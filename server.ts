@@ -2930,10 +2930,13 @@ const APPOINTMENT_BILLING_CONTEXT_SELECT = [
   'payer_id',
   'payer_name_snapshot',
   'service_type',
+  'insurance_card_number',
+  'insurance_plan_name',
   'authorization_code',
   'guide_number',
   'procedure_code',
   'notes',
+  'source',
   'created_at',
   'updated_at'
 ].join(',');
@@ -5542,6 +5545,18 @@ async function resolveAppointmentBillingSuggestion(params: {
     .limit(20);
   if (planResult.error && !hasMissingFinancialSchema(planResult.error)) throw planResult.error;
   const plans = planResult.error ? [] : Array.isArray(planResult.data) ? planResult.data : [];
+  const patientResult = await supabase
+    .from('patients')
+    .select('id, insurance_type, insurance_name, insurance_card_number')
+    .eq('id', patientId)
+    .eq('clinic_id', organizationId)
+    .limit(1)
+    .maybeSingle();
+  if (patientResult.error) {
+    if (!hasMissingFinancialSchema(patientResult.error)) throw patientResult.error;
+  }
+  const patientBillingRow = patientResult.error ? null : patientResult.data;
+  const patientInsuranceCardNumber = sanitizeString(patientBillingRow?.insurance_card_number, 120);
   const usablePlans = plans.filter((plan: any) =>
     isUuid(sanitizeString(plan?.payer_id, 120)) || Boolean(sanitizeString(plan?.payer_name_snapshot, 180))
   );
@@ -5572,25 +5587,17 @@ async function resolveAppointmentBillingSuggestion(params: {
       payerId: isUuid(payerId) ? payerId : null,
       payerName: payerName || null,
       serviceType: sanitizeString(selectedPlan.service_type || serviceType, 120) || null,
+      insuranceCardNumber: patientInsuranceCardNumber || null,
+      insurancePlanName: sanitizeString(selectedPlan.insurance_plan_name, 160) || null,
       authorizationCode: sanitizeString(selectedPlan.authorization_code, 120) || null,
       guideNumber: null,
-      source: 'patient_financial_plan'
+      notes: sanitizeTextField(selectedPlan.notes, 1200) || null,
+      source: 'PATIENT_DEFAULT'
     };
   }
 
-  const patientResult = await supabase
-    .from('patients')
-    .select('id, insurance_type, insurance_name')
-    .eq('id', patientId)
-    .eq('clinic_id', organizationId)
-    .limit(1)
-    .maybeSingle();
-  if (patientResult.error) {
-    if (hasMissingFinancialSchema(patientResult.error)) return null;
-    throw patientResult.error;
-  }
-  const insuranceName = sanitizeString(patientResult.data?.insurance_name, 180);
-  const insuranceType = sanitizeString(patientResult.data?.insurance_type, 80)
+  const insuranceName = sanitizeString(patientBillingRow?.insurance_name, 180);
+  const insuranceType = sanitizeString(patientBillingRow?.insurance_type, 80)
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .trim()
@@ -5608,9 +5615,12 @@ async function resolveAppointmentBillingSuggestion(params: {
     payerId: isUuid(sanitizeString(matchingPayer?.id, 120)) ? sanitizeString(matchingPayer.id, 120) : null,
     payerName: sanitizeString(matchingPayer?.name || insuranceName, 180) || null,
     serviceType: serviceType || null,
+    insuranceCardNumber: patientInsuranceCardNumber || null,
+    insurancePlanName: null,
     authorizationCode: null,
     guideNumber: null,
-    source: 'patient_registration'
+    notes: null,
+    source: 'PATIENT_DEFAULT'
   };
 }
 
@@ -5693,10 +5703,13 @@ async function upsertInitialBillingContextFromAppointment(params: {
     payer_id: payer?.id || null,
     payer_name_snapshot: payerName || null,
     service_type: serviceType || sanitizeString(suggestedBilling?.serviceType || suggestedBilling?.service_type, 120) || null,
+    insurance_card_number: sanitizeString(params.appointment?.insuranceCardNumber || params.appointment?.insurance_card_number || params.appointment?.cardNumber || params.appointment?.card_number || suggestedBilling?.insuranceCardNumber || suggestedBilling?.insurance_card_number, 120) || null,
+    insurance_plan_name: sanitizeString(params.appointment?.insurancePlanName || params.appointment?.insurance_plan_name || suggestedBilling?.insurancePlanName || suggestedBilling?.insurance_plan_name, 160) || null,
     authorization_code: sanitizeString(params.appointment?.authorizationCode || params.appointment?.authorization_code || suggestedBilling?.authorizationCode || suggestedBilling?.authorization_code, 120) || null,
     guide_number: sanitizeString(params.appointment?.guideNumber || params.appointment?.guide_number || suggestedBilling?.guideNumber || suggestedBilling?.guide_number, 120) || null,
     procedure_code: sanitizeString(params.appointment?.procedureCode || params.appointment?.procedure_code, 80) || null,
-    notes: sanitizeTextField(params.appointment?.billingNotes || params.appointment?.billing_notes, 1200) || null,
+    notes: sanitizeTextField(params.appointment?.billingNotes || params.appointment?.billing_notes || suggestedBilling?.notes, 1200) || null,
+    source: sanitizeString(suggestedBilling?.source || (suggestedBilling ? 'PATIENT_DEFAULT' : 'MANUAL'), 60) || null,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString()
   });
@@ -5705,6 +5718,8 @@ async function upsertInitialBillingContextFromAppointment(params: {
       payload.payer_name_snapshot ||
       payload.authorization_code ||
       payload.guide_number ||
+      payload.insurance_card_number ||
+      payload.insurance_plan_name ||
       payload.procedure_code ||
       payload.notes
   );
@@ -24821,6 +24836,8 @@ async function startServer() {
       ...appointment,
       payer_id: billingContext?.payer_id || (context as any).requirements?.payerId || null,
       payer_name_snapshot: billingContext?.payer_name_snapshot || (context as any).requirements?.payerName || null,
+      insurance_card_number: billingContext?.insurance_card_number || null,
+      insurance_plan_name: billingContext?.insurance_plan_name || null,
       authorization_code: billingContext?.authorization_code || null,
       guide_number: billingContext?.guide_number || null,
       procedure_code: billingContext?.procedure_code || null,
@@ -25365,9 +25382,12 @@ async function startServer() {
     payerId: sanitizeString(suggestion?.payerId || suggestion?.payer_id, 120) || null,
     payerName: sanitizeString(suggestion?.payerName || suggestion?.payer_name_snapshot, 180) || null,
     serviceType: sanitizeString(suggestion?.serviceType || suggestion?.service_type, 120) || null,
+    insuranceCardNumber: sanitizeString(suggestion?.insuranceCardNumber || suggestion?.insurance_card_number, 120) || null,
+    insurancePlanName: sanitizeString(suggestion?.insurancePlanName || suggestion?.insurance_plan_name, 160) || null,
     authorizationCode: sanitizeString(suggestion?.authorizationCode || suggestion?.authorization_code, 120) || null,
     guideNumber: sanitizeString(suggestion?.guideNumber || suggestion?.guide_number, 120) || null,
-    source: sanitizeString(suggestion?.source, 60) || 'patient_default'
+    notes: sanitizeTextField(suggestion?.notes, 1200) || null,
+    source: sanitizeString(suggestion?.source, 60) || 'PATIENT_DEFAULT'
   } : null;
 
   const serializeBillingContext = (row: any, payer: any = null, documents: any[] = [], suggestion: any = null) => ({
@@ -25377,10 +25397,13 @@ async function startServer() {
     payerName: sanitizeString(payer?.name || row?.payer_name_snapshot, 180) || null,
     payerType: payer ? normalizePayerType(payer?.payer_type) : null,
     serviceType: sanitizeString(row?.service_type, 120) || null,
+    insuranceCardNumber: sanitizeString(row?.insurance_card_number, 120) || null,
+    insurancePlanName: sanitizeString(row?.insurance_plan_name, 160) || null,
     authorizationCode: sanitizeString(row?.authorization_code, 120) || null,
     guideNumber: sanitizeString(row?.guide_number, 120) || null,
     procedureCode: sanitizeString(row?.procedure_code, 80) || null,
     notes: sanitizeTextField(row?.notes, 1200) || null,
+    source: sanitizeString(row?.source, 60) || null,
     documents: documents.map((doc: any) => ({
       id: sanitizeString(doc?.id, 120),
       documentType: normalizeDocumentType(doc?.document_type),
@@ -25745,10 +25768,15 @@ async function startServer() {
         payer_id: payer?.id || null,
         payer_name_snapshot: sanitizeString(payer?.name || req.body?.payerName || req.body?.payer_name_snapshot, 180) || null,
         service_type: sanitizeString(req.body?.serviceType || req.body?.service_type || appointment.service_type || appointment.approach, 120) || null,
+        insurance_card_number: sanitizeString(req.body?.insuranceCardNumber || req.body?.insurance_card_number || req.body?.cardNumber || req.body?.card_number, 120) || null,
+        insurance_plan_name: sanitizeString(req.body?.insurancePlanName || req.body?.insurance_plan_name, 160) || null,
         authorization_code: sanitizeString(req.body?.authorizationCode || req.body?.authorization_code, 120) || null,
         guide_number: sanitizeString(req.body?.guideNumber || req.body?.guide_number, 120) || null,
         procedure_code: sanitizeString(req.body?.procedureCode || req.body?.procedure_code, 80) || null,
         notes: sanitizeTextField(req.body?.notes, 1200) || null,
+        source: ['PATIENT_DEFAULT', 'MANUAL'].includes(sanitizeString(req.body?.source, 60).toUpperCase())
+          ? sanitizeString(req.body?.source, 60).toUpperCase()
+          : 'MANUAL',
         created_at: existing?.created_at || now,
         updated_at: now
       });

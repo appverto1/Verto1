@@ -282,6 +282,7 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
     appointment.payer_id,
     appointment.payerId
   );
+  const insuranceCardNumber = asString(firstValue(appointment.insurance_card_number, appointment.insuranceCardNumber, appointment.cardNumber));
   checklist.push(buildCheck(
     'session_completed',
     'Sessão concluída',
@@ -396,6 +397,7 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
       : 'Pagador não configurado para esta conferência.',
     {
       present: Boolean(appointmentPayerContext),
+      insuranceCardPresent: Boolean(insuranceCardNumber),
       source: requirements.payerRequirementSource || 'DEFAULT'
     }
   ));

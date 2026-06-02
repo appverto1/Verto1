@@ -8,6 +8,7 @@ const calendarCode = readFileSync(join(root, 'src/components/Calendar.tsx'), 'ut
 const coordinatorCode = readFileSync(join(root, 'src/components/CoordinatorDashboard.tsx'), 'utf8');
 const closureCode = readFileSync(join(root, 'src/services/closureReadinessEngine.ts'), 'utf8');
 const migrationCode = readFileSync(join(root, 'supabase/migrations/20260601120000_appointment_billing_context_patient_index.sql'), 'utf8');
+const patientDefaultMigrationCode = readFileSync(join(root, 'supabase/migrations/20260602123000_appointment_billing_context_patient_defaults.sql'), 'utf8');
 
 const tests: Array<{ name: string; fn: () => void }> = [];
 const test = (name: string, fn: () => void) => tests.push({ name, fn });
@@ -32,7 +33,10 @@ test('criacao da consulta cria contexto inicial sem sobrescrever edicao posterio
   assert.match(serverCode, /if \(existing\.data\?\.id\) return/);
   assert.match(serverCode, /suggestedBilling = await resolveAppointmentBillingSuggestion/);
   assert.match(serverCode, /payer_name_snapshot: payerName \|\| null/);
+  assert.match(serverCode, /insurance_card_number: sanitizeString\(params\.appointment\?\.insuranceCardNumber/);
+  assert.match(serverCode, /insurance_plan_name: sanitizeString\(params\.appointment\?\.insurancePlanName/);
   assert.match(serverCode, /guide_number: sanitizeString\(params\.appointment\?\.guideNumber/);
+  assert.match(serverCode, /source: sanitizeString\(suggestedBilling\?\.source/);
 });
 
 test('sugestao do paciente nao escolhe multiplos planos silenciosamente', () => {
@@ -45,10 +49,28 @@ test('sugestao do paciente nao escolhe multiplos planos silenciosamente', () => 
 test('detalhe da consulta salva pagador no contexto administrativo', () => {
   assert.match(calendarCode, /saveBillingContext/);
   assert.match(calendarCode, /dataService\.updateAppointmentBillingContext/);
+  assert.match(calendarCode, /insuranceCardNumber: values\.insuranceCardNumber/);
+  assert.match(calendarCode, /insurancePlanName: values\.insurancePlanName/);
+  assert.match(calendarCode, /source: values\.source/);
   assert.match(calendarCode, /Aplicar . consulta/);
   assert.match(calendarCode, /Definir pagador/);
   assert.match(calendarCode, /Editar pagador/);
   assert.doesNotMatch(calendarCode, /onClick=\{\(\) => onEditAppointment\?\.\(detailEvent\)\}[\s\S]{0,140}Editar pagador/);
+});
+
+test('modal preenche sugestao do paciente com carteirinha sem sobrescrever cadastro', () => {
+  assert.match(serverCode, /\.from\('patients'\)[\s\S]*\.select\('id, insurance_type, insurance_name, insurance_card_number'\)/);
+  assert.match(serverCode, /insuranceCardNumber: patientInsuranceCardNumber \|\| null/);
+  assert.match(serverCode, /insurancePlanName: sanitizeString\(selectedPlan\.insurance_plan_name/);
+  assert.match(calendarCode, /currentBilling\?\.hasContext \? currentBilling : currentBilling\?\.suggestion \|\| currentBilling/);
+  assert.match(calendarCode, /Dados sugeridos a partir do cadastro do paciente/);
+  assert.match(calendarCode, /NÃºmero da carteirinha/);
+  assert.match(calendarCode, /Salvar na consulta/);
+  const routeStart = serverCode.indexOf("app.patch('/api/appointments/:appointmentId/billing-context'");
+  const routeEnd = serverCode.indexOf("app.post('/api/appointments/:appointmentId/required-documents", routeStart);
+  const route = serverCode.slice(routeStart, routeEnd);
+  assert.doesNotMatch(route, /\.from\('patients'\)[\s\S]*\.update/);
+  assert.doesNotMatch(route, /\.from\('patient_financial_plans'\)[\s\S]*\.update/);
 });
 
 test('modal carrega pagadores ativos e permite criar pagador rapido', () => {
@@ -123,6 +145,16 @@ test('conferencia mensal consome resumo persistido com pagador da consulta', () 
 test('indice por paciente foi adicionado de forma aditiva', () => {
   assert.match(migrationCode, /create index if not exists idx_appointment_billing_contexts_patient/);
   assert.match(migrationCode, /appointment_billing_contexts \(organization_id, patient_id\)/);
+});
+
+test('campos herdados do paciente foram adicionados de forma aditiva', () => {
+  assert.match(patientDefaultMigrationCode, /add column if not exists insurance_card_number text/);
+  assert.match(patientDefaultMigrationCode, /add column if not exists insurance_plan_name text/);
+  assert.match(patientDefaultMigrationCode, /add column if not exists source text/);
+  assert.match(serverCode, /'insurance_card_number'/);
+  assert.match(serverCode, /'insurance_plan_name'/);
+  assert.match(serverCode, /'source'/);
+  assert.match(closureCode, /insuranceCardPresent/);
 });
 
 let passed = 0;

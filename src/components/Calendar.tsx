@@ -788,10 +788,13 @@ export const ClinicalAgendaBoard = ({
     payerId: '',
     payerName: '',
     serviceType: '',
+    insuranceCardNumber: '',
+    insurancePlanName: '',
     guideNumber: '',
     authorizationCode: '',
     procedureCode: '',
-    notes: ''
+    notes: '',
+    source: ''
   });
   const [quickPayerForm, setQuickPayerForm] = useState({
     open: false,
@@ -1200,10 +1203,13 @@ export const ClinicalAgendaBoard = ({
       payerId: String(source?.payerId || source?.payer_id || ''),
       payerName: sanitizeHumanPayerName(source?.payerName || source?.payer_name_snapshot || ''),
       serviceType: String(source?.serviceType || source?.service_type || detailEvent.type || ''),
+      insuranceCardNumber: String(source?.insuranceCardNumber || source?.insurance_card_number || source?.cardNumber || source?.card_number || ''),
+      insurancePlanName: String(source?.insurancePlanName || source?.insurance_plan_name || ''),
       guideNumber: String(source?.guideNumber || source?.guide_number || ''),
       authorizationCode: String(source?.authorizationCode || source?.authorization_code || ''),
       procedureCode: String(source?.procedureCode || source?.procedure_code || ''),
-      notes: String(source?.notes || '')
+      notes: String(source?.notes || ''),
+      source: String(source?.source || '')
     });
   };
 
@@ -1253,7 +1259,8 @@ export const ClinicalAgendaBoard = ({
     setBillingForm((prev) => ({
       ...prev,
       payerId: String(payer?.id || ''),
-      payerName: sanitizeHumanPayerName(payer?.name || name)
+      payerName: sanitizeHumanPayerName(payer?.name || name),
+      source: 'MANUAL'
     }));
     setQuickPayerForm({ open: false, saving: false, error: '', name: '', payerType: 'INSURANCE' });
   };
@@ -1261,7 +1268,7 @@ export const ClinicalAgendaBoard = ({
   const openBillingEditor = (source: any = null) => {
     if (!canEditBillingContext) return;
     const currentBilling = detail?.billingContext || {};
-    hydrateBillingForm(source || currentBilling);
+    hydrateBillingForm(source || (currentBilling?.hasContext ? currentBilling : currentBilling?.suggestion || currentBilling));
     setQuickPayerForm({ open: false, saving: false, error: '', name: '', payerType: 'INSURANCE' });
     setBillingEditorOpen(true);
     setBillingEditorState({ loading: false, saving: false, error: '', success: '' });
@@ -1272,6 +1279,10 @@ export const ClinicalAgendaBoard = ({
     const appointmentPatch = {
       payer_name_snapshot: nextBillingContext?.payerName || null,
       payerName: nextBillingContext?.payerName || null,
+      insurance_card_number: nextBillingContext?.insuranceCardNumber || null,
+      insuranceCardNumber: nextBillingContext?.insuranceCardNumber || null,
+      insurance_plan_name: nextBillingContext?.insurancePlanName || null,
+      insurancePlanName: nextBillingContext?.insurancePlanName || null,
       guide_number: nextBillingContext?.guideNumber || null,
       guideNumber: nextBillingContext?.guideNumber || null,
       authorization_code: nextBillingContext?.authorizationCode || null,
@@ -1298,10 +1309,13 @@ export const ClinicalAgendaBoard = ({
       payerId: values.payerId || null,
       payerName: values.payerName || null,
       serviceType: values.serviceType || detailEvent.type || null,
+      insuranceCardNumber: values.insuranceCardNumber || null,
+      insurancePlanName: values.insurancePlanName || null,
       guideNumber: values.guideNumber || null,
       authorizationCode: values.authorizationCode || null,
       procedureCode: values.procedureCode || null,
-      notes: values.notes || null
+      notes: values.notes || null,
+      source: values.source || null
     });
     if (!result?.success) {
       setBillingEditorState((prev) => ({
@@ -1335,10 +1349,13 @@ export const ClinicalAgendaBoard = ({
       payerId: suggestion.payerId || '',
       payerName: suggestion.payerName || '',
       serviceType: suggestion.serviceType || detailEvent.type || '',
+      insuranceCardNumber: suggestion.insuranceCardNumber || '',
+      insurancePlanName: suggestion.insurancePlanName || '',
       guideNumber: suggestion.guideNumber || '',
       authorizationCode: suggestion.authorizationCode || '',
       procedureCode: '',
-      notes: ''
+      notes: suggestion.notes || '',
+      source: suggestion.source || 'PATIENT_DEFAULT'
     });
   };
 
@@ -1948,6 +1965,11 @@ export const ClinicalAgendaBoard = ({
     : billingSnapshotOptionVisible
       ? billingSnapshotSelectValue
       : '';
+  const billingEditorBadge = billingContext.hasContext
+    ? 'Dados desta consulta'
+    : String(billingForm.source || '').toUpperCase() === 'PATIENT_DEFAULT'
+      ? 'Dados sugeridos a partir do cadastro do paciente'
+      : '';
 
   return (
     <div className="flex flex-col gap-3 pb-[calc(env(safe-area-inset-bottom)+5rem)] xl:h-[calc(100vh-2rem)] xl:min-h-[680px] xl:overflow-hidden xl:pb-0">
@@ -2215,6 +2237,11 @@ export const ClinicalAgendaBoard = ({
                 {billingEditorState.error}
               </div>
             )}
+            {billingEditorBadge && (
+              <div className={`mt-4 inline-flex rounded-full border px-3 py-1 text-[11px] font-bold ${isDark ? 'border-violet-500/30 bg-violet-500/10 text-violet-200' : 'border-violet-100 bg-violet-50 text-[#7a32fc]'}`}>
+                {billingEditorBadge}
+              </div>
+            )}
 
             <div className="mt-5 grid gap-3 sm:grid-cols-2">
               <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
@@ -2230,7 +2257,8 @@ export const ClinicalAgendaBoard = ({
                     setBillingForm((prev) => ({
                       ...prev,
                       payerId: value,
-                      payerName: payer?.name || ''
+                      payerName: payer?.name || '',
+                      source: 'MANUAL'
                     }));
                   }}
                 >
@@ -2308,8 +2336,26 @@ export const ClinicalAgendaBoard = ({
                 <input
                   className={`mt-1 w-full rounded-xl border p-3 text-sm font-semibold normal-case tracking-normal outline-none ${isDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-violet-100 bg-white text-slate-700'}`}
                   value={billingForm.serviceType}
-                  onChange={(event) => setBillingForm((prev) => ({ ...prev, serviceType: event.target.value }))}
+                  onChange={(event) => setBillingForm((prev) => ({ ...prev, serviceType: event.target.value, source: 'MANUAL' }))}
                   placeholder="Tipo de atendimento"
+                />
+              </label>
+              <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                NÃºmero da carteirinha
+                <input
+                  className={`mt-1 w-full rounded-xl border p-3 text-sm font-semibold normal-case tracking-normal outline-none ${isDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-violet-100 bg-white text-slate-700'}`}
+                  value={billingForm.insuranceCardNumber}
+                  onChange={(event) => setBillingForm((prev) => ({ ...prev, insuranceCardNumber: event.target.value, source: 'MANUAL' }))}
+                  placeholder="Carteirinha do paciente"
+                />
+              </label>
+              <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                Plano
+                <input
+                  className={`mt-1 w-full rounded-xl border p-3 text-sm font-semibold normal-case tracking-normal outline-none ${isDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-violet-100 bg-white text-slate-700'}`}
+                  value={billingForm.insurancePlanName}
+                  onChange={(event) => setBillingForm((prev) => ({ ...prev, insurancePlanName: event.target.value, source: 'MANUAL' }))}
+                  placeholder="Plano do convÃªnio"
                 />
               </label>
               <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
@@ -2317,7 +2363,7 @@ export const ClinicalAgendaBoard = ({
                 <input
                   className={`mt-1 w-full rounded-xl border p-3 text-sm font-semibold normal-case tracking-normal outline-none ${isDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-violet-100 bg-white text-slate-700'}`}
                   value={billingForm.guideNumber}
-                  onChange={(event) => setBillingForm((prev) => ({ ...prev, guideNumber: event.target.value }))}
+                  onChange={(event) => setBillingForm((prev) => ({ ...prev, guideNumber: event.target.value, source: 'MANUAL' }))}
                   placeholder="Número da guia"
                 />
               </label>
@@ -2326,7 +2372,7 @@ export const ClinicalAgendaBoard = ({
                 <input
                   className={`mt-1 w-full rounded-xl border p-3 text-sm font-semibold normal-case tracking-normal outline-none ${isDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-violet-100 bg-white text-slate-700'}`}
                   value={billingForm.authorizationCode}
-                  onChange={(event) => setBillingForm((prev) => ({ ...prev, authorizationCode: event.target.value }))}
+                  onChange={(event) => setBillingForm((prev) => ({ ...prev, authorizationCode: event.target.value, source: 'MANUAL' }))}
                   placeholder="Código informado pelo pagador"
                 />
               </label>
@@ -2335,7 +2381,7 @@ export const ClinicalAgendaBoard = ({
                 <textarea
                   className={`mt-1 min-h-[96px] w-full rounded-xl border p-3 text-sm font-semibold normal-case tracking-normal outline-none ${isDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-violet-100 bg-white text-slate-700'}`}
                   value={billingForm.notes}
-                  onChange={(event) => setBillingForm((prev) => ({ ...prev, notes: event.target.value }))}
+                  onChange={(event) => setBillingForm((prev) => ({ ...prev, notes: event.target.value, source: 'MANUAL' }))}
                   placeholder="Observações para conferência"
                 />
               </label>
@@ -2346,7 +2392,7 @@ export const ClinicalAgendaBoard = ({
                 Cancelar
               </button>
               <button type="button" disabled={billingEditorState.saving} onClick={submitBillingEditor} className="rounded-2xl bg-[#7a32fc] px-4 py-3 text-sm font-bold text-white shadow-lg shadow-violet-500/20 disabled:opacity-60">
-                {billingEditorState.saving ? 'Salvando...' : 'Salvar pagador'}
+                {billingEditorState.saving ? 'Salvando...' : billingContext.hasContext ? 'Salvar pagador' : 'Salvar na consulta'}
               </button>
             </div>
           </div>
@@ -2425,6 +2471,7 @@ export const ClinicalAgendaBoard = ({
                       {billingContext.payerName || detailEvent.payer_name_snapshot || billingSuggestion?.payerName || 'nao informado'}
                     </p>
                     <p><span className="font-semibold">ServiÃ§o:</span> {billingContext.serviceType || detailEvent.service_type || detailEvent.type || 'ABA'}</p>
+                    <p><span className="font-semibold">Carteirinha:</span> {billingContext.insuranceCardNumber || detailEvent.insurance_card_number || 'pendente'}</p>
                     <p><span className="font-semibold">Guia:</span> {billingContext.guideNumber || detailEvent.guide_number || 'pendente'}</p>
                     <p><span className="font-semibold">Autorização:</span> {billingContext.authorizationCode || detailEvent.authorization_code || 'pendente'}</p>
                     <p><span className="font-semibold">Documentos:</span> {pendingBillingDocuments.length > 0 ? `${pendingBillingDocuments.length} pendente(s)` : 'Sem pendência extra'}</p>
