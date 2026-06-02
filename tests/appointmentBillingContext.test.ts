@@ -36,6 +36,8 @@ test('salvar contexto usa fallback de schema sem expor 503 tecnico', () => {
   assert.match(serverCode, /APPOINTMENT_BILLING_CONTEXT_METADATA_VALUE_COLUMNS/);
   assert.match(serverCode, /BILLING_CONTEXT_APPOINTMENT_SELECT/);
   assert.match(serverCode, /BILLING_CONTEXT_APPOINTMENT_SCHEMA_FALLBACK_COLUMNS/);
+  assert.match(serverCode, /fetchClinicStateWithSchemaFallback\(\{ supabase, clinicId: organizationId, logger: console \}\)/);
+  assert.match(serverCode, /source_payload: sanitizeClinicalPayload\(stateAppointment\)/);
   assert.match(serverCode, /const buildBillingContextSelect/);
   assert.match(serverCode, /const buildBillingContextStoragePayload/);
   assert.match(serverCode, /buildBillingContextMetadata\(payload\)/);
@@ -52,9 +54,10 @@ test('salvar contexto usa fallback de schema sem expor 503 tecnico', () => {
   assert.doesNotMatch(route, /status\(503\)/);
 
   const fetchStart = serverCode.indexOf('const fetchAppointmentForBillingContext');
-  const fetchSlice = serverCode.slice(fetchStart, fetchStart + 1800);
+  const fetchSlice = serverCode.slice(fetchStart, fetchStart + 3200);
   assert.match(fetchSlice, /runAppointmentQuery\(CLOSURE_APPOINTMENT_SELECT\)/);
   assert.match(fetchSlice, /runAppointmentQuery\(selectColumns\)/);
+  assert.match(fetchSlice, /buildClinicStateAppointment/);
   assert.match(fetchSlice, /status: 500, error: 'Agenda indisponível\.'/);
   assert.doesNotMatch(fetchSlice, /status: 503/);
 
@@ -134,7 +137,7 @@ test('criacao de pagador reutiliza nome existente na mesma clinica', () => {
 test('payer_id e appointment_id fora da organizacao sao rejeitados', () => {
   const fetchStart = serverCode.indexOf('const fetchAppointmentForBillingContext');
   assert.ok(fetchStart > 0, 'helper de escopo da consulta deve existir');
-  const fetchSlice = serverCode.slice(fetchStart, fetchStart + 2600);
+  const fetchSlice = serverCode.slice(fetchStart, fetchStart + 3800);
   assert.match(fetchSlice, /\.from\('appointments'\)[\s\S]*\.select\(selectColumns\)[\s\S]*\.eq\('id', safeAppointmentId\)/);
   assert.match(fetchSlice, /runAppointmentQuery\(CLOSURE_APPOINTMENT_SELECT\)/);
   assert.match(fetchSlice, /\.or\(`organization_id\.eq\.\$\{organizationId\},clinic_id\.eq\.\$\{organizationId\}`\)/);
@@ -144,7 +147,10 @@ test('payer_id e appointment_id fora da organizacao sao rejeitados', () => {
   const routeEnd = serverCode.indexOf("app.post('/api/appointments/:appointmentId/required-documents", routeStart);
   const route = serverCode.slice(routeStart, routeEnd);
   assert.match(route, /const payer = isUuid\(payerId\) \? await fetchPayerForAdmin\(payerId, organizationId\) : null/);
-  assert.match(route, /if \(payerId && !payer\) return res\.status\(404\)\.json\(payerSafeError\(404\)\)/);
+  assert.match(route, /const requestedPayerName = sanitizeString\(req\.body\?\.payerName \|\| req\.body\?\.payer_name_snapshot, 180\)/);
+  assert.match(route, /if \(payerId && !payer && !requestedPayerName\) return res\.status\(404\)\.json\(payerSafeError\(404\)\)/);
+  assert.match(route, /payer_id: payer\?\.id \|\| null/);
+  assert.match(route, /payer_name_snapshot: sanitizeString\(payer\?\.name \|\| requestedPayerName, 180\) \|\| null/);
 });
 
 test('fechamento usa pagador da consulta, nao plano do paciente como substituto', () => {

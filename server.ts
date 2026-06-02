@@ -25611,6 +25611,33 @@ async function startServer() {
     const safeAppointmentId = sanitizeString(appointmentId, 120);
     const organizationId = sanitizeString(currentClinicId(user), 120);
     if (!isUuid(safeAppointmentId) || !isUuid(organizationId)) return { ok: false, status: 400, error: 'Consulta inválida.' };
+    const buildClinicStateAppointment = async () => {
+      const stateResult = await fetchClinicStateWithSchemaFallback({ supabase, clinicId: organizationId, logger: console });
+      if (stateResult.error) {
+        if (hasMissingFinancialSchema(stateResult.error)) return null;
+        throw stateResult.error;
+      }
+      const stateAppointment = (Array.isArray(stateResult.data?.appointments) ? stateResult.data.appointments : [])
+        .find((item: any) => sanitizeString(item?.id || item?.appointmentId, 120) === safeAppointmentId);
+      const patientId = sanitizeString(
+        stateAppointment?.patient_id ||
+          stateAppointment?.patientId ||
+          stateAppointment?.patient?.id,
+        120
+      );
+      if (!stateAppointment || !isUuid(patientId)) return null;
+      return {
+        id: safeAppointmentId,
+        organization_id: organizationId,
+        clinic_id: organizationId,
+        patient_id: patientId,
+        approach: sanitizeString(stateAppointment?.approach || stateAppointment?.type || stateAppointment?.serviceType, 120) || null,
+        service_type: sanitizeString(stateAppointment?.service_type || stateAppointment?.serviceType || stateAppointment?.type || stateAppointment?.approach, 120) || null,
+        status: sanitizeString(stateAppointment?.status, 80) || null,
+        source_payload: sanitizeClinicalPayload(stateAppointment),
+        updated_at: sanitizeString(stateAppointment?.updated_at || stateAppointment?.updatedAt, 80) || null
+      };
+    };
     const runAppointmentQuery = (selectColumns: string) => supabase
         .from('appointments')
         .select(selectColumns)
@@ -25640,7 +25667,7 @@ async function startServer() {
       if (hasMissingFinancialSchema(result.error)) return { ok: false, status: 500, error: 'Agenda indisponível.' };
       throw result.error;
     }
-    const data = result.data;
+    const data = result.data || await buildClinicStateAppointment();
     if (!data?.id) return { ok: false, status: 404, error: 'Consulta não encontrada.' };
     if (!(await canAccessPatientInCurrentClinic(sanitizeString(data.patient_id, 120), user))) {
       return { ok: false, status: 404, error: 'Consulta não encontrada.' };
@@ -25921,8 +25948,9 @@ async function startServer() {
       const organizationId = (context as any).organizationId;
       const appointment = (context as any).appointment;
       const payerId = sanitizeString(req.body?.payerId || req.body?.payer_id, 120);
+      const requestedPayerName = sanitizeString(req.body?.payerName || req.body?.payer_name_snapshot, 180);
       const payer = isUuid(payerId) ? await fetchPayerForAdmin(payerId, organizationId) : null;
-      if (payerId && !payer) return res.status(404).json(payerSafeError(404));
+      if (payerId && !payer && !requestedPayerName) return res.status(404).json(payerSafeError(404));
       const existing = await fetchAppointmentBillingContextRow(organizationId, appointment.id);
       const now = new Date().toISOString();
       const payload = cleanObject({
@@ -25934,7 +25962,7 @@ async function startServer() {
         payer_type: payer?.payer_type || req.body?.payerType || req.body?.payer_type
           ? normalizePayerType(payer?.payer_type || req.body?.payerType || req.body?.payer_type)
           : null,
-        payer_name_snapshot: sanitizeString(payer?.name || req.body?.payerName || req.body?.payer_name_snapshot, 180) || null,
+        payer_name_snapshot: sanitizeString(payer?.name || requestedPayerName, 180) || null,
         service_type: sanitizeString(req.body?.serviceType || req.body?.service_type || appointment.service_type || appointment.approach, 120) || null,
         insurance_card_number: sanitizeString(req.body?.insuranceCardNumber || req.body?.insurance_card_number || req.body?.cardNumber || req.body?.card_number, 120) || null,
         insurance_plan_name: sanitizeString(req.body?.insurancePlanName || req.body?.insurance_plan_name, 160) || null,
