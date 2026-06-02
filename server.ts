@@ -21579,7 +21579,7 @@ async function startServer() {
     return next();
   };
 
-  const ABA_SESSION_STATUSES = new Set(['active', 'completed', 'canceled']);
+  const ABA_SESSION_STATUSES = new Set(['active', 'in_progress', 'completed', 'canceled']);
   const ABA_COLLECTION_TYPES = new Set(['dtt', 'net', 'cold_probe', 'baseline_probe', 'maintenance_probe']);
   const ABA_BEHAVIOR_MEASUREMENT_TYPES = new Set([
     'frequency',
@@ -21640,6 +21640,20 @@ async function startServer() {
   const normalizeAbaSessionStatus = (value: unknown) => {
     const safe = sanitizeString(value, 40).toLowerCase();
     return ABA_SESSION_STATUSES.has(safe) ? safe : 'active';
+  };
+
+  const isAbaSessionInProgressStatus = (value: unknown) => {
+    const safe = sanitizeString(value, 40).toLowerCase();
+    return safe === 'active' || safe === 'in_progress';
+  };
+
+  const calculateAbaSessionDurationMinutes = (start: unknown, end: unknown, fallback: unknown = null) => {
+    const fallbackNumber = Number(fallback);
+    if (Number.isFinite(fallbackNumber) && fallbackNumber >= 0) return Math.round(fallbackNumber);
+    const startTime = new Date(sanitizeString(start, 80)).getTime();
+    const endTime = new Date(sanitizeString(end, 80)).getTime();
+    if (!Number.isFinite(startTime) || !Number.isFinite(endTime) || endTime < startTime) return null;
+    return Math.max(0, Math.ceil((endTime - startTime) / 60000));
   };
 
   const normalizeAbaCollectionType = (value: unknown) => {
@@ -23470,6 +23484,7 @@ async function startServer() {
 
   const updateAppointmentOperationalPatch = async (appointmentId: string, patch: Record<string, any>) => {
     let safePatch: Record<string, any> = cleanObject(patch);
+    let triedLegacyStatus = false;
     while (Object.keys(safePatch).length > 0) {
       const { data, error } = await supabase
         .from('appointments')
@@ -23481,6 +23496,11 @@ async function startServer() {
       const missingColumn = extractMissingColumnName(error);
       if (missingColumn && missingColumn in safePatch) {
         delete safePatch[missingColumn];
+        continue;
+      }
+      if (!triedLegacyStatus && safePatch.status && /status|check constraint/i.test(String(error?.message || ''))) {
+        triedLegacyStatus = true;
+        safePatch.status = normalizeAppointmentStatusForTable(safePatch.status);
         continue;
       }
       return { data: null, error };
@@ -27729,6 +27749,150 @@ async function startServer() {
     return { ok: true };
   };
 
+  const readAbaSessionAppointmentLink = async (sessionId: string | null, clinicId: string, user: any) => {
+    const safeSessionId = sanitizeString(sessionId, 180);
+    if (!safeSessionId) return null;
+    let query = supabase
+      .from('aba_sessions')
+      .select('id,appointment_id,patient_id,clinic_id,therapist_id,status,started_at,actual_start_at,actual_end_at,actual_duration_minutes,duration_minutes,ended_at')
+      .eq('id', safeSessionId);
+    if (!hasGlobalClinicAccess(user) && clinicId) query = query.eq('clinic_id', clinicId);
+    if (sanitizeString(user?.role, 40).toLowerCase() === 'therapist') {
+      query = query.eq('therapist_id', sanitizeString(user?.id, 120));
+    }
+    const { data, error } = await query.limit(1).maybeSingle();
+    if (error) {
+      if (hasMissingFinancialSchema(error) || extractMissingColumnName(error)) return null;
+      throw error;
+    }
+    return data || null;
+  };
+
+  const resolveAbaAppointmentIdForClinicalWrite = async (params: {
+    requestedAppointmentId?: unknown;
+    sessionId?: string | null;
+    clinicId: string;
+    user: any;
+  }) => {
+    const linkedSession = await readAbaSessionAppointmentLink(params.sessionId || null, params.clinicId, params.user);
+    const linkedAppointmentId = sanitizeString(linkedSession?.appointment_id, 120);
+    if (isUuid(linkedAppointmentId)) return linkedAppointmentId;
+    const requestedAppointmentId = sanitizeString(params.requestedAppointmentId, 120);
+    return isUuid(requestedAppointmentId) ? requestedAppointmentId : null;
+  };
+
+  const ensureAppointmentMirrorForOperationalLink = async (params: {
+    organizationId: string;
+    appointment: any;
+    user: any;
+  }) => ensureAppointmentMirrorForBillingContext(params);
+
+  const fetchAppointmentForAbaSessionLink = async (appointmentId: string, clinicId: string, user: any) => {
+    const safeAppointmentId = sanitizeString(appointmentId, 120);
+    if (!isUuid(safeAppointmentId) || !isUuid(clinicId)) return null;
+    let query = supabase
+      .from('appointments')
+      .select(CLOSURE_APPOINTMENT_SELECT)
+      .eq('id', safeAppointmentId)
+      .or(`organization_id.eq.${clinicId},clinic_id.eq.${clinicId}`)
+      .limit(1);
+    if (sanitizeString(user?.role, 40).toLowerCase() === 'therapist') {
+      query = query.eq('therapist_id', sanitizeString(user?.id, 120));
+    }
+    const { data, error } = await query.maybeSingle();
+    if (error) {
+      if (hasMissingFinancialSchema(error) || extractMissingColumnName(error)) return null;
+      throw error;
+    }
+    return data || null;
+  };
+
+  const fetchInProgressAbaSessionForAppointment = async (params: {
+    appointmentId: string;
+    patientId: string;
+    clinicId: string;
+    user: any;
+  }) => {
+    const appointmentId = sanitizeString(params.appointmentId, 120);
+    const patientId = sanitizeString(params.patientId, 120);
+    if (!isUuid(appointmentId) || !isUuid(patientId)) return null;
+    let query = supabase
+      .from('aba_sessions')
+      .select(ABA_SESSION_LIST_SELECT)
+      .eq('appointment_id', appointmentId)
+      .eq('patient_id', patientId)
+      .in('status', ['active', 'in_progress', 'IN_PROGRESS'])
+      .order('updated_at', { ascending: false })
+      .limit(1);
+    if (!hasGlobalClinicAccess(params.user) && params.clinicId) query = query.eq('clinic_id', params.clinicId);
+    if (sanitizeString(params.user?.role, 40).toLowerCase() === 'therapist') {
+      query = query.eq('therapist_id', sanitizeString(params.user?.id, 120));
+    }
+    const { data, error } = await query.maybeSingle();
+    if (error) {
+      if (hasMissingFinancialSchema(error) || extractMissingColumnName(error)) return null;
+      throw error;
+    }
+    return data || null;
+  };
+
+  const patchAppointmentOperationalFromAbaSession = async (params: {
+    appointmentId: string;
+    user: any;
+    status: 'IN_PROGRESS' | 'COMPLETED';
+    actualStartAt?: string | null;
+    actualEndAt?: string | null;
+    actualDurationMinutes?: number | null;
+    abaSessionId?: string | null;
+  }) => {
+    const appointmentId = sanitizeString(params.appointmentId, 120);
+    if (!isUuid(appointmentId)) return null;
+    const previousResult = await supabase
+      .from('appointments')
+      .select('id,organization_id,clinic_id,patient_id,status')
+      .eq('id', appointmentId)
+      .limit(1)
+      .maybeSingle();
+    if (previousResult.error && !hasMissingFinancialSchema(previousResult.error) && !extractMissingColumnName(previousResult.error)) {
+      throw previousResult.error;
+    }
+    const previous = previousResult.data || null;
+    const status = params.status;
+    const patch = cleanObject({
+      status,
+      actual_start_at: params.actualStartAt || undefined,
+      actual_end_at: status === 'COMPLETED' ? params.actualEndAt || new Date().toISOString() : undefined,
+      actual_duration_minutes: status === 'COMPLETED' && Number.isFinite(Number(params.actualDurationMinutes))
+        ? Math.max(0, Math.round(Number(params.actualDurationMinutes)))
+        : undefined,
+      updated_at: new Date().toISOString()
+    });
+    const update = await updateAppointmentOperationalPatch(appointmentId, patch);
+    if (update.error) {
+      if (hasMissingFinancialSchema(update.error)) return null;
+      throw update.error;
+    }
+    const previousStatus = normalizeOperationalAppointmentStatus(previous?.status);
+    const organizationId = sanitizeString(previous?.organization_id || previous?.clinic_id || currentClinicId(params.user), 120);
+    if (previous?.id && previousStatus !== status) {
+      await writeAppointmentStatusAuditLog({
+        organizationId,
+        appointmentId,
+        patientId: previous.patient_id,
+        action: status === 'COMPLETED' ? 'SESSION_COMPLETED' : 'SESSION_STARTED',
+        previousStatus,
+        newStatus: status,
+        performedBy: sanitizeString(params.user?.id, 120),
+        performedByRole: sanitizeString(params.user?.role, 40),
+        metadata: {
+          source: 'aba_session',
+          abaSessionId: sanitizeString(params.abaSessionId, 180) || null
+        }
+      });
+    }
+    return update.data || { id: appointmentId, ...patch };
+  };
+
   const normalizeAbaMasteryStatusForLegacy = (status: string) => {
     const normalized = sanitizeString(status, 60).toUpperCase();
     if (normalized === 'READY_FOR_REVIEW' || normalized === 'MET_TODAY') return 'met';
@@ -29731,50 +29895,105 @@ async function startServer() {
       if (!isUuid(patientId)) return res.status(400).json({ success: false, error: 'Paciente inválido.' });
 
       const startedAt = sanitizeIsoDateTime(req.body?.started_at || req.body?.startedAt);
-      const sessionId = sanitizeString(req.body?.id || req.body?.session_id || req.body?.sessionId || crypto.randomUUID(), 180);
+      const appointmentId = isUuid(sanitizeString(req.body?.appointment_id || req.body?.appointmentId, 180))
+        ? sanitizeString(req.body?.appointment_id || req.body?.appointmentId, 180)
+        : null;
+      let linkedAppointment: any = null;
+      let existingInProgressSession: any = null;
+      if (appointmentId) {
+        const mirrorOk = await ensureAppointmentMirrorForOperationalLink({
+          organizationId: clinicId,
+          appointment: cleanObject({
+            ...(req.body || {}),
+            id: appointmentId,
+            appointment_id: appointmentId,
+            patient_id: patientId,
+            patientId,
+            therapist_id: req.body?.therapist_id || req.body?.therapistId || req.session.user?.id,
+            therapistId: req.body?.therapist_id || req.body?.therapistId || req.session.user?.id,
+            scheduled_start_at: req.body?.scheduled_start_at || req.body?.scheduledStartAt || req.body?.scheduled_start || req.body?.scheduledStart,
+            scheduledStartAt: req.body?.scheduledStartAt || req.body?.scheduled_start_at || req.body?.scheduledStart || req.body?.scheduled_start,
+            scheduled_end_at: req.body?.scheduled_end_at || req.body?.scheduledEndAt || req.body?.scheduled_end || req.body?.scheduledEnd,
+            scheduledEndAt: req.body?.scheduledEndAt || req.body?.scheduled_end_at || req.body?.scheduledEnd || req.body?.scheduled_end,
+            scheduled_duration_minutes: req.body?.scheduled_duration_minutes ?? req.body?.scheduledDurationMinutes,
+            scheduledDurationMinutes: req.body?.scheduledDurationMinutes ?? req.body?.scheduled_duration_minutes,
+            organization_id: clinicId,
+            organizationId: clinicId,
+            clinic_id: clinicId,
+            clinicId,
+            status: 'IN_PROGRESS'
+          }),
+          user: req.session.user
+        });
+        if (!mirrorOk) {
+          return res.status(409).json({
+            success: false,
+            code: 'APPOINTMENT_LINK_UNAVAILABLE',
+            error: 'Sincronize a agenda antes de iniciar a sessão desta consulta.'
+          });
+        }
+        linkedAppointment = await fetchAppointmentForAbaSessionLink(appointmentId, clinicId, req.session.user);
+        if (!linkedAppointment?.id) return res.status(404).json({ success: false, error: 'Consulta não encontrada.' });
+        if (sanitizeString(linkedAppointment.patient_id, 120) !== patientId) {
+          return res.status(409).json({ success: false, error: 'Consulta vinculada a outro paciente.' });
+        }
+        existingInProgressSession = await fetchInProgressAbaSessionForAppointment({
+          appointmentId,
+          patientId,
+          clinicId,
+          user: req.session.user
+        });
+      }
+      const requestedSessionId = sanitizeString(req.body?.id || req.body?.session_id || req.body?.sessionId || crypto.randomUUID(), 180);
+      const sessionId = sanitizeString(existingInProgressSession?.id || requestedSessionId, 180);
+      const requestedStatus = normalizeAbaSessionStatus(req.body?.status);
+      const sessionStatus = appointmentId && requestedStatus === 'active' ? 'in_progress' : requestedStatus;
+      const resolvedActualEndAt = req.body?.actual_end || req.body?.actualEnd || req.body?.actual_end_at || req.body?.actualEndAt
+        ? sanitizeIsoDateTime(req.body?.actual_end || req.body?.actualEnd || req.body?.actual_end_at || req.body?.actualEndAt)
+        : null;
+      const resolvedActualStartAt = existingInProgressSession?.actual_start_at || (
+        req.body?.actual_start || req.body?.actualStart || req.body?.actual_start_at || req.body?.actualStartAt
+          ? sanitizeIsoDateTime(req.body?.actual_start || req.body?.actualStart || req.body?.actual_start_at || req.body?.actualStartAt)
+          : startedAt
+      );
       const payload = cleanObject({
         id: sessionId,
+        organization_id: sanitizeString(req.body?.organization_id || req.body?.organizationId || clinicId, 120),
         clinic_id: clinicId,
         patient_id: patientId,
         patient_name: sanitizeString(req.body?.patient_name || req.body?.patientName, 180),
         therapist_id: sanitizeString(req.body?.therapist_id || req.body?.therapistId || req.session.user?.id, 120),
         device_id: sanitizeString(req.body?.device_id || req.body?.deviceId, 180),
         source: resolveAbaRequestSource(req.body),
-        status: normalizeAbaSessionStatus(req.body?.status),
-        appointment_id: isUuid(sanitizeString(req.body?.appointment_id || req.body?.appointmentId, 180))
-          ? sanitizeString(req.body?.appointment_id || req.body?.appointmentId, 180)
-          : null,
+        status: sessionStatus,
+        appointment_id: appointmentId,
         scheduled_start_at: req.body?.scheduled_start || req.body?.scheduledStart || req.body?.scheduled_start_at || req.body?.scheduledStartAt
           ? sanitizeIsoDateTime(req.body?.scheduled_start || req.body?.scheduledStart || req.body?.scheduled_start_at || req.body?.scheduledStartAt)
-          : null,
+          : linkedAppointment?.scheduled_start_at || linkedAppointment?.scheduled_at || null,
         scheduled_end_at: req.body?.scheduled_end || req.body?.scheduledEnd || req.body?.scheduled_end_at || req.body?.scheduledEndAt
           ? sanitizeIsoDateTime(req.body?.scheduled_end || req.body?.scheduledEnd || req.body?.scheduled_end_at || req.body?.scheduledEndAt)
-          : null,
+          : linkedAppointment?.scheduled_end_at || null,
         scheduled_duration_minutes: req.body?.scheduled_duration_minutes !== undefined || req.body?.scheduledDurationMinutes !== undefined
           ? asSafeNumber(req.body?.scheduled_duration_minutes ?? req.body?.scheduledDurationMinutes, 0, 1440)
-          : null,
-        actual_start_at: req.body?.actual_start || req.body?.actualStart || req.body?.actual_start_at || req.body?.actualStartAt
-          ? sanitizeIsoDateTime(req.body?.actual_start || req.body?.actualStart || req.body?.actual_start_at || req.body?.actualStartAt)
-          : startedAt,
-        actual_end_at: req.body?.actual_end || req.body?.actualEnd || req.body?.actual_end_at || req.body?.actualEndAt
-          ? sanitizeIsoDateTime(req.body?.actual_end || req.body?.actualEnd || req.body?.actual_end_at || req.body?.actualEndAt)
-          : null,
+          : linkedAppointment?.scheduled_duration_minutes || linkedAppointment?.duration_minutes || null,
+        actual_start_at: resolvedActualStartAt,
+        actual_end_at: resolvedActualEndAt,
         actual_duration_minutes: req.body?.actual_duration_minutes !== undefined || req.body?.actualDurationMinutes !== undefined
           ? asSafeNumber(req.body?.actual_duration_minutes ?? req.body?.actualDurationMinutes, 0, 1440)
-          : null,
-        room_id: sanitizeString(req.body?.room_id || req.body?.roomId, 180) || null,
-        room_name: sanitizeString(req.body?.room_name || req.body?.roomName, 180) || null,
-        location_type: sanitizeString(req.body?.location_type || req.body?.locationType, 80) || null,
-        started_at: startedAt,
-        ended_at: req.body?.ended_at || req.body?.endedAt ? sanitizeIsoDateTime(req.body?.ended_at || req.body?.endedAt, startedAt) : null,
+          : calculateAbaSessionDurationMinutes(resolvedActualStartAt, resolvedActualEndAt),
+        room_id: sanitizeString(req.body?.room_id || req.body?.roomId || linkedAppointment?.room_id, 180) || null,
+        room_name: sanitizeString(req.body?.room_name || req.body?.roomName || linkedAppointment?.room_name, 180) || null,
+        location_type: sanitizeString(req.body?.location_type || req.body?.locationType || linkedAppointment?.location_type, 80) || null,
+        started_at: existingInProgressSession?.started_at || startedAt,
+        ended_at: req.body?.ended_at || req.body?.endedAt ? sanitizeIsoDateTime(req.body?.ended_at || req.body?.endedAt, startedAt) : resolvedActualEndAt,
         duration_seconds: req.body?.duration_seconds !== undefined || req.body?.durationSeconds !== undefined
           ? asSafeNumber(req.body?.duration_seconds ?? req.body?.durationSeconds, 0, 86400)
           : null,
         duration_minutes: req.body?.duration_minutes !== undefined || req.body?.durationMinutes !== undefined
           ? asSafeNumber(req.body?.duration_minutes ?? req.body?.durationMinutes, 0, 1440)
-          : null,
+          : calculateAbaSessionDurationMinutes(resolvedActualStartAt, resolvedActualEndAt),
         reference_date: sanitizeDate(req.body?.reference_date || req.body?.referenceDate) || startedAt.slice(0, 10),
-        record_count: asSafeNumber(req.body?.record_count ?? req.body?.recordCount, 0, 100000) || 0,
+        record_count: existingInProgressSession?.record_count ?? (asSafeNumber(req.body?.record_count ?? req.body?.recordCount, 0, 100000) || 0),
         sync_status: 'synced',
         notes: sanitizeTextField(req.body?.notes, 2000),
         created_by: sanitizeString(req.session.user?.id, 120),
@@ -29789,13 +30008,30 @@ async function startServer() {
         throw result.error;
       }
       if (payload.appointment_id) {
-        void regenerateClosureForAppointments(
+        const appointmentStatus = payload.status === 'completed'
+          ? 'COMPLETED'
+          : isAbaSessionInProgressStatus(payload.status)
+            ? 'IN_PROGRESS'
+            : null;
+        if (appointmentStatus) {
+          await patchAppointmentOperationalFromAbaSession({
+            appointmentId: payload.appointment_id,
+            user: req.session.user,
+            status: appointmentStatus,
+            actualStartAt: payload.actual_start_at || payload.started_at,
+            actualEndAt: payload.actual_end_at || payload.ended_at,
+            actualDurationMinutes: payload.actual_duration_minutes || payload.duration_minutes,
+            abaSessionId: payload.id
+          });
+        }
+        await regenerateClosureForAppointments(
           [payload.appointment_id],
           req.session.user,
           'aba_session_saved'
         );
       }
-      return res.json({ success: true, data: { ...payload, id: (result.data as any)?.id || payload.id } });
+      const data = { ...payload, id: (result.data as any)?.id || payload.id };
+      return res.json({ success: true, idempotent: Boolean(existingInProgressSession?.id), data, session: data });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
     }
@@ -29849,6 +30085,11 @@ async function startServer() {
         notes: req.body?.notes !== undefined ? sanitizeTextField(req.body?.notes, 2000) : undefined,
         updated_at: new Date().toISOString()
       });
+      if (patch.status === 'completed') {
+        const completedAt = patch.actual_end_at || patch.ended_at || new Date().toISOString();
+        if (patch.actual_end_at === undefined) patch.actual_end_at = completedAt;
+        if (patch.ended_at === undefined) patch.ended_at = completedAt;
+      }
 
       let safePatch: Record<string, any> = { ...patch };
       while (Object.keys(safePatch).length > 0) {
@@ -29861,7 +30102,30 @@ async function startServer() {
         if (!result.error) {
           const appointmentIdForClosure = sanitizeString(result.data?.appointment_id || safePatch.appointment_id, 120);
           if (isUuid(appointmentIdForClosure)) {
-            void regenerateClosureForAppointments(
+            const sessionData = result.data || { id: sessionId, ...safePatch };
+            const actualEndAt = sessionData.actual_end_at || sessionData.ended_at || null;
+            const actualDurationMinutes = calculateAbaSessionDurationMinutes(
+              sessionData.actual_start_at || sessionData.started_at,
+              actualEndAt,
+              sessionData.actual_duration_minutes ?? sessionData.duration_minutes
+            );
+            const appointmentStatus = sanitizeString(sessionData.status || safePatch.status, 40).toLowerCase() === 'completed'
+              ? 'COMPLETED'
+              : isAbaSessionInProgressStatus(sessionData.status || safePatch.status)
+                ? 'IN_PROGRESS'
+                : null;
+            if (appointmentStatus) {
+              await patchAppointmentOperationalFromAbaSession({
+                appointmentId: appointmentIdForClosure,
+                user: req.session.user,
+                status: appointmentStatus,
+                actualStartAt: sessionData.actual_start_at || sessionData.started_at,
+                actualEndAt,
+                actualDurationMinutes,
+                abaSessionId: sessionId
+              });
+            }
+            await regenerateClosureForAppointments(
               [appointmentIdForClosure],
               req.session.user,
               'aba_session_updated'
