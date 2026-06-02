@@ -106,12 +106,12 @@ test('historico usa labels humanos para DTT e Maintenance Probe', () => {
     collectionType: 'dtt',
     outcome: 'independent',
     score: 1
-  }), 'Treino DTT · Independente · 1');
+  }), 'DTT · Independente · 1');
   assert.equal(formatAbaTrialHistoryLabel({
     collectionType: 'maintenance_probe',
     outcome: 'independent',
     score: 1
-  }), 'Sondagem de manutenção · Independente · 1');
+  }), 'Maintenance Probe · Independente · 1');
 });
 
 test('historico de tentativa com ajuda mostra o prompt humano registrado', () => {
@@ -120,13 +120,13 @@ test('historico de tentativa com ajuda mostra o prompt humano registrado', () =>
     outcome: 'prompted',
     score: 0.5,
     promptLevelKey: 'verbal'
-  }), 'Treino DTT · Com ajuda verbal · 0.5');
+  }), 'DTT · Ajuda verbal · 0.5');
   assert.equal(formatAbaTrialHistoryLabel({
     collectionType: 'net',
     outcome: 'prompted',
     score: 0.5,
     promptLevelKey: 'partial_physical'
-  }), 'Treino NET · Com ajuda física parcial · 0.5');
+  }), 'NET · Ajuda física parcial · 0.5');
 });
 
 test('detector separa treino de sondagem de manutencao', () => {

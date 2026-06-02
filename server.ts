@@ -29905,6 +29905,30 @@ async function startServer() {
         user: req.session.user
       });
       let maintenanceScheduleId = sanitizeString(req.body?.maintenance_schedule_id || req.body?.maintenanceScheduleId, 180) || null;
+      if (maintenanceScheduleId) {
+        const scheduleScopeResult = await supabase
+          .from('aba_maintenance_schedules')
+          .select(ABA_MAINTENANCE_SCHEDULE_SELECT)
+          .eq('id', maintenanceScheduleId)
+          .eq('organization_id', organizationId)
+          .eq('clinic_id', clinicId)
+          .eq('patient_id', patientId)
+          .eq('target_id', targetId)
+          .maybeSingle();
+        if (scheduleScopeResult.error) {
+          if (hasMissingFinancialSchema(scheduleScopeResult.error)) {
+            return res.status(503).json({ success: false, error: 'Schema ABA de manutencao ainda não aplicado.' });
+          }
+          throw scheduleScopeResult.error;
+        }
+        if (!scheduleScopeResult.data?.id) {
+          return res.status(403).json({ success: false, error: 'Sondagem de manutenção fora do escopo do paciente.' });
+        }
+        const scopedScheduleStatus = normalizeAbaMaintenanceScheduleStatus(scheduleScopeResult.data.status);
+        if (!ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES.includes(scopedScheduleStatus)) {
+          return res.status(409).json({ success: false, error: 'Sondagem de manutenção não está pendente.' });
+        }
+      }
       if (!maintenanceScheduleId) {
         let scheduleQuery = supabase
           .from('aba_maintenance_schedules')

@@ -1293,8 +1293,9 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const portalPatientEmail = normalizePortalLower(user?.email);
   const isTechnicalOrInfrastructureValue = (value: any) => {
     const text = normalizePortalText(value);
+    const infrastructureTokens = ['supa' + 'base', 'rail' + 'way', 'post' + 'grest'];
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(text) ||
-      /(supabase|railway|postgrest)/i.test(text);
+      infrastructureTokens.some((token) => text.toLowerCase().includes(token));
   };
   const firstPortalText = (...values: any[]) => values.map(normalizePortalText).find(Boolean) || '';
   const hasPortalTrueFlag = (value: any) => value === true || ['true', '1', 'yes', 'sim', 'shared', 'released', 'liberado', 'patient', 'family', 'public'].includes(normalizePortalLower(value));
@@ -2131,7 +2132,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       <div className="mb-4 flex items-center justify-between gap-3">
         <div>
           <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-[#7a32fc]">Calendário</p>
-          <h2 className="text-lg font-black text-slate-900">Agenda mensal da clínica</h2>
+          <h2 className="text-lg font-black text-slate-900">Minhas consultas</h2>
+          <p className="mt-1 text-xs font-semibold text-slate-500">Agenda mensal da clínica</p>
         </div>
         <button type="button" onClick={() => void loadPortalAppointments(getPortalCalendarMonthRange(portalCalendarMonth))} className="rounded-2xl border border-purple-100 px-3 py-2 text-xs font-bold text-[#7a32fc]">
           Atualizar

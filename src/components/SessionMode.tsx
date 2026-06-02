@@ -46,6 +46,14 @@ import {
   normalizeAbaCollectionType
 } from '../utils/abaTrialLabels';
 import {
+  getActiveMaintenanceProbeForTarget as resolveActiveMaintenanceProbeForTarget,
+  getMaintenanceTargetKey,
+  normalizeRegularAbaTrialType,
+  resolveContextualTrialTypeForTarget,
+  type ActiveMaintenanceProbeForTarget,
+  type ManualMaintenanceProbeActivation
+} from '../utils/abaMaintenanceProbeContext';
+import {
   buildIntervalAggregateSummary,
   buildIntervalCancelAudit,
   getIntervalRunStatus,
@@ -518,6 +526,12 @@ export const SessionMode = ({
   const [trialCount, setTrialCount] = useState(0);
   const [activeCriteria, setActiveCriteria] = useState<string | null>(null);
   const [collectionType, setCollectionType] = useState('dtt');
+  const [lastRegularTrialType, setLastRegularTrialType] = useState('dtt');
+  const [currentTrialTargetKey, setCurrentTrialTargetKey] = useState<string | null>(null);
+  const [activeMaintenanceProbeTargetId, setActiveMaintenanceProbeTargetId] = useState<string | null>(null);
+  const [activeMaintenanceScheduleId, setActiveMaintenanceScheduleId] = useState<string | null>(null);
+  const [manualMaintenanceProbeTargets, setManualMaintenanceProbeTargets] = useState<Record<string, ManualMaintenanceProbeActivation>>({});
+  const [manualRegularOverrideTargetId, setManualRegularOverrideTargetId] = useState<string | null>(null);
   const [promptLevelKey, setPromptLevelKey] = useState('verbal');
   const [records, setRecords] = useState<SessionRecord[]>([]);
   const [sessionLiveSummary, setSessionLiveSummary] = useState<any>(null);
@@ -726,6 +740,15 @@ export const SessionMode = ({
       setSessionCompleted(Boolean(persisted.sessionCompleted || String(activeSession?.status || '').toLowerCase() === 'completed'));
       setPostClosureSummary(persisted.postClosureSummary || null);
       setTrialCount(Number(persisted.trialCount || 0));
+      const restoredRegularTrialType = normalizeRegularAbaTrialType(persisted.lastRegularTrialType, 'dtt');
+      const restoredCollectionType = normalizeAbaCollectionType(persisted.collectionType || restoredRegularTrialType);
+      setLastRegularTrialType(restoredRegularTrialType);
+      setCollectionType(isMaintenanceProbeCollection(restoredCollectionType) ? restoredRegularTrialType : normalizeRegularAbaTrialType(restoredCollectionType, restoredRegularTrialType));
+      setManualMaintenanceProbeTargets(persisted.manualMaintenanceProbeTargets && typeof persisted.manualMaintenanceProbeTargets === 'object' ? persisted.manualMaintenanceProbeTargets : {});
+      setActiveMaintenanceProbeTargetId(null);
+      setActiveMaintenanceScheduleId(null);
+      setManualRegularOverrideTargetId(null);
+      setCurrentTrialTargetKey(null);
     } catch {
       setRecords([]);
       setOpenDurations([]);
@@ -736,6 +759,13 @@ export const SessionMode = ({
       setSessionCompleted(String(activeSession?.status || '').toLowerCase() === 'completed');
       setPostClosureSummary(null);
       setTrialCount(0);
+      setLastRegularTrialType('dtt');
+      setCollectionType('dtt');
+      setManualMaintenanceProbeTargets({});
+      setActiveMaintenanceProbeTargetId(null);
+      setActiveMaintenanceScheduleId(null);
+      setManualRegularOverrideTargetId(null);
+      setCurrentTrialTargetKey(null);
     } finally {
       setHydratedSessionStateKey(sessionStateKey);
     }
@@ -755,13 +785,16 @@ export const SessionMode = ({
           sessionNote,
           sessionCompleted,
           postClosureSummary,
-          trialCount
+          trialCount,
+          collectionType,
+          lastRegularTrialType,
+          manualMaintenanceProbeTargets
         })
       );
     } catch {
       // Local session history is a convenience layer; encrypted offline cache remains the source of truth.
     }
-  }, [hydratedSessionStateKey, intervalRun, intervalSummary, openDurations, postClosureSummary, rateWindow, records, sessionCompleted, sessionNote, sessionStateKey, trialCount]);
+  }, [collectionType, hydratedSessionStateKey, intervalRun, intervalSummary, lastRegularTrialType, manualMaintenanceProbeTargets, openDurations, postClosureSummary, rateWindow, records, sessionCompleted, sessionNote, sessionStateKey, trialCount]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1035,6 +1068,62 @@ export const SessionMode = ({
     });
   };
 
+  const goalTargetId = (goal: any) => String(goal?.id || goal?.target_id || goal?.targetId || '').trim();
+  const goalTargetName = (goal: any) => String(goal?.name || goal?.target_name || goal?.targetName || '').trim();
+
+  const getActiveMaintenanceProbeForTarget = (goal: any): ActiveMaintenanceProbeForTarget | null => resolveActiveMaintenanceProbeForTarget({
+    targetId: goalTargetId(goal),
+    targetName: goalTargetName(goal),
+    schedules: maintenanceSchedules,
+    manualActivations: manualMaintenanceProbeTargets,
+    activeAppointmentId,
+    sessionId,
+    now: new Date(nowMs)
+  });
+
+  const handleCollectionTypeChange = (value: unknown) => {
+    const normalized = normalizeAbaCollectionType(value);
+    if (isMaintenanceProbeCollection(normalized)) {
+      setCollectionType('maintenance_probe');
+      setManualRegularOverrideTargetId(null);
+      return;
+    }
+    const regularType = normalizeRegularAbaTrialType(normalized, lastRegularTrialType || 'dtt');
+    setCollectionType(regularType);
+    setLastRegularTrialType(regularType);
+    if (activeMaintenanceProbeTargetId) setManualRegularOverrideTargetId(activeMaintenanceProbeTargetId);
+    setActiveMaintenanceProbeTargetId(null);
+    setActiveMaintenanceScheduleId(null);
+  };
+
+  const syncTrialTypeForGoal = (goal: any) => {
+    const targetKey = getMaintenanceTargetKey(goal);
+    const activeProbe = getActiveMaintenanceProbeForTarget(goal);
+    const sameManualOverride = Boolean(targetKey && manualRegularOverrideTargetId === targetKey);
+    if (targetKey) setCurrentTrialTargetKey(targetKey);
+    if (manualRegularOverrideTargetId && targetKey && manualRegularOverrideTargetId !== targetKey) {
+      setManualRegularOverrideTargetId(null);
+    }
+    const resolvedCollectionType = resolveContextualTrialTypeForTarget({
+      requestedTrialType: collectionType,
+      lastRegularTrialType,
+      activeProbe,
+      manualRegularOverride: sameManualOverride
+    });
+    if (isMaintenanceProbeCollection(resolvedCollectionType)) {
+      setCollectionType('maintenance_probe');
+      if (targetKey) setActiveMaintenanceProbeTargetId(targetKey);
+      setActiveMaintenanceScheduleId(activeProbe?.scheduleId || null);
+      return { collectionType: 'maintenance_probe', activeProbe };
+    }
+    const regularType = normalizeRegularAbaTrialType(resolvedCollectionType, lastRegularTrialType || 'dtt');
+    setCollectionType(regularType);
+    if (!isMaintenanceProbeCollection(collectionType)) setLastRegularTrialType(regularType);
+    setActiveMaintenanceProbeTargetId(null);
+    setActiveMaintenanceScheduleId(null);
+    return { collectionType: regularType, activeProbe: sameManualOverride ? activeProbe : null };
+  };
+
   const saveExistingBehaviorEvent = async (payload: any, record: Omit<SessionRecord, 'syncStatus'>) => {
     upsertRecord(record, 'local');
     setTimeout(() => updateRecordStatus(record.id, 'syncing'), 60);
@@ -1258,6 +1347,118 @@ export const SessionMode = ({
     return Boolean(goalName && recordTargetName && recordTargetName === goalName);
   };
 
+  const persistMaintenanceProbeResultForTrial = async (params: {
+    goal: any;
+    score: number;
+    outcome: 'independent' | 'prompted' | 'error';
+    selectedPrompt: any;
+    timestamp: string;
+    trialId: string;
+    activeProbe: ActiveMaintenanceProbeForTarget | null;
+  }) => {
+    const goalId = goalTargetId(params.goal);
+    const goalName = goalTargetName(params.goal) || 'Target';
+    const activeProbe = params.activeProbe || getActiveMaintenanceProbeForTarget(params.goal);
+    const syntheticRecord: SessionRecord = {
+      id: params.trialId,
+      kind: 'trial',
+      title: goalName,
+      detail: '',
+      timestamp: params.timestamp,
+      syncStatus: 'local',
+      targetId: goalId || null,
+      targetName: goalName,
+      trialOutcome: params.outcome,
+      collectionType: 'maintenance_probe',
+      promptLevelKey: params.selectedPrompt.key,
+      promptLevelName: params.selectedPrompt.label,
+      score: params.score,
+      correct: params.outcome !== 'error' && params.score > 0,
+      independent: params.outcome === 'independent'
+    };
+    const probeRecords = [
+      syntheticRecord,
+      ...records.filter((record) => record.kind === 'trial' && isMaintenanceProbeCollection(record.collectionType) && recordMatchesGoal(record, params.goal))
+    ];
+    const totalTrials = probeRecords.length;
+    const independentTrials = probeRecords.filter((record) => record.trialOutcome === 'independent' || record.independent).length;
+    const errorTrials = probeRecords.filter((record) => record.trialOutcome === 'error' || record.correct === false).length;
+    const promptedTrials = Math.max(0, totalTrials - independentTrials - errorTrials);
+    const accuracyPercent = totalTrials > 0 ? Math.round(((independentTrials + promptedTrials) / totalTrials) * 10000) / 100 : 0;
+    const independencePercent = totalTrials > 0 ? Math.round((independentTrials / totalTrials) * 10000) / 100 : 0;
+    const result = await dataService.saveAbaMaintenanceProbeResult({
+      id: `maintenance-${sessionId}-${goalId || goalName}`,
+      organization_id: resolvedClinicId || undefined,
+      organizationId: resolvedClinicId || undefined,
+      clinic_id: resolvedClinicId || undefined,
+      clinicId: resolvedClinicId || undefined,
+      patient_id: patientId,
+      patientId,
+      target_id: goalId || goalName,
+      targetId: goalId || goalName,
+      target_name: goalName,
+      targetName: goalName,
+      maintenance_schedule_id: activeProbe?.scheduleId || activeMaintenanceScheduleId || undefined,
+      maintenanceScheduleId: activeProbe?.scheduleId || activeMaintenanceScheduleId || undefined,
+      session_id: sessionId,
+      sessionId,
+      appointment_id: activeAppointmentId || undefined,
+      appointmentId: activeAppointmentId || undefined,
+      occurred_at: params.timestamp,
+      occurredAt: params.timestamp,
+      total_trials: totalTrials,
+      totalTrials,
+      independent_trials: independentTrials,
+      independentTrials,
+      prompted_trials: promptedTrials,
+      promptedTrials,
+      error_trials: errorTrials,
+      errorTrials,
+      accuracy_percent: accuracyPercent,
+      accuracyPercent,
+      independence_percent: independencePercent,
+      independencePercent,
+      raw_payload: {
+        source: 'session_mode_trial',
+        clientTrialId: params.trialId,
+        targetName: goalName,
+        manuallyActivated: Boolean(activeProbe?.manuallyActivated),
+        linkedToSession: Boolean(activeProbe?.linkedToSession),
+        noAutomaticTargetMutation: true
+      }
+    });
+    showPersistResultToast(result);
+    void refreshMaintenanceOverview();
+
+    const targetKey = getMaintenanceTargetKey(params.goal);
+    const nextManualActivations = { ...manualMaintenanceProbeTargets };
+    if (targetKey && activeProbe?.manuallyActivated) {
+      delete nextManualActivations[targetKey];
+      setManualMaintenanceProbeTargets(nextManualActivations);
+    }
+    const remainingSchedules = maintenanceSchedules.filter((schedule: any) => String(schedule?.id || '') !== String(activeProbe?.scheduleId || ''));
+    const remainingProbe = resolveActiveMaintenanceProbeForTarget({
+      targetId: goalId,
+      targetName: goalName,
+      schedules: remainingSchedules,
+      manualActivations: nextManualActivations,
+      activeAppointmentId,
+      sessionId,
+      now: new Date(nowMs)
+    });
+    if (remainingProbe && targetKey) {
+      setCollectionType('maintenance_probe');
+      setActiveMaintenanceProbeTargetId(targetKey);
+      setActiveMaintenanceScheduleId(remainingProbe.scheduleId || null);
+      return result;
+    }
+    setActiveMaintenanceProbeTargetId(null);
+    setActiveMaintenanceScheduleId(null);
+    setManualRegularOverrideTargetId(null);
+    setCollectionType(lastRegularTrialType || 'dtt');
+    return result;
+  };
+
   const findPreviousTrainingTrialForGoal = (goal: any) => {
     return records
       .filter((record) => record.kind === 'trial' && recordMatchesGoal(record, goal) && isDuplicateRiskTrainingCollection(record.collectionType))
@@ -1341,6 +1542,18 @@ export const SessionMode = ({
       });
       updateRecordStatus(record.id, result?.success && !result?.pending && !result?.offline ? 'synced' : 'local');
       showPersistResultToast(result);
+      await persistMaintenanceProbeResultForTrial({
+        goal: { id: record.targetId || null, name: record.targetName || record.title },
+        score: Number(record.score ?? 0),
+        outcome: record.trialOutcome || (record.correct ? 'independent' : 'error'),
+        selectedPrompt: {
+          key: record.promptLevelKey || 'independent',
+          label: record.promptLevelName || record.promptLevelKey || 'Independente'
+        },
+        timestamp: record.timestamp,
+        trialId: record.id,
+        activeProbe: getActiveMaintenanceProbeForTarget({ id: record.targetId || null, name: record.targetName || record.title })
+      });
       onSessionRecordSaved?.();
     } catch (error) {
       updateRecordStatus(record.id, 'error');
@@ -1400,13 +1613,15 @@ export const SessionMode = ({
     score,
     outcome,
     selectedPrompt,
-    activeCollectionType
+    activeCollectionType,
+    activeMaintenanceProbe
   }: {
     goal: any;
     score: number;
     outcome: 'independent' | 'prompted' | 'error';
     selectedPrompt: any;
     activeCollectionType: string;
+    activeMaintenanceProbe?: ActiveMaintenanceProbeForTarget | null;
   }) => {
     const maxScore = Number(goal?.maxScore || 1);
     const timestamp = new Date().toISOString();
@@ -1485,6 +1700,17 @@ export const SessionMode = ({
       }));
       setTrialCount((prev) => prev + 1);
       updateRecordStatus(trialId, 'synced');
+      if (isMaintenanceProbeCollection(normalizedCollectionType)) {
+        await persistMaintenanceProbeResultForTrial({
+          goal,
+          score,
+          outcome,
+          selectedPrompt,
+          timestamp,
+          trialId,
+          activeProbe: activeMaintenanceProbe || null
+        });
+      }
       onSessionRecordSaved?.();
     } catch (error) {
       updateRecordStatus(trialId, 'error');
@@ -1506,7 +1732,8 @@ export const SessionMode = ({
       return;
     }
     setPromptWarning('');
-    const activeCollectionType = normalizeAbaCollectionType(collectionType);
+    const trialContext = syncTrialTypeForGoal(goal);
+    const activeCollectionType = normalizeAbaCollectionType(trialContext.collectionType);
     if (isMaintenanceProbeCollection(activeCollectionType)) {
       const previousTrial = findPreviousTrainingTrialForGoal(goal);
       if (previousTrial) {
@@ -1520,10 +1747,31 @@ export const SessionMode = ({
         return;
       }
     }
-    await persistTrialRecord({ goal, score, outcome, selectedPrompt, activeCollectionType });
+    await persistTrialRecord({ goal, score, outcome, selectedPrompt, activeCollectionType, activeMaintenanceProbe: trialContext.activeProbe });
   };
 
   const activateMaintenanceProbeMode = (goal?: any) => {
+    const targetKey = goal ? getMaintenanceTargetKey(goal) : '';
+    const activeProbe = goal ? getActiveMaintenanceProbeForTarget(goal) : null;
+    if (targetKey) {
+      setCurrentTrialTargetKey(targetKey);
+      setActiveMaintenanceProbeTargetId(targetKey);
+      setActiveMaintenanceScheduleId(activeProbe?.scheduleId || null);
+      setManualRegularOverrideTargetId(null);
+      setManualMaintenanceProbeTargets((prev) => ({
+        ...prev,
+        [targetKey]: {
+          targetId: goalTargetId(goal) || targetKey,
+          targetName: goalTargetName(goal) || null,
+          scheduleId: activeProbe?.scheduleId || null,
+          status: activeProbe?.status || 'MANUAL',
+          dueDate: activeProbe?.dueDate || null,
+          appointmentId: activeAppointmentId || null,
+          sessionId,
+          activatedAt: new Date().toISOString()
+        }
+      }));
+    }
     setCollectionType('maintenance_probe');
     if (goal?.id) setActiveCriteria(goal.id);
     setPlanActionMessage('Maintenance Probe ativo para esta tentativa.');
@@ -3127,12 +3375,12 @@ export const SessionMode = ({
   };
 
   const handleApplyPlanItemNow = (item: any) => {
-    if (item?.planned_trial_type) setCollectionType(String(item.planned_trial_type));
     if (String(item?.planned_trial_type || '').toLowerCase() === 'maintenance_probe') {
       const goal = sessionGoals.find((entry: any) => String(entry?.id || entry?.target_id || entry?.targetId || '') === String(item?.target_id || item?.targetId || ''));
       activateMaintenanceProbeMode(goal);
       setPlanActionMessage('Maintenance Probe ativo para esta tentativa.');
     } else {
+      if (item?.planned_trial_type) handleCollectionTypeChange(String(item.planned_trial_type));
       setPlanActionMessage('Item do plano selecionado para esta sessao.');
     }
     void dataService.updateAbaNextSessionPlanItem(item.id, { status: 'USED_IN_SESSION' });
@@ -4511,7 +4759,7 @@ export const SessionMode = ({
               Tipo da próxima tentativa
               <select
                 value={collectionType}
-                onChange={(event) => setCollectionType(event.target.value)}
+                onChange={(event) => handleCollectionTypeChange(event.target.value)}
                 className="block mt-1 w-full bg-white border border-blue-100 rounded-xl px-3 py-2 text-xs font-bold text-gray-700 outline-none focus:border-[#7a32fc]"
               >
                 {collectionOptions.map((option) => (
@@ -5176,12 +5424,14 @@ export const SessionMode = ({
           <div className="space-y-5">
             {sessionGoals.map((goal: any) => {
               const goalKey = String(goal?.id || goal?.name || 'goal');
+              const maintenanceTargetKey = getMaintenanceTargetKey(goal);
+              const maintenanceProbeActiveForGoal = Boolean(maintenanceTargetKey && currentTrialTargetKey === maintenanceTargetKey && activeMaintenanceProbeTargetId === maintenanceTargetKey && isMaintenanceProbeCollection(collectionType));
               const masteryRow = teachingMasteryRows.find((row) => String(row.id || row.targetId || row.name) === goalKey || row.name === goal.name);
               const maintenanceInfo = getGoalMaintenanceInfo(goal);
               const independentTrialLockKey = `trial:${goalKey}:independent:independent`;
               const errorTrialLockKey = `trial:${goalKey}:error:error`;
               return (
-                <div key={goal.id} className="bg-white rounded-[24px] sm:rounded-[32px] p-4 sm:p-6 shadow-xl shadow-blue-900/5 border border-white relative overflow-hidden">
+                <div key={goal.id} onPointerDown={() => syncTrialTypeForGoal(goal)} className="bg-white rounded-[24px] sm:rounded-[32px] p-4 sm:p-6 shadow-xl shadow-blue-900/5 border border-white relative overflow-hidden">
                   <div className="flex flex-col gap-4 mb-5 sm:flex-row sm:items-start sm:justify-between">
                     <div>
                       <span className="inline-flex bg-[#7a32fc]/10 text-[#7a32fc] text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-widest mb-3">
@@ -5209,6 +5459,11 @@ export const SessionMode = ({
                           <p className="mt-1 text-xs font-bold text-amber-900">
                             Tipo atual da próxima tentativa: {getAbaCollectionLabel(collectionType)}
                           </p>
+                          {maintenanceProbeActiveForGoal && (
+                            <p className="mt-2 inline-flex rounded-full bg-emerald-100 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-emerald-700">
+                              Maintenance Probe ativo para a próxima tentativa
+                            </p>
+                          )}
                           <p className="mt-1 text-xs font-semibold text-amber-800">Para avaliar manutenção, use Maintenance Probe.</p>
                           <p className="text-xs font-semibold text-amber-800">
                             {maintenanceInfo.nextSchedule ? formatMaintenanceDueLabel(maintenanceInfo.nextSchedule) : 'Sem sondagem agendada'}
@@ -5247,7 +5502,7 @@ export const SessionMode = ({
                           </button>
                         </div>
                       </div>
-                      {maintenanceProbeFeedback && (
+                      {maintenanceProbeFeedback && maintenanceProbeActiveForGoal && (
                         <p className="mt-2 inline-flex rounded-full bg-emerald-100 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-emerald-700">
                           {maintenanceProbeFeedback}
                         </p>
@@ -5717,7 +5972,8 @@ export const SessionMode = ({
                     score: pending.score,
                     outcome: pending.outcome,
                     selectedPrompt: pending.selectedPrompt,
-                    activeCollectionType: 'maintenance_probe'
+                    activeCollectionType: 'maintenance_probe',
+                    activeMaintenanceProbe: getActiveMaintenanceProbeForTarget(pending.goal)
                   });
                 }}
                 className="min-h-[48px] rounded-2xl bg-emerald-500 px-4 py-3 text-xs font-bold uppercase tracking-widest text-white shadow-lg shadow-emerald-500/20"

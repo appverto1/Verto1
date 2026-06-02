@@ -11,11 +11,11 @@ const COLLECTION_LABELS: Record<string, string> = {
 };
 
 const HISTORY_PREFIX_LABELS: Record<string, string> = {
-  dtt: 'Treino DTT',
-  net: 'Treino NET',
-  cold_probe: 'Sondagem Cold Probe',
-  baseline_probe: 'Sondagem Baseline Probe',
-  maintenance_probe: 'Sondagem de manutenção'
+  dtt: 'DTT',
+  net: 'NET',
+  cold_probe: 'Cold Probe',
+  baseline_probe: 'Baseline Probe',
+  maintenance_probe: 'Maintenance Probe'
 };
 
 const OUTCOME_LABELS: Record<string, string> = {
@@ -84,7 +84,7 @@ export const formatAbaTrialHistoryLabel = ({
     ? getAbaPromptLabel(promptLevelKey || promptLevelName || promptLabel, '')
     : '';
   const outcomeLabel = normalizedOutcome === 'prompted' && resolvedPromptLabel && resolvedPromptLabel !== 'Com ajuda'
-    ? `Com ajuda ${resolvedPromptLabel.toLowerCase()}`
+    ? `Ajuda ${resolvedPromptLabel.toLowerCase()}`
     : getAbaTrialOutcomeLabel(outcome);
   return `${prefix} · ${outcomeLabel} · ${formatAbaScoreLabel(score)}`;
 };

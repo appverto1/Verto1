@@ -53,7 +53,7 @@ test('prompted labels survive normalization and history formatting', () => {
     outcome: 'prompted',
     score: 0.5,
     promptLevelKey: partialPhysical.key
-  }), 'Sondagem Cold Probe · Com ajuda física parcial · 0.5');
+  }), 'Cold Probe · Ajuda física parcial · 0.5');
 });
 
 for (const item of tests) {

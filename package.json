@@ -14,6 +14,7 @@
     "preview": "vite preview",
     "start": "tsx server.ts",
     "check:docker-runtime-imports": "node scripts/check-docker-runtime-imports.mjs",
+    "test": "node scripts/run-tests.mjs",
     "test:security": "node tests/security.regression.test.mjs",
     "test:aba-session-summary": "tsx tests/abaSessionSummary.test.ts",
     "test:aba-session-feedback": "tsx tests/abaSessionFeedback.test.ts",
