@@ -7,6 +7,7 @@ const serverCode = readFileSync(join(root, 'server.ts'), 'utf8');
 const calendarCode = readFileSync(join(root, 'src/components/Calendar.tsx'), 'utf8');
 const coordinatorCode = readFileSync(join(root, 'src/components/CoordinatorDashboard.tsx'), 'utf8');
 const closureCode = readFileSync(join(root, 'src/services/closureReadinessEngine.ts'), 'utf8');
+const dataServiceCode = readFileSync(join(root, 'src/services/dataService.ts'), 'utf8');
 const migrationCode = readFileSync(join(root, 'supabase/migrations/20260601120000_appointment_billing_context_patient_index.sql'), 'utf8');
 const patientDefaultMigrationCode = readFileSync(join(root, 'supabase/migrations/20260602123000_appointment_billing_context_patient_defaults.sql'), 'utf8');
 
@@ -24,8 +25,33 @@ test('endpoint de contexto faz upsert idempotente por consulta', () => {
   const route = serverCode.slice(routeStart, routeEnd);
   assert.match(route, /await persistAppointmentClosureCheck\(\{\s*appointmentId: appointment\.id,\s*user: req\.session\.user,\s*force: true\s*\}\)/);
   assert.doesNotMatch(route, /regenerateClosureForAppointments/);
-  assert.match(serverCode, /message: 'Pagador atualizado\.'/);
+  assert.match(route, /message: 'Pagador salvo na consulta\.'/);
   assert.doesNotMatch(serverCode, /\.select\('\*'\)/);
+});
+
+test('salvar contexto usa fallback de schema sem expor 503 tecnico', () => {
+  assert.match(serverCode, /APPOINTMENT_BILLING_CONTEXT_SCHEMA_FALLBACK_COLUMNS/);
+  assert.match(serverCode, /APPOINTMENT_BILLING_CONTEXT_METADATA_VALUE_COLUMNS/);
+  assert.match(serverCode, /APPOINTMENT_BILLING_CONTEXT_REQUIRED_STORAGE_COLUMNS/);
+  assert.match(serverCode, /const buildBillingContextSelect/);
+  assert.match(serverCode, /const buildBillingContextStoragePayload/);
+  assert.match(serverCode, /const assertBillingContextExtendedStorageAvailable/);
+  assert.match(serverCode, /BILLING_CONTEXT_SCHEMA_INCOMPLETE/);
+  assert.match(serverCode, /buildBillingContextMetadata\(payload\)/);
+
+  const routeStart = serverCode.indexOf("app.patch('/api/appointments/:appointmentId/billing-context'");
+  const routeEnd = serverCode.indexOf("app.post('/api/appointments/:appointmentId/required-documents", routeStart);
+  const route = serverCode.slice(routeStart, routeEnd);
+  assert.match(route, /const data = await upsertAppointmentBillingContextRow\(payload\)/);
+  assert.match(route, /error: 'Não foi possível salvar o pagador da consulta agora\.'/);
+  assert.doesNotMatch(route, /status\(503\)/);
+
+  const fetchStart = serverCode.indexOf('const fetchAppointmentForBillingContext');
+  const fetchSlice = serverCode.slice(fetchStart, fetchStart + 1200);
+  assert.match(fetchSlice, /status: 500, error: 'Agenda indisponível\.'/);
+  assert.doesNotMatch(fetchSlice, /status: 503/);
+
+  assert.match(dataServiceCode, /Não foi possível salvar o pagador da consulta agora\./);
 });
 
 test('criacao da consulta cria contexto inicial sem sobrescrever edicao posterior', () => {
@@ -148,9 +174,14 @@ test('indice por paciente foi adicionado de forma aditiva', () => {
 });
 
 test('campos herdados do paciente foram adicionados de forma aditiva', () => {
+  assert.match(patientDefaultMigrationCode, /add column if not exists payer_type text/);
   assert.match(patientDefaultMigrationCode, /add column if not exists insurance_card_number text/);
   assert.match(patientDefaultMigrationCode, /add column if not exists insurance_plan_name text/);
   assert.match(patientDefaultMigrationCode, /add column if not exists source text/);
+  assert.match(patientDefaultMigrationCode, /add column if not exists metadata jsonb not null default '\{\}'::jsonb/);
+  assert.match(patientDefaultMigrationCode, /add column if not exists created_by uuid/);
+  assert.match(patientDefaultMigrationCode, /add column if not exists updated_by uuid/);
+  assert.match(patientDefaultMigrationCode, /idx_appointment_billing_contexts_source/);
   assert.match(serverCode, /'insurance_card_number'/);
   assert.match(serverCode, /'insurance_plan_name'/);
   assert.match(serverCode, /'source'/);

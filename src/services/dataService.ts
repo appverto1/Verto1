@@ -2222,9 +2222,17 @@ export const dataService = {
         hasExplicitColumns: true,
         requiresPatientOrSession: false
       });
-      return await safeJson(response);
+      const result = await safeJson(response);
+      if (!result?.success) {
+        return {
+          ...result,
+          status: response.status,
+          error: result?.error || 'Não foi possível salvar o pagador da consulta agora.'
+        };
+      }
+      return result;
     } catch {
-      return { success: false, error: 'Não foi possível atualizar pagador da consulta agora.' };
+      return { success: false, error: 'Não foi possível salvar o pagador da consulta agora.' };
     }
   },
 

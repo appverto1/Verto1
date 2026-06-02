@@ -2928,6 +2928,7 @@ const APPOINTMENT_BILLING_CONTEXT_SELECT = [
   'appointment_id',
   'patient_id',
   'payer_id',
+  'payer_type',
   'payer_name_snapshot',
   'service_type',
   'insurance_card_number',
@@ -2937,9 +2938,34 @@ const APPOINTMENT_BILLING_CONTEXT_SELECT = [
   'procedure_code',
   'notes',
   'source',
+  'metadata',
+  'created_by',
+  'updated_by',
   'created_at',
   'updated_at'
 ].join(',');
+
+const APPOINTMENT_BILLING_CONTEXT_SCHEMA_FALLBACK_COLUMNS = new Set([
+  'payer_type',
+  'insurance_card_number',
+  'insurance_plan_name',
+  'source',
+  'metadata',
+  'created_by',
+  'updated_by'
+]);
+
+const APPOINTMENT_BILLING_CONTEXT_METADATA_VALUE_COLUMNS = [
+  'payer_type',
+  'insurance_card_number',
+  'insurance_plan_name',
+  'source'
+];
+
+const APPOINTMENT_BILLING_CONTEXT_REQUIRED_STORAGE_COLUMNS = [
+  'insurance_card_number',
+  'insurance_plan_name'
+];
 
 const APPOINTMENT_REQUIRED_DOCUMENT_SELECT = [
   'id',
@@ -5727,6 +5753,21 @@ async function upsertInitialBillingContextFromAppointment(params: {
   const upsertResult = await supabase
     .from('appointment_billing_contexts')
     .upsert([payload], { onConflict: 'organization_id,appointment_id' });
+  if (upsertResult.error && extractMissingColumnName(upsertResult.error)) {
+    const legacyPayload = { ...payload };
+    delete legacyPayload.payer_type;
+    delete legacyPayload.insurance_card_number;
+    delete legacyPayload.insurance_plan_name;
+    delete legacyPayload.source;
+    delete legacyPayload.metadata;
+    delete legacyPayload.created_by;
+    delete legacyPayload.updated_by;
+    const legacyResult = await supabase
+      .from('appointment_billing_contexts')
+      .upsert([cleanObject(legacyPayload)], { onConflict: 'organization_id,appointment_id' });
+    if (legacyResult.error && !hasMissingFinancialSchema(legacyResult.error)) throw legacyResult.error;
+    return;
+  }
   if (upsertResult.error && !hasMissingFinancialSchema(upsertResult.error)) throw upsertResult.error;
 }
 
@@ -24491,20 +24532,112 @@ async function startServer() {
     }
   };
 
+  const mergeBillingContextMetadata = (row: any) => {
+    if (!row) return null;
+    const metadata = parseStoredJsonObject(row?.metadata);
+    return {
+      ...row,
+      payer_type: row?.payer_type || metadata.payer_type || null,
+      insurance_card_number: row?.insurance_card_number || metadata.insurance_card_number || null,
+      insurance_plan_name: row?.insurance_plan_name || metadata.insurance_plan_name || null,
+      source: row?.source || metadata.source || null
+    };
+  };
+
+  const buildBillingContextMetadata = (payload: any) => sanitizeClinicalPayload(cleanObject({
+    ...parseStoredJsonObject(payload?.metadata),
+    payer_type: payload?.payer_type || undefined,
+    insurance_card_number: payload?.insurance_card_number || undefined,
+    insurance_plan_name: payload?.insurance_plan_name || undefined,
+    source: payload?.source || undefined
+  }));
+
+  const buildBillingContextSelect = (omittedColumns: Set<string> = new Set()) => APPOINTMENT_BILLING_CONTEXT_SELECT
+    .split(',')
+    .map((column) => column.trim())
+    .filter((column) => column && !omittedColumns.has(column))
+    .join(',');
+
+  const hasBillingContextStorageValue = (payload: any, column: string) => {
+    const value = payload?.[column];
+    return value !== undefined && value !== null && String(value).trim() !== '';
+  };
+
+  const assertBillingContextExtendedStorageAvailable = (payload: any, omittedColumns: Set<string>) => {
+    if (!omittedColumns.has('metadata')) return;
+    const unavailableColumns = APPOINTMENT_BILLING_CONTEXT_REQUIRED_STORAGE_COLUMNS.filter(
+      (column) => omittedColumns.has(column) && hasBillingContextStorageValue(payload, column)
+    );
+    if (!unavailableColumns.length) return;
+    const error = new Error('Não foi possível salvar todos os dados do pagador da consulta agora.');
+    (error as any).code = 'BILLING_CONTEXT_SCHEMA_INCOMPLETE';
+    throw error;
+  };
+
+  const buildBillingContextStoragePayload = (payload: any, omittedColumns: Set<string>) => {
+    const next = { ...(payload || {}) };
+    for (const column of omittedColumns) delete next[column];
+    const needsMetadataFallback = !omittedColumns.has('metadata') && APPOINTMENT_BILLING_CONTEXT_METADATA_VALUE_COLUMNS.some(
+      (column) => omittedColumns.has(column) && hasBillingContextStorageValue(payload, column)
+    );
+    if (needsMetadataFallback) next.metadata = buildBillingContextMetadata(payload);
+    else if (omittedColumns.has('metadata')) delete next.metadata;
+    return cleanObject(next);
+  };
+
   const fetchAppointmentBillingContextRow = async (organizationId: string, appointmentId: string) => {
     if (!isUuid(organizationId) || !isUuid(appointmentId)) return null;
-    const { data, error } = await supabase
-      .from('appointment_billing_contexts')
-      .select(APPOINTMENT_BILLING_CONTEXT_SELECT)
-      .eq('organization_id', organizationId)
-      .eq('appointment_id', appointmentId)
-      .limit(1)
-      .maybeSingle();
-    if (error) {
-      if (hasMissingFinancialSchema(error)) return null;
-      throw error;
+    const runQuery = (selectColumns: string) => supabase
+        .from('appointment_billing_contexts')
+        .select(selectColumns)
+        .eq('organization_id', organizationId)
+        .eq('appointment_id', appointmentId)
+        .limit(1)
+        .maybeSingle();
+    const omittedColumns = new Set<string>();
+    let lastError: any = null;
+    for (let attempt = 0; attempt <= APPOINTMENT_BILLING_CONTEXT_SCHEMA_FALLBACK_COLUMNS.size; attempt += 1) {
+      const result = await runQuery(buildBillingContextSelect(omittedColumns));
+      if (!result.error) return mergeBillingContextMetadata(result.data || null);
+      if (isMissingRelationError(result.error)) return null;
+      const missingColumn = extractMissingColumnName(result.error);
+      if (!missingColumn || !APPOINTMENT_BILLING_CONTEXT_SCHEMA_FALLBACK_COLUMNS.has(missingColumn) || omittedColumns.has(missingColumn)) {
+        throw result.error;
+      }
+      omittedColumns.add(missingColumn);
+      lastError = result.error;
     }
-    return data || null;
+    if (lastError && hasMissingFinancialSchema(lastError)) return null;
+    if (lastError) throw lastError;
+    return null;
+  };
+
+  const upsertAppointmentBillingContextRow = async (payload: any) => {
+    const upsertWithSelect = (row: any, selectColumns: string) => supabase
+        .from('appointment_billing_contexts')
+        .upsert([cleanObject(row)], { onConflict: 'organization_id,appointment_id' })
+        .select(selectColumns)
+        .maybeSingle();
+
+    const omittedColumns = new Set<string>();
+    let lastError: any = null;
+    for (let attempt = 0; attempt <= APPOINTMENT_BILLING_CONTEXT_SCHEMA_FALLBACK_COLUMNS.size; attempt += 1) {
+      const storagePayload = buildBillingContextStoragePayload(payload, omittedColumns);
+      const result = await upsertWithSelect(storagePayload, buildBillingContextSelect(omittedColumns));
+      if (!result.error) {
+        assertBillingContextExtendedStorageAvailable(payload, omittedColumns);
+        return mergeBillingContextMetadata(result.data || storagePayload);
+      }
+      if (isMissingRelationError(result.error)) throw result.error;
+      const missingColumn = extractMissingColumnName(result.error);
+      if (!missingColumn || !APPOINTMENT_BILLING_CONTEXT_SCHEMA_FALLBACK_COLUMNS.has(missingColumn) || omittedColumns.has(missingColumn)) {
+        throw result.error;
+      }
+      omittedColumns.add(missingColumn);
+      lastError = result.error;
+    }
+    if (lastError) throw lastError;
+    return mergeBillingContextMetadata(payload);
   };
 
   const fetchRequiredDocumentsForAppointment = async (organizationId: string, appointmentId: string) => {
@@ -25473,7 +25606,7 @@ async function startServer() {
       .limit(1)
       .maybeSingle();
     if (error) {
-      if (hasMissingFinancialSchema(error)) return { ok: false, status: 503, error: 'Agenda indisponível.' };
+      if (hasMissingFinancialSchema(error)) return { ok: false, status: 500, error: 'Agenda indisponível.' };
       throw error;
     }
     if (!data?.id) return { ok: false, status: 404, error: 'Consulta não encontrada.' };
@@ -25766,6 +25899,9 @@ async function startServer() {
         appointment_id: appointment.id,
         patient_id: appointment.patient_id,
         payer_id: payer?.id || null,
+        payer_type: payer?.payer_type || req.body?.payerType || req.body?.payer_type
+          ? normalizePayerType(payer?.payer_type || req.body?.payerType || req.body?.payer_type)
+          : null,
         payer_name_snapshot: sanitizeString(payer?.name || req.body?.payerName || req.body?.payer_name_snapshot, 180) || null,
         service_type: sanitizeString(req.body?.serviceType || req.body?.service_type || appointment.service_type || appointment.approach, 120) || null,
         insurance_card_number: sanitizeString(req.body?.insuranceCardNumber || req.body?.insurance_card_number || req.body?.cardNumber || req.body?.card_number, 120) || null,
@@ -25777,15 +25913,19 @@ async function startServer() {
         source: ['PATIENT_DEFAULT', 'MANUAL'].includes(sanitizeString(req.body?.source, 60).toUpperCase())
           ? sanitizeString(req.body?.source, 60).toUpperCase()
           : 'MANUAL',
+        metadata: sanitizeClinicalPayload(cleanObject({
+          insurance_card_number: sanitizeString(req.body?.insuranceCardNumber || req.body?.insurance_card_number || req.body?.cardNumber || req.body?.card_number, 120) || undefined,
+          insurance_plan_name: sanitizeString(req.body?.insurancePlanName || req.body?.insurance_plan_name, 160) || undefined,
+          source: ['PATIENT_DEFAULT', 'MANUAL'].includes(sanitizeString(req.body?.source, 60).toUpperCase())
+            ? sanitizeString(req.body?.source, 60).toUpperCase()
+            : 'MANUAL'
+        })),
+        created_by: existing?.created_by || (isUuid(sanitizeString(req.session.user?.id, 120)) ? sanitizeString(req.session.user?.id, 120) : null),
+        updated_by: isUuid(sanitizeString(req.session.user?.id, 120)) ? sanitizeString(req.session.user?.id, 120) : null,
         created_at: existing?.created_at || now,
         updated_at: now
       });
-      const { data, error } = await supabase
-        .from('appointment_billing_contexts')
-        .upsert([payload], { onConflict: 'organization_id,appointment_id' })
-        .select(APPOINTMENT_BILLING_CONTEXT_SELECT)
-        .maybeSingle();
-      if (error) throw error;
+      const data = await upsertAppointmentBillingContextRow(payload);
       await writePayerRequirementAuditLog({
         organizationId,
         payerId: data?.payer_id || null,
@@ -25834,10 +25974,21 @@ async function startServer() {
       } catch (closureError: any) {
         console.warn('[PayerRequirements] fechamento pontual apos pagador falhou:', closureError?.message || String(closureError));
       }
-      return res.json({ success: true, message: 'Pagador atualizado.', data: serializeBillingContext(data, payer, documents) });
+      const serialized = serializeBillingContext(data, payer, documents);
+      return res.json({ success: true, message: 'Pagador salvo na consulta.', data: serialized, billingContext: serialized });
     } catch (error: any) {
       console.warn('[PayerRequirements] billing context update failed:', error?.message || String(error));
-      return res.status(500).json(payerSafeError(500));
+      const code = sanitizeString(error?.code, 40);
+      const message = extractSupabaseErrorMessage(error).toLowerCase();
+      const status = code === '42501' || message.includes('row-level security') || message.includes('permission denied')
+        ? 403
+        : ['23502', '23503', '23514', '22P02'].includes(code)
+          ? 400
+          : 500;
+      return res.status(status).json({
+        success: false,
+        error: 'Não foi possível salvar o pagador da consulta agora.'
+      });
     }
   });
 
