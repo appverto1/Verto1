@@ -852,7 +852,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       const raw = localStorage.getItem(sessionStorageKey);
       if (!raw) return null;
       const parsed = JSON.parse(raw);
-      if (String(parsed?.patientId) !== String(patient?.id) || parsed?.status !== 'active') return null;
+      const status = String(parsed?.status || '').toLowerCase();
+      if (String(parsed?.patientId) !== String(patient?.id) || !['active', 'in_progress'].includes(status)) return null;
       return parsed;
     } catch {
       return null;
@@ -906,7 +907,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     setShowSessionStartConfirm(true);
   };
 
-  const handleConfirmSessionStart = () => {
+  const handleConfirmSessionStart = async () => {
     const durationMinutes = Math.max(5, Math.min(240, Math.round(Number(sessionDurationInput) || configuredDefaultSessionMinutes)));
     const startedAt = new Date();
     const resetAt = startedAt.getTime();
@@ -988,7 +989,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     };
     persistActiveSession(nextSession);
     if (abaV2Enabled) {
-      void dataService.saveAbaSession({
+      const saveResult = await dataService.saveAbaSession({
         id: nextSession.id,
         patient_id: patient?.id,
         patient_name: patient?.name || 'Paciente',
@@ -1011,6 +1012,26 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         record_count: 0,
         source: 'verto_web'
       });
+      if (saveResult?.success === false && !saveResult?.offline && nextSession.appointment_id) {
+        clearActiveSession();
+        alert(saveResult?.error || 'Não foi possível vincular a sessão a esta consulta.');
+        return;
+      }
+      const savedSession = saveResult?.session || saveResult?.data;
+      if (saveResult?.success && savedSession?.id && String(savedSession.id) !== String(nextSession.id)) {
+        persistActiveSession({
+          ...nextSession,
+          id: String(savedSession.id),
+          status: savedSession.status || nextSession.status,
+          startedAt: savedSession.actual_start_at || savedSession.started_at || nextSession.startedAt,
+          appointmentId: savedSession.appointment_id || nextSession.appointmentId,
+          appointment_id: savedSession.appointment_id || nextSession.appointment_id,
+          scheduledStart: savedSession.scheduled_start_at || nextSession.scheduledStart,
+          scheduled_start: savedSession.scheduled_start_at || nextSession.scheduled_start,
+          scheduledEnd: savedSession.scheduled_end_at || nextSession.scheduledEnd,
+          scheduled_end: savedSession.scheduled_end_at || nextSession.scheduled_end
+        });
+      }
     }
     setShowSessionStartConfirm(false);
     setRestoreSessionData(false);

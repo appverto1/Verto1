@@ -3285,6 +3285,32 @@ const APPOINTMENT_CLOSURE_MINIMAL_LIST_SELECT = [
   'updated_at'
 ].join(',');
 
+const APPOINTMENT_CLOSURE_CHECK_SCHEMA_FALLBACK_COLUMNS = new Set([
+  'payer_id',
+  'payer_name_snapshot',
+  'authorization_code',
+  'guide_number',
+  'applied_payer_requirement_id',
+  'payer_requirement_source',
+  'required_document_pending_count',
+  'checklist',
+  'main_issues',
+  'generated_by',
+  'context_hash'
+]);
+
+const buildAppointmentClosureCheckSelect = (omittedColumns: Set<string> = new Set()) => APPOINTMENT_CLOSURE_CHECK_SELECT
+  .split(',')
+  .map((column) => column.trim())
+  .filter((column) => column && !omittedColumns.has(column))
+  .join(',');
+
+const buildAppointmentClosureCheckStoragePayload = (payload: any, omittedColumns: Set<string> = new Set()) => {
+  const next = { ...(payload || {}) };
+  for (const column of omittedColumns) delete next[column];
+  return cleanObject(next);
+};
+
 const ACTIVITY_LOG_SELECT = [
   'id',
   'user_id',
@@ -25060,6 +25086,87 @@ async function startServer() {
     };
   };
 
+  const fetchAppointmentClosureCheckRow = async (params: {
+    organizationId: string;
+    appointmentId: string;
+    user: any;
+  }) => {
+    const organizationId = sanitizeString(params.organizationId, 120);
+    const appointmentId = sanitizeString(params.appointmentId, 120);
+    const omittedColumns = new Set<string>();
+    if (!isUuid(organizationId) || !isUuid(appointmentId)) {
+      return { data: null, omittedColumns };
+    }
+
+    let lastError: any = null;
+    for (let attempt = 0; attempt <= APPOINTMENT_CLOSURE_CHECK_SCHEMA_FALLBACK_COLUMNS.size; attempt += 1) {
+      let query = supabase
+        .from('appointment_closure_checks')
+        .select(buildAppointmentClosureCheckSelect(omittedColumns))
+        .eq('organization_id', organizationId)
+        .eq('appointment_id', appointmentId)
+        .limit(1);
+      query = await applyClosureTenantScope(query, params.user, organizationId);
+      const result = await query.maybeSingle();
+      if (!result.error) return { data: result.data || null, omittedColumns };
+      if (isMissingRelationError(result.error)) return { data: null, omittedColumns };
+
+      const missingColumn = extractMissingColumnName(result.error);
+      if (!missingColumn || !APPOINTMENT_CLOSURE_CHECK_SCHEMA_FALLBACK_COLUMNS.has(missingColumn) || omittedColumns.has(missingColumn)) {
+        if (hasMissingFinancialSchema(result.error)) return { data: null, omittedColumns };
+        throw result.error;
+      }
+      omittedColumns.add(missingColumn);
+      lastError = result.error;
+    }
+
+    if (lastError && hasMissingFinancialSchema(lastError)) return { data: null, omittedColumns };
+    if (lastError) throw lastError;
+    return { data: null, omittedColumns };
+  };
+
+  const upsertAppointmentClosureCheckRow = async (payload: any) => {
+    const omittedColumns = new Set<string>();
+    let lastError: any = null;
+    for (let attempt = 0; attempt <= APPOINTMENT_CLOSURE_CHECK_SCHEMA_FALLBACK_COLUMNS.size; attempt += 1) {
+      const storagePayload = buildAppointmentClosureCheckStoragePayload(payload, omittedColumns);
+      const result = await supabase
+        .from('appointment_closure_checks')
+        .upsert([storagePayload], { onConflict: 'organization_id,appointment_id' })
+        .select(buildAppointmentClosureCheckSelect(omittedColumns))
+        .maybeSingle();
+      if (!result.error) {
+        return {
+          ok: true,
+          data: cleanObject({
+            ...payload,
+            ...storagePayload,
+            ...(result.data || {})
+          })
+        };
+      }
+      if (isMissingRelationError(result.error)) {
+        return { ok: false, status: 503, error: 'Fechamento indisponível.' };
+      }
+
+      const missingColumn = extractMissingColumnName(result.error);
+      if (!missingColumn || !APPOINTMENT_CLOSURE_CHECK_SCHEMA_FALLBACK_COLUMNS.has(missingColumn) || omittedColumns.has(missingColumn)) {
+        if (hasMissingFinancialSchema(result.error)) {
+          return { ok: false, status: 503, error: 'Fechamento indisponível.' };
+        }
+        throw result.error;
+      }
+      omittedColumns.add(missingColumn);
+      lastError = result.error;
+    }
+
+    if (lastError && hasMissingFinancialSchema(lastError)) {
+      return { ok: false, status: 503, error: 'Fechamento indisponível.' };
+    }
+    if (lastError) throw lastError;
+    return { ok: false, status: 503, error: 'Fechamento indisponível.' };
+  };
+
   const persistAppointmentClosureCheck = async (params: {
     appointmentId: string;
     user: any;
@@ -25077,13 +25184,11 @@ async function startServer() {
     const appointmentId = sanitizeString(appointment?.id, 120);
     const abaSessionId = sanitizeString(abaSession?.id, 180) || null;
     const patientId = sanitizeString(appointment?.patient_id || abaSession?.patient_id, 120);
-    const existingResult = await supabase
-      .from('appointment_closure_checks')
-      .select(APPOINTMENT_CLOSURE_CHECK_SELECT)
-      .eq('organization_id', organizationId)
-      .eq('appointment_id', appointmentId)
-      .maybeSingle();
-    if (existingResult.error && !hasMissingFinancialSchema(existingResult.error)) throw existingResult.error;
+    const existingResult = await fetchAppointmentClosureCheckRow({
+      organizationId,
+      appointmentId,
+      user: params.user
+    });
 
     const billingContext = (context as any).billingContext || {};
     const requiredDocuments = Array.isArray((context as any).requiredDocuments) ? (context as any).requiredDocuments : [];
@@ -25161,17 +25266,8 @@ async function startServer() {
       context_hash: evaluation.contextHash
     });
 
-    const result = await supabase
-      .from('appointment_closure_checks')
-      .upsert([payload], { onConflict: 'organization_id,appointment_id' })
-      .select(APPOINTMENT_CLOSURE_CHECK_SELECT)
-      .maybeSingle();
-    if (result.error) {
-      if (hasMissingFinancialSchema(result.error)) {
-        return { ok: false, status: 503, error: 'Fechamento indisponível.' };
-      }
-      throw result.error;
-    }
+    const result = await upsertAppointmentClosureCheckRow(payload);
+    if (!result.ok) return result;
     await writeClosureAuditLog({
       organizationId,
       appointmentId,
@@ -26428,19 +26524,16 @@ async function startServer() {
       const appointmentId = sanitizeString(req.params.appointmentId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(appointmentId) || !isUuid(clinicId)) return res.status(400).json(closureSafeError(400));
-      let query = supabase
-        .from('appointment_closure_checks')
-        .select(APPOINTMENT_CLOSURE_CHECK_SELECT)
-        .eq('organization_id', clinicId)
-        .eq('appointment_id', appointmentId)
-        .limit(1);
-      query = await applyClosureTenantScope(query, req.session.user, clinicId);
-      let { data, error } = await query.maybeSingle();
-      if (error && !hasMissingFinancialSchema(error)) throw error;
-      if (!data) {
+      const closureResult = await fetchAppointmentClosureCheckRow({
+        organizationId: clinicId,
+        appointmentId,
+        user: req.session.user
+      });
+      let data = closureResult.data;
+      if (!data || closureResult.omittedColumns.size > 0) {
         const generated = await persistAppointmentClosureCheck({ appointmentId, user: req.session.user, force: true });
-        if (!generated.ok) return res.status((generated as any).status || 404).json(closureSafeError((generated as any).status || 404));
-        data = (generated as any).data;
+        if ((generated as any).ok) data = (generated as any).data;
+        else if (!data) return res.status((generated as any).status || 404).json(closureSafeError((generated as any).status || 404));
       }
       const patientId = sanitizeString(data?.patient_id, 120);
       const professionalId = sanitizeString(data?.professional_id, 120);
@@ -27771,6 +27864,7 @@ async function startServer() {
   const resolveAbaAppointmentIdForClinicalWrite = async (params: {
     requestedAppointmentId?: unknown;
     sessionId?: string | null;
+    patientId?: string | null;
     clinicId: string;
     user: any;
   }) => {
@@ -27778,7 +27872,12 @@ async function startServer() {
     const linkedAppointmentId = sanitizeString(linkedSession?.appointment_id, 120);
     if (isUuid(linkedAppointmentId)) return linkedAppointmentId;
     const requestedAppointmentId = sanitizeString(params.requestedAppointmentId, 120);
-    return isUuid(requestedAppointmentId) ? requestedAppointmentId : null;
+    if (!isUuid(requestedAppointmentId)) return null;
+    const appointment = await fetchAppointmentForAbaSessionLink(requestedAppointmentId, params.clinicId, params.user);
+    if (!appointment?.id) return null;
+    const patientId = sanitizeString(params.patientId, 120);
+    if (isUuid(patientId) && sanitizeString(appointment.patient_id, 120) !== patientId) return null;
+    return requestedAppointmentId;
   };
 
   const ensureAppointmentMirrorForOperationalLink = async (params: {
@@ -29797,9 +29896,14 @@ async function startServer() {
         : (totalTrials > 0 ? Math.round((independentTrials / totalTrials) * 10000) / 100 : 0);
       const occurredAt = sanitizeIsoDateTime(req.body?.occurred_at || req.body?.occurredAt);
       const organizationId = sanitizeString(req.body?.organization_id || req.body?.organizationId || req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
-      const appointmentId = isUuid(sanitizeString(req.body?.appointment_id || req.body?.appointmentId, 180))
-        ? sanitizeString(req.body?.appointment_id || req.body?.appointmentId, 180)
-        : null;
+      const sessionId = sanitizeString(req.body?.session_id || req.body?.sessionId, 180) || null;
+      const appointmentId = await resolveAbaAppointmentIdForClinicalWrite({
+        requestedAppointmentId: req.body?.appointment_id || req.body?.appointmentId,
+        sessionId,
+        patientId,
+        clinicId,
+        user: req.session.user
+      });
       let maintenanceScheduleId = sanitizeString(req.body?.maintenance_schedule_id || req.body?.maintenanceScheduleId, 180) || null;
       if (!maintenanceScheduleId) {
         let scheduleQuery = supabase
@@ -29847,9 +29951,10 @@ async function startServer() {
         organization_id: organizationId,
         clinic_id: clinicId,
         patient_id: patientId,
+        appointment_id: appointmentId,
         target_id: targetId,
         maintenance_schedule_id: maintenanceScheduleId,
-        session_id: sanitizeString(req.body?.session_id || req.body?.sessionId, 180) || null,
+        session_id: sessionId,
         occurred_at: occurredAt,
         total_trials: totalTrials,
         independent_trials: independentTrials,
@@ -29860,6 +29965,7 @@ async function startServer() {
         status: probeStatus,
         raw_payload: sanitizeClinicalPayload({
           ...(req.body?.raw_payload || req.body?.rawPayload || {}),
+          appointmentId: appointmentId || undefined,
           targetName: sanitizeTextField(req.body?.target_name || req.body?.targetName, 240),
           noAutomaticTargetMutation: true,
           humanReviewRequiredForRegressionConfirmed: true
@@ -30191,6 +30297,13 @@ async function startServer() {
       const durationSeconds = req.body?.duration_seconds !== undefined || req.body?.durationSeconds !== undefined
         ? asSafeNumber(req.body?.duration_seconds ?? req.body?.durationSeconds, 0, 86400)
         : Math.max(0, Math.round((new Date(endedAt).getTime() - new Date(startedAt).getTime()) / 1000));
+      const sessionSummaryAppointmentId = await resolveAbaAppointmentIdForClinicalWrite({
+        requestedAppointmentId: req.body?.appointment_id || req.body?.appointmentId,
+        sessionId,
+        patientId,
+        clinicId,
+        user: req.session.user
+      });
       let masterySummaryPayload = sanitizeClinicalPayload(req.body?.mastery_summary || req.body?.masterySummary || []);
       let maintenanceSummaryPayload = sanitizeClinicalPayload(req.body?.maintenance_summary || req.body?.maintenanceSummary || []);
       try {
@@ -30214,7 +30327,7 @@ async function startServer() {
           clinicId,
           therapistId: sanitizeString(req.body?.therapist_id || req.body?.therapistId || req.session.user?.id, 120),
           evaluatedAt: endedAt,
-          appointmentId: req.body?.appointment_id || req.body?.appointmentId
+          appointmentId: sessionSummaryAppointmentId
         });
         if (evaluatedMaintenance.length > 0) {
           maintenanceSummaryPayload = sanitizeClinicalPayload(evaluatedMaintenance);
@@ -30229,6 +30342,7 @@ async function startServer() {
         organization_id: sanitizeString(req.body?.organization_id || req.body?.organizationId || clinicId, 120),
         clinic_id: clinicId,
         session_id: sessionId,
+        appointment_id: sessionSummaryAppointmentId,
         patient_id: patientId,
         therapist_id: sanitizeString(req.body?.therapist_id || req.body?.therapistId || req.session.user?.id, 120),
         started_at: startedAt,
@@ -30258,6 +30372,7 @@ async function startServer() {
         summary_payload: sanitizeClinicalPayload({
           ...(req.body?.summary_payload || req.body?.summaryPayload || {}),
           source: requestSource,
+          appointmentId: sessionSummaryAppointmentId || undefined,
           patientName: sanitizeString(req.body?.patient_name || req.body?.patientName, 180),
           therapistName: sanitizeString(req.body?.therapist_name || req.body?.therapistName, 180),
           teachingSummary: req.body?.teaching_summary || req.body?.teachingSummary || undefined,
@@ -30286,9 +30401,7 @@ async function startServer() {
       } catch (snapshotError: any) {
         console.warn('[ABA Charts] Falha ao gerar snapshots da sessão:', snapshotError?.message || String(snapshotError));
       }
-      let appointmentIdForClosure = isUuid(sanitizeString(req.body?.appointment_id || req.body?.appointmentId, 180))
-        ? sanitizeString(req.body?.appointment_id || req.body?.appointmentId, 180)
-        : '';
+      let appointmentIdForClosure = sessionSummaryAppointmentId || '';
       if (!appointmentIdForClosure) {
         const sessionLinkResult = await supabase
           .from('aba_sessions')
@@ -30347,11 +30460,19 @@ async function startServer() {
       const sessionId = sanitizeString(req.body?.session_id || req.body?.sessionId, 180) || null;
       const sessionWrite = await assertAbaSessionCanAcceptClinicalWrite(sessionId, clinicId, req.session.user);
       if (!sessionWrite.ok) return res.status((sessionWrite as any).status || 409).json({ success: false, error: (sessionWrite as any).error });
+      const appointmentId = await resolveAbaAppointmentIdForClinicalWrite({
+        requestedAppointmentId: req.body?.appointment_id || req.body?.appointmentId,
+        sessionId,
+        patientId,
+        clinicId,
+        user: req.session.user
+      });
       const requestSource = resolveAbaRequestSource(req.body);
       const payload = cleanObject({
         id: sanitizeString(req.body?.id || req.body?.trial_id || req.body?.trialId || crypto.randomUUID(), 180),
         clinic_id: clinicId,
         patient_id: patientId,
+        appointment_id: appointmentId,
         session_id: sessionId,
         target_id: sanitizeString(req.body?.target_id || req.body?.targetId, 180) || null,
         target_name: targetName,
@@ -30380,6 +30501,7 @@ async function startServer() {
         raw_payload: sanitizeClinicalPayload({
           ...(req.body?.raw_payload || req.body?.rawPayload || {}),
           source: requestSource,
+          appointmentId: appointmentId || undefined,
           trialType: sanitizeString(req.body?.trialType || req.body?.trial_type || req.body?.collection_type || req.body?.collectionType, 80),
           promptLevel: promptLevel.key,
           isIndependent: independent,
@@ -30471,11 +30593,19 @@ async function startServer() {
         allowCompletedComplement: isAuthorizedComplement
       });
       if (!sessionWrite.ok) return res.status((sessionWrite as any).status || 409).json({ success: false, error: (sessionWrite as any).error });
+      const appointmentId = await resolveAbaAppointmentIdForClinicalWrite({
+        requestedAppointmentId: req.body?.appointment_id || req.body?.appointmentId,
+        sessionId,
+        patientId,
+        clinicId,
+        user: req.session.user
+      });
 
       let payload: Record<string, any> = cleanObject({
         id: sanitizeString(req.body?.id || req.body?.event_id || req.body?.eventId || crypto.randomUUID(), 180),
         clinic_id: clinicId,
         patient_id: patientId,
+        appointment_id: appointmentId,
         session_id: sessionId,
         behavior_id: behaviorId,
         behavior_name: behaviorName,
@@ -30509,6 +30639,7 @@ async function startServer() {
           ...(req.body?.raw_payload || req.body?.rawPayload || {}),
           source: requestSource,
           patientId,
+          appointmentId: appointmentId || undefined,
           sessionId: sessionId || undefined,
           behaviorId: behaviorId || undefined,
           method: measurementType,
@@ -30625,6 +30756,13 @@ async function startServer() {
       const sessionId = sanitizeString(req.body?.session_id || req.body?.sessionId, 180) || null;
       const sessionWrite = await assertAbaSessionCanAcceptClinicalWrite(sessionId, clinicId, req.session.user);
       if (!sessionWrite.ok) return res.status((sessionWrite as any).status || 409).json({ success: false, error: (sessionWrite as any).error });
+      const appointmentId = await resolveAbaAppointmentIdForClinicalWrite({
+        requestedAppointmentId: req.body?.appointment_id || req.body?.appointmentId,
+        sessionId,
+        patientId,
+        clinicId,
+        user: req.session.user
+      });
 
       const behaviorName = sanitizeTextField(req.body?.behavior_name || req.body?.behaviorName || req.body?.name, 240);
       if (!behaviorName) return res.status(400).json({ success: false, error: 'Comportamento é obrigatório.' });
@@ -30644,6 +30782,7 @@ async function startServer() {
         id: sanitizeString(req.body?.id || req.body?.record_id || req.body?.recordId || crypto.randomUUID(), 180),
         clinic_id: clinicId,
         patient_id: patientId,
+        appointment_id: appointmentId,
         session_id: sessionId,
         behavior_id: sanitizeString(req.body?.behavior_id || req.body?.behaviorId, 180) || null,
         behavior_name: behaviorName,
@@ -30669,6 +30808,7 @@ async function startServer() {
           collectionStatus,
           cancelledAt: cancelledAt || undefined,
           patientId,
+          appointmentId: appointmentId || undefined,
           sessionId: sessionId || undefined,
           syncStatus: 'synced'
         }),
@@ -30697,6 +30837,13 @@ async function startServer() {
       const sessionId = sanitizeString(req.body?.session_id || req.body?.sessionId, 180) || null;
       const sessionWrite = await assertAbaSessionCanAcceptClinicalWrite(sessionId, clinicId, req.session.user);
       if (!sessionWrite.ok) return res.status((sessionWrite as any).status || 409).json({ success: false, error: (sessionWrite as any).error });
+      const appointmentId = await resolveAbaAppointmentIdForClinicalWrite({
+        requestedAppointmentId: req.body?.appointment_id || req.body?.appointmentId,
+        sessionId,
+        patientId,
+        clinicId,
+        user: req.session.user
+      });
 
       const behaviorName = sanitizeTextField(req.body?.behavior_name || req.body?.behaviorName || req.body?.name, 240);
       if (!behaviorName) return res.status(400).json({ success: false, error: 'Comportamento é obrigatório.' });
@@ -30722,6 +30869,7 @@ async function startServer() {
         id: sanitizeString(req.body?.id || req.body?.summary_id || req.body?.summaryId || crypto.randomUUID(), 180),
         clinic_id: clinicId,
         patient_id: patientId,
+        appointment_id: appointmentId,
         session_id: sessionId,
         behavior_id: sanitizeString(req.body?.behavior_id || req.body?.behaviorId, 180) || null,
         behavior_name: behaviorName,
@@ -30763,6 +30911,7 @@ async function startServer() {
           endedEarlyAt: endedEarlyAt || undefined,
           cancelledAt: cancelledAt || undefined,
           patientId,
+          appointmentId: appointmentId || undefined,
           sessionId: sessionId || undefined,
           syncStatus: 'synced'
         }),
@@ -30796,12 +30945,20 @@ async function startServer() {
         allowCompletedComplement: isAuthorizedComplement
       });
       if (!sessionWrite.ok) return res.status((sessionWrite as any).status || 409).json({ success: false, error: (sessionWrite as any).error });
+      const appointmentId = await resolveAbaAppointmentIdForClinicalWrite({
+        requestedAppointmentId: req.body?.appointment_id || req.body?.appointmentId,
+        sessionId,
+        patientId,
+        clinicId,
+        user: req.session.user
+      });
       const requestSource = resolveAbaRequestSource(req.body);
       const occurredAt = sanitizeIsoDateTime(req.body?.occurred_at || req.body?.occurredAt || req.body?.created_at || req.body?.createdAt);
       const payload = cleanObject({
         id: sanitizeString(req.body?.id || req.body?.abc_id || req.body?.abcId || crypto.randomUUID(), 180),
         clinic_id: clinicId,
         patient_id: patientId,
+        appointment_id: appointmentId,
         session_id: sessionId,
         behavior_id: sanitizeString(req.body?.behavior_id || req.body?.behaviorId, 180) || null,
         behavior_event_id: sanitizeString(req.body?.behavior_event_id || req.body?.behaviorEventId, 180) || null,
@@ -30820,6 +30977,7 @@ async function startServer() {
           ...(req.body?.raw_payload || req.body?.rawPayload || {}),
           source: requestSource,
           patientId,
+          appointmentId: appointmentId || undefined,
           sessionId: sessionId || undefined,
           timestamp: occurredAt,
           syncStatus: 'synced',
@@ -30849,13 +31007,22 @@ async function startServer() {
 
       const targetName = sanitizeTextField(req.body?.target_name || req.body?.targetName || req.body?.title, 240);
       if (!targetName) return res.status(400).json({ success: false, error: 'Target é obrigatório.' });
+      const sessionId = sanitizeString(req.body?.session_id || req.body?.sessionId, 180) || null;
+      const appointmentId = await resolveAbaAppointmentIdForClinicalWrite({
+        requestedAppointmentId: req.body?.appointment_id || req.body?.appointmentId,
+        sessionId,
+        patientId,
+        clinicId,
+        user: req.session.user
+      });
 
       const payload = cleanObject({
         id: sanitizeString(req.body?.id || req.body?.evaluation_id || req.body?.evaluationId || crypto.randomUUID(), 180),
         organization_id: sanitizeString(req.body?.organization_id || req.body?.organizationId || clinicId, 120),
         clinic_id: clinicId,
         patient_id: patientId,
-        session_id: sanitizeString(req.body?.session_id || req.body?.sessionId, 180) || null,
+        appointment_id: appointmentId,
+        session_id: sessionId,
         target_id: sanitizeString(req.body?.target_id || req.body?.targetId, 180) || null,
         target_name: targetName,
         criteria_id: sanitizeString(req.body?.criteria_id || req.body?.criteriaId, 180) || null,
@@ -30890,7 +31057,10 @@ async function startServer() {
         evaluated_at: sanitizeIsoDateTime(req.body?.evaluated_at || req.body?.evaluatedAt),
         therapist_id: sanitizeString(req.body?.therapist_id || req.body?.therapistId || req.session.user?.id, 120),
         source_trial_id: sanitizeString(req.body?.source_trial_id || req.body?.sourceTrialId, 180) || null,
-        raw_payload: sanitizeClinicalPayload(req.body?.raw_payload || req.body?.rawPayload || {}),
+        raw_payload: sanitizeClinicalPayload({
+          ...(req.body?.raw_payload || req.body?.rawPayload || {}),
+          appointmentId: appointmentId || undefined
+        }),
         created_at: new Date().toISOString()
       });
 

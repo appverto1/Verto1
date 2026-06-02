@@ -1045,6 +1045,8 @@ export const SessionMode = ({
         patientId,
         session_id: sessionId,
         sessionId,
+        appointment_id: activeAppointmentId || undefined,
+        appointmentId: activeAppointmentId || undefined,
         clinic_id: resolvedClinicId || undefined,
         clinicId: resolvedClinicId || undefined,
         therapist_id: resolvedTherapistId || undefined,
@@ -1073,6 +1075,8 @@ export const SessionMode = ({
         patientId,
         session_id: sessionId,
         sessionId,
+        appointment_id: activeAppointmentId || undefined,
+        appointmentId: activeAppointmentId || undefined,
         clinic_id: resolvedClinicId || undefined,
         clinicId: resolvedClinicId || undefined,
         therapist_id: resolvedTherapistId || undefined,
@@ -1101,6 +1105,8 @@ export const SessionMode = ({
         patientId,
         session_id: sessionId,
         sessionId,
+        appointment_id: activeAppointmentId || undefined,
+        appointmentId: activeAppointmentId || undefined,
         clinic_id: resolvedClinicId || undefined,
         clinicId: resolvedClinicId || undefined,
         therapist_id: resolvedTherapistId || undefined,
@@ -1129,6 +1135,8 @@ export const SessionMode = ({
         patientId,
         session_id: sessionId,
         sessionId,
+        appointment_id: activeAppointmentId || undefined,
+        appointmentId: activeAppointmentId || undefined,
         clinic_id: resolvedClinicId || undefined,
         clinicId: resolvedClinicId || undefined,
         therapist_id: resolvedTherapistId || undefined,
@@ -1158,6 +1166,8 @@ export const SessionMode = ({
         patientId,
         session_id: sessionId,
         sessionId,
+        appointment_id: activeAppointmentId || undefined,
+        appointmentId: activeAppointmentId || undefined,
         clinic_id: resolvedClinicId || undefined,
         clinicId: resolvedClinicId || undefined,
         therapist_id: resolvedTherapistId || undefined,
@@ -1209,6 +1219,8 @@ export const SessionMode = ({
       patientId,
       session_id: sessionId,
       sessionId,
+      appointment_id: activeAppointmentId || undefined,
+      appointmentId: activeAppointmentId || undefined,
       therapist_id: resolvedTherapistId || undefined,
       therapistId: resolvedTherapistId || undefined,
       source: 'verto_web',
@@ -1290,6 +1302,8 @@ export const SessionMode = ({
         patientId,
         session_id: sessionId,
         sessionId,
+        appointment_id: activeAppointmentId || undefined,
+        appointmentId: activeAppointmentId || undefined,
         target_id: record.targetId || record.targetName || record.title,
         targetId: record.targetId || record.targetName || record.title,
         target_name: record.targetName || record.title,
@@ -1791,6 +1805,8 @@ export const SessionMode = ({
       patientId,
       session_id: sessionId,
       sessionId,
+      appointment_id: activeAppointmentId || undefined,
+      appointmentId: activeAppointmentId || undefined,
       behavior_id: behaviorId,
       behaviorId,
       behavior_name: run.behaviorName,
@@ -2652,6 +2668,11 @@ export const SessionMode = ({
       await dataService.updateAbaSession(sessionId, {
         status: 'COMPLETED',
         ended_at: endedAt,
+        actual_end_at: endedAt,
+        actual_end: endedAt,
+        actual_duration_minutes: Math.ceil(finalSummary.durationSeconds / 60),
+        appointment_id: activeAppointmentId || undefined,
+        appointmentId: activeAppointmentId || undefined,
         duration_seconds: finalSummary.durationSeconds,
         duration_minutes: Math.ceil(finalSummary.durationSeconds / 60),
         record_count: finalSummary.totalTrials + finalSummary.totalBehaviorEvents,
@@ -3385,6 +3406,8 @@ export const SessionMode = ({
         patient_id: updatedSummary.patientId,
         clinic_id: resolvedClinicId || undefined,
         clinicId: resolvedClinicId || undefined,
+        appointment_id: activeAppointmentId || undefined,
+        appointmentId: activeAppointmentId || undefined,
         therapist_id: updatedSummary.therapistId || undefined,
         source: 'verto_web',
         started_at: updatedSummary.startedAt,
@@ -3412,6 +3435,7 @@ export const SessionMode = ({
         summary_payload: {
           source: 'verto_web',
           clinicId: resolvedClinicId || undefined,
+          appointmentId: activeAppointmentId || undefined,
           patientName: updatedSummary.patientName,
           teachingSummary: updatedSummary.teachingSummary,
           trialTypesUsed: updatedSummary.trialTypesUsed,
@@ -3424,7 +3448,11 @@ export const SessionMode = ({
           sessionNote
         }
       });
-      await dataService.updateAbaSession(sessionId, { notes: sessionNote });
+      await dataService.updateAbaSession(sessionId, {
+        notes: sessionNote,
+        appointment_id: activeAppointmentId || undefined,
+        appointmentId: activeAppointmentId || undefined
+      });
       showClinicalToast(buildClinicalActionToast({ action: 'edit' }));
     } catch (error) {
       console.error('Falha ao persistir complemento da sessão:', error);

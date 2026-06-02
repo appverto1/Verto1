@@ -782,6 +782,12 @@ function buildAbaIntegrityFields(input: any = {}, options: { includeRawPayload?:
     rawPayload?.clinicId,
     rawPayload?.organizationId
   );
+  const appointmentId = firstStringValue(
+    input?.appointment_id,
+    input?.appointmentId,
+    rawPayload?.appointment_id,
+    rawPayload?.appointmentId
+  );
   const source = firstStringValue(input?.source, input?.clientSource, rawPayload?.source, rawPayload?.clientSource, ABA_DEFAULT_SOURCE);
   const syncStatus = firstStringValue(input?.sync_status, input?.syncStatus, rawPayload?.syncStatus, 'local');
   const createdAt = firstStringValue(input?.created_at, input?.createdAt, new Date().toISOString());
@@ -797,6 +803,10 @@ function buildAbaIntegrityFields(input: any = {}, options: { includeRawPayload?:
     fields.organization_id = firstStringValue(input?.organization_id, input?.organizationId, clinicId);
     fields.organizationId = firstStringValue(input?.organizationId, input?.organization_id, clinicId);
   }
+  if (appointmentId) {
+    fields.appointment_id = appointmentId;
+    fields.appointmentId = appointmentId;
+  }
   if (options.includeRawPayload !== false) {
     const nextRawPayload = {
       ...rawPayload,
@@ -804,6 +814,10 @@ function buildAbaIntegrityFields(input: any = {}, options: { includeRawPayload?:
       clientSource: source,
       syncStatus
     };
+    if (appointmentId) {
+      nextRawPayload.appointment_id = appointmentId;
+      nextRawPayload.appointmentId = appointmentId;
+    }
     if (clinicId) {
       nextRawPayload.clinicId = clinicId;
       nextRawPayload.organizationId = fields.organizationId;

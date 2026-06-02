@@ -85,6 +85,30 @@ test('salvar contexto usa fallback de schema sem expor 503 tecnico', () => {
   assert.match(dataServiceCode, /Não foi possível salvar o pagador da consulta agora\./);
 });
 
+test('detalhe do fechamento tolera colunas novas do pagador ausentes', () => {
+  assert.match(serverCode, /APPOINTMENT_CLOSURE_CHECK_SCHEMA_FALLBACK_COLUMNS/);
+  assert.match(serverCode, /buildAppointmentClosureCheckSelect/);
+  assert.match(serverCode, /buildAppointmentClosureCheckStoragePayload/);
+  assert.match(serverCode, /fetchAppointmentClosureCheckRow/);
+  assert.match(serverCode, /upsertAppointmentClosureCheckRow/);
+
+  const persistStart = serverCode.indexOf('const persistAppointmentClosureCheck');
+  const persistEnd = serverCode.indexOf('const regenerateClosureForAppointments', persistStart);
+  assert.ok(persistStart > 0 && persistEnd > persistStart, 'persistencia de fechamento deve existir');
+  const persistSlice = serverCode.slice(persistStart, persistEnd);
+  assert.match(persistSlice, /const existingResult = await fetchAppointmentClosureCheckRow/);
+  assert.match(persistSlice, /const result = await upsertAppointmentClosureCheckRow\(payload\)/);
+  assert.doesNotMatch(persistSlice, /\.select\(APPOINTMENT_CLOSURE_CHECK_SELECT\)/);
+
+  const detailStart = serverCode.indexOf("app.get('/api/closure/appointments/:appointmentId'");
+  const detailEnd = serverCode.indexOf("app.post('/api/closure/appointments/:appointmentId/revalidate'", detailStart);
+  assert.ok(detailStart > 0 && detailEnd > detailStart, 'rota de detalhe do fechamento deve existir');
+  const detailSlice = serverCode.slice(detailStart, detailEnd);
+  assert.match(detailSlice, /const closureResult = await fetchAppointmentClosureCheckRow/);
+  assert.match(detailSlice, /closureResult\.omittedColumns\.size > 0/);
+  assert.doesNotMatch(detailSlice, /\.select\(APPOINTMENT_CLOSURE_CHECK_SELECT\)/);
+});
+
 test('criacao da consulta cria contexto inicial sem sobrescrever edicao posterior', () => {
   assert.match(serverCode, /upsertInitialBillingContextFromAppointment/);
   assert.match(serverCode, /if \(existing\.data\?\.id\) return/);
