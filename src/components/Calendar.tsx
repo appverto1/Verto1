@@ -1213,6 +1213,27 @@ export const ClinicalAgendaBoard = ({
     });
   };
 
+  const getBillingFormSource = (currentBilling: any = {}) => {
+    if (!currentBilling?.hasContext) return currentBilling?.suggestion || currentBilling;
+    const suggestion = currentBilling?.suggestion || {};
+    return {
+      ...currentBilling,
+      serviceType: currentBilling?.serviceType || currentBilling?.service_type || suggestion?.serviceType || suggestion?.service_type || '',
+      insuranceCardNumber:
+        currentBilling?.insuranceCardNumber ||
+        currentBilling?.insurance_card_number ||
+        suggestion?.insuranceCardNumber ||
+        suggestion?.insurance_card_number ||
+        '',
+      insurancePlanName:
+        currentBilling?.insurancePlanName ||
+        currentBilling?.insurance_plan_name ||
+        suggestion?.insurancePlanName ||
+        suggestion?.insurance_plan_name ||
+        ''
+    };
+  };
+
   const loadBillingPayers = async () => {
     if (billingPayersLoaded) return;
     setBillingEditorState((prev) => ({ ...prev, loading: true, error: '' }));
@@ -1268,7 +1289,7 @@ export const ClinicalAgendaBoard = ({
   const openBillingEditor = (source: any = null) => {
     if (!canEditBillingContext) return;
     const currentBilling = detail?.billingContext || {};
-    hydrateBillingForm(source || (currentBilling?.hasContext ? currentBilling : currentBilling?.suggestion || currentBilling));
+    hydrateBillingForm(source || getBillingFormSource(currentBilling));
     setQuickPayerForm({ open: false, saving: false, error: '', name: '', payerType: 'INSURANCE' });
     setBillingEditorOpen(true);
     setBillingEditorState({ loading: false, saving: false, error: '', success: '' });
@@ -2341,7 +2362,7 @@ export const ClinicalAgendaBoard = ({
                 />
               </label>
               <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
-                NÃºmero da carteirinha
+                Número da carteirinha
                 <input
                   className={`mt-1 w-full rounded-xl border p-3 text-sm font-semibold normal-case tracking-normal outline-none ${isDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-violet-100 bg-white text-slate-700'}`}
                   value={billingForm.insuranceCardNumber}
@@ -2355,7 +2376,7 @@ export const ClinicalAgendaBoard = ({
                   className={`mt-1 w-full rounded-xl border p-3 text-sm font-semibold normal-case tracking-normal outline-none ${isDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-violet-100 bg-white text-slate-700'}`}
                   value={billingForm.insurancePlanName}
                   onChange={(event) => setBillingForm((prev) => ({ ...prev, insurancePlanName: event.target.value, source: 'MANUAL' }))}
-                  placeholder="Plano do convÃªnio"
+                  placeholder="Plano do convênio"
                 />
               </label>
               <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
@@ -2470,7 +2491,7 @@ export const ClinicalAgendaBoard = ({
                       </span>{' '}
                       {billingContext.payerName || detailEvent.payer_name_snapshot || billingSuggestion?.payerName || 'nao informado'}
                     </p>
-                    <p><span className="font-semibold">ServiÃ§o:</span> {billingContext.serviceType || detailEvent.service_type || detailEvent.type || 'ABA'}</p>
+                    <p><span className="font-semibold">Serviço:</span> {billingContext.serviceType || detailEvent.service_type || detailEvent.type || 'ABA'}</p>
                     <p><span className="font-semibold">Carteirinha:</span> {billingContext.insuranceCardNumber || detailEvent.insurance_card_number || 'pendente'}</p>
                     <p><span className="font-semibold">Guia:</span> {billingContext.guideNumber || detailEvent.guide_number || 'pendente'}</p>
                     <p><span className="font-semibold">Autorização:</span> {billingContext.authorizationCode || detailEvent.authorization_code || 'pendente'}</p>

@@ -25655,7 +25655,7 @@ async function startServer() {
             appointment_id: eventId,
             patient_id: event.patient_id,
             service_type: event.type || event.service_type || null
-          }, null, billingDocuments, billingContext ? null : await resolveAppointmentBillingSuggestion({
+          }, null, billingDocuments, await resolveAppointmentBillingSuggestion({
             organizationId,
             patientId: event.patient_id,
             serviceType: event.type || event.service_type || null
@@ -25742,30 +25742,34 @@ async function startServer() {
     source: sanitizeString(suggestion?.source, 60) || 'PATIENT_DEFAULT'
   } : null;
 
-  const serializeBillingContext = (row: any, payer: any = null, documents: any[] = [], suggestion: any = null) => ({
-    id: sanitizeString(row?.id, 120) || null,
-    hasContext: Boolean(row?.id),
-    payerId: sanitizeString(row?.payer_id, 120) || null,
-    payerName: sanitizeString(payer?.name || row?.payer_name_snapshot, 180) || null,
-    payerType: payer ? normalizePayerType(payer?.payer_type) : null,
-    serviceType: sanitizeString(row?.service_type, 120) || null,
-    insuranceCardNumber: sanitizeString(row?.insurance_card_number, 120) || null,
-    insurancePlanName: sanitizeString(row?.insurance_plan_name, 160) || null,
-    authorizationCode: sanitizeString(row?.authorization_code, 120) || null,
-    guideNumber: sanitizeString(row?.guide_number, 120) || null,
-    procedureCode: sanitizeString(row?.procedure_code, 80) || null,
-    notes: sanitizeTextField(row?.notes, 1200) || null,
-    source: sanitizeString(row?.source, 60) || null,
-    documents: documents.map((doc: any) => ({
-      id: sanitizeString(doc?.id, 120),
-      documentType: normalizeDocumentType(doc?.document_type),
-      status: normalizeDocumentStatus(doc?.status),
-      requiredForServiceType: sanitizeString(doc?.required_for_service_type, 120) || null,
-      dueDate: doc?.due_date || null,
-      uploadedAt: doc?.uploaded_at || null
-    })),
-    suggestion: row?.id ? null : serializeBillingSuggestion(suggestion)
-  });
+  const serializeBillingContext = (row: any, payer: any = null, documents: any[] = [], suggestion: any = null) => {
+    const patientDefault = serializeBillingSuggestion(suggestion);
+    const hasContext = Boolean(row?.id);
+    return {
+      id: sanitizeString(row?.id, 120) || null,
+      hasContext,
+      payerId: sanitizeString(row?.payer_id, 120) || (!hasContext ? patientDefault?.payerId : null),
+      payerName: sanitizeString(payer?.name || row?.payer_name_snapshot, 180) || (!hasContext ? patientDefault?.payerName : null),
+      payerType: payer ? normalizePayerType(payer?.payer_type) : null,
+      serviceType: sanitizeString(row?.service_type, 120) || patientDefault?.serviceType || null,
+      insuranceCardNumber: sanitizeString(row?.insurance_card_number, 120) || patientDefault?.insuranceCardNumber || null,
+      insurancePlanName: sanitizeString(row?.insurance_plan_name, 160) || patientDefault?.insurancePlanName || null,
+      authorizationCode: sanitizeString(row?.authorization_code, 120) || (!hasContext ? patientDefault?.authorizationCode : null),
+      guideNumber: sanitizeString(row?.guide_number, 120) || (!hasContext ? patientDefault?.guideNumber : null),
+      procedureCode: sanitizeString(row?.procedure_code, 80) || null,
+      notes: sanitizeTextField(row?.notes, 1200) || (!hasContext ? patientDefault?.notes : null),
+      source: sanitizeString(row?.source, 60) || (!hasContext ? patientDefault?.source : null),
+      documents: documents.map((doc: any) => ({
+        id: sanitizeString(doc?.id, 120),
+        documentType: normalizeDocumentType(doc?.document_type),
+        status: normalizeDocumentStatus(doc?.status),
+        requiredForServiceType: sanitizeString(doc?.required_for_service_type, 120) || null,
+        dueDate: doc?.due_date || null,
+        uploadedAt: doc?.uploaded_at || null
+      })),
+      suggestion: patientDefault
+    };
+  };
 
   const writePayerRequirementAuditLog = async (params: {
     organizationId: string;
@@ -26125,13 +26129,11 @@ async function startServer() {
       const billingContext = await fetchAppointmentBillingContextRow(organizationId, appointment.id);
       const payer = billingContext?.payer_id ? await fetchPayerForAdmin(billingContext.payer_id, organizationId) : null;
       const documents = await fetchRequiredDocumentsForAppointment(organizationId, appointment.id);
-      const suggestion = billingContext?.id
-        ? null
-        : await resolveAppointmentBillingSuggestion({
-            organizationId,
-            patientId: appointment.patient_id,
-            serviceType: appointment.service_type || appointment.approach || null
-          });
+      const suggestion = await resolveAppointmentBillingSuggestion({
+        organizationId,
+        patientId: appointment.patient_id,
+        serviceType: appointment.service_type || appointment.approach || null
+      });
       return res.json({
         success: true,
         data: serializeBillingContext(billingContext || {

@@ -143,9 +143,16 @@ test('modal preenche sugestao do paciente com carteirinha sem sobrescrever cadas
   assert.match(serverCode, /\.from\('patients'\)[\s\S]*\.select\('id, insurance_type, insurance_name, insurance_card_number'\)/);
   assert.match(serverCode, /insuranceCardNumber: patientInsuranceCardNumber \|\| null/);
   assert.match(serverCode, /insurancePlanName: sanitizeString\(selectedPlan\.insurance_plan_name/);
-  assert.match(calendarCode, /currentBilling\?\.hasContext \? currentBilling : currentBilling\?\.suggestion \|\| currentBilling/);
+  assert.match(serverCode, /const patientDefault = serializeBillingSuggestion\(suggestion\)/);
+  assert.match(serverCode, /insuranceCardNumber: sanitizeString\(row\?\.insurance_card_number, 120\) \|\| patientDefault\?\.insuranceCardNumber \|\| null/);
+  assert.match(serverCode, /insurancePlanName: sanitizeString\(row\?\.insurance_plan_name, 160\) \|\| patientDefault\?\.insurancePlanName \|\| null/);
+  assert.doesNotMatch(serverCode, /const suggestion = billingContext\?\.id\s*\?\s*null/);
+  assert.match(calendarCode, /getBillingFormSource/);
+  assert.match(calendarCode, /suggestion\?\.insuranceCardNumber/);
+  assert.match(calendarCode, /suggestion\?\.insurancePlanName/);
   assert.match(calendarCode, /Dados sugeridos a partir do cadastro do paciente/);
-  assert.match(calendarCode, /NÃºmero da carteirinha/);
+  assert.match(calendarCode, /Número da carteirinha/);
+  assert.doesNotMatch(calendarCode, /NÃºmero da carteirinha|Plano do convÃªnio/);
   assert.match(calendarCode, /Salvar na consulta/);
   const routeStart = serverCode.indexOf("app.patch('/api/appointments/:appointmentId/billing-context'");
   const routeEnd = serverCode.indexOf("app.post('/api/appointments/:appointmentId/required-documents", routeStart);
