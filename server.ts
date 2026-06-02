@@ -6074,6 +6074,62 @@ async function syncAppointmentsTableFromClinicState(params: {
   return { mirrored, skipped };
 }
 
+async function ensureAppointmentMirrorForBillingContext(params: {
+  organizationId: string;
+  appointment: any;
+  user: any;
+}) {
+  const organizationId = sanitizeString(params.organizationId, 120);
+  const appointmentId = sanitizeString(params.appointment?.id || params.appointment?.appointment_id, 120);
+  if (!isUuid(organizationId) || !isUuid(appointmentId)) return false;
+
+  const existingResult = await supabase
+    .from('appointments')
+    .select('id')
+    .eq('id', appointmentId)
+    .limit(1)
+    .maybeSingle();
+  if (!existingResult.error && existingResult.data?.id) return true;
+  if (existingResult.error && !hasMissingFinancialSchema(existingResult.error)) {
+    const missingColumn = extractMissingColumnName(existingResult.error);
+    if (!missingColumn) throw existingResult.error;
+  }
+
+  const sourceAppointment = parseStoredJsonObject(params.appointment?.source_payload || params.appointment?.sourcePayload);
+  const appointmentForMirror = cleanObject({
+    ...sourceAppointment,
+    ...params.appointment,
+    id: appointmentId,
+    patientId: params.appointment?.patient_id || params.appointment?.patientId || sourceAppointment?.patientId || sourceAppointment?.patient_id,
+    patient_id: params.appointment?.patient_id || params.appointment?.patientId || sourceAppointment?.patient_id || sourceAppointment?.patientId,
+    therapistId: params.appointment?.therapist_id || params.appointment?.therapistId || params.appointment?.professional_id || params.appointment?.professionalId || sourceAppointment?.therapistId || sourceAppointment?.therapist_id || sourceAppointment?.professionalId || sourceAppointment?.professional_id || params.user?.id,
+    therapist_id: params.appointment?.therapist_id || params.appointment?.therapistId || params.appointment?.professional_id || params.appointment?.professionalId || sourceAppointment?.therapist_id || sourceAppointment?.therapistId || sourceAppointment?.professional_id || sourceAppointment?.professionalId || params.user?.id,
+    organization_id: organizationId,
+    organizationId,
+    clinic_id: params.appointment?.clinic_id || params.appointment?.clinicId || organizationId,
+    clinicId: params.appointment?.clinic_id || params.appointment?.clinicId || organizationId,
+    serviceType: params.appointment?.service_type || params.appointment?.serviceType || params.appointment?.approach || sourceAppointment?.serviceType || sourceAppointment?.service_type || sourceAppointment?.approach,
+    service_type: params.appointment?.service_type || params.appointment?.serviceType || params.appointment?.approach || sourceAppointment?.service_type || sourceAppointment?.serviceType || sourceAppointment?.approach
+  });
+
+  const summary = await syncAppointmentsTableFromClinicState({
+    clinicId: organizationId,
+    appointments: [appointmentForMirror],
+    actorId: sanitizeString(params.user?.id, 120),
+    specialtySettings: {}
+  });
+  if (summary.mirrored > 0) return true;
+
+  const retryResult = await supabase
+    .from('appointments')
+    .select('id')
+    .eq('id', appointmentId)
+    .limit(1)
+    .maybeSingle();
+  if (retryResult.error && !hasMissingFinancialSchema(retryResult.error)) throw retryResult.error;
+  return Boolean(retryResult.data?.id);
+}
+
 async function syncClinicRoomsTableFromClinicState(params: {
   clinicId: string | null;
   rooms: any[];
@@ -24615,6 +24671,17 @@ async function startServer() {
   };
 
   const upsertAppointmentBillingContextRow = async (payload: any, hasExistingRow = false) => {
+    const isAppointmentBillingContextConflict = (error: any) => {
+      const message = String(error?.message || error?.details || '').toLowerCase();
+      return sanitizeString(error?.code, 40) === '23505' &&
+        (
+          message.includes('appointment_billing_contexts') ||
+          message.includes('idx_appointment_billing_contexts_appointment') ||
+          message.includes('organization_id') ||
+          message.includes('appointment_id')
+        );
+    };
+
     const writeWithSelect = async (row: any, selectColumns: string) => {
       if (hasExistingRow && isUuid(sanitizeString(row?.id, 120))) {
         const updateResult = await supabase
@@ -24626,9 +24693,32 @@ async function startServer() {
           .maybeSingle();
         if (updateResult.error || updateResult.data) return updateResult;
       }
-      return supabase
+      const insertResult = await supabase
         .from('appointment_billing_contexts')
         .insert([cleanObject(row)])
+        .select(selectColumns)
+        .maybeSingle();
+      if (!insertResult.error || !isAppointmentBillingContextConflict(insertResult.error)) return insertResult;
+
+      const existingResult = await supabase
+        .from('appointment_billing_contexts')
+        .select('id, created_at, created_by')
+        .eq('organization_id', row.organization_id)
+        .eq('appointment_id', row.appointment_id)
+        .limit(1)
+        .maybeSingle();
+      if (existingResult.error || !existingResult.data?.id) return insertResult;
+
+      return supabase
+        .from('appointment_billing_contexts')
+        .update(cleanObject({
+          ...row,
+          id: existingResult.data.id,
+          created_at: existingResult.data.created_at || row.created_at,
+          created_by: existingResult.data.created_by || row.created_by
+        }))
+        .eq('organization_id', row.organization_id)
+        .eq('id', existingResult.data.id)
         .select(selectColumns)
         .maybeSingle();
     };
@@ -25951,6 +26041,21 @@ async function startServer() {
       const requestedPayerName = sanitizeString(req.body?.payerName || req.body?.payer_name_snapshot, 180);
       const payer = isUuid(payerId) ? await fetchPayerForAdmin(payerId, organizationId) : null;
       if (payerId && !payer && !requestedPayerName) return res.status(404).json(payerSafeError(404));
+      const hasAppointmentMirror = await ensureAppointmentMirrorForBillingContext({
+        organizationId,
+        appointment,
+        user: req.session.user
+      });
+      if (!hasAppointmentMirror) {
+        console.warn('[PayerRequirements] consulta sem espelho em appointments para salvar pagador.', {
+          appointmentId: appointment.id,
+          organizationId
+        });
+        return res.status(409).json({
+          success: false,
+          error: 'Sincronize a agenda e tente salvar o pagador novamente.'
+        });
+      }
       const existing = await fetchAppointmentBillingContextRow(organizationId, appointment.id);
       const now = new Date().toISOString();
       const payload = cleanObject({

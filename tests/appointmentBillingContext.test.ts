@@ -31,6 +31,27 @@ test('endpoint de contexto faz upsert idempotente por consulta', () => {
   assert.doesNotMatch(serverCode, /\.select\('\*'\)/);
 });
 
+test('salvar pagador garante espelho da consulta antes do contexto', () => {
+  assert.match(serverCode, /ensureAppointmentMirrorForBillingContext/);
+  assert.match(serverCode, /syncAppointmentsTableFromClinicState\(\{\s*clinicId: organizationId,\s*appointments: \[appointmentForMirror\]/);
+  const routeStart = serverCode.indexOf("app.patch('/api/appointments/:appointmentId/billing-context'");
+  const routeEnd = serverCode.indexOf("app.post('/api/appointments/:appointmentId/required-documents", routeStart);
+  const route = serverCode.slice(routeStart, routeEnd);
+  const mirrorIndex = route.indexOf('ensureAppointmentMirrorForBillingContext');
+  const existingIndex = route.indexOf('const existing = await fetchAppointmentBillingContextRow');
+  const saveIndex = route.indexOf('const data = await upsertAppointmentBillingContextRow');
+  assert.ok(mirrorIndex > 0, 'rota deve garantir appointments antes de gravar pagador');
+  assert.ok(existingIndex > mirrorIndex, 'contexto existente deve ser buscado depois do espelho');
+  assert.ok(saveIndex > existingIndex, 'upsert do pagador deve acontecer depois do espelho');
+});
+
+test('conflito de contexto existente vira update idempotente', () => {
+  assert.match(serverCode, /isAppointmentBillingContextConflict/);
+  assert.match(serverCode, /sanitizeString\(error\?\.code, 40\) === '23505'/);
+  assert.match(serverCode, /\.select\('id, created_at, created_by'\)[\s\S]*\.eq\('organization_id', row\.organization_id\)[\s\S]*\.eq\('appointment_id', row\.appointment_id\)/);
+  assert.match(serverCode, /\.update\(cleanObject\(\{\s*\.\.\.row,\s*id: existingResult\.data\.id,/);
+});
+
 test('salvar contexto usa fallback de schema sem expor 503 tecnico', () => {
   assert.match(serverCode, /APPOINTMENT_BILLING_CONTEXT_SCHEMA_FALLBACK_COLUMNS/);
   assert.match(serverCode, /APPOINTMENT_BILLING_CONTEXT_METADATA_VALUE_COLUMNS/);

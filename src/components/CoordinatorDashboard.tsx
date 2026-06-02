@@ -27,9 +27,11 @@ import {
   Trash2,
   History,
   ClipboardCheck,
-  CalendarRange,
   CalendarDays,
   CalendarPlus,
+  ReceiptText,
+  FileChartColumnIncreasing,
+  BookOpenCheck,
   Cake,
   MessageCircle,
   CreditCard,
@@ -5426,7 +5428,7 @@ export function CoordinatorDashboard({
               {
                 id: "protocols",
                 label: "Protocolos",
-                icon: ClipboardCheck,
+                icon: BookOpenCheck,
               },
               { id: "logs", label: "Log de Atividades", icon: History },
               {
@@ -5632,7 +5634,7 @@ export function CoordinatorDashboard({
                       {
                         id: "protocols",
                         label: "Protocolos",
-                        icon: ClipboardCheck,
+                        icon: BookOpenCheck,
                       },
                       { id: "logs", label: "Log de Atividades", icon: History },
                       {
@@ -5812,9 +5814,9 @@ export function CoordinatorDashboard({
         { id: "dashboard", label: "Painel", icon: LayoutDashboard },
         { id: "patients", label: "Pacientes", icon: ClipboardList },
         { id: "agenda", label: "Agenda", icon: CalendarDays },
-        { id: "closure", label: "Fechamento", icon: CalendarRange },
-        { id: "conference", label: "Conferência", icon: ClipboardCheck },
-        { id: "protocols", label: "Protocolos", icon: ClipboardCheck },
+        { id: "closure", label: "Fechamento", icon: ReceiptText },
+        { id: "conference", label: "Conferência", icon: FileChartColumnIncreasing },
+        { id: "protocols", label: "Protocolos", icon: BookOpenCheck },
         { id: "logs", label: "Log de Atividades", icon: History },
         { id: "settings", label: "Configurações", icon: Settings },
         {
@@ -5844,12 +5846,12 @@ export function CoordinatorDashboard({
         { id: "dashboard", label: "Painel", icon: LayoutDashboard },
         { id: "patients", label: "Pacientes", icon: ClipboardList },
         { id: "agenda", label: "Agenda", icon: CalendarDays },
-        { id: "closure", label: "Fechamento", icon: CalendarRange },
-        { id: "conference", label: "Conferência", icon: ClipboardCheck },
+        { id: "closure", label: "Fechamento", icon: ReceiptText },
+        { id: "conference", label: "Conferência", icon: FileChartColumnIncreasing },
         {
           id: "protocols",
           label: "Protocolos",
-          icon: ClipboardCheck,
+          icon: BookOpenCheck,
         },
         { id: "logs", label: "Registros", icon: History },
         {
