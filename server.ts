@@ -2962,11 +2962,6 @@ const APPOINTMENT_BILLING_CONTEXT_METADATA_VALUE_COLUMNS = [
   'source'
 ];
 
-const APPOINTMENT_BILLING_CONTEXT_REQUIRED_STORAGE_COLUMNS = [
-  'insurance_card_number',
-  'insurance_plan_name'
-];
-
 const APPOINTMENT_REQUIRED_DOCUMENT_SELECT = [
   'id',
   'organization_id',
@@ -24563,17 +24558,6 @@ async function startServer() {
     return value !== undefined && value !== null && String(value).trim() !== '';
   };
 
-  const assertBillingContextExtendedStorageAvailable = (payload: any, omittedColumns: Set<string>) => {
-    if (!omittedColumns.has('metadata')) return;
-    const unavailableColumns = APPOINTMENT_BILLING_CONTEXT_REQUIRED_STORAGE_COLUMNS.filter(
-      (column) => omittedColumns.has(column) && hasBillingContextStorageValue(payload, column)
-    );
-    if (!unavailableColumns.length) return;
-    const error = new Error('Não foi possível salvar todos os dados do pagador da consulta agora.');
-    (error as any).code = 'BILLING_CONTEXT_SCHEMA_INCOMPLETE';
-    throw error;
-  };
-
   const buildBillingContextStoragePayload = (payload: any, omittedColumns: Set<string>) => {
     const next = { ...(payload || {}) };
     for (const column of omittedColumns) delete next[column];
@@ -24625,7 +24609,6 @@ async function startServer() {
       const storagePayload = buildBillingContextStoragePayload(payload, omittedColumns);
       const result = await upsertWithSelect(storagePayload, buildBillingContextSelect(omittedColumns));
       if (!result.error) {
-        assertBillingContextExtendedStorageAvailable(payload, omittedColumns);
         return mergeBillingContextMetadata(result.data || storagePayload);
       }
       if (isMissingRelationError(result.error)) throw result.error;

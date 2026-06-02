@@ -32,12 +32,10 @@ test('endpoint de contexto faz upsert idempotente por consulta', () => {
 test('salvar contexto usa fallback de schema sem expor 503 tecnico', () => {
   assert.match(serverCode, /APPOINTMENT_BILLING_CONTEXT_SCHEMA_FALLBACK_COLUMNS/);
   assert.match(serverCode, /APPOINTMENT_BILLING_CONTEXT_METADATA_VALUE_COLUMNS/);
-  assert.match(serverCode, /APPOINTMENT_BILLING_CONTEXT_REQUIRED_STORAGE_COLUMNS/);
   assert.match(serverCode, /const buildBillingContextSelect/);
   assert.match(serverCode, /const buildBillingContextStoragePayload/);
-  assert.match(serverCode, /const assertBillingContextExtendedStorageAvailable/);
-  assert.match(serverCode, /BILLING_CONTEXT_SCHEMA_INCOMPLETE/);
   assert.match(serverCode, /buildBillingContextMetadata\(payload\)/);
+  assert.doesNotMatch(serverCode, /BILLING_CONTEXT_SCHEMA_INCOMPLETE/);
 
   const routeStart = serverCode.indexOf("app.patch('/api/appointments/:appointmentId/billing-context'");
   const routeEnd = serverCode.indexOf("app.post('/api/appointments/:appointmentId/required-documents", routeStart);
