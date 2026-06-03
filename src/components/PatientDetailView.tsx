@@ -4622,7 +4622,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   }, [isTutorialActive, tutorialStep, isKidsProfile, allowedTabsSet]);
 
   return ( 
-    <div className={`min-h-screen flex flex-col animate-slide-up relative overflow-y-auto transition-colors ${isPanelDark ? 'bg-[#081324]' : 'bg-gray-50'}`}> 
+    <div className={`relative flex min-h-screen flex-col overflow-x-hidden overflow-y-auto transition-colors animate-slide-up ${isPanelDark ? 'bg-[#081324]' : 'bg-gray-50'}`}>
       <div
         aria-hidden="true"
         style={{
@@ -4859,23 +4859,23 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         </div>
       )}
 
-      <div className={`px-6 pt-6 pb-6 shadow-sm z-20 transition-colors ${isPanelDark ? 'bg-[#0f1b2f]' : 'bg-white'}`}> 
-        <div className="flex flex-col sm:flex-row justify-between items-start gap-4 mb-4"> 
-          <div className="flex items-center gap-4"> 
+      <div className={`z-20 border-b px-4 py-4 transition-colors sm:px-6 sm:py-5 ${isPanelDark ? 'border-slate-800 bg-[#0f1b2f]' : 'border-slate-100 bg-white'}`}>
+        <div className="mb-4 flex min-w-0 flex-col items-stretch gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="flex min-w-0 items-start gap-3 sm:gap-4">
             {!hideBackButton && (
-              <button id="back-btn" onClick={onBack} className={`flex items-center gap-2 px-3 py-2 rounded-xl transition-all border hover:text-[#7a32fc] group ${isPanelDark ? 'border-slate-700 text-slate-300 hover:bg-slate-800' : 'border-slate-100 text-slate-400 hover:bg-slate-50'}`}>
+              <button id="back-btn" onClick={onBack} className={`group flex shrink-0 items-center gap-2 rounded-xl border px-3 py-2 transition-all hover:text-[#7a32fc] ${isPanelDark ? 'border-slate-700 text-slate-300 hover:bg-slate-800' : 'border-slate-100 text-slate-400 hover:bg-slate-50'}`}>
                 <ChevronLeft size={20} className="group-hover:-translate-x-0.5 transition-transform" />
-                <span className="text-xs font-bold uppercase tracking-widest hidden sm:inline">Painel</span>
+                <span className="hidden text-xs font-medium uppercase tracking-widest sm:inline">Painel</span>
               </button>
             )}
-            <div id="patient-header-info">
+            <div id="patient-header-info" className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                    <h1 className={`text-2xl font-semibold tracking-tight ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{patient.name}</h1>
+                    <h1 className={`break-words text-xl font-semibold leading-snug sm:text-2xl ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{patient.name}</h1>
                 </div>
-                <p className={`text-xs ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>Detalhes do Paciente</p>
+                <p className={`text-xs ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>Paciente</p>
                 {canOpenAnamnesis && (
                   <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider ${getAnamnesisStatusLabel().includes('revisada') ? 'bg-emerald-100 text-emerald-700' : isPanelDark ? 'bg-amber-500/10 text-amber-200' : 'bg-amber-50 text-amber-700'}`}>
+                    <span className={`rounded-full px-2.5 py-1 text-[10px] font-medium uppercase tracking-wider ${getAnamnesisStatusLabel().includes('revisada') ? 'bg-emerald-100 text-emerald-700' : isPanelDark ? 'bg-amber-500/10 text-amber-200' : 'bg-amber-50 text-amber-700'}`}>
                       {getAnamnesisStatusLabel()}
                     </span>
                     {anamnesisFlowMessage && (
@@ -4886,12 +4886,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                   </div>
                 )}
                 {canManageTherapistAssignment && (
-                  <div className="mt-2 flex items-center gap-2">
-                    <label className={`text-[10px] font-semibold uppercase tracking-wide ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                  <div className="mt-3 flex w-full max-w-sm flex-col items-stretch gap-1.5 sm:flex-row sm:items-center sm:gap-2">
+                    <label className={`text-[10px] font-medium uppercase tracking-wide ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>
                       Terapeuta Responsável
                     </label>
                     <select
-                      className={`min-w-[220px] rounded-lg px-3 py-1.5 text-xs font-semibold outline-none focus:border-[#7551FF] border ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-white border-slate-200 text-slate-800'}`}
+                      className={`w-full min-w-0 rounded-lg border px-3 py-2 text-xs font-medium outline-none focus:border-[#7551FF] sm:w-56 ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-white border-slate-200 text-slate-800'}`}
                       value={selectedTherapistId}
                       onChange={(e) => handleTherapistAssignmentChange(e.target.value)}
                       disabled={isLoadingTherapists}
@@ -4907,18 +4907,18 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 )}
             </div> 
           </div> 
-          <div className="flex items-center gap-2 w-full sm:w-auto">
+          <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center">
             <a 
               id="whatsapp-btn"
               href={`https://wa.me/${(patient.phone || '').replace(/\D/g, '')}`} 
               target="_blank" 
               rel="noopener noreferrer" 
-              className="flex-1 sm:flex-none bg-green-500 text-white px-4 py-2.5 rounded-xl text-xs font-semibold shadow-lg shadow-green-200 hover:opacity-90 transition-all flex items-center justify-center gap-2"
+              className="flex min-h-11 min-w-0 items-center justify-center gap-2 rounded-xl bg-green-500 px-3 py-2.5 text-center text-[11px] font-medium leading-tight text-white transition-all hover:opacity-90 sm:flex-none sm:text-xs"
             >
               <MessageCircle size={16} /> WhatsApp
             </a>
             {canOpenAnamnesis && (
-              <button id="anamnesis-btn" onClick={() => setShowAnamnesis(true)} className={`flex-1 sm:flex-none px-4 py-2.5 rounded-xl text-xs font-semibold transition-colors flex items-center justify-center gap-2 border ${isPanelDark ? 'bg-violet-500/10 text-violet-200 border-violet-400/30 hover:bg-violet-500/20' : 'bg-[#F4F7FE] text-[#7a32fc] border-blue-100 hover:bg-[#7a32fc]/10'}`}> 
+              <button id="anamnesis-btn" onClick={() => setShowAnamnesis(true)} className={`flex min-h-11 min-w-0 items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-center text-[11px] font-medium leading-tight transition-colors sm:flex-none sm:text-xs ${isPanelDark ? 'bg-violet-500/10 text-violet-200 border-violet-400/30 hover:bg-violet-500/20' : 'bg-[#F4F7FE] text-[#7a32fc] border-blue-100 hover:bg-[#7a32fc]/10'}`}>
                 <FileText size={16} /> Ficha Anamnese 
               </button>
             )}
@@ -4926,7 +4926,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               <button
                 onClick={() => void handleSendAnamnesisRequest()}
                 disabled={isSendingAnamnesisRequest}
-                className={`flex-1 sm:flex-none px-4 py-2.5 rounded-xl text-xs font-semibold transition-colors flex items-center justify-center gap-2 border disabled:opacity-60 ${isPanelDark ? 'bg-slate-800 text-violet-200 border-slate-700 hover:bg-slate-700' : 'bg-white text-[#7a32fc] border-purple-100 hover:bg-purple-50'}`}
+                className={`flex min-h-11 min-w-0 items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-center text-[11px] font-medium leading-tight transition-colors disabled:opacity-60 sm:flex-none sm:text-xs ${isPanelDark ? 'bg-slate-800 text-violet-200 border-slate-700 hover:bg-slate-700' : 'bg-white text-[#7a32fc] border-purple-100 hover:bg-purple-50'}`}
               >
                 <Share2 size={16} /> {isSendingAnamnesisRequest ? 'Enviando...' : 'Enviar anamnese'}
               </button>
@@ -4934,7 +4934,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             {canOpenAnamnesis && hasSubmittedAnamnesisFlow && (
               <button
                 onClick={openSubmittedAnamnesisForFiles}
-                className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl text-xs font-semibold transition-colors flex items-center justify-center gap-2 border border-indigo-100 bg-indigo-50 text-indigo-700 hover:bg-indigo-100"
+                className="flex min-h-11 min-w-0 items-center justify-center gap-2 rounded-xl border border-indigo-100 bg-indigo-50 px-3 py-2.5 text-center text-[11px] font-medium leading-tight text-indigo-700 transition-colors hover:bg-indigo-100 sm:flex-none sm:text-xs"
               >
                 <Eye size={16} /> Ver ficha enviada
               </button>
@@ -4943,43 +4943,43 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               <button
                 onClick={() => void handleReviewAnamnesisFlow()}
                 disabled={isReviewingAnamnesis}
-                className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl text-xs font-semibold transition-colors flex items-center justify-center gap-2 border border-emerald-100 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 disabled:opacity-60"
+                className="flex min-h-11 min-w-0 items-center justify-center gap-2 rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2.5 text-center text-[11px] font-medium leading-tight text-emerald-700 transition-colors hover:bg-emerald-100 disabled:opacity-60 sm:flex-none sm:text-xs"
               >
                 <CheckCircle2 size={16} /> {isReviewingAnamnesis ? 'Revisando...' : 'Marcar revisada'}
               </button>
             )}
             <button 
               onClick={() => setIsUnlinkingModalOpen(true)}
-              className="p-2.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all"
+              className="flex h-11 w-11 items-center justify-center justify-self-end rounded-xl text-gray-400 transition-all hover:bg-red-50 hover:text-red-500"
               title="Desvincular Paciente"
             >
               <EyeOff size={20} />
             </button>
           </div>
         </div> 
-        <div id="tab-nav" className={`flex gap-2 p-1 rounded-xl overflow-x-auto no-scrollbar transition-colors ${isPanelDark ? 'bg-slate-900/70' : 'bg-gray-100'}`}> 
-          {canAccessTab('history') && <button id="tab-history" onClick={() => setActiveTab('history')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'history' ? (isPanelDark ? 'bg-slate-800 text-white shadow-sm' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Histórico</button>}
-          {canAccessTab('notes') && <button id="tab-notes" onClick={() => setActiveTab('notes')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'notes' ? (isPanelDark ? 'bg-slate-800 text-white shadow-sm' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Anotações</button>}
-          {canAccessTab('report') && <button id="tab-report" onClick={() => setActiveTab('report')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'report' ? (isPanelDark ? 'bg-slate-800 text-white shadow-sm' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Relatório</button>}
+        <div id="tab-nav" className={`flex gap-1 overflow-x-auto rounded-xl p-1 no-scrollbar transition-colors ${isPanelDark ? 'bg-slate-900/70' : 'bg-gray-100'}`}>
+          {canAccessTab('history') && <button id="tab-history" onClick={() => setActiveTab('history')} className={`min-w-[6rem] shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-all ${activeTab === 'history' ? (isPanelDark ? 'bg-slate-800 text-white' : 'bg-white text-[#7551FF]') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Histórico</button>}
+          {canAccessTab('notes') && <button id="tab-notes" onClick={() => setActiveTab('notes')} className={`min-w-[6rem] shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-all ${activeTab === 'notes' ? (isPanelDark ? 'bg-slate-800 text-white' : 'bg-white text-[#7551FF]') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Anotações</button>}
+          {canAccessTab('report') && <button id="tab-report" onClick={() => setActiveTab('report')} className={`min-w-[6rem] shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-all ${activeTab === 'report' ? (isPanelDark ? 'bg-slate-800 text-white' : 'bg-white text-[#7551FF]') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Relatório</button>}
           {canAccessTab('plan') && (
             <button
               id="tab-plan"
               onClick={() => setActiveTab('plan')}
-              className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'plan' ? (isPanelDark ? 'bg-slate-800 text-white shadow-sm' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}
+              className={`min-w-[6rem] shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-all ${activeTab === 'plan' ? (isPanelDark ? 'bg-slate-800 text-white' : 'bg-white text-[#7551FF]') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}
             >
               {isKidsProfile ? 'Plano' : 'Plano Adulto'}
             </button>
           )}
           {canAccessTab('session') && isKidsProfile && (
-            <button id="tab-session" onClick={() => requestSessionStart('fullscreen')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'session' ? (isPanelDark ? 'bg-slate-800 text-white shadow-sm' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Sessão</button>
+            <button id="tab-session" onClick={() => requestSessionStart('fullscreen')} className={`min-w-[6rem] shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-all ${activeTab === 'session' ? (isPanelDark ? 'bg-slate-800 text-white' : 'bg-white text-[#7551FF]') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Sessão</button>
           )}
           {abaV2Enabled && canAccessTab('aba-charts') && isKidsProfile && (
-            <button id="tab-aba-charts" onClick={() => setActiveTab('aba-charts')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'aba-charts' ? (isPanelDark ? 'bg-slate-800 text-white shadow-sm' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Gráficos ABA</button>
+            <button id="tab-aba-charts" onClick={() => setActiveTab('aba-charts')} className={`min-w-[7rem] shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-all ${activeTab === 'aba-charts' ? (isPanelDark ? 'bg-slate-800 text-white' : 'bg-white text-[#7551FF]') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Gráficos ABA</button>
           )}
-          {canAccessTab('files') && <button id="tab-files" onClick={() => setActiveTab('files')} className={`shrink-0 flex-1 py-2 px-4 text-xs font-semibold rounded-lg transition-all ${activeTab === 'files' ? (isPanelDark ? 'bg-slate-800 text-white shadow-sm' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Arquivos</button>}
+          {canAccessTab('files') && <button id="tab-files" onClick={() => setActiveTab('files')} className={`min-w-[6rem] shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-all ${activeTab === 'files' ? (isPanelDark ? 'bg-slate-800 text-white' : 'bg-white text-[#7551FF]') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Arquivos</button>}
         </div> 
       </div> 
-      <div className={`p-6 transition-colors ${isPanelDark ? 'bg-[#081324]' : 'bg-gray-50'}`}> 
+      <div className={`min-w-0 p-4 transition-colors sm:p-6 ${isPanelDark ? 'bg-[#081324]' : 'bg-gray-50'}`}>
         {activeTab === 'history' ? ( 
           <div className="space-y-6"> 
             {showCoordinatorPatientRadar && (

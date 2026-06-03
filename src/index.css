@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600&display=swap');
 @import "tailwindcss";
 
 @theme {
@@ -7,12 +7,70 @@
 }
 
 @layer utilities {
+  .font-bold {
+    font-weight: 500 !important;
+  }
+
+  .font-extrabold,
+  .font-black {
+    font-weight: 600 !important;
+  }
+
   .scrollbar-hide::-webkit-scrollbar {
     display: none;
   }
   .scrollbar-hide {
     -ms-overflow-style: none;
     scrollbar-width: none;
+  }
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  body {
+    font-weight: 400;
+    text-rendering: geometricPrecision;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    font-weight: 600;
+    letter-spacing: 0;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+}
+
+@media (max-width: 640px) {
+  .shadow-lg,
+  .shadow-xl,
+  .shadow-2xl {
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08) !important;
+  }
+
+  .rounded-\[24px\],
+  .rounded-\[28px\],
+  .rounded-\[30px\],
+  .rounded-\[32px\],
+  .rounded-\[36px\],
+  .rounded-\[40px\],
+  .rounded-3xl {
+    border-radius: 14px !important;
   }
 }
 

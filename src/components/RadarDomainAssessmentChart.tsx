@@ -59,10 +59,10 @@ const CustomTooltip = ({ active, payload }: any) => {
   if (!row) return null;
 
   return (
-    <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-xl">
-      <p className="text-xs font-black uppercase tracking-widest text-slate-900">{row.subject}</p>
-      <p className="mt-2 text-sm font-black text-[#8B5CF6]">{row.score.toFixed(1)}%</p>
-      <p className="mt-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">
+    <div className="rounded-xl border border-slate-100 bg-white p-3 shadow-sm">
+      <p className="text-xs font-semibold uppercase tracking-widest text-slate-900">{row.subject}</p>
+      <p className="mt-2 text-sm font-medium text-[#8B5CF6]">{row.score.toFixed(1)}%</p>
+      <p className="mt-1 text-[10px] font-medium uppercase tracking-widest text-slate-400">
         {row.obtained.toFixed(1)} de {row.total.toFixed(1)} pts
       </p>
     </div>
@@ -208,9 +208,9 @@ export const RadarDomainAssessmentChart = ({
 
   if (!chartData.length) {
     return (
-      <div className="rounded-[32px] border border-slate-100 bg-white p-6 text-center shadow-sm">
+      <div className="rounded-2xl border border-slate-100 bg-white p-5 text-center shadow-sm">
         <Activity size={30} className="mx-auto mb-3 text-slate-300" />
-        <p className="text-sm font-bold text-slate-400">
+        <p className="text-sm font-medium text-slate-400">
           Ainda nao ha avaliacoes suficientes para gerar o radar individual deste paciente.
         </p>
       </div>
@@ -218,24 +218,24 @@ export const RadarDomainAssessmentChart = ({
   }
 
   return (
-    <div className="rounded-[36px] border border-slate-100 bg-white p-5 shadow-sm sm:p-7">
+    <div className="min-w-0 rounded-2xl border border-slate-100 bg-white p-4 shadow-sm sm:p-6">
       <div className="mb-5 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-        <div>
-          <h3 className="flex items-center gap-2 text-lg font-black tracking-tight text-slate-900">
+        <div className="min-w-0">
+          <h3 className="flex items-center gap-2 text-base font-semibold leading-snug text-slate-900 sm:text-lg">
             <Activity size={20} className="text-[#8B5CF6]" />
             Radar individual por dominio
           </h3>
-          <p className="mt-1 text-xs font-semibold uppercase tracking-widest text-slate-400">
+          <p className="mt-1 text-[11px] font-medium uppercase tracking-widest text-slate-400 sm:text-xs">
             Visao 360 do equilibrio de desenvolvimento do paciente
           </p>
         </div>
         {protocolOptions.length > 1 && (
-          <div className="min-w-[240px]">
-            <label className="mb-1 block text-[10px] font-black uppercase tracking-widest text-slate-400">
+          <div className="w-full min-w-0 lg:w-64">
+            <label className="mb-1 block text-[10px] font-medium uppercase tracking-widest text-slate-400">
               Filtrar protocolo
             </label>
             <select
-              className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-xs font-bold text-slate-700 outline-none transition-all focus:border-[#8B5CF6] focus:ring-4 focus:ring-[#8B5CF6]/10"
+              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-xs font-medium text-slate-700 outline-none transition-all focus:border-[#8B5CF6] focus:ring-4 focus:ring-[#8B5CF6]/10"
               value={selectedProtocolId}
               onChange={(event) => {
                 hasUserSelectedProtocolRef.current = true;
@@ -253,17 +253,17 @@ export const RadarDomainAssessmentChart = ({
         )}
       </div>
 
-      <div className="h-[420px]">
+      <div className="h-[300px] sm:h-[420px]">
         {isMounted ? (
-          <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={360}>
-            <RadarChart data={chartData} outerRadius="78%">
+          <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={280}>
+            <RadarChart data={chartData} outerRadius="70%">
               <PolarGrid stroke="#CBD5E1" />
-              <PolarAngleAxis dataKey="subject" tick={{ fill: '#475569', fontSize: 11, fontWeight: 800 }} />
+              <PolarAngleAxis dataKey="subject" tick={{ fill: '#475569', fontSize: 10, fontWeight: 500 }} />
               <PolarRadiusAxis
                 angle={90}
                 domain={[0, 100]}
                 tickCount={6}
-                tick={{ fill: '#94A3B8', fontSize: 10, fontWeight: 800 }}
+                tick={{ fill: '#94A3B8', fontSize: 9, fontWeight: 500 }}
                 tickFormatter={(value) => `${value}%`}
               />
               <Tooltip content={<CustomTooltip />} />

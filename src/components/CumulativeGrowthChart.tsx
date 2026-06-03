@@ -104,9 +104,9 @@ const CustomTooltip = ({ active, payload }: any) => {
   if (!row) return null;
 
   return (
-    <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-xl">
-      <p className="text-xs font-black uppercase tracking-widest text-slate-900">{row.date}</p>
-      <p className="mt-2 text-sm font-black text-[#3B82F6]">
+    <div className="rounded-xl border border-slate-100 bg-white p-3 shadow-sm">
+      <p className="text-xs font-semibold uppercase tracking-widest text-slate-900">{row.date}</p>
+      <p className="mt-2 text-sm font-medium text-[#3B82F6]">
         {row.total} habilidade{row.total === 1 ? '' : 's'} dominada{row.total === 1 ? '' : 's'}
       </p>
     </div>
@@ -196,9 +196,9 @@ export const CumulativeGrowthChart = ({ patientId, history = [], protocols = [],
 
   if (!chartData.length) {
     return (
-      <div className="rounded-[32px] border border-slate-100 bg-white p-6 text-center shadow-sm">
+      <div className="rounded-2xl border border-slate-100 bg-white p-5 text-center shadow-sm">
         <TrendingUp size={30} className="mx-auto mb-3 text-slate-300" />
-        <p className="text-sm font-bold text-slate-400">
+        <p className="text-sm font-medium text-slate-400">
           Ainda nao ha registros suficientes para gerar crescimento cumulativo.
         </p>
       </div>
@@ -206,20 +206,20 @@ export const CumulativeGrowthChart = ({ patientId, history = [], protocols = [],
   }
 
   return (
-    <div className="rounded-[36px] border border-slate-100 bg-white p-5 shadow-sm sm:p-7">
+    <div className="min-w-0 rounded-2xl border border-slate-100 bg-white p-4 shadow-sm sm:p-6">
       <div className="mb-5">
-        <h3 className="flex items-center gap-2 text-lg font-black tracking-tight text-slate-900">
+        <h3 className="flex items-center gap-2 text-base font-semibold leading-snug text-slate-900 sm:text-lg">
           <TrendingUp size={20} className="text-[#3B82F6]" />
           Crescimento cumulativo
         </h3>
-        <p className="mt-1 text-xs font-semibold uppercase tracking-widest text-slate-400">
+        <p className="mt-1 text-[11px] font-medium uppercase tracking-widest text-slate-400 sm:text-xs">
           Registro cumulativo de habilidades dominadas ao longo das sessoes
         </p>
       </div>
 
-      <div className="h-[320px]">
+      <div className="h-[260px] sm:h-[320px]">
         {isMounted ? (
-          <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={280}>
+          <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={240}>
             <AreaChart data={chartData} margin={{ top: 12, right: 24, left: 0, bottom: 8 }}>
               <defs>
                 <linearGradient id="cumulativeGrowthFill" x1="0" y1="0" x2="0" y2="1">
@@ -232,20 +232,20 @@ export const CumulativeGrowthChart = ({ patientId, history = [], protocols = [],
                 dataKey="label"
                 axisLine={false}
                 tickLine={false}
-                tick={{ fill: '#64748B', fontSize: 11, fontWeight: 800 }}
+                tick={{ fill: '#64748B', fontSize: 10, fontWeight: 500 }}
               />
               <YAxis
                 allowDecimals={false}
                 axisLine={false}
                 tickLine={false}
-                tick={{ fill: '#94A3B8', fontSize: 11, fontWeight: 800 }}
+                tick={{ fill: '#94A3B8', fontSize: 10, fontWeight: 500 }}
               />
               <Tooltip content={<CustomTooltip />} />
               <Area
                 type="monotone"
                 dataKey="total"
                 stroke={CHART_COLOR}
-                strokeWidth={4}
+                strokeWidth={3}
                 fill="url(#cumulativeGrowthFill)"
                 dot={{ r: 5, fill: CHART_COLOR, stroke: '#fff', strokeWidth: 2 }}
                 activeDot={{ r: 7, stroke: '#fff', strokeWidth: 2 }}

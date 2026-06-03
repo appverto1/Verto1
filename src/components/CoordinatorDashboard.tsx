@@ -5506,23 +5506,23 @@ export function CoordinatorDashboard({
         </div>
 
         {/* Main Content */}
-        <div className="flex-1 overflow-y-auto">
+        <div className="min-w-0 flex-1 overflow-y-auto">
           {/* Header */}
           <header
-            className={`px-4 lg:px-6 py-2.5 flex items-center justify-between sticky top-0 backdrop-blur-md z-30 ${
+            className={`sticky top-0 z-30 flex items-center justify-between gap-2 px-3 py-2.5 backdrop-blur-md sm:px-4 lg:px-6 ${
               theme === "dark"
                 ? "bg-[#0f172a]/85 border-b border-slate-800/80"
                 : "bg-[#F4F7FE]/85 border-b border-slate-100/90"
             }`}
           >
-            <div className="flex items-center gap-4">
+            <div className="flex min-w-0 items-center gap-2 sm:gap-4">
               <button
                 onClick={() => {
                   setView("home");
                   setActiveTab("dashboard");
                   setTabHistory(["dashboard"]);
                 }}
-                className={`p-2 rounded-xl shadow-sm border transition-all ${
+                className={`shrink-0 rounded-xl border p-2 shadow-sm transition-all ${
                   theme === "dark"
                     ? "bg-[#0b1a33] text-slate-300 border-slate-700 hover:text-violet-300"
                     : "bg-white text-slate-400 border-slate-100 hover:text-[#7a32fc]"
@@ -5530,18 +5530,18 @@ export function CoordinatorDashboard({
               >
                 <ChevronRight size={20} className="rotate-180" />
               </button>
-              <div>
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">
+              <div className="min-w-0">
+                <p className="mb-0.5 text-[10px] font-medium uppercase tracking-widest text-slate-400">
                   Prontuário
                 </p>
-                <h1 className="text-lg lg:text-2xl font-semibold text-slate-900 tracking-tight">
+                <h1 className="max-w-[13rem] text-base font-semibold leading-snug text-slate-900 sm:max-w-none lg:text-2xl">
                   Prontuário do Paciente
                 </h1>
               </div>
             </div>
 
             <div
-              className={`flex items-center gap-2 lg:gap-4 p-1.5 lg:p-2 rounded-[24px] shadow-sm border ${
+              className={`flex shrink-0 items-center gap-1 rounded-2xl border p-1 shadow-sm sm:gap-2 lg:gap-4 lg:p-2 ${
                 theme === "dark"
                   ? "bg-[#0b1a33] border-slate-700"
                   : "bg-white border-slate-100"
@@ -5549,7 +5549,7 @@ export function CoordinatorDashboard({
             >
               <button
                 onClick={() => setTheme((prev) => (prev === "light" ? "dark" : "light"))}
-                className={`p-2.5 rounded-xl transition-all ${
+                className={`rounded-xl p-2 transition-all sm:p-2.5 ${
                   theme === "dark"
                     ? "text-slate-300 hover:text-slate-100 hover:bg-[#122544]"
                     : "text-slate-400 hover:text-slate-700 hover:bg-slate-50"
@@ -5579,7 +5579,7 @@ export function CoordinatorDashboard({
 
               <button
                 onClick={() => setIsMobileMenuOpen(true)}
-                className="lg:hidden p-2.5 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-xl transition-all"
+                className="rounded-xl p-2 text-slate-400 transition-all hover:bg-slate-50 hover:text-slate-600 lg:hidden sm:p-2.5"
               >
                 <Menu size={20} />
               </button>
@@ -5698,7 +5698,7 @@ export function CoordinatorDashboard({
             )}
           </AnimatePresence>
 
-          <main className="p-4 lg:p-8 pb-20">
+          <main className="min-w-0 px-0 pb-20 sm:p-4 lg:p-8">
             <PatientDetailView
               patient={patient}
               themeMode={theme}
