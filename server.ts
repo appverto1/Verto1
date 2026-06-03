@@ -28167,20 +28167,85 @@ async function startServer() {
     const safeAppointmentId = sanitizeString(appointmentId, 120);
     const safeClinicId = sanitizeString(clinicId, 120);
     if (!isUuid(safeAppointmentId) || !isUuid(safeClinicId)) return null;
-    let query = supabase
-      .from('appointments')
-      .select(CLOSURE_APPOINTMENT_SELECT)
-      .eq('id', safeAppointmentId)
-      .or(`organization_id.eq.${safeClinicId},clinic_id.eq.${safeClinicId}`)
-      .limit(1);
-    const { data, error } = await query.maybeSingle();
-    if (error) {
-      if (hasMissingFinancialSchema(error) || extractMissingColumnName(error)) return null;
+    let selectColumns = CLOSURE_APPOINTMENT_SELECT;
+    const fallbackColumns = [
+      'id',
+      'organization_id',
+      'clinic_id',
+      'patient_id',
+      'patient_name',
+      'therapist_id',
+      'therapist_name',
+      'scheduled_at',
+      'date',
+      'time',
+      'duration_minutes',
+      'approach',
+      'status',
+      'source_payload',
+      'updated_at'
+    ];
+
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const query = supabase
+        .from('appointments')
+        .select(selectColumns)
+        .eq('id', safeAppointmentId)
+        .or(`organization_id.eq.${safeClinicId},clinic_id.eq.${safeClinicId}`)
+        .limit(1);
+      const { data, error } = await query.maybeSingle();
+      if (!error) {
+        if (!data) return null;
+        if (!appointmentCanBeLinkedByUser(data, user, professionalScopeIds)) return null;
+        return data;
+      }
+      const missingColumn = extractMissingColumnName(error);
+      if (missingColumn) {
+        const nextColumns = selectColumns
+          .split(',')
+          .map((column) => column.trim())
+          .filter((column) => column && column !== missingColumn);
+        if (nextColumns.length > 0 && nextColumns.length !== selectColumns.split(',').length) {
+          selectColumns = nextColumns.join(',');
+          continue;
+        }
+        selectColumns = fallbackColumns.filter((column) => column !== missingColumn).join(',');
+        continue;
+      }
+      if (hasMissingFinancialSchema(error)) return null;
       throw error;
     }
-    if (!data) return null;
-    if (!appointmentCanBeLinkedByUser(data, user, professionalScopeIds)) return null;
-    return data;
+    return null;
+  };
+
+  const getAppointmentForSessionStart = async (
+    appointmentId: string,
+    organizationId: string,
+    user: any,
+    options: { fallbackAppointment?: any; professionalScopeIds?: string[] } = {}
+  ) => ensureServerAppointmentForAbaSessionLink({
+    appointmentId,
+    clinicId: organizationId,
+    user,
+    fallbackAppointment: options.fallbackAppointment,
+    professionalScopeIds: options.professionalScopeIds || []
+  });
+
+  const logAbaSessionStartDebug = (details: {
+    hasAppointmentId?: boolean;
+    appointmentFound?: boolean;
+    appointmentStatus?: string | null;
+    organizationMatched?: boolean;
+    reasonCode?: string;
+  }) => {
+    console.info('[ABA Sessions] start appointment context', cleanObject({
+      action: 'START_ABA_SESSION_FROM_APPOINTMENT',
+      hasAppointmentId: Boolean(details.hasAppointmentId),
+      appointmentFound: Boolean(details.appointmentFound),
+      appointmentStatus: sanitizeString(details.appointmentStatus, 80) || null,
+      organizationMatched: details.organizationMatched === undefined ? undefined : Boolean(details.organizationMatched),
+      reasonCode: sanitizeString(details.reasonCode, 80) || null
+    }));
   };
 
   const ensureServerAppointmentForAbaSessionLink = async (params: {
@@ -30584,12 +30649,31 @@ async function startServer() {
       if (!clinicId) return res.status(400).json({ success: false, error: 'Clínica não identificada.' });
 
       const startedAt = sanitizeIsoDateTime(req.body?.started_at || req.body?.startedAt);
+      const requestSource = resolveAbaRequestSource(req.body);
+      const appointmentStartRequested = ['appointment', 'agenda', 'calendar'].includes(
+        sanitizeString(requestSource, 80).toLowerCase()
+      );
       const rawAppointmentId = sanitizeString(req.body?.appointment_id || req.body?.appointmentId, 180);
+      if (!rawAppointmentId && appointmentStartRequested) {
+        logAbaSessionStartDebug({
+          hasAppointmentId: false,
+          appointmentFound: false,
+          organizationMatched: false,
+          reasonCode: 'MISSING_APPOINTMENT_ID'
+        });
+        return res.status(400).json({ success: false, error: 'Consulta não informada.' });
+      }
       if (rawAppointmentId && !isUuid(rawAppointmentId)) {
-        return res.status(409).json({
+        logAbaSessionStartDebug({
+          hasAppointmentId: true,
+          appointmentFound: false,
+          organizationMatched: false,
+          reasonCode: 'INVALID_APPOINTMENT_ID'
+        });
+        return res.status(400).json({
           success: false,
-          code: 'APPOINTMENT_NOT_PERSISTED',
-          error: 'Esta consulta ainda não foi salva no servidor. Atualize a agenda e tente novamente.'
+          code: 'INVALID_APPOINTMENT_ID',
+          error: 'Consulta inválida.'
         });
       }
       const appointmentId = rawAppointmentId || null;
@@ -30615,28 +30699,73 @@ async function startServer() {
           body: req.body || {},
           user: req.session.user
         });
-        linkedAppointment = await ensureServerAppointmentForAbaSessionLink({
+        linkedAppointment = await getAppointmentForSessionStart(
           appointmentId,
           clinicId,
-          user: req.session.user,
-          fallbackAppointment,
-          professionalScopeIds
-        });
-        if (!linkedAppointment?.id) return res.status(404).json({ success: false, error: 'Consulta não encontrada.' });
+          req.session.user,
+          {
+            fallbackAppointment,
+            professionalScopeIds
+          }
+        );
+        if (!linkedAppointment?.id) {
+          logAbaSessionStartDebug({
+            hasAppointmentId: true,
+            appointmentFound: false,
+            organizationMatched: false,
+            reasonCode: 'APPOINTMENT_NOT_FOUND'
+          });
+          return res.status(404).json({ success: false, error: 'Consulta não encontrada.' });
+        }
         if (sanitizeString(linkedAppointment.patient_id, 120) !== patientId) {
-          return res.status(409).json({ success: false, error: 'Consulta vinculada a outro paciente.' });
+          logAbaSessionStartDebug({
+            hasAppointmentId: true,
+            appointmentFound: true,
+            appointmentStatus: normalizeOperationalAppointmentStatus(linkedAppointment.status),
+            organizationMatched: true,
+            reasonCode: 'PATIENT_MISMATCH'
+          });
+          return res.status(409).json({ success: false, error: 'Os dados da consulta não conferem com o paciente selecionado.' });
         }
         const appointmentStatus = normalizeOperationalAppointmentStatus(linkedAppointment.status);
         if (appointmentStatus === 'DELETED') {
+          logAbaSessionStartDebug({
+            hasAppointmentId: true,
+            appointmentFound: false,
+            appointmentStatus,
+            organizationMatched: true,
+            reasonCode: 'APPOINTMENT_DELETED'
+          });
           return res.status(404).json({ success: false, error: 'Consulta não encontrada.' });
         }
         if (appointmentStatus === 'CANCELLED' || appointmentStatus === 'CANCEL_REQUESTED') {
+          logAbaSessionStartDebug({
+            hasAppointmentId: true,
+            appointmentFound: true,
+            appointmentStatus,
+            organizationMatched: true,
+            reasonCode: 'APPOINTMENT_CANCELLED'
+          });
           return res.status(409).json({ success: false, error: 'Esta consulta está cancelada e não pode ser iniciada.' });
         }
         if (appointmentStatus === 'COMPLETED') {
+          logAbaSessionStartDebug({
+            hasAppointmentId: true,
+            appointmentFound: true,
+            appointmentStatus,
+            organizationMatched: true,
+            reasonCode: 'APPOINTMENT_COMPLETED'
+          });
           return res.status(409).json({ success: false, error: 'Esta consulta já possui sessão encerrada.' });
         }
         if (!ABA_SESSION_STARTABLE_APPOINTMENT_STATUSES.has(appointmentStatus)) {
+          logAbaSessionStartDebug({
+            hasAppointmentId: true,
+            appointmentFound: true,
+            appointmentStatus,
+            organizationMatched: true,
+            reasonCode: 'APPOINTMENT_STATUS_NOT_STARTABLE'
+          });
           return res.status(409).json({ success: false, error: 'Esta consulta não pode ser iniciada neste status.' });
         }
         const appointmentProfessionalId = resolveAppointmentProfessionalId(linkedAppointment);
@@ -30658,6 +30787,13 @@ async function startServer() {
           explicitProfessionalId !== appointmentProfessionalId &&
           !appointmentBelongsToProfessional(linkedAppointment, explicitProfessionalId)
         ) {
+          logAbaSessionStartDebug({
+            hasAppointmentId: true,
+            appointmentFound: true,
+            appointmentStatus,
+            organizationMatched: true,
+            reasonCode: 'PROFESSIONAL_MISMATCH'
+          });
           return res.status(409).json({ success: false, error: 'Consulta vinculada a outro profissional.' });
         }
         resolvedProfessionalId = appointmentProfessionalId || explicitProfessionalId || resolvedProfessionalId;
@@ -30677,6 +30813,13 @@ async function startServer() {
             professionalIds: professionalScopeIds
           });
           if (existingCompletedSession?.id) {
+            logAbaSessionStartDebug({
+              hasAppointmentId: true,
+              appointmentFound: true,
+              appointmentStatus,
+              organizationMatched: true,
+              reasonCode: 'SESSION_ALREADY_COMPLETED'
+            });
             return res.status(409).json({ success: false, error: 'Esta consulta já possui sessão encerrada.' });
           }
           const conflictingInProgressSession = await fetchConflictingInProgressAbaSessionForAppointment({
@@ -30689,9 +30832,23 @@ async function startServer() {
             scheduledEndAt: linkedAppointment?.scheduled_end_at || null
           });
           if (conflictingInProgressSession?.id) {
+            logAbaSessionStartDebug({
+              hasAppointmentId: true,
+              appointmentFound: true,
+              appointmentStatus,
+              organizationMatched: true,
+              reasonCode: 'CONFLICTING_SESSION_IN_PROGRESS'
+            });
             return res.status(409).json({ success: false, error: 'Já existe uma sessão em andamento para este paciente/profissional.' });
           }
         }
+        logAbaSessionStartDebug({
+          hasAppointmentId: true,
+          appointmentFound: true,
+          appointmentStatus,
+          organizationMatched: true,
+          reasonCode: existingInProgressSession?.id ? 'REUSE_IN_PROGRESS_SESSION' : 'START_ALLOWED'
+        });
       }
       const requestedSessionId = sanitizeString(req.body?.id || req.body?.session_id || req.body?.sessionId || crypto.randomUUID(), 180);
       const sessionId = sanitizeString(existingInProgressSession?.id || requestedSessionId, 180);
@@ -30713,7 +30870,7 @@ async function startServer() {
         patient_name: sanitizeString(req.body?.patient_name || req.body?.patientName, 180),
         therapist_id: resolvedProfessionalId,
         device_id: sanitizeString(req.body?.device_id || req.body?.deviceId, 180),
-        source: resolveAbaRequestSource(req.body),
+        source: requestSource,
         status: sessionStatus,
         appointment_id: appointmentId,
         scheduled_start_at: req.body?.scheduled_start || req.body?.scheduledStart || req.body?.scheduled_start_at || req.body?.scheduledStartAt

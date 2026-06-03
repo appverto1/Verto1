@@ -13,6 +13,14 @@ const migrationSql = readFileSync(join(root, 'supabase/migrations/20260602153000
 const tests: Array<{ name: string; fn: () => void }> = [];
 const test = (name: string, fn: () => void) => tests.push({ name, fn });
 
+const getAbaSessionStartRoute = () => {
+  const routeStart = serverCode.indexOf("app.post('/api/aba/sessions'");
+  const routeEnd = serverCode.indexOf("app.patch('/api/aba/sessions/:sessionId'", routeStart);
+  assert.ok(routeStart >= 0, 'ABA session start route exists');
+  assert.ok(routeEnd > routeStart, 'ABA session patch route follows start route');
+  return serverCode.slice(routeStart, routeEnd);
+};
+
 test('ABA session start is idempotent for an appointment', () => {
   assert.match(serverCode, /fetchInProgressAbaSessionForAppointment[\s\S]*?\.eq\('appointment_id', appointmentId\)[\s\S]*?\.in\('status', \['active', 'in_progress', 'IN_PROGRESS'\]\)/);
   assert.match(serverCode, /const sessionId = sanitizeString\(existingInProgressSession\?\.id \|\| requestedSessionId, 180\)/);
@@ -20,35 +28,36 @@ test('ABA session start is idempotent for an appointment', () => {
 });
 
 test('ABA session start validates server appointment instead of returning false sync conflict', () => {
-  const routeStart = serverCode.indexOf("app.post('/api/aba/sessions'");
-  const routeEnd = serverCode.indexOf("app.patch('/api/aba/sessions/:sessionId'", routeStart);
-  const route = serverCode.slice(routeStart, routeEnd);
+  const route = getAbaSessionStartRoute();
   assert.match(serverCode, /ensureServerAppointmentForAbaSessionLink[\s\S]*?fetchAppointmentForAbaSessionLink[\s\S]*?fetchClinicStateAppointmentForAbaSessionLink/);
+  assert.match(serverCode, /getAppointmentForSessionStart[\s\S]*?ensureServerAppointmentForAbaSessionLink/);
   assert.match(serverCode, /resolvePatientClinicIdForAbaSession[\s\S]*?\.from\('patients'\)[\s\S]*?\.select\('clinic_id'\)[\s\S]*?resolveAbaSessionClinicId/);
   assert.match(serverCode, /collectAbaSessionProfessionalScopeIds[\s\S]*?appointmentCanBeLinkedByUser/);
   assert.match(serverCode, /scheduled_start_at[\s\S]*?scheduledStartAt[\s\S]*?scheduled_start[\s\S]*?scheduledStart/);
   assert.match(route, /const clinicId = await resolveAbaSessionClinicId/);
   assert.match(route, /const rawAppointmentId = sanitizeString\(req\.body\?\.appointment_id \|\| req\.body\?\.appointmentId, 180\)/);
-  assert.match(route, /APPOINTMENT_NOT_PERSISTED[\s\S]*?Esta consulta ainda não foi salva no servidor/);
+  assert.match(route, /appointmentStartRequested[\s\S]*?Consulta n.o informada/);
+  assert.match(route, /INVALID_APPOINTMENT_ID[\s\S]*?Consulta inv.lida/);
   assert.match(route, /const fallbackAppointment = buildAbaSessionAppointmentMirrorFallback/);
+  assert.match(route, /getAppointmentForSessionStart/);
   assert.match(route, /fallbackAppointment/);
   assert.match(route, /professionalScopeIds/);
   assert.match(serverCode, /appointment_snapshot/);
   assert.match(serverCode, /appointmentSnapshot/);
   assert.match(serverCode, /syncAppointmentsTableFromClinicState/);
-  assert.match(route, /ensureServerAppointmentForAbaSessionLink/);
   assert.doesNotMatch(route, /Sincronize a agenda antes de iniciar/);
 });
 
-test('ABA session appointment lookup tolerates clinic and professional aliases', () => {
+test('ABA session appointment lookup tolerates clinic, schema and professional aliases', () => {
   const fetchStart = serverCode.indexOf('const fetchAppointmentForAbaSessionLink');
-  const fetchEnd = serverCode.indexOf('const ensureServerAppointmentForAbaSessionLink', fetchStart);
+  const fetchEnd = serverCode.indexOf('const getAppointmentForSessionStart', fetchStart);
   const fetchBlock = serverCode.slice(fetchStart, fetchEnd);
-  const routeStart = serverCode.indexOf("app.post('/api/aba/sessions'");
-  const routeEnd = serverCode.indexOf("app.patch('/api/aba/sessions/:sessionId'", routeStart);
-  const route = serverCode.slice(routeStart, routeEnd);
+  const route = getAbaSessionStartRoute();
 
   assert.match(fetchBlock, /\.or\(`organization_id\.eq\.\$\{safeClinicId\},clinic_id\.eq\.\$\{safeClinicId\}`\)/);
+  assert.match(fetchBlock, /let selectColumns = CLOSURE_APPOINTMENT_SELECT/);
+  assert.match(fetchBlock, /fallbackColumns/);
+  assert.match(fetchBlock, /extractMissingColumnName\(error\)/);
   assert.match(fetchBlock, /appointmentCanBeLinkedByUser\(data, user, professionalScopeIds\)/);
   assert.doesNotMatch(fetchBlock, /\.eq\('therapist_id', sanitizeString\(user\?\.id, 120\)\)/);
   assert.match(route, /req\.body\?\.therapist_id[\s\S]*?req\.body\?\.therapistId/);
@@ -57,12 +66,12 @@ test('ABA session appointment lookup tolerates clinic and professional aliases',
 });
 
 test('ABA session start returns specific operational conflicts', () => {
-  const routeStart = serverCode.indexOf("app.post('/api/aba/sessions'");
-  const routeEnd = serverCode.indexOf("app.patch('/api/aba/sessions/:sessionId'", routeStart);
-  const route = serverCode.slice(routeStart, routeEnd);
-  assert.match(route, /Esta consulta está cancelada e não pode ser iniciada/);
-  assert.match(route, /Esta consulta já possui sessão encerrada/);
-  assert.match(route, /Já existe uma sessão em andamento para este paciente\/profissional/);
+  const route = getAbaSessionStartRoute();
+  assert.match(route, /Esta consulta est[\s\S]*?cancelada e n[\s\S]*?pode ser iniciada/);
+  assert.match(route, /Esta consulta j[\s\S]*?possui sess[\s\S]*?encerrada/);
+  assert.match(route, /Os dados da consulta n[\s\S]*?conferem com o paciente selecionado/);
+  assert.match(route, /Esta consulta n[\s\S]*?pode ser iniciada neste status/);
+  assert.match(route, /J[\s\S]*?existe uma sess[\s\S]*?em andamento para este paciente\/profissional/);
   assert.match(serverCode, /fetchCompletedAbaSessionForAppointment[\s\S]*?\.in\('status', \['completed', 'COMPLETED'\]\)/);
   assert.match(serverCode, /fetchConflictingInProgressAbaSessionForAppointment[\s\S]*?\.eq\('patient_id', patientId\)[\s\S]*?\.eq\('therapist_id', professionalId\)/);
 });
@@ -102,6 +111,10 @@ test('frontend accepts canonical session id and sends appointment_id with record
   assert.match(patientDetailCode, /id: String\(savedSession\.id\)/);
   assert.match(patientDetailCode, /professional_id: nextSession\.professional_id \|\| undefined/);
   assert.match(patientDetailCode, /service_type: nextSession\.service_type \|\| undefined/);
+  assert.match(patientDetailCode, /appointmentId: nextSession\.appointmentId/);
+  assert.match(patientDetailCode, /scheduled_start_at: nextSession\.scheduledStart/);
+  assert.match(patientDetailCode, /scheduled_end_at: nextSession\.scheduledEnd/);
+  assert.match(patientDetailCode, /source: nextSession\.appointment_id \? 'appointment' : 'verto_web'/);
   assert.match(dataServiceCode, /fields\.appointment_id = appointmentId[\s\S]*?fields\.appointmentId = appointmentId/);
   assert.match(patientDetailCode, /appointment_snapshot: scheduledSessionForPatient/);
   assert.match(patientDetailCode, /appointmentSnapshot: scheduledSessionForPatient/);
@@ -109,14 +122,28 @@ test('frontend accepts canonical session id and sends appointment_id with record
   assert.match(sessionModeCode, /appointmentId: activeAppointmentId \|\| undefined/);
 });
 
-test('agenda start action auto-starts a scheduled patient session', () => {
-  assert.match(coordinatorDashboardCode, /setScheduledSessionContext\(appointment\)/);
+test('agenda start action uses only a persisted appointment id', () => {
+  assert.match(coordinatorDashboardCode, /resolvePersistedAppointmentId/);
+  assert.match(coordinatorDashboardCode, /appointment\?\.appointment_id[\s\S]*?appointment\?\.appointmentId[\s\S]*?appointment\?\.id/);
+  assert.match(coordinatorDashboardCode, /buildAppointmentSessionContext/);
+  assert.match(coordinatorDashboardCode, /showToast\("Esta consulta ainda n[\s\S]*?foi salva no servidor\. Atualize a agenda e tente novamente\.", "error"\)/);
+  assert.match(coordinatorDashboardCode, /setScheduledSessionContext\(sessionAppointment\)/);
   assert.match(coordinatorDashboardCode, /setScheduledSessionStartKey\(/);
   assert.match(coordinatorDashboardCode, /startScheduledSessionKey=\{/);
   assert.match(patientDetailCode, /startScheduledSessionKey/);
   assert.match(patientDetailCode, /consumedScheduledSessionStartKeyRef/);
+  assert.match(patientDetailCode, /isUuidLike\(scheduledAppointmentId\)/);
   assert.match(patientDetailCode, /handleConfirmSessionStart\(\{ durationMinutes: scheduledSessionDurationMinutes, openSessionMode: true \}\)/);
   assert.match(patientDetailCode, /appointmentId: scheduledAppointmentId[\s\S]*?appointment_id: scheduledAppointmentId/);
+});
+
+test('ABA session start emits safe appointment context logs', () => {
+  assert.match(serverCode, /logAbaSessionStartDebug/);
+  assert.match(serverCode, /START_ABA_SESSION_FROM_APPOINTMENT/);
+  assert.match(serverCode, /hasAppointmentId/);
+  assert.match(serverCode, /appointmentFound/);
+  assert.match(serverCode, /organizationMatched/);
+  assert.doesNotMatch(serverCode, /console\.info\([^)]*req\.body/);
 });
 
 test('migration adds appointment_id to ABA clinical records with scoped indexes', () => {

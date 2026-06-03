@@ -54,6 +54,8 @@ const isVbMappProtocol = (protocol: any) => {
 };
 
 type PatientDetailTab = 'history' | 'notes' | 'report' | 'plan' | 'session' | 'aba-charts' | 'files';
+const isUuidLike = (value: any) =>
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || '').trim());
 
 export const PatientDetailView = ({ patient, onBack, history, notes: externalNotes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false, anamnesisTemplate, allowedTabs, userRole, themeMode, scheduledSession, startScheduledSessionKey }: any) => {
   const safeSetProtocols =
@@ -988,10 +990,15 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       scheduledSessionForPatient?.approach ||
       null;
     const scheduledAppointmentId =
-      scheduledSessionForPatient?.id ||
       scheduledSessionForPatient?.appointment_id ||
       scheduledSessionForPatient?.appointmentId ||
+      scheduledSessionForPatient?.id ||
       null;
+    if (scheduledSessionForPatient && !isUuidLike(scheduledAppointmentId)) {
+      setShowSessionStartConfirm(false);
+      alert('Esta consulta ainda não foi salva no servidor. Atualize a agenda e tente novamente.');
+      return;
+    }
     const nextSession = {
       id: `session-${String(patient?.id || 'patient')}-${startedAt.getTime()}`,
       patientId: patient?.id,
@@ -1030,10 +1037,16 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       const saveResult = await dataService.saveAbaSession({
         id: nextSession.id,
         patient_id: patient?.id,
+        patientId: patient?.id,
         patient_name: patient?.name || 'Paciente',
         appointment_id: nextSession.appointment_id,
+        appointmentId: nextSession.appointmentId,
         scheduled_start: nextSession.scheduledStart,
+        scheduled_start_at: nextSession.scheduledStart,
+        scheduledStartAt: nextSession.scheduledStart,
         scheduled_end: nextSession.scheduledEnd,
+        scheduled_end_at: nextSession.scheduledEnd,
+        scheduledEndAt: nextSession.scheduledEnd,
         scheduled_duration_minutes: nextSession.scheduled_duration_minutes,
         actual_start: nextSession.startedAt,
         room_id: nextSession.room_id,
@@ -1116,11 +1129,19 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         duration_minutes: durationMinutes,
         reference_date: nextSession.referenceDate,
         record_count: 0,
-        source: 'verto_web'
+        source: nextSession.appointment_id ? 'appointment' : 'verto_web',
+        clientSource: nextSession.appointment_id ? 'appointment' : 'verto_web'
       });
       if (saveResult?.success === false && !saveResult?.offline && nextSession.appointment_id) {
         clearActiveSession();
-        alert(saveResult?.error || 'Não foi possível vincular a sessão a esta consulta.');
+        const errorText = String(saveResult?.error || '');
+        const humanError =
+          saveResult?.code === 'INVALID_APPOINTMENT_ID' || saveResult?.code === 'APPOINTMENT_NOT_PERSISTED'
+            ? 'Esta consulta ainda não foi salva no servidor. Atualize a agenda e tente novamente.'
+            : saveResult?.status === 404 || /consulta n[aã]o encontrada/i.test(errorText)
+              ? 'Consulta não encontrada. Atualize a agenda e tente novamente.'
+              : errorText || 'Não foi possível vincular a sessão a esta consulta.';
+        alert(humanError);
         return;
       }
       const savedSession = saveResult?.session || saveResult?.data;

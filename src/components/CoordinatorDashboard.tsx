@@ -2418,6 +2418,45 @@ export function CoordinatorDashboard({
     }
   }, []);
 
+  const isPersistedAppointmentId = useCallback((value: any) => (
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || "").trim())
+  ), []);
+
+  const resolvePersistedAppointmentId = useCallback((appointment: any) => {
+    const source = readAppointmentSourcePayload(appointment);
+    for (const candidate of [
+      appointment?.appointment_id,
+      appointment?.appointmentId,
+      source?.appointment_id,
+      source?.appointmentId,
+      appointment?.id,
+      source?.id,
+    ]) {
+      const normalized = String(candidate || "").trim();
+      if (isPersistedAppointmentId(normalized)) return normalized;
+    }
+    return "";
+  }, [isPersistedAppointmentId, readAppointmentSourcePayload]);
+
+  const buildAppointmentSessionContext = useCallback((appointment: any) => {
+    const appointmentId = resolvePersistedAppointmentId(appointment);
+    if (!appointmentId) return null;
+    const source = readAppointmentSourcePayload(appointment);
+    return {
+      ...source,
+      ...appointment,
+      id: appointmentId,
+      appointment_id: appointmentId,
+      appointmentId,
+      patientId: appointment?.patientId || appointment?.patient_id || source?.patientId || source?.patient_id,
+      patient_id: appointment?.patient_id || appointment?.patientId || source?.patient_id || source?.patientId,
+      professionalId: appointment?.professionalId || appointment?.professional_id || appointment?.therapistId || appointment?.therapist_id || source?.professionalId || source?.professional_id || source?.therapistId || source?.therapist_id,
+      professional_id: appointment?.professional_id || appointment?.professionalId || appointment?.therapist_id || appointment?.therapistId || source?.professional_id || source?.professionalId || source?.therapist_id || source?.therapistId,
+      therapistId: appointment?.therapistId || appointment?.therapist_id || appointment?.professionalId || appointment?.professional_id || source?.therapistId || source?.therapist_id || source?.professionalId || source?.professional_id,
+      therapist_id: appointment?.therapist_id || appointment?.therapistId || appointment?.professional_id || appointment?.professionalId || source?.therapist_id || source?.therapistId || source?.professional_id || source?.professionalId,
+    };
+  }, [readAppointmentSourcePayload, resolvePersistedAppointmentId]);
+
   const normalizeSeriesKeyText = useCallback((value: any) =>
     String(value || "")
       .normalize("NFD")
@@ -4796,14 +4835,19 @@ export function CoordinatorDashboard({
       onOpenPatient={onPatientClick}
       onStartSession={(appointment: any) =>
         {
-          setScheduledSessionContext(appointment);
+          const sessionAppointment = buildAppointmentSessionContext(appointment);
+          if (!sessionAppointment?.appointmentId) {
+            showToast("Esta consulta ainda não foi salva no servidor. Atualize a agenda e tente novamente.", "error");
+            return;
+          }
+          setScheduledSessionContext(sessionAppointment);
           setScheduledSessionStartKey(
-            `${appointment?.id || appointment?.appointment_id || "appointment"}:${Date.now()}`,
+            `${sessionAppointment.appointmentId}:${Date.now()}`,
           );
           onPatientClick(
-            appointment?.patientId || appointment?.patient_id,
+            sessionAppointment?.patientId || sessionAppointment?.patient_id,
             { tab: "session" },
-            appointment?.patientName || appointment?.patient_name,
+            sessionAppointment?.patientName || sessionAppointment?.patient_name,
           );
         }
       }
