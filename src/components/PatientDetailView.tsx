@@ -21,6 +21,17 @@ import { resolveAbaPromptLevel } from '../utils/abaPromptLevels';
 import { isAbaV2Enabled } from '../utils/featureFlags';
 import { filterHumanDisplayEntries, formatSessionLabel, safeDisplayValue } from '../utils/displayLabels';
 import {
+  PEI_PLAN_SUBTABS,
+  buildPeiMaintenanceRows,
+  buildPeiPlanHistoryEvents,
+  formatPeiMaintenanceAppointmentLabel,
+  formatPeiMaintenanceScheduleLabel,
+  groupPeiMaintenanceRows,
+  summarizePeiMaintenanceRows,
+  type PeiMaintenanceGroupKey,
+  type PeiPlanSubtab,
+} from '../utils/peiMaintenancePanel';
+import {
   buildAppointmentDateTime,
   calculateAppointmentEnd,
   getAppointmentDurationMinutes,
@@ -311,12 +322,20 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [showConfirmation, setShowConfirmation] = useState(false); 
   const [editingTask, setEditingTask] = useState<any>(null); 
   const [isPlanFilterOpen, setIsPlanFilterOpen] = useState(false);
+  const [activePeiPlanSubtab, setActivePeiPlanSubtab] = useState<PeiPlanSubtab>('teaching');
   const [isAddingPEIGoal, setIsAddingPEIGoal] = useState(false);
   const [selectedPEIProtocolId, setSelectedPEIProtocolId] = useState("");
   const [selectedPEIDomainId, setSelectedPEIDomainId] = useState("");
   const [selectedPEISkillId, setSelectedPEISkillId] = useState("");
   const [confirmedPEIGoalId, setConfirmedPEIGoalId] = useState<any>(null);
   const [confirmedPEISkillId, setConfirmedPEISkillId] = useState<any>(null);
+  const [hasLoadedPeiMaintenancePanel, setHasLoadedPeiMaintenancePanel] = useState(false);
+  const [isLoadingPeiMaintenancePanel, setIsLoadingPeiMaintenancePanel] = useState(false);
+  const [peiMaintenancePanelMessage, setPeiMaintenancePanelMessage] = useState("");
+  const [peiMaintenanceAssignSchedule, setPeiMaintenanceAssignSchedule] = useState<any>(null);
+  const [peiMaintenanceAppointmentsState, setPeiMaintenanceAppointmentsState] = useState<any>({ loading: false, error: '', items: [] });
+  const [selectedPeiMaintenanceAppointmentId, setSelectedPeiMaintenanceAppointmentId] = useState('');
+  const [peiMaintenanceActionKey, setPeiMaintenanceActionKey] = useState('');
   const peiConfirmationTimerRef = React.useRef<number | null>(null);
   const [isSessionModeOpen, setIsSessionModeOpen] = useState(false);
   const [isUnlinkingModalOpen, setIsUnlinkingModalOpen] = useState(false);
@@ -766,6 +785,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
   useEffect(() => {
     setGeneratedReviewNotes([]);
+    setActivePeiPlanSubtab('teaching');
+    setHasLoadedPeiMaintenancePanel(false);
+    setPeiMaintenancePanelMessage('');
+    setPeiMaintenanceAssignSchedule(null);
+    setSelectedPeiMaintenanceAppointmentId('');
+    setPeiMaintenanceAppointmentsState({ loading: false, error: '', items: [] });
   }, [patient?.id]);
 
   useEffect(() => {
@@ -4732,6 +4757,448 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     );
   };
 
+  const peiGoals = useMemo(() => (Array.isArray(patient?.pei) ? patient.pei : []), [patient?.pei]);
+
+  const canManagePeiMaintenance = useMemo(() => {
+    const role = String(userRole || resolvedClinicContext?.role || clinicContext?.role || '').toLowerCase();
+    return isKidsProfile && abaV2Enabled && !['patient', 'paciente', 'responsavel', 'responsável', 'guardian', 'family'].includes(role);
+  }, [abaV2Enabled, clinicContext?.role, isKidsProfile, resolvedClinicContext?.role, userRole]);
+
+  const peiMaintenanceRows = useMemo(() => buildPeiMaintenanceRows({
+    goals: peiGoals,
+    schedules: abaMaintenanceOverview?.schedules || [],
+    probeResults: abaMaintenanceOverview?.probeResults || [],
+    alerts: abaMaintenanceOverview?.alerts || []
+  }), [peiGoals, abaMaintenanceOverview]);
+
+  const peiMaintenanceSummary = useMemo(
+    () => summarizePeiMaintenanceRows(peiMaintenanceRows),
+    [peiMaintenanceRows]
+  );
+
+  const peiMaintenanceGroups = useMemo(
+    () => groupPeiMaintenanceRows(peiMaintenanceRows),
+    [peiMaintenanceRows]
+  );
+
+  const peiGeneralizationRows = useMemo(() => {
+    const maintainedRows = peiMaintenanceRows.filter((row: any) => row.isMaintained);
+    const maintainedKeys = new Set(maintainedRows.map((row: any) => String(row.key)));
+    const acquiredWithoutRow = peiGoals
+      .filter((goal: any) => isGoalAcquired(goal))
+      .filter((goal: any) => !maintainedKeys.has(String(goal?.id || goal?.skillId || goal?.name).toLowerCase()))
+      .map((goal: any) => ({
+        key: `goal-${String(goal?.id || goal?.name)}`,
+        targetName: goal?.name || 'Habilidade adquirida',
+        protocol: goal?.protocolTitle || 'Sem protocolo informado',
+        domain: goal?.domainName || 'Sem dominio informado',
+        statusLabel: 'Habilidade adquirida'
+      }));
+    return [...maintainedRows, ...acquiredWithoutRow];
+  }, [peiGoals, peiMaintenanceRows]);
+
+  const peiHistoryEvents = useMemo(() => buildPeiPlanHistoryEvents({
+    goals: peiGoals,
+    masteryEvaluations: abaMasteryEvaluations,
+    schedules: abaMaintenanceOverview?.schedules || [],
+    probeResults: abaMaintenanceOverview?.probeResults || [],
+    alerts: abaMaintenanceOverview?.alerts || [],
+    history
+  }), [peiGoals, abaMasteryEvaluations, abaMaintenanceOverview, history]);
+
+  const refreshPeiMaintenancePanel = React.useCallback(async () => {
+    if (!patient?.id || !isKidsProfile || !abaV2Enabled) return;
+    setIsLoadingPeiMaintenancePanel(true);
+    setPeiMaintenancePanelMessage('');
+    try {
+      const result = await dataService.getAbaMaintenanceOverview(String(patient.id), { page: 1, pageSize: 50 });
+      if (result?.success === false) {
+        setPeiMaintenancePanelMessage(result?.error || 'Nao foi possivel carregar manutencao agora.');
+        return;
+      }
+      setAbaMaintenanceOverview(result?.data || { schedules: [], probeResults: [], alerts: [], summary: null });
+      setHasLoadedPeiMaintenancePanel(true);
+    } catch {
+      setPeiMaintenancePanelMessage('Nao foi possivel carregar manutencao agora.');
+    } finally {
+      setIsLoadingPeiMaintenancePanel(false);
+    }
+  }, [abaV2Enabled, isKidsProfile, patient?.id]);
+
+  useEffect(() => {
+    if (activeTab !== 'plan' || activePeiPlanSubtab !== 'maintenance') return;
+    if (hasLoadedPeiMaintenancePanel || isLoadingPeiMaintenancePanel) return;
+    void refreshPeiMaintenancePanel();
+  }, [activeTab, activePeiPlanSubtab, hasLoadedPeiMaintenancePanel, isLoadingPeiMaintenancePanel, refreshPeiMaintenancePanel]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!peiMaintenanceAssignSchedule || !patient?.id) return;
+    setPeiMaintenanceAppointmentsState({ loading: true, error: '', items: [] });
+    dataService.getAbaFutureAppointmentsForMaintenance(String(patient.id), { limit: 20 })
+      .then((result: any) => {
+        if (cancelled) return;
+        setPeiMaintenanceAppointmentsState({
+          loading: false,
+          error: result?.success === false ? result?.error || 'Nao foi possivel carregar proximas sessoes.' : '',
+          items: Array.isArray(result?.data) ? result.data : []
+        });
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPeiMaintenanceAppointmentsState({ loading: false, error: 'Nao foi possivel carregar proximas sessoes.', items: [] });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [patient?.id, peiMaintenanceAssignSchedule]);
+
+  const getPeiMaintenanceTargetId = (row: any) =>
+    String(row?.targetId || row?.target_id || row?.goal?.id || row?.goal?.target_id || row?.goal?.targetId || '').trim();
+
+  const getPeiMaintenanceScheduleId = (schedule: any) =>
+    String(schedule?.id || schedule?.schedule_id || schedule?.scheduleId || '').trim();
+
+  const getPeiMaintenanceCandidateAppointmentId = (schedule: any) =>
+    String(
+      schedule?.candidate_appointment_id ||
+      schedule?.candidateAppointmentId ||
+      schedule?.raw_payload?.candidateAppointmentId ||
+      schedule?.rawPayload?.candidateAppointmentId ||
+      ''
+    ).trim();
+
+  const runPeiMaintenanceAction = async (key: string, action: () => Promise<any>, successMessage: string) => {
+    setPeiMaintenanceActionKey(key);
+    setPeiMaintenancePanelMessage('');
+    try {
+      const result = await action();
+      if (result?.success === false) {
+        setPeiMaintenancePanelMessage(result?.error || 'Nao foi possivel concluir a acao agora.');
+        return false;
+      }
+      setPeiMaintenancePanelMessage(successMessage);
+      await refreshPeiMaintenancePanel();
+      return true;
+    } catch {
+      setPeiMaintenancePanelMessage('Nao foi possivel concluir a acao agora.');
+      return false;
+    } finally {
+      setPeiMaintenanceActionKey('');
+    }
+  };
+
+  const handlePeiCreateMaintenancePlan = (row: any) => {
+    const targetId = getPeiMaintenanceTargetId(row);
+    if (!targetId) {
+      setPeiMaintenancePanelMessage('Este target ainda nao possui vinculo clinico para agendamento automatico.');
+      return;
+    }
+    void runPeiMaintenanceAction(
+      `create-${row.key}`,
+      () => dataService.createMaintenanceScheduleForTarget(targetId, {
+        patient_id: patient?.id,
+        patientId: patient?.id,
+        scheduleMode: 'DEFAULT_SEQUENCE',
+        intervals: [7, 14, 30, 60],
+        target_name: row?.targetName
+      }),
+      'Plano de manutencao criado.'
+    );
+  };
+
+  const handlePeiScheduleNextSession = (row: any) => {
+    const targetId = getPeiMaintenanceTargetId(row);
+    if (!targetId) {
+      setPeiMaintenancePanelMessage('Este target ainda nao possui vinculo clinico para agendamento automatico.');
+      return;
+    }
+    void runPeiMaintenanceAction(
+      `next-${row.key}`,
+      () => dataService.scheduleMaintenanceForNextSession(targetId, {
+        patient_id: patient?.id,
+        patientId: patient?.id,
+        scheduleMode: 'NEXT_PATIENT_SESSION',
+        target_name: row?.targetName
+      }),
+      'Sondagem marcada para a proxima sessao ou mantida aguardando agenda.'
+    );
+  };
+
+  const handlePeiConfirmCandidateLink = (row: any) => {
+    const schedule = row?.nextSchedule;
+    const scheduleId = getPeiMaintenanceScheduleId(schedule);
+    const appointmentId = getPeiMaintenanceCandidateAppointmentId(schedule);
+    if (!scheduleId || !appointmentId) {
+      setPeiMaintenanceAssignSchedule(schedule || null);
+      return;
+    }
+    void runPeiMaintenanceAction(
+      `confirm-${row.key}`,
+      () => dataService.confirmMaintenanceScheduleLink(scheduleId, { appointmentId, appointment_id: appointmentId }),
+      'Vinculo confirmado.'
+    );
+  };
+
+  const handlePeiSkipCandidateLink = (row: any) => {
+    const schedule = row?.nextSchedule;
+    const scheduleId = getPeiMaintenanceScheduleId(schedule);
+    if (!scheduleId) return;
+    void runPeiMaintenanceAction(
+      `skip-${row.key}`,
+      () => dataService.skipMaintenanceScheduleLink(scheduleId, {
+        appointmentId: getPeiMaintenanceCandidateAppointmentId(schedule) || undefined
+      }),
+      'A sondagem continuou pendente para vinculo posterior.'
+    );
+  };
+
+  const openPeiMaintenanceAssignModal = (row: any) => {
+    const schedule = row?.nextSchedule || row?.schedules?.find?.((item: any) => getPeiMaintenanceScheduleId(item)) || null;
+    if (!schedule) {
+      handlePeiScheduleNextSession(row);
+      return;
+    }
+    setPeiMaintenanceAssignSchedule({ ...schedule, targetName: row?.targetName });
+    setSelectedPeiMaintenanceAppointmentId('');
+    setPeiMaintenancePanelMessage('');
+  };
+
+  const handlePeiAssignToAppointment = () => {
+    const scheduleId = getPeiMaintenanceScheduleId(peiMaintenanceAssignSchedule);
+    const appointmentId = String(selectedPeiMaintenanceAppointmentId || '').trim();
+    if (!scheduleId || !appointmentId) return;
+    void runPeiMaintenanceAction(
+      `assign-${scheduleId}`,
+      () => dataService.confirmMaintenanceScheduleLink(scheduleId, { appointmentId, appointment_id: appointmentId }),
+      'Sondagem vinculada a sessao.'
+    ).then((ok) => {
+      if (ok) {
+        setPeiMaintenanceAssignSchedule(null);
+        setSelectedPeiMaintenanceAppointmentId('');
+      }
+    });
+  };
+
+  const handlePeiWaitNextSessionFromModal = () => {
+    const scheduleId = getPeiMaintenanceScheduleId(peiMaintenanceAssignSchedule);
+    if (scheduleId) {
+      void runPeiMaintenanceAction(
+        `wait-${scheduleId}`,
+        () => dataService.skipMaintenanceScheduleLink(scheduleId, {}),
+        'Sondagem mantida aguardando proxima sessao.'
+      ).then((ok) => {
+        if (ok) setPeiMaintenanceAssignSchedule(null);
+      });
+    } else {
+      setPeiMaintenanceAssignSchedule(null);
+    }
+  };
+
+  const renderPeiMaintenanceMetric = (label: string, value: number) => (
+    <div className={`rounded-2xl border p-4 ${isPanelDark ? 'bg-slate-900/50 border-slate-700' : 'bg-white border-slate-100'}`}>
+      <p className={`text-xs font-medium ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>{label}</p>
+      <p className={`mt-1 text-2xl font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{value}</p>
+    </div>
+  );
+
+  const renderPeiMaintenanceActions = (row: any) => {
+    if (!canManagePeiMaintenance) return null;
+    const loading = peiMaintenanceActionKey.endsWith(String(row.key));
+    const noSchedule = row?.nextProbe?.status === 'NO_SCHEDULE';
+    const group = row?.group as PeiMaintenanceGroupKey;
+    const buttonClass = `min-h-[40px] rounded-xl px-3 py-2 text-xs font-semibold transition-all disabled:opacity-60 ${isPanelDark ? 'bg-slate-800 text-slate-100 hover:bg-slate-700' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`;
+    const primaryClass = 'min-h-[40px] rounded-xl bg-[#7a32fc] px-3 py-2 text-xs font-semibold text-white transition-all hover:opacity-90 disabled:opacity-60';
+
+    return (
+      <div className="mt-4 flex flex-wrap gap-2">
+        {noSchedule && (
+          <button type="button" disabled={loading} onClick={() => handlePeiCreateMaintenancePlan(row)} className={primaryClass}>
+            Agendar manutencao
+          </button>
+        )}
+        {(noSchedule || group === 'overdue' || group === 'unlinked') && (
+          <button type="button" disabled={loading} onClick={() => handlePeiScheduleNextSession(row)} className={buttonClass}>
+            Aguardar proxima sessao
+          </button>
+        )}
+        {group === 'confirmation' && (
+          <>
+            <button type="button" disabled={loading} onClick={() => handlePeiConfirmCandidateLink(row)} className={primaryClass}>
+              Confirmar vinculo
+            </button>
+            <button type="button" disabled={loading} onClick={() => handlePeiSkipCandidateLink(row)} className={buttonClass}>
+              Fazer depois
+            </button>
+          </>
+        )}
+        {group !== 'completed' && !noSchedule && (
+          <button type="button" disabled={loading} onClick={() => openPeiMaintenanceAssignModal(row)} className={buttonClass}>
+            Atribuir a uma sessao
+          </button>
+        )}
+        {group === 'today' && (
+          <button type="button" onClick={() => requestSessionStart('fullscreen')} className={primaryClass}>
+            Usar na sessao
+          </button>
+        )}
+        {group === 'overdue' && (
+          <button type="button" disabled={loading} onClick={() => handlePeiScheduleNextSession(row)} className={primaryClass}>
+            Usar na proxima sessao
+          </button>
+        )}
+      </div>
+    );
+  };
+
+  const renderPeiMaintenanceRow = (row: any) => {
+    const lastResult = row?.lastResult || null;
+    const accuracy = lastResult?.accuracy_percent ?? lastResult?.accuracyPercent;
+    const independence = lastResult?.independence_percent ?? lastResult?.independencePercent;
+    const cycleLabel = row?.hasCycle
+      ? `Plano de manutencao: ${row.completedCount}/${row.totalCycleCount || 4} concluido`
+      : 'Sem ciclo completo registrado';
+    return (
+      <div key={row.key} className={`rounded-2xl border p-4 shadow-sm ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-100'}`}>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
+            <div className="flex flex-wrap gap-2">
+              <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${row.isRegressionRisk ? 'bg-red-50 text-red-700' : row.isMaintained ? 'bg-emerald-50 text-emerald-700' : 'bg-violet-50 text-[#7a32fc]'}`}>
+                {row.statusLabel}
+              </span>
+              {row.group === 'confirmation' && <span className="rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-700">Pendente de confirmacao</span>}
+            </div>
+            <h4 className={`mt-2 text-base font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{row.targetName}</h4>
+            <p className={`mt-1 text-xs ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>{row.protocol} - {row.domain}</p>
+          </div>
+          <div className={`rounded-2xl px-3 py-2 text-xs font-semibold ${isPanelDark ? 'bg-slate-900/70 text-slate-200' : 'bg-slate-50 text-slate-600'}`}>
+            {formatPeiMaintenanceScheduleLabel(row.nextSchedule)}
+          </div>
+        </div>
+        <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+          <div className={`rounded-xl p-3 text-xs ${isPanelDark ? 'bg-slate-900/60 text-slate-300' : 'bg-slate-50 text-slate-600'}`}>
+            <span className="font-semibold">Proximo probe</span>
+            <p className="mt-1">{formatPeiMaintenanceScheduleLabel(row.nextSchedule)}</p>
+          </div>
+          <div className={`rounded-xl p-3 text-xs ${isPanelDark ? 'bg-slate-900/60 text-slate-300' : 'bg-slate-50 text-slate-600'}`}>
+            <span className="font-semibold">Ciclo atual</span>
+            <p className="mt-1">{cycleLabel}</p>
+          </div>
+          <div className={`rounded-xl p-3 text-xs ${isPanelDark ? 'bg-slate-900/60 text-slate-300' : 'bg-slate-50 text-slate-600'}`}>
+            <span className="font-semibold">Resultado recente</span>
+            <p className="mt-1">
+              {lastResult ? `${accuracy ?? 0}% acuracia - ${independence ?? 0}% independencia` : 'Sem probe concluido'}
+            </p>
+          </div>
+        </div>
+        {row.activeAlert && (
+          <div className="mt-3 rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">
+            {row.isRegressionRisk ? 'Risco de regressao' : 'Atencao'}: {safeDisplayValue(row.activeAlert?.message, 'Acompanhar proximos probes.')}
+          </div>
+        )}
+        {renderPeiMaintenanceActions(row)}
+      </div>
+    );
+  };
+
+  const renderPeiMaintenanceGroup = (key: PeiMaintenanceGroupKey, title: string, empty: string) => {
+    const rows = peiMaintenanceGroups[key] || [];
+    return (
+      <section className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h4 className={`text-sm font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>{title}</h4>
+          <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${isPanelDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>{rows.length}</span>
+        </div>
+        {rows.length > 0 ? rows.map(renderPeiMaintenanceRow) : (
+          <p className={`rounded-2xl border p-4 text-sm ${isPanelDark ? 'border-slate-700 bg-slate-900/40 text-slate-400' : 'border-slate-100 bg-slate-50 text-slate-500'}`}>{empty}</p>
+        )}
+      </section>
+    );
+  };
+
+  const renderPeiMaintenancePanel = () => (
+    <div className="space-y-5">
+      <div>
+        <h3 className={`text-lg font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>Manutencao</h3>
+        <p className={`mt-1 text-sm ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>Gerencie sondagens de manutencao, vinculos com sessoes e ciclos concluidos.</p>
+      </div>
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-6">
+        {renderPeiMaintenanceMetric('Probes pendentes', peiMaintenanceSummary.pending)}
+        {renderPeiMaintenanceMetric('Para hoje', peiMaintenanceSummary.today)}
+        {renderPeiMaintenanceMetric('Atrasadas', peiMaintenanceSummary.overdue)}
+        {renderPeiMaintenanceMetric('Sem sessao vinculada', peiMaintenanceSummary.unlinked)}
+        {renderPeiMaintenanceMetric('Pendentes de confirmacao', peiMaintenanceSummary.pendingConfirmation)}
+        {renderPeiMaintenanceMetric('Ciclos concluidos', peiMaintenanceSummary.completedCycles)}
+      </div>
+      <div className={`rounded-2xl border p-4 text-sm ${isPanelDark ? 'bg-slate-900/40 border-slate-700 text-slate-300' : 'bg-violet-50/50 border-violet-100 text-slate-600'}`}>
+        <span className="font-semibold text-[#7a32fc]">Plano de manutencao.</span> Cria checagens em 7, 14, 30 e 60 dias. O sistema tenta vincular cada checagem a sessao mais proxima.
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" onClick={() => void refreshPeiMaintenancePanel()} disabled={isLoadingPeiMaintenancePanel} className="rounded-xl bg-[#7a32fc] px-4 py-2 text-xs font-semibold text-white disabled:opacity-60">
+          {isLoadingPeiMaintenancePanel ? 'Atualizando...' : 'Atualizar manutencao'}
+        </button>
+        {peiMaintenancePanelMessage && <span className={`text-xs font-semibold ${peiMaintenancePanelMessage.includes('Nao') ? 'text-amber-700' : 'text-emerald-700'}`}>{peiMaintenancePanelMessage}</span>}
+      </div>
+      {renderPeiMaintenanceGroup('today', 'Para hoje', 'Nenhuma sondagem marcada para hoje.')}
+      {renderPeiMaintenanceGroup('overdue', 'Atrasadas', 'Nenhuma sondagem atrasada.')}
+      {renderPeiMaintenanceGroup('unlinked', 'Sem sessao vinculada', 'Nenhuma sondagem aguardando vinculo.')}
+      {renderPeiMaintenanceGroup('confirmation', 'Pendentes de confirmacao', 'Nenhuma sugestao aguardando confirmacao.')}
+      {renderPeiMaintenanceGroup('activeCycle', 'Em ciclo de manutencao', 'Nenhum ciclo ativo no momento.')}
+      {renderPeiMaintenanceGroup('completed', 'Concluidas', 'Nenhum ciclo concluido ainda.')}
+    </div>
+  );
+
+  const renderPeiGeneralizationPanel = () => (
+    <div className="space-y-4">
+      <div>
+        <h3 className={`text-lg font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>Generalizacao</h3>
+        <p className={`mt-1 text-sm ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>Habilidades mantidas que podem evoluir para outro ambiente, terapeuta, material ou familiar.</p>
+      </div>
+      {peiGeneralizationRows.length === 0 ? (
+        <p className={`rounded-2xl border p-5 text-sm ${isPanelDark ? 'border-slate-700 bg-slate-900/40 text-slate-400' : 'border-slate-100 bg-slate-50 text-slate-500'}`}>Nenhuma habilidade pronta para generalização no momento.</p>
+      ) : (
+        <div className="space-y-3">
+          {peiGeneralizationRows.map((row: any) => (
+            <div key={row.key} className={`rounded-2xl border p-4 ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-100'}`}>
+              <p className={`text-sm font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{row.targetName}</p>
+              <p className={`mt-1 text-xs ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>{row.protocol} - {row.domain}</p>
+              <span className="mt-3 inline-flex rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">{row.statusLabel || 'Habilidade mantida'}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  const renderPeiHistoryPanel = () => (
+    <div className="space-y-4">
+      <div>
+        <h3 className={`text-lg font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>Historico do PEI</h3>
+        <p className={`mt-1 text-sm ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>Linha do tempo com eventos clinicos ja registrados.</p>
+      </div>
+      {peiHistoryEvents.length === 0 ? (
+        <p className={`rounded-2xl border p-5 text-sm ${isPanelDark ? 'border-slate-700 bg-slate-900/40 text-slate-400' : 'border-slate-100 bg-slate-50 text-slate-500'}`}>Ainda nao ha historico estruturado do PEI para este paciente.</p>
+      ) : (
+        <div className="space-y-3">
+          {peiHistoryEvents.map((event: any) => (
+            <div key={event.id} className={`rounded-2xl border p-4 ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-100'}`}>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className={`text-sm font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{event.title}</p>
+                  <p className={`mt-1 text-xs ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>{event.detail}</p>
+                </div>
+                <span className={`rounded-full px-3 py-1 text-xs font-semibold ${isPanelDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>
+                  {event.date ? formatAbaDateTime(event.date) : event.source}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
   useEffect(() => {
     if (isTutorialActive) {
       if (tutorialStep >= 6 && isKidsProfile && canAccessTab('plan')) setActiveTab('plan');
@@ -4930,6 +5397,81 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 className="flex-1 py-3 rounded-2xl bg-red-500 text-white font-semibold shadow-lg shadow-red-500/20 hover:bg-red-600 transition-all"
               >
                 Encerrar
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+      {peiMaintenanceAssignSchedule && createPortal(
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm animate-fade-in">
+          <div className={`w-full max-w-2xl rounded-[28px] border p-5 shadow-2xl ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-100'}`}>
+            <div className="mb-4 flex items-start justify-between gap-4">
+              <div>
+                <h3 className={`text-lg font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>Escolha uma sessão para esta sondagem</h3>
+                <p className={`mt-1 text-sm ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>
+                  {peiMaintenanceAssignSchedule?.targetName || 'Sondagem de manutencao'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPeiMaintenanceAssignSchedule(null)}
+                className={`rounded-xl p-2 ${isPanelDark ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-400 hover:bg-slate-100'}`}
+                title="Fechar"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            {peiMaintenanceAppointmentsState.loading ? (
+              <p className={`rounded-2xl border p-4 text-sm ${isPanelDark ? 'border-slate-700 bg-slate-900/40 text-slate-300' : 'border-slate-100 bg-slate-50 text-slate-500'}`}>Carregando próximas sessões...</p>
+            ) : peiMaintenanceAppointmentsState.items.length > 0 ? (
+              <div className="max-h-[50vh] space-y-2 overflow-y-auto pr-1">
+                {peiMaintenanceAppointmentsState.items.map((appointment: any) => {
+                  const appointmentId = String(appointment?.id || '').trim();
+                  const selected = selectedPeiMaintenanceAppointmentId === appointmentId;
+                  return (
+                    <button
+                      key={appointmentId || formatPeiMaintenanceAppointmentLabel(appointment)}
+                      type="button"
+                      onClick={() => setSelectedPeiMaintenanceAppointmentId(appointmentId)}
+                      className={`w-full rounded-2xl border p-4 text-left transition-all ${
+                        selected
+                          ? 'border-[#7a32fc] bg-[#7a32fc]/10 text-[#7a32fc]'
+                          : isPanelDark
+                            ? 'border-slate-700 bg-slate-900/50 text-slate-200 hover:bg-slate-800'
+                            : 'border-slate-100 bg-slate-50 text-slate-700 hover:bg-white'
+                      }`}
+                    >
+                      <p className="text-sm font-semibold">{formatPeiMaintenanceAppointmentLabel(appointment)}</p>
+                      <p className="mt-1 text-xs opacity-80">{safeDisplayValue(appointment?.status, 'Agendada')}</p>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className={`rounded-2xl border p-4 text-sm ${isPanelDark ? 'border-amber-400/20 bg-amber-500/10 text-amber-100' : 'border-amber-100 bg-amber-50 text-amber-800'}`}>
+                Este paciente ainda não possui próximas sessões. A sondagem ficará aguardando próxima sessão.
+              </div>
+            )}
+            {peiMaintenanceAppointmentsState.error && (
+              <p className="mt-3 text-sm font-semibold text-amber-700">{peiMaintenanceAppointmentsState.error}</p>
+            )}
+            <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={handlePeiWaitNextSessionFromModal}
+                disabled={Boolean(peiMaintenanceActionKey)}
+                className={`min-h-[44px] rounded-xl px-4 py-2 text-sm font-semibold disabled:opacity-60 ${isPanelDark ? 'bg-slate-800 text-slate-100 hover:bg-slate-700' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}
+              >
+                Aguardar próxima sessão
+              </button>
+              <button
+                type="button"
+                onClick={handlePeiAssignToAppointment}
+                disabled={!selectedPeiMaintenanceAppointmentId || Boolean(peiMaintenanceActionKey)}
+                className="min-h-[44px] rounded-xl bg-[#7a32fc] px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-violet-500/20 transition-all hover:opacity-90 disabled:opacity-60"
+              >
+                Vincular sessão
               </button>
             </div>
           </div>
@@ -5836,6 +6378,43 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                   </div>
                 </div>
 
+                <div className={`mb-6 flex gap-2 overflow-x-auto rounded-2xl border p-1 ${isPanelDark ? 'bg-slate-900/60 border-slate-700' : 'bg-slate-50 border-slate-100'}`}>
+                  {PEI_PLAN_SUBTABS.map((tab) => {
+                    const active = activePeiPlanSubtab === tab.id;
+                    const label =
+                      tab.id === 'teaching'
+                        ? 'Ensino'
+                        : tab.id === 'maintenance'
+                          ? 'Manutenção'
+                          : tab.id === 'generalization'
+                            ? 'Generalização'
+                            : 'Histórico';
+                    const badge = tab.id === 'maintenance' ? peiMaintenanceSummary.pending : 0;
+                    return (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        onClick={() => setActivePeiPlanSubtab(tab.id)}
+                        className={`min-h-[40px] shrink-0 rounded-xl px-4 py-2 text-sm font-semibold transition-all ${
+                          active
+                            ? isPanelDark
+                              ? 'bg-slate-800 text-white shadow-sm'
+                              : 'bg-white text-[#7a32fc] shadow-sm'
+                            : isPanelDark
+                              ? 'text-slate-300 hover:bg-slate-800/60'
+                              : 'text-slate-500 hover:bg-white/70'
+                        }`}
+                      >
+                        {label}
+                        {badge > 0 && (
+                          <span className="ml-2 rounded-full bg-[#7a32fc]/10 px-2 py-0.5 text-xs text-[#7a32fc]">{badge}</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {activePeiPlanSubtab === 'teaching' && (
                 <div className="space-y-4 mb-8">
                   <div className="flex items-center justify-between mb-2">
                     <h4 className={`text-xs font-semibold uppercase tracking-widest ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>Metas Ativas</h4>
@@ -6145,6 +6724,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                     )}
                   </div>
                 </div>
+                )}
+                {activePeiPlanSubtab === 'maintenance' && renderPeiMaintenancePanel()}
+                {activePeiPlanSubtab === 'generalization' && renderPeiGeneralizationPanel()}
+                {activePeiPlanSubtab === 'history' && renderPeiHistoryPanel()}
               </div>
             )}
 
