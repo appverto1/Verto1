@@ -59,9 +59,9 @@ const heroStories = [
 const centralAbaShowcase = [
   {
     src: '/lp-central-aba-collection.webp',
-    width: 853,
-    height: 305,
-    alt: 'Tela da Verto mostrando coleta ABA em tempo real por target.'
+    width: 2131,
+    height: 587,
+    alt: 'Tela da Verto mostrando um target ABA em manutencao com botoes de coleta de tentativa.'
   },
   {
     src: '/lp-central-aba-maintenance.webp',
@@ -112,6 +112,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
   const [activeHeroStory, setActiveHeroStory] = useState(0);
   const [activeCentralAbaShot, setActiveCentralAbaShot] = useState(0);
   const activeHeroStoryData = heroStories[activeHeroStory] || heroStories[0];
+  const activeCentralAbaShotData = centralAbaShowcase[activeCentralAbaShot] || centralAbaShowcase[0];
 
   const parseApiResponse = async (response: Response) => {
     const text = await response.text();
@@ -1074,7 +1075,10 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                   </button>
                 ))}
               </div>
-              <div className="relative overflow-hidden rounded-[22px] bg-[#fbf8ff]" style={{ aspectRatio: '853 / 305' }}>
+              <div
+                className="relative overflow-hidden rounded-[22px] bg-[#fbf8ff] transition-all duration-700"
+                style={{ aspectRatio: `${activeCentralAbaShotData.width} / ${activeCentralAbaShotData.height}` }}
+              >
                 {centralAbaShowcase.map((shot, index) => (
                   <img
                     key={shot.src}
@@ -1084,7 +1088,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                     height={shot.height}
                     loading="lazy"
                     decoding="async"
-                    className={`absolute inset-0 h-full w-full object-cover transition-all duration-700 ${
+                    className={`absolute inset-0 h-full w-full object-contain transition-all duration-700 ${
                       index === activeCentralAbaShot
                         ? 'scale-100 opacity-100'
                         : 'pointer-events-none scale-[1.02] opacity-0'
