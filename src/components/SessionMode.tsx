@@ -63,6 +63,7 @@ import {
 } from '../utils/abaIntervalLifecycle';
 import { evaluateMaintenanceStatus, evaluateTargetMastery, formatAbaMasteryCriterion } from '../utils/abaMasteryEngine';
 import { formatMaintenanceScheduleDueLabel } from '../utils/abaMaintenanceScheduling';
+import { resolveMaintenanceTargetDisplay } from '../utils/peiMaintenancePanel';
 
 type SyncStatus = 'local' | 'syncing' | 'synced' | 'error';
 type AbcRequirement = 'REQUIRED' | 'RECOMMENDED' | 'OPTIONAL' | 'DISABLED';
@@ -1753,6 +1754,20 @@ export const SessionMode = ({
   const activateMaintenanceProbeMode = (goal?: any) => {
     const targetKey = goal ? getMaintenanceTargetKey(goal) : '';
     const activeProbe = goal ? getActiveMaintenanceProbeForTarget(goal) : null;
+    const maintenanceDisplay = goal ? resolveMaintenanceTargetDisplay({
+      target: goal,
+      schedule: activeProbe
+        ? {
+          ...activeProbe,
+          target_id: goalTargetId(goal) || targetKey,
+          target_name: goalTargetName(goal) || null
+        }
+        : {
+          target_id: goalTargetId(goal) || targetKey || null,
+          target_name: goalTargetName(goal) || null
+        }
+    }) : null;
+    const maintenanceTargetLabel = maintenanceDisplay?.targetDisplayName || 'esta tentativa';
     if (targetKey) {
       setCurrentTrialTargetKey(targetKey);
       setActiveMaintenanceProbeTargetId(targetKey);
@@ -1774,8 +1789,8 @@ export const SessionMode = ({
     }
     setCollectionType('maintenance_probe');
     if (goal?.id) setActiveCriteria(goal.id);
-    setPlanActionMessage('Maintenance Probe ativo para esta tentativa.');
-    setMaintenanceProbeFeedback('Maintenance Probe ativo para a próxima tentativa');
+    setPlanActionMessage(`Maintenance Probe ativo: ${maintenanceTargetLabel}.`);
+    setMaintenanceProbeFeedback(`Próxima tentativa: ${maintenanceTargetLabel}`);
     if (maintenanceProbeFeedbackTimerRef.current) window.clearTimeout(maintenanceProbeFeedbackTimerRef.current);
     maintenanceProbeFeedbackTimerRef.current = window.setTimeout(() => {
       setMaintenanceProbeFeedback('');
@@ -1785,7 +1800,7 @@ export const SessionMode = ({
     showClinicalToast({
       variant: 'success',
       title: 'Maintenance Probe ativo',
-      subtitle: 'A próxima tentativa será uma sondagem de manutenção.'
+      subtitle: `Próxima tentativa: ${maintenanceTargetLabel}.`
     }, 'none');
   };
 
@@ -3092,6 +3107,18 @@ export const SessionMode = ({
       });
       const info = getGoalMaintenanceInfo(goal);
       if (goalTrials.length === 0 && !info.isMaintenanceTarget) return null;
+      const display = resolveMaintenanceTargetDisplay({
+        target: goal,
+        schedule: info.nextSchedule || info.lastResult || info.activeAlert || {
+          target_id: goalId || null,
+          target_name: goalName,
+          protocolTitle: goal?.protocolTitle,
+          protocol_title: goal?.protocol_title,
+          domainName: goal?.domainName,
+          domain_name: goal?.domain_name
+        },
+        recentResult: info.lastResult
+      });
       const criterion = buildSessionGoalMasteryCriterion(goal);
       const evaluation = evaluateMaintenanceStatus({
         organizationId: resolvedClinicId || 'local',
@@ -3120,7 +3147,12 @@ export const SessionMode = ({
       return {
         id: `maintenance-${goalId || goalName}`,
         targetId: goalId || null,
-        name: goalName,
+        name: display.targetDisplayName,
+        protocol: display.protocolDisplayName,
+        domain: display.domainDisplayName,
+        contextLabel: display.contextLabel,
+        milestoneLabel: display.clinicalMilestoneLabel,
+        recentResultLabel: display.recentResultLabel,
         nextSchedule: info.nextSchedule,
         activeAlert: info.activeAlert,
         lastResult: info.lastResult,
@@ -3378,7 +3410,8 @@ export const SessionMode = ({
     if (String(item?.planned_trial_type || '').toLowerCase() === 'maintenance_probe') {
       const goal = sessionGoals.find((entry: any) => String(entry?.id || entry?.target_id || entry?.targetId || '') === String(item?.target_id || item?.targetId || ''));
       activateMaintenanceProbeMode(goal);
-      setPlanActionMessage('Maintenance Probe ativo para esta tentativa.');
+      const display = resolveMaintenanceTargetDisplay({ target: goal || item, schedule: item });
+      setPlanActionMessage(`Maintenance Probe ativo: ${display.targetDisplayName}.`);
     } else {
       if (item?.planned_trial_type) handleCollectionTypeChange(String(item.planned_trial_type));
       setPlanActionMessage('Item do plano selecionado para esta sessao.');
@@ -5363,6 +5396,7 @@ export const SessionMode = ({
                   return (
                     <div key={`pending-${row.id}`} className="rounded-2xl border border-amber-100 bg-[#FFFDF7] p-4">
                       <p className="text-sm font-bold text-gray-900">{row.name}</p>
+                      {row.contextLabel && <p className="mt-1 text-xs text-gray-500">{row.contextLabel}</p>}
                       <p className="mt-1 text-xs font-semibold text-amber-700">{row.nextSchedule ? formatMaintenanceDueLabel(row.nextSchedule) : 'Sem sondagem agendada'}</p>
                       <p className="mt-1 text-xs text-gray-500">{row.activeAlert ? 'Alerta ativo de regressao/manutencao' : 'Use somente se for intencao clinica da tentativa.'}</p>
                       <button type="button" onClick={() => activateMaintenanceProbeMode(goal)} className="mt-3 inline-flex min-h-[36px] items-center justify-center rounded-full bg-amber-600 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-white">
@@ -5392,6 +5426,7 @@ export const SessionMode = ({
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <p className="truncate text-sm font-bold text-gray-900">{row.name}</p>
+                        {row.contextLabel && <p className="mt-1 truncate text-xs text-gray-500">{row.contextLabel}</p>}
                         <p className="mt-1 text-xs font-semibold text-gray-500">
                           {row.nextSchedule ? formatMaintenanceDueLabel(row.nextSchedule) : 'Sem sondagem agendada'}
                         </p>
@@ -5428,6 +5463,18 @@ export const SessionMode = ({
               const maintenanceProbeActiveForGoal = Boolean(maintenanceTargetKey && currentTrialTargetKey === maintenanceTargetKey && activeMaintenanceProbeTargetId === maintenanceTargetKey && isMaintenanceProbeCollection(collectionType));
               const masteryRow = teachingMasteryRows.find((row) => String(row.id || row.targetId || row.name) === goalKey || row.name === goal.name);
               const maintenanceInfo = getGoalMaintenanceInfo(goal);
+              const maintenanceDisplay = maintenanceInfo.isMaintenanceTarget ? resolveMaintenanceTargetDisplay({
+                target: goal,
+                schedule: maintenanceInfo.nextSchedule || maintenanceInfo.lastResult || maintenanceInfo.activeAlert || {
+                  target_id: goalTargetId(goal) || maintenanceTargetKey || null,
+                  target_name: goalTargetName(goal) || goal?.name || null,
+                  protocolTitle: goal?.protocolTitle,
+                  protocol_title: goal?.protocol_title,
+                  domainName: goal?.domainName,
+                  domain_name: goal?.domain_name
+                },
+                recentResult: maintenanceInfo.lastResult
+              }) : null;
               const independentTrialLockKey = `trial:${goalKey}:independent:independent`;
               const errorTrialLockKey = `trial:${goalKey}:error:error`;
               return (
@@ -5459,15 +5506,23 @@ export const SessionMode = ({
                           <p className="mt-1 text-xs font-bold text-amber-900">
                             Tipo atual da próxima tentativa: {getAbaCollectionLabel(collectionType)}
                           </p>
+                          {maintenanceDisplay?.contextLabel && (
+                            <p className="mt-1 text-xs font-semibold text-amber-800">{maintenanceDisplay.contextLabel}</p>
+                          )}
                           {maintenanceProbeActiveForGoal && (
                             <p className="mt-2 inline-flex rounded-full bg-emerald-100 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-emerald-700">
-                              Maintenance Probe ativo para a próxima tentativa
+                              Maintenance Probe ativo para {maintenanceDisplay?.targetDisplayName || 'esta tentativa'}
                             </p>
                           )}
                           <p className="mt-1 text-xs font-semibold text-amber-800">Para avaliar manutenção, use Maintenance Probe.</p>
                           <p className="text-xs font-semibold text-amber-800">
                             {maintenanceInfo.nextSchedule ? formatMaintenanceDueLabel(maintenanceInfo.nextSchedule) : 'Sem sondagem agendada'}
                           </p>
+                          {maintenanceDisplay?.clinicalMilestoneLabel && (
+                            <p className="text-xs font-semibold text-amber-800">
+                              Marco clinico: {maintenanceDisplay.clinicalMilestoneLabel}
+                            </p>
+                          )}
                           {!maintenanceInfo.nextSchedule && (
                             <p className="mt-1 text-xs font-semibold text-amber-800">
                               Este target esta em manutencao, mas ainda nao ha sondagem agendada.
@@ -6253,7 +6308,8 @@ export const SessionMode = ({
                 ) : maintenanceProbeRows.map((row: any) => (
                   <div key={row.id} className="rounded-2xl bg-[#FFFDF7] border border-amber-100 p-3">
                     <p className="font-bold text-gray-900">{row.name}</p>
-                    <p className="text-xs text-gray-500">{row.nextSchedule ? formatMaintenanceDueLabel(row.nextSchedule.scheduled_for || row.nextSchedule.scheduledFor) : 'Sem maintenance probe agendado'}</p>
+                    {row.contextLabel && <p className="text-xs text-gray-500">{row.contextLabel}</p>}
+                    <p className="text-xs text-gray-500">{row.nextSchedule ? formatMaintenanceDueLabel(row.nextSchedule) : 'Sem sondagem agendada'}</p>
                     <p className="text-xs text-gray-500">status: {row.status}</p>
                     <p className="text-xs text-gray-500">probes hoje: {row.totalTrials ?? 0} - acuracia {row.accuracyPercent ?? 0}% - independencia {row.independencePercent ?? 0}%</p>
                     {row.consecutiveFailureCount >= 2 && <p className="text-xs font-bold text-red-600">{row.consecutiveFailureCount} probes consecutivos abaixo do criterio</p>}

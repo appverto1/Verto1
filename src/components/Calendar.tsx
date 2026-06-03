@@ -33,6 +33,7 @@ import {
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
 import { formatMinutesHuman, getActualDurationMinutes, getAppointmentDurationMinutes } from '../utils/scheduling';
+import { resolveMaintenanceTargetDisplay } from '../utils/peiMaintenancePanel';
 
 const normalizeAppointmentStatusKey = (status: any) =>
   String(status || 'scheduled')
@@ -2740,7 +2741,6 @@ export const ClinicalAgendaBoard = ({
                   )}
                   <div className="mt-3 space-y-2">
                     {maintenanceProbes.slice(0, 6).map((probe: any, index: number) => {
-                      const raw = typeof probe.raw_payload === 'object' && probe.raw_payload ? probe.raw_payload : {};
                       const status = String(probe.status || 'PENDING').toUpperCase();
                       const statusLabel: Record<string, string> = {
                         PENDING_NEXT_SESSION: 'Aguardando proxima sessao',
@@ -2752,12 +2752,15 @@ export const ClinicalAgendaBoard = ({
                         OVERDUE: 'Atrasada',
                         MISSED: 'Perdida'
                       };
+                      const display = resolveMaintenanceTargetDisplay({ schedule: probe });
                       const loadingConfirm = actionRequestState.loadingId === `confirm:${probe.id}`;
                       const loadingSkip = actionRequestState.loadingId === `skip:${probe.id}`;
                       return (
                         <div key={probe.id || index} className="rounded-2xl bg-white/70 px-3 py-2 text-sm">
-                          <p className="font-semibold text-slate-800">{raw.targetName || raw.target_name || 'Target em manutenção'}</p>
-                          <p className="mt-1 text-xs text-slate-500">Marco clinico: {probe.target_due_date ? new Date(probe.target_due_date).toLocaleDateString('pt-BR') : 'a definir'} - Status: {statusLabel[status] || status}</p>
+                          <p className="font-semibold text-slate-800">{display.targetDisplayName}</p>
+                          <p className="mt-1 text-xs text-slate-500">{display.contextLabel}</p>
+                          <p className="mt-1 text-xs text-slate-500">Marco clinico: {display.clinicalMilestoneLabel} - Status: {statusLabel[status] || display.statusLabel}</p>
+                          {display.reviewBadgeLabel && <p className="mt-1 text-[10px] font-bold uppercase tracking-widest text-amber-700">{display.reviewBadgeLabel}</p>}
                           {status === 'PENDING_CONFIRMATION' ? (
                             <div className="mt-2 flex flex-wrap gap-2">
                               <button

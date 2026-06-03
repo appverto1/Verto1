@@ -295,7 +295,8 @@ test('banner de manutencao comunica tipo atual e botao nao registra tentativa', 
   assert.match(sessionModeCode, /Este target está em manutenção\./);
   assert.match(sessionModeCode, /Tipo atual da próxima tentativa/);
   assert.match(sessionModeCode, /Para avaliar manutenção, use Maintenance Probe\./);
-  assert.match(sessionModeCode, /Maintenance Probe ativo para a próxima tentativa/);
+  assert.match(sessionModeCode, /resolveMaintenanceTargetDisplay/);
+  assert.match(sessionModeCode, /Maintenance Probe ativo: \$\{maintenanceTargetLabel\}/);
   assert.match(activationBody, /setCollectionType\('maintenance_probe'\)[\s\S]*?showClinicalToast/m);
   assert.doesNotMatch(activationBody, /handleTrialClick|persistTrialRecord|addRecord/m);
 });

@@ -27,6 +27,7 @@ import {
   formatPeiMaintenanceAppointmentLabel,
   formatPeiMaintenanceScheduleLabel,
   groupPeiMaintenanceRows,
+  resolveMaintenanceTargetDisplay,
   summarizePeiMaintenanceRows,
   type PeiMaintenanceGroupKey,
   type PeiPlanSubtab,
@@ -4787,13 +4788,16 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     const acquiredWithoutRow = peiGoals
       .filter((goal: any) => isGoalAcquired(goal))
       .filter((goal: any) => !maintainedKeys.has(String(goal?.id || goal?.skillId || goal?.name).toLowerCase()))
-      .map((goal: any) => ({
-        key: `goal-${String(goal?.id || goal?.name)}`,
-        targetName: goal?.name || 'Habilidade adquirida',
-        protocol: goal?.protocolTitle || 'Sem protocolo informado',
-        domain: goal?.domainName || 'Sem dominio informado',
-        statusLabel: 'Habilidade adquirida'
-      }));
+      .map((goal: any) => {
+        const display = resolveMaintenanceTargetDisplay({ target: goal, schedule: goal });
+        return {
+          key: `goal-${String(goal?.id || goal?.name)}`,
+          targetName: display.targetDisplayName || 'Habilidade adquirida',
+          protocol: display.protocolDisplayName,
+          domain: display.domainDisplayName,
+          statusLabel: 'Habilidade adquirida'
+        };
+      });
     return [...maintainedRows, ...acquiredWithoutRow];
   }, [peiGoals, peiMaintenanceRows]);
 

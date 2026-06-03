@@ -22004,9 +22004,11 @@ async function startServer() {
     'source_mastery_evaluation_id',
     'schedule_day',
     'interval_label',
+    'due_date',
     'target_due_date',
     'scheduled_for',
     'appointment_id',
+    'candidate_appointment_id',
     'schedule_mode',
     'sequence_index',
     'window_start',
@@ -22014,7 +22016,10 @@ async function startServer() {
     'status',
     'completed_at',
     'completed_by',
+    'confirmed_at',
+    'confirmed_by',
     'created_by',
+    'metadata',
     'updated_at',
     'raw_payload',
     'created_at'
@@ -22187,6 +22192,69 @@ async function startServer() {
     'updated_at',
     'created_at'
   ].join(',');
+  const enrichMaintenanceRowsWithTargetDisplay = async (
+    rows: any[],
+    clinicId: string,
+    organizationId: string,
+    user: any
+  ) => {
+    const safeRows = Array.isArray(rows) ? rows : [];
+    const targetIds = Array.from(new Set(
+      safeRows
+        .map((row: any) => sanitizeString(row?.target_id || row?.targetId, 180))
+        .filter((id: string) => isUuid(id))
+    )).slice(0, 200);
+    if (targetIds.length === 0) return safeRows;
+    let targetQuery = supabase
+      .from('aba_targets')
+      .select(ABA_TARGET_RECOMMENDATION_SELECT)
+      .eq('organization_id', organizationId)
+      .in('id', targetIds)
+      .limit(targetIds.length);
+    targetQuery = applyAbaTenantScope(targetQuery, user, clinicId, organizationId);
+    const targetResult = await targetQuery;
+    if (targetResult.error) {
+      if (hasMissingFinancialSchema(targetResult.error)) return safeRows;
+      throw targetResult.error;
+    }
+    const targetById = new Map<string, any>();
+    (targetResult.data || []).forEach((target: any) => {
+      const id = sanitizeString(target?.id, 180);
+      if (id) targetById.set(id, target);
+    });
+    return safeRows.map((row: any) => {
+      const targetId = sanitizeString(row?.target_id || row?.targetId, 180);
+      const target = targetById.get(targetId) || null;
+      const raw = row?.raw_payload && typeof row.raw_payload === 'object' ? row.raw_payload : {};
+      if (!target) {
+        return cleanObject({
+          ...row,
+          target_missing: Boolean(targetId),
+          raw_payload: sanitizeClinicalPayload(raw)
+        });
+      }
+      const displayName = sanitizeString(target?.name || raw.targetName || raw.target_name, 240) || null;
+      const protocolTitle = sanitizeString(target?.protocol_title || raw.protocolTitle || raw.protocol_name, 240) || null;
+      const domainName = sanitizeString(target?.domain_name || raw.domainName || raw.domain_name, 240) || null;
+      return cleanObject({
+        ...row,
+        target,
+        target_name: displayName,
+        targetName: displayName,
+        protocol_title: protocolTitle,
+        protocolTitle,
+        domain_name: domainName,
+        domainName,
+        target_missing: false,
+        raw_payload: sanitizeClinicalPayload({
+          ...raw,
+          targetName: displayName || raw.targetName || raw.target_name || null,
+          protocolTitle: protocolTitle || raw.protocolTitle || raw.protocol_name || null,
+          domainName: domainName || raw.domainName || raw.domain_name || null
+        })
+      });
+    });
+  };
   const ABA_APPOINTMENT_MAINTENANCE_COLUMNS = [
     'id',
     'organization_id',
@@ -25653,6 +25721,20 @@ async function startServer() {
         else if (!hasMissingFinancialSchema(overdueProbeResult.error)) throw overdueProbeResult.error;
       }
 
+      const enrichedMaintenanceRows = await enrichMaintenanceRowsWithTargetDisplay(
+        [...maintenanceProbes, ...overdueMaintenanceProbes],
+        clinicId,
+        organizationId,
+        req.session.user
+      );
+      const enrichedMaintenanceById = new Map<string, any>();
+      enrichedMaintenanceRows.forEach((row: any) => {
+        const id = sanitizeString(row?.id, 180);
+        if (id) enrichedMaintenanceById.set(id, row);
+      });
+      maintenanceProbes = maintenanceProbes.map((row: any) => enrichedMaintenanceById.get(sanitizeString(row?.id, 180)) || row);
+      overdueMaintenanceProbes = overdueMaintenanceProbes.map((row: any) => enrichedMaintenanceById.get(sanitizeString(row?.id, 180)) || row);
+
       return res.json({
         success: true,
         data: {
@@ -27490,7 +27572,13 @@ async function startServer() {
       throw result.error;
     }
     logAbaPlanningEgress({ helper: 'getNextMaintenanceProbeForTarget', table: 'aba_maintenance_schedules', limit: 10, rows: (result.data || []).length });
-    return getNextMaintenanceProbeForTarget(result.data || []);
+    const enrichedRows = await enrichMaintenanceRowsWithTargetDisplay(
+      result.data || [],
+      params.clinicId,
+      params.organizationId,
+      { role: 'owner' }
+    );
+    return getNextMaintenanceProbeForTarget(enrichedRows);
   };
 
   const updateAbaScheduleWithSchemaFallback = async (scheduleId: string, patchBase: Record<string, any>, clinicId: string, organizationId?: string, patientId?: string) => {
@@ -27831,13 +27919,18 @@ async function startServer() {
       limit,
       rows: queries.map((result: any) => Array.isArray(result.data) ? result.data.length : (result.data ? 1 : 0))
     });
+    const [maintenanceSchedules, maintenanceProbeResults, regressionAlerts] = await Promise.all([
+      enrichMaintenanceRowsWithTargetDisplay(safeData(3, []), clinicId, organizationId, { role: 'owner' }),
+      enrichMaintenanceRowsWithTargetDisplay(safeData(4, []), clinicId, organizationId, { role: 'owner' }),
+      enrichMaintenanceRowsWithTargetDisplay(safeData(5, []), clinicId, organizationId, { role: 'owner' })
+    ]);
     return {
       sessionSummary: safeData(0, null),
       metricSnapshots: safeData(1, []),
       masteryEvaluations: safeData(2, []),
-      maintenanceSchedules: safeData(3, []),
-      maintenanceProbeResults: safeData(4, []),
-      regressionAlerts: safeData(5, []),
+      maintenanceSchedules,
+      maintenanceProbeResults,
+      regressionAlerts,
       targets: safeData(6, []),
       behaviorDailySummaries: safeData(7, []),
       existingRecommendations: safeData(8, [])
@@ -29135,12 +29228,17 @@ async function startServer() {
           throw linkedScheduleResult.error;
         }
       }
+      const [enrichedSchedules, enrichedProbeResults, enrichedAlerts] = await Promise.all([
+        enrichMaintenanceRowsWithTargetDisplay(schedules, clinicId, organizationId, req.session.user),
+        enrichMaintenanceRowsWithTargetDisplay((probeResult as any).data || [], clinicId, organizationId, req.session.user),
+        enrichMaintenanceRowsWithTargetDisplay((alertResult as any).data || [], clinicId, organizationId, req.session.user)
+      ]);
       return res.json({
         success: true,
         data: {
-          schedules,
-          probeResults: (probeResult as any).data || [],
-          alerts: (alertResult as any).data || [],
+          schedules: enrichedSchedules,
+          probeResults: enrichedProbeResults,
+          alerts: enrichedAlerts,
           summary: (summaryResult as any).data || null
         },
         page,
@@ -29172,7 +29270,8 @@ async function startServer() {
         if (hasMissingFinancialSchema(error)) return res.json({ success: true, data: [] });
         throw error;
       }
-      return res.json({ success: true, data: data || [] });
+      const enriched = await enrichMaintenanceRowsWithTargetDisplay(data || [], clinicId, organizationId, req.session.user);
+      return res.json({ success: true, data: enriched });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || 'Não foi possível carregar os agendamentos agora.' });
     }
@@ -29326,7 +29425,14 @@ async function startServer() {
         updated_at: new Date().toISOString()
       }), existing.data.clinic_id, existing.data.organization_id, existing.data.patient_id);
       if (update.error) throw update.error;
-      return res.json({ success: true, data: { ...existing.data, status: 'COMPLETED', completed_at: completedAt, completed_by: sanitizeString(req.session.user?.id, 120) } });
+      const completedSchedule = { ...existing.data, status: 'COMPLETED', completed_at: completedAt, completed_by: sanitizeString(req.session.user?.id, 120) };
+      const [enrichedSchedule] = await enrichMaintenanceRowsWithTargetDisplay(
+        [completedSchedule],
+        sanitizeString(existing.data.clinic_id, 120) || clinicId,
+        sanitizeString(existing.data.organization_id, 120) || sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120),
+        req.session.user
+      );
+      return res.json({ success: true, data: enrichedSchedule || completedSchedule });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || 'Não foi possível concluir o agendamento agora.' });
     }
@@ -29402,16 +29508,23 @@ async function startServer() {
         actionType: 'MAINTENANCE_PROBE_LINK_CONFIRMED',
         payload: { scheduleId, appointmentId, patientId: schedule.patient_id }
       });
+      const confirmedSchedule = {
+        ...schedule,
+        status: 'SCHEDULED',
+        appointment_id: appointmentId,
+        scheduled_for: appointment.scheduled_at,
+        confirmed_at: now,
+        confirmed_by: confirmedBy
+      };
+      const [enrichedSchedule] = await enrichMaintenanceRowsWithTargetDisplay(
+        [confirmedSchedule],
+        sanitizeString(schedule.clinic_id, 120) || clinicId,
+        sanitizeString(schedule.organization_id, 120) || organizationId,
+        req.session.user
+      );
       return res.json({
         success: true,
-        data: {
-          ...schedule,
-          status: 'SCHEDULED',
-          appointment_id: appointmentId,
-          scheduled_for: appointment.scheduled_at,
-          confirmed_at: now,
-          confirmed_by: confirmedBy
-        }
+        data: enrichedSchedule || confirmedSchedule
       });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || 'Não foi possível confirmar o vínculo agora.' });
@@ -29486,14 +29599,21 @@ async function startServer() {
         actionType: 'MAINTENANCE_PROBE_LINK_SKIPPED',
         payload: { scheduleId, appointmentId, patientId: schedule.patient_id }
       });
+      const skippedSchedule = {
+        ...schedule,
+        status: nextStatus,
+        appointment_id: null,
+        raw_payload: { ...raw, ignoredAppointmentIds }
+      };
+      const [enrichedSchedule] = await enrichMaintenanceRowsWithTargetDisplay(
+        [skippedSchedule],
+        sanitizeString(schedule.clinic_id, 120) || clinicId,
+        sanitizeString(schedule.organization_id, 120) || organizationId,
+        req.session.user
+      );
       return res.json({
         success: true,
-        data: {
-          ...schedule,
-          status: nextStatus,
-          appointment_id: null,
-          raw_payload: { ...raw, ignoredAppointmentIds }
-        }
+        data: enrichedSchedule || skippedSchedule
       });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || 'Não foi possível adiar o vínculo agora.' });
@@ -29870,7 +29990,7 @@ async function startServer() {
         if (params.itemId) probeQuery = probeQuery.eq('target_id', params.itemId);
         const probeResult = await probeQuery;
         if (probeResult.error && !hasMissingFinancialSchema(probeResult.error)) throw probeResult.error;
-        const probeRows = probeResult.error ? [] : probeResult.data || [];
+        const probeRows = await enrichMaintenanceRowsWithTargetDisplay(probeResult.error ? [] : probeResult.data || [], clinicId, organizationId, req.session.user);
         availableItems = uniqueLineItems(probeRows, 'target');
         if (params.itemId) points = buildMaintenanceLinePoints(probeRows, params.metric, params.groupBy);
         source = 'aba_maintenance_probe_results';
@@ -30160,13 +30280,18 @@ async function startServer() {
         limit: params.limit,
         significantOnly: params.significantOnly
       });
-      const fallbackPoints = ((probeResult as any).data || []).map((row: any) => ({
+      const [schedules, probeResults, alerts] = await Promise.all([
+        enrichMaintenanceRowsWithTargetDisplay((scheduleResult as any).error ? [] : (scheduleResult as any).data || [], clinicId, organizationId, req.session.user),
+        enrichMaintenanceRowsWithTargetDisplay((probeResult as any).error ? [] : (probeResult as any).data || [], clinicId, organizationId, req.session.user),
+        enrichMaintenanceRowsWithTargetDisplay((alertResult as any).error ? [] : (alertResult as any).data || [], clinicId, organizationId, req.session.user)
+      ]);
+      const fallbackPoints = probeResults.map((row: any) => ({
         id: row.id,
         sessionId: row.session_id,
         targetId: row.target_id,
         behaviorId: null,
         metricType: 'MAINTENANCE_STATUS',
-        metricLabel: row.raw_payload?.targetName || row.target_id || 'Habilidade',
+        metricLabel: row.targetName || row.target_name || row.raw_payload?.targetName || row.target_id || 'Habilidade',
         value: row.status === 'MAINTAINED' ? 3 : row.status === 'WATCH' ? 1 : -1,
         previousValue: null,
         deltaValue: null,
@@ -30192,9 +30317,9 @@ async function startServer() {
         success: true,
         data: {
           points: snapshotRows.length > 0 ? snapshotRows.map(normalizeAbaSnapshotPoint) : fallbackPoints,
-          schedules: (scheduleResult as any).error ? [] : (scheduleResult as any).data || [],
-          probeResults: (probeResult as any).error ? [] : (probeResult as any).data || [],
-          alerts: (alertResult as any).error ? [] : (alertResult as any).data || [],
+          schedules,
+          probeResults,
+          alerts,
           annotations
         },
         source: snapshotRows.length > 0 ? 'aba_session_metric_snapshots' : 'aba_maintenance_probe_results'

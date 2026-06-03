@@ -33,7 +33,35 @@ const normalizeText = (value: any) =>
 
 const normalizeStatus = (value: any) => normalizeText(value).toUpperCase();
 
-const safeTargetName = (value: any, fallback = 'Target em manutencao') => {
+const readObjectPayload = (...values: any[]) => {
+  const merged: Record<string, any> = {};
+  for (const value of values) {
+    if (!value) continue;
+    if (typeof value === 'object' && !Array.isArray(value)) {
+      Object.assign(merged, value);
+      continue;
+    }
+    if (typeof value === 'string') {
+      try {
+        const parsed = JSON.parse(value);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) Object.assign(merged, parsed);
+      } catch {
+        // Ignore malformed legacy payloads; display falls through to safe fallback.
+      }
+    }
+  }
+  return merged;
+};
+
+const firstDisplayText = (...values: any[]) => {
+  for (const value of values) {
+    const label = normalizeText(value);
+    if (label && !UUID_LIKE.test(label)) return label;
+  }
+  return '';
+};
+
+const safeTargetName = (value: any, fallback = 'Habilidade sem nome') => {
   const label = normalizeText(value);
   if (!label || UUID_LIKE.test(label)) return fallback;
   return label;
@@ -66,6 +94,125 @@ const formatShortDateTime = (value: any) => {
   const time = date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
   return `${day} as ${time}`;
 };
+
+const statusLabelForMaintenance = (scheduleOrProbe: any, now = new Date()) => {
+  const status = normalizeStatus(scheduleOrProbe?.status || scheduleOrProbe?.probeStatus || scheduleOrProbe?.result_status);
+  if (status === 'MAINTAINED') return 'Habilidade mantida';
+  if (status === 'REGRESSION_RISK') return 'Risco de regressao';
+  if (status === 'WATCH') return 'Atencao';
+  if (status === 'PENDING_CONFIRMATION') return 'Pendente de confirmacao';
+  if (status === 'PENDING_NEXT_SESSION') return 'Aguardando proxima sessao';
+  if (status === 'PENDING_LINK' || status === 'PENDING_SCHEDULING' || status === 'UNSCHEDULED') return 'Sem sessao vinculada';
+  if (status === 'COMPLETED') return 'Concluida';
+  if (status === 'SCHEDULED') return 'Agendada';
+  const derived = scheduleOrProbe ? deriveMaintenanceScheduleStatus(scheduleOrProbe, now) : '';
+  if (derived === 'DUE_TODAY') return 'Para hoje';
+  if (derived === 'OVERDUE') return 'Atrasada';
+  return status || 'Pendente';
+};
+
+export function resolveMaintenanceTargetDisplay(input: {
+  schedule?: any;
+  probe?: any;
+  target?: any;
+  appointment?: any;
+  recentResult?: any;
+  now?: Date;
+} | any = {}) {
+  const source = input?.schedule || input?.probe || input || {};
+  const probe = input?.probe || source;
+  const target = input?.target || source?.target || source?.aba_target || source?.targets || {};
+  const metadata = readObjectPayload(source?.metadata, source?.raw_payload, source?.rawPayload);
+  const probeMetadata = readObjectPayload(probe?.metadata, probe?.raw_payload, probe?.rawPayload);
+  const targetId = normalizeText(source?.target_id || source?.targetId || probe?.target_id || probe?.targetId || target?.id);
+  const hasExplicitMissingTarget = Boolean(targetId && source?.target_missing === true);
+  const targetDisplayName =
+    firstDisplayText(
+      target?.name,
+      target?.title,
+      target?.target_name,
+      target?.targetName,
+      target?.skill_name,
+      target?.skillName,
+      source?.target_name,
+      source?.targetName,
+      source?.name,
+      metadata?.target_name,
+      metadata?.targetName,
+      probe?.target_name,
+      probe?.targetName,
+      probeMetadata?.target_name,
+      probeMetadata?.targetName
+    ) ||
+    (!targetId ? 'Habilidade nao vinculada' : hasExplicitMissingTarget ? 'Habilidade nao encontrada' : 'Habilidade sem nome');
+  const protocolDisplayName =
+    firstDisplayText(
+      target?.protocol?.name,
+      target?.protocol_name,
+      target?.protocolName,
+      target?.protocol_title,
+      target?.protocolTitle,
+      source?.protocol_name,
+      source?.protocolName,
+      source?.protocol_title,
+      source?.protocolTitle,
+      metadata?.protocol_name,
+      metadata?.protocolName,
+      metadata?.protocol_title,
+      metadata?.protocolTitle,
+      probeMetadata?.protocol_name,
+      probeMetadata?.protocolName
+    ) || 'Sem protocolo informado';
+  const domainDisplayName =
+    firstDisplayText(
+      target?.domain?.name,
+      target?.domain_name,
+      target?.domainName,
+      target?.program?.name,
+      target?.program_name,
+      target?.programName,
+      source?.domain_name,
+      source?.domainName,
+      source?.program_name,
+      source?.programName,
+      metadata?.domain_name,
+      metadata?.domainName,
+      metadata?.program_name,
+      metadata?.programName,
+      probeMetadata?.domain_name,
+      probeMetadata?.domainName
+    ) || 'Sem dominio informado';
+  const now = input?.now || new Date();
+  const recentResult = input?.recentResult || probe || null;
+  const schedule = input?.schedule || source;
+  const scheduleDay = Number(schedule?.schedule_day ?? schedule?.scheduleDay);
+  const clinicalMilestoneLabel =
+    Number.isFinite(scheduleDay) && scheduleDay > 0
+      ? `${Math.round(scheduleDay)} dias`
+      : schedule?.interval_label || schedule?.intervalLabel || formatPeiMaintenanceScheduleLabel(schedule, now);
+  const linkedSessionLabel = schedule?.appointment_id || schedule?.appointmentId
+    ? formatPeiMaintenanceScheduleLabel(schedule, now)
+    : '';
+  const accuracy = recentResult?.accuracy_percent ?? recentResult?.accuracyPercent;
+  const independence = recentResult?.independence_percent ?? recentResult?.independencePercent;
+  const recentResultLabel = accuracy !== undefined || independence !== undefined
+    ? `${accuracy ?? 0}% acuracia - ${independence ?? 0}% independencia`
+    : '';
+  const statusLabel = statusLabelForMaintenance(schedule, now);
+  return {
+    targetDisplayName,
+    protocolDisplayName,
+    domainDisplayName,
+    contextLabel: `${protocolDisplayName} - ${domainDisplayName}`,
+    statusLabel,
+    clinicalMilestoneLabel,
+    linkedSessionLabel,
+    recentResultLabel,
+    badgeLabel: statusLabel,
+    targetId,
+    reviewBadgeLabel: !targetId ? 'Revisar vinculo' : hasExplicitMissingTarget ? 'Revisar dados' : '',
+  };
+}
 
 export const formatPeiMaintenanceAppointmentLabel = (appointment: any) => {
   const when = formatShortDateTime(
@@ -124,6 +271,7 @@ export function buildPeiMaintenanceRows(input: {
   const rowsByKey = new Map<string, any>();
 
   const ensureRow = (seed: any = {}) => {
+    const display = resolveMaintenanceTargetDisplay(seed);
     const key =
       getTargetKey(seed.target_id, seed.targetId, seed.skillId, seed.skill_id, seed.name, seed.target_name, seed.targetName) ||
       `target-${rowsByKey.size + 1}`;
@@ -132,9 +280,9 @@ export function buildPeiMaintenanceRows(input: {
     const row = {
       key,
       targetId: normalizeText(seed.target_id || seed.targetId || seed.id || ''),
-      targetName: safeTargetName(seed.name || seed.target_name || seed.targetName || seed.raw_payload?.targetName || seed.rawPayload?.targetName),
-      protocol: safeTargetName(seed.protocolTitle || seed.protocol_title || seed.protocol || seed.protocol_name, 'Sem protocolo informado'),
-      domain: safeTargetName(seed.domainName || seed.domain_name || seed.domain || seed.program_name, 'Sem dominio informado'),
+      targetName: display.targetDisplayName,
+      protocol: display.protocolDisplayName,
+      domain: display.domainDisplayName,
       clinicalStatus: normalizeStatus(seed.status || seed.clinical_status || seed.clinicalStatus || ''),
       goal: seed.goal || seed,
       schedules: [] as any[],
@@ -294,7 +442,7 @@ export function buildPeiPlanHistoryEvents(input: {
     events.push({
       id: `schedule-${normalizeText(schedule?.id || schedule?.target_id || schedule?.targetId)}`,
       date: schedule?.confirmed_at || schedule?.confirmedAt || schedule?.created_at || schedule?.createdAt || getScheduleReferenceDate(schedule),
-      title: safeTargetName(schedule?.target_name || schedule?.targetName || schedule?.raw_payload?.targetName || schedule?.rawPayload?.targetName, 'Sondagem de manutencao'),
+      title: resolveMaintenanceTargetDisplay({ schedule }).targetDisplayName,
       detail:
         status === 'PENDING_CONFIRMATION'
           ? 'Probe pendente de confirmacao'
@@ -309,7 +457,7 @@ export function buildPeiPlanHistoryEvents(input: {
     events.push({
       id: `probe-${normalizeText(result?.id || result?.target_id || result?.targetId)}`,
       date: getResultReferenceDate(result),
-      title: safeTargetName(result?.target_name || result?.targetName || result?.raw_payload?.targetName || result?.rawPayload?.targetName, 'Probe de manutencao'),
+      title: resolveMaintenanceTargetDisplay({ probe: result }).targetDisplayName,
       detail: status === 'MAINTAINED' ? 'Probe concluida com habilidade mantida' : `Probe concluida: ${status || 'registrada'}`,
       source: 'Resultado',
     });
@@ -318,7 +466,7 @@ export function buildPeiPlanHistoryEvents(input: {
     events.push({
       id: `alert-${normalizeText(alert?.id || alert?.target_id || alert?.targetId)}`,
       date: alert?.created_at || alert?.createdAt,
-      title: safeTargetName(alert?.target_name || alert?.targetName, 'Alerta de manutencao'),
+      title: resolveMaintenanceTargetDisplay({ probe: alert }).targetDisplayName,
       detail: safeTargetName(alert?.message, 'Risco de regressao'),
       source: 'Alerta',
     });

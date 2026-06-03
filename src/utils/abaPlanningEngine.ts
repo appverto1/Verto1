@@ -416,7 +416,7 @@ export function generateNextSessionRecommendations(input: GenerateNextSessionRec
       priority: nextProbe.isOverdue || nextProbe.status === 'MISSED' ? 'HIGH' : 'MEDIUM',
       title: nextProbe.noSchedule ? `Agendar sondagem de manutencao: ${targetNameOf(target)}` : `Revisar manutencao: ${targetNameOf(target)}`,
       summary: nextProbe.label,
-      rationale: 'Target em manutencao com sondagem pendente, vencida, sem agenda ou dentro da janela clinica.',
+      rationale: 'Habilidade em manutencao com sondagem pendente, vencida, sem agenda ou dentro da janela clinica.',
       suggested_action: nextProbe.noSchedule ? 'Agendar Maintenance Probe para a proxima sessao ou escolher uma data.' : 'Usar Maintenance Probe na proxima sessao, com validacao do supervisor.',
       target_id: targetId,
       program_id: targetProgramOf(target) || null,

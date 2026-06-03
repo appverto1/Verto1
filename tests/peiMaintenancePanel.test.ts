@@ -6,11 +6,15 @@ import {
   formatPeiMaintenanceAppointmentLabel,
   formatPeiMaintenanceScheduleLabel,
   groupPeiMaintenanceRows,
+  resolveMaintenanceTargetDisplay,
   summarizePeiMaintenanceRows,
 } from '../src/utils/peiMaintenancePanel.ts';
 
 const root = process.cwd();
 const patientDetailCode = readFileSync(join(root, 'src/components/PatientDetailView.tsx'), 'utf8');
+const calendarCode = readFileSync(join(root, 'src/components/Calendar.tsx'), 'utf8');
+const sessionModeCode = readFileSync(join(root, 'src/components/SessionMode.tsx'), 'utf8');
+const maintenancePanelCode = readFileSync(join(root, 'src/utils/peiMaintenancePanel.ts'), 'utf8');
 const serverCode = readFileSync(join(root, 'server.ts'), 'utf8');
 
 const tests: Array<{ name: string; fn: () => void }> = [];
@@ -45,8 +49,36 @@ test('labels escondem identificadores tecnicos quando nome do target veio cru', 
       }
     ]
   });
-  assert.equal(rows[0].targetName, 'Target em manutencao');
+  assert.equal(rows[0].targetName, 'Habilidade sem nome');
   assert.doesNotMatch(rows[0].statusLabel, /6b0a0b10/);
+});
+
+test('resolvedor central prioriza nome real, protocolo, dominio e marco clinico', () => {
+  const display = resolveMaintenanceTargetDisplay({
+    schedule: {
+      id: 's1',
+      target_id: 'target-1',
+      target_name: 'target-1',
+      status: 'PENDING_CONFIRMATION',
+      schedule_day: 14
+    },
+    target: {
+      id: 'target-1',
+      name: 'Contato visual',
+      protocol_title: 'VB-MAPP',
+      domain_name: 'Social'
+    },
+    recentResult: {
+      accuracy_percent: 80,
+      independence_percent: 60
+    }
+  });
+  assert.equal(display.targetDisplayName, 'Contato visual');
+  assert.equal(display.protocolDisplayName, 'VB-MAPP');
+  assert.equal(display.domainDisplayName, 'Social');
+  assert.equal(display.clinicalMilestoneLabel, '14 dias');
+  assert.equal(display.recentResultLabel, '80% acuracia - 60% independencia');
+  assert.equal(resolveMaintenanceTargetDisplay({ schedule: { target_id: 'target-2', target_missing: true } }).targetDisplayName, 'Habilidade nao encontrada');
 });
 
 test('cards humanos descrevem vinculo, atraso, confirmacao e ciclo concluido', () => {
@@ -88,6 +120,21 @@ test('acoes do painel chamam rotas seguras existentes', () => {
   assert.match(serverCode, /app\.post\('\/api\/aba\/maintenance-schedules\/:scheduleId\/skip-link'/);
   assert.match(serverCode, /fetchMaintenanceAppointmentById/);
   assert.match(serverCode, /canAccessPatientInCurrentClinic/);
+});
+
+test('interfaces de manutencao usam display central sem placeholders antigos', () => {
+  const uiCode = [patientDetailCode, calendarCode, sessionModeCode, maintenancePanelCode].join('\n');
+  assert.match(calendarCode, /resolveMaintenanceTargetDisplay/);
+  assert.match(sessionModeCode, /resolveMaintenanceTargetDisplay/);
+  assert.match(patientDetailCode, /resolveMaintenanceTargetDisplay/);
+  assert.doesNotMatch(uiCode, /Target em manuten[cç]ao|Target em manutenção|Sem maintenance probe agendado|Marco clinico: a definir|Marco clínico: a definir/);
+});
+
+test('backend resolve targets de manutencao em lote com colunas explicitas', () => {
+  assert.match(serverCode, /const enrichMaintenanceRowsWithTargetDisplay/);
+  assert.match(serverCode, /\.from\('aba_targets'\)[\s\S]*?\.select\(ABA_TARGET_RECOMMENDATION_SELECT\)[\s\S]*?\.in\('id', targetIds\)/m);
+  assert.match(serverCode, /'candidate_appointment_id'[\s\S]*?'confirmed_at'[\s\S]*?'metadata'/m);
+  assert.doesNotMatch(serverCode, /from\('aba_maintenance_schedules'\)[\s\S]{0,200}\.select\('\*'\)/m);
 });
 
 let passed = 0;
