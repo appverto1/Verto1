@@ -4858,14 +4858,19 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     };
   }, [patient?.id, peiMaintenanceAssignSchedule]);
 
+  const getPersistedUuid = (value: any) => {
+    const id = String(value || '').trim();
+    return isUuidLike(id) ? id : '';
+  };
+
   const getPeiMaintenanceTargetId = (row: any) =>
-    String(row?.targetId || row?.target_id || row?.goal?.id || row?.goal?.target_id || row?.goal?.targetId || '').trim();
+    getPersistedUuid(row?.targetId || row?.target_id || row?.goal?.id || row?.goal?.target_id || row?.goal?.targetId);
 
   const getPeiMaintenanceScheduleId = (schedule: any) =>
-    String(schedule?.id || schedule?.schedule_id || schedule?.scheduleId || '').trim();
+    getPersistedUuid(schedule?.id || schedule?.schedule_id || schedule?.scheduleId);
 
   const getPeiMaintenanceCandidateAppointmentId = (schedule: any) =>
-    String(
+    getPersistedUuid(
       schedule?.candidate_appointment_id ||
       schedule?.candidateAppointmentId ||
       schedule?.raw_payload?.candidateAppointmentId ||
@@ -4896,7 +4901,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const handlePeiCreateMaintenancePlan = (row: any) => {
     const targetId = getPeiMaintenanceTargetId(row);
     if (!targetId) {
-      setPeiMaintenancePanelMessage('Este target ainda nao possui vinculo clinico para agendamento automatico.');
+      setPeiMaintenancePanelMessage('Não foi possível agendar porque esta manutenção não está vinculada a uma habilidade real.');
       return;
     }
     void runPeiMaintenanceAction(
@@ -4915,7 +4920,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const handlePeiScheduleNextSession = (row: any) => {
     const targetId = getPeiMaintenanceTargetId(row);
     if (!targetId) {
-      setPeiMaintenancePanelMessage('Este target ainda nao possui vinculo clinico para agendamento automatico.');
+      setPeiMaintenancePanelMessage('Não foi possível agendar porque esta manutenção não está vinculada a uma habilidade real.');
       return;
     }
     void runPeiMaintenanceAction(
@@ -4926,7 +4931,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         scheduleMode: 'NEXT_PATIENT_SESSION',
         target_name: row?.targetName
       }),
-      'Sondagem marcada para a proxima sessao ou mantida aguardando agenda.'
+      'Sondagem aguardando próxima sessão.'
     );
   };
 
@@ -4934,8 +4939,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     const schedule = row?.nextSchedule;
     const scheduleId = getPeiMaintenanceScheduleId(schedule);
     const appointmentId = getPeiMaintenanceCandidateAppointmentId(schedule);
-    if (!scheduleId || !appointmentId) {
+    if (!scheduleId) {
+      setPeiMaintenancePanelMessage('Sondagem de manutenção inválida. Revise o vínculo antes de confirmar.');
+      return;
+    }
+    if (!appointmentId) {
       setPeiMaintenanceAssignSchedule(schedule || null);
+      setPeiMaintenancePanelMessage('Escolha uma sessão antes de confirmar o vínculo.');
       return;
     }
     void runPeiMaintenanceAction(
@@ -4948,20 +4958,23 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const handlePeiSkipCandidateLink = (row: any) => {
     const schedule = row?.nextSchedule;
     const scheduleId = getPeiMaintenanceScheduleId(schedule);
-    if (!scheduleId) return;
+    if (!scheduleId) {
+      setPeiMaintenancePanelMessage('Sondagem de manutenção inválida. Revise o vínculo antes de fazer depois.');
+      return;
+    }
     void runPeiMaintenanceAction(
       `skip-${row.key}`,
       () => dataService.skipMaintenanceScheduleLink(scheduleId, {
         appointmentId: getPeiMaintenanceCandidateAppointmentId(schedule) || undefined
       }),
-      'A sondagem continuou pendente para vinculo posterior.'
+      'Sondagem mantida para depois.'
     );
   };
 
   const openPeiMaintenanceAssignModal = (row: any) => {
     const schedule = row?.nextSchedule || row?.schedules?.find?.((item: any) => getPeiMaintenanceScheduleId(item)) || null;
-    if (!schedule) {
-      handlePeiScheduleNextSession(row);
+    if (!getPeiMaintenanceScheduleId(schedule)) {
+      setPeiMaintenancePanelMessage('Crie uma agenda de manutenção real antes de atribuir a uma sessão.');
       return;
     }
     setPeiMaintenanceAssignSchedule({ ...schedule, targetName: row?.targetName });
@@ -4971,12 +4984,19 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
   const handlePeiAssignToAppointment = () => {
     const scheduleId = getPeiMaintenanceScheduleId(peiMaintenanceAssignSchedule);
-    const appointmentId = String(selectedPeiMaintenanceAppointmentId || '').trim();
-    if (!scheduleId || !appointmentId) return;
+    const appointmentId = getPersistedUuid(selectedPeiMaintenanceAppointmentId);
+    if (!scheduleId) {
+      setPeiMaintenancePanelMessage('Sondagem de manutenção inválida. Revise o vínculo antes de atribuir.');
+      return;
+    }
+    if (!appointmentId) {
+      setPeiMaintenancePanelMessage('Escolha uma sessão antes de confirmar o vínculo.');
+      return;
+    }
     void runPeiMaintenanceAction(
       `assign-${scheduleId}`,
       () => dataService.confirmMaintenanceScheduleLink(scheduleId, { appointmentId, appointment_id: appointmentId }),
-      'Sondagem vinculada a sessao.'
+      'Sondagem atribuída à sessão.'
     ).then((ok) => {
       if (ok) {
         setPeiMaintenanceAssignSchedule(null);
@@ -4991,11 +5011,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       void runPeiMaintenanceAction(
         `wait-${scheduleId}`,
         () => dataService.skipMaintenanceScheduleLink(scheduleId, {}),
-        'Sondagem mantida aguardando proxima sessao.'
+        'Sondagem mantida para depois.'
       ).then((ok) => {
         if (ok) setPeiMaintenanceAssignSchedule(null);
       });
     } else {
+      setPeiMaintenancePanelMessage('Sondagem de manutenção inválida. Revise o vínculo antes de adiar.');
       setPeiMaintenanceAssignSchedule(null);
     }
   };
@@ -5012,33 +5033,43 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     const loading = peiMaintenanceActionKey.endsWith(String(row.key));
     const noSchedule = row?.nextProbe?.status === 'NO_SCHEDULE';
     const group = row?.group as PeiMaintenanceGroupKey;
+    const targetId = getPeiMaintenanceTargetId(row);
+    const scheduleId = getPeiMaintenanceScheduleId(row?.nextSchedule);
+    const hasRealTarget = Boolean(targetId);
+    const hasRealSchedule = Boolean(scheduleId);
+    const needsReview = !hasRealTarget || (!noSchedule && group !== 'completed' && !hasRealSchedule);
     const buttonClass = `min-h-[40px] rounded-xl px-3 py-2 text-xs font-semibold transition-all disabled:opacity-60 ${isPanelDark ? 'bg-slate-800 text-slate-100 hover:bg-slate-700' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`;
     const primaryClass = 'min-h-[40px] rounded-xl bg-[#7a32fc] px-3 py-2 text-xs font-semibold text-white transition-all hover:opacity-90 disabled:opacity-60';
 
     return (
       <div className="mt-4 flex flex-wrap gap-2">
+        {needsReview && (
+          <span className={`inline-flex min-h-[40px] items-center rounded-xl px-3 py-2 text-xs font-semibold ${isPanelDark ? 'bg-amber-500/10 text-amber-100' : 'bg-amber-50 text-amber-700'}`}>
+            Revisar vínculo
+          </span>
+        )}
         {noSchedule && (
-          <button type="button" disabled={loading} onClick={() => handlePeiCreateMaintenancePlan(row)} className={primaryClass}>
+          <button type="button" disabled={loading || !hasRealTarget} onClick={() => handlePeiCreateMaintenancePlan(row)} className={primaryClass}>
             Agendar manutencao
           </button>
         )}
         {(noSchedule || group === 'overdue' || group === 'unlinked') && (
-          <button type="button" disabled={loading} onClick={() => handlePeiScheduleNextSession(row)} className={buttonClass}>
+          <button type="button" disabled={loading || !hasRealTarget} onClick={() => handlePeiScheduleNextSession(row)} className={buttonClass}>
             Aguardar proxima sessao
           </button>
         )}
         {group === 'confirmation' && (
           <>
-            <button type="button" disabled={loading} onClick={() => handlePeiConfirmCandidateLink(row)} className={primaryClass}>
+            <button type="button" disabled={loading || !hasRealSchedule} onClick={() => handlePeiConfirmCandidateLink(row)} className={primaryClass}>
               Confirmar vinculo
             </button>
-            <button type="button" disabled={loading} onClick={() => handlePeiSkipCandidateLink(row)} className={buttonClass}>
+            <button type="button" disabled={loading || !hasRealSchedule} onClick={() => handlePeiSkipCandidateLink(row)} className={buttonClass}>
               Fazer depois
             </button>
           </>
         )}
         {group !== 'completed' && !noSchedule && (
-          <button type="button" disabled={loading} onClick={() => openPeiMaintenanceAssignModal(row)} className={buttonClass}>
+          <button type="button" disabled={loading || !hasRealSchedule} onClick={() => openPeiMaintenanceAssignModal(row)} className={buttonClass}>
             Atribuir a uma sessao
           </button>
         )}
@@ -5048,7 +5079,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           </button>
         )}
         {group === 'overdue' && (
-          <button type="button" disabled={loading} onClick={() => handlePeiScheduleNextSession(row)} className={primaryClass}>
+          <button type="button" disabled={loading || !hasRealTarget} onClick={() => handlePeiScheduleNextSession(row)} className={primaryClass}>
             Usar na proxima sessao
           </button>
         )}
@@ -5431,12 +5462,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             ) : peiMaintenanceAppointmentsState.items.length > 0 ? (
               <div className="max-h-[50vh] space-y-2 overflow-y-auto pr-1">
                 {peiMaintenanceAppointmentsState.items.map((appointment: any) => {
-                  const appointmentId = String(appointment?.id || '').trim();
+                  const appointmentId = getPersistedUuid(appointment?.id);
                   const selected = selectedPeiMaintenanceAppointmentId === appointmentId;
                   return (
                     <button
                       key={appointmentId || formatPeiMaintenanceAppointmentLabel(appointment)}
                       type="button"
+                      disabled={!appointmentId}
                       onClick={() => setSelectedPeiMaintenanceAppointmentId(appointmentId)}
                       className={`w-full rounded-2xl border p-4 text-left transition-all ${
                         selected
@@ -5444,7 +5476,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                           : isPanelDark
                             ? 'border-slate-700 bg-slate-900/50 text-slate-200 hover:bg-slate-800'
                             : 'border-slate-100 bg-slate-50 text-slate-700 hover:bg-white'
-                      }`}
+                      } disabled:opacity-60`}
                     >
                       <p className="text-sm font-semibold">{formatPeiMaintenanceAppointmentLabel(appointment)}</p>
                       <p className="mt-1 text-xs opacity-80">{safeDisplayValue(appointment?.status, 'Agendada')}</p>

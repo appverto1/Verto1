@@ -94,6 +94,23 @@ function normalizeListLimit(value: unknown, fallback = 50, max = 50): number {
   return Math.min(max, Math.max(1, Math.round(numeric)));
 }
 
+const PERSISTED_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const SYNTHETIC_CLINICAL_ID_RE = /^(maintenance-|session-|target-|local-|temp-|tmp-|offline-)|^\d{9,}$/i;
+
+function isPersistedUuid(value: unknown): boolean {
+  const id = String(value || '').trim();
+  return PERSISTED_UUID_RE.test(id) && !SYNTHETIC_CLINICAL_ID_RE.test(id);
+}
+
+function isSyntheticClinicalId(value: unknown): boolean {
+  const id = String(value || '').trim();
+  return !id || SYNTHETIC_CLINICAL_ID_RE.test(id);
+}
+
+function invalidClinicalIdResponse(error: string, data: any = null) {
+  return { success: false, data, error };
+}
+
 function endpointWithLimit(endpoint: string, limit: number): string {
   const separator = endpoint.includes('?') ? '&' : '?';
   return `${endpoint}${separator}limit=${encodeURIComponent(String(limit))}`;
@@ -2586,6 +2603,7 @@ export const dataService = {
 
   async getRecentSessionEvents(sessionId: string, limit = 20) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse([]);
+    if (!isPersistedUuid(sessionId)) return { success: true, data: [] };
     const safeLimit = normalizeListLimit(limit, 20, 20);
     const endpoint = endpointWithLimit(`/api/aba/recent-session-events/${encodeURIComponent(String(sessionId))}`, safeLimit);
     try {
@@ -2683,6 +2701,9 @@ export const dataService = {
 
   async createMaintenanceScheduleForTarget(targetId: string, payload: any = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse([]);
+    if (!isPersistedUuid(targetId)) {
+      return invalidClinicalIdResponse('Habilidade inválida para agendamento de manutenção.', []);
+    }
     const endpoint = `/api/aba/targets/${encodeURIComponent(String(targetId))}/maintenance-schedules`;
     try {
       const response = await fetchClinical(endpoint, {
@@ -2699,6 +2720,13 @@ export const dataService = {
 
   async confirmMaintenanceScheduleLink(scheduleId: string, payload: any = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
+    if (!isPersistedUuid(scheduleId)) {
+      return invalidClinicalIdResponse('Sondagem de manutenção inválida para confirmar vínculo.');
+    }
+    const appointmentId = payload?.appointmentId || payload?.appointment_id;
+    if (appointmentId !== undefined && isSyntheticClinicalId(appointmentId)) {
+      return invalidClinicalIdResponse('Escolha uma sessão antes de confirmar o vínculo.');
+    }
     const endpoint = `/api/aba/maintenance-schedules/${encodeURIComponent(String(scheduleId))}/confirm-link`;
     try {
       const response = await fetchClinical(endpoint, {
@@ -2715,6 +2743,13 @@ export const dataService = {
 
   async skipMaintenanceScheduleLink(scheduleId: string, payload: any = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
+    if (!isPersistedUuid(scheduleId)) {
+      return invalidClinicalIdResponse('Sondagem de manutenção inválida para adiar vínculo.');
+    }
+    const appointmentId = payload?.appointmentId || payload?.appointment_id;
+    if (appointmentId !== undefined && isSyntheticClinicalId(appointmentId)) {
+      return invalidClinicalIdResponse('Sessão inválida para esta sondagem.');
+    }
     const endpoint = `/api/aba/maintenance-schedules/${encodeURIComponent(String(scheduleId))}/skip-link`;
     try {
       const response = await fetchClinical(endpoint, {
@@ -2731,6 +2766,9 @@ export const dataService = {
 
   async scheduleMaintenanceForNextSession(targetId: string, payload: any = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse([]);
+    if (!isPersistedUuid(targetId)) {
+      return invalidClinicalIdResponse('Habilidade inválida para agendamento de manutenção.', []);
+    }
     const endpoint = `/api/aba/targets/${encodeURIComponent(String(targetId))}/maintenance-schedules/next-session`;
     try {
       const response = await fetchClinical(endpoint, {
@@ -2747,6 +2785,7 @@ export const dataService = {
 
   async getNextMaintenanceProbeForTarget(targetId: string, patientId: string) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
+    if (!isPersistedUuid(targetId)) return { success: true, data: null };
     const endpoint = endpointWithQuery(`/api/aba/targets/${encodeURIComponent(String(targetId))}/next-maintenance-probe`, { patientId });
     try {
       const response = await fetchClinical(endpoint, {
@@ -2762,6 +2801,9 @@ export const dataService = {
 
   async completeMaintenanceSchedule(scheduleId: string, payload: any = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
+    if (!isPersistedUuid(scheduleId)) {
+      return invalidClinicalIdResponse('Sondagem de manutenção inválida para conclusão.');
+    }
     const endpoint = `/api/aba/maintenance-schedules/${encodeURIComponent(String(scheduleId))}/complete`;
     try {
       const response = await fetchClinical(endpoint, {

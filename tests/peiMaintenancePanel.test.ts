@@ -15,6 +15,7 @@ const patientDetailCode = readFileSync(join(root, 'src/components/PatientDetailV
 const calendarCode = readFileSync(join(root, 'src/components/Calendar.tsx'), 'utf8');
 const sessionModeCode = readFileSync(join(root, 'src/components/SessionMode.tsx'), 'utf8');
 const maintenancePanelCode = readFileSync(join(root, 'src/utils/peiMaintenancePanel.ts'), 'utf8');
+const dataServiceCode = readFileSync(join(root, 'src/services/dataService.ts'), 'utf8');
 const serverCode = readFileSync(join(root, 'server.ts'), 'utf8');
 
 const tests: Array<{ name: string; fn: () => void }> = [];
@@ -135,6 +136,25 @@ test('backend resolve targets de manutencao em lote com colunas explicitas', () 
   assert.match(serverCode, /\.from\('aba_targets'\)[\s\S]*?\.select\(ABA_TARGET_RECOMMENDATION_SELECT\)[\s\S]*?\.in\('id', targetIds\)/m);
   assert.match(serverCode, /'candidate_appointment_id'[\s\S]*?'confirmed_at'[\s\S]*?'metadata'/m);
   assert.doesNotMatch(serverCode, /from\('aba_maintenance_schedules'\)[\s\S]{0,200}\.select\('\*'\)/m);
+});
+
+test('acoes nao enviam ids sinteticos para endpoints de manutencao', () => {
+  assert.match(patientDetailCode, /const getPersistedUuid/);
+  assert.match(patientDetailCode, /disabled=\{loading \|\| !hasRealSchedule\}/);
+  assert.match(dataServiceCode, /SYNTHETIC_CLINICAL_ID_RE/);
+  assert.match(dataServiceCode, /if \(!isPersistedUuid\(targetId\)\)[\s\S]*?Habilidade inválida para agendamento de manutenção/m);
+  assert.match(dataServiceCode, /if \(!isPersistedUuid\(scheduleId\)\)[\s\S]*?Sondagem de manutenção inválida para confirmar vínculo/m);
+  assert.match(calendarCode, /if \(!isPersistedUuid\(scheduleId\)\)/);
+  assert.match(dataServiceCode, /async confirmMaintenanceScheduleLink\(scheduleId: string[\s\S]*?if \(!isPersistedUuid\(scheduleId\)\)[\s\S]*?const endpoint = `\/api\/aba\/maintenance-schedules\/\$\{encodeURIComponent\(String\(scheduleId\)\)\}\/confirm-link`/m);
+});
+
+test('backend valida ids invalidos e recent-session-events local sem ruido', () => {
+  assert.match(serverCode, /if \(!isUuid\(targetId\)\)[\s\S]*?Habilidade inválida para agendamento de manutenção/m);
+  assert.match(serverCode, /if \(!isUuid\(scheduleId\)\)[\s\S]*?Identificador inválido/m);
+  assert.match(serverCode, /Escolha uma sessão antes de confirmar o vínculo/);
+  assert.match(serverCode, /Sondagem de manutenção não encontrada/);
+  assert.match(serverCode, /requestedSessionId[\s\S]*?!isUuid\(requestedSessionId\)[\s\S]*?success: true, data: \[\]/m);
+  assert.match(dataServiceCode, /if \(!isPersistedUuid\(sessionId\)\) return \{ success: true, data: \[\] \}/);
 });
 
 let passed = 0;

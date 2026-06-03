@@ -35,6 +35,9 @@ import { dataService } from '../services/dataService';
 import { formatMinutesHuman, getActualDurationMinutes, getAppointmentDurationMinutes } from '../utils/scheduling';
 import { resolveMaintenanceTargetDisplay } from '../utils/peiMaintenancePanel';
 
+const isPersistedUuid = (value: any) =>
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || '').trim());
+
 const normalizeAppointmentStatusKey = (status: any) =>
   String(status || 'scheduled')
     .normalize('NFD')
@@ -1410,7 +1413,14 @@ export const ClinicalAgendaBoard = ({
       ...((eventDetail || {}).event || {})
     });
     const appointmentId = String(currentEvent?.id || '').trim();
-    if (!scheduleId || !appointmentId) return;
+    if (!isPersistedUuid(scheduleId)) {
+      setActionRequestState({ loadingId: '', error: 'Sondagem de manutenção inválida. Revise o vínculo antes de atualizar.' });
+      return;
+    }
+    if (!isPersistedUuid(appointmentId)) {
+      setActionRequestState({ loadingId: '', error: 'Consulta inválida para confirmar esta sondagem.' });
+      return;
+    }
     const loadingId = `${decision}:${scheduleId}`;
     setActionRequestState({ loadingId, error: '' });
     const result = decision === 'confirm'
