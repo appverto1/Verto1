@@ -1,4 +1,4 @@
-const SW_VERSION = "appointments-app-only-v6";
+const SW_VERSION = "appointments-app-only-v7";
 const APPOINTMENT_NOTIFICATION_CTA = "Toque para abrir a Verto e confirmar, remarcar ou cancelar.";
 const VERTO_ICON = "/verto-3d-transparent.png";
 
@@ -7,7 +7,19 @@ self.addEventListener("install", (event) => {
 });
 
 self.addEventListener("activate", (event) => {
-  event.waitUntil(self.clients.claim());
+  event.waitUntil(
+    (async () => {
+      if ("caches" in self) {
+        const cacheNames = await self.caches.keys();
+        await Promise.all(
+          cacheNames
+            .filter((cacheName) => cacheName !== SW_VERSION)
+            .map((cacheName) => self.caches.delete(cacheName)),
+        );
+      }
+      await self.clients.claim();
+    })(),
+  );
 });
 
 self.addEventListener("push", (event) => {

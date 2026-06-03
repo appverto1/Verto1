@@ -54,6 +54,78 @@ const ProfessionalOnboarding = React.lazy(() =>
   import('./components/ProfessionalOnboarding').then((m) => ({ default: m.ProfessionalOnboarding }))
 );
 
+const STALE_DYNAMIC_IMPORT_RELOAD_KEY = 'verto.staleDynamicImportReload.v1';
+let staleDynamicImportReloadScheduled = false;
+
+const getErrorMessage = (error: unknown): string => {
+  if (typeof error === 'string') return error;
+  if (error && typeof error === 'object') {
+    const maybeMessage = (error as { message?: unknown }).message;
+    if (typeof maybeMessage === 'string') return maybeMessage;
+  }
+  return '';
+};
+
+const isStaleDynamicImportError = (error: unknown): boolean => {
+  const message = getErrorMessage(error);
+  return /Failed to fetch dynamically imported module|Importing a module script failed|error loading dynamically imported module|ChunkLoadError/i.test(message);
+};
+
+const scheduleStaleDynamicImportReload = (error: unknown): boolean => {
+  if (typeof window === 'undefined' || !isStaleDynamicImportError(error)) return false;
+  if (staleDynamicImportReloadScheduled) return true;
+
+  const message = getErrorMessage(error).slice(0, 220);
+  const currentUrl = new URL(window.location.href);
+  currentUrl.searchParams.delete('verto_refresh');
+  const reloadToken = `${currentUrl.pathname}${currentUrl.search}:${message}`;
+
+  try {
+    if (window.sessionStorage.getItem(STALE_DYNAMIC_IMPORT_RELOAD_KEY) === reloadToken) {
+      return false;
+    }
+    window.sessionStorage.setItem(STALE_DYNAMIC_IMPORT_RELOAD_KEY, reloadToken);
+  } catch {
+    // Session storage may be blocked; a single in-memory guard still prevents loops.
+  }
+
+  staleDynamicImportReloadScheduled = true;
+  window.setTimeout(() => {
+    const nextUrl = new URL(window.location.href);
+    nextUrl.searchParams.set('verto_refresh', String(Date.now()));
+    window.location.replace(nextUrl.href);
+  }, 80);
+  return true;
+};
+
+type LazyImportBoundaryProps = {
+  children: React.ReactNode;
+  fallback: React.ReactNode;
+};
+
+type LazyImportBoundaryState = {
+  hasError: boolean;
+};
+
+class LazyImportBoundary extends React.Component<LazyImportBoundaryProps, LazyImportBoundaryState> {
+  state: LazyImportBoundaryState = { hasError: false };
+
+  static getDerivedStateFromError(): LazyImportBoundaryState {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: unknown) {
+    if (!scheduleStaleDynamicImportReload(error)) {
+      console.warn('Application chunk failed to load:', error);
+    }
+  }
+
+  render() {
+    const { fallback, children } = (this as unknown as { props: LazyImportBoundaryProps }).props;
+    return this.state.hasError ? fallback : children;
+  }
+}
+
 const AUTO_RETRIED_FAILED_SYNC_KEY = 'verto.failedSyncAutoRetried.v1';
 
 const readAutoRetriedFailedSyncIds = () => {
@@ -231,10 +303,35 @@ export default function App() {
   };
 
   useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleChunkError = (event: ErrorEvent) => {
+      if (scheduleStaleDynamicImportReload(event.error || event.message)) {
+        event.preventDefault();
+      }
+    };
+    const handleChunkRejection = (event: PromiseRejectionEvent) => {
+      if (scheduleStaleDynamicImportReload(event.reason)) {
+        event.preventDefault();
+      }
+    };
+
+    window.addEventListener('error', handleChunkError);
+    window.addEventListener('unhandledrejection', handleChunkRejection);
+    return () => {
+      window.removeEventListener('error', handleChunkError);
+      window.removeEventListener('unhandledrejection', handleChunkRejection);
+    };
+  }, []);
+
+  useEffect(() => {
     if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
-    navigator.serviceWorker.register('/sw.js').catch((error) => {
-      console.warn('Service worker registration for PWA failed:', error);
-    });
+    navigator.serviceWorker
+      .register('/sw.js', { updateViaCache: 'none' })
+      .then((registration) => registration.update().catch(() => undefined))
+      .catch((error) => {
+        console.warn('Service worker registration for PWA failed:', error);
+      });
   }, []);
 
   useEffect(() => {
@@ -1467,7 +1564,7 @@ export default function App() {
         }
         if (cancelled || Notification.permission !== 'granted') return;
 
-        const registration = await navigator.serviceWorker.register('/sw.js');
+        const registration = await navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' });
         await registration.update().catch(() => undefined);
         await navigator.serviceWorker.ready;
         let existingSubscription = await registration.pushManager.getSubscription();
@@ -4928,187 +5025,189 @@ export default function App() {
           </div>
         </div>
       )}
-      <Suspense fallback={lazyFallback}>
-      {isPortalRelationshipRoute ? (
-        <PortalRelationshipConfirmation onLogin={handleLoginSuccess} />
-      ) : !user || userNeedsPatientActivation ? (
-        isAuthActionRoute || userNeedsPatientActivation ? (
-          <ActivationAccess onLogin={handleLoginSuccess} />
-        ) : (
-          <LandingPage onLogin={handleLoginSuccess} setUser={setUser} />
-        )
-      ) : showWorkspacePicker && Array.isArray(user.workspaces) && user.workspaces.length > 1 ? (
-        <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
-          <div className="w-full max-w-2xl bg-white rounded-3xl border border-slate-100 shadow-sm p-6">
-            <h2 className="text-xl font-bold text-slate-900">Escolha o Workspace</h2>
-            <p className="text-sm text-slate-500 mt-1">
-              Seu usuÃ¡rio participa de mais de uma clÃ­nica. Selecione onde deseja trabalhar agora.
-            </p>
-            <div className="mt-6 space-y-3">
-              {user.workspaces.map((workspace: any) => (
-                <button
-                  key={workspace.clinicId}
-                  onClick={() => handleWorkspaceSelect(workspace.clinicId)}
-                  className="w-full text-left px-4 py-4 rounded-2xl border border-slate-200 hover:border-[#7a32fc] hover:bg-violet-50/40 transition"
-                >
-                  <p className="text-sm font-bold text-slate-900">{workspace.clinicName}</p>
-                  <p className="text-xs text-slate-500 mt-1">
-                    Papel neste workspace: {workspace.role === 'coordinator' ? 'Coordenador' : workspace.role === 'therapist' ? 'Terapeuta' : 'Recepcionista'}
-                  </p>
-                </button>
-              ))}
+      <LazyImportBoundary fallback={lazyFallback}>
+        <Suspense fallback={lazyFallback}>
+        {isPortalRelationshipRoute ? (
+          <PortalRelationshipConfirmation onLogin={handleLoginSuccess} />
+        ) : !user || userNeedsPatientActivation ? (
+          isAuthActionRoute || userNeedsPatientActivation ? (
+            <ActivationAccess onLogin={handleLoginSuccess} />
+          ) : (
+            <LandingPage onLogin={handleLoginSuccess} setUser={setUser} />
+          )
+        ) : showWorkspacePicker && Array.isArray(user.workspaces) && user.workspaces.length > 1 ? (
+          <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
+            <div className="w-full max-w-2xl bg-white rounded-3xl border border-slate-100 shadow-sm p-6">
+              <h2 className="text-xl font-bold text-slate-900">Escolha o Workspace</h2>
+              <p className="text-sm text-slate-500 mt-1">
+                Seu usuÃ¡rio participa de mais de uma clÃ­nica. Selecione onde deseja trabalhar agora.
+              </p>
+              <div className="mt-6 space-y-3">
+                {user.workspaces.map((workspace: any) => (
+                  <button
+                    key={workspace.clinicId}
+                    onClick={() => handleWorkspaceSelect(workspace.clinicId)}
+                    className="w-full text-left px-4 py-4 rounded-2xl border border-slate-200 hover:border-[#7a32fc] hover:bg-violet-50/40 transition"
+                  >
+                    <p className="text-sm font-bold text-slate-900">{workspace.clinicName}</p>
+                    <p className="text-xs text-slate-500 mt-1">
+                      Papel neste workspace: {workspace.role === 'coordinator' ? 'Coordenador' : workspace.role === 'therapist' ? 'Terapeuta' : 'Recepcionista'}
+                    </p>
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
-        </div>
-      ) : (user.role === 'therapist' || user.role === 'coordinator' || user.role === 'receptionist') && !clinicStateHydrated ? (
-        <div className="min-h-screen flex items-center justify-center bg-white">
-          <div className="text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#7a32fc] mx-auto"></div>
-            <p className="mt-4 text-sm text-slate-500">Carregando dados da clínica...</p>
+        ) : (user.role === 'therapist' || user.role === 'coordinator' || user.role === 'receptionist') && !clinicStateHydrated ? (
+          <div className="min-h-screen flex items-center justify-center bg-white">
+            <div className="text-center">
+              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#7a32fc] mx-auto"></div>
+              <p className="mt-4 text-sm text-slate-500">Carregando dados da clínica...</p>
+            </div>
           </div>
-        </div>
-      ) : ((user.role === 'therapist' || user.role === 'coordinator' || user.role === 'receptionist') && user.firstLoginCompleted === false) || showOnboarding ? (
-        <ProfessionalOnboarding 
-          user={user} 
-          onComplete={(data) => {
-            setUser((prev: any) => ({
-              ...prev,
-              ...data,
-              clinicSettings: {
-                ...(prev?.clinicSettings || {}),
-                ...(data?.clinicSettings || {}),
-              },
-              firstLoginCompleted: true,
-            }));
-            setShowOnboarding(false);
-          }}
-          onClose={() => setShowOnboarding(false)}
-        />
-      ) : (user.role === 'therapist' || user.role === 'coordinator') && user.subscriptionStatus === 'pending' ? (
-        <SubscriptionRequired user={user} onLogout={handleLogout} />
-      ) : user.role === 'patient' ? (
-        <PatientDashboard 
-          user={user} 
-          onLogout={handleLogout} 
-          onMoodCheckin={handleMoodCheckin} 
-          tasks={tasks} 
-          onCompleteTask={handleCompleteTask} 
-          history={history} 
-          energyTags={(user.type === 'conventional' || user.type === 'adult_conventional') ? ADULT_CONVENTIONAL_TAGS : ENERGY_TAGS} 
-          sharedNotes={therapistNotes.filter(n => {
-            const noteVisibility = String(n?.visibility || n?.type || '').toLowerCase();
-            const isPatientNote =
-              noteVisibility === 'shared' ||
-              noteVisibility === 'patient' ||
-              noteVisibility === 'family' ||
-              noteVisibility === 'shared_patient';
-            if (user.role === 'patient') {
-              return isPatientNote;
-            }
-            return (n.patientId === user.id || n?.patient_email === user.email) && isPatientNote;
-          })} 
-          protocols={protocols} 
-          onAddFamilyNote={handleAddFamilyNote}
-          isReadOnlyMode={patientIsReadOnlyMode}
-          patientPortalId={resolvedPatientPortalId}
+        ) : ((user.role === 'therapist' || user.role === 'coordinator' || user.role === 'receptionist') && user.firstLoginCompleted === false) || showOnboarding ? (
+          <ProfessionalOnboarding 
+            user={user} 
+            onComplete={(data) => {
+              setUser((prev: any) => ({
+                ...prev,
+                ...data,
+                clinicSettings: {
+                  ...(prev?.clinicSettings || {}),
+                  ...(data?.clinicSettings || {}),
+                },
+                firstLoginCompleted: true,
+              }));
+              setShowOnboarding(false);
+            }}
+            onClose={() => setShowOnboarding(false)}
           />
-      ) : user.role === 'coordinator' || user.role === 'receptionist' || user.role === 'therapist' ? (
-        <CoordinatorDashboard 
-          user={{ ...user, profilePicture, crp }}
-          onLogout={handleLogout}
-          allPatients={allPatients} 
-          therapistAgenda={therapistAgenda} 
-          onOpenOnboarding={() => setShowOnboarding(true)}
-          rooms={rooms}
-          setRooms={setRooms}
-          roomReservations={roomReservations}
-          onDeleteRoomReservation={(id) => {
-            const agendaId = id.replace('res-', '');
-            handleUpdateAgendaStatus(agendaId, 'canceled');
-          }}
-          protocols={protocols}
-          setProtocols={setProtocols}
-          activityLogs={activityLogs}
-          onAddActivityLog={onAddActivityLog}
-          onScheduleSession={handleScheduleSession}
-          onUpdateAppointment={handleUpdateAppointment}
-          onUpdateAgendaStatus={handleUpdateAgendaStatus}
-          onDeleteAppointment={handleDeleteAppointment}
-          onAddPatient={handleAddPatient}
-          patientsHistory={history}
-          therapistNotes={therapistNotes}
-          onAddNote={handleAddNote}
-          onUpdateProfile={(data: any) => {
-            void (async () => {
-              const baseUser = { ...user, ...data };
-              try {
-                const profileUpload = await uploadProfileAssetIfNeeded(
-                  data?.profilePicture ?? data?.profile_picture,
-                  'profile',
-                  user.id,
-                );
-                const signatureUpload = await uploadProfileAssetIfNeeded(
-                  data?.signatureDataUrl ?? data?.signature_url ?? data?.signatureUrl,
-                  'signature',
-                  user.id,
-                );
-                const clinicLogoUpload = await uploadProfileAssetIfNeeded(
-                  data?.clinicSettings?.clinicLogoUrl,
-                  'logo',
-                  user.id,
-                );
-
-                const nextUser = {
-                  ...baseUser,
-                  profilePicture: profileUpload.url || baseUser.profilePicture || baseUser.profile_picture || null,
-                  profile_picture: profileUpload.url || baseUser.profile_picture || baseUser.profilePicture || null,
-                  signatureDataUrl: signatureUpload.url || baseUser.signatureDataUrl || null,
-                  clinicSettings: {
-                    ...(baseUser?.clinicSettings || {}),
-                    ...(clinicLogoUpload.url ? { clinicLogoUrl: clinicLogoUpload.url } : {}),
-                    ...(signatureUpload.url ? { signatureDataUrl: signatureUpload.url } : {}),
-                  },
-                };
-
-                if (nextUser.profilePicture !== undefined) setProfilePicture(nextUser.profilePicture);
-                if (nextUser.crp !== undefined) setCrp(formatProfessionalRegistry(nextUser.crp));
-                setUser(nextUser);
-
-                await dataService.saveUserProfile(user.id, {
-                  ...nextUser,
-                  profilePicturePath: profileUpload.path,
-                  signaturePath: signatureUpload.path,
-                  clinicLogoPath: clinicLogoUpload.path,
-                  workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
-                });
-              } catch (error) {
-                console.error('Profile asset upload error:', error);
-                if (baseUser.profilePicture !== undefined) setProfilePicture(baseUser.profilePicture);
-                if (baseUser.crp !== undefined) setCrp(formatProfessionalRegistry(baseUser.crp));
-                setUser(baseUser);
-                await dataService.saveUserProfile(user.id, {
-                  ...baseUser,
-                  workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
-                });
+        ) : (user.role === 'therapist' || user.role === 'coordinator') && user.subscriptionStatus === 'pending' ? (
+          <SubscriptionRequired user={user} onLogout={handleLogout} />
+        ) : user.role === 'patient' ? (
+          <PatientDashboard 
+            user={user} 
+            onLogout={handleLogout} 
+            onMoodCheckin={handleMoodCheckin} 
+            tasks={tasks} 
+            onCompleteTask={handleCompleteTask} 
+            history={history} 
+            energyTags={(user.type === 'conventional' || user.type === 'adult_conventional') ? ADULT_CONVENTIONAL_TAGS : ENERGY_TAGS} 
+            sharedNotes={therapistNotes.filter(n => {
+              const noteVisibility = String(n?.visibility || n?.type || '').toLowerCase();
+              const isPatientNote =
+                noteVisibility === 'shared' ||
+                noteVisibility === 'patient' ||
+                noteVisibility === 'family' ||
+                noteVisibility === 'shared_patient';
+              if (user.role === 'patient') {
+                return isPatientNote;
               }
-            })();
-          }}
-          onUpdatePatient={handleUpdatePatient}
-          onRecordTrial={handleRecordTrial}
-          onDeleteHistoryItem={handleDeleteHistoryItem}
-          onEvaluateHistoryItem={handleUpdateHistoryItem}
-          onAddTask={handleAddTask}
-          onUpdateTask={handleUpdateTask}
-          allTasks={tasks}
-        />
-      ) : user.role === 'owner' ? (
-        <SuperAdminDashboard onLogout={handleLogout} />
-      ) : user.role === 'admin' ? (
-        <AdminDashboard onLogout={handleLogout} />
-      ) : (
-        <AdminDashboard onLogout={handleLogout} />
-      )}
-      </Suspense>
+              return (n.patientId === user.id || n?.patient_email === user.email) && isPatientNote;
+            })} 
+            protocols={protocols} 
+            onAddFamilyNote={handleAddFamilyNote}
+            isReadOnlyMode={patientIsReadOnlyMode}
+            patientPortalId={resolvedPatientPortalId}
+            />
+        ) : user.role === 'coordinator' || user.role === 'receptionist' || user.role === 'therapist' ? (
+          <CoordinatorDashboard 
+            user={{ ...user, profilePicture, crp }}
+            onLogout={handleLogout}
+            allPatients={allPatients} 
+            therapistAgenda={therapistAgenda} 
+            onOpenOnboarding={() => setShowOnboarding(true)}
+            rooms={rooms}
+            setRooms={setRooms}
+            roomReservations={roomReservations}
+            onDeleteRoomReservation={(id) => {
+              const agendaId = id.replace('res-', '');
+              handleUpdateAgendaStatus(agendaId, 'canceled');
+            }}
+            protocols={protocols}
+            setProtocols={setProtocols}
+            activityLogs={activityLogs}
+            onAddActivityLog={onAddActivityLog}
+            onScheduleSession={handleScheduleSession}
+            onUpdateAppointment={handleUpdateAppointment}
+            onUpdateAgendaStatus={handleUpdateAgendaStatus}
+            onDeleteAppointment={handleDeleteAppointment}
+            onAddPatient={handleAddPatient}
+            patientsHistory={history}
+            therapistNotes={therapistNotes}
+            onAddNote={handleAddNote}
+            onUpdateProfile={(data: any) => {
+              void (async () => {
+                const baseUser = { ...user, ...data };
+                try {
+                  const profileUpload = await uploadProfileAssetIfNeeded(
+                    data?.profilePicture ?? data?.profile_picture,
+                    'profile',
+                    user.id,
+                  );
+                  const signatureUpload = await uploadProfileAssetIfNeeded(
+                    data?.signatureDataUrl ?? data?.signature_url ?? data?.signatureUrl,
+                    'signature',
+                    user.id,
+                  );
+                  const clinicLogoUpload = await uploadProfileAssetIfNeeded(
+                    data?.clinicSettings?.clinicLogoUrl,
+                    'logo',
+                    user.id,
+                  );
+
+                  const nextUser = {
+                    ...baseUser,
+                    profilePicture: profileUpload.url || baseUser.profilePicture || baseUser.profile_picture || null,
+                    profile_picture: profileUpload.url || baseUser.profile_picture || baseUser.profilePicture || null,
+                    signatureDataUrl: signatureUpload.url || baseUser.signatureDataUrl || null,
+                    clinicSettings: {
+                      ...(baseUser?.clinicSettings || {}),
+                      ...(clinicLogoUpload.url ? { clinicLogoUrl: clinicLogoUpload.url } : {}),
+                      ...(signatureUpload.url ? { signatureDataUrl: signatureUpload.url } : {}),
+                    },
+                  };
+
+                  if (nextUser.profilePicture !== undefined) setProfilePicture(nextUser.profilePicture);
+                  if (nextUser.crp !== undefined) setCrp(formatProfessionalRegistry(nextUser.crp));
+                  setUser(nextUser);
+
+                  await dataService.saveUserProfile(user.id, {
+                    ...nextUser,
+                    profilePicturePath: profileUpload.path,
+                    signaturePath: signatureUpload.path,
+                    clinicLogoPath: clinicLogoUpload.path,
+                    workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
+                  });
+                } catch (error) {
+                  console.error('Profile asset upload error:', error);
+                  if (baseUser.profilePicture !== undefined) setProfilePicture(baseUser.profilePicture);
+                  if (baseUser.crp !== undefined) setCrp(formatProfessionalRegistry(baseUser.crp));
+                  setUser(baseUser);
+                  await dataService.saveUserProfile(user.id, {
+                    ...baseUser,
+                    workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
+                  });
+                }
+              })();
+            }}
+            onUpdatePatient={handleUpdatePatient}
+            onRecordTrial={handleRecordTrial}
+            onDeleteHistoryItem={handleDeleteHistoryItem}
+            onEvaluateHistoryItem={handleUpdateHistoryItem}
+            onAddTask={handleAddTask}
+            onUpdateTask={handleUpdateTask}
+            allTasks={tasks}
+          />
+        ) : user.role === 'owner' ? (
+          <SuperAdminDashboard onLogout={handleLogout} />
+        ) : user.role === 'admin' ? (
+          <AdminDashboard onLogout={handleLogout} />
+        ) : (
+          <AdminDashboard onLogout={handleLogout} />
+        )}
+        </Suspense>
+      </LazyImportBoundary>
 
     </React.Fragment>
   );

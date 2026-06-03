@@ -8,6 +8,7 @@ import { HistoryCard } from './History';
 import { SessionMode } from './SessionMode';
 import { RadarDomainAssessmentChart } from './RadarDomainAssessmentChart';
 import { CumulativeGrowthChart } from './CumulativeGrowthChart';
+import { AbaClinicalChartsPanel } from './AbaClinicalChartsPanel';
 import { ProgressReportPDFLayout } from './ProgressReportPDFLayout';
 import { ENERGY_TAGS } from './Common';
 import { dataService } from '../services/dataService';
@@ -25,10 +26,6 @@ import { VBMAPP_LEVEL_1_CANONICAL_PROTOCOL } from '../constants/vbmappLevel1Prot
 import { VBMAPP_LEVEL_2_CANONICAL_PROTOCOL } from '../constants/vbmappLevel2Protocol';
 import { VBMAPP_LEVEL_3_CANONICAL_PROTOCOL } from '../constants/vbmappLevel3Protocol';
 import html2canvas from 'html2canvas';
-
-const AbaClinicalChartsPanel = React.lazy(() =>
-  import('./AbaClinicalChartsPanel').then((module) => ({ default: module.AbaClinicalChartsPanel }))
-);
 
 const getApprovedVertoCanonicalProtocol = (request: any) => {
   const source = `${request?.canonicalKey || ''} ${request?.canonicalName || ''} ${request?.protocolName || ''}`.toLowerCase();
@@ -6422,9 +6419,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
  
           </div> 
         ) : activeTab === 'aba-charts' && isKidsProfile && abaV2Enabled ? (
-          <React.Suspense fallback={<div className={`rounded-[32px] border p-8 text-center text-sm font-semibold ${isPanelDark ? 'border-slate-700 bg-[#101b2e] text-slate-300' : 'border-slate-100 bg-white text-slate-400'}`}>Carregando gráficos ABA...</div>}>
-            <AbaClinicalChartsPanel patientId={String(patient.id)} isPanelDark={isPanelDark} />
-          </React.Suspense>
+          <AbaClinicalChartsPanel patientId={String(patient.id)} isPanelDark={isPanelDark} />
         ) : activeTab === 'session' && isKidsProfile ? (
           null
         ) : (

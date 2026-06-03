@@ -430,8 +430,9 @@ test('backend expõe endpoints ABA summary-driven com selects explícitos', () =
   assert.doesNotMatch(serverCode, /select\('\*'\)/);
 });
 
-test('frontend carrega gráficos ABA lazy e usa dataService dedicado', () => {
-  assert.match(patientDetailCode, /const AbaClinicalChartsPanel = React\.lazy/);
+test('frontend carrega gráficos ABA sem chunk lazy dedicado e usa dataService dedicado', () => {
+  assert.match(patientDetailCode, /import \{ AbaClinicalChartsPanel \} from '\.\/AbaClinicalChartsPanel'/);
+  assert.doesNotMatch(patientDetailCode, /const AbaClinicalChartsPanel = React\.lazy/);
   assert.match(patientDetailCode, /activeTab === 'aba-charts'[\s\S]*?<AbaClinicalChartsPanel/m);
   assert.match(panelCode, /dataService\.getAbaClinicalChart\(patientId, tab as any/);
   assert.match(panelCode, /chartTabs[\s\S]*?Mudanças por sessão/);
