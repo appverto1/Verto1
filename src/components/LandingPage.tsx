@@ -56,6 +56,21 @@ const heroStories = [
   }
 ];
 
+const centralAbaShowcase = [
+  {
+    src: '/lp-central-aba-collection.webp',
+    width: 853,
+    height: 305,
+    alt: 'Tela da Verto mostrando coleta ABA em tempo real por target.'
+  },
+  {
+    src: '/lp-central-aba-maintenance.webp',
+    width: 853,
+    height: 305,
+    alt: 'Tela da Verto mostrando targets em manutencao e risco de regressao.'
+  }
+];
+
 export const LandingPage = ({ onLogin, setUser }: any) => {
   const registerPasswordInputRef = React.useRef<HTMLInputElement | null>(null);
   const [showLogin, setShowLogin] = useState(false);
@@ -95,6 +110,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
   const [recoveryMessage, setRecoveryMessage] = useState('');
   const [recoveryError, setRecoveryError] = useState('');
   const [activeHeroStory, setActiveHeroStory] = useState(0);
+  const [activeCentralAbaShot, setActiveCentralAbaShot] = useState(0);
   const activeHeroStoryData = heroStories[activeHeroStory] || heroStories[0];
 
   const parseApiResponse = async (response: Response) => {
@@ -346,6 +362,14 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
     const timer = window.setInterval(() => {
       setActiveHeroStory((current) => (current + 1) % heroStories.length);
     }, 4200);
+
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setActiveCentralAbaShot((current) => (current + 1) % centralAbaShowcase.length);
+    }, 4600);
 
     return () => window.clearInterval(timer);
   }, []);
@@ -1032,14 +1056,40 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
               </p>
             </div>
 
-            <div className="rounded-[28px] border border-purple-100 bg-white p-6 shadow-sm md:p-8">
-              <p className="text-sm font-semibold uppercase tracking-widest text-[#7a32fc]">Coleta em tempo real</p>
-              <div className="mt-6 grid gap-3">
-                {['Tentativas e prompts', 'Intervalos e duracao', 'ABC e eventos', 'Resumo para supervisao'].map((item) => (
-                  <div key={item} className="flex items-center justify-between rounded-2xl bg-[#f7f5ff] px-4 py-3">
-                    <span className="text-sm font-normal text-slate-700">{item}</span>
-                    <Check size={16} className="text-[#7a32fc]" />
-                  </div>
+            <div className="rounded-[28px] border border-purple-100 bg-white p-3 shadow-sm sm:p-4 md:p-5">
+              <div className="mb-3 flex gap-2 px-1">
+                {centralAbaShowcase.map((shot, index) => (
+                  <button
+                    key={shot.src}
+                    type="button"
+                    aria-label={`Ver tela ABA ${index + 1}`}
+                    onClick={() => setActiveCentralAbaShot(index)}
+                    className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-200"
+                  >
+                    <span
+                      className={`block h-full rounded-full bg-[#7a32fc] transition-all duration-700 ${
+                        index === activeCentralAbaShot ? 'w-full' : 'w-0'
+                      }`}
+                    />
+                  </button>
+                ))}
+              </div>
+              <div className="relative overflow-hidden rounded-[22px] bg-[#fbf8ff]" style={{ aspectRatio: '853 / 305' }}>
+                {centralAbaShowcase.map((shot, index) => (
+                  <img
+                    key={shot.src}
+                    src={shot.src}
+                    alt={shot.alt}
+                    width={shot.width}
+                    height={shot.height}
+                    loading="lazy"
+                    decoding="async"
+                    className={`absolute inset-0 h-full w-full object-cover transition-all duration-700 ${
+                      index === activeCentralAbaShot
+                        ? 'scale-100 opacity-100'
+                        : 'pointer-events-none scale-[1.02] opacity-0'
+                    }`}
+                  />
                 ))}
               </div>
             </div>
