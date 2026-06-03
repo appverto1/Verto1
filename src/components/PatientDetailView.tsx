@@ -959,15 +959,34 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       (scheduledStart
         ? new Date(new Date(scheduledStart).getTime() + scheduledSessionDurationMinutes * 60 * 1000).toISOString()
         : null);
+    const scheduledProfessionalId =
+      scheduledSessionForPatient?.professional_id ||
+      scheduledSessionForPatient?.professionalId ||
+      scheduledSessionForPatient?.therapist_id ||
+      scheduledSessionForPatient?.therapistId ||
+      resolvedClinicContext?.userId ||
+      clinicContext?.userId ||
+      null;
+    const scheduledServiceType =
+      scheduledSessionForPatient?.service_type ||
+      scheduledSessionForPatient?.serviceType ||
+      scheduledSessionForPatient?.type ||
+      scheduledSessionForPatient?.approach ||
+      null;
     const nextSession = {
       id: `session-${String(patient?.id || 'patient')}-${startedAt.getTime()}`,
       patientId: patient?.id,
       patientName: patient?.name || 'Paciente',
       appointmentId: scheduledSessionForPatient?.id || null,
       appointment_id: scheduledSessionForPatient?.id || null,
-      therapistId: resolvedClinicContext?.userId || clinicContext?.userId || null,
+      professionalId: scheduledProfessionalId,
+      professional_id: scheduledProfessionalId,
+      therapistId: scheduledProfessionalId,
+      therapist_id: scheduledProfessionalId,
       therapistName: resolvedClinicContext?.professionalName || resolvedClinicContext?.userName || clinicContext?.professionalName || clinicContext?.userName || patient?.therapistName || patient?.therapist_name || null,
       clinicId: resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || null,
+      serviceType: scheduledServiceType,
+      service_type: scheduledServiceType,
       status: 'active',
       durationMinutes,
       scheduledDurationMinutes: scheduledSessionForPatient ? scheduledSessionDurationMinutes : durationMinutes,
@@ -1003,8 +1022,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         location_type: nextSession.location_type,
         clinic_id: resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || undefined,
         clinicId: resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || undefined,
-        therapist_id: resolvedClinicContext?.userId || clinicContext?.userId || undefined,
+        professional_id: nextSession.professional_id || undefined,
+        professionalId: nextSession.professionalId || undefined,
+        therapist_id: nextSession.therapist_id || undefined,
+        therapistId: nextSession.therapistId || undefined,
         therapistName: resolvedClinicContext?.professionalName || resolvedClinicContext?.userName || clinicContext?.professionalName || clinicContext?.userName || patient?.therapistName || patient?.therapist_name || undefined,
+        service_type: nextSession.service_type || undefined,
+        serviceType: nextSession.serviceType || undefined,
         status: 'active',
         started_at: nextSession.startedAt,
         duration_minutes: durationMinutes,

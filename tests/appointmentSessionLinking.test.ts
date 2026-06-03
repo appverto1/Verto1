@@ -18,6 +18,29 @@ test('ABA session start is idempotent for an appointment', () => {
   assert.match(serverCode, /return res\.json\(\{ success: true, idempotent: Boolean\(existingInProgressSession\?\.id\), data, session: data \}\)/);
 });
 
+test('ABA session start validates server appointment instead of returning false sync conflict', () => {
+  const routeStart = serverCode.indexOf("app.post('/api/aba/sessions'");
+  const routeEnd = serverCode.indexOf("app.patch('/api/aba/sessions/:sessionId'", routeStart);
+  const route = serverCode.slice(routeStart, routeEnd);
+  assert.match(serverCode, /ensureServerAppointmentForAbaSessionLink[\s\S]*?fetchAppointmentForAbaSessionLink[\s\S]*?fetchClinicStateAppointmentForAbaSessionLink/);
+  assert.match(serverCode, /scheduled_start_at[\s\S]*?scheduledStartAt[\s\S]*?scheduled_start[\s\S]*?scheduledStart/);
+  assert.match(route, /const rawAppointmentId = sanitizeString\(req\.body\?\.appointment_id \|\| req\.body\?\.appointmentId, 180\)/);
+  assert.match(route, /APPOINTMENT_NOT_PERSISTED[\s\S]*?Esta consulta ainda não foi salva no servidor/);
+  assert.match(route, /ensureServerAppointmentForAbaSessionLink/);
+  assert.doesNotMatch(route, /Sincronize a agenda antes de iniciar/);
+});
+
+test('ABA session start returns specific operational conflicts', () => {
+  const routeStart = serverCode.indexOf("app.post('/api/aba/sessions'");
+  const routeEnd = serverCode.indexOf("app.patch('/api/aba/sessions/:sessionId'", routeStart);
+  const route = serverCode.slice(routeStart, routeEnd);
+  assert.match(route, /Esta consulta está cancelada e não pode ser iniciada/);
+  assert.match(route, /Esta consulta já possui sessão encerrada/);
+  assert.match(route, /Já existe uma sessão em andamento para este paciente\/profissional/);
+  assert.match(serverCode, /fetchCompletedAbaSessionForAppointment[\s\S]*?\.in\('status', \['completed', 'COMPLETED'\]\)/);
+  assert.match(serverCode, /fetchConflictingInProgressAbaSessionForAppointment[\s\S]*?\.eq\('patient_id', patientId\)[\s\S]*?\.eq\('therapist_id', professionalId\)/);
+});
+
 test('ABA session writes update appointment and closure readiness', () => {
   assert.match(serverCode, /patchAppointmentOperationalFromAbaSession[\s\S]*?status: 'IN_PROGRESS' \| 'COMPLETED'/);
   assert.match(serverCode, /appointmentStatus = payload\.status === 'completed'[\s\S]*?'COMPLETED'[\s\S]*?isAbaSessionInProgressStatus\(payload\.status\)[\s\S]*?'IN_PROGRESS'/);
@@ -51,6 +74,8 @@ test('frontend accepts canonical session id and sends appointment_id with record
   assert.match(patientDetailCode, /const saveResult = await dataService\.saveAbaSession/);
   assert.match(patientDetailCode, /const savedSession = saveResult\?\.session \|\| saveResult\?\.data/);
   assert.match(patientDetailCode, /id: String\(savedSession\.id\)/);
+  assert.match(patientDetailCode, /professional_id: nextSession\.professional_id \|\| undefined/);
+  assert.match(patientDetailCode, /service_type: nextSession\.service_type \|\| undefined/);
   assert.match(dataServiceCode, /fields\.appointment_id = appointmentId[\s\S]*?fields\.appointmentId = appointmentId/);
   assert.match(sessionModeCode, /appointment_id: activeAppointmentId \|\| undefined/);
   assert.match(sessionModeCode, /appointmentId: activeAppointmentId \|\| undefined/);

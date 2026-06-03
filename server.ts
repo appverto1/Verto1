@@ -5090,8 +5090,24 @@ function isTrustedPushNotificationAction(action: unknown): boolean {
 
 function buildAppointmentScheduledAt(appointment: any): string | null {
   const source = parseStoredJsonObject(appointment?.source_payload || appointment?.sourcePayload);
-  const explicit = sanitizeString(appointment?.scheduled_at || appointment?.scheduledAt, 80);
-  const sourceExplicit = sanitizeString(source?.scheduled_at || source?.scheduledAt, 80);
+  const explicit = sanitizeString(
+    appointment?.scheduled_at ||
+      appointment?.scheduledAt ||
+      appointment?.scheduled_start_at ||
+      appointment?.scheduledStartAt ||
+      appointment?.scheduled_start ||
+      appointment?.scheduledStart,
+    80
+  );
+  const sourceExplicit = sanitizeString(
+    source?.scheduled_at ||
+      source?.scheduledAt ||
+      source?.scheduled_start_at ||
+      source?.scheduledStartAt ||
+      source?.scheduled_start ||
+      source?.scheduledStart,
+    80
+  );
   const resolvedExplicit = explicit || sourceExplicit;
   if (resolvedExplicit) {
     const parsed = new Date(resolvedExplicit);
@@ -27888,6 +27904,76 @@ async function startServer() {
     user: any;
   }) => ensureAppointmentMirrorForBillingContext(params);
 
+  const ABA_SESSION_STARTABLE_APPOINTMENT_STATUSES = new Set([
+    'SCHEDULED',
+    'CONFIRMED',
+    'RESCHEDULED',
+    'RESCHEDULED_CONFIRMED',
+    'RESCHEDULED_CONFIRMADO',
+    'IN_PROGRESS'
+  ]);
+
+  const collectAppointmentProfessionalIds = (appointment: any) => {
+    const source = parseStoredJsonObject(appointment?.source_payload || appointment?.sourcePayload);
+    const values: any[] = [
+      appointment?.therapist_id,
+      appointment?.therapistId,
+      appointment?.professional_id,
+      appointment?.professionalId,
+      source?.therapist_id,
+      source?.therapistId,
+      source?.professional_id,
+      source?.professionalId
+    ];
+    for (const key of ['professional_ids', 'professionalIds', 'team_professional_ids', 'teamProfessionalIds']) {
+      if (Array.isArray(appointment?.[key])) values.push(...appointment[key]);
+      if (Array.isArray(source?.[key])) values.push(...source[key]);
+    }
+    return Array.from(new Set(values.map((value) => sanitizeString(value, 120)).filter(Boolean)));
+  };
+
+  const resolveAppointmentProfessionalId = (appointment: any) => collectAppointmentProfessionalIds(appointment)[0] || '';
+
+  const appointmentBelongsToProfessional = (appointment: any, professionalId: string) => {
+    const safeProfessionalId = sanitizeString(professionalId, 120);
+    if (!safeProfessionalId) return false;
+    return collectAppointmentProfessionalIds(appointment).includes(safeProfessionalId);
+  };
+
+  const fetchClinicStateAppointmentForAbaSessionLink = async (appointmentId: string, clinicId: string, user: any) => {
+    const safeAppointmentId = sanitizeString(appointmentId, 120);
+    const safeClinicId = sanitizeString(clinicId, 120);
+    if (!isUuid(safeAppointmentId) || !isUuid(safeClinicId)) return null;
+    const { data, error } = await supabase
+      .from('clinic_state')
+      .select('clinic_id,appointments')
+      .eq('clinic_id', safeClinicId)
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      if (hasMissingFinancialSchema(error) || extractMissingColumnName(error)) return null;
+      throw error;
+    }
+    const appointment = (Array.isArray(data?.appointments) ? data.appointments : [])
+      .find((item: any) => sanitizeString(item?.id || item?.appointment_id || item?.appointmentId, 120) === safeAppointmentId);
+    if (!appointment) return null;
+    if (
+      sanitizeString(user?.role, 40).toLowerCase() === 'therapist' &&
+      !appointmentBelongsToProfessional(appointment, sanitizeString(user?.id, 120))
+    ) {
+      return null;
+    }
+    return cleanObject({
+      ...appointment,
+      id: safeAppointmentId,
+      appointment_id: safeAppointmentId,
+      organization_id: appointment?.organization_id || appointment?.organizationId || safeClinicId,
+      organizationId: appointment?.organizationId || appointment?.organization_id || safeClinicId,
+      clinic_id: appointment?.clinic_id || appointment?.clinicId || safeClinicId,
+      clinicId: appointment?.clinicId || appointment?.clinic_id || safeClinicId
+    });
+  };
+
   const fetchAppointmentForAbaSessionLink = async (appointmentId: string, clinicId: string, user: any) => {
     const safeAppointmentId = sanitizeString(appointmentId, 120);
     if (!isUuid(safeAppointmentId) || !isUuid(clinicId)) return null;
@@ -27906,6 +27992,30 @@ async function startServer() {
       throw error;
     }
     return data || null;
+  };
+
+  const ensureServerAppointmentForAbaSessionLink = async (params: {
+    appointmentId: string;
+    clinicId: string;
+    user: any;
+  }) => {
+    const appointment = await fetchAppointmentForAbaSessionLink(params.appointmentId, params.clinicId, params.user);
+    if (appointment?.id) return appointment;
+
+    const stateAppointment = await fetchClinicStateAppointmentForAbaSessionLink(
+      params.appointmentId,
+      params.clinicId,
+      params.user
+    );
+    if (!stateAppointment?.id) return null;
+
+    const mirrorOk = await ensureAppointmentMirrorForOperationalLink({
+      organizationId: params.clinicId,
+      appointment: stateAppointment,
+      user: params.user
+    });
+    if (!mirrorOk) return null;
+    return await fetchAppointmentForAbaSessionLink(params.appointmentId, params.clinicId, params.user);
   };
 
   const fetchInProgressAbaSessionForAppointment = async (params: {
@@ -27935,6 +28045,75 @@ async function startServer() {
       throw error;
     }
     return data || null;
+  };
+
+  const fetchCompletedAbaSessionForAppointment = async (params: {
+    appointmentId: string;
+    patientId: string;
+    clinicId: string;
+    user: any;
+  }) => {
+    const appointmentId = sanitizeString(params.appointmentId, 120);
+    const patientId = sanitizeString(params.patientId, 120);
+    if (!isUuid(appointmentId) || !isUuid(patientId)) return null;
+    let query = supabase
+      .from('aba_sessions')
+      .select('id,status,appointment_id,patient_id,clinic_id,therapist_id,actual_start_at,actual_end_at,started_at,ended_at,updated_at')
+      .eq('appointment_id', appointmentId)
+      .eq('patient_id', patientId)
+      .in('status', ['completed', 'COMPLETED'])
+      .order('updated_at', { ascending: false })
+      .limit(1);
+    if (!hasGlobalClinicAccess(params.user) && params.clinicId) query = query.eq('clinic_id', params.clinicId);
+    if (sanitizeString(params.user?.role, 40).toLowerCase() === 'therapist') {
+      query = query.eq('therapist_id', sanitizeString(params.user?.id, 120));
+    }
+    const { data, error } = await query.maybeSingle();
+    if (error) {
+      if (hasMissingFinancialSchema(error) || extractMissingColumnName(error)) return null;
+      throw error;
+    }
+    return data || null;
+  };
+
+  const fetchConflictingInProgressAbaSessionForAppointment = async (params: {
+    appointmentId: string;
+    patientId: string;
+    professionalId: string;
+    clinicId: string;
+    user: any;
+    scheduledStartAt?: string | null;
+    scheduledEndAt?: string | null;
+  }) => {
+    const appointmentId = sanitizeString(params.appointmentId, 120);
+    const patientId = sanitizeString(params.patientId, 120);
+    const professionalId = sanitizeString(params.professionalId, 120);
+    if (!isUuid(appointmentId) || !isUuid(patientId) || !professionalId) return null;
+    let query = supabase
+      .from('aba_sessions')
+      .select('id,status,appointment_id,patient_id,clinic_id,therapist_id,scheduled_start_at,scheduled_end_at,actual_start_at,started_at,updated_at')
+      .eq('patient_id', patientId)
+      .eq('therapist_id', professionalId)
+      .in('status', ['active', 'in_progress', 'IN_PROGRESS'])
+      .order('updated_at', { ascending: false })
+      .limit(10);
+    if (!hasGlobalClinicAccess(params.user) && params.clinicId) query = query.eq('clinic_id', params.clinicId);
+    const { data, error } = await query;
+    if (error) {
+      if (hasMissingFinancialSchema(error) || extractMissingColumnName(error)) return null;
+      throw error;
+    }
+    const requestedStart = new Date(sanitizeString(params.scheduledStartAt, 80)).getTime();
+    const requestedEnd = new Date(sanitizeString(params.scheduledEndAt, 80)).getTime();
+    return (data || []).find((session: any) => {
+      const sessionAppointmentId = sanitizeString(session?.appointment_id, 120);
+      if (sessionAppointmentId && sessionAppointmentId === appointmentId) return false;
+      const sessionStart = new Date(sanitizeString(session?.scheduled_start_at || session?.actual_start_at || session?.started_at, 80)).getTime();
+      const sessionEnd = new Date(sanitizeString(session?.scheduled_end_at, 80)).getTime();
+      if (!Number.isFinite(requestedStart) || !Number.isFinite(sessionStart)) return true;
+      if (Math.abs(sessionStart - requestedStart) < 60000) return true;
+      return Number.isFinite(requestedEnd) && Number.isFinite(sessionEnd) && requestedStart < sessionEnd && requestedEnd > sessionStart;
+    }) || null;
   };
 
   const patchAppointmentOperationalFromAbaSession = async (params: {
@@ -30027,54 +30206,83 @@ async function startServer() {
       if (!isUuid(patientId)) return res.status(400).json({ success: false, error: 'Paciente inválido.' });
 
       const startedAt = sanitizeIsoDateTime(req.body?.started_at || req.body?.startedAt);
-      const appointmentId = isUuid(sanitizeString(req.body?.appointment_id || req.body?.appointmentId, 180))
-        ? sanitizeString(req.body?.appointment_id || req.body?.appointmentId, 180)
-        : null;
+      const rawAppointmentId = sanitizeString(req.body?.appointment_id || req.body?.appointmentId, 180);
+      if (rawAppointmentId && !isUuid(rawAppointmentId)) {
+        return res.status(409).json({
+          success: false,
+          code: 'APPOINTMENT_NOT_PERSISTED',
+          error: 'Esta consulta ainda não foi salva no servidor. Atualize a agenda e tente novamente.'
+        });
+      }
+      const appointmentId = rawAppointmentId || null;
       let linkedAppointment: any = null;
       let existingInProgressSession: any = null;
+      let resolvedProfessionalId = sanitizeString(
+        req.body?.professional_id ||
+          req.body?.professionalId ||
+          req.body?.therapist_id ||
+          req.body?.therapistId ||
+          req.session.user?.id,
+        120
+      );
       if (appointmentId) {
-        const mirrorOk = await ensureAppointmentMirrorForOperationalLink({
-          organizationId: clinicId,
-          appointment: cleanObject({
-            ...(req.body || {}),
-            id: appointmentId,
-            appointment_id: appointmentId,
-            patient_id: patientId,
-            patientId,
-            therapist_id: req.body?.therapist_id || req.body?.therapistId || req.session.user?.id,
-            therapistId: req.body?.therapist_id || req.body?.therapistId || req.session.user?.id,
-            scheduled_start_at: req.body?.scheduled_start_at || req.body?.scheduledStartAt || req.body?.scheduled_start || req.body?.scheduledStart,
-            scheduledStartAt: req.body?.scheduledStartAt || req.body?.scheduled_start_at || req.body?.scheduledStart || req.body?.scheduled_start,
-            scheduled_end_at: req.body?.scheduled_end_at || req.body?.scheduledEndAt || req.body?.scheduled_end || req.body?.scheduledEnd,
-            scheduledEndAt: req.body?.scheduledEndAt || req.body?.scheduled_end_at || req.body?.scheduledEnd || req.body?.scheduled_end,
-            scheduled_duration_minutes: req.body?.scheduled_duration_minutes ?? req.body?.scheduledDurationMinutes,
-            scheduledDurationMinutes: req.body?.scheduledDurationMinutes ?? req.body?.scheduled_duration_minutes,
-            organization_id: clinicId,
-            organizationId: clinicId,
-            clinic_id: clinicId,
-            clinicId,
-            status: 'IN_PROGRESS'
-          }),
+        linkedAppointment = await ensureServerAppointmentForAbaSessionLink({
+          appointmentId,
+          clinicId,
           user: req.session.user
         });
-        if (!mirrorOk) {
-          return res.status(409).json({
-            success: false,
-            code: 'APPOINTMENT_LINK_UNAVAILABLE',
-            error: 'Sincronize a agenda antes de iniciar a sessão desta consulta.'
-          });
-        }
-        linkedAppointment = await fetchAppointmentForAbaSessionLink(appointmentId, clinicId, req.session.user);
         if (!linkedAppointment?.id) return res.status(404).json({ success: false, error: 'Consulta não encontrada.' });
         if (sanitizeString(linkedAppointment.patient_id, 120) !== patientId) {
           return res.status(409).json({ success: false, error: 'Consulta vinculada a outro paciente.' });
         }
+        const appointmentStatus = normalizeOperationalAppointmentStatus(linkedAppointment.status);
+        if (appointmentStatus === 'DELETED') {
+          return res.status(404).json({ success: false, error: 'Consulta não encontrada.' });
+        }
+        if (appointmentStatus === 'CANCELLED' || appointmentStatus === 'CANCEL_REQUESTED') {
+          return res.status(409).json({ success: false, error: 'Esta consulta está cancelada e não pode ser iniciada.' });
+        }
+        if (appointmentStatus === 'COMPLETED') {
+          return res.status(409).json({ success: false, error: 'Esta consulta já possui sessão encerrada.' });
+        }
+        if (!ABA_SESSION_STARTABLE_APPOINTMENT_STATUSES.has(appointmentStatus)) {
+          return res.status(409).json({ success: false, error: 'Esta consulta não pode ser iniciada neste status.' });
+        }
+        const appointmentProfessionalId = resolveAppointmentProfessionalId(linkedAppointment);
+        const explicitProfessionalId = sanitizeString(req.body?.professional_id || req.body?.professionalId, 120);
+        if (explicitProfessionalId && appointmentProfessionalId && explicitProfessionalId !== appointmentProfessionalId) {
+          return res.status(409).json({ success: false, error: 'Consulta vinculada a outro profissional.' });
+        }
+        resolvedProfessionalId = appointmentProfessionalId || explicitProfessionalId || resolvedProfessionalId;
         existingInProgressSession = await fetchInProgressAbaSessionForAppointment({
           appointmentId,
           patientId,
           clinicId,
           user: req.session.user
         });
+        if (!existingInProgressSession?.id) {
+          const existingCompletedSession = await fetchCompletedAbaSessionForAppointment({
+            appointmentId,
+            patientId,
+            clinicId,
+            user: req.session.user
+          });
+          if (existingCompletedSession?.id) {
+            return res.status(409).json({ success: false, error: 'Esta consulta já possui sessão encerrada.' });
+          }
+          const conflictingInProgressSession = await fetchConflictingInProgressAbaSessionForAppointment({
+            appointmentId,
+            patientId,
+            professionalId: resolvedProfessionalId,
+            clinicId,
+            user: req.session.user,
+            scheduledStartAt: linkedAppointment?.scheduled_start_at || linkedAppointment?.scheduled_at || null,
+            scheduledEndAt: linkedAppointment?.scheduled_end_at || null
+          });
+          if (conflictingInProgressSession?.id) {
+            return res.status(409).json({ success: false, error: 'Já existe uma sessão em andamento para este paciente/profissional.' });
+          }
+        }
       }
       const requestedSessionId = sanitizeString(req.body?.id || req.body?.session_id || req.body?.sessionId || crypto.randomUUID(), 180);
       const sessionId = sanitizeString(existingInProgressSession?.id || requestedSessionId, 180);
@@ -30090,11 +30298,11 @@ async function startServer() {
       );
       const payload = cleanObject({
         id: sessionId,
-        organization_id: sanitizeString(req.body?.organization_id || req.body?.organizationId || clinicId, 120),
+        organization_id: sanitizeString(linkedAppointment?.organization_id || linkedAppointment?.clinic_id || clinicId, 120),
         clinic_id: clinicId,
         patient_id: patientId,
         patient_name: sanitizeString(req.body?.patient_name || req.body?.patientName, 180),
-        therapist_id: sanitizeString(req.body?.therapist_id || req.body?.therapistId || req.session.user?.id, 120),
+        therapist_id: resolvedProfessionalId,
         device_id: sanitizeString(req.body?.device_id || req.body?.deviceId, 180),
         source: resolveAbaRequestSource(req.body),
         status: sessionStatus,
@@ -30116,6 +30324,7 @@ async function startServer() {
         room_id: sanitizeString(req.body?.room_id || req.body?.roomId || linkedAppointment?.room_id, 180) || null,
         room_name: sanitizeString(req.body?.room_name || req.body?.roomName || linkedAppointment?.room_name, 180) || null,
         location_type: sanitizeString(req.body?.location_type || req.body?.locationType || linkedAppointment?.location_type, 80) || null,
+        service_type: sanitizeString(req.body?.service_type || req.body?.serviceType || linkedAppointment?.service_type || linkedAppointment?.approach, 120) || null,
         started_at: existingInProgressSession?.started_at || startedAt,
         ended_at: req.body?.ended_at || req.body?.endedAt ? sanitizeIsoDateTime(req.body?.ended_at || req.body?.endedAt, startedAt) : resolvedActualEndAt,
         duration_seconds: req.body?.duration_seconds !== undefined || req.body?.durationSeconds !== undefined
@@ -30165,7 +30374,8 @@ async function startServer() {
       const data = { ...payload, id: (result.data as any)?.id || payload.id };
       return res.json({ success: true, idempotent: Boolean(existingInProgressSession?.id), data, session: data });
     } catch (error: any) {
-      return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
+      console.error('[ABA Sessions] start error:', error?.message || String(error));
+      return res.status(500).json({ success: false, error: 'Não foi possível iniciar a sessão agora.' });
     }
   });
 
