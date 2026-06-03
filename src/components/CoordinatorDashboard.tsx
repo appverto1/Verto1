@@ -696,6 +696,8 @@ export function CoordinatorDashboard({
     useState<any>(null);
   const [scheduledSessionContext, setScheduledSessionContext] =
     useState<any>(null);
+  const [scheduledSessionStartKey, setScheduledSessionStartKey] =
+    useState("");
   const [agendaAppointmentObservation, setAgendaAppointmentObservation] =
     useState("");
   const [pendingRecurringCancellation, setPendingRecurringCancellation] =
@@ -4795,6 +4797,9 @@ export function CoordinatorDashboard({
       onStartSession={(appointment: any) =>
         {
           setScheduledSessionContext(appointment);
+          setScheduledSessionStartKey(
+            `${appointment?.id || appointment?.appointment_id || "appointment"}:${Date.now()}`,
+          );
           onPatientClick(
             appointment?.patientId || appointment?.patient_id,
             { tab: "session" },
@@ -5725,6 +5730,11 @@ export function CoordinatorDashboard({
                 String(scheduledSessionContext?.patientId || scheduledSessionContext?.patient_id || "") === String(patient?.id || "")
                   ? scheduledSessionContext
                   : null
+              }
+              startScheduledSessionKey={
+                String(scheduledSessionContext?.patientId || scheduledSessionContext?.patient_id || "") === String(patient?.id || "")
+                  ? scheduledSessionStartKey
+                  : ""
               }
               initialTab={patientOpenTab}
               openAnamnesisOnLoad={openAnamnesisOnPatientOpen}

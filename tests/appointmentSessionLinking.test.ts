@@ -7,6 +7,7 @@ const serverCode = readFileSync(join(root, 'server.ts'), 'utf8');
 const dataServiceCode = readFileSync(join(root, 'src/services/dataService.ts'), 'utf8');
 const patientDetailCode = readFileSync(join(root, 'src/components/PatientDetailView.tsx'), 'utf8');
 const sessionModeCode = readFileSync(join(root, 'src/components/SessionMode.tsx'), 'utf8');
+const coordinatorDashboardCode = readFileSync(join(root, 'src/components/CoordinatorDashboard.tsx'), 'utf8');
 const migrationSql = readFileSync(join(root, 'supabase/migrations/20260602153000_aba_clinical_records_appointment_link.sql'), 'utf8');
 
 const tests: Array<{ name: string; fn: () => void }> = [];
@@ -106,6 +107,16 @@ test('frontend accepts canonical session id and sends appointment_id with record
   assert.match(patientDetailCode, /appointmentSnapshot: scheduledSessionForPatient/);
   assert.match(sessionModeCode, /appointment_id: activeAppointmentId \|\| undefined/);
   assert.match(sessionModeCode, /appointmentId: activeAppointmentId \|\| undefined/);
+});
+
+test('agenda start action auto-starts a scheduled patient session', () => {
+  assert.match(coordinatorDashboardCode, /setScheduledSessionContext\(appointment\)/);
+  assert.match(coordinatorDashboardCode, /setScheduledSessionStartKey\(/);
+  assert.match(coordinatorDashboardCode, /startScheduledSessionKey=\{/);
+  assert.match(patientDetailCode, /startScheduledSessionKey/);
+  assert.match(patientDetailCode, /consumedScheduledSessionStartKeyRef/);
+  assert.match(patientDetailCode, /handleConfirmSessionStart\(\{ durationMinutes: scheduledSessionDurationMinutes, openSessionMode: true \}\)/);
+  assert.match(patientDetailCode, /appointmentId: scheduledAppointmentId[\s\S]*?appointment_id: scheduledAppointmentId/);
 });
 
 test('migration adds appointment_id to ABA clinical records with scoped indexes', () => {

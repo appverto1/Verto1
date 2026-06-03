@@ -55,7 +55,7 @@ const isVbMappProtocol = (protocol: any) => {
 
 type PatientDetailTab = 'history' | 'notes' | 'report' | 'plan' | 'session' | 'aba-charts' | 'files';
 
-export const PatientDetailView = ({ patient, onBack, history, notes: externalNotes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false, anamnesisTemplate, allowedTabs, userRole, themeMode, scheduledSession }: any) => {
+export const PatientDetailView = ({ patient, onBack, history, notes: externalNotes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false, anamnesisTemplate, allowedTabs, userRole, themeMode, scheduledSession, startScheduledSessionKey }: any) => {
   const safeSetProtocols =
     typeof setProtocols === 'function' ? setProtocols : null;
   const coalescePatientText = (...values: any[]) => {
@@ -732,6 +732,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [showSessionEndConfirm, setShowSessionEndConfirm] = useState(false);
   const [pendingSessionAction, setPendingSessionAction] = useState<'tab' | 'fullscreen'>('tab');
   const [restoreSessionData, setRestoreSessionData] = useState(false);
+  const consumedScheduledSessionStartKeyRef = React.useRef('');
   const [abaSessions, setAbaSessions] = useState<any[]>([]);
   const [abaTrials, setAbaTrials] = useState<any[]>([]);
   const [abaBehaviorEvents, setAbaBehaviorEvents] = useState<any[]>([]);
@@ -908,8 +909,17 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     setShowSessionStartConfirm(true);
   };
 
-  const handleConfirmSessionStart = async () => {
-    const durationMinutes = Math.max(5, Math.min(240, Math.round(Number(sessionDurationInput) || configuredDefaultSessionMinutes)));
+  const handleConfirmSessionStart = async (options?: { durationMinutes?: number; openSessionMode?: boolean }) => {
+    const requestedDuration = options?.durationMinutes ?? Number(sessionDurationInput);
+    const parsedDuration = Number(requestedDuration);
+    const fallbackDuration = scheduledSessionForPatient ? scheduledSessionDurationMinutes : configuredDefaultSessionMinutes;
+    const durationMinutes = Math.max(
+      5,
+      Math.min(
+        240,
+        Math.round(Number.isFinite(parsedDuration) && parsedDuration > 0 ? parsedDuration : fallbackDuration),
+      ),
+    );
     const startedAt = new Date();
     const resetAt = startedAt.getTime();
     if (restoreSessionData && isKidsProfile && Array.isArray(patient?.pei) && onUpdatePatient) {
@@ -977,12 +987,17 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       scheduledSessionForPatient?.type ||
       scheduledSessionForPatient?.approach ||
       null;
+    const scheduledAppointmentId =
+      scheduledSessionForPatient?.id ||
+      scheduledSessionForPatient?.appointment_id ||
+      scheduledSessionForPatient?.appointmentId ||
+      null;
     const nextSession = {
       id: `session-${String(patient?.id || 'patient')}-${startedAt.getTime()}`,
       patientId: patient?.id,
       patientName: patient?.name || 'Paciente',
-      appointmentId: scheduledSessionForPatient?.id || null,
-      appointment_id: scheduledSessionForPatient?.id || null,
+      appointmentId: scheduledAppointmentId,
+      appointment_id: scheduledAppointmentId,
       professionalId: scheduledProfessionalId,
       professional_id: scheduledProfessionalId,
       therapistId: scheduledProfessionalId,
@@ -1131,8 +1146,34 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       `Sessão de ${patient?.name || 'paciente'} iniciada com duração prevista de ${durationMinutes} minutos.`,
       'clinical'
     );
-    if (pendingSessionAction === 'fullscreen') setIsSessionModeOpen(true);
+    if (options?.openSessionMode || pendingSessionAction === 'fullscreen') setIsSessionModeOpen(true);
   };
+
+  useEffect(() => {
+    const startKey = String(startScheduledSessionKey || '').trim();
+    if (!startKey || consumedScheduledSessionStartKeyRef.current === startKey) return;
+    if (!abaV2Enabled || !scheduledSessionForPatient || !patient?.id) return;
+
+    consumedScheduledSessionStartKeyRef.current = startKey;
+    setSessionDurationInput(String(scheduledSessionDurationMinutes));
+    setPendingSessionAction('fullscreen');
+
+    const persistedSession = readPersistedSession();
+    if (activeSession || persistedSession) {
+      if (persistedSession && !activeSession) persistActiveSession(persistedSession);
+      setIsSessionModeOpen(true);
+      return;
+    }
+
+    void handleConfirmSessionStart({ durationMinutes: scheduledSessionDurationMinutes, openSessionMode: true });
+  }, [
+    abaV2Enabled,
+    activeSession,
+    patient?.id,
+    scheduledSessionDurationMinutes,
+    scheduledSessionForPatient,
+    startScheduledSessionKey,
+  ]);
 
   const handleConfirmSessionEnd = (options?: { alreadyPersisted?: boolean; summary?: any }) => {
     const endedSession = activeSession;
