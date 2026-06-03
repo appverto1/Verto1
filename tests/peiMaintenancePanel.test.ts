@@ -117,8 +117,12 @@ test('acoes do painel chamam rotas seguras existentes', () => {
   assert.match(patientDetailCode, /handlePeiWaitNextSessionFromModal/);
   assert.match(patientDetailCode, /handlePeiConfirmCandidateLink/);
   assert.match(patientDetailCode, /handlePeiSkipCandidateLink/);
+  assert.match(patientDetailCode, /handlePeiScheduleModalSave/);
+  assert.match(patientDetailCode, /openPeiMaintenanceReviewModal/);
   assert.match(serverCode, /app\.post\('\/api\/aba\/maintenance-schedules\/:scheduleId\/confirm-link'/);
+  assert.match(serverCode, /app\.post\('\/api\/aba\/maintenance-schedules\/:scheduleId\/assign-appointment'/);
   assert.match(serverCode, /app\.post\('\/api\/aba\/maintenance-schedules\/:scheduleId\/skip-link'/);
+  assert.match(serverCode, /app\.post\('\/api\/aba\/maintenance-schedules\/:scheduleId\/relink-target'/);
   assert.match(serverCode, /fetchMaintenanceAppointmentById/);
   assert.match(serverCode, /canAccessPatientInCurrentClinic/);
 });
@@ -140,12 +144,14 @@ test('backend resolve targets de manutencao em lote com colunas explicitas', () 
 
 test('acoes nao enviam ids sinteticos para endpoints de manutencao', () => {
   assert.match(patientDetailCode, /const getPersistedUuid/);
-  assert.match(patientDetailCode, /disabled=\{loading \|\| !hasRealSchedule\}/);
+  assert.match(patientDetailCode, /disabled=\{actionLoading\('confirm'\) \|\| !hasRealSchedule\}/);
   assert.match(dataServiceCode, /SYNTHETIC_CLINICAL_ID_RE/);
   assert.match(dataServiceCode, /if \(!isPersistedUuid\(targetId\)\)[\s\S]*?Habilidade inválida para agendamento de manutenção/m);
   assert.match(dataServiceCode, /if \(!isPersistedUuid\(scheduleId\)\)[\s\S]*?Sondagem de manutenção inválida para confirmar vínculo/m);
   assert.match(calendarCode, /if \(!isPersistedUuid\(scheduleId\)\)/);
   assert.match(dataServiceCode, /async confirmMaintenanceScheduleLink\(scheduleId: string[\s\S]*?if \(!isPersistedUuid\(scheduleId\)\)[\s\S]*?const endpoint = `\/api\/aba\/maintenance-schedules\/\$\{encodeURIComponent\(String\(scheduleId\)\)\}\/confirm-link`/m);
+  assert.match(dataServiceCode, /async assignMaintenanceScheduleToAppointment\(scheduleId: string[\s\S]*?if \(!isPersistedUuid\(appointmentId\)\)/m);
+  assert.match(dataServiceCode, /async relinkMaintenanceScheduleTarget\(scheduleId: string[\s\S]*?if \(!isPersistedUuid\(targetId\)\)/m);
 });
 
 test('backend valida ids invalidos e recent-session-events local sem ruido', () => {
@@ -153,8 +159,23 @@ test('backend valida ids invalidos e recent-session-events local sem ruido', () 
   assert.match(serverCode, /if \(!isUuid\(scheduleId\)\)[\s\S]*?Identificador inválido/m);
   assert.match(serverCode, /Escolha uma sessão antes de confirmar o vínculo/);
   assert.match(serverCode, /Sondagem de manutenção não encontrada/);
+  assert.match(serverCode, /MISSING_CANDIDATE_APPOINTMENT/);
+  assert.match(serverCode, /APPOINTMENT_PATIENT_MISMATCH/);
   assert.match(serverCode, /requestedSessionId[\s\S]*?!isUuid\(requestedSessionId\)[\s\S]*?success: true, data: \[\]/m);
   assert.match(dataServiceCode, /if \(!isPersistedUuid\(sessionId\)\) return \{ success: true, data: \[\] \}/);
+});
+
+test('botoes de manutencao abrem modais ou mostram feedback sem iniciar sessao fora da sessao ativa', () => {
+  assert.match(patientDetailCode, /Agendar sondagem de manutencao/);
+  assert.match(patientDetailCode, /Escolher sessao/);
+  assert.match(patientDetailCode, /Plano 7\/14\/30\/60/);
+  assert.match(patientDetailCode, /openPeiMaintenanceReviewModal/);
+  assert.match(patientDetailCode, /Inicie a sess[ãa]o para usar esta Maintenance Probe|Inicie a sessÃ£o para usar esta Maintenance Probe/);
+  const maintenanceActionsStart = patientDetailCode.indexOf('const renderPeiMaintenanceActions');
+  const maintenanceActionsEnd = patientDetailCode.indexOf('const renderPeiMaintenanceRow', maintenanceActionsStart);
+  const maintenanceActionsCode = patientDetailCode.slice(maintenanceActionsStart, maintenanceActionsEnd);
+  assert.doesNotMatch(maintenanceActionsCode, /requestSessionStart\('fullscreen'\)/);
+  assert.doesNotMatch(calendarCode, /onStartSession\?\(\{ \.\.\.detailEvent, maintenanceProbe: probe/);
 });
 
 let passed = 0;

@@ -108,7 +108,7 @@ function isSyntheticClinicalId(value: unknown): boolean {
 }
 
 function invalidClinicalIdResponse(error: string, data: any = null) {
-  return { success: false, data, error };
+  return { success: false, data, error, message: error };
 }
 
 function endpointWithLimit(endpoint: string, limit: number): string {
@@ -467,6 +467,31 @@ function normalizeApiErrorMessage(value: any): string {
     }
   }
   return sanitizeTechnicalErrorMessage(repairMojibakeMessage(String(value || 'Erro desconhecido')));
+}
+
+export function getApiErrorMessage(error: any, fallback = 'Não foi possível atualizar a manutenção.'): string {
+  const responseData = error?.response?.data || error?.data || null;
+  const candidates = [
+    responseData?.message,
+    responseData?.error,
+    error?.message,
+    error?.error,
+    typeof error === 'string' ? error : ''
+  ];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const message = normalizeApiErrorMessage(candidate);
+    if (message && message !== 'Erro desconhecido') return message;
+  }
+  return fallback;
+}
+
+function normalizeClinicalMutationResult(result: any, fallback: string) {
+  if (result?.success === false) {
+    const message = getApiErrorMessage(result, fallback);
+    return { ...result, error: message, message };
+  }
+  return result;
 }
 
 function normalizePatientInviteSuccess(result: any) {
@@ -2712,9 +2737,10 @@ export const dataService = {
         credentials: 'include',
         body: JSON.stringify(payload || {})
       }, { helperName: 'createMaintenanceScheduleForTarget', operation: 'write', table: 'aba_maintenance_schedules', hasExplicitColumns: true });
-      return await safeJson(response);
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível agendar a sondagem agora.');
     } catch (error) {
-      return { success: false, error: 'Não foi possível agendar a sondagem agora.' };
+      const message = getApiErrorMessage(error, 'Não foi possível agendar a sondagem agora.');
+      return { success: false, error: message, message };
     }
   },
 
@@ -2735,9 +2761,34 @@ export const dataService = {
         credentials: 'include',
         body: JSON.stringify(payload || {})
       }, { helperName: 'confirmMaintenanceScheduleLink', operation: 'write', table: 'aba_maintenance_schedules', hasExplicitColumns: true });
-      return await safeJson(response);
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível confirmar o vínculo agora.');
     } catch (error) {
-      return { success: false, error: 'Não foi possível confirmar o vínculo agora.' };
+      const message = getApiErrorMessage(error, 'Não foi possível confirmar o vínculo agora.');
+      return { success: false, error: message, message };
+    }
+  },
+
+  async assignMaintenanceScheduleToAppointment(scheduleId: string, payload: any = {}) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
+    if (!isPersistedUuid(scheduleId)) {
+      return invalidClinicalIdResponse('Sondagem de manutenção inválida para atribuir sessão.');
+    }
+    const appointmentId = payload?.appointmentId || payload?.appointment_id;
+    if (!isPersistedUuid(appointmentId)) {
+      return invalidClinicalIdResponse('Escolha uma sessão antes de atribuir a sondagem.');
+    }
+    const endpoint = `/api/aba/maintenance-schedules/${encodeURIComponent(String(scheduleId))}/assign-appointment`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ ...(payload || {}), appointmentId })
+      }, { helperName: 'assignMaintenanceScheduleToAppointment', operation: 'write', table: 'aba_maintenance_schedules', hasExplicitColumns: true });
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível atribuir a sondagem agora.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível atribuir a sondagem agora.');
+      return { success: false, error: message, message };
     }
   },
 
@@ -2758,9 +2809,34 @@ export const dataService = {
         credentials: 'include',
         body: JSON.stringify(payload || {})
       }, { helperName: 'skipMaintenanceScheduleLink', operation: 'write', table: 'aba_maintenance_schedules', hasExplicitColumns: true });
-      return await safeJson(response);
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível adiar o vínculo agora.');
     } catch (error) {
-      return { success: false, error: 'Não foi possível adiar o vínculo agora.' };
+      const message = getApiErrorMessage(error, 'Não foi possível adiar o vínculo agora.');
+      return { success: false, error: message, message };
+    }
+  },
+
+  async relinkMaintenanceScheduleTarget(scheduleId: string, payload: any = {}) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
+    if (!isPersistedUuid(scheduleId)) {
+      return invalidClinicalIdResponse('Sondagem de manutenção inválida para revisar vínculo.');
+    }
+    const targetId = payload?.targetId || payload?.target_id;
+    if (!isPersistedUuid(targetId)) {
+      return invalidClinicalIdResponse('Escolha uma habilidade real antes de salvar o vínculo.');
+    }
+    const endpoint = `/api/aba/maintenance-schedules/${encodeURIComponent(String(scheduleId))}/relink-target`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ ...(payload || {}), targetId })
+      }, { helperName: 'relinkMaintenanceScheduleTarget', operation: 'write', table: 'aba_maintenance_schedules', hasExplicitColumns: true });
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível revisar o vínculo agora.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível revisar o vínculo agora.');
+      return { success: false, error: message, message };
     }
   },
 
@@ -2777,9 +2853,10 @@ export const dataService = {
         credentials: 'include',
         body: JSON.stringify(payload || {})
       }, { helperName: 'scheduleMaintenanceForNextSession', operation: 'write', table: 'aba_maintenance_schedules', hasExplicitColumns: true });
-      return await safeJson(response);
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível agendar para a próxima sessão agora.');
     } catch (error) {
-      return { success: false, error: 'Não foi possível agendar para a próxima sessão agora.' };
+      const message = getApiErrorMessage(error, 'Não foi possível agendar para a próxima sessão agora.');
+      return { success: false, error: message, message };
     }
   },
 
@@ -2812,9 +2889,10 @@ export const dataService = {
         credentials: 'include',
         body: JSON.stringify(payload || {})
       }, { helperName: 'completeMaintenanceSchedule', operation: 'write', table: 'aba_maintenance_schedules', hasExplicitColumns: true });
-      return await safeJson(response);
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível concluir o agendamento agora.');
     } catch (error) {
-      return { success: false, error: 'Não foi possível concluir o agendamento agora.' };
+      const message = getApiErrorMessage(error, 'Não foi possível concluir o agendamento agora.');
+      return { success: false, error: message, message };
     }
   },
 

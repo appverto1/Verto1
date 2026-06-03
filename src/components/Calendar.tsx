@@ -778,7 +778,7 @@ export const ClinicalAgendaBoard = ({
   const [eventDetail, setEventDetail] = useState<any>(null);
   const [detailState, setDetailState] = useState<{ loading: boolean; error: string }>({ loading: false, error: '' });
   const [closureDetailState, setClosureDetailState] = useState<{ loading: boolean; error: string; data: any | null }>({ loading: false, error: '', data: null });
-  const [actionRequestState, setActionRequestState] = useState<{ loadingId: string; error: string }>({ loadingId: '', error: '' });
+  const [actionRequestState, setActionRequestState] = useState<{ loadingId: string; error: string; message?: string }>({ loadingId: '', error: '', message: '' });
   const [billingEditorOpen, setBillingEditorOpen] = useState(false);
   const [billingEditorState, setBillingEditorState] = useState<{ loading: boolean; saving: boolean; error: string; success: string }>({
     loading: false,
@@ -1422,12 +1422,12 @@ export const ClinicalAgendaBoard = ({
       return;
     }
     const loadingId = `${decision}:${scheduleId}`;
-    setActionRequestState({ loadingId, error: '' });
+    setActionRequestState({ loadingId, error: '', message: '' });
     const result = decision === 'confirm'
       ? await dataService.confirmMaintenanceScheduleLink(scheduleId, { appointmentId })
       : await dataService.skipMaintenanceScheduleLink(scheduleId, { appointmentId });
     if (!result?.success) {
-      setActionRequestState({ loadingId: '', error: result?.error || 'Nao foi possivel atualizar a sondagem.' });
+      setActionRequestState({ loadingId: '', error: result?.message || result?.error || 'Nao foi possivel atualizar a sondagem.', message: '' });
       return;
     }
     cacheRef.current.clear();
@@ -1436,7 +1436,7 @@ export const ClinicalAgendaBoard = ({
       const detailResult = await dataService.getCalendarEventDetail(currentId);
       if (detailResult?.success) setEventDetail(detailResult.data || null);
     }
-    setActionRequestState({ loadingId: '', error: '' });
+    setActionRequestState({ loadingId: '', error: '', message: result?.message || (decision === 'confirm' ? 'Vínculo confirmado.' : 'Sondagem mantida para depois.') });
   };
 
   const renderSection = (id: string, title: string, count: number | null, children: React.ReactNode) => {
@@ -2744,6 +2744,16 @@ export const ClinicalAgendaBoard = ({
                     <AlertCircle size={16} className="text-amber-600" />
                     Manutencoes vinculadas
                   </h4>
+                  {actionRequestState.message && (
+                    <div className="mt-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800">
+                      {actionRequestState.message}
+                    </div>
+                  )}
+                  {actionRequestState.error && (
+                    <div className="mt-3 rounded-2xl border border-amber-200 bg-white/80 px-3 py-2 text-xs font-semibold text-amber-800">
+                      {actionRequestState.error}
+                    </div>
+                  )}
                   {maintenanceProbes.some((probe: any) => String(probe?.status || '').toUpperCase() === 'PENDING_CONFIRMATION') && (
                     <p className="mt-2 rounded-2xl border border-amber-200 bg-white/80 px-3 py-2 text-xs font-semibold text-amber-800">
                       Ha sondagem de manutencao pendente para esta consulta. Confirme antes de vincular.
@@ -2791,13 +2801,9 @@ export const ClinicalAgendaBoard = ({
                               </button>
                             </div>
                           ) : (
-                            <button
-                              type="button"
-                              onClick={() => onStartSession?.({ ...detailEvent, maintenanceProbe: probe, activeCollectionType: 'maintenance_probe' })}
-                              className="mt-2 inline-flex min-h-[32px] items-center justify-center rounded-full bg-amber-600 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-white"
-                            >
-                              Usar Maintenance Probe
-                            </button>
+                            <p className="mt-2 rounded-2xl border border-amber-200 bg-white/80 px-3 py-2 text-xs font-semibold text-amber-800">
+                              Inicie a sessão para usar esta Maintenance Probe.
+                            </p>
                           )}
                         </div>
                       );

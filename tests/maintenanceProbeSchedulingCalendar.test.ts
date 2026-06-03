@@ -44,8 +44,11 @@ test('backend registra proxima sessao pendente e confirmacao candidata', () => {
   assert.match(serverCode, /flagPendingMaintenanceProbesForAppointment/);
   assert.match(serverCode, /status:\s*'PENDING_CONFIRMATION'/);
   assert.match(serverCode, /confirm-link/);
+  assert.match(serverCode, /assign-appointment/);
   assert.match(serverCode, /skip-link/);
+  assert.match(serverCode, /relink-target/);
   assert.match(serverCode, /MAINTENANCE_PROBE_LINK_CONFIRMED/);
+  assert.match(serverCode, /MAINTENANCE_PROBE_ASSIGNED_TO_APPOINTMENT/);
   assert.match(serverCode, /MAINTENANCE_PROBE_LINK_SKIPPED/);
   assert.match(serverCode, /saveMaintenanceScheduleRowWithLegacyFallback/);
   assert.match(serverCode, /legacyScheduleFallback/);
@@ -83,11 +86,15 @@ test('agenda mostra filtros e acoes de confirmacao de manutencao', () => {
   assert.match(calendarCode, /Fazer depois/);
   assert.match(calendarCode, /confirmMaintenanceScheduleLink/);
   assert.match(calendarCode, /skipMaintenanceScheduleLink/);
+  assert.match(calendarCode, /Inicie a sess[ãa]o para usar esta Maintenance Probe|Inicie a sessÃ£o para usar esta Maintenance Probe/);
+  assert.doesNotMatch(calendarCode, /onStartSession\?\(\{ \.\.\.detailEvent, maintenanceProbe: probe/);
 });
 
 test('dataService e migracao expõem fluxo aditivo', () => {
   assert.match(dataServiceCode, /getAbaFutureAppointmentsForMaintenance/);
+  assert.match(dataServiceCode, /getApiErrorMessage/);
   assert.match(dataServiceCode, /confirmMaintenanceScheduleLink/);
+  assert.match(dataServiceCode, /assignMaintenanceScheduleToAppointment/);
   assert.match(dataServiceCode, /skipMaintenanceScheduleLink/);
   assert.match(migrationSql, /candidate_appointment_id/);
   assert.match(migrationSql, /PENDING_NEXT_SESSION/);

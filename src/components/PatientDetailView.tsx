@@ -334,6 +334,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [isLoadingPeiMaintenancePanel, setIsLoadingPeiMaintenancePanel] = useState(false);
   const [peiMaintenancePanelMessage, setPeiMaintenancePanelMessage] = useState("");
   const [peiMaintenanceAssignSchedule, setPeiMaintenanceAssignSchedule] = useState<any>(null);
+  const [peiMaintenanceScheduleRow, setPeiMaintenanceScheduleRow] = useState<any>(null);
+  const [peiMaintenanceScheduleMode, setPeiMaintenanceScheduleMode] = useState('NEXT_PATIENT_SESSION');
+  const [peiMaintenanceScheduleDate, setPeiMaintenanceScheduleDate] = useState('');
+  const [peiMaintenanceReviewRow, setPeiMaintenanceReviewRow] = useState<any>(null);
+  const [peiMaintenanceReviewTargetId, setPeiMaintenanceReviewTargetId] = useState('');
   const [peiMaintenanceAppointmentsState, setPeiMaintenanceAppointmentsState] = useState<any>({ loading: false, error: '', items: [] });
   const [selectedPeiMaintenanceAppointmentId, setSelectedPeiMaintenanceAppointmentId] = useState('');
   const [peiMaintenanceActionKey, setPeiMaintenanceActionKey] = useState('');
@@ -790,6 +795,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     setHasLoadedPeiMaintenancePanel(false);
     setPeiMaintenancePanelMessage('');
     setPeiMaintenanceAssignSchedule(null);
+    setPeiMaintenanceScheduleRow(null);
+    setPeiMaintenanceScheduleMode('NEXT_PATIENT_SESSION');
+    setPeiMaintenanceScheduleDate('');
+    setPeiMaintenanceReviewRow(null);
+    setPeiMaintenanceReviewTargetId('');
     setSelectedPeiMaintenanceAppointmentId('');
     setPeiMaintenanceAppointmentsState({ loading: false, error: '', items: [] });
   }, [patient?.id]);
@@ -4837,7 +4847,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
   useEffect(() => {
     let cancelled = false;
-    if (!peiMaintenanceAssignSchedule || !patient?.id) return;
+    const shouldLoadAppointments = Boolean(peiMaintenanceAssignSchedule || peiMaintenanceScheduleRow);
+    if (!shouldLoadAppointments || !patient?.id) return;
     setPeiMaintenanceAppointmentsState({ loading: true, error: '', items: [] });
     dataService.getAbaFutureAppointmentsForMaintenance(String(patient.id), { limit: 20 })
       .then((result: any) => {
@@ -4856,7 +4867,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return () => {
       cancelled = true;
     };
-  }, [patient?.id, peiMaintenanceAssignSchedule]);
+  }, [patient?.id, peiMaintenanceAssignSchedule, peiMaintenanceScheduleRow]);
 
   const getPersistedUuid = (value: any) => {
     const id = String(value || '').trim();
@@ -4884,10 +4895,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     try {
       const result = await action();
       if (result?.success === false) {
-        setPeiMaintenancePanelMessage(result?.error || 'Nao foi possivel concluir a acao agora.');
+        setPeiMaintenancePanelMessage(result?.message || result?.error || 'Nao foi possivel concluir a acao agora.');
         return false;
       }
-      setPeiMaintenancePanelMessage(successMessage);
+      setPeiMaintenancePanelMessage(result?.message || successMessage);
       await refreshPeiMaintenancePanel();
       return true;
     } catch {
@@ -4899,22 +4910,66 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   };
 
   const handlePeiCreateMaintenancePlan = (row: any) => {
+    setPeiMaintenanceScheduleRow(row);
+    setPeiMaintenanceScheduleMode('DEFAULT_SEQUENCE');
+    setPeiMaintenanceScheduleDate('');
+    setSelectedPeiMaintenanceAppointmentId('');
+    setPeiMaintenancePanelMessage('');
+  };
+
+  const openPeiMaintenanceScheduleModal = (row: any, mode = 'NEXT_PATIENT_SESSION') => {
+    setPeiMaintenanceScheduleRow(row);
+    setPeiMaintenanceScheduleMode(mode);
+    setPeiMaintenanceScheduleDate('');
+    setSelectedPeiMaintenanceAppointmentId('');
+    setPeiMaintenancePanelMessage('');
+  };
+
+  const handlePeiScheduleModalSave = () => {
+    const row = peiMaintenanceScheduleRow;
     const targetId = getPeiMaintenanceTargetId(row);
     if (!targetId) {
-      setPeiMaintenancePanelMessage('Não foi possível agendar porque esta manutenção não está vinculada a uma habilidade real.');
+      setPeiMaintenancePanelMessage('Esta manutenção ainda não está vinculada a uma habilidade real. Revise o vínculo antes de agendar.');
       return;
     }
+    if (peiMaintenanceScheduleMode === 'CUSTOM_DATE' && !peiMaintenanceScheduleDate) {
+      setPeiMaintenancePanelMessage('Escolha uma data para agendar esta sondagem.');
+      return;
+    }
+    if (peiMaintenanceScheduleMode === 'EXISTING_APPOINTMENT' && !getPersistedUuid(selectedPeiMaintenanceAppointmentId)) {
+      setPeiMaintenancePanelMessage('Escolha uma sessão antes de salvar a sondagem.');
+      return;
+    }
+    const selectedAppointment = peiMaintenanceAppointmentsState.items.find((appointment: any) => getPersistedUuid(appointment?.id) === getPersistedUuid(selectedPeiMaintenanceAppointmentId));
+    const scheduleMode = peiMaintenanceScheduleMode === 'EXISTING_APPOINTMENT' ? 'CUSTOM_DATE' : peiMaintenanceScheduleMode;
+    const dueDate = peiMaintenanceScheduleMode === 'CUSTOM_DATE'
+      ? new Date(`${peiMaintenanceScheduleDate}T12:00:00`).toISOString()
+      : selectedAppointment?.scheduled_at || selectedAppointment?.scheduledAt || undefined;
+    const payload = {
+      patient_id: patient?.id,
+      patientId: patient?.id,
+      scheduleMode,
+      dueDate,
+      appointmentId: peiMaintenanceScheduleMode === 'EXISTING_APPOINTMENT' ? getPersistedUuid(selectedPeiMaintenanceAppointmentId) : undefined,
+      appointment_id: peiMaintenanceScheduleMode === 'EXISTING_APPOINTMENT' ? getPersistedUuid(selectedPeiMaintenanceAppointmentId) : undefined,
+      intervals: [7, 14, 30, 60],
+      target_name: row?.targetName
+    };
     void runPeiMaintenanceAction(
-      `create-${row.key}`,
-      () => dataService.createMaintenanceScheduleForTarget(targetId, {
-        patient_id: patient?.id,
-        patientId: patient?.id,
-        scheduleMode: 'DEFAULT_SEQUENCE',
-        intervals: [7, 14, 30, 60],
-        target_name: row?.targetName
-      }),
-      'Plano de manutencao criado.'
-    );
+      `schedule-${row?.key || targetId}`,
+      () => scheduleMode === 'NEXT_PATIENT_SESSION'
+        ? dataService.scheduleMaintenanceForNextSession(targetId, payload)
+        : dataService.createMaintenanceScheduleForTarget(targetId, payload),
+      scheduleMode === 'NEXT_PATIENT_SESSION'
+        ? 'Sondagem aguardando próxima sessão.'
+        : 'Sondagem de manutenção agendada.'
+    ).then((ok) => {
+      if (ok) {
+        setPeiMaintenanceScheduleRow(null);
+        setSelectedPeiMaintenanceAppointmentId('');
+        setPeiMaintenanceScheduleDate('');
+      }
+    });
   };
 
   const handlePeiScheduleNextSession = (row: any) => {
@@ -4995,7 +5050,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     }
     void runPeiMaintenanceAction(
       `assign-${scheduleId}`,
-      () => dataService.confirmMaintenanceScheduleLink(scheduleId, { appointmentId, appointment_id: appointmentId }),
+      () => dataService.assignMaintenanceScheduleToAppointment(scheduleId, { appointmentId, appointment_id: appointmentId }),
       'Sondagem atribuída à sessão.'
     ).then((ok) => {
       if (ok) {
@@ -5007,7 +5062,21 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
   const handlePeiWaitNextSessionFromModal = () => {
     const scheduleId = getPeiMaintenanceScheduleId(peiMaintenanceAssignSchedule);
-    if (scheduleId) {
+    const targetId = getPersistedUuid(peiMaintenanceAssignSchedule?.target_id || peiMaintenanceAssignSchedule?.targetId);
+    if (targetId) {
+      void runPeiMaintenanceAction(
+        `wait-${scheduleId || targetId}`,
+        () => dataService.scheduleMaintenanceForNextSession(targetId, {
+          patient_id: patient?.id,
+          patientId: patient?.id,
+          scheduleMode: 'NEXT_PATIENT_SESSION',
+          target_name: peiMaintenanceAssignSchedule?.targetName || peiMaintenanceAssignSchedule?.target_name
+        }),
+        'Sondagem aguardando próxima sessão.'
+      ).then((ok) => {
+        if (ok) setPeiMaintenanceAssignSchedule(null);
+      });
+    } else if (scheduleId) {
       void runPeiMaintenanceAction(
         `wait-${scheduleId}`,
         () => dataService.skipMaintenanceScheduleLink(scheduleId, {}),
@@ -5021,6 +5090,46 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     }
   };
 
+  const openPeiMaintenanceReviewModal = (row: any) => {
+    setPeiMaintenanceReviewRow(row);
+    setPeiMaintenanceReviewTargetId(getPeiMaintenanceTargetId(row));
+    setPeiMaintenancePanelMessage('');
+  };
+
+  const handlePeiReviewTargetSave = () => {
+    const row = peiMaintenanceReviewRow;
+    const schedule = row?.nextSchedule || row?.schedules?.find?.((item: any) => getPeiMaintenanceScheduleId(item)) || null;
+    const scheduleId = getPeiMaintenanceScheduleId(schedule);
+    const targetId = getPersistedUuid(peiMaintenanceReviewTargetId);
+    if (!scheduleId) {
+      setPeiMaintenancePanelMessage('Esta sondagem precisa ser vinculada a uma habilidade real antes de ser agendada.');
+      return;
+    }
+    if (!targetId) {
+      setPeiMaintenancePanelMessage('Escolha uma habilidade real do PEI antes de salvar o vínculo.');
+      return;
+    }
+    void runPeiMaintenanceAction(
+      `review-${row?.key || scheduleId}`,
+      () => dataService.relinkMaintenanceScheduleTarget(scheduleId, { targetId, target_id: targetId }),
+      'Vínculo da habilidade atualizado.'
+    ).then((ok) => {
+      if (ok) {
+        setPeiMaintenanceReviewRow(null);
+        setPeiMaintenanceReviewTargetId('');
+      }
+    });
+  };
+
+  const getPeiMaintenanceTargetOptions = () =>
+    (Array.isArray(patient?.pei) ? patient.pei : [])
+      .map((goal: any) => {
+        const id = getPersistedUuid(goal?.id || goal?.target_id || goal?.targetId);
+        const label = safeDisplayValue(goal?.name || goal?.target_name || goal?.targetName || goal?.title, 'Habilidade sem nome');
+        return id ? { id, label } : null;
+      })
+      .filter(Boolean) as Array<{ id: string; label: string }>;
+
   const renderPeiMaintenanceMetric = (label: string, value: number) => (
     <div className={`rounded-2xl border p-4 ${isPanelDark ? 'bg-slate-900/50 border-slate-700' : 'bg-white border-slate-100'}`}>
       <p className={`text-xs font-medium ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>{label}</p>
@@ -5030,57 +5139,66 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
   const renderPeiMaintenanceActions = (row: any) => {
     if (!canManagePeiMaintenance) return null;
-    const loading = peiMaintenanceActionKey.endsWith(String(row.key));
     const noSchedule = row?.nextProbe?.status === 'NO_SCHEDULE';
     const group = row?.group as PeiMaintenanceGroupKey;
     const targetId = getPeiMaintenanceTargetId(row);
     const scheduleId = getPeiMaintenanceScheduleId(row?.nextSchedule);
     const hasRealTarget = Boolean(targetId);
     const hasRealSchedule = Boolean(scheduleId);
-    const needsReview = !hasRealTarget || (!noSchedule && group !== 'completed' && !hasRealSchedule);
+    const hasMissingTargetLabel = /habilidade\s+(nao|não)\s+(vinculada|encontrada)|habilidade\s+sem\s+nome/i.test(String(row?.targetName || ''));
+    const needsReview = !hasRealTarget || hasMissingTargetLabel || (!noSchedule && group !== 'completed' && !hasRealSchedule);
+    const actionLoading = (actionName: string) =>
+      peiMaintenanceActionKey === `${actionName}-${row.key}` ||
+      (scheduleId && peiMaintenanceActionKey === `${actionName}-${scheduleId}`) ||
+      Boolean(peiMaintenanceActionKey && peiMaintenanceActionKey.endsWith(String(row.key)));
     const buttonClass = `min-h-[40px] rounded-xl px-3 py-2 text-xs font-semibold transition-all disabled:opacity-60 ${isPanelDark ? 'bg-slate-800 text-slate-100 hover:bg-slate-700' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`;
     const primaryClass = 'min-h-[40px] rounded-xl bg-[#7a32fc] px-3 py-2 text-xs font-semibold text-white transition-all hover:opacity-90 disabled:opacity-60';
 
     return (
       <div className="mt-4 flex flex-wrap gap-2">
         {needsReview && (
-          <span className={`inline-flex min-h-[40px] items-center rounded-xl px-3 py-2 text-xs font-semibold ${isPanelDark ? 'bg-amber-500/10 text-amber-100' : 'bg-amber-50 text-amber-700'}`}>
+          <button type="button" onClick={() => openPeiMaintenanceReviewModal(row)} className={`inline-flex min-h-[40px] items-center rounded-xl px-3 py-2 text-xs font-semibold ${isPanelDark ? 'bg-amber-500/10 text-amber-100 hover:bg-amber-500/20' : 'bg-amber-50 text-amber-700 hover:bg-amber-100'}`}>
             Revisar vínculo
-          </span>
+          </button>
         )}
         {noSchedule && (
-          <button type="button" disabled={loading || !hasRealTarget} onClick={() => handlePeiCreateMaintenancePlan(row)} className={primaryClass}>
-            Agendar manutencao
+          <button type="button" disabled={actionLoading('schedule') || !hasRealTarget} title={!hasRealTarget ? 'Revise o vínculo antes de agendar.' : undefined} onClick={() => handlePeiCreateMaintenancePlan(row)} className={primaryClass}>
+            {actionLoading('schedule') ? 'Agendando...' : 'Agendar manutencao'}
           </button>
         )}
         {(noSchedule || group === 'overdue' || group === 'unlinked') && (
-          <button type="button" disabled={loading || !hasRealTarget} onClick={() => handlePeiScheduleNextSession(row)} className={buttonClass}>
-            Aguardar proxima sessao
+          <button type="button" disabled={actionLoading('next') || !hasRealTarget} title={!hasRealTarget ? 'Revise o vínculo antes de aguardar próxima sessão.' : undefined} onClick={() => handlePeiScheduleNextSession(row)} className={buttonClass}>
+            {actionLoading('next') ? 'Atualizando...' : 'Aguardar proxima sessao'}
           </button>
         )}
         {group === 'confirmation' && (
           <>
-            <button type="button" disabled={loading || !hasRealSchedule} onClick={() => handlePeiConfirmCandidateLink(row)} className={primaryClass}>
-              Confirmar vinculo
+            <button type="button" disabled={actionLoading('confirm') || !hasRealSchedule} title={!hasRealSchedule ? 'Revise o vínculo antes de confirmar.' : undefined} onClick={() => handlePeiConfirmCandidateLink(row)} className={primaryClass}>
+              {actionLoading('confirm') ? 'Confirmando...' : 'Confirmar vinculo'}
             </button>
-            <button type="button" disabled={loading || !hasRealSchedule} onClick={() => handlePeiSkipCandidateLink(row)} className={buttonClass}>
-              Fazer depois
+            <button type="button" disabled={actionLoading('skip') || !hasRealSchedule} title={!hasRealSchedule ? 'Revise o vínculo antes de fazer depois.' : undefined} onClick={() => handlePeiSkipCandidateLink(row)} className={buttonClass}>
+              {actionLoading('skip') ? 'Atualizando...' : 'Fazer depois'}
             </button>
           </>
         )}
         {group !== 'completed' && !noSchedule && (
-          <button type="button" disabled={loading || !hasRealSchedule} onClick={() => openPeiMaintenanceAssignModal(row)} className={buttonClass}>
+          <button type="button" disabled={actionLoading('assign') || !hasRealSchedule} title={!hasRealSchedule ? 'Revise o vínculo antes de atribuir.' : undefined} onClick={() => openPeiMaintenanceAssignModal(row)} className={buttonClass}>
             Atribuir a uma sessao
           </button>
         )}
-        {group === 'today' && (
-          <button type="button" onClick={() => requestSessionStart('fullscreen')} className={primaryClass}>
-            Usar na sessao
+        {group === 'today' && activeSession && (
+          <button type="button" onClick={() => setIsSessionModeOpen(true)} className={primaryClass}>
+            Abrir sessao ativa
           </button>
         )}
+        {group === 'today' && !activeSession && (
+          <span className={`inline-flex min-h-[40px] items-center rounded-xl px-3 py-2 text-xs font-semibold ${isPanelDark ? 'bg-slate-900 text-slate-300' : 'bg-slate-50 text-slate-600'}`}>
+            Inicie a sessão para usar esta Maintenance Probe.
+          </span>
+        )}
         {group === 'overdue' && (
-          <button type="button" disabled={loading || !hasRealTarget} onClick={() => handlePeiScheduleNextSession(row)} className={primaryClass}>
-            Usar na proxima sessao
+          <button type="button" disabled={actionLoading('next') || !hasRealTarget} onClick={() => handlePeiScheduleNextSession(row)} className={primaryClass}>
+            {actionLoading('next') ? 'Atualizando...' : 'Usar na proxima sessao'}
           </button>
         )}
       </div>
@@ -5438,6 +5556,182 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         </div>,
         document.body
       )}
+      {peiMaintenanceScheduleRow && createPortal(
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm animate-fade-in">
+          <div className={`w-full max-w-2xl rounded-[28px] border p-5 shadow-2xl ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-100'}`}>
+            <div className="mb-4 flex items-start justify-between gap-4">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-amber-600">Agendar sondagem de manutencao</p>
+                <h3 className={`mt-1 text-lg font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>
+                  {peiMaintenanceScheduleRow?.targetName || 'Habilidade em manutencao'}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPeiMaintenanceScheduleRow(null)}
+                className={`rounded-xl p-2 ${isPanelDark ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-400 hover:bg-slate-100'}`}
+                title="Fechar"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {[
+                ['NEXT_PATIENT_SESSION', 'Proxima sessao'],
+                ['EXISTING_APPOINTMENT', 'Escolher sessao'],
+                ['CUSTOM_DATE', 'Escolher data'],
+                ['DEFAULT_SEQUENCE', 'Plano 7/14/30/60']
+              ].map(([mode, label]) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => {
+                    setPeiMaintenanceScheduleMode(mode);
+                    if (mode !== 'CUSTOM_DATE') setPeiMaintenanceScheduleDate('');
+                    if (mode !== 'EXISTING_APPOINTMENT') setSelectedPeiMaintenanceAppointmentId('');
+                  }}
+                  className={`min-h-[44px] rounded-xl border px-3 py-2 text-left text-sm font-semibold transition-all ${
+                    peiMaintenanceScheduleMode === mode
+                      ? 'border-[#7a32fc] bg-[#7a32fc]/10 text-[#7a32fc]'
+                      : isPanelDark
+                        ? 'border-slate-700 bg-slate-900/50 text-slate-200 hover:bg-slate-800'
+                        : 'border-slate-100 bg-slate-50 text-slate-700 hover:bg-white'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            {peiMaintenanceScheduleMode === 'CUSTOM_DATE' && (
+              <label className={`mt-4 block text-sm font-semibold ${isPanelDark ? 'text-slate-200' : 'text-slate-700'}`}>
+                Data da sondagem
+                <input
+                  type="date"
+                  value={peiMaintenanceScheduleDate}
+                  onChange={(event) => setPeiMaintenanceScheduleDate(event.target.value)}
+                  className={`mt-2 w-full rounded-xl border px-3 py-3 text-sm outline-none ${isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-100 bg-slate-50 text-slate-700'}`}
+                />
+              </label>
+            )}
+            {peiMaintenanceScheduleMode === 'EXISTING_APPOINTMENT' && (
+              <div className="mt-4">
+                {peiMaintenanceAppointmentsState.loading ? (
+                  <p className={`rounded-2xl border p-4 text-sm ${isPanelDark ? 'border-slate-700 bg-slate-900/40 text-slate-300' : 'border-slate-100 bg-slate-50 text-slate-500'}`}>Carregando próximas sessões...</p>
+                ) : peiMaintenanceAppointmentsState.items.length > 0 ? (
+                  <div className="max-h-[34vh] space-y-2 overflow-y-auto pr-1">
+                    {peiMaintenanceAppointmentsState.items.map((appointment: any) => {
+                      const appointmentId = getPersistedUuid(appointment?.id);
+                      const selected = selectedPeiMaintenanceAppointmentId === appointmentId;
+                      return (
+                        <button
+                          key={appointmentId || formatPeiMaintenanceAppointmentLabel(appointment)}
+                          type="button"
+                          disabled={!appointmentId}
+                          onClick={() => setSelectedPeiMaintenanceAppointmentId(appointmentId)}
+                          className={`w-full rounded-2xl border p-4 text-left transition-all ${
+                            selected
+                              ? 'border-[#7a32fc] bg-[#7a32fc]/10 text-[#7a32fc]'
+                              : isPanelDark
+                                ? 'border-slate-700 bg-slate-900/50 text-slate-200 hover:bg-slate-800'
+                                : 'border-slate-100 bg-slate-50 text-slate-700 hover:bg-white'
+                          } disabled:opacity-60`}
+                        >
+                          <p className="text-sm font-semibold">{formatPeiMaintenanceAppointmentLabel(appointment)}</p>
+                          <p className="mt-1 text-xs opacity-80">{safeDisplayValue(appointment?.status, 'Agendada')}</p>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className={`rounded-2xl border p-4 text-sm ${isPanelDark ? 'border-amber-400/20 bg-amber-500/10 text-amber-100' : 'border-amber-100 bg-amber-50 text-amber-800'}`}>
+                    Este paciente ainda não possui próximas consultas.
+                  </div>
+                )}
+              </div>
+            )}
+            {peiMaintenanceAppointmentsState.error && peiMaintenanceScheduleMode === 'EXISTING_APPOINTMENT' && (
+              <p className="mt-3 text-sm font-semibold text-amber-700">{peiMaintenanceAppointmentsState.error}</p>
+            )}
+            <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={() => setPeiMaintenanceScheduleRow(null)}
+                className={`min-h-[44px] rounded-xl px-4 py-2 text-sm font-semibold ${isPanelDark ? 'bg-slate-800 text-slate-100 hover:bg-slate-700' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handlePeiScheduleModalSave}
+                disabled={Boolean(peiMaintenanceActionKey)}
+                className="min-h-[44px] rounded-xl bg-[#7a32fc] px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-violet-500/20 transition-all hover:opacity-90 disabled:opacity-60"
+              >
+                {peiMaintenanceActionKey ? 'Salvando...' : 'Salvar agendamento'}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+      {peiMaintenanceReviewRow && createPortal(
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm animate-fade-in">
+          <div className={`w-full max-w-lg rounded-[28px] border p-5 shadow-2xl ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-100'}`}>
+            <div className="mb-4 flex items-start justify-between gap-4">
+              <div>
+                <h3 className={`text-lg font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>Revisar vínculo</h3>
+                <p className={`mt-1 text-sm ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>
+                  Esta sondagem precisa ser vinculada a uma habilidade real antes de ser agendada.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPeiMaintenanceReviewRow(null)}
+                className={`rounded-xl p-2 ${isPanelDark ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-400 hover:bg-slate-100'}`}
+                title="Fechar"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            {getPeiMaintenanceTargetOptions().length > 0 ? (
+              <label className={`block text-sm font-semibold ${isPanelDark ? 'text-slate-200' : 'text-slate-700'}`}>
+                Habilidade do PEI
+                <select
+                  value={peiMaintenanceReviewTargetId}
+                  onChange={(event) => setPeiMaintenanceReviewTargetId(event.target.value)}
+                  className={`mt-2 w-full rounded-xl border px-3 py-3 text-sm outline-none ${isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-100 bg-slate-50 text-slate-700'}`}
+                >
+                  <option value="">Selecione uma habilidade</option>
+                  {getPeiMaintenanceTargetOptions().map((option) => (
+                    <option key={option.id} value={option.id}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+            ) : (
+              <div className={`rounded-2xl border p-4 text-sm ${isPanelDark ? 'border-amber-400/20 bg-amber-500/10 text-amber-100' : 'border-amber-100 bg-amber-50 text-amber-800'}`}>
+                Ainda não há habilidade real do PEI disponível para selecionar.
+              </div>
+            )}
+            <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={() => setPeiMaintenanceReviewRow(null)}
+                className={`min-h-[44px] rounded-xl px-4 py-2 text-sm font-semibold ${isPanelDark ? 'bg-slate-800 text-slate-100 hover:bg-slate-700' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}
+              >
+                Fazer depois
+              </button>
+              <button
+                type="button"
+                onClick={handlePeiReviewTargetSave}
+                disabled={!peiMaintenanceReviewTargetId || Boolean(peiMaintenanceActionKey)}
+                className="min-h-[44px] rounded-xl bg-[#7a32fc] px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-violet-500/20 transition-all hover:opacity-90 disabled:opacity-60"
+              >
+                {peiMaintenanceActionKey ? 'Salvando...' : 'Salvar vínculo'}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
       {peiMaintenanceAssignSchedule && createPortal(
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm animate-fade-in">
           <div className={`w-full max-w-2xl rounded-[28px] border p-5 shadow-2xl ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-100'}`}>
@@ -5507,7 +5801,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 disabled={!selectedPeiMaintenanceAppointmentId || Boolean(peiMaintenanceActionKey)}
                 className="min-h-[44px] rounded-xl bg-[#7a32fc] px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-violet-500/20 transition-all hover:opacity-90 disabled:opacity-60"
               >
-                Vincular sessão
+                {peiMaintenanceActionKey ? 'Vinculando...' : 'Vincular a esta sessão'}
               </button>
             </div>
           </div>
