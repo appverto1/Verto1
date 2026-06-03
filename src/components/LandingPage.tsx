@@ -59,9 +59,9 @@ const heroStories = [
 const centralAbaShowcase = [
   {
     src: '/lp-central-aba-collection.webp',
-    width: 2131,
-    height: 587,
-    alt: 'Tela da Verto mostrando um target ABA em manutencao com botoes de coleta de tentativa.'
+    width: 1142,
+    height: 576,
+    alt: 'Tela da Verto mostrando um target ABA em manutencao com coleta de tentativa e criterio de maestria.'
   },
   {
     src: '/lp-central-aba-maintenance.webp',
