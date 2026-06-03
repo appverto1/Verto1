@@ -39,12 +39,16 @@ test('plano 7 14 30 60 deixa marco sem sessao como PENDING_LINK', () => {
 test('backend registra proxima sessao pendente e confirmacao candidata', () => {
   assert.match(serverCode, /NEXT_SESSION_WITHOUT_APPOINTMENT/);
   assert.match(serverCode, /status:\s*'PENDING_NEXT_SESSION'/);
+  assert.match(serverCode, /appointments,clinic_state/);
+  assert.match(serverCode, /source:\s*'clinic_state'/);
   assert.match(serverCode, /flagPendingMaintenanceProbesForAppointment/);
   assert.match(serverCode, /status:\s*'PENDING_CONFIRMATION'/);
   assert.match(serverCode, /confirm-link/);
   assert.match(serverCode, /skip-link/);
   assert.match(serverCode, /MAINTENANCE_PROBE_LINK_CONFIRMED/);
   assert.match(serverCode, /MAINTENANCE_PROBE_LINK_SKIPPED/);
+  assert.match(serverCode, /saveMaintenanceScheduleRowWithLegacyFallback/);
+  assert.match(serverCode, /legacyScheduleFallback/);
   assert.doesNotMatch(serverCode, /select\('\*'\)/);
 });
 

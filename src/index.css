@@ -7,15 +7,6 @@
 }
 
 @layer utilities {
-  .font-bold {
-    font-weight: 500 !important;
-  }
-
-  .font-extrabold,
-  .font-black {
-    font-weight: 600 !important;
-  }
-
   .scrollbar-hide::-webkit-scrollbar {
     display: none;
   }
@@ -38,6 +29,24 @@
     text-rendering: geometricPrecision;
   }
 
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+}
+
+@media (max-width: 640px) {
+  .font-bold {
+    font-weight: 500 !important;
+  }
+
+  .font-extrabold,
+  .font-black {
+    font-weight: 600 !important;
+  }
+
   h1,
   h2,
   h3,
@@ -48,15 +57,6 @@
     letter-spacing: 0;
   }
 
-  button,
-  input,
-  select,
-  textarea {
-    font: inherit;
-  }
-}
-
-@media (max-width: 640px) {
   .shadow-lg,
   .shadow-xl,
   .shadow-2xl {

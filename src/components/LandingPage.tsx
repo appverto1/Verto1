@@ -37,66 +37,18 @@ import { formatProfessionalRegistry } from '../utils/professionalRegistry';
 
 const heroStories = [
   {
-    src: '/verto-mobile-session-attempt.webp',
-    alt: 'Tela mobile da Verto mostrando uma sessão ABA em andamento com registro de tentativa, prompt e botões de resposta.'
+    src: '/lp-hero-pei.png',
+    width: 1686,
+    height: 776,
+    alt: 'Tela da Verto mostrando o PEI com metas ativas e progresso por objetivo.'
   },
   {
-    src: '/verto-mobile-interval-collection.webp',
-    alt: 'Tela mobile da Verto mostrando coleta por intervalo em tempo real durante uma sessão clínica.'
+    src: '/lp-hero-agenda.png',
+    width: 1797,
+    height: 906,
+    alt: 'Tela da Verto mostrando a agenda operacional mensal com sessoes e filtros clinicos.'
   }
 ];
-
-const abaScreens = {
-  sessionAttempt: {
-    src: '/verto-mobile-session-attempt.webp',
-    alt: 'Tela mobile da Verto com registro de tentativa durante uma sessão ABA.'
-  },
-  intervalCollection: {
-    src: '/verto-mobile-interval-collection.webp',
-    alt: 'Tela mobile da Verto com coleta por intervalo em andamento.'
-  },
-  intervalSummary: {
-    src: '/verto-mobile-interval-summary.webp',
-    alt: 'Tela mobile da Verto com resumo de coleta por intervalo.'
-  },
-  maintenance: {
-    src: '/verto-mobile-maintenance.webp',
-    alt: 'Tela mobile da Verto com targets em manutenção, probes e risco de regressão.'
-  },
-  clinicalDock: {
-    src: '/verto-mobile-clinical-dock.webp',
-    alt: 'Tela mobile da Verto com dock clínico, modo crise e registro ABC rápido.'
-  }
-};
-
-const MobileScreenMockup = ({
-  src,
-  alt,
-  label,
-  caption,
-  className = ''
-}: {
-  src: string;
-  alt: string;
-  label?: string;
-  caption?: string;
-  className?: string;
-}) => (
-  <div className={`relative mx-auto w-full max-w-[330px] ${className}`}>
-    <div className="absolute -inset-4 rounded-[44px] bg-gradient-to-br from-[#7a32fc]/18 via-sky-400/10 to-emerald-300/18 blur-2xl" />
-    <div className="relative overflow-hidden rounded-[42px] border border-white/80 bg-white p-2 shadow-2xl shadow-purple-500/15 ring-1 ring-slate-900/5">
-      <div className="overflow-hidden rounded-[34px] bg-slate-950">
-        <img src={src} alt={alt} className="h-full w-full object-contain" loading="lazy" />
-      </div>
-    </div>
-    {(label || caption) && (
-      <div className="relative mx-auto -mt-5 max-w-[88%] rounded-3xl bg-white px-5 py-4 text-center shadow-xl shadow-slate-900/10 ring-1 ring-slate-100">
-        {label && <p className="text-[10px] font-semibold uppercase tracking-widest text-[#7a32fc]">{label}</p>}
-        {caption && <p className="mt-1 text-sm font-normal leading-6 text-slate-600">{caption}</p>}
-      </div>
-    )}
-  </div>
-);
 
 export const LandingPage = ({ onLogin, setUser }: any) => {
   const registerPasswordInputRef = React.useRef<HTMLInputElement | null>(null);
@@ -137,6 +89,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
   const [recoveryMessage, setRecoveryMessage] = useState('');
   const [recoveryError, setRecoveryError] = useState('');
   const [activeHeroStory, setActiveHeroStory] = useState(0);
+  const activeHeroStoryData = heroStories[activeHeroStory] || heroStories[0];
 
   const parseApiResponse = async (response: Response) => {
     const text = await response.text();
@@ -934,9 +887,8 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
               </div>
             </div>
 
-            <div className="relative flex min-h-[520px] flex-col items-center justify-center overflow-hidden bg-gradient-to-br from-[#eef6ff] via-white to-[#f4efff] px-6 py-8 lg:min-h-full lg:px-8">
-              <div className="absolute inset-0 bg-[radial-gradient(circle_at_18%_18%,rgba(122,50,252,0.12),transparent_32%),radial-gradient(circle_at_88%_22%,rgba(5,205,153,0.14),transparent_30%)]" />
-              <div className="relative w-full max-w-[360px]">
+            <div className="relative flex min-h-[420px] flex-col items-center justify-center overflow-hidden bg-white px-3 py-6 sm:px-5 lg:min-h-full lg:px-6">
+              <div className="relative w-full max-w-[980px]">
                 <div className="mb-4 flex gap-2 px-1">
                   {heroStories.map((story, index) => (
                     <button
@@ -954,7 +906,10 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                     </button>
                   ))}
                 </div>
-                <div className="relative aspect-[9/16] overflow-hidden rounded-[38px] border border-white/80 bg-white shadow-2xl shadow-purple-500/15">
+                <div
+                  className="relative overflow-hidden rounded-[18px] border border-slate-200 bg-white shadow-xl shadow-slate-900/10 transition-all duration-700 sm:rounded-[24px]"
+                  style={{ aspectRatio: `${activeHeroStoryData.width} / ${activeHeroStoryData.height}` }}
+                >
                   {heroStories.map((story, index) => (
                     <img
                       key={story.src}
@@ -1065,12 +1020,16 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
               </p>
             </div>
 
-            <div className="relative rounded-[40px] bg-gradient-to-br from-[#f7f5ff] via-white to-sky-50 px-6 py-8 ring-1 ring-purple-100 md:px-8">
-              <MobileScreenMockup
-                {...abaScreens.intervalCollection}
-                label="Coleta em tempo real"
-                caption="Intervalos, respostas e eventos ficam registrados durante a sessão, sem planilhas paralelas."
-              />
+            <div className="rounded-[28px] border border-purple-100 bg-white p-6 shadow-sm md:p-8">
+              <p className="text-sm font-semibold uppercase tracking-widest text-[#7a32fc]">Coleta em tempo real</p>
+              <div className="mt-6 grid gap-3">
+                {['Tentativas e prompts', 'Intervalos e duracao', 'ABC e eventos', 'Resumo para supervisao'].map((item) => (
+                  <div key={item} className="flex items-center justify-between rounded-2xl bg-[#f7f5ff] px-4 py-3">
+                    <span className="text-sm font-normal text-slate-700">{item}</span>
+                    <Check size={16} className="text-[#7a32fc]" />
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
 
@@ -1103,12 +1062,19 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
               </p>
             </div>
 
-            <MobileScreenMockup
-              {...abaScreens.intervalSummary}
-              label="Resumo automático"
-              caption="Cada coleta vira leitura para supervisão, histórico e tomada de decisão."
-              className="max-w-[300px]"
-            />
+            <div className="rounded-[28px] bg-white/10 p-6 ring-1 ring-white/10">
+              <p className="text-sm font-semibold uppercase tracking-widest text-emerald-200">Resumo automatico</p>
+              <p className="mt-4 text-base font-normal leading-7 text-slate-200">
+                Cada coleta vira leitura para supervisao, historico e tomada de decisao.
+              </p>
+              <div className="mt-6 grid gap-3">
+                {clinicalReadings.slice(0, 3).map((item) => (
+                  <div key={item} className="rounded-2xl bg-white/10 px-4 py-3 text-sm font-normal leading-6 text-white">
+                    {item}
+                  </div>
+                ))}
+              </div>
+            </div>
 
             <div>
               <p className="text-sm font-semibold uppercase tracking-widest text-slate-400">Exemplos de leitura clínica</p>
@@ -1139,13 +1105,11 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
           </div>
 
           <div className="rounded-[36px] border border-sky-100 bg-white p-7 shadow-sm md:p-9">
-            <MobileScreenMockup
-              {...abaScreens.maintenance}
-              label="Maestria e manutenção"
-              caption="Targets em manutenção, probes e sinais de regressão aparecem antes que a evolução se perca."
-              className="mb-9 max-w-[300px]"
-            />
-            <p className="text-sm font-semibold uppercase tracking-widest text-sky-700">O que fica conectado</p>
+            <p className="text-sm font-semibold uppercase tracking-widest text-sky-700">Maestria e manutencao</p>
+            <p className="mt-4 text-sm font-normal leading-7 text-slate-500">
+              Targets em manutencao, probes e sinais de regressao aparecem antes que a evolucao se perca.
+            </p>
+            <p className="mt-8 text-sm font-semibold uppercase tracking-widest text-sky-700">O que fica conectado</p>
             <div className="mt-6 grid gap-3 sm:grid-cols-2">
               {peiConnections.map((item) => (
                 <div key={item} className="flex items-start gap-3 rounded-2xl bg-sky-50/70 px-4 py-3">
@@ -1234,13 +1198,18 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
           </div>
 
           <div className="mt-12 grid gap-8 lg:grid-cols-[0.85fr_1.15fr] lg:items-center">
-            <div className="rounded-[40px] bg-slate-950 px-6 py-8 text-white shadow-sm">
-              <MobileScreenMockup
-                {...abaScreens.clinicalDock}
-                label="Dock clínico"
-                caption="Atalhos para crise, ABC rápido e registros prioritários sem sair da sessão."
-                className="max-w-[300px]"
-              />
+            <div className="rounded-[28px] bg-slate-950 p-7 text-white shadow-sm md:p-9">
+              <p className="text-sm font-semibold uppercase tracking-widest text-emerald-200">Dock clinico</p>
+              <p className="mt-4 text-base font-normal leading-7 text-slate-300">
+                Atalhos para crise, ABC rapido e registros prioritarios sem sair da sessao.
+              </p>
+              <div className="mt-6 grid gap-3">
+                {['Crise', 'ABC rapido', 'Registros prioritarios'].map((item) => (
+                  <div key={item} className="rounded-2xl bg-white/10 px-4 py-3 text-sm font-normal text-white ring-1 ring-white/10">
+                    {item}
+                  </div>
+                ))}
+              </div>
             </div>
 
             <div className="grid gap-5 md:grid-cols-2">
@@ -1667,7 +1636,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                         onClick={handleGoogleLogin}
                         className="w-full bg-white border border-gray-200 text-gray-700 py-3.5 rounded-2xl font-bold text-sm shadow-sm hover:bg-gray-50 transition-all active:scale-[0.98] flex items-center justify-center gap-3"
                       >
-                        <img src="https://www.gstatic.com/images/branding/product/1x/gsa_512dp.png" alt="Google" className="w-5 h-5" />
+                        <ExternalLink size={18} />
                         Entrar com Google
                       </button>
 
@@ -1919,7 +1888,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                         onClick={handleGoogleLogin}
                         className="w-full bg-white border border-gray-100 text-gray-600 py-2.5 md:py-3 rounded-2xl font-semibold text-[11px] md:text-xs shadow-sm hover:bg-gray-50 transition-all active:scale-[0.98] flex items-center justify-center gap-3"
                       >
-                        <img src="https://www.gstatic.com/images/branding/product/1x/gsa_512dp.png" alt="Google" className="w-4 h-4" />
+                        <ExternalLink size={16} />
                         Cadastrar com Google
                       </button>
                     </form>
@@ -2052,4 +2021,3 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
     </div>
   );
 };
-
