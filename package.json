@@ -47,6 +47,7 @@
     "test:payer-requirements": "tsx tests/payerRequirements.test.ts",
     "test:calendar-events": "tsx tests/calendarEvents.test.ts",
     "test:scheduling": "tsx tests/scheduling.test.ts",
+    "test:appointment-conflicts": "tsx tests/appointmentConflicts.test.ts",
     "test:monthly-conference": "tsx tests/monthlyConference.test.ts",
     "test:simplisaude-pilot-smoke": "tsx tests/simplisaudePilotSmoke.test.ts",
     "test:pilot-security": "tsx tests/pilotSecurity.test.ts",

@@ -13,9 +13,13 @@ import {
 } from './utils/offlineSyncResilience';
 import {
   addMinutesToTime,
+  appointmentBlocksConflict,
   appointmentTimesOverlap as scheduleTimesOverlap,
+  buildAppointmentDateTime,
   buildRecurrenceDateKeys,
+  calculateAppointmentEnd,
   getAppointmentDurationMinutes,
+  normalizeAppointmentTime,
   normalizeDurationMinutes,
   normalizeScheduleLocationType,
 } from './utils/scheduling';
@@ -1380,7 +1384,7 @@ export default function App() {
   const calculateEndTime = (startTime: string, approach: string, durationMinutes?: any) => {
     const configuredDuration = specialtySettings[approach] || 60;
     const duration = normalizeDurationMinutes(durationMinutes || configuredDuration, 60);
-    return addMinutesToTime(startTime, duration);
+    return addMinutesToTime(normalizeAppointmentTime(startTime) || '08:00', duration);
   };
 
   const appointmentTimesOverlap = (startA: string, endA: string, startB: string, endB: string) => {
@@ -3034,8 +3038,7 @@ export default function App() {
       if (!start || !end) return 0;
       return Math.round((end.getTime() - start.getTime()) / 86400000);
     };
-    const isCanceledAppointment = (appointment: any) =>
-      ['canceled', 'cancelled'].includes(String(appointment?.status || '').toLowerCase());
+    const isNonBlockingAppointment = (appointment: any) => !appointmentBlocksConflict(appointment);
     const isSameRecurrenceGroup = (appointment: any) =>
       recurrenceGroupId &&
       String(appointment?.recurrenceGroupId || appointment?.recurrence_group_id || '').trim() === recurrenceGroupId;
@@ -3052,7 +3055,7 @@ export default function App() {
           (appointment) =>
             isSameRecurrenceGroup(appointment) &&
             isFutureOccurrence(appointment) &&
-            (String(appointment?.id) === String(id) || !isCanceledAppointment(appointment)),
+            (String(appointment?.id) === String(id) || !isNonBlockingAppointment(appointment)),
         )
       : [currentAppointment];
     const targetIds = new Set(appointmentsToUpdate.map((appointment) => String(appointment.id)));
@@ -3153,7 +3156,7 @@ export default function App() {
 
       therapistAgenda.forEach((item) => {
         if (targetIds.has(String(item.id))) return false;
-        if (isCanceledAppointment(item)) return false;
+        if (isNonBlockingAppointment(item)) return false;
         if (item.date !== targetDate) return false;
         const itemEndTime = calculateEndTime(
           item.time,
@@ -3204,8 +3207,14 @@ export default function App() {
       const scheduleChanged =
         String(appointment.date || '') !== String(targetDate || '') ||
         String(appointment.time || '') !== String(targetTime || '');
-      const targetScheduledAt = new Date(`${targetDate}T${targetTime}:00`).toISOString();
-      const targetScheduledEndAt = new Date(new Date(targetScheduledAt).getTime() + targetDuration * 60 * 1000).toISOString();
+      const targetStartAt = buildAppointmentDateTime(targetDate, targetTime);
+      const targetEndAt = calculateAppointmentEnd(targetStartAt, targetDuration);
+      if (!targetStartAt || !targetEndAt) {
+        addConflict(conflicts, 'Informe data e horario validos para este atendimento.');
+        return;
+      }
+      const targetScheduledAt = targetStartAt.toISOString();
+      const targetScheduledEndAt = targetEndAt.toISOString();
       patchesById.set(String(appointment.id), {
         ...appointmentUpdates,
         date: targetDate,
@@ -3349,6 +3358,7 @@ export default function App() {
     if(data.scheduleImmediate) {
       const immediateDate = data.date || todayStr;
       const immediateTime = data.time || '08:00';
+      const immediateStartAt = buildAppointmentDateTime(immediateDate, immediateTime);
       setTherapistAgenda(prev => [...prev, {
         id: createAppointmentId(),
         patientId: newId,
@@ -3357,8 +3367,8 @@ export default function App() {
         name: data.name,
         date: immediateDate,
         time: immediateTime,
-        scheduledAt: new Date(`${immediateDate}T${immediateTime}:00`).toISOString(),
-        scheduled_at: new Date(`${immediateDate}T${immediateTime}:00`).toISOString(),
+        scheduledAt: immediateStartAt?.toISOString() || null,
+        scheduled_at: immediateStartAt?.toISOString() || null,
         status: 'pending',
         type: 'Primeira',
         color: 'bg-blue-100 text-blue-600'
@@ -3894,7 +3904,7 @@ export default function App() {
       const endTime = calculateEndTime(sess.time, sess.approach, durationMinutes);
 
       therapistAgenda.forEach((item) => {
-        if (item.date !== dateStr || ['canceled', 'cancelled'].includes(String(item.status || '').toLowerCase())) return;
+        if (item.date !== dateStr || !appointmentBlocksConflict(item)) return;
         const existingEndTime = calculateEndTime(
           item.time,
           item.type || item.approach || 'Consulta Padrão',
@@ -3931,8 +3941,15 @@ export default function App() {
 
       if (conflicts.length === 0) {
         const appointmentId = createAppointmentId();
-        const scheduledAt = new Date(`${dateStr}T${sess.time}:00`).toISOString();
-        const scheduledEndAt = new Date(new Date(scheduledAt).getTime() + durationMinutes * 60 * 1000).toISOString();
+        const startAt = buildAppointmentDateTime(dateStr, sess.time);
+        const endAt = calculateAppointmentEnd(startAt, durationMinutes);
+        if (!startAt || !endAt) {
+          const message = 'Informe data e horario validos para este atendimento.';
+          if (!conflicts.includes(message)) conflicts.push(message);
+          continue;
+        }
+        const scheduledAt = startAt.toISOString();
+        const scheduledEndAt = endAt.toISOString();
         newItems.push({
           id: appointmentId,
           patientId: pid,

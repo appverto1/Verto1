@@ -69,13 +69,18 @@ import {
   type AbaClinicalLinePoint
 } from './src/utils/abaClinicalCharts';
 import {
-  BLOCKING_APPOINTMENT_STATUSES,
+  BLOCKING_APPOINTMENT_STATUS_QUERY_VALUES,
   addMinutesToTime,
   appointmentTimesOverlap,
+  buildAppointmentDateTime,
   buildPatientTimeReport,
   buildProfessionalWorkReport,
+  calculateAppointmentEnd,
   checkLocalScheduleConflicts,
+  formatDateInAppointmentTimezone,
+  formatTimeInAppointmentTimezone,
   getAppointmentDurationMinutes,
+  normalizeAppointmentTime,
   normalizeDurationMinutes,
   normalizeScheduleLocationType
 } from './src/utils/scheduling';
@@ -5193,7 +5198,7 @@ function getAppointmentSeriesClockTime(appointment: any): string {
   if (!scheduledAt) return '';
   const parsed = new Date(scheduledAt);
   if (Number.isNaN(parsed.getTime())) return '';
-  return `${String(parsed.getHours()).padStart(2, '0')}:${String(parsed.getMinutes()).padStart(2, '0')}`;
+  return formatTimeInAppointmentTimezone(parsed);
 }
 
 function getAppointmentOccurrenceTime(appointment: any): number {
@@ -22898,9 +22903,8 @@ async function startServer() {
     }
     const dateKey = sanitizeDate(row?.date || source?.date);
     const rawTime = sanitizeString(row?.time || source?.time || '08:00', 12);
-    const time = /^\d{2}:\d{2}$/.test(rawTime) ? `${rawTime}:00` : rawTime;
-    const date = new Date(`${dateKey || new Date().toISOString().slice(0, 10)}T${time || '08:00:00'}`);
-    return Number.isNaN(date.getTime()) ? new Date() : date;
+    const date = buildAppointmentDateTime(dateKey || formatDateInAppointmentTimezone(new Date()), rawTime || '08:00');
+    return date || new Date();
   };
 
   const getCalendarAppointmentDuration = (row: any) => {
@@ -22923,9 +22927,9 @@ async function startServer() {
   const normalizeCalendarAppointmentRow = (row: any, counters: any = {}) => {
     const source = parseCalendarSourcePayload(row?.source_payload || row?.sourcePayload);
     const start = buildCalendarAppointmentStart(row);
-    const end = new Date(start.getTime() + getCalendarAppointmentDuration(row) * 60 * 1000);
+    const end = calculateAppointmentEnd(start, getCalendarAppointmentDuration(row)) || new Date(start.getTime());
     const sourceDate = sanitizeDate(row?.date || source?.date);
-    const sourceTime = sanitizeString(row?.time || source?.time, 10);
+    const sourceTime = normalizeAppointmentTime(row?.time || source?.time);
     const appointmentId = sanitizeString(row?.id || source?.id, 180);
     const patientId = sanitizeString(row?.patient_id || row?.patientId || source?.patient_id || source?.patientId, 120);
     const status = normalizeAppointmentStatusForUi(row?.status || source?.status || 'pending');
@@ -22990,9 +22994,9 @@ async function startServer() {
       therapist_name: sanitizeString(row?.therapist_name || row?.therapistName || source?.therapistName || source?.professional || source?.therapist_name, 180) || 'Equipe',
       start_time: start.toISOString(),
       end_time: end.toISOString(),
-      date: sourceDate || start.toISOString().slice(0, 10),
-      time: /^\d{2}:\d{2}$/.test(sourceTime) ? sourceTime : `${String(start.getHours()).padStart(2, '0')}:${String(start.getMinutes()).padStart(2, '0')}`,
-      endTime: `${String(end.getHours()).padStart(2, '0')}:${String(end.getMinutes()).padStart(2, '0')}`,
+      date: sourceDate || formatDateInAppointmentTimezone(start),
+      time: sourceTime || formatTimeInAppointmentTimezone(start),
+      endTime: formatTimeInAppointmentTimezone(end),
       scheduled_start: row?.scheduled_start_at || source?.scheduled_start_at || start.toISOString(),
       scheduled_end: row?.scheduled_end_at || source?.scheduled_end_at || end.toISOString(),
       scheduled_duration_minutes: getCalendarAppointmentDuration(row),
@@ -23099,23 +23103,22 @@ async function startServer() {
     const startDate = input?.start_time && String(input.start_time).includes('T')
       ? new Date(input.start_time)
       : null;
-    const dateFromIso = startDate && !Number.isNaN(startDate.getTime()) ? startDate.toISOString().slice(0, 10) : '';
+    const dateFromIso = startDate && !Number.isNaN(startDate.getTime()) ? formatDateInAppointmentTimezone(startDate) : '';
     const startTimeFromIso = startDate && !Number.isNaN(startDate.getTime())
-      ? `${String(startDate.getHours()).padStart(2, '0')}:${String(startDate.getMinutes()).padStart(2, '0')}`
+      ? formatTimeInAppointmentTimezone(startDate)
       : '';
     const date = baseDate || dateFromIso;
-    const startTime = sanitizeString(
+    const startTime = normalizeAppointmentTime(
       String(fromStart || '').includes('T')
         ? startTimeFromIso
         : fromStart || input?.time || '08:00',
-      10
-    ).slice(0, 5);
+    );
     const duration = Math.max(15, Math.min(720, Math.round(Number(input?.duration_minutes || input?.durationMinutes || 50) || 50)));
     const endFromIso = input?.end_time || input?.endTime;
     const endDate = endFromIso && String(endFromIso).includes('T') ? new Date(endFromIso) : null;
     const endTime = endDate && !Number.isNaN(endDate.getTime())
-      ? `${String(endDate.getHours()).padStart(2, '0')}:${String(endDate.getMinutes()).padStart(2, '0')}`
-      : sanitizeString(endFromIso || addMinutesToTime(startTime, duration), 10).slice(0, 5);
+      ? formatTimeInAppointmentTimezone(endDate)
+      : addMinutesToTime(startTime || '08:00', duration);
     const dates = (recurrenceDates.length > 0 ? recurrenceDates : [date])
       .map((value: any) => sanitizeDate(value))
       .filter(Boolean)
@@ -23185,11 +23188,11 @@ async function startServer() {
     const dates = params.input.recurrenceDates || [];
     const firstDate = dates[0] || params.input.date;
     const lastDate = dates[dates.length - 1] || firstDate;
-    const windowStart = new Date(`${firstDate}T00:00:00-03:00`);
-    const windowEnd = new Date(`${lastDate}T23:59:59-03:00`);
-    if (Number.isNaN(windowStart.getTime()) || Number.isNaN(windowEnd.getTime())) return [];
-    windowStart.setHours(windowStart.getHours() - 12);
-    windowEnd.setHours(windowEnd.getHours() + 12);
+    const windowStartBase = buildAppointmentDateTime(firstDate, '00:00');
+    const windowEndBase = buildAppointmentDateTime(lastDate, '23:59');
+    if (!windowStartBase || !windowEndBase) return [];
+    const windowStart = new Date(windowStartBase.getTime() - 12 * 60 * 60 * 1000);
+    const windowEnd = new Date(windowEndBase.getTime() + 12 * 60 * 60 * 1000);
 
     let query = supabase
       .from('appointments')
@@ -23197,7 +23200,7 @@ async function startServer() {
       .eq('clinic_id', params.clinicId)
       .gte('scheduled_at', windowStart.toISOString())
       .lte('scheduled_at', windowEnd.toISOString())
-      .in('status', [...BLOCKING_APPOINTMENT_STATUSES, 'pending'])
+      .in('status', BLOCKING_APPOINTMENT_STATUS_QUERY_VALUES)
       .order('scheduled_at', { ascending: true })
       .limit(500);
 
@@ -23237,7 +23240,7 @@ async function startServer() {
             .in('id', teamAppointmentIds)
             .gte('scheduled_at', windowStart.toISOString())
             .lte('scheduled_at', windowEnd.toISOString())
-            .in('status', [...BLOCKING_APPOINTMENT_STATUSES, 'pending'])
+            .in('status', BLOCKING_APPOINTMENT_STATUS_QUERY_VALUES)
             .limit(100);
           if (isUuid(params.organizationId)) teamAppointmentQuery = teamAppointmentQuery.eq('organization_id', params.organizationId);
           const teamAppointmentResult = await teamAppointmentQuery;
@@ -23439,7 +23442,7 @@ async function startServer() {
     const source = parseCalendarSourcePayload(row?.source_payload || row?.sourcePayload);
     const start = buildCalendarAppointmentStart(row);
     const scheduledDurationMinutes = getCalendarAppointmentDuration(row);
-    const end = new Date(start.getTime() + scheduledDurationMinutes * 60 * 1000);
+    const end = calculateAppointmentEnd(start, scheduledDurationMinutes) || new Date(start.getTime());
     const rawActualMinutes = Number(
       row?.actual_duration_minutes ||
       row?.actualDurationMinutes ||
@@ -23464,13 +23467,13 @@ async function startServer() {
     return {
       id: sanitizeString(row?.id, 120),
       patientName: sanitizeString(row?.patient_name || source?.patientName || source?.name, 180) || 'Paciente',
-      date: start.toISOString().slice(0, 10),
+      date: formatDateInAppointmentTimezone(start),
       scheduledAt: start.toISOString(),
       scheduledEnd: end.toISOString(),
       scheduledDurationMinutes,
       actualDurationMinutes,
-      time: `${String(start.getHours()).padStart(2, '0')}:${String(start.getMinutes()).padStart(2, '0')}`,
-      endTime: `${String(end.getHours()).padStart(2, '0')}:${String(end.getMinutes()).padStart(2, '0')}`,
+      time: formatTimeInAppointmentTimezone(start),
+      endTime: formatTimeInAppointmentTimezone(end),
       serviceType,
       professionalName: sanitizeString(row?.therapist_name || source?.therapistName || source?.professional, 180) || 'Equipe',
       locationType,
@@ -24130,8 +24133,8 @@ async function startServer() {
           room_id: appointment.room_id,
           room_name: appointment.room_name,
           location_type: appointment.location_type,
-          date: requestedStart.slice(0, 10),
-          start_time: `${String(startDate.getHours()).padStart(2, '0')}:${String(startDate.getMinutes()).padStart(2, '0')}`,
+          date: formatDateInAppointmentTimezone(startDate),
+          start_time: formatTimeInAppointmentTimezone(startDate),
           duration_minutes: durationMinutes,
           exclude_event_id: appointment.id
         }, req.session.user);
