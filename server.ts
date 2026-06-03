@@ -28071,7 +28071,63 @@ async function startServer() {
     return collectAppointmentProfessionalIds(appointment).includes(safeProfessionalId);
   };
 
-  const fetchClinicStateAppointmentForAbaSessionLink = async (appointmentId: string, clinicId: string, user: any) => {
+  const firstUuidValue = (...values: any[]) => {
+    for (const value of values) {
+      const safeValue = sanitizeString(value, 120);
+      if (isUuid(safeValue)) return safeValue;
+    }
+    return '';
+  };
+
+  const collectAbaSessionProfessionalScopeIds = (params: {
+    body?: any;
+    user?: any;
+    appointment?: any;
+  }) => {
+    const snapshot = parseStoredJsonObject(params.body?.appointment_snapshot || params.body?.appointmentSnapshot);
+    const source = parseStoredJsonObject(params.appointment?.source_payload || params.appointment?.sourcePayload);
+    const values: any[] = [
+      params.body?.professional_id,
+      params.body?.professionalId,
+      params.body?.therapist_id,
+      params.body?.therapistId,
+      snapshot?.professional_id,
+      snapshot?.professionalId,
+      snapshot?.therapist_id,
+      snapshot?.therapistId,
+      params.appointment?.professional_id,
+      params.appointment?.professionalId,
+      params.appointment?.therapist_id,
+      params.appointment?.therapistId,
+      source?.professional_id,
+      source?.professionalId,
+      source?.therapist_id,
+      source?.therapistId,
+      params.user?.id
+    ];
+    for (const key of ['professional_ids', 'professionalIds', 'team_professional_ids', 'teamProfessionalIds']) {
+      if (Array.isArray(snapshot?.[key])) values.push(...snapshot[key]);
+      if (Array.isArray(params.appointment?.[key])) values.push(...params.appointment[key]);
+      if (Array.isArray(source?.[key])) values.push(...source[key]);
+    }
+    return Array.from(new Set(values.map((value) => sanitizeString(value, 120)).filter(Boolean)));
+  };
+
+  const appointmentCanBeLinkedByUser = (appointment: any, user: any, professionalScopeIds: string[] = []) => {
+    if (sanitizeString(user?.role, 40).toLowerCase() !== 'therapist') return true;
+    const candidates = Array.from(new Set([
+      ...professionalScopeIds,
+      sanitizeString(user?.id, 120)
+    ].map((value) => sanitizeString(value, 120)).filter(Boolean)));
+    return candidates.some((professionalId) => appointmentBelongsToProfessional(appointment, professionalId));
+  };
+
+  const fetchClinicStateAppointmentForAbaSessionLink = async (
+    appointmentId: string,
+    clinicId: string,
+    user: any,
+    professionalScopeIds: string[] = []
+  ) => {
     const safeAppointmentId = sanitizeString(appointmentId, 120);
     const safeClinicId = sanitizeString(clinicId, 120);
     if (!isUuid(safeAppointmentId) || !isUuid(safeClinicId)) return null;
@@ -28088,10 +28144,7 @@ async function startServer() {
     const appointment = (Array.isArray(data?.appointments) ? data.appointments : [])
       .find((item: any) => sanitizeString(item?.id || item?.appointment_id || item?.appointmentId, 120) === safeAppointmentId);
     if (!appointment) return null;
-    if (
-      sanitizeString(user?.role, 40).toLowerCase() === 'therapist' &&
-      !appointmentBelongsToProfessional(appointment, sanitizeString(user?.id, 120))
-    ) {
+    if (!appointmentCanBeLinkedByUser(appointment, user, professionalScopeIds)) {
       return null;
     }
     return cleanObject({
@@ -28105,24 +28158,29 @@ async function startServer() {
     });
   };
 
-  const fetchAppointmentForAbaSessionLink = async (appointmentId: string, clinicId: string, user: any) => {
+  const fetchAppointmentForAbaSessionLink = async (
+    appointmentId: string,
+    clinicId: string,
+    user: any,
+    professionalScopeIds: string[] = []
+  ) => {
     const safeAppointmentId = sanitizeString(appointmentId, 120);
-    if (!isUuid(safeAppointmentId) || !isUuid(clinicId)) return null;
+    const safeClinicId = sanitizeString(clinicId, 120);
+    if (!isUuid(safeAppointmentId) || !isUuid(safeClinicId)) return null;
     let query = supabase
       .from('appointments')
       .select(CLOSURE_APPOINTMENT_SELECT)
       .eq('id', safeAppointmentId)
-      .or(`organization_id.eq.${clinicId},clinic_id.eq.${clinicId}`)
+      .or(`organization_id.eq.${safeClinicId},clinic_id.eq.${safeClinicId}`)
       .limit(1);
-    if (sanitizeString(user?.role, 40).toLowerCase() === 'therapist') {
-      query = query.eq('therapist_id', sanitizeString(user?.id, 120));
-    }
     const { data, error } = await query.maybeSingle();
     if (error) {
       if (hasMissingFinancialSchema(error) || extractMissingColumnName(error)) return null;
       throw error;
     }
-    return data || null;
+    if (!data) return null;
+    if (!appointmentCanBeLinkedByUser(data, user, professionalScopeIds)) return null;
+    return data;
   };
 
   const ensureServerAppointmentForAbaSessionLink = async (params: {
@@ -28130,14 +28188,21 @@ async function startServer() {
     clinicId: string;
     user: any;
     fallbackAppointment?: any;
+    professionalScopeIds?: string[];
   }) => {
-    const appointment = await fetchAppointmentForAbaSessionLink(params.appointmentId, params.clinicId, params.user);
+    const appointment = await fetchAppointmentForAbaSessionLink(
+      params.appointmentId,
+      params.clinicId,
+      params.user,
+      params.professionalScopeIds || []
+    );
     if (appointment?.id) return appointment;
 
     const stateAppointment = await fetchClinicStateAppointmentForAbaSessionLink(
       params.appointmentId,
       params.clinicId,
-      params.user
+      params.user,
+      params.professionalScopeIds || []
     );
     const appointmentForMirror = stateAppointment?.id ? stateAppointment : params.fallbackAppointment;
     if (!appointmentForMirror?.id) return null;
@@ -28148,7 +28213,12 @@ async function startServer() {
       user: params.user
     });
     if (!mirrorOk) return null;
-    return await fetchAppointmentForAbaSessionLink(params.appointmentId, params.clinicId, params.user);
+    return await fetchAppointmentForAbaSessionLink(
+      params.appointmentId,
+      params.clinicId,
+      params.user,
+      params.professionalScopeIds || []
+    );
   };
 
   const fetchInProgressAbaSessionForAppointment = async (params: {
@@ -28156,6 +28226,7 @@ async function startServer() {
     patientId: string;
     clinicId: string;
     user: any;
+    professionalIds?: string[];
   }) => {
     const appointmentId = sanitizeString(params.appointmentId, 120);
     const patientId = sanitizeString(params.patientId, 120);
@@ -28170,7 +28241,11 @@ async function startServer() {
       .limit(1);
     if (!hasGlobalClinicAccess(params.user) && params.clinicId) query = query.eq('clinic_id', params.clinicId);
     if (sanitizeString(params.user?.role, 40).toLowerCase() === 'therapist') {
-      query = query.eq('therapist_id', sanitizeString(params.user?.id, 120));
+      const professionalIds = Array.from(new Set((params.professionalIds || [])
+        .map((value) => sanitizeString(value, 120))
+        .filter((value) => isUuid(value))));
+      if (professionalIds.length > 0) query = query.in('therapist_id', professionalIds);
+      else query = query.eq('therapist_id', sanitizeString(params.user?.id, 120));
     }
     const { data, error } = await query.maybeSingle();
     if (error) {
@@ -28185,6 +28260,7 @@ async function startServer() {
     patientId: string;
     clinicId: string;
     user: any;
+    professionalIds?: string[];
   }) => {
     const appointmentId = sanitizeString(params.appointmentId, 120);
     const patientId = sanitizeString(params.patientId, 120);
@@ -28199,7 +28275,11 @@ async function startServer() {
       .limit(1);
     if (!hasGlobalClinicAccess(params.user) && params.clinicId) query = query.eq('clinic_id', params.clinicId);
     if (sanitizeString(params.user?.role, 40).toLowerCase() === 'therapist') {
-      query = query.eq('therapist_id', sanitizeString(params.user?.id, 120));
+      const professionalIds = Array.from(new Set((params.professionalIds || [])
+        .map((value) => sanitizeString(value, 120))
+        .filter((value) => isUuid(value))));
+      if (professionalIds.length > 0) query = query.in('therapist_id', professionalIds);
+      else query = query.eq('therapist_id', sanitizeString(params.user?.id, 120));
     }
     const { data, error } = await query.maybeSingle();
     if (error) {
@@ -30330,6 +30410,48 @@ async function startServer() {
     }
   });
 
+  const resolvePatientClinicIdForAbaSession = async (patientId: string) => {
+    const safePatientId = sanitizeString(patientId, 120);
+    if (!isUuid(safePatientId)) return '';
+    const { data, error } = await supabase
+      .from('patients')
+      .select('clinic_id')
+      .eq('id', safePatientId)
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      if (hasMissingFinancialSchema(error) || extractMissingColumnName(error)) return '';
+      throw error;
+    }
+    return firstUuidValue(data?.clinic_id);
+  };
+
+  const resolveAbaSessionClinicId = async (params: {
+    patientId: string;
+    body: any;
+    user: any;
+  }) => {
+    const snapshot = parseStoredJsonObject(params.body?.appointment_snapshot || params.body?.appointmentSnapshot);
+    const patientClinicId = await resolvePatientClinicIdForAbaSession(params.patientId);
+    return firstUuidValue(
+      patientClinicId,
+      currentClinicId(params.user),
+      params.user?.clinicId,
+      params.user?.clinic_id,
+      params.user?.organizationId,
+      params.user?.organization_id,
+      params.user?.activeWorkspaceId,
+      params.body?.clinic_id,
+      params.body?.clinicId,
+      params.body?.organization_id,
+      params.body?.organizationId,
+      snapshot?.clinic_id,
+      snapshot?.clinicId,
+      snapshot?.organization_id,
+      snapshot?.organizationId
+    );
+  };
+
   const buildAbaSessionAppointmentMirrorFallback = (params: {
     appointmentId: string;
     patientId: string;
@@ -30452,10 +30574,14 @@ async function startServer() {
   app.post('/api/aba/sessions', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 96 * 1024, 'Payload da sessão ABA')) return;
-      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const patientId = sanitizeString(req.resolvedPatientId || req.body?.patient_id || req.body?.patientId, 120);
-      if (!clinicId) return res.status(400).json({ success: false, error: 'Clínica não identificada.' });
       if (!isUuid(patientId)) return res.status(400).json({ success: false, error: 'Paciente inválido.' });
+      const clinicId = await resolveAbaSessionClinicId({
+        patientId,
+        body: req.body || {},
+        user: req.session.user
+      });
+      if (!clinicId) return res.status(400).json({ success: false, error: 'Clínica não identificada.' });
 
       const startedAt = sanitizeIsoDateTime(req.body?.started_at || req.body?.startedAt);
       const rawAppointmentId = sanitizeString(req.body?.appointment_id || req.body?.appointmentId, 180);
@@ -30477,6 +30603,10 @@ async function startServer() {
           req.session.user?.id,
         120
       );
+      let professionalScopeIds = collectAbaSessionProfessionalScopeIds({
+        body: req.body || {},
+        user: req.session.user
+      });
       if (appointmentId) {
         const fallbackAppointment = buildAbaSessionAppointmentMirrorFallback({
           appointmentId,
@@ -30489,7 +30619,8 @@ async function startServer() {
           appointmentId,
           clinicId,
           user: req.session.user,
-          fallbackAppointment
+          fallbackAppointment,
+          professionalScopeIds
         });
         if (!linkedAppointment?.id) return res.status(404).json({ success: false, error: 'Consulta não encontrada.' });
         if (sanitizeString(linkedAppointment.patient_id, 120) !== patientId) {
@@ -30509,8 +30640,24 @@ async function startServer() {
           return res.status(409).json({ success: false, error: 'Esta consulta não pode ser iniciada neste status.' });
         }
         const appointmentProfessionalId = resolveAppointmentProfessionalId(linkedAppointment);
-        const explicitProfessionalId = sanitizeString(req.body?.professional_id || req.body?.professionalId, 120);
-        if (explicitProfessionalId && appointmentProfessionalId && explicitProfessionalId !== appointmentProfessionalId) {
+        professionalScopeIds = collectAbaSessionProfessionalScopeIds({
+          body: req.body || {},
+          user: req.session.user,
+          appointment: linkedAppointment
+        });
+        const explicitProfessionalId = sanitizeString(
+          req.body?.professional_id ||
+            req.body?.professionalId ||
+            req.body?.therapist_id ||
+            req.body?.therapistId,
+          120
+        );
+        if (
+          explicitProfessionalId &&
+          appointmentProfessionalId &&
+          explicitProfessionalId !== appointmentProfessionalId &&
+          !appointmentBelongsToProfessional(linkedAppointment, explicitProfessionalId)
+        ) {
           return res.status(409).json({ success: false, error: 'Consulta vinculada a outro profissional.' });
         }
         resolvedProfessionalId = appointmentProfessionalId || explicitProfessionalId || resolvedProfessionalId;
@@ -30518,14 +30665,16 @@ async function startServer() {
           appointmentId,
           patientId,
           clinicId,
-          user: req.session.user
+          user: req.session.user,
+          professionalIds: professionalScopeIds
         });
         if (!existingInProgressSession?.id) {
           const existingCompletedSession = await fetchCompletedAbaSessionForAppointment({
             appointmentId,
             patientId,
             clinicId,
-            user: req.session.user
+            user: req.session.user,
+            professionalIds: professionalScopeIds
           });
           if (existingCompletedSession?.id) {
             return res.status(409).json({ success: false, error: 'Esta consulta já possui sessão encerrada.' });
