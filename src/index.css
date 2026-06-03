@@ -83,6 +83,52 @@
   animation: slide-infinite 2s linear infinite;
 }
 
+.landing-hero-media-frame {
+  width: min(100%, 620px);
+  transform-origin: center;
+}
+
+.landing-hero-media-frame[data-hero-kind="agenda-pan"] {
+  animation: landing-hero-frame-float 7s ease-in-out infinite;
+}
+
+.landing-hero-agenda-shot {
+  left: 0;
+  width: 200%;
+  height: 100%;
+  object-fit: cover;
+  animation: landing-hero-agenda-pan 9s ease-in-out infinite alternate;
+}
+
+.landing-hero-chart-shot {
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+@keyframes landing-hero-frame-float {
+  0%,
+  100% {
+    transform: translate3d(-8px, 0, 0) rotate(-0.35deg);
+  }
+  50% {
+    transform: translate3d(8px, -7px, 0) rotate(0.35deg);
+  }
+}
+
+@keyframes landing-hero-agenda-pan {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  40% {
+    transform: translate3d(-24%, -1%, 0) scale(1.01);
+  }
+  100% {
+    transform: translate3d(-50%, 0, 0) scale(1);
+  }
+}
+
 .chart-glow {
   box-shadow: 0 20px 50px -12px rgba(67, 24, 255, 0.1);
 }

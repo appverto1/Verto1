@@ -37,16 +37,22 @@ import { formatProfessionalRegistry } from '../utils/professionalRegistry';
 
 const heroStories = [
   {
-    src: '/lp-hero-pei.png',
-    width: 1686,
-    height: 776,
-    alt: 'Tela da Verto mostrando o PEI com metas ativas e progresso por objetivo.'
-  },
-  {
-    src: '/lp-hero-agenda.png',
+    src: '/lp-hero-agenda.webp',
     width: 1797,
     height: 906,
+    frameWidth: 899,
+    frameHeight: 906,
+    variant: 'agenda-pan',
     alt: 'Tela da Verto mostrando a agenda operacional mensal com sessoes e filtros clinicos.'
+  },
+  {
+    src: '/lp-hero-charts.webp',
+    width: 1195,
+    height: 941,
+    frameWidth: 1195,
+    frameHeight: 941,
+    variant: 'charts',
+    alt: 'Tela da Verto mostrando graficos ABA de mudancas clinicas por sessao.'
   }
 ];
 
@@ -888,7 +894,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
             </div>
 
             <div className="relative flex min-h-[420px] flex-col items-center justify-center overflow-hidden bg-white px-3 py-6 sm:px-5 lg:min-h-full lg:px-6">
-              <div className="relative w-full max-w-[980px]">
+              <div className="relative w-full max-w-[680px]">
                 <div className="mb-4 flex gap-2 px-1">
                   {heroStories.map((story, index) => (
                     <button
@@ -907,21 +913,27 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                   ))}
                 </div>
                 <div
-                  className="relative overflow-hidden rounded-[18px] border border-slate-200 bg-white shadow-xl shadow-slate-900/10 transition-all duration-700 sm:rounded-[24px]"
-                  style={{ aspectRatio: `${activeHeroStoryData.width} / ${activeHeroStoryData.height}` }}
+                  className="landing-hero-media-frame relative mx-auto overflow-hidden rounded-[18px] border border-slate-200 bg-white shadow-xl shadow-slate-900/10 transition-all duration-700 sm:rounded-[24px]"
+                  data-hero-kind={activeHeroStoryData.variant}
+                  style={{ aspectRatio: `${activeHeroStoryData.frameWidth} / ${activeHeroStoryData.frameHeight}` }}
                 >
-                  {heroStories.map((story, index) => (
-                    <img
-                      key={story.src}
-                      src={story.src}
-                      alt={story.alt}
-                      className={`absolute inset-0 h-full w-full object-contain transition-all duration-700 ${
-                        index === activeHeroStory
-                          ? 'scale-100 opacity-100'
-                          : 'scale-[1.03] opacity-0'
-                      }`}
-                    />
-                  ))}
+                  {heroStories.map((story, index) => {
+                    const isActiveStory = index === activeHeroStory;
+                    return (
+                      <img
+                        key={story.src}
+                        src={story.src}
+                        alt={story.alt}
+                        width={story.width}
+                        height={story.height}
+                        loading={index === 0 ? 'eager' : 'lazy'}
+                        decoding="async"
+                        className={`absolute inset-y-0 max-w-none select-none transition-opacity duration-700 ${
+                          story.variant === 'agenda-pan' ? 'landing-hero-agenda-shot' : 'landing-hero-chart-shot'
+                        } ${isActiveStory ? 'opacity-100' : 'pointer-events-none opacity-0'}`}
+                      />
+                    );
+                  })}
                 </div>
               </div>
               <div className="relative mt-8 grid w-full max-w-[360px] gap-3 lg:hidden">
