@@ -20,7 +20,11 @@ import { sanitizeDescriptionForDisplay } from '../utils/mediaSecurity';
 import { resolveAbaPromptLevel } from '../utils/abaPromptLevels';
 import { isAbaV2Enabled } from '../utils/featureFlags';
 import { filterHumanDisplayEntries, formatSessionLabel, safeDisplayValue } from '../utils/displayLabels';
-import { getAppointmentDurationMinutes } from '../utils/scheduling';
+import {
+  buildAppointmentDateTime,
+  calculateAppointmentEnd,
+  getAppointmentDurationMinutes,
+} from '../utils/scheduling';
 import { AFLS_ADULT_SOCIAL_PARTICIPATION_PROTOCOL } from '../constants/aflsProtocol';
 import { VBMAPP_LEVEL_1_CANONICAL_PROTOCOL } from '../constants/vbmappLevel1Protocol';
 import { VBMAPP_LEVEL_2_CANONICAL_PROTOCOL } from '../constants/vbmappLevel2Protocol';
@@ -940,22 +944,25 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       );
     }
     const endsAt = new Date(startedAt.getTime() + durationMinutes * 60 * 1000);
+    const scheduledStartFromLocalFields =
+      scheduledSessionForPatient?.date && scheduledSessionForPatient?.time
+        ? buildAppointmentDateTime(scheduledSessionForPatient.date, scheduledSessionForPatient.time)
+        : null;
     const scheduledStart =
       scheduledSessionForPatient?.scheduled_start_at ||
       scheduledSessionForPatient?.scheduledStartAt ||
       scheduledSessionForPatient?.scheduledAt ||
       scheduledSessionForPatient?.scheduled_at ||
-      (scheduledSessionForPatient?.date && scheduledSessionForPatient?.time
-        ? new Date(`${scheduledSessionForPatient.date}T${scheduledSessionForPatient.time}:00`).toISOString()
-        : null);
+      scheduledStartFromLocalFields?.toISOString() ||
+      null;
+    const calculatedScheduledEnd = calculateAppointmentEnd(scheduledStart, scheduledSessionDurationMinutes);
     const scheduledEnd =
       scheduledSessionForPatient?.scheduled_end_at ||
       scheduledSessionForPatient?.scheduledEndAt ||
       scheduledSessionForPatient?.end_time ||
       scheduledSessionForPatient?.endTime ||
-      (scheduledStart
-        ? new Date(new Date(scheduledStart).getTime() + scheduledSessionDurationMinutes * 60 * 1000).toISOString()
-        : null);
+      calculatedScheduledEnd?.toISOString() ||
+      null;
     const scheduledProfessionalId =
       scheduledSessionForPatient?.professional_id ||
       scheduledSessionForPatient?.professionalId ||
@@ -1026,6 +1033,69 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         therapistName: resolvedClinicContext?.professionalName || resolvedClinicContext?.userName || clinicContext?.professionalName || clinicContext?.userName || patient?.therapistName || patient?.therapist_name || undefined,
         service_type: nextSession.service_type || undefined,
         serviceType: nextSession.serviceType || undefined,
+        appointment_snapshot: scheduledSessionForPatient
+          ? {
+              ...scheduledSessionForPatient,
+              id: nextSession.appointment_id,
+              patientId: patient?.id,
+              patient_id: patient?.id,
+              patientName: patient?.name || scheduledSessionForPatient?.patientName || scheduledSessionForPatient?.name || 'Paciente',
+              patient_name: patient?.name || scheduledSessionForPatient?.patient_name || scheduledSessionForPatient?.patientName || 'Paciente',
+              professionalId: nextSession.professional_id || undefined,
+              professional_id: nextSession.professional_id || undefined,
+              therapistId: nextSession.therapist_id || undefined,
+              therapist_id: nextSession.therapist_id || undefined,
+              scheduledAt: scheduledStart,
+              scheduled_at: scheduledStart,
+              scheduledStartAt: scheduledStart,
+              scheduled_start_at: scheduledStart,
+              scheduledEndAt: scheduledEnd,
+              scheduled_end_at: scheduledEnd,
+              scheduledDurationMinutes: nextSession.scheduled_duration_minutes,
+              scheduled_duration_minutes: nextSession.scheduled_duration_minutes,
+              durationMinutes: nextSession.scheduled_duration_minutes,
+              duration_minutes: nextSession.scheduled_duration_minutes,
+              roomId: nextSession.room_id,
+              room_id: nextSession.room_id,
+              roomName: nextSession.room_name,
+              room_name: nextSession.room_name,
+              locationType: nextSession.location_type,
+              location_type: nextSession.location_type,
+              serviceType: nextSession.service_type,
+              service_type: nextSession.service_type
+            }
+          : undefined,
+        appointmentSnapshot: scheduledSessionForPatient
+          ? {
+              id: nextSession.appointment_id,
+              patientId: patient?.id,
+              patient_id: patient?.id,
+              patientName: patient?.name || 'Paciente',
+              patient_name: patient?.name || 'Paciente',
+              professionalId: nextSession.professional_id || undefined,
+              professional_id: nextSession.professional_id || undefined,
+              therapistId: nextSession.therapist_id || undefined,
+              therapist_id: nextSession.therapist_id || undefined,
+              scheduledAt: scheduledStart,
+              scheduled_at: scheduledStart,
+              scheduledStartAt: scheduledStart,
+              scheduled_start_at: scheduledStart,
+              scheduledEndAt: scheduledEnd,
+              scheduled_end_at: scheduledEnd,
+              scheduledDurationMinutes: nextSession.scheduled_duration_minutes,
+              scheduled_duration_minutes: nextSession.scheduled_duration_minutes,
+              durationMinutes: nextSession.scheduled_duration_minutes,
+              duration_minutes: nextSession.scheduled_duration_minutes,
+              roomId: nextSession.room_id,
+              room_id: nextSession.room_id,
+              roomName: nextSession.room_name,
+              room_name: nextSession.room_name,
+              locationType: nextSession.location_type,
+              location_type: nextSession.location_type,
+              serviceType: nextSession.service_type,
+              service_type: nextSession.service_type
+            }
+          : undefined,
         status: 'active',
         started_at: nextSession.startedAt,
         duration_minutes: durationMinutes,

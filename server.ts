@@ -28129,6 +28129,7 @@ async function startServer() {
     appointmentId: string;
     clinicId: string;
     user: any;
+    fallbackAppointment?: any;
   }) => {
     const appointment = await fetchAppointmentForAbaSessionLink(params.appointmentId, params.clinicId, params.user);
     if (appointment?.id) return appointment;
@@ -28138,11 +28139,12 @@ async function startServer() {
       params.clinicId,
       params.user
     );
-    if (!stateAppointment?.id) return null;
+    const appointmentForMirror = stateAppointment?.id ? stateAppointment : params.fallbackAppointment;
+    if (!appointmentForMirror?.id) return null;
 
     const mirrorOk = await ensureAppointmentMirrorForOperationalLink({
       organizationId: params.clinicId,
-      appointment: stateAppointment,
+      appointment: appointmentForMirror,
       user: params.user
     });
     if (!mirrorOk) return null;
@@ -30328,6 +30330,125 @@ async function startServer() {
     }
   });
 
+  const buildAbaSessionAppointmentMirrorFallback = (params: {
+    appointmentId: string;
+    patientId: string;
+    clinicId: string;
+    body: any;
+    user: any;
+  }) => {
+    const appointmentId = sanitizeString(params.appointmentId, 120);
+    const patientId = sanitizeString(params.patientId, 120);
+    const clinicId = sanitizeString(params.clinicId, 120);
+    if (!isUuid(appointmentId) || !isUuid(patientId) || !isUuid(clinicId)) return null;
+
+    const snapshot = parseStoredJsonObject(params.body?.appointment_snapshot || params.body?.appointmentSnapshot);
+    const snapshotId = sanitizeString(snapshot?.id || snapshot?.appointment_id || snapshot?.appointmentId, 120);
+    if (snapshotId && snapshotId !== appointmentId) return null;
+    const snapshotPatientId = sanitizeString(snapshot?.patient_id || snapshot?.patientId, 120);
+    if (snapshotPatientId && snapshotPatientId !== patientId) return null;
+
+    const scheduledStart =
+      sanitizeIsoDateTime(
+        params.body?.scheduled_start ||
+          params.body?.scheduledStart ||
+          params.body?.scheduled_start_at ||
+          params.body?.scheduledStartAt ||
+          snapshot?.scheduled_start_at ||
+          snapshot?.scheduledStartAt ||
+          snapshot?.scheduledAt ||
+          snapshot?.scheduled_at,
+        ''
+      ) ||
+      (
+        snapshot?.date && snapshot?.time
+          ? buildAppointmentDateTime(snapshot.date, snapshot.time)?.toISOString()
+          : null
+      );
+    if (!scheduledStart) return null;
+
+    const durationMinutes =
+      asSafeNumber(
+        params.body?.scheduled_duration_minutes ??
+          params.body?.scheduledDurationMinutes ??
+          snapshot?.scheduled_duration_minutes ??
+          snapshot?.scheduledDurationMinutes ??
+          snapshot?.duration_minutes ??
+          snapshot?.durationMinutes,
+        1,
+        1440
+      ) || 50;
+    const scheduledEnd =
+      sanitizeIsoDateTime(
+        params.body?.scheduled_end ||
+          params.body?.scheduledEnd ||
+          params.body?.scheduled_end_at ||
+          params.body?.scheduledEndAt ||
+          snapshot?.scheduled_end_at ||
+          snapshot?.scheduledEndAt ||
+          snapshot?.scheduledEnd ||
+          snapshot?.scheduled_end,
+        ''
+      ) ||
+      calculateAppointmentEnd(scheduledStart, durationMinutes)?.toISOString() ||
+      null;
+    const professionalId = sanitizeString(
+      params.body?.professional_id ||
+        params.body?.professionalId ||
+        params.body?.therapist_id ||
+        params.body?.therapistId ||
+        snapshot?.professional_id ||
+        snapshot?.professionalId ||
+        snapshot?.therapist_id ||
+        snapshot?.therapistId ||
+        params.user?.id,
+      120
+    );
+
+    return cleanObject({
+      ...snapshot,
+      id: appointmentId,
+      appointment_id: appointmentId,
+      appointmentId,
+      organization_id: snapshot?.organization_id || snapshot?.organizationId || clinicId,
+      organizationId: snapshot?.organizationId || snapshot?.organization_id || clinicId,
+      clinic_id: snapshot?.clinic_id || snapshot?.clinicId || clinicId,
+      clinicId: snapshot?.clinicId || snapshot?.clinic_id || clinicId,
+      patient_id: patientId,
+      patientId,
+      patient_name: sanitizeString(params.body?.patient_name || params.body?.patientName || snapshot?.patient_name || snapshot?.patientName || snapshot?.name, 180) || null,
+      patientName: sanitizeString(params.body?.patientName || params.body?.patient_name || snapshot?.patientName || snapshot?.patient_name || snapshot?.name, 180) || null,
+      therapist_id: professionalId || null,
+      therapistId: professionalId || null,
+      professional_id: professionalId || null,
+      professionalId: professionalId || null,
+      therapist_name: sanitizeString(params.body?.therapist_name || params.body?.therapistName || params.body?.professionalName || snapshot?.therapist_name || snapshot?.therapistName || snapshot?.professional, 180) || null,
+      professional: sanitizeString(params.body?.professionalName || params.body?.therapistName || snapshot?.professional || snapshot?.therapistName || snapshot?.therapist_name, 180) || null,
+      scheduled_at: scheduledStart,
+      scheduledAt: scheduledStart,
+      scheduled_start_at: scheduledStart,
+      scheduledStartAt: scheduledStart,
+      scheduled_end_at: scheduledEnd,
+      scheduledEndAt: scheduledEnd,
+      scheduled_duration_minutes: durationMinutes,
+      scheduledDurationMinutes: durationMinutes,
+      duration_minutes: durationMinutes,
+      durationMinutes: durationMinutes,
+      date: sanitizeDate(snapshot?.date) || formatDateInAppointmentTimezone(scheduledStart),
+      time: normalizeAppointmentTime(snapshot?.time) || formatTimeInAppointmentTimezone(scheduledStart),
+      status: snapshot?.status || 'SCHEDULED',
+      room_id: sanitizeString(params.body?.room_id || params.body?.roomId || snapshot?.room_id || snapshot?.roomId || snapshot?.room, 180) || null,
+      roomId: sanitizeString(params.body?.roomId || params.body?.room_id || snapshot?.roomId || snapshot?.room_id || snapshot?.room, 180) || null,
+      room_name: sanitizeString(params.body?.room_name || params.body?.roomName || snapshot?.room_name || snapshot?.roomName || snapshot?.roomDisplayName, 180) || null,
+      roomName: sanitizeString(params.body?.roomName || params.body?.room_name || snapshot?.roomName || snapshot?.room_name || snapshot?.roomDisplayName, 180) || null,
+      location_type: sanitizeString(params.body?.location_type || params.body?.locationType || snapshot?.location_type || snapshot?.locationType || snapshot?.location, 80) || null,
+      locationType: sanitizeString(params.body?.locationType || params.body?.location_type || snapshot?.locationType || snapshot?.location_type || snapshot?.location, 80) || null,
+      service_type: sanitizeString(params.body?.service_type || params.body?.serviceType || snapshot?.service_type || snapshot?.serviceType || snapshot?.type || snapshot?.approach, 120) || null,
+      serviceType: sanitizeString(params.body?.serviceType || params.body?.service_type || snapshot?.serviceType || snapshot?.service_type || snapshot?.type || snapshot?.approach, 120) || null,
+      approach: sanitizeString(snapshot?.approach || snapshot?.type || params.body?.service_type || params.body?.serviceType, 120) || null
+    });
+  };
+
   app.post('/api/aba/sessions', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 96 * 1024, 'Payload da sessão ABA')) return;
@@ -30357,10 +30478,18 @@ async function startServer() {
         120
       );
       if (appointmentId) {
+        const fallbackAppointment = buildAbaSessionAppointmentMirrorFallback({
+          appointmentId,
+          patientId,
+          clinicId,
+          body: req.body || {},
+          user: req.session.user
+        });
         linkedAppointment = await ensureServerAppointmentForAbaSessionLink({
           appointmentId,
           clinicId,
-          user: req.session.user
+          user: req.session.user,
+          fallbackAppointment
         });
         if (!linkedAppointment?.id) return res.status(404).json({ success: false, error: 'Consulta não encontrada.' });
         if (sanitizeString(linkedAppointment.patient_id, 120) !== patientId) {

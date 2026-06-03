@@ -26,6 +26,11 @@ test('ABA session start validates server appointment instead of returning false 
   assert.match(serverCode, /scheduled_start_at[\s\S]*?scheduledStartAt[\s\S]*?scheduled_start[\s\S]*?scheduledStart/);
   assert.match(route, /const rawAppointmentId = sanitizeString\(req\.body\?\.appointment_id \|\| req\.body\?\.appointmentId, 180\)/);
   assert.match(route, /APPOINTMENT_NOT_PERSISTED[\s\S]*?Esta consulta ainda não foi salva no servidor/);
+  assert.match(route, /const fallbackAppointment = buildAbaSessionAppointmentMirrorFallback/);
+  assert.match(route, /fallbackAppointment/);
+  assert.match(serverCode, /appointment_snapshot/);
+  assert.match(serverCode, /appointmentSnapshot/);
+  assert.match(serverCode, /syncAppointmentsTableFromClinicState/);
   assert.match(route, /ensureServerAppointmentForAbaSessionLink/);
   assert.doesNotMatch(route, /Sincronize a agenda antes de iniciar/);
 });
@@ -77,6 +82,8 @@ test('frontend accepts canonical session id and sends appointment_id with record
   assert.match(patientDetailCode, /professional_id: nextSession\.professional_id \|\| undefined/);
   assert.match(patientDetailCode, /service_type: nextSession\.service_type \|\| undefined/);
   assert.match(dataServiceCode, /fields\.appointment_id = appointmentId[\s\S]*?fields\.appointmentId = appointmentId/);
+  assert.match(patientDetailCode, /appointment_snapshot: scheduledSessionForPatient/);
+  assert.match(patientDetailCode, /appointmentSnapshot: scheduledSessionForPatient/);
   assert.match(sessionModeCode, /appointment_id: activeAppointmentId \|\| undefined/);
   assert.match(sessionModeCode, /appointmentId: activeAppointmentId \|\| undefined/);
 });
