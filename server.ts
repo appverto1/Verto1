@@ -40,6 +40,7 @@ import { resolveAbaPromptLevel } from './src/utils/abaPromptLevels';
 import { buildTargetStatusAuditLog, evaluateMaintenanceStatus, evaluateTargetMastery, formatAbaMasteryCriterion } from './src/utils/abaMasteryEngine';
 import {
   buildDefaultMaintenanceSchedulePreview,
+  deriveMaintenanceScheduleStatus,
   getMaintenanceToleranceDays,
   getNextMaintenanceProbeForTarget,
   normalizeMaintenanceDayList,
@@ -29463,7 +29464,7 @@ async function startServer() {
         let scoped = organizationId ? query.eq('organization_id', organizationId) : query;
         return !hasGlobalClinicAccess(req.session.user) && clinicId ? scoped.eq('clinic_id', clinicId) : scoped;
       };
-      const [scheduleResult, targetResult, probeResult, alertResult] = await Promise.all([
+      const [scheduleResult, targetResult, probeResult, alertResult, masteryResult] = await Promise.all([
         applyClinic(
           supabase
             .from('aba_maintenance_schedules')
@@ -29497,11 +29498,41 @@ async function startServer() {
             .is('resolved_at', null)
             .order('created_at', { ascending: false })
             .limit(200)
+        ),
+        applyClinic(
+          supabase
+            .from('aba_mastery_evaluations')
+            .select(ABA_MASTERY_LIST_SELECT)
+            .eq('patient_id', patientId)
+            .order('evaluated_at', { ascending: false })
+            .limit(200)
         )
       ]);
-      const firstError = [scheduleResult, targetResult, probeResult, alertResult].find((result: any) => result.error)?.error;
+      const firstError = [scheduleResult, targetResult, probeResult, alertResult, masteryResult].find((result: any) => result.error)?.error;
       if (firstError) {
-        if (hasMissingFinancialSchema(firstError)) return res.json({ success: true, data: { skills: [], orphanSchedules: [], cards: [], schedules: [], targets: [], probeResults: [], alerts: [] }, page, pageSize });
+        if (hasMissingFinancialSchema(firstError)) {
+          return res.json({
+            success: true,
+            data: {
+              eligibleSkills: [],
+              maintenanceSkills: [],
+              scheduledProbes: [],
+              waitingNextSession: [],
+              overdueProbes: [],
+              regressionRisk: [],
+              technicalIssues: [],
+              skills: [],
+              orphanSchedules: [],
+              cards: [],
+              schedules: [],
+              targets: [],
+              probeResults: [],
+              alerts: []
+            },
+            page,
+            pageSize
+          });
+        }
         throw firstError;
       }
       const enrichedSchedules = await enrichMaintenanceRowsWithTargetDisplay((scheduleResult as any).data || [], clinicId, organizationId, req.session.user);
@@ -29509,6 +29540,7 @@ async function startServer() {
       const peiTargets = await getPatientPeiTargets(patientId, clinicId, organizationId, req.session.user);
       const probeResults = Array.isArray((probeResult as any).data) ? (probeResult as any).data : [];
       const alerts = Array.isArray((alertResult as any).data) ? (alertResult as any).data : [];
+      const masteryEvaluations = Array.isArray((masteryResult as any).data) ? (masteryResult as any).data : [];
       const latestResultByTargetId = new Map<string, any>();
       const latestResultByScheduleId = new Map<string, any>();
       probeResults.forEach((result: any) => {
@@ -29521,6 +29553,11 @@ async function startServer() {
       alerts.forEach((alert: any) => {
         const targetId = sanitizeString(alert?.target_id || alert?.targetId, 180);
         if (isUuid(targetId) && !alertByTargetId.has(targetId)) alertByTargetId.set(targetId, alert);
+      });
+      const latestMasteryByTargetId = new Map<string, any>();
+      masteryEvaluations.forEach((evaluation: any) => {
+        const targetId = sanitizeString(evaluation?.target_id || evaluation?.targetId, 180);
+        if (isUuid(targetId) && !latestMasteryByTargetId.has(targetId)) latestMasteryByTargetId.set(targetId, evaluation);
       });
       const activeScheduleByTargetId = new Map<string, any>();
       enrichedSchedules.forEach((schedule: any) => {
@@ -29575,13 +29612,29 @@ async function startServer() {
         });
       };
       const hydratedPeiTargets = peiTargets.map(hydratePeiTarget);
+      const isMasteryEvaluationComplete = (evaluation: any) => {
+        const status = sanitizeString(evaluation?.status || evaluation?.statusCode, 80).toUpperCase();
+        const legacyStatus = sanitizeString(evaluation?.evaluation_status || evaluation?.evaluationStatus, 80).toLowerCase();
+        return (
+          ['READY_FOR_REVIEW', 'MASTERED_APPROVED', 'MET_TODAY'].includes(status) ||
+          ['met', 'mastered'].includes(legacyStatus)
+        );
+      };
+      const isTargetEligibleForMaintenance = (target: any) => {
+        const targetId = sanitizeString(target?.id, 180);
+        const status = sanitizeString(target?.clinical_status || target?.phase || target?.target_type, 80).toUpperCase();
+        const latestMastery = targetId ? latestMasteryByTargetId.get(targetId) : null;
+        return (
+          ['READY_FOR_REVIEW', 'MASTERED', 'MAINTENANCE', 'MAINTAINED', 'ACQUIRED', 'ADQUIRIDO'].includes(status) ||
+          isMasteryEvaluationComplete(latestMastery)
+        );
+      };
       const scheduledTargetIds = new Set(enrichedSchedules.map((schedule: any) => sanitizeString(schedule?.target_id || schedule?.targetId, 180)).filter(Boolean));
       const skillTargetRows = allTargets.filter((target: any) => isUuid(sanitizeString(target?.id, 180)));
       const maintenanceTargetRows = allTargets.filter((target: any) => {
         const id = sanitizeString(target?.id, 180);
         if (!isUuid(id) || scheduledTargetIds.has(id)) return false;
-        const status = sanitizeString(target?.clinical_status || target?.phase || target?.target_type, 80).toUpperCase();
-        return ['MAINTENANCE', 'MASTERED', 'MAINTAINED', 'ACQUIRED'].includes(status);
+        return isTargetEligibleForMaintenance(target);
       });
       const scheduleCards = enrichedSchedules.map((schedule: any) => {
         const scheduleId = sanitizeString(schedule?.id, 180);
@@ -29614,6 +29667,8 @@ async function startServer() {
           schedule,
           target: schedule?.target || null,
           latestResult: latestResultByScheduleId.get(scheduleId) || (targetResolved ? latestResultByTargetId.get(targetId) : null) || null,
+          latestMastery: targetResolved ? latestMasteryByTargetId.get(targetId) || null : null,
+          activeAlert: targetResolved ? alertByTargetId.get(targetId) || null : null,
           status: sanitizeString(schedule?.status, 80) || 'PENDING',
           canSchedule: targetResolved,
           canScheduleMaintenance: targetResolved,
@@ -29632,6 +29687,7 @@ async function startServer() {
         const targetName = sanitizeString(target?.name || target?.description, 240) || 'Habilidade sem nome';
         const protocolName = sanitizeString(target?.protocol_title, 240) || 'Sem protocolo informado';
         const domainName = sanitizeString(target?.domain_name, 240) || 'Sem domínio informado';
+        const latestMastery = latestMasteryByTargetId.get(targetId) || null;
         return cleanObject({
           id: targetId,
           cardId: targetId,
@@ -29647,7 +29703,11 @@ async function startServer() {
           schedule: null,
           target,
           latestResult: latestResultByTargetId.get(targetId) || null,
+          latestMastery,
           status: sanitizeString(target?.clinical_status || target?.phase, 80) || 'MAINTENANCE',
+          clinicalStatus: sanitizeString(target?.clinical_status || target?.phase, 80) || null,
+          masteryStatus: sanitizeString(latestMastery?.status || latestMastery?.evaluation_status, 80) || null,
+          progressPercent: isMasteryEvaluationComplete(latestMastery) ? 100 : null,
           canSchedule: true,
           canScheduleMaintenance: true,
           canAssign: false,
@@ -29665,7 +29725,10 @@ async function startServer() {
           if (targetId && scheduledTargetIds.has(targetId)) return false;
           return true;
         })
-        .map((target: any) => cleanObject({
+        .map((target: any) => {
+          const targetId = sanitizeString(target?.targetId, 180);
+          const latestMastery = targetId ? latestMasteryByTargetId.get(targetId) || null : null;
+          return cleanObject({
           id: target?.targetId || target?.peiGoalId || target?.targetName,
           cardId: target?.targetId || target?.peiGoalId || target?.targetName,
           cardKind: 'TARGET_REAL_SEM_SCHEDULE',
@@ -29682,7 +29745,8 @@ async function startServer() {
           progressPercent: target?.progressPercent,
           schedule: null,
           target: target?.target || null,
-          latestResult: target?.targetId ? latestResultByTargetId.get(target.targetId) || null : null,
+          latestResult: targetId ? latestResultByTargetId.get(targetId) || null : null,
+          latestMastery,
           status: target?.clinicalStatus || target?.masteryStatus || null,
           canSchedule: Boolean(target?.hasRealTarget),
           canScheduleMaintenance: Boolean(target?.hasRealTarget),
@@ -29694,7 +29758,8 @@ async function startServer() {
           availableActions: target?.hasRealTarget
             ? ['SCHEDULE_MAINTENANCE', 'WAIT_NEXT_SESSION', 'ASSIGN_APPOINTMENT']
             : ['REVIEW_TARGET']
-        }));
+          });
+        });
       const skills = skillTargetRows.map((target: any) => {
         const targetId = sanitizeString(target?.id, 180);
         const activeSchedule = activeScheduleByTargetId.get(targetId) || null;
@@ -29702,15 +29767,19 @@ async function startServer() {
         const protocolName = sanitizeString(target?.protocol_title, 240) || 'Sem protocolo informado';
         const domainName = sanitizeString(target?.domain_name, 240) || 'Sem domínio informado';
         const clinicalStatus = sanitizeString(target?.clinical_status || target?.phase || target?.target_type, 80) || null;
+        const latestMastery = latestMasteryByTargetId.get(targetId) || null;
         return cleanObject({
           targetId,
           targetName,
           protocolName,
           domainName,
           clinicalStatus,
+          masteryStatus: sanitizeString(latestMastery?.status || latestMastery?.evaluation_status, 80) || null,
+          progressPercent: isMasteryEvaluationComplete(latestMastery) ? 100 : null,
           maintenanceStatus: sanitizeString(activeSchedule?.status, 80) || clinicalStatus,
           activeSchedule,
           latestResult: latestResultByTargetId.get(targetId) || null,
+          latestMastery,
           activeAlert: alertByTargetId.get(targetId) || null,
           canScheduleMaintenance: true,
           canWaitNextSession: true,
@@ -29742,15 +29811,141 @@ async function startServer() {
       });
       const normalizedSkills = Array.from(skillsByKey.values());
       const orphanSchedules = scheduleCards.filter((card: any) => card?.needsTargetReview);
+      const now = new Date();
+      const schedulePanelStatus = (schedule: any) => {
+        if (!schedule) return 'Sem sondagem agendada';
+        const derived = schedule ? deriveMaintenanceScheduleStatus(schedule, now) : 'NO_SCHEDULE';
+        if (derived === 'OVERDUE') return 'Atrasada';
+        if (derived === 'DUE_TODAY') return 'Para hoje';
+        const status = sanitizeString(schedule?.status || derived, 80).toUpperCase();
+        if (status === 'PENDING_NEXT_SESSION') return 'Aguardando próxima sessão';
+        if (status === 'PENDING_CONFIRMATION') return 'Pendente de confirmação';
+        if (status === 'PENDING_LINK' || status === 'PENDING_SCHEDULING' || status === 'UNSCHEDULED') return 'Sem sessão vinculada';
+        if (status === 'SCHEDULED') return 'Agendada';
+        if (status === 'COMPLETED') return 'Habilidade mantida';
+        return status || 'Sem sondagem agendada';
+      };
+      const targetClinicalStatus = (row: any) => sanitizeString(row?.clinicalStatus || row?.clinical_status || row?.status || row?.phase || row?.target?.clinical_status, 80).toUpperCase();
+      const rowHasRegressionRisk = (row: any) => {
+        const resultStatus = sanitizeString(row?.latestResult?.status || row?.lastResult?.status, 80).toUpperCase();
+        const clinicalStatus = targetClinicalStatus(row);
+        return Boolean(row?.activeAlert || ['WATCH', 'REGRESSION_RISK', 'REGRESSION_CONFIRMED'].includes(resultStatus) || ['REGRESSION_RISK', 'REGRESSION_CONFIRMED'].includes(clinicalStatus));
+      };
+      const toPanelRow = (row: any, group: string) => {
+        const schedule = row?.schedule || row?.activeSchedule || null;
+        const scheduleId = sanitizeString(row?.scheduleId || schedule?.id, 180);
+        const targetId = sanitizeString(row?.targetId || row?.target_id, 180);
+        const result = row?.latestResult || null;
+        const statusLabel = group === 'technical'
+          ? 'Revisar vínculo'
+          : group === 'regression'
+            ? 'Risco de regressão'
+            : schedulePanelStatus(schedule);
+        return cleanObject({
+          id: row?.id || targetId || scheduleId || row?.cardId,
+          key: sanitizeString(row?.cardId || scheduleId || targetId || row?.id || row?.targetName, 280),
+          cardId: row?.cardId || scheduleId || targetId || row?.id,
+          cardKind: row?.cardKind || row?.kind || (schedule ? 'SCHEDULE_VALIDO' : 'TARGET_REAL_SEM_SCHEDULE'),
+          scheduleId: isUuid(scheduleId) ? scheduleId : '',
+          targetId: isUuid(targetId) ? targetId : null,
+          targetName: sanitizeString(row?.targetName || row?.target_name, 240) || (group === 'technical' ? 'Sondagem sem habilidade vinculada' : 'Habilidade sem nome'),
+          protocol: sanitizeString(row?.protocol || row?.protocolName || row?.protocol_name, 240) || 'Sem protocolo informado',
+          domain: sanitizeString(row?.domain || row?.domainName || row?.domain_name, 240) || 'Sem domínio informado',
+          protocolName: sanitizeString(row?.protocolName || row?.protocol || row?.protocol_name, 240) || 'Sem protocolo informado',
+          domainName: sanitizeString(row?.domainName || row?.domain || row?.domain_name, 240) || 'Sem domínio informado',
+          clinicalStatus: row?.clinicalStatus || row?.status || null,
+          masteryStatus: row?.masteryStatus || null,
+          progressPercent: row?.progressPercent ?? null,
+          activeSchedule: schedule,
+          nextSchedule: schedule,
+          schedule,
+          schedules: schedule ? [schedule] : [],
+          latestResult: result,
+          lastResult: result,
+          latestMastery: row?.latestMastery || null,
+          activeAlert: row?.activeAlert || null,
+          group: group === 'eligible'
+            ? 'activeCycle'
+            : group === 'waiting'
+              ? 'unlinked'
+              : group === 'overdue'
+                ? 'overdue'
+                : group === 'technical'
+                  ? 'unlinked'
+                  : 'activeCycle',
+          hasRealTarget: Boolean(row?.hasRealTarget && isUuid(targetId)),
+          hasRealSchedule: Boolean(isUuid(scheduleId)),
+          needsTargetReview: Boolean(row?.needsTargetReview || group === 'technical'),
+          canScheduleMaintenance: Boolean(row?.canScheduleMaintenance && isUuid(targetId)),
+          canWaitNextSession: Boolean(row?.canWaitNextSession && isUuid(targetId)),
+          canAssignAppointment: Boolean(row?.canAssignAppointment && isUuid(targetId)),
+          canReviewLink: Boolean(row?.canReviewLink || group === 'technical'),
+          isRegressionRisk: group === 'regression' || rowHasRegressionRisk(row),
+          isMaintained: sanitizeString(row?.status, 80).toUpperCase() === 'COMPLETED',
+          statusLabel,
+          availableActions: row?.availableActions || (group === 'technical' ? ['REVIEW_TARGET'] : ['SCHEDULE_MAINTENANCE', 'WAIT_NEXT_SESSION', 'ASSIGN_APPOINTMENT'])
+        });
+      };
+      const isMaintenanceClinical = (row: any) => ['MAINTENANCE', 'MAINTAINED'].includes(targetClinicalStatus(row));
+      const eligibleSourceCards = [...targetCards, ...peiTargetCards].filter((row: any) => !row?.needsTargetReview && !isMaintenanceClinical(row));
+      const maintenanceSourceCards = [...targetCards, ...peiTargetCards].filter((row: any) => !row?.needsTargetReview && isMaintenanceClinical(row));
+      const validScheduleCards = scheduleCards.filter((card: any) => !card?.needsTargetReview);
+      const scheduledProbes: any[] = [];
+      const waitingNextSession: any[] = [];
+      const overdueProbes: any[] = [];
+      const regressionRisk: any[] = [];
+      validScheduleCards.forEach((card: any) => {
+        const schedule = card?.schedule || {};
+        const derived = deriveMaintenanceScheduleStatus(schedule, now);
+        if (rowHasRegressionRisk(card)) {
+          regressionRisk.push(toPanelRow(card, 'regression'));
+        } else if (derived === 'OVERDUE') {
+          overdueProbes.push(toPanelRow(card, 'overdue'));
+        } else if (derived === 'PENDING_NEXT_SESSION') {
+          waitingNextSession.push(toPanelRow(card, 'waiting'));
+        } else {
+          scheduledProbes.push(toPanelRow(card, 'scheduled'));
+        }
+      });
+      normalizedSkills
+        .filter((skill: any) => rowHasRegressionRisk(skill))
+        .forEach((skill: any) => {
+          const key = sanitizeString(skill?.targetId || skill?.targetName, 280);
+          if (!regressionRisk.some((row: any) => sanitizeString(row?.targetId || row?.targetName, 280) === key)) {
+            regressionRisk.push(toPanelRow(skill, 'regression'));
+          }
+        });
+      const eligibleSkills = eligibleSourceCards.map((row: any) => toPanelRow(row, 'eligible'));
+      const maintenanceSkills = maintenanceSourceCards.map((row: any) => toPanelRow(row, 'maintenance'));
+      const technicalIssues = orphanSchedules.map((row: any) => toPanelRow(row, 'technical'));
       const cards = [
-        ...targetCards,
-        ...peiTargetCards,
-        ...scheduleCards.filter((card: any) => !card?.needsTargetReview),
-        ...orphanSchedules
+        ...eligibleSkills,
+        ...maintenanceSkills,
+        ...scheduledProbes,
+        ...waitingNextSession,
+        ...overdueProbes,
+        ...regressionRisk,
+        ...technicalIssues
       ].slice(0, pageSize);
       return res.json({
         success: true,
         data: {
+          eligibleSkills,
+          maintenanceSkills,
+          scheduledProbes,
+          waitingNextSession,
+          overdueProbes,
+          regressionRisk,
+          technicalIssues,
+          summary: {
+            maintenanceSkills: maintenanceSkills.length,
+            eligibleSkills: eligibleSkills.length,
+            scheduledProbes: scheduledProbes.length,
+            waitingNextSession: waitingNextSession.length,
+            overdueProbes: overdueProbes.length,
+            regressionRisk: regressionRisk.length,
+            technicalIssues: technicalIssues.length
+          },
           skills: normalizedSkills,
           orphanSchedules,
           cards,
@@ -29759,6 +29954,7 @@ async function startServer() {
           peiTargets: hydratedPeiTargets,
           probeResults,
           alerts,
+          masteryEvaluations,
           debugCounts: {
             targetsFromPei: peiTargets.length,
             eligibleTargets: normalizedSkills.filter((skill: any) => skill?.canScheduleMaintenance || skill?.progressPercent >= 100 || ['COMPLETED', 'ACQUIRED', 'ADQUIRIDO', 'MASTERED', 'MAINTENANCE'].includes(sanitizeString(skill?.clinicalStatus, 80).toUpperCase())).length,

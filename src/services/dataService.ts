@@ -2689,6 +2689,34 @@ export const dataService = {
     };
   },
 
+  async getAbaMaintenancePanel(patientId: string, options: { limit?: number; page?: number; pageSize?: number } = {}) {
+    if (!isAbaV2Enabled()) {
+      return abaV2DisabledResponse({
+        eligibleSkills: [],
+        maintenanceSkills: [],
+        scheduledProbes: [],
+        waitingNextSession: [],
+        overdueProbes: [],
+        regressionRisk: [],
+        technicalIssues: []
+      });
+    }
+    const limit = normalizeListLimit(options.pageSize ?? options.limit, 50, 100);
+    const page = Math.max(1, Math.round(Number(options.page || 1) || 1));
+    const endpoint = endpointWithPagination(`/api/patients/${encodeURIComponent(String(patientId))}/aba/maintenance-panel`, { page, pageSize: limit });
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await buildConditionalHeaders(endpoint, 'aba'),
+        credentials: 'include'
+      }, { helperName: 'getAbaMaintenancePanel', operation: 'list', table: 'aba_targets,aba_maintenance_schedules,aba_maintenance_probe_results,aba_regression_alerts', hasExplicitColumns: true });
+      if (response.ok) return await response.json();
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível carregar manutenção agora.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível carregar manutenção agora.');
+      return { success: false, error: message, message };
+    }
+  },
+
   async getAbaMaintenanceSchedules(patientId: string, options: { limit?: number; status?: string } = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse([]);
     const limit = normalizeListLimit(options.limit, 20, 50);

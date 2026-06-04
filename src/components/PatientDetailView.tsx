@@ -339,6 +339,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [hasLoadedPeiMaintenancePanel, setHasLoadedPeiMaintenancePanel] = useState(false);
   const [isLoadingPeiMaintenancePanel, setIsLoadingPeiMaintenancePanel] = useState(false);
   const [peiMaintenancePanelMessage, setPeiMaintenancePanelMessage] = useState("");
+  const [abaMaintenancePanel, setAbaMaintenancePanel] = useState<any>(null);
   const [peiMaintenanceAssignSchedule, setPeiMaintenanceAssignSchedule] = useState<any>(null);
   const [peiMaintenanceScheduleRow, setPeiMaintenanceScheduleRow] = useState<any>(null);
   const [peiMaintenanceScheduleMode, setPeiMaintenanceScheduleMode] = useState('NEXT_PATIENT_SESSION');
@@ -349,6 +350,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [peiMaintenanceAppointmentsState, setPeiMaintenanceAppointmentsState] = useState<any>({ loading: false, error: '', items: [] });
   const [selectedPeiMaintenanceAppointmentId, setSelectedPeiMaintenanceAppointmentId] = useState('');
   const [peiMaintenanceActionKey, setPeiMaintenanceActionKey] = useState('');
+  const [isPeiMaintenanceTechnicalExpanded, setIsPeiMaintenanceTechnicalExpanded] = useState(false);
   const peiConfirmationTimerRef = React.useRef<number | null>(null);
   const [isSessionModeOpen, setIsSessionModeOpen] = useState(false);
   const [sessionPatientOverride, setSessionPatientOverride] = useState<any>(null);
@@ -803,6 +805,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     setActivePeiPlanSubtab('teaching');
     setHasLoadedPeiMaintenancePanel(false);
     setPeiMaintenancePanelMessage('');
+    setAbaMaintenancePanel(null);
     setPeiMaintenanceAssignSchedule(null);
     setPeiMaintenanceScheduleRow(null);
     setPeiMaintenanceScheduleMode('NEXT_PATIENT_SESSION');
@@ -812,6 +815,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     setPeiMaintenanceLinkableTargetsState({ loading: false, error: '', items: [], loadedFor: '' });
     setSelectedPeiMaintenanceAppointmentId('');
     setPeiMaintenanceAppointmentsState({ loading: false, error: '', items: [] });
+    setIsPeiMaintenanceTechnicalExpanded(false);
   }, [patient?.id]);
 
   const sessionModePatient = useMemo(() => {
@@ -835,6 +839,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         setAbaMasteryEvaluations([]);
         setAbaPatientSummary(null);
         setAbaMaintenanceOverview({ schedules: [], probeResults: [], alerts: [], summary: null });
+        setAbaMaintenancePanel(null);
         return;
       }
       setIsLoadingAbaRecords(true);
@@ -4875,8 +4880,57 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   );
 
   const peiMaintenanceTargetFirstGroups = useMemo(
-    () => groupPeiMaintenanceRowsTargetFirst(peiMaintenanceRows),
-    [peiMaintenanceRows]
+    () => {
+      const hasPanelPayload = Boolean(
+        abaMaintenancePanel &&
+        (
+          Array.isArray(abaMaintenancePanel.eligibleSkills) ||
+          Array.isArray(abaMaintenancePanel.maintenanceSkills) ||
+          Array.isArray(abaMaintenancePanel.scheduledProbes) ||
+          Array.isArray(abaMaintenancePanel.waitingNextSession) ||
+          Array.isArray(abaMaintenancePanel.overdueProbes) ||
+          Array.isArray(abaMaintenancePanel.regressionRisk) ||
+          Array.isArray(abaMaintenancePanel.technicalIssues)
+        )
+      );
+      if (!hasPanelPayload) return groupPeiMaintenanceRowsTargetFirst(peiMaintenanceRows);
+      const normalizePanelRow = (row: any, group: string) => {
+        const schedule = row?.nextSchedule || row?.activeSchedule || row?.schedule || null;
+        const latestResult = row?.lastResult || row?.latestResult || null;
+        return {
+          ...(row || {}),
+          key: String(row?.key || row?.cardId || row?.scheduleId || row?.targetId || row?.targetName || group),
+          targetId: row?.targetId || row?.target_id || null,
+          targetName: row?.targetName || row?.target_name || (group === 'technical' ? 'Sondagem sem habilidade vinculada' : 'Habilidade sem nome'),
+          protocol: row?.protocol || row?.protocolName || 'Sem protocolo informado',
+          domain: row?.domain || row?.domainName || 'Sem domínio informado',
+          nextSchedule: schedule,
+          activeSchedule: schedule,
+          schedules: Array.isArray(row?.schedules) ? row.schedules : schedule ? [schedule] : [],
+          lastResult: latestResult,
+          latestResult,
+          group: group === 'waitingNextSession'
+            ? 'unlinked'
+            : group === 'overdue'
+              ? 'overdue'
+              : group === 'technical'
+                ? 'unlinked'
+                : row?.group || 'activeCycle',
+          needsTargetReview: group === 'technical' || Boolean(row?.needsTargetReview),
+          isRegressionRisk: group === 'regressionRisk' || Boolean(row?.isRegressionRisk)
+        };
+      };
+      return {
+        eligibleSkills: (abaMaintenancePanel.eligibleSkills || []).map((row: any) => normalizePanelRow(row, 'eligibleSkills')),
+        maintenanceSkills: (abaMaintenancePanel.maintenanceSkills || []).map((row: any) => normalizePanelRow(row, 'maintenanceSkills')),
+        scheduled: (abaMaintenancePanel.scheduledProbes || []).map((row: any) => normalizePanelRow(row, 'scheduled')),
+        waitingNextSession: (abaMaintenancePanel.waitingNextSession || []).map((row: any) => normalizePanelRow(row, 'waitingNextSession')),
+        overdue: (abaMaintenancePanel.overdueProbes || []).map((row: any) => normalizePanelRow(row, 'overdue')),
+        regressionRisk: (abaMaintenancePanel.regressionRisk || []).map((row: any) => normalizePanelRow(row, 'regressionRisk')),
+        technical: (abaMaintenancePanel.technicalIssues || []).map((row: any) => normalizePanelRow(row, 'technical'))
+      };
+    },
+    [abaMaintenancePanel, peiMaintenanceRows]
   );
 
   const peiMaintenanceTargetFirstSummary = useMemo(() => ({
@@ -4885,6 +4939,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     scheduled: peiMaintenanceTargetFirstGroups.scheduled.length,
     waitingNextSession: peiMaintenanceTargetFirstGroups.waitingNextSession.length,
     overdue: peiMaintenanceTargetFirstGroups.overdue.length,
+    regressionRisk: peiMaintenanceTargetFirstGroups.regressionRisk.length,
     technical: peiMaintenanceTargetFirstGroups.technical.length
   }), [peiMaintenanceTargetFirstGroups]);
 
@@ -4921,15 +4976,22 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     setIsLoadingPeiMaintenancePanel(true);
     setPeiMaintenancePanelMessage('');
     try {
-      const [result, linkableResult] = await Promise.all([
-        dataService.getAbaMaintenanceOverview(String(patient.id), { page: 1, pageSize: 50 }),
+      const [panelResult, linkableResult] = await Promise.all([
+        dataService.getAbaMaintenancePanel(String(patient.id), { page: 1, pageSize: 100 }),
         dataService.getAbaLinkableTargetsForMaintenance(String(patient.id), { limit: 200 })
       ]);
-      if (result?.success === false) {
-        setPeiMaintenancePanelMessage(result?.error || 'Nao foi possivel carregar manutencao agora.');
+      if (panelResult?.success === false) {
+        setPeiMaintenancePanelMessage(panelResult?.message || panelResult?.error || 'Nao foi possivel carregar manutencao agora.');
         return;
       }
-      setAbaMaintenanceOverview(result?.data || { schedules: [], probeResults: [], alerts: [], summary: null });
+      const panelData = panelResult?.data || null;
+      setAbaMaintenancePanel(panelData);
+      setAbaMaintenanceOverview({
+        schedules: Array.isArray(panelData?.schedules) ? panelData.schedules : [],
+        probeResults: Array.isArray(panelData?.probeResults) ? panelData.probeResults : [],
+        alerts: Array.isArray(panelData?.alerts) ? panelData.alerts : [],
+        summary: panelData?.summary || null
+      });
       if (linkableResult?.success !== false) {
         setPeiMaintenanceLinkableTargetsState({ loading: false, error: '', items: Array.isArray(linkableResult?.data) ? linkableResult.data : [], loadedFor: String(patient.id) });
       }
@@ -5087,7 +5149,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       : peiMaintenanceScheduleMode === 'EXISTING_APPOINTMENT'
         ? 'Sondagem atribuída à sessão.'
         : peiMaintenanceScheduleMode === 'CUSTOM_DATE'
-          ? 'Sondagem marcada para esta data. Se houver sessão próxima, o sistema poderá sugerir vínculo.'
+          ? 'Sondagem marcada para a data escolhida.'
           : 'Sondagem de manutenção agendada.';
     void runPeiMaintenanceAction(
       `schedule-${row?.key || targetId}`,
@@ -5435,6 +5497,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               {row.group === 'confirmation' && <span className="rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-700">Pendente de confirmacao</span>}
             </div>
             <h4 className={`mt-2 text-base font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{displayTargetName}</h4>
+            {!options.technical && (
+              <p className={`mt-1 text-xs font-semibold ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>
+                {[row.protocol, row.domain].filter(Boolean).join(' · ') || 'PEI do paciente'}
+              </p>
+            )}
             <p className={`mt-1 text-xs ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>
               {rowClinicalContext}
             </p>
@@ -5472,6 +5539,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const renderPeiMaintenanceGroup = (key: PeiMaintenanceTargetFirstGroupKey, title: string, empty: string, description = '') => {
     const rows = peiMaintenanceTargetFirstGroups[key] || [];
     const technical = key === 'technical';
+    const shouldCollapseTechnical = technical && rows.length > 3 && !isPeiMaintenanceTechnicalExpanded;
+    const visibleRows = shouldCollapseTechnical ? rows.slice(0, 3) : rows;
     return (
       <section className={`space-y-3 ${technical ? 'pt-2' : ''}`}>
         <div className="flex items-center justify-between">
@@ -5481,8 +5550,17 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         {description && (
           <p className={`text-xs ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>{description}</p>
         )}
-        {rows.length > 0 ? rows.map((row: any) => renderPeiMaintenanceRow(row, { technical })) : (
+        {rows.length > 0 ? visibleRows.map((row: any) => renderPeiMaintenanceRow(row, { technical })) : (
           <p className={`rounded-2xl border p-4 text-sm ${isPanelDark ? 'border-slate-700 bg-slate-900/40 text-slate-400' : 'border-slate-100 bg-slate-50 text-slate-500'}`}>{empty}</p>
+        )}
+        {technical && rows.length > 3 && (
+          <button
+            type="button"
+            onClick={() => setIsPeiMaintenanceTechnicalExpanded((value) => !value)}
+            className={`min-h-[40px] rounded-xl px-3 py-2 text-xs font-semibold ${isPanelDark ? 'bg-slate-800 text-slate-100 hover:bg-slate-700' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}
+          >
+            {isPeiMaintenanceTechnicalExpanded ? 'Recolher pendências técnicas' : `Mostrar ${rows.length - visibleRows.length} pendência(s) técnica(s)`}
+          </button>
         )}
       </section>
     );
@@ -5492,14 +5570,15 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     <div className="space-y-5">
       <div>
         <h3 className={`text-lg font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>Manutenção</h3>
-        <p className={`mt-1 text-sm ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>Escolha uma habilidade real do PEI, decida quando sondar e crie o agendamento de manutenção.</p>
+        <p className={`mt-1 text-sm ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>Escolha habilidades adquiridas do PEI e defina quando serão sondadas.</p>
       </div>
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-6">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-7">
         {renderPeiMaintenanceMetric('Em manutenção', peiMaintenanceTargetFirstSummary.maintenanceSkills)}
         {renderPeiMaintenanceMetric('Elegíveis', peiMaintenanceTargetFirstSummary.eligibleSkills)}
         {renderPeiMaintenanceMetric('Agendadas', peiMaintenanceTargetFirstSummary.scheduled)}
         {renderPeiMaintenanceMetric('Aguardando sessão', peiMaintenanceTargetFirstSummary.waitingNextSession)}
         {renderPeiMaintenanceMetric('Atrasadas', peiMaintenanceTargetFirstSummary.overdue)}
+        {renderPeiMaintenanceMetric('Risco de regressão', peiMaintenanceTargetFirstSummary.regressionRisk)}
         {renderPeiMaintenanceMetric('Pendências técnicas', peiMaintenanceTargetFirstSummary.technical)}
       </div>
       <div className={`rounded-2xl border p-4 text-sm ${isPanelDark ? 'bg-slate-900/40 border-slate-700 text-slate-300' : 'bg-violet-50/50 border-violet-100 text-slate-600'}`}>
@@ -5507,20 +5586,21 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <button type="button" onClick={() => void refreshPeiMaintenancePanel()} disabled={isLoadingPeiMaintenancePanel} className="rounded-xl bg-[#7a32fc] px-4 py-2 text-xs font-semibold text-white disabled:opacity-60">
-          {isLoadingPeiMaintenancePanel ? 'Atualizando...' : 'Atualizar manutencao'}
+          {isLoadingPeiMaintenancePanel ? 'Atualizando...' : 'Atualizar manutenção'}
         </button>
         {peiMaintenancePanelMessage && <span className={`text-xs font-semibold ${/N[ãa]o/i.test(peiMaintenancePanelMessage) ? 'text-amber-700' : 'text-emerald-700'}`}>{peiMaintenancePanelMessage}</span>}
       </div>
-      {renderPeiMaintenanceGroup('maintenanceSkills', 'Habilidades em manutenção', 'Nenhuma habilidade em manutenção no momento.')}
       {renderPeiMaintenanceGroup('eligibleSkills', 'Habilidades elegíveis para manutenção', 'Nenhuma habilidade adquirida ou masterizada elegível no momento.')}
+      {renderPeiMaintenanceGroup('maintenanceSkills', 'Habilidades em manutenção', 'Nenhuma habilidade em manutenção no momento.')}
       {renderPeiMaintenanceGroup('scheduled', 'Sondagens agendadas', 'Nenhuma sondagem agendada com habilidade real.')}
       {renderPeiMaintenanceGroup('waitingNextSession', 'Aguardando próxima sessão', 'Nenhuma sondagem aguardando próxima sessão.')}
       {renderPeiMaintenanceGroup('overdue', 'Atrasadas', 'Nenhuma sondagem atrasada.')}
+      {renderPeiMaintenanceGroup('regressionRisk', 'Atenção / risco de regressão', 'Nenhuma habilidade em risco de regressão no momento.')}
       {renderPeiMaintenanceGroup(
         'technical',
         'Pendências técnicas de manutenção',
         'Nenhuma pendência técnica de manutenção.',
-        'Existem sondagens antigas sem vínculo claro com uma habilidade do PEI.'
+        'Sondagens antigas sem vínculo claro com uma habilidade real do PEI.'
       )}
     </div>
   );

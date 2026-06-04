@@ -76,10 +76,12 @@ test('sessao iniciada no coordenador preserva metadados ABA da tentativa', () =>
   assert.match(coordinatorDashboardCode, /return onRecordTrial\(pid, title, score, evalComment, sessionMeta\)/);
 });
 
-test('Manutencao carrega painel sob demanda e usa summaries existentes', () => {
+test('Manutencao carrega painel target-first sob demanda e preserva overview para historico', () => {
   assert.match(patientDetailCode, /activePeiPlanSubtab !== 'maintenance'/);
   assert.match(patientDetailCode, /refreshPeiMaintenancePanel/);
-  assert.match(patientDetailCode, /dataService\.getAbaMaintenanceOverview\(String\(patient\.id\), \{ page: 1, pageSize: 50 \}\)/);
+  assert.match(patientDetailCode, /dataService\.getAbaMaintenancePanel\(String\(patient\.id\), \{ page: 1, pageSize: 100 \}\)/);
+  assert.match(dataServiceCode, /async getAbaMaintenancePanel\(patientId: string/);
+  assert.match(serverCode, /app\.get\('\/api\/patients\/:patientId\/aba\/maintenance-panel'/);
   assert.match(dataServiceCode, /async getAbaMaintenanceOverview\(patientId: string/);
   assert.match(serverCode, /app\.get\('\/api\/aba\/maintenance-overview\/:patientId'/);
 });

@@ -15,11 +15,12 @@ export type PeiMaintenanceGroupKey =
   | 'completed';
 
 export type PeiMaintenanceTargetFirstGroupKey =
-  | 'maintenanceSkills'
   | 'eligibleSkills'
+  | 'maintenanceSkills'
   | 'scheduled'
   | 'waitingNextSession'
   | 'overdue'
+  | 'regressionRisk'
   | 'technical';
 
 export const PEI_PLAN_SUBTABS: Array<{ id: PeiPlanSubtab; label: string }> = [
@@ -505,11 +506,12 @@ export function groupPeiMaintenanceRows(rows: any[]) {
 
 export function groupPeiMaintenanceRowsTargetFirst(rows: any[]) {
   const groups: Record<PeiMaintenanceTargetFirstGroupKey, any[]> = {
-    maintenanceSkills: [],
     eligibleSkills: [],
+    maintenanceSkills: [],
     scheduled: [],
     waitingNextSession: [],
     overdue: [],
+    regressionRisk: [],
     technical: [],
   };
   (Array.isArray(rows) ? rows : []).forEach((row) => {
@@ -526,6 +528,10 @@ export function groupPeiMaintenanceRowsTargetFirst(rows: any[]) {
     );
     if (needsTargetReview) {
       groups.technical.push(row);
+      return;
+    }
+    if (row?.isRegressionRisk) {
+      groups.regressionRisk.push(row);
       return;
     }
     if (row?.group === 'overdue') {

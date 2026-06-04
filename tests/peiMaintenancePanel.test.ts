@@ -139,6 +139,24 @@ test('painel target-first separa habilidades reais de pendencias tecnicas', () =
   assert.equal(groups.technical[0].canScheduleMaintenance, false);
 });
 
+test('target-first separa risco de regressao do fluxo agendado', () => {
+  const targetId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0020';
+  const rows = buildPeiMaintenanceRows({
+    goals: [
+      { id: targetId, name: 'Solicita ajuda', clinical_status: 'MAINTENANCE', protocol_title: 'VB-MAPP', domain_name: 'Mando' }
+    ],
+    schedules: [
+      { id: '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0021', target_id: targetId, target: { id: targetId, name: 'Solicita ajuda' }, status: 'SCHEDULED', target_due_date: '2026-06-10T12:00:00.000Z' }
+    ],
+    probeResults: [
+      { id: '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0022', target_id: targetId, status: 'REGRESSION_RISK', occurred_at: '2026-06-03T12:00:00.000Z' }
+    ]
+  });
+  const groups = groupPeiMaintenanceRowsTargetFirst(rows);
+  assert.equal(groups.regressionRisk.some((row: any) => row.targetId === targetId), true);
+  assert.equal(groups.scheduled.some((row: any) => row.targetId === targetId), false);
+});
+
 test('habilidades do PEI com status local ou progresso 100 aparecem como elegiveis clinicas', () => {
   const rows = buildPeiMaintenanceRows({
     goals: [
@@ -227,6 +245,9 @@ test('acoes do painel chamam rotas seguras existentes', () => {
   assert.match(patientDetailCode, /rowClinicalContext/);
   assert.match(patientDetailCode, /groupPeiMaintenanceRowsTargetFirst/);
   assert.match(patientDetailCode, /peiMaintenanceTargetFirstGroups/);
+  assert.match(patientDetailCode, /Atenção \/ risco de regressão/);
+  assert.match(patientDetailCode, /isPeiMaintenanceTechnicalExpanded/);
+  assert.match(patientDetailCode, /Recolher pendências técnicas/);
   assert.match(patientDetailCode, /Habilidades em manutenção/);
   assert.match(patientDetailCode, /Habilidades elegíveis para manutenção/);
   assert.match(patientDetailCode, /Pendências técnicas de manutenção/);
@@ -279,6 +300,14 @@ test('backend resolve targets de manutencao em lote com colunas explicitas', () 
   assert.match(serverCode, /patient_pei/);
   assert.match(serverCode, /debugCounts/);
   assert.match(serverCode, /targetsFromPei/);
+  assert.match(serverCode, /eligibleSkills/);
+  assert.match(serverCode, /maintenanceSkills/);
+  assert.match(serverCode, /scheduledProbes/);
+  assert.match(serverCode, /waitingNextSession/);
+  assert.match(serverCode, /overdueProbes/);
+  assert.match(serverCode, /regressionRisk/);
+  assert.match(serverCode, /technicalIssues/);
+  assert.match(serverCode, /latestMasteryByTargetId/);
   assert.match(serverCode, /activeScheduleByTargetId/);
   assert.match(serverCode, /latestResultByTargetId/);
   assert.match(serverCode, /const kind = needsTargetReview \? 'SCHEDULE_ORFAO' : 'SCHEDULE_VALIDO'/);
@@ -309,6 +338,7 @@ test('acoes nao enviam ids sinteticos para endpoints de manutencao', () => {
   assert.match(dataServiceCode, /async assignMaintenanceScheduleToAppointment\(scheduleId: string[\s\S]*?if \(!isPersistedUuid\(appointmentId\)\)/m);
   assert.match(dataServiceCode, /async relinkMaintenanceScheduleTarget\(scheduleId: string[\s\S]*?if \(!isPersistedUuid\(targetId\)\)/m);
   assert.match(dataServiceCode, /async getAbaLinkableTargetsForMaintenance\(patientId: string/);
+  assert.match(dataServiceCode, /async getAbaMaintenancePanel\(patientId: string/);
 });
 
 test('backend valida ids invalidos e recent-session-events local sem ruido', () => {
