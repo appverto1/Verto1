@@ -158,6 +158,7 @@ interface CoordinatorDashboardProps {
     title: string,
     score: number,
     evalComment?: string,
+    sessionMeta?: any,
   ) => any;
   onDeleteHistoryItem?: (id: any) => void;
   onEvaluateHistoryItem?: (id: any, score: number, note: string) => void;
@@ -5820,15 +5821,15 @@ export function CoordinatorDashboard({
                 onUpdatePatient
                   ? (updates: any) => {
                       if (!ensureTherapistClinicalProfile()) return;
-                      onUpdatePatient(updates);
+                      return onUpdatePatient(updates);
                     }
                   : undefined
               }
               onRecordTrial={
                 onRecordTrial
-                  ? (pid: any, title: string, score: number, evalComment?: string) => {
+                  ? (pid: any, title: string, score: number, evalComment?: string, sessionMeta?: any) => {
                       if (!ensureTherapistClinicalProfile()) return null;
-                      return onRecordTrial(pid, title, score, evalComment);
+                      return onRecordTrial(pid, title, score, evalComment, sessionMeta);
                     }
                   : undefined
               }

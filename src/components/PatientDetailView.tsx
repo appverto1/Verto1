@@ -38,6 +38,11 @@ import {
   calculateAppointmentEnd,
   getAppointmentDurationMinutes,
 } from '../utils/scheduling';
+import {
+  buildPeiSessionProgressReset,
+  getPeiHistoryProgressMarker,
+  getPeiProgressResetMarker,
+} from '../utils/peiSessionReset';
 import { AFLS_ADULT_SOCIAL_PARTICIPATION_PROTOCOL } from '../constants/aflsProtocol';
 import { VBMAPP_LEVEL_1_CANONICAL_PROTOCOL } from '../constants/vbmappLevel1Protocol';
 import { VBMAPP_LEVEL_2_CANONICAL_PROTOCOL } from '../constants/vbmappLevel2Protocol';
@@ -964,24 +969,16 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     const startedAt = new Date();
     const resetAt = startedAt.getTime();
     if (restoreSessionData && isKidsProfile && Array.isArray(patient?.pei) && onUpdatePatient) {
-      const updatedPei = patient.pei.map((goal: any) => {
-        if (isGoalAcquired(goal)) return goal;
-        return {
-          ...goal,
-          progress: 0,
-          progressResetAt: resetAt,
-          sessionProgressResetAt: resetAt,
-          masteryResetAt: resetAt,
-          status: String(goal?.status || '').toLowerCase() === 'not_started'
-            ? 'not_started'
-            : 'in_progress'
-        };
-      });
-      onUpdatePatient({
+      const updatedPei = buildPeiSessionProgressReset(patient.pei, resetAt);
+      const updateResult = await onUpdatePatient({
         ...patient,
         id: patient.id,
         pei: updatedPei
       });
+      if (updateResult?.success === false) {
+        alert(`Não foi possível restaurar os dados de sessão agora: ${updateResult?.error || 'falha ao salvar o PEI.'}`);
+        return;
+      }
       onAddNote?.(
         patient.id,
         `Dados de preenchimento do PEI restaurados em ${startedAt.toLocaleString('pt-BR')}. O plano estruturado foi mantido e os novos registros passam a contar a partir desta sessão.`,
@@ -4688,22 +4685,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   };
 
   const getGoalProgressResetMarker = (goal: any) => {
-    const explicitReset = Number(
-      goal?.sessionProgressResetAt ??
-      goal?.progressResetAt ??
-      goal?.masteryResetAt ??
-      goal?.progress_reset_at
-    );
-    if (Number.isFinite(explicitReset) && explicitReset > 0) return explicitReset;
-    const legacyGoalId = Number(goal?.id);
-    return Number.isFinite(legacyGoalId) ? legacyGoalId : 0;
+    return getPeiProgressResetMarker(goal);
   };
 
   const getHistoryProgressMarker = (entry: any) => {
-    const numericId = Number(entry?.id);
-    if (Number.isFinite(numericId) && numericId > 0) return numericId;
-    const createdAt = new Date(entry?.created_at || entry?.date || entry?.time || 0).getTime();
-    return Number.isFinite(createdAt) ? createdAt : 0;
+    return getPeiHistoryProgressMarker(entry);
   };
 
   const getMasteryProgress = (goalOrName: any) => {
@@ -4719,6 +4705,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         String(h.patientId ?? h.patient_id ?? '') === String(patient.id) &&
         h.title === skillName &&
         h.type === 'task' &&
+        String(h.collection_type || h.collectionType || h.trialType || '').toLowerCase() !== 'maintenance_probe' &&
         (!goal || getHistoryProgressMarker(h) > resetMarker)
       )
       .sort((a: any, b: any) => getHistoryProgressMarker(b) - getHistoryProgressMarker(a));

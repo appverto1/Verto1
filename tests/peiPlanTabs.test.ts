@@ -7,9 +7,15 @@ import {
   groupPeiMaintenanceRows,
   summarizePeiMaintenanceRows,
 } from '../src/utils/peiMaintenancePanel.ts';
+import {
+  buildPeiSessionProgressReset,
+  getPeiHistoryProgressMarker,
+  getPeiProgressResetMarker,
+} from '../src/utils/peiSessionReset.ts';
 
 const root = process.cwd();
 const patientDetailCode = readFileSync(join(root, 'src/components/PatientDetailView.tsx'), 'utf8');
+const coordinatorDashboardCode = readFileSync(join(root, 'src/components/CoordinatorDashboard.tsx'), 'utf8');
 const dataServiceCode = readFileSync(join(root, 'src/services/dataService.ts'), 'utf8');
 const serverCode = readFileSync(join(root, 'server.ts'), 'utf8');
 
@@ -32,6 +38,31 @@ test('Ensino preserva lista atual de metas e acao de sessao', () => {
   assert.match(teachingBlock, /patient\.pei && patient\.pei\.length > 0/);
   assert.match(patientDetailCode, /requestSessionStart\('fullscreen'\)/);
   assert.match(teachingBlock, /MasteryDots/);
+});
+
+test('Restaurar dados de sessao zera progresso PEI antes de abrir sessao', () => {
+  const resetAt = new Date('2026-06-04T12:00:00.000Z').getTime();
+  const resetPei = buildPeiSessionProgressReset([
+    { id: 'goal-1', name: 'Contato visual', status: 'completed', progress: 100 },
+    { id: 'goal-2', name: 'Imitacao', status: 'in_progress', progress: 60 },
+    { id: 'goal-3', name: 'Arquivado', status: 'archived', progress: 80 }
+  ], resetAt);
+
+  assert.equal(resetPei[0].status, 'in_progress');
+  assert.equal(resetPei[0].progress, 0);
+  assert.equal(resetPei[0].sessionProgressResetAt, resetAt);
+  assert.equal(resetPei[0].sessionRestorePreviousStatus, 'completed');
+  assert.equal(resetPei[1].progressResetAt, resetAt);
+  assert.equal(resetPei[2].status, 'archived');
+  assert.equal(getPeiProgressResetMarker(resetPei[0]), resetAt);
+  assert.equal(getPeiHistoryProgressMarker({ id: 'history-1', createdAt: '2026-06-04T12:01:00.000Z' }) > resetAt, true);
+  assert.match(patientDetailCode, /const updatedPei = buildPeiSessionProgressReset\(patient\.pei, resetAt\)/);
+  assert.match(patientDetailCode, /const updateResult = await onUpdatePatient/);
+});
+
+test('sessao iniciada no coordenador preserva metadados ABA da tentativa', () => {
+  assert.match(coordinatorDashboardCode, /evalComment\?: string, sessionMeta\?: any/);
+  assert.match(coordinatorDashboardCode, /return onRecordTrial\(pid, title, score, evalComment, sessionMeta\)/);
 });
 
 test('Manutencao carrega painel sob demanda e usa summaries existentes', () => {

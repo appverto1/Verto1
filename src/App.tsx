@@ -27,6 +27,10 @@ import {
   mapPatientProfileTypeToLegacyPortalType,
   normalizePatientProfileType,
 } from './utils/patientProfileType';
+import {
+  getPeiHistoryProgressMarker,
+  getPeiProgressResetMarker,
+} from './utils/peiSessionReset';
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>;
@@ -4394,23 +4398,8 @@ export default function App() {
     let updatedPei = sourcePei;
 
     if (isKid && sourcePei.length > 0 && abaCollectionType !== 'maintenance_probe') {
-      const progressResetMarker = (() => {
-        const explicitReset = Number(
-          peiGoal?.sessionProgressResetAt ??
-          peiGoal?.progressResetAt ??
-          peiGoal?.masteryResetAt ??
-          peiGoal?.progress_reset_at
-        );
-        if (Number.isFinite(explicitReset) && explicitReset > 0) return explicitReset;
-        const legacyGoalId = Number(peiGoal?.id);
-        return Number.isFinite(legacyGoalId) ? legacyGoalId : 0;
-      })();
-      const historyProgressMarker = (entry: any) => {
-        const numericId = Number(entry?.id);
-        if (Number.isFinite(numericId) && numericId > 0) return numericId;
-        const createdAt = new Date(entry?.created_at || entry?.date || entry?.time || 0).getTime();
-        return Number.isFinite(createdAt) ? createdAt : 0;
-      };
+      const progressResetMarker = getPeiProgressResetMarker(peiGoal);
+      const historyProgressMarker = getPeiHistoryProgressMarker;
       const skillHistory = updatedHistory
         .filter((h: any) =>
           String(h.patientId ?? h.patient_id ?? '') === String(pid) &&
