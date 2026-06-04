@@ -339,6 +339,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [peiMaintenanceScheduleDate, setPeiMaintenanceScheduleDate] = useState('');
   const [peiMaintenanceReviewRow, setPeiMaintenanceReviewRow] = useState<any>(null);
   const [peiMaintenanceReviewTargetId, setPeiMaintenanceReviewTargetId] = useState('');
+  const [peiMaintenanceLinkableTargetsState, setPeiMaintenanceLinkableTargetsState] = useState<any>({ loading: false, error: '', items: [], loadedFor: '' });
   const [peiMaintenanceAppointmentsState, setPeiMaintenanceAppointmentsState] = useState<any>({ loading: false, error: '', items: [] });
   const [selectedPeiMaintenanceAppointmentId, setSelectedPeiMaintenanceAppointmentId] = useState('');
   const [peiMaintenanceActionKey, setPeiMaintenanceActionKey] = useState('');
@@ -800,6 +801,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     setPeiMaintenanceScheduleDate('');
     setPeiMaintenanceReviewRow(null);
     setPeiMaintenanceReviewTargetId('');
+    setPeiMaintenanceLinkableTargetsState({ loading: false, error: '', items: [], loadedFor: '' });
     setSelectedPeiMaintenanceAppointmentId('');
     setPeiMaintenanceAppointmentsState({ loading: false, error: '', items: [] });
   }, [patient?.id]);
@@ -4769,6 +4771,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   };
 
   const peiGoals = useMemo(() => (Array.isArray(patient?.pei) ? patient.pei : []), [patient?.pei]);
+  const peiMaintenanceLinkableTargets = useMemo(
+    () => (Array.isArray(peiMaintenanceLinkableTargetsState.items) ? peiMaintenanceLinkableTargetsState.items : []),
+    [peiMaintenanceLinkableTargetsState.items]
+  );
 
   const canManagePeiMaintenance = useMemo(() => {
     const role = String(userRole || resolvedClinicContext?.role || clinicContext?.role || '').toLowerCase();
@@ -4776,11 +4782,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   }, [abaV2Enabled, clinicContext?.role, isKidsProfile, resolvedClinicContext?.role, userRole]);
 
   const peiMaintenanceRows = useMemo(() => buildPeiMaintenanceRows({
-    goals: peiGoals,
+    goals: [...peiGoals, ...peiMaintenanceLinkableTargets],
     schedules: abaMaintenanceOverview?.schedules || [],
     probeResults: abaMaintenanceOverview?.probeResults || [],
     alerts: abaMaintenanceOverview?.alerts || []
-  }), [peiGoals, abaMaintenanceOverview]);
+  }), [peiGoals, peiMaintenanceLinkableTargets, abaMaintenanceOverview]);
 
   const peiMaintenanceSummary = useMemo(
     () => summarizePeiMaintenanceRows(peiMaintenanceRows),
@@ -4825,12 +4831,18 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     setIsLoadingPeiMaintenancePanel(true);
     setPeiMaintenancePanelMessage('');
     try {
-      const result = await dataService.getAbaMaintenanceOverview(String(patient.id), { page: 1, pageSize: 50 });
+      const [result, linkableResult] = await Promise.all([
+        dataService.getAbaMaintenanceOverview(String(patient.id), { page: 1, pageSize: 50 }),
+        dataService.getAbaLinkableTargetsForMaintenance(String(patient.id), { limit: 200 })
+      ]);
       if (result?.success === false) {
         setPeiMaintenancePanelMessage(result?.error || 'Nao foi possivel carregar manutencao agora.');
         return;
       }
       setAbaMaintenanceOverview(result?.data || { schedules: [], probeResults: [], alerts: [], summary: null });
+      if (linkableResult?.success !== false) {
+        setPeiMaintenanceLinkableTargetsState({ loading: false, error: '', items: Array.isArray(linkableResult?.data) ? linkableResult.data : [], loadedFor: String(patient.id) });
+      }
       setHasLoadedPeiMaintenancePanel(true);
     } catch {
       setPeiMaintenancePanelMessage('Nao foi possivel carregar manutencao agora.');
@@ -4868,6 +4880,31 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       cancelled = true;
     };
   }, [patient?.id, peiMaintenanceAssignSchedule, peiMaintenanceScheduleRow]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!peiMaintenanceReviewRow || !patient?.id || !abaV2Enabled) return;
+    if (peiMaintenanceLinkableTargetsState.loadedFor === String(patient.id) && peiMaintenanceLinkableTargetsState.items.length > 0) return;
+    setPeiMaintenanceLinkableTargetsState((prev: any) => ({ ...prev, loading: true, error: '' }));
+    dataService.getAbaLinkableTargetsForMaintenance(String(patient.id), { limit: 200 })
+      .then((result: any) => {
+        if (cancelled) return;
+        setPeiMaintenanceLinkableTargetsState({
+          loading: false,
+          error: result?.success === false ? result?.message || result?.error || 'Nao foi possivel carregar habilidades do PEI.' : '',
+          items: Array.isArray(result?.data) ? result.data : [],
+          loadedFor: String(patient.id)
+        });
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPeiMaintenanceLinkableTargetsState({ loading: false, error: 'Nao foi possivel carregar habilidades do PEI.', items: [], loadedFor: String(patient.id) });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [abaV2Enabled, patient?.id, peiMaintenanceLinkableTargetsState.items.length, peiMaintenanceLinkableTargetsState.loadedFor, peiMaintenanceReviewRow]);
 
   const getPersistedUuid = (value: any) => {
     const id = String(value || '').trim();
@@ -5121,14 +5158,40 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     });
   };
 
-  const getPeiMaintenanceTargetOptions = () =>
-    (Array.isArray(patient?.pei) ? patient.pei : [])
-      .map((goal: any) => {
-        const id = getPersistedUuid(goal?.id || goal?.target_id || goal?.targetId);
-        const label = safeDisplayValue(goal?.name || goal?.target_name || goal?.targetName || goal?.title, 'Habilidade sem nome');
-        return id ? { id, label } : null;
-      })
-      .filter(Boolean) as Array<{ id: string; label: string }>;
+  const getPeiMaintenanceTargetOptions = () => {
+    const byId = new Map<string, { id: string; label: string; detail: string; status: string }>();
+    const addTargetOption = (target: any) => {
+      const id = getPersistedUuid(target?.id || target?.target_id || target?.targetId);
+      if (!id || byId.has(id)) return;
+      const display = resolveMaintenanceTargetDisplay({ target, schedule: target });
+      const label = safeDisplayValue(
+        display.targetDisplayName || target?.name || target?.target_name || target?.targetName || target?.title,
+        'Habilidade sem nome'
+      );
+      const detail = [display.protocolDisplayName, display.domainDisplayName]
+        .filter((value) => value && !String(value).startsWith('Sem '))
+        .join(' - ');
+      byId.set(id, {
+        id,
+        label,
+        detail: detail || 'PEI do paciente',
+        status: safeDisplayValue(target?.clinical_status || target?.clinicalStatus || target?.status || target?.phase, 'Status nao informado')
+      });
+    };
+    (Array.isArray(patient?.pei) ? patient.pei : []).forEach(addTargetOption);
+    peiMaintenanceLinkableTargets.forEach(addTargetOption);
+    const currentTargetId = getPeiMaintenanceTargetId(peiMaintenanceReviewRow);
+    if (currentTargetId) {
+      addTargetOption({
+        id: currentTargetId,
+        name: peiMaintenanceReviewRow?.targetName,
+        protocol_title: peiMaintenanceReviewRow?.protocol,
+        domain_name: peiMaintenanceReviewRow?.domain,
+        status: peiMaintenanceReviewRow?.statusLabel
+      });
+    }
+    return Array.from(byId.values()).sort((a, b) => a.label.localeCompare(b.label, 'pt-BR'));
+  };
 
   const renderPeiMaintenanceMetric = (label: string, value: number) => (
     <div className={`rounded-2xl border p-4 ${isPanelDark ? 'bg-slate-900/50 border-slate-700' : 'bg-white border-slate-100'}`}>
@@ -5145,8 +5208,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     const scheduleId = getPeiMaintenanceScheduleId(row?.nextSchedule);
     const hasRealTarget = Boolean(targetId);
     const hasRealSchedule = Boolean(scheduleId);
-    const hasMissingTargetLabel = /habilidade\s+(nao|não)\s+(vinculada|encontrada)|habilidade\s+sem\s+nome/i.test(String(row?.targetName || ''));
-    const needsReview = !hasRealTarget || hasMissingTargetLabel || (!noSchedule && group !== 'completed' && !hasRealSchedule);
+    const hasMissingTargetLabel = /habilidade\s+(nao|não)\s+(vinculada|encontrada)/i.test(String(row?.targetName || ''));
+    const needsTargetReview = !hasRealTarget || Boolean(row?.targetMissing || row?.nextSchedule?.target_missing) || hasMissingTargetLabel;
+    const needsReview = needsTargetReview || (!noSchedule && group !== 'completed' && !hasRealSchedule);
     const actionLoading = (actionName: string) =>
       peiMaintenanceActionKey === `${actionName}-${row.key}` ||
       (scheduleId && peiMaintenanceActionKey === `${actionName}-${scheduleId}`) ||
@@ -5162,18 +5226,18 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           </button>
         )}
         {noSchedule && (
-          <button type="button" disabled={actionLoading('schedule') || !hasRealTarget} title={!hasRealTarget ? 'Revise o vínculo antes de agendar.' : undefined} onClick={() => handlePeiCreateMaintenancePlan(row)} className={primaryClass}>
+          <button type="button" disabled={actionLoading('schedule') || needsTargetReview} title={needsTargetReview ? 'Vincule esta sondagem a uma habilidade real antes de agendar.' : undefined} onClick={() => handlePeiCreateMaintenancePlan(row)} className={primaryClass}>
             {actionLoading('schedule') ? 'Agendando...' : 'Agendar manutencao'}
           </button>
         )}
         {(noSchedule || group === 'overdue' || group === 'unlinked') && (
-          <button type="button" disabled={actionLoading('next') || !hasRealTarget} title={!hasRealTarget ? 'Revise o vínculo antes de aguardar próxima sessão.' : undefined} onClick={() => handlePeiScheduleNextSession(row)} className={buttonClass}>
+          <button type="button" disabled={actionLoading('next') || needsTargetReview} title={needsTargetReview ? 'Vincule esta sondagem a uma habilidade real antes de agendar.' : undefined} onClick={() => handlePeiScheduleNextSession(row)} className={buttonClass}>
             {actionLoading('next') ? 'Atualizando...' : 'Aguardar proxima sessao'}
           </button>
         )}
         {group === 'confirmation' && (
           <>
-            <button type="button" disabled={actionLoading('confirm') || !hasRealSchedule} title={!hasRealSchedule ? 'Revise o vínculo antes de confirmar.' : undefined} onClick={() => handlePeiConfirmCandidateLink(row)} className={primaryClass}>
+            <button type="button" disabled={actionLoading('confirm') || !hasRealSchedule || needsTargetReview} title={needsTargetReview || !hasRealSchedule ? 'Revise o vínculo antes de confirmar.' : undefined} onClick={() => handlePeiConfirmCandidateLink(row)} className={primaryClass}>
               {actionLoading('confirm') ? 'Confirmando...' : 'Confirmar vinculo'}
             </button>
             <button type="button" disabled={actionLoading('skip') || !hasRealSchedule} title={!hasRealSchedule ? 'Revise o vínculo antes de fazer depois.' : undefined} onClick={() => handlePeiSkipCandidateLink(row)} className={buttonClass}>
@@ -5182,7 +5246,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           </>
         )}
         {group !== 'completed' && !noSchedule && (
-          <button type="button" disabled={actionLoading('assign') || !hasRealSchedule} title={!hasRealSchedule ? 'Revise o vínculo antes de atribuir.' : undefined} onClick={() => openPeiMaintenanceAssignModal(row)} className={buttonClass}>
+          <button type="button" disabled={actionLoading('assign') || !hasRealSchedule || needsTargetReview} title={needsTargetReview || !hasRealSchedule ? 'Vincule esta sondagem a uma habilidade real antes de atribuir.' : undefined} onClick={() => openPeiMaintenanceAssignModal(row)} className={buttonClass}>
             Atribuir a uma sessao
           </button>
         )}
@@ -5197,7 +5261,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           </span>
         )}
         {group === 'overdue' && (
-          <button type="button" disabled={actionLoading('next') || !hasRealTarget} onClick={() => handlePeiScheduleNextSession(row)} className={primaryClass}>
+          <button type="button" disabled={actionLoading('next') || needsTargetReview} onClick={() => handlePeiScheduleNextSession(row)} className={primaryClass}>
             {actionLoading('next') ? 'Atualizando...' : 'Usar na proxima sessao'}
           </button>
         )}
@@ -5209,6 +5273,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     const lastResult = row?.lastResult || null;
     const accuracy = lastResult?.accuracy_percent ?? lastResult?.accuracyPercent;
     const independence = lastResult?.independence_percent ?? lastResult?.independencePercent;
+    const rowNeedsTargetReview = !getPeiMaintenanceTargetId(row) || Boolean(row?.targetMissing || row?.nextSchedule?.target_missing);
     const cycleLabel = row?.hasCycle
       ? `Plano de manutencao: ${row.completedCount}/${row.totalCycleCount || 4} concluido`
       : 'Sem ciclo completo registrado';
@@ -5223,7 +5288,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               {row.group === 'confirmation' && <span className="rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-700">Pendente de confirmacao</span>}
             </div>
             <h4 className={`mt-2 text-base font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{row.targetName}</h4>
-            <p className={`mt-1 text-xs ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>{row.protocol} - {row.domain}</p>
+            <p className={`mt-1 text-xs ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>
+              {rowNeedsTargetReview ? 'Esta sondagem precisa ser vinculada a uma habilidade do PEI.' : `${row.protocol} - ${row.domain}`}
+            </p>
           </div>
           <div className={`rounded-2xl px-3 py-2 text-xs font-semibold ${isPanelDark ? 'bg-slate-900/70 text-slate-200' : 'bg-slate-50 text-slate-600'}`}>
             {formatPeiMaintenanceScheduleLabel(row.nextSchedule)}
@@ -5692,23 +5759,39 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 <X size={18} />
               </button>
             </div>
-            {getPeiMaintenanceTargetOptions().length > 0 ? (
-              <label className={`block text-sm font-semibold ${isPanelDark ? 'text-slate-200' : 'text-slate-700'}`}>
-                Habilidade do PEI
-                <select
-                  value={peiMaintenanceReviewTargetId}
-                  onChange={(event) => setPeiMaintenanceReviewTargetId(event.target.value)}
-                  className={`mt-2 w-full rounded-xl border px-3 py-3 text-sm outline-none ${isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-100 bg-slate-50 text-slate-700'}`}
-                >
-                  <option value="">Selecione uma habilidade</option>
-                  {getPeiMaintenanceTargetOptions().map((option) => (
-                    <option key={option.id} value={option.id}>{option.label}</option>
-                  ))}
-                </select>
-              </label>
+            {peiMaintenanceLinkableTargetsState.loading ? (
+              <div className={`rounded-2xl border p-4 text-sm ${isPanelDark ? 'border-slate-700 bg-slate-900/40 text-slate-300' : 'border-slate-100 bg-slate-50 text-slate-500'}`}>
+                Carregando habilidades do PEI...
+              </div>
+            ) : getPeiMaintenanceTargetOptions().length > 0 ? (
+              (() => {
+                const options = getPeiMaintenanceTargetOptions();
+                return (
+                  <label className={`block text-sm font-semibold ${isPanelDark ? 'text-slate-200' : 'text-slate-700'}`}>
+                    Habilidade do PEI
+                    <select
+                      value={peiMaintenanceReviewTargetId}
+                      onChange={(event) => setPeiMaintenanceReviewTargetId(event.target.value)}
+                      className={`mt-2 w-full rounded-xl border px-3 py-3 text-sm outline-none ${isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-100 bg-slate-50 text-slate-700'}`}
+                    >
+                      <option value="">Selecione uma habilidade</option>
+                      {options.map((option) => (
+                        <option key={option.id} value={option.id}>
+                          {[option.label, option.detail, option.status].filter(Boolean).join(' - ')}
+                        </option>
+                      ))}
+                    </select>
+                    {peiMaintenanceReviewTargetId && (
+                      <p className={`mt-2 text-xs ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>
+                        {options.find((option) => option.id === peiMaintenanceReviewTargetId)?.detail || 'PEI do paciente'}
+                      </p>
+                    )}
+                  </label>
+                );
+              })()
             ) : (
               <div className={`rounded-2xl border p-4 text-sm ${isPanelDark ? 'border-amber-400/20 bg-amber-500/10 text-amber-100' : 'border-amber-100 bg-amber-50 text-amber-800'}`}>
-                Ainda não há habilidade real do PEI disponível para selecionar.
+                {peiMaintenanceLinkableTargetsState.error || 'Este paciente ainda não possui habilidades no PEI. Adicione uma meta antes de vincular a manutenção.'}
               </div>
             )}
             <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">

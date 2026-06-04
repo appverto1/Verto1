@@ -75,6 +75,15 @@ const getTargetKey = (...values: any[]) => {
   return '';
 };
 
+const isMaintenanceRelevantGoal = (goal: any) => {
+  const status = String(goal?.status || goal?.clinical_status || goal?.clinicalStatus || goal?.phase || '').toLowerCase();
+  const clinicalStatus = normalizeStatus(goal?.clinical_status || goal?.clinicalStatus || goal?.status || goal?.phase);
+  return (
+    ['completed', 'acquired', 'adquirido', 'maintenance', 'maintained', 'mastered'].includes(status) ||
+    ['MASTERED', 'MAINTENANCE', 'MAINTAINED', 'ACQUIRED'].includes(clinicalStatus)
+  );
+};
+
 const getScheduleReferenceDate = (schedule: any) =>
   schedule?.scheduled_for ||
   schedule?.scheduledFor ||
@@ -134,13 +143,19 @@ export function resolveMaintenanceTargetDisplay(input: {
       target?.targetName,
       target?.skill_name,
       target?.skillName,
+      target?.objective,
       source?.target_name,
       source?.targetName,
       source?.name,
+      source?.title,
+      source?.skill_name,
+      source?.skillName,
+      source?.objective,
       metadata?.target_name,
       metadata?.targetName,
       probe?.target_name,
       probe?.targetName,
+      probe?.objective,
       probeMetadata?.target_name,
       probeMetadata?.targetName
     ) ||
@@ -210,6 +225,9 @@ export function resolveMaintenanceTargetDisplay(input: {
     recentResultLabel,
     badgeLabel: statusLabel,
     targetId,
+    hasTargetId: Boolean(targetId),
+    targetMissing: hasExplicitMissingTarget,
+    needsTargetReview: !targetId || hasExplicitMissingTarget,
     reviewBadgeLabel: !targetId ? 'Revisar vinculo' : hasExplicitMissingTarget ? 'Revisar dados' : '',
   };
 }
@@ -279,11 +297,13 @@ export function buildPeiMaintenanceRows(input: {
     if (existing) return existing;
     const row = {
       key,
-      targetId: normalizeText(seed.target_id || seed.targetId || seed.id || ''),
+      targetId: normalizeText(seed.target_id || seed.targetId || (seed.goal ? seed.id : '') || ''),
       targetName: display.targetDisplayName,
       protocol: display.protocolDisplayName,
       domain: display.domainDisplayName,
       clinicalStatus: normalizeStatus(seed.status || seed.clinical_status || seed.clinicalStatus || ''),
+      needsTargetReview: display.needsTargetReview,
+      targetMissing: display.targetMissing,
       goal: seed.goal || seed,
       schedules: [] as any[],
       probeResults: [] as any[],
@@ -294,7 +314,7 @@ export function buildPeiMaintenanceRows(input: {
   };
 
   (Array.isArray(input.goals) ? input.goals : [])
-    .filter((goal) => ['completed', 'acquired', 'adquirido', 'maintenance', 'maintained'].includes(String(goal?.status || '').toLowerCase()))
+    .filter(isMaintenanceRelevantGoal)
     .forEach((goal) => ensureRow({ ...goal, goal }));
 
   (Array.isArray(input.schedules) ? input.schedules : []).forEach((schedule) => {

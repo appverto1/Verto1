@@ -217,6 +217,8 @@ function auditClinicalQuery(endpoint: string, options: ClinicalQueryAuditOptions
       /\/api\/appointments\/[^/?]+\/required-documents\/[^/?]+\/waive/.test(endpoint) ||
       /\/api\/admin\/payers(?:\/[^/?]+\/requirements)?/.test(endpoint) ||
       /\/api\/admin\/payer-requirements\/[^/?]+/.test(endpoint) ||
+      /\/api\/patients\/[^/?]+\/aba\/maintenance-panel/.test(endpoint) ||
+      /\/api\/patients\/[^/?]+\/aba\/targets\/linkable/.test(endpoint) ||
       /\/api\/aba\/patients\/[^/?]+\/charts\/[^/?]+/.test(endpoint) ||
       /\/api\/aba\/patients\/[^/?]+\/(maintenance-schedules|next-session\/recommendations|next-session\/plan-items)/.test(endpoint) ||
       /\/api\/(notes|history|tasks|assigned-tasks|patient-anamnesis|patient-records)\/[^/?]+/.test(endpoint) ||
@@ -2722,6 +2724,24 @@ export const dataService = {
       if (import.meta.env.DEV) console.log('Fetching future ABA maintenance appointments from local state only...');
     }
     return { success: true, data: [] };
+  },
+
+  async getAbaLinkableTargetsForMaintenance(patientId: string, options: { limit?: number } = {}) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse([]);
+    const endpoint = endpointWithQuery(`/api/patients/${encodeURIComponent(String(patientId))}/aba/targets/linkable`, {
+      limit: normalizeListLimit(options.limit, 200, 200)
+    });
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await buildConditionalHeaders(endpoint, 'aba'),
+        credentials: 'include'
+      }, { helperName: 'getAbaLinkableTargetsForMaintenance', operation: 'list', table: 'aba_targets', hasExplicitColumns: true });
+      if (response.ok) return await response.json();
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível carregar habilidades do PEI agora.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível carregar habilidades do PEI agora.');
+      return { success: false, data: [], error: message, message };
+    }
   },
 
   async createMaintenanceScheduleForTarget(targetId: string, payload: any = {}) {

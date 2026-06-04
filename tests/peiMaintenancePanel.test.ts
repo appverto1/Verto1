@@ -54,6 +54,21 @@ test('labels escondem identificadores tecnicos quando nome do target veio cru', 
   assert.doesNotMatch(rows[0].statusLabel, /6b0a0b10/);
 });
 
+test('schedule orfao nao herda schedule id como target real', () => {
+  const rows = buildPeiMaintenanceRows({
+    schedules: [
+      {
+        id: '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0001',
+        status: 'PENDING_LINK',
+        target_due_date: '2026-06-01T13:00:00.000Z'
+      }
+    ]
+  });
+  assert.equal(rows[0].targetId, '');
+  assert.equal(rows[0].targetName, 'Habilidade nao vinculada');
+  assert.equal(rows[0].needsTargetReview, true);
+});
+
 test('resolvedor central prioriza nome real, protocolo, dominio e marco clinico', () => {
   const display = resolveMaintenanceTargetDisplay({
     schedule: {
@@ -119,6 +134,10 @@ test('acoes do painel chamam rotas seguras existentes', () => {
   assert.match(patientDetailCode, /handlePeiSkipCandidateLink/);
   assert.match(patientDetailCode, /handlePeiScheduleModalSave/);
   assert.match(patientDetailCode, /openPeiMaintenanceReviewModal/);
+  assert.match(patientDetailCode, /getAbaLinkableTargetsForMaintenance/);
+  assert.match(patientDetailCode, /Este paciente ainda n[Ã£a]o possui habilidades no PEI|Este paciente ainda não possui habilidades no PEI/);
+  assert.doesNotMatch(patientDetailCode, /Ainda n[Ã£a]o h[Ã¡a] habilidade real do PEI dispon[Ã­i]vel para selecionar|Ainda não há habilidade real do PEI disponível para selecionar/);
+  assert.match(serverCode, /app\.get\('\/api\/patients\/:patientId\/aba\/targets\/linkable'/);
   assert.match(serverCode, /app\.post\('\/api\/aba\/maintenance-schedules\/:scheduleId\/confirm-link'/);
   assert.match(serverCode, /app\.post\('\/api\/aba\/maintenance-schedules\/:scheduleId\/assign-appointment'/);
   assert.match(serverCode, /app\.post\('\/api\/aba\/maintenance-schedules\/:scheduleId\/skip-link'/);
@@ -152,6 +171,7 @@ test('acoes nao enviam ids sinteticos para endpoints de manutencao', () => {
   assert.match(dataServiceCode, /async confirmMaintenanceScheduleLink\(scheduleId: string[\s\S]*?if \(!isPersistedUuid\(scheduleId\)\)[\s\S]*?const endpoint = `\/api\/aba\/maintenance-schedules\/\$\{encodeURIComponent\(String\(scheduleId\)\)\}\/confirm-link`/m);
   assert.match(dataServiceCode, /async assignMaintenanceScheduleToAppointment\(scheduleId: string[\s\S]*?if \(!isPersistedUuid\(appointmentId\)\)/m);
   assert.match(dataServiceCode, /async relinkMaintenanceScheduleTarget\(scheduleId: string[\s\S]*?if \(!isPersistedUuid\(targetId\)\)/m);
+  assert.match(dataServiceCode, /async getAbaLinkableTargetsForMaintenance\(patientId: string/);
 });
 
 test('backend valida ids invalidos e recent-session-events local sem ruido', () => {

@@ -29324,6 +29324,135 @@ async function startServer() {
     }
   });
 
+  app.get('/api/patients/:patientId/aba/maintenance-panel', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      if (!isUuid(patientId)) return res.status(400).json({ success: false, error: 'ID_INVALIDO', message: 'Paciente inválido.' });
+      const { page, pageSize, from, to } = parseAbaPageParams(req.query);
+      const applyClinic = (query: any) => {
+        let scoped = organizationId ? query.eq('organization_id', organizationId) : query;
+        return !hasGlobalClinicAccess(req.session.user) && clinicId ? scoped.eq('clinic_id', clinicId) : scoped;
+      };
+      const [scheduleResult, targetResult] = await Promise.all([
+        applyClinic(
+          supabase
+            .from('aba_maintenance_schedules')
+            .select(ABA_MAINTENANCE_SCHEDULE_SELECT)
+            .eq('patient_id', patientId)
+            .in('status', ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES)
+            .order('target_due_date', { ascending: true })
+            .range(from, to)
+        ),
+        applyClinic(
+          supabase
+            .from('aba_targets')
+            .select(ABA_TARGET_RECOMMENDATION_SELECT)
+            .eq('patient_id', patientId)
+            .order('updated_at', { ascending: false })
+            .limit(200)
+        )
+      ]);
+      const firstError = [scheduleResult, targetResult].find((result: any) => result.error)?.error;
+      if (firstError) {
+        if (hasMissingFinancialSchema(firstError)) return res.json({ success: true, data: { cards: [], schedules: [], targets: [] }, page, pageSize });
+        throw firstError;
+      }
+      const enrichedSchedules = await enrichMaintenanceRowsWithTargetDisplay((scheduleResult as any).data || [], clinicId, organizationId, req.session.user);
+      const allTargets = Array.isArray((targetResult as any).data) ? (targetResult as any).data : [];
+      const scheduledTargetIds = new Set(enrichedSchedules.map((schedule: any) => sanitizeString(schedule?.target_id || schedule?.targetId, 180)).filter(Boolean));
+      const maintenanceTargetRows = allTargets.filter((target: any) => {
+        const id = sanitizeString(target?.id, 180);
+        if (!isUuid(id) || scheduledTargetIds.has(id)) return false;
+        const status = sanitizeString(target?.clinical_status || target?.phase || target?.target_type, 80).toUpperCase();
+        return ['MAINTENANCE', 'MASTERED', 'MAINTAINED', 'ACQUIRED'].includes(status);
+      });
+      const cards = [
+        ...enrichedSchedules.map((schedule: any) => {
+          const scheduleId = sanitizeString(schedule?.id, 180);
+          const targetId = sanitizeString(schedule?.target_id || schedule?.targetId, 180);
+          const targetResolved = Boolean(targetId && !schedule?.target_missing);
+          const needsTargetReview = !isUuid(targetId) || Boolean(schedule?.target_missing);
+          return cleanObject({
+            id: scheduleId,
+            type: needsTargetReview ? 'ORPHAN_SCHEDULE' : 'VALID_SCHEDULE',
+            schedule,
+            target: schedule?.target || null,
+            status: sanitizeString(schedule?.status, 80) || 'PENDING',
+            canSchedule: targetResolved,
+            canAssign: targetResolved && isUuid(scheduleId),
+            needsTargetReview,
+            availableActions: needsTargetReview
+              ? ['REVIEW_TARGET', 'SKIP_LINK']
+              : ['SCHEDULE_MAINTENANCE', 'WAIT_NEXT_SESSION', 'ASSIGN_APPOINTMENT', 'REVIEW_TARGET']
+          });
+        }),
+        ...maintenanceTargetRows.map((target: any) => {
+          const targetId = sanitizeString(target?.id, 180);
+          return cleanObject({
+            id: targetId,
+            type: 'TARGET_WITHOUT_SCHEDULE',
+            schedule: null,
+            target,
+            status: sanitizeString(target?.clinical_status || target?.phase, 80) || 'MAINTENANCE',
+            canSchedule: true,
+            canAssign: false,
+            needsTargetReview: false,
+            availableActions: ['SCHEDULE_MAINTENANCE', 'WAIT_NEXT_SESSION']
+          });
+        })
+      ].slice(0, pageSize);
+      return res.json({ success: true, data: { cards, schedules: enrichedSchedules, targets: maintenanceTargetRows }, page, pageSize });
+    } catch {
+      return res.status(500).json({ success: false, error: 'UNEXPECTED_ERROR', message: 'Não foi possível carregar manutenção agora.' });
+    }
+  });
+
+  app.get('/api/patients/:patientId/aba/targets/linkable', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      if (!isUuid(patientId)) return res.status(400).json({ success: false, error: 'ID_INVALIDO', message: 'Paciente inválido.' });
+      let query = supabase
+        .from('aba_targets')
+        .select(ABA_TARGET_RECOMMENDATION_SELECT)
+        .eq('organization_id', organizationId)
+        .eq('patient_id', patientId)
+        .order('updated_at', { ascending: false })
+        .limit(200);
+      query = applyAbaTenantScope(query, req.session.user, clinicId, organizationId);
+      const { data, error } = await query;
+      if (error) {
+        if (hasMissingFinancialSchema(error)) return res.json({ success: true, data: [] });
+        throw error;
+      }
+      const rows = (Array.isArray(data) ? data : [])
+        .filter((target: any) => isUuid(sanitizeString(target?.id, 180)))
+        .map((target: any) => cleanObject({
+          id: sanitizeString(target.id, 180),
+          target_id: sanitizeString(target.id, 180),
+          targetId: sanitizeString(target.id, 180),
+          name: sanitizeString(target.name || target.description, 240) || 'Habilidade sem nome',
+          target_name: sanitizeString(target.name || target.description, 240) || 'Habilidade sem nome',
+          targetName: sanitizeString(target.name || target.description, 240) || 'Habilidade sem nome',
+          protocol_title: sanitizeString(target.protocol_title, 240) || null,
+          protocolTitle: sanitizeString(target.protocol_title, 240) || null,
+          domain_name: sanitizeString(target.domain_name, 240) || null,
+          domainName: sanitizeString(target.domain_name, 240) || null,
+          clinical_status: sanitizeString(target.clinical_status || target.phase || target.target_type, 80) || null,
+          clinicalStatus: sanitizeString(target.clinical_status || target.phase || target.target_type, 80) || null,
+          phase: sanitizeString(target.phase, 80) || null,
+          status: sanitizeString(target.clinical_status || target.phase, 80) || null,
+          updated_at: sanitizeString(target.updated_at, 80) || null
+        }));
+      return res.json({ success: true, data: rows });
+    } catch {
+      return res.status(500).json({ success: false, error: 'UNEXPECTED_ERROR', message: 'Não foi possível carregar habilidades do PEI agora.' });
+    }
+  });
+
   app.get('/api/aba/patients/:patientId/maintenance-schedules', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
