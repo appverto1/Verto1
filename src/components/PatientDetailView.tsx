@@ -4775,6 +4775,82 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     () => (Array.isArray(peiMaintenanceLinkableTargetsState.items) ? peiMaintenanceLinkableTargetsState.items : []),
     [peiMaintenanceLinkableTargetsState.items]
   );
+  const normalizePeiMaintenanceMatchKey = (value: any) =>
+    String(value || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-zA-Z0-9]+/g, ' ')
+      .trim()
+      .toLowerCase();
+  const getPeiMaintenancePersistedId = (value: any) => {
+    const id = String(value || '').trim();
+    return isUuidLike(id) ? id : '';
+  };
+  const getPeiMaintenanceMatchName = (target: any) =>
+    safeDisplayValue(
+      target?.name ||
+        target?.target_name ||
+        target?.targetName ||
+        target?.title ||
+        target?.skill_name ||
+        target?.skillName ||
+        target?.objective,
+      ''
+    );
+  const getPeiMaintenanceProtocolName = (target: any) =>
+    safeDisplayValue(target?.protocol_title || target?.protocolTitle || target?.protocolName || target?.protocol_name, '');
+  const getPeiMaintenanceDomainName = (target: any) =>
+    safeDisplayValue(target?.domain_name || target?.domainName || target?.program_name || target?.programName, '');
+
+  const peiMaintenanceHydratedGoals = useMemo(() => {
+    const byComposite = new Map<string, any>();
+    const duplicateComposite = new Set<string>();
+    const byName = new Map<string, any>();
+    const duplicateName = new Set<string>();
+    const register = (map: Map<string, any>, duplicates: Set<string>, key: string, target: any) => {
+      if (!key) return;
+      if (map.has(key)) {
+        duplicates.add(key);
+        map.delete(key);
+        return;
+      }
+      if (!duplicates.has(key)) map.set(key, target);
+    };
+    peiMaintenanceLinkableTargets.forEach((target: any) => {
+      const id = getPeiMaintenancePersistedId(target?.id || target?.target_id || target?.targetId);
+      if (!id) return;
+      const nameKey = normalizePeiMaintenanceMatchKey(getPeiMaintenanceMatchName(target));
+      const protocolKey = normalizePeiMaintenanceMatchKey(getPeiMaintenanceProtocolName(target));
+      const domainKey = normalizePeiMaintenanceMatchKey(getPeiMaintenanceDomainName(target));
+      register(byComposite, duplicateComposite, [nameKey, protocolKey, domainKey].filter(Boolean).join('|'), target);
+      register(byName, duplicateName, nameKey, target);
+    });
+    return peiGoals.map((goal: any) => {
+      const currentId = getPeiMaintenancePersistedId(goal?.target_id || goal?.targetId || goal?.id);
+      if (currentId) return { ...goal, target_id: currentId, targetId: currentId };
+      const nameKey = normalizePeiMaintenanceMatchKey(getPeiMaintenanceMatchName(goal));
+      const protocolKey = normalizePeiMaintenanceMatchKey(getPeiMaintenanceProtocolName(goal));
+      const domainKey = normalizePeiMaintenanceMatchKey(getPeiMaintenanceDomainName(goal));
+      const compositeKey = [nameKey, protocolKey, domainKey].filter(Boolean).join('|');
+      const match = (compositeKey && !duplicateComposite.has(compositeKey) ? byComposite.get(compositeKey) : null) ||
+        (nameKey && !duplicateName.has(nameKey) ? byName.get(nameKey) : null);
+      const matchId = getPeiMaintenancePersistedId(match?.id || match?.target_id || match?.targetId);
+      if (!matchId) return goal;
+      return {
+        ...goal,
+        target_id: matchId,
+        targetId: matchId,
+        target_name: goal?.target_name || goal?.targetName || goal?.name || match?.name || match?.target_name || match?.targetName,
+        targetName: goal?.targetName || goal?.target_name || goal?.name || match?.name || match?.targetName || match?.target_name,
+        protocol_title: goal?.protocol_title || goal?.protocolTitle || match?.protocol_title || match?.protocolTitle || match?.protocolName,
+        protocolTitle: goal?.protocolTitle || goal?.protocol_title || match?.protocolTitle || match?.protocol_title || match?.protocolName,
+        domain_name: goal?.domain_name || goal?.domainName || match?.domain_name || match?.domainName,
+        domainName: goal?.domainName || goal?.domain_name || match?.domainName || match?.domain_name,
+        clinical_status: goal?.clinical_status || goal?.clinicalStatus || match?.clinical_status || match?.clinicalStatus,
+        clinicalStatus: goal?.clinicalStatus || goal?.clinical_status || match?.clinicalStatus || match?.clinical_status
+      };
+    });
+  }, [peiGoals, peiMaintenanceLinkableTargets]);
 
   const canManagePeiMaintenance = useMemo(() => {
     const role = String(userRole || resolvedClinicContext?.role || clinicContext?.role || '').toLowerCase();
@@ -4782,11 +4858,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   }, [abaV2Enabled, clinicContext?.role, isKidsProfile, resolvedClinicContext?.role, userRole]);
 
   const peiMaintenanceRows = useMemo(() => buildPeiMaintenanceRows({
-    goals: [...peiGoals, ...peiMaintenanceLinkableTargets],
+    goals: [...peiMaintenanceHydratedGoals, ...peiMaintenanceLinkableTargets],
     schedules: abaMaintenanceOverview?.schedules || [],
     probeResults: abaMaintenanceOverview?.probeResults || [],
     alerts: abaMaintenanceOverview?.alerts || []
-  }), [peiGoals, peiMaintenanceLinkableTargets, abaMaintenanceOverview]);
+  }), [peiMaintenanceHydratedGoals, peiMaintenanceLinkableTargets, abaMaintenanceOverview]);
 
   const peiMaintenanceSummary = useMemo(
     () => summarizePeiMaintenanceRows(peiMaintenanceRows),
@@ -4884,7 +4960,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   useEffect(() => {
     let cancelled = false;
     if (!peiMaintenanceReviewRow || !patient?.id || !abaV2Enabled) return;
-    if (peiMaintenanceLinkableTargetsState.loadedFor === String(patient.id)) return;
+    if (peiMaintenanceLinkableTargetsState.loadedFor === String(patient.id) && peiMaintenanceLinkableTargetsState.items.length > 0) return;
     setPeiMaintenanceLinkableTargetsState((prev: any) => ({ ...prev, loading: true, error: '' }));
     dataService.getAbaLinkableTargetsForMaintenance(String(patient.id), { limit: 200 })
       .then((result: any) => {
@@ -4904,7 +4980,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return () => {
       cancelled = true;
     };
-  }, [abaV2Enabled, patient?.id, peiMaintenanceLinkableTargetsState.loadedFor, peiMaintenanceReviewRow]);
+  }, [abaV2Enabled, patient?.id, peiMaintenanceLinkableTargetsState.items.length, peiMaintenanceLinkableTargetsState.loadedFor, peiMaintenanceReviewRow]);
 
   const getPersistedUuid = (value: any) => {
     const id = String(value || '').trim();
@@ -5200,7 +5276,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         status: safeDisplayValue(target?.clinical_status || target?.clinicalStatus || target?.status || target?.phase, 'Status nao informado')
       });
     };
-    (Array.isArray(patient?.pei) ? patient.pei : []).forEach(addTargetOption);
+    peiMaintenanceHydratedGoals.forEach(addTargetOption);
     peiMaintenanceLinkableTargets.forEach(addTargetOption);
     const currentTargetId = getPeiMaintenanceTargetId(peiMaintenanceReviewRow);
     if (currentTargetId) {
@@ -5253,12 +5329,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         )}
         {noSchedule && (
           <button type="button" disabled={actionLoading('schedule') || !canScheduleMaintenance} title={!canScheduleMaintenance ? 'Vincule esta sondagem a uma habilidade real antes de agendar.' : undefined} onClick={() => handlePeiCreateMaintenancePlan(row)} className={primaryClass}>
-            {actionLoading('schedule') ? 'Agendando...' : 'Agendar manutencao'}
+            {actionLoading('schedule') ? 'Agendando...' : 'Agendar manutenção'}
           </button>
         )}
-        {(noSchedule || group === 'overdue' || group === 'unlinked') && (
+        {group !== 'completed' && group !== 'confirmation' && (
           <button type="button" disabled={actionLoading('next') || !canWaitNextSession} title={!canWaitNextSession ? 'Vincule esta sondagem a uma habilidade real antes de agendar.' : undefined} onClick={() => handlePeiScheduleNextSession(row)} className={buttonClass}>
-            {actionLoading('next') ? 'Atualizando...' : 'Aguardar proxima sessao'}
+            {actionLoading('next') ? 'Atualizando...' : 'Aguardar próxima sessão'}
           </button>
         )}
         {group === 'confirmation' && (
@@ -5271,9 +5347,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             </button>
           </>
         )}
-        {group !== 'completed' && canAssignAppointment && (
+        {group !== 'completed' && group !== 'confirmation' && (
           <button type="button" disabled={actionLoading('assign') || !canAssignAppointment} title={!canAssignAppointment ? 'Vincule esta sondagem a uma habilidade real antes de atribuir.' : undefined} onClick={() => openPeiMaintenanceAssignModal(row)} className={buttonClass}>
-            Atribuir a uma sessao
+            Atribuir a uma sessão
           </button>
         )}
         {group === 'today' && activeSession && (
@@ -5300,8 +5376,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     const accuracy = lastResult?.accuracy_percent ?? lastResult?.accuracyPercent;
     const independence = lastResult?.independence_percent ?? lastResult?.independencePercent;
     const rowNeedsTargetReview = Boolean(row?.needsTargetReview ?? (!getPeiMaintenanceTargetId(row) || row?.targetMissing || row?.nextSchedule?.target_missing));
+    const displayTargetName = rowNeedsTargetReview ? 'Habilidade não vinculada' : row.targetName;
     const rowClinicalContext = rowNeedsTargetReview
-      ? 'Esta sondagem precisa ser vinculada a uma habilidade do PEI.'
+      ? 'Esta sondagem antiga precisa ser associada a uma habilidade real.'
       : row.group === 'completed'
         ? 'Habilidade mantida.'
         : row.group === 'overdue'
@@ -5326,7 +5403,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               </span>
               {row.group === 'confirmation' && <span className="rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-700">Pendente de confirmacao</span>}
             </div>
-            <h4 className={`mt-2 text-base font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{row.targetName}</h4>
+            <h4 className={`mt-2 text-base font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{displayTargetName}</h4>
             <p className={`mt-1 text-xs ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>
               {rowClinicalContext}
             </p>

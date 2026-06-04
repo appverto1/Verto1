@@ -187,6 +187,11 @@ test('acoes do painel chamam rotas seguras existentes', () => {
   assert.match(patientDetailCode, /canWaitNextSession/);
   assert.match(patientDetailCode, /canAssignAppointment/);
   assert.match(patientDetailCode, /rowClinicalContext/);
+  assert.match(patientDetailCode, /normalizePeiMaintenanceMatchKey/);
+  assert.match(patientDetailCode, /peiMaintenanceHydratedGoals/);
+  assert.match(patientDetailCode, /goals: \[\.\.\.peiMaintenanceHydratedGoals, \.\.\.peiMaintenanceLinkableTargets\]/);
+  assert.match(patientDetailCode, /peiMaintenanceHydratedGoals\.forEach\(addTargetOption\)/);
+  assert.match(patientDetailCode, /group !== 'completed' && group !== 'confirmation' && \(/);
   assert.match(serverCode, /app\.get\('\/api\/patients\/:patientId\/aba\/maintenance-panel'/);
   assert.match(serverCode, /app\.patch\('\/api\/aba\/maintenance-schedules\/:scheduleId\/assign-appointment'/);
   assert.match(serverCode, /app\.patch\('\/api\/aba\/maintenance-schedules\/:scheduleId\/relink-target'/);
@@ -207,9 +212,15 @@ test('acoes do painel chamam rotas seguras existentes', () => {
 
 test('interfaces de manutencao usam display central sem placeholders antigos', () => {
   const uiCode = [patientDetailCode, calendarCode, sessionModeCode, maintenancePanelCode].join('\n');
+  const rowStart = patientDetailCode.indexOf('const renderPeiMaintenanceRow');
+  const rowEnd = patientDetailCode.indexOf('const renderPeiMaintenanceGroup', rowStart);
+  const rowCode = patientDetailCode.slice(rowStart, rowEnd);
   assert.match(calendarCode, /resolveMaintenanceTargetDisplay/);
   assert.match(sessionModeCode, /resolveMaintenanceTargetDisplay/);
   assert.match(patientDetailCode, /resolveMaintenanceTargetDisplay/);
+  assert.match(rowCode, /displayTargetName/);
+  assert.match(rowCode, /Esta sondagem antiga precisa ser associada a uma habilidade real/);
+  assert.doesNotMatch(rowCode, /Esta sondagem precisa ser vinculada a uma habilidade do PEI/);
   assert.doesNotMatch(uiCode, /Target em manuten[cç]ao|Target em manutenção|Sem maintenance probe agendado|Marco clinico: a definir|Marco clínico: a definir/);
 });
 
@@ -235,7 +246,7 @@ test('backend resolve targets de manutencao em lote com colunas explicitas', () 
 test('acoes nao enviam ids sinteticos para endpoints de manutencao', () => {
   assert.match(patientDetailCode, /const getPersistedUuid/);
   assert.match(patientDetailCode, /disabled=\{actionLoading\('confirm'\) \|\| !hasRealSchedule \|\| needsTargetReview\}/);
-  assert.match(patientDetailCode, /group !== 'completed' && canAssignAppointment/);
+  assert.match(patientDetailCode, /group !== 'completed' && group !== 'confirmation' && \(/);
   assert.match(dataServiceCode, /SYNTHETIC_CLINICAL_ID_RE/);
   assert.match(dataServiceCode, /if \(!isPersistedUuid\(targetId\)\)[\s\S]*?Habilidade inválida para agendamento de manutenção/m);
   assert.match(dataServiceCode, /if \(!isPersistedUuid\(scheduleId\)\)[\s\S]*?Sondagem de manutenção inválida para confirmar vínculo/m);
