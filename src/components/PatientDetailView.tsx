@@ -351,6 +351,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [peiMaintenanceActionKey, setPeiMaintenanceActionKey] = useState('');
   const peiConfirmationTimerRef = React.useRef<number | null>(null);
   const [isSessionModeOpen, setIsSessionModeOpen] = useState(false);
+  const [sessionPatientOverride, setSessionPatientOverride] = useState<any>(null);
   const [isUnlinkingModalOpen, setIsUnlinkingModalOpen] = useState(false);
   const [approvedVertoProtocolStatuses, setApprovedVertoProtocolStatuses] = useState<any[]>([]);
   const [clinicTherapists, setClinicTherapists] = useState<any[]>([]);
@@ -798,6 +799,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
   useEffect(() => {
     setGeneratedReviewNotes([]);
+    setSessionPatientOverride(null);
     setActivePeiPlanSubtab('teaching');
     setHasLoadedPeiMaintenancePanel(false);
     setPeiMaintenancePanelMessage('');
@@ -811,6 +813,17 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     setSelectedPeiMaintenanceAppointmentId('');
     setPeiMaintenanceAppointmentsState({ loading: false, error: '', items: [] });
   }, [patient?.id]);
+
+  const sessionModePatient = useMemo(() => {
+    if (
+      sessionPatientOverride &&
+      String(sessionPatientOverride?.id || '') === String(patient?.id || '') &&
+      Array.isArray(sessionPatientOverride?.pei)
+    ) {
+      return { ...patient, pei: sessionPatientOverride.pei };
+    }
+    return patient;
+  }, [patient, sessionPatientOverride]);
 
   useEffect(() => {
     let cancelled = false;
@@ -970,15 +983,19 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     const resetAt = startedAt.getTime();
     if (restoreSessionData && isKidsProfile && Array.isArray(patient?.pei) && onUpdatePatient) {
       const updatedPei = buildPeiSessionProgressReset(patient.pei, resetAt);
-      const updateResult = await onUpdatePatient({
+      const restoredPatient = {
         ...patient,
         id: patient.id,
         pei: updatedPei
+      };
+      const updateResult = await onUpdatePatient({
+        ...restoredPatient
       });
       if (updateResult?.success === false) {
         alert(`Não foi possível restaurar os dados de sessão agora: ${updateResult?.error || 'falha ao salvar o PEI.'}`);
         return;
       }
+      setSessionPatientOverride(restoredPatient);
       onAddNote?.(
         patient.id,
         `Dados de preenchimento do PEI restaurados em ${startedAt.toLocaleString('pt-BR')}. O plano estruturado foi mantido e os novos registros passam a contar a partir desta sessão.`,
@@ -5609,7 +5626,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       </div>
       {abaV2Enabled && isSessionModeOpen && (
         <SessionMode 
-          patient={{ ...patient, history: history.filter((h: any) => h.patientId === patient.id) }} 
+          patient={{ ...sessionModePatient, history: history.filter((h: any) => h.patientId === patient.id) }} 
           onClose={() => setIsSessionModeOpen(false)} 
           onRecordTrial={onRecordTrial} 
           onDeleteHistoryItem={onDeleteHistoryItem}

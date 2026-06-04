@@ -9,13 +9,16 @@ import {
 } from '../src/utils/peiMaintenancePanel.ts';
 import {
   buildPeiSessionProgressReset,
+  getPeiClinicalRowMarker,
   getPeiHistoryProgressMarker,
   getPeiProgressResetMarker,
+  isPeiClinicalRowAfterProgressReset,
 } from '../src/utils/peiSessionReset.ts';
 
 const root = process.cwd();
 const patientDetailCode = readFileSync(join(root, 'src/components/PatientDetailView.tsx'), 'utf8');
 const coordinatorDashboardCode = readFileSync(join(root, 'src/components/CoordinatorDashboard.tsx'), 'utf8');
+const sessionModeCode = readFileSync(join(root, 'src/components/SessionMode.tsx'), 'utf8');
 const dataServiceCode = readFileSync(join(root, 'src/services/dataService.ts'), 'utf8');
 const serverCode = readFileSync(join(root, 'server.ts'), 'utf8');
 
@@ -56,8 +59,16 @@ test('Restaurar dados de sessao zera progresso PEI antes de abrir sessao', () =>
   assert.equal(resetPei[2].status, 'archived');
   assert.equal(getPeiProgressResetMarker(resetPei[0]), resetAt);
   assert.equal(getPeiHistoryProgressMarker({ id: 'history-1', createdAt: '2026-06-04T12:01:00.000Z' }) > resetAt, true);
+  assert.equal(getPeiClinicalRowMarker({ created_at: '2026-06-04T11:59:00.000Z' }) < resetAt, true);
+  assert.equal(isPeiClinicalRowAfterProgressReset(resetPei[0], { created_at: '2026-06-04T11:59:00.000Z' }), false);
+  assert.equal(isPeiClinicalRowAfterProgressReset(resetPei[0], { created_at: '2026-06-04T12:01:00.000Z' }), true);
   assert.match(patientDetailCode, /const updatedPei = buildPeiSessionProgressReset\(patient\.pei, resetAt\)/);
   assert.match(patientDetailCode, /const updateResult = await onUpdatePatient/);
+  assert.match(patientDetailCode, /setSessionPatientOverride\(restoredPatient\)/);
+  assert.match(patientDetailCode, /patient=\{\{ \.\.\.sessionModePatient/);
+  assert.match(sessionModeCode, /isPeiClinicalRowAfterProgressReset/);
+  assert.match(sessionModeCode, /filter\(\(schedule: any\) => isPeiClinicalRowAfterProgressReset\(goal, schedule\)\)/);
+  assert.match(sessionModeCode, /filter\(\(result: any\) => isPeiClinicalRowAfterProgressReset\(goal, result\)\)/);
 });
 
 test('sessao iniciada no coordenador preserva metadados ABA da tentativa', () => {

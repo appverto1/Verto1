@@ -64,6 +64,7 @@ import {
 import { evaluateMaintenanceStatus, evaluateTargetMastery, formatAbaMasteryCriterion } from '../utils/abaMasteryEngine';
 import { formatMaintenanceScheduleDueLabel } from '../utils/abaMaintenanceScheduling';
 import { resolveMaintenanceTargetDisplay } from '../utils/peiMaintenancePanel';
+import { isPeiClinicalRowAfterProgressReset } from '../utils/peiSessionReset';
 
 type SyncStatus = 'local' | 'syncing' | 'synced' | 'error';
 type AbcRequirement = 'REQUIRED' | 'RECOMMENDED' | 'OPTIONAL' | 'DISABLED';
@@ -3016,12 +3017,15 @@ export const SessionMode = ({
     const goalName = String(goal?.name || goal?.target_name || goal?.targetName || 'Meta').trim();
     const schedules = maintenanceSchedules
       .filter((schedule: any) => targetMatchesGoal(schedule, goalId, goalName))
+      .filter((schedule: any) => isPeiClinicalRowAfterProgressReset(goal, schedule))
       .sort((a: any, b: any) => new Date(a?.scheduled_for || a?.scheduledFor || a?.target_due_date || a?.targetDueDate || 0).getTime() - new Date(b?.scheduled_for || b?.scheduledFor || b?.target_due_date || b?.targetDueDate || 0).getTime());
     const probeResults = maintenanceProbeResults
       .filter((result: any) => targetMatchesGoal(result, goalId, goalName))
+      .filter((result: any) => isPeiClinicalRowAfterProgressReset(goal, result))
       .sort((a: any, b: any) => new Date(b?.occurred_at || b?.occurredAt || 0).getTime() - new Date(a?.occurred_at || a?.occurredAt || 0).getTime());
     const alerts = regressionAlerts
       .filter((alert: any) => targetMatchesGoal(alert, goalId, goalName))
+      .filter((alert: any) => isPeiClinicalRowAfterProgressReset(goal, alert))
       .sort((a: any, b: any) => new Date(b?.created_at || b?.createdAt || 0).getTime() - new Date(a?.created_at || a?.createdAt || 0).getTime());
     let consecutiveFailures = 0;
     for (const result of probeResults) {

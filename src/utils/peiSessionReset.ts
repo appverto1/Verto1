@@ -51,3 +51,31 @@ export const getPeiHistoryProgressMarker = (entry: any) => {
   ).getTime();
   return Number.isFinite(createdAt) ? createdAt : 0;
 };
+
+export const getPeiClinicalRowMarker = (entry: any) => {
+  const createdAt = new Date(
+    entry?.created_at ||
+    entry?.createdAt ||
+    entry?.updated_at ||
+    entry?.updatedAt ||
+    entry?.occurred_at ||
+    entry?.occurredAt ||
+    entry?.evaluated_at ||
+    entry?.evaluatedAt ||
+    entry?.completed_at ||
+    entry?.completedAt ||
+    entry?.scheduled_for ||
+    entry?.scheduledFor ||
+    entry?.target_due_date ||
+    entry?.targetDueDate ||
+    entry?.date ||
+    0
+  ).getTime();
+  return Number.isFinite(createdAt) ? createdAt : 0;
+};
+
+export const isPeiClinicalRowAfterProgressReset = (goal: any, row: any) => {
+  const resetMarker = getPeiProgressResetMarker(goal);
+  if (!resetMarker) return true;
+  return getPeiClinicalRowMarker(row) > resetMarker;
+};
