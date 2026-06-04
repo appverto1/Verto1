@@ -71,6 +71,8 @@ const centralAbaShowcase = [
   }
 ];
 
+const CENTRAL_ABA_SHOWCASE_ASPECT_RATIO = '1142 / 576';
+
 export const LandingPage = ({ onLogin, setUser }: any) => {
   const registerPasswordInputRef = React.useRef<HTMLInputElement | null>(null);
   const [showLogin, setShowLogin] = useState(false);
@@ -112,7 +114,6 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
   const [activeHeroStory, setActiveHeroStory] = useState(0);
   const [activeCentralAbaShot, setActiveCentralAbaShot] = useState(0);
   const activeHeroStoryData = heroStories[activeHeroStory] || heroStories[0];
-  const activeCentralAbaShotData = centralAbaShowcase[activeCentralAbaShot] || centralAbaShowcase[0];
 
   const parseApiResponse = async (response: Response) => {
     const text = await response.text();
@@ -1077,7 +1078,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
               </div>
               <div
                 className="relative overflow-hidden rounded-[22px] bg-[#fbf8ff] transition-all duration-700"
-                style={{ aspectRatio: `${activeCentralAbaShotData.width} / ${activeCentralAbaShotData.height}` }}
+                style={{ aspectRatio: CENTRAL_ABA_SHOWCASE_ASPECT_RATIO }}
               >
                 {centralAbaShowcase.map((shot, index) => (
                   <img
