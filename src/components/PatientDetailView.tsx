@@ -4884,7 +4884,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   useEffect(() => {
     let cancelled = false;
     if (!peiMaintenanceReviewRow || !patient?.id || !abaV2Enabled) return;
-    if (peiMaintenanceLinkableTargetsState.loadedFor === String(patient.id) && peiMaintenanceLinkableTargetsState.items.length > 0) return;
+    if (peiMaintenanceLinkableTargetsState.loadedFor === String(patient.id)) return;
     setPeiMaintenanceLinkableTargetsState((prev: any) => ({ ...prev, loading: true, error: '' }));
     dataService.getAbaLinkableTargetsForMaintenance(String(patient.id), { limit: 200 })
       .then((result: any) => {
@@ -4904,7 +4904,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return () => {
       cancelled = true;
     };
-  }, [abaV2Enabled, patient?.id, peiMaintenanceLinkableTargetsState.items.length, peiMaintenanceLinkableTargetsState.loadedFor, peiMaintenanceReviewRow]);
+  }, [abaV2Enabled, patient?.id, peiMaintenanceLinkableTargetsState.loadedFor, peiMaintenanceReviewRow]);
 
   const getPersistedUuid = (value: any) => {
     const id = String(value || '').trim();

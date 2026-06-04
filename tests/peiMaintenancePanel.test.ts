@@ -39,7 +39,7 @@ test('resumo operacional calcula pendencias sem eventos brutos', () => {
   assert.equal(summary.pending, 4);
 });
 
-test('labels escondem identificadores tecnicos quando nome do target veio cru', () => {
+test('labels escondem identificadores tecnicos quando target nao foi hidratado', () => {
   const rows = buildPeiMaintenanceRows({
     schedules: [
       {
@@ -50,7 +50,7 @@ test('labels escondem identificadores tecnicos quando nome do target veio cru', 
       }
     ]
   });
-  assert.equal(rows[0].targetName, 'Habilidade sem nome');
+  assert.equal(rows[0].targetName, 'Habilidade nao encontrada');
   assert.doesNotMatch(rows[0].statusLabel, /6b0a0b10/);
 });
 
@@ -65,6 +65,21 @@ test('schedule orfao nao herda schedule id como target real', () => {
     ]
   });
   assert.equal(rows[0].targetId, '');
+  assert.equal(rows[0].targetName, 'Habilidade nao vinculada');
+  assert.equal(rows[0].needsTargetReview, true);
+});
+
+test('schedule sem target_id nao usa metadata antiga como habilidade real', () => {
+  const rows = buildPeiMaintenanceRows({
+    schedules: [
+      {
+        id: '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0001',
+        target_name: 'Imitacao antiga',
+        metadata: { target_name: 'Imitacao antiga' },
+        status: 'PENDING_LINK'
+      }
+    ]
+  });
   assert.equal(rows[0].targetName, 'Habilidade nao vinculada');
   assert.equal(rows[0].needsTargetReview, true);
 });
@@ -135,6 +150,13 @@ test('acoes do painel chamam rotas seguras existentes', () => {
   assert.match(patientDetailCode, /handlePeiScheduleModalSave/);
   assert.match(patientDetailCode, /openPeiMaintenanceReviewModal/);
   assert.match(patientDetailCode, /getAbaLinkableTargetsForMaintenance/);
+  assert.match(serverCode, /app\.get\('\/api\/patients\/:patientId\/aba\/maintenance-panel'/);
+  assert.match(serverCode, /app\.patch\('\/api\/aba\/maintenance-schedules\/:scheduleId\/assign-appointment'/);
+  assert.match(serverCode, /app\.patch\('\/api\/aba\/maintenance-schedules\/:scheduleId\/relink-target'/);
+  assert.match(serverCode, /MAINTENANCE_SCHEDULE_RELINKED/);
+  assert.match(serverCode, /MAINTENANCE_SCHEDULE_CREATED/);
+  assert.match(serverCode, /MAINTENANCE_SCHEDULE_ASSIGNED/);
+  assert.match(serverCode, /MAINTENANCE_NEXT_SESSION_SET/);
   assert.match(patientDetailCode, /Este paciente ainda n[Ã£a]o possui habilidades no PEI|Este paciente ainda não possui habilidades no PEI/);
   assert.doesNotMatch(patientDetailCode, /Ainda n[Ã£a]o h[Ã¡a] habilidade real do PEI dispon[Ã­i]vel para selecionar|Ainda não há habilidade real do PEI disponível para selecionar/);
   assert.match(serverCode, /app\.get\('\/api\/patients\/:patientId\/aba\/targets\/linkable'/);
@@ -157,13 +179,16 @@ test('interfaces de manutencao usam display central sem placeholders antigos', (
 test('backend resolve targets de manutencao em lote com colunas explicitas', () => {
   assert.match(serverCode, /const enrichMaintenanceRowsWithTargetDisplay/);
   assert.match(serverCode, /\.from\('aba_targets'\)[\s\S]*?\.select\(ABA_TARGET_RECOMMENDATION_SELECT\)[\s\S]*?\.in\('id', targetIds\)/m);
+  assert.match(serverCode, /type: needsTargetReview \? 'ORPHAN_SCHEDULE' : 'VALID_SCHEDULE'/);
+  assert.match(serverCode, /type: 'TARGET_WITHOUT_SCHEDULE'/);
+  assert.match(serverCode, /availableActions: needsTargetReview/);
   assert.match(serverCode, /'candidate_appointment_id'[\s\S]*?'confirmed_at'[\s\S]*?'metadata'/m);
   assert.doesNotMatch(serverCode, /from\('aba_maintenance_schedules'\)[\s\S]{0,200}\.select\('\*'\)/m);
 });
 
 test('acoes nao enviam ids sinteticos para endpoints de manutencao', () => {
   assert.match(patientDetailCode, /const getPersistedUuid/);
-  assert.match(patientDetailCode, /disabled=\{actionLoading\('confirm'\) \|\| !hasRealSchedule\}/);
+  assert.match(patientDetailCode, /disabled=\{actionLoading\('confirm'\) \|\| !hasRealSchedule \|\| needsTargetReview\}/);
   assert.match(dataServiceCode, /SYNTHETIC_CLINICAL_ID_RE/);
   assert.match(dataServiceCode, /if \(!isPersistedUuid\(targetId\)\)[\s\S]*?Habilidade inválida para agendamento de manutenção/m);
   assert.match(dataServiceCode, /if \(!isPersistedUuid\(scheduleId\)\)[\s\S]*?Sondagem de manutenção inválida para confirmar vínculo/m);

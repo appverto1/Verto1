@@ -27444,6 +27444,7 @@ async function startServer() {
             due_date: null,
             metadata: sanitizeClinicalPayload({
               ...(existingSchedule.metadata && typeof existingSchedule.metadata === 'object' ? existingSchedule.metadata : {}),
+              auditAction: 'MAINTENANCE_NEXT_SESSION_SET',
               nextSessionPolicy: true,
               scheduleReason: 'NEXT_SESSION_REUSED'
             }),
@@ -27460,6 +27461,16 @@ async function startServer() {
           patientId
         );
         if (update.error) throw update.error;
+        void persistActivityLog({
+          userId: createdBy || '',
+          clinicId,
+          actorName: 'Equipe',
+          title: 'Sondagem aguardando proxima sessao',
+          content: 'Maintenance Schedule existente foi colocado para aguardar a proxima sessao.',
+          type: 'clinical',
+          actionType: 'MAINTENANCE_NEXT_SESSION_SET',
+          payload: { scheduleId: existingSchedule.id, targetId, patientId }
+        });
         const [enrichedSchedule] = await enrichMaintenanceRowsWithTargetDisplay(
           [{
             ...existingSchedule,
@@ -27520,6 +27531,7 @@ async function startServer() {
           status: item.status,
           created_by: createdBy,
           metadata: sanitizeClinicalPayload({
+            auditAction: 'MAINTENANCE_SCHEDULE_CREATED',
             scheduleReason: 'PLAN_7_14_30_60',
             matchStatus: item.status
           }),
@@ -27554,6 +27566,7 @@ async function startServer() {
         status: 'PENDING_NEXT_SESSION',
         created_by: createdBy,
         metadata: sanitizeClinicalPayload({
+          auditAction: 'MAINTENANCE_NEXT_SESSION_SET',
           nextSessionPolicy: true,
           scheduleReason: 'NEXT_SESSION_WITHOUT_APPOINTMENT'
         }),
@@ -27596,6 +27609,7 @@ async function startServer() {
         status: appointmentId ? 'SCHEDULED' : 'PENDING_LINK',
         created_by: createdBy,
         metadata: sanitizeClinicalPayload({
+          auditAction: 'MAINTENANCE_SCHEDULE_CREATED',
           scheduleReason: appointmentId ? 'CUSTOM_DATE_LINKED' : 'CUSTOM_DATE_PENDING_LINK'
         }),
         raw_payload: sanitizeClinicalPayload({
@@ -27611,11 +27625,27 @@ async function startServer() {
     for (const row of rows) {
       const result = await saveMaintenanceScheduleRowWithLegacyFallback(row, now);
       if (result.error) return { ok: false, status: hasMissingFinancialSchema(result.error) ? 503 : 500, error: 'Não foi possível salvar o agendamento agora.' };
-      saved.push(cleanObject({
+      const savedRow = cleanObject({
         ...(result.row || row),
         id: (result.data as any)?.id || (isUuid((result.row as any)?.id) ? (result.row as any).id : null),
         persisted: Boolean((result.data as any)?.id || isUuid((result.row as any)?.id))
-      }));
+      });
+      saved.push(savedRow);
+      const actionType = scheduleMode === 'NEXT_PATIENT_SESSION' || scheduleMode === 'NEXT_AVAILABLE_SESSION'
+        ? 'MAINTENANCE_NEXT_SESSION_SET'
+        : 'MAINTENANCE_SCHEDULE_CREATED';
+      void persistActivityLog({
+        userId: createdBy || '',
+        clinicId,
+        actorName: 'Equipe',
+        title: actionType === 'MAINTENANCE_NEXT_SESSION_SET' ? 'Sondagem aguardando proxima sessao' : 'Sondagem de manutencao criada',
+        content: actionType === 'MAINTENANCE_NEXT_SESSION_SET'
+          ? 'Maintenance Schedule foi criado para aguardar a proxima sessao.'
+          : 'Maintenance Schedule foi criado para uma habilidade real do PEI.',
+        type: 'clinical',
+        actionType,
+        payload: { scheduleId: savedRow?.id || row?.id, targetId, patientId, scheduleMode }
+      });
     }
     logAbaPlanningEgress({ helper: 'createMaintenanceScheduleForTarget', table: 'aba_maintenance_schedules', limit: rows.length, rows: saved.length });
     return { ok: true, status: 200, data: saved };
@@ -29590,7 +29620,7 @@ async function startServer() {
       });
       if (!result.ok) return res.status((result as any).status || 400).json({ success: false, error: (result as any).status === 404 ? 'TARGET_NOT_FOUND' : (result as any).status === 400 ? 'ID_INVALIDO' : 'UNEXPECTED_ERROR', message: (result as any).error || 'Não foi possível aguardar próxima sessão.', data: (result as any).data || [] });
       const schedules = Array.isArray(result.data) ? result.data : [];
-      return res.json({ success: true, message: 'Sondagem aguardando a próxima sessão.', schedule: schedules[0] || null, data: schedules });
+      return res.json({ success: true, message: 'Sondagem aguardando próxima sessão.', schedule: schedules[0] || null, data: schedules });
     } catch {
       return res.status(500).json({ success: false, error: 'UNEXPECTED_ERROR', message: 'Não foi possível aguardar próxima sessão.' });
     }
@@ -29768,7 +29798,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/aba/maintenance-schedules/:scheduleId/assign-appointment', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  const handleAssignMaintenanceScheduleToAppointment = async (req: any, res: any) => {
     try {
       if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de atribuicao de Maintenance Probe')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -29819,7 +29849,8 @@ async function startServer() {
         confirmed_by: assignedBy,
         metadata: sanitizeClinicalPayload({
           ...metadata,
-          auditAction: 'MAINTENANCE_PROBE_ASSIGNED_TO_APPOINTMENT',
+          auditAction: 'MAINTENANCE_SCHEDULE_ASSIGNED',
+          legacyAuditAction: 'MAINTENANCE_PROBE_ASSIGNED_TO_APPOINTMENT',
           assignedAppointmentId: appointmentId,
           assignedAt: now
         }),
@@ -29840,7 +29871,7 @@ async function startServer() {
         title: 'Sondagem atribuida a sessao',
         content: 'Maintenance Probe foi vinculada a uma consulta escolhida pela equipe.',
         type: 'clinical',
-        actionType: 'MAINTENANCE_PROBE_ASSIGNED_TO_APPOINTMENT',
+        actionType: 'MAINTENANCE_SCHEDULE_ASSIGNED',
         payload: { scheduleId, appointmentId, patientId: schedule.patient_id }
       });
       const assignedSchedule = {
@@ -29867,9 +29898,12 @@ async function startServer() {
     } catch {
       return res.status(500).json({ success: false, error: 'UNEXPECTED_ERROR', message: 'Não foi possível atribuir a sondagem agora.' });
     }
-  });
+  };
 
-  app.post('/api/aba/maintenance-schedules/:scheduleId/relink-target', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/aba/maintenance-schedules/:scheduleId/assign-appointment', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), handleAssignMaintenanceScheduleToAppointment);
+  app.patch('/api/aba/maintenance-schedules/:scheduleId/assign-appointment', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), handleAssignMaintenanceScheduleToAppointment);
+
+  const handleRelinkMaintenanceScheduleTarget = async (req: any, res: any) => {
     try {
       if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de revisao de vinculo de Maintenance Probe')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -29910,7 +29944,7 @@ async function startServer() {
         target_id: targetId,
         metadata: sanitizeClinicalPayload({
           ...metadata,
-          auditAction: 'MAINTENANCE_PROBE_TARGET_RELINKED',
+          auditAction: 'MAINTENANCE_SCHEDULE_RELINKED',
           relinkedTargetId: targetId,
           relinkedAt: now
         }),
@@ -29923,6 +29957,17 @@ async function startServer() {
         updated_at: now
       }), schedule.clinic_id || clinicId, schedule.organization_id || organizationId, schedule.patient_id);
       if (update.error) throw update.error;
+      const relinkedBy = sanitizeString(req.session.user?.id, 120) || null;
+      void persistActivityLog({
+        userId: relinkedBy || '',
+        clinicId: schedule.clinic_id || clinicId,
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email, 180) || 'Equipe',
+        title: 'Vinculo da habilidade atualizado',
+        content: 'Maintenance Schedule foi vinculado a uma habilidade real do PEI.',
+        type: 'clinical',
+        actionType: 'MAINTENANCE_SCHEDULE_RELINKED',
+        payload: { scheduleId, targetId, patientId: schedule.patient_id }
+      });
       const relinkedSchedule = {
         ...schedule,
         target_id: targetId,
@@ -29944,7 +29989,10 @@ async function startServer() {
     } catch {
       return res.status(500).json({ success: false, error: 'UNEXPECTED_ERROR', message: 'Não foi possível revisar o vínculo agora.' });
     }
-  });
+  };
+
+  app.post('/api/aba/maintenance-schedules/:scheduleId/relink-target', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), handleRelinkMaintenanceScheduleTarget);
+  app.patch('/api/aba/maintenance-schedules/:scheduleId/relink-target', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), handleRelinkMaintenanceScheduleTarget);
 
   app.post('/api/aba/maintenance-schedules/:scheduleId/skip-link', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {

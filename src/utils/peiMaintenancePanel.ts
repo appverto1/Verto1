@@ -135,31 +135,38 @@ export function resolveMaintenanceTargetDisplay(input: {
   const probeMetadata = readObjectPayload(probe?.metadata, probe?.raw_payload, probe?.rawPayload);
   const targetId = normalizeText(source?.target_id || source?.targetId || probe?.target_id || probe?.targetId || target?.id);
   const hasExplicitMissingTarget = Boolean(targetId && source?.target_missing === true);
+  const targetLabel = firstDisplayText(
+    target?.name,
+    target?.title,
+    target?.target_name,
+    target?.targetName,
+    target?.skill_name,
+    target?.skillName,
+    target?.objective
+  );
+  const sourceLabel = targetId
+    ? firstDisplayText(
+        source?.target_name,
+        source?.targetName,
+        source?.name,
+        source?.title,
+        source?.skill_name,
+        source?.skillName,
+        source?.objective,
+        metadata?.target_name,
+        metadata?.targetName,
+        probe?.target_name,
+        probe?.targetName,
+        probe?.objective,
+        probeMetadata?.target_name,
+        probeMetadata?.targetName
+      )
+    : '';
+  const hasResolvedTarget = Boolean(normalizeText(target?.id || target?.target_id || target?.targetId));
   const targetDisplayName =
-    firstDisplayText(
-      target?.name,
-      target?.title,
-      target?.target_name,
-      target?.targetName,
-      target?.skill_name,
-      target?.skillName,
-      target?.objective,
-      source?.target_name,
-      source?.targetName,
-      source?.name,
-      source?.title,
-      source?.skill_name,
-      source?.skillName,
-      source?.objective,
-      metadata?.target_name,
-      metadata?.targetName,
-      probe?.target_name,
-      probe?.targetName,
-      probe?.objective,
-      probeMetadata?.target_name,
-      probeMetadata?.targetName
-    ) ||
-    (!targetId ? 'Habilidade nao vinculada' : hasExplicitMissingTarget ? 'Habilidade nao encontrada' : 'Habilidade sem nome');
+    targetLabel ||
+    sourceLabel ||
+    (!targetId ? 'Habilidade nao vinculada' : hasExplicitMissingTarget ? 'Habilidade nao encontrada' : hasResolvedTarget ? 'Habilidade sem nome' : 'Habilidade nao encontrada');
   const protocolDisplayName =
     firstDisplayText(
       target?.protocol?.name,
@@ -289,7 +296,7 @@ export function buildPeiMaintenanceRows(input: {
   const rowsByKey = new Map<string, any>();
 
   const ensureRow = (seed: any = {}) => {
-    const display = resolveMaintenanceTargetDisplay(seed);
+    const display = resolveMaintenanceTargetDisplay(seed.goal ? { target: seed, schedule: seed } : seed);
     const key =
       getTargetKey(seed.target_id, seed.targetId, seed.skillId, seed.skill_id, seed.name, seed.target_name, seed.targetName) ||
       `target-${rowsByKey.size + 1}`;
