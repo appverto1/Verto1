@@ -28737,7 +28737,7 @@ async function startServer() {
 
   const abaMasteryStatusLabel = (status: string) => {
     const normalized = sanitizeString(status, 60).toUpperCase();
-    if (normalized === 'READY_FOR_REVIEW') return 'Pronto para revisão do supervisor';
+    if (normalized === 'READY_FOR_REVIEW') return 'Critério concluído - pronto para revisão';
     if (normalized === 'MET_TODAY') return 'Critério atingido hoje';
     if (normalized === 'NOT_MET') return 'Critério não atingido';
     if (normalized === 'MASTERED_APPROVED') return 'Maestria aprovada';
@@ -28805,6 +28805,26 @@ async function startServer() {
       ? targetRow.mastery_criteria
       : null;
     if (embeddedCriteria && Object.keys(embeddedCriteria).length > 0) {
+      const embeddedRequiredIndependentCorrectTrials =
+        embeddedCriteria.required_independent_correct_trials ??
+        embeddedCriteria.requiredIndependentCorrectTrials ??
+        embeddedCriteria.min_independent_correct_trials ??
+        embeddedCriteria.minIndependentCorrectTrials ??
+        embeddedCriteria.min_consecutive_successes ??
+        embeddedCriteria.minConsecutiveSuccesses ??
+        embeddedCriteria.meta_sucessos ??
+        embeddedCriteria.metaSucessos ??
+        embeddedCriteria.mastery_target ??
+        embeddedCriteria.masteryTarget ??
+        null;
+      const embeddedRequiredCorrectTrials =
+        embeddedCriteria.required_correct_trials ??
+        embeddedCriteria.requiredCorrectTrials ??
+        embeddedCriteria.required_successes ??
+        embeddedCriteria.requiredSuccesses ??
+        embeddedCriteria.success_threshold ??
+        embeddedCriteria.successThreshold ??
+        null;
       return {
         criterion: {
           id: null,
@@ -28813,9 +28833,11 @@ async function startServer() {
           program_id: resolvedProgramId || null,
           target_id: targetId || null,
           name: sanitizeString(embeddedCriteria.name, 180) || 'Critério do target',
+          required_independent_correct_trials: embeddedRequiredIndependentCorrectTrials,
+          required_correct_trials: embeddedRequiredCorrectTrials,
           min_accuracy_percent: embeddedCriteria.min_accuracy_percent ?? embeddedCriteria.minAccuracyPercent ?? 80,
           min_independence_percent: embeddedCriteria.min_independence_percent ?? embeddedCriteria.minIndependencePercent ?? 80,
-          min_trials_per_session: embeddedCriteria.min_trials_per_session ?? embeddedCriteria.minTrialsPerSession ?? 3,
+          min_trials_per_session: embeddedCriteria.min_trials_per_session ?? embeddedCriteria.minTrialsPerSession ?? embeddedCriteria.required_trials ?? embeddedCriteria.requiredTrials ?? embeddedRequiredIndependentCorrectTrials ?? embeddedRequiredCorrectTrials ?? 3,
           min_consecutive_days: embeddedCriteria.min_consecutive_days ?? embeddedCriteria.minConsecutiveDays ?? 1,
           require_first_trial_independent: Boolean(embeddedCriteria.require_first_trial_independent ?? embeddedCriteria.requireFirstTrialIndependent),
           cold_probe_only: Boolean(embeddedCriteria.cold_probe_only ?? embeddedCriteria.coldProbeOnly),
@@ -28941,9 +28963,9 @@ async function startServer() {
         error_trials: evaluation.errorTrials,
         accuracy_percent: evaluation.accuracyPercent,
         independence_percent: evaluation.independencePercent,
-        consecutive_successes: evaluation.consecutiveSuccessfulDays,
+        consecutive_successes: evaluation.criterionProgressCount,
         consecutive_successful_days: evaluation.consecutiveSuccessfulDays,
-        min_consecutive_successes: criterion?.min_consecutive_days || criterion?.minConsecutiveDays || 1,
+        min_consecutive_successes: evaluation.criterionRequiredCount || criterion?.min_consecutive_days || criterion?.minConsecutiveDays || 1,
         trials_considered: evaluation.totalTrials,
         cold_probe_trials_count: evaluation.coldProbeTrialsCount,
         distinct_therapists_count: evaluation.distinctTherapistsCount,
@@ -28956,6 +28978,7 @@ async function startServer() {
         raw_payload: sanitizeClinicalPayload({
           status: evaluation.status,
           criterionLabel: evaluation.criterionLabel,
+          criterionProgressLabel: evaluation.criterionProgressLabel,
           targetPhaseAtEvaluation: target?.phase || null,
           noAutomaticTargetMutation: true
         }),
@@ -28979,6 +29002,9 @@ async function startServer() {
         accuracyPercent: evaluation.accuracyPercent,
         independencePercent: evaluation.independencePercent,
         consecutiveSuccessfulDays: evaluation.consecutiveSuccessfulDays,
+        criterionProgressCount: evaluation.criterionProgressCount,
+        criterionRequiredCount: evaluation.criterionRequiredCount,
+        criterionProgressLabel: evaluation.criterionProgressLabel,
         reasons: evaluation.reasons
       });
     }
@@ -32723,6 +32749,28 @@ async function startServer() {
         clinicId,
         user: req.session.user
       });
+      const masteryProgressCount = asSafeNumber(
+        req.body?.criterion_progress_count ??
+        req.body?.criterionProgressCount ??
+        req.body?.consecutive_successes ??
+        req.body?.consecutiveSuccesses,
+        0,
+        100000
+      ) || 0;
+      const masteryRequiredCount = asSafeNumber(
+        req.body?.criterion_required_count ??
+        req.body?.criterionRequiredCount ??
+        req.body?.min_consecutive_successes ??
+        req.body?.minConsecutiveSuccesses,
+        1,
+        100000
+      ) || 1;
+      const masterySuccessfulDays = asSafeNumber(
+        req.body?.consecutive_successful_days ??
+        req.body?.consecutiveSuccessfulDays,
+        0,
+        100000
+      ) || 0;
 
       const payload = cleanObject({
         id: sanitizeString(req.body?.id || req.body?.evaluation_id || req.body?.evaluationId || crypto.randomUUID(), 180),
@@ -32747,9 +32795,9 @@ async function startServer() {
         independence_percent: req.body?.independence_percent !== undefined || req.body?.independencePercent !== undefined
           ? asSafeNumber(req.body?.independence_percent ?? req.body?.independencePercent, 0, 100)
           : null,
-        consecutive_successes: asSafeNumber(req.body?.consecutive_successes ?? req.body?.consecutiveSuccesses, 0, 100000) || 0,
-        consecutive_successful_days: asSafeNumber(req.body?.consecutive_successful_days ?? req.body?.consecutiveSuccessfulDays ?? req.body?.consecutive_successes ?? req.body?.consecutiveSuccesses, 0, 100000) || 0,
-        min_consecutive_successes: asSafeNumber(req.body?.min_consecutive_successes ?? req.body?.minConsecutiveSuccesses, 1, 100000) || 1,
+        consecutive_successes: masteryProgressCount,
+        consecutive_successful_days: masterySuccessfulDays,
+        min_consecutive_successes: masteryRequiredCount,
         trials_considered: asSafeNumber(req.body?.trials_considered ?? req.body?.trialsConsidered, 0, 100000) || 0,
         cold_probe_trials_count: asSafeNumber(req.body?.cold_probe_trials_count ?? req.body?.coldProbeTrialsCount, 0, 100000) || 0,
         distinct_therapists_count: req.body?.distinct_therapists_count !== undefined || req.body?.distinctTherapistsCount !== undefined

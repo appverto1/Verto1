@@ -448,21 +448,42 @@ const readMasteryValue = (row: any, ...keys: string[]) => {
 
 const buildSessionGoalMasteryCriterion = (goal: any) => {
   const embedded = goal?.mastery_criteria || goal?.masteryCriteria || {};
-  const legacyDays = masteryNumber(
+  const legacySuccessTarget = masteryNumber(
     readMasteryValue(goal, 'meta_sucessos', 'metaSucessos', 'masteryTarget', 'mastery_target'),
-    masteryNumber(readMasteryValue(embedded, 'min_consecutive_days', 'minConsecutiveDays'), 1, 1),
+    0,
     1
   );
+  const requiredIndependentCorrectTrials = masteryNumber(
+    readMasteryValue(
+      embedded,
+      'required_independent_correct_trials',
+      'requiredIndependentCorrectTrials',
+      'min_independent_correct_trials',
+      'minIndependentCorrectTrials',
+      'min_consecutive_successes',
+      'minConsecutiveSuccesses'
+    ),
+    legacySuccessTarget,
+    1
+  );
+  const requiredCorrectTrials = masteryNumber(
+    readMasteryValue(embedded, 'required_correct_trials', 'requiredCorrectTrials', 'required_successes', 'requiredSuccesses'),
+    0,
+    1
+  );
+  const minTrialsFallback = Math.max(1, Math.round(requiredIndependentCorrectTrials || requiredCorrectTrials || 1));
   return {
     id: readMasteryValue(embedded, 'id') || readMasteryValue(goal, 'masteryCriteriaId', 'criteriaId') || null,
     organization_id: readMasteryValue(goal, 'organization_id', 'organizationId', 'clinic_id', 'clinicId') || null,
     program_id: readMasteryValue(goal, 'program_id', 'programId', 'protocol_id', 'protocolId') || null,
     target_id: readMasteryValue(goal, 'id', 'target_id', 'targetId') || null,
     name: readMasteryValue(embedded, 'name') || 'Criterio da meta',
+    required_independent_correct_trials: requiredIndependentCorrectTrials > 0 ? Math.round(requiredIndependentCorrectTrials) : null,
+    required_correct_trials: requiredCorrectTrials > 0 ? Math.round(requiredCorrectTrials) : null,
     min_accuracy_percent: masteryNumber(readMasteryValue(embedded, 'min_accuracy_percent', 'minAccuracyPercent', 'accuracyPercent'), 80, 0, 100),
     min_independence_percent: masteryNumber(readMasteryValue(embedded, 'min_independence_percent', 'minIndependencePercent', 'independencePercent'), 80, 0, 100),
-    min_trials_per_session: Math.max(1, Math.round(masteryNumber(readMasteryValue(embedded, 'min_trials_per_session', 'minTrialsPerSession'), 1, 1))),
-    min_consecutive_days: Math.max(1, Math.round(legacyDays)),
+    min_trials_per_session: Math.max(1, Math.round(masteryNumber(readMasteryValue(embedded, 'min_trials_per_session', 'minTrialsPerSession', 'required_trials', 'requiredTrials'), minTrialsFallback, 1))),
+    min_consecutive_days: Math.max(1, Math.round(masteryNumber(readMasteryValue(embedded, 'min_consecutive_days', 'minConsecutiveDays'), 1, 1))),
     require_first_trial_independent: Boolean(readMasteryValue(embedded, 'require_first_trial_independent', 'requireFirstTrialIndependent')),
     cold_probe_only: Boolean(readMasteryValue(embedded, 'cold_probe_only', 'coldProbeOnly')),
     min_distinct_therapists: Math.max(1, Math.round(masteryNumber(readMasteryValue(embedded, 'min_distinct_therapists', 'minDistinctTherapists'), 1, 1))),
@@ -474,7 +495,7 @@ const buildSessionGoalMasteryCriterion = (goal: any) => {
 
 const masteryStatusLabel = (status: string) => {
   const normalized = String(status || '').toUpperCase();
-  if (normalized === 'READY_FOR_REVIEW') return 'Pronto para revisão do supervisor';
+  if (normalized === 'READY_FOR_REVIEW') return 'Critério concluído - pronto para revisão';
   if (normalized === 'MET_TODAY') return 'Critério atingido hoje';
   if (normalized === 'NOT_MET') return 'Critério não atingido';
   if (normalized === 'MASTERED_APPROVED') return 'Maestria aprovada';
@@ -3094,6 +3115,9 @@ export const SessionMode = ({
       accuracyPercent: evaluation.accuracyPercent,
       independencePercent: evaluation.independencePercent,
       consecutiveSuccessfulDays: evaluation.consecutiveSuccessfulDays,
+      criterionProgressCount: evaluation.criterionProgressCount,
+      criterionRequiredCount: evaluation.criterionRequiredCount,
+      criterionProgressLabel: evaluation.criterionProgressLabel,
       reasons: evaluation.reasons
     };
   }), [patientId, records, resolvedClinicId, resolvedTherapistId, sessionEndPreviewAt, sessionGoals, sessionId]);
@@ -6293,7 +6317,7 @@ export const SessionMode = ({
                     <p className="text-xs text-gray-500">critério: {row.criterion}</p>
                     <p className="text-xs text-gray-500">desempenho: {row.performanceText}</p>
                     <p className="text-xs text-gray-500">tentativas: {row.totalTrials ?? 0} - acurácia {row.accuracyPercent ?? 0}% - independência {row.independencePercent ?? 0}%</p>
-                    <p className="text-xs text-gray-500">dias consecutivos: {row.consecutiveSuccessfulDays ?? 0}</p>
+                    <p className="text-xs text-gray-500">progresso do critério: {row.criterionProgressLabel || `${row.consecutiveSuccessfulDays ?? 0} dias consecutivos`}</p>
                     <p className="text-xs text-gray-500">contribuiu para o critério: {row.contributes ? 'sim' : 'não'}</p>
                     <p className="text-xs font-bold text-[#7a32fc]">{row.status}</p>
                     {Array.isArray(row.reasons) && row.reasons.length > 0 && (

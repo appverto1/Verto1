@@ -113,6 +113,64 @@ test('dias consecutivos suficientes retorna READY_FOR_REVIEW', () => {
   assert.equal(result.consecutiveSuccessfulDays, 3);
 });
 
+test('meta_sucessos vira acertos independentes e nao dias obrigatorios', () => {
+  const criteria = {
+    ...baseCriteria,
+    name: '2 acertos independentes',
+    meta_sucessos: 2,
+    min_trials_per_session: undefined,
+    min_consecutive_days: undefined
+  };
+  const normalized = normalizeAbaMasteryCriterion(criteria);
+  assert.equal(normalized?.requiredIndependentCorrectTrials, 2);
+  assert.equal(normalized?.minTrialsPerSession, 2);
+  assert.equal(normalized?.minConsecutiveDays, 1);
+  assert.doesNotMatch(formatAbaMasteryCriterion(normalized), /2 dia/);
+
+  const result = evaluate({ criteria });
+  assert.equal(result.status, 'READY_FOR_REVIEW');
+  assert.equal(result.suggestedPhase, 'maintenance');
+  assert.equal(result.criterionProgressCount, 2);
+  assert.equal(result.criterionRequiredCount, 2);
+  assert.match(result.criterionLabel, /2 acertos independentes/);
+  assert.match(result.performanceText, /2\/2 acertos independentes/);
+  assert.equal(result.reasons.some((reason) => reason.code === 'CONSECUTIVE_DAYS_PENDING'), false);
+});
+
+test('acerto com ajuda nao conta para criterio independente', () => {
+  const result = evaluate({
+    criteria: {
+      ...baseCriteria,
+      required_independent_correct_trials: 2,
+      min_trials_per_session: 2,
+      min_consecutive_days: 1
+    },
+    trials: [trial({ id: 't1' }), trial({ id: 't2', trialOutcome: 'prompted', independent: false })]
+  });
+  assert.equal(result.status, 'NOT_MET');
+  assert.equal(result.criterionProgressCount, 1);
+  assert.equal(result.reasons.some((reason) => reason.code === 'INDEPENDENT_CORRECT_TRIALS_NOT_MET'), true);
+});
+
+test('tentativas de outro target nao entram na avaliacao da meta atual', () => {
+  const result = evaluate({
+    criteria: {
+      ...baseCriteria,
+      required_independent_correct_trials: 2,
+      min_trials_per_session: 2,
+      min_consecutive_days: 1
+    },
+    trials: [
+      trial({ id: 't1' }),
+      trial({ id: 't2', occurred_at: '2026-05-25T12:01:00.000Z' }),
+      trial({ id: 'other-target', target_id: 'target-2', target_name: 'Outra meta', occurred_at: '2026-05-25T12:02:00.000Z' })
+    ]
+  });
+  assert.equal(result.status, 'READY_FOR_REVIEW');
+  assert.equal(result.totalTrials, 2);
+  assert.equal(result.criterionProgressCount, 2);
+});
+
 test('cold_probe_only considera apenas Cold Probe', () => {
   const result = evaluate({
     criteria: { ...baseCriteria, cold_probe_only: true, min_trials_per_session: 1, min_consecutive_days: 1 },
@@ -206,14 +264,20 @@ test('frontend e backend integram avaliacao summary-driven no encerramento e rel
   assert.match(serverCode, /app\.post\('\/api\/aba\/session-summaries'[\s\S]*?evaluateAndPersistSessionMastery[\s\S]*?mastery_summary: masterySummaryPayload/m);
   assert.match(serverCode, /from\('aba_mastery_evaluations'\)[\s\S]*?select\('id,status,evaluation_status,evaluated_at,therapist_id,consecutive_successful_days'\)[\s\S]*?limit\(30\)/m);
   assert.match(sessionModeCode, /evaluateTargetMastery\([\s\S]*?teachingMasteryRows/m);
-  assert.match(sessionModeCode, /Critérios de maestria[\s\S]*?dias consecutivos/m);
+  assert.match(sessionModeCode, /legacySuccessTarget[\s\S]*?required_independent_correct_trials/m);
+  assert.match(sessionModeCode, /Critérios de maestria[\s\S]*?progresso do crit/m);
+  assert.doesNotMatch(sessionModeCode, /const legacyDays/);
+  assert.match(serverCode, /required_independent_correct_trials[\s\S]*?embeddedRequiredIndependentCorrectTrials/m);
+  assert.doesNotMatch(serverCode, /consecutive_successful_days: asSafeNumber\([\s\S]*?consecutive_successes/m);
   assert.match(dataServiceCode, /async saveAbaMasteryEvaluation\(evaluation: any\)[\s\S]*?criteria_id[\s\S]*?status[\s\S]*?total_trials/m);
+  assert.match(dataServiceCode, /criterion_progress_count[\s\S]*?criterionProgressCount/m);
 });
 
 test('normalizacao e formatacao de criterio sao estaveis', () => {
   const normalized = normalizeAbaMasteryCriterion(baseCriteria);
   assert.equal(normalized?.minAccuracyPercent, 80);
   assert.equal(normalized?.minIndependencePercent, 80);
+  assert.equal(normalized?.requiredIndependentCorrectTrials, null);
   assert.match(formatAbaMasteryCriterion(normalized), /80% acuracia/);
 });
 
