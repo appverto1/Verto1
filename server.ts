@@ -29402,16 +29402,35 @@ async function startServer() {
         ...enrichedSchedules.map((schedule: any) => {
           const scheduleId = sanitizeString(schedule?.id, 180);
           const targetId = sanitizeString(schedule?.target_id || schedule?.targetId, 180);
-          const targetResolved = Boolean(targetId && !schedule?.target_missing);
+          const targetResolved = Boolean(isUuid(targetId) && !schedule?.target_missing);
           const needsTargetReview = !isUuid(targetId) || Boolean(schedule?.target_missing);
+          const kind = needsTargetReview ? 'SCHEDULE_ORFAO' : 'SCHEDULE_VALIDO';
+          const legacyType = needsTargetReview ? 'ORPHAN_SCHEDULE' : 'VALID_SCHEDULE';
+          const targetName = sanitizeString(
+            schedule?.targetName ||
+              schedule?.target_name ||
+              schedule?.target?.name ||
+              (!targetId ? 'Habilidade não vinculada' : 'Habilidade não encontrada'),
+            240
+          ) || (!targetId ? 'Habilidade não vinculada' : 'Habilidade não encontrada');
+          const protocolName = sanitizeString(schedule?.protocolTitle || schedule?.protocol_title || schedule?.target?.protocol_title, 240) || 'Sem protocolo informado';
+          const domainName = sanitizeString(schedule?.domainName || schedule?.domain_name || schedule?.target?.domain_name, 240) || 'Sem domínio informado';
           return cleanObject({
             id: scheduleId,
-            type: needsTargetReview ? 'ORPHAN_SCHEDULE' : 'VALID_SCHEDULE',
+            kind,
+            type: legacyType,
+            scheduleId: isUuid(scheduleId) ? scheduleId : null,
+            targetId: targetResolved ? targetId : null,
+            targetName,
+            protocolName,
+            domainName,
             schedule,
             target: schedule?.target || null,
             status: sanitizeString(schedule?.status, 80) || 'PENDING',
             canSchedule: targetResolved,
             canAssign: targetResolved && isUuid(scheduleId),
+            canWaitNextSession: targetResolved,
+            canAssignAppointment: targetResolved && isUuid(scheduleId),
             needsTargetReview,
             availableActions: needsTargetReview
               ? ['REVIEW_TARGET', 'SKIP_LINK']
@@ -29420,16 +29439,27 @@ async function startServer() {
         }),
         ...maintenanceTargetRows.map((target: any) => {
           const targetId = sanitizeString(target?.id, 180);
+          const targetName = sanitizeString(target?.name || target?.description, 240) || 'Habilidade sem nome';
+          const protocolName = sanitizeString(target?.protocol_title, 240) || 'Sem protocolo informado';
+          const domainName = sanitizeString(target?.domain_name, 240) || 'Sem domínio informado';
           return cleanObject({
             id: targetId,
+            kind: 'TARGET_REAL_SEM_SCHEDULE',
             type: 'TARGET_WITHOUT_SCHEDULE',
+            scheduleId: null,
+            targetId,
+            targetName,
+            protocolName,
+            domainName,
             schedule: null,
             target,
             status: sanitizeString(target?.clinical_status || target?.phase, 80) || 'MAINTENANCE',
             canSchedule: true,
             canAssign: false,
+            canWaitNextSession: true,
+            canAssignAppointment: true,
             needsTargetReview: false,
-            availableActions: ['SCHEDULE_MAINTENANCE', 'WAIT_NEXT_SESSION']
+            availableActions: ['SCHEDULE_MAINTENANCE', 'WAIT_NEXT_SESSION', 'ASSIGN_APPOINTMENT']
           });
         })
       ].slice(0, pageSize);

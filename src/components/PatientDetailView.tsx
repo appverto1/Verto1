@@ -5065,29 +5065,51 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
   const openPeiMaintenanceAssignModal = (row: any) => {
     const schedule = row?.nextSchedule || row?.schedules?.find?.((item: any) => getPeiMaintenanceScheduleId(item)) || null;
-    if (!getPeiMaintenanceScheduleId(schedule)) {
-      setPeiMaintenancePanelMessage('Crie uma agenda de manutenção real antes de atribuir a uma sessão.');
+    const targetId = getPeiMaintenanceTargetId(row);
+    if (!targetId) {
+      setPeiMaintenancePanelMessage('Vincule esta sondagem a uma habilidade antes de atribuir a uma sessão.');
       return;
     }
-    setPeiMaintenanceAssignSchedule({ ...schedule, targetName: row?.targetName });
+    setPeiMaintenanceAssignSchedule({
+      ...(schedule || {}),
+      key: row?.key,
+      target_id: schedule?.target_id || schedule?.targetId || targetId,
+      targetId,
+      targetName: row?.targetName
+    });
     setSelectedPeiMaintenanceAppointmentId('');
     setPeiMaintenancePanelMessage('');
   };
 
   const handlePeiAssignToAppointment = () => {
     const scheduleId = getPeiMaintenanceScheduleId(peiMaintenanceAssignSchedule);
+    const targetId = getPersistedUuid(peiMaintenanceAssignSchedule?.target_id || peiMaintenanceAssignSchedule?.targetId);
     const appointmentId = getPersistedUuid(selectedPeiMaintenanceAppointmentId);
-    if (!scheduleId) {
-      setPeiMaintenancePanelMessage('Sondagem de manutenção inválida. Revise o vínculo antes de atribuir.');
+    if (!scheduleId && !targetId) {
+      setPeiMaintenancePanelMessage('Vincule esta sondagem a uma habilidade antes de atribuir a uma sessão.');
       return;
     }
     if (!appointmentId) {
       setPeiMaintenancePanelMessage('Escolha uma sessão antes de confirmar o vínculo.');
       return;
     }
+    const actionKey = peiMaintenanceAssignSchedule?.key || scheduleId || targetId;
     void runPeiMaintenanceAction(
-      `assign-${scheduleId}`,
-      () => dataService.assignMaintenanceScheduleToAppointment(scheduleId, { appointmentId, appointment_id: appointmentId }),
+      `assign-${actionKey}`,
+      async () => {
+        if (scheduleId) {
+          return dataService.assignMaintenanceScheduleToAppointment(scheduleId, { appointmentId, appointment_id: appointmentId });
+        }
+        const result = await dataService.createMaintenanceScheduleForTarget(targetId, {
+          patient_id: patient?.id,
+          patientId: patient?.id,
+          scheduleMode: 'CUSTOM_DATE',
+          appointmentId,
+          appointment_id: appointmentId,
+          target_name: peiMaintenanceAssignSchedule?.targetName || peiMaintenanceAssignSchedule?.target_name
+        });
+        return result?.success === false ? result : { ...result, message: 'Sondagem atribuída à sessão.' };
+      },
       'Sondagem atribuída à sessão.'
     ).then((ok) => {
       if (ok) {
@@ -5245,8 +5267,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             </button>
           </>
         )}
-        {group !== 'completed' && !noSchedule && (
-          <button type="button" disabled={actionLoading('assign') || !hasRealSchedule || needsTargetReview} title={needsTargetReview || !hasRealSchedule ? 'Vincule esta sondagem a uma habilidade real antes de atribuir.' : undefined} onClick={() => openPeiMaintenanceAssignModal(row)} className={buttonClass}>
+        {group !== 'completed' && (hasRealSchedule || (noSchedule && hasRealTarget)) && (
+          <button type="button" disabled={actionLoading('assign') || needsTargetReview} title={needsTargetReview ? 'Vincule esta sondagem a uma habilidade real antes de atribuir.' : undefined} onClick={() => openPeiMaintenanceAssignModal(row)} className={buttonClass}>
             Atribuir a uma sessao
           </button>
         )}
