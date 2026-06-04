@@ -4966,7 +4966,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     const row = peiMaintenanceScheduleRow;
     const targetId = getPeiMaintenanceTargetId(row);
     if (!targetId) {
-      setPeiMaintenancePanelMessage('Esta manutenção ainda não está vinculada a uma habilidade real. Revise o vínculo antes de agendar.');
+      setPeiMaintenancePanelMessage('Revise o vínculo da habilidade antes de agendar.');
       return;
     }
     if (peiMaintenanceScheduleMode === 'CUSTOM_DATE' && !peiMaintenanceScheduleDate) {
@@ -5012,7 +5012,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const handlePeiScheduleNextSession = (row: any) => {
     const targetId = getPeiMaintenanceTargetId(row);
     if (!targetId) {
-      setPeiMaintenancePanelMessage('Não foi possível agendar porque esta manutenção não está vinculada a uma habilidade real.');
+      setPeiMaintenancePanelMessage('Vincule esta sondagem a uma habilidade antes de continuar.');
       return;
     }
     void runPeiMaintenanceAction(
@@ -5228,11 +5228,15 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     const group = row?.group as PeiMaintenanceGroupKey;
     const targetId = getPeiMaintenanceTargetId(row);
     const scheduleId = getPeiMaintenanceScheduleId(row?.nextSchedule);
-    const hasRealTarget = Boolean(targetId);
+    const hasRealTarget = Boolean(row?.hasRealTarget ?? targetId);
     const hasRealSchedule = Boolean(scheduleId);
     const hasMissingTargetLabel = /habilidade\s+(nao|não)\s+(vinculada|encontrada)/i.test(String(row?.targetName || ''));
-    const needsTargetReview = !hasRealTarget || Boolean(row?.targetMissing || row?.nextSchedule?.target_missing) || hasMissingTargetLabel;
-    const needsReview = needsTargetReview || (!noSchedule && group !== 'completed' && !hasRealSchedule);
+    const needsTargetReview = Boolean(row?.needsTargetReview ?? (!hasRealTarget || row?.targetMissing || row?.nextSchedule?.target_missing || hasMissingTargetLabel));
+    const canReviewLink = Boolean(row?.canReviewLink ?? needsTargetReview);
+    const canScheduleMaintenance = Boolean(row?.canScheduleMaintenance ?? (hasRealTarget && !needsTargetReview));
+    const canWaitNextSession = Boolean(row?.canWaitNextSession ?? (hasRealTarget && !needsTargetReview));
+    const canAssignAppointment = Boolean(row?.canAssignAppointment ?? (hasRealTarget && !needsTargetReview && (hasRealSchedule || noSchedule)));
+    const needsReview = canReviewLink || (!noSchedule && group !== 'completed' && !hasRealSchedule && !hasRealTarget);
     const actionLoading = (actionName: string) =>
       peiMaintenanceActionKey === `${actionName}-${row.key}` ||
       (scheduleId && peiMaintenanceActionKey === `${actionName}-${scheduleId}`) ||
@@ -5248,12 +5252,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           </button>
         )}
         {noSchedule && (
-          <button type="button" disabled={actionLoading('schedule') || needsTargetReview} title={needsTargetReview ? 'Vincule esta sondagem a uma habilidade real antes de agendar.' : undefined} onClick={() => handlePeiCreateMaintenancePlan(row)} className={primaryClass}>
+          <button type="button" disabled={actionLoading('schedule') || !canScheduleMaintenance} title={!canScheduleMaintenance ? 'Vincule esta sondagem a uma habilidade real antes de agendar.' : undefined} onClick={() => handlePeiCreateMaintenancePlan(row)} className={primaryClass}>
             {actionLoading('schedule') ? 'Agendando...' : 'Agendar manutencao'}
           </button>
         )}
         {(noSchedule || group === 'overdue' || group === 'unlinked') && (
-          <button type="button" disabled={actionLoading('next') || needsTargetReview} title={needsTargetReview ? 'Vincule esta sondagem a uma habilidade real antes de agendar.' : undefined} onClick={() => handlePeiScheduleNextSession(row)} className={buttonClass}>
+          <button type="button" disabled={actionLoading('next') || !canWaitNextSession} title={!canWaitNextSession ? 'Vincule esta sondagem a uma habilidade real antes de agendar.' : undefined} onClick={() => handlePeiScheduleNextSession(row)} className={buttonClass}>
             {actionLoading('next') ? 'Atualizando...' : 'Aguardar proxima sessao'}
           </button>
         )}
@@ -5267,8 +5271,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             </button>
           </>
         )}
-        {group !== 'completed' && (hasRealSchedule || (noSchedule && hasRealTarget)) && (
-          <button type="button" disabled={actionLoading('assign') || needsTargetReview} title={needsTargetReview ? 'Vincule esta sondagem a uma habilidade real antes de atribuir.' : undefined} onClick={() => openPeiMaintenanceAssignModal(row)} className={buttonClass}>
+        {group !== 'completed' && canAssignAppointment && (
+          <button type="button" disabled={actionLoading('assign') || !canAssignAppointment} title={!canAssignAppointment ? 'Vincule esta sondagem a uma habilidade real antes de atribuir.' : undefined} onClick={() => openPeiMaintenanceAssignModal(row)} className={buttonClass}>
             Atribuir a uma sessao
           </button>
         )}
@@ -5283,7 +5287,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           </span>
         )}
         {group === 'overdue' && (
-          <button type="button" disabled={actionLoading('next') || needsTargetReview} onClick={() => handlePeiScheduleNextSession(row)} className={primaryClass}>
+          <button type="button" disabled={actionLoading('next') || !canWaitNextSession} onClick={() => handlePeiScheduleNextSession(row)} className={primaryClass}>
             {actionLoading('next') ? 'Atualizando...' : 'Usar na proxima sessao'}
           </button>
         )}
@@ -5295,7 +5299,20 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     const lastResult = row?.lastResult || null;
     const accuracy = lastResult?.accuracy_percent ?? lastResult?.accuracyPercent;
     const independence = lastResult?.independence_percent ?? lastResult?.independencePercent;
-    const rowNeedsTargetReview = !getPeiMaintenanceTargetId(row) || Boolean(row?.targetMissing || row?.nextSchedule?.target_missing);
+    const rowNeedsTargetReview = Boolean(row?.needsTargetReview ?? (!getPeiMaintenanceTargetId(row) || row?.targetMissing || row?.nextSchedule?.target_missing));
+    const rowClinicalContext = rowNeedsTargetReview
+      ? 'Esta sondagem precisa ser vinculada a uma habilidade do PEI.'
+      : row.group === 'completed'
+        ? 'Habilidade mantida.'
+        : row.group === 'overdue'
+          ? 'Sondagem atrasada.'
+          : row.cardKind === 'TARGET_REAL_SEM_SCHEDULE' || row?.nextProbe?.status === 'NO_SCHEDULE'
+            ? 'Sem sondagem de manutencao agendada.'
+            : row.group === 'unlinked'
+              ? 'Sondagem aguardando proxima sessao.'
+              : row.group === 'activeCycle'
+                ? 'Plano de manutencao em andamento.'
+                : `${row.protocol} - ${row.domain}`;
     const cycleLabel = row?.hasCycle
       ? `Plano de manutencao: ${row.completedCount}/${row.totalCycleCount || 4} concluido`
       : 'Sem ciclo completo registrado';
@@ -5311,7 +5328,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             </div>
             <h4 className={`mt-2 text-base font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{row.targetName}</h4>
             <p className={`mt-1 text-xs ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>
-              {rowNeedsTargetReview ? 'Esta sondagem precisa ser vinculada a uma habilidade do PEI.' : `${row.protocol} - ${row.domain}`}
+              {rowClinicalContext}
             </p>
           </div>
           <div className={`rounded-2xl px-3 py-2 text-xs font-semibold ${isPanelDark ? 'bg-slate-900/70 text-slate-200' : 'bg-slate-50 text-slate-600'}`}>

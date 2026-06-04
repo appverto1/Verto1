@@ -29417,10 +29417,13 @@ async function startServer() {
           const domainName = sanitizeString(schedule?.domainName || schedule?.domain_name || schedule?.target?.domain_name, 240) || 'Sem domínio informado';
           return cleanObject({
             id: scheduleId,
+            cardId: isUuid(scheduleId) ? scheduleId : targetId || scheduleId,
+            cardKind: kind,
             kind,
             type: legacyType,
             scheduleId: isUuid(scheduleId) ? scheduleId : null,
             targetId: targetResolved ? targetId : null,
+            hasRealTarget: targetResolved,
             targetName,
             protocolName,
             domainName,
@@ -29428,9 +29431,11 @@ async function startServer() {
             target: schedule?.target || null,
             status: sanitizeString(schedule?.status, 80) || 'PENDING',
             canSchedule: targetResolved,
+            canScheduleMaintenance: targetResolved,
             canAssign: targetResolved && isUuid(scheduleId),
             canWaitNextSession: targetResolved,
             canAssignAppointment: targetResolved && isUuid(scheduleId),
+            canReviewLink: needsTargetReview,
             needsTargetReview,
             availableActions: needsTargetReview
               ? ['REVIEW_TARGET', 'SKIP_LINK']
@@ -29444,10 +29449,13 @@ async function startServer() {
           const domainName = sanitizeString(target?.domain_name, 240) || 'Sem domínio informado';
           return cleanObject({
             id: targetId,
+            cardId: targetId,
+            cardKind: 'TARGET_REAL_SEM_SCHEDULE',
             kind: 'TARGET_REAL_SEM_SCHEDULE',
             type: 'TARGET_WITHOUT_SCHEDULE',
             scheduleId: null,
             targetId,
+            hasRealTarget: true,
             targetName,
             protocolName,
             domainName,
@@ -29455,9 +29463,11 @@ async function startServer() {
             target,
             status: sanitizeString(target?.clinical_status || target?.phase, 80) || 'MAINTENANCE',
             canSchedule: true,
+            canScheduleMaintenance: true,
             canAssign: false,
             canWaitNextSession: true,
             canAssignAppointment: true,
+            canReviewLink: false,
             needsTargetReview: false,
             availableActions: ['SCHEDULE_MAINTENANCE', 'WAIT_NEXT_SESSION', 'ASSIGN_APPOINTMENT']
           });
@@ -29499,10 +29509,12 @@ async function startServer() {
           targetName: sanitizeString(target.name || target.description, 240) || 'Habilidade sem nome',
           protocol_title: sanitizeString(target.protocol_title, 240) || null,
           protocolTitle: sanitizeString(target.protocol_title, 240) || null,
+          protocolName: sanitizeString(target.protocol_title, 240) || null,
           domain_name: sanitizeString(target.domain_name, 240) || null,
           domainName: sanitizeString(target.domain_name, 240) || null,
           clinical_status: sanitizeString(target.clinical_status || target.phase || target.target_type, 80) || null,
           clinicalStatus: sanitizeString(target.clinical_status || target.phase || target.target_type, 80) || null,
+          masteryStatus: sanitizeString(target.clinical_status, 80).toUpperCase() === 'MASTERED' ? 'MASTERED' : null,
           phase: sanitizeString(target.phase, 80) || null,
           status: sanitizeString(target.clinical_status || target.phase, 80) || null,
           updated_at: sanitizeString(target.updated_at, 80) || null

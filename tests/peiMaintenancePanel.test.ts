@@ -84,6 +84,37 @@ test('schedule sem target_id nao usa metadata antiga como habilidade real', () =
   assert.equal(rows[0].needsTargetReview, true);
 });
 
+test('classifica cards reais e orfaos com flags operacionais explicitas', () => {
+  const targetId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0002';
+  const scheduleId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0003';
+  const rows = buildPeiMaintenanceRows({
+    goals: [
+      { id: targetId, name: 'Imita movimentos', clinical_status: 'MAINTENANCE', protocol_title: 'VB-MAPP', domain_name: 'Imitacao' }
+    ],
+    schedules: [
+      {
+        id: scheduleId,
+        target_id: targetId,
+        target: { id: targetId, name: 'Imita movimentos', protocol_title: 'VB-MAPP', domain_name: 'Imitacao' },
+        status: 'PENDING_NEXT_SESSION'
+      },
+      {
+        id: '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0004',
+        status: 'PENDING_LINK'
+      }
+    ]
+  });
+  const valid = rows.find((row: any) => row.targetId === targetId);
+  const orphan = rows.find((row: any) => row.cardKind === 'SCHEDULE_ORFAO');
+  assert.equal(valid.cardKind, 'SCHEDULE_VALIDO');
+  assert.equal(valid.hasRealTarget, true);
+  assert.equal(valid.needsTargetReview, false);
+  assert.equal(valid.canWaitNextSession, true);
+  assert.equal(valid.canAssignAppointment, true);
+  assert.equal(orphan.needsTargetReview, true);
+  assert.equal(orphan.canScheduleMaintenance, false);
+});
+
 test('resolvedor central prioriza nome real, protocolo, dominio e marco clinico', () => {
   const display = resolveMaintenanceTargetDisplay({
     schedule: {
@@ -152,6 +183,10 @@ test('acoes do painel chamam rotas seguras existentes', () => {
   assert.match(patientDetailCode, /getAbaLinkableTargetsForMaintenance/);
   assert.match(patientDetailCode, /dataService\.createMaintenanceScheduleForTarget\(targetId,[\s\S]*?appointmentId/m);
   assert.match(patientDetailCode, /Sondagem atribu/);
+  assert.match(patientDetailCode, /canScheduleMaintenance/);
+  assert.match(patientDetailCode, /canWaitNextSession/);
+  assert.match(patientDetailCode, /canAssignAppointment/);
+  assert.match(patientDetailCode, /rowClinicalContext/);
   assert.match(serverCode, /app\.get\('\/api\/patients\/:patientId\/aba\/maintenance-panel'/);
   assert.match(serverCode, /app\.patch\('\/api\/aba\/maintenance-schedules\/:scheduleId\/assign-appointment'/);
   assert.match(serverCode, /app\.patch\('\/api\/aba\/maintenance-schedules\/:scheduleId\/relink-target'/);
@@ -182,6 +217,11 @@ test('backend resolve targets de manutencao em lote com colunas explicitas', () 
   assert.match(serverCode, /const enrichMaintenanceRowsWithTargetDisplay/);
   assert.match(serverCode, /\.from\('aba_targets'\)[\s\S]*?\.select\(ABA_TARGET_RECOMMENDATION_SELECT\)[\s\S]*?\.in\('id', targetIds\)/m);
   assert.match(serverCode, /const kind = needsTargetReview \? 'SCHEDULE_ORFAO' : 'SCHEDULE_VALIDO'/);
+  assert.match(serverCode, /cardKind: kind/);
+  assert.match(serverCode, /cardKind: 'TARGET_REAL_SEM_SCHEDULE'/);
+  assert.match(serverCode, /hasRealTarget: targetResolved/);
+  assert.match(serverCode, /canScheduleMaintenance: targetResolved/);
+  assert.match(serverCode, /canReviewLink: needsTargetReview/);
   assert.match(serverCode, /type: legacyType/);
   assert.match(serverCode, /kind: 'TARGET_REAL_SEM_SCHEDULE'/);
   assert.match(serverCode, /type: 'TARGET_WITHOUT_SCHEDULE'/);
@@ -195,7 +235,7 @@ test('backend resolve targets de manutencao em lote com colunas explicitas', () 
 test('acoes nao enviam ids sinteticos para endpoints de manutencao', () => {
   assert.match(patientDetailCode, /const getPersistedUuid/);
   assert.match(patientDetailCode, /disabled=\{actionLoading\('confirm'\) \|\| !hasRealSchedule \|\| needsTargetReview\}/);
-  assert.match(patientDetailCode, /group !== 'completed' && \(hasRealSchedule \|\| \(noSchedule && hasRealTarget\)\)/);
+  assert.match(patientDetailCode, /group !== 'completed' && canAssignAppointment/);
   assert.match(dataServiceCode, /SYNTHETIC_CLINICAL_ID_RE/);
   assert.match(dataServiceCode, /if \(!isPersistedUuid\(targetId\)\)[\s\S]*?Habilidade inválida para agendamento de manutenção/m);
   assert.match(dataServiceCode, /if \(!isPersistedUuid\(scheduleId\)\)[\s\S]*?Sondagem de manutenção inválida para confirmar vínculo/m);

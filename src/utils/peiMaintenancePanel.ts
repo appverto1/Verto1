@@ -67,6 +67,8 @@ const safeTargetName = (value: any, fallback = 'Habilidade sem nome') => {
   return label;
 };
 
+const isPersistedUuid = (value: any) => UUID_LIKE.test(normalizeText(value));
+
 const getTargetKey = (...values: any[]) => {
   for (const value of values) {
     const normalized = normalizeText(value);
@@ -234,7 +236,9 @@ export function resolveMaintenanceTargetDisplay(input: {
     targetId,
     hasTargetId: Boolean(targetId),
     targetMissing: hasExplicitMissingTarget,
-    needsTargetReview: !targetId || hasExplicitMissingTarget,
+    hasResolvedTarget,
+    hasRealTarget: Boolean(isPersistedUuid(targetId) && hasResolvedTarget && !hasExplicitMissingTarget),
+    needsTargetReview: !targetId || hasExplicitMissingTarget || !hasResolvedTarget,
     reviewBadgeLabel: !targetId ? 'Revisar vinculo' : hasExplicitMissingTarget ? 'Revisar dados' : '',
   };
 }
@@ -298,18 +302,20 @@ export function buildPeiMaintenanceRows(input: {
   const ensureRow = (seed: any = {}) => {
     const display = resolveMaintenanceTargetDisplay(seed.goal ? { target: seed, schedule: seed } : seed);
     const key =
-      getTargetKey(seed.target_id, seed.targetId, seed.skillId, seed.skill_id, seed.name, seed.target_name, seed.targetName) ||
+      getTargetKey(seed.target_id, seed.targetId, seed.skillId, seed.skill_id, seed.goal ? seed.id : '', seed.name, seed.target_name, seed.targetName) ||
       `target-${rowsByKey.size + 1}`;
     const existing = rowsByKey.get(key);
     if (existing) return existing;
+    const targetId = normalizeText(seed.target_id || seed.targetId || (seed.goal ? seed.id : '') || '');
     const row = {
       key,
-      targetId: normalizeText(seed.target_id || seed.targetId || (seed.goal ? seed.id : '') || ''),
+      targetId,
       targetName: display.targetDisplayName,
       protocol: display.protocolDisplayName,
       domain: display.domainDisplayName,
       clinicalStatus: normalizeStatus(seed.status || seed.clinical_status || seed.clinicalStatus || ''),
-      needsTargetReview: display.needsTargetReview,
+      hasRealTarget: Boolean(display.hasRealTarget || (seed.goal && isPersistedUuid(targetId))),
+      needsTargetReview: Boolean(display.needsTargetReview && !(seed.goal && isPersistedUuid(targetId))),
       targetMissing: display.targetMissing,
       goal: seed.goal || seed,
       schedules: [] as any[],
@@ -367,6 +373,25 @@ export function buildPeiMaintenanceRows(input: {
     const allCycleCompleted = hasCycle && sortedSchedules.length > 0 && completedCount >= sortedSchedules.length;
     const resultStatus = normalizeStatus(lastResult?.status);
     const derivedStatus = nextProbe.schedule ? deriveMaintenanceScheduleStatus(nextProbe.schedule, now) : 'NO_SCHEDULE';
+    const nextScheduleId = normalizeText(nextProbe.schedule?.id || nextProbe.schedule?.schedule_id || nextProbe.schedule?.scheduleId);
+    const hasRealSchedule = isPersistedUuid(nextScheduleId);
+    const hasSyntheticSchedule = sortedSchedules.some((schedule: any) => {
+      const id = normalizeText(schedule?.id || schedule?.schedule_id || schedule?.scheduleId);
+      return id && !isPersistedUuid(id);
+    });
+    const hasMissingTargetLabel = /habilidade\s+(nao|não)\s+(vinculada|encontrada)/i.test(String(row.targetName || ''));
+    const hasRealTarget = Boolean(isPersistedUuid(row.targetId) && !row.targetMissing && !nextProbe.schedule?.target_missing && !hasMissingTargetLabel && row.hasRealTarget !== false);
+    const needsTargetReview = !hasRealTarget || Boolean(row.targetMissing || nextProbe.schedule?.target_missing) || hasMissingTargetLabel;
+    const cardKind = hasSyntheticSchedule && !hasRealSchedule
+      ? 'ITEM_SINTETICO_LOCAL'
+      : needsTargetReview && hasRealSchedule
+        ? 'SCHEDULE_ORFAO'
+        : hasRealTarget && hasRealSchedule
+          ? 'SCHEDULE_VALIDO'
+          : hasRealTarget
+            ? 'TARGET_REAL_SEM_SCHEDULE'
+            : 'SCHEDULE_ORFAO';
+    const canOperateOnTarget = hasRealTarget && cardKind !== 'ITEM_SINTETICO_LOCAL';
     const group: PeiMaintenanceGroupKey =
       allCycleCompleted || (!nextProbe.schedule && COMPLETED_STATUSES.has(resultStatus))
         ? 'completed'
@@ -388,6 +413,19 @@ export function buildPeiMaintenanceRows(input: {
       lastResult,
       nextSchedule: nextProbe.schedule,
       nextProbe,
+      cardKind,
+      cardId: hasRealSchedule ? nextScheduleId : row.targetId || row.key,
+      scheduleId: hasRealSchedule ? nextScheduleId : '',
+      hasRealTarget,
+      hasRealSchedule,
+      needsTargetReview,
+      canScheduleMaintenance: canOperateOnTarget,
+      canWaitNextSession: canOperateOnTarget,
+      canAssignAppointment: canOperateOnTarget && (hasRealSchedule || derivedStatus === 'NO_SCHEDULE'),
+      canReviewLink: needsTargetReview && cardKind !== 'ITEM_SINTETICO_LOCAL',
+      availableActions: needsTargetReview
+        ? ['REVIEW_TARGET']
+        : ['SCHEDULE_MAINTENANCE', 'WAIT_NEXT_SESSION', 'ASSIGN_APPOINTMENT'],
       group,
       hasCycle,
       completedCount,
