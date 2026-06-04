@@ -29365,7 +29365,7 @@ async function startServer() {
         let scoped = organizationId ? query.eq('organization_id', organizationId) : query;
         return !hasGlobalClinicAccess(req.session.user) && clinicId ? scoped.eq('clinic_id', clinicId) : scoped;
       };
-      const [scheduleResult, targetResult] = await Promise.all([
+      const [scheduleResult, targetResult, probeResult, alertResult] = await Promise.all([
         applyClinic(
           supabase
             .from('aba_maintenance_schedules')
@@ -29382,98 +29382,167 @@ async function startServer() {
             .eq('patient_id', patientId)
             .order('updated_at', { ascending: false })
             .limit(200)
+        ),
+        applyClinic(
+          supabase
+            .from('aba_maintenance_probe_results')
+            .select(ABA_MAINTENANCE_PROBE_RESULT_SELECT)
+            .eq('patient_id', patientId)
+            .order('occurred_at', { ascending: false })
+            .limit(200)
+        ),
+        applyClinic(
+          supabase
+            .from('aba_regression_alerts')
+            .select(ABA_REGRESSION_ALERT_SELECT)
+            .eq('patient_id', patientId)
+            .is('resolved_at', null)
+            .order('created_at', { ascending: false })
+            .limit(200)
         )
       ]);
-      const firstError = [scheduleResult, targetResult].find((result: any) => result.error)?.error;
+      const firstError = [scheduleResult, targetResult, probeResult, alertResult].find((result: any) => result.error)?.error;
       if (firstError) {
-        if (hasMissingFinancialSchema(firstError)) return res.json({ success: true, data: { cards: [], schedules: [], targets: [] }, page, pageSize });
+        if (hasMissingFinancialSchema(firstError)) return res.json({ success: true, data: { skills: [], orphanSchedules: [], cards: [], schedules: [], targets: [], probeResults: [], alerts: [] }, page, pageSize });
         throw firstError;
       }
       const enrichedSchedules = await enrichMaintenanceRowsWithTargetDisplay((scheduleResult as any).data || [], clinicId, organizationId, req.session.user);
       const allTargets = Array.isArray((targetResult as any).data) ? (targetResult as any).data : [];
+      const probeResults = Array.isArray((probeResult as any).data) ? (probeResult as any).data : [];
+      const alerts = Array.isArray((alertResult as any).data) ? (alertResult as any).data : [];
+      const latestResultByTargetId = new Map<string, any>();
+      const latestResultByScheduleId = new Map<string, any>();
+      probeResults.forEach((result: any) => {
+        const targetId = sanitizeString(result?.target_id || result?.targetId, 180);
+        const scheduleId = sanitizeString(result?.maintenance_schedule_id || result?.maintenanceScheduleId, 180);
+        if (isUuid(targetId) && !latestResultByTargetId.has(targetId)) latestResultByTargetId.set(targetId, result);
+        if (isUuid(scheduleId) && !latestResultByScheduleId.has(scheduleId)) latestResultByScheduleId.set(scheduleId, result);
+      });
+      const alertByTargetId = new Map<string, any>();
+      alerts.forEach((alert: any) => {
+        const targetId = sanitizeString(alert?.target_id || alert?.targetId, 180);
+        if (isUuid(targetId) && !alertByTargetId.has(targetId)) alertByTargetId.set(targetId, alert);
+      });
+      const activeScheduleByTargetId = new Map<string, any>();
+      enrichedSchedules.forEach((schedule: any) => {
+        const targetId = sanitizeString(schedule?.target_id || schedule?.targetId, 180);
+        if (isUuid(targetId) && !schedule?.target_missing && !activeScheduleByTargetId.has(targetId)) {
+          activeScheduleByTargetId.set(targetId, schedule);
+        }
+      });
       const scheduledTargetIds = new Set(enrichedSchedules.map((schedule: any) => sanitizeString(schedule?.target_id || schedule?.targetId, 180)).filter(Boolean));
+      const skillTargetRows = allTargets.filter((target: any) => isUuid(sanitizeString(target?.id, 180)));
       const maintenanceTargetRows = allTargets.filter((target: any) => {
         const id = sanitizeString(target?.id, 180);
         if (!isUuid(id) || scheduledTargetIds.has(id)) return false;
         const status = sanitizeString(target?.clinical_status || target?.phase || target?.target_type, 80).toUpperCase();
         return ['MAINTENANCE', 'MASTERED', 'MAINTAINED', 'ACQUIRED'].includes(status);
       });
+      const scheduleCards = enrichedSchedules.map((schedule: any) => {
+        const scheduleId = sanitizeString(schedule?.id, 180);
+        const targetId = sanitizeString(schedule?.target_id || schedule?.targetId, 180);
+        const targetResolved = Boolean(isUuid(targetId) && !schedule?.target_missing);
+        const needsTargetReview = !isUuid(targetId) || Boolean(schedule?.target_missing);
+        const kind = needsTargetReview ? 'SCHEDULE_ORFAO' : 'SCHEDULE_VALIDO';
+        const legacyType = needsTargetReview ? 'ORPHAN_SCHEDULE' : 'VALID_SCHEDULE';
+        const targetName = sanitizeString(
+          schedule?.targetName ||
+            schedule?.target_name ||
+            schedule?.target?.name ||
+            (!targetId ? 'Habilidade não vinculada' : 'Habilidade não encontrada'),
+          240
+        ) || (!targetId ? 'Habilidade não vinculada' : 'Habilidade não encontrada');
+        const protocolName = sanitizeString(schedule?.protocolTitle || schedule?.protocol_title || schedule?.target?.protocol_title, 240) || 'Sem protocolo informado';
+        const domainName = sanitizeString(schedule?.domainName || schedule?.domain_name || schedule?.target?.domain_name, 240) || 'Sem domínio informado';
+        return cleanObject({
+          id: scheduleId,
+          cardId: isUuid(scheduleId) ? scheduleId : targetId || scheduleId,
+          cardKind: kind,
+          kind,
+          type: legacyType,
+          scheduleId: isUuid(scheduleId) ? scheduleId : null,
+          targetId: targetResolved ? targetId : null,
+          hasRealTarget: targetResolved,
+          targetName,
+          protocolName,
+          domainName,
+          schedule,
+          target: schedule?.target || null,
+          latestResult: latestResultByScheduleId.get(scheduleId) || (targetResolved ? latestResultByTargetId.get(targetId) : null) || null,
+          status: sanitizeString(schedule?.status, 80) || 'PENDING',
+          canSchedule: targetResolved,
+          canScheduleMaintenance: targetResolved,
+          canAssign: targetResolved && isUuid(scheduleId),
+          canWaitNextSession: targetResolved,
+          canAssignAppointment: targetResolved && isUuid(scheduleId),
+          canReviewLink: needsTargetReview,
+          needsTargetReview,
+          availableActions: needsTargetReview
+            ? ['REVIEW_TARGET']
+            : ['SCHEDULE_MAINTENANCE', 'WAIT_NEXT_SESSION', 'ASSIGN_APPOINTMENT']
+        });
+      });
+      const targetCards = maintenanceTargetRows.map((target: any) => {
+        const targetId = sanitizeString(target?.id, 180);
+        const targetName = sanitizeString(target?.name || target?.description, 240) || 'Habilidade sem nome';
+        const protocolName = sanitizeString(target?.protocol_title, 240) || 'Sem protocolo informado';
+        const domainName = sanitizeString(target?.domain_name, 240) || 'Sem domínio informado';
+        return cleanObject({
+          id: targetId,
+          cardId: targetId,
+          cardKind: 'TARGET_REAL_SEM_SCHEDULE',
+          kind: 'TARGET_REAL_SEM_SCHEDULE',
+          type: 'TARGET_WITHOUT_SCHEDULE',
+          scheduleId: null,
+          targetId,
+          hasRealTarget: true,
+          targetName,
+          protocolName,
+          domainName,
+          schedule: null,
+          target,
+          latestResult: latestResultByTargetId.get(targetId) || null,
+          status: sanitizeString(target?.clinical_status || target?.phase, 80) || 'MAINTENANCE',
+          canSchedule: true,
+          canScheduleMaintenance: true,
+          canAssign: false,
+          canWaitNextSession: true,
+          canAssignAppointment: true,
+          canReviewLink: false,
+          needsTargetReview: false,
+          availableActions: ['SCHEDULE_MAINTENANCE', 'WAIT_NEXT_SESSION', 'ASSIGN_APPOINTMENT']
+        });
+      });
+      const skills = skillTargetRows.map((target: any) => {
+        const targetId = sanitizeString(target?.id, 180);
+        const activeSchedule = activeScheduleByTargetId.get(targetId) || null;
+        const targetName = sanitizeString(target?.name || target?.description, 240) || 'Habilidade sem nome';
+        const protocolName = sanitizeString(target?.protocol_title, 240) || 'Sem protocolo informado';
+        const domainName = sanitizeString(target?.domain_name, 240) || 'Sem domínio informado';
+        const clinicalStatus = sanitizeString(target?.clinical_status || target?.phase || target?.target_type, 80) || null;
+        return cleanObject({
+          targetId,
+          targetName,
+          protocolName,
+          domainName,
+          clinicalStatus,
+          maintenanceStatus: sanitizeString(activeSchedule?.status, 80) || clinicalStatus,
+          activeSchedule,
+          latestResult: latestResultByTargetId.get(targetId) || null,
+          activeAlert: alertByTargetId.get(targetId) || null,
+          canScheduleMaintenance: true,
+          canWaitNextSession: true,
+          canAssignAppointment: true,
+          needsTargetReview: false
+        });
+      });
+      const orphanSchedules = scheduleCards.filter((card: any) => card?.needsTargetReview);
       const cards = [
-        ...enrichedSchedules.map((schedule: any) => {
-          const scheduleId = sanitizeString(schedule?.id, 180);
-          const targetId = sanitizeString(schedule?.target_id || schedule?.targetId, 180);
-          const targetResolved = Boolean(isUuid(targetId) && !schedule?.target_missing);
-          const needsTargetReview = !isUuid(targetId) || Boolean(schedule?.target_missing);
-          const kind = needsTargetReview ? 'SCHEDULE_ORFAO' : 'SCHEDULE_VALIDO';
-          const legacyType = needsTargetReview ? 'ORPHAN_SCHEDULE' : 'VALID_SCHEDULE';
-          const targetName = sanitizeString(
-            schedule?.targetName ||
-              schedule?.target_name ||
-              schedule?.target?.name ||
-              (!targetId ? 'Habilidade não vinculada' : 'Habilidade não encontrada'),
-            240
-          ) || (!targetId ? 'Habilidade não vinculada' : 'Habilidade não encontrada');
-          const protocolName = sanitizeString(schedule?.protocolTitle || schedule?.protocol_title || schedule?.target?.protocol_title, 240) || 'Sem protocolo informado';
-          const domainName = sanitizeString(schedule?.domainName || schedule?.domain_name || schedule?.target?.domain_name, 240) || 'Sem domínio informado';
-          return cleanObject({
-            id: scheduleId,
-            cardId: isUuid(scheduleId) ? scheduleId : targetId || scheduleId,
-            cardKind: kind,
-            kind,
-            type: legacyType,
-            scheduleId: isUuid(scheduleId) ? scheduleId : null,
-            targetId: targetResolved ? targetId : null,
-            hasRealTarget: targetResolved,
-            targetName,
-            protocolName,
-            domainName,
-            schedule,
-            target: schedule?.target || null,
-            status: sanitizeString(schedule?.status, 80) || 'PENDING',
-            canSchedule: targetResolved,
-            canScheduleMaintenance: targetResolved,
-            canAssign: targetResolved && isUuid(scheduleId),
-            canWaitNextSession: targetResolved,
-            canAssignAppointment: targetResolved && isUuid(scheduleId),
-            canReviewLink: needsTargetReview,
-            needsTargetReview,
-            availableActions: needsTargetReview
-              ? ['REVIEW_TARGET', 'SKIP_LINK']
-              : ['SCHEDULE_MAINTENANCE', 'WAIT_NEXT_SESSION', 'ASSIGN_APPOINTMENT', 'REVIEW_TARGET']
-          });
-        }),
-        ...maintenanceTargetRows.map((target: any) => {
-          const targetId = sanitizeString(target?.id, 180);
-          const targetName = sanitizeString(target?.name || target?.description, 240) || 'Habilidade sem nome';
-          const protocolName = sanitizeString(target?.protocol_title, 240) || 'Sem protocolo informado';
-          const domainName = sanitizeString(target?.domain_name, 240) || 'Sem domínio informado';
-          return cleanObject({
-            id: targetId,
-            cardId: targetId,
-            cardKind: 'TARGET_REAL_SEM_SCHEDULE',
-            kind: 'TARGET_REAL_SEM_SCHEDULE',
-            type: 'TARGET_WITHOUT_SCHEDULE',
-            scheduleId: null,
-            targetId,
-            hasRealTarget: true,
-            targetName,
-            protocolName,
-            domainName,
-            schedule: null,
-            target,
-            status: sanitizeString(target?.clinical_status || target?.phase, 80) || 'MAINTENANCE',
-            canSchedule: true,
-            canScheduleMaintenance: true,
-            canAssign: false,
-            canWaitNextSession: true,
-            canAssignAppointment: true,
-            canReviewLink: false,
-            needsTargetReview: false,
-            availableActions: ['SCHEDULE_MAINTENANCE', 'WAIT_NEXT_SESSION', 'ASSIGN_APPOINTMENT']
-          });
-        })
+        ...targetCards,
+        ...scheduleCards.filter((card: any) => !card?.needsTargetReview),
+        ...orphanSchedules
       ].slice(0, pageSize);
-      return res.json({ success: true, data: { cards, schedules: enrichedSchedules, targets: maintenanceTargetRows }, page, pageSize });
+      return res.json({ success: true, data: { skills, orphanSchedules, cards, schedules: enrichedSchedules, targets: skillTargetRows, probeResults, alerts }, page, pageSize });
     } catch {
       return res.status(500).json({ success: false, error: 'UNEXPECTED_ERROR', message: 'Não foi possível carregar manutenção agora.' });
     }

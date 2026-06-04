@@ -6,6 +6,7 @@ import {
   formatPeiMaintenanceAppointmentLabel,
   formatPeiMaintenanceScheduleLabel,
   groupPeiMaintenanceRows,
+  groupPeiMaintenanceRowsTargetFirst,
   resolveMaintenanceTargetDisplay,
   summarizePeiMaintenanceRows,
 } from '../src/utils/peiMaintenancePanel.ts';
@@ -115,6 +116,29 @@ test('classifica cards reais e orfaos com flags operacionais explicitas', () => 
   assert.equal(orphan.canScheduleMaintenance, false);
 });
 
+test('painel target-first separa habilidades reais de pendencias tecnicas', () => {
+  const maintenanceTargetId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0010';
+  const waitingTargetId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0011';
+  const eligibleTargetId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0012';
+  const rows = buildPeiMaintenanceRows({
+    goals: [
+      { id: maintenanceTargetId, name: 'Imita 2 movimentos motores grossos', clinical_status: 'MAINTENANCE', protocol_title: 'VB-MAPP - Nivel 1', domain_name: 'Imitacao Motora Nivel 1' },
+      { id: waitingTargetId, name: 'Pega pequenos objetos com movimento de pinca', clinical_status: 'MAINTENANCE', protocol_title: 'VB-MAPP - Nivel 1', domain_name: 'Motricidade fina' },
+      { id: eligibleTargetId, name: 'Nomeia objetos familiares', clinical_status: 'MASTERED', protocol_title: 'VB-MAPP - Nivel 1', domain_name: 'Tato' }
+    ],
+    schedules: [
+      { id: '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0013', target_id: waitingTargetId, target: { id: waitingTargetId, name: 'Pega pequenos objetos com movimento de pinca' }, status: 'PENDING_NEXT_SESSION' },
+      { id: '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0014', status: 'PENDING_LINK' }
+    ]
+  });
+  const groups = groupPeiMaintenanceRowsTargetFirst(rows);
+  assert.equal(groups.maintenanceSkills.some((row: any) => row.targetId === maintenanceTargetId), true);
+  assert.equal(groups.waitingNextSession.some((row: any) => row.targetId === waitingTargetId), true);
+  assert.equal(groups.eligibleSkills.some((row: any) => row.targetId === eligibleTargetId), true);
+  assert.equal(groups.technical.length, 1);
+  assert.equal(groups.technical[0].canScheduleMaintenance, false);
+});
+
 test('resolvedor central prioriza nome real, protocolo, dominio e marco clinico', () => {
   const display = resolveMaintenanceTargetDisplay({
     schedule: {
@@ -187,6 +211,11 @@ test('acoes do painel chamam rotas seguras existentes', () => {
   assert.match(patientDetailCode, /canWaitNextSession/);
   assert.match(patientDetailCode, /canAssignAppointment/);
   assert.match(patientDetailCode, /rowClinicalContext/);
+  assert.match(patientDetailCode, /groupPeiMaintenanceRowsTargetFirst/);
+  assert.match(patientDetailCode, /peiMaintenanceTargetFirstGroups/);
+  assert.match(patientDetailCode, /Habilidades em manutenção/);
+  assert.match(patientDetailCode, /Habilidades elegíveis para manutenção/);
+  assert.match(patientDetailCode, /Pendências técnicas de manutenção/);
   assert.match(patientDetailCode, /normalizePeiMaintenanceMatchKey/);
   assert.match(patientDetailCode, /peiMaintenanceHydratedGoals/);
   assert.match(patientDetailCode, /goals: \[\.\.\.peiMaintenanceHydratedGoals, \.\.\.peiMaintenanceLinkableTargets\]/);
@@ -219,6 +248,7 @@ test('interfaces de manutencao usam display central sem placeholders antigos', (
   assert.match(sessionModeCode, /resolveMaintenanceTargetDisplay/);
   assert.match(patientDetailCode, /resolveMaintenanceTargetDisplay/);
   assert.match(rowCode, /displayTargetName/);
+  assert.match(rowCode, /Sondagem sem habilidade vinculada/);
   assert.match(rowCode, /Esta sondagem antiga precisa ser associada a uma habilidade real/);
   assert.doesNotMatch(rowCode, /Esta sondagem precisa ser vinculada a uma habilidade do PEI/);
   assert.doesNotMatch(uiCode, /Target em manuten[cç]ao|Target em manutenção|Sem maintenance probe agendado|Marco clinico: a definir|Marco clínico: a definir/);
@@ -227,6 +257,10 @@ test('interfaces de manutencao usam display central sem placeholders antigos', (
 test('backend resolve targets de manutencao em lote com colunas explicitas', () => {
   assert.match(serverCode, /const enrichMaintenanceRowsWithTargetDisplay/);
   assert.match(serverCode, /\.from\('aba_targets'\)[\s\S]*?\.select\(ABA_TARGET_RECOMMENDATION_SELECT\)[\s\S]*?\.in\('id', targetIds\)/m);
+  assert.match(serverCode, /skills/);
+  assert.match(serverCode, /orphanSchedules/);
+  assert.match(serverCode, /activeScheduleByTargetId/);
+  assert.match(serverCode, /latestResultByTargetId/);
   assert.match(serverCode, /const kind = needsTargetReview \? 'SCHEDULE_ORFAO' : 'SCHEDULE_VALIDO'/);
   assert.match(serverCode, /cardKind: kind/);
   assert.match(serverCode, /cardKind: 'TARGET_REAL_SEM_SCHEDULE'/);
@@ -238,7 +272,7 @@ test('backend resolve targets de manutencao em lote com colunas explicitas', () 
   assert.match(serverCode, /type: 'TARGET_WITHOUT_SCHEDULE'/);
   assert.match(serverCode, /canWaitNextSession: true/);
   assert.match(serverCode, /canAssignAppointment: true/);
-  assert.match(serverCode, /availableActions: needsTargetReview/);
+  assert.match(serverCode, /availableActions: needsTargetReview[\s\S]*?\? \['REVIEW_TARGET'\]/m);
   assert.match(serverCode, /'candidate_appointment_id'[\s\S]*?'confirmed_at'[\s\S]*?'metadata'/m);
   assert.doesNotMatch(serverCode, /from\('aba_maintenance_schedules'\)[\s\S]{0,200}\.select\('\*'\)/m);
 });
@@ -269,11 +303,12 @@ test('backend valida ids invalidos e recent-session-events local sem ruido', () 
 });
 
 test('botoes de manutencao abrem modais ou mostram feedback sem iniciar sessao fora da sessao ativa', () => {
-  assert.match(patientDetailCode, /Agendar sondagem de manutencao/);
-  assert.match(patientDetailCode, /Escolher sessao/);
-  assert.match(patientDetailCode, /Plano 7\/14\/30\/60/);
+  assert.match(patientDetailCode, /Agendar sondagem de manutenção/);
+  assert.match(patientDetailCode, /Escolher sessão existente/);
+  assert.match(patientDetailCode, /Escolher data específica/);
+  assert.match(patientDetailCode, /Plano de manutenção/);
   assert.match(patientDetailCode, /openPeiMaintenanceReviewModal/);
-  assert.match(patientDetailCode, /Inicie a sess[ãa]o para usar esta Maintenance Probe|Inicie a sessÃ£o para usar esta Maintenance Probe/);
+  assert.doesNotMatch(patientDetailCode, /Inicie a sess[ãa]o para usar esta Maintenance Probe|Inicie a sessÃ£o para usar esta Maintenance Probe/);
   const maintenanceActionsStart = patientDetailCode.indexOf('const renderPeiMaintenanceActions');
   const maintenanceActionsEnd = patientDetailCode.indexOf('const renderPeiMaintenanceRow', maintenanceActionsStart);
   const maintenanceActionsCode = patientDetailCode.slice(maintenanceActionsStart, maintenanceActionsEnd);

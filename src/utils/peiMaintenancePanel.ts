@@ -14,6 +14,14 @@ export type PeiMaintenanceGroupKey =
   | 'activeCycle'
   | 'completed';
 
+export type PeiMaintenanceTargetFirstGroupKey =
+  | 'maintenanceSkills'
+  | 'eligibleSkills'
+  | 'scheduled'
+  | 'waitingNextSession'
+  | 'overdue'
+  | 'technical';
+
 export const PEI_PLAN_SUBTABS: Array<{ id: PeiPlanSubtab; label: string }> = [
   { id: 'teaching', label: 'Ensino' },
   { id: 'maintenance', label: 'Manutencao' },
@@ -468,6 +476,51 @@ export function groupPeiMaintenanceRows(rows: any[]) {
   (Array.isArray(rows) ? rows : []).forEach((row) => {
     const key = (row?.group || 'activeCycle') as PeiMaintenanceGroupKey;
     groups[key]?.push(row);
+  });
+  return groups;
+}
+
+export function groupPeiMaintenanceRowsTargetFirst(rows: any[]) {
+  const groups: Record<PeiMaintenanceTargetFirstGroupKey, any[]> = {
+    maintenanceSkills: [],
+    eligibleSkills: [],
+    scheduled: [],
+    waitingNextSession: [],
+    overdue: [],
+    technical: [],
+  };
+  (Array.isArray(rows) ? rows : []).forEach((row) => {
+    const status = normalizeStatus(row?.nextSchedule?.status || row?.status || row?.nextProbe?.status);
+    const clinicalStatus = normalizeStatus(row?.clinicalStatus || row?.goal?.clinical_status || row?.goal?.clinicalStatus || row?.goal?.status || row?.goal?.phase);
+    const needsTargetReview = Boolean(
+      row?.needsTargetReview ||
+      row?.targetMissing ||
+      row?.nextSchedule?.target_missing ||
+      row?.cardKind === 'SCHEDULE_ORFAO' ||
+      row?.cardKind === 'ITEM_SINTETICO_LOCAL' ||
+      !row?.hasRealTarget
+    );
+    if (needsTargetReview) {
+      groups.technical.push(row);
+      return;
+    }
+    if (row?.group === 'overdue') {
+      groups.overdue.push(row);
+      return;
+    }
+    if (row?.group === 'unlinked' || status === 'PENDING_NEXT_SESSION') {
+      groups.waitingNextSession.push(row);
+      return;
+    }
+    if (row?.hasRealSchedule && row?.group !== 'completed') {
+      groups.scheduled.push(row);
+      return;
+    }
+    if (['MAINTENANCE', 'MAINTAINED'].includes(clinicalStatus) || row?.hasCycle || row?.isMaintained) {
+      groups.maintenanceSkills.push(row);
+      return;
+    }
+    groups.eligibleSkills.push(row);
   });
   return groups;
 }
