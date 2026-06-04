@@ -17411,6 +17411,78 @@ async function startServer() {
     };
   };
 
+  const parsePatientPeiArray = (value: any, keys = ['pei', 'peiGoals', 'pei_goals', 'goals', 'metas']): any[] => {
+    if (Array.isArray(value)) return value;
+    const parsed = typeof value === 'string' ? parseJsonValueForRoute(value) : value;
+    if (Array.isArray(parsed)) return parsed;
+    if (!parsed || typeof parsed !== 'object') return [];
+    for (const key of keys) {
+      const nested = (parsed as any)[key];
+      if (Array.isArray(nested)) return nested;
+      const parsedNested = typeof nested === 'string' ? parseJsonValueForRoute(nested) : nested;
+      if (Array.isArray(parsedNested)) return parsedNested;
+    }
+    return [];
+  };
+
+  const normalizePeiTargetMatchKey = (value: any) =>
+    sanitizeString(value, 280)
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-zA-Z0-9]+/g, ' ')
+      .trim()
+      .toLowerCase();
+
+  const isMaintenanceEligiblePeiGoal = (goal: any) => {
+    const status = sanitizeString(goal?.status || goal?.clinical_status || goal?.clinicalStatus || goal?.phase, 80).toUpperCase();
+    const masteryStatus = sanitizeString(goal?.mastery_status || goal?.masteryStatus || goal?.evaluation_status || goal?.evaluationStatus, 80).toUpperCase();
+    const progress = Number(goal?.progress ?? goal?.progressPercent ?? goal?.progress_percent ?? goal?.masteryProgressPercent ?? goal?.mastery_progress_percent);
+    return (
+      ['COMPLETED', 'COMPLETE', 'CONCLUIDO', 'CONCLUÍDO', 'ACQUIRED', 'ADQUIRIDO', 'MASTERED', 'MASTERED_APPROVED', 'MAINTENANCE', 'MANUTENCAO', 'MANUTENÇÃO', 'MAINTAINED', 'READY_FOR_MAINTENANCE'].includes(status) ||
+      ['MASTERED', 'MASTERED_APPROVED', 'READY_FOR_MAINTENANCE', 'MET', 'MET_TODAY'].includes(masteryStatus) ||
+      (Number.isFinite(progress) && progress >= 100)
+    );
+  };
+
+  const getPatientPeiTargets = async (patientId: string, clinicId: string, organizationId: string, sessionUser: any) => {
+    try {
+      const record = await readPatientRecordPayloadForFiles(patientId, clinicId, sessionUser);
+      const goals = parsePatientPeiArray(record?.payload || {});
+      return goals
+        .filter((goal: any) => goal && typeof goal === 'object')
+        .map((goal: any) => {
+          const targetName = sanitizeString(goal?.name || goal?.targetName || goal?.target_name || goal?.objective, 240);
+          if (!targetName) return null;
+          const targetId = sanitizeString(goal?.target_id || goal?.targetId || goal?.abaTargetId || goal?.aba_target_id || goal?.id, 180);
+          const protocolName = sanitizeString(goal?.protocolTitle || goal?.protocol_title || goal?.protocolName || goal?.protocol_name, 240) || 'PEI';
+          const domainName = sanitizeString(goal?.domainName || goal?.domain_name || goal?.programName || goal?.program_name, 240) || 'Plano de ensino';
+          const progressPercent = Number(goal?.progress ?? goal?.progressPercent ?? goal?.progress_percent ?? null);
+          const clinicalStatus = sanitizeString(goal?.clinical_status || goal?.clinicalStatus || goal?.status || goal?.phase, 80) || null;
+          const masteryStatus = sanitizeString(goal?.mastery_status || goal?.masteryStatus || goal?.evaluation_status || goal?.evaluationStatus, 80) || null;
+          return cleanObject({
+            source: 'patient_pei',
+            peiGoalId: sanitizeString(goal?.id, 180) || null,
+            skillId: sanitizeString(goal?.skillId || goal?.skill_id, 180) || null,
+            targetId: isUuid(targetId) ? targetId : null,
+            localTargetRef: !isUuid(targetId) ? targetId || null : null,
+            targetName,
+            protocolName,
+            domainName,
+            clinicalStatus,
+            masteryStatus,
+            progressPercent: Number.isFinite(progressPercent) ? Math.max(0, Math.min(100, Math.round(progressPercent))) : null,
+            eligibleForMaintenance: isMaintenanceEligiblePeiGoal(goal),
+            matchNameKey: normalizePeiTargetMatchKey(targetName),
+            matchCompositeKey: [targetName, protocolName, domainName].map(normalizePeiTargetMatchKey).filter(Boolean).join('|')
+          });
+        })
+        .filter(Boolean);
+    } catch (error: any) {
+      if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return [];
+      throw error;
+    }
+  };
+
   const writePatientRecordSafely = async (params: {
     patientId: string;
     clinicId: string;
@@ -29408,6 +29480,7 @@ async function startServer() {
       }
       const enrichedSchedules = await enrichMaintenanceRowsWithTargetDisplay((scheduleResult as any).data || [], clinicId, organizationId, req.session.user);
       const allTargets = Array.isArray((targetResult as any).data) ? (targetResult as any).data : [];
+      const peiTargets = await getPatientPeiTargets(patientId, clinicId, organizationId, req.session.user);
       const probeResults = Array.isArray((probeResult as any).data) ? (probeResult as any).data : [];
       const alerts = Array.isArray((alertResult as any).data) ? (alertResult as any).data : [];
       const latestResultByTargetId = new Map<string, any>();
@@ -29430,6 +29503,52 @@ async function startServer() {
           activeScheduleByTargetId.set(targetId, schedule);
         }
       });
+      const targetById = new Map<string, any>();
+      const targetByComposite = new Map<string, any>();
+      const duplicateComposite = new Set<string>();
+      const targetByName = new Map<string, any>();
+      const duplicateName = new Set<string>();
+      const registerTargetMatch = (map: Map<string, any>, duplicates: Set<string>, key: string, target: any) => {
+        if (!key) return;
+        if (map.has(key)) {
+          duplicates.add(key);
+          map.delete(key);
+          return;
+        }
+        if (!duplicates.has(key)) map.set(key, target);
+      };
+      allTargets.forEach((target: any) => {
+        const targetId = sanitizeString(target?.id, 180);
+        if (!isUuid(targetId)) return;
+        targetById.set(targetId, target);
+        const targetName = sanitizeString(target?.name || target?.description, 240);
+        const protocolName = sanitizeString(target?.protocol_title, 240);
+        const domainName = sanitizeString(target?.domain_name, 240);
+        registerTargetMatch(targetByComposite, duplicateComposite, [targetName, protocolName, domainName].map(normalizePeiTargetMatchKey).filter(Boolean).join('|'), target);
+        registerTargetMatch(targetByName, duplicateName, normalizePeiTargetMatchKey(targetName), target);
+      });
+      const hydratePeiTarget = (peiTarget: any) => {
+        const explicitTarget = isUuid(sanitizeString(peiTarget?.targetId, 180)) ? targetById.get(sanitizeString(peiTarget.targetId, 180)) : null;
+        const compositeKey = sanitizeString(peiTarget?.matchCompositeKey, 500);
+        const nameKey = sanitizeString(peiTarget?.matchNameKey, 280);
+        const matchedTarget = explicitTarget ||
+          (compositeKey && !duplicateComposite.has(compositeKey) ? targetByComposite.get(compositeKey) : null) ||
+          (nameKey && !duplicateName.has(nameKey) ? targetByName.get(nameKey) : null) ||
+          null;
+        const targetId = sanitizeString(matchedTarget?.id || peiTarget?.targetId, 180);
+        return cleanObject({
+          ...peiTarget,
+          targetId: isUuid(targetId) ? targetId : null,
+          target: matchedTarget || null,
+          hasRealTarget: Boolean(isUuid(targetId) && matchedTarget?.id),
+          needsTargetReview: !Boolean(isUuid(targetId) && matchedTarget?.id),
+          canScheduleMaintenance: Boolean(isUuid(targetId) && matchedTarget?.id),
+          canWaitNextSession: Boolean(isUuid(targetId) && matchedTarget?.id),
+          canAssignAppointment: Boolean(isUuid(targetId) && matchedTarget?.id),
+          canReviewLink: !Boolean(isUuid(targetId) && matchedTarget?.id)
+        });
+      };
+      const hydratedPeiTargets = peiTargets.map(hydratePeiTarget);
       const scheduledTargetIds = new Set(enrichedSchedules.map((schedule: any) => sanitizeString(schedule?.target_id || schedule?.targetId, 180)).filter(Boolean));
       const skillTargetRows = allTargets.filter((target: any) => isUuid(sanitizeString(target?.id, 180)));
       const maintenanceTargetRows = allTargets.filter((target: any) => {
@@ -29513,6 +29632,43 @@ async function startServer() {
           availableActions: ['SCHEDULE_MAINTENANCE', 'WAIT_NEXT_SESSION', 'ASSIGN_APPOINTMENT']
         });
       });
+      const peiTargetCards = hydratedPeiTargets
+        .filter((target: any) => target?.eligibleForMaintenance)
+        .filter((target: any) => {
+          const targetId = sanitizeString(target?.targetId, 180);
+          if (targetId && scheduledTargetIds.has(targetId)) return false;
+          return true;
+        })
+        .map((target: any) => cleanObject({
+          id: target?.targetId || target?.peiGoalId || target?.targetName,
+          cardId: target?.targetId || target?.peiGoalId || target?.targetName,
+          cardKind: 'TARGET_REAL_SEM_SCHEDULE',
+          kind: 'TARGET_REAL_SEM_SCHEDULE',
+          type: 'TARGET_WITHOUT_SCHEDULE',
+          scheduleId: null,
+          targetId: target?.targetId || null,
+          hasRealTarget: Boolean(target?.hasRealTarget),
+          targetName: target?.targetName,
+          protocolName: target?.protocolName,
+          domainName: target?.domainName,
+          clinicalStatus: target?.clinicalStatus,
+          masteryStatus: target?.masteryStatus,
+          progressPercent: target?.progressPercent,
+          schedule: null,
+          target: target?.target || null,
+          latestResult: target?.targetId ? latestResultByTargetId.get(target.targetId) || null : null,
+          status: target?.clinicalStatus || target?.masteryStatus || null,
+          canSchedule: Boolean(target?.hasRealTarget),
+          canScheduleMaintenance: Boolean(target?.hasRealTarget),
+          canAssign: false,
+          canWaitNextSession: Boolean(target?.hasRealTarget),
+          canAssignAppointment: Boolean(target?.hasRealTarget),
+          canReviewLink: !target?.hasRealTarget,
+          needsTargetReview: !target?.hasRealTarget,
+          availableActions: target?.hasRealTarget
+            ? ['SCHEDULE_MAINTENANCE', 'WAIT_NEXT_SESSION', 'ASSIGN_APPOINTMENT']
+            : ['REVIEW_TARGET']
+        }));
       const skills = skillTargetRows.map((target: any) => {
         const targetId = sanitizeString(target?.id, 180);
         const activeSchedule = activeScheduleByTargetId.get(targetId) || null;
@@ -29536,13 +29692,57 @@ async function startServer() {
           needsTargetReview: false
         });
       });
+      const peiSkills = hydratedPeiTargets.map((target: any) => cleanObject({
+        cardKind: target?.hasRealTarget ? 'TARGET_REAL_SEM_SCHEDULE' : 'PEI_GOAL_REQUIRES_TARGET',
+        targetId: target?.targetId || null,
+        peiGoalId: target?.peiGoalId || null,
+        targetName: target?.targetName,
+        protocolName: target?.protocolName,
+        domainName: target?.domainName,
+        clinicalStatus: target?.clinicalStatus,
+        masteryStatus: target?.masteryStatus,
+        progressPercent: target?.progressPercent,
+        activeSchedule: target?.targetId ? activeScheduleByTargetId.get(target.targetId) || null : null,
+        latestResult: target?.targetId ? latestResultByTargetId.get(target.targetId) || null : null,
+        canScheduleMaintenance: Boolean(target?.hasRealTarget),
+        canWaitNextSession: Boolean(target?.hasRealTarget),
+        canAssignAppointment: Boolean(target?.hasRealTarget),
+        needsTargetReview: !target?.hasRealTarget
+      }));
+      const skillsByKey = new Map<string, any>();
+      [...skills, ...peiSkills].forEach((skill: any) => {
+        const key = sanitizeString(skill?.targetId || skill?.peiGoalId || normalizePeiTargetMatchKey(skill?.targetName), 280);
+        if (key && !skillsByKey.has(key)) skillsByKey.set(key, skill);
+      });
+      const normalizedSkills = Array.from(skillsByKey.values());
       const orphanSchedules = scheduleCards.filter((card: any) => card?.needsTargetReview);
       const cards = [
         ...targetCards,
+        ...peiTargetCards,
         ...scheduleCards.filter((card: any) => !card?.needsTargetReview),
         ...orphanSchedules
       ].slice(0, pageSize);
-      return res.json({ success: true, data: { skills, orphanSchedules, cards, schedules: enrichedSchedules, targets: skillTargetRows, probeResults, alerts }, page, pageSize });
+      return res.json({
+        success: true,
+        data: {
+          skills: normalizedSkills,
+          orphanSchedules,
+          cards,
+          schedules: enrichedSchedules,
+          targets: skillTargetRows,
+          peiTargets: hydratedPeiTargets,
+          probeResults,
+          alerts,
+          debugCounts: {
+            targetsFromPei: peiTargets.length,
+            eligibleTargets: normalizedSkills.filter((skill: any) => skill?.canScheduleMaintenance || skill?.progressPercent >= 100 || ['COMPLETED', 'ACQUIRED', 'ADQUIRIDO', 'MASTERED', 'MAINTENANCE'].includes(sanitizeString(skill?.clinicalStatus, 80).toUpperCase())).length,
+            validSchedules: scheduleCards.filter((card: any) => !card?.needsTargetReview).length,
+            orphanSchedules: orphanSchedules.length
+          }
+        },
+        page,
+        pageSize
+      });
     } catch {
       return res.status(500).json({ success: false, error: 'UNEXPECTED_ERROR', message: 'Não foi possível carregar manutenção agora.' });
     }

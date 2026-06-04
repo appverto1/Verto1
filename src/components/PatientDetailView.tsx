@@ -4818,7 +4818,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       if (!duplicates.has(key)) map.set(key, target);
     };
     peiMaintenanceLinkableTargets.forEach((target: any) => {
-      const id = getPeiMaintenancePersistedId(target?.id || target?.target_id || target?.targetId);
+      const id = getPeiMaintenancePersistedId(target?.id || target?.target_id || target?.targetId || target?.aba_target_id || target?.abaTargetId);
       if (!id) return;
       const nameKey = normalizePeiMaintenanceMatchKey(getPeiMaintenanceMatchName(target));
       const protocolKey = normalizePeiMaintenanceMatchKey(getPeiMaintenanceProtocolName(target));
@@ -4827,7 +4827,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       register(byName, duplicateName, nameKey, target);
     });
     return peiGoals.map((goal: any) => {
-      const currentId = getPeiMaintenancePersistedId(goal?.target_id || goal?.targetId || goal?.id);
+      const currentId = getPeiMaintenancePersistedId(goal?.target_id || goal?.targetId || goal?.aba_target_id || goal?.abaTargetId || goal?.id);
       if (currentId) return { ...goal, target_id: currentId, targetId: currentId };
       const nameKey = normalizePeiMaintenanceMatchKey(getPeiMaintenanceMatchName(goal));
       const protocolKey = normalizePeiMaintenanceMatchKey(getPeiMaintenanceProtocolName(goal));
@@ -4835,7 +4835,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       const compositeKey = [nameKey, protocolKey, domainKey].filter(Boolean).join('|');
       const match = (compositeKey && !duplicateComposite.has(compositeKey) ? byComposite.get(compositeKey) : null) ||
         (nameKey && !duplicateName.has(nameKey) ? byName.get(nameKey) : null);
-      const matchId = getPeiMaintenancePersistedId(match?.id || match?.target_id || match?.targetId);
+      const matchId = getPeiMaintenancePersistedId(match?.id || match?.target_id || match?.targetId || match?.aba_target_id || match?.abaTargetId);
       if (!matchId) return goal;
       return {
         ...goal,
@@ -4998,7 +4998,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   };
 
   const getPeiMaintenanceTargetId = (row: any) =>
-    getPersistedUuid(row?.targetId || row?.target_id || row?.goal?.id || row?.goal?.target_id || row?.goal?.targetId);
+    getPersistedUuid(row?.targetId || row?.target_id || row?.aba_target_id || row?.abaTargetId || row?.goal?.aba_target_id || row?.goal?.abaTargetId || row?.goal?.target_id || row?.goal?.targetId || row?.goal?.id);
 
   const getPeiMaintenanceScheduleId = (schedule: any) =>
     getPersistedUuid(schedule?.id || schedule?.schedule_id || schedule?.scheduleId);
@@ -5274,7 +5274,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const getPeiMaintenanceTargetOptions = () => {
     const byId = new Map<string, { id: string; label: string; detail: string; status: string }>();
     const addTargetOption = (target: any) => {
-      const id = getPersistedUuid(target?.id || target?.target_id || target?.targetId);
+      const id = getPersistedUuid(target?.id || target?.target_id || target?.targetId || target?.aba_target_id || target?.abaTargetId);
       if (!id || byId.has(id)) return;
       const display = resolveMaintenanceTargetDisplay({ target, schedule: target });
       const label = safeDisplayValue(

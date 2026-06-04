@@ -86,11 +86,29 @@ const getTargetKey = (...values: any[]) => {
 };
 
 const isMaintenanceRelevantGoal = (goal: any) => {
-  const status = String(goal?.status || goal?.clinical_status || goal?.clinicalStatus || goal?.phase || '').toLowerCase();
+  const status = String(goal?.status || goal?.clinical_status || goal?.clinicalStatus || goal?.phase || goal?.mastery_status || goal?.masteryStatus || '').toLowerCase();
   const clinicalStatus = normalizeStatus(goal?.clinical_status || goal?.clinicalStatus || goal?.status || goal?.phase);
+  const masteryStatus = normalizeStatus(goal?.mastery_status || goal?.masteryStatus || goal?.evaluation_status || goal?.evaluationStatus);
+  const progress = Number(goal?.progress ?? goal?.progressPercent ?? goal?.progress_percent ?? goal?.masteryProgressPercent ?? goal?.mastery_progress_percent);
   return (
-    ['completed', 'acquired', 'adquirido', 'maintenance', 'maintained', 'mastered'].includes(status) ||
-    ['MASTERED', 'MAINTENANCE', 'MAINTAINED', 'ACQUIRED'].includes(clinicalStatus)
+    [
+      'completed',
+      'complete',
+      'concluido',
+      'concluído',
+      'acquired',
+      'adquirido',
+      'maintenance',
+      'manutencao',
+      'manutenção',
+      'maintained',
+      'mastered',
+      'masterizado',
+      'ready_for_maintenance'
+    ].includes(status) ||
+    ['MASTERED', 'MASTERED_APPROVED', 'MAINTENANCE', 'MAINTAINED', 'ACQUIRED', 'ADQUIRIDO', 'READY_FOR_MAINTENANCE'].includes(clinicalStatus) ||
+    ['MASTERED', 'MASTERED_APPROVED', 'READY_FOR_MAINTENANCE', 'MET', 'MET_TODAY'].includes(masteryStatus) ||
+    (Number.isFinite(progress) && progress >= 100)
   );
 };
 
@@ -322,6 +340,7 @@ export function buildPeiMaintenanceRows(input: {
       protocol: display.protocolDisplayName,
       domain: display.domainDisplayName,
       clinicalStatus: normalizeStatus(seed.status || seed.clinical_status || seed.clinicalStatus || ''),
+      hasPeiClinicalSource: Boolean(seed.goal && isMaintenanceRelevantGoal(seed)),
       hasRealTarget: Boolean(display.hasRealTarget || (seed.goal && isPersistedUuid(targetId))),
       needsTargetReview: Boolean(display.needsTargetReview && !(seed.goal && isPersistedUuid(targetId))),
       targetMissing: display.targetMissing,
@@ -389,7 +408,8 @@ export function buildPeiMaintenanceRows(input: {
     });
     const hasMissingTargetLabel = /habilidade\s+(nao|não)\s+(vinculada|encontrada)/i.test(String(row.targetName || ''));
     const hasRealTarget = Boolean(isPersistedUuid(row.targetId) && !row.targetMissing && !nextProbe.schedule?.target_missing && !hasMissingTargetLabel && row.hasRealTarget !== false);
-    const needsTargetReview = !hasRealTarget || Boolean(row.targetMissing || nextProbe.schedule?.target_missing) || hasMissingTargetLabel;
+    const hasPeiClinicalSource = Boolean(row.hasPeiClinicalSource);
+    const needsTargetReview = (!hasRealTarget && !hasPeiClinicalSource) || Boolean(row.targetMissing || nextProbe.schedule?.target_missing) || hasMissingTargetLabel;
     const cardKind = hasSyntheticSchedule && !hasRealSchedule
       ? 'ITEM_SINTETICO_LOCAL'
       : needsTargetReview && hasRealSchedule
@@ -398,7 +418,9 @@ export function buildPeiMaintenanceRows(input: {
           ? 'SCHEDULE_VALIDO'
           : hasRealTarget
             ? 'TARGET_REAL_SEM_SCHEDULE'
-            : 'SCHEDULE_ORFAO';
+            : hasPeiClinicalSource
+              ? 'TARGET_REAL_SEM_SCHEDULE'
+              : 'SCHEDULE_ORFAO';
     const canOperateOnTarget = hasRealTarget && cardKind !== 'ITEM_SINTETICO_LOCAL';
     const group: PeiMaintenanceGroupKey =
       allCycleCompleted || (!nextProbe.schedule && COMPLETED_STATUSES.has(resultStatus))
@@ -425,12 +447,13 @@ export function buildPeiMaintenanceRows(input: {
       cardId: hasRealSchedule ? nextScheduleId : row.targetId || row.key,
       scheduleId: hasRealSchedule ? nextScheduleId : '',
       hasRealTarget,
+      hasPeiClinicalSource,
       hasRealSchedule,
       needsTargetReview,
       canScheduleMaintenance: canOperateOnTarget,
       canWaitNextSession: canOperateOnTarget,
       canAssignAppointment: canOperateOnTarget && (hasRealSchedule || derivedStatus === 'NO_SCHEDULE'),
-      canReviewLink: needsTargetReview && cardKind !== 'ITEM_SINTETICO_LOCAL',
+      canReviewLink: (needsTargetReview || (!hasRealTarget && hasPeiClinicalSource)) && cardKind !== 'ITEM_SINTETICO_LOCAL',
       availableActions: needsTargetReview
         ? ['REVIEW_TARGET']
         : ['SCHEDULE_MAINTENANCE', 'WAIT_NEXT_SESSION', 'ASSIGN_APPOINTMENT'],
@@ -492,13 +515,14 @@ export function groupPeiMaintenanceRowsTargetFirst(rows: any[]) {
   (Array.isArray(rows) ? rows : []).forEach((row) => {
     const status = normalizeStatus(row?.nextSchedule?.status || row?.status || row?.nextProbe?.status);
     const clinicalStatus = normalizeStatus(row?.clinicalStatus || row?.goal?.clinical_status || row?.goal?.clinicalStatus || row?.goal?.status || row?.goal?.phase);
+    const hasPeiClinicalSource = Boolean(row?.hasPeiClinicalSource);
     const needsTargetReview = Boolean(
       row?.needsTargetReview ||
       row?.targetMissing ||
       row?.nextSchedule?.target_missing ||
       row?.cardKind === 'SCHEDULE_ORFAO' ||
       row?.cardKind === 'ITEM_SINTETICO_LOCAL' ||
-      !row?.hasRealTarget
+      (!row?.hasRealTarget && !hasPeiClinicalSource)
     );
     if (needsTargetReview) {
       groups.technical.push(row);

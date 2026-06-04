@@ -139,6 +139,20 @@ test('painel target-first separa habilidades reais de pendencias tecnicas', () =
   assert.equal(groups.technical[0].canScheduleMaintenance, false);
 });
 
+test('habilidades do PEI com status local ou progresso 100 aparecem como elegiveis clinicas', () => {
+  const rows = buildPeiMaintenanceRows({
+    goals: [
+      { id: 'pei-local-1', name: 'Imita 2 movimentos motores grossos', status: 'ADQUIRIDO', protocolTitle: 'VB-MAPP - Nivel 1', domainName: 'Imitacao Motora Nivel 1' },
+      { id: 'pei-local-2', name: 'Pega pequenos objetos com movimento de pinca', status: 'in_progress', progress: 100, protocolTitle: 'VB-MAPP - Nivel 1', domainName: 'Motricidade fina' }
+    ]
+  });
+  const groups = groupPeiMaintenanceRowsTargetFirst(rows);
+  assert.equal(groups.eligibleSkills.length, 2);
+  assert.equal(groups.technical.length, 0);
+  assert.equal(groups.eligibleSkills.every((row: any) => row.cardKind === 'TARGET_REAL_SEM_SCHEDULE'), true);
+  assert.equal(groups.eligibleSkills.every((row: any) => row.hasPeiClinicalSource), true);
+});
+
 test('resolvedor central prioriza nome real, protocolo, dominio e marco clinico', () => {
   const display = resolveMaintenanceTargetDisplay({
     schedule: {
@@ -218,6 +232,8 @@ test('acoes do painel chamam rotas seguras existentes', () => {
   assert.match(patientDetailCode, /Pendências técnicas de manutenção/);
   assert.match(patientDetailCode, /normalizePeiMaintenanceMatchKey/);
   assert.match(patientDetailCode, /peiMaintenanceHydratedGoals/);
+  assert.match(patientDetailCode, /aba_target_id/);
+  assert.match(patientDetailCode, /abaTargetId/);
   assert.match(patientDetailCode, /goals: \[\.\.\.peiMaintenanceHydratedGoals, \.\.\.peiMaintenanceLinkableTargets\]/);
   assert.match(patientDetailCode, /peiMaintenanceHydratedGoals\.forEach\(addTargetOption\)/);
   assert.match(patientDetailCode, /group !== 'completed' && group !== 'confirmation' && \(/);
@@ -259,6 +275,10 @@ test('backend resolve targets de manutencao em lote com colunas explicitas', () 
   assert.match(serverCode, /\.from\('aba_targets'\)[\s\S]*?\.select\(ABA_TARGET_RECOMMENDATION_SELECT\)[\s\S]*?\.in\('id', targetIds\)/m);
   assert.match(serverCode, /skills/);
   assert.match(serverCode, /orphanSchedules/);
+  assert.match(serverCode, /getPatientPeiTargets/);
+  assert.match(serverCode, /patient_pei/);
+  assert.match(serverCode, /debugCounts/);
+  assert.match(serverCode, /targetsFromPei/);
   assert.match(serverCode, /activeScheduleByTargetId/);
   assert.match(serverCode, /latestResultByTargetId/);
   assert.match(serverCode, /const kind = needsTargetReview \? 'SCHEDULE_ORFAO' : 'SCHEDULE_VALIDO'/);
