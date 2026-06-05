@@ -295,17 +295,49 @@ test('modal de atribuicao lista proximas sessoes com dados clinicos sem UUID vis
   assert.match(patientDetailCode, /formatPeiMaintenanceAppointmentLabel\(appointment\)/);
 });
 
-test('subaba manutencao etapa 1 nao renderiza acoes de agendamento', () => {
-  const maintenancePanelStart = patientDetailCode.indexOf('const renderPeiMaintenancePanel = () => (');
+test('subaba manutencao etapa 2 renderiza botao de agendamento simples', () => {
+  const maintenancePanelStart = patientDetailCode.indexOf('const renderPeiMaintenancePanel = () => {');
   const maintenancePanelEnd = patientDetailCode.indexOf('const renderPeiGeneralizationPanel', maintenancePanelStart);
+  assert.notEqual(maintenancePanelStart, -1);
   const maintenancePanelUi = patientDetailCode.slice(maintenancePanelStart, maintenancePanelEnd);
   assert.match(maintenancePanelUi, /Habilidades adquiridas no Ensino, prontas para sondagem de manutenção/);
   assert.match(maintenancePanelUi, /Elegíveis/);
   assert.match(maintenancePanelUi, /Em manutenção/);
   assert.match(maintenancePanelUi, /Agendadas/);
+  assert.match(maintenancePanelUi, /Aguardando sessão/);
   assert.match(maintenancePanelUi, /Habilidades elegíveis para manutenção/);
-  assert.match(maintenancePanelUi, /Status: Adquirido/);
-  assert.doesNotMatch(maintenancePanelUi, /renderPeiMaintenanceGroup|renderPeiMaintenanceMetric|renderPeiMaintenanceActions|Agendar manutenção|Atribuir a uma sessão|Plano de manutenção|createMaintenanceScheduleForTarget|scheduleMaintenanceForNextSession|Pendências técnicas/);
+  assert.match(maintenancePanelUi, /Agendar manutenção/);
+  assert.match(maintenancePanelUi, /canManagePeiMaintenance && hasRealTarget && hasValidPeiMaintenanceScope/);
+  assert.match(maintenancePanelUi, /openPeiMaintenanceScheduleModal\(goal, 'NEXT_PATIENT_SESSION'\)/);
+  assert.match(maintenancePanelUi, /peiMaintenanceEligibleRows\.map/);
+  assert.doesNotMatch(maintenancePanelUi, /renderPeiMaintenanceGroup|renderPeiMaintenanceMetric|renderPeiMaintenanceActions|Atribuir a uma sessão|Plano de manutenção|Escolher sessão existente|Pendências técnicas/);
+});
+
+test('modal etapa 2 mostra somente data ou proxima sessao e payload novo', () => {
+  const modalStart = patientDetailCode.indexOf('{peiMaintenanceScheduleRow && createPortal(');
+  const modalEnd = patientDetailCode.indexOf('{peiMaintenanceReviewRow && createPortal', modalStart);
+  assert.notEqual(modalStart, -1);
+  const modalCode = patientDetailCode.slice(modalStart, modalEnd);
+  assert.match(modalCode, /Agendar sondagem de manutenção/);
+  assert.match(modalCode, /Defina quando esta habilidade será sondada/);
+  assert.match(modalCode, /Status:[\s\S]*Progresso:/m);
+  assert.match(modalCode, /Escolher data/);
+  assert.match(modalCode, /Aguardar próxima sessão/);
+  assert.match(modalCode, /Salvar agendamento/);
+  assert.doesNotMatch(modalCode, /Escolher sessão existente|Escolher data específica|Plano de manutenção|Atribuir a uma sessão/);
+
+  const handlerStart = patientDetailCode.indexOf('const handlePeiScheduleModalSave');
+  const handlerEnd = patientDetailCode.indexOf('const handlePeiScheduleNextSession', handlerStart);
+  assert.notEqual(handlerStart, -1);
+  const handlerCode = patientDetailCode.slice(handlerStart, handlerEnd);
+  assert.match(handlerCode, /Esta habilidade não está disponível para manutenção/);
+  assert.match(handlerCode, /Escolha uma data para agendar a sondagem/);
+  assert.match(handlerCode, /const scheduleMode = isDateMode \? 'DATE' : 'NEXT_SESSION'/);
+  assert.match(handlerCode, /dueDate: isDateMode \? peiMaintenanceScheduleDate : null/);
+  assert.match(handlerCode, /dataService\.createMaintenanceScheduleForTarget\(targetId, payload\)/);
+  assert.match(handlerCode, /Sondagem de manutenção agendada para a data escolhida/);
+  assert.match(handlerCode, /Sondagem aguardando próxima sessão/);
+  assert.doesNotMatch(handlerCode, /scheduleMaintenanceForNextSession|requestSessionStart|saveAbaSession|createAbaSession|POST \/api\/aba\/sessions/);
 });
 
 test('acoes do painel chamam rotas seguras existentes', () => {
@@ -332,11 +364,12 @@ test('acoes do painel chamam rotas seguras existentes', () => {
   assert.doesNotMatch(patientDetailCode, /setAbaMaintenancePanel\(panelData\)/);
   assert.doesNotMatch(patientDetailCode, /groupPeiMaintenanceRowsTargetFirst\(peiMaintenanceRows\)/);
   assert.match(patientDetailCode, /peiAcquiredTeachingGoals/);
-  const maintenancePanelStart = patientDetailCode.indexOf('const renderPeiMaintenancePanel = () => (');
+  const maintenancePanelStart = patientDetailCode.indexOf('const renderPeiMaintenancePanel = () => {');
   const maintenancePanelEnd = patientDetailCode.indexOf('const renderPeiGeneralizationPanel', maintenancePanelStart);
+  assert.notEqual(maintenancePanelStart, -1);
   const maintenancePanelCode = patientDetailCode.slice(maintenancePanelStart, maintenancePanelEnd);
   assert.match(maintenancePanelCode, /Habilidades adquiridas no Ensino/);
-  assert.match(maintenancePanelCode, /peiAcquiredTeachingGoals\.map/);
+  assert.match(maintenancePanelCode, /peiMaintenanceEligibleRows\.map/);
   assert.doesNotMatch(maintenancePanelCode, /renderPeiMaintenanceGroup|renderPeiMaintenanceMetric|Atualizar manutenção|Pendências técnicas|Plano de manutenção|shouldShowPeiMaintenancePanelLoading/);
   assert.match(patientDetailCode, /normalizePeiMaintenanceMatchKey/);
   assert.match(patientDetailCode, /peiMaintenanceHydratedGoals/);
@@ -391,17 +424,46 @@ test('interfaces de manutencao usam display central sem placeholders antigos', (
   assert.doesNotMatch(uiCode, /Target em manuten[cç]ao|Target em manutenção|Sem maintenance probe agendado|Marco clinico: a definir|Marco clínico: a definir/);
 });
 
-test('backend da etapa 1 usa PEI targets como fonte principal sem schedules', () => {
+test('backend da etapa 2 usa PEI targets e schedules ativos por target em lote', () => {
   const routeStart = serverCode.indexOf("app.get('/api/patients/:patientId/aba/maintenance-panel'");
   const legacyStart = serverCode.indexOf('const { page, pageSize, from, to } = parseAbaPageParams', routeStart);
-  const stepOneRoute = serverCode.slice(routeStart, legacyStart);
-  assert.match(stepOneRoute, /checkPatientAccess/);
-  assert.match(stepOneRoute, /getPatientPeiTargets/);
-  assert.match(stepOneRoute, /\.from\('aba_targets'\)[\s\S]*?\.select\(ABA_TARGET_RECOMMENDATION_SELECT\)/m);
-  assert.match(stepOneRoute, /source: 'patient_pei_targets_step1'/);
-  assert.match(dataServiceCode, /table: 'patient_pei,aba_targets'/);
-  assert.doesNotMatch(stepOneRoute, /aba_maintenance_schedules|ABA_MAINTENANCE_SCHEDULE_SELECT|aba_maintenance_probe_results|aba_regression_alerts|fetchFutureAppointmentsForMaintenance/);
-  assert.doesNotMatch(stepOneRoute, /select\('\*'\)/);
+  const stepTwoRoute = serverCode.slice(routeStart, legacyStart);
+  assert.match(stepTwoRoute, /checkPatientAccess/);
+  assert.match(stepTwoRoute, /getPatientPeiTargets/);
+  assert.match(stepTwoRoute, /\.from\('aba_targets'\)[\s\S]*?\.select\(ABA_TARGET_RECOMMENDATION_SELECT\)/m);
+  assert.match(stepTwoRoute, /\.from\('aba_maintenance_schedules'\)[\s\S]*?\.select\(ABA_MAINTENANCE_SCHEDULE_SELECT\)[\s\S]*?\.in\('target_id', eligibleTargetIds\)[\s\S]*?\.in\('status', ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES\)/m);
+  assert.match(stepTwoRoute, /source: 'patient_pei_targets_step2'/);
+  assert.match(stepTwoRoute, /canScheduleMaintenance: hasRealTarget/);
+  assert.match(stepTwoRoute, /availableActions: hasRealTarget \? \['SCHEDULE_MAINTENANCE'\] : \[\]/);
+  assert.match(dataServiceCode, /table: 'patient_pei,aba_targets,aba_maintenance_schedules'/);
+  assert.doesNotMatch(stepTwoRoute, /aba_maintenance_probe_results|aba_regression_alerts|fetchFutureAppointmentsForMaintenance/);
+  assert.doesNotMatch(stepTwoRoute, /select\('\*'\)/);
+});
+
+test('endpoint de agendamento aceita DATE ou NEXT_SESSION com upsert ativo', () => {
+  const endpointStart = serverCode.indexOf("app.post('/api/aba/targets/:targetId/maintenance-schedules'");
+  const nextEndpointStart = serverCode.indexOf("app.post('/api/aba/targets/:targetId/maintenance-schedules/next-session'", endpointStart);
+  assert.notEqual(endpointStart, -1);
+  const endpointCode = serverCode.slice(endpointStart, nextEndpointStart);
+  assert.match(endpointCode, /requestedMode[\s\S]*?'DATE'[\s\S]*?'NEXT_SESSION'/m);
+  assert.match(endpointCode, /scheduleModeFromPayload[\s\S]*?'CUSTOM_DATE'[\s\S]*?'NEXT_PATIENT_SESSION'/m);
+  assert.match(endpointCode, /MISSING_DUE_DATE/);
+  assert.match(endpointCode, /Escolha uma data para agendar a sondagem/);
+  assert.match(endpointCode, /createMaintenanceScheduleForTarget/);
+  assert.match(endpointCode, /hydrateScheduleResponse/);
+  assert.match(endpointCode, /targetId/);
+  assert.match(endpointCode, /dueDate/);
+  assert.doesNotMatch(endpointCode, /scheduleId|select\('\*'\)|\/api\/aba\/sessions|saveAbaSession|createAbaSession/);
+
+  const helperStart = serverCode.indexOf('const createMaintenanceScheduleForTarget = async');
+  const helperEnd = serverCode.indexOf('const fetchNextMaintenanceProbeForTarget', helperStart);
+  const helperCode = serverCode.slice(helperStart, helperEnd);
+  assert.match(helperCode, /\.eq\('organization_id', organizationId\)[\s\S]*?\.eq\('patient_id', patientId\)[\s\S]*?\.eq\('target_id', targetId\)[\s\S]*?\.in\('status', ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES\)/m);
+  assert.match(helperCode, /MAINTENANCE_SCHEDULE_CREATED/);
+  assert.match(helperCode, /MAINTENANCE_SCHEDULE_UPDATED/);
+  assert.match(helperCode, /status: 'PENDING_NEXT_SESSION'/);
+  assert.match(helperCode, /status: 'SCHEDULED'/);
+  assert.doesNotMatch(helperCode, /CUSTOM_DATE_PENDING_LINK/);
 });
 
 test('backend resolve targets de manutencao em lote com colunas explicitas', () => {
@@ -465,17 +527,18 @@ test('backend valida ids invalidos e recent-session-events local sem ruido', () 
   assert.match(dataServiceCode, /if \(!isPersistedUuid\(sessionId\)\) return \{ success: true, data: \[\] \}/);
 });
 
-test('botoes de manutencao abrem modais ou mostram feedback sem iniciar sessao fora da sessao ativa', () => {
-  assert.match(patientDetailCode, /Agendar sondagem de manutenção/);
-  assert.match(patientDetailCode, /Escolher sessão existente/);
-  assert.match(patientDetailCode, /Escolher data específica/);
-  assert.match(patientDetailCode, /Plano de manutenção/);
-  assert.match(patientDetailCode, /openPeiMaintenanceReviewModal/);
-  assert.doesNotMatch(patientDetailCode, /Inicie a sess[ãa]o para usar esta Maintenance Probe|Inicie a sessÃ£o para usar esta Maintenance Probe/);
-  const maintenanceActionsStart = patientDetailCode.indexOf('const renderPeiMaintenanceActions');
-  const maintenanceActionsEnd = patientDetailCode.indexOf('const renderPeiMaintenanceRow', maintenanceActionsStart);
-  const maintenanceActionsCode = patientDetailCode.slice(maintenanceActionsStart, maintenanceActionsEnd);
-  assert.doesNotMatch(maintenanceActionsCode, /requestSessionStart\('fullscreen'\)/);
+test('agendamento simples da etapa 2 nao inicia sessao nem mostra opcoes futuras', () => {
+  const modalStart = patientDetailCode.indexOf('{peiMaintenanceScheduleRow && createPortal(');
+  const modalEnd = patientDetailCode.indexOf('{peiMaintenanceReviewRow && createPortal', modalStart);
+  const modalCode = patientDetailCode.slice(modalStart, modalEnd);
+  const handlerStart = patientDetailCode.indexOf('const handlePeiScheduleModalSave');
+  const handlerEnd = patientDetailCode.indexOf('const handlePeiScheduleNextSession', handlerStart);
+  const handlerCode = patientDetailCode.slice(handlerStart, handlerEnd);
+  assert.match(modalCode, /Agendar sondagem de manutenção/);
+  assert.match(modalCode, /Escolher data/);
+  assert.match(modalCode, /Aguardar próxima sessão/);
+  assert.doesNotMatch(modalCode, /Escolher sessão existente|Escolher data específica|Plano de manutenção|Atribuir a uma sessão/);
+  assert.doesNotMatch(handlerCode, /requestSessionStart\('fullscreen'\)|POST \/api\/aba\/sessions|saveAbaSession|startSession|createAbaSession|SessionMode/);
   assert.doesNotMatch(calendarCode, /onStartSession\?\(\{ \.\.\.detailEvent, maintenanceProbe: probe/);
 });
 

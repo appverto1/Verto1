@@ -2708,7 +2708,7 @@ export const dataService = {
       const response = await fetchClinical(endpoint, {
         headers: await buildConditionalHeaders(endpoint, 'aba'),
         credentials: 'include'
-      }, { helperName: 'getAbaMaintenancePanel', operation: 'list', table: 'patient_pei,aba_targets', hasExplicitColumns: true });
+      }, { helperName: 'getAbaMaintenancePanel', operation: 'list', table: 'patient_pei,aba_targets,aba_maintenance_schedules', hasExplicitColumns: true });
       if (response.ok) return await response.json();
       return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível carregar manutenção agora.');
     } catch (error) {
@@ -2785,9 +2785,9 @@ export const dataService = {
         credentials: 'include',
         body: JSON.stringify(payload || {})
       }, { helperName: 'createMaintenanceScheduleForTarget', operation: 'write', table: 'aba_maintenance_schedules', hasExplicitColumns: true });
-      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível agendar a sondagem agora.');
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível agendar a manutenção.');
     } catch (error) {
-      const message = getApiErrorMessage(error, 'Não foi possível agendar a sondagem agora.');
+      const message = getApiErrorMessage(error, 'Não foi possível agendar a manutenção.');
       return { success: false, error: message, message };
     }
   },

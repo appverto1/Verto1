@@ -27517,7 +27517,8 @@ async function startServer() {
             due_date: null,
             metadata: sanitizeClinicalPayload({
               ...(existingSchedule.metadata && typeof existingSchedule.metadata === 'object' ? existingSchedule.metadata : {}),
-              auditAction: 'MAINTENANCE_NEXT_SESSION_SET',
+              auditAction: 'MAINTENANCE_SCHEDULE_UPDATED',
+              legacyAction: 'MAINTENANCE_NEXT_SESSION_SET',
               nextSessionPolicy: true,
               scheduleReason: 'NEXT_SESSION_REUSED'
             }),
@@ -27541,7 +27542,7 @@ async function startServer() {
           title: 'Sondagem aguardando proxima sessao',
           content: 'Maintenance Schedule existente foi colocado para aguardar a proxima sessao.',
           type: 'clinical',
-          actionType: 'MAINTENANCE_NEXT_SESSION_SET',
+          actionType: 'MAINTENANCE_SCHEDULE_UPDATED',
           payload: { scheduleId: existingSchedule.id, targetId, patientId }
         });
         const [enrichedSchedule] = await enrichMaintenanceRowsWithTargetDisplay(
@@ -27552,6 +27553,90 @@ async function startServer() {
             candidate_appointment_id: null,
             scheduled_for: null,
             due_date: null,
+            updated_at: now
+          }],
+          clinicId,
+          organizationId,
+          { role: 'owner' }
+        );
+        return { ok: true, status: 200, data: [enrichedSchedule || existingSchedule] };
+      }
+    }
+
+    if (scheduleMode === 'CUSTOM_DATE') {
+      const appointmentId = sanitizeString(params.appointmentId, 180) || null;
+      const dueDate = sanitizeIsoDateTime(params.dueDate || now);
+      const appointment = appointmentId
+        ? await fetchMaintenanceAppointmentById({ appointmentId, patientId, clinicId, organizationId })
+        : null;
+      if (appointmentId && !appointment?.id) {
+        return { ok: false, status: 400, error: 'A sessao sugerida nao pertence a este paciente.' };
+      }
+      const scheduledFor = appointment?.scheduled_at || null;
+      let existingQuery = supabase
+        .from('aba_maintenance_schedules')
+        .select(ABA_MAINTENANCE_SCHEDULE_SELECT)
+        .eq('organization_id', organizationId)
+        .eq('patient_id', patientId)
+        .eq('target_id', targetId)
+        .in('status', ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES)
+        .order('target_due_date', { ascending: true })
+        .limit(1);
+      existingQuery = applyAbaTenantScope(existingQuery, { role: 'owner' }, clinicId, organizationId);
+      const existingResult = await existingQuery;
+      if (existingResult.error && !hasMissingFinancialSchema(existingResult.error)) throw existingResult.error;
+      const existingSchedule = Array.isArray(existingResult.data)
+        ? existingResult.data.find((item: any) => isUuid(sanitizeString(item?.id, 180)))
+        : null;
+      if (existingSchedule?.id) {
+        const raw = existingSchedule.raw_payload && typeof existingSchedule.raw_payload === 'object' ? existingSchedule.raw_payload : {};
+        const update = await updateAbaScheduleWithSchemaFallback(
+          sanitizeString(existingSchedule.id, 180),
+          cleanObject({
+            status: 'SCHEDULED',
+            appointment_id: appointmentId,
+            candidate_appointment_id: null,
+            due_date: scheduledFor || dueDate,
+            target_due_date: dueDate,
+            scheduled_for: scheduledFor,
+            schedule_mode: 'CUSTOM_DATE',
+            metadata: sanitizeClinicalPayload({
+              ...(existingSchedule.metadata && typeof existingSchedule.metadata === 'object' ? existingSchedule.metadata : {}),
+              auditAction: 'MAINTENANCE_SCHEDULE_UPDATED',
+              scheduleReason: appointmentId ? 'CUSTOM_DATE_LINKED_UPDATED' : 'CUSTOM_DATE_UPDATED'
+            }),
+            raw_payload: sanitizeClinicalPayload({
+              ...raw,
+              targetName: target?.name || raw.targetName || null,
+              noAutomaticClinicalMutation: true
+            }),
+            updated_at: now
+          }),
+          clinicId,
+          organizationId,
+          patientId
+        );
+        if (update.error) throw update.error;
+        void persistActivityLog({
+          userId: createdBy || '',
+          clinicId,
+          actorName: 'Equipe',
+          title: 'Sondagem de manutencao atualizada',
+          content: 'Maintenance Schedule existente foi atualizado para a data escolhida.',
+          type: 'clinical',
+          actionType: 'MAINTENANCE_SCHEDULE_UPDATED',
+          payload: { scheduleId: existingSchedule.id, targetId, patientId, dueDate }
+        });
+        const [enrichedSchedule] = await enrichMaintenanceRowsWithTargetDisplay(
+          [{
+            ...existingSchedule,
+            status: 'SCHEDULED',
+            appointment_id: appointmentId,
+            candidate_appointment_id: null,
+            due_date: scheduledFor || dueDate,
+            target_due_date: dueDate,
+            scheduled_for: scheduledFor,
+            schedule_mode: 'CUSTOM_DATE',
             updated_at: now
           }],
           clinicId,
@@ -27639,7 +27724,8 @@ async function startServer() {
         status: 'PENDING_NEXT_SESSION',
         created_by: createdBy,
         metadata: sanitizeClinicalPayload({
-          auditAction: 'MAINTENANCE_NEXT_SESSION_SET',
+          auditAction: 'MAINTENANCE_SCHEDULE_CREATED',
+          legacyAction: 'MAINTENANCE_NEXT_SESSION_SET',
           nextSessionPolicy: true,
           scheduleReason: 'NEXT_SESSION_WITHOUT_APPOINTMENT'
         }),
@@ -27679,11 +27765,11 @@ async function startServer() {
         appointment_id: appointmentId,
         schedule_mode: 'CUSTOM_DATE',
         sequence_index: 1,
-        status: appointmentId ? 'SCHEDULED' : 'PENDING_LINK',
+        status: 'SCHEDULED',
         created_by: createdBy,
         metadata: sanitizeClinicalPayload({
           auditAction: 'MAINTENANCE_SCHEDULE_CREATED',
-          scheduleReason: appointmentId ? 'CUSTOM_DATE_LINKED' : 'CUSTOM_DATE_PENDING_LINK'
+          scheduleReason: appointmentId ? 'CUSTOM_DATE_LINKED' : 'CUSTOM_DATE_BY_DATE'
         }),
         raw_payload: sanitizeClinicalPayload({
           targetName: target?.name || null,
@@ -27704,15 +27790,14 @@ async function startServer() {
         persisted: Boolean((result.data as any)?.id || isUuid((result.row as any)?.id))
       });
       saved.push(savedRow);
-      const actionType = scheduleMode === 'NEXT_PATIENT_SESSION' || scheduleMode === 'NEXT_AVAILABLE_SESSION'
-        ? 'MAINTENANCE_NEXT_SESSION_SET'
-        : 'MAINTENANCE_SCHEDULE_CREATED';
+      const isNextSessionSchedule = scheduleMode === 'NEXT_PATIENT_SESSION' || scheduleMode === 'NEXT_AVAILABLE_SESSION';
+      const actionType = 'MAINTENANCE_SCHEDULE_CREATED';
       void persistActivityLog({
         userId: createdBy || '',
         clinicId,
         actorName: 'Equipe',
-        title: actionType === 'MAINTENANCE_NEXT_SESSION_SET' ? 'Sondagem aguardando proxima sessao' : 'Sondagem de manutencao criada',
-        content: actionType === 'MAINTENANCE_NEXT_SESSION_SET'
+        title: isNextSessionSchedule ? 'Sondagem aguardando proxima sessao' : 'Sondagem de manutencao criada',
+        content: isNextSessionSchedule
           ? 'Maintenance Schedule foi criado para aguardar a proxima sessao.'
           : 'Maintenance Schedule foi criado para uma habilidade real do PEI.',
         type: 'clinical',
@@ -29496,7 +29581,10 @@ async function startServer() {
                 },
                 skills: [],
                 cards: [],
-                source: 'patient_pei_targets_step1'
+                schedules: [],
+                probeResults: [],
+                alerts: [],
+                source: 'patient_pei_targets_step2'
               },
               page,
               pageSize
@@ -29568,7 +29656,9 @@ async function startServer() {
           const progress = Number(source?.progressPercent ?? source?.progress_percent ?? source?.progress);
           const progressPercent = Number.isFinite(progress) ? Math.max(0, Math.min(100, Math.round(progress))) : 100;
           const compositeKey = [targetName, protocolName, domainName].map(normalizePeiTargetMatchKey).filter(Boolean).join('|');
-          const internalKey = isUuid(targetId)
+          const hasRealTarget = Boolean(isUuid(targetId) && isUuid(sanitizeString(target?.id, 180)));
+          const realTargetId = hasRealTarget ? targetId : '';
+          const internalKey = realTargetId
             ? `target:${targetId}`
             : goalId
               ? `goal:${goalId}`
@@ -29577,6 +29667,9 @@ async function startServer() {
           eligibleByKey.set(internalKey, cleanObject({
             key: `eligible-${eligibleByKey.size + 1}`,
             cardKind: 'PEI_ACQUIRED_SKILL',
+            targetId: realTargetId,
+            target_id: realTargetId || null,
+            hasRealTarget,
             targetName,
             protocol: protocolName,
             domain: domainName,
@@ -29587,12 +29680,12 @@ async function startServer() {
             clinicalStatus: sanitizeString(source?.clinicalStatus || source?.clinical_status || target?.clinical_status || target?.phase, 80) || null,
             masteryStatus: sanitizeString(source?.masteryStatus || source?.mastery_status, 80) || null,
             progressPercent,
-            canScheduleMaintenance: false,
-            canWaitNextSession: false,
+            canScheduleMaintenance: hasRealTarget,
+            canWaitNextSession: hasRealTarget,
             canAssignAppointment: false,
             canReviewLink: false,
             needsTargetReview: false,
-            availableActions: []
+            availableActions: hasRealTarget ? ['SCHEDULE_MAINTENANCE'] : []
           }));
         };
 
@@ -29612,32 +29705,126 @@ async function startServer() {
             clinicalStatus: target?.clinical_status || target?.phase,
             progressPercent: 100
           }));
-        const eligibleSkills = Array.from(eligibleByKey.values()).slice(0, pageSize);
+        const allEligibleSkills = Array.from(eligibleByKey.values());
+        const eligibleTargetIds = Array.from(new Set(
+          allEligibleSkills
+            .map((row: any) => sanitizeString(row?.targetId || row?.target_id, 180))
+            .filter((id: string) => isUuid(id))
+        )).slice(0, 200);
+        let activeSchedules: any[] = [];
+        if (eligibleTargetIds.length > 0) {
+          let activeScheduleQuery = supabase
+            .from('aba_maintenance_schedules')
+            .select(ABA_MAINTENANCE_SCHEDULE_SELECT)
+            .eq('organization_id', organizationId)
+            .eq('patient_id', patientId)
+            .in('target_id', eligibleTargetIds)
+            .in('status', ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES)
+            .order('target_due_date', { ascending: true })
+            .limit(Math.min(200, Math.max(eligibleTargetIds.length * 2, 1)));
+          activeScheduleQuery = applyClinic(activeScheduleQuery);
+          const activeScheduleResult = await activeScheduleQuery;
+          if (activeScheduleResult.error) {
+            if (!hasMissingFinancialSchema(activeScheduleResult.error) && !isMissingRelationError(activeScheduleResult.error)) throw activeScheduleResult.error;
+          } else {
+            activeSchedules = await enrichMaintenanceRowsWithTargetDisplay(activeScheduleResult.data || [], clinicId, organizationId, req.session.user);
+          }
+        }
+        const activeScheduleByTargetId = new Map<string, any>();
+        activeSchedules.forEach((schedule: any) => {
+          const scheduleTargetId = sanitizeString(schedule?.target_id || schedule?.targetId, 180);
+          if (isUuid(scheduleTargetId) && !activeScheduleByTargetId.has(scheduleTargetId)) {
+            activeScheduleByTargetId.set(scheduleTargetId, schedule);
+          }
+        });
+        const sanitizeScheduleForPanel = (schedule: any) => {
+          const scheduleTargetId = sanitizeString(schedule?.target_id || schedule?.targetId, 180);
+          const raw = schedule?.raw_payload && typeof schedule.raw_payload === 'object' ? schedule.raw_payload : {};
+          return cleanObject({
+            target_id: isUuid(scheduleTargetId) ? scheduleTargetId : null,
+            targetId: isUuid(scheduleTargetId) ? scheduleTargetId : null,
+            status: sanitizeString(schedule?.status, 80) || 'SCHEDULED',
+            due_date: schedule?.due_date || null,
+            dueDate: schedule?.due_date || null,
+            target_due_date: schedule?.target_due_date || null,
+            targetDueDate: schedule?.target_due_date || null,
+            scheduled_for: schedule?.scheduled_for || null,
+            scheduledFor: schedule?.scheduled_for || null,
+            schedule_mode: sanitizeString(schedule?.schedule_mode, 80) || null,
+            scheduleMode: sanitizeString(schedule?.schedule_mode, 80) || null,
+            targetName: sanitizeString(schedule?.targetName || schedule?.target_name || raw.targetName, 240) || null,
+            protocolName: sanitizeString(schedule?.protocolTitle || schedule?.protocol_title || raw.protocolTitle, 240) || null,
+            domainName: sanitizeString(schedule?.domainName || schedule?.domain_name || raw.domainName, 240) || null
+          });
+        };
+        const buildScheduledPanelRow = (skill: any, schedule: any, label: string) => {
+          const safeSchedule = sanitizeScheduleForPanel(schedule);
+          return cleanObject({
+            ...skill,
+            key: `${label === 'Aguardando próxima sessão' ? 'waiting' : 'scheduled'}-${skill?.targetId || skill?.key}`,
+            statusLabel: label,
+            nextSchedule: safeSchedule,
+            activeSchedule: safeSchedule,
+            schedule: safeSchedule,
+            schedules: [safeSchedule],
+            dueDate: safeSchedule.target_due_date || safeSchedule.due_date || safeSchedule.scheduled_for || null,
+            canScheduleMaintenance: false,
+            canWaitNextSession: false,
+            canAssignAppointment: false,
+            availableActions: []
+          });
+        };
+        const eligibleSkills: any[] = [];
+        const scheduledProbes: any[] = [];
+        const waitingNextSession: any[] = [];
+        const overdueProbes: any[] = [];
+        allEligibleSkills.forEach((skill: any) => {
+          const skillTargetId = sanitizeString(skill?.targetId || skill?.target_id, 180);
+          const schedule = skillTargetId ? activeScheduleByTargetId.get(skillTargetId) : null;
+          if (!schedule) {
+            eligibleSkills.push(skill);
+            return;
+          }
+          const status = sanitizeString(schedule?.status, 80).toUpperCase();
+          const derivedStatus = deriveMaintenanceScheduleStatus(schedule, new Date());
+          if (status === 'PENDING_NEXT_SESSION' || derivedStatus === 'PENDING_NEXT_SESSION') {
+            waitingNextSession.push(buildScheduledPanelRow(skill, schedule, 'Aguardando próxima sessão'));
+          } else if (status === 'OVERDUE' || derivedStatus === 'OVERDUE') {
+            overdueProbes.push(buildScheduledPanelRow(skill, schedule, 'Sondagem atrasada'));
+          } else {
+            scheduledProbes.push(buildScheduledPanelRow(skill, schedule, 'Sondagem agendada'));
+          }
+        });
+        const pagedEligibleSkills = eligibleSkills.slice(0, pageSize);
+        const pagedScheduledProbes = scheduledProbes.slice(0, pageSize);
+        const pagedWaitingNextSession = waitingNextSession.slice(0, pageSize);
+        const pagedOverdueProbes = overdueProbes.slice(0, pageSize);
+        const sanitizedSchedules = activeSchedules.map(sanitizeScheduleForPanel);
         return res.json({
           success: true,
           data: {
-            eligibleSkills,
+            eligibleSkills: pagedEligibleSkills,
             maintenanceSkills: [],
-            scheduledProbes: [],
-            waitingNextSession: [],
-            overdueProbes: [],
+            scheduledProbes: pagedScheduledProbes,
+            waitingNextSession: pagedWaitingNextSession,
+            overdueProbes: pagedOverdueProbes,
             regressionRisk: [],
             technicalIssues: [],
             summary: {
               eligibleSkills: eligibleSkills.length,
               maintenanceSkills: 0,
-              scheduledProbes: 0,
-              waitingNextSession: 0,
-              overdueProbes: 0,
+              scheduledProbes: scheduledProbes.length,
+              waitingNextSession: waitingNextSession.length,
+              overdueProbes: overdueProbes.length,
               regressionRisk: 0,
               technicalIssues: 0
             },
-            skills: eligibleSkills,
-            cards: eligibleSkills,
-            schedules: [],
+            skills: pagedEligibleSkills,
+            cards: [...pagedEligibleSkills, ...pagedScheduledProbes, ...pagedWaitingNextSession, ...pagedOverdueProbes],
+            schedules: sanitizedSchedules,
             probeResults: [],
             alerts: [],
-            source: 'patient_pei_targets_step1'
+            source: 'patient_pei_targets_step2'
           },
           page,
           pageSize
@@ -30292,13 +30479,26 @@ async function startServer() {
       if (!isUuid(patientId) || !(await canAccessPatientInCurrentClinic(patientId, req.session.user))) {
         return res.status(403).json({ success: false, error: 'FORBIDDEN', message: 'Paciente fora do escopo da clínica.' });
       }
+      const requestedMode = sanitizeString(req.body?.mode, 80).toUpperCase();
+      if (requestedMode && requestedMode !== 'DATE' && requestedMode !== 'NEXT_SESSION') {
+        return res.status(400).json({ success: false, error: 'INVALID_MODE', message: 'Modo de agendamento inválido.' });
+      }
+      const scheduleModeFromPayload = requestedMode === 'DATE'
+        ? 'CUSTOM_DATE'
+        : requestedMode === 'NEXT_SESSION'
+          ? 'NEXT_PATIENT_SESSION'
+          : (req.body?.scheduleMode || req.body?.schedule_mode);
+      const dueDate = req.body?.dueDate || req.body?.due_date || null;
+      if ((requestedMode === 'DATE' || sanitizeString(scheduleModeFromPayload, 80).toUpperCase() === 'CUSTOM_DATE') && !sanitizeString(dueDate, 80)) {
+        return res.status(400).json({ success: false, error: 'MISSING_DUE_DATE', message: 'Escolha uma data para agendar a sondagem.' });
+      }
       const result = await createMaintenanceScheduleForTarget({
         targetId,
         patientId,
         organizationId,
         clinicId,
-        scheduleMode: req.body?.scheduleMode || req.body?.schedule_mode,
-        dueDate: req.body?.dueDate || req.body?.due_date,
+        scheduleMode: scheduleModeFromPayload,
+        dueDate,
         appointmentId: req.body?.appointmentId || req.body?.appointment_id,
         intervals: req.body?.intervals || req.body?.maintenanceDays || req.body?.maintenance_days,
         createdBy: sanitizeString(req.session.user?.id, 120),
@@ -30307,7 +30507,21 @@ async function startServer() {
       });
       if (!result.ok) return res.status((result as any).status || 400).json({ success: false, error: (result as any).status === 404 ? 'TARGET_NOT_FOUND' : (result as any).status === 400 ? 'ID_INVALIDO' : 'UNEXPECTED_ERROR', message: (result as any).error || 'Não foi possível agendar a sondagem.' });
       const schedules = Array.isArray(result.data) ? result.data : [];
-      return res.json({ success: true, message: 'Sondagem de manutenção agendada.', schedule: schedules[0] || null, data: schedules });
+      const hydrateScheduleResponse = (schedule: any) => {
+        if (!schedule) return null;
+        const raw = schedule?.raw_payload && typeof schedule.raw_payload === 'object' ? schedule.raw_payload : {};
+        const target = schedule?.target && typeof schedule.target === 'object' ? schedule.target : {};
+        return cleanObject({
+          targetId,
+          status: sanitizeString(schedule?.status, 80) || null,
+          dueDate: schedule?.target_due_date || schedule?.targetDueDate || schedule?.due_date || schedule?.dueDate || null,
+          targetName: sanitizeString(schedule?.targetName || schedule?.target_name || target?.name || raw.targetName, 240) || null,
+          protocolName: sanitizeString(schedule?.protocolTitle || schedule?.protocol_title || target?.protocol_title || raw.protocolTitle, 240) || null,
+          domainName: sanitizeString(schedule?.domainName || schedule?.domain_name || target?.domain_name || raw.domainName, 240) || null
+        });
+      };
+      const schedule = hydrateScheduleResponse(schedules[0] || null);
+      return res.json({ success: true, message: 'Sondagem de manutenção agendada.', schedule, data: schedule ? [schedule] : [] });
     } catch {
       return res.status(500).json({ success: false, error: 'UNEXPECTED_ERROR', message: 'Não foi possível agendar a sondagem.' });
     }
