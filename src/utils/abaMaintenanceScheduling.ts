@@ -67,7 +67,49 @@ export type NextMaintenanceProbe = {
   label: string;
 };
 
+export type MaintenanceProbeAvailabilityReason =
+  | 'MATCHING_APPOINTMENT'
+  | 'MATCHING_SESSION'
+  | 'MATCHING_CLINICAL_DATE'
+  | 'UPCOMING_OR_DIFFERENT_SESSION';
+
+export type MaintenanceProbeAvailabilityItem = {
+  schedule: any;
+  status: AbaMaintenanceScheduleStatus;
+  reason: MaintenanceProbeAvailabilityReason;
+  referenceDate: string | null;
+  appointmentId: string | null;
+  sessionId: string | null;
+  blockedAppointmentStatus: boolean;
+};
+
+export type MaintenanceProbeAvailability = {
+  available: any[];
+  upcoming: any[];
+  availableSchedule: any | null;
+  upcomingSchedule: any | null;
+  availableItems: MaintenanceProbeAvailabilityItem[];
+  upcomingItems: MaintenanceProbeAvailabilityItem[];
+};
+
 const ACTIVE_APPOINTMENT_STATUSES = new Set(['scheduled', 'pending', 'confirmed', 'in_progress', 'rescheduled', 'reschedule']);
+const BLOCKED_APPOINTMENT_STATUSES = new Set([
+  'cancelled',
+  'canceled',
+  'cancelada',
+  'cancelado',
+  'deleted',
+  'archived',
+  'completed',
+  'complete',
+  'concluida',
+  'concluido',
+  'realizada',
+  'realizado',
+  'no_show',
+  'noshow',
+  'missed'
+]);
 const ACTIVE_SCHEDULE_STATUSES = new Set([
   'PENDING',
   'PENDING_NEXT_SESSION',
@@ -235,6 +277,28 @@ const dateKey = (value: string | null | undefined) => {
   return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 10);
 };
 
+export const dateKeyInMaintenanceTimeZone = (value: string | Date | null | undefined, timeZone = 'America/Sao_Paulo') => {
+  if (!value) return '';
+  const raw = typeof value === 'string' ? value.trim() : '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  const date = value instanceof Date ? value : new Date(raw);
+  if (Number.isNaN(date.getTime())) return '';
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: timeZone || 'America/Sao_Paulo',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).formatToParts(date);
+    const year = parts.find((part) => part.type === 'year')?.value || '';
+    const month = parts.find((part) => part.type === 'month')?.value || '';
+    const day = parts.find((part) => part.type === 'day')?.value || '';
+    return year && month && day ? `${year}-${month}-${day}` : date.toISOString().slice(0, 10);
+  } catch {
+    return date.toISOString().slice(0, 10);
+  }
+};
+
 const parseScheduleDate = (value: string | null | undefined) => {
   const raw = String(value || '').trim();
   if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
@@ -252,6 +316,27 @@ const formatScheduleDate = (value: string | null | undefined) => {
 
 const scheduleReferenceDate = (schedule: any) =>
   schedule?.scheduled_for || schedule?.scheduledFor || schedule?.target_due_date || schedule?.targetDueDate || null;
+
+const scheduleAppointmentId = (schedule: any) =>
+  String(schedule?.appointment_id || schedule?.appointmentId || '').trim();
+
+const scheduleSessionId = (schedule: any) =>
+  String(schedule?.session_id || schedule?.sessionId || '').trim();
+
+const scheduleAppointmentStatus = (schedule: any) => String(
+  schedule?.appointment?.status ||
+    schedule?.appointment_status ||
+    schedule?.appointmentStatus ||
+    schedule?.raw_payload?.appointmentStatus ||
+    schedule?.rawPayload?.appointmentStatus ||
+    schedule?.metadata?.appointmentStatus ||
+    ''
+).trim().toLowerCase();
+
+export const isBlockedMaintenanceAppointmentStatus = (status: unknown) => (
+  Boolean(String(status || '').trim()) &&
+  BLOCKED_APPOINTMENT_STATUSES.has(String(status || '').trim().toLowerCase())
+);
 
 export const deriveMaintenanceScheduleStatus = (schedule: any, now = new Date()): AbaMaintenanceScheduleStatus => {
   const status = normalizeMaintenanceScheduleStatus(schedule?.status);
@@ -377,4 +462,84 @@ export function selectMaintenanceScheduleForProbe(
     });
 
   return active[0]?.schedule || null;
+}
+
+export function resolveMaintenanceProbeAvailability(
+  schedules: any[] = [],
+  options: {
+    appointmentId?: string | null;
+    sessionId?: string | null;
+    sessionClinicalDate?: string | Date | null;
+    occurredAt?: string | Date | null;
+    timeZone?: string | null;
+  } = {}
+): MaintenanceProbeAvailability {
+  const appointmentId = String(options.appointmentId || '').trim();
+  const sessionId = String(options.sessionId || '').trim();
+  const timeZone = String(options.timeZone || 'America/Sao_Paulo').trim() || 'America/Sao_Paulo';
+  const occurredDate = options.occurredAt instanceof Date ? options.occurredAt : new Date(options.occurredAt || Date.now());
+  const occurredAt = Number.isNaN(occurredDate.getTime()) ? new Date() : occurredDate;
+  const clinicalDateKey = dateKeyInMaintenanceTimeZone(options.sessionClinicalDate || occurredAt, timeZone);
+
+  const items = (Array.isArray(schedules) ? schedules : [])
+    .filter(isActiveMaintenanceSchedule)
+    .map((schedule) => {
+      const referenceDate = scheduleReferenceDate(schedule);
+      const itemAppointmentId = scheduleAppointmentId(schedule);
+      const itemSessionId = scheduleSessionId(schedule);
+      const appointmentStatus = scheduleAppointmentStatus(schedule);
+      const blockedAppointmentStatus = isBlockedMaintenanceAppointmentStatus(appointmentStatus);
+      const sameAppointment = Boolean(
+        appointmentId &&
+        itemAppointmentId &&
+        itemAppointmentId === appointmentId &&
+        !blockedAppointmentStatus
+      );
+      const sameSession = Boolean(sessionId && itemSessionId && itemSessionId === sessionId && !blockedAppointmentStatus);
+      const sameClinicalDate = Boolean(
+        !itemAppointmentId &&
+        referenceDate &&
+        clinicalDateKey &&
+        dateKeyInMaintenanceTimeZone(referenceDate, timeZone) === clinicalDateKey
+      );
+      const reason: MaintenanceProbeAvailabilityReason = sameAppointment
+        ? 'MATCHING_APPOINTMENT'
+        : sameSession
+          ? 'MATCHING_SESSION'
+          : sameClinicalDate
+            ? 'MATCHING_CLINICAL_DATE'
+            : 'UPCOMING_OR_DIFFERENT_SESSION';
+      return {
+        schedule,
+        status: deriveMaintenanceScheduleStatus(schedule, occurredAt),
+        reason,
+        referenceDate,
+        appointmentId: itemAppointmentId || null,
+        sessionId: itemSessionId || null,
+        blockedAppointmentStatus
+      };
+    })
+    .sort((a, b) => {
+      const rank = (item: MaintenanceProbeAvailabilityItem) => (
+        item.reason === 'MATCHING_APPOINTMENT' ? 0 :
+          item.reason === 'MATCHING_SESSION' ? 1 :
+            item.reason === 'MATCHING_CLINICAL_DATE' ? 2 : 3
+      );
+      const rankDiff = rank(a) - rank(b);
+      if (rankDiff !== 0) return rankDiff;
+      const aMs = a.referenceDate ? new Date(a.referenceDate).getTime() : Number.POSITIVE_INFINITY;
+      const bMs = b.referenceDate ? new Date(b.referenceDate).getTime() : Number.POSITIVE_INFINITY;
+      return aMs - bMs;
+    });
+
+  const availableItems = items.filter((item) => item.reason !== 'UPCOMING_OR_DIFFERENT_SESSION');
+  const upcomingItems = items.filter((item) => item.reason === 'UPCOMING_OR_DIFFERENT_SESSION');
+  return {
+    available: availableItems.map((item) => item.schedule),
+    upcoming: upcomingItems.map((item) => item.schedule),
+    availableSchedule: availableItems[0]?.schedule || null,
+    upcomingSchedule: upcomingItems[0]?.schedule || null,
+    availableItems,
+    upcomingItems
+  };
 }

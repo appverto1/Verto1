@@ -68,7 +68,7 @@ import {
   formatAbaMasteryCriterion,
   normalizeAbaMasteryCriterion
 } from '../utils/abaMasteryEngine';
-import { formatMaintenanceScheduleDueLabel } from '../utils/abaMaintenanceScheduling';
+import { formatMaintenanceScheduleDueLabel, resolveMaintenanceProbeAvailability } from '../utils/abaMaintenanceScheduling';
 import { resolveMaintenanceTargetDisplay } from '../utils/peiMaintenancePanel';
 import { isPeiClinicalRowAfterProgressReset } from '../utils/peiSessionReset';
 
@@ -516,6 +516,8 @@ export const SessionMode = ({
   const resolvedTherapistId = String(therapistId || activeSession?.therapistId || activeSession?.therapist_id || '').trim();
   const resolvedClinicId = String(clinicId || activeSession?.clinicId || activeSession?.clinic_id || patient?.clinicId || patient?.clinic_id || patient?.organizationId || patient?.organization_id || '').trim();
   const activeAppointmentId = String(activeSession?.appointmentId || activeSession?.appointment_id || '').trim();
+  const sessionClinicalDate = activeSession?.clinicalDate || activeSession?.clinical_date || activeSession?.sessionDate || activeSession?.session_date || activeSession?.date || activeSession?.scheduledAt || activeSession?.scheduled_at || activeSession?.startedAt || activeSession?.started_at || activeSession?.created_at || new Date().toISOString();
+  const maintenanceTimeZone = String(activeSession?.timeZone || activeSession?.timezone || patient?.timeZone || patient?.timezone || patient?.clinicTimeZone || patient?.clinic_timezone || 'America/Sao_Paulo').trim() || 'America/Sao_Paulo';
   const patientDisplayName = formatPatientLabel(patient);
   const therapistDisplayName = formatTherapistLabel({
     therapistName,
@@ -1080,6 +1082,8 @@ export const SessionMode = ({
     manualActivations: manualMaintenanceProbeTargets,
     activeAppointmentId,
     sessionId,
+    sessionClinicalDate,
+    timeZone: maintenanceTimeZone,
     now: new Date(nowMs)
   });
 
@@ -1755,6 +1759,19 @@ export const SessionMode = ({
   const activateMaintenanceProbeMode = (goal?: any) => {
     const targetKey = goal ? getMaintenanceTargetKey(goal) : '';
     const activeProbe = goal ? getActiveMaintenanceProbeForTarget(goal) : null;
+    if (!goal || !activeProbe) {
+      const info = goal ? getGoalMaintenanceInfo(goal) : null;
+      const schedule = info?.upcomingSchedule || info?.nextSchedule || null;
+      setPlanActionMessage('Maintenance Probe indisponivel nesta sessao.');
+      showClinicalToast({
+        variant: 'info',
+        title: 'Maintenance Probe agendada',
+        subtitle: schedule
+          ? `${formatMaintenanceScheduleDueLabel(schedule)}. Use na data ou consulta vinculada.`
+          : 'Agende a sondagem antes de usar Maintenance Probe nesta sessao.'
+      }, 'none');
+      return false;
+    }
     const maintenanceDisplay = goal ? resolveMaintenanceTargetDisplay({
       target: goal,
       schedule: activeProbe
@@ -1803,6 +1820,7 @@ export const SessionMode = ({
       title: 'Maintenance Probe ativo',
       subtitle: `Próxima tentativa: ${maintenanceTargetLabel}.`
     }, 'none');
+    return true;
   };
 
   const registerFrequency = (behaviorName = selectedBehavior.name, countDelta = 1) => {
@@ -3027,6 +3045,18 @@ export const SessionMode = ({
       .filter((alert: any) => targetMatchesGoal(alert, goalId, goalName))
       .filter((alert: any) => isPeiClinicalRowAfterProgressReset(goal, alert))
       .sort((a: any, b: any) => new Date(b?.created_at || b?.createdAt || 0).getTime() - new Date(a?.created_at || a?.createdAt || 0).getTime());
+    const availability = resolveMaintenanceProbeAvailability(schedules, {
+      appointmentId: activeAppointmentId || null,
+      sessionId,
+      sessionClinicalDate,
+      occurredAt: new Date(nowMs),
+      timeZone: maintenanceTimeZone
+    });
+    const nextSchedule = availability.availableSchedule ||
+      availability.upcomingSchedule ||
+      schedules.find((schedule: any) => ['PENDING', 'SCHEDULED', 'UNSCHEDULED', 'DUE_TODAY', 'OVERDUE', 'MISSED'].includes(String(schedule?.status || '').toUpperCase())) ||
+      schedules[0] ||
+      null;
     let consecutiveFailures = 0;
     for (const result of probeResults) {
       const status = String(result?.status || '').toUpperCase();
@@ -3035,7 +3065,12 @@ export const SessionMode = ({
     }
     return {
       isMaintenanceTarget: isMaintenanceLikeGoal(goal) || schedules.length > 0 || probeResults.length > 0 || alerts.length > 0,
-      nextSchedule: schedules.find((schedule: any) => ['PENDING', 'SCHEDULED', 'UNSCHEDULED', 'DUE_TODAY', 'OVERDUE', 'MISSED'].includes(String(schedule?.status || '').toUpperCase())) || schedules[0] || null,
+      nextSchedule,
+      availableSchedule: availability.availableSchedule,
+      upcomingSchedule: availability.upcomingSchedule,
+      hasAvailableMaintenanceProbe: Boolean(availability.availableSchedule),
+      hasUpcomingMaintenanceProbe: Boolean(availability.upcomingSchedule),
+      maintenanceAvailability: availability,
       lastResult: probeResults[0] || null,
       activeAlert: alerts[0] || null,
       probeResults,
@@ -3162,6 +3197,11 @@ export const SessionMode = ({
         milestoneLabel: display.clinicalMilestoneLabel,
         recentResultLabel: display.recentResultLabel,
         nextSchedule: info.nextSchedule,
+        availableSchedule: info.availableSchedule,
+        upcomingSchedule: info.upcomingSchedule,
+        hasAvailableMaintenanceProbe: info.hasAvailableMaintenanceProbe,
+        hasUpcomingMaintenanceProbe: info.hasUpcomingMaintenanceProbe,
+        maintenanceAvailability: info.maintenanceAvailability,
         activeAlert: info.activeAlert,
         lastResult: info.lastResult,
         currentStatus: evaluation.status,
@@ -3174,23 +3214,19 @@ export const SessionMode = ({
         reasons: evaluation.reasons
       };
     })
-    .filter((row): row is any => Boolean(row)), [patientId, records, resolvedClinicId, resolvedTherapistId, sessionEndPreviewAt, sessionGoals, sessionId, maintenanceOverview]);
+    .filter((row): row is any => Boolean(row)), [activeAppointmentId, maintenanceOverview, maintenanceTimeZone, patientId, records, resolvedClinicId, resolvedTherapistId, sessionClinicalDate, sessionEndPreviewAt, sessionGoals, sessionId]);
 
   const pendingMaintenanceProbeItems = useMemo(() => {
-    const today = new Date();
     return maintenanceProbeRows
-      .filter((row: any) => {
-        const schedule = row.nextSchedule;
-        if (!schedule) return true;
-        const status = String(schedule?.status || '').toUpperCase();
-        const due = new Date(schedule?.scheduled_for || schedule?.scheduledFor || schedule?.target_due_date || schedule?.targetDueDate || 0);
-        const sameDay = !Number.isNaN(due.getTime()) && due.toISOString().slice(0, 10) === today.toISOString().slice(0, 10);
-        const overdue = !Number.isNaN(due.getTime()) && due.getTime() < today.getTime();
-        const linkedToThisAppointment = Boolean(activeAppointmentId && String(schedule?.appointment_id || schedule?.appointmentId || '') === activeAppointmentId);
-        return linkedToThisAppointment || ['PENDING_NEXT_SESSION', 'PENDING_LINK', 'PENDING_SCHEDULING', 'UNSCHEDULED', 'DUE_TODAY', 'OVERDUE', 'MISSED'].includes(status) || sameDay || overdue;
-      })
+      .filter((row: any) => Boolean(row.hasAvailableMaintenanceProbe))
       .slice(0, 6);
-  }, [activeAppointmentId, maintenanceProbeRows]);
+  }, [maintenanceProbeRows]);
+
+  const upcomingMaintenanceProbeItems = useMemo(() => {
+    return maintenanceProbeRows
+      .filter((row: any) => !row.hasAvailableMaintenanceProbe && row.hasUpcomingMaintenanceProbe)
+      .slice(0, 6);
+  }, [maintenanceProbeRows]);
 
   const refreshMaintenanceOverview = async () => {
     try {
@@ -3417,7 +3453,8 @@ export const SessionMode = ({
   const handleApplyPlanItemNow = (item: any) => {
     if (String(item?.planned_trial_type || '').toLowerCase() === 'maintenance_probe') {
       const goal = sessionGoals.find((entry: any) => String(entry?.id || entry?.target_id || entry?.targetId || '') === String(item?.target_id || item?.targetId || ''));
-      activateMaintenanceProbeMode(goal);
+      const applied = activateMaintenanceProbeMode(goal);
+      if (!applied) return;
       const display = resolveMaintenanceTargetDisplay({ target: goal || item, schedule: item });
       setPlanActionMessage(`Maintenance Probe ativo: ${display.targetDisplayName}.`);
     } else {
@@ -5417,6 +5454,27 @@ export const SessionMode = ({
             </section>
           )}
 
+          {upcomingMaintenanceProbeItems.length > 0 && (
+            <section className="rounded-[24px] sm:rounded-[28px] border border-slate-200 bg-white p-4 sm:p-5 shadow-xl shadow-slate-900/5">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-500">Maintenance Probe agendada</p>
+                  <h2 className="text-lg font-bold text-gray-900">Sondagens futuras deste paciente</h2>
+                </div>
+              </div>
+              <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2">
+                {upcomingMaintenanceProbeItems.map((row: any) => (
+                  <div key={`upcoming-${row.id}`} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-sm font-bold text-gray-900">{row.name}</p>
+                    {row.contextLabel && <p className="mt-1 text-xs text-gray-500">{row.contextLabel}</p>}
+                    <p className="mt-1 text-xs font-semibold text-slate-600">{row.upcomingSchedule ? formatMaintenanceDueLabel(row.upcomingSchedule) : 'Agendada para outra consulta'}</p>
+                    <p className="mt-1 text-xs text-gray-500">Disponivel somente na data ou consulta vinculada.</p>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
           {maintenanceProbeRows.length > 0 && (
             <section className="rounded-[24px] sm:rounded-[28px] border border-amber-100 bg-white p-4 sm:p-5 shadow-xl shadow-amber-900/5">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -5471,6 +5529,7 @@ export const SessionMode = ({
               const maintenanceProbeActiveForGoal = Boolean(maintenanceTargetKey && currentTrialTargetKey === maintenanceTargetKey && activeMaintenanceProbeTargetId === maintenanceTargetKey && isMaintenanceProbeCollection(collectionType));
               const masteryRow = teachingMasteryRows.find((row) => String(row.id || row.targetId || row.name) === goalKey || row.name === goal.name);
               const maintenanceInfo = getGoalMaintenanceInfo(goal);
+              const maintenanceProbeCanRunNow = Boolean(maintenanceInfo.hasAvailableMaintenanceProbe);
               const maintenanceDisplay = maintenanceInfo.isMaintenanceTarget ? resolveMaintenanceTargetDisplay({
                 target: goal,
                 schedule: maintenanceInfo.nextSchedule || maintenanceInfo.lastResult || maintenanceInfo.activeAlert || {
@@ -5515,7 +5574,9 @@ export const SessionMode = ({
                         <div>
                           <p className="text-[10px] font-bold uppercase tracking-widest text-amber-700">Este target está em manutenção.</p>
                           <p className="mt-1 text-xs font-bold text-amber-900">
-                            Tipo atual da próxima tentativa: {getAbaCollectionLabel(collectionType)}
+                            {maintenanceProbeCanRunNow
+                              ? `Tipo atual da proxima tentativa: ${getAbaCollectionLabel(collectionType)}`
+                              : 'Sondagem agendada para outra data ou consulta.'}
                           </p>
                           {maintenanceDisplay?.contextLabel && (
                             <p className="mt-1 text-xs font-semibold text-amber-800">{maintenanceDisplay.contextLabel}</p>
@@ -5525,7 +5586,11 @@ export const SessionMode = ({
                               Maintenance Probe ativo para {maintenanceDisplay?.targetDisplayName || 'esta tentativa'}
                             </p>
                           )}
-                          <p className="mt-1 text-xs font-semibold text-amber-800">Para avaliar manutenção, use Maintenance Probe.</p>
+                          <p className="mt-1 text-xs font-semibold text-amber-800">
+                            {maintenanceProbeCanRunNow
+                              ? 'Para avaliar manutencao, use Maintenance Probe.'
+                              : 'Disponivel somente na data ou consulta vinculada.'}
+                          </p>
                           <p className="text-xs font-semibold text-amber-800">
                             {maintenanceInfo.nextSchedule ? formatMaintenanceDueLabel(maintenanceInfo.nextSchedule) : 'Sem sondagem agendada'}
                           </p>
@@ -5559,13 +5624,15 @@ export const SessionMode = ({
                               </button>
                             </>
                           )}
-                          <button
-                            type="button"
-                            onClick={() => activateMaintenanceProbeMode(goal)}
-                            className="inline-flex min-h-[38px] w-fit items-center justify-center rounded-full bg-white px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-amber-700 shadow-sm transition-all active:scale-95"
-                          >
-                            Usar Maintenance Probe agora
-                          </button>
+                          {maintenanceProbeCanRunNow && (
+                            <button
+                              type="button"
+                              onClick={() => activateMaintenanceProbeMode(goal)}
+                              className="inline-flex min-h-[38px] w-fit items-center justify-center rounded-full bg-white px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-amber-700 shadow-sm transition-all active:scale-95"
+                            >
+                              Usar Maintenance Probe agora
+                            </button>
+                          )}
                         </div>
                       </div>
                       {maintenanceProbeFeedback && maintenanceProbeActiveForGoal && (

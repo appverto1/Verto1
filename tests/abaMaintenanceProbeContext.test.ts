@@ -35,10 +35,11 @@ test('DTT volta quando target comum e Maintenance Probe nao contamina o contexto
   }), 'dtt');
 });
 
-test('NET volta ao selecionar target comum depois de target em manutencao', () => {
+test('NET volta ao selecionar target comum depois de target em manutencao nesta consulta', () => {
   const activeProbe = getActiveMaintenanceProbeForTarget({
     targetId: 'target-maintenance',
-    schedules: [{ id: 'schedule-2', target_id: 'target-maintenance', status: 'OVERDUE', target_due_date: '2026-06-01T12:00:00.000Z' }],
+    activeAppointmentId: 'appointment-1',
+    schedules: [{ id: 'schedule-2', target_id: 'target-maintenance', appointment_id: 'appointment-1', status: 'SCHEDULED', target_due_date: '2026-06-05T12:00:00.000Z' }],
     now
   });
 
@@ -60,7 +61,7 @@ test('Maintenance Probe nao sobrescreve lastRegularTrialType', () => {
   assert.equal(normalizeRegularAbaTrialType('maintenance_probe', ''), 'dtt');
 });
 
-test('selecionar novamente target em manutencao reativa Maintenance Probe automaticamente', () => {
+test('selecionar target com probe futura nao reativa Maintenance Probe automaticamente', () => {
   const schedules = [{ id: 'schedule-3', target_id: 'target-maintenance', status: 'PENDING_NEXT_SESSION', target_due_date: '2026-06-03T12:00:00.000Z' }];
   const commonType = resolveContextualTrialTypeForTarget({
     requestedTrialType: 'maintenance_probe',
@@ -70,11 +71,23 @@ test('selecionar novamente target em manutencao reativa Maintenance Probe automa
   const activeProbe = getActiveMaintenanceProbeForTarget({ targetId: 'target-maintenance', schedules, now });
 
   assert.equal(commonType, 'dtt');
+  assert.equal(activeProbe, null);
   assert.equal(resolveContextualTrialTypeForTarget({
     requestedTrialType: commonType,
     lastRegularTrialType: 'dtt',
     activeProbe
-  }), 'maintenance_probe');
+  }), 'dtt');
+});
+
+test('probe futura fica informativa quando pertence a outra consulta', () => {
+  const activeProbe = getActiveMaintenanceProbeForTarget({
+    targetId: 'target-maintenance',
+    activeAppointmentId: 'appointment-current',
+    schedules: [{ id: 'schedule-future', target_id: 'target-maintenance', appointment_id: 'appointment-future', status: 'SCHEDULED', target_due_date: '2026-06-10T12:00:00.000Z' }],
+    now
+  });
+
+  assert.equal(activeProbe, null);
 });
 
 test('override manual permite DTT/NET em target com probe sem cancelar schedule', () => {

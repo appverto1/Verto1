@@ -10,6 +10,7 @@ import {
   buildDefaultMaintenanceSchedulePreview,
   deriveMaintenanceScheduleStatus,
   findBestAppointmentForMaintenanceProbe,
+  resolveMaintenanceProbeAvailability,
   selectMaintenanceScheduleForProbe
 } from '../src/utils/abaMaintenanceScheduling.ts';
 
@@ -142,6 +143,36 @@ test('registro escolhe schedule por appointment, hoje, vencido e janela', () => 
     { id: 'oldest-overdue', target_due_date: '2026-05-20T12:00:00.000Z', status: 'PENDING' }
   ], { occurredAt: '2026-05-28T13:00:00.000Z' });
   assert.equal(selectedOverdue?.id, 'oldest-overdue');
+});
+
+test('disponibilidade em sessao libera apenas consulta ou data clinica correta', () => {
+  const matchingAppointment = resolveMaintenanceProbeAvailability([
+    { id: 'linked', appointment_id: 'appointment-1', status: 'SCHEDULED', target_due_date: '2026-06-10T12:00:00.000Z' }
+  ], {
+    appointmentId: 'appointment-1',
+    occurredAt: '2026-06-02T15:00:00.000Z',
+    timeZone: 'America/Sao_Paulo'
+  });
+  assert.equal(matchingAppointment.availableSchedule?.id, 'linked');
+
+  const clinicalDate = resolveMaintenanceProbeAvailability([
+    { id: 'date-only', status: 'SCHEDULED_BY_DATE', target_due_date: '2026-06-02T18:00:00.000Z' }
+  ], {
+    sessionClinicalDate: '2026-06-02',
+    occurredAt: '2026-06-02T15:00:00.000Z',
+    timeZone: 'America/Sao_Paulo'
+  });
+  assert.equal(clinicalDate.availableSchedule?.id, 'date-only');
+
+  const futureAppointment = resolveMaintenanceProbeAvailability([
+    { id: 'future', appointment_id: 'appointment-future', status: 'SCHEDULED', target_due_date: '2026-06-10T12:00:00.000Z' }
+  ], {
+    appointmentId: 'appointment-current',
+    occurredAt: '2026-06-02T15:00:00.000Z',
+    timeZone: 'America/Sao_Paulo'
+  });
+  assert.equal(futureAppointment.availableSchedule, null);
+  assert.equal(futureAppointment.upcomingSchedule?.id, 'future');
 });
 
 test('maintenance probe adequado retorna MAINTAINED', () => {
@@ -293,10 +324,13 @@ test('banner de manutencao comunica tipo atual e botao nao registra tentativa', 
   const activationEnd = sessionModeCode.indexOf('const registerFrequency', activationStart);
   const activationBody = sessionModeCode.slice(activationStart, activationEnd);
   assert.match(sessionModeCode, /Este target está em manutenção\./);
-  assert.match(sessionModeCode, /Tipo atual da próxima tentativa/);
-  assert.match(sessionModeCode, /Para avaliar manutenção, use Maintenance Probe\./);
+  assert.match(sessionModeCode, /maintenanceProbeCanRunNow/);
+  assert.match(sessionModeCode, /hasAvailableMaintenanceProbe/);
+  assert.match(sessionModeCode, /upcomingMaintenanceProbeItems/);
+  assert.match(sessionModeCode, /Disponivel somente na data ou consulta vinculada/);
   assert.match(sessionModeCode, /resolveMaintenanceTargetDisplay/);
   assert.match(sessionModeCode, /Maintenance Probe ativo: \$\{maintenanceTargetLabel\}/);
+  assert.match(activationBody, /Maintenance Probe agendada/);
   assert.match(activationBody, /setCollectionType\('maintenance_probe'\)[\s\S]*?showClinicalToast/m);
   assert.doesNotMatch(activationBody, /handleTrialClick|persistTrialRecord|addRecord/m);
 });

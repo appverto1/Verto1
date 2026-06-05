@@ -13499,6 +13499,16 @@ async function startServer() {
         ...rawUpdatedAppointment,
         status: normalizeAppointmentStatusForUi(rawUpdatedAppointment?.status || normalizedStatus)
       };
+      const maintenanceProbeReassignment = normalizedStatus === 'canceled'
+        ? await reassignMaintenanceSchedulesFromCancelledAppointments({
+          appointmentIds: affectedAppointmentIds,
+          appointments: affectedAppointments,
+          actor,
+          clinicId: foundClinicId || clinicId || updatedAppointment?.clinic_id || foundAppointment?.clinic_id,
+          organizationId: updatedAppointment?.organization_id || foundAppointment?.organization_id || clinicId,
+          source: 'appointment_cancelled'
+        })
+        : null;
 
       const patientName = sanitizeString(
         updatedAppointment?.patientName || updatedAppointment?.patient_name || updatedAppointment?.name || foundAppointment?.patientName || foundAppointment?.name,
@@ -13525,6 +13535,7 @@ async function startServer() {
           status: normalizedStatus,
           recurrenceScope,
           affectedAppointmentIds,
+          maintenanceProbeReassignment,
           source: safeSource,
           actorRole,
           patientId: updatedAppointment?.patientId || updatedAppointment?.patient_id || null,
@@ -13540,7 +13551,8 @@ async function startServer() {
       return res.json({
         success: true,
         appointment: updatedAppointment,
-        appointments: updatedClinicAppointments || nextAppointments
+        appointments: updatedClinicAppointments || nextAppointments,
+        maintenanceProbeReassignment
       });
     } catch (error: any) {
       console.error('[Appointments] status update error:', error?.message || String(error));
@@ -13740,6 +13752,15 @@ async function startServer() {
         }
       }
 
+      const maintenanceProbeReassignment = await reassignMaintenanceSchedulesFromCancelledAppointments({
+        appointmentIds: affectedAppointmentIds,
+        appointments: affectedAppointments,
+        actor,
+        clinicId: foundClinicId || clinicId || foundAppointment?.clinic_id,
+        organizationId: foundAppointment?.organization_id || clinicId,
+        source: 'appointment_deleted'
+      });
+
       const patientName = sanitizeString(
         foundAppointment?.patientName || foundAppointment?.patient_name || foundAppointment?.name,
         180
@@ -13757,6 +13778,7 @@ async function startServer() {
         payloadDetails: JSON.stringify({
           appointmentId,
           deletedAppointmentIds: affectedAppointmentIds,
+          maintenanceProbeReassignment,
           recurrenceScope,
           source: safeSource,
           actorRole,
@@ -13773,7 +13795,8 @@ async function startServer() {
         success: true,
         deletedAppointmentIds: affectedAppointmentIds,
         appointments: updatedClinicAppointments,
-        recurrenceScope
+        recurrenceScope,
+        maintenanceProbeReassignment
       });
     } catch (error: any) {
       console.error('[Appointments] delete error:', error?.message || String(error));
@@ -28348,6 +28371,180 @@ async function startServer() {
       return { data: null, error: result.error };
     }
     return { data: null, error: { message: 'Patch ABA target vazio apos fallback de schema.' } };
+  };
+
+  const reassignMaintenanceSchedulesFromCancelledAppointments = async (params: {
+    appointmentIds: string[];
+    appointments?: any[];
+    actor?: any;
+    clinicId?: string | null;
+    organizationId?: string | null;
+    source: 'appointment_cancelled' | 'appointment_deleted';
+  }) => {
+    const appointmentIds = Array.from(new Set((params.appointmentIds || []).map((value) => sanitizeString(value, 180)).filter(isUuid)));
+    if (appointmentIds.length === 0) return { moved: 0, waiting: 0, failed: 0, schedules: 0 };
+    const cancelledById = new Map<string, any>();
+    for (const appointment of Array.isArray(params.appointments) ? params.appointments : []) {
+      const id = sanitizeString(appointment?.id, 180);
+      if (id) cancelledById.set(id, appointment);
+    }
+    const actorId = sanitizeString(params.actor?.id, 120);
+    const actorName = sanitizeString(params.actor?.name || params.actor?.email || 'Equipe', 180);
+    const clinicId = sanitizeString(params.clinicId || currentClinicId(params.actor), 120);
+    const organizationId = sanitizeString(params.organizationId || params.actor?.organizationId || params.actor?.organization_id || clinicId, 120);
+    const now = new Date().toISOString();
+
+    let query = supabase
+      .from('aba_maintenance_schedules')
+      .select(ABA_MAINTENANCE_SCHEDULE_SELECT)
+      .in('appointment_id', appointmentIds)
+      .in('status', ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES)
+      .order('target_due_date', { ascending: true })
+      .limit(100);
+    if (organizationId && isUuid(organizationId)) query = query.eq('organization_id', organizationId);
+    if (clinicId) query = query.eq('clinic_id', clinicId);
+    const result = await query;
+    if (result.error) {
+      if (hasMissingFinancialSchema(result.error) || isMissingRelationError(result.error)) {
+        return { moved: 0, waiting: 0, failed: 0, schedules: 0 };
+      }
+      throw result.error;
+    }
+
+    const schedules = Array.isArray(result.data) ? result.data : [];
+    let moved = 0;
+    let waiting = 0;
+    let failed = 0;
+    for (const schedule of schedules) {
+      const scheduleId = sanitizeString(schedule?.id, 180);
+      const previousAppointmentId = sanitizeString(schedule?.appointment_id || schedule?.appointmentId, 180);
+      const patientId = sanitizeString(schedule?.patient_id || schedule?.patientId, 120);
+      const scheduleClinicId = sanitizeString(schedule?.clinic_id || clinicId, 120);
+      const scheduleOrganizationId = sanitizeString(schedule?.organization_id || organizationId || scheduleClinicId, 120);
+      if (!scheduleId || !isUuid(patientId)) {
+        failed += 1;
+        continue;
+      }
+
+      const cancelledAppointment = cancelledById.get(previousAppointmentId) || {};
+      const cancelledScheduledAt = sanitizeIsoDateTime(
+        cancelledAppointment?.scheduled_at ||
+          cancelledAppointment?.scheduledAt ||
+          buildAppointmentScheduledAt(cancelledAppointment) ||
+          schedule?.scheduled_for ||
+          schedule?.target_due_date ||
+          now,
+        now
+      );
+      const cancelledMs = new Date(cancelledScheduledAt).getTime();
+      const fromIso = new Date(Math.max(Number.isFinite(cancelledMs) ? cancelledMs + 1 : Date.now(), Date.now())).toISOString();
+      const candidates = await fetchFutureAppointmentsForMaintenance({
+        patientId,
+        clinicId: scheduleClinicId,
+        organizationId: scheduleOrganizationId,
+        fromIso,
+        limit: 30
+      });
+      const nextAppointment = candidates.find((appointment: any) => {
+        const candidateId = sanitizeString(appointment?.id || appointment?.appointment_id || appointment?.appointmentId, 180);
+        return candidateId && !appointmentIds.includes(candidateId) && candidateId !== previousAppointmentId;
+      }) || null;
+
+      const raw = schedule?.raw_payload && typeof schedule.raw_payload === 'object' ? schedule.raw_payload : {};
+      const metadata = schedule?.metadata && typeof schedule.metadata === 'object' ? schedule.metadata : {};
+      const nextAppointmentId = sanitizeString(nextAppointment?.id || nextAppointment?.appointment_id || nextAppointment?.appointmentId, 180) || null;
+      const nextScheduledAt = nextAppointment
+        ? sanitizeIsoDateTime(nextAppointment?.scheduled_at || nextAppointment?.scheduledAt || nextAppointment?.scheduled_start_at || nextAppointment?.scheduledStartAt, now)
+        : null;
+      const auditAction = nextAppointmentId
+        ? 'MAINTENANCE_SCHEDULE_AUTO_MOVED_TO_NEXT_APPOINTMENT'
+        : 'MAINTENANCE_SCHEDULE_WAITING_NEXT_SESSION_AFTER_CANCEL';
+      const patch = cleanObject({
+        status: nextAppointmentId ? 'SCHEDULED' : 'PENDING_NEXT_SESSION',
+        appointment_id: nextAppointmentId,
+        candidate_appointment_id: null,
+        scheduled_for: nextScheduledAt,
+        due_date: nextScheduledAt,
+        target_due_date: nextAppointmentId ? nextScheduledAt : null,
+        schedule_mode: 'NEXT_PATIENT_SESSION',
+        metadata: sanitizeClinicalPayload({
+          ...metadata,
+          auditAction,
+          previousAppointmentId,
+          reassignedAppointmentId: nextAppointmentId,
+          reassignedScheduledAt: nextScheduledAt,
+          cancelledAppointmentIds: appointmentIds,
+          appointmentCancellationSource: params.source,
+          reassignedAt: now
+        }),
+        raw_payload: sanitizeClinicalPayload({
+          ...raw,
+          previousAppointmentId,
+          reassignedAppointmentId: nextAppointmentId,
+          reassignedScheduledAt: nextScheduledAt,
+          cancelledAppointmentIds: appointmentIds,
+          appointmentCancellationSource: params.source,
+          scheduledForNextSession: !nextAppointmentId,
+          noAutomaticClinicalMutation: true
+        }),
+        updated_at: now
+      });
+
+      let update = await updateAbaScheduleWithSchemaFallback(scheduleId, patch, scheduleClinicId, scheduleOrganizationId, patientId);
+      if (update.error && isLegacyMaintenanceScheduleConstraintError(update.error)) {
+        update = await updateAbaScheduleWithSchemaFallback(
+          scheduleId,
+          buildLegacyMaintenanceScheduleRow(patch, now),
+          scheduleClinicId,
+          scheduleOrganizationId,
+          patientId
+        );
+      }
+      if (update.error) {
+        failed += 1;
+        void persistActivityLog({
+          userId: actorId || '',
+          clinicId: scheduleClinicId,
+          actorName: actorName || 'Equipe',
+          title: 'Falha ao mover sondagem de manutencao',
+          content: 'Maintenance Probe vinculada a consulta cancelada nao pode ser realocada automaticamente.',
+          type: 'clinical',
+          actionType: 'MAINTENANCE_SCHEDULE_REASSIGNMENT_FAILED',
+          payload: { scheduleId, previousAppointmentId, patientId, source: params.source }
+        });
+        continue;
+      }
+
+      if (nextAppointmentId) moved += 1;
+      else waiting += 1;
+      void persistActivityLog({
+        userId: actorId || '',
+        clinicId: scheduleClinicId,
+        actorName: actorName || 'Equipe',
+        title: nextAppointmentId ? 'Sondagem movida para proxima consulta' : 'Sondagem aguardando futura consulta',
+        content: nextAppointmentId
+          ? 'Maintenance Probe vinculada a consulta cancelada foi movida automaticamente para a proxima consulta valida do paciente.'
+          : 'Maintenance Probe vinculada a consulta cancelada ficou aguardando a proxima consulta valida do paciente.',
+        type: 'clinical',
+        actionType: auditAction,
+        payload: { scheduleId, previousAppointmentId, reassignedAppointmentId: nextAppointmentId, patientId, source: params.source }
+      });
+    }
+
+    if (schedules.length > 0) {
+      void persistActivityLog({
+        userId: actorId || '',
+        clinicId,
+        actorName: actorName || 'Equipe',
+        title: 'Consultas canceladas com Maintenance Probe',
+        content: `${schedules.length} sondagem(ns) de manutencao vinculada(s) a consulta cancelada foram revisadas automaticamente.`,
+        type: 'clinical',
+        actionType: 'APPOINTMENT_CANCELLED_WITH_MAINTENANCE',
+        payload: { appointmentIds, moved, waiting, failed, source: params.source }
+      });
+    }
+
+    return { moved, waiting, failed, schedules: schedules.length };
   };
 
   async function flagPendingMaintenanceProbesForAppointment(params: {

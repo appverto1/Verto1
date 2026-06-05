@@ -32,6 +32,18 @@ test('paciente nao consegue usar a rota para status administrativo', () => {
   assert.match(serverCode, /Consulta n.o pertence a este paciente|Consulta não pertence a este paciente/);
 });
 
+test('cancelamento move Maintenance Probe para proxima consulta valida', () => {
+  assert.match(serverCode, /reassignMaintenanceSchedulesFromCancelledAppointments/);
+  assert.match(serverCode, /MAINTENANCE_SCHEDULE_AUTO_MOVED_TO_NEXT_APPOINTMENT/);
+  assert.match(serverCode, /MAINTENANCE_SCHEDULE_WAITING_NEXT_SESSION_AFTER_CANCEL/);
+  assert.match(serverCode, /APPOINTMENT_CANCELLED_WITH_MAINTENANCE/);
+  assert.match(serverCode, /MAINTENANCE_SCHEDULE_REASSIGNMENT_FAILED/);
+  assert.match(serverCode, /fetchFutureAppointmentsForMaintenance\(\{[\s\S]*?patientId[\s\S]*?fromIso[\s\S]*?limit: 30[\s\S]*?\}\)/);
+  assert.match(serverCode, /normalizedStatus === 'canceled'[\s\S]*?reassignMaintenanceSchedulesFromCancelledAppointments/);
+  assert.match(serverCode, /source: 'appointment_deleted'[\s\S]*?\}\)/);
+  assert.match(serverCode, /maintenanceProbeReassignment/);
+});
+
 test('painel profissional e recepcao usam o fluxo de cancelamento recorrente', () => {
   assert.match(appCode, /user\.role === 'coordinator' \|\| user\.role === 'receptionist' \|\| user\.role === 'therapist'/);
   assert.match(coordinatorCode, /onCancelAppointment=\{handleCancelAppointmentFromAgenda\}/);

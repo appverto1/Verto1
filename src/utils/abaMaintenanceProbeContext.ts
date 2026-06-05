@@ -1,7 +1,7 @@
 import {
   deriveMaintenanceScheduleStatus,
   isActiveMaintenanceSchedule,
-  selectMaintenanceScheduleForProbe
+  resolveMaintenanceProbeAvailability
 } from './abaMaintenanceScheduling';
 import { isMaintenanceProbeCollection, normalizeAbaCollectionType } from './abaTrialLabels';
 
@@ -69,6 +69,8 @@ export function getActiveMaintenanceProbeForTarget(input: {
   manualActivations?: Record<string, ManualMaintenanceProbeActivation | undefined>;
   activeAppointmentId?: string | null;
   sessionId?: string | null;
+  sessionClinicalDate?: string | Date | null;
+  timeZone?: string | null;
   now?: Date;
 }): ActiveMaintenanceProbeForTarget | null {
   const targetId = String(input.targetId || '').trim();
@@ -98,10 +100,14 @@ export function getActiveMaintenanceProbeForTarget(input: {
   const targetSchedules = (Array.isArray(input.schedules) ? input.schedules : [])
     .filter((schedule) => targetMatches(schedule, targetId, targetName))
     .filter(isActiveMaintenanceSchedule);
-  const schedule = selectMaintenanceScheduleForProbe(targetSchedules, {
+  const availability = resolveMaintenanceProbeAvailability(targetSchedules, {
     appointmentId: activeAppointmentId,
-    occurredAt: now
-  }) || targetSchedules[0] || null;
+    sessionId,
+    sessionClinicalDate: input.sessionClinicalDate,
+    occurredAt: now,
+    timeZone: input.timeZone
+  });
+  const schedule = availability.availableSchedule || null;
   if (!schedule) return null;
 
   const status = deriveMaintenanceScheduleStatus(schedule, now);
