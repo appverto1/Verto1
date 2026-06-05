@@ -2836,6 +2836,26 @@ export const dataService = {
     }
   },
 
+  async clearPatientAbaMaintenance(patientId: string, payload: any = {}) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse({ schedulesCleared: 0, targetsReset: 0 });
+    if (!isPersistedUuid(patientId)) {
+      return invalidClinicalIdResponse('Paciente inválido para apagar manutenções.', { schedulesCleared: 0, targetsReset: 0 });
+    }
+    const endpoint = `/api/aba/patients/${encodeURIComponent(String(patientId))}/maintenance-schedules/clear`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, { helperName: 'clearPatientAbaMaintenance', operation: 'write', table: 'aba_maintenance_schedules,aba_targets', hasExplicitColumns: true });
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível apagar as manutenções agora.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível apagar as manutenções agora.');
+      return { success: false, error: message, message };
+    }
+  },
+
   async confirmMaintenanceScheduleLink(scheduleId: string, payload: any = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
     if (!isPersistedUuid(scheduleId)) {

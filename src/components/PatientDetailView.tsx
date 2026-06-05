@@ -797,6 +797,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [showSessionEndConfirm, setShowSessionEndConfirm] = useState(false);
   const [pendingSessionAction, setPendingSessionAction] = useState<'tab' | 'fullscreen'>('tab');
   const [restoreSessionData, setRestoreSessionData] = useState(false);
+  const [clearMaintenanceOnSessionRestore, setClearMaintenanceOnSessionRestore] = useState(false);
   const consumedScheduledSessionStartKeyRef = React.useRef('');
   const [abaSessions, setAbaSessions] = useState<any[]>([]);
   const [abaTrials, setAbaTrials] = useState<any[]>([]);
@@ -832,6 +833,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     peiMaintenancePanelRequestSeqRef.current += 1;
     setGeneratedReviewNotes([]);
     setSessionPatientOverride(null);
+    setRestoreSessionData(false);
+    setClearMaintenanceOnSessionRestore(false);
     setActivePeiPlanSubtab('teaching');
     setHasLoadedPeiMaintenancePanel(false);
     setPeiMaintenancePanelMessage('');
@@ -1000,6 +1003,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     setPendingSessionAction(resolvedAction);
     setSessionDurationInput(String(scheduledSessionForPatient ? scheduledSessionDurationMinutes : configuredDefaultSessionMinutes));
     setRestoreSessionData(false);
+    setClearMaintenanceOnSessionRestore(false);
     setShowSessionStartConfirm(true);
   };
 
@@ -1016,8 +1020,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     );
     const startedAt = new Date();
     const resetAt = startedAt.getTime();
+    const shouldClearMaintenance = Boolean(restoreSessionData && clearMaintenanceOnSessionRestore && isKidsProfile && patient?.id);
     if (restoreSessionData && isKidsProfile && Array.isArray(patient?.pei) && onUpdatePatient) {
-      const updatedPei = buildPeiSessionProgressReset(patient.pei, resetAt);
+      const updatedPei = buildPeiSessionProgressReset(patient.pei, resetAt, {
+        clearMaintenance: shouldClearMaintenance
+      });
       const restoredPatient = {
         ...patient,
         id: patient.id,
@@ -1040,6 +1047,36 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       onAddActivityLog?.(
         'Dados de sessão restaurados',
         `Preenchimento do PEI de ${patient?.name || 'paciente'} reiniciado sem apagar o plano estruturado.`,
+        'clinical'
+      );
+    }
+    if (shouldClearMaintenance) {
+      const clearResult = await dataService.clearPatientAbaMaintenance(String(patient.id), {
+        resetAt: startedAt.toISOString(),
+        reason: 'SESSION_RESTORE_CLEAR_MAINTENANCE'
+      });
+      if (clearResult?.success === false) {
+        alert(`Não foi possível apagar as manutenções agora: ${clearResult?.error || clearResult?.message || 'falha ao atualizar a manutenção.'}`);
+        return;
+      }
+      setAbaMaintenanceOverview((prev: any) => ({
+        ...(prev || {}),
+        schedules: [],
+        summary: prev?.summary || null
+      }));
+      setAbaMaintenancePanel(null);
+      setHasLoadedPeiMaintenancePanel(false);
+      setPeiMaintenancePanelMessage('Manutenções apagadas para esta nova sessão.');
+      setAbaRecordsRefreshKey((value) => value + 1);
+      onAddNote?.(
+        patient.id,
+        `Manutenções ativas apagadas em ${startedAt.toLocaleString('pt-BR')} durante a restauração dos dados de sessão.`,
+        'private',
+        'Sessão'
+      );
+      onAddActivityLog?.(
+        'Manutenções apagadas',
+        `Sondagens de manutenção de ${patient?.name || 'paciente'} foram removidas do fluxo ativo para a nova sessão.`,
         'clinical'
       );
     }
@@ -1250,6 +1287,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     }
     setShowSessionStartConfirm(false);
     setRestoreSessionData(false);
+    setClearMaintenanceOnSessionRestore(false);
     onAddActivityLog?.(
       'Sessão iniciada',
       `Sessão de ${patient?.name || 'paciente'} iniciada com duração prevista de ${durationMinutes} minutos.`,
@@ -6591,7 +6629,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       )} 
       {showSessionStartConfirm && typeof document !== 'undefined' && createPortal(
         <div className="fixed inset-0 z-[120] flex items-start justify-center p-4 pt-6 sm:pt-10 bg-black/30 backdrop-blur-sm animate-fade-in">
-          <div className="bg-white dark:bg-[#101b2e] rounded-[32px] p-7 shadow-2xl max-w-md w-full animate-pop border border-violet-100 dark:border-violet-500/30">
+          <div className="bg-white dark:bg-[#101b2e] rounded-[32px] p-7 shadow-2xl max-h-[calc(100vh-2rem)] max-w-md w-full overflow-y-auto animate-pop border border-violet-100 dark:border-violet-500/30">
             <div className="w-14 h-14 bg-[#7a32fc]/10 rounded-2xl flex items-center justify-center mb-5 text-[#7a32fc]">
               <Clock size={28} />
             </div>
@@ -6611,27 +6649,53 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               className="w-full bg-gray-50 dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-2xl px-4 py-3 text-lg font-semibold text-gray-800 dark:text-slate-50 outline-none focus:border-[#7a32fc]"
             />
             {isKidsProfile && (
-              <label className="my-5 flex items-start gap-3 rounded-2xl border border-violet-100 bg-violet-50/70 p-4 dark:border-violet-500/30 dark:bg-violet-500/10">
-                <input
-                  type="checkbox"
-                  checked={restoreSessionData}
-                  onChange={(event) => setRestoreSessionData(event.target.checked)}
-                  className="mt-1 h-4 w-4 rounded border-violet-200 text-[#7a32fc]"
-                />
-                <span>
-                  <span className="block text-sm font-semibold text-gray-900 dark:text-slate-50">
-                    Restaurar dados de sessão
+              <div className="my-5 space-y-3">
+                <label className="flex items-start gap-3 rounded-2xl border border-violet-100 bg-violet-50/70 p-4 dark:border-violet-500/30 dark:bg-violet-500/10">
+                  <input
+                    type="checkbox"
+                    checked={restoreSessionData}
+                    onChange={(event) => {
+                      const checked = event.target.checked;
+                      setRestoreSessionData(checked);
+                      if (!checked) setClearMaintenanceOnSessionRestore(false);
+                    }}
+                    className="mt-1 h-4 w-4 rounded border-violet-200 text-[#7a32fc]"
+                  />
+                  <span>
+                    <span className="block text-sm font-semibold text-gray-900 dark:text-slate-50">
+                      Restaurar dados de sessão
+                    </span>
+                    <span className="mt-1 block text-xs leading-relaxed text-gray-500 dark:text-slate-300">
+                      Mantém o PEI estruturado ativo, zera o preenchimento atual das metas e passa a contar novos registros a partir desta sessão.
+                    </span>
                   </span>
-                  <span className="mt-1 block text-xs leading-relaxed text-gray-500 dark:text-slate-300">
-                    Mantém o PEI estruturado ativo, zera o preenchimento atual das metas e passa a contar novos registros a partir desta sessão.
-                  </span>
-                </span>
-              </label>
+                </label>
+                {restoreSessionData && (
+                  <label className="flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50/80 p-4 dark:border-red-500/30 dark:bg-red-500/10">
+                    <input
+                      type="checkbox"
+                      checked={clearMaintenanceOnSessionRestore}
+                      onChange={(event) => setClearMaintenanceOnSessionRestore(event.target.checked)}
+                      className="mt-1 h-4 w-4 rounded border-red-200 text-red-500"
+                    />
+                    <span>
+                      <span className="flex items-center gap-2 text-sm font-semibold text-red-700 dark:text-red-100">
+                        <Trash2 size={14} />
+                        Apagar manutenções
+                      </span>
+                      <span className="mt-1 block text-xs leading-relaxed text-red-600/80 dark:text-red-100/80">
+                        Remove sondagens de manutenção ativas e faz essas habilidades voltarem para treino nesta nova sessão.
+                      </span>
+                    </span>
+                  </label>
+                )}
+              </div>
             )}
             <div className="flex gap-3">
               <button
                 onClick={() => {
                   setRestoreSessionData(false);
+                  setClearMaintenanceOnSessionRestore(false);
                   setShowSessionStartConfirm(false);
                 }}
                 className="flex-1 py-3 rounded-2xl bg-gray-100 dark:bg-slate-800 text-gray-600 dark:text-slate-200 font-semibold hover:bg-gray-200 dark:hover:bg-slate-700 transition-all"

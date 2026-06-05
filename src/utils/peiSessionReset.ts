@@ -1,4 +1,71 @@
 const PRESERVED_NON_TRAINING_STATUSES = new Set(['archived', 'deleted', 'inactive', 'cancelled', 'canceled']);
+const PEI_MAINTENANCE_STATUS_VALUES = new Set([
+  'completed',
+  'complete',
+  'concluido',
+  'concluído',
+  'acquired',
+  'adquirido',
+  'mastered',
+  'masterizado',
+  'mastered_approved',
+  'maintenance',
+  'manutencao',
+  'manutenção',
+  'maintained',
+  'ready_for_maintenance',
+  'ready_for_review',
+  'regression_risk',
+  'met',
+  'met_today'
+]);
+
+const PEI_MAINTENANCE_FIELDS_TO_DELETE = [
+  'maintenanceScheduleId',
+  'maintenance_schedule_id',
+  'maintenanceSchedule',
+  'maintenance_schedule',
+  'maintenanceSchedules',
+  'maintenance_schedules',
+  'maintenanceProbe',
+  'maintenance_probe',
+  'maintenanceProbes',
+  'maintenance_probes',
+  'nextMaintenanceProbe',
+  'next_maintenance_probe',
+  'activeMaintenanceSchedule',
+  'active_maintenance_schedule',
+  'maintenanceStatus',
+  'maintenance_status',
+  'maintenanceDays',
+  'maintenance_days',
+  'maintenanceRequired',
+  'maintenance_required',
+  'eligibleForMaintenance',
+  'eligible_for_maintenance',
+  'readyForMaintenance',
+  'ready_for_maintenance',
+  'isMaintained',
+  'is_maintained',
+  'isMaintenance',
+  'is_maintenance',
+  'isMastered',
+  'is_mastered',
+  'isAcquired',
+  'is_acquired',
+  'criteriaMet',
+  'criterionMet',
+  'masteryCriterionMet',
+  'masteryMet',
+  'masteredAt',
+  'mastered_at',
+  'acquiredAt',
+  'acquired_at'
+];
+
+type PeiSessionProgressResetOptions = {
+  clearMaintenance?: boolean;
+};
 
 const normalizePeiStatusAfterSessionReset = (status: unknown) => {
   const normalized = String(status || '').trim().toLowerCase();
@@ -7,21 +74,69 @@ const normalizePeiStatusAfterSessionReset = (status: unknown) => {
   return 'in_progress';
 };
 
-export const buildPeiSessionProgressReset = (pei: any[], resetAt: number) => {
+const normalizeMaintenanceStatusValue = (value: unknown) =>
+  String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+
+const isMaintenanceStatusValue = (value: unknown) =>
+  PEI_MAINTENANCE_STATUS_VALUES.has(normalizeMaintenanceStatusValue(value));
+
+const clearPeiMaintenanceData = (goal: any, resetAt: number) => {
+  const nextGoal = {
+    ...goal,
+    sessionMaintenanceClearedAt: resetAt,
+    maintenanceClearedAt: resetAt,
+    sessionRestorePreviousClinicalStatus: goal?.clinical_status ?? goal?.clinicalStatus ?? null,
+    sessionRestorePreviousMasteryStatus: goal?.mastery_status ?? goal?.masteryStatus ?? goal?.evaluation_status ?? goal?.evaluationStatus ?? null
+  };
+
+  PEI_MAINTENANCE_FIELDS_TO_DELETE.forEach((field) => {
+    delete nextGoal[field];
+  });
+
+  const shouldResetClinicalStatus = (
+    isMaintenanceStatusValue(goal?.clinical_status) ||
+    isMaintenanceStatusValue(goal?.clinicalStatus) ||
+    isMaintenanceStatusValue(goal?.status) ||
+    isMaintenanceStatusValue(goal?.phase)
+  );
+  if (shouldResetClinicalStatus || 'clinical_status' in nextGoal) nextGoal.clinical_status = 'ACQUISITION';
+  if (shouldResetClinicalStatus || 'clinicalStatus' in nextGoal) nextGoal.clinicalStatus = 'ACQUISITION';
+  if (isMaintenanceStatusValue(goal?.phase)) nextGoal.phase = 'teaching';
+
+  if (isMaintenanceStatusValue(goal?.mastery_status) || 'mastery_status' in nextGoal) nextGoal.mastery_status = null;
+  if (isMaintenanceStatusValue(goal?.masteryStatus) || 'masteryStatus' in nextGoal) nextGoal.masteryStatus = null;
+  if (isMaintenanceStatusValue(goal?.evaluation_status) || 'evaluation_status' in nextGoal) nextGoal.evaluation_status = null;
+  if (isMaintenanceStatusValue(goal?.evaluationStatus) || 'evaluationStatus' in nextGoal) nextGoal.evaluationStatus = null;
+
+  return nextGoal;
+};
+
+export const buildPeiSessionProgressReset = (
+  pei: any[],
+  resetAt: number,
+  options: PeiSessionProgressResetOptions = {}
+) => {
   const safeResetAt = Number.isFinite(Number(resetAt)) && Number(resetAt) > 0
     ? Math.floor(Number(resetAt))
     : Date.now();
 
-  return (Array.isArray(pei) ? pei : []).map((goal: any) => ({
-    ...goal,
-    progress: 0,
-    progressResetAt: safeResetAt,
-    sessionProgressResetAt: safeResetAt,
-    masteryResetAt: safeResetAt,
-    sessionRestorePreviousStatus: goal?.status || null,
-    sessionRestorePreviousProgress: Number.isFinite(Number(goal?.progress)) ? Number(goal.progress) : null,
-    status: normalizePeiStatusAfterSessionReset(goal?.status)
-  }));
+  return (Array.isArray(pei) ? pei : []).map((goal: any) => {
+    const resetGoal = {
+      ...goal,
+      progress: 0,
+      progressResetAt: safeResetAt,
+      sessionProgressResetAt: safeResetAt,
+      masteryResetAt: safeResetAt,
+      sessionRestorePreviousStatus: goal?.status || null,
+      sessionRestorePreviousProgress: Number.isFinite(Number(goal?.progress)) ? Number(goal.progress) : null,
+      status: normalizePeiStatusAfterSessionReset(goal?.status)
+    };
+    return options.clearMaintenance ? clearPeiMaintenanceData(resetGoal, safeResetAt) : resetGoal;
+  });
 };
 
 export const getPeiProgressResetMarker = (goal: any) => {

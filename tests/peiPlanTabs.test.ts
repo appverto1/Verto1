@@ -5,6 +5,7 @@ import {
   buildPeiMaintenanceRows,
   buildPeiPlanHistoryEvents,
   groupPeiMaintenanceRows,
+  isPeiMaintenanceEligibleSkill,
   summarizePeiMaintenanceRows,
 } from '../src/utils/peiMaintenancePanel.ts';
 import {
@@ -62,7 +63,43 @@ test('Restaurar dados de sessao zera progresso PEI antes de abrir sessao', () =>
   assert.equal(getPeiClinicalRowMarker({ created_at: '2026-06-04T11:59:00.000Z' }) < resetAt, true);
   assert.equal(isPeiClinicalRowAfterProgressReset(resetPei[0], { created_at: '2026-06-04T11:59:00.000Z' }), false);
   assert.equal(isPeiClinicalRowAfterProgressReset(resetPei[0], { created_at: '2026-06-04T12:01:00.000Z' }), true);
-  assert.match(patientDetailCode, /const updatedPei = buildPeiSessionProgressReset\(patient\.pei, resetAt\)/);
+
+  const resetPeiWithoutMaintenance = buildPeiSessionProgressReset([
+    {
+      id: 'goal-maintenance',
+      name: 'Nomeia objetos',
+      status: 'completed',
+      progress: 100,
+      clinical_status: 'MAINTENANCE',
+      clinicalStatus: 'MAINTENANCE',
+      mastery_status: 'MASTERED',
+      masteryStatus: 'MASTERED',
+      phase: 'maintenance',
+      maintenanceScheduleId: 'schedule-1',
+      maintenance_required: true,
+      criteriaMet: true,
+      isMastered: true
+    }
+  ], resetAt, { clearMaintenance: true });
+  assert.equal(resetPeiWithoutMaintenance[0].status, 'in_progress');
+  assert.equal(resetPeiWithoutMaintenance[0].clinical_status, 'ACQUISITION');
+  assert.equal(resetPeiWithoutMaintenance[0].clinicalStatus, 'ACQUISITION');
+  assert.equal(resetPeiWithoutMaintenance[0].phase, 'teaching');
+  assert.equal(resetPeiWithoutMaintenance[0].mastery_status, null);
+  assert.equal(resetPeiWithoutMaintenance[0].masteryStatus, null);
+  assert.equal('maintenanceScheduleId' in resetPeiWithoutMaintenance[0], false);
+  assert.equal('criteriaMet' in resetPeiWithoutMaintenance[0], false);
+  assert.equal(resetPeiWithoutMaintenance[0].sessionMaintenanceClearedAt, resetAt);
+  assert.equal(isPeiMaintenanceEligibleSkill(resetPeiWithoutMaintenance[0]), false);
+
+  assert.match(patientDetailCode, /const updatedPei = buildPeiSessionProgressReset\(patient\.pei, resetAt, \{[\s\S]*?clearMaintenance: shouldClearMaintenance[\s\S]*?\}\)/);
+  assert.match(patientDetailCode, /clearMaintenanceOnSessionRestore/);
+  assert.match(patientDetailCode, /Apagar manutenções/);
+  assert.match(patientDetailCode, /dataService\.clearPatientAbaMaintenance/);
+  assert.match(dataServiceCode, /async clearPatientAbaMaintenance\(patientId: string/);
+  assert.match(serverCode, /app\.post\('\/api\/aba\/patients\/:patientId\/maintenance-schedules\/clear'/);
+  assert.match(serverCode, /MAINTENANCE_SESSION_RESET_CLEAR/);
+  assert.match(serverCode, /clinical_status: 'ACQUISITION'/);
   assert.match(patientDetailCode, /const updateResult = await onUpdatePatient/);
   assert.match(patientDetailCode, /setSessionPatientOverride\(restoredPatient\)/);
   assert.match(patientDetailCode, /patient=\{\{ \.\.\.sessionModePatient/);
@@ -77,15 +114,14 @@ test('sessao iniciada no coordenador preserva metadados ABA da tentativa', () =>
 });
 
 test('Manutencao exibe apenas habilidades adquiridas do Ensino neste passo', () => {
-  const maintenancePanelStart = patientDetailCode.indexOf('const renderPeiMaintenancePanel = () => (');
+  const maintenancePanelStart = patientDetailCode.indexOf('const renderPeiMaintenancePanel = () => {');
   const maintenancePanelEnd = patientDetailCode.indexOf('const renderPeiGeneralizationPanel', maintenancePanelStart);
   const maintenancePanelCode = patientDetailCode.slice(maintenancePanelStart, maintenancePanelEnd);
   assert.match(patientDetailCode, /const peiAcquiredTeachingGoals/);
-  assert.match(patientDetailCode, /const badge = tab\.id === 'maintenance' \? peiAcquiredTeachingGoals\.length : 0/);
+  assert.match(patientDetailCode, /const badge = tab\.id === 'maintenance'[\s\S]*?peiMaintenanceEligibleRows\.length \+ peiMaintenanceScheduledRows\.length \+ peiMaintenanceWaitingRows\.length[\s\S]*?: 0/);
   assert.match(maintenancePanelCode, /Habilidades adquiridas no Ensino/);
-  assert.match(maintenancePanelCode, /peiAcquiredTeachingGoals\.map/);
+  assert.match(maintenancePanelCode, /peiMaintenanceEligibleRows\.map/);
   assert.doesNotMatch(maintenancePanelCode, /Atualizar manutenção|Pendências técnicas|Plano de manutenção|renderPeiMaintenanceGroup|renderPeiMaintenanceMetric/);
-  assert.doesNotMatch(patientDetailCode, /activeTab !== 'plan' \|\| activePeiPlanSubtab !== 'maintenance'/);
   assert.match(dataServiceCode, /async getAbaMaintenancePanel\(patientId: string/);
   assert.match(serverCode, /app\.get\('\/api\/patients\/:patientId\/aba\/maintenance-panel'/);
   assert.match(dataServiceCode, /async getAbaMaintenanceOverview\(patientId: string/);
@@ -119,16 +155,16 @@ test('agrupamento de manutencao separa hoje, atrasadas, sem sessao, confirmacao 
 });
 
 test('painel permite atribuir, confirmar e adiar vinculo de Maintenance Probe', () => {
-  assert.match(patientDetailCode, /Escolha uma sessão para esta sondagem/);
   assert.match(patientDetailCode, /dataService\.getAbaFutureAppointmentsForMaintenance/);
   assert.match(patientDetailCode, /dataService\.confirmMaintenanceScheduleLink/);
   assert.match(patientDetailCode, /dataService\.skipMaintenanceScheduleLink/);
+  assert.match(patientDetailCode, /dataService\.assignMaintenanceScheduleToAppointment/);
   assert.match(patientDetailCode, /dataService\.scheduleMaintenanceForNextSession/);
   assert.match(patientDetailCode, /dataService\.createMaintenanceScheduleForTarget/);
 });
 
 test('Manutencao passo atual nao exibe plano 7 14 30 60 e generalizacao permanece', () => {
-  const maintenancePanelStart = patientDetailCode.indexOf('const renderPeiMaintenancePanel = () => (');
+  const maintenancePanelStart = patientDetailCode.indexOf('const renderPeiMaintenancePanel = () => {');
   const maintenancePanelEnd = patientDetailCode.indexOf('const renderPeiGeneralizationPanel', maintenancePanelStart);
   const maintenancePanelCode = patientDetailCode.slice(maintenancePanelStart, maintenancePanelEnd);
   assert.doesNotMatch(maintenancePanelCode, /Plano de manutencao|Plano de manutenção|7, 14, 30 e 60 dias/);

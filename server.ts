@@ -28328,6 +28328,28 @@ async function startServer() {
     return { data: null, error: { message: 'Patch ABA vazio apos fallback de schema.' } };
   };
 
+  const updateAbaTargetWithSchemaFallback = async (targetId: string, patchBase: Record<string, any>, clinicId: string, organizationId?: string, patientId?: string) => {
+    let patch: Record<string, any> = { ...patchBase };
+    while (Object.keys(patch).length > 0) {
+      let query = supabase
+        .from('aba_targets')
+        .update(patch)
+        .eq('id', targetId);
+      if (clinicId) query = query.eq('clinic_id', clinicId);
+      if (organizationId) query = query.eq('organization_id', organizationId);
+      if (patientId) query = query.eq('patient_id', patientId);
+      const result = await query.select('id').maybeSingle();
+      if (!result.error) return { data: result.data, error: null };
+      const missingColumn = extractMissingColumnName(result.error);
+      if (missingColumn && missingColumn in patch) {
+        delete patch[missingColumn];
+        continue;
+      }
+      return { data: null, error: result.error };
+    }
+    return { data: null, error: { message: 'Patch ABA target vazio apos fallback de schema.' } };
+  };
+
   async function flagPendingMaintenanceProbesForAppointment(params: {
     appointmentId: string;
     organizationId: string;
@@ -30945,6 +30967,157 @@ async function startServer() {
       return res.json({ success: true, data: enriched });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || 'Não foi possível carregar os agendamentos agora.' });
+    }
+  });
+
+  app.post('/api/aba/patients/:patientId/maintenance-schedules/clear', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload para apagar manutenções')) return;
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      if (!isUuid(patientId)) {
+        return res.status(400).json({ success: false, error: 'ID_INVALIDO', message: 'Paciente inválido para apagar manutenções.' });
+      }
+      const now = sanitizeIsoDateTime(req.body?.resetAt || req.body?.reset_at || new Date().toISOString());
+      const actorId = sanitizeString(req.session.user?.id, 120) || null;
+      const reason = sanitizeString(req.body?.reason || req.body?.clearReason || req.body?.clear_reason, 240) || 'SESSION_RESTORE_CLEAR_MAINTENANCE';
+
+      let scheduleQuery = supabase
+        .from('aba_maintenance_schedules')
+        .select(ABA_MAINTENANCE_SCHEDULE_SELECT)
+        .eq('organization_id', organizationId)
+        .eq('patient_id', patientId)
+        .in('status', ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES)
+        .order('updated_at', { ascending: false })
+        .limit(500);
+      scheduleQuery = applyAbaTenantScope(scheduleQuery, req.session.user, clinicId, organizationId);
+      const scheduleResult = await scheduleQuery;
+      if (scheduleResult.error) {
+        if (hasMissingFinancialSchema(scheduleResult.error) || isMissingRelationError(scheduleResult.error)) {
+          return res.json({
+            success: true,
+            message: 'Manutenções apagadas.',
+            data: { schedulesCleared: 0, targetsReset: 0, schemaUnavailable: true },
+            schedulesCleared: 0,
+            targetsReset: 0
+          });
+        }
+        throw scheduleResult.error;
+      }
+
+      let schedulesCleared = 0;
+      const schedules = Array.isArray(scheduleResult.data) ? scheduleResult.data : [];
+      for (const schedule of schedules) {
+        const scheduleId = sanitizeString(schedule?.id, 180);
+        if (!scheduleId) continue;
+        const raw = schedule?.raw_payload && typeof schedule.raw_payload === 'object' ? schedule.raw_payload : {};
+        const metadata = schedule?.metadata && typeof schedule.metadata === 'object' ? schedule.metadata : {};
+        const patch = cleanObject({
+          status: 'CANCELLED',
+          cancelled_at: now,
+          cancelled_by: actorId,
+          appointment_id: null,
+          candidate_appointment_id: null,
+          metadata: sanitizeClinicalPayload({
+            ...metadata,
+            auditAction: 'MAINTENANCE_SESSION_RESET_CLEAR',
+            clearReason: reason,
+            clearedAt: now
+          }),
+          raw_payload: sanitizeClinicalPayload({
+            ...raw,
+            clearedBySessionRestore: true,
+            maintenanceClearedAt: now,
+            noAutomaticClinicalMutation: true
+          }),
+          updated_at: now
+        });
+        let update = await updateAbaScheduleWithSchemaFallback(
+          scheduleId,
+          patch,
+          sanitizeString(schedule?.clinic_id, 120) || clinicId,
+          sanitizeString(schedule?.organization_id, 120) || organizationId,
+          patientId
+        );
+        if (update.error && isLegacyMaintenanceScheduleConstraintError(update.error)) {
+          update = await updateAbaScheduleWithSchemaFallback(
+            scheduleId,
+            buildLegacyMaintenanceScheduleRow(patch, now),
+            sanitizeString(schedule?.clinic_id, 120) || clinicId,
+            sanitizeString(schedule?.organization_id, 120) || organizationId,
+            patientId
+          );
+        }
+        if (update.error) throw update.error;
+        schedulesCleared += 1;
+      }
+
+      let targetsReset = 0;
+      let targetQuery = supabase
+        .from('aba_targets')
+        .select(ABA_TARGET_RECOMMENDATION_SELECT)
+        .eq('organization_id', organizationId)
+        .eq('patient_id', patientId)
+        .order('updated_at', { ascending: false })
+        .limit(500);
+      targetQuery = applyAbaTenantScope(targetQuery, req.session.user, clinicId, organizationId);
+      const targetResult = await targetQuery;
+      if (targetResult.error) {
+        if (!hasMissingFinancialSchema(targetResult.error) && !isMissingRelationError(targetResult.error)) throw targetResult.error;
+      } else {
+        const resettableClinicalStatuses = new Set(['READY_FOR_REVIEW', 'MASTERED', 'MAINTENANCE', 'REGRESSION_RISK']);
+        const resettablePhases = new Set(['mastered', 'maintenance']);
+        for (const target of Array.isArray(targetResult.data) ? targetResult.data : []) {
+          const targetId = sanitizeString(target?.id, 180);
+          const clinicalStatus = sanitizeString(target?.clinical_status || target?.clinicalStatus, 80).toUpperCase();
+          const phase = sanitizeString(target?.phase, 80).toLowerCase();
+          if (!targetId || (!resettableClinicalStatuses.has(clinicalStatus) && !resettablePhases.has(phase))) continue;
+          const masteryCriteria = target?.mastery_criteria && typeof target.mastery_criteria === 'object' ? target.mastery_criteria : {};
+          const patch = cleanObject({
+            clinical_status: 'ACQUISITION',
+            phase: 'teaching',
+            mastery_criteria: sanitizeClinicalPayload({
+              ...masteryCriteria,
+              maintenanceClearedAt: now,
+              maintenanceClearReason: reason,
+              previousClinicalStatus: clinicalStatus || null,
+              previousPhase: phase || null
+            }),
+            updated_at: now
+          });
+          const update = await updateAbaTargetWithSchemaFallback(
+            targetId,
+            patch,
+            sanitizeString(target?.clinic_id, 120) || clinicId,
+            sanitizeString(target?.organization_id, 120) || organizationId,
+            patientId
+          );
+          if (update.error) throw update.error;
+          targetsReset += 1;
+        }
+      }
+
+      void persistActivityLog({
+        userId: actorId || '',
+        clinicId,
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email, 180) || 'Equipe',
+        title: 'Manutenções apagadas no início da sessão',
+        content: 'Sondagens de manutenção ativas foram removidas do fluxo e os targets de manutenção voltaram para treino.',
+        type: 'clinical',
+        actionType: 'MAINTENANCE_SESSION_RESET_CLEAR',
+        payload: { patientId, schedulesCleared, targetsReset, reason }
+      });
+
+      return res.json({
+        success: true,
+        message: schedulesCleared || targetsReset ? 'Manutenções apagadas.' : 'Nenhuma manutenção ativa para apagar.',
+        data: { schedulesCleared, targetsReset },
+        schedulesCleared,
+        targetsReset
+      });
+    } catch {
+      return res.status(500).json({ success: false, error: 'UNEXPECTED_ERROR', message: 'Não foi possível apagar as manutenções agora.' });
     }
   });
 
