@@ -5056,12 +5056,15 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         };
       })
       .filter(Boolean);
-    const localDisplayKeys = new Set(localRows.map((row: any) => getPeiMaintenanceDisplayKey(row)).filter(Boolean));
+    const schedulableLocalRows = panelEligibleRows.length > 0
+      ? localRows.filter((row: any) => Boolean(getPeiMaintenancePersistedId(row?.targetId || row?.target_id || row?.aba_target_id || row?.abaTargetId)))
+      : localRows;
+    const localDisplayKeys = new Set(schedulableLocalRows.map((row: any) => getPeiMaintenanceDisplayKey(row)).filter(Boolean));
     const panelOnlyRows = panelEligibleRows.filter((row: any) => {
       const key = getPeiMaintenanceDisplayKey(row);
       return !key || !localDisplayKeys.has(key);
     });
-    const rows = localRows.length > 0 ? [...localRows, ...panelOnlyRows] : panelEligibleRows.length > 0 ? panelEligibleRows : buildPeiMaintenanceEligibleSkills(
+    const rows = schedulableLocalRows.length > 0 ? [...schedulableLocalRows, ...panelOnlyRows] : panelEligibleRows.length > 0 ? panelEligibleRows : buildPeiMaintenanceEligibleSkills(
       peiMaintenanceHydratedGoals.map((goal: any) => ({
         ...goal,
         progressPercent: getGoalProgressPercent(goal),
@@ -5284,7 +5287,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     const hasClinicalMatchContext = Boolean(protocolKey || domainKey);
     const compositeKey = hasClinicalMatchContext ? [nameKey, protocolKey, domainKey].filter(Boolean).join('|') : '';
     const matches = new Map<string, any>();
-    [...peiMaintenanceLinkableTargets, ...peiMaintenanceHydratedGoals].forEach((target: any) => {
+    const panelRowsForTargetResolution = [
+      ...(peiMaintenanceTargetFirstGroups.eligibleSkills || []),
+      ...(peiMaintenanceTargetFirstGroups.scheduled || []),
+      ...(peiMaintenanceTargetFirstGroups.waitingNextSession || []),
+      ...(peiMaintenanceTargetFirstGroups.overdue || [])
+    ];
+    [...panelRowsForTargetResolution, ...peiMaintenanceLinkableTargets, ...peiMaintenanceHydratedGoals].forEach((target: any) => {
       const id = getPersistedUuid(target?.id || target?.target_id || target?.targetId || target?.aba_target_id || target?.abaTargetId);
       if (!id || matches.has(id)) return;
       const targetNameKey = normalizePeiMaintenanceMatchKey(getPeiMaintenanceMatchName(target));
