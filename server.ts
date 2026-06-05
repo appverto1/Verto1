@@ -27616,6 +27616,10 @@ async function startServer() {
     scheduleMode?: unknown;
     dueDate?: unknown;
     appointmentId?: unknown;
+    targetName?: unknown;
+    protocolName?: unknown;
+    domainName?: unknown;
+    description?: unknown;
     intervals?: unknown;
     createdBy?: string;
     masteryEvaluationId?: string | null;
@@ -27635,7 +27639,51 @@ async function startServer() {
     }
 
     const now = new Date().toISOString();
-    const target = await fetchTargetForMaintenance({ targetId, patientId, clinicId, organizationId });
+    let target = await fetchTargetForMaintenance({ targetId, patientId, clinicId, organizationId });
+    if (!target?.id) {
+      const peiTargets = await getPatientPeiTargets(patientId, clinicId, organizationId, { role: 'owner' });
+      const materialized = await materializePeiTargetsForMaintenance({
+        patientId,
+        clinicId,
+        organizationId,
+        sessionUser: { role: 'owner', id: createdBy },
+        peiTargets,
+        existingTargets: []
+      });
+      target = materialized.targets.find((item: any) => sanitizeString(item?.id, 180) === targetId) ||
+        await fetchTargetForMaintenance({ targetId, patientId, clinicId, organizationId });
+    }
+    if (!target?.id && sanitizeString(params.targetName, 240)) {
+      const fallbackTarget = cleanObject({
+        id: targetId,
+        organization_id: organizationId,
+        clinic_id: clinicId,
+        patient_id: patientId,
+        program_id: null,
+        name: sanitizeString(params.targetName, 240),
+        description: sanitizeString(params.description || params.targetName, 500) || sanitizeString(params.targetName, 240),
+        target_type: 'dtt',
+        phase: 'mastered',
+        protocol_id: null,
+        protocol_title: sanitizeString(params.protocolName, 240) || 'Sem protocolo informado',
+        domain_id: null,
+        domain_name: sanitizeString(params.domainName, 240) || 'Sem domínio informado',
+        mastery_criteria: sanitizeClinicalPayload({
+          source: 'maintenance_schedule_target_fallback',
+          materializedForMaintenance: true
+        }),
+        clinical_status: 'MASTERED',
+        created_by: createdBy,
+        created_at: now,
+        updated_at: now
+      });
+      const writeTargetResult = await writeAbaRowWithSchemaFallback('aba_targets', fallbackTarget, 'upsert');
+      if (writeTargetResult.error) {
+        if (!hasMissingFinancialSchema(writeTargetResult.error) && !isMissingRelationError(writeTargetResult.error)) throw writeTargetResult.error;
+      } else {
+        target = { ...fallbackTarget, id: sanitizeString((writeTargetResult.data as any)?.id, 180) || targetId };
+      }
+    }
     if (!target?.id) {
       return { ok: false, status: 404, error: 'Habilidade não encontrada.' };
     }
@@ -30739,6 +30787,10 @@ async function startServer() {
         scheduleMode: scheduleModeFromPayload,
         dueDate,
         appointmentId: appointmentIdFromPayload,
+        targetName: req.body?.targetName || req.body?.target_name || req.body?.name,
+        protocolName: req.body?.protocolName || req.body?.protocol_name || req.body?.protocol,
+        domainName: req.body?.domainName || req.body?.domain_name || req.body?.domain,
+        description: req.body?.description,
         intervals: req.body?.intervals || req.body?.maintenanceDays || req.body?.maintenance_days,
         createdBy: sanitizeString(req.session.user?.id, 120),
         masteryEvaluationId: req.body?.masteryEvaluationId || req.body?.mastery_evaluation_id,

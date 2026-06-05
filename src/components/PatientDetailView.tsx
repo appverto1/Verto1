@@ -5210,7 +5210,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     let cancelled = false;
     const shouldLoadAppointments = Boolean(
       peiMaintenanceAssignSchedule ||
-        (peiMaintenanceScheduleRow && peiMaintenanceScheduleMode === 'EXISTING_APPOINTMENT')
+        (peiMaintenanceScheduleRow && ['CUSTOM_DATE', 'EXISTING_APPOINTMENT'].includes(peiMaintenanceScheduleMode))
     );
     if (!shouldLoadAppointments || !patient?.id) return;
     setPeiMaintenanceAppointmentsState({ loading: true, error: '', items: [] });
@@ -5366,6 +5366,22 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       schedule?.rawPayload?.candidateAppointmentId ||
       ''
     ).trim();
+
+  const getPeiMaintenanceAppointmentDateValue = (appointment: any) => {
+    const value =
+      appointment?.scheduled_at ||
+      appointment?.scheduledAt ||
+      appointment?.scheduled_start_at ||
+      appointment?.scheduledStartAt ||
+      appointment?.start_at ||
+      appointment?.startAt ||
+      appointment?.date ||
+      '';
+    const date = new Date(value);
+    if (!Number.isNaN(date.getTime())) return date.toISOString().slice(0, 10);
+    const raw = String(value || '').trim();
+    return /^\d{4}-\d{2}-\d{2}/.test(raw) ? raw.slice(0, 10) : '';
+  };
 
   const runPeiMaintenanceAction = async (key: string, action: () => Promise<any>, successMessage: string) => {
     setPeiMaintenanceActionKey(key);
@@ -6345,15 +6361,60 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               ))}
             </div>
             {peiMaintenanceScheduleMode === 'CUSTOM_DATE' && (
-              <label className={`mt-4 block text-sm font-semibold ${isPanelDark ? 'text-slate-200' : 'text-slate-700'}`}>
-                Data da sondagem
-                <input
-                  type="date"
-                  value={peiMaintenanceScheduleDate}
-                  onChange={(event) => setPeiMaintenanceScheduleDate(event.target.value)}
-                  className={`mt-2 w-full rounded-xl border px-3 py-3 text-sm outline-none ${isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-100 bg-slate-50 text-slate-700'}`}
-                />
-              </label>
+              <div className="mt-4">
+                <label className={`block text-sm font-semibold ${isPanelDark ? 'text-slate-200' : 'text-slate-700'}`}>
+                  Data da sondagem
+                  <input
+                    type="date"
+                    value={peiMaintenanceScheduleDate}
+                    onChange={(event) => setPeiMaintenanceScheduleDate(event.target.value)}
+                    className={`mt-2 w-full rounded-xl border px-3 py-3 text-sm outline-none ${isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-100 bg-slate-50 text-slate-700'}`}
+                  />
+                </label>
+                {peiMaintenanceAppointmentsState.loading ? (
+                  <p className={`mt-3 rounded-2xl border p-3 text-sm ${isPanelDark ? 'border-slate-700 bg-slate-900/40 text-slate-300' : 'border-slate-100 bg-slate-50 text-slate-500'}`}>
+                    Carregando próximas consultas...
+                  </p>
+                ) : peiMaintenanceAppointmentsState.items.length > 0 ? (
+                  <div className="mt-3">
+                    <p className={`text-xs font-bold uppercase tracking-widest ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>Dias com consulta</p>
+                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                      {peiMaintenanceAppointmentsState.items.map((appointment: any) => {
+                        const appointmentDate = getPeiMaintenanceAppointmentDateValue(appointment);
+                        const selected = Boolean(appointmentDate && peiMaintenanceScheduleDate === appointmentDate);
+                        return (
+                          <button
+                            key={`${appointment?.id || appointmentDate || formatPeiMaintenanceAppointmentLabel(appointment)}-date`}
+                            type="button"
+                            disabled={!appointmentDate}
+                            onClick={() => {
+                              setPeiMaintenanceScheduleDate(appointmentDate);
+                              setSelectedPeiMaintenanceAppointmentId('');
+                            }}
+                            className={`rounded-2xl border p-3 text-left text-sm transition-all ${
+                              selected
+                                ? 'border-[#7a32fc] bg-[#7a32fc]/10 text-[#7a32fc]'
+                                : isPanelDark
+                                  ? 'border-slate-700 bg-slate-900/50 text-slate-200 hover:bg-slate-800'
+                                  : 'border-slate-100 bg-slate-50 text-slate-700 hover:bg-white'
+                            } disabled:opacity-60`}
+                          >
+                            <span className="font-semibold">{appointmentDate ? formatAbaDateTime(appointmentDate) : 'Data indisponível'}</span>
+                            <span className="mt-1 block text-xs opacity-80">{formatPeiMaintenanceAppointmentLabel(appointment)}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : (
+                  <p className={`mt-3 rounded-2xl border p-3 text-sm ${isPanelDark ? 'border-amber-400/20 bg-amber-500/10 text-amber-100' : 'border-amber-100 bg-amber-50 text-amber-800'}`}>
+                    Este paciente não possui próximas consultas agendadas.
+                  </p>
+                )}
+                {peiMaintenanceAppointmentsState.error && (
+                  <p className="mt-3 text-sm font-semibold text-amber-700">{peiMaintenanceAppointmentsState.error}</p>
+                )}
+              </div>
             )}
             {peiMaintenanceScheduleMode === 'EXISTING_APPOINTMENT' && (
               <div className="mt-4">

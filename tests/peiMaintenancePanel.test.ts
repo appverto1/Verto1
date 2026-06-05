@@ -359,11 +359,16 @@ test('modal etapa 2 mostra data, proxima consulta e aguardar futura consulta', (
   assert.match(modalCode, /Escolher data/);
   assert.match(modalCode, /Escolher próxima consulta/);
   assert.match(modalCode, /Aguardar futura consulta/);
+  assert.match(modalCode, /Dias com consulta/);
   assert.match(modalCode, /Carregando próximas consultas/);
   assert.match(modalCode, /Este paciente não possui próximas consultas agendadas/);
+  assert.match(modalCode, /getPeiMaintenanceAppointmentDateValue\(appointment\)/);
+  assert.match(modalCode, /setPeiMaintenanceScheduleDate\(appointmentDate\)/);
+  assert.match(modalCode, /setSelectedPeiMaintenanceAppointmentId\(''\)/);
   assert.match(modalCode, /setSelectedPeiMaintenanceAppointmentId\(appointmentId\)/);
   assert.match(modalCode, /appointment\?\.unavailableReason/);
   assert.match(modalCode, /Salvar agendamento/);
+  assert.match(patientDetailCode, /\['CUSTOM_DATE', 'EXISTING_APPOINTMENT'\]\.includes\(peiMaintenanceScheduleMode\)/);
   assert.doesNotMatch(modalCode, /Escolher sessão existente|Escolher data específica|Plano de manutenção|Atribuir a uma sessão|Aguardar próxima sessão/);
 
   const openStart = patientDetailCode.indexOf('const buildPeiMaintenanceScheduleSelection');
@@ -547,12 +552,16 @@ test('endpoint de agendamento aceita DATE APPOINTMENT ou NEXT_SESSION com upsert
   assert.match(endpointCode, /targetId/);
   assert.match(endpointCode, /dueDate/);
   assert.match(endpointCode, /appointmentId/);
+  assert.match(endpointCode, /targetName: req\.body\?\.targetName \|\| req\.body\?\.target_name \|\| req\.body\?\.name/);
   assert.match(endpointCode, /candidateAppointmentId/);
   assert.doesNotMatch(endpointCode, /scheduleId|select\('\*'\)|\/api\/aba\/sessions|saveAbaSession|createAbaSession/);
 
   const helperStart = serverCode.indexOf('const createMaintenanceScheduleForTarget = async');
   const helperEnd = serverCode.indexOf('const fetchNextMaintenanceProbeForTarget', helperStart);
   const helperCode = serverCode.slice(helperStart, helperEnd);
+  assert.match(helperCode, /materializePeiTargetsForMaintenance/);
+  assert.match(helperCode, /maintenance_schedule_target_fallback/);
+  assert.match(helperCode, /writeAbaRowWithSchemaFallback\('aba_targets', fallbackTarget, 'upsert'\)/);
   assert.match(helperCode, /\.eq\('organization_id', organizationId\)[\s\S]*?\.eq\('patient_id', patientId\)[\s\S]*?\.eq\('target_id', targetId\)[\s\S]*?\.in\('status', ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES\)/m);
   assert.match(helperCode, /MAINTENANCE_SCHEDULE_CREATED/);
   assert.match(helperCode, /MAINTENANCE_SCHEDULE_UPDATED/);
