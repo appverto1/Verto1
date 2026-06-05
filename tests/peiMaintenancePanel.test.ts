@@ -310,7 +310,31 @@ test('modal de atribuicao lista proximas consultas com dados clinicos sem UUID v
   const futureEndpointCode = serverCode.slice(futureEndpointStart, futureEndpointEnd);
   assert.match(futureEndpointCode, /canLinkMaintenance/);
   assert.match(futureEndpointCode, /unavailableReason/);
+  assert.match(futureEndpointCode, /appointmentStatus/);
+  assert.match(futureEndpointCode, /statusLabel: getMaintenanceAppointmentStatusLabel\(appointment\)/);
+  assert.match(futureEndpointCode, /recurrence_instance_status/);
+  assert.match(futureEndpointCode, /recurrenceInstanceStatus/);
+  assert.doesNotMatch(futureEndpointCode, /status: appointment\.status \|\| 'scheduled'/);
   assert.match(futureEndpointCode, /Esta recorrência ainda não foi salva como consulta real/);
+});
+
+test('modal de manutencao mostra status real da consulta sem fallback para confirmada', () => {
+  const helperStart = patientDetailCode.indexOf('const getPeiMaintenanceAppointmentStatusInfo = (appointment: any) => {');
+  const helperEnd = patientDetailCode.indexOf('const getPeiMaintenanceAppointmentsByDate', helperStart);
+  assert.notEqual(helperStart, -1);
+  const helperCode = patientDetailCode.slice(helperStart, helperEnd);
+  assert.match(helperCode, /appointment\?\.recurrence_instance_status/);
+  assert.match(helperCode, /appointment\?\.appointment_status/);
+  assert.match(helperCode, /normalizedStatus === 'SCHEDULED'/);
+  assert.match(helperCode, /label: 'Agendada'/);
+  assert.match(helperCode, /label: 'Confirmada'/);
+  assert.match(helperCode, /label: 'Remarcada'/);
+  assert.match(helperCode, /label: 'Cancelada'/);
+  assert.match(helperCode, /label: 'Realizada'/);
+  assert.match(helperCode, /label: 'Status nÃ£o informado'|label: 'Status não informado'/);
+  assert.match(helperCode, /bg-sky-500/);
+  assert.doesNotMatch(helperCode, /String\(appointment\?\.status \|\| appointment\?\.appointmentStatus \|\| appointment\?\.statusLabel \|\| ''\)\.toLowerCase\(\)/);
+  assert.ok(helperCode.lastIndexOf("label: 'Status") > helperCode.lastIndexOf("label: 'Confirmada'"));
 });
 
 test('subaba manutencao etapa 2 renderiza botao de agendamento simples', () => {

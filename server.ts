@@ -5347,7 +5347,7 @@ function resetRescheduledAppointmentsForNewReminderCycle(nextAppointments: any[]
 function getClinicStateAppointmentStatusBlocksConflict(appointment: any) {
   const normalized = sanitizeString(appointment?.status || 'scheduled', 40).toLowerCase();
   if (['canceled', 'cancelled', 'cancelada', 'no_show', 'missed', 'deleted', 'archived', 'completed', 'concluida', 'concluido'].includes(normalized)) return false;
-  return ['scheduled', 'agendada', 'pending', 'confirmed', 'confirmada', 'in_progress'].includes(normalized);
+  return ['scheduled', 'agendada', 'pending', 'confirmed', 'confirmada', 'in_progress', 'reschedule', 'rescheduled', 'remarcada', 'remarcado'].includes(normalized);
 }
 
 function getClinicStateAppointmentDurationMinutes(appointment: any, specialtySettings: Record<string, any> = {}) {
@@ -22409,17 +22409,24 @@ async function startServer() {
     'clinic_id',
     'patient_id',
     'therapist_id',
+    'professional_id',
     'therapist_name',
+    'professional_name',
     'scheduled_at',
     'scheduled_start_at',
     'scheduled_end_at',
     'scheduled_duration_minutes',
+    'duration_minutes',
     'service_type',
     'approach',
     'room_id',
     'room_name',
     'location_type',
     'status',
+    'appointment_status',
+    'recurrence_instance_status',
+    'is_recurring',
+    'recurrence_id',
     'is_active',
     'deleted_at'
   ];
@@ -27437,6 +27444,52 @@ async function startServer() {
     }
   });
 
+  const normalizeMaintenanceAppointmentStatusKey = (value: unknown) =>
+    sanitizeString(value, 80)
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toUpperCase()
+      .replace(/[^A-Z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '');
+
+  const readMaintenanceAppointmentStatusValue = (appointment: any) => sanitizeString(
+    appointment?.recurrence_instance_status ||
+      appointment?.recurrenceInstanceStatus ||
+      appointment?.occurrence_status ||
+      appointment?.occurrenceStatus ||
+      appointment?.status ||
+      appointment?.appointment_status ||
+      appointment?.appointmentStatus,
+    80
+  );
+
+  const getMaintenanceAppointmentResponseStatus = (appointment: any) =>
+    readMaintenanceAppointmentStatusValue(appointment) || 'scheduled';
+
+  const getMaintenanceAppointmentStatusLabel = (appointment: any) => {
+    const rawStatus = readMaintenanceAppointmentStatusValue(appointment);
+    if (!rawStatus) return 'Agendada';
+    const status = normalizeMaintenanceAppointmentStatusKey(rawStatus);
+    if (status.includes('CONFIRM')) return 'Confirmada';
+    if (status.includes('PENDING') || status === 'PENDENTE') return 'Pendente';
+    if (status.includes('RESCHEDULE') || status.includes('REMARC')) return 'Remarcada';
+    if (status.includes('CANCEL')) return 'Cancelada';
+    if (status.includes('PROGRESS') || status.includes('ANDAMENTO')) return 'Em andamento';
+    if (status.includes('COMPLET') || status.includes('CONCLUID') || status.includes('REALIZ')) return 'Realizada';
+    if (status.includes('NO_SHOW') || status.includes('MISSED') || status.includes('FALTA')) return 'Falta';
+    if (status === 'SCHEDULED' || status === 'AGENDADA' || status === 'AGENDADO') return 'Agendada';
+    return 'Status não informado';
+  };
+
+  const isMaintenanceAppointmentLinkableStatus = (appointment: any) => {
+    const status = normalizeMaintenanceAppointmentStatusKey(getMaintenanceAppointmentResponseStatus(appointment));
+    if (status.includes('CANCEL')) return false;
+    if (status.includes('DELET') || status.includes('ARCHIV')) return false;
+    if (status.includes('COMPLET') || status.includes('CONCLUID') || status.includes('REALIZ')) return false;
+    if (status.includes('NO_SHOW') || status.includes('MISSED') || status.includes('FALTA')) return false;
+    return true;
+  };
+
   const fetchFutureAppointmentsForMaintenance = async (params: {
     patientId: string;
     clinicId: string;
@@ -27451,6 +27504,7 @@ async function startServer() {
       for (const row of rows) {
         const id = sanitizeString(row?.id || row?.appointment_id || row?.appointmentId, 180);
         if (!id) continue;
+        if (!isMaintenanceAppointmentLinkableStatus(row)) continue;
         if (!byId.has(id)) byId.set(id, row);
       }
       return Array.from(byId.values())
@@ -27484,7 +27538,11 @@ async function startServer() {
             room_id: sanitizeString(appointment?.room_id || appointment?.roomId || appointment?.room, 180) || null,
             room_name: sanitizeString(appointment?.room_name || appointment?.roomName || appointment?.roomDisplayName, 180) || null,
             location_type: sanitizeString(appointment?.location_type || appointment?.locationType || appointment?.location, 120) || null,
-            status: normalizeAppointmentStatusForTable(appointment?.status),
+            status: getMaintenanceAppointmentResponseStatus(appointment),
+            appointment_status: sanitizeString(appointment?.appointment_status || appointment?.appointmentStatus, 80) || null,
+            recurrence_instance_status: sanitizeString(appointment?.recurrence_instance_status || appointment?.recurrenceInstanceStatus, 80) || null,
+            is_recurring: appointment?.is_recurring ?? appointment?.isRecurring ?? null,
+            recurrence_id: sanitizeString(appointment?.recurrence_id || appointment?.recurrenceId, 180) || null,
             source: 'clinic_state'
           });
         })
@@ -30914,6 +30972,8 @@ async function startServer() {
         const totalProbeCount = typeof countInfo === 'object'
           ? Number(countInfo.total || 0)
           : Number(countInfo || 0);
+        const appointmentStatus = getMaintenanceAppointmentResponseStatus(appointment);
+        const rawAppointmentStatus = sanitizeString(appointment.appointment_status || appointment.appointmentStatus, 80) || null;
         return {
           id,
           appointmentId: id,
@@ -30921,12 +30981,27 @@ async function startServer() {
           unavailableReason,
           scheduled_at: appointment.scheduled_at,
           scheduledAt: appointment.scheduled_at,
-          status: appointment.status || 'scheduled',
+          scheduled_start_at: appointment.scheduled_start_at || appointment.scheduled_at,
+          scheduledStartAt: appointment.scheduled_start_at || appointment.scheduled_at,
+          scheduled_end_at: appointment.scheduled_end_at || null,
+          scheduledEndAt: appointment.scheduled_end_at || null,
+          status: appointmentStatus,
+          appointment_status: rawAppointmentStatus || appointmentStatus,
+          appointmentStatus,
+          recurrence_instance_status: sanitizeString(appointment.recurrence_instance_status || appointment.recurrenceInstanceStatus, 80) || null,
+          recurrenceInstanceStatus: sanitizeString(appointment.recurrence_instance_status || appointment.recurrenceInstanceStatus, 80) || null,
+          statusLabel: getMaintenanceAppointmentStatusLabel(appointment),
+          is_recurring: appointment.is_recurring ?? appointment.isRecurring ?? null,
+          isRecurring: appointment.is_recurring ?? appointment.isRecurring ?? null,
+          recurrence_id: sanitizeString(appointment.recurrence_id || appointment.recurrenceId, 180) || null,
+          recurrenceId: sanitizeString(appointment.recurrence_id || appointment.recurrenceId, 180) || null,
           type: sanitizeString(appointment.service_type || appointment.approach, 120) || 'Sessao',
           durationMinutes: Number(appointment.scheduled_duration_minutes || appointment.duration_minutes || 0) || null,
           duration_minutes: Number(appointment.scheduled_duration_minutes || appointment.duration_minutes || 0) || null,
           therapistName: sanitizeString(appointment.therapist_name, 180) || 'Equipe',
+          professionalName: sanitizeString(appointment.professional_name || appointment.therapist_name, 180) || 'Equipe',
           location: sanitizeString(appointment.room_name || appointment.location_type, 180) || 'Local a definir',
+          roomName: sanitizeString(appointment.room_name, 180) || null,
           maintenanceProbeCount: totalProbeCount,
           maintenance_probe_count: totalProbeCount
         };

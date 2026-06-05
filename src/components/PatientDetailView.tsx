@@ -5524,25 +5524,73 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   };
 
   const getPeiMaintenanceAppointmentStatusInfo = (appointment: any) => {
-    const status = String(appointment?.status || appointment?.appointmentStatus || appointment?.statusLabel || '').toLowerCase();
-    if (status.includes('cancel') || status.includes('cancelad')) {
+    const rawStatus = String(
+      appointment?.recurrence_instance_status ||
+        appointment?.recurrenceInstanceStatus ||
+        appointment?.status ||
+        appointment?.appointment_status ||
+        appointment?.appointmentStatus ||
+        ''
+    ).trim();
+    const normalizedStatus = rawStatus
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toUpperCase()
+      .replace(/[^A-Z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '');
+    if (!normalizedStatus || normalizedStatus === 'SCHEDULED' || normalizedStatus === 'AGENDADA' || normalizedStatus === 'AGENDADO') {
+      return {
+        label: 'Agendada',
+        badgeClass: isPanelDark ? 'bg-sky-500/15 text-sky-100 border-sky-300/30' : 'bg-sky-50 text-sky-700 border-sky-200',
+        dotClass: 'bg-sky-500'
+      };
+    }
+    if (normalizedStatus.includes('CONFIRM')) {
+      return {
+        label: 'Confirmada',
+        badgeClass: isPanelDark ? 'bg-emerald-500/15 text-emerald-100 border-emerald-300/30' : 'bg-emerald-50 text-emerald-700 border-emerald-200',
+        dotClass: 'bg-emerald-500'
+      };
+    }
+    if (normalizedStatus.includes('RESCHEDULE') || normalizedStatus.includes('REMARC')) {
+      return {
+        label: 'Remarcada',
+        badgeClass: isPanelDark ? 'bg-amber-500/15 text-amber-100 border-amber-300/30' : 'bg-amber-50 text-amber-700 border-amber-200',
+        dotClass: 'bg-amber-500'
+      };
+    }
+    if (normalizedStatus.includes('CANCEL')) {
       return {
         label: 'Cancelada',
         badgeClass: isPanelDark ? 'bg-rose-500/15 text-rose-100 border-rose-300/30' : 'bg-rose-50 text-rose-700 border-rose-200',
         dotClass: 'bg-rose-500'
       };
     }
-    if (status.includes('pend') || status.includes('aguard')) {
+    if (normalizedStatus.includes('PENDING') || normalizedStatus === 'PENDENTE' || normalizedStatus.includes('AGUARD')) {
       return {
         label: 'Pendente',
         badgeClass: isPanelDark ? 'bg-amber-500/15 text-amber-100 border-amber-300/30' : 'bg-amber-50 text-amber-700 border-amber-200',
         dotClass: 'bg-amber-500'
       };
     }
+    if (normalizedStatus.includes('PROGRESS') || normalizedStatus.includes('ANDAMENTO')) {
+      return {
+        label: 'Em andamento',
+        badgeClass: isPanelDark ? 'bg-indigo-500/15 text-indigo-100 border-indigo-300/30' : 'bg-indigo-50 text-indigo-700 border-indigo-200',
+        dotClass: 'bg-indigo-500'
+      };
+    }
+    if (normalizedStatus.includes('COMPLET') || normalizedStatus.includes('CONCLUID') || normalizedStatus.includes('REALIZ')) {
+      return {
+        label: 'Realizada',
+        badgeClass: isPanelDark ? 'bg-slate-500/15 text-slate-100 border-slate-300/30' : 'bg-slate-50 text-slate-700 border-slate-200',
+        dotClass: 'bg-slate-500'
+      };
+    }
     return {
-      label: 'Confirmada',
-      badgeClass: isPanelDark ? 'bg-emerald-500/15 text-emerald-100 border-emerald-300/30' : 'bg-emerald-50 text-emerald-700 border-emerald-200',
-      dotClass: 'bg-emerald-500'
+      label: 'Status não informado',
+      badgeClass: isPanelDark ? 'bg-slate-500/15 text-slate-100 border-slate-300/30' : 'bg-slate-50 text-slate-700 border-slate-200',
+      dotClass: 'bg-slate-400'
     };
   };
 
@@ -6956,6 +7004,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 {peiMaintenanceAppointmentsState.items.map((appointment: any) => {
                   const appointmentId = getPersistedUuid(appointment?.id);
                   const selected = selectedPeiMaintenanceAppointmentId === appointmentId;
+                  const statusInfo = getPeiMaintenanceAppointmentStatusInfo(appointment);
                   return (
                     <button
                       key={appointmentId || formatPeiMaintenanceAppointmentLabel(appointment)}
@@ -6972,7 +7021,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                       } disabled:opacity-60`}
                     >
                       <p className="text-sm font-semibold">{formatPeiMaintenanceAppointmentLabel(appointment)}</p>
-                      <p className="mt-1 text-xs opacity-80">{safeDisplayValue(appointment?.status, 'Agendada')}</p>
+                      <p className="mt-1 text-xs opacity-80">{statusInfo.label}</p>
                     </button>
                   );
                 })}
