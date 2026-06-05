@@ -17460,6 +17460,7 @@ async function startServer() {
           const progressPercent = Number(goal?.progress ?? goal?.progressPercent ?? goal?.progress_percent ?? null);
           const clinicalStatus = sanitizeString(goal?.clinical_status || goal?.clinicalStatus || goal?.status || goal?.phase, 80) || null;
           const masteryStatus = sanitizeString(goal?.mastery_status || goal?.masteryStatus || goal?.evaluation_status || goal?.evaluationStatus, 80) || null;
+          const description = sanitizeString(goal?.description || goal?.objective || goal?.criteria, 500) || null;
           return cleanObject({
             source: 'patient_pei',
             peiGoalIndex: index,
@@ -17470,6 +17471,7 @@ async function startServer() {
             targetName,
             protocolName,
             domainName,
+            description,
             clinicalStatus,
             masteryStatus,
             progressPercent: Number.isFinite(progressPercent) ? Math.max(0, Math.min(100, Math.round(progressPercent))) : null,
@@ -22956,6 +22958,176 @@ async function startServer() {
       return { data: null, error: result.error };
     }
     return { data: null, error: { message: 'Payload ABA vazio após fallback de schema.' } };
+  };
+
+  const stableAbaUuidFromParts = (scope: string, parts: any[] = []) => {
+    const digest = crypto
+      .createHash('sha1')
+      .update([scope, ...parts].map((part) => sanitizeString(part, 500)).join('|'))
+      .digest();
+    const bytes = Buffer.from(digest.subarray(0, 16));
+    bytes[6] = (bytes[6] & 0x0f) | 0x50;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = bytes.toString('hex');
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+  };
+
+  const materializePeiTargetsForMaintenance = async (params: {
+    patientId: string;
+    clinicId: string;
+    organizationId: string;
+    sessionUser: any;
+    peiTargets: any[];
+    existingTargets: any[];
+  }) => {
+    const patientId = sanitizeString(params.patientId, 120);
+    const clinicId = sanitizeString(params.clinicId, 120);
+    const organizationId = sanitizeString(params.organizationId || clinicId, 120);
+    const existingTargets = Array.isArray(params.existingTargets) ? params.existingTargets : [];
+    const peiTargets = Array.isArray(params.peiTargets) ? params.peiTargets : [];
+    const targetById = new Map<string, any>();
+    const targetByComposite = new Map<string, any>();
+    const duplicateComposite = new Set<string>();
+    const targetByName = new Map<string, any>();
+    const duplicateName = new Set<string>();
+    const registerTargetMatch = (map: Map<string, any>, duplicates: Set<string>, key: string, target: any) => {
+      if (!key) return;
+      if (map.has(key)) {
+        duplicates.add(key);
+        map.delete(key);
+        return;
+      }
+      if (!duplicates.has(key)) map.set(key, target);
+    };
+    existingTargets.forEach((target: any) => {
+      const id = sanitizeString(target?.id || target?.target_id || target?.targetId, 180);
+      if (!isUuid(id) || targetById.has(id)) return;
+      targetById.set(id, target);
+      const targetName = sanitizeString(target?.name || target?.description || target?.targetName || target?.target_name, 240);
+      const protocolName = sanitizeString(target?.protocol_title || target?.protocolTitle || target?.protocolName || target?.protocol_name, 240);
+      const domainName = sanitizeString(target?.domain_name || target?.domainName, 240);
+      registerTargetMatch(targetByComposite, duplicateComposite, [targetName, protocolName, domainName].map(normalizePeiTargetMatchKey).filter(Boolean).join('|'), target);
+      registerTargetMatch(targetByName, duplicateName, normalizePeiTargetMatchKey(targetName), target);
+    });
+    const materializedTargets: any[] = [];
+    const hydratedPeiTargets: any[] = [];
+    const resolveSourceStatus = (source: any) => {
+      const status = sanitizeString(source?.clinicalStatus || source?.clinical_status || source?.status || source?.phase || source?.masteryStatus || source?.mastery_status, 80).toUpperCase();
+      if (['MAINTENANCE', 'MAINTAINED'].includes(status)) return { clinicalStatus: 'MAINTENANCE', phase: 'maintenance' };
+      return { clinicalStatus: 'MASTERED', phase: 'mastered' };
+    };
+    for (const peiTarget of peiTargets) {
+      if (!peiTarget?.eligibleForMaintenance) {
+        hydratedPeiTargets.push(peiTarget);
+        continue;
+      }
+      const targetName = sanitizeString(peiTarget?.targetName, 240);
+      const protocolName = sanitizeString(peiTarget?.protocolName, 240) || 'Sem protocolo informado';
+      const domainName = sanitizeString(peiTarget?.domainName, 240) || 'Sem domínio informado';
+      const compositeKey = sanitizeString(peiTarget?.matchCompositeKey, 500) ||
+        [targetName, protocolName, domainName].map(normalizePeiTargetMatchKey).filter(Boolean).join('|');
+      const nameKey = sanitizeString(peiTarget?.matchNameKey, 280) || normalizePeiTargetMatchKey(targetName);
+      const explicitTargetId = sanitizeString(peiTarget?.targetId || peiTarget?.target_id || peiTarget?.abaTargetId || peiTarget?.aba_target_id, 180);
+      const stableTargetId = stableAbaUuidFromParts('patient-pei-maintenance-target', [
+        organizationId,
+        patientId,
+        peiTarget?.peiGoalId || peiTarget?.goalId || peiTarget?.goal_id || '',
+        peiTarget?.skillId || peiTarget?.skill_id || '',
+        peiTarget?.localTargetRef || '',
+        peiTarget?.peiGoalIndex ?? '',
+        compositeKey
+      ]);
+      const matchedTarget =
+        (isUuid(explicitTargetId) ? targetById.get(explicitTargetId) : null) ||
+        targetById.get(stableTargetId) ||
+        (compositeKey && !duplicateComposite.has(compositeKey) ? targetByComposite.get(compositeKey) : null) ||
+        (nameKey && !duplicateName.has(nameKey) ? targetByName.get(nameKey) : null) ||
+        null;
+      if (matchedTarget?.id) {
+        const matchedId = sanitizeString(matchedTarget.id, 180);
+        hydratedPeiTargets.push(cleanObject({
+          ...peiTarget,
+          targetId: matchedId,
+          target_id: matchedId,
+          target: matchedTarget,
+          hasRealTarget: true,
+          needsTargetReview: false,
+          canScheduleMaintenance: true,
+          canWaitNextSession: true,
+          canAssignAppointment: true,
+          canReviewLink: false,
+          protocolName: protocolName || sanitizeString(matchedTarget?.protocol_title, 240) || 'Sem protocolo informado',
+          domainName: domainName || sanitizeString(matchedTarget?.domain_name, 240) || 'Sem domínio informado'
+        }));
+        continue;
+      }
+      if (!targetName || !isUuid(patientId) || !clinicId) {
+        hydratedPeiTargets.push(peiTarget);
+        continue;
+      }
+      const targetId = isUuid(explicitTargetId) ? explicitTargetId : stableTargetId;
+      const status = resolveSourceStatus(peiTarget);
+      const now = new Date().toISOString();
+      const payload = cleanObject({
+        id: targetId,
+        organization_id: organizationId,
+        clinic_id: clinicId,
+        patient_id: patientId,
+        program_id: null,
+        name: targetName,
+        description: sanitizeString(peiTarget?.description || targetName, 500) || targetName,
+        target_type: 'dtt',
+        phase: status.phase,
+        protocol_id: null,
+        protocol_title: protocolName,
+        domain_id: null,
+        domain_name: domainName,
+        mastery_criteria: sanitizeClinicalPayload({
+          source: 'patient_pei_materialized',
+          peiGoalId: sanitizeString(peiTarget?.peiGoalId, 180) || null,
+          skillId: sanitizeString(peiTarget?.skillId, 180) || null,
+          peiGoalIndex: Number.isFinite(Number(peiTarget?.peiGoalIndex)) ? Number(peiTarget.peiGoalIndex) : null,
+          materializedForMaintenance: true
+        }),
+        clinical_status: status.clinicalStatus,
+        created_by: sanitizeString(params.sessionUser?.id || params.sessionUser?.user_id || params.sessionUser?.email, 120) || null,
+        updated_at: now
+      });
+      const writeResult = await writeAbaRowWithSchemaFallback('aba_targets', payload, 'upsert');
+      if (writeResult.error) {
+        if (hasMissingFinancialSchema(writeResult.error) || isMissingRelationError(writeResult.error)) {
+          hydratedPeiTargets.push(peiTarget);
+          continue;
+        }
+        throw writeResult.error;
+      }
+      const target = cleanObject({
+        ...payload,
+        id: sanitizeString((writeResult.data as any)?.id, 180) || targetId,
+        target_id: sanitizeString((writeResult.data as any)?.id, 180) || targetId,
+        targetId: sanitizeString((writeResult.data as any)?.id, 180) || targetId,
+        created_at: now
+      });
+      targetById.set(target.id, target);
+      materializedTargets.push(target);
+      hydratedPeiTargets.push(cleanObject({
+        ...peiTarget,
+        targetId: target.id,
+        target_id: target.id,
+        target,
+        hasRealTarget: true,
+        needsTargetReview: false,
+        canScheduleMaintenance: true,
+        canWaitNextSession: true,
+        canAssignAppointment: true,
+        canReviewLink: false
+      }));
+    }
+    return {
+      targets: Array.from(targetById.values()),
+      peiTargets: hydratedPeiTargets,
+      materializedTargets
+    };
   };
 
   const abaPlanningHash = (parts: any[]) => crypto
@@ -29608,8 +29780,18 @@ async function startServer() {
           throw targetResult.error;
         }
 
-        const allTargets = Array.isArray((targetResult as any).data) ? (targetResult as any).data : [];
-        const peiTargets = await getPatientPeiTargets(patientId, clinicId, organizationId, req.session.user);
+        let allTargets = Array.isArray((targetResult as any).data) ? (targetResult as any).data : [];
+        let peiTargets = await getPatientPeiTargets(patientId, clinicId, organizationId, req.session.user);
+        const materializedPeiTargets = await materializePeiTargetsForMaintenance({
+          patientId,
+          clinicId,
+          organizationId,
+          sessionUser: req.session.user,
+          peiTargets,
+          existingTargets: allTargets
+        });
+        allTargets = materializedPeiTargets.targets;
+        peiTargets = materializedPeiTargets.peiTargets;
         const targetById = new Map<string, any>();
         const targetByComposite = new Map<string, any>();
         const duplicateComposite = new Set<string>();
@@ -29925,8 +30107,18 @@ async function startServer() {
         throw firstError;
       }
       const enrichedSchedules = await enrichMaintenanceRowsWithTargetDisplay((scheduleResult as any).data || [], clinicId, organizationId, req.session.user);
-      const allTargets = Array.isArray((targetResult as any).data) ? (targetResult as any).data : [];
-      const peiTargets = await getPatientPeiTargets(patientId, clinicId, organizationId, req.session.user);
+      let allTargets = Array.isArray((targetResult as any).data) ? (targetResult as any).data : [];
+      let peiTargets = await getPatientPeiTargets(patientId, clinicId, organizationId, req.session.user);
+      const materializedPeiTargets = await materializePeiTargetsForMaintenance({
+        patientId,
+        clinicId,
+        organizationId,
+        sessionUser: req.session.user,
+        peiTargets,
+        existingTargets: allTargets
+      });
+      allTargets = materializedPeiTargets.targets;
+      peiTargets = materializedPeiTargets.peiTargets;
       const probeResults = Array.isArray((probeResult as any).data) ? (probeResult as any).data : [];
       const alerts = Array.isArray((alertResult as any).data) ? (alertResult as any).data : [];
       const masteryEvaluations = Array.isArray((masteryResult as any).data) ? (masteryResult as any).data : [];
@@ -30378,7 +30570,18 @@ async function startServer() {
         if (hasMissingFinancialSchema(error)) return res.json({ success: true, data: [] });
         throw error;
       }
-      const rows = (Array.isArray(data) ? data : [])
+      let targets = Array.isArray(data) ? data : [];
+      const peiTargets = await getPatientPeiTargets(patientId, clinicId, organizationId, req.session.user);
+      const materializedPeiTargets = await materializePeiTargetsForMaintenance({
+        patientId,
+        clinicId,
+        organizationId,
+        sessionUser: req.session.user,
+        peiTargets,
+        existingTargets: targets
+      });
+      targets = materializedPeiTargets.targets;
+      const rows = targets
         .filter((target: any) => isUuid(sanitizeString(target?.id, 180)))
         .map((target: any) => cleanObject({
           id: sanitizeString(target.id, 180),

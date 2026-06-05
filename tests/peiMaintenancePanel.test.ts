@@ -490,6 +490,9 @@ test('backend da etapa 2 usa PEI targets e schedules ativos por target em lote',
   const stepTwoRoute = serverCode.slice(routeStart, legacyStart);
   assert.match(stepTwoRoute, /checkPatientAccess/);
   assert.match(stepTwoRoute, /getPatientPeiTargets/);
+  assert.match(stepTwoRoute, /materializePeiTargetsForMaintenance/);
+  assert.match(stepTwoRoute, /allTargets = materializedPeiTargets\.targets/);
+  assert.match(stepTwoRoute, /peiTargets = materializedPeiTargets\.peiTargets/);
   assert.match(stepTwoRoute, /\.from\('aba_targets'\)[\s\S]*?\.select\(ABA_TARGET_RECOMMENDATION_SELECT\)/m);
   assert.match(stepTwoRoute, /\.from\('aba_maintenance_schedules'\)[\s\S]*?\.select\(ABA_MAINTENANCE_SCHEDULE_SELECT\)[\s\S]*?\.in\('target_id', eligibleTargetIds\)[\s\S]*?\.in\('status', ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES\)/m);
   assert.match(stepTwoRoute, /source: 'patient_pei_targets_step2'/);
@@ -502,6 +505,24 @@ test('backend da etapa 2 usa PEI targets e schedules ativos por target em lote',
   assert.match(dataServiceCode, /table: 'patient_pei,aba_targets,aba_maintenance_schedules'/);
   assert.doesNotMatch(stepTwoRoute, /aba_maintenance_probe_results|aba_regression_alerts|fetchFutureAppointmentsForMaintenance/);
   assert.doesNotMatch(stepTwoRoute, /select\('\*'\)/);
+});
+
+test('backend materializa target real para habilidade adquirida local do PEI', () => {
+  assert.match(serverCode, /const stableAbaUuidFromParts = \(scope: string, parts: any\[\] = \[\]\) => \{/);
+  assert.match(serverCode, /const materializePeiTargetsForMaintenance = async/);
+  assert.match(serverCode, /stableAbaUuidFromParts\('patient-pei-maintenance-target'/);
+  assert.match(serverCode, /source: 'patient_pei_materialized'/);
+  assert.match(serverCode, /writeAbaRowWithSchemaFallback\('aba_targets', payload, 'upsert'\)/);
+  assert.match(serverCode, /clinical_status: status\.clinicalStatus/);
+  assert.match(serverCode, /hasRealTarget: true/);
+  assert.match(serverCode, /canScheduleMaintenance: true/);
+  const linkableStart = serverCode.indexOf("app.get('/api/patients/:patientId/aba/targets/linkable'");
+  const linkableEnd = serverCode.indexOf("app.get('/api/aba/patients/:patientId/maintenance-schedules'", linkableStart);
+  assert.notEqual(linkableStart, -1);
+  const linkableCode = serverCode.slice(linkableStart, linkableEnd);
+  assert.match(linkableCode, /materializePeiTargetsForMaintenance/);
+  assert.match(linkableCode, /targets = materializedPeiTargets\.targets/);
+  assert.doesNotMatch(linkableCode, /select\('\*'\)/);
 });
 
 test('endpoint de agendamento aceita DATE APPOINTMENT ou NEXT_SESSION com upsert ativo', () => {
