@@ -1,5 +1,5 @@
 ﻿import React, { useState, useMemo, useEffect } from 'react';
-import { ChevronLeft, MessageCircle, FileText, SlidersHorizontal, ChevronDown, Calendar, FileOutput, Download, EyeOff, Share2, Eye, Edit, X, UploadCloud, FileUp, File, Trash2, Activity, Search, Plus, Filter, Target, Zap, Info, BarChart2, CheckCircle2, RotateCcw, Clock, StopCircle } from 'lucide-react';
+import { ChevronLeft, ChevronRight, MessageCircle, FileText, SlidersHorizontal, ChevronDown, Calendar, FileOutput, Download, EyeOff, Share2, Eye, Edit, X, UploadCloud, FileUp, File, Trash2, Activity, Search, Plus, Filter, Target, Zap, Info, BarChart2, CheckCircle2, RotateCcw, Clock, StopCircle } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import { TutorialOverlay } from './Tutorial';
 import { AnamnesisModal } from './Anamnesis';
@@ -346,6 +346,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [peiMaintenanceScheduleRow, setPeiMaintenanceScheduleRow] = useState<any>(null);
   const [peiMaintenanceScheduleMode, setPeiMaintenanceScheduleMode] = useState('NEXT_PATIENT_SESSION');
   const [peiMaintenanceScheduleDate, setPeiMaintenanceScheduleDate] = useState('');
+  const [isPeiMaintenanceCalendarOpen, setIsPeiMaintenanceCalendarOpen] = useState(false);
+  const [peiMaintenanceCalendarMonth, setPeiMaintenanceCalendarMonth] = useState(() => new Date().toISOString().slice(0, 7));
   const [peiMaintenanceReviewRow, setPeiMaintenanceReviewRow] = useState<any>(null);
   const [peiMaintenanceReviewTargetId, setPeiMaintenanceReviewTargetId] = useState('');
   const [peiMaintenanceLinkableTargetsState, setPeiMaintenanceLinkableTargetsState] = useState<any>({ loading: false, error: '', items: [], loadedFor: '' });
@@ -5383,6 +5385,92 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return /^\d{4}-\d{2}-\d{2}/.test(raw) ? raw.slice(0, 10) : '';
   };
 
+  const parsePeiMaintenanceDateValue = (dateValue: string) => {
+    const match = String(dateValue || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return null;
+    const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+    return Number.isNaN(date.getTime()) ? null : date;
+  };
+
+  const formatPeiMaintenanceDateValue = (dateValue: string) => {
+    const date = parsePeiMaintenanceDateValue(dateValue);
+    return date ? date.toLocaleDateString('pt-BR') : 'dd/mm/aaaa';
+  };
+
+  const formatPeiMaintenanceAppointmentDateTimeLabel = (appointment: any) => {
+    const value =
+      appointment?.scheduled_at ||
+      appointment?.scheduledAt ||
+      appointment?.scheduled_start_at ||
+      appointment?.scheduledStartAt ||
+      appointment?.start_at ||
+      appointment?.startAt ||
+      appointment?.date ||
+      '';
+    const raw = String(value || '').trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return formatPeiMaintenanceDateValue(raw);
+    const date = new Date(value);
+    if (!Number.isNaN(date.getTime())) return formatAbaDateTime(value);
+    const dateValue = getPeiMaintenanceAppointmentDateValue(appointment);
+    return dateValue ? formatPeiMaintenanceDateValue(dateValue) : 'Data indisponível';
+  };
+
+  const formatPeiMaintenanceMonthLabel = (monthValue: string) => {
+    const [year, month] = String(monthValue || '').split('-').map(Number);
+    const date = new Date(year || new Date().getFullYear(), (month || new Date().getMonth() + 1) - 1, 1);
+    return date.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+  };
+
+  const addMonthsToPeiMaintenanceCalendar = (delta: number) => {
+    const [year, month] = String(peiMaintenanceCalendarMonth || '').split('-').map(Number);
+    const date = new Date(year || new Date().getFullYear(), (month || new Date().getMonth() + 1) - 1 + delta, 1);
+    setPeiMaintenanceCalendarMonth(date.toISOString().slice(0, 7));
+  };
+
+  const getPeiMaintenanceAppointmentStatusInfo = (appointment: any) => {
+    const status = String(appointment?.status || appointment?.appointmentStatus || appointment?.statusLabel || '').toLowerCase();
+    if (status.includes('cancel') || status.includes('cancelad')) {
+      return {
+        label: 'Cancelada',
+        badgeClass: isPanelDark ? 'bg-rose-500/15 text-rose-100 border-rose-300/30' : 'bg-rose-50 text-rose-700 border-rose-200',
+        dotClass: 'bg-rose-500'
+      };
+    }
+    if (status.includes('pend') || status.includes('aguard')) {
+      return {
+        label: 'Pendente',
+        badgeClass: isPanelDark ? 'bg-amber-500/15 text-amber-100 border-amber-300/30' : 'bg-amber-50 text-amber-700 border-amber-200',
+        dotClass: 'bg-amber-500'
+      };
+    }
+    return {
+      label: 'Confirmada',
+      badgeClass: isPanelDark ? 'bg-emerald-500/15 text-emerald-100 border-emerald-300/30' : 'bg-emerald-50 text-emerald-700 border-emerald-200',
+      dotClass: 'bg-emerald-500'
+    };
+  };
+
+  const getPeiMaintenanceAppointmentsByDate = () => {
+    const byDate = new Map<string, any[]>();
+    peiMaintenanceAppointmentsState.items.forEach((appointment: any) => {
+      const dateValue = getPeiMaintenanceAppointmentDateValue(appointment);
+      if (!dateValue) return;
+      const current = byDate.get(dateValue) || [];
+      current.push(appointment);
+      byDate.set(dateValue, current);
+    });
+    return byDate;
+  };
+
+  const openPeiMaintenanceCalendar = () => {
+    const firstAppointmentDate = peiMaintenanceAppointmentsState.items
+      .map((appointment: any) => getPeiMaintenanceAppointmentDateValue(appointment))
+      .find(Boolean);
+    const basis = peiMaintenanceScheduleDate || firstAppointmentDate || new Date().toISOString().slice(0, 10);
+    setPeiMaintenanceCalendarMonth(basis.slice(0, 7));
+    setIsPeiMaintenanceCalendarOpen((open) => !open);
+  };
+
   const runPeiMaintenanceAction = async (key: string, action: () => Promise<any>, successMessage: string) => {
     setPeiMaintenanceActionKey(key);
     setPeiMaintenancePanelMessage('');
@@ -5404,10 +5492,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   };
 
   const handlePeiCreateMaintenancePlan = (row: any) => {
-    openPeiMaintenanceScheduleModal(row, 'EXISTING_APPOINTMENT');
+    openPeiMaintenanceScheduleModal(row, 'CUSTOM_DATE');
   };
 
-  const openPeiMaintenanceScheduleModal = async (row: any, mode = 'EXISTING_APPOINTMENT') => {
+  const openPeiMaintenanceScheduleModal = async (row: any, mode = 'CUSTOM_DATE') => {
     let selectedSkill = buildPeiMaintenanceScheduleSelection(row);
     if (!selectedSkill && patient?.id && abaV2Enabled) {
       const actionKey = `schedule-${row?.key || normalizePeiMaintenanceMatchKey(row?.targetName || row?.name || 'skill')}`;
@@ -5435,8 +5523,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       return;
     }
     setPeiMaintenanceScheduleRow(selectedSkill);
-    setPeiMaintenanceScheduleMode(mode);
+    setPeiMaintenanceScheduleMode(mode === 'EXISTING_APPOINTMENT' ? 'CUSTOM_DATE' : mode);
     setPeiMaintenanceScheduleDate('');
+    setIsPeiMaintenanceCalendarOpen(false);
+    setPeiMaintenanceCalendarMonth(new Date().toISOString().slice(0, 7));
     setSelectedPeiMaintenanceAppointmentId('');
     setPeiMaintenancePanelMessage('');
   };
@@ -5498,6 +5588,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     ).then((ok) => {
       if (ok) {
         setPeiMaintenanceScheduleRow(null);
+        setIsPeiMaintenanceCalendarOpen(false);
         setSelectedPeiMaintenanceAppointmentId('');
         setPeiMaintenanceScheduleDate('');
       }
@@ -6007,7 +6098,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                       <span className="w-full sm:w-auto" title={cannotScheduleTooltip}>
                         <button
                           type="button"
-                          onClick={() => openPeiMaintenanceScheduleModal(goal, 'EXISTING_APPOINTMENT')}
+                          onClick={() => openPeiMaintenanceScheduleModal(goal, 'CUSTOM_DATE')}
                           disabled={Boolean(peiMaintenanceActionKey) || !canManagePeiMaintenance}
                           title={cannotScheduleTooltip}
                           aria-label={cannotScheduleTooltip || 'Agendar manutenção'}
@@ -6322,7 +6413,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               </div>
               <button
                 type="button"
-                onClick={() => setPeiMaintenanceScheduleRow(null)}
+                onClick={() => {
+                  setPeiMaintenanceScheduleRow(null);
+                  setIsPeiMaintenanceCalendarOpen(false);
+                }}
                 className={`rounded-xl p-2 ${isPanelDark ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-400 hover:bg-slate-100'}`}
                 title="Fechar"
               >
@@ -6334,10 +6428,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 {peiMaintenancePanelMessage}
               </div>
             )}
-            <div className="grid gap-2 sm:grid-cols-3">
+            <div className="grid gap-2 sm:grid-cols-2">
               {[
                 ['CUSTOM_DATE', 'Escolher data'],
-                ['EXISTING_APPOINTMENT', 'Escolher próxima consulta'],
                 ['NEXT_PATIENT_SESSION', 'Aguardar futura consulta']
               ].map(([mode, label]) => (
                 <button
@@ -6346,7 +6439,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                   onClick={() => {
                     setPeiMaintenanceScheduleMode(mode);
                     if (mode !== 'CUSTOM_DATE') setPeiMaintenanceScheduleDate('');
-                    if (mode !== 'EXISTING_APPOINTMENT') setSelectedPeiMaintenanceAppointmentId('');
+                    if (mode !== 'CUSTOM_DATE') setIsPeiMaintenanceCalendarOpen(false);
+                    setSelectedPeiMaintenanceAppointmentId('');
                   }}
                   className={`min-h-[44px] rounded-xl border px-3 py-2 text-left text-sm font-semibold transition-all ${
                     peiMaintenanceScheduleMode === mode
@@ -6362,15 +6456,88 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             </div>
             {peiMaintenanceScheduleMode === 'CUSTOM_DATE' && (
               <div className="mt-4">
-                <label className={`block text-sm font-semibold ${isPanelDark ? 'text-slate-200' : 'text-slate-700'}`}>
+                <div className={`block text-sm font-semibold ${isPanelDark ? 'text-slate-200' : 'text-slate-700'}`}>
                   Data da sondagem
-                  <input
-                    type="date"
-                    value={peiMaintenanceScheduleDate}
-                    onChange={(event) => setPeiMaintenanceScheduleDate(event.target.value)}
-                    className={`mt-2 w-full rounded-xl border px-3 py-3 text-sm outline-none ${isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-100 bg-slate-50 text-slate-700'}`}
-                  />
-                </label>
+                  <div className="relative mt-2">
+                    <button
+                      type="button"
+                      onClick={openPeiMaintenanceCalendar}
+                      className={`flex min-h-[46px] w-full items-center justify-between rounded-xl border px-3 py-3 text-left text-sm outline-none ${isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-100 bg-slate-50 text-slate-700'}`}
+                    >
+                      <span>{peiMaintenanceScheduleDate ? formatPeiMaintenanceDateValue(peiMaintenanceScheduleDate) : 'dd/mm/aaaa'}</span>
+                      <Calendar size={17} />
+                    </button>
+                    {isPeiMaintenanceCalendarOpen && (() => {
+                      const appointmentsByDate = getPeiMaintenanceAppointmentsByDate();
+                      const [yearValue, monthValue] = String(peiMaintenanceCalendarMonth || '').split('-').map(Number);
+                      const year = yearValue || new Date().getFullYear();
+                      const month = (monthValue || new Date().getMonth() + 1) - 1;
+                      const firstDay = new Date(year, month, 1);
+                      const startOffset = firstDay.getDay();
+                      const daysInMonth = new Date(year, month + 1, 0).getDate();
+                      const cells = Array.from({ length: 42 }, (_, index) => {
+                        const day = index - startOffset + 1;
+                        const date = new Date(year, month, day);
+                        const inMonth = day >= 1 && day <= daysInMonth;
+                        const dateValue = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+                        return { date, dateValue, day: date.getDate(), inMonth, appointments: appointmentsByDate.get(dateValue) || [] };
+                      });
+                      return (
+                        <div className={`absolute left-0 top-full z-[70] mt-2 w-[286px] rounded-2xl border p-3 shadow-2xl ${isPanelDark ? 'border-slate-700 bg-slate-950 text-slate-100' : 'border-slate-200 bg-white text-slate-900'}`}>
+                          <div className="mb-3 flex items-center justify-between">
+                            <button type="button" onClick={() => addMonthsToPeiMaintenanceCalendar(-1)} className={`rounded-lg p-2 ${isPanelDark ? 'hover:bg-slate-800' : 'hover:bg-slate-100'}`} title="Mês anterior">
+                              <ChevronLeft size={17} />
+                            </button>
+                            <span className="text-sm font-bold capitalize">{formatPeiMaintenanceMonthLabel(peiMaintenanceCalendarMonth)}</span>
+                            <button type="button" onClick={() => addMonthsToPeiMaintenanceCalendar(1)} className={`rounded-lg p-2 ${isPanelDark ? 'hover:bg-slate-800' : 'hover:bg-slate-100'}`} title="Próximo mês">
+                              <ChevronRight size={17} />
+                            </button>
+                          </div>
+                          <div className={`grid grid-cols-7 text-center text-[11px] font-bold ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                            {['D', 'S', 'T', 'Q', 'Q', 'S', 'S'].map((dayLabel, index) => <span key={`${dayLabel}-${index}`}>{dayLabel}</span>)}
+                          </div>
+                          <div className="mt-2 grid grid-cols-7 gap-1">
+                            {cells.map((cell) => {
+                              const selected = peiMaintenanceScheduleDate === cell.dateValue;
+                              const hasAppointments = cell.appointments.length > 0;
+                              return (
+                                <button
+                                  key={cell.dateValue}
+                                  type="button"
+                                  onClick={() => {
+                                    setPeiMaintenanceScheduleDate(cell.dateValue);
+                                    setSelectedPeiMaintenanceAppointmentId('');
+                                    setIsPeiMaintenanceCalendarOpen(false);
+                                  }}
+                                  className={`relative flex h-9 items-center justify-center rounded-lg text-xs font-semibold transition-all ${
+                                    selected
+                                      ? 'bg-[#7a32fc] text-white shadow-sm shadow-violet-500/20'
+                                      : cell.inMonth
+                                        ? isPanelDark
+                                          ? 'text-slate-100 hover:bg-slate-800'
+                                          : 'text-slate-800 hover:bg-slate-100'
+                                        : isPanelDark
+                                          ? 'text-slate-600 hover:bg-slate-900'
+                                          : 'text-slate-400 hover:bg-slate-50'
+                                  }`}
+                                >
+                                  {cell.day}
+                                  {hasAppointments && (
+                                    <span className="absolute bottom-1 left-1/2 flex -translate-x-1/2 gap-0.5">
+                                      {cell.appointments.slice(0, 3).map((appointment: any, index: number) => (
+                                        <span key={`${cell.dateValue}-dot-${index}`} className={`h-1.5 w-1.5 rounded-full ${getPeiMaintenanceAppointmentStatusInfo(appointment).dotClass}`}></span>
+                                      ))}
+                                    </span>
+                                  )}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </div>
                 {peiMaintenanceAppointmentsState.loading ? (
                   <p className={`mt-3 rounded-2xl border p-3 text-sm ${isPanelDark ? 'border-slate-700 bg-slate-900/40 text-slate-300' : 'border-slate-100 bg-slate-50 text-slate-500'}`}>
                     Carregando próximas consultas...
@@ -6382,6 +6549,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                       {peiMaintenanceAppointmentsState.items.map((appointment: any) => {
                         const appointmentDate = getPeiMaintenanceAppointmentDateValue(appointment);
                         const selected = Boolean(appointmentDate && peiMaintenanceScheduleDate === appointmentDate);
+                        const statusInfo = getPeiMaintenanceAppointmentStatusInfo(appointment);
                         return (
                           <button
                             key={`${appointment?.id || appointmentDate || formatPeiMaintenanceAppointmentLabel(appointment)}-date`}
@@ -6399,7 +6567,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                                   : 'border-slate-100 bg-slate-50 text-slate-700 hover:bg-white'
                             } disabled:opacity-60`}
                           >
-                            <span className="font-semibold">{appointmentDate ? formatAbaDateTime(appointmentDate) : 'Data indisponível'}</span>
+                            <span className="flex items-start justify-between gap-3">
+                              <span className="font-semibold">{formatPeiMaintenanceAppointmentDateTimeLabel(appointment)}</span>
+                              <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${statusInfo.badgeClass}`}>{statusInfo.label}</span>
+                            </span>
                             <span className="mt-1 block text-xs opacity-80">{formatPeiMaintenanceAppointmentLabel(appointment)}</span>
                           </button>
                         );
@@ -6416,62 +6587,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 )}
               </div>
             )}
-            {peiMaintenanceScheduleMode === 'EXISTING_APPOINTMENT' && (
-              <div className="mt-4">
-                {peiMaintenanceAppointmentsState.loading ? (
-                  <p className={`rounded-2xl border p-4 text-sm ${isPanelDark ? 'border-slate-700 bg-slate-900/40 text-slate-300' : 'border-slate-100 bg-slate-50 text-slate-500'}`}>
-                    Carregando próximas consultas...
-                  </p>
-                ) : peiMaintenanceAppointmentsState.items.length > 0 ? (
-                  <div className="max-h-[38vh] space-y-2 overflow-y-auto pr-1">
-                    {peiMaintenanceAppointmentsState.items.map((appointment: any) => {
-                      const appointmentId = getPersistedUuid(appointment?.id);
-                      const selected = selectedPeiMaintenanceAppointmentId === appointmentId;
-                      return (
-                        <button
-                          key={appointmentId || formatPeiMaintenanceAppointmentLabel(appointment)}
-                          type="button"
-                          disabled={!appointmentId}
-                          title={!appointmentId ? appointment?.unavailableReason || 'Esta recorrência ainda não foi salva como consulta real. Salve a consulta antes de vincular manutenção.' : undefined}
-                          onClick={() => setSelectedPeiMaintenanceAppointmentId(appointmentId)}
-                          className={`w-full rounded-2xl border p-4 text-left transition-all ${
-                            selected
-                              ? 'border-[#7a32fc] bg-[#7a32fc]/10 text-[#7a32fc]'
-                              : isPanelDark
-                                ? 'border-slate-700 bg-slate-900/50 text-slate-200 hover:bg-slate-800'
-                                : 'border-slate-100 bg-slate-50 text-slate-700 hover:bg-white'
-                          } disabled:opacity-60`}
-                        >
-                          <p className="text-sm font-semibold">{formatPeiMaintenanceAppointmentLabel(appointment)}</p>
-                          <p className="mt-1 text-xs opacity-80">Status: {safeDisplayValue(appointment?.status, 'Agendada')}</p>
-                        </button>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className={`rounded-2xl border p-4 text-sm ${isPanelDark ? 'border-amber-400/20 bg-amber-500/10 text-amber-100' : 'border-amber-100 bg-amber-50 text-amber-800'}`}>
-                    <p>Este paciente não possui próximas consultas agendadas.</p>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setPeiMaintenanceScheduleMode('NEXT_PATIENT_SESSION');
-                        setSelectedPeiMaintenanceAppointmentId('');
-                      }}
-                      className={`mt-3 min-h-[40px] rounded-xl px-3 py-2 text-xs font-semibold ${isPanelDark ? 'bg-slate-800 text-slate-100 hover:bg-slate-700' : 'bg-white text-slate-700 hover:bg-slate-50'}`}
-                    >
-                      Aguardar futura consulta
-                    </button>
-                  </div>
-                )}
-                {peiMaintenanceAppointmentsState.error && (
-                  <p className="mt-3 text-sm font-semibold text-amber-700">{peiMaintenanceAppointmentsState.error}</p>
-                )}
-              </div>
-            )}
             <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
               <button
                 type="button"
-                onClick={() => setPeiMaintenanceScheduleRow(null)}
+                onClick={() => {
+                  setPeiMaintenanceScheduleRow(null);
+                  setIsPeiMaintenanceCalendarOpen(false);
+                }}
                 className={`min-h-[44px] rounded-xl px-4 py-2 text-sm font-semibold ${isPanelDark ? 'bg-slate-800 text-slate-100 hover:bg-slate-700' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}
               >
                 Cancelar
