@@ -44,15 +44,14 @@ test('Ensino preserva lista atual de metas e acao de sessao', () => {
   assert.match(teachingBlock, /MasteryDots/);
 });
 
-test('Ensino exibe origem e permite editar criterio individual da habilidade', () => {
+test('Ensino exibe criterio e origem sem editor inline da habilidade', () => {
   const teachingBlock = patientDetailCode.match(/activePeiPlanSubtab === 'teaching'[\s\S]*?activePeiPlanSubtab === 'maintenance'/)?.[0] || '';
   assert.match(teachingBlock, /Criterio de maestria/);
   assert.match(teachingBlock, /Origem: \{masteryDisplay\.sourceLabel\}/);
-  assert.match(teachingBlock, /Editar criterio/);
-  assert.match(teachingBlock, /savePeiMasteryCriteria\(goal\)/);
-  assert.match(patientDetailCode, /requiredIndependentCorrectTrials[\s\S]*?minimumTrials[\s\S]*?sourceLabel: 'Criterio da habilidade'/);
-  assert.match(dataServiceCode, /async updateAbaTargetMasteryCriteria\(patientId: string, targetId: string, criteria: any\)/);
-  assert.match(serverCode, /MASTERY_CRITERIA_UPDATED/);
+  assert.match(teachingBlock, /Hoje: \{masteryDisplay\.progressLabel\}/);
+  assert.doesNotMatch(teachingBlock, /Editar criterio/);
+  assert.doesNotMatch(teachingBlock, /savePeiMasteryCriteria\(goal\)/);
+  assert.doesNotMatch(patientDetailCode, /masteryCriteriaEditorGoalId|masteryCriteriaForm|isSavingMasteryCriteria/);
 });
 
 test('Restaurar dados de sessao zera progresso PEI antes de abrir sessao', () => {

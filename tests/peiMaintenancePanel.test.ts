@@ -408,6 +408,9 @@ test('modal etapa 2 mostra data com consultas e aguardar futura consulta', () =>
   assert.match(patientDetailCode, /missing_target_on_open/);
   assert.match(patientDetailCode, /dataService\.getAbaLinkableTargetsForMaintenance\(String\(patient\.id\), \{ limit: 200 \}\)/);
   assert.match(patientDetailCode, /selectedSkill = buildPeiMaintenanceScheduleSelection\(row, items\)/);
+  assert.match(patientDetailCode, /target\?\.description[\s\S]*target\?\.source\?\.targetName[\s\S]*target\?\.goal\?\.targetName/);
+  assert.match(patientDetailCode, /const nameKey = normalizePeiMaintenanceMatchKey\(getPeiMaintenanceMatchName\(row\)\)/);
+  assert.match(openCode, /safeDisplayValue\(getPeiMaintenanceMatchName\(row\), 'Habilidade em manutenção'\)/);
 
   const handlerStart = patientDetailCode.indexOf('const handlePeiScheduleModalSave');
   const handlerEnd = patientDetailCode.indexOf('const handlePeiScheduleNextSession', handlerStart);
