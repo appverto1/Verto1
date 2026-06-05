@@ -4807,6 +4807,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   };
 
   const peiGoals = useMemo(() => (Array.isArray(patient?.pei) ? patient.pei : []), [patient?.pei]);
+  const peiAcquiredTeachingGoals = useMemo(
+    () => peiGoals.filter((goal: any) => isGoalAcquired(goal)),
+    [peiGoals]
+  );
   const peiMaintenanceLinkableTargets = useMemo(
     () => (Array.isArray(peiMaintenanceLinkableTargetsState.items) ? peiMaintenanceLinkableTargetsState.items : []),
     [peiMaintenanceLinkableTargetsState.items]
@@ -5062,12 +5066,6 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       }
     }
   }, [abaV2Enabled, debugPeiMaintenancePanelLoad, isKidsProfile, patient?.id]);
-
-  useEffect(() => {
-    if (activeTab !== 'plan' || activePeiPlanSubtab !== 'maintenance') return;
-    if (hasLoadedPeiMaintenancePanel || isLoadingPeiMaintenancePanel) return;
-    void refreshPeiMaintenancePanel();
-  }, [activeTab, activePeiPlanSubtab, hasLoadedPeiMaintenancePanel, isLoadingPeiMaintenancePanel, refreshPeiMaintenancePanel]);
 
   useEffect(() => {
     let cancelled = false;
@@ -5627,52 +5625,50 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   };
 
   const renderPeiMaintenancePanel = () => (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <div>
         <h3 className={`text-lg font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>Manutenção</h3>
-        <p className={`mt-1 text-sm ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>Escolha habilidades adquiridas do PEI e defina quando serão sondadas.</p>
+        <p className={`mt-1 text-sm ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>Habilidades adquiridas no Ensino.</p>
       </div>
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-7">
-        {renderPeiMaintenanceMetric('Em manutenção', peiMaintenanceTargetFirstSummary.maintenanceSkills)}
-        {renderPeiMaintenanceMetric('Elegíveis', peiMaintenanceTargetFirstSummary.eligibleSkills)}
-        {renderPeiMaintenanceMetric('Agendadas', peiMaintenanceTargetFirstSummary.scheduled)}
-        {renderPeiMaintenanceMetric('Aguardando sessão', peiMaintenanceTargetFirstSummary.waitingNextSession)}
-        {renderPeiMaintenanceMetric('Atrasadas', peiMaintenanceTargetFirstSummary.overdue)}
-        {renderPeiMaintenanceMetric('Risco de regressão', peiMaintenanceTargetFirstSummary.regressionRisk)}
-        {renderPeiMaintenanceMetric('Pendências técnicas', peiMaintenanceTargetFirstSummary.technical)}
-      </div>
-      <div className={`rounded-2xl border p-4 text-sm ${isPanelDark ? 'bg-slate-900/40 border-slate-700 text-slate-300' : 'bg-violet-50/50 border-violet-100 text-slate-600'}`}>
-        <span className="font-semibold text-[#7a32fc]">Plano de manutenção.</span> Cria checagens em 7, 14, 30 e 60 dias. O sistema tenta vincular cada checagem à sessão mais próxima.
-      </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <button type="button" onClick={() => void refreshPeiMaintenancePanel()} disabled={isLoadingPeiMaintenancePanel} className="rounded-xl bg-[#7a32fc] px-4 py-2 text-xs font-semibold text-white disabled:opacity-60">
-          {isLoadingPeiMaintenancePanel ? 'Atualizando...' : 'Atualizar manutenção'}
-        </button>
-        {peiMaintenancePanelMessage && <span className={`text-xs font-semibold ${/N[ãa]o/i.test(peiMaintenancePanelMessage) ? 'text-amber-700' : 'text-emerald-700'}`}>{peiMaintenancePanelMessage}</span>}
-      </div>
-      {shouldShowPeiMaintenancePanelLoading ? (
-        <div className={`rounded-2xl border p-5 ${isPanelDark ? 'border-slate-700 bg-slate-900/40' : 'border-slate-100 bg-slate-50'}`}>
-          <div className="animate-pulse space-y-4">
-            <div className={`h-4 w-48 rounded ${isPanelDark ? 'bg-slate-700' : 'bg-slate-200'}`}></div>
-            <div className={`h-20 rounded-xl ${isPanelDark ? 'bg-slate-800' : 'bg-white'}`}></div>
-            <div className={`h-20 rounded-xl ${isPanelDark ? 'bg-slate-800' : 'bg-white'}`}></div>
-          </div>
-        </div>
+      {peiAcquiredTeachingGoals.length === 0 ? (
+        <p className={`rounded-2xl border p-5 text-sm ${isPanelDark ? 'border-slate-700 bg-slate-900/40 text-slate-400' : 'border-slate-100 bg-slate-50 text-slate-500'}`}>
+          Nenhuma habilidade adquirida no Ensino no momento.
+        </p>
       ) : (
-        <>
-          {renderPeiMaintenanceGroup('eligibleSkills', 'Habilidades elegíveis para manutenção', 'Nenhuma habilidade adquirida ou masterizada elegível no momento.')}
-          {renderPeiMaintenanceGroup('maintenanceSkills', 'Habilidades em manutenção', 'Nenhuma habilidade em manutenção no momento.')}
-          {renderPeiMaintenanceGroup('scheduled', 'Sondagens agendadas', 'Nenhuma sondagem agendada com habilidade real.')}
-          {renderPeiMaintenanceGroup('waitingNextSession', 'Aguardando próxima sessão', 'Nenhuma sondagem aguardando próxima sessão.')}
-          {renderPeiMaintenanceGroup('overdue', 'Atrasadas', 'Nenhuma sondagem atrasada.')}
-          {renderPeiMaintenanceGroup('regressionRisk', 'Atenção / risco de regressão', 'Nenhuma habilidade em risco de regressão no momento.')}
-          {renderPeiMaintenanceGroup(
-            'technical',
-            'Pendências técnicas de manutenção',
-            'Nenhuma pendência técnica de manutenção.',
-            'Sondagens antigas sem vínculo claro com uma habilidade real do PEI.'
-          )}
-        </>
+        <div className="space-y-3">
+          {peiAcquiredTeachingGoals.map((goal: any) => (
+            <div key={goal.id || goal.name} className={`rounded-2xl border p-5 shadow-sm ${isPanelDark ? 'bg-gradient-to-br from-emerald-950/70 via-[#101b2e] to-teal-950/50 border-emerald-400/50' : 'bg-gradient-to-br from-emerald-50 via-white to-teal-50 border-emerald-300'}`}>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {goal.protocolTitle && <span className="rounded-full bg-[#05CD99]/10 px-2 py-0.5 text-[9px] font-semibold uppercase text-[#05CD99]">{goal.protocolTitle}</span>}
+                    {goal.domainName && <span className={`text-[9px] font-semibold uppercase ${isPanelDark ? 'text-slate-300' : 'text-gray-400'}`}>{goal.domainName}</span>}
+                  </div>
+                  <h4 className={`mt-2 text-base font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{goal.name}</h4>
+                  {goal.objective && (
+                    <p className={`mt-1 text-xs ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>{sanitizeDescriptionForDisplay(goal.objective)}</p>
+                  )}
+                </div>
+                <span className="inline-flex min-h-[34px] items-center justify-center rounded-xl bg-emerald-500 px-4 py-2 text-xs font-bold uppercase tracking-wide text-white shadow-md shadow-emerald-200">
+                  Adquirido
+                </span>
+              </div>
+              <div className="mt-4">
+                <div className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-widest text-emerald-700">
+                  <span>Progresso da meta</span>
+                  <span>100%</span>
+                </div>
+                <div className={`mt-2 h-3 overflow-hidden rounded-full ${isPanelDark ? 'bg-slate-800' : 'bg-emerald-100'}`}>
+                  <div className="h-full w-full rounded-full bg-gradient-to-r from-emerald-400 via-green-500 to-teal-500"></div>
+                </div>
+                <div className={`mt-3 inline-flex items-center gap-2 rounded-2xl px-3 py-2 text-xs font-bold ${isPanelDark ? 'bg-emerald-500/10 text-emerald-100 border border-emerald-300/20' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'}`}>
+                  <CheckCircle2 size={15} />
+                  Habilidade adquirida. Progresso concluído com 100%.
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );
@@ -7131,7 +7127,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                           : tab.id === 'generalization'
                             ? 'Generalização'
                             : 'Histórico';
-                    const badge = tab.id === 'maintenance' ? peiMaintenanceClinicalBadgeCount : 0;
+                    const badge = tab.id === 'maintenance' ? peiAcquiredTeachingGoals.length : 0;
                     return (
                       <button
                         key={tab.id}

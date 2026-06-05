@@ -76,11 +76,16 @@ test('sessao iniciada no coordenador preserva metadados ABA da tentativa', () =>
   assert.match(coordinatorDashboardCode, /return onRecordTrial\(pid, title, score, evalComment, sessionMeta\)/);
 });
 
-test('Manutencao carrega painel target-first sob demanda e preserva overview para historico', () => {
-  assert.match(patientDetailCode, /activePeiPlanSubtab !== 'maintenance'/);
-  assert.match(patientDetailCode, /refreshPeiMaintenancePanel/);
-  assert.match(patientDetailCode, /dataService\.getAbaMaintenancePanel\(requestPatientId, \{ page: 1, pageSize: 100 \}\)/);
-  assert.match(patientDetailCode, /mapMaintenancePanelResponse\(panelData/);
+test('Manutencao exibe apenas habilidades adquiridas do Ensino neste passo', () => {
+  const maintenancePanelStart = patientDetailCode.indexOf('const renderPeiMaintenancePanel = () => (');
+  const maintenancePanelEnd = patientDetailCode.indexOf('const renderPeiGeneralizationPanel', maintenancePanelStart);
+  const maintenancePanelCode = patientDetailCode.slice(maintenancePanelStart, maintenancePanelEnd);
+  assert.match(patientDetailCode, /const peiAcquiredTeachingGoals/);
+  assert.match(patientDetailCode, /const badge = tab\.id === 'maintenance' \? peiAcquiredTeachingGoals\.length : 0/);
+  assert.match(maintenancePanelCode, /Habilidades adquiridas no Ensino/);
+  assert.match(maintenancePanelCode, /peiAcquiredTeachingGoals\.map/);
+  assert.doesNotMatch(maintenancePanelCode, /Atualizar manutenção|Pendências técnicas|Plano de manutenção|renderPeiMaintenanceGroup|renderPeiMaintenanceMetric/);
+  assert.doesNotMatch(patientDetailCode, /activeTab !== 'plan' \|\| activePeiPlanSubtab !== 'maintenance'/);
   assert.match(dataServiceCode, /async getAbaMaintenancePanel\(patientId: string/);
   assert.match(serverCode, /app\.get\('\/api\/patients\/:patientId\/aba\/maintenance-panel'/);
   assert.match(dataServiceCode, /async getAbaMaintenanceOverview\(patientId: string/);
@@ -122,9 +127,11 @@ test('painel permite atribuir, confirmar e adiar vinculo de Maintenance Probe', 
   assert.match(patientDetailCode, /dataService\.createMaintenanceScheduleForTarget/);
 });
 
-test('ciclo 7 14 30 60 e generalizacao aparecem em linguagem clinica', () => {
-  assert.match(patientDetailCode, /Plano de manutencao/);
-  assert.match(patientDetailCode, /7, 14, 30 e 60 dias/);
+test('Manutencao passo atual nao exibe plano 7 14 30 60 e generalizacao permanece', () => {
+  const maintenancePanelStart = patientDetailCode.indexOf('const renderPeiMaintenancePanel = () => (');
+  const maintenancePanelEnd = patientDetailCode.indexOf('const renderPeiGeneralizationPanel', maintenancePanelStart);
+  const maintenancePanelCode = patientDetailCode.slice(maintenancePanelStart, maintenancePanelEnd);
+  assert.doesNotMatch(maintenancePanelCode, /Plano de manutencao|Plano de manutenção|7, 14, 30 e 60 dias/);
   assert.match(patientDetailCode, /Habilidade mantida/);
   assert.match(patientDetailCode, /Nenhuma habilidade pronta para generalização no momento/);
 });
