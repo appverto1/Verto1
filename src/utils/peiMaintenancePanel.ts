@@ -305,7 +305,7 @@ const statusLabelForMaintenance = (scheduleOrProbe: any, now = new Date()) => {
   if (status === 'REGRESSION_RISK') return 'Risco de regressao';
   if (status === 'WATCH') return 'Atencao';
   if (status === 'PENDING_CONFIRMATION') return 'Pendente de confirmacao';
-  if (status === 'PENDING_NEXT_SESSION') return 'Aguardando proxima sessao';
+  if (status === 'PENDING_NEXT_SESSION') return 'Aguardando futura consulta';
   if (status === 'PENDING_LINK' || status === 'PENDING_SCHEDULING' || status === 'UNSCHEDULED') return 'Sem sessao vinculada';
   if (status === 'COMPLETED') return 'Concluida';
   if (status === 'SCHEDULED') return 'Agendada';
@@ -444,6 +444,14 @@ export const formatPeiMaintenanceAppointmentLabel = (appointment: any) => {
     appointment?.date
   );
   const type = safeTargetName(appointment?.service_type || appointment?.serviceType || appointment?.approach || appointment?.type, 'Sessao');
+  const durationMinutes = Number(
+    appointment?.durationMinutes ||
+      appointment?.duration_minutes ||
+      appointment?.scheduledDurationMinutes ||
+      appointment?.scheduled_duration_minutes ||
+      0
+  );
+  const duration = Number.isFinite(durationMinutes) && durationMinutes > 0 ? `${Math.round(durationMinutes)} min` : '';
   const professional = safeTargetName(
     appointment?.therapistName ||
       appointment?.therapist_name ||
@@ -458,13 +466,13 @@ export const formatPeiMaintenanceAppointmentLabel = (appointment: any) => {
       appointment?.local,
     'Local a definir'
   );
-  return [when || 'Data a definir', type, professional, location].filter(Boolean).join(' - ');
+  return [when || 'Data a definir', duration, type, professional, location].filter(Boolean).join(' - ');
 };
 
 export const formatPeiMaintenanceScheduleLabel = (schedule: any, now = new Date()) => {
   if (!schedule) return 'Sem sondagem agendada';
   const status = deriveMaintenanceScheduleStatus(schedule, now);
-  if (status === 'PENDING_NEXT_SESSION') return 'Aguardando proxima sessao';
+  if (status === 'PENDING_NEXT_SESSION') return 'Aguardando futura consulta';
   if (status === 'PENDING_CONFIRMATION') return 'Pendente de confirmacao';
   if (status === 'OVERDUE') {
     const reference = getScheduleReferenceDate(schedule);

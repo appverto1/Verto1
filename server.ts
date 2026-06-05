@@ -5346,8 +5346,8 @@ function resetRescheduledAppointmentsForNewReminderCycle(nextAppointments: any[]
 
 function getClinicStateAppointmentStatusBlocksConflict(appointment: any) {
   const normalized = sanitizeString(appointment?.status || 'scheduled', 40).toLowerCase();
-  if (['canceled', 'cancelled', 'no_show', 'missed', 'deleted', 'completed'].includes(normalized)) return false;
-  return ['scheduled', 'pending', 'confirmed', 'in_progress'].includes(normalized);
+  if (['canceled', 'cancelled', 'cancelada', 'no_show', 'missed', 'deleted', 'archived', 'completed', 'concluida', 'concluido'].includes(normalized)) return false;
+  return ['scheduled', 'agendada', 'pending', 'confirmed', 'confirmada', 'in_progress'].includes(normalized);
 }
 
 function getClinicStateAppointmentDurationMinutes(appointment: any, specialtySettings: Record<string, any> = {}) {
@@ -27263,7 +27263,7 @@ async function startServer() {
         .gte('scheduled_at', sanitizeIsoDateTime(params.fromIso || new Date().toISOString()))
         .eq('is_active', true)
         .is('deleted_at', null)
-        .not('status', 'in', '("cancelled","canceled","deleted")')
+        .not('status', 'in', '("cancelled","canceled","cancelada","no_show","missed","deleted","archived","completed","concluida","concluido")')
         .order('scheduled_at', { ascending: true })
         .limit(limit);
       if (params.organizationId && isUuid(params.organizationId) && columns.includes('organization_id')) query = query.eq('organization_id', params.organizationId);
@@ -27508,40 +27508,53 @@ async function startServer() {
         : null;
       if (existingSchedule?.id) {
         const raw = existingSchedule.raw_payload && typeof existingSchedule.raw_payload === 'object' ? existingSchedule.raw_payload : {};
-        const update = await updateAbaScheduleWithSchemaFallback(
-          sanitizeString(existingSchedule.id, 180),
-          cleanObject({
-            status: 'PENDING_NEXT_SESSION',
-            appointment_id: null,
-            candidate_appointment_id: null,
-            scheduled_for: null,
-            due_date: null,
-            metadata: sanitizeClinicalPayload({
-              ...(existingSchedule.metadata && typeof existingSchedule.metadata === 'object' ? existingSchedule.metadata : {}),
-              auditAction: 'MAINTENANCE_SCHEDULE_UPDATED',
-              legacyAction: 'MAINTENANCE_NEXT_SESSION_SET',
-              nextSessionPolicy: true,
-              scheduleReason: 'NEXT_SESSION_REUSED'
-            }),
-            raw_payload: sanitizeClinicalPayload({
-              ...raw,
-              targetName: target?.name || raw.targetName || null,
-              scheduledForNextSession: true,
-              noAutomaticClinicalMutation: true
-            }),
-            updated_at: now
+        const nextSessionPatch = cleanObject({
+          status: 'PENDING_NEXT_SESSION',
+          appointment_id: null,
+          candidate_appointment_id: null,
+          scheduled_for: null,
+          due_date: null,
+          target_due_date: null,
+          schedule_mode: 'NEXT_PATIENT_SESSION',
+          metadata: sanitizeClinicalPayload({
+            ...(existingSchedule.metadata && typeof existingSchedule.metadata === 'object' ? existingSchedule.metadata : {}),
+            auditAction: 'MAINTENANCE_SCHEDULE_UPDATED',
+            legacyAction: 'MAINTENANCE_NEXT_SESSION_SET',
+            nextSessionPolicy: true,
+            scheduleReason: 'NEXT_SESSION_REUSED'
           }),
+          raw_payload: sanitizeClinicalPayload({
+            ...raw,
+            targetName: target?.name || raw.targetName || null,
+            scheduledForNextSession: true,
+            nextSessionPolicy: true,
+            noAutomaticClinicalMutation: true
+          }),
+          updated_at: now
+        });
+        let update = await updateAbaScheduleWithSchemaFallback(
+          sanitizeString(existingSchedule.id, 180),
+          nextSessionPatch,
           clinicId,
           organizationId,
           patientId
         );
+        if (update.error && isLegacyMaintenanceScheduleConstraintError(update.error)) {
+          update = await updateAbaScheduleWithSchemaFallback(
+            sanitizeString(existingSchedule.id, 180),
+            buildLegacyMaintenanceScheduleRow(nextSessionPatch, now),
+            clinicId,
+            organizationId,
+            patientId
+          );
+        }
         if (update.error) throw update.error;
         void persistActivityLog({
           userId: createdBy || '',
           clinicId,
           actorName: 'Equipe',
-          title: 'Sondagem aguardando proxima sessao',
-          content: 'Maintenance Schedule existente foi colocado para aguardar a proxima sessao.',
+          title: 'Sondagem aguardando futura consulta',
+          content: 'Maintenance Schedule existente foi colocado para aguardar futura consulta.',
           type: 'clinical',
           actionType: 'MAINTENANCE_SCHEDULE_UPDATED',
           payload: { scheduleId: existingSchedule.id, targetId, patientId }
@@ -27566,14 +27579,14 @@ async function startServer() {
 
     if (scheduleMode === 'CUSTOM_DATE') {
       const appointmentId = sanitizeString(params.appointmentId, 180) || null;
-      const dueDate = sanitizeIsoDateTime(params.dueDate || now);
       const appointment = appointmentId
         ? await fetchMaintenanceAppointmentById({ appointmentId, patientId, clinicId, organizationId })
         : null;
       if (appointmentId && !appointment?.id) {
-        return { ok: false, status: 400, error: 'A sessao sugerida nao pertence a este paciente.' };
+        return { ok: false, status: 404, error: 'Consulta não encontrada.' };
       }
       const scheduledFor = appointment?.scheduled_at || null;
+      const dueDate = sanitizeIsoDateTime(params.dueDate || scheduledFor || now);
       let existingQuery = supabase
         .from('aba_maintenance_schedules')
         .select(ABA_MAINTENANCE_SCHEDULE_SELECT)
@@ -27726,6 +27739,7 @@ async function startServer() {
         created_by: createdBy,
         metadata: sanitizeClinicalPayload({
           auditAction: 'MAINTENANCE_SCHEDULE_CREATED',
+          waitingAuditAction: 'MAINTENANCE_SCHEDULE_WAITING_NEXT_SESSION',
           legacyAction: 'MAINTENANCE_NEXT_SESSION_SET',
           nextSessionPolicy: true,
           scheduleReason: 'NEXT_SESSION_WITHOUT_APPOINTMENT'
@@ -27734,22 +27748,22 @@ async function startServer() {
           targetName: target?.name || null,
           scheduledForNextSession: true,
           nextSessionPolicy: true,
-          humanMessage: 'A sondagem ficou aguardando a proxima sessao e sera sugerida quando uma consulta real estiver disponivel.',
+          humanMessage: 'A sondagem ficou aguardando futura consulta e sera sugerida quando uma consulta real estiver disponivel.',
           noAutomaticClinicalMutation: true
         }),
         created_at: now,
         updated_at: now
       }));
     } else {
-      const dueDate = sanitizeIsoDateTime(params.dueDate || now);
       const appointmentId = sanitizeString(params.appointmentId, 180) || null;
       const appointment = appointmentId
         ? await fetchMaintenanceAppointmentById({ appointmentId, patientId, clinicId, organizationId })
         : null;
       if (appointmentId && !appointment?.id) {
-        return { ok: false, status: 400, error: 'A sessao sugerida nao pertence a este paciente.' };
+        return { ok: false, status: 404, error: 'Consulta não encontrada.' };
       }
       const scheduledFor = appointment?.scheduled_at || null;
+      const dueDate = sanitizeIsoDateTime(params.dueDate || scheduledFor || now);
       rows.push(cleanObject({
         id: `maintenance-${abaPlanningHash([targetId, 'custom', dueDate, appointmentId || 'date'])}`,
         organization_id: organizationId,
@@ -27797,9 +27811,9 @@ async function startServer() {
         userId: createdBy || '',
         clinicId,
         actorName: 'Equipe',
-        title: isNextSessionSchedule ? 'Sondagem aguardando proxima sessao' : 'Sondagem de manutencao criada',
+        title: isNextSessionSchedule ? 'Sondagem aguardando futura consulta' : 'Sondagem de manutencao criada',
         content: isNextSessionSchedule
-          ? 'Maintenance Schedule foi criado para aguardar a proxima sessao.'
+          ? 'Maintenance Schedule foi criado para aguardar futura consulta.'
           : 'Maintenance Schedule foi criado para uma habilidade real do PEI.',
         type: 'clinical',
         actionType,
@@ -29765,7 +29779,7 @@ async function startServer() {
           const safeSchedule = sanitizeScheduleForPanel(schedule);
           return cleanObject({
             ...skill,
-            key: `${label === 'Aguardando próxima sessão' ? 'waiting' : 'scheduled'}-${skill?.targetId || skill?.key}`,
+            key: `${label === 'Aguardando futura consulta' ? 'waiting' : 'scheduled'}-${skill?.targetId || skill?.key}`,
             statusLabel: label,
             nextSchedule: safeSchedule,
             activeSchedule: safeSchedule,
@@ -29792,7 +29806,7 @@ async function startServer() {
           const status = sanitizeString(schedule?.status, 80).toUpperCase();
           const derivedStatus = deriveMaintenanceScheduleStatus(schedule, new Date());
           if (status === 'PENDING_NEXT_SESSION' || derivedStatus === 'PENDING_NEXT_SESSION') {
-            waitingNextSession.push(buildScheduledPanelRow(skill, schedule, 'Aguardando próxima sessão'));
+            waitingNextSession.push(buildScheduledPanelRow(skill, schedule, 'Aguardando futura consulta'));
           } else if (status === 'OVERDUE' || derivedStatus === 'OVERDUE') {
             overdueProbes.push(buildScheduledPanelRow(skill, schedule, 'Sondagem atrasada'));
           } else {
@@ -30193,7 +30207,7 @@ async function startServer() {
         if (derived === 'OVERDUE') return 'Atrasada';
         if (derived === 'DUE_TODAY') return 'Para hoje';
         const status = sanitizeString(schedule?.status || derived, 80).toUpperCase();
-        if (status === 'PENDING_NEXT_SESSION') return 'Aguardando próxima sessão';
+        if (status === 'PENDING_NEXT_SESSION') return 'Aguardando futura consulta';
         if (status === 'PENDING_CONFIRMATION') return 'Pendente de confirmação';
         if (status === 'PENDING_LINK' || status === 'PENDING_SCHEDULING' || status === 'UNSCHEDULED') return 'Sem sessão vinculada';
         if (status === 'SCHEDULED') return 'Agendada';
@@ -30435,18 +30449,25 @@ async function startServer() {
       });
       const appointmentIds = appointments.map((item: any) => sanitizeString(item?.id, 180)).filter((id: string) => isUuid(id));
       const counts = await countCalendarMaintenanceProbesByAppointment(appointmentIds, clinicId, organizationId, req.session.user);
-      const data = appointments.filter((appointment: any) => isUuid(sanitizeString(appointment?.id, 180))).map((appointment: any) => {
-        const id = sanitizeString(appointment?.id, 180);
-        const countInfo = counts.get(id);
+      const data = appointments.map((appointment: any) => {
+        const rawId = sanitizeString(appointment?.id, 180);
+        const id = isUuid(rawId) ? rawId : null;
+        const unavailableReason = id ? null : 'Esta recorrência ainda não foi salva como consulta real. Salve a consulta antes de vincular manutenção.';
+        const countInfo = id ? counts.get(id) : null;
         const totalProbeCount = typeof countInfo === 'object'
           ? Number(countInfo.total || 0)
           : Number(countInfo || 0);
         return {
           id,
+          appointmentId: id,
+          canLinkMaintenance: Boolean(id),
+          unavailableReason,
           scheduled_at: appointment.scheduled_at,
           scheduledAt: appointment.scheduled_at,
           status: appointment.status || 'scheduled',
           type: sanitizeString(appointment.service_type || appointment.approach, 120) || 'Sessao',
+          durationMinutes: Number(appointment.scheduled_duration_minutes || appointment.duration_minutes || 0) || null,
+          duration_minutes: Number(appointment.scheduled_duration_minutes || appointment.duration_minutes || 0) || null,
           therapistName: sanitizeString(appointment.therapist_name, 180) || 'Equipe',
           location: sanitizeString(appointment.room_name || appointment.location_type, 180) || 'Local a definir',
           maintenanceProbeCount: totalProbeCount,
@@ -30455,7 +30476,7 @@ async function startServer() {
       });
       return res.json({ success: true, data });
     } catch (error: any) {
-      return res.status(500).json({ success: false, error: error?.message || 'Não foi possível carregar próximas sessões agora.' });
+      return res.status(500).json({ success: false, error: error?.message || 'Não foi possível carregar próximas consultas agora.' });
     }
   });
 
@@ -30493,7 +30514,9 @@ async function startServer() {
           ? 'NEXT_PATIENT_SESSION'
           : (req.body?.scheduleMode || req.body?.schedule_mode);
       const dueDate = req.body?.dueDate || req.body?.due_date || null;
-      if ((requestedMode === 'DATE' || sanitizeString(scheduleModeFromPayload, 80).toUpperCase() === 'CUSTOM_DATE') && !sanitizeString(dueDate, 80)) {
+      const appointmentIdFromPayload = req.body?.appointmentId || req.body?.appointment_id || null;
+      const customDateOrAppointmentMode = requestedMode === 'DATE' || sanitizeString(scheduleModeFromPayload, 80).toUpperCase() === 'CUSTOM_DATE';
+      if (customDateOrAppointmentMode && !sanitizeString(dueDate, 80) && !sanitizeString(appointmentIdFromPayload, 180)) {
         return res.status(400).json({ success: false, error: 'MISSING_DUE_DATE', message: 'Escolha uma data para agendar a sondagem.' });
       }
       const result = await createMaintenanceScheduleForTarget({
@@ -30503,7 +30526,7 @@ async function startServer() {
         clinicId,
         scheduleMode: scheduleModeFromPayload,
         dueDate,
-        appointmentId: req.body?.appointmentId || req.body?.appointment_id,
+        appointmentId: appointmentIdFromPayload,
         intervals: req.body?.intervals || req.body?.maintenanceDays || req.body?.maintenance_days,
         createdBy: sanitizeString(req.session.user?.id, 120),
         masteryEvaluationId: req.body?.masteryEvaluationId || req.body?.mastery_evaluation_id,
@@ -30535,7 +30558,7 @@ async function startServer() {
 
   app.post('/api/aba/targets/:targetId/maintenance-schedules/next-session', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
-      if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de agendamento para próxima sessão')) return;
+      if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de agendamento para futura consulta')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = sanitizeString(req.body?.organization_id || req.body?.organizationId || req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
       const patientId = sanitizeString(req.body?.patient_id || req.body?.patientId, 120);
@@ -30555,11 +30578,11 @@ async function startServer() {
         createdBy: sanitizeString(req.session.user?.id, 120),
         masteryEvaluationId: req.body?.masteryEvaluationId || req.body?.mastery_evaluation_id
       });
-      if (!result.ok) return res.status((result as any).status || 400).json({ success: false, error: (result as any).status === 404 ? 'TARGET_NOT_FOUND' : (result as any).status === 400 ? 'ID_INVALIDO' : 'UNEXPECTED_ERROR', message: (result as any).error || 'Não foi possível aguardar próxima sessão.', data: (result as any).data || [] });
+      if (!result.ok) return res.status((result as any).status || 400).json({ success: false, error: (result as any).status === 404 ? 'TARGET_NOT_FOUND' : (result as any).status === 400 ? 'ID_INVALIDO' : 'UNEXPECTED_ERROR', message: (result as any).error || 'Não foi possível aguardar futura consulta.', data: (result as any).data || [] });
       const schedules = Array.isArray(result.data) ? result.data : [];
-      return res.json({ success: true, message: 'Sondagem aguardando próxima sessão.', schedule: schedules[0] || null, data: schedules });
+      return res.json({ success: true, message: 'Sondagem aguardando futura consulta.', schedule: schedules[0] || null, data: schedules });
     } catch {
-      return res.status(500).json({ success: false, error: 'UNEXPECTED_ERROR', message: 'Não foi possível aguardar próxima sessão.' });
+      return res.status(500).json({ success: false, error: 'UNEXPECTED_ERROR', message: 'Não foi possível aguardar futura consulta.' });
     }
   });
 

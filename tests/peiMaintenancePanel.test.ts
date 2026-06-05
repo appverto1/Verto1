@@ -275,7 +275,7 @@ test('resolvedor central prioriza nome real, protocolo, dominio e marco clinico'
 });
 
 test('cards humanos descrevem vinculo, atraso, confirmacao e ciclo concluido', () => {
-  assert.equal(formatPeiMaintenanceScheduleLabel({ status: 'PENDING_NEXT_SESSION' }), 'Aguardando proxima sessao');
+  assert.equal(formatPeiMaintenanceScheduleLabel({ status: 'PENDING_NEXT_SESSION' }), 'Aguardando futura consulta');
   assert.equal(formatPeiMaintenanceScheduleLabel({ status: 'PENDING_CONFIRMATION' }), 'Pendente de confirmacao');
   assert.match(formatPeiMaintenanceScheduleLabel({ status: 'PENDING', target_due_date: '2026-06-01T12:00:00.000Z' }, new Date('2026-06-03T12:00:00.000Z')), /Atrasada ha 2 dia/);
   assert.match(formatPeiMaintenanceScheduleLabel({ status: 'SCHEDULED', appointment_id: 'appt-1', scheduled_for: '2026-06-03T12:00:00.000Z' }, new Date('2026-06-02T12:00:00.000Z')), /Vinculada a consulta/);
@@ -287,21 +287,30 @@ test('cards humanos descrevem vinculo, atraso, confirmacao e ciclo concluido', (
   assert.equal(groupPeiMaintenanceRows(completedRows).completed.length, 1);
 });
 
-test('modal de atribuicao lista proximas sessoes com dados clinicos sem UUID visivel', () => {
+test('modal de atribuicao lista proximas consultas com dados clinicos sem UUID visivel', () => {
   const label = formatPeiMaintenanceAppointmentLabel({
     id: '0aabb3ef-79fe-4c18-96d8-cc7b02588aa0',
     scheduled_at: '2026-06-03T13:20:00.000Z',
     service_type: 'ABA',
+    durationMinutes: 50,
     therapist_name: 'Terapeuta Mateus',
     room_name: 'Sala 1',
     status: 'scheduled'
   });
   assert.match(label, /03\/06/);
+  assert.match(label, /50 min/);
   assert.match(label, /ABA/);
   assert.match(label, /Terapeuta Mateus/);
   assert.match(label, /Sala 1/);
   assert.doesNotMatch(label, /0aabb3ef/);
   assert.match(patientDetailCode, /formatPeiMaintenanceAppointmentLabel\(appointment\)/);
+  const futureEndpointStart = serverCode.indexOf("app.get('/api/aba/patients/:patientId/future-appointments'");
+  const futureEndpointEnd = serverCode.indexOf("app.post('/api/aba/targets/:targetId/maintenance-schedules'", futureEndpointStart);
+  assert.notEqual(futureEndpointStart, -1);
+  const futureEndpointCode = serverCode.slice(futureEndpointStart, futureEndpointEnd);
+  assert.match(futureEndpointCode, /canLinkMaintenance/);
+  assert.match(futureEndpointCode, /unavailableReason/);
+  assert.match(futureEndpointCode, /Esta recorrência ainda não foi salva como consulta real/);
 });
 
 test('subaba manutencao etapa 2 renderiza botao de agendamento simples', () => {
@@ -320,7 +329,7 @@ test('subaba manutencao etapa 2 renderiza botao de agendamento simples', () => {
   assert.match(maintenancePanelUi, /peiMaintenanceEligibleRows\.map[\s\S]*?Agendar manutenção/m);
   assert.match(maintenancePanelUi, /disabled=\{Boolean\(peiMaintenanceActionKey\) \|\| !canManagePeiMaintenance\}/);
   assert.match(maintenancePanelUi, /VocÃª nÃ£o tem permissÃ£o para agendar manutenÃ§Ã£o|Você não tem permissão para agendar manutenção/);
-  assert.match(maintenancePanelUi, /openPeiMaintenanceScheduleModal\(goal, 'NEXT_PATIENT_SESSION'\)/);
+  assert.match(maintenancePanelUi, /openPeiMaintenanceScheduleModal\(goal, 'EXISTING_APPOINTMENT'\)/);
   assert.match(maintenancePanelUi, /peiMaintenanceEligibleRows\.map/);
   assert.doesNotMatch(maintenancePanelUi, /renderPeiMaintenanceGroup|renderPeiMaintenanceMetric|renderPeiMaintenanceActions|Atribuir a uma sessão|Plano de manutenção|Escolher sessão existente|Pendências técnicas/);
 });
@@ -338,7 +347,7 @@ test('subaba manutencao preserva duplicatas do ensino e hidrata target do painel
   assert.match(eligibleCode, /const rows = localRows\.length > 0 \? \[\.\.\.localRows, \.\.\.panelOnlyRows\]/);
 });
 
-test('modal etapa 2 mostra somente data ou proxima sessao e payload novo', () => {
+test('modal etapa 2 mostra data, proxima consulta e aguardar futura consulta', () => {
   const modalStart = patientDetailCode.indexOf('{peiMaintenanceScheduleRow && createPortal(');
   const modalEnd = patientDetailCode.indexOf('{peiMaintenanceReviewRow && createPortal', modalStart);
   assert.notEqual(modalStart, -1);
@@ -347,23 +356,32 @@ test('modal etapa 2 mostra somente data ou proxima sessao e payload novo', () =>
   assert.match(modalCode, /Defina quando esta habilidade será sondada/);
   assert.match(modalCode, /Status:[\s\S]*Progresso:/m);
   assert.match(modalCode, /Escolher data/);
-  assert.match(modalCode, /Aguardar próxima sessão/);
+  assert.match(modalCode, /Escolher próxima consulta/);
+  assert.match(modalCode, /Aguardar futura consulta/);
+  assert.match(modalCode, /Carregando próximas consultas/);
+  assert.match(modalCode, /Este paciente não possui próximas consultas agendadas/);
+  assert.match(modalCode, /setSelectedPeiMaintenanceAppointmentId\(appointmentId\)/);
+  assert.match(modalCode, /appointment\?\.unavailableReason/);
   assert.match(modalCode, /Salvar agendamento/);
-  assert.doesNotMatch(modalCode, /Escolher sessão existente|Escolher data específica|Plano de manutenção|Atribuir a uma sessão/);
+  assert.doesNotMatch(modalCode, /Escolher sessão existente|Escolher data específica|Plano de manutenção|Atribuir a uma sessão|Aguardar próxima sessão/);
 
   const handlerStart = patientDetailCode.indexOf('const handlePeiScheduleModalSave');
   const handlerEnd = patientDetailCode.indexOf('const handlePeiScheduleNextSession', handlerStart);
   assert.notEqual(handlerStart, -1);
   const handlerCode = patientDetailCode.slice(handlerStart, handlerEnd);
   assert.doesNotMatch(handlerCode, /Esta habilidade não está disponível para manutenção/);
-  assert.match(handlerCode, /Não foi possível agendar a manutenção/);
+  assert.match(handlerCode, /Não foi possível identificar a habilidade/);
   assert.match(handlerCode, /Escolha uma data para agendar a sondagem/);
-  assert.match(handlerCode, /const scheduleMode = isDateMode \? 'DATE' : 'NEXT_SESSION'/);
-  assert.match(handlerCode, /dueDate: isDateMode \? peiMaintenanceScheduleDate : null/);
+  assert.match(handlerCode, /Escolha uma consulta antes de salvar o agendamento/);
+  assert.match(handlerCode, /const isAppointmentMode = peiMaintenanceScheduleMode === 'EXISTING_APPOINTMENT'/);
+  assert.match(handlerCode, /const scheduleMode = isDateMode \|\| isAppointmentMode \? 'DATE' : 'NEXT_SESSION'/);
+  assert.match(handlerCode, /dueDate: isDateMode \? peiMaintenanceScheduleDate : appointmentDueDate/);
+  assert.match(handlerCode, /appointmentId: appointmentId \|\| null/);
   assert.match(handlerCode, /dataService\.createMaintenanceScheduleForTarget\(targetId, payload\)/);
   assert.match(handlerCode, /message: successMessage/);
+  assert.match(handlerCode, /Sondagem atribuída à consulta/);
   assert.match(handlerCode, /Sondagem de manutenção agendada para a data escolhida/);
-  assert.match(handlerCode, /Sondagem aguardando próxima sessão/);
+  assert.match(handlerCode, /Sondagem aguardando futura consulta/);
   assert.doesNotMatch(handlerCode, /scheduleMaintenanceForNextSession|requestSessionStart|saveAbaSession|createAbaSession|POST \/api\/aba\/sessions/);
 });
 
@@ -478,6 +496,8 @@ test('endpoint de agendamento aceita DATE ou NEXT_SESSION com upsert ativo', () 
   const endpointCode = serverCode.slice(endpointStart, nextEndpointStart);
   assert.match(endpointCode, /requestedMode[\s\S]*?'DATE'[\s\S]*?'NEXT_SESSION'/m);
   assert.match(endpointCode, /scheduleModeFromPayload[\s\S]*?'CUSTOM_DATE'[\s\S]*?'NEXT_PATIENT_SESSION'/m);
+  assert.match(endpointCode, /appointmentIdFromPayload/);
+  assert.match(endpointCode, /customDateOrAppointmentMode[\s\S]*!sanitizeString\(dueDate, 80\)[\s\S]*!sanitizeString\(appointmentIdFromPayload, 180\)/m);
   assert.match(endpointCode, /MISSING_DUE_DATE/);
   assert.match(endpointCode, /Escolha uma data para agendar a sondagem/);
   assert.match(endpointCode, /NÃ£o foi possÃ­vel agendar a manutenÃ§Ã£o|Não foi possível agendar a manutenção/);
@@ -495,6 +515,10 @@ test('endpoint de agendamento aceita DATE ou NEXT_SESSION com upsert ativo', () 
   assert.match(helperCode, /\.eq\('organization_id', organizationId\)[\s\S]*?\.eq\('patient_id', patientId\)[\s\S]*?\.eq\('target_id', targetId\)[\s\S]*?\.in\('status', ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES\)/m);
   assert.match(helperCode, /MAINTENANCE_SCHEDULE_CREATED/);
   assert.match(helperCode, /MAINTENANCE_SCHEDULE_UPDATED/);
+  assert.match(helperCode, /fetchMaintenanceAppointmentById/);
+  assert.match(helperCode, /Consulta não encontrada/);
+  assert.match(helperCode, /appointment_id: appointmentId/);
+  assert.match(helperCode, /due_date: scheduledFor \|\| dueDate/);
   assert.match(helperCode, /status: 'PENDING_NEXT_SESSION'/);
   assert.match(helperCode, /status: 'SCHEDULED'/);
   assert.doesNotMatch(helperCode, /CUSTOM_DATE_PENDING_LINK/);
@@ -565,7 +589,7 @@ test('backend valida ids invalidos e recent-session-events local sem ruido', () 
   assert.match(dataServiceCode, /if \(!isPersistedUuid\(sessionId\)\) return \{ success: true, data: \[\] \}/);
 });
 
-test('agendamento simples da etapa 2 nao inicia sessao nem mostra opcoes futuras', () => {
+test('agendamento simples da etapa 2 nao inicia sessao e mostra fluxo de consultas reais', () => {
   const modalStart = patientDetailCode.indexOf('{peiMaintenanceScheduleRow && createPortal(');
   const modalEnd = patientDetailCode.indexOf('{peiMaintenanceReviewRow && createPortal', modalStart);
   const modalCode = patientDetailCode.slice(modalStart, modalEnd);
@@ -574,8 +598,9 @@ test('agendamento simples da etapa 2 nao inicia sessao nem mostra opcoes futuras
   const handlerCode = patientDetailCode.slice(handlerStart, handlerEnd);
   assert.match(modalCode, /Agendar sondagem de manutenção/);
   assert.match(modalCode, /Escolher data/);
-  assert.match(modalCode, /Aguardar próxima sessão/);
-  assert.doesNotMatch(modalCode, /Escolher sessão existente|Escolher data específica|Plano de manutenção|Atribuir a uma sessão/);
+  assert.match(modalCode, /Escolher próxima consulta/);
+  assert.match(modalCode, /Aguardar futura consulta/);
+  assert.doesNotMatch(modalCode, /Escolher sessão existente|Escolher data específica|Plano de manutenção|Atribuir a uma sessão|Aguardar próxima sessão/);
   assert.doesNotMatch(handlerCode, /requestSessionStart\('fullscreen'\)|POST \/api\/aba\/sessions|saveAbaSession|startSession|createAbaSession|SessionMode/);
   assert.doesNotMatch(calendarCode, /onStartSession\?\(\{ \.\.\.detailEvent, maintenanceProbe: probe/);
 });

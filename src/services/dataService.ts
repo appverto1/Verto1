@@ -2901,9 +2901,9 @@ export const dataService = {
         credentials: 'include',
         body: JSON.stringify(payload || {})
       }, { helperName: 'scheduleMaintenanceForNextSession', operation: 'write', table: 'aba_maintenance_schedules', hasExplicitColumns: true });
-      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível agendar para a próxima sessão agora.');
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível aguardar futura consulta agora.');
     } catch (error) {
-      const message = getApiErrorMessage(error, 'Não foi possível agendar para a próxima sessão agora.');
+      const message = getApiErrorMessage(error, 'Não foi possível aguardar futura consulta agora.');
       return { success: false, error: message, message };
     }
   },
