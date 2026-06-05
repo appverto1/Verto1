@@ -2708,7 +2708,7 @@ export const dataService = {
       const response = await fetchClinical(endpoint, {
         headers: await buildConditionalHeaders(endpoint, 'aba'),
         credentials: 'include'
-      }, { helperName: 'getAbaMaintenancePanel', operation: 'list', table: 'aba_targets,aba_maintenance_schedules,aba_maintenance_probe_results,aba_regression_alerts', hasExplicitColumns: true });
+      }, { helperName: 'getAbaMaintenancePanel', operation: 'list', table: 'patient_pei,aba_targets', hasExplicitColumns: true });
       if (response.ok) return await response.json();
       return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível carregar manutenção agora.');
     } catch (error) {

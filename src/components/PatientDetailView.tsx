@@ -22,11 +22,13 @@ import { isAbaV2Enabled } from '../utils/featureFlags';
 import { filterHumanDisplayEntries, formatSessionLabel, safeDisplayValue } from '../utils/displayLabels';
 import {
   PEI_PLAN_SUBTABS,
+  buildPeiMaintenanceEligibleSkills,
   buildPeiMaintenanceRows,
   buildPeiPlanHistoryEvents,
   createEmptyPeiMaintenanceTargetFirstSections,
   formatPeiMaintenanceAppointmentLabel,
   formatPeiMaintenanceScheduleLabel,
+  isPeiMaintenanceEligibleSkill,
   mapMaintenancePanelResponse,
   resolveMaintenanceTargetDisplay,
   type PeiMaintenanceGroupKey,
@@ -4766,20 +4768,36 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return Math.min(count, target);
   };
 
-  const isGoalAcquired = (goal: any) =>
-    ['completed', 'acquired', 'adquirido'].includes(String(goal?.status || '').toLowerCase());
-
-  const getGoalProgressPercent = (goal: any) => {
-    if (isGoalAcquired(goal)) return 100;
-
-    const storedProgress = Number(goal?.progress);
+  const getGoalComputedProgressPercent = (goal: any) => {
+    const storedProgress = Number(
+      goal?.progress ??
+        goal?.progressPercent ??
+        goal?.progress_percent ??
+        goal?.masteryProgressPercent ??
+        goal?.mastery_progress_percent
+    );
+    const normalizedStoredProgress = Number.isFinite(storedProgress)
+      ? Math.min(Math.max(Math.round(storedProgress), 0), 100)
+      : 0;
     if (patientCategory !== 'Criança') {
-      return Number.isFinite(storedProgress) ? Math.min(Math.max(Math.round(storedProgress), 0), 100) : 0;
+      return normalizedStoredProgress;
     }
 
     const target = getGoalMasteryTarget(goal);
     const consecutiveSuccesses = getMasteryProgress(goal) || 0;
-    return Math.min(Math.round((consecutiveSuccesses / target) * 100), 100);
+    const masteryProgress = Math.min(Math.round((consecutiveSuccesses / target) * 100), 100);
+    return Math.max(normalizedStoredProgress, masteryProgress);
+  };
+
+  const isGoalAcquired = (goal: any) =>
+    isPeiMaintenanceEligibleSkill({
+      ...goal,
+      progressPercent: getGoalComputedProgressPercent(goal)
+    });
+
+  const getGoalProgressPercent = (goal: any) => {
+    if (isGoalAcquired(goal)) return 100;
+    return getGoalComputedProgressPercent(goal);
   };
 
   const MasteryDots = ({ count, status, target = 5 }: { count: number, status?: string, target?: number }) => {
@@ -4808,8 +4826,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
   const peiGoals = useMemo(() => (Array.isArray(patient?.pei) ? patient.pei : []), [patient?.pei]);
   const peiAcquiredTeachingGoals = useMemo(
-    () => peiGoals.filter((goal: any) => isGoalAcquired(goal)),
-    [peiGoals]
+    () => buildPeiMaintenanceEligibleSkills(
+      peiGoals.map((goal: any) => ({
+        ...goal,
+        progressPercent: getGoalProgressPercent(goal),
+        statusLabel: isGoalAcquired(goal) ? 'Adquirido' : goal?.status
+      }))
+    ),
+    [history, patient?.id, patientCategory, peiGoals, planProtocolCatalog, protocols]
   );
   const peiMaintenanceLinkableTargets = useMemo(
     () => (Array.isArray(peiMaintenanceLinkableTargetsState.items) ? peiMaintenanceLinkableTargetsState.items : []),
@@ -5628,8 +5652,25 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     <div className="space-y-4">
       <div>
         <h3 className={`text-lg font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>Manutenção</h3>
-        <p className={`mt-1 text-sm ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>Habilidades adquiridas no Ensino.</p>
+        <p className={`mt-1 text-sm ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>Habilidades adquiridas no Ensino, prontas para sondagem de manutenção.</p>
       </div>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        {[
+          ['Elegíveis', peiAcquiredTeachingGoals.length],
+          ['Em manutenção', 0],
+          ['Agendadas', 0],
+        ].map(([label, value]) => (
+          <div key={String(label)} className={`rounded-2xl border p-4 ${isPanelDark ? 'border-slate-700 bg-slate-900/50' : 'border-slate-100 bg-white'}`}>
+            <p className={`text-xs font-medium ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>{label}</p>
+            <p className={`mt-1 text-2xl font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{value}</p>
+          </div>
+        ))}
+      </div>
+      <section className="space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <h4 className={`text-sm font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>Habilidades elegíveis para manutenção</h4>
+          <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${isPanelDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>{peiAcquiredTeachingGoals.length}</span>
+        </div>
       {peiAcquiredTeachingGoals.length === 0 ? (
         <p className={`rounded-2xl border p-5 text-sm ${isPanelDark ? 'border-slate-700 bg-slate-900/40 text-slate-400' : 'border-slate-100 bg-slate-50 text-slate-500'}`}>
           Nenhuma habilidade adquirida no Ensino no momento.
@@ -5637,39 +5678,41 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       ) : (
         <div className="space-y-3">
           {peiAcquiredTeachingGoals.map((goal: any) => (
-            <div key={goal.id || goal.name} className={`rounded-2xl border p-5 shadow-sm ${isPanelDark ? 'bg-gradient-to-br from-emerald-950/70 via-[#101b2e] to-teal-950/50 border-emerald-400/50' : 'bg-gradient-to-br from-emerald-50 via-white to-teal-50 border-emerald-300'}`}>
+            <div key={goal.key} className={`rounded-2xl border p-5 shadow-sm ${isPanelDark ? 'border-emerald-400/40 bg-[#101b2e]' : 'border-emerald-200 bg-white'}`}>
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    {goal.protocolTitle && <span className="rounded-full bg-[#05CD99]/10 px-2 py-0.5 text-[9px] font-semibold uppercase text-[#05CD99]">{goal.protocolTitle}</span>}
-                    {goal.domainName && <span className={`text-[9px] font-semibold uppercase ${isPanelDark ? 'text-slate-300' : 'text-gray-400'}`}>{goal.domainName}</span>}
-                  </div>
-                  <h4 className={`mt-2 text-base font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{goal.name}</h4>
-                  {goal.objective && (
-                    <p className={`mt-1 text-xs ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>{sanitizeDescriptionForDisplay(goal.objective)}</p>
+                  <h4 className={`text-base font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{goal.name}</h4>
+                  <p className={`mt-1 text-xs font-semibold ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>
+                    {[goal.protocol, goal.domain].filter(Boolean).join(' · ') || 'PEI do paciente'}
+                  </p>
+                  {goal.description && (
+                    <p className={`mt-2 text-xs ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>{sanitizeDescriptionForDisplay(goal.description)}</p>
                   )}
                 </div>
                 <span className="inline-flex min-h-[34px] items-center justify-center rounded-xl bg-emerald-500 px-4 py-2 text-xs font-bold uppercase tracking-wide text-white shadow-md shadow-emerald-200">
-                  Adquirido
+                  {goal.statusLabel}
                 </span>
               </div>
+              {goal.progressPercent !== null && (
               <div className="mt-4">
                 <div className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-widest text-emerald-700">
                   <span>Progresso da meta</span>
-                  <span>100%</span>
+                  <span>{goal.progressPercent}%</span>
                 </div>
                 <div className={`mt-2 h-3 overflow-hidden rounded-full ${isPanelDark ? 'bg-slate-800' : 'bg-emerald-100'}`}>
-                  <div className="h-full w-full rounded-full bg-gradient-to-r from-emerald-400 via-green-500 to-teal-500"></div>
+                  <div className="h-full rounded-full bg-gradient-to-r from-emerald-400 via-green-500 to-teal-500" style={{ width: `${goal.progressPercent}%` }}></div>
                 </div>
                 <div className={`mt-3 inline-flex items-center gap-2 rounded-2xl px-3 py-2 text-xs font-bold ${isPanelDark ? 'bg-emerald-500/10 text-emerald-100 border border-emerald-300/20' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'}`}>
                   <CheckCircle2 size={15} />
-                  Habilidade adquirida. Progresso concluído com 100%.
+                  Status: Adquirido. Progresso: {goal.progressPercent}%.
                 </div>
               </div>
+              )}
             </div>
           ))}
         </div>
       )}
+      </section>
     </div>
   );
 

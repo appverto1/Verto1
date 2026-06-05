@@ -2,11 +2,14 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  buildPeiMaintenanceEligibleSkills,
   buildPeiMaintenanceRows,
   formatPeiMaintenanceAppointmentLabel,
   formatPeiMaintenanceScheduleLabel,
+  getPeiMaintenanceProgressPercent,
   groupPeiMaintenanceRows,
   groupPeiMaintenanceRowsTargetFirst,
+  isPeiMaintenanceEligibleSkill,
   mapMaintenancePanelResponse,
   resolveMaintenanceTargetDisplay,
   summarizePeiMaintenanceRows,
@@ -206,6 +209,34 @@ test('habilidades do PEI com status local ou progresso 100 aparecem como elegive
   assert.equal(groups.eligibleSkills.every((row: any) => row.hasPeiClinicalSource), true);
 });
 
+test('etapa 1 lista apenas habilidades adquiridas reais do PEI', () => {
+  const targetId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0030';
+  const skills = buildPeiMaintenanceEligibleSkills([
+    { id: 'goal-1', target_id: targetId, name: 'Contato visual', status: 'ACQUIRED', protocolTitle: 'VB-MAPP', domainName: 'Social', description: 'Olha quando chamado.' },
+    { id: 'goal-1-duplicate', target_id: targetId, name: 'Contato visual duplicado', status: 'ACQUIRED', protocolTitle: 'VB-MAPP', domainName: 'Social' },
+    { id: 'goal-2', name: 'Imita gesto', clinical_status: 'MASTERED', protocolTitle: 'VB-MAPP', domainName: 'Imitacao' },
+    { id: 'goal-3', name: 'Emparelha igual', status: 'in_progress', progress: 100, protocolTitle: 'VB-MAPP', domainName: 'Matching' },
+    { id: 'goal-4', name: 'Solicita item', status: 'in_progress', progress: 40, protocolTitle: 'VB-MAPP', domainName: 'Mando' },
+    { name: 'Nomeia objeto', badgeLabel: 'Adquirido', protocolTitle: 'VB-MAPP', domainName: 'Tato' },
+    { name: 'Nomeia objeto', badgeLabel: 'Adquirido', protocolTitle: 'VB-MAPP', domainName: 'Tato' }
+  ]);
+
+  assert.equal(skills.length, 4);
+  assert.equal(skills[0].name, 'Contato visual');
+  assert.equal(skills[0].description, 'Olha quando chamado.');
+  assert.equal(skills.every((skill) => skill.statusLabel === 'Adquirido'), true);
+  assert.equal(skills.some((skill) => skill.name === 'Solicita item'), false);
+  assert.equal(skills.filter((skill) => skill.name === 'Nomeia objeto').length, 1);
+});
+
+test('etapa 1 reconhece progresso 100 e bloqueia treino sem criterio concluido', () => {
+  assert.equal(isPeiMaintenanceEligibleSkill({ status: 'in_progress', progress_percent: 100 }), true);
+  assert.equal(isPeiMaintenanceEligibleSkill({ mastery_status: 'MASTERED' }), true);
+  assert.equal(isPeiMaintenanceEligibleSkill({ clinical_status: 'ACQUIRED' }), true);
+  assert.equal(isPeiMaintenanceEligibleSkill({ status: 'in_progress', progress: 80 }), false);
+  assert.equal(getPeiMaintenanceProgressPercent({ progress: '100%' }), 100);
+});
+
 test('resolvedor central prioriza nome real, protocolo, dominio e marco clinico', () => {
   const display = resolveMaintenanceTargetDisplay({
     schedule: {
@@ -262,6 +293,19 @@ test('modal de atribuicao lista proximas sessoes com dados clinicos sem UUID vis
   assert.match(label, /Sala 1/);
   assert.doesNotMatch(label, /0aabb3ef/);
   assert.match(patientDetailCode, /formatPeiMaintenanceAppointmentLabel\(appointment\)/);
+});
+
+test('subaba manutencao etapa 1 nao renderiza acoes de agendamento', () => {
+  const maintenancePanelStart = patientDetailCode.indexOf('const renderPeiMaintenancePanel = () => (');
+  const maintenancePanelEnd = patientDetailCode.indexOf('const renderPeiGeneralizationPanel', maintenancePanelStart);
+  const maintenancePanelUi = patientDetailCode.slice(maintenancePanelStart, maintenancePanelEnd);
+  assert.match(maintenancePanelUi, /Habilidades adquiridas no Ensino, prontas para sondagem de manutenção/);
+  assert.match(maintenancePanelUi, /Elegíveis/);
+  assert.match(maintenancePanelUi, /Em manutenção/);
+  assert.match(maintenancePanelUi, /Agendadas/);
+  assert.match(maintenancePanelUi, /Habilidades elegíveis para manutenção/);
+  assert.match(maintenancePanelUi, /Status: Adquirido/);
+  assert.doesNotMatch(maintenancePanelUi, /renderPeiMaintenanceGroup|renderPeiMaintenanceMetric|renderPeiMaintenanceActions|Agendar manutenção|Atribuir a uma sessão|Plano de manutenção|createMaintenanceScheduleForTarget|scheduleMaintenanceForNextSession|Pendências técnicas/);
 });
 
 test('acoes do painel chamam rotas seguras existentes', () => {
@@ -345,6 +389,19 @@ test('interfaces de manutencao usam display central sem placeholders antigos', (
   assert.match(rowCode, /Esta sondagem antiga precisa ser associada a uma habilidade real/);
   assert.doesNotMatch(rowCode, /Esta sondagem precisa ser vinculada a uma habilidade do PEI/);
   assert.doesNotMatch(uiCode, /Target em manuten[cç]ao|Target em manutenção|Sem maintenance probe agendado|Marco clinico: a definir|Marco clínico: a definir/);
+});
+
+test('backend da etapa 1 usa PEI targets como fonte principal sem schedules', () => {
+  const routeStart = serverCode.indexOf("app.get('/api/patients/:patientId/aba/maintenance-panel'");
+  const legacyStart = serverCode.indexOf('const { page, pageSize, from, to } = parseAbaPageParams', routeStart);
+  const stepOneRoute = serverCode.slice(routeStart, legacyStart);
+  assert.match(stepOneRoute, /checkPatientAccess/);
+  assert.match(stepOneRoute, /getPatientPeiTargets/);
+  assert.match(stepOneRoute, /\.from\('aba_targets'\)[\s\S]*?\.select\(ABA_TARGET_RECOMMENDATION_SELECT\)/m);
+  assert.match(stepOneRoute, /source: 'patient_pei_targets_step1'/);
+  assert.match(dataServiceCode, /table: 'patient_pei,aba_targets'/);
+  assert.doesNotMatch(stepOneRoute, /aba_maintenance_schedules|ABA_MAINTENANCE_SCHEDULE_SELECT|aba_maintenance_probe_results|aba_regression_alerts|fetchFutureAppointmentsForMaintenance/);
+  assert.doesNotMatch(stepOneRoute, /select\('\*'\)/);
 });
 
 test('backend resolve targets de manutencao em lote com colunas explicitas', () => {

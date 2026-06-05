@@ -29459,6 +29459,190 @@ async function startServer() {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
       if (!isUuid(patientId)) return res.status(400).json({ success: false, error: 'ID_INVALIDO', message: 'Paciente inválido.' });
+      {
+        const { page, pageSize } = parseAbaPageParams(req.query);
+        const applyClinic = (query: any) => {
+          let scoped = organizationId ? query.eq('organization_id', organizationId) : query;
+          return !hasGlobalClinicAccess(req.session.user) && clinicId ? scoped.eq('clinic_id', clinicId) : scoped;
+        };
+        const targetResult = await applyClinic(
+          supabase
+            .from('aba_targets')
+            .select(ABA_TARGET_RECOMMENDATION_SELECT)
+            .eq('patient_id', patientId)
+            .order('updated_at', { ascending: false })
+            .limit(200)
+        );
+        if (targetResult.error) {
+          if (hasMissingFinancialSchema(targetResult.error) || isMissingRelationError(targetResult.error)) {
+            return res.json({
+              success: true,
+              data: {
+                eligibleSkills: [],
+                maintenanceSkills: [],
+                scheduledProbes: [],
+                waitingNextSession: [],
+                overdueProbes: [],
+                regressionRisk: [],
+                technicalIssues: [],
+                summary: {
+                  eligibleSkills: 0,
+                  maintenanceSkills: 0,
+                  scheduledProbes: 0,
+                  waitingNextSession: 0,
+                  overdueProbes: 0,
+                  regressionRisk: 0,
+                  technicalIssues: 0
+                },
+                skills: [],
+                cards: [],
+                source: 'patient_pei_targets_step1'
+              },
+              page,
+              pageSize
+            });
+          }
+          throw targetResult.error;
+        }
+
+        const allTargets = Array.isArray((targetResult as any).data) ? (targetResult as any).data : [];
+        const peiTargets = await getPatientPeiTargets(patientId, clinicId, organizationId, req.session.user);
+        const targetById = new Map<string, any>();
+        const targetByComposite = new Map<string, any>();
+        const duplicateComposite = new Set<string>();
+        const targetByName = new Map<string, any>();
+        const duplicateName = new Set<string>();
+        const registerTargetMatch = (map: Map<string, any>, duplicates: Set<string>, key: string, target: any) => {
+          if (!key) return;
+          if (map.has(key)) {
+            duplicates.add(key);
+            map.delete(key);
+            return;
+          }
+          if (!duplicates.has(key)) map.set(key, target);
+        };
+        allTargets.forEach((target: any) => {
+          const targetId = sanitizeString(target?.id, 180);
+          if (!isUuid(targetId)) return;
+          targetById.set(targetId, target);
+          const targetName = sanitizeString(target?.name || target?.description, 240);
+          const protocolName = sanitizeString(target?.protocol_title, 240);
+          const domainName = sanitizeString(target?.domain_name, 240);
+          registerTargetMatch(targetByComposite, duplicateComposite, [targetName, protocolName, domainName].map(normalizePeiTargetMatchKey).filter(Boolean).join('|'), target);
+          registerTargetMatch(targetByName, duplicateName, normalizePeiTargetMatchKey(targetName), target);
+        });
+
+        const acquiredStatuses = new Set(['COMPLETED', 'COMPLETE', 'CONCLUIDO', 'CONCLUÍDO', 'ACQUIRED', 'ADQUIRIDO', 'MASTERED', 'MASTERED_APPROVED', 'MAINTENANCE', 'MAINTAINED', 'READY_FOR_MAINTENANCE']);
+        const isTargetEligibleForMaintenance = (target: any) => {
+          const status = sanitizeString(target?.clinical_status || target?.phase || target?.target_type, 80).toUpperCase();
+          return acquiredStatuses.has(status);
+        };
+        const hydratePeiTarget = (peiTarget: any) => {
+          const explicitTargetId = sanitizeString(peiTarget?.targetId, 180);
+          const explicitTarget = isUuid(explicitTargetId) ? targetById.get(explicitTargetId) : null;
+          const compositeKey = sanitizeString(peiTarget?.matchCompositeKey, 500);
+          const nameKey = sanitizeString(peiTarget?.matchNameKey, 280);
+          const matchedTarget = explicitTarget ||
+            (compositeKey && !duplicateComposite.has(compositeKey) ? targetByComposite.get(compositeKey) : null) ||
+            (nameKey && !duplicateName.has(nameKey) ? targetByName.get(nameKey) : null) ||
+            null;
+          return cleanObject({
+            ...peiTarget,
+            targetId: isUuid(matchedTarget?.id) ? matchedTarget.id : (isUuid(explicitTargetId) ? explicitTargetId : null),
+            target: matchedTarget || null,
+            targetName: sanitizeString(peiTarget?.targetName || matchedTarget?.name || matchedTarget?.description, 240),
+            protocolName: sanitizeString(peiTarget?.protocolName || matchedTarget?.protocol_title, 240) || 'Sem protocolo informado',
+            domainName: sanitizeString(peiTarget?.domainName || matchedTarget?.domain_name, 240) || 'Sem domínio informado'
+          });
+        };
+        const eligibleByKey = new Map<string, any>();
+        const addEligibleSkill = (source: any) => {
+          const target = source?.target || source || {};
+          const targetId = sanitizeString(source?.targetId || source?.target_id || target?.id, 180);
+          const goalId = sanitizeString(source?.peiGoalId || source?.goalId || source?.goal_id, 180);
+          const targetName = sanitizeString(source?.targetName || source?.target_name || source?.name || target?.name || target?.description, 240);
+          if (!targetName) return;
+          const protocolName = sanitizeString(source?.protocolName || source?.protocol || source?.protocol_title || target?.protocol_title, 240) || 'Sem protocolo informado';
+          const domainName = sanitizeString(source?.domainName || source?.domain || source?.domain_name || target?.domain_name, 240) || 'Sem domínio informado';
+          const description = sanitizeString(source?.description || source?.objective || target?.description, 500) || null;
+          const progress = Number(source?.progressPercent ?? source?.progress_percent ?? source?.progress);
+          const progressPercent = Number.isFinite(progress) ? Math.max(0, Math.min(100, Math.round(progress))) : 100;
+          const compositeKey = [targetName, protocolName, domainName].map(normalizePeiTargetMatchKey).filter(Boolean).join('|');
+          const internalKey = isUuid(targetId)
+            ? `target:${targetId}`
+            : goalId
+              ? `goal:${goalId}`
+              : `skill:${compositeKey}`;
+          if (!internalKey || eligibleByKey.has(internalKey)) return;
+          eligibleByKey.set(internalKey, cleanObject({
+            key: `eligible-${eligibleByKey.size + 1}`,
+            cardKind: 'PEI_ACQUIRED_SKILL',
+            targetName,
+            protocol: protocolName,
+            domain: domainName,
+            protocolName,
+            domainName,
+            description,
+            statusLabel: 'Adquirido',
+            clinicalStatus: sanitizeString(source?.clinicalStatus || source?.clinical_status || target?.clinical_status || target?.phase, 80) || null,
+            masteryStatus: sanitizeString(source?.masteryStatus || source?.mastery_status, 80) || null,
+            progressPercent,
+            canScheduleMaintenance: false,
+            canWaitNextSession: false,
+            canAssignAppointment: false,
+            canReviewLink: false,
+            needsTargetReview: false,
+            availableActions: []
+          }));
+        };
+
+        peiTargets
+          .filter((target: any) => target?.eligibleForMaintenance)
+          .map(hydratePeiTarget)
+          .forEach(addEligibleSkill);
+        allTargets
+          .filter(isTargetEligibleForMaintenance)
+          .forEach((target: any) => addEligibleSkill({
+            target,
+            targetId: target?.id,
+            targetName: target?.name || target?.description,
+            protocolName: target?.protocol_title,
+            domainName: target?.domain_name,
+            description: target?.description,
+            clinicalStatus: target?.clinical_status || target?.phase,
+            progressPercent: 100
+          }));
+        const eligibleSkills = Array.from(eligibleByKey.values()).slice(0, pageSize);
+        return res.json({
+          success: true,
+          data: {
+            eligibleSkills,
+            maintenanceSkills: [],
+            scheduledProbes: [],
+            waitingNextSession: [],
+            overdueProbes: [],
+            regressionRisk: [],
+            technicalIssues: [],
+            summary: {
+              eligibleSkills: eligibleSkills.length,
+              maintenanceSkills: 0,
+              scheduledProbes: 0,
+              waitingNextSession: 0,
+              overdueProbes: 0,
+              regressionRisk: 0,
+              technicalIssues: 0
+            },
+            skills: eligibleSkills,
+            cards: eligibleSkills,
+            schedules: [],
+            probeResults: [],
+            alerts: [],
+            source: 'patient_pei_targets_step1'
+          },
+          page,
+          pageSize
+        });
+      }
       const { page, pageSize, from, to } = parseAbaPageParams(req.query);
       const applyClinic = (query: any) => {
         let scoped = organizationId ? query.eq('organization_id', organizationId) : query;

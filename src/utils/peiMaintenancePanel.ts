@@ -42,6 +42,19 @@ export type PeiMaintenancePanelMappedState = {
   technicalIssues: any[];
 };
 
+export type PeiMaintenanceEligibleSkill = {
+  key: string;
+  targetId: string;
+  goalId: string;
+  name: string;
+  description: string;
+  protocol: string;
+  domain: string;
+  statusLabel: 'Adquirido';
+  progressPercent: number | null;
+  source: any;
+};
+
 export const PEI_PLAN_SUBTABS: Array<{ id: PeiPlanSubtab; label: string }> = [
   { id: 'teaching', label: 'Ensino' },
   { id: 'maintenance', label: 'Manutencao' },
@@ -63,6 +76,31 @@ const UUID_LIKE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[
 const ACTIVE_LINKLESS_STATUSES = new Set(['PENDING_NEXT_SESSION', 'PENDING_LINK', 'PENDING_SCHEDULING', 'UNSCHEDULED', 'PENDING']);
 const COMPLETED_STATUSES = new Set(['COMPLETED', 'MAINTAINED', 'MAINTENANCE_COMPLETED']);
 const REGRESSION_STATUSES = new Set(['WATCH', 'REGRESSION_RISK']);
+const PEI_MAINTENANCE_ACQUIRED_STATUSES = new Set([
+  'COMPLETED',
+  'COMPLETE',
+  'CONCLUIDO',
+  'CONCLUÍDO',
+  'ACQUIRED',
+  'ADQUIRIDO',
+  'MASTERED',
+  'MASTERIZADO',
+  'MASTERED_APPROVED',
+  'MAINTENANCE',
+  'MANUTENCAO',
+  'MANUTENÇÃO',
+  'MAINTAINED',
+  'READY_FOR_MAINTENANCE'
+]);
+const PEI_MAINTENANCE_MASTERY_STATUSES = new Set([
+  'MASTERED',
+  'MASTERIZADO',
+  'MASTERED_APPROVED',
+  'READY_FOR_MAINTENANCE',
+  'MET',
+  'MET_TODAY'
+]);
+const PEI_MAINTENANCE_ACQUIRED_LABELS = new Set(['ADQUIRIDO', 'ACQUIRED', 'MASTERED', 'MASTERIZADO']);
 
 const normalizeText = (value: any) =>
   String(value ?? '')
@@ -141,6 +179,92 @@ const isMaintenanceRelevantGoal = (goal: any) => {
     (Number.isFinite(progress) && progress >= 100)
   );
 };
+
+const normalizeMaintenanceMatchKey = (value: any) =>
+  normalizeText(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9]+/g, ' ')
+    .trim()
+    .toLowerCase();
+
+const firstFiniteNumber = (...values: any[]) => {
+  for (const value of values) {
+    if (value === null || value === undefined || value === '') continue;
+    const parsed = typeof value === 'number'
+      ? value
+      : Number(String(value).replace('%', '').replace(',', '.').trim());
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+};
+
+export const getPeiMaintenanceProgressPercent = (goal: any) => {
+  const progress = firstFiniteNumber(
+    goal?.progress,
+    goal?.progressPercent,
+    goal?.progress_percent,
+    goal?.masteryProgressPercent,
+    goal?.mastery_progress_percent,
+    goal?.completionPercent,
+    goal?.completion_percent
+  );
+  if (progress === null) return null;
+  return Math.max(0, Math.min(100, Math.round(progress)));
+};
+
+export const isPeiMaintenanceEligibleSkill = (goal: any) => {
+  const status = normalizeStatus(goal?.status || goal?.phase);
+  const clinicalStatus = normalizeStatus(goal?.clinical_status || goal?.clinicalStatus);
+  const masteryStatus = normalizeStatus(goal?.mastery_status || goal?.masteryStatus || goal?.evaluation_status || goal?.evaluationStatus);
+  const badgeLabel = normalizeStatus(goal?.badge || goal?.label || goal?.badgeLabel || goal?.statusLabel || goal?.teachingBadge || goal?.teachingStatusLabel);
+  const progress = getPeiMaintenanceProgressPercent(goal);
+  return (
+    PEI_MAINTENANCE_ACQUIRED_STATUSES.has(status) ||
+    PEI_MAINTENANCE_ACQUIRED_STATUSES.has(clinicalStatus) ||
+    PEI_MAINTENANCE_MASTERY_STATUSES.has(masteryStatus) ||
+    PEI_MAINTENANCE_ACQUIRED_LABELS.has(badgeLabel) ||
+    Boolean(goal?.criteriaMet || goal?.criterionMet || goal?.masteryCriterionMet || goal?.masteryMet || goal?.isAcquired || goal?.isMastered) ||
+    progress === 100
+  );
+};
+
+export function buildPeiMaintenanceEligibleSkills(goals: any[] = []): PeiMaintenanceEligibleSkill[] {
+  const rowsByKey = new Map<string, PeiMaintenanceEligibleSkill>();
+  (Array.isArray(goals) ? goals : [])
+    .filter((goal) => goal && typeof goal === 'object')
+    .filter(isPeiMaintenanceEligibleSkill)
+    .forEach((goal) => {
+      const explicitTargetId = normalizeText(goal?.target_id || goal?.targetId || goal?.aba_target_id || goal?.abaTargetId);
+      const idAsTarget = isPersistedUuid(goal?.id) ? normalizeText(goal.id) : '';
+      const targetId = isPersistedUuid(explicitTargetId) ? explicitTargetId : idAsTarget;
+      const goalId = normalizeText(goal?.goal_id || goal?.goalId || (!targetId ? goal?.id : ''));
+      const name = firstDisplayText(goal?.name, goal?.title, goal?.target_name, goal?.targetName, goal?.skill_name, goal?.skillName, goal?.objective) || 'Habilidade sem nome';
+      const protocol = firstDisplayText(goal?.protocolTitle, goal?.protocol_title, goal?.protocolName, goal?.protocol_name, goal?.protocol?.name) || 'Sem protocolo informado';
+      const domain = firstDisplayText(goal?.domainName, goal?.domain_name, goal?.programName, goal?.program_name, goal?.domain?.name, goal?.program?.name) || 'Sem dominio informado';
+      const description = firstDisplayText(goal?.description, goal?.objective, goal?.criteria);
+      const compositeKey = [name, protocol, domain].map(normalizeMaintenanceMatchKey).filter(Boolean).join('|');
+      const key = targetId
+        ? `target:${targetId}`
+        : goalId
+          ? `goal:${goalId}`
+          : `skill:${compositeKey}`;
+      if (!key || rowsByKey.has(key)) return;
+      rowsByKey.set(key, {
+        key,
+        targetId,
+        goalId,
+        name,
+        description,
+        protocol,
+        domain,
+        statusLabel: 'Adquirido',
+        progressPercent: getPeiMaintenanceProgressPercent(goal),
+        source: goal,
+      });
+    });
+  return Array.from(rowsByKey.values());
+}
 
 const getScheduleReferenceDate = (schedule: any) =>
   schedule?.scheduled_for ||
