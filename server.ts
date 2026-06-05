@@ -23238,6 +23238,310 @@ async function startServer() {
     .digest('hex')
     .slice(0, 24);
 
+  const readPeiMaintenanceEnsureSource = (payload: any = {}) => {
+    const row = payload?.skill && typeof payload.skill === 'object'
+      ? payload.skill
+      : payload?.row && typeof payload.row === 'object'
+        ? payload.row
+        : payload?.target && typeof payload.target === 'object'
+          ? payload.target
+          : payload;
+    const source = row?.source && typeof row.source === 'object' ? row.source : {};
+    const goal = row?.goal && typeof row.goal === 'object' ? row.goal : {};
+    const target = row?.target && typeof row.target === 'object' ? row.target : {};
+    const firstText = (max: number, ...values: any[]) => {
+      for (const value of values) {
+        const text = sanitizeString(value, max);
+        if (text) return text;
+      }
+      return '';
+    };
+    const targetName = firstText(
+      240,
+      row?.targetName,
+      row?.target_name,
+      row?.name,
+      row?.title,
+      source?.targetName,
+      source?.target_name,
+      source?.name,
+      source?.title,
+      goal?.targetName,
+      goal?.target_name,
+      goal?.name,
+      goal?.title,
+      target?.name,
+      target?.targetName,
+      row?.objective,
+      source?.objective,
+      goal?.objective
+    );
+    const protocolName = firstText(
+      240,
+      row?.protocolName,
+      row?.protocol_name,
+      row?.protocolTitle,
+      row?.protocol_title,
+      row?.protocol,
+      source?.protocolName,
+      source?.protocol_name,
+      source?.protocolTitle,
+      source?.protocol_title,
+      source?.protocol,
+      goal?.protocolName,
+      goal?.protocol_name,
+      goal?.protocolTitle,
+      goal?.protocol_title,
+      goal?.protocol,
+      target?.protocol_title,
+      target?.protocolTitle,
+      target?.protocolName
+    ) || 'Sem protocolo informado';
+    const domainName = firstText(
+      240,
+      row?.domainName,
+      row?.domain_name,
+      row?.domain,
+      row?.programName,
+      row?.program_name,
+      source?.domainName,
+      source?.domain_name,
+      source?.domain,
+      source?.programName,
+      source?.program_name,
+      goal?.domainName,
+      goal?.domain_name,
+      goal?.domain,
+      goal?.programName,
+      goal?.program_name,
+      target?.domain_name,
+      target?.domainName,
+      target?.program_name,
+      target?.programName
+    ) || 'Sem domínio informado';
+    const progressPercent = Number(
+      row?.progressPercent ??
+      row?.progress_percent ??
+      row?.progress ??
+      source?.progressPercent ??
+      source?.progress_percent ??
+      source?.progress ??
+      goal?.progressPercent ??
+      goal?.progress_percent ??
+      goal?.progress
+    );
+    const clinicalStatus = firstText(80, row?.clinicalStatus, row?.clinical_status, row?.status, source?.clinicalStatus, source?.clinical_status, source?.status, goal?.clinicalStatus, goal?.clinical_status, goal?.status);
+    const masteryStatus = firstText(80, row?.masteryStatus, row?.mastery_status, row?.evaluationStatus, row?.evaluation_status, source?.masteryStatus, source?.mastery_status, goal?.masteryStatus, goal?.mastery_status);
+    const candidate = cleanObject({
+      source: 'patient_pei_request',
+      peiGoalId: firstText(180, row?.peiGoalId, row?.goalId, row?.goal_id, source?.peiGoalId, source?.goalId, source?.goal_id, source?.id, goal?.id),
+      skillId: firstText(180, row?.skillId, row?.skill_id, source?.skillId, source?.skill_id, goal?.skillId, goal?.skill_id),
+      targetId: isUuid(firstText(180, row?.targetId, row?.target_id, row?.abaTargetId, row?.aba_target_id, target?.id, source?.targetId, source?.target_id)) ? firstText(180, row?.targetId, row?.target_id, row?.abaTargetId, row?.aba_target_id, target?.id, source?.targetId, source?.target_id) : null,
+      localTargetRef: firstText(180, row?.localTargetRef, source?.localTargetRef, source?.id, goal?.id, row?.goalId, row?.goal_id),
+      targetName,
+      protocolName,
+      domainName,
+      description: firstText(500, row?.description, row?.objective, source?.description, source?.objective, goal?.description, goal?.objective, target?.description, targetName),
+      clinicalStatus,
+      masteryStatus,
+      progressPercent: Number.isFinite(progressPercent) ? Math.max(0, Math.min(100, Math.round(progressPercent))) : null,
+      acquiredAt: sanitizeIsoDateTime(row?.acquiredAt || row?.completedAt || row?.updatedAt || source?.acquiredAt || source?.completedAt || source?.updatedAt || null),
+      eligibleForMaintenance: isMaintenanceEligiblePeiGoal({
+        status: clinicalStatus,
+        clinical_status: clinicalStatus,
+        mastery_status: masteryStatus,
+        progressPercent: Number.isFinite(progressPercent) ? progressPercent : null
+      }),
+      matchNameKey: normalizePeiTargetMatchKey(targetName),
+      matchCompositeKey: [targetName, protocolName, domainName].map(normalizePeiTargetMatchKey).filter(Boolean).join('|')
+    });
+    return candidate;
+  };
+
+  const resolvePeiMaintenanceSourceTarget = (peiTargets: any[] = [], candidate: any = {}) => {
+    const eligibleTargets = (Array.isArray(peiTargets) ? peiTargets : []).filter((target: any) => target?.eligibleForMaintenance);
+    const targetId = sanitizeString(candidate?.targetId, 180);
+    if (isUuid(targetId)) {
+      const byTargetId = eligibleTargets.find((target: any) => sanitizeString(target?.targetId || target?.target_id, 180) === targetId);
+      if (byTargetId) return byTargetId;
+    }
+    const peiGoalId = sanitizeString(candidate?.peiGoalId || candidate?.goalId, 180);
+    if (peiGoalId) {
+      const byGoalId = eligibleTargets.find((target: any) =>
+        sanitizeString(target?.peiGoalId || target?.goalId || target?.goal_id, 180) === peiGoalId ||
+        sanitizeString(target?.localTargetRef, 180) === peiGoalId
+      );
+      if (byGoalId) return byGoalId;
+    }
+    const skillId = sanitizeString(candidate?.skillId || candidate?.skill_id, 180);
+    if (skillId) {
+      const bySkillId = eligibleTargets.find((target: any) => sanitizeString(target?.skillId || target?.skill_id, 180) === skillId);
+      if (bySkillId) return bySkillId;
+    }
+    const localTargetRef = sanitizeString(candidate?.localTargetRef, 180);
+    if (localTargetRef) {
+      const byLocalRef = eligibleTargets.find((target: any) => sanitizeString(target?.localTargetRef, 180) === localTargetRef);
+      if (byLocalRef) return byLocalRef;
+    }
+    const compositeKey = sanitizeString(candidate?.matchCompositeKey, 500);
+    if (compositeKey) {
+      const compositeMatches = eligibleTargets.filter((target: any) => sanitizeString(target?.matchCompositeKey, 500) === compositeKey);
+      if (compositeMatches.length === 1) return compositeMatches[0];
+    }
+    const nameKey = sanitizeString(candidate?.matchNameKey, 280);
+    if (nameKey) {
+      const nameMatches = eligibleTargets.filter((target: any) => sanitizeString(target?.matchNameKey, 280) === nameKey);
+      if (nameMatches.length === 1) return nameMatches[0];
+    }
+    return null;
+  };
+
+  const persistPeiSkillAcquiredMasteryEvent = async (params: {
+    organizationId: string;
+    clinicId: string;
+    patientId: string;
+    targetId: string;
+    source: any;
+    changedBy?: string | null;
+  }) => {
+    const targetId = sanitizeString(params.targetId, 180);
+    const patientId = sanitizeString(params.patientId, 120);
+    const clinicId = sanitizeString(params.clinicId, 120);
+    const organizationId = sanitizeString(params.organizationId || clinicId, 120);
+    if (!isUuid(targetId) || !isUuid(patientId) || !clinicId) return null;
+    const source = params.source || {};
+    const now = new Date().toISOString();
+    const evaluatedAt = sanitizeIsoDateTime(source?.acquiredAt || source?.updatedAt || now);
+    const eventId = `mastery-pei-acquired-${abaPlanningHash([patientId, targetId, source?.peiGoalId || source?.matchCompositeKey || source?.targetName || 'pei'])}`;
+    const payload = cleanObject({
+      id: eventId,
+      organization_id: organizationId,
+      clinic_id: clinicId,
+      patient_id: patientId,
+      session_id: null,
+      target_id: targetId,
+      target_name: sanitizeString(source?.targetName, 240),
+      criteria_id: null,
+      status: 'MASTERED_APPROVED',
+      evaluation_status: 'mastered',
+      suggested_phase: 'maintenance',
+      total_trials: 0,
+      independent_trials: 0,
+      prompted_trials: 0,
+      error_trials: 0,
+      accuracy_percent: null,
+      independence_percent: null,
+      consecutive_successes: 0,
+      consecutive_successful_days: 0,
+      min_consecutive_successes: 1,
+      trials_considered: 0,
+      cold_probe_trials_count: 0,
+      distinct_therapists_count: null,
+      first_trial_independent: null,
+      criteria: sanitizeClinicalPayload({
+        source: 'patient_pei',
+        eventType: 'SKILL_ACQUIRED',
+        manualAcquisition: true,
+        peiGoalId: sanitizeString(source?.peiGoalId, 180) || null,
+        skillId: sanitizeString(source?.skillId, 180) || null
+      }),
+      reasons: sanitizeClinicalPayload(['SKILL_ACQUIRED_FROM_PEI']),
+      evaluated_at: evaluatedAt,
+      therapist_id: sanitizeString(params.changedBy, 120) || null,
+      source_trial_id: null,
+      raw_payload: sanitizeClinicalPayload({
+        source: 'patient_pei',
+        eventType: 'SKILL_ACQUIRED',
+        manualAcquisition: true,
+        noAutomaticTargetMutation: true,
+        targetName: sanitizeString(source?.targetName, 240),
+        protocolName: sanitizeString(source?.protocolName, 240),
+        domainName: sanitizeString(source?.domainName, 240),
+        progressPercent: source?.progressPercent ?? null
+      }),
+      created_at: now
+    });
+    const writeResult = await writeAbaRowWithSchemaFallback('aba_mastery_evaluations', payload, 'upsert');
+    if (writeResult.error && !hasMissingFinancialSchema(writeResult.error) && !isMissingRelationError(writeResult.error)) {
+      console.warn('[PEI Maintenance] Falha ao registrar evento SKILL_ACQUIRED:', writeResult.error?.message || String(writeResult.error));
+    }
+    return eventId;
+  };
+
+  const ensurePeiMaintenanceTargetForPatient = async (params: {
+    patientId: string;
+    clinicId: string;
+    organizationId: string;
+    sessionUser: any;
+    payload: any;
+  }) => {
+    const patientId = sanitizeString(params.patientId, 120);
+    const clinicId = sanitizeString(params.clinicId, 120);
+    const organizationId = sanitizeString(params.organizationId || clinicId, 120);
+    if (!isUuid(patientId) || !clinicId) {
+      return { ok: false, status: 400, error: 'Dados insuficientes para preparar a habilidade.' };
+    }
+    const candidate = readPeiMaintenanceEnsureSource(params.payload || {});
+    let targetQuery = supabase
+      .from('aba_targets')
+      .select(ABA_TARGET_RECOMMENDATION_SELECT)
+      .eq('organization_id', organizationId)
+      .eq('patient_id', patientId)
+      .limit(500);
+    targetQuery = applyAbaTenantScope(targetQuery, params.sessionUser, clinicId, organizationId);
+    const targetResult = await targetQuery;
+    if (targetResult.error && !hasMissingFinancialSchema(targetResult.error) && !isMissingRelationError(targetResult.error)) throw targetResult.error;
+    const existingTargets = targetResult.error ? [] : (Array.isArray(targetResult.data) ? targetResult.data : []);
+    const requestedTargetId = sanitizeString(candidate?.targetId, 180);
+    const existingTarget = isUuid(requestedTargetId)
+      ? existingTargets.find((target: any) => sanitizeString(target?.id, 180) === requestedTargetId) || null
+      : null;
+    if (existingTarget?.id) {
+      const eventId = await persistPeiSkillAcquiredMasteryEvent({
+        organizationId,
+        clinicId,
+        patientId,
+        targetId: sanitizeString(existingTarget.id, 180),
+        source: { ...candidate, targetName: candidate?.targetName || existingTarget?.name },
+        changedBy: sanitizeString(params.sessionUser?.id || params.sessionUser?.user_id, 120)
+      });
+      return { ok: true, status: 200, target: existingTarget, targetId: sanitizeString(existingTarget.id, 180), masteryEvaluationId: eventId, materialized: false };
+    }
+
+    const peiTargets = await getPatientPeiTargets(patientId, clinicId, organizationId, params.sessionUser);
+    const matchedPeiTarget = resolvePeiMaintenanceSourceTarget(peiTargets, candidate);
+    const sourceTarget = matchedPeiTarget || (candidate?.eligibleForMaintenance && candidate?.targetName ? candidate : null);
+    if (!sourceTarget?.targetName) {
+      return { ok: false, status: 404, error: 'Habilidade adquirida não encontrada no PEI do paciente.' };
+    }
+    const materialized = await materializePeiTargetsForMaintenance({
+      patientId,
+      clinicId,
+      organizationId,
+      sessionUser: params.sessionUser,
+      peiTargets: [sourceTarget],
+      existingTargets
+    });
+    const hydrated = Array.isArray(materialized.peiTargets) ? materialized.peiTargets[0] : null;
+    const targetId = sanitizeString(hydrated?.targetId || hydrated?.target_id || materialized.materializedTargets?.[0]?.id, 180);
+    let target = (Array.isArray(materialized.targets) ? materialized.targets : []).find((item: any) => sanitizeString(item?.id, 180) === targetId) || null;
+    if (!target?.id && isUuid(targetId)) {
+      target = await fetchTargetForMaintenance({ targetId, patientId, clinicId, organizationId });
+    }
+    if (!isUuid(targetId) || !target?.id) {
+      return { ok: false, status: 500, error: 'Não foi possível materializar a habilidade adquirida.' };
+    }
+    const eventId = await persistPeiSkillAcquiredMasteryEvent({
+      organizationId,
+      clinicId,
+      patientId,
+      targetId,
+      source: { ...sourceTarget, targetName: sourceTarget?.targetName || target?.name },
+      changedBy: sanitizeString(params.sessionUser?.id || params.sessionUser?.user_id, 120)
+    });
+    return { ok: true, status: 200, target, targetId, masteryEvaluationId: eventId, materialized: Boolean(materialized.materializedTargets?.length) };
+  };
+
   const logAbaPlanningEgress = (details: Record<string, any>) => {
     if (process.env.NODE_ENV !== 'production') {
       console.log('[ABA Planning Egress]', cleanObject(details));
@@ -31617,6 +31921,55 @@ async function startServer() {
       return res.json({ success: true, data });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || 'Não foi possível carregar próximas consultas agora.' });
+    }
+  });
+
+  app.post('/api/aba/patients/:patientId/maintenance-targets/ensure', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 64 * 1024, 'Payload de habilidade adquirida para manutenção')) return;
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId || req.body?.patient_id || req.body?.patientId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.body?.organization_id || req.body?.organizationId || req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      if (!isUuid(patientId) || !(await canAccessPatientInCurrentClinic(patientId, req.session.user))) {
+        return res.status(403).json({ success: false, error: 'FORBIDDEN', message: 'Paciente fora do escopo da clínica.' });
+      }
+      const result = await ensurePeiMaintenanceTargetForPatient({
+        patientId,
+        clinicId,
+        organizationId,
+        sessionUser: req.session.user,
+        payload: req.body || {}
+      });
+      if (!result.ok) {
+        return res.status((result as any).status || 400).json({
+          success: false,
+          error: (result as any).status === 404 ? 'PEI_SKILL_NOT_FOUND' : 'TARGET_ENSURE_FAILED',
+          message: (result as any).error || 'Não foi possível preparar a habilidade para manutenção.'
+        });
+      }
+      const target = (result as any).target || {};
+      const targetId = sanitizeString((result as any).targetId || target?.id, 180);
+      const responseTarget = cleanObject({
+        ...target,
+        id: targetId,
+        targetId,
+        target_id: targetId,
+        targetName: sanitizeString(target?.targetName || target?.name, 240) || null,
+        target_name: sanitizeString(target?.target_name || target?.name, 240) || null,
+        protocolName: sanitizeString(target?.protocolName || target?.protocol_title, 240) || null,
+        domainName: sanitizeString(target?.domainName || target?.domain_name, 240) || null
+      });
+      return res.json({
+        success: true,
+        message: 'Habilidade pronta para manutenção.',
+        targetId,
+        masteryEvaluationId: (result as any).masteryEvaluationId || null,
+        materialized: Boolean((result as any).materialized),
+        target: responseTarget,
+        data: responseTarget
+      });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: 'UNEXPECTED_ERROR', message: error?.message || 'Não foi possível preparar a habilidade para manutenção.' });
     }
   });
 

@@ -5611,6 +5611,89 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     };
   };
 
+  const buildPeiMaintenanceTargetEnsurePayload = (row: any) => {
+    const source = row?.source && typeof row.source === 'object' ? row.source : {};
+    const goal = row?.goal && typeof row.goal === 'object' ? row.goal : {};
+    const target = row?.target && typeof row.target === 'object' ? row.target : {};
+    const targetName = safeDisplayValue(getPeiMaintenanceMatchName(row), '');
+    const protocolName = safeDisplayValue(getPeiMaintenanceProtocolName(row), '');
+    const domainName = safeDisplayValue(getPeiMaintenanceDomainName(row), '');
+    const progressPercent = Number(
+      row?.progressPercent ??
+        row?.progress_percent ??
+        row?.progress ??
+        source?.progressPercent ??
+        source?.progress_percent ??
+        source?.progress ??
+        goal?.progressPercent ??
+        goal?.progress_percent ??
+        goal?.progress
+    );
+    return {
+      targetId: row?.targetId || row?.target_id || row?.abaTargetId || row?.aba_target_id || target?.id || source?.targetId || source?.target_id || '',
+      target_id: row?.target_id || row?.targetId || row?.aba_target_id || row?.abaTargetId || target?.id || source?.target_id || source?.targetId || '',
+      peiGoalId: row?.peiGoalId || row?.goalId || row?.goal_id || source?.peiGoalId || source?.goalId || source?.goal_id || source?.id || goal?.id || '',
+      goalId: row?.goalId || row?.goal_id || row?.peiGoalId || source?.goalId || source?.goal_id || source?.peiGoalId || source?.id || goal?.id || '',
+      skillId: row?.skillId || row?.skill_id || source?.skillId || source?.skill_id || goal?.skillId || goal?.skill_id || '',
+      localTargetRef: row?.localTargetRef || source?.localTargetRef || source?.id || goal?.id || '',
+      targetName,
+      target_name: targetName,
+      name: targetName,
+      protocolName,
+      protocol_name: protocolName,
+      protocol: protocolName,
+      domainName,
+      domain_name: domainName,
+      domain: domainName,
+      description: safeDisplayValue(row?.description || row?.objective || source?.description || source?.objective || goal?.description || goal?.objective || target?.description, ''),
+      status: row?.status || row?.clinicalStatus || row?.clinical_status || source?.status || source?.clinicalStatus || source?.clinical_status || goal?.status || goal?.clinicalStatus || goal?.clinical_status || '',
+      clinicalStatus: row?.clinicalStatus || row?.clinical_status || source?.clinicalStatus || source?.clinical_status || goal?.clinicalStatus || goal?.clinical_status || '',
+      masteryStatus: row?.masteryStatus || row?.mastery_status || source?.masteryStatus || source?.mastery_status || goal?.masteryStatus || goal?.mastery_status || '',
+      progressPercent: Number.isFinite(progressPercent) ? progressPercent : (isGoalAcquired(row) ? 100 : null),
+      acquiredAt: row?.acquiredAt || row?.completedAt || row?.updatedAt || source?.acquiredAt || source?.completedAt || source?.updatedAt || null
+    };
+  };
+
+  const ensurePeiMaintenanceScheduleSelection = async (row: any) => {
+    if (!patient?.id || !abaV2Enabled || !row) return null;
+    const result = await dataService.ensurePeiMaintenanceTarget(String(patient.id), buildPeiMaintenanceTargetEnsurePayload(row));
+    const ensuredTarget = result?.target || result?.data || null;
+    const ensuredTargetId = getPersistedUuid(
+      result?.targetId ||
+      ensuredTarget?.targetId ||
+      ensuredTarget?.target_id ||
+      ensuredTarget?.id ||
+      result?.data?.targetId ||
+      result?.data?.id
+    );
+    if (!result || result.success === false || !ensuredTargetId) return null;
+    const nextTarget = {
+      ...(ensuredTarget || {}),
+      id: ensuredTargetId,
+      targetId: ensuredTargetId,
+      target_id: ensuredTargetId,
+      name: ensuredTarget?.name || ensuredTarget?.targetName || getPeiMaintenanceMatchName(row),
+      targetName: ensuredTarget?.targetName || ensuredTarget?.name || getPeiMaintenanceMatchName(row),
+      target_name: ensuredTarget?.target_name || ensuredTarget?.targetName || ensuredTarget?.name || getPeiMaintenanceMatchName(row),
+      protocolName: ensuredTarget?.protocolName || ensuredTarget?.protocol_title || getPeiMaintenanceProtocolName(row),
+      protocol_title: ensuredTarget?.protocol_title || ensuredTarget?.protocolName || getPeiMaintenanceProtocolName(row),
+      domainName: ensuredTarget?.domainName || ensuredTarget?.domain_name || getPeiMaintenanceDomainName(row),
+      domain_name: ensuredTarget?.domain_name || ensuredTarget?.domainName || getPeiMaintenanceDomainName(row)
+    };
+    setPeiMaintenanceLinkableTargetsState((prev: any) => {
+      const items = Array.isArray(prev.items) ? prev.items : [];
+      const exists = items.some((item: any) => getPersistedUuid(item?.id || item?.targetId || item?.target_id) === ensuredTargetId);
+      return {
+        ...prev,
+        loading: false,
+        error: '',
+        loadedFor: String(patient.id),
+        items: exists ? items.map((item: any) => getPersistedUuid(item?.id || item?.targetId || item?.target_id) === ensuredTargetId ? { ...item, ...nextTarget } : item) : [nextTarget, ...items]
+      };
+    });
+    return buildPeiMaintenanceScheduleSelection({ ...(row || {}), targetId: ensuredTargetId, target_id: ensuredTargetId, target: nextTarget }, [nextTarget]);
+  };
+
   const logPeiMaintenanceScheduleDebug = (reasonCode: string, details: Record<string, any> = {}) => {
     if (!import.meta.env.DEV) return;
     console.debug('[pei-maintenance-schedule]', {
@@ -5922,6 +6005,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           loadedFor: String(patient.id)
         });
         selectedSkill = buildPeiMaintenanceScheduleSelection(row, items);
+        if (!selectedSkill) {
+          selectedSkill = await ensurePeiMaintenanceScheduleSelection(row);
+        }
       } catch {
         setPeiMaintenanceLinkableTargetsState({ loading: false, error: 'Nao foi possivel carregar habilidades do PEI.', items: [], loadedFor: String(patient.id) });
       } finally {
@@ -5930,7 +6016,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     }
     if (!selectedSkill) {
       logPeiMaintenanceScheduleDebug('missing_target_on_open', { hasTargetId: false, targetId: row?.targetId || row?.target_id, mode });
-      setPeiMaintenancePanelMessage('Não foi possível identificar a habilidade para agendamento.');
+      setPeiMaintenancePanelMessage('Não foi possível preparar esta habilidade para manutenção agora.');
       return;
     }
     const schedule = getPeiMaintenanceScheduleObject(row);
@@ -5951,12 +6037,20 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     setPeiMaintenancePanelMessage('');
   };
 
-  const handlePeiScheduleModalSave = () => {
-    const row = peiMaintenanceScheduleRow;
-    const targetId = getPersistedUuid(row?.targetId || row?.target_id) || getPeiMaintenanceTargetId(row);
+  const handlePeiScheduleModalSave = async () => {
+    let row = peiMaintenanceScheduleRow;
+    let targetId = getPersistedUuid(row?.targetId || row?.target_id) || getPeiMaintenanceTargetId(row);
+    if (!targetId && row) {
+      const ensuredSelection = await ensurePeiMaintenanceScheduleSelection(row);
+      if (ensuredSelection) {
+        row = ensuredSelection;
+        setPeiMaintenanceScheduleRow(ensuredSelection);
+        targetId = getPersistedUuid(ensuredSelection?.targetId || ensuredSelection?.target_id) || getPeiMaintenanceTargetId(ensuredSelection);
+      }
+    }
     if (!targetId || !patient?.id) {
       logPeiMaintenanceScheduleDebug('missing_target_on_save', { hasTargetId: false, targetId: row?.targetId || row?.target_id, mode: peiMaintenanceScheduleMode });
-      setPeiMaintenancePanelMessage('Não foi possível identificar a habilidade.');
+      setPeiMaintenancePanelMessage('Não foi possível preparar esta habilidade para manutenção agora.');
       return;
     }
     const isDateMode = peiMaintenanceScheduleMode === 'CUSTOM_DATE';
@@ -6021,19 +6115,27 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     });
   };
 
-  const handlePeiScheduleNextSession = (row: any) => {
-    const targetId = getPeiMaintenanceTargetId(row);
+  const handlePeiScheduleNextSession = async (row: any) => {
+    let targetId = getPeiMaintenanceTargetId(row);
+    let selectedRow = row;
     if (!targetId) {
-      setPeiMaintenancePanelMessage('Vincule esta sondagem a uma habilidade antes de continuar.');
+      const ensuredSelection = await ensurePeiMaintenanceScheduleSelection(row);
+      if (ensuredSelection) {
+        selectedRow = ensuredSelection;
+        targetId = getPeiMaintenanceTargetId(ensuredSelection);
+      }
+    }
+    if (!targetId) {
+      setPeiMaintenancePanelMessage('Não foi possível preparar esta habilidade para manutenção agora.');
       return;
     }
     void runPeiMaintenanceAction(
-      `next-${row.key}`,
+      `next-${selectedRow.key || targetId}`,
       () => dataService.scheduleMaintenanceForNextSession(targetId, {
         patient_id: patient?.id,
         patientId: patient?.id,
         scheduleMode: 'NEXT_PATIENT_SESSION',
-        target_name: row?.targetName
+        target_name: selectedRow?.targetName || selectedRow?.name
       }),
       'Sondagem aguardando futura consulta.'
     );
@@ -8491,8 +8593,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                                         }`}
                                         value={isGoalAcquired(goal) ? 'completed' : goal.status}
                                         onChange={(e) => {
-                                          const updatedPEI = patient.pei.map((g: any) => g.id === goal.id ? { ...g, status: e.target.value } : g);
+                                          const nextStatus = e.target.value;
+                                          const nextGoal = { ...goal, status: nextStatus };
+                                          const updatedPEI = patient.pei.map((g: any) => g.id === goal.id ? { ...g, status: nextStatus } : g);
                                           onUpdatePatient({ ...patient, pei: updatedPEI });
+                                          if (nextStatus === 'completed' && patient?.id && abaV2Enabled) {
+                                            void ensurePeiMaintenanceScheduleSelection({ ...nextGoal, progressPercent: 100 });
+                                          }
                                         }}
                                       >
                                         <option value="not_started">Não Iniciado</option>

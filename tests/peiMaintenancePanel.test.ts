@@ -404,10 +404,13 @@ test('modal etapa 2 mostra data com consultas e aguardar futura consulta', () =>
   assert.match(openCode, /targetId/);
   assert.match(openCode, /target_id: targetId/);
   assert.match(patientDetailCode, /rowIdCanBeTarget/);
-  assert.match(patientDetailCode, /Não foi possível identificar a habilidade para agendamento/);
+  assert.match(patientDetailCode, /buildPeiMaintenanceTargetEnsurePayload/);
+  assert.match(patientDetailCode, /Não foi possível preparar esta habilidade para manutenção agora/);
   assert.match(patientDetailCode, /missing_target_on_open/);
   assert.match(patientDetailCode, /dataService\.getAbaLinkableTargetsForMaintenance\(String\(patient\.id\), \{ limit: 200 \}\)/);
   assert.match(patientDetailCode, /selectedSkill = buildPeiMaintenanceScheduleSelection\(row, items\)/);
+  assert.match(patientDetailCode, /selectedSkill = await ensurePeiMaintenanceScheduleSelection\(row\)/);
+  assert.match(patientDetailCode, /dataService\.ensurePeiMaintenanceTarget\(String\(patient\.id\), buildPeiMaintenanceTargetEnsurePayload\(row\)\)/);
   assert.match(patientDetailCode, /target\?\.description[\s\S]*target\?\.source\?\.targetName[\s\S]*target\?\.goal\?\.targetName/);
   assert.match(patientDetailCode, /const nameKey = normalizePeiMaintenanceMatchKey\(getPeiMaintenanceMatchName\(row\)\)/);
   assert.match(openCode, /safeDisplayValue\(getPeiMaintenanceMatchName\(row\), 'Habilidade em manutenção'\)/);
@@ -417,7 +420,9 @@ test('modal etapa 2 mostra data com consultas e aguardar futura consulta', () =>
   assert.notEqual(handlerStart, -1);
   const handlerCode = patientDetailCode.slice(handlerStart, handlerEnd);
   assert.doesNotMatch(handlerCode, /Esta habilidade não está disponível para manutenção/);
-  assert.match(handlerCode, /Não foi possível identificar a habilidade/);
+  assert.match(handlerCode, /const handlePeiScheduleModalSave = async/);
+  assert.match(handlerCode, /const ensuredSelection = await ensurePeiMaintenanceScheduleSelection\(row\)/);
+  assert.match(handlerCode, /Não foi possível preparar esta habilidade para manutenção agora/);
   assert.match(handlerCode, /Escolha uma data para agendar a sondagem/);
   assert.match(handlerCode, /Escolha uma consulta para vincular a sondagem/);
   assert.match(handlerCode, /const selectedAppointmentId = getPersistedUuid\(selectedPeiMaintenanceAppointmentId\)/);
@@ -493,6 +498,12 @@ test('acoes do painel chamam rotas seguras existentes', () => {
   assert.match(patientDetailCode, /Este paciente ainda n[Ã£a]o possui habilidades no PEI|Este paciente ainda não possui habilidades no PEI/);
   assert.doesNotMatch(patientDetailCode, /Ainda n[Ã£a]o h[Ã¡a] habilidade real do PEI dispon[Ã­i]vel para selecionar|Ainda não há habilidade real do PEI disponível para selecionar/);
   assert.match(serverCode, /app\.get\('\/api\/patients\/:patientId\/aba\/targets\/linkable'/);
+  assert.match(serverCode, /app\.post\('\/api\/aba\/patients\/:patientId\/maintenance-targets\/ensure'/);
+  assert.match(serverCode, /ensurePeiMaintenanceTargetForPatient/);
+  assert.match(serverCode, /persistPeiSkillAcquiredMasteryEvent/);
+  assert.match(serverCode, /eventType: 'SKILL_ACQUIRED'/);
+  assert.match(serverCode, /writeAbaRowWithSchemaFallback\('aba_mastery_evaluations', payload, 'upsert'\)/);
+  assert.match(dataServiceCode, /async ensurePeiMaintenanceTarget\(patientId: string, payload: any = \{\}\)/);
   assert.match(serverCode, /app\.post\('\/api\/aba\/maintenance-schedules\/:scheduleId\/confirm-link'/);
   assert.match(serverCode, /app\.post\('\/api\/aba\/maintenance-schedules\/:scheduleId\/assign-appointment'/);
   assert.match(serverCode, /app\.post\('\/api\/aba\/maintenance-schedules\/:scheduleId\/skip-link'/);
@@ -686,6 +697,8 @@ test('acoes nao enviam ids sinteticos para endpoints de manutencao', () => {
   assert.match(patientDetailCode, /disabled=\{actionLoading\('confirm'\) \|\| !hasRealSchedule \|\| needsTargetReview\}/);
   assert.match(patientDetailCode, /group !== 'completed' && group !== 'confirmation' && \(/);
   assert.match(dataServiceCode, /SYNTHETIC_CLINICAL_ID_RE/);
+  assert.match(dataServiceCode, /const ensured = await dataService\.ensurePeiMaintenanceTarget\(String\(patientId\), payload\)/);
+  assert.match(dataServiceCode, /return await dataService\.createMaintenanceScheduleForTarget\(String\(ensuredTargetId\)/);
   assert.match(dataServiceCode, /if \(!isPersistedUuid\(targetId\)\)[\s\S]*?Não foi possível identificar a habilidade/m);
   assert.match(dataServiceCode, /if \(!isPersistedUuid\(scheduleId\)\)[\s\S]*?Sondagem de manutenção inválida para confirmar vínculo/m);
   assert.match(calendarCode, /if \(!isPersistedUuid\(scheduleId\)\)/);

@@ -2772,9 +2772,39 @@ export const dataService = {
     }
   },
 
+  async ensurePeiMaintenanceTarget(patientId: string, payload: any = {}) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
+    const endpoint = `/api/aba/patients/${encodeURIComponent(String(patientId))}/maintenance-targets/ensure`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, { helperName: 'ensurePeiMaintenanceTarget', operation: 'write', table: 'patient_records,aba_targets', hasExplicitColumns: true });
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível preparar a habilidade para manutenção.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível preparar a habilidade para manutenção.');
+      return { success: false, error: message, message };
+    }
+  },
+
   async createMaintenanceScheduleForTarget(targetId: string, payload: any = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse([]);
     if (!isPersistedUuid(targetId)) {
+      const patientId = payload?.patient_id || payload?.patientId;
+      const targetName = payload?.target_name || payload?.targetName || payload?.name;
+      if (patientId && targetName) {
+        const ensured = await dataService.ensurePeiMaintenanceTarget(String(patientId), payload);
+        const ensuredTargetId = ensured?.targetId || ensured?.target?.targetId || ensured?.target?.target_id || ensured?.target?.id || ensured?.data?.targetId || ensured?.data?.id;
+        if (isPersistedUuid(ensuredTargetId)) {
+          return await dataService.createMaintenanceScheduleForTarget(String(ensuredTargetId), {
+            ...(payload || {}),
+            targetId: ensuredTargetId,
+            target_id: ensuredTargetId
+          });
+        }
+      }
       return invalidClinicalIdResponse('Não foi possível identificar a habilidade.', []);
     }
     const endpoint = `/api/aba/targets/${encodeURIComponent(String(targetId))}/maintenance-schedules`;
