@@ -5260,8 +5260,28 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return isUuidLike(id) ? id : '';
   };
 
-  const getPeiMaintenanceTargetId = (row: any) =>
-    getPersistedUuid(row?.targetId || row?.target_id || row?.aba_target_id || row?.abaTargetId || row?.goal?.aba_target_id || row?.goal?.abaTargetId || row?.goal?.target_id || row?.goal?.targetId || row?.goal?.id);
+  const getPeiMaintenanceTargetId = (row: any) => {
+    const explicitId = getPersistedUuid(row?.targetId || row?.target_id || row?.aba_target_id || row?.abaTargetId || row?.goal?.aba_target_id || row?.goal?.abaTargetId || row?.goal?.target_id || row?.goal?.targetId || row?.goal?.id);
+    if (explicitId) return explicitId;
+    const nameKey = normalizePeiMaintenanceMatchKey(row?.name || row?.targetName || row?.target_name);
+    const protocolKey = normalizePeiMaintenanceMatchKey(row?.protocol || row?.protocolName || row?.protocol_title || row?.protocolTitle);
+    const domainKey = normalizePeiMaintenanceMatchKey(row?.domain || row?.domainName || row?.domain_name || row?.domainName);
+    const hasClinicalMatchContext = Boolean(protocolKey || domainKey);
+    const compositeKey = hasClinicalMatchContext ? [nameKey, protocolKey, domainKey].filter(Boolean).join('|') : '';
+    const matches = new Map<string, any>();
+    [...peiMaintenanceLinkableTargets, ...peiMaintenanceHydratedGoals].forEach((target: any) => {
+      const id = getPersistedUuid(target?.id || target?.target_id || target?.targetId || target?.aba_target_id || target?.abaTargetId);
+      if (!id || matches.has(id)) return;
+      const targetNameKey = normalizePeiMaintenanceMatchKey(getPeiMaintenanceMatchName(target));
+      const targetProtocolKey = normalizePeiMaintenanceMatchKey(getPeiMaintenanceProtocolName(target));
+      const targetDomainKey = normalizePeiMaintenanceMatchKey(getPeiMaintenanceDomainName(target));
+      const targetCompositeKey = [targetNameKey, targetProtocolKey, targetDomainKey].filter(Boolean).join('|');
+      const compositeMatches = compositeKey && targetCompositeKey === compositeKey;
+      const nameOnlyMatches = !compositeKey && nameKey && targetNameKey === nameKey;
+      if (compositeMatches || nameOnlyMatches) matches.set(id, target);
+    });
+    return matches.size === 1 ? Array.from(matches.keys())[0] : '';
+  };
 
   const getPeiMaintenanceScheduleId = (schedule: any) =>
     getPersistedUuid(schedule?.id || schedule?.schedule_id || schedule?.scheduleId);
@@ -5807,7 +5827,6 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           ) : (
             <div className="space-y-3">
               {peiMaintenanceEligibleRows.map((goal: any) => {
-                const hasRealTarget = Boolean(getPeiMaintenanceTargetId(goal));
                 const scheduleActionKey = `schedule-${goal?.key || getPeiMaintenanceTargetId(goal)}`;
                 const cannotScheduleTooltip = !canManagePeiMaintenance
                   ? 'Você não tem permissão para agendar manutenção.'
@@ -5847,22 +5866,20 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                         </div>
                       </div>
                     )}
-                    {hasRealTarget && (
-                      <div className="mt-4 flex justify-end">
-                        <span className="w-full sm:w-auto" title={cannotScheduleTooltip}>
-                          <button
-                            type="button"
-                            onClick={() => openPeiMaintenanceScheduleModal(goal, 'NEXT_PATIENT_SESSION')}
-                            disabled={Boolean(peiMaintenanceActionKey) || !canManagePeiMaintenance}
-                            title={cannotScheduleTooltip}
-                            aria-label={cannotScheduleTooltip || 'Agendar manutenção'}
-                            className="min-h-[44px] w-full rounded-xl bg-[#7a32fc] px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-violet-500/20 transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
-                          >
-                            {peiMaintenanceActionKey === scheduleActionKey ? 'Agendando...' : 'Agendar manutenção'}
-                          </button>
-                        </span>
-                      </div>
-                    )}
+                    <div className="mt-4 flex justify-end">
+                      <span className="w-full sm:w-auto" title={cannotScheduleTooltip}>
+                        <button
+                          type="button"
+                          onClick={() => openPeiMaintenanceScheduleModal(goal, 'NEXT_PATIENT_SESSION')}
+                          disabled={Boolean(peiMaintenanceActionKey) || !canManagePeiMaintenance}
+                          title={cannotScheduleTooltip}
+                          aria-label={cannotScheduleTooltip || 'Agendar manutenção'}
+                          className="min-h-[44px] w-full rounded-xl bg-[#7a32fc] px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-violet-500/20 transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+                        >
+                          {peiMaintenanceActionKey === scheduleActionKey ? 'Agendando...' : 'Agendar manutenção'}
+                        </button>
+                      </span>
+                    </div>
                   </div>
                 );
               })}

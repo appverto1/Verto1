@@ -316,7 +316,8 @@ test('subaba manutencao etapa 2 renderiza botao de agendamento simples', () => {
   assert.match(maintenancePanelUi, /Aguardando sessão/);
   assert.match(maintenancePanelUi, /Habilidades elegíveis para manutenção/);
   assert.match(maintenancePanelUi, /Agendar manutenção/);
-  assert.match(maintenancePanelUi, /hasRealTarget && \(/);
+  assert.doesNotMatch(maintenancePanelUi, /hasRealTarget && \(/);
+  assert.match(maintenancePanelUi, /peiMaintenanceEligibleRows\.map[\s\S]*?Agendar manutenção/m);
   assert.match(maintenancePanelUi, /disabled=\{Boolean\(peiMaintenanceActionKey\) \|\| !canManagePeiMaintenance\}/);
   assert.match(maintenancePanelUi, /VocÃª nÃ£o tem permissÃ£o para agendar manutenÃ§Ã£o|Você não tem permissão para agendar manutenção/);
   assert.match(maintenancePanelUi, /openPeiMaintenanceScheduleModal\(goal, 'NEXT_PATIENT_SESSION'\)/);
@@ -532,6 +533,9 @@ test('backend resolve targets de manutencao em lote com colunas explicitas', () 
 
 test('acoes nao enviam ids sinteticos para endpoints de manutencao', () => {
   assert.match(patientDetailCode, /const getPersistedUuid/);
+  assert.match(patientDetailCode, /const getPeiMaintenanceTargetId = \(row: any\) => \{/);
+  assert.match(patientDetailCode, /\[\.\.\.peiMaintenanceLinkableTargets, \.\.\.peiMaintenanceHydratedGoals\]/);
+  assert.match(patientDetailCode, /return matches\.size === 1 \? Array\.from\(matches\.keys\(\)\)\[0\] : ''/);
   assert.match(patientDetailCode, /disabled=\{actionLoading\('confirm'\) \|\| !hasRealSchedule \|\| needsTargetReview\}/);
   assert.match(patientDetailCode, /group !== 'completed' && group !== 'confirmation' && \(/);
   assert.match(dataServiceCode, /SYNTHETIC_CLINICAL_ID_RE/);
