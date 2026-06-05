@@ -237,6 +237,15 @@ test('etapa 1 reconhece progresso 100 e bloqueia treino sem criterio concluido',
   assert.equal(getPeiMaintenanceProgressPercent({ progress: '100%' }), 100);
 });
 
+test('habilidade adquirida preserva progresso clinico 100 mesmo com progresso cru antigo', () => {
+  assert.equal(getPeiMaintenanceProgressPercent({ status: 'ACQUIRED', progress: 50 }), 100);
+  assert.equal(getPeiMaintenanceProgressPercent({ statusLabel: 'Adquirido', progress: 50, progressPercent: 100 }), 100);
+  const [skill] = buildPeiMaintenanceEligibleSkills([
+    { id: 'goal-progress-legacy', name: 'Pareia 10 itens identicos', statusLabel: 'Adquirido', progress: 50, progressPercent: 100 }
+  ]);
+  assert.equal(skill.progressPercent, 100);
+});
+
 test('resolvedor central prioriza nome real, protocolo, dominio e marco clinico', () => {
   const display = resolveMaintenanceTargetDisplay({
     schedule: {
@@ -307,7 +316,7 @@ test('subaba manutencao etapa 2 renderiza botao de agendamento simples', () => {
   assert.match(maintenancePanelUi, /Aguardando sessão/);
   assert.match(maintenancePanelUi, /Habilidades elegíveis para manutenção/);
   assert.match(maintenancePanelUi, /Agendar manutenção/);
-  assert.match(maintenancePanelUi, /canManagePeiMaintenance && hasRealTarget && hasValidPeiMaintenanceScope/);
+  assert.match(maintenancePanelUi, /canManagePeiMaintenance && hasRealTarget/);
   assert.match(maintenancePanelUi, /openPeiMaintenanceScheduleModal\(goal, 'NEXT_PATIENT_SESSION'\)/);
   assert.match(maintenancePanelUi, /peiMaintenanceEligibleRows\.map/);
   assert.doesNotMatch(maintenancePanelUi, /renderPeiMaintenanceGroup|renderPeiMaintenanceMetric|renderPeiMaintenanceActions|Atribuir a uma sessão|Plano de manutenção|Escolher sessão existente|Pendências técnicas/);
@@ -435,6 +444,7 @@ test('backend da etapa 2 usa PEI targets e schedules ativos por target em lote',
   assert.match(stepTwoRoute, /source: 'patient_pei_targets_step2'/);
   assert.match(stepTwoRoute, /canScheduleMaintenance: hasRealTarget/);
   assert.match(stepTwoRoute, /availableActions: hasRealTarget \? \['SCHEDULE_MAINTENANCE'\] : \[\]/);
+  assert.match(stepTwoRoute, /progressPercent: 100/);
   assert.match(dataServiceCode, /table: 'patient_pei,aba_targets,aba_maintenance_schedules'/);
   assert.doesNotMatch(stepTwoRoute, /aba_maintenance_probe_results|aba_regression_alerts|fetchFutureAppointmentsForMaintenance/);
   assert.doesNotMatch(stepTwoRoute, /select\('\*'\)/);

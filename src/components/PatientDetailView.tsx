@@ -4920,19 +4920,6 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     const role = String(userRole || resolvedClinicContext?.role || clinicContext?.role || '').toLowerCase();
     return isKidsProfile && abaV2Enabled && !['patient', 'paciente', 'responsavel', 'responsável', 'guardian', 'family'].includes(role);
   }, [abaV2Enabled, clinicContext?.role, isKidsProfile, resolvedClinicContext?.role, userRole]);
-  const hasValidPeiMaintenanceScope = Boolean(
-    patient?.id &&
-      (
-        resolvedClinicContext?.clinicId ||
-        resolvedClinicContext?.organizationId ||
-        resolvedClinicContext?.organization_id ||
-        clinicContext?.clinicId ||
-        clinicContext?.organizationId ||
-        clinicContext?.organization_id ||
-        patient?.clinicId ||
-        patient?.clinic_id
-      )
-  );
 
   const peiMaintenanceRows = useMemo(() => buildPeiMaintenanceRows({
     goals: [...peiMaintenanceHydratedGoals, ...peiMaintenanceLinkableTargets],
@@ -5013,7 +5000,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   }, [peiMaintenanceScheduledRows, peiMaintenanceWaitingRows]);
 
   const peiMaintenanceEligibleRows = useMemo(() => {
-    const rows = buildPeiMaintenanceEligibleSkills(
+    const panelEligibleRows = Array.isArray(peiMaintenanceTargetFirstGroups.eligibleSkills)
+      ? peiMaintenanceTargetFirstGroups.eligibleSkills
+      : [];
+    const rows = panelEligibleRows.length > 0 ? panelEligibleRows : buildPeiMaintenanceEligibleSkills(
       peiMaintenanceHydratedGoals.map((goal: any) => ({
         ...goal,
         progressPercent: getGoalProgressPercent(goal),
@@ -5024,7 +5014,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       const key = getPeiMaintenanceDisplayKey(row);
       return !key || !peiMaintenanceUnavailableKeys.has(key);
     });
-  }, [history, patient?.id, patientCategory, peiMaintenanceHydratedGoals, peiMaintenanceUnavailableKeys, planProtocolCatalog, protocols]);
+  }, [history, patient?.id, patientCategory, peiMaintenanceHydratedGoals, peiMaintenanceTargetFirstGroups.eligibleSkills, peiMaintenanceUnavailableKeys, planProtocolCatalog, protocols]);
 
   const peiGeneralizationRows = useMemo(() => {
     const maintainedRows = peiMaintenanceRows.filter((row: any) => row.isMaintained);
@@ -5760,13 +5750,17 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             <div className="space-y-3">
               {peiMaintenanceEligibleRows.map((goal: any) => {
                 const hasRealTarget = Boolean(getPeiMaintenanceTargetId(goal));
+                const goalName = safeDisplayValue(goal?.name || goal?.targetName, 'Habilidade sem nome');
+                const goalProtocol = safeDisplayValue(goal?.protocol || goal?.protocolName, '');
+                const goalDomain = safeDisplayValue(goal?.domain || goal?.domainName, '');
+                const goalProgressPercent = Number.isFinite(Number(goal?.progressPercent)) ? Math.max(0, Math.min(100, Math.round(Number(goal.progressPercent)))) : 100;
                 return (
                   <div key={goal.key} className={`rounded-2xl border p-5 shadow-sm ${isPanelDark ? 'border-emerald-400/40 bg-[#101b2e]' : 'border-emerald-200 bg-white'}`}>
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div className="min-w-0">
-                        <h4 className={`text-base font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{goal.name}</h4>
+                        <h4 className={`text-base font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{goalName}</h4>
                         <p className={`mt-1 text-xs font-semibold ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>
-                          {[goal.protocol, goal.domain].filter(Boolean).join(' · ') || 'PEI do paciente'}
+                          {[goalProtocol, goalDomain].filter(Boolean).join(' · ') || 'PEI do paciente'}
                         </p>
                         {goal.description && (
                           <p className={`mt-2 text-xs ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>{sanitizeDescriptionForDisplay(goal.description)}</p>
@@ -5776,22 +5770,22 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                         {goal.statusLabel}
                       </span>
                     </div>
-                    {goal.progressPercent !== null && (
+                    {goalProgressPercent !== null && (
                       <div className="mt-4">
                         <div className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-widest text-emerald-700">
                           <span>Progresso da meta</span>
-                          <span>{goal.progressPercent}%</span>
+                          <span>{goalProgressPercent}%</span>
                         </div>
                         <div className={`mt-2 h-3 overflow-hidden rounded-full ${isPanelDark ? 'bg-slate-800' : 'bg-emerald-100'}`}>
-                          <div className="h-full rounded-full bg-gradient-to-r from-emerald-400 via-green-500 to-teal-500" style={{ width: `${goal.progressPercent}%` }}></div>
+                          <div className="h-full rounded-full bg-gradient-to-r from-emerald-400 via-green-500 to-teal-500" style={{ width: `${goalProgressPercent}%` }}></div>
                         </div>
                         <div className={`mt-3 inline-flex items-center gap-2 rounded-2xl px-3 py-2 text-xs font-bold ${isPanelDark ? 'bg-emerald-500/10 text-emerald-100 border border-emerald-300/20' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'}`}>
                           <CheckCircle2 size={15} />
-                          Status: Adquirido. Progresso: {goal.progressPercent}%.
+                          Status: Adquirido. Progresso: {goalProgressPercent}%.
                         </div>
                       </div>
                     )}
-                    {canManagePeiMaintenance && hasRealTarget && hasValidPeiMaintenanceScope && (
+                    {canManagePeiMaintenance && hasRealTarget && (
                       <div className="mt-4 flex justify-end">
                         <button
                           type="button"

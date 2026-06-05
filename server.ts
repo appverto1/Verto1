@@ -29653,8 +29653,6 @@ async function startServer() {
           const protocolName = sanitizeString(source?.protocolName || source?.protocol || source?.protocol_title || target?.protocol_title, 240) || 'Sem protocolo informado';
           const domainName = sanitizeString(source?.domainName || source?.domain || source?.domain_name || target?.domain_name, 240) || 'Sem domínio informado';
           const description = sanitizeString(source?.description || source?.objective || target?.description, 500) || null;
-          const progress = Number(source?.progressPercent ?? source?.progress_percent ?? source?.progress);
-          const progressPercent = Number.isFinite(progress) ? Math.max(0, Math.min(100, Math.round(progress))) : 100;
           const compositeKey = [targetName, protocolName, domainName].map(normalizePeiTargetMatchKey).filter(Boolean).join('|');
           const hasRealTarget = Boolean(isUuid(targetId) && isUuid(sanitizeString(target?.id, 180)));
           const realTargetId = hasRealTarget ? targetId : '';
@@ -29679,7 +29677,7 @@ async function startServer() {
             statusLabel: 'Adquirido',
             clinicalStatus: sanitizeString(source?.clinicalStatus || source?.clinical_status || target?.clinical_status || target?.phase, 80) || null,
             masteryStatus: sanitizeString(source?.masteryStatus || source?.mastery_status, 80) || null,
-            progressPercent,
+            progressPercent: 100,
             canScheduleMaintenance: hasRealTarget,
             canWaitNextSession: hasRealTarget,
             canAssignAppointment: false,

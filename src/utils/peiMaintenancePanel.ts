@@ -200,14 +200,27 @@ const firstFiniteNumber = (...values: any[]) => {
 };
 
 export const getPeiMaintenanceProgressPercent = (goal: any) => {
+  const status = normalizeStatus(goal?.status || goal?.phase);
+  const clinicalStatus = normalizeStatus(goal?.clinical_status || goal?.clinicalStatus);
+  const masteryStatus = normalizeStatus(goal?.mastery_status || goal?.masteryStatus || goal?.evaluation_status || goal?.evaluationStatus);
+  const badgeLabel = normalizeStatus(goal?.badge || goal?.label || goal?.badgeLabel || goal?.statusLabel || goal?.teachingBadge || goal?.teachingStatusLabel);
+  if (
+    PEI_MAINTENANCE_ACQUIRED_STATUSES.has(status) ||
+    PEI_MAINTENANCE_ACQUIRED_STATUSES.has(clinicalStatus) ||
+    PEI_MAINTENANCE_MASTERY_STATUSES.has(masteryStatus) ||
+    PEI_MAINTENANCE_ACQUIRED_LABELS.has(badgeLabel) ||
+    Boolean(goal?.criteriaMet || goal?.criterionMet || goal?.masteryCriterionMet || goal?.masteryMet || goal?.isAcquired || goal?.isMastered)
+  ) {
+    return 100;
+  }
   const progress = firstFiniteNumber(
-    goal?.progress,
     goal?.progressPercent,
     goal?.progress_percent,
     goal?.masteryProgressPercent,
     goal?.mastery_progress_percent,
     goal?.completionPercent,
-    goal?.completion_percent
+    goal?.completion_percent,
+    goal?.progress
   );
   if (progress === null) return null;
   return Math.max(0, Math.min(100, Math.round(progress)));
