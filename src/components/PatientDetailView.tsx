@@ -5235,8 +5235,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
   useEffect(() => {
     let cancelled = false;
-    if (!peiMaintenanceReviewRow || !patient?.id || !abaV2Enabled) return;
-    if (peiMaintenanceLinkableTargetsState.loadedFor === String(patient.id) && peiMaintenanceLinkableTargetsState.items.length > 0) return;
+    const shouldLoadLinkableTargets = Boolean(
+      peiMaintenanceReviewRow ||
+      peiMaintenanceScheduleRow ||
+      (activeTab === 'plan' && activePeiPlanSubtab === 'maintenance')
+    );
+    if (!shouldLoadLinkableTargets || !patient?.id || !abaV2Enabled) return;
+    if (peiMaintenanceLinkableTargetsState.loadedFor === String(patient.id)) return;
     setPeiMaintenanceLinkableTargetsState((prev: any) => ({ ...prev, loading: true, error: '' }));
     dataService.getAbaLinkableTargetsForMaintenance(String(patient.id), { limit: 200 })
       .then((result: any) => {
@@ -5256,14 +5261,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return () => {
       cancelled = true;
     };
-  }, [abaV2Enabled, patient?.id, peiMaintenanceLinkableTargetsState.items.length, peiMaintenanceLinkableTargetsState.loadedFor, peiMaintenanceReviewRow]);
+  }, [abaV2Enabled, activePeiPlanSubtab, activeTab, patient?.id, peiMaintenanceLinkableTargetsState.items.length, peiMaintenanceLinkableTargetsState.loadedFor, peiMaintenanceReviewRow, peiMaintenanceScheduleRow]);
 
   const getPersistedUuid = (value: any) => {
     const id = String(value || '').trim();
     return isUuidLike(id) ? id : '';
   };
 
-  const getPeiMaintenanceTargetId = (row: any) => {
+  const getPeiMaintenanceTargetId = (row: any, extraTargets: any[] = []) => {
     const rowIdCanBeTarget = !row?.scheduleId && !row?.schedule_id && !row?.nextSchedule && !row?.activeSchedule && !row?.schedule && row?.hasRealTarget !== false;
     const explicitId = getPersistedUuid(
       row?.targetId ||
@@ -5278,6 +5283,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       row?.goal?.target_id ||
       row?.goal?.targetId ||
       row?.goal?.id ||
+      row?.source?.target_id ||
+      row?.source?.targetId ||
+      row?.source?.aba_target_id ||
+      row?.source?.abaTargetId ||
+      row?.source?.id ||
       (rowIdCanBeTarget ? row?.id : '')
     );
     if (explicitId) return explicitId;
@@ -5293,7 +5303,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       ...(peiMaintenanceTargetFirstGroups.waitingNextSession || []),
       ...(peiMaintenanceTargetFirstGroups.overdue || [])
     ];
-    [...panelRowsForTargetResolution, ...peiMaintenanceLinkableTargets, ...peiMaintenanceHydratedGoals].forEach((target: any) => {
+    [...panelRowsForTargetResolution, ...extraTargets, ...peiMaintenanceLinkableTargets, ...peiMaintenanceHydratedGoals].forEach((target: any) => {
       const id = getPersistedUuid(target?.id || target?.target_id || target?.targetId || target?.aba_target_id || target?.abaTargetId);
       if (!id || matches.has(id)) return;
       const targetNameKey = normalizePeiMaintenanceMatchKey(getPeiMaintenanceMatchName(target));
@@ -5307,8 +5317,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return matches.size === 1 ? Array.from(matches.keys())[0] : '';
   };
 
-  const buildPeiMaintenanceScheduleSelection = (row: any) => {
-    const targetId = getPeiMaintenanceTargetId(row);
+  const buildPeiMaintenanceScheduleSelection = (row: any, extraTargets: any[] = []) => {
+    const targetId = getPeiMaintenanceTargetId(row, extraTargets);
     if (!targetId) return null;
     const targetName = safeDisplayValue(row?.targetName || row?.target_name || row?.name || row?.title, 'Habilidade em manutenção');
     const protocolName = safeDisplayValue(row?.protocolName || row?.protocol || row?.protocol_title || row?.protocolTitle, '');
@@ -5381,8 +5391,28 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     openPeiMaintenanceScheduleModal(row, 'EXISTING_APPOINTMENT');
   };
 
-  const openPeiMaintenanceScheduleModal = (row: any, mode = 'EXISTING_APPOINTMENT') => {
-    const selectedSkill = buildPeiMaintenanceScheduleSelection(row);
+  const openPeiMaintenanceScheduleModal = async (row: any, mode = 'EXISTING_APPOINTMENT') => {
+    let selectedSkill = buildPeiMaintenanceScheduleSelection(row);
+    if (!selectedSkill && patient?.id && abaV2Enabled) {
+      const actionKey = `schedule-${row?.key || normalizePeiMaintenanceMatchKey(row?.targetName || row?.name || 'skill')}`;
+      setPeiMaintenanceActionKey(actionKey);
+      setPeiMaintenancePanelMessage('');
+      try {
+        const result = await dataService.getAbaLinkableTargetsForMaintenance(String(patient.id), { limit: 200 });
+        const items = Array.isArray(result?.data) ? result.data : [];
+        setPeiMaintenanceLinkableTargetsState({
+          loading: false,
+          error: result?.success === false ? result?.message || result?.error || 'Nao foi possivel carregar habilidades do PEI.' : '',
+          items,
+          loadedFor: String(patient.id)
+        });
+        selectedSkill = buildPeiMaintenanceScheduleSelection(row, items);
+      } catch {
+        setPeiMaintenanceLinkableTargetsState({ loading: false, error: 'Nao foi possivel carregar habilidades do PEI.', items: [], loadedFor: String(patient.id) });
+      } finally {
+        setPeiMaintenanceActionKey('');
+      }
+    }
     if (!selectedSkill) {
       logPeiMaintenanceScheduleDebug('missing_target_on_open', { hasTargetId: false, targetId: row?.targetId || row?.target_id, mode });
       setPeiMaintenancePanelMessage('Não foi possível identificar a habilidade para agendamento.');

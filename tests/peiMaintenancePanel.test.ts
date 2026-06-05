@@ -375,6 +375,8 @@ test('modal etapa 2 mostra data, proxima consulta e aguardar futura consulta', (
   assert.match(patientDetailCode, /rowIdCanBeTarget/);
   assert.match(patientDetailCode, /Não foi possível identificar a habilidade para agendamento/);
   assert.match(patientDetailCode, /missing_target_on_open/);
+  assert.match(patientDetailCode, /dataService\.getAbaLinkableTargetsForMaintenance\(String\(patient\.id\), \{ limit: 200 \}\)/);
+  assert.match(patientDetailCode, /selectedSkill = buildPeiMaintenanceScheduleSelection\(row, items\)/);
 
   const handlerStart = patientDetailCode.indexOf('const handlePeiScheduleModalSave');
   const handlerEnd = patientDetailCode.indexOf('const handlePeiScheduleNextSession', handlerStart);
@@ -579,9 +581,11 @@ test('backend resolve targets de manutencao em lote com colunas explicitas', () 
 
 test('acoes nao enviam ids sinteticos para endpoints de manutencao', () => {
   assert.match(patientDetailCode, /const getPersistedUuid/);
-  assert.match(patientDetailCode, /const getPeiMaintenanceTargetId = \(row: any\) => \{/);
+  assert.match(patientDetailCode, /const getPeiMaintenanceTargetId = \(row: any, extraTargets: any\[\] = \[\]\) => \{/);
+  assert.match(patientDetailCode, /row\?\.source\?\.target_id/);
+  assert.match(patientDetailCode, /row\?\.source\?\.abaTargetId/);
   assert.match(patientDetailCode, /panelRowsForTargetResolution/);
-  assert.match(patientDetailCode, /\[\.\.\.panelRowsForTargetResolution, \.\.\.peiMaintenanceLinkableTargets, \.\.\.peiMaintenanceHydratedGoals\]/);
+  assert.match(patientDetailCode, /\[\.\.\.panelRowsForTargetResolution, \.\.\.extraTargets, \.\.\.peiMaintenanceLinkableTargets, \.\.\.peiMaintenanceHydratedGoals\]/);
   assert.match(patientDetailCode, /const nameOnlyMatches = nameKey && targetNameKey === nameKey/);
   assert.match(patientDetailCode, /return matches\.size === 1 \? Array\.from\(matches\.keys\(\)\)\[0\] : ''/);
   assert.match(patientDetailCode, /disabled=\{actionLoading\('confirm'\) \|\| !hasRealSchedule \|\| needsTargetReview\}/);
