@@ -30494,7 +30494,7 @@ async function startServer() {
           : (req.body?.scheduleMode || req.body?.schedule_mode);
       const dueDate = req.body?.dueDate || req.body?.due_date || null;
       if ((requestedMode === 'DATE' || sanitizeString(scheduleModeFromPayload, 80).toUpperCase() === 'CUSTOM_DATE') && !sanitizeString(dueDate, 80)) {
-        return res.status(400).json({ success: false, error: 'MISSING_DUE_DATE', message: 'Escolha uma data para agendar a sondagem.' });
+        return res.status(400).json({ success: false, error: 'MISSING_DUE_DATE', message: 'Escolha uma data para agendar.' });
       }
       const result = await createMaintenanceScheduleForTarget({
         targetId,
@@ -30509,7 +30509,7 @@ async function startServer() {
         masteryEvaluationId: req.body?.masteryEvaluationId || req.body?.mastery_evaluation_id,
         approvedAt: req.body?.approvedAt || req.body?.approved_at
       });
-      if (!result.ok) return res.status((result as any).status || 400).json({ success: false, error: (result as any).status === 404 ? 'TARGET_NOT_FOUND' : (result as any).status === 400 ? 'ID_INVALIDO' : 'UNEXPECTED_ERROR', message: (result as any).error || 'Não foi possível agendar a sondagem.' });
+      if (!result.ok) return res.status((result as any).status || 400).json({ success: false, error: (result as any).status === 404 ? 'TARGET_NOT_FOUND' : (result as any).status === 400 ? 'ID_INVALIDO' : 'UNEXPECTED_ERROR', message: (result as any).error || 'Não foi possível agendar a manutenção.' });
       const schedules = Array.isArray(result.data) ? result.data : [];
       const hydrateScheduleResponse = (schedule: any) => {
         if (!schedule) return null;
@@ -30527,7 +30527,7 @@ async function startServer() {
       const schedule = hydrateScheduleResponse(schedules[0] || null);
       return res.json({ success: true, message: 'Sondagem de manutenção agendada.', schedule, data: schedule ? [schedule] : [] });
     } catch {
-      return res.status(500).json({ success: false, error: 'UNEXPECTED_ERROR', message: 'Não foi possível agendar a sondagem.' });
+      return res.status(500).json({ success: false, error: 'UNEXPECTED_ERROR', message: 'Não foi possível agendar a manutenção.' });
     }
   });
 

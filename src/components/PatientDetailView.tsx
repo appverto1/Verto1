@@ -5319,7 +5319,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       return;
     }
     if (peiMaintenanceScheduleMode === 'CUSTOM_DATE' && !peiMaintenanceScheduleDate) {
-      setPeiMaintenancePanelMessage('Escolha uma data para agendar a sondagem.');
+      setPeiMaintenancePanelMessage('Escolha uma data para agendar.');
       return;
     }
     const isDateMode = peiMaintenanceScheduleMode === 'CUSTOM_DATE';
@@ -5808,6 +5808,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             <div className="space-y-3">
               {peiMaintenanceEligibleRows.map((goal: any) => {
                 const hasRealTarget = Boolean(getPeiMaintenanceTargetId(goal));
+                const scheduleActionKey = `schedule-${goal?.key || getPeiMaintenanceTargetId(goal)}`;
+                const cannotScheduleTooltip = !canManagePeiMaintenance
+                  ? 'Você não tem permissão para agendar manutenção.'
+                  : undefined;
                 const goalName = safeDisplayValue(goal?.name || goal?.targetName, 'Habilidade sem nome');
                 const goalProtocol = safeDisplayValue(goal?.protocol || goal?.protocolName, '');
                 const goalDomain = safeDisplayValue(goal?.domain || goal?.domainName, '');
@@ -5843,16 +5847,20 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                         </div>
                       </div>
                     )}
-                    {canManagePeiMaintenance && hasRealTarget && (
+                    {hasRealTarget && (
                       <div className="mt-4 flex justify-end">
-                        <button
-                          type="button"
-                          onClick={() => openPeiMaintenanceScheduleModal(goal, 'NEXT_PATIENT_SESSION')}
-                          disabled={Boolean(peiMaintenanceActionKey)}
-                          className="min-h-[40px] rounded-xl bg-[#7a32fc] px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-violet-500/20 transition-all hover:opacity-90 disabled:opacity-60"
-                        >
-                          Agendar manutenção
-                        </button>
+                        <span className="w-full sm:w-auto" title={cannotScheduleTooltip}>
+                          <button
+                            type="button"
+                            onClick={() => openPeiMaintenanceScheduleModal(goal, 'NEXT_PATIENT_SESSION')}
+                            disabled={Boolean(peiMaintenanceActionKey) || !canManagePeiMaintenance}
+                            title={cannotScheduleTooltip}
+                            aria-label={cannotScheduleTooltip || 'Agendar manutenção'}
+                            className="min-h-[44px] w-full rounded-xl bg-[#7a32fc] px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-violet-500/20 transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+                          >
+                            {peiMaintenanceActionKey === scheduleActionKey ? 'Agendando...' : 'Agendar manutenção'}
+                          </button>
+                        </span>
                       </div>
                     )}
                   </div>

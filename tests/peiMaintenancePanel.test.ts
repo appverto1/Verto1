@@ -316,7 +316,9 @@ test('subaba manutencao etapa 2 renderiza botao de agendamento simples', () => {
   assert.match(maintenancePanelUi, /Aguardando sessão/);
   assert.match(maintenancePanelUi, /Habilidades elegíveis para manutenção/);
   assert.match(maintenancePanelUi, /Agendar manutenção/);
-  assert.match(maintenancePanelUi, /canManagePeiMaintenance && hasRealTarget/);
+  assert.match(maintenancePanelUi, /hasRealTarget && \(/);
+  assert.match(maintenancePanelUi, /disabled=\{Boolean\(peiMaintenanceActionKey\) \|\| !canManagePeiMaintenance\}/);
+  assert.match(maintenancePanelUi, /VocÃª nÃ£o tem permissÃ£o para agendar manutenÃ§Ã£o|Você não tem permissão para agendar manutenção/);
   assert.match(maintenancePanelUi, /openPeiMaintenanceScheduleModal\(goal, 'NEXT_PATIENT_SESSION'\)/);
   assert.match(maintenancePanelUi, /peiMaintenanceEligibleRows\.map/);
   assert.doesNotMatch(maintenancePanelUi, /renderPeiMaintenanceGroup|renderPeiMaintenanceMetric|renderPeiMaintenanceActions|Atribuir a uma sessão|Plano de manutenção|Escolher sessão existente|Pendências técnicas/);
@@ -353,7 +355,7 @@ test('modal etapa 2 mostra somente data ou proxima sessao e payload novo', () =>
   assert.notEqual(handlerStart, -1);
   const handlerCode = patientDetailCode.slice(handlerStart, handlerEnd);
   assert.match(handlerCode, /Esta habilidade não está disponível para manutenção/);
-  assert.match(handlerCode, /Escolha uma data para agendar a sondagem/);
+  assert.match(handlerCode, /Escolha uma data para agendar\./);
   assert.match(handlerCode, /const scheduleMode = isDateMode \? 'DATE' : 'NEXT_SESSION'/);
   assert.match(handlerCode, /dueDate: isDateMode \? peiMaintenanceScheduleDate : null/);
   assert.match(handlerCode, /dataService\.createMaintenanceScheduleForTarget\(targetId, payload\)/);
@@ -474,7 +476,8 @@ test('endpoint de agendamento aceita DATE ou NEXT_SESSION com upsert ativo', () 
   assert.match(endpointCode, /requestedMode[\s\S]*?'DATE'[\s\S]*?'NEXT_SESSION'/m);
   assert.match(endpointCode, /scheduleModeFromPayload[\s\S]*?'CUSTOM_DATE'[\s\S]*?'NEXT_PATIENT_SESSION'/m);
   assert.match(endpointCode, /MISSING_DUE_DATE/);
-  assert.match(endpointCode, /Escolha uma data para agendar a sondagem/);
+  assert.match(endpointCode, /Escolha uma data para agendar\./);
+  assert.match(endpointCode, /NÃ£o foi possÃ­vel agendar a manutenÃ§Ã£o|Não foi possível agendar a manutenção/);
   assert.match(endpointCode, /createMaintenanceScheduleForTarget/);
   assert.match(endpointCode, /hydrateScheduleResponse/);
   assert.match(endpointCode, /targetId/);
