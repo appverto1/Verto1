@@ -5261,7 +5261,22 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   };
 
   const getPeiMaintenanceTargetId = (row: any) => {
-    const explicitId = getPersistedUuid(row?.targetId || row?.target_id || row?.aba_target_id || row?.abaTargetId || row?.goal?.aba_target_id || row?.goal?.abaTargetId || row?.goal?.target_id || row?.goal?.targetId || row?.goal?.id);
+    const rowIdCanBeTarget = !row?.scheduleId && !row?.schedule_id && !row?.nextSchedule && !row?.activeSchedule && !row?.schedule && row?.hasRealTarget !== false;
+    const explicitId = getPersistedUuid(
+      row?.targetId ||
+      row?.target_id ||
+      row?.aba_target_id ||
+      row?.abaTargetId ||
+      row?.target?.id ||
+      row?.target?.target_id ||
+      row?.target?.targetId ||
+      row?.goal?.aba_target_id ||
+      row?.goal?.abaTargetId ||
+      row?.goal?.target_id ||
+      row?.goal?.targetId ||
+      row?.goal?.id ||
+      (rowIdCanBeTarget ? row?.id : '')
+    );
     if (explicitId) return explicitId;
     const nameKey = normalizePeiMaintenanceMatchKey(row?.name || row?.targetName || row?.target_name);
     const protocolKey = normalizePeiMaintenanceMatchKey(row?.protocol || row?.protocolName || row?.protocol_title || row?.protocolTitle);
@@ -5281,6 +5296,44 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       if (compositeMatches || nameOnlyMatches) matches.set(id, target);
     });
     return matches.size === 1 ? Array.from(matches.keys())[0] : '';
+  };
+
+  const buildPeiMaintenanceScheduleSelection = (row: any) => {
+    const targetId = getPeiMaintenanceTargetId(row);
+    if (!targetId) return null;
+    const targetName = safeDisplayValue(row?.targetName || row?.target_name || row?.name || row?.title, 'Habilidade em manutenção');
+    const protocolName = safeDisplayValue(row?.protocolName || row?.protocol || row?.protocol_title || row?.protocolTitle, '');
+    const domainName = safeDisplayValue(row?.domainName || row?.domain || row?.domain_name || row?.domainName, '');
+    return {
+      ...(row || {}),
+      targetId,
+      target_id: targetId,
+      targetName,
+      target_name: targetName,
+      name: targetName,
+      protocol: protocolName,
+      protocolName,
+      domain: domainName,
+      domainName,
+      status: row?.status || row?.clinicalStatus || row?.clinical_status || 'ACQUIRED',
+      progressPercent: Number.isFinite(Number(row?.progressPercent)) ? row.progressPercent : 100,
+      hasRealTarget: true,
+      canScheduleMaintenance: true,
+      availableActions: Array.isArray(row?.availableActions) && row.availableActions.length > 0 ? row.availableActions : ['SCHEDULE_MAINTENANCE']
+    };
+  };
+
+  const logPeiMaintenanceScheduleDebug = (reasonCode: string, details: Record<string, any> = {}) => {
+    if (!import.meta.env.DEV) return;
+    console.debug('[pei-maintenance-schedule]', {
+      action: 'schedule_maintenance',
+      reasonCode,
+      hasTargetId: Boolean(details.hasTargetId),
+      targetIdType: details.hasTargetId ? typeof details.targetId : 'missing',
+      mode: details.mode || peiMaintenanceScheduleMode,
+      hasAppointmentId: Boolean(details.hasAppointmentId),
+      hasDueDate: Boolean(details.hasDueDate)
+    });
   };
 
   const getPeiMaintenanceScheduleId = (schedule: any) =>
@@ -5316,15 +5369,17 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   };
 
   const handlePeiCreateMaintenancePlan = (row: any) => {
-    setPeiMaintenanceScheduleRow(row);
-    setPeiMaintenanceScheduleMode('EXISTING_APPOINTMENT');
-    setPeiMaintenanceScheduleDate('');
-    setSelectedPeiMaintenanceAppointmentId('');
-    setPeiMaintenancePanelMessage('');
+    openPeiMaintenanceScheduleModal(row, 'EXISTING_APPOINTMENT');
   };
 
   const openPeiMaintenanceScheduleModal = (row: any, mode = 'EXISTING_APPOINTMENT') => {
-    setPeiMaintenanceScheduleRow(row);
+    const selectedSkill = buildPeiMaintenanceScheduleSelection(row);
+    if (!selectedSkill) {
+      logPeiMaintenanceScheduleDebug('missing_target_on_open', { hasTargetId: false, targetId: row?.targetId || row?.target_id, mode });
+      setPeiMaintenancePanelMessage('Não foi possível identificar a habilidade para agendamento.');
+      return;
+    }
+    setPeiMaintenanceScheduleRow(selectedSkill);
     setPeiMaintenanceScheduleMode(mode);
     setPeiMaintenanceScheduleDate('');
     setSelectedPeiMaintenanceAppointmentId('');
@@ -5333,8 +5388,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
   const handlePeiScheduleModalSave = () => {
     const row = peiMaintenanceScheduleRow;
-    const targetId = getPeiMaintenanceTargetId(row);
+    const targetId = getPersistedUuid(row?.targetId || row?.target_id) || getPeiMaintenanceTargetId(row);
     if (!targetId || !patient?.id) {
+      logPeiMaintenanceScheduleDebug('missing_target_on_save', { hasTargetId: false, targetId: row?.targetId || row?.target_id, mode: peiMaintenanceScheduleMode });
       setPeiMaintenancePanelMessage('Não foi possível identificar a habilidade.');
       return;
     }
@@ -5348,25 +5404,30 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       ? selectedAppointment?.scheduled_at || selectedAppointment?.scheduledAt || selectedAppointment?.scheduled_start_at || selectedAppointment?.scheduledStartAt || selectedAppointment?.start_at || selectedAppointment?.startAt || null
       : null;
     if (isDateMode && !peiMaintenanceScheduleDate) {
+      logPeiMaintenanceScheduleDebug('missing_due_date', { hasTargetId: true, targetId, mode: peiMaintenanceScheduleMode, hasDueDate: false, hasAppointmentId: Boolean(appointmentId) });
       setPeiMaintenancePanelMessage('Escolha uma data para agendar a sondagem.');
       return;
     }
     if (isAppointmentMode && !appointmentId) {
-      setPeiMaintenancePanelMessage('Escolha uma consulta antes de salvar o agendamento.');
+      logPeiMaintenanceScheduleDebug('missing_appointment_id', { hasTargetId: true, targetId, mode: peiMaintenanceScheduleMode, hasDueDate: Boolean(appointmentDueDate), hasAppointmentId: false });
+      setPeiMaintenancePanelMessage('Escolha uma consulta para vincular a sondagem.');
       return;
     }
-    const scheduleMode = isDateMode || isAppointmentMode ? 'DATE' : 'NEXT_SESSION';
+    const scheduleMode = isAppointmentMode ? 'APPOINTMENT' : isDateMode ? 'DATE' : 'NEXT_SESSION';
     const payload = {
+      targetId,
+      target_id: targetId,
       patient_id: patient?.id,
       patientId: patient?.id,
       mode: scheduleMode,
-      dueDate: isDateMode ? peiMaintenanceScheduleDate : appointmentDueDate,
+      dueDate: isDateMode ? peiMaintenanceScheduleDate : null,
       appointmentId: appointmentId || null,
       appointment_id: appointmentId || null,
       target_name: row?.targetName || row?.name,
       protocolName: row?.protocol || row?.protocolName || null,
       domainName: row?.domain || row?.domainName || null
     };
+    logPeiMaintenanceScheduleDebug('submit', { hasTargetId: true, targetId, mode: scheduleMode, hasDueDate: Boolean(payload.dueDate), hasAppointmentId: Boolean(appointmentId) });
     const successMessage = isAppointmentMode
       ? 'Sondagem atribuída à consulta.'
       : isDateMode

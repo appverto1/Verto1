@@ -2775,7 +2775,7 @@ export const dataService = {
   async createMaintenanceScheduleForTarget(targetId: string, payload: any = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse([]);
     if (!isPersistedUuid(targetId)) {
-      return invalidClinicalIdResponse('Habilidade inválida para agendamento de manutenção.', []);
+      return invalidClinicalIdResponse('Não foi possível identificar a habilidade.', []);
     }
     const endpoint = `/api/aba/targets/${encodeURIComponent(String(targetId))}/maintenance-schedules`;
     try {

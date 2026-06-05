@@ -30486,9 +30486,13 @@ async function startServer() {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = sanitizeString(req.body?.organization_id || req.body?.organizationId || req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
       const targetId = sanitizeString(req.params.targetId, 180);
+      const bodyTargetId = sanitizeString(req.body?.targetId || req.body?.target_id, 180);
       let patientId = sanitizeString(req.body?.patient_id || req.body?.patientId, 120);
       if (!isUuid(targetId)) {
-        return res.status(400).json({ success: false, error: 'ID_INVALIDO', message: 'Habilidade inválida para agendamento de manutenção.' });
+        return res.status(400).json({ success: false, error: 'MISSING_TARGET_ID', message: 'Não foi possível identificar a habilidade.' });
+      }
+      if (bodyTargetId && bodyTargetId !== targetId) {
+        return res.status(400).json({ success: false, error: 'TARGET_ID_MISMATCH', message: 'Não foi possível identificar a habilidade.' });
       }
       if (!patientId && targetId) {
         let targetQuery = supabase
@@ -30505,17 +30509,22 @@ async function startServer() {
         return res.status(403).json({ success: false, error: 'FORBIDDEN', message: 'Paciente fora do escopo da clínica.' });
       }
       const requestedMode = sanitizeString(req.body?.mode, 80).toUpperCase();
-      if (requestedMode && requestedMode !== 'DATE' && requestedMode !== 'NEXT_SESSION') {
+      if (requestedMode && requestedMode !== 'DATE' && requestedMode !== 'NEXT_SESSION' && requestedMode !== 'APPOINTMENT') {
         return res.status(400).json({ success: false, error: 'INVALID_MODE', message: 'Modo de agendamento inválido.' });
       }
       const scheduleModeFromPayload = requestedMode === 'DATE'
         ? 'CUSTOM_DATE'
+        : requestedMode === 'APPOINTMENT'
+          ? 'CUSTOM_DATE'
         : requestedMode === 'NEXT_SESSION'
           ? 'NEXT_PATIENT_SESSION'
           : (req.body?.scheduleMode || req.body?.schedule_mode);
       const dueDate = req.body?.dueDate || req.body?.due_date || null;
       const appointmentIdFromPayload = req.body?.appointmentId || req.body?.appointment_id || null;
-      const customDateOrAppointmentMode = requestedMode === 'DATE' || sanitizeString(scheduleModeFromPayload, 80).toUpperCase() === 'CUSTOM_DATE';
+      if (requestedMode === 'APPOINTMENT' && !sanitizeString(appointmentIdFromPayload, 180)) {
+        return res.status(400).json({ success: false, error: 'MISSING_APPOINTMENT_ID', message: 'Escolha uma consulta para vincular a sondagem.' });
+      }
+      const customDateOrAppointmentMode = requestedMode === 'DATE' || requestedMode === 'APPOINTMENT' || sanitizeString(scheduleModeFromPayload, 80).toUpperCase() === 'CUSTOM_DATE';
       if (customDateOrAppointmentMode && !sanitizeString(dueDate, 80) && !sanitizeString(appointmentIdFromPayload, 180)) {
         return res.status(400).json({ success: false, error: 'MISSING_DUE_DATE', message: 'Escolha uma data para agendar a sondagem.' });
       }
@@ -30532,7 +30541,17 @@ async function startServer() {
         masteryEvaluationId: req.body?.masteryEvaluationId || req.body?.mastery_evaluation_id,
         approvedAt: req.body?.approvedAt || req.body?.approved_at
       });
-      if (!result.ok) return res.status((result as any).status || 400).json({ success: false, error: (result as any).status === 404 ? 'TARGET_NOT_FOUND' : (result as any).status === 400 ? 'ID_INVALIDO' : 'UNEXPECTED_ERROR', message: (result as any).error || 'Não foi possível agendar a manutenção.' });
+      if (!result.ok) {
+        const resultMessage = sanitizeString((result as any).error, 240);
+        const errorCode = resultMessage.includes('Consulta')
+          ? 'APPOINTMENT_NOT_FOUND'
+          : (result as any).status === 404
+            ? 'TARGET_NOT_FOUND'
+            : (result as any).status === 400
+              ? 'ID_INVALIDO'
+              : 'UNEXPECTED_ERROR';
+        return res.status((result as any).status || 400).json({ success: false, error: errorCode, message: resultMessage || 'Não foi possível agendar a manutenção.' });
+      }
       const schedules = Array.isArray(result.data) ? result.data : [];
       const hydrateScheduleResponse = (schedule: any) => {
         if (!schedule) return null;

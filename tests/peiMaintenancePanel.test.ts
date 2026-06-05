@@ -365,6 +365,16 @@ test('modal etapa 2 mostra data, proxima consulta e aguardar futura consulta', (
   assert.match(modalCode, /Salvar agendamento/);
   assert.doesNotMatch(modalCode, /Escolher sessão existente|Escolher data específica|Plano de manutenção|Atribuir a uma sessão|Aguardar próxima sessão/);
 
+  const openStart = patientDetailCode.indexOf('const buildPeiMaintenanceScheduleSelection');
+  const openEnd = patientDetailCode.indexOf('const getPeiMaintenanceScheduleId', openStart);
+  assert.notEqual(openStart, -1);
+  const openCode = patientDetailCode.slice(openStart, openEnd);
+  assert.match(openCode, /targetId/);
+  assert.match(openCode, /target_id: targetId/);
+  assert.match(patientDetailCode, /rowIdCanBeTarget/);
+  assert.match(patientDetailCode, /Não foi possível identificar a habilidade para agendamento/);
+  assert.match(patientDetailCode, /missing_target_on_open/);
+
   const handlerStart = patientDetailCode.indexOf('const handlePeiScheduleModalSave');
   const handlerEnd = patientDetailCode.indexOf('const handlePeiScheduleNextSession', handlerStart);
   assert.notEqual(handlerStart, -1);
@@ -372,12 +382,14 @@ test('modal etapa 2 mostra data, proxima consulta e aguardar futura consulta', (
   assert.doesNotMatch(handlerCode, /Esta habilidade não está disponível para manutenção/);
   assert.match(handlerCode, /Não foi possível identificar a habilidade/);
   assert.match(handlerCode, /Escolha uma data para agendar a sondagem/);
-  assert.match(handlerCode, /Escolha uma consulta antes de salvar o agendamento/);
+  assert.match(handlerCode, /Escolha uma consulta para vincular a sondagem/);
   assert.match(handlerCode, /const isAppointmentMode = peiMaintenanceScheduleMode === 'EXISTING_APPOINTMENT'/);
-  assert.match(handlerCode, /const scheduleMode = isDateMode \|\| isAppointmentMode \? 'DATE' : 'NEXT_SESSION'/);
-  assert.match(handlerCode, /dueDate: isDateMode \? peiMaintenanceScheduleDate : appointmentDueDate/);
+  assert.match(handlerCode, /const scheduleMode = isAppointmentMode \? 'APPOINTMENT' : isDateMode \? 'DATE' : 'NEXT_SESSION'/);
+  assert.match(handlerCode, /target_id: targetId/);
+  assert.match(handlerCode, /dueDate: isDateMode \? peiMaintenanceScheduleDate : null/);
   assert.match(handlerCode, /appointmentId: appointmentId \|\| null/);
   assert.match(handlerCode, /dataService\.createMaintenanceScheduleForTarget\(targetId, payload\)/);
+  assert.match(handlerCode, /missing_target_on_save/);
   assert.match(handlerCode, /message: successMessage/);
   assert.match(handlerCode, /Sondagem atribuída à consulta/);
   assert.match(handlerCode, /Sondagem de manutenção agendada para a data escolhida/);
@@ -489,15 +501,20 @@ test('backend da etapa 2 usa PEI targets e schedules ativos por target em lote',
   assert.doesNotMatch(stepTwoRoute, /select\('\*'\)/);
 });
 
-test('endpoint de agendamento aceita DATE ou NEXT_SESSION com upsert ativo', () => {
+test('endpoint de agendamento aceita DATE APPOINTMENT ou NEXT_SESSION com upsert ativo', () => {
   const endpointStart = serverCode.indexOf("app.post('/api/aba/targets/:targetId/maintenance-schedules'");
   const nextEndpointStart = serverCode.indexOf("app.post('/api/aba/targets/:targetId/maintenance-schedules/next-session'", endpointStart);
   assert.notEqual(endpointStart, -1);
   const endpointCode = serverCode.slice(endpointStart, nextEndpointStart);
-  assert.match(endpointCode, /requestedMode[\s\S]*?'DATE'[\s\S]*?'NEXT_SESSION'/m);
-  assert.match(endpointCode, /scheduleModeFromPayload[\s\S]*?'CUSTOM_DATE'[\s\S]*?'NEXT_PATIENT_SESSION'/m);
+  assert.match(endpointCode, /requestedMode[\s\S]*?'DATE'[\s\S]*?'NEXT_SESSION'[\s\S]*?'APPOINTMENT'/m);
+  assert.match(endpointCode, /MISSING_TARGET_ID/);
+  assert.match(endpointCode, /bodyTargetId/);
+  assert.match(endpointCode, /TARGET_ID_MISMATCH/);
+  assert.match(endpointCode, /scheduleModeFromPayload[\s\S]*?'CUSTOM_DATE'[\s\S]*?'APPOINTMENT'[\s\S]*?'CUSTOM_DATE'[\s\S]*?'NEXT_PATIENT_SESSION'/m);
   assert.match(endpointCode, /appointmentIdFromPayload/);
-  assert.match(endpointCode, /customDateOrAppointmentMode[\s\S]*!sanitizeString\(dueDate, 80\)[\s\S]*!sanitizeString\(appointmentIdFromPayload, 180\)/m);
+  assert.match(endpointCode, /MISSING_APPOINTMENT_ID/);
+  assert.match(endpointCode, /Escolha uma consulta para vincular a sondagem/);
+  assert.match(endpointCode, /customDateOrAppointmentMode[\s\S]*requestedMode === 'APPOINTMENT'[\s\S]*!sanitizeString\(dueDate, 80\)[\s\S]*!sanitizeString\(appointmentIdFromPayload, 180\)/m);
   assert.match(endpointCode, /MISSING_DUE_DATE/);
   assert.match(endpointCode, /Escolha uma data para agendar a sondagem/);
   assert.match(endpointCode, /NÃ£o foi possÃ­vel agendar a manutenÃ§Ã£o|Não foi possível agendar a manutenção/);
