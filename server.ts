@@ -17451,7 +17451,7 @@ async function startServer() {
       const goals = parsePatientPeiArray(record?.payload || {});
       return goals
         .filter((goal: any) => goal && typeof goal === 'object')
-        .map((goal: any) => {
+        .map((goal: any, index: number) => {
           const targetName = sanitizeString(goal?.name || goal?.targetName || goal?.target_name || goal?.objective, 240);
           if (!targetName) return null;
           const targetId = sanitizeString(goal?.target_id || goal?.targetId || goal?.abaTargetId || goal?.aba_target_id || goal?.id, 180);
@@ -17462,6 +17462,7 @@ async function startServer() {
           const masteryStatus = sanitizeString(goal?.mastery_status || goal?.masteryStatus || goal?.evaluation_status || goal?.evaluationStatus, 80) || null;
           return cleanObject({
             source: 'patient_pei',
+            peiGoalIndex: index,
             peiGoalId: sanitizeString(goal?.id, 180) || null,
             skillId: sanitizeString(goal?.skillId || goal?.skill_id, 180) || null,
             targetId: isUuid(targetId) ? targetId : null,
@@ -29654,14 +29655,19 @@ async function startServer() {
           const domainName = sanitizeString(source?.domainName || source?.domain || source?.domain_name || target?.domain_name, 240) || 'Sem domínio informado';
           const description = sanitizeString(source?.description || source?.objective || target?.description, 500) || null;
           const compositeKey = [targetName, protocolName, domainName].map(normalizePeiTargetMatchKey).filter(Boolean).join('|');
-          const hasRealTarget = Boolean(isUuid(targetId) && isUuid(sanitizeString(target?.id, 180)));
+          const hasRealTarget = isUuid(targetId);
           const realTargetId = hasRealTarget ? targetId : '';
-          const internalKey = realTargetId
-            ? `target:${targetId}`
-            : goalId
-              ? `goal:${goalId}`
-              : `skill:${compositeKey}`;
+          const sourceIndex = sanitizeString(source?.peiGoalIndex, 40);
+          const isPeiSource = source?.source === 'patient_pei';
+          const internalKey = isPeiSource
+            ? `pei:${goalId || sourceIndex || eligibleByKey.size}:${realTargetId || compositeKey}`
+            : realTargetId
+              ? `target:${targetId}`
+              : goalId
+                ? `goal:${goalId}`
+                : `skill:${compositeKey}`;
           if (!internalKey || eligibleByKey.has(internalKey)) return;
+          if (!isPeiSource && realTargetId && Array.from(eligibleByKey.values()).some((row: any) => sanitizeString(row?.targetId || row?.target_id, 180) === realTargetId)) return;
           eligibleByKey.set(internalKey, cleanObject({
             key: `eligible-${eligibleByKey.size + 1}`,
             cardKind: 'PEI_ACQUIRED_SKILL',

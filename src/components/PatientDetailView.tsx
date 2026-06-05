@@ -5003,7 +5003,65 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     const panelEligibleRows = Array.isArray(peiMaintenanceTargetFirstGroups.eligibleSkills)
       ? peiMaintenanceTargetFirstGroups.eligibleSkills
       : [];
-    const rows = panelEligibleRows.length > 0 ? panelEligibleRows : buildPeiMaintenanceEligibleSkills(
+    const panelByTargetId = new Map<string, any>();
+    const panelByComposite = new Map<string, any>();
+    const panelByName = new Map<string, any>();
+    panelEligibleRows.forEach((row: any) => {
+      const targetId = getPeiMaintenancePersistedId(row?.targetId || row?.target_id || row?.aba_target_id || row?.abaTargetId);
+      const nameKey = normalizePeiMaintenanceMatchKey(row?.name || row?.targetName || row?.target_name);
+      const protocolKey = normalizePeiMaintenanceMatchKey(row?.protocol || row?.protocolName || row?.protocol_title || row?.protocolTitle);
+      const domainKey = normalizePeiMaintenanceMatchKey(row?.domain || row?.domainName || row?.domain_name || row?.domainName);
+      const compositeKey = [nameKey, protocolKey, domainKey].filter(Boolean).join('|');
+      if (targetId && !panelByTargetId.has(targetId)) panelByTargetId.set(targetId, row);
+      if (compositeKey && !panelByComposite.has(compositeKey)) panelByComposite.set(compositeKey, row);
+      if (nameKey && !panelByName.has(nameKey)) panelByName.set(nameKey, row);
+    });
+    const localRows = peiMaintenanceHydratedGoals
+      .map((goal: any, index: number) => {
+        if (!isGoalAcquired(goal)) return null;
+        const localTargetId = getPeiMaintenancePersistedId(goal?.target_id || goal?.targetId || goal?.aba_target_id || goal?.abaTargetId);
+        const goalId = String(goal?.goal_id || goal?.goalId || goal?.id || index).trim();
+        const name = safeDisplayValue(goal?.name || goal?.targetName || goal?.target_name || goal?.title || goal?.objective, 'Habilidade sem nome');
+        const protocol = safeDisplayValue(goal?.protocolTitle || goal?.protocol_title || goal?.protocolName || goal?.protocol_name, 'Sem protocolo informado');
+        const domain = safeDisplayValue(goal?.domainName || goal?.domain_name || goal?.programName || goal?.program_name, 'Sem domínio informado');
+        const nameKey = normalizePeiMaintenanceMatchKey(name);
+        const compositeKey = [name, protocol, domain].map(normalizePeiMaintenanceMatchKey).filter(Boolean).join('|');
+        const panelMatch = (localTargetId ? panelByTargetId.get(localTargetId) : null) || panelByComposite.get(compositeKey) || panelByName.get(nameKey) || null;
+        const panelTargetId = getPeiMaintenancePersistedId(panelMatch?.targetId || panelMatch?.target_id || panelMatch?.aba_target_id || panelMatch?.abaTargetId);
+        const targetId = localTargetId || panelTargetId;
+        return {
+          ...(panelMatch || {}),
+          key: `goal:${goalId || index}:${targetId || compositeKey || index}`,
+          targetId,
+          target_id: targetId || null,
+          goalId,
+          name,
+          targetName: name,
+          protocol,
+          domain,
+          protocolName: protocol,
+          domainName: domain,
+          description: safeDisplayValue(goal?.description || goal?.objective || panelMatch?.description, ''),
+          statusLabel: 'Adquirido',
+          clinicalStatus: goal?.clinicalStatus || goal?.clinical_status || panelMatch?.clinicalStatus || panelMatch?.clinical_status || null,
+          masteryStatus: goal?.masteryStatus || goal?.mastery_status || panelMatch?.masteryStatus || panelMatch?.mastery_status || null,
+          progressPercent: 100,
+          hasRealTarget: Boolean(targetId),
+          canScheduleMaintenance: Boolean(targetId),
+          canWaitNextSession: Boolean(targetId),
+          canAssignAppointment: false,
+          canReviewLink: false,
+          needsTargetReview: false,
+          availableActions: targetId ? ['SCHEDULE_MAINTENANCE'] : []
+        };
+      })
+      .filter(Boolean);
+    const localDisplayKeys = new Set(localRows.map((row: any) => getPeiMaintenanceDisplayKey(row)).filter(Boolean));
+    const panelOnlyRows = panelEligibleRows.filter((row: any) => {
+      const key = getPeiMaintenanceDisplayKey(row);
+      return !key || !localDisplayKeys.has(key);
+    });
+    const rows = localRows.length > 0 ? [...localRows, ...panelOnlyRows] : panelEligibleRows.length > 0 ? panelEligibleRows : buildPeiMaintenanceEligibleSkills(
       peiMaintenanceHydratedGoals.map((goal: any) => ({
         ...goal,
         progressPercent: getGoalProgressPercent(goal),

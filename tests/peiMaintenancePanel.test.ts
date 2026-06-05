@@ -322,6 +322,19 @@ test('subaba manutencao etapa 2 renderiza botao de agendamento simples', () => {
   assert.doesNotMatch(maintenancePanelUi, /renderPeiMaintenanceGroup|renderPeiMaintenanceMetric|renderPeiMaintenanceActions|Atribuir a uma sessão|Plano de manutenção|Escolher sessão existente|Pendências técnicas/);
 });
 
+test('subaba manutencao preserva duplicatas do ensino e hidrata target do painel', () => {
+  const eligibleStart = patientDetailCode.indexOf('const peiMaintenanceEligibleRows = useMemo');
+  const eligibleEnd = patientDetailCode.indexOf('const peiGeneralizationRows', eligibleStart);
+  assert.notEqual(eligibleStart, -1);
+  const eligibleCode = patientDetailCode.slice(eligibleStart, eligibleEnd);
+  assert.match(eligibleCode, /const localRows = peiMaintenanceHydratedGoals/);
+  assert.match(eligibleCode, /panelByComposite/);
+  assert.match(eligibleCode, /panelTargetId/);
+  assert.match(eligibleCode, /key: `goal:\$\{goalId \|\| index\}:\$\{targetId \|\| compositeKey \|\| index\}`/);
+  assert.match(eligibleCode, /progressPercent: 100/);
+  assert.match(eligibleCode, /const rows = localRows\.length > 0 \? \[\.\.\.localRows, \.\.\.panelOnlyRows\]/);
+});
+
 test('modal etapa 2 mostra somente data ou proxima sessao e payload novo', () => {
   const modalStart = patientDetailCode.indexOf('{peiMaintenanceScheduleRow && createPortal(');
   const modalEnd = patientDetailCode.indexOf('{peiMaintenanceReviewRow && createPortal', modalStart);
@@ -442,6 +455,9 @@ test('backend da etapa 2 usa PEI targets e schedules ativos por target em lote',
   assert.match(stepTwoRoute, /\.from\('aba_targets'\)[\s\S]*?\.select\(ABA_TARGET_RECOMMENDATION_SELECT\)/m);
   assert.match(stepTwoRoute, /\.from\('aba_maintenance_schedules'\)[\s\S]*?\.select\(ABA_MAINTENANCE_SCHEDULE_SELECT\)[\s\S]*?\.in\('target_id', eligibleTargetIds\)[\s\S]*?\.in\('status', ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES\)/m);
   assert.match(stepTwoRoute, /source: 'patient_pei_targets_step2'/);
+  assert.match(stepTwoRoute, /source\?\.peiGoalIndex/);
+  assert.match(stepTwoRoute, /const hasRealTarget = isUuid\(targetId\)/);
+  assert.match(stepTwoRoute, /const internalKey = isPeiSource/);
   assert.match(stepTwoRoute, /canScheduleMaintenance: hasRealTarget/);
   assert.match(stepTwoRoute, /availableActions: hasRealTarget \? \['SCHEDULE_MAINTENANCE'\] : \[\]/);
   assert.match(stepTwoRoute, /progressPercent: 100/);
