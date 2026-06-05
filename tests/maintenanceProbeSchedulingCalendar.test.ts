@@ -55,6 +55,22 @@ test('backend registra proxima sessao pendente e confirmacao candidata', () => {
   assert.doesNotMatch(serverCode, /select\('\*'\)/);
 });
 
+test('backend resolve consulta de manutencao mesmo com escopo legado da sondagem', () => {
+  const helperStart = serverCode.indexOf('const fetchMaintenanceAppointmentById = async');
+  const helperEnd = serverCode.indexOf('const fetchTargetForMaintenance = async', helperStart);
+  assert.notEqual(helperStart, -1);
+  const helperCode = serverCode.slice(helperStart, helperEnd);
+  assert.match(helperCode, /normalizeAppointmentForMaintenance/);
+  assert.match(helperCode, /fetchDbAppointment/);
+  assert.match(helperCode, /column: 'patient_id', value: patientId, onMissing: 'empty'/);
+  assert.match(helperCode, /column: 'clinic_id', value: clinicId, onMissing: 'omit'/);
+  assert.match(helperCode, /column: 'organization_id', value: organizationId, onMissing: 'omit'/);
+  assert.match(helperCode, /patientScopedAppointment/);
+  assert.match(helperCode, /blockedStatuses/);
+  assert.match(helperCode, /statePatientId !== patientId/);
+  assert.doesNotMatch(helperCode, /\.eq\('organization_id', params\.organizationId\)/);
+});
+
 test('modal usa cards guiados e nao usa botao salvar generico', () => {
   const modalStart = sessionModeCode.indexOf('Agendar sondagem de manutencao');
   const modalEnd = sessionModeCode.indexOf('{pendingMaintenanceProbeTrial', modalStart);

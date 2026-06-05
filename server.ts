@@ -27538,38 +27538,95 @@ async function startServer() {
     organizationId: string;
   }) => {
     const appointmentId = sanitizeString(params.appointmentId, 180);
+    const patientId = sanitizeString(params.patientId, 120);
+    const clinicId = sanitizeString(params.clinicId, 120);
+    const organizationId = sanitizeString(params.organizationId, 120);
     if (!appointmentId) return null;
-    if (isUuid(appointmentId)) {
-      let query = supabase
-        .from('appointments')
-        .select(ABA_APPOINTMENT_MAINTENANCE_SELECT)
-        .eq('id', appointmentId)
-        .eq('patient_id', params.patientId)
-        .eq('clinic_id', params.clinicId)
-        .limit(1);
-      if (isUuid(params.organizationId)) query = query.eq('organization_id', params.organizationId);
-      const result = await query.maybeSingle();
-      if (!result.error && result.data) return result.data;
-      if (result.error) {
+    const normalizeAppointmentForMaintenance = (appointment: any) => {
+      if (!appointment?.id) return null;
+      const scheduledAt = sanitizeIsoDateTime(
+        appointment?.scheduled_at ||
+          appointment?.scheduled_start_at ||
+          appointment?.scheduledStartAt ||
+          appointment?.start_at ||
+          appointment?.startAt ||
+          '',
+        ''
+      );
+      const normalizedStatus = normalizeAppointmentStatusForTable(appointment?.status);
+      const inactive = appointment?.is_active === false || Boolean(appointment?.deleted_at);
+      const blockedStatuses = new Set(['cancelled', 'canceled', 'cancelada', 'no_show', 'missed', 'deleted', 'archived']);
+      if (!scheduledAt || inactive || blockedStatuses.has(normalizedStatus)) return null;
+      return cleanObject({
+        ...appointment,
+        patient_id: sanitizeString(appointment?.patient_id || appointment?.patientId || patientId, 120),
+        clinic_id: sanitizeString(appointment?.clinic_id || appointment?.clinicId || clinicId, 120) || null,
+        organization_id: sanitizeString(appointment?.organization_id || appointment?.organizationId || organizationId || clinicId, 120) || null,
+        scheduled_at: scheduledAt || appointment?.scheduled_at || appointment?.scheduled_start_at || null,
+        scheduled_start_at: appointment?.scheduled_start_at || scheduledAt || null,
+        status: normalizedStatus
+      });
+    };
+    const fetchDbAppointment = async (filters: Array<{ column: string; value: string; onMissing?: 'omit' | 'empty' | 'throw' }>) => {
+      let columns = [...ABA_APPOINTMENT_MAINTENANCE_COLUMNS];
+      let activeFilters = filters
+        .map((filter) => ({
+          ...filter,
+          column: sanitizeString(filter.column, 120),
+          value: sanitizeString(filter.value, 180),
+          onMissing: filter.onMissing || 'throw'
+        }))
+        .filter((filter) => filter.column && filter.value);
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        let query = supabase
+          .from('appointments')
+          .select(columns.join(',') || ABA_APPOINTMENT_MAINTENANCE_SELECT)
+          .limit(1);
+        activeFilters.forEach((filter) => {
+          query = query.eq(filter.column, filter.value);
+        });
+        const result = await query.maybeSingle();
+        if (!result.error) return normalizeAppointmentForMaintenance(result.data);
         if (hasMissingFinancialSchema(result.error)) return null;
         const missingColumn = extractMissingColumnName(result.error);
-        if (missingColumn && ABA_APPOINTMENT_MAINTENANCE_COLUMNS.includes(missingColumn)) {
-          const fallback = await supabase
-            .from('appointments')
-            .select('id,clinic_id,patient_id,therapist_id,scheduled_at,status')
-            .eq('id', appointmentId)
-            .eq('patient_id', params.patientId)
-            .eq('clinic_id', params.clinicId)
-            .limit(1)
-            .maybeSingle();
-          if (!fallback.error && fallback.data) return fallback.data;
-          if (fallback.error && !hasMissingFinancialSchema(fallback.error)) throw fallback.error;
-        } else {
-          throw result.error;
+        if (missingColumn && columns.includes(missingColumn)) {
+          columns = columns.filter((column) => column !== missingColumn);
+          continue;
         }
+        const missingFilterIndex = activeFilters.findIndex((filter) => filter.column === missingColumn);
+        if (missingFilterIndex >= 0) {
+          const missingFilter = activeFilters[missingFilterIndex];
+          if (missingFilter.onMissing === 'empty') return null;
+          if (missingFilter.onMissing === 'omit') {
+            activeFilters = activeFilters.filter((_, index) => index !== missingFilterIndex);
+            continue;
+          }
+        }
+        throw result.error;
+      }
+      return null;
+    };
+    if (isUuid(appointmentId)) {
+      const strictFilters = [
+        { column: 'id', value: appointmentId },
+        { column: 'patient_id', value: patientId, onMissing: 'empty' as const },
+        { column: 'clinic_id', value: clinicId, onMissing: 'omit' as const }
+      ];
+      const scopedAppointment = await fetchDbAppointment(
+        isUuid(organizationId)
+          ? [...strictFilters, { column: 'organization_id', value: organizationId, onMissing: 'omit' as const }]
+          : strictFilters
+      );
+      if (scopedAppointment?.id) return scopedAppointment;
+      const patientScopedAppointment = await fetchDbAppointment([
+        { column: 'id', value: appointmentId },
+        { column: 'patient_id', value: patientId, onMissing: 'empty' as const }
+      ]);
+      if (patientScopedAppointment?.id) {
+        return patientScopedAppointment;
       }
     }
-    const stateResult = await fetchClinicStateWithSchemaFallback({ supabase, clinicId: params.clinicId, logger: console });
+    const stateResult = await fetchClinicStateWithSchemaFallback({ supabase, clinicId, logger: console });
     if (stateResult.error) {
       if (hasMissingFinancialSchema(stateResult.error)) return null;
       throw stateResult.error;
@@ -27578,13 +27635,13 @@ async function startServer() {
       .find((item: any) => String(item?.id || '') === appointmentId);
     if (!appointment) return null;
     const scheduledAt = buildAppointmentScheduledAt(appointment);
-    const patientId = sanitizeString(appointment?.patient_id || appointment?.patientId, 120);
-    if (patientId !== params.patientId || !scheduledAt || !getClinicStateAppointmentStatusBlocksConflict(appointment)) return null;
+    const statePatientId = sanitizeString(appointment?.patient_id || appointment?.patientId, 120);
+    if (statePatientId !== patientId || !scheduledAt || !getClinicStateAppointmentStatusBlocksConflict(appointment)) return null;
     return cleanObject({
       id: appointmentId,
-      organization_id: sanitizeString(appointment?.organization_id || appointment?.organizationId || params.organizationId || params.clinicId, 120),
-      clinic_id: params.clinicId,
-      patient_id: params.patientId,
+      organization_id: sanitizeString(appointment?.organization_id || appointment?.organizationId || organizationId || clinicId, 120),
+      clinic_id: clinicId,
+      patient_id: statePatientId,
       therapist_id: sanitizeString(appointment?.therapist_id || appointment?.therapistId || appointment?.professional_id || appointment?.professionalId, 120) || null,
       therapist_name: sanitizeString(appointment?.therapist_name || appointment?.therapistName || appointment?.professionalName || appointment?.professional, 180) || null,
       scheduled_at: scheduledAt,
