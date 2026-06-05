@@ -23,12 +23,41 @@ export type PeiMaintenanceTargetFirstGroupKey =
   | 'regressionRisk'
   | 'technical';
 
+export type PeiMaintenanceTargetFirstSections = Record<PeiMaintenanceTargetFirstGroupKey, any[]>;
+
+export type PeiMaintenancePanelMappedState = {
+  source: 'maintenance-panel-target-first';
+  requestId: number;
+  loadedFor: string;
+  loadedAt: number;
+  summary: Record<PeiMaintenanceTargetFirstGroupKey, number>;
+  sections: PeiMaintenanceTargetFirstSections;
+  raw: any;
+  eligibleSkills: any[];
+  maintenanceSkills: any[];
+  scheduledProbes: any[];
+  waitingNextSession: any[];
+  overdueProbes: any[];
+  regressionRisk: any[];
+  technicalIssues: any[];
+};
+
 export const PEI_PLAN_SUBTABS: Array<{ id: PeiPlanSubtab; label: string }> = [
   { id: 'teaching', label: 'Ensino' },
   { id: 'maintenance', label: 'Manutencao' },
   { id: 'generalization', label: 'Generalizacao' },
   { id: 'history', label: 'Historico' },
 ];
+
+export const createEmptyPeiMaintenanceTargetFirstSections = (): PeiMaintenanceTargetFirstSections => ({
+  eligibleSkills: [],
+  maintenanceSkills: [],
+  scheduled: [],
+  waitingNextSession: [],
+  overdue: [],
+  regressionRisk: [],
+  technical: [],
+});
 
 const UUID_LIKE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ACTIVE_LINKLESS_STATUSES = new Set(['PENDING_NEXT_SESSION', 'PENDING_LINK', 'PENDING_SCHEDULING', 'UNSCHEDULED', 'PENDING']);
@@ -315,6 +344,142 @@ export const formatPeiMaintenanceScheduleLabel = (schedule: any, now = new Date(
   }
   return formatMaintenanceScheduleDueLabel(schedule, now);
 };
+
+export function mapMaintenancePanelResponse(
+  response: any,
+  meta: { patientId?: any; requestId?: number; loadedAt?: number } = {}
+): PeiMaintenancePanelMappedState {
+  const panel = response?.data && typeof response.data === 'object' && !Array.isArray(response.data)
+    ? response.data
+    : response && typeof response === 'object' && !Array.isArray(response)
+      ? response
+      : {};
+  const sections = createEmptyPeiMaintenanceTargetFirstSections();
+  const normalizePanelRow = (row: any, group: PeiMaintenanceTargetFirstGroupKey) => {
+    const schedule = row?.nextSchedule || row?.activeSchedule || row?.schedule || null;
+    const latestResult = row?.lastResult || row?.latestResult || null;
+    const rawTargetId =
+      row?.targetId ||
+      row?.target_id ||
+      row?.aba_target_id ||
+      row?.abaTargetId ||
+      schedule?.target_id ||
+      schedule?.targetId ||
+      (!group.startsWith('technical') && isPersistedUuid(row?.id) ? row.id : '');
+    const rawScheduleId =
+      row?.scheduleId ||
+      row?.schedule_id ||
+      schedule?.id ||
+      schedule?.schedule_id ||
+      schedule?.scheduleId ||
+      '';
+    const targetId = normalizeText(rawTargetId);
+    const scheduleId = normalizeText(rawScheduleId);
+    const isTechnicalIssue = group === 'technical';
+    const targetName = safeTargetName(
+      row?.targetName ||
+        row?.target_name ||
+        row?.name ||
+        row?.title ||
+        row?.skillName ||
+        row?.skill_name,
+      isTechnicalIssue ? 'Sondagem sem habilidade vinculada' : 'Habilidade sem nome'
+    );
+    const protocol = safeTargetName(row?.protocol || row?.protocolName || row?.protocol_name || row?.protocolTitle || row?.protocol_title, 'Sem protocolo informado');
+    const domain = safeTargetName(row?.domain || row?.domainName || row?.domain_name || row?.programName || row?.program_name, 'Sem dominio informado');
+    const hasRealTarget = Boolean(!isTechnicalIssue && isPersistedUuid(targetId) && row?.hasRealTarget !== false);
+    const needsTargetReview = Boolean(
+      isTechnicalIssue ||
+        row?.needsTargetReview ||
+        row?.targetMissing ||
+        schedule?.target_missing ||
+        !hasRealTarget
+    );
+    const availableActions = needsTargetReview
+      ? ['REVIEW_TARGET']
+      : Array.isArray(row?.availableActions) && row.availableActions.length > 0
+        ? row.availableActions
+        : ['SCHEDULE_MAINTENANCE', 'WAIT_NEXT_SESSION', 'ASSIGN_APPOINTMENT'];
+    const groupName = group === 'waitingNextSession'
+      ? 'unlinked'
+      : group === 'overdue'
+        ? 'overdue'
+        : group === 'technical'
+          ? 'unlinked'
+          : row?.group || 'activeCycle';
+
+    return {
+      ...(row || {}),
+      key: String(row?.key || row?.cardId || scheduleId || targetId || targetName || group),
+      kind: row?.kind || row?.cardKind || (isTechnicalIssue ? 'SCHEDULE_ORFAO' : scheduleId ? 'SCHEDULE_VALIDO' : 'TARGET_REAL_SEM_SCHEDULE'),
+      cardKind: row?.cardKind || row?.kind || (isTechnicalIssue ? 'SCHEDULE_ORFAO' : scheduleId ? 'SCHEDULE_VALIDO' : 'TARGET_REAL_SEM_SCHEDULE'),
+      targetId,
+      scheduleId,
+      targetName,
+      protocol,
+      domain,
+      nextSchedule: schedule,
+      activeSchedule: schedule,
+      schedules: Array.isArray(row?.schedules) ? row.schedules : schedule ? [schedule] : [],
+      lastResult: latestResult,
+      latestResult,
+      group: groupName,
+      isTechnicalIssue,
+      needsTargetReview,
+      hasRealTarget,
+      hasRealSchedule: isPersistedUuid(scheduleId),
+      canScheduleMaintenance: hasRealTarget && !needsTargetReview,
+      canWaitNextSession: hasRealTarget && !needsTargetReview,
+      canAssignAppointment: hasRealTarget && !needsTargetReview,
+      canReviewLink: needsTargetReview,
+      availableActions,
+      isRegressionRisk: group === 'regressionRisk' || Boolean(row?.isRegressionRisk),
+      statusLabel:
+        row?.statusLabel ||
+        (group === 'eligibleSkills'
+          ? 'Sem sondagem agendada'
+          : group === 'regressionRisk'
+            ? 'Risco de regressao'
+            : formatPeiMaintenanceScheduleLabel(schedule)),
+    };
+  };
+
+  sections.eligibleSkills = (Array.isArray(panel.eligibleSkills) ? panel.eligibleSkills : []).map((row: any) => normalizePanelRow(row, 'eligibleSkills'));
+  sections.maintenanceSkills = (Array.isArray(panel.maintenanceSkills) ? panel.maintenanceSkills : []).map((row: any) => normalizePanelRow(row, 'maintenanceSkills'));
+  sections.scheduled = (Array.isArray(panel.scheduledProbes) ? panel.scheduledProbes : []).map((row: any) => normalizePanelRow(row, 'scheduled'));
+  sections.waitingNextSession = (Array.isArray(panel.waitingNextSession) ? panel.waitingNextSession : []).map((row: any) => normalizePanelRow(row, 'waitingNextSession'));
+  sections.overdue = (Array.isArray(panel.overdueProbes) ? panel.overdueProbes : []).map((row: any) => normalizePanelRow(row, 'overdue'));
+  sections.regressionRisk = (Array.isArray(panel.regressionRisk) ? panel.regressionRisk : []).map((row: any) => normalizePanelRow(row, 'regressionRisk'));
+  sections.technical = (Array.isArray(panel.technicalIssues) ? panel.technicalIssues : []).map((row: any) => normalizePanelRow(row, 'technical'));
+
+  const summary = {
+    eligibleSkills: sections.eligibleSkills.length,
+    maintenanceSkills: sections.maintenanceSkills.length,
+    scheduled: sections.scheduled.length,
+    waitingNextSession: sections.waitingNextSession.length,
+    overdue: sections.overdue.length,
+    regressionRisk: sections.regressionRisk.length,
+    technical: sections.technical.length,
+  };
+
+  return {
+    ...panel,
+    source: 'maintenance-panel-target-first',
+    requestId: Number(meta.requestId || 0),
+    loadedFor: normalizeText(meta.patientId),
+    loadedAt: Number(meta.loadedAt || Date.now()),
+    summary,
+    sections,
+    raw: panel,
+    eligibleSkills: sections.eligibleSkills,
+    maintenanceSkills: sections.maintenanceSkills,
+    scheduledProbes: sections.scheduled,
+    waitingNextSession: sections.waitingNextSession,
+    overdueProbes: sections.overdue,
+    regressionRisk: sections.regressionRisk,
+    technicalIssues: sections.technical,
+  };
+}
 
 export function buildPeiMaintenanceRows(input: {
   goals?: any[];

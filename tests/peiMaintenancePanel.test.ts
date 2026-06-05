@@ -7,6 +7,7 @@ import {
   formatPeiMaintenanceScheduleLabel,
   groupPeiMaintenanceRows,
   groupPeiMaintenanceRowsTargetFirst,
+  mapMaintenancePanelResponse,
   resolveMaintenanceTargetDisplay,
   summarizePeiMaintenanceRows,
 } from '../src/utils/peiMaintenancePanel.ts';
@@ -139,6 +140,40 @@ test('painel target-first separa habilidades reais de pendencias tecnicas', () =
   assert.equal(groups.technical[0].canScheduleMaintenance, false);
 });
 
+test('mapper target-first preserva habilidade elegivel mesmo com muitas pendencias tecnicas', () => {
+  const targetId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0015';
+  const mapped = mapMaintenancePanelResponse({
+    eligibleSkills: [
+      {
+        targetId,
+        targetName: 'Realiza duas atividades simples de encaixe ou construcao',
+        protocol: 'VB-MAPP - Nivel 1',
+        domain: 'Brincar independente'
+      }
+    ],
+    maintenanceSkills: [],
+    scheduledProbes: [],
+    waitingNextSession: [],
+    overdueProbes: [],
+    regressionRisk: [],
+    technicalIssues: Array.from({ length: 50 }, (_, index) => ({
+      scheduleId: `6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0${String(200 + index).padStart(3, '0')}`,
+      targetName: ''
+    }))
+  }, { patientId: 'patient-1', requestId: 12, loadedAt: 123456 });
+
+  assert.equal(mapped.source, 'maintenance-panel-target-first');
+  assert.equal(mapped.requestId, 12);
+  assert.equal(mapped.loadedAt, 123456);
+  assert.equal(mapped.summary.eligibleSkills, 1);
+  assert.equal(mapped.summary.technical, 50);
+  assert.equal(mapped.sections.eligibleSkills[0].targetName, 'Realiza duas atividades simples de encaixe ou construcao');
+  assert.equal(mapped.sections.eligibleSkills[0].targetId, targetId);
+  assert.equal(mapped.sections.eligibleSkills[0].canScheduleMaintenance, true);
+  assert.equal(mapped.sections.technical[0].isTechnicalIssue, true);
+  assert.deepEqual(mapped.sections.technical[0].availableActions, ['REVIEW_TARGET']);
+});
+
 test('target-first separa risco de regressao do fluxo agendado', () => {
   const targetId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0020';
   const rows = buildPeiMaintenanceRows({
@@ -243,8 +278,18 @@ test('acoes do painel chamam rotas seguras existentes', () => {
   assert.match(patientDetailCode, /canWaitNextSession/);
   assert.match(patientDetailCode, /canAssignAppointment/);
   assert.match(patientDetailCode, /rowClinicalContext/);
-  assert.match(patientDetailCode, /groupPeiMaintenanceRowsTargetFirst/);
+  assert.match(patientDetailCode, /mapMaintenancePanelResponse/);
+  assert.match(patientDetailCode, /peiMaintenancePanelRequestSeqRef/);
+  assert.match(patientDetailCode, /requestId !== peiMaintenancePanelRequestSeqRef\.current/);
+  assert.match(patientDetailCode, /peiMaintenancePanelPatientIdRef\.current !== requestPatientId/);
+  assert.match(patientDetailCode, /ignoredAsStale/);
+  assert.match(patientDetailCode, /source: 'maintenance-panel-target-first'/);
+  assert.match(patientDetailCode, /setAbaMaintenancePanel\(mappedPanel\)/);
+  assert.doesNotMatch(patientDetailCode, /setAbaMaintenancePanel\(panelData\)/);
+  assert.doesNotMatch(patientDetailCode, /groupPeiMaintenanceRowsTargetFirst\(peiMaintenanceRows\)/);
   assert.match(patientDetailCode, /peiMaintenanceTargetFirstGroups/);
+  assert.match(patientDetailCode, /shouldShowPeiMaintenancePanelLoading/);
+  assert.match(patientDetailCode, /peiMaintenanceClinicalBadgeCount/);
   assert.match(patientDetailCode, /Atenção \/ risco de regressão/);
   assert.match(patientDetailCode, /isPeiMaintenanceTechnicalExpanded/);
   assert.match(patientDetailCode, /Recolher pendências técnicas/);
@@ -274,6 +319,19 @@ test('acoes do painel chamam rotas seguras existentes', () => {
   assert.match(serverCode, /app\.post\('\/api\/aba\/maintenance-schedules\/:scheduleId\/relink-target'/);
   assert.match(serverCode, /fetchMaintenanceAppointmentById/);
   assert.match(serverCode, /canAccessPatientInCurrentClinic/);
+});
+
+test('refresh da manutencao usa apenas painel target-first e ignora respostas stale', () => {
+  const refreshStart = patientDetailCode.indexOf('const refreshPeiMaintenancePanel');
+  const refreshEnd = patientDetailCode.indexOf('useEffect(() => {', refreshStart);
+  const refreshCode = patientDetailCode.slice(refreshStart, refreshEnd);
+  assert.match(refreshCode, /dataService\.getAbaMaintenancePanel\(requestPatientId, \{ page: 1, pageSize: 100 \}\)/);
+  assert.match(refreshCode, /mapMaintenancePanelResponse\(panelData/);
+  assert.match(refreshCode, /requestId !== peiMaintenancePanelRequestSeqRef\.current/);
+  assert.match(refreshCode, /setAbaMaintenancePanel\(mappedPanel\)/);
+  assert.doesNotMatch(refreshCode, /getAbaMaintenanceOverview/);
+  assert.doesNotMatch(refreshCode, /groupPeiMaintenanceRowsTargetFirst/);
+  assert.doesNotMatch(refreshCode, /buildPeiMaintenanceRows/);
 });
 
 test('interfaces de manutencao usam display central sem placeholders antigos', () => {
