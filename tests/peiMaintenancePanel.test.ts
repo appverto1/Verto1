@@ -355,11 +355,13 @@ test('modal etapa 2 mostra somente data ou proxima sessao e payload novo', () =>
   const handlerEnd = patientDetailCode.indexOf('const handlePeiScheduleNextSession', handlerStart);
   assert.notEqual(handlerStart, -1);
   const handlerCode = patientDetailCode.slice(handlerStart, handlerEnd);
-  assert.match(handlerCode, /Esta habilidade não está disponível para manutenção/);
-  assert.match(handlerCode, /Escolha uma data para agendar\./);
+  assert.doesNotMatch(handlerCode, /Esta habilidade não está disponível para manutenção/);
+  assert.match(handlerCode, /Não foi possível agendar a manutenção/);
+  assert.match(handlerCode, /Escolha uma data para agendar a sondagem/);
   assert.match(handlerCode, /const scheduleMode = isDateMode \? 'DATE' : 'NEXT_SESSION'/);
   assert.match(handlerCode, /dueDate: isDateMode \? peiMaintenanceScheduleDate : null/);
   assert.match(handlerCode, /dataService\.createMaintenanceScheduleForTarget\(targetId, payload\)/);
+  assert.match(handlerCode, /message: successMessage/);
   assert.match(handlerCode, /Sondagem de manutenção agendada para a data escolhida/);
   assert.match(handlerCode, /Sondagem aguardando próxima sessão/);
   assert.doesNotMatch(handlerCode, /scheduleMaintenanceForNextSession|requestSessionStart|saveAbaSession|createAbaSession|POST \/api\/aba\/sessions/);
@@ -477,12 +479,14 @@ test('endpoint de agendamento aceita DATE ou NEXT_SESSION com upsert ativo', () 
   assert.match(endpointCode, /requestedMode[\s\S]*?'DATE'[\s\S]*?'NEXT_SESSION'/m);
   assert.match(endpointCode, /scheduleModeFromPayload[\s\S]*?'CUSTOM_DATE'[\s\S]*?'NEXT_PATIENT_SESSION'/m);
   assert.match(endpointCode, /MISSING_DUE_DATE/);
-  assert.match(endpointCode, /Escolha uma data para agendar\./);
+  assert.match(endpointCode, /Escolha uma data para agendar a sondagem/);
   assert.match(endpointCode, /NÃ£o foi possÃ­vel agendar a manutenÃ§Ã£o|Não foi possível agendar a manutenção/);
   assert.match(endpointCode, /createMaintenanceScheduleForTarget/);
   assert.match(endpointCode, /hydrateScheduleResponse/);
   assert.match(endpointCode, /targetId/);
   assert.match(endpointCode, /dueDate/);
+  assert.match(endpointCode, /appointmentId/);
+  assert.match(endpointCode, /candidateAppointmentId/);
   assert.doesNotMatch(endpointCode, /scheduleId|select\('\*'\)|\/api\/aba\/sessions|saveAbaSession|createAbaSession/);
 
   const helperStart = serverCode.indexOf('const createMaintenanceScheduleForTarget = async');
@@ -535,6 +539,7 @@ test('acoes nao enviam ids sinteticos para endpoints de manutencao', () => {
   assert.match(patientDetailCode, /const getPersistedUuid/);
   assert.match(patientDetailCode, /const getPeiMaintenanceTargetId = \(row: any\) => \{/);
   assert.match(patientDetailCode, /\[\.\.\.peiMaintenanceLinkableTargets, \.\.\.peiMaintenanceHydratedGoals\]/);
+  assert.match(patientDetailCode, /const nameOnlyMatches = nameKey && targetNameKey === nameKey/);
   assert.match(patientDetailCode, /return matches\.size === 1 \? Array\.from\(matches\.keys\(\)\)\[0\] : ''/);
   assert.match(patientDetailCode, /disabled=\{actionLoading\('confirm'\) \|\| !hasRealSchedule \|\| needsTargetReview\}/);
   assert.match(patientDetailCode, /group !== 'completed' && group !== 'confirmation' && \(/);

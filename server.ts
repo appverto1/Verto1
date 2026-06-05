@@ -30494,7 +30494,7 @@ async function startServer() {
           : (req.body?.scheduleMode || req.body?.schedule_mode);
       const dueDate = req.body?.dueDate || req.body?.due_date || null;
       if ((requestedMode === 'DATE' || sanitizeString(scheduleModeFromPayload, 80).toUpperCase() === 'CUSTOM_DATE') && !sanitizeString(dueDate, 80)) {
-        return res.status(400).json({ success: false, error: 'MISSING_DUE_DATE', message: 'Escolha uma data para agendar.' });
+        return res.status(400).json({ success: false, error: 'MISSING_DUE_DATE', message: 'Escolha uma data para agendar a sondagem.' });
       }
       const result = await createMaintenanceScheduleForTarget({
         targetId,
@@ -30519,6 +30519,8 @@ async function startServer() {
           targetId,
           status: sanitizeString(schedule?.status, 80) || null,
           dueDate: schedule?.target_due_date || schedule?.targetDueDate || schedule?.due_date || schedule?.dueDate || null,
+          appointmentId: schedule?.appointment_id || schedule?.appointmentId || null,
+          candidateAppointmentId: schedule?.candidate_appointment_id || schedule?.candidateAppointmentId || null,
           targetName: sanitizeString(schedule?.targetName || schedule?.target_name || target?.name || raw.targetName, 240) || null,
           protocolName: sanitizeString(schedule?.protocolTitle || schedule?.protocol_title || target?.protocol_title || raw.protocolTitle, 240) || null,
           domainName: sanitizeString(schedule?.domainName || schedule?.domain_name || target?.domain_name || raw.domainName, 240) || null

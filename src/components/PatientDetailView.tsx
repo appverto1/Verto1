@@ -5277,7 +5277,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       const targetDomainKey = normalizePeiMaintenanceMatchKey(getPeiMaintenanceDomainName(target));
       const targetCompositeKey = [targetNameKey, targetProtocolKey, targetDomainKey].filter(Boolean).join('|');
       const compositeMatches = compositeKey && targetCompositeKey === compositeKey;
-      const nameOnlyMatches = !compositeKey && nameKey && targetNameKey === nameKey;
+      const nameOnlyMatches = nameKey && targetNameKey === nameKey;
       if (compositeMatches || nameOnlyMatches) matches.set(id, target);
     });
     return matches.size === 1 ? Array.from(matches.keys())[0] : '';
@@ -5335,11 +5335,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     const row = peiMaintenanceScheduleRow;
     const targetId = getPeiMaintenanceTargetId(row);
     if (!targetId || !patient?.id) {
-      setPeiMaintenancePanelMessage('Esta habilidade não está disponível para manutenção.');
+      setPeiMaintenancePanelMessage('Não foi possível agendar a manutenção.');
       return;
     }
     if (peiMaintenanceScheduleMode === 'CUSTOM_DATE' && !peiMaintenanceScheduleDate) {
-      setPeiMaintenancePanelMessage('Escolha uma data para agendar.');
+      setPeiMaintenancePanelMessage('Escolha uma data para agendar a sondagem.');
       return;
     }
     const isDateMode = peiMaintenanceScheduleMode === 'CUSTOM_DATE';
@@ -5349,14 +5349,19 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       patientId: patient?.id,
       mode: scheduleMode,
       dueDate: isDateMode ? peiMaintenanceScheduleDate : null,
-      target_name: row?.targetName || row?.name
+      target_name: row?.targetName || row?.name,
+      protocolName: row?.protocol || row?.protocolName || null,
+      domainName: row?.domain || row?.domainName || null
     };
     const successMessage = isDateMode
       ? 'Sondagem de manutenção agendada para a data escolhida.'
       : 'Sondagem aguardando próxima sessão.';
     void runPeiMaintenanceAction(
       `schedule-${row?.key || targetId}`,
-      () => dataService.createMaintenanceScheduleForTarget(targetId, payload),
+      async () => {
+        const result = await dataService.createMaintenanceScheduleForTarget(targetId, payload);
+        return result?.success === false ? result : { ...result, message: successMessage };
+      },
       successMessage
     ).then((ok) => {
       if (ok) {
