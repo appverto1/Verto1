@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  abaMasteryCriterionSourceLabel,
   buildTargetStatusAuditLog,
   evaluateTargetMastery,
   formatAbaMasteryCriterion,
@@ -137,6 +138,43 @@ test('meta_sucessos vira acertos independentes e nao dias obrigatorios', () => {
   assert.equal(result.reasons.some((reason) => reason.code === 'CONSECUTIVE_DAYS_PENDING'), false);
 });
 
+test('criterio proprio de 1 acerto independente conclui sem fallback 5 ou 80/80', () => {
+  const criteria = {
+    name: '1 acerto independente',
+    source: 'skill',
+    requiredIndependentCorrectTrials: 1,
+    is_active: true
+  };
+  const normalized = normalizeAbaMasteryCriterion(criteria);
+  assert.equal(normalized?.requiredIndependentCorrectTrials, 1);
+  assert.equal(normalized?.minTrialsPerSession, 1);
+  assert.equal(normalized?.minAccuracyPercent, null);
+  assert.equal(normalized?.minIndependencePercent, null);
+  assert.equal(formatAbaMasteryCriterion(normalized), '1 acerto independente');
+  assert.doesNotMatch(formatAbaMasteryCriterion(normalized), /5|80%/);
+  assert.equal(abaMasteryCriterionSourceLabel(normalized), 'Criterio da habilidade');
+
+  const result = evaluate({
+    criteria,
+    trials: [trial({ id: 't1' })],
+    previousEvaluations: []
+  });
+  assert.equal(result.status, 'READY_FOR_REVIEW');
+  assert.equal(result.criterionProgressCount, 1);
+  assert.equal(result.criterionRequiredCount, 1);
+  assert.match(result.criterionProgressLabel, /1\/1 acertos independentes/);
+  assert.equal(result.reasons.length, 0);
+});
+
+test('criterio vazio nao vira criterio padrao oculto', () => {
+  const normalized = normalizeAbaMasteryCriterion({ name: 'sem campos', is_active: true });
+  assert.equal(normalized, null);
+  const result = evaluate({ criteria: { name: 'sem campos', is_active: true }, trials: [trial({ id: 't1' }), trial({ id: 't2' })] });
+  assert.equal(result.status, 'INSUFFICIENT_DATA');
+  assert.equal(result.reasons[0].code, 'NO_CRITERIA');
+  assert.equal(result.criterionLabel, 'Criterio nao configurado');
+});
+
 test('acerto com ajuda nao conta para criterio independente', () => {
   const result = evaluate({
     criteria: {
@@ -265,9 +303,15 @@ test('frontend e backend integram avaliacao summary-driven no encerramento e rel
   assert.match(serverCode, /from\('aba_mastery_evaluations'\)[\s\S]*?select\('id,status,evaluation_status,evaluated_at,therapist_id,consecutive_successful_days'\)[\s\S]*?limit\(30\)/m);
   assert.match(sessionModeCode, /evaluateTargetMastery\([\s\S]*?teachingMasteryRows/m);
   assert.match(sessionModeCode, /legacySuccessTarget[\s\S]*?required_independent_correct_trials/m);
+  assert.match(sessionModeCode, /normalizeAbaMasteryCriterion[\s\S]*?buildSessionGoalMasteryCriterion/m);
+  assert.match(sessionModeCode, /criterionSourceLabel[\s\S]*?Origem:/m);
   assert.match(sessionModeCode, /Critérios de maestria[\s\S]*?progresso do crit/m);
   assert.doesNotMatch(sessionModeCode, /const legacyDays/);
   assert.match(serverCode, /required_independent_correct_trials[\s\S]*?embeddedRequiredIndependentCorrectTrials/m);
+  assert.match(serverCode, /MASTERY_CRITERIA_UPDATED/);
+  assert.match(serverCode, /\/api\/aba\/patients\/:patientId\/targets\/:targetId\/mastery-criteria/);
+  assert.match(dataServiceCode, /async updateAbaTargetMasteryCriteria[\s\S]*?mastery-criteria/);
+  assert.match(serverCode, /min_accuracy_percent:[\s\S]*?requiredAccuracy[\s\S]*?\?\? null/m);
   assert.doesNotMatch(serverCode, /consecutive_successful_days: asSafeNumber\([\s\S]*?consecutive_successes/m);
   assert.match(dataServiceCode, /async saveAbaMasteryEvaluation\(evaluation: any\)[\s\S]*?criteria_id[\s\S]*?status[\s\S]*?total_trials/m);
   assert.match(dataServiceCode, /criterion_progress_count[\s\S]*?criterionProgressCount/m);

@@ -4416,14 +4416,25 @@ export default function App() {
         else break;
       }
 
-      let appliedMasteryTarget = 5;
+      let appliedMasteryTarget = 0;
       updatedPei = sourcePei.map((goal: any) => {
         if (goal.name !== title) return goal;
 
-        const masteryTarget = Math.max(
-          1,
-          Math.floor(Number(goal?.meta_sucessos ?? goal?.metaSucessos ?? goal?.masteryTarget ?? goal?.mastery_target) || 5)
+        const configuredMasteryTarget = Number(
+          goal?.mastery_criteria?.required_independent_correct_trials ??
+            goal?.mastery_criteria?.requiredIndependentCorrectTrials ??
+            goal?.masteryCriteria?.required_independent_correct_trials ??
+            goal?.masteryCriteria?.requiredIndependentCorrectTrials ??
+            goal?.meta_sucessos ??
+            goal?.metaSucessos ??
+            goal?.masteryTarget ??
+            goal?.mastery_target
         );
+        if (!Number.isFinite(configuredMasteryTarget) || configuredMasteryTarget <= 0) {
+          return goal.status === 'not_started' ? { ...goal, status: 'in_progress' } : goal;
+        }
+
+        const masteryTarget = Math.max(1, Math.floor(configuredMasteryTarget));
         appliedMasteryTarget = masteryTarget;
         const progress = Math.min(Math.round((consecutiveCount / masteryTarget) * 100), 100);
         const isMastered = progress >= 100;
@@ -4433,7 +4444,7 @@ export default function App() {
       const updatedGoal = updatedPei.find((goal: any) => goal.name === title);
       const isMastered = updatedGoal?.status === 'completed';
 
-      if (isAbaV2Enabled()) {
+      if (isAbaV2Enabled() && appliedMasteryTarget > 0) {
         try {
           await dataService.saveAbaMasteryEvaluation({
             id: `mastery-${newId}`,
@@ -4450,9 +4461,13 @@ export default function App() {
             distinct_therapists_count: 1,
             first_trial_independent: abaIndependent,
             criteria: {
-              source: 'pei_consecutive_successes',
-              minConsecutiveSuccesses: appliedMasteryTarget,
-              minAccuracyPercent: 100,
+              source: 'skill',
+              sourceLabel: 'Criterio da habilidade',
+              type: 'independent_correct_count',
+              requiredIndependentCorrectTrials: appliedMasteryTarget,
+              required_independent_correct_trials: appliedMasteryTarget,
+              minTrialsPerSession: appliedMasteryTarget,
+              min_trials_per_session: appliedMasteryTarget,
               collectionType: abaCollectionType
             },
             reasons: isMastered

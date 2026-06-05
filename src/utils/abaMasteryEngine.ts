@@ -43,16 +43,21 @@ export type AbaMasteryCriterion = {
   name: string;
   requiredIndependentCorrectTrials?: number | null;
   requiredCorrectTrials?: number | null;
-  minAccuracyPercent: number;
-  minIndependencePercent: number;
-  minTrialsPerSession: number;
+  minAccuracyPercent?: number | null;
+  minIndependencePercent?: number | null;
+  minTrialsPerSession?: number | null;
+  minTrialsPerSessionImplicit?: boolean;
   minConsecutiveDays: number;
+  minConsecutiveDaysExplicit?: boolean;
   requireFirstTrialIndependent: boolean;
   coldProbeOnly: boolean;
   minDistinctTherapists: number;
+  minDistinctTherapistsExplicit?: boolean;
   maintenanceRequired: boolean;
   maintenanceDays?: any;
   isActive: boolean;
+  source?: string | null;
+  sourceLabel?: string | null;
 };
 
 export type AbaMasteryEvaluationResult = {
@@ -194,6 +199,34 @@ const positiveIntegerOrNull = (value: any, min = 1, max = 100000) => {
   return Math.min(max, rounded);
 };
 
+const boundedNumberOrNull = (value: any, min = 0, max = 100000) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.min(max, Math.max(min, parsed));
+};
+
+const hasConfiguredValue = (row: any, ...keys: string[]) =>
+  keys.some((key) => row?.[key] !== undefined && row?.[key] !== null && row?.[key] !== '');
+
+export const abaMasteryCriterionSourceLabel = (criterion: any | null | undefined) => {
+  if (!criterion) return 'Criterio de maestria nao configurado';
+  const explicit = String(readValue(criterion, 'sourceLabel', 'source_label', 'originLabel', 'origin_label') || '').trim();
+  if (explicit) return explicit;
+  const source = String(readValue(criterion, 'source', 'criterionSource', 'criterion_source', 'origin') || '').trim().toLowerCase();
+  if (['skill', 'target', 'target_specific', 'patient_pei', 'patient_pei_materialized', 'manual', 'individual'].includes(source)) {
+    return 'Criterio da habilidade';
+  }
+  if (['protocol', 'program', 'program_inherited', 'protocol_inherited', 'inherited_protocol'].includes(source)) {
+    return 'Criterio herdado do protocolo';
+  }
+  if (['clinic', 'clinic_default', 'default_clinic', 'organization_default'].includes(source)) {
+    return 'Criterio padrao da clinica';
+  }
+  if (readValue(criterion, 'target_id', 'targetId')) return 'Criterio da habilidade';
+  if (readValue(criterion, 'program_id', 'programId')) return 'Criterio herdado do protocolo';
+  return 'Criterio da habilidade';
+};
+
 const isoOrNow = (value: any) => {
   const date = new Date(value || Date.now());
   return Number.isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString();
@@ -235,7 +268,14 @@ const normalizeMaintenanceDayList = (value: any): number[] => {
 
 const maintenanceCriterionOrDefault = (criteria: any | null | undefined): AbaMasteryCriterion => {
   const normalized = normalizeAbaMasteryCriterion(criteria);
-  if (normalized) return normalized;
+  if (normalized) {
+    return {
+      ...normalized,
+      minAccuracyPercent: normalized.minAccuracyPercent ?? 80,
+      minIndependencePercent: normalized.minIndependencePercent ?? 80,
+      minTrialsPerSession: normalized.minTrialsPerSession ?? 1
+    };
+  }
   return {
     id: null,
     organizationId: null,
@@ -300,7 +340,54 @@ export function normalizeAbaMasteryCriterion(row: any | null | undefined): AbaMa
     'success_threshold',
     'successThreshold'
   ));
-  const minTrialsFallback = requiredIndependentCorrectTrials || requiredCorrectTrials || 3;
+  const minAccuracyPercent = boundedNumberOrNull(readValue(
+    row,
+    'min_accuracy_percent',
+    'minAccuracyPercent',
+    'required_accuracy',
+    'requiredAccuracy',
+    'required_accuracy_percent',
+    'requiredAccuracyPercent'
+  ), 0, 100);
+  const minIndependencePercent = boundedNumberOrNull(readValue(
+    row,
+    'min_independence_percent',
+    'minIndependencePercent',
+    'required_independence',
+    'requiredIndependence',
+    'required_independence_percent',
+    'requiredIndependencePercent'
+  ), 0, 100);
+  const explicitMinTrials = positiveIntegerOrNull(readValue(
+    row,
+    'min_trials_per_session',
+    'minTrialsPerSession',
+    'minimum_trials',
+    'minimumTrials',
+    'required_trials',
+    'requiredTrials',
+    'trials_required',
+    'trialsRequired'
+  ));
+  const minTrialsPerSession = explicitMinTrials ?? requiredIndependentCorrectTrials ?? requiredCorrectTrials ?? null;
+  const minConsecutiveDays = positiveIntegerOrNull(readValue(row, 'min_consecutive_days', 'minConsecutiveDays'), 1, 3650) ?? 1;
+  const minDistinctTherapists = positiveIntegerOrNull(readValue(row, 'min_distinct_therapists', 'minDistinctTherapists'), 1, 1000) ?? 1;
+  const requireFirstTrialIndependent = safeBoolean(readValue(row, 'require_first_trial_independent', 'requireFirstTrialIndependent'), false);
+  const coldProbeOnly = safeBoolean(readValue(row, 'cold_probe_only', 'coldProbeOnly'), false);
+  const hasAnyCriterionConfig = Boolean(
+    requiredIndependentCorrectTrials ||
+      requiredCorrectTrials ||
+      minAccuracyPercent !== null ||
+      minIndependencePercent !== null ||
+      explicitMinTrials ||
+      hasConfiguredValue(row, 'min_consecutive_days', 'minConsecutiveDays') ||
+      requireFirstTrialIndependent ||
+      coldProbeOnly ||
+      (hasConfiguredValue(row, 'min_distinct_therapists', 'minDistinctTherapists') && minDistinctTherapists > 1)
+  );
+  if (!hasAnyCriterionConfig) return null;
+  const source = String(readValue(row, 'source', 'criterionSource', 'criterion_source', 'origin') || '').trim() || null;
+  const sourceLabel = abaMasteryCriterionSourceLabel({ ...row, source });
   return {
     id: String(readValue(row, 'id') || '').trim() || null,
     organizationId: String(readValue(row, 'organization_id', 'organizationId') || '').trim() || null,
@@ -309,16 +396,21 @@ export function normalizeAbaMasteryCriterion(row: any | null | undefined): AbaMa
     name,
     requiredIndependentCorrectTrials,
     requiredCorrectTrials,
-    minAccuracyPercent: safeNumber(readValue(row, 'min_accuracy_percent', 'minAccuracyPercent'), 80, 0, 100),
-    minIndependencePercent: safeNumber(readValue(row, 'min_independence_percent', 'minIndependencePercent'), 80, 0, 100),
-    minTrialsPerSession: Math.max(1, Math.round(safeNumber(readValue(row, 'min_trials_per_session', 'minTrialsPerSession', 'required_trials', 'requiredTrials', 'trials_required', 'trialsRequired'), minTrialsFallback, 1, 100000))),
-    minConsecutiveDays: Math.max(1, Math.round(safeNumber(readValue(row, 'min_consecutive_days', 'minConsecutiveDays'), 1, 1, 3650))),
-    requireFirstTrialIndependent: safeBoolean(readValue(row, 'require_first_trial_independent', 'requireFirstTrialIndependent'), false),
-    coldProbeOnly: safeBoolean(readValue(row, 'cold_probe_only', 'coldProbeOnly'), false),
-    minDistinctTherapists: Math.max(1, Math.round(safeNumber(readValue(row, 'min_distinct_therapists', 'minDistinctTherapists'), 1, 1, 1000))),
+    minAccuracyPercent,
+    minIndependencePercent,
+    minTrialsPerSession,
+    minTrialsPerSessionImplicit: explicitMinTrials === null && Boolean(minTrialsPerSession),
+    minConsecutiveDays,
+    minConsecutiveDaysExplicit: hasConfiguredValue(row, 'min_consecutive_days', 'minConsecutiveDays'),
+    requireFirstTrialIndependent,
+    coldProbeOnly,
+    minDistinctTherapists,
+    minDistinctTherapistsExplicit: hasConfiguredValue(row, 'min_distinct_therapists', 'minDistinctTherapists'),
     maintenanceRequired: safeBoolean(readValue(row, 'maintenance_required', 'maintenanceRequired'), false),
     maintenanceDays: readValue(row, 'maintenance_days', 'maintenanceDays') ?? null,
-    isActive
+    isActive,
+    source,
+    sourceLabel
   };
 }
 
@@ -331,19 +423,23 @@ export function formatAbaMasteryCriterion(criterion: AbaMasteryCriterion | null)
   if (criterion.requiredCorrectTrials) {
     parts.push(`${criterion.requiredCorrectTrials} ${criterion.requiredCorrectTrials === 1 ? 'acerto' : 'acertos'}`);
   }
-  parts.push(
-    `${criterion.minAccuracyPercent}% acuracia`,
-    `${criterion.minIndependencePercent}% independencia`,
-    `${criterion.minTrialsPerSession} tentativa(s)/sessao`
-  );
+  if (criterion.minAccuracyPercent !== null && criterion.minAccuracyPercent !== undefined) {
+    parts.push(`${criterion.minAccuracyPercent}% acuracia`);
+  }
+  if (criterion.minIndependencePercent !== null && criterion.minIndependencePercent !== undefined) {
+    parts.push(`${criterion.minIndependencePercent}% independencia`);
+  }
+  if (criterion.minTrialsPerSession && !criterion.minTrialsPerSessionImplicit) {
+    parts.push(`${criterion.minTrialsPerSession} tentativa(s)/sessao`);
+  }
   const usesTrialCountCriterion = Boolean(criterion.requiredIndependentCorrectTrials || criterion.requiredCorrectTrials);
-  if (!usesTrialCountCriterion || criterion.minConsecutiveDays > 1) {
+  if ((!usesTrialCountCriterion && criterion.minConsecutiveDaysExplicit) || criterion.minConsecutiveDays > 1) {
     parts.push(`${criterion.minConsecutiveDays} dia(s)`);
   }
   if (criterion.requireFirstTrialIndependent) parts.push('1a tentativa independente');
   if (criterion.coldProbeOnly) parts.push('Cold Probe');
   if (criterion.minDistinctTherapists > 1) parts.push(`${criterion.minDistinctTherapists} terapeutas`);
-  return parts.join(' - ');
+  return parts.length > 0 ? parts.join(' - ') : 'Criterio nao configurado';
 }
 
 const normalizeCollectionType = (trial: any) =>
@@ -507,10 +603,10 @@ export function evaluateTargetMastery(input: EvaluateTargetMasteryInput): AbaMas
   if (totalTrials === 0) {
     reasons.push({ code: criterion.coldProbeOnly ? 'NO_COLD_PROBE_TRIALS' : 'NO_VALID_TRIALS', message: criterion.coldProbeOnly ? 'Nenhuma tentativa Cold Probe valida foi registrada.' : 'Nenhuma tentativa valida foi registrada para esta meta.' });
   }
-  if (totalTrials < criterion.minTrialsPerSession) {
+  if (criterion.minTrialsPerSession && totalTrials < criterion.minTrialsPerSession) {
     reasons.push({ code: 'MIN_TRIALS_NOT_MET', message: `${totalTrials}/${criterion.minTrialsPerSession} tentativas minimas na sessao.` });
   }
-  if (criterion.coldProbeOnly && coldProbeTrialsCount < criterion.minTrialsPerSession) {
+  if (criterion.coldProbeOnly && criterion.minTrialsPerSession && coldProbeTrialsCount < criterion.minTrialsPerSession) {
     reasons.push({ code: 'COLD_PROBE_MIN_TRIALS_NOT_MET', message: `${coldProbeTrialsCount}/${criterion.minTrialsPerSession} tentativas Cold Probe.` });
   }
 
@@ -539,10 +635,10 @@ export function evaluateTargetMastery(input: EvaluateTargetMasteryInput): AbaMas
     };
   }
 
-  if (accuracyPercent < criterion.minAccuracyPercent) {
+  if (criterion.minAccuracyPercent !== null && criterion.minAccuracyPercent !== undefined && accuracyPercent < criterion.minAccuracyPercent) {
     reasons.push({ code: 'ACCURACY_BELOW_CRITERION', message: `${accuracyPercent}% acuracia; criterio ${criterion.minAccuracyPercent}%.` });
   }
-  if (independencePercent < criterion.minIndependencePercent) {
+  if (criterion.minIndependencePercent !== null && criterion.minIndependencePercent !== undefined && independencePercent < criterion.minIndependencePercent) {
     reasons.push({ code: 'INDEPENDENCE_BELOW_CRITERION', message: `${independencePercent}% independencia; criterio ${criterion.minIndependencePercent}%.` });
   }
   if (criterion.requireFirstTrialIndependent && !firstTrialIndependent) {
@@ -650,6 +746,7 @@ export function evaluateMaintenanceStatus(input: EvaluateMaintenanceStatusInput)
   const errorTrials = consideredTrials.filter((trial) => !isTrialCorrect(trial)).length;
   const accuracyPercent = percent(independentTrials + promptedTrials, totalTrials);
   const independencePercent = percent(independentTrials, totalTrials);
+  const minTrialsPerSession = criterion.minTrialsPerSession ?? 1;
   const reasons: AbaMasteryReason[] = [];
 
   if (totalTrials === 0) {
@@ -658,32 +755,34 @@ export function evaluateMaintenanceStatus(input: EvaluateMaintenanceStatusInput)
       message: 'Nenhuma tentativa Maintenance Probe valida foi registrada.'
     });
   }
-  if (totalTrials < criterion.minTrialsPerSession) {
+  if (totalTrials < minTrialsPerSession) {
     reasons.push({
       code: 'MIN_MAINTENANCE_TRIALS_NOT_MET',
-      message: `${totalTrials}/${criterion.minTrialsPerSession} maintenance probe(s) minimas.`
+      message: `${totalTrials}/${minTrialsPerSession} maintenance probe(s) minimas.`
     });
   }
 
-  const accuracyDrop = criterion.minAccuracyPercent - accuracyPercent;
-  const independenceDrop = criterion.minIndependencePercent - independencePercent;
+  const minAccuracyPercent = criterion.minAccuracyPercent ?? 80;
+  const minIndependencePercent = criterion.minIndependencePercent ?? 80;
+  const accuracyDrop = minAccuracyPercent - accuracyPercent;
+  const independenceDrop = minIndependencePercent - independencePercent;
   if (accuracyDrop > 0) {
     reasons.push({
       code: 'MAINTENANCE_ACCURACY_BELOW_CRITERION',
-      message: `${accuracyPercent}% acuracia; criterio ${criterion.minAccuracyPercent}%.`
+      message: `${accuracyPercent}% acuracia; criterio ${minAccuracyPercent}%.`
     });
   }
   if (independenceDrop > 0) {
     reasons.push({
       code: 'MAINTENANCE_INDEPENDENCE_BELOW_CRITERION',
-      message: `${independencePercent}% independencia; criterio ${criterion.minIndependencePercent}%.`
+      message: `${independencePercent}% independencia; criterio ${minIndependencePercent}%.`
     });
   }
 
   const severeDrop = accuracyDrop >= 20 || independenceDrop >= 20;
   const belowCriterion = accuracyDrop > 0 || independenceDrop > 0;
   const status: AbaMaintenanceProbeStatus =
-    totalTrials === 0 || totalTrials < criterion.minTrialsPerSession
+    totalTrials === 0 || totalTrials < minTrialsPerSession
       ? 'WATCH'
       : severeDrop
         ? 'REGRESSION_RISK'
@@ -707,8 +806,8 @@ export function evaluateMaintenanceStatus(input: EvaluateMaintenanceStatusInput)
     errorTrials,
     accuracyPercent,
     independencePercent,
-    minAccuracyPercent: criterion.minAccuracyPercent,
-    minIndependencePercent: criterion.minIndependencePercent,
+    minAccuracyPercent,
+    minIndependencePercent,
     status,
     consecutiveFailureCount,
     reasons,

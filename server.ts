@@ -37,7 +37,7 @@ import {
   buildPasswordRecoveryEmailTemplate
 } from './src/services/emailTemplates';
 import { resolveAbaPromptLevel } from './src/utils/abaPromptLevels';
-import { buildTargetStatusAuditLog, evaluateMaintenanceStatus, evaluateTargetMastery, formatAbaMasteryCriterion } from './src/utils/abaMasteryEngine';
+import { abaMasteryCriterionSourceLabel, buildTargetStatusAuditLog, evaluateMaintenanceStatus, evaluateTargetMastery, formatAbaMasteryCriterion, normalizeAbaMasteryCriterion } from './src/utils/abaMasteryEngine';
 import {
   buildDefaultMaintenanceSchedulePreview,
   deriveMaintenanceScheduleStatus,
@@ -21396,7 +21396,7 @@ async function startServer() {
         existingTaskData?.meta_sucessos ?? existingTaskData?.metaSucessos ?? req.body?.meta_sucessos,
         1,
         1000
-      ) || 5;
+      );
       const maxScoreFromTask =
         asSafeNumber(
           existingTaskData?.maxScore ??
@@ -21410,7 +21410,7 @@ async function startServer() {
         return res.status(400).json({ success: false, error: `pro_score deve estar entre 0 e ${maxScoreFromTask}.` });
       }
       const existingConsecutive = asSafeNumber(existing?.consecutive_successes, 0, 1000) || 0;
-      const nextConsecutive = isVbMapp
+      const nextConsecutive = isVbMapp && taskMasteryCriterion !== null
         ? (proScore >= 1 ? existingConsecutive + 1 : 0)
         : existingConsecutive;
 
@@ -21464,7 +21464,7 @@ async function startServer() {
         reviewed_at: reviewedAt,
         reviewed_by: sanitizeString(req.session.user?.id, 120)
       };
-      if (isVbMapp) {
+      if (isVbMapp && taskMasteryCriterion !== null) {
         reviewPayload.consecutive_successes = nextConsecutive;
       }
 
@@ -21668,7 +21668,7 @@ async function startServer() {
         suggestedTask,
         historyEntry,
         privateNote,
-        mastery_feedback: isVbMapp
+        mastery_feedback: isVbMapp && taskMasteryCriterion !== null
           ? {
               protocol: 'VB-MAPP',
               consecutive_successes: nextConsecutive,
@@ -29318,6 +29318,199 @@ async function startServer() {
     return 'Dados insuficientes';
   };
 
+  const readMasteryCriteriaInput = (row: any, ...keys: string[]) => {
+    for (const key of keys) {
+      if (row?.[key] !== undefined && row?.[key] !== null && row?.[key] !== '') return row[key];
+    }
+    return undefined;
+  };
+
+  const masteryCriteriaIntegerOrNull = (value: unknown, min = 1, max = 100000) => {
+    if (value === undefined || value === null || value === '') return null;
+    const parsed = asSafeNumber(value, min, max);
+    return parsed === null ? null : Math.round(parsed);
+  };
+
+  const masteryCriteriaPercentOrNull = (value: unknown) => {
+    if (value === undefined || value === null || value === '') return null;
+    const parsed = asSafeNumber(value, 0, 100);
+    return parsed === null ? null : Math.round(parsed);
+  };
+
+  const buildAbaMasteryCriteriaUpdatePayload = (input: any, actorId: string) => {
+    const source = input?.criteria && typeof input.criteria === 'object' ? input.criteria : input || {};
+    const requiredIndependentCorrectTrials = masteryCriteriaIntegerOrNull(readMasteryCriteriaInput(
+      source,
+      'required_independent_correct_trials',
+      'requiredIndependentCorrectTrials',
+      'min_independent_correct_trials',
+      'minIndependentCorrectTrials',
+      'meta_sucessos',
+      'metaSucessos',
+      'mastery_target',
+      'masteryTarget'
+    ));
+    const requiredCorrectTrials = masteryCriteriaIntegerOrNull(readMasteryCriteriaInput(
+      source,
+      'required_correct_trials',
+      'requiredCorrectTrials',
+      'required_successes',
+      'requiredSuccesses'
+    ));
+    const requiredAccuracy = masteryCriteriaPercentOrNull(readMasteryCriteriaInput(
+      source,
+      'min_accuracy_percent',
+      'minAccuracyPercent',
+      'required_accuracy',
+      'requiredAccuracy',
+      'required_accuracy_percent',
+      'requiredAccuracyPercent'
+    ));
+    const requiredIndependence = masteryCriteriaPercentOrNull(readMasteryCriteriaInput(
+      source,
+      'min_independence_percent',
+      'minIndependencePercent',
+      'required_independence',
+      'requiredIndependence',
+      'required_independence_percent',
+      'requiredIndependencePercent'
+    ));
+    const minimumTrials = masteryCriteriaIntegerOrNull(readMasteryCriteriaInput(
+      source,
+      'min_trials_per_session',
+      'minTrialsPerSession',
+      'minimum_trials',
+      'minimumTrials',
+      'required_trials',
+      'requiredTrials'
+    ));
+    const minConsecutiveDays = masteryCriteriaIntegerOrNull(readMasteryCriteriaInput(source, 'min_consecutive_days', 'minConsecutiveDays'), 1, 3650);
+    const minDistinctTherapists = masteryCriteriaIntegerOrNull(readMasteryCriteriaInput(source, 'min_distinct_therapists', 'minDistinctTherapists'), 1, 1000);
+    const type = sanitizeString(source?.type, 80) || (requiredIndependentCorrectTrials ? 'independent_correct_count' : 'custom');
+    const now = new Date().toISOString();
+    const criteria = cleanObject({
+      type,
+      source: 'skill',
+      sourceLabel: 'Criterio da habilidade',
+      required_independent_correct_trials: requiredIndependentCorrectTrials,
+      requiredIndependentCorrectTrials,
+      required_correct_trials: requiredCorrectTrials,
+      requiredCorrectTrials,
+      min_accuracy_percent: requiredAccuracy,
+      minAccuracyPercent: requiredAccuracy,
+      requiredAccuracy,
+      min_independence_percent: requiredIndependence,
+      minIndependencePercent: requiredIndependence,
+      requiredIndependence,
+      min_trials_per_session: minimumTrials,
+      minTrialsPerSession: minimumTrials,
+      minimumTrials,
+      min_consecutive_days: minConsecutiveDays,
+      minConsecutiveDays: minConsecutiveDays,
+      require_first_trial_independent: Boolean(source?.require_first_trial_independent ?? source?.requireFirstTrialIndependent),
+      requireFirstTrialIndependent: Boolean(source?.require_first_trial_independent ?? source?.requireFirstTrialIndependent),
+      cold_probe_only: Boolean(source?.cold_probe_only ?? source?.coldProbeOnly),
+      coldProbeOnly: Boolean(source?.cold_probe_only ?? source?.coldProbeOnly),
+      min_distinct_therapists: minDistinctTherapists,
+      minDistinctTherapists,
+      promptsAllowed: Array.isArray(source?.promptsAllowed) ? source.promptsAllowed.slice(0, 30).map((item: any) => sanitizeString(item, 80)).filter(Boolean) : undefined,
+      is_active: true,
+      isActive: true,
+      updatedBy: sanitizeString(actorId, 120) || null,
+      updatedAt: now,
+      updated_at: now
+    });
+    const normalized = normalizeAbaMasteryCriterion(criteria);
+    if (!normalized) {
+      return { error: 'Informe ao menos um criterio de maestria valido.', criteria: null, normalized: null };
+    }
+    return { error: null, criteria: sanitizeClinicalPayload(criteria), normalized };
+  };
+
+  app.patch('/api/aba/patients/:patientId/targets/:targetId/mastery-criteria', checkAuth, checkPatientAccess, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.params.patientId || req.body?.patient_id || req.body?.patientId, 120);
+      const targetId = sanitizeString(req.params.targetId || req.body?.target_id || req.body?.targetId, 180);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
+      if (!isUuid(patientId) || !isUuid(targetId) || !clinicId) {
+        return res.status(400).json({ success: false, error: 'Dados invalidos para editar o criterio.' });
+      }
+
+      let targetQuery = supabase
+        .from('aba_targets')
+        .select(ABA_TARGET_RECOMMENDATION_SELECT)
+        .eq('organization_id', organizationId)
+        .eq('patient_id', patientId)
+        .eq('id', targetId)
+        .limit(1);
+      targetQuery = applyAbaTenantScope(targetQuery, req.session.user, clinicId, organizationId);
+      const targetResult = await targetQuery.maybeSingle();
+      if (targetResult.error) {
+        if (hasMissingFinancialSchema(targetResult.error) || isMissingRelationError(targetResult.error)) {
+          return res.status(503).json({ success: false, error: 'Schema ABA ainda nao aplicado.' });
+        }
+        throw targetResult.error;
+      }
+      const target = targetResult.data;
+      if (!target?.id) return res.status(404).json({ success: false, error: 'Habilidade nao encontrada para este paciente.' });
+
+      const previousCriteria = target?.mastery_criteria && typeof target.mastery_criteria === 'object' ? target.mastery_criteria : null;
+      const built = buildAbaMasteryCriteriaUpdatePayload(req.body, actorId);
+      if (built.error || !built.criteria || !built.normalized) {
+        return res.status(400).json({ success: false, error: built.error || 'Criterio invalido.' });
+      }
+
+      const update = await updateAbaTargetWithSchemaFallback(
+        targetId,
+        {
+          mastery_criteria: built.criteria,
+          updated_at: new Date().toISOString()
+        },
+        clinicId,
+        organizationId,
+        patientId
+      );
+      if (update.error) {
+        if (hasMissingFinancialSchema(update.error) || isMissingRelationError(update.error)) {
+          return res.status(503).json({ success: false, error: 'Schema ABA ainda nao aplicado.' });
+        }
+        throw update.error;
+      }
+
+      void persistActivityLog({
+        userId: actorId || '',
+        clinicId,
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email, 180) || 'Equipe',
+        title: 'Criterio de maestria atualizado',
+        content: `Criterio da habilidade "${sanitizeString(target?.name, 180) || 'habilidade'}" atualizado.`,
+        type: 'clinical',
+        actionType: 'MASTERY_CRITERIA_UPDATED',
+        payload: {
+          targetName: sanitizeString(target?.name, 180) || null,
+          previousCriterion: previousCriteria ? formatAbaMasteryCriterion(normalizeAbaMasteryCriterion(previousCriteria)) : 'Criterio nao configurado',
+          newCriterion: formatAbaMasteryCriterion(built.normalized),
+          source: 'skill'
+        }
+      });
+
+      return res.json({
+        success: true,
+        message: 'Criterio de maestria atualizado.',
+        data: {
+          criteria: built.criteria,
+          criterionLabel: formatAbaMasteryCriterion(built.normalized),
+          criterionSourceLabel: abaMasteryCriterionSourceLabel(built.normalized)
+        }
+      });
+    } catch (error) {
+      return sendRouteDbError(res, '/api/aba/patients/:patientId/targets/:targetId/mastery-criteria [PATCH]', error, {
+        fallbackMessage: 'Nao foi possivel editar o criterio agora.'
+      });
+    }
+  });
+
   const fetchAbaMasteryCriterion = async (params: {
     organizationId: string;
     clinicId: string;
@@ -29354,24 +29547,17 @@ async function startServer() {
         .limit(1);
       if (params.clinicId) targetCriteriaQuery = targetCriteriaQuery.eq('clinic_id', params.clinicId);
       const targetCriteria = await targetCriteriaQuery.maybeSingle();
-      if (!targetCriteria.error && targetCriteria.data) return { criterion: targetCriteria.data, target: targetRow };
+      if (!targetCriteria.error && targetCriteria.data && normalizeAbaMasteryCriterion(targetCriteria.data)) {
+        return {
+          criterion: {
+            ...targetCriteria.data,
+            source: 'skill',
+            sourceLabel: abaMasteryCriterionSourceLabel({ ...targetCriteria.data, source: 'skill' })
+          },
+          target: targetRow
+        };
+      }
       if (targetCriteria.error && !hasMissingFinancialSchema(targetCriteria.error)) throw targetCriteria.error;
-    }
-
-    if (resolvedProgramId) {
-      let programCriteriaQuery = supabase
-        .from('aba_mastery_criteria')
-        .select(ABA_MASTERY_CRITERIA_SELECT)
-        .eq('organization_id', organizationId)
-        .eq('program_id', resolvedProgramId)
-        .is('target_id', null)
-        .eq('is_active', true)
-        .order('updated_at', { ascending: false })
-        .limit(1);
-      if (params.clinicId) programCriteriaQuery = programCriteriaQuery.eq('clinic_id', params.clinicId);
-      const programCriteria = await programCriteriaQuery.maybeSingle();
-      if (!programCriteria.error && programCriteria.data) return { criterion: programCriteria.data, target: targetRow };
-      if (programCriteria.error && !hasMissingFinancialSchema(programCriteria.error)) throw programCriteria.error;
     }
 
     const embeddedCriteria = targetRow?.mastery_criteria && typeof targetRow.mastery_criteria === 'object'
@@ -29398,30 +29584,82 @@ async function startServer() {
         embeddedCriteria.success_threshold ??
         embeddedCriteria.successThreshold ??
         null;
+      const embeddedSource = sanitizeString(embeddedCriteria.source || embeddedCriteria.criterionSource || embeddedCriteria.criterion_source, 80) || 'skill';
+      const embeddedCriterion = {
+        ...embeddedCriteria,
+        id: null,
+        organization_id: organizationId,
+        clinic_id: params.clinicId,
+        program_id: resolvedProgramId || null,
+        target_id: targetId || null,
+        name: sanitizeString(embeddedCriteria.name, 180) || 'Critério do target',
+        required_independent_correct_trials: embeddedRequiredIndependentCorrectTrials,
+        required_correct_trials: embeddedRequiredCorrectTrials,
+        min_accuracy_percent: embeddedCriteria.min_accuracy_percent ?? embeddedCriteria.minAccuracyPercent ?? embeddedCriteria.required_accuracy ?? embeddedCriteria.requiredAccuracy ?? null,
+        min_independence_percent: embeddedCriteria.min_independence_percent ?? embeddedCriteria.minIndependencePercent ?? embeddedCriteria.required_independence ?? embeddedCriteria.requiredIndependence ?? null,
+        min_trials_per_session: embeddedCriteria.min_trials_per_session ?? embeddedCriteria.minTrialsPerSession ?? embeddedCriteria.minimum_trials ?? embeddedCriteria.minimumTrials ?? embeddedCriteria.required_trials ?? embeddedCriteria.requiredTrials ?? null,
+        min_consecutive_days: embeddedCriteria.min_consecutive_days ?? embeddedCriteria.minConsecutiveDays ?? null,
+        require_first_trial_independent: Boolean(embeddedCriteria.require_first_trial_independent ?? embeddedCriteria.requireFirstTrialIndependent),
+        cold_probe_only: Boolean(embeddedCriteria.cold_probe_only ?? embeddedCriteria.coldProbeOnly),
+        min_distinct_therapists: embeddedCriteria.min_distinct_therapists ?? embeddedCriteria.minDistinctTherapists ?? null,
+        maintenance_required: Boolean(embeddedCriteria.maintenance_required ?? embeddedCriteria.maintenanceRequired),
+        maintenance_days: embeddedCriteria.maintenance_days ?? embeddedCriteria.maintenanceDays ?? null,
+        is_active: true,
+        source: embeddedSource,
+        sourceLabel: embeddedCriteria.sourceLabel || embeddedCriteria.source_label || abaMasteryCriterionSourceLabel({ ...embeddedCriteria, source: embeddedSource })
+      };
+      if (normalizeAbaMasteryCriterion(embeddedCriterion)) {
+        return { criterion: embeddedCriterion, target: targetRow };
+      }
+    }
+
+    if (resolvedProgramId) {
+      let programCriteriaQuery = supabase
+        .from('aba_mastery_criteria')
+        .select(ABA_MASTERY_CRITERIA_SELECT)
+        .eq('organization_id', organizationId)
+        .eq('program_id', resolvedProgramId)
+        .is('target_id', null)
+        .eq('is_active', true)
+        .order('updated_at', { ascending: false })
+        .limit(1);
+      if (params.clinicId) programCriteriaQuery = programCriteriaQuery.eq('clinic_id', params.clinicId);
+      const programCriteria = await programCriteriaQuery.maybeSingle();
+      if (!programCriteria.error && programCriteria.data && normalizeAbaMasteryCriterion(programCriteria.data)) {
+        return {
+          criterion: {
+            ...programCriteria.data,
+            source: 'protocol',
+            sourceLabel: abaMasteryCriterionSourceLabel({ ...programCriteria.data, source: 'protocol' })
+          },
+          target: targetRow
+        };
+      }
+      if (programCriteria.error && !hasMissingFinancialSchema(programCriteria.error)) throw programCriteria.error;
+    }
+
+    let clinicCriteriaQuery = supabase
+      .from('aba_mastery_criteria')
+      .select(ABA_MASTERY_CRITERIA_SELECT)
+      .eq('organization_id', organizationId)
+      .is('program_id', null)
+      .is('target_id', null)
+      .eq('is_active', true)
+      .order('updated_at', { ascending: false })
+      .limit(1);
+    if (params.clinicId) clinicCriteriaQuery = clinicCriteriaQuery.eq('clinic_id', params.clinicId);
+    const clinicCriteria = await clinicCriteriaQuery.maybeSingle();
+    if (!clinicCriteria.error && clinicCriteria.data && normalizeAbaMasteryCriterion(clinicCriteria.data)) {
       return {
         criterion: {
-          id: null,
-          organization_id: organizationId,
-          clinic_id: params.clinicId,
-          program_id: resolvedProgramId || null,
-          target_id: targetId || null,
-          name: sanitizeString(embeddedCriteria.name, 180) || 'Critério do target',
-          required_independent_correct_trials: embeddedRequiredIndependentCorrectTrials,
-          required_correct_trials: embeddedRequiredCorrectTrials,
-          min_accuracy_percent: embeddedCriteria.min_accuracy_percent ?? embeddedCriteria.minAccuracyPercent ?? 80,
-          min_independence_percent: embeddedCriteria.min_independence_percent ?? embeddedCriteria.minIndependencePercent ?? 80,
-          min_trials_per_session: embeddedCriteria.min_trials_per_session ?? embeddedCriteria.minTrialsPerSession ?? embeddedCriteria.required_trials ?? embeddedCriteria.requiredTrials ?? embeddedRequiredIndependentCorrectTrials ?? embeddedRequiredCorrectTrials ?? 3,
-          min_consecutive_days: embeddedCriteria.min_consecutive_days ?? embeddedCriteria.minConsecutiveDays ?? 1,
-          require_first_trial_independent: Boolean(embeddedCriteria.require_first_trial_independent ?? embeddedCriteria.requireFirstTrialIndependent),
-          cold_probe_only: Boolean(embeddedCriteria.cold_probe_only ?? embeddedCriteria.coldProbeOnly),
-          min_distinct_therapists: embeddedCriteria.min_distinct_therapists ?? embeddedCriteria.minDistinctTherapists ?? 1,
-          maintenance_required: Boolean(embeddedCriteria.maintenance_required ?? embeddedCriteria.maintenanceRequired),
-          maintenance_days: embeddedCriteria.maintenance_days ?? embeddedCriteria.maintenanceDays ?? null,
-          is_active: true
+          ...clinicCriteria.data,
+          source: 'clinic_default',
+          sourceLabel: abaMasteryCriterionSourceLabel({ ...clinicCriteria.data, source: 'clinic_default' })
         },
         target: targetRow
       };
     }
+    if (clinicCriteria.error && !hasMissingFinancialSchema(clinicCriteria.error)) throw clinicCriteria.error;
 
     return { criterion: null, target: targetRow };
   };

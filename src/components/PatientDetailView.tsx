@@ -18,6 +18,7 @@ import { prepareElementForPdfCapture } from '../utils/pdfCapture';
 import { formatProfessionalRegistry } from '../utils/professionalRegistry';
 import { sanitizeDescriptionForDisplay } from '../utils/mediaSecurity';
 import { resolveAbaPromptLevel } from '../utils/abaPromptLevels';
+import { abaMasteryCriterionSourceLabel, formatAbaMasteryCriterion, normalizeAbaMasteryCriterion } from '../utils/abaMasteryEngine';
 import { isAbaV2Enabled } from '../utils/featureFlags';
 import { filterHumanDisplayEntries, formatSessionLabel, safeDisplayValue } from '../utils/displayLabels';
 import {
@@ -338,6 +339,15 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [selectedPEISkillId, setSelectedPEISkillId] = useState("");
   const [confirmedPEIGoalId, setConfirmedPEIGoalId] = useState<any>(null);
   const [confirmedPEISkillId, setConfirmedPEISkillId] = useState<any>(null);
+  const [masteryCriteriaEditorGoalId, setMasteryCriteriaEditorGoalId] = useState<any>(null);
+  const [masteryCriteriaForm, setMasteryCriteriaForm] = useState({
+    type: 'independent_correct_count',
+    requiredIndependentCorrectTrials: '1',
+    requiredAccuracy: '',
+    requiredIndependence: '100',
+    minimumTrials: '1'
+  });
+  const [isSavingMasteryCriteria, setIsSavingMasteryCriteria] = useState(false);
   const [hasLoadedPeiMaintenancePanel, setHasLoadedPeiMaintenancePanel] = useState(false);
   const [isLoadingPeiMaintenancePanel, setIsLoadingPeiMaintenancePanel] = useState(false);
   const [peiMaintenancePanelMessage, setPeiMaintenancePanelMessage] = useState("");
@@ -4753,9 +4763,63 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     }
   };
 
-  const getGoalMasteryTarget = (goal: any) => {
-    const directTarget = Number(goal?.meta_sucessos ?? goal?.metaSucessos ?? goal?.masteryTarget ?? goal?.mastery_target);
-    if (Number.isFinite(directTarget) && directTarget > 0) return Math.floor(directTarget);
+  const readPeiMasteryValue = (row: any, ...keys: string[]) => {
+    for (const key of keys) {
+      if (row?.[key] !== undefined && row?.[key] !== null && row?.[key] !== '') return row[key];
+    }
+    return undefined;
+  };
+
+  const buildProtocolSkillMasteryCriteria = (skill: any, source = 'protocol') => {
+    const embedded = skill?.mastery_criteria && typeof skill.mastery_criteria === 'object'
+      ? skill.mastery_criteria
+      : skill?.masteryCriteria && typeof skill.masteryCriteria === 'object'
+        ? skill.masteryCriteria
+        : {};
+    const directTarget = readPeiMasteryValue(
+      skill,
+      'meta_sucessos',
+      'metaSucessos',
+      'masteryTarget',
+      'mastery_target'
+    );
+    const raw = {
+      ...embedded,
+      required_independent_correct_trials: readPeiMasteryValue(
+        embedded,
+        'required_independent_correct_trials',
+        'requiredIndependentCorrectTrials',
+        'min_independent_correct_trials',
+        'minIndependentCorrectTrials'
+      ) ?? directTarget,
+      source,
+      sourceLabel: source === 'protocol' ? 'Criterio herdado do protocolo' : 'Criterio da habilidade',
+      is_active: true
+    };
+    const normalized = normalizeAbaMasteryCriterion(raw);
+    return normalized ? raw : null;
+  };
+
+  const resolvePeiGoalMasteryCriterion = (goal: any) => {
+    const embedded = goal?.mastery_criteria && typeof goal.mastery_criteria === 'object'
+      ? goal.mastery_criteria
+      : goal?.masteryCriteria && typeof goal.masteryCriteria === 'object'
+        ? goal.masteryCriteria
+        : null;
+    const embeddedCriterion = normalizeAbaMasteryCriterion(embedded);
+    if (embeddedCriterion) return embeddedCriterion;
+
+    const directTarget = readPeiMasteryValue(goal, 'meta_sucessos', 'metaSucessos', 'masteryTarget', 'mastery_target');
+    if (directTarget !== undefined) {
+      const criterion = normalizeAbaMasteryCriterion({
+        type: 'independent_correct_count',
+        required_independent_correct_trials: directTarget,
+        source: 'skill',
+        sourceLabel: 'Criterio da habilidade',
+        is_active: true
+      });
+      if (criterion) return criterion;
+    }
 
     const catalogs = [planProtocolCatalog, protocols].filter(Array.isArray);
     for (const catalog of catalogs) {
@@ -4765,13 +4829,18 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             String(s?.id) === String(goal?.skillId) ||
             String(s?.name || '').trim().toLowerCase() === String(goal?.name || '').trim().toLowerCase()
           );
-          const target = Number(skill?.meta_sucessos ?? skill?.metaSucessos ?? skill?.masteryTarget ?? skill?.mastery_target);
-          if (Number.isFinite(target) && target > 0) return Math.floor(target);
+          const protocolCriterion = normalizeAbaMasteryCriterion(buildProtocolSkillMasteryCriteria(skill, 'protocol'));
+          if (protocolCriterion) return protocolCriterion;
         }
       }
     }
 
-    return 5;
+    return null;
+  };
+
+  const getGoalMasteryTarget = (goal: any) => {
+    const criterion = resolvePeiGoalMasteryCriterion(goal);
+    return criterion?.requiredIndependentCorrectTrials || criterion?.requiredCorrectTrials || null;
   };
 
   const getGoalProgressResetMarker = (goal: any) => {
@@ -4789,6 +4858,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       : goalOrName;
     const skillName = typeof goalOrName === 'string' ? goalOrName : goalOrName?.name;
     const target = getGoalMasteryTarget(goal);
+    if (!target) return 0;
     const resetMarker = getGoalProgressResetMarker(goal);
     const skillHistory = history
       .filter((h: any) =>
@@ -4824,6 +4894,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     }
 
     const target = getGoalMasteryTarget(goal);
+    if (!target) return normalizedStoredProgress;
     const consecutiveSuccesses = getMasteryProgress(goal) || 0;
     const masteryProgress = Math.min(Math.round((consecutiveSuccesses / target) * 100), 100);
     return Math.max(normalizedStoredProgress, masteryProgress);
@@ -4840,8 +4911,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return getGoalComputedProgressPercent(goal);
   };
 
-  const MasteryDots = ({ count, status, target = 5 }: { count: number, status?: string, target?: number }) => {
-    const safeTarget = Math.max(1, Math.floor(Number(target) || 5));
+  const MasteryDots = ({ count, status, target }: { count: number, status?: string, target?: number | null }) => {
+    const safeTarget = Math.floor(Number(target) || 0);
+    if (safeTarget <= 0) return null;
     const dots = Array.from({ length: safeTarget }, (_, index) => index + 1);
     const dotSize = safeTarget > 30 ? 'w-1 h-1' : safeTarget > 12 ? 'w-1.5 h-1.5' : 'w-2 h-2';
     if (status === 'completed') {
@@ -4862,6 +4934,129 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         <span className="text-[9px] font-semibold text-gray-400 dark:text-slate-300 ml-1 uppercase">{count}/{safeTarget}</span>
       </div>
     );
+  };
+
+  const resolvePeiGoalMasteryDisplay = (goal: any) => {
+    const criterion = resolvePeiGoalMasteryCriterion(goal);
+    if (!criterion) {
+      return {
+        criterion: null,
+        label: 'Criterio de maestria nao configurado',
+        sourceLabel: 'Criterio de maestria nao configurado',
+        progressLabel: '0/0',
+        requiredCount: 0
+      };
+    }
+    const progress = getMasteryProgress(goal) || 0;
+    const requiredIndependent = criterion.requiredIndependentCorrectTrials || null;
+    const requiredCorrect = criterion.requiredCorrectTrials || null;
+    const requiredCount = requiredIndependent || requiredCorrect || criterion.minConsecutiveDays || 0;
+    const progressLabel = requiredIndependent
+      ? `${progress}/${requiredIndependent} acertos independentes`
+      : requiredCorrect
+        ? `${progress}/${requiredCorrect} acertos`
+        : `${progress}/${criterion.minConsecutiveDays} dias consecutivos`;
+    return {
+      criterion,
+      label: formatAbaMasteryCriterion(criterion),
+      sourceLabel: abaMasteryCriterionSourceLabel(criterion),
+      progressLabel,
+      requiredCount
+    };
+  };
+
+  const startPeiMasteryCriteriaEdit = (goal: any) => {
+    const criterion = resolvePeiGoalMasteryCriterion(goal);
+    const requiredIndependent = criterion?.requiredIndependentCorrectTrials || criterion?.requiredCorrectTrials || 1;
+    setMasteryCriteriaForm({
+      type: 'independent_correct_count',
+      requiredIndependentCorrectTrials: String(requiredIndependent),
+      requiredAccuracy: criterion?.minAccuracyPercent === null || criterion?.minAccuracyPercent === undefined ? '' : String(criterion.minAccuracyPercent),
+      requiredIndependence: criterion?.minIndependencePercent === null || criterion?.minIndependencePercent === undefined ? '100' : String(criterion.minIndependencePercent),
+      minimumTrials: String(criterion?.minTrialsPerSession || requiredIndependent || 1)
+    });
+    setMasteryCriteriaEditorGoalId(goal?.id);
+  };
+
+  const formPositiveInteger = (value: any, fallback: number) => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed < 1) return fallback;
+    return Math.floor(parsed);
+  };
+
+  const formOptionalPercent = (value: any) => {
+    if (value === '' || value === null || value === undefined) return null;
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return null;
+    return Math.min(100, Math.max(0, Math.round(parsed)));
+  };
+
+  const isAbaTargetUuidLike = (value: any) =>
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || '').trim());
+
+  const savePeiMasteryCriteria = async (goal: any) => {
+    const requiredIndependentCorrectTrials = formPositiveInteger(masteryCriteriaForm.requiredIndependentCorrectTrials, 1);
+    const minimumTrials = formPositiveInteger(masteryCriteriaForm.minimumTrials, requiredIndependentCorrectTrials);
+    const criteria = {
+      type: 'independent_correct_count',
+      source: 'skill',
+      sourceLabel: 'Criterio da habilidade',
+      required_independent_correct_trials: requiredIndependentCorrectTrials,
+      requiredIndependentCorrectTrials,
+      requiredAccuracy: formOptionalPercent(masteryCriteriaForm.requiredAccuracy),
+      requiredIndependence: formOptionalPercent(masteryCriteriaForm.requiredIndependence),
+      min_accuracy_percent: formOptionalPercent(masteryCriteriaForm.requiredAccuracy),
+      minAccuracyPercent: formOptionalPercent(masteryCriteriaForm.requiredAccuracy),
+      min_independence_percent: formOptionalPercent(masteryCriteriaForm.requiredIndependence),
+      minIndependencePercent: formOptionalPercent(masteryCriteriaForm.requiredIndependence),
+      minimumTrials,
+      min_trials_per_session: minimumTrials,
+      minTrialsPerSession: minimumTrials,
+      is_active: true,
+      isActive: true,
+      updatedAt: new Date().toISOString()
+    };
+    const normalized = normalizeAbaMasteryCriterion(criteria);
+    if (!normalized) {
+      alert('Informe um criterio de maestria valido.');
+      return;
+    }
+
+    const targetId = String(goal?.targetId || goal?.target_id || goal?.abaTargetId || goal?.aba_target_id || '').trim();
+    setIsSavingMasteryCriteria(true);
+    try {
+      if (isAbaTargetUuidLike(targetId) && isAbaV2Enabled()) {
+        const result = await dataService.updateAbaTargetMasteryCriteria(String(patient.id), targetId, criteria);
+        if (result?.success === false && !result?.offline && !result?.pending) {
+          throw new Error(result?.error || 'Falha ao salvar criterio no target.');
+        }
+      }
+      const updatedPEI = (patient.pei || []).map((item: any) =>
+        item.id === goal.id
+          ? {
+              ...item,
+              masteryCriteria: criteria,
+              mastery_criteria: criteria,
+              meta_sucessos: requiredIndependentCorrectTrials,
+              metaSucessos: requiredIndependentCorrectTrials,
+              masteryTarget: requiredIndependentCorrectTrials,
+              mastery_target: requiredIndependentCorrectTrials
+            }
+          : item
+      );
+      await Promise.resolve(onUpdatePatient({ ...patient, pei: updatedPEI }));
+      onAddActivityLog?.(
+        'Criterio de maestria atualizado',
+        `Criterio da habilidade "${goal?.name || 'habilidade'}" atualizado para ${formatAbaMasteryCriterion(normalized)}.`,
+        'clinical'
+      );
+      setMasteryCriteriaEditorGoalId(null);
+    } catch (error) {
+      console.error('Falha ao salvar criterio de maestria:', error);
+      alert('Nao foi possivel salvar o criterio agora.');
+    } finally {
+      setIsSavingMasteryCriteria(false);
+    }
   };
 
   const peiGoals = useMemo(() => (Array.isArray(patient?.pei) ? patient.pei : []), [patient?.pei]);
@@ -8123,6 +8318,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                                 key={s.id}
                                 onClick={() => {
                                   const peiGoalId = Date.now();
+                                  const protocolMasteryCriteria = buildProtocolSkillMasteryCriteria(s, 'protocol');
                                   const peiGoal = {
                                     id: peiGoalId,
                                     protocolId: selectedPEIProtocol?.id,
@@ -8133,6 +8329,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                                     criteria: s.criteria,
                                     maxScore: s.maxScore || 1,
                                     meta_sucessos: s.meta_sucessos ?? s.metaSucessos ?? s.masteryTarget ?? s.mastery_target,
+                                    masteryCriteria: protocolMasteryCriteria || undefined,
+                                    mastery_criteria: protocolMasteryCriteria || undefined,
                                     status: 'not_started',
                                     progress: 0,
                                     term: 'short',
@@ -8183,7 +8381,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                             <h5 className="text-[10px] font-semibold text-gray-400 uppercase tracking-[0.2em] ml-2">
                               {term === 'short' ? 'Curto Prazo' : term === 'medium' ? 'Médio Prazo' : 'Longo Prazo'}
                             </h5>
-                            {termGoals.sort((a: any, b: any) => (b.isPriority ? 1 : 0) - (a.isPriority ? 1 : 0)).map((goal: any) => (
+                            {termGoals.sort((a: any, b: any) => (b.isPriority ? 1 : 0) - (a.isPriority ? 1 : 0)).map((goal: any) => {
+                              const masteryDisplay = resolvePeiGoalMasteryDisplay(goal);
+                              const goalMasteryTarget = getGoalMasteryTarget(goal);
+                              return (
                               <div key={goal.id} className={`p-5 rounded-2xl border shadow-sm group hover:shadow-md transition-all relative overflow-hidden ${
                                 isGoalAcquired(goal)
                                   ? isPanelDark
@@ -8236,10 +8437,109 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                                     </h4>
                                     {patientCategory === 'Criança' && (
                                       <div className="mt-1 mb-2">
-                                        <MasteryDots count={getMasteryProgress(goal) || 0} status={goal.status} target={getGoalMasteryTarget(goal)} />
+                                        <MasteryDots count={getMasteryProgress(goal) || 0} status={goal.status} target={goalMasteryTarget} />
                                       </div>
                                     )}
                                     <p className={`text-xs mt-1 ${isPanelDark ? 'text-slate-300' : 'text-gray-500'}`}>{sanitizeDescriptionForDisplay(goal.objective)}</p>
+                                    <div className={`mt-3 border-t pt-3 ${isPanelDark ? 'border-slate-700' : 'border-slate-100'}`}>
+                                      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                                        <div>
+                                          <p className={`text-[10px] font-semibold uppercase tracking-widest ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>Criterio de maestria</p>
+                                          <p className={`mt-1 text-xs font-bold ${masteryDisplay.criterion ? (isPanelDark ? 'text-violet-100' : 'text-[#7a32fc]') : 'text-amber-600'}`}>{masteryDisplay.label}</p>
+                                          <p className={`mt-1 text-[11px] font-semibold ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>Origem: {masteryDisplay.sourceLabel}</p>
+                                          <p className={`text-[11px] font-semibold ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>Hoje: {masteryDisplay.progressLabel}</p>
+                                        </div>
+                                        <button
+                                          type="button"
+                                          onClick={() => startPeiMasteryCriteriaEdit(goal)}
+                                          className={`inline-flex min-h-[34px] items-center justify-center gap-1.5 rounded-xl px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest transition-all ${
+                                            isPanelDark
+                                              ? 'bg-violet-500/15 text-violet-100 hover:bg-violet-500/25 border border-violet-300/20'
+                                              : 'bg-violet-50 text-[#7a32fc] hover:bg-violet-100 border border-violet-100'
+                                          }`}
+                                        >
+                                          <Edit size={13} />
+                                          Editar criterio
+                                        </button>
+                                      </div>
+                                      {masteryCriteriaEditorGoalId === goal.id && (
+                                        <div className={`mt-3 border-t pt-3 ${isPanelDark ? 'border-slate-700' : 'border-slate-100'}`}>
+                                          <div className="grid grid-cols-1 gap-3 md:grid-cols-5">
+                                            <div className="md:col-span-2">
+                                              <label className={`block text-[9px] font-semibold uppercase tracking-widest ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Tipo</label>
+                                              <select
+                                                className={`mt-1 w-full rounded-xl border px-3 py-2 text-xs font-semibold outline-none ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-white border-slate-200 text-slate-700'}`}
+                                                value={masteryCriteriaForm.type}
+                                                onChange={(event) => setMasteryCriteriaForm((prev) => ({ ...prev, type: event.target.value }))}
+                                              >
+                                                <option value="independent_correct_count">Acertos independentes</option>
+                                              </select>
+                                            </div>
+                                            <div>
+                                              <label className={`block text-[9px] font-semibold uppercase tracking-widest ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Quantidade</label>
+                                              <input
+                                                type="number"
+                                                min={1}
+                                                className={`mt-1 w-full rounded-xl border px-3 py-2 text-xs font-semibold outline-none ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-white border-slate-200 text-slate-700'}`}
+                                                value={masteryCriteriaForm.requiredIndependentCorrectTrials}
+                                                onChange={(event) => setMasteryCriteriaForm((prev) => ({ ...prev, requiredIndependentCorrectTrials: event.target.value }))}
+                                              />
+                                            </div>
+                                            <div>
+                                              <label className={`block text-[9px] font-semibold uppercase tracking-widest ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Acuracia</label>
+                                              <input
+                                                type="number"
+                                                min={0}
+                                                max={100}
+                                                placeholder="opcional"
+                                                className={`mt-1 w-full rounded-xl border px-3 py-2 text-xs font-semibold outline-none ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100 placeholder:text-slate-500' : 'bg-white border-slate-200 text-slate-700 placeholder:text-slate-400'}`}
+                                                value={masteryCriteriaForm.requiredAccuracy}
+                                                onChange={(event) => setMasteryCriteriaForm((prev) => ({ ...prev, requiredAccuracy: event.target.value }))}
+                                              />
+                                            </div>
+                                            <div>
+                                              <label className={`block text-[9px] font-semibold uppercase tracking-widest ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Independencia</label>
+                                              <input
+                                                type="number"
+                                                min={0}
+                                                max={100}
+                                                placeholder="opcional"
+                                                className={`mt-1 w-full rounded-xl border px-3 py-2 text-xs font-semibold outline-none ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100 placeholder:text-slate-500' : 'bg-white border-slate-200 text-slate-700 placeholder:text-slate-400'}`}
+                                                value={masteryCriteriaForm.requiredIndependence}
+                                                onChange={(event) => setMasteryCriteriaForm((prev) => ({ ...prev, requiredIndependence: event.target.value }))}
+                                              />
+                                            </div>
+                                            <div>
+                                              <label className={`block text-[9px] font-semibold uppercase tracking-widest ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Tentativas</label>
+                                              <input
+                                                type="number"
+                                                min={1}
+                                                className={`mt-1 w-full rounded-xl border px-3 py-2 text-xs font-semibold outline-none ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-white border-slate-200 text-slate-700'}`}
+                                                value={masteryCriteriaForm.minimumTrials}
+                                                onChange={(event) => setMasteryCriteriaForm((prev) => ({ ...prev, minimumTrials: event.target.value }))}
+                                              />
+                                            </div>
+                                          </div>
+                                          <div className="mt-3 flex flex-wrap justify-end gap-2">
+                                            <button
+                                              type="button"
+                                              onClick={() => setMasteryCriteriaEditorGoalId(null)}
+                                              className={`rounded-xl px-3 py-2 text-[10px] font-bold uppercase tracking-widest ${isPanelDark ? 'bg-slate-800 text-slate-200' : 'bg-slate-100 text-slate-600'}`}
+                                            >
+                                              Cancelar
+                                            </button>
+                                            <button
+                                              type="button"
+                                              disabled={isSavingMasteryCriteria}
+                                              onClick={() => savePeiMasteryCriteria(goal)}
+                                              className="rounded-xl bg-[#7a32fc] px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-white shadow-sm shadow-violet-200 transition-all disabled:cursor-not-allowed disabled:opacity-60"
+                                            >
+                                              {isSavingMasteryCriteria ? 'Salvando...' : 'Salvar criterio'}
+                                            </button>
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
                                   </div>
                                     <div className="flex items-center gap-2">
                                       <select 
@@ -8355,7 +8655,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                                   )}
                                 </div>
                               </div>
-                            ))}
+                              );
+                            })}
                           </div>
                         );
                       })

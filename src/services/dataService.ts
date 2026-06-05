@@ -3602,6 +3602,25 @@ export const dataService = {
     return await saveOfflineFirst(id, data, 'aba', '/api/aba/mastery-evaluations');
   },
 
+  async updateAbaTargetMasteryCriteria(patientId: string, targetId: string, criteria: any) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(criteria || {});
+    const safePatientId = encodeURIComponent(String(patientId || '').trim());
+    const safeTargetId = encodeURIComponent(String(targetId || '').trim());
+    const id = `mastery-criteria-${String(targetId || generateId())}`;
+    const data = {
+      id,
+      patient_id: patientId,
+      patientId,
+      target_id: targetId,
+      targetId,
+      criteria,
+      mastery_criteria: criteria,
+      masteryCriteria: criteria,
+      source: 'verto_web'
+    };
+    return await saveOfflineFirst(id, data, 'aba', `/api/aba/patients/${safePatientId}/targets/${safeTargetId}/mastery-criteria`, 'PATCH');
+  },
+
   async saveAbaMaintenanceProbeResult(result: any) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse(result || {});
     const id = String(result?.id || result?.result_id || result?.resultId || generateId());

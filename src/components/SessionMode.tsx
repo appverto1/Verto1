@@ -61,7 +61,13 @@ import {
   resumeIntervalRunState,
   type AbaIntervalCollectionStatus
 } from '../utils/abaIntervalLifecycle';
-import { evaluateMaintenanceStatus, evaluateTargetMastery, formatAbaMasteryCriterion } from '../utils/abaMasteryEngine';
+import {
+  abaMasteryCriterionSourceLabel,
+  evaluateMaintenanceStatus,
+  evaluateTargetMastery,
+  formatAbaMasteryCriterion,
+  normalizeAbaMasteryCriterion
+} from '../utils/abaMasteryEngine';
 import { formatMaintenanceScheduleDueLabel } from '../utils/abaMaintenanceScheduling';
 import { resolveMaintenanceTargetDisplay } from '../utils/peiMaintenancePanel';
 import { isPeiClinicalRowAfterProgressReset } from '../utils/peiSessionReset';
@@ -433,12 +439,6 @@ const getIntervalInstruction = (measurementType: string) => {
   return 'SIM = estava ocorrendo exatamente no momento do alerta.';
 };
 
-const masteryNumber = (value: any, fallback: number, min = 0, max = 100000) => {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  return Math.min(max, Math.max(min, parsed));
-};
-
 const readMasteryValue = (row: any, ...keys: string[]) => {
   for (const key of keys) {
     if (row?.[key] !== undefined && row?.[key] !== null) return row[key];
@@ -447,50 +447,29 @@ const readMasteryValue = (row: any, ...keys: string[]) => {
 };
 
 const buildSessionGoalMasteryCriterion = (goal: any) => {
-  const embedded = goal?.mastery_criteria || goal?.masteryCriteria || {};
-  const legacySuccessTarget = masteryNumber(
-    readMasteryValue(goal, 'meta_sucessos', 'metaSucessos', 'masteryTarget', 'mastery_target'),
-    0,
-    1
-  );
-  const requiredIndependentCorrectTrials = masteryNumber(
-    readMasteryValue(
-      embedded,
-      'required_independent_correct_trials',
-      'requiredIndependentCorrectTrials',
-      'min_independent_correct_trials',
-      'minIndependentCorrectTrials',
-      'min_consecutive_successes',
-      'minConsecutiveSuccesses'
-    ),
-    legacySuccessTarget,
-    1
-  );
-  const requiredCorrectTrials = masteryNumber(
-    readMasteryValue(embedded, 'required_correct_trials', 'requiredCorrectTrials', 'required_successes', 'requiredSuccesses'),
-    0,
-    1
-  );
-  const minTrialsFallback = Math.max(1, Math.round(requiredIndependentCorrectTrials || requiredCorrectTrials || 1));
-  return {
+  const embedded = goal?.mastery_criteria && typeof goal.mastery_criteria === 'object'
+    ? goal.mastery_criteria
+    : goal?.masteryCriteria && typeof goal.masteryCriteria === 'object'
+      ? goal.masteryCriteria
+      : {};
+  const rawCriterion: any = {
+    ...embedded,
     id: readMasteryValue(embedded, 'id') || readMasteryValue(goal, 'masteryCriteriaId', 'criteriaId') || null,
     organization_id: readMasteryValue(goal, 'organization_id', 'organizationId', 'clinic_id', 'clinicId') || null,
     program_id: readMasteryValue(goal, 'program_id', 'programId', 'protocol_id', 'protocolId') || null,
     target_id: readMasteryValue(goal, 'id', 'target_id', 'targetId') || null,
     name: readMasteryValue(embedded, 'name') || 'Criterio da meta',
-    required_independent_correct_trials: requiredIndependentCorrectTrials > 0 ? Math.round(requiredIndependentCorrectTrials) : null,
-    required_correct_trials: requiredCorrectTrials > 0 ? Math.round(requiredCorrectTrials) : null,
-    min_accuracy_percent: masteryNumber(readMasteryValue(embedded, 'min_accuracy_percent', 'minAccuracyPercent', 'accuracyPercent'), 80, 0, 100),
-    min_independence_percent: masteryNumber(readMasteryValue(embedded, 'min_independence_percent', 'minIndependencePercent', 'independencePercent'), 80, 0, 100),
-    min_trials_per_session: Math.max(1, Math.round(masteryNumber(readMasteryValue(embedded, 'min_trials_per_session', 'minTrialsPerSession', 'required_trials', 'requiredTrials'), minTrialsFallback, 1))),
-    min_consecutive_days: Math.max(1, Math.round(masteryNumber(readMasteryValue(embedded, 'min_consecutive_days', 'minConsecutiveDays'), 1, 1))),
-    require_first_trial_independent: Boolean(readMasteryValue(embedded, 'require_first_trial_independent', 'requireFirstTrialIndependent')),
-    cold_probe_only: Boolean(readMasteryValue(embedded, 'cold_probe_only', 'coldProbeOnly')),
-    min_distinct_therapists: Math.max(1, Math.round(masteryNumber(readMasteryValue(embedded, 'min_distinct_therapists', 'minDistinctTherapists'), 1, 1))),
-    maintenance_required: Boolean(readMasteryValue(embedded, 'maintenance_required', 'maintenanceRequired')),
-    maintenance_days: readMasteryValue(embedded, 'maintenance_days', 'maintenanceDays') ?? null,
-    is_active: readMasteryValue(embedded, 'is_active', 'isActive') ?? true
+    is_active: readMasteryValue(embedded, 'is_active', 'isActive') ?? true,
+    source: readMasteryValue(embedded, 'source', 'criterionSource', 'criterion_source', 'origin') || 'skill',
+    sourceLabel: readMasteryValue(embedded, 'sourceLabel', 'source_label', 'originLabel', 'origin_label') || undefined
   };
+  const legacySuccessTarget = readMasteryValue(goal, 'meta_sucessos', 'metaSucessos', 'masteryTarget', 'mastery_target');
+  if (legacySuccessTarget !== undefined && readMasteryValue(rawCriterion, 'required_independent_correct_trials', 'requiredIndependentCorrectTrials') === undefined) {
+    rawCriterion.required_independent_correct_trials = legacySuccessTarget;
+    rawCriterion.requiredIndependentCorrectTrials = legacySuccessTarget;
+  }
+  const normalized = normalizeAbaMasteryCriterion(rawCriterion);
+  return normalized ? { ...normalized, sourceLabel: abaMasteryCriterionSourceLabel(normalized) } : null;
 };
 
 const masteryStatusLabel = (status: string) => {
@@ -3104,6 +3083,7 @@ export const SessionMode = ({
       targetId: goalId || null,
       name: goalName,
       criterion: evaluation.criterionLabel || formatAbaMasteryCriterion(criterion as any),
+      criterionSourceLabel: criterion ? abaMasteryCriterionSourceLabel(criterion) : 'Criterio de maestria nao configurado',
       performanceText: evaluation.performanceText,
       contributes: evaluation.status === 'MET_TODAY' || evaluation.status === 'READY_FOR_REVIEW',
       status: masteryStatusLabel(evaluation.status),
@@ -5518,7 +5498,10 @@ export const SessionMode = ({
                       <div className="text-left sm:text-right">
                         <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Criterio de maestria</p>
                         <p className="max-w-[220px] text-xs font-bold text-[#7a32fc] sm:ml-auto">{masteryRow?.criterion || 'Criterio nao configurado'}</p>
-                        <p className="mt-1 text-[11px] font-semibold text-gray-500">Hoje: {masteryRow?.independencePercent ?? 0}% independencia</p>
+                        <p className="mt-1 text-[11px] font-semibold text-gray-500">Origem: {masteryRow?.criterionSourceLabel || 'Criterio de maestria nao configurado'}</p>
+                        <p className="text-[11px] font-semibold text-gray-500">
+                          {masteryRow?.contributes ? 'Criterio concluido' : 'Hoje'}: {masteryRow?.criterionProgressLabel || '0/0'}
+                        </p>
                         <span className={`mt-2 inline-flex rounded-full px-2 py-1 text-[9px] font-bold uppercase tracking-widest ${masteryRow?.statusCode === 'READY_FOR_REVIEW' ? 'bg-emerald-50 text-emerald-600' : masteryRow?.statusCode === 'MET_TODAY' ? 'bg-blue-50 text-blue-600' : masteryRow?.statusCode === 'INSUFFICIENT_DATA' ? 'bg-amber-50 text-amber-600' : 'bg-slate-100 text-slate-500'}`}>
                           {masteryRow?.status || 'Dados insuficientes'}
                         </span>
@@ -6315,6 +6298,7 @@ export const SessionMode = ({
                   <div key={row.id} className="rounded-2xl bg-[#F8FAFF] border border-gray-100 p-3">
                     <p className="font-bold text-gray-900">{row.name}</p>
                     <p className="text-xs text-gray-500">critério: {row.criterion}</p>
+                    <p className="text-xs text-gray-500">origem: {row.criterionSourceLabel || 'Criterio de maestria nao configurado'}</p>
                     <p className="text-xs text-gray-500">desempenho: {row.performanceText}</p>
                     <p className="text-xs text-gray-500">tentativas: {row.totalTrials ?? 0} - acurácia {row.accuracyPercent ?? 0}% - independência {row.independencePercent ?? 0}%</p>
                     <p className="text-xs text-gray-500">progresso do critério: {row.criterionProgressLabel || `${row.consecutiveSuccessfulDays ?? 0} dias consecutivos`}</p>

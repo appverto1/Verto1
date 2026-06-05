@@ -44,6 +44,17 @@ test('Ensino preserva lista atual de metas e acao de sessao', () => {
   assert.match(teachingBlock, /MasteryDots/);
 });
 
+test('Ensino exibe origem e permite editar criterio individual da habilidade', () => {
+  const teachingBlock = patientDetailCode.match(/activePeiPlanSubtab === 'teaching'[\s\S]*?activePeiPlanSubtab === 'maintenance'/)?.[0] || '';
+  assert.match(teachingBlock, /Criterio de maestria/);
+  assert.match(teachingBlock, /Origem: \{masteryDisplay\.sourceLabel\}/);
+  assert.match(teachingBlock, /Editar criterio/);
+  assert.match(teachingBlock, /savePeiMasteryCriteria\(goal\)/);
+  assert.match(patientDetailCode, /requiredIndependentCorrectTrials[\s\S]*?minimumTrials[\s\S]*?sourceLabel: 'Criterio da habilidade'/);
+  assert.match(dataServiceCode, /async updateAbaTargetMasteryCriteria\(patientId: string, targetId: string, criteria: any\)/);
+  assert.match(serverCode, /MASTERY_CRITERIA_UPDATED/);
+});
+
 test('Restaurar dados de sessao zera progresso PEI antes de abrir sessao', () => {
   const resetAt = new Date('2026-06-04T12:00:00.000Z').getTime();
   const resetPei = buildPeiSessionProgressReset([
