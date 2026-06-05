@@ -13,12 +13,15 @@ export type AbaMaintenanceScheduleStatus =
   | 'PENDING_LINK'
   | 'PENDING_SCHEDULING'
   | 'SCHEDULED'
+  | 'SCHEDULED_BY_DATE'
   | 'UNSCHEDULED'
   | 'DUE_TODAY'
   | 'OVERDUE'
+  | 'IN_MAINTENANCE'
   | 'COMPLETED'
   | 'MISSED'
-  | 'CANCELLED';
+  | 'CANCELLED'
+  | 'ARCHIVED';
 
 export type MaintenanceAppointmentCandidate = {
   id?: string | null;
@@ -72,9 +75,11 @@ const ACTIVE_SCHEDULE_STATUSES = new Set([
   'PENDING_LINK',
   'PENDING_SCHEDULING',
   'SCHEDULED',
+  'SCHEDULED_BY_DATE',
   'UNSCHEDULED',
   'DUE_TODAY',
   'OVERDUE',
+  'IN_MAINTENANCE',
   'MISSED'
 ]);
 
@@ -104,12 +109,15 @@ export const normalizeMaintenanceScheduleStatus = (value: unknown): AbaMaintenan
   if (normalized === 'PENDING_LINK') return 'PENDING_LINK';
   if (normalized === 'PENDING_SCHEDULING') return 'PENDING_SCHEDULING';
   if (normalized === 'SCHEDULED') return 'SCHEDULED';
+  if (normalized === 'SCHEDULED_BY_DATE') return 'SCHEDULED_BY_DATE';
   if (normalized === 'UNSCHEDULED') return 'UNSCHEDULED';
   if (normalized === 'DUE_TODAY') return 'DUE_TODAY';
   if (normalized === 'OVERDUE') return 'OVERDUE';
+  if (normalized === 'IN_MAINTENANCE') return 'IN_MAINTENANCE';
   if (normalized === 'COMPLETED') return 'COMPLETED';
   if (normalized === 'MISSED') return 'MISSED';
   if (normalized === 'CANCELLED') return 'CANCELLED';
+  if (normalized === 'ARCHIVED') return 'ARCHIVED';
   return 'PENDING';
 };
 
@@ -221,8 +229,25 @@ export function buildDefaultMaintenanceSchedulePreview(input: {
 
 const dateKey = (value: string | null | undefined) => {
   if (!value) return '';
+  const raw = String(value || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 10);
+};
+
+const parseScheduleDate = (value: string | null | undefined) => {
+  const raw = String(value || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    const [year, month, day] = raw.split('-').map(Number);
+    return new Date(year, (month || 1) - 1, day || 1);
+  }
+  const date = new Date(raw);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const formatScheduleDate = (value: string | null | undefined) => {
+  const date = parseScheduleDate(value);
+  return date ? date.toLocaleDateString('pt-BR') : '';
 };
 
 const scheduleReferenceDate = (schedule: any) =>
@@ -230,7 +255,7 @@ const scheduleReferenceDate = (schedule: any) =>
 
 export const deriveMaintenanceScheduleStatus = (schedule: any, now = new Date()): AbaMaintenanceScheduleStatus => {
   const status = normalizeMaintenanceScheduleStatus(schedule?.status);
-  if (['COMPLETED', 'CANCELLED'].includes(status)) return status;
+  if (['COMPLETED', 'CANCELLED', 'ARCHIVED'].includes(status)) return status;
   if (status === 'PENDING_NEXT_SESSION' || status === 'PENDING_CONFIRMATION') return status;
   const reference = scheduleReferenceDate(schedule);
   const referenceMs = reference ? new Date(reference).getTime() : NaN;
@@ -254,7 +279,7 @@ export const formatMaintenanceScheduleDueLabel = (schedule: any, now = new Date(
   if (status === 'DUE_TODAY') return 'Proxima sondagem: hoje';
   if (status === 'OVERDUE') {
     const reference = scheduledFor || targetDueDate;
-    const due = reference ? new Date(reference) : null;
+    const due = parseScheduleDate(reference);
     const diffDays = due && !Number.isNaN(due.getTime())
       ? Math.max(1, Math.ceil((now.getTime() - due.getTime()) / 86_400_000))
       : 1;
@@ -269,14 +294,14 @@ export const formatMaintenanceScheduleDueLabel = (schedule: any, now = new Date(
   }
   const reference = scheduledFor || targetDueDate;
   if (!reference) return 'Sem sondagem agendada';
-  const due = new Date(reference);
-  if (Number.isNaN(due.getTime())) return 'Sem sondagem agendada';
+  const due = parseScheduleDate(reference);
+  if (!due || Number.isNaN(due.getTime())) return 'Sem sondagem agendada';
   const todayKey = dateKey(now.toISOString());
   const dueKey = dateKey(reference);
   const diffDays = Math.ceil((due.getTime() - now.getTime()) / 86_400_000);
   if (dueKey === todayKey) return 'Proxima sondagem: hoje';
   if (diffDays < 0) return `Sondagem atrasada ha ${Math.abs(diffDays)} dia(s)`;
-  return `Proxima sondagem: ${due.toLocaleDateString('pt-BR')}`;
+  return `Proxima sondagem: ${formatScheduleDate(reference) || due.toLocaleDateString('pt-BR')}`;
 };
 
 export function getNextMaintenanceProbeForTarget(schedules: any[] = [], now = new Date()): NextMaintenanceProbe {

@@ -2792,6 +2792,50 @@ export const dataService = {
     }
   },
 
+  async updateMaintenanceSchedule(scheduleId: string, payload: any = {}) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
+    if (!isPersistedUuid(scheduleId)) {
+      return invalidClinicalIdResponse('Sondagem de manutenção inválida para edição.');
+    }
+    const appointmentId = payload?.appointmentId || payload?.appointment_id;
+    if (appointmentId !== undefined && appointmentId !== null && appointmentId !== '' && !isPersistedUuid(appointmentId)) {
+      return invalidClinicalIdResponse('Escolha uma consulta real para vincular a sondagem.');
+    }
+    const endpoint = `/api/aba/maintenance-schedules/${encodeURIComponent(String(scheduleId))}`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'PATCH',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, { helperName: 'updateMaintenanceSchedule', operation: 'write', table: 'aba_maintenance_schedules', hasExplicitColumns: true });
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível atualizar o agendamento.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível atualizar o agendamento.');
+      return { success: false, error: message, message };
+    }
+  },
+
+  async cancelMaintenanceSchedule(scheduleId: string, payload: any = {}) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
+    if (!isPersistedUuid(scheduleId)) {
+      return invalidClinicalIdResponse('Sondagem de manutenção inválida para cancelamento.');
+    }
+    const endpoint = `/api/aba/maintenance-schedules/${encodeURIComponent(String(scheduleId))}/cancel`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, { helperName: 'cancelMaintenanceSchedule', operation: 'write', table: 'aba_maintenance_schedules', hasExplicitColumns: true });
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível atualizar o agendamento.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível atualizar o agendamento.');
+      return { success: false, error: message, message };
+    }
+  },
+
   async confirmMaintenanceScheduleLink(scheduleId: string, payload: any = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
     if (!isPersistedUuid(scheduleId)) {

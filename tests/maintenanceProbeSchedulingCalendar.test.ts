@@ -22,7 +22,7 @@ test('status novos sao normalizados e rotulados sem quebrar legado', () => {
   assert.equal(normalizeMaintenanceScheduleStatus('PENDING_CONFIRMATION'), 'PENDING_CONFIRMATION');
   assert.equal(normalizeMaintenanceScheduleStatus('PENDING_LINK'), 'PENDING_LINK');
   assert.equal(normalizeMaintenanceScheduleStatus('UNSCHEDULED'), 'UNSCHEDULED');
-  assert.equal(formatMaintenanceScheduleDueLabel({ status: 'PENDING_NEXT_SESSION' }), 'Aguardando proxima sessao');
+  assert.equal(formatMaintenanceScheduleDueLabel({ status: 'PENDING_NEXT_SESSION' }), 'Aguardando futura consulta');
   assert.equal(formatMaintenanceScheduleDueLabel({ status: 'PENDING_CONFIRMATION' }), 'Pendente de confirmacao');
 });
 

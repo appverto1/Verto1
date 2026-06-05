@@ -21723,12 +21723,15 @@ async function startServer() {
     'PENDING_LINK',
     'PENDING_SCHEDULING',
     'SCHEDULED',
+    'SCHEDULED_BY_DATE',
     'UNSCHEDULED',
     'DUE_TODAY',
     'OVERDUE',
+    'IN_MAINTENANCE',
     'COMPLETED',
     'MISSED',
-    'CANCELLED'
+    'CANCELLED',
+    'ARCHIVED'
   ]);
   const ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES = [
     'PENDING',
@@ -21737,9 +21740,11 @@ async function startServer() {
     'PENDING_LINK',
     'PENDING_SCHEDULING',
     'SCHEDULED',
+    'SCHEDULED_BY_DATE',
     'UNSCHEDULED',
     'DUE_TODAY',
     'OVERDUE',
+    'IN_MAINTENANCE',
     'MISSED'
   ];
   const ABA_MAINTENANCE_PROBE_STATUSES = new Set(['MAINTAINED', 'WATCH', 'REGRESSION_RISK']);
@@ -21758,6 +21763,30 @@ async function startServer() {
     if (!raw) return fallback;
     const date = new Date(raw);
     return Number.isNaN(date.getTime()) ? fallback : date.toISOString();
+  };
+
+  const sanitizeClinicalDate = (value: unknown, fallback = new Date().toISOString().slice(0, 10)) => {
+    const raw = typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+    const date = new Date(raw || fallback);
+    if (Number.isNaN(date.getTime())) return fallback;
+    return date.toISOString().slice(0, 10);
+  };
+
+  const readClinicalDateInput = (value: unknown) => {
+    const raw = typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
+    if (!raw) return '';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+    const date = new Date(raw);
+    return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 10);
+  };
+
+  const parseClinicalDateMs = (value: unknown) => {
+    const raw = sanitizeClinicalDate(value, '');
+    if (!raw) return NaN;
+    const [year, month, day] = raw.split('-').map(Number);
+    const date = new Date(year, (month || 1) - 1, day || 1);
+    return date.getTime();
   };
 
   const normalizeAbaSessionStatus = (value: unknown) => {
@@ -22280,7 +22309,46 @@ async function startServer() {
         .map((row: any) => sanitizeString(row?.target_id || row?.targetId, 180))
         .filter((id: string) => isUuid(id))
     )).slice(0, 200);
-    if (targetIds.length === 0) return safeRows;
+    const appointmentIds = Array.from(new Set(
+      safeRows
+        .map((row: any) => sanitizeString(row?.appointment_id || row?.appointmentId, 180))
+        .filter((id: string) => isUuid(id))
+    )).slice(0, 200);
+    const patientIds = Array.from(new Set(
+      safeRows
+        .map((row: any) => sanitizeString(row?.patient_id || row?.patientId, 120))
+        .filter((id: string) => isUuid(id))
+    )).slice(0, 50);
+    const appointmentById = new Map<string, any>();
+    if (appointmentIds.length > 0) {
+      let appointmentQuery = supabase
+        .from('appointments')
+        .select(ABA_APPOINTMENT_MAINTENANCE_SELECT)
+        .eq('organization_id', organizationId)
+        .in('id', appointmentIds)
+        .limit(appointmentIds.length);
+      if (patientIds.length === 1) appointmentQuery = appointmentQuery.eq('patient_id', patientIds[0]);
+      appointmentQuery = applyAbaTenantScope(appointmentQuery, user, clinicId, organizationId);
+      const appointmentResult = await appointmentQuery;
+      if (!appointmentResult.error) {
+        (appointmentResult.data || []).forEach((appointment: any) => {
+          const id = sanitizeString(appointment?.id, 180);
+          if (id) appointmentById.set(id, appointment);
+        });
+      } else if (!hasMissingFinancialSchema(appointmentResult.error)) {
+        const missingColumn = extractMissingColumnName(appointmentResult.error);
+        if (!missingColumn || !ABA_APPOINTMENT_MAINTENANCE_COLUMNS.includes(missingColumn)) throw appointmentResult.error;
+      }
+    }
+    if (targetIds.length === 0) {
+      return safeRows.map((row: any) => {
+        const appointmentId = sanitizeString(row?.appointment_id || row?.appointmentId, 180);
+        return cleanObject({
+          ...row,
+          appointment: appointmentById.get(appointmentId) || row?.appointment || null
+        });
+      });
+    }
     let targetQuery = supabase
       .from('aba_targets')
       .select(ABA_TARGET_RECOMMENDATION_SELECT)
@@ -22300,11 +22368,14 @@ async function startServer() {
     });
     return safeRows.map((row: any) => {
       const targetId = sanitizeString(row?.target_id || row?.targetId, 180);
+      const appointmentId = sanitizeString(row?.appointment_id || row?.appointmentId, 180);
+      const appointment = appointmentById.get(appointmentId) || row?.appointment || null;
       const target = targetById.get(targetId) || null;
       const raw = row?.raw_payload && typeof row.raw_payload === 'object' ? row.raw_payload : {};
       if (!target) {
         return cleanObject({
           ...row,
+          appointment,
           target_missing: Boolean(targetId),
           raw_payload: sanitizeClinicalPayload(raw)
         });
@@ -22314,6 +22385,7 @@ async function startServer() {
       const domainName = sanitizeString(target?.domain_name || raw.domainName || raw.domain_name, 240) || null;
       return cleanObject({
         ...row,
+        appointment,
         target,
         target_name: displayName,
         targetName: displayName,
@@ -27718,14 +27790,29 @@ async function startServer() {
         .eq('patient_id', patientId)
         .eq('target_id', targetId)
         .in('status', ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES)
-        .order('target_due_date', { ascending: true })
-        .limit(1);
+        .order('updated_at', { ascending: false })
+        .limit(20);
       existingQuery = applyAbaTenantScope(existingQuery, { role: 'owner' }, clinicId, organizationId);
       const existingResult = await existingQuery;
       if (existingResult.error && !hasMissingFinancialSchema(existingResult.error)) throw existingResult.error;
       const existingSchedule = Array.isArray(existingResult.data)
         ? existingResult.data.find((item: any) => isUuid(sanitizeString(item?.id, 180)))
         : null;
+      const duplicateRows = Array.isArray(existingResult.data)
+        ? existingResult.data.filter((item: any) => isUuid(sanitizeString(item?.id, 180))).slice(1)
+        : [];
+      if (duplicateRows.length > 0) {
+        void persistActivityLog({
+          userId: createdBy || '',
+          clinicId,
+          actorName: 'Equipe',
+          title: 'Duplicidade de sondagem detectada',
+          content: 'Ha multiplas sondagens ativas para a mesma habilidade; o agendamento principal reutilizou o mais recente.',
+          type: 'clinical',
+          actionType: 'MAINTENANCE_SCHEDULE_DUPLICATE_DETECTED',
+          payload: { targetId, patientId, duplicateCount: duplicateRows.length, scheduleIds: duplicateRows.map((item: any) => sanitizeString(item?.id, 180)).filter(Boolean).slice(0, 20) }
+        });
+      }
       if (existingSchedule?.id) {
         const raw = existingSchedule.raw_payload && typeof existingSchedule.raw_payload === 'object' ? existingSchedule.raw_payload : {};
         const nextSessionPatch = cleanObject({
@@ -27787,6 +27874,7 @@ async function startServer() {
             candidate_appointment_id: null,
             scheduled_for: null,
             due_date: null,
+            target_due_date: null,
             updated_at: now
           }],
           clinicId,
@@ -27806,7 +27894,9 @@ async function startServer() {
         return { ok: false, status: 404, error: 'Consulta não encontrada.' };
       }
       const scheduledFor = appointment?.scheduled_at || null;
-      const dueDate = sanitizeIsoDateTime(params.dueDate || scheduledFor || now);
+      const dueDate = scheduledFor
+        ? sanitizeIsoDateTime(scheduledFor)
+        : sanitizeClinicalDate(params.dueDate || now);
       let existingQuery = supabase
         .from('aba_maintenance_schedules')
         .select(ABA_MAINTENANCE_SCHEDULE_SELECT)
@@ -27814,14 +27904,29 @@ async function startServer() {
         .eq('patient_id', patientId)
         .eq('target_id', targetId)
         .in('status', ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES)
-        .order('target_due_date', { ascending: true })
-        .limit(1);
+        .order('updated_at', { ascending: false })
+        .limit(20);
       existingQuery = applyAbaTenantScope(existingQuery, { role: 'owner' }, clinicId, organizationId);
       const existingResult = await existingQuery;
       if (existingResult.error && !hasMissingFinancialSchema(existingResult.error)) throw existingResult.error;
       const existingSchedule = Array.isArray(existingResult.data)
         ? existingResult.data.find((item: any) => isUuid(sanitizeString(item?.id, 180)))
         : null;
+      const duplicateRows = Array.isArray(existingResult.data)
+        ? existingResult.data.filter((item: any) => isUuid(sanitizeString(item?.id, 180))).slice(1)
+        : [];
+      if (duplicateRows.length > 0) {
+        void persistActivityLog({
+          userId: createdBy || '',
+          clinicId,
+          actorName: 'Equipe',
+          title: 'Duplicidade de sondagem detectada',
+          content: 'Ha multiplas sondagens ativas para a mesma habilidade; o agendamento principal reutilizou o mais recente.',
+          type: 'clinical',
+          actionType: 'MAINTENANCE_SCHEDULE_DUPLICATE_DETECTED',
+          payload: { targetId, patientId, duplicateCount: duplicateRows.length, scheduleIds: duplicateRows.map((item: any) => sanitizeString(item?.id, 180)).filter(Boolean).slice(0, 20) }
+        });
+      }
       if (existingSchedule?.id) {
         const raw = existingSchedule.raw_payload && typeof existingSchedule.raw_payload === 'object' ? existingSchedule.raw_payload : {};
         const update = await updateAbaScheduleWithSchemaFallback(
@@ -27837,11 +27942,14 @@ async function startServer() {
             metadata: sanitizeClinicalPayload({
               ...(existingSchedule.metadata && typeof existingSchedule.metadata === 'object' ? existingSchedule.metadata : {}),
               auditAction: 'MAINTENANCE_SCHEDULE_UPDATED',
-              scheduleReason: appointmentId ? 'CUSTOM_DATE_LINKED_UPDATED' : 'CUSTOM_DATE_UPDATED'
+              scheduleReason: appointmentId ? 'CUSTOM_DATE_LINKED_UPDATED' : 'CUSTOM_DATE_UPDATED',
+              scheduleType: appointmentId ? 'APPOINTMENT' : 'DATE'
             }),
             raw_payload: sanitizeClinicalPayload({
               ...raw,
               targetName: target?.name || raw.targetName || null,
+              scheduleType: appointmentId ? 'APPOINTMENT' : 'DATE',
+              clinicalDate: appointmentId ? null : dueDate,
               noAutomaticClinicalMutation: true
             }),
             updated_at: now
@@ -27939,7 +28047,7 @@ async function startServer() {
       }
     } else if (scheduleMode === 'NEXT_PATIENT_SESSION' || scheduleMode === 'NEXT_AVAILABLE_SESSION') {
       rows.push(cleanObject({
-        id: `maintenance-${abaPlanningHash([targetId, 'next-session-pending', patientId])}`,
+        id: `maintenance-${abaPlanningHash([targetId, 'next-session-pending', patientId, now])}`,
         organization_id: organizationId,
         clinic_id: clinicId,
         patient_id: patientId,
@@ -27983,16 +28091,20 @@ async function startServer() {
         return { ok: false, status: 404, error: 'Consulta não encontrada.' };
       }
       const scheduledFor = appointment?.scheduled_at || null;
-      const dueDate = sanitizeIsoDateTime(params.dueDate || scheduledFor || now);
+      const dueDate = scheduledFor
+        ? sanitizeIsoDateTime(scheduledFor)
+        : sanitizeClinicalDate(params.dueDate || now);
+      const dueDateMs = scheduledFor ? new Date(dueDate).getTime() : parseClinicalDateMs(dueDate);
+      const nowClinicalMs = parseClinicalDateMs(now);
       rows.push(cleanObject({
-        id: `maintenance-${abaPlanningHash([targetId, 'custom', dueDate, appointmentId || 'date'])}`,
+        id: `maintenance-${abaPlanningHash([targetId, 'custom', dueDate, appointmentId || 'date', now])}`,
         organization_id: organizationId,
         clinic_id: clinicId,
         patient_id: patientId,
         target_id: targetId,
         mastery_evaluation_id: masteryEvaluationId,
         source_mastery_evaluation_id: masteryEvaluationId,
-        schedule_day: Math.max(1, Math.ceil((new Date(dueDate).getTime() - new Date(now).getTime()) / 86_400_000)),
+        schedule_day: Math.max(1, Math.ceil(((Number.isFinite(dueDateMs) ? dueDateMs : Date.now()) - (Number.isFinite(nowClinicalMs) ? nowClinicalMs : Date.now())) / 86_400_000)),
         interval_label: 'Data personalizada',
         due_date: scheduledFor || dueDate,
         target_due_date: dueDate,
@@ -28004,10 +28116,13 @@ async function startServer() {
         created_by: createdBy,
         metadata: sanitizeClinicalPayload({
           auditAction: 'MAINTENANCE_SCHEDULE_CREATED',
-          scheduleReason: appointmentId ? 'CUSTOM_DATE_LINKED' : 'CUSTOM_DATE_BY_DATE'
+          scheduleReason: appointmentId ? 'CUSTOM_DATE_LINKED' : 'CUSTOM_DATE_BY_DATE',
+          scheduleType: appointmentId ? 'APPOINTMENT' : 'DATE'
         }),
         raw_payload: sanitizeClinicalPayload({
           targetName: target?.name || null,
+          scheduleType: appointmentId ? 'APPOINTMENT' : 'DATE',
+          clinicalDate: appointmentId ? null : dueDate,
           noAutomaticClinicalMutation: true
         }),
         created_at: now,
@@ -29694,7 +29809,7 @@ async function startServer() {
             .select(ABA_MAINTENANCE_SCHEDULE_SELECT)
             .eq('patient_id', patientId)
             .in('status', ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES)
-            .order('target_due_date', { ascending: true })
+            .order('updated_at', { ascending: false })
             .range(from, to)
         ),
         applyClinic(
@@ -29968,7 +30083,7 @@ async function startServer() {
             .eq('patient_id', patientId)
             .in('target_id', eligibleTargetIds)
             .in('status', ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES)
-            .order('target_due_date', { ascending: true })
+            .order('updated_at', { ascending: false })
             .limit(Math.min(200, Math.max(eligibleTargetIds.length * 2, 1)));
           activeScheduleQuery = applyClinic(activeScheduleQuery);
           const activeScheduleResult = await activeScheduleQuery;
@@ -29979,16 +30094,23 @@ async function startServer() {
           }
         }
         const activeScheduleByTargetId = new Map<string, any>();
+        const duplicateSchedulesForReview: any[] = [];
         activeSchedules.forEach((schedule: any) => {
           const scheduleTargetId = sanitizeString(schedule?.target_id || schedule?.targetId, 180);
-          if (isUuid(scheduleTargetId) && !activeScheduleByTargetId.has(scheduleTargetId)) {
+          if (!isUuid(scheduleTargetId)) return;
+          if (!activeScheduleByTargetId.has(scheduleTargetId)) {
             activeScheduleByTargetId.set(scheduleTargetId, schedule);
+          } else {
+            duplicateSchedulesForReview.push(schedule);
           }
         });
         const sanitizeScheduleForPanel = (schedule: any) => {
           const scheduleTargetId = sanitizeString(schedule?.target_id || schedule?.targetId, 180);
+          const scheduleId = sanitizeString(schedule?.id || schedule?.schedule_id || schedule?.scheduleId, 180);
           const raw = schedule?.raw_payload && typeof schedule.raw_payload === 'object' ? schedule.raw_payload : {};
           return cleanObject({
+            id: isUuid(scheduleId) ? scheduleId : null,
+            scheduleId: isUuid(scheduleId) ? scheduleId : null,
             target_id: isUuid(scheduleTargetId) ? scheduleTargetId : null,
             targetId: isUuid(scheduleTargetId) ? scheduleTargetId : null,
             status: sanitizeString(schedule?.status, 80) || 'SCHEDULED',
@@ -29998,11 +30120,18 @@ async function startServer() {
             targetDueDate: schedule?.target_due_date || null,
             scheduled_for: schedule?.scheduled_for || null,
             scheduledFor: schedule?.scheduled_for || null,
+            appointment_id: schedule?.appointment_id || null,
+            appointmentId: schedule?.appointment_id || null,
+            appointment: schedule?.appointment || null,
+            candidate_appointment_id: schedule?.candidate_appointment_id || null,
+            candidateAppointmentId: schedule?.candidate_appointment_id || null,
             schedule_mode: sanitizeString(schedule?.schedule_mode, 80) || null,
             scheduleMode: sanitizeString(schedule?.schedule_mode, 80) || null,
             targetName: sanitizeString(schedule?.targetName || schedule?.target_name || raw.targetName, 240) || null,
             protocolName: sanitizeString(schedule?.protocolTitle || schedule?.protocol_title || raw.protocolTitle, 240) || null,
-            domainName: sanitizeString(schedule?.domainName || schedule?.domain_name || raw.domainName, 240) || null
+            domainName: sanitizeString(schedule?.domainName || schedule?.domain_name || raw.domainName, 240) || null,
+            raw_payload: sanitizeClinicalPayload(raw),
+            rawPayload: sanitizeClinicalPayload(raw)
           });
         };
         const buildScheduledPanelRow = (skill: any, schedule: any, label: string) => {
@@ -30016,10 +30145,11 @@ async function startServer() {
             schedule: safeSchedule,
             schedules: [safeSchedule],
             dueDate: safeSchedule.target_due_date || safeSchedule.due_date || safeSchedule.scheduled_for || null,
-            canScheduleMaintenance: false,
-            canWaitNextSession: false,
-            canAssignAppointment: false,
-            availableActions: []
+            scheduleId: safeSchedule.scheduleId || safeSchedule.id || null,
+            canScheduleMaintenance: true,
+            canWaitNextSession: true,
+            canAssignAppointment: true,
+            availableActions: ['EDIT_SCHEDULE', 'CANCEL_SCHEDULE', 'MOVE_NEXT_SESSION', 'ASSIGN_APPOINTMENT']
           });
         };
         const eligibleSkills: any[] = [];
@@ -30048,6 +30178,7 @@ async function startServer() {
         const pagedWaitingNextSession = waitingNextSession.slice(0, pageSize);
         const pagedOverdueProbes = overdueProbes.slice(0, pageSize);
         const sanitizedSchedules = activeSchedules.map(sanitizeScheduleForPanel);
+        const sanitizedDuplicateSchedules = duplicateSchedulesForReview.map(sanitizeScheduleForPanel);
         return res.json({
           success: true,
           data: {
@@ -30070,6 +30201,7 @@ async function startServer() {
             skills: pagedEligibleSkills,
             cards: [...pagedEligibleSkills, ...pagedScheduledProbes, ...pagedWaitingNextSession, ...pagedOverdueProbes],
             schedules: sanitizedSchedules,
+            duplicateSchedulesForReview: sanitizedDuplicateSchedules,
             probeResults: [],
             alerts: [],
             source: 'patient_pei_targets_step2'
@@ -30155,6 +30287,22 @@ async function startServer() {
         throw firstError;
       }
       const enrichedSchedules = await enrichMaintenanceRowsWithTargetDisplay((scheduleResult as any).data || [], clinicId, organizationId, req.session.user);
+      const primarySchedulesByTargetId = new Map<string, any>();
+      const duplicateSchedulesForReview: any[] = [];
+      const orphanScheduleRows: any[] = [];
+      enrichedSchedules.forEach((schedule: any) => {
+        const targetId = sanitizeString(schedule?.target_id || schedule?.targetId, 180);
+        if (!isUuid(targetId) || schedule?.target_missing) {
+          orphanScheduleRows.push(schedule);
+          return;
+        }
+        if (!primarySchedulesByTargetId.has(targetId)) {
+          primarySchedulesByTargetId.set(targetId, schedule);
+          return;
+        }
+        duplicateSchedulesForReview.push(schedule);
+      });
+      const schedulesForMainFlow = [...Array.from(primarySchedulesByTargetId.values()), ...orphanScheduleRows];
       let allTargets = Array.isArray((targetResult as any).data) ? (targetResult as any).data : [];
       let peiTargets = await getPatientPeiTargets(patientId, clinicId, organizationId, req.session.user);
       const materializedPeiTargets = await materializePeiTargetsForMaintenance({
@@ -30189,7 +30337,7 @@ async function startServer() {
         if (isUuid(targetId) && !latestMasteryByTargetId.has(targetId)) latestMasteryByTargetId.set(targetId, evaluation);
       });
       const activeScheduleByTargetId = new Map<string, any>();
-      enrichedSchedules.forEach((schedule: any) => {
+      schedulesForMainFlow.forEach((schedule: any) => {
         const targetId = sanitizeString(schedule?.target_id || schedule?.targetId, 180);
         if (isUuid(targetId) && !schedule?.target_missing && !activeScheduleByTargetId.has(targetId)) {
           activeScheduleByTargetId.set(targetId, schedule);
@@ -30258,14 +30406,14 @@ async function startServer() {
           isMasteryEvaluationComplete(latestMastery)
         );
       };
-      const scheduledTargetIds = new Set(enrichedSchedules.map((schedule: any) => sanitizeString(schedule?.target_id || schedule?.targetId, 180)).filter(Boolean));
+      const scheduledTargetIds = new Set(schedulesForMainFlow.map((schedule: any) => sanitizeString(schedule?.target_id || schedule?.targetId, 180)).filter(Boolean));
       const skillTargetRows = allTargets.filter((target: any) => isUuid(sanitizeString(target?.id, 180)));
       const maintenanceTargetRows = allTargets.filter((target: any) => {
         const id = sanitizeString(target?.id, 180);
         if (!isUuid(id) || scheduledTargetIds.has(id)) return false;
         return isTargetEligibleForMaintenance(target);
       });
-      const scheduleCards = enrichedSchedules.map((schedule: any) => {
+      const scheduleCards = schedulesForMainFlow.map((schedule: any) => {
         const scheduleId = sanitizeString(schedule?.id, 180);
         const targetId = sanitizeString(schedule?.target_id || schedule?.targetId, 180);
         const targetResolved = Boolean(isUuid(targetId) && !schedule?.target_missing);
@@ -30308,7 +30456,7 @@ async function startServer() {
           needsTargetReview,
           availableActions: needsTargetReview
             ? ['REVIEW_TARGET']
-            : ['SCHEDULE_MAINTENANCE', 'WAIT_NEXT_SESSION', 'ASSIGN_APPOINTMENT']
+            : ['EDIT_SCHEDULE', 'CANCEL_SCHEDULE', 'MOVE_NEXT_SESSION', 'ASSIGN_APPOINTMENT']
         });
       });
       const targetCards = maintenanceTargetRows.map((target: any) => {
@@ -30579,6 +30727,7 @@ async function startServer() {
           orphanSchedules,
           cards,
           schedules: enrichedSchedules,
+          duplicateSchedulesForReview,
           targets: skillTargetRows,
           peiTargets: hydratedPeiTargets,
           probeResults,
@@ -30812,10 +30961,18 @@ async function startServer() {
         if (!schedule) return null;
         const raw = schedule?.raw_payload && typeof schedule.raw_payload === 'object' ? schedule.raw_payload : {};
         const target = schedule?.target && typeof schedule.target === 'object' ? schedule.target : {};
+        const scheduleId = sanitizeString(schedule?.id || schedule?.schedule_id || schedule?.scheduleId, 180);
         return cleanObject({
+          id: isUuid(scheduleId) ? scheduleId : null,
+          scheduleId: isUuid(scheduleId) ? scheduleId : null,
           targetId,
           status: sanitizeString(schedule?.status, 80) || null,
           dueDate: schedule?.target_due_date || schedule?.targetDueDate || schedule?.due_date || schedule?.dueDate || null,
+          due_date: schedule?.due_date || schedule?.dueDate || null,
+          target_due_date: schedule?.target_due_date || schedule?.targetDueDate || null,
+          scheduled_for: schedule?.scheduled_for || schedule?.scheduledFor || null,
+          scheduledFor: schedule?.scheduled_for || schedule?.scheduledFor || null,
+          scheduleMode: sanitizeString(schedule?.schedule_mode || schedule?.scheduleMode, 80) || null,
           appointmentId: schedule?.appointment_id || schedule?.appointmentId || null,
           candidateAppointmentId: schedule?.candidate_appointment_id || schedule?.candidateAppointmentId || null,
           targetName: sanitizeString(schedule?.targetName || schedule?.target_name || target?.name || raw.targetName, 240) || null,
@@ -30857,6 +31014,251 @@ async function startServer() {
       return res.json({ success: true, message: 'Sondagem aguardando futura consulta.', schedule: schedules[0] || null, data: schedules });
     } catch {
       return res.status(500).json({ success: false, error: 'UNEXPECTED_ERROR', message: 'Não foi possível aguardar futura consulta.' });
+    }
+  });
+
+  app.patch('/api/aba/maintenance-schedules/:scheduleId', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de edição de Maintenance Probe')) return;
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const scheduleId = sanitizeString(req.params.scheduleId, 180);
+      if (!isUuid(scheduleId)) {
+        return res.status(400).json({ success: false, error: 'ID_INVALIDO', message: 'Sondagem de manutenção inválida.' });
+      }
+      let query = supabase
+        .from('aba_maintenance_schedules')
+        .select(ABA_MAINTENANCE_SCHEDULE_SELECT)
+        .eq('id', scheduleId)
+        .eq('organization_id', organizationId)
+        .limit(1);
+      query = applyAbaTenantScope(query, req.session.user, clinicId, organizationId);
+      const existing = await query.maybeSingle();
+      if (existing.error) {
+        if (hasMissingFinancialSchema(existing.error)) return res.status(503).json({ success: false, error: 'UNEXPECTED_ERROR', message: 'Schema ABA de manutenção ainda não aplicado.' });
+        throw existing.error;
+      }
+      const schedule = existing.data || null;
+      const patientId = sanitizeString(schedule?.patient_id, 120);
+      const targetId = sanitizeString(schedule?.target_id || schedule?.targetId, 180);
+      if (!schedule?.id || !isUuid(patientId) || !(await canAccessPatientInCurrentClinic(patientId, req.session.user))) {
+        return res.status(404).json({ success: false, error: 'SCHEDULE_NOT_FOUND', message: 'Sondagem de manutenção não encontrada.' });
+      }
+      if (!ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES.includes(normalizeAbaMaintenanceScheduleStatus(schedule.status))) {
+        return res.status(409).json({ success: false, error: 'SCHEDULE_INACTIVE', message: 'Esta sondagem não está ativa.' });
+      }
+      if (!isUuid(targetId)) {
+        return res.status(404).json({ success: false, error: 'TARGET_NOT_FOUND', message: 'Habilidade não encontrada.' });
+      }
+      const target = await fetchTargetForMaintenance({ targetId, patientId, clinicId: sanitizeString(schedule.clinic_id || clinicId, 120), organizationId: sanitizeString(schedule.organization_id || organizationId, 120) });
+      if (!target?.id) {
+        return res.status(404).json({ success: false, error: 'TARGET_NOT_FOUND', message: 'Habilidade não encontrada.' });
+      }
+      const requested = sanitizeString(req.body?.mode || req.body?.scheduleMode || req.body?.schedule_mode, 80).toUpperCase();
+      const mode = requested === 'APPOINTMENT'
+        ? 'APPOINTMENT'
+        : requested === 'NEXT_SESSION' || requested === 'NEXT_PATIENT_SESSION'
+          ? 'NEXT_SESSION'
+          : requested === 'DATE' || requested === 'CUSTOM_DATE'
+            ? 'DATE'
+            : '';
+      if (!mode) {
+        return res.status(400).json({ success: false, error: 'INVALID_MODE', message: 'Modo de agendamento inválido.' });
+      }
+      const now = new Date().toISOString();
+      const raw = schedule.raw_payload && typeof schedule.raw_payload === 'object' ? schedule.raw_payload : {};
+      let patch: Record<string, any> = {};
+      let actionType = 'MAINTENANCE_SCHEDULE_UPDATED';
+      let message = 'Agendamento de manutenção atualizado.';
+      if (mode === 'APPOINTMENT') {
+        const appointmentId = sanitizeString(req.body?.appointmentId || req.body?.appointment_id, 180);
+        if (!isUuid(appointmentId)) {
+          return res.status(400).json({ success: false, error: 'MISSING_APPOINTMENT_ID', message: 'Escolha uma consulta para vincular a sondagem.' });
+        }
+        const appointment = await fetchMaintenanceAppointmentById({
+          appointmentId,
+          patientId,
+          clinicId: sanitizeString(schedule.clinic_id || clinicId, 120),
+          organizationId: sanitizeString(schedule.organization_id || organizationId, 120)
+        });
+        if (!appointment?.id) {
+          return res.status(404).json({ success: false, error: 'APPOINTMENT_NOT_FOUND', message: 'Consulta não encontrada.' });
+        }
+        const scheduledFor = sanitizeIsoDateTime(appointment.scheduled_at || appointment.scheduled_start_at || appointment.scheduledStartAt || now);
+        patch = cleanObject({
+          status: 'SCHEDULED',
+          appointment_id: appointmentId,
+          candidate_appointment_id: null,
+          due_date: scheduledFor,
+          target_due_date: scheduledFor,
+          scheduled_for: scheduledFor,
+          schedule_mode: 'CUSTOM_DATE',
+          metadata: sanitizeClinicalPayload({
+            ...(schedule.metadata && typeof schedule.metadata === 'object' ? schedule.metadata : {}),
+            auditAction: actionType,
+            scheduleType: 'APPOINTMENT',
+            scheduleReason: 'APPOINTMENT_UPDATED'
+          }),
+          raw_payload: sanitizeClinicalPayload({
+            ...raw,
+            targetName: target?.name || raw.targetName || null,
+            scheduleType: 'APPOINTMENT',
+            clinicalDate: null,
+            noAutomaticClinicalMutation: true
+          }),
+          updated_at: now
+        });
+      } else if (mode === 'NEXT_SESSION') {
+        actionType = 'MAINTENANCE_SCHEDULE_MOVED_TO_NEXT_SESSION';
+        message = 'Sondagem aguardando futura consulta.';
+        patch = cleanObject({
+          status: 'PENDING_NEXT_SESSION',
+          appointment_id: null,
+          candidate_appointment_id: null,
+          due_date: null,
+          target_due_date: null,
+          scheduled_for: null,
+          schedule_mode: 'NEXT_PATIENT_SESSION',
+          metadata: sanitizeClinicalPayload({
+            ...(schedule.metadata && typeof schedule.metadata === 'object' ? schedule.metadata : {}),
+            auditAction: actionType,
+            legacyAction: 'MAINTENANCE_NEXT_SESSION_SET',
+            nextSessionPolicy: true,
+            scheduleReason: 'MOVED_TO_NEXT_SESSION'
+          }),
+          raw_payload: sanitizeClinicalPayload({
+            ...raw,
+            targetName: target?.name || raw.targetName || null,
+            scheduledForNextSession: true,
+            nextSessionPolicy: true,
+            noAutomaticClinicalMutation: true
+          }),
+          updated_at: now
+        });
+      } else {
+        const clinicalDate = readClinicalDateInput(req.body?.dueDate || req.body?.due_date);
+        if (!clinicalDate) {
+          return res.status(400).json({ success: false, error: 'MISSING_DUE_DATE', message: 'Escolha uma data para agendar a sondagem.' });
+        }
+        patch = cleanObject({
+          status: 'SCHEDULED',
+          appointment_id: null,
+          candidate_appointment_id: null,
+          due_date: clinicalDate,
+          target_due_date: clinicalDate,
+          scheduled_for: null,
+          schedule_mode: 'CUSTOM_DATE',
+          metadata: sanitizeClinicalPayload({
+            ...(schedule.metadata && typeof schedule.metadata === 'object' ? schedule.metadata : {}),
+            auditAction: actionType,
+            scheduleType: 'DATE',
+            scheduleReason: 'CUSTOM_DATE_UPDATED'
+          }),
+          raw_payload: sanitizeClinicalPayload({
+            ...raw,
+            targetName: target?.name || raw.targetName || null,
+            scheduleType: 'DATE',
+            clinicalDate,
+            noAutomaticClinicalMutation: true
+          }),
+          updated_at: now
+        });
+      }
+      let update = await updateAbaScheduleWithSchemaFallback(scheduleId, patch, sanitizeString(schedule.clinic_id || clinicId, 120), sanitizeString(schedule.organization_id || organizationId, 120), patientId);
+      if (update.error && isLegacyMaintenanceScheduleConstraintError(update.error)) {
+        update = await updateAbaScheduleWithSchemaFallback(scheduleId, buildLegacyMaintenanceScheduleRow(patch, now), sanitizeString(schedule.clinic_id || clinicId, 120), sanitizeString(schedule.organization_id || organizationId, 120), patientId);
+      }
+      if (update.error) throw update.error;
+      void persistActivityLog({
+        userId: sanitizeString(req.session.user?.id, 120),
+        clinicId: sanitizeString(schedule.clinic_id || clinicId, 120),
+        actorName: 'Equipe',
+        title: mode === 'NEXT_SESSION' ? 'Sondagem aguardando futura consulta' : 'Agendamento de manutencao atualizado',
+        content: mode === 'NEXT_SESSION'
+          ? 'Maintenance Schedule foi movido para aguardar futura consulta.'
+          : 'Maintenance Schedule foi atualizado sem criar duplicidade.',
+        type: 'clinical',
+        actionType,
+        payload: { scheduleId, targetId, patientId, mode }
+      });
+      const [enrichedSchedule] = await enrichMaintenanceRowsWithTargetDisplay(
+        [{ ...schedule, ...patch }],
+        sanitizeString(schedule.clinic_id || clinicId, 120),
+        sanitizeString(schedule.organization_id || organizationId, 120),
+        req.session.user
+      );
+      return res.json({ success: true, message, data: enrichedSchedule || { ...schedule, ...patch }, schedule: enrichedSchedule || { ...schedule, ...patch } });
+    } catch {
+      return res.status(500).json({ success: false, error: 'UNEXPECTED_ERROR', message: 'Não foi possível atualizar o agendamento.' });
+    }
+  });
+
+  app.post('/api/aba/maintenance-schedules/:scheduleId/cancel', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 24 * 1024, 'Payload de cancelamento de Maintenance Probe')) return;
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const scheduleId = sanitizeString(req.params.scheduleId, 180);
+      if (!isUuid(scheduleId)) {
+        return res.status(400).json({ success: false, error: 'ID_INVALIDO', message: 'Sondagem de manutenção inválida.' });
+      }
+      let query = supabase
+        .from('aba_maintenance_schedules')
+        .select(ABA_MAINTENANCE_SCHEDULE_SELECT)
+        .eq('id', scheduleId)
+        .eq('organization_id', organizationId)
+        .limit(1);
+      query = applyAbaTenantScope(query, req.session.user, clinicId, organizationId);
+      const existing = await query.maybeSingle();
+      if (existing.error) {
+        if (hasMissingFinancialSchema(existing.error)) return res.status(503).json({ success: false, error: 'UNEXPECTED_ERROR', message: 'Schema ABA de manutenção ainda não aplicado.' });
+        throw existing.error;
+      }
+      const schedule = existing.data || null;
+      const patientId = sanitizeString(schedule?.patient_id, 120);
+      const targetId = sanitizeString(schedule?.target_id || schedule?.targetId, 180);
+      if (!schedule?.id || !isUuid(patientId) || !(await canAccessPatientInCurrentClinic(patientId, req.session.user))) {
+        return res.status(404).json({ success: false, error: 'SCHEDULE_NOT_FOUND', message: 'Sondagem de manutenção não encontrada.' });
+      }
+      if (!ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES.includes(normalizeAbaMaintenanceScheduleStatus(schedule.status))) {
+        return res.status(409).json({ success: false, error: 'SCHEDULE_INACTIVE', message: 'Esta sondagem não está ativa.' });
+      }
+      const raw = schedule.raw_payload && typeof schedule.raw_payload === 'object' ? schedule.raw_payload : {};
+      const now = new Date().toISOString();
+      const patch = cleanObject({
+        status: 'CANCELLED',
+        cancelled_at: now,
+        cancelled_by: sanitizeString(req.session.user?.id, 120),
+        metadata: sanitizeClinicalPayload({
+          ...(schedule.metadata && typeof schedule.metadata === 'object' ? schedule.metadata : {}),
+          auditAction: 'MAINTENANCE_SCHEDULE_CANCELLED',
+          cancelReason: sanitizeString(req.body?.reason || req.body?.cancelReason || req.body?.cancel_reason, 240) || null
+        }),
+        raw_payload: sanitizeClinicalPayload({
+          ...raw,
+          cancelledAt: now,
+          noAutomaticClinicalMutation: true
+        }),
+        updated_at: now
+      });
+      let update = await updateAbaScheduleWithSchemaFallback(scheduleId, patch, sanitizeString(schedule.clinic_id || clinicId, 120), sanitizeString(schedule.organization_id || organizationId, 120), patientId);
+      if (update.error && isLegacyMaintenanceScheduleConstraintError(update.error)) {
+        update = await updateAbaScheduleWithSchemaFallback(scheduleId, buildLegacyMaintenanceScheduleRow(patch, now), sanitizeString(schedule.clinic_id || clinicId, 120), sanitizeString(schedule.organization_id || organizationId, 120), patientId);
+      }
+      if (update.error) throw update.error;
+      void persistActivityLog({
+        userId: sanitizeString(req.session.user?.id, 120),
+        clinicId: sanitizeString(schedule.clinic_id || clinicId, 120),
+        actorName: 'Equipe',
+        title: 'Sondagem de manutencao cancelada',
+        content: 'Maintenance Schedule foi marcado como cancelado sem exclusao fisica.',
+        type: 'clinical',
+        actionType: 'MAINTENANCE_SCHEDULE_CANCELLED',
+        payload: { scheduleId, targetId, patientId }
+      });
+      return res.json({ success: true, message: 'Sondagem de manutenção cancelada.', data: { ...schedule, ...patch }, schedule: { ...schedule, ...patch } });
+    } catch {
+      return res.status(500).json({ success: false, error: 'UNEXPECTED_ERROR', message: 'Não foi possível atualizar o agendamento.' });
     }
   });
 

@@ -5360,6 +5360,27 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const getPeiMaintenanceScheduleId = (schedule: any) =>
     getPersistedUuid(schedule?.id || schedule?.schedule_id || schedule?.scheduleId);
 
+  const peiMaintenanceDuplicateScheduleRows = useMemo(() => {
+    const duplicates = Array.isArray(abaMaintenancePanel?.raw?.duplicateSchedulesForReview)
+      ? abaMaintenancePanel.raw.duplicateSchedulesForReview
+      : [];
+    return duplicates.map((schedule: any, index: number) => ({
+      key: `duplicate-${schedule?.id || schedule?.scheduleId || index}`,
+      targetId: schedule?.targetId || schedule?.target_id || null,
+      targetName: schedule?.targetName || schedule?.target_name || 'Habilidade em manutenção',
+      protocol: schedule?.protocolName || schedule?.protocolTitle || schedule?.protocol_title || '',
+      protocolName: schedule?.protocolName || schedule?.protocolTitle || schedule?.protocol_title || '',
+      domain: schedule?.domainName || schedule?.domain_name || '',
+      domainName: schedule?.domainName || schedule?.domain_name || '',
+      statusLabel: 'Duplicado para revisão',
+      nextSchedule: schedule,
+      schedule,
+      duplicateSchedule: true,
+      hasRealSchedule: Boolean(getPeiMaintenanceScheduleId(schedule)),
+      hasRealTarget: Boolean(getPersistedUuid(schedule?.targetId || schedule?.target_id))
+    }));
+  }, [abaMaintenancePanel?.raw?.duplicateSchedulesForReview]);
+
   const getPeiMaintenanceCandidateAppointmentId = (schedule: any) =>
     getPersistedUuid(
       schedule?.candidate_appointment_id ||
@@ -5413,6 +5434,81 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     if (!Number.isNaN(date.getTime())) return formatAbaDateTime(value);
     const dateValue = getPeiMaintenanceAppointmentDateValue(appointment);
     return dateValue ? formatPeiMaintenanceDateValue(dateValue) : 'Data indisponível';
+  };
+
+  const getPeiMaintenanceScheduleObject = (row: any) =>
+    row?.nextSchedule || row?.activeSchedule || row?.schedule || (row?.scheduleId || row?.schedule_id ? row : null);
+
+  const getPeiMaintenanceScheduleClinicalDateValue = (schedule: any) => {
+    const rawPayload = schedule?.raw_payload || schedule?.rawPayload || {};
+    const rawClinicalDate = String(rawPayload?.clinicalDate || rawPayload?.clinical_date || '').trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(rawClinicalDate)) return rawClinicalDate;
+    const value =
+      schedule?.target_due_date ||
+      schedule?.targetDueDate ||
+      schedule?.due_date ||
+      schedule?.dueDate ||
+      '';
+    const raw = String(value || '').trim();
+    if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10);
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 10);
+  };
+
+  const formatPeiMaintenanceAppointmentScheduleLine = (schedule: any) => {
+    const appointment = schedule?.appointment || {};
+    const value =
+      appointment?.scheduled_at ||
+      appointment?.scheduledAt ||
+      appointment?.scheduled_start_at ||
+      appointment?.scheduledStartAt ||
+      schedule?.scheduled_for ||
+      schedule?.scheduledFor ||
+      schedule?.due_date ||
+      schedule?.dueDate ||
+      '';
+    const date = new Date(value);
+    const when = Number.isNaN(date.getTime())
+      ? 'Data da consulta indisponível'
+      : `${date.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })} às ${date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`;
+    const durationMinutes = Number(
+      appointment?.durationMinutes ||
+      appointment?.duration_minutes ||
+      appointment?.scheduledDurationMinutes ||
+      appointment?.scheduled_duration_minutes ||
+      0
+    );
+    const duration = Number.isFinite(durationMinutes) && durationMinutes > 0 ? `${Math.round(durationMinutes)} min` : '';
+    const type = safeDisplayValue(appointment?.service_type || appointment?.serviceType || appointment?.approach || appointment?.type, '');
+    const professional = safeDisplayValue(appointment?.therapistName || appointment?.therapist_name || appointment?.professionalName || appointment?.professional_name, '');
+    const location = safeDisplayValue(appointment?.roomName || appointment?.room_name || appointment?.location || appointment?.location_type || appointment?.local, '');
+    return [when, duration, type, professional, location].filter(Boolean).join(' · ');
+  };
+
+  const getPeiMaintenanceScheduleDisplay = (row: any, fallbackStatus = 'Sondagem agendada') => {
+    const schedule = getPeiMaintenanceScheduleObject(row);
+    const status = String(schedule?.status || row?.status || '').toUpperCase();
+    const appointmentId = getPersistedUuid(schedule?.appointment_id || schedule?.appointmentId);
+    if (status === 'PENDING_NEXT_SESSION') {
+      return {
+        badge: 'Aguardando futura consulta',
+        line: 'O sistema sugerirá vínculo quando houver próxima consulta.',
+        tone: 'amber'
+      };
+    }
+    if (appointmentId) {
+      return {
+        badge: 'Sondagem vinculada à consulta',
+        line: `Consulta: ${formatPeiMaintenanceAppointmentScheduleLine(schedule)}`,
+        tone: 'violet'
+      };
+    }
+    const clinicalDate = getPeiMaintenanceScheduleClinicalDateValue(schedule);
+    return {
+      badge: 'Sondagem por data',
+      line: clinicalDate ? `Data: ${formatPeiMaintenanceDateValue(clinicalDate)}` : fallbackStatus,
+      tone: 'emerald'
+    };
   };
 
   const formatPeiMaintenanceMonthLabel = (monthValue: string) => {
@@ -5522,12 +5618,21 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       setPeiMaintenancePanelMessage('Não foi possível identificar a habilidade para agendamento.');
       return;
     }
+    const schedule = getPeiMaintenanceScheduleObject(row);
+    const scheduleAppointmentId = getPersistedUuid(schedule?.appointment_id || schedule?.appointmentId);
+    const scheduleDate = scheduleAppointmentId
+      ? getPeiMaintenanceAppointmentDateValue(schedule?.appointment || schedule)
+      : getPeiMaintenanceScheduleClinicalDateValue(schedule);
+    const scheduleStatus = String(schedule?.status || '').toUpperCase();
+    const initialMode = scheduleStatus === 'PENDING_NEXT_SESSION'
+      ? 'NEXT_PATIENT_SESSION'
+      : (mode === 'EXISTING_APPOINTMENT' ? 'CUSTOM_DATE' : mode);
     setPeiMaintenanceScheduleRow(selectedSkill);
-    setPeiMaintenanceScheduleMode(mode === 'EXISTING_APPOINTMENT' ? 'CUSTOM_DATE' : mode);
-    setPeiMaintenanceScheduleDate('');
+    setPeiMaintenanceScheduleMode(initialMode);
+    setPeiMaintenanceScheduleDate(scheduleDate || '');
     setIsPeiMaintenanceCalendarOpen(false);
-    setPeiMaintenanceCalendarMonth(new Date().toISOString().slice(0, 7));
-    setSelectedPeiMaintenanceAppointmentId('');
+    setPeiMaintenanceCalendarMonth((scheduleDate || new Date().toISOString().slice(0, 10)).slice(0, 7));
+    setSelectedPeiMaintenanceAppointmentId(scheduleAppointmentId || '');
     setPeiMaintenancePanelMessage('');
   };
 
@@ -5540,32 +5645,34 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       return;
     }
     const isDateMode = peiMaintenanceScheduleMode === 'CUSTOM_DATE';
-    const isAppointmentMode = peiMaintenanceScheduleMode === 'EXISTING_APPOINTMENT';
-    const selectedAppointment = isAppointmentMode
-      ? peiMaintenanceAppointmentsState.items.find((appointment: any) => getPersistedUuid(appointment?.id) === getPersistedUuid(selectedPeiMaintenanceAppointmentId))
+    const existingSchedule = getPeiMaintenanceScheduleObject(row);
+    const existingScheduleId = getPeiMaintenanceScheduleId(existingSchedule) || getPersistedUuid(row?.scheduleId || row?.schedule_id);
+    const selectedAppointmentId = getPersistedUuid(selectedPeiMaintenanceAppointmentId);
+    const selectedAppointment = selectedAppointmentId
+      ? peiMaintenanceAppointmentsState.items.find((appointment: any) => getPersistedUuid(appointment?.id) === selectedAppointmentId) || existingSchedule?.appointment || null
       : null;
-    const appointmentId = isAppointmentMode ? getPersistedUuid(selectedPeiMaintenanceAppointmentId) : '';
+    const appointmentId = isDateMode ? selectedAppointmentId : '';
     const appointmentDueDate = selectedAppointment
       ? selectedAppointment?.scheduled_at || selectedAppointment?.scheduledAt || selectedAppointment?.scheduled_start_at || selectedAppointment?.scheduledStartAt || selectedAppointment?.start_at || selectedAppointment?.startAt || null
       : null;
-    if (isDateMode && !peiMaintenanceScheduleDate) {
+    if (isDateMode && !peiMaintenanceScheduleDate && !appointmentId) {
       logPeiMaintenanceScheduleDebug('missing_due_date', { hasTargetId: true, targetId, mode: peiMaintenanceScheduleMode, hasDueDate: false, hasAppointmentId: Boolean(appointmentId) });
       setPeiMaintenancePanelMessage('Escolha uma data para agendar a sondagem.');
       return;
     }
-    if (isAppointmentMode && !appointmentId) {
+    if (appointmentId && !selectedAppointment) {
       logPeiMaintenanceScheduleDebug('missing_appointment_id', { hasTargetId: true, targetId, mode: peiMaintenanceScheduleMode, hasDueDate: Boolean(appointmentDueDate), hasAppointmentId: false });
       setPeiMaintenancePanelMessage('Escolha uma consulta para vincular a sondagem.');
       return;
     }
-    const scheduleMode = isAppointmentMode ? 'APPOINTMENT' : isDateMode ? 'DATE' : 'NEXT_SESSION';
+    const scheduleMode = appointmentId ? 'APPOINTMENT' : isDateMode ? 'DATE' : 'NEXT_SESSION';
     const payload = {
       targetId,
       target_id: targetId,
       patient_id: patient?.id,
       patientId: patient?.id,
       mode: scheduleMode,
-      dueDate: isDateMode ? peiMaintenanceScheduleDate : null,
+      dueDate: appointmentId ? appointmentDueDate : isDateMode ? peiMaintenanceScheduleDate : null,
       appointmentId: appointmentId || null,
       appointment_id: appointmentId || null,
       target_name: row?.targetName || row?.name,
@@ -5573,15 +5680,19 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       domainName: row?.domain || row?.domainName || null
     };
     logPeiMaintenanceScheduleDebug('submit', { hasTargetId: true, targetId, mode: scheduleMode, hasDueDate: Boolean(payload.dueDate), hasAppointmentId: Boolean(appointmentId) });
-    const successMessage = isAppointmentMode
-      ? 'Sondagem atribuída à consulta.'
-      : isDateMode
-        ? 'Sondagem de manutenção agendada para a data escolhida.'
-        : 'Sondagem aguardando futura consulta.';
+    const successMessage = existingScheduleId
+      ? 'Agendamento de manutenção atualizado.'
+      : appointmentId
+        ? 'Sondagem atribuída à consulta.'
+        : isDateMode
+          ? 'Sondagem de manutenção agendada para a data escolhida.'
+          : 'Sondagem aguardando futura consulta.';
     void runPeiMaintenanceAction(
       `schedule-${row?.key || targetId}`,
       async () => {
-        const result = await dataService.createMaintenanceScheduleForTarget(targetId, payload);
+        const result = existingScheduleId
+          ? await dataService.updateMaintenanceSchedule(existingScheduleId, payload)
+          : await dataService.createMaintenanceScheduleForTarget(targetId, payload);
         return result?.success === false ? result : { ...result, message: successMessage };
       },
       successMessage
@@ -5611,6 +5722,59 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       }),
       'Sondagem aguardando futura consulta.'
     );
+  };
+
+  const handlePeiEditScheduledMaintenance = (row: any) => {
+    openPeiMaintenanceScheduleModal(row, 'CUSTOM_DATE');
+  };
+
+  const handlePeiCancelScheduledMaintenance = (row: any) => {
+    const schedule = getPeiMaintenanceScheduleObject(row);
+    const scheduleId = getPeiMaintenanceScheduleId(schedule) || getPersistedUuid(row?.scheduleId || row?.schedule_id);
+    if (!scheduleId) {
+      setPeiMaintenancePanelMessage('Sondagem de manutenção inválida para cancelamento.');
+      return;
+    }
+    if (!window.confirm('Cancelar esta sondagem de manutenção?')) return;
+    void runPeiMaintenanceAction(
+      `cancel-${scheduleId}`,
+      () => dataService.cancelMaintenanceSchedule(scheduleId),
+      'Sondagem de manutenção cancelada.'
+    );
+  };
+
+  const handlePeiMoveScheduledMaintenanceToNextSession = (row: any) => {
+    const schedule = getPeiMaintenanceScheduleObject(row);
+    const scheduleId = getPeiMaintenanceScheduleId(schedule) || getPersistedUuid(row?.scheduleId || row?.schedule_id);
+    if (!scheduleId) {
+      setPeiMaintenancePanelMessage('Sondagem de manutenção inválida para edição.');
+      return;
+    }
+    void runPeiMaintenanceAction(
+      `move-next-${scheduleId}`,
+      () => dataService.updateMaintenanceSchedule(scheduleId, { mode: 'NEXT_SESSION' }),
+      'Sondagem aguardando futura consulta.'
+    );
+  };
+
+  const handlePeiRemoveScheduledMaintenanceAppointmentLink = (row: any) => {
+    const schedule = getPeiMaintenanceScheduleObject(row);
+    const scheduleId = getPeiMaintenanceScheduleId(schedule) || getPersistedUuid(row?.scheduleId || row?.schedule_id);
+    const dueDate = getPeiMaintenanceScheduleClinicalDateValue(schedule) || getPeiMaintenanceAppointmentDateValue(schedule?.appointment || schedule);
+    if (!scheduleId || !dueDate) {
+      setPeiMaintenancePanelMessage('Não foi possível remover o vínculo desta sondagem.');
+      return;
+    }
+    void runPeiMaintenanceAction(
+      `unlink-${scheduleId}`,
+      () => dataService.updateMaintenanceSchedule(scheduleId, { mode: 'DATE', dueDate }),
+      'Agendamento de manutenção atualizado.'
+    );
+  };
+
+  const handlePeiViewScheduledMaintenanceAppointment = (row: any) => {
+    const schedule = getPeiMaintenanceScheduleObject(row);
+    setPeiMaintenancePanelMessage(formatPeiMaintenanceAppointmentScheduleLine(schedule));
   };
 
   const handlePeiConfirmCandidateLink = (row: any) => {
@@ -6000,21 +6164,84 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       const title = safeDisplayValue(row?.targetName || row?.name, 'Habilidade sem nome');
       const protocol = safeDisplayValue(row?.protocol || row?.protocolName, '');
       const domain = safeDisplayValue(row?.domain || row?.domainName, '');
-      const schedule = row?.nextSchedule || row?.schedule || null;
-      const dueDate = schedule?.target_due_date || schedule?.due_date || schedule?.scheduled_for || row?.dueDate || row?.due_date;
-      const dueLabel = dueDate ? formatAbaDateTime(dueDate) : '';
+      const schedule = getPeiMaintenanceScheduleObject(row);
+      const scheduleId = getPeiMaintenanceScheduleId(schedule) || getPersistedUuid(row?.scheduleId || row?.schedule_id);
+      const appointmentId = getPersistedUuid(schedule?.appointment_id || schedule?.appointmentId);
+      const display = getPeiMaintenanceScheduleDisplay(row, fallbackStatus);
+      const isWaiting = display.badge === 'Aguardando futura consulta';
+      const isLinkedToAppointment = Boolean(appointmentId);
+      const actionLoading = (actionName: string) => Boolean(scheduleId && peiMaintenanceActionKey === `${actionName}-${scheduleId}`);
+      const badgeClass = display.tone === 'amber'
+        ? isPanelDark ? 'bg-amber-500/15 text-amber-100 border-amber-300/30' : 'bg-amber-50 text-amber-700 border-amber-200'
+        : display.tone === 'violet'
+          ? isPanelDark ? 'bg-violet-500/15 text-violet-100 border-violet-300/30' : 'bg-violet-50 text-violet-700 border-violet-200'
+          : isPanelDark ? 'bg-emerald-500/15 text-emerald-100 border-emerald-300/30' : 'bg-emerald-50 text-emerald-700 border-emerald-200';
+      const buttonClass = `inline-flex min-h-[36px] items-center justify-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold transition-all disabled:opacity-60 ${isPanelDark ? 'bg-slate-800 text-slate-100 hover:bg-slate-700' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`;
+      const dangerClass = `inline-flex min-h-[36px] items-center justify-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold transition-all disabled:opacity-60 ${isPanelDark ? 'bg-rose-500/10 text-rose-100 hover:bg-rose-500/20' : 'bg-rose-50 text-rose-700 hover:bg-rose-100'}`;
       return (
-        <div key={row?.key || title} className={`rounded-2xl border p-4 ${isPanelDark ? 'border-slate-700 bg-[#101b2e]' : 'border-slate-100 bg-white'}`}>
+        <div key={row?.key || scheduleId || title} className={`rounded-2xl border p-4 ${row?.duplicateSchedule ? isPanelDark ? 'border-amber-400/30 bg-[#101b2e]' : 'border-amber-200 bg-white' : isPanelDark ? 'border-slate-700 bg-[#101b2e]' : 'border-slate-100 bg-white'}`}>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="min-w-0">
               <h5 className={`text-sm font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{title}</h5>
               <p className={`mt-1 text-xs ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>{[protocol, domain].filter(Boolean).join(' · ') || 'PEI do paciente'}</p>
-              {dueLabel && <p className={`mt-2 text-xs ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Data: {dueLabel}</p>}
+              <p className={`mt-2 text-xs font-semibold ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>{display.line}</p>
+              {row?.duplicateSchedule && (
+                <p className={`mt-2 rounded-xl border px-3 py-2 text-xs font-semibold ${isPanelDark ? 'border-amber-300/20 bg-amber-500/10 text-amber-100' : 'border-amber-100 bg-amber-50 text-amber-700'}`}>
+                  Há múltiplas sondagens ativas para esta habilidade.
+                </p>
+              )}
             </div>
-            <span className={`inline-flex min-h-[32px] items-center rounded-xl px-3 py-1.5 text-xs font-semibold ${isPanelDark ? 'bg-slate-800 text-slate-100' : 'bg-slate-100 text-slate-700'}`}>
-              {row?.statusLabel || fallbackStatus}
+            <span className={`inline-flex min-h-[32px] items-center rounded-xl border px-3 py-1.5 text-xs font-semibold ${badgeClass}`}>
+              {display.badge}
             </span>
           </div>
+          {canManagePeiMaintenance && (
+            <div className="mt-4 flex flex-wrap gap-2">
+              {row?.duplicateSchedule ? (
+                <>
+                  <button type="button" disabled={!scheduleId || actionLoading('cancel')} onClick={() => handlePeiCancelScheduledMaintenance(row)} className={dangerClass}>
+                    <CheckCircle2 size={14} /> {actionLoading('cancel') ? 'Atualizando...' : 'Manter mais recente'}
+                  </button>
+                  <button type="button" disabled={!scheduleId || actionLoading('schedule')} onClick={() => handlePeiEditScheduledMaintenance(row)} className={buttonClass}>
+                    <Edit size={14} /> Revisar agendamentos
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button type="button" disabled={!scheduleId || actionLoading('schedule')} onClick={() => handlePeiEditScheduledMaintenance(row)} className={buttonClass}>
+                    <Edit size={14} /> {actionLoading('schedule') ? 'Abrindo...' : 'Editar agendamento'}
+                  </button>
+                  <button type="button" disabled={!scheduleId || actionLoading('cancel')} onClick={() => handlePeiCancelScheduledMaintenance(row)} className={dangerClass}>
+                    <X size={14} /> {actionLoading('cancel') ? 'Cancelando...' : 'Cancelar sondagem'}
+                  </button>
+                  {!isWaiting && (
+                    <button type="button" disabled={!scheduleId || actionLoading('move-next')} onClick={() => handlePeiMoveScheduledMaintenanceToNextSession(row)} className={buttonClass}>
+                      <Clock size={14} /> {actionLoading('move-next') ? 'Atualizando...' : 'Mover para futura consulta'}
+                    </button>
+                  )}
+                  {isLinkedToAppointment ? (
+                    <>
+                      <button type="button" onClick={() => handlePeiViewScheduledMaintenanceAppointment(row)} className={buttonClass}>
+                        <Eye size={14} /> Ver consulta
+                      </button>
+                      <button type="button" disabled={!scheduleId || actionLoading('unlink')} onClick={() => handlePeiRemoveScheduledMaintenanceAppointmentLink(row)} className={buttonClass}>
+                        <Calendar size={14} /> {actionLoading('unlink') ? 'Atualizando...' : 'Remover vínculo'}
+                      </button>
+                    </>
+                  ) : !isWaiting && (
+                    <>
+                      <button type="button" disabled={!scheduleId || actionLoading('schedule')} onClick={() => handlePeiEditScheduledMaintenance(row)} className={buttonClass}>
+                        <Calendar size={14} /> Editar data
+                      </button>
+                      <button type="button" disabled={!scheduleId || actionLoading('assign')} onClick={() => openPeiMaintenanceAssignModal(row)} className={buttonClass}>
+                        <Calendar size={14} /> Vincular a uma consulta
+                      </button>
+                    </>
+                  )}
+                </>
+              )}
+            </div>
+          )}
         </div>
       );
     };
@@ -6122,6 +6349,18 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             </div>
             <div className="space-y-3">
               {peiMaintenanceScheduledRows.map((row: any) => renderScheduledRow(row, 'Sondagem agendada'))}
+            </div>
+          </section>
+        )}
+        {peiMaintenanceDuplicateScheduleRows.length > 0 && (
+          <section className="space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <h4 className={`text-sm font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>Agendamentos duplicados para revisão</h4>
+              <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${isPanelDark ? 'bg-amber-500/10 text-amber-100' : 'bg-amber-50 text-amber-700'}`}>{peiMaintenanceDuplicateScheduleRows.length}</span>
+            </div>
+            <p className={`text-xs ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>O fluxo principal mostra somente o agendamento ativo mais recente por habilidade.</p>
+            <div className="space-y-3">
+              {peiMaintenanceDuplicateScheduleRows.map((row: any) => renderScheduledRow(row, 'Duplicado para revisão'))}
             </div>
           </section>
         )}
@@ -6548,7 +6787,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                     <div className="mt-2 grid gap-2 sm:grid-cols-2">
                       {peiMaintenanceAppointmentsState.items.map((appointment: any) => {
                         const appointmentDate = getPeiMaintenanceAppointmentDateValue(appointment);
-                        const selected = Boolean(appointmentDate && peiMaintenanceScheduleDate === appointmentDate);
+                        const appointmentId = getPersistedUuid(appointment?.id);
+                        const selected = Boolean(
+                          appointmentId
+                            ? selectedPeiMaintenanceAppointmentId === appointmentId
+                            : appointmentDate && peiMaintenanceScheduleDate === appointmentDate
+                        );
                         const statusInfo = getPeiMaintenanceAppointmentStatusInfo(appointment);
                         return (
                           <button
@@ -6557,7 +6801,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                             disabled={!appointmentDate}
                             onClick={() => {
                               setPeiMaintenanceScheduleDate(appointmentDate);
-                              setSelectedPeiMaintenanceAppointmentId('');
+                              setSelectedPeiMaintenanceAppointmentId(appointmentId || '');
                             }}
                             className={`rounded-2xl border p-3 text-left text-sm transition-all ${
                               selected
