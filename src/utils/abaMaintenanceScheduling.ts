@@ -18,6 +18,10 @@ export type AbaMaintenanceScheduleStatus =
   | 'DUE_TODAY'
   | 'OVERDUE'
   | 'IN_MAINTENANCE'
+  | 'AVAILABLE_IN_SESSION'
+  | 'NEEDS_REVIEW'
+  | 'WATCH'
+  | 'REGRESSION_RISK'
   | 'COMPLETED'
   | 'MISSED'
   | 'CANCELLED'
@@ -121,6 +125,10 @@ const ACTIVE_SCHEDULE_STATUSES = new Set([
   'DUE_TODAY',
   'OVERDUE',
   'IN_MAINTENANCE',
+  'AVAILABLE_IN_SESSION',
+  'NEEDS_REVIEW',
+  'WATCH',
+  'REGRESSION_RISK',
   'MISSED'
 ]);
 
@@ -155,6 +163,10 @@ export const normalizeMaintenanceScheduleStatus = (value: unknown): AbaMaintenan
   if (normalized === 'DUE_TODAY') return 'DUE_TODAY';
   if (normalized === 'OVERDUE') return 'OVERDUE';
   if (normalized === 'IN_MAINTENANCE') return 'IN_MAINTENANCE';
+  if (normalized === 'AVAILABLE_IN_SESSION') return 'AVAILABLE_IN_SESSION';
+  if (normalized === 'NEEDS_REVIEW') return 'NEEDS_REVIEW';
+  if (normalized === 'WATCH') return 'WATCH';
+  if (normalized === 'REGRESSION_RISK') return 'REGRESSION_RISK';
   if (normalized === 'COMPLETED') return 'COMPLETED';
   if (normalized === 'MISSED') return 'MISSED';
   if (normalized === 'CANCELLED') return 'CANCELLED';

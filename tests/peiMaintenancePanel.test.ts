@@ -177,6 +177,40 @@ test('mapper target-first preserva habilidade elegivel mesmo com muitas pendenci
   assert.deepEqual(mapped.sections.technical[0].availableActions, ['REVIEW_TARGET']);
 });
 
+test('mapper target-first remove de elegiveis target com schedule ativo', () => {
+  const targetId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0016';
+  const scheduleId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0017';
+  const mapped = mapMaintenancePanelResponse({
+    eligibleSkills: [
+      {
+        targetId,
+        targetName: 'Imita 2 movimentos motores grossos',
+        protocol: 'VB-MAPP - Nivel 1',
+        domain: 'Imitacao Motora Nivel 1'
+      }
+    ],
+    maintenanceSkills: [],
+    scheduledProbes: [
+      {
+        targetId,
+        scheduleId,
+        targetName: 'Imita 2 movimentos motores grossos',
+        status: 'SCHEDULED',
+        nextSchedule: { id: scheduleId, target_id: targetId, status: 'SCHEDULED', appointment_id: '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0018' }
+      }
+    ],
+    waitingNextSession: [],
+    overdueProbes: [],
+    regressionRisk: [],
+    technicalIssues: []
+  }, { patientId: 'patient-1', requestId: 13, loadedAt: 123457 });
+
+  assert.equal(mapped.summary.eligibleSkills, 0);
+  assert.equal(mapped.summary.scheduled, 1);
+  assert.equal(mapped.sections.eligibleSkills.some((row: any) => row.targetId === targetId), false);
+  assert.equal(mapped.sections.scheduled.some((row: any) => row.targetId === targetId), true);
+});
+
 test('target-first separa risco de regressao do fluxo agendado', () => {
   const targetId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0020';
   const rows = buildPeiMaintenanceRows({
@@ -705,6 +739,7 @@ test('backend resolve targets de manutencao em lote com colunas explicitas', () 
   assert.match(serverCode, /technicalIssues/);
   assert.match(serverCode, /latestMasteryByTargetId/);
   assert.match(serverCode, /activeScheduleByTargetId/);
+  assert.match(serverCode, /rowTargetHasActiveSchedule/);
   assert.match(serverCode, /latestResultByTargetId/);
   assert.match(serverCode, /const kind = needsTargetReview \? 'SCHEDULE_ORFAO' : 'SCHEDULE_VALIDO'/);
   assert.match(serverCode, /cardKind: kind/);
@@ -733,6 +768,8 @@ test('acoes nao enviam ids sinteticos para endpoints de manutencao', () => {
   assert.match(patientDetailCode, /const targetId = getPeiMaintenanceExplicitTargetId\(row\)/);
   assert.doesNotMatch(patientDetailCode, /panelRowsForTargetResolution|nameOnlyMatches|matches\.size === 1|buildPeiMaintenanceScheduleSelection\(row, items\)/);
   assert.match(maintenancePanelCode, /const explicitTargetId = normalizeText\(seed\.target_id \|\| seed\.targetId \|\| seed\.aba_target_id \|\| seed\.abaTargetId \|\| ''\)/);
+  assert.match(maintenancePanelCode, /operationalTargetIds/);
+  assert.match(patientDetailCode, /peiMaintenanceUnavailableTargetIds/);
   assert.doesNotMatch(maintenancePanelCode, /idAsTarget|const targetId = isPersistedUuid\(explicitTargetId\) \? explicitTargetId : idAsTarget/);
   assert.match(patientDetailCode, /disabled=\{actionLoading\('confirm'\) \|\| !hasRealSchedule \|\| needsTargetReview\}/);
   assert.match(patientDetailCode, /group !== 'completed' && group !== 'confirmation' && \(/);

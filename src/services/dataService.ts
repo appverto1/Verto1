@@ -2657,7 +2657,7 @@ export const dataService = {
       if (response.ok) return await response.json();
       return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível carregar Maintenance Probes desta sessão.');
     } catch {
-      return { success: true, data: { available: [], upcoming: [] }, available: [], upcoming: [] };
+      return { success: false, error: 'Não foi possível carregar Maintenance Probes.', data: { available: [], upcoming: [] }, available: [], upcoming: [] };
     }
   },
 

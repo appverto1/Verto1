@@ -596,6 +596,24 @@ export function mapMaintenancePanelResponse(
   sections.regressionRisk = (Array.isArray(panel.regressionRisk) ? panel.regressionRisk : []).map((row: any) => normalizePanelRow(row, 'regressionRisk'));
   sections.technical = (Array.isArray(panel.technicalIssues) ? panel.technicalIssues : []).map((row: any) => normalizePanelRow(row, 'technical'));
 
+  const operationalTargetIds = new Set(
+    [
+      ...sections.maintenanceSkills,
+      ...sections.scheduled,
+      ...sections.waitingNextSession,
+      ...sections.overdue,
+      ...sections.regressionRisk,
+    ]
+      .map((row: any) => normalizeText(row?.targetId || row?.target_id))
+      .filter((targetId: string) => isPersistedUuid(targetId))
+  );
+  if (operationalTargetIds.size > 0) {
+    sections.eligibleSkills = sections.eligibleSkills.filter((row: any) => {
+      const targetId = normalizeText(row?.targetId || row?.target_id);
+      return !targetId || !operationalTargetIds.has(targetId);
+    });
+  }
+
   const summary = {
     eligibleSkills: sections.eligibleSkills.length,
     maintenanceSkills: sections.maintenanceSkills.length,

@@ -5211,12 +5211,31 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
   const peiMaintenanceUnavailableKeys = useMemo(() => {
     const keys = new Set<string>();
-    [...peiMaintenanceScheduledRows, ...peiMaintenanceWaitingRows].forEach((row: any) => {
+    [
+      ...peiMaintenanceScheduledRows,
+      ...peiMaintenanceWaitingRows,
+      ...(peiMaintenanceTargetFirstGroups.regressionRisk || []),
+      ...(peiMaintenanceTargetFirstGroups.maintenanceSkills || [])
+    ].forEach((row: any) => {
       const key = getPeiMaintenanceDisplayKey(row);
       if (key) keys.add(key);
     });
     return keys;
-  }, [peiMaintenanceScheduledRows, peiMaintenanceWaitingRows]);
+  }, [peiMaintenanceScheduledRows, peiMaintenanceTargetFirstGroups, peiMaintenanceWaitingRows]);
+
+  const peiMaintenanceUnavailableTargetIds = useMemo(() => {
+    const targetIds = new Set<string>();
+    [
+      ...peiMaintenanceScheduledRows,
+      ...peiMaintenanceWaitingRows,
+      ...(peiMaintenanceTargetFirstGroups.regressionRisk || []),
+      ...(peiMaintenanceTargetFirstGroups.maintenanceSkills || [])
+    ].forEach((row: any) => {
+      const targetId = getPeiMaintenancePersistedId(row?.targetId || row?.target_id || row?.aba_target_id || row?.abaTargetId);
+      if (targetId) targetIds.add(targetId);
+    });
+    return targetIds;
+  }, [peiMaintenanceScheduledRows, peiMaintenanceTargetFirstGroups, peiMaintenanceWaitingRows]);
 
   const peiMaintenanceEligibleRows = useMemo(() => {
     const panelEligibleRows = Array.isArray(peiMaintenanceTargetFirstGroups.eligibleSkills)
@@ -5282,9 +5301,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     );
     return rows.filter((row: any) => {
       const key = getPeiMaintenanceDisplayKey(row);
+      const targetId = getPeiMaintenancePersistedId(row?.targetId || row?.target_id || row?.aba_target_id || row?.abaTargetId);
+      if (targetId && peiMaintenanceUnavailableTargetIds.has(targetId)) return false;
       return !key || !peiMaintenanceUnavailableKeys.has(key);
     });
-  }, [history, patient?.id, patientCategory, peiMaintenanceHydratedGoals, peiMaintenanceTargetFirstGroups.eligibleSkills, peiMaintenanceUnavailableKeys, planProtocolCatalog, protocols]);
+  }, [history, patient?.id, patientCategory, peiMaintenanceHydratedGoals, peiMaintenanceTargetFirstGroups.eligibleSkills, peiMaintenanceUnavailableKeys, peiMaintenanceUnavailableTargetIds, planProtocolCatalog, protocols]);
 
   const peiGeneralizationRows = useMemo(() => {
     const maintainedRows = peiMaintenanceRows.filter((row: any) => row.isMaintained);

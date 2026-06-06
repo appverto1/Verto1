@@ -21753,6 +21753,10 @@ async function startServer() {
     'DUE_TODAY',
     'OVERDUE',
     'IN_MAINTENANCE',
+    'AVAILABLE_IN_SESSION',
+    'NEEDS_REVIEW',
+    'WATCH',
+    'REGRESSION_RISK',
     'COMPLETED',
     'MISSED',
     'CANCELLED',
@@ -21770,6 +21774,10 @@ async function startServer() {
     'DUE_TODAY',
     'OVERDUE',
     'IN_MAINTENANCE',
+    'AVAILABLE_IN_SESSION',
+    'NEEDS_REVIEW',
+    'WATCH',
+    'REGRESSION_RISK',
     'MISSED'
   ];
   const ABA_MAINTENANCE_PROBE_STATUSES = new Set(['MAINTAINED', 'WATCH', 'REGRESSION_RISK']);
@@ -31643,8 +31651,12 @@ async function startServer() {
         });
       };
       const isMaintenanceClinical = (row: any) => ['MAINTENANCE', 'MAINTAINED'].includes(targetClinicalStatus(row));
-      const eligibleSourceCards = [...targetCards, ...peiTargetCards].filter((row: any) => !row?.needsTargetReview && !isMaintenanceClinical(row));
-      const maintenanceSourceCards = [...targetCards, ...peiTargetCards].filter((row: any) => !row?.needsTargetReview && isMaintenanceClinical(row));
+      const rowTargetHasActiveSchedule = (row: any) => {
+        const targetId = sanitizeString(row?.targetId || row?.target_id, 180);
+        return Boolean(isUuid(targetId) && activeScheduleByTargetId.has(targetId));
+      };
+      const eligibleSourceCards = [...targetCards, ...peiTargetCards].filter((row: any) => !row?.needsTargetReview && !rowTargetHasActiveSchedule(row) && !isMaintenanceClinical(row));
+      const maintenanceSourceCards = [...targetCards, ...peiTargetCards].filter((row: any) => !row?.needsTargetReview && !rowTargetHasActiveSchedule(row) && isMaintenanceClinical(row));
       const validScheduleCards = scheduleCards.filter((card: any) => !card?.needsTargetReview);
       const scheduledProbes: any[] = [];
       const waitingNextSession: any[] = [];

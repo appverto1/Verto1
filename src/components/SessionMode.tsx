@@ -581,7 +581,7 @@ export const SessionMode = ({
   const [records, setRecords] = useState<SessionRecord[]>([]);
   const [sessionLiveSummary, setSessionLiveSummary] = useState<any>(null);
   const [maintenanceOverview, setMaintenanceOverview] = useState<any>({ schedules: [], probeResults: [], alerts: [], summary: null });
-  const [sessionMaintenanceProbes, setSessionMaintenanceProbes] = useState<any>({ available: [], upcoming: [], loaded: false });
+  const [sessionMaintenanceProbes, setSessionMaintenanceProbes] = useState<any>({ available: [], upcoming: [], loaded: false, error: '' });
   const [maintenanceScheduleModalGoal, setMaintenanceScheduleModalGoal] = useState<any>(null);
   const [maintenanceScheduleMode, setMaintenanceScheduleMode] = useState('DEFAULT_SEQUENCE');
   const [maintenanceCustomDate, setMaintenanceCustomDate] = useState('');
@@ -918,21 +918,23 @@ export const SessionMode = ({
     let cancelled = false;
     const loadSessionMaintenanceProbes = async () => {
       if (!patientId || !sessionId || sessionId.startsWith('draft-') || sessionCompleted) {
-        setSessionMaintenanceProbes({ available: [], upcoming: [], loaded: false });
+        setSessionMaintenanceProbes({ available: [], upcoming: [], loaded: false, error: '' });
         return;
       }
       try {
         const result = await dataService.getAbaSessionMaintenanceProbes(sessionId);
         const payload = result?.data || result || {};
+        const errorMessage = result?.success === false ? (result?.error || 'Não foi possível carregar Maintenance Probes.') : '';
         if (!cancelled) {
           setSessionMaintenanceProbes({
-            available: Array.isArray(payload?.available) ? payload.available : [],
-            upcoming: Array.isArray(payload?.upcoming) ? payload.upcoming : [],
-            loaded: true
+            available: result?.success === false ? [] : Array.isArray(payload?.available) ? payload.available : [],
+            upcoming: result?.success === false ? [] : Array.isArray(payload?.upcoming) ? payload.upcoming : [],
+            loaded: true,
+            error: errorMessage
           });
         }
       } catch {
-        if (!cancelled) setSessionMaintenanceProbes({ available: [], upcoming: [], loaded: true });
+        if (!cancelled) setSessionMaintenanceProbes({ available: [], upcoming: [], loaded: true, error: 'Não foi possível carregar Maintenance Probes.' });
       }
     };
     void loadSessionMaintenanceProbes();
@@ -3327,21 +3329,34 @@ export const SessionMode = ({
       .slice(0, 6);
   }, [maintenanceProbeRows]);
 
+  const maintenanceSessionSummaryRows = useMemo(() => {
+    return maintenanceProbeRows
+      .filter((row: any) => (
+        row.hasAvailableMaintenanceProbe ||
+        row.totalTrials > 0 ||
+        Boolean(row.activeAlert || row.lastResult) ||
+        row.consecutiveFailureCount > 0
+      ))
+      .slice(0, 3);
+  }, [maintenanceProbeRows]);
+
   const refreshSessionMaintenanceProbes = async () => {
     if (!patientId || !sessionId || sessionId.startsWith('draft-') || sessionCompleted) {
-      setSessionMaintenanceProbes({ available: [], upcoming: [], loaded: false });
+      setSessionMaintenanceProbes({ available: [], upcoming: [], loaded: false, error: '' });
       return;
     }
     try {
       const result = await dataService.getAbaSessionMaintenanceProbes(sessionId);
       const payload = result?.data || result || {};
+      const errorMessage = result?.success === false ? (result?.error || 'Não foi possível carregar Maintenance Probes.') : '';
       setSessionMaintenanceProbes({
-        available: Array.isArray(payload?.available) ? payload.available : [],
-        upcoming: Array.isArray(payload?.upcoming) ? payload.upcoming : [],
-        loaded: true
+        available: result?.success === false ? [] : Array.isArray(payload?.available) ? payload.available : [],
+        upcoming: result?.success === false ? [] : Array.isArray(payload?.upcoming) ? payload.upcoming : [],
+        loaded: true,
+        error: errorMessage
       });
     } catch {
-      setSessionMaintenanceProbes({ available: [], upcoming: [], loaded: true });
+      setSessionMaintenanceProbes({ available: [], upcoming: [], loaded: true, error: 'Não foi possível carregar Maintenance Probes.' });
     }
   };
 
@@ -5546,6 +5561,12 @@ export const SessionMode = ({
             </section>
           )}
 
+          {sessionMaintenanceProbes?.error && (
+            <section className="rounded-[24px] sm:rounded-[28px] border border-slate-200 bg-white p-4 sm:p-5 shadow-xl shadow-slate-900/5">
+              <p className="text-sm font-bold text-slate-700">Não foi possível carregar Maintenance Probes.</p>
+            </section>
+          )}
+
           {pendingMaintenanceProbeItems.length > 0 && (
             <section className="rounded-[24px] sm:rounded-[28px] border border-amber-100 bg-white p-4 sm:p-5 shadow-xl shadow-amber-900/5">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -5578,24 +5599,13 @@ export const SessionMode = ({
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-500">Maintenance Probe agendada</p>
-                  <h2 className="text-lg font-bold text-gray-900">Sondagens futuras deste paciente</h2>
-                  <p className="mt-1 text-xs font-semibold text-slate-500">Ha Maintenance Probe agendada para data futura.</p>
+                  <h2 className="text-lg font-bold text-gray-900">Há Maintenance Probe agendada para data futura.</h2>
                 </div>
-              </div>
-              <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2">
-                {upcomingMaintenanceProbeItems.map((row: any) => (
-                  <div key={`upcoming-${row.id}`} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                    <p className="text-sm font-bold text-gray-900">{row.name}</p>
-                    {row.contextLabel && <p className="mt-1 text-xs text-gray-500">{row.contextLabel}</p>}
-                    <p className="mt-1 text-xs font-semibold text-slate-600">{row.upcomingSchedule ? formatMaintenanceDueLabel(row.upcomingSchedule) : 'Agendada para outra consulta'}</p>
-                    <p className="mt-1 text-xs text-gray-500">Disponivel somente na data ou consulta vinculada.</p>
-                  </div>
-                ))}
               </div>
             </section>
           )}
 
-          {maintenanceProbeRows.length > 0 && (
+          {maintenanceSessionSummaryRows.length > 0 && (
             <section className="rounded-[24px] sm:rounded-[28px] border border-amber-100 bg-white p-4 sm:p-5 shadow-xl shadow-amber-900/5">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <div>
@@ -5607,7 +5617,7 @@ export const SessionMode = ({
                 </span>
               </div>
               <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-3">
-                {maintenanceProbeRows.slice(0, 3).map((row: any) => (
+                {maintenanceSessionSummaryRows.map((row: any) => (
                   <div key={row.id} className="rounded-2xl border border-amber-100 bg-[#FFFDF7] p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
@@ -5650,7 +5660,8 @@ export const SessionMode = ({
               const masteryRow = teachingMasteryRows.find((row) => String(row.id || row.targetId || row.name) === goalKey || row.name === goal.name);
               const maintenanceInfo = getGoalMaintenanceInfo(goal);
               const maintenanceProbeCanRunNow = Boolean(maintenanceInfo.hasAvailableMaintenanceProbe);
-              const maintenanceDisplay = maintenanceInfo.isMaintenanceTarget ? resolveMaintenanceTargetDisplay({
+              const showMaintenanceOperationalBlock = Boolean(maintenanceProbeCanRunNow || maintenanceProbeActiveForGoal);
+              const maintenanceDisplay = showMaintenanceOperationalBlock ? resolveMaintenanceTargetDisplay({
                 target: goal,
                 schedule: maintenanceInfo.nextSchedule || maintenanceInfo.lastResult || maintenanceInfo.activeAlert || {
                   target_id: goalTargetId(goal) || maintenanceTargetKey || null,
@@ -5688,7 +5699,7 @@ export const SessionMode = ({
                     )}
                   </div>
 
-                  {maintenanceInfo.isMaintenanceTarget && (
+                  {showMaintenanceOperationalBlock && (
                     <div className="mb-5 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3">
                       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                         <div>
@@ -5726,24 +5737,6 @@ export const SessionMode = ({
                           )}
                         </div>
                         <div className="flex flex-wrap gap-2">
-                          {!maintenanceInfo.nextSchedule && (
-                            <>
-                              <button
-                                type="button"
-                                onClick={() => openMaintenanceScheduleModal(goal)}
-                                className="inline-flex min-h-[38px] w-fit items-center justify-center rounded-full bg-white px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-amber-700 shadow-sm transition-all active:scale-95"
-                              >
-                                Agendar probe
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleScheduleMaintenanceForNextSession(goal)}
-                                className="inline-flex min-h-[38px] w-fit items-center justify-center rounded-full bg-white px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-amber-700 shadow-sm transition-all active:scale-95"
-                              >
-                                Agendar para proxima sessao
-                              </button>
-                            </>
-                          )}
                           {maintenanceProbeCanRunNow && (
                             <button
                               type="button"
