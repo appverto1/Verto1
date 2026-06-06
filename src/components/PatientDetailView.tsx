@@ -5109,55 +5109,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       ''
     );
 
-  const peiMaintenanceHydratedGoals = useMemo(() => {
-    const byComposite = new Map<string, any>();
-    const duplicateComposite = new Set<string>();
-    const byName = new Map<string, any>();
-    const duplicateName = new Set<string>();
-    const register = (map: Map<string, any>, duplicates: Set<string>, key: string, target: any) => {
-      if (!key) return;
-      if (map.has(key)) {
-        duplicates.add(key);
-        map.delete(key);
-        return;
-      }
-      if (!duplicates.has(key)) map.set(key, target);
-    };
-    peiMaintenanceLinkableTargets.forEach((target: any) => {
-      const id = getPeiMaintenancePersistedId(target?.id || target?.target_id || target?.targetId || target?.aba_target_id || target?.abaTargetId);
-      if (!id) return;
-      const nameKey = normalizePeiMaintenanceMatchKey(getPeiMaintenanceMatchName(target));
-      const protocolKey = normalizePeiMaintenanceMatchKey(getPeiMaintenanceProtocolName(target));
-      const domainKey = normalizePeiMaintenanceMatchKey(getPeiMaintenanceDomainName(target));
-      register(byComposite, duplicateComposite, [nameKey, protocolKey, domainKey].filter(Boolean).join('|'), target);
-      register(byName, duplicateName, nameKey, target);
-    });
-    return peiGoals.map((goal: any) => {
-      const currentId = getPeiMaintenancePersistedId(goal?.target_id || goal?.targetId || goal?.aba_target_id || goal?.abaTargetId || goal?.id);
-      if (currentId) return { ...goal, target_id: currentId, targetId: currentId };
-      const nameKey = normalizePeiMaintenanceMatchKey(getPeiMaintenanceMatchName(goal));
-      const protocolKey = normalizePeiMaintenanceMatchKey(getPeiMaintenanceProtocolName(goal));
-      const domainKey = normalizePeiMaintenanceMatchKey(getPeiMaintenanceDomainName(goal));
-      const compositeKey = [nameKey, protocolKey, domainKey].filter(Boolean).join('|');
-      const match = (compositeKey && !duplicateComposite.has(compositeKey) ? byComposite.get(compositeKey) : null) ||
-        (nameKey && !duplicateName.has(nameKey) ? byName.get(nameKey) : null);
-      const matchId = getPeiMaintenancePersistedId(match?.id || match?.target_id || match?.targetId || match?.aba_target_id || match?.abaTargetId);
-      if (!matchId) return goal;
-      return {
-        ...goal,
-        target_id: matchId,
-        targetId: matchId,
-        target_name: goal?.target_name || goal?.targetName || goal?.name || match?.name || match?.target_name || match?.targetName,
-        targetName: goal?.targetName || goal?.target_name || goal?.name || match?.name || match?.targetName || match?.target_name,
-        protocol_title: goal?.protocol_title || goal?.protocolTitle || match?.protocol_title || match?.protocolTitle || match?.protocolName,
-        protocolTitle: goal?.protocolTitle || goal?.protocol_title || match?.protocolTitle || match?.protocol_title || match?.protocolName,
-        domain_name: goal?.domain_name || goal?.domainName || match?.domain_name || match?.domainName,
-        domainName: goal?.domainName || goal?.domain_name || match?.domainName || match?.domain_name,
-        clinical_status: goal?.clinical_status || goal?.clinicalStatus || match?.clinical_status || match?.clinicalStatus,
-        clinicalStatus: goal?.clinicalStatus || goal?.clinical_status || match?.clinicalStatus || match?.clinical_status
-      };
-    });
-  }, [peiGoals, peiMaintenanceLinkableTargets]);
+  const peiMaintenanceHydratedGoals = useMemo(() => (
+    peiGoals.map((goal: any) => {
+      const currentId = getPeiMaintenancePersistedId(goal?.target_id || goal?.targetId || goal?.aba_target_id || goal?.abaTargetId);
+      return currentId ? { ...goal, target_id: currentId, targetId: currentId } : goal;
+    })
+  ), [peiGoals]);
 
   const canManagePeiMaintenance = useMemo(() => {
     const role = String(userRole || resolvedClinicContext?.role || clinicContext?.role || '').toLowerCase();
@@ -5214,10 +5171,29 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const getPeiMaintenanceDisplayKey = (row: any) => {
     const persistedId = getPeiMaintenancePersistedId(row?.targetId || row?.target_id || row?.aba_target_id || row?.abaTargetId);
     if (persistedId) return `target:${persistedId}`;
-    const nameKey = normalizePeiMaintenanceMatchKey(getPeiMaintenanceMatchName(row));
-    const protocolKey = normalizePeiMaintenanceMatchKey(getPeiMaintenanceProtocolName(row));
-    const domainKey = normalizePeiMaintenanceMatchKey(getPeiMaintenanceDomainName(row));
-    return [nameKey, protocolKey, domainKey].filter(Boolean).join('|');
+    const scheduleId = getPeiMaintenancePersistedId(
+      row?.scheduleId ||
+      row?.schedule_id ||
+      row?.nextSchedule?.id ||
+      row?.nextSchedule?.schedule_id ||
+      row?.activeSchedule?.id ||
+      row?.activeSchedule?.schedule_id ||
+      row?.schedule?.id ||
+      row?.schedule?.schedule_id
+    );
+    if (scheduleId) return `schedule:${scheduleId}`;
+    const clinicalSourceId = String(
+      row?.peiGoalId ||
+      row?.goalId ||
+      row?.goal_id ||
+      row?.source?.peiGoalId ||
+      row?.source?.goalId ||
+      row?.source?.goal_id ||
+      row?.source?.id ||
+      row?.key ||
+      ''
+    ).trim();
+    return clinicalSourceId ? `clinical:${clinicalSourceId}` : '';
   };
 
   const peiMaintenanceScheduledRows = useMemo(
@@ -5247,17 +5223,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       ? peiMaintenanceTargetFirstGroups.eligibleSkills
       : [];
     const panelByTargetId = new Map<string, any>();
-    const panelByComposite = new Map<string, any>();
-    const panelByName = new Map<string, any>();
     panelEligibleRows.forEach((row: any) => {
       const targetId = getPeiMaintenancePersistedId(row?.targetId || row?.target_id || row?.aba_target_id || row?.abaTargetId);
-      const nameKey = normalizePeiMaintenanceMatchKey(getPeiMaintenanceMatchName(row));
-      const protocolKey = normalizePeiMaintenanceMatchKey(getPeiMaintenanceProtocolName(row));
-      const domainKey = normalizePeiMaintenanceMatchKey(getPeiMaintenanceDomainName(row));
-      const compositeKey = [nameKey, protocolKey, domainKey].filter(Boolean).join('|');
       if (targetId && !panelByTargetId.has(targetId)) panelByTargetId.set(targetId, row);
-      if (compositeKey && !panelByComposite.has(compositeKey)) panelByComposite.set(compositeKey, row);
-      if (nameKey && !panelByName.has(nameKey)) panelByName.set(nameKey, row);
     });
     const localRows = peiMaintenanceHydratedGoals
       .map((goal: any, index: number) => {
@@ -5267,14 +5235,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         const name = safeDisplayValue(getPeiMaintenanceMatchName(goal), 'Habilidade sem nome');
         const protocol = safeDisplayValue(getPeiMaintenanceProtocolName(goal), 'Sem protocolo informado');
         const domain = safeDisplayValue(getPeiMaintenanceDomainName(goal), 'Sem domínio informado');
-        const nameKey = normalizePeiMaintenanceMatchKey(name);
-        const compositeKey = [name, protocol, domain].map(normalizePeiMaintenanceMatchKey).filter(Boolean).join('|');
-        const panelMatch = (localTargetId ? panelByTargetId.get(localTargetId) : null) || panelByComposite.get(compositeKey) || panelByName.get(nameKey) || null;
+        const panelMatch = localTargetId ? panelByTargetId.get(localTargetId) || null : null;
         const panelTargetId = getPeiMaintenancePersistedId(panelMatch?.targetId || panelMatch?.target_id || panelMatch?.aba_target_id || panelMatch?.abaTargetId);
         const targetId = localTargetId || panelTargetId;
         return {
           ...(panelMatch || {}),
-          key: `goal:${goalId || index}:${targetId || compositeKey || index}`,
+          key: `goal:${goalId || index}:${targetId || index}`,
           targetId,
           target_id: targetId || null,
           goalId,
@@ -5511,9 +5477,16 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return isUuidLike(id) ? id : '';
   };
 
-  const getPeiMaintenanceTargetId = (row: any, extraTargets: any[] = []) => {
-    const rowIdCanBeTarget = !row?.scheduleId && !row?.schedule_id && !row?.nextSchedule && !row?.activeSchedule && !row?.schedule && row?.hasRealTarget !== false;
-    const explicitId = getPersistedUuid(
+  const getPeiMaintenanceExplicitTargetId = (row: any) => {
+    const rowIdCanBeTarget = Boolean(
+      row?.hasRealTarget === true &&
+      !row?.scheduleId &&
+      !row?.schedule_id &&
+      !row?.nextSchedule &&
+      !row?.activeSchedule &&
+      !row?.schedule
+    );
+    return getPersistedUuid(
       row?.targetId ||
       row?.target_id ||
       row?.aba_target_id ||
@@ -5539,55 +5512,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       row?.schedule?.targetId ||
       (rowIdCanBeTarget ? row?.id : '')
     );
-    if (explicitId) return explicitId;
-    const nameKey = normalizePeiMaintenanceMatchKey(getPeiMaintenanceMatchName(row));
-    const protocolKey = normalizePeiMaintenanceMatchKey(getPeiMaintenanceProtocolName(row));
-    const domainKey = normalizePeiMaintenanceMatchKey(getPeiMaintenanceDomainName(row));
-    const hasClinicalMatchContext = Boolean(protocolKey || domainKey);
-    const compositeKey = hasClinicalMatchContext ? [nameKey, protocolKey, domainKey].filter(Boolean).join('|') : '';
-    const matches = new Map<string, any>();
-    const panelRowsForTargetResolution = [
-      ...(peiMaintenanceTargetFirstGroups.eligibleSkills || []),
-      ...(peiMaintenanceTargetFirstGroups.scheduled || []),
-      ...(peiMaintenanceTargetFirstGroups.waitingNextSession || []),
-      ...(peiMaintenanceTargetFirstGroups.overdue || [])
-    ];
-    [...panelRowsForTargetResolution, ...extraTargets, ...peiMaintenanceLinkableTargets, ...peiMaintenanceHydratedGoals].forEach((target: any) => {
-      const id = getPersistedUuid(
-        target?.id ||
-        target?.target_id ||
-        target?.targetId ||
-        target?.aba_target_id ||
-        target?.abaTargetId ||
-        target?.source?.target_id ||
-        target?.source?.targetId ||
-        target?.source?.aba_target_id ||
-        target?.source?.abaTargetId ||
-        target?.goal?.target_id ||
-        target?.goal?.targetId ||
-        target?.goal?.aba_target_id ||
-        target?.goal?.abaTargetId ||
-        target?.nextSchedule?.target_id ||
-        target?.nextSchedule?.targetId ||
-        target?.activeSchedule?.target_id ||
-        target?.activeSchedule?.targetId ||
-        target?.schedule?.target_id ||
-        target?.schedule?.targetId
-      );
-      if (!id || matches.has(id)) return;
-      const targetNameKey = normalizePeiMaintenanceMatchKey(getPeiMaintenanceMatchName(target));
-      const targetProtocolKey = normalizePeiMaintenanceMatchKey(getPeiMaintenanceProtocolName(target));
-      const targetDomainKey = normalizePeiMaintenanceMatchKey(getPeiMaintenanceDomainName(target));
-      const targetCompositeKey = [targetNameKey, targetProtocolKey, targetDomainKey].filter(Boolean).join('|');
-      const compositeMatches = compositeKey && targetCompositeKey === compositeKey;
-      const nameOnlyMatches = nameKey && targetNameKey === nameKey;
-      if (compositeMatches || nameOnlyMatches) matches.set(id, target);
-    });
-    return matches.size === 1 ? Array.from(matches.keys())[0] : '';
   };
 
-  const buildPeiMaintenanceScheduleSelection = (row: any, extraTargets: any[] = []) => {
-    const targetId = getPeiMaintenanceTargetId(row, extraTargets);
+  const getPeiMaintenanceTargetId = (row: any, _extraTargets: any[] = []) => getPeiMaintenanceExplicitTargetId(row);
+
+  const buildPeiMaintenanceScheduleSelection = (row: any, _extraTargets: any[] = []) => {
+    const targetId = getPeiMaintenanceExplicitTargetId(row);
     if (!targetId) return null;
     const targetName = safeDisplayValue(getPeiMaintenanceMatchName(row), 'Habilidade em manutenção');
     const protocolName = safeDisplayValue(getPeiMaintenanceProtocolName(row), '');
@@ -5691,7 +5621,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         items: exists ? items.map((item: any) => getPersistedUuid(item?.id || item?.targetId || item?.target_id) === ensuredTargetId ? { ...item, ...nextTarget } : item) : [nextTarget, ...items]
       };
     });
-    return buildPeiMaintenanceScheduleSelection({ ...(row || {}), targetId: ensuredTargetId, target_id: ensuredTargetId, target: nextTarget }, [nextTarget]);
+    return buildPeiMaintenanceScheduleSelection({ ...(row || {}), targetId: ensuredTargetId, target_id: ensuredTargetId, target: nextTarget });
   };
 
   const logPeiMaintenanceScheduleDebug = (reasonCode: string, details: Record<string, any> = {}) => {
@@ -5996,20 +5926,27 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       setPeiMaintenanceActionKey(actionKey);
       setPeiMaintenancePanelMessage('');
       try {
-        const result = await dataService.getAbaLinkableTargetsForMaintenance(String(patient.id), { limit: 200 });
-        const items = Array.isArray(result?.data) ? result.data : [];
-        setPeiMaintenanceLinkableTargetsState({
-          loading: false,
-          error: result?.success === false ? result?.message || result?.error || 'Nao foi possivel carregar habilidades do PEI.' : '',
-          items,
-          loadedFor: String(patient.id)
-        });
-        selectedSkill = buildPeiMaintenanceScheduleSelection(row, items);
-        if (!selectedSkill) {
-          selectedSkill = await ensurePeiMaintenanceScheduleSelection(row);
+        selectedSkill = await ensurePeiMaintenanceScheduleSelection(row);
+        if (selectedSkill) {
+          try {
+            const result = await dataService.getAbaLinkableTargetsForMaintenance(String(patient.id), { limit: 200 });
+            setPeiMaintenanceLinkableTargetsState({
+              loading: false,
+              error: result?.success === false ? result?.message || result?.error || 'Nao foi possivel carregar habilidades do PEI.' : '',
+              items: Array.isArray(result?.data) ? result.data : [],
+              loadedFor: String(patient.id)
+            });
+          } catch {
+            setPeiMaintenanceLinkableTargetsState((prev: any) => ({
+              ...prev,
+              loading: false,
+              error: prev?.items?.length ? '' : 'Nao foi possivel carregar habilidades do PEI.',
+              loadedFor: String(patient.id)
+            }));
+          }
         }
       } catch {
-        setPeiMaintenanceLinkableTargetsState({ loading: false, error: 'Nao foi possivel carregar habilidades do PEI.', items: [], loadedFor: String(patient.id) });
+        selectedSkill = null;
       } finally {
         setPeiMaintenanceActionKey('');
       }
@@ -6039,13 +5976,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
   const handlePeiScheduleModalSave = async () => {
     let row = peiMaintenanceScheduleRow;
-    let targetId = getPersistedUuid(row?.targetId || row?.target_id) || getPeiMaintenanceTargetId(row);
+    let targetId = getPeiMaintenanceExplicitTargetId(row);
     if (!targetId && row) {
       const ensuredSelection = await ensurePeiMaintenanceScheduleSelection(row);
       if (ensuredSelection) {
         row = ensuredSelection;
         setPeiMaintenanceScheduleRow(ensuredSelection);
-        targetId = getPersistedUuid(ensuredSelection?.targetId || ensuredSelection?.target_id) || getPeiMaintenanceTargetId(ensuredSelection);
+        targetId = getPeiMaintenanceExplicitTargetId(ensuredSelection);
       }
     }
     if (!targetId || !patient?.id) {
@@ -6116,13 +6053,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   };
 
   const handlePeiScheduleNextSession = async (row: any) => {
-    let targetId = getPeiMaintenanceTargetId(row);
+    let targetId = getPeiMaintenanceExplicitTargetId(row);
     let selectedRow = row;
     if (!targetId) {
       const ensuredSelection = await ensurePeiMaintenanceScheduleSelection(row);
       if (ensuredSelection) {
         selectedRow = ensuredSelection;
-        targetId = getPeiMaintenanceTargetId(ensuredSelection);
+        targetId = getPeiMaintenanceExplicitTargetId(ensuredSelection);
       }
     }
     if (!targetId) {

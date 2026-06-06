@@ -44,19 +44,15 @@ export const normalizeRegularAbaTrialType = (value: unknown, fallback: unknown =
 };
 
 export const getMaintenanceTargetKey = (target: any) => {
-  const id = String(target?.id || target?.target_id || target?.targetId || '').trim();
-  if (id) return id;
-  return String(target?.name || target?.target_name || target?.targetName || '').trim();
+  return String(target?.target_id || target?.targetId || target?.aba_target_id || target?.abaTargetId || target?.id || '').trim();
 };
 
 const targetNameFrom = (target: any) =>
   String(target?.name || target?.target_name || target?.targetName || '').trim();
 
-const targetMatches = (row: any, targetId: string, targetName: string) => {
-  const rowTargetId = String(row?.target_id || row?.targetId || row?.target || '').trim();
-  const rowTargetName = String(row?.target_name || row?.targetName || row?.raw_payload?.targetName || row?.rawPayload?.targetName || '').trim();
-  if (targetId && rowTargetId && rowTargetId === targetId) return true;
-  return Boolean(targetName && rowTargetName && rowTargetName === targetName);
+const targetMatches = (row: any, targetId: string) => {
+  const rowTargetId = String(row?.target_id || row?.targetId || row?.target?.id || row?.target || '').trim();
+  return Boolean(targetId && rowTargetId && rowTargetId === targetId);
 };
 
 const scheduleDueDate = (schedule: any) =>
@@ -75,11 +71,10 @@ export function getActiveMaintenanceProbeForTarget(input: {
 }): ActiveMaintenanceProbeForTarget | null {
   const targetId = String(input.targetId || '').trim();
   const targetName = String(input.targetName || '').trim();
-  const targetKey = targetId || targetName;
-  if (!targetKey) return null;
+  if (!targetId) return null;
 
   const manualActivations = input.manualActivations || {};
-  const manualActivation = manualActivations[targetKey] || (targetId ? manualActivations[targetId] : undefined) || (targetName ? manualActivations[targetName] : undefined);
+  const manualActivation = manualActivations[targetId];
   if (manualActivation) {
     return {
       active: true,
@@ -98,7 +93,7 @@ export function getActiveMaintenanceProbeForTarget(input: {
   const activeAppointmentId = String(input.activeAppointmentId || '').trim();
   const sessionId = String(input.sessionId || '').trim();
   const targetSchedules = (Array.isArray(input.schedules) ? input.schedules : [])
-    .filter((schedule) => targetMatches(schedule, targetId, targetName))
+    .filter((schedule) => targetMatches(schedule, targetId))
     .filter(isActiveMaintenanceSchedule);
   const availability = resolveMaintenanceProbeAvailability(targetSchedules, {
     appointmentId: activeAppointmentId,
@@ -112,7 +107,6 @@ export function getActiveMaintenanceProbeForTarget(input: {
 
   const status = deriveMaintenanceScheduleStatus(schedule, now);
   const scheduleAppointmentId = String(schedule?.appointment_id || schedule?.appointmentId || '').trim();
-  const scheduleSessionId = String(schedule?.session_id || schedule?.sessionId || '').trim();
   return {
     active: true,
     targetId: targetId || String(schedule?.target_id || schedule?.targetId || '').trim() || null,
@@ -122,7 +116,7 @@ export function getActiveMaintenanceProbeForTarget(input: {
     dueDate: scheduleDueDate(schedule),
     linkedToSession: Boolean(
       (activeAppointmentId && scheduleAppointmentId && scheduleAppointmentId === activeAppointmentId) ||
-      (sessionId && scheduleSessionId && scheduleSessionId === sessionId)
+      (!scheduleAppointmentId && scheduleDueDate(schedule))
     ),
     manuallyActivated: false,
     schedule

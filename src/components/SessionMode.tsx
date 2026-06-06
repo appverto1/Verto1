@@ -165,8 +165,7 @@ const collectionOptions = [
   { key: 'dtt', label: 'DTT' },
   { key: 'net', label: 'NET' },
   { key: 'cold_probe', label: 'Cold Probe' },
-  { key: 'baseline_probe', label: 'Baseline Probe' },
-  { key: 'maintenance_probe', label: 'Maintenance Probe' }
+  { key: 'baseline_probe', label: 'Baseline Probe' }
 ];
 
 const behaviorMeasurementOptions = [
@@ -492,6 +491,48 @@ const isMaintenanceLikeGoal = (goal: any) => {
   return values.some((value) => ['completed', 'mastered', 'maintenance', 'maintained', 'ready_for_review', 'regression_risk'].includes(value));
 };
 
+const normalizeSessionMaintenanceProbeList = (items: any[]) => (Array.isArray(items) ? items : [])
+  .map((item: any) => {
+    const schedule = item?.schedule && typeof item.schedule === 'object' ? item.schedule : {};
+    const scheduleId = String(schedule?.id || schedule?.schedule_id || schedule?.scheduleId || item?.scheduleId || '').trim();
+    const targetId = String(schedule?.target_id || schedule?.targetId || schedule?.target?.id || item?.targetId || '').trim();
+    if (!scheduleId || !targetId) return null;
+    return {
+      ...schedule,
+      id: scheduleId,
+      schedule_id: schedule?.schedule_id || scheduleId,
+      scheduleId,
+      target_id: targetId,
+      targetId,
+      target_name: schedule?.target_name || schedule?.targetName || item?.targetName || schedule?.target?.name || null,
+      targetName: schedule?.targetName || schedule?.target_name || item?.targetName || schedule?.target?.name || null,
+      protocolTitle: schedule?.protocolTitle || schedule?.protocol_title || item?.protocolName || null,
+      protocol_title: schedule?.protocol_title || schedule?.protocolTitle || item?.protocolName || null,
+      domainName: schedule?.domainName || schedule?.domain_name || item?.domainName || null,
+      domain_name: schedule?.domain_name || schedule?.domainName || item?.domainName || null,
+      target_due_date: schedule?.target_due_date || schedule?.targetDueDate || schedule?.due_date || schedule?.dueDate || item?.dueDate || null,
+      targetDueDate: schedule?.targetDueDate || schedule?.target_due_date || schedule?.dueDate || schedule?.due_date || item?.dueDate || null,
+      scheduled_for: schedule?.scheduled_for || schedule?.scheduledFor || item?.appointmentStartAt || item?.dueDate || null,
+      scheduledFor: schedule?.scheduledFor || schedule?.scheduled_for || item?.appointmentStartAt || item?.dueDate || null,
+      appointment_id: schedule?.appointment_id || schedule?.appointmentId || item?.appointmentId || null,
+      appointmentId: schedule?.appointmentId || schedule?.appointment_id || item?.appointmentId || null,
+      appointmentStartAt: item?.appointmentStartAt || schedule?.appointmentStartAt || null,
+      availabilityReason: item?.availabilityReason || schedule?.availabilityReason || null,
+      status: schedule?.status || item?.status || null
+    };
+  })
+  .filter(Boolean);
+
+const mergeMaintenanceScheduleLists = (...lists: any[][]) => {
+  const byId = new Map<string, any>();
+  lists.flat().forEach((schedule: any) => {
+    const scheduleId = String(schedule?.id || schedule?.schedule_id || schedule?.scheduleId || '').trim();
+    if (!scheduleId) return;
+    if (!byId.has(scheduleId)) byId.set(scheduleId, schedule);
+  });
+  return Array.from(byId.values());
+};
+
 export const SessionMode = ({
   patient,
   onClose,
@@ -540,6 +581,7 @@ export const SessionMode = ({
   const [records, setRecords] = useState<SessionRecord[]>([]);
   const [sessionLiveSummary, setSessionLiveSummary] = useState<any>(null);
   const [maintenanceOverview, setMaintenanceOverview] = useState<any>({ schedules: [], probeResults: [], alerts: [], summary: null });
+  const [sessionMaintenanceProbes, setSessionMaintenanceProbes] = useState<any>({ available: [], upcoming: [], loaded: false });
   const [maintenanceScheduleModalGoal, setMaintenanceScheduleModalGoal] = useState<any>(null);
   const [maintenanceScheduleMode, setMaintenanceScheduleMode] = useState('DEFAULT_SEQUENCE');
   const [maintenanceCustomDate, setMaintenanceCustomDate] = useState('');
@@ -874,6 +916,33 @@ export const SessionMode = ({
 
   useEffect(() => {
     let cancelled = false;
+    const loadSessionMaintenanceProbes = async () => {
+      if (!patientId || !sessionId || sessionId.startsWith('draft-') || sessionCompleted) {
+        setSessionMaintenanceProbes({ available: [], upcoming: [], loaded: false });
+        return;
+      }
+      try {
+        const result = await dataService.getAbaSessionMaintenanceProbes(sessionId);
+        const payload = result?.data || result || {};
+        if (!cancelled) {
+          setSessionMaintenanceProbes({
+            available: Array.isArray(payload?.available) ? payload.available : [],
+            upcoming: Array.isArray(payload?.upcoming) ? payload.upcoming : [],
+            loaded: true
+          });
+        }
+      } catch {
+        if (!cancelled) setSessionMaintenanceProbes({ available: [], upcoming: [], loaded: true });
+      }
+    };
+    void loadSessionMaintenanceProbes();
+    return () => {
+      cancelled = true;
+    };
+  }, [patientId, sessionId, sessionCompleted]);
+
+  useEffect(() => {
+    let cancelled = false;
     const loadNextSessionPlanItems = async () => {
       if (!patientId || sessionCompleted) {
         setNextSessionPlanItems([]);
@@ -1072,13 +1141,25 @@ export const SessionMode = ({
     });
   };
 
-  const goalTargetId = (goal: any) => String(goal?.id || goal?.target_id || goal?.targetId || '').trim();
+  const goalTargetId = (goal: any) => String(goal?.target_id || goal?.targetId || goal?.aba_target_id || goal?.abaTargetId || goal?.id || '').trim();
   const goalTargetName = (goal: any) => String(goal?.name || goal?.target_name || goal?.targetName || '').trim();
+
+  const getAvailableMaintenanceProbeForTarget = (goal: any): ActiveMaintenanceProbeForTarget | null => resolveActiveMaintenanceProbeForTarget({
+    targetId: goalTargetId(goal),
+    targetName: goalTargetName(goal),
+    schedules: sessionId.startsWith('draft-') ? maintenanceSchedules : sessionAvailableMaintenanceProbeSchedules,
+    manualActivations: manualMaintenanceProbeTargets,
+    activeAppointmentId,
+    sessionId,
+    sessionClinicalDate,
+    timeZone: maintenanceTimeZone,
+    now: new Date(nowMs)
+  });
 
   const getActiveMaintenanceProbeForTarget = (goal: any): ActiveMaintenanceProbeForTarget | null => resolveActiveMaintenanceProbeForTarget({
     targetId: goalTargetId(goal),
     targetName: goalTargetName(goal),
-    schedules: maintenanceSchedules,
+    schedules: [],
     manualActivations: manualMaintenanceProbeTargets,
     activeAppointmentId,
     sessionId,
@@ -1345,12 +1426,9 @@ export const SessionMode = ({
   };
 
   const recordMatchesGoal = (record: SessionRecord, goal: any) => {
-    const goalId = String(goal?.id || goal?.target_id || goal?.targetId || '').trim();
-    const goalName = String(goal?.name || goal?.target_name || goal?.targetName || '').trim();
+    const goalId = goalTargetId(goal);
     const recordTargetId = String(record.targetId || '').trim();
-    const recordTargetName = String(record.targetName || record.title || '').trim();
-    if (goalId && recordTargetId && recordTargetId === goalId) return true;
-    return Boolean(goalName && recordTargetName && recordTargetName === goalName);
+    return Boolean(goalId && recordTargetId && recordTargetId === goalId);
   };
 
   const persistMaintenanceProbeResultForTrial = async (params: {
@@ -1365,6 +1443,16 @@ export const SessionMode = ({
     const goalId = goalTargetId(params.goal);
     const goalName = goalTargetName(params.goal) || 'Target';
     const activeProbe = params.activeProbe || getActiveMaintenanceProbeForTarget(params.goal);
+    const resolvedTargetId = goalId || String(activeProbe?.targetId || '').trim();
+    if (!resolvedTargetId) {
+      setSessionWarning('Nao foi possivel registrar Maintenance Probe sem habilidade identificada.');
+      showClinicalToast({
+        variant: 'error',
+        title: 'Habilidade nao identificada',
+        subtitle: 'Selecione uma habilidade com target real antes de registrar a sondagem.'
+      }, 'error');
+      return;
+    }
     const syntheticRecord: SessionRecord = {
       id: params.trialId,
       kind: 'trial',
@@ -1372,7 +1460,7 @@ export const SessionMode = ({
       detail: '',
       timestamp: params.timestamp,
       syncStatus: 'local',
-      targetId: goalId || null,
+      targetId: resolvedTargetId,
       targetName: goalName,
       trialOutcome: params.outcome,
       collectionType: 'maintenance_probe',
@@ -1393,15 +1481,15 @@ export const SessionMode = ({
     const accuracyPercent = totalTrials > 0 ? Math.round(((independentTrials + promptedTrials) / totalTrials) * 10000) / 100 : 0;
     const independencePercent = totalTrials > 0 ? Math.round((independentTrials / totalTrials) * 10000) / 100 : 0;
     const result = await dataService.saveAbaMaintenanceProbeResult({
-      id: `maintenance-${sessionId}-${goalId || goalName}`,
+      id: `maintenance-${sessionId}-${resolvedTargetId}`,
       organization_id: resolvedClinicId || undefined,
       organizationId: resolvedClinicId || undefined,
       clinic_id: resolvedClinicId || undefined,
       clinicId: resolvedClinicId || undefined,
       patient_id: patientId,
       patientId,
-      target_id: goalId || goalName,
-      targetId: goalId || goalName,
+      target_id: resolvedTargetId,
+      targetId: resolvedTargetId,
       target_name: goalName,
       targetName: goalName,
       maintenance_schedule_id: activeProbe?.scheduleId || activeMaintenanceScheduleId || undefined,
@@ -1441,22 +1529,6 @@ export const SessionMode = ({
     if (targetKey && activeProbe?.manuallyActivated) {
       delete nextManualActivations[targetKey];
       setManualMaintenanceProbeTargets(nextManualActivations);
-    }
-    const remainingSchedules = maintenanceSchedules.filter((schedule: any) => String(schedule?.id || '') !== String(activeProbe?.scheduleId || ''));
-    const remainingProbe = resolveActiveMaintenanceProbeForTarget({
-      targetId: goalId,
-      targetName: goalName,
-      schedules: remainingSchedules,
-      manualActivations: nextManualActivations,
-      activeAppointmentId,
-      sessionId,
-      now: new Date(nowMs)
-    });
-    if (remainingProbe && targetKey) {
-      setCollectionType('maintenance_probe');
-      setActiveMaintenanceProbeTargetId(targetKey);
-      setActiveMaintenanceScheduleId(remainingProbe.scheduleId || null);
-      return result;
     }
     setActiveMaintenanceProbeTargetId(null);
     setActiveMaintenanceScheduleId(null);
@@ -1758,7 +1830,7 @@ export const SessionMode = ({
 
   const activateMaintenanceProbeMode = (goal?: any) => {
     const targetKey = goal ? getMaintenanceTargetKey(goal) : '';
-    const activeProbe = goal ? getActiveMaintenanceProbeForTarget(goal) : null;
+    const activeProbe = goal ? getAvailableMaintenanceProbeForTarget(goal) : null;
     if (!goal || !activeProbe) {
       const info = goal ? getGoalMaintenanceInfo(goal) : null;
       const schedule = info?.upcomingSchedule || info?.nextSchedule || null;
@@ -3005,15 +3077,24 @@ export const SessionMode = ({
     });
   }, [activeSession?.startedAt, patientDisplayName, patientId, records, resolvedTherapistId, sessionClosureIssues, sessionEndPreviewAt, sessionId, sessionNote, therapistDisplayName]);
 
-  const maintenanceSchedules = Array.isArray(maintenanceOverview?.schedules) ? maintenanceOverview.schedules : [];
+  const overviewMaintenanceSchedules = Array.isArray(maintenanceOverview?.schedules) ? maintenanceOverview.schedules : [];
+  const sessionAvailableMaintenanceProbeSchedules = useMemo(() => (
+    normalizeSessionMaintenanceProbeList(sessionMaintenanceProbes?.available || [])
+  ), [sessionMaintenanceProbes]);
+  const sessionUpcomingMaintenanceProbeSchedules = useMemo(() => (
+    normalizeSessionMaintenanceProbeList(sessionMaintenanceProbes?.upcoming || [])
+  ), [sessionMaintenanceProbes]);
+  const maintenanceSchedules = useMemo(() => mergeMaintenanceScheduleLists(
+    sessionAvailableMaintenanceProbeSchedules,
+    sessionUpcomingMaintenanceProbeSchedules,
+    overviewMaintenanceSchedules
+  ), [overviewMaintenanceSchedules, sessionAvailableMaintenanceProbeSchedules, sessionUpcomingMaintenanceProbeSchedules]);
   const maintenanceProbeResults = Array.isArray(maintenanceOverview?.probeResults) ? maintenanceOverview.probeResults : [];
   const regressionAlerts = Array.isArray(maintenanceOverview?.alerts) ? maintenanceOverview.alerts : [];
 
-  const targetMatchesGoal = (row: any, goalId: string, goalName: string) => {
-    const rowTargetId = String(row?.target_id || row?.targetId || '').trim();
-    const rowTargetName = String(row?.target_name || row?.targetName || row?.raw_payload?.targetName || row?.rawPayload?.targetName || '').trim();
-    if (goalId && rowTargetId && rowTargetId === goalId) return true;
-    return Boolean(goalName && rowTargetName && rowTargetName === goalName);
+  const targetMatchesGoal = (row: any, goalId: string) => {
+    const rowTargetId = String(row?.target_id || row?.targetId || row?.target?.id || row?.schedule?.target_id || row?.schedule?.targetId || '').trim();
+    return Boolean(goalId && rowTargetId && rowTargetId === goalId);
   };
 
   const formatMaintenanceDueLabel = (schedule: any) => (
@@ -3031,27 +3112,45 @@ export const SessionMode = ({
   };
 
   const getGoalMaintenanceInfo = (goal: any) => {
-    const goalId = String(goal?.id || goal?.target_id || goal?.targetId || '').trim();
+    const goalId = goalTargetId(goal);
     const goalName = String(goal?.name || goal?.target_name || goal?.targetName || 'Meta').trim();
     const schedules = maintenanceSchedules
-      .filter((schedule: any) => targetMatchesGoal(schedule, goalId, goalName))
+      .filter((schedule: any) => targetMatchesGoal(schedule, goalId))
       .filter((schedule: any) => isPeiClinicalRowAfterProgressReset(goal, schedule))
       .sort((a: any, b: any) => new Date(a?.scheduled_for || a?.scheduledFor || a?.target_due_date || a?.targetDueDate || 0).getTime() - new Date(b?.scheduled_for || b?.scheduledFor || b?.target_due_date || b?.targetDueDate || 0).getTime());
+    const availableSchedulesForSession = sessionAvailableMaintenanceProbeSchedules
+      .filter((schedule: any) => targetMatchesGoal(schedule, goalId))
+      .filter((schedule: any) => isPeiClinicalRowAfterProgressReset(goal, schedule));
+    const upcomingSchedulesForSession = sessionUpcomingMaintenanceProbeSchedules
+      .filter((schedule: any) => targetMatchesGoal(schedule, goalId))
+      .filter((schedule: any) => isPeiClinicalRowAfterProgressReset(goal, schedule));
     const probeResults = maintenanceProbeResults
-      .filter((result: any) => targetMatchesGoal(result, goalId, goalName))
+      .filter((result: any) => targetMatchesGoal(result, goalId))
       .filter((result: any) => isPeiClinicalRowAfterProgressReset(goal, result))
       .sort((a: any, b: any) => new Date(b?.occurred_at || b?.occurredAt || 0).getTime() - new Date(a?.occurred_at || a?.occurredAt || 0).getTime());
     const alerts = regressionAlerts
-      .filter((alert: any) => targetMatchesGoal(alert, goalId, goalName))
+      .filter((alert: any) => targetMatchesGoal(alert, goalId))
       .filter((alert: any) => isPeiClinicalRowAfterProgressReset(goal, alert))
       .sort((a: any, b: any) => new Date(b?.created_at || b?.createdAt || 0).getTime() - new Date(a?.created_at || a?.createdAt || 0).getTime());
-    const availability = resolveMaintenanceProbeAvailability(schedules, {
-      appointmentId: activeAppointmentId || null,
-      sessionId,
-      sessionClinicalDate,
-      occurredAt: new Date(nowMs),
-      timeZone: maintenanceTimeZone
-    });
+    const availability = sessionId.startsWith('draft-')
+      ? resolveMaintenanceProbeAvailability(schedules, {
+        appointmentId: activeAppointmentId || null,
+        sessionId,
+        sessionClinicalDate,
+        occurredAt: new Date(nowMs),
+        timeZone: maintenanceTimeZone
+      })
+      : sessionMaintenanceProbes?.loaded === true ? {
+        availableSchedule: availableSchedulesForSession[0] || null,
+        upcomingSchedule: upcomingSchedulesForSession[0] || null,
+        availableItems: availableSchedulesForSession.map((schedule: any) => ({ schedule, reason: schedule?.availabilityReason || 'MATCHING_APPOINTMENT' })),
+        upcomingItems: upcomingSchedulesForSession.map((schedule: any) => ({ schedule, reason: schedule?.availabilityReason || 'UPCOMING_OR_DIFFERENT_SESSION' }))
+      } : {
+        availableSchedule: null,
+        upcomingSchedule: null,
+        availableItems: [],
+        upcomingItems: []
+      };
     const nextSchedule = availability.availableSchedule ||
       availability.upcomingSchedule ||
       schedules.find((schedule: any) => ['PENDING', 'SCHEDULED', 'UNSCHEDULED', 'DUE_TODAY', 'OVERDUE', 'MISSED'].includes(String(schedule?.status || '').toUpperCase())) ||
@@ -3166,7 +3265,7 @@ export const SessionMode = ({
       const evaluation = evaluateMaintenanceStatus({
         organizationId: resolvedClinicId || 'local',
         patientId,
-        targetId: goalId || goalName,
+        targetId: goalId,
         targetName: goalName,
         sessionId,
         maintenanceScheduleId: info.nextSchedule?.id || null,
@@ -3214,7 +3313,7 @@ export const SessionMode = ({
         reasons: evaluation.reasons
       };
     })
-    .filter((row): row is any => Boolean(row)), [activeAppointmentId, maintenanceOverview, maintenanceTimeZone, patientId, records, resolvedClinicId, resolvedTherapistId, sessionClinicalDate, sessionEndPreviewAt, sessionGoals, sessionId]);
+    .filter((row): row is any => Boolean(row)), [activeAppointmentId, maintenanceOverview, maintenanceSchedules, maintenanceTimeZone, patientId, records, resolvedClinicId, resolvedTherapistId, sessionAvailableMaintenanceProbeSchedules, sessionClinicalDate, sessionEndPreviewAt, sessionGoals, sessionId, sessionMaintenanceProbes?.loaded, sessionUpcomingMaintenanceProbeSchedules]);
 
   const pendingMaintenanceProbeItems = useMemo(() => {
     return maintenanceProbeRows
@@ -3228,6 +3327,24 @@ export const SessionMode = ({
       .slice(0, 6);
   }, [maintenanceProbeRows]);
 
+  const refreshSessionMaintenanceProbes = async () => {
+    if (!patientId || !sessionId || sessionId.startsWith('draft-') || sessionCompleted) {
+      setSessionMaintenanceProbes({ available: [], upcoming: [], loaded: false });
+      return;
+    }
+    try {
+      const result = await dataService.getAbaSessionMaintenanceProbes(sessionId);
+      const payload = result?.data || result || {};
+      setSessionMaintenanceProbes({
+        available: Array.isArray(payload?.available) ? payload.available : [],
+        upcoming: Array.isArray(payload?.upcoming) ? payload.upcoming : [],
+        loaded: true
+      });
+    } catch {
+      setSessionMaintenanceProbes({ available: [], upcoming: [], loaded: true });
+    }
+  };
+
   const refreshMaintenanceOverview = async () => {
     try {
       const result = await dataService.getAbaMaintenanceOverview(patientId, { page: 1, pageSize: 20, appointmentId: activeAppointmentId || undefined });
@@ -3235,6 +3352,7 @@ export const SessionMode = ({
     } catch {
       setMaintenanceOverview((prev: any) => prev || { schedules: [], probeResults: [], alerts: [], summary: null });
     }
+    await refreshSessionMaintenanceProbes();
   };
 
   useEffect(() => {
@@ -3344,7 +3462,7 @@ export const SessionMode = ({
     }
     setMaintenanceScheduleSaving(true);
     try {
-      const targetId = String(maintenanceScheduleModalGoal?.id || maintenanceScheduleModalGoal?.target_id || maintenanceScheduleModalGoal?.targetId || '').trim();
+      const targetId = goalTargetId(maintenanceScheduleModalGoal);
       const payload = buildMaintenanceSchedulePayload(maintenanceScheduleModalGoal);
       const result = maintenanceScheduleMode === 'NEXT_PATIENT_SESSION'
         ? await dataService.scheduleMaintenanceForNextSession(targetId, { ...payload, scheduleMode: 'NEXT_PATIENT_SESSION' })
@@ -3373,7 +3491,7 @@ export const SessionMode = ({
   };
 
   const handleScheduleMaintenanceForNextSession = async (goal: any) => {
-    const targetId = String(goal?.id || goal?.target_id || goal?.targetId || '').trim();
+    const targetId = goalTargetId(goal);
     if (!targetId) return;
     setMaintenanceScheduleSaving(true);
     try {
@@ -3452,7 +3570,8 @@ export const SessionMode = ({
 
   const handleApplyPlanItemNow = (item: any) => {
     if (String(item?.planned_trial_type || '').toLowerCase() === 'maintenance_probe') {
-      const goal = sessionGoals.find((entry: any) => String(entry?.id || entry?.target_id || entry?.targetId || '') === String(item?.target_id || item?.targetId || ''));
+      const itemTargetId = String(item?.target_id || item?.targetId || '').trim();
+      const goal = sessionGoals.find((entry: any) => goalTargetId(entry) === itemTargetId);
       const applied = activateMaintenanceProbeMode(goal);
       if (!applied) return;
       const display = resolveMaintenanceTargetDisplay({ target: goal || item, schedule: item });
@@ -5437,7 +5556,7 @@ export const SessionMode = ({
               </div>
               <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2">
                 {pendingMaintenanceProbeItems.map((row: any) => {
-                  const goal = sessionGoals.find((entry: any) => String(entry?.id || entry?.target_id || entry?.targetId || '') === String(row.targetId || '')) || sessionGoals.find((entry: any) => String(entry?.name || '') === String(row.name || ''));
+                  const goal = sessionGoals.find((entry: any) => goalTargetId(entry) === String(row.targetId || ''));
                   return (
                     <div key={`pending-${row.id}`} className="rounded-2xl border border-amber-100 bg-[#FFFDF7] p-4">
                       <p className="text-sm font-bold text-gray-900">{row.name}</p>
@@ -5460,6 +5579,7 @@ export const SessionMode = ({
                 <div>
                   <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-500">Maintenance Probe agendada</p>
                   <h2 className="text-lg font-bold text-gray-900">Sondagens futuras deste paciente</h2>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">Ha Maintenance Probe agendada para data futura.</p>
                 </div>
               </div>
               <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2">
@@ -5630,7 +5750,7 @@ export const SessionMode = ({
                               onClick={() => activateMaintenanceProbeMode(goal)}
                               className="inline-flex min-h-[38px] w-fit items-center justify-center rounded-full bg-white px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-amber-700 shadow-sm transition-all active:scale-95"
                             >
-                              Usar Maintenance Probe agora
+                              Usar Maintenance Probe
                             </button>
                           )}
                         </div>

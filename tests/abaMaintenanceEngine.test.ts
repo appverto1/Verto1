@@ -164,6 +164,16 @@ test('disponibilidade em sessao libera apenas consulta ou data clinica correta',
   });
   assert.equal(clinicalDate.availableSchedule?.id, 'date-only');
 
+  const futureDateOnly = resolveMaintenanceProbeAvailability([
+    { id: 'future-date', status: 'SCHEDULED_BY_DATE', target_due_date: '2026-06-10T18:00:00.000Z' }
+  ], {
+    sessionClinicalDate: '2026-06-02',
+    occurredAt: '2026-06-02T15:00:00.000Z',
+    timeZone: 'America/Sao_Paulo'
+  });
+  assert.equal(futureDateOnly.availableSchedule, null);
+  assert.equal(futureDateOnly.upcomingSchedule?.id, 'future-date');
+
   const futureAppointment = resolveMaintenanceProbeAvailability([
     { id: 'future', appointment_id: 'appointment-future', status: 'SCHEDULED', target_due_date: '2026-06-10T12:00:00.000Z' }
   ], {
@@ -173,6 +183,17 @@ test('disponibilidade em sessao libera apenas consulta ou data clinica correta',
   });
   assert.equal(futureAppointment.availableSchedule, null);
   assert.equal(futureAppointment.upcomingSchedule?.id, 'future');
+
+  const blockedAppointment = resolveMaintenanceProbeAvailability([
+    { id: 'cancelled', appointment_id: 'appointment-1', appointment_status: 'cancelled', status: 'SCHEDULED', target_due_date: '2026-06-10T12:00:00.000Z' }
+  ], {
+    appointmentId: 'appointment-1',
+    occurredAt: '2026-06-02T15:00:00.000Z',
+    timeZone: 'America/Sao_Paulo'
+  });
+  assert.equal(blockedAppointment.availableSchedule, null);
+  assert.equal(blockedAppointment.upcomingSchedule?.id, 'cancelled');
+  assert.notEqual(blockedAppointment.upcomingItems[0]?.reason, 'MATCHING_SESSION');
 });
 
 test('maintenance probe adequado retorna MAINTAINED', () => {
@@ -273,6 +294,7 @@ test('migration cria tabelas, estados clinicos, schedules e alertas sem mutar ta
 test('backend e frontend usam summaries e rotas de manutencao paginadas', () => {
   assert.match(serverCode, /evaluateAndPersistSessionMaintenance[\s\S]*?collection_type', 'maintenance_probe'/m);
   assert.match(serverCode, /app\.get\('\/api\/aba\/maintenance-overview\/:patientId'[\s\S]*?select\(ABA_MAINTENANCE_SCHEDULE_SELECT\)[\s\S]*?select\(ABA_MAINTENANCE_PROBE_RESULT_SELECT\)[\s\S]*?select\(ABA_REGRESSION_ALERT_SELECT\)/m);
+  assert.match(serverCode, /app\.get\('\/api\/aba\/sessions\/:sessionId\/maintenance-probes'[\s\S]*?resolveAbaSessionReadScope[\s\S]*?select\(ABA_MAINTENANCE_SCHEDULE_SELECT\)[\s\S]*?target_missing/m);
   assert.match(serverCode, /app\.get\('\/api\/aba\/patients\/:patientId\/maintenance-schedules'/m);
   assert.match(serverCode, /app\.post\('\/api\/aba\/targets\/:targetId\/maintenance-schedules'/m);
   assert.match(serverCode, /app\.post\('\/api\/aba\/targets\/:targetId\/maintenance-schedules\/next-session'/m);
@@ -283,11 +305,15 @@ test('backend e frontend usam summaries e rotas de manutencao paginadas', () => 
   assert.match(serverCode, /completeMaintenanceScheduleAfterProbe/);
   assert.match(serverCode, /persistTargetMaintenanceApproval/);
   assert.match(dataServiceCode, /async getAbaMaintenanceOverview\(patientId: string/);
+  assert.match(dataServiceCode, /async getAbaSessionMaintenanceProbes\(sessionId: string\)/);
   assert.match(dataServiceCode, /appointmentId\?: string \| null/);
   assert.match(dataServiceCode, /async createMaintenanceScheduleForTarget\(targetId: string/);
   assert.match(dataServiceCode, /async scheduleMaintenanceForNextSession\(targetId: string/);
   assert.match(dataServiceCode, /async saveAbaMaintenanceProbeResult\(result: any\)/);
   assert.match(sessionModeCode, /dataService\.getAbaMaintenanceOverview\(patientId/);
+  assert.match(sessionModeCode, /dataService\.getAbaSessionMaintenanceProbes\(sessionId\)/);
+  assert.match(sessionModeCode, /sessionAvailableMaintenanceProbeSchedules/);
+  assert.match(sessionModeCode, /schedules: \[\]/);
   assert.match(sessionModeCode, /appointmentId: activeAppointmentId/);
   assert.match(sessionModeCode, /Probes de manutencao pendentes/);
   assert.match(sessionModeCode, /Agendar para proxima sessao/);
@@ -327,12 +353,15 @@ test('banner de manutencao comunica tipo atual e botao nao registra tentativa', 
   assert.match(sessionModeCode, /maintenanceProbeCanRunNow/);
   assert.match(sessionModeCode, /hasAvailableMaintenanceProbe/);
   assert.match(sessionModeCode, /upcomingMaintenanceProbeItems/);
+  assert.match(sessionModeCode, /Ha Maintenance Probe agendada para data futura/);
   assert.match(sessionModeCode, /Disponivel somente na data ou consulta vinculada/);
   assert.match(sessionModeCode, /resolveMaintenanceTargetDisplay/);
   assert.match(sessionModeCode, /Maintenance Probe ativo: \$\{maintenanceTargetLabel\}/);
   assert.match(activationBody, /Maintenance Probe agendada/);
   assert.match(activationBody, /setCollectionType\('maintenance_probe'\)[\s\S]*?showClinicalToast/m);
   assert.doesNotMatch(activationBody, /handleTrialClick|persistTrialRecord|addRecord/m);
+  assert.doesNotMatch(sessionModeCode, /Usar Maintenance Probe agora/);
+  assert.doesNotMatch(sessionModeCode, /\{ key: 'maintenance_probe', label: 'Maintenance Probe' \}/);
 });
 
 test('agendamento flexivel trata 7 14 30 60 como marcos clinicos', () => {

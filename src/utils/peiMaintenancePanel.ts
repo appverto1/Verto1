@@ -249,9 +249,8 @@ export function buildPeiMaintenanceEligibleSkills(goals: any[] = []): PeiMainten
     .filter(isPeiMaintenanceEligibleSkill)
     .forEach((goal) => {
       const explicitTargetId = normalizeText(goal?.target_id || goal?.targetId || goal?.aba_target_id || goal?.abaTargetId);
-      const idAsTarget = isPersistedUuid(goal?.id) ? normalizeText(goal.id) : '';
-      const targetId = isPersistedUuid(explicitTargetId) ? explicitTargetId : idAsTarget;
-      const goalId = normalizeText(goal?.goal_id || goal?.goalId || (!targetId ? goal?.id : ''));
+      const targetId = isPersistedUuid(explicitTargetId) ? explicitTargetId : '';
+      const goalId = normalizeText(goal?.goal_id || goal?.goalId || goal?.id || '');
       const name = firstDisplayText(goal?.name, goal?.title, goal?.target_name, goal?.targetName, goal?.skill_name, goal?.skillName, goal?.objective) || 'Habilidade sem nome';
       const protocol = firstDisplayText(goal?.protocolTitle, goal?.protocol_title, goal?.protocolName, goal?.protocol_name, goal?.protocol?.name) || 'Sem protocolo informado';
       const domain = firstDisplayText(goal?.domainName, goal?.domain_name, goal?.programName, goal?.program_name, goal?.domain?.name, goal?.program?.name) || 'Sem dominio informado';
@@ -637,23 +636,39 @@ export function buildPeiMaintenanceRows(input: {
   const rowsByKey = new Map<string, any>();
 
   const ensureRow = (seed: any = {}) => {
-    const display = resolveMaintenanceTargetDisplay(seed.goal ? { target: seed, schedule: seed } : seed);
+    const explicitTargetId = normalizeText(seed.target_id || seed.targetId || seed.aba_target_id || seed.abaTargetId || '');
+    const clinicalSourceId = normalizeText(seed.peiGoalId || seed.goalId || seed.goal_id || seed.skillId || seed.skill_id || (seed.goal ? seed.id : ''));
+    const display = resolveMaintenanceTargetDisplay(seed.goal
+      ? {
+        target: explicitTargetId ? { ...seed, id: explicitTargetId } : {},
+        schedule: {
+          ...seed,
+          id: explicitTargetId || '',
+          target_id: explicitTargetId || undefined,
+          targetId: explicitTargetId || undefined
+        }
+      }
+      : seed);
     const key =
-      getTargetKey(seed.target_id, seed.targetId, seed.skillId, seed.skill_id, seed.goal ? seed.id : '', seed.name, seed.target_name, seed.targetName) ||
-      `target-${rowsByKey.size + 1}`;
+      (explicitTargetId ? `target:${explicitTargetId}` : '') ||
+      (clinicalSourceId ? `clinical:${clinicalSourceId}` : '') ||
+      `row-${rowsByKey.size + 1}`;
     const existing = rowsByKey.get(key);
     if (existing) return existing;
-    const targetId = normalizeText(seed.target_id || seed.targetId || (seed.goal ? seed.id : '') || '');
+    const targetId = explicitTargetId;
+    const hasPeiClinicalSource = Boolean(seed.goal && isMaintenanceRelevantGoal(seed));
     const row = {
       key,
       targetId,
-      targetName: display.targetDisplayName,
+      targetName: seed.goal
+        ? safeTargetName(seed.name || seed.target_name || seed.targetName, display.targetDisplayName)
+        : display.targetDisplayName,
       protocol: display.protocolDisplayName,
       domain: display.domainDisplayName,
       clinicalStatus: normalizeStatus(seed.status || seed.clinical_status || seed.clinicalStatus || ''),
-      hasPeiClinicalSource: Boolean(seed.goal && isMaintenanceRelevantGoal(seed)),
-      hasRealTarget: Boolean(display.hasRealTarget || (seed.goal && isPersistedUuid(targetId))),
-      needsTargetReview: Boolean(display.needsTargetReview && !(seed.goal && isPersistedUuid(targetId))),
+      hasPeiClinicalSource,
+      hasRealTarget: Boolean(display.hasRealTarget && isPersistedUuid(targetId)),
+      needsTargetReview: Boolean(display.needsTargetReview && !hasPeiClinicalSource),
       targetMissing: display.targetMissing,
       goal: seed.goal || seed,
       schedules: [] as any[],

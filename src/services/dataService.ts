@@ -2645,6 +2645,22 @@ export const dataService = {
     return { success: true, data: [] };
   },
 
+  async getAbaSessionMaintenanceProbes(sessionId: string) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse({ available: [], upcoming: [] });
+    if (!isPersistedUuid(sessionId)) return { success: true, data: { available: [], upcoming: [] }, available: [], upcoming: [] };
+    const endpoint = `/api/aba/sessions/${encodeURIComponent(String(sessionId))}/maintenance-probes`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await buildConditionalHeaders(endpoint, 'aba'),
+        credentials: 'include'
+      }, { helperName: 'getAbaSessionMaintenanceProbes', operation: 'list', table: 'aba_maintenance_schedules,aba_targets,appointments', hasExplicitColumns: true });
+      if (response.ok) return await response.json();
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível carregar Maintenance Probes desta sessão.');
+    } catch {
+      return { success: true, data: { available: [], upcoming: [] }, available: [], upcoming: [] };
+    }
+  },
+
   async getPatientAbaSummary(patientId: string) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
     const endpoint = `/api/aba/patient-summary/${encodeURIComponent(String(patientId))}`;
@@ -2781,7 +2797,7 @@ export const dataService = {
         headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify(payload || {})
-      }, { helperName: 'ensurePeiMaintenanceTarget', operation: 'write', table: 'patient_records,aba_targets', hasExplicitColumns: true });
+      }, { helperName: 'ensurePeiMaintenanceTarget', operation: 'write', table: 'patient_records,aba_targets,aba_mastery_evaluations', hasExplicitColumns: true });
       return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível preparar a habilidade para manutenção.');
     } catch (error) {
       const message = getApiErrorMessage(error, 'Não foi possível preparar a habilidade para manutenção.');

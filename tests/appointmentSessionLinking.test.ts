@@ -163,6 +163,21 @@ test('migration adds appointment_id to ABA clinical records with scoped indexes'
   }
 });
 
+test('maintenance probes da sessao usam appointment_id e escopo da sessao', () => {
+  const routeStart = serverCode.indexOf("app.get('/api/aba/sessions/:sessionId/maintenance-probes'");
+  assert.ok(routeStart >= 0, 'endpoint de probes da sessao existe');
+  const routeEnd = serverCode.indexOf("app.get('/api/aba/patient-summary/:patientId'", routeStart);
+  const route = serverCode.slice(routeStart, routeEnd);
+  assert.match(route, /checkAuth, requireRoles\('coordinator', 'therapist', 'admin', 'owner'\)/);
+  assert.match(route, /resolveAbaSessionReadScope\(requestedSessionId, req\.session\.user\)/);
+  assert.match(route, /const activeAppointmentId = sanitizeString\(session\?\.appointment_id/);
+  assert.match(route, /\.eq\('patient_id', patientId\)/);
+  assert.match(route, /select\(ABA_MAINTENANCE_SCHEDULE_SELECT\)/);
+  assert.match(route, /resolveMaintenanceProbeAvailability/);
+  assert.match(route, /available[\s\S]*upcoming/);
+  assert.doesNotMatch(route, /select\('\*'\)|targetName[\s\S]{0,120}availableSchedule/);
+});
+
 test('no broad select star is introduced', () => {
   assert.doesNotMatch(serverCode, /select\('\*'\)/);
 });

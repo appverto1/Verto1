@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   getActiveMaintenanceProbeForTarget,
+  getMaintenanceTargetKey,
   normalizeRegularAbaTrialType,
   resolveContextualTrialTypeForTarget
 } from '../src/utils/abaMaintenanceProbeContext.ts';
@@ -115,10 +116,27 @@ test('ativacao manual de Maintenance Probe e contextual ao target', () => {
   assert.equal(getActiveMaintenanceProbeForTarget({ targetId: 'target-common', manualActivations, now }), null);
 });
 
+test('Maintenance Probe nao identifica target por nome', () => {
+  assert.equal(getMaintenanceTargetKey({ name: 'Nomeia cores' }), '');
+  assert.equal(getActiveMaintenanceProbeForTarget({
+    targetName: 'Nomeia cores',
+    schedules: [{ id: 'schedule-name', target_name: 'Nomeia cores', status: 'DUE_TODAY', target_due_date: now.toISOString() }],
+    now
+  }), null);
+  assert.equal(getActiveMaintenanceProbeForTarget({
+    targetId: 'target-real',
+    targetName: 'Nomeia cores',
+    schedules: [{ id: 'schedule-other-name', target_id: 'target-other', target_name: 'Nomeia cores', status: 'DUE_TODAY', target_due_date: now.toISOString() }],
+    now
+  }), null);
+});
+
 test('SessionMode usa lastRegularTrialType e cria resultado de maintenance probe ao registrar', () => {
   assert.match(sessionModeCode, /const \[lastRegularTrialType, setLastRegularTrialType\] = useState\('dtt'\)/);
   assert.match(sessionModeCode, /resolveContextualTrialTypeForTarget/);
   assert.match(sessionModeCode, /const trialContext = syncTrialTypeForGoal\(goal\)/);
+  assert.match(sessionModeCode, /const getAvailableMaintenanceProbeForTarget/);
+  assert.match(sessionModeCode, /const getActiveMaintenanceProbeForTarget[\s\S]*?schedules: \[\]/m);
   assert.match(sessionModeCode, /dataService\.saveAbaMaintenanceProbeResult/);
   assert.match(sessionModeCode, /maintenanceProbeFeedback && maintenanceProbeActiveForGoal/);
 });

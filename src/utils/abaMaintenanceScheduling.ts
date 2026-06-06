@@ -69,7 +69,6 @@ export type NextMaintenanceProbe = {
 
 export type MaintenanceProbeAvailabilityReason =
   | 'MATCHING_APPOINTMENT'
-  | 'MATCHING_SESSION'
   | 'MATCHING_CLINICAL_DATE'
   | 'UPCOMING_OR_DIFFERENT_SESSION';
 
@@ -277,7 +276,7 @@ const dateKey = (value: string | null | undefined) => {
   return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 10);
 };
 
-export const dateKeyInMaintenanceTimeZone = (value: string | Date | null | undefined, timeZone = 'America/Sao_Paulo') => {
+export const getClinicalDate = (value: string | Date | null | undefined, timeZone = 'America/Sao_Paulo') => {
   if (!value) return '';
   const raw = typeof value === 'string' ? value.trim() : '';
   if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
@@ -297,6 +296,18 @@ export const dateKeyInMaintenanceTimeZone = (value: string | Date | null | undef
   } catch {
     return date.toISOString().slice(0, 10);
   }
+};
+
+export const dateKeyInMaintenanceTimeZone = getClinicalDate;
+
+export const isSameClinicalDate = (
+  dueDate: string | Date | null | undefined,
+  sessionClinicalDate: string | Date | null | undefined,
+  timeZone = 'America/Sao_Paulo'
+) => {
+  const dueKey = getClinicalDate(dueDate, timeZone);
+  const sessionKey = getClinicalDate(sessionClinicalDate, timeZone);
+  return Boolean(dueKey && sessionKey && dueKey === sessionKey);
 };
 
 const parseScheduleDate = (value: string | null | undefined) => {
@@ -319,9 +330,6 @@ const scheduleReferenceDate = (schedule: any) =>
 
 const scheduleAppointmentId = (schedule: any) =>
   String(schedule?.appointment_id || schedule?.appointmentId || '').trim();
-
-const scheduleSessionId = (schedule: any) =>
-  String(schedule?.session_id || schedule?.sessionId || '').trim();
 
 const scheduleAppointmentStatus = (schedule: any) => String(
   schedule?.appointment?.status ||
@@ -486,7 +494,6 @@ export function resolveMaintenanceProbeAvailability(
     .map((schedule) => {
       const referenceDate = scheduleReferenceDate(schedule);
       const itemAppointmentId = scheduleAppointmentId(schedule);
-      const itemSessionId = scheduleSessionId(schedule);
       const appointmentStatus = scheduleAppointmentStatus(schedule);
       const blockedAppointmentStatus = isBlockedMaintenanceAppointmentStatus(appointmentStatus);
       const sameAppointment = Boolean(
@@ -495,35 +502,31 @@ export function resolveMaintenanceProbeAvailability(
         itemAppointmentId === appointmentId &&
         !blockedAppointmentStatus
       );
-      const sameSession = Boolean(sessionId && itemSessionId && itemSessionId === sessionId && !blockedAppointmentStatus);
       const sameClinicalDate = Boolean(
         !itemAppointmentId &&
         referenceDate &&
         clinicalDateKey &&
-        dateKeyInMaintenanceTimeZone(referenceDate, timeZone) === clinicalDateKey
+        isSameClinicalDate(referenceDate, clinicalDateKey, timeZone)
       );
       const reason: MaintenanceProbeAvailabilityReason = sameAppointment
         ? 'MATCHING_APPOINTMENT'
-        : sameSession
-          ? 'MATCHING_SESSION'
-          : sameClinicalDate
-            ? 'MATCHING_CLINICAL_DATE'
-            : 'UPCOMING_OR_DIFFERENT_SESSION';
+        : sameClinicalDate && !blockedAppointmentStatus
+          ? 'MATCHING_CLINICAL_DATE'
+          : 'UPCOMING_OR_DIFFERENT_SESSION';
       return {
         schedule,
         status: deriveMaintenanceScheduleStatus(schedule, occurredAt),
         reason,
         referenceDate,
         appointmentId: itemAppointmentId || null,
-        sessionId: itemSessionId || null,
+        sessionId: sessionId || null,
         blockedAppointmentStatus
       };
     })
     .sort((a, b) => {
       const rank = (item: MaintenanceProbeAvailabilityItem) => (
         item.reason === 'MATCHING_APPOINTMENT' ? 0 :
-          item.reason === 'MATCHING_SESSION' ? 1 :
-            item.reason === 'MATCHING_CLINICAL_DATE' ? 2 : 3
+          item.reason === 'MATCHING_CLINICAL_DATE' ? 1 : 2
       );
       const rankDiff = rank(a) - rank(b);
       if (rankDiff !== 0) return rankDiff;
