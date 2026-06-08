@@ -30046,7 +30046,18 @@ async function startServer() {
       'required_independent_correct_trials',
       'requiredIndependentCorrectTrials',
       'min_independent_correct_trials',
-      'minIndependentCorrectTrials',
+      'minIndependentCorrectTrials'
+    ));
+    const explicitConsecutiveIndependentCorrectTrials = masteryCriteriaIntegerOrNull(readMasteryCriteriaInput(
+      source,
+      'required_consecutive_independent_correct_trials',
+      'requiredConsecutiveIndependentCorrectTrials',
+      'min_consecutive_independent_correct_trials',
+      'minConsecutiveIndependentCorrectTrials',
+      'consecutive_independent_correct_trials_required',
+      'consecutiveIndependentCorrectTrialsRequired',
+      'min_consecutive_successes',
+      'minConsecutiveSuccesses',
       'meta_sucessos',
       'metaSucessos',
       'mastery_target',
@@ -30088,14 +30099,31 @@ async function startServer() {
     ));
     const minConsecutiveDays = masteryCriteriaIntegerOrNull(readMasteryCriteriaInput(source, 'min_consecutive_days', 'minConsecutiveDays'), 1, 3650);
     const minDistinctTherapists = masteryCriteriaIntegerOrNull(readMasteryCriteriaInput(source, 'min_distinct_therapists', 'minDistinctTherapists'), 1, 1000);
-    const type = sanitizeString(source?.type, 80) || (requiredIndependentCorrectTrials ? 'independent_correct_count' : 'custom');
+    const rawMode = sanitizeString(source?.mastery_criterion_mode || source?.masteryCriterionMode || source?.criterion_mode || source?.criterionMode || source?.type || source?.mode, 80).toLowerCase();
+    const explicitConsecutiveFlag = Boolean(source?.requires_consecutive_successes ?? source?.requiresConsecutiveSuccesses ?? source?.consecutive_required ?? source?.consecutiveRequired);
+    const isConsecutiveMode = /consecutive|streak|sequencia|sequência/.test(rawMode) || explicitConsecutiveFlag || Boolean(explicitConsecutiveIndependentCorrectTrials);
+    const requiredConsecutiveIndependentCorrectTrials = explicitConsecutiveIndependentCorrectTrials || (isConsecutiveMode ? requiredIndependentCorrectTrials : null);
+    const masteryCriterionMode = requiredConsecutiveIndependentCorrectTrials
+      ? 'consecutive_independent'
+      : requiredIndependentCorrectTrials
+        ? 'total_independent'
+        : 'custom';
+    const type = sanitizeString(source?.type, 80) || (requiredConsecutiveIndependentCorrectTrials ? 'consecutive_independent_correct_count' : requiredIndependentCorrectTrials ? 'independent_correct_count' : 'custom');
     const now = new Date().toISOString();
     const criteria = cleanObject({
       type,
+      mastery_criterion_mode: masteryCriterionMode,
+      masteryCriterionMode,
       source: 'skill',
       sourceLabel: 'Criterio da habilidade',
       required_independent_correct_trials: requiredIndependentCorrectTrials,
       requiredIndependentCorrectTrials,
+      required_consecutive_independent_correct_trials: requiredConsecutiveIndependentCorrectTrials,
+      requiredConsecutiveIndependentCorrectTrials,
+      requires_consecutive_successes: Boolean(requiredConsecutiveIndependentCorrectTrials),
+      requiresConsecutiveSuccesses: Boolean(requiredConsecutiveIndependentCorrectTrials),
+      consecutive_required: Boolean(requiredConsecutiveIndependentCorrectTrials),
+      consecutiveRequired: Boolean(requiredConsecutiveIndependentCorrectTrials),
       required_correct_trials: requiredCorrectTrials,
       requiredCorrectTrials,
       min_accuracy_percent: requiredAccuracy,
@@ -30271,6 +30299,14 @@ async function startServer() {
         embeddedCriteria.requiredIndependentCorrectTrials ??
         embeddedCriteria.min_independent_correct_trials ??
         embeddedCriteria.minIndependentCorrectTrials ??
+        null;
+      const embeddedRequiredConsecutiveIndependentCorrectTrials =
+        embeddedCriteria.required_consecutive_independent_correct_trials ??
+        embeddedCriteria.requiredConsecutiveIndependentCorrectTrials ??
+        embeddedCriteria.min_consecutive_independent_correct_trials ??
+        embeddedCriteria.minConsecutiveIndependentCorrectTrials ??
+        embeddedCriteria.consecutive_independent_correct_trials_required ??
+        embeddedCriteria.consecutiveIndependentCorrectTrialsRequired ??
         embeddedCriteria.min_consecutive_successes ??
         embeddedCriteria.minConsecutiveSuccesses ??
         embeddedCriteria.meta_sucessos ??
@@ -30296,6 +30332,9 @@ async function startServer() {
         target_id: targetId || null,
         name: sanitizeString(embeddedCriteria.name, 180) || 'Critério do target',
         required_independent_correct_trials: embeddedRequiredIndependentCorrectTrials,
+        required_consecutive_independent_correct_trials: embeddedRequiredConsecutiveIndependentCorrectTrials,
+        mastery_criterion_mode: embeddedRequiredConsecutiveIndependentCorrectTrials ? 'consecutive_independent' : (embeddedCriteria.mastery_criterion_mode ?? embeddedCriteria.masteryCriterionMode ?? embeddedCriteria.criterion_mode ?? embeddedCriteria.criterionMode ?? null),
+        requires_consecutive_successes: Boolean(embeddedRequiredConsecutiveIndependentCorrectTrials || embeddedCriteria.requires_consecutive_successes || embeddedCriteria.requiresConsecutiveSuccesses || embeddedCriteria.consecutive_required || embeddedCriteria.consecutiveRequired),
         required_correct_trials: embeddedRequiredCorrectTrials,
         min_accuracy_percent: embeddedCriteria.min_accuracy_percent ?? embeddedCriteria.minAccuracyPercent ?? embeddedCriteria.required_accuracy ?? embeddedCriteria.requiredAccuracy ?? null,
         min_independence_percent: embeddedCriteria.min_independence_percent ?? embeddedCriteria.minIndependencePercent ?? embeddedCriteria.required_independence ?? embeddedCriteria.requiredIndependence ?? null,
@@ -34151,14 +34190,14 @@ async function startServer() {
       const targetId = sanitizeString(req.body?.target_id || req.body?.targetId, 180);
       if (!targetId) return res.status(400).json({ success: false, error: 'Target é obrigatório.' });
 
-      const totalTrials = asSafeNumber(req.body?.total_trials ?? req.body?.totalTrials, 0, 100000) || 0;
-      const independentTrials = asSafeNumber(req.body?.independent_trials ?? req.body?.independentTrials, 0, 100000) || 0;
-      const promptedTrials = asSafeNumber(req.body?.prompted_trials ?? req.body?.promptedTrials, 0, 100000) || 0;
-      const errorTrials = asSafeNumber(req.body?.error_trials ?? req.body?.errorTrials, 0, 100000) || 0;
-      const accuracyPercent = req.body?.accuracy_percent !== undefined || req.body?.accuracyPercent !== undefined
+      let totalTrials = asSafeNumber(req.body?.total_trials ?? req.body?.totalTrials, 0, 100000) || 0;
+      let independentTrials = asSafeNumber(req.body?.independent_trials ?? req.body?.independentTrials, 0, 100000) || 0;
+      let promptedTrials = asSafeNumber(req.body?.prompted_trials ?? req.body?.promptedTrials, 0, 100000) || 0;
+      let errorTrials = asSafeNumber(req.body?.error_trials ?? req.body?.errorTrials, 0, 100000) || 0;
+      let accuracyPercent = req.body?.accuracy_percent !== undefined || req.body?.accuracyPercent !== undefined
         ? asSafeNumber(req.body?.accuracy_percent ?? req.body?.accuracyPercent, 0, 100)
         : (totalTrials > 0 ? Math.round(((independentTrials + promptedTrials) / totalTrials) * 10000) / 100 : 0);
-      const independencePercent = req.body?.independence_percent !== undefined || req.body?.independencePercent !== undefined
+      let independencePercent = req.body?.independence_percent !== undefined || req.body?.independencePercent !== undefined
         ? asSafeNumber(req.body?.independence_percent ?? req.body?.independencePercent, 0, 100)
         : (totalTrials > 0 ? Math.round((independentTrials / totalTrials) * 10000) / 100 : 0);
       const occurredAt = sanitizeIsoDateTime(req.body?.occurred_at || req.body?.occurredAt);
@@ -34187,29 +34226,94 @@ async function startServer() {
       if (!linkValidation.ok) return res.status((linkValidation as any).status || 409).json({ success: false, error: (linkValidation as any).error });
       const appointmentId = (linkValidation as any).appointmentId || requestedAppointmentId || null;
       const clinicalDate = (linkValidation as any).clinicalDate || occurredAt.slice(0, 10);
+      const trialId = sanitizeString(req.body?.trial_id || req.body?.trialId || req.body?.raw_payload?.trialId || req.body?.rawPayload?.trialId, 180) || null;
+      const singleTrialResult = sanitizeString(req.body?.result || req.body?.outcome || req.body?.trialOutcome, 40).toLowerCase();
+      const promptType = sanitizeString(req.body?.prompt_type || req.body?.promptType || req.body?.prompt_level_key || req.body?.promptLevelKey, 80) || null;
+      const { criterion } = await fetchAbaMasteryCriterion({
+        organizationId,
+        clinicId,
+        patientId,
+        targetId,
+        programId: sanitizeString(req.body?.program_id || req.body?.programId, 180)
+      });
       let probeStatus = normalizeAbaMaintenanceProbeStatus(req.body?.status ?? req.body?.probeStatus);
-      if (req.body?.status === undefined && req.body?.probeStatus === undefined) {
-        const { criterion } = await fetchAbaMasteryCriterion({
-          organizationId,
-          clinicId,
-          patientId,
-          targetId,
-          programId: sanitizeString(req.body?.program_id || req.body?.programId, 180)
-        });
+      let serverEvaluation: ReturnType<typeof evaluateMaintenanceStatus> | null = null;
+      if (sessionId && maintenanceScheduleId) {
+        const trialSelect = [
+          'id',
+          'organization_id',
+          'clinic_id',
+          'patient_id',
+          'session_id',
+          'target_id',
+          'target_name',
+          'program_id',
+          'collection_type',
+          'maintenance_schedule_id',
+          'response_score',
+          'correct',
+          'independent',
+          'prompt_level_key',
+          'occurred_at',
+          'therapist_id',
+          'created_at'
+        ].join(',');
+        const trialResult = await supabase
+          .from('aba_trials')
+          .select(trialSelect)
+          .eq('session_id', sessionId)
+          .eq('patient_id', patientId)
+          .eq('clinic_id', clinicId)
+          .eq('target_id', targetId)
+          .eq('maintenance_schedule_id', maintenanceScheduleId)
+          .eq('collection_type', 'maintenance_probe')
+          .order('occurred_at', { ascending: true })
+          .limit(1000);
+        if (trialResult.error && !hasMissingFinancialSchema(trialResult.error)) throw trialResult.error;
+        if (!trialResult.error && Array.isArray(trialResult.data) && trialResult.data.length > 0) {
+          serverEvaluation = evaluateMaintenanceStatus({
+            organizationId,
+            patientId,
+            targetId,
+            targetName: sanitizeTextField(req.body?.target_name || req.body?.targetName, 240) || targetId,
+            sessionId,
+            maintenanceScheduleId,
+            criteria: criterion,
+            trials: trialResult.data,
+            previousProbeResults: [],
+            occurredAt
+          });
+          totalTrials = serverEvaluation.totalTrials;
+          independentTrials = serverEvaluation.independentTrials;
+          promptedTrials = serverEvaluation.promptedTrials;
+          errorTrials = serverEvaluation.errorTrials;
+          accuracyPercent = serverEvaluation.accuracyPercent;
+          independencePercent = serverEvaluation.independencePercent;
+          probeStatus = serverEvaluation.status;
+        }
+      }
+      if (!serverEvaluation && req.body?.status === undefined && req.body?.probeStatus === undefined) {
         const minAccuracy = asSafeNumber(criterion?.minAccuracyPercent ?? criterion?.min_accuracy_percent, 80, 0, 100) || 80;
         const minIndependence = asSafeNumber(criterion?.minIndependencePercent ?? criterion?.min_independence_percent, 80, 0, 100) || 80;
         const minTrials = Math.max(1, Math.round(asSafeNumber(criterion?.minTrialsPerSession ?? criterion?.min_trials_per_session, 1, 1, 100000) || 1));
+        const requiredConsecutive = Number(normalizeAbaMasteryCriterion(criterion)?.requiredConsecutiveIndependentCorrectTrials || 0);
         const accuracyDrop = minAccuracy - Number(accuracyPercent || 0);
         const independenceDrop = minIndependence - Number(independencePercent || 0);
+        const consecutiveDrop = requiredConsecutive > 0 && (singleTrialResult !== 'independent' || independentTrials < requiredConsecutive);
         probeStatus = totalTrials < minTrials
           ? 'WATCH'
           : accuracyDrop >= 20 || independenceDrop >= 20
             ? 'REGRESSION_RISK'
-            : accuracyDrop > 0 || independenceDrop > 0
+            : accuracyDrop > 0 || independenceDrop > 0 || consecutiveDrop
               ? 'WATCH'
               : 'MAINTAINED';
       }
-      const trialId = sanitizeString(req.body?.trial_id || req.body?.trialId || req.body?.raw_payload?.trialId || req.body?.rawPayload?.trialId, 180) || null;
+      if (!serverEvaluation && (req.body?.status !== undefined || req.body?.probeStatus !== undefined)) {
+        const requiredConsecutive = Number(normalizeAbaMasteryCriterion(criterion)?.requiredConsecutiveIndependentCorrectTrials || 0);
+        if (requiredConsecutive > 0 && (singleTrialResult !== 'independent' || independentTrials < requiredConsecutive)) {
+          probeStatus = 'WATCH';
+        }
+      }
       const resultId = sanitizeString(
         req.body?.id ||
         req.body?.result_id ||
@@ -34218,8 +34322,6 @@ async function startServer() {
         crypto.randomUUID(),
         180
       );
-      const singleTrialResult = sanitizeString(req.body?.result || req.body?.outcome || req.body?.trialOutcome, 40).toLowerCase();
-      const promptType = sanitizeString(req.body?.prompt_type || req.body?.promptType || req.body?.prompt_level_key || req.body?.promptLevelKey, 80) || null;
       const actorId = sanitizeString(req.session.user?.id, 120);
       const payload = cleanObject({
         id: resultId,

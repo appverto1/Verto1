@@ -42,6 +42,7 @@ export type AbaMasteryCriterion = {
   targetId?: string | null;
   name: string;
   requiredIndependentCorrectTrials?: number | null;
+  requiredConsecutiveIndependentCorrectTrials?: number | null;
   requiredCorrectTrials?: number | null;
   minAccuracyPercent?: number | null;
   minIndependencePercent?: number | null;
@@ -58,6 +59,8 @@ export type AbaMasteryCriterion = {
   isActive: boolean;
   source?: string | null;
   sourceLabel?: string | null;
+  masteryCriterionMode?: 'total_independent' | 'consecutive_independent' | 'custom';
+  requiresConsecutiveSuccesses?: boolean;
 };
 
 export type AbaMasteryEvaluationResult = {
@@ -72,6 +75,7 @@ export type AbaMasteryEvaluationResult = {
   evaluatedAt: string;
   totalTrials: number;
   independentTrials: number;
+  consecutiveIndependentTrials: number;
   promptedTrials: number;
   errorTrials: number;
   accuracyPercent: number;
@@ -83,6 +87,8 @@ export type AbaMasteryEvaluationResult = {
   criterionProgressCount: number;
   criterionRequiredCount: number;
   criterionProgressLabel: string;
+  criterionProgressKind: 'none' | 'total_independent' | 'consecutive_independent' | 'correct' | 'days';
+  sequenceBrokenByLastTrial: boolean;
   status: AbaMasteryStatus;
   reasons: AbaMasteryReason[];
   suggestedPhase: 'teaching' | 'maintenance' | 'mastered';
@@ -133,6 +139,7 @@ export type AbaMaintenanceEvaluationResult = {
   occurredAt: string;
   totalTrials: number;
   independentTrials: number;
+  consecutiveIndependentTrials: number;
   promptedTrials: number;
   errorTrials: number;
   accuracyPercent: number;
@@ -141,6 +148,8 @@ export type AbaMaintenanceEvaluationResult = {
   minIndependencePercent: number;
   status: AbaMaintenanceProbeStatus;
   consecutiveFailureCount: number;
+  criterionRequiredCount: number;
+  criterionProgressLabel: string;
   reasons: AbaMasteryReason[];
   performanceText: string;
   shouldCreateRegressionAlert: boolean;
@@ -207,6 +216,40 @@ const boundedNumberOrNull = (value: any, min = 0, max = 100000) => {
 
 const hasConfiguredValue = (row: any, ...keys: string[]) =>
   keys.some((key) => row?.[key] !== undefined && row?.[key] !== null && row?.[key] !== '');
+
+const normalizeCriterionMode = (row: any): 'total_independent' | 'consecutive_independent' | 'custom' | null => {
+  const raw = String(readValue(
+    row,
+    'mastery_criterion_mode',
+    'masteryCriterionMode',
+    'criterion_mode',
+    'criterionMode',
+    'type',
+    'mode'
+  ) || '').trim().toLowerCase();
+  if (!raw) return null;
+  const compact = raw.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '_');
+  if (compact.includes('consecutive') || compact.includes('streak') || compact.includes('sequencia')) return 'consecutive_independent';
+  if (compact.includes('total') || compact.includes('count') || compact.includes('independent_correct')) return 'total_independent';
+  return 'custom';
+};
+
+const criterionRequiresConsecutiveSuccesses = (row: any) => {
+  const explicit = readValue(
+    row,
+    'requires_consecutive_successes',
+    'requiresConsecutiveSuccesses',
+    'consecutive_required',
+    'consecutiveRequired',
+    'require_consecutive_successes',
+    'requireConsecutiveSuccesses'
+  );
+  if (explicit !== undefined) return safeBoolean(explicit, false);
+  return normalizeCriterionMode(row) === 'consecutive_independent';
+};
+
+const isConsecutiveIndependentCriterion = (criterion: AbaMasteryCriterion | null | undefined) =>
+  Boolean(criterion?.requiredConsecutiveIndependentCorrectTrials);
 
 export const abaMasteryCriterionSourceLabel = (criterion: any | null | undefined) => {
   if (!criterion) return 'Criterio de maestria nao configurado';
@@ -314,6 +357,7 @@ export function normalizeAbaMasteryCriterion(row: any | null | undefined): AbaMa
   const isActive = safeBoolean(readValue(row, 'is_active', 'isActive'), true);
   if (!isActive) return null;
   const name = String(readValue(row, 'name') || 'Criterio de maestria').trim();
+  const masteryCriterionMode = normalizeCriterionMode(row);
   const requiredIndependentCorrectTrials = positiveIntegerOrNull(readValue(
     row,
     'required_independent_correct_trials',
@@ -321,7 +365,19 @@ export function normalizeAbaMasteryCriterion(row: any | null | undefined): AbaMa
     'min_independent_correct_trials',
     'minIndependentCorrectTrials',
     'independent_correct_trials_required',
-    'independentCorrectTrialsRequired',
+    'independentCorrectTrialsRequired'
+  ));
+  const explicitConsecutiveIndependentCorrectTrials = positiveIntegerOrNull(readValue(
+    row,
+    'required_consecutive_independent_correct_trials',
+    'requiredConsecutiveIndependentCorrectTrials',
+    'min_consecutive_independent_correct_trials',
+    'minConsecutiveIndependentCorrectTrials',
+    'consecutive_independent_correct_trials_required',
+    'consecutiveIndependentCorrectTrialsRequired'
+  ));
+  const legacyConsecutiveSuccessTarget = positiveIntegerOrNull(readValue(
+    row,
     'min_consecutive_successes',
     'minConsecutiveSuccesses',
     'meta_sucessos',
@@ -329,6 +385,15 @@ export function normalizeAbaMasteryCriterion(row: any | null | undefined): AbaMa
     'mastery_target',
     'masteryTarget'
   ));
+  const requiresConsecutiveSuccesses = Boolean(
+    explicitConsecutiveIndependentCorrectTrials ||
+      legacyConsecutiveSuccessTarget ||
+      criterionRequiresConsecutiveSuccesses(row)
+  );
+  const requiredConsecutiveIndependentCorrectTrials =
+    explicitConsecutiveIndependentCorrectTrials ||
+    legacyConsecutiveSuccessTarget ||
+    (requiresConsecutiveSuccesses ? requiredIndependentCorrectTrials : null);
   const requiredCorrectTrials = positiveIntegerOrNull(readValue(
     row,
     'required_correct_trials',
@@ -369,13 +434,14 @@ export function normalizeAbaMasteryCriterion(row: any | null | undefined): AbaMa
     'trials_required',
     'trialsRequired'
   ));
-  const minTrialsPerSession = explicitMinTrials ?? requiredIndependentCorrectTrials ?? requiredCorrectTrials ?? null;
+  const minTrialsPerSession = explicitMinTrials ?? requiredConsecutiveIndependentCorrectTrials ?? requiredIndependentCorrectTrials ?? requiredCorrectTrials ?? null;
   const minConsecutiveDays = positiveIntegerOrNull(readValue(row, 'min_consecutive_days', 'minConsecutiveDays'), 1, 3650) ?? 1;
   const minDistinctTherapists = positiveIntegerOrNull(readValue(row, 'min_distinct_therapists', 'minDistinctTherapists'), 1, 1000) ?? 1;
   const requireFirstTrialIndependent = safeBoolean(readValue(row, 'require_first_trial_independent', 'requireFirstTrialIndependent'), false);
   const coldProbeOnly = safeBoolean(readValue(row, 'cold_probe_only', 'coldProbeOnly'), false);
   const hasAnyCriterionConfig = Boolean(
-    requiredIndependentCorrectTrials ||
+    requiredConsecutiveIndependentCorrectTrials ||
+      requiredIndependentCorrectTrials ||
       requiredCorrectTrials ||
       minAccuracyPercent !== null ||
       minIndependencePercent !== null ||
@@ -395,6 +461,7 @@ export function normalizeAbaMasteryCriterion(row: any | null | undefined): AbaMa
     targetId: String(readValue(row, 'target_id', 'targetId') || '').trim() || null,
     name,
     requiredIndependentCorrectTrials,
+    requiredConsecutiveIndependentCorrectTrials,
     requiredCorrectTrials,
     minAccuracyPercent,
     minIndependencePercent,
@@ -410,14 +477,22 @@ export function normalizeAbaMasteryCriterion(row: any | null | undefined): AbaMa
     maintenanceDays: readValue(row, 'maintenance_days', 'maintenanceDays') ?? null,
     isActive,
     source,
-    sourceLabel
+    sourceLabel,
+    masteryCriterionMode: requiredConsecutiveIndependentCorrectTrials
+      ? 'consecutive_independent'
+      : requiredIndependentCorrectTrials
+        ? 'total_independent'
+        : masteryCriterionMode || 'custom',
+    requiresConsecutiveSuccesses
   };
 }
 
 export function formatAbaMasteryCriterion(criterion: AbaMasteryCriterion | null): string {
   if (!criterion) return 'Criterio nao configurado';
   const parts = [];
-  if (criterion.requiredIndependentCorrectTrials) {
+  if (criterion.requiredConsecutiveIndependentCorrectTrials) {
+    parts.push(`${criterion.requiredConsecutiveIndependentCorrectTrials} ${criterion.requiredConsecutiveIndependentCorrectTrials === 1 ? 'acerto independente consecutivo' : 'acertos independentes consecutivos'}`);
+  } else if (criterion.requiredIndependentCorrectTrials) {
     parts.push(`${criterion.requiredIndependentCorrectTrials} ${criterion.requiredIndependentCorrectTrials === 1 ? 'acerto independente' : 'acertos independentes'}`);
   }
   if (criterion.requiredCorrectTrials) {
@@ -432,7 +507,7 @@ export function formatAbaMasteryCriterion(criterion: AbaMasteryCriterion | null)
   if (criterion.minTrialsPerSession && !criterion.minTrialsPerSessionImplicit) {
     parts.push(`${criterion.minTrialsPerSession} tentativa(s)/sessao`);
   }
-  const usesTrialCountCriterion = Boolean(criterion.requiredIndependentCorrectTrials || criterion.requiredCorrectTrials);
+  const usesTrialCountCriterion = Boolean(criterion.requiredConsecutiveIndependentCorrectTrials || criterion.requiredIndependentCorrectTrials || criterion.requiredCorrectTrials);
   if ((!usesTrialCountCriterion && criterion.minConsecutiveDaysExplicit) || criterion.minConsecutiveDays > 1) {
     parts.push(`${criterion.minConsecutiveDays} dia(s)`);
   }
@@ -499,14 +574,36 @@ function countConsecutiveSuccessfulDays(evaluatedAt: string, metToday: boolean, 
   return count;
 }
 
+const countConsecutiveIndependentCorrectTrials = (trials: any[]) => {
+  let count = 0;
+  for (const trial of Array.isArray(trials) ? trials : []) {
+    if (isTrialCorrect(trial) && isTrialIndependent(trial)) {
+      count += 1;
+    } else {
+      count = 0;
+    }
+  }
+  return count;
+};
+
 const buildCriterionProgressSummary = (
   criterion: AbaMasteryCriterion,
   independentTrials: number,
   correctTrials: number,
+  consecutiveIndependentTrials: number,
   consecutiveSuccessfulDays: number
 ) => {
+  if (criterion.requiredConsecutiveIndependentCorrectTrials) {
+    return {
+      kind: 'consecutive_independent' as const,
+      count: consecutiveIndependentTrials,
+      required: criterion.requiredConsecutiveIndependentCorrectTrials,
+      label: `${consecutiveIndependentTrials}/${criterion.requiredConsecutiveIndependentCorrectTrials} acertos independentes consecutivos`
+    };
+  }
   if (criterion.requiredIndependentCorrectTrials) {
     return {
+      kind: 'total_independent' as const,
       count: independentTrials,
       required: criterion.requiredIndependentCorrectTrials,
       label: `${independentTrials}/${criterion.requiredIndependentCorrectTrials} acertos independentes`
@@ -514,12 +611,14 @@ const buildCriterionProgressSummary = (
   }
   if (criterion.requiredCorrectTrials) {
     return {
+      kind: 'correct' as const,
       count: correctTrials,
       required: criterion.requiredCorrectTrials,
       label: `${correctTrials}/${criterion.requiredCorrectTrials} acertos`
     };
   }
   return {
+    kind: 'days' as const,
     count: consecutiveSuccessfulDays,
     required: criterion.minConsecutiveDays,
     label: `${consecutiveSuccessfulDays}/${criterion.minConsecutiveDays} dias consecutivos`
@@ -533,7 +632,7 @@ const buildPerformanceText = (
   totalTrials: number,
   independencePercent: number
 ) => {
-  if (criterion.requiredIndependentCorrectTrials || criterion.requiredCorrectTrials) {
+  if (criterion.requiredConsecutiveIndependentCorrectTrials || criterion.requiredIndependentCorrectTrials || criterion.requiredCorrectTrials) {
     return `${progressLabel} - ${independencePercent}% independencia`;
   }
   return `${correctTrials}/${totalTrials} acertos - ${independencePercent}% independencia`;
@@ -559,6 +658,7 @@ export function evaluateTargetMastery(input: EvaluateTargetMasteryInput): AbaMas
       ...base,
       totalTrials: 0,
       independentTrials: 0,
+      consecutiveIndependentTrials: 0,
       promptedTrials: 0,
       errorTrials: 0,
       accuracyPercent: 0,
@@ -570,6 +670,8 @@ export function evaluateTargetMastery(input: EvaluateTargetMasteryInput): AbaMas
       criterionProgressCount: 0,
       criterionRequiredCount: 0,
       criterionProgressLabel: '0/0 tentativas',
+      criterionProgressKind: 'none',
+      sequenceBrokenByLastTrial: false,
       status: 'INSUFFICIENT_DATA',
       reasons: [{ code: 'NO_CRITERIA', message: 'Nenhum criterio ativo encontrado para esta meta ou programa.' }],
       suggestedPhase: 'teaching',
@@ -587,6 +689,7 @@ export function evaluateTargetMastery(input: EvaluateTargetMasteryInput): AbaMas
 
   const totalTrials = consideredTrials.length;
   const independentTrials = consideredTrials.filter((trial) => isTrialCorrect(trial) && isTrialIndependent(trial)).length;
+  const consecutiveIndependentTrials = countConsecutiveIndependentCorrectTrials(consideredTrials);
   const promptedTrials = consideredTrials.filter((trial) => isTrialCorrect(trial) && !isTrialIndependent(trial)).length;
   const correctTrials = independentTrials + promptedTrials;
   const errorTrials = consideredTrials.filter((trial) => !isTrialCorrect(trial)).length;
@@ -598,6 +701,8 @@ export function evaluateTargetMastery(input: EvaluateTargetMasteryInput): AbaMas
     ...(Array.isArray(input.previousEvaluations) ? input.previousEvaluations.filter(isSuccessfulEvaluation).map((evaluation) => String(readValue(evaluation, 'therapist_id', 'therapistId') || '').trim()) : [])
   ].filter(Boolean));
   const distinctTherapistsCount = therapistIds.size;
+  const lastTrial = consideredTrials[consideredTrials.length - 1] || null;
+  const sequenceBrokenByLastTrial = Boolean(lastTrial && (!isTrialCorrect(lastTrial) || !isTrialIndependent(lastTrial)));
   const reasons: AbaMasteryReason[] = [];
 
   if (totalTrials === 0) {
@@ -611,11 +716,12 @@ export function evaluateTargetMastery(input: EvaluateTargetMasteryInput): AbaMas
   }
 
   if (reasons.length > 0) {
-    const progressSummary = buildCriterionProgressSummary(criterion, independentTrials, correctTrials, 0);
+    const progressSummary = buildCriterionProgressSummary(criterion, independentTrials, correctTrials, consecutiveIndependentTrials, 0);
     return {
       ...base,
       totalTrials,
       independentTrials,
+      consecutiveIndependentTrials,
       promptedTrials,
       errorTrials,
       accuracyPercent,
@@ -627,6 +733,8 @@ export function evaluateTargetMastery(input: EvaluateTargetMasteryInput): AbaMas
       criterionProgressCount: progressSummary.count,
       criterionRequiredCount: progressSummary.required,
       criterionProgressLabel: progressSummary.label,
+      criterionProgressKind: progressSummary.kind,
+      sequenceBrokenByLastTrial,
       status: 'INSUFFICIENT_DATA',
       reasons,
       suggestedPhase: 'teaching',
@@ -644,7 +752,12 @@ export function evaluateTargetMastery(input: EvaluateTargetMasteryInput): AbaMas
   if (criterion.requireFirstTrialIndependent && !firstTrialIndependent) {
     reasons.push({ code: 'FIRST_TRIAL_NOT_INDEPENDENT', message: 'A primeira tentativa da sessao nao foi independente.' });
   }
-  if (criterion.requiredIndependentCorrectTrials && independentTrials < criterion.requiredIndependentCorrectTrials) {
+  if (criterion.requiredConsecutiveIndependentCorrectTrials && consecutiveIndependentTrials < criterion.requiredConsecutiveIndependentCorrectTrials) {
+    reasons.push({
+      code: 'CONSECUTIVE_INDEPENDENT_CORRECT_TRIALS_NOT_MET',
+      message: `${consecutiveIndependentTrials}/${criterion.requiredConsecutiveIndependentCorrectTrials} acertos independentes consecutivos.`
+    });
+  } else if (criterion.requiredIndependentCorrectTrials && independentTrials < criterion.requiredIndependentCorrectTrials) {
     reasons.push({ code: 'INDEPENDENT_CORRECT_TRIALS_NOT_MET', message: `${independentTrials}/${criterion.requiredIndependentCorrectTrials} acertos independentes.` });
   }
   if (criterion.requiredCorrectTrials && correctTrials < criterion.requiredCorrectTrials) {
@@ -665,12 +778,13 @@ export function evaluateTargetMastery(input: EvaluateTargetMasteryInput): AbaMas
     consecutiveSuccessfulDays >= criterion.minConsecutiveDays &&
     distinctTherapistsCount >= criterion.minDistinctTherapists;
   const status: AbaMasteryStatus = !metToday ? 'NOT_MET' : readyForReview ? 'READY_FOR_REVIEW' : 'MET_TODAY';
-  const progressSummary = buildCriterionProgressSummary(criterion, independentTrials, correctTrials, consecutiveSuccessfulDays);
+  const progressSummary = buildCriterionProgressSummary(criterion, independentTrials, correctTrials, consecutiveIndependentTrials, consecutiveSuccessfulDays);
 
   return {
     ...base,
     totalTrials,
     independentTrials,
+    consecutiveIndependentTrials,
     promptedTrials,
     errorTrials,
     accuracyPercent,
@@ -682,6 +796,8 @@ export function evaluateTargetMastery(input: EvaluateTargetMasteryInput): AbaMas
     criterionProgressCount: progressSummary.count,
     criterionRequiredCount: progressSummary.required,
     criterionProgressLabel: progressSummary.label,
+    criterionProgressKind: progressSummary.kind,
+    sequenceBrokenByLastTrial,
     status,
     reasons,
     suggestedPhase: status === 'READY_FOR_REVIEW' ? 'maintenance' : 'teaching',
@@ -742,6 +858,7 @@ export function evaluateMaintenanceStatus(input: EvaluateMaintenanceStatusInput)
 
   const totalTrials = consideredTrials.length;
   const independentTrials = consideredTrials.filter((trial) => isTrialCorrect(trial) && isTrialIndependent(trial)).length;
+  const consecutiveIndependentTrials = countConsecutiveIndependentCorrectTrials(consideredTrials);
   const promptedTrials = consideredTrials.filter((trial) => isTrialCorrect(trial) && !isTrialIndependent(trial)).length;
   const errorTrials = consideredTrials.filter((trial) => !isTrialCorrect(trial)).length;
   const accuracyPercent = percent(independentTrials + promptedTrials, totalTrials);
@@ -778,9 +895,17 @@ export function evaluateMaintenanceStatus(input: EvaluateMaintenanceStatusInput)
       message: `${independencePercent}% independencia; criterio ${minIndependencePercent}%.`
     });
   }
+  const requiredConsecutiveIndependentTrials = criterion.requiredConsecutiveIndependentCorrectTrials || 0;
+  const consecutiveSequenceBelowCriterion = requiredConsecutiveIndependentTrials > 0 && consecutiveIndependentTrials < requiredConsecutiveIndependentTrials;
+  if (consecutiveSequenceBelowCriterion) {
+    reasons.push({
+      code: 'MAINTENANCE_CONSECUTIVE_INDEPENDENT_TRIALS_NOT_MET',
+      message: `${consecutiveIndependentTrials}/${requiredConsecutiveIndependentTrials} acertos independentes consecutivos.`
+    });
+  }
 
   const severeDrop = accuracyDrop >= 20 || independenceDrop >= 20;
-  const belowCriterion = accuracyDrop > 0 || independenceDrop > 0;
+  const belowCriterion = accuracyDrop > 0 || independenceDrop > 0 || consecutiveSequenceBelowCriterion;
   const status: AbaMaintenanceProbeStatus =
     totalTrials === 0 || totalTrials < minTrialsPerSession
       ? 'WATCH'
@@ -802,6 +927,7 @@ export function evaluateMaintenanceStatus(input: EvaluateMaintenanceStatusInput)
     occurredAt,
     totalTrials,
     independentTrials,
+    consecutiveIndependentTrials,
     promptedTrials,
     errorTrials,
     accuracyPercent,
@@ -810,8 +936,14 @@ export function evaluateMaintenanceStatus(input: EvaluateMaintenanceStatusInput)
     minIndependencePercent,
     status,
     consecutiveFailureCount,
+    criterionRequiredCount: requiredConsecutiveIndependentTrials || minTrialsPerSession,
+    criterionProgressLabel: requiredConsecutiveIndependentTrials
+      ? `${consecutiveIndependentTrials}/${requiredConsecutiveIndependentTrials} acertos independentes consecutivos`
+      : `${independentTrials}/${minTrialsPerSession} acertos independentes`,
     reasons,
-    performanceText: `${independentTrials + promptedTrials}/${totalTrials} acertos - ${independencePercent}% independencia`,
+    performanceText: requiredConsecutiveIndependentTrials
+      ? `Sequencia: ${consecutiveIndependentTrials}/${requiredConsecutiveIndependentTrials} acertos independentes consecutivos - ${independencePercent}% independencia`
+      : `${independentTrials + promptedTrials}/${totalTrials} acertos - ${independencePercent}% independencia`,
     shouldCreateRegressionAlert,
     suggestedClinicalStatus: status === 'REGRESSION_RISK' ? 'REGRESSION_RISK' : 'MAINTENANCE'
   };

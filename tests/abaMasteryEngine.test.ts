@@ -114,16 +114,18 @@ test('dias consecutivos suficientes retorna READY_FOR_REVIEW', () => {
   assert.equal(result.consecutiveSuccessfulDays, 3);
 });
 
-test('meta_sucessos vira acertos independentes e nao dias obrigatorios', () => {
+test('meta_sucessos vira acertos independentes consecutivos e nao dias obrigatorios', () => {
   const criteria = {
     ...baseCriteria,
-    name: '2 acertos independentes',
+    name: '2 acertos independentes consecutivos',
     meta_sucessos: 2,
     min_trials_per_session: undefined,
     min_consecutive_days: undefined
   };
   const normalized = normalizeAbaMasteryCriterion(criteria);
-  assert.equal(normalized?.requiredIndependentCorrectTrials, 2);
+  assert.equal(normalized?.requiredIndependentCorrectTrials, null);
+  assert.equal(normalized?.requiredConsecutiveIndependentCorrectTrials, 2);
+  assert.equal(normalized?.masteryCriterionMode, 'consecutive_independent');
   assert.equal(normalized?.minTrialsPerSession, 2);
   assert.equal(normalized?.minConsecutiveDays, 1);
   assert.doesNotMatch(formatAbaMasteryCriterion(normalized), /2 dia/);
@@ -133,8 +135,10 @@ test('meta_sucessos vira acertos independentes e nao dias obrigatorios', () => {
   assert.equal(result.suggestedPhase, 'maintenance');
   assert.equal(result.criterionProgressCount, 2);
   assert.equal(result.criterionRequiredCount, 2);
-  assert.match(result.criterionLabel, /2 acertos independentes/);
-  assert.match(result.performanceText, /2\/2 acertos independentes/);
+  assert.equal(result.consecutiveIndependentTrials, 2);
+  assert.equal(result.criterionProgressKind, 'consecutive_independent');
+  assert.match(result.criterionLabel, /2 acertos independentes consecutivos/);
+  assert.match(result.performanceText, /2\/2 acertos independentes consecutivos/);
   assert.equal(result.reasons.some((reason) => reason.code === 'CONSECUTIVE_DAYS_PENDING'), false);
 });
 
@@ -188,6 +192,80 @@ test('acerto com ajuda nao conta para criterio independente', () => {
   assert.equal(result.status, 'NOT_MET');
   assert.equal(result.criterionProgressCount, 1);
   assert.equal(result.reasons.some((reason) => reason.code === 'INDEPENDENT_CORRECT_TRIALS_NOT_MET'), true);
+});
+
+test('criterio consecutivo zera sequencia quando ha ajuda', () => {
+  const criteria = {
+    name: '5 independentes consecutivos',
+    required_consecutive_independent_correct_trials: 5,
+    min_trials_per_session: 5,
+    is_active: true
+  };
+  const result = evaluate({
+    criteria,
+    trials: [
+      trial({ id: 't1', occurred_at: '2026-05-25T12:00:00.000Z' }),
+      trial({ id: 't2', occurred_at: '2026-05-25T12:01:00.000Z' }),
+      trial({ id: 't3', occurred_at: '2026-05-25T12:02:00.000Z' }),
+      trial({ id: 't4', occurred_at: '2026-05-25T12:03:00.000Z' }),
+      trial({ id: 't5', trialOutcome: 'prompted', independent: false, occurred_at: '2026-05-25T12:04:00.000Z' })
+    ]
+  });
+  assert.equal(result.independentTrials, 4);
+  assert.equal(result.promptedTrials, 1);
+  assert.equal(result.consecutiveIndependentTrials, 0);
+  assert.equal(result.criterionProgressLabel, '0/5 acertos independentes consecutivos');
+  assert.equal(result.sequenceBrokenByLastTrial, true);
+  assert.equal(result.status, 'NOT_MET');
+  assert.equal(result.reasons.some((reason) => reason.code === 'CONSECUTIVE_INDEPENDENT_CORRECT_TRIALS_NOT_MET'), true);
+});
+
+test('criterio consecutivo zera sequencia quando ha erro', () => {
+  const criteria = {
+    name: '5 independentes consecutivos',
+    requiredConsecutiveIndependentCorrectTrials: 5,
+    minTrialsPerSession: 5,
+    is_active: true
+  };
+  const result = evaluate({
+    criteria,
+    trials: [
+      trial({ id: 't1', occurred_at: '2026-05-25T12:00:00.000Z' }),
+      trial({ id: 't2', occurred_at: '2026-05-25T12:01:00.000Z' }),
+      trial({ id: 't3', occurred_at: '2026-05-25T12:02:00.000Z' }),
+      trial({ id: 't4', occurred_at: '2026-05-25T12:03:00.000Z' }),
+      trial({ id: 't5', trialOutcome: 'error', correct: false, independent: false, occurred_at: '2026-05-25T12:04:00.000Z' })
+    ]
+  });
+  assert.equal(result.errorTrials, 1);
+  assert.equal(result.consecutiveIndependentTrials, 0);
+  assert.equal(result.criterionProgressLabel, '0/5 acertos independentes consecutivos');
+  assert.equal(result.status, 'NOT_MET');
+});
+
+test('criterio total independente nao zera acumulado apos ajuda', () => {
+  const criteria = {
+    name: '5 independentes totais',
+    requiredIndependentCorrectTrials: 5,
+    minTrialsPerSession: 6,
+    is_active: true
+  };
+  const result = evaluate({
+    criteria,
+    trials: [
+      trial({ id: 't1', occurred_at: '2026-05-25T12:00:00.000Z' }),
+      trial({ id: 't2', occurred_at: '2026-05-25T12:01:00.000Z' }),
+      trial({ id: 't3', occurred_at: '2026-05-25T12:02:00.000Z' }),
+      trial({ id: 't4', occurred_at: '2026-05-25T12:03:00.000Z' }),
+      trial({ id: 't5', trialOutcome: 'prompted', independent: false, occurred_at: '2026-05-25T12:04:00.000Z' }),
+      trial({ id: 't6', occurred_at: '2026-05-25T12:05:00.000Z' })
+    ]
+  });
+  assert.equal(result.independentTrials, 5);
+  assert.equal(result.consecutiveIndependentTrials, 1);
+  assert.equal(result.criterionProgressKind, 'total_independent');
+  assert.equal(result.criterionProgressLabel, '5/5 acertos independentes');
+  assert.equal(result.status, 'READY_FOR_REVIEW');
 });
 
 test('tentativas de outro target nao entram na avaliacao da meta atual', () => {
@@ -302,12 +380,12 @@ test('frontend e backend integram avaliacao summary-driven no encerramento e rel
   assert.match(serverCode, /app\.post\('\/api\/aba\/session-summaries'[\s\S]*?evaluateAndPersistSessionMastery[\s\S]*?mastery_summary: masterySummaryPayload/m);
   assert.match(serverCode, /from\('aba_mastery_evaluations'\)[\s\S]*?select\('id,status,evaluation_status,evaluated_at,therapist_id,consecutive_successful_days'\)[\s\S]*?limit\(30\)/m);
   assert.match(sessionModeCode, /evaluateTargetMastery\([\s\S]*?teachingMasteryRows/m);
-  assert.match(sessionModeCode, /legacySuccessTarget[\s\S]*?required_independent_correct_trials/m);
+  assert.match(sessionModeCode, /legacySuccessTarget[\s\S]*?required_consecutive_independent_correct_trials/m);
   assert.match(sessionModeCode, /normalizeAbaMasteryCriterion[\s\S]*?buildSessionGoalMasteryCriterion/m);
   assert.match(sessionModeCode, /criterionSourceLabel[\s\S]*?Origem:/m);
   assert.match(sessionModeCode, /Critérios de maestria[\s\S]*?progresso do crit/m);
   assert.doesNotMatch(sessionModeCode, /const legacyDays/);
-  assert.match(serverCode, /required_independent_correct_trials[\s\S]*?embeddedRequiredIndependentCorrectTrials/m);
+  assert.match(serverCode, /required_consecutive_independent_correct_trials[\s\S]*?embeddedRequiredConsecutiveIndependentCorrectTrials/m);
   assert.match(serverCode, /MASTERY_CRITERIA_UPDATED/);
   assert.match(serverCode, /\/api\/aba\/patients\/:patientId\/targets\/:targetId\/mastery-criteria/);
   assert.match(dataServiceCode, /async updateAbaTargetMasteryCriteria[\s\S]*?mastery-criteria/);

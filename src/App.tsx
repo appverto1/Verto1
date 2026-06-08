@@ -4478,9 +4478,13 @@ export default function App() {
             criteria: {
               source: 'skill',
               sourceLabel: 'Criterio da habilidade',
-              type: 'independent_correct_count',
-              requiredIndependentCorrectTrials: appliedMasteryTarget,
-              required_independent_correct_trials: appliedMasteryTarget,
+              type: 'consecutive_independent_correct_count',
+              masteryCriterionMode: 'consecutive_independent',
+              mastery_criterion_mode: 'consecutive_independent',
+              requiredConsecutiveIndependentCorrectTrials: appliedMasteryTarget,
+              required_consecutive_independent_correct_trials: appliedMasteryTarget,
+              requiresConsecutiveSuccesses: true,
+              requires_consecutive_successes: true,
               minTrialsPerSession: appliedMasteryTarget,
               min_trials_per_session: appliedMasteryTarget,
               collectionType: abaCollectionType

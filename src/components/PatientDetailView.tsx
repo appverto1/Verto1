@@ -4774,15 +4774,29 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       'masteryTarget',
       'mastery_target'
     );
+    const explicitIndependentTarget = readPeiMasteryValue(
+      embedded,
+      'required_independent_correct_trials',
+      'requiredIndependentCorrectTrials',
+      'min_independent_correct_trials',
+      'minIndependentCorrectTrials'
+    );
+    const explicitConsecutiveTarget = readPeiMasteryValue(
+      embedded,
+      'required_consecutive_independent_correct_trials',
+      'requiredConsecutiveIndependentCorrectTrials',
+      'min_consecutive_independent_correct_trials',
+      'minConsecutiveIndependentCorrectTrials',
+      'min_consecutive_successes',
+      'minConsecutiveSuccesses'
+    );
+    const consecutiveTarget = explicitConsecutiveTarget ?? (explicitIndependentTarget === undefined ? directTarget : undefined);
     const raw = {
       ...embedded,
-      required_independent_correct_trials: readPeiMasteryValue(
-        embedded,
-        'required_independent_correct_trials',
-        'requiredIndependentCorrectTrials',
-        'min_independent_correct_trials',
-        'minIndependentCorrectTrials'
-      ) ?? directTarget,
+      required_independent_correct_trials: explicitIndependentTarget,
+      required_consecutive_independent_correct_trials: consecutiveTarget,
+      mastery_criterion_mode: consecutiveTarget !== undefined ? 'consecutive_independent' : embedded.mastery_criterion_mode ?? embedded.masteryCriterionMode,
+      requires_consecutive_successes: consecutiveTarget !== undefined ? true : embedded.requires_consecutive_successes ?? embedded.requiresConsecutiveSuccesses,
       source,
       sourceLabel: source === 'protocol' ? 'Criterio herdado do protocolo' : 'Criterio da habilidade',
       is_active: true
@@ -4803,8 +4817,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     const directTarget = readPeiMasteryValue(goal, 'meta_sucessos', 'metaSucessos', 'masteryTarget', 'mastery_target');
     if (directTarget !== undefined) {
       const criterion = normalizeAbaMasteryCriterion({
-        type: 'independent_correct_count',
-        required_independent_correct_trials: directTarget,
+        type: 'consecutive_independent_correct_count',
+        mastery_criterion_mode: 'consecutive_independent',
+        required_consecutive_independent_correct_trials: directTarget,
+        requires_consecutive_successes: true,
         source: 'skill',
         sourceLabel: 'Criterio da habilidade',
         is_active: true
@@ -4831,7 +4847,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
   const getGoalMasteryTarget = (goal: any) => {
     const criterion = resolvePeiGoalMasteryCriterion(goal);
-    return criterion?.requiredIndependentCorrectTrials || criterion?.requiredCorrectTrials || null;
+    return criterion?.requiredConsecutiveIndependentCorrectTrials || criterion?.requiredIndependentCorrectTrials || criterion?.requiredCorrectTrials || null;
   };
 
   const getGoalProgressResetMarker = (goal: any) => {
@@ -4842,7 +4858,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return getPeiHistoryProgressMarker(entry);
   };
 
-  const getMasteryProgress = (goalOrName: any) => {
+  const getMasteryProgress = (goalOrName: any, mode: 'consecutive' | 'total' = 'consecutive') => {
     if (patientCategory !== 'Criança') return null;
     const goal = typeof goalOrName === 'string'
       ? patient.pei?.find((g: any) => g.name === goalOrName)
@@ -4860,6 +4876,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         (!goal || getHistoryProgressMarker(h) > resetMarker)
       )
       .sort((a: any, b: any) => getHistoryProgressMarker(b) - getHistoryProgressMarker(a));
+
+    if (mode === 'total') {
+      return skillHistory.filter((h: any) => h.score === 1).length;
+    }
     
     let count = 0;
     for (const h of skillHistory) {
@@ -4884,10 +4904,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       return normalizedStoredProgress;
     }
 
-    const target = getGoalMasteryTarget(goal);
+    const criterion = resolvePeiGoalMasteryCriterion(goal);
+    const target = criterion?.requiredConsecutiveIndependentCorrectTrials || criterion?.requiredIndependentCorrectTrials || criterion?.requiredCorrectTrials || null;
     if (!target) return normalizedStoredProgress;
-    const consecutiveSuccesses = getMasteryProgress(goal) || 0;
-    const masteryProgress = Math.min(Math.round((consecutiveSuccesses / target) * 100), 100);
+    const progressCount = getMasteryProgress(goal, criterion?.requiredIndependentCorrectTrials && !criterion?.requiredConsecutiveIndependentCorrectTrials ? 'total' : 'consecutive') || 0;
+    const masteryProgress = Math.min(Math.round((progressCount / target) * 100), 100);
     return Math.max(normalizedStoredProgress, masteryProgress);
   };
 
@@ -4938,11 +4959,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         requiredCount: 0
       };
     }
-    const progress = getMasteryProgress(goal) || 0;
+    const requiredConsecutive = criterion.requiredConsecutiveIndependentCorrectTrials || null;
     const requiredIndependent = criterion.requiredIndependentCorrectTrials || null;
     const requiredCorrect = criterion.requiredCorrectTrials || null;
-    const requiredCount = requiredIndependent || requiredCorrect || criterion.minConsecutiveDays || 0;
-    const progressLabel = requiredIndependent
+    const progress = getMasteryProgress(goal, requiredIndependent && !requiredConsecutive ? 'total' : 'consecutive') || 0;
+    const requiredCount = requiredConsecutive || requiredIndependent || requiredCorrect || criterion.minConsecutiveDays || 0;
+    const progressLabel = requiredConsecutive
+      ? `Sequencia: ${progress}/${requiredConsecutive} acertos independentes consecutivos`
+      : requiredIndependent
       ? `${progress}/${requiredIndependent} acertos independentes`
       : requiredCorrect
         ? `${progress}/${requiredCorrect} acertos`

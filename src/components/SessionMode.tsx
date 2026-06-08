@@ -465,9 +465,17 @@ const buildSessionGoalMasteryCriterion = (goal: any) => {
     sourceLabel: readMasteryValue(embedded, 'sourceLabel', 'source_label', 'originLabel', 'origin_label') || undefined
   };
   const legacySuccessTarget = readMasteryValue(goal, 'meta_sucessos', 'metaSucessos', 'masteryTarget', 'mastery_target');
-  if (legacySuccessTarget !== undefined && readMasteryValue(rawCriterion, 'required_independent_correct_trials', 'requiredIndependentCorrectTrials') === undefined) {
-    rawCriterion.required_independent_correct_trials = legacySuccessTarget;
-    rawCriterion.requiredIndependentCorrectTrials = legacySuccessTarget;
+  if (
+    legacySuccessTarget !== undefined &&
+    readMasteryValue(rawCriterion, 'required_consecutive_independent_correct_trials', 'requiredConsecutiveIndependentCorrectTrials') === undefined &&
+    readMasteryValue(rawCriterion, 'required_independent_correct_trials', 'requiredIndependentCorrectTrials') === undefined
+  ) {
+    rawCriterion.required_consecutive_independent_correct_trials = legacySuccessTarget;
+    rawCriterion.requiredConsecutiveIndependentCorrectTrials = legacySuccessTarget;
+    rawCriterion.mastery_criterion_mode = readMasteryValue(rawCriterion, 'mastery_criterion_mode', 'masteryCriterionMode') || 'consecutive_independent';
+    rawCriterion.masteryCriterionMode = rawCriterion.mastery_criterion_mode;
+    rawCriterion.requires_consecutive_successes = true;
+    rawCriterion.requiresConsecutiveSuccesses = true;
   }
   const normalized = normalizeAbaMasteryCriterion(rawCriterion);
   return normalized ? { ...normalized, sourceLabel: abaMasteryCriterionSourceLabel(normalized) } : null;
@@ -1553,12 +1561,31 @@ export const SessionMode = ({
       syntheticRecord,
       ...records.filter((record) => record.kind === 'trial' && isMaintenanceProbeCollection(record.collectionType) && recordMatchesGoal(record, params.goal))
     ];
-    const totalTrials = probeRecords.length;
-    const independentTrials = probeRecords.filter((record) => record.trialOutcome === 'independent' || record.independent).length;
-    const errorTrials = probeRecords.filter((record) => record.trialOutcome === 'error' || record.correct === false).length;
-    const promptedTrials = Math.max(0, totalTrials - independentTrials - errorTrials);
-    const accuracyPercent = totalTrials > 0 ? Math.round(((independentTrials + promptedTrials) / totalTrials) * 10000) / 100 : 0;
-    const independencePercent = totalTrials > 0 ? Math.round((independentTrials / totalTrials) * 10000) / 100 : 0;
+    const maintenanceInfo = getGoalMaintenanceInfo(params.goal);
+    const maintenanceEvaluation = evaluateMaintenanceStatus({
+      organizationId: resolvedClinicId || 'local',
+      patientId,
+      targetId: resolvedTargetId,
+      targetName: goalName,
+      sessionId,
+      maintenanceScheduleId: resolvedScheduleId,
+      criteria: buildSessionGoalMasteryCriterion(params.goal),
+      trials: probeRecords.map((record) => ({
+        ...record,
+        target_id: record.targetId || resolvedTargetId,
+        target_name: record.targetName || record.title,
+        response_score: record.score,
+        correct: Boolean(record.correct),
+        independent: Boolean(record.independent),
+        collection_type: record.collectionType,
+        prompt_level_key: record.promptLevelKey,
+        trial_outcome: record.trialOutcome,
+        therapist_id: record.therapistId || resolvedTherapistId || null,
+        occurred_at: record.timestamp
+      })),
+      previousProbeResults: maintenanceInfo.probeResults,
+      occurredAt: params.timestamp
+    });
     const result = await dataService.saveAbaMaintenanceProbeResult({
       id: `maintenance-${resolvedScheduleId}-${sessionId}-${params.trialId}`,
       organization_id: resolvedClinicId || undefined,
@@ -1590,19 +1617,21 @@ export const SessionMode = ({
       result: params.outcome,
       prompt_type: promptType,
       promptType,
-      passed: params.outcome !== 'error' && params.score > 0,
-      total_trials: totalTrials,
-      totalTrials,
-      independent_trials: independentTrials,
-      independentTrials,
-      prompted_trials: promptedTrials,
-      promptedTrials,
-      error_trials: errorTrials,
-      errorTrials,
-      accuracy_percent: accuracyPercent,
-      accuracyPercent,
-      independence_percent: independencePercent,
-      independencePercent,
+      passed: maintenanceEvaluation.status === 'MAINTAINED',
+      status: maintenanceEvaluation.status,
+      probeStatus: maintenanceEvaluation.status,
+      total_trials: maintenanceEvaluation.totalTrials,
+      totalTrials: maintenanceEvaluation.totalTrials,
+      independent_trials: maintenanceEvaluation.independentTrials,
+      independentTrials: maintenanceEvaluation.independentTrials,
+      prompted_trials: maintenanceEvaluation.promptedTrials,
+      promptedTrials: maintenanceEvaluation.promptedTrials,
+      error_trials: maintenanceEvaluation.errorTrials,
+      errorTrials: maintenanceEvaluation.errorTrials,
+      accuracy_percent: maintenanceEvaluation.accuracyPercent,
+      accuracyPercent: maintenanceEvaluation.accuracyPercent,
+      independence_percent: maintenanceEvaluation.independencePercent,
+      independencePercent: maintenanceEvaluation.independencePercent,
       created_by: resolvedTherapistId || undefined,
       createdBy: resolvedTherapistId || undefined,
       updated_by: resolvedTherapistId || undefined,
@@ -1617,6 +1646,9 @@ export const SessionMode = ({
         score: params.score,
         promptType,
         targetName: goalName,
+        status: maintenanceEvaluation.status,
+        reasons: maintenanceEvaluation.reasons,
+        criterionProgressLabel: maintenanceEvaluation.criterionProgressLabel,
         activeMaintenanceProbe: {
           scheduleId: resolvedScheduleId,
           targetId: resolvedTargetId,
@@ -3472,6 +3504,7 @@ export const SessionMode = ({
       statusCode: evaluation.status,
       totalTrials: evaluation.totalTrials,
       independentTrials: evaluation.independentTrials,
+      consecutiveIndependentTrials: evaluation.consecutiveIndependentTrials,
       promptedTrials: evaluation.promptedTrials,
       errorTrials: evaluation.errorTrials,
       accuracyPercent: evaluation.accuracyPercent,
@@ -3480,6 +3513,9 @@ export const SessionMode = ({
       criterionProgressCount: evaluation.criterionProgressCount,
       criterionRequiredCount: evaluation.criterionRequiredCount,
       criterionProgressLabel: evaluation.criterionProgressLabel,
+      criterionProgressKind: evaluation.criterionProgressKind,
+      criterionProgressPrefix: evaluation.criterionProgressKind === 'consecutive_independent' ? 'Sequencia' : 'Hoje',
+      sequenceBrokenByLastTrial: evaluation.sequenceBrokenByLastTrial,
       reasons: evaluation.reasons
     };
   }), [patientId, records, resolvedClinicId, resolvedTherapistId, sessionEndPreviewAt, sessionGoals, sessionId]);
@@ -5932,6 +5968,7 @@ export const SessionMode = ({
                       ? 'Em treino'
                       : masteryRow?.status || 'Dados insuficientes';
               const progressLabel = masteryRow?.criterionProgressLabel || '0/0';
+              const progressPrefix = masteryRow?.criterionProgressPrefix || 'Hoje';
               return (
                 <article
                   key={`mobile-${goalKey}`}
@@ -5963,9 +6000,14 @@ export const SessionMode = ({
                   </div>
 
                   <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] font-semibold text-gray-500">
-                    <span>Hoje: {progressLabel}</span>
+                    <span>{progressPrefix}: {progressLabel}</span>
                     {masteryRow?.criterion && <span className="truncate">Critério: {masteryRow.criterion}</span>}
                   </div>
+                  {selected && masteryRow?.criterionProgressKind === 'consecutive_independent' && masteryRow?.sequenceBrokenByLastTrial && (
+                    <p className="mt-2 rounded-xl bg-orange-50 px-3 py-2 text-[11px] font-bold text-orange-700">
+                      Última tentativa com ajuda ou erro quebrou a sequência.
+                    </p>
+                  )}
 
                   {selected && (
                     <div className="mt-3 space-y-2" data-aba-mobile-quick-actions>
@@ -6052,7 +6094,7 @@ export const SessionMode = ({
                         <div className="rounded-xl border border-blue-100 bg-[#F8FAFF] px-3 py-2 text-xs font-semibold leading-relaxed text-gray-600" data-aba-mobile-criteria-details>
                           <p>{masteryRow?.criterion || 'Critério não configurado.'}</p>
                           <p className="mt-1 text-[11px] text-gray-500">Origem: {masteryRow?.criterionSourceLabel || 'Critério de maestria não configurado'}</p>
-                          <p className="mt-1 text-[11px] text-gray-500">Hoje: {progressLabel}</p>
+                          <p className="mt-1 text-[11px] text-gray-500">{progressPrefix}: {progressLabel}</p>
                           {goal.criteria && <p className="mt-1 text-[11px] text-gray-500">{sanitizeDescriptionForDisplay(goal.criteria)}</p>}
                         </div>
                       )}
@@ -6101,8 +6143,11 @@ export const SessionMode = ({
                         <p className="max-w-[220px] text-xs font-bold text-[#7a32fc] sm:ml-auto">{masteryRow?.criterion || 'Criterio nao configurado'}</p>
                         <p className="mt-1 text-[11px] font-semibold text-gray-500">Origem: {masteryRow?.criterionSourceLabel || 'Criterio de maestria nao configurado'}</p>
                         <p className="text-[11px] font-semibold text-gray-500">
-                          {masteryRow?.contributes ? 'Criterio concluido' : 'Hoje'}: {masteryRow?.criterionProgressLabel || '0/0'}
+                          {masteryRow?.contributes ? 'Criterio concluido' : masteryRow?.criterionProgressPrefix || 'Hoje'}: {masteryRow?.criterionProgressLabel || '0/0'}
                         </p>
+                        {masteryRow?.criterionProgressKind === 'consecutive_independent' && masteryRow?.sequenceBrokenByLastTrial && (
+                          <p className="mt-1 text-[11px] font-bold text-orange-600">Ultima tentativa com ajuda ou erro quebrou a sequencia.</p>
+                        )}
                         <span className={`mt-2 inline-flex rounded-full px-2 py-1 text-[9px] font-bold uppercase tracking-widest ${masteryRow?.statusCode === 'READY_FOR_REVIEW' ? 'bg-emerald-50 text-emerald-600' : masteryRow?.statusCode === 'MET_TODAY' ? 'bg-blue-50 text-blue-600' : masteryRow?.statusCode === 'INSUFFICIENT_DATA' ? 'bg-amber-50 text-amber-600' : 'bg-slate-100 text-slate-500'}`}>
                           {masteryRow?.status || 'Dados insuficientes'}
                         </span>

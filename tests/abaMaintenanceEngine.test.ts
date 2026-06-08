@@ -230,6 +230,45 @@ test('queda leve abaixo do criterio retorna WATCH', () => {
   assert.equal(result.shouldCreateRegressionAlert, false);
 });
 
+test('maintenance probe com criterio consecutivo nao passa com ajuda', () => {
+  const result = evaluate({
+    criteria: {
+      ...criteria,
+      required_consecutive_independent_correct_trials: 2,
+      min_trials_per_session: 2,
+      min_accuracy_percent: 0,
+      min_independence_percent: 0
+    },
+    trials: [
+      trial({ id: 'm1', occurred_at: '2026-05-25T12:00:00.000Z' }),
+      trial({ id: 'm2', trialOutcome: 'prompted', independent: false, occurred_at: '2026-05-25T12:01:00.000Z' })
+    ]
+  });
+  assert.equal(result.status, 'WATCH');
+  assert.equal(result.independentTrials, 1);
+  assert.equal(result.consecutiveIndependentTrials, 0);
+  assert.equal(result.criterionProgressLabel, '0/2 acertos independentes consecutivos');
+  assert.equal(result.reasons.some((reason) => reason.code === 'MAINTENANCE_CONSECUTIVE_INDEPENDENT_TRIALS_NOT_MET'), true);
+});
+
+test('maintenance probe com criterio consecutivo passa com independentes consecutivos', () => {
+  const result = evaluate({
+    criteria: {
+      ...criteria,
+      requiredConsecutiveIndependentCorrectTrials: 2,
+      min_trials_per_session: 2,
+      min_accuracy_percent: 0,
+      min_independence_percent: 0
+    },
+    trials: [
+      trial({ id: 'm1', occurred_at: '2026-05-25T12:00:00.000Z' }),
+      trial({ id: 'm2', occurred_at: '2026-05-25T12:01:00.000Z' })
+    ]
+  });
+  assert.equal(result.status, 'MAINTAINED');
+  assert.equal(result.consecutiveIndependentTrials, 2);
+});
+
 test('resultado muito abaixo do criterio retorna REGRESSION_RISK', () => {
   const result = evaluate({
     trials: [
@@ -393,7 +432,8 @@ test('SessionMode mobile usa cards compactos sem criar fluxo paralelo de registr
   assert.match(sessionModeCode, /mobileExpandedCriteriaKey/);
   assert.match(mobileCode, /data-aba-mobile-task-card/);
   assert.match(mobileCode, /line-clamp-2/);
-  assert.match(mobileCode, /Hoje: \{progressLabel\}/);
+  assert.match(mobileCode, /\{progressPrefix\}: \{progressLabel\}/);
+  assert.match(mobileCode, /criterionProgressKind === 'consecutive_independent'/);
   assert.match(mobileCode, /setMobileSelectedGoalKey\(goalKey\)[\s\S]*?syncTrialTypeForGoal\(goal\)/m);
   assert.match(mobileCode, /handleTrialClick\(goal, 1, 'independent'\)/);
   assert.match(mobileCode, /handleTrialClick\(goal, 0\.5, 'prompted', prompt\.key\)/);
