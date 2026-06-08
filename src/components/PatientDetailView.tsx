@@ -29,6 +29,7 @@ import {
   createEmptyPeiMaintenanceTargetFirstSections,
   formatPeiMaintenanceAppointmentLabel,
   formatPeiMaintenanceScheduleLabel,
+  isActivePeiMaintenanceScheduleRow,
   isPeiMaintenanceEligibleSkill,
   mapMaintenancePanelResponse,
   resolveMaintenanceTargetDisplay,
@@ -5177,11 +5178,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const getPeiMaintenanceScheduleStatusKey = (row: any) =>
     String(getPeiMaintenanceScheduleObject(row)?.status || row?.nextProbe?.status || row?.status || '').trim().toUpperCase();
   const isPeiMaintenanceLinklessScheduleRow = (row: any) => {
+    if (!isActivePeiMaintenanceScheduleRow(row)) return false;
     const status = getPeiMaintenanceScheduleStatusKey(row);
     return ['PENDING_NEXT_SESSION', 'PENDING_LINK', 'PENDING_SCHEDULING', 'UNSCHEDULED', 'PENDING'].includes(status) || row?.group === 'unlinked';
   };
   const isPeiMaintenanceScheduledScheduleRow = (row: any) => {
-    if (!getPeiMaintenanceRowScheduleId(row) && !row?.hasRealSchedule) return false;
+    if (!isActivePeiMaintenanceScheduleRow(row)) return false;
     if (row?.needsTargetReview || row?.isRegressionRisk || row?.group === 'completed') return false;
     return !isPeiMaintenanceLinklessScheduleRow(row);
   };
@@ -5298,7 +5300,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       ...peiMaintenanceWaitingRows,
       ...(peiMaintenanceTargetFirstGroups.regressionRisk || []),
       ...(peiMaintenanceTargetFirstGroups.maintenanceSkills || [])
-    ].forEach((row: any) => {
+    ].filter((row: any) => isActivePeiMaintenanceScheduleRow(row)).forEach((row: any) => {
       const key = getPeiMaintenanceDisplayKey(row);
       if (key) keys.add(key);
     });
@@ -5312,7 +5314,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       ...peiMaintenanceWaitingRows,
       ...(peiMaintenanceTargetFirstGroups.regressionRisk || []),
       ...(peiMaintenanceTargetFirstGroups.maintenanceSkills || [])
-    ].forEach((row: any) => {
+    ].filter((row: any) => isActivePeiMaintenanceScheduleRow(row)).forEach((row: any) => {
       const targetId = getPeiMaintenancePersistedId(row?.targetId || row?.target_id || row?.aba_target_id || row?.abaTargetId);
       if (targetId) targetIds.add(targetId);
     });

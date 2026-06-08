@@ -32045,13 +32045,12 @@ async function startServer() {
           availableActions: row?.availableActions || (group === 'technical' ? ['REVIEW_TARGET'] : ['SCHEDULE_MAINTENANCE', 'WAIT_NEXT_SESSION', 'ASSIGN_APPOINTMENT'])
         });
       };
-      const isMaintenanceClinical = (row: any) => ['MAINTENANCE', 'MAINTAINED'].includes(targetClinicalStatus(row));
       const rowTargetHasActiveSchedule = (row: any) => {
         const targetId = sanitizeString(row?.targetId || row?.target_id, 180);
         return Boolean(isUuid(targetId) && activeScheduleByTargetId.has(targetId));
       };
-      const eligibleSourceCards = [...targetCards, ...peiTargetCards].filter((row: any) => !row?.needsTargetReview && !rowTargetHasActiveSchedule(row) && !isMaintenanceClinical(row));
-      const maintenanceSourceCards = [...targetCards, ...peiTargetCards].filter((row: any) => !row?.needsTargetReview && !rowTargetHasActiveSchedule(row) && isMaintenanceClinical(row));
+      const eligibleSourceCards = [...targetCards, ...peiTargetCards].filter((row: any) => !row?.needsTargetReview && !rowTargetHasActiveSchedule(row));
+      const maintenanceSourceCards: any[] = [];
       const validScheduleCards = scheduleCards.filter((card: any) => !card?.needsTargetReview);
       const scheduledProbes: any[] = [];
       const waitingNextSession: any[] = [];

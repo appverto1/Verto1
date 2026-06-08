@@ -76,6 +76,36 @@ const UUID_LIKE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[
 const ACTIVE_LINKLESS_STATUSES = new Set(['PENDING_NEXT_SESSION', 'PENDING_LINK', 'PENDING_SCHEDULING', 'UNSCHEDULED', 'PENDING']);
 const COMPLETED_STATUSES = new Set(['COMPLETED', 'MAINTAINED', 'MAINTENANCE_COMPLETED']);
 const REGRESSION_STATUSES = new Set(['WATCH', 'REGRESSION_RISK']);
+const ACTIVE_MAINTENANCE_PANEL_SCHEDULE_STATUSES = new Set([
+  'PENDING',
+  'PENDING_NEXT_SESSION',
+  'PENDING_CONFIRMATION',
+  'PENDING_LINK',
+  'PENDING_SCHEDULING',
+  'SCHEDULED',
+  'SCHEDULED_BY_DATE',
+  'UNSCHEDULED',
+  'DUE_TODAY',
+  'OVERDUE',
+  'IN_MAINTENANCE',
+  'AVAILABLE_IN_SESSION',
+  'NEEDS_REVIEW',
+  'WATCH',
+  'REGRESSION_RISK',
+  'MISSED',
+]);
+const FINAL_MAINTENANCE_PANEL_SCHEDULE_STATUSES = new Set([
+  'CANCELLED',
+  'CANCELED',
+  'ARCHIVED',
+  'COMPLETED',
+  'DELETED',
+  'REMOVED',
+  'FAILED',
+  'FAILED_FINAL',
+  'MAINTAINED',
+  'MAINTENANCE_COMPLETED',
+]);
 const PEI_MAINTENANCE_ACQUIRED_STATUSES = new Set([
   'COMPLETED',
   'COMPLETE',
@@ -148,6 +178,40 @@ const isPersistedMaintenanceScheduleId = (value: any) => {
   const id = normalizeText(value);
   if (isPersistedUuid(id)) return true;
   return /^maintenance-[a-z0-9][a-z0-9-]{7,}$/i.test(id) && !/(^|-)local-|(^|-)temp-|(^|-)tmp-|(^|-)offline-/i.test(id);
+};
+
+const getMaintenancePanelScheduleObject = (row: any) =>
+  row?.nextSchedule || row?.activeSchedule || row?.schedule || row?.nextProbe?.schedule || null;
+
+export const isActivePeiMaintenanceScheduleRow = (row: any, now = new Date()) => {
+  const schedule = getMaintenancePanelScheduleObject(row) || {};
+  const scheduleId = normalizeText(
+    row?.scheduleId ||
+      row?.schedule_id ||
+      schedule?.id ||
+      schedule?.schedule_id ||
+      schedule?.scheduleId ||
+      ''
+  );
+  const targetId = normalizeText(
+    row?.targetId ||
+      row?.target_id ||
+      row?.aba_target_id ||
+      row?.abaTargetId ||
+      schedule?.target_id ||
+      schedule?.targetId ||
+      ''
+  );
+  if (!isPersistedMaintenanceScheduleId(scheduleId) || !isPersistedUuid(targetId)) return false;
+  const rawStatus = normalizeStatus(schedule?.status || row?.status || row?.nextProbe?.status);
+  if (!rawStatus || FINAL_MAINTENANCE_PANEL_SCHEDULE_STATUSES.has(rawStatus)) return false;
+  if (ACTIVE_MAINTENANCE_PANEL_SCHEDULE_STATUSES.has(rawStatus)) return true;
+  const derivedStatus = normalizeStatus(deriveMaintenanceScheduleStatus(schedule, now));
+  return Boolean(
+    derivedStatus &&
+      ACTIVE_MAINTENANCE_PANEL_SCHEDULE_STATUSES.has(derivedStatus) &&
+      !FINAL_MAINTENANCE_PANEL_SCHEDULE_STATUSES.has(derivedStatus)
+  );
 };
 
 const getTargetKey = (...values: any[]) => {
@@ -507,6 +571,7 @@ export function mapMaintenancePanelResponse(
   const normalizePanelRow = (row: any, group: PeiMaintenanceTargetFirstGroupKey) => {
     const schedule = row?.nextSchedule || row?.activeSchedule || row?.schedule || null;
     const latestResult = row?.lastResult || row?.latestResult || null;
+    const rowIdCanBeTarget = Boolean(row?.hasRealTarget === true && !group.startsWith('technical') && isPersistedUuid(row?.id));
     const rawTargetId =
       row?.targetId ||
       row?.target_id ||
@@ -514,7 +579,7 @@ export function mapMaintenancePanelResponse(
       row?.abaTargetId ||
       schedule?.target_id ||
       schedule?.targetId ||
-      (!group.startsWith('technical') && isPersistedUuid(row?.id) ? row.id : '');
+      (rowIdCanBeTarget ? row.id : '');
     const rawScheduleId =
       row?.scheduleId ||
       row?.schedule_id ||
@@ -601,6 +666,45 @@ export function mapMaintenancePanelResponse(
   sections.regressionRisk = (Array.isArray(panel.regressionRisk) ? panel.regressionRisk : []).map((row: any) => normalizePanelRow(row, 'regressionRisk'));
   sections.technical = (Array.isArray(panel.technicalIssues) ? panel.technicalIssues : []).map((row: any) => normalizePanelRow(row, 'technical'));
 
+  const eligibleKeyFor = (row: any) => {
+    const targetId = normalizeText(row?.targetId || row?.target_id);
+    if (isPersistedUuid(targetId)) return `target:${targetId}`;
+    return normalizeText(row?.key || row?.goalId || row?.goal_id || row?.name || row?.targetName);
+  };
+  const eligibleRowsByKey = new Map<string, any>();
+  sections.eligibleSkills.forEach((row: any, index: number) => {
+    eligibleRowsByKey.set(eligibleKeyFor(row) || `eligible:${index}`, row);
+  });
+  const moveInactiveOperationalRowsToEligible = (group: PeiMaintenanceTargetFirstGroupKey) => {
+    const rows = sections[group] || [];
+    const inactiveRows = rows.filter((row: any) => !isActivePeiMaintenanceScheduleRow(row));
+    sections[group] = rows.filter((row: any) => isActivePeiMaintenanceScheduleRow(row));
+    inactiveRows.forEach((row: any, index: number) => {
+      const targetId = normalizeText(row?.targetId || row?.target_id);
+      if (!isPersistedUuid(targetId)) return;
+      const key = eligibleKeyFor(row) || `${group}-without-active-schedule:${index}`;
+      if (eligibleRowsByKey.has(key)) return;
+      eligibleRowsByKey.set(key, {
+        ...row,
+        key: row?.key || key,
+        kind: 'TARGET_REAL_SEM_SCHEDULE',
+        cardKind: 'TARGET_REAL_SEM_SCHEDULE',
+        nextSchedule: null,
+        activeSchedule: null,
+        schedule: null,
+        schedules: [],
+        scheduleId: '',
+        schedule_id: null,
+        hasRealSchedule: false,
+        group: 'activeCycle',
+        statusLabel: 'Sem sondagem agendada',
+        availableActions: ['SCHEDULE_MAINTENANCE', 'WAIT_NEXT_SESSION', 'ASSIGN_APPOINTMENT'],
+      });
+    });
+  };
+  (['maintenanceSkills', 'scheduled', 'waitingNextSession', 'overdue', 'regressionRisk'] as PeiMaintenanceTargetFirstGroupKey[]).forEach(moveInactiveOperationalRowsToEligible);
+  sections.eligibleSkills = Array.from(eligibleRowsByKey.values());
+
   const operationalTargetIds = new Set(
     [
       ...sections.maintenanceSkills,
@@ -609,6 +713,7 @@ export function mapMaintenancePanelResponse(
       ...sections.overdue,
       ...sections.regressionRisk,
     ]
+      .filter((row: any) => isActivePeiMaintenanceScheduleRow(row))
       .map((row: any) => normalizeText(row?.targetId || row?.target_id))
       .filter((targetId: string) => isPersistedUuid(targetId))
   );
@@ -865,6 +970,7 @@ export function groupPeiMaintenanceRowsTargetFirst(rows: any[]) {
   (Array.isArray(rows) ? rows : []).forEach((row) => {
     const status = normalizeStatus(row?.nextSchedule?.status || row?.status || row?.nextProbe?.status);
     const clinicalStatus = normalizeStatus(row?.clinicalStatus || row?.goal?.clinical_status || row?.goal?.clinicalStatus || row?.goal?.status || row?.goal?.phase);
+    const hasActiveSchedule = isActivePeiMaintenanceScheduleRow(row);
     const hasPeiClinicalSource = Boolean(row?.hasPeiClinicalSource);
     const needsTargetReview = Boolean(
       row?.needsTargetReview ||
@@ -878,23 +984,23 @@ export function groupPeiMaintenanceRowsTargetFirst(rows: any[]) {
       groups.technical.push(row);
       return;
     }
-    if (row?.isRegressionRisk) {
+    if (row?.isRegressionRisk && hasActiveSchedule) {
       groups.regressionRisk.push(row);
       return;
     }
-    if (row?.group === 'overdue') {
+    if (row?.group === 'overdue' && hasActiveSchedule) {
       groups.overdue.push(row);
       return;
     }
-    if (row?.group === 'unlinked' || status === 'PENDING_NEXT_SESSION') {
+    if (hasActiveSchedule && (row?.group === 'unlinked' || status === 'PENDING_NEXT_SESSION')) {
       groups.waitingNextSession.push(row);
       return;
     }
-    if (row?.hasRealSchedule && row?.group !== 'completed') {
+    if (hasActiveSchedule && row?.group !== 'completed') {
       groups.scheduled.push(row);
       return;
     }
-    if (['MAINTENANCE', 'MAINTAINED'].includes(clinicalStatus) || row?.hasCycle || row?.isMaintained) {
+    if (hasActiveSchedule && (['MAINTENANCE', 'MAINTAINED'].includes(clinicalStatus) || row?.hasCycle || row?.isMaintained)) {
       groups.maintenanceSkills.push(row);
       return;
     }
