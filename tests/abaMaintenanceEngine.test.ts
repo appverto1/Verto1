@@ -131,6 +131,25 @@ test('status derivado diferencia due today e overdue sem mutacao automatica', ()
   }, new Date('2026-05-28T15:00:00.000Z')), 'OVERDUE');
 });
 
+test('status derivado respeita originalStatus salvo por fallback legado', () => {
+  assert.equal(deriveMaintenanceScheduleStatus({
+    status: 'PENDING',
+    scheduled_for: '2026-06-10T12:00:00.000Z',
+    raw_payload: {
+      legacyScheduleFallback: true,
+      originalStatus: 'SCHEDULED'
+    }
+  }, new Date('2026-05-28T15:00:00.000Z')), 'SCHEDULED');
+
+  assert.equal(deriveMaintenanceScheduleStatus({
+    status: 'PENDING',
+    raw_payload: {
+      legacyScheduleFallback: true,
+      originalStatus: 'PENDING_NEXT_SESSION'
+    }
+  }, new Date('2026-05-28T15:00:00.000Z')), 'PENDING_NEXT_SESSION');
+});
+
 test('registro escolhe schedule por appointment, hoje, vencido e janela', () => {
   const selectedByAppointment = selectMaintenanceScheduleForProbe([
     { id: 'due-today', target_due_date: '2026-05-28T12:00:00.000Z', status: 'PENDING' },

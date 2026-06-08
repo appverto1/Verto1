@@ -570,7 +570,7 @@ export function mapMaintenancePanelResponse(
   const sections = createEmptyPeiMaintenanceTargetFirstSections();
   const clinicalLinkIdsFor = (row: any) => {
     const schedule = row?.nextSchedule || row?.activeSchedule || row?.schedule || null;
-    const raw = schedule?.raw_payload || schedule?.rawPayload || row?.raw_payload || row?.rawPayload || {};
+    const raw = readObjectPayload(schedule?.raw_payload, schedule?.rawPayload, row?.raw_payload, row?.rawPayload);
     return [
       row?.peiGoalId,
       row?.goalId,
@@ -604,7 +604,7 @@ export function mapMaintenancePanelResponse(
   };
   const normalizePanelRow = (row: any, group: PeiMaintenanceTargetFirstGroupKey) => {
     const schedule = row?.nextSchedule || row?.activeSchedule || row?.schedule || null;
-    const raw = schedule?.raw_payload || schedule?.rawPayload || row?.raw_payload || row?.rawPayload || {};
+    const raw = readObjectPayload(schedule?.raw_payload, schedule?.rawPayload, row?.raw_payload, row?.rawPayload);
     const latestResult = row?.lastResult || row?.latestResult || null;
     const rowIdCanBeTarget = Boolean(row?.hasRealTarget === true && !group.startsWith('technical') && isPersistedUuid(row?.id));
     const rawTargetId =
@@ -876,7 +876,7 @@ export function buildPeiMaintenanceRows(input: {
     .forEach((goal) => ensureRow({ ...goal, goal }));
 
   (Array.isArray(input.schedules) ? input.schedules : []).forEach((schedule) => {
-    const raw = schedule?.raw_payload && typeof schedule.raw_payload === 'object' ? schedule.raw_payload : {};
+    const raw = readObjectPayload(schedule?.raw_payload, schedule?.rawPayload);
     const row = ensureRow({
       ...schedule,
       name: schedule?.target_name || schedule?.targetName || raw.targetName,
@@ -887,7 +887,7 @@ export function buildPeiMaintenanceRows(input: {
   });
 
   (Array.isArray(input.probeResults) ? input.probeResults : []).forEach((result) => {
-    const raw = result?.raw_payload && typeof result.raw_payload === 'object' ? result.raw_payload : {};
+    const raw = readObjectPayload(result?.raw_payload, result?.rawPayload);
     const row = ensureRow({
       ...result,
       name: result?.target_name || result?.targetName || raw.targetName,

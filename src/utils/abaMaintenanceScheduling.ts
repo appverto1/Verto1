@@ -174,6 +174,38 @@ export const normalizeMaintenanceScheduleStatus = (value: unknown): AbaMaintenan
   return 'PENDING';
 };
 
+const readMaintenanceSchedulePayload = (value: any) => {
+  if (!value) return {};
+  if (typeof value === 'object' && !Array.isArray(value)) return value;
+  if (typeof value !== 'string') return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+const getEffectiveMaintenanceScheduleStatus = (schedule: any): AbaMaintenanceScheduleStatus => {
+  const status = normalizeMaintenanceScheduleStatus(schedule?.status);
+  const rawPayload = readMaintenanceSchedulePayload(schedule?.raw_payload || schedule?.rawPayload);
+  const metadata = readMaintenanceSchedulePayload(schedule?.metadata);
+  const originalStatus = normalizeMaintenanceScheduleStatus(
+    rawPayload?.schemaFixRestoredStatus ||
+      rawPayload?.originalStatus ||
+      metadata?.schemaFixRestoredStatus ||
+      metadata?.originalStatus
+  );
+  const hasLegacyStatusIntent = Boolean(
+    rawPayload?.legacyScheduleFallback ||
+      metadata?.legacyScheduleFallback ||
+      rawPayload?.schemaFixRestoredStatus ||
+      metadata?.schemaFixRestoredStatus
+  );
+  if (status === 'PENDING' && hasLegacyStatusIntent && originalStatus !== 'PENDING') return originalStatus;
+  return status;
+};
+
 export const normalizeMaintenanceDayList = (value: unknown = DEFAULT_ABA_MAINTENANCE_DAYS) => {
   const raw = Array.isArray(value) && value.length > 0 ? value : DEFAULT_ABA_MAINTENANCE_DAYS;
   const days = raw
@@ -196,7 +228,7 @@ export const isActiveAppointmentForMaintenance = (appointment: MaintenanceAppoin
 };
 
 export const isActiveMaintenanceSchedule = (schedule: any) => {
-  return ACTIVE_SCHEDULE_STATUSES.has(normalizeMaintenanceScheduleStatus(schedule?.status));
+  return ACTIVE_SCHEDULE_STATUSES.has(getEffectiveMaintenanceScheduleStatus(schedule));
 };
 
 export const appointmentTimestamp = (appointment: MaintenanceAppointmentCandidate) => {
@@ -359,7 +391,7 @@ export const isBlockedMaintenanceAppointmentStatus = (status: unknown) => (
 );
 
 export const deriveMaintenanceScheduleStatus = (schedule: any, now = new Date()): AbaMaintenanceScheduleStatus => {
-  const status = normalizeMaintenanceScheduleStatus(schedule?.status);
+  const status = getEffectiveMaintenanceScheduleStatus(schedule);
   if (['COMPLETED', 'CANCELLED', 'ARCHIVED'].includes(status)) return status;
   if (status === 'PENDING_NEXT_SESSION' || status === 'PENDING_CONFIRMATION') return status;
   const reference = scheduleReferenceDate(schedule);

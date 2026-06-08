@@ -13,6 +13,7 @@ const sessionModeCode = readFileSync(join(root, 'src/components/SessionMode.tsx'
 const calendarCode = readFileSync(join(root, 'src/components/Calendar.tsx'), 'utf8');
 const dataServiceCode = readFileSync(join(root, 'src/services/dataService.ts'), 'utf8');
 const migrationSql = readFileSync(join(root, 'supabase/migrations/20260531163000_aba_maintenance_pending_confirmation.sql'), 'utf8');
+const schemaFixMigrationSql = readFileSync(join(root, 'supabase/migrations/20260608150000_aba_maintenance_schema_fix.sql'), 'utf8');
 
 const tests: Array<{ name: string; fn: () => void }> = [];
 const test = (name: string, fn: () => void) => tests.push({ name, fn });
@@ -52,6 +53,9 @@ test('backend registra proxima sessao pendente e confirmacao candidata', () => {
   assert.match(serverCode, /MAINTENANCE_PROBE_LINK_SKIPPED/);
   assert.match(serverCode, /saveMaintenanceScheduleRowWithLegacyFallback/);
   assert.match(serverCode, /legacyScheduleFallback/);
+  assert.match(serverCode, /isMaintenanceScheduleStatusConstraintError/);
+  assert.match(serverCode, /preservedOriginalStatus/);
+  assert.match(serverCode, /forceLegacyStatus/);
   assert.doesNotMatch(serverCode, /select\('\*'\)/);
 });
 
@@ -116,6 +120,9 @@ test('dataService e migracao expõem fluxo aditivo', () => {
   assert.match(migrationSql, /PENDING_NEXT_SESSION/);
   assert.match(migrationSql, /PENDING_CONFIRMATION/);
   assert.match(migrationSql, /trg_aba_mark_pending_next_session_probe_candidate/);
+  assert.match(schemaFixMigrationSql, /alter column scheduled_for drop not null/);
+  assert.match(schemaFixMigrationSql, /SCHEDULED_BY_DATE/);
+  assert.match(schemaFixMigrationSql, /schemaFixRestoredStatus/);
 });
 
 let passed = 0;

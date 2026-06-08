@@ -371,6 +371,55 @@ test('mapper target-first remove elegivel por id clinico quando schedule ativo u
   assert.equal(mapped.sections.scheduled.some((row: any) => row.targetId === scheduledTargetId), true);
 });
 
+test('mapper target-first remove elegivel quando raw_payload legado vem como string', () => {
+  const eligibleTargetId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0213';
+  const scheduledTargetId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0214';
+  const scheduleId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0215';
+  const appointmentId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0216';
+  const mapped = mapMaintenancePanelResponse({
+    eligibleSkills: [
+      {
+        targetId: eligibleTargetId,
+        peiGoalId: 'pei-goal-legado-string',
+        skillId: 'skill-legado-string',
+        targetName: 'Realiza duas atividades simples de encaixe ou construcao',
+        protocol: 'VB-MAPP - Nivel 1',
+        domain: 'Percepcao Visual e Matching to Sample Nivel 1'
+      }
+    ],
+    scheduledProbes: [
+      {
+        targetId: scheduledTargetId,
+        scheduleId,
+        targetName: 'Realiza duas atividades simples de encaixe ou construcao',
+        protocolName: 'VB-MAPP - Nivel 1',
+        domainName: 'Percepcao Visual e Matching to Sample Nivel 1',
+        nextSchedule: {
+          id: scheduleId,
+          target_id: scheduledTargetId,
+          status: 'PENDING',
+          appointment_id: appointmentId,
+          raw_payload: JSON.stringify({
+            legacyScheduleFallback: true,
+            originalStatus: 'SCHEDULED',
+            peiGoalId: 'pei-goal-legado-string',
+            skillId: 'skill-legado-string'
+          })
+        }
+      }
+    ],
+    maintenanceSkills: [],
+    waitingNextSession: [],
+    overdueProbes: [],
+    regressionRisk: [],
+    technicalIssues: []
+  }, { patientId: 'patient-1', requestId: 142, loadedAt: 123460 });
+
+  assert.equal(mapped.summary.eligibleSkills, 0);
+  assert.equal(mapped.summary.scheduled, 1);
+  assert.equal(mapped.sections.scheduled[0].scheduleId, scheduleId);
+});
+
 test('target-first separa risco de regressao do fluxo agendado', () => {
   const targetId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0020';
   const rows = buildPeiMaintenanceRows({
@@ -832,6 +881,10 @@ test('backend da etapa 2 usa PEI targets e schedules ativos por target em lote',
   assert.match(stepTwoRoute, /activeScheduleByTargetId/);
   assert.match(stepTwoRoute, /findActiveScheduleForSkill/);
   assert.match(stepTwoRoute, /emittedActiveScheduleKeys/);
+  assert.match(stepTwoRoute, /readMaintenanceStoredPayload/);
+  assert.match(stepTwoRoute, /getMaintenanceDisplaySignature/);
+  assert.match(stepTwoRoute, /activeScheduleByDisplaySignature/);
+  assert.match(stepTwoRoute, /eligibleDisplaySignatureCounts/);
   assert.doesNotMatch(stepTwoRoute, /activeScheduleByCompositeKey|getMaintenanceDisplayCompositeKey|getMaintenanceDisplayNameKey/);
   assert.match(stepTwoRoute, /source: 'patient_pei_targets_step2'/);
   assert.match(stepTwoRoute, /source\?\.peiGoalIndex/);

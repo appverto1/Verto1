@@ -22447,7 +22447,7 @@ async function startServer() {
       const appointmentId = sanitizeString(row?.appointment_id || row?.appointmentId, 180);
       const appointment = appointmentById.get(appointmentId) || row?.appointment || null;
       const target = targetById.get(targetId) || null;
-      const raw = row?.raw_payload && typeof row.raw_payload === 'object' ? row.raw_payload : {};
+      const raw = readMaintenanceStoredPayload(row?.raw_payload || row?.rawPayload);
       if (!target) {
         return cleanObject({
           ...row,
@@ -28218,6 +28218,11 @@ async function startServer() {
     return message.includes('aba_maintenance_schedules_schedule_mode_check') || message.includes('schedule_mode');
   };
 
+  const isMaintenanceScheduleStatusConstraintError = (error: any) => {
+    const message = extractSupabaseErrorMessage(error).toLowerCase();
+    return message.includes('aba_maintenance_schedules_status_check') || (message.includes('check constraint') && message.includes('status'));
+  };
+
   const isUniqueMaintenanceScheduleConflict = (error: any) => {
     const code = sanitizeString(error?.code, 40);
     const message = extractSupabaseErrorMessage(error).toLowerCase();
@@ -28239,35 +28244,42 @@ async function startServer() {
     return id;
   };
   const hasPersistedMaintenanceScheduleId = (scheduleOrId: any) => Boolean(getPersistedMaintenanceScheduleId(scheduleOrId));
+  const readMaintenanceStoredPayload = (value: any) => parseStoredJsonObject(value);
 
-  const buildLegacyMaintenanceScheduleRow = (row: any, now: string, error?: any) => {
+  const buildLegacyMaintenanceScheduleRow = (row: any, now: string, error?: any, options: { forceLegacyStatus?: boolean } = {}) => {
     const scheduledFor = row?.scheduled_for || row?.scheduledFor || row?.target_due_date || row?.targetDueDate || row?.due_date || row?.dueDate || now;
     const targetDueDate = row?.target_due_date || row?.targetDueDate || scheduledFor;
+    const originalStatus = normalizeAbaMaintenanceScheduleStatus(row?.status);
+    const shouldPreserveOriginalStatus = !options.forceLegacyStatus && !isMaintenanceScheduleStatusConstraintError(error);
+    const legacySafeStatus = ['COMPLETED', 'MISSED', 'CANCELLED'].includes(originalStatus) ? originalStatus : 'PENDING';
+    const fallbackStatus = shouldPreserveOriginalStatus ? originalStatus : legacySafeStatus;
     return cleanObject({
       ...row,
-      status: ['COMPLETED', 'MISSED', 'CANCELLED'].includes(sanitizeString(row?.status, 60).toUpperCase())
-        ? sanitizeString(row.status, 60).toUpperCase()
-        : 'PENDING',
+      status: fallbackStatus,
       schedule_mode: isMaintenanceScheduleScheduleModeConstraintError(error) ? 'DEFAULT_SEQUENCE' : row?.schedule_mode,
       scheduled_for: scheduledFor,
       due_date: row?.due_date || scheduledFor,
       target_due_date: targetDueDate,
       metadata: sanitizeClinicalPayload({
-        ...(row?.metadata && typeof row.metadata === 'object' ? row.metadata : {}),
+        ...readMaintenanceStoredPayload(row?.metadata),
         legacyScheduleFallback: true,
-        originalStatus: row?.status || null
+        originalStatus,
+        fallbackStatus,
+        preservedOriginalStatus: shouldPreserveOriginalStatus
       }),
       raw_payload: sanitizeClinicalPayload({
-        ...(row?.raw_payload && typeof row.raw_payload === 'object' ? row.raw_payload : {}),
+        ...readMaintenanceStoredPayload(row?.raw_payload || row?.rawPayload),
         legacyScheduleFallback: true,
-        originalStatus: row?.status || null,
+        originalStatus,
+        fallbackStatus,
+        preservedOriginalStatus: shouldPreserveOriginalStatus,
         humanMessage: 'Agendamento salvo em modo compatível porque o schema de manutenção do banco ainda está defasado.'
       })
     });
   };
 
   const saveMaintenanceScheduleRowWithLegacyFallback = async (row: any, now: string) => {
-    const raw = row?.raw_payload && typeof row.raw_payload === 'object' ? row.raw_payload : {};
+    const raw = readMaintenanceStoredPayload(row?.raw_payload || row?.rawPayload);
     const rowId = sanitizeString(row?.id, 180);
     const persistedRow = isUuid(rowId)
       ? row
@@ -28285,7 +28297,13 @@ async function startServer() {
     if (!isLegacyMaintenanceScheduleConstraintError(firstResult.error)) return { ...firstResult, row };
     const legacyRow = buildLegacyMaintenanceScheduleRow(persistedRow, now, firstResult.error);
     const retryResult = await writeAbaRowWithSchemaFallback('aba_maintenance_schedules', legacyRow, 'upsert');
-    return { ...retryResult, row: retryResult.error ? persistedRow : legacyRow };
+    if (!retryResult.error) return { ...retryResult, row: legacyRow };
+    if (!isLegacyMaintenanceScheduleConstraintError(retryResult.error) || legacyRow.status === 'PENDING') {
+      return { ...retryResult, row: persistedRow };
+    }
+    const forcedLegacyRow = buildLegacyMaintenanceScheduleRow(persistedRow, now, retryResult.error, { forceLegacyStatus: true });
+    const forcedRetryResult = await writeAbaRowWithSchemaFallback('aba_maintenance_schedules', forcedLegacyRow, 'upsert');
+    return { ...forcedRetryResult, row: forcedRetryResult.error ? persistedRow : forcedLegacyRow };
   };
 
   const findMaintenanceScheduleForUniqueConflict = async (row: any, clinicId: string, organizationId: string, patientId: string) => {
@@ -28451,7 +28469,7 @@ async function startServer() {
         });
       }
       if (existingSchedule?.id) {
-        const raw = existingSchedule.raw_payload && typeof existingSchedule.raw_payload === 'object' ? existingSchedule.raw_payload : {};
+        const raw = readMaintenanceStoredPayload(existingSchedule.raw_payload || existingSchedule.rawPayload);
         const nextSessionPatch = cleanObject({
           status: 'PENDING_NEXT_SESSION',
           appointment_id: null,
@@ -28572,7 +28590,7 @@ async function startServer() {
         });
       }
       if (existingSchedule?.id) {
-        const raw = existingSchedule.raw_payload && typeof existingSchedule.raw_payload === 'object' ? existingSchedule.raw_payload : {};
+        const raw = readMaintenanceStoredPayload(existingSchedule.raw_payload || existingSchedule.rawPayload);
         const customDatePatch = cleanObject({
           status: 'SCHEDULED',
           appointment_id: appointmentId,
@@ -28797,14 +28815,10 @@ async function startServer() {
         const existingConflictSchedule = await findMaintenanceScheduleForUniqueConflict(row, clinicId, organizationId, patientId);
         const existingConflictScheduleId = getPersistedMaintenanceScheduleId(existingConflictSchedule);
         if (existingConflictScheduleId) {
-          const existingRaw = existingConflictSchedule?.raw_payload && typeof existingConflictSchedule.raw_payload === 'object'
-            ? existingConflictSchedule.raw_payload
-            : {};
-          const rowRaw = row?.raw_payload && typeof row.raw_payload === 'object' ? row.raw_payload : {};
-          const existingMetadata = existingConflictSchedule?.metadata && typeof existingConflictSchedule.metadata === 'object'
-            ? existingConflictSchedule.metadata
-            : {};
-          const rowMetadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+          const existingRaw = readMaintenanceStoredPayload(existingConflictSchedule?.raw_payload || existingConflictSchedule?.rawPayload);
+          const rowRaw = readMaintenanceStoredPayload(row?.raw_payload || row?.rawPayload);
+          const existingMetadata = readMaintenanceStoredPayload(existingConflictSchedule?.metadata);
+          const rowMetadata = readMaintenanceStoredPayload(row?.metadata);
           const conflictPatch = cleanObject({
             ...row,
             id: undefined,
@@ -29048,7 +29062,7 @@ async function startServer() {
         return candidateId && !appointmentIds.includes(candidateId) && candidateId !== previousAppointmentId;
       }) || null;
 
-      const raw = schedule?.raw_payload && typeof schedule.raw_payload === 'object' ? schedule.raw_payload : {};
+      const raw = readMaintenanceStoredPayload(schedule?.raw_payload || schedule?.rawPayload);
       const metadata = schedule?.metadata && typeof schedule.metadata === 'object' ? schedule.metadata : {};
       const nextAppointmentId = sanitizeString(nextAppointment?.id || nextAppointment?.appointment_id || nextAppointment?.appointmentId, 180) || null;
       const nextScheduledAt = nextAppointment
@@ -29181,7 +29195,7 @@ async function startServer() {
     let flagged = 0;
     for (const row of rows) {
       const status = normalizeAbaMaintenanceScheduleStatus(row?.status);
-      const raw = row?.raw_payload && typeof row.raw_payload === 'object' ? row.raw_payload : {};
+      const raw = readMaintenanceStoredPayload(row?.raw_payload || row?.rawPayload);
       const ignoredIds = Array.isArray(raw.ignoredAppointmentIds) ? raw.ignoredAppointmentIds.map((value: any) => String(value)) : [];
       if (ignoredIds.includes(appointmentId)) continue;
       if (sanitizeString((row as any)?.candidate_appointment_id || raw.candidateAppointmentId, 180) === appointmentId) continue;
@@ -30840,7 +30854,7 @@ async function startServer() {
           status: evaluation.status,
           updated_at: new Date().toISOString(),
           raw_payload: sanitizeClinicalPayload({
-            ...(schedule?.raw_payload && typeof schedule.raw_payload === 'object' ? schedule.raw_payload : {}),
+            ...readMaintenanceStoredPayload(schedule?.raw_payload || schedule?.rawPayload),
             lastMaintenanceProbeResultId: resultId,
             lastMaintenanceProbeStatus: evaluation.status,
             humanReviewRequired: true,
@@ -31542,6 +31556,46 @@ async function startServer() {
             progressPercent: 100
           }));
         const allEligibleSkills = Array.from(eligibleByKey.values());
+        const getMaintenanceDisplaySignature = (source: any) => {
+          const raw = readMaintenanceStoredPayload(source?.raw_payload || source?.rawPayload);
+          const target = source?.target && typeof source.target === 'object' ? source.target : {};
+          const targetName = sanitizeString(
+            source?.targetName ||
+              source?.target_name ||
+              source?.name ||
+              target?.name ||
+              target?.description ||
+              raw.targetName ||
+              raw.target_name,
+            240
+          );
+          const protocolName = sanitizeString(
+            source?.protocolName ||
+              source?.protocol ||
+              source?.protocol_title ||
+              source?.protocolTitle ||
+              target?.protocol_title ||
+              raw.protocolName ||
+              raw.protocolTitle ||
+              raw.protocol_name,
+            240
+          );
+          const domainName = sanitizeString(
+            source?.domainName ||
+              source?.domain ||
+              source?.domain_name ||
+              target?.domain_name ||
+              raw.domainName ||
+              raw.domain_name,
+            240
+          );
+          return [targetName, protocolName, domainName].map(normalizePeiTargetMatchKey).filter(Boolean).join('|');
+        };
+        const eligibleDisplaySignatureCounts = new Map<string, number>();
+        allEligibleSkills.forEach((skill: any) => {
+          const signature = getMaintenanceDisplaySignature(skill);
+          if (signature) eligibleDisplaySignatureCounts.set(signature, (eligibleDisplaySignatureCounts.get(signature) || 0) + 1);
+        });
         const eligibleTargetIds = Array.from(new Set(
           allEligibleSkills
             .map((row: any) => sanitizeString(row?.targetId || row?.target_id, 180))
@@ -31566,8 +31620,19 @@ async function startServer() {
         }
         const activeScheduleByTargetId = new Map<string, any>();
         const activeScheduleByClinicalId = new Map<string, any>();
+        const activeScheduleByDisplaySignature = new Map<string, any>();
+        const duplicateScheduleDisplaySignatures = new Set<string>();
+        const registerDisplayScheduleMatch = (signature: string, schedule: any) => {
+          if (!signature) return;
+          if (activeScheduleByDisplaySignature.has(signature)) {
+            duplicateScheduleDisplaySignatures.add(signature);
+            activeScheduleByDisplaySignature.delete(signature);
+            return;
+          }
+          if (!duplicateScheduleDisplaySignatures.has(signature)) activeScheduleByDisplaySignature.set(signature, schedule);
+        };
         const getMaintenanceClinicalLinkIds = (source: any) => {
-          const raw = source?.raw_payload && typeof source.raw_payload === 'object' ? source.raw_payload : {};
+          const raw = readMaintenanceStoredPayload(source?.raw_payload || source?.rawPayload);
           const target = source?.target && typeof source.target === 'object' ? source.target : {};
           const masteryCriteria = target?.mastery_criteria && typeof target.mastery_criteria === 'object' ? target.mastery_criteria : {};
           return [
@@ -31607,11 +31672,12 @@ async function startServer() {
           getMaintenanceClinicalLinkIds(schedule).forEach((clinicalId: string) => {
             if (!activeScheduleByClinicalId.has(clinicalId)) activeScheduleByClinicalId.set(clinicalId, schedule);
           });
+          registerDisplayScheduleMatch(getMaintenanceDisplaySignature(schedule), schedule);
         });
         const sanitizeScheduleForPanel = (schedule: any) => {
           const scheduleTargetId = sanitizeString(schedule?.target_id || schedule?.targetId, 180);
           const scheduleId = sanitizeString(schedule?.id || schedule?.schedule_id || schedule?.scheduleId, 180);
-          const raw = schedule?.raw_payload && typeof schedule.raw_payload === 'object' ? schedule.raw_payload : {};
+          const raw = readMaintenanceStoredPayload(schedule?.raw_payload || schedule?.rawPayload);
           return cleanObject({
             id: scheduleId || null,
             scheduleId: scheduleId || null,
@@ -31646,6 +31712,25 @@ async function startServer() {
             rawPayload: sanitizeClinicalPayload(raw)
           });
         };
+        const maintenanceScheduleHasTimingContext = (schedule: any) => Boolean(
+          schedule?.appointment_id ||
+            schedule?.appointmentId ||
+            schedule?.candidate_appointment_id ||
+            schedule?.candidateAppointmentId ||
+            schedule?.scheduled_for ||
+            schedule?.scheduledFor ||
+            schedule?.target_due_date ||
+            schedule?.targetDueDate ||
+            schedule?.due_date ||
+            schedule?.dueDate
+        );
+        const isMaintenanceScheduleLinklessForPanel = (schedule: any, rawStatus: string, derivedStatus: string, rawPendingRestoredAsOperational = false) => {
+          const pendingWithTimingContext = rawStatus === 'PENDING' && maintenanceScheduleHasTimingContext(schedule);
+          return (
+            (ABA_LINKLESS_MAINTENANCE_SCHEDULE_STATUSES.has(rawStatus) && !rawPendingRestoredAsOperational && !pendingWithTimingContext) ||
+            (ABA_LINKLESS_MAINTENANCE_SCHEDULE_STATUSES.has(derivedStatus) && !(derivedStatus === 'PENDING' && pendingWithTimingContext))
+          );
+        };
         const buildScheduledPanelRow = (skill: any, schedule: any, label: string) => {
           const safeSchedule = sanitizeScheduleForPanel(schedule);
           return cleanObject({
@@ -31676,6 +31761,15 @@ async function startServer() {
             .map((clinicalId: string) => activeScheduleByClinicalId.get(clinicalId))
             .find(Boolean);
           if (clinicalSchedule) return clinicalSchedule;
+          const displaySignature = getMaintenanceDisplaySignature(skill);
+          if (
+            displaySignature &&
+            eligibleDisplaySignatureCounts.get(displaySignature) === 1 &&
+            !duplicateScheduleDisplaySignatures.has(displaySignature) &&
+            activeScheduleByDisplaySignature.has(displaySignature)
+          ) {
+            return activeScheduleByDisplaySignature.get(displaySignature);
+          }
           return null;
         };
         allEligibleSkills.forEach((skill: any) => {
@@ -31689,7 +31783,11 @@ async function startServer() {
           if (emittedScheduleKey) emittedActiveScheduleKeys.add(emittedScheduleKey);
           const status = sanitizeString(schedule?.status, 80).toUpperCase();
           const derivedStatus = deriveMaintenanceScheduleStatus(schedule, new Date());
-          if (ABA_LINKLESS_MAINTENANCE_SCHEDULE_STATUSES.has(status) || ABA_LINKLESS_MAINTENANCE_SCHEDULE_STATUSES.has(String(derivedStatus).toUpperCase())) {
+          const derivedStatusText = String(derivedStatus).toUpperCase();
+          const rawPendingRestoredAsOperational = status === 'PENDING' && derivedStatusText !== 'PENDING';
+          if (
+            isMaintenanceScheduleLinklessForPanel(schedule, status, derivedStatusText, rawPendingRestoredAsOperational)
+          ) {
             waitingNextSession.push(buildScheduledPanelRow(skill, schedule, 'Aguardando futura consulta'));
           } else if (status === 'OVERDUE' || derivedStatus === 'OVERDUE') {
             overdueProbes.push(buildScheduledPanelRow(skill, schedule, 'Sondagem atrasada'));
@@ -32116,15 +32214,35 @@ async function startServer() {
       const normalizedSkills = Array.from(skillsByKey.values());
       const orphanSchedules = scheduleCards.filter((card: any) => card?.needsTargetReview);
       const now = new Date();
+      const fallbackMaintenanceScheduleHasTimingContext = (schedule: any) => Boolean(
+        schedule?.appointment_id ||
+          schedule?.appointmentId ||
+          schedule?.candidate_appointment_id ||
+          schedule?.candidateAppointmentId ||
+          schedule?.scheduled_for ||
+          schedule?.scheduledFor ||
+          schedule?.target_due_date ||
+          schedule?.targetDueDate ||
+          schedule?.due_date ||
+          schedule?.dueDate
+      );
+      const isFallbackMaintenanceScheduleLinklessForPanel = (schedule: any, rawStatus: string, derivedStatus: string, rawPendingRestoredAsOperational = false) => {
+        const pendingWithTimingContext = rawStatus === 'PENDING' && fallbackMaintenanceScheduleHasTimingContext(schedule);
+        return (
+          (ABA_LINKLESS_MAINTENANCE_SCHEDULE_STATUSES.has(rawStatus) && !rawPendingRestoredAsOperational && !pendingWithTimingContext) ||
+          (ABA_LINKLESS_MAINTENANCE_SCHEDULE_STATUSES.has(derivedStatus) && !(derivedStatus === 'PENDING' && pendingWithTimingContext))
+        );
+      };
       const schedulePanelStatus = (schedule: any) => {
         if (!schedule) return 'Sem sondagem agendada';
         const derived = schedule ? deriveMaintenanceScheduleStatus(schedule, now) : 'NO_SCHEDULE';
         if (derived === 'OVERDUE') return 'Atrasada';
         if (derived === 'DUE_TODAY') return 'Para hoje';
-        const status = sanitizeString(schedule?.status || derived, 80).toUpperCase();
+        const status = sanitizeString(derived || schedule?.status, 80).toUpperCase();
         if (status === 'PENDING_NEXT_SESSION') return 'Aguardando futura consulta';
         if (status === 'PENDING_CONFIRMATION') return 'Pendente de confirmação';
         if (status === 'PENDING_LINK' || status === 'PENDING_SCHEDULING' || status === 'UNSCHEDULED') return 'Sem sessão vinculada';
+        if (status === 'PENDING' && fallbackMaintenanceScheduleHasTimingContext(schedule)) return 'Agendada';
         if (status === 'SCHEDULED') return 'Agendada';
         if (status === 'COMPLETED') return 'Habilidade mantida';
         return status || 'Sem sondagem agendada';
@@ -32204,14 +32322,14 @@ async function startServer() {
       validScheduleCards.forEach((card: any) => {
         const schedule = card?.schedule || {};
         const derived = deriveMaintenanceScheduleStatus(schedule, now);
+        const rawStatus = sanitizeString(schedule?.status, 80).toUpperCase();
+        const derivedText = String(derived).toUpperCase();
+        const rawPendingRestoredAsOperational = rawStatus === 'PENDING' && derivedText !== 'PENDING';
         if (rowHasRegressionRisk(card)) {
           regressionRisk.push(toPanelRow(card, 'regression'));
         } else if (derived === 'OVERDUE') {
           overdueProbes.push(toPanelRow(card, 'overdue'));
-        } else if (
-          ABA_LINKLESS_MAINTENANCE_SCHEDULE_STATUSES.has(sanitizeString(schedule?.status, 80).toUpperCase()) ||
-          ABA_LINKLESS_MAINTENANCE_SCHEDULE_STATUSES.has(String(derived).toUpperCase())
-        ) {
+        } else if (isFallbackMaintenanceScheduleLinklessForPanel(schedule, rawStatus, derivedText, rawPendingRestoredAsOperational)) {
           waitingNextSession.push(toPanelRow(card, 'waiting'));
         } else {
           scheduledProbes.push(toPanelRow(card, 'scheduled'));
@@ -32419,7 +32537,7 @@ async function startServer() {
       for (const schedule of schedules) {
         const scheduleId = sanitizeString(schedule?.id, 180);
         if (!scheduleId) continue;
-        const raw = schedule?.raw_payload && typeof schedule.raw_payload === 'object' ? schedule.raw_payload : {};
+        const raw = readMaintenanceStoredPayload(schedule?.raw_payload || schedule?.rawPayload);
         const metadata = schedule?.metadata && typeof schedule.metadata === 'object' ? schedule.metadata : {};
         const patch = cleanObject({
           status: 'CANCELLED',
@@ -32736,7 +32854,7 @@ async function startServer() {
       const schedules = Array.isArray(result.data) ? result.data : [];
       const hydrateScheduleResponse = (schedule: any) => {
         if (!schedule) return null;
-        const raw = schedule?.raw_payload && typeof schedule.raw_payload === 'object' ? schedule.raw_payload : {};
+        const raw = readMaintenanceStoredPayload(schedule?.raw_payload || schedule?.rawPayload);
         const target = schedule?.target && typeof schedule.target === 'object' ? schedule.target : {};
         const masteryCriteria = target?.mastery_criteria && typeof target.mastery_criteria === 'object' ? target.mastery_criteria : {};
         const peiGoalId = sanitizeString(schedule?.peiGoalId || schedule?.goalId || schedule?.goal_id || masteryCriteria?.peiGoalId || masteryCriteria?.pei_goal_id || raw.peiGoalId || raw.pei_goal_id || raw.goalId || raw.goal_id || req.body?.peiGoalId || req.body?.goalId || req.body?.goal_id, 180);
@@ -32864,7 +32982,7 @@ async function startServer() {
         return res.status(400).json({ success: false, error: 'INVALID_MODE', message: 'Modo de agendamento inválido.' });
       }
       const now = new Date().toISOString();
-      const raw = schedule.raw_payload && typeof schedule.raw_payload === 'object' ? schedule.raw_payload : {};
+      const raw = readMaintenanceStoredPayload(schedule.raw_payload || schedule.rawPayload);
       let patch: Record<string, any> = {};
       let actionType = 'MAINTENANCE_SCHEDULE_UPDATED';
       let message = 'Agendamento de manutenção atualizado.';
@@ -33021,7 +33139,7 @@ async function startServer() {
       if (!ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES.includes(normalizeAbaMaintenanceScheduleStatus(schedule.status))) {
         return res.status(409).json({ success: false, error: 'SCHEDULE_INACTIVE', message: 'Esta sondagem não está ativa.' });
       }
-      const raw = schedule.raw_payload && typeof schedule.raw_payload === 'object' ? schedule.raw_payload : {};
+      const raw = readMaintenanceStoredPayload(schedule.raw_payload || schedule.rawPayload);
       const now = new Date().toISOString();
       const patch = cleanObject({
         status: 'CANCELLED',
@@ -33145,7 +33263,7 @@ async function startServer() {
       if (!schedule?.id || !(await canAccessPatientInCurrentClinic(sanitizeString(schedule.patient_id, 120), req.session.user))) {
         return res.status(404).json({ success: false, error: 'SCHEDULE_NOT_FOUND', message: 'Sondagem de manutenção não encontrada.' });
       }
-      const raw = schedule.raw_payload && typeof schedule.raw_payload === 'object' ? schedule.raw_payload : {};
+      const raw = readMaintenanceStoredPayload(schedule.raw_payload || schedule.rawPayload);
       const metadata = schedule.metadata && typeof schedule.metadata === 'object' ? schedule.metadata : {};
       const appointmentId = sanitizeString(
         req.body?.appointmentId ||
@@ -33269,7 +33387,7 @@ async function startServer() {
       if (!appointment?.id) {
         return res.status(409).json({ success: false, error: 'APPOINTMENT_PATIENT_MISMATCH', message: 'Esta sessão não pertence ao paciente desta sondagem.' });
       }
-      const raw = schedule.raw_payload && typeof schedule.raw_payload === 'object' ? schedule.raw_payload : {};
+      const raw = readMaintenanceStoredPayload(schedule.raw_payload || schedule.rawPayload);
       const metadata = schedule.metadata && typeof schedule.metadata === 'object' ? schedule.metadata : {};
       const now = new Date().toISOString();
       const assignedBy = sanitizeString(req.session.user?.id, 120) || null;
@@ -33371,7 +33489,7 @@ async function startServer() {
       if (!target?.id) {
         return res.status(404).json({ success: false, error: 'TARGET_NOT_FOUND', message: 'Habilidade não encontrada para este paciente.' });
       }
-      const raw = schedule.raw_payload && typeof schedule.raw_payload === 'object' ? schedule.raw_payload : {};
+      const raw = readMaintenanceStoredPayload(schedule.raw_payload || schedule.rawPayload);
       const metadata = schedule.metadata && typeof schedule.metadata === 'object' ? schedule.metadata : {};
       const now = new Date().toISOString();
       const update = await updateAbaScheduleWithSchemaFallback(scheduleId, cleanObject({
@@ -33452,7 +33570,7 @@ async function startServer() {
       if (!schedule?.id || !(await canAccessPatientInCurrentClinic(sanitizeString(schedule.patient_id, 120), req.session.user))) {
         return res.status(404).json({ success: false, error: 'Sondagem de manutenção não encontrada.' });
       }
-      const raw = schedule.raw_payload && typeof schedule.raw_payload === 'object' ? schedule.raw_payload : {};
+      const raw = readMaintenanceStoredPayload(schedule.raw_payload || schedule.rawPayload);
       const appointmentId = sanitizeString(
         req.body?.appointmentId || req.body?.appointment_id || raw.candidateAppointmentId,
         180
@@ -34585,7 +34703,7 @@ async function startServer() {
           status: probeStatus,
           updated_at: new Date().toISOString(),
           raw_payload: sanitizeClinicalPayload({
-            ...(((linkValidation as any).schedule?.raw_payload && typeof (linkValidation as any).schedule.raw_payload === 'object') ? (linkValidation as any).schedule.raw_payload : {}),
+            ...readMaintenanceStoredPayload((linkValidation as any).schedule?.raw_payload || (linkValidation as any).schedule?.rawPayload),
             lastMaintenanceProbeResultId: resultId,
             lastMaintenanceProbeStatus: probeStatus,
             humanReviewRequired: true,
