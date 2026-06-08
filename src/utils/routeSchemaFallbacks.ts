@@ -269,7 +269,9 @@ export const TASK_SELECT_COLUMNS = [
   'pro_score',
   'max_score',
   'created_at',
-  'updated_at'
+  'updated_at',
+  'is_active',
+  'deleted_at'
 ];
 
 export const TASK_LEGACY_SELECT_COLUMNS = [
@@ -739,7 +741,9 @@ const TASK_OPTIONAL_COLUMNS = new Set([
   'pro_score',
   'max_score',
   'created_at',
-  'updated_at'
+  'updated_at',
+  'is_active',
+  'deleted_at'
 ]);
 
 const ASSIGNED_TASK_OPTIONAL_COLUMNS = new Set([
@@ -1426,6 +1430,8 @@ export async function fetchTasksWithSchemaFallback(params: {
       }
       if (excludePatientId) query = query.neq('patient_id', excludePatientId);
       if (patientIds.length > 0) query = query.in('patient_id', patientIds);
+      if (!removedColumns.has('is_active')) query = query.eq('is_active', true);
+      if (!removedColumns.has('deleted_at')) query = query.is('deleted_at', null);
 
       if (!removedColumns.has('created_at')) query = query.order('created_at', { ascending: false });
       return query.limit(params.limit);

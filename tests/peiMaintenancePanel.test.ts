@@ -627,6 +627,8 @@ test('acoes do painel chamam rotas seguras existentes', () => {
   assert.match(patientDetailCode, /Mover para futura consulta/);
   assert.match(patientDetailCode, /dataService\.skipMaintenanceScheduleLink\(scheduleId, appointmentId \? \{ appointmentId \} : \{\}\)/);
   assert.doesNotMatch(patientDetailCode, /handlePeiRemoveScheduledMaintenanceAppointmentLink[\s\S]*?dataService\.updateMaintenanceSchedule\(scheduleId, \{ mode: 'DATE'/m);
+  assert.match(patientDetailCode, /Sem consulta vinculada/);
+  assert.match(patientDetailCode, /display\.tone === 'amber' && !appointmentId/);
   assert.match(patientDetailCode, /Sondagem vinculada à consulta/);
   assert.match(patientDetailCode, /Sondagem por data/);
   assert.match(patientDetailCode, /Agendamentos duplicados para revisão/);
@@ -661,6 +663,8 @@ test('acoes do painel chamam rotas seguras existentes', () => {
   assert.match(serverCode, /MAINTENANCE_SCHEDULE_CREATED/);
   assert.match(serverCode, /MAINTENANCE_SCHEDULE_ASSIGNED/);
   assert.match(serverCode, /MAINTENANCE_NEXT_SESSION_SET/);
+  assert.match(serverCode, /MAINTENANCE_PROBE_LINK_SKIPPED[\s\S]*?due_date: null[\s\S]*?target_due_date: null[\s\S]*?scheduled_for: null[\s\S]*?schedule_mode: 'NEXT_PATIENT_SESSION'/m);
+  assert.match(serverCode, /linkSkippedAt: now[\s\S]*?clinicalDate: null[\s\S]*?scheduleType: 'NEXT_SESSION'[\s\S]*?scheduledForNextSession: true/m);
   assert.match(patientDetailCode, /Este paciente ainda n[Ã£a]o possui habilidades no PEI|Este paciente ainda não possui habilidades no PEI/);
   assert.doesNotMatch(patientDetailCode, /Ainda n[Ã£a]o h[Ã¡a] habilidade real do PEI dispon[Ã­i]vel para selecionar|Ainda não há habilidade real do PEI disponível para selecionar/);
   assert.match(serverCode, /app\.get\('\/api\/patients\/:patientId\/aba\/targets\/linkable'/);
@@ -691,6 +695,10 @@ test('refresh da manutencao usa apenas painel target-first e ignora respostas st
   assert.match(refreshCode, /setAbaMaintenancePanel\(mappedPanel\)/);
   assert.match(actionCode, /await refreshPeiMaintenancePanel\(\);[\s\S]*?setPeiMaintenancePanelMessage\(result\?\.message \|\| successMessage\)/m);
   assert.match(patientDetailCode, /const applyPeiMaintenanceScheduleResult = React\.useCallback/);
+  assert.match(patientDetailCode, /Array\.isArray\(result\?\.data\) \? result\.data : result\?\.data \? \[result\.data\] : \[\]/);
+  assert.match(patientDetailCode, /const scheduledClinicalIds = new Set<string>\(\)/);
+  assert.match(patientDetailCode, /getPeiMaintenanceClinicalLinkIds\(row\)\.forEach/);
+  assert.match(patientDetailCode, /rowClinicalIds\.some\(\(id: string\) => scheduledClinicalIds\.has\(id\)\)/);
   assert.match(actionCode, /await refreshPeiMaintenancePanel\(\);[\s\S]*?applyPeiMaintenanceScheduleResult\(result, optimisticRow\)/m);
   assert.match(patientDetailCode, /runPeiMaintenanceAction\([\s\S]*?successMessage,[\s\S]*?row[\s\S]*?\)\.then/m);
   assert.doesNotMatch(refreshCode, /getAbaMaintenanceOverview/);

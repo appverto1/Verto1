@@ -20736,9 +20736,35 @@ async function startServer() {
       if (!(await canAccessPatientInCurrentClinic(sanitizeString(existing.patient_id, 120), req.session.user))) {
         return res.status(403).json({ success: false, error: 'Acesso negado.' });
       }
+      const now = new Date().toISOString();
+      let softDeletePatch: Record<string, any> = {
+        deleted_at: now,
+        is_active: false,
+        updated_at: now
+      };
+      let softDeleteError: any = null;
+      while (Object.keys(softDeletePatch).length > 0) {
+        if (!('deleted_at' in softDeletePatch) && !('is_active' in softDeletePatch)) break;
+        const result = await supabase
+          .from('tasks')
+          .update(softDeletePatch)
+          .eq('id', taskId);
+        softDeleteError = result.error;
+        if (!softDeleteError) {
+          return res.json({ success: true, softDeleted: true });
+        }
+        const missingColumn = extractMissingColumnName(softDeleteError);
+        if (missingColumn && missingColumn in softDeletePatch) {
+          delete softDeletePatch[missingColumn];
+          continue;
+        }
+        break;
+      }
+      const hasSoftDeleteField = 'deleted_at' in softDeletePatch || 'is_active' in softDeletePatch;
+      if (softDeleteError && hasSoftDeleteField) throw softDeleteError;
       const { error } = await supabase.from('tasks').delete().eq('id', taskId);
       if (error) throw error;
-      return res.json({ success: true });
+      return res.json({ success: true, softDeleted: false, warning: 'Schema de tarefas sem colunas de arquivamento; exclusão física usada como fallback.' });
     } catch (error: any) {
       logRouteDbError('/api/tasks/:taskId [DELETE]', error, { taskId: sanitizeString(req.params.taskId, 120) });
       return res.status(500).json({ success: false, error: 'Falha na operação de dados.' });
@@ -22431,6 +22457,10 @@ async function startServer() {
       const displayName = sanitizeString(target?.name || raw.targetName || raw.target_name, 240) || null;
       const protocolTitle = sanitizeString(target?.protocol_title || raw.protocolTitle || raw.protocol_name, 240) || null;
       const domainName = sanitizeString(target?.domain_name || raw.domainName || raw.domain_name, 240) || null;
+      const masteryCriteria = target?.mastery_criteria && typeof target.mastery_criteria === 'object' ? target.mastery_criteria : {};
+      const peiGoalId = sanitizeString(masteryCriteria?.peiGoalId || masteryCriteria?.pei_goal_id || raw.peiGoalId || raw.pei_goal_id || raw.goalId || raw.goal_id, 180);
+      const skillId = sanitizeString(masteryCriteria?.skillId || masteryCriteria?.skill_id || raw.skillId || raw.skill_id, 180);
+      const localTargetRef = sanitizeString(masteryCriteria?.localTargetRef || masteryCriteria?.local_target_ref || raw.localTargetRef || raw.local_target_ref || peiGoalId, 180);
       return cleanObject({
         ...row,
         appointment,
@@ -22441,12 +22471,22 @@ async function startServer() {
         protocolTitle,
         domain_name: domainName,
         domainName,
+        peiGoalId: peiGoalId || null,
+        goalId: peiGoalId || null,
+        goal_id: peiGoalId || null,
+        skillId: skillId || null,
+        skill_id: skillId || null,
+        localTargetRef: localTargetRef || null,
         target_missing: false,
         raw_payload: sanitizeClinicalPayload({
           ...raw,
           targetName: displayName || raw.targetName || raw.target_name || null,
           protocolTitle: protocolTitle || raw.protocolTitle || raw.protocol_name || null,
-          domainName: domainName || raw.domainName || raw.domain_name || null
+          domainName: domainName || raw.domainName || raw.domain_name || null,
+          peiGoalId: peiGoalId || raw.peiGoalId || raw.pei_goal_id || null,
+          goalId: peiGoalId || raw.goalId || raw.goal_id || null,
+          skillId: skillId || raw.skillId || raw.skill_id || null,
+          localTargetRef: localTargetRef || raw.localTargetRef || raw.local_target_ref || null
         })
       });
     });
@@ -28295,6 +28335,16 @@ async function startServer() {
     if (!target?.id) {
       return { ok: false, status: 404, error: 'Não foi possível agendar manutenção porque a habilidade não foi identificada corretamente.' };
     }
+    const targetMasteryCriteria = target?.mastery_criteria && typeof target.mastery_criteria === 'object' ? target.mastery_criteria : {};
+    const targetPeiGoalId = sanitizeString(targetMasteryCriteria?.peiGoalId || targetMasteryCriteria?.pei_goal_id, 180);
+    const targetSkillId = sanitizeString(targetMasteryCriteria?.skillId || targetMasteryCriteria?.skill_id, 180);
+    const targetLocalTargetRef = sanitizeString(targetMasteryCriteria?.localTargetRef || targetMasteryCriteria?.local_target_ref || targetPeiGoalId, 180);
+    const maintenanceTargetRawPayload = cleanObject({
+      peiGoalId: targetPeiGoalId || null,
+      goalId: targetPeiGoalId || null,
+      skillId: targetSkillId || null,
+      localTargetRef: targetLocalTargetRef || null
+    });
     const requestedMasteryEvaluationId = sanitizeString(params.masteryEvaluationId, 180);
     const masteryEvaluationId = requestedMasteryEvaluationId || `manual-${targetId}`;
     const rows: any[] = [];
@@ -28382,6 +28432,7 @@ async function startServer() {
           }),
           raw_payload: sanitizeClinicalPayload({
             ...raw,
+            ...maintenanceTargetRawPayload,
             targetName: target?.name || raw.targetName || null,
             scheduledForNextSession: true,
             nextSessionPolicy: true,
@@ -28501,6 +28552,7 @@ async function startServer() {
           }),
           raw_payload: sanitizeClinicalPayload({
             ...raw,
+            ...maintenanceTargetRawPayload,
             targetName: target?.name || raw.targetName || null,
             scheduleType: appointmentId ? 'APPOINTMENT' : 'DATE',
             clinicalDate: appointmentId ? null : dueDate,
@@ -28602,6 +28654,7 @@ async function startServer() {
             matchStatus: item.status
           }),
           raw_payload: sanitizeClinicalPayload({
+            ...maintenanceTargetRawPayload,
             targetName: target?.name || null,
             previewMessage: item.message,
             maxAppointmentLookupDay: maxDay,
@@ -28640,6 +28693,7 @@ async function startServer() {
           scheduleReason: 'NEXT_SESSION_WITHOUT_APPOINTMENT'
         }),
         raw_payload: sanitizeClinicalPayload({
+          ...maintenanceTargetRawPayload,
           targetName: target?.name || null,
           scheduledForNextSession: true,
           nextSessionPolicy: true,
@@ -28688,6 +28742,7 @@ async function startServer() {
           scheduleType: appointmentId ? 'APPOINTMENT' : 'DATE'
         }),
         raw_payload: sanitizeClinicalPayload({
+          ...maintenanceTargetRawPayload,
           targetName: target?.name || null,
           scheduleType: appointmentId ? 'APPOINTMENT' : 'DATE',
           clinicalDate: appointmentId ? null : dueDate,
@@ -31511,6 +31566,12 @@ async function startServer() {
             targetName: sanitizeString(schedule?.targetName || schedule?.target_name || raw.targetName, 240) || null,
             protocolName: sanitizeString(schedule?.protocolTitle || schedule?.protocol_title || raw.protocolTitle, 240) || null,
             domainName: sanitizeString(schedule?.domainName || schedule?.domain_name || raw.domainName, 240) || null,
+            peiGoalId: sanitizeString(schedule?.peiGoalId || schedule?.goalId || schedule?.goal_id || raw.peiGoalId || raw.goalId || raw.goal_id, 180) || null,
+            goalId: sanitizeString(schedule?.goalId || schedule?.goal_id || schedule?.peiGoalId || raw.goalId || raw.goal_id || raw.peiGoalId, 180) || null,
+            goal_id: sanitizeString(schedule?.goal_id || schedule?.goalId || schedule?.peiGoalId || raw.goal_id || raw.goalId || raw.peiGoalId, 180) || null,
+            skillId: sanitizeString(schedule?.skillId || schedule?.skill_id || raw.skillId || raw.skill_id, 180) || null,
+            skill_id: sanitizeString(schedule?.skill_id || schedule?.skillId || raw.skill_id || raw.skillId, 180) || null,
+            localTargetRef: sanitizeString(schedule?.localTargetRef || schedule?.local_target_ref || raw.localTargetRef || raw.local_target_ref, 180) || null,
             raw_payload: sanitizeClinicalPayload(raw),
             rawPayload: sanitizeClinicalPayload(raw)
           });
@@ -32600,6 +32661,10 @@ async function startServer() {
         if (!schedule) return null;
         const raw = schedule?.raw_payload && typeof schedule.raw_payload === 'object' ? schedule.raw_payload : {};
         const target = schedule?.target && typeof schedule.target === 'object' ? schedule.target : {};
+        const masteryCriteria = target?.mastery_criteria && typeof target.mastery_criteria === 'object' ? target.mastery_criteria : {};
+        const peiGoalId = sanitizeString(schedule?.peiGoalId || schedule?.goalId || schedule?.goal_id || masteryCriteria?.peiGoalId || masteryCriteria?.pei_goal_id || raw.peiGoalId || raw.pei_goal_id || raw.goalId || raw.goal_id || req.body?.peiGoalId || req.body?.goalId || req.body?.goal_id, 180);
+        const skillId = sanitizeString(schedule?.skillId || schedule?.skill_id || masteryCriteria?.skillId || masteryCriteria?.skill_id || raw.skillId || raw.skill_id || req.body?.skillId || req.body?.skill_id, 180);
+        const localTargetRef = sanitizeString(schedule?.localTargetRef || masteryCriteria?.localTargetRef || masteryCriteria?.local_target_ref || raw.localTargetRef || raw.local_target_ref || req.body?.localTargetRef || peiGoalId, 180);
         const scheduleId = sanitizeString(schedule?.id || schedule?.schedule_id || schedule?.scheduleId, 180);
         return cleanObject({
           id: scheduleId || null,
@@ -32618,7 +32683,13 @@ async function startServer() {
           candidateAppointmentId: schedule?.candidate_appointment_id || schedule?.candidateAppointmentId || null,
           targetName: sanitizeString(schedule?.targetName || schedule?.target_name || target?.name || raw.targetName, 240) || null,
           protocolName: sanitizeString(schedule?.protocolTitle || schedule?.protocol_title || target?.protocol_title || raw.protocolTitle, 240) || null,
-          domainName: sanitizeString(schedule?.domainName || schedule?.domain_name || target?.domain_name || raw.domainName, 240) || null
+          domainName: sanitizeString(schedule?.domainName || schedule?.domain_name || target?.domain_name || raw.domainName, 240) || null,
+          peiGoalId: peiGoalId || null,
+          goalId: peiGoalId || null,
+          goal_id: peiGoalId || null,
+          skillId: skillId || null,
+          skill_id: skillId || null,
+          localTargetRef: localTargetRef || null
         });
       };
       const schedule = hydrateScheduleResponse(schedules[0] || null);
@@ -33311,17 +33382,18 @@ async function startServer() {
         appointmentId
       ].map((value: any) => sanitizeString(value, 180)).filter(Boolean))).slice(-20);
       const previousStatus = sanitizeString(raw.pendingConfirmationPreviousStatus, 40).toUpperCase();
-      const fallbackStatus = String(schedule.schedule_mode || '').toUpperCase() === 'NEXT_PATIENT_SESSION'
-        ? 'PENDING_NEXT_SESSION'
-        : 'PENDING_LINK';
       const nextStatus = ['PENDING_NEXT_SESSION', 'PENDING_LINK', 'PENDING_SCHEDULING', 'UNSCHEDULED', 'PENDING'].includes(previousStatus)
         ? previousStatus
-        : fallbackStatus;
+        : 'PENDING_NEXT_SESSION';
       const now = new Date().toISOString();
       const update = await updateAbaScheduleWithSchemaFallback(scheduleId, cleanObject({
         status: nextStatus,
         appointment_id: null,
         candidate_appointment_id: null,
+        due_date: null,
+        target_due_date: null,
+        scheduled_for: null,
+        schedule_mode: 'NEXT_PATIENT_SESSION',
         metadata: sanitizeClinicalPayload({
           auditAction: 'MAINTENANCE_PROBE_LINK_SKIPPED',
           skippedAppointmentId: appointmentId,
@@ -33334,6 +33406,10 @@ async function startServer() {
           pendingConfirmationPreviousStatus: null,
           ignoredAppointmentIds,
           linkSkippedAt: now,
+          clinicalDate: null,
+          scheduleType: 'NEXT_SESSION',
+          scheduledForNextSession: true,
+          nextSessionPolicy: true,
           noAutomaticClinicalMutation: true
         }),
         updated_at: now
@@ -33354,7 +33430,23 @@ async function startServer() {
         status: nextStatus,
         appointment_id: null,
         candidate_appointment_id: null,
-        raw_payload: { ...raw, ignoredAppointmentIds }
+        due_date: null,
+        target_due_date: null,
+        scheduled_for: null,
+        schedule_mode: 'NEXT_PATIENT_SESSION',
+        raw_payload: {
+          ...raw,
+          candidateAppointmentId: null,
+          candidateScheduledAt: null,
+          pendingConfirmationPreviousStatus: null,
+          ignoredAppointmentIds,
+          linkSkippedAt: now,
+          clinicalDate: null,
+          scheduleType: 'NEXT_SESSION',
+          scheduledForNextSession: true,
+          nextSessionPolicy: true,
+          noAutomaticClinicalMutation: true
+        }
       };
       const [enrichedSchedule] = await enrichMaintenanceRowsWithTargetDisplay(
         [skippedSchedule],
@@ -35517,6 +35609,40 @@ async function startServer() {
       if (!eventId) return res.status(400).json({ success: false, error: 'Evento inválido.' });
       if (!isUuid(patientId)) return res.status(400).json({ success: false, error: 'Paciente inválido.' });
 
+      const now = new Date().toISOString();
+      let softDeletePatch: Record<string, any> = {
+        is_active: false,
+        deleted_at: now,
+        status: 'CANCELED',
+        updated_at: now
+      };
+      let softDeleteError: any = null;
+      while (Object.keys(softDeletePatch).length > 0) {
+        if (!('is_active' in softDeletePatch) && !('deleted_at' in softDeletePatch) && !('status' in softDeletePatch)) break;
+        let query = supabase
+          .from('aba_behavior_events')
+          .update(softDeletePatch)
+          .eq('id', eventId)
+          .eq('patient_id', patientId);
+        if (!hasGlobalClinicAccess(req.session.user) && clinicId) query = query.eq('clinic_id', clinicId);
+        if (sanitizeString(req.session.user?.role, 40).toLowerCase() === 'therapist') {
+          query = query.eq('therapist_id', sanitizeString(req.session.user?.id, 120));
+        }
+        const result = await query;
+        softDeleteError = result.error;
+        if (!softDeleteError) return res.json({ success: true, data: { id: eventId, deleted: true, softDeleted: true } });
+        if (hasMissingFinancialSchema(softDeleteError)) {
+          return res.status(503).json({ success: false, error: 'Schema ABA ainda não aplicado.' });
+        }
+        const missingColumn = extractMissingColumnName(softDeleteError);
+        if (missingColumn && missingColumn in softDeletePatch) {
+          delete softDeletePatch[missingColumn];
+          continue;
+        }
+        break;
+      }
+      const hasSoftDeleteField = 'is_active' in softDeletePatch || 'deleted_at' in softDeletePatch || 'status' in softDeletePatch;
+      if (softDeleteError && hasSoftDeleteField) throw softDeleteError;
       let query = supabase
         .from('aba_behavior_events')
         .delete()
@@ -35533,7 +35659,7 @@ async function startServer() {
         }
         throw error;
       }
-      return res.json({ success: true, data: { id: eventId, deleted: true } });
+      return res.json({ success: true, data: { id: eventId, deleted: true, softDeleted: false } });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
     }
@@ -35545,17 +35671,44 @@ async function startServer() {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(patientId)) return res.json({ success: true, data: [] });
       const { page, pageSize, from, to } = parseAbaPageParams(req.query);
-      let query = supabase
-        .from('aba_behavior_events')
-        .select(ABA_BEHAVIOR_EVENT_LIST_SELECT)
-        .eq('patient_id', patientId)
-        .order('occurred_at', { ascending: false })
-        .range(from, to);
-      if (!hasGlobalClinicAccess(req.session.user) && clinicId) query = query.eq('clinic_id', clinicId);
-      if (sanitizeString(req.session.user?.role, 40).toLowerCase() === 'therapist') {
-        query = query.eq('therapist_id', sanitizeString(req.session.user?.id, 120));
+      let filterIsActive = true;
+      let filterDeletedAt = true;
+      let filterCanceled = true;
+      let data: any[] | null = null;
+      let error: any = null;
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        let query = supabase
+          .from('aba_behavior_events')
+          .select(ABA_BEHAVIOR_EVENT_LIST_SELECT)
+          .eq('patient_id', patientId)
+          .order('occurred_at', { ascending: false })
+          .range(from, to);
+        if (filterIsActive) query = query.eq('is_active', true);
+        if (filterDeletedAt) query = query.is('deleted_at', null);
+        if (filterCanceled) query = query.neq('status', 'CANCELED');
+        if (!hasGlobalClinicAccess(req.session.user) && clinicId) query = query.eq('clinic_id', clinicId);
+        if (sanitizeString(req.session.user?.role, 40).toLowerCase() === 'therapist') {
+          query = query.eq('therapist_id', sanitizeString(req.session.user?.id, 120));
+        }
+        const result = await query;
+        data = result.data;
+        error = result.error;
+        if (!error) break;
+        const missingColumn = extractMissingColumnName(error);
+        if (missingColumn === 'is_active' && filterIsActive) {
+          filterIsActive = false;
+          continue;
+        }
+        if (missingColumn === 'deleted_at' && filterDeletedAt) {
+          filterDeletedAt = false;
+          continue;
+        }
+        if (missingColumn === 'status' && filterCanceled) {
+          filterCanceled = false;
+          continue;
+        }
+        break;
       }
-      const { data, error } = await query;
       if (error) {
         if (hasMissingFinancialSchema(error)) return res.json({ success: true, data: [] });
         throw error;

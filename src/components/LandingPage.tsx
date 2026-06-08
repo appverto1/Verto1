@@ -40,8 +40,6 @@ const heroStories = [
     src: '/lp-hero-agenda.webp',
     width: 1797,
     height: 906,
-    frameWidth: 899,
-    frameHeight: 906,
     variant: 'agenda-pan',
     alt: 'Tela da Verto mostrando a agenda operacional mensal com sessoes e filtros clinicos.'
   },
@@ -49,12 +47,12 @@ const heroStories = [
     src: '/lp-hero-charts.webp',
     width: 1195,
     height: 941,
-    frameWidth: 1195,
-    frameHeight: 941,
     variant: 'charts',
     alt: 'Tela da Verto mostrando graficos ABA de mudancas clinicas por sessao.'
   }
 ];
+
+const LANDING_HERO_MEDIA_ASPECT_RATIO = '16 / 9';
 
 const centralAbaShowcase = [
   {
@@ -879,7 +877,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
 
       <section className="px-6 pb-16 pt-28 md:pb-20 md:pt-32">
         <div className="mx-auto max-w-7xl overflow-hidden rounded-[40px] bg-[#f7f5ff] shadow-sm ring-1 ring-purple-100">
-          <div className="grid min-h-[720px] grid-cols-1 lg:min-h-[760px] lg:grid-cols-[1.05fr_0.95fr]">
+          <div className="grid min-h-[720px] grid-cols-1 lg:min-h-[760px] lg:grid-cols-[0.9fr_1.1fr]">
             <div className="flex flex-col justify-between px-8 py-10 md:px-12 md:py-12 lg:px-14 lg:py-14">
               <div>
                 <span className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-[11px] font-semibold uppercase tracking-widest text-[#7a32fc] shadow-sm ring-1 ring-purple-100">
@@ -919,8 +917,8 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
               </div>
             </div>
 
-            <div className="relative flex min-h-[420px] flex-col items-center justify-center overflow-hidden bg-white px-3 py-6 sm:px-5 lg:min-h-full lg:px-6">
-              <div className="relative w-full max-w-[680px]">
+            <div className="relative flex min-h-[420px] flex-col items-center justify-center overflow-hidden bg-white px-3 py-6 sm:px-5 lg:min-h-full lg:justify-start lg:px-3 lg:py-14 xl:px-4">
+              <div className="relative w-full max-w-[760px]">
                 <div className="mb-4 flex gap-2 px-1">
                   {heroStories.map((story, index) => (
                     <button
@@ -941,7 +939,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                 <div
                   className="landing-hero-media-frame relative mx-auto overflow-hidden rounded-[18px] border border-slate-200 bg-white shadow-xl shadow-slate-900/10 transition-all duration-700 sm:rounded-[24px]"
                   data-hero-kind={activeHeroStoryData.variant}
-                  style={{ aspectRatio: `${activeHeroStoryData.frameWidth} / ${activeHeroStoryData.frameHeight}` }}
+                  style={{ aspectRatio: LANDING_HERO_MEDIA_ASPECT_RATIO }}
                 >
                   {heroStories.map((story, index) => {
                     const isActiveStory = index === activeHeroStory;

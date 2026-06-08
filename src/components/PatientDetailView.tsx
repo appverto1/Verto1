@@ -5288,6 +5288,30 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     row?.source?.skillId,
     row?.source?.skill_id,
     row?.source?.localTargetRef,
+    row?.nextSchedule?.peiGoalId,
+    row?.nextSchedule?.goalId,
+    row?.nextSchedule?.goal_id,
+    row?.nextSchedule?.skillId,
+    row?.nextSchedule?.skill_id,
+    row?.nextSchedule?.localTargetRef,
+    row?.nextSchedule?.raw_payload?.peiGoalId,
+    row?.nextSchedule?.raw_payload?.goalId,
+    row?.nextSchedule?.raw_payload?.goal_id,
+    row?.nextSchedule?.raw_payload?.skillId,
+    row?.nextSchedule?.raw_payload?.skill_id,
+    row?.nextSchedule?.raw_payload?.localTargetRef,
+    row?.schedule?.peiGoalId,
+    row?.schedule?.goalId,
+    row?.schedule?.goal_id,
+    row?.schedule?.skillId,
+    row?.schedule?.skill_id,
+    row?.schedule?.localTargetRef,
+    row?.schedule?.raw_payload?.peiGoalId,
+    row?.schedule?.raw_payload?.goalId,
+    row?.schedule?.raw_payload?.goal_id,
+    row?.schedule?.raw_payload?.skillId,
+    row?.schedule?.raw_payload?.skill_id,
+    row?.schedule?.raw_payload?.localTargetRef,
     row?.goal?.id,
     row?.goal?.skillId,
     row?.goal?.skill_id,
@@ -5577,7 +5601,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     if (!patient?.id || result?.success === false) return;
     const rawSchedules = [
       result?.schedule,
-      ...(Array.isArray(result?.data) ? result.data : []),
+      ...(Array.isArray(result?.data) ? result.data : result?.data ? [result.data] : []),
       ...(Array.isArray(result?.schedules) ? result.schedules : []),
     ].filter(Boolean);
     if (rawSchedules.length === 0) return;
@@ -5604,6 +5628,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           schedule_id: scheduleId,
           targetId,
           target_id: targetId,
+          peiGoalId: schedule?.peiGoalId || schedule?.goalId || schedule?.goal_id || fallbackRow?.peiGoalId || fallbackRow?.goalId || fallbackRow?.goal_id || null,
+          goalId: schedule?.goalId || schedule?.goal_id || schedule?.peiGoalId || fallbackRow?.goalId || fallbackRow?.goal_id || fallbackRow?.peiGoalId || null,
+          goal_id: schedule?.goal_id || schedule?.goalId || schedule?.peiGoalId || fallbackRow?.goal_id || fallbackRow?.goalId || fallbackRow?.peiGoalId || null,
+          skillId: schedule?.skillId || schedule?.skill_id || fallbackRow?.skillId || fallbackRow?.skill_id || null,
+          skill_id: schedule?.skill_id || schedule?.skillId || fallbackRow?.skill_id || fallbackRow?.skillId || null,
+          localTargetRef: schedule?.localTargetRef || schedule?.local_target_ref || fallbackRow?.localTargetRef || fallbackRow?.local_target_ref || null,
           status: schedule?.status || (schedule?.appointmentId || schedule?.appointment_id ? 'SCHEDULED' : 'SCHEDULED'),
         };
         return {
@@ -5642,10 +5672,19 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       };
       const scheduledTargetIds = new Set(optimisticRows.map((row: any) => row.targetId).filter(Boolean));
       const scheduledScheduleIds = new Set(optimisticRows.map((row: any) => row.scheduleId).filter(Boolean));
+      const scheduledClinicalIds = new Set<string>();
+      optimisticRows.forEach((row: any) => {
+        getPeiMaintenanceClinicalLinkIds(row).forEach((id: string) => scheduledClinicalIds.add(id));
+      });
       const keepUnrelated = (row: any) => {
         const rowTargetId = getPeiMaintenancePersistedId(row?.targetId || row?.target_id);
         const rowScheduleId = getPersistedMaintenanceScheduleId(row?.scheduleId || row?.schedule_id || row?.nextSchedule?.id || row?.activeSchedule?.id || row?.schedule?.id, row?.nextSchedule || row?.activeSchedule || row?.schedule || row);
-        return !(rowTargetId && scheduledTargetIds.has(rowTargetId)) && !(rowScheduleId && scheduledScheduleIds.has(rowScheduleId));
+        const rowClinicalIds = getPeiMaintenanceClinicalLinkIds(row);
+        return (
+          !(rowTargetId && scheduledTargetIds.has(rowTargetId)) &&
+          !(rowScheduleId && scheduledScheduleIds.has(rowScheduleId)) &&
+          !rowClinicalIds.some((id: string) => scheduledClinicalIds.has(id))
+        );
       };
       const waitingRows: any[] = [];
       const scheduledRows: any[] = [];
@@ -5683,7 +5722,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         ...(Array.isArray(previous?.schedules) ? previous.schedules : []).filter((row: any) => {
           const rowTargetId = getPeiMaintenancePersistedId(row?.targetId || row?.target_id);
           const rowScheduleId = getPersistedMaintenanceScheduleId(row?.scheduleId || row?.schedule_id || row?.id, row);
-          return !optimisticRows.some((scheduledRow: any) => scheduledRow.targetId === rowTargetId || scheduledRow.scheduleId === rowScheduleId);
+          const rowClinicalIds = getPeiMaintenanceClinicalLinkIds(row);
+          return !optimisticRows.some((scheduledRow: any) => (
+            scheduledRow.targetId === rowTargetId ||
+            scheduledRow.scheduleId === rowScheduleId ||
+            rowClinicalIds.some((id: string) => getPeiMaintenanceClinicalLinkIds(scheduledRow).includes(id))
+          ));
         }),
       ],
     }));
@@ -6066,10 +6110,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     const schedule = getPeiMaintenanceScheduleObject(row);
     const status = String(schedule?.status || row?.status || '').toUpperCase();
     const appointmentId = getPersistedUuid(schedule?.appointment_id || schedule?.appointmentId);
-    if (status === 'PENDING_NEXT_SESSION') {
+    if (['PENDING_NEXT_SESSION', 'PENDING_LINK', 'PENDING_SCHEDULING', 'UNSCHEDULED', 'PENDING'].includes(status)) {
       return {
-        badge: 'Aguardando futura consulta',
-        line: 'O sistema sugerirá vínculo quando houver próxima consulta.',
+        badge: appointmentId ? 'Vínculo pendente' : 'Sem consulta vinculada',
+        line: 'A sondagem voltará a ser sugerida quando houver uma consulta real disponível.',
         tone: 'amber'
       };
     }
@@ -6319,6 +6363,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       dueDate: appointmentId ? appointmentDueDate : isDateMode ? peiMaintenanceScheduleDate : null,
       appointmentId: appointmentId || null,
       appointment_id: appointmentId || null,
+      peiGoalId: row?.peiGoalId || row?.goalId || row?.goal_id || row?.source?.peiGoalId || row?.source?.goalId || row?.source?.goal_id || null,
+      goalId: row?.goalId || row?.goal_id || row?.peiGoalId || row?.source?.goalId || row?.source?.goal_id || row?.source?.peiGoalId || null,
+      goal_id: row?.goal_id || row?.goalId || row?.peiGoalId || row?.source?.goal_id || row?.source?.goalId || row?.source?.peiGoalId || null,
+      skillId: row?.skillId || row?.skill_id || row?.source?.skillId || row?.source?.skill_id || null,
+      skill_id: row?.skill_id || row?.skillId || row?.source?.skill_id || row?.source?.skillId || null,
+      localTargetRef: row?.localTargetRef || row?.source?.localTargetRef || row?.source?.id || row?.goal?.id || null,
       target_name: row?.targetName || row?.name,
       protocolName: row?.protocol || row?.protocolName || null,
       domainName: row?.domain || row?.domainName || null
@@ -6371,6 +6421,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         patient_id: patient?.id,
         patientId: patient?.id,
         scheduleMode: 'NEXT_PATIENT_SESSION',
+        peiGoalId: selectedRow?.peiGoalId || selectedRow?.goalId || selectedRow?.goal_id || selectedRow?.source?.peiGoalId || selectedRow?.source?.goalId || selectedRow?.source?.goal_id || null,
+        goalId: selectedRow?.goalId || selectedRow?.goal_id || selectedRow?.peiGoalId || selectedRow?.source?.goalId || selectedRow?.source?.goal_id || selectedRow?.source?.peiGoalId || null,
+        goal_id: selectedRow?.goal_id || selectedRow?.goalId || selectedRow?.peiGoalId || selectedRow?.source?.goal_id || selectedRow?.source?.goalId || selectedRow?.source?.peiGoalId || null,
+        skillId: selectedRow?.skillId || selectedRow?.skill_id || selectedRow?.source?.skillId || selectedRow?.source?.skill_id || null,
+        skill_id: selectedRow?.skill_id || selectedRow?.skillId || selectedRow?.source?.skill_id || selectedRow?.source?.skillId || null,
+        localTargetRef: selectedRow?.localTargetRef || selectedRow?.source?.localTargetRef || selectedRow?.source?.id || selectedRow?.goal?.id || null,
         target_name: selectedRow?.targetName || selectedRow?.name
       }),
       'Sondagem aguardando futura consulta.'
@@ -6821,7 +6877,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       const scheduleId = getPeiMaintenanceScheduleId(schedule) || getPersistedMaintenanceScheduleId(row?.scheduleId || row?.schedule_id, row);
       const appointmentId = getPersistedUuid(schedule?.appointment_id || schedule?.appointmentId);
       const display = getPeiMaintenanceScheduleDisplay(row, fallbackStatus);
-      const isWaiting = display.badge === 'Aguardando futura consulta';
+      const isWaiting = display.tone === 'amber' && !appointmentId;
       const isLinkedToAppointment = Boolean(appointmentId);
       const actionLoading = (actionName: string) => Boolean(scheduleId && peiMaintenanceActionKey === `${actionName}-${scheduleId}`);
       const badgeClass = display.tone === 'amber'

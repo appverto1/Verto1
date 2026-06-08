@@ -9,6 +9,7 @@ const patientDetailCode = readFileSync(join(root, 'src/components/PatientDetailV
 const sessionModeCode = readFileSync(join(root, 'src/components/SessionMode.tsx'), 'utf8');
 const coordinatorDashboardCode = readFileSync(join(root, 'src/components/CoordinatorDashboard.tsx'), 'utf8');
 const migrationSql = readFileSync(join(root, 'supabase/migrations/20260602153000_aba_clinical_records_appointment_link.sql'), 'utf8');
+const behaviorSoftDeleteMigrationSql = readFileSync(join(root, 'supabase/migrations/20260608120000_aba_behavior_events_soft_delete.sql'), 'utf8');
 
 const tests: Array<{ name: string; fn: () => void }> = [];
 const test = (name: string, fn: () => void) => tests.push({ name, fn });
@@ -103,6 +104,27 @@ test('clinical records inherit appointment_id from session or request', () => {
     const block = serverCode.slice(routeStart, routeEnd > routeStart ? routeEnd : routeStart + 9000);
     assert.match(block, /appointment_id:/, `${route} persists appointment_id`);
   }
+});
+
+test('ABA behavior events usam soft delete e listagem ignora arquivados', () => {
+  const deleteStart = serverCode.indexOf("app.delete('/api/aba/behavior-events/:eventId'");
+  const listStart = serverCode.indexOf("app.get('/api/aba/behavior-events/:patientId'", deleteStart);
+  const nextRoute = serverCode.indexOf("app.post('/api/aba/interval-records'", listStart);
+  assert.ok(deleteStart >= 0, 'behavior delete route exists');
+  assert.ok(listStart > deleteStart, 'behavior list route follows delete route');
+  const deleteRoute = serverCode.slice(deleteStart, listStart);
+  const listRoute = serverCode.slice(listStart, nextRoute);
+
+  assert.match(deleteRoute, /softDeletePatch[\s\S]*?is_active: false[\s\S]*?deleted_at: now[\s\S]*?status: 'CANCELED'/m);
+  assert.match(deleteRoute, /\.from\('aba_behavior_events'\)[\s\S]*?\.update\(softDeletePatch\)/m);
+  assert.match(listRoute, /filterIsActive[\s\S]*?query = query\.eq\('is_active', true\)/m);
+  assert.match(listRoute, /filterDeletedAt[\s\S]*?query = query\.is\('deleted_at', null\)/m);
+  assert.match(listRoute, /filterCanceled[\s\S]*?query = query\.neq\('status', 'CANCELED'\)/m);
+});
+
+test('migration adiciona soft delete em ABA behavior events', () => {
+  assert.match(behaviorSoftDeleteMigrationSql, /alter table public\.aba_behavior_events[\s\S]*add column if not exists is_active boolean not null default true[\s\S]*add column if not exists deleted_at timestamptz/i);
+  assert.match(behaviorSoftDeleteMigrationSql, /idx_aba_behavior_events_active_patient/i);
 });
 
 test('frontend accepts canonical session id and sends appointment_id with records', () => {

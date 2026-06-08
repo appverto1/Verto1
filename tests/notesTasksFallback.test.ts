@@ -165,6 +165,45 @@ test('/api/tasks remove order opcional quando created_at nao existe', async () =
   assert.equal(supabase.calls[1].filters.some((item) => item.op === 'order' && item.column === 'created_at'), false);
 });
 
+test('/api/tasks nao lista tarefas arquivadas quando colunas de soft delete existem', async () => {
+  const supabase = new FakeSupabase({
+    tasks: [{ data: [{ id: 'task-active', patient_id: 'patient-1', is_active: true }], error: null }]
+  });
+
+  const result = await fetchTasksWithSchemaFallback({
+    supabase,
+    patientId: 'patient-1',
+    limit: 20,
+    logger
+  });
+
+  assert.equal(result.error, null);
+  assert.equal(result.data?.[0]?.id, 'task-active');
+  assert.equal(supabase.calls[0].filters.some((item) => item.op === 'eq' && item.column === 'is_active' && item.value === true), true);
+  assert.equal(supabase.calls[0].filters.some((item) => item.op === 'is' && item.column === 'deleted_at' && item.value === null), true);
+});
+
+test('/api/tasks nao quebra quando filtro opcional is_active nao existe', async () => {
+  const supabase = new FakeSupabase({
+    tasks: [
+      { data: null, error: { code: '42703', message: 'column tasks.is_active does not exist' } },
+      { data: [{ id: 'task-legacy', patient_id: 'patient-1' }], error: null }
+    ]
+  });
+
+  const result = await fetchTasksWithSchemaFallback({
+    supabase,
+    patientId: 'patient-1',
+    limit: 20,
+    logger
+  });
+
+  assert.equal(result.error, null);
+  assert.equal(result.data?.[0]?.id, 'task-legacy');
+  assert.equal(supabase.calls[1].filters.some((item) => item.op === 'eq' && item.column === 'is_active'), false);
+  assert.equal(supabase.calls[1].filters.some((item) => item.op === 'is' && item.column === 'deleted_at'), true);
+});
+
 test('/api/notes retorna 200-equivalente com schema atual e respeita limit', async () => {
   const supabase = new FakeSupabase({
     notes: [{ data: [{ id: 'note-1', patient_id: 'patient-1' }], error: null }]
@@ -250,11 +289,17 @@ test('/api/notes remove order opcional quando created_at nao existe', async () =
 test('notes/tasks nao usam select amplo operacional', () => {
   const serverCode = fs.readFileSync(path.resolve(process.cwd(), 'server.ts'), 'utf8');
   const fallbackCode = fs.readFileSync(path.resolve(process.cwd(), 'src/utils/routeSchemaFallbacks.ts'), 'utf8');
+  const taskDeleteStart = serverCode.indexOf("app.delete('/api/tasks/:taskId'");
+  const taskDeleteEnd = serverCode.indexOf("app.patch('/api/history/:historyId'", taskDeleteStart);
+  const taskDeleteCode = serverCode.slice(taskDeleteStart, taskDeleteEnd);
 
   assert.doesNotMatch(serverCode, /select\(['"]\*['"]\)/);
   assert.doesNotMatch(fallbackCode, /select\(['"]\*['"]\)/);
   assert.doesNotMatch(TASK_SELECT, /\*/);
   assert.doesNotMatch(NOTE_SELECT, /\*/);
+  assert.match(taskDeleteCode, /softDeletePatch/);
+  assert.match(taskDeleteCode, /\.from\('tasks'\)[\s\S]*?\.update\(softDeletePatch\)/m);
+  assert.match(taskDeleteCode, /softDeleted: true/);
 });
 
 for (const item of tests) {
