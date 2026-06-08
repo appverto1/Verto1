@@ -521,6 +521,8 @@ test('subaba manutencao usa painel target-first sem fallback local antigo', () =
   assert.match(eligibleCode, /\? dedupePeiMaintenanceRows\(\[\.\.\.panelRows, \.\.\.localEligibleRows\]\)/);
   assert.match(eligibleCode, /peiMaintenanceLinkableTargets/);
   assert.match(eligibleCode, /targetId && peiMaintenanceUnavailableTargetIds\.has\(targetId\)/);
+  assert.match(eligibleCode, /peiMaintenanceUnavailableClinicalIds/);
+  assert.match(eligibleCode, /clinicalIds\.some\(\(id: string\) => peiMaintenanceUnavailableClinicalIds\.has\(id\)\)/);
   assert.match(eligibleCode, /getPeiMaintenanceRowScheduleId\(row\) \|\| row\?\.hasRealSchedule/);
   assert.match(patientDetailCode, /const isPeiMaintenanceScheduledScheduleRow = \(row: any\) => \{/);
   assert.match(patientDetailCode, /isPeiMaintenanceLinklessScheduleRow/);
@@ -688,6 +690,9 @@ test('refresh da manutencao usa apenas painel target-first e ignora respostas st
   assert.match(refreshCode, /requestId !== peiMaintenancePanelRequestSeqRef\.current/);
   assert.match(refreshCode, /setAbaMaintenancePanel\(mappedPanel\)/);
   assert.match(actionCode, /await refreshPeiMaintenancePanel\(\);[\s\S]*?setPeiMaintenancePanelMessage\(result\?\.message \|\| successMessage\)/m);
+  assert.match(patientDetailCode, /const applyPeiMaintenanceScheduleResult = React\.useCallback/);
+  assert.match(actionCode, /await refreshPeiMaintenancePanel\(\);[\s\S]*?applyPeiMaintenanceScheduleResult\(result, optimisticRow\)/m);
+  assert.match(patientDetailCode, /runPeiMaintenanceAction\([\s\S]*?successMessage,[\s\S]*?row[\s\S]*?\)\.then/m);
   assert.doesNotMatch(refreshCode, /getAbaMaintenanceOverview/);
   assert.doesNotMatch(refreshCode, /groupPeiMaintenanceRowsTargetFirst/);
   assert.doesNotMatch(refreshCode, /buildPeiMaintenanceRows/);
@@ -719,6 +724,8 @@ test('ensure de habilidade adquirida e evento SKILL_ACQUIRED sao idempotentes', 
   assert.match(ensureCode, /resolvePeiMaintenanceSourceTarget\(peiTargets, candidate\)/);
   assert.match(ensureCode, /materializePeiTargetsForMaintenance/);
   assert.match(ensureCode, /persistPeiSkillAcquiredMasteryEvent/);
+  assert.match(routeCode, /peiGoalId: peiGoalId \|\| null/);
+  assert.match(routeCode, /localTargetRef: localTargetRef \|\| null/);
   assert.doesNotMatch(ensureCode, /select\('\*'\)/);
   assert.match(routeCode, /const organizationId = sanitizeString\(req\.session\.user\?\.organizationId \|\| req\.session\.user\?\.organization_id \|\| clinicId, 120\)/);
   assert.match(scheduleRouteCode, /const organizationId = sanitizeString\(req\.session\.user\?\.organizationId \|\| req\.session\.user\?\.organization_id \|\| clinicId, 120\)/);

@@ -5275,6 +5275,23 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     ).trim();
     return clinicalSourceId ? `clinical:${clinicalSourceId}` : '';
   };
+  const getPeiMaintenanceClinicalLinkIds = (row: any) => ([
+    row?.peiGoalId,
+    row?.goalId,
+    row?.goal_id,
+    row?.skillId,
+    row?.skill_id,
+    row?.localTargetRef,
+    row?.source?.peiGoalId,
+    row?.source?.goalId,
+    row?.source?.goal_id,
+    row?.source?.skillId,
+    row?.source?.skill_id,
+    row?.source?.localTargetRef,
+    row?.goal?.id,
+    row?.goal?.skillId,
+    row?.goal?.skill_id,
+  ]).map((value: any) => String(value || '').trim()).filter(Boolean);
 
   const peiMaintenanceScheduledRows = useMemo(() => {
     const panelRows = [
@@ -5319,6 +5336,19 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       if (targetId) targetIds.add(targetId);
     });
     return targetIds;
+  }, [peiMaintenanceScheduledRows, peiMaintenanceTargetFirstGroups, peiMaintenanceWaitingRows]);
+
+  const peiMaintenanceUnavailableClinicalIds = useMemo(() => {
+    const clinicalIds = new Set<string>();
+    [
+      ...peiMaintenanceScheduledRows,
+      ...peiMaintenanceWaitingRows,
+      ...(peiMaintenanceTargetFirstGroups.regressionRisk || []),
+      ...(peiMaintenanceTargetFirstGroups.maintenanceSkills || [])
+    ].filter((row: any) => isActivePeiMaintenanceScheduleRow(row)).forEach((row: any) => {
+      getPeiMaintenanceClinicalLinkIds(row).forEach((id: string) => clinicalIds.add(id));
+    });
+    return clinicalIds;
   }, [peiMaintenanceScheduledRows, peiMaintenanceTargetFirstGroups, peiMaintenanceWaitingRows]);
 
   const peiMaintenanceEligibleRows = useMemo(() => {
@@ -5412,11 +5442,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return dedupePeiMaintenanceRows(rows.filter((row: any) => {
       const key = getPeiMaintenanceDisplayKey(row);
       const targetId = getPeiMaintenancePersistedId(row?.targetId || row?.target_id || row?.aba_target_id || row?.abaTargetId);
+      const clinicalIds = getPeiMaintenanceClinicalLinkIds(row);
       if (getPeiMaintenanceRowScheduleId(row) || row?.hasRealSchedule) return false;
       if (targetId && peiMaintenanceUnavailableTargetIds.has(targetId)) return false;
+      if (clinicalIds.some((id: string) => peiMaintenanceUnavailableClinicalIds.has(id))) return false;
       return !key || !peiMaintenanceUnavailableKeys.has(key);
     }));
-  }, [hasPeiMaintenancePanelForCurrentPatient, peiMaintenanceHydratedGoals, peiMaintenanceLinkableTargets, peiMaintenanceTargetFirstGroups.eligibleSkills, peiMaintenanceUnavailableKeys, peiMaintenanceUnavailableTargetIds]);
+  }, [hasPeiMaintenancePanelForCurrentPatient, peiMaintenanceHydratedGoals, peiMaintenanceLinkableTargets, peiMaintenanceTargetFirstGroups.eligibleSkills, peiMaintenanceUnavailableClinicalIds, peiMaintenanceUnavailableKeys, peiMaintenanceUnavailableTargetIds]);
 
   const peiGeneralizationRows = useMemo(() => {
     const maintainedRows = peiMaintenanceRows.filter((row: any) => row.isMaintained);
@@ -5540,6 +5572,123 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       }
     }
   }, [abaV2Enabled, debugPeiMaintenancePanelLoad, isKidsProfile, patient?.id]);
+
+  const applyPeiMaintenanceScheduleResult = React.useCallback((result: any, fallbackRow: any = null) => {
+    if (!patient?.id || result?.success === false) return;
+    const rawSchedules = [
+      result?.schedule,
+      ...(Array.isArray(result?.data) ? result.data : []),
+      ...(Array.isArray(result?.schedules) ? result.schedules : []),
+    ].filter(Boolean);
+    if (rawSchedules.length === 0) return;
+    const optimisticRows = rawSchedules
+      .map((schedule: any) => {
+        const targetId = getPeiMaintenancePersistedId(
+          schedule?.targetId ||
+            schedule?.target_id ||
+            result?.targetId ||
+            fallbackRow?.targetId ||
+            fallbackRow?.target_id
+        );
+        const scheduleId = getPersistedMaintenanceScheduleId(
+          schedule?.scheduleId ||
+            schedule?.schedule_id ||
+            schedule?.id,
+          schedule
+        );
+        if (!targetId || !scheduleId) return null;
+        const nextSchedule = {
+          ...(schedule || {}),
+          id: scheduleId,
+          scheduleId,
+          schedule_id: scheduleId,
+          targetId,
+          target_id: targetId,
+          status: schedule?.status || (schedule?.appointmentId || schedule?.appointment_id ? 'SCHEDULED' : 'SCHEDULED'),
+        };
+        return {
+          ...(fallbackRow || {}),
+          ...(schedule || {}),
+          key: `schedule:${scheduleId}`,
+          scheduleId,
+          schedule_id: scheduleId,
+          targetId,
+          target_id: targetId,
+          hasRealTarget: true,
+          hasRealSchedule: true,
+          targetName: schedule?.targetName || schedule?.target_name || fallbackRow?.targetName || fallbackRow?.name,
+          name: schedule?.targetName || schedule?.target_name || fallbackRow?.targetName || fallbackRow?.name,
+          protocolName: schedule?.protocolName || schedule?.protocol || fallbackRow?.protocolName || fallbackRow?.protocol,
+          protocol: schedule?.protocolName || schedule?.protocol || fallbackRow?.protocolName || fallbackRow?.protocol,
+          domainName: schedule?.domainName || schedule?.domain || fallbackRow?.domainName || fallbackRow?.domain,
+          domain: schedule?.domainName || schedule?.domain || fallbackRow?.domainName || fallbackRow?.domain,
+          nextSchedule,
+          activeSchedule: nextSchedule,
+          schedule: nextSchedule,
+          schedules: [nextSchedule],
+          canScheduleMaintenance: true,
+          canWaitNextSession: true,
+          canAssignAppointment: true,
+          availableActions: ['EDIT_SCHEDULE', 'CANCEL_SCHEDULE', 'MOVE_NEXT_SESSION', 'ASSIGN_APPOINTMENT'],
+        };
+      })
+      .filter((row: any) => row && isActivePeiMaintenanceScheduleRow(row));
+    if (optimisticRows.length === 0) return;
+
+    setAbaMaintenancePanel((previous: any) => {
+      const sections = {
+        ...createEmptyPeiMaintenanceTargetFirstSections(),
+        ...(previous?.sections || {}),
+      };
+      const scheduledTargetIds = new Set(optimisticRows.map((row: any) => row.targetId).filter(Boolean));
+      const scheduledScheduleIds = new Set(optimisticRows.map((row: any) => row.scheduleId).filter(Boolean));
+      const keepUnrelated = (row: any) => {
+        const rowTargetId = getPeiMaintenancePersistedId(row?.targetId || row?.target_id);
+        const rowScheduleId = getPersistedMaintenanceScheduleId(row?.scheduleId || row?.schedule_id || row?.nextSchedule?.id || row?.activeSchedule?.id || row?.schedule?.id, row?.nextSchedule || row?.activeSchedule || row?.schedule || row);
+        return !(rowTargetId && scheduledTargetIds.has(rowTargetId)) && !(rowScheduleId && scheduledScheduleIds.has(rowScheduleId));
+      };
+      const waitingRows: any[] = [];
+      const scheduledRows: any[] = [];
+      optimisticRows.forEach((row: any) => {
+        const status = String(row?.nextSchedule?.status || row?.status || '').toUpperCase();
+        if (['PENDING_NEXT_SESSION', 'PENDING_LINK', 'PENDING_SCHEDULING', 'UNSCHEDULED', 'PENDING'].includes(status)) {
+          waitingRows.push(row);
+        } else {
+          scheduledRows.push(row);
+        }
+      });
+      return mapMaintenancePanelResponse({
+        ...(previous?.raw || {}),
+        eligibleSkills: (sections.eligibleSkills || []).filter(keepUnrelated),
+        maintenanceSkills: (sections.maintenanceSkills || []).filter(keepUnrelated),
+        scheduledProbes: [...scheduledRows, ...(sections.scheduled || []).filter(keepUnrelated)],
+        waitingNextSession: [...waitingRows, ...(sections.waitingNextSession || []).filter(keepUnrelated)],
+        overdueProbes: (sections.overdue || []).filter(keepUnrelated),
+        regressionRisk: (sections.regressionRisk || []).filter(keepUnrelated),
+        technicalIssues: sections.technical || [],
+        schedules: [
+          ...optimisticRows.map((row: any) => row.nextSchedule),
+          ...(Array.isArray(previous?.raw?.schedules) ? previous.raw.schedules.filter(keepUnrelated) : []),
+        ],
+      }, {
+        patientId: patient.id,
+        requestId: peiMaintenancePanelRequestSeqRef.current,
+        loadedAt: Date.now(),
+      });
+    });
+    setAbaMaintenanceOverview((previous: any) => ({
+      ...(previous || {}),
+      schedules: [
+        ...optimisticRows.map((row: any) => row.nextSchedule),
+        ...(Array.isArray(previous?.schedules) ? previous.schedules : []).filter((row: any) => {
+          const rowTargetId = getPeiMaintenancePersistedId(row?.targetId || row?.target_id);
+          const rowScheduleId = getPersistedMaintenanceScheduleId(row?.scheduleId || row?.schedule_id || row?.id, row);
+          return !optimisticRows.some((scheduledRow: any) => scheduledRow.targetId === rowTargetId || scheduledRow.scheduleId === rowScheduleId);
+        }),
+      ],
+    }));
+    setHasLoadedPeiMaintenancePanel(true);
+  }, [patient?.id]);
 
   useEffect(() => {
     if (activeTab !== 'plan' || activePeiPlanSubtab !== 'maintenance') return;
@@ -6043,7 +6192,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     setIsPeiMaintenanceCalendarOpen((open) => !open);
   };
 
-  const runPeiMaintenanceAction = async (key: string, action: () => Promise<any>, successMessage: string) => {
+  const runPeiMaintenanceAction = async (key: string, action: () => Promise<any>, successMessage: string, optimisticRow: any = null) => {
     setPeiMaintenanceActionKey(key);
     setPeiMaintenancePanelMessage('');
     try {
@@ -6053,6 +6202,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         return false;
       }
       await refreshPeiMaintenancePanel();
+      applyPeiMaintenanceScheduleResult(result, optimisticRow);
       setPeiMaintenancePanelMessage(result?.message || successMessage);
       return true;
     } catch {
@@ -6189,7 +6339,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           : await dataService.createMaintenanceScheduleForTarget(targetId, payload);
         return result?.success === false ? result : { ...result, message: successMessage };
       },
-      successMessage
+      successMessage,
+      row
     ).then((ok) => {
       if (ok) {
         setPeiMaintenanceScheduleRow(null);

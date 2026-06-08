@@ -32483,6 +32483,10 @@ async function startServer() {
       }
       const target = (result as any).target || {};
       const targetId = sanitizeString((result as any).targetId || target?.id, 180);
+      const masteryCriteria = target?.mastery_criteria && typeof target.mastery_criteria === 'object' ? target.mastery_criteria : {};
+      const peiGoalId = sanitizeString(masteryCriteria?.peiGoalId || masteryCriteria?.pei_goal_id || req.body?.peiGoalId || req.body?.goalId || req.body?.goal_id, 180);
+      const skillId = sanitizeString(masteryCriteria?.skillId || masteryCriteria?.skill_id || req.body?.skillId || req.body?.skill_id, 180);
+      const localTargetRef = sanitizeString(masteryCriteria?.localTargetRef || masteryCriteria?.local_target_ref || req.body?.localTargetRef || peiGoalId, 180);
       const responseTarget = cleanObject({
         ...target,
         id: targetId,
@@ -32491,7 +32495,13 @@ async function startServer() {
         targetName: sanitizeString(target?.targetName || target?.name, 240) || null,
         target_name: sanitizeString(target?.target_name || target?.name, 240) || null,
         protocolName: sanitizeString(target?.protocolName || target?.protocol_title, 240) || null,
-        domainName: sanitizeString(target?.domainName || target?.domain_name, 240) || null
+        domainName: sanitizeString(target?.domainName || target?.domain_name, 240) || null,
+        peiGoalId: peiGoalId || null,
+        goalId: peiGoalId || null,
+        goal_id: peiGoalId || null,
+        skillId: skillId || null,
+        skill_id: skillId || null,
+        localTargetRef: localTargetRef || null
       });
       return res.json({
         success: true,
