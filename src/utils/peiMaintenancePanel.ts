@@ -568,8 +568,43 @@ export function mapMaintenancePanelResponse(
       ? response
       : {};
   const sections = createEmptyPeiMaintenanceTargetFirstSections();
+  const clinicalLinkIdsFor = (row: any) => {
+    const schedule = row?.nextSchedule || row?.activeSchedule || row?.schedule || null;
+    const raw = schedule?.raw_payload || schedule?.rawPayload || row?.raw_payload || row?.rawPayload || {};
+    return [
+      row?.peiGoalId,
+      row?.goalId,
+      row?.goal_id,
+      row?.skillId,
+      row?.skill_id,
+      row?.localTargetRef,
+      row?.local_target_ref,
+      row?.source?.peiGoalId,
+      row?.source?.goalId,
+      row?.source?.goal_id,
+      row?.source?.skillId,
+      row?.source?.skill_id,
+      row?.source?.localTargetRef,
+      schedule?.peiGoalId,
+      schedule?.goalId,
+      schedule?.goal_id,
+      schedule?.skillId,
+      schedule?.skill_id,
+      schedule?.localTargetRef,
+      schedule?.local_target_ref,
+      raw?.peiGoalId,
+      raw?.pei_goal_id,
+      raw?.goalId,
+      raw?.goal_id,
+      raw?.skillId,
+      raw?.skill_id,
+      raw?.localTargetRef,
+      raw?.local_target_ref,
+    ].map((value: any) => normalizeText(value)).filter(Boolean);
+  };
   const normalizePanelRow = (row: any, group: PeiMaintenanceTargetFirstGroupKey) => {
     const schedule = row?.nextSchedule || row?.activeSchedule || row?.schedule || null;
+    const raw = schedule?.raw_payload || schedule?.rawPayload || row?.raw_payload || row?.rawPayload || {};
     const latestResult = row?.lastResult || row?.latestResult || null;
     const rowIdCanBeTarget = Boolean(row?.hasRealTarget === true && !group.startsWith('technical') && isPersistedUuid(row?.id));
     const rawTargetId =
@@ -589,6 +624,9 @@ export function mapMaintenancePanelResponse(
       '';
     const targetId = normalizeText(rawTargetId);
     const scheduleId = normalizeText(rawScheduleId);
+    const peiGoalId = normalizeText(row?.peiGoalId || row?.goalId || row?.goal_id || schedule?.peiGoalId || schedule?.goalId || schedule?.goal_id || raw?.peiGoalId || raw?.pei_goal_id || raw?.goalId || raw?.goal_id);
+    const skillId = normalizeText(row?.skillId || row?.skill_id || schedule?.skillId || schedule?.skill_id || raw?.skillId || raw?.skill_id);
+    const localTargetRef = normalizeText(row?.localTargetRef || row?.local_target_ref || schedule?.localTargetRef || schedule?.local_target_ref || raw?.localTargetRef || raw?.local_target_ref || peiGoalId);
     const isTechnicalIssue = group === 'technical';
     const targetName = safeTargetName(
       row?.targetName ||
@@ -629,6 +667,12 @@ export function mapMaintenancePanelResponse(
       cardKind: row?.cardKind || row?.kind || (isTechnicalIssue ? 'SCHEDULE_ORFAO' : scheduleId ? 'SCHEDULE_VALIDO' : 'TARGET_REAL_SEM_SCHEDULE'),
       targetId,
       scheduleId,
+      peiGoalId: peiGoalId || null,
+      goalId: peiGoalId || null,
+      goal_id: peiGoalId || null,
+      skillId: skillId || null,
+      skill_id: skillId || null,
+      localTargetRef: localTargetRef || null,
       targetName,
       protocol,
       domain,
@@ -669,6 +713,8 @@ export function mapMaintenancePanelResponse(
   const eligibleKeyFor = (row: any) => {
     const targetId = normalizeText(row?.targetId || row?.target_id);
     if (isPersistedUuid(targetId)) return `target:${targetId}`;
+    const clinicalId = clinicalLinkIdsFor(row)[0];
+    if (clinicalId) return `clinical:${clinicalId}`;
     return normalizeText(row?.key || row?.goalId || row?.goal_id || row?.name || row?.targetName);
   };
   const eligibleRowsByKey = new Map<string, any>();
@@ -717,10 +763,28 @@ export function mapMaintenancePanelResponse(
       .map((row: any) => normalizeText(row?.targetId || row?.target_id))
       .filter((targetId: string) => isPersistedUuid(targetId))
   );
+  const operationalClinicalIds = new Set(
+    [
+      ...sections.maintenanceSkills,
+      ...sections.scheduled,
+      ...sections.waitingNextSession,
+      ...sections.overdue,
+      ...sections.regressionRisk,
+    ]
+      .filter((row: any) => isActivePeiMaintenanceScheduleRow(row))
+      .flatMap((row: any) => clinicalLinkIdsFor(row))
+      .filter(Boolean)
+  );
   if (operationalTargetIds.size > 0) {
     sections.eligibleSkills = sections.eligibleSkills.filter((row: any) => {
       const targetId = normalizeText(row?.targetId || row?.target_id);
       return !isPersistedUuid(targetId) || !operationalTargetIds.has(targetId);
+    });
+  }
+  if (operationalClinicalIds.size > 0) {
+    sections.eligibleSkills = sections.eligibleSkills.filter((row: any) => {
+      const clinicalIds = clinicalLinkIdsFor(row);
+      return !clinicalIds.some((clinicalId: string) => operationalClinicalIds.has(clinicalId));
     });
   }
 

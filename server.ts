@@ -28302,6 +28302,9 @@ async function startServer() {
     intervals?: unknown;
     createdBy?: string;
     masteryEvaluationId?: string | null;
+    peiGoalId?: unknown;
+    skillId?: unknown;
+    localTargetRef?: unknown;
     approvedAt?: unknown;
   }) => {
     const targetId = sanitizeString(params.targetId, 180);
@@ -28336,9 +28339,12 @@ async function startServer() {
       return { ok: false, status: 404, error: 'Não foi possível agendar manutenção porque a habilidade não foi identificada corretamente.' };
     }
     const targetMasteryCriteria = target?.mastery_criteria && typeof target.mastery_criteria === 'object' ? target.mastery_criteria : {};
-    const targetPeiGoalId = sanitizeString(targetMasteryCriteria?.peiGoalId || targetMasteryCriteria?.pei_goal_id, 180);
-    const targetSkillId = sanitizeString(targetMasteryCriteria?.skillId || targetMasteryCriteria?.skill_id, 180);
-    const targetLocalTargetRef = sanitizeString(targetMasteryCriteria?.localTargetRef || targetMasteryCriteria?.local_target_ref || targetPeiGoalId, 180);
+    const requestedPeiGoalId = sanitizeString(params.peiGoalId, 180);
+    const requestedSkillId = sanitizeString(params.skillId, 180);
+    const requestedLocalTargetRef = sanitizeString(params.localTargetRef, 180);
+    const targetPeiGoalId = sanitizeString(requestedPeiGoalId || targetMasteryCriteria?.peiGoalId || targetMasteryCriteria?.pei_goal_id, 180);
+    const targetSkillId = sanitizeString(requestedSkillId || targetMasteryCriteria?.skillId || targetMasteryCriteria?.skill_id, 180);
+    const targetLocalTargetRef = sanitizeString(requestedLocalTargetRef || targetMasteryCriteria?.localTargetRef || targetMasteryCriteria?.local_target_ref || targetPeiGoalId, 180);
     const maintenanceTargetRawPayload = cleanObject({
       peiGoalId: targetPeiGoalId || null,
       goalId: targetPeiGoalId || null,
@@ -31528,15 +31534,48 @@ async function startServer() {
           activeSchedules = await enrichMaintenanceRowsWithTargetDisplay(activeScheduleResult.data || [], clinicId, organizationId, req.session.user);
         }
         const activeScheduleByTargetId = new Map<string, any>();
+        const activeScheduleByClinicalId = new Map<string, any>();
+        const getMaintenanceClinicalLinkIds = (source: any) => {
+          const raw = source?.raw_payload && typeof source.raw_payload === 'object' ? source.raw_payload : {};
+          const target = source?.target && typeof source.target === 'object' ? source.target : {};
+          const masteryCriteria = target?.mastery_criteria && typeof target.mastery_criteria === 'object' ? target.mastery_criteria : {};
+          return [
+            source?.peiGoalId,
+            source?.goalId,
+            source?.goal_id,
+            source?.skillId,
+            source?.skill_id,
+            source?.localTargetRef,
+            source?.local_target_ref,
+            raw?.peiGoalId,
+            raw?.pei_goal_id,
+            raw?.goalId,
+            raw?.goal_id,
+            raw?.skillId,
+            raw?.skill_id,
+            raw?.localTargetRef,
+            raw?.local_target_ref,
+            masteryCriteria?.peiGoalId,
+            masteryCriteria?.pei_goal_id,
+            masteryCriteria?.skillId,
+            masteryCriteria?.skill_id,
+            masteryCriteria?.localTargetRef,
+            masteryCriteria?.local_target_ref
+          ]
+            .map((value: any) => sanitizeString(value, 180))
+            .filter(Boolean);
+        };
         const duplicateSchedulesForReview: any[] = [];
         activeSchedules.forEach((schedule: any) => {
           const scheduleTargetId = sanitizeString(schedule?.target_id || schedule?.targetId, 180);
-          if (!isUuid(scheduleTargetId)) return;
-          if (!activeScheduleByTargetId.has(scheduleTargetId)) {
+          if (isUuid(scheduleTargetId) && !activeScheduleByTargetId.has(scheduleTargetId)) {
             activeScheduleByTargetId.set(scheduleTargetId, schedule);
-          } else {
+          } else if (isUuid(scheduleTargetId)) {
             duplicateSchedulesForReview.push(schedule);
           }
+          getMaintenanceClinicalLinkIds(schedule).forEach((clinicalId: string) => {
+            if (!activeScheduleByClinicalId.has(clinicalId)) activeScheduleByClinicalId.set(clinicalId, schedule);
+          });
         });
         const sanitizeScheduleForPanel = (schedule: any) => {
           const scheduleTargetId = sanitizeString(schedule?.target_id || schedule?.targetId, 180);
@@ -31602,6 +31641,10 @@ async function startServer() {
         const findActiveScheduleForSkill = (skill: any) => {
           const skillTargetId = sanitizeString(skill?.targetId || skill?.target_id, 180);
           if (isUuid(skillTargetId) && activeScheduleByTargetId.has(skillTargetId)) return activeScheduleByTargetId.get(skillTargetId);
+          const clinicalSchedule = getMaintenanceClinicalLinkIds(skill)
+            .map((clinicalId: string) => activeScheduleByClinicalId.get(clinicalId))
+            .find(Boolean);
+          if (clinicalSchedule) return clinicalSchedule;
           return null;
         };
         allEligibleSkills.forEach((skill: any) => {
@@ -32641,6 +32684,9 @@ async function startServer() {
         intervals: req.body?.intervals || req.body?.maintenanceDays || req.body?.maintenance_days,
         createdBy: sanitizeString(req.session.user?.id, 120),
         masteryEvaluationId: req.body?.masteryEvaluationId || req.body?.mastery_evaluation_id,
+        peiGoalId: req.body?.peiGoalId || req.body?.goalId || req.body?.goal_id,
+        skillId: req.body?.skillId || req.body?.skill_id,
+        localTargetRef: req.body?.localTargetRef || req.body?.local_target_ref,
         approvedAt: req.body?.approvedAt || req.body?.approved_at
       });
       if (!result.ok) {
@@ -32725,7 +32771,10 @@ async function startServer() {
         clinicId,
         scheduleMode: 'NEXT_PATIENT_SESSION',
         createdBy: sanitizeString(req.session.user?.id, 120),
-        masteryEvaluationId: req.body?.masteryEvaluationId || req.body?.mastery_evaluation_id
+        masteryEvaluationId: req.body?.masteryEvaluationId || req.body?.mastery_evaluation_id,
+        peiGoalId: req.body?.peiGoalId || req.body?.goalId || req.body?.goal_id,
+        skillId: req.body?.skillId || req.body?.skill_id,
+        localTargetRef: req.body?.localTargetRef || req.body?.local_target_ref
       });
       if (!result.ok) return res.status((result as any).status || 400).json({ success: false, error: (result as any).status === 404 ? 'TARGET_NOT_FOUND' : (result as any).status === 400 ? 'ID_INVALIDO' : 'UNEXPECTED_ERROR', message: (result as any).error || 'Não foi possível aguardar futura consulta.', data: (result as any).data || [] });
       const schedules = Array.isArray(result.data) ? result.data : [];

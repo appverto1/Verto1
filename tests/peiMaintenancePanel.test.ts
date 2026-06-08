@@ -321,6 +321,56 @@ test('mapper target-first nao remove elegivel por nome quando schedule ativo tem
   assert.equal(mapped.sections.eligibleSkills.some((row: any) => row.targetId === eligibleTargetId), true);
 });
 
+test('mapper target-first remove elegivel por id clinico quando schedule ativo usa outro target id', () => {
+  const eligibleTargetId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0113';
+  const scheduledTargetId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0114';
+  const scheduleId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0115';
+  const appointmentId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0116';
+  const mapped = mapMaintenancePanelResponse({
+    eligibleSkills: [
+      {
+        targetId: eligibleTargetId,
+        peiGoalId: 'pei-goal-realiza-encaixe',
+        skillId: 'skill-realiza-encaixe',
+        targetName: 'Realiza duas atividades simples de encaixe ou construcao',
+        protocol: 'VB-MAPP - Nivel 1',
+        domain: 'Percepcao Visual e Matching to Sample Nivel 1'
+      }
+    ],
+    scheduledProbes: [
+      {
+        targetId: scheduledTargetId,
+        scheduleId,
+        peiGoalId: 'pei-goal-realiza-encaixe',
+        skillId: 'skill-realiza-encaixe',
+        targetName: 'Realiza duas atividades simples de encaixe ou construcao',
+        protocolName: 'VB-MAPP - Nivel 1',
+        domainName: 'Percepcao Visual e Matching to Sample Nivel 1',
+        nextSchedule: {
+          id: scheduleId,
+          target_id: scheduledTargetId,
+          status: 'SCHEDULED',
+          appointment_id: appointmentId,
+          raw_payload: {
+            peiGoalId: 'pei-goal-realiza-encaixe',
+            skillId: 'skill-realiza-encaixe'
+          }
+        }
+      }
+    ],
+    maintenanceSkills: [],
+    waitingNextSession: [],
+    overdueProbes: [],
+    regressionRisk: [],
+    technicalIssues: []
+  }, { patientId: 'patient-1', requestId: 141, loadedAt: 123459 });
+
+  assert.equal(mapped.summary.eligibleSkills, 0);
+  assert.equal(mapped.summary.scheduled, 1);
+  assert.equal(mapped.sections.eligibleSkills.some((row: any) => row.targetId === eligibleTargetId), false);
+  assert.equal(mapped.sections.scheduled.some((row: any) => row.targetId === scheduledTargetId), true);
+});
+
 test('target-first separa risco de regressao do fluxo agendado', () => {
   const targetId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0020';
   const rows = buildPeiMaintenanceRows({
@@ -915,6 +965,8 @@ test('backend resolve targets de manutencao em lote com colunas explicitas', () 
   assert.match(serverCode, /technicalIssues/);
   assert.match(serverCode, /latestMasteryByTargetId/);
   assert.match(serverCode, /activeScheduleByTargetId/);
+  assert.match(serverCode, /activeScheduleByClinicalId/);
+  assert.match(serverCode, /getMaintenanceClinicalLinkIds/);
   assert.doesNotMatch(serverCode, /getMaintenanceDisplayCompositeKey|getMaintenanceDisplayNameKey|rowDisplayHasActiveSchedule/);
   assert.match(serverCode, /hasPersistedMaintenanceScheduleId/);
   assert.match(serverCode, /scheduleId: scheduleId \|\| null/);
