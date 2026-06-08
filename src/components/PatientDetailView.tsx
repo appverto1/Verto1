@@ -5455,7 +5455,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     const localEligibleRows = localRows();
     const panelRows = dedupePeiMaintenanceRows(panelEligibleRows);
     const rows = hasPeiMaintenancePanelForCurrentPatient
-      ? dedupePeiMaintenanceRows([...panelRows, ...localEligibleRows])
+      ? panelRows
       : dedupePeiMaintenanceRows(localEligibleRows.length > 0 ? localEligibleRows : buildPeiMaintenanceEligibleSkills(
         peiMaintenanceHydratedGoals.map((goal: any) => ({
           ...goal,

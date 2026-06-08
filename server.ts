@@ -17479,7 +17479,9 @@ async function startServer() {
         .map((goal: any, index: number) => {
           const targetName = sanitizeString(goal?.name || goal?.targetName || goal?.target_name || goal?.objective, 240);
           if (!targetName) return null;
-          const targetId = sanitizeString(goal?.target_id || goal?.targetId || goal?.abaTargetId || goal?.aba_target_id || goal?.id, 180);
+          const explicitTargetId = sanitizeString(goal?.target_id || goal?.targetId || goal?.abaTargetId || goal?.aba_target_id, 180);
+          const peiGoalId = sanitizeString(goal?.id || goal?.goalId || goal?.goal_id, 180);
+          const localTargetRef = sanitizeString(goal?.localTargetRef || goal?.local_target_ref || (!isUuid(explicitTargetId) ? explicitTargetId : '') || peiGoalId, 180);
           const protocolName = sanitizeString(goal?.protocolTitle || goal?.protocol_title || goal?.protocolName || goal?.protocol_name, 240) || 'PEI';
           const domainName = sanitizeString(goal?.domainName || goal?.domain_name || goal?.programName || goal?.program_name, 240) || 'Plano de ensino';
           const progressPercent = Number(goal?.progress ?? goal?.progressPercent ?? goal?.progress_percent ?? null);
@@ -17489,10 +17491,10 @@ async function startServer() {
           return cleanObject({
             source: 'patient_pei',
             peiGoalIndex: index,
-            peiGoalId: sanitizeString(goal?.id, 180) || null,
+            peiGoalId: peiGoalId || null,
             skillId: sanitizeString(goal?.skillId || goal?.skill_id, 180) || null,
-            targetId: isUuid(targetId) ? targetId : null,
-            localTargetRef: !isUuid(targetId) ? targetId || null : null,
+            targetId: isUuid(explicitTargetId) ? explicitTargetId : null,
+            localTargetRef: localTargetRef || null,
             targetName,
             protocolName,
             domainName,
@@ -23187,6 +23189,8 @@ async function startServer() {
     const duplicateComposite = new Set<string>();
     const targetByName = new Map<string, any>();
     const duplicateName = new Set<string>();
+    const targetByClinicalId = new Map<string, any>();
+    const duplicateClinicalId = new Set<string>();
     const registerTargetMatch = (map: Map<string, any>, duplicates: Set<string>, key: string, target: any) => {
       if (!key) return;
       if (map.has(key)) {
@@ -23195,6 +23199,28 @@ async function startServer() {
         return;
       }
       if (!duplicates.has(key)) map.set(key, target);
+    };
+    const getPeiMaintenanceTargetClinicalIds = (source: any) => {
+      const masteryCriteria = source?.mastery_criteria && typeof source.mastery_criteria === 'object' ? source.mastery_criteria : {};
+      return [
+        source?.peiGoalId,
+        source?.goalId,
+        source?.goal_id,
+        source?.skillId,
+        source?.skill_id,
+        source?.localTargetRef,
+        source?.local_target_ref,
+        masteryCriteria?.peiGoalId,
+        masteryCriteria?.pei_goal_id,
+        masteryCriteria?.goalId,
+        masteryCriteria?.goal_id,
+        masteryCriteria?.skillId,
+        masteryCriteria?.skill_id,
+        masteryCriteria?.localTargetRef,
+        masteryCriteria?.local_target_ref
+      ]
+        .map((value: any) => sanitizeString(value, 180))
+        .filter(Boolean);
     };
     existingTargets.forEach((target: any) => {
       const id = sanitizeString(target?.id || target?.target_id || target?.targetId, 180);
@@ -23205,6 +23231,7 @@ async function startServer() {
       const domainName = sanitizeString(target?.domain_name || target?.domainName, 240);
       registerTargetMatch(targetByComposite, duplicateComposite, [targetName, protocolName, domainName].map(normalizePeiTargetMatchKey).filter(Boolean).join('|'), target);
       registerTargetMatch(targetByName, duplicateName, normalizePeiTargetMatchKey(targetName), target);
+      getPeiMaintenanceTargetClinicalIds(target).forEach((clinicalId: string) => registerTargetMatch(targetByClinicalId, duplicateClinicalId, clinicalId, target));
     });
     const materializedTargets: any[] = [];
     const hydratedPeiTargets: any[] = [];
@@ -23234,9 +23261,13 @@ async function startServer() {
         peiTarget?.peiGoalIndex ?? '',
         compositeKey
       ]);
+      const clinicalMatchedTarget = getPeiMaintenanceTargetClinicalIds(peiTarget)
+        .map((clinicalId: string) => !duplicateClinicalId.has(clinicalId) ? targetByClinicalId.get(clinicalId) : null)
+        .find(Boolean) || null;
       const matchedTarget =
         (isUuid(explicitTargetId) ? targetById.get(explicitTargetId) : null) ||
         targetById.get(stableTargetId) ||
+        clinicalMatchedTarget ||
         (compositeKey && !duplicateComposite.has(compositeKey) ? targetByComposite.get(compositeKey) : null) ||
         (nameKey && !duplicateName.has(nameKey) ? targetByName.get(nameKey) : null) ||
         null;
