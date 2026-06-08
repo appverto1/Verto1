@@ -6264,9 +6264,16 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         setPeiMaintenancePanelMessage(result?.message || result?.error || 'Não foi possível atualizar a manutenção.');
         return false;
       }
-      await refreshPeiMaintenancePanel();
+      // Aplica otimisticamente ANTES do refresh para que a UI seja imediata e
+      // não seja sobrescrita por dados desatualizados do banco enquanto o refresh corre.
       applyPeiMaintenanceScheduleResult(result, optimisticRow);
       setPeiMaintenancePanelMessage(result?.message || successMessage);
+      // Refresh em background: sincroniza com o banco sem bloquear a UI.
+      // Após o refresh, re-aplica o resultado para garantir consistência caso o
+      // banco tenha retornado um estado diferente do otimista (ex: legacy fallback).
+      void refreshPeiMaintenancePanel().then(() => {
+        applyPeiMaintenanceScheduleResult(result, optimisticRow);
+      });
       return true;
     } catch {
       setPeiMaintenancePanelMessage('Não foi possível atualizar a manutenção.');
