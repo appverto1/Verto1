@@ -5117,6 +5117,50 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       normalizePeiMaintenanceMatchKey(getPeiMaintenanceDomainName(row))
     ].filter(Boolean).join('|');
   };
+  const getPeiMaintenanceRowTargetId = (row: any) =>
+    getPeiMaintenancePersistedId(row?.targetId || row?.target_id || row?.aba_target_id || row?.abaTargetId);
+  const getPeiMaintenanceRowScheduleId = (row: any) => getPersistedMaintenanceScheduleId(
+    row?.scheduleId ||
+      row?.schedule_id ||
+      row?.nextSchedule?.id ||
+      row?.nextSchedule?.schedule_id ||
+      row?.nextSchedule?.scheduleId ||
+      row?.activeSchedule?.id ||
+      row?.activeSchedule?.schedule_id ||
+      row?.activeSchedule?.scheduleId ||
+      row?.schedule?.id ||
+      row?.schedule?.schedule_id ||
+      row?.schedule?.scheduleId,
+    row?.nextSchedule || row?.activeSchedule || row?.schedule || row
+  );
+  const getPeiMaintenanceDedupKey = (row: any) => {
+    const scheduleId = getPeiMaintenanceRowScheduleId(row);
+    if (scheduleId) return `schedule:${scheduleId}`;
+    const displaySignature = getPeiMaintenanceDisplaySignature(row);
+    if (displaySignature) return `display:${displaySignature}`;
+    const targetId = getPeiMaintenanceRowTargetId(row);
+    if (targetId) return `target:${targetId}`;
+    return getPeiMaintenanceDisplayKey(row) || '';
+  };
+  const dedupePeiMaintenanceRows = (rows: any[]) => {
+    const byKey = new Map<string, any>();
+    (Array.isArray(rows) ? rows : []).filter(Boolean).forEach((row: any, index: number) => {
+      const key = getPeiMaintenanceDedupKey(row) || `row:${index}`;
+      const existing = byKey.get(key);
+      if (!existing) {
+        byKey.set(key, row);
+        return;
+      }
+      const existingHasSchedule = Boolean(getPeiMaintenanceRowScheduleId(existing) || existing?.hasRealSchedule);
+      const rowHasSchedule = Boolean(getPeiMaintenanceRowScheduleId(row) || row?.hasRealSchedule);
+      const existingHasTarget = Boolean(getPeiMaintenanceRowTargetId(existing));
+      const rowHasTarget = Boolean(getPeiMaintenanceRowTargetId(row));
+      if ((!existingHasSchedule && rowHasSchedule) || (!existingHasTarget && rowHasTarget)) {
+        byKey.set(key, row);
+      }
+    });
+    return Array.from(byKey.values());
+  };
 
   const peiMaintenanceHydratedGoals = useMemo(() => (
     peiGoals.map((goal: any) => {
@@ -5180,7 +5224,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const getPeiMaintenanceDisplayKey = (row: any) => {
     const persistedId = getPeiMaintenancePersistedId(row?.targetId || row?.target_id || row?.aba_target_id || row?.abaTargetId);
     if (persistedId) return `target:${persistedId}`;
-    const scheduleId = getPeiMaintenancePersistedId(
+    const scheduleId = getPersistedMaintenanceScheduleId(
       row?.scheduleId ||
       row?.schedule_id ||
       row?.nextSchedule?.id ||
@@ -5188,7 +5232,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       row?.activeSchedule?.id ||
       row?.activeSchedule?.schedule_id ||
       row?.schedule?.id ||
-      row?.schedule?.schedule_id
+      row?.schedule?.schedule_id,
+      row?.nextSchedule || row?.activeSchedule || row?.schedule || row
     );
     if (scheduleId) return `schedule:${scheduleId}`;
     const clinicalSourceId = String(
@@ -5205,18 +5250,30 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return clinicalSourceId ? `clinical:${clinicalSourceId}` : '';
   };
 
-  const peiMaintenanceScheduledRows = useMemo(
-    () => [
+  const peiMaintenanceScheduledRows = useMemo(() => {
+    const panelRows = [
       ...(peiMaintenanceTargetFirstGroups.scheduled || []),
       ...(peiMaintenanceTargetFirstGroups.overdue || [])
-    ],
-    [peiMaintenanceTargetFirstGroups]
-  );
+    ];
+    const panelKeys = new Set(panelRows.map((row: any) => getPeiMaintenanceDedupKey(row)).filter(Boolean));
+    const fallbackRows = peiMaintenanceRows.filter((row: any) => {
+      if (!row?.hasRealSchedule || row?.needsTargetReview || row?.isRegressionRisk || row?.group === 'completed' || row?.group === 'unlinked') return false;
+      const key = getPeiMaintenanceDedupKey(row);
+      return !key || !panelKeys.has(key);
+    });
+    return dedupePeiMaintenanceRows([...panelRows, ...fallbackRows]);
+  }, [peiMaintenanceRows, peiMaintenanceTargetFirstGroups]);
 
-  const peiMaintenanceWaitingRows = useMemo(
-    () => peiMaintenanceTargetFirstGroups.waitingNextSession || [],
-    [peiMaintenanceTargetFirstGroups]
-  );
+  const peiMaintenanceWaitingRows = useMemo(() => {
+    const panelRows = peiMaintenanceTargetFirstGroups.waitingNextSession || [];
+    const panelKeys = new Set(panelRows.map((row: any) => getPeiMaintenanceDedupKey(row)).filter(Boolean));
+    const fallbackRows = peiMaintenanceRows.filter((row: any) => {
+      if (!row?.hasRealSchedule || row?.needsTargetReview || row?.group !== 'unlinked') return false;
+      const key = getPeiMaintenanceDedupKey(row);
+      return !key || !panelKeys.has(key);
+    });
+    return dedupePeiMaintenanceRows([...panelRows, ...fallbackRows]);
+  }, [peiMaintenanceRows, peiMaintenanceTargetFirstGroups]);
 
   const peiMaintenanceUnavailableKeys = useMemo(() => {
     const keys = new Set<string>();
@@ -5269,7 +5326,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       const targetId = getPeiMaintenancePersistedId(row?.targetId || row?.target_id || row?.aba_target_id || row?.abaTargetId);
       if (targetId && !panelByTargetId.has(targetId)) panelByTargetId.set(targetId, row);
     });
-    const localRows = peiMaintenanceHydratedGoals
+    const localRows = dedupePeiMaintenanceRows(peiMaintenanceHydratedGoals
       .map((goal: any, index: number) => {
         if (!isGoalAcquired(goal)) return null;
         const localTargetId = getPeiMaintenancePersistedId(goal?.target_id || goal?.targetId || goal?.aba_target_id || goal?.abaTargetId);
@@ -5306,30 +5363,33 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           availableActions: targetId ? ['SCHEDULE_MAINTENANCE'] : []
         };
       })
-      .filter(Boolean);
+      .filter(Boolean));
     const schedulableLocalRows = panelEligibleRows.length > 0
       ? localRows.filter((row: any) => Boolean(getPeiMaintenancePersistedId(row?.targetId || row?.target_id || row?.aba_target_id || row?.abaTargetId)))
       : localRows;
     const localDisplayKeys = new Set(schedulableLocalRows.map((row: any) => getPeiMaintenanceDisplayKey(row)).filter(Boolean));
+    const localDisplaySignatures = new Set(schedulableLocalRows.map((row: any) => getPeiMaintenanceDisplaySignature(row)).filter(Boolean));
     const panelOnlyRows = panelEligibleRows.filter((row: any) => {
       const key = getPeiMaintenanceDisplayKey(row);
-      return !key || !localDisplayKeys.has(key);
+      const signature = getPeiMaintenanceDisplaySignature(row);
+      if (key && localDisplayKeys.has(key)) return false;
+      return !signature || !localDisplaySignatures.has(signature);
     });
-    const rows = schedulableLocalRows.length > 0 ? [...schedulableLocalRows, ...panelOnlyRows] : panelEligibleRows.length > 0 ? panelEligibleRows : buildPeiMaintenanceEligibleSkills(
+    const rows = dedupePeiMaintenanceRows(schedulableLocalRows.length > 0 ? [...schedulableLocalRows, ...panelOnlyRows] : panelEligibleRows.length > 0 ? panelEligibleRows : buildPeiMaintenanceEligibleSkills(
       peiMaintenanceHydratedGoals.map((goal: any) => ({
         ...goal,
         progressPercent: getGoalProgressPercent(goal),
         statusLabel: isGoalAcquired(goal) ? 'Adquirido' : goal?.status
       }))
-    );
-    return rows.filter((row: any) => {
+    ));
+    return dedupePeiMaintenanceRows(rows.filter((row: any) => {
       const key = getPeiMaintenanceDisplayKey(row);
       const targetId = getPeiMaintenancePersistedId(row?.targetId || row?.target_id || row?.aba_target_id || row?.abaTargetId);
       const displaySignature = getPeiMaintenanceDisplaySignature(row);
       if (targetId && peiMaintenanceUnavailableTargetIds.has(targetId)) return false;
       if (displaySignature && peiMaintenanceUnavailableDisplaySignatures.has(displaySignature)) return false;
       return !key || !peiMaintenanceUnavailableKeys.has(key);
-    });
+    }));
   }, [history, patient?.id, patientCategory, peiMaintenanceHydratedGoals, peiMaintenanceTargetFirstGroups.eligibleSkills, peiMaintenanceUnavailableDisplaySignatures, peiMaintenanceUnavailableKeys, peiMaintenanceUnavailableTargetIds, planProtocolCatalog, protocols]);
 
   const peiGeneralizationRows = useMemo(() => {
@@ -5523,7 +5583,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return isUuidLike(id) ? id : '';
   };
 
-  const getPersistedMaintenanceScheduleId = (value: any, source?: any) => {
+  function getPersistedMaintenanceScheduleId(value: any, source?: any) {
     const id = String(value || '').trim();
     if (isUuidLike(id)) return id;
     const schedule = source && typeof source === 'object' ? source : {};
@@ -5536,7 +5596,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       return id;
     }
     return '';
-  };
+  }
 
   const getPeiMaintenanceExplicitTargetId = (row: any) => {
     const rowIdCanBeTarget = Boolean(

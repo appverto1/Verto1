@@ -431,20 +431,29 @@ test('subaba manutencao etapa 2 renderiza botao de agendamento simples', () => {
   assert.doesNotMatch(maintenancePanelUi, /renderPeiMaintenanceGroup|renderPeiMaintenanceMetric|renderPeiMaintenanceActions|Atribuir a uma sessão|Plano de manutenção|Escolher sessão existente|Pendências técnicas/);
 });
 
-test('subaba manutencao preserva duplicatas do ensino e hidrata target do painel', () => {
+test('subaba manutencao deduplica ensino local e preserva agendadas do painel antigo', () => {
   const eligibleStart = patientDetailCode.indexOf('const peiMaintenanceEligibleRows = useMemo');
   const eligibleEnd = patientDetailCode.indexOf('const peiGeneralizationRows', eligibleStart);
+  const scheduledStart = patientDetailCode.indexOf('const peiMaintenanceScheduledRows = useMemo');
+  const waitingStart = patientDetailCode.indexOf('const peiMaintenanceWaitingRows = useMemo', scheduledStart);
   assert.notEqual(eligibleStart, -1);
+  assert.notEqual(scheduledStart, -1);
   const eligibleCode = patientDetailCode.slice(eligibleStart, eligibleEnd);
-  assert.match(eligibleCode, /const localRows = peiMaintenanceHydratedGoals/);
+  const scheduledCode = patientDetailCode.slice(scheduledStart, waitingStart);
+  assert.match(eligibleCode, /const localRows = dedupePeiMaintenanceRows\(peiMaintenanceHydratedGoals/);
+  assert.match(patientDetailCode, /const dedupePeiMaintenanceRows = \(rows: any\[\]\) =>/);
   assert.match(eligibleCode, /panelByTargetId/);
   assert.match(eligibleCode, /panelTargetId/);
   assert.match(eligibleCode, /key: `goal:\$\{goalId \|\| index\}:\$\{targetId \|\| index\}`/);
   assert.match(eligibleCode, /progressPercent: 100/);
   assert.match(eligibleCode, /const schedulableLocalRows = panelEligibleRows\.length > 0/);
-  assert.match(eligibleCode, /const rows = schedulableLocalRows\.length > 0 \? \[\.\.\.schedulableLocalRows, \.\.\.panelOnlyRows\]/);
+  assert.match(eligibleCode, /localDisplaySignatures/);
+  assert.match(eligibleCode, /const rows = dedupePeiMaintenanceRows\(schedulableLocalRows\.length > 0 \? \[\.\.\.schedulableLocalRows, \.\.\.panelOnlyRows\]/);
   assert.match(eligibleCode, /peiMaintenanceUnavailableDisplaySignatures/);
   assert.match(eligibleCode, /getPeiMaintenanceDisplaySignature/);
+  assert.match(scheduledCode, /const fallbackRows = peiMaintenanceRows\.filter/);
+  assert.match(scheduledCode, /row\?\.hasRealSchedule/);
+  assert.match(scheduledCode, /return dedupePeiMaintenanceRows\(\[\.\.\.panelRows, \.\.\.fallbackRows\]\)/);
   assert.doesNotMatch(eligibleCode, /panelByComposite|panelByName|compositeKey|panelByName\.get|panelByComposite\.get/);
 });
 
@@ -841,7 +850,8 @@ test('acoes nao enviam ids sinteticos para endpoints de manutencao', () => {
   assert.match(dataServiceCode, /SYNTHETIC_CLINICAL_ID_RE/);
   assert.match(dataServiceCode, /PERSISTED_MAINTENANCE_SCHEDULE_ID_RE/);
   assert.match(dataServiceCode, /function isPersistedMaintenanceScheduleId/);
-  assert.match(patientDetailCode, /const getPersistedMaintenanceScheduleId = \(value: any, source\?: any\) => \{/);
+  assert.match(patientDetailCode, /function getPersistedMaintenanceScheduleId\(value: any, source\?: any\) \{/);
+  assert.match(patientDetailCode, /const scheduleId = getPersistedMaintenanceScheduleId\(/);
   assert.match(dataServiceCode, /const ensured = await dataService\.ensurePeiMaintenanceTarget\(String\(patientId\), payload\)/);
   assert.match(dataServiceCode, /return await dataService\.createMaintenanceScheduleForTarget\(String\(ensuredTargetId\)/);
   assert.match(dataServiceCode, /if \(!isPersistedUuid\(targetId\)\)[\s\S]*?Não foi possível identificar a habilidade/m);
