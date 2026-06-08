@@ -4332,6 +4332,14 @@ export default function App() {
     const abaCollectionType = String(sessionMeta?.collectionType || 'dtt').toLowerCase();
     const abaTargetId = String(sessionMeta?.targetId || peiGoal?.id || matchedSkill?.id || title);
     const abaTrialId = String(sessionMeta?.trialId || sessionMeta?.trial_id || `trial-${newId}`);
+    const abaMaintenanceScheduleId = String(
+      sessionMeta?.maintenanceScheduleId ||
+      sessionMeta?.maintenance_schedule_id ||
+      sessionMeta?.scheduleId ||
+      sessionMeta?.schedule_id ||
+      sessionMeta?.activeMaintenanceProbe?.scheduleId ||
+      ''
+    ).trim();
 
     if (isAbaV2Enabled()) {
       try {
@@ -4353,6 +4361,10 @@ export default function App() {
           domain_name: sessionMeta?.domainName || peiGoal?.domainName || matchedDomain?.name || matchedDomain?.title || null,
           collection_type: abaCollectionType,
           trialType: abaCollectionType,
+          maintenance_schedule_id: abaMaintenanceScheduleId || undefined,
+          maintenanceScheduleId: abaMaintenanceScheduleId || undefined,
+          schedule_id: abaMaintenanceScheduleId || undefined,
+          scheduleId: abaMaintenanceScheduleId || undefined,
           response_score: finalScore,
           score: finalScore,
           max_score: maxScoreForAba,
@@ -4384,6 +4396,9 @@ export default function App() {
             promptLevelName: abaPromptLevel.label,
             promptLevelSource: sessionMeta?.promptLevelSource || null,
             trialType: abaCollectionType,
+            maintenanceScheduleId: abaMaintenanceScheduleId || null,
+            maintenance_schedule_id: abaMaintenanceScheduleId || null,
+            activeMaintenanceProbe: sessionMeta?.activeMaintenanceProbe || null,
             therapistId: user?.id || null
           }
         });

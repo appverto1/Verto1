@@ -9,6 +9,7 @@ export type ManualMaintenanceProbeActivation = {
   targetId?: string | null;
   targetName?: string | null;
   scheduleId?: string | null;
+  source?: 'available' | string | null;
   status?: string | null;
   dueDate?: string | null;
   appointmentId?: string | null;
@@ -25,6 +26,7 @@ export type ActiveMaintenanceProbeForTarget = {
   dueDate: string | null;
   linkedToSession: boolean;
   manuallyActivated: boolean;
+  source?: 'available' | string | null;
   schedule: any | null;
 };
 
@@ -85,6 +87,7 @@ export function getActiveMaintenanceProbeForTarget(input: {
       dueDate: manualActivation.dueDate || null,
       linkedToSession: true,
       manuallyActivated: true,
+      source: manualActivation.source || null,
       schedule: null
     };
   }
@@ -119,6 +122,7 @@ export function getActiveMaintenanceProbeForTarget(input: {
       (!scheduleAppointmentId && scheduleDueDate(schedule))
     ),
     manuallyActivated: false,
+    source: 'available',
     schedule
   };
 }

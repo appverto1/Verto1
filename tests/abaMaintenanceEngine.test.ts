@@ -357,14 +357,33 @@ test('banner de manutencao comunica tipo atual e botao nao registra tentativa', 
   assert.match(sessionModeCode, /Há Maintenance Probe agendada para data futura/);
   assert.match(sessionModeCode, /maintenanceSessionSummaryRows/);
   assert.match(sessionModeCode, /resolveMaintenanceTargetDisplay/);
-  assert.match(sessionModeCode, /Maintenance Probe ativo: \$\{maintenanceTargetLabel\}/);
-  assert.match(activationBody, /Maintenance Probe agendada/);
+  assert.match(sessionModeCode, /Maintenance Probe ativa para a proxima tentativa/);
+  assert.match(sessionModeCode, /Cancelar uso da probe/);
+  assert.match(activationBody, /activeProbeFromAvailable/);
+  assert.match(activationBody, /isRealClinicalId\(targetId\)/);
+  assert.match(activationBody, /isRealClinicalId\(scheduleId\)/);
+  assert.match(activationBody, /Nao foi possivel ativar a Maintenance Probe/);
   assert.match(activationBody, /setCollectionType\('maintenance_probe'\)[\s\S]*?showClinicalToast/m);
   assert.doesNotMatch(activationBody, /handleTrialClick|persistTrialRecord|addRecord/m);
   assert.doesNotMatch(sessionModeCode, /upcomingMaintenanceProbeItems\.map/);
   assert.doesNotMatch(sessionModeCode, /maintenanceInfo\.isMaintenanceTarget && \(/);
   assert.doesNotMatch(sessionModeCode, /Usar Maintenance Probe agora/);
   assert.doesNotMatch(sessionModeCode, /\{ key: 'maintenance_probe', label: 'Maintenance Probe' \}/);
+});
+
+test('registro real de Maintenance Probe preserva target e schedule idempotentes', () => {
+  assert.match(sessionModeCode, /maintenance_schedule_id: isMaintenanceAttempt \? maintenanceScheduleId : undefined/);
+  assert.match(sessionModeCode, /activeMaintenanceProbe: isMaintenanceAttempt \? \{[\s\S]*?scheduleId: maintenanceScheduleId[\s\S]*?targetId: recordTargetId/m);
+  assert.match(sessionModeCode, /dataService\.saveAbaMaintenanceProbeResult\(\{[\s\S]*?id: `maintenance-\$\{resolvedScheduleId\}-\$\{sessionId\}-\$\{params\.trialId\}`[\s\S]*?trial_id: params\.trialId[\s\S]*?maintenance_schedule_id: resolvedScheduleId/m);
+  assert.match(appCode, /const abaMaintenanceScheduleId = String\([\s\S]*?sessionMeta\?\.maintenanceScheduleId[\s\S]*?sessionMeta\?\.activeMaintenanceProbe\?\.scheduleId/m);
+  assert.match(appCode, /maintenance_schedule_id: abaMaintenanceScheduleId \|\| undefined/);
+  assert.match(dataServiceCode, /maintenance_schedule_id: trial\?\.maintenance_schedule_id \|\| trial\?\.maintenanceScheduleId \|\| trial\?\.schedule_id \|\| trial\?\.scheduleId/);
+  assert.match(dataServiceCode, /trial_id: result\?\.trial_id \|\| result\?\.trialId/);
+  assert.match(serverCode, /validateMaintenanceProbeClinicalLink/);
+  assert.match(serverCode, /Maintenance Probe sem sondagem vinculada/);
+  assert.match(serverCode, /Esta Maintenance Probe não está disponível para esta sessão/);
+  assert.match(serverCode, /MAINTENANCE_PROBE_TRIAL_RECORDED/);
+  assert.match(serverCode, /maintenance-\$\{maintenanceScheduleId\}-\$\{sessionId\}-\$\{trialId\}/);
 });
 
 test('agendamento flexivel trata 7 14 30 60 como marcos clinicos', () => {

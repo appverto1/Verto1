@@ -143,7 +143,12 @@ test('SessionMode usa lastRegularTrialType e cria resultado de maintenance probe
 
 test('backend valida maintenance_schedule_id no escopo do paciente e target', () => {
   assert.match(serverCode, /maintenanceScheduleId[\s\S]*?\.from\('aba_maintenance_schedules'\)[\s\S]*?\.eq\('id', maintenanceScheduleId\)[\s\S]*?\.eq\('patient_id', patientId\)[\s\S]*?\.eq\('target_id', targetId\)/m);
-  assert.match(serverCode, /Sondagem de manutenção fora do escopo do paciente/);
+  assert.match(serverCode, /Maintenance Probe sem sondagem vinculada/);
+  assert.match(serverCode, /Esta Maintenance Probe não está disponível para esta sessão/);
+  const resultRouteStart = serverCode.indexOf("app.post('/api/aba/maintenance-probe-results'");
+  const resultRouteEnd = serverCode.indexOf("const resolvePatientClinicIdForAbaSession", resultRouteStart);
+  const resultRouteBody = serverCode.slice(resultRouteStart, resultRouteEnd);
+  assert.doesNotMatch(resultRouteBody, /selectMaintenanceScheduleForProbe/);
 });
 
 let passed = 0;

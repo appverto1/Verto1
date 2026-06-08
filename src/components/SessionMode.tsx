@@ -309,6 +309,8 @@ const promptedPromptOptions = ABA_PROMPTED_PROMPT_OPTIONS.map((prompt) => ({
       ? 'Física total'
       : prompt.label
 }));
+const REAL_CLINICAL_ID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const isRealClinicalId = (value: unknown) => REAL_CLINICAL_ID_REGEX.test(String(value || '').trim());
 
 const normalizeSyncStatus = (status: any): SyncStatus => {
   return status === 'syncing' || status === 'synced' || status === 'error' ? status : 'local';
@@ -1145,12 +1147,22 @@ export const SessionMode = ({
 
   const goalTargetId = (goal: any) => String(goal?.target_id || goal?.targetId || goal?.aba_target_id || goal?.abaTargetId || goal?.id || '').trim();
   const goalTargetName = (goal: any) => String(goal?.name || goal?.target_name || goal?.targetName || '').trim();
+  const clearManualMaintenanceProbeTarget = (targetKey?: string | null) => {
+    const safeTargetKey = String(targetKey || '').trim();
+    if (!safeTargetKey) return;
+    setManualMaintenanceProbeTargets((prev) => {
+      if (!prev[safeTargetKey]) return prev;
+      const next = { ...prev };
+      delete next[safeTargetKey];
+      return next;
+    });
+  };
 
   const getAvailableMaintenanceProbeForTarget = (goal: any): ActiveMaintenanceProbeForTarget | null => resolveActiveMaintenanceProbeForTarget({
     targetId: goalTargetId(goal),
     targetName: goalTargetName(goal),
     schedules: sessionId.startsWith('draft-') ? maintenanceSchedules : sessionAvailableMaintenanceProbeSchedules,
-    manualActivations: manualMaintenanceProbeTargets,
+    manualActivations: {},
     activeAppointmentId,
     sessionId,
     sessionClinicalDate,
@@ -1180,7 +1192,10 @@ export const SessionMode = ({
     const regularType = normalizeRegularAbaTrialType(normalized, lastRegularTrialType || 'dtt');
     setCollectionType(regularType);
     setLastRegularTrialType(regularType);
-    if (activeMaintenanceProbeTargetId) setManualRegularOverrideTargetId(activeMaintenanceProbeTargetId);
+    if (activeMaintenanceProbeTargetId) {
+      clearManualMaintenanceProbeTarget(activeMaintenanceProbeTargetId);
+      setManualRegularOverrideTargetId(activeMaintenanceProbeTargetId);
+    }
     setActiveMaintenanceProbeTargetId(null);
     setActiveMaintenanceScheduleId(null);
   };
@@ -1446,15 +1461,17 @@ export const SessionMode = ({
     const goalName = goalTargetName(params.goal) || 'Target';
     const activeProbe = params.activeProbe || getActiveMaintenanceProbeForTarget(params.goal);
     const resolvedTargetId = goalId || String(activeProbe?.targetId || '').trim();
-    if (!resolvedTargetId) {
-      setSessionWarning('Nao foi possivel registrar Maintenance Probe sem habilidade identificada.');
+    const resolvedScheduleId = String(activeProbe?.scheduleId || activeMaintenanceScheduleId || '').trim();
+    if (!isRealClinicalId(resolvedTargetId) || !isRealClinicalId(resolvedScheduleId)) {
+      setSessionWarning('Nao foi possivel registrar Maintenance Probe sem habilidade e sondagem vinculadas.');
       showClinicalToast({
         variant: 'error',
-        title: 'Habilidade nao identificada',
-        subtitle: 'Selecione uma habilidade com target real antes de registrar a sondagem.'
+        title: 'Maintenance Probe incompleta',
+        subtitle: 'Selecione uma sondagem disponivel com target e schedule reais.'
       }, 'error');
-      return;
+      return { success: false, error: 'missing_real_maintenance_probe_link' };
     }
+    const promptType = params.outcome === 'prompted' ? params.selectedPrompt.key : null;
     const syntheticRecord: SessionRecord = {
       id: params.trialId,
       kind: 'trial',
@@ -1483,7 +1500,7 @@ export const SessionMode = ({
     const accuracyPercent = totalTrials > 0 ? Math.round(((independentTrials + promptedTrials) / totalTrials) * 10000) / 100 : 0;
     const independencePercent = totalTrials > 0 ? Math.round((independentTrials / totalTrials) * 10000) / 100 : 0;
     const result = await dataService.saveAbaMaintenanceProbeResult({
-      id: `maintenance-${sessionId}-${resolvedTargetId}`,
+      id: `maintenance-${resolvedScheduleId}-${sessionId}-${params.trialId}`,
       organization_id: resolvedClinicId || undefined,
       organizationId: resolvedClinicId || undefined,
       clinic_id: resolvedClinicId || undefined,
@@ -1494,14 +1511,26 @@ export const SessionMode = ({
       targetId: resolvedTargetId,
       target_name: goalName,
       targetName: goalName,
-      maintenance_schedule_id: activeProbe?.scheduleId || activeMaintenanceScheduleId || undefined,
-      maintenanceScheduleId: activeProbe?.scheduleId || activeMaintenanceScheduleId || undefined,
+      maintenance_schedule_id: resolvedScheduleId,
+      maintenanceScheduleId: resolvedScheduleId,
+      schedule_id: resolvedScheduleId,
+      scheduleId: resolvedScheduleId,
       session_id: sessionId,
       sessionId,
       appointment_id: activeAppointmentId || undefined,
       appointmentId: activeAppointmentId || undefined,
+      trial_id: params.trialId,
+      trialId: params.trialId,
+      probe_date: params.timestamp.slice(0, 10),
+      probeDate: params.timestamp.slice(0, 10),
+      clinical_date: String(activeSession?.referenceDate || activeSession?.reference_date || params.timestamp.slice(0, 10)).slice(0, 10),
+      clinicalDate: String(activeSession?.referenceDate || activeSession?.reference_date || params.timestamp.slice(0, 10)).slice(0, 10),
       occurred_at: params.timestamp,
       occurredAt: params.timestamp,
+      result: params.outcome,
+      prompt_type: promptType,
+      promptType,
+      passed: params.outcome !== 'error' && params.score > 0,
       total_trials: totalTrials,
       totalTrials,
       independent_trials: independentTrials,
@@ -1514,16 +1543,43 @@ export const SessionMode = ({
       accuracyPercent,
       independence_percent: independencePercent,
       independencePercent,
+      created_by: resolvedTherapistId || undefined,
+      createdBy: resolvedTherapistId || undefined,
+      updated_by: resolvedTherapistId || undefined,
+      updatedBy: resolvedTherapistId || undefined,
       raw_payload: {
         source: 'session_mode_trial',
         clientTrialId: params.trialId,
+        trialId: params.trialId,
+        maintenanceScheduleId: resolvedScheduleId,
+        maintenance_schedule_id: resolvedScheduleId,
+        result: params.outcome,
+        score: params.score,
+        promptType,
         targetName: goalName,
+        activeMaintenanceProbe: {
+          scheduleId: resolvedScheduleId,
+          targetId: resolvedTargetId,
+          source: activeProbe?.source || 'available'
+        },
         manuallyActivated: Boolean(activeProbe?.manuallyActivated),
         linkedToSession: Boolean(activeProbe?.linkedToSession),
         noAutomaticTargetMutation: true
       }
     });
-    showPersistResultToast(result);
+    if (result?.success === false && !result?.pending && !result?.offline) {
+      updateRecordStatus(params.trialId, 'error');
+      showPersistResultToast(result);
+      return result;
+    } else if (result?.pending || result?.offline) {
+      showPersistResultToast(result);
+    } else {
+      showClinicalToast({
+        variant: 'success',
+        title: 'Maintenance Probe registrada.',
+        subtitle: 'Resultado salvo no registro clinico.'
+      });
+    }
     void refreshMaintenanceOverview();
 
     const targetKey = getMaintenanceTargetKey(params.goal);
@@ -1570,11 +1626,42 @@ export const SessionMode = ({
     });
   };
 
-  const persistConvertedTrialRecord = async (record: SessionRecord, fromCollectionType: string) => {
+  const persistConvertedTrialRecord = async (record: SessionRecord, fromCollectionType: string, mode: 'conversion' | 'edit' = 'conversion') => {
     const canUpdatePersistedTrial = !String(record.id || '').startsWith('trial-ui-') || record.rawPayload?.clientTrialId === record.id;
     if (!canUpdatePersistedTrial) return;
     try {
       const maxScore = Number(record.rawPayload?.targetMaxScore || record.rawPayload?.maxScore || 1);
+      const activeProbe = getActiveMaintenanceProbeForTarget({ id: record.targetId || null, name: record.targetName || record.title });
+      const maintenanceScheduleId = String(
+        activeProbe?.scheduleId ||
+        record.rawPayload?.maintenanceScheduleId ||
+        record.rawPayload?.maintenance_schedule_id ||
+        record.rawPayload?.activeMaintenanceProbe?.scheduleId ||
+        ''
+      ).trim();
+      const maintenanceTargetId = String(record.targetId || activeProbe?.targetId || '').trim();
+      if (!isRealClinicalId(maintenanceTargetId) || !isRealClinicalId(maintenanceScheduleId)) {
+        updateRecordStatus(record.id, 'error');
+        setSessionWarning('Nao foi possivel converter a tentativa sem Maintenance Probe disponivel vinculada.');
+        showClinicalToast({
+          variant: 'error',
+          title: 'Maintenance Probe incompleta',
+          subtitle: 'Use uma sondagem disponivel antes de converter ou editar este registro.'
+        }, 'error');
+        return;
+      }
+      const resolvedProbe: ActiveMaintenanceProbeForTarget = activeProbe || {
+        active: true,
+        targetId: maintenanceTargetId,
+        targetName: record.targetName || record.title || null,
+        scheduleId: maintenanceScheduleId,
+        status: 'AVAILABLE_IN_SESSION',
+        dueDate: null,
+        linkedToSession: true,
+        manuallyActivated: false,
+        source: 'available',
+        schedule: null
+      };
       const result = await dataService.saveAbaTrial({
         id: record.id,
         clinic_id: resolvedClinicId || undefined,
@@ -1585,12 +1672,16 @@ export const SessionMode = ({
         sessionId,
         appointment_id: activeAppointmentId || undefined,
         appointmentId: activeAppointmentId || undefined,
-        target_id: record.targetId || record.targetName || record.title,
-        targetId: record.targetId || record.targetName || record.title,
+        target_id: maintenanceTargetId,
+        targetId: maintenanceTargetId,
         target_name: record.targetName || record.title,
         targetName: record.targetName || record.title,
         program_id: record.programId || null,
         programId: record.programId || null,
+        maintenance_schedule_id: maintenanceScheduleId,
+        maintenanceScheduleId: maintenanceScheduleId,
+        schedule_id: maintenanceScheduleId,
+        scheduleId: maintenanceScheduleId,
         collection_type: 'maintenance_probe',
         collectionType: 'maintenance_probe',
         trialType: 'maintenance_probe',
@@ -1614,10 +1705,18 @@ export const SessionMode = ({
         source: 'verto_web',
         raw_payload: {
           ...(record.rawPayload || {}),
-          convertedFromCollectionType: fromCollectionType,
-          convertedToCollectionType: 'maintenance_probe',
-          conversionPreservedOriginalTimestamp: true,
-          source: 'session_mode_trial_conversion'
+          maintenanceScheduleId,
+          maintenance_schedule_id: maintenanceScheduleId,
+          activeMaintenanceProbe: {
+            scheduleId: maintenanceScheduleId,
+            targetId: maintenanceTargetId,
+            source: resolvedProbe.source || 'available'
+          },
+          convertedFromCollectionType: mode === 'conversion' ? fromCollectionType : undefined,
+          convertedToCollectionType: mode === 'conversion' ? 'maintenance_probe' : undefined,
+          conversionPreservedOriginalTimestamp: mode === 'conversion' ? true : undefined,
+          maintenanceProbeTrialEdited: mode === 'edit' ? true : undefined,
+          source: mode === 'edit' ? 'session_mode_trial_edit' : 'session_mode_trial_conversion'
         }
       });
       updateRecordStatus(record.id, result?.success && !result?.pending && !result?.offline ? 'synced' : 'local');
@@ -1632,7 +1731,7 @@ export const SessionMode = ({
         },
         timestamp: record.timestamp,
         trialId: record.id,
-        activeProbe: getActiveMaintenanceProbeForTarget({ id: record.targetId || null, name: record.targetName || record.title })
+        activeProbe: resolvedProbe
       });
       onSessionRecordSaved?.();
     } catch (error) {
@@ -1650,8 +1749,12 @@ export const SessionMode = ({
     }
     const fromCollectionType = normalizeAbaCollectionType(original.collectionType);
     const convertedAt = new Date().toISOString();
+    const activeProbe = getActiveMaintenanceProbeForTarget({ id: original.targetId || null, name: original.targetName || original.title });
+    const maintenanceScheduleId = String(activeProbe?.scheduleId || '').trim();
+    const maintenanceTargetId = String(activeProbe?.targetId || original.targetId || '').trim();
     const convertedRecord: SessionRecord = {
       ...original,
+      targetId: maintenanceTargetId || original.targetId || null,
       collectionType: 'maintenance_probe',
       detail: formatAbaTrialHistoryLabel({
         collectionType: 'maintenance_probe',
@@ -1664,6 +1767,13 @@ export const SessionMode = ({
       editedAt: convertedAt,
       rawPayload: {
         ...(original.rawPayload || {}),
+        maintenanceScheduleId: maintenanceScheduleId || undefined,
+        maintenance_schedule_id: maintenanceScheduleId || undefined,
+        activeMaintenanceProbe: maintenanceScheduleId && maintenanceTargetId ? {
+          scheduleId: maintenanceScheduleId,
+          targetId: maintenanceTargetId,
+          source: activeProbe?.source || 'available'
+        } : undefined,
         convertedFromCollectionType: fromCollectionType,
         convertedToCollectionType: 'maintenance_probe',
         convertedAt,
@@ -1706,7 +1816,28 @@ export const SessionMode = ({
     const maxScore = Number(goal?.maxScore || 1);
     const timestamp = new Date().toISOString();
     const normalizedCollectionType = normalizeAbaCollectionType(activeCollectionType);
-    const trialLockKey = `trial:${String(goal?.id || goal?.name || 'goal')}:${outcome}:${selectedPrompt.key}`;
+    const isMaintenanceAttempt = isMaintenanceProbeCollection(normalizedCollectionType);
+    const resolvedMaintenanceProbe = isMaintenanceAttempt
+      ? activeMaintenanceProbe || getActiveMaintenanceProbeForTarget(goal)
+      : null;
+    const recordTargetId = String(resolvedMaintenanceProbe?.targetId || goalTargetId(goal)).trim();
+    const maintenanceScheduleId = String(resolvedMaintenanceProbe?.scheduleId || activeMaintenanceScheduleId || '').trim();
+    if (isMaintenanceAttempt && (
+      !resolvedMaintenanceProbe ||
+      !isRealClinicalId(recordTargetId) ||
+      !isRealClinicalId(maintenanceScheduleId) ||
+      sessionId.startsWith('draft-') ||
+      !canRecordInAbaSession({ sessionCompleted, status: activeSession?.status })
+    )) {
+      setSessionWarning('Nao foi possivel registrar Maintenance Probe sem target e schedule reais na sessao ativa.');
+      showClinicalToast({
+        variant: 'error',
+        title: 'Nao foi possivel ativar a Maintenance Probe.',
+        subtitle: 'A sondagem precisa estar disponivel nesta sessao antes da tentativa.'
+      }, 'error');
+      return;
+    }
+    const trialLockKey = `trial:${String(recordTargetId || goal?.name || 'goal')}:${outcome}:${selectedPrompt.key}`;
     if (!lockAction(trialLockKey, 600)) return;
     const isCorrect = outcome !== 'error' && score > 0;
     const isIndependent = outcome === 'independent';
@@ -1725,7 +1856,7 @@ export const SessionMode = ({
         promptLevelName: selectedPrompt.label
       }),
       timestamp,
-      targetId: goal?.id || null,
+      targetId: recordTargetId || null,
       targetName: goal?.name || null,
       programId: goal?.programId || goal?.program_id || goal?.protocolId || null,
       therapistId: resolvedTherapistId || null,
@@ -1740,7 +1871,14 @@ export const SessionMode = ({
         source: 'session_mode_trial',
         clientTrialId: trialId,
         targetMaxScore: maxScore,
-        sessionReferenceDate: activeSession?.referenceDate || timestamp.slice(0, 10)
+        sessionReferenceDate: activeSession?.referenceDate || timestamp.slice(0, 10),
+        maintenanceScheduleId: isMaintenanceAttempt ? maintenanceScheduleId : undefined,
+        maintenance_schedule_id: isMaintenanceAttempt ? maintenanceScheduleId : undefined,
+        activeMaintenanceProbe: isMaintenanceAttempt ? {
+          scheduleId: maintenanceScheduleId,
+          targetId: recordTargetId,
+          source: resolvedMaintenanceProbe?.source || 'available'
+        } : undefined
       }
     });
     triggerMicroFeedback(trialLockKey, 'check');
@@ -1758,13 +1896,23 @@ export const SessionMode = ({
         sessionId,
         sessionStartedAt: activeSession?.startedAt || timestamp,
         sessionReferenceDate: activeSession?.referenceDate || timestamp.slice(0, 10),
-        targetId: goal?.id,
+        targetId: recordTargetId || undefined,
         targetMaxScore: maxScore,
         protocolId: goal?.protocolId || null,
         protocolTitle: goal?.protocolTitle || null,
         domainId: goal?.domainId || null,
         domainName: goal?.domainName || null,
         trialId,
+        maintenance_schedule_id: isMaintenanceAttempt ? maintenanceScheduleId : undefined,
+        maintenanceScheduleId: isMaintenanceAttempt ? maintenanceScheduleId : undefined,
+        schedule_id: isMaintenanceAttempt ? maintenanceScheduleId : undefined,
+        scheduleId: isMaintenanceAttempt ? maintenanceScheduleId : undefined,
+        activeMaintenanceProbe: isMaintenanceAttempt ? {
+          scheduleId: maintenanceScheduleId,
+          targetId: recordTargetId,
+          targetName: goalTargetName(goal) || null,
+          source: resolvedMaintenanceProbe?.source || 'available'
+        } : undefined,
         collectionType: normalizedCollectionType,
         trialType: normalizedCollectionType,
         promptLevelKey: selectedPrompt.key,
@@ -1788,7 +1936,7 @@ export const SessionMode = ({
           selectedPrompt,
           timestamp,
           trialId,
-          activeProbe: activeMaintenanceProbe || null
+          activeProbe: resolvedMaintenanceProbe || null
         });
       }
       onSessionRecordSaved?.();
@@ -1831,19 +1979,25 @@ export const SessionMode = ({
   };
 
   const activateMaintenanceProbeMode = (goal?: any) => {
-    const targetKey = goal ? getMaintenanceTargetKey(goal) : '';
     const activeProbe = goal ? getAvailableMaintenanceProbeForTarget(goal) : null;
-    if (!goal || !activeProbe) {
-      const info = goal ? getGoalMaintenanceInfo(goal) : null;
-      const schedule = info?.upcomingSchedule || info?.nextSchedule || null;
+    const targetId = String(activeProbe?.targetId || goalTargetId(goal) || '').trim();
+    const scheduleId = String(activeProbe?.scheduleId || '').trim();
+    const activeProbeFromAvailable = Boolean(activeProbe && !activeProbe.manuallyActivated && activeProbe.source === 'available');
+    if (
+      !goal ||
+      !activeProbe ||
+      !activeProbeFromAvailable ||
+      !isRealClinicalId(targetId) ||
+      !isRealClinicalId(scheduleId) ||
+      sessionId.startsWith('draft-') ||
+      !canRecordInAbaSession({ sessionCompleted, status: activeSession?.status })
+    ) {
       setPlanActionMessage('Maintenance Probe indisponivel nesta sessao.');
       showClinicalToast({
-        variant: 'info',
-        title: 'Maintenance Probe agendada',
-        subtitle: schedule
-          ? `${formatMaintenanceScheduleDueLabel(schedule)}. Use na data ou consulta vinculada.`
-          : 'Agende a sondagem antes de usar Maintenance Probe nesta sessao.'
-      }, 'none');
+        variant: 'error',
+        title: 'Nao foi possivel ativar a Maintenance Probe.',
+        subtitle: 'A sondagem precisa estar disponivel nesta sessao com target e schedule reais.'
+      }, 'error');
       return false;
     }
     const maintenanceDisplay = goal ? resolveMaintenanceTargetDisplay({
@@ -1851,27 +2005,28 @@ export const SessionMode = ({
       schedule: activeProbe
         ? {
           ...activeProbe,
-          target_id: goalTargetId(goal) || targetKey,
+          target_id: targetId,
           target_name: goalTargetName(goal) || null
         }
         : {
-          target_id: goalTargetId(goal) || targetKey || null,
+          target_id: targetId || null,
           target_name: goalTargetName(goal) || null
         }
     }) : null;
     const maintenanceTargetLabel = maintenanceDisplay?.targetDisplayName || 'esta tentativa';
-    if (targetKey) {
-      setCurrentTrialTargetKey(targetKey);
-      setActiveMaintenanceProbeTargetId(targetKey);
-      setActiveMaintenanceScheduleId(activeProbe?.scheduleId || null);
+    if (targetId) {
+      setCurrentTrialTargetKey(targetId);
+      setActiveMaintenanceProbeTargetId(targetId);
+      setActiveMaintenanceScheduleId(scheduleId);
       setManualRegularOverrideTargetId(null);
       setManualMaintenanceProbeTargets((prev) => ({
         ...prev,
-        [targetKey]: {
-          targetId: goalTargetId(goal) || targetKey,
+        [targetId]: {
+          targetId,
           targetName: goalTargetName(goal) || null,
-          scheduleId: activeProbe?.scheduleId || null,
-          status: activeProbe?.status || 'MANUAL',
+          scheduleId,
+          source: 'available',
+          status: activeProbe?.status || 'AVAILABLE_IN_SESSION',
           dueDate: activeProbe?.dueDate || null,
           appointmentId: activeAppointmentId || null,
           sessionId,
@@ -1881,8 +2036,8 @@ export const SessionMode = ({
     }
     setCollectionType('maintenance_probe');
     if (goal?.id) setActiveCriteria(goal.id);
-    setPlanActionMessage(`Maintenance Probe ativo: ${maintenanceTargetLabel}.`);
-    setMaintenanceProbeFeedback(`Próxima tentativa: ${maintenanceTargetLabel}`);
+    setPlanActionMessage('Maintenance Probe ativa para a proxima tentativa.');
+    setMaintenanceProbeFeedback('Maintenance Probe ativa para a proxima tentativa.');
     if (maintenanceProbeFeedbackTimerRef.current) window.clearTimeout(maintenanceProbeFeedbackTimerRef.current);
     maintenanceProbeFeedbackTimerRef.current = window.setTimeout(() => {
       setMaintenanceProbeFeedback('');
@@ -1891,10 +2046,26 @@ export const SessionMode = ({
     }, 1500);
     showClinicalToast({
       variant: 'success',
-      title: 'Maintenance Probe ativo',
-      subtitle: `Próxima tentativa: ${maintenanceTargetLabel}.`
+      title: 'Maintenance Probe ativa para a proxima tentativa.',
+      subtitle: maintenanceTargetLabel
     }, 'none');
     return true;
+  };
+
+  const cancelActiveMaintenanceProbeMode = (goal?: any) => {
+    const targetKey = String(activeMaintenanceProbeTargetId || getMaintenanceTargetKey(goal) || '').trim();
+    if (targetKey) clearManualMaintenanceProbeTarget(targetKey);
+    setActiveMaintenanceProbeTargetId(null);
+    setActiveMaintenanceScheduleId(null);
+    setManualRegularOverrideTargetId(null);
+    setCollectionType(lastRegularTrialType || 'dtt');
+    setMaintenanceProbeFeedback('');
+    setPlanActionMessage('Uso da Maintenance Probe cancelado.');
+    showClinicalToast({
+      variant: 'info',
+      title: 'Uso da Maintenance Probe cancelado.',
+      subtitle: 'A proxima tentativa volta ao tipo regular.'
+    }, 'none');
   };
 
   const registerFrequency = (behaviorName = selectedBehavior.name, countDelta = 1) => {
@@ -3589,8 +3760,7 @@ export const SessionMode = ({
       const goal = sessionGoals.find((entry: any) => goalTargetId(entry) === itemTargetId);
       const applied = activateMaintenanceProbeMode(goal);
       if (!applied) return;
-      const display = resolveMaintenanceTargetDisplay({ target: goal || item, schedule: item });
-      setPlanActionMessage(`Maintenance Probe ativo: ${display.targetDisplayName}.`);
+      setPlanActionMessage('Maintenance Probe ativa para a proxima tentativa.');
     } else {
       if (item?.planned_trial_type) handleCollectionTypeChange(String(item.planned_trial_type));
       setPlanActionMessage('Item do plano selecionado para esta sessao.');
@@ -3849,6 +4019,8 @@ export const SessionMode = ({
         if (isMaintenanceProbeCollection(editedCollectionType)) {
           void persistConvertedTrialRecord(editedRecord, originalCollectionType);
         }
+      } else if (isMaintenanceProbeCollection(editedCollectionType)) {
+        void persistConvertedTrialRecord(editedRecord, originalCollectionType, 'edit');
       }
     }
     showClinicalToast(buildClinicalActionToast({ action: 'edit' }));
@@ -5746,6 +5918,15 @@ export const SessionMode = ({
                               Usar Maintenance Probe
                             </button>
                           )}
+                          {maintenanceProbeActiveForGoal && (
+                            <button
+                              type="button"
+                              onClick={() => cancelActiveMaintenanceProbeMode(goal)}
+                              className="inline-flex min-h-[38px] w-fit items-center justify-center rounded-full border border-amber-200 bg-amber-100 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-amber-800 transition-all active:scale-95"
+                            >
+                              Cancelar uso da probe
+                            </button>
+                          )}
                         </div>
                       </div>
                       {maintenanceProbeFeedback && maintenanceProbeActiveForGoal && (
@@ -5766,14 +5947,14 @@ export const SessionMode = ({
                     <button
                       onClick={() => handleTrialClick(goal, 1, 'independent')}
                       disabled={Boolean(actionLocks[independentTrialLockKey])}
-                      className={`relative bg-[#05CD99] text-white min-h-[88px] sm:min-h-[96px] rounded-3xl flex flex-col items-center justify-center px-4 shadow-lg shadow-green-500/20 hover:scale-[1.01] active:scale-95 transition-all disabled:opacity-90 ${microFeedback[independentTrialLockKey] === 'check' ? 'scale-[0.98] ring-4 ring-emerald-200/70' : ''}`}
+                      className={`relative bg-[#05CD99] text-white min-h-[88px] sm:min-h-[96px] rounded-3xl flex flex-col items-center justify-center px-4 shadow-lg shadow-green-500/20 hover:scale-[1.01] active:scale-95 transition-all disabled:opacity-90 ${maintenanceProbeActiveForGoal ? 'ring-4 ring-amber-200/80' : ''} ${microFeedback[independentTrialLockKey] === 'check' ? 'scale-[0.98] ring-4 ring-emerald-200/70' : ''}`}
                     >
                       {microFeedback[independentTrialLockKey] === 'check' && <span className="absolute right-4 top-4 rounded-full bg-white/25 p-1"><CheckCircle2 size={16} /></span>}
                       <CheckCircle2 size={26} />
                       <span className="text-xl sm:text-2xl font-bold mt-2">Independente</span>
                       <span className={`${mobileFocusMode ? 'hidden sm:block' : 'block'} text-[10px] font-bold uppercase tracking-widest opacity-80`}>1 = correto independente</span>
                     </button>
-                    <div className="relative rounded-3xl border border-orange-100 bg-orange-50 p-2 shadow-lg shadow-orange-500/10">
+                    <div className={`relative rounded-3xl border border-orange-100 bg-orange-50 p-2 shadow-lg shadow-orange-500/10 ${maintenanceProbeActiveForGoal ? 'ring-4 ring-amber-200/80' : ''}`}>
                       <div className="mb-2 flex min-h-[28px] items-center justify-center gap-2 px-2 text-orange-700">
                         <Activity size={18} />
                         <span className="text-xs font-black uppercase tracking-widest">Com ajuda</span>
@@ -5802,7 +5983,7 @@ export const SessionMode = ({
                     <button
                       onClick={() => handleTrialClick(goal, 0, 'error')}
                       disabled={Boolean(actionLocks[errorTrialLockKey])}
-                      className={`relative bg-[#EE5D50] text-white min-h-[88px] sm:min-h-[96px] rounded-3xl flex flex-col items-center justify-center px-4 shadow-lg shadow-red-500/20 hover:scale-[1.01] active:scale-95 transition-all disabled:opacity-90 ${microFeedback[errorTrialLockKey] === 'check' ? 'scale-[0.98] ring-4 ring-red-200/70' : ''}`}
+                      className={`relative bg-[#EE5D50] text-white min-h-[88px] sm:min-h-[96px] rounded-3xl flex flex-col items-center justify-center px-4 shadow-lg shadow-red-500/20 hover:scale-[1.01] active:scale-95 transition-all disabled:opacity-90 ${maintenanceProbeActiveForGoal ? 'ring-4 ring-amber-200/80' : ''} ${microFeedback[errorTrialLockKey] === 'check' ? 'scale-[0.98] ring-4 ring-red-200/70' : ''}`}
                     >
                       {microFeedback[errorTrialLockKey] === 'check' && <span className="absolute right-4 top-4 rounded-full bg-white/25 p-1"><CheckCircle2 size={16} /></span>}
                       <X size={26} />
