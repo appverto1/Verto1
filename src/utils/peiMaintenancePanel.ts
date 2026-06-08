@@ -144,6 +144,11 @@ const safeTargetName = (value: any, fallback = 'Habilidade sem nome') => {
 };
 
 const isPersistedUuid = (value: any) => UUID_LIKE.test(normalizeText(value));
+const isPersistedMaintenanceScheduleId = (value: any) => {
+  const id = normalizeText(value);
+  if (isPersistedUuid(id)) return true;
+  return /^maintenance-[a-z0-9][a-z0-9-]{7,}$/i.test(id) && !/(^|-)local-|(^|-)temp-|(^|-)tmp-|(^|-)offline-/i.test(id);
+};
 
 const getTargetKey = (...values: any[]) => {
   for (const value of values) {
@@ -571,7 +576,7 @@ export function mapMaintenancePanelResponse(
       isTechnicalIssue,
       needsTargetReview,
       hasRealTarget,
-      hasRealSchedule: isPersistedUuid(scheduleId),
+      hasRealSchedule: isPersistedMaintenanceScheduleId(scheduleId),
       canScheduleMaintenance: hasRealTarget && !needsTargetReview,
       canWaitNextSession: hasRealTarget && !needsTargetReview,
       canAssignAppointment: hasRealTarget && !needsTargetReview,
@@ -745,10 +750,10 @@ export function buildPeiMaintenanceRows(input: {
     const resultStatus = normalizeStatus(lastResult?.status);
     const derivedStatus = nextProbe.schedule ? deriveMaintenanceScheduleStatus(nextProbe.schedule, now) : 'NO_SCHEDULE';
     const nextScheduleId = normalizeText(nextProbe.schedule?.id || nextProbe.schedule?.schedule_id || nextProbe.schedule?.scheduleId);
-    const hasRealSchedule = isPersistedUuid(nextScheduleId);
+    const hasRealSchedule = isPersistedMaintenanceScheduleId(nextScheduleId);
     const hasSyntheticSchedule = sortedSchedules.some((schedule: any) => {
       const id = normalizeText(schedule?.id || schedule?.schedule_id || schedule?.scheduleId);
-      return id && !isPersistedUuid(id);
+      return id && !isPersistedMaintenanceScheduleId(id);
     });
     const hasMissingTargetLabel = /habilidade\s+(nao|não)\s+(vinculada|encontrada)/i.test(String(row.targetName || ''));
     const hasRealTarget = Boolean(isPersistedUuid(row.targetId) && !row.targetMissing && !nextProbe.schedule?.target_missing && !hasMissingTargetLabel && row.hasRealTarget !== false);

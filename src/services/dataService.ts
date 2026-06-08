@@ -96,10 +96,18 @@ function normalizeListLimit(value: unknown, fallback = 50, max = 50): number {
 
 const PERSISTED_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SYNTHETIC_CLINICAL_ID_RE = /^(maintenance-|session-|target-|local-|temp-|tmp-|offline-)|^\d{9,}$/i;
+const PERSISTED_MAINTENANCE_SCHEDULE_ID_RE = /^maintenance-[a-z0-9][a-z0-9-]{7,}$/i;
 
 function isPersistedUuid(value: unknown): boolean {
   const id = String(value || '').trim();
   return PERSISTED_UUID_RE.test(id) && !SYNTHETIC_CLINICAL_ID_RE.test(id);
+}
+
+function isPersistedMaintenanceScheduleId(value: unknown): boolean {
+  const id = String(value || '').trim();
+  if (isPersistedUuid(id)) return true;
+  if (!PERSISTED_MAINTENANCE_SCHEDULE_ID_RE.test(id)) return false;
+  return !/(^|-)local-|(^|-)temp-|(^|-)tmp-|(^|-)offline-/i.test(id);
 }
 
 function isSyntheticClinicalId(value: unknown): boolean {
@@ -2840,7 +2848,7 @@ export const dataService = {
 
   async updateMaintenanceSchedule(scheduleId: string, payload: any = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
-    if (!isPersistedUuid(scheduleId)) {
+    if (!isPersistedMaintenanceScheduleId(scheduleId)) {
       return invalidClinicalIdResponse('Sondagem de manutenção inválida para edição.');
     }
     const appointmentId = payload?.appointmentId || payload?.appointment_id;
@@ -2864,7 +2872,7 @@ export const dataService = {
 
   async cancelMaintenanceSchedule(scheduleId: string, payload: any = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
-    if (!isPersistedUuid(scheduleId)) {
+    if (!isPersistedMaintenanceScheduleId(scheduleId)) {
       return invalidClinicalIdResponse('Sondagem de manutenção inválida para cancelamento.');
     }
     const endpoint = `/api/aba/maintenance-schedules/${encodeURIComponent(String(scheduleId))}/cancel`;
@@ -2904,7 +2912,7 @@ export const dataService = {
 
   async confirmMaintenanceScheduleLink(scheduleId: string, payload: any = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
-    if (!isPersistedUuid(scheduleId)) {
+    if (!isPersistedMaintenanceScheduleId(scheduleId)) {
       return invalidClinicalIdResponse('Sondagem de manutenção inválida para confirmar vínculo.');
     }
     const appointmentId = payload?.appointmentId || payload?.appointment_id;
@@ -2928,7 +2936,7 @@ export const dataService = {
 
   async assignMaintenanceScheduleToAppointment(scheduleId: string, payload: any = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
-    if (!isPersistedUuid(scheduleId)) {
+    if (!isPersistedMaintenanceScheduleId(scheduleId)) {
       return invalidClinicalIdResponse('Sondagem de manutenção inválida para atribuir sessão.');
     }
     const appointmentId = payload?.appointmentId || payload?.appointment_id;
@@ -2952,7 +2960,7 @@ export const dataService = {
 
   async skipMaintenanceScheduleLink(scheduleId: string, payload: any = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
-    if (!isPersistedUuid(scheduleId)) {
+    if (!isPersistedMaintenanceScheduleId(scheduleId)) {
       return invalidClinicalIdResponse('Sondagem de manutenção inválida para adiar vínculo.');
     }
     const appointmentId = payload?.appointmentId || payload?.appointment_id;
@@ -2976,7 +2984,7 @@ export const dataService = {
 
   async relinkMaintenanceScheduleTarget(scheduleId: string, payload: any = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
-    if (!isPersistedUuid(scheduleId)) {
+    if (!isPersistedMaintenanceScheduleId(scheduleId)) {
       return invalidClinicalIdResponse('Sondagem de manutenção inválida para revisar vínculo.');
     }
     const targetId = payload?.targetId || payload?.target_id;
@@ -3036,7 +3044,7 @@ export const dataService = {
 
   async completeMaintenanceSchedule(scheduleId: string, payload: any = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
-    if (!isPersistedUuid(scheduleId)) {
+    if (!isPersistedMaintenanceScheduleId(scheduleId)) {
       return invalidClinicalIdResponse('Sondagem de manutenção inválida para conclusão.');
     }
     const endpoint = `/api/aba/maintenance-schedules/${encodeURIComponent(String(scheduleId))}/complete`;

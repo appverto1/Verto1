@@ -28160,8 +28160,12 @@ async function startServer() {
       : scheduleOrId;
     const id = sanitizeString(rawId, 180);
     if (!id || ['null', 'undefined', '[object object]'].includes(id.toLowerCase())) return '';
+    if (isUuid(id)) return id;
+    if (!/^maintenance-[a-z0-9][a-z0-9-]{7,}$/i.test(id)) return '';
+    if (/(^|-)local-|(^|-)temp-|(^|-)tmp-|(^|-)offline-/i.test(id)) return '';
     return id;
   };
+  const hasPersistedMaintenanceScheduleId = (scheduleOrId: any) => Boolean(getPersistedMaintenanceScheduleId(scheduleOrId));
 
   const buildLegacyMaintenanceScheduleRow = (row: any, now: string, error?: any) => {
     const scheduledFor = row?.scheduled_for || row?.scheduledFor || row?.target_due_date || row?.targetDueDate || row?.due_date || row?.dueDate || now;
@@ -30598,7 +30602,7 @@ async function startServer() {
       const targetName = sanitizeTextField(firstTrial.target_name || targetKey, 240);
       const programId = sanitizeString(firstTrial.program_id, 180);
       const trialScheduleId = sanitizeString(firstTrial.maintenance_schedule_id, 180);
-      if (!isUuid(trialScheduleId)) continue;
+      if (!hasPersistedMaintenanceScheduleId(trialScheduleId)) continue;
       const { criterion } = await fetchAbaMasteryCriterion({
         organizationId,
         clinicId,
@@ -30912,7 +30916,7 @@ async function startServer() {
         const targetPatientId = sanitizeString(schedule?.target?.patient_id || schedule?.target?.patientId, 120);
         const appointmentId = sanitizeString(schedule?.appointment_id || schedule?.appointmentId, 180);
         const appointmentPatientId = sanitizeString(schedule?.appointment?.patient_id || schedule?.appointment?.patientId, 120);
-        if (!isUuid(scheduleId) || !isUuid(targetId) || schedule?.target_missing) return false;
+        if (!hasPersistedMaintenanceScheduleId(scheduleId) || !isUuid(targetId) || schedule?.target_missing) return false;
         if (!schedule?.target?.id) return false;
         if (appointmentId && schedule?.appointment?.id && appointmentPatientId && appointmentPatientId !== patientId) return false;
         return !targetPatientId || targetPatientId === patientId;
@@ -30945,7 +30949,7 @@ async function startServer() {
         const appointment = schedule?.appointment || null;
         const scheduleId = sanitizeString(schedule?.id || schedule?.schedule_id || schedule?.scheduleId, 180);
         const targetId = sanitizeString(schedule?.target_id || schedule?.targetId || target?.id, 180);
-        if (!isUuid(scheduleId) || !isUuid(targetId)) return null;
+        if (!hasPersistedMaintenanceScheduleId(scheduleId) || !isUuid(targetId)) return null;
         return cleanObject({
           scheduleId,
           targetId,
@@ -31004,7 +31008,7 @@ async function startServer() {
     const organizationId = sanitizeString(params.organizationId || clinicId, 120);
     const sessionId = sanitizeString(params.sessionId, 180);
     if (!isUuid(sessionId)) return { ok: false, status: 400, error: 'Sessão ABA inválida.' };
-    if (!isUuid(maintenanceScheduleId)) return { ok: false, status: 400, error: 'Maintenance Probe sem sondagem vinculada.' };
+    if (!hasPersistedMaintenanceScheduleId(maintenanceScheduleId)) return { ok: false, status: 400, error: 'Maintenance Probe sem sondagem vinculada.' };
     if (!isUuid(targetId)) return { ok: false, status: 400, error: 'Target real é obrigatório para Maintenance Probe.' };
 
     const scope = await resolveAbaSessionReadScope(sessionId, params.user);
@@ -31426,8 +31430,10 @@ async function startServer() {
           const scheduleId = sanitizeString(schedule?.id || schedule?.schedule_id || schedule?.scheduleId, 180);
           const raw = schedule?.raw_payload && typeof schedule.raw_payload === 'object' ? schedule.raw_payload : {};
           return cleanObject({
-            id: isUuid(scheduleId) ? scheduleId : null,
-            scheduleId: isUuid(scheduleId) ? scheduleId : null,
+            id: scheduleId || null,
+            scheduleId: scheduleId || null,
+            persisted: Boolean(scheduleId),
+            hasRealSchedule: Boolean(scheduleId),
             target_id: isUuid(scheduleTargetId) ? scheduleTargetId : null,
             targetId: isUuid(scheduleTargetId) ? scheduleTargetId : null,
             status: sanitizeString(schedule?.status, 80) || 'SCHEDULED',
@@ -31641,7 +31647,7 @@ async function startServer() {
         const targetId = sanitizeString(result?.target_id || result?.targetId, 180);
         const scheduleId = sanitizeString(result?.maintenance_schedule_id || result?.maintenanceScheduleId, 180);
         if (isUuid(targetId) && !latestResultByTargetId.has(targetId)) latestResultByTargetId.set(targetId, result);
-        if (isUuid(scheduleId) && !latestResultByScheduleId.has(scheduleId)) latestResultByScheduleId.set(scheduleId, result);
+        if (hasPersistedMaintenanceScheduleId(scheduleId) && !latestResultByScheduleId.has(scheduleId)) latestResultByScheduleId.set(scheduleId, result);
       });
       const alertByTargetId = new Map<string, any>();
       alerts.forEach((alert: any) => {
@@ -31748,11 +31754,11 @@ async function startServer() {
         const domainName = sanitizeString(schedule?.domainName || schedule?.domain_name || schedule?.target?.domain_name, 240) || 'Sem domínio informado';
         return cleanObject({
           id: scheduleId,
-          cardId: isUuid(scheduleId) ? scheduleId : targetId || scheduleId,
+          cardId: scheduleId || targetId,
           cardKind: kind,
           kind,
           type: legacyType,
-          scheduleId: isUuid(scheduleId) ? scheduleId : null,
+          scheduleId: scheduleId || null,
           targetId: targetResolved ? targetId : null,
           hasRealTarget: targetResolved,
           targetName,
@@ -31766,9 +31772,9 @@ async function startServer() {
           status: sanitizeString(schedule?.status, 80) || 'PENDING',
           canSchedule: targetResolved,
           canScheduleMaintenance: targetResolved,
-          canAssign: targetResolved && isUuid(scheduleId),
+          canAssign: targetResolved && hasPersistedMaintenanceScheduleId(scheduleId),
           canWaitNextSession: targetResolved,
-          canAssignAppointment: targetResolved && isUuid(scheduleId),
+          canAssignAppointment: targetResolved && hasPersistedMaintenanceScheduleId(scheduleId),
           canReviewLink: needsTargetReview,
           needsTargetReview,
           availableActions: needsTargetReview
@@ -31940,7 +31946,7 @@ async function startServer() {
           key: sanitizeString(row?.cardId || scheduleId || targetId || row?.id || row?.targetName, 280),
           cardId: row?.cardId || scheduleId || targetId || row?.id,
           cardKind: row?.cardKind || row?.kind || (schedule ? 'SCHEDULE_VALIDO' : 'TARGET_REAL_SEM_SCHEDULE'),
-          scheduleId: isUuid(scheduleId) ? scheduleId : '',
+          scheduleId: scheduleId || '',
           targetId: isUuid(targetId) ? targetId : null,
           targetName: sanitizeString(row?.targetName || row?.target_name, 240) || (group === 'technical' ? 'Sondagem sem habilidade vinculada' : 'Habilidade sem nome'),
           protocol: sanitizeString(row?.protocol || row?.protocolName || row?.protocol_name, 240) || 'Sem protocolo informado',
@@ -31968,7 +31974,7 @@ async function startServer() {
                   ? 'unlinked'
                   : 'activeCycle',
           hasRealTarget: Boolean(row?.hasRealTarget && isUuid(targetId)),
-          hasRealSchedule: Boolean(isUuid(scheduleId)),
+          hasRealSchedule: Boolean(hasPersistedMaintenanceScheduleId(scheduleId)),
           needsTargetReview: Boolean(row?.needsTargetReview || group === 'technical'),
           canScheduleMaintenance: Boolean(row?.canScheduleMaintenance && isUuid(targetId)),
           canWaitNextSession: Boolean(row?.canWaitNextSession && isUuid(targetId)),
@@ -32503,8 +32509,10 @@ async function startServer() {
         const target = schedule?.target && typeof schedule.target === 'object' ? schedule.target : {};
         const scheduleId = sanitizeString(schedule?.id || schedule?.schedule_id || schedule?.scheduleId, 180);
         return cleanObject({
-          id: isUuid(scheduleId) ? scheduleId : null,
-          scheduleId: isUuid(scheduleId) ? scheduleId : null,
+          id: scheduleId || null,
+          scheduleId: scheduleId || null,
+          persisted: Boolean(scheduleId),
+          hasRealSchedule: Boolean(scheduleId),
           targetId,
           status: sanitizeString(schedule?.status, 80) || null,
           dueDate: schedule?.target_due_date || schedule?.targetDueDate || schedule?.due_date || schedule?.dueDate || null,
@@ -32569,7 +32577,7 @@ async function startServer() {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
       const scheduleId = sanitizeString(req.params.scheduleId, 180);
-      if (!isUuid(scheduleId)) {
+      if (!hasPersistedMaintenanceScheduleId(scheduleId)) {
         return res.status(400).json({ success: false, error: 'ID_INVALIDO', message: 'Sondagem de manutenção inválida.' });
       }
       let query = supabase
@@ -32745,7 +32753,7 @@ async function startServer() {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
       const scheduleId = sanitizeString(req.params.scheduleId, 180);
-      if (!isUuid(scheduleId)) {
+      if (!hasPersistedMaintenanceScheduleId(scheduleId)) {
         return res.status(400).json({ success: false, error: 'ID_INVALIDO', message: 'Sondagem de manutenção inválida.' });
       }
       let query = supabase
@@ -32832,7 +32840,7 @@ async function startServer() {
       if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de conclusão de Maintenance Probe')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const scheduleId = sanitizeString(req.params.scheduleId, 180);
-      if (!isUuid(scheduleId)) {
+      if (!hasPersistedMaintenanceScheduleId(scheduleId)) {
         return res.status(400).json({ success: false, error: 'ID_INVALIDO', message: 'Identificador inválido.' });
       }
       let query = supabase
@@ -32875,7 +32883,7 @@ async function startServer() {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
       const scheduleId = sanitizeString(req.params.scheduleId, 180);
-      if (!isUuid(scheduleId)) {
+      if (!hasPersistedMaintenanceScheduleId(scheduleId)) {
         return res.status(400).json({ success: false, error: 'ID_INVALIDO', message: 'Identificador inválido.' });
       }
       let query = supabase
@@ -32987,7 +32995,7 @@ async function startServer() {
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
       const scheduleId = sanitizeString(req.params.scheduleId, 180);
       const appointmentId = sanitizeString(req.body?.appointmentId || req.body?.appointment_id, 180);
-      if (!isUuid(scheduleId)) {
+      if (!hasPersistedMaintenanceScheduleId(scheduleId)) {
         return res.status(400).json({ success: false, error: 'ID_INVALIDO', message: 'Identificador inválido.' });
       }
       if (!isUuid(appointmentId)) {
@@ -33092,7 +33100,7 @@ async function startServer() {
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
       const scheduleId = sanitizeString(req.params.scheduleId, 180);
       const targetId = sanitizeString(req.body?.targetId || req.body?.target_id, 180);
-      if (!isUuid(scheduleId) || !isUuid(targetId)) {
+      if (!hasPersistedMaintenanceScheduleId(scheduleId) || !isUuid(targetId)) {
         return res.status(400).json({ success: false, error: 'ID_INVALIDO', message: 'Escolha uma habilidade real antes de salvar o vínculo.' });
       }
       let scheduleQuery = supabase
@@ -33182,7 +33190,7 @@ async function startServer() {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
       const scheduleId = sanitizeString(req.params.scheduleId, 180);
-      if (!isUuid(scheduleId)) {
+      if (!hasPersistedMaintenanceScheduleId(scheduleId)) {
         return res.status(400).json({ success: false, error: 'Identificador inválido.' });
       }
       let query = supabase

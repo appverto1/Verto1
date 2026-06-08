@@ -5498,6 +5498,21 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return isUuidLike(id) ? id : '';
   };
 
+  const getPersistedMaintenanceScheduleId = (value: any, source?: any) => {
+    const id = String(value || '').trim();
+    if (isUuidLike(id)) return id;
+    const schedule = source && typeof source === 'object' ? source : {};
+    if (
+      id &&
+      /^maintenance-[a-z0-9][a-z0-9-]{7,}$/i.test(id) &&
+      !/(^|-)local-|(^|-)temp-|(^|-)tmp-|(^|-)offline-/i.test(id) &&
+      (schedule.persisted || schedule.hasRealSchedule || schedule.schedulePersisted)
+    ) {
+      return id;
+    }
+    return '';
+  };
+
   const getPeiMaintenanceExplicitTargetId = (row: any) => {
     const rowIdCanBeTarget = Boolean(
       row?.hasRealTarget === true &&
@@ -5659,7 +5674,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   };
 
   const getPeiMaintenanceScheduleId = (schedule: any) =>
-    getPersistedUuid(schedule?.id || schedule?.schedule_id || schedule?.scheduleId);
+    getPersistedMaintenanceScheduleId(schedule?.id || schedule?.schedule_id || schedule?.scheduleId, schedule);
 
   const peiMaintenanceDuplicateScheduleRows = useMemo(() => {
     const duplicates = Array.isArray(abaMaintenancePanel?.raw?.duplicateSchedulesForReview)
@@ -5925,8 +5940,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         setPeiMaintenancePanelMessage(result?.message || result?.error || 'Não foi possível atualizar a manutenção.');
         return false;
       }
-      setPeiMaintenancePanelMessage(result?.message || successMessage);
       await refreshPeiMaintenancePanel();
+      setPeiMaintenancePanelMessage(result?.message || successMessage);
       return true;
     } catch {
       setPeiMaintenancePanelMessage('Não foi possível atualizar a manutenção.');
@@ -6013,7 +6028,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     }
     const isDateMode = peiMaintenanceScheduleMode === 'CUSTOM_DATE';
     const existingSchedule = getPeiMaintenanceScheduleObject(row);
-    const existingScheduleId = getPeiMaintenanceScheduleId(existingSchedule) || getPersistedUuid(row?.scheduleId || row?.schedule_id);
+    const existingScheduleId = getPeiMaintenanceScheduleId(existingSchedule) || getPersistedMaintenanceScheduleId(row?.scheduleId || row?.schedule_id, row);
     const selectedAppointmentId = getPersistedUuid(selectedPeiMaintenanceAppointmentId);
     const selectedAppointment = selectedAppointmentId
       ? peiMaintenanceAppointmentsState.items.find((appointment: any) => getPersistedUuid(appointment?.id) === selectedAppointmentId) || existingSchedule?.appointment || null
@@ -6105,7 +6120,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
   const handlePeiCancelScheduledMaintenance = (row: any) => {
     const schedule = getPeiMaintenanceScheduleObject(row);
-    const scheduleId = getPeiMaintenanceScheduleId(schedule) || getPersistedUuid(row?.scheduleId || row?.schedule_id);
+    const scheduleId = getPeiMaintenanceScheduleId(schedule) || getPersistedMaintenanceScheduleId(row?.scheduleId || row?.schedule_id, row);
     if (!scheduleId) {
       setPeiMaintenancePanelMessage('Sondagem de manutenção inválida para cancelamento.');
       return;
@@ -6120,7 +6135,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
   const handlePeiMoveScheduledMaintenanceToNextSession = (row: any) => {
     const schedule = getPeiMaintenanceScheduleObject(row);
-    const scheduleId = getPeiMaintenanceScheduleId(schedule) || getPersistedUuid(row?.scheduleId || row?.schedule_id);
+    const scheduleId = getPeiMaintenanceScheduleId(schedule) || getPersistedMaintenanceScheduleId(row?.scheduleId || row?.schedule_id, row);
     if (!scheduleId) {
       setPeiMaintenancePanelMessage('Sondagem de manutenção inválida para edição.');
       return;
@@ -6134,7 +6149,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
   const handlePeiRemoveScheduledMaintenanceAppointmentLink = (row: any) => {
     const schedule = getPeiMaintenanceScheduleObject(row);
-    const scheduleId = getPeiMaintenanceScheduleId(schedule) || getPersistedUuid(row?.scheduleId || row?.schedule_id);
+    const scheduleId = getPeiMaintenanceScheduleId(schedule) || getPersistedMaintenanceScheduleId(row?.scheduleId || row?.schedule_id, row);
     const dueDate = getPeiMaintenanceScheduleClinicalDateValue(schedule) || getPeiMaintenanceAppointmentDateValue(schedule?.appointment || schedule);
     if (!scheduleId || !dueDate) {
       setPeiMaintenancePanelMessage('Não foi possível remover o vínculo desta sondagem.');
@@ -6154,7 +6169,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
   const handlePeiConfirmCandidateLink = (row: any) => {
     const schedule = row?.nextSchedule;
-    const scheduleId = getPeiMaintenanceScheduleId(schedule) || getPersistedUuid(row?.scheduleId || row?.schedule_id);
+    const scheduleId = getPeiMaintenanceScheduleId(schedule) || getPersistedMaintenanceScheduleId(row?.scheduleId || row?.schedule_id, row);
     const appointmentId = getPeiMaintenanceCandidateAppointmentId(schedule);
     if (!scheduleId) {
       setPeiMaintenancePanelMessage('Sondagem de manutenção inválida. Revise o vínculo antes de confirmar.');
@@ -6351,7 +6366,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     if (!canManagePeiMaintenance) return null;
     const group = row?.group as PeiMaintenanceGroupKey;
     const targetId = getPeiMaintenanceTargetId(row);
-    const scheduleId = getPeiMaintenanceScheduleId(row?.nextSchedule) || getPersistedUuid(row?.scheduleId || row?.schedule_id);
+    const scheduleId = getPeiMaintenanceScheduleId(row?.nextSchedule) || getPersistedMaintenanceScheduleId(row?.scheduleId || row?.schedule_id, row);
     const hasRealTarget = Boolean(row?.hasRealTarget ?? targetId);
     const hasRealSchedule = Boolean(scheduleId);
     const hasMissingTargetLabel = /habilidade\s+(nao|não)\s+(vinculada|encontrada)/i.test(String(row?.targetName || ''));
@@ -6540,7 +6555,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       const protocol = safeDisplayValue(row?.protocol || row?.protocolName, '');
       const domain = safeDisplayValue(row?.domain || row?.domainName, '');
       const schedule = getPeiMaintenanceScheduleObject(row);
-      const scheduleId = getPeiMaintenanceScheduleId(schedule) || getPersistedUuid(row?.scheduleId || row?.schedule_id);
+      const scheduleId = getPeiMaintenanceScheduleId(schedule) || getPersistedMaintenanceScheduleId(row?.scheduleId || row?.schedule_id, row);
       const appointmentId = getPersistedUuid(schedule?.appointment_id || schedule?.appointmentId);
       const display = getPeiMaintenanceScheduleDisplay(row, fallbackStatus);
       const isWaiting = display.badge === 'Aguardando futura consulta';

@@ -555,10 +555,14 @@ test('refresh da manutencao usa apenas painel target-first e ignora respostas st
   const refreshStart = patientDetailCode.indexOf('const refreshPeiMaintenancePanel');
   const refreshEnd = patientDetailCode.indexOf('useEffect(() => {', refreshStart);
   const refreshCode = patientDetailCode.slice(refreshStart, refreshEnd);
+  const actionStart = patientDetailCode.indexOf('const runPeiMaintenanceAction');
+  const actionEnd = patientDetailCode.indexOf('const handlePeiCreateMaintenancePlan', actionStart);
+  const actionCode = patientDetailCode.slice(actionStart, actionEnd);
   assert.match(refreshCode, /dataService\.getAbaMaintenancePanel\(requestPatientId, \{ page: 1, pageSize: 100 \}\)/);
   assert.match(refreshCode, /mapMaintenancePanelResponse\(panelData/);
   assert.match(refreshCode, /requestId !== peiMaintenancePanelRequestSeqRef\.current/);
   assert.match(refreshCode, /setAbaMaintenancePanel\(mappedPanel\)/);
+  assert.match(actionCode, /await refreshPeiMaintenancePanel\(\);[\s\S]*?setPeiMaintenancePanelMessage\(result\?\.message \|\| successMessage\)/m);
   assert.doesNotMatch(refreshCode, /getAbaMaintenanceOverview/);
   assert.doesNotMatch(refreshCode, /groupPeiMaintenanceRowsTargetFirst/);
   assert.doesNotMatch(refreshCode, /buildPeiMaintenanceRows/);
@@ -671,6 +675,8 @@ test('endpoint de agendamento aceita DATE APPOINTMENT ou NEXT_SESSION com upsert
   assert.match(endpointCode, /NÃ£o foi possÃ­vel agendar a manutenÃ§Ã£o|Não foi possível agendar a manutenção/);
   assert.match(endpointCode, /createMaintenanceScheduleForTarget/);
   assert.match(endpointCode, /hydrateScheduleResponse/);
+  assert.match(endpointCode, /id: scheduleId \|\| null/);
+  assert.match(endpointCode, /persisted: Boolean\(scheduleId\)/);
   assert.match(endpointCode, /targetId/);
   assert.match(endpointCode, /dueDate/);
   assert.match(endpointCode, /appointmentId/);
@@ -747,6 +753,8 @@ test('backend resolve targets de manutencao em lote com colunas explicitas', () 
   assert.match(serverCode, /technicalIssues/);
   assert.match(serverCode, /latestMasteryByTargetId/);
   assert.match(serverCode, /activeScheduleByTargetId/);
+  assert.match(serverCode, /hasPersistedMaintenanceScheduleId/);
+  assert.match(serverCode, /scheduleId: scheduleId \|\| null/);
   assert.match(serverCode, /rowTargetHasActiveSchedule/);
   assert.match(serverCode, /latestResultByTargetId/);
   assert.match(serverCode, /const kind = needsTargetReview \? 'SCHEDULE_ORFAO' : 'SCHEDULE_VALIDO'/);
@@ -782,12 +790,16 @@ test('acoes nao enviam ids sinteticos para endpoints de manutencao', () => {
   assert.match(patientDetailCode, /disabled=\{actionLoading\('confirm'\) \|\| !hasRealSchedule \|\| needsTargetReview\}/);
   assert.match(patientDetailCode, /group !== 'completed' && group !== 'confirmation' && \(/);
   assert.match(dataServiceCode, /SYNTHETIC_CLINICAL_ID_RE/);
+  assert.match(dataServiceCode, /PERSISTED_MAINTENANCE_SCHEDULE_ID_RE/);
+  assert.match(dataServiceCode, /function isPersistedMaintenanceScheduleId/);
+  assert.match(patientDetailCode, /const getPersistedMaintenanceScheduleId = \(value: any, source\?: any\) => \{/);
   assert.match(dataServiceCode, /const ensured = await dataService\.ensurePeiMaintenanceTarget\(String\(patientId\), payload\)/);
   assert.match(dataServiceCode, /return await dataService\.createMaintenanceScheduleForTarget\(String\(ensuredTargetId\)/);
   assert.match(dataServiceCode, /if \(!isPersistedUuid\(targetId\)\)[\s\S]*?Não foi possível identificar a habilidade/m);
-  assert.match(dataServiceCode, /if \(!isPersistedUuid\(scheduleId\)\)[\s\S]*?Sondagem de manutenção inválida para confirmar vínculo/m);
-  assert.match(calendarCode, /if \(!isPersistedUuid\(scheduleId\)\)/);
-  assert.match(dataServiceCode, /async confirmMaintenanceScheduleLink\(scheduleId: string[\s\S]*?if \(!isPersistedUuid\(scheduleId\)\)[\s\S]*?const endpoint = `\/api\/aba\/maintenance-schedules\/\$\{encodeURIComponent\(String\(scheduleId\)\)\}\/confirm-link`/m);
+  assert.match(dataServiceCode, /if \(!isPersistedMaintenanceScheduleId\(scheduleId\)\)[\s\S]*?Sondagem de manutenção inválida para confirmar vínculo/m);
+  assert.match(calendarCode, /isPersistedMaintenanceScheduleId/);
+  assert.match(calendarCode, /if \(!isPersistedMaintenanceScheduleId\(scheduleId\)\)/);
+  assert.match(dataServiceCode, /async confirmMaintenanceScheduleLink\(scheduleId: string[\s\S]*?if \(!isPersistedMaintenanceScheduleId\(scheduleId\)\)[\s\S]*?const endpoint = `\/api\/aba\/maintenance-schedules\/\$\{encodeURIComponent\(String\(scheduleId\)\)\}\/confirm-link`/m);
   assert.match(dataServiceCode, /async updateMaintenanceSchedule\(scheduleId: string[\s\S]*?\/api\/aba\/maintenance-schedules\/\$\{encodeURIComponent\(String\(scheduleId\)\)\}`[\s\S]*?method: 'PATCH'/m);
   assert.match(dataServiceCode, /async cancelMaintenanceSchedule\(scheduleId: string[\s\S]*?\/api\/aba\/maintenance-schedules\/\$\{encodeURIComponent\(String\(scheduleId\)\)\}\/cancel`[\s\S]*?method: 'POST'/m);
   assert.match(dataServiceCode, /async assignMaintenanceScheduleToAppointment\(scheduleId: string[\s\S]*?if \(!isPersistedUuid\(appointmentId\)\)/m);
@@ -798,7 +810,7 @@ test('acoes nao enviam ids sinteticos para endpoints de manutencao', () => {
 
 test('backend valida ids invalidos e recent-session-events local sem ruido', () => {
   assert.match(serverCode, /if \(!isUuid\(targetId\)\)[\s\S]*?Habilidade inválida para agendamento de manutenção/m);
-  assert.match(serverCode, /if \(!isUuid\(scheduleId\)\)[\s\S]*?Identificador inválido/m);
+  assert.match(serverCode, /if \(!hasPersistedMaintenanceScheduleId\(scheduleId\)\)[\s\S]*?Identificador inválido/m);
   assert.match(serverCode, /Escolha uma sessão antes de confirmar o vínculo/);
   assert.match(serverCode, /Sondagem de manutenção não encontrada/);
   assert.match(serverCode, /MISSING_CANDIDATE_APPOINTMENT/);

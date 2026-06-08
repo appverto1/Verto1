@@ -38,6 +38,12 @@ import { resolveMaintenanceTargetDisplay } from '../utils/peiMaintenancePanel';
 const isPersistedUuid = (value: any) =>
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || '').trim());
 
+const isPersistedMaintenanceScheduleId = (value: any) => {
+  const id = String(value || '').trim();
+  if (isPersistedUuid(id)) return true;
+  return /^maintenance-[a-z0-9][a-z0-9-]{7,}$/i.test(id) && !/(^|-)local-|(^|-)temp-|(^|-)tmp-|(^|-)offline-/i.test(id);
+};
+
 const normalizeAppointmentStatusKey = (status: any) =>
   String(status || 'scheduled')
     .normalize('NFD')
@@ -1413,7 +1419,7 @@ export const ClinicalAgendaBoard = ({
       ...((eventDetail || {}).event || {})
     });
     const appointmentId = String(currentEvent?.id || '').trim();
-    if (!isPersistedUuid(scheduleId)) {
+    if (!isPersistedMaintenanceScheduleId(scheduleId)) {
       setActionRequestState({ loadingId: '', error: 'Sondagem de manutenção inválida. Revise o vínculo antes de atualizar.' });
       return;
     }
