@@ -5376,9 +5376,33 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   }, [peiMaintenanceScheduledRows, peiMaintenanceTargetFirstGroups, peiMaintenanceWaitingRows]);
 
   const peiMaintenanceEligibleRows = useMemo(() => {
+    const filterEligibleRows = (rows: any[]) => dedupePeiMaintenanceRows(rows.filter((row: any) => {
+      const key = getPeiMaintenanceDisplayKey(row);
+      const targetId = getPeiMaintenancePersistedId(row?.targetId || row?.target_id || row?.aba_target_id || row?.abaTargetId);
+      const clinicalIds = getPeiMaintenanceClinicalLinkIds(row);
+      if (getPeiMaintenanceRowScheduleId(row) || row?.hasRealSchedule) return false;
+      if (targetId && peiMaintenanceUnavailableTargetIds.has(targetId)) return false;
+      if (clinicalIds.some((id: string) => peiMaintenanceUnavailableClinicalIds.has(id))) return false;
+      return !key || !peiMaintenanceUnavailableKeys.has(key);
+    }));
+
     const panelEligibleRows = Array.isArray(peiMaintenanceTargetFirstGroups.eligibleSkills)
-      ? peiMaintenanceTargetFirstGroups.eligibleSkills
+      ? dedupePeiMaintenanceRows(peiMaintenanceTargetFirstGroups.eligibleSkills)
       : [];
+
+    // Depois que o painel target-first do backend carregou, ele vira a única fonte
+    // de verdade para Elegíveis. Não misture novamente goals/linkableTargets locais,
+    // porque essas listas chegam em outro timing e causam flicker/sumiço de cards.
+    if (hasPeiMaintenancePanelForCurrentPatient) {
+      return filterEligibleRows(panelEligibleRows);
+    }
+
+    // Enquanto a aba de manutenção carrega o painel real, não renderize fallback local.
+    // Isso evita mostrar habilidades por 1s e removê-las quando o payload persistido chega.
+    if (activeTab === 'plan' && activePeiPlanSubtab === 'maintenance' && isLoadingPeiMaintenancePanel) {
+      return [];
+    }
+
     const linkableTargetByClinicalId = new Map<string, any>();
     peiMaintenanceLinkableTargets.forEach((target: any) => {
       [
@@ -5402,7 +5426,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         if (key && !linkableTargetByClinicalId.has(key)) linkableTargetByClinicalId.set(key, target);
       });
     });
-    const localRows = () => dedupePeiMaintenanceRows(peiMaintenanceHydratedGoals
+    const localEligibleRows = dedupePeiMaintenanceRows(peiMaintenanceHydratedGoals
       .map((goal: any, index: number) => {
         if (!isGoalAcquired(goal)) return null;
         const goalId = String(goal?.goal_id || goal?.goalId || goal?.id || index).trim();
@@ -5452,27 +5476,15 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         };
       })
       .filter(Boolean));
-    const localEligibleRows = localRows();
-    const panelRows = dedupePeiMaintenanceRows(panelEligibleRows);
-    const rows = hasPeiMaintenancePanelForCurrentPatient
-      ? panelRows
-      : dedupePeiMaintenanceRows(localEligibleRows.length > 0 ? localEligibleRows : buildPeiMaintenanceEligibleSkills(
-        peiMaintenanceHydratedGoals.map((goal: any) => ({
-          ...goal,
-          progressPercent: getGoalProgressPercent(goal),
-          statusLabel: isGoalAcquired(goal) ? 'Adquirido' : goal?.status
-        }))
-      ));
-    return dedupePeiMaintenanceRows(rows.filter((row: any) => {
-      const key = getPeiMaintenanceDisplayKey(row);
-      const targetId = getPeiMaintenancePersistedId(row?.targetId || row?.target_id || row?.aba_target_id || row?.abaTargetId);
-      const clinicalIds = getPeiMaintenanceClinicalLinkIds(row);
-      if (getPeiMaintenanceRowScheduleId(row) || row?.hasRealSchedule) return false;
-      if (targetId && peiMaintenanceUnavailableTargetIds.has(targetId)) return false;
-      if (clinicalIds.some((id: string) => peiMaintenanceUnavailableClinicalIds.has(id))) return false;
-      return !key || !peiMaintenanceUnavailableKeys.has(key);
-    }));
-  }, [hasPeiMaintenancePanelForCurrentPatient, peiMaintenanceHydratedGoals, peiMaintenanceLinkableTargets, peiMaintenanceTargetFirstGroups.eligibleSkills, peiMaintenanceUnavailableClinicalIds, peiMaintenanceUnavailableKeys, peiMaintenanceUnavailableTargetIds]);
+    const fallbackRows = localEligibleRows.length > 0 ? localEligibleRows : buildPeiMaintenanceEligibleSkills(
+      peiMaintenanceHydratedGoals.map((goal: any) => ({
+        ...goal,
+        progressPercent: getGoalProgressPercent(goal),
+        statusLabel: isGoalAcquired(goal) ? 'Adquirido' : goal?.status
+      }))
+    );
+    return filterEligibleRows(dedupePeiMaintenanceRows(fallbackRows));
+  }, [activePeiPlanSubtab, activeTab, hasPeiMaintenancePanelForCurrentPatient, isLoadingPeiMaintenancePanel, peiMaintenanceHydratedGoals, peiMaintenanceLinkableTargets, peiMaintenanceTargetFirstGroups.eligibleSkills, peiMaintenanceUnavailableClinicalIds, peiMaintenanceUnavailableKeys, peiMaintenanceUnavailableTargetIds]);
 
   const peiGeneralizationRows = useMemo(() => {
     const maintainedRows = peiMaintenanceRows.filter((row: any) => row.isMaintained);
@@ -5838,12 +5850,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       row?.goal?.abaTargetId ||
       row?.goal?.target_id ||
       row?.goal?.targetId ||
-      row?.goal?.id ||
       row?.source?.target_id ||
       row?.source?.targetId ||
       row?.source?.aba_target_id ||
       row?.source?.abaTargetId ||
-      row?.source?.id ||
       row?.nextSchedule?.target_id ||
       row?.nextSchedule?.targetId ||
       row?.activeSchedule?.target_id ||
@@ -6984,7 +6994,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             <h4 className={`text-sm font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>Habilidades elegíveis para manutenção</h4>
             <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${isPanelDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>{peiMaintenanceEligibleRows.length}</span>
           </div>
-          {peiMaintenanceEligibleRows.length === 0 ? (
+          {shouldShowPeiMaintenancePanelLoading ? (
+            <p className={`rounded-2xl border p-5 text-sm ${isPanelDark ? 'border-slate-700 bg-slate-900/40 text-slate-400' : 'border-slate-100 bg-slate-50 text-slate-500'}`}>
+              Carregando manutenção persistida...
+            </p>
+          ) : peiMaintenanceEligibleRows.length === 0 ? (
             <p className={`rounded-2xl border p-5 text-sm ${isPanelDark ? 'border-slate-700 bg-slate-900/40 text-slate-400' : 'border-slate-100 bg-slate-50 text-slate-500'}`}>
               Nenhuma habilidade adquirida no Ensino no momento.
             </p>

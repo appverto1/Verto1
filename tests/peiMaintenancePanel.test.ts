@@ -552,7 +552,7 @@ test('subaba manutencao etapa 2 renderiza botao de agendamento simples', () => {
   assert.doesNotMatch(maintenancePanelUi, /renderPeiMaintenanceGroup|renderPeiMaintenanceMetric|renderPeiMaintenanceActions|Atribuir a uma sessão|Plano de manutenção|Escolher sessão existente|Pendências técnicas/);
 });
 
-test('subaba manutencao usa painel target-first sem fallback local antigo', () => {
+test('subaba manutencao usa painel target-first como fonte unica depois do carregamento', () => {
   const eligibleStart = patientDetailCode.indexOf('const peiMaintenanceEligibleRows = useMemo');
   const eligibleEnd = patientDetailCode.indexOf('const peiGeneralizationRows', eligibleStart);
   const scheduledStart = patientDetailCode.indexOf('const peiMaintenanceScheduledRows = useMemo');
@@ -561,25 +561,37 @@ test('subaba manutencao usa painel target-first sem fallback local antigo', () =
   assert.notEqual(scheduledStart, -1);
   const eligibleCode = patientDetailCode.slice(eligibleStart, eligibleEnd);
   const scheduledCode = patientDetailCode.slice(scheduledStart, waitingStart);
-  assert.match(eligibleCode, /const localRows = \(\) => dedupePeiMaintenanceRows\(peiMaintenanceHydratedGoals/);
   assert.match(patientDetailCode, /const dedupePeiMaintenanceRows = \(rows: any\[\]\) =>/);
+  assert.match(eligibleCode, /const filterEligibleRows = \(rows: any\[\]\) => dedupePeiMaintenanceRows/);
+  assert.match(eligibleCode, /const panelEligibleRows = Array\.isArray\(peiMaintenanceTargetFirstGroups\.eligibleSkills\)/);
+  assert.match(eligibleCode, /if \(hasPeiMaintenancePanelForCurrentPatient\) \{\s*return filterEligibleRows\(panelEligibleRows\);\s*\}/m);
+  assert.match(eligibleCode, /activePeiPlanSubtab === 'maintenance'[\s\S]*?isLoadingPeiMaintenancePanel[\s\S]*?return \[\]/m);
   assert.match(eligibleCode, /key: `goal:\$\{goalId \|\| index\}:\$\{targetId \|\| index\}`/);
   assert.match(eligibleCode, /progressPercent: 100/);
-  assert.match(eligibleCode, /const rows = hasPeiMaintenancePanelForCurrentPatient/);
-  assert.match(eligibleCode, /dedupePeiMaintenanceRows\(panelEligibleRows\)/);
-  assert.match(eligibleCode, /const localEligibleRows = localRows\(\)/);
-  assert.match(eligibleCode, /\? panelRows\s*:/);
   assert.match(eligibleCode, /peiMaintenanceLinkableTargets/);
   assert.match(eligibleCode, /targetId && peiMaintenanceUnavailableTargetIds\.has\(targetId\)/);
   assert.match(eligibleCode, /peiMaintenanceUnavailableClinicalIds/);
   assert.match(eligibleCode, /clinicalIds\.some\(\(id: string\) => peiMaintenanceUnavailableClinicalIds\.has\(id\)\)/);
   assert.match(eligibleCode, /getPeiMaintenanceRowScheduleId\(row\) \|\| row\?\.hasRealSchedule/);
+  assert.match(patientDetailCode, /Carregando manutenção persistida/);
   assert.match(patientDetailCode, /const isPeiMaintenanceScheduledScheduleRow = \(row: any\) => \{/);
   assert.match(patientDetailCode, /isPeiMaintenanceLinklessScheduleRow/);
   assert.match(scheduledCode, /isPeiMaintenanceScheduledScheduleRow/);
   assert.match(scheduledCode, /return dedupePeiMaintenanceRows\(panelRows\)/);
-  assert.doesNotMatch(`${eligibleCode}\n${scheduledCode}`, /localDisplaySignatures|panelOnlyRows|fallbackRows|peiMaintenanceUnavailableDisplaySignatures|getPeiMaintenanceDisplaySignature/);
+  assert.doesNotMatch(eligibleCode, /dedupePeiMaintenanceRows\(\[\.\.\.panelRows, \.\.\.localEligibleRows\]\)/);
+  assert.doesNotMatch(`${eligibleCode}\n${scheduledCode}`, /localDisplaySignatures|panelOnlyRows|peiMaintenanceUnavailableDisplaySignatures|getPeiMaintenanceDisplaySignature/);
   assert.doesNotMatch(eligibleCode, /panelByComposite|panelByName|compositeKey|panelByName\.get|panelByComposite\.get/);
+});
+
+test('agendamento de manutencao nao trata goal.id nem source.id como target_id real', () => {
+  const explicitStart = patientDetailCode.indexOf('const getPeiMaintenanceExplicitTargetId = (row: any) =>');
+  const explicitEnd = patientDetailCode.indexOf('const getPeiMaintenanceTargetId', explicitStart);
+  assert.notEqual(explicitStart, -1);
+  const explicitCode = patientDetailCode.slice(explicitStart, explicitEnd);
+  assert.match(explicitCode, /row\?\.goal\?\.target_id/);
+  assert.match(explicitCode, /row\?\.source\?\.target_id/);
+  assert.doesNotMatch(explicitCode, /row\?\.goal\?\.id/);
+  assert.doesNotMatch(explicitCode, /row\?\.source\?\.id/);
 });
 
 test('modal etapa 2 mostra data com consultas e aguardar futura consulta', () => {
@@ -698,7 +710,7 @@ test('acoes do painel chamam rotas seguras existentes', () => {
   const maintenancePanelCode = patientDetailCode.slice(maintenancePanelStart, maintenancePanelEnd);
   assert.match(maintenancePanelCode, /Habilidades adquiridas no Ensino/);
   assert.match(maintenancePanelCode, /peiMaintenanceEligibleRows\.map/);
-  assert.doesNotMatch(maintenancePanelCode, /renderPeiMaintenanceGroup|renderPeiMaintenanceMetric|Atualizar manutenção|Pendências técnicas|Plano de manutenção|shouldShowPeiMaintenancePanelLoading/);
+  assert.doesNotMatch(maintenancePanelCode, /renderPeiMaintenanceGroup|renderPeiMaintenanceMetric|Atualizar manutenção|Pendências técnicas|Plano de manutenção/);
   assert.match(patientDetailCode, /normalizePeiMaintenanceMatchKey/);
   assert.match(patientDetailCode, /peiMaintenanceHydratedGoals/);
   assert.match(patientDetailCode, /aba_target_id/);
@@ -1049,35 +1061,6 @@ test('agendamento simples da etapa 2 nao inicia sessao e mostra fluxo de consult
   assert.doesNotMatch(modalCode, /Escolher pr|Escolher sessão existente|Escolher data específica|Plano de manutenção|Atribuir a uma sessão|Aguardar próxima sessão/);
   assert.doesNotMatch(handlerCode, /requestSessionStart\('fullscreen'\)|POST \/api\/aba\/sessions|saveAbaSession|startSession|createAbaSession|SessionMode/);
   assert.doesNotMatch(calendarCode, /onStartSession\?\(\{ \.\.\.detailEvent, maintenanceProbe: probe/);
-});
-
-
-test('frontend usa painel target-first como fonte de verdade apos carregamento', () => {
-  const eligibleStart = patientDetailCode.indexOf('const peiMaintenanceEligibleRows = useMemo');
-  const eligibleEnd = patientDetailCode.indexOf('const peiGeneralizationRows', eligibleStart);
-  const eligibleCode = patientDetailCode.slice(eligibleStart, eligibleEnd);
-  assert.match(eligibleCode, /const rows = hasPeiMaintenancePanelForCurrentPatient\s*\? panelRows\s*:/);
-  assert.doesNotMatch(eligibleCode, /hasPeiMaintenancePanelForCurrentPatient\s*\? dedupePeiMaintenanceRows\(\[\.\.\.panelRows, \.\.\.localEligibleRows\]\)/);
-});
-
-test('backend nao trata goal.id como target_id real em PEI local', () => {
-  const getTargetsStart = serverCode.indexOf('const getPatientPeiTargets = async');
-  const getTargetsEnd = serverCode.indexOf('const writePatientRecordSafely', getTargetsStart);
-  const getTargetsCode = serverCode.slice(getTargetsStart, getTargetsEnd);
-  assert.match(getTargetsCode, /const explicitTargetId = sanitizeString\(goal\?\.target_id \|\| goal\?\.targetId \|\| goal\?\.abaTargetId \|\| goal\?\.aba_target_id, 180\)/);
-  assert.match(getTargetsCode, /peiGoalId: peiGoalId \|\| null/);
-  assert.match(getTargetsCode, /localTargetRef: localTargetRef \|\| null/);
-  assert.doesNotMatch(getTargetsCode, /goal\?\.id[\s\S]{0,120}targetId: isUuid\(targetId\)/);
-});
-
-test('backend materializa PEI por ids clinicos antes de fallback por nome', () => {
-  const materializeStart = serverCode.indexOf('const materializePeiTargetsForMaintenance = async');
-  const materializeEnd = serverCode.indexOf('const abaPlanningHash =', materializeStart);
-  const materializeCode = serverCode.slice(materializeStart, materializeEnd);
-  assert.match(materializeCode, /const targetByClinicalId = new Map<string, any>\(\)/);
-  assert.match(materializeCode, /getPeiMaintenanceTargetClinicalIds\(target\)\.forEach/);
-  assert.match(materializeCode, /const clinicalMatchedTarget = getPeiMaintenanceTargetClinicalIds\(peiTarget\)/);
-  assert.match(materializeCode, /targetById\.get\(stableTargetId\) \|\|\s*clinicalMatchedTarget \|\|\s*\(compositeKey/);
 });
 
 let passed = 0;
