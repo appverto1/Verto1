@@ -5161,6 +5161,17 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     });
     return Array.from(byKey.values());
   };
+  const getPeiMaintenanceScheduleStatusKey = (row: any) =>
+    String(getPeiMaintenanceScheduleObject(row)?.status || row?.nextProbe?.status || row?.status || '').trim().toUpperCase();
+  const isPeiMaintenanceLinklessScheduleRow = (row: any) => {
+    const status = getPeiMaintenanceScheduleStatusKey(row);
+    return ['PENDING_NEXT_SESSION', 'PENDING_LINK', 'PENDING_SCHEDULING', 'UNSCHEDULED', 'PENDING'].includes(status) || row?.group === 'unlinked';
+  };
+  const isPeiMaintenanceScheduledScheduleRow = (row: any) => {
+    if (!getPeiMaintenanceRowScheduleId(row) && !row?.hasRealSchedule) return false;
+    if (row?.needsTargetReview || row?.isRegressionRisk || row?.group === 'completed') return false;
+    return !isPeiMaintenanceLinklessScheduleRow(row);
+  };
 
   const peiMaintenanceHydratedGoals = useMemo(() => (
     peiGoals.map((goal: any) => {
@@ -5254,10 +5265,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     const panelRows = [
       ...(peiMaintenanceTargetFirstGroups.scheduled || []),
       ...(peiMaintenanceTargetFirstGroups.overdue || [])
-    ];
+    ].filter(isPeiMaintenanceScheduledScheduleRow);
     const panelKeys = new Set(panelRows.map((row: any) => getPeiMaintenanceDedupKey(row)).filter(Boolean));
     const fallbackRows = peiMaintenanceRows.filter((row: any) => {
-      if (!row?.hasRealSchedule || row?.needsTargetReview || row?.isRegressionRisk || row?.group === 'completed' || row?.group === 'unlinked') return false;
+      if (!isPeiMaintenanceScheduledScheduleRow(row)) return false;
       const key = getPeiMaintenanceDedupKey(row);
       return !key || !panelKeys.has(key);
     });
@@ -5265,10 +5276,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   }, [peiMaintenanceRows, peiMaintenanceTargetFirstGroups]);
 
   const peiMaintenanceWaitingRows = useMemo(() => {
-    const panelRows = peiMaintenanceTargetFirstGroups.waitingNextSession || [];
+    const panelRows = [
+      ...(peiMaintenanceTargetFirstGroups.waitingNextSession || []),
+      ...(peiMaintenanceTargetFirstGroups.scheduled || []),
+      ...(peiMaintenanceTargetFirstGroups.overdue || [])
+    ].filter((row: any) => Boolean(getPeiMaintenanceRowScheduleId(row) || row?.hasRealSchedule) && isPeiMaintenanceLinklessScheduleRow(row));
     const panelKeys = new Set(panelRows.map((row: any) => getPeiMaintenanceDedupKey(row)).filter(Boolean));
     const fallbackRows = peiMaintenanceRows.filter((row: any) => {
-      if (!row?.hasRealSchedule || row?.needsTargetReview || row?.group !== 'unlinked') return false;
+      if (!row?.hasRealSchedule || row?.needsTargetReview || !isPeiMaintenanceLinklessScheduleRow(row)) return false;
       const key = getPeiMaintenanceDedupKey(row);
       return !key || !panelKeys.has(key);
     });
@@ -5386,6 +5401,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       const key = getPeiMaintenanceDisplayKey(row);
       const targetId = getPeiMaintenancePersistedId(row?.targetId || row?.target_id || row?.aba_target_id || row?.abaTargetId);
       const displaySignature = getPeiMaintenanceDisplaySignature(row);
+      if (getPeiMaintenanceRowScheduleId(row) || row?.hasRealSchedule) return false;
       if (targetId && peiMaintenanceUnavailableTargetIds.has(targetId)) return false;
       if (displaySignature && peiMaintenanceUnavailableDisplaySignatures.has(displaySignature)) return false;
       return !key || !peiMaintenanceUnavailableKeys.has(key);
@@ -5837,8 +5853,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return dateValue ? formatPeiMaintenanceDateValue(dateValue) : 'Data indisponível';
   };
 
-  const getPeiMaintenanceScheduleObject = (row: any) =>
-    row?.nextSchedule || row?.activeSchedule || row?.schedule || (row?.scheduleId || row?.schedule_id ? row : null);
+  function getPeiMaintenanceScheduleObject(row: any) {
+    return row?.nextSchedule || row?.activeSchedule || row?.schedule || (row?.scheduleId || row?.schedule_id ? row : null);
+  }
 
   const getPeiMaintenanceScheduleClinicalDateValue = (schedule: any) => {
     const rawPayload = schedule?.raw_payload || schedule?.rawPayload || {};
@@ -6235,15 +6252,15 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const handlePeiRemoveScheduledMaintenanceAppointmentLink = (row: any) => {
     const schedule = getPeiMaintenanceScheduleObject(row);
     const scheduleId = getPeiMaintenanceScheduleId(schedule) || getPersistedMaintenanceScheduleId(row?.scheduleId || row?.schedule_id, row);
-    const dueDate = getPeiMaintenanceScheduleClinicalDateValue(schedule) || getPeiMaintenanceAppointmentDateValue(schedule?.appointment || schedule);
-    if (!scheduleId || !dueDate) {
+    const appointmentId = getPersistedUuid(schedule?.appointment_id || schedule?.appointmentId);
+    if (!scheduleId) {
       setPeiMaintenancePanelMessage('Não foi possível remover o vínculo desta sondagem.');
       return;
     }
     void runPeiMaintenanceAction(
       `unlink-${scheduleId}`,
-      () => dataService.updateMaintenanceSchedule(scheduleId, { mode: 'DATE', dueDate }),
-      'Agendamento de manutenção atualizado.'
+      () => dataService.skipMaintenanceScheduleLink(scheduleId, appointmentId ? { appointmentId } : {}),
+      'Sondagem sem consulta vinculada.'
     );
   };
 

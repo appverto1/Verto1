@@ -451,8 +451,11 @@ test('subaba manutencao deduplica ensino local e preserva agendadas do painel an
   assert.match(eligibleCode, /const rows = dedupePeiMaintenanceRows\(schedulableLocalRows\.length > 0 \? \[\.\.\.schedulableLocalRows, \.\.\.panelOnlyRows\]/);
   assert.match(eligibleCode, /peiMaintenanceUnavailableDisplaySignatures/);
   assert.match(eligibleCode, /getPeiMaintenanceDisplaySignature/);
+  assert.match(eligibleCode, /getPeiMaintenanceRowScheduleId\(row\) \|\| row\?\.hasRealSchedule/);
   assert.match(scheduledCode, /const fallbackRows = peiMaintenanceRows\.filter/);
-  assert.match(scheduledCode, /row\?\.hasRealSchedule/);
+  assert.match(patientDetailCode, /const isPeiMaintenanceScheduledScheduleRow = \(row: any\) => \{/);
+  assert.match(patientDetailCode, /isPeiMaintenanceLinklessScheduleRow/);
+  assert.match(scheduledCode, /isPeiMaintenanceScheduledScheduleRow/);
   assert.match(scheduledCode, /return dedupePeiMaintenanceRows\(\[\.\.\.panelRows, \.\.\.fallbackRows\]\)/);
   assert.doesNotMatch(eligibleCode, /panelByComposite|panelByName|compositeKey|panelByName\.get|panelByComposite\.get/);
 });
@@ -550,6 +553,8 @@ test('acoes do painel chamam rotas seguras existentes', () => {
   assert.match(patientDetailCode, /Editar agendamento/);
   assert.match(patientDetailCode, /Cancelar sondagem/);
   assert.match(patientDetailCode, /Mover para futura consulta/);
+  assert.match(patientDetailCode, /dataService\.skipMaintenanceScheduleLink\(scheduleId, appointmentId \? \{ appointmentId \} : \{\}\)/);
+  assert.doesNotMatch(patientDetailCode, /handlePeiRemoveScheduledMaintenanceAppointmentLink[\s\S]*?dataService\.updateMaintenanceSchedule\(scheduleId, \{ mode: 'DATE'/m);
   assert.match(patientDetailCode, /Sondagem vinculada à consulta/);
   assert.match(patientDetailCode, /Sondagem por data/);
   assert.match(patientDetailCode, /Agendamentos duplicados para revisão/);
