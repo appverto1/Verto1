@@ -685,6 +685,14 @@ test('endpoint de agendamento aceita DATE APPOINTMENT ou NEXT_SESSION com upsert
   assert.match(helperCode, /NÃ£o foi possÃ­vel agendar manutenÃ§Ã£o porque a habilidade nÃ£o foi identificada corretamente|Não foi possível agendar manutenção porque a habilidade não foi identificada corretamente/);
   assert.doesNotMatch(helperCode, /maintenance_schedule_target_fallback|fallbackTarget|writeAbaRowWithSchemaFallback\('aba_targets', fallbackTarget, 'upsert'\)/);
   assert.match(helperCode, /\.eq\('organization_id', organizationId\)[\s\S]*?\.eq\('patient_id', patientId\)[\s\S]*?\.eq\('target_id', targetId\)[\s\S]*?\.in\('status', ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES\)/m);
+  assert.match(helperCode, /getPersistedMaintenanceScheduleId/);
+  assert.match(helperCode, /existingSequenceRows[\s\S]*?getPersistedMaintenanceScheduleId/);
+  assert.match(helperCode, /existingConflictScheduleId = getPersistedMaintenanceScheduleId\(existingConflictSchedule\)/);
+  assert.doesNotMatch(helperCode, /isUuid\(existingConflictScheduleId\)/);
+  assert.match(helperCode, /requestedMasteryEvaluationId/);
+  assert.match(helperCode, /nextSessionMasteryEvaluationId[\s\S]*?next-session/m);
+  assert.match(helperCode, /customMasteryEvaluationId[\s\S]*?custom-date/m);
+  assert.match(helperCode, /mastery_evaluation_id: customMasteryEvaluationId/);
   assert.match(helperCode, /order\('updated_at', \{ ascending: false \}\)[\s\S]*?limit\(20\)/m);
   assert.match(helperCode, /duplicateRows/);
   assert.match(helperCode, /MAINTENANCE_SCHEDULE_DUPLICATE_DETECTED/);

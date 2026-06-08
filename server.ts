@@ -28154,6 +28154,15 @@ async function startServer() {
     );
   };
 
+  const getPersistedMaintenanceScheduleId = (scheduleOrId: any) => {
+    const rawId = scheduleOrId && typeof scheduleOrId === 'object'
+      ? scheduleOrId.id || scheduleOrId.schedule_id || scheduleOrId.scheduleId
+      : scheduleOrId;
+    const id = sanitizeString(rawId, 180);
+    if (!id || ['null', 'undefined', '[object object]'].includes(id.toLowerCase())) return '';
+    return id;
+  };
+
   const buildLegacyMaintenanceScheduleRow = (row: any, now: string, error?: any) => {
     const scheduledFor = row?.scheduled_for || row?.scheduledFor || row?.target_due_date || row?.targetDueDate || row?.due_date || row?.dueDate || now;
     const targetDueDate = row?.target_due_date || row?.targetDueDate || scheduledFor;
@@ -28227,8 +28236,8 @@ async function startServer() {
       throw result.error;
     }
     const rows = Array.isArray(result.data) ? result.data : [];
-    return rows.find((item: any) => ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES.includes(normalizeAbaMaintenanceScheduleStatus(item?.status))) ||
-      rows.find((item: any) => isUuid(sanitizeString(item?.id, 180))) ||
+    return rows.find((item: any) => ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES.includes(normalizeAbaMaintenanceScheduleStatus(item?.status)) && getPersistedMaintenanceScheduleId(item)) ||
+      rows.find((item: any) => getPersistedMaintenanceScheduleId(item)) ||
       null;
   };
 
@@ -28280,7 +28289,8 @@ async function startServer() {
     if (!target?.id) {
       return { ok: false, status: 404, error: 'Não foi possível agendar manutenção porque a habilidade não foi identificada corretamente.' };
     }
-    const masteryEvaluationId = sanitizeString(params.masteryEvaluationId, 180) || `manual-${targetId}`;
+    const requestedMasteryEvaluationId = sanitizeString(params.masteryEvaluationId, 180);
+    const masteryEvaluationId = requestedMasteryEvaluationId || `manual-${targetId}`;
     const rows: any[] = [];
 
     if (scheduleMode === 'DEFAULT_SEQUENCE') {
@@ -28303,7 +28313,7 @@ async function startServer() {
         return existingSequenceQuery;
       });
       if (existingSequenceResult.error && !hasMissingFinancialSchema(existingSequenceResult.error)) throw existingSequenceResult.error;
-      const existingSequenceRows = (existingSequenceResult.data || []).filter((item: any) => isUuid(sanitizeString(item?.id, 180)));
+      const existingSequenceRows = (existingSequenceResult.data || []).filter((item: any) => getPersistedMaintenanceScheduleId(item));
       if (existingSequenceRows.length > 0) {
         const enrichedRows = await enrichMaintenanceRowsWithTargetDisplay(existingSequenceRows, clinicId, organizationId, { role: 'owner' });
         return { ok: true, status: 200, data: enrichedRows };
@@ -28330,10 +28340,10 @@ async function startServer() {
       });
       if (existingResult.error && !hasMissingFinancialSchema(existingResult.error)) throw existingResult.error;
       const existingSchedule = Array.isArray(existingResult.data)
-        ? existingResult.data.find((item: any) => isUuid(sanitizeString(item?.id, 180)))
+        ? existingResult.data.find((item: any) => getPersistedMaintenanceScheduleId(item))
         : null;
       const duplicateRows = Array.isArray(existingResult.data)
-        ? existingResult.data.filter((item: any) => isUuid(sanitizeString(item?.id, 180))).slice(1)
+        ? existingResult.data.filter((item: any) => getPersistedMaintenanceScheduleId(item)).slice(1)
         : [];
       if (duplicateRows.length > 0) {
         void persistActivityLog({
@@ -28374,7 +28384,7 @@ async function startServer() {
           updated_at: now
         });
         let update = await updateAbaScheduleWithSchemaFallback(
-          sanitizeString(existingSchedule.id, 180),
+          getPersistedMaintenanceScheduleId(existingSchedule),
           nextSessionPatch,
           clinicId,
           organizationId,
@@ -28382,7 +28392,7 @@ async function startServer() {
         );
         if (update.error && isLegacyMaintenanceScheduleConstraintError(update.error)) {
           update = await updateAbaScheduleWithSchemaFallback(
-            sanitizeString(existingSchedule.id, 180),
+            getPersistedMaintenanceScheduleId(existingSchedule),
             buildLegacyMaintenanceScheduleRow(nextSessionPatch, now, update.error),
             clinicId,
             organizationId,
@@ -28450,10 +28460,10 @@ async function startServer() {
       });
       if (existingResult.error && !hasMissingFinancialSchema(existingResult.error)) throw existingResult.error;
       const existingSchedule = Array.isArray(existingResult.data)
-        ? existingResult.data.find((item: any) => isUuid(sanitizeString(item?.id, 180)))
+        ? existingResult.data.find((item: any) => getPersistedMaintenanceScheduleId(item))
         : null;
       const duplicateRows = Array.isArray(existingResult.data)
-        ? existingResult.data.filter((item: any) => isUuid(sanitizeString(item?.id, 180))).slice(1)
+        ? existingResult.data.filter((item: any) => getPersistedMaintenanceScheduleId(item)).slice(1)
         : [];
       if (duplicateRows.length > 0) {
         void persistActivityLog({
@@ -28493,7 +28503,7 @@ async function startServer() {
           updated_at: now
         });
         let update = await updateAbaScheduleWithSchemaFallback(
-          sanitizeString(existingSchedule.id, 180),
+          getPersistedMaintenanceScheduleId(existingSchedule),
           customDatePatch,
           clinicId,
           organizationId,
@@ -28501,7 +28511,7 @@ async function startServer() {
         );
         if (update.error && isLegacyMaintenanceScheduleConstraintError(update.error)) {
           update = await updateAbaScheduleWithSchemaFallback(
-            sanitizeString(existingSchedule.id, 180),
+            getPersistedMaintenanceScheduleId(existingSchedule),
             buildLegacyMaintenanceScheduleRow(customDatePatch, now, update.error),
             clinicId,
             organizationId,
@@ -28596,14 +28606,15 @@ async function startServer() {
         }));
       }
     } else if (scheduleMode === 'NEXT_PATIENT_SESSION' || scheduleMode === 'NEXT_AVAILABLE_SESSION') {
+      const nextSessionMasteryEvaluationId = requestedMasteryEvaluationId || `manual-${targetId}-${abaPlanningHash([patientId, 'next-session', now])}`;
       rows.push(cleanObject({
         id: `maintenance-${abaPlanningHash([targetId, 'next-session-pending', patientId, now])}`,
         organization_id: organizationId,
         clinic_id: clinicId,
         patient_id: patientId,
         target_id: targetId,
-        mastery_evaluation_id: masteryEvaluationId,
-        source_mastery_evaluation_id: masteryEvaluationId,
+        mastery_evaluation_id: nextSessionMasteryEvaluationId,
+        source_mastery_evaluation_id: requestedMasteryEvaluationId || null,
         schedule_day: 1,
         interval_label: 'Proxima sessao',
         due_date: null,
@@ -28646,14 +28657,15 @@ async function startServer() {
         : sanitizeClinicalDate(params.dueDate || now);
       const dueDateMs = scheduledFor ? new Date(dueDate).getTime() : parseClinicalDateMs(dueDate);
       const nowClinicalMs = parseClinicalDateMs(now);
+      const customMasteryEvaluationId = requestedMasteryEvaluationId || `manual-${targetId}-${abaPlanningHash([patientId, appointmentId || dueDate, 'custom-date'])}`;
       rows.push(cleanObject({
-        id: stableAbaUuidFromParts('aba-maintenance-schedule-custom', [organizationId, patientId, targetId, masteryEvaluationId, dueDate, appointmentId || 'date']),
+        id: stableAbaUuidFromParts('aba-maintenance-schedule-custom', [organizationId, patientId, targetId, customMasteryEvaluationId, dueDate, appointmentId || 'date']),
         organization_id: organizationId,
         clinic_id: clinicId,
         patient_id: patientId,
         target_id: targetId,
-        mastery_evaluation_id: masteryEvaluationId,
-        source_mastery_evaluation_id: masteryEvaluationId,
+        mastery_evaluation_id: customMasteryEvaluationId,
+        source_mastery_evaluation_id: requestedMasteryEvaluationId || null,
         schedule_day: Math.max(1, Math.ceil(((Number.isFinite(dueDateMs) ? dueDateMs : Date.now()) - (Number.isFinite(nowClinicalMs) ? nowClinicalMs : Date.now())) / 86_400_000)),
         interval_label: 'Data personalizada',
         due_date: scheduledFor || dueDate,
@@ -28685,8 +28697,8 @@ async function startServer() {
       let result = await saveMaintenanceScheduleRowWithLegacyFallback(row, now);
       if (result.error && isUniqueMaintenanceScheduleConflict(result.error)) {
         const existingConflictSchedule = await findMaintenanceScheduleForUniqueConflict(row, clinicId, organizationId, patientId);
-        const existingConflictScheduleId = sanitizeString(existingConflictSchedule?.id, 180);
-        if (isUuid(existingConflictScheduleId)) {
+        const existingConflictScheduleId = getPersistedMaintenanceScheduleId(existingConflictSchedule);
+        if (existingConflictScheduleId) {
           const existingRaw = existingConflictSchedule?.raw_payload && typeof existingConflictSchedule.raw_payload === 'object'
             ? existingConflictSchedule.raw_payload
             : {};
@@ -28730,7 +28742,7 @@ async function startServer() {
               patientId
             );
           }
-          if (!conflictUpdate.error && (conflictUpdate.data as any)?.id) {
+          if (!conflictUpdate.error && getPersistedMaintenanceScheduleId(conflictUpdate.data)) {
             result = {
               data: { id: existingConflictScheduleId },
               error: null,
