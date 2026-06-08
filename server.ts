@@ -21780,6 +21780,7 @@ async function startServer() {
     'REGRESSION_RISK',
     'MISSED'
   ];
+  const ABA_LINKLESS_MAINTENANCE_SCHEDULE_STATUSES = new Set(['PENDING_NEXT_SESSION', 'PENDING_LINK', 'PENDING_SCHEDULING', 'UNSCHEDULED', 'PENDING']);
   const ABA_MAINTENANCE_PROBE_STATUSES = new Set(['MAINTAINED', 'WATCH', 'REGRESSION_RISK']);
   const ABA_PLANNING_FOCUS_TYPES = new Set(['MAINTENANCE', 'NEW_SKILLS', 'BEHAVIOR_REDUCTION', 'GENERALIZATION', 'MASTERY_REVIEW', 'BALANCED']);
   const ABA_RECOMMENDATION_TYPES = new Set(['MAINTENANCE_PROBE', 'REGRESSION_ATTENTION', 'MASTERY_REVIEW', 'CONTINUE_TRAINING', 'INTRODUCE_NEW_TARGET', 'BEHAVIOR_MONITORING', 'ABC_COLLECTION', 'PROMPT_FADING', 'GENERALIZATION']);
@@ -28167,35 +28168,6 @@ async function startServer() {
   };
   const hasPersistedMaintenanceScheduleId = (scheduleOrId: any) => Boolean(getPersistedMaintenanceScheduleId(scheduleOrId));
 
-  const getMaintenanceDisplayParts = (row: any) => {
-    const raw = row?.raw_payload && typeof row.raw_payload === 'object' ? row.raw_payload : {};
-    const target = row?.target && typeof row.target === 'object' ? row.target : {};
-    return {
-      targetName: sanitizeString(
-        row?.targetName || row?.target_name || row?.name || row?.title || row?.skillName || row?.skill_name ||
-          target?.name || target?.description || raw.targetName || raw.target_name,
-        240
-      ),
-      protocolName: sanitizeString(
-        row?.protocolName || row?.protocol || row?.protocol_title || row?.protocolTitle ||
-          target?.protocol_title || raw.protocolName || raw.protocolTitle || raw.protocol_title,
-        240
-      ),
-      domainName: sanitizeString(
-        row?.domainName || row?.domain || row?.domain_name || row?.programName || row?.program_name ||
-          target?.domain_name || raw.domainName || raw.domain_name,
-        240
-      )
-    };
-  };
-
-  const getMaintenanceDisplayCompositeKey = (row: any) => {
-    const parts = getMaintenanceDisplayParts(row);
-    return [parts.targetName, parts.protocolName, parts.domainName].map(normalizePeiTargetMatchKey).filter(Boolean).join('|');
-  };
-
-  const getMaintenanceDisplayNameKey = (row: any) => normalizePeiTargetMatchKey(getMaintenanceDisplayParts(row).targetName);
-
   const buildLegacyMaintenanceScheduleRow = (row: any, now: string, error?: any) => {
     const scheduledFor = row?.scheduled_for || row?.scheduledFor || row?.target_due_date || row?.targetDueDate || row?.due_date || row?.dueDate || now;
     const targetDueDate = row?.target_due_date || row?.targetDueDate || scheduledFor;
@@ -31442,19 +31414,9 @@ async function startServer() {
           activeSchedules = await enrichMaintenanceRowsWithTargetDisplay(activeScheduleResult.data || [], clinicId, organizationId, req.session.user);
         }
         const activeScheduleByTargetId = new Map<string, any>();
-        const activeScheduleByCompositeKey = new Map<string, any>();
-        const activeScheduleByNameKey = new Map<string, any>();
         const duplicateSchedulesForReview: any[] = [];
         activeSchedules.forEach((schedule: any) => {
           const scheduleTargetId = sanitizeString(schedule?.target_id || schedule?.targetId, 180);
-          const scheduleCompositeKey = getMaintenanceDisplayCompositeKey(schedule);
-          const scheduleNameKey = getMaintenanceDisplayNameKey(schedule);
-          if (scheduleCompositeKey && !activeScheduleByCompositeKey.has(scheduleCompositeKey)) {
-            activeScheduleByCompositeKey.set(scheduleCompositeKey, schedule);
-          }
-          if (scheduleNameKey && !activeScheduleByNameKey.has(scheduleNameKey)) {
-            activeScheduleByNameKey.set(scheduleNameKey, schedule);
-          }
           if (!isUuid(scheduleTargetId)) return;
           if (!activeScheduleByTargetId.has(scheduleTargetId)) {
             activeScheduleByTargetId.set(scheduleTargetId, schedule);
@@ -31520,10 +31482,6 @@ async function startServer() {
         const findActiveScheduleForSkill = (skill: any) => {
           const skillTargetId = sanitizeString(skill?.targetId || skill?.target_id, 180);
           if (isUuid(skillTargetId) && activeScheduleByTargetId.has(skillTargetId)) return activeScheduleByTargetId.get(skillTargetId);
-          const compositeKey = getMaintenanceDisplayCompositeKey(skill);
-          if (compositeKey && activeScheduleByCompositeKey.has(compositeKey)) return activeScheduleByCompositeKey.get(compositeKey);
-          const nameKey = getMaintenanceDisplayNameKey(skill);
-          if (nameKey && activeScheduleByNameKey.has(nameKey)) return activeScheduleByNameKey.get(nameKey);
           return null;
         };
         allEligibleSkills.forEach((skill: any) => {
@@ -31532,14 +31490,12 @@ async function startServer() {
             eligibleSkills.push(skill);
             return;
           }
-          const emittedScheduleKey = getPersistedMaintenanceScheduleId(schedule) ||
-            getMaintenanceDisplayCompositeKey(schedule) ||
-            getMaintenanceDisplayNameKey(schedule);
+          const emittedScheduleKey = getPersistedMaintenanceScheduleId(schedule);
           if (emittedScheduleKey && emittedActiveScheduleKeys.has(emittedScheduleKey)) return;
           if (emittedScheduleKey) emittedActiveScheduleKeys.add(emittedScheduleKey);
           const status = sanitizeString(schedule?.status, 80).toUpperCase();
           const derivedStatus = deriveMaintenanceScheduleStatus(schedule, new Date());
-          if (status === 'PENDING_NEXT_SESSION' || derivedStatus === 'PENDING_NEXT_SESSION') {
+          if (ABA_LINKLESS_MAINTENANCE_SCHEDULE_STATUSES.has(status) || ABA_LINKLESS_MAINTENANCE_SCHEDULE_STATUSES.has(String(derivedStatus).toUpperCase())) {
             waitingNextSession.push(buildScheduledPanelRow(skill, schedule, 'Aguardando futura consulta'));
           } else if (status === 'OVERDUE' || derivedStatus === 'OVERDUE') {
             overdueProbes.push(buildScheduledPanelRow(skill, schedule, 'Sondagem atrasada'));
@@ -31780,19 +31736,15 @@ async function startServer() {
           isMasteryEvaluationComplete(latestMastery)
         );
       };
-      const scheduledTargetIds = new Set(schedulesForMainFlow.map((schedule: any) => sanitizeString(schedule?.target_id || schedule?.targetId, 180)).filter(Boolean));
-      const scheduledCompositeKeys = new Set(schedulesForMainFlow.map(getMaintenanceDisplayCompositeKey).filter(Boolean));
-      const scheduledNameKeys = new Set(schedulesForMainFlow.map(getMaintenanceDisplayNameKey).filter(Boolean));
-      const rowDisplayHasActiveSchedule = (row: any) => {
-        const compositeKey = getMaintenanceDisplayCompositeKey(row);
-        if (compositeKey && scheduledCompositeKeys.has(compositeKey)) return true;
-        const nameKey = getMaintenanceDisplayNameKey(row);
-        return Boolean(nameKey && scheduledNameKeys.has(nameKey));
-      };
+      const scheduledTargetIds = new Set(
+        schedulesForMainFlow
+          .map((schedule: any) => sanitizeString(schedule?.target_id || schedule?.targetId, 180))
+          .filter((targetId: string) => isUuid(targetId))
+      );
       const skillTargetRows = allTargets.filter((target: any) => isUuid(sanitizeString(target?.id, 180)));
       const maintenanceTargetRows = allTargets.filter((target: any) => {
         const id = sanitizeString(target?.id, 180);
-        if (!isUuid(id) || scheduledTargetIds.has(id) || rowDisplayHasActiveSchedule(target)) return false;
+        if (!isUuid(id) || scheduledTargetIds.has(id)) return false;
         return isTargetEligibleForMaintenance(target);
       });
       const scheduleCards = schedulesForMainFlow.map((schedule: any) => {
@@ -31881,8 +31833,7 @@ async function startServer() {
         .filter((target: any) => target?.eligibleForMaintenance)
         .filter((target: any) => {
           const targetId = sanitizeString(target?.targetId, 180);
-          if (targetId && scheduledTargetIds.has(targetId)) return false;
-          return !rowDisplayHasActiveSchedule(target);
+          return !targetId || !scheduledTargetIds.has(targetId);
         })
         .map((target: any) => {
           const targetId = sanitizeString(target?.targetId, 180);
@@ -32048,8 +31999,7 @@ async function startServer() {
       const isMaintenanceClinical = (row: any) => ['MAINTENANCE', 'MAINTAINED'].includes(targetClinicalStatus(row));
       const rowTargetHasActiveSchedule = (row: any) => {
         const targetId = sanitizeString(row?.targetId || row?.target_id, 180);
-        if (isUuid(targetId) && activeScheduleByTargetId.has(targetId)) return true;
-        return rowDisplayHasActiveSchedule(row);
+        return Boolean(isUuid(targetId) && activeScheduleByTargetId.has(targetId));
       };
       const eligibleSourceCards = [...targetCards, ...peiTargetCards].filter((row: any) => !row?.needsTargetReview && !rowTargetHasActiveSchedule(row) && !isMaintenanceClinical(row));
       const maintenanceSourceCards = [...targetCards, ...peiTargetCards].filter((row: any) => !row?.needsTargetReview && !rowTargetHasActiveSchedule(row) && isMaintenanceClinical(row));
@@ -32065,7 +32015,10 @@ async function startServer() {
           regressionRisk.push(toPanelRow(card, 'regression'));
         } else if (derived === 'OVERDUE') {
           overdueProbes.push(toPanelRow(card, 'overdue'));
-        } else if (derived === 'PENDING_NEXT_SESSION') {
+        } else if (
+          ABA_LINKLESS_MAINTENANCE_SCHEDULE_STATUSES.has(sanitizeString(schedule?.status, 80).toUpperCase()) ||
+          ABA_LINKLESS_MAINTENANCE_SCHEDULE_STATUSES.has(String(derived).toUpperCase())
+        ) {
           waitingNextSession.push(toPanelRow(card, 'waiting'));
         } else {
           scheduledProbes.push(toPanelRow(card, 'scheduled'));

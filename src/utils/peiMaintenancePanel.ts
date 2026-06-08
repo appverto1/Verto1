@@ -150,64 +150,6 @@ const isPersistedMaintenanceScheduleId = (value: any) => {
   return /^maintenance-[a-z0-9][a-z0-9-]{7,}$/i.test(id) && !/(^|-)local-|(^|-)temp-|(^|-)tmp-|(^|-)offline-/i.test(id);
 };
 
-const getMaintenanceRowDisplayParts = (row: any) => {
-  const schedule = row?.nextSchedule || row?.activeSchedule || row?.schedule || {};
-  const raw = schedule?.raw_payload && typeof schedule.raw_payload === 'object' ? schedule.raw_payload : {};
-  const target = schedule?.target && typeof schedule.target === 'object' ? schedule.target : row?.target && typeof row.target === 'object' ? row.target : {};
-  return {
-    name: firstDisplayText(
-      row?.targetName,
-      row?.target_name,
-      row?.name,
-      row?.title,
-      row?.skillName,
-      row?.skill_name,
-      schedule?.targetName,
-      schedule?.target_name,
-      schedule?.name,
-      target?.name,
-      target?.description,
-      raw.targetName,
-      raw.target_name
-    ),
-    protocol: firstDisplayText(
-      row?.protocol,
-      row?.protocolName,
-      row?.protocol_name,
-      row?.protocolTitle,
-      row?.protocol_title,
-      schedule?.protocolName,
-      schedule?.protocolTitle,
-      schedule?.protocol_title,
-      target?.protocol_title,
-      raw.protocolName,
-      raw.protocolTitle,
-      raw.protocol_title
-    ),
-    domain: firstDisplayText(
-      row?.domain,
-      row?.domainName,
-      row?.domain_name,
-      row?.programName,
-      row?.program_name,
-      schedule?.domainName,
-      schedule?.domain_name,
-      schedule?.programName,
-      schedule?.program_name,
-      target?.domain_name,
-      raw.domainName,
-      raw.domain_name
-    )
-  };
-};
-
-const getMaintenanceRowDisplayCompositeKey = (row: any) => {
-  const parts = getMaintenanceRowDisplayParts(row);
-  return [parts.name, parts.protocol, parts.domain].map(normalizeMaintenanceMatchKey).filter(Boolean).join('|');
-};
-
-const getMaintenanceRowDisplayNameKey = (row: any) => normalizeMaintenanceMatchKey(getMaintenanceRowDisplayParts(row).name);
-
 const getTargetKey = (...values: any[]) => {
   for (const value of values) {
     const normalized = normalizeText(value);
@@ -670,36 +612,10 @@ export function mapMaintenancePanelResponse(
       .map((row: any) => normalizeText(row?.targetId || row?.target_id))
       .filter((targetId: string) => isPersistedUuid(targetId))
   );
-  const operationalCompositeKeys = new Set(
-    [
-      ...sections.maintenanceSkills,
-      ...sections.scheduled,
-      ...sections.waitingNextSession,
-      ...sections.overdue,
-      ...sections.regressionRisk,
-    ]
-      .map(getMaintenanceRowDisplayCompositeKey)
-      .filter(Boolean)
-  );
-  const operationalNameKeys = new Set(
-    [
-      ...sections.maintenanceSkills,
-      ...sections.scheduled,
-      ...sections.waitingNextSession,
-      ...sections.overdue,
-      ...sections.regressionRisk,
-    ]
-      .map(getMaintenanceRowDisplayNameKey)
-      .filter(Boolean)
-  );
-  if (operationalTargetIds.size > 0 || operationalCompositeKeys.size > 0 || operationalNameKeys.size > 0) {
+  if (operationalTargetIds.size > 0) {
     sections.eligibleSkills = sections.eligibleSkills.filter((row: any) => {
       const targetId = normalizeText(row?.targetId || row?.target_id);
-      if (targetId && operationalTargetIds.has(targetId)) return false;
-      const compositeKey = getMaintenanceRowDisplayCompositeKey(row);
-      if (compositeKey && operationalCompositeKeys.has(compositeKey)) return false;
-      const nameKey = getMaintenanceRowDisplayNameKey(row);
-      return !nameKey || !operationalNameKeys.has(nameKey);
+      return !isPersistedUuid(targetId) || !operationalTargetIds.has(targetId);
     });
   }
 
