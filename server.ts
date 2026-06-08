@@ -22135,7 +22135,7 @@ async function startServer() {
     'last_behavior_event_at',
     'updated_at'
   ].join(',');
-  const ABA_MAINTENANCE_SCHEDULE_SELECT = [
+  const ABA_MAINTENANCE_SCHEDULE_COLUMNS = [
     'id',
     'organization_id',
     'clinic_id',
@@ -22164,7 +22164,8 @@ async function startServer() {
     'updated_at',
     'raw_payload',
     'created_at'
-  ].join(',');
+  ];
+  const ABA_MAINTENANCE_SCHEDULE_SELECT = ABA_MAINTENANCE_SCHEDULE_COLUMNS.join(',');
   const ABA_MAINTENANCE_PROBE_RESULT_SELECT = [
     'id',
     'organization_id',
@@ -23083,6 +23084,36 @@ async function startServer() {
       return { data: null, error: result.error };
     }
     return { data: null, error: { message: 'Payload ABA vazio após fallback de schema.' } };
+  };
+
+  const selectAbaMaintenanceSchedulesWithSchemaFallback = async (
+    buildQuery: (selectColumns: string, availableColumns: string[]) => any
+  ) => {
+    const baseColumns = [
+      'id',
+      'organization_id',
+      'clinic_id',
+      'patient_id',
+      'target_id',
+      'mastery_evaluation_id',
+      'schedule_day',
+      'scheduled_for',
+      'status',
+      'created_at'
+    ];
+    let columns = [...ABA_MAINTENANCE_SCHEDULE_COLUMNS];
+    for (let attempt = 0; attempt < ABA_MAINTENANCE_SCHEDULE_COLUMNS.length + 2; attempt += 1) {
+      const activeColumns = columns.length > 0 ? columns : baseColumns;
+      const result = await buildQuery(activeColumns.join(','), activeColumns);
+      if (!result.error) return result;
+      const missingColumn = extractMissingColumnName(result.error);
+      if (missingColumn && columns.includes(missingColumn)) {
+        columns = columns.filter((column) => column !== missingColumn);
+        continue;
+      }
+      return result;
+    }
+    return buildQuery(baseColumns.join(','), baseColumns);
   };
 
   const stableAbaUuidFromParts = (scope: string, parts: any[] = []) => {
@@ -28109,7 +28140,21 @@ async function startServer() {
     );
   };
 
-  const buildLegacyMaintenanceScheduleRow = (row: any, now: string) => {
+  const isMaintenanceScheduleScheduleModeConstraintError = (error: any) => {
+    const message = extractSupabaseErrorMessage(error).toLowerCase();
+    return message.includes('aba_maintenance_schedules_schedule_mode_check') || message.includes('schedule_mode');
+  };
+
+  const isUniqueMaintenanceScheduleConflict = (error: any) => {
+    const code = sanitizeString(error?.code, 40);
+    const message = extractSupabaseErrorMessage(error).toLowerCase();
+    return code === '23505' || (
+      (message.includes('duplicate key') || message.includes('unique constraint') || message.includes('already exists')) &&
+      message.includes('aba_maintenance_schedules')
+    );
+  };
+
+  const buildLegacyMaintenanceScheduleRow = (row: any, now: string, error?: any) => {
     const scheduledFor = row?.scheduled_for || row?.scheduledFor || row?.target_due_date || row?.targetDueDate || row?.due_date || row?.dueDate || now;
     const targetDueDate = row?.target_due_date || row?.targetDueDate || scheduledFor;
     return cleanObject({
@@ -28117,6 +28162,7 @@ async function startServer() {
       status: ['COMPLETED', 'MISSED', 'CANCELLED'].includes(sanitizeString(row?.status, 60).toUpperCase())
         ? sanitizeString(row.status, 60).toUpperCase()
         : 'PENDING',
+      schedule_mode: isMaintenanceScheduleScheduleModeConstraintError(error) ? 'DEFAULT_SEQUENCE' : row?.schedule_mode,
       scheduled_for: scheduledFor,
       due_date: row?.due_date || scheduledFor,
       target_due_date: targetDueDate,
@@ -28151,9 +28197,39 @@ async function startServer() {
     const firstResult = await writeAbaRowWithSchemaFallback('aba_maintenance_schedules', persistedRow, 'upsert');
     if (!firstResult.error) return { ...firstResult, row: persistedRow };
     if (!isLegacyMaintenanceScheduleConstraintError(firstResult.error)) return { ...firstResult, row };
-    const legacyRow = buildLegacyMaintenanceScheduleRow(persistedRow, now);
+    const legacyRow = buildLegacyMaintenanceScheduleRow(persistedRow, now, firstResult.error);
     const retryResult = await writeAbaRowWithSchemaFallback('aba_maintenance_schedules', legacyRow, 'upsert');
     return { ...retryResult, row: retryResult.error ? persistedRow : legacyRow };
+  };
+
+  const findMaintenanceScheduleForUniqueConflict = async (row: any, clinicId: string, organizationId: string, patientId: string) => {
+    const targetId = sanitizeString(row?.target_id || row?.targetId, 180);
+    const masteryEvaluationId = sanitizeString(row?.mastery_evaluation_id || row?.masteryEvaluationId, 180);
+    const scheduleDay = Math.max(1, Math.round(Number(row?.schedule_day || row?.scheduleDay || 1) || 1));
+    if (!isUuid(targetId) || !masteryEvaluationId || !isUuid(patientId)) return null;
+    const result = await selectAbaMaintenanceSchedulesWithSchemaFallback((selectColumns, availableColumns) => {
+      const updatedOrderColumn = availableColumns.includes('updated_at') ? 'updated_at' : 'created_at';
+      let query = supabase
+        .from('aba_maintenance_schedules')
+        .select(selectColumns)
+        .eq('organization_id', organizationId)
+        .eq('patient_id', patientId)
+        .eq('target_id', targetId)
+        .eq('mastery_evaluation_id', masteryEvaluationId)
+        .eq('schedule_day', scheduleDay)
+        .order(updatedOrderColumn, { ascending: false })
+        .limit(5);
+      query = applyAbaTenantScope(query, { role: 'owner' }, clinicId, organizationId);
+      return query;
+    });
+    if (result.error) {
+      if (hasMissingFinancialSchema(result.error)) return null;
+      throw result.error;
+    }
+    const rows = Array.isArray(result.data) ? result.data : [];
+    return rows.find((item: any) => ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES.includes(normalizeAbaMaintenanceScheduleStatus(item?.status))) ||
+      rows.find((item: any) => isUuid(sanitizeString(item?.id, 180))) ||
+      null;
   };
 
   const createMaintenanceScheduleForTarget = async (params: {
@@ -28208,17 +28284,24 @@ async function startServer() {
     const rows: any[] = [];
 
     if (scheduleMode === 'DEFAULT_SEQUENCE') {
-      let existingSequenceQuery = supabase
-        .from('aba_maintenance_schedules')
-        .select(ABA_MAINTENANCE_SCHEDULE_SELECT)
-        .eq('organization_id', organizationId)
-        .eq('patient_id', patientId)
-        .eq('target_id', targetId)
-        .in('status', [...ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES, 'COMPLETED'])
-        .order('target_due_date', { ascending: true })
-        .limit(10);
-      existingSequenceQuery = applyAbaTenantScope(existingSequenceQuery, { role: 'owner' }, clinicId, organizationId);
-      const existingSequenceResult = await existingSequenceQuery;
+      const existingSequenceResult = await selectAbaMaintenanceSchedulesWithSchemaFallback((selectColumns, availableColumns) => {
+        const dueOrderColumn = availableColumns.includes('target_due_date')
+          ? 'target_due_date'
+          : availableColumns.includes('scheduled_for')
+            ? 'scheduled_for'
+            : 'created_at';
+        let existingSequenceQuery = supabase
+          .from('aba_maintenance_schedules')
+          .select(selectColumns)
+          .eq('organization_id', organizationId)
+          .eq('patient_id', patientId)
+          .eq('target_id', targetId)
+          .in('status', [...ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES, 'COMPLETED'])
+          .order(dueOrderColumn, { ascending: true })
+          .limit(10);
+        existingSequenceQuery = applyAbaTenantScope(existingSequenceQuery, { role: 'owner' }, clinicId, organizationId);
+        return existingSequenceQuery;
+      });
       if (existingSequenceResult.error && !hasMissingFinancialSchema(existingSequenceResult.error)) throw existingSequenceResult.error;
       const existingSequenceRows = (existingSequenceResult.data || []).filter((item: any) => isUuid(sanitizeString(item?.id, 180)));
       if (existingSequenceRows.length > 0) {
@@ -28228,17 +28311,23 @@ async function startServer() {
     }
 
     if (scheduleMode === 'NEXT_PATIENT_SESSION' || scheduleMode === 'NEXT_AVAILABLE_SESSION') {
-      let existingQuery = supabase
-        .from('aba_maintenance_schedules')
-        .select(ABA_MAINTENANCE_SCHEDULE_SELECT)
-        .eq('organization_id', organizationId)
-        .eq('patient_id', patientId)
-        .eq('target_id', targetId)
-        .in('status', ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES)
-        .order('updated_at', { ascending: false })
-        .limit(20);
-      existingQuery = applyAbaTenantScope(existingQuery, { role: 'owner' }, clinicId, organizationId);
-      const existingResult = await existingQuery;
+      const existingResult = await selectAbaMaintenanceSchedulesWithSchemaFallback((selectColumns, availableColumns) => {
+        let existingQuery = supabase
+          .from('aba_maintenance_schedules')
+          .select(selectColumns)
+          .eq('organization_id', organizationId)
+          .eq('patient_id', patientId)
+          .eq('target_id', targetId)
+          .in('status', ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES)
+        if (availableColumns.includes('updated_at')) {
+          existingQuery = existingQuery.order('updated_at', { ascending: false });
+        } else {
+          existingQuery = existingQuery.order('created_at', { ascending: false });
+        }
+        existingQuery = existingQuery.limit(20);
+        existingQuery = applyAbaTenantScope(existingQuery, { role: 'owner' }, clinicId, organizationId);
+        return existingQuery;
+      });
       if (existingResult.error && !hasMissingFinancialSchema(existingResult.error)) throw existingResult.error;
       const existingSchedule = Array.isArray(existingResult.data)
         ? existingResult.data.find((item: any) => isUuid(sanitizeString(item?.id, 180)))
@@ -28294,7 +28383,7 @@ async function startServer() {
         if (update.error && isLegacyMaintenanceScheduleConstraintError(update.error)) {
           update = await updateAbaScheduleWithSchemaFallback(
             sanitizeString(existingSchedule.id, 180),
-            buildLegacyMaintenanceScheduleRow(nextSessionPatch, now),
+            buildLegacyMaintenanceScheduleRow(nextSessionPatch, now, update.error),
             clinicId,
             organizationId,
             patientId
@@ -28342,17 +28431,23 @@ async function startServer() {
       const dueDate = scheduledFor
         ? sanitizeIsoDateTime(scheduledFor)
         : sanitizeClinicalDate(params.dueDate || now);
-      let existingQuery = supabase
-        .from('aba_maintenance_schedules')
-        .select(ABA_MAINTENANCE_SCHEDULE_SELECT)
-        .eq('organization_id', organizationId)
-        .eq('patient_id', patientId)
-        .eq('target_id', targetId)
-        .in('status', ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES)
-        .order('updated_at', { ascending: false })
-        .limit(20);
-      existingQuery = applyAbaTenantScope(existingQuery, { role: 'owner' }, clinicId, organizationId);
-      const existingResult = await existingQuery;
+      const existingResult = await selectAbaMaintenanceSchedulesWithSchemaFallback((selectColumns, availableColumns) => {
+        let existingQuery = supabase
+          .from('aba_maintenance_schedules')
+          .select(selectColumns)
+          .eq('organization_id', organizationId)
+          .eq('patient_id', patientId)
+          .eq('target_id', targetId)
+          .in('status', ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES)
+        if (availableColumns.includes('updated_at')) {
+          existingQuery = existingQuery.order('updated_at', { ascending: false });
+        } else {
+          existingQuery = existingQuery.order('created_at', { ascending: false });
+        }
+        existingQuery = existingQuery.limit(20);
+        existingQuery = applyAbaTenantScope(existingQuery, { role: 'owner' }, clinicId, organizationId);
+        return existingQuery;
+      });
       if (existingResult.error && !hasMissingFinancialSchema(existingResult.error)) throw existingResult.error;
       const existingSchedule = Array.isArray(existingResult.data)
         ? existingResult.data.find((item: any) => isUuid(sanitizeString(item?.id, 180)))
@@ -28374,35 +28469,45 @@ async function startServer() {
       }
       if (existingSchedule?.id) {
         const raw = existingSchedule.raw_payload && typeof existingSchedule.raw_payload === 'object' ? existingSchedule.raw_payload : {};
-        const update = await updateAbaScheduleWithSchemaFallback(
-          sanitizeString(existingSchedule.id, 180),
-          cleanObject({
-            status: 'SCHEDULED',
-            appointment_id: appointmentId,
-            candidate_appointment_id: null,
-            due_date: scheduledFor || dueDate,
-            target_due_date: dueDate,
-            scheduled_for: scheduledFor,
-            schedule_mode: 'CUSTOM_DATE',
-            metadata: sanitizeClinicalPayload({
-              ...(existingSchedule.metadata && typeof existingSchedule.metadata === 'object' ? existingSchedule.metadata : {}),
-              auditAction: 'MAINTENANCE_SCHEDULE_UPDATED',
-              scheduleReason: appointmentId ? 'CUSTOM_DATE_LINKED_UPDATED' : 'CUSTOM_DATE_UPDATED',
-              scheduleType: appointmentId ? 'APPOINTMENT' : 'DATE'
-            }),
-            raw_payload: sanitizeClinicalPayload({
-              ...raw,
-              targetName: target?.name || raw.targetName || null,
-              scheduleType: appointmentId ? 'APPOINTMENT' : 'DATE',
-              clinicalDate: appointmentId ? null : dueDate,
-              noAutomaticClinicalMutation: true
-            }),
-            updated_at: now
+        const customDatePatch = cleanObject({
+          status: 'SCHEDULED',
+          appointment_id: appointmentId,
+          candidate_appointment_id: null,
+          due_date: scheduledFor || dueDate,
+          target_due_date: dueDate,
+          scheduled_for: scheduledFor,
+          schedule_mode: 'CUSTOM_DATE',
+          metadata: sanitizeClinicalPayload({
+            ...(existingSchedule.metadata && typeof existingSchedule.metadata === 'object' ? existingSchedule.metadata : {}),
+            auditAction: 'MAINTENANCE_SCHEDULE_UPDATED',
+            scheduleReason: appointmentId ? 'CUSTOM_DATE_LINKED_UPDATED' : 'CUSTOM_DATE_UPDATED',
+            scheduleType: appointmentId ? 'APPOINTMENT' : 'DATE'
           }),
+          raw_payload: sanitizeClinicalPayload({
+            ...raw,
+            targetName: target?.name || raw.targetName || null,
+            scheduleType: appointmentId ? 'APPOINTMENT' : 'DATE',
+            clinicalDate: appointmentId ? null : dueDate,
+            noAutomaticClinicalMutation: true
+          }),
+          updated_at: now
+        });
+        let update = await updateAbaScheduleWithSchemaFallback(
+          sanitizeString(existingSchedule.id, 180),
+          customDatePatch,
           clinicId,
           organizationId,
           patientId
         );
+        if (update.error && isLegacyMaintenanceScheduleConstraintError(update.error)) {
+          update = await updateAbaScheduleWithSchemaFallback(
+            sanitizeString(existingSchedule.id, 180),
+            buildLegacyMaintenanceScheduleRow(customDatePatch, now, update.error),
+            clinicId,
+            organizationId,
+            patientId
+          );
+        }
         if (update.error) throw update.error;
         void persistActivityLog({
           userId: createdBy || '',
@@ -28542,7 +28647,7 @@ async function startServer() {
       const dueDateMs = scheduledFor ? new Date(dueDate).getTime() : parseClinicalDateMs(dueDate);
       const nowClinicalMs = parseClinicalDateMs(now);
       rows.push(cleanObject({
-        id: `maintenance-${abaPlanningHash([targetId, 'custom', dueDate, appointmentId || 'date', now])}`,
+        id: stableAbaUuidFromParts('aba-maintenance-schedule-custom', [organizationId, patientId, targetId, masteryEvaluationId, dueDate, appointmentId || 'date']),
         organization_id: organizationId,
         clinic_id: clinicId,
         patient_id: patientId,
@@ -28577,8 +28682,84 @@ async function startServer() {
 
     const saved: any[] = [];
     for (const row of rows) {
-      const result = await saveMaintenanceScheduleRowWithLegacyFallback(row, now);
-      if (result.error) return { ok: false, status: hasMissingFinancialSchema(result.error) ? 503 : 500, error: 'Não foi possível salvar o agendamento agora.' };
+      let result = await saveMaintenanceScheduleRowWithLegacyFallback(row, now);
+      if (result.error && isUniqueMaintenanceScheduleConflict(result.error)) {
+        const existingConflictSchedule = await findMaintenanceScheduleForUniqueConflict(row, clinicId, organizationId, patientId);
+        const existingConflictScheduleId = sanitizeString(existingConflictSchedule?.id, 180);
+        if (isUuid(existingConflictScheduleId)) {
+          const existingRaw = existingConflictSchedule?.raw_payload && typeof existingConflictSchedule.raw_payload === 'object'
+            ? existingConflictSchedule.raw_payload
+            : {};
+          const rowRaw = row?.raw_payload && typeof row.raw_payload === 'object' ? row.raw_payload : {};
+          const existingMetadata = existingConflictSchedule?.metadata && typeof existingConflictSchedule.metadata === 'object'
+            ? existingConflictSchedule.metadata
+            : {};
+          const rowMetadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+          const conflictPatch = cleanObject({
+            ...row,
+            id: undefined,
+            created_at: undefined,
+            created_by: row?.created_by || existingConflictSchedule?.created_by || createdBy || null,
+            metadata: sanitizeClinicalPayload({
+              ...existingMetadata,
+              ...rowMetadata,
+              auditAction: 'MAINTENANCE_SCHEDULE_UPDATED',
+              idempotentConflictResolution: true
+            }),
+            raw_payload: sanitizeClinicalPayload({
+              ...existingRaw,
+              ...rowRaw,
+              idempotentConflictResolution: true,
+              noAutomaticClinicalMutation: true
+            }),
+            updated_at: now
+          });
+          let conflictUpdate = await updateAbaScheduleWithSchemaFallback(
+            existingConflictScheduleId,
+            conflictPatch,
+            clinicId,
+            organizationId,
+            patientId
+          );
+          if (conflictUpdate.error && isLegacyMaintenanceScheduleConstraintError(conflictUpdate.error)) {
+            conflictUpdate = await updateAbaScheduleWithSchemaFallback(
+              existingConflictScheduleId,
+              buildLegacyMaintenanceScheduleRow(conflictPatch, now, conflictUpdate.error),
+              clinicId,
+              organizationId,
+              patientId
+            );
+          }
+          if (!conflictUpdate.error && (conflictUpdate.data as any)?.id) {
+            result = {
+              data: { id: existingConflictScheduleId },
+              error: null,
+              row: cleanObject({
+                ...existingConflictSchedule,
+                ...conflictPatch,
+                id: existingConflictScheduleId,
+                persisted: true
+              })
+            };
+            void persistActivityLog({
+              userId: createdBy || '',
+              clinicId,
+              actorName: 'Equipe',
+              title: 'Agendamento de manutencao reutilizado',
+              content: 'Maintenance Schedule existente foi atualizado de forma idempotente apos conflito de unicidade.',
+              type: 'clinical',
+              actionType: 'MAINTENANCE_SCHEDULE_IDEMPOTENT_REUSED',
+              payload: { scheduleId: existingConflictScheduleId, targetId, patientId, scheduleMode }
+            });
+          }
+        }
+      }
+      if (result.error) {
+        if (isUniqueMaintenanceScheduleConflict(result.error)) {
+          return { ok: false, status: 409, error: 'Já existe uma sondagem de manutenção para esta habilidade nesta janela.' };
+        }
+        return { ok: false, status: hasMissingFinancialSchema(result.error) ? 503 : 500, error: 'Não foi possível salvar o agendamento agora.' };
+      }
       const savedRow = cleanObject({
         ...(result.row || row),
         id: (result.data as any)?.id || (isUuid((result.row as any)?.id) ? (result.row as any).id : null),
@@ -28801,7 +28982,7 @@ async function startServer() {
       if (update.error && isLegacyMaintenanceScheduleConstraintError(update.error)) {
         update = await updateAbaScheduleWithSchemaFallback(
           scheduleId,
-          buildLegacyMaintenanceScheduleRow(patch, now),
+          buildLegacyMaintenanceScheduleRow(patch, now, update.error),
           scheduleClinicId,
           scheduleOrganizationId,
           patientId
@@ -32034,7 +32215,7 @@ async function startServer() {
         if (update.error && isLegacyMaintenanceScheduleConstraintError(update.error)) {
           update = await updateAbaScheduleWithSchemaFallback(
             scheduleId,
-            buildLegacyMaintenanceScheduleRow(patch, now),
+            buildLegacyMaintenanceScheduleRow(patch, now, update.error),
             sanitizeString(schedule?.clinic_id, 120) || clinicId,
             sanitizeString(schedule?.organization_id, 120) || organizationId,
             patientId
@@ -32296,9 +32477,11 @@ async function startServer() {
           ? 'APPOINTMENT_NOT_FOUND'
           : (result as any).status === 404
             ? 'TARGET_NOT_FOUND'
-            : (result as any).status === 400
-              ? 'ID_INVALIDO'
-              : 'UNEXPECTED_ERROR';
+            : (result as any).status === 409
+              ? 'MAINTENANCE_SCHEDULE_CONFLICT'
+              : (result as any).status === 400
+                ? 'ID_INVALIDO'
+                : 'UNEXPECTED_ERROR';
         return res.status((result as any).status || 400).json({ success: false, error: errorCode, message: resultMessage || 'Não foi possível agendar a manutenção.' });
       }
       const schedules = Array.isArray(result.data) ? result.data : [];
@@ -32327,7 +32510,13 @@ async function startServer() {
       };
       const schedule = hydrateScheduleResponse(schedules[0] || null);
       return res.json({ success: true, message: 'Sondagem de manutenção agendada.', schedule, data: schedule ? [schedule] : [] });
-    } catch {
+    } catch (error: any) {
+      logRouteDbError('/api/aba/targets/:targetId/maintenance-schedules', error, {
+        targetId: sanitizeString(req.params?.targetId, 180),
+        bodyTargetId: sanitizeString(req.body?.targetId || req.body?.target_id, 180),
+        patientId: sanitizeString(req.body?.patient_id || req.body?.patientId, 120),
+        mode: sanitizeString(req.body?.mode || req.body?.scheduleMode || req.body?.schedule_mode, 80)
+      });
       return res.status(500).json({ success: false, error: 'UNEXPECTED_ERROR', message: 'Não foi possível agendar a manutenção.' });
     }
   });
@@ -32511,7 +32700,7 @@ async function startServer() {
       }
       let update = await updateAbaScheduleWithSchemaFallback(scheduleId, patch, sanitizeString(schedule.clinic_id || clinicId, 120), sanitizeString(schedule.organization_id || organizationId, 120), patientId);
       if (update.error && isLegacyMaintenanceScheduleConstraintError(update.error)) {
-        update = await updateAbaScheduleWithSchemaFallback(scheduleId, buildLegacyMaintenanceScheduleRow(patch, now), sanitizeString(schedule.clinic_id || clinicId, 120), sanitizeString(schedule.organization_id || organizationId, 120), patientId);
+        update = await updateAbaScheduleWithSchemaFallback(scheduleId, buildLegacyMaintenanceScheduleRow(patch, now, update.error), sanitizeString(schedule.clinic_id || clinicId, 120), sanitizeString(schedule.organization_id || organizationId, 120), patientId);
       }
       if (update.error) throw update.error;
       void persistActivityLog({
@@ -32588,7 +32777,7 @@ async function startServer() {
       });
       let update = await updateAbaScheduleWithSchemaFallback(scheduleId, patch, sanitizeString(schedule.clinic_id || clinicId, 120), sanitizeString(schedule.organization_id || organizationId, 120), patientId);
       if (update.error && isLegacyMaintenanceScheduleConstraintError(update.error)) {
-        update = await updateAbaScheduleWithSchemaFallback(scheduleId, buildLegacyMaintenanceScheduleRow(patch, now), sanitizeString(schedule.clinic_id || clinicId, 120), sanitizeString(schedule.organization_id || organizationId, 120), patientId);
+        update = await updateAbaScheduleWithSchemaFallback(scheduleId, buildLegacyMaintenanceScheduleRow(patch, now, update.error), sanitizeString(schedule.clinic_id || clinicId, 120), sanitizeString(schedule.organization_id || organizationId, 120), patientId);
       }
       if (update.error) throw update.error;
       void persistActivityLog({
