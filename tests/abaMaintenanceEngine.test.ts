@@ -382,6 +382,31 @@ test('banner de manutencao comunica tipo atual e botao nao registra tentativa', 
   assert.match(serverCode, /return 'FUTURE_APPOINTMENT'/);
 });
 
+test('SessionMode mobile usa cards compactos sem criar fluxo paralelo de registro', () => {
+  const mobileStart = sessionModeCode.indexOf('data-aba-mobile-task-list');
+  const desktopStart = sessionModeCode.indexOf('className="hidden space-y-5 sm:block"', mobileStart);
+  assert.notEqual(mobileStart, -1);
+  assert.notEqual(desktopStart, -1);
+  const mobileCode = sessionModeCode.slice(mobileStart, desktopStart);
+  assert.match(sessionModeCode, /mobileSelectedGoalKey/);
+  assert.match(sessionModeCode, /mobilePromptGridGoalKey/);
+  assert.match(sessionModeCode, /mobileExpandedCriteriaKey/);
+  assert.match(mobileCode, /data-aba-mobile-task-card/);
+  assert.match(mobileCode, /line-clamp-2/);
+  assert.match(mobileCode, /Hoje: \{progressLabel\}/);
+  assert.match(mobileCode, /setMobileSelectedGoalKey\(goalKey\)[\s\S]*?syncTrialTypeForGoal\(goal\)/m);
+  assert.match(mobileCode, /handleTrialClick\(goal, 1, 'independent'\)/);
+  assert.match(mobileCode, /handleTrialClick\(goal, 0\.5, 'prompted', prompt\.key\)/);
+  assert.match(mobileCode, /handleTrialClick\(goal, 0, 'error'\)/);
+  assert.match(mobileCode, /data-aba-mobile-help-grid/);
+  assert.match(mobileCode, /Ver critério/);
+  assert.match(mobileCode, /data-aba-mobile-criteria-details/);
+  assert.match(mobileCode, /maintenanceProbeCanRunNow && !maintenanceProbeActiveForGoal/);
+  assert.match(mobileCode, /Usar Maintenance Probe/);
+  assert.match(sessionModeCode, /className="hidden space-y-5 sm:block"/);
+  assert.doesNotMatch(mobileCode, /persistTrialRecord|dataService\.saveAbaMaintenanceProbeResult|saveAbaTrial/);
+});
+
 test('registro real de Maintenance Probe preserva target e schedule idempotentes', () => {
   assert.match(sessionModeCode, /maintenance_schedule_id: isMaintenanceAttempt \? maintenanceScheduleId : undefined/);
   assert.match(sessionModeCode, /activeMaintenanceProbe: isMaintenanceAttempt \? \{[\s\S]*?scheduleId: maintenanceScheduleId[\s\S]*?targetId: recordTargetId/m);

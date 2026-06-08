@@ -695,6 +695,9 @@ export const SessionMode = ({
   const [promptSelectionGoal, setPromptSelectionGoal] = useState<any>(null);
   const [promptWarning, setPromptWarning] = useState('');
   const [mobileFocusMode, setMobileFocusMode] = useState(true);
+  const [mobileSelectedGoalKey, setMobileSelectedGoalKey] = useState('');
+  const [mobilePromptGridGoalKey, setMobilePromptGridGoalKey] = useState('');
+  const [mobileExpandedCriteriaKey, setMobileExpandedCriteriaKey] = useState('');
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const [clinicalDockSheetOpen, setClinicalDockSheetOpen] = useState(false);
   const [crisisMode, setCrisisMode] = useState(false);
@@ -3317,6 +3320,18 @@ export const SessionMode = ({
   const sessionGoals = useMemo(() => (
     mergeSessionGoalsWithAvailableMaintenance(baseSessionGoals, sessionAvailableMaintenanceProbeSchedules)
   ), [baseSessionGoals, sessionAvailableMaintenanceProbeSchedules]);
+  useEffect(() => {
+    if (sessionGoals.length === 0) {
+      if (mobileSelectedGoalKey) setMobileSelectedGoalKey('');
+      return;
+    }
+    setMobileSelectedGoalKey((current) => {
+      const stillVisible = current && sessionGoals.some((goal: any) => String(goal?.id || goal?.target_id || goal?.targetId || goal?.name || '') === current);
+      if (stillVisible) return current;
+      const first = sessionGoals[0];
+      return String(first?.id || first?.target_id || first?.targetId || first?.name || '');
+    });
+  }, [mobileSelectedGoalKey, sessionGoals]);
   const maintenanceSchedules = useMemo(() => mergeMaintenanceScheduleLists(
     sessionAvailableMaintenanceProbeSchedules,
     sessionUpcomingMaintenanceProbeSchedules,
@@ -5894,7 +5909,161 @@ export const SessionMode = ({
             </section>
           )}
 
-          <div className="space-y-5">
+          <div className="space-y-2 sm:hidden" data-aba-mobile-task-list>
+            {sessionGoals.map((goal: any) => {
+              const goalKey = String(goal?.id || goal?.target_id || goal?.targetId || goal?.name || 'goal');
+              const maintenanceTargetKey = getMaintenanceTargetKey(goal);
+              const maintenanceProbeActiveForGoal = Boolean(maintenanceTargetKey && currentTrialTargetKey === maintenanceTargetKey && activeMaintenanceProbeTargetId === maintenanceTargetKey && isMaintenanceProbeCollection(collectionType));
+              const masteryRow = teachingMasteryRows.find((row) => String(row.id || row.targetId || row.name) === goalKey || row.name === goal.name);
+              const maintenanceInfo = getGoalMaintenanceInfo(goal);
+              const maintenanceProbeCanRunNow = Boolean(maintenanceInfo.hasAvailableMaintenanceProbe);
+              const selected = mobileSelectedGoalKey === goalKey;
+              const helpOpen = mobilePromptGridGoalKey === goalKey;
+              const criteriaOpen = mobileExpandedCriteriaKey === goalKey;
+              const independentTrialLockKey = `trial:${goalKey}:independent:independent`;
+              const errorTrialLockKey = `trial:${goalKey}:error:error`;
+              const statusLabel = maintenanceProbeCanRunNow
+                ? 'Maintenance hoje'
+                : maintenanceInfo.hasUpcomingMaintenanceProbe
+                  ? 'Agendada futura'
+                  : masteryRow?.contributes
+                    ? 'Critério atingido'
+                    : masteryRow?.statusCode === 'NOT_MET'
+                      ? 'Em treino'
+                      : masteryRow?.status || 'Dados insuficientes';
+              const progressLabel = masteryRow?.criterionProgressLabel || '0/0';
+              return (
+                <article
+                  key={`mobile-${goalKey}`}
+                  data-aba-mobile-task-card
+                  onClick={() => {
+                    setMobileSelectedGoalKey(goalKey);
+                    syncTrialTypeForGoal(goal);
+                  }}
+                  className={`rounded-2xl border bg-white px-3 py-2.5 shadow-sm transition-all ${selected ? 'border-[#7a32fc] ring-2 ring-[#7a32fc]/15' : 'border-blue-100'}`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="rounded-full bg-[#7a32fc]/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest text-[#7a32fc]">
+                          {goal.domainName || goal.domain_name || 'Meta'}
+                        </span>
+                        {maintenanceProbeCanRunNow && (
+                          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest text-amber-700">Maintenance hoje</span>
+                        )}
+                        {!maintenanceProbeCanRunNow && maintenanceInfo.hasUpcomingMaintenanceProbe && (
+                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest text-slate-600">Manutenção agendada</span>
+                        )}
+                      </div>
+                      <h2 className="mt-1 line-clamp-2 text-[15px] font-semibold leading-snug text-gray-900">{goal.name || goal.targetName || goal.target_name}</h2>
+                    </div>
+                    <span className={`shrink-0 rounded-full px-2 py-1 text-[9px] font-bold uppercase tracking-widest ${maintenanceProbeCanRunNow ? 'bg-amber-100 text-amber-700' : masteryRow?.contributes ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-600'}`}>
+                      {statusLabel}
+                    </span>
+                  </div>
+
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] font-semibold text-gray-500">
+                    <span>Hoje: {progressLabel}</span>
+                    {masteryRow?.criterion && <span className="truncate">Critério: {masteryRow.criterion}</span>}
+                  </div>
+
+                  {selected && (
+                    <div className="mt-3 space-y-2" data-aba-mobile-quick-actions>
+                      {maintenanceProbeCanRunNow && !maintenanceProbeActiveForGoal && (
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            activateMaintenanceProbeMode(goal);
+                          }}
+                          className="inline-flex min-h-[34px] w-full items-center justify-center rounded-xl bg-amber-100 px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-amber-800"
+                        >
+                          Usar Maintenance Probe
+                        </button>
+                      )}
+                      <div className="grid grid-cols-3 gap-2">
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            handleTrialClick(goal, 1, 'independent');
+                          }}
+                          disabled={Boolean(actionLocks[independentTrialLockKey])}
+                          className={`min-h-[42px] rounded-xl bg-[#05CD99] px-2 text-xs font-black text-white transition-all disabled:opacity-75 ${microFeedback[independentTrialLockKey] === 'check' ? 'scale-[0.98] ring-4 ring-emerald-200/70' : ''}`}
+                        >
+                          Indep.
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setMobilePromptGridGoalKey(helpOpen ? '' : goalKey);
+                          }}
+                          className="min-h-[42px] rounded-xl bg-orange-100 px-2 text-xs font-black text-orange-700"
+                        >
+                          Ajuda
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            handleTrialClick(goal, 0, 'error');
+                          }}
+                          disabled={Boolean(actionLocks[errorTrialLockKey])}
+                          className={`min-h-[42px] rounded-xl bg-[#EE5D50] px-2 text-xs font-black text-white transition-all disabled:opacity-75 ${microFeedback[errorTrialLockKey] === 'check' ? 'scale-[0.98] ring-4 ring-red-200/70' : ''}`}
+                        >
+                          Erro
+                        </button>
+                      </div>
+                      {helpOpen && (
+                        <div className="grid grid-cols-2 gap-2" data-aba-mobile-help-grid>
+                          {promptedPromptOptions.map((prompt) => {
+                            const promptedTrialLockKey = `trial:${goalKey}:prompted:${prompt.key}`;
+                            const promptedActive = microFeedback[promptedTrialLockKey] === 'check';
+                            return (
+                              <button
+                                key={prompt.key}
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  handleTrialClick(goal, 0.5, 'prompted', prompt.key);
+                                }}
+                                disabled={Boolean(actionLocks[promptedTrialLockKey])}
+                                aria-label={`Registrar ${goal.name} com ajuda ${prompt.label}`}
+                                className={`min-h-[38px] rounded-xl border px-2 text-[11px] font-black leading-tight transition-all disabled:opacity-75 ${promptedActive ? 'border-orange-300 bg-white text-orange-700 ring-4 ring-orange-200/70' : 'border-orange-100 bg-white text-orange-700'}`}
+                              >
+                                {prompt.compactLabel}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setMobileExpandedCriteriaKey(criteriaOpen ? '' : goalKey);
+                        }}
+                        className="min-h-[32px] rounded-xl bg-slate-50 px-3 text-[10px] font-bold uppercase tracking-widest text-slate-500"
+                      >
+                        {criteriaOpen ? 'Ocultar critério' : 'Ver critério'}
+                      </button>
+                      {criteriaOpen && (
+                        <div className="rounded-xl border border-blue-100 bg-[#F8FAFF] px-3 py-2 text-xs font-semibold leading-relaxed text-gray-600" data-aba-mobile-criteria-details>
+                          <p>{masteryRow?.criterion || 'Critério não configurado.'}</p>
+                          <p className="mt-1 text-[11px] text-gray-500">Origem: {masteryRow?.criterionSourceLabel || 'Critério de maestria não configurado'}</p>
+                          <p className="mt-1 text-[11px] text-gray-500">Hoje: {progressLabel}</p>
+                          {goal.criteria && <p className="mt-1 text-[11px] text-gray-500">{sanitizeDescriptionForDisplay(goal.criteria)}</p>}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </article>
+              );
+            })}
+          </div>
+
+          <div className="hidden space-y-5 sm:block">
             {sessionGoals.map((goal: any) => {
               const goalKey = String(goal?.id || goal?.name || 'goal');
               const maintenanceTargetKey = getMaintenanceTargetKey(goal);
