@@ -601,7 +601,7 @@ test('subaba manutencao etapa 2 renderiza botao de agendamento simples', () => {
   assert.doesNotMatch(maintenancePanelUi, /renderPeiMaintenanceGroup|renderPeiMaintenanceMetric|renderPeiMaintenanceActions|Atribuir a uma sessão|Plano de manutenção|Escolher sessão existente|Pendências técnicas/);
 });
 
-test('subaba manutencao usa painel target-first como fonte unica depois do carregamento', () => {
+test('subaba manutencao usa painel target-first com conteudo e preserva fallback quando vazio', () => {
   const eligibleStart = patientDetailCode.indexOf('const peiMaintenanceEligibleRows = useMemo');
   const eligibleEnd = patientDetailCode.indexOf('const peiGeneralizationRows', eligibleStart);
   const scheduledStart = patientDetailCode.indexOf('const peiMaintenanceScheduledRows = useMemo');
@@ -613,7 +613,10 @@ test('subaba manutencao usa painel target-first como fonte unica depois do carre
   assert.match(patientDetailCode, /const dedupePeiMaintenanceRows = \(rows: any\[\]\) =>/);
   assert.match(eligibleCode, /const filterEligibleRows = \(rows: any\[\]\) => dedupePeiMaintenanceRows/);
   assert.match(eligibleCode, /const panelEligibleRows = Array\.isArray\(peiMaintenanceTargetFirstGroups\.eligibleSkills\)/);
-  assert.match(eligibleCode, /if \(hasPeiMaintenancePanelForCurrentPatient\) \{\s*return filterEligibleRows\(panelEligibleRows\);\s*\}/m);
+  assert.match(eligibleCode, /const panelHasAnyMaintenanceRows = \[/);
+  assert.match(eligibleCode, /peiMaintenanceTargetFirstGroups\.scheduled/);
+  assert.match(eligibleCode, /if \(hasPeiMaintenancePanelForCurrentPatient && panelHasAnyMaintenanceRows\) \{\s*return filterEligibleRows\(panelEligibleRows\);\s*\}/m);
+  assert.match(eligibleCode, /Painel carregado e vazio nao pode apagar metas adquiridas/);
   assert.match(eligibleCode, /activePeiPlanSubtab === 'maintenance'[\s\S]*?isLoadingPeiMaintenancePanel[\s\S]*?return \[\]/m);
   assert.match(eligibleCode, /key: `goal:\$\{goalId \|\| index\}:\$\{targetId \|\| index\}`/);
   assert.match(eligibleCode, /progressPercent: 100/);

@@ -5389,11 +5389,20 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     const panelEligibleRows = Array.isArray(peiMaintenanceTargetFirstGroups.eligibleSkills)
       ? dedupePeiMaintenanceRows(peiMaintenanceTargetFirstGroups.eligibleSkills)
       : [];
+    const panelHasAnyMaintenanceRows = [
+      peiMaintenanceTargetFirstGroups.eligibleSkills,
+      peiMaintenanceTargetFirstGroups.maintenanceSkills,
+      peiMaintenanceTargetFirstGroups.scheduled,
+      peiMaintenanceTargetFirstGroups.waitingNextSession,
+      peiMaintenanceTargetFirstGroups.overdue,
+      peiMaintenanceTargetFirstGroups.regressionRisk,
+      peiMaintenanceTargetFirstGroups.technical
+    ].some((rows: any) => Array.isArray(rows) && rows.length > 0);
 
-    // Depois que o painel target-first do backend carregou, ele vira a única fonte
-    // de verdade para Elegíveis. Não misture novamente goals/linkableTargets locais,
-    // porque essas listas chegam em outro timing e causam flicker/sumiço de cards.
-    if (hasPeiMaintenancePanelForCurrentPatient) {
+    // Painel target-first com conteudo persistido vira a fonte de verdade.
+    // Painel carregado e vazio nao pode apagar metas adquiridas que ja aparecem
+    // no Ensino; nesse caso mantemos o fallback local abaixo.
+    if (hasPeiMaintenancePanelForCurrentPatient && panelHasAnyMaintenanceRows) {
       return filterEligibleRows(panelEligibleRows);
     }
 
@@ -5484,7 +5493,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       }))
     );
     return filterEligibleRows(dedupePeiMaintenanceRows(fallbackRows));
-  }, [activePeiPlanSubtab, activeTab, hasPeiMaintenancePanelForCurrentPatient, isLoadingPeiMaintenancePanel, peiMaintenanceHydratedGoals, peiMaintenanceLinkableTargets, peiMaintenanceTargetFirstGroups.eligibleSkills, peiMaintenanceUnavailableClinicalIds, peiMaintenanceUnavailableKeys, peiMaintenanceUnavailableTargetIds]);
+  }, [activePeiPlanSubtab, activeTab, hasPeiMaintenancePanelForCurrentPatient, isLoadingPeiMaintenancePanel, peiMaintenanceHydratedGoals, peiMaintenanceLinkableTargets, peiMaintenanceTargetFirstGroups, peiMaintenanceUnavailableClinicalIds, peiMaintenanceUnavailableKeys, peiMaintenanceUnavailableTargetIds]);
 
   const peiGeneralizationRows = useMemo(() => {
     const maintainedRows = peiMaintenanceRows.filter((row: any) => row.isMaintained);
