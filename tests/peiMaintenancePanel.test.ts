@@ -517,6 +517,9 @@ test('subaba manutencao usa painel target-first sem fallback local antigo', () =
   assert.match(eligibleCode, /progressPercent: 100/);
   assert.match(eligibleCode, /const rows = hasPeiMaintenancePanelForCurrentPatient/);
   assert.match(eligibleCode, /dedupePeiMaintenanceRows\(panelEligibleRows\)/);
+  assert.match(eligibleCode, /const localEligibleRows = localRows\(\)/);
+  assert.match(eligibleCode, /\? dedupePeiMaintenanceRows\(\[\.\.\.panelRows, \.\.\.localEligibleRows\]\)/);
+  assert.match(eligibleCode, /peiMaintenanceLinkableTargets/);
   assert.match(eligibleCode, /targetId && peiMaintenanceUnavailableTargetIds\.has\(targetId\)/);
   assert.match(eligibleCode, /getPeiMaintenanceRowScheduleId\(row\) \|\| row\?\.hasRealSchedule/);
   assert.match(patientDetailCode, /const isPeiMaintenanceScheduledScheduleRow = \(row: any\) => \{/);
@@ -757,6 +760,8 @@ test('backend da etapa 2 usa PEI targets e schedules ativos por target em lote',
   assert.match(stepTwoRoute, /source\?\.peiGoalIndex/);
   assert.match(stepTwoRoute, /const hasRealTarget = isUuid\(targetId\)/);
   assert.match(stepTwoRoute, /const internalKey = isPeiSource/);
+  assert.match(stepTwoRoute, /peiGoalId: goalId \|\| null/);
+  assert.match(stepTwoRoute, /localTargetRef: localTargetRef \|\| null/);
   assert.match(stepTwoRoute, /canScheduleMaintenance: hasRealTarget/);
   assert.match(stepTwoRoute, /availableActions: hasRealTarget \? \['SCHEDULE_MAINTENANCE'\] : \[\]/);
   assert.match(stepTwoRoute, /progressPercent: 100/);
@@ -784,6 +789,7 @@ test('backend materializa target real para habilidade adquirida local do PEI', (
   assert.match(serverCode, /source: 'patient_pei_materialized'/);
   assert.match(serverCode, /writeAbaRowWithSchemaFallback\('aba_targets', payload, 'upsert'\)/);
   assert.match(serverCode, /clinical_status: status\.clinicalStatus/);
+  assert.match(serverCode, /localTargetRef: sanitizeString\(peiTarget\?\.localTargetRef, 180\) \|\| null/);
   assert.match(serverCode, /hasRealTarget: true/);
   assert.match(serverCode, /canScheduleMaintenance: true/);
   const linkableStart = serverCode.indexOf("app.get('/api/patients/:patientId/aba/targets/linkable'");
@@ -792,6 +798,8 @@ test('backend materializa target real para habilidade adquirida local do PEI', (
   const linkableCode = serverCode.slice(linkableStart, linkableEnd);
   assert.match(linkableCode, /materializePeiTargetsForMaintenance/);
   assert.match(linkableCode, /targets = materializedPeiTargets\.targets/);
+  assert.match(linkableCode, /peiGoalId: peiGoalId \|\| null/);
+  assert.match(linkableCode, /localTargetRef: localTargetRef \|\| null/);
   assert.doesNotMatch(linkableCode, /select\('\*'\)/);
 });
 

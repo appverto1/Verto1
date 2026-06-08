@@ -23243,6 +23243,7 @@ async function startServer() {
           source: 'patient_pei_materialized',
           peiGoalId: sanitizeString(peiTarget?.peiGoalId, 180) || null,
           skillId: sanitizeString(peiTarget?.skillId, 180) || null,
+          localTargetRef: sanitizeString(peiTarget?.localTargetRef, 180) || null,
           peiGoalIndex: Number.isFinite(Number(peiTarget?.peiGoalIndex)) ? Number(peiTarget.peiGoalIndex) : null,
           materializedForMaintenance: true
         }),
@@ -31378,7 +31379,10 @@ async function startServer() {
         const addEligibleSkill = (source: any) => {
           const target = source?.target || source || {};
           const targetId = sanitizeString(source?.targetId || source?.target_id || target?.id, 180);
-          const goalId = sanitizeString(source?.peiGoalId || source?.goalId || source?.goal_id, 180);
+          const masteryCriteria = target?.mastery_criteria && typeof target.mastery_criteria === 'object' ? target.mastery_criteria : {};
+          const goalId = sanitizeString(source?.peiGoalId || source?.goalId || source?.goal_id || masteryCriteria?.peiGoalId || masteryCriteria?.pei_goal_id, 180);
+          const skillId = sanitizeString(source?.skillId || source?.skill_id || masteryCriteria?.skillId || masteryCriteria?.skill_id, 180);
+          const localTargetRef = sanitizeString(source?.localTargetRef || masteryCriteria?.localTargetRef || masteryCriteria?.local_target_ref || goalId, 180);
           const targetName = sanitizeString(source?.targetName || source?.target_name || source?.name || target?.name || target?.description, 240);
           if (!targetName) return;
           const protocolName = sanitizeString(source?.protocolName || source?.protocol || source?.protocol_title || target?.protocol_title, 240) || 'Sem protocolo informado';
@@ -31403,6 +31407,12 @@ async function startServer() {
             cardKind: 'PEI_ACQUIRED_SKILL',
             targetId: realTargetId,
             target_id: realTargetId || null,
+            peiGoalId: goalId || null,
+            goalId: goalId || null,
+            goal_id: goalId || null,
+            skillId: skillId || null,
+            skill_id: skillId || null,
+            localTargetRef: localTargetRef || null,
             hasRealTarget,
             targetName,
             protocol: protocolName,
@@ -32168,25 +32178,37 @@ async function startServer() {
       targets = materializedPeiTargets.targets;
       const rows = targets
         .filter((target: any) => isUuid(sanitizeString(target?.id, 180)))
-        .map((target: any) => cleanObject({
-          id: sanitizeString(target.id, 180),
-          target_id: sanitizeString(target.id, 180),
-          targetId: sanitizeString(target.id, 180),
-          name: sanitizeString(target.name || target.description, 240) || 'Habilidade sem nome',
-          target_name: sanitizeString(target.name || target.description, 240) || 'Habilidade sem nome',
-          targetName: sanitizeString(target.name || target.description, 240) || 'Habilidade sem nome',
-          protocol_title: sanitizeString(target.protocol_title, 240) || null,
-          protocolTitle: sanitizeString(target.protocol_title, 240) || null,
-          protocolName: sanitizeString(target.protocol_title, 240) || null,
-          domain_name: sanitizeString(target.domain_name, 240) || null,
-          domainName: sanitizeString(target.domain_name, 240) || null,
-          clinical_status: sanitizeString(target.clinical_status || target.phase || target.target_type, 80) || null,
-          clinicalStatus: sanitizeString(target.clinical_status || target.phase || target.target_type, 80) || null,
-          masteryStatus: sanitizeString(target.clinical_status, 80).toUpperCase() === 'MASTERED' ? 'MASTERED' : null,
-          phase: sanitizeString(target.phase, 80) || null,
-          status: sanitizeString(target.clinical_status || target.phase, 80) || null,
-          updated_at: sanitizeString(target.updated_at, 80) || null
-        }));
+        .map((target: any) => {
+          const masteryCriteria = target?.mastery_criteria && typeof target.mastery_criteria === 'object' ? target.mastery_criteria : {};
+          const peiGoalId = sanitizeString(masteryCriteria?.peiGoalId || masteryCriteria?.pei_goal_id, 180);
+          const skillId = sanitizeString(masteryCriteria?.skillId || masteryCriteria?.skill_id, 180);
+          const localTargetRef = sanitizeString(masteryCriteria?.localTargetRef || masteryCriteria?.local_target_ref || peiGoalId, 180);
+          return cleanObject({
+            id: sanitizeString(target.id, 180),
+            target_id: sanitizeString(target.id, 180),
+            targetId: sanitizeString(target.id, 180),
+            name: sanitizeString(target.name || target.description, 240) || 'Habilidade sem nome',
+            target_name: sanitizeString(target.name || target.description, 240) || 'Habilidade sem nome',
+            targetName: sanitizeString(target.name || target.description, 240) || 'Habilidade sem nome',
+            protocol_title: sanitizeString(target.protocol_title, 240) || null,
+            protocolTitle: sanitizeString(target.protocol_title, 240) || null,
+            protocolName: sanitizeString(target.protocol_title, 240) || null,
+            domain_name: sanitizeString(target.domain_name, 240) || null,
+            domainName: sanitizeString(target.domain_name, 240) || null,
+            clinical_status: sanitizeString(target.clinical_status || target.phase || target.target_type, 80) || null,
+            clinicalStatus: sanitizeString(target.clinical_status || target.phase || target.target_type, 80) || null,
+            masteryStatus: sanitizeString(target.clinical_status, 80).toUpperCase() === 'MASTERED' ? 'MASTERED' : null,
+            phase: sanitizeString(target.phase, 80) || null,
+            status: sanitizeString(target.clinical_status || target.phase, 80) || null,
+            peiGoalId: peiGoalId || null,
+            goalId: peiGoalId || null,
+            goal_id: peiGoalId || null,
+            skillId: skillId || null,
+            skill_id: skillId || null,
+            localTargetRef: localTargetRef || null,
+            updated_at: sanitizeString(target.updated_at, 80) || null
+          });
+        });
       return res.json({ success: true, data: rows });
     } catch {
       return res.status(500).json({ success: false, error: 'UNEXPECTED_ERROR', message: 'Não foi possível carregar habilidades do PEI agora.' });

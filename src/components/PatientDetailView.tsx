@@ -5325,11 +5325,46 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     const panelEligibleRows = Array.isArray(peiMaintenanceTargetFirstGroups.eligibleSkills)
       ? peiMaintenanceTargetFirstGroups.eligibleSkills
       : [];
+    const linkableTargetByClinicalId = new Map<string, any>();
+    peiMaintenanceLinkableTargets.forEach((target: any) => {
+      [
+        target?.peiGoalId,
+        target?.goalId,
+        target?.goal_id,
+        target?.skillId,
+        target?.skill_id,
+        target?.localTargetRef,
+        target?.source?.peiGoalId,
+        target?.source?.goalId,
+        target?.source?.goal_id,
+        target?.source?.skillId,
+        target?.source?.skill_id,
+        target?.source?.localTargetRef,
+        target?.mastery_criteria?.peiGoalId,
+        target?.mastery_criteria?.skillId,
+        target?.mastery_criteria?.localTargetRef
+      ].forEach((value: any) => {
+        const key = String(value || '').trim();
+        if (key && !linkableTargetByClinicalId.has(key)) linkableTargetByClinicalId.set(key, target);
+      });
+    });
     const localRows = () => dedupePeiMaintenanceRows(peiMaintenanceHydratedGoals
       .map((goal: any, index: number) => {
         if (!isGoalAcquired(goal)) return null;
-        const targetId = getPeiMaintenancePersistedId(goal?.target_id || goal?.targetId || goal?.aba_target_id || goal?.abaTargetId);
         const goalId = String(goal?.goal_id || goal?.goalId || goal?.id || index).trim();
+        const skillId = String(goal?.skillId || goal?.skill_id || '').trim();
+        const matchedTarget = [goalId, skillId]
+          .map((key) => linkableTargetByClinicalId.get(key))
+          .find(Boolean);
+        const targetId = getPeiMaintenancePersistedId(
+          goal?.target_id ||
+            goal?.targetId ||
+            goal?.aba_target_id ||
+            goal?.abaTargetId ||
+            matchedTarget?.target_id ||
+            matchedTarget?.targetId ||
+            matchedTarget?.id
+        );
         const name = safeDisplayValue(getPeiMaintenanceMatchName(goal), 'Habilidade sem nome');
         const protocol = safeDisplayValue(getPeiMaintenanceProtocolName(goal), 'Sem protocolo informado');
         const domain = safeDisplayValue(getPeiMaintenanceDomainName(goal), 'Sem domínio informado');
@@ -5338,6 +5373,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           targetId,
           target_id: targetId || null,
           goalId,
+          peiGoalId: goalId || null,
+          skillId: skillId || null,
+          localTargetRef: goalId || null,
           name,
           targetName: name,
           protocol,
@@ -5355,14 +5393,16 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           canAssignAppointment: false,
           canReviewLink: false,
           needsTargetReview: false,
-          availableActions: targetId ? ['SCHEDULE_MAINTENANCE'] : []
+          availableActions: targetId ? ['SCHEDULE_MAINTENANCE'] : [],
+          source: goal
         };
       })
       .filter(Boolean));
-    const localFallbackRows = hasPeiMaintenancePanelForCurrentPatient ? [] : localRows();
+    const localEligibleRows = localRows();
+    const panelRows = dedupePeiMaintenanceRows(panelEligibleRows);
     const rows = hasPeiMaintenancePanelForCurrentPatient
-      ? dedupePeiMaintenanceRows(panelEligibleRows)
-      : dedupePeiMaintenanceRows(localFallbackRows.length > 0 ? localFallbackRows : buildPeiMaintenanceEligibleSkills(
+      ? dedupePeiMaintenanceRows([...panelRows, ...localEligibleRows])
+      : dedupePeiMaintenanceRows(localEligibleRows.length > 0 ? localEligibleRows : buildPeiMaintenanceEligibleSkills(
         peiMaintenanceHydratedGoals.map((goal: any) => ({
           ...goal,
           progressPercent: getGoalProgressPercent(goal),
@@ -5376,7 +5416,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       if (targetId && peiMaintenanceUnavailableTargetIds.has(targetId)) return false;
       return !key || !peiMaintenanceUnavailableKeys.has(key);
     }));
-  }, [hasPeiMaintenancePanelForCurrentPatient, peiMaintenanceHydratedGoals, peiMaintenanceTargetFirstGroups.eligibleSkills, peiMaintenanceUnavailableKeys, peiMaintenanceUnavailableTargetIds]);
+  }, [hasPeiMaintenancePanelForCurrentPatient, peiMaintenanceHydratedGoals, peiMaintenanceLinkableTargets, peiMaintenanceTargetFirstGroups.eligibleSkills, peiMaintenanceUnavailableKeys, peiMaintenanceUnavailableTargetIds]);
 
   const peiGeneralizationRows = useMemo(() => {
     const maintainedRows = peiMaintenanceRows.filter((row: any) => row.isMaintained);
