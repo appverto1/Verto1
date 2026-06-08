@@ -211,6 +211,45 @@ test('mapper target-first remove de elegiveis target com schedule ativo', () => 
   assert.equal(mapped.sections.scheduled.some((row: any) => row.targetId === targetId), true);
 });
 
+test('mapper target-first remove elegivel duplicada quando schedule ativo tem outro target id', () => {
+  const eligibleTargetId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0110';
+  const scheduledTargetId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0111';
+  const mapped = mapMaintenancePanelResponse({
+    eligibleSkills: [
+      {
+        targetId: eligibleTargetId,
+        targetName: 'Realiza duas atividades simples de encaixe ou construcao',
+        protocol: 'VB-MAPP - Nivel 1',
+        domain: 'Percepcao Visual e Matching to Sample Nivel 1'
+      }
+    ],
+    scheduledProbes: [
+      {
+        targetId: scheduledTargetId,
+        scheduleId: 'maintenance-linked-active-001',
+        targetName: 'Realiza duas atividades simples de encaixe ou construcao',
+        protocolName: 'VB-MAPP - Nivel 1',
+        domainName: 'Percepcao Visual e Matching to Sample Nivel 1',
+        nextSchedule: {
+          id: 'maintenance-linked-active-001',
+          target_id: scheduledTargetId,
+          status: 'SCHEDULED',
+          appointment_id: '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0112'
+        }
+      }
+    ],
+    maintenanceSkills: [],
+    waitingNextSession: [],
+    overdueProbes: [],
+    regressionRisk: [],
+    technicalIssues: []
+  }, { patientId: 'patient-1', requestId: 14, loadedAt: 123458 });
+
+  assert.equal(mapped.summary.eligibleSkills, 0);
+  assert.equal(mapped.summary.scheduled, 1);
+  assert.equal(mapped.sections.eligibleSkills.some((row: any) => row.targetId === eligibleTargetId), false);
+});
+
 test('target-first separa risco de regressao do fluxo agendado', () => {
   const targetId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0020';
   const rows = buildPeiMaintenanceRows({
@@ -404,6 +443,8 @@ test('subaba manutencao preserva duplicatas do ensino e hidrata target do painel
   assert.match(eligibleCode, /progressPercent: 100/);
   assert.match(eligibleCode, /const schedulableLocalRows = panelEligibleRows\.length > 0/);
   assert.match(eligibleCode, /const rows = schedulableLocalRows\.length > 0 \? \[\.\.\.schedulableLocalRows, \.\.\.panelOnlyRows\]/);
+  assert.match(eligibleCode, /peiMaintenanceUnavailableDisplaySignatures/);
+  assert.match(eligibleCode, /getPeiMaintenanceDisplaySignature/);
   assert.doesNotMatch(eligibleCode, /panelByComposite|panelByName|compositeKey|panelByName\.get|panelByComposite\.get/);
 });
 
@@ -625,7 +666,12 @@ test('backend da etapa 2 usa PEI targets e schedules ativos por target em lote',
   assert.match(stepTwoRoute, /allTargets = materializedPeiTargets\.targets/);
   assert.match(stepTwoRoute, /peiTargets = materializedPeiTargets\.peiTargets/);
   assert.match(stepTwoRoute, /\.from\('aba_targets'\)[\s\S]*?\.select\(ABA_TARGET_RECOMMENDATION_SELECT\)/m);
-  assert.match(stepTwoRoute, /\.from\('aba_maintenance_schedules'\)[\s\S]*?\.select\(ABA_MAINTENANCE_SCHEDULE_SELECT\)[\s\S]*?\.in\('target_id', eligibleTargetIds\)[\s\S]*?\.in\('status', ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES\)/m);
+  assert.match(stepTwoRoute, /\.from\('aba_maintenance_schedules'\)[\s\S]*?\.select\(ABA_MAINTENANCE_SCHEDULE_SELECT\)[\s\S]*?\.eq\('patient_id', patientId\)[\s\S]*?\.in\('status', ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES\)/m);
+  assert.doesNotMatch(stepTwoRoute, /\.in\('target_id', eligibleTargetIds\)/);
+  assert.match(stepTwoRoute, /activeScheduleByCompositeKey/);
+  assert.match(stepTwoRoute, /findActiveScheduleForSkill/);
+  assert.match(stepTwoRoute, /emittedActiveScheduleKeys/);
+  assert.match(stepTwoRoute, /getMaintenanceDisplayCompositeKey/);
   assert.match(stepTwoRoute, /source: 'patient_pei_targets_step2'/);
   assert.match(stepTwoRoute, /source\?\.peiGoalIndex/);
   assert.match(stepTwoRoute, /const hasRealTarget = isUuid\(targetId\)/);
@@ -753,6 +799,9 @@ test('backend resolve targets de manutencao em lote com colunas explicitas', () 
   assert.match(serverCode, /technicalIssues/);
   assert.match(serverCode, /latestMasteryByTargetId/);
   assert.match(serverCode, /activeScheduleByTargetId/);
+  assert.match(serverCode, /getMaintenanceDisplayCompositeKey/);
+  assert.match(serverCode, /getMaintenanceDisplayNameKey/);
+  assert.match(serverCode, /rowDisplayHasActiveSchedule/);
   assert.match(serverCode, /hasPersistedMaintenanceScheduleId/);
   assert.match(serverCode, /scheduleId: scheduleId \|\| null/);
   assert.match(serverCode, /rowTargetHasActiveSchedule/);

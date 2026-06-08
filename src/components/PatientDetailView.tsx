@@ -5108,6 +5108,15 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         target?.schedule?.programName,
       ''
     );
+  const getPeiMaintenanceDisplaySignature = (row: any) => {
+    const name = normalizePeiMaintenanceMatchKey(getPeiMaintenanceMatchName(row));
+    if (!name) return '';
+    return [
+      name,
+      normalizePeiMaintenanceMatchKey(getPeiMaintenanceProtocolName(row)),
+      normalizePeiMaintenanceMatchKey(getPeiMaintenanceDomainName(row))
+    ].filter(Boolean).join('|');
+  };
 
   const peiMaintenanceHydratedGoals = useMemo(() => (
     peiGoals.map((goal: any) => {
@@ -5237,6 +5246,20 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return targetIds;
   }, [peiMaintenanceScheduledRows, peiMaintenanceTargetFirstGroups, peiMaintenanceWaitingRows]);
 
+  const peiMaintenanceUnavailableDisplaySignatures = useMemo(() => {
+    const signatures = new Set<string>();
+    [
+      ...peiMaintenanceScheduledRows,
+      ...peiMaintenanceWaitingRows,
+      ...(peiMaintenanceTargetFirstGroups.regressionRisk || []),
+      ...(peiMaintenanceTargetFirstGroups.maintenanceSkills || [])
+    ].forEach((row: any) => {
+      const signature = getPeiMaintenanceDisplaySignature(row);
+      if (signature) signatures.add(signature);
+    });
+    return signatures;
+  }, [peiMaintenanceScheduledRows, peiMaintenanceTargetFirstGroups, peiMaintenanceWaitingRows]);
+
   const peiMaintenanceEligibleRows = useMemo(() => {
     const panelEligibleRows = Array.isArray(peiMaintenanceTargetFirstGroups.eligibleSkills)
       ? peiMaintenanceTargetFirstGroups.eligibleSkills
@@ -5302,10 +5325,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return rows.filter((row: any) => {
       const key = getPeiMaintenanceDisplayKey(row);
       const targetId = getPeiMaintenancePersistedId(row?.targetId || row?.target_id || row?.aba_target_id || row?.abaTargetId);
+      const displaySignature = getPeiMaintenanceDisplaySignature(row);
       if (targetId && peiMaintenanceUnavailableTargetIds.has(targetId)) return false;
+      if (displaySignature && peiMaintenanceUnavailableDisplaySignatures.has(displaySignature)) return false;
       return !key || !peiMaintenanceUnavailableKeys.has(key);
     });
-  }, [history, patient?.id, patientCategory, peiMaintenanceHydratedGoals, peiMaintenanceTargetFirstGroups.eligibleSkills, peiMaintenanceUnavailableKeys, peiMaintenanceUnavailableTargetIds, planProtocolCatalog, protocols]);
+  }, [history, patient?.id, patientCategory, peiMaintenanceHydratedGoals, peiMaintenanceTargetFirstGroups.eligibleSkills, peiMaintenanceUnavailableDisplaySignatures, peiMaintenanceUnavailableKeys, peiMaintenanceUnavailableTargetIds, planProtocolCatalog, protocols]);
 
   const peiGeneralizationRows = useMemo(() => {
     const maintainedRows = peiMaintenanceRows.filter((row: any) => row.isMaintained);
