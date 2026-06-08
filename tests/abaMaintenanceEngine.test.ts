@@ -348,12 +348,21 @@ test('banner de manutencao comunica tipo atual e botao nao registra tentativa', 
   const activationStart = sessionModeCode.indexOf('const activateMaintenanceProbeMode');
   const activationEnd = sessionModeCode.indexOf('const registerFrequency', activationStart);
   const activationBody = sessionModeCode.slice(activationStart, activationEnd);
+  const sessionGoalsStart = sessionModeCode.indexOf('const baseSessionGoals');
+  const sessionGoalsEnd = sessionModeCode.indexOf('const maintenanceSchedules = useMemo', sessionGoalsStart);
+  const sessionGoalsBody = sessionModeCode.slice(sessionGoalsStart, sessionGoalsEnd);
+  assert.match(sessionModeCode, /const isTeachingOperationalGoal = \(goal: any\) => \{/);
+  assert.match(sessionModeCode, /const baseSessionGoals = \(patient\.pei\?\.filter\(isTeachingOperationalGoal\) \|\| \[\]\)/);
+  assert.match(sessionGoalsBody, /mergeSessionGoalsWithAvailableMaintenance\(baseSessionGoals, sessionAvailableMaintenanceProbeSchedules\)/);
+  assert.match(sessionModeCode, /source: 'session_maintenance_probe_available'/);
+  assert.doesNotMatch(sessionModeCode, /patient\.pei\?\.filter\(\(g: any\) => g\.isPriority \|\| g\.status === 'in_progress' \|\| isMaintenanceLikeGoal\(g\)\)/);
   assert.match(sessionModeCode, /Este target está em manutenção\./);
   assert.match(sessionModeCode, /const showMaintenanceOperationalBlock = Boolean\(maintenanceProbeCanRunNow \|\| maintenanceProbeActiveForGoal\)/);
   assert.match(sessionModeCode, /\{showMaintenanceOperationalBlock && \(/);
   assert.match(sessionModeCode, /maintenanceProbeCanRunNow/);
   assert.match(sessionModeCode, /hasAvailableMaintenanceProbe/);
-  assert.match(sessionModeCode, /upcomingMaintenanceProbeItems/);
+  assert.match(sessionModeCode, /sessionUpcomingMaintenanceProbeSchedules[\s\S]*?\.map\(\(schedule: any\)/m);
+  assert.match(sessionModeCode, /firstUpcomingMaintenanceProbeItem/);
   assert.match(sessionModeCode, /Há Maintenance Probe agendada para data futura/);
   assert.match(sessionModeCode, /maintenanceSessionSummaryRows/);
   assert.match(sessionModeCode, /resolveMaintenanceTargetDisplay/);
@@ -369,6 +378,8 @@ test('banner de manutencao comunica tipo atual e botao nao registra tentativa', 
   assert.doesNotMatch(sessionModeCode, /maintenanceInfo\.isMaintenanceTarget && \(/);
   assert.doesNotMatch(sessionModeCode, /Usar Maintenance Probe agora/);
   assert.doesNotMatch(sessionModeCode, /\{ key: 'maintenance_probe', label: 'Maintenance Probe' \}/);
+  assert.match(serverCode, /availabilityReasonForResponse/);
+  assert.match(serverCode, /return 'FUTURE_APPOINTMENT'/);
 });
 
 test('registro real de Maintenance Probe preserva target e schedule idempotentes', () => {

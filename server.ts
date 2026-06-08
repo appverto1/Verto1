@@ -30944,6 +30944,16 @@ async function startServer() {
         timeZone
       });
 
+      const availabilityReasonForResponse = (item: any) => {
+        const schedule = item?.schedule || {};
+        const reason = sanitizeString(item?.reason, 80) || 'UPCOMING_OR_DIFFERENT_SESSION';
+        if (reason !== 'UPCOMING_OR_DIFFERENT_SESSION') return reason;
+        const appointmentId = sanitizeString(schedule?.appointment_id || schedule?.appointmentId, 180);
+        if (appointmentId) return 'FUTURE_APPOINTMENT';
+        const referenceDate = schedule?.target_due_date || schedule?.targetDueDate || schedule?.due_date || schedule?.dueDate || schedule?.scheduled_for || schedule?.scheduledFor || item?.referenceDate || null;
+        return referenceDate ? 'FUTURE_DATE' : 'NOT_AVAILABLE_IN_SESSION';
+      };
+
       const itemForResponse = (item: any, reason: string) => {
         const schedule = item?.schedule || item || {};
         const target = schedule?.target || {};
@@ -30967,10 +30977,10 @@ async function startServer() {
 
       const available = availability.availableItems
         .filter((item) => !item.blockedAppointmentStatus)
-        .map((item) => itemForResponse(item, item.reason))
+        .map((item) => itemForResponse(item, availabilityReasonForResponse(item)))
         .filter(Boolean);
       const upcoming = availability.upcomingItems
-        .map((item) => itemForResponse(item, item.reason))
+        .map((item) => itemForResponse(item, availabilityReasonForResponse(item)))
         .filter(Boolean);
       return res.json({
         success: true,

@@ -493,6 +493,19 @@ const isMaintenanceLikeGoal = (goal: any) => {
   return values.some((value) => ['completed', 'mastered', 'maintenance', 'maintained', 'ready_for_review', 'regression_risk'].includes(value));
 };
 
+const isTeachingOperationalGoal = (goal: any) => {
+  const values = [
+    goal?.clinical_status,
+    goal?.clinicalStatus,
+    goal?.phase,
+    goal?.status,
+    goal?.target_type,
+    goal?.targetType
+  ].map((value) => String(value || '').trim().toLowerCase());
+  if (values.some((value) => ['in_progress', 'acquisition', 'teaching', 'baseline'].includes(value))) return true;
+  return Boolean(goal?.isPriority && !isMaintenanceLikeGoal(goal));
+};
+
 const normalizeSessionMaintenanceProbeList = (items: any[]) => (Array.isArray(items) ? items : [])
   .map((item: any) => {
     const schedule = item?.schedule && typeof item.schedule === 'object' ? item.schedule : {};
@@ -535,6 +548,50 @@ const mergeMaintenanceScheduleLists = (...lists: any[][]) => {
   return Array.from(byId.values());
 };
 
+const maintenanceScheduleTargetId = (schedule: any) => String(schedule?.target_id || schedule?.targetId || schedule?.target?.id || '').trim();
+
+const buildSessionGoalFromAvailableMaintenanceSchedule = (schedule: any) => {
+  const targetId = maintenanceScheduleTargetId(schedule);
+  if (!targetId) return null;
+  const targetName = String(schedule?.targetName || schedule?.target_name || schedule?.target?.name || 'Maintenance Probe').trim();
+  return {
+    id: targetId,
+    target_id: targetId,
+    targetId,
+    name: targetName,
+    targetName,
+    target_name: targetName,
+    protocolTitle: schedule?.protocolTitle || schedule?.protocol_title || null,
+    protocol_title: schedule?.protocol_title || schedule?.protocolTitle || null,
+    domainName: schedule?.domainName || schedule?.domain_name || null,
+    domain_name: schedule?.domain_name || schedule?.domainName || null,
+    status: 'maintenance_probe_available',
+    clinical_status: 'MAINTENANCE',
+    source: 'session_maintenance_probe_available',
+    isMaintenanceProbeAvailableSessionGoal: true
+  };
+};
+
+const mergeSessionGoalsWithAvailableMaintenance = (baseGoals: any[], availableSchedules: any[]) => {
+  const byTargetId = new Map<string, any>();
+  (Array.isArray(baseGoals) ? baseGoals : []).forEach((goal: any) => {
+    const targetId = String(goal?.target_id || goal?.targetId || goal?.aba_target_id || goal?.abaTargetId || goal?.id || '').trim();
+    const key = targetId || String(goal?.id || goal?.name || '').trim();
+    if (key && !byTargetId.has(key)) byTargetId.set(key, goal);
+  });
+  (Array.isArray(availableSchedules) ? availableSchedules : []).forEach((schedule: any) => {
+    const targetId = maintenanceScheduleTargetId(schedule);
+    if (!targetId || byTargetId.has(targetId)) return;
+    const goal = buildSessionGoalFromAvailableMaintenanceSchedule(schedule);
+    if (goal) byTargetId.set(targetId, goal);
+  });
+  return Array.from(byTargetId.values()).sort((a: any, b: any) => {
+    const availableDiff = (b.isMaintenanceProbeAvailableSessionGoal ? 1 : 0) - (a.isMaintenanceProbeAvailableSessionGoal ? 1 : 0);
+    if (availableDiff !== 0) return availableDiff;
+    return (b.isPriority ? 1 : 0) - (a.isPriority ? 1 : 0);
+  });
+};
+
 export const SessionMode = ({
   patient,
   onClose,
@@ -551,7 +608,7 @@ export const SessionMode = ({
 }: any) => {
   if (!isAbaV2Enabled()) return null;
 
-  const sessionGoals = (patient.pei?.filter((g: any) => g.isPriority || g.status === 'in_progress' || isMaintenanceLikeGoal(g)) || [])
+  const baseSessionGoals = (patient.pei?.filter(isTeachingOperationalGoal) || [])
     .sort((a: any, b: any) => (b.isPriority ? 1 : 0) - (a.isPriority ? 1 : 0));
 
   const sessionId = String(activeSession?.id || `draft-${patient?.id || 'patient'}`);
@@ -3257,6 +3314,9 @@ export const SessionMode = ({
   const sessionUpcomingMaintenanceProbeSchedules = useMemo(() => (
     normalizeSessionMaintenanceProbeList(sessionMaintenanceProbes?.upcoming || [])
   ), [sessionMaintenanceProbes]);
+  const sessionGoals = useMemo(() => (
+    mergeSessionGoalsWithAvailableMaintenance(baseSessionGoals, sessionAvailableMaintenanceProbeSchedules)
+  ), [baseSessionGoals, sessionAvailableMaintenanceProbeSchedules]);
   const maintenanceSchedules = useMemo(() => mergeMaintenanceScheduleLists(
     sessionAvailableMaintenanceProbeSchedules,
     sessionUpcomingMaintenanceProbeSchedules,
@@ -3495,10 +3555,18 @@ export const SessionMode = ({
   }, [maintenanceProbeRows]);
 
   const upcomingMaintenanceProbeItems = useMemo(() => {
-    return maintenanceProbeRows
-      .filter((row: any) => !row.hasAvailableMaintenanceProbe && row.hasUpcomingMaintenanceProbe)
+    return sessionUpcomingMaintenanceProbeSchedules
+      .filter((schedule: any) => !sessionAvailableMaintenanceProbeSchedules.some((available: any) => String(available?.id || available?.scheduleId || '') === String(schedule?.id || schedule?.scheduleId || '')))
+      .map((schedule: any) => ({
+        id: `upcoming-${String(schedule?.id || schedule?.scheduleId || schedule?.targetId || schedule?.target_id || '')}`,
+        targetId: maintenanceScheduleTargetId(schedule) || null,
+        name: String(schedule?.targetName || schedule?.target_name || schedule?.target?.name || 'Maintenance Probe').trim(),
+        nextSchedule: schedule,
+        availabilityReason: schedule?.availabilityReason || null
+      }))
       .slice(0, 6);
-  }, [maintenanceProbeRows]);
+  }, [sessionAvailableMaintenanceProbeSchedules, sessionUpcomingMaintenanceProbeSchedules]);
+  const firstUpcomingMaintenanceProbeItem = upcomingMaintenanceProbeItems[0] || null;
 
   const maintenanceSessionSummaryRows = useMemo(() => {
     return maintenanceProbeRows
@@ -4280,7 +4348,7 @@ export const SessionMode = ({
       )
     : null;
 
-  if (sessionGoals.length === 0 && !(sessionCompleted && postClosureSummary && !showSessionSummary)) {
+  if (sessionGoals.length === 0 && upcomingMaintenanceProbeItems.length === 0 && !sessionMaintenanceProbes?.error && !(sessionCompleted && postClosureSummary && !showSessionSummary)) {
     const emptyStateContent = (
       <div className="fixed inset-0 z-[100] bg-white flex flex-col items-center justify-center p-6">
         <button onClick={onClose} className="absolute top-6 left-6 p-2 hover:bg-gray-100 rounded-full transition-all">
@@ -5771,7 +5839,9 @@ export const SessionMode = ({
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-500">Maintenance Probe agendada</p>
-                  <h2 className="text-lg font-bold text-gray-900">Há Maintenance Probe agendada para data futura.</h2>
+                  <h2 className="text-lg font-bold text-gray-900">
+                    Há Maintenance Probe agendada para data futura{firstUpcomingMaintenanceProbeItem?.nextSchedule ? `: ${formatMaintenanceDueLabel(firstUpcomingMaintenanceProbeItem.nextSchedule)}` : '.'}
+                  </h2>
                 </div>
               </div>
             </section>
