@@ -24768,24 +24768,51 @@ async function startServer() {
       const toIso = sanitizeIsoDateTime(req.query?.to || new Date(Date.now() + 90 * 86400000).toISOString());
       const limit = parseBoundedListLimit(req.query?.limit, 40, 100);
 
-      let query = supabase
-        .from('appointments')
-        .select(PORTAL_APPOINTMENT_SELECT)
-        .gte('scheduled_at', fromIso)
-        .lte('scheduled_at', toIso)
-        .order('scheduled_at', { ascending: true })
-        .limit(limit);
-      if (patientIds.length > 0) query = query.in('patient_id', patientIds);
-      else if (!isResponsiblePortalRole(role)) {
+      const applyPortalAppointmentScope = (query: any) => {
+        if (patientIds.length > 0) return query.in('patient_id', patientIds);
+        if (!isResponsiblePortalRole(role)) {
+          const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+          if (clinicId) return query.eq('clinic_id', clinicId);
+        }
+        return query;
+      };
+      const buildPortalAppointmentRangeQuery = (dateColumn: 'scheduled_at' | 'scheduled_start_at') =>
+        applyPortalAppointmentScope(
+          supabase
+            .from('appointments')
+            .select(PORTAL_APPOINTMENT_SELECT)
+            .gte(dateColumn, fromIso)
+            .lte(dateColumn, toIso)
+            .order(dateColumn, { ascending: true })
+            .limit(limit)
+        );
+
+      const [scheduledAtResult, scheduledStartResult] = await Promise.all([
+        buildPortalAppointmentRangeQuery('scheduled_at'),
+        buildPortalAppointmentRangeQuery('scheduled_start_at')
+      ]);
+      const queryResults = [scheduledAtResult, scheduledStartResult];
+      const rowsById = new Map<string, any>();
+      for (const result of queryResults) {
+        const error = (result as any).error;
+        if (error) {
+          if (hasMissingFinancialSchema(error)) continue;
+          throw error;
+        }
+        for (const row of Array.isArray((result as any).data) ? (result as any).data : []) {
+          const rowId = sanitizeString(row?.id, 120);
+          if (rowId && !rowsById.has(rowId)) rowsById.set(rowId, row);
+        }
+      }
+      if (rowsById.size === 0) {
         const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
-        if (clinicId) query = query.eq('clinic_id', clinicId);
+        if (!clinicId && !isResponsiblePortalRole(role)) {
+          return res.json({ success: true, data: [] });
+        }
       }
-      const { data, error } = await query;
-      if (error) {
-        if (hasMissingFinancialSchema(error)) return res.json({ success: true, data: [] });
-        throw error;
-      }
-      const rows = Array.isArray(data) ? data : [];
+      const rows = Array.from(rowsById.values())
+        .sort((a, b) => buildCalendarAppointmentStart(a).getTime() - buildCalendarAppointmentStart(b).getTime())
+        .slice(0, limit);
       const visibleRows = [];
       for (const row of rows) {
         if (await canPortalUserAccessPatient(sanitizeString(row?.patient_id, 120), row, req.session.user)) {

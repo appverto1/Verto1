@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 const root = process.cwd();
 const patientDashboardCode = readFileSync(join(root, 'src/components/PatientDashboard.tsx'), 'utf8');
+const appCode = readFileSync(join(root, 'src/App.tsx'), 'utf8');
 
 const tests: Array<{ name: string; fn: () => void }> = [];
 const test = (name: string, fn: () => void) => tests.push({ name, fn });
@@ -67,6 +68,30 @@ test('diario da familia preserva path de foto e aguarda persistencia do historic
   assert.match(patientDashboardCode, /setFamilyImagePath\(result\.path \|\| null\)/);
   assert.match(patientDashboardCode, /setFamilyImagePath\(null\); setIsDrawingMode\(false\)/);
   assert.match(patientDashboardCode, /setFamilyImagePath\(null\);\s*setIsFamilyLogOpen\(false\)/);
+  assert.match(patientDashboardCode, /const getFamilyDiaryImageSource = \(entry: any\) =>/);
+  assert.match(patientDashboardCode, /entry\?\.image_path/);
+  assert.match(patientDashboardCode, /path\.startsWith\('patient-photos\/'\)/);
+  assert.match(patientDashboardCode, /<SecureImage\s+src=\{getFamilyDiaryImageSource\(entry\)\}/);
+  const kidsBlock = between('if (isKidsProfile) {', 'const dailyReviewTasks = useMemo');
+  assert.doesNotMatch(kidsBlock, /<img[\s\S]{0,220}alt="Registro do diário"/);
+});
+
+test('estrelinhas Kids contam apenas registros do proprio paciente e comecam em zero', () => {
+  assert.match(patientDashboardCode, /const portalStarPatientKeys = new Set/);
+  assert.match(patientDashboardCode, /const sharedNoteBelongsToPortalPatient = \(item: any\) =>/);
+  assert.match(patientDashboardCode, /return false;\s*\};\s*const scopedSharedNotes = \(Array\.isArray\(sharedNotes\) \? sharedNotes : \[\]\)\.filter\(sharedNoteBelongsToPortalPatient\)/);
+  assert.match(patientDashboardCode, /const sharedFamilyStars = scopedSharedNotes\.filter/);
+  assert.match(patientDashboardCode, /scopedSharedNotes\.forEach\(\(item: any\) =>/);
+
+  const sharedNotesProp = appCode.slice(
+    appCode.indexOf('sharedNotes={therapistNotes.filter'),
+    appCode.indexOf('protocols={protocols}', appCode.indexOf('sharedNotes={therapistNotes.filter'))
+  );
+  assert.match(sharedNotesProp, /const currentPatientIds = new Set/);
+  assert.match(sharedNotesProp, /const belongsById =/);
+  assert.match(sharedNotesProp, /const belongsByEmail =/);
+  assert.match(sharedNotesProp, /return belongsById \|\| belongsByEmail/);
+  assert.doesNotMatch(sharedNotesProp, /if \(user\.role === 'patient'\) \{\s*return isPatientNote;\s*\}/);
 });
 
 let passed = 0;

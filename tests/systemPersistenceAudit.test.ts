@@ -78,12 +78,18 @@ test('diario da familia usa historico como fonte persistente e idempotente', () 
 });
 
 test('estrelinhas do diario sao persistidas para o portal do paciente', () => {
-  const updateHistory = sliceFrom(appCode, 'const handleUpdateHistoryItem = async', 8000);
+  const updateHistory = sliceFrom(appCode, 'const handleUpdateHistoryItem = async', 11000);
   assert.match(updateHistory, /resolvePatientEmailForMilestone/);
   assert.match(updateHistory, /stableUuidFromString\(`family-milestone:\$\{sourceRef\}`\)/);
   assert.match(updateHistory, /source:\s*'family_milestone_event'/);
   assert.match(updateHistory, /dataService\.updateNote\(String\(noteId\)/);
   assert.match(updateHistory, /const historyUpdateResult = await dataService\.updateHistoryItem/);
+  assert.match(updateHistory, /return false/);
+  assert.match(updateHistory, /const previousTherapistNotes = therapistNotes/);
+  assert.match(updateHistory, /const previousHistory = history/);
+  assert.match(updateHistory, /setHistory\(previousHistory\)/);
+  assert.match(updateHistory, /setTherapistNotes\(previousTherapistNotes\)/);
+  assert.match(updateHistory, /Não foi possível salvar a estrelinha agora\. Tente novamente\./);
   assert.match(updateHistory, /throw new Error\(historyUpdateResult\?\.error \|\| 'Falha ao salvar estrela no histórico\.'\)/);
 });
 

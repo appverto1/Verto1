@@ -94,11 +94,15 @@ test('calendario e relatorio carregam sob demanda e nao na home Kids', () => {
 
 test('endpoint do calendario do portal segue escopo e select explicito', () => {
   assert.doesNotMatch(serverCode, /\.select\(\s*['"`]\*['"`]\s*\)/);
-  const route = serverSlice("app.get('/api/portal/appointments'");
+  const route = serverSlice("app.get('/api/portal/appointments'", 4400);
   assert.match(route, /checkAuth/);
   assert.match(route, /getPortalPatientIdsForUser/);
   assert.match(route, /canPortalUserAccessPatient/);
   assert.match(route, /\.select\(PORTAL_APPOINTMENT_SELECT\)/);
+  assert.match(route, /buildPortalAppointmentRangeQuery\('scheduled_at'\)/);
+  assert.match(route, /buildPortalAppointmentRangeQuery\('scheduled_start_at'\)/);
+  assert.match(route, /const rowsById = new Map<string, any>\(\)/);
+  assert.match(route, /buildCalendarAppointmentStart\(a\)\.getTime\(\) - buildCalendarAppointmentStart\(b\)\.getTime\(\)/);
   assert.match(route, /visibleRows\.map\(\(row\) => serializePortalAppointment\(row\)\)/);
 });
 

@@ -1252,7 +1252,21 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       const hasStarMarker = /\u2b50|⭐/.test(String(item?.subject || '')) || /\[STAR\]/i.test(String(item?.note || item?.text || ''));
       return isFamily && (Number(item?.score ?? 0) >= 1 || hasStarMarker);
     }).length;
-    const sharedFamilyStars = (Array.isArray(sharedNotes) ? sharedNotes : []).filter((item: any) => {
+    const portalStarPatientKeys = new Set(
+      [portalPatientId, user?.id, user?.patientId, user?.patient_id]
+        .map((value) => String(value || '').trim())
+        .filter(Boolean)
+    );
+    const portalStarPatientEmail = String(user?.email || '').trim().toLowerCase();
+    const sharedNoteBelongsToPortalPatient = (item: any) => {
+      const notePatientId = String(item?.patientId ?? item?.patient_id ?? '').trim();
+      const notePatientEmail = String(item?.patient_email ?? item?.email ?? '').trim().toLowerCase();
+      if (notePatientId) return portalStarPatientKeys.has(notePatientId);
+      if (notePatientEmail) return Boolean(portalStarPatientEmail && notePatientEmail === portalStarPatientEmail);
+      return false;
+    };
+    const scopedSharedNotes = (Array.isArray(sharedNotes) ? sharedNotes : []).filter(sharedNoteBelongsToPortalPatient);
+    const sharedFamilyStars = scopedSharedNotes.filter((item: any) => {
       const type = String(item?.type || '').toLowerCase();
       const visibility = String(item?.visibility || '').toLowerCase();
       const isFamily = type === 'family_note' || type === 'photo' || visibility === 'family';
@@ -1260,7 +1274,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       return isFamily && (Number(item?.score ?? 0) >= 1 || hasStarMarker);
     }).length;
     const milestoneBySource = new Map<string, { awarded: boolean; ts: number }>();
-    (Array.isArray(sharedNotes) ? sharedNotes : []).forEach((item: any) => {
+    scopedSharedNotes.forEach((item: any) => {
       const subject = String(item?.subject || '').trim().toLowerCase();
       const text = String(item?.text || item?.note || '').trim();
       const isEvent = subject === 'milestone_event' || text.startsWith('MILESTONE_EVENT|');
@@ -1278,7 +1292,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     });
     const milestoneEventStars = Array.from(milestoneBySource.values()).filter((e) => e.awarded).length;
     return { weekLogs, weekPhotos, stars: Math.max(stars, sharedFamilyStars, milestoneEventStars) };
-  }, [familyDiaryHistory, history, sharedNotes]);
+  }, [familyDiaryHistory, history, sharedNotes, portalPatientId, user?.id, user?.patientId, user?.patient_id, user?.email]);
   const kidsCheckpointLevel = useMemo(() => Math.floor((kidsGamification.stars || 0) / 5), [kidsGamification.stars]);
 
   const normalizePortalText = (value: any) => String(value || '').trim();
@@ -1484,6 +1498,14 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       hour: '2-digit',
       minute: '2-digit'
     });
+  };
+
+  const getFamilyDiaryImageSource = (entry: any) => {
+    const direct = firstPortalText(entry?.image, entry?.imageUrl, entry?.photoUrl, entry?.image_url, entry?.url);
+    if (direct) return direct;
+    const path = firstPortalText(entry?.image_path, entry?.imagePath, entry?.storage_path, entry?.storagePath);
+    if (!path) return '';
+    return path.startsWith('patient-photos/') ? path : `patient-photos/${path}`;
   };
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -2581,11 +2603,16 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                             </span>
                           </div>
                           {entry.note && <p className="text-xs sm:text-sm text-gray-700 leading-relaxed mb-2">{entry.note}</p>}
-                          {(entry.image || entry.imageUrl || entry.photoUrl || entry.image_url || entry.url) && (
-                            <img
-                              src={entry.image || entry.imageUrl || entry.photoUrl || entry.image_url || entry.url}
+                          {getFamilyDiaryImageSource(entry) && (
+                            <SecureImage
+                              src={getFamilyDiaryImageSource(entry)}
                               alt="Registro do diário"
                               className="w-full max-h-40 object-cover rounded-xl border border-blue-100"
+                              fallback={
+                                <div className="rounded-xl border border-blue-100 bg-white px-3 py-4 text-center text-[11px] font-semibold text-blue-500">
+                                  Foto indisponível no momento
+                                </div>
+                              }
                             />
                           )}
                         </div>

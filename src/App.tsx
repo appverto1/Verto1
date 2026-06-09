@@ -2592,7 +2592,7 @@ export default function App() {
         const patientId = String(payload.patientId || '').trim();
         const patientEmail = resolvePatientEmailForMilestone(patientId, payload.patientEmail);
         const sourceRef = String(payload.sourceRef || '').trim();
-        if (!sourceRef || (!patientId && !patientEmail)) return;
+        if (!sourceRef || (!patientId && !patientEmail)) return false;
         const result = await dataService.addNote({
           id: stableUuidFromString(`family-milestone:${sourceRef}`),
           patient_id: patientId,
@@ -2606,9 +2606,12 @@ export default function App() {
         });
         if (result?.success === false && !(result?.offline && result?.pending)) {
           console.warn('Falha ao persistir evento de marco:', result?.error || result);
+          return false;
         }
+        return true;
       } catch (error) {
         console.error('Falha ao persistir evento de marco:', error);
+        return false;
       }
     };
     if (rawId.startsWith('note-family-')) {
@@ -2619,6 +2622,7 @@ export default function App() {
       const notePatientEmail = resolvePatientEmailForMilestone(notePatientId, matchingNote?.patient_email);
       const updatedNoteText = applyStarMarker(String(matchingNote?.text || matchingNote?.note || ''), starred);
       const updatedNoteSubject = String(matchingNote?.subject || 'Geral').replace(/\u2b50|â­/g, '').trim() || 'Geral';
+      const previousTherapistNotes = therapistNotes;
       setTherapistNotes(prev =>
         prev.map((n: any) =>
           String(n.id) === String(noteId)
@@ -2645,17 +2649,22 @@ export default function App() {
             text: updatedNoteText
           });
           if (noteUpdateResult?.success === false) {
-            console.warn('Falha ao atualizar anotação familiar original:', noteUpdateResult?.error || noteUpdateResult);
+            throw new Error(noteUpdateResult?.error || 'Falha ao atualizar anotação familiar original.');
           }
         }
-        await persistMilestoneEvent({
+        const milestonePersisted = await persistMilestoneEvent({
           patientId: notePatientId,
           patientEmail: notePatientEmail,
           sourceRef: rawId,
           awarded: starred
         });
+        if (!milestonePersisted) {
+          throw new Error('Falha ao confirmar a estrelinha no portal da família.');
+        }
       } catch (error) {
         console.error('Falha ao persistir estrela em anotaÃ§Ã£o de famÃ­lia:', error);
+        setTherapistNotes(previousTherapistNotes);
+        alert('Não foi possível salvar a estrelinha agora. Tente novamente.');
       }
       return;
     }
@@ -2666,6 +2675,8 @@ export default function App() {
       const patientId = String(item?.patientId || item?.patient_id || '').trim();
       const normalizedItemText = String(item?.note || item?.text || '').trim().toLowerCase();
       const starred = Number(score || 0) >= 1;
+      const previousHistory = history;
+      const previousTherapistNotes = therapistNotes;
       const matchingNote = (Array.isArray(therapistNotes) ? therapistNotes : []).find((n: any) => {
         const samePatient = String(n?.patientId || n?.patient_id || '').trim() === patientId;
         const sameFamilyType = ['family', 'patient', 'shared'].includes(String(n?.visibility || '').toLowerCase()) ||
@@ -2717,14 +2728,20 @@ export default function App() {
           );
         }
 
-        await persistMilestoneEvent({
+        const milestonePersisted = await persistMilestoneEvent({
           patientId: String(item?.patientId || item?.patient_id || ''),
           patientEmail,
           sourceRef: rawId,
           awarded: starred
         });
+        if (!milestonePersisted) {
+          throw new Error('Falha ao confirmar a estrelinha no portal da família.');
+        }
       } catch (error) {
         console.error('Falha ao persistir estrelinha de registro da família:', error);
+        setHistory(previousHistory);
+        setTherapistNotes(previousTherapistNotes);
+        alert('Não foi possível salvar a estrelinha agora. Tente novamente.');
       }
       return;
     }
@@ -5140,10 +5157,18 @@ export default function App() {
                 noteVisibility === 'patient' ||
                 noteVisibility === 'family' ||
                 noteVisibility === 'shared_patient';
-              if (user.role === 'patient') {
-                return isPatientNote;
-              }
-              return (n.patientId === user.id || n?.patient_email === user.email) && isPatientNote;
+              if (!isPatientNote) return false;
+              const notePatientId = String(n?.patientId ?? n?.patient_id ?? '').trim();
+              const currentPatientIds = new Set(
+                [resolvedPatientPortalId, user?.patientId, user?.patient_id, user?.id]
+                  .map((value) => String(value || '').trim())
+                  .filter(Boolean)
+              );
+              const notePatientEmail = String(n?.patient_email ?? n?.email ?? '').trim().toLowerCase();
+              const currentEmail = String(user?.email || '').trim().toLowerCase();
+              const belongsById = notePatientId !== '' && currentPatientIds.has(notePatientId);
+              const belongsByEmail = notePatientEmail !== '' && currentEmail !== '' && notePatientEmail === currentEmail;
+              return belongsById || belongsByEmail;
             })} 
             protocols={protocols} 
             onAddFamilyNote={handleAddFamilyNote}
