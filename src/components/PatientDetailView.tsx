@@ -5346,13 +5346,45 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     // Painel carregado e vazio nao pode apagar metas adquiridas que ja aparecem
     // no Ensino; nesse caso mantemos o fallback local abaixo.
     if (hasPeiMaintenancePanelForCurrentPatient && panelHasAnyMaintenanceRows) {
+      if (import.meta.env.DEV) {
+        console.debug('[peiMaintenanceEligibleRows] Using panel data', {
+          source: 'panel_persistent',
+          panelEligibleCount: panelEligibleRows.length,
+          panelScheduledCount: peiMaintenanceTargetFirstGroups.scheduled?.length || 0,
+          panelHasAnyRows: panelHasAnyMaintenanceRows,
+          hasPeiMaintenancePanelForCurrentPatient,
+          availableSections: {
+            eligibleSkills: peiMaintenanceTargetFirstGroups.eligibleSkills?.length || 0,
+            maintenanceSkills: peiMaintenanceTargetFirstGroups.maintenanceSkills?.length || 0,
+            scheduled: peiMaintenanceTargetFirstGroups.scheduled?.length || 0,
+            waitingNextSession: peiMaintenanceTargetFirstGroups.waitingNextSession?.length || 0,
+            overdue: peiMaintenanceTargetFirstGroups.overdue?.length || 0,
+            regressionRisk: peiMaintenanceTargetFirstGroups.regressionRisk?.length || 0,
+            technical: peiMaintenanceTargetFirstGroups.technical?.length || 0
+          }
+        });
+      }
       return filterEligibleRows(panelEligibleRows);
     }
 
     // Enquanto a aba de manutenção carrega o painel real, não renderize fallback local.
     // Isso evita mostrar habilidades por 1s e removê-las quando o payload persistido chega.
     if (activeTab === 'plan' && activePeiPlanSubtab === 'maintenance' && isLoadingPeiMaintenancePanel) {
+      if (import.meta.env.DEV) {
+        console.debug('[peiMaintenanceEligibleRows] Panel still loading, showing empty');
+      }
       return [];
+    }
+
+    // Fallback local - só usado quando painel não tem dados persistidos
+    if (import.meta.env.DEV) {
+      console.debug('[peiMaintenanceEligibleRows] Using fallback local data', {
+        source: 'fallback_local',
+        hasPeiMaintenancePanelForCurrentPatient,
+        panelHasAnyMaintenanceRows,
+        isLoadingPeiMaintenancePanel,
+        peiMaintenanceHydratedGoalsCount: peiMaintenanceHydratedGoals?.length || 0
+      });
     }
 
     const linkableTargetByClinicalId = new Map<string, any>();
