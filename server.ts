@@ -22663,9 +22663,10 @@ async function startServer() {
       const protocolTitle = sanitizeString(target?.protocol_title || raw.protocolTitle || raw.protocol_name, 240) || null;
       const domainName = sanitizeString(target?.domain_name || raw.domainName || raw.domain_name, 240) || null;
       const masteryCriteria = target?.mastery_criteria && typeof target.mastery_criteria === 'object' ? target.mastery_criteria : {};
-      const peiGoalId = sanitizeString(masteryCriteria?.peiGoalId || masteryCriteria?.pei_goal_id || raw.peiGoalId || raw.pei_goal_id || raw.goalId || raw.goal_id, 180);
-      const skillId = sanitizeString(masteryCriteria?.skillId || masteryCriteria?.skill_id || raw.skillId || raw.skill_id, 180);
-      const localTargetRef = sanitizeString(masteryCriteria?.localTargetRef || masteryCriteria?.local_target_ref || raw.localTargetRef || raw.local_target_ref || peiGoalId, 180);
+      const peiGoalId = sanitizePeiLocalIdentifier(masteryCriteria?.peiGoalId || masteryCriteria?.pei_goal_id || raw.peiGoalId || raw.pei_goal_id || raw.goalId || raw.goal_id, 180);
+      const skillId = sanitizePeiLocalIdentifier(masteryCriteria?.skillId || masteryCriteria?.skill_id || raw.skillId || raw.skill_id, 180);
+      const localTargetRef = sanitizePeiLocalIdentifier(masteryCriteria?.localTargetRef || masteryCriteria?.local_target_ref || raw.localTargetRef || raw.local_target_ref || peiGoalId, 180);
+      const clinicalIdentitySource = sanitizeString(masteryCriteria?.source || raw.source || raw.clinicalIdentitySource, 120);
       return cleanObject({
         ...row,
         appointment,
@@ -22682,6 +22683,7 @@ async function startServer() {
         skillId: skillId || null,
         skill_id: skillId || null,
         localTargetRef: localTargetRef || null,
+        clinicalIdentitySource: clinicalIdentitySource || null,
         target_missing: false,
         raw_payload: sanitizeClinicalPayload({
           ...raw,
@@ -22691,7 +22693,8 @@ async function startServer() {
           peiGoalId: peiGoalId || raw.peiGoalId || raw.pei_goal_id || null,
           goalId: peiGoalId || raw.goalId || raw.goal_id || null,
           skillId: skillId || raw.skillId || raw.skill_id || null,
-          localTargetRef: localTargetRef || raw.localTargetRef || raw.local_target_ref || null
+          localTargetRef: localTargetRef || raw.localTargetRef || raw.local_target_ref || null,
+          clinicalIdentitySource: clinicalIdentitySource || raw.clinicalIdentitySource || null
         })
       });
     });
@@ -23464,21 +23467,33 @@ async function startServer() {
         [targetName, protocolName, domainName].map(normalizePeiTargetMatchKey).filter(Boolean).join('|');
       const nameKey = sanitizeString(peiTarget?.matchNameKey, 280) || normalizePeiTargetMatchKey(targetName);
       const explicitTargetId = sanitizeString(peiTarget?.targetId || peiTarget?.target_id || peiTarget?.abaTargetId || peiTarget?.aba_target_id, 180);
+      const sourcePeiGoalId = sanitizePeiLocalIdentifier(peiTarget?.peiGoalId || peiTarget?.goalId || peiTarget?.goal_id, 180);
+      const sourceSkillId = sanitizePeiLocalIdentifier(peiTarget?.skillId || peiTarget?.skill_id, 180);
+      const sourceLocalTargetRef = sanitizePeiLocalIdentifier(peiTarget?.localTargetRef, 180);
+      const sourceIndex = sanitizePeiLocalIdentifier(peiTarget?.peiGoalIndex, 40);
       const stableTargetId = stableAbaUuidFromParts('patient-pei-maintenance-target', [
         organizationId,
         patientId,
-        sanitizePeiLocalIdentifier(peiTarget?.peiGoalId || peiTarget?.goalId || peiTarget?.goal_id, 180),
-        sanitizePeiLocalIdentifier(peiTarget?.skillId || peiTarget?.skill_id, 180),
-        sanitizePeiLocalIdentifier(peiTarget?.localTargetRef, 180),
-        sanitizePeiLocalIdentifier(peiTarget?.peiGoalIndex, 40),
+        sourcePeiGoalId,
+        sourceSkillId,
+        sourceLocalTargetRef,
+        sourceIndex,
         compositeKey
       ]);
+      const legacyStableTargetIds = [
+        stableAbaUuidFromParts('patient-pei-maintenance-target', [organizationId, patientId, '', sourceSkillId, '', '', compositeKey]),
+        stableAbaUuidFromParts('patient-pei-maintenance-target', [organizationId, patientId, '', sourceSkillId, '', String(peiTarget?.peiGoalIndex ?? ''), compositeKey]),
+        stableAbaUuidFromParts('patient-pei-maintenance-target', [organizationId, patientId, sourcePeiGoalId, sourceSkillId, '', '', compositeKey])
+      ].filter((id, index, list) => isUuid(id) && list.indexOf(id) === index);
       const clinicalMatchedTarget = getPeiMaintenanceTargetClinicalIds(peiTarget)
         .map((clinicalId: string) => !duplicateClinicalId.has(clinicalId) ? targetByClinicalId.get(clinicalId) : null)
         .find(Boolean) || null;
+      const stableMatchedTarget = [stableTargetId, ...legacyStableTargetIds]
+        .map((candidateId: string) => targetById.get(candidateId))
+        .find(Boolean) || null;
       const matchedTarget =
         (isUuid(explicitTargetId) ? targetById.get(explicitTargetId) : null) ||
-        targetById.get(stableTargetId) ||
+        stableMatchedTarget ||
         clinicalMatchedTarget ||
         (compositeKey && !duplicateComposite.has(compositeKey) ? targetByComposite.get(compositeKey) : null) ||
         (nameKey && !duplicateName.has(nameKey) ? targetByName.get(nameKey) : null) ||
@@ -28769,17 +28784,19 @@ async function startServer() {
       return { ok: false, status: 404, error: 'Habilidade de manutenção não encontrada.' };
     }
     const targetMasteryCriteria = target?.mastery_criteria && typeof target.mastery_criteria === 'object' ? target.mastery_criteria : {};
-    const requestedPeiGoalId = sanitizeString(params.peiGoalId, 180);
-    const requestedSkillId = sanitizeString(params.skillId, 180);
-    const requestedLocalTargetRef = sanitizeString(params.localTargetRef, 180);
-    const targetPeiGoalId = sanitizeString(requestedPeiGoalId || targetMasteryCriteria?.peiGoalId || targetMasteryCriteria?.pei_goal_id, 180);
-    const targetSkillId = sanitizeString(requestedSkillId || targetMasteryCriteria?.skillId || targetMasteryCriteria?.skill_id, 180);
-    const targetLocalTargetRef = sanitizeString(requestedLocalTargetRef || targetMasteryCriteria?.localTargetRef || targetMasteryCriteria?.local_target_ref || targetPeiGoalId, 180);
+    const requestedPeiGoalId = sanitizePeiLocalIdentifier(params.peiGoalId, 180);
+    const requestedSkillId = sanitizePeiLocalIdentifier(params.skillId, 180);
+    const requestedLocalTargetRef = sanitizePeiLocalIdentifier(params.localTargetRef, 180);
+    const targetPeiGoalId = sanitizePeiLocalIdentifier(requestedPeiGoalId || targetMasteryCriteria?.peiGoalId || targetMasteryCriteria?.pei_goal_id, 180);
+    const targetSkillId = sanitizePeiLocalIdentifier(requestedSkillId || targetMasteryCriteria?.skillId || targetMasteryCriteria?.skill_id, 180);
+    const targetLocalTargetRef = sanitizePeiLocalIdentifier(requestedLocalTargetRef || targetMasteryCriteria?.localTargetRef || targetMasteryCriteria?.local_target_ref || targetPeiGoalId, 180);
+    const targetClinicalIdentitySource = sanitizeString(targetMasteryCriteria?.source, 120);
     const maintenanceTargetRawPayload = cleanObject({
       peiGoalId: targetPeiGoalId || null,
       goalId: targetPeiGoalId || null,
       skillId: targetSkillId || null,
-      localTargetRef: targetLocalTargetRef || null
+      localTargetRef: targetLocalTargetRef || null,
+      clinicalIdentitySource: targetClinicalIdentitySource || null
     });
     const requestedMasteryEvaluationId = sanitizeString(params.masteryEvaluationId, 180);
     const masteryEvaluationId = requestedMasteryEvaluationId || `manual-${targetId}`;
@@ -32025,6 +32042,7 @@ async function startServer() {
           activeSchedules = await enrichMaintenanceRowsWithTargetDisplay(activeScheduleResult.data || [], clinicId, organizationId, req.session.user);
         }
         const activeScheduleByTargetId = new Map<string, any>();
+        const activeScheduleByPeiSourceId = new Map<string, any>();
         const duplicateSchedulesForReview: any[] = [];
         activeSchedules.forEach((schedule: any) => {
           const scheduleTargetId = sanitizeString(schedule?.target_id || schedule?.targetId, 180);
@@ -32038,6 +32056,9 @@ async function startServer() {
           const scheduleTargetId = sanitizeString(schedule?.target_id || schedule?.targetId, 180);
           const scheduleId = sanitizeString(schedule?.id || schedule?.schedule_id || schedule?.scheduleId, 180);
           const raw = readMaintenanceStoredPayload(schedule?.raw_payload || schedule?.rawPayload);
+          const target = schedule?.target && typeof schedule.target === 'object' ? schedule.target : {};
+          const masteryCriteria = target?.mastery_criteria && typeof target.mastery_criteria === 'object' ? target.mastery_criteria : {};
+          const clinicalIdentitySource = sanitizeString(schedule?.clinicalIdentitySource || masteryCriteria?.source || raw.clinicalIdentitySource || raw.source, 120);
           return cleanObject({
             id: scheduleId || null,
             scheduleId: scheduleId || null,
@@ -32062,16 +32083,63 @@ async function startServer() {
             targetName: sanitizeString(schedule?.targetName || schedule?.target_name || raw.targetName, 240) || null,
             protocolName: sanitizeString(schedule?.protocolTitle || schedule?.protocol_title || raw.protocolTitle, 240) || null,
             domainName: sanitizeString(schedule?.domainName || schedule?.domain_name || raw.domainName, 240) || null,
-            peiGoalId: sanitizeString(schedule?.peiGoalId || schedule?.goalId || schedule?.goal_id || raw.peiGoalId || raw.goalId || raw.goal_id, 180) || null,
-            goalId: sanitizeString(schedule?.goalId || schedule?.goal_id || schedule?.peiGoalId || raw.goalId || raw.goal_id || raw.peiGoalId, 180) || null,
-            goal_id: sanitizeString(schedule?.goal_id || schedule?.goalId || schedule?.peiGoalId || raw.goal_id || raw.goalId || raw.peiGoalId, 180) || null,
-            skillId: sanitizeString(schedule?.skillId || schedule?.skill_id || raw.skillId || raw.skill_id, 180) || null,
-            skill_id: sanitizeString(schedule?.skill_id || schedule?.skillId || raw.skill_id || raw.skillId, 180) || null,
-            localTargetRef: sanitizeString(schedule?.localTargetRef || schedule?.local_target_ref || raw.localTargetRef || raw.local_target_ref, 180) || null,
+            peiGoalId: sanitizePeiLocalIdentifier(schedule?.peiGoalId || schedule?.goalId || schedule?.goal_id || masteryCriteria?.peiGoalId || masteryCriteria?.pei_goal_id || raw.peiGoalId || raw.goalId || raw.goal_id, 180) || null,
+            goalId: sanitizePeiLocalIdentifier(schedule?.goalId || schedule?.goal_id || schedule?.peiGoalId || masteryCriteria?.peiGoalId || masteryCriteria?.pei_goal_id || raw.goalId || raw.goal_id || raw.peiGoalId, 180) || null,
+            goal_id: sanitizePeiLocalIdentifier(schedule?.goal_id || schedule?.goalId || schedule?.peiGoalId || masteryCriteria?.peiGoalId || masteryCriteria?.pei_goal_id || raw.goal_id || raw.goalId || raw.peiGoalId, 180) || null,
+            skillId: sanitizePeiLocalIdentifier(schedule?.skillId || schedule?.skill_id || masteryCriteria?.skillId || masteryCriteria?.skill_id || raw.skillId || raw.skill_id, 180) || null,
+            skill_id: sanitizePeiLocalIdentifier(schedule?.skill_id || schedule?.skillId || masteryCriteria?.skill_id || masteryCriteria?.skillId || raw.skill_id || raw.skillId, 180) || null,
+            localTargetRef: sanitizePeiLocalIdentifier(schedule?.localTargetRef || schedule?.local_target_ref || masteryCriteria?.localTargetRef || masteryCriteria?.local_target_ref || raw.localTargetRef || raw.local_target_ref, 180) || null,
+            clinicalIdentitySource: clinicalIdentitySource || null,
             raw_payload: sanitizeClinicalPayload(raw),
             rawPayload: sanitizeClinicalPayload(raw)
           });
         };
+        const isPeiMaterializedMaintenanceSource = (source: any) => {
+          const raw = readMaintenanceStoredPayload(source?.raw_payload || source?.rawPayload);
+          const target = source?.target && typeof source.target === 'object' ? source.target : {};
+          const masteryCriteria = target?.mastery_criteria && typeof target.mastery_criteria === 'object' ? target.mastery_criteria : {};
+          const sourceLabel = sanitizeString(source?.clinicalIdentitySource || masteryCriteria?.source || raw.clinicalIdentitySource || raw.source, 120);
+          return ['patient_pei_materialized', 'patient_pei_request', 'patient_pei'].includes(sourceLabel) || raw.materializedForMaintenance === true;
+        };
+        const getPeiMaintenanceExplicitSourceIds = (source: any) => {
+          if (!source) return [];
+          const raw = readMaintenanceStoredPayload(source?.raw_payload || source?.rawPayload);
+          const target = source?.target && typeof source.target === 'object' ? source.target : {};
+          const masteryCriteria = target?.mastery_criteria && typeof target.mastery_criteria === 'object' ? target.mastery_criteria : {};
+          return [
+            source?.peiGoalId,
+            source?.goalId,
+            source?.goal_id,
+            source?.skillId,
+            source?.skill_id,
+            source?.localTargetRef,
+            source?.local_target_ref,
+            masteryCriteria?.peiGoalId,
+            masteryCriteria?.pei_goal_id,
+            masteryCriteria?.goalId,
+            masteryCriteria?.goal_id,
+            masteryCriteria?.skillId,
+            masteryCriteria?.skill_id,
+            masteryCriteria?.localTargetRef,
+            masteryCriteria?.local_target_ref,
+            raw.peiGoalId,
+            raw.pei_goal_id,
+            raw.goalId,
+            raw.goal_id,
+            raw.skillId,
+            raw.skill_id,
+            raw.localTargetRef,
+            raw.local_target_ref
+          ]
+            .map((value: any) => sanitizePeiLocalIdentifier(value, 180))
+            .filter((value: string, index: number, list: string[]) => Boolean(value) && list.indexOf(value) === index);
+        };
+        activeSchedules.forEach((schedule: any) => {
+          if (!isPeiMaterializedMaintenanceSource(schedule)) return;
+          getPeiMaintenanceExplicitSourceIds(schedule).forEach((sourceId: string) => {
+            if (!activeScheduleByPeiSourceId.has(sourceId)) activeScheduleByPeiSourceId.set(sourceId, schedule);
+          });
+        });
         const maintenanceScheduleHasTimingContext = (schedule: any) => Boolean(
           schedule?.appointment_id ||
             schedule?.appointmentId ||
@@ -32093,9 +32161,12 @@ async function startServer() {
         };
         const buildScheduledPanelRow = (skill: any, schedule: any, label: string) => {
           const safeSchedule = sanitizeScheduleForPanel(schedule);
+          const effectiveTargetId = safeSchedule.targetId || safeSchedule.target_id || skill?.targetId || skill?.target_id || null;
           return cleanObject({
             ...skill,
-            key: `${label === 'Aguardando futura consulta' ? 'waiting' : 'scheduled'}-${skill?.targetId || skill?.key}`,
+            key: `${label === 'Aguardando futura consulta' ? 'waiting' : 'scheduled'}-${effectiveTargetId || skill?.key}`,
+            targetId: effectiveTargetId,
+            target_id: effectiveTargetId,
             statusLabel: label,
             nextSchedule: safeSchedule,
             activeSchedule: safeSchedule,
@@ -32117,6 +32188,10 @@ async function startServer() {
         const findActiveScheduleForSkill = (skill: any) => {
           const skillTargetId = sanitizeString(skill?.targetId || skill?.target_id, 180);
           if (isUuid(skillTargetId) && activeScheduleByTargetId.has(skillTargetId)) return activeScheduleByTargetId.get(skillTargetId);
+          for (const sourceId of getPeiMaintenanceExplicitSourceIds(skill)) {
+            const schedule = activeScheduleByPeiSourceId.get(sourceId);
+            if (schedule) return schedule;
+          }
           return null;
         };
         const emitActiveSchedulePanelRow = (skill: any, schedule: any) => {
@@ -32185,11 +32260,16 @@ async function startServer() {
             .map((row: any) => sanitizeString(row?.targetId || row?.target_id, 180))
             .filter((id: string) => isUuid(id) && activeScheduleByTargetId.has(id))
             .slice(0, 40);
+          const removedEligibleSourceIds = allEligibleSkills
+            .flatMap((row: any) => getPeiMaintenanceExplicitSourceIds(row))
+            .filter((sourceId: string) => activeScheduleByPeiSourceId.has(sourceId))
+            .slice(0, 40);
           console.debug('[pei-maintenance-panel]', {
             panelEligibleTargetIds,
             panelScheduledTargetIds,
             removedEligibleTargetIds,
-            reasonForRemoval: 'active_schedule_target_id_match'
+            removedEligibleSourceIds,
+            reasonForRemoval: 'active_schedule_target_or_pei_source_match'
           });
         }
         return res.json({
@@ -33332,9 +33412,10 @@ async function startServer() {
         const raw = readMaintenanceStoredPayload(schedule?.raw_payload || schedule?.rawPayload);
         const target = schedule?.target && typeof schedule.target === 'object' ? schedule.target : {};
         const masteryCriteria = target?.mastery_criteria && typeof target.mastery_criteria === 'object' ? target.mastery_criteria : {};
-        const peiGoalId = sanitizeString(schedule?.peiGoalId || schedule?.goalId || schedule?.goal_id || masteryCriteria?.peiGoalId || masteryCriteria?.pei_goal_id || raw.peiGoalId || raw.pei_goal_id || raw.goalId || raw.goal_id || req.body?.peiGoalId || req.body?.goalId || req.body?.goal_id, 180);
-        const skillId = sanitizeString(schedule?.skillId || schedule?.skill_id || masteryCriteria?.skillId || masteryCriteria?.skill_id || raw.skillId || raw.skill_id || req.body?.skillId || req.body?.skill_id, 180);
-        const localTargetRef = sanitizeString(schedule?.localTargetRef || masteryCriteria?.localTargetRef || masteryCriteria?.local_target_ref || raw.localTargetRef || raw.local_target_ref || req.body?.localTargetRef || peiGoalId, 180);
+        const peiGoalId = sanitizePeiLocalIdentifier(schedule?.peiGoalId || schedule?.goalId || schedule?.goal_id || masteryCriteria?.peiGoalId || masteryCriteria?.pei_goal_id || raw.peiGoalId || raw.pei_goal_id || raw.goalId || raw.goal_id || req.body?.peiGoalId || req.body?.goalId || req.body?.goal_id, 180);
+        const skillId = sanitizePeiLocalIdentifier(schedule?.skillId || schedule?.skill_id || masteryCriteria?.skillId || masteryCriteria?.skill_id || raw.skillId || raw.skill_id || req.body?.skillId || req.body?.skill_id, 180);
+        const localTargetRef = sanitizePeiLocalIdentifier(schedule?.localTargetRef || masteryCriteria?.localTargetRef || masteryCriteria?.local_target_ref || raw.localTargetRef || raw.local_target_ref || req.body?.localTargetRef || peiGoalId, 180);
+        const clinicalIdentitySource = sanitizeString(schedule?.clinicalIdentitySource || masteryCriteria?.source || raw.clinicalIdentitySource || raw.source, 120);
         const scheduleId = sanitizeString(schedule?.id || schedule?.schedule_id || schedule?.scheduleId, 180);
         return cleanObject({
           id: scheduleId || null,
@@ -33359,7 +33440,8 @@ async function startServer() {
           goal_id: peiGoalId || null,
           skillId: skillId || null,
           skill_id: skillId || null,
-          localTargetRef: localTargetRef || null
+          localTargetRef: localTargetRef || null,
+          clinicalIdentitySource: clinicalIdentitySource || null
         });
       };
       const schedule = hydrateScheduleResponse(schedules[0] || null);

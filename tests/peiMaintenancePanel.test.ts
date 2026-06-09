@@ -417,6 +417,53 @@ test('mapper target-first nao remove elegivel por goalId ou skillId quando sched
   assert.equal(mapped.sections.scheduled.some((row: any) => row.targetId === scheduledTargetId), true);
 });
 
+test('mapper target-first remove elegivel por origem PEI materializada quando target legado diverge', () => {
+  const eligibleTargetId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0123';
+  const scheduledTargetId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0124';
+  const scheduleId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0125';
+  const mapped = mapMaintenancePanelResponse({
+    eligibleSkills: [
+      {
+        targetId: eligibleTargetId,
+        skillId: 'vp-mts-n1-4',
+        targetName: 'Realiza duas atividades simples de encaixe ou construcao',
+        protocol: 'VB-MAPP - Nivel 1',
+        domain: 'Percepcao Visual e Matching to Sample Nivel 1'
+      }
+    ],
+    scheduledProbes: [
+      {
+        targetId: scheduledTargetId,
+        scheduleId,
+        skillId: 'vp-mts-n1-4',
+        clinicalIdentitySource: 'patient_pei_materialized',
+        targetName: 'Realiza duas atividades simples de encaixe ou construcao',
+        nextSchedule: {
+          id: scheduleId,
+          target_id: scheduledTargetId,
+          status: 'SCHEDULED',
+          due_date: '2026-06-10',
+          skillId: 'vp-mts-n1-4',
+          raw_payload: {
+            skillId: 'vp-mts-n1-4',
+            clinicalIdentitySource: 'patient_pei_materialized'
+          }
+        }
+      }
+    ],
+    maintenanceSkills: [],
+    waitingNextSession: [],
+    overdueProbes: [],
+    regressionRisk: [],
+    technicalIssues: []
+  }, { patientId: 'patient-1', requestId: 143, loadedAt: 123461 });
+
+  assert.equal(mapped.summary.eligibleSkills, 0);
+  assert.equal(mapped.summary.scheduled, 1);
+  assert.equal(mapped.sections.eligibleSkills.some((row: any) => row.targetId === eligibleTargetId), false);
+  assert.equal(mapped.sections.scheduled.some((row: any) => row.targetId === scheduledTargetId), true);
+});
+
 test('mapper target-first nao remove elegivel por raw_payload legado quando target id e diferente', () => {
   const eligibleTargetId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0213';
   const scheduledTargetId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0214';
@@ -547,6 +594,8 @@ test('backend preserva identidade PEI numerica e progresso por criterio na manut
   assert.match(serverCode, /const peiGoalId = sanitizePeiLocalIdentifier\(goal\?\.id/);
   assert.match(serverCode, /skillId: sanitizePeiLocalIdentifier\(goal\?\.skillId/);
   assert.match(serverCode, /sanitizePeiLocalIdentifier\(peiTarget\?\.peiGoalIndex, 40\)/);
+  assert.match(serverCode, /legacyStableTargetIds/);
+  assert.match(serverCode, /activeScheduleByPeiSourceId/);
   assert.doesNotMatch(patientDetailCode, /getPeiMaintenanceDebugGoals\(requestPatientId\)/);
 });
 

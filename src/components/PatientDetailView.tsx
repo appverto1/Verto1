@@ -5276,6 +5276,67 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     ).trim();
     return clinicalSourceId ? `clinical:${clinicalSourceId}` : '';
   };
+  const readPeiMaintenanceObjectPayload = (...values: any[]) => {
+    const merged: Record<string, any> = {};
+    values.forEach((value: any) => {
+      if (!value) return;
+      if (typeof value === 'object' && !Array.isArray(value)) {
+        Object.assign(merged, value);
+        return;
+      }
+      if (typeof value === 'string') {
+        try {
+          const parsed = JSON.parse(value);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) Object.assign(merged, parsed);
+        } catch {
+          // Ignore legacy malformed payloads.
+        }
+      }
+    });
+    return merged;
+  };
+  const getPeiMaintenanceExplicitSourceIds = (row: any) => {
+    const schedule = row?.nextSchedule || row?.activeSchedule || row?.schedule || null;
+    const raw = readPeiMaintenanceObjectPayload(schedule?.raw_payload, schedule?.rawPayload, row?.raw_payload, row?.rawPayload);
+    return [
+      row?.peiGoalId,
+      row?.goalId,
+      row?.goal_id,
+      row?.skillId,
+      row?.skill_id,
+      row?.localTargetRef,
+      row?.local_target_ref,
+      row?.source?.peiGoalId,
+      row?.source?.goalId,
+      row?.source?.goal_id,
+      row?.source?.skillId,
+      row?.source?.skill_id,
+      row?.source?.localTargetRef,
+      schedule?.peiGoalId,
+      schedule?.goalId,
+      schedule?.goal_id,
+      schedule?.skillId,
+      schedule?.skill_id,
+      schedule?.localTargetRef,
+      schedule?.local_target_ref,
+      raw?.peiGoalId,
+      raw?.pei_goal_id,
+      raw?.goalId,
+      raw?.goal_id,
+      raw?.skillId,
+      raw?.skill_id,
+      raw?.localTargetRef,
+      raw?.local_target_ref
+    ]
+      .map((value: any) => String(value ?? '').trim())
+      .filter((value: string, index: number, list: string[]) => Boolean(value) && list.indexOf(value) === index);
+  };
+  const isPeiMaintenanceMaterializedSourceRow = (row: any) => {
+    const schedule = row?.nextSchedule || row?.activeSchedule || row?.schedule || null;
+    const raw = readPeiMaintenanceObjectPayload(schedule?.raw_payload, schedule?.rawPayload, row?.raw_payload, row?.rawPayload);
+    const sourceLabel = String(row?.clinicalIdentitySource || schedule?.clinicalIdentitySource || raw?.clinicalIdentitySource || raw?.source || '').trim();
+    return ['patient_pei_materialized', 'patient_pei_request', 'patient_pei'].includes(sourceLabel) || raw?.materializedForMaintenance === true;
+  };
   const peiMaintenanceScheduledRows = useMemo(() => {
     const panelRows = [
       ...(peiMaintenanceTargetFirstGroups.scheduled || []),
@@ -5321,12 +5382,26 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return targetIds;
   }, [peiMaintenanceScheduledRows, peiMaintenanceTargetFirstGroups, peiMaintenanceWaitingRows]);
 
+  const peiMaintenanceUnavailableSourceIds = useMemo(() => {
+    const sourceIds = new Set<string>();
+    [
+      ...peiMaintenanceScheduledRows,
+      ...peiMaintenanceWaitingRows,
+      ...(peiMaintenanceTargetFirstGroups.regressionRisk || []),
+      ...(peiMaintenanceTargetFirstGroups.maintenanceSkills || [])
+    ].filter((row: any) => isActivePeiMaintenanceScheduleRow(row) && isPeiMaintenanceMaterializedSourceRow(row)).forEach((row: any) => {
+      getPeiMaintenanceExplicitSourceIds(row).forEach((sourceId: string) => sourceIds.add(sourceId));
+    });
+    return sourceIds;
+  }, [peiMaintenanceScheduledRows, peiMaintenanceTargetFirstGroups, peiMaintenanceWaitingRows]);
+
   const peiMaintenanceEligibleRows = useMemo(() => {
     const filterEligibleRows = (rows: any[]) => dedupePeiMaintenanceRows(rows.filter((row: any) => {
       const key = getPeiMaintenanceDisplayKey(row);
       const targetId = getPeiMaintenancePersistedId(row?.targetId || row?.target_id || row?.aba_target_id || row?.abaTargetId);
       if (getPeiMaintenanceRowScheduleId(row) || row?.hasRealSchedule) return false;
       if (targetId && peiMaintenanceUnavailableTargetIds.has(targetId)) return false;
+      if (getPeiMaintenanceExplicitSourceIds(row).some((sourceId: string) => peiMaintenanceUnavailableSourceIds.has(sourceId))) return false;
       return !key || !peiMaintenanceUnavailableKeys.has(key);
     }));
 
@@ -5459,7 +5534,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       }))
     );
     return filterEligibleRows(dedupePeiMaintenanceRows(fallbackRows));
-  }, [activePeiPlanSubtab, activeTab, hasPeiMaintenancePanelForCurrentPatient, isLoadingPeiMaintenancePanel, peiMaintenanceHydratedGoals, peiMaintenanceLinkableTargets, peiMaintenanceTargetFirstGroups, peiMaintenanceUnavailableKeys, peiMaintenanceUnavailableTargetIds]);
+  }, [activePeiPlanSubtab, activeTab, hasPeiMaintenancePanelForCurrentPatient, isLoadingPeiMaintenancePanel, peiMaintenanceHydratedGoals, peiMaintenanceLinkableTargets, peiMaintenanceTargetFirstGroups, peiMaintenanceUnavailableKeys, peiMaintenanceUnavailableSourceIds, peiMaintenanceUnavailableTargetIds]);
 
   const peiGeneralizationRows = useMemo(() => {
     const maintainedRows = peiMaintenanceRows.filter((row: any) => row.isMaintained);

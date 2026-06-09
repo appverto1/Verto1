@@ -620,6 +620,17 @@ export function mapMaintenancePanelResponse(
       raw?.local_target_ref,
     ].map((value: any) => normalizeText(value)).filter(Boolean);
   };
+  const isPeiMaterializedScheduleSource = (row: any) => {
+    const schedule = row?.nextSchedule || row?.activeSchedule || row?.schedule || null;
+    const raw = readObjectPayload(schedule?.raw_payload, schedule?.rawPayload, row?.raw_payload, row?.rawPayload);
+    const sourceLabel = normalizeText(
+      row?.clinicalIdentitySource ||
+        schedule?.clinicalIdentitySource ||
+        raw?.clinicalIdentitySource ||
+        raw?.source
+    );
+    return ['patient_pei_materialized', 'patient_pei_request', 'patient_pei'].includes(sourceLabel) || raw?.materializedForMaintenance === true;
+  };
   const normalizePanelRow = (row: any, group: PeiMaintenanceTargetFirstGroupKey) => {
     const schedule = row?.nextSchedule || row?.activeSchedule || row?.schedule || null;
     const raw = readObjectPayload(schedule?.raw_payload, schedule?.rawPayload, row?.raw_payload, row?.rawPayload);
@@ -781,10 +792,24 @@ export function mapMaintenancePanelResponse(
       .map((row: any) => normalizeText(row?.targetId || row?.target_id))
       .filter((targetId: string) => isPersistedUuid(targetId))
   );
-  if (operationalTargetIds.size > 0) {
+  const operationalPeiSourceIds = new Set(
+    [
+      ...sections.maintenanceSkills,
+      ...sections.scheduled,
+      ...sections.waitingNextSession,
+      ...sections.overdue,
+      ...sections.regressionRisk,
+    ]
+      .filter((row: any) => isActivePeiMaintenanceScheduleRow(row) && isPeiMaterializedScheduleSource(row))
+      .flatMap((row: any) => clinicalLinkIdsFor(row))
+  );
+  if (operationalTargetIds.size > 0 || operationalPeiSourceIds.size > 0) {
     sections.eligibleSkills = sections.eligibleSkills.filter((row: any) => {
       const targetId = normalizeText(row?.targetId || row?.target_id);
-      return !isPersistedUuid(targetId) || !operationalTargetIds.has(targetId);
+      if (isPersistedUuid(targetId) && operationalTargetIds.has(targetId)) return false;
+      const rowSourceIds = clinicalLinkIdsFor(row);
+      if (rowSourceIds.some((sourceId: string) => operationalPeiSourceIds.has(sourceId))) return false;
+      return true;
     });
   }
 
