@@ -3277,9 +3277,20 @@ export const SessionMode = ({
           sessionNote
         }
       });
+      const persistedMasterySummary = Array.isArray(summarySaveResult?.data?.mastery_summary)
+        ? summarySaveResult.data.mastery_summary
+        : Array.isArray(summarySaveResult?.data?.masterySummary)
+          ? summarySaveResult.data.masterySummary
+          : finalSummary.masterySummary;
+      const persistedMaintenanceSummary = Array.isArray(summarySaveResult?.data?.maintenance_summary)
+        ? summarySaveResult.data.maintenance_summary
+        : Array.isArray(summarySaveResult?.data?.maintenanceSummary)
+          ? summarySaveResult.data.maintenanceSummary
+          : finalMaintenanceSummary;
       setPostClosureSummary({
         ...finalSummary,
-        maintenanceSummary: finalMaintenanceSummary,
+        masterySummary: persistedMasterySummary,
+        maintenanceSummary: persistedMaintenanceSummary,
         id: String(summarySaveResult?.data?.id || finalSummary.id),
         syncStatus: summarySaveResult?.success && !summarySaveResult?.pending && !summarySaveResult?.offline ? 'synced' : finalSummary.syncStatus,
         createdAt: summarySaveResult?.data?.created_at || summarySaveResult?.data?.createdAt || finalSummary.createdAt

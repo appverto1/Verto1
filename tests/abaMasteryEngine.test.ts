@@ -380,6 +380,8 @@ test('frontend e backend integram avaliacao summary-driven no encerramento e rel
   assert.match(serverCode, /app\.post\('\/api\/aba\/session-summaries'[\s\S]*?evaluateAndPersistSessionMastery[\s\S]*?mastery_summary: masterySummaryPayload/m);
   assert.match(serverCode, /from\('aba_mastery_evaluations'\)[\s\S]*?select\('id,status,evaluation_status,evaluated_at,therapist_id,consecutive_successful_days'\)[\s\S]*?limit\(30\)/m);
   assert.match(sessionModeCode, /evaluateTargetMastery\([\s\S]*?teachingMasteryRows/m);
+  assert.match(sessionModeCode, /const persistedMasterySummary = Array\.isArray\(summarySaveResult\?\.data\?\.mastery_summary\)/);
+  assert.match(sessionModeCode, /masterySummary: persistedMasterySummary/);
   assert.match(sessionModeCode, /legacySuccessTarget[\s\S]*?required_consecutive_independent_correct_trials/m);
   assert.match(sessionModeCode, /normalizeAbaMasteryCriterion[\s\S]*?buildSessionGoalMasteryCriterion/m);
   assert.match(sessionModeCode, /criterionSourceLabel[\s\S]*?Origem:/m);

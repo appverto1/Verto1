@@ -969,6 +969,18 @@ test('refresh da manutencao usa apenas painel target-first e ignora respostas st
   assert.doesNotMatch(refreshCode, /buildPeiMaintenanceRows/);
 });
 
+test('ensino aplica resumo de maestria encerrado sem depender de F5', () => {
+  assert.match(patientDetailCode, /const applySessionMasterySummaryToPei = async \(sessionSummary: any\)/);
+  assert.match(patientDetailCode, /Array\.isArray\(sessionSummary\?\.masterySummary\)/);
+  assert.match(patientDetailCode, /criterionReached[\s\S]*?READY_FOR_REVIEW[\s\S]*?progressPercent: computedProgress/m);
+  assert.match(patientDetailCode, /setSessionPatientOverride\(updatedPatient\)/);
+  assert.match(patientDetailCode, /setHasLoadedPeiMaintenancePanel\(false\)/);
+  assert.match(patientDetailCode, /if \(options\?\.alreadyPersisted\) \{[\s\S]*?applySessionMasterySummaryToPei\(options\.summary\)/m);
+  assert.match(patientDetailCode, /const peiGoals = useMemo\(\(\) => \(Array\.isArray\(sessionModePatient\?\.pei\)/);
+  assert.match(patientDetailCode, /const termGoals = peiGoals\.filter/);
+  assert.doesNotMatch(patientDetailCode, /const termGoals = patient\.pei\.filter/);
+});
+
 test('ensure de habilidade adquirida e evento SKILL_ACQUIRED sao idempotentes', () => {
   const eventStart = serverCode.indexOf('const persistPeiSkillAcquiredMasteryEvent = async');
   const eventEnd = serverCode.indexOf('const ensurePeiMaintenanceTargetForPatient = async', eventStart);
