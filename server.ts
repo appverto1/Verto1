@@ -17495,11 +17495,23 @@ async function startServer() {
     const status = sanitizeString(goal?.status || goal?.clinical_status || goal?.clinicalStatus || goal?.phase, 80).toUpperCase();
     const masteryStatus = sanitizeString(goal?.mastery_status || goal?.masteryStatus || goal?.evaluation_status || goal?.evaluationStatus, 80).toUpperCase();
     const progress = Number(goal?.progress ?? goal?.progressPercent ?? goal?.progress_percent ?? goal?.masteryProgressPercent ?? goal?.mastery_progress_percent);
-    return (
+    const isEligible = (
       ['COMPLETED', 'COMPLETE', 'CONCLUIDO', 'CONCLUÍDO', 'ACQUIRED', 'ADQUIRIDO', 'MASTERED', 'MASTERED_APPROVED', 'MAINTENANCE', 'MANUTENCAO', 'MANUTENÇÃO', 'MAINTAINED', 'READY_FOR_MAINTENANCE'].includes(status) ||
       ['MASTERED', 'MASTERED_APPROVED', 'READY_FOR_MAINTENANCE', 'MET', 'MET_TODAY'].includes(masteryStatus) ||
       (Number.isFinite(progress) && progress >= 100)
     );
+    if (process.env.NODE_ENV !== 'production' && !isEligible) {
+      console.debug('[isMaintenanceEligiblePeiGoal] NOT eligible:', {
+        goalName: goal?.name || goal?.targetName,
+        status,
+        masteryStatus,
+        progress,
+        rawStatus: goal?.status || goal?.clinical_status || goal?.clinicalStatus || goal?.phase,
+        rawMasteryStatus: goal?.mastery_status || goal?.masteryStatus || goal?.evaluation_status || goal?.evaluationStatus,
+        rawProgress: goal?.progress ?? goal?.progressPercent ?? goal?.progress_percent
+      });
+    }
+    return isEligible;
   };
 
   const getPatientPeiTargets = async (patientId: string, clinicId: string, organizationId: string, sessionUser: any) => {
@@ -31777,12 +31789,39 @@ async function startServer() {
           }));
         };
 
-        peiTargets
-          .filter((target: any) => target?.eligibleForMaintenance)
+        const filteredPeiTargets = peiTargets.filter((target: any) => target?.eligibleForMaintenance);
+        if (process.env.NODE_ENV !== 'production') {
+          console.debug('[pei-maintenance-panel] PEI targets eligible:', {
+            total: peiTargets.length,
+            eligible: filteredPeiTargets.length,
+            targets: filteredPeiTargets.map((t: any) => ({
+              name: t?.targetName,
+              status: t?.clinicalStatus,
+              eligibleForMaintenance: t?.eligibleForMaintenance,
+              peiGoalId: t?.peiGoalId
+            }))
+          });
+        }
+        
+        filteredPeiTargets
           .map(hydratePeiTarget)
           .forEach(addEligibleSkill);
-        allTargets
-          .filter(isTargetEligibleForMaintenance)
+        
+        const filteredAbaTargets = allTargets.filter(isTargetEligibleForMaintenance);
+        if (process.env.NODE_ENV !== 'production') {
+          console.debug('[pei-maintenance-panel] ABA targets eligible:', {
+            total: allTargets.length,
+            eligible: filteredAbaTargets.length,
+            targets: filteredAbaTargets.map((t: any) => ({
+              name: t?.name || t?.description,
+              status: t?.clinical_status || t?.phase,
+              masteryStatus: t?.mastery_status,
+              progress: t?.progress
+            }))
+          });
+        }
+        
+        filteredAbaTargets
           .forEach((target: any) => addEligibleSkill({
             target,
             targetId: target?.id,
@@ -31794,6 +31833,18 @@ async function startServer() {
             progressPercent: 100
           }));
         const allEligibleSkills = Array.from(eligibleByKey.values());
+        if (process.env.NODE_ENV !== 'production') {
+          console.debug('[pei-maintenance-panel] Deduplicated eligible skills:', {
+            total: allEligibleSkills.length,
+            skills: allEligibleSkills.map((s: any) => ({
+              key: s?.key,
+              targetName: s?.targetName,
+              targetId: s?.targetId,
+              hasRealTarget: s?.hasRealTarget,
+              source: s?.source
+            }))
+          });
+        }
         const eligibleTargetIds = Array.from(new Set(
           allEligibleSkills
             .map((row: any) => sanitizeString(row?.targetId || row?.target_id, 180))
