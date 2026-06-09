@@ -17518,7 +17518,7 @@ async function startServer() {
     try {
       const record = await readPatientRecordPayloadForFiles(patientId, clinicId, sessionUser);
       const goals = parsePatientPeiArray(record?.payload || {});
-      return goals
+      const results = goals
         .filter((goal: any) => goal && typeof goal === 'object')
         .map((goal: any, index: number) => {
           const targetName = sanitizeString(goal?.name || goal?.targetName || goal?.target_name || goal?.objective, 240);
@@ -17532,6 +17532,28 @@ async function startServer() {
           const clinicalStatus = sanitizeString(goal?.clinical_status || goal?.clinicalStatus || goal?.status || goal?.phase, 80) || null;
           const masteryStatus = sanitizeString(goal?.mastery_status || goal?.masteryStatus || goal?.evaluation_status || goal?.evaluationStatus, 80) || null;
           const description = sanitizeString(goal?.description || goal?.objective || goal?.criteria, 500) || null;
+          const eligible = isMaintenanceEligiblePeiGoal(goal);
+          
+          // Debug log para todos os goals
+          if (process.env.NODE_ENV !== 'production') {
+            console.debug('[getPatientPeiTargets] PEI goal:', {
+              targetName,
+              clinicalStatus,
+              masteryStatus,
+              progressPercent,
+              eligible,
+              rawStatus: goal?.status,
+              rawClinicalStatus: goal?.clinical_status,
+              rawClinicaStatus: goal?.clinicalStatus,
+              rawPhase: goal?.phase,
+              rawMasteryStatus: goal?.mastery_status,
+              rawMasteryStatusCase: goal?.masteryStatus,
+              rawEvaluationStatus: goal?.evaluation_status,
+              rawEvaluationStatusCase: goal?.evaluationStatus,
+              allKeys: Object.keys(goal).sort()
+            });
+          }
+          
           return cleanObject({
             source: 'patient_pei',
             peiGoalIndex: index,
@@ -17546,12 +17568,23 @@ async function startServer() {
             clinicalStatus,
             masteryStatus,
             progressPercent: Number.isFinite(progressPercent) ? Math.max(0, Math.min(100, Math.round(progressPercent))) : null,
-            eligibleForMaintenance: isMaintenanceEligiblePeiGoal(goal),
+            eligibleForMaintenance: eligible,
             matchNameKey: normalizePeiTargetMatchKey(targetName),
             matchCompositeKey: [targetName, protocolName, domainName].map(normalizePeiTargetMatchKey).filter(Boolean).join('|')
           });
         })
         .filter(Boolean);
+      
+      if (process.env.NODE_ENV !== 'production') {
+        console.debug('[getPatientPeiTargets] Summary:', {
+          patientId,
+          totalGoals: goals.length,
+          resultsAfterFilter: results.length,
+          eligibleCount: results.filter((r: any) => r?.eligibleForMaintenance).length
+        });
+      }
+      
+      return results;
     } catch (error: any) {
       if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return [];
       throw error;
