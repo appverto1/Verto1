@@ -973,6 +973,8 @@ test('backend da etapa 2 usa PEI targets e schedules ativos por target em lote',
   assert.doesNotMatch(stepTwoRoute, /\.in\('target_id', eligibleTargetIds\)/);
   assert.match(stepTwoRoute, /activeScheduleByTargetId/);
   assert.match(stepTwoRoute, /findActiveScheduleForSkill/);
+  assert.match(stepTwoRoute, /emitActiveSchedulePanelRow/);
+  assert.match(stepTwoRoute, /activeSchedules\.forEach\(\(schedule: any\) => \{[\s\S]*?emittedActiveScheduleKeys\.has\(scheduleId\)[\s\S]*?emitActiveSchedulePanelRow/m);
   assert.match(stepTwoRoute, /emittedActiveScheduleKeys/);
   assert.match(stepTwoRoute, /readMaintenanceStoredPayload/);
   assert.doesNotMatch(stepTwoRoute, /getMaintenanceDisplaySignature/);
@@ -1073,9 +1075,9 @@ test('endpoint de agendamento aceita DATE APPOINTMENT ou NEXT_SESSION com upsert
   const helperStart = serverCode.indexOf('const createMaintenanceScheduleForTarget = async');
   const helperEnd = serverCode.indexOf('const fetchNextMaintenanceProbeForTarget', helperStart);
   const helperCode = serverCode.slice(helperStart, helperEnd);
-  assert.match(helperCode, /materializePeiTargetsForMaintenance/);
-  assert.match(helperCode, /NÃ£o foi possÃ­vel agendar manutenÃ§Ã£o porque a habilidade nÃ£o foi identificada corretamente|Não foi possível agendar manutenção porque a habilidade não foi identificada corretamente/);
-  assert.doesNotMatch(helperCode, /maintenance_schedule_target_fallback|fallbackTarget|writeAbaRowWithSchemaFallback\('aba_targets', fallbackTarget, 'upsert'\)/);
+  assert.doesNotMatch(helperCode, /materializePeiTargetsForMaintenance/);
+  assert.match(helperCode, /Habilidade de manuten/);
+  assert.doesNotMatch(helperCode, /maintenance_schedule_target_fallback|fallbackTarget|writeAbaRowWithSchemaFallback\('aba_targets'/);
   assert.match(helperCode, /\.eq\('organization_id', organizationId\)[\s\S]*?\.eq\('patient_id', patientId\)[\s\S]*?\.eq\('target_id', targetId\)[\s\S]*?\.in\('status', ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES\)/m);
   assert.match(helperCode, /getPersistedMaintenanceScheduleId/);
   assert.match(helperCode, /existingSequenceRows[\s\S]*?getPersistedMaintenanceScheduleId/);

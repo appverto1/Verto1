@@ -23136,8 +23136,14 @@ async function startServer() {
     return { patientId, clinicId, organizationId };
   };
 
-  const writeAbaRowWithSchemaFallback = async (tableName: string, payloadBase: Record<string, any>, mode: 'insert' | 'upsert' = 'insert') => {
+  const writeAbaRowWithSchemaFallback = async (
+    tableName: string,
+    payloadBase: Record<string, any>,
+    mode: 'insert' | 'upsert' = 'insert',
+    options: { criticalColumns?: string[] } = {}
+  ) => {
     let payload: Record<string, any> = { ...payloadBase };
+    const criticalColumns = new Set((options.criticalColumns || []).map((column) => sanitizeString(column, 80)).filter(Boolean));
     while (Object.keys(payload).length > 0) {
       const query = mode === 'upsert'
         ? supabase.from(tableName).upsert([payload], { onConflict: 'id' })
@@ -23146,6 +23152,9 @@ async function startServer() {
       if (!result.error) return { data: result.data, error: null };
       const missingColumn = extractMissingColumnName(result.error);
       if (missingColumn && missingColumn in payload) {
+        if (criticalColumns.has(missingColumn)) {
+          return { data: null, error: result.error };
+        }
         delete payload[missingColumn];
         continue;
       }
@@ -28317,17 +28326,24 @@ async function startServer() {
           noAutomaticClinicalMutation: true
         })
       });
-    const firstResult = await writeAbaRowWithSchemaFallback('aba_maintenance_schedules', persistedRow, 'upsert');
+    const criticalScheduleColumns = ['organization_id', 'patient_id', 'target_id', 'status'];
+    const firstResult = await writeAbaRowWithSchemaFallback('aba_maintenance_schedules', persistedRow, 'upsert', {
+      criticalColumns: criticalScheduleColumns
+    });
     if (!firstResult.error) return { ...firstResult, row: persistedRow };
     if (!isLegacyMaintenanceScheduleConstraintError(firstResult.error)) return { ...firstResult, row };
     const legacyRow = buildLegacyMaintenanceScheduleRow(persistedRow, now, firstResult.error);
-    const retryResult = await writeAbaRowWithSchemaFallback('aba_maintenance_schedules', legacyRow, 'upsert');
+    const retryResult = await writeAbaRowWithSchemaFallback('aba_maintenance_schedules', legacyRow, 'upsert', {
+      criticalColumns: criticalScheduleColumns
+    });
     if (!retryResult.error) return { ...retryResult, row: legacyRow };
     if (!isLegacyMaintenanceScheduleConstraintError(retryResult.error) || legacyRow.status === 'PENDING') {
       return { ...retryResult, row: persistedRow };
     }
     const forcedLegacyRow = buildLegacyMaintenanceScheduleRow(persistedRow, now, retryResult.error, { forceLegacyStatus: true });
-    const forcedRetryResult = await writeAbaRowWithSchemaFallback('aba_maintenance_schedules', forcedLegacyRow, 'upsert');
+    const forcedRetryResult = await writeAbaRowWithSchemaFallback('aba_maintenance_schedules', forcedLegacyRow, 'upsert', {
+      criticalColumns: criticalScheduleColumns
+    });
     return { ...forcedRetryResult, row: forcedRetryResult.error ? persistedRow : forcedLegacyRow };
   };
 
@@ -28374,6 +28390,22 @@ async function startServer() {
       schedule?.dueDate
   );
 
+  const resolvePersistedMaintenanceScheduleMode = (schedule: any, status = '') => {
+    const raw = readMaintenanceStoredPayload(schedule?.raw_payload || schedule?.rawPayload);
+    const explicitMode = sanitizeString(
+      schedule?.schedule_mode ||
+        schedule?.scheduleMode ||
+        raw.scheduleMode ||
+        raw.schedule_mode,
+      80
+    );
+    if (explicitMode) return explicitMode;
+    if (status === 'PENDING_NEXT_SESSION') return 'NEXT_PATIENT_SESSION';
+    if (schedule?.appointment_id || schedule?.appointmentId || schedule?.candidate_appointment_id || schedule?.candidateAppointmentId) return 'CUSTOM_DATE';
+    if (maintenanceScheduleHasOperationalTiming(schedule)) return 'CUSTOM_DATE';
+    return '';
+  };
+
   const confirmPersistedMaintenanceScheduleAfterWrite = async (params: {
     scheduleId?: string | null;
     targetId: string;
@@ -28391,24 +28423,33 @@ async function startServer() {
       return { ok: false, error: persistenceError, reason: 'invalid_scope' };
     }
 
-    let query = supabase
-      .from('aba_maintenance_schedules')
-      .select(ABA_MAINTENANCE_SCHEDULE_SELECT)
-      .eq('organization_id', organizationId)
-      .eq('patient_id', patientId)
-      .eq('target_id', targetId)
-      .in('status', ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES);
-    if (requestedScheduleId) query = query.eq('id', requestedScheduleId);
-    query = query.order('updated_at', { ascending: false }).limit(requestedScheduleId ? 1 : 20);
-    query = applyAbaTenantScope(query, { role: 'owner' }, clinicId, organizationId);
-
-    const result = await query;
+    const result = await selectAbaMaintenanceSchedulesWithSchemaFallback((selectColumns, availableColumns) => {
+      const orderColumn = availableColumns.includes('updated_at') ? 'updated_at' : 'created_at';
+      let query = supabase
+        .from('aba_maintenance_schedules')
+        .select(selectColumns)
+        .eq('organization_id', organizationId)
+        .eq('patient_id', patientId)
+        .eq('target_id', targetId)
+        .in('status', ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES);
+      if (requestedScheduleId) query = query.eq('id', requestedScheduleId);
+      query = query.order(orderColumn, { ascending: false }).limit(requestedScheduleId ? 1 : 20);
+      query = applyAbaTenantScope(query, { role: 'owner' }, clinicId, organizationId);
+      return query;
+    });
     if (result.error) {
       console.warn('[MaintenanceSchedule] read-after-write failed', {
+        requestTargetId: targetId,
+        resolvedPatientId: patientId,
+        organizationId,
+        mode: null,
+        writeAttemptStatus: 'read_error',
         targetId,
         patientId,
         scheduleId: requestedScheduleId || null,
-        message: extractSupabaseErrorMessage(result.error)
+        message: extractSupabaseErrorMessage(result.error),
+        readAfterWriteFound: false,
+        reasonCode: 'read_error'
       });
       return { ok: false, error: persistenceError, reason: 'read_error' };
     }
@@ -28425,11 +28466,29 @@ async function startServer() {
     const persistedPatientId = sanitizeString(row?.patient_id || row?.patientId, 120);
     const persistedTargetId = sanitizeString(row?.target_id || row?.targetId, 180);
     const persistedStatus = normalizeAbaMaintenanceScheduleStatus(row?.status);
-    const persistedScheduleMode = sanitizeString(row?.schedule_mode || row?.scheduleMode, 80);
+    const persistedScheduleMode = resolvePersistedMaintenanceScheduleMode(row, persistedStatus);
     const isActive = ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES.includes(persistedStatus);
     const hasOperationalContext =
       persistedStatus === 'PENDING_NEXT_SESSION' ||
       maintenanceScheduleHasOperationalTiming(row);
+    const reasonCode =
+      !persistedId
+        ? 'missing_persisted_id'
+        : persistedOrganizationId !== organizationId
+          ? 'organization_mismatch'
+          : persistedPatientId !== patientId
+            ? 'patient_mismatch'
+            : persistedTargetId !== targetId
+              ? 'target_mismatch'
+              : (persistedClinicId && clinicId && persistedClinicId !== clinicId)
+                ? 'clinic_mismatch'
+                : !isActive
+                  ? 'inactive_status'
+                  : !persistedScheduleMode
+                    ? 'missing_schedule_mode'
+                    : !hasOperationalContext
+                      ? 'missing_operational_context'
+                      : '';
 
     if (
       !persistedId ||
@@ -28442,6 +28501,18 @@ async function startServer() {
       !hasOperationalContext
     ) {
       console.warn('[MaintenanceSchedule] read-after-write mismatch', {
+        requestTargetId: targetId,
+        resolvedPatientId: patientId,
+        organizationId,
+        mode: persistedScheduleMode || null,
+        writeAttemptStatus: 'mismatch',
+        insertedOrUpdatedScheduleId: requestedScheduleId || persistedId || null,
+        persistedTargetId: persistedTargetId || null,
+        persistedPatientId: persistedPatientId || null,
+        persistedOrganizationId: persistedOrganizationId || null,
+        persistedStatus: persistedStatus || null,
+        readAfterWriteFound: Boolean(row),
+        reasonCode,
         targetId,
         patientId,
         scheduleId: requestedScheduleId || persistedId || null,
@@ -28451,6 +28522,23 @@ async function startServer() {
         hasScheduleMode: Boolean(persistedScheduleMode)
       });
       return { ok: false, error: persistenceError, reason: 'mismatch' };
+    }
+
+    if (process.env.NODE_ENV !== 'production') {
+      console.debug('[MaintenanceSchedule] read-after-write confirmed', {
+        requestTargetId: targetId,
+        resolvedPatientId: patientId,
+        organizationId,
+        mode: persistedScheduleMode,
+        writeAttemptStatus: 'confirmed',
+        insertedOrUpdatedScheduleId: persistedId,
+        persistedTargetId,
+        persistedPatientId,
+        persistedOrganizationId,
+        persistedStatus,
+        readAfterWriteFound: true,
+        reasonCode: 'confirmed'
+      });
     }
 
     const [enrichedSchedule] = await enrichMaintenanceRowsWithTargetDisplay([row], clinicId, organizationId, { role: 'owner' });
@@ -28493,20 +28581,7 @@ async function startServer() {
     const now = new Date().toISOString();
     let target = await fetchTargetForMaintenance({ targetId, patientId, clinicId, organizationId });
     if (!target?.id) {
-      const peiTargets = await getPatientPeiTargets(patientId, clinicId, organizationId, { role: 'owner' });
-      const materialized = await materializePeiTargetsForMaintenance({
-        patientId,
-        clinicId,
-        organizationId,
-        sessionUser: { role: 'owner', id: createdBy },
-        peiTargets,
-        existingTargets: []
-      });
-      target = materialized.targets.find((item: any) => sanitizeString(item?.id, 180) === targetId) ||
-        await fetchTargetForMaintenance({ targetId, patientId, clinicId, organizationId });
-    }
-    if (!target?.id) {
-      return { ok: false, status: 404, error: 'Não foi possível agendar manutenção porque a habilidade não foi identificada corretamente.' };
+      return { ok: false, status: 404, error: 'Habilidade de manutenção não encontrada.' };
     }
     const targetMasteryCriteria = target?.mastery_criteria && typeof target.mastery_criteria === 'object' ? target.mastery_criteria : {};
     const requestedPeiGoalId = sanitizeString(params.peiGoalId, 180);
@@ -31788,12 +31863,7 @@ async function startServer() {
           if (isUuid(skillTargetId) && activeScheduleByTargetId.has(skillTargetId)) return activeScheduleByTargetId.get(skillTargetId);
           return null;
         };
-        allEligibleSkills.forEach((skill: any) => {
-          const schedule = findActiveScheduleForSkill(skill);
-          if (!schedule) {
-            eligibleSkills.push(skill);
-            return;
-          }
+        const emitActiveSchedulePanelRow = (skill: any, schedule: any) => {
           const emittedScheduleKey = getPersistedMaintenanceScheduleId(schedule);
           if (emittedScheduleKey && emittedActiveScheduleKeys.has(emittedScheduleKey)) return;
           if (emittedScheduleKey) emittedActiveScheduleKeys.add(emittedScheduleKey);
@@ -31805,11 +31875,43 @@ async function startServer() {
             isMaintenanceScheduleLinklessForPanel(schedule, status, derivedStatusText, rawPendingRestoredAsOperational)
           ) {
             waitingNextSession.push(buildScheduledPanelRow(skill, schedule, 'Aguardando futura consulta'));
-          } else if (status === 'OVERDUE' || derivedStatus === 'OVERDUE') {
+          } else if (status === 'OVERDUE' || derivedStatusText === 'OVERDUE') {
             overdueProbes.push(buildScheduledPanelRow(skill, schedule, 'Sondagem atrasada'));
           } else {
             scheduledProbes.push(buildScheduledPanelRow(skill, schedule, 'Sondagem agendada'));
           }
+        };
+        allEligibleSkills.forEach((skill: any) => {
+          const schedule = findActiveScheduleForSkill(skill);
+          if (!schedule) {
+            eligibleSkills.push(skill);
+            return;
+          }
+          emitActiveSchedulePanelRow(skill, schedule);
+        });
+        activeSchedules.forEach((schedule: any) => {
+          const scheduleTargetId = sanitizeString(schedule?.target_id || schedule?.targetId, 180);
+          if (!isUuid(scheduleTargetId)) return;
+          const scheduleId = getPersistedMaintenanceScheduleId(schedule);
+          if (scheduleId && emittedActiveScheduleKeys.has(scheduleId)) return;
+          const raw = readMaintenanceStoredPayload(schedule?.raw_payload || schedule?.rawPayload);
+          emitActiveSchedulePanelRow(cleanObject({
+            key: `scheduled-target-${scheduleTargetId}`,
+            cardKind: 'PEI_SCHEDULED_TARGET',
+            targetId: scheduleTargetId,
+            target_id: scheduleTargetId,
+            hasRealTarget: true,
+            targetName: sanitizeString(schedule?.targetName || schedule?.target_name || raw.targetName, 240) || 'Habilidade em manutenção',
+            protocol: sanitizeString(schedule?.protocolTitle || schedule?.protocol_title || raw.protocolTitle || raw.protocolName, 240) || 'Sem protocolo informado',
+            domain: sanitizeString(schedule?.domainName || schedule?.domain_name || raw.domainName, 240) || 'Sem domínio informado',
+            protocolName: sanitizeString(schedule?.protocolTitle || schedule?.protocol_title || raw.protocolTitle || raw.protocolName, 240) || 'Sem protocolo informado',
+            domainName: sanitizeString(schedule?.domainName || schedule?.domain_name || raw.domainName, 240) || 'Sem domínio informado',
+            description: sanitizeString(schedule?.description || raw.description, 500) || null,
+            canScheduleMaintenance: true,
+            canWaitNextSession: true,
+            canAssignAppointment: true,
+            availableActions: ['EDIT_SCHEDULE', 'CANCEL_SCHEDULE', 'MOVE_NEXT_SESSION', 'ASSIGN_APPOINTMENT']
+          }), schedule);
         });
         const pagedEligibleSkills = eligibleSkills.slice(0, pageSize);
         const pagedScheduledProbes = scheduledProbes.slice(0, pageSize);
