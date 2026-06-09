@@ -5475,7 +5475,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     setPeiMaintenancePanelMessage('');
     try {
       const [panelResult, linkableResult] = await Promise.all([
-        dataService.getAbaMaintenancePanel(requestPatientId, { page: 1, pageSize: 100 }),
+        dataService.getAbaMaintenancePanel(requestPatientId, { page: 1, pageSize: 200 }),
         dataService.getAbaLinkableTargetsForMaintenance(requestPatientId, { limit: 200 })
       ]);
       const ignoredAsStale =

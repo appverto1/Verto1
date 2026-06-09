@@ -22008,8 +22008,8 @@ async function startServer() {
     return safeScore > 0;
   };
 
-  const ABA_RECORD_LIST_FALLBACK_LIMIT = 20;
-  const ABA_RECORD_LIST_MAX_LIMIT = 50;
+  const ABA_RECORD_LIST_FALLBACK_LIMIT = 100;
+  const ABA_RECORD_LIST_MAX_LIMIT = 200;
   const ABA_SESSION_LIST_SELECT = [
     'id',
     'clinic_id',
@@ -31696,8 +31696,45 @@ async function startServer() {
               : goalId
                 ? `goal:${goalId}`
                 : `skill:${compositeKey}`;
-          if (!internalKey || eligibleByKey.has(internalKey)) return;
-          if (!isPeiSource && realTargetId && Array.from(eligibleByKey.values()).some((row: any) => sanitizeString(row?.targetId || row?.target_id, 180) === realTargetId)) return;
+          if (!internalKey) return;
+          
+          // Se já existe uma entrada com a mesma chave, só substitua se a nova for melhor
+          if (eligibleByKey.has(internalKey)) {
+            const existing = eligibleByKey.get(internalKey);
+            // Prefira targets ABA reais sobre PEI targets sem targetId
+            if (!isPeiSource && realTargetId && !existing?.hasRealTarget) {
+              eligibleByKey.set(internalKey, cleanObject({
+                key: `eligible-${eligibleByKey.size + 1}`,
+                cardKind: 'PEI_ACQUIRED_SKILL',
+                targetId: realTargetId,
+                target_id: realTargetId || null,
+                peiGoalId: goalId || null,
+                goalId: goalId || null,
+                goal_id: goalId || null,
+                skillId: skillId || null,
+                skill_id: skillId || null,
+                localTargetRef: localTargetRef || null,
+                hasRealTarget,
+                targetName,
+                protocol: protocolName,
+                domain: domainName,
+                protocolName,
+                domainName,
+                description,
+                statusLabel: 'Adquirido',
+                clinicalStatus: sanitizeString(source?.clinicalStatus || source?.clinical_status || target?.clinical_status || target?.phase, 80) || null,
+                masteryStatus: sanitizeString(source?.masteryStatus || source?.mastery_status, 80) || null,
+                progressPercent: 100,
+                canScheduleMaintenance: hasRealTarget,
+                canWaitNextSession: hasRealTarget,
+                canAssignAppointment: false,
+                canReviewLink: false,
+                needsTargetReview: false,
+                availableActions: hasRealTarget ? ['SCHEDULE_MAINTENANCE'] : []
+              }));
+            }
+            return;
+          }
           eligibleByKey.set(internalKey, cleanObject({
             key: `eligible-${eligibleByKey.size + 1}`,
             cardKind: 'PEI_ACQUIRED_SKILL',

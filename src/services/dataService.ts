@@ -2725,7 +2725,7 @@ export const dataService = {
         technicalIssues: []
       });
     }
-    const limit = normalizeListLimit(options.pageSize ?? options.limit, 50, 100);
+    const limit = normalizeListLimit(options.pageSize ?? options.limit, 100, 200);
     const page = Math.max(1, Math.round(Number(options.page || 1) || 1));
     const endpoint = endpointWithPagination(`/api/patients/${encodeURIComponent(String(patientId))}/aba/maintenance-panel`, { page, pageSize: limit });
     try {
