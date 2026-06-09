@@ -15,6 +15,7 @@ import { getDefaultAnamnesisTemplate, getProfileTemplate, normalizeAnamnesisTemp
 type PortalSection = 'home' | 'appointments' | 'anamnesis' | 'notes' | 'tasks' | 'reports' | 'documents' | 'profile';
 
 export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompleteTask, history, energyTags, sharedNotes, protocols, onAddFamilyNote, isReadOnlyMode = false, patientPortalId = '' }: any) => { 
+  const FAMILY_DAILY_PHOTO_LIMIT = 5;
   const chartFiltersStorageKey = `verto.patient-dashboard-chart-filters:${String(user?.id || patientPortalId || 'unknown')}`;
   const readPersistedChartFilters = () => {
     if (typeof window === 'undefined') return {};
@@ -1457,17 +1458,18 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     }
   }, [kidsGamification.stars, isKidsProfile, user?.id, user?.email]);
 
-  const hasFamilyPhotoToday = useMemo(() => {
+  const familyPhotoCountToday = useMemo(() => {
     const todayStr = new Date().toISOString().slice(0, 10);
-    return familyDiaryHistory.some((item: any) => {
-      if (item.type !== 'photo') return false;
+    return portalFamilyHistory.filter((item: any) => {
+      if (item?.type !== 'photo') return false;
       const raw = item.date || item.created_at;
       if (!raw) return false;
       const parsed = new Date(raw);
       if (Number.isNaN(parsed.getTime())) return false;
       return parsed.toISOString().slice(0, 10) === todayStr;
-    });
-  }, [familyDiaryHistory]);
+    }).length;
+  }, [portalFamilyHistory]);
+  const hasReachedFamilyPhotoLimitToday = familyPhotoCountToday >= FAMILY_DAILY_PHOTO_LIMIT;
 
   const handleConfirmFamilyNote = async () => {
     if (isReadOnlyMode) return;
@@ -1527,8 +1529,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (isReadOnlyMode) return;
-    if (hasFamilyPhotoToday && !familyImage) {
-      alert('A família já enviou uma foto hoje. Você pode editar com desenho na foto atual ou enviar nova foto amanhã.');
+    if (hasReachedFamilyPhotoLimitToday && !familyImage) {
+      alert(`A família já enviou ${FAMILY_DAILY_PHOTO_LIMIT} fotos hoje. Envie novas fotos amanhã.`);
       e.target.value = '';
       return;
     }
@@ -2674,20 +2676,20 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                           </div>
                         </div>
                       ) : (
-                        <label className={`w-24 h-24 rounded-2xl border-2 border-dashed border-gray-200 flex flex-col items-center justify-center gap-1 text-gray-400 transition-all ${isUploading || hasFamilyPhotoToday ? 'opacity-50 cursor-not-allowed' : 'hover:border-blue-300 hover:text-blue-400 cursor-pointer'}`}>
+                        <label className={`w-24 h-24 rounded-2xl border-2 border-dashed border-gray-200 flex flex-col items-center justify-center gap-1 text-gray-400 transition-all ${isUploading || hasReachedFamilyPhotoLimitToday ? 'opacity-50 cursor-not-allowed' : 'hover:border-blue-300 hover:text-blue-400 cursor-pointer'}`}>
                           {isUploading ? (
                             <RefreshCcw size={24} className="animate-spin" />
                           ) : (
                             <Camera size={24} />
                           )}
-                          <span className="text-[10px] font-bold uppercase">{isUploading ? 'Enviando' : hasFamilyPhotoToday ? '1 foto/dia' : 'Foto'}</span>
-                          {!isUploading && !hasFamilyPhotoToday && <input type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />}
+                          <span className="text-[10px] font-bold uppercase">{isUploading ? 'Enviando' : hasReachedFamilyPhotoLimitToday ? '5 fotos/dia' : 'Foto'}</span>
+                          {!isUploading && !hasReachedFamilyPhotoLimitToday && <input type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />}
                         </label>
                       )}
                     </div>
-                    {hasFamilyPhotoToday && !familyImage && (
+                    {hasReachedFamilyPhotoLimitToday && !familyImage && (
                       <p className="mt-2 text-[11px] text-amber-600 font-medium">
-                        Limite diário: já existe uma foto enviada hoje no Diário da Família.
+                        Limite diário: já existem {FAMILY_DAILY_PHOTO_LIMIT} fotos enviadas hoje no Diário da Família.
                       </p>
                     )}
                   </div>

@@ -10,6 +10,7 @@ const dataServiceCode = read('src/services/dataService.ts');
 const patientDashboardCode = read('src/components/PatientDashboard.tsx');
 const appCode = read('src/App.tsx');
 const secureMediaCode = read('src/components/SecureMedia.tsx');
+const familyPhotoLimitMigration = read('supabase/migrations/20260609143000_family_diary_photo_limit_five.sql');
 
 const tests: Array<{ name: string; fn: () => void }> = [];
 const test = (name: string, fn: () => void) => tests.push({ name, fn });
@@ -37,6 +38,9 @@ test('backend normaliza paths com prefixo do bucket antes de renovar URL assinad
 
 test('upload de midia de perfil usa path deterministico por hash e retry idempotente', () => {
   assert.match(dataServiceCode, /function resolveIdempotentPatientPhotoPath/);
+  assert.match(dataServiceCode, /mimeType:\s*'image\/webp'/);
+  assert.match(dataServiceCode, /const readDataUrlContentType =/);
+  assert.match(dataServiceCode, /contentType:\s*actualOutputType/);
   assert.match(dataServiceCode, /sha256TextHex\(prepared\.dataUrl\)/);
   assert.match(dataServiceCode, /patient-profile:\$\{ownerId\}:\$\{shortHash\}/);
   assert.match(dataServiceCode, /onboarding:\$\{ownerId\}:\$\{kind\}:\$\{shortHash\}/);
@@ -50,6 +54,14 @@ test('upload de midia de perfil usa path deterministico por hash e retry idempot
   assert.match(storageRoute, /buildPatientPhotoViewUrl\(uploadData\.path\)/);
   assert.match(storageRoute, /idempotent:\s*true/);
   assert.doesNotMatch(storageRoute, /upsert:\s*true/);
+});
+
+test('diario da familia permite cinco fotos por dia sem indice unico antigo', () => {
+  assert.match(serverCode, /const FAMILY_DAILY_PHOTO_LIMIT = 5/);
+  assert.match(serverCode, /todayPhotos\.length >= FAMILY_DAILY_PHOTO_LIMIT/);
+  assert.match(serverCode, /at. \${FAMILY_DAILY_PHOTO_LIMIT} fotos por dia/);
+  assert.match(familyPhotoLimitMigration, /drop index if exists public\.history_one_photo_per_day/);
+  assert.match(familyPhotoLimitMigration, /create index if not exists idx_history_family_photos_patient_day/);
 });
 
 test('midia de patient-photos usa proxy autenticado e imagem falhada para de renderizar', () => {

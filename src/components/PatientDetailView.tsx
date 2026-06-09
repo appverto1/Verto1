@@ -2506,6 +2506,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             n?.photo_url ||
             n?.photoUrl ||
             null,
+          image_path: n?.image_path || n?.imagePath || n?.storage_path || n?.storagePath || null,
           icon: '🏠',
           score:
             milestoneBySource.get(`note-family-${n?.id}`)?.awarded
@@ -2543,6 +2544,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         ...current,
         // Preserve family enrichment when duplicated with history rows
         image: current?.image || entry?.image || null,
+        image_path: current?.image_path || current?.imagePath || entry?.image_path || null,
         subject: current?.subject || entry?.subject,
         score: Math.max(Number(current?.score ?? 0) || 0, Number(entry?.score ?? 0) || 0),
         milestoneAwarded:

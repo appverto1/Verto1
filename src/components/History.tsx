@@ -103,6 +103,13 @@ export const HistoryCard = ({ item, energyTags, isTherapist, onEvaluate, protoco
   }; 
 
   const isFamilyEntry = item.type === 'family_note' || item.type === 'photo';
+  const familyImageSource = (() => {
+    const direct = item?.image || item?.image_url || item?.imageUrl || item?.photo || item?.photo_url || item?.photoUrl;
+    if (direct) return direct;
+    const path = String(item?.image_path || item?.imagePath || item?.storage_path || item?.storagePath || '').trim();
+    if (!path) return '';
+    return path.startsWith('patient-photos/') ? path : `patient-photos/${path}`;
+  })();
   const displayTitle = repairMojibake(item?.title);
   const displayNote = sanitizeDescriptionForDisplay(repairMojibake(item?.note));
   const displayIcon = (() => {
@@ -164,13 +171,13 @@ export const HistoryCard = ({ item, energyTags, isTherapist, onEvaluate, protoco
           {isTherapist && item.score !== undefined && item.type !== 'intervention' && !isFamilyEntry && <span className="text-[10px] font-semibold text-white bg-green-500 px-2 py-0.5 rounded-md shadow-sm animate-pop">Pontuação: {item.score}</span>} 
         </div> 
       </div> 
-      {(item.note || item.image) && (
+      {(item.note || familyImageSource) && (
         <div className={`rounded-xl p-3 text-sm italic border mb-3 ${item.type === 'intervention' ? 'bg-green-50 text-green-800 border-green-100' : (item.type === 'family_note' || item.type === 'photo') ? 'bg-orange-50 text-orange-800 border-orange-100' : 'bg-[#F4F7FE] text-gray-600 border-blue-50'}`}>
           <p className="text-[10px] font-semibold uppercase mb-1 opacity-60">{(item.type === 'family_note' || item.type === 'photo') ? 'Registro da Família:' : 'Anotações do Paciente:'}</p>
           {displayNote && <p>"{displayNote}"</p>}
-          {item.image && (
+          {familyImageSource && (
             <div className={`${item.note ? 'mt-3' : ''} rounded-lg overflow-hidden border border-orange-200`}>
-              <SecureImage src={item.image} alt="Registro da Família" className="w-full max-w-[380px] max-h-56 object-contain bg-white mx-auto" />
+              <SecureImage src={familyImageSource} alt="Registro da Família" className="w-full max-w-[380px] max-h-56 object-contain bg-white mx-auto" />
             </div>
           )}
         </div>
@@ -275,5 +282,4 @@ export const HistoryCard = ({ item, energyTags, isTherapist, onEvaluate, protoco
     </div> 
   ); 
 };
-
 

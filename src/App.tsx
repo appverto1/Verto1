@@ -1746,6 +1746,57 @@ export default function App() {
       .replace(/&gt;/g, '>')
       .trim();
 
+  const normalizeHistoryRecordForState = (record: any, fallbackPatientId?: string) => {
+    const createdAt = record?.created_at || record?.createdAt || record?.date || null;
+    const parsedCreatedAt = createdAt ? new Date(createdAt) : null;
+    const hasValidCreatedAt = Boolean(parsedCreatedAt && !Number.isNaN(parsedCreatedAt.getTime()));
+    return {
+      ...record,
+      patientId: record?.patientId || record?.patient_id || fallbackPatientId,
+      patient_id: record?.patient_id || record?.patientId || fallbackPatientId,
+      date: record?.date || record?.created_at || record?.createdAt || new Date().toISOString(),
+      time:
+        record?.time ||
+        (hasValidCreatedAt
+          ? parsedCreatedAt!.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          : ''),
+      dateGroup:
+        record?.dateGroup ||
+        record?.date_group ||
+        (hasValidCreatedAt && parsedCreatedAt!.toDateString() === new Date().toDateString()
+          ? 'Hoje'
+          : hasValidCreatedAt
+            ? parsedCreatedAt!.toLocaleDateString()
+            : ''),
+      image: record?.image || record?.image_url || record?.imageUrl || null,
+      image_path: record?.image_path || record?.imagePath || null
+    };
+  };
+
+  const mergeHistoryRecords = (current: any[], incoming: any[], fallbackPatientId?: string) => {
+    const byId = new Map<string, any>();
+    const addRecord = (record: any) => {
+      const normalized = normalizeHistoryRecordForState(record, fallbackPatientId);
+      const key = String(normalized?.id || [
+        normalized?.patient_id || normalized?.patientId || '',
+        normalized?.type || '',
+        normalized?.title || '',
+        normalized?.created_at || normalized?.date || '',
+        normalized?.note || ''
+      ].join('|'));
+      if (!key.trim()) return;
+      const existing = byId.get(key);
+      byId.set(key, existing ? { ...existing, ...normalized } : normalized);
+    };
+    (Array.isArray(current) ? current : []).forEach(addRecord);
+    (Array.isArray(incoming) ? incoming : []).forEach(addRecord);
+    return Array.from(byId.values()).sort((a: any, b: any) => {
+      const aTime = new Date(a?.created_at || a?.date || 0).getTime();
+      const bTime = new Date(b?.created_at || b?.date || 0).getTime();
+      return bTime - aTime;
+    });
+  };
+
   const normalizeAndDecorateNotes = (rawNotes: any[]) => {
     const normalized = (Array.isArray(rawNotes) ? rawNotes : []).map((n: any) => {
       const rawVisibility = String(n?.visibility || '').toLowerCase();
@@ -2173,21 +2224,7 @@ export default function App() {
 
       if (mounted) setHistory(
         Array.isArray(mergedHistory)
-          ? mergedHistory.map((h: any) => ({
-              ...h,
-              patientId: h?.patient_id || h?.patientId || user.id,
-              time: h?.created_at
-                ? new Date(h.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                : '',
-              dateGroup:
-                h?.date_group ||
-                h?.dateGroup ||
-                (h?.created_at && new Date(h.created_at).toDateString() === new Date().toDateString()
-                  ? 'Hoje'
-                  : h?.created_at
-                    ? new Date(h.created_at).toLocaleDateString()
-                    : '')
-            }))
+          ? mergedHistory.map((h: any) => normalizeHistoryRecordForState(h, user.id))
           : []
       );
       if (mounted) setTasks((() => {
@@ -2301,6 +2338,24 @@ export default function App() {
     if (!normalizedStatus) return false;
     return true;
   }, [user, patientAssignedTaskCount, patientAssignedTasksLoadError, patientContextLoaded, tasks]);
+
+  const refreshPatientHistoryForProfessional = async (patientId: any) => {
+    const normalizedPatientId = String(patientId || '').trim();
+    if (!normalizedPatientId || !user || !['therapist', 'coordinator', 'receptionist', 'admin', 'owner'].includes(String(user.role || '').toLowerCase())) {
+      return { success: false, error: 'Paciente inválido.' };
+    }
+    try {
+      const result = await dataService.getHistory(normalizedPatientId);
+      if (!result?.success || !Array.isArray(result?.data)) {
+        return { success: false, error: result?.error || 'Não foi possível atualizar o histórico.' };
+      }
+      setHistory(prev => mergeHistoryRecords(prev, result.data, normalizedPatientId));
+      return { success: true, data: result.data };
+    } catch (error: any) {
+      console.error('Falha ao atualizar histórico persistido do paciente:', error);
+      return { success: false, error: error?.message || 'Não foi possível atualizar o histórico.' };
+    }
+  };
 
   useEffect(() => {
     if (!user) return;
@@ -4796,7 +4851,7 @@ export default function App() {
       image_path: imagePath || null,
       icon: isPhotoRecord ? "📷" : "🏠",
       created_at: createdAt,
-      date_group: "Hoje",
+      date_group: createdAt.slice(0, 10),
       source: 'family_portal'
     });
 
@@ -5264,6 +5319,7 @@ export default function App() {
             onRecordTrial={handleRecordTrial}
             onDeleteHistoryItem={handleDeleteHistoryItem}
             onEvaluateHistoryItem={handleUpdateHistoryItem}
+            onRefreshPatientHistory={refreshPatientHistoryForProfessional}
             onAddTask={handleAddTask}
             onUpdateTask={handleUpdateTask}
             allTasks={tasks}

@@ -162,6 +162,7 @@ interface CoordinatorDashboardProps {
   ) => any;
   onDeleteHistoryItem?: (id: any) => void;
   onEvaluateHistoryItem?: (id: any, score: number, note: string) => void;
+  onRefreshPatientHistory?: (patientId: any) => Promise<any> | any;
   allTasks?: any[];
   onAddTask?: (task: any) => void;
   onUpdateTask?: (taskId: any, updates: any) => void;
@@ -196,6 +197,7 @@ export function CoordinatorDashboard({
   onRecordTrial,
   onDeleteHistoryItem,
   onEvaluateHistoryItem,
+  onRefreshPatientHistory,
   allTasks = [],
   onAddTask,
   onUpdateTask,
@@ -3350,6 +3352,11 @@ export function CoordinatorDashboard({
     setPatientOpenTab(nextOptions.tab || "history");
     setOpenAnamnesisOnPatientOpen(Boolean(nextOptions.openAnamnesis));
     setView("patient");
+    if (nextOptions.tab === "history" || !nextOptions.tab) {
+      void Promise.resolve(onRefreshPatientHistory?.(resolvedPatient.id)).catch((error) => {
+        console.warn("Falha ao atualizar histórico persistido do paciente:", error);
+      });
+    }
   };
 
   const openPatientProfileModal = (patient: any) => {

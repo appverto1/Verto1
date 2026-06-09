@@ -418,6 +418,7 @@ const ENCRYPTION_ALGO = 'aes-256-gcm';
 const paymentStatuses = new Set(['paid', 'pending', 'canceled', 'refunded', 'delinquent']);
 const OTP_TTL_MS = 15 * 60 * 1000;
 const PORTAL_LOGIN_OTP_TTL_MS = 10 * 60 * 1000;
+const FAMILY_DAILY_PHOTO_LIMIT = 5;
 
 function sanitizeString(value: unknown, maxLength = 5000): string {
   if (typeof value !== 'string') return '';
@@ -19495,7 +19496,7 @@ async function startServer() {
               .is('deleted_at', null)
               .gte('created_at', startOfDay)
               .lt('created_at', endOfDay)
-              .limit(5);
+              .limit(FAMILY_DAILY_PHOTO_LIMIT);
             if (!error) return Array.isArray(data) ? data : [];
             const missingColumn = extractMissingColumnName(error);
             if (missingColumn && columns.includes(missingColumn)) {
@@ -19538,14 +19539,12 @@ async function startServer() {
             data: sameUploadedPhoto
           });
         }
-        const hasDifferentPhotoToday = todayPhotos.some((photo: any) =>
-          !sameRequestPhoto || String(photo?.id || '') !== String(sameRequestPhoto?.id || '')
-        );
-        if (hasDifferentPhotoToday) {
+        const reachedDailyPhotoLimit = !sameRequestPhoto && todayPhotos.length >= FAMILY_DAILY_PHOTO_LIMIT;
+        if (reachedDailyPhotoLimit) {
           return res.status(409).json({
             success: false,
             code: 'FAMILY_DAILY_PHOTO_LIMIT',
-            error: 'Limite diário atingido: apenas 1 foto por dia pode ser enviada no Portal da Família.'
+            error: `Limite diário atingido: até ${FAMILY_DAILY_PHOTO_LIMIT} fotos por dia podem ser enviadas no Portal da Família.`
           });
         }
       }
@@ -19602,7 +19601,7 @@ async function startServer() {
         return res.status(409).json({
           success: false,
           code: 'FAMILY_DAILY_PHOTO_LIMIT',
-          error: 'Limite diário atingido: apenas 1 foto por dia pode ser enviada no Portal da Família.'
+          error: `Limite diário atingido: até ${FAMILY_DAILY_PHOTO_LIMIT} fotos por dia podem ser enviadas no Portal da Família.`
         });
       }
       return sendClinicalMutationError(res, '/api/history', 'write', error, {

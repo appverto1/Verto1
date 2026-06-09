@@ -72,6 +72,11 @@ test('diario da familia usa historico como fonte persistente e idempotente', () 
   assert.match(familySave, /const persistedPatientId = String\(historySaveResult\.data\.patient_id \|\| historySaveResult\.data\.patientId \|\| ''\)\.trim\(\)/);
   assert.match(familySave, /setResolvedPatientPortalId\(persistedPatientId\)/);
   assert.match(familySave, /return \{ success: true, data: historySaveResult\?\.data \|\| newHistoryItem \}/);
+  assert.match(appCode, /const refreshPatientHistoryForProfessional = async \(patientId: any\) =>/);
+  assert.match(appCode, /dataService\.getHistory\(normalizedPatientId\)/);
+  assert.match(appCode, /setHistory\(prev => mergeHistoryRecords\(prev, result\.data, normalizedPatientId\)\)/);
+  assert.match(coordinatorCode, /onRefreshPatientHistory\?: \(patientId: any\) => Promise<any> \| any/);
+  assert.match(coordinatorCode, /onRefreshPatientHistory\?\.?\(resolvedPatient\.id\)/);
 
   const historyRoute = sliceFrom(serverCode, "app.post('/api/history'", 6200);
   assert.match(historyRoute, /const incomingHistoryId = sanitizeString\(req\.body\?\.id/);
@@ -82,7 +87,7 @@ test('diario da familia usa historico como fonte persistente e idempotente', () 
   assert.match(historyRoute, /FAMILY_DAILY_PHOTO_ALREADY_SAVED/);
   assert.match(historyRoute, /idempotent:\s*true/);
   assert.match(historyRoute, /FAMILY_DAILY_PHOTO_LIMIT/);
-  assert.match(historyRoute, /hasDifferentPhotoToday/);
+  assert.match(historyRoute, /todayPhotos\.length >= FAMILY_DAILY_PHOTO_LIMIT/);
   assert.doesNotMatch(historyRoute, /\.select\(\s*['"`]\*['"`]\s*\)/);
 });
 

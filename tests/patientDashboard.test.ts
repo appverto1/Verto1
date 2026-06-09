@@ -67,6 +67,9 @@ test('persistencia visual Kids continua baseada em dados existentes e nao mocks'
 
 test('diario da familia preserva path de foto e aguarda persistencia do historico', () => {
   assert.match(patientDashboardCode, /const \[familyImagePath, setFamilyImagePath\] = useState<string \| null>\(null\)/);
+  assert.match(patientDashboardCode, /const FAMILY_DAILY_PHOTO_LIMIT = 5/);
+  assert.match(patientDashboardCode, /const familyPhotoCountToday = useMemo/);
+  assert.match(patientDashboardCode, /familyPhotoCountToday >= FAMILY_DAILY_PHOTO_LIMIT/);
   assert.match(patientDashboardCode, /let persistedImagePath: string \| undefined = familyImagePath \|\| undefined/);
   assert.match(patientDashboardCode, /const saveResult = await onAddFamilyNote\(portalPatientId \|\| user\.id, familyNote, persistedImage, persistedImagePath\)/);
   assert.match(patientDashboardCode, /setFamilyImagePath\(result\.path \|\| null\)/);
@@ -76,6 +79,7 @@ test('diario da familia preserva path de foto e aguarda persistencia do historic
   assert.match(patientDashboardCode, /entry\?\.image_path/);
   assert.match(patientDashboardCode, /path\.startsWith\('patient-photos\/'\)/);
   assert.match(patientDashboardCode, /<SecureImage\s+src=\{getFamilyDiaryImageSource\(entry\)\}/);
+  assert.doesNotMatch(patientDashboardCode, /1 foto\/dia|apenas 1 foto/);
   const kidsBlock = between('if (isKidsProfile) {', 'const dailyReviewTasks = useMemo');
   assert.doesNotMatch(kidsBlock, /<img[\s\S]{0,220}alt="Registro do diário"/);
 });

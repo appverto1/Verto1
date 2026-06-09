@@ -327,8 +327,11 @@ async function compressImageDataUrl(
   const outputType = options.mimeType || 'image/jpeg';
   const MAX_COMPRESSED_SIZE_BYTES = 500 * 1024; // 500KB max post-compression
 
+  const readDataUrlContentType = (value: string) => value.match(/^data:([^;]+);base64,/)?.[1] || outputType;
+
   // Try initial quality
   let dataUrl = canvas.toDataURL(outputType, initialQuality);
+  let actualOutputType = readDataUrlContentType(dataUrl);
   let compressedSize = Math.ceil((dataUrl.length - dataUrl.indexOf(',') - 1) * 0.75); // Estimate base64 to binary size
   
   // If exceeds 500KB, retry with lower quality (0.60)
@@ -337,6 +340,7 @@ async function compressImageDataUrl(
       `[Compression] Initial quality ${initialQuality} resulted in ${(compressedSize / 1024).toFixed(2)}KB. Retrying with quality 0.60...`
     );
     dataUrl = canvas.toDataURL(outputType, 0.60);
+    actualOutputType = readDataUrlContentType(dataUrl);
     compressedSize = Math.ceil((dataUrl.length - dataUrl.indexOf(',') - 1) * 0.75);
   }
 
@@ -349,7 +353,7 @@ async function compressImageDataUrl(
 
   return {
     dataUrl,
-    contentType: outputType
+    contentType: actualOutputType
   };
 }
 
@@ -4310,8 +4314,8 @@ export const dataService = {
       try {
         const prepared = await compressImageDataUrl(file, {
           maxDimension: 1200,
-          quality: 0.78,
-          mimeType: 'image/jpeg'
+          quality: 0.76,
+          mimeType: 'image/webp'
         });
         const contentHash = await sha256TextHex(prepared.dataUrl) || await sha256Hex(file);
         const uploadTarget = resolveIdempotentPatientPhotoPath(path, prepared.contentType, contentHash);
@@ -4422,7 +4426,7 @@ export const dataService = {
     try {
       const shouldCompressPatientPhoto = bucket === 'patient-photos';
       const prepared = shouldCompressPatientPhoto
-        ? await compressImageDataUrl(dataUrl, { maxDimension: 1200, quality: 0.78, mimeType: 'image/jpeg' })
+        ? await compressImageDataUrl(dataUrl, { maxDimension: 1200, quality: 0.76, mimeType: 'image/webp' })
         : { dataUrl, contentType: contentTypeHint || 'image/png' };
       const contentHash = shouldCompressPatientPhoto ? await sha256TextHex(prepared.dataUrl) : null;
       const uploadTarget = shouldCompressPatientPhoto
