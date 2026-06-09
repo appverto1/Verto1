@@ -3,6 +3,10 @@ import {
   formatMaintenanceScheduleDueLabel,
   getNextMaintenanceProbeForTarget,
 } from './abaMaintenanceScheduling';
+import {
+  debugMapperInput,
+  debugMapperOutput,
+} from './debugPeiMaintenance';
 
 export type PeiPlanSubtab = 'teaching' | 'maintenance' | 'generalization' | 'history';
 
@@ -567,6 +571,20 @@ export function mapMaintenancePanelResponse(
     : response && typeof response === 'object' && !Array.isArray(response)
       ? response
       : {};
+
+  // Log input state
+  debugMapperInput(
+    Array.isArray(panel.eligibleSkills) ? panel.eligibleSkills.length : 0,
+    Array.isArray(panel.scheduledProbes) ? panel.scheduledProbes.length : 0,
+    {
+      maintenanceSkills: Array.isArray(panel.maintenanceSkills) ? panel.maintenanceSkills.length : 0,
+      waitingNextSession: Array.isArray(panel.waitingNextSession) ? panel.waitingNextSession.length : 0,
+      overdueProbes: Array.isArray(panel.overdueProbes) ? panel.overdueProbes.length : 0,
+      regressionRisk: Array.isArray(panel.regressionRisk) ? panel.regressionRisk.length : 0,
+      technicalIssues: Array.isArray(panel.technicalIssues) ? panel.technicalIssues.length : 0,
+    }
+  );
+
   const sections = createEmptyPeiMaintenanceTargetFirstSections();
   const clinicalLinkIdsFor = (row: any) => {
     const schedule = row?.nextSchedule || row?.activeSchedule || row?.schedule || null;
@@ -779,6 +797,19 @@ export function mapMaintenancePanelResponse(
     regressionRisk: sections.regressionRisk.length,
     technical: sections.technical.length,
   };
+
+  // Log output state
+  debugMapperOutput(
+    sections.eligibleSkills.length,
+    sections.scheduled.length,
+    {
+      maintenanceSkills: sections.maintenanceSkills.length,
+      waitingNextSession: sections.waitingNextSession.length,
+      overdue: sections.overdue.length,
+      regressionRisk: sections.regressionRisk.length,
+      technical: sections.technical.length,
+    }
+  );
 
   return {
     ...panel,
