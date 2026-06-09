@@ -2006,16 +2006,15 @@ function extractPatientPhotosStoragePath(raw: unknown): string | null {
   return null;
 }
 
+function buildPatientPhotoViewUrl(storagePath: unknown): string | null {
+  const path = extractPatientPhotosStoragePath(storagePath);
+  if (!path) return null;
+  return `/api/storage/patient-photos/view?path=${encodeURIComponent(path)}`;
+}
+
 async function resolvePatientPhotoUrl(rawUrl: unknown, rawPath?: unknown): Promise<string | null> {
   const storagePath = extractPatientPhotosStoragePath(rawPath) || extractPatientPhotosStoragePath(rawUrl);
-  if (storagePath) {
-    try {
-      const { data } = await supabase.storage.from('patient-photos').createSignedUrl(storagePath, 60 * 60 * 24 * 30);
-      if (data?.signedUrl) return data.signedUrl;
-    } catch (error: any) {
-      console.warn('[PatientProfile] signed photo url warning:', error?.message || String(error));
-    }
-  }
+  if (storagePath) return buildPatientPhotoViewUrl(storagePath);
   return sanitizeSessionUrl(rawUrl);
 }
 
@@ -16112,34 +16111,67 @@ async function startServer() {
           throw uploadError;
         }
 
-        const { data: signedExisting, error: signedExistingError } = await supabase.storage
-          .from(bucketName)
-          .createSignedUrl(objectPath, 60 * 10);
-        if (signedExistingError) throw signedExistingError;
-
         return res.json({
           success: true,
           idempotent: true,
-          url: signedExisting.signedUrl,
+          url: buildPatientPhotoViewUrl(objectPath),
           path: objectPath
         });
       }
 
-      const { data: signedData, error: signedError } = await supabase.storage
-        .from(bucketName)
-        .createSignedUrl(uploadData.path, 60 * 10);
-
-      if (signedError) throw signedError;
-
       return res.json({
         success: true,
         idempotent: false,
-        url: signedData.signedUrl,
+        url: buildPatientPhotoViewUrl(uploadData.path),
         path: uploadData.path
       });
     } catch (error: any) {
       console.error('Storage upload fallback error:', error);
       return res.status(500).json({ success: false, error: error.message || String(error) });
+    }
+  });
+
+  app.get('/api/storage/patient-photos/view', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner', 'patient'), async (req: any, res) => {
+    try {
+      const objectPath = extractPatientPhotosStoragePath(req.query?.path);
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      const role = sanitizeString(req.session.user?.role, 40).toLowerCase();
+      if (!objectPath || objectPath.includes('..')) {
+        return res.status(400).send('Path inválido.');
+      }
+
+      if (objectPath.startsWith('onboarding/')) {
+        const ownerUserId = sanitizeString(objectPath.split('/')[1], 120);
+        const canViewOnboardingMedia = isUuid(ownerUserId) && (
+          ownerUserId === actorId ||
+          ['admin', 'owner', 'coordinator'].includes(role)
+        );
+        if (!canViewOnboardingMedia) return res.status(403).send('Acesso negado.');
+      } else {
+        const ownerPatientId = sanitizeString(objectPath.split('/')[0], 120);
+        if (!isUuid(ownerPatientId)) return res.status(400).send('Path inválido.');
+        if (role === 'patient') {
+          if (ownerPatientId !== actorId) return res.status(403).send('Acesso negado.');
+        } else if (!(await canAccessPatientInCurrentClinic(ownerPatientId, req.session.user))) {
+          return res.status(403).send('Paciente fora do escopo da clínica.');
+        }
+      }
+
+      const { data, error } = await supabase.storage.from('patient-photos').download(objectPath);
+      if (error || !data) return res.status(404).send('Arquivo não encontrado.');
+      const arrayBuffer = await data.arrayBuffer();
+      const contentType = sanitizeString((data as any).type, 120) || (
+        /\.webp$/i.test(objectPath) ? 'image/webp' :
+          /\.png$/i.test(objectPath) ? 'image/png' :
+            /\.gif$/i.test(objectPath) ? 'image/gif' :
+              'image/jpeg'
+      );
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Cache-Control', 'private, max-age=300');
+      return res.send(Buffer.from(arrayBuffer));
+    } catch (error: any) {
+      console.error('Patient photo view error:', error?.message || String(error));
+      return res.status(500).send('Não foi possível carregar a imagem.');
     }
   });
 
@@ -18856,14 +18888,12 @@ async function startServer() {
 
           if (!storagePath) return row;
 
-          const { data: signed, error: signedError } = await supabase.storage
-            .from('patient-photos')
-            .createSignedUrl(storagePath, 60 * 10);
-          if (signedError || !signed?.signedUrl) return row;
+          const viewUrl = buildPatientPhotoViewUrl(storagePath);
+          if (!viewUrl) return row;
 
           return {
             ...row,
-            image: signed.signedUrl,
+            image: viewUrl,
             image_path: storagePath
           };
         } catch {
@@ -18949,10 +18979,7 @@ async function startServer() {
               if (encodedPath) storagePath = decodeURIComponent(encodedPath);
             }
             if (!storagePath) return row;
-            const { data: signed } = await supabase.storage
-              .from('patient-photos')
-              .createSignedUrl(storagePath, 60 * 10);
-            return { ...row, image: signed?.signedUrl || row?.image, image_path: storagePath };
+            return { ...row, image: buildPatientPhotoViewUrl(storagePath) || row?.image, image_path: storagePath };
           } catch {
             return row;
           }
@@ -19143,10 +19170,7 @@ async function startServer() {
               if (encodedPath) storagePath = decodeURIComponent(encodedPath);
             }
             if (!storagePath) return row;
-            const { data: signed } = await supabase.storage
-              .from('patient-photos')
-              .createSignedUrl(storagePath, 60 * 10);
-            return { ...row, image: signed?.signedUrl || row?.image, image_path: storagePath };
+            return { ...row, image: buildPatientPhotoViewUrl(storagePath) || row?.image, image_path: storagePath };
           } catch {
             return row;
           }
@@ -20109,16 +20133,13 @@ async function startServer() {
         const signaturePath = extractPatientPhotosStoragePath(metadata.signaturePath || profileOut.signature_data_url);
 
         if (profilePhotoPath) {
-          const { data: signed } = await supabase.storage.from('patient-photos').createSignedUrl(profilePhotoPath, 60 * 10);
-          if (signed?.signedUrl) profileOut.profile_photo_url = signed.signedUrl;
+          profileOut.profile_photo_url = buildPatientPhotoViewUrl(profilePhotoPath);
         }
         if (clinicLogoPath) {
-          const { data: signed } = await supabase.storage.from('patient-photos').createSignedUrl(clinicLogoPath, 60 * 10);
-          if (signed?.signedUrl) profileOut.clinic_logo_url = signed.signedUrl;
+          profileOut.clinic_logo_url = buildPatientPhotoViewUrl(clinicLogoPath);
         }
         if (signaturePath) {
-          const { data: signed } = await supabase.storage.from('patient-photos').createSignedUrl(signaturePath, 60 * 10);
-          if (signed?.signedUrl) profileOut.signature_data_url = signed.signedUrl;
+          profileOut.signature_data_url = buildPatientPhotoViewUrl(signaturePath);
         }
         profileOut.metadata = {
           ...metadata,
@@ -20178,16 +20199,13 @@ async function startServer() {
       let signatureUrl: string | null = null;
 
       if (profilePhotoPath) {
-        const { data: signed } = await supabase.storage.from('patient-photos').createSignedUrl(profilePhotoPath, 60 * 10);
-        profilePictureUrl = sanitizeUrl(signed?.signedUrl) || null;
+        profilePictureUrl = buildPatientPhotoViewUrl(profilePhotoPath);
       }
       if (clinicLogoPath) {
-        const { data: signed } = await supabase.storage.from('patient-photos').createSignedUrl(clinicLogoPath, 60 * 10);
-        clinicLogoUrl = sanitizeUrl(signed?.signedUrl) || null;
+        clinicLogoUrl = buildPatientPhotoViewUrl(clinicLogoPath);
       }
       if (signaturePath) {
-        const { data: signed } = await supabase.storage.from('patient-photos').createSignedUrl(signaturePath, 60 * 10);
-        signatureUrl = sanitizeUrl(signed?.signedUrl) || null;
+        signatureUrl = buildPatientPhotoViewUrl(signaturePath);
       }
 
       return res.json({

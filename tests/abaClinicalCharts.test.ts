@@ -20,6 +20,7 @@ const serverCode = readFileSync(join(root, 'server.ts'), 'utf8');
 const dataServiceCode = readFileSync(join(root, 'src/services/dataService.ts'), 'utf8');
 const patientDetailCode = readFileSync(join(root, 'src/components/PatientDetailView.tsx'), 'utf8');
 const panelCode = readFileSync(join(root, 'src/components/AbaClinicalChartsPanel.tsx'), 'utf8');
+const safeResponsiveContainerCode = readFileSync(join(root, 'src/components/SafeResponsiveContainer.tsx'), 'utf8');
 const packageJson = readFileSync(join(root, 'package.json'), 'utf8');
 
 const tests: Array<{ name: string; fn: () => void }> = [];
@@ -479,6 +480,19 @@ test('frontend usa visão agregada com drilldown em vez de plotar todos os targe
 test('script npm do épico está registrado', () => {
   const parsed = JSON.parse(packageJson);
   assert.equal(parsed.scripts['test:aba-clinical-charts'], 'tsx tests/abaClinicalCharts.test.ts');
+});
+
+test('container responsivo mede dimensoes antes de montar graficos recharts', () => {
+  assert.doesNotMatch(safeResponsiveContainerCode, /import\s*\{[\s\S]*ResponsiveContainer[\s\S]*\}\s*from\s*['"]recharts['"]/);
+  assert.doesNotMatch(safeResponsiveContainerCode, /<ResponsiveContainer/);
+  assert.match(safeResponsiveContainerCode, /getBoundingClientRect\(\)/);
+  assert.match(safeResponsiveContainerCode, /ResizeObserver/);
+  assert.match(safeResponsiveContainerCode, /size\.width > 0 && size\.height > 0/);
+  assert.match(safeResponsiveContainerCode, /React\.cloneElement/);
+  assert.match(safeResponsiveContainerCode, /width:\s*size\.width/);
+  assert.match(safeResponsiveContainerCode, /height:\s*size\.height/);
+  assert.match(panelCode, /<SafeResponsiveContainer width="100%" height="100%" minWidth=\{0\} minHeight=\{340\}>/);
+  assert.match(panelCode, /<SafeResponsiveContainer width="100%" height="100%" minWidth=\{0\} minHeight=\{320\}>/);
 });
 
 let passed = 0;

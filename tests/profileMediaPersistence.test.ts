@@ -9,6 +9,7 @@ const serverCode = read('server.ts');
 const dataServiceCode = read('src/services/dataService.ts');
 const patientDashboardCode = read('src/components/PatientDashboard.tsx');
 const appCode = read('src/App.tsx');
+const secureMediaCode = read('src/components/SecureMedia.tsx');
 
 const tests: Array<{ name: string; fn: () => void }> = [];
 const test = (name: string, fn: () => void) => tests.push({ name, fn });
@@ -29,7 +30,9 @@ test('backend normaliza paths com prefixo do bucket antes de renovar URL assinad
     helper.indexOf("value.startsWith('patient-photos/')") < helper.indexOf("!value.includes('://')"),
     'prefixo patient-photos precisa ser removido antes do fallback generico de path.'
   );
-  assert.match(serverCode, /createSignedUrl\(storagePath, 60 \* 60 \* 24 \* 30\)/);
+  assert.match(serverCode, /function buildPatientPhotoViewUrl\(storagePath: unknown\): string \| null/);
+  assert.match(serverCode, /\/api\/storage\/patient-photos\/view\?path=/);
+  assert.match(serverCode, /if \(storagePath\) return buildPatientPhotoViewUrl\(storagePath\)/);
 });
 
 test('upload de midia de perfil usa path deterministico por hash e retry idempotente', () => {
@@ -43,9 +46,28 @@ test('upload de midia de perfil usa path deterministico por hash e retry idempot
   const storageRoute = routeSlice("app.post('/api/storage/upload'", 7000);
   assert.match(storageRoute, /isIdempotentUpload/);
   assert.match(storageRoute, /isStorageDuplicateObjectError/);
-  assert.match(storageRoute, /createSignedUrl\(objectPath, 60 \* 10\)/);
+  assert.match(storageRoute, /buildPatientPhotoViewUrl\(objectPath\)/);
+  assert.match(storageRoute, /buildPatientPhotoViewUrl\(uploadData\.path\)/);
   assert.match(storageRoute, /idempotent:\s*true/);
   assert.doesNotMatch(storageRoute, /upsert:\s*true/);
+});
+
+test('midia de patient-photos usa proxy autenticado e imagem falhada para de renderizar', () => {
+  const viewRoute = routeSlice("app.get('/api/storage/patient-photos/view'", 5000);
+  assert.match(viewRoute, /checkAuth/);
+  assert.match(viewRoute, /requireRoles\('coordinator', 'receptionist', 'therapist', 'admin', 'owner', 'patient'\)/);
+  assert.match(viewRoute, /canAccessPatientInCurrentClinic\(ownerPatientId, req\.session\.user\)/);
+  assert.match(viewRoute, /supabase\.storage\.from\('patient-photos'\)\.download\(objectPath\)/);
+  assert.match(viewRoute, /Cache-Control', 'private, max-age=300'/);
+  assert.match(secureMediaCode, /const \[failedSrc, setFailedSrc\]/);
+  assert.match(secureMediaCode, /function normalizePatientPhotoSource/);
+  assert.match(secureMediaCode, /\/storage\/v1\/object\/sign\/patient-photos\//);
+  assert.match(secureMediaCode, /\/api\/storage\/patient-photos\/view\?path=/);
+  assert.match(secureMediaCode, /const normalizedSrc = normalizePatientPhotoSource/);
+  assert.match(secureMediaCode, /toTrustedMediaUrl\(normalizedSrc\)/);
+  assert.match(secureMediaCode, /failedSrc === safeSrc/);
+  assert.match(secureMediaCode, /loading=\{loading \|\| "lazy"\}/);
+  assert.match(secureMediaCode, /decoding=\{decoding \|\| "async"\}/);
 });
 
 test('perfil de paciente salva foto imediatamente e enfileira PATCH quando servidor cai', () => {

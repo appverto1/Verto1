@@ -1,5 +1,4 @@
 import React from 'react';
-import { ResponsiveContainer } from 'recharts';
 
 type SafeResponsiveContainerProps = {
   children: React.ReactNode;
@@ -21,20 +20,29 @@ export function SafeResponsiveContainer({
   skeletonClassName = 'h-full w-full rounded-2xl bg-slate-50 animate-pulse'
 }: SafeResponsiveContainerProps) {
   const wrapperRef = React.useRef<HTMLDivElement | null>(null);
-  const [ready, setReady] = React.useState(false);
+  const [size, setSize] = React.useState({ width: 0, height: 0 });
 
   React.useEffect(() => {
     const node = wrapperRef.current;
     if (!node) return;
 
     const check = () => {
-      const w = node.offsetWidth || 0;
-      const h = node.offsetHeight || minHeight;
-      setReady(w > 0 && h > 0);
+      const rect = node.getBoundingClientRect();
+      const measuredWidth = Math.floor(rect.width || node.clientWidth || node.offsetWidth || 0);
+      const measuredHeight = Math.floor(rect.height || node.clientHeight || node.offsetHeight || minHeight || 0);
+      const nextWidth = Math.max(0, measuredWidth);
+      const nextHeight = Math.max(0, measuredHeight || minHeight);
+      setSize((current) => (
+        current.width === nextWidth && current.height === nextHeight
+          ? current
+          : { width: nextWidth, height: nextHeight }
+      ));
     };
 
     const rafId = window.requestAnimationFrame(check);
-    const observer = new ResizeObserver(check);
+    const observer = new ResizeObserver(() => {
+      window.requestAnimationFrame(check);
+    });
     observer.observe(node);
     window.addEventListener('resize', check);
 
@@ -51,13 +59,18 @@ export function SafeResponsiveContainer({
     width: typeof width === 'number' ? `${width}px` : width || '100%',
     height: typeof height === 'number' ? `${height}px` : height || '100%'
   };
+  const ready = size.width > 0 && size.height > 0;
+  const chart = React.isValidElement(children)
+    ? React.cloneElement(children as React.ReactElement<any>, {
+      width: size.width,
+      height: size.height
+    })
+    : children;
 
   return (
     <div ref={wrapperRef} className={className} style={wrapperStyle}>
       {ready ? (
-        <ResponsiveContainer width={width} height={height} minHeight={minHeight} minWidth={minWidth}>
-          {children}
-        </ResponsiveContainer>
+        chart
       ) : (
         <div className={skeletonClassName} style={{ minHeight, minWidth }} />
       )}
