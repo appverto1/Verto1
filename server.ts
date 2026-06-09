@@ -32697,21 +32697,37 @@ async function startServer() {
   app.get('/api/patients/:patientId/debug/pei-maintenance-goals', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
     try {
       // Endpoint de debug para investigar por que habilidades não aparecem como elegíveis
-      // Controlled via localStorage.DEBUG_PEI_MAINTENANCE="1"
+      // Mostra: PEI goals + ABA targets elegíveis
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
       if (!isUuid(patientId)) return res.status(400).json({ success: false, error: 'ID_INVALIDO', message: 'Paciente inválido.' });
 
+      // Get PEI targets
       const peiTargets = await getPatientPeiTargets(patientId, clinicId, organizationId, req.session.user);
       
-      // Retorna informações COMPLETAS sobre cada habilidade PEI - incluindo TODOS os campos do raw goal
-      // Para entender qual campo marca como "Adquirido"
-      const record = await readPatientRecordPayloadForFiles(patientId, clinicId, req.session.user);
-      const rawGoals = parsePatientPeiArray(record?.payload || {});
+      // Get ABA targets (para comparar qual é elegível)
+      const applyClinic = (query: any) => {
+        let scoped = organizationId ? query.eq('organization_id', organizationId) : query;
+        return !hasGlobalClinicAccess(req.session.user) && clinicId ? scoped.eq('clinic_id', clinicId) : scoped;
+      };
+      const targetResult = await applyClinic(
+        supabase
+          .from('aba_targets')
+          .select(ABA_TARGET_RECOMMENDATION_SELECT)
+          .eq('patient_id', patientId)
+          .order('updated_at', { ascending: false })
+          .limit(200)
+      );
+      const allAbaTargets = targetResult.error ? [] : (targetResult.data || []);
+      const abaTargetsEligible = allAbaTargets.filter(isTargetEligibleForMaintenance);
       
-      const details = peiTargets.map((target: any, idx: number) => {
-        const rawGoal = rawGoals[idx] || {};
+      // Get raw data for detailed view
+      const record = await readPatientRecordPayloadForFiles(patientId, clinicId, req.session.user);
+      const rawPeiGoals = parsePatientPeiArray(record?.payload || {});
+      
+      const peiDetails = peiTargets.map((target: any, idx: number) => {
+        const rawGoal = rawPeiGoals[idx] || {};
         return {
           targetName: target?.targetName,
           protocolName: target?.protocolName,
@@ -32721,27 +32737,41 @@ async function startServer() {
           clinicalStatus: target?.clinicalStatus,
           masteryStatus: target?.masteryStatus,
           peiGoalId: target?.peiGoalId,
-          targetId: target?.targetId,
-          matchCompositeKey: target?.matchCompositeKey,
-          // TODOS os campos do goal raw - para descobrir o que marca como "Adquirido"
-          rawGoalAllFields: Object.entries(rawGoal).reduce((acc: any, [key, value]: any) => {
-            acc[key] = typeof value === 'object' && value !== null ? `[${typeof value}]` : value;
-            return acc;
-          }, {})
+          source: 'pei'
         };
       });
+
+      const abaDetails = abaTargetsEligible.map((target: any) => ({
+        targetName: target?.name || target?.description,
+        protocolName: target?.protocol_title,
+        domainName: target?.domain_name,
+        eligibleForMaintenance: true,
+        progressPercent: 100,
+        clinicalStatus: target?.clinical_status || target?.phase,
+        masteryStatus: target?.mastery_status,
+        targetId: target?.id,
+        source: 'aba'
+      }));
 
       return res.json({
         success: true,
         data: {
           patientId,
-          totalGoals: peiTargets.length,
-          eligibleCount: peiTargets.filter((t: any) => t?.eligibleForMaintenance).length,
-          payloadStructure: {
-            payloadKeys: Object.keys(record?.payload || {}).sort(),
-            peiGoalsFromPayload: parsePatientPeiArray(record?.payload || {}).length
+          pei: {
+            totalGoals: peiTargets.length,
+            eligibleCount: peiTargets.filter((t: any) => t?.eligibleForMaintenance).length,
+            goals: peiDetails
           },
-          goals: details
+          aba: {
+            totalTargets: allAbaTargets.length,
+            eligibleCount: abaTargetsEligible.length,
+            targets: abaDetails
+          },
+          summary: {
+            totalEligible: peiDetails.filter((g: any) => g.eligibleForMaintenance).length + abaDetails.length,
+            fromPei: peiDetails.filter((g: any) => g.eligibleForMaintenance).length,
+            fromAba: abaDetails.length
+          }
         }
       });
     } catch (error: any) {
