@@ -32666,6 +32666,45 @@ async function startServer() {
     }
   });
 
+  app.get('/api/patients/:patientId/debug/pei-maintenance-goals', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+    try {
+      // Endpoint de debug para investigar por que habilidades não aparecem como elegíveis
+      // Controlled via localStorage.DEBUG_PEI_MAINTENANCE="1"
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      if (!isUuid(patientId)) return res.status(400).json({ success: false, error: 'ID_INVALIDO', message: 'Paciente inválido.' });
+
+      const peiTargets = await getPatientPeiTargets(patientId, clinicId, organizationId, req.session.user);
+      
+      // Retorna informações detalhadas sobre cada habilidade PEI
+      const details = peiTargets.map((target: any) => ({
+        targetName: target?.targetName,
+        protocolName: target?.protocolName,
+        domainName: target?.domainName,
+        eligibleForMaintenance: target?.eligibleForMaintenance,
+        progressPercent: target?.progressPercent,
+        clinicalStatus: target?.clinicalStatus,
+        masteryStatus: target?.masteryStatus,
+        peiGoalId: target?.peiGoalId,
+        targetId: target?.targetId,
+        matchCompositeKey: target?.matchCompositeKey
+      }));
+
+      return res.json({
+        success: true,
+        data: {
+          patientId,
+          totalGoals: peiTargets.length,
+          eligibleCount: peiTargets.filter((t: any) => t?.eligibleForMaintenance).length,
+          goals: details
+        }
+      });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || 'Erro ao carregar dados de debug.' });
+    }
+  });
+
   app.get('/api/patients/:patientId/aba/targets/linkable', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);

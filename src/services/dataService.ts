@@ -2741,6 +2741,22 @@ export const dataService = {
     }
   },
 
+  async getPeiMaintenanceDebugGoals(patientId: string) {
+    if (!isAbaV2Enabled()) return { success: false, data: [] };
+    const endpoint = `/api/patients/${encodeURIComponent(String(patientId))}/debug/pei-maintenance-goals`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await buildConditionalHeaders(endpoint, 'aba'),
+        credentials: 'include'
+      }, { helperName: 'getPeiMaintenanceDebugGoals', operation: 'list', table: 'patient_pei', hasExplicitColumns: true });
+      if (response.ok) return await response.json();
+      return { success: false, error: await safeJson(response) };
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Erro ao carregar dados de debug.');
+      return { success: false, error: message };
+    }
+  },
+
   async getAbaMaintenanceSchedules(patientId: string, options: { limit?: number; status?: string } = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse([]);
     const limit = normalizeListLimit(options.limit, 20, 50);

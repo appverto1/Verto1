@@ -5501,6 +5501,19 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         dataService.getAbaMaintenancePanel(requestPatientId, { page: 1, pageSize: 200 }),
         dataService.getAbaLinkableTargetsForMaintenance(requestPatientId, { limit: 200 })
       ]);
+
+      // Call debug endpoint if flag is enabled
+      if (isDebugPeiMaintenanceEnabled()) {
+        try {
+          const debugResult = await dataService.getPeiMaintenanceDebugGoals(requestPatientId);
+          if (debugResult?.success) {
+            debugStateSnapshot('PEI Goals from Backend', debugResult?.data || {});
+          }
+        } catch {
+          // Silently ignore debug endpoint errors
+        }
+      }
+
       const ignoredAsStale =
         !peiMaintenancePanelMountedRef.current ||
         requestId !== peiMaintenancePanelRequestSeqRef.current ||
