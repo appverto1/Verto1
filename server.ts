@@ -17518,6 +17518,16 @@ async function startServer() {
     try {
       const record = await readPatientRecordPayloadForFiles(patientId, clinicId, sessionUser);
       const goals = parsePatientPeiArray(record?.payload || {});
+      
+      if (process.env.NODE_ENV !== 'production') {
+        console.debug('[getPatientPeiTargets] Raw PEI payload structure:', {
+          payloadKeys: Object.keys(record?.payload || {}).sort(),
+          goalsArrayLength: goals.length,
+          firstGoalRawKeys: goals[0] ? Object.keys(goals[0]).sort() : [],
+          firstGoalRawData: goals[0] ? JSON.stringify(goals[0]).substring(0, 500) : 'N/A'
+        });
+      }
+      
       const results = goals
         .filter((goal: any) => goal && typeof goal === 'object')
         .map((goal: any, index: number) => {
@@ -17534,23 +17544,41 @@ async function startServer() {
           const description = sanitizeString(goal?.description || goal?.objective || goal?.criteria, 500) || null;
           const eligible = isMaintenanceEligiblePeiGoal(goal);
           
-          // Debug log para todos os goals
-          if (process.env.NODE_ENV !== 'production') {
-            console.debug('[getPatientPeiTargets] PEI goal:', {
+          // Debug log para todos os goals - mostrando EXATAMENTE o que foi lido
+          if (process.env.NODE_ENV !== 'production' && index < 4) {  // Log apenas dos primeiros 4
+            console.debug('[getPatientPeiTargets] Goal details:', {
+              goalIndex: index,
               targetName,
               clinicalStatus,
               masteryStatus,
               progressPercent,
               eligible,
-              rawStatus: goal?.status,
-              rawClinicalStatus: goal?.clinical_status,
-              rawClinicaStatus: goal?.clinicalStatus,
-              rawPhase: goal?.phase,
-              rawMasteryStatus: goal?.mastery_status,
-              rawMasteryStatusCase: goal?.masteryStatus,
-              rawEvaluationStatus: goal?.evaluation_status,
-              rawEvaluationStatusCase: goal?.evaluationStatus,
-              allKeys: Object.keys(goal).sort()
+              // Mostrar TODOS os campos de status possíveis do goal raw
+              rawGoalFields: {
+                status: goal?.status,
+                clinical_status: goal?.clinical_status,
+                clinicalStatus: goal?.clinicalStatus,
+                phase: goal?.phase,
+                progress: goal?.progress,
+                progressPercent: goal?.progressPercent,
+                progress_percent: goal?.progress_percent,
+                mastery_status: goal?.mastery_status,
+                masteryStatus: goal?.masteryStatus,
+                evaluation_status: goal?.evaluation_status,
+                evaluationStatus: goal?.evaluationStatus,
+                badge: goal?.badge,
+                label: goal?.label,
+                badgeLabel: goal?.badgeLabel,
+                statusLabel: goal?.statusLabel,
+                teachingBadge: goal?.teachingBadge,
+                teachingStatusLabel: goal?.teachingStatusLabel,
+                criteriaMet: goal?.criteriaMet,
+                criterionMet: goal?.criterionMet,
+                masteryCriterionMet: goal?.masteryCriterionMet,
+                masteryMet: goal?.masteryMet,
+                isAcquired: goal?.isAcquired,
+                isMastered: goal?.isMastered
+              }
             });
           }
           
