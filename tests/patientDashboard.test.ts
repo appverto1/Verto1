@@ -54,9 +54,13 @@ test('menu Kids usa hamburger sem remover atalhos clinicos da home', () => {
 });
 
 test('persistencia visual Kids continua baseada em dados existentes e nao mocks', () => {
+  assert.match(patientDashboardCode, /portalFamilyHistory = useMemo/);
   assert.match(patientDashboardCode, /familyDiaryHistory = useMemo/);
-  assert.match(patientDashboardCode, /history\s*\.filter\(\(item: any\) => item\.type === 'family_note' \|\| item\.type === 'photo'\)/);
+  assert.match(patientDashboardCode, /const isFamily = item\.type === 'family_note' \|\| item\.type === 'photo'/);
+  assert.match(patientDashboardCode, /const itemPatientId = String\(item\?\.patientId \|\| item\?\.patient_id \|\| ''\)\.trim\(\)/);
+  assert.match(patientDashboardCode, /return \[\.\.\.portalFamilyHistory\]/);
   assert.match(patientDashboardCode, /kidsGamification = useMemo/);
+  assert.match(patientDashboardCode, /const stars = portalFamilyHistory\.filter/);
   assert.match(patientDashboardCode, /activeKidsProtocolEvents/);
   assert.doesNotMatch(patientDashboardCode, /mock[A-Z]|fake[A-Z]|dummy[A-Z]/);
 });

@@ -69,12 +69,21 @@ test('diario da familia usa historico como fonte persistente e idempotente', () 
   assert.match(familySave, /image_path:\s*imagePath \|\| null/);
   assert.match(familySave, /created_at:\s*createdAt/);
   assert.match(familySave, /source:\s*'family_portal'/);
+  assert.match(familySave, /const persistedPatientId = String\(historySaveResult\.data\.patient_id \|\| historySaveResult\.data\.patientId \|\| ''\)\.trim\(\)/);
+  assert.match(familySave, /setResolvedPatientPortalId\(persistedPatientId\)/);
   assert.match(familySave, /return \{ success: true, data: historySaveResult\?\.data \|\| newHistoryItem \}/);
 
-  const historyRoute = sliceFrom(serverCode, "app.post('/api/history'", 3600);
+  const historyRoute = sliceFrom(serverCode, "app.post('/api/history'", 6200);
   assert.match(historyRoute, /const incomingHistoryId = sanitizeString\(req\.body\?\.id/);
+  assert.match(historyRoute, /selectTodayPhotos\('patient_id', resolvedPatientId\)/);
+  assert.match(historyRoute, /selectTodayPhotos\('patient_email', safeEmail\)/);
+  assert.match(historyRoute, /\.eq\(field, value\)/);
+  assert.match(historyRoute, /const sameUploadedPhoto = todayPhotos\.find/);
+  assert.match(historyRoute, /FAMILY_DAILY_PHOTO_ALREADY_SAVED/);
+  assert.match(historyRoute, /idempotent:\s*true/);
+  assert.match(historyRoute, /FAMILY_DAILY_PHOTO_LIMIT/);
   assert.match(historyRoute, /hasDifferentPhotoToday/);
-  assert.match(historyRoute, /String\(photo\?\.id \|\| ''\) !== incomingHistoryId/);
+  assert.doesNotMatch(historyRoute, /\.select\(\s*['"`]\*['"`]\s*\)/);
 });
 
 test('estrelinhas do diario sao persistidas para o portal do paciente', () => {

@@ -1223,9 +1223,26 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     };
   }, [activeKidsProtocol, activeKidsProtocolEvents, selectedBaseDate, selectedCompareDate, activeProtocolSnapshots]);
 
+  const portalFamilyHistory = useMemo(() => {
+    const patientKeys = new Set(
+      [portalPatientId, user?.id, user?.patientId, user?.patient_id]
+        .map((value) => String(value || '').trim())
+        .filter(Boolean)
+    );
+    const patientEmail = String(user?.email || '').trim().toLowerCase();
+    return (Array.isArray(history) ? history : []).filter((item: any) => {
+      const isFamily = item.type === 'family_note' || item.type === 'photo';
+      if (!isFamily) return false;
+      const itemPatientId = String(item?.patientId || item?.patient_id || '').trim();
+      const itemPatientEmail = String(item?.patient_email || item?.patientEmail || item?.email || '').trim().toLowerCase();
+      if (itemPatientId) return patientKeys.has(itemPatientId);
+      if (itemPatientEmail) return Boolean(patientEmail && itemPatientEmail === patientEmail);
+      return false;
+    });
+  }, [history, portalPatientId, user?.id, user?.patientId, user?.patient_id, user?.email]);
+
   const familyDiaryHistory = useMemo(() => {
-    return history
-      .filter((item: any) => item.type === 'family_note' || item.type === 'photo')
+    return [...portalFamilyHistory]
       .sort((a: any, b: any) => {
         const aTime = new Date(a.date || a.created_at || 0).getTime();
         const bTime = new Date(b.date || b.created_at || 0).getTime();
@@ -1233,21 +1250,21 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         return bTime - aTime;
       })
       .slice(0, 8);
-  }, [history]);
+  }, [portalFamilyHistory]);
 
   const kidsGamification = useMemo(() => {
     const today = new Date();
     const weekAgo = new Date();
     weekAgo.setDate(today.getDate() - 7);
-    const weekLogs = familyDiaryHistory.filter((item: any) => {
+    const weekLogs = portalFamilyHistory.filter((item: any) => {
       const when = new Date(item.date || item.created_at || 0);
       return when >= weekAgo;
     }).length;
-    const weekPhotos = familyDiaryHistory.filter((item: any) => {
+    const weekPhotos = portalFamilyHistory.filter((item: any) => {
       const when = new Date(item.date || item.created_at || 0);
       return item.type === 'photo' && when >= weekAgo;
     }).length;
-    const stars = familyDiaryHistory.filter((item: any) => {
+    const stars = portalFamilyHistory.filter((item: any) => {
       const isFamily = item.type === 'family_note' || item.type === 'photo';
       const hasStarMarker = /\u2b50|⭐/.test(String(item?.subject || '')) || /\[STAR\]/i.test(String(item?.note || item?.text || ''));
       return isFamily && (Number(item?.score ?? 0) >= 1 || hasStarMarker);
@@ -1292,7 +1309,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     });
     const milestoneEventStars = Array.from(milestoneBySource.values()).filter((e) => e.awarded).length;
     return { weekLogs, weekPhotos, stars: Math.max(stars, sharedFamilyStars, milestoneEventStars) };
-  }, [familyDiaryHistory, history, sharedNotes, portalPatientId, user?.id, user?.patientId, user?.patient_id, user?.email]);
+  }, [portalFamilyHistory, sharedNotes, portalPatientId, user?.id, user?.patientId, user?.patient_id, user?.email]);
   const kidsCheckpointLevel = useMemo(() => Math.floor((kidsGamification.stars || 0) / 5), [kidsGamification.stars]);
 
   const normalizePortalText = (value: any) => String(value || '').trim();

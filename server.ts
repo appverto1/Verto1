@@ -19467,35 +19467,84 @@ async function startServer() {
         req.session.user,
         { createIfMissing: true, fallbackName: sanitizeString(req.body?.patient_name, 160) }
       );
+      if (!resolvedPatientId) {
+        return res.status(400).json({ success: false, error: 'patient_id inválido para salvar histórico.' });
+      }
       const safeType = sanitizeString(req.body?.type, 80) || 'task';
       const role = sanitizeString(req.session.user?.role, 40).toLowerCase();
       if (role === 'patient' && safeType === 'photo') {
         const safeEmail = sanitizeEmail(req.body?.patient_email || req.session.user?.email);
         const incomingHistoryId = sanitizeString(req.body?.id || req.body?.clientRecordId || req.body?.localId, 120);
+        const incomingImagePath = sanitizeString(req.body?.image_path || req.body?.imagePath, 600);
+        const incomingImageUrl = sanitizeString(req.body?.image || req.body?.image_url || req.body?.imageUrl, 4000);
         if (!safeEmail) {
           return res.status(400).json({ success: false, error: 'E-mail do paciente não disponível para validação de foto diária.' });
         }
         const now = new Date();
         const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0).toISOString();
         const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0, 0).toISOString();
+        const selectTodayPhotos = async (field: 'patient_id' | 'patient_email', value: string) => {
+          let columns = ['id', 'patient_id', 'patient_email', 'type', 'title', 'score', 'note', 'icon', 'image', 'image_path', 'date_group', 'created_at', 'is_active', 'deleted_at'];
+          for (let attempt = 0; attempt < 4; attempt += 1) {
+            const { data, error } = await supabase
+              .from('history')
+              .select(columns.join(','))
+              .eq('type', 'photo')
+              .eq(field, value)
+              .eq('is_active', true)
+              .is('deleted_at', null)
+              .gte('created_at', startOfDay)
+              .lt('created_at', endOfDay)
+              .limit(5);
+            if (!error) return Array.isArray(data) ? data : [];
+            const missingColumn = extractMissingColumnName(error);
+            if (missingColumn && columns.includes(missingColumn)) {
+              columns = columns.filter((column) => column !== missingColumn);
+              continue;
+            }
+            throw error;
+          }
+          return [];
+        };
 
-        const { data: todayPhotos, error: todayPhotosError } = await supabase
-          .from('history')
-          .select('id')
-          .eq('type', 'photo')
-          .eq('patient_email', safeEmail)
-          .eq('is_active', true)
-          .is('deleted_at', null)
-          .gte('created_at', startOfDay)
-          .lt('created_at', endOfDay)
-          .limit(5);
-        if (todayPhotosError) throw todayPhotosError;
-        const hasDifferentPhotoToday = Array.isArray(todayPhotos) && todayPhotos.some((photo: any) =>
-          !incomingHistoryId || String(photo?.id || '') !== incomingHistoryId
+        const todayPhotosByPatient = await selectTodayPhotos('patient_id', resolvedPatientId);
+        const todayPhotosByEmail = await selectTodayPhotos('patient_email', safeEmail);
+
+        const todayPhotosById = new Map<string, any>();
+        [...(Array.isArray(todayPhotosByPatient) ? todayPhotosByPatient : []), ...(Array.isArray(todayPhotosByEmail) ? todayPhotosByEmail : [])]
+          .forEach((photo: any) => {
+            const photoId = sanitizeString(photo?.id, 120);
+            if (photoId) todayPhotosById.set(photoId, photo);
+          });
+        const todayPhotos = Array.from(todayPhotosById.values());
+        const sameRequestPhoto = todayPhotos.find((photo: any) =>
+          incomingHistoryId && String(photo?.id || '') === incomingHistoryId
+        );
+        const sameUploadedPhoto = todayPhotos.find((photo: any) => {
+          const storedPath = sanitizeString(photo?.image_path || photo?.imagePath, 600);
+          const storedImage = sanitizeString(photo?.image || photo?.image_url || photo?.imageUrl, 4000);
+          return (
+            (incomingImagePath && storedPath && incomingImagePath === storedPath) ||
+            (incomingImageUrl && storedImage && incomingImageUrl === storedImage)
+          );
+        });
+        if (sameUploadedPhoto && !sameRequestPhoto) {
+          return res.status(409).json({
+            success: true,
+            idempotent: true,
+            code: 'FAMILY_DAILY_PHOTO_ALREADY_SAVED',
+            status: 'RESOLVED_IDEMPOTENT',
+            message: 'Foto do diário já salva hoje.',
+            data: sameUploadedPhoto
+          });
+        }
+        const hasDifferentPhotoToday = todayPhotos.some((photo: any) =>
+          !sameRequestPhoto || String(photo?.id || '') !== String(sameRequestPhoto?.id || '')
         );
         if (hasDifferentPhotoToday) {
           return res.status(409).json({
             success: false,
+            code: 'FAMILY_DAILY_PHOTO_LIMIT',
             error: 'Limite diário atingido: apenas 1 foto por dia pode ser enviada no Portal da Família.'
           });
         }
@@ -19541,6 +19590,21 @@ async function startServer() {
       }
       res.json({ success: true, data });
     } catch (error: any) {
+      const role = sanitizeString(req.session.user?.role, 40).toLowerCase();
+      const safeType = sanitizeString(req.body?.type, 80) || 'task';
+      const errorFingerprint = [
+        sanitizeString(error?.code, 40),
+        sanitizeString(error?.message, 500),
+        sanitizeString(error?.details, 500),
+        sanitizeString(error?.hint, 500)
+      ].join(' ').toLowerCase();
+      if (role === 'patient' && safeType === 'photo' && sanitizeString(error?.code, 40) === '23505' && /history_one_photo_per_day|date_group|patient_id/.test(errorFingerprint)) {
+        return res.status(409).json({
+          success: false,
+          code: 'FAMILY_DAILY_PHOTO_LIMIT',
+          error: 'Limite diário atingido: apenas 1 foto por dia pode ser enviada no Portal da Família.'
+        });
+      }
       return sendClinicalMutationError(res, '/api/history', 'write', error, {
         requestId,
         userId: sanitizeString(req.session.user?.id, 120),

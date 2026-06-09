@@ -4805,6 +4805,10 @@ export default function App() {
       setHistory(prev => prev.filter((item: any) => item.id !== newHistoryItem.id));
       return { success: false, error: historySaveResult?.error || 'Falha ao persistir histórico da família.' };
     } else if (historySaveResult?.data?.id) {
+      const persistedPatientId = String(historySaveResult.data.patient_id || historySaveResult.data.patientId || '').trim();
+      if (persistedPatientId) {
+        setResolvedPatientPortalId(persistedPatientId);
+      }
       setHistory(prev =>
         prev.map((item: any) =>
           item.id === newHistoryItem.id
