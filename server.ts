@@ -31648,10 +31648,21 @@ async function startServer() {
           registerTargetMatch(targetByName, duplicateName, normalizePeiTargetMatchKey(targetName), target);
         });
 
-        const acquiredStatuses = new Set(['COMPLETED', 'COMPLETE', 'CONCLUIDO', 'CONCLUÍDO', 'ACQUIRED', 'ADQUIRIDO', 'MASTERED', 'MASTERED_APPROVED', 'MAINTENANCE', 'MAINTAINED', 'READY_FOR_MAINTENANCE']);
+        const acquiredStatuses = new Set(['COMPLETED', 'COMPLETE', 'CONCLUIDO', 'CONCLUÍDO', 'ACQUIRED', 'ADQUIRIDO', 'MASTERED', 'MASTERED_APPROVED', 'MAINTENANCE', 'MANUTENCAO', 'MANUTENÇÃO', 'MAINTAINED', 'READY_FOR_MAINTENANCE']);
         const isTargetEligibleForMaintenance = (target: any) => {
-          const status = sanitizeString(target?.clinical_status || target?.phase || target?.target_type, 80).toUpperCase();
-          return acquiredStatuses.has(status);
+          // Primary check: clinical status fields
+          const status = sanitizeString(target?.clinical_status || target?.phase || target?.target_type || target?.status || target?.badge || target?.statusLabel, 80).toUpperCase();
+          if (acquiredStatuses.has(status)) return true;
+          
+          // Secondary check: mastery status (often used in ABA targets)
+          const masteryStatus = sanitizeString(target?.mastery_status || target?.masteryStatus || target?.evaluation_status || target?.evaluationStatus, 80).toUpperCase();
+          if (['MASTERED', 'MASTERED_APPROVED', 'READY_FOR_MAINTENANCE', 'MET', 'MET_TODAY'].includes(masteryStatus)) return true;
+          
+          // Tertiary check: progress >= 100% indicates completion
+          const progress = Number(target?.progress ?? target?.progressPercent ?? target?.progress_percent ?? null);
+          if (Number.isFinite(progress) && progress >= 100) return true;
+          
+          return false;
         };
         const hydratePeiTarget = (peiTarget: any) => {
           const explicitTargetId = sanitizeString(peiTarget?.targetId, 180);
@@ -31689,13 +31700,13 @@ async function startServer() {
           const realTargetId = hasRealTarget ? targetId : '';
           const sourceIndex = sanitizeString(source?.peiGoalIndex, 40);
           const isPeiSource = source?.source === 'patient_pei';
-          const internalKey = isPeiSource
-            ? `pei:${goalId || sourceIndex || eligibleByKey.size}:${realTargetId || compositeKey}`
-            : realTargetId
-              ? `target:${targetId}`
-              : goalId
-                ? `goal:${goalId}`
-                : `skill:${compositeKey}`;
+          // Chave unificada que independe da fonte (PEI ou ABA)
+          // Prioriza: targetId real > goalId > compositeKey
+          const internalKey = realTargetId
+            ? `target:${realTargetId}`
+            : goalId
+              ? `goal:${goalId}`
+              : `skill:${compositeKey}`;
           if (!internalKey) return;
           
           // Se já existe uma entrada com a mesma chave, só substitua se a nova for melhor
