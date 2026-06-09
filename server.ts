@@ -21806,7 +21806,14 @@ async function startServer() {
     'COMPLETED',
     'MISSED',
     'CANCELLED',
-    'ARCHIVED'
+    'CANCELED',
+    'ARCHIVED',
+    'DELETED',
+    'REMOVED',
+    'MAINTAINED',
+    'MAINTENANCE_COMPLETED',
+    'FAILED',
+    'FAILED_FINAL'
   ]);
   const ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES = [
     'PENDING',
@@ -28354,6 +28361,102 @@ async function startServer() {
       null;
   };
 
+  const maintenanceScheduleHasOperationalTiming = (schedule: any) => Boolean(
+    schedule?.appointment_id ||
+      schedule?.appointmentId ||
+      schedule?.candidate_appointment_id ||
+      schedule?.candidateAppointmentId ||
+      schedule?.scheduled_for ||
+      schedule?.scheduledFor ||
+      schedule?.target_due_date ||
+      schedule?.targetDueDate ||
+      schedule?.due_date ||
+      schedule?.dueDate
+  );
+
+  const confirmPersistedMaintenanceScheduleAfterWrite = async (params: {
+    scheduleId?: string | null;
+    targetId: string;
+    patientId: string;
+    clinicId: string;
+    organizationId: string;
+  }) => {
+    const requestedScheduleId = getPersistedMaintenanceScheduleId(params.scheduleId);
+    const targetId = sanitizeString(params.targetId, 180);
+    const patientId = sanitizeString(params.patientId, 120);
+    const clinicId = sanitizeString(params.clinicId, 120);
+    const organizationId = sanitizeString(params.organizationId || clinicId, 120);
+    const persistenceError = 'Não foi possível confirmar a persistência do agendamento.';
+    if (!isUuid(targetId) || !isUuid(patientId) || !organizationId) {
+      return { ok: false, error: persistenceError, reason: 'invalid_scope' };
+    }
+
+    let query = supabase
+      .from('aba_maintenance_schedules')
+      .select(ABA_MAINTENANCE_SCHEDULE_SELECT)
+      .eq('organization_id', organizationId)
+      .eq('patient_id', patientId)
+      .eq('target_id', targetId)
+      .in('status', ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES);
+    if (requestedScheduleId) query = query.eq('id', requestedScheduleId);
+    query = query.order('updated_at', { ascending: false }).limit(requestedScheduleId ? 1 : 20);
+    query = applyAbaTenantScope(query, { role: 'owner' }, clinicId, organizationId);
+
+    const result = await query;
+    if (result.error) {
+      console.warn('[MaintenanceSchedule] read-after-write failed', {
+        targetId,
+        patientId,
+        scheduleId: requestedScheduleId || null,
+        message: extractSupabaseErrorMessage(result.error)
+      });
+      return { ok: false, error: persistenceError, reason: 'read_error' };
+    }
+
+    const rows = Array.isArray(result.data) ? result.data : [];
+    const row = rows.find((item: any) => {
+      const persistedId = getPersistedMaintenanceScheduleId(item);
+      return (!requestedScheduleId || persistedId === requestedScheduleId) &&
+        sanitizeString(item?.target_id || item?.targetId, 180) === targetId;
+    });
+    const persistedId = getPersistedMaintenanceScheduleId(row);
+    const persistedOrganizationId = sanitizeString(row?.organization_id || row?.organizationId, 120);
+    const persistedClinicId = sanitizeString(row?.clinic_id || row?.clinicId, 120);
+    const persistedPatientId = sanitizeString(row?.patient_id || row?.patientId, 120);
+    const persistedTargetId = sanitizeString(row?.target_id || row?.targetId, 180);
+    const persistedStatus = normalizeAbaMaintenanceScheduleStatus(row?.status);
+    const persistedScheduleMode = sanitizeString(row?.schedule_mode || row?.scheduleMode, 80);
+    const isActive = ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES.includes(persistedStatus);
+    const hasOperationalContext =
+      persistedStatus === 'PENDING_NEXT_SESSION' ||
+      maintenanceScheduleHasOperationalTiming(row);
+
+    if (
+      !persistedId ||
+      persistedOrganizationId !== organizationId ||
+      persistedPatientId !== patientId ||
+      persistedTargetId !== targetId ||
+      (persistedClinicId && clinicId && persistedClinicId !== clinicId) ||
+      !isActive ||
+      !persistedScheduleMode ||
+      !hasOperationalContext
+    ) {
+      console.warn('[MaintenanceSchedule] read-after-write mismatch', {
+        targetId,
+        patientId,
+        scheduleId: requestedScheduleId || persistedId || null,
+        persistedScheduleTargetId: persistedTargetId || null,
+        status: persistedStatus || null,
+        hasOperationalContext,
+        hasScheduleMode: Boolean(persistedScheduleMode)
+      });
+      return { ok: false, error: persistenceError, reason: 'mismatch' };
+    }
+
+    const [enrichedSchedule] = await enrichMaintenanceRowsWithTargetDisplay([row], clinicId, organizationId, { role: 'owner' });
+    return { ok: true, row: enrichedSchedule || row };
+  };
+
   const createMaintenanceScheduleForTarget = async (params: {
     targetId: string;
     patientId: string;
@@ -28540,22 +28643,15 @@ async function startServer() {
           actionType: 'MAINTENANCE_SCHEDULE_UPDATED',
           payload: { scheduleId: existingSchedule.id, targetId, patientId }
         });
-        const [enrichedSchedule] = await enrichMaintenanceRowsWithTargetDisplay(
-          [{
-            ...existingSchedule,
-            status: 'PENDING_NEXT_SESSION',
-            appointment_id: null,
-            candidate_appointment_id: null,
-            scheduled_for: null,
-            due_date: null,
-            target_due_date: null,
-            updated_at: now
-          }],
+        const confirmed = await confirmPersistedMaintenanceScheduleAfterWrite({
+          scheduleId: getPersistedMaintenanceScheduleId(existingSchedule),
+          targetId,
+          patientId,
           clinicId,
-          organizationId,
-          { role: 'owner' }
-        );
-        return { ok: true, status: 200, data: [enrichedSchedule || existingSchedule] };
+          organizationId
+        });
+        if (!confirmed.ok) return { ok: false, status: 500, error: confirmed.error };
+        return { ok: true, status: 200, data: [confirmed.row] };
       }
     }
 
@@ -28660,23 +28756,15 @@ async function startServer() {
           actionType: 'MAINTENANCE_SCHEDULE_UPDATED',
           payload: { scheduleId: existingSchedule.id, targetId, patientId, dueDate }
         });
-        const [enrichedSchedule] = await enrichMaintenanceRowsWithTargetDisplay(
-          [{
-            ...existingSchedule,
-            status: 'SCHEDULED',
-            appointment_id: appointmentId,
-            candidate_appointment_id: null,
-            due_date: scheduledFor || dueDate,
-            target_due_date: dueDate,
-            scheduled_for: scheduledFor,
-            schedule_mode: 'CUSTOM_DATE',
-            updated_at: now
-          }],
+        const confirmed = await confirmPersistedMaintenanceScheduleAfterWrite({
+          scheduleId: getPersistedMaintenanceScheduleId(existingSchedule),
+          targetId,
+          patientId,
           clinicId,
-          organizationId,
-          { role: 'owner' }
-        );
-        return { ok: true, status: 200, data: [enrichedSchedule || existingSchedule] };
+          organizationId
+        });
+        if (!confirmed.ok) return { ok: false, status: 500, error: confirmed.error };
+        return { ok: true, status: 200, data: [confirmed.row] };
       }
     }
 
@@ -28902,10 +28990,19 @@ async function startServer() {
         }
         return { ok: false, status: hasMissingFinancialSchema(result.error) ? 503 : 500, error: 'Não foi possível salvar o agendamento agora.' };
       }
+      const persistedScheduleId = getPersistedMaintenanceScheduleId((result.data as any)?.id || (result.row as any)?.id || row?.id);
+      const confirmed = await confirmPersistedMaintenanceScheduleAfterWrite({
+        scheduleId: persistedScheduleId || null,
+        targetId,
+        patientId,
+        clinicId,
+        organizationId
+      });
+      if (!confirmed.ok) return { ok: false, status: 500, error: confirmed.error };
       const savedRow = cleanObject({
-        ...(result.row || row),
-        id: getPersistedMaintenanceScheduleId((result.data as any)?.id || (result.row as any)?.id || row?.id) || null,
-        persisted: Boolean(getPersistedMaintenanceScheduleId((result.data as any)?.id || (result.row as any)?.id || row?.id))
+        ...(confirmed.row || {}),
+        id: getPersistedMaintenanceScheduleId(confirmed.row) || persistedScheduleId || null,
+        persisted: true
       });
       saved.push(savedRow);
       const isNextSessionSchedule = scheduleMode === 'NEXT_PATIENT_SESSION' || scheduleMode === 'NEXT_AVAILABLE_SESSION';
@@ -31574,46 +31671,6 @@ async function startServer() {
             progressPercent: 100
           }));
         const allEligibleSkills = Array.from(eligibleByKey.values());
-        const getMaintenanceDisplaySignature = (source: any) => {
-          const raw = readMaintenanceStoredPayload(source?.raw_payload || source?.rawPayload);
-          const target = source?.target && typeof source.target === 'object' ? source.target : {};
-          const targetName = sanitizeString(
-            source?.targetName ||
-              source?.target_name ||
-              source?.name ||
-              target?.name ||
-              target?.description ||
-              raw.targetName ||
-              raw.target_name,
-            240
-          );
-          const protocolName = sanitizeString(
-            source?.protocolName ||
-              source?.protocol ||
-              source?.protocol_title ||
-              source?.protocolTitle ||
-              target?.protocol_title ||
-              raw.protocolName ||
-              raw.protocolTitle ||
-              raw.protocol_name,
-            240
-          );
-          const domainName = sanitizeString(
-            source?.domainName ||
-              source?.domain ||
-              source?.domain_name ||
-              target?.domain_name ||
-              raw.domainName ||
-              raw.domain_name,
-            240
-          );
-          return [targetName, protocolName, domainName].map(normalizePeiTargetMatchKey).filter(Boolean).join('|');
-        };
-        const eligibleDisplaySignatureCounts = new Map<string, number>();
-        allEligibleSkills.forEach((skill: any) => {
-          const signature = getMaintenanceDisplaySignature(skill);
-          if (signature) eligibleDisplaySignatureCounts.set(signature, (eligibleDisplaySignatureCounts.get(signature) || 0) + 1);
-        });
         const eligibleTargetIds = Array.from(new Set(
           allEligibleSkills
             .map((row: any) => sanitizeString(row?.targetId || row?.target_id, 180))
@@ -31637,48 +31694,6 @@ async function startServer() {
           activeSchedules = await enrichMaintenanceRowsWithTargetDisplay(activeScheduleResult.data || [], clinicId, organizationId, req.session.user);
         }
         const activeScheduleByTargetId = new Map<string, any>();
-        const activeScheduleByClinicalId = new Map<string, any>();
-        const activeScheduleByDisplaySignature = new Map<string, any>();
-        const duplicateScheduleDisplaySignatures = new Set<string>();
-        const registerDisplayScheduleMatch = (signature: string, schedule: any) => {
-          if (!signature) return;
-          if (activeScheduleByDisplaySignature.has(signature)) {
-            duplicateScheduleDisplaySignatures.add(signature);
-            activeScheduleByDisplaySignature.delete(signature);
-            return;
-          }
-          if (!duplicateScheduleDisplaySignatures.has(signature)) activeScheduleByDisplaySignature.set(signature, schedule);
-        };
-        const getMaintenanceClinicalLinkIds = (source: any) => {
-          const raw = readMaintenanceStoredPayload(source?.raw_payload || source?.rawPayload);
-          const target = source?.target && typeof source.target === 'object' ? source.target : {};
-          const masteryCriteria = target?.mastery_criteria && typeof target.mastery_criteria === 'object' ? target.mastery_criteria : {};
-          return [
-            source?.peiGoalId,
-            source?.goalId,
-            source?.goal_id,
-            source?.skillId,
-            source?.skill_id,
-            source?.localTargetRef,
-            source?.local_target_ref,
-            raw?.peiGoalId,
-            raw?.pei_goal_id,
-            raw?.goalId,
-            raw?.goal_id,
-            raw?.skillId,
-            raw?.skill_id,
-            raw?.localTargetRef,
-            raw?.local_target_ref,
-            masteryCriteria?.peiGoalId,
-            masteryCriteria?.pei_goal_id,
-            masteryCriteria?.skillId,
-            masteryCriteria?.skill_id,
-            masteryCriteria?.localTargetRef,
-            masteryCriteria?.local_target_ref
-          ]
-            .map((value: any) => sanitizeString(value, 180))
-            .filter(Boolean);
-        };
         const duplicateSchedulesForReview: any[] = [];
         activeSchedules.forEach((schedule: any) => {
           const scheduleTargetId = sanitizeString(schedule?.target_id || schedule?.targetId, 180);
@@ -31687,10 +31702,6 @@ async function startServer() {
           } else if (isUuid(scheduleTargetId)) {
             duplicateSchedulesForReview.push(schedule);
           }
-          getMaintenanceClinicalLinkIds(schedule).forEach((clinicalId: string) => {
-            if (!activeScheduleByClinicalId.has(clinicalId)) activeScheduleByClinicalId.set(clinicalId, schedule);
-          });
-          registerDisplayScheduleMatch(getMaintenanceDisplaySignature(schedule), schedule);
         });
         const sanitizeScheduleForPanel = (schedule: any) => {
           const scheduleTargetId = sanitizeString(schedule?.target_id || schedule?.targetId, 180);
@@ -31775,19 +31786,6 @@ async function startServer() {
         const findActiveScheduleForSkill = (skill: any) => {
           const skillTargetId = sanitizeString(skill?.targetId || skill?.target_id, 180);
           if (isUuid(skillTargetId) && activeScheduleByTargetId.has(skillTargetId)) return activeScheduleByTargetId.get(skillTargetId);
-          const clinicalSchedule = getMaintenanceClinicalLinkIds(skill)
-            .map((clinicalId: string) => activeScheduleByClinicalId.get(clinicalId))
-            .find(Boolean);
-          if (clinicalSchedule) return clinicalSchedule;
-          const displaySignature = getMaintenanceDisplaySignature(skill);
-          if (
-            displaySignature &&
-            eligibleDisplaySignatureCounts.get(displaySignature) === 1 &&
-            !duplicateScheduleDisplaySignatures.has(displaySignature) &&
-            activeScheduleByDisplaySignature.has(displaySignature)
-          ) {
-            return activeScheduleByDisplaySignature.get(displaySignature);
-          }
           return null;
         };
         allEligibleSkills.forEach((skill: any) => {
@@ -31819,6 +31817,23 @@ async function startServer() {
         const pagedOverdueProbes = overdueProbes.slice(0, pageSize);
         const sanitizedSchedules = activeSchedules.map(sanitizeScheduleForPanel);
         const sanitizedDuplicateSchedules = duplicateSchedulesForReview.map(sanitizeScheduleForPanel);
+        if (process.env.NODE_ENV !== 'production') {
+          const panelEligibleTargetIds = eligibleSkills.map((row: any) => sanitizeString(row?.targetId || row?.target_id, 180)).filter(Boolean).slice(0, 40);
+          const panelScheduledTargetIds = [...scheduledProbes, ...waitingNextSession, ...overdueProbes]
+            .map((row: any) => sanitizeString(row?.targetId || row?.target_id, 180))
+            .filter(Boolean)
+            .slice(0, 40);
+          const removedEligibleTargetIds = allEligibleSkills
+            .map((row: any) => sanitizeString(row?.targetId || row?.target_id, 180))
+            .filter((id: string) => isUuid(id) && activeScheduleByTargetId.has(id))
+            .slice(0, 40);
+          console.debug('[pei-maintenance-panel]', {
+            panelEligibleTargetIds,
+            panelScheduledTargetIds,
+            removedEligibleTargetIds,
+            reasonForRemoval: 'active_schedule_target_id_match'
+          });
+        }
         return res.json({
           success: true,
           data: {
@@ -32754,6 +32769,9 @@ async function startServer() {
       }
       const target = (result as any).target || {};
       const targetId = sanitizeString((result as any).targetId || target?.id, 180);
+      if (process.env.NODE_ENV !== 'production') {
+        console.debug('[pei-maintenance-target]', { ensureTargetId: targetId || null, patientIdPresent: Boolean(patientId) });
+      }
       const masteryCriteria = target?.mastery_criteria && typeof target.mastery_criteria === 'object' ? target.mastery_criteria : {};
       const peiGoalId = sanitizeString(masteryCriteria?.peiGoalId || masteryCriteria?.pei_goal_id || req.body?.peiGoalId || req.body?.goalId || req.body?.goal_id, 180);
       const skillId = sanitizeString(masteryCriteria?.skillId || masteryCriteria?.skill_id || req.body?.skillId || req.body?.skill_id, 180);
@@ -32906,6 +32924,21 @@ async function startServer() {
         });
       };
       const schedule = hydrateScheduleResponse(schedules[0] || null);
+      if (process.env.NODE_ENV !== 'production') {
+        console.debug('[pei-maintenance-schedule]', {
+          scheduleRequestTargetId: targetId,
+          persistedScheduleTargetId: schedule?.targetId || null,
+          scheduleId: schedule?.id || null,
+          status: schedule?.status || null
+        });
+      }
+      if (!schedule?.id || schedule?.targetId !== targetId) {
+        return res.status(500).json({
+          success: false,
+          error: 'PERSISTENCE_NOT_CONFIRMED',
+          message: 'Não foi possível confirmar a persistência do agendamento.'
+        });
+      }
       return res.json({ success: true, message: 'Sondagem de manutenção agendada.', schedule, data: schedule ? [schedule] : [] });
     } catch (error: any) {
       logRouteDbError('/api/aba/targets/:targetId/maintenance-schedules', error, {

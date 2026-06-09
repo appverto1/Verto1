@@ -212,6 +212,52 @@ test('mapper target-first remove de elegiveis target com schedule ativo', () => 
   assert.equal(mapped.sections.scheduled.some((row: any) => row.targetId === targetId), true);
 });
 
+test('mapper target-first com duas habilidades remove somente a agendada apos refetch', () => {
+  const scheduledTargetId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0310';
+  const eligibleTargetId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0311';
+  const scheduleId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0312';
+  const mapped = mapMaintenancePanelResponse({
+    eligibleSkills: [
+      {
+        targetId: scheduledTargetId,
+        targetName: 'Habilidade A',
+        protocol: 'VB-MAPP',
+        domain: 'Imitacao'
+      },
+      {
+        targetId: eligibleTargetId,
+        targetName: 'Habilidade B',
+        protocol: 'VB-MAPP',
+        domain: 'Ecoico'
+      }
+    ],
+    scheduledProbes: [
+      {
+        targetId: scheduledTargetId,
+        scheduleId,
+        targetName: 'Habilidade A',
+        nextSchedule: {
+          id: scheduleId,
+          target_id: scheduledTargetId,
+          status: 'SCHEDULED',
+          due_date: '2026-06-10'
+        }
+      }
+    ],
+    maintenanceSkills: [],
+    waitingNextSession: [],
+    overdueProbes: [],
+    regressionRisk: [],
+    technicalIssues: []
+  }, { patientId: 'patient-1', requestId: 1310, loadedAt: 123480 });
+
+  assert.equal(mapped.summary.eligibleSkills, 1);
+  assert.equal(mapped.summary.scheduled, 1);
+  assert.equal(mapped.sections.eligibleSkills.some((row: any) => row.targetId === scheduledTargetId), false);
+  assert.equal(mapped.sections.eligibleSkills.some((row: any) => row.targetId === eligibleTargetId), true);
+  assert.equal(mapped.sections.scheduled.some((row: any) => row.targetId === scheduledTargetId), true);
+});
+
 test('mapper target-first nao remove elegivel por status clinico sem schedule ativo', () => {
   const targetId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0101';
   const mapped = mapMaintenancePanelResponse({
@@ -321,7 +367,7 @@ test('mapper target-first nao remove elegivel por nome quando schedule ativo tem
   assert.equal(mapped.sections.eligibleSkills.some((row: any) => row.targetId === eligibleTargetId), true);
 });
 
-test('mapper target-first remove elegivel por id clinico quando schedule ativo usa outro target id', () => {
+test('mapper target-first nao remove elegivel por goalId ou skillId quando schedule ativo usa outro target id', () => {
   const eligibleTargetId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0113';
   const scheduledTargetId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0114';
   const scheduleId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0115';
@@ -365,13 +411,13 @@ test('mapper target-first remove elegivel por id clinico quando schedule ativo u
     technicalIssues: []
   }, { patientId: 'patient-1', requestId: 141, loadedAt: 123459 });
 
-  assert.equal(mapped.summary.eligibleSkills, 0);
+  assert.equal(mapped.summary.eligibleSkills, 1);
   assert.equal(mapped.summary.scheduled, 1);
-  assert.equal(mapped.sections.eligibleSkills.some((row: any) => row.targetId === eligibleTargetId), false);
+  assert.equal(mapped.sections.eligibleSkills.some((row: any) => row.targetId === eligibleTargetId), true);
   assert.equal(mapped.sections.scheduled.some((row: any) => row.targetId === scheduledTargetId), true);
 });
 
-test('mapper target-first remove elegivel quando raw_payload legado vem como string', () => {
+test('mapper target-first nao remove elegivel por raw_payload legado quando target id e diferente', () => {
   const eligibleTargetId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0213';
   const scheduledTargetId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0214';
   const scheduleId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0215';
@@ -415,9 +461,51 @@ test('mapper target-first remove elegivel quando raw_payload legado vem como str
     technicalIssues: []
   }, { patientId: 'patient-1', requestId: 142, loadedAt: 123460 });
 
-  assert.equal(mapped.summary.eligibleSkills, 0);
+  assert.equal(mapped.summary.eligibleSkills, 1);
   assert.equal(mapped.summary.scheduled, 1);
+  assert.equal(mapped.sections.eligibleSkills.some((row: any) => row.targetId === eligibleTargetId), true);
   assert.equal(mapped.sections.scheduled[0].scheduleId, scheduleId);
+});
+
+test('mapper target-first nao remove elegivel por source id generico quando schedule ativo usa outro target id', () => {
+  const eligibleTargetId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0223';
+  const scheduledTargetId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0224';
+  const scheduleId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0225';
+  const mapped = mapMaintenancePanelResponse({
+    eligibleSkills: [
+      {
+        targetId: eligibleTargetId,
+        source: { id: 'shared-source-id' },
+        targetName: 'Habilidade A',
+        protocol: 'VB-MAPP',
+        domain: 'Imitacao'
+      }
+    ],
+    scheduledProbes: [
+      {
+        targetId: scheduledTargetId,
+        scheduleId,
+        source: { id: 'shared-source-id' },
+        targetName: 'Habilidade B',
+        nextSchedule: {
+          id: scheduleId,
+          target_id: scheduledTargetId,
+          status: 'SCHEDULED',
+          due_date: '2026-06-10'
+        }
+      }
+    ],
+    maintenanceSkills: [],
+    waitingNextSession: [],
+    overdueProbes: [],
+    regressionRisk: [],
+    technicalIssues: []
+  }, { patientId: 'patient-1', requestId: 143, loadedAt: 123461 });
+
+  assert.equal(mapped.summary.eligibleSkills, 1);
+  assert.equal(mapped.summary.scheduled, 1);
+  assert.equal(mapped.sections.eligibleSkills[0].targetId, eligibleTargetId);
+  assert.equal(mapped.sections.scheduled[0].targetId, scheduledTargetId);
 });
 
 test('target-first separa risco de regressao do fluxo agendado', () => {
@@ -622,8 +710,8 @@ test('subaba manutencao usa painel target-first com conteudo e preserva fallback
   assert.match(eligibleCode, /progressPercent: 100/);
   assert.match(eligibleCode, /peiMaintenanceLinkableTargets/);
   assert.match(eligibleCode, /targetId && peiMaintenanceUnavailableTargetIds\.has\(targetId\)/);
-  assert.match(eligibleCode, /peiMaintenanceUnavailableClinicalIds/);
-  assert.match(eligibleCode, /clinicalIds\.some\(\(id: string\) => peiMaintenanceUnavailableClinicalIds\.has\(id\)\)/);
+  assert.doesNotMatch(eligibleCode, /peiMaintenanceUnavailableClinicalIds/);
+  assert.doesNotMatch(eligibleCode, /clinicalIds\.some\(\(id: string\) => peiMaintenanceUnavailableClinicalIds\.has\(id\)\)/);
   assert.match(eligibleCode, /getPeiMaintenanceRowScheduleId\(row\) \|\| row\?\.hasRealSchedule/);
   assert.match(patientDetailCode, /Carregando manutenção persistida/);
   assert.match(patientDetailCode, /const isPeiMaintenanceScheduledScheduleRow = \(row: any\) => \{/);
@@ -807,13 +895,15 @@ test('refresh da manutencao usa apenas painel target-first e ignora respostas st
   assert.match(refreshCode, /mapMaintenancePanelResponse\(panelData/);
   assert.match(refreshCode, /requestId !== peiMaintenancePanelRequestSeqRef\.current/);
   assert.match(refreshCode, /setAbaMaintenancePanel\(mappedPanel\)/);
-  assert.match(actionCode, /await refreshPeiMaintenancePanel\(\);[\s\S]*?setPeiMaintenancePanelMessage\(result\?\.message \|\| successMessage\)/m);
+  assert.match(actionCode, /applyPeiMaintenanceScheduleResult\(result, optimisticRow\);[\s\S]*?setPeiMaintenancePanelMessage\(result\?\.message \|\| successMessage\)/m);
   assert.match(patientDetailCode, /const applyPeiMaintenanceScheduleResult = React\.useCallback/);
   assert.match(patientDetailCode, /Array\.isArray\(result\?\.data\) \? result\.data : result\?\.data \? \[result\.data\] : \[\]/);
-  assert.match(patientDetailCode, /const scheduledClinicalIds = new Set<string>\(\)/);
-  assert.match(patientDetailCode, /getPeiMaintenanceClinicalLinkIds\(row\)\.forEach/);
-  assert.match(patientDetailCode, /rowClinicalIds\.some\(\(id: string\) => scheduledClinicalIds\.has\(id\)\)/);
-  assert.match(actionCode, /await refreshPeiMaintenancePanel\(\);[\s\S]*?applyPeiMaintenanceScheduleResult\(result, optimisticRow\)/m);
+  assert.doesNotMatch(patientDetailCode, /const scheduledClinicalIds = new Set<string>\(\)/);
+  assert.doesNotMatch(patientDetailCode, /getPeiMaintenanceClinicalLinkIds\(row\)\.forEach/);
+  assert.doesNotMatch(patientDetailCode, /rowClinicalIds\.some\(\(id: string\) => scheduledClinicalIds\.has\(id\)\)/);
+  assert.match(actionCode, /refreshPeiMaintenancePanel\(\)\.then\(\(mappedPanel: any\)/);
+  assert.match(actionCode, /Agendamento salvo localmente, mas nÃ£o confirmado no banco|Agendamento salvo localmente, mas não confirmado no banco/);
+  assert.doesNotMatch(actionCode, /refreshPeiMaintenancePanel\(\)\.then\([\s\S]*?applyPeiMaintenanceScheduleResult\(result, optimisticRow\)/m);
   assert.match(patientDetailCode, /runPeiMaintenanceAction\([\s\S]*?successMessage,[\s\S]*?row[\s\S]*?\)\.then/m);
   assert.doesNotMatch(refreshCode, /getAbaMaintenanceOverview/);
   assert.doesNotMatch(refreshCode, /groupPeiMaintenanceRowsTargetFirst/);
@@ -885,9 +975,9 @@ test('backend da etapa 2 usa PEI targets e schedules ativos por target em lote',
   assert.match(stepTwoRoute, /findActiveScheduleForSkill/);
   assert.match(stepTwoRoute, /emittedActiveScheduleKeys/);
   assert.match(stepTwoRoute, /readMaintenanceStoredPayload/);
-  assert.match(stepTwoRoute, /getMaintenanceDisplaySignature/);
-  assert.match(stepTwoRoute, /activeScheduleByDisplaySignature/);
-  assert.match(stepTwoRoute, /eligibleDisplaySignatureCounts/);
+  assert.doesNotMatch(stepTwoRoute, /getMaintenanceDisplaySignature/);
+  assert.doesNotMatch(stepTwoRoute, /activeScheduleByDisplaySignature/);
+  assert.doesNotMatch(stepTwoRoute, /eligibleDisplaySignatureCounts/);
   assert.doesNotMatch(stepTwoRoute, /activeScheduleByCompositeKey|getMaintenanceDisplayCompositeKey|getMaintenanceDisplayNameKey/);
   assert.match(stepTwoRoute, /source: 'patient_pei_targets_step2'/);
   assert.match(stepTwoRoute, /source\?\.peiGoalIndex/);
@@ -962,7 +1052,23 @@ test('endpoint de agendamento aceita DATE APPOINTMENT ou NEXT_SESSION com upsert
   assert.match(endpointCode, /appointmentId/);
   assert.match(endpointCode, /targetName: req\.body\?\.targetName \|\| req\.body\?\.target_name \|\| req\.body\?\.name/);
   assert.match(endpointCode, /candidateAppointmentId/);
+  assert.match(endpointCode, /PERSISTENCE_NOT_CONFIRMED/);
+  assert.match(endpointCode, /NÃ£o foi possÃ­vel confirmar a persistÃªncia do agendamento|Não foi possível confirmar a persistência do agendamento/);
   assert.doesNotMatch(endpointCode, /select\('\*'\)|\/api\/aba\/sessions|saveAbaSession|createAbaSession/);
+
+  const confirmStart = serverCode.indexOf('const confirmPersistedMaintenanceScheduleAfterWrite');
+  const confirmEnd = serverCode.indexOf('const createMaintenanceScheduleForTarget = async', confirmStart);
+  assert.notEqual(confirmStart, -1);
+  const confirmCode = serverCode.slice(confirmStart, confirmEnd);
+  assert.match(confirmCode, /\.eq\('organization_id', organizationId\)[\s\S]*?\.eq\('patient_id', patientId\)[\s\S]*?\.eq\('target_id', targetId\)[\s\S]*?\.in\('status', ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES\)/m);
+  assert.match(confirmCode, /persistedTargetId !== targetId/);
+  assert.match(confirmCode, /!persistedScheduleMode/);
+  assert.match(confirmCode, /!hasOperationalContext/);
+  assert.match(confirmCode, /NÃ£o foi possÃ­vel confirmar a persistÃªncia do agendamento|Não foi possível confirmar a persistência do agendamento/);
+  assert.match(serverCode, /confirmPersistedMaintenanceScheduleAfterWrite\(/);
+  assert.match(serverCode, /CANCELED/);
+  assert.match(serverCode, /MAINTENANCE_COMPLETED/);
+  assert.match(serverCode, /FAILED_FINAL/);
 
   const helperStart = serverCode.indexOf('const createMaintenanceScheduleForTarget = async');
   const helperEnd = serverCode.indexOf('const fetchNextMaintenanceProbeForTarget', helperStart);
@@ -1033,8 +1139,8 @@ test('backend resolve targets de manutencao em lote com colunas explicitas', () 
   assert.match(serverCode, /technicalIssues/);
   assert.match(serverCode, /latestMasteryByTargetId/);
   assert.match(serverCode, /activeScheduleByTargetId/);
-  assert.match(serverCode, /activeScheduleByClinicalId/);
-  assert.match(serverCode, /getMaintenanceClinicalLinkIds/);
+  assert.doesNotMatch(serverCode, /activeScheduleByClinicalId/);
+  assert.doesNotMatch(serverCode, /getMaintenanceClinicalLinkIds/);
   assert.doesNotMatch(serverCode, /getMaintenanceDisplayCompositeKey|getMaintenanceDisplayNameKey|rowDisplayHasActiveSchedule/);
   assert.match(serverCode, /hasPersistedMaintenanceScheduleId/);
   assert.match(serverCode, /scheduleId: scheduleId \|\| null/);

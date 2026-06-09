@@ -763,28 +763,10 @@ export function mapMaintenancePanelResponse(
       .map((row: any) => normalizeText(row?.targetId || row?.target_id))
       .filter((targetId: string) => isPersistedUuid(targetId))
   );
-  const operationalClinicalIds = new Set(
-    [
-      ...sections.maintenanceSkills,
-      ...sections.scheduled,
-      ...sections.waitingNextSession,
-      ...sections.overdue,
-      ...sections.regressionRisk,
-    ]
-      .filter((row: any) => isActivePeiMaintenanceScheduleRow(row))
-      .flatMap((row: any) => clinicalLinkIdsFor(row))
-      .filter(Boolean)
-  );
   if (operationalTargetIds.size > 0) {
     sections.eligibleSkills = sections.eligibleSkills.filter((row: any) => {
       const targetId = normalizeText(row?.targetId || row?.target_id);
       return !isPersistedUuid(targetId) || !operationalTargetIds.has(targetId);
-    });
-  }
-  if (operationalClinicalIds.size > 0) {
-    sections.eligibleSkills = sections.eligibleSkills.filter((row: any) => {
-      const clinicalIds = clinicalLinkIdsFor(row);
-      return !clinicalIds.some((clinicalId: string) => operationalClinicalIds.has(clinicalId));
     });
   }
 
