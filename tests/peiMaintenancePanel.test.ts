@@ -540,6 +540,16 @@ test('habilidades do PEI com status local ou progresso 100 aparecem como elegive
   assert.equal(groups.eligibleSkills.every((row: any) => row.hasPeiClinicalSource), true);
 });
 
+test('backend preserva identidade PEI numerica e progresso por criterio na manutencao', () => {
+  assert.match(serverCode, /const sanitizePeiLocalIdentifier = \(value: any/);
+  assert.match(serverCode, /const getPeiGoalComputedMaintenanceProgress = \(goal: any\)/);
+  assert.match(serverCode, /const progress = getPeiGoalComputedMaintenanceProgress\(goal\)/);
+  assert.match(serverCode, /const peiGoalId = sanitizePeiLocalIdentifier\(goal\?\.id/);
+  assert.match(serverCode, /skillId: sanitizePeiLocalIdentifier\(goal\?\.skillId/);
+  assert.match(serverCode, /sanitizePeiLocalIdentifier\(peiTarget\?\.peiGoalIndex, 40\)/);
+  assert.doesNotMatch(patientDetailCode, /getPeiMaintenanceDebugGoals\(requestPatientId\)/);
+});
+
 test('etapa 1 lista apenas habilidades adquiridas reais do PEI', () => {
   const targetId = '6b0a0b10-1e4c-4a4c-9f68-4f6a0caa0030';
   const skills = buildPeiMaintenanceEligibleSkills([
@@ -703,7 +713,7 @@ test('subaba manutencao usa painel target-first com conteudo e preserva fallback
   assert.match(eligibleCode, /const panelEligibleRows = Array\.isArray\(peiMaintenanceTargetFirstGroups\.eligibleSkills\)/);
   assert.match(eligibleCode, /const panelHasAnyMaintenanceRows = \[/);
   assert.match(eligibleCode, /peiMaintenanceTargetFirstGroups\.scheduled/);
-  assert.match(eligibleCode, /if \(hasPeiMaintenancePanelForCurrentPatient && panelHasAnyMaintenanceRows\) \{\s*return filterEligibleRows\(panelEligibleRows\);\s*\}/m);
+  assert.match(eligibleCode, /if \(hasPeiMaintenancePanelForCurrentPatient && panelHasAnyMaintenanceRows\) \{[\s\S]*?return filterEligibleRows\(panelEligibleRows\);\s*\}/m);
   assert.match(eligibleCode, /Painel carregado e vazio nao pode apagar metas adquiridas/);
   assert.match(eligibleCode, /activePeiPlanSubtab === 'maintenance'[\s\S]*?isLoadingPeiMaintenancePanel[\s\S]*?return \[\]/m);
   assert.match(eligibleCode, /key: `goal:\$\{goalId \|\| index\}:\$\{targetId \|\| index\}`/);
@@ -891,7 +901,7 @@ test('refresh da manutencao usa apenas painel target-first e ignora respostas st
   const actionStart = patientDetailCode.indexOf('const runPeiMaintenanceAction');
   const actionEnd = patientDetailCode.indexOf('const handlePeiCreateMaintenancePlan', actionStart);
   const actionCode = patientDetailCode.slice(actionStart, actionEnd);
-  assert.match(refreshCode, /dataService\.getAbaMaintenancePanel\(requestPatientId, \{ page: 1, pageSize: 100 \}\)/);
+  assert.match(refreshCode, /dataService\.getAbaMaintenancePanel\(requestPatientId, \{ page: 1, pageSize: 200 \}\)/);
   assert.match(refreshCode, /mapMaintenancePanelResponse\(panelData/);
   assert.match(refreshCode, /requestId !== peiMaintenancePanelRequestSeqRef\.current/);
   assert.match(refreshCode, /setAbaMaintenancePanel\(mappedPanel\)/);
@@ -984,7 +994,7 @@ test('backend da etapa 2 usa PEI targets e schedules ativos por target em lote',
   assert.match(stepTwoRoute, /source: 'patient_pei_targets_step2'/);
   assert.match(stepTwoRoute, /source\?\.peiGoalIndex/);
   assert.match(stepTwoRoute, /const hasRealTarget = isUuid\(targetId\)/);
-  assert.match(stepTwoRoute, /const internalKey = isPeiSource/);
+  assert.match(stepTwoRoute, /const internalKey = realTargetId[\s\S]*?\? `target:\$\{realTargetId\}`[\s\S]*?: goalId[\s\S]*?\? `goal:\$\{goalId\}`[\s\S]*?: `skill:\$\{compositeKey\}`/m);
   assert.match(stepTwoRoute, /peiGoalId: goalId \|\| null/);
   assert.match(stepTwoRoute, /localTargetRef: localTargetRef \|\| null/);
   assert.match(stepTwoRoute, /canScheduleMaintenance: hasRealTarget/);
@@ -1014,7 +1024,7 @@ test('backend materializa target real para habilidade adquirida local do PEI', (
   assert.match(serverCode, /source: 'patient_pei_materialized'/);
   assert.match(serverCode, /writeAbaRowWithSchemaFallback\('aba_targets', payload, 'upsert'\)/);
   assert.match(serverCode, /clinical_status: status\.clinicalStatus/);
-  assert.match(serverCode, /localTargetRef: sanitizeString\(peiTarget\?\.localTargetRef, 180\) \|\| null/);
+  assert.match(serverCode, /localTargetRef: sanitizePeiLocalIdentifier\(peiTarget\?\.localTargetRef, 180\) \|\| null/);
   assert.match(serverCode, /hasRealTarget: true/);
   assert.match(serverCode, /canScheduleMaintenance: true/);
   const linkableStart = serverCode.indexOf("app.get('/api/patients/:patientId/aba/targets/linkable'");
@@ -1141,6 +1151,10 @@ test('backend resolve targets de manutencao em lote com colunas explicitas', () 
   assert.match(serverCode, /technicalIssues/);
   assert.match(serverCode, /latestMasteryByTargetId/);
   assert.match(serverCode, /activeScheduleByTargetId/);
+  assert.match(serverCode, /const isMaintenanceEligibleAbaTarget = \(target: any\)/);
+  assert.match(serverCode, /allTargets\.filter\(isMaintenanceEligibleAbaTarget\)/);
+  assert.match(serverCode, /allAbaTargets\.filter\(isMaintenanceEligibleAbaTarget\)/);
+  assert.doesNotMatch(serverCode, /allAbaTargets\.filter\(isTargetEligibleForMaintenance\)/);
   assert.doesNotMatch(serverCode, /activeScheduleByClinicalId/);
   assert.doesNotMatch(serverCode, /getMaintenanceClinicalLinkIds/);
   assert.doesNotMatch(serverCode, /getMaintenanceDisplayCompositeKey|getMaintenanceDisplayNameKey|rowDisplayHasActiveSchedule/);

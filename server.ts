@@ -17491,13 +17491,109 @@ async function startServer() {
       .trim()
       .toLowerCase();
 
+  const sanitizePeiLocalIdentifier = (value: any, maxLength = 180) => {
+    if (value === undefined || value === null || value === '') return '';
+    return sanitizeString(String(value), maxLength);
+  };
+
+  const readPeiGoalValue = (source: any, ...keys: string[]) => {
+    for (const key of keys) {
+      const value = source?.[key];
+      if (value !== undefined && value !== null && value !== '') return value;
+    }
+    return undefined;
+  };
+
+  const readPeiGoalNumber = (source: any, ...keys: string[]) => {
+    const value = readPeiGoalValue(source, ...keys);
+    if (value === undefined) return null;
+    const parsed = typeof value === 'number' ? value : Number(String(value).replace('%', '').replace(',', '.').trim());
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+
+  const getPeiGoalMaintenanceCriterionTarget = (goal: any) => {
+    const embedded = goal?.mastery_criteria && typeof goal.mastery_criteria === 'object'
+      ? goal.mastery_criteria
+      : goal?.masteryCriteria && typeof goal.masteryCriteria === 'object'
+        ? goal.masteryCriteria
+        : {};
+    return readPeiGoalNumber(
+      embedded,
+      'required_consecutive_independent_correct_trials',
+      'requiredConsecutiveIndependentCorrectTrials',
+      'min_consecutive_independent_correct_trials',
+      'minConsecutiveIndependentCorrectTrials',
+      'consecutive_independent_correct_trials_required',
+      'consecutiveIndependentCorrectTrialsRequired',
+      'min_consecutive_successes',
+      'minConsecutiveSuccesses',
+      'meta_sucessos',
+      'metaSucessos',
+      'mastery_target',
+      'masteryTarget'
+    ) ?? readPeiGoalNumber(
+      goal,
+      'required_consecutive_independent_correct_trials',
+      'requiredConsecutiveIndependentCorrectTrials',
+      'min_consecutive_independent_correct_trials',
+      'minConsecutiveIndependentCorrectTrials',
+      'consecutive_independent_correct_trials_required',
+      'consecutiveIndependentCorrectTrialsRequired',
+      'min_consecutive_successes',
+      'minConsecutiveSuccesses',
+      'meta_sucessos',
+      'metaSucessos',
+      'mastery_target',
+      'masteryTarget'
+    );
+  };
+
+  const getPeiGoalComputedMaintenanceProgress = (goal: any) => {
+    const storedProgress = readPeiGoalNumber(goal, 'progress', 'progressPercent', 'progress_percent', 'masteryProgressPercent', 'mastery_progress_percent');
+    const normalizedStoredProgress = Number.isFinite(Number(storedProgress))
+      ? Math.max(0, Math.min(100, Math.round(Number(storedProgress))))
+      : 0;
+    const target = getPeiGoalMaintenanceCriterionTarget(goal);
+    if (!Number.isFinite(Number(target)) || Number(target) <= 0) return normalizedStoredProgress;
+    const observed = Math.max(
+      0,
+      ...[
+        readPeiGoalNumber(goal, 'consecutive_successes', 'consecutiveSuccesses'),
+        readPeiGoalNumber(goal, 'consecutive_successful_days', 'consecutiveSuccessfulDays'),
+        readPeiGoalNumber(goal, 'criterionProgressCount', 'criterion_progress_count'),
+        readPeiGoalNumber(goal, 'masteryProgressCount', 'mastery_progress_count'),
+        readPeiGoalNumber(goal, 'independentCorrectTrials', 'independent_correct_trials'),
+        readPeiGoalNumber(goal, 'correctTrials', 'correct_trials')
+      ].filter((value) => Number.isFinite(Number(value))).map(Number)
+    );
+    const masteryProgress = Math.min(Math.round((observed / Number(target)) * 100), 100);
+    return Math.max(normalizedStoredProgress, masteryProgress);
+  };
+
+  const MAINTENANCE_ACQUIRED_STATUS_VALUES = new Set([
+    'COMPLETED',
+    'COMPLETE',
+    'CONCLUIDO',
+    'CONCLUÍDO',
+    'ACQUIRED',
+    'ADQUIRIDO',
+    'MASTERED',
+    'MASTERED_APPROVED',
+    'MAINTENANCE',
+    'MANUTENCAO',
+    'MANUTENÇÃO',
+    'MAINTAINED',
+    'READY_FOR_MAINTENANCE'
+  ]);
+  const MAINTENANCE_MASTERY_STATUS_VALUES = new Set(['MASTERED', 'MASTERED_APPROVED', 'READY_FOR_MAINTENANCE', 'MET', 'MET_TODAY']);
+
   const isMaintenanceEligiblePeiGoal = (goal: any) => {
     const status = sanitizeString(goal?.status || goal?.clinical_status || goal?.clinicalStatus || goal?.phase, 80).toUpperCase();
     const masteryStatus = sanitizeString(goal?.mastery_status || goal?.masteryStatus || goal?.evaluation_status || goal?.evaluationStatus, 80).toUpperCase();
-    const progress = Number(goal?.progress ?? goal?.progressPercent ?? goal?.progress_percent ?? goal?.masteryProgressPercent ?? goal?.mastery_progress_percent);
+    const progress = getPeiGoalComputedMaintenanceProgress(goal);
     const isEligible = (
-      ['COMPLETED', 'COMPLETE', 'CONCLUIDO', 'CONCLUÍDO', 'ACQUIRED', 'ADQUIRIDO', 'MASTERED', 'MASTERED_APPROVED', 'MAINTENANCE', 'MANUTENCAO', 'MANUTENÇÃO', 'MAINTAINED', 'READY_FOR_MAINTENANCE'].includes(status) ||
-      ['MASTERED', 'MASTERED_APPROVED', 'READY_FOR_MAINTENANCE', 'MET', 'MET_TODAY'].includes(masteryStatus) ||
+      MAINTENANCE_ACQUIRED_STATUS_VALUES.has(status) ||
+      MAINTENANCE_MASTERY_STATUS_VALUES.has(masteryStatus) ||
       (Number.isFinite(progress) && progress >= 100)
     );
     if (process.env.NODE_ENV !== 'production' && !isEligible) {
@@ -17512,6 +17608,15 @@ async function startServer() {
       });
     }
     return isEligible;
+  };
+
+  const isMaintenanceEligibleAbaTarget = (target: any) => {
+    const status = sanitizeString(target?.clinical_status || target?.clinicalStatus || target?.phase || target?.target_type || target?.status || target?.badge || target?.statusLabel, 80).toUpperCase();
+    if (MAINTENANCE_ACQUIRED_STATUS_VALUES.has(status)) return true;
+    const masteryStatus = sanitizeString(target?.mastery_status || target?.masteryStatus || target?.evaluation_status || target?.evaluationStatus, 80).toUpperCase();
+    if (MAINTENANCE_MASTERY_STATUS_VALUES.has(masteryStatus)) return true;
+    const progress = readPeiGoalNumber(target, 'progress', 'progressPercent', 'progress_percent', 'masteryProgressPercent', 'mastery_progress_percent');
+    return Boolean(Number.isFinite(Number(progress)) && Number(progress) >= 100);
   };
 
   const getPatientPeiTargets = async (patientId: string, clinicId: string, organizationId: string, sessionUser: any) => {
@@ -17533,12 +17638,12 @@ async function startServer() {
         .map((goal: any, index: number) => {
           const targetName = sanitizeString(goal?.name || goal?.targetName || goal?.target_name || goal?.objective, 240);
           if (!targetName) return null;
-          const explicitTargetId = sanitizeString(goal?.target_id || goal?.targetId || goal?.abaTargetId || goal?.aba_target_id, 180);
-          const peiGoalId = sanitizeString(goal?.id || goal?.goalId || goal?.goal_id, 180);
-          const localTargetRef = sanitizeString(goal?.localTargetRef || goal?.local_target_ref || (!isUuid(explicitTargetId) ? explicitTargetId : '') || peiGoalId, 180);
+          const explicitTargetId = sanitizePeiLocalIdentifier(goal?.target_id || goal?.targetId || goal?.abaTargetId || goal?.aba_target_id, 180);
+          const peiGoalId = sanitizePeiLocalIdentifier(goal?.id || goal?.goalId || goal?.goal_id, 180);
+          const localTargetRef = sanitizePeiLocalIdentifier(goal?.localTargetRef || goal?.local_target_ref || (!isUuid(explicitTargetId) ? explicitTargetId : '') || peiGoalId, 180);
           const protocolName = sanitizeString(goal?.protocolTitle || goal?.protocol_title || goal?.protocolName || goal?.protocol_name, 240) || 'PEI';
           const domainName = sanitizeString(goal?.domainName || goal?.domain_name || goal?.programName || goal?.program_name, 240) || 'Plano de ensino';
-          const progressPercent = Number(goal?.progress ?? goal?.progressPercent ?? goal?.progress_percent ?? null);
+          const progressPercent = getPeiGoalComputedMaintenanceProgress(goal);
           const clinicalStatus = sanitizeString(goal?.clinical_status || goal?.clinicalStatus || goal?.status || goal?.phase, 80) || null;
           const masteryStatus = sanitizeString(goal?.mastery_status || goal?.masteryStatus || goal?.evaluation_status || goal?.evaluationStatus, 80) || null;
           const description = sanitizeString(goal?.description || goal?.objective || goal?.criteria, 500) || null;
@@ -17586,7 +17691,7 @@ async function startServer() {
             source: 'patient_pei',
             peiGoalIndex: index,
             peiGoalId: peiGoalId || null,
-            skillId: sanitizeString(goal?.skillId || goal?.skill_id, 180) || null,
+            skillId: sanitizePeiLocalIdentifier(goal?.skillId || goal?.skill_id, 180) || null,
             targetId: isUuid(explicitTargetId) ? explicitTargetId : null,
             localTargetRef: localTargetRef || null,
             targetName,
@@ -23326,7 +23431,7 @@ async function startServer() {
         masteryCriteria?.localTargetRef,
         masteryCriteria?.local_target_ref
       ]
-        .map((value: any) => sanitizeString(value, 180))
+        .map((value: any) => sanitizePeiLocalIdentifier(value, 180))
         .filter(Boolean);
     };
     existingTargets.forEach((target: any) => {
@@ -23362,10 +23467,10 @@ async function startServer() {
       const stableTargetId = stableAbaUuidFromParts('patient-pei-maintenance-target', [
         organizationId,
         patientId,
-        peiTarget?.peiGoalId || peiTarget?.goalId || peiTarget?.goal_id || '',
-        peiTarget?.skillId || peiTarget?.skill_id || '',
-        peiTarget?.localTargetRef || '',
-        peiTarget?.peiGoalIndex ?? '',
+        sanitizePeiLocalIdentifier(peiTarget?.peiGoalId || peiTarget?.goalId || peiTarget?.goal_id, 180),
+        sanitizePeiLocalIdentifier(peiTarget?.skillId || peiTarget?.skill_id, 180),
+        sanitizePeiLocalIdentifier(peiTarget?.localTargetRef, 180),
+        sanitizePeiLocalIdentifier(peiTarget?.peiGoalIndex, 40),
         compositeKey
       ]);
       const clinicalMatchedTarget = getPeiMaintenanceTargetClinicalIds(peiTarget)
@@ -23419,9 +23524,9 @@ async function startServer() {
         domain_name: domainName,
         mastery_criteria: sanitizeClinicalPayload({
           source: 'patient_pei_materialized',
-          peiGoalId: sanitizeString(peiTarget?.peiGoalId, 180) || null,
-          skillId: sanitizeString(peiTarget?.skillId, 180) || null,
-          localTargetRef: sanitizeString(peiTarget?.localTargetRef, 180) || null,
+          peiGoalId: sanitizePeiLocalIdentifier(peiTarget?.peiGoalId, 180) || null,
+          skillId: sanitizePeiLocalIdentifier(peiTarget?.skillId, 180) || null,
+          localTargetRef: sanitizePeiLocalIdentifier(peiTarget?.localTargetRef, 180) || null,
           peiGoalIndex: Number.isFinite(Number(peiTarget?.peiGoalIndex)) ? Number(peiTarget.peiGoalIndex) : null,
           materializedForMaintenance: true
         }),
@@ -23486,6 +23591,13 @@ async function startServer() {
     const firstText = (max: number, ...values: any[]) => {
       for (const value of values) {
         const text = sanitizeString(value, max);
+        if (text) return text;
+      }
+      return '';
+    };
+    const firstIdentifier = (max: number, ...values: any[]) => {
+      for (const value of values) {
+        const text = sanitizePeiLocalIdentifier(value, max);
         if (text) return text;
       }
       return '';
@@ -23568,10 +23680,10 @@ async function startServer() {
     const masteryStatus = firstText(80, row?.masteryStatus, row?.mastery_status, row?.evaluationStatus, row?.evaluation_status, source?.masteryStatus, source?.mastery_status, goal?.masteryStatus, goal?.mastery_status);
     const candidate = cleanObject({
       source: 'patient_pei_request',
-      peiGoalId: firstText(180, row?.peiGoalId, row?.goalId, row?.goal_id, source?.peiGoalId, source?.goalId, source?.goal_id, source?.id, goal?.id),
-      skillId: firstText(180, row?.skillId, row?.skill_id, source?.skillId, source?.skill_id, goal?.skillId, goal?.skill_id),
+      peiGoalId: firstIdentifier(180, row?.peiGoalId, row?.goalId, row?.goal_id, source?.peiGoalId, source?.goalId, source?.goal_id, source?.id, goal?.id),
+      skillId: firstIdentifier(180, row?.skillId, row?.skill_id, source?.skillId, source?.skill_id, goal?.skillId, goal?.skill_id),
       targetId: isUuid(firstText(180, row?.targetId, row?.target_id, row?.abaTargetId, row?.aba_target_id, target?.id, source?.targetId, source?.target_id)) ? firstText(180, row?.targetId, row?.target_id, row?.abaTargetId, row?.aba_target_id, target?.id, source?.targetId, source?.target_id) : null,
-      localTargetRef: firstText(180, row?.localTargetRef, source?.localTargetRef, source?.id, goal?.id, row?.goalId, row?.goal_id),
+      localTargetRef: firstIdentifier(180, row?.localTargetRef, source?.localTargetRef, source?.id, goal?.id, row?.goalId, row?.goal_id),
       targetName,
       protocolName,
       domainName,
@@ -23599,22 +23711,22 @@ async function startServer() {
       const byTargetId = eligibleTargets.find((target: any) => sanitizeString(target?.targetId || target?.target_id, 180) === targetId);
       if (byTargetId) return byTargetId;
     }
-    const peiGoalId = sanitizeString(candidate?.peiGoalId || candidate?.goalId, 180);
+    const peiGoalId = sanitizePeiLocalIdentifier(candidate?.peiGoalId || candidate?.goalId, 180);
     if (peiGoalId) {
       const byGoalId = eligibleTargets.find((target: any) =>
-        sanitizeString(target?.peiGoalId || target?.goalId || target?.goal_id, 180) === peiGoalId ||
-        sanitizeString(target?.localTargetRef, 180) === peiGoalId
+        sanitizePeiLocalIdentifier(target?.peiGoalId || target?.goalId || target?.goal_id, 180) === peiGoalId ||
+        sanitizePeiLocalIdentifier(target?.localTargetRef, 180) === peiGoalId
       );
       if (byGoalId) return byGoalId;
     }
-    const skillId = sanitizeString(candidate?.skillId || candidate?.skill_id, 180);
+    const skillId = sanitizePeiLocalIdentifier(candidate?.skillId || candidate?.skill_id, 180);
     if (skillId) {
-      const bySkillId = eligibleTargets.find((target: any) => sanitizeString(target?.skillId || target?.skill_id, 180) === skillId);
+      const bySkillId = eligibleTargets.find((target: any) => sanitizePeiLocalIdentifier(target?.skillId || target?.skill_id, 180) === skillId);
       if (bySkillId) return bySkillId;
     }
-    const localTargetRef = sanitizeString(candidate?.localTargetRef, 180);
+    const localTargetRef = sanitizePeiLocalIdentifier(candidate?.localTargetRef, 180);
     if (localTargetRef) {
-      const byLocalRef = eligibleTargets.find((target: any) => sanitizeString(target?.localTargetRef, 180) === localTargetRef);
+      const byLocalRef = eligibleTargets.find((target: any) => sanitizePeiLocalIdentifier(target?.localTargetRef, 180) === localTargetRef);
       if (byLocalRef) return byLocalRef;
     }
     const compositeKey = sanitizeString(candidate?.matchCompositeKey, 500);
@@ -31721,22 +31833,6 @@ async function startServer() {
           registerTargetMatch(targetByName, duplicateName, normalizePeiTargetMatchKey(targetName), target);
         });
 
-        const acquiredStatuses = new Set(['COMPLETED', 'COMPLETE', 'CONCLUIDO', 'CONCLUÍDO', 'ACQUIRED', 'ADQUIRIDO', 'MASTERED', 'MASTERED_APPROVED', 'MAINTENANCE', 'MANUTENCAO', 'MANUTENÇÃO', 'MAINTAINED', 'READY_FOR_MAINTENANCE']);
-        const isTargetEligibleForMaintenance = (target: any) => {
-          // Primary check: clinical status fields
-          const status = sanitizeString(target?.clinical_status || target?.phase || target?.target_type || target?.status || target?.badge || target?.statusLabel, 80).toUpperCase();
-          if (acquiredStatuses.has(status)) return true;
-          
-          // Secondary check: mastery status (often used in ABA targets)
-          const masteryStatus = sanitizeString(target?.mastery_status || target?.masteryStatus || target?.evaluation_status || target?.evaluationStatus, 80).toUpperCase();
-          if (['MASTERED', 'MASTERED_APPROVED', 'READY_FOR_MAINTENANCE', 'MET', 'MET_TODAY'].includes(masteryStatus)) return true;
-          
-          // Tertiary check: progress >= 100% indicates completion
-          const progress = Number(target?.progress ?? target?.progressPercent ?? target?.progress_percent ?? null);
-          if (Number.isFinite(progress) && progress >= 100) return true;
-          
-          return false;
-        };
         const hydratePeiTarget = (peiTarget: any) => {
           const explicitTargetId = sanitizeString(peiTarget?.targetId, 180);
           const explicitTarget = isUuid(explicitTargetId) ? targetById.get(explicitTargetId) : null;
@@ -31760,9 +31856,9 @@ async function startServer() {
           const target = source?.target || source || {};
           const targetId = sanitizeString(source?.targetId || source?.target_id || target?.id, 180);
           const masteryCriteria = target?.mastery_criteria && typeof target.mastery_criteria === 'object' ? target.mastery_criteria : {};
-          const goalId = sanitizeString(source?.peiGoalId || source?.goalId || source?.goal_id || masteryCriteria?.peiGoalId || masteryCriteria?.pei_goal_id, 180);
-          const skillId = sanitizeString(source?.skillId || source?.skill_id || masteryCriteria?.skillId || masteryCriteria?.skill_id, 180);
-          const localTargetRef = sanitizeString(source?.localTargetRef || masteryCriteria?.localTargetRef || masteryCriteria?.local_target_ref || goalId, 180);
+          const goalId = sanitizePeiLocalIdentifier(source?.peiGoalId || source?.goalId || source?.goal_id || masteryCriteria?.peiGoalId || masteryCriteria?.pei_goal_id, 180);
+          const skillId = sanitizePeiLocalIdentifier(source?.skillId || source?.skill_id || masteryCriteria?.skillId || masteryCriteria?.skill_id, 180);
+          const localTargetRef = sanitizePeiLocalIdentifier(source?.localTargetRef || masteryCriteria?.localTargetRef || masteryCriteria?.local_target_ref || goalId, 180);
           const targetName = sanitizeString(source?.targetName || source?.target_name || source?.name || target?.name || target?.description, 240);
           if (!targetName) return;
           const protocolName = sanitizeString(source?.protocolName || source?.protocol || source?.protocol_title || target?.protocol_title, 240) || 'Sem protocolo informado';
@@ -31771,7 +31867,7 @@ async function startServer() {
           const compositeKey = [targetName, protocolName, domainName].map(normalizePeiTargetMatchKey).filter(Boolean).join('|');
           const hasRealTarget = isUuid(targetId);
           const realTargetId = hasRealTarget ? targetId : '';
-          const sourceIndex = sanitizeString(source?.peiGoalIndex, 40);
+          const sourceIndex = sanitizePeiLocalIdentifier(source?.peiGoalIndex, 40);
           const isPeiSource = source?.source === 'patient_pei';
           // Chave unificada que independe da fonte (PEI ou ABA)
           // Prioriza: targetId real > goalId > compositeKey
@@ -31868,7 +31964,7 @@ async function startServer() {
           .map(hydratePeiTarget)
           .forEach(addEligibleSkill);
         
-        const filteredAbaTargets = allTargets.filter(isTargetEligibleForMaintenance);
+        const filteredAbaTargets = allTargets.filter(isMaintenanceEligibleAbaTarget);
         if (process.env.NODE_ENV !== 'production') {
           console.debug('[pei-maintenance-panel] ABA targets eligible:', {
             total: allTargets.length,
@@ -32314,14 +32410,10 @@ async function startServer() {
           ['met', 'mastered'].includes(legacyStatus)
         );
       };
-      const isTargetEligibleForMaintenance = (target: any) => {
+      const targetHasMaintenanceEligibility = (target: any) => {
         const targetId = sanitizeString(target?.id, 180);
-        const status = sanitizeString(target?.clinical_status || target?.phase || target?.target_type, 80).toUpperCase();
         const latestMastery = targetId ? latestMasteryByTargetId.get(targetId) : null;
-        return (
-          ['READY_FOR_REVIEW', 'MASTERED', 'MAINTENANCE', 'MAINTAINED', 'ACQUIRED', 'ADQUIRIDO'].includes(status) ||
-          isMasteryEvaluationComplete(latestMastery)
-        );
+        return isMaintenanceEligibleAbaTarget(target) || isMasteryEvaluationComplete(latestMastery);
       };
       const scheduledTargetIds = new Set(
         schedulesForMainFlow
@@ -32332,7 +32424,7 @@ async function startServer() {
       const maintenanceTargetRows = allTargets.filter((target: any) => {
         const id = sanitizeString(target?.id, 180);
         if (!isUuid(id) || scheduledTargetIds.has(id)) return false;
-        return isTargetEligibleForMaintenance(target);
+        return targetHasMaintenanceEligibility(target);
       });
       const scheduleCards = schedulesForMainFlow.map((schedule: any) => {
         const scheduleId = sanitizeString(schedule?.id, 180);
@@ -32720,7 +32812,7 @@ async function startServer() {
           .limit(200)
       );
       const allAbaTargets = targetResult.error ? [] : (targetResult.data || []);
-      const abaTargetsEligible = allAbaTargets.filter(isTargetEligibleForMaintenance);
+      const abaTargetsEligible = allAbaTargets.filter(isMaintenanceEligibleAbaTarget);
       
       // Get raw data for detailed view
       const record = await readPatientRecordPayloadForFiles(patientId, clinicId, req.session.user);
