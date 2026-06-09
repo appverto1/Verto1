@@ -32705,19 +32705,31 @@ async function startServer() {
 
       const peiTargets = await getPatientPeiTargets(patientId, clinicId, organizationId, req.session.user);
       
-      // Retorna informações detalhadas sobre cada habilidade PEI
-      const details = peiTargets.map((target: any) => ({
-        targetName: target?.targetName,
-        protocolName: target?.protocolName,
-        domainName: target?.domainName,
-        eligibleForMaintenance: target?.eligibleForMaintenance,
-        progressPercent: target?.progressPercent,
-        clinicalStatus: target?.clinicalStatus,
-        masteryStatus: target?.masteryStatus,
-        peiGoalId: target?.peiGoalId,
-        targetId: target?.targetId,
-        matchCompositeKey: target?.matchCompositeKey
-      }));
+      // Retorna informações COMPLETAS sobre cada habilidade PEI - incluindo TODOS os campos do raw goal
+      // Para entender qual campo marca como "Adquirido"
+      const record = await readPatientRecordPayloadForFiles(patientId, clinicId, req.session.user);
+      const rawGoals = parsePatientPeiArray(record?.payload || {});
+      
+      const details = peiTargets.map((target: any, idx: number) => {
+        const rawGoal = rawGoals[idx] || {};
+        return {
+          targetName: target?.targetName,
+          protocolName: target?.protocolName,
+          domainName: target?.domainName,
+          eligibleForMaintenance: target?.eligibleForMaintenance,
+          progressPercent: target?.progressPercent,
+          clinicalStatus: target?.clinicalStatus,
+          masteryStatus: target?.masteryStatus,
+          peiGoalId: target?.peiGoalId,
+          targetId: target?.targetId,
+          matchCompositeKey: target?.matchCompositeKey,
+          // TODOS os campos do goal raw - para descobrir o que marca como "Adquirido"
+          rawGoalAllFields: Object.entries(rawGoal).reduce((acc: any, [key, value]: any) => {
+            acc[key] = typeof value === 'object' && value !== null ? `[${typeof value}]` : value;
+            return acc;
+          }, {})
+        };
+      });
 
       return res.json({
         success: true,
@@ -32725,6 +32737,10 @@ async function startServer() {
           patientId,
           totalGoals: peiTargets.length,
           eligibleCount: peiTargets.filter((t: any) => t?.eligibleForMaintenance).length,
+          payloadStructure: {
+            payloadKeys: Object.keys(record?.payload || {}).sort(),
+            peiGoalsFromPayload: parsePatientPeiArray(record?.payload || {}).length
+          },
           goals: details
         }
       });
