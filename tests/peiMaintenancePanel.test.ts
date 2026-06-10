@@ -973,10 +973,18 @@ test('refresh da manutencao usa apenas painel target-first e ignora respostas st
 test('ensino aplica resumo de maestria encerrado sem depender de F5', () => {
   assert.match(patientDetailCode, /const applySessionMasterySummaryToPei = async \(sessionSummary: any\)/);
   assert.match(patientDetailCode, /Array\.isArray\(sessionSummary\?\.masterySummary\)/);
+  assert.match(patientDetailCode, /const collectMasteryIdentityKeys = \(value: any, options: \{ includeNames\?: boolean \} = \{\}\) =>/);
+  assert.match(patientDetailCode, /value\?\.skillId[\s\S]*?value\?\.localTargetRef[\s\S]*?raw\?\.skillId[\s\S]*?raw\?\.localTargetRef/m);
+  assert.match(patientDetailCode, /collectMasteryIdentityKeys\(goal, \{ includeNames: false \}\)[\s\S]*?rowFromId \|\| collectMasteryIdentityKeys\(goal\)/m);
   assert.match(patientDetailCode, /criterionReached[\s\S]*?READY_FOR_REVIEW[\s\S]*?progressPercent: computedProgress/m);
   assert.match(patientDetailCode, /setSessionPatientOverride\(updatedPatient\)/);
   assert.match(patientDetailCode, /setHasLoadedPeiMaintenancePanel\(false\)/);
   assert.match(patientDetailCode, /onSessionSummaryPersisted=\{applySessionMasterySummaryToPei\}/);
+  assert.match(sessionModeCode, /target_id: readMasteryValue\(goal, 'target_id', 'targetId', 'aba_target_id', 'abaTargetId', 'id'\)/);
+  assert.match(sessionModeCode, /const sessionRecordMatchesTeachingGoal = \(record: SessionRecord, goal: any\) =>/);
+  assert.match(sessionModeCode, /if \(recordTargetId && goalKeys\.length > 0\) return goalKeys\.includes\(recordTargetId\)/);
+  assert.match(sessionModeCode, /const teachingMasteryRowMatchesGoal = \(row: any, goal: any\) =>/);
+  assert.match(sessionModeCode, /skillId: skillId \|\| null[\s\S]*?localTargetRef: localTargetRef \|\| null/m);
   assert.match(sessionModeCode, /setPostClosureSummary\(persistedSummary\);[\s\S]*?onSessionSummaryPersisted\(persistedSummary\)/m);
   assert.match(patientDetailCode, /if \(options\?\.alreadyPersisted\) \{[\s\S]*?applySessionMasterySummaryToPei\(options\.summary\)/m);
   assert.match(patientDetailCode, /const peiGoals = useMemo\(\(\) => \(Array\.isArray\(sessionModePatient\?\.pei\)/);
@@ -993,6 +1001,11 @@ test('registro de tentativa ABA calcula maestria com historico local atualizado'
   assert.match(handlerCode, /globalThis\.crypto\?\.randomUUID\?\.\(\)/);
   assert.match(handlerCode, /const previousHistory = Array\.isArray\(historyRef\.current\) \? historyRef\.current : history/);
   assert.match(handlerCode, /historyRef\.current = updatedHistory;[\s\S]*?setHistory\(updatedHistory\);[\s\S]*?const skillHistory = updatedHistory/m);
+  assert.match(handlerCode, /const sessionGoalKeys = \[[\s\S]*?sessionMeta\?\.skillId[\s\S]*?sessionMeta\?\.localTargetRef/m);
+  assert.match(handlerCode, /normalizeAbaMasteryCriterion\(embeddedCriterion\) \|\| normalizeAbaMasteryCriterion/);
+  assert.match(handlerCode, /masteryCriterion\?\.requiredConsecutiveIndependentCorrectTrials \|\|[\s\S]*?masteryCriterion\?\.requiredIndependentCorrectTrials/m);
+  assert.match(handlerCode, /criterion_progress_count: criterionProgressCount/);
+  assert.match(handlerCode, /raw_payload: \{[\s\S]*?peiGoalId:[\s\S]*?skillId:[\s\S]*?localTargetRef:/m);
   assert.doesNotMatch(handlerCode, /const updatedHistory = \[newHistoryItem, \.\.\.history\]/);
 });
 

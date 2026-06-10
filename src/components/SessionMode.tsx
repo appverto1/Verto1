@@ -458,7 +458,7 @@ const buildSessionGoalMasteryCriterion = (goal: any) => {
     id: readMasteryValue(embedded, 'id') || readMasteryValue(goal, 'masteryCriteriaId', 'criteriaId') || null,
     organization_id: readMasteryValue(goal, 'organization_id', 'organizationId', 'clinic_id', 'clinicId') || null,
     program_id: readMasteryValue(goal, 'program_id', 'programId', 'protocol_id', 'protocolId') || null,
-    target_id: readMasteryValue(goal, 'id', 'target_id', 'targetId') || null,
+    target_id: readMasteryValue(goal, 'target_id', 'targetId', 'aba_target_id', 'abaTargetId', 'id') || null,
     name: readMasteryValue(embedded, 'name') || 'Criterio da meta',
     is_active: readMasteryValue(embedded, 'is_active', 'isActive') ?? true,
     source: readMasteryValue(embedded, 'source', 'criterionSource', 'criterion_source', 'origin') || 'skill',
@@ -1216,6 +1216,52 @@ export const SessionMode = ({
 
   const goalTargetId = (goal: any) => String(goal?.target_id || goal?.targetId || goal?.aba_target_id || goal?.abaTargetId || goal?.id || '').trim();
   const goalTargetName = (goal: any) => String(goal?.name || goal?.target_name || goal?.targetName || '').trim();
+  const normalizeSessionGoalKey = (value: any) => String(value ?? '').trim();
+  const uniqueSessionGoalKeys = (values: any[]) =>
+    values
+      .map(normalizeSessionGoalKey)
+      .filter((value: string, index: number, list: string[]) => Boolean(value) && list.indexOf(value) === index);
+  const getSessionGoalIdentityKeys = (goal: any) => uniqueSessionGoalKeys([
+    goal?.target_id,
+    goal?.targetId,
+    goal?.aba_target_id,
+    goal?.abaTargetId,
+    goal?.id,
+    goal?.goalId,
+    goal?.goal_id,
+    goal?.peiGoalId,
+    goal?.pei_goal_id,
+    goal?.skillId,
+    goal?.skill_id,
+    goal?.localTargetRef,
+    goal?.local_target_ref
+  ]);
+  const sessionRecordMatchesTeachingGoal = (record: SessionRecord, goal: any) => {
+    if (record.kind !== 'trial') return false;
+    if (isMaintenanceProbeCollection(record.collectionType)) return false;
+    const recordTargetId = normalizeSessionGoalKey(record.targetId);
+    const goalKeys = getSessionGoalIdentityKeys(goal);
+    if (recordTargetId && goalKeys.length > 0) return goalKeys.includes(recordTargetId);
+    return String(record.title || record.targetName || '').trim() === goalTargetName(goal);
+  };
+  const teachingMasteryRowMatchesGoal = (row: any, goal: any) => {
+    const goalKeys = getSessionGoalIdentityKeys(goal);
+    const rowKeys = uniqueSessionGoalKeys([
+      row?.targetId,
+      row?.target_id,
+      row?.id,
+      row?.goalId,
+      row?.goal_id,
+      row?.peiGoalId,
+      row?.pei_goal_id,
+      row?.skillId,
+      row?.skill_id,
+      row?.localTargetRef,
+      row?.local_target_ref
+    ]);
+    if (goalKeys.length > 0 && rowKeys.length > 0) return rowKeys.some((key: string) => goalKeys.includes(key));
+    return String(row?.name || row?.targetName || row?.target_name || '').trim() === goalTargetName(goal);
+  };
   const clearManualMaintenanceProbeTarget = (targetKey?: string | null) => {
     const safeTargetKey = String(targetKey || '').trim();
     if (!safeTargetKey) return;
@@ -3482,15 +3528,12 @@ export const SessionMode = ({
   };
 
   const teachingMasteryRows = useMemo(() => sessionGoals.map((goal: any) => {
-    const goalId = String(goal?.id || goal?.target_id || goal?.targetId || '').trim();
+    const goalId = goalTargetId(goal);
+    const peiGoalId = String(goal?.peiGoalId || goal?.pei_goal_id || goal?.goalId || goal?.goal_id || goal?.id || '').trim();
+    const skillId = String(goal?.skillId || goal?.skill_id || '').trim();
+    const localTargetRef = String(goal?.localTargetRef || goal?.local_target_ref || goal?.id || '').trim();
     const goalName = String(goal?.name || goal?.target_name || goal?.targetName || 'Meta').trim();
-    const goalTrials = records.filter((record) => {
-      if (record.kind !== 'trial') return false;
-      if (isMaintenanceProbeCollection(record.collectionType)) return false;
-      const recordTargetId = String(record.targetId || '').trim();
-      if (goalId && recordTargetId && recordTargetId === goalId) return true;
-      return String(record.title || record.targetName || '').trim() === goalName;
-    });
+    const goalTrials = records.filter((record) => sessionRecordMatchesTeachingGoal(record, goal));
     const criterion = buildSessionGoalMasteryCriterion(goal);
     const evaluation = evaluateTargetMastery({
       organizationId: resolvedClinicId || 'local',
@@ -3519,6 +3562,15 @@ export const SessionMode = ({
     return {
       id: goal.id || goalId || goalName,
       targetId: goalId || null,
+      target_id: goalId || null,
+      goalId: peiGoalId || null,
+      goal_id: peiGoalId || null,
+      peiGoalId: peiGoalId || null,
+      pei_goal_id: peiGoalId || null,
+      skillId: skillId || null,
+      skill_id: skillId || null,
+      localTargetRef: localTargetRef || null,
+      local_target_ref: localTargetRef || null,
       name: goalName,
       criterion: evaluation.criterionLabel || formatAbaMasteryCriterion(criterion as any),
       criterionSourceLabel: criterion ? abaMasteryCriterionSourceLabel(criterion) : 'Criterio de maestria nao configurado',
@@ -5974,7 +6026,7 @@ export const SessionMode = ({
               const goalKey = String(goal?.id || goal?.target_id || goal?.targetId || goal?.name || 'goal');
               const maintenanceTargetKey = getMaintenanceTargetKey(goal);
               const maintenanceProbeActiveForGoal = Boolean(maintenanceTargetKey && currentTrialTargetKey === maintenanceTargetKey && activeMaintenanceProbeTargetId === maintenanceTargetKey && isMaintenanceProbeCollection(collectionType));
-              const masteryRow = teachingMasteryRows.find((row) => String(row.id || row.targetId || row.name) === goalKey || row.name === goal.name);
+              const masteryRow = teachingMasteryRows.find((row) => teachingMasteryRowMatchesGoal(row, goal));
               const maintenanceInfo = getGoalMaintenanceInfo(goal);
               const maintenanceProbeCanRunNow = Boolean(maintenanceInfo.hasAvailableMaintenanceProbe);
               const selected = mobileSelectedGoalKey === goalKey;
@@ -6134,7 +6186,7 @@ export const SessionMode = ({
               const goalKey = String(goal?.id || goal?.name || 'goal');
               const maintenanceTargetKey = getMaintenanceTargetKey(goal);
               const maintenanceProbeActiveForGoal = Boolean(maintenanceTargetKey && currentTrialTargetKey === maintenanceTargetKey && activeMaintenanceProbeTargetId === maintenanceTargetKey && isMaintenanceProbeCollection(collectionType));
-              const masteryRow = teachingMasteryRows.find((row) => String(row.id || row.targetId || row.name) === goalKey || row.name === goal.name);
+              const masteryRow = teachingMasteryRows.find((row) => teachingMasteryRowMatchesGoal(row, goal));
               const maintenanceInfo = getGoalMaintenanceInfo(goal);
               const maintenanceProbeCanRunNow = Boolean(maintenanceInfo.hasAvailableMaintenanceProbe);
               const showMaintenanceOperationalBlock = Boolean(maintenanceProbeCanRunNow || maintenanceProbeActiveForGoal);

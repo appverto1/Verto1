@@ -1310,38 +1310,107 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     if (!patient?.id || !Array.isArray(currentPei) || masterySummary.length === 0) return;
 
     const normalizeKey = (value: any) => String(value ?? '').trim().toLowerCase();
+    const normalizeNameKey = (value: any) =>
+      String(value ?? '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+    const readIdentityPayload = (...values: any[]) => {
+      const merged: Record<string, any> = {};
+      values.forEach((value: any) => {
+        if (!value) return;
+        if (typeof value === 'object' && !Array.isArray(value)) {
+          Object.assign(merged, value);
+          return;
+        }
+        if (typeof value === 'string') {
+          try {
+            const parsed = JSON.parse(value);
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) Object.assign(merged, parsed);
+          } catch {
+            // Payload textual antigo nao participa do casamento por ID.
+          }
+        }
+      });
+      return merged;
+    };
+    const uniqueIdentityKeys = (values: any[]) =>
+      values
+        .map((value: any) => normalizeKey(value))
+        .filter((value: string, index: number, list: string[]) => Boolean(value) && list.indexOf(value) === index);
+    const collectMasteryIdentityKeys = (value: any, options: { includeNames?: boolean } = {}) => {
+      const raw = readIdentityPayload(value?.raw_payload, value?.rawPayload, value?.criteria, value?.mastery_criteria, value?.masteryCriteria, value?.source);
+      const ids = uniqueIdentityKeys([
+        value?.targetId,
+        value?.target_id,
+        value?.abaTargetId,
+        value?.aba_target_id,
+        value?.id,
+        value?.goalId,
+        value?.goal_id,
+        value?.peiGoalId,
+        value?.pei_goal_id,
+        value?.skillId,
+        value?.skill_id,
+        value?.localTargetRef,
+        value?.local_target_ref,
+        value?.source?.id,
+        value?.source?.targetId,
+        value?.source?.target_id,
+        value?.source?.goalId,
+        value?.source?.goal_id,
+        value?.source?.peiGoalId,
+        value?.source?.pei_goal_id,
+        value?.source?.skillId,
+        value?.source?.skill_id,
+        value?.source?.localTargetRef,
+        value?.source?.local_target_ref,
+        raw?.targetId,
+        raw?.target_id,
+        raw?.abaTargetId,
+        raw?.aba_target_id,
+        raw?.id,
+        raw?.goalId,
+        raw?.goal_id,
+        raw?.peiGoalId,
+        raw?.pei_goal_id,
+        raw?.skillId,
+        raw?.skill_id,
+        raw?.localTargetRef,
+        raw?.local_target_ref
+      ]).map((key: string) => `id:${key}`);
+      if (options.includeNames === false) return ids;
+      const names = [
+        value?.name,
+        value?.targetName,
+        value?.target_name,
+        value?.title,
+        raw?.name,
+        raw?.targetName,
+        raw?.target_name,
+        raw?.title
+      ]
+        .map((entry: any) => normalizeNameKey(entry))
+        .filter((entry: string, index: number, list: string[]) => Boolean(entry) && list.indexOf(entry) === index)
+        .map((key: string) => `name:${key}`);
+      return [...ids, ...names];
+    };
     const rowByKey = new Map<string, any>();
     masterySummary.forEach((row: any) => {
-      [
-        row?.targetId,
-        row?.target_id,
-        row?.id,
-        row?.goalId,
-        row?.goal_id,
-        row?.name,
-        row?.targetName,
-        row?.target_name
-      ].forEach((value: any) => {
-        const key = normalizeKey(value);
+      collectMasteryIdentityKeys(row).forEach((key: string) => {
         if (key && !rowByKey.has(key)) rowByKey.set(key, row);
       });
     });
 
     let changed = false;
     const updatedPei = currentPei.map((goal: any) => {
-      const row = [
-        goal?.target_id,
-        goal?.targetId,
-        goal?.aba_target_id,
-        goal?.abaTargetId,
-        goal?.id,
-        goal?.goalId,
-        goal?.goal_id,
-        goal?.name,
-        goal?.targetName,
-        goal?.target_name
-      ]
-        .map((value: any) => rowByKey.get(normalizeKey(value)))
+      const rowFromId = collectMasteryIdentityKeys(goal, { includeNames: false })
+        .map((key: string) => rowByKey.get(key))
+        .find(Boolean);
+      const row = rowFromId || collectMasteryIdentityKeys(goal)
+        .map((key: string) => rowByKey.get(key))
         .find(Boolean);
       if (!row) return goal;
 

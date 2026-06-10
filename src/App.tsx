@@ -31,6 +31,7 @@ import {
   getPeiHistoryProgressMarker,
   getPeiProgressResetMarker,
 } from './utils/peiSessionReset';
+import { normalizeAbaMasteryCriterion } from './utils/abaMasteryEngine';
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>;
@@ -4319,9 +4320,40 @@ export default function App() {
       : Array.isArray(targetPatient?.pei)
         ? targetPatient.pei
         : [];
-    const peiGoal = sourcePei.find((goal: any) =>
-      goal.name === title || String(goal?.id || '') === String(sessionMeta?.targetId || '')
-    );
+    const sessionTargetKey = String(sessionMeta?.targetId || sessionMeta?.target_id || '').trim();
+    const sessionGoalKeys = [
+      sessionTargetKey,
+      sessionMeta?.goalId,
+      sessionMeta?.goal_id,
+      sessionMeta?.peiGoalId,
+      sessionMeta?.pei_goal_id,
+      sessionMeta?.skillId,
+      sessionMeta?.skill_id,
+      sessionMeta?.localTargetRef,
+      sessionMeta?.local_target_ref
+    ].map((value: any) => String(value ?? '').trim()).filter(Boolean);
+    const peiGoalMatchesSession = (goal: any) => {
+      const goalKeys = [
+        goal?.target_id,
+        goal?.targetId,
+        goal?.aba_target_id,
+        goal?.abaTargetId,
+        goal?.id,
+        goal?.goalId,
+        goal?.goal_id,
+        goal?.peiGoalId,
+        goal?.pei_goal_id,
+        goal?.skillId,
+        goal?.skill_id,
+        goal?.localTargetRef,
+        goal?.local_target_ref
+      ].map((value: any) => String(value ?? '').trim()).filter(Boolean);
+      if (sessionGoalKeys.length > 0 && goalKeys.length > 0) {
+        return goalKeys.some((key: string) => sessionGoalKeys.includes(key));
+      }
+      return String(goal?.name || '').trim() === String(title || '').trim();
+    };
+    const peiGoal = sourcePei.find((goal: any) => peiGoalMatchesSession(goal));
     
     // Find the skill to get its maxScore
     let skillMaxScore = Number(sessionMeta?.targetMaxScore || peiGoal?.maxScore || 1);
@@ -4333,7 +4365,7 @@ export default function App() {
       domains.forEach((domain: any) => {
         const skills = Array.isArray(domain?.skills) ? domain.skills : [];
         const skill = skills.find((s: any) =>
-          s.name === title || String(s?.id || '') === String(sessionMeta?.targetId || '')
+          s.name === title || sessionGoalKeys.includes(String(s?.id || '').trim())
         );
         if (skill) {
           matchedProtocol = p;
@@ -4369,6 +4401,8 @@ export default function App() {
       icon: "🎯",
       sessionId: sessionMeta?.sessionId || null,
       sessionReferenceDate: sessionMeta?.sessionReferenceDate || sessionStartedAt.slice(0, 10),
+      targetId: sessionTargetKey || null,
+      target_id: sessionTargetKey || null,
       collection_type: sessionMeta?.collectionType || sessionMeta?.trialType || null,
       collectionType: sessionMeta?.collectionType || sessionMeta?.trialType || null,
       created_at: recordedAt
@@ -4422,7 +4456,16 @@ export default function App() {
       ? abaCorrect && sessionMeta.independent && abaPromptLevel.isIndependent
       : abaCorrect && abaPromptLevel.isIndependent;
     const abaCollectionType = String(sessionMeta?.collectionType || 'dtt').toLowerCase();
-    const abaTargetId = String(sessionMeta?.targetId || peiGoal?.id || matchedSkill?.id || title);
+    const abaTargetId = String(
+      sessionTargetKey ||
+        peiGoal?.target_id ||
+        peiGoal?.targetId ||
+        peiGoal?.aba_target_id ||
+        peiGoal?.abaTargetId ||
+        peiGoal?.id ||
+        matchedSkill?.id ||
+        title
+    );
     const abaTrialId = String(sessionMeta?.trialId || sessionMeta?.trial_id || `trial-${newId}`);
     const abaMaintenanceScheduleId = String(
       sessionMeta?.maintenanceScheduleId ||
@@ -4491,6 +4534,10 @@ export default function App() {
             maintenanceScheduleId: abaMaintenanceScheduleId || null,
             maintenance_schedule_id: abaMaintenanceScheduleId || null,
             activeMaintenanceProbe: sessionMeta?.activeMaintenanceProbe || null,
+            peiGoalId: peiGoal?.peiGoalId || peiGoal?.pei_goal_id || peiGoal?.goalId || peiGoal?.goal_id || peiGoal?.id || null,
+            goalId: peiGoal?.goalId || peiGoal?.goal_id || peiGoal?.peiGoalId || peiGoal?.pei_goal_id || peiGoal?.id || null,
+            skillId: peiGoal?.skillId || peiGoal?.skill_id || matchedSkill?.id || null,
+            localTargetRef: peiGoal?.localTargetRef || peiGoal?.local_target_ref || peiGoal?.id || null,
             therapistId: user?.id || null
           }
         });
@@ -4522,31 +4569,59 @@ export default function App() {
 
       let appliedMasteryTarget = 0;
       updatedPei = sourcePei.map((goal: any) => {
-        if (goal.name !== title) return goal;
+        if (!peiGoalMatchesSession(goal)) return goal;
 
-        const configuredMasteryTarget = Number(
-          goal?.mastery_criteria?.required_independent_correct_trials ??
-            goal?.mastery_criteria?.requiredIndependentCorrectTrials ??
-            goal?.masteryCriteria?.required_independent_correct_trials ??
-            goal?.masteryCriteria?.requiredIndependentCorrectTrials ??
-            goal?.meta_sucessos ??
-            goal?.metaSucessos ??
-            goal?.masteryTarget ??
-            goal?.mastery_target
-        );
-        if (!Number.isFinite(configuredMasteryTarget) || configuredMasteryTarget <= 0) {
+        const embeddedCriterion = goal?.mastery_criteria && typeof goal.mastery_criteria === 'object'
+          ? goal.mastery_criteria
+          : goal?.masteryCriteria && typeof goal.masteryCriteria === 'object'
+            ? goal.masteryCriteria
+            : null;
+        const masteryCriterion = normalizeAbaMasteryCriterion(embeddedCriterion) || normalizeAbaMasteryCriterion({
+          type: 'consecutive_independent_correct_count',
+          mastery_criterion_mode: 'consecutive_independent',
+          required_consecutive_independent_correct_trials: goal?.meta_sucessos ?? goal?.metaSucessos ?? goal?.masteryTarget ?? goal?.mastery_target,
+          requires_consecutive_successes: true,
+          is_active: true
+        });
+        const configuredMasteryTarget =
+          masteryCriterion?.requiredConsecutiveIndependentCorrectTrials ||
+          masteryCriterion?.requiredIndependentCorrectTrials ||
+          masteryCriterion?.requiredCorrectTrials ||
+          null;
+        if (!Number.isFinite(Number(configuredMasteryTarget)) || Number(configuredMasteryTarget) <= 0) {
           return goal.status === 'not_started' ? { ...goal, status: 'in_progress' } : goal;
         }
 
-        const masteryTarget = Math.max(1, Math.floor(configuredMasteryTarget));
+        const masteryTarget = Math.max(1, Math.floor(Number(configuredMasteryTarget)));
         appliedMasteryTarget = masteryTarget;
-        const progress = Math.min(Math.round((consecutiveCount / masteryTarget) * 100), 100);
+        const requiresConsecutive = Boolean(masteryCriterion?.requiredConsecutiveIndependentCorrectTrials || masteryCriterion?.requiresConsecutiveSuccesses);
+        const totalIndependentCount = skillHistory.filter((h: any) => h.score === 1).length;
+        const progressCount = requiresConsecutive ? consecutiveCount : totalIndependentCount;
+        const progress = Math.min(Math.round((progressCount / masteryTarget) * 100), 100);
         const isMastered = progress >= 100;
 
-        return { ...goal, status: isMastered ? 'completed' : 'in_progress', progress };
+        return {
+          ...goal,
+          status: isMastered ? 'completed' : 'in_progress',
+          clinicalStatus: isMastered ? 'completed' : goal?.clinicalStatus,
+          clinical_status: isMastered ? 'completed' : goal?.clinical_status,
+          masteryStatus: isMastered ? 'READY_FOR_MAINTENANCE' : goal?.masteryStatus,
+          mastery_status: isMastered ? 'READY_FOR_MAINTENANCE' : goal?.mastery_status,
+          progress,
+          progressPercent: progress,
+          progress_percent: progress,
+          masteryProgressPercent: progress,
+          mastery_progress_percent: progress,
+          criterionProgressCount: progressCount,
+          criterion_progress_count: progressCount,
+          criterionRequiredCount: masteryTarget,
+          criterion_required_count: masteryTarget
+        };
       });
-      const updatedGoal = updatedPei.find((goal: any) => goal.name === title);
+      const updatedGoal = updatedPei.find((goal: any) => peiGoalMatchesSession(goal));
       const isMastered = updatedGoal?.status === 'completed';
+      const criterionProgressCount = Number(updatedGoal?.criterionProgressCount ?? updatedGoal?.criterion_progress_count ?? consecutiveCount);
+      const criterionRequiredCount = Number(updatedGoal?.criterionRequiredCount ?? updatedGoal?.criterion_required_count ?? appliedMasteryTarget);
 
       if (isAbaV2Enabled() && appliedMasteryTarget > 0) {
         try {
@@ -4557,10 +4632,18 @@ export default function App() {
             target_id: abaTargetId,
             target_name: title,
             evaluation_status: isMastered ? 'mastered' : 'not_met',
+            status: isMastered ? 'MASTERED' : 'NOT_MET',
+            statusCode: isMastered ? 'MASTERED' : 'NOT_MET',
             suggested_phase: isMastered ? 'mastered' : 'teaching',
             accuracy_percent: abaCorrect ? 100 : 0,
-            consecutive_successes: consecutiveCount,
+            consecutive_successes: criterionProgressCount,
             min_consecutive_successes: appliedMasteryTarget,
+            criterion_progress_count: criterionProgressCount,
+            criterionProgressCount: criterionProgressCount,
+            criterion_required_count: criterionRequiredCount,
+            criterionRequiredCount: criterionRequiredCount,
+            criterion_progress_label: `${criterionProgressCount}/${criterionRequiredCount}`,
+            criterionProgressLabel: `${criterionProgressCount}/${criterionRequiredCount}`,
             trials_considered: skillHistory.length,
             distinct_therapists_count: 1,
             first_trial_independent: abaIndependent,
@@ -4586,7 +4669,11 @@ export default function App() {
             raw_payload: {
               legacyHistoryId: String(sourceHistoryId || newId),
               previousStatus: peiGoal?.status || null,
-              progress: updatedGoal?.progress ?? null
+              progress: updatedGoal?.progress ?? null,
+              peiGoalId: peiGoal?.peiGoalId || peiGoal?.pei_goal_id || peiGoal?.goalId || peiGoal?.goal_id || peiGoal?.id || null,
+              goalId: peiGoal?.goalId || peiGoal?.goal_id || peiGoal?.peiGoalId || peiGoal?.pei_goal_id || peiGoal?.id || null,
+              skillId: peiGoal?.skillId || peiGoal?.skill_id || matchedSkill?.id || null,
+              localTargetRef: peiGoal?.localTargetRef || peiGoal?.local_target_ref || peiGoal?.id || null
             }
           });
         } catch (error) {

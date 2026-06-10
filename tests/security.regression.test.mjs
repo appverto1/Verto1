@@ -668,8 +668,8 @@ test('aba persistence: frontend records sessions and structured trials offline-f
   );
   assert.match(
     patientDetailCode,
-    /recentRecordLimit = 10[\s\S]*?dataService\.getAbaSessions\(String\(patient\.id\), \{ page: 1, pageSize: recentRecordLimit \}\)[\s\S]*?dataService\.getAbaTrials\(String\(patient\.id\), \{ page: 1, pageSize: recentRecordLimit \}\)[\s\S]*?dataService\.getAbaBehaviorEvents\(String\(patient\.id\), \{ page: 1, pageSize: recentRecordLimit \}\)[\s\S]*?dataService\.getAbaMasteryEvaluations\(String\(patient\.id\), \{ page: 1, pageSize: recentRecordLimit \}\)/m,
-    'PatientDetailView deve carregar sessoes, tentativas, comportamentos e maestria ABA com limite recente.'
+    /recentRecordLimit = 10[\s\S]*?peiProgressRecordLimit = 50[\s\S]*?dataService\.getAbaSessions\(String\(patient\.id\), \{ page: 1, pageSize: recentRecordLimit \}\)[\s\S]*?dataService\.getAbaTrials\(String\(patient\.id\), \{ page: 1, pageSize: peiProgressRecordLimit \}\)[\s\S]*?dataService\.getAbaBehaviorEvents\(String\(patient\.id\), \{ page: 1, pageSize: recentRecordLimit \}\)[\s\S]*?dataService\.getAbaMasteryEvaluations\(String\(patient\.id\), \{ page: 1, pageSize: peiProgressRecordLimit \}\)/m,
+    'PatientDetailView deve carregar sessoes e comportamentos recentes, mantendo tentativas e maestria com janela suficiente para criterio.'
   );
   assert.match(
     `${patientDetailCode}\n${dataServiceCode}`,
