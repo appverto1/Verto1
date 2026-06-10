@@ -316,6 +316,9 @@ function resolveActivePatientPriceId(): string {
 }
 
 const ACTIVE_PATIENT_BILLING_MODEL = 'active_patients';
+const DEMO_SANDBOX_BILLING_MODEL = 'demo';
+const DEMO_SANDBOX_TEMPLATE_NAME = 'Clinica Demo Verto';
+const DEMO_SANDBOX_SEED_VERSION = '2026-06-demo-v1';
 
 function queueActivePatientSync(clinicId: string | null | undefined, trigger: string) {
   const safeClinicId = sanitizeString(clinicId, 120);
@@ -323,15 +326,22 @@ function queueActivePatientSync(clinicId: string | null | undefined, trigger: st
   if (!safeClinicId || !activePatientPriceId) return;
 
   try {
-    const stripe = getStripe();
-    void syncClinicActivePatientAddonQuantity({
-      supabase,
-      stripe,
-      clinicId: safeClinicId,
-      trigger,
-      activePatientPriceId,
-      logger: console
-    }).catch((error: any) => {
+    void (async () => {
+      const demoState = await fetchClinicDemoState(safeClinicId);
+      if (demoState.isDemo) {
+        console.log('[Stripe Sync] Clinica demo sem cobranca real. Sync em fila ignorado.', { clinicId: safeClinicId });
+        return;
+      }
+      const stripe = getStripe();
+      await syncClinicActivePatientAddonQuantity({
+        supabase,
+        stripe,
+        clinicId: safeClinicId,
+        trigger,
+        activePatientPriceId,
+        logger: console
+      });
+    })().catch((error: any) => {
       console.error('[CRITICAL] Falha ao sincronizar adicional de pacientes ativos (não bloqueante).', {
         clinicId: safeClinicId,
         trigger,
@@ -4219,6 +4229,512 @@ async function updateRowsWithSchemaFallback(params: {
   return { success: false, error: lastError || new Error('Falha ao atualizar registro.') };
 }
 
+type DemoClinicState = {
+  id: string;
+  name: string;
+  isDemo: boolean;
+  billingModel: string;
+  demoStatus: string;
+  demoExpiresAt: string | null;
+  demoSource: string | null;
+  demoTemplateId: string | null;
+  demoOwnerUserId: string | null;
+};
+
+function isDemoExpiredAt(value: any): boolean {
+  const raw = sanitizeString(value, 80);
+  if (!raw) return false;
+  const time = new Date(raw).getTime();
+  return Number.isFinite(time) && time <= Date.now();
+}
+
+function isDemoSessionUser(user: any): boolean {
+  const billingModel = sanitizeString(user?.billingModel || user?.billing_model, 40).toLowerCase();
+  const activeWorkspaceId = sanitizeString(user?.activeWorkspaceId || user?.clinicId || user?.clinic_id, 120);
+  const workspaces = Array.isArray(user?.workspaces) ? user.workspaces : [];
+  const activeWorkspace = workspaces.find((workspace: any) => sanitizeString(workspace?.clinicId, 120) === activeWorkspaceId);
+  return Boolean(
+    user?.isDemoUser ||
+    user?.is_demo_user ||
+    billingModel === DEMO_SANDBOX_BILLING_MODEL ||
+    activeWorkspace?.isDemo ||
+    sanitizeString(activeWorkspace?.billingModel, 40).toLowerCase() === DEMO_SANDBOX_BILLING_MODEL
+  );
+}
+
+async function fetchClinicDemoState(clinicId: string | null | undefined): Promise<DemoClinicState> {
+  const safeClinicId = sanitizeString(clinicId, 120);
+  const fallback: DemoClinicState = {
+    id: safeClinicId,
+    name: '',
+    isDemo: false,
+    billingModel: '',
+    demoStatus: 'active',
+    demoExpiresAt: null,
+    demoSource: null,
+    demoTemplateId: null,
+    demoOwnerUserId: null
+  };
+  if (!safeClinicId || !supabase) return fallback;
+
+  const run = (columns: string) =>
+    supabase
+      .from('clinics')
+      .select(columns)
+      .eq('id', safeClinicId)
+      .maybeSingle();
+
+  let result = await run('id,name,is_demo,demo_status,demo_expires_at,demo_source,demo_template_id,demo_owner_user_id,billing_model,subscription_status');
+  if (result.error && extractMissingColumnName(result.error)) {
+    result = await run('id,name,subscription_status');
+  }
+  if (result.error || !result.data) return fallback;
+
+  const row = result.data as any;
+  const billingModel = sanitizeString(row?.billing_model, 40).toLowerCase();
+  const subscriptionStatus = sanitizeString(row?.subscription_status, 40).toLowerCase();
+  return {
+    id: sanitizeString(row?.id, 120) || safeClinicId,
+    name: sanitizeString(row?.name, 180),
+    isDemo: row?.is_demo === true || billingModel === DEMO_SANDBOX_BILLING_MODEL || subscriptionStatus === DEMO_SANDBOX_BILLING_MODEL,
+    billingModel,
+    demoStatus: sanitizeString(row?.demo_status, 40).toLowerCase() || 'active',
+    demoExpiresAt: sanitizeString(row?.demo_expires_at, 80) || null,
+    demoSource: sanitizeString(row?.demo_source, 40) || null,
+    demoTemplateId: sanitizeString(row?.demo_template_id, 120) || null,
+    demoOwnerUserId: sanitizeString(row?.demo_owner_user_id, 120) || null
+  };
+}
+
+async function resolveDemoAccessBlock(user: any): Promise<{ blocked: boolean; status: number; error: string; message: string } | null> {
+  const clinicId = currentClinicId(user);
+  if (!clinicId || !isDemoSessionUser(user)) return null;
+  const state = await fetchClinicDemoState(clinicId);
+  if (!state.isDemo) return null;
+  const expired =
+    state.demoStatus === 'expired' ||
+    state.demoStatus === 'archived' ||
+    isDemoExpiredAt(state.demoExpiresAt) ||
+    isDemoExpiredAt(user?.demoExpiresAt || user?.demo_expires_at);
+  if (!expired) return null;
+  return {
+    blocked: true,
+    status: 403,
+    error: 'DEMO_SANDBOX_EXPIRED',
+    message: 'Este ambiente demo expirou. Solicite reativacao para continuar.'
+  };
+}
+
+async function writeDemoRowWithSchemaFallback(params: {
+  tableName: string;
+  payload: Record<string, any>;
+  operation?: 'insert' | 'upsert' | 'update';
+  onConflict?: string;
+  filters?: Array<{ column: string; value: any }>;
+  context?: string;
+}) {
+  let safePayload: Record<string, any> = cleanObject({ ...params.payload });
+  let lastError: any = null;
+
+  for (let attempt = 0; attempt < 30 && Object.keys(safePayload).length > 0; attempt += 1) {
+    let query: any;
+    if (params.operation === 'update') {
+      query = supabase.from(params.tableName).update(safePayload);
+      for (const filter of params.filters || []) {
+        const column = sanitizeString(filter.column, 120);
+        if (column) query = query.eq(column, filter.value);
+      }
+    } else if (params.operation === 'upsert') {
+      query = params.onConflict
+        ? supabase.from(params.tableName).upsert([safePayload], { onConflict: params.onConflict })
+        : supabase.from(params.tableName).upsert([safePayload]);
+    } else {
+      query = supabase.from(params.tableName).insert([safePayload]);
+    }
+
+    const { error } = await query;
+    if (!error) return { success: true, data: safePayload, error: null };
+    if (isMissingRelationError(error)) return { success: false, data: null, error, skipped: true };
+    lastError = error;
+
+    const missingColumn = extractMissingColumnName(error);
+    if (missingColumn && Object.prototype.hasOwnProperty.call(safePayload, missingColumn)) {
+      delete safePayload[missingColumn];
+      console.warn('[Demo Sandbox] coluna opcional removida:', {
+        table: params.tableName,
+        context: sanitizeString(params.context || params.tableName, 160),
+        missingColumn
+      });
+      continue;
+    }
+    return { success: false, data: null, error };
+  }
+
+  return { success: false, data: null, error: lastError || new Error('Falha ao persistir sandbox demo.') };
+}
+
+async function deleteDemoRowsByColumn(tableName: string, column: string, values: string[] | string | null | undefined) {
+  const safeColumn = sanitizeString(column, 120);
+  const safeValues = (Array.isArray(values) ? values : [values])
+    .map((value) => sanitizeString(value, 120))
+    .filter(Boolean);
+  if (!safeColumn || safeValues.length === 0) return { deleted: 0, skipped: false };
+  const query = safeValues.length === 1
+    ? supabase.from(tableName).delete().eq(safeColumn, safeValues[0])
+    : supabase.from(tableName).delete().in(safeColumn, safeValues);
+  const { error } = await query;
+  if (!error) return { deleted: safeValues.length, skipped: false };
+  if (isMissingRelationError(error) || extractMissingColumnName(error)) return { deleted: 0, skipped: true };
+  throw error;
+}
+
+async function persistDemoSandboxAuditLog(params: {
+  clinicId: string;
+  actorUserId?: string | null;
+  action: string;
+  details?: Record<string, any>;
+}) {
+  try {
+    await writeDemoRowWithSchemaFallback({
+      tableName: 'demo_sandbox_audit_logs',
+      operation: 'insert',
+      context: 'demo_audit',
+      payload: {
+        id: crypto.randomUUID(),
+        clinic_id: params.clinicId,
+        actor_user_id: sanitizeString(params.actorUserId, 120) || null,
+        action: sanitizeString(params.action, 80),
+        details: redactForLogs(params.details || {}),
+        created_at: new Date().toISOString()
+      }
+    });
+  } catch (error: any) {
+    console.warn('[Demo Sandbox] Falha ao registrar auditoria demo:', sanitizeString(error?.message || String(error), 240));
+  }
+}
+
+async function fetchDemoPatientIds(clinicId: string): Promise<string[]> {
+  const safeClinicId = sanitizeString(clinicId, 120);
+  if (!safeClinicId) return [];
+  const { data, error } = await supabase
+    .from('patients')
+    .select('id,is_demo')
+    .eq('clinic_id', safeClinicId)
+    .limit(2000);
+  if (error) {
+    if (isMissingRelationError(error)) return [];
+    if (extractMissingColumnName(error)) {
+      const fallback = await supabase
+        .from('patients')
+        .select('id')
+        .eq('clinic_id', safeClinicId)
+        .limit(2000);
+      if (fallback.error) {
+        if (isMissingRelationError(fallback.error) || extractMissingColumnName(fallback.error)) return [];
+        throw fallback.error;
+      }
+      return (fallback.data || [])
+        .map((row: any) => sanitizeString(row?.id, 120))
+        .filter(Boolean);
+    }
+    throw error;
+  }
+  return (data || [])
+    .filter((row: any) => row?.is_demo === true || String(row?.id || '').startsWith('demo-'))
+    .map((row: any) => sanitizeString(row?.id, 120))
+    .filter(Boolean);
+}
+
+async function resetDemoClinicData(clinicId: string) {
+  const safeClinicId = sanitizeString(clinicId, 120);
+  if (!safeClinicId) throw new Error('clinic_id ausente para reset demo.');
+  const patientIds = await fetchDemoPatientIds(safeClinicId);
+
+  const patientScopedTables = [
+    'aba_trials',
+    'aba_behavior_events',
+    'aba_interval_records',
+    'aba_interval_summaries',
+    'aba_abc_events',
+    'aba_mastery_evaluations',
+    'aba_maintenance_schedules',
+    'aba_maintenance_probe_results',
+    'aba_session_summaries',
+    'aba_sessions',
+    'aba_targets',
+    'patient_records',
+    'patient_files',
+    'notes',
+    'history',
+    'patient_logs',
+    'tasks',
+    'assigned_tasks',
+    'patient_financial_plans',
+    'appointments'
+  ];
+  for (const tableName of patientScopedTables) {
+    await deleteDemoRowsByColumn(tableName, 'patient_id', patientIds);
+  }
+
+  const clinicScopedTables = [
+    'clinic_payers',
+    'clinic_rooms',
+    'billing_sync_audit_logs'
+  ];
+  for (const tableName of clinicScopedTables) {
+    await deleteDemoRowsByColumn(tableName, 'clinic_id', safeClinicId);
+  }
+
+  await deleteDemoRowsByColumn('patients', 'id', patientIds);
+  return { patientIdsRemoved: patientIds.length };
+}
+
+function buildDemoPatientRows(clinicId: string, ownerUserId: string | null) {
+  const now = new Date().toISOString();
+  const base = [
+    { id: uuidFromStableString(`demo-patient:${clinicId}:pedro`), name: 'Pedro Henrique Demo', email: 'pedro.demo@example.invalid', type: 'child' },
+    { id: uuidFromStableString(`demo-patient:${clinicId}:ana`), name: 'Ana Clara Demo', email: 'ana.demo@example.invalid', type: 'child' },
+    { id: uuidFromStableString(`demo-patient:${clinicId}:lucas`), name: 'Lucas Martins Demo', email: 'lucas.demo@example.invalid', type: 'child' }
+  ];
+  return base.map((patient, index) => ({
+    id: patient.id,
+    clinic_id: clinicId,
+    name: patient.name,
+    email: patient.email,
+    phone: null,
+    cpf: null,
+    age: index === 0 ? 6 : index === 1 ? 8 : 5,
+    type: patient.type,
+    patient_profile_type: 'ABA',
+    panel_type: 'ABA',
+    diagnosis: 'Dados ficticios para demonstracao',
+    status: 'active',
+    is_active: true,
+    is_demo: true,
+    therapist_id: ownerUserId,
+    metadata: {
+      demo: true,
+      seedVersion: DEMO_SANDBOX_SEED_VERSION,
+      source: 'demo_sandbox'
+    },
+    created_at: now,
+    updated_at: now
+  }));
+}
+
+async function seedDemoClinicData(params: {
+  clinicId: string;
+  ownerUserId?: string | null;
+  source: 'template' | 'prospect' | 'presentation';
+}) {
+  const clinicId = sanitizeString(params.clinicId, 120);
+  const ownerUserId = sanitizeString(params.ownerUserId, 120) || null;
+  const now = new Date().toISOString();
+  const patients = buildDemoPatientRows(clinicId, ownerUserId);
+  const counts: Record<string, number> = {
+    patients: 0,
+    appointments: 0,
+    abaTargets: 0,
+    abaSessions: 0,
+    histories: 0,
+    notes: 0
+  };
+
+  for (const patient of patients) {
+    const result = await writeDemoRowWithSchemaFallback({
+      tableName: 'patients',
+      operation: 'upsert',
+      onConflict: 'id',
+      context: 'demo_seed_patient',
+      payload: patient
+    });
+    if (!result.error) counts.patients += 1;
+  }
+
+  await writeDemoRowWithSchemaFallback({
+    tableName: 'clinic_payers',
+    operation: 'upsert',
+    onConflict: 'id',
+    context: 'demo_seed_payer',
+    payload: {
+      id: `demo-payer-${clinicId.slice(0, 12)}`,
+      clinic_id: clinicId,
+      organization_id: clinicId,
+      name: 'Saude Exemplo',
+      service_type: 'ABA',
+      is_active: true,
+      metadata: { demo: true, seedVersion: DEMO_SANDBOX_SEED_VERSION },
+      created_at: now,
+      updated_at: now
+    }
+  });
+
+  for (const [index, patient] of patients.entries()) {
+    const patientId = sanitizeString(patient.id, 120);
+    const sessionId = uuidFromStableString(`demo-aba-session:${clinicId}:${patientId}`);
+    const targetId = uuidFromStableString(`demo-target:${clinicId}:${patientId}`);
+    const appointmentId = uuidFromStableString(`demo-appointment:${clinicId}:${patientId}`);
+    const appointmentDate = new Date(Date.now() + (index + 1) * 86400000).toISOString().slice(0, 10);
+
+    const appointmentResult = await writeDemoRowWithSchemaFallback({
+      tableName: 'appointments',
+      operation: 'upsert',
+      onConflict: 'id',
+      context: 'demo_seed_appointment',
+      payload: {
+        id: appointmentId,
+        clinic_id: clinicId,
+        organization_id: clinicId,
+        patient_id: patientId,
+        patient_name: patient.name,
+        patient_email: patient.email,
+        therapist_id: ownerUserId,
+        date: appointmentDate,
+        time: index === 0 ? '09:00' : index === 1 ? '14:00' : '16:00',
+        status: 'confirmed',
+        type: 'ABA',
+        duration_minutes: 50,
+        source: 'demo_sandbox',
+        metadata: { demo: true, seedVersion: DEMO_SANDBOX_SEED_VERSION },
+        created_at: now,
+        updated_at: now
+      }
+    });
+    if (!appointmentResult.error) counts.appointments += 1;
+
+    const targetResult = await writeDemoRowWithSchemaFallback({
+      tableName: 'aba_targets',
+      operation: 'upsert',
+      onConflict: 'id',
+      context: 'demo_seed_target',
+      payload: {
+        id: targetId,
+        clinic_id: clinicId,
+        organization_id: clinicId,
+        patient_id: patientId,
+        title: index === 0 ? 'Imita 2 movimentos motores grossos' : index === 1 ? 'Realiza duas atividades simples de encaixe' : 'Emite 2 palavras selecionadas',
+        description: 'Habilidade ficticia para demonstracao do fluxo ABA.',
+        program_name: 'VB-MAPP - Nivel 1',
+        domain: index === 2 ? 'Mando Nivel 1' : 'Imitacao Motora Nivel 1',
+        status: index === 0 ? 'ACQUIRED' : 'IN_TRAINING',
+        progress_percentage: index === 0 ? 100 : 60,
+        mastery_criterion: { type: 'independent_consecutive_correct', required: index === 0 ? 2 : 5 },
+        metadata: { demo: true, seedVersion: DEMO_SANDBOX_SEED_VERSION },
+        created_at: now,
+        updated_at: now
+      }
+    });
+    if (!targetResult.error) counts.abaTargets += 1;
+
+    const sessionResult = await writeDemoRowWithSchemaFallback({
+      tableName: 'aba_sessions',
+      operation: 'upsert',
+      onConflict: 'id',
+      context: 'demo_seed_session',
+      payload: {
+        id: sessionId,
+        clinic_id: clinicId,
+        organization_id: clinicId,
+        patient_id: patientId,
+        appointment_id: appointmentId,
+        therapist_id: ownerUserId,
+        status: 'completed',
+        started_at: now,
+        ended_at: now,
+        metadata: { demo: true, seedVersion: DEMO_SANDBOX_SEED_VERSION },
+        created_at: now,
+        updated_at: now
+      }
+    });
+    if (!sessionResult.error) counts.abaSessions += 1;
+
+    await writeDemoRowWithSchemaFallback({
+      tableName: 'aba_trials',
+      operation: 'insert',
+      context: 'demo_seed_trial',
+      payload: {
+        id: crypto.randomUUID(),
+        clinic_id: clinicId,
+        organization_id: clinicId,
+        patient_id: patientId,
+        session_id: sessionId,
+        target_id: targetId,
+        response: index === 0 ? 'independent' : 'prompted',
+        score: index === 0 ? 1 : 0.6,
+        occurred_at: now,
+        metadata: { demo: true, seedVersion: DEMO_SANDBOX_SEED_VERSION },
+        created_at: now,
+        updated_at: now
+      }
+    });
+
+    await writeDemoRowWithSchemaFallback({
+      tableName: 'history',
+      operation: 'upsert',
+      onConflict: 'id',
+      context: 'demo_seed_history',
+      payload: {
+        id: uuidFromStableString(`demo-history:${clinicId}:${patientId}:${index + 1}`),
+        clinic_id: clinicId,
+        patient_id: patientId,
+        patient_email: patient.email,
+        type: 'family',
+        visibility: 'family',
+        content: 'Registro familiar ficticio para demonstracao.',
+        image_path: `demo/${clinicId}/${patientId}/familia-${index + 1}.webp`,
+        source: 'demo_sandbox',
+        metadata: { demo: true, seedVersion: DEMO_SANDBOX_SEED_VERSION },
+        created_at: now,
+        updated_at: now
+      }
+    });
+    counts.histories += 1;
+
+    await writeDemoRowWithSchemaFallback({
+      tableName: 'notes',
+      operation: 'upsert',
+      onConflict: 'id',
+      context: 'demo_seed_note',
+      payload: {
+        id: uuidFromStableString(`demo-note:${clinicId}:${patientId}:${index + 1}`),
+        clinic_id: clinicId,
+        patient_id: patientId,
+        patient_email: patient.email,
+        type: 'professional',
+        visibility: 'professional',
+        subject: 'Nota demo',
+        content: 'Nota clinica ficticia para demonstracao.',
+        source: 'demo_sandbox',
+        metadata: { demo: true, seedVersion: DEMO_SANDBOX_SEED_VERSION },
+        created_at: now,
+        updated_at: now
+      }
+    });
+    counts.notes += 1;
+  }
+
+  await writeDemoRowWithSchemaFallback({
+    tableName: 'demo_sandbox_templates',
+    operation: 'upsert',
+    onConflict: 'id',
+    context: 'demo_template_snapshot',
+    payload: {
+      id: uuidFromStableString(`demo-template:${clinicId}`),
+      clinic_id: clinicId,
+      name: DEMO_SANDBOX_TEMPLATE_NAME,
+      seed_version: DEMO_SANDBOX_SEED_VERSION,
+      payload: {
+        source: params.source,
+        fakePatients: patients.map((patient) => ({ id: patient.id, name: patient.name, email: patient.email }))
+      },
+      created_at: now,
+      updated_at: now
+    }
+  });
+
+  return counts;
+}
+
 function stableHashPayload(input: any): string {
   const normalize = (value: any): any => {
     if (Array.isArray(value)) return value.map(normalize);
@@ -6231,20 +6747,26 @@ function normalizeClinicRoomSpecialties(value: any) {
 }
 
 async function fetchUserWorkspaces(userId: string) {
-  const { data, error } = await supabase
-    .from('clinic_memberships')
-    .select(`
+  const run = (clinicColumns: string) =>
+    supabase
+      .from('clinic_memberships')
+      .select(`
       clinic_id,
       role,
       status,
       clinics:clinic_id (
-        id,
-        name,
-        logo_url
+        ${clinicColumns}
       )
     `)
-    .eq('user_id', userId)
-    .eq('status', 'active');
+      .eq('user_id', userId)
+      .eq('status', 'active');
+
+  let { data, error } = await run('id,name,logo_url,is_demo,demo_status,demo_expires_at,demo_source,billing_model');
+  if (error && extractMissingColumnName(error)) {
+    const fallback = await run('id,name,logo_url');
+    data = fallback.data;
+    error = fallback.error;
+  }
 
   if (error) {
     return [];
@@ -6256,7 +6778,12 @@ async function fetchUserWorkspaces(userId: string) {
       clinicId: sanitizeString(clinic.id || membership.clinic_id, 120),
       clinicName: sanitizeString(clinic.name, 160) || 'Clinica',
       clinicLogoUrl: sanitizeSessionUrl(clinic.logo_url),
-      role: ensureRole(membership.role) ? membership.role : 'therapist'
+      role: ensureRole(membership.role) ? membership.role : 'therapist',
+      isDemo: clinic?.is_demo === true || sanitizeString(clinic?.billing_model, 40).toLowerCase() === DEMO_SANDBOX_BILLING_MODEL,
+      demoStatus: sanitizeString(clinic?.demo_status, 40).toLowerCase() || null,
+      demoExpiresAt: sanitizeString(clinic?.demo_expires_at, 80) || null,
+      demoSource: sanitizeString(clinic?.demo_source, 40) || null,
+      billingModel: sanitizeString(clinic?.billing_model, 40).toLowerCase() || null
     };
   }).filter((w: any) => w.clinicId);
 }
@@ -6377,7 +6904,12 @@ function compactWorkspacesForSession(workspaces: any[]) {
     clinicId: sanitizeString(w?.clinicId, 120),
     clinicName: sanitizeString(w?.clinicName, 160) || 'Clinica',
     clinicLogoUrl: sanitizeSessionUrl(w?.clinicLogoUrl),
-    role: ensureRole(w?.role) ? w.role : 'therapist'
+    role: ensureRole(w?.role) ? w.role : 'therapist',
+    isDemo: Boolean(w?.isDemo || w?.is_demo),
+    demoStatus: sanitizeString(w?.demoStatus || w?.demo_status, 40).toLowerCase() || null,
+    demoExpiresAt: sanitizeString(w?.demoExpiresAt || w?.demo_expires_at, 80) || null,
+    demoSource: sanitizeString(w?.demoSource || w?.demo_source, 40) || null,
+    billingModel: sanitizeString(w?.billingModel || w?.billing_model, 40).toLowerCase() || null
   })).filter((w: any) => w.clinicId);
 }
 
@@ -6412,6 +6944,16 @@ function buildSessionUserPayload(input: any) {
     : null;
   const resolvedRole = selectedWorkspace?.role || input?.role;
   const mustSelectWorkspace = workspaces.length > 1 && !activeWorkspaceId;
+  const resolvedBillingModel = sanitizeString(
+    selectedWorkspace?.billingModel || input?.billingModel || input?.billing_model,
+    40
+  ).toLowerCase();
+  const resolvedIsDemoUser = Boolean(
+    input?.isDemoUser ||
+    input?.is_demo_user ||
+    selectedWorkspace?.isDemo ||
+    resolvedBillingModel === DEMO_SANDBOX_BILLING_MODEL
+  );
 
   return {
     id: sanitizeString(input?.id, 120),
@@ -6426,6 +6968,12 @@ function buildSessionUserPayload(input: any) {
     subscriptionStatus: sanitizeString(input?.subscriptionStatus, 40) || null,
     planName: sanitizeString(input?.planName, 80) || null,
     planPrice: asSafeNumber(input?.planPrice, 0, 100000) || null,
+    billingModel: resolvedBillingModel || null,
+    isDemoUser: resolvedIsDemoUser,
+    demoRole: sanitizeString(input?.demoRole || input?.demo_role, 80) || null,
+    demoExpiresAt: sanitizeString(selectedWorkspace?.demoExpiresAt || input?.demoExpiresAt || input?.demo_expires_at, 80) || null,
+    demoStatus: sanitizeString(selectedWorkspace?.demoStatus || input?.demoStatus || input?.demo_status, 40).toLowerCase() || null,
+    demoSource: sanitizeString(selectedWorkspace?.demoSource || input?.demoSource || input?.demo_source, 40) || null,
     treatmentStatus: sanitizeString(input?.treatmentStatus, 40) || null,
     clinicId: selectedWorkspace?.clinicId || sanitizeString(input?.clinicId, 120) || null,
     activeWorkspaceId,
@@ -8738,6 +9286,13 @@ async function startServer() {
           message: 'Confirme seu e-mail para acessar funcionalidades sensíveis.'
         });
       }
+      const demoBlock = await resolveDemoAccessBlock(req.session.user);
+      if (demoBlock?.blocked) {
+        return res.status(demoBlock.status).json({
+          error: demoBlock.error,
+          message: demoBlock.message
+        });
+      }
       if (await isBillingAccessBlocked(req.session.user)) {
         return res.status(402).json({
           error: 'BILLING_ACCESS_BLOCKED',
@@ -8791,6 +9346,10 @@ async function startServer() {
               subscriptionStatus: profile.subscription_status,
               planName: profile.plan_name,
               planPrice: profile.plan_price,
+              billingModel: profile.billing_model,
+              isDemoUser: profile.is_demo_user,
+              demoRole: profile.demo_role,
+              demoExpiresAt: profile.demo_expires_at,
               status: sanitizeString((profile as any)?.status, 60) || null,
               activationRequired: Boolean((user as any)?.user_metadata?.patient_activation_required),
               clinicId: selectedWorkspace?.clinicId || profile.clinic_id,
@@ -8815,6 +9374,13 @@ async function startServer() {
               return res.status(403).json({
                 error: 'EMAIL_NOT_CONFIRMED',
                 message: 'Confirme seu e-mail para acessar funcionalidades sensíveis.'
+              });
+            }
+            const demoBlock = await resolveDemoAccessBlock(req.session.user);
+            if (demoBlock?.blocked) {
+              return res.status(demoBlock.status).json({
+                error: demoBlock.error,
+                message: demoBlock.message
               });
             }
             if (await isBillingAccessBlocked(req.session.user)) {
@@ -10094,6 +10660,10 @@ async function startServer() {
         subscriptionStatus: profile.subscription_status,
         planName: profile.plan_name,
         planPrice: profile.plan_price,
+        billingModel: profile.billing_model,
+        isDemoUser: profile.is_demo_user,
+        demoRole: profile.demo_role,
+        demoExpiresAt: profile.demo_expires_at,
         status: sanitizeString((profile as any)?.status, 60) || null,
         treatmentStatus,
         clinicId: clinicForSession,
@@ -10748,6 +11318,10 @@ async function startServer() {
         subscriptionStatus: profile.subscription_status,
         planName: profile.plan_name,
         planPrice: profile.plan_price,
+        billingModel: profile.billing_model,
+        isDemoUser: profile.is_demo_user,
+        demoRole: profile.demo_role,
+        demoExpiresAt: profile.demo_expires_at,
         status: sanitizeString((profile as any)?.status, 60) || null,
         treatmentStatus,
         clinicId: clinicForSession,
@@ -11365,6 +11939,10 @@ async function startServer() {
         subscriptionStatus: profile.subscription_status,
         planName: profile.plan_name,
         planPrice: profile.plan_price,
+        billingModel: profile.billing_model,
+        isDemoUser: profile.is_demo_user,
+        demoRole: profile.demo_role,
+        demoExpiresAt: profile.demo_expires_at,
         activationRequired: authActivationRequired,
         treatmentStatus,
         clinicId: clinicForSession,
@@ -11498,6 +12076,11 @@ async function startServer() {
       req.session.user.clinicId = clinicId;
       req.session.user.activeWorkspaceId = clinicId;
       req.session.user.role = selected.role;
+      req.session.user.billingModel = selected.billingModel || req.session.user.billingModel || null;
+      req.session.user.isDemoUser = Boolean(req.session.user.isDemoUser || selected.isDemo);
+      req.session.user.demoStatus = selected.demoStatus || null;
+      req.session.user.demoExpiresAt = selected.demoExpiresAt || null;
+      req.session.user.demoSource = selected.demoSource || null;
       req.session.user.workspaces = compactWorkspacesForSession(workspaces);
       req.session.user = buildSessionUserPayload(req.session.user);
 
@@ -11612,6 +12195,13 @@ async function startServer() {
       }
 
       const clinicId = currentClinicId(user);
+      const demoState = await fetchClinicDemoState(clinicId);
+      if (demoState.isDemo && !hasGlobalClinicAccess(user)) {
+        return res.status(403).json({
+          success: false,
+          error: 'Ambiente demo não permite convidar membros reais.'
+        });
+      }
       const { data: clinic } = await supabase
         .from('clinics')
         .select('name')
@@ -37524,6 +38114,407 @@ async function startServer() {
     return res.status(403).json({ error: 'Acesso negado. Apenas administradores podem acessar esta rota.' });
   };
 
+  app.post('/api/admin/demo/create-presentation', checkAuth, checkPlatformAdmin, async (req: any, res) => {
+    try {
+      const actor = req.session.user;
+      const ownerEmail = sanitizeEmail(req.body?.ownerEmail || req.body?.email);
+      const ownerName = sanitizeString(req.body?.ownerName || req.body?.name, 180) || 'Equipe Demo Verto';
+      const clinicId = sanitizeString(req.body?.clinicId, 120) || uuidFromStableString('verto:presentation-demo-clinic');
+      const clinicName = sanitizeString(req.body?.clinicName, 180) || DEMO_SANDBOX_TEMPLATE_NAME;
+      const now = new Date().toISOString();
+      let ownerUserId = sanitizeString(actor?.id, 120) || null;
+
+      if (ownerEmail) {
+        const existingAuthUser = await findAuthUserByEmail(ownerEmail);
+        ownerUserId = sanitizeString(existingAuthUser?.id, 120) || ownerUserId || crypto.randomUUID();
+      }
+
+      const clinicResult = await writeDemoRowWithSchemaFallback({
+        tableName: 'clinics',
+        operation: 'upsert',
+        onConflict: 'id',
+        context: 'demo_presentation_clinic',
+        payload: {
+          id: clinicId,
+          owner_user_id: ownerUserId,
+          name: clinicName,
+          subscription_status: DEMO_SANDBOX_BILLING_MODEL,
+          billing_model: DEMO_SANDBOX_BILLING_MODEL,
+          is_demo: true,
+          demo_source: 'presentation',
+          demo_status: 'active',
+          demo_owner_user_id: ownerUserId,
+          demo_template_id: DEMO_SANDBOX_SEED_VERSION,
+          created_at: now,
+          updated_at: now
+        }
+      });
+      if (clinicResult.error) throw clinicResult.error;
+      const persistedDemoState = await fetchClinicDemoState(clinicId);
+      if (!persistedDemoState.isDemo) {
+        return res.status(500).json({ success: false, error: 'Não foi possível confirmar a persistência do ambiente demo.' });
+      }
+
+      if (ownerUserId) {
+        const membershipResult = await writeDemoRowWithSchemaFallback({
+          tableName: 'clinic_memberships',
+          operation: 'upsert',
+          onConflict: 'user_id,clinic_id',
+          context: 'demo_presentation_membership',
+          payload: {
+            user_id: ownerUserId,
+            clinic_id: clinicId,
+            role: 'coordinator',
+            status: 'active',
+            created_at: now
+          }
+        });
+        if (membershipResult.error) throw membershipResult.error;
+      }
+
+      await resetDemoClinicData(clinicId);
+      const seeded = await seedDemoClinicData({ clinicId, ownerUserId, source: 'presentation' });
+      await persistDemoSandboxAuditLog({
+        clinicId,
+        actorUserId: actor?.id,
+        action: 'create_presentation_demo',
+        details: { seeded, source: 'presentation' }
+      });
+
+      return res.json({
+        success: true,
+        data: {
+          clinicId,
+          clinicName,
+          ownerUserId,
+          isDemo: true,
+          billingModel: DEMO_SANDBOX_BILLING_MODEL,
+          seeded
+        }
+      });
+    } catch (error: any) {
+      logRouteDbError('/api/admin/demo/create-presentation', error, { actorId: req.session.user?.id });
+      return res.status(500).json({ success: false, error: 'Não foi possível criar o ambiente demo.' });
+    }
+  });
+
+  app.post('/api/admin/demo/create-prospect-sandbox', checkAuth, checkPlatformAdmin, async (req: any, res) => {
+    try {
+      const actor = req.session.user;
+      const ownerEmail = sanitizeEmail(req.body?.ownerEmail || req.body?.email);
+      const ownerName = sanitizeString(req.body?.ownerName || req.body?.name, 180);
+      const prospectName = sanitizeString(req.body?.prospectName || req.body?.clinicName || ownerName, 180);
+      const requestedClinicName = sanitizeString(req.body?.clinicName, 180);
+      const clinicName = requestedClinicName || (prospectName ? `Sandbox Demo - ${prospectName}` : 'Sandbox Demo Verto');
+      const requestedDays = Math.round(Number(req.body?.expiresInDays || req.body?.expires_in_days || 14));
+      const expiresInDays = Math.max(1, Math.min(60, Number.isFinite(requestedDays) ? requestedDays : 14));
+      const expiresAt = new Date(Date.now() + expiresInDays * 86400000).toISOString();
+      const templateClinicId = sanitizeString(req.body?.templateClinicId || req.body?.template_clinic_id, 120) || null;
+      const now = new Date().toISOString();
+
+      if (!ownerEmail) {
+        return res.status(400).json({ success: false, error: 'Informe o e-mail do responsavel pelo sandbox.' });
+      }
+      if (templateClinicId) {
+        const templateState = await fetchClinicDemoState(templateClinicId);
+        if (!templateState.isDemo) {
+          return res.status(409).json({ success: false, error: 'Template informado não é um ambiente demo.' });
+        }
+      }
+
+      let authUser = await findAuthUserByEmail(ownerEmail);
+      if (!authUser?.id) {
+        const temporaryPassword = `${crypto.randomBytes(18).toString('base64')}Aa1!`;
+        const created = await supabase.auth.admin.createUser({
+          email: ownerEmail,
+          password: temporaryPassword,
+          email_confirm: false,
+          user_metadata: {
+            full_name: ownerName || ownerEmail.split('@')[0],
+            demo_role: 'prospect_demo'
+          }
+        });
+        if (created.error) throw created.error;
+        authUser = created.data?.user || null;
+      }
+      const ownerUserId = sanitizeString(authUser?.id, 120);
+      if (!ownerUserId) {
+        return res.status(500).json({ success: false, error: 'Não foi possível preparar o usuário demo.' });
+      }
+
+      const existingProfile = await fetchProfileByEmailWithSchemaFallback({
+        supabase,
+        email: ownerEmail,
+        logger: console
+      });
+      const existingProfileData = existingProfile.data as any;
+      const existingProfileIsDemo =
+        existingProfileData?.is_demo_user === true ||
+        sanitizeString(existingProfileData?.billing_model, 40).toLowerCase() === DEMO_SANDBOX_BILLING_MODEL ||
+        !existingProfileData?.id;
+      const clinicId = crypto.randomUUID();
+
+      if (existingProfileIsDemo) {
+        const profileResult = await writeDemoRowWithSchemaFallback({
+          tableName: 'users',
+          operation: 'upsert',
+          onConflict: 'id',
+          context: 'demo_prospect_profile',
+          payload: {
+            id: ownerUserId,
+            email: ownerEmail,
+            name: ownerName || existingProfileData?.name || ownerEmail.split('@')[0],
+            role: 'coordinator',
+            clinic_id: clinicId,
+            subscription_status: DEMO_SANDBOX_BILLING_MODEL,
+            billing_model: DEMO_SANDBOX_BILLING_MODEL,
+            plan_name: 'Demo Verto',
+            plan_price: 0,
+            is_demo_user: true,
+            demo_role: 'prospect_demo',
+            demo_expires_at: expiresAt,
+            created_at: existingProfileData?.created_at || now,
+            updated_at: now
+          }
+        });
+        if (profileResult.error && !profileResult.skipped) throw profileResult.error;
+      }
+
+      const clinicResult = await writeDemoRowWithSchemaFallback({
+        tableName: 'clinics',
+        operation: 'upsert',
+        onConflict: 'id',
+        context: 'demo_prospect_clinic',
+        payload: {
+          id: clinicId,
+          owner_user_id: ownerUserId,
+          name: clinicName,
+          subscription_status: DEMO_SANDBOX_BILLING_MODEL,
+          billing_model: DEMO_SANDBOX_BILLING_MODEL,
+          is_demo: true,
+          demo_source: 'prospect',
+          demo_status: 'active',
+          demo_expires_at: expiresAt,
+          demo_owner_user_id: ownerUserId,
+          demo_template_id: templateClinicId || DEMO_SANDBOX_SEED_VERSION,
+          demo_notes: prospectName ? `Prospect: ${prospectName}` : null,
+          created_at: now,
+          updated_at: now
+        }
+      });
+      if (clinicResult.error) throw clinicResult.error;
+      const persistedDemoState = await fetchClinicDemoState(clinicId);
+      if (!persistedDemoState.isDemo) {
+        return res.status(500).json({ success: false, error: 'Não foi possível confirmar a persistência do sandbox demo.' });
+      }
+
+      const membershipResult = await writeDemoRowWithSchemaFallback({
+        tableName: 'clinic_memberships',
+        operation: 'upsert',
+        onConflict: 'user_id,clinic_id',
+        context: 'demo_prospect_membership',
+        payload: {
+          user_id: ownerUserId,
+          clinic_id: clinicId,
+          role: 'coordinator',
+          status: 'active',
+          created_at: now
+        }
+      });
+      if (membershipResult.error) throw membershipResult.error;
+
+      const seeded = await seedDemoClinicData({ clinicId, ownerUserId, source: 'prospect' });
+      let accessLink: string | null = null;
+      try {
+        accessLink = await generateSupabaseActionLink({
+          type: 'signup',
+          email: ownerEmail,
+          redirectTo: getActivationRedirectUrl('coordinator', ownerEmail)
+        });
+      } catch {
+        accessLink = null;
+      }
+
+      if (accessLink) {
+        void sendTransactionalEmailSafe({
+          to: ownerEmail,
+          subject: '[DEMO] Acesso ao sandbox Verto',
+          html: `
+            <p>Olá${ownerName ? `, ${ownerName}` : ''}.</p>
+            <p>Seu sandbox demo da Verto foi preparado com dados fictícios e expira em ${new Date(expiresAt).toLocaleDateString('pt-BR')}.</p>
+            <p><a href="${accessLink}">Ativar acesso ao sandbox demo</a></p>
+            <p>Este ambiente não realiza cobranças Stripe reais e não contém dados de pacientes reais.</p>
+          `,
+          context: 'demo_prospect_sandbox'
+        });
+      }
+
+      await persistDemoSandboxAuditLog({
+        clinicId,
+        actorUserId: actor?.id,
+        action: 'create_prospect_sandbox',
+        details: { ownerEmail: maskEmail(ownerEmail), expiresAt, seeded, templateClinicId }
+      });
+
+      return res.json({
+        success: true,
+        data: {
+          clinicId,
+          clinicName,
+          ownerUserId,
+          accessLink,
+          expiresAt,
+          isDemo: true,
+          billingModel: DEMO_SANDBOX_BILLING_MODEL,
+          seeded
+        }
+      });
+    } catch (error: any) {
+      logRouteDbError('/api/admin/demo/create-prospect-sandbox', error, {
+        actorId: req.session.user?.id,
+        ownerEmail: maskEmail(sanitizeEmail(req.body?.ownerEmail || req.body?.email) || '')
+      });
+      return res.status(500).json({ success: false, error: 'Não foi possível criar o sandbox demo.' });
+    }
+  });
+
+  app.post('/api/admin/demo/:clinicId/reset', checkAuth, checkPlatformAdmin, async (req: any, res) => {
+    try {
+      const clinicId = sanitizeString(req.params?.clinicId, 120);
+      const confirmationText = sanitizeString(req.body?.confirmationText || req.body?.confirmText, 80);
+      const confirmed = req.body?.confirm === true || confirmationText === 'RESET DEMO';
+      if (!clinicId || !confirmed) {
+        return res.status(400).json({ success: false, error: 'Confirme o reset com RESET DEMO.' });
+      }
+      const state = await fetchClinicDemoState(clinicId);
+      if (!state.isDemo) {
+        return res.status(403).json({ success: false, error: 'Reset permitido apenas para ambientes demo.' });
+      }
+      const reset = await resetDemoClinicData(clinicId);
+      const seeded = await seedDemoClinicData({
+        clinicId,
+        ownerUserId: state.demoOwnerUserId || req.session.user?.id,
+        source: state.demoSource === 'presentation' ? 'presentation' : 'prospect'
+      });
+      await writeDemoRowWithSchemaFallback({
+        tableName: 'clinics',
+        operation: 'update',
+        context: 'demo_reset_clinic',
+        filters: [{ column: 'id', value: clinicId }],
+        payload: {
+          demo_reset_at: new Date().toISOString(),
+          demo_status: 'active',
+          updated_at: new Date().toISOString()
+        }
+      });
+      await persistDemoSandboxAuditLog({
+        clinicId,
+        actorUserId: req.session.user?.id,
+        action: 'reset_demo_sandbox',
+        details: { reset, seeded }
+      });
+      return res.json({ success: true, data: { clinicId, reset, seeded } });
+    } catch (error: any) {
+      logRouteDbError('/api/admin/demo/:clinicId/reset', error, { clinicId: req.params?.clinicId });
+      return res.status(500).json({ success: false, error: 'Não foi possível resetar o sandbox demo.' });
+    }
+  });
+
+  app.post('/api/admin/demo/:clinicId/expire', checkAuth, checkPlatformAdmin, async (req: any, res) => {
+    try {
+      const clinicId = sanitizeString(req.params?.clinicId, 120);
+      const state = await fetchClinicDemoState(clinicId);
+      if (!clinicId || !state.isDemo) {
+        return res.status(403).json({ success: false, error: 'Expiração permitida apenas para ambientes demo.' });
+      }
+      const now = new Date().toISOString();
+      await writeDemoRowWithSchemaFallback({
+        tableName: 'clinics',
+        operation: 'update',
+        context: 'demo_expire_clinic',
+        filters: [{ column: 'id', value: clinicId }],
+        payload: { demo_status: 'expired', demo_expires_at: now, updated_at: now }
+      });
+      await writeDemoRowWithSchemaFallback({
+        tableName: 'users',
+        operation: 'update',
+        context: 'demo_expire_user',
+        filters: [{ column: 'id', value: state.demoOwnerUserId }],
+        payload: { demo_expires_at: now, updated_at: now }
+      });
+      await persistDemoSandboxAuditLog({ clinicId, actorUserId: req.session.user?.id, action: 'expire_demo_sandbox', details: { expiredAt: now } });
+      return res.json({ success: true, data: { clinicId, expiresAt: now, status: 'expired' } });
+    } catch (error: any) {
+      logRouteDbError('/api/admin/demo/:clinicId/expire', error, { clinicId: req.params?.clinicId });
+      return res.status(500).json({ success: false, error: 'Não foi possível expirar o sandbox demo.' });
+    }
+  });
+
+  app.post('/api/admin/demo/:clinicId/reactivate', checkAuth, checkPlatformAdmin, async (req: any, res) => {
+    try {
+      const clinicId = sanitizeString(req.params?.clinicId, 120);
+      const state = await fetchClinicDemoState(clinicId);
+      if (!clinicId || !state.isDemo) {
+        return res.status(403).json({ success: false, error: 'Reativação permitida apenas para ambientes demo.' });
+      }
+      const requestedDays = Math.round(Number(req.body?.expiresInDays || req.body?.expires_in_days || 14));
+      const expiresInDays = Math.max(1, Math.min(60, Number.isFinite(requestedDays) ? requestedDays : 14));
+      const expiresAt = new Date(Date.now() + expiresInDays * 86400000).toISOString();
+      await writeDemoRowWithSchemaFallback({
+        tableName: 'clinics',
+        operation: 'update',
+        context: 'demo_reactivate_clinic',
+        filters: [{ column: 'id', value: clinicId }],
+        payload: { demo_status: 'active', demo_expires_at: expiresAt, updated_at: new Date().toISOString() }
+      });
+      await writeDemoRowWithSchemaFallback({
+        tableName: 'users',
+        operation: 'update',
+        context: 'demo_reactivate_user',
+        filters: [{ column: 'id', value: state.demoOwnerUserId }],
+        payload: { demo_expires_at: expiresAt, updated_at: new Date().toISOString() }
+      });
+      await persistDemoSandboxAuditLog({ clinicId, actorUserId: req.session.user?.id, action: 'reactivate_demo_sandbox', details: { expiresAt } });
+      return res.json({ success: true, data: { clinicId, expiresAt, status: 'active' } });
+    } catch (error: any) {
+      logRouteDbError('/api/admin/demo/:clinicId/reactivate', error, { clinicId: req.params?.clinicId });
+      return res.status(500).json({ success: false, error: 'Não foi possível reativar o sandbox demo.' });
+    }
+  });
+
+  app.get('/api/admin/demo/sandboxes', checkAuth, checkPlatformAdmin, async (_req: any, res) => {
+    try {
+      const result = await supabase
+        .from('clinics')
+        .select('id,name,is_demo,demo_status,demo_expires_at,demo_source,demo_owner_user_id,billing_model,created_at,updated_at')
+        .eq('is_demo', true)
+        .order('created_at', { ascending: false })
+        .limit(200);
+      if (result.error) {
+        if (extractMissingColumnName(result.error) || isMissingRelationError(result.error)) {
+          return res.json({ success: true, data: [], warning: 'Schema demo ainda não aplicado.' });
+        }
+        throw result.error;
+      }
+      const data = (result.data || []).map((row: any) => ({
+        id: sanitizeString(row?.id, 120),
+        name: sanitizeString(row?.name, 180),
+        isDemo: row?.is_demo === true,
+        demoStatus: sanitizeString(row?.demo_status, 40) || null,
+        demoExpiresAt: sanitizeString(row?.demo_expires_at, 80) || null,
+        demoSource: sanitizeString(row?.demo_source, 40) || null,
+        demoOwnerUserId: sanitizeString(row?.demo_owner_user_id, 120) || null,
+        billingModel: sanitizeString(row?.billing_model, 40) || null,
+        createdAt: sanitizeString(row?.created_at, 80) || null,
+        updatedAt: sanitizeString(row?.updated_at, 80) || null
+      }));
+      return res.json({ success: true, data });
+    } catch (error: any) {
+      logRouteDbError('/api/admin/demo/sandboxes', error, {});
+      return res.status(500).json({ success: false, error: 'Não foi possível listar sandboxes demo.' });
+    }
+  });
+
   app.get('/api/admin/stats', checkAuth, checkAdmin, async (req, res) => {
     try {
       // Get total users
@@ -39125,12 +40116,21 @@ async function startServer() {
   app.post('/api/stripe/create-checkout', checkAuth, async (req, res) => {
     try {
       const user = req.session.user;
-      const stripe = getStripe();
       const origin = req.headers.origin || req.protocol + '://' + req.get('host');
       const clinicId = sanitizeString(
         user.activeWorkspaceId || user.clinicId || user.id,
         120
       );
+      const isPatientCheckout = sanitizeString(user.role, 40).toLowerCase() === 'patient';
+      const demoState = await fetchClinicDemoState(clinicId);
+      if (demoState.isDemo || isDemoSessionUser(user)) {
+        return res.status(403).json({
+          success: false,
+          error: isPatientCheckout
+            ? 'Ambiente demo não abre cobrança real.'
+            : 'Ambiente demo não cobra Stripe real.'
+        });
+      }
 
       const persistedCustomerId = await resolvePersistedStripeCustomerId({
         userId: sanitizeString(user.id, 120),
@@ -39138,11 +40138,11 @@ async function startServer() {
         email: sanitizeEmail(user.email)
       });
 
-      const isPatientCheckout = sanitizeString(user.role, 40).toLowerCase() === 'patient';
       const activePatientPriceId = isPatientCheckout ? '' : resolveActivePatientPriceId();
       if (!isPatientCheckout && !activePatientPriceId) {
         return res.status(503).json({ success: false, error: 'Cobranca por paciente ativo ainda nao esta configurada.' });
       }
+      const stripe = getStripe();
 
       const lineItem: Stripe.Checkout.SessionCreateParams.LineItem = isPatientCheckout
         ? {
@@ -39198,7 +40198,6 @@ async function startServer() {
 
   app.post('/api/stripe/customer-portal-session', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
-      const stripe = getStripe();
       const sessionUser = req.session?.user || {};
       const safeEmail = sanitizeEmail(sessionUser?.email);
       if (!safeEmail) {
@@ -39209,6 +40208,13 @@ async function startServer() {
         sessionUser.activeWorkspaceId || sessionUser.clinicId || sessionUser.id,
         120
       );
+      const demoState = await fetchClinicDemoState(clinicId);
+      if (demoState.isDemo || isDemoSessionUser(sessionUser)) {
+        return res.status(403).json({
+          success: false,
+          error: 'Ambiente demo não abre faturamento real.'
+        });
+      }
       const persistedCustomerId = await resolvePersistedStripeCustomerId({
         userId: sanitizeString(sessionUser.id, 120),
         clinicId,
@@ -39216,6 +40222,7 @@ async function startServer() {
       });
 
       let customerId = persistedCustomerId;
+      const stripe = getStripe();
       if (!customerId) {
         const customers = await stripe.customers.list({ email: safeEmail, limit: 10 });
         customerId = sanitizeString(customers.data?.[0]?.id, 200);
@@ -39285,6 +40292,22 @@ async function startServer() {
       const clinicId = currentClinicId(req.session.user);
       if (!clinicId || !isUuid(clinicId)) {
         return res.status(400).json({ error: 'Workspace da clínica não identificado.' });
+      }
+      const demoState = await fetchClinicDemoState(clinicId);
+      if (demoState.isDemo || isDemoSessionUser(req.session.user)) {
+        return res.json({
+          success: true,
+          data: {
+            billingModel: DEMO_SANDBOX_BILLING_MODEL,
+            subscriptionStatus: DEMO_SANDBOX_BILLING_MODEL,
+            stripeEnabled: false,
+            demo: true,
+            activePatients: 0,
+            estimatedAmount: 0,
+            estimatedAmountCents: 0,
+            stripeCalculatesFinalAmount: false
+          }
+        });
       }
 
       const summary = await getClinicBillingSummary({

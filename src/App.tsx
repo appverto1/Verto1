@@ -5138,6 +5138,19 @@ export default function App() {
     user?.portalVerified !== true &&
     user?.accountState !== 'PORTAL_VERIFIED' &&
     (user?.activationRequired === true || user?.firstLoginCompleted === false);
+  const activeWorkspaceForDemo = Array.isArray(user?.workspaces)
+    ? user.workspaces.find((workspace: any) => String(workspace?.clinicId || '') === String(user?.activeWorkspaceId || user?.clinicId || ''))
+    : null;
+  const isDemoEnvironment = Boolean(
+    user?.isDemoUser ||
+    user?.billingModel === 'demo' ||
+    activeWorkspaceForDemo?.isDemo ||
+    activeWorkspaceForDemo?.billingModel === 'demo'
+  );
+  const rawDemoExpiresAt = String(user?.demoExpiresAt || activeWorkspaceForDemo?.demoExpiresAt || '').trim();
+  const demoExpirationLabel = rawDemoExpiresAt && !Number.isNaN(new Date(rawDemoExpiresAt).getTime())
+    ? new Date(rawDemoExpiresAt).toLocaleDateString('pt-BR')
+    : '';
 
   return (
     <React.Fragment>
@@ -5231,6 +5244,14 @@ export default function App() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+      {user && isDemoEnvironment && (
+        <div className="pointer-events-none fixed bottom-3 left-3 z-[9997] max-w-[calc(100vw-24px)] rounded-lg border border-amber-200 bg-amber-50/95 px-3 py-2 text-left shadow-lg shadow-amber-900/10 backdrop-blur">
+          <p className="text-[11px] font-black uppercase tracking-[0.16em] text-amber-700">Ambiente demo</p>
+          <p className="text-xs font-semibold text-slate-700">
+            Dados ficticios para demonstracao{demoExpirationLabel ? ` · expira em ${demoExpirationLabel}` : ''}
+          </p>
         </div>
       )}
       <LazyImportBoundary fallback={lazyFallback}>

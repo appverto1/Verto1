@@ -85,6 +85,34 @@ async function patchClinicBillingSafely(
   }
 }
 
+async function getClinicDemoBillingState(
+  supabase: SupabaseClientLike,
+  clinicId: string
+): Promise<{ isDemo: boolean; billingModel: string; subscriptionStatus: string }> {
+  const safeClinicId = toSafeString(clinicId, 120);
+  if (!safeClinicId) return { isDemo: false, billingModel: '', subscriptionStatus: '' };
+
+  const run = (selectColumns: string) =>
+    supabase
+      .from('clinics')
+      .select(selectColumns)
+      .eq('id', safeClinicId)
+      .limit(1);
+
+  let result = await run('is_demo,billing_model,subscription_status');
+  if (result.error && extractMissingColumnName(result.error)) {
+    result = await run('subscription_status');
+  }
+  if (result.error) return { isDemo: false, billingModel: '', subscriptionStatus: '' };
+
+  const row = Array.isArray(result.data) ? result.data[0] : result.data;
+  return {
+    isDemo: row?.is_demo === true || toSafeString(row?.billing_model, 40).toLowerCase() === 'demo',
+    billingModel: toSafeString(row?.billing_model, 40).toLowerCase(),
+    subscriptionStatus: toSafeString(row?.subscription_status, 40).toLowerCase()
+  };
+}
+
 export async function getBillableActivePatientCount(params: {
   supabase: SupabaseClientLike;
   clinicId?: string | null;
@@ -235,6 +263,12 @@ export async function syncClinicActivePatientAddonQuantity(params: {
     return { success: true, activePatients: 0, billableQuantity: 1, synced: false, reason: 'price_id_ausente' };
   }
 
+  const demoState = await getClinicDemoBillingState(params.supabase, clinicId);
+  if (demoState.isDemo) {
+    logger.log('[Stripe Sync] Clínica demo sem cobrança real. Sync ignorado.', { clinicId });
+    return { success: true, activePatients: 0, billableQuantity: 1, synced: false, reason: 'demo_billing_disabled' };
+  }
+
   const activePatients = await getBillableActivePatientCount({ supabase: params.supabase, clinicId });
   const billableQuantity = Math.max(1, activePatients);
   const clinicEmails = await resolveClinicEmails(params.supabase, clinicId);
@@ -372,11 +406,19 @@ export async function reportAllClinicsActivePatientUsage(params: {
   logger?: Pick<Console, 'log' | 'warn' | 'error'>;
 }): Promise<Array<Awaited<ReturnType<typeof reportClinicActivePatientUsage>>>> {
   const logger = params.logger || console;
-  const clinicsResult = await params.supabase
+  let clinicsResult = await params.supabase
     .from('clinics')
-    .select('id,subscription_status,stripe_subscription_id,stripe_subscription_item_id')
+    .select('id,subscription_status,stripe_subscription_id,stripe_subscription_item_id,is_demo,billing_model')
     .in('subscription_status', ['active', 'trialing', 'past_due', 'delinquent'])
     .limit(10000);
+
+  if (clinicsResult.error && extractMissingColumnName(clinicsResult.error)) {
+    clinicsResult = await params.supabase
+      .from('clinics')
+      .select('id,subscription_status,stripe_subscription_id,stripe_subscription_item_id')
+      .in('subscription_status', ['active', 'trialing', 'past_due', 'delinquent'])
+      .limit(10000);
+  }
 
   if (clinicsResult.error) {
     throw clinicsResult.error;
@@ -386,6 +428,11 @@ export async function reportAllClinicsActivePatientUsage(params: {
   for (const clinic of clinicsResult.data || []) {
     const clinicId = toSafeString((clinic as any)?.id, 120);
     if (!clinicId) continue;
+    const isDemo = (clinic as any)?.is_demo === true || toSafeString((clinic as any)?.billing_model, 40).toLowerCase() === 'demo';
+    if (isDemo) {
+      results.push({ success: true, clinicId, activePatients: 0, reported: false, reason: 'demo_billing_disabled' });
+      continue;
+    }
     try {
       results.push(await reportClinicActivePatientUsage({
         supabase: params.supabase,
@@ -424,6 +471,12 @@ export async function createClinicMeteredSubscription(params: {
   const clinicName = toSafeString(params.clinicName, 180) || 'Clínica Verto';
   const priceId = toSafeString(params.activePatientPriceId, 120);
   if (!clinicId || !email || !priceId) return null;
+
+  const demoState = await getClinicDemoBillingState(params.supabase, clinicId);
+  if (demoState.isDemo) {
+    logger.warn('[Stripe Sync] Assinatura Stripe não criada para clínica demo.', { clinicId });
+    return null;
+  }
 
   const { data: clinicRows } = await params.supabase
     .from('clinics')
