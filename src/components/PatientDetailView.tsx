@@ -47,6 +47,7 @@ import {
   buildPeiSessionProgressReset,
   getPeiHistoryProgressMarker,
   getPeiProgressResetMarker,
+  isPeiClinicalRowAfterProgressReset,
 } from '../utils/peiSessionReset';
 import { AFLS_ADULT_SOCIAL_PARTICIPATION_PROTOCOL } from '../constants/aflsProtocol';
 import { VBMAPP_LEVEL_1_CANONICAL_PROTOCOL } from '../constants/vbmappLevel1Protocol';
@@ -5200,7 +5201,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   };
   const getPersistedAbaMasteryProgress = (goal: any, target: number) => {
     const evaluations = (Array.isArray(abaMasteryEvaluations) ? abaMasteryEvaluations : [])
-      .filter((evaluation: any) => rowMatchesGoalEvidence(evaluation, goal, { allowNameFallback: true }))
+      .filter((evaluation: any) =>
+        rowMatchesGoalEvidence(evaluation, goal, { allowNameFallback: true }) &&
+        isPeiClinicalRowAfterProgressReset(goal, evaluation)
+      )
       .sort((a: any, b: any) => {
         const aTime = new Date(a?.evaluated_at || a?.evaluatedAt || a?.created_at || a?.createdAt || 0).getTime();
         const bTime = new Date(b?.evaluated_at || b?.evaluatedAt || b?.created_at || b?.createdAt || 0).getTime();
@@ -5222,7 +5226,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         schedule,
         scheduleId: schedule?.id || schedule?.schedule_id || schedule?.scheduleId,
         targetId: schedule?.target_id || schedule?.targetId
-      }) && scheduleMatchesGoalEvidence(schedule, goal)
+      }) &&
+      scheduleMatchesGoalEvidence(schedule, goal) &&
+      isPeiClinicalRowAfterProgressReset(goal, schedule)
     );
     if (matchingSchedule) return true;
 
@@ -9368,8 +9374,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                                         value={isGoalAcquired(goal) ? 'completed' : goal.status}
                                         onChange={(e) => {
                                           const nextStatus = e.target.value;
-                                          const nextGoal = { ...goal, status: nextStatus };
-                                          const updatedPEI = peiGoals.map((g: any) => g.id === goal.id ? { ...g, status: nextStatus } : g);
+                                          const resetAt = Date.now();
+                                          const nextGoal = nextStatus === 'completed'
+                                            ? { ...goal, status: nextStatus }
+                                            : { ...buildPeiSessionProgressReset([{ ...goal, status: nextStatus }], resetAt)[0], status: nextStatus };
+                                          const updatedPEI = peiGoals.map((g: any) => g.id === goal.id ? nextGoal : g);
                                           onUpdatePatient({ ...patient, pei: updatedPEI });
                                           if (nextStatus === 'completed' && patient?.id && abaV2Enabled) {
                                             void ensurePeiMaintenanceScheduleSelection({ ...nextGoal, progressPercent: 100 });
@@ -9380,11 +9389,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                                         <option value="in_progress">Em Treino</option>
                                         <option value="completed">Adquirido</option>
                                       </select>
-                                      {patientCategory === 'Criança' && !isGoalAcquired(goal) && (
+                                      {patientCategory === 'Criança' && (
                                         <button 
                                           onClick={() => {
                                             if (confirm("Deseja zerar o progresso de maestria desta meta? Isso reiniciará a contagem de acertos consecutivos.")) {
-                                              const updatedPEI = peiGoals.map((g: any) => g.id === goal.id ? { ...g, id: Date.now(), progress: 0, status: 'not_started' } : g);
+                                              const resetAt = Date.now();
+                                              const updatedPEI = peiGoals.map((g: any) => g.id === goal.id ? buildPeiSessionProgressReset([g], resetAt)[0] : g);
                                               onUpdatePatient({ ...patient, pei: updatedPEI });
                                             }
                                           }}

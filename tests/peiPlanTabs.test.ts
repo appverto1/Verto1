@@ -39,7 +39,7 @@ test('Ensino preserva lista atual de metas e acao de sessao', () => {
   const teachingBlock = patientDetailCode.match(/activePeiPlanSubtab === 'teaching'[\s\S]*?activePeiPlanSubtab === 'maintenance'/)?.[0] || '';
   assert.match(teachingBlock, /Adicionar Meta do Protocolo/);
   assert.match(teachingBlock, /Metas Ativas/);
-  assert.match(teachingBlock, /patient\.pei && patient\.pei\.length > 0/);
+  assert.match(teachingBlock, /peiGoals && peiGoals\.length > 0/);
   assert.match(patientDetailCode, /requestSessionStart\('fullscreen'\)/);
   assert.match(teachingBlock, /MasteryDots/);
 });
@@ -57,13 +57,33 @@ test('Ensino exibe criterio e origem sem editor inline da habilidade', () => {
 test('Restaurar dados de sessao zera progresso PEI antes de abrir sessao', () => {
   const resetAt = new Date('2026-06-04T12:00:00.000Z').getTime();
   const resetPei = buildPeiSessionProgressReset([
-    { id: 'goal-1', name: 'Contato visual', status: 'completed', progress: 100 },
+    {
+      id: 'goal-1',
+      name: 'Contato visual',
+      status: 'completed',
+      progress: 100,
+      progressPercent: 100,
+      clinical_status: 'COMPLETED',
+      clinicalStatus: 'COMPLETED',
+      mastery_status: 'MASTERED',
+      masteryStatus: 'MASTERED',
+      criteriaMet: true,
+      isMastered: true
+    },
     { id: 'goal-2', name: 'Imitacao', status: 'in_progress', progress: 60 },
     { id: 'goal-3', name: 'Arquivado', status: 'archived', progress: 80 }
   ], resetAt);
 
   assert.equal(resetPei[0].status, 'in_progress');
   assert.equal(resetPei[0].progress, 0);
+  assert.equal(resetPei[0].progressPercent, 0);
+  assert.equal(resetPei[0].clinical_status, 'ACQUISITION');
+  assert.equal(resetPei[0].clinicalStatus, 'ACQUISITION');
+  assert.equal(resetPei[0].mastery_status, null);
+  assert.equal(resetPei[0].masteryStatus, null);
+  assert.equal('criteriaMet' in resetPei[0], false);
+  assert.equal('isMastered' in resetPei[0], false);
+  assert.equal(isPeiMaintenanceEligibleSkill(resetPei[0]), false);
   assert.equal(resetPei[0].sessionProgressResetAt, resetAt);
   assert.equal(resetPei[0].sessionRestorePreviousStatus, 'completed');
   assert.equal(resetPei[1].progressResetAt, resetAt);
@@ -113,6 +133,12 @@ test('Restaurar dados de sessao zera progresso PEI antes de abrir sessao', () =>
   assert.match(patientDetailCode, /const updateResult = await onUpdatePatient/);
   assert.match(patientDetailCode, /setSessionPatientOverride\(restoredPatient\)/);
   assert.match(patientDetailCode, /patient=\{\{ \.\.\.sessionModePatient/);
+  assert.match(patientDetailCode, /isPeiClinicalRowAfterProgressReset\(goal, evaluation\)/);
+  assert.match(patientDetailCode, /isPeiClinicalRowAfterProgressReset\(goal, schedule\)/);
+  const teachingBlock = patientDetailCode.match(/activePeiPlanSubtab === 'teaching'[\s\S]*?activePeiPlanSubtab === 'maintenance'/)?.[0] || '';
+  assert.doesNotMatch(teachingBlock, /patientCategory === 'CrianÃ§a' && !isGoalAcquired\(goal\)|patientCategory === 'Criança' && !isGoalAcquired\(goal\)/);
+  assert.doesNotMatch(teachingBlock, /\{ \.\.\.g, id: Date\.now\(\), progress: 0/);
+  assert.match(teachingBlock, /buildPeiSessionProgressReset\(\[g\], resetAt\)\[0\]/);
   assert.match(sessionModeCode, /isPeiClinicalRowAfterProgressReset/);
   assert.match(sessionModeCode, /filter\(\(schedule: any\) => isPeiClinicalRowAfterProgressReset\(goal, schedule\)\)/);
   assert.match(sessionModeCode, /filter\(\(result: any\) => isPeiClinicalRowAfterProgressReset\(goal, result\)\)/);

@@ -63,6 +63,21 @@ const PEI_MAINTENANCE_FIELDS_TO_DELETE = [
   'acquired_at'
 ];
 
+const PEI_ACQUISITION_FIELDS_TO_DELETE = [
+  'isMastered',
+  'is_mastered',
+  'isAcquired',
+  'is_acquired',
+  'criteriaMet',
+  'criterionMet',
+  'masteryCriterionMet',
+  'masteryMet',
+  'masteredAt',
+  'mastered_at',
+  'acquiredAt',
+  'acquired_at'
+];
+
 type PeiSessionProgressResetOptions = {
   clearMaintenance?: boolean;
 };
@@ -84,16 +99,25 @@ const normalizeMaintenanceStatusValue = (value: unknown) =>
 const isMaintenanceStatusValue = (value: unknown) =>
   PEI_MAINTENANCE_STATUS_VALUES.has(normalizeMaintenanceStatusValue(value));
 
-const clearPeiMaintenanceData = (goal: any, resetAt: number) => {
+const clearPeiAcquisitionData = (goal: any, resetAt: number) => {
   const nextGoal = {
     ...goal,
-    sessionMaintenanceClearedAt: resetAt,
-    maintenanceClearedAt: resetAt,
+    progress: 0,
+    progressPercent: 0,
+    progress_percent: 0,
+    masteryProgressPercent: 0,
+    mastery_progress_percent: 0,
+    criterionProgressCount: 0,
+    criterion_progress_count: 0,
+    consecutive_successes: 0,
+    consecutiveSuccesses: 0,
+    sessionMasteryClearedAt: resetAt,
+    masteryClearedAt: resetAt,
     sessionRestorePreviousClinicalStatus: goal?.clinical_status ?? goal?.clinicalStatus ?? null,
     sessionRestorePreviousMasteryStatus: goal?.mastery_status ?? goal?.masteryStatus ?? goal?.evaluation_status ?? goal?.evaluationStatus ?? null
   };
 
-  PEI_MAINTENANCE_FIELDS_TO_DELETE.forEach((field) => {
+  PEI_ACQUISITION_FIELDS_TO_DELETE.forEach((field) => {
     delete nextGoal[field];
   });
 
@@ -115,6 +139,22 @@ const clearPeiMaintenanceData = (goal: any, resetAt: number) => {
   return nextGoal;
 };
 
+const clearPeiMaintenanceData = (goal: any, resetAt: number) => {
+  const nextGoal = clearPeiAcquisitionData({
+    ...goal,
+    sessionMaintenanceClearedAt: resetAt,
+    maintenanceClearedAt: resetAt,
+    sessionRestorePreviousClinicalStatus: goal?.clinical_status ?? goal?.clinicalStatus ?? null,
+    sessionRestorePreviousMasteryStatus: goal?.mastery_status ?? goal?.masteryStatus ?? goal?.evaluation_status ?? goal?.evaluationStatus ?? null
+  }, resetAt);
+
+  PEI_MAINTENANCE_FIELDS_TO_DELETE.forEach((field) => {
+    delete nextGoal[field];
+  });
+
+  return nextGoal;
+};
+
 export const buildPeiSessionProgressReset = (
   pei: any[],
   resetAt: number,
@@ -125,7 +165,7 @@ export const buildPeiSessionProgressReset = (
     : Date.now();
 
   return (Array.isArray(pei) ? pei : []).map((goal: any) => {
-    const resetGoal = {
+    const resetGoal = clearPeiAcquisitionData({
       ...goal,
       progress: 0,
       progressResetAt: safeResetAt,
@@ -134,7 +174,7 @@ export const buildPeiSessionProgressReset = (
       sessionRestorePreviousStatus: goal?.status || null,
       sessionRestorePreviousProgress: Number.isFinite(Number(goal?.progress)) ? Number(goal.progress) : null,
       status: normalizePeiStatusAfterSessionReset(goal?.status)
-    };
+    }, safeResetAt);
     return options.clearMaintenance ? clearPeiMaintenanceData(resetGoal, safeResetAt) : resetGoal;
   });
 };
