@@ -996,6 +996,18 @@ test('registro de tentativa ABA calcula maestria com historico local atualizado'
   assert.doesNotMatch(handlerCode, /const updatedHistory = \[newHistoryItem, \.\.\.history\]/);
 });
 
+test('ensino usa evidencia ABA persistida para nao ficar preso em progresso legado', () => {
+  assert.match(patientDetailCode, /const peiProgressRecordLimit = 50/);
+  assert.match(patientDetailCode, /dataService\.getAbaTrials\(String\(patient\.id\), \{ page: 1, pageSize: peiProgressRecordLimit \}\)/);
+  assert.match(patientDetailCode, /dataService\.getAbaMasteryEvaluations\(String\(patient\.id\), \{ page: 1, pageSize: peiProgressRecordLimit \}\)/);
+  assert.match(patientDetailCode, /const hasPersistedGoalMasteryEvidence = \(goal: any\) =>/);
+  assert.match(patientDetailCode, /isActivePeiMaintenanceScheduleRow\(\{[\s\S]*?scheduleId: schedule\?\.id[\s\S]*?targetId: schedule\?\.target_id/m);
+  assert.match(patientDetailCode, /getPersistedAbaMasteryProgress\(goal, target\) >= target/);
+  assert.match(patientDetailCode, /const structuredProgress = goal \? getStructuredAbaTrialProgress\(goal, mode, target, resetMarker\) : 0/);
+  assert.match(patientDetailCode, /return Math\.min\(Math\.max\(legacyProgress, structuredProgress, persistedProgress\), target\)/);
+  assert.match(patientDetailCode, /<MasteryDots count=\{getMasteryProgress\(goal\) \|\| 0\} status=\{isGoalAcquired\(goal\) \? 'completed' : goal\.status\}/);
+});
+
 test('ensure de habilidade adquirida e evento SKILL_ACQUIRED sao idempotentes', () => {
   const eventStart = serverCode.indexOf('const persistPeiSkillAcquiredMasteryEvent = async');
   const eventEnd = serverCode.indexOf('const ensurePeiMaintenanceTargetForPatient = async', eventStart);

@@ -882,12 +882,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       setAbaRecordsError("");
       try {
         const recentRecordLimit = 10;
+        const peiProgressRecordLimit = 50;
         const [patientSummaryResult, sessionsResult, trialsResult, behaviorResult, masteryResult, maintenanceResult] = await Promise.allSettled([
           dataService.getPatientAbaSummary(String(patient.id)),
           dataService.getAbaSessions(String(patient.id), { page: 1, pageSize: recentRecordLimit }),
-          dataService.getAbaTrials(String(patient.id), { page: 1, pageSize: recentRecordLimit }),
+          dataService.getAbaTrials(String(patient.id), { page: 1, pageSize: peiProgressRecordLimit }),
           dataService.getAbaBehaviorEvents(String(patient.id), { page: 1, pageSize: recentRecordLimit }),
-          dataService.getAbaMasteryEvaluations(String(patient.id), { page: 1, pageSize: recentRecordLimit }),
+          dataService.getAbaMasteryEvaluations(String(patient.id), { page: 1, pageSize: peiProgressRecordLimit }),
           dataService.getAbaMaintenanceOverview(String(patient.id), { page: 1, pageSize: recentRecordLimit })
         ]);
         if (cancelled) return;
@@ -4965,6 +4966,203 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return getPeiHistoryProgressMarker(entry);
   };
 
+  const normalizePeiEvidenceKey = (value: any) => String(value ?? '').trim();
+  const normalizePeiEvidenceName = (value: any) =>
+    String(value ?? '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+  const uniquePeiEvidenceValues = (values: any[]) =>
+    values
+      .map(normalizePeiEvidenceKey)
+      .filter((value: string, index: number, list: string[]) => Boolean(value) && list.indexOf(value) === index);
+  const readTeachingEvidencePayload = (...values: any[]) => {
+    const merged: Record<string, any> = {};
+    values.forEach((value: any) => {
+      if (!value) return;
+      if (typeof value === 'object' && !Array.isArray(value)) {
+        Object.assign(merged, value);
+        return;
+      }
+      if (typeof value === 'string') {
+        try {
+          const parsed = JSON.parse(value);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) Object.assign(merged, parsed);
+        } catch {
+          // Payloads antigos podem vir como texto livre; nesse caso não participam do casamento por ID.
+        }
+      }
+    });
+    return merged;
+  };
+  const getGoalTargetEvidenceIds = (goal: any) => uniquePeiEvidenceValues([
+    goal?.target_id,
+    goal?.targetId,
+    goal?.aba_target_id,
+    goal?.abaTargetId,
+    goal?.target?.id,
+    goal?.target?.target_id,
+    goal?.target?.targetId
+  ]);
+  const getGoalClinicalEvidenceIds = (goal: any) => uniquePeiEvidenceValues([
+    goal?.peiGoalId,
+    goal?.pei_goal_id,
+    goal?.goalId,
+    goal?.goal_id,
+    goal?.id,
+    goal?.skillId,
+    goal?.skill_id,
+    goal?.localTargetRef,
+    goal?.local_target_ref,
+    goal?.target?.peiGoalId,
+    goal?.target?.goalId,
+    goal?.target?.goal_id,
+    goal?.target?.skillId,
+    goal?.target?.skill_id,
+    goal?.target?.localTargetRef
+  ]);
+  const rowClinicalEvidenceIds = (row: any) => {
+    const raw = readTeachingEvidencePayload(row?.raw_payload, row?.rawPayload, row?.criteria, row?.mastery_criteria, row?.masteryCriteria);
+    return uniquePeiEvidenceValues([
+      row?.peiGoalId,
+      row?.pei_goal_id,
+      row?.goalId,
+      row?.goal_id,
+      row?.skillId,
+      row?.skill_id,
+      row?.localTargetRef,
+      row?.local_target_ref,
+      raw?.peiGoalId,
+      raw?.pei_goal_id,
+      raw?.goalId,
+      raw?.goal_id,
+      raw?.skillId,
+      raw?.skill_id,
+      raw?.localTargetRef,
+      raw?.local_target_ref
+    ]);
+  };
+  const scheduleClinicalEvidenceIds = (schedule: any) => {
+    const raw = readTeachingEvidencePayload(schedule?.raw_payload, schedule?.rawPayload, schedule?.mastery_criteria, schedule?.masteryCriteria);
+    return uniquePeiEvidenceValues([
+      schedule?.peiGoalId,
+      schedule?.pei_goal_id,
+      schedule?.goalId,
+      schedule?.goal_id,
+      schedule?.skillId,
+      schedule?.skill_id,
+      schedule?.localTargetRef,
+      schedule?.local_target_ref,
+      raw?.peiGoalId,
+      raw?.pei_goal_id,
+      raw?.goalId,
+      raw?.goal_id,
+      raw?.skillId,
+      raw?.skill_id,
+      raw?.localTargetRef,
+      raw?.local_target_ref
+    ]);
+  };
+  const rowMatchesGoalEvidence = (row: any, goal: any, options: { allowNameFallback?: boolean } = {}) => {
+    const goalTargetIds = getGoalTargetEvidenceIds(goal);
+    const rowTargetIds = uniquePeiEvidenceValues([
+      row?.target_id,
+      row?.targetId,
+      row?.aba_target_id,
+      row?.abaTargetId
+    ]);
+    if (goalTargetIds.length > 0 && rowTargetIds.some((id: string) => goalTargetIds.includes(id))) return true;
+
+    const goalClinicalIds = getGoalClinicalEvidenceIds(goal);
+    const clinicalIds = rowClinicalEvidenceIds(row);
+    if (goalClinicalIds.length > 0 && clinicalIds.some((id: string) => goalClinicalIds.includes(id))) return true;
+
+    if (!options.allowNameFallback) return false;
+    const goalName = normalizePeiEvidenceName(goal?.name || goal?.targetName || goal?.target_name);
+    const rowName = normalizePeiEvidenceName(row?.target_name || row?.targetName || row?.title || row?.name);
+    return Boolean(goalName && rowName && goalName === rowName);
+  };
+  const scheduleMatchesGoalEvidence = (schedule: any, goal: any) => {
+    const goalTargetIds = getGoalTargetEvidenceIds(goal);
+    const scheduleTargetId = normalizePeiEvidenceKey(schedule?.target_id || schedule?.targetId || schedule?.target?.id);
+    if (scheduleTargetId && goalTargetIds.includes(scheduleTargetId)) return true;
+
+    const goalClinicalIds = getGoalClinicalEvidenceIds(goal);
+    const clinicalIds = scheduleClinicalEvidenceIds(schedule);
+    return goalClinicalIds.length > 0 && clinicalIds.some((id: string) => goalClinicalIds.includes(id));
+  };
+  const isStructuredTrialIndependentCorrect = (trial: any) => {
+    const correct = typeof trial?.correct === 'boolean'
+      ? trial.correct
+      : Number(trial?.response_score ?? trial?.score ?? 0) >= Number(trial?.max_score ?? trial?.maxScore ?? 1);
+    const promptKey = String(trial?.prompt_level_key || trial?.promptLevelKey || trial?.promptLevel || '').trim().toLowerCase();
+    const independent = typeof trial?.independent === 'boolean'
+      ? trial.independent
+      : ['independent', 'independente', 'no_prompt', 'sem_ajuda', 'none'].includes(promptKey) || !promptKey;
+    return Boolean(correct && independent);
+  };
+  const getStructuredTrialProgressMarker = (trial: any) => {
+    const value = trial?.occurred_at || trial?.occurredAt || trial?.timestamp || trial?.created_at || trial?.createdAt;
+    const parsed = new Date(value).getTime();
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+  const getStructuredAbaTrialProgress = (goal: any, mode: 'consecutive' | 'total', target: number, resetMarker: number) => {
+    const trials = (Array.isArray(abaTrials) ? abaTrials : [])
+      .filter((trial: any) =>
+        String(trial?.patient_id || trial?.patientId || '') === String(patient?.id || '') &&
+        String(trial?.collection_type || trial?.collectionType || trial?.trialType || '').toLowerCase() !== 'maintenance_probe' &&
+        rowMatchesGoalEvidence(trial, goal, { allowNameFallback: true }) &&
+        (!goal || getStructuredTrialProgressMarker(trial) > resetMarker || !resetMarker)
+      )
+      .sort((a: any, b: any) => getStructuredTrialProgressMarker(b) - getStructuredTrialProgressMarker(a));
+
+    if (mode === 'total') {
+      return Math.min(trials.filter(isStructuredTrialIndependentCorrect).length, target);
+    }
+
+    let count = 0;
+    for (const trial of trials) {
+      if (isStructuredTrialIndependentCorrect(trial)) count += 1;
+      else break;
+    }
+    return Math.min(count, target);
+  };
+  const getPersistedAbaMasteryProgress = (goal: any, target: number) => {
+    const evaluations = (Array.isArray(abaMasteryEvaluations) ? abaMasteryEvaluations : [])
+      .filter((evaluation: any) => rowMatchesGoalEvidence(evaluation, goal, { allowNameFallback: true }))
+      .sort((a: any, b: any) => {
+        const aTime = new Date(a?.evaluated_at || a?.evaluatedAt || a?.created_at || a?.createdAt || 0).getTime();
+        const bTime = new Date(b?.evaluated_at || b?.evaluatedAt || b?.created_at || b?.createdAt || 0).getTime();
+        return (Number.isFinite(bTime) ? bTime : 0) - (Number.isFinite(aTime) ? aTime : 0);
+      });
+    const latest = evaluations[0];
+    if (!latest) return 0;
+    const status = String(latest?.status || latest?.statusCode || latest?.evaluation_status || latest?.evaluationStatus || '').trim().toUpperCase();
+    const progressCount = Number(latest?.criterionProgressCount ?? latest?.criterion_progress_count ?? latest?.consecutive_successes ?? latest?.consecutiveSuccesses ?? 0);
+    const requiredCount = Number(latest?.criterionRequiredCount ?? latest?.criterion_required_count ?? latest?.min_consecutive_successes ?? latest?.minConsecutiveSuccesses ?? target);
+    if (['MET_TODAY', 'READY_FOR_REVIEW', 'MASTERED', 'MASTERED_APPROVED', 'ADQUIRIDO', 'ACQUIRED'].includes(status)) return target;
+    if (Number.isFinite(progressCount) && progressCount >= Math.min(target, Number.isFinite(requiredCount) && requiredCount > 0 ? requiredCount : target)) return target;
+    return Number.isFinite(progressCount) ? Math.min(progressCount, target) : 0;
+  };
+  const hasPersistedGoalMasteryEvidence = (goal: any) => {
+    const matchingSchedule = (Array.isArray(abaMaintenanceOverview?.schedules) ? abaMaintenanceOverview.schedules : []).find((schedule: any) =>
+      isActivePeiMaintenanceScheduleRow({
+        ...schedule,
+        schedule,
+        scheduleId: schedule?.id || schedule?.schedule_id || schedule?.scheduleId,
+        targetId: schedule?.target_id || schedule?.targetId
+      }) && scheduleMatchesGoalEvidence(schedule, goal)
+    );
+    if (matchingSchedule) return true;
+
+    const criterion = resolvePeiGoalMasteryCriterion(goal);
+    const target = criterion?.requiredConsecutiveIndependentCorrectTrials || criterion?.requiredIndependentCorrectTrials || criterion?.requiredCorrectTrials || null;
+    if (!target) return false;
+    return getPersistedAbaMasteryProgress(goal, target) >= target;
+  };
+
   const getMasteryProgress = (goalOrName: any, mode: 'consecutive' | 'total' = 'consecutive') => {
     if (patientCategory !== 'Criança') return null;
     const goal = typeof goalOrName === 'string'
@@ -4973,6 +5171,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     const skillName = typeof goalOrName === 'string' ? goalOrName : goalOrName?.name;
     const target = getGoalMasteryTarget(goal);
     if (!target) return 0;
+    if (goal && hasPersistedGoalMasteryEvidence(goal)) return target;
     const resetMarker = getGoalProgressResetMarker(goal);
     const skillHistory = history
       .filter((h: any) =>
@@ -4985,7 +5184,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       .sort((a: any, b: any) => getHistoryProgressMarker(b) - getHistoryProgressMarker(a));
 
     if (mode === 'total') {
-      return skillHistory.filter((h: any) => h.score === 1).length;
+      const legacyTotal = Math.min(skillHistory.filter((h: any) => h.score === 1).length, target);
+      const structuredTotal = goal ? getStructuredAbaTrialProgress(goal, mode, target, resetMarker) : 0;
+      const persistedTotal = goal ? getPersistedAbaMasteryProgress(goal, target) : 0;
+      return Math.min(Math.max(legacyTotal, structuredTotal, persistedTotal), target);
     }
     
     let count = 0;
@@ -4993,7 +5195,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       if (h.score === 1) count++;
       else break;
     }
-    return Math.min(count, target);
+    const legacyProgress = Math.min(count, target);
+    const structuredProgress = goal ? getStructuredAbaTrialProgress(goal, mode, target, resetMarker) : 0;
+    const persistedProgress = goal ? getPersistedAbaMasteryProgress(goal, target) : 0;
+    return Math.min(Math.max(legacyProgress, structuredProgress, persistedProgress), target);
   };
 
   const getGoalComputedProgressPercent = (goal: any) => {
@@ -5010,6 +5215,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     if (patientCategory !== 'Criança') {
       return normalizedStoredProgress;
     }
+    if (hasPersistedGoalMasteryEvidence(goal)) return 100;
 
     const criterion = resolvePeiGoalMasteryCriterion(goal);
     const target = criterion?.requiredConsecutiveIndependentCorrectTrials || criterion?.requiredIndependentCorrectTrials || criterion?.requiredCorrectTrials || null;
@@ -5096,7 +5302,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         statusLabel: isGoalAcquired(goal) ? 'Adquirido' : goal?.status
       }))
     ),
-    [history, patient?.id, patientCategory, peiGoals, planProtocolCatalog, protocols]
+    [abaMaintenanceOverview, abaMasteryEvaluations, abaTrials, history, patient?.id, patientCategory, peiGoals, planProtocolCatalog, protocols]
   );
   const peiMaintenanceLinkableTargets = useMemo(
     () => (Array.isArray(peiMaintenanceLinkableTargetsState.items) ? peiMaintenanceLinkableTargetsState.items : []),
@@ -5639,7 +5845,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       }))
     );
     return filterEligibleRows(dedupePeiMaintenanceRows(fallbackRows));
-  }, [activePeiPlanSubtab, activeTab, hasPeiMaintenancePanelForCurrentPatient, isLoadingPeiMaintenancePanel, peiMaintenanceHydratedGoals, peiMaintenanceLinkableTargets, peiMaintenanceTargetFirstGroups, peiMaintenanceUnavailableKeys, peiMaintenanceUnavailableSourceIds, peiMaintenanceUnavailableTargetIds]);
+  }, [abaMaintenanceOverview, abaMasteryEvaluations, abaTrials, activePeiPlanSubtab, activeTab, hasPeiMaintenancePanelForCurrentPatient, history, isLoadingPeiMaintenancePanel, peiMaintenanceHydratedGoals, peiMaintenanceLinkableTargets, peiMaintenanceTargetFirstGroups, peiMaintenanceUnavailableKeys, peiMaintenanceUnavailableSourceIds, peiMaintenanceUnavailableTargetIds]);
 
   const peiGeneralizationRows = useMemo(() => {
     const maintainedRows = peiMaintenanceRows.filter((row: any) => row.isMaintained);
@@ -5658,7 +5864,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         };
       });
     return [...maintainedRows, ...acquiredWithoutRow];
-  }, [peiGoals, peiMaintenanceRows]);
+  }, [abaMaintenanceOverview, abaMasteryEvaluations, abaTrials, history, peiGoals, peiMaintenanceRows]);
 
   const peiHistoryEvents = useMemo(() => buildPeiPlanHistoryEvents({
     goals: peiGoals,
@@ -9072,7 +9278,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                                     </h4>
                                     {patientCategory === 'Criança' && (
                                       <div className="mt-1 mb-2">
-                                        <MasteryDots count={getMasteryProgress(goal) || 0} status={goal.status} target={goalMasteryTarget} />
+                                        <MasteryDots count={getMasteryProgress(goal) || 0} status={isGoalAcquired(goal) ? 'completed' : goal.status} target={goalMasteryTarget} />
                                       </div>
                                     )}
                                     <p className={`text-xs mt-1 ${isPanelDark ? 'text-slate-300' : 'text-gray-500'}`}>{sanitizeDescriptionForDisplay(goal.objective)}</p>
@@ -9105,7 +9311,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                                         <option value="in_progress">Em Treino</option>
                                         <option value="completed">Adquirido</option>
                                       </select>
-                                      {patientCategory === 'Criança' && goal.status !== 'completed' && (
+                                      {patientCategory === 'Criança' && !isGoalAcquired(goal) && (
                                         <button 
                                           onClick={() => {
                                             if (confirm("Deseja zerar o progresso de maestria desta meta? Isso reiniciará a contagem de acertos consecutivos.")) {
