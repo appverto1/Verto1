@@ -374,14 +374,14 @@ export const ReceptionistDashboard = ({
     [user?.clinicId, user?.id]
   );
 
-  const handleCheckout = async (planId: string) => {
+  const handleCheckout = async () => {
     setLoading(true);
     try {
       const response = await fetch("/api/stripe/create-checkout", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ planName: planId }),
+        body: JSON.stringify({}),
       });
       const data = await response.json();
       if (data.url) {
@@ -981,10 +981,10 @@ export const ReceptionistDashboard = ({
                     Próxima Fatura
                   </p>
                   <h3 className="text-xl font-bold text-slate-900">
-                    R$ 149,90
+                    Calculada pela Stripe
                   </h3>
                   <p className="text-slate-400 text-xs font-medium mt-2">
-                    Vence em 15/04/2026
+                    Por paciente ativo
                   </p>
                 </div>
                 <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
@@ -1002,37 +1002,36 @@ export const ReceptionistDashboard = ({
 
               <div className="bg-white rounded-[32px] p-8 shadow-sm border border-slate-100 mb-8">
                 <h3 className="text-lg font-bold text-slate-900 mb-6">
-                  Upgrade de Plano
+                  Modelo de cobrança
                 </h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="grid grid-cols-1 gap-6">
                   <div
-                    className={`p-8 rounded-[40px] border-2 transition-all ${user.planName === "Verto Business" ? "border-[#7a32fc] bg-blue-50/30" : "border-slate-100 hover:border-blue-200"}`}
+                    className="p-8 rounded-[40px] border-2 border-[#7a32fc] bg-blue-50/30 transition-all"
                   >
                     <div className="flex justify-between items-start mb-6">
                       <div>
                         <h5 className="text-xl font-bold text-slate-900">
-                          Verto Business
+                          Pacientes ativos
                         </h5>
                         <p className="text-slate-500 text-sm">
-                          Para clínicas em crescimento
+                          Assinatura modular com tiers configurados no Stripe
                         </p>
                       </div>
                       <div className="text-right">
                         <p className="text-2xl font-black text-[#7a32fc]">
-                          R$ 299,90
+                          Automático
                         </p>
                         <p className="text-[10px] font-bold text-slate-400 uppercase">
-                          por mês
+                          por quantidade
                         </p>
                       </div>
                     </div>
                     <ul className="space-y-3 mb-8">
                       {[
-                        "Até 10 Terapeutas",
-                        "Pacientes Ilimitados",
-                        "DRE Avançado",
-                        "Suporte Prioritário",
-                        "Personalização de Marca",
+                        "Quantidade sincronizada no servidor",
+                        "Sem preço vindo do navegador",
+                        "Portal Stripe para pagamento",
+                        "Auditoria de assinatura",
                       ].map((feat) => (
                         <li
                           key={feat}
@@ -1047,65 +1046,11 @@ export const ReceptionistDashboard = ({
                       ))}
                     </ul>
                     <button
-                      onClick={() => handleCheckout("business_plan_id")}
-                      disabled={loading || user.planName === "Verto Business"}
-                      className={`w-full py-4 rounded-2xl font-bold text-sm transition-all ${user.planName === "Verto Business" ? "bg-slate-100 text-slate-400 cursor-not-allowed" : "bg-[#7a32fc] text-white shadow-lg shadow-blue-500/20 hover:scale-[1.02]"}`}
+                      onClick={() => handleCheckout()}
+                      disabled={loading}
+                      className="w-full py-4 rounded-2xl font-bold text-sm transition-all bg-[#7a32fc] text-white shadow-lg shadow-blue-500/20 hover:scale-[1.02] disabled:opacity-60 disabled:cursor-not-allowed"
                     >
-                      {user.planName === "Verto Business"
-                        ? "Plano Atual"
-                        : "Fazer Upgrade"}
-                    </button>
-                  </div>
-
-                  <div
-                    className={`p-8 rounded-[40px] border-2 transition-all ${user.planName === "Verto Enterprise" ? "border-[#7a32fc] bg-blue-50/30" : "border-slate-100 hover:border-blue-200"}`}
-                  >
-                    <div className="flex justify-between items-start mb-6">
-                      <div>
-                        <h5 className="text-xl font-bold text-slate-900">
-                          Verto Enterprise
-                        </h5>
-                        <p className="text-slate-500 text-sm">
-                          Solução completa e ilimitada
-                        </p>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-2xl font-black text-[#7a32fc]">
-                          R$ 599,90
-                        </p>
-                        <p className="text-[10px] font-bold text-slate-400 uppercase">
-                          por mês
-                        </p>
-                      </div>
-                    </div>
-                    <ul className="space-y-3 mb-8">
-                      {[
-                        "Terapeutas Ilimitados",
-                        "Pacientes Ilimitados",
-                        "DRE Completo",
-                        "Gerente de Conta",
-                        "API de Integração",
-                      ].map((feat) => (
-                        <li
-                          key={feat}
-                          className="flex items-center gap-2 text-sm text-slate-600 font-medium"
-                        >
-                          <CheckCircle2
-                            size={16}
-                            className="text-emerald-500"
-                          />{" "}
-                          {feat}
-                        </li>
-                      ))}
-                    </ul>
-                    <button
-                      onClick={() => handleCheckout("enterprise_plan_id")}
-                      disabled={loading || user.planName === "Verto Enterprise"}
-                      className={`w-full py-4 rounded-2xl font-bold text-sm transition-all ${user.planName === "Verto Enterprise" ? "bg-slate-100 text-slate-400 cursor-not-allowed" : "bg-[#7a32fc] text-white shadow-lg shadow-blue-500/20 hover:scale-[1.02]"}`}
-                    >
-                      {user.planName === "Verto Enterprise"
-                        ? "Plano Atual"
-                        : "Fazer Upgrade"}
+                      Gerenciar assinatura
                     </button>
                   </div>
                 </div>

@@ -3,53 +3,24 @@ import type Stripe from 'stripe';
 
 type SupabaseClientLike = any;
 
-export const ACTIVE_PATIENT_BILLING_TIERS = [
-  { name: 'Verto Start', upTo: 5, amount: 49900 },
-  { name: 'Verto Essencial', upTo: 10, amount: 89900 },
-  { name: 'Verto Growth', upTo: 20, amount: 159900 },
-  { name: 'Verto Clinic 50', upTo: 50, amount: 349900 },
-  { name: 'Verto Clinic 100', upTo: 100, amount: 599900 },
-  { name: 'Verto Clinic 150', upTo: 150, amount: 824900 },
-  { name: 'Verto Clinic 200', upTo: 200, amount: 999900 },
-  { name: 'Verto Clinic 299', upTo: 299, amount: 1349900 }
-] as const;
+export const ACTIVE_PATIENT_BILLING_MODEL = 'active_patients' as const;
+export const ACTIVE_PATIENT_BILLING_TIERS: Array<never> = [];
 
-const ACTIVE_PATIENT_NEGOTIATION_THRESHOLD = 299;
-const ACTIVE_PATIENT_STATUSES = new Set([
+const ACTIVE_PATIENT_STATUS_VALUES = [
+  'ACTIVE',
   'active',
   'ativo',
   'atendimento_ativo',
   'em_tratamento'
-]);
+] as const;
 
 function toSafeString(value: unknown, max = 200): string {
   if (typeof value !== 'string') return '';
   return value.trim().slice(0, max);
 }
 
-function normalizeStatus(status: unknown): string {
-  return toSafeString(status, 60)
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/\s+/g, '_');
-}
-
-function isActivePatientStatus(status: unknown): boolean {
-  if (!status) return true;
-  return ACTIVE_PATIENT_STATUSES.has(normalizeStatus(status));
-}
-
 function buildIdempotencyKey(seed: string): string {
   return crypto.createHash('sha256').update(seed).digest('hex');
-}
-
-function formatBillingPeriod(date = new Date()): string {
-  return date.toISOString().slice(0, 7);
-}
-
-function resolveMeterEventName(): string {
-  return toSafeString(process.env.STRIPE_ACTIVE_PATIENT_METER_EVENT_NAME || 'verto_active_patients_monthly', 100);
 }
 
 export function estimateGraduatedActivePatientBilling(activePatients: number): {
@@ -61,39 +32,92 @@ export function estimateGraduatedActivePatientBilling(activePatients: number): {
   averageUnitPrice: number;
   requiresNegotiation: boolean;
   includedForEstimate: number;
+  billingModel: typeof ACTIVE_PATIENT_BILLING_MODEL;
+  stripeCalculatesFinalAmount: boolean;
 } {
   const safePatients = Math.max(0, Math.floor(Number(activePatients || 0)));
-  const requiresNegotiation = safePatients > ACTIVE_PATIENT_NEGOTIATION_THRESHOLD;
-  const billablePatients = Math.min(Math.max(1, safePatients), ACTIVE_PATIENT_NEGOTIATION_THRESHOLD);
-  const selectedTier = ACTIVE_PATIENT_BILLING_TIERS.find((tier) => billablePatients <= tier.upTo);
-  const totalCents = selectedTier?.amount || 0;
 
   return {
     activePatients: safePatients,
-    planName: selectedTier?.name || 'Verto Enterprise',
-    patientLimit: selectedTier?.upTo || null,
-    estimatedAmount: Number((totalCents / 100).toFixed(2)),
-    estimatedAmountCents: totalCents,
-    averageUnitPrice: billablePatients ? Number((totalCents / billablePatients / 100).toFixed(2)) : 0,
-    requiresNegotiation,
-    includedForEstimate: selectedTier?.upTo || ACTIVE_PATIENT_NEGOTIATION_THRESHOLD
+    planName: 'Pacientes ativos',
+    patientLimit: null,
+    estimatedAmount: 0,
+    estimatedAmountCents: 0,
+    averageUnitPrice: 0,
+    requiresNegotiation: false,
+    includedForEstimate: safePatients,
+    billingModel: ACTIVE_PATIENT_BILLING_MODEL,
+    stripeCalculatesFinalAmount: true
   };
 }
 
-async function countActivePatientsByClinic(
-  supabase: SupabaseClientLike,
-  clinicId: string
-): Promise<number> {
-  const { data, error } = await supabase
-    .from('patients')
-    .select('id,status')
-    .eq('clinic_id', clinicId)
-    .eq('is_active', true)
-    .is('deleted_at', null)
-    .limit(10000);
+function activePatientStatusFilter(): string {
+  return `status.is.null,status.in.(${ACTIVE_PATIENT_STATUS_VALUES.join(',')})`;
+}
 
-  if (error) throw error;
-  return (data || []).filter((patient: any) => isActivePatientStatus(patient?.status)).length;
+function extractMissingColumnName(error: any): string | null {
+  const raw = `${error?.message || ''} ${error?.details || ''} ${error?.hint || ''}`;
+  const quoted = raw.match(/column\s+["']?([a-zA-Z0-9_]+)["']?\s+(?:does not exist|of relation|not found)/i);
+  if (quoted?.[1]) return quoted[1];
+  const cache = raw.match(/schema cache.*['"]([a-zA-Z0-9_]+)['"]/i);
+  if (cache?.[1]) return cache[1];
+  return null;
+}
+
+async function patchClinicBillingSafely(
+  supabase: SupabaseClientLike,
+  clinicId: string,
+  patch: Record<string, any>
+): Promise<void> {
+  let safePatch = Object.fromEntries(
+    Object.entries(patch).filter(([, value]) => value !== undefined)
+  );
+  while (Object.keys(safePatch).length > 0) {
+    const { error } = await supabase
+      .from('clinics')
+      .update(safePatch)
+      .eq('id', clinicId);
+    if (!error) return;
+    const missingColumn = extractMissingColumnName(error);
+    if (!missingColumn || !(missingColumn in safePatch)) return;
+    const { [missingColumn]: _removed, ...rest } = safePatch;
+    safePatch = rest;
+  }
+}
+
+export async function getBillableActivePatientCount(params: {
+  supabase: SupabaseClientLike;
+  clinicId?: string | null;
+  organizationId?: string | null;
+}): Promise<number> {
+  const clinicId = toSafeString(params.clinicId, 120);
+  const organizationId = toSafeString(params.organizationId, 120);
+  const scopeColumn = clinicId ? 'clinic_id' : 'organization_id';
+  const scopeValue = clinicId || organizationId;
+  if (!scopeValue) return 0;
+
+  const runCount = async (includeArchivedAt: boolean) => {
+    let query = params.supabase
+      .from('patients')
+      .select('id', { count: 'exact', head: true })
+      .eq(scopeColumn, scopeValue)
+      .eq('is_active', true)
+      .is('deleted_at', null)
+      .or(activePatientStatusFilter());
+
+    if (includeArchivedAt) {
+      query = query.is('archived_at', null);
+    }
+
+    return query;
+  };
+
+  let result = await runCount(true);
+  if (result.error && extractMissingColumnName(result.error) === 'archived_at') {
+    result = await runCount(false);
+  }
+  if (result.error) throw result.error;
+  return Math.max(0, Number(result.count || 0));
 }
 
 function resolveSubscriptionItemByPriceId(subscription: Stripe.Subscription, priceId: string): Stripe.SubscriptionItem | null {
@@ -191,19 +215,28 @@ export async function syncClinicActivePatientAddonQuantity(params: {
   trigger: string;
   activePatientPriceId: string;
   logger?: Pick<Console, 'log' | 'warn' | 'error'>;
-}): Promise<{ success: boolean; activePatients: number; synced: boolean; reason?: string }> {
+}): Promise<{
+  success: boolean;
+  activePatients: number;
+  billableQuantity: number;
+  synced: boolean;
+  subscriptionId?: string;
+  subscriptionItemId?: string;
+  reason?: string;
+}> {
   const logger = params.logger || console;
   const clinicId = toSafeString(params.clinicId, 120);
   const priceId = toSafeString(params.activePatientPriceId, 120);
   if (!clinicId) {
-    return { success: false, activePatients: 0, synced: false, reason: 'clinic_id ausente' };
+    return { success: false, activePatients: 0, billableQuantity: 1, synced: false, reason: 'clinic_id ausente' };
   }
   if (!priceId) {
     logger.warn('[Stripe Sync] STRIPE_ACTIVE_PATIENT_PRICE_ID ausente. Sincronização ignorada.', { clinicId });
-    return { success: true, activePatients: 0, synced: false, reason: 'price_id_ausente' };
+    return { success: true, activePatients: 0, billableQuantity: 1, synced: false, reason: 'price_id_ausente' };
   }
 
-  const activePatients = await countActivePatientsByClinic(params.supabase, clinicId);
+  const activePatients = await getBillableActivePatientCount({ supabase: params.supabase, clinicId });
+  const billableQuantity = Math.max(1, activePatients);
   const clinicEmails = await resolveClinicEmails(params.supabase, clinicId);
   const subscription = await findSubscriptionForClinic({
     stripe: params.stripe,
@@ -214,38 +247,66 @@ export async function syncClinicActivePatientAddonQuantity(params: {
 
   if (!subscription) {
     logger.warn('[Stripe Sync] Assinatura não encontrada para clínica.', { clinicId, activePatients });
-    return { success: true, activePatients, synced: false, reason: 'subscription_not_found' };
+    await patchClinicBillingSafely(params.supabase, clinicId, {
+      billing_model: ACTIVE_PATIENT_BILLING_MODEL,
+      stripe_price_id: priceId,
+      active_patient_count: activePatients,
+      billing_sync_status: 'subscription_not_found',
+      billing_sync_error: 'Assinatura Stripe nao encontrada para a clinica.',
+      last_billing_sync_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    });
+    return { success: true, activePatients, billableQuantity, synced: false, reason: 'subscription_not_found' };
   }
 
   const item = resolveSubscriptionItemByPriceId(subscription, priceId);
-  const idempotencySeed = `${clinicId}:${subscription.id}:${priceId}:${activePatients}:${params.trigger}:${new Date().toISOString().slice(0, 13)}`;
+  const idempotencySeed = `${clinicId}:${subscription.id}:${priceId}:${billableQuantity}:${params.trigger}:${new Date().toISOString().slice(0, 13)}`;
   const idempotencyKey = buildIdempotencyKey(idempotencySeed);
+  let subscriptionItemId = toSafeString(item?.id, 120);
 
   if (item) {
     await params.stripe.subscriptionItems.update(
       item.id,
-      { quantity: activePatients },
+      { quantity: billableQuantity, proration_behavior: 'none' } as any,
       { idempotencyKey }
     );
   } else {
-    await params.stripe.subscriptionItems.create(
+    const createdItem = await params.stripe.subscriptionItems.create(
       {
         subscription: subscription.id,
         price: priceId,
-        quantity: activePatients
-      },
+        quantity: billableQuantity,
+        proration_behavior: 'none'
+      } as any,
       { idempotencyKey }
     );
+    subscriptionItemId = toSafeString(createdItem?.id, 120);
   }
+
+  await patchClinicBillingSafely(params.supabase, clinicId, {
+    stripe_customer_id: toSafeString(String(subscription.customer || ''), 200) || undefined,
+    stripe_subscription_id: subscription.id,
+    stripe_subscription_item_id: subscriptionItemId || undefined,
+    stripe_price_id: priceId,
+    subscription_status: subscription.status,
+    billing_model: ACTIVE_PATIENT_BILLING_MODEL,
+    active_patient_count: activePatients,
+    billing_sync_status: 'synced',
+    billing_sync_error: null,
+    last_billing_sync_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  });
 
   logger.log('[Stripe Sync] Quantidade de pacientes ativos sincronizada.', {
     clinicId,
     subscriptionId: subscription.id,
+    subscriptionItemId,
     activePatients,
+    billableQuantity,
     trigger: params.trigger
   });
 
-  return { success: true, activePatients, synced: true };
+  return { success: true, activePatients, billableQuantity, subscriptionId: subscription.id, subscriptionItemId, synced: true };
 }
 
 export async function reportClinicActivePatientUsage(params: {
@@ -265,6 +326,7 @@ export async function reportClinicActivePatientUsage(params: {
   reported: boolean;
   reason?: string;
 }> {
+  void params.allowOverNegotiationLimit;
   const logger = params.logger || console;
   const clinicId = toSafeString(params.clinicId, 120);
   const priceId = toSafeString(params.activePatientPriceId, 120);
@@ -272,93 +334,32 @@ export async function reportClinicActivePatientUsage(params: {
     return { success: false, clinicId, activePatients: 0, reported: false, reason: 'clinic_or_price_missing' };
   }
 
-  const activePatients = await countActivePatientsByClinic(params.supabase, clinicId);
-  if (activePatients > ACTIVE_PATIENT_NEGOTIATION_THRESHOLD && !params.allowOverNegotiationLimit) {
-    logger.warn('[Stripe Usage] Clínica ultrapassou 299 pacientes ativos; uso mensal bloqueado para negociação manual.', {
-      clinicId,
-      activePatients
-    });
-    return { success: true, clinicId, activePatients, reported: false, reason: 'requires_manual_negotiation' };
-  }
-
-  let subscriptionId = '';
-  let subscriptionItemId = '';
-  let customerId = '';
-  const { data: clinicRows } = await params.supabase
-    .from('clinics')
-    .select('stripe_customer_id,stripe_subscription_id,stripe_subscription_item_id,stripe_customer_email')
-    .eq('id', clinicId)
-    .limit(1);
-  customerId = toSafeString(clinicRows?.[0]?.stripe_customer_id, 200);
-  subscriptionId = toSafeString(clinicRows?.[0]?.stripe_subscription_id, 120);
-  subscriptionItemId = toSafeString(clinicRows?.[0]?.stripe_subscription_item_id, 120);
-
-  if (!customerId || !subscriptionId || !subscriptionItemId) {
-    const clinicEmails = await resolveClinicEmails(params.supabase, clinicId);
-    const subscription = await findSubscriptionForClinic({
-      stripe: params.stripe,
-      clinicId,
-      clinicEmails,
-      logger
-    });
-    if (!subscription) {
-      return { success: true, clinicId, activePatients, reported: false, reason: 'subscription_not_found' };
-    }
-    subscriptionId = subscription.id;
-    customerId = toSafeString(String(subscription.customer || ''), 200);
-    const item = resolveSubscriptionItemByPriceId(subscription, priceId);
-    if (!item?.id) {
-      return { success: true, clinicId, activePatients, subscriptionId, reported: false, reason: 'subscription_item_not_found' };
-    }
-    subscriptionItemId = item.id;
-  }
-
-  if (!customerId) {
-    return { success: true, clinicId, activePatients, subscriptionId, subscriptionItemId, reported: false, reason: 'customer_not_found' };
-  }
-
-  const period = formatBillingPeriod();
-  const identifier = buildIdempotencyKey(`${clinicId}:${customerId}:${period}:active_patients`);
-  await (params.stripe.billing as any).meterEvents.create({
-    event_name: resolveMeterEventName(),
-    payload: {
-      stripe_customer_id: customerId,
-      value: String(activePatients)
-    },
-    identifier,
-    timestamp: Math.floor(Date.now() / 1000)
+  const syncResult = await syncClinicActivePatientAddonQuantity({
+    supabase: params.supabase,
+    stripe: params.stripe,
+    clinicId,
+    trigger: params.trigger,
+    activePatientPriceId: priceId,
+    logger
   });
 
-  const reportPayload = {
-    stripe_customer_id: customerId,
-    stripe_subscription_id: subscriptionId,
-    stripe_subscription_item_id: subscriptionItemId,
-    stripe_last_reported_active_patients: activePatients,
-    stripe_last_usage_reported_at: new Date().toISOString(),
-    updated_at: new Date().toISOString()
-  };
-  try {
-    await params.supabase.from('clinics').update(reportPayload).eq('id', clinicId);
-  } catch {
-    // Persistência auxiliar; o usage record já foi enviado ao Stripe.
-  }
-
-  logger.log('[Stripe Usage] Uso mensal de pacientes ativos reportado.', {
+  logger.log('[Stripe Sync] Rota legada report-usage encaminhada para sync de quantity.', {
     clinicId,
-    customerId,
-    subscriptionId,
-    subscriptionItemId,
-    activePatients,
+    subscriptionId: syncResult.subscriptionId,
+    subscriptionItemId: syncResult.subscriptionItemId,
+    activePatients: syncResult.activePatients,
+    billableQuantity: syncResult.billableQuantity,
     trigger: params.trigger
   });
 
   return {
-    success: true,
+    success: syncResult.success,
     clinicId,
-    activePatients,
-    subscriptionId,
-    subscriptionItemId,
-    reported: true
+    activePatients: syncResult.activePatients,
+    subscriptionId: syncResult.subscriptionId,
+    subscriptionItemId: syncResult.subscriptionItemId,
+    reported: syncResult.synced,
+    reason: syncResult.reason
   };
 }
 
@@ -396,7 +397,7 @@ export async function reportAllClinicsActivePatientUsage(params: {
         logger
       }));
     } catch (error: any) {
-      logger.error('[Stripe Usage] Falha ao reportar uso mensal da clínica.', {
+      logger.error('[Stripe Sync] Falha ao sincronizar quantidade de pacientes ativos da clínica.', {
         clinicId,
         message: error?.message || String(error)
       });
@@ -448,21 +449,23 @@ export async function createClinicMeteredSubscription(params: {
       metadata: {
         clinicId,
         userId: coordinatorUserId,
-        billingModel: 'active_patient_metered_graduated'
+        billingModel: ACTIVE_PATIENT_BILLING_MODEL
       }
     });
     customerId = customer.id;
   }
 
+  const activePatients = await getBillableActivePatientCount({ supabase: params.supabase, clinicId });
+  const billableQuantity = Math.max(1, activePatients);
   const subscription = await params.stripe.subscriptions.create({
     customer: customerId,
-    items: [{ price: priceId }],
+    items: [{ price: priceId, quantity: billableQuantity }],
     payment_behavior: 'default_incomplete',
     collection_method: 'charge_automatically',
     metadata: {
       clinicId,
       userId: coordinatorUserId,
-      billingModel: 'active_patient_metered_graduated'
+      billingModel: ACTIVE_PATIENT_BILLING_MODEL
     },
     expand: ['items.data.price', 'latest_invoice']
   } as any);
@@ -554,8 +557,10 @@ export async function getClinicBillingSummary(params: {
   requiresNegotiation: boolean;
   includedForEstimate: number;
   tiers: typeof ACTIVE_PATIENT_BILLING_TIERS;
+  billingModel: typeof ACTIVE_PATIENT_BILLING_MODEL;
+  stripeCalculatesFinalAmount: boolean;
 }> {
-  const activePatients = await countActivePatientsByClinic(params.supabase, params.clinicId);
+  const activePatients = await getBillableActivePatientCount({ supabase: params.supabase, clinicId: params.clinicId });
   const estimate = estimateGraduatedActivePatientBilling(activePatients);
   return {
     activePatients,
@@ -568,6 +573,8 @@ export async function getClinicBillingSummary(params: {
     averageUnitPrice: estimate.averageUnitPrice,
     requiresNegotiation: estimate.requiresNegotiation,
     includedForEstimate: estimate.includedForEstimate,
-    tiers: ACTIVE_PATIENT_BILLING_TIERS
+    tiers: ACTIVE_PATIENT_BILLING_TIERS,
+    billingModel: estimate.billingModel,
+    stripeCalculatesFinalAmount: estimate.stripeCalculatesFinalAmount
   };
 }

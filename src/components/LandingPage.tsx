@@ -89,8 +89,6 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
   const [registerError, setRegisterError] = useState('');
   const [activeFaq, setActiveFaq] = useState<number | null>(null);
   const [isVerifyingEmail, setIsVerifyingEmail] = useState(false);
-  const [showPricingAfterClick, setShowPricingAfterClick] = useState(false);
-  const [selectedPlan, setSelectedPlan] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [twoFactorRequired, setTwoFactorRequired] = useState(false);
   const [twoFactorToken, setTwoFactorToken] = useState('');
@@ -740,7 +738,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
   const handleRegister = async (e: React.FormEvent, planOverride?: string) => {
     e.preventDefault();
     setRegisterError('');
-    const effectiveSelectedPlan = planOverride || selectedPlan;
+    void planOverride;
 
     try {
       if ((registerType === 'professional' || registerType === 'coordinator') && !crp.trim()) {
@@ -759,11 +757,6 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
         return;
       }
 
-      if (registerType === 'professional' && !effectiveSelectedPlan) {
-        setRegisterStep(3);
-        return;
-      }
-
       setLoading(true);
       const endpoint = registerType === 'professional'
         ? '/api/stripe/create-checkout-registration'
@@ -778,7 +771,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
           name,
           role: registerType === 'professional' ? 'coordinator' : 'patient',
           crp: registerType === 'professional' ? crp : undefined,
-          planName: registerType === 'patient' ? 'Paciente' : effectiveSelectedPlan,
+          billingModel: registerType === 'professional' ? 'active_patients' : undefined,
           phone: registerType === 'professional' ? normalizeWhatsappPhone(whatsappPhone) : undefined,
           acquisitionChannel
         })
@@ -830,7 +823,6 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
 
 	  const handleSelectPlan = async (planName: string) => {
     try {
-      setSelectedPlan(planName);
       const syntheticSubmitEvent = { preventDefault: () => {} } as React.FormEvent;
       await handleRegister(syntheticSubmitEvent, planName);
     } catch (err: any) {
@@ -1936,7 +1928,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                         disabled={loading}
                         className={`w-full py-3 md:py-3.5 rounded-2xl font-semibold text-sm shadow-lg transition-all active:scale-[0.98] mt-2 ${registerType === 'professional' ? 'bg-[#7a32fc] text-white shadow-purple-500/10' : 'bg-pink-500 text-white shadow-pink-500/10'} ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
                       >
-                        {loading ? 'Processando...' : (registerType === 'professional' && !selectedPlan ? 'Continuar para perfis de implantação' : 'Criar minha conta')}
+                        {loading ? 'Processando...' : (registerType === 'professional' ? 'Iniciar assinatura' : 'Criar minha conta')}
                       </button>
 
                       <div className="relative my-3 md:my-4">
@@ -1988,54 +1980,48 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                       <div className="w-10 h-10 md:w-12 md:h-12 bg-purple-100 text-[#7a32fc] rounded-xl flex items-center justify-center mx-auto mb-3">
                         <Rocket size={20} />
                       </div>
-                      <h2 className="text-base md:text-lg font-semibold tracking-tight">Quase lá, {name.split(' ')[0]}!</h2>
-                      <p className="text-gray-400 font-normal text-[9px] md:text-[10px] uppercase tracking-wider mt-1">Escolha um plano e conclua o pagamento pela Stripe</p>
+                      <h2 className="text-base md:text-lg font-semibold tracking-tight">Quase la, {name.split(' ')[0]}!</h2>
+                      <p className="text-gray-400 font-normal text-[9px] md:text-[10px] uppercase tracking-wider mt-1">Assinatura por paciente ativo com pagamento pela Stripe</p>
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-4">
                       <div className="bg-violet-50 border border-violet-100 rounded-xl px-3 py-2">
-                        <p className="text-[9px] uppercase tracking-wider text-violet-500 font-semibold">Inclui</p>
-                        <p className="text-[11px] text-slate-700 font-medium">Prontuário + Agenda</p>
+                        <p className="text-[9px] uppercase tracking-wider text-violet-500 font-semibold">Modelo</p>
+                        <p className="text-[11px] text-slate-700 font-medium">Pacientes ativos</p>
                       </div>
                       <div className="bg-sky-50 border border-sky-100 rounded-xl px-3 py-2">
-                        <p className="text-[9px] uppercase tracking-wider text-sky-500 font-semibold">Suporte</p>
-                        <p className="text-[11px] text-slate-700 font-medium">Onboarding assistido</p>
+                        <p className="text-[9px] uppercase tracking-wider text-sky-500 font-semibold">Ajuste</p>
+                        <p className="text-[11px] text-slate-700 font-medium">Quantidade sincronizada</p>
                       </div>
                       <div className="bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2">
-                        <p className="text-[9px] uppercase tracking-wider text-emerald-500 font-semibold">Escala</p>
-                        <p className="text-[11px] text-slate-700 font-medium">Upgrade sem perda de dados</p>
+                        <p className="text-[9px] uppercase tracking-wider text-emerald-500 font-semibold">Stripe</p>
+                        <p className="text-[11px] text-slate-700 font-medium">Faixas progressivas</p>
                       </div>
                     </div>
 
                     <div className="space-y-2 md:space-y-2.5">
-                      {[
-                        { name: 'Essencial', desc: 'Até 2 profissionais', price: 'R$ 149,90/mês' },
-                        { name: 'Crescimento', desc: '3 a 7 profissionais', price: 'R$ 399,90/mês' },
-                        { name: 'Avançado', desc: '8 a 12 profissionais', price: 'R$ 679,90/mês' }
-                      ].map((plan) => (
-                        <button 
-                          key={plan.name}
-                          onClick={() => void handleSelectPlan(plan.name)}
-                          disabled={loading}
-                          className="w-full p-3 md:p-4 bg-gray-50 border border-transparent hover:border-[#7a32fc] hover:bg-purple-50/50 rounded-2xl transition-all flex items-center justify-between group text-left"
-                        >
-                          <div>
-                            <h3 className="font-semibold text-gray-800 text-[11px] md:text-xs">{plan.name}</h3>
-                            <p className="text-[8px] md:text-[9px] text-gray-400 font-normal uppercase tracking-wider">{plan.desc}</p>
-                          </div>
-                          <span className="text-[8px] md:text-[9px] font-semibold uppercase tracking-wider text-[#7a32fc] flex items-center gap-1">
-                            <ExternalLink size={12} /> {loading && selectedPlan === plan.name ? 'Abrindo Stripe...' : plan.price}
-                          </span>
-                        </button>
-                      ))}
+                      <button
+                        type="button"
+                        onClick={() => void handleSelectPlan('active_patients')}
+                        disabled={loading}
+                        className="w-full p-3 md:p-4 bg-gray-50 border border-transparent hover:border-[#7a32fc] hover:bg-purple-50/50 rounded-2xl transition-all flex items-center justify-between group text-left"
+                      >
+                        <div>
+                          <h3 className="font-semibold text-gray-800 text-[11px] md:text-xs">Cobranca por paciente ativo</h3>
+                          <p className="text-[8px] md:text-[9px] text-gray-400 font-normal uppercase tracking-wider">Valor final calculado pela Stripe conforme a quantidade ativa</p>
+                        </div>
+                        <span className="text-[8px] md:text-[9px] font-semibold uppercase tracking-wider text-[#7a32fc] flex items-center gap-1">
+                          <ExternalLink size={12} /> {loading ? 'Abrindo Stripe...' : 'Iniciar assinatura'}
+                        </span>
+                      </button>
                       <button
                         type="button"
                         onClick={() => window.open(buildEnterpriseWhatsappUrl(), '_blank', 'noopener,noreferrer')}
                         className="w-full p-3 md:p-4 bg-gray-900 text-white rounded-2xl hover:bg-black transition-all flex items-center justify-between group text-left"
                       >
                         <div>
-                          <h3 className="font-semibold text-[11px] md:text-xs">Enterprise</h3>
-                          <p className="text-[8px] md:text-[9px] text-gray-400 font-normal uppercase tracking-wider">Clínicas de grande porte com suporte dedicado</p>
+                          <h3 className="font-semibold text-[11px] md:text-xs">Implantacao assistida</h3>
+                          <p className="text-[8px] md:text-[9px] text-gray-400 font-normal uppercase tracking-wider">Fale com Mateus para organizar onboarding e importacao inicial</p>
                         </div>
                         <span className="text-[8px] md:text-[9px] font-semibold uppercase tracking-wider flex items-center gap-1">
                           <MessageCircle size={12} /> Falar com especialista

@@ -140,7 +140,6 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
   const [financialFeatureSurveys, setFinancialFeatureSurveys] = useState<any[]>([]);
   const [dashboardWarning, setDashboardWarning] = useState<string | null>(null);
   const [complimentaryEmail, setComplimentaryEmail] = useState('');
-  const [complimentaryPlan, setComplimentaryPlan] = useState<'Essencial' | 'Crescimento' | 'Avançado'>('Essencial');
   const [complimentaryNote, setComplimentaryNote] = useState('');
   const [grantingComplimentaryPlan, setGrantingComplimentaryPlan] = useState(false);
 
@@ -255,7 +254,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
       alert('Informe o e-mail cadastrado antes de conceder o acesso.');
       return;
     }
-    if (!window.confirm(`Conceder plano ${complimentaryPlan} sem cobranca para ${email}?`)) return;
+    if (!window.confirm(`Conceder acesso cortesia por paciente ativo para ${email}?`)) return;
 
     try {
       setGrantingComplimentaryPlan(true);
@@ -271,7 +270,6 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
         },
         body: JSON.stringify({
           email,
-          planName: complimentaryPlan,
           note: complimentaryNote
         })
       });
@@ -281,12 +279,12 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
       }
       setAllCustomers((current) => current.map((customer) => (
         String(customer.email || '').toLowerCase() === email.toLowerCase()
-          ? { ...customer, role: 'coordinator', subscription_status: 'active', plan_name: data.data?.planName || complimentaryPlan, plan_price: 0 }
+          ? { ...customer, role: 'coordinator', subscription_status: 'active', plan_name: 'Pacientes ativos', billing_model: data.data?.billingModel || 'active_patients', plan_price: 0 }
           : customer
       )));
       setComplimentaryEmail('');
       setComplimentaryNote('');
-      alert(`Acesso gratuito liberado no plano ${data.data?.planName || complimentaryPlan}.${data.data?.activationEmailSent ? ' E-mail de ativacao enviado.' : ''}`);
+      alert(`Acesso gratuito por paciente ativo liberado.${data.data?.activationEmailSent ? ' E-mail de ativacao enviado.' : ''}`);
     } catch (error: any) {
       alert(error.message || 'Erro ao conceder acesso gratuito.');
     } finally {
@@ -737,15 +735,9 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                   placeholder="email@clinica.com.br"
                   className="lg:col-span-2 rounded-2xl border border-slate-200 px-4 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-emerald-200"
                 />
-                <select
-                  value={complimentaryPlan}
-                  onChange={(event) => setComplimentaryPlan(event.target.value as 'Essencial' | 'Crescimento' | 'Avançado')}
-                  className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-emerald-200"
-                >
-                  <option value="Essencial">Essencial</option>
-                  <option value="Crescimento">Crescimento</option>
-                  <option value="Avançado">Avançado</option>
-                </select>
+                <div className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-bold text-slate-700">
+                  Pacientes ativos
+                </div>
                 <input
                   type="text"
                   value={complimentaryNote}
@@ -1303,4 +1295,3 @@ const SidebarItem = ({ icon, label, active, onClick }: any) => (
     {icon} <span className="text-sm">{label}</span>
   </button>
 );
-

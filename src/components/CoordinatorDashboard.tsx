@@ -1678,7 +1678,7 @@ export function CoordinatorDashboard({
   const normalizedPlanName = (() => {
     const raw = normalizeUtf8Text(user?.planName || "").trim();
     if (!raw || raw === "Verto Pro" || raw === "Plano Pro" || raw === "Pro") {
-      return "Essencial";
+      return "Pacientes ativos";
     }
     return raw;
   })();

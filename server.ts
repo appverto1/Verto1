@@ -315,22 +315,12 @@ function resolveActivePatientPriceId(): string {
   return sanitizeString(process.env.STRIPE_ACTIVE_PATIENT_PRICE_ID || '', 120);
 }
 
-function isMeteredActivePatientBilling(): boolean {
-  const mode = sanitizeString(process.env.STRIPE_ACTIVE_PATIENT_BILLING_MODE || 'metered', 40).toLowerCase();
-  return mode !== 'legacy_quantity';
-}
+const ACTIVE_PATIENT_BILLING_MODEL = 'active_patients';
 
 function queueActivePatientSync(clinicId: string | null | undefined, trigger: string) {
   const safeClinicId = sanitizeString(clinicId, 120);
   const activePatientPriceId = resolveActivePatientPriceId();
   if (!safeClinicId || !activePatientPriceId) return;
-  if (isMeteredActivePatientBilling()) {
-    console.log('[Stripe Usage] Billing metered ativo; sync imediato de quantidade ignorado até o fechamento mensal.', {
-      clinicId: safeClinicId,
-      trigger
-    });
-    return;
-  }
 
   try {
     const stripe = getStripe();
@@ -355,56 +345,6 @@ function queueActivePatientSync(clinicId: string | null | undefined, trigger: st
       message: error?.message || String(error)
     });
   }
-}
-
-function normalizeProfessionalPlan(input?: string | null): 'Essencial' | 'Crescimento' | 'Avançado' | null {
-  if (!input) return null;
-  const normalized = input
-    .trim()
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '');
-
-  if (normalized === 'essencial') return 'Essencial';
-  if (normalized === 'crescimento') return 'Crescimento';
-  if (normalized === 'avancado') return 'Avançado';
-  return null;
-}
-
-function resolveProfessionalPlanPriceId(planName: string | null | undefined): string {
-  const normalizedPlan = normalizeProfessionalPlan(planName || '');
-  if (!normalizedPlan) return '';
-
-  const envNames: Record<string, string[]> = {
-    Essencial: ['STRIPE_PRICE_ESSENCIAL', 'STRIPE_ESSENCIAL_PRICE_ID'],
-    Crescimento: ['STRIPE_PRICE_CRESCIMENTO', 'STRIPE_CRESCIMENTO_PRICE_ID'],
-    Avançado: ['STRIPE_PRICE_AVANCADO', 'STRIPE_AVANCADO_PRICE_ID', 'STRIPE_PRICE_AVANÇADO']
-  };
-
-  for (const envName of envNames[normalizedPlan] || []) {
-    const priceId = sanitizeString(process.env[envName] || '', 160);
-    if (priceId) return priceId;
-  }
-
-  return '';
-}
-
-function resolveProfessionalPlanByPriceId(priceId: string | null | undefined): 'Essencial' | 'Crescimento' | 'Avançado' | null {
-  const safePriceId = sanitizeString(priceId, 160);
-  if (!safePriceId) return null;
-
-  const planNames: Array<'Essencial' | 'Crescimento' | 'Avançado'> = ['Essencial', 'Crescimento', 'Avançado'];
-  for (const planName of planNames) {
-    if (resolveProfessionalPlanPriceId(planName) === safePriceId) {
-      return planName;
-    }
-  }
-
-  return null;
-}
-
-function generateTemporaryCheckoutPassword(): string {
-  return `Verto#${crypto.randomBytes(12).toString('base64url')}9aA!`;
 }
 
 type AppRole = 'owner' | 'admin' | 'coordinator' | 'receptionist' | 'therapist' | 'patient';
@@ -522,6 +462,10 @@ async function persistStripeSubscriptionReference(params: {
   subscriptionId?: string | null;
   subscriptionItemId?: string | null;
   customerId?: string | null;
+  priceId?: string | null;
+  activePatientCount?: number | null;
+  billingSyncStatus?: string | null;
+  billingSyncError?: string | null;
   email?: string | null;
   userId?: string | null;
   clinicId?: string | null;
@@ -530,6 +474,7 @@ async function persistStripeSubscriptionReference(params: {
   const subscriptionId = sanitizeString(params.subscriptionId, 200);
   const subscriptionItemId = sanitizeString(params.subscriptionItemId, 200);
   const customerId = sanitizeString(params.customerId, 200);
+  const priceId = sanitizeString(params.priceId, 200);
   const userId = sanitizeString(params.userId, 120);
   const clinicId = sanitizeString(params.clinicId, 120);
   const safeEmail = sanitizeEmail(params.email);
@@ -539,7 +484,13 @@ async function persistStripeSubscriptionReference(params: {
     stripe_subscription_item_id: subscriptionItemId || undefined,
     stripe_customer_id: customerId || undefined,
     stripe_customer_email: safeEmail || undefined,
+    stripe_price_id: priceId || undefined,
     subscription_status: status,
+    billing_model: ACTIVE_PATIENT_BILLING_MODEL,
+    active_patient_count: typeof params.activePatientCount === 'number' ? Math.max(0, Math.floor(params.activePatientCount)) : undefined,
+    billing_sync_status: sanitizeString(params.billingSyncStatus, 80) || undefined,
+    billing_sync_error: sanitizeString(params.billingSyncError, 500) || undefined,
+    last_billing_sync_at: new Date().toISOString(),
     updated_at: new Date().toISOString()
   });
 
@@ -550,6 +501,57 @@ async function persistStripeSubscriptionReference(params: {
     await patchTableSafely('users', { column: 'id', value: userId }, patch);
   } else if (safeEmail) {
     await patchTableSafely('users', { column: 'email', value: safeEmail }, patch);
+  }
+}
+
+async function reserveStripeWebhookEvent(event: Stripe.Event): Promise<boolean> {
+  const eventId = sanitizeString(event?.id, 200);
+  const eventType = sanitizeString(event?.type, 120);
+  if (!eventId || !eventType) return true;
+  try {
+    const { error } = await supabase
+      .from('stripe_webhook_events')
+      .insert([{
+        id: eventId,
+        event_type: eventType,
+        status: 'processing',
+        metadata: {}
+      }]);
+    if (!error) return true;
+    const code = sanitizeString((error as any)?.code, 20);
+    const message = sanitizeString((error as any)?.message || '', 300).toLowerCase();
+    if (code === '23505' || message.includes('duplicate')) {
+      return false;
+    }
+    if (isMissingRelationError(error) || extractMissingColumnName(error)) {
+      console.warn('[Stripe Webhook] Tabela de idempotencia ausente; processando com fallback.', {
+        eventType
+      });
+      return true;
+    }
+    throw error;
+  } catch (error: any) {
+    console.warn('[Stripe Webhook] Falha no guard de idempotencia; processando com fallback.', {
+      eventType,
+      message: sanitizeString(error?.message || String(error), 200)
+    });
+    return true;
+  }
+}
+
+async function markStripeWebhookEventStatus(event: Stripe.Event, status: 'processed' | 'failed'): Promise<void> {
+  const eventId = sanitizeString(event?.id, 200);
+  if (!eventId) return;
+  try {
+    await supabase
+      .from('stripe_webhook_events')
+      .update({
+        status,
+        processed_at: new Date().toISOString()
+      })
+      .eq('id', eventId);
+  } catch {
+    // Best-effort audit only. Never retry webhook work because audit status failed.
   }
 }
 
@@ -6502,29 +6504,26 @@ async function derivePatientTreatmentStatus(user: any): Promise<'active' | 'inac
   return 'waiting_treatment';
 }
 
-async function resolveProfessionalPlanFromCheckoutSession(
+async function checkoutSessionUsesActivePatientPrice(
   stripe: Stripe,
   session: Stripe.Checkout.Session,
-): Promise<'Essencial' | 'Crescimento' | 'Avançado' | null> {
-  const metadataPlan = normalizeProfessionalPlan((session.metadata as any)?.planName);
-  if (metadataPlan) return metadataPlan;
-
+): Promise<boolean> {
+  const activePatientPriceId = resolveActivePatientPriceId();
+  if (!activePatientPriceId) return false;
   try {
     const lineItems = await stripe.checkout.sessions.listLineItems(session.id, { limit: 10 });
     for (const lineItem of lineItems.data || []) {
-      const planByPriceId = resolveProfessionalPlanByPriceId(
-        typeof lineItem.price === 'string' ? lineItem.price : lineItem.price?.id,
-      );
-      if (planByPriceId) return planByPriceId;
+      const priceId = sanitizeString(typeof lineItem.price === 'string' ? lineItem.price : lineItem.price?.id, 160);
+      if (priceId === activePatientPriceId) return true;
     }
   } catch (error: any) {
-    console.warn('[Stripe] Falha ao resolver plano pelos line items da sessao:', {
+    console.warn('[Stripe] Falha ao validar Price ID ativo pelos line items da sessao:', {
       sessionId: sanitizeString(session.id, 200),
       message: error?.message || String(error)
     });
   }
 
-  return null;
+  return false;
 }
 
 async function canAccessPatientInCurrentClinic(patientId: string, user: any): Promise<boolean> {
@@ -8097,6 +8096,9 @@ async function startServer() {
     if (event.type !== 'checkout.session.completed') {
       return res.json({ received: true, ignored: true });
     }
+    if (!(await reserveStripeWebhookEvent(event))) {
+      return res.json({ received: true, duplicate: true });
+    }
 
     try {
       const session = event.data.object as Stripe.Checkout.Session;
@@ -8133,8 +8135,10 @@ async function startServer() {
         });
       }
 
+      await markStripeWebhookEventStatus(event, 'processed');
       return res.json({ success: true, received: true });
     } catch (webhookError: any) {
+      await markStripeWebhookEventStatus(event, 'failed');
       console.error('[Stripe Activation Webhook] Erro ao processar ativação:', {
         message: webhookError?.message || String(webhookError)
       });
@@ -8164,33 +8168,25 @@ async function startServer() {
 
     try {
       const stripe = getStripe();
+      if (!(await reserveStripeWebhookEvent(event))) {
+        return res.json({ received: true, duplicate: true });
+      }
       switch (event.type) {
         case 'checkout.session.completed': {
           const session = event.data.object as Stripe.Checkout.Session;
           const userId = sanitizeString((session.metadata as any)?.userId, 120);
           const clinicId = sanitizeString((session.metadata as any)?.clinicId, 120);
           const flowType = sanitizeString((session.metadata as any)?.flowType, 80);
-          const planNameFromMetadata = sanitizeString((session.metadata as any)?.planName, 80);
           const customerEmail = sanitizeEmail(session.customer_details?.email || session.customer_email);
           const stripeCustomerId = sanitizeString(String(session.customer || ''), 200);
-          const resolvedDirectPlan = await resolveProfessionalPlanFromCheckoutSession(stripe, session);
 
-          if (!flowType && !userId && customerEmail && resolvedDirectPlan) {
-            try {
-              await provisionProfessionalFromDirectStripeCheckout({
-                email: customerEmail,
-                planName: resolvedDirectPlan,
-                customerName: sanitizeString(session.customer_details?.name, 180) || null,
-                stripeCustomerId
-              });
-            } catch (directProvisionError: any) {
-              console.error('[Stripe Webhook] Falha ao provisionar conta por payment link direto:', {
-                email: maskEmail(customerEmail),
-                planName: resolvedDirectPlan,
-                message: directProvisionError?.message || String(directProvisionError)
-              });
-              throw directProvisionError;
-            }
+          if (!flowType && !userId) {
+            const usesActivePatientPrice = await checkoutSessionUsesActivePatientPrice(stripe, session);
+            console.warn('[Stripe Webhook] Checkout sem metadata de clinica/usuario nao provisiona acesso automaticamente.', {
+              sessionId: sanitizeString(session.id, 200),
+              email: customerEmail ? maskEmail(customerEmail) : null,
+              billingModel: usesActivePatientPrice ? ACTIVE_PATIENT_BILLING_MODEL : 'unknown_or_legacy'
+            });
             break;
           }
 
@@ -8222,7 +8218,8 @@ async function startServer() {
                 const subscription = await stripe.subscriptions.update(subscriptionId, {
                   metadata: {
                     ...(userId ? { userId } : {}),
-                    ...(clinicId ? { clinicId } : {})
+                    ...(clinicId ? { clinicId } : {}),
+                    billingModel: ACTIVE_PATIENT_BILLING_MODEL
                   },
                   expand: ['items.data.price']
                 } as any);
@@ -8235,6 +8232,7 @@ async function startServer() {
                   subscriptionId,
                   subscriptionItemId: sanitizeString(subscriptionItem?.id, 120),
                   customerId: stripeCustomerId,
+                  priceId: activePatientPriceId,
                   email: customerEmail,
                   userId,
                   clinicId,
@@ -8280,7 +8278,7 @@ async function startServer() {
                   .from('users')
                   .update({
                     subscription_status: 'active',
-                    plan_name: normalizeProfessionalPlan(planNameFromMetadata) || resolvedDirectPlan || undefined,
+                    billing_model: ACTIVE_PATIENT_BILLING_MODEL,
                     updated_at: new Date().toISOString()
                   })
                   .eq('id', effectiveUserId);
@@ -8375,7 +8373,8 @@ async function startServer() {
           });
           break;
         }
-        case 'invoice.created': {
+        case 'invoice.created':
+        case 'invoice.finalized': {
           const invoice = event.data.object as Stripe.Invoice;
           const subscriptionId = sanitizeString(String((invoice as any).subscription || ''), 120);
           const customerEmail = sanitizeEmail(invoice.customer_email);
@@ -8407,7 +8406,8 @@ async function startServer() {
           }
           break;
         }
-        case 'invoice.paid': {
+        case 'invoice.paid':
+        case 'invoice.payment_succeeded': {
           const invoice = event.data.object as Stripe.Invoice;
           const subscriptionId = sanitizeString(String((invoice as any).subscription || ''), 120);
           const customerEmail = sanitizeEmail(invoice.customer_email);
@@ -8426,6 +8426,7 @@ async function startServer() {
               subscriptionId,
               subscriptionItemId: sanitizeString(subscriptionItem?.id, 120),
               customerId: sanitizeString(String((invoice as any).customer || subscription.customer || ''), 200),
+              priceId: activePatientPriceId,
               email: customerEmail,
               userId,
               clinicId,
@@ -8441,6 +8442,7 @@ async function startServer() {
           await clearClinicPaymentFailure({ clinicId, userId, email: customerEmail });
           break;
         }
+        case 'customer.subscription.created':
         case 'customer.subscription.updated':
         case 'customer.subscription.deleted': {
           const subscription = event.data.object as Stripe.Subscription;
@@ -8456,6 +8458,7 @@ async function startServer() {
             subscriptionId: subscription.id,
             subscriptionItemId: sanitizeString(subscriptionItem?.id, 120),
             customerId: sanitizeString(String(subscription.customer || ''), 200),
+            priceId: activePatientPriceId,
             userId,
             clinicId,
             status: subscription.status
@@ -8470,7 +8473,9 @@ async function startServer() {
         default:
           break;
       }
+      await markStripeWebhookEventStatus(event, 'processed');
     } catch (webhookProcessingError: any) {
+      await markStripeWebhookEventStatus(event, 'failed');
       console.error('[Stripe Webhook] Erro ao processar evento:', {
         type: event?.type,
         message: webhookProcessingError?.message || String(webhookProcessingError)
@@ -10187,15 +10192,8 @@ async function startServer() {
       roleToUse = 'coordinator';
     }
 
-    const planPrices: Record<string, number> = {
-      'Essencial': 149.90,
-      'Crescimento': 399.90,
-      'Avançado': 679.90,
-      'Paciente': 4.90
-    };
-
-    const normalizedPlanName = roleToUse === 'patient' ? 'Paciente' : normalizeProfessionalPlan(planName);
-    const finalPlanPrice = normalizedPlanName ? (planPrices[normalizedPlanName] || null) : null;
+    const normalizedPlanName = roleToUse === 'patient' ? 'Paciente' : null;
+    const finalPlanPrice = roleToUse === 'patient' ? 4.90 : null;
 
     const newProfile = cleanObject({
       id: authUser.id,
@@ -10206,6 +10204,7 @@ async function startServer() {
       subscription_status: 'pending',
       plan_name: normalizedPlanName,
       plan_price: finalPlanPrice,
+      billing_model: roleToUse === 'patient' ? undefined : ACTIVE_PATIENT_BILLING_MODEL,
       phone: phone || null,
       phone_verified_at: null,
       created_at: new Date().toISOString()
@@ -10223,6 +10222,7 @@ async function startServer() {
           subscription_status: 'pending',
           plan_name: normalizedPlanName,
           plan_price: finalPlanPrice,
+          billing_model: roleToUse === 'patient' ? undefined : ACTIVE_PATIENT_BILLING_MODEL,
           created_at: new Date().toISOString()
         });
         const { error: fallbackInsertError } = await supabase.from('users').upsert([fallbackProfile], { onConflict: 'id' });
@@ -10292,180 +10292,6 @@ async function startServer() {
           : 'Conta criada. Enviamos um link de confirmação para seu e-mail. Confirme antes de acessar funcionalidades sensíveis.'
       }
     };
-  };
-
-  const provisionProfessionalFromDirectStripeCheckout = async (params: {
-    email: string;
-    planName: 'Essencial' | 'Crescimento' | 'Avançado';
-    customerName?: string | null;
-    stripeCustomerId?: string | null;
-  }) => {
-    const safeEmail = sanitizeEmail(params.email);
-    const planName = normalizeProfessionalPlan(params.planName);
-    const customerName = sanitizeString(params.customerName, 180);
-    const stripeCustomerId = sanitizeString(params.stripeCustomerId, 200);
-    if (!safeEmail || !planName) {
-      throw new Error('Dados insuficientes para provisionar acesso profissional por checkout direto.');
-    }
-
-    const planPrices: Record<'Essencial' | 'Crescimento' | 'Avançado', number> = {
-      Essencial: 149.9,
-      Crescimento: 399.9,
-      Avançado: 679.9
-    };
-
-    let authUser = await findAuthUserByEmail(safeEmail);
-    let userId = sanitizeString(authUser?.id, 120);
-    const displayName = customerName || sanitizeString(authUser?.user_metadata?.full_name, 180) || safeEmail.split('@')[0];
-
-    if (!userId) {
-      const signupResult = await registerUserWithEmailConfirmation(
-        {
-          email: safeEmail,
-          password: generateTemporaryCheckoutPassword(),
-          name: displayName,
-          role: 'professional',
-          intendedRole: 'coordinator',
-          planName
-        },
-        { deferActivationEmail: true }
-      );
-
-      if (!signupResult.ok) {
-        throw new Error(sanitizeString((signupResult.body as any)?.error || 'Falha ao criar conta pós-pagamento.', 300));
-      }
-
-      userId = sanitizeString((signupResult.body as any)?.userId, 120);
-      authUser = await findAuthUserByEmail(safeEmail);
-    }
-
-    if (!userId) {
-      throw new Error('Nao foi possivel localizar a conta apos o checkout.');
-    }
-
-    const { data: existingProfile } = await supabase
-      .from('users')
-      .select('id, role, email, name')
-      .eq('id', userId)
-      .maybeSingle();
-
-    const existingRole = sanitizeString(existingProfile?.role, 40).toLowerCase();
-    if (existingRole === 'patient') {
-      throw new Error('Este e-mail ja possui cadastro como paciente e nao pode receber plano profissional direto.');
-    }
-
-    let profileUpdatePayload = cleanObject({
-      email: safeEmail,
-      name: displayName,
-      role: 'coordinator',
-      clinic_id: userId,
-      subscription_status: 'active',
-      plan_name: planName,
-      plan_price: planPrices[planName],
-      updated_at: new Date().toISOString()
-    });
-
-    const removedColumns = new Set<string>();
-    for (let attempt = 0; attempt < 8; attempt += 1) {
-      const { error: updateError } = await supabase
-        .from('users')
-        .update(profileUpdatePayload)
-        .eq('id', userId);
-
-      if (!updateError) break;
-
-      const missingColumn = extractMissingColumnName(updateError);
-      if (!missingColumn || removedColumns.has(missingColumn)) {
-        throw updateError;
-      }
-
-      removedColumns.add(missingColumn);
-      const { [missingColumn]: _removed, ...rest } = profileUpdatePayload as any;
-      profileUpdatePayload = rest;
-    }
-
-    await ensureClinicAndMembershipForCoordinator(userId, displayName || null);
-    await updateClinicSubscriptionStatus({
-      clinicId: userId,
-      userId,
-      email: safeEmail,
-      status: 'active'
-    });
-
-    if (stripeCustomerId) {
-      await persistStripeCustomerReference({
-        customerId: stripeCustomerId,
-        email: safeEmail,
-        userId,
-        clinicId: userId
-      });
-    }
-
-    try {
-      await supabase.auth.admin.updateUserById(userId, {
-        user_metadata: {
-          ...((authUser as any)?.user_metadata || {}),
-          full_name: displayName,
-          role: 'coordinator'
-        }
-      });
-    } catch (metadataError: any) {
-      console.warn('[Stripe] Nao foi possivel atualizar metadata do usuario provisionado por link direto:', {
-        userId,
-        message: metadataError?.message || String(metadataError)
-      });
-    }
-
-    const { data: authData, error: authError } = await supabase.auth.admin.getUserById(userId);
-    if (authError) {
-      throw authError;
-    }
-
-    const latestAuthUser = authData?.user;
-    const isEmailConfirmed = Boolean((latestAuthUser as any)?.email_confirmed_at || (latestAuthUser as any)?.confirmed_at);
-    const targetEmail = sanitizeEmail(latestAuthUser?.email) || safeEmail;
-
-    if (!isEmailConfirmed && targetEmail) {
-      const activationLink =
-        (await generateSupabaseActionLink({
-          type: 'signup',
-          email: targetEmail,
-          redirectTo: getActivationRedirectUrl('coordinator', targetEmail)
-        })) ||
-        (await generateSupabaseActionLink({
-          type: 'recovery',
-          email: targetEmail,
-          redirectTo: getActivationRedirectUrl('coordinator', targetEmail)
-        })) ||
-        getActivationRedirectUrl('coordinator', targetEmail);
-
-      const activationEmail = buildActivationEmailTemplate({
-        nome: displayName,
-        link_ativacao: activationLink,
-        perfil: 'professional'
-      });
-
-      await sendTransactionalEmailSafe({
-        to: targetEmail,
-        subject: activationEmail.subject,
-        html: activationEmail.html,
-        context: 'professional_direct_payment_activation',
-        from: OFFICIAL_FROM_CONTACT,
-        replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
-        templateKind: 'welcome_professional',
-        templateData: {
-          nome: displayName,
-          link_ativacao: activationLink
-        },
-        metadata: {
-          userId,
-          email: maskEmail(targetEmail),
-          planName
-        }
-      });
-    }
-
-    return { userId, planName, email: targetEmail };
   };
 
   app.post('/api/auth/signup', authSignupLimiter, async (req, res) => {
@@ -20280,6 +20106,7 @@ async function startServer() {
                 customerId: subscription.customerId,
                 subscriptionId: subscription.subscriptionId,
                 subscriptionItemId: subscription.subscriptionItemId,
+                priceId: activePatientPriceId,
                 email: coordinatorEmail,
                 userId,
                 clinicId,
@@ -37754,14 +37581,10 @@ async function startServer() {
   app.post('/api/admin/grant-complimentary-plan', checkAuth, checkPlatformAdmin, async (req: any, res) => {
     try {
       const email = sanitizeEmail(req.body?.email);
-      const requestedPlan = normalizeProfessionalPlan(req.body?.planName || 'Essencial');
       const note = sanitizeString(req.body?.note, 500);
 
       if (!email) {
         return res.status(400).json({ success: false, error: 'Informe um e-mail valido.' });
-      }
-      if (!requestedPlan) {
-        return res.status(400).json({ success: false, error: 'Plano profissional invalido.' });
       }
 
       const { data: existingUser, error: findError } = await supabase
@@ -37787,12 +37610,13 @@ async function startServer() {
         role: 'coordinator',
         clinic_id: userId,
         subscription_status: 'active',
-        plan_name: requestedPlan,
+        billing_model: ACTIVE_PATIENT_BILLING_MODEL,
+        plan_name: null,
         plan_price: 0,
         billing_source: 'complimentary',
         complimentary_plan_granted_at: new Date().toISOString(),
         complimentary_plan_granted_by: sanitizeString(actor?.id, 120) || null,
-        complimentary_plan_note: note || `Acesso gratuito concedido no plano ${requestedPlan}.`,
+        complimentary_plan_note: note || 'Acesso gratuito concedido no modelo por paciente ativo.',
         updated_at: new Date().toISOString()
       });
 
@@ -37851,7 +37675,7 @@ async function startServer() {
               metadata: {
                 userId,
                 email: maskEmail(targetEmail),
-                planName: requestedPlan,
+                billingModel: ACTIVE_PATIENT_BILLING_MODEL,
                 billingSource: 'complimentary'
               }
             });
@@ -37862,8 +37686,8 @@ async function startServer() {
       }
 
       await persistIdentityAuditLog({
-        title: 'Plano gratuito concedido',
-        content: `Acesso gratuito ${requestedPlan} concedido para ${maskEmail(email)} por ${maskEmail(actor?.email)}. E-mail de ativacao ${activationEmailSent ? 'enviado' : 'nao enviado ou ja confirmado'}.${note ? ` Observacao: ${note}` : ''}`,
+        title: 'Acesso gratuito concedido',
+        content: `Acesso gratuito por paciente ativo concedido para ${maskEmail(email)} por ${maskEmail(actor?.email)}. E-mail de ativacao ${activationEmailSent ? 'enviado' : 'nao enviado ou ja confirmado'}.${note ? ` Observacao: ${note}` : ''}`,
         identifier: email,
         channel: 'admin',
         userId,
@@ -37875,7 +37699,7 @@ async function startServer() {
         data: {
           userId,
           email,
-          planName: requestedPlan,
+          billingModel: ACTIVE_PATIENT_BILLING_MODEL,
           subscriptionStatus: 'active',
           planPrice: 0,
           activationEmailSent
@@ -39080,25 +38904,15 @@ async function startServer() {
       const safeName = sanitizeString(req.body?.name, 180);
       const safeCrp = sanitizeString(req.body?.crp, 80);
       const safePhone = sanitizePhoneE164(req.body?.phone || req.body?.whatsappPhone || req.body?.whatsapp);
-      const requestedPlan = normalizeProfessionalPlan(req.body?.planName || '') || sanitizeString(req.body?.planName, 80);
 
-      if (!safeEmail || !password || !safeName || !requestedPlan || !safePhone) {
-        return res.status(400).json({ error: 'Dados obrigatórios ausentes para checkout do cadastro profissional.' });
-      }
-      if (!['Essencial', 'Crescimento', 'Avançado'].includes(requestedPlan)) {
-        return res.status(400).json({ error: 'Plano profissional inválido.' });
+      if (!safeEmail || !password || !safeName || !safePhone) {
+        return res.status(400).json({ error: 'Dados obrigatorios ausentes para checkout do cadastro profissional.' });
       }
 
-      const planPricesCents: Record<string, number> = {
-        Essencial: 14990,
-        Crescimento: 39990,
-        Avançado: 67990
-      };
-      const planPricesDecimal: Record<string, number> = {
-        Essencial: 149.90,
-        Crescimento: 399.90,
-        Avançado: 679.90
-      };
+      const activePatientPriceId = resolveActivePatientPriceId();
+      if (!activePatientPriceId) {
+        return res.status(503).json({ error: 'Cobranca por paciente ativo ainda nao esta configurada.' });
+      }
 
       let userId: string | null = null;
       const existingAuthUser = await findAuthUserByEmail(safeEmail);
@@ -39112,10 +38926,10 @@ async function startServer() {
         const existingRole = sanitizeString(existingProfile?.role, 40).toLowerCase();
         const existingSub = sanitizeString(existingProfile?.subscription_status, 40).toLowerCase();
         if (existingRole === 'patient') {
-          return res.status(409).json({ error: 'Este e-mail já está cadastrado como paciente.' });
+          return res.status(409).json({ error: 'Este e-mail ja esta cadastrado como paciente.' });
         }
         if (existingSub === 'active') {
-          return res.status(409).json({ error: 'Este e-mail já possui assinatura ativa. Faça login.' });
+          return res.status(409).json({ error: 'Este e-mail ja possui assinatura ativa. Faca login.' });
         }
 
         userId = sanitizeString(existingAuthUser.id, 120);
@@ -39123,8 +38937,9 @@ async function startServer() {
           name: safeName,
           role: 'coordinator',
           phone: safePhone,
-          plan_name: requestedPlan,
-          plan_price: planPricesDecimal[requestedPlan] || null,
+          plan_name: null,
+          plan_price: null,
+          billing_model: ACTIVE_PATIENT_BILLING_MODEL,
           subscription_status: 'pending',
           crp: safeCrp || undefined,
           updated_at: new Date().toISOString()
@@ -39152,7 +38967,7 @@ async function startServer() {
           profileUpdatePayload = rest;
         }
         if (!updateSucceeded) {
-          throw new Error('Não foi possível atualizar cadastro existente para checkout.');
+          throw new Error('Nao foi possivel atualizar cadastro existente para checkout.');
         }
       } else {
         const signupResult = await registerUserWithEmailConfirmation(
@@ -39162,9 +38977,9 @@ async function startServer() {
             name: safeName,
             role: 'professional',
             intendedRole: 'coordinator',
-            planName: requestedPlan,
             crp: safeCrp,
-            phone: safePhone
+            phone: safePhone,
+            billingModel: ACTIVE_PATIENT_BILLING_MODEL
           },
           { deferActivationEmail: true }
         );
@@ -39176,55 +38991,30 @@ async function startServer() {
       }
 
       if (!userId) {
-        return res.status(500).json({ error: 'Não foi possível preparar o cadastro para pagamento.' });
+        return res.status(500).json({ error: 'Nao foi possivel preparar o cadastro para pagamento.' });
       }
 
       const stripe = getStripe();
-      const origin = req.headers.origin || `${req.protocol}://${req.get('host')}`;
-      const activePatientPriceId = resolveActivePatientPriceId();
-      const stripePriceId = activePatientPriceId || resolveProfessionalPlanPriceId(requestedPlan);
-      const lineItem: Stripe.Checkout.SessionCreateParams.LineItem = stripePriceId
-        ? activePatientPriceId
-          ? {
-              price: stripePriceId
-            }
-          : {
-              price: stripePriceId,
-              quantity: 1
-            }
-        : {
-            price_data: {
-              currency: 'brl',
-              product_data: {
-                name: `Plano ${requestedPlan} - Verto`
-              },
-              unit_amount: planPricesCents[requestedPlan],
-              recurring: {
-                interval: 'month'
-              }
-            },
-            quantity: 1
-          };
-
+      const origin = req.headers.origin || req.protocol + '://' + req.get('host');
       const session = await stripe.checkout.sessions.create({
         payment_method_types: ['card'],
-        line_items: [lineItem],
+        line_items: [{ price: activePatientPriceId, quantity: 1 }],
         mode: 'subscription',
-        success_url: `${origin}/?payment=success&mode=professional-signup&signup=check-email&checkout_session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${origin}/?payment=cancel&mode=professional-signup&lead_ref=${encodeURIComponent(userId)}&plan=${encodeURIComponent(requestedPlan)}&checkout_session_id={CHECKOUT_SESSION_ID}`,
+        success_url: origin + '/?payment=success&mode=professional-signup&signup=check-email&checkout_session_id={CHECKOUT_SESSION_ID}',
+        cancel_url: origin + '/?payment=cancel&mode=professional-signup&lead_ref=' + encodeURIComponent(userId) + '&checkout_session_id={CHECKOUT_SESSION_ID}',
         customer_email: safeEmail,
         metadata: {
           flowType: 'professional_signup',
           userId,
           clinicId: userId,
-          planName: requestedPlan
+          billingModel: ACTIVE_PATIENT_BILLING_MODEL
         },
         subscription_data: {
           metadata: {
             flowType: 'professional_signup',
             userId,
             clinicId: userId,
-            planName: requestedPlan
+            billingModel: ACTIVE_PATIENT_BILLING_MODEL
           }
         }
       });
@@ -39335,90 +39125,8 @@ async function startServer() {
   app.post('/api/stripe/create-checkout', checkAuth, async (req, res) => {
     try {
       const user = req.session.user;
-      const { planName: requestedPlan } = req.body;
-      
-      console.log('Creating checkout for user:', user.id, user.email, user.role, requestedPlan);
-      
-      // Determine price
-      let amount = 0;
-      let description = '';
-      let checkoutPlanName = '';
-      
-      if (user.role === 'patient') {
-        amount = 490; // R$ 4,90 in cents
-        description = 'Assinatura Mensal Paciente - Verto';
-      } else {
-        // Professional plans
-        const planPrices: Record<string, number> = {
-          'Essencial': 14990,
-          'Crescimento': 39990,
-          'Avançado': 67990
-        };
-        const activePatientPriceId = resolveActivePatientPriceId();
-        
-        let planName = normalizeProfessionalPlan(requestedPlan) || requestedPlan;
-        
-        if (!planName) {
-          // Try to get plan from profile if not in session
-          const { data: profile, error: profileError } = await supabase
-            .from('users')
-            .select('plan_name')
-            .eq('id', user.id)
-            .single();
-            
-          if (profileError) {
-            console.warn('Could not fetch user profile for plan:', profileError.message);
-          }
-          planName = normalizeProfessionalPlan(profile?.plan_name) || profile?.plan_name || null;
-        }
-
-        if (!planName && !activePatientPriceId) {
-          return res.status(400).json({ error: 'Selecione um plano para continuar.' });
-        }
-
-        if (planName && !planPrices[planName]) {
-          return res.status(400).json({ error: 'Plano invalido para checkout.' });
-        }
-
-        if (requestedPlan) {
-          // Update user profile with selected plan if it was passed in body
-          const planPrice = planName === 'Essencial' ? 149.90 : planName === 'Crescimento' ? 399.90 : 679.90;
-          const { error: updateError } = await supabase
-            .from('users')
-            .update({ plan_name: planName, plan_price: planPrice })
-            .eq('id', user.id);
-            
-          if (updateError) {
-            console.error('Error updating user plan before checkout:', updateError);
-          }
-          
-          // Also update session user
-          if (req.session.user) {
-            req.session.user.planName = planName;
-            req.session.user.planPrice = planPrice;
-          }
-        }
-        
-        amount = planName ? planPrices[planName] : 0;
-        description = activePatientPriceId ? 'Cobrança por paciente ativo - Verto' : `Plano ${planName} - Verto`;
-        checkoutPlanName = planName || 'Pacientes Ativos';
-      }
-
-      console.log('Checkout details:', { amount, description });
-
-      let stripe;
-      try {
-        stripe = getStripe();
-      } catch (stripeInitError: any) {
-        console.error('Stripe initialization failed:', stripeInitError.message);
-        return res.status(500).json({ 
-          error: 'O Stripe não está configurado corretamente no servidor.',
-          details: stripeInitError.message 
-        });
-      }
-
-      const origin = req.headers.origin || `${req.protocol}://${req.get('host')}`;
-      
+      const stripe = getStripe();
+      const origin = req.headers.origin || req.protocol + '://' + req.get('host');
       const clinicId = sanitizeString(
         user.activeWorkspaceId || user.clinicId || user.id,
         120
@@ -39430,47 +39138,40 @@ async function startServer() {
         email: sanitizeEmail(user.email)
       });
 
-      const activePatientPriceId = user.role === 'patient' ? '' : resolveActivePatientPriceId();
-      const professionalPriceId = user.role === 'patient' ? '' : (activePatientPriceId || resolveProfessionalPlanPriceId(checkoutPlanName));
-      const lineItem: Stripe.Checkout.SessionCreateParams.LineItem = professionalPriceId
-        ? activePatientPriceId
-          ? {
-              price: professionalPriceId
-            }
-          : {
-              price: professionalPriceId,
-              quantity: 1
-            }
-        : {
+      const isPatientCheckout = sanitizeString(user.role, 40).toLowerCase() === 'patient';
+      const activePatientPriceId = isPatientCheckout ? '' : resolveActivePatientPriceId();
+      if (!isPatientCheckout && !activePatientPriceId) {
+        return res.status(503).json({ success: false, error: 'Cobranca por paciente ativo ainda nao esta configurada.' });
+      }
+
+      const lineItem: Stripe.Checkout.SessionCreateParams.LineItem = isPatientCheckout
+        ? {
             price_data: {
               currency: 'brl',
-              product_data: {
-                name: description,
-              },
-              unit_amount: amount,
-              recurring: {
-                interval: 'month',
-              },
+              product_data: { name: 'Assinatura Mensal Paciente - Verto' },
+              unit_amount: 490,
+              recurring: { interval: 'month' }
             },
-            quantity: 1,
-          };
+            quantity: 1
+          }
+        : { price: activePatientPriceId, quantity: 1 };
 
       const checkoutPayload: Stripe.Checkout.SessionCreateParams = {
         payment_method_types: ['card'],
         line_items: [lineItem],
         mode: 'subscription',
-        success_url: `${origin}/?payment=success`,
-        cancel_url: `${origin}/?payment=cancel`,
+        success_url: origin + '/?payment=success',
+        cancel_url: origin + '/?payment=cancel',
         metadata: {
           userId: user.id,
           clinicId,
-          ...(user.role === 'patient' ? {} : { planName: checkoutPlanName })
+          ...(isPatientCheckout ? {} : { billingModel: ACTIVE_PATIENT_BILLING_MODEL })
         },
         subscription_data: {
           metadata: {
             userId: user.id,
             clinicId,
-            ...(user.role === 'patient' ? {} : { planName: checkoutPlanName })
+            ...(isPatientCheckout ? {} : { billingModel: ACTIVE_PATIENT_BILLING_MODEL })
           }
         }
       };
@@ -39482,14 +39183,15 @@ async function startServer() {
       }
 
       const session = await stripe.checkout.sessions.create(checkoutPayload);
-
-      console.log('Stripe session created:', session.id);
-      res.json({ url: session.url });
+      res.json({ success: true, url: session.url });
     } catch (error: any) {
-      console.error('Stripe checkout error:', error);
-      res.status(500).json({ 
-        error: error.message || 'Erro ao criar sessão de pagamento',
-        details: process.env.NODE_ENV === 'production' ? undefined : error.stack
+      console.error('[Stripe] create-checkout error:', {
+        message: error?.message || String(error),
+        code: sanitizeString(error?.code, 60) || null
+      });
+      res.status(500).json({
+        success: false,
+        error: error.message || 'Erro ao criar sessao de pagamento'
       });
     }
   });
@@ -39640,10 +39342,55 @@ async function startServer() {
         results
       });
     } catch (error: any) {
-      console.error('[Stripe Usage] Endpoint report-usage falhou:', {
+      console.error('[Stripe Sync] Endpoint legado report-usage falhou:', {
         message: error?.message || String(error)
       });
-      return res.status(500).json({ success: false, error: 'Falha ao reportar uso mensal.' });
+      return res.status(500).json({ success: false, error: 'Falha ao sincronizar cobrança por paciente ativo.' });
+    }
+  });
+
+  app.post('/api/admin/billing/reconcile-active-patient-usage', async (req: any, res) => {
+    try {
+      const cronSecret = sanitizeString(process.env.BILLING_CRON_SECRET || '', 240);
+      const providedSecret = sanitizeString(req.headers['x-cron-secret'] || req.body?.secret, 240);
+      const sessionRole = sanitizeString(req.session?.user?.role, 40).toLowerCase();
+      const authorizedBySecret = Boolean(
+        cronSecret &&
+        providedSecret &&
+        Buffer.byteLength(cronSecret) === Buffer.byteLength(providedSecret) &&
+        crypto.timingSafeEqual(Buffer.from(cronSecret), Buffer.from(providedSecret))
+      );
+      const authorizedBySession = ['owner', 'admin'].includes(sessionRole);
+      if (!authorizedBySecret && !authorizedBySession) {
+        return res.status(403).json({ success: false, error: 'Acesso negado para reconciliar billing.' });
+      }
+
+      const activePatientPriceId = resolveActivePatientPriceId();
+      if (!activePatientPriceId) {
+        return res.status(400).json({ success: false, error: 'STRIPE_ACTIVE_PATIENT_PRICE_ID não configurado.' });
+      }
+
+      const results = await reportAllClinicsActivePatientUsage({
+        supabase,
+        stripe: getStripe(),
+        activePatientPriceId,
+        trigger: sanitizeString(req.body?.trigger, 80) || 'reconcile_active_patient_usage',
+        allowOverNegotiationLimit: true,
+        logger: console
+      });
+
+      return res.json({
+        success: true,
+        billingModel: ACTIVE_PATIENT_BILLING_MODEL,
+        synced: results.filter((item) => item.reported).length,
+        skipped: results.filter((item) => !item.reported).length,
+        results
+      });
+    } catch (error: any) {
+      console.error('[Stripe Billing] Reconcile active patient usage failed:', {
+        message: error?.message || String(error)
+      });
+      return res.status(500).json({ success: false, error: 'Falha ao reconciliar cobrança.' });
     }
   });
 
@@ -39703,30 +39450,7 @@ async function startServer() {
 
   const activePatientPriceId = resolveActivePatientPriceId();
   if (activePatientPriceId) {
-    const runMonthlyUsageReport = async (trigger: string) => {
-      try {
-        const results = await reportAllClinicsActivePatientUsage({
-          supabase,
-          stripe: getStripe(),
-          activePatientPriceId,
-          trigger,
-          allowOverNegotiationLimit: sanitizeString(process.env.STRIPE_ALLOW_OVER_299_USAGE || process.env.STRIPE_ALLOW_OVER_50_USAGE || '', 10).toLowerCase() === 'true',
-          logger: console
-        });
-        console.log('[Stripe Usage] Reporte mensal concluído.', {
-          trigger,
-          reported: results.filter((item) => item.reported).length,
-          skipped: results.filter((item) => !item.reported).length
-        });
-      } catch (error: any) {
-        console.error('[CRITICAL] Falha no reporte mensal de uso Stripe (não bloqueante).', {
-          trigger,
-          message: error?.message || String(error)
-        });
-      }
-    };
-
-    const runLegacyDailyBillingSync = async (trigger: string) => {
+    const runDailyBillingSync = async (trigger: string) => {
       try {
         await syncAllClinicsActivePatientAddonQuantity({
           supabase,
@@ -39743,35 +39467,13 @@ async function startServer() {
       }
     };
 
-    if (isMeteredActivePatientBilling()) {
-      let lastMonthlyUsageReportKey = '';
-      const shouldRunMonthlyUsageReport = () => {
-        const now = new Date();
-        const saoPauloDate = new Date(now.toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
-        const tomorrow = new Date(saoPauloDate);
-        tomorrow.setDate(saoPauloDate.getDate() + 1);
-        const isLastDay = tomorrow.getMonth() !== saoPauloDate.getMonth();
-        const isReportWindow = saoPauloDate.getHours() === 23 && saoPauloDate.getMinutes() < 15;
-        const key = `${saoPauloDate.getFullYear()}-${String(saoPauloDate.getMonth() + 1).padStart(2, '0')}`;
-        if (!isLastDay || !isReportWindow || lastMonthlyUsageReportKey === key) return false;
-        lastMonthlyUsageReportKey = key;
-        return true;
-      };
+    setTimeout(() => {
+      void runDailyBillingSync('startup_warmup');
+    }, 90 * 1000);
 
-      setInterval(() => {
-        if (shouldRunMonthlyUsageReport()) {
-          void runMonthlyUsageReport('monthly_last_day_23h');
-        }
-      }, 15 * 60 * 1000);
-    } else {
-      setTimeout(() => {
-        void runLegacyDailyBillingSync('startup_warmup');
-      }, 90 * 1000);
-
-      setInterval(() => {
-        void runLegacyDailyBillingSync('daily_interval');
-      }, 24 * 60 * 60 * 1000);
-    }
+    setInterval(() => {
+      void runDailyBillingSync('daily_interval');
+    }, 24 * 60 * 60 * 1000);
   } else {
     console.warn('[Stripe Sync] STRIPE_ACTIVE_PATIENT_PRICE_ID não configurado. Sync de pacientes ativos desabilitado.');
   }

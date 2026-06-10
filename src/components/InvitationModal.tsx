@@ -27,22 +27,13 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [invitations, setInvitations] = useState<{email: string, role: string}[]>([]);
 
-  // Plan limits based on LandingPage.tsx
-  const planLimits: Record<string, number> = {
-    'Essencial': 2,
-    'Crescimento': 7,
-    'Avançado': 12,
-    'Enterprise': 999,
-    'Premium': 999
-  };
-
-  const currentPlan = user.planName || 'Essencial';
-  const maxMembers = planLimits[currentPlan] || 2;
+  const explicitTeamLimit = Number(user?.teamMemberLimit || user?.team_member_limit || 0);
+  const maxMembers = Number.isFinite(explicitTeamLimit) && explicitTeamLimit > 0 ? explicitTeamLimit : null;
 
   const handleInvite = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (invitations.length + 1 >= maxMembers) {
-      setError(`Seu plano ${currentPlan} permite no máximo ${maxMembers} profissionais.`);
+    if (maxMembers && invitations.length + 1 >= maxMembers) {
+      setError(`Sua configuracao permite no maximo ${maxMembers} profissionais.`);
       return;
     }
 
@@ -89,7 +80,7 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
               </div>
               <h2 className="text-2xl font-bold mb-4 tracking-tight">Bem-vindo à Verto!</h2>
               <p className="text-blue-100 text-sm leading-relaxed mb-6">
-                Vamos configurar sua equipe. De acordo com seu plano <span className="font-bold text-white">{currentPlan}</span>, você pode convidar até {maxMembers - 1} outros profissionais.
+                Vamos configurar sua equipe. {maxMembers ? `Voce pode convidar ate ${maxMembers - 1} outros profissionais.` : 'Convide os profissionais que vao colaborar na clinica.'}
               </p>
             </div>
             

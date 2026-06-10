@@ -55,7 +55,6 @@ export const AdminDashboard = ({ onLogout }: any) => {
   const [is2FAEnabled, setIs2FAEnabled] = useState(false);
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(false);
   const [complimentaryEmail, setComplimentaryEmail] = useState('');
-  const [complimentaryPlan, setComplimentaryPlan] = useState<'Essencial' | 'Crescimento' | 'Avançado'>('Essencial');
   const [complimentaryNote, setComplimentaryNote] = useState('');
   const [grantingComplimentaryPlan, setGrantingComplimentaryPlan] = useState(false);
 
@@ -186,7 +185,7 @@ export const AdminDashboard = ({ onLogout }: any) => {
       alert('Informe o e-mail cadastrado antes de conceder o acesso.');
       return;
     }
-    if (!window.confirm(`Conceder plano ${complimentaryPlan} sem cobranca para ${email}?`)) return;
+    if (!window.confirm(`Conceder acesso cortesia por paciente ativo para ${email}?`)) return;
 
     setGrantingComplimentaryPlan(true);
     try {
@@ -202,7 +201,6 @@ export const AdminDashboard = ({ onLogout }: any) => {
         },
         body: JSON.stringify({
           email,
-          planName: complimentaryPlan,
           note: complimentaryNote
         })
       });
@@ -217,14 +215,15 @@ export const AdminDashboard = ({ onLogout }: any) => {
               ...client,
               role: 'coordinator',
               subscription_status: 'active',
-              plan_name: data.data?.planName || complimentaryPlan,
+              plan_name: 'Pacientes ativos',
+              billing_model: data.data?.billingModel || 'active_patients',
               plan_price: 0
             }
           : client
       )));
       setComplimentaryEmail('');
       setComplimentaryNote('');
-      alert(`Acesso gratuito liberado no plano ${data.data?.planName || complimentaryPlan}.${data.data?.activationEmailSent ? ' E-mail de ativacao enviado.' : ''}`);
+      alert(`Acesso gratuito por paciente ativo liberado.${data.data?.activationEmailSent ? ' E-mail de ativacao enviado.' : ''}`);
     } catch (err: any) {
       alert(err.message || 'Erro ao conceder acesso gratuito.');
     } finally {
@@ -488,16 +487,10 @@ export const AdminDashboard = ({ onLogout }: any) => {
                     />
                   </div>
                   <div className="w-full lg:w-56">
-                    <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Plano liberado</label>
-                    <select
-                      value={complimentaryPlan}
-                      onChange={(event) => setComplimentaryPlan(event.target.value as 'Essencial' | 'Crescimento' | 'Avançado')}
-                      className="mt-2 w-full bg-white border border-blue-100 rounded-2xl py-3 px-4 text-sm font-bold text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#7a32fc]/20"
-                    >
-                      <option value="Essencial">Essencial</option>
-                      <option value="Crescimento">Crescimento</option>
-                      <option value="Avançado">Avançado</option>
-                    </select>
+                    <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Modelo liberado</label>
+                    <div className="mt-2 w-full bg-white border border-blue-100 rounded-2xl py-3 px-4 text-sm font-bold text-gray-700">
+                      Pacientes ativos
+                    </div>
                   </div>
                   <div className="flex-[1.2]">
                     <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Observacao interna</label>
@@ -518,7 +511,7 @@ export const AdminDashboard = ({ onLogout }: any) => {
                   </button>
                 </div>
                 <p className="mt-3 text-xs font-semibold text-gray-500">
-                  Use depois que a pessoa criou o cadastro e chegou na etapa de pagamento. O plano fica ativo com valor R$ 0,00 e registro de auditoria.
+                  Use depois que a pessoa criou o cadastro e chegou na etapa de pagamento. O acesso fica ativo com valor R$ 0,00 e registro de auditoria.
                 </p>
               </div>
               <div className="overflow-x-auto">

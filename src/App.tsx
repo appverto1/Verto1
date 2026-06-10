@@ -1949,7 +1949,7 @@ export default function App() {
           {user.role === 'patient' ? (
             <span> O valor para pacientes Ã© de apenas <strong>R$ 4,90/mÃªs</strong>.</span>
           ) : (
-            <span> Escolha um plano para concluir sua assinatura.</span>
+            <span> A cobranca da clinica e feita por paciente ativo, com faixas calculadas pela Stripe.</span>
           )}
         </p>
         
@@ -1964,28 +1964,16 @@ export default function App() {
           ) : (
             <React.Fragment>
               <button 
-                onClick={() => handleCheckout('Essencial')}
+                onClick={() => handleCheckout()}
                 className="w-full bg-[#7a32fc] text-white py-4 rounded-2xl font-bold text-sm shadow-lg shadow-blue-500/20 hover:scale-[1.02] transition-all active:scale-[0.98]"
               >
-                Assinar Essencial (R$ 149,90)
-              </button>
-              <button 
-                onClick={() => handleCheckout('Crescimento')}
-                className="w-full bg-[#05CD99] text-white py-4 rounded-2xl font-bold text-sm shadow-lg shadow-emerald-500/20 hover:scale-[1.02] transition-all active:scale-[0.98]"
-              >
-                Assinar Crescimento (R$ 399,90)
-              </button>
-              <button 
-                onClick={() => handleCheckout('AvanÃ§ado')}
-                className="w-full bg-[#FFB547] text-white py-4 rounded-2xl font-bold text-sm shadow-lg shadow-amber-500/20 hover:scale-[1.02] transition-all active:scale-[0.98]"
-              >
-                Assinar AvanÃ§ado (R$ 679,90)
+                Iniciar assinatura por paciente ativo
               </button>
               <button
                 onClick={() => handleEnterpriseContact(user)}
                 className="w-full bg-slate-900 text-white py-4 rounded-2xl font-bold text-sm shadow-lg shadow-slate-500/20 hover:scale-[1.02] transition-all active:scale-[0.98]"
               >
-                Falar sobre Enterprise (WhatsApp)
+                Falar com Mateus para implantacao
               </button>
             </React.Fragment>
           )}
