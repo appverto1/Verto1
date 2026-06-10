@@ -12,7 +12,6 @@ import {
   Bell,
   ChevronLeft,
   ChevronRight,
-  ChevronDown,
   DollarSign,
   PieChart,
   ArrowUpRight,
@@ -5421,6 +5420,81 @@ export function CoordinatorDashboard({
     </div>
   );
 
+  const navigationGroups: Array<Array<{
+    id: string;
+    label: string;
+    icon: React.ComponentType<{ size?: number }>;
+    badge?: string;
+  }>> = [
+    [{ id: "dashboard", label: "Painel", icon: LayoutDashboard }],
+    [
+      { id: "patients", label: "Pacientes", icon: ClipboardList },
+      { id: "birthdays", label: "Aniversariantes", icon: Heart },
+    ],
+    [
+      { id: "agenda", label: "Agenda", icon: CalendarDays },
+      { id: "rooms", label: "Salas", icon: DoorOpen },
+    ],
+    [{ id: "protocols", label: "Protocolos", icon: BookOpenCheck }],
+    [
+      { id: "financial", label: "Financeiro", icon: DollarSign, badge: "BETA" },
+      { id: "closure", label: "Fechamento", icon: ReceiptText },
+      { id: "conference", label: "Conferência", icon: FileChartColumnIncreasing },
+    ],
+    [{ id: "flow", label: "Verto Flow", icon: Zap, badge: "EM BREVE" }],
+    [
+      { id: "logs", label: "Log de Atividades", icon: History },
+      { id: "settings", label: "Configurações", icon: Settings },
+    ],
+  ];
+
+  const visibleNavigationGroups = navigationGroups
+    .map((group) => filterTabsByRole(group))
+    .filter((group) => group.length > 0);
+
+  const renderNavigationGroups = ({
+    expanded,
+    iconSize,
+    onNavigate,
+  }: {
+    expanded: boolean;
+    iconSize: number;
+    onNavigate: (tabId: string) => void;
+  }) => (
+    <div className="space-y-3">
+      {visibleNavigationGroups.map((group, groupIndex) => (
+        <div key={`navigation-group-${groupIndex}`} className="space-y-1">
+          {group.map((item) => (
+            <button
+              key={item.id}
+              onClick={() => onNavigate(item.id)}
+              className={`w-full flex items-center ${
+                expanded ? "gap-3 px-3" : "justify-center"
+              } min-h-10 py-2.5 rounded-xl transition-all font-medium text-sm ${
+                activeTab === item.id
+                  ? "text-[#7a32fc] bg-purple-50 shadow-sm"
+                  : "text-slate-400 hover:text-slate-900 hover:bg-slate-50"
+              }`}
+              title={!expanded ? item.label : ""}
+            >
+              <item.icon size={iconSize} />
+              {expanded && (
+                <>
+                  <span className="min-w-0 truncate">{item.label}</span>
+                  {item.badge && (
+                    <span className="ml-auto shrink-0 rounded-full bg-amber-400 px-1.5 py-0.5 text-[8px] font-black text-amber-950 shadow-sm shadow-amber-300/50 ring-1 ring-amber-500/30">
+                      {item.badge}
+                    </span>
+                  )}
+                </>
+              )}
+            </button>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+
   if (view === "patient" && selectedPatientId) {
     const patient = allPatients.find(
       (p) => String(p.id) === String(selectedPatientId),
@@ -5448,15 +5522,15 @@ export function CoordinatorDashboard({
     }
     const patientSidebarExpanded = isSidebarExpanded;
     return (
-      <div className="min-h-screen bg-[#F4F7FE] flex">
+      <div className="h-screen overflow-hidden bg-[#F4F7FE] flex">
         {/* Sidebar */}
         <div
           onMouseEnter={() => setIsSidebarExpanded(true)}
           onMouseLeave={() => setIsSidebarExpanded(false)}
-          className={`${patientSidebarExpanded ? "w-64" : "w-20"} bg-white hidden lg:flex flex-col p-5 sticky top-0 h-screen border-r border-slate-100 transition-all duration-300 ease-in-out z-20`}
+          className={`${patientSidebarExpanded ? "w-64" : "w-20"} h-screen shrink-0 overflow-hidden bg-white hidden lg:flex flex-col px-4 py-4 border-r border-slate-100 transition-all duration-300 ease-in-out z-20`}
         >
           <div
-            className={`flex items-center ${patientSidebarExpanded ? "gap-2" : "justify-center"} mb-7 px-1 transition-all duration-300`}
+            className={`flex shrink-0 items-center ${patientSidebarExpanded ? "gap-2" : "justify-center"} mb-5 px-1 transition-all duration-300`}
           >
             <LogoVerto size={38} />
             {patientSidebarExpanded && (
@@ -5471,65 +5545,18 @@ export function CoordinatorDashboard({
             )}
           </div>
 
-          <nav className="space-y-1 flex-1 overflow-y-auto no-scrollbar pr-1">
-            {filterTabsByRole([
-              {
-                id: "dashboard",
-                label: "Painel",
-                icon: LayoutDashboard,
+          <nav className="min-h-0 flex-1 overflow-y-auto no-scrollbar pr-1">
+            {renderNavigationGroups({
+              expanded: patientSidebarExpanded,
+              iconSize: 20,
+              onNavigate: (tabId) => {
+                navigateToTab(tabId as any);
+                setView("home");
               },
-              {
-                id: "patients",
-                label: "Pacientes",
-                icon: ClipboardList,
-              },
-              {
-                id: "protocols",
-                label: "Protocolos",
-                icon: BookOpenCheck,
-              },
-              { id: "logs", label: "Log de Atividades", icon: History },
-              {
-                id: "settings",
-                label: "Configurações",
-                icon: Settings,
-              },
-              {
-                id: "financial",
-                label: "Financeiro",
-                icon: DollarSign,
-              },
-              {
-                id: "flow",
-                label: "Fluxo Verto",
-                icon: Zap,
-              },
-              {
-                id: "birthdays",
-                label: "Aniversariantes",
-                icon: Heart,
-              },
-            ]).map((item) => (
-              <button
-                key={item.id}
-                onClick={() => {
-                  navigateToTab(item.id as any);
-                  setView("home");
-                }}
-                className={`w-full flex items-center ${patientSidebarExpanded ? "gap-3 px-4" : "justify-center"} py-3.5 rounded-2xl transition-all font-medium text-sm ${
-                  activeTab === item.id
-                    ? "text-[#7a32fc] bg-purple-50 shadow-sm"
-                    : "text-slate-400 hover:text-slate-900 hover:bg-slate-50"
-                }`}
-                title={!patientSidebarExpanded ? item.label : ""}
-              >
-                <item.icon size={20} />
-                {patientSidebarExpanded && item.label}
-              </button>
-            ))}
+            })}
           </nav>
 
-          <div className="mt-auto pt-4 border-t border-slate-50">
+          <div className="mt-auto shrink-0 pt-3 border-t border-slate-50">
             <div
               className={`bg-slate-50 rounded-2xl ${patientSidebarExpanded ? "p-3 mb-3" : "p-2 mb-2"} transition-all`}
             >
@@ -5564,7 +5591,7 @@ export function CoordinatorDashboard({
         </div>
 
         {/* Main Content */}
-        <div className="min-w-0 flex-1 overflow-y-auto">
+        <div className="h-screen min-w-0 flex-1 overflow-y-auto">
           {/* Header */}
           <header
             className={`sticky top-0 z-30 flex items-center justify-between gap-2 px-3 py-2.5 backdrop-blur-md sm:px-4 lg:px-6 ${
@@ -5677,69 +5704,16 @@ export function CoordinatorDashboard({
                     </button>
                   </div>
 
-                  <nav className="space-y-1 flex-1 overflow-y-auto no-scrollbar">
-                    {filterTabsByRole([
-                      {
-                        id: "dashboard",
-                        label: "Painel",
-                        icon: LayoutDashboard,
+                  <nav className="flex-1 overflow-y-auto no-scrollbar">
+                    {renderNavigationGroups({
+                      expanded: true,
+                      iconSize: 18,
+                      onNavigate: (tabId) => {
+                        navigateToTab(tabId as any);
+                        setView("home");
+                        setIsMobileMenuOpen(false);
                       },
-                      {
-                        id: "patients",
-                        label: "Pacientes",
-                        icon: ClipboardList,
-                      },
-                      {
-                        id: "protocols",
-                        label: "Protocolos",
-                        icon: BookOpenCheck,
-                      },
-                      { id: "logs", label: "Log de Atividades", icon: History },
-                      {
-                        id: "settings",
-                        label: "Configurações",
-                        icon: Settings,
-                      },
-                      {
-                        id: "financial",
-                        label: "Financeiro",
-                        icon: DollarSign,
-                        badge: "BETA",
-                      },
-                      {
-                        id: "flow",
-                        label: "Verto Flow",
-                        icon: Zap,
-                        badge: "EM BREVE",
-                      },
-                      {
-                        id: "birthdays",
-                        label: "Aniversariantes",
-                        icon: Heart,
-                      },
-                    ]).map((item) => (
-                      <button
-                        key={item.id}
-                        onClick={() => {
-                          navigateToTab(item.id as any);
-                          setView("home");
-                          setIsMobileMenuOpen(false);
-                        }}
-                        className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-xl transition-all font-medium text-sm ${
-                          activeTab === item.id
-                            ? "text-[#7a32fc] bg-blue-50"
-                            : "text-slate-400 hover:text-slate-900 hover:bg-slate-50"
-                        }`}
-                      >
-                        <item.icon size={18} />
-                        {item.label}
-                        {item.badge && (
-                          <span className="ml-auto rounded-full bg-amber-400 px-1.5 py-0.5 text-[8px] font-black text-amber-950 shadow-sm shadow-amber-300/50 ring-1 ring-amber-500/30">
-                            {item.badge}
-                          </span>
-                        )}
-                      </button>
-                    ))}
+                    })}
                   </nav>
 
                   <div className="mt-auto pt-6 border-t border-slate-50">
@@ -5864,92 +5838,15 @@ export function CoordinatorDashboard({
     );
   }
 
-  const desktopNavItems = isReceptionist
-    ? [
-        { id: "dashboard", label: "Painel", icon: LayoutDashboard },
-        { id: "patients", label: "Pacientes", icon: ClipboardList },
-        { id: "agenda", label: "Agenda", icon: CalendarDays },
-        { id: "rooms", label: "Salas", icon: DoorOpen },
-        { id: "logs", label: "Log de Atividades", icon: History },
-        { id: "settings", label: "Configurações", icon: Settings },
-      ]
-    : [
-        { id: "dashboard", label: "Painel", icon: LayoutDashboard },
-        { id: "patients", label: "Pacientes", icon: ClipboardList },
-        { id: "agenda", label: "Agenda", icon: CalendarDays },
-        { id: "closure", label: "Fechamento", icon: ReceiptText },
-        { id: "conference", label: "Conferência", icon: FileChartColumnIncreasing },
-        { id: "protocols", label: "Protocolos", icon: BookOpenCheck },
-        { id: "logs", label: "Log de Atividades", icon: History },
-        { id: "settings", label: "Configurações", icon: Settings },
-        {
-          id: "financial",
-          label: "Financeiro",
-          icon: DollarSign,
-          badge: "BETA",
-        },
-        { id: "flow", label: "Verto Flow", icon: Zap, badge: "EM BREVE" },
-        {
-          id: "birthdays",
-          label: "Aniversariantes",
-          icon: Heart,
-        },
-      ];
-
-  const mobileNavItems = isReceptionist
-    ? [
-        { id: "dashboard", label: "Painel", icon: LayoutDashboard },
-        { id: "patients", label: "Pacientes", icon: ClipboardList },
-        { id: "agenda", label: "Agenda", icon: CalendarDays },
-        { id: "rooms", label: "Salas", icon: DoorOpen },
-        { id: "logs", label: "Registros", icon: History },
-        { id: "settings", label: "Configurações", icon: Settings },
-      ]
-    : [
-        { id: "dashboard", label: "Painel", icon: LayoutDashboard },
-        { id: "patients", label: "Pacientes", icon: ClipboardList },
-        { id: "agenda", label: "Agenda", icon: CalendarDays },
-        { id: "closure", label: "Fechamento", icon: ReceiptText },
-        { id: "conference", label: "Conferência", icon: FileChartColumnIncreasing },
-        {
-          id: "protocols",
-          label: "Protocolos",
-          icon: BookOpenCheck,
-        },
-        { id: "logs", label: "Registros", icon: History },
-        {
-          id: "settings",
-          label: "Configurações",
-          icon: Settings,
-        },
-        {
-          id: "financial",
-          label: "Financeiro",
-          icon: DollarSign,
-          badge: "BETA",
-        },
-        {
-          id: "flow",
-          label: "Fluxo Verto",
-          icon: Zap,
-          badge: "EM BREVE",
-        },
-        {
-          id: "birthdays",
-          label: "Aniversariantes",
-          icon: Heart,
-        },
-      ];
-
   return (
-    <div className="min-h-screen bg-[#F4F7FE] flex">
+    <div className="h-screen overflow-hidden bg-[#F4F7FE] flex">
       {/* Sidebar */}
       <aside 
         onMouseEnter={() => setIsSidebarExpanded(true)}
         onMouseLeave={() => setIsSidebarExpanded(false)}
-        className={`${isSidebarExpanded ? 'w-64' : 'w-20'} bg-white hidden lg:flex flex-col p-5 sticky top-0 h-screen border-r border-slate-100 transition-all duration-300 ease-in-out z-20`}
+        className={`${isSidebarExpanded ? 'w-64' : 'w-20'} h-screen shrink-0 overflow-hidden bg-white hidden lg:flex flex-col px-4 py-4 border-r border-slate-100 transition-all duration-300 ease-in-out z-20`}
       >
-        <div className={`flex items-center ${isSidebarExpanded ? 'gap-2' : 'justify-center'} mb-7 px-1 transition-all duration-300`}>
+        <div className={`flex shrink-0 items-center ${isSidebarExpanded ? 'gap-2' : 'justify-center'} mb-5 px-1 transition-all duration-300`}>
           <LogoVerto size={38} />
           {isSidebarExpanded && (
             <div>
@@ -5963,43 +5860,15 @@ export function CoordinatorDashboard({
           )}
         </div>
 
-        <nav className="space-y-2 flex-1 overflow-y-auto no-scrollbar pr-2">
-            {filterTabsByRole(desktopNavItems as any).map((item: any) => (
-            <button
-              key={item.id}
-              onClick={() => navigateToTab(item.id as any)}
-              className={`w-full flex items-center ${isSidebarExpanded ? 'gap-3 px-4' : 'justify-center'} py-3.5 rounded-2xl transition-all font-medium text-sm ${
-                activeTab === item.id
-                  ? "text-[#7a32fc] bg-purple-50 shadow-sm"
-                  : "text-slate-400 hover:text-slate-900 hover:bg-slate-50"
-              }`}
-              title={!isSidebarExpanded ? item.label : ""}
-            >
-              <item.icon size={20} />
-              {isSidebarExpanded && (
-                <>
-                  {item.label}
-                  {item.badge && (
-                    <span className="ml-auto rounded-full bg-amber-400 px-1.5 py-0.5 text-[8px] font-black text-amber-950 shadow-sm shadow-amber-300/50 ring-1 ring-amber-500/30">
-                      {item.badge}
-                    </span>
-                  )}
-                </>
-              )}
-            </button>
-          ))}
+        <nav className="min-h-0 flex-1 overflow-y-auto no-scrollbar pr-1">
+          {renderNavigationGroups({
+            expanded: isSidebarExpanded,
+            iconSize: 20,
+            onNavigate: (tabId) => navigateToTab(tabId as any),
+          })}
         </nav>
-        <div
-          className={`mt-2 mb-0 text-[9px] text-slate-400 font-semibold uppercase tracking-wider flex items-center ${
-            isSidebarExpanded ? "gap-1 px-2" : "justify-center"
-          }`}
-          title={!isSidebarExpanded ? "Role para ver mais módulos" : ""}
-        >
-          <ChevronDown size={12} />
-          {isSidebarExpanded && "Role para ver mais módulos"}
-        </div>
 
-        <div className="mt-auto pt-4 border-t border-slate-50">
+        <div className="mt-auto shrink-0 pt-3 border-t border-slate-50">
           {isSidebarExpanded && (
             <div className="bg-slate-50 rounded-2xl p-3 mb-3">
               <div className="flex items-center gap-2">
@@ -6030,7 +5899,7 @@ export function CoordinatorDashboard({
       </aside>
 
       {/* Main Content */}
-      <div className="flex-1 overflow-y-auto relative z-10">
+      <div className="h-screen min-w-0 flex-1 overflow-y-auto relative z-10">
         {/* Header */}
         <header
           className={`px-4 lg:px-8 ${activeTab === "dashboard" ? "py-5 lg:py-6" : "py-4"} flex items-center justify-between sticky top-0 backdrop-blur-md z-30 ${
@@ -6153,29 +6022,15 @@ export function CoordinatorDashboard({
                   </button>
                 </div>
 
-                <nav className="space-y-1 flex-1 overflow-y-auto no-scrollbar">
-                  {filterTabsByRole(mobileNavItems as any).map((item: any) => (
-                    <button
-                      key={item.id}
-                      onClick={() => {
-                        navigateToTab(item.id as any);
-                        setIsMobileMenuOpen(false);
-                      }}
-                      className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-xl transition-all font-bold text-sm ${
-                        activeTab === item.id
-                          ? "text-[#7a32fc] bg-purple-50"
-                          : "text-slate-400 hover:text-slate-900 hover:bg-slate-50"
-                      }`}
-                    >
-                      <item.icon size={18} />
-                      {item.label}
-                      {item.badge && (
-                        <span className="ml-auto rounded-full bg-amber-400 px-1.5 py-0.5 text-[8px] font-black text-amber-950 shadow-sm shadow-amber-300/50 ring-1 ring-amber-500/30">
-                          {item.badge}
-                        </span>
-                      )}
-                    </button>
-                  ))}
+                <nav className="flex-1 overflow-y-auto no-scrollbar">
+                  {renderNavigationGroups({
+                    expanded: true,
+                    iconSize: 18,
+                    onNavigate: (tabId) => {
+                      navigateToTab(tabId as any);
+                      setIsMobileMenuOpen(false);
+                    },
+                  })}
                 </nav>
 
                 <div className="mt-auto pt-6 border-t border-slate-50">
