@@ -164,35 +164,35 @@ export const ABA_METRIC_DIRECTION: Record<string, AbaMetricDirection> = {
 export const ABA_CLINICAL_LINE_METRICS: Record<AbaClinicalLineCategory, AbaClinicalLineMetricOption[]> = {
   target: [
     { id: 'TARGET_COMPARE_RESPONSES', label: 'Comparar respostas', axis: 'percent', multiLine: true },
-    { id: 'TARGET_ACCURACY', label: 'Acuracia %', axis: 'percent' },
-    { id: 'TARGET_INDEPENDENCE', label: 'Independencia %', axis: 'percent' },
+    { id: 'TARGET_ACCURACY', label: 'Acurácia %', axis: 'percent' },
+    { id: 'TARGET_INDEPENDENCE', label: 'Independência %', axis: 'percent' },
     { id: 'TARGET_PROMPTED', label: 'Com ajuda %', axis: 'percent' },
     { id: 'TARGET_ERROR', label: 'Erro %', axis: 'percent' },
-    { id: 'TARGET_TRIAL_COUNT', label: 'Numero de tentativas', axis: 'count' }
+    { id: 'TARGET_TRIAL_COUNT', label: 'Número de tentativas', axis: 'count' }
   ],
   behavior: [
-    { id: 'BEHAVIOR_FREQUENCY', label: 'Frequencia', axis: 'count' },
-    { id: 'BEHAVIOR_DURATION_EPISODES', label: 'Episodios de duracao', axis: 'count' },
-    { id: 'BEHAVIOR_DURATION_TOTAL', label: 'Duracao total', axis: 'duration' },
-    { id: 'BEHAVIOR_DURATION_AVG', label: 'Duracao media', axis: 'duration' },
+    { id: 'BEHAVIOR_FREQUENCY', label: 'Frequência', axis: 'count' },
+    { id: 'BEHAVIOR_DURATION_EPISODES', label: 'Episódios de duração', axis: 'count' },
+    { id: 'BEHAVIOR_DURATION_TOTAL', label: 'Duração total', axis: 'duration' },
+    { id: 'BEHAVIOR_DURATION_AVG', label: 'Duração média', axis: 'duration' },
     { id: 'BEHAVIOR_INTERVAL_OCCURRENCE', label: 'Intervalo parcial %', axis: 'percent' }
   ],
   mastery: [
     { id: 'MASTERY_STATUS', label: 'Status de maestria', axis: 'status' },
     { id: 'MASTERY_CONSECUTIVE_DAYS', label: 'Dias consecutivos', axis: 'count' },
-    { id: 'MASTERY_VALID_ATTEMPTS', label: 'Tentativas validas', axis: 'count' },
-    { id: 'MASTERY_READY_FOR_REVIEW', label: 'Pronto para revisao', axis: 'status' }
+    { id: 'MASTERY_VALID_ATTEMPTS', label: 'Tentativas válidas', axis: 'count' },
+    { id: 'MASTERY_READY_FOR_REVIEW', label: 'Pronto para revisão', axis: 'status' }
   ],
   maintenance: [
-    { id: 'MAINTENANCE_STATUS', label: 'Resultado do maintenance probe', axis: 'status' },
-    { id: 'MAINTENANCE_ACCURACY', label: 'Acuracia de manutencao', axis: 'percent' },
-    { id: 'MAINTENANCE_INDEPENDENCE', label: 'Independencia de manutencao', axis: 'percent' },
+    { id: 'MAINTENANCE_STATUS', label: 'Resultado da sondagem de manutenção', axis: 'status' },
+    { id: 'MAINTENANCE_ACCURACY', label: 'Acurácia de manutenção', axis: 'percent' },
+    { id: 'MAINTENANCE_INDEPENDENCE', label: 'Independência de manutenção', axis: 'percent' },
     { id: 'MAINTENANCE_FAILURES', label: 'Falhas consecutivas', axis: 'count' },
-    { id: 'MAINTENANCE_DAYS_SINCE_PROBE', label: 'Dias desde ultimo probe', axis: 'count' }
+    { id: 'MAINTENANCE_DAYS_SINCE_PROBE', label: 'Dias desde última sondagem', axis: 'count' }
   ],
   general: [
-    { id: 'TARGET_ACCURACY', label: 'Acuracia geral', axis: 'percent' },
-    { id: 'TARGET_INDEPENDENCE', label: 'Independencia geral', axis: 'percent' },
+    { id: 'TARGET_ACCURACY', label: 'Acurácia geral', axis: 'percent' },
+    { id: 'TARGET_INDEPENDENCE', label: 'Independência geral', axis: 'percent' },
     { id: 'TARGET_TRIAL_COUNT', label: 'Tentativas', axis: 'count' }
   ]
 };
@@ -657,7 +657,7 @@ export function buildAbaClinicalLinePointsFromTargetSummaries(
       return {
         id: String(firstValue(row, ['id']) || `${targetId || 'target'}-${index}`),
         sessionId: String(firstValue(row, ['session_id', 'sessionId']) || '').trim() || null,
-        sessionLabel: String(firstValue(row, ['session_label', 'sessionLabel']) || `Sessao ${index + 1}`),
+        sessionLabel: String(firstValue(row, ['session_label', 'sessionLabel']) || `Sessão ${index + 1}`),
         itemId: targetId,
         itemLabel: targetLabel,
         metric,
@@ -695,12 +695,12 @@ export function buildAbaClinicalLinePointsFromSnapshots(
       const itemId = category === 'behavior'
         ? String(firstValue(row, ['behavior_id', 'behaviorId']) || '').trim()
         : String(firstValue(row, ['target_id', 'targetId']) || '').trim();
-      const metricLabel = String(firstValue(row, ['metric_label', 'metricLabel']) || itemId || 'Metrica clinica').trim();
+      const metricLabel = String(firstValue(row, ['metric_label', 'metricLabel']) || itemId || 'Métrica clínica').trim();
       const changedAt = linePointDate(firstValue(row, ['changed_at', 'changedAt', 'date']));
       return {
         id: String(firstValue(row, ['id']) || `${metricType}-${index}`),
         sessionId: String(firstValue(row, ['session_id', 'sessionId']) || '').trim() || null,
-        sessionLabel: String(firstValue(row, ['session_label', 'sessionLabel']) || `Sessao ${index + 1}`),
+        sessionLabel: String(firstValue(row, ['session_label', 'sessionLabel']) || `Sessão ${index + 1}`),
         itemId: itemId || null,
         itemLabel: metricLabel,
         metric: metric === 'TARGET_COMPARE_RESPONSES' ? metric : metricType,
@@ -760,7 +760,7 @@ export function aggregateAbaClinicalLinePoints(
   if (groupBy === 'session') {
     return sorted.map((point, index) => ({
       ...point,
-      sessionLabel: point.sessionLabel || `Sessao ${index + 1}`
+      sessionLabel: point.sessionLabel || `Sessão ${index + 1}`
     }));
   }
 

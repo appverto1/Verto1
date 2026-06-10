@@ -99,10 +99,10 @@ const chartTabs = [
 ] as const;
 
 const lineCategoryOptions: Array<{ id: AbaClinicalLineCategory; label: string }> = [
-  { id: 'target', label: 'Habilidade / Target' },
+  { id: 'target', label: 'Habilidade' },
   { id: 'behavior', label: 'Comportamento' },
   { id: 'mastery', label: 'Maestria' },
-  { id: 'maintenance', label: 'Manutencao' },
+  { id: 'maintenance', label: 'Manutenção' },
   { id: 'general', label: 'Geral' }
 ];
 
@@ -144,7 +144,7 @@ const metricLabels: Record<string, string> = {
   MAINTENANCE_ACCURACY: 'Acurácia de manutenção',
   MAINTENANCE_INDEPENDENCE: 'Independência de manutenção',
   MAINTENANCE_FAILURES: 'Falhas consecutivas',
-  MAINTENANCE_DAYS_SINCE_PROBE: 'Dias desde último probe',
+  MAINTENANCE_DAYS_SINCE_PROBE: 'Dias desde última sondagem',
   REGRESSION_RISK: 'Risco de regressão'
 };
 
@@ -157,7 +157,7 @@ const behaviorMetricOptions = [
   'BEHAVIOR_INTERVAL_OCCURRENCE'
 ];
 const masteryStatuses = ['INSUFFICIENT_DATA', 'NOT_MET', 'MET_TODAY', 'READY_FOR_REVIEW', 'MASTERED_APPROVED'];
-const maintenanceStatuses = ['PENDING', 'MAINTAINED', 'WATCH', 'REGRESSION_RISK', 'MISSED'];
+const maintenanceStatuses = ['SCHEDULED', 'PENDING_NEXT_SESSION', 'PENDING', 'OVERDUE', 'MAINTAINED', 'WATCH', 'REGRESSION_RISK', 'MISSED'];
 const clinicalChangeCategoryLabels: Record<AbaClinicalChangeCategory, string> = {
   skill: 'Habilidades',
   behavior: 'Comportamentos',
@@ -362,6 +362,61 @@ const formatValue = (value: any, metricType?: string) => {
   return `${round1(numeric)}${valueUnit(metricType)}`;
 };
 
+const isTechnicalClinicalLabel = (value: unknown) => {
+  const text = String(value || '').trim();
+  if (!text) return true;
+  const normalized = normalizeFilterText(text);
+  if (['sessao', 'session', 'target', 'habilidade', 'comportamento', 'metrica clinica', 'metric', 'probe'].includes(normalized)) return true;
+  if (/^[0-9a-f]{8}-[0-9a-f-]{10,}$/i.test(text)) return true;
+  if (/^(TARGET|BEHAVIOR|MASTERY|MAINTENANCE|REGRESSION)_/.test(text)) return true;
+  return false;
+};
+
+const clinicalItemLabel = (point: Partial<ChartPoint>, fallback = 'Resumo da sessão sem item específico') => {
+  const candidates = [
+    point.metricLabel,
+    (point as any).targetName,
+    (point as any).target_name,
+    (point as any).behaviorName,
+    (point as any).behavior_name,
+    point.itemLabel
+  ];
+  const found = candidates.find((candidate) => !isTechnicalClinicalLabel(candidate));
+  return found ? safeDisplayValue(found, fallback) : fallback;
+};
+
+const translatedStatusLabel = (value: unknown) => {
+  const status = String(value || '').trim().toUpperCase();
+  if (masteryStatusLabel[status]) return masteryStatusLabel[status];
+  if (maintenanceStatusLabel[status]) return maintenanceStatusLabel[status];
+  if (status === 'FIRST_MEASUREMENT') return 'Primeira medição';
+  if (status === 'REGRESSION_SIGNAL') return 'Sinal de regressão';
+  if (status === 'CLINICALLY_SIGNIFICANT_CHANGE') return 'Mudança clinicamente relevante';
+  if (status === 'NO_CHANGE') return 'Estável';
+  if (status === 'CHANGED') return 'Mudança registrada';
+  return safeDisplayValue(value, '-');
+};
+
+const formatClinicalValue = (value: any, metricType?: string, explicitStatus?: unknown) => {
+  const metric = String(metricType || '');
+  if (!statusMetrics.has(metric)) return formatValue(value, metricType);
+  const translated = translatedStatusLabel(explicitStatus);
+  if (translated !== '-') return translated;
+  const numeric = Math.round(safeNumber(value, 0));
+  if (metric === 'MASTERY_STATUS' || metric === 'MASTERY_READY_FOR_REVIEW') {
+    if (numeric >= 4) return masteryStatusLabel.MASTERED_APPROVED;
+    if (numeric === 3) return masteryStatusLabel.READY_FOR_REVIEW;
+    if (numeric === 2) return masteryStatusLabel.MET_TODAY;
+    if (numeric === 1) return masteryStatusLabel.NOT_MET;
+    if (numeric < 0) return masteryStatusLabel.REGRESSION_RISK;
+    return masteryStatusLabel.INSUFFICIENT_DATA;
+  }
+  if (numeric >= 3) return maintenanceStatusLabel.MAINTAINED;
+  if (numeric < 0) return maintenanceStatusLabel.REGRESSION_RISK;
+  if (numeric === 1) return maintenanceStatusLabel.WATCH;
+  return maintenanceStatusLabel.PENDING;
+};
+
 const formatDelta = (point: ChartPoint) => {
   const metricType = String(point.metricType || '');
   const previous = point.previousValue;
@@ -398,16 +453,38 @@ const changeSentence = (point: ChartPoint, index: number) => {
   const metricType = String(point.metricType || '');
   const session = point.sessionId
     ? formatSessionLabel({ id: point.sessionId, startedAt: point.changedAt })
-    : `Sessao ${index + 1}`;
-  const target = safeDisplayValue(point.metricLabel || point.targetId || point.behaviorId, 'Metrica clinica');
-  const metric = metricLabels[metricType] || metricType || 'Métrica';
-  const previous = formatValue(point.previousValue, metricType);
-  const current = formatValue(point.value ?? point.metricValue, metricType);
+    : `Sessão ${index + 1}`;
+  const target = clinicalItemLabel(point);
+  const metric = metricLabels[metricType] || 'Métrica';
+  const previous = formatClinicalValue(point.previousValue, metricType, (point as any).previousStatus);
+  const current = formatClinicalValue(point.value ?? point.metricValue, metricType, point.currentStatus || point.masteryStatus || point.statusLabel);
   return `${formatDate(point.changedAt)} ${session} — ${target}: ${metric.toLowerCase()} ${previous} → ${current} (${formatDelta(point)}), ${clinicalInterpretation(point)}.`;
 };
 
 const changePrimaryLabel = (point: Partial<ChartPoint>) =>
-  safeDisplayValue(point.metricLabel || point.targetId || point.behaviorId, 'Métrica clínica');
+  clinicalItemLabel(point);
+
+const clinicalChangeBrief = (point?: Partial<ChartPoint> | null) => {
+  if (!point) return 'Sem dados suficientes para interpretar.';
+  const metricType = String(point.metricType || '');
+  const metric = metricLabels[metricType] || 'Métrica';
+  const label = clinicalItemLabel(point);
+  const previous = formatClinicalValue(point.previousValue, metricType, (point as any).previousStatus);
+  const current = formatClinicalValue((point as ChartPoint).value ?? point.metricValue, metricType, point.currentStatus || point.masteryStatus || point.statusLabel);
+  const delta = formatDelta(point as ChartPoint);
+  return `${label}: ${metric.toLowerCase()} ${previous} → ${current} (${delta}), ${clinicalInterpretation(point as ChartPoint)}.`;
+};
+
+const topClinicalChangeForGroup = (group: AbaAggregatedClinicalChangeGroup) => {
+  const changes = Array.isArray(group.topChanges) && group.topChanges.length > 0
+    ? group.topChanges
+    : group.topChange
+      ? [group.topChange]
+      : [];
+  return changes.find((change) => safeNumber(change.rawMagnitude, 0) > 0 && !isTechnicalClinicalLabel(change.metricLabel)) ||
+    changes.find((change) => safeNumber(change.rawMagnitude, 0) > 0) ||
+    null;
+};
 
 const changeSessionLabel = (point: Partial<ChartPoint>, fallbackIndex = 0) =>
   point.sessionId
@@ -440,17 +517,29 @@ const masteryStatusLabel: Record<string, string> = {
   NOT_MET: 'Critério não atingido',
   MET_TODAY: 'Critério atingido hoje',
   READY_FOR_REVIEW: 'Pronto para revisão',
-  MASTERED_APPROVED: 'Masterizado aprovado',
+  MASTERED_APPROVED: 'Maestria aprovada',
   REGRESSION_RISK: 'Risco de regressão'
 };
 
 const maintenanceStatusLabel: Record<string, string> = {
-  PENDING: 'Probe pendente',
+  SCHEDULED: 'Sondagem agendada',
+  SCHEDULED_BY_DATE: 'Sondagem por data',
+  PENDING: 'Sondagem pendente',
+  PENDING_CONFIRMATION: 'Aguardando confirmação',
+  PENDING_NEXT_SESSION: 'Aguardando próxima sessão',
+  PENDING_LINK: 'Aguardando vínculo',
+  PENDING_SCHEDULING: 'Aguardando agendamento',
+  UNSCHEDULED: 'Sem consulta vinculada',
+  DUE_TODAY: 'Sondagem para hoje',
+  OVERDUE: 'Sondagem atrasada',
+  IN_MAINTENANCE: 'Em manutenção',
+  AVAILABLE_IN_SESSION: 'Disponível na sessão',
+  NEEDS_REVIEW: 'Precisa de revisão',
   MAINTAINED: 'Mantido',
-  WATCH: 'Watch',
+  WATCH: 'Em observação',
   REGRESSION_RISK: 'Risco de regressão',
-  MISSED: 'Missed',
-  COMPLETED: 'Probe concluído'
+  MISSED: 'Sondagem não realizada',
+  COMPLETED: 'Sondagem concluída'
 };
 
 const EmptyState = ({ text }: { text: string }) => (
@@ -464,21 +553,20 @@ const CustomTooltip = ({ active, payload }: any) => {
   const row: ChartPoint = payload[0]?.payload || {};
   const metricType = String(row.metricType || '');
   const trialType = safeDisplayValue(row.mostUsedTrialType || row.trialTypeMostUsed, '-');
-  const masteryStatus = safeDisplayValue(row.masteryStatus || row.currentStatus || (metricType === 'MASTERY_STATUS' ? row.statusLabel : '-'), '-');
+  const masteryStatus = translatedStatusLabel(row.masteryStatus || row.currentStatus || (metricType === 'MASTERY_STATUS' ? row.statusLabel : '-'));
   const sessionLabel = formatSessionLabel({ id: row.sessionId, startedAt: row.changedAt });
-  const targetLabel = safeDisplayValue(row.metricLabel || row.targetId, '-');
-  const behaviorLabel = safeDisplayValue(row.metricLabel || row.behaviorId, '-');
+  const itemLabel = clinicalItemLabel(row, 'Sem item específico');
+  const isBehavior = String(row.metricType || '').startsWith('BEHAVIOR_') || Boolean(row.behaviorId);
   return (
     <div className="max-w-[320px] rounded-lg border border-slate-100 bg-white p-4 text-xs shadow-xl">
       <p className="font-black uppercase tracking-widest text-slate-900">{formatDateTime(row.changedAt)}</p>
-      <p className="mt-2 font-bold text-slate-700">{row.metricLabel || '-'}</p>
+      <p className="mt-2 font-bold text-slate-700">{itemLabel}</p>
       <div className="mt-3 space-y-1 text-slate-500">
         <p>Sessão: {row.sessionId || row.changedAt ? sessionLabel : '-'}</p>
-        <p>Habilidade: {row.targetId || row.metricLabel ? targetLabel : '-'}</p>
-        <p>Comportamento: {row.behaviorId || row.metricLabel ? behaviorLabel : '-'}</p>
-        <p>Métrica: {metricLabels[metricType] || metricType || '-'}</p>
-        <p>Valor anterior: {formatValue(row.previousValue, metricType)}</p>
-        <p>Valor atual: {formatValue(row.value ?? row.metricValue, metricType)}</p>
+        <p>{isBehavior ? 'Comportamento' : 'Habilidade'}: {itemLabel}</p>
+        <p>Métrica: {metricLabels[metricType] || 'Métrica'}</p>
+        <p>Valor anterior: {formatClinicalValue(row.previousValue, metricType, (row as any).previousStatus)}</p>
+        <p>Valor atual: {formatClinicalValue(row.value ?? row.metricValue, metricType, row.currentStatus || row.masteryStatus || row.statusLabel)}</p>
         <p>Delta: {formatDelta(row)}</p>
         <p>Tipo de tentativa mais usado: {trialType}</p>
         <p>Status de maestria: {masteryStatus}</p>
@@ -515,7 +603,7 @@ const ClinicalLineTooltip = ({ active, payload }: any) => {
 const AggregatedTooltip = ({ active, payload }: any) => {
   if (!active || !payload?.length) return null;
   const row: AbaAggregatedClinicalChangeGroup = payload[0]?.payload || {};
-  const topChange = row.topChange;
+  const topChange = topClinicalChangeForGroup(row);
   return (
     <div className="max-w-[340px] rounded-lg border border-slate-100 bg-white p-4 text-xs shadow-xl">
       <p className="font-black uppercase tracking-widest text-slate-900">{row.label || 'Sessão'}</p>
@@ -529,7 +617,12 @@ const AggregatedTooltip = ({ active, payload }: any) => {
       </div>
       {topChange && (
         <p className="mt-3 rounded-md bg-slate-50 px-3 py-2 font-bold text-slate-700">
-          Maior mudança: {topChange.metricLabel || 'Métrica'} · {round1(topChange.rawMagnitude)} real / {round1(topChange.visualMagnitude)} visual
+          Maior mudança: {clinicalChangeBrief(topChange)}
+        </p>
+      )}
+      {!topChange && (
+        <p className="mt-3 rounded-md bg-slate-50 px-3 py-2 font-bold text-slate-700">
+          Sem dados suficientes para interpretar.
         </p>
       )}
       {(row.hasRegressionAlert || row.hasReviewReady) && (
@@ -552,8 +645,8 @@ const ClinicalChangeCard: React.FC<{ change: AbaAggregatedClinicalChange; index:
   const categoryTone = clinicalChangeCategoryTone[change.changeCategory];
   const interpretation = clinicalInterpretation(change);
   const sessionLabel = changeSessionLabel(change, index);
-  const previous = formatValue(change.previousValue, metricType);
-  const current = formatValue((change as ChartPoint).value ?? change.metricValue, metricType);
+  const previous = formatClinicalValue(change.previousValue, metricType, (change as any).previousStatus);
+  const current = formatClinicalValue((change as ChartPoint).value ?? change.metricValue, metricType, change.currentStatus || change.masteryStatus || change.statusLabel);
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
@@ -569,7 +662,7 @@ const ClinicalChangeCard: React.FC<{ change: AbaAggregatedClinicalChange; index:
       <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
         {clinicalChangeCategoryLabels[change.changeCategory]} • {formatDateTime(change.changedAt)} • {sessionLabel}
       </p>
-      <p className="mt-1 text-[11px] text-slate-400">{metricLabels[metricType] || metricType || 'Métrica clínica'}</p>
+      <p className="mt-1 text-[11px] text-slate-400">{metricLabels[metricType] || 'Métrica'}</p>
       <div className="mt-3 grid grid-cols-1 gap-2 text-xs sm:grid-cols-3">
         <div className="rounded-md bg-slate-50 px-3 py-2">
           <p className="text-[10px] font-medium uppercase tracking-widest text-slate-400">Anterior</p>
@@ -886,6 +979,7 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
   const aggregateTopChanges = useMemo(() => {
     return aggregatedChangeRows
       .flatMap((group) => group.topChanges.map((change) => ({ group, change })))
+      .filter(({ change }) => safeNumber(change.rawMagnitude, 0) > 0)
       .sort((a, b) => b.change.rawMagnitude - a.change.rawMagnitude)
       .slice(0, 6);
   }, [aggregatedChangeRows]);
@@ -965,7 +1059,7 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
   const isCompareResponses = lineMetric === 'TARGET_COMPARE_RESPONSES';
   const lineNeedsItem = lineCategory !== 'general' && !lineItemId;
   const lineEmptyText = lineNeedsItem
-    ? 'Selecione um target ou comportamento para visualizar a evolução em linha.'
+    ? 'Selecione uma habilidade ou comportamento para visualizar a evolução em linha.'
     : 'Este item ainda não possui dados suficientes para gráfico de evolução.';
   const lineMinWidth = Math.max(720, lineChartRows.length * 72);
 
@@ -982,13 +1076,14 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
   const shouldRenderChart = viewMode === 'stacked' && (showAggregatedChart ? aggregatedChangeRows.length > 0 : chartRows.length > 0);
 
   const yAxisLabel = showAggregatedChart
-    ? 'Magnitude agregada'
+    ? 'Intensidade das mudanças'
     : metricAxisLabels[effectiveMetricType] || 'Valor';
+  const stackedMinWidth = Math.max(760, (showAggregatedChart ? aggregatedChangeRows.length : chartRows.length) * 72);
 
   const emptyText = activeTab === 'overview' || activeTab === 'session-changes'
     ? 'Sem mudanças clínicas detectadas neste período.'
     : activeTab === 'maintenance'
-      ? 'Sem probes no período. A timeline mostra probes pendentes, misses e alertas quando existirem.'
+      ? 'Sem sondagens no período. A linha do tempo mostra sondagens pendentes, não realizadas e alertas quando existirem.'
       : activePoints.length === 1
         ? 'Primeira medição registrada. A comparação aparecerá após a próxima sessão.'
         : 'Sem dados no período selecionado.';
@@ -1126,7 +1221,7 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
       {
         title: 'Metas prontas para revisão',
         icon: CheckCircle2,
-        body: readyReview ? `${readyReview.metricLabel || 'Meta'}: ${readyReview.statusLabel || 'pronto para revisão'}.` : 'Nenhuma meta pronta para revisão no período.'
+        body: readyReview ? `${clinicalItemLabel(readyReview, 'Habilidade sem nome')}: ${translatedStatusLabel(readyReview.statusLabel || readyReview.currentStatus || 'READY_FOR_REVIEW')}.` : 'Nenhuma meta pronta para revisão no período.'
       },
       {
         title: 'Sinais de regressão',
@@ -1136,7 +1231,7 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
       {
         title: 'Primeiras medições',
         icon: Sparkles,
-        body: firstMeasurement ? `${firstMeasurement.metricLabel || 'Métrica clínica'}: primeira medição registrada.` : 'Sem primeiras medições no período.'
+        body: firstMeasurement ? `${clinicalItemLabel(firstMeasurement, 'Resumo da sessão sem item específico')}: primeira medição registrada.` : 'Sem primeiras medições no período.'
       }
     ];
   }, [overviewPoints]);
@@ -1158,7 +1253,7 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
         latestByTarget.set(key, {
           id: evaluation.id,
           targetId: evaluation.target_id || evaluation.targetId,
-          metricLabel: evaluation.target_name || evaluation.targetName || evaluation.target_id,
+          metricLabel: evaluation.target_name || evaluation.targetName || 'Habilidade sem nome',
           metricType: 'MASTERY_STATUS',
           status: evaluation.status,
           changedAt: evaluation.evaluated_at || evaluation.evaluatedAt
@@ -1180,14 +1275,20 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
         id: item.id,
         at: item.scheduled_for || item.scheduledFor,
         status: String(item.status || 'PENDING').toUpperCase(),
-        label: safeDisplayValue(item.raw_payload?.targetName || item.target_name || item.target_id, 'Probe'),
+        label: clinicalItemLabel({
+          metricLabel: item.raw_payload?.targetName || item.target_name,
+          targetId: item.target_id
+        }, 'Sondagem sem habilidade vinculada'),
         kind: 'schedule'
       })),
       ...probes.map((item: any) => ({
         id: item.id,
         at: item.occurred_at || item.occurredAt,
         status: String(item.status || 'WATCH').toUpperCase(),
-        label: safeDisplayValue(item.raw_payload?.targetName || item.target_name || item.target_id, 'Probe'),
+        label: clinicalItemLabel({
+          metricLabel: item.raw_payload?.targetName || item.target_name,
+          targetId: item.target_id
+        }, 'Sondagem sem habilidade vinculada'),
         kind: 'probe'
       })),
       ...alerts.map((item: any) => ({
@@ -1242,7 +1343,7 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
         </div>
       </div>
       <div>
-        <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-400">Target</label>
+        <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-400">Habilidade</label>
         <select value={targetId} onChange={(event) => setTargetId(event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-3 text-xs font-bold text-slate-700 outline-none">
           <option value="">Todos</option>
           {targetOptions.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
@@ -1482,7 +1583,7 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
                 {bucket.items.slice(0, 3).map((item: any) => (
                   <p key={`${bucket.status}-${item.id || item.targetId || item.metricLabel}`} className="truncate text-xs font-semibold text-slate-700">{safeDisplayValue(item.metricLabel || item.targetId, 'Meta sem nome')}</p>
                 ))}
-                {bucket.items.length === 0 && <p className="text-xs font-semibold text-slate-300">Sem targets</p>}
+                {bucket.items.length === 0 && <p className="text-xs font-semibold text-slate-300">Sem habilidades neste status</p>}
               </div>
             </div>
           ))}
@@ -1542,7 +1643,7 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
 
             <div className="mb-4 grid grid-cols-1 gap-2 md:grid-cols-4">
               {[
-                { label: 'Valor atual', value: formatValue(lineSummary.currentValue, lineMetric) },
+                { label: 'Valor atual', value: formatClinicalValue(lineSummary.currentValue, lineMetric, lineSummary.status) },
                 { label: 'Variação', value: lineSummary.delta === null || lineSummary.delta === undefined ? '-' : `${lineSummary.delta > 0 ? '+' : ''}${formatValue(lineSummary.delta, lineMetric)}` },
                 { label: 'Tendência', value: lineSummary.trend === 'improved' ? 'melhora' : lineSummary.trend === 'worsened' ? 'atenção' : lineSummary.trend === 'stable' ? 'estável' : 'dados insuficientes' },
                 { label: 'Última medição', value: lineSummary.lastMeasuredAt ? `${formatDate(lineSummary.lastMeasuredAt)} · ${lineSummary.lastSessionLabel || 'sessão'}` : '-' }
@@ -1625,7 +1726,7 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
             <div>
               <p className="text-sm font-bold text-slate-900">
                 {showAggregatedChart
-                  ? 'Magnitude das mudanças detectadas'
+                  ? 'Resumo clínico agrupado'
                   : metricAxisLabels[effectiveMetricType] || chartTabs.find((tab) => tab.id === activeTab)?.label}
               </p>
               <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
@@ -1634,12 +1735,13 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
             </div>
             <SlidersHorizontal size={18} className="text-slate-300" />
           </div>
-          <div className="h-[360px] min-w-0">
-            <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={320}>
-              {showAggregatedChart ? (
-                <BarChart data={aggregatedChangeRows} margin={{ top: 20, right: 24, left: 8, bottom: 44 }}>
+          <div className="h-[360px] min-w-0 overflow-x-auto">
+            <div className="h-full" style={{ minWidth: stackedMinWidth }}>
+              <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={320}>
+                {showAggregatedChart ? (
+                  <BarChart data={aggregatedChangeRows} margin={{ top: 20, right: 24, left: 8, bottom: 44 }}>
                   <CartesianGrid stroke="#EEF2F7" strokeDasharray="3 3" vertical={false} />
-                  <XAxis dataKey="label" tick={{ fill: '#64748B', fontSize: 10, fontWeight: 700 }} angle={-18} textAnchor="end" height={58} interval="preserveStartEnd" />
+                  <XAxis dataKey="label" tick={{ fill: '#64748B', fontSize: 10, fontWeight: 700 }} angle={-18} textAnchor="end" height={58} interval={0} />
                   <YAxis tick={{ fill: '#94A3B8', fontSize: 11, fontWeight: 700 }} label={{ value: yAxisLabel, angle: -90, position: 'insideLeft', fill: '#94A3B8', fontSize: 11, fontWeight: 700 }} />
                   <Tooltip content={<AggregatedTooltip />} cursor={{ fill: 'rgba(122, 50, 252, 0.06)' }} />
                   <Legend wrapperStyle={{ fontSize: 11, fontWeight: 700 }} />
@@ -1648,9 +1750,9 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
                   <Bar dataKey="masteryCount" name="Maestria" stackId="changes" fill={aggregateBarColors.masteryCount} maxBarSize={56} onClick={(entry: any) => openChangeGroup(entry?.payload?.groupKey || '', 'mastery', 'detail')} />
                   <Bar dataKey="maintenanceCount" name="Manutenção" stackId="changes" fill={aggregateBarColors.maintenanceCount} maxBarSize={56} onClick={(entry: any) => openChangeGroup(entry?.payload?.groupKey || '', 'maintenance', 'detail')} />
                   <Bar dataKey="regressionCount" name="Regressão/alertas" stackId="changes" fill={aggregateBarColors.regressionCount} radius={[6, 6, 0, 0]} maxBarSize={56} onClick={(entry: any) => openChangeGroup(entry?.payload?.groupKey || '', 'regression', 'detail')} />
-                </BarChart>
-              ) : (
-                <LineChart data={chartRows} margin={{ top: 20, right: 24, left: 8, bottom: 44 }}>
+                  </BarChart>
+                ) : (
+                  <LineChart data={chartRows} margin={{ top: 20, right: 24, left: 8, bottom: 44 }}>
                   <CartesianGrid stroke="#EEF2F7" strokeDasharray="3 3" vertical={false} />
                   <XAxis dataKey="x" tick={{ fill: '#64748B', fontSize: 10, fontWeight: 700 }} angle={-18} textAnchor="end" height={58} />
                   <YAxis tick={{ fill: '#94A3B8', fontSize: 11, fontWeight: 700 }} label={{ value: yAxisLabel, angle: -90, position: 'insideLeft', fill: '#94A3B8', fontSize: 11, fontWeight: 700 }} />
@@ -1674,9 +1776,10 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
                     }}
                     activeDot={{ r: 7 }}
                   />
-                </LineChart>
-              )}
-            </SafeResponsiveContainer>
+                  </LineChart>
+                )}
+              </SafeResponsiveContainer>
+            </div>
           </div>
         </div>
       ) : activeTab !== 'maintenance' && activeTab !== 'mastery' ? (
@@ -1705,7 +1808,7 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
                   </button>
                 </div>
                 <p className="text-sm font-semibold text-slate-800">
-                  {group.relevantChanges} relevantes de {group.totalChanges} mudanças. Maior mudança: {group.topChange?.metricLabel || 'sem destaque'}.
+                  {group.relevantChanges} relevantes de {group.totalChanges} mudanças. Maior mudança: {clinicalChangeBrief(topClinicalChangeForGroup(group))}.
                 </p>
                 <div className="mt-3 flex flex-wrap gap-2">
                   {clinicalChangeCategoryOrder.map((category) => (
@@ -1735,13 +1838,13 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
               >
                 <div className="mb-2 flex flex-wrap items-center gap-2">
                   <span className={`rounded-full border px-3 py-1 text-[10px] font-bold uppercase tracking-widest ${statusTone(change.changeStatus)}`}>
-                    {change.statusLabel || clinicalInterpretation(change)}
+                    {translatedStatusLabel(change.statusLabel || change.currentStatus) !== '-' ? translatedStatusLabel(change.statusLabel || change.currentStatus) : clinicalInterpretation(change)}
                   </span>
                   <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{group.label}</span>
                 </div>
-                <p className="text-sm font-bold text-slate-900">{change.metricLabel || 'Métrica clínica'}</p>
+                <p className="text-sm font-bold text-slate-900">{clinicalItemLabel(change)}</p>
                 <p className="mt-1 text-xs text-slate-500">
-                  {clinicalChangeCategoryLabels[change.changeCategory]} · magnitude real {round1(change.rawMagnitude)} · visual {round1(change.visualMagnitude)}
+                  {clinicalChangeCategoryLabels[change.changeCategory]} · {clinicalChangeBrief(change)}
                 </p>
               </button>
             ))}
@@ -1759,9 +1862,9 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
                 </span>
                 <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{formatDateTime(point.changedAt)}</span>
               </div>
-              <p className="text-sm font-bold text-slate-900">{point.metricLabel}</p>
+              <p className="text-sm font-bold text-slate-900">{clinicalItemLabel(point)}</p>
               <p className="mt-1 text-xs text-slate-500">
-                {metricLabels[String(point.metricType || '')] || point.metricType}: {formatValue(point.value ?? point.metricValue, point.metricType)} · anterior {formatValue(point.previousValue, point.metricType)} · delta {formatDelta(point)}
+                {metricLabels[String(point.metricType || '')] || 'Métrica'}: {formatClinicalValue(point.value ?? point.metricValue, point.metricType, point.currentStatus || point.masteryStatus || point.statusLabel)} · anterior {formatClinicalValue(point.previousValue, point.metricType, (point as any).previousStatus)} · delta {formatDelta(point)}
               </p>
             </div>
           ))}
@@ -1883,7 +1986,7 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
                   </select>
                 </div>
                 <div>
-                  <label className="mb-1 block text-[10px] font-medium uppercase tracking-widest text-slate-400">Target/meta</label>
+                  <label className="mb-1 block text-[10px] font-medium uppercase tracking-widest text-slate-400">Habilidade/meta</label>
                   <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2.5">
                     <Search size={14} className="text-slate-400" />
                     <input value={detailTargetFilter} onChange={(event) => setDetailTargetFilter(event.target.value)} placeholder="Filtrar por nome" className="min-w-0 flex-1 bg-transparent text-xs font-medium text-slate-700 outline-none placeholder:text-slate-300" />
@@ -1942,7 +2045,7 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
                           <div key={`${change.id || change.sessionId}-${change.metricType}-${index}`} className="rounded-md bg-white/80 px-3 py-2">
                             <p className="truncate text-xs font-medium text-slate-800">{changePrimaryLabel(change)}</p>
                             <p className="mt-1 text-[11px] text-slate-500">
-                              {formatValue(change.previousValue, change.metricType)} → {formatValue((change as ChartPoint).value ?? change.metricValue, change.metricType)} · {formatDelta(change)} · {clinicalInterpretation(change)}
+                              {formatClinicalValue(change.previousValue, change.metricType, (change as any).previousStatus)} → {formatClinicalValue((change as ChartPoint).value ?? change.metricValue, change.metricType, change.currentStatus || change.masteryStatus || change.statusLabel)} · {formatDelta(change)} · {clinicalInterpretation(change)}
                             </p>
                           </div>
                         ))}

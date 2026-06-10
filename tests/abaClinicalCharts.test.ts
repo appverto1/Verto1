@@ -480,9 +480,9 @@ test('frontend apresenta deltas clínicos, status e timelines sem misturar escal
   assert.match(panelCode, /overviewCards[\s\S]*?Maior melhora em habilidade[\s\S]*?Maior redução de comportamento[\s\S]*?Metas prontas para revisão[\s\S]*?Sinais de regressão[\s\S]*?Primeiras medições/m);
   assert.match(panelCode, /metricAxisLabels[\s\S]*?Acurácia \(%\)[\s\S]*?Independência \(%\)[\s\S]*?Ocorrências[\s\S]*?Duração total[\s\S]*?% de ocorrência por intervalo/m);
   assert.match(panelCode, /masteryBuckets/);
-  assert.match(panelCode, /Dados insuficientes[\s\S]*?Critério não atingido[\s\S]*?Critério atingido hoje[\s\S]*?Pronto para revisão[\s\S]*?Masterizado aprovado/m);
+  assert.match(panelCode, /Dados insuficientes[\s\S]*?Critério não atingido[\s\S]*?Critério atingido hoje[\s\S]*?Pronto para revisão[\s\S]*?Maestria aprovada/m);
   assert.match(panelCode, /maintenanceTimeline/);
-  assert.match(panelCode, /Probe pendente[\s\S]*?Mantido[\s\S]*?Watch[\s\S]*?Risco de regressão[\s\S]*?Missed/m);
+  assert.match(panelCode, /Sondagem pendente[\s\S]*?Mantido[\s\S]*?Em observação[\s\S]*?Risco de regressão[\s\S]*?Sondagem não realizada/m);
   assert.match(panelCode, /changeSentence[\s\S]*?previous[\s\S]*?current[\s\S]*?→/m);
   assert.match(panelCode, /GOAL_LINE/);
   assert.match(panelCode, /CONDITION_LINE/);
@@ -504,6 +504,19 @@ test('frontend usa visão agregada com drilldown em vez de plotar todos os targe
   assert.doesNotMatch(panelCode, /activeTab === 'session-changes' && chartRows\.length > 0/);
 });
 
+test('frontend evita textos genericos e ingles cru na camada visivel dos graficos ABA', () => {
+  assert.doesNotMatch(panelCode, /label:\s*'Habilidade \/ Target'/);
+  assert.doesNotMatch(panelCode, />Target</);
+  assert.doesNotMatch(panelCode, /Target\/meta/);
+  assert.doesNotMatch(panelCode, /Sem targets/);
+  assert.doesNotMatch(panelCode, /Probe pendente|Watch|Missed|Masterizado aprovado|Manutencao|Acuracia|Independencia|Frequencia|Duracao|Episodios|Numero|Validas|Revisao|Ultimo|Sessao|Metrica clinica/);
+  assert.doesNotMatch(panelCode, /magnitude real|real \/|0 real \/ 0 visual|sem destaque/);
+  assert.match(panelCode, /Resumo da sessão sem item específico/);
+  assert.match(panelCode, /Sem dados suficientes para interpretar/);
+  assert.match(panelCode, /clinicalChangeBrief/);
+  assert.match(panelCode, /translatedStatusLabel/);
+});
+
 test('script npm do épico está registrado', () => {
   const parsed = JSON.parse(packageJson);
   assert.equal(parsed.scripts['test:aba-clinical-charts'], 'tsx tests/abaClinicalCharts.test.ts');
@@ -520,6 +533,8 @@ test('container responsivo mede dimensoes antes de montar graficos recharts', ()
   assert.match(safeResponsiveContainerCode, /height:\s*size\.height/);
   assert.match(panelCode, /<SafeResponsiveContainer width="100%" height="100%" minWidth=\{0\} minHeight=\{340\}>/);
   assert.match(panelCode, /<SafeResponsiveContainer width="100%" height="100%" minWidth=\{0\} minHeight=\{320\}>/);
+  assert.match(panelCode, /stackedMinWidth = Math\.max\(760,[\s\S]*\* 72\)/);
+  assert.match(panelCode, /h-\[360px\] min-w-0 overflow-x-auto[\s\S]*style=\{\{ minWidth: stackedMinWidth \}\}/m);
 });
 
 let passed = 0;
