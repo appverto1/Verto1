@@ -1363,6 +1363,7 @@ export default function App() {
 
   const [therapistNotes, setTherapistNotes] = useState<any[]>([]);
   const [history, setHistory] = useState<any[]>([]);
+  const historyRef = useRef<any[]>([]);
   const [tasks, setTasks] = useState<any[]>([]);
   const [patientAssignedTaskCount, setPatientAssignedTaskCount] = useState(0);
   const [patientAssignedTasksLoadError, setPatientAssignedTasksLoadError] = useState(false);
@@ -2005,8 +2006,13 @@ export default function App() {
 
   const [protocols, setProtocols] = useState<any[]>([]);
   const [allPatients, setAllPatients] = useState<any[]>([]);
+
+  useEffect(() => {
+    historyRef.current = Array.isArray(history) ? history : [];
+  }, [history]);
   
   const resetWorkspaceScopedState = () => {
+    historyRef.current = [];
     setTherapistNotes([]);
     setHistory([]);
     setTasks([]);
@@ -2075,7 +2081,9 @@ export default function App() {
         : visiblePatients;
       setAllPatients(scopedPatients);
       setTherapistNotes(normalizeAndDecorateNotes(Array.isArray(hydrated.notes) ? hydrated.notes : []));
-      setHistory(Array.isArray(hydrated.history) ? hydrated.history : []);
+      const hydratedHistory = Array.isArray(hydrated.history) ? hydrated.history : [];
+      historyRef.current = hydratedHistory;
+      setHistory(hydratedHistory);
       setTasks(Array.isArray(hydrated.tasks) ? hydrated.tasks : []);
       setClinicalRecords(Array.isArray(hydrated.clinicalRecords) ? hydrated.clinicalRecords : []);
       hydratedSuccessfully = true;
@@ -2222,11 +2230,13 @@ export default function App() {
         setResolvedPatientPortalId(candidateResolvedIds[0]);
       }
 
-      if (mounted) setHistory(
-        Array.isArray(mergedHistory)
+      if (mounted) {
+        const normalizedHistory = Array.isArray(mergedHistory)
           ? mergedHistory.map((h: any) => normalizeHistoryRecordForState(h, user.id))
-          : []
-      );
+          : [];
+        historyRef.current = normalizedHistory;
+        setHistory(normalizedHistory);
+      }
       if (mounted) setTasks((() => {
         const baseTasks = Array.isArray(safeTasksRes?.data)
           ? safeTasksRes.data.map((t: any) => ({
@@ -2349,7 +2359,11 @@ export default function App() {
       if (!result?.success || !Array.isArray(result?.data)) {
         return { success: false, error: result?.error || 'Não foi possível atualizar o histórico.' };
       }
-      setHistory(prev => mergeHistoryRecords(prev, result.data, normalizedPatientId));
+      setHistory(prev => {
+        const next = mergeHistoryRecords(prev, result.data, normalizedPatientId);
+        historyRef.current = next;
+        return next;
+      });
       return { success: true, data: result.data };
     } catch (error: any) {
       console.error('Falha ao atualizar histórico persistido do paciente:', error);
@@ -4338,7 +4352,9 @@ export default function App() {
       else finalScore = 0;
     }
 
-    const newId = Date.now();
+    const newId =
+      globalThis.crypto?.randomUUID?.() ||
+      `trial-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     const recordedAt = new Date().toISOString();
     const sessionStartedAt = sessionMeta?.sessionStartedAt || recordedAt;
     const newHistoryItem = {
@@ -4357,6 +4373,10 @@ export default function App() {
       collectionType: sessionMeta?.collectionType || sessionMeta?.trialType || null,
       created_at: recordedAt
     };
+    const previousHistory = Array.isArray(historyRef.current) ? historyRef.current : history;
+    const updatedHistory = [newHistoryItem, ...previousHistory.filter((item: any) => String(item?.id || '') !== String(newId))];
+    historyRef.current = updatedHistory;
+    setHistory(updatedHistory);
     
     // Add a note about the trial
     const noteText = `🎯 NOVO REGISTRO\nAtividade: ${title}\nPontuação: ${finalScore}${evalComment ? `\nAnotações do Profissional: ${evalComment}` : ""}`;
@@ -4478,9 +4498,6 @@ export default function App() {
         console.error('Falha ao persistir tentativa ABA estruturada:', error);
       }
     }
-
-    const updatedHistory = [newHistoryItem, ...history];
-    setHistory(updatedHistory);
 
     let updatedPei = sourcePei;
 

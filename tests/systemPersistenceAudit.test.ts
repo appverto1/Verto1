@@ -74,7 +74,8 @@ test('diario da familia usa historico como fonte persistente e idempotente', () 
   assert.match(familySave, /return \{ success: true, data: historySaveResult\?\.data \|\| newHistoryItem \}/);
   assert.match(appCode, /const refreshPatientHistoryForProfessional = async \(patientId: any\) =>/);
   assert.match(appCode, /dataService\.getHistory\(normalizedPatientId\)/);
-  assert.match(appCode, /setHistory\(prev => mergeHistoryRecords\(prev, result\.data, normalizedPatientId\)\)/);
+  assert.match(appCode, /const next = mergeHistoryRecords\(prev, result\.data, normalizedPatientId\)/);
+  assert.match(appCode, /historyRef\.current = next/);
   assert.match(coordinatorCode, /onRefreshPatientHistory\?: \(patientId: any\) => Promise<any> \| any/);
   assert.match(coordinatorCode, /onRefreshPatientHistory\?\.?\(resolvedPatient\.id\)/);
 

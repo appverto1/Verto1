@@ -7405,6 +7405,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           formatCountdown={formatSessionCountdown}
           onRequestEndSession={() => setShowSessionEndConfirm(true)}
           onConfirmEndSession={handleConfirmSessionEnd}
+          onSessionSummaryPersisted={applySessionMasterySummaryToPei}
           onSessionRecordSaved={incrementActiveSessionRecordCount}
           therapistId={resolvedClinicContext?.userId || clinicContext?.userId || null}
           therapistName={resolvedClinicContext?.professionalName || resolvedClinicContext?.userName || clinicContext?.professionalName || clinicContext?.userName || patient?.therapistName || patient?.therapist_name || null}

@@ -609,6 +609,7 @@ export const SessionMode = ({
   formatCountdown,
   onRequestEndSession,
   onConfirmEndSession,
+  onSessionSummaryPersisted,
   onSessionRecordSaved,
   therapistId,
   therapistName,
@@ -3287,14 +3288,20 @@ export const SessionMode = ({
         : Array.isArray(summarySaveResult?.data?.maintenanceSummary)
           ? summarySaveResult.data.maintenanceSummary
           : finalMaintenanceSummary;
-      setPostClosureSummary({
+      const persistedSummary = {
         ...finalSummary,
         masterySummary: persistedMasterySummary,
         maintenanceSummary: persistedMaintenanceSummary,
         id: String(summarySaveResult?.data?.id || finalSummary.id),
         syncStatus: summarySaveResult?.success && !summarySaveResult?.pending && !summarySaveResult?.offline ? 'synced' : finalSummary.syncStatus,
         createdAt: summarySaveResult?.data?.created_at || summarySaveResult?.data?.createdAt || finalSummary.createdAt
-      });
+      };
+      setPostClosureSummary(persistedSummary);
+      if (typeof onSessionSummaryPersisted === 'function') {
+        void Promise.resolve(onSessionSummaryPersisted(persistedSummary)).catch((error: any) => {
+          console.warn('[ABA] Não foi possível aplicar resumo de maestria no PEI local:', error);
+        });
+      }
       await dataService.updateAbaSession(sessionId, {
         status: 'COMPLETED',
         ended_at: endedAt,
@@ -3311,7 +3318,13 @@ export const SessionMode = ({
       showClinicalToast(buildClinicalActionToast({ action: 'session_end' }));
     } catch (error) {
       console.error('Falha ao persistir encerramento da sessão ABA:', error);
-      setPostClosureSummary({ ...finalSummary, syncStatus: 'error' });
+      const failedSummary = { ...finalSummary, syncStatus: 'error' };
+      setPostClosureSummary(failedSummary);
+      if (typeof onSessionSummaryPersisted === 'function') {
+        void Promise.resolve(onSessionSummaryPersisted(failedSummary)).catch((applyError: any) => {
+          console.warn('[ABA] Não foi possível aplicar resumo local de maestria no PEI:', applyError);
+        });
+      }
       setSessionWarning('A sessão foi marcada como encerrada localmente, mas houve falha de sincronização.');
       showClinicalToast(buildClinicalSaveErrorToast(), 'error');
     }

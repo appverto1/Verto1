@@ -22,6 +22,7 @@ const sessionModeCode = readFileSync(join(root, 'src/components/SessionMode.tsx'
 const maintenancePanelCode = readFileSync(join(root, 'src/utils/peiMaintenancePanel.ts'), 'utf8');
 const dataServiceCode = readFileSync(join(root, 'src/services/dataService.ts'), 'utf8');
 const serverCode = readFileSync(join(root, 'server.ts'), 'utf8');
+const appCode = readFileSync(join(root, 'src/App.tsx'), 'utf8');
 
 const tests: Array<{ name: string; fn: () => void }> = [];
 const test = (name: string, fn: () => void) => tests.push({ name, fn });
@@ -975,10 +976,24 @@ test('ensino aplica resumo de maestria encerrado sem depender de F5', () => {
   assert.match(patientDetailCode, /criterionReached[\s\S]*?READY_FOR_REVIEW[\s\S]*?progressPercent: computedProgress/m);
   assert.match(patientDetailCode, /setSessionPatientOverride\(updatedPatient\)/);
   assert.match(patientDetailCode, /setHasLoadedPeiMaintenancePanel\(false\)/);
+  assert.match(patientDetailCode, /onSessionSummaryPersisted=\{applySessionMasterySummaryToPei\}/);
+  assert.match(sessionModeCode, /setPostClosureSummary\(persistedSummary\);[\s\S]*?onSessionSummaryPersisted\(persistedSummary\)/m);
   assert.match(patientDetailCode, /if \(options\?\.alreadyPersisted\) \{[\s\S]*?applySessionMasterySummaryToPei\(options\.summary\)/m);
   assert.match(patientDetailCode, /const peiGoals = useMemo\(\(\) => \(Array\.isArray\(sessionModePatient\?\.pei\)/);
   assert.match(patientDetailCode, /const termGoals = peiGoals\.filter/);
   assert.doesNotMatch(patientDetailCode, /const termGoals = patient\.pei\.filter/);
+});
+
+test('registro de tentativa ABA calcula maestria com historico local atualizado', () => {
+  const handlerStart = appCode.indexOf('const handleRecordTrial = async');
+  const handlerEnd = appCode.indexOf('const handleDeleteHistoryItem', handlerStart);
+  const handlerCode = appCode.slice(handlerStart, handlerEnd);
+  assert.notEqual(handlerStart, -1);
+  assert.match(appCode, /const historyRef = useRef<any\[\]>\(\[\]\)/);
+  assert.match(handlerCode, /globalThis\.crypto\?\.randomUUID\?\.\(\)/);
+  assert.match(handlerCode, /const previousHistory = Array\.isArray\(historyRef\.current\) \? historyRef\.current : history/);
+  assert.match(handlerCode, /historyRef\.current = updatedHistory;[\s\S]*?setHistory\(updatedHistory\);[\s\S]*?const skillHistory = updatedHistory/m);
+  assert.doesNotMatch(handlerCode, /const updatedHistory = \[newHistoryItem, \.\.\.history\]/);
 });
 
 test('ensure de habilidade adquirida e evento SKILL_ACQUIRED sao idempotentes', () => {
