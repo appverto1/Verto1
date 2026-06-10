@@ -4,13 +4,17 @@ import {
   BarChart3,
   ClipboardCheck,
   CheckCircle2,
+  Copy,
   DollarSign,
   FileText,
+  FlaskConical,
+  KeyRound,
   LayoutDashboard,
   Loader2,
   LogOut,
   MessageCircle,
   Phone,
+  RotateCcw,
   Shield,
   TrendingUp,
   Users
@@ -115,7 +119,7 @@ const VERTO_PROTOCOL_OPTIONS = VERTO_PROTOCOL_EDITOR_CATALOG.map(({ protocol, ..
 export const SuperAdminDashboard = ({ onLogout }: any) => {
   const [loading, setLoading] = useState(true);
   const [bootstrapping, setBootstrapping] = useState(false);
-  const [activeTab, setActiveTab] = useState<'overview' | 'financial' | 'customers' | 'leads' | 'protocols'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'financial' | 'customers' | 'leads' | 'demos' | 'protocols'>('overview');
   const [stats, setStats] = useState<any>(null);
   const [financial, setFinancial] = useState<any>({
     summary: {},
@@ -142,6 +146,8 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
   const [complimentaryEmail, setComplimentaryEmail] = useState('');
   const [complimentaryNote, setComplimentaryNote] = useState('');
   const [grantingComplimentaryPlan, setGrantingComplimentaryPlan] = useState(false);
+  const [demoSandboxes, setDemoSandboxes] = useState<any[]>([]);
+  const [demoAction, setDemoAction] = useState<string | null>(null);
 
   const selectedCatalogEntry = useMemo(
     () => VERTO_PROTOCOL_EDITOR_CATALOG.find((entry) => entry.key === selectedCatalogProtocolKey) || VERTO_PROTOCOL_EDITOR_CATALOG[0],
@@ -192,6 +198,88 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
     }
   };
 
+  const fetchDemoSandboxes = async (headers: Record<string, string>) => {
+    const response = await fetch('/api/admin/demo/sandboxes', {
+      credentials: 'include',
+      headers
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data?.success) {
+      throw new Error(data?.error || 'Nao foi possivel carregar os ambientes demo.');
+    }
+    setDemoSandboxes(Array.isArray(data.data) ? data.data : []);
+  };
+
+  const demoAdminRequest = async (url: string, body: Record<string, any>, actionKey: string) => {
+    setDemoAction(actionKey);
+    try {
+      const supabase = await getSupabase();
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      const response = await fetch(url, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: token ? `Bearer ${token}` : ''
+        },
+        body: JSON.stringify(body)
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || 'Operacao demo indisponivel.');
+      }
+      await fetchDemoSandboxes({ Authorization: token ? `Bearer ${token}` : '' });
+      return data;
+    } finally {
+      setDemoAction(null);
+    }
+  };
+
+  const handleBootstrapOperationalDemo = async () => {
+    try {
+      await demoAdminRequest('/api/admin/demo/bootstrap-operational', {}, 'bootstrap');
+      alert('Clínica Demo Verto e Playground Demo preparados.');
+    } catch (error: any) {
+      alert(error?.message || 'Nao foi possivel preparar as demos.');
+    }
+  };
+
+  const handleResetPlayground = async () => {
+    const confirmationText = window.prompt('Digite RESET DEMO para recriar somente o Playground Demo.');
+    if (confirmationText !== 'RESET DEMO') return;
+    try {
+      await demoAdminRequest('/api/admin/demo/playground/reset', { confirmationText }, 'reset-playground');
+      alert('Playground Demo recriado a partir do baseline.');
+    } catch (error: any) {
+      alert(error?.message || 'Nao foi possivel resetar o Playground Demo.');
+    }
+  };
+
+  const handleRotateDemoPassword = async () => {
+    const newPassword = window.prompt('Informe uma nova senha forte para a conta demo compartilhada.');
+    if (!newPassword) return;
+    try {
+      const result = await demoAdminRequest(
+        '/api/admin/demo/shared-user/rotate-password',
+        { newPassword },
+        'rotate-password'
+      );
+      alert(result?.data?.recommendation || 'Senha demo atualizada.');
+    } catch (error: any) {
+      alert(error?.message || 'Nao foi possivel rotacionar a senha demo.');
+    }
+  };
+
+  const handleCopyDemoAccess = async () => {
+    try {
+      await navigator.clipboard.writeText('coordenador.teste@verto.com');
+      alert('E-mail da conta demo copiado. A senha não é armazenada no painel.');
+    } catch {
+      alert('E-mail demo: coordenador.teste@verto.com');
+    }
+  };
+
   React.useEffect(() => {
     const fetchData = async () => {
       try {
@@ -214,7 +302,10 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
         if (customersData?.success) setAllCustomers(customersData.data || []);
         if (surveysData?.success) setFinancialFeatureSurveys(surveysData.data || []);
         if (leadsData?.success) setLeadRecoveryItems(leadsData.data || []);
-        await fetchProtocolRequests(headers);
+        await Promise.all([
+          fetchProtocolRequests(headers),
+          fetchDemoSandboxes(headers)
+        ]);
       } catch (error: any) {
         console.error('Owner dashboard error:', error);
         setDashboardWarning(error.message || 'Nao foi possivel carregar todos os dados do painel.');
@@ -245,7 +336,10 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
     if (customersData?.success) setAllCustomers(customersData.data || []);
     if (surveysData?.success) setFinancialFeatureSurveys(surveysData.data || []);
     if (leadsData?.success) setLeadRecoveryItems(leadsData.data || []);
-    await fetchProtocolRequests(headers);
+    await Promise.all([
+      fetchProtocolRequests(headers),
+      fetchDemoSandboxes(headers)
+    ]);
   };
 
   const handleGrantComplimentaryPlan = async () => {
@@ -524,6 +618,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
           <SidebarItem icon={<BarChart3 size={18} />} label="DRE e EBITDA" active={activeTab === 'financial'} onClick={() => setActiveTab('financial')} />
           <SidebarItem icon={<Users size={18} />} label="Clientes e Lucro" active={activeTab === 'customers'} onClick={() => setActiveTab('customers')} />
           <SidebarItem icon={<MessageCircle size={18} />} label="Recuperação de Leads" active={activeTab === 'leads'} onClick={() => setActiveTab('leads')} />
+          <SidebarItem icon={<FlaskConical size={18} />} label="Ambientes Demo" active={activeTab === 'demos'} onClick={() => setActiveTab('demos')} />
           <SidebarItem icon={<ClipboardCheck size={18} />} label="Protocolos" active={activeTab === 'protocols'} onClick={() => setActiveTab('protocols')} />
         </nav>
 
@@ -550,7 +645,9 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                     ? 'Clientes e Performance'
                     : activeTab === 'leads'
                       ? 'Recuperacao de Leads'
-                      : 'Governanca de Protocolos'}
+                      : activeTab === 'demos'
+                        ? 'Ambientes Demo'
+                        : 'Governanca de Protocolos'}
             </h1>
           </div>
           <div className="px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold">
@@ -937,6 +1034,134 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                 </div>
               )}
             </div>
+          </div>
+        )}
+
+        {activeTab === 'demos' && (
+          <div className="space-y-6">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-5">
+              <div>
+                <p className="text-xs font-black uppercase tracking-[0.16em] text-violet-600">Operacao acompanhada</p>
+                <h2 className="mt-1 text-2xl font-black text-slate-900">Demo principal e playground</h2>
+                <p className="mt-1 text-sm font-semibold text-slate-500">
+                  A sandbox individual por prospect continua disponível pela API, mas não é obrigatória.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleBootstrapOperationalDemo}
+                disabled={Boolean(demoAction)}
+                className="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-3 text-sm font-black text-white disabled:opacity-60"
+              >
+                {demoAction === 'bootstrap' ? <Loader2 size={17} className="animate-spin" /> : <FlaskConical size={17} />}
+                Preparar demos
+              </button>
+            </div>
+
+            <div className="grid gap-4 xl:grid-cols-2">
+              {['presentation', 'playground'].map((kind) => {
+                const demo = demoSandboxes.find((item) => item.demoKind === kind);
+                const isPlayground = kind === 'playground';
+                return (
+                  <div key={kind} className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="text-[11px] font-black uppercase tracking-[0.16em] text-violet-600">
+                          {isPlayground ? 'Testes guiados' : 'Apresentacao oficial'}
+                        </p>
+                        <h3 className="mt-1 text-lg font-black text-slate-900">
+                          {demo?.name || (isPlayground ? 'Playground Demo Verto' : 'Clinica Demo Verto')}
+                        </h3>
+                      </div>
+                      <span className={`rounded-full px-3 py-1 text-[10px] font-black uppercase ${
+                        demo?.demoStatus === 'active'
+                          ? 'bg-emerald-50 text-emerald-700'
+                          : 'bg-slate-100 text-slate-500'
+                      }`}>
+                        {demo?.demoStatus === 'active' ? 'Ativa' : 'Pendente'}
+                      </span>
+                    </div>
+
+                    <div className="mt-5 grid grid-cols-2 gap-3 text-sm">
+                      <div className="rounded-lg bg-slate-50 p-3">
+                        <p className="text-[10px] font-black uppercase text-slate-400">Ultima atividade</p>
+                        <p className="mt-1 font-bold text-slate-700">
+                          {demo?.demoLastActivityAt ? formatProtocolRequestDateTime(demo.demoLastActivityAt) : 'Sem atividade recente'}
+                        </p>
+                      </div>
+                      <div className="rounded-lg bg-slate-50 p-3">
+                        <p className="text-[10px] font-black uppercase text-slate-400">Ultimo reset</p>
+                        <p className="mt-1 font-bold text-slate-700">
+                          {demo?.demoResetAt ? formatProtocolRequestDateTime(demo.demoResetAt) : 'Baseline original'}
+                        </p>
+                      </div>
+                    </div>
+
+                    <p className="mt-4 text-sm font-semibold text-slate-600">
+                      {isPlayground
+                        ? 'Use apenas dados ficticios. Este ambiente pode ser resetado.'
+                        : 'Demo de apresentacao. A conta compartilhada acessa em modo somente leitura.'}
+                    </p>
+
+                    <div className="mt-5 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={handleCopyDemoAccess}
+                        className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs font-black text-slate-700 hover:bg-slate-50"
+                      >
+                        <Copy size={15} /> Copiar acesso
+                      </button>
+                      {isPlayground && (
+                        <button
+                          type="button"
+                          onClick={handleResetPlayground}
+                          disabled={Boolean(demoAction) || !demo}
+                          className="inline-flex items-center gap-2 rounded-lg border border-amber-200 px-3 py-2 text-xs font-black text-amber-700 hover:bg-amber-50 disabled:opacity-50"
+                        >
+                          {demoAction === 'reset-playground' ? <Loader2 size={15} className="animate-spin" /> : <RotateCcw size={15} />}
+                          Resetar Playground
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-4 rounded-lg border border-slate-200 bg-white p-5">
+              <div>
+                <p className="text-sm font-black text-slate-900">Conta compartilhada</p>
+                <p className="text-sm font-semibold text-slate-500">coordenador.teste@verto.com</p>
+              </div>
+              <button
+                type="button"
+                onClick={handleRotateDemoPassword}
+                disabled={Boolean(demoAction)}
+                className="inline-flex items-center gap-2 rounded-lg border border-violet-200 px-4 py-2 text-xs font-black text-violet-700 hover:bg-violet-50 disabled:opacity-50"
+              >
+                {demoAction === 'rotate-password' ? <Loader2 size={15} className="animate-spin" /> : <KeyRound size={15} />}
+                Rotacionar senha
+              </button>
+            </div>
+
+            {demoSandboxes.some((item) => item.demoKind === 'prospect') && (
+              <div className="border-t border-slate-200 pt-5">
+                <h3 className="text-base font-black text-slate-900">Sandboxes opcionais por prospect</h3>
+                <div className="mt-3 divide-y divide-slate-100 rounded-lg border border-slate-200 bg-white">
+                  {demoSandboxes.filter((item) => item.demoKind === 'prospect').map((demo) => (
+                    <div key={demo.id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+                      <div>
+                        <p className="text-sm font-black text-slate-800">{demo.name}</p>
+                        <p className="text-xs font-semibold text-slate-500">
+                          {demo.demoExpiresAt ? `Expira em ${formatProtocolRequestDateTime(demo.demoExpiresAt)}` : 'Sem expiracao informada'}
+                        </p>
+                      </div>
+                      <span className="text-xs font-black uppercase text-slate-500">{demo.demoStatus || 'active'}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 

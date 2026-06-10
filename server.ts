@@ -318,7 +318,11 @@ function resolveActivePatientPriceId(): string {
 const ACTIVE_PATIENT_BILLING_MODEL = 'active_patients';
 const DEMO_SANDBOX_BILLING_MODEL = 'demo';
 const DEMO_SANDBOX_TEMPLATE_NAME = 'Clinica Demo Verto';
+const DEMO_PLAYGROUND_NAME = 'Playground Demo Verto';
 const DEMO_SANDBOX_SEED_VERSION = '2026-06-demo-v1';
+const DEMO_PRESENTATION_CLINIC_ID = uuidFromStableString('verto:presentation-demo-clinic');
+const DEMO_PLAYGROUND_CLINIC_ID = uuidFromStableString('verto:playground-demo-clinic');
+const DEMO_SHARED_USER_EMAIL = 'coordenador.teste@verto.com';
 
 function queueActivePatientSync(clinicId: string | null | undefined, trigger: string) {
   const safeClinicId = sanitizeString(clinicId, 120);
@@ -4239,6 +4243,9 @@ type DemoClinicState = {
   demoSource: string | null;
   demoTemplateId: string | null;
   demoOwnerUserId: string | null;
+  demoKind: string | null;
+  demoKey: string | null;
+  demoLastActivityAt: string | null;
 };
 
 function isDemoExpiredAt(value: any): boolean {
@@ -4262,6 +4269,18 @@ function isDemoSessionUser(user: any): boolean {
   );
 }
 
+function isExplicitDemoUser(user: any): boolean {
+  const demoRole = sanitizeString(user?.demoRole || user?.demo_role, 80).toLowerCase();
+  const accessMode = sanitizeString(user?.demoAccessMode || user?.demo_access_mode, 80).toLowerCase();
+  return Boolean(
+    user?.is_demo_user === true ||
+    demoRole === 'shared_demo_coordinator' ||
+    demoRole === 'prospect_demo' ||
+    accessMode === 'shared_guided' ||
+    accessMode === 'prospect'
+  );
+}
+
 async function fetchClinicDemoState(clinicId: string | null | undefined): Promise<DemoClinicState> {
   const safeClinicId = sanitizeString(clinicId, 120);
   const fallback: DemoClinicState = {
@@ -4273,7 +4292,10 @@ async function fetchClinicDemoState(clinicId: string | null | undefined): Promis
     demoExpiresAt: null,
     demoSource: null,
     demoTemplateId: null,
-    demoOwnerUserId: null
+    demoOwnerUserId: null,
+    demoKind: null,
+    demoKey: null,
+    demoLastActivityAt: null
   };
   if (!safeClinicId || !supabase) return fallback;
 
@@ -4284,7 +4306,7 @@ async function fetchClinicDemoState(clinicId: string | null | undefined): Promis
       .eq('id', safeClinicId)
       .maybeSingle();
 
-  let result = await run('id,name,is_demo,demo_status,demo_expires_at,demo_source,demo_template_id,demo_owner_user_id,billing_model,subscription_status');
+  let result = await run('id,name,is_demo,demo_status,demo_expires_at,demo_source,demo_template_id,demo_owner_user_id,demo_kind,demo_key,demo_last_activity_at,billing_model,subscription_status');
   if (result.error && extractMissingColumnName(result.error)) {
     result = await run('id,name,subscription_status');
   }
@@ -4302,14 +4324,20 @@ async function fetchClinicDemoState(clinicId: string | null | undefined): Promis
     demoExpiresAt: sanitizeString(row?.demo_expires_at, 80) || null,
     demoSource: sanitizeString(row?.demo_source, 40) || null,
     demoTemplateId: sanitizeString(row?.demo_template_id, 120) || null,
-    demoOwnerUserId: sanitizeString(row?.demo_owner_user_id, 120) || null
+    demoOwnerUserId: sanitizeString(row?.demo_owner_user_id, 120) || null,
+    demoKind: sanitizeString(row?.demo_kind, 40).toLowerCase() || null,
+    demoKey: sanitizeString(row?.demo_key, 80) || null,
+    demoLastActivityAt: sanitizeString(row?.demo_last_activity_at, 80) || null
   };
 }
 
-async function resolveDemoAccessBlock(user: any): Promise<{ blocked: boolean; status: number; error: string; message: string } | null> {
+async function resolveDemoAccessBlock(
+  user: any,
+  knownState?: DemoClinicState | null
+): Promise<{ blocked: boolean; status: number; error: string; message: string } | null> {
   const clinicId = currentClinicId(user);
   if (!clinicId || !isDemoSessionUser(user)) return null;
-  const state = await fetchClinicDemoState(clinicId);
+  const state = knownState || await fetchClinicDemoState(clinicId);
   if (!state.isDemo) return null;
   const expired =
     state.demoStatus === 'expired' ||
@@ -4323,6 +4351,135 @@ async function resolveDemoAccessBlock(user: any): Promise<{ blocked: boolean; st
     error: 'DEMO_SANDBOX_EXPIRED',
     message: 'Este ambiente demo expirou. Solicite reativacao para continuar.'
   };
+}
+
+const demoActivityTouchByClinicId = new Map<string, number>();
+
+function isDemoRouteForbidden(pathname: string): boolean {
+  const path = pathname.toLowerCase();
+  const forbiddenPrefixes = [
+    '/api/admin',
+    '/api/owner',
+    '/api/billing',
+    '/api/payments',
+    '/api/financial',
+    '/api/logs',
+    '/api/activity-logs',
+    '/api/clinic/members',
+    '/api/clinic/invite',
+    '/api/clinic/invitations',
+    '/api/clinic/assign-role',
+    '/api/protocol-import-requests'
+  ];
+  return forbiddenPrefixes.some((prefix) => path === prefix || path.startsWith(`${prefix}/`)) ||
+    path.includes('/export') ||
+    path.includes('feature-flag') ||
+    path.includes('feature_flag');
+}
+
+function trackDemoActivityAfterSuccess(req: any, res: any, clinicId: string) {
+  if (req.__demoActivityTracking) return;
+  req.__demoActivityTracking = true;
+  res.on('finish', () => {
+    if (res.statusCode < 200 || res.statusCode >= 400) return;
+    const nowMs = Date.now();
+    const previousTouch = demoActivityTouchByClinicId.get(clinicId) || 0;
+    if (nowMs - previousTouch < 60_000) return;
+    demoActivityTouchByClinicId.set(clinicId, nowMs);
+    void writeDemoRowWithSchemaFallback({
+      tableName: 'clinics',
+      operation: 'update',
+      context: 'demo_last_activity',
+      filters: [{ column: 'id', value: clinicId }],
+      payload: {
+        demo_last_activity_at: new Date(nowMs).toISOString(),
+        updated_at: new Date(nowMs).toISOString()
+      }
+    });
+  });
+}
+
+async function resolveDemoRoutePolicyBlock(
+  req: any,
+  res: any,
+  user: any,
+  knownState?: DemoClinicState | null
+): Promise<{ status: number; error: string; message: string } | null> {
+  if (!isExplicitDemoUser(user)) return null;
+
+  const pathname = sanitizeString(req.path || req.originalUrl, 240);
+  const method = sanitizeString(req.method, 20).toUpperCase();
+  const workspaceRecoveryRoute =
+    pathname === '/api/workspaces' ||
+    pathname === '/api/workspaces/select' ||
+    pathname === '/api/auth/me';
+  if (workspaceRecoveryRoute) return null;
+
+  const clinicId = currentClinicId(user);
+  const state = knownState || await fetchClinicDemoState(clinicId);
+  if (!clinicId || !state.isDemo) {
+    return {
+      status: 403,
+      error: 'DEMO_REAL_CLINIC_ACCESS_DENIED',
+      message: 'A conta demo só pode acessar ambientes de demonstração.'
+    };
+  }
+
+  if (pathname.startsWith('/api/stripe/')) {
+    if (pathname === '/api/stripe/clinic-billing-summary' && method === 'GET') return null;
+    void persistDemoSandboxAuditLog({
+      clinicId,
+      actorUserId: user?.id,
+      action: 'blocked_demo_billing_attempt',
+      details: { endpoint: pathname, method }
+    });
+    return {
+      status: 403,
+      error: 'DEMO_BILLING_DISABLED',
+      message: 'O faturamento real fica desativado no ambiente demo.'
+    };
+  }
+
+  if (isDemoRouteForbidden(pathname)) {
+    if (
+      pathname.startsWith('/api/billing') ||
+      pathname.startsWith('/api/payments') ||
+      pathname.startsWith('/api/financial')
+    ) {
+      void persistDemoSandboxAuditLog({
+        clinicId,
+        actorUserId: user?.id,
+        action: 'blocked_demo_billing_attempt',
+        details: { endpoint: pathname, method }
+      });
+    }
+    return {
+      status: 403,
+      error: 'DEMO_RESTRICTED_OPERATION',
+      message: 'Esta operação não está disponível para a conta demo.'
+    };
+  }
+
+  if (method === 'DELETE') {
+    return {
+      status: 403,
+      error: 'DEMO_PERMANENT_DELETE_DISABLED',
+      message: 'Exclusões permanentes ficam desativadas no ambiente demo.'
+    };
+  }
+
+  if (state.demoKind === 'presentation' && !['GET', 'HEAD', 'OPTIONS'].includes(method)) {
+    return {
+      status: 403,
+      error: 'DEMO_PRESENTATION_READ_ONLY',
+      message: 'A demo de apresentação é somente leitura. Use o Playground Demo para testes.'
+    };
+  }
+
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) {
+    trackDemoActivityAfterSuccess(req, res, clinicId);
+  }
+  return null;
 }
 
 async function writeDemoRowWithSchemaFallback(params: {
@@ -4445,10 +4602,37 @@ async function fetchDemoPatientIds(clinicId: string): Promise<string[]> {
     .filter(Boolean);
 }
 
+async function removeDemoPatientStorage(clinicId: string, patientIds: string[]) {
+  let removed = 0;
+  for (const patientId of patientIds) {
+    const prefix = `demo/${clinicId}/${patientId}`;
+    const { data, error } = await supabase.storage
+      .from('patient-photos')
+      .list(prefix, { limit: 1000 });
+    if (error) {
+      if (sanitizeString(error?.message, 240).toLowerCase().includes('bucket not found')) continue;
+      console.warn('[Demo Sandbox] Falha ao listar mídia demo para reset:', {
+        clinicId,
+        patientId,
+        message: sanitizeString(error?.message || String(error), 240)
+      });
+      continue;
+    }
+    const paths = (data || [])
+      .filter((item: any) => sanitizeString(item?.name, 240) && sanitizeString(item?.id, 120))
+      .map((item: any) => `${prefix}/${sanitizeString(item.name, 240)}`);
+    if (!paths.length) continue;
+    const removal = await supabase.storage.from('patient-photos').remove(paths);
+    if (!removal.error) removed += paths.length;
+  }
+  return removed;
+}
+
 async function resetDemoClinicData(clinicId: string) {
   const safeClinicId = sanitizeString(clinicId, 120);
   if (!safeClinicId) throw new Error('clinic_id ausente para reset demo.');
   const patientIds = await fetchDemoPatientIds(safeClinicId);
+  const storageObjectsRemoved = await removeDemoPatientStorage(safeClinicId, patientIds);
 
   const patientScopedTables = [
     'aba_trials',
@@ -4486,7 +4670,7 @@ async function resetDemoClinicData(clinicId: string) {
   }
 
   await deleteDemoRowsByColumn('patients', 'id', patientIds);
-  return { patientIdsRemoved: patientIds.length };
+  return { patientIdsRemoved: patientIds.length, storageObjectsRemoved };
 }
 
 function buildDemoPatientRows(clinicId: string, ownerUserId: string | null) {
@@ -4525,7 +4709,7 @@ function buildDemoPatientRows(clinicId: string, ownerUserId: string | null) {
 async function seedDemoClinicData(params: {
   clinicId: string;
   ownerUserId?: string | null;
-  source: 'template' | 'prospect' | 'presentation';
+  source: 'template' | 'prospect' | 'presentation' | 'playground';
 }) {
   const clinicId = sanitizeString(params.clinicId, 120);
   const ownerUserId = sanitizeString(params.ownerUserId, 120) || null;
@@ -4557,7 +4741,7 @@ async function seedDemoClinicData(params: {
     onConflict: 'id',
     context: 'demo_seed_payer',
     payload: {
-      id: `demo-payer-${clinicId.slice(0, 12)}`,
+      id: uuidFromStableString(`demo-payer:${clinicId}`),
       clinic_id: clinicId,
       organization_id: clinicId,
       name: 'Saude Exemplo',
@@ -4721,7 +4905,7 @@ async function seedDemoClinicData(params: {
     payload: {
       id: uuidFromStableString(`demo-template:${clinicId}`),
       clinic_id: clinicId,
-      name: DEMO_SANDBOX_TEMPLATE_NAME,
+      name: params.source === 'playground' ? DEMO_PLAYGROUND_NAME : DEMO_SANDBOX_TEMPLATE_NAME,
       seed_version: DEMO_SANDBOX_SEED_VERSION,
       payload: {
         source: params.source,
@@ -6761,7 +6945,7 @@ async function fetchUserWorkspaces(userId: string) {
       .eq('user_id', userId)
       .eq('status', 'active');
 
-  let { data, error } = await run('id,name,logo_url,is_demo,demo_status,demo_expires_at,demo_source,billing_model');
+  let { data, error } = await run('id,name,logo_url,is_demo,demo_status,demo_expires_at,demo_source,demo_kind,demo_key,demo_last_activity_at,billing_model');
   if (error && extractMissingColumnName(error)) {
     const fallback = await run('id,name,logo_url');
     data = fallback.data;
@@ -6783,6 +6967,9 @@ async function fetchUserWorkspaces(userId: string) {
       demoStatus: sanitizeString(clinic?.demo_status, 40).toLowerCase() || null,
       demoExpiresAt: sanitizeString(clinic?.demo_expires_at, 80) || null,
       demoSource: sanitizeString(clinic?.demo_source, 40) || null,
+      demoKind: sanitizeString(clinic?.demo_kind, 40).toLowerCase() || null,
+      demoKey: sanitizeString(clinic?.demo_key, 80) || null,
+      demoLastActivityAt: sanitizeString(clinic?.demo_last_activity_at, 80) || null,
       billingModel: sanitizeString(clinic?.billing_model, 40).toLowerCase() || null
     };
   }).filter((w: any) => w.clinicId);
@@ -6909,8 +7096,19 @@ function compactWorkspacesForSession(workspaces: any[]) {
     demoStatus: sanitizeString(w?.demoStatus || w?.demo_status, 40).toLowerCase() || null,
     demoExpiresAt: sanitizeString(w?.demoExpiresAt || w?.demo_expires_at, 80) || null,
     demoSource: sanitizeString(w?.demoSource || w?.demo_source, 40) || null,
+    demoKind: sanitizeString(w?.demoKind || w?.demo_kind, 40).toLowerCase() || null,
+    demoKey: sanitizeString(w?.demoKey || w?.demo_key, 80) || null,
+    demoLastActivityAt: sanitizeString(w?.demoLastActivityAt || w?.demo_last_activity_at, 80) || null,
     billingModel: sanitizeString(w?.billingModel || w?.billing_model, 40).toLowerCase() || null
   })).filter((w: any) => w.clinicId);
+}
+
+function filterWorkspacesForUser(workspaces: any[], user: any) {
+  const compacted = compactWorkspacesForSession(workspaces);
+  if (!isExplicitDemoUser(user)) return compacted;
+  return compacted.filter((workspace: any) => (
+    workspace.isDemo || workspace.billingModel === DEMO_SANDBOX_BILLING_MODEL
+  ));
 }
 
 function resolveActiveWorkspaceId(
@@ -6933,7 +7131,11 @@ function resolveActiveWorkspaceId(
 }
 
 function buildSessionUserPayload(input: any) {
-  const workspaces = compactWorkspacesForSession(input?.workspaces || []);
+  const explicitDemoUser = isExplicitDemoUser(input);
+  const compactedWorkspaces = compactWorkspacesForSession(input?.workspaces || []);
+  const workspaces = explicitDemoUser
+    ? compactedWorkspaces.filter((workspace: any) => workspace.isDemo || workspace.billingModel === DEMO_SANDBOX_BILLING_MODEL)
+    : compactedWorkspaces;
   const activeWorkspaceId = resolveActiveWorkspaceId(
     workspaces,
     input?.activeWorkspaceId,
@@ -6942,18 +7144,15 @@ function buildSessionUserPayload(input: any) {
   const selectedWorkspace = activeWorkspaceId
     ? workspaces.find((w: any) => w.clinicId === activeWorkspaceId) || null
     : null;
-  const resolvedRole = selectedWorkspace?.role || input?.role;
+  const resolvedRole = explicitDemoUser
+    ? selectedWorkspace?.role || workspaces[0]?.role || 'coordinator'
+    : selectedWorkspace?.role || input?.role;
   const mustSelectWorkspace = workspaces.length > 1 && !activeWorkspaceId;
   const resolvedBillingModel = sanitizeString(
     selectedWorkspace?.billingModel || input?.billingModel || input?.billing_model,
     40
   ).toLowerCase();
-  const resolvedIsDemoUser = Boolean(
-    input?.isDemoUser ||
-    input?.is_demo_user ||
-    selectedWorkspace?.isDemo ||
-    resolvedBillingModel === DEMO_SANDBOX_BILLING_MODEL
-  );
+  const resolvedIsDemoUser = explicitDemoUser;
 
   return {
     id: sanitizeString(input?.id, 120),
@@ -6971,9 +7170,12 @@ function buildSessionUserPayload(input: any) {
     billingModel: resolvedBillingModel || null,
     isDemoUser: resolvedIsDemoUser,
     demoRole: sanitizeString(input?.demoRole || input?.demo_role, 80) || null,
+    demoAccessMode: sanitizeString(input?.demoAccessMode || input?.demo_access_mode, 80).toLowerCase() || null,
     demoExpiresAt: sanitizeString(selectedWorkspace?.demoExpiresAt || input?.demoExpiresAt || input?.demo_expires_at, 80) || null,
     demoStatus: sanitizeString(selectedWorkspace?.demoStatus || input?.demoStatus || input?.demo_status, 40).toLowerCase() || null,
     demoSource: sanitizeString(selectedWorkspace?.demoSource || input?.demoSource || input?.demo_source, 40) || null,
+    demoKind: sanitizeString(selectedWorkspace?.demoKind || input?.demoKind || input?.demo_kind, 40).toLowerCase() || null,
+    demoKey: sanitizeString(selectedWorkspace?.demoKey || input?.demoKey || input?.demo_key, 80) || null,
     treatmentStatus: sanitizeString(input?.treatmentStatus, 40) || null,
     clinicId: selectedWorkspace?.clinicId || sanitizeString(input?.clinicId, 120) || null,
     activeWorkspaceId,
@@ -7076,13 +7278,14 @@ async function checkoutSessionUsesActivePatientPrice(
 
 async function canAccessPatientInCurrentClinic(patientId: string, user: any): Promise<boolean> {
   if (!isUuid(patientId)) return false;
-  if (hasGlobalClinicAccess(user)) return true;
+  const explicitDemoUser = isExplicitDemoUser(user);
+  if (hasGlobalClinicAccess(user) && !explicitDemoUser) return true;
   const clinicId = currentClinicId(user);
   const role = sanitizeString(user?.role, 40).toLowerCase();
   const userId = sanitizeString(user?.id, 120);
   let query = supabase
     .from('patients')
-    .select('id, therapist_id, clinic_id')
+    .select('id,therapist_id,clinic_id,is_demo')
     .eq('id', patientId)
     .eq('is_active', true)
     .is('deleted_at', null);
@@ -7092,6 +7295,9 @@ async function canAccessPatientInCurrentClinic(patientId: string, user: any): Pr
   const { data, error } = await query.maybeSingle();
   if (error) return false;
   if (data?.id) {
+    if (explicitDemoUser && (data?.is_demo !== true || sanitizeString(data?.clinic_id, 120) !== clinicId)) {
+      return false;
+    }
     if (role === 'coordinator') return true;
     if (role === 'therapist' && sanitizeString(data?.therapist_id, 120) === userId) return true;
     return false;
@@ -7099,7 +7305,7 @@ async function canAccessPatientInCurrentClinic(patientId: string, user: any): Pr
 
   // Fallback robusto: se contexto de clínica não estiver pronto na sessão,
   // terapeuta responsável ainda pode acessar seu próprio paciente.
-  if (role === 'therapist' && isUuid(userId)) {
+  if (!explicitDemoUser && role === 'therapist' && isUuid(userId)) {
     const { data: byTherapist, error: byTherapistError } = await supabase
       .from('patients')
       .select('id')
@@ -9286,11 +9492,21 @@ async function startServer() {
           message: 'Confirme seu e-mail para acessar funcionalidades sensíveis.'
         });
       }
-      const demoBlock = await resolveDemoAccessBlock(req.session.user);
+      const demoState = isDemoSessionUser(req.session.user)
+        ? await fetchClinicDemoState(currentClinicId(req.session.user))
+        : null;
+      const demoBlock = await resolveDemoAccessBlock(req.session.user, demoState);
       if (demoBlock?.blocked) {
         return res.status(demoBlock.status).json({
           error: demoBlock.error,
           message: demoBlock.message
+        });
+      }
+      const demoRouteBlock = await resolveDemoRoutePolicyBlock(req, res, req.session.user, demoState);
+      if (demoRouteBlock) {
+        return res.status(demoRouteBlock.status).json({
+          error: demoRouteBlock.error,
+          message: demoRouteBlock.message
         });
       }
       if (await isBillingAccessBlocked(req.session.user)) {
@@ -9349,6 +9565,7 @@ async function startServer() {
               billingModel: profile.billing_model,
               isDemoUser: profile.is_demo_user,
               demoRole: profile.demo_role,
+              demoAccessMode: profile.demo_access_mode,
               demoExpiresAt: profile.demo_expires_at,
               status: sanitizeString((profile as any)?.status, 60) || null,
               activationRequired: Boolean((user as any)?.user_metadata?.patient_activation_required),
@@ -9376,11 +9593,21 @@ async function startServer() {
                 message: 'Confirme seu e-mail para acessar funcionalidades sensíveis.'
               });
             }
-            const demoBlock = await resolveDemoAccessBlock(req.session.user);
+            const demoState = isDemoSessionUser(req.session.user)
+              ? await fetchClinicDemoState(currentClinicId(req.session.user))
+              : null;
+            const demoBlock = await resolveDemoAccessBlock(req.session.user, demoState);
             if (demoBlock?.blocked) {
               return res.status(demoBlock.status).json({
                 error: demoBlock.error,
                 message: demoBlock.message
+              });
+            }
+            const demoRouteBlock = await resolveDemoRoutePolicyBlock(req, res, req.session.user, demoState);
+            if (demoRouteBlock) {
+              return res.status(demoRouteBlock.status).json({
+                error: demoRouteBlock.error,
+                message: demoRouteBlock.message
               });
             }
             if (await isBillingAccessBlocked(req.session.user)) {
@@ -10335,16 +10562,19 @@ async function startServer() {
       }
 
       // Global backoffice bypass only
+      if (hasGlobalClinicAccess(user) && isExplicitDemoUser(user)) {
+        return res.status(403).json({ error: 'A conta demo não possui acesso global a prontuários.' });
+      }
       if (hasGlobalClinicAccess(user)) return next();
 
       // Check if user is the patient themselves
-      if (user.id === rawPatientId || (resolvedPatientId && user.id === resolvedPatientId)) return next();
+      if (!isExplicitDemoUser(user) && (user.id === rawPatientId || (resolvedPatientId && user.id === resolvedPatientId))) return next();
       if (!resolvedPatientId) {
         // Allow initial clinical record bootstrap flow to resolve/create mapping inside route handler.
         const isPatientRecordWrite =
           req.method?.toUpperCase?.() === 'POST' &&
           String(req.path || '').startsWith('/api/patient-records/');
-        if (isPatientRecordWrite) {
+        if (isPatientRecordWrite && !isExplicitDemoUser(user)) {
           return next();
         }
         return res.status(404).json({ error: 'Paciente não encontrado' });
@@ -10353,12 +10583,18 @@ async function startServer() {
       // Check if user is the therapist for this patient
       const { data: patient, error } = await supabase
         .from('patients')
-        .select('therapist_id, clinic_id')
+        .select('therapist_id,clinic_id,is_demo')
         .eq('id', resolvedPatientId)
         .single();
 
       if (error || !patient) {
         return res.status(404).json({ error: 'Paciente não encontrado' });
+      }
+      if (
+        isExplicitDemoUser(user) &&
+        (patient.is_demo !== true || sanitizeString(patient.clinic_id, 120) !== currentClinicId(user))
+      ) {
+        return res.status(403).json({ error: 'Acesso negado a este prontuário' });
       }
 
       if (patient.therapist_id === user.id) {
@@ -10663,6 +10899,7 @@ async function startServer() {
         billingModel: profile.billing_model,
         isDemoUser: profile.is_demo_user,
         demoRole: profile.demo_role,
+        demoAccessMode: profile.demo_access_mode,
         demoExpiresAt: profile.demo_expires_at,
         status: sanitizeString((profile as any)?.status, 60) || null,
         treatmentStatus,
@@ -11321,6 +11558,7 @@ async function startServer() {
         billingModel: profile.billing_model,
         isDemoUser: profile.is_demo_user,
         demoRole: profile.demo_role,
+        demoAccessMode: profile.demo_access_mode,
         demoExpiresAt: profile.demo_expires_at,
         status: sanitizeString((profile as any)?.status, 60) || null,
         treatmentStatus,
@@ -11942,6 +12180,7 @@ async function startServer() {
         billingModel: profile.billing_model,
         isDemoUser: profile.is_demo_user,
         demoRole: profile.demo_role,
+        demoAccessMode: profile.demo_access_mode,
         demoExpiresAt: profile.demo_expires_at,
         activationRequired: authActivationRequired,
         treatmentStatus,
@@ -12041,7 +12280,10 @@ async function startServer() {
 
   app.get('/api/workspaces', checkAuth, async (req: any, res) => {
     try {
-      const workspaces = await fetchUserWorkspaces(req.session.user.id);
+      const workspaces = filterWorkspacesForUser(
+        await fetchUserWorkspaces(req.session.user.id),
+        req.session.user
+      );
       req.session.user = buildSessionUserPayload({
         ...req.session.user,
         workspaces,
@@ -12059,10 +12301,20 @@ async function startServer() {
         return res.status(400).json({ success: false, error: 'clinicId obrigatorio' });
       }
 
-      const workspaces = await fetchUserWorkspaces(req.session.user.id);
+      const workspaces = filterWorkspacesForUser(
+        await fetchUserWorkspaces(req.session.user.id),
+        req.session.user
+      );
       const selected = workspaces.find((w: any) => w.clinicId === clinicId);
       if (!selected) {
         return res.status(403).json({ success: false, error: 'Workspace nao autorizado' });
+      }
+      if (isExplicitDemoUser(req.session.user) && !selected.isDemo) {
+        return res.status(403).json({
+          success: false,
+          error: 'DEMO_REAL_CLINIC_ACCESS_DENIED',
+          message: 'A conta demo só pode acessar ambientes de demonstração.'
+        });
       }
 
       await supabase
@@ -12077,10 +12329,12 @@ async function startServer() {
       req.session.user.activeWorkspaceId = clinicId;
       req.session.user.role = selected.role;
       req.session.user.billingModel = selected.billingModel || req.session.user.billingModel || null;
-      req.session.user.isDemoUser = Boolean(req.session.user.isDemoUser || selected.isDemo);
+      req.session.user.isDemoUser = isExplicitDemoUser(req.session.user);
       req.session.user.demoStatus = selected.demoStatus || null;
       req.session.user.demoExpiresAt = selected.demoExpiresAt || null;
       req.session.user.demoSource = selected.demoSource || null;
+      req.session.user.demoKind = selected.demoKind || null;
+      req.session.user.demoKey = selected.demoKey || null;
       req.session.user.workspaces = compactWorkspacesForSession(workspaces);
       req.session.user = buildSessionUserPayload(req.session.user);
 
@@ -16429,24 +16683,39 @@ async function startServer() {
   app.post('/api/storage/upload', uploadLimiter, checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner', 'patient'), async (req: any, res) => {
     try {
       const bucketName = sanitizeString(req.body?.bucket, 80);
-      const objectPath = sanitizeString(req.body?.path, 260);
+      const requestedObjectPath = sanitizeString(req.body?.path, 260);
       const contentType = sanitizeString(req.body?.contentType, 120) || 'application/octet-stream';
       const dataUrl = sanitizeString(req.body?.fileBase64, 8_000_000);
       const role = sanitizeString(req.session.user?.role, 40).toLowerCase();
       const actorId = sanitizeString(req.session.user?.id, 120);
-      const isOnboardingUpload = objectPath.startsWith('onboarding/');
+      const activeClinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const demoState = await fetchClinicDemoState(activeClinicId);
+      const requestedPathParts = requestedObjectPath.split('/').filter(Boolean);
+      const hasDemoPrefix = requestedPathParts[0] === 'demo';
+      if (
+        hasDemoPrefix &&
+        requestedPathParts[1] !== activeClinicId &&
+        (!hasGlobalClinicAccess(req.session.user) || isExplicitDemoUser(req.session.user))
+      ) {
+        return res.status(403).json({ success: false, error: 'Path demo fora do escopo da clínica.' });
+      }
+      const accessObjectPath = hasDemoPrefix ? requestedPathParts.slice(2).join('/') : requestedObjectPath;
+      const isOnboardingUpload = accessObjectPath.startsWith('onboarding/');
+      const objectPath = demoState.isDemo && !isOnboardingUpload
+        ? `demo/${activeClinicId}/${accessObjectPath}`
+        : requestedObjectPath;
       const idempotencyKey = sanitizeString(req.body?.idempotencyKey || req.body?.idempotency_key, 180);
       const isIdempotentUpload = Boolean(req.body?.idempotent === true || idempotencyKey);
 
       if (bucketName !== 'patient-photos') {
         return res.status(400).json({ success: false, error: 'Bucket inválido para upload.' });
       }
-      if (!objectPath || objectPath.includes('..')) {
+      if (!requestedObjectPath || requestedObjectPath.includes('..') || accessObjectPath.includes('..')) {
         return res.status(400).json({ success: false, error: 'Path inválido.' });
       }
       if (isOnboardingUpload) {
         // Onboarding paths: onboarding/{actorId}/...
-        const ownerUserId = sanitizeString(objectPath.split('/')[1], 120);
+        const ownerUserId = sanitizeString(accessObjectPath.split('/')[1], 120);
         if (!isUuid(ownerUserId)) {
           return res.status(400).json({ success: false, error: 'Path inválido: usuário de onboarding não identificado.' });
         }
@@ -16457,7 +16726,7 @@ async function startServer() {
           return res.status(403).json({ success: false, error: 'Perfil sem permissão para upload de onboarding.' });
         }
       } else {
-        const ownerPatientId = sanitizeString(objectPath.split('/')[0], 120);
+        const ownerPatientId = sanitizeString(accessObjectPath.split('/')[0], 120);
         if (!isUuid(ownerPatientId)) {
           return res.status(400).json({ success: false, error: 'Path inválido: paciente não identificado.' });
         }
@@ -16556,16 +16825,31 @@ async function startServer() {
       if (!objectPath || objectPath.includes('..')) {
         return res.status(400).send('Path inválido.');
       }
+      const activeClinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const demoState = await fetchClinicDemoState(activeClinicId);
+      const objectPathParts = objectPath.split('/').filter(Boolean);
+      const hasDemoPrefix = objectPathParts[0] === 'demo';
+      if (isExplicitDemoUser(req.session.user) && !hasDemoPrefix) {
+        return res.status(403).send('A conta demo só pode acessar arquivos do ambiente demo.');
+      }
+      if (
+        hasDemoPrefix &&
+        (objectPathParts[1] !== activeClinicId || !demoState.isDemo) &&
+        (!hasGlobalClinicAccess(req.session.user) || isExplicitDemoUser(req.session.user))
+      ) {
+        return res.status(403).send('Arquivo fora do escopo da clínica.');
+      }
+      const accessObjectPath = hasDemoPrefix ? objectPathParts.slice(2).join('/') : objectPath;
 
-      if (objectPath.startsWith('onboarding/')) {
-        const ownerUserId = sanitizeString(objectPath.split('/')[1], 120);
+      if (accessObjectPath.startsWith('onboarding/')) {
+        const ownerUserId = sanitizeString(accessObjectPath.split('/')[1], 120);
         const canViewOnboardingMedia = isUuid(ownerUserId) && (
           ownerUserId === actorId ||
           ['admin', 'owner', 'coordinator'].includes(role)
         );
         if (!canViewOnboardingMedia) return res.status(403).send('Acesso negado.');
       } else {
-        const ownerPatientId = sanitizeString(objectPath.split('/')[0], 120);
+        const ownerPatientId = sanitizeString(accessObjectPath.split('/')[0], 120);
         if (!isUuid(ownerPatientId)) return res.status(400).send('Path inválido.');
         if (role === 'patient') {
           if (ownerPatientId !== actorId) return res.status(403).send('Acesso negado.');
@@ -16829,7 +17113,10 @@ async function startServer() {
       });
 
       if (result.error) throw result.error;
-      res.json({ success: true, data: result.data || [] });
+      const patients = isExplicitDemoUser(req.session.user)
+        ? (result.data || []).filter((patient: any) => patient?.is_demo === true)
+        : result.data || [];
+      res.json({ success: true, data: patients });
     } catch (error: any) {
       return sendRouteDbError(res, '/api/patients [GET]', error, {
         userId: sanitizeString(req.session?.user?.id, 120),
@@ -16844,6 +17131,7 @@ async function startServer() {
     try {
       const safeName = sanitizeString(req.body?.name || req.body?.nome, 160);
       const safeClinicId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 100);
+      const demoClinicState = await fetchClinicDemoState(safeClinicId);
       const safeTherapistId = sanitizeString(req.body?.therapist_id || req.session.user?.id, 100);
       const rawEmail = req.body?.email;
       const safeEmail = sanitizeEmail(rawEmail);
@@ -16885,12 +17173,32 @@ async function startServer() {
         relationship_status: RELATIONSHIP_CONFIRMED,
         clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
         therapist_id: isUuid(safeTherapistId) ? safeTherapistId : undefined,
+        is_demo: demoClinicState.isDemo ? true : undefined,
+        metadata: demoClinicState.isDemo
+          ? {
+              demo: true,
+              source: demoClinicState.demoKind || demoClinicState.demoSource || 'demo'
+            }
+          : undefined,
         client_record_id: safeClientRecordId || undefined,
         created_at: sanitizeString(req.body?.created_at, 40) || new Date().toISOString()
       });
 
       if (!safeBody.name) {
         return res.status(400).json({ error: 'Nome do paciente é obrigatório.' });
+      }
+      if (demoClinicState.isDemo) {
+        const submittedEmail = sanitizeString(rawEmail, 320).toLowerCase();
+        if (submittedEmail && !submittedEmail.endsWith('.invalid')) {
+          return res.status(400).json({
+            error: 'Use apenas e-mail fictício terminado em .invalid no ambiente demo.'
+          });
+        }
+        if (sanitizeString(rawCpf, 80) || sanitizeString(rawPhone, 80)) {
+          return res.status(400).json({
+            error: 'CPF e telefone reais não devem ser informados no ambiente demo.'
+          });
+        }
       }
       if (rawEmail !== undefined && rawEmail !== null && String(rawEmail).trim() && !safeEmail) {
         return res.status(400).json({ error: 'E-mail inválido. Informe um domínio válido.' });
@@ -17429,9 +17737,11 @@ async function startServer() {
 
   app.patch('/api/patients/:id', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
+      const explicitDemoUser = isExplicitDemoUser(req.session.user);
       const canChangeClinic = hasGlobalClinicAccess(req.session.user);
       const role = sanitizeString(req.session.user?.role, 40).toLowerCase();
       const scopedClinicId = currentClinicId(req.session.user);
+      const demoClinicState = await fetchClinicDemoState(scopedClinicId);
       if (role === 'receptionist') {
         return res.status(403).json({
           success: false,
@@ -17451,6 +17761,39 @@ async function startServer() {
         role === 'admin' ||
         role === 'owner';
 
+      if (explicitDemoUser && req.body?.clinic_id !== undefined) {
+        return res.status(403).json({
+          success: false,
+          error: 'A conta demo não pode transferir pacientes entre clínicas.'
+        });
+      }
+      if (demoClinicState.isDemo) {
+        const demoEmails = [
+          rawEmail,
+          req.body?.responsibleEmail,
+          req.body?.responsible_email
+        ].map((value) => sanitizeString(value, 320).toLowerCase()).filter(Boolean);
+        if (demoEmails.some((email) => !email.endsWith('.invalid'))) {
+          return res.status(400).json({
+            success: false,
+            error: 'Use apenas e-mail fictício terminado em .invalid no ambiente demo.'
+          });
+        }
+        const submittedDemoPii = [
+          rawCpf,
+          rawPhone,
+          req.body?.responsibleCpf,
+          req.body?.responsible_cpf,
+          req.body?.responsiblePhone,
+          req.body?.responsible_phone
+        ].some((value) => Boolean(sanitizeString(value, 120)));
+        if (submittedDemoPii) {
+          return res.status(400).json({
+            success: false,
+            error: 'CPF e telefone reais não devem ser informados no ambiente demo.'
+          });
+        }
+      }
       if (rawEmail !== undefined && rawEmail !== null && String(rawEmail).trim() && !safeEmail) {
         return res.status(400).json({ success: false, error: 'E-mail inválido. Informe um domínio válido.' });
       }
@@ -17546,6 +17889,9 @@ async function startServer() {
         if (!hasGlobalClinicAccess(req.session.user) && scopedClinicId) {
           patientUpdateQuery = patientUpdateQuery.eq('clinic_id', scopedClinicId);
         }
+        if (explicitDemoUser) {
+          patientUpdateQuery = patientUpdateQuery.eq('is_demo', true);
+        }
         if (role === 'therapist') {
           patientUpdateQuery = patientUpdateQuery.eq('therapist_id', sanitizeString(req.session.user?.id, 120));
         }
@@ -17566,6 +17912,9 @@ async function startServer() {
           .eq('id', req.params.id);
         if (!hasGlobalClinicAccess(req.session.user) && scopedClinicId) {
           patientSelectQuery = patientSelectQuery.eq('clinic_id', scopedClinicId);
+        }
+        if (explicitDemoUser) {
+          patientSelectQuery = patientSelectQuery.eq('is_demo', true);
         }
         const selectResult = await patientSelectQuery.maybeSingle();
         updatedPatient = selectResult.data;
@@ -20199,7 +20548,11 @@ async function startServer() {
                   role: profile.role,
                   name: profile.name,
                   clinicId: profile.clinic_id,
-                  activeWorkspaceId: profile.clinic_id
+                  activeWorkspaceId: profile.clinic_id,
+                  billingModel: profile.billing_model,
+                  isDemoUser: profile.is_demo_user,
+                  demoRole: profile.demo_role,
+                  demoAccessMode: profile.demo_access_mode
                 });
               }
             }
@@ -20209,6 +20562,13 @@ async function startServer() {
 
       if (!currentUser?.id) {
         return res.status(200).json({ success: true, data: [], warning: 'activity_logs_missing_auth' });
+      }
+      if (isExplicitDemoUser(currentUser)) {
+        return res.status(403).json({
+          success: false,
+          error: 'DEMO_RESTRICTED_OPERATION',
+          message: 'Logs administrativos não estão disponíveis para a conta demo.'
+        });
       }
 
       const role = currentUser.role as AppRole;
@@ -20351,7 +20711,11 @@ async function startServer() {
                   role: profile.role,
                   name: profile.name,
                   clinicId: profile.clinic_id,
-                  activeWorkspaceId: profile.clinic_id
+                  activeWorkspaceId: profile.clinic_id,
+                  billingModel: profile.billing_model,
+                  isDemoUser: profile.is_demo_user,
+                  demoRole: profile.demo_role,
+                  demoAccessMode: profile.demo_access_mode
                 });
               }
             }
@@ -20364,6 +20728,13 @@ async function startServer() {
           success: false,
           queued: true,
           warning: 'activity_logs_missing_auth'
+        });
+      }
+      if (isExplicitDemoUser(currentUser)) {
+        return res.status(403).json({
+          success: false,
+          error: 'DEMO_RESTRICTED_OPERATION',
+          message: 'Logs administrativos não estão disponíveis para a conta demo.'
         });
       }
 
@@ -38114,12 +38485,300 @@ async function startServer() {
     return res.status(403).json({ error: 'Acesso negado. Apenas administradores podem acessar esta rota.' });
   };
 
+  const seedFixedDemoIfEmpty = async (
+    clinicId: string,
+    ownerUserId: string,
+    source: 'presentation' | 'playground'
+  ) => {
+    const patientIds = await fetchDemoPatientIds(clinicId);
+    if (patientIds.length > 0) {
+      return { seeded: false, existingPatients: patientIds.length, counts: null };
+    }
+    const counts = await seedDemoClinicData({ clinicId, ownerUserId, source });
+    return { seeded: true, existingPatients: 0, counts };
+  };
+
+  app.post('/api/admin/demo/bootstrap-operational', checkAuth, checkPlatformAdmin, async (req: any, res) => {
+    try {
+      const actor = req.session.user;
+      const authUser = await findAuthUserByEmail(DEMO_SHARED_USER_EMAIL);
+      const demoUserId = sanitizeString(authUser?.id, 120);
+      if (!demoUserId) {
+        return res.status(404).json({
+          success: false,
+          error: 'A conta demo compartilhada ainda não existe. Crie a conta pelo fluxo seguro de autenticação antes de preparar as demos.'
+        });
+      }
+
+      const now = new Date().toISOString();
+      const fixedClinics = [
+        {
+          id: DEMO_PRESENTATION_CLINIC_ID,
+          name: DEMO_SANDBOX_TEMPLATE_NAME,
+          kind: 'presentation' as const,
+          key: 'verto-presentation',
+          source: 'presentation'
+        },
+        {
+          id: DEMO_PLAYGROUND_CLINIC_ID,
+          name: DEMO_PLAYGROUND_NAME,
+          kind: 'playground' as const,
+          key: 'verto-playground',
+          source: 'template'
+        }
+      ];
+
+      for (const clinic of fixedClinics) {
+        const clinicResult = await writeDemoRowWithSchemaFallback({
+          tableName: 'clinics',
+          operation: 'upsert',
+          onConflict: 'id',
+          context: `demo_operational_${clinic.kind}`,
+          payload: {
+            id: clinic.id,
+            owner_user_id: demoUserId,
+            name: clinic.name,
+            subscription_status: DEMO_SANDBOX_BILLING_MODEL,
+            billing_model: DEMO_SANDBOX_BILLING_MODEL,
+            is_demo: true,
+            demo_source: clinic.source,
+            demo_kind: clinic.kind,
+            demo_key: clinic.key,
+            demo_status: 'active',
+            demo_expires_at: null,
+            demo_owner_user_id: demoUserId,
+            demo_template_id: DEMO_SANDBOX_SEED_VERSION,
+            demo_notes: clinic.kind === 'playground'
+              ? 'Ambiente de testes guiados com dados exclusivamente fictícios.'
+              : 'Demo oficial de apresentação, preservada em modo somente leitura para a conta compartilhada.',
+            created_at: now,
+            updated_at: now
+          }
+        });
+        if (clinicResult.error) throw clinicResult.error;
+      }
+
+      const persistedPresentation = await fetchClinicDemoState(DEMO_PRESENTATION_CLINIC_ID);
+      const persistedPlayground = await fetchClinicDemoState(DEMO_PLAYGROUND_CLINIC_ID);
+      if (
+        !persistedPresentation.isDemo ||
+        persistedPresentation.demoKind !== 'presentation' ||
+        !persistedPlayground.isDemo ||
+        persistedPlayground.demoKind !== 'playground'
+      ) {
+        return res.status(500).json({
+          success: false,
+          error: 'Não foi possível confirmar o modelo operacional das clínicas demo. Aplique a migration demo mais recente.'
+        });
+      }
+
+      const profileResult = await writeDemoRowWithSchemaFallback({
+        tableName: 'users',
+        operation: 'upsert',
+        onConflict: 'id',
+        context: 'demo_shared_user_profile',
+        payload: {
+          id: demoUserId,
+          email: DEMO_SHARED_USER_EMAIL,
+          name: sanitizeString((authUser as any)?.user_metadata?.full_name, 180) || 'Coordenador Demo Verto',
+          role: 'coordinator',
+          clinic_id: DEMO_PRESENTATION_CLINIC_ID,
+          subscription_status: DEMO_SANDBOX_BILLING_MODEL,
+          billing_model: DEMO_SANDBOX_BILLING_MODEL,
+          plan_name: 'Demo Verto',
+          plan_price: 0,
+          is_demo_user: true,
+          demo_role: 'shared_demo_coordinator',
+          demo_access_mode: 'shared_guided',
+          demo_expires_at: null,
+          updated_at: now
+        }
+      });
+      if (profileResult.error) throw profileResult.error;
+
+      const authUpdate = await supabase.auth.admin.updateUserById(demoUserId, {
+        user_metadata: {
+          ...((authUser as any)?.user_metadata || {}),
+          demo_role: 'shared_demo_coordinator',
+          demo_access_mode: 'shared_guided'
+        }
+      });
+      if (authUpdate.error) throw authUpdate.error;
+
+      for (const clinic of fixedClinics) {
+        const membership = await writeDemoRowWithSchemaFallback({
+          tableName: 'clinic_memberships',
+          operation: 'upsert',
+          onConflict: 'user_id,clinic_id',
+          context: `demo_shared_membership_${clinic.kind}`,
+          payload: {
+            user_id: demoUserId,
+            clinic_id: clinic.id,
+            role: 'coordinator',
+            status: 'active',
+            created_at: now
+          }
+        });
+        if (membership.error) throw membership.error;
+      }
+
+      const memberships = await supabase
+        .from('clinic_memberships')
+        .select('clinic_id,status,clinics:clinic_id(id,is_demo,billing_model)')
+        .eq('user_id', demoUserId);
+      if (memberships.error) throw memberships.error;
+      for (const membership of memberships.data || []) {
+        const clinic = (membership as any)?.clinics || {};
+        const membershipClinicId = sanitizeString((membership as any)?.clinic_id, 120);
+        const membershipIsDemo =
+          clinic?.is_demo === true ||
+          sanitizeString(clinic?.billing_model, 40).toLowerCase() === DEMO_SANDBOX_BILLING_MODEL;
+        if (membershipClinicId && !membershipIsDemo && sanitizeString((membership as any)?.status, 40) === 'active') {
+          const deactivated = await supabase
+            .from('clinic_memberships')
+            .update({ status: 'inactive' })
+            .eq('user_id', demoUserId)
+            .eq('clinic_id', membershipClinicId);
+          if (deactivated.error) throw deactivated.error;
+        }
+      }
+
+      const presentationSeed = await seedFixedDemoIfEmpty(
+        DEMO_PRESENTATION_CLINIC_ID,
+        demoUserId,
+        'presentation'
+      );
+      const playgroundSeed = await seedFixedDemoIfEmpty(
+        DEMO_PLAYGROUND_CLINIC_ID,
+        demoUserId,
+        'playground'
+      );
+
+      await persistDemoSandboxAuditLog({
+        clinicId: DEMO_PRESENTATION_CLINIC_ID,
+        actorUserId: actor?.id,
+        action: 'bootstrap_operational_demo',
+        details: { kind: 'presentation', seed: presentationSeed }
+      });
+      await persistDemoSandboxAuditLog({
+        clinicId: DEMO_PLAYGROUND_CLINIC_ID,
+        actorUserId: actor?.id,
+        action: 'bootstrap_operational_demo',
+        details: { kind: 'playground', seed: playgroundSeed }
+      });
+
+      return res.json({
+        success: true,
+        data: {
+          sharedUserEmail: DEMO_SHARED_USER_EMAIL,
+          presentation: {
+            clinicId: DEMO_PRESENTATION_CLINIC_ID,
+            name: DEMO_SANDBOX_TEMPLATE_NAME,
+            seed: presentationSeed
+          },
+          playground: {
+            clinicId: DEMO_PLAYGROUND_CLINIC_ID,
+            name: DEMO_PLAYGROUND_NAME,
+            seed: playgroundSeed
+          }
+        }
+      });
+    } catch (error: any) {
+      logRouteDbError('/api/admin/demo/bootstrap-operational', error, {
+        actorId: req.session.user?.id
+      });
+      return res.status(500).json({ success: false, error: 'Não foi possível preparar as demos operacionais.' });
+    }
+  });
+
+  app.post('/api/admin/demo/shared-user/rotate-password', checkAuth, checkPlatformAdmin, async (req: any, res) => {
+    try {
+      const newPassword = validateStrongPassword(req.body?.newPassword);
+      if (!newPassword) {
+        return res.status(400).json({
+          success: false,
+          error: 'A nova senha deve ter entre 12 e 128 caracteres, com maiúscula, minúscula, número e símbolo.'
+        });
+      }
+      const authUser = await findAuthUserByEmail(DEMO_SHARED_USER_EMAIL);
+      const demoUserId = sanitizeString(authUser?.id, 120);
+      if (!demoUserId) {
+        return res.status(404).json({ success: false, error: 'Conta demo compartilhada não encontrada.' });
+      }
+      const updated = await supabase.auth.admin.updateUserById(demoUserId, { password: newPassword });
+      if (updated.error) throw updated.error;
+      await persistDemoSandboxAuditLog({
+        clinicId: DEMO_PLAYGROUND_CLINIC_ID,
+        actorUserId: req.session.user?.id,
+        action: 'rotate_shared_demo_password',
+        details: { userEmail: maskEmail(DEMO_SHARED_USER_EMAIL) }
+      });
+      return res.json({
+        success: true,
+        data: {
+          email: DEMO_SHARED_USER_EMAIL,
+          recommendation: 'Troque novamente a senha após o teste guiado com o lead.'
+        }
+      });
+    } catch (error: any) {
+      logRouteDbError('/api/admin/demo/shared-user/rotate-password', error, {
+        actorId: req.session.user?.id
+      });
+      return res.status(500).json({ success: false, error: 'Não foi possível rotacionar a senha demo.' });
+    }
+  });
+
+  app.post('/api/admin/demo/playground/reset', checkAuth, checkPlatformAdmin, async (req: any, res) => {
+    try {
+      const confirmationText = sanitizeString(req.body?.confirmationText, 80);
+      if (confirmationText !== 'RESET DEMO') {
+        return res.status(400).json({ success: false, error: 'Confirme o reset com RESET DEMO.' });
+      }
+      const state = await fetchClinicDemoState(DEMO_PLAYGROUND_CLINIC_ID);
+      if (!state.isDemo || state.demoKind !== 'playground') {
+        return res.status(403).json({ success: false, error: 'Playground Demo não está configurado corretamente.' });
+      }
+      const reset = await resetDemoClinicData(DEMO_PLAYGROUND_CLINIC_ID);
+      const seeded = await seedDemoClinicData({
+        clinicId: DEMO_PLAYGROUND_CLINIC_ID,
+        ownerUserId: state.demoOwnerUserId,
+        source: 'playground'
+      });
+      const now = new Date().toISOString();
+      await writeDemoRowWithSchemaFallback({
+        tableName: 'clinics',
+        operation: 'update',
+        context: 'demo_playground_reset',
+        filters: [{ column: 'id', value: DEMO_PLAYGROUND_CLINIC_ID }],
+        payload: {
+          demo_reset_at: now,
+          demo_last_activity_at: now,
+          demo_status: 'active',
+          updated_at: now
+        }
+      });
+      await persistDemoSandboxAuditLog({
+        clinicId: DEMO_PLAYGROUND_CLINIC_ID,
+        actorUserId: req.session.user?.id,
+        action: 'reset_playground_demo',
+        details: { reset, seeded }
+      });
+      return res.json({
+        success: true,
+        data: { clinicId: DEMO_PLAYGROUND_CLINIC_ID, reset, seeded }
+      });
+    } catch (error: any) {
+      logRouteDbError('/api/admin/demo/playground/reset', error, {});
+      return res.status(500).json({ success: false, error: 'Não foi possível resetar o Playground Demo.' });
+    }
+  });
+
   app.post('/api/admin/demo/create-presentation', checkAuth, checkPlatformAdmin, async (req: any, res) => {
     try {
       const actor = req.session.user;
       const ownerEmail = sanitizeEmail(req.body?.ownerEmail || req.body?.email);
       const ownerName = sanitizeString(req.body?.ownerName || req.body?.name, 180) || 'Equipe Demo Verto';
-      const clinicId = sanitizeString(req.body?.clinicId, 120) || uuidFromStableString('verto:presentation-demo-clinic');
+      const clinicId = sanitizeString(req.body?.clinicId, 120) || DEMO_PRESENTATION_CLINIC_ID;
       const clinicName = sanitizeString(req.body?.clinicName, 180) || DEMO_SANDBOX_TEMPLATE_NAME;
       const now = new Date().toISOString();
       let ownerUserId = sanitizeString(actor?.id, 120) || null;
@@ -38142,6 +38801,8 @@ async function startServer() {
           billing_model: DEMO_SANDBOX_BILLING_MODEL,
           is_demo: true,
           demo_source: 'presentation',
+          demo_kind: 'presentation',
+          demo_key: clinicId === DEMO_PRESENTATION_CLINIC_ID ? 'verto-presentation' : null,
           demo_status: 'active',
           demo_owner_user_id: ownerUserId,
           demo_template_id: DEMO_SANDBOX_SEED_VERSION,
@@ -38172,8 +38833,7 @@ async function startServer() {
         if (membershipResult.error) throw membershipResult.error;
       }
 
-      await resetDemoClinicData(clinicId);
-      const seeded = await seedDemoClinicData({ clinicId, ownerUserId, source: 'presentation' });
+      const seeded = await seedFixedDemoIfEmpty(clinicId, ownerUserId || sanitizeString(actor?.id, 120), 'presentation');
       await persistDemoSandboxAuditLog({
         clinicId,
         actorUserId: actor?.id,
@@ -38231,7 +38891,8 @@ async function startServer() {
           email_confirm: false,
           user_metadata: {
             full_name: ownerName || ownerEmail.split('@')[0],
-            demo_role: 'prospect_demo'
+            demo_role: 'prospect_demo',
+            demo_access_mode: 'prospect'
           }
         });
         if (created.error) throw created.error;
@@ -38272,6 +38933,7 @@ async function startServer() {
             plan_price: 0,
             is_demo_user: true,
             demo_role: 'prospect_demo',
+            demo_access_mode: 'prospect',
             demo_expires_at: expiresAt,
             created_at: existingProfileData?.created_at || now,
             updated_at: now
@@ -38293,6 +38955,7 @@ async function startServer() {
           billing_model: DEMO_SANDBOX_BILLING_MODEL,
           is_demo: true,
           demo_source: 'prospect',
+          demo_kind: 'prospect',
           demo_status: 'active',
           demo_expires_at: expiresAt,
           demo_owner_user_id: ownerUserId,
@@ -38382,7 +39045,7 @@ async function startServer() {
     try {
       const clinicId = sanitizeString(req.params?.clinicId, 120);
       const confirmationText = sanitizeString(req.body?.confirmationText || req.body?.confirmText, 80);
-      const confirmed = req.body?.confirm === true || confirmationText === 'RESET DEMO';
+      const confirmed = confirmationText === 'RESET DEMO';
       if (!clinicId || !confirmed) {
         return res.status(400).json({ success: false, error: 'Confirme o reset com RESET DEMO.' });
       }
@@ -38390,11 +39053,25 @@ async function startServer() {
       if (!state.isDemo) {
         return res.status(403).json({ success: false, error: 'Reset permitido apenas para ambientes demo.' });
       }
+      if (
+        state.demoKind === 'presentation' &&
+        sanitizeString(req.body?.presentationConfirmationText, 80) !== 'RESET PRESENTATION DEMO'
+      ) {
+        return res.status(400).json({
+          success: false,
+          error: 'A demo de apresentação exige também a confirmação RESET PRESENTATION DEMO.'
+        });
+      }
       const reset = await resetDemoClinicData(clinicId);
       const seeded = await seedDemoClinicData({
         clinicId,
         ownerUserId: state.demoOwnerUserId || req.session.user?.id,
-        source: state.demoSource === 'presentation' ? 'presentation' : 'prospect'
+        source:
+          state.demoKind === 'presentation'
+            ? 'presentation'
+            : state.demoKind === 'playground'
+              ? 'playground'
+              : 'prospect'
       });
       await writeDemoRowWithSchemaFallback({
         tableName: 'clinics',
@@ -38426,6 +39103,12 @@ async function startServer() {
       const state = await fetchClinicDemoState(clinicId);
       if (!clinicId || !state.isDemo) {
         return res.status(403).json({ success: false, error: 'Expiração permitida apenas para ambientes demo.' });
+      }
+      if (state.demoKind === 'presentation' || state.demoKind === 'playground') {
+        return res.status(409).json({
+          success: false,
+          error: 'As demos operacionais fixas não expiram. Use reset apenas no Playground Demo.'
+        });
       }
       const now = new Date().toISOString();
       await writeDemoRowWithSchemaFallback({
@@ -38486,7 +39169,7 @@ async function startServer() {
     try {
       const result = await supabase
         .from('clinics')
-        .select('id,name,is_demo,demo_status,demo_expires_at,demo_source,demo_owner_user_id,billing_model,created_at,updated_at')
+        .select('id,name,is_demo,demo_status,demo_expires_at,demo_source,demo_owner_user_id,demo_kind,demo_key,demo_last_activity_at,demo_reset_at,billing_model,created_at,updated_at')
         .eq('is_demo', true)
         .order('created_at', { ascending: false })
         .limit(200);
@@ -38496,6 +39179,7 @@ async function startServer() {
         }
         throw result.error;
       }
+      const kindPriority: Record<string, number> = { presentation: 0, playground: 1, prospect: 2 };
       const data = (result.data || []).map((row: any) => ({
         id: sanitizeString(row?.id, 120),
         name: sanitizeString(row?.name, 180),
@@ -38503,11 +39187,18 @@ async function startServer() {
         demoStatus: sanitizeString(row?.demo_status, 40) || null,
         demoExpiresAt: sanitizeString(row?.demo_expires_at, 80) || null,
         demoSource: sanitizeString(row?.demo_source, 40) || null,
+        demoKind: sanitizeString(row?.demo_kind, 40) || null,
+        demoKey: sanitizeString(row?.demo_key, 80) || null,
+        demoLastActivityAt: sanitizeString(row?.demo_last_activity_at, 80) || null,
+        demoResetAt: sanitizeString(row?.demo_reset_at, 80) || null,
         demoOwnerUserId: sanitizeString(row?.demo_owner_user_id, 120) || null,
         billingModel: sanitizeString(row?.billing_model, 40) || null,
         createdAt: sanitizeString(row?.created_at, 80) || null,
         updatedAt: sanitizeString(row?.updated_at, 80) || null
-      }));
+      })).sort((a: any, b: any) => (
+        (kindPriority[a.demoKind] ?? 9) - (kindPriority[b.demoKind] ?? 9) ||
+        String(b.createdAt || '').localeCompare(String(a.createdAt || ''))
+      ));
       return res.json({ success: true, data });
     } catch (error: any) {
       logRouteDbError('/api/admin/demo/sandboxes', error, {});

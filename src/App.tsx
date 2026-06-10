@@ -5148,9 +5148,15 @@ export default function App() {
     activeWorkspaceForDemo?.billingModel === 'demo'
   );
   const rawDemoExpiresAt = String(user?.demoExpiresAt || activeWorkspaceForDemo?.demoExpiresAt || '').trim();
+  const activeDemoKind = String(user?.demoKind || activeWorkspaceForDemo?.demoKind || '').trim().toLowerCase();
   const demoExpirationLabel = rawDemoExpiresAt && !Number.isNaN(new Date(rawDemoExpiresAt).getTime())
     ? new Date(rawDemoExpiresAt).toLocaleDateString('pt-BR')
     : '';
+  const demoEnvironmentMessage = activeDemoKind === 'playground'
+    ? 'Use apenas dados ficticios. Este ambiente pode ser resetado.'
+    : activeDemoKind === 'presentation'
+      ? 'Demo de apresentacao.'
+      : 'Dados ficticios para demonstracao.';
 
   return (
     <React.Fragment>
@@ -5250,7 +5256,7 @@ export default function App() {
         <div className="pointer-events-none fixed bottom-3 left-3 z-[9997] max-w-[calc(100vw-24px)] rounded-lg border border-amber-200 bg-amber-50/95 px-3 py-2 text-left shadow-lg shadow-amber-900/10 backdrop-blur">
           <p className="text-[11px] font-black uppercase tracking-[0.16em] text-amber-700">Ambiente demo</p>
           <p className="text-xs font-semibold text-slate-700">
-            Dados ficticios para demonstracao{demoExpirationLabel ? ` · expira em ${demoExpirationLabel}` : ''}
+            {demoEnvironmentMessage}{demoExpirationLabel ? ` · expira em ${demoExpirationLabel}` : ''}
           </p>
         </div>
       )}

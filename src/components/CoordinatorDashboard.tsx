@@ -900,9 +900,10 @@ export function CoordinatorDashboard({
     logo: 0,
   });
   const therapistCanRegisterClinicalData = !isTherapist || Boolean(therapistCrp.trim());
+  const isDemoAccount = Boolean(user?.isDemoUser);
   const canManageProtocolLibrary = capabilityStatusForRole("protocol-library") === "full";
   const canManageClinicSettings = capabilityStatusForRole("clinic-settings") !== "none";
-  const canManageBilling = capabilityStatusForRole("billing-management") !== "none";
+  const canManageBilling = !isDemoAccount && capabilityStatusForRole("billing-management") !== "none";
   const canEditAnamnesisTemplate = canManageClinicSettings;
   const DAY_GRID_SLOT_HEIGHT_PX = 66;
   const DAY_GRID_START_HOUR = 7;

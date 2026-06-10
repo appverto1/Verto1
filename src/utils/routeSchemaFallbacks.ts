@@ -19,6 +19,7 @@ export const PROFILE_SELECT_COLUMNS = [
   'billing_model',
   'is_demo_user',
   'demo_role',
+  'demo_access_mode',
   'demo_expires_at',
   'type',
   'status',
