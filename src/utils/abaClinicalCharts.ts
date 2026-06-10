@@ -300,14 +300,24 @@ const clinicalChangeCategoryFor = (point: any): AbaClinicalChangeCategory => {
 
 const rawClinicalMagnitudeFor = (point: any) => {
   const metricType = normalizeStatus(point?.metricType);
+  const changeStatus = normalizeStatus(point?.changeStatus);
   const statusMetric = metricType === 'MASTERY_STATUS' || metricType === 'MAINTENANCE_STATUS' || metricType === 'REGRESSION_RISK';
   if (statusMetric) return 1;
   const deltaPercent = Number(point?.deltaPercent);
-  if (Number.isFinite(deltaPercent)) return Math.abs(deltaPercent);
+  if (Number.isFinite(deltaPercent) && Math.abs(deltaPercent) > 0) return Math.abs(deltaPercent);
   const deltaValue = Number(point?.deltaValue);
-  if (Number.isFinite(deltaValue)) return Math.abs(deltaValue);
-  if (normalizeStatus(point?.changeStatus) === 'FIRST_MEASUREMENT') return 1;
-  return Math.abs(safeNumber(point?.value ?? point?.metricValue, 0));
+  if (Number.isFinite(deltaValue) && Math.abs(deltaValue) > 0) return Math.abs(deltaValue);
+  const currentMagnitude = Math.abs(safeNumber(point?.value ?? point?.metricValue, 0));
+  if (currentMagnitude > 0) return currentMagnitude;
+  if (
+    changeStatus === 'FIRST_MEASUREMENT' ||
+    changeStatus === 'CHANGED' ||
+    changeStatus === 'CLINICALLY_SIGNIFICANT_CHANGE' ||
+    changeStatus === 'REGRESSION_SIGNAL'
+  ) {
+    return 1;
+  }
+  return 0;
 };
 
 const aggregateDateKey = (value: any) => {

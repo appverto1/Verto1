@@ -1641,7 +1641,7 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
                   <CartesianGrid stroke="#EEF2F7" strokeDasharray="3 3" vertical={false} />
                   <XAxis dataKey="label" tick={{ fill: '#64748B', fontSize: 10, fontWeight: 700 }} angle={-18} textAnchor="end" height={58} interval="preserveStartEnd" />
                   <YAxis tick={{ fill: '#94A3B8', fontSize: 11, fontWeight: 700 }} label={{ value: yAxisLabel, angle: -90, position: 'insideLeft', fill: '#94A3B8', fontSize: 11, fontWeight: 700 }} />
-                  <Tooltip content={<AggregatedTooltip />} />
+                  <Tooltip content={<AggregatedTooltip />} cursor={{ fill: 'rgba(122, 50, 252, 0.06)' }} />
                   <Legend wrapperStyle={{ fontSize: 11, fontWeight: 700 }} />
                   <Bar dataKey="skillMagnitude" name="Habilidades" stackId="changes" fill={aggregateBarColors.skillMagnitude} maxBarSize={56} onClick={(entry: any) => openChangeGroup(entry?.payload?.groupKey || '', 'skill', 'detail')} />
                   <Bar dataKey="behaviorMagnitude" name="Comportamentos" stackId="changes" fill={aggregateBarColors.behaviorMagnitude} maxBarSize={56} onClick={(entry: any) => openChangeGroup(entry?.payload?.groupKey || '', 'behavior', 'detail')} />

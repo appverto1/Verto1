@@ -329,6 +329,33 @@ test('aggregateClinicalChangesBySession cap visual preserva magnitude real de ou
   assert.equal(group.topChange?.visualMagnitude, 120);
 });
 
+test('aggregateClinicalChangesBySession mantem barra visivel para eventos reais com delta zero', () => {
+  const points = Array.from({ length: 7 }, (_, index) => ({
+    id: `behavior-zero-${index}`,
+    sessionId: 'session-zero',
+    metricType: 'BEHAVIOR_FREQUENCY',
+    metricLabel: 'Choro',
+    changedAt: `2026-06-05T12:0${index}:00.000Z`,
+    previousValue: 0,
+    metricValue: 0,
+    deltaValue: 0,
+    deltaPercent: 0,
+    trendDirection: 'INSUFFICIENT_DATA',
+    changeStatus: 'FIRST_MEASUREMENT',
+    metricDirection: 'LOWER_IS_BETTER'
+  }));
+
+  const [group] = aggregateClinicalChangesBySession(points, { groupBy: 'day', visualMagnitudeCap: 120 });
+
+  assert.equal(group.totalChanges, 7);
+  assert.equal(group.relevantChanges, 7);
+  assert.equal(group.categoryCounts.behavior, 7);
+  assert.equal(group.behaviorMagnitude, 7);
+  assert.equal(group.totalVisualMagnitude, 7);
+  assert.equal(group.topChange?.rawMagnitude, 1);
+  assert.equal(group.topChange?.visualMagnitude, 1);
+});
+
 test('buildSessionMetricSnapshotsFromSummaries cria snapshot geral quando não há target por sessão', () => {
   const snapshots = buildSessionMetricSnapshotsFromSummaries({
     currentSummary: { session_id: 's2', patient_id: 'p1', clinic_id: 'c1', ended_at: '2026-05-25T10:00:00.000Z', accuracy_percent: 90, independence_percent: 80 },
