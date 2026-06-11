@@ -73,8 +73,21 @@ test('appointment create tolerates optional schema columns after durable write',
   assert.match(appointmentRouteSlice, /columns = columns\.filter/);
   assert.match(appointmentRouteSlice, /extractMissingColumnName\(result\.error\) === 'specialty_settings'/);
   assert.match(appointmentRouteSlice, /extractMissingColumnName\(result\.error\) === 'updated_by'/);
+  assert.match(appointmentRouteSlice, /clinic_state mirror ignored after durable persistence/);
+  assert.match(appointmentRouteSlice, /clinic_state mirror did not echo all durable appointments/);
   assert.match(serverCode, /Sugestao de Maintenance Probe ignorada ao criar consulta/);
   assert.match(serverCode, /Contexto financeiro inicial ignorado/);
+});
+
+test('appointment status actions confirm durable table update without depending on clinic_state mirror', () => {
+  const statusRouteSlice = serverCode.slice(
+    serverCode.indexOf('const handleAppointmentStatusUpdate'),
+    serverCode.indexOf("app.delete('/api/appointments/:appointmentId'"),
+  );
+  assert.match(statusRouteSlice, /\.select\('id'\)/);
+  assert.match(statusRouteSlice, /status clinic_state mirror ignored after durable update/);
+  assert.match(statusRouteSlice, /persistedStatusMatches/);
+  assert.match(statusRouteSlice, /normalizeAppointmentStatusForUi\(row\?\.status \|\| ''\) === normalizedStatus/);
 });
 
 test('appointment routes avoid select star and persist domain events', () => {

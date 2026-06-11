@@ -13803,18 +13803,20 @@ async function startServer() {
     };
   };
 
-  const readPersistedAppointmentRows = async (appointmentIds: string[], clinicId: string) => {
+  const readPersistedAppointmentRows = async (appointmentIds: string[], clinicId?: string) => {
     const ids = Array.from(new Set((appointmentIds || []).map((id) => sanitizeString(id, 120)).filter((id) => isUuid(id))));
     if (ids.length === 0) return [];
+    const safeClinicId = sanitizeString(clinicId, 120);
     const criticalColumns = new Set(['id', 'clinic_id', 'patient_id', 'therapist_id', 'scheduled_at', 'status']);
     let columns = APPOINTMENT_SELECT.split(',').map((column) => column.trim()).filter(Boolean);
     while (columns.length > 0) {
-      const result = await supabase
+      let query = supabase
         .from('appointments')
         .select(columns.join(','))
-        .eq('clinic_id', clinicId)
         .in('id', ids)
         .limit(ids.length);
+      if (safeClinicId) query = query.eq('clinic_id', safeClinicId);
+      const result = await query;
       if (!result.error) return Array.isArray(result.data) ? result.data : [];
 
       const missingColumn = extractMissingColumnName(result.error);
@@ -13863,12 +13865,24 @@ async function startServer() {
     if (result.error && extractMissingColumnName(result.error) === 'updated_by') {
       result = await writeState(false);
     }
-    if (result.error) throw result.error;
+    if (result.error) {
+      console.warn('[Appointments] clinic_state mirror ignored after durable persistence.', {
+        clinicId,
+        appointmentIds: persistedAppointments.map((appointment: any) => sanitizeString(appointment?.id, 120)).filter(Boolean),
+        message: extractSupabaseErrorMessage(result.error),
+        code: sanitizeString(result.error?.code, 40) || null
+      });
+      return nextAppointments;
+    }
     const confirmedStateAppointments = Array.isArray(result.data?.appointments) ? result.data.appointments : [];
     const confirmedIds = new Set(confirmedStateAppointments.map((appointment: any) => sanitizeString(appointment?.id, 120)).filter(Boolean));
     const allConfirmed = persistedAppointments.every((appointment: any) => confirmedIds.has(sanitizeString(appointment?.id, 120)));
     if (!allConfirmed) {
-      throw new Error('Não foi possível confirmar a persistência do agendamento.');
+      console.warn('[Appointments] clinic_state mirror did not echo all durable appointments.', {
+        clinicId,
+        appointmentIds: persistedAppointments.map((appointment: any) => sanitizeString(appointment?.id, 120)).filter(Boolean)
+      });
+      return nextAppointments;
     }
     return confirmedStateAppointments;
   };
@@ -14634,7 +14648,7 @@ async function startServer() {
             .from('appointments')
             .update(safePatch)
             .in('id', validAppointmentIds)
-            .select(APPOINTMENT_SELECT);
+            .select('id');
 
           if (!tableUpdateError) {
             for (const row of Array.isArray(updatedRows) ? updatedRows : []) {
@@ -14684,20 +14698,17 @@ async function startServer() {
       });
 
       if (!foundAppointment) {
-        let tableAppointmentQuery = supabase
-          .from('appointments')
-          .select(APPOINTMENT_SELECT)
-          .eq('id', appointmentId)
-          .limit(1);
-        if (isProfessionalActor && !hasGlobalClinicAccess(actor) && clinicId) {
-          tableAppointmentQuery = tableAppointmentQuery.eq('clinic_id', clinicId);
-        }
-        const { data: tableAppointment, error: tableReadError } = await tableAppointmentQuery.maybeSingle();
-        if (tableReadError) {
-          console.warn('[Appointments] status fallback read failed:', tableReadError.message);
-        }
-        if (tableAppointment) {
-          foundAppointment = tableAppointment;
+        try {
+          const tableRows = await readPersistedAppointmentRows(
+            [appointmentId],
+            isProfessionalActor && !hasGlobalClinicAccess(actor) && clinicId ? clinicId : undefined,
+          );
+          const tableAppointment = tableRows.find((row: any) => sanitizeString(row?.id, 120) === appointmentId);
+          if (tableAppointment) {
+            foundAppointment = tableAppointment;
+          }
+        } catch (tableReadError: any) {
+          console.warn('[Appointments] status fallback read failed:', tableReadError?.message || String(tableReadError));
         }
       }
 
@@ -14841,18 +14852,38 @@ async function startServer() {
           return updated;
         });
 
-        const { data: updated, error: updateError } = await supabase
+        const clinicStatePatch = {
+          appointments: nextAppointments,
+          updated_by: actorId,
+          updated_at: now
+        };
+        let result = await supabase
           .from('clinic_state')
-          .update({
-            appointments: nextAppointments,
-            updated_by: actorId,
-            updated_at: now
-          })
+          .update(clinicStatePatch)
           .eq('clinic_id', foundClinicId || clinicId)
           .select('appointments')
           .single();
-        if (updateError) throw updateError;
-        updatedClinicAppointments = Array.isArray(updated?.appointments) ? updated.appointments : nextAppointments;
+        if (result.error && extractMissingColumnName(result.error) === 'updated_by') {
+          result = await supabase
+            .from('clinic_state')
+            .update({
+              appointments: nextAppointments,
+              updated_at: now
+            })
+            .eq('clinic_id', foundClinicId || clinicId)
+            .select('appointments')
+            .single();
+        }
+        if (result.error) {
+          console.warn('[Appointments] status clinic_state mirror ignored after durable update.', {
+            clinicId: foundClinicId || clinicId,
+            appointmentIds: affectedAppointmentIds,
+            message: extractSupabaseErrorMessage(result.error),
+            code: sanitizeString(result.error?.code, 40) || null
+          });
+        } else {
+          updatedClinicAppointments = Array.isArray(result.data?.appointments) ? result.data.appointments : nextAppointments;
+        }
       }
 
       const updatedTableAppointments = await updateAppointmentsTableStatuses(affectedAppointmentIds);
@@ -14892,6 +14923,12 @@ async function startServer() {
 
       const persistedStatusRows = await readPersistedAppointmentRows(affectedAppointmentIds, foundClinicId || clinicId || updatedAppointment?.clinic_id || foundAppointment?.clinic_id);
       if (affectedAppointmentIds.length > 0 && persistedStatusRows.length < affectedAppointmentIds.length) {
+        return res.status(500).json({ success: false, error: 'Não foi possível confirmar a persistência do agendamento.' });
+      }
+      const persistedStatusMatches = persistedStatusRows.every((row: any) =>
+        normalizeAppointmentStatusForUi(row?.status || '') === normalizedStatus
+      );
+      if (affectedAppointmentIds.length > 0 && !persistedStatusMatches) {
         return res.status(500).json({ success: false, error: 'Não foi possível confirmar a persistência do agendamento.' });
       }
       const affectedPersistedAppointments = persistedStatusRows.length > 0
