@@ -67,6 +67,7 @@
     "test:appointment-notifications": "tsx tests/appointmentNotifications.test.ts",
     "test:appointment-action-driven": "tsx tests/appointmentActionDriven.test.ts",
     "test:action-driven-system": "tsx tests/actionDrivenSystem.test.ts",
+    "test:portal-branding": "tsx tests/portalBranding.test.ts",
     "test:family-diary": "tsx tests/familyDiary.test.ts",
     "test:patient-registration-anamnesis": "tsx tests/patientRegistrationAnamnesis.test.ts",
     "test:patient-demographics-persistence": "tsx tests/patientDemographicsPersistence.test.ts",

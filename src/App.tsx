@@ -1431,6 +1431,10 @@ export default function App() {
     timeLabel: string;
     clinicName: string;
     clinicLogoUrl: string;
+    patientName: string;
+    professionalName: string;
+    professionalRole: string;
+    status: string;
     isLoading: boolean;
     isUpdating: boolean;
     message: string;
@@ -1586,12 +1590,38 @@ export default function App() {
     return shortDate;
   };
 
+  const getClinicInitials = (value: string) => {
+    const words = String(value || 'Clínica')
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2);
+    const initials = words.map((word) => word.charAt(0).toUpperCase()).join('');
+    return initials || 'CV';
+  };
+
+  const getAppointmentConfirmationStatusLabel = (value: string) => {
+    const normalized = String(value || '').toLowerCase();
+    if (normalized.includes('confirm')) return 'Confirmada';
+    if (normalized.includes('reschedule') || normalized.includes('remarc')) return 'Remarcação solicitada';
+    if (normalized.includes('cancel')) return 'Cancelamento solicitado';
+    if (normalized.includes('pend')) return 'Pendente';
+    if (normalized.includes('sched') || normalized.includes('agend')) return 'Agendada';
+    return normalized ? 'Atualizada' : '';
+  };
+
   const buildAppointmentConfirmationSubtitle = () => {
     if (!appointmentConfirmation) return 'Como deseja responder à consulta agendada?';
     const dateLabel = decorateAppointmentDateLabel(appointmentConfirmation.dateLabel);
     const timeLabel = appointmentConfirmation.timeLabel;
-    if (dateLabel && timeLabel) return `Consulta dia ${dateLabel} às ${timeLabel}.`;
-    if (dateLabel) return `Consulta dia ${dateLabel}`;
+    const patientLabel = appointmentConfirmation.patientName
+      ? ` de ${appointmentConfirmation.patientName}`
+      : '';
+    const professionalLabel = appointmentConfirmation.professionalName
+      ? ` com ${appointmentConfirmation.professionalName}`
+      : ' com Profissional a definir';
+    if (dateLabel && timeLabel) return `Consulta${patientLabel}${professionalLabel} dia ${dateLabel} às ${timeLabel}.`;
+    if (dateLabel) return `Consulta${patientLabel}${professionalLabel} dia ${dateLabel}.`;
     return 'Como deseja responder à consulta agendada?';
   };
 
@@ -1781,6 +1811,10 @@ export default function App() {
       ...fallbackLabels,
       clinicName: '',
       clinicLogoUrl: '',
+      patientName: '',
+      professionalName: '',
+      professionalRole: '',
+      status: '',
       isLoading: !hasFallbackDateTime,
       isUpdating: false,
       message: '',
@@ -1803,8 +1837,12 @@ export default function App() {
               ? {
                   ...prev,
                   ...labels,
-                  clinicName: String(result.appointment?.clinicName || result.appointment?.clinic_name || '').trim(),
-                  clinicLogoUrl: String(result.appointment?.clinicLogoUrl || result.appointment?.clinic_logo_url || '').trim(),
+                  clinicName: String(result.appointment?.clinic?.displayName || result.appointment?.clinicName || result.appointment?.clinic_name || '').trim(),
+                  clinicLogoUrl: String(result.appointment?.clinic?.logoUrl || result.appointment?.clinicLogoUrl || result.appointment?.clinic_logo_url || '').trim(),
+                  patientName: String(result.appointment?.patient?.name || result.appointment?.patientName || result.appointment?.patient_name || '').trim(),
+                  professionalName: String(result.appointment?.professionalName || result.appointment?.professional_name || '').trim(),
+                  professionalRole: String(result.appointment?.professionalRole || result.appointment?.professional_role || '').trim(),
+                  status: String(result.appointment?.patientConfirmationStatus || result.appointment?.status || '').trim(),
                   isLoading: false,
                   message: '',
                 }
@@ -5239,11 +5277,12 @@ export default function App() {
       if (!result?.success) {
         throw new Error(result?.error || 'Não foi possível atualizar a consulta.');
       }
-      const serverStatus = normalizeConfirmationResultStatus(result?.appointment?.status || result?.appointment?.patientConfirmationStatus || status);
+      const resultAppointment = result?.item || result?.appointment || null;
+      const serverStatus = normalizeConfirmationResultStatus(resultAppointment?.status || resultAppointment?.patientConfirmationStatus || status);
       setTherapistAgenda(prev =>
         prev.map(item =>
           String(item.id) === String(appointmentConfirmation.appointmentId)
-            ? { ...item, ...(result.appointment || {}), status: serverStatus }
+            ? { ...item, ...(resultAppointment || {}), status: serverStatus }
             : item
         )
       );
@@ -5256,7 +5295,17 @@ export default function App() {
               ? 'Esse agendamento já estava cancelado.'
               : 'Essa consulta já tinha uma resposta registrada.'
         : feedback;
-      setAppointmentConfirmation((prev) => prev ? { ...prev, isUpdating: false, message: alreadyAnsweredMessage } : prev);
+      setAppointmentConfirmation((prev) => prev ? {
+        ...prev,
+        clinicName: String(resultAppointment?.clinic?.displayName || resultAppointment?.clinicName || prev.clinicName || '').trim(),
+        clinicLogoUrl: String(resultAppointment?.clinic?.logoUrl || resultAppointment?.clinicLogoUrl || prev.clinicLogoUrl || '').trim(),
+        patientName: String(resultAppointment?.patient?.name || resultAppointment?.patientName || prev.patientName || '').trim(),
+        professionalName: String(resultAppointment?.professionalName || prev.professionalName || '').trim(),
+        professionalRole: String(resultAppointment?.professionalRole || prev.professionalRole || '').trim(),
+        status: serverStatus,
+        isUpdating: false,
+        message: alreadyAnsweredMessage
+      } : prev);
       window.history.replaceState({}, document.title, window.location.pathname);
       window.setTimeout(() => setAppointmentConfirmation(null), 1800);
     } catch (error: any) {
@@ -5323,16 +5372,25 @@ export default function App() {
               <div className="mb-4 flex items-center gap-3">
                 <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-slate-200 bg-white text-slate-500 shadow-sm">
                   {appointmentConfirmation.clinicLogoUrl ? (
-                    <img
-                      src={appointmentConfirmation.clinicLogoUrl}
-                      alt="Logo da clínica"
-                      className="h-full w-full object-contain p-1.5"
-                      onError={(event) => {
-                        event.currentTarget.style.display = 'none';
-                      }}
-                    />
+                    <>
+                      <img
+                        src={appointmentConfirmation.clinicLogoUrl}
+                        alt="Logo da clínica"
+                        className="h-full w-full object-contain p-1.5"
+                        onError={(event) => {
+                          event.currentTarget.style.display = 'none';
+                          const fallback = event.currentTarget.nextElementSibling as HTMLElement | null;
+                          if (fallback) fallback.style.display = 'flex';
+                        }}
+                      />
+                      <span className="hidden h-full w-full items-center justify-center bg-slate-100 text-sm font-black text-slate-700">
+                        {getClinicInitials(appointmentConfirmation.clinicName)}
+                      </span>
+                    </>
                   ) : (
-                    <CheckCircle2 size={30} />
+                    <span className="flex h-full w-full items-center justify-center bg-slate-100 text-sm font-black text-slate-700">
+                      {getClinicInitials(appointmentConfirmation.clinicName)}
+                    </span>
                   )}
                 </div>
                 <div className="min-w-0">
@@ -5345,6 +5403,11 @@ export default function App() {
               <p className="text-sm font-semibold text-slate-600">
                 {buildAppointmentConfirmationSubtitle()}
               </p>
+              {appointmentConfirmation.status ? (
+                <p className="mt-2 text-xs font-bold uppercase tracking-[0.14em] text-slate-400">
+                  Status: {getAppointmentConfirmationStatusLabel(appointmentConfirmation.status)}
+                </p>
+              ) : null}
             </div>
             <div className="space-y-3 p-5">
               {appointmentConfirmation.isLoading && !appointmentConfirmation.dateLabel && (
@@ -5363,7 +5426,7 @@ export default function App() {
                 onClick={() => void handleAppointmentConfirmationChoice('confirmed')}
                 className="flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-500 px-4 py-3 text-sm font-black text-white shadow-lg shadow-emerald-500/25 transition hover:bg-emerald-600 disabled:opacity-60"
               >
-                <CheckCircle2 size={18} /> Presença na consulta confirmada
+                <CheckCircle2 size={18} /> Confirmar presença
               </button>
               <button
                 type="button"

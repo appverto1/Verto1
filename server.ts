@@ -14453,6 +14453,201 @@ async function startServer() {
     }
   });
 
+  const readClinicBrandingForFamilyView = async (rawClinicId: unknown) => {
+    const safeClinicId = sanitizeString(rawClinicId, 120);
+    const fallback = {
+      id: isUuid(safeClinicId) ? safeClinicId : null,
+      displayName: 'sua clínica',
+      logoUrl: null as string | null,
+      primaryColor: '#7C3AED'
+    };
+    if (!isUuid(safeClinicId)) return fallback;
+    const read = (columns: string) =>
+      supabase
+        .from('clinics')
+        .select(columns)
+        .eq('id', safeClinicId)
+        .limit(1)
+        .maybeSingle();
+    let { data: clinic, error: clinicError } = await read('id,name,logo_url');
+    if (clinicError && extractMissingColumnName(clinicError) === 'logo_url') {
+      const fallbackRead = await read('id,name');
+      clinic = fallbackRead.data;
+      clinicError = fallbackRead.error;
+    }
+    if (clinicError) {
+      console.warn('[Appointments] clinic branding read failed:', clinicError.message);
+      return fallback;
+    }
+    return {
+      id: safeClinicId,
+      displayName: sanitizeString(clinic?.name, 160) || fallback.displayName,
+      logoUrl: sanitizeSessionUrl(clinic?.logo_url),
+      primaryColor: fallback.primaryColor
+    };
+  };
+
+  const parseAppointmentSourcePayloadForFamilyView = (value: any) => {
+    if (!value) return {};
+    if (typeof value === 'object') return value;
+    if (typeof value !== 'string') return {};
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  };
+
+  const resolveAppointmentProfessionalForFamilyView = async (appointment: any) => {
+    const source = parseAppointmentSourcePayloadForFamilyView(appointment?.source_payload || appointment?.sourcePayload);
+    const professionalId = sanitizeString(
+      appointment?.professional_id ||
+        appointment?.professionalId ||
+        appointment?.therapist_id ||
+        appointment?.therapistId ||
+        appointment?.assigned_professional_id ||
+        appointment?.assignedProfessionalId ||
+        source?.professional_id ||
+        source?.professionalId ||
+        source?.therapist_id ||
+        source?.therapistId,
+      120
+    );
+    const directName = sanitizeString(
+      appointment?.professional_name ||
+        appointment?.professionalName ||
+        appointment?.therapist_name ||
+        appointment?.therapistName ||
+        source?.professional_name ||
+        source?.professionalName ||
+        source?.therapist_name ||
+        source?.therapistName ||
+        source?.professional,
+      180
+    );
+    const directRole = sanitizeString(
+      appointment?.professional_role ||
+        appointment?.professionalRole ||
+        appointment?.therapist_role ||
+        appointment?.therapistRole ||
+        source?.professional_role ||
+        source?.professionalRole,
+      80
+    );
+    if (directName) {
+      return {
+        professionalId: professionalId || null,
+        professionalName: directName,
+        professionalRole: directRole || null,
+        professionalAvatarUrl: sanitizeSessionUrl(
+          appointment?.professional_avatar_url ||
+            appointment?.professionalAvatarUrl ||
+            appointment?.therapist_avatar_url ||
+            appointment?.therapistAvatarUrl ||
+            source?.professionalAvatarUrl ||
+            source?.therapistAvatarUrl
+        )
+      };
+    }
+
+    if (isUuid(professionalId)) {
+      const { data, error } = await supabase
+        .from('users')
+        .select('id,name,role')
+        .eq('id', professionalId)
+        .limit(1)
+        .maybeSingle();
+      if (!error && data?.id) {
+        return {
+          professionalId,
+          professionalName: sanitizeString(data?.name, 180) || 'Profissional a definir',
+          professionalRole: sanitizeString(data?.role, 80) || directRole || null,
+          professionalAvatarUrl: null
+        };
+      }
+      if (error && !hasMissingFinancialSchema(error)) {
+        console.warn('[Appointments] professional display read failed:', error.message);
+      }
+    }
+
+    return {
+      professionalId: professionalId || null,
+      professionalName: 'Profissional a definir',
+      professionalRole: directRole || null,
+      professionalAvatarUrl: null
+    };
+  };
+
+  const buildFamilyAppointmentDisplayContext = async (appointment: any) => {
+    const source = parseAppointmentSourcePayloadForFamilyView(appointment?.source_payload || appointment?.sourcePayload);
+    const clinicId = sanitizeString(
+      appointment?.clinic_id ||
+        appointment?.clinicId ||
+        appointment?.organization_id ||
+        appointment?.organizationId ||
+        source?.clinic_id ||
+        source?.clinicId ||
+        source?.organization_id ||
+        source?.organizationId,
+      120
+    );
+    const clinicBranding = await readClinicBrandingForFamilyView(clinicId);
+    const explicitClinicName = sanitizeString(
+      appointment?.clinic_display_name ||
+        appointment?.clinicDisplayName ||
+        appointment?.clinic_name ||
+        appointment?.clinicName ||
+        source?.clinic_display_name ||
+        source?.clinicDisplayName ||
+        source?.clinic_name ||
+        source?.clinicName,
+      160
+    );
+    const clinicName = clinicBranding.displayName !== 'sua clínica'
+      ? clinicBranding.displayName
+      : explicitClinicName || clinicBranding.displayName;
+    const clinicLogoUrl =
+      clinicBranding.logoUrl ||
+      sanitizeSessionUrl(
+        appointment?.clinic_logo_url ||
+          appointment?.clinicLogoUrl ||
+          source?.clinic_logo_url ||
+          source?.clinicLogoUrl
+      ) ||
+      null;
+    const professional = await resolveAppointmentProfessionalForFamilyView(appointment);
+    const patientId = sanitizeString(appointment?.patient_id || appointment?.patientId || source?.patient_id || source?.patientId, 120);
+    const patientName = sanitizeString(
+      appointment?.patient_name ||
+        appointment?.patientName ||
+        appointment?.name ||
+        source?.patient_name ||
+        source?.patientName ||
+        source?.name,
+      180
+    ) || 'Paciente';
+
+    return {
+      clinicId: clinicBranding.id || (isUuid(clinicId) ? clinicId : null),
+      clinicName,
+      clinicLogoUrl,
+      clinic: {
+        id: clinicBranding.id || (isUuid(clinicId) ? clinicId : null),
+        displayName: clinicName,
+        logoUrl: clinicLogoUrl,
+        primaryColor: clinicBranding.primaryColor
+      },
+      patientId: isUuid(patientId) ? patientId : null,
+      patientName,
+      patient: {
+        id: isUuid(patientId) ? patientId : null,
+        name: patientName
+      },
+      ...professional
+    };
+  };
+
   app.get('/api/appointments/:appointmentId/confirmation', checkAuth, async (req: any, res) => {
     try {
       const appointmentId = sanitizeString(req.params.appointmentId, 120);
@@ -14462,31 +14657,6 @@ async function startServer() {
 
       const actor = req.session.user;
       const clinicId = currentClinicId(actor);
-      const readClinicBranding = async (rawClinicId: unknown) => {
-        const safeClinicId = sanitizeString(rawClinicId, 120);
-        if (!isUuid(safeClinicId)) return null;
-        const read = (columns: string) =>
-          supabase
-            .from('clinics')
-            .select(columns)
-            .eq('id', safeClinicId)
-            .limit(1)
-            .maybeSingle();
-        let { data: clinic, error: clinicError } = await read('id,name,logo_url');
-        if (clinicError && extractMissingColumnName(clinicError) === 'logo_url') {
-          const fallback = await read('id,name');
-          clinic = fallback.data;
-          clinicError = fallback.error;
-        }
-        if (clinicError) {
-          console.warn('[Appointments] clinic branding read failed:', clinicError.message);
-          return null;
-        }
-        return {
-          clinicName: sanitizeString(clinic?.name, 160) || 'sua clínica',
-          clinicLogoUrl: sanitizeSessionUrl(clinic?.logo_url)
-        };
-      };
       const clinicStateQuery = supabase
         .from('clinic_state')
         .select('clinic_id, appointments');
@@ -14536,17 +14706,10 @@ async function startServer() {
           clinicId,
         120
       );
-      const clinicBranding = await readClinicBranding(appointmentClinicId);
-      const clinicName =
-        clinicBranding?.clinicName ||
-        sanitizeString(foundAppointment?.clinicName || foundAppointment?.clinic_name, 160) ||
-        sanitizeString(actor?.clinicSettings?.clinicName, 160) ||
-        'sua clínica';
-      const clinicLogoUrl =
-        clinicBranding?.clinicLogoUrl ||
-        sanitizeSessionUrl(foundAppointment?.clinicLogoUrl || foundAppointment?.clinic_logo_url) ||
-        sanitizeSessionUrl(actor?.clinicSettings?.clinicLogoUrl) ||
-        null;
+      const displayContext = await buildFamilyAppointmentDisplayContext({
+        ...foundAppointment,
+        clinic_id: foundAppointment?.clinic_id || foundAppointment?.clinicId || appointmentClinicId || null
+      });
 
       if (sanitizeString(actor?.role, 40) === 'patient') {
         const actorId = sanitizeString(actor?.id, 120);
@@ -14589,8 +14752,15 @@ async function startServer() {
             foundAppointment.patientConfirmationAt ||
             foundAppointment.patient_confirmation_at ||
             null,
-          clinicName,
-          clinicLogoUrl,
+          clinicName: displayContext.clinicName,
+          clinicLogoUrl: displayContext.clinicLogoUrl,
+          clinic: displayContext.clinic,
+          patientId: displayContext.patientId,
+          patient: displayContext.patient,
+          professionalId: displayContext.professionalId,
+          professionalName: displayContext.professionalName,
+          professionalRole: displayContext.professionalRole,
+          professionalAvatarUrl: displayContext.professionalAvatarUrl,
           source: foundInAppointmentsTable ? 'appointments' : 'clinic_state'
         }
       });
@@ -26480,9 +26650,22 @@ async function startServer() {
     const roomName = sanitizePortalRoomName(row?.room_name || source?.room_name || source?.roomName);
     const locationType = normalizeScheduleLocationType(row?.location_type || source?.location_type || source?.locationType || (roomName ? 'clinica' : 'outro'));
     const serviceType = sanitizeString(row?.service_type || row?.approach || source?.service_type || source?.type, 120) || 'Sessão';
+    const clinicId = sanitizeString(row?.clinic_id || row?.clinicId || row?.organization_id || row?.organizationId || source?.clinic_id || source?.clinicId, 120);
+    const patientId = sanitizeString(row?.patient_id || row?.patientId || source?.patient_id || source?.patientId, 120);
+    const patientName = sanitizeString(row?.patient_name || source?.patientName || source?.name, 180) || 'Paciente';
+    const professionalId = sanitizeString(row?.therapist_id || row?.therapistId || row?.professional_id || row?.professionalId || source?.therapist_id || source?.therapistId || source?.professionalId, 120);
+    const professionalName = sanitizeString(row?.therapist_name || source?.therapistName || source?.professionalName || source?.professional, 180) || 'Profissional a definir';
+    const clinicName = sanitizeString(row?.clinic_display_name || row?.clinicDisplayName || row?.clinic_name || row?.clinicName || source?.clinic_display_name || source?.clinicDisplayName || source?.clinic_name || source?.clinicName, 160) || null;
+    const clinicLogoUrl = sanitizeSessionUrl(row?.clinic_logo_url || row?.clinicLogoUrl || source?.clinic_logo_url || source?.clinicLogoUrl) || null;
     return {
       id: sanitizeString(row?.id, 120),
-      patientName: sanitizeString(row?.patient_name || source?.patientName || source?.name, 180) || 'Paciente',
+      clinicId: isUuid(clinicId) ? clinicId : null,
+      patientId: isUuid(patientId) ? patientId : null,
+      patientName,
+      patient: {
+        id: isUuid(patientId) ? patientId : null,
+        name: patientName
+      },
       date: formatDateInAppointmentTimezone(start),
       scheduledAt: start.toISOString(),
       scheduledEnd: end.toISOString(),
@@ -26491,7 +26674,19 @@ async function startServer() {
       time: formatTimeInAppointmentTimezone(start),
       endTime: formatTimeInAppointmentTimezone(end),
       serviceType,
-      professionalName: sanitizeString(row?.therapist_name || source?.therapistName || source?.professional, 180) || 'Equipe',
+      professionalId: isUuid(professionalId) ? professionalId : null,
+      professionalName,
+      professionalRole: sanitizeString(row?.therapist_role || row?.professional_role || source?.therapistRole || source?.professionalRole, 80) || null,
+      clinicName,
+      clinicLogoUrl,
+      clinic: clinicName || clinicLogoUrl || isUuid(clinicId)
+        ? {
+            id: isUuid(clinicId) ? clinicId : null,
+            displayName: clinicName || 'sua clínica',
+            logoUrl: clinicLogoUrl,
+            primaryColor: '#7C3AED'
+          }
+        : null,
       locationType,
       locationLabel: locationType === 'online'
         ? 'Online'
@@ -26506,6 +26701,138 @@ async function startServer() {
       notes: sanitizeTextField(row?.notes || source?.notes || source?.orientation || '', 800) || null,
       ...extras
     };
+  };
+
+  const serializePortalAppointmentForFamilyView = async (row: any, extras: Record<string, any> = {}) => {
+    const displayContext = await buildFamilyAppointmentDisplayContext(row);
+    return serializePortalAppointment(row, {
+      clinicId: displayContext.clinicId,
+      clinicName: displayContext.clinicName,
+      clinicLogoUrl: displayContext.clinicLogoUrl,
+      clinic: displayContext.clinic,
+      patientId: displayContext.patientId,
+      patientName: displayContext.patientName,
+      patient: displayContext.patient,
+      professionalId: displayContext.professionalId,
+      professionalName: displayContext.professionalName,
+      professionalRole: displayContext.professionalRole,
+      professionalAvatarUrl: displayContext.professionalAvatarUrl,
+      ...extras
+    });
+  };
+
+  const acknowledgePortalAppointmentNotifications = async (params: {
+    appointment: any;
+    user: any;
+    action: string;
+    notificationId?: unknown;
+  }) => {
+    const appointmentId = sanitizeString(params.appointment?.id, 120);
+    const patientId = sanitizeString(params.appointment?.patient_id || params.appointment?.patientId, 120);
+    if (!isUuid(appointmentId) || !isUuid(patientId)) return { ok: true, notificationIds: [] as string[] };
+    const userId = sanitizeString(params.user?.id, 120);
+    const userEmail = sanitizeEmail(params.user?.email);
+    const requestedNotificationId = sanitizeString(params.notificationId || '', 120);
+    if (requestedNotificationId && !isUuid(requestedNotificationId)) {
+      return { ok: false, status: 400, error: 'Notificação inválida.', notificationIds: [] as string[] };
+    }
+    const now = new Date().toISOString();
+    let query = supabase
+      .from('portal_notifications')
+      .update({
+        read_at: now,
+        acknowledged_at: now,
+        updated_at: now
+      })
+      .eq('appointment_id', appointmentId)
+      .eq('patient_id', patientId);
+    if (requestedNotificationId) query = query.eq('id', requestedNotificationId);
+    if (isUuid(userId) && userEmail) {
+      query = query.or(`recipient_user_id.eq.${userId},recipient_email.eq.${userEmail}`);
+    } else if (isUuid(userId)) {
+      query = query.eq('recipient_user_id', userId);
+    } else if (userEmail) {
+      query = query.eq('recipient_email', userEmail);
+    } else {
+      return { ok: true, notificationIds: [] as string[] };
+    }
+    let result = await query.select('id');
+    if (result.error && extractMissingColumnName(result.error) === 'updated_at') {
+      let fallbackQuery = supabase
+        .from('portal_notifications')
+        .update({
+          read_at: now,
+          acknowledged_at: now
+        })
+        .eq('appointment_id', appointmentId)
+        .eq('patient_id', patientId);
+      if (requestedNotificationId) fallbackQuery = fallbackQuery.eq('id', requestedNotificationId);
+      if (isUuid(userId) && userEmail) {
+        fallbackQuery = fallbackQuery.or(`recipient_user_id.eq.${userId},recipient_email.eq.${userEmail}`);
+      } else if (isUuid(userId)) {
+        fallbackQuery = fallbackQuery.eq('recipient_user_id', userId);
+      } else if (userEmail) {
+        fallbackQuery = fallbackQuery.eq('recipient_email', userEmail);
+      }
+      result = await fallbackQuery.select('id');
+    }
+    if (result.error) {
+      if (isMissingRelationError(result.error) || hasMissingFinancialSchema(result.error)) {
+        console.warn('[PortalAppointments] notification acknowledgement skipped:', result.error.message);
+        return { ok: true, notificationIds: [] as string[] };
+      }
+      throw result.error;
+    }
+    const notificationIds = (Array.isArray(result.data) ? result.data : [])
+      .map((row: any) => sanitizeString(row?.id, 120))
+      .filter((id) => isUuid(id));
+    if (requestedNotificationId && !notificationIds.includes(requestedNotificationId)) {
+      return { ok: false, status: 404, error: 'Notificação não encontrada.', notificationIds: [] as string[] };
+    }
+    return { ok: true, notificationIds };
+  };
+
+  const buildPortalAppointmentActionResult = (params: {
+    action: string;
+    appointment: any;
+    message: string;
+    user: any;
+    notificationIds?: string[];
+    actionRequest?: any;
+    alreadyAnswered?: boolean;
+    events?: any[];
+  }) => {
+    const appointmentId = sanitizeString(params.appointment?.id, 120);
+    const clinicId = sanitizeString(params.appointment?.clinicId || params.appointment?.clinic_id || params.appointment?.organizationId || params.appointment?.organization_id, 120);
+    const patientId = sanitizeString(params.appointment?.patientId || params.appointment?.patient_id, 120);
+    const professionalId = sanitizeString(params.appointment?.professionalId || params.appointment?.professional_id || params.appointment?.therapistId || params.appointment?.therapist_id, 120);
+    const userId = sanitizeString(params.user?.id, 120);
+    return buildActionResultPayload({
+      entity: 'appointment',
+      action: params.action,
+      item: params.appointment,
+      items: [params.appointment],
+      affected: cleanObject({
+        clinicId: isUuid(clinicId) ? clinicId : null,
+        organizationId: isUuid(clinicId) ? clinicId : null,
+        patientId: isUuid(patientId) ? patientId : null,
+        patientIds: isUuid(patientId) ? [patientId] : [],
+        professionalId: isUuid(professionalId) ? professionalId : null,
+        professionalIds: isUuid(professionalId) ? [professionalId] : [],
+        appointmentId: isUuid(appointmentId) ? appointmentId : null,
+        appointmentIds: isUuid(appointmentId) ? [appointmentId] : [],
+        userIds: isUuid(userId) ? [userId] : [],
+        notificationIds: Array.from(new Set((params.notificationIds || []).filter((id) => isUuid(id)))),
+        queryKeys: ['portalAppointments', 'portalNotifications', 'appointments']
+      }),
+      events: params.events || [],
+      legacy: cleanObject({
+        message: params.message,
+        appointment: params.appointment,
+        data: params.actionRequest || undefined,
+        alreadyAnswered: params.alreadyAnswered || undefined
+      })
+    });
   };
 
   const writeAppointmentStatusAuditLog = async (params: {
@@ -26551,7 +26878,7 @@ async function startServer() {
         .from('appointments')
         .update(safePatch)
         .eq('id', appointmentId)
-        .select(PORTAL_APPOINTMENT_SELECT)
+        .select('id')
         .maybeSingle();
       if (!error) return { data, error: null };
       const missingColumn = extractMissingColumnName(error);
@@ -26754,7 +27081,7 @@ async function startServer() {
       }
       return res.json({
         success: true,
-        data: visibleRows.map((row) => serializePortalAppointment(row))
+        data: await Promise.all(visibleRows.map((row) => serializePortalAppointmentForFamilyView(row)))
       });
     } catch (error: any) {
       console.warn('[PortalAppointments] list failed:', error?.message || String(error));
@@ -26823,7 +27150,7 @@ async function startServer() {
       return res.json({
         success: true,
         data: {
-          appointment: serializePortalAppointment(appointment, {
+          appointment: await serializePortalAppointmentForFamilyView(appointment, {
             signatureStatus: signatures.length > 0 ? 'SIGNED' : signaturePending ? 'PENDING' : 'NOT_REQUIRED',
             signedAt: signatures[0]?.signed_at || null
           }),
@@ -26868,7 +27195,14 @@ async function startServer() {
       const appointment = (context as any).appointment;
       const previousStatus = normalizeOperationalAppointmentStatus(appointment.status);
       if (previousStatus === 'CONFIRMED') {
-        return res.json({ success: true, alreadyAnswered: true, appointment: serializePortalAppointment(appointment) });
+        const serializedAppointment = await serializePortalAppointmentForFamilyView(appointment);
+        return res.json(buildPortalAppointmentActionResult({
+          action: 'confirmed_by_family',
+          appointment: serializedAppointment,
+          message: 'Essa presença já estava confirmada.',
+          user: req.session.user,
+          alreadyAnswered: true
+        }));
       }
       if (isAppointmentTerminalForPortalAction(previousStatus) || previousStatus === 'CANCEL_REQUESTED') {
         return res.status(409).json(portalSafeError(409));
@@ -26891,6 +27225,20 @@ async function startServer() {
         updated_at: now
       });
       if (update.error) throw update.error;
+      const persistedRows = await readPersistedAppointmentRows([appointment.id], sanitizeString(appointment.clinic_id, 120));
+      const persistedAppointment = persistedRows.find((row: any) => sanitizeString(row?.id, 120) === sanitizeString(appointment.id, 120));
+      if (!persistedAppointment || normalizeOperationalAppointmentStatus(persistedAppointment.status) !== 'CONFIRMED') {
+        return res.status(500).json({ success: false, error: 'Não foi possível confirmar a persistência da resposta.' });
+      }
+      const notificationUpdate = await acknowledgePortalAppointmentNotifications({
+        appointment: persistedAppointment,
+        user: req.session.user,
+        action: 'confirmed_by_family',
+        notificationId: req.body?.notificationId || req.body?.notification_id
+      });
+      if (!notificationUpdate.ok) {
+        return res.status((notificationUpdate as any).status || 404).json(portalSafeError((notificationUpdate as any).status || 404));
+      }
       await writeAppointmentStatusAuditLog({
         organizationId: appointment.organization_id || appointment.clinic_id,
         appointmentId: appointment.id,
@@ -26903,7 +27251,14 @@ async function startServer() {
         metadata: { source: 'portal' }
       });
       void regenerateClosureForAppointments([appointment.id], req.session.user, 'appointment_confirmed_by_responsible');
-      return res.json({ success: true, message: 'Consulta confirmada.', appointment: serializePortalAppointment(update.data || { ...appointment, status: 'confirmed' }) });
+      const serializedAppointment = await serializePortalAppointmentForFamilyView(persistedAppointment);
+      return res.json(buildPortalAppointmentActionResult({
+        action: 'confirmed_by_family',
+        appointment: serializedAppointment,
+        message: 'Consulta confirmada.',
+        user: req.session.user,
+        notificationIds: notificationUpdate.notificationIds
+      }));
     } catch (error: any) {
       console.warn('[PortalAppointments] confirm failed:', error?.message || String(error));
       return res.status(500).json(portalSafeError(500));
@@ -26943,6 +27298,20 @@ async function startServer() {
         updated_at: now
       });
       if (update.error) throw update.error;
+      const persistedRows = await readPersistedAppointmentRows([appointment.id], sanitizeString(appointment.clinic_id, 120));
+      const persistedAppointment = persistedRows.find((row: any) => sanitizeString(row?.id, 120) === sanitizeString(appointment.id, 120));
+      if (!persistedAppointment || normalizeOperationalAppointmentStatus(persistedAppointment.status) !== 'RESCHEDULE_REQUESTED') {
+        return res.status(500).json({ success: false, error: 'Não foi possível confirmar a persistência da resposta.' });
+      }
+      const notificationUpdate = await acknowledgePortalAppointmentNotifications({
+        appointment: persistedAppointment,
+        user: req.session.user,
+        action: 'reschedule_requested_by_family',
+        notificationId: req.body?.notificationId || req.body?.notification_id
+      });
+      if (!notificationUpdate.ok) {
+        return res.status((notificationUpdate as any).status || 404).json(portalSafeError((notificationUpdate as any).status || 404));
+      }
       await writeAppointmentStatusAuditLog({
         organizationId: appointment.organization_id || appointment.clinic_id,
         appointmentId: appointment.id,
@@ -26955,7 +27324,15 @@ async function startServer() {
         metadata: { actionRequestId: requestRow?.id || null, source: 'portal' }
       });
       void regenerateClosureForAppointments([appointment.id], req.session.user, 'appointment_reschedule_requested');
-      return res.json({ success: true, message: 'Solicitação de remarcação registrada.', data: requestRow, appointment: serializePortalAppointment(update.data || { ...appointment, status: 'reschedule' }) });
+      const serializedAppointment = await serializePortalAppointmentForFamilyView(persistedAppointment);
+      return res.json(buildPortalAppointmentActionResult({
+        action: 'reschedule_requested_by_family',
+        appointment: serializedAppointment,
+        message: 'Solicitação de remarcação registrada.',
+        user: req.session.user,
+        notificationIds: notificationUpdate.notificationIds,
+        actionRequest: requestRow
+      }));
     } catch (error: any) {
       console.warn('[PortalAppointments] reschedule request failed:', error?.message || String(error));
       return res.status(500).json(portalSafeError(500));
@@ -26993,6 +27370,22 @@ async function startServer() {
         updated_at: now
       });
       if (update.error) throw update.error;
+      const persistedRows = await readPersistedAppointmentRows([appointment.id], sanitizeString(appointment.clinic_id, 120));
+      const persistedAppointment = persistedRows.find((row: any) => sanitizeString(row?.id, 120) === sanitizeString(appointment.id, 120));
+      const persistedCancelStatus = normalizeOperationalAppointmentStatus(persistedAppointment?.status);
+      const persistedCancelResponse = normalizeOperationalAppointmentStatus(persistedAppointment?.patient_confirmation_status || persistedAppointment?.patient_response);
+      if (!persistedAppointment || (persistedCancelStatus !== 'CANCELLED' && persistedCancelResponse !== 'CANCEL_REQUESTED')) {
+        return res.status(500).json({ success: false, error: 'Não foi possível confirmar a persistência da resposta.' });
+      }
+      const notificationUpdate = await acknowledgePortalAppointmentNotifications({
+        appointment: persistedAppointment,
+        user: req.session.user,
+        action: 'cancel_requested_by_family',
+        notificationId: req.body?.notificationId || req.body?.notification_id
+      });
+      if (!notificationUpdate.ok) {
+        return res.status((notificationUpdate as any).status || 404).json(portalSafeError((notificationUpdate as any).status || 404));
+      }
       await writeAppointmentStatusAuditLog({
         organizationId: appointment.organization_id || appointment.clinic_id,
         appointmentId: appointment.id,
@@ -27005,7 +27398,15 @@ async function startServer() {
         metadata: { actionRequestId: requestRow?.id || null, source: 'portal' }
       });
       void regenerateClosureForAppointments([appointment.id], req.session.user, 'appointment_cancel_requested');
-      return res.json({ success: true, message: 'Solicitação de cancelamento registrada.', data: requestRow, appointment: serializePortalAppointment(update.data || { ...appointment, status: 'cancelled' }) });
+      const serializedAppointment = await serializePortalAppointmentForFamilyView(persistedAppointment);
+      return res.json(buildPortalAppointmentActionResult({
+        action: 'cancel_requested_by_family',
+        appointment: serializedAppointment,
+        message: 'Solicitação de cancelamento registrada.',
+        user: req.session.user,
+        notificationIds: notificationUpdate.notificationIds,
+        actionRequest: requestRow
+      }));
     } catch (error: any) {
       console.warn('[PortalAppointments] cancel request failed:', error?.message || String(error));
       return res.status(500).json(portalSafeError(500));
