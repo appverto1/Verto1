@@ -48,10 +48,15 @@ test('app checa retorno de persistencia antes de confirmar update cadastral', ()
 
 test('estado operacional mutavel tem caminho persistente explicito', () => {
   const clinicStateSync = sliceFrom(appCode, 'clinicStateSyncTimerRef.current = setTimeout', 1600);
-  assert.match(clinicStateSync, /appointments:\s*therapistAgenda/);
+  assert.doesNotMatch(clinicStateSync, /appointments:\s*therapistAgenda/);
   assert.match(clinicStateSync, /payload\.rooms = rooms/);
   assert.match(clinicStateSync, /payload\.protocols = protocols/);
   assert.match(clinicStateSync, /await dataService\.saveClinicState\(payload\)/);
+
+  assert.match(dataServiceCode, /async createAppointments\(appointments: any\[\]/);
+  assert.match(dataServiceCode, /async updateAppointment\(appointmentId: string, appointments: any\[\]/);
+  assert.match(appCode, /await dataService\.createAppointments\(/);
+  assert.match(appCode, /await dataService\.updateAppointment\(/);
 
   const dataServiceCore = sliceFrom(dataServiceCode, 'async savePatient(patient: any)', 2400);
   for (const helper of ['savePatient', 'savePatientRecord', 'updatePatient', 'deletePatient']) {

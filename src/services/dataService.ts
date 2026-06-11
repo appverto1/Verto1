@@ -4805,6 +4805,62 @@ export const dataService = {
     }
   },
 
+  async createAppointments(appointments: any[], clientRequestId?: string) {
+    try {
+      const stableRequestId =
+        clientRequestId ||
+        appointments.map((appointment) => String(appointment?.id || "")).filter(Boolean).join(",");
+      const idempotencyKey = `POST:/api/appointments:${stableRequestId}`;
+      const response = await fetch("/api/appointments", {
+        method: "POST",
+        headers: {
+          ...(await getAuthHeaders()),
+          "X-Idempotency-Key": idempotencyKey,
+        },
+        credentials: "include",
+        body: JSON.stringify({ appointments, idempotencyKey }),
+      });
+      const result = await safeJson(response);
+      if (!response.ok || result?.success === false) {
+        return {
+          success: false,
+          error: result?.error || `Falha ao criar agendamento (HTTP ${response.status}).`,
+        };
+      }
+      return result;
+    } catch (error) {
+      console.error("Error creating appointments:", error);
+      return { success: false, error: "Não foi possível confirmar o agendamento." };
+    }
+  },
+
+  async updateAppointment(appointmentId: string, appointments: any[], clientRequestId?: string) {
+    try {
+      const stableRequestId = clientRequestId || `${appointmentId}:${appointments.map((item) => item?.id).join(",")}`;
+      const idempotencyKey = `PATCH:/api/appointments/${appointmentId}:${stableRequestId}`;
+      const response = await fetch(`/api/appointments/${encodeURIComponent(appointmentId)}`, {
+        method: "PATCH",
+        headers: {
+          ...(await getAuthHeaders()),
+          "X-Idempotency-Key": idempotencyKey,
+        },
+        credentials: "include",
+        body: JSON.stringify({ appointments, idempotencyKey }),
+      });
+      const result = await safeJson(response);
+      if (!response.ok || result?.success === false) {
+        return {
+          success: false,
+          error: result?.error || `Falha ao editar agendamento (HTTP ${response.status}).`,
+        };
+      }
+      return result;
+    } catch (error) {
+      console.error("Error updating appointment:", error);
+      return { success: false, error: "Não foi possível confirmar a alteração do agendamento." };
+    }
+  },
+
   async savePatientAnamnesisSubmission(patientId: string, payload: {
     title: string;
     referenceDate?: string;

@@ -65,6 +65,7 @@
     "test:patient-dashboard": "tsx tests/patientDashboard.test.ts",
     "test:patient-professional-link": "tsx tests/patientProfessionalLink.test.ts",
     "test:appointment-notifications": "tsx tests/appointmentNotifications.test.ts",
+    "test:appointment-action-driven": "tsx tests/appointmentActionDriven.test.ts",
     "test:family-diary": "tsx tests/familyDiary.test.ts",
     "test:patient-registration-anamnesis": "tsx tests/patientRegistrationAnamnesis.test.ts",
     "test:patient-demographics-persistence": "tsx tests/patientDemographicsPersistence.test.ts",

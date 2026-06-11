@@ -137,9 +137,9 @@ interface CoordinatorDashboardProps {
   setProtocols: (protocols: any) => void;
   activityLogs: any[];
   onAddActivityLog: (title: string, content: string, type?: string) => void;
-  onScheduleSession: (session: any) => any;
-  onUpdateAppointment: (id: any, updates: any) => any;
-  onUpdateAgendaStatus: (id: any, status: string, details?: any) => void;
+  onScheduleSession: (session: any) => Promise<any> | any;
+  onUpdateAppointment: (id: any, updates: any) => Promise<any> | any;
+  onUpdateAgendaStatus: (id: any, status: string, details?: any) => Promise<any> | any;
   onDeleteAppointment?: (id: any, details?: any) => Promise<any> | any;
   onAddPatient: (patient: any) => Promise<any> | any;
   patientsHistory: any[];
@@ -2252,10 +2252,10 @@ export function CoordinatorDashboard({
           ? appointmentEditScope
           : "single",
       };
-      const result: any = onUpdateAppointment(editingAppointmentId, updates);
+      const result: any = await onUpdateAppointment(editingAppointmentId, updates);
       if (result && !result.success) {
         hideProcessing();
-        showToast(result.errors.join(" | "), "error");
+        showToast((result.errors || [result.error || "Não foi possível confirmar o agendamento."]).join(" | "), "error");
         return;
       }
       onAddActivityLog(
@@ -2283,6 +2283,10 @@ export function CoordinatorDashboard({
 
     const newSession = {
       patientName: sessionPatientName,
+      patientId: selectedSessionPatient?.id,
+      patient_id: selectedSessionPatient?.id,
+      patientEmail: selectedSessionPatient?.email,
+      patient_email: selectedSessionPatient?.email,
       date: sessionDate,
       time: sessionTime,
       approach: sessionApproach || "Consulta Padrão",
@@ -2318,10 +2322,10 @@ export function CoordinatorDashboard({
       numSessions: Math.min(52, Math.max(1, Number(sessionNumSessions) || 1)),
       recurrencePattern: sessionRecurrencePattern,
     };
-    const result = onScheduleSession(newSession);
+    const result = await onScheduleSession(newSession);
     if (result && !result.success) {
       hideProcessing();
-      showToast(result.errors.join(" | "), "error");
+      showToast((result.errors || [result.error || "Não foi possível confirmar o agendamento."]).join(" | "), "error");
       return;
     }
     onAddActivityLog(
@@ -2399,8 +2403,12 @@ export function CoordinatorDashboard({
     }
   };
 
-  const handleStatusUpdate = (id: number, status: string, details: any = {}) => {
-    onUpdateAgendaStatus(id, status, details);
+  const handleStatusUpdate = async (id: number, status: string, details: any = {}) => {
+    const result = await onUpdateAgendaStatus(id, status, details);
+    if (result?.success === false) {
+      showToast(result.error || "Não foi possível confirmar a atualização da agenda.", "error");
+      return;
+    }
     onAddActivityLog(
       "Status de agenda atualizado",
       `Agendamento ${id} atualizado para ${status}${details?.recurrenceScope === "future" ? " para esta e as próximas consultas da série" : ""}.${details?.note ? ` Observação: ${details.note}` : ""}`,

@@ -627,7 +627,10 @@ export const ReceptionistDashboard = ({
         room: sessionRoom,
         professional: sessionProfessional,
       };
-      onUpdateAppointment(editingAppointmentId, updates);
+      const result = await onUpdateAppointment(editingAppointmentId, updates);
+      if (result?.success === false) {
+        return alert((result.errors || [result.error || "Não foi possível confirmar o agendamento."]).join("\n"));
+      }
       setIsAddSessionModalOpen(false);
       resetSessionForm();
       return;
@@ -642,9 +645,9 @@ export const ReceptionistDashboard = ({
       professional: sessionProfessional,
       numSessions: sessionNumSessions,
     };
-    const result = onScheduleSession(newSession);
+    const result = await onScheduleSession(newSession);
     if (result && !result.success) {
-      return alert(result.errors.join("\n"));
+      return alert((result.errors || [result.error || "Não foi possível confirmar o agendamento."]).join("\n"));
     }
 
     setIsAddSessionModalOpen(false);
@@ -673,9 +676,12 @@ export const ReceptionistDashboard = ({
     setIsAddSessionModalOpen(true);
   };
 
-  const handleStatusUpdate = (appointmentId: any, newStatus: string) => {
+  const handleStatusUpdate = async (appointmentId: any, newStatus: string) => {
     if (onUpdateAgendaStatus) {
-      onUpdateAgendaStatus(appointmentId, newStatus);
+      const result = await onUpdateAgendaStatus(appointmentId, newStatus);
+      if (result?.success === false) {
+        return alert(result.error || "Não foi possível confirmar a atualização da agenda.");
+      }
     }
     onAddActivityLog(
       "Atualização de Agenda",

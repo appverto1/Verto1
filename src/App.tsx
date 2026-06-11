@@ -32,6 +32,11 @@ import {
   getPeiProgressResetMarker,
 } from './utils/peiSessionReset';
 import { normalizeAbaMasteryCriterion } from './utils/abaMasteryEngine';
+import {
+  emitAppointmentDomainEvents,
+  mergePersistedAppointments,
+  removePersistedAppointments,
+} from './utils/appointmentActionUpdates';
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>;
@@ -2424,8 +2429,7 @@ export default function App() {
         const workspaceId = String(user?.activeWorkspaceId || user?.clinicId || '').trim();
         const role = String(user?.role || '').toLowerCase();
         const payload: any = {
-          workspace_id: workspaceId || undefined,
-          appointments: therapistAgenda
+          workspace_id: workspaceId || undefined
         };
         if (role === 'coordinator' || role === 'admin' || role === 'owner') {
           payload.rooms = rooms;
@@ -2445,7 +2449,7 @@ export default function App() {
         clearTimeout(clinicStateSyncTimerRef.current);
       }
     };
-  }, [user, clinicStateHydrated, clinicStateSyncReady, rooms, therapistAgenda, protocols, specialtySettings]);
+  }, [user, clinicStateHydrated, clinicStateSyncReady, rooms, protocols, specialtySettings]);
 
   // Fetch activity logs from Backend on load
   useEffect(() => {
@@ -2901,48 +2905,9 @@ export default function App() {
     const note = String(details?.note ?? details?.notes ?? details?.observation ?? '').trim();
     const recurrenceScope = String(details?.recurrenceScope || 'single').toLowerCase() === 'future' ? 'future' : 'single';
     const currentAppointment = therapistAgenda.find(item => String(item.id) === String(id));
-    const recurrenceGroupId = getAppointmentRecurrenceGroupId(currentAppointment);
-    const getRecurrenceIndex = (appointment: any) =>
-      Number(appointment?.recurrenceIndex ?? appointment?.recurrence_index ?? 0) || 0;
-    const currentRecurrenceIndex = getRecurrenceIndex(currentAppointment);
-    const isFutureRecurringCancellation =
-      normalizedStatus === 'canceled' &&
-      recurrenceScope === 'future' &&
-      Boolean(recurrenceGroupId);
-    const getOccurrenceTimestamp = (appointment: any) => {
-      const scheduledAt = appointment?.scheduledAt || appointment?.scheduled_at;
-      const parsedScheduledAt = scheduledAt ? new Date(scheduledAt).getTime() : Number.NaN;
-      if (!Number.isNaN(parsedScheduledAt)) return parsedScheduledAt;
-      const date = String(appointment?.date || '').trim();
-      const time = String(appointment?.time || '').trim();
-      const parsedDateTime = date && time ? new Date(`${date}T${time}:00`).getTime() : Number.NaN;
-      return Number.isNaN(parsedDateTime) ? Number.POSITIVE_INFINITY : parsedDateTime;
-    };
-    const currentOccurrenceTimestamp = getOccurrenceTimestamp(currentAppointment);
-    const shouldUpdateItem = (appointment: any) => {
-      if (String(appointment?.id) === String(id)) return true;
-      if (!isFutureRecurringCancellation) return false;
-      const appointmentRecurrenceGroupId = String(
-        appointment?.recurrenceGroupId || appointment?.recurrence_group_id || '',
-      ).trim();
-      if (!appointmentRecurrenceGroupId || appointmentRecurrenceGroupId !== recurrenceGroupId) return false;
-      const appointmentRecurrenceIndex = getRecurrenceIndex(appointment);
-      if (currentRecurrenceIndex > 0 && appointmentRecurrenceIndex > 0) {
-        return appointmentRecurrenceIndex >= currentRecurrenceIndex;
-      }
-      return getOccurrenceTimestamp(appointment) >= currentOccurrenceTimestamp;
-    };
-    setTherapistAgenda(prev =>
-      prev.map(item =>
-        shouldUpdateItem(item)
-          ? {
-              ...item,
-              status: normalizedStatus,
-              ...(note ? { notes: note, note, observation: note } : {}),
-            }
-          : item,
-      ),
-    );
+    if (!currentAppointment) {
+      return { success: false, error: 'Agendamento não encontrado.' };
+    }
     try {
       const response = await fetch(`/api/appointments/${encodeURIComponent(String(id))}/status`, {
         method: 'PATCH',
@@ -2956,20 +2921,23 @@ export default function App() {
         })
       });
       const result = await response.json().catch(() => ({}));
-      if (response.ok && Array.isArray(result?.appointments) && result.appointments.length > 0) {
-        setTherapistAgenda(
-          [...result.appointments].sort((a, b) => {
-            if (a.date !== b.date) return String(a.date || '').localeCompare(String(b.date || ''));
-            return String(a.time || '').localeCompare(String(b.time || ''));
-          }),
-        );
-      } else if (response.ok && result?.appointment) {
-        setTherapistAgenda(prev =>
-          prev.map(item => (String(item.id) === String(id) ? { ...item, ...result.appointment } : item)),
-        );
+      if (!response.ok || result?.success === false) {
+        throw new Error(result?.error || 'Não foi possível confirmar o novo status.');
       }
-    } catch (error) {
+      const persistedAppointments = Array.isArray(result?.affectedAppointments)
+        ? result.affectedAppointments
+        : result?.appointment
+          ? [result.appointment]
+          : [];
+      if (persistedAppointments.length === 0) {
+        throw new Error('O servidor não devolveu a consulta confirmada.');
+      }
+      setTherapistAgenda((prev) => mergePersistedAppointments(prev, persistedAppointments));
+      emitAppointmentDomainEvents(result?.events);
+      return { success: true, appointments: persistedAppointments };
+    } catch (error: any) {
       console.warn('Falha ao persistir status da consulta imediatamente:', error);
+      return { success: false, error: error?.message || 'Não foi possível atualizar o status.' };
     }
   };
 
@@ -3078,8 +3046,6 @@ export default function App() {
       return { success: false, error: 'Nenhum agendamento encontrado para excluir.' };
     }
 
-    const previousAgenda = therapistAgenda;
-    setTherapistAgenda((prev) => prev.filter((item) => !deletedAppointmentIdSet.has(String(item.id))));
     try {
       const response = await fetch(`/api/appointments/${encodeURIComponent(String(id))}`, {
         method: 'DELETE',
@@ -3095,17 +3061,11 @@ export default function App() {
       if (!response.ok || result?.success === false) {
         throw new Error(result?.error || 'Erro ao excluir agendamento.');
       }
-      if (Array.isArray(result?.appointments)) {
-        setTherapistAgenda(
-          [...result.appointments].sort((a, b) => {
-            if (a.date !== b.date) return String(a.date || '').localeCompare(String(b.date || ''));
-            return String(a.time || '').localeCompare(String(b.time || ''));
-          }),
-        );
-      } else if (Array.isArray(result?.deletedAppointmentIds)) {
-        const confirmedDeletedIds = new Set(result.deletedAppointmentIds.map((value: any) => String(value)));
-        setTherapistAgenda((prev) => prev.filter((item) => !confirmedDeletedIds.has(String(item.id))));
-      }
+      const confirmedDeletedIds = Array.isArray(result?.deletedAppointmentIds)
+        ? result.deletedAppointmentIds
+        : deletedAppointmentIds;
+      setTherapistAgenda((prev) => removePersistedAppointments(prev, confirmedDeletedIds));
+      emitAppointmentDomainEvents(result?.events);
       const appointmentLabel = formatPatientLabel({
         name: currentAppointment?.patientName || currentAppointment?.name,
         id: currentAppointment?.patientId
@@ -3124,13 +3084,12 @@ export default function App() {
           : deletedAppointmentIds,
       };
     } catch (error: any) {
-      setTherapistAgenda(previousAgenda);
       console.warn('Falha ao excluir agendamento:', error?.message || String(error));
       return { success: false, error: error?.message || 'Não foi possível excluir o agendamento.' };
     }
   };
 
-  const handleUpdateAppointment = (id: any, updates: any) => {
+  const handleUpdateAppointment = async (id: any, updates: any) => {
     const currentAppointment = therapistAgenda.find((item) => String(item.id) === String(id));
     if (!currentAppointment) {
       return { success: false, errors: ['Agendamento não encontrado.'] };
@@ -3372,17 +3331,23 @@ export default function App() {
       return { success: false, errors: conflicts };
     }
 
-    setTherapistAgenda(prev =>
-      prev
-        .map(item => {
-          const patch = patchesById.get(String(item.id));
-          return patch ? { ...item, ...patch } : item;
-        })
-        .sort((a, b) => {
-          if (a.date !== b.date) return String(a.date || '').localeCompare(String(b.date || ''));
-          return String(a.time || '').localeCompare(String(b.time || ''));
-        }),
+    const appointmentsToPersist = appointmentsToUpdate.map((appointment) => ({
+      ...appointment,
+      ...(patchesById.get(String(appointment.id)) || {}),
+    }));
+    const persistenceResult = await dataService.updateAppointment(
+      String(id),
+      appointmentsToPersist,
+      `${id}:${recurrenceScope}`,
     );
+    if (!persistenceResult?.success || !Array.isArray(persistenceResult?.appointments)) {
+      return {
+        success: false,
+        errors: [persistenceResult?.error || 'Não foi possível confirmar a alteração do agendamento.'],
+      };
+    }
+    setTherapistAgenda((prev) => mergePersistedAppointments(prev, persistenceResult.appointments));
+    emitAppointmentDomainEvents(persistenceResult?.events);
     const appointmentLabel = formatPatientLabel({
       name: appointmentsToUpdate[0]?.patientName || appointmentsToUpdate[0]?.name,
       id: appointmentsToUpdate[0]?.patientId
@@ -3394,7 +3359,11 @@ export default function App() {
         : `Agendamento de ${appointmentLabel} atualizado para ${nextDate} às ${nextTime}.`,
       'management',
     );
-    return { success: true, updatedCount: appointmentsToUpdate.length };
+    return {
+      success: true,
+      updatedCount: persistenceResult.appointments.length,
+      appointments: persistenceResult.appointments,
+    };
   };
 
   const handleAddPatient = async (data: any) => { 
@@ -4001,9 +3970,17 @@ export default function App() {
     }
     return { success: true };
   };
-  const handleScheduleSession = (sess: any) => {
-    const patientForSession = allPatients.find(p => p.name === sess.patientName);
-    const pid = patientForSession?.id || Date.now();
+  const handleScheduleSession = async (sess: any) => {
+    const requestedPatientId = String(sess.patientId || sess.patient_id || '').trim();
+    const patientForSession = allPatients.find((p) =>
+      requestedPatientId
+        ? String(p?.id || '').trim() === requestedPatientId
+        : String(p?.name || '').trim() === String(sess.patientName || '').trim()
+    );
+    const pid = patientForSession?.id || requestedPatientId;
+    if (!pid) {
+      return { success: false, errors: ['Selecione um paciente cadastrado para confirmar o agendamento.'] };
+    }
     const numSessions = Math.min(52, Math.max(1, Number(sess.numSessions) || 1));
     const recurrenceGroupId = numSessions > 1 ? createAppointmentId() : null;
     const recurrenceDates = buildRecurrenceDateKeys({
@@ -4081,7 +4058,7 @@ export default function App() {
         newItems.push({
           id: appointmentId,
           patientId: pid,
-          patient_id: patientForSession?.id || null,
+          patient_id: pid,
           patientName: sess.patientName,
           patient_name: sess.patientName,
           patientEmail: patientForSession?.email || null,
@@ -4169,13 +4146,22 @@ export default function App() {
       return { success: false, errors: conflicts };
     }
 
-    setTherapistAgenda(prev => [...prev, ...newItems].sort((a, b) => {
-      if (a.date !== b.date) return a.date.localeCompare(b.date);
-      return a.time.localeCompare(b.time);
-    }));
+    const persistenceResult = await dataService.createAppointments(
+      newItems,
+      `${pid}:${sess.date}:${sess.time}:${numSessions}`,
+    );
+    if (!persistenceResult?.success || !Array.isArray(persistenceResult?.appointments)) {
+      return {
+        success: false,
+        errors: [persistenceResult?.error || 'Não foi possível confirmar o agendamento no banco.'],
+      };
+    }
+
+    setTherapistAgenda((prev) => mergePersistedAppointments(prev, persistenceResult.appointments));
+    emitAppointmentDomainEvents(persistenceResult?.events);
 
     onAddActivityLog("Agendamento de Sessão", `${numSessions} sessões agendadas para "${sess.patientName}" começando em ${sess.date}.`, 'management');
-    return { success: true };
+    return { success: true, appointments: persistenceResult.appointments };
   };
 
   const handleMoodCheckin = async (l: number | null, n: string, i: string, t: any) => {

@@ -5833,6 +5833,104 @@ function buildAppointmentScheduledAt(appointment: any): string | null {
   return parsed.toISOString();
 }
 
+function serializePersistedAppointmentForAgenda(row: any) {
+  const source = parseStoredJsonObject(row?.source_payload || row?.sourcePayload);
+  const scheduledAt = buildAppointmentScheduledAt(row) || buildAppointmentScheduledAt(source);
+  const start = scheduledAt ? new Date(scheduledAt) : null;
+  const durationMinutes = Number(
+    row?.scheduled_duration_minutes ||
+      row?.duration_minutes ||
+      source?.scheduledDurationMinutes ||
+      source?.scheduled_duration_minutes ||
+      source?.durationMinutes ||
+      source?.duration_minutes ||
+      50
+  );
+  const safeDuration = Number.isFinite(durationMinutes) && durationMinutes > 0 ? Math.round(durationMinutes) : 50;
+  const end = start ? calculateAppointmentEnd(start, safeDuration) : null;
+  const date = sanitizeDate(row?.date || source?.date) || (start ? formatDateInAppointmentTimezone(start) : '');
+  const time = normalizeAppointmentTime(row?.time || source?.time) || (start ? formatTimeInAppointmentTimezone(start) : '');
+  const serviceType = sanitizeString(row?.service_type || row?.approach || source?.serviceType || source?.service_type || source?.approach || source?.type, 120) || 'Consulta Padrão';
+  const professionalId = sanitizeString(row?.therapist_id || source?.professionalId || source?.professional_id || source?.therapistId || source?.therapist_id, 120) || null;
+  const roomId = sanitizeString(row?.room_id || source?.roomId || source?.room_id || source?.room, 180) || '';
+  const roomName = sanitizeString(row?.room_name || source?.roomName || source?.room_name || source?.roomDisplayName || roomId, 180) || '';
+  const locationType = normalizeScheduleLocationType(row?.location_type || source?.locationType || source?.location_type || (roomId ? 'clinica' : 'outro'));
+  const uiStatus = normalizeAppointmentStatusForUi(row?.status || source?.status || 'pending');
+  const appointment = {
+    ...source,
+    id: sanitizeString(row?.id || source?.id, 120),
+    organization_id: sanitizeString(row?.organization_id || source?.organization_id || source?.organizationId, 120) || null,
+    clinic_id: sanitizeString(row?.clinic_id || source?.clinic_id || source?.clinicId, 120) || null,
+    clinicId: sanitizeString(row?.clinic_id || source?.clinicId || source?.clinic_id, 120) || null,
+    patientId: sanitizeString(row?.patient_id || source?.patientId || source?.patient_id, 120) || null,
+    patient_id: sanitizeString(row?.patient_id || source?.patient_id || source?.patientId, 120) || null,
+    patientName: sanitizeString(row?.patient_name || source?.patientName || source?.patient_name || source?.name, 180) || 'Paciente',
+    patient_name: sanitizeString(row?.patient_name || source?.patient_name || source?.patientName || source?.name, 180) || 'Paciente',
+    patientEmail: sanitizeEmail(row?.patient_email || source?.patientEmail || source?.patient_email) || null,
+    patient_email: sanitizeEmail(row?.patient_email || source?.patient_email || source?.patientEmail) || null,
+    name: sanitizeString(row?.patient_name || source?.name || source?.patientName || source?.patient_name, 180) || 'Paciente',
+    therapistId: professionalId,
+    therapist_id: professionalId,
+    professionalId,
+    professional_id: professionalId,
+    therapistName: sanitizeString(row?.therapist_name || source?.therapistName || source?.therapist_name || source?.professional, 180) || 'Equipe',
+    therapist_name: sanitizeString(row?.therapist_name || source?.therapist_name || source?.therapistName || source?.professional, 180) || 'Equipe',
+    professional: sanitizeString(row?.therapist_name || source?.professional || source?.therapistName || source?.therapist_name, 180) || 'Equipe',
+    date,
+    time,
+    scheduledAt: scheduledAt || source?.scheduledAt || source?.scheduled_at || null,
+    scheduled_at: scheduledAt || source?.scheduled_at || source?.scheduledAt || null,
+    scheduledStartAt: scheduledAt || source?.scheduledStartAt || source?.scheduled_start_at || null,
+    scheduled_start_at: scheduledAt || source?.scheduled_start_at || source?.scheduledStartAt || null,
+    scheduledEndAt: end ? end.toISOString() : source?.scheduledEndAt || source?.scheduled_end_at || null,
+    scheduled_end_at: end ? end.toISOString() : source?.scheduled_end_at || source?.scheduledEndAt || null,
+    durationMinutes: safeDuration,
+    duration_minutes: safeDuration,
+    scheduledDurationMinutes: safeDuration,
+    scheduled_duration_minutes: safeDuration,
+    type: serviceType,
+    approach: serviceType,
+    serviceType,
+    service_type: serviceType,
+    status: uiStatus,
+    room: roomId,
+    roomId,
+    room_id: roomId,
+    roomName,
+    room_name: roomName,
+    location: locationType,
+    locationType,
+    location_type: locationType,
+    locationNotes: sanitizeString(row?.location_notes || source?.locationNotes || source?.location_notes, 1000) || '',
+    location_notes: sanitizeString(row?.location_notes || source?.location_notes || source?.locationNotes, 1000) || '',
+    callLink: sanitizeString(row?.call_link || source?.callLink || source?.call_link, 500) || '',
+    call_link: sanitizeString(row?.call_link || source?.call_link || source?.callLink, 500) || '',
+    recurrenceGroupId: sanitizeString(row?.recurrence_group_id || source?.recurrenceGroupId || source?.recurrence_group_id, 120) || null,
+    recurrence_group_id: sanitizeString(row?.recurrence_group_id || source?.recurrence_group_id || source?.recurrenceGroupId, 120) || null,
+    recurrenceIndex: Number(row?.recurrence_index ?? source?.recurrenceIndex ?? source?.recurrence_index) || null,
+    recurrence_index: Number(row?.recurrence_index ?? source?.recurrence_index ?? source?.recurrenceIndex) || null,
+    recurrenceTotal: Number(row?.recurrence_total ?? source?.recurrenceTotal ?? source?.recurrence_total) || null,
+    recurrence_total: Number(row?.recurrence_total ?? source?.recurrence_total ?? source?.recurrenceTotal) || null,
+    recurrenceFrequency: sanitizeString(row?.recurrence_frequency || source?.recurrenceFrequency || source?.recurrence_frequency, 60) || null,
+    recurrence_frequency: sanitizeString(row?.recurrence_frequency || source?.recurrence_frequency || source?.recurrenceFrequency, 60) || null,
+    patientResponse: row?.patient_response || source?.patientResponse || source?.patient_response || null,
+    patient_response: row?.patient_response || source?.patient_response || source?.patientResponse || null,
+    patientRespondedAt: row?.patient_responded_at || source?.patientRespondedAt || source?.patient_responded_at || null,
+    patient_responded_at: row?.patient_responded_at || source?.patient_responded_at || source?.patientRespondedAt || null,
+    patientConfirmationStatus: row?.patient_confirmation_status || source?.patientConfirmationStatus || source?.patient_confirmation_status || null,
+    patient_confirmation_status: row?.patient_confirmation_status || source?.patient_confirmation_status || source?.patientConfirmationStatus || null,
+    patientConfirmationAt: row?.patient_confirmation_at || source?.patientConfirmationAt || source?.patient_confirmation_at || null,
+    patient_confirmation_at: row?.patient_confirmation_at || source?.patient_confirmation_at || source?.patientConfirmationAt || null,
+    notification_sent: row?.notification_sent ?? source?.notification_sent ?? false,
+    notification_sent_at: row?.notification_sent_at || source?.notification_sent_at || null,
+    notification_12h_sent: row?.notification_12h_sent ?? source?.notification_12h_sent ?? false,
+    notification_12h_sent_at: row?.notification_12h_sent_at || source?.notification_12h_sent_at || null,
+    updated_at: row?.updated_at || source?.updated_at || null,
+    source_payload: source
+  };
+  return cleanObject(appointment);
+}
+
 function getAppointmentRecurrenceGroupId(appointment: any): string {
   const source = parseStoredJsonObject(appointment?.source_payload || appointment?.sourcePayload);
   return sanitizeString(
@@ -13502,6 +13600,481 @@ async function startServer() {
     }
   });
 
+  const readClinicStateForAppointmentMutation = async (clinicId: string) => {
+    const result = await supabase
+      .from('clinic_state')
+      .select('clinic_id, rooms, appointments, specialty_settings')
+      .eq('clinic_id', clinicId)
+      .maybeSingle();
+    if (result.error) {
+      if (isMissingRelationError(result.error)) {
+        return { rooms: [], appointments: [], specialtySettings: {} };
+      }
+      throw result.error;
+    }
+    return {
+      rooms: Array.isArray(result.data?.rooms) ? result.data.rooms : [],
+      appointments: Array.isArray(result.data?.appointments) ? result.data.appointments : [],
+      specialtySettings:
+        result.data?.specialty_settings && typeof result.data.specialty_settings === 'object'
+          ? result.data.specialty_settings
+          : {},
+    };
+  };
+
+  const appointmentSortValue = (appointment: any) => {
+    const scheduledAt = buildAppointmentScheduledAt(appointment);
+    if (scheduledAt) {
+      const parsed = new Date(scheduledAt).getTime();
+      if (Number.isFinite(parsed)) return parsed;
+    }
+    return Number.POSITIVE_INFINITY;
+  };
+
+  const mergeClinicStateAppointmentsById = (existingAppointments: any[], persistedAppointments: any[]) => {
+    const byId = new Map<string, any>();
+    for (const appointment of Array.isArray(existingAppointments) ? existingAppointments : []) {
+      const id = sanitizeString(appointment?.id, 120);
+      if (id) byId.set(id, appointment);
+    }
+    for (const appointment of Array.isArray(persistedAppointments) ? persistedAppointments : []) {
+      const id = sanitizeString(appointment?.id, 120);
+      if (id) byId.set(id, { ...(byId.get(id) || {}), ...appointment });
+    }
+    return Array.from(byId.values()).sort((left, right) => {
+      const byDate = appointmentSortValue(left) - appointmentSortValue(right);
+      if (byDate !== 0) return byDate;
+      return sanitizeString(left?.id, 120).localeCompare(sanitizeString(right?.id, 120));
+    });
+  };
+
+  const professionalBelongsToClinic = async (professionalId: string, clinicId: string, actor: any) => {
+    const safeProfessionalId = sanitizeString(professionalId, 120);
+    if (!isUuid(safeProfessionalId) || !isUuid(clinicId)) return false;
+    if (safeProfessionalId === sanitizeString(actor?.id, 120)) return true;
+
+    const membership = await supabase
+      .from('clinic_memberships')
+      .select('user_id')
+      .eq('clinic_id', clinicId)
+      .eq('user_id', safeProfessionalId)
+      .eq('status', 'active')
+      .limit(1)
+      .maybeSingle();
+    if (!membership.error && membership.data?.user_id) return true;
+    if (membership.error && !isMissingRelationError(membership.error)) throw membership.error;
+
+    const userResult = await supabase
+      .from('users')
+      .select('id, clinic_id')
+      .eq('id', safeProfessionalId)
+      .limit(1)
+      .maybeSingle();
+    if (userResult.error) {
+      if (extractMissingColumnName(userResult.error) || isMissingRelationError(userResult.error)) return false;
+      throw userResult.error;
+    }
+    return sanitizeString(userResult.data?.clinic_id, 120) === clinicId;
+  };
+
+  const prepareAppointmentForWrite = async (rawAppointment: any, actor: any, clinicId: string) => {
+    const appointmentId = sanitizeString(rawAppointment?.id, 120);
+    if (!isUuid(appointmentId)) {
+      return { ok: false, status: 400, error: 'Agendamento sem identificador persistente.' };
+    }
+
+    const patientId = sanitizeString(rawAppointment?.patient_id || rawAppointment?.patientId, 120);
+    if (!isUuid(patientId)) {
+      return { ok: false, status: 400, error: 'Selecione um paciente cadastrado para confirmar o agendamento.' };
+    }
+
+    const patientResult = await supabase
+      .from('patients')
+      .select('id, name, email, clinic_id')
+      .eq('id', patientId)
+      .eq('clinic_id', clinicId)
+      .limit(1)
+      .maybeSingle();
+    if (patientResult.error) throw patientResult.error;
+    if (!patientResult.data?.id) {
+      return { ok: false, status: 403, error: 'Paciente não pertence à clínica atual.' };
+    }
+
+    const professionalId =
+      sanitizeString(
+        rawAppointment?.professional_id ||
+          rawAppointment?.professionalId ||
+          rawAppointment?.therapist_id ||
+          rawAppointment?.therapistId,
+        120
+      ) || sanitizeString(actor?.id, 120);
+    if (!isUuid(professionalId)) {
+      return { ok: false, status: 400, error: 'Profissional inválido para este agendamento.' };
+    }
+    const professionalAllowed = await professionalBelongsToClinic(professionalId, clinicId, actor);
+    if (!professionalAllowed) {
+      return { ok: false, status: 403, error: 'Profissional não pertence à clínica atual.' };
+    }
+
+    const scheduledAt = buildAppointmentScheduledAt(rawAppointment);
+    if (!scheduledAt) {
+      return { ok: false, status: 400, error: 'Informe data e horário válidos para este atendimento.' };
+    }
+
+    const duration = Number(
+      rawAppointment?.duration_minutes ||
+        rawAppointment?.durationMinutes ||
+        rawAppointment?.scheduled_duration_minutes ||
+        rawAppointment?.scheduledDurationMinutes ||
+        50
+    );
+    const safeDuration = Number.isFinite(duration) && duration > 0 ? Math.min(360, Math.round(duration)) : 50;
+    const start = new Date(scheduledAt);
+    const end = calculateAppointmentEnd(start, safeDuration);
+    const patientName = sanitizeString(patientResult.data.name || rawAppointment?.patientName || rawAppointment?.name, 180) || 'Paciente';
+    const patientEmail = sanitizeEmail(patientResult.data.email || rawAppointment?.patientEmail || rawAppointment?.patient_email) || null;
+    const professionalName =
+      sanitizeString(
+        rawAppointment?.therapistName ||
+          rawAppointment?.therapist_name ||
+          rawAppointment?.professionalName ||
+          rawAppointment?.professional ||
+          actor?.name ||
+          actor?.email,
+        180
+      ) || 'Equipe';
+
+    return {
+      ok: true,
+      appointment: cleanObject({
+        ...rawAppointment,
+        id: appointmentId,
+        organization_id: clinicId,
+        organizationId: clinicId,
+        clinic_id: clinicId,
+        clinicId,
+        patient_id: patientId,
+        patientId,
+        patient_name: patientName,
+        patientName,
+        name: patientName,
+        patient_email: patientEmail,
+        patientEmail,
+        therapist_id: professionalId,
+        therapistId: professionalId,
+        professional_id: professionalId,
+        professionalId,
+        therapist_name: professionalName,
+        therapistName: professionalName,
+        professional: professionalName,
+        scheduled_at: scheduledAt,
+        scheduledAt,
+        scheduled_start_at: scheduledAt,
+        scheduledStartAt: scheduledAt,
+        scheduled_end_at: end ? end.toISOString() : rawAppointment?.scheduled_end_at || rawAppointment?.scheduledEndAt || null,
+        scheduledEndAt: end ? end.toISOString() : rawAppointment?.scheduledEndAt || rawAppointment?.scheduled_end_at || null,
+        duration_minutes: safeDuration,
+        durationMinutes: safeDuration,
+        scheduled_duration_minutes: safeDuration,
+        scheduledDurationMinutes: safeDuration,
+        date: sanitizeDate(rawAppointment?.date) || formatDateInAppointmentTimezone(start),
+        time: normalizeAppointmentTime(rawAppointment?.time) || formatTimeInAppointmentTimezone(start),
+        status: normalizeAppointmentStatusForUi(rawAppointment?.status || 'pending'),
+      }),
+    };
+  };
+
+  const readPersistedAppointmentRows = async (appointmentIds: string[], clinicId: string) => {
+    const ids = Array.from(new Set((appointmentIds || []).map((id) => sanitizeString(id, 120)).filter((id) => isUuid(id))));
+    if (ids.length === 0) return [];
+    const result = await supabase
+      .from('appointments')
+      .select(APPOINTMENT_SELECT)
+      .eq('clinic_id', clinicId)
+      .in('id', ids)
+      .limit(ids.length);
+    if (result.error) throw result.error;
+    return Array.isArray(result.data) ? result.data : [];
+  };
+
+  const confirmPersistedAppointmentRows = (rows: any[], expectedAppointments: any[], clinicId: string) => {
+    const rowsById = new Map((rows || []).map((row: any) => [sanitizeString(row?.id, 120), row]));
+    for (const appointment of expectedAppointments) {
+      const appointmentId = sanitizeString(appointment?.id, 120);
+      const row = rowsById.get(appointmentId);
+      if (!row) return false;
+      if (sanitizeString(row?.clinic_id, 120) !== clinicId) return false;
+      if (sanitizeString(row?.patient_id, 120) !== sanitizeString(appointment?.patient_id || appointment?.patientId, 120)) return false;
+      if (sanitizeString(row?.therapist_id, 120) !== sanitizeString(appointment?.therapist_id || appointment?.therapistId, 120)) return false;
+      const status = normalizeAppointmentStatusForUi(row?.status || 'pending');
+      if (['deleted'].includes(status)) return false;
+      if (!buildAppointmentScheduledAt(row)) return false;
+    }
+    return true;
+  };
+
+  const writeClinicStateAppointmentsAfterPersistence = async (clinicId: string, actorId: string, previousAppointments: any[], persistedAppointments: any[]) => {
+    const nextAppointments = mergeClinicStateAppointmentsById(previousAppointments, persistedAppointments);
+    const result = await supabase
+      .from('clinic_state')
+      .upsert([{
+        clinic_id: clinicId,
+        appointments: nextAppointments,
+        updated_by: actorId,
+        updated_at: new Date().toISOString()
+      }], { onConflict: 'clinic_id' })
+      .select('appointments')
+      .single();
+    if (result.error) throw result.error;
+    const confirmedStateAppointments = Array.isArray(result.data?.appointments) ? result.data.appointments : [];
+    const confirmedIds = new Set(confirmedStateAppointments.map((appointment: any) => sanitizeString(appointment?.id, 120)).filter(Boolean));
+    const allConfirmed = persistedAppointments.every((appointment: any) => confirmedIds.has(sanitizeString(appointment?.id, 120)));
+    if (!allConfirmed) {
+      throw new Error('Não foi possível confirmar a persistência do agendamento.');
+    }
+    return confirmedStateAppointments;
+  };
+
+  const persistAppointmentDomainEvents = async (params: {
+    eventType: string;
+    appointments: any[];
+    actor: any;
+    clinicId: string;
+    idempotencyKey: string;
+    payload?: Record<string, any>;
+  }) => {
+    const actorId = sanitizeString(params.actor?.id, 120);
+    const rows = (params.appointments || [])
+      .map((appointment) => {
+        const appointmentId = sanitizeString(appointment?.id, 120);
+        if (!isUuid(appointmentId)) return null;
+        return cleanObject({
+          id: crypto.randomUUID(),
+          organization_id: params.clinicId,
+          clinic_id: params.clinicId,
+          patient_id: isUuid(sanitizeString(appointment?.patient_id || appointment?.patientId, 120))
+            ? sanitizeString(appointment?.patient_id || appointment?.patientId, 120)
+            : null,
+          professional_id: isUuid(sanitizeString(appointment?.therapist_id || appointment?.therapistId || appointment?.professional_id || appointment?.professionalId, 120))
+            ? sanitizeString(appointment?.therapist_id || appointment?.therapistId || appointment?.professional_id || appointment?.professionalId, 120)
+            : null,
+          appointment_id: appointmentId,
+          event_type: sanitizeString(params.eventType, 80),
+          idempotency_key: `${sanitizeString(params.idempotencyKey, 220)}:${params.eventType}:${appointmentId}`,
+          created_by: isUuid(actorId) ? actorId : null,
+          payload: sanitizeClinicalPayload({
+            source: 'appointment_action',
+            status: appointment?.status || null,
+            ...params.payload,
+          }),
+          created_at: new Date().toISOString()
+        });
+      })
+      .filter(Boolean) as any[];
+
+    if (rows.length === 0) return [];
+    try {
+      const result = await supabase
+        .from('appointment_domain_events')
+        .upsert(rows, { onConflict: 'idempotency_key' })
+        .select('id, event_type, clinic_id, patient_id, professional_id, appointment_id, created_by, idempotency_key, payload, created_at');
+      if (!result.error) {
+        return (result.data || rows).map((row: any) => ({
+          eventId: sanitizeString(row?.id, 120),
+          eventType: sanitizeString(row?.event_type || params.eventType, 80),
+          clinicId: sanitizeString(row?.clinic_id || params.clinicId, 120) || null,
+          patientId: sanitizeString(row?.patient_id, 120) || null,
+          professionalId: sanitizeString(row?.professional_id, 120) || null,
+          appointmentId: sanitizeString(row?.appointment_id, 120),
+          createdBy: sanitizeString(row?.created_by, 120) || null,
+          idempotencyKey: sanitizeString(row?.idempotency_key, 240),
+          payload: row?.payload || {},
+          createdAt: sanitizeString(row?.created_at, 80) || new Date().toISOString()
+        }));
+      }
+      if (!isMissingRelationError(result.error)) throw result.error;
+    } catch (error: any) {
+      if (!isMissingRelationError(error)) {
+        console.warn('[Appointments] Falha ao persistir eventos de dominio.', sanitizeString(error?.message || String(error), 300));
+      }
+    }
+
+    for (const row of rows) {
+      void persistActivityLog({
+        userId: actorId || '',
+        clinicId: params.clinicId,
+        actorName: sanitizeString(params.actor?.name || params.actor?.email || 'Equipe', 180),
+        title: 'Evento de agenda',
+        content: `Evento ${row.event_type} confirmado para consulta.`,
+        type: 'management',
+        actionType: row.event_type,
+        payloadDetails: JSON.stringify({
+          eventId: row.id,
+          eventType: row.event_type,
+          appointmentId: row.appointment_id,
+          patientId: row.patient_id,
+          professionalId: row.professional_id,
+          idempotencyKey: row.idempotency_key
+        })
+      });
+    }
+    return rows.map((row: any) => ({
+      eventId: row.id,
+      eventType: row.event_type,
+      clinicId: row.clinic_id,
+      patientId: row.patient_id || null,
+      professionalId: row.professional_id || null,
+      appointmentId: row.appointment_id,
+      createdBy: row.created_by || null,
+      idempotencyKey: row.idempotency_key,
+      payload: row.payload || {},
+      createdAt: row.created_at
+    }));
+  };
+
+  const persistAppointmentActionBatch = async (params: {
+    req: any;
+    res: any;
+    rawAppointments: any[];
+    eventType: string;
+    requireExisting?: boolean;
+    pathAppointmentId?: string;
+  }) => {
+    const { req, res } = params;
+    const actor = req.session.user;
+    const actorId = sanitizeString(actor?.id, 120);
+    const clinicId = sanitizeString(currentClinicId(actor), 120);
+    if (!isUuid(clinicId)) {
+      return res.status(400).json({ success: false, error: 'Clínica inválida para agendamento.' });
+    }
+
+    const rawAppointments = Array.isArray(params.rawAppointments) ? params.rawAppointments.slice(0, 52) : [];
+    if (rawAppointments.length === 0) {
+      return res.status(400).json({ success: false, error: 'Nenhum agendamento enviado.' });
+    }
+
+    const preparedAppointments: any[] = [];
+    for (const rawAppointment of rawAppointments) {
+      const prepared = await prepareAppointmentForWrite(rawAppointment, actor, clinicId);
+      if (!prepared.ok) {
+        return res.status((prepared as any).status || 400).json({ success: false, error: (prepared as any).error });
+      }
+      preparedAppointments.push((prepared as any).appointment);
+    }
+
+    const appointmentIds = preparedAppointments.map((appointment) => sanitizeString(appointment?.id, 120));
+    const pathAppointmentId = sanitizeString(params.pathAppointmentId, 120);
+    if (pathAppointmentId && !appointmentIds.includes(pathAppointmentId)) {
+      return res.status(400).json({ success: false, error: 'A consulta editada não foi enviada para persistência.' });
+    }
+
+    const state = await readClinicStateForAppointmentMutation(clinicId);
+    if (params.requireExisting) {
+      const existingStateIds = new Set(state.appointments.map((appointment: any) => sanitizeString(appointment?.id, 120)));
+      const existingRows = await readPersistedAppointmentRows(appointmentIds, clinicId);
+      const existingTableIds = new Set(existingRows.map((row: any) => sanitizeString(row?.id, 120)));
+      const missingExisting = appointmentIds.some((appointmentId) => !existingStateIds.has(appointmentId) && !existingTableIds.has(appointmentId));
+      if (missingExisting) {
+        return res.status(404).json({ success: false, error: 'Consulta não encontrada para edição.' });
+      }
+    }
+
+    const nextAppointmentsForValidation = mergeClinicStateAppointmentsById(state.appointments, preparedAppointments);
+    const scheduleValidation = validateClinicStateAppointmentsForScheduleConflicts({
+      appointments: nextAppointmentsForValidation,
+      rooms: state.rooms,
+      specialtySettings: state.specialtySettings
+    });
+    if (!scheduleValidation.ok) {
+      return res.status(scheduleValidation.status).json({ success: false, error: scheduleValidation.error });
+    }
+
+    const mirror = await syncAppointmentsTableFromClinicState({
+      clinicId,
+      appointments: preparedAppointments,
+      actorId,
+      specialtySettings: state.specialtySettings
+    });
+    if (mirror.mirrored < appointmentIds.length) {
+      return res.status(500).json({ success: false, error: 'Não foi possível confirmar a persistência do agendamento.' });
+    }
+
+    const persistedRows = await readPersistedAppointmentRows(appointmentIds, clinicId);
+    if (!confirmPersistedAppointmentRows(persistedRows, preparedAppointments, clinicId)) {
+      return res.status(500).json({ success: false, error: 'Não foi possível confirmar a persistência do agendamento.' });
+    }
+
+    const persistedAppointments = persistedRows.map((row: any) => serializePersistedAppointmentForAgenda(row));
+    const clinicStateAppointments = await writeClinicStateAppointmentsAfterPersistence(
+      clinicId,
+      actorId,
+      state.appointments,
+      persistedAppointments
+    );
+    const idempotencyKey = sanitizeString(
+      req.body?.idempotencyKey || req.body?.idempotency_key || req.headers?.['x-idempotency-key'] || `${params.eventType}:${appointmentIds.join(',')}`,
+      240
+    );
+    const events = await persistAppointmentDomainEvents({
+      eventType: params.eventType,
+      appointments: persistedAppointments,
+      actor,
+      clinicId,
+      idempotencyKey,
+      payload: { appointmentIds }
+    });
+
+    void regenerateClosureForAppointments(appointmentIds, actor, params.eventType);
+    triggerAppointmentReminderScan(params.eventType);
+
+    return res.json({
+      success: true,
+      appointment: persistedAppointments[0] || null,
+      appointments: persistedAppointments,
+      affected: {
+        patientId: persistedAppointments[0]?.patientId || persistedAppointments[0]?.patient_id || null,
+        professionalId: persistedAppointments[0]?.professionalId || persistedAppointments[0]?.professional_id || persistedAppointments[0]?.therapistId || null,
+        date: persistedAppointments[0]?.date || null,
+        appointmentIds
+      },
+      clinicStateAppointments,
+      events
+    });
+  };
+
+  app.post('/api/appointments', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res: any) => {
+    try {
+      return await persistAppointmentActionBatch({
+        req,
+        res,
+        rawAppointments: Array.isArray(req.body?.appointments) ? req.body.appointments : [req.body?.appointment].filter(Boolean),
+        eventType: 'appointment.created'
+      });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/appointments [POST]', error, {
+        requestId: requestIdForLogs(req)
+      });
+    }
+  });
+
+  app.patch('/api/appointments/:appointmentId', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res: any) => {
+    try {
+      return await persistAppointmentActionBatch({
+        req,
+        res,
+        rawAppointments: Array.isArray(req.body?.appointments) ? req.body.appointments : [req.body?.appointment].filter(Boolean),
+        eventType: 'appointment.updated',
+        requireExisting: true,
+        pathAppointmentId: req.params.appointmentId
+      });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/appointments/:appointmentId [PATCH]', error, {
+        appointmentId: sanitizeString(req.params.appointmentId, 120),
+        requestId: requestIdForLogs(req)
+      });
+    }
+  });
+
   const handleVapidPublicKey = (_req: any, res: any) => {
     if (!vapidPublicKey || !vapidPrivateKey) {
       return res.status(503).json({
@@ -14227,8 +14800,34 @@ async function startServer() {
         })
         : null;
 
+      const persistedStatusRows = await readPersistedAppointmentRows(affectedAppointmentIds, foundClinicId || clinicId || updatedAppointment?.clinic_id || foundAppointment?.clinic_id);
+      if (affectedAppointmentIds.length > 0 && persistedStatusRows.length < affectedAppointmentIds.length) {
+        return res.status(500).json({ success: false, error: 'Não foi possível confirmar a persistência do agendamento.' });
+      }
+      const affectedPersistedAppointments = persistedStatusRows.length > 0
+        ? persistedStatusRows.map((row: any) => serializePersistedAppointmentForAgenda(row))
+        : [updatedAppointment];
+      const persistedUpdatedAppointment =
+        affectedPersistedAppointments.find((appointment: any) => sanitizeString(appointment?.id, 120) === appointmentId) ||
+        updatedAppointment;
+      const events = await persistAppointmentDomainEvents({
+        eventType: 'appointment.status.updated',
+        appointments: affectedPersistedAppointments,
+        actor,
+        clinicId: sanitizeString(foundClinicId || clinicId || updatedAppointment?.clinic_id || foundAppointment?.clinic_id, 120),
+        idempotencyKey: sanitizeString(
+          req.body?.idempotencyKey || req.body?.idempotency_key || req.headers?.['x-idempotency-key'] || `status:${appointmentId}:${normalizedStatus}:${recurrenceScope}`,
+          240
+        ),
+        payload: {
+          status: normalizedStatus,
+          recurrenceScope,
+          affectedAppointmentIds
+        }
+      });
+
       const patientName = sanitizeString(
-        updatedAppointment?.patientName || updatedAppointment?.patient_name || updatedAppointment?.name || foundAppointment?.patientName || foundAppointment?.name,
+        persistedUpdatedAppointment?.patientName || persistedUpdatedAppointment?.patient_name || persistedUpdatedAppointment?.name || foundAppointment?.patientName || foundAppointment?.name,
         180
       ) || 'paciente';
       const statusInfo = appointmentStatusLabelForLog(normalizedStatus);
@@ -14255,7 +14854,7 @@ async function startServer() {
           maintenanceProbeReassignment,
           source: safeSource,
           actorRole,
-          patientId: updatedAppointment?.patientId || updatedAppointment?.patient_id || null,
+          patientId: persistedUpdatedAppointment?.patientId || persistedUpdatedAppointment?.patient_id || null,
           note: appointmentNote || null
         })
       });
@@ -14267,9 +14866,11 @@ async function startServer() {
 
       return res.json({
         success: true,
-        appointment: updatedAppointment,
+        appointment: persistedUpdatedAppointment,
+        affectedAppointments: affectedPersistedAppointments,
         appointments: updatedClinicAppointments || nextAppointments,
-        maintenanceProbeReassignment
+        maintenanceProbeReassignment,
+        events
       });
     } catch (error: any) {
       console.error('[Appointments] status update error:', error?.message || String(error));
@@ -14434,6 +15035,7 @@ async function startServer() {
       }
 
       const validAppointmentIds = affectedAppointmentIds.filter((value) => isUuid(value));
+      let tableDeleteConfirmed = validAppointmentIds.length === 0;
       if (validAppointmentIds.length > 0) {
         let safePatch: Record<string, any> = cleanObject({
           status: 'deleted',
@@ -14450,7 +15052,10 @@ async function startServer() {
             .in('id', validAppointmentIds);
           if (!hasGlobalClinicAccess(actor) && clinicId) deleteQuery = deleteQuery.eq('clinic_id', clinicId);
           const result = await deleteQuery.select('id');
-          if (!result.error) break;
+          if (!result.error) {
+            tableDeleteConfirmed = true;
+            break;
+          }
 
           const missingColumn = extractMissingColumnName(result.error);
           if (missingColumn && missingColumn in safePatch) {
@@ -14467,6 +15072,9 @@ async function startServer() {
           console.warn('[Appointments] delete table sync failed:', result.error.message);
           break;
         }
+      }
+      if (!tableDeleteConfirmed) {
+        return res.status(500).json({ success: false, error: 'Não foi possível confirmar a persistência do agendamento.' });
       }
 
       const maintenanceProbeReassignment = await reassignMaintenanceSchedulesFromCancelledAppointments({
@@ -14507,13 +15115,28 @@ async function startServer() {
         req.session.user,
         'appointment_deleted'
       );
+      const events = await persistAppointmentDomainEvents({
+        eventType: 'appointment.deleted',
+        appointments: affectedAppointments,
+        actor,
+        clinicId: sanitizeString(foundClinicId || clinicId || foundAppointment?.clinic_id, 120),
+        idempotencyKey: sanitizeString(
+          req.body?.idempotencyKey || req.body?.idempotency_key || req.headers?.['x-idempotency-key'] || `delete:${appointmentId}:${recurrenceScope}`,
+          240
+        ),
+        payload: {
+          deletedAppointmentIds: affectedAppointmentIds,
+          recurrenceScope
+        }
+      });
 
       return res.json({
         success: true,
         deletedAppointmentIds: affectedAppointmentIds,
         appointments: updatedClinicAppointments,
         recurrenceScope,
-        maintenanceProbeReassignment
+        maintenanceProbeReassignment,
+        events
       });
     } catch (error: any) {
       console.error('[Appointments] delete error:', error?.message || String(error));
