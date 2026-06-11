@@ -10,6 +10,14 @@ export type MonthlyConferenceRow = {
   payer_id?: string | null;
   payer_name?: string | null;
   payer_name_snapshot?: string | null;
+  clinic_name?: string | null;
+  unit_name?: string | null;
+  financial_plan_name?: string | null;
+  insurance_card_number?: string | null;
+  copayment_amount_cents?: number | null;
+  expected_amount_cents?: number | null;
+  financial_status?: string | null;
+  professional_registry?: string | null;
   scheduled_start?: string | null;
   scheduled_end?: string | null;
   actual_start?: string | null;
@@ -24,6 +32,13 @@ export type MonthlyConferenceRow = {
   required_document_pending_count?: number | null;
   guide_number?: string | null;
   authorization_code?: string | null;
+  conference_status?: string | null;
+  conference_status_label?: string | null;
+  export_status?: string | null;
+  export_id?: string | null;
+  exported_at?: string | null;
+  exported_by_name?: string | null;
+  notes?: string | null;
   main_issues?: string[] | null;
   checklist?: Array<{ key?: string; label?: string; status?: string; required?: boolean; message?: string }> | null;
 };
@@ -66,6 +81,25 @@ export function formatConferenceMinutes(value: any): string {
   if (hours > 0 && remainder > 0) return `${hours}h ${remainder}min`;
   if (hours > 0) return `${hours}h`;
   return `${remainder}min`;
+}
+
+function formatCurrencyCents(value: any): string {
+  const cents = Math.round(Number(value || 0));
+  if (!Number.isFinite(cents) || cents <= 0) return '';
+  return (cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
+
+function formatTimeOnly(value: any): string {
+  if (!value) return '';
+  const date = new Date(String(value));
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toISOString().slice(11, 16);
+}
+
+function competenceMonth(value: any): string {
+  const text = String(value || '');
+  if (!text) return '';
+  return `${text.slice(0, 7)}-01`;
 }
 
 function rowIssues(row: MonthlyConferenceRow): string[] {
@@ -262,18 +296,41 @@ export function buildMonthlyConferenceSummary(rows: MonthlyConferenceRow[]): Mon
 }
 
 export const MONTHLY_CONFERENCE_EXPORT_FIELDS = [
+  'competenceMonth',
+  'clinicName',
+  'unitName',
   'scheduledDate',
+  'startTime',
+  'endTime',
   'patientName',
   'professionalName',
+  'professionalRegistry',
   'serviceType',
   'payerName',
+  'financialPlanName',
+  'insuranceCardNumber',
+  'guideNumber',
+  'authorizationCode',
+  'copaymentAmount',
+  'expectedAmount',
+  'financialStatus',
   'scheduledMinutes',
   'actualMinutes',
   'appointmentStatus',
   'readinessStatus',
+  'conferenceStatus',
+  'exportStatus',
+  'signaturePresent',
+  'reportPresent',
+  'pendingDocuments',
+  'pendingDetails',
   'pendingKinds',
   'guideStatus',
   'authorizationStatus',
+  'exportedAt',
+  'exportedBy',
+  'exportId',
+  'notes',
   'name',
   'payerName',
   'totalSessions',
@@ -289,18 +346,41 @@ export const MONTHLY_CONFERENCE_EXPORT_FIELDS = [
 
 export function buildMonthlyConferenceExportRows(rows: MonthlyConferenceRow[]) {
   return (Array.isArray(rows) ? rows : []).map((row) => ({
+    competenceMonth: competenceMonth(row.scheduled_start),
+    clinicName: row.clinic_name || '',
+    unitName: row.unit_name || '',
     scheduledDate: String(row.scheduled_start || '').slice(0, 10),
+    startTime: formatTimeOnly(row.scheduled_start || row.actual_start),
+    endTime: formatTimeOnly(row.scheduled_end || row.actual_end),
     patientName: row.patient_name || 'Paciente',
     professionalName: row.professional_name || 'Equipe',
+    professionalRegistry: row.professional_registry || '',
     serviceType: row.service_type || 'Sessao',
     payerName: row.payer_name || row.payer_name_snapshot || 'Sem pagador',
+    financialPlanName: row.financial_plan_name || '',
+    insuranceCardNumber: row.insurance_card_number || '',
+    guideNumber: row.guide_number || '',
+    authorizationCode: row.authorization_code || '',
+    copaymentAmount: formatCurrencyCents(row.copayment_amount_cents),
+    expectedAmount: row.expected_amount_cents ? formatCurrencyCents(row.expected_amount_cents) : 'Valor nao configurado',
+    financialStatus: row.financial_status || '',
     scheduledMinutes: Math.round(Number(row.scheduled_minutes || 0)),
     actualMinutes: Math.round(Number(row.actual_minutes || 0)),
     appointmentStatus: row.appointment_status || (Number(row.actual_minutes || 0) > 0 ? 'Realizada' : 'Agendada'),
     readinessStatus: normalizeConferenceStatus(row.readiness_status),
+    conferenceStatus: row.conference_status_label || row.conference_status || 'A revisar',
+    exportStatus: row.export_status || (row.export_id ? 'Exportado' : 'Nao exportado'),
+    signaturePresent: classifyConferencePendingKinds(row).includes('Assinatura') ? 'Nao' : 'Sim',
+    reportPresent: classifyConferencePendingKinds(row).includes('Relatorio') ? 'Nao' : 'Sim',
+    pendingDocuments: Math.max(0, Math.round(Number(row.required_document_pending_count || 0))),
+    pendingDetails: Array.isArray(row.main_issues) ? row.main_issues.join('; ') : '',
     pendingKinds: classifyConferencePendingKinds(row).join('; '),
     guideStatus: row.guide_number ? 'Informada' : 'Pendente/nao exigida',
-    authorizationStatus: row.authorization_code ? 'Informada' : 'Pendente/nao exigida'
+    authorizationStatus: row.authorization_code ? 'Informada' : 'Pendente/nao exigida',
+    exportedAt: row.exported_at || '',
+    exportedBy: row.exported_by_name || '',
+    exportId: row.export_id || '',
+    notes: row.notes || ''
   }));
 }
 

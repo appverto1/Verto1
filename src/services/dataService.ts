@@ -2583,6 +2583,27 @@ export const dataService = {
     }
   },
 
+  async updateMonthlyConferenceSessionStatus(appointmentId: string, payload: { status: 'reviewed' | 'reopened' | 'non_billable'; reason?: string }) {
+    const endpoint = `/api/conference/monthly/session/${encodeURIComponent(String(appointmentId))}/status`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'PATCH',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'updateMonthlyConferenceSessionStatus',
+        operation: 'write',
+        table: 'appointment_conference_statuses,appointment_closure_audit_logs',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, error: 'Não foi possível atualizar o status da conferência.' };
+    }
+  },
+
   async exportMonthlyConference(payload: any = {}) {
     const endpoint = '/api/conference/monthly/export';
     try {
@@ -2594,7 +2615,7 @@ export const dataService = {
       }, {
         helperName: 'exportMonthlyConference',
         operation: 'write',
-        table: 'appointment_closure_checks,operational_closure_exports,appointment_closure_audit_logs',
+        table: 'appointment_closure_checks,appointment_conference_statuses,operational_closure_exports,appointment_closure_audit_logs',
         hasExplicitColumns: true,
         requiresPatientOrSession: false
       });

@@ -3308,6 +3308,26 @@ const APPOINTMENT_CLOSURE_LIST_SELECT = [
   'updated_at'
 ].join(',');
 
+const APPOINTMENT_CONFERENCE_STATUS_SELECT = [
+  'id',
+  'organization_id',
+  'appointment_id',
+  'patient_id',
+  'payer_id',
+  'competence_month',
+  'status',
+  'reviewed_by',
+  'reviewed_at',
+  'exported_by',
+  'exported_at',
+  'export_id',
+  'reopened_by',
+  'reopened_at',
+  'reason',
+  'created_at',
+  'updated_at'
+].join(',');
+
 const APPOINTMENT_CLOSURE_LEGACY_LIST_SELECT = [
   'id',
   'organization_id',
@@ -30381,6 +30401,39 @@ async function startServer() {
 
       const patientNames = new Map<string, string>((patientsResult.error ? [] : patientsResult.data || []).map((row: any) => [sanitizeString(row.id, 120), sanitizeString(row.name, 180) || 'Paciente']));
       const professionalNames = new Map<string, string>((professionalsResult.error ? [] : professionalsResult.data || []).map((row: any) => [sanitizeString(row.id, 120), sanitizeString(row.name || row.email, 180) || 'Equipe']));
+      const financialPlansResult = patientIds.length > 0
+        ? await supabase
+            .from('patient_financial_plans')
+            .select(PATIENT_FINANCIAL_PLAN_SELECT)
+            .eq('organization_id', clinicId)
+            .in('patient_id', patientIds)
+            .eq('status', 'ACTIVE')
+            .limit(Math.min(patientIds.length * 8, 400))
+        : { data: [], error: null } as any;
+      if (financialPlansResult.error && !hasMissingFinancialSchema(financialPlansResult.error)) throw financialPlansResult.error;
+      const financialPlansByPatient = new Map<string, any[]>();
+      (financialPlansResult.error ? [] : financialPlansResult.data || []).forEach((plan: any) => {
+        const patientId = sanitizeString(plan?.patient_id, 120);
+        if (!patientId) return;
+        financialPlansByPatient.set(patientId, [...(financialPlansByPatient.get(patientId) || []), plan]);
+      });
+      const financialPlanNameForClosureRow = (row: any) => {
+        const plans = financialPlansByPatient.get(sanitizeString(row?.patient_id, 120)) || [];
+        const serviceType = sanitizeString(row?.service_type, 120);
+        const payerId = sanitizeString(row?.payer_id, 120);
+        const selected =
+          plans.find((plan: any) => payerId && sanitizeString(plan?.payer_id, 120) === payerId && financialPlanMatchesAppointmentService(plan, serviceType)) ||
+          plans.find((plan: any) => financialPlanMatchesAppointmentService(plan, serviceType)) ||
+          plans[0] ||
+          null;
+        return sanitizeString(
+          selected?.insurance_plan_name ||
+            selected?.service_name_snapshot ||
+            selected?.custom_service_name ||
+            selected?.payer_name_snapshot,
+          180
+        ) || null;
+      };
       const totals = {
         ready: totalsRows.filter((row: any) => row.readiness_status === 'READY').length,
         pending: totalsRows.filter((row: any) => row.readiness_status === 'PENDING').length,
@@ -30395,7 +30448,10 @@ async function startServer() {
       };
       return res.json({
         success: true,
-        data: rows.map((row: any) => normalizeClosureListRow(row, patientNames, professionalNames)),
+        data: rows.map((row: any) => ({
+          ...normalizeClosureListRow(row, patientNames, professionalNames),
+          financial_plan_name: financialPlanNameForClosureRow(row)
+        })),
         page,
         limit,
         totals
@@ -30437,6 +30493,30 @@ async function startServer() {
       ]);
       if (patientResult.error && !hasMissingFinancialSchema(patientResult.error)) throw patientResult.error;
       if (professionalResult.error && !hasMissingFinancialSchema(professionalResult.error)) throw professionalResult.error;
+      const financialPlansResult = isUuid(patientId)
+        ? await supabase
+            .from('patient_financial_plans')
+            .select(PATIENT_FINANCIAL_PLAN_SELECT)
+            .eq('organization_id', clinicId)
+            .eq('patient_id', patientId)
+            .eq('status', 'ACTIVE')
+            .limit(8)
+        : { data: [], error: null } as any;
+      if (financialPlansResult.error && !hasMissingFinancialSchema(financialPlansResult.error)) throw financialPlansResult.error;
+      const plans = financialPlansResult.error ? [] : financialPlansResult.data || [];
+      const payerId = sanitizeString(data?.payer_id, 120);
+      const selectedFinancialPlan =
+        plans.find((plan: any) => payerId && sanitizeString(plan?.payer_id, 120) === payerId && financialPlanMatchesAppointmentService(plan, data?.service_type)) ||
+        plans.find((plan: any) => financialPlanMatchesAppointmentService(plan, data?.service_type)) ||
+        plans[0] ||
+        null;
+      const financialPlanName = sanitizeString(
+        selectedFinancialPlan?.insurance_plan_name ||
+          selectedFinancialPlan?.service_name_snapshot ||
+          selectedFinancialPlan?.custom_service_name ||
+          selectedFinancialPlan?.payer_name_snapshot,
+        180
+      ) || null;
       await writeClosureAuditLog({
         organizationId: clinicId,
         appointmentId,
@@ -30456,6 +30536,7 @@ async function startServer() {
             new Map([[patientId, sanitizeString(patientResult.data?.name, 180) || 'Paciente']]),
             new Map([[professionalId, sanitizeString(professionalResult.data?.name || professionalResult.data?.email, 180) || 'Equipe']])
           ),
+          financial_plan_name: financialPlanName,
           checklist: Array.isArray(data?.checklist) ? data.checklist : []
         }
       });
@@ -30592,22 +30673,233 @@ async function startServer() {
     return scoped;
   };
 
-  const hydrateConferenceRows = async (rows: any[], clinicId: string) => {
+  const CONFERENCE_STATUS_LABELS: Record<string, string> = {
+    pending_review: 'A revisar',
+    reviewed: 'Conferido',
+    exported: 'Exportado',
+    reopened: 'Reaberto',
+    non_billable: 'Não faturável'
+  };
+
+  const normalizeAppointmentConferenceStatus = (value: any) => {
+    const status = sanitizeString(value, 40).trim().toLowerCase();
+    return Object.prototype.hasOwnProperty.call(CONFERENCE_STATUS_LABELS, status) ? status : 'pending_review';
+  };
+
+  const conferenceStatusLabel = (value: any) => CONFERENCE_STATUS_LABELS[normalizeAppointmentConferenceStatus(value)] || 'A revisar';
+
+  const conferenceExportStatusLabel = (row: any) => {
+    const status = normalizeAppointmentConferenceStatus(row?.status);
+    if (status === 'exported') return 'Exportado';
+    if (status === 'reopened') return 'Reaberto após exportação';
+    return 'Não exportado';
+  };
+
+  const getConferenceCompetenceMonth = (value: any) => {
+    const raw = sanitizeString(value, 80);
+    if (/^\d{4}-\d{2}/.test(raw)) return `${raw.slice(0, 7)}-01`;
+    const date = raw ? new Date(raw) : new Date();
+    if (Number.isNaN(date.getTime())) return new Date().toISOString().slice(0, 7) + '-01';
+    return `${date.toISOString().slice(0, 7)}-01`;
+  };
+
+  const normalizeConferenceExportType = (value: any) => {
+    const normalized = sanitizeString(value, 80).trim().toLowerCase();
+    const aliases: Record<string, string> = {
+      sessions: 'sessions_period',
+      sessions_period: 'sessions_period',
+      pending: 'pending_items',
+      pending_items: 'pending_items',
+      time_by_patient: 'patient_time',
+      patient_time: 'patient_time',
+      time_by_professional: 'professional_time',
+      professional_time: 'professional_time',
+      time_by_payer: 'payer_time',
+      payer_time: 'payer_time',
+      billing_conference_full: 'billing_conference_full'
+    };
+    return aliases[normalized] || 'billing_conference_full';
+  };
+
+  const isFinalConferenceExportType = (value: any) => normalizeConferenceExportType(value) === 'billing_conference_full';
+
+  const clinicExportSlug = (value: any) => {
+    const text = sanitizeString(value, 120)
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+    return text || 'clinica';
+  };
+
+  const actorDisplayName = (user: any) =>
+    sanitizeString(user?.name || user?.full_name || user?.email, 180) || 'Usuário Verto';
+
+  const planPayerMatchKey = (value: any) =>
+    sanitizeString(value, 180)
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .trim()
+      .toLowerCase();
+
+  const selectConferenceFinancialPlan = (plans: any[], row: any) => {
+    const payerId = sanitizeString(row?.payer_id, 120);
+    const payerName = planPayerMatchKey(row?.payer_name_snapshot || row?.payer_name);
+    const serviceType = sanitizeString(row?.service_type, 120);
+    const activePlans = (Array.isArray(plans) ? plans : []).filter((plan) => sanitizeString(plan?.status, 40).toUpperCase() === 'ACTIVE');
+    const serviceMatches = (plan: any) => !serviceType || financialPlanMatchesAppointmentService(plan, serviceType);
+    return (
+      activePlans.find((plan: any) => payerId && sanitizeString(plan?.payer_id, 120) === payerId && serviceMatches(plan)) ||
+      activePlans.find((plan: any) => payerName && planPayerMatchKey(plan?.payer_name_snapshot) === payerName && serviceMatches(plan)) ||
+      activePlans.find((plan: any) => serviceMatches(plan)) ||
+      activePlans[0] ||
+      null
+    );
+  };
+
+  const readConferenceStatusesForRows = async (rows: any[], clinicId: string) => {
+    const appointmentIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row?.appointment_id, 120)).filter((id: string) => isUuid(id))));
+    const byKey = new Map<string, any>();
+    if (!isUuid(clinicId) || appointmentIds.length === 0) return byKey;
+    const { data, error } = await supabase
+      .from('appointment_conference_statuses')
+      .select(APPOINTMENT_CONFERENCE_STATUS_SELECT)
+      .eq('organization_id', clinicId)
+      .in('appointment_id', appointmentIds)
+      .limit(Math.min(appointmentIds.length * 2, 500));
+    if (error) {
+      if (hasMissingFinancialSchema(error)) return byKey;
+      throw error;
+    }
+    (Array.isArray(data) ? data : []).forEach((statusRow: any) => {
+      const appointmentId = sanitizeString(statusRow?.appointment_id, 120);
+      const competenceMonth = sanitizeString(statusRow?.competence_month, 20);
+      if (appointmentId && competenceMonth) byKey.set(`${appointmentId}:${competenceMonth}`, statusRow);
+    });
+    return byKey;
+  };
+
+  const hydrateConferenceRows = async (rows: any[], clinicId: string, user?: any) => {
     const patientIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row.patient_id, 120)).filter((id: string) => isUuid(id))));
     const professionalIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row.professional_id, 120)).filter((id: string) => isUuid(id))));
+    const appointmentIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row.appointment_id, 120)).filter((id: string) => isUuid(id))));
     const [patientsResult, professionalsResult] = await Promise.all([
       patientIds.length > 0
-        ? supabase.from('patients').select('id, name').eq('clinic_id', clinicId).in('id', patientIds).limit(patientIds.length)
+        ? supabase.from('patients').select('id, name, clinic_id, insurance_name, insurance_card_number').eq('clinic_id', clinicId).in('id', patientIds).limit(patientIds.length)
         : Promise.resolve({ data: [], error: null } as any),
       professionalIds.length > 0
-        ? supabase.from('users').select('id, name, email').in('id', professionalIds).limit(professionalIds.length)
+        ? supabase.from('users').select('id, name, email, clinic_id, crp, council_number, council').in('id', professionalIds).limit(professionalIds.length)
         : Promise.resolve({ data: [], error: null } as any)
     ]);
-    if (patientsResult.error && !hasMissingFinancialSchema(patientsResult.error)) throw patientsResult.error;
-    if (professionalsResult.error && !hasMissingFinancialSchema(professionalsResult.error)) throw professionalsResult.error;
-    const patientNames = new Map<string, string>((patientsResult.data || []).map((row: any) => [sanitizeString(row.id, 120), sanitizeString(row.name, 180) || 'Paciente']));
-    const professionalNames = new Map<string, string>((professionalsResult.data || []).map((row: any) => [sanitizeString(row.id, 120), sanitizeString(row.name || row.email, 180) || 'Equipe']));
-    return rows.map((row: any) => normalizeClosureListRow(row, patientNames, professionalNames));
+    let safePatients = patientsResult.data || [];
+    if (patientsResult.error) {
+      if (!hasMissingFinancialSchema(patientsResult.error)) throw patientsResult.error;
+      const fallback = patientIds.length > 0
+        ? await supabase.from('patients').select('id, name, clinic_id').eq('clinic_id', clinicId).in('id', patientIds).limit(patientIds.length)
+        : { data: [], error: null } as any;
+      if (fallback.error && !hasMissingFinancialSchema(fallback.error)) throw fallback.error;
+      safePatients = fallback.data || [];
+    }
+    let safeProfessionals = professionalsResult.data || [];
+    if (professionalsResult.error) {
+      if (!hasMissingFinancialSchema(professionalsResult.error)) throw professionalsResult.error;
+      const fallback = professionalIds.length > 0
+        ? await supabase.from('users').select('id, name, email, clinic_id').in('id', professionalIds).limit(professionalIds.length)
+        : { data: [], error: null } as any;
+      if (fallback.error && !hasMissingFinancialSchema(fallback.error)) throw fallback.error;
+      safeProfessionals = fallback.data || [];
+    }
+
+    const [billingResult, financialPlansResult, statusMap] = await Promise.all([
+      appointmentIds.length > 0
+        ? supabase.from('appointment_billing_contexts').select(APPOINTMENT_BILLING_CONTEXT_SELECT).eq('organization_id', clinicId).in('appointment_id', appointmentIds).limit(appointmentIds.length)
+        : Promise.resolve({ data: [], error: null } as any),
+      patientIds.length > 0
+        ? supabase.from('patient_financial_plans').select(PATIENT_FINANCIAL_PLAN_SELECT).eq('organization_id', clinicId).in('patient_id', patientIds).eq('status', 'ACTIVE').limit(Math.min(patientIds.length * 8, 400))
+        : Promise.resolve({ data: [], error: null } as any),
+      readConferenceStatusesForRows(rows, clinicId)
+    ]);
+    if (billingResult.error && !hasMissingFinancialSchema(billingResult.error)) throw billingResult.error;
+    if (financialPlansResult.error && !hasMissingFinancialSchema(financialPlansResult.error)) throw financialPlansResult.error;
+
+    const exporterIds = Array.from(new Set(Array.from(statusMap.values()).flatMap((statusRow: any) => [
+      sanitizeString(statusRow?.exported_by, 120),
+      sanitizeString(statusRow?.reviewed_by, 120),
+      sanitizeString(statusRow?.reopened_by, 120)
+    ]).filter((id: string) => isUuid(id))));
+    const exportersResult = exporterIds.length > 0
+      ? await supabase.from('users').select('id, name, email').in('id', exporterIds).limit(exporterIds.length)
+      : { data: [], error: null } as any;
+    if (exportersResult.error && !hasMissingFinancialSchema(exportersResult.error)) throw exportersResult.error;
+
+    const patientsById = new Map<string, any>((safePatients || []).map((row: any) => [sanitizeString(row.id, 120), row]));
+    const professionalsById = new Map<string, any>((safeProfessionals || []).map((row: any) => [sanitizeString(row.id, 120), row]));
+    const peopleNames = new Map<string, string>((exportersResult.error ? [] : exportersResult.data || []).map((row: any) => [sanitizeString(row.id, 120), sanitizeString(row.name || row.email, 180) || 'Equipe']));
+    const billingByAppointment = new Map<string, any>((billingResult.error ? [] : billingResult.data || []).map((row: any) => [sanitizeString(row.appointment_id, 120), mergeBillingContextMetadata(row)]));
+    const financialPlansByPatient = new Map<string, any[]>();
+    (financialPlansResult.error ? [] : financialPlansResult.data || []).forEach((plan: any) => {
+      const patientId = sanitizeString(plan?.patient_id, 120);
+      if (!patientId) return;
+      financialPlansByPatient.set(patientId, [...(financialPlansByPatient.get(patientId) || []), plan]);
+    });
+    const patientNames = new Map<string, string>(Array.from(patientsById.entries()).map(([id, row]) => [id, sanitizeString(row?.name, 180) || 'Paciente']));
+    const professionalNames = new Map<string, string>(Array.from(professionalsById.entries()).map(([id, row]) => [id, sanitizeString(row?.name || row?.email, 180) || 'Equipe']));
+    const clinicName = sanitizeString(user?.clinicSettings?.clinicName || user?.workspaceName || user?.clinicName, 180) || 'Clínica';
+
+    return rows.map((row: any) => {
+      const base = normalizeClosureListRow(row, patientNames, professionalNames);
+      const patient = patientsById.get(sanitizeString(row?.patient_id, 120));
+      const professional = professionalsById.get(sanitizeString(row?.professional_id, 120));
+      const billing = billingByAppointment.get(sanitizeString(row?.appointment_id, 120)) || {};
+      const financialPlan = selectConferenceFinancialPlan(financialPlansByPatient.get(sanitizeString(row?.patient_id, 120)) || [], {
+        ...row,
+        payer_name: base.payer_name
+      });
+      const competenceMonth = getConferenceCompetenceMonth(row?.scheduled_start || row?.actual_start);
+      const statusRow = statusMap.get(`${sanitizeString(row?.appointment_id, 120)}:${competenceMonth}`);
+      const conferenceStatus = statusRow?.status || (base.readiness_status === 'NOT_BILLABLE' ? 'non_billable' : 'pending_review');
+      const professionalRegistry = sanitizeString(
+        professional?.crp ||
+          professional?.council_number ||
+          professional?.professional_registry ||
+          professional?.registry,
+        80
+      );
+      return {
+        ...base,
+        clinic_name: clinicName,
+        unit_name: '',
+        competence_month: competenceMonth,
+        insurance_card_number: sanitizeString(billing?.insurance_card_number || patient?.insurance_card_number, 120) || null,
+        financial_plan_name: sanitizeString(
+          financialPlan?.insurance_plan_name ||
+            financialPlan?.service_name_snapshot ||
+            financialPlan?.custom_service_name ||
+            financialPlan?.payer_name_snapshot,
+          180
+        ) || null,
+        copayment_amount_cents: Number(financialPlan?.copayment_amount_cents || 0) || 0,
+        expected_amount_cents: Number(financialPlan?.amount_cents || 0) || 0,
+        financial_status: sanitizeString(financialPlan?.status, 40) || null,
+        professional_registry: professionalRegistry || null,
+        guide_number: sanitizeString(billing?.guide_number || base.guide_number, 120) || null,
+        authorization_code: sanitizeString(billing?.authorization_code || base.authorization_code, 120) || null,
+        notes: sanitizeTextField(billing?.notes || financialPlan?.notes, 600) || null,
+        conference_status: normalizeAppointmentConferenceStatus(conferenceStatus),
+        conference_status_label: conferenceStatusLabel(conferenceStatus),
+        export_status: conferenceExportStatusLabel(statusRow || { status: conferenceStatus }),
+        reviewed_at: statusRow?.reviewed_at || null,
+        reviewed_by: statusRow?.reviewed_by || null,
+        exported_at: statusRow?.exported_at || null,
+        exported_by: statusRow?.exported_by || null,
+        exported_by_name: peopleNames.get(sanitizeString(statusRow?.exported_by, 120)) || null,
+        export_id: statusRow?.export_id || null,
+        reopened_at: statusRow?.reopened_at || null,
+        reopened_by: statusRow?.reopened_by || null,
+        conference_reason: statusRow?.reason || null
+      };
+    });
   };
 
   const loadConferenceClosureRows = async (params: {
@@ -30645,7 +30937,7 @@ async function startServer() {
     status: 'GENERATED' | 'FAILED';
     metadata?: Record<string, any>;
   }) => {
-    if (!isUuid(params.organizationId)) return;
+    if (!isUuid(params.organizationId)) return null;
     const payload = cleanObject({
       id: crypto.randomUUID(),
       organization_id: params.organizationId,
@@ -30657,9 +30949,15 @@ async function startServer() {
       status: params.status,
       metadata: sanitizeClinicalPayload(params.metadata || {})
     });
-    const { error } = await supabase.from('operational_closure_exports').insert([payload]);
-    if (error && !hasMissingFinancialSchema(error)) {
+    const { data, error } = await supabase
+      .from('operational_closure_exports')
+      .insert([payload])
+      .select('id, generated_at, generated_by, export_type, row_count, status')
+      .maybeSingle();
+    if (error) {
       console.warn('[MonthlyConference] export audit failed:', error?.message || String(error));
+      if (!hasMissingFinancialSchema(error)) throw error;
+      return null;
     }
     await writeClosureAuditLog({
       organizationId: params.organizationId,
@@ -30671,6 +30969,76 @@ async function startServer() {
         filters: payload.filters
       }
     });
+    return data || payload;
+  };
+
+  const upsertAppointmentConferenceStatuses = async (params: {
+    clinicId: string;
+    user: any;
+    rows: any[];
+    status: 'pending_review' | 'reviewed' | 'exported' | 'reopened' | 'non_billable';
+    reason?: string | null;
+    exportId?: string | null;
+  }) => {
+    const clinicId = sanitizeString(params.clinicId, 120);
+    const actorId = sanitizeString(params.user?.id, 120);
+    const now = new Date().toISOString();
+    const rows = Array.isArray(params.rows) ? params.rows : [];
+    if (!isUuid(clinicId) || rows.length === 0) return [];
+    const status = normalizeAppointmentConferenceStatus(params.status) as any;
+    const reason = sanitizeTextField(params.reason, 600);
+    if (status === 'reopened' && reason.length < 8) {
+      const error = new Error('Justificativa obrigatória para reabrir conferência exportada.');
+      (error as any).status = 400;
+      throw error;
+    }
+    const payloads = rows
+      .map((row: any) => {
+        const appointmentId = sanitizeString(row?.appointment_id, 120);
+        if (!isUuid(appointmentId)) return null;
+        const competenceMonth = getConferenceCompetenceMonth(row?.scheduled_start || row?.actual_start);
+        return cleanObject({
+          organization_id: clinicId,
+          appointment_id: appointmentId,
+          patient_id: isUuid(sanitizeString(row?.patient_id, 120)) ? sanitizeString(row?.patient_id, 120) : null,
+          payer_id: isUuid(sanitizeString(row?.payer_id, 120)) ? sanitizeString(row?.payer_id, 120) : null,
+          competence_month: competenceMonth,
+          status,
+          reviewed_by: status === 'reviewed' && isUuid(actorId) ? actorId : undefined,
+          reviewed_at: status === 'reviewed' ? now : undefined,
+          exported_by: status === 'exported' && isUuid(actorId) ? actorId : undefined,
+          exported_at: status === 'exported' ? now : undefined,
+          export_id: status === 'exported' && isUuid(sanitizeString(params.exportId, 120)) ? sanitizeString(params.exportId, 120) : undefined,
+          reopened_by: status === 'reopened' && isUuid(actorId) ? actorId : undefined,
+          reopened_at: status === 'reopened' ? now : undefined,
+          reason: status === 'reopened' ? reason : status === 'reviewed' && reason ? reason : undefined,
+          updated_at: now
+        });
+      })
+      .filter(Boolean);
+    if (payloads.length === 0) return [];
+    const { data, error } = await supabase
+      .from('appointment_conference_statuses')
+      .upsert(payloads, { onConflict: 'organization_id,appointment_id,competence_month' })
+      .select(APPOINTMENT_CONFERENCE_STATUS_SELECT);
+    if (error) throw error;
+    await writeClosureAuditLog({
+      organizationId: clinicId,
+      action:
+        status === 'exported'
+          ? 'CONFERENCE_STATUS_EXPORTED'
+          : status === 'reopened'
+            ? 'CONFERENCE_STATUS_REOPENED'
+            : 'CONFERENCE_STATUS_REVIEWED',
+      performedBy: actorId,
+      metadata: {
+        status,
+        reason: reason || undefined,
+        exportId: params.exportId || undefined,
+        appointmentCount: payloads.length
+      }
+    });
+    return Array.isArray(data) ? data : [];
   };
 
   const assertConferenceFilterOwnership = async (filters: any, clinicId: string) => {
@@ -30714,8 +31082,8 @@ async function startServer() {
         loadConferenceClosureRows({ clinicId, user: req.session.user, filters, paginated: true }),
         loadConferenceClosureRows({ clinicId, user: req.session.user, filters, hardLimit: 2000 })
       ]);
-      const hydratedPageRows = await hydrateConferenceRows(pageRows, clinicId);
-      const hydratedAggregateRows = await hydrateConferenceRows(aggregateRows, clinicId);
+      const hydratedPageRows = await hydrateConferenceRows(pageRows, clinicId, req.session.user);
+      const hydratedAggregateRows = await hydrateConferenceRows(aggregateRows, clinicId, req.session.user);
       const summary = buildMonthlyConferenceSummary(hydratedAggregateRows);
       await writeClosureAuditLog({
         organizationId: clinicId,
@@ -30754,7 +31122,7 @@ async function startServer() {
       if (!isUuid(clinicId) || !filters.ok) return res.status(400).json(conferenceSafeError(400));
       if (!(await assertConferenceFilterOwnership(filters, clinicId))) return res.status(404).json(conferenceSafeError(404));
       const rows = await loadConferenceClosureRows({ clinicId, user: req.session.user, filters, hardLimit: 2000 });
-      const hydratedRows = await hydrateConferenceRows(rows, clinicId);
+      const hydratedRows = await hydrateConferenceRows(rows, clinicId, req.session.user);
       const summary = buildMonthlyConferenceSummary(hydratedRows);
       return res.json({ success: true, data: (summary as any)[summaryKey] || [], kpis: summary.kpis });
     } catch (error: any) {
@@ -30786,7 +31154,7 @@ async function startServer() {
         throw error;
       }
       if (!data?.appointment_id) return res.status(404).json(conferenceSafeError(404));
-      const hydrated = await hydrateConferenceRows([data], clinicId);
+      const hydrated = await hydrateConferenceRows([data], clinicId, req.session.user);
       await writeClosureAuditLog({
         organizationId: clinicId,
         appointmentId,
@@ -30843,62 +31211,187 @@ async function startServer() {
     }
   });
 
+  app.patch('/api/conference/monthly/session/:appointmentId/status', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de status da conferência')) return;
+      const appointmentId = sanitizeString(req.params.appointmentId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!isUuid(appointmentId) || !isUuid(clinicId)) return res.status(400).json(conferenceSafeError(400));
+      const requestedStatus = normalizeAppointmentConferenceStatus(req.body?.status || req.body?.conferenceStatus || req.body?.conference_status);
+      if (!['reviewed', 'reopened', 'non_billable'].includes(requestedStatus)) {
+        return res.status(400).json({ success: false, error: 'Status de conferência inválido.' });
+      }
+      const reason = sanitizeTextField(req.body?.reason || req.body?.justificativa, 600);
+      let closureResult = await fetchAppointmentClosureCheckRow({
+        organizationId: clinicId,
+        appointmentId,
+        user: req.session.user
+      });
+      let closureRow = closureResult.data;
+      if (!closureRow) {
+        const generated = await persistAppointmentClosureCheck({ appointmentId, user: req.session.user, force: true });
+        if (!generated.ok) return res.status((generated as any).status || 404).json(conferenceSafeError((generated as any).status || 404));
+        closureRow = (generated as any).data;
+      }
+      if (!closureRow?.appointment_id) return res.status(404).json(conferenceSafeError(404));
+      if (requestedStatus === 'reopened') {
+        const currentStatusMap = await readConferenceStatusesForRows([closureRow], clinicId);
+        const currentStatus = currentStatusMap.get(`${appointmentId}:${getConferenceCompetenceMonth(closureRow?.scheduled_start || closureRow?.actual_start)}`);
+        const currentStatusValue = normalizeAppointmentConferenceStatus(currentStatus?.status);
+        if (!['exported', 'reopened'].includes(currentStatusValue)) {
+          return res.status(400).json({ success: false, error: 'Apenas itens exportados podem ser reabertos.' });
+        }
+      }
+      const persistedStatuses = await upsertAppointmentConferenceStatuses({
+        clinicId,
+        user: req.session.user,
+        rows: [closureRow],
+        status: requestedStatus as any,
+        reason
+      });
+      const hydrated = await hydrateConferenceRows([closureRow], clinicId, req.session.user);
+      return res.json({
+        success: true,
+        data: hydrated[0] || null,
+        conferenceStatus: persistedStatuses[0] || null
+      });
+    } catch (error: any) {
+      console.warn('[MonthlyConference] status update failed:', error?.message || String(error));
+      return res.status(Number(error?.status || 500)).json({
+        success: false,
+        error: error?.status === 400 ? error.message : 'Não foi possível atualizar o status da conferência.'
+      });
+    }
+  });
+
   app.post('/api/conference/monthly/export', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
     try {
       if (!enforcePayloadLimit(req, res, 64 * 1024, 'Payload de exportação da conferência')) return;
-      const exportType = sanitizeString(req.body?.exportType || req.body?.export_type || 'sessions', 80);
+      const exportType = normalizeConferenceExportType(req.body?.exportType || req.body?.export_type || 'billing_conference_full');
       const filters = parseConferenceFilters(req.body?.filters || req.body || {});
       if (!isUuid(clinicId) || !filters.ok) return res.status(400).json(conferenceSafeError(400));
       if (!(await assertConferenceFilterOwnership(filters, clinicId))) return res.status(404).json(conferenceSafeError(404));
       const requestedFields = Array.isArray(req.body?.fields) ? req.body.fields.map((field: any) => sanitizeString(field, 80)) : [];
       const rows = await loadConferenceClosureRows({ clinicId, user: req.session.user, filters, hardLimit: 2000 });
-      const hydratedRows = await hydrateConferenceRows(rows, clinicId);
+      let hydratedRows = await hydrateConferenceRows(rows, clinicId, req.session.user);
       const summary = buildMonthlyConferenceSummary(hydratedRows);
-      const sessionRows = buildMonthlyConferenceExportRows(hydratedRows);
+      const actorName = actorDisplayName(req.session.user);
+      let sessionRows = buildMonthlyConferenceExportRows(hydratedRows);
       let exportRows: any[] = sessionRows;
-      let defaultFields: string[] = ['scheduledDate', 'patientName', 'professionalName', 'serviceType', 'payerName', 'scheduledMinutes', 'actualMinutes', 'readinessStatus', 'pendingKinds'];
-      if (exportType === 'pending') {
-        exportRows = sessionRows.filter((row: any) => String(row.pendingKinds || '').trim());
-      } else if (exportType === 'time_by_patient') {
+      let defaultFields: string[] = [
+        'competenceMonth',
+        'clinicName',
+        'unitName',
+        'scheduledDate',
+        'startTime',
+        'endTime',
+        'patientName',
+        'professionalName',
+        'professionalRegistry',
+        'serviceType',
+        'payerName',
+        'financialPlanName',
+        'insuranceCardNumber',
+        'guideNumber',
+        'authorizationCode',
+        'copaymentAmount',
+        'expectedAmount',
+        'financialStatus',
+        'scheduledMinutes',
+        'actualMinutes',
+        'appointmentStatus',
+        'readinessStatus',
+        'conferenceStatus',
+        'exportStatus',
+        'signaturePresent',
+        'reportPresent',
+        'pendingDocuments',
+        'pendingDetails',
+        'exportedAt',
+        'exportedBy',
+        'exportId',
+        'notes'
+      ];
+      if (exportType === 'pending_items') {
+        exportRows = sessionRows.filter((row: any) => String(row.pendingKinds || row.pendingDetails || '').trim());
+        defaultFields = ['competenceMonth', 'clinicName', 'scheduledDate', 'patientName', 'professionalName', 'payerName', 'readinessStatus', 'conferenceStatus', 'pendingKinds', 'pendingDetails', 'exportedAt', 'exportedBy', 'exportId'];
+      } else if (exportType === 'patient_time') {
         exportRows = summary.byPatient.map((row: any) => ({ name: row.name, totalSessions: row.totalSessions, realizedSessions: row.realizedSessions, scheduledMinutes: row.scheduledMinutes, actualMinutes: row.actualMinutes, pendingSignatures: row.pendingSignatures, pendingReports: row.pendingReports }));
         defaultFields = ['name', 'totalSessions', 'realizedSessions', 'scheduledMinutes', 'actualMinutes', 'pendingSignatures', 'pendingReports'];
-      } else if (exportType === 'time_by_professional') {
+      } else if (exportType === 'professional_time') {
         exportRows = summary.byProfessional.map((row: any) => ({ name: row.name, workedDaysCount: row.workedDaysCount, totalSessions: row.totalSessions, realizedSessions: row.realizedSessions, scheduledMinutes: row.scheduledMinutes, actualMinutes: row.actualMinutes, pendingReports: row.pendingReports }));
         defaultFields = ['name', 'workedDaysCount', 'totalSessions', 'realizedSessions', 'scheduledMinutes', 'actualMinutes', 'pendingReports'];
-      } else if (exportType === 'time_by_payer') {
+      } else if (exportType === 'payer_time') {
         exportRows = summary.byPayer.map((row: any) => ({ payerName: row.payerName, totalSessions: row.totalSessions, ready: row.ready, pending: row.pending, pendingGuides: row.pendingGuides, pendingAuthorizations: row.pendingAuthorizations, pendingSignatures: row.pendingSignatures, pendingReports: row.pendingReports }));
         defaultFields = ['payerName', 'totalSessions', 'ready', 'pending', 'pendingGuides', 'pendingAuthorizations', 'pendingSignatures', 'pendingReports'];
       }
-      const fields = (requestedFields.length > 0 ? requestedFields : defaultFields)
-        .filter((field: string) => (MONTHLY_CONFERENCE_EXPORT_FIELDS as readonly string[]).includes(field));
-      const csv = rowsToCsv(exportRows, fields.length > 0 ? fields : defaultFields);
-      await writeConferenceExportAudit({
+      const auditRecord = await writeConferenceExportAudit({
         organizationId: clinicId,
         exportType,
         filters,
         generatedBy: sanitizeString(req.session.user?.id, 120),
         rowCount: exportRows.length,
         status: 'GENERATED',
-        metadata: { fieldCount: fields.length }
+        metadata: { requestedFieldCount: requestedFields.length, finalBillingConference: isFinalConferenceExportType(exportType) }
       });
+      if (!auditRecord?.id) throw new Error('conference_export_audit_unavailable');
+
+      let affectedItems: any[] = [];
+      if (isFinalConferenceExportType(exportType) && rows.length > 0) {
+        await upsertAppointmentConferenceStatuses({
+          clinicId,
+          user: req.session.user,
+          rows,
+          status: 'exported',
+          exportId: sanitizeString(auditRecord.id, 120)
+        });
+        hydratedRows = await hydrateConferenceRows(rows, clinicId, req.session.user);
+        affectedItems = hydratedRows;
+      } else {
+        hydratedRows = hydratedRows.map((row: any) => ({
+          ...row,
+          export_id: sanitizeString(auditRecord.id, 120),
+          exported_at: auditRecord.generated_at || new Date().toISOString(),
+          exported_by_name: actorName,
+          export_status: 'Exportação parcial'
+        }));
+      }
+
+      sessionRows = buildMonthlyConferenceExportRows(hydratedRows);
+      if (exportType === 'billing_conference_full' || exportType === 'sessions_period') {
+        exportRows = sessionRows;
+      } else if (exportType === 'pending_items') {
+        exportRows = sessionRows.filter((row: any) => String(row.pendingKinds || row.pendingDetails || '').trim());
+      }
+      const fields = (requestedFields.length > 0 ? requestedFields : defaultFields)
+        .filter((field: string) => (MONTHLY_CONFERENCE_EXPORT_FIELDS as readonly string[]).includes(field));
+      const csv = rowsToCsv(exportRows, fields.length > 0 ? fields : defaultFields);
+      const monthLabel = sanitizeString(filters.fromIso, 20).slice(0, 7) || new Date().toISOString().slice(0, 7);
+      const clinicName = hydratedRows[0]?.clinic_name || req.session.user?.clinicSettings?.clinicName || req.session.user?.workspaceName || 'clinica';
       return res.json({
         success: true,
-        fileName: `conferencia-mensal-${new Date().toISOString().slice(0, 10)}.csv`,
+        fileName: `conferencia-convenios-${monthLabel}-${clinicExportSlug(clinicName)}.csv`,
         contentType: 'text/csv; charset=utf-8',
         rowCount: exportRows.length,
+        exportId: auditRecord.id,
+        affectedItems,
         csv
       });
     } catch (error: any) {
       console.warn('[MonthlyConference] export failed:', error?.message || String(error));
-      await writeConferenceExportAudit({
-        organizationId: clinicId,
-        exportType: sanitizeString(req.body?.exportType || req.body?.export_type || 'sessions', 80),
-        filters: req.body?.filters || {},
-        generatedBy: sanitizeString(req.session?.user?.id, 120),
-        rowCount: 0,
-        status: 'FAILED'
-      });
+      try {
+        await writeConferenceExportAudit({
+          organizationId: clinicId,
+          exportType: normalizeConferenceExportType(req.body?.exportType || req.body?.export_type || 'billing_conference_full'),
+          filters: req.body?.filters || {},
+          generatedBy: sanitizeString(req.session?.user?.id, 120),
+          rowCount: 0,
+          status: 'FAILED'
+        });
+      } catch (auditError: any) {
+        console.warn('[MonthlyConference] failed export audit unavailable:', auditError?.message || String(auditError));
+      }
       return res.status(500).json(conferenceSafeError(500));
     }
   });

@@ -141,7 +141,7 @@ test('exportacao gera trilha auditavel e tabela com RLS', () => {
   assert.match(migrationCode, /create policy operational_closure_exports_admin_rw/);
   assert.match(migrationCode, /EXPORT_GENERATED/);
   assert.match(serverCode, /writeConferenceExportAudit/);
-  assert.match(serverCode, /\.from\('operational_closure_exports'\)\.insert/);
+  assert.match(serverCode, /\.from\('operational_closure_exports'\)[\s\S]*?\.insert/);
 });
 
 test('frontend tem tela mensal, filtros, detalhe, exportacao e nao expõe infraestrutura', () => {

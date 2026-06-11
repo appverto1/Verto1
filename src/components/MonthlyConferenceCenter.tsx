@@ -31,6 +31,11 @@ type ConferenceRow = {
   professional_name?: string | null;
   service_type?: string | null;
   payer_name?: string | null;
+  clinic_name?: string | null;
+  unit_name?: string | null;
+  financial_plan_name?: string | null;
+  insurance_card_number?: string | null;
+  professional_registry?: string | null;
   scheduled_start?: string | null;
   scheduled_end?: string | null;
   actual_start?: string | null;
@@ -43,6 +48,13 @@ type ConferenceRow = {
   required_document_pending_count?: number | null;
   guide_number?: string | null;
   authorization_code?: string | null;
+  conference_status?: string | null;
+  conference_status_label?: string | null;
+  export_status?: string | null;
+  export_id?: string | null;
+  exported_at?: string | null;
+  exported_by_name?: string | null;
+  conference_reason?: string | null;
   main_issues?: string[];
   checklist?: any[];
   payerRules?: any;
@@ -59,12 +71,20 @@ type MonthlyConferenceCenterProps = {
 };
 
 const statusMeta: Record<ConferenceStatus, { label: string; className: string; icon: React.ComponentType<any> }> = {
-  READY: { label: "Pronta", className: "bg-emerald-50 text-emerald-700 ring-emerald-200", icon: CheckCircle2 },
-  PENDING: { label: "Com pendências", className: "bg-orange-50 text-orange-700 ring-orange-200", icon: XCircle },
+  READY: { label: "Pronta para faturar", className: "bg-emerald-50 text-emerald-700 ring-emerald-200", icon: CheckCircle2 },
+  PENDING: { label: "Pendente", className: "bg-orange-50 text-orange-700 ring-orange-200", icon: XCircle },
   WARNING: { label: "Em atenção", className: "bg-amber-50 text-amber-700 ring-amber-200", icon: AlertTriangle },
   NOT_BILLABLE: { label: "Não faturável", className: "bg-slate-100 text-slate-700 ring-slate-200", icon: ShieldAlert },
   DRAFT: { label: "Em aberto", className: "bg-sky-50 text-sky-700 ring-sky-200", icon: CalendarDays },
   UNKNOWN: { label: "A revisar", className: "bg-zinc-100 text-zinc-700 ring-zinc-200", icon: AlertTriangle },
+};
+
+const conferenceStatusMeta: Record<string, { label: string; className: string }> = {
+  pending_review: { label: "A revisar", className: "bg-zinc-100 text-zinc-700 ring-zinc-200" },
+  reviewed: { label: "Conferido", className: "bg-emerald-50 text-emerald-700 ring-emerald-200" },
+  exported: { label: "Exportado", className: "bg-indigo-50 text-indigo-700 ring-indigo-200" },
+  reopened: { label: "Reaberto", className: "bg-amber-50 text-amber-700 ring-amber-200" },
+  non_billable: { label: "Não faturável", className: "bg-slate-100 text-slate-700 ring-slate-200" },
 };
 
 const pendingTone: Record<string, string> = {
@@ -100,6 +120,11 @@ function toApiDate(value: string, endOfDay = false) {
 function normalizeStatus(value?: string | null): ConferenceStatus {
   const status = String(value || "UNKNOWN").toUpperCase();
   return Object.prototype.hasOwnProperty.call(statusMeta, status) ? (status as ConferenceStatus) : "UNKNOWN";
+}
+
+function normalizeConferenceWorkflowStatus(value?: string | null) {
+  const status = String(value || "pending_review").toLowerCase();
+  return Object.prototype.hasOwnProperty.call(conferenceStatusMeta, status) ? status : "pending_review";
 }
 
 function formatDateTime(value?: string | null) {
@@ -154,9 +179,45 @@ export function MonthlyConferenceCenter({
   const [detail, setDetail] = useState<ConferenceRow | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
-  const [exportType, setExportType] = useState("sessions");
-  const [exportFields, setExportFields] = useState<string[]>(["scheduledDate", "patientName", "professionalName", "serviceType", "payerName", "scheduledMinutes", "actualMinutes", "readinessStatus", "pendingKinds"]);
+  const [exportType, setExportType] = useState("billing_conference_full");
+  const [exportFields, setExportFields] = useState<string[]>([
+    "competenceMonth",
+    "clinicName",
+    "unitName",
+    "scheduledDate",
+    "startTime",
+    "endTime",
+    "patientName",
+    "professionalName",
+    "professionalRegistry",
+    "serviceType",
+    "payerName",
+    "financialPlanName",
+    "insuranceCardNumber",
+    "guideNumber",
+    "authorizationCode",
+    "copaymentAmount",
+    "expectedAmount",
+    "financialStatus",
+    "scheduledMinutes",
+    "actualMinutes",
+    "appointmentStatus",
+    "readinessStatus",
+    "conferenceStatus",
+    "exportStatus",
+    "signaturePresent",
+    "reportPresent",
+    "pendingDocuments",
+    "pendingDetails",
+    "exportedAt",
+    "exportedBy",
+    "exportId",
+    "notes",
+  ]);
   const [exporting, setExporting] = useState(false);
+  const [actionLoadingId, setActionLoadingId] = useState("");
+  const [reopenTarget, setReopenTarget] = useState<ConferenceRow | null>(null);
+  const [reopenReason, setReopenReason] = useState("");
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
     checklist: true,
     payer: true,
@@ -262,6 +323,59 @@ export function MonthlyConferenceCenter({
     }
   };
 
+  const applyUpdatedConferenceRows = (items: ConferenceRow[]) => {
+    const updates = new Map(
+      (Array.isArray(items) ? items : [])
+        .filter((item) => item?.appointment_id)
+        .map((item) => [String(item.appointment_id), item])
+    );
+    if (updates.size === 0) return;
+    setRows((current) => current.map((row) => updates.get(String(row.appointment_id || "")) || row));
+    setDetail((current) => {
+      if (!current?.appointment_id) return current;
+      return updates.get(String(current.appointment_id)) || current;
+    });
+  };
+
+  const markReviewed = async (row: ConferenceRow) => {
+    const appointmentId = String(row.appointment_id || "");
+    if (!appointmentId) return;
+    setActionLoadingId(appointmentId);
+    setError("");
+    try {
+      const result = await dataService.updateMonthlyConferenceSessionStatus(appointmentId, { status: "reviewed" });
+      if (!result?.success || !result.data) {
+        setError(result?.error || "Não foi possível marcar a sessão como conferida.");
+        return;
+      }
+      applyUpdatedConferenceRows([result.data]);
+    } finally {
+      setActionLoadingId("");
+    }
+  };
+
+  const submitReopen = async () => {
+    const appointmentId = String(reopenTarget?.appointment_id || "");
+    if (!appointmentId || reopenReason.trim().length < 8) return;
+    setActionLoadingId(appointmentId);
+    setError("");
+    try {
+      const result = await dataService.updateMonthlyConferenceSessionStatus(appointmentId, {
+        status: "reopened",
+        reason: reopenReason.trim(),
+      });
+      if (!result?.success || !result.data) {
+        setError(result?.error || "Não foi possível reabrir a conferência.");
+        return;
+      }
+      applyUpdatedConferenceRows([result.data]);
+      setReopenTarget(null);
+      setReopenReason("");
+    } finally {
+      setActionLoadingId("");
+    }
+  };
+
   const runExport = async () => {
     setExporting(true);
     setError("");
@@ -282,6 +396,7 @@ export function MonthlyConferenceCenter({
       link.download = result.fileName || "conferencia-mensal.csv";
       link.click();
       URL.revokeObjectURL(url);
+      if (Array.isArray(result.affectedItems)) applyUpdatedConferenceRows(result.affectedItems);
       setExportOpen(false);
     } finally {
       setExporting(false);
@@ -503,20 +618,24 @@ export function MonthlyConferenceCenter({
                   <th className="px-4 py-3">Realizado</th>
                   <th className="px-4 py-3">Consulta</th>
                   <th className="px-4 py-3">Fechamento</th>
+                  <th className="px-4 py-3">Conferência</th>
                   <th className="px-4 py-3">Pendências</th>
                   <th className="px-4 py-3 text-right">Ações</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {loading ? (
-                  <tr><td colSpan={11} className="px-4 py-10 text-center text-slate-500"><Loader2 className="mx-auto mb-2 animate-spin" size={20} />Carregando conferência</td></tr>
+                  <tr><td colSpan={12} className="px-4 py-10 text-center text-slate-500"><Loader2 className="mx-auto mb-2 animate-spin" size={20} />Carregando conferência</td></tr>
                 ) : rows.length === 0 ? (
-                  <tr><td colSpan={11} className="px-4 py-10 text-center text-slate-500">Nenhuma sessão encontrada no período.</td></tr>
+                  <tr><td colSpan={12} className="px-4 py-10 text-center text-slate-500">Nenhuma sessão encontrada no período.</td></tr>
                 ) : rows.map((row, index) => {
                   const status = normalizeStatus(row.readiness_status);
                   const meta = statusMeta[status];
                   const StatusIcon = meta.icon;
                   const pendingKinds = classifyConferencePendingKinds(row);
+                  const workflowStatus = normalizeConferenceWorkflowStatus(row.conference_status);
+                  const workflowMeta = conferenceStatusMeta[workflowStatus];
+                  const isBusy = actionLoadingId === row.appointment_id;
                   return (
                     <tr key={`${row.appointment_id || "session"}-${index}`} className="align-top hover:bg-slate-50/70">
                       <td className="px-4 py-3 text-slate-700">{formatDateTime(row.scheduled_start)}</td>
@@ -533,6 +652,14 @@ export function MonthlyConferenceCenter({
                           {meta.label}
                         </span>
                       </td>
+                      <td className="px-4 py-3">
+                        <div className="flex flex-col gap-1">
+                          <span className={`inline-flex w-fit items-center gap-1.5 rounded-full px-2 py-1 text-xs font-medium ring-1 ${workflowMeta.className}`}>
+                            {workflowMeta.label}
+                          </span>
+                          {row.export_id && <span className="text-[11px] text-slate-500">Export {String(row.export_id).slice(0, 8)}</span>}
+                        </div>
+                      </td>
                       <td className="max-w-[260px] px-4 py-3">
                         <div className="flex flex-wrap gap-1">
                           {pendingKinds.length === 0 ? (
@@ -547,6 +674,15 @@ export function MonthlyConferenceCenter({
                           <button type="button" onClick={() => openDetail(row)} title="Ver checklist" className="rounded-md border border-slate-200 p-2 text-slate-600 hover:bg-white"><ClipboardCheck size={16} /></button>
                           <button type="button" onClick={() => onOpenAppointment?.(row)} title="Abrir consulta" className="rounded-md border border-slate-200 p-2 text-slate-600 hover:bg-white"><Stethoscope size={16} /></button>
                           <button type="button" onClick={() => onOpenReport?.(row)} title="Abrir relatório" className="rounded-md border border-slate-200 p-2 text-slate-600 hover:bg-white"><FileText size={16} /></button>
+                          {workflowStatus === "exported" ? (
+                            <button type="button" onClick={() => setReopenTarget(row)} disabled={isBusy} title="Reabrir conferência" className="rounded-md border border-slate-200 p-2 text-slate-600 hover:bg-white disabled:opacity-60">
+                              {isBusy ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+                            </button>
+                          ) : workflowStatus !== "reviewed" && workflowStatus !== "non_billable" ? (
+                            <button type="button" onClick={() => markReviewed(row)} disabled={isBusy} title="Marcar como conferido" className="rounded-md border border-slate-200 p-2 text-emerald-700 hover:bg-white disabled:opacity-60">
+                              {isBusy ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
+                            </button>
+                          ) : null}
                         </div>
                       </td>
                     </tr>
@@ -620,11 +756,12 @@ export function MonthlyConferenceCenter({
               </button>
             </div>
             <div className="max-h-[70vh] overflow-y-auto">
-              <div className="grid gap-3 p-5 sm:grid-cols-4">
+              <div className="grid gap-3 p-5 sm:grid-cols-5">
                 <div className="rounded-md border border-slate-200 px-3 py-2"><div className="text-xs text-slate-500">Planejado</div><div className="font-semibold">{formatConferenceMinutes(detail.scheduled_minutes || 0)}</div></div>
                 <div className="rounded-md border border-slate-200 px-3 py-2"><div className="text-xs text-slate-500">Realizado</div><div className="font-semibold">{formatConferenceMinutes(detail.actual_minutes || 0)}</div></div>
                 <div className="rounded-md border border-slate-200 px-3 py-2"><div className="text-xs text-slate-500">Pagador</div><div className="font-semibold">{safeName(detail.payer_name, "Sem pagador")}</div></div>
                 <div className="rounded-md border border-slate-200 px-3 py-2"><div className="text-xs text-slate-500">Status</div><div className="font-semibold">{statusMeta[normalizeStatus(detail.readiness_status)].label}</div></div>
+                <div className="rounded-md border border-slate-200 px-3 py-2"><div className="text-xs text-slate-500">Conferência</div><div className="font-semibold">{conferenceStatusMeta[normalizeConferenceWorkflowStatus(detail.conference_status)].label}</div></div>
               </div>
 
               {renderSection("checklist", "Checklist de fechamento", detailLoading ? (
@@ -651,6 +788,10 @@ export function MonthlyConferenceCenter({
                   <span>Regra: {detail.payerRules?.source || "Padrão"}</span>
                   <span>Guia: {detail.guide_number || "Pendente/não exigida"}</span>
                   <span>Autorização: {detail.authorization_code || "Pendente/não exigida"}</span>
+                  <span>Plano financeiro: {detail.financial_plan_name || "Não configurado"}</span>
+                  <span>Carteirinha: {detail.insurance_card_number || "Não informada"}</span>
+                  <span>Registro profissional: {detail.professional_registry || "Não informado"}</span>
+                  <span>Exportação: {detail.export_status || "Não exportado"}</span>
                 </div>
               ))}
               {renderSection("documents", "Documentos obrigatórios", <div className="text-sm text-slate-600">{Number(detail.required_document_pending_count || 0)} documento(s) pendente(s).</div>)}
@@ -659,6 +800,17 @@ export function MonthlyConferenceCenter({
               {renderSection("audit", "Histórico/auditoria resumida", <div className="text-sm text-slate-600">Última atualização: {formatDateTime(detail.audit?.updatedAt || detail.audit?.generatedAt)}</div>)}
             </div>
             <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-5 py-3">
+              {normalizeConferenceWorkflowStatus(detail.conference_status) === "exported" ? (
+                <button type="button" onClick={() => setReopenTarget(detail)} disabled={detailLoading} className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-600 disabled:opacity-60">
+                  <RefreshCw size={16} />
+                  Reabrir
+                </button>
+              ) : normalizeConferenceWorkflowStatus(detail.conference_status) !== "reviewed" && normalizeConferenceWorkflowStatus(detail.conference_status) !== "non_billable" ? (
+                <button type="button" onClick={() => markReviewed(detail)} disabled={detailLoading || actionLoadingId === detail.appointment_id} className="inline-flex items-center gap-2 rounded-md border border-emerald-200 px-3 py-2 text-sm text-emerald-700 disabled:opacity-60">
+                  <CheckCircle2 size={16} />
+                  Conferir
+                </button>
+              ) : null}
               <button type="button" onClick={revalidateDetail} disabled={detailLoading} className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-600 disabled:opacity-60">
                 {detailLoading ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
                 Revalidar
@@ -671,7 +823,7 @@ export function MonthlyConferenceCenter({
 
       {exportOpen && (
         <div className="fixed inset-0 z-[130] flex items-end justify-center bg-slate-950/40 p-4 sm:items-center" role="dialog" aria-modal="true">
-          <div className="w-full max-w-lg rounded-lg bg-white p-5 shadow-xl">
+          <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-lg bg-white p-5 shadow-xl">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="text-lg font-semibold text-slate-900">Exportar conferência</div>
@@ -682,24 +834,48 @@ export function MonthlyConferenceCenter({
             <label className="mt-4 block text-sm font-medium text-slate-700">
               Tipo
               <select value={exportType} onChange={(event) => setExportType(event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm">
-                <option value="sessions">Sessões do período</option>
-                <option value="pending">Pendências do período</option>
-                <option value="time_by_patient">Tempo por paciente</option>
-                <option value="time_by_professional">Tempo por profissional</option>
-                <option value="time_by_payer">Tempo por pagador</option>
+                <option value="billing_conference_full">Conferência completa para financeiro</option>
+                <option value="sessions_period">Sessões do período</option>
+                <option value="pending_items">Pendências do período</option>
+                <option value="patient_time">Tempo por paciente</option>
+                <option value="professional_time">Tempo por profissional</option>
+                <option value="payer_time">Tempo por pagador</option>
               </select>
             </label>
             <div className="mt-4 grid grid-cols-2 gap-2">
               {[
+                ["competenceMonth", "Competência"],
+                ["clinicName", "Clínica"],
+                ["unitName", "Unidade"],
                 ["scheduledDate", "Data"],
+                ["startTime", "Início"],
+                ["endTime", "Fim"],
                 ["patientName", "Paciente"],
                 ["professionalName", "Profissional"],
+                ["professionalRegistry", "Registro"],
                 ["serviceType", "Especialidade"],
                 ["payerName", "Pagador"],
+                ["financialPlanName", "Plano financeiro"],
+                ["insuranceCardNumber", "Carteirinha"],
+                ["guideNumber", "Guia"],
+                ["authorizationCode", "Autorização"],
+                ["copaymentAmount", "Coparticipação"],
+                ["expectedAmount", "Valor previsto"],
+                ["financialStatus", "Status financeiro"],
                 ["scheduledMinutes", "Previsto"],
                 ["actualMinutes", "Realizado"],
                 ["readinessStatus", "Fechamento"],
+                ["conferenceStatus", "Conferência"],
+                ["exportStatus", "Exportação"],
+                ["signaturePresent", "Assinatura"],
+                ["reportPresent", "Relatório"],
+                ["pendingDocuments", "Documentos"],
+                ["pendingDetails", "Pendências detalhadas"],
                 ["pendingKinds", "Pendências"],
+                ["exportedAt", "Data exportação"],
+                ["exportedBy", "Responsável"],
+                ["exportId", "Export ID"],
+                ["notes", "Observações"],
               ].map(([field, label]) => (
                 <label key={field} className="flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-600">
                   <input
@@ -716,6 +892,41 @@ export function MonthlyConferenceCenter({
               <button type="button" onClick={runExport} disabled={exporting || exportFields.length === 0} className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-50">
                 {exporting ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
                 Exportar CSV
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {reopenTarget && (
+        <div className="fixed inset-0 z-[130] flex items-end justify-center bg-slate-950/40 p-4 sm:items-center" role="dialog" aria-modal="true">
+          <div className="w-full max-w-lg rounded-lg bg-white p-5 shadow-xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-lg font-semibold text-slate-900">Reabrir conferência exportada</div>
+                <p className="mt-1 text-sm text-slate-500">Informe a justificativa para voltar este atendimento para conferência.</p>
+              </div>
+              <button type="button" onClick={() => setReopenTarget(null)} className="rounded-md p-2 text-slate-500 hover:bg-slate-100" aria-label="Fechar reabertura"><X size={18} /></button>
+            </div>
+            <div className="mt-4 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-600">
+              {safeName(reopenTarget.patient_name, "Paciente")} · {formatDateTime(reopenTarget.scheduled_start)}
+            </div>
+            <textarea
+              value={reopenReason}
+              onChange={(event) => setReopenReason(event.target.value)}
+              className="mt-4 min-h-[110px] w-full rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700"
+              placeholder="Exemplo: guia corrigida depois da exportação de conferência."
+            />
+            <div className="mt-5 flex justify-end gap-2">
+              <button type="button" onClick={() => setReopenTarget(null)} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-600">Cancelar</button>
+              <button
+                type="button"
+                onClick={submitReopen}
+                disabled={reopenReason.trim().length < 8 || actionLoadingId === reopenTarget.appointment_id}
+                className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
+              >
+                {actionLoadingId === reopenTarget.appointment_id ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+                Reabrir
               </button>
             </div>
           </div>

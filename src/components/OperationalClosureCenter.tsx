@@ -31,6 +31,7 @@ type ClosureRow = {
   professional_name?: string | null;
   service_type?: string | null;
   payer_name?: string | null;
+  financial_plan_name?: string | null;
   guide_number?: string | null;
   authorization_code?: string | null;
   payer_requirement_source?: string | null;
@@ -67,17 +68,17 @@ type OperationalClosureCenterProps = {
 
 const statusMeta: Record<ClosureStatus, { label: string; className: string; icon: React.ComponentType<any> }> = {
   READY: {
-    label: "Pronta",
+    label: "Pronta para conferência",
     className: "bg-emerald-50 text-emerald-700 ring-emerald-200",
     icon: CheckCircle2,
   },
   PENDING: {
-    label: "Com pendências",
+    label: "Pendente",
     className: "bg-rose-50 text-rose-700 ring-rose-200",
     icon: XCircle,
   },
   WARNING: {
-    label: "Atenção",
+    label: "Em atenção",
     className: "bg-amber-50 text-amber-700 ring-amber-200",
     icon: AlertTriangle,
   },
@@ -92,7 +93,7 @@ const statusMeta: Record<ClosureStatus, { label: string; className: string; icon
     icon: Clock,
   },
   UNKNOWN: {
-    label: "Dados insuficientes",
+    label: "A revisar",
     className: "bg-zinc-100 text-zinc-700 ring-zinc-200",
     icon: AlertTriangle,
   },
@@ -535,6 +536,7 @@ export function OperationalClosureCenter({
                 <th className="px-4 py-3">Profissional</th>
                 <th className="px-4 py-3">Tipo</th>
                 <th className="px-4 py-3">Pagador</th>
+                <th className="px-4 py-3">Plano</th>
                 <th className="px-4 py-3">Guia/autorização</th>
                 <th className="px-4 py-3">Planejado</th>
                 <th className="px-4 py-3">Realizado</th>
@@ -546,14 +548,14 @@ export function OperationalClosureCenter({
             <tbody className="divide-y divide-slate-100">
               {loading ? (
                 <tr>
-                  <td colSpan={11} className="px-4 py-10 text-center text-slate-500">
+                  <td colSpan={12} className="px-4 py-10 text-center text-slate-500">
                     <Loader2 size={20} className="mx-auto mb-2 animate-spin" />
                     Carregando fechamento
                   </td>
                 </tr>
               ) : rows.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="px-4 py-10 text-center text-slate-500">
+                  <td colSpan={12} className="px-4 py-10 text-center text-slate-500">
                     Nenhuma sessão encontrada no período.
                   </td>
                 </tr>
@@ -568,6 +570,7 @@ export function OperationalClosureCenter({
                     <td className="px-4 py-3 text-slate-600">{row.professional_name || "Equipe"}</td>
                     <td className="px-4 py-3 text-slate-600">{row.service_type || "Sessão"}</td>
                     <td className="px-4 py-3 text-slate-600">{row.payer_name || "Sem pagador"}</td>
+                    <td className="px-4 py-3 text-slate-600">{row.financial_plan_name || "Não configurado"}</td>
                     <td className="px-4 py-3 text-slate-600">
                       {row.guide_number || row.authorization_code || Number(row.required_document_pending_count || 0) > 0
                         ? [row.guide_number ? `Guia ${row.guide_number}` : "", row.authorization_code ? "Autorização informada" : "", Number(row.required_document_pending_count || 0) > 0 ? `${row.required_document_pending_count} doc.` : ""].filter(Boolean).join(" · ")
@@ -662,6 +665,7 @@ export function OperationalClosureCenter({
                 <div className="mt-2 grid gap-2 text-slate-600 sm:grid-cols-2">
                   <span>Pagador: {detail.payer_name || "Sem pagador"}</span>
                   <span>Regra aplicada: {detail.payer_requirement_source || "Default"}</span>
+                  <span>Plano financeiro: {detail.financial_plan_name || "Não configurado"}</span>
                   <span>Guia: {detail.guide_number || "Pendente/não exigida"}</span>
                   <span>Autorização: {detail.authorization_code || "Pendente/não exigida"}</span>
                 </div>
