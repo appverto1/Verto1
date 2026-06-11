@@ -54,6 +54,7 @@
     "test:appointment-conflicts": "tsx tests/appointmentConflicts.test.ts",
     "test:monthly-conference": "tsx tests/monthlyConference.test.ts",
     "test:prefacturing-conference": "tsx tests/prefacturingConference.test.ts",
+    "test:tuss-ready": "tsx tests/tussReady.test.ts",
     "test:simplisaude-pilot-smoke": "tsx tests/simplisaudePilotSmoke.test.ts",
     "test:pilot-security": "tsx tests/pilotSecurity.test.ts",
     "test:patient-portability": "tsx tests/patientPortability.test.ts",

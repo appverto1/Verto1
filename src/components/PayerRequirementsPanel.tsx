@@ -26,6 +26,37 @@ type Requirement = {
   isActive: boolean;
 };
 
+type TussService = {
+  id: string;
+  internalCode?: string | null;
+  name: string;
+  serviceType?: string | null;
+  billingUnit?: string | null;
+  defaultAmountCents?: number | null;
+};
+
+type TussCode = {
+  id: string;
+  code: string;
+  description: string;
+  version?: string | null;
+};
+
+type PayerTussMapping = {
+  id: string;
+  payerId: string;
+  serviceCatalogId: string;
+  tussCodeId?: string | null;
+  serviceName?: string | null;
+  internalCode?: string | null;
+  tussCode?: string | null;
+  guideType?: string | null;
+  billingUnit?: string | null;
+  quantityRule?: string | null;
+  amountCents?: number | null;
+  active: boolean;
+};
+
 const payerTypeLabels: Record<string, string> = {
   INSURANCE: "Convênio",
   PRIVATE: "Particular",
@@ -50,6 +81,35 @@ const defaultRequirement = (payerId = "") => ({
   isActive: true,
 });
 
+const defaultTussServiceForm = {
+  internalCode: "",
+  name: "",
+  serviceType: "",
+  billingUnit: "session",
+  defaultAmountCents: "",
+};
+
+const defaultTussCodeForm = {
+  code: "",
+  description: "",
+  version: "",
+};
+
+const defaultTussMappingForm = {
+  serviceCatalogId: "",
+  tussCodeId: "",
+  guideType: "sp_sadt",
+  billingUnit: "session",
+  quantityRule: "per_session",
+  defaultQuantity: "1",
+  amountCents: "",
+  requiresAuthorization: false,
+  requiresGuide: false,
+  requiresProfessionalRegistry: false,
+  requiresPatientDocument: false,
+  useActualDuration: false,
+};
+
 export function PayerRequirementsPanel() {
   const [payers, setPayers] = useState<Payer[]>([]);
   const [selectedPayerId, setSelectedPayerId] = useState("");
@@ -59,6 +119,13 @@ export function PayerRequirementsPanel() {
   const [error, setError] = useState("");
   const [payerForm, setPayerForm] = useState({ name: "", payerType: "INSURANCE", notes: "" });
   const [requirementForm, setRequirementForm] = useState(defaultRequirement());
+  const [tussServices, setTussServices] = useState<TussService[]>([]);
+  const [tussCodes, setTussCodes] = useState<TussCode[]>([]);
+  const [tussMappings, setTussMappings] = useState<PayerTussMapping[]>([]);
+  const [tussLoading, setTussLoading] = useState(false);
+  const [tussServiceForm, setTussServiceForm] = useState(defaultTussServiceForm);
+  const [tussCodeForm, setTussCodeForm] = useState(defaultTussCodeForm);
+  const [tussMappingForm, setTussMappingForm] = useState(defaultTussMappingForm);
 
   const selectedPayer = useMemo(
     () => payers.find((payer) => payer.id === selectedPayerId) || null,
@@ -104,12 +171,37 @@ export function PayerRequirementsPanel() {
     }
   };
 
+  const loadTussConfig = async (payerId: string) => {
+    setTussLoading(true);
+    try {
+      const [servicesResult, codesResult, mappingsResult] = await Promise.all([
+        dataService.getTussServices({ active: true, limit: 160 }),
+        dataService.getTussCodes({ active: true, limit: 240 }),
+        dataService.getPayerTussMappings({ payerId, active: true, limit: 180 }),
+      ]);
+      if (servicesResult?.success) setTussServices(Array.isArray(servicesResult.data) ? servicesResult.data : []);
+      if (codesResult?.success) setTussCodes(Array.isArray(codesResult.data) ? codesResult.data : []);
+      if (mappingsResult?.success) setTussMappings(Array.isArray(mappingsResult.data) ? mappingsResult.data : []);
+      setTussMappingForm((current) => ({
+        ...current,
+        serviceCatalogId: current.serviceCatalogId || servicesResult?.data?.[0]?.id || "",
+        tussCodeId: current.tussCodeId || codesResult?.data?.[0]?.id || "",
+      }));
+    } finally {
+      setTussLoading(false);
+    }
+  };
+
   useEffect(() => {
     void loadPayers();
   }, []);
 
   useEffect(() => {
     void loadRequirements(selectedPayerId);
+  }, [selectedPayerId]);
+
+  useEffect(() => {
+    void loadTussConfig(selectedPayerId);
   }, [selectedPayerId]);
 
   const createPayer = async () => {
@@ -170,6 +262,102 @@ export function PayerRequirementsPanel() {
 
   const toggleRequirementFlag = (key: string) => {
     setRequirementForm((current: any) => ({ ...current, [key]: !current[key] }));
+  };
+
+  const upsertTussMappingInState = (item: PayerTussMapping) => {
+    setTussMappings((current) => {
+      const index = current.findIndex((mapping) => mapping.id === item.id);
+      if (index < 0) return [item, ...current];
+      return current.map((mapping) => mapping.id === item.id ? item : mapping);
+    });
+  };
+
+  const createTussService = async () => {
+    if (tussServiceForm.name.trim().length < 2) return;
+    setSaving(true);
+    setError("");
+    try {
+      const result = await dataService.createTussService({
+        ...tussServiceForm,
+        name: tussServiceForm.name.trim(),
+        internalCode: tussServiceForm.internalCode.trim(),
+        serviceType: tussServiceForm.serviceType.trim(),
+        defaultAmountCents: tussServiceForm.defaultAmountCents ? Number(tussServiceForm.defaultAmountCents) : null,
+      });
+      if (!result?.success || !result.data) {
+        setError(result?.error || "Não foi possível salvar o procedimento agora.");
+        return;
+      }
+      setTussServices((current) => Array.from(new Map([result.data, ...current].map((item) => [item.id, item])).values()));
+      setTussServiceForm(defaultTussServiceForm);
+      setTussMappingForm((current) => ({ ...current, serviceCatalogId: current.serviceCatalogId || result.data.id }));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const createTussCode = async () => {
+    if (tussCodeForm.code.trim().length < 2 || tussCodeForm.description.trim().length < 2) return;
+    setSaving(true);
+    setError("");
+    try {
+      const result = await dataService.createTussCode({
+        code: tussCodeForm.code.trim(),
+        description: tussCodeForm.description.trim(),
+        version: tussCodeForm.version.trim(),
+        source: "manual",
+      });
+      if (!result?.success || !result.data) {
+        setError(result?.error || "Não foi possível salvar o código TUSS agora.");
+        return;
+      }
+      setTussCodes((current) => Array.from(new Map([result.data, ...current].map((item) => [item.id, item])).values()));
+      setTussCodeForm(defaultTussCodeForm);
+      setTussMappingForm((current) => ({ ...current, tussCodeId: current.tussCodeId || result.data.id }));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const createTussMapping = async () => {
+    if (!selectedPayerId || !tussMappingForm.serviceCatalogId) return;
+    setSaving(true);
+    setError("");
+    try {
+      const result = await dataService.createPayerTussMapping({
+        ...tussMappingForm,
+        payerId: selectedPayerId,
+        defaultQuantity: Number(tussMappingForm.defaultQuantity || 1),
+        amountCents: tussMappingForm.amountCents ? Number(tussMappingForm.amountCents) : null,
+      });
+      if (!result?.success || !result.data) {
+        setError(result?.error || "Não foi possível salvar o mapeamento agora.");
+        return;
+      }
+      upsertTussMappingInState(result.data);
+      setTussMappingForm((current) => ({
+        ...defaultTussMappingForm,
+        serviceCatalogId: current.serviceCatalogId,
+        tussCodeId: current.tussCodeId,
+      }));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const disableTussMapping = async (mappingId: string) => {
+    setSaving(true);
+    setError("");
+    try {
+      const result = await dataService.updatePayerTussMapping(mappingId, { active: false });
+      if (!result?.success) {
+        setError(result?.error || "Não foi possível desativar o mapeamento agora.");
+        return;
+      }
+      setTussMappings((current) => current.filter((mapping) => mapping.id !== mappingId));
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -344,6 +532,222 @@ export function PayerRequirementsPanel() {
               </div>
             ))}
           </div>
+        </div>
+      </div>
+
+      <div className="mt-5 rounded-2xl bg-white p-4">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p className="text-sm font-bold text-slate-900">Procedimentos e TUSS-ready</p>
+            <p className="mt-1 text-xs text-slate-500">Configure catalogo interno, codigos usados pela clinica e mapeamento por pagador.</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void loadTussConfig(selectedPayerId)}
+            className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600"
+          >
+            {tussLoading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+            Atualizar base
+          </button>
+        </div>
+
+        <div className="mt-4 grid gap-4 xl:grid-cols-3">
+          <div className="rounded-2xl border border-slate-100 p-3">
+            <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Procedimento interno</p>
+            <input
+              value={tussServiceForm.name}
+              onChange={(event) => setTussServiceForm((current) => ({ ...current, name: event.target.value }))}
+              placeholder="Sessao ABA individual"
+              className="mt-3 w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
+            />
+            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              <input
+                value={tussServiceForm.internalCode}
+                onChange={(event) => setTussServiceForm((current) => ({ ...current, internalCode: event.target.value }))}
+                placeholder="Codigo interno"
+                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
+              />
+              <input
+                value={tussServiceForm.serviceType}
+                onChange={(event) => setTussServiceForm((current) => ({ ...current, serviceType: event.target.value }))}
+                placeholder="Tipo de sessao"
+                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
+              />
+            </div>
+            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              <select
+                value={tussServiceForm.billingUnit}
+                onChange={(event) => setTussServiceForm((current) => ({ ...current, billingUnit: event.target.value }))}
+                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
+              >
+                <option value="session">Sessao</option>
+                <option value="hour">Hora</option>
+                <option value="minute">Minuto</option>
+                <option value="unit">Unidade</option>
+                <option value="package">Pacote</option>
+              </select>
+              <input
+                type="number"
+                min="0"
+                value={tussServiceForm.defaultAmountCents}
+                onChange={(event) => setTussServiceForm((current) => ({ ...current, defaultAmountCents: event.target.value }))}
+                placeholder="Valor em centavos"
+                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => void createTussService()}
+              disabled={saving || tussServiceForm.name.trim().length < 2}
+              className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-900 px-3 py-2 text-sm font-bold text-white disabled:opacity-50"
+            >
+              <Plus size={15} />
+              Salvar procedimento
+            </button>
+          </div>
+
+          <div className="rounded-2xl border border-slate-100 p-3">
+            <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Codigo TUSS</p>
+            <input
+              value={tussCodeForm.code}
+              onChange={(event) => setTussCodeForm((current) => ({ ...current, code: event.target.value }))}
+              placeholder="Codigo"
+              className="mt-3 w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
+            />
+            <input
+              value={tussCodeForm.description}
+              onChange={(event) => setTussCodeForm((current) => ({ ...current, description: event.target.value }))}
+              placeholder="Descricao controlada"
+              className="mt-2 w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
+            />
+            <input
+              value={tussCodeForm.version}
+              onChange={(event) => setTussCodeForm((current) => ({ ...current, version: event.target.value }))}
+              placeholder="Versao/tabela"
+              className="mt-2 w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
+            />
+            <button
+              type="button"
+              onClick={() => void createTussCode()}
+              disabled={saving || tussCodeForm.code.trim().length < 2 || tussCodeForm.description.trim().length < 2}
+              className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-900 px-3 py-2 text-sm font-bold text-white disabled:opacity-50"
+            >
+              <Plus size={15} />
+              Salvar codigo
+            </button>
+          </div>
+
+          <div className="rounded-2xl border border-slate-100 p-3">
+            <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Mapeamento por pagador</p>
+            <select
+              value={tussMappingForm.serviceCatalogId}
+              onChange={(event) => setTussMappingForm((current) => ({ ...current, serviceCatalogId: event.target.value }))}
+              className="mt-3 w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
+            >
+              <option value="">Procedimento</option>
+              {tussServices.map((service) => <option key={service.id} value={service.id}>{service.name}</option>)}
+            </select>
+            <select
+              value={tussMappingForm.tussCodeId}
+              onChange={(event) => setTussMappingForm((current) => ({ ...current, tussCodeId: event.target.value }))}
+              className="mt-2 w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
+            >
+              <option value="">Sem codigo TUSS</option>
+              {tussCodes.map((code) => <option key={code.id} value={code.id}>{code.code} - {code.description}</option>)}
+            </select>
+            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              <select
+                value={tussMappingForm.guideType}
+                onChange={(event) => setTussMappingForm((current) => ({ ...current, guideType: event.target.value }))}
+                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
+              >
+                <option value="sp_sadt">SP/SADT</option>
+                <option value="consulta">Consulta</option>
+                <option value="other">Outra</option>
+              </select>
+              <select
+                value={tussMappingForm.quantityRule}
+                onChange={(event) => setTussMappingForm((current) => ({ ...current, quantityRule: event.target.value }))}
+                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
+              >
+                <option value="per_session">Por sessao</option>
+                <option value="per_hour">Por hora</option>
+                <option value="duration_based">Por duracao</option>
+                <option value="fixed">Fixo</option>
+              </select>
+            </div>
+            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              <input
+                type="number"
+                min="0.01"
+                step="0.01"
+                value={tussMappingForm.defaultQuantity}
+                onChange={(event) => setTussMappingForm((current) => ({ ...current, defaultQuantity: event.target.value }))}
+                placeholder="Quantidade"
+                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
+              />
+              <input
+                type="number"
+                min="0"
+                value={tussMappingForm.amountCents}
+                onChange={(event) => setTussMappingForm((current) => ({ ...current, amountCents: event.target.value }))}
+                placeholder="Valor em centavos"
+                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
+              />
+            </div>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              {[
+                ["requiresAuthorization", "Autorizacao"],
+                ["requiresGuide", "Guia"],
+                ["requiresProfessionalRegistry", "Registro"],
+                ["requiresPatientDocument", "Carteirinha"],
+                ["useActualDuration", "Duracao real"],
+              ].map(([key, label]) => (
+                <label key={key} className="flex items-center gap-2 rounded-2xl border border-slate-100 px-3 py-2 text-xs font-bold text-slate-600">
+                  <input
+                    type="checkbox"
+                    checked={Boolean((tussMappingForm as any)[key])}
+                    onChange={() => setTussMappingForm((current: any) => ({ ...current, [key]: !current[key] }))}
+                    className="h-4 w-4 accent-[#7a32fc]"
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() => void createTussMapping()}
+              disabled={!selectedPayerId || !tussMappingForm.serviceCatalogId || saving}
+              className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-[#7a32fc] px-3 py-2 text-sm font-bold text-white disabled:opacity-50"
+            >
+              {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+              Salvar mapeamento
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-4 space-y-2">
+          {tussMappings.length === 0 ? (
+            <p className="rounded-2xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">Nenhum mapeamento ativo para este pagador.</p>
+          ) : tussMappings.map((mapping) => (
+            <div key={mapping.id} className="rounded-2xl border border-slate-100 px-3 py-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-bold text-slate-800">{mapping.serviceName || mapping.internalCode || "Procedimento"}</p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    {[mapping.tussCode && `TUSS ${mapping.tussCode}`, mapping.guideType, mapping.billingUnit, mapping.quantityRule, mapping.amountCents ? `R$ ${(Number(mapping.amountCents) / 100).toFixed(2)}` : "valor pendente"].filter(Boolean).join(" · ")}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void disableTussMapping(mapping.id)}
+                  className="rounded-xl border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-500 hover:bg-slate-50"
+                >
+                  Desativar
+                </button>
+              </div>
+            </div>
+          ))}
         </div>
       </div>
     </section>

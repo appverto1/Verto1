@@ -35,6 +35,18 @@ type ConferenceRow = {
   unit_name?: string | null;
   financial_plan_name?: string | null;
   insurance_card_number?: string | null;
+  internal_procedure_code?: string | null;
+  internal_procedure_name?: string | null;
+  tuss_code?: string | null;
+  tuss_description?: string | null;
+  tuss_version?: string | null;
+  guide_type?: string | null;
+  billing_unit?: string | null;
+  billing_quantity?: number | null;
+  billing_unit_amount_cents?: number | null;
+  billing_amount_cents?: number | null;
+  tuss_mapping_status?: string | null;
+  tuss_pending_reasons?: string[] | null;
   professional_registry?: string | null;
   scheduled_start?: string | null;
   scheduled_end?: string | null;
@@ -96,6 +108,10 @@ const pendingTone: Record<string, string> = {
   Profissional: "bg-slate-100 text-slate-700",
   Pagador: "bg-cyan-50 text-cyan-700",
   Documento: "bg-fuchsia-50 text-fuchsia-700",
+  Procedimento: "bg-sky-50 text-sky-700",
+  TUSS: "bg-indigo-50 text-indigo-700",
+  Valor: "bg-emerald-50 text-emerald-700",
+  Carteirinha: "bg-violet-50 text-violet-700",
 };
 
 function getLocalDateInput(date: Date) {
@@ -168,12 +184,12 @@ export function MonthlyConferenceCenter({
   const [readinessStatus, setReadinessStatus] = useState("");
   const [appointmentStatus, setAppointmentStatus] = useState("");
   const [quickFilter, setQuickFilter] = useState("");
-  const [activeTab, setActiveTab] = useState<"sessions" | "patient" | "professional" | "payer" | "service">("sessions");
+  const [activeTab, setActiveTab] = useState<"sessions" | "patient" | "professional" | "payer" | "service" | "procedure" | "tuss" | "guide">("sessions");
   const [page, setPage] = useState(1);
   const [rows, setRows] = useState<ConferenceRow[]>([]);
   const [kpis, setKpis] = useState<any>(null);
   const [pendingByType, setPendingByType] = useState<any[]>([]);
-  const [summaries, setSummaries] = useState<Record<string, any[]>>({ patient: [], professional: [], payer: [], service: [] });
+  const [summaries, setSummaries] = useState<Record<string, any[]>>({ patient: [], professional: [], payer: [], service: [], procedure: [], tuss: [], guide: [] });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [detail, setDetail] = useState<ConferenceRow | null>(null);
@@ -213,6 +229,18 @@ export function MonthlyConferenceCenter({
     "exportedBy",
     "exportId",
     "notes",
+    "internalProcedureCode",
+    "internalProcedureName",
+    "tussCode",
+    "tussDescription",
+    "tussVersion",
+    "guideType",
+    "billingUnit",
+    "billingQuantity",
+    "billingUnitAmount",
+    "billingExpectedAmount",
+    "tussMappingStatus",
+    "tussPendingReasons",
   ]);
   const [exporting, setExporting] = useState(false);
   const [actionLoadingId, setActionLoadingId] = useState("");
@@ -248,19 +276,22 @@ export function MonthlyConferenceCenter({
     onlyPending: quickFilter === "pending",
     onlyReady: quickFilter === "ready",
     onlyNotBillable: quickFilter === "not_billable",
-    missing: ["signature", "report", "guide", "authorization", "documents"].includes(quickFilter) ? quickFilter : "",
+    missing: ["signature", "report", "guide", "authorization", "documents", "procedure", "tuss", "amount", "professional_registry", "card"].includes(quickFilter) ? quickFilter : "",
   }), [appointmentStatus, from, patientId, payerId, professionalId, quickFilter, readinessStatus, serviceType, to]);
 
   const loadConference = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const [main, byPatient, byProfessional, byPayer, byService] = await Promise.all([
+      const [main, byPatient, byProfessional, byPayer, byService, byProcedure, byTuss, byGuide] = await Promise.all([
         dataService.getMonthlyConference({ ...filterPayload, page, limit: 50 }),
         dataService.getMonthlyConferenceSummary("patient", filterPayload),
         dataService.getMonthlyConferenceSummary("professional", filterPayload),
         dataService.getMonthlyConferenceSummary("payer", filterPayload),
         dataService.getMonthlyConferenceSummary("service-type", filterPayload),
+        dataService.getMonthlyConferenceSummary("procedure", filterPayload),
+        dataService.getMonthlyConferenceSummary("tuss-code", filterPayload),
+        dataService.getMonthlyConferenceSummary("guide-type", filterPayload),
       ]);
       if (!main?.success) {
         setRows([]);
@@ -277,6 +308,9 @@ export function MonthlyConferenceCenter({
         professional: Array.isArray(byProfessional?.data) ? byProfessional.data : [],
         payer: Array.isArray(byPayer?.data) ? byPayer.data : [],
         service: Array.isArray(byService?.data) ? byService.data : [],
+        procedure: Array.isArray(byProcedure?.data) ? byProcedure.data : [],
+        tuss: Array.isArray(byTuss?.data) ? byTuss.data : [],
+        guide: Array.isArray(byGuide?.data) ? byGuide.data : [],
       });
     } catch {
       setRows([]);
@@ -420,10 +454,16 @@ export function MonthlyConferenceCenter({
     ? summaries.patient
     : activeTab === "professional"
       ? summaries.professional
-      : activeTab === "payer"
-        ? summaries.payer
-        : activeTab === "service"
-          ? summaries.service
+    : activeTab === "payer"
+      ? summaries.payer
+      : activeTab === "service"
+        ? summaries.service
+        : activeTab === "procedure"
+          ? summaries.procedure
+          : activeTab === "tuss"
+            ? summaries.tuss
+            : activeTab === "guide"
+              ? summaries.guide
           : [];
 
   const renderSection = (key: string, title: string, children: React.ReactNode) => (
@@ -544,6 +584,11 @@ export function MonthlyConferenceCenter({
             ["guide", "Sem guia"],
             ["authorization", "Sem autorização"],
             ["documents", "Documentos"],
+            ["procedure", "Sem procedimento"],
+            ["tuss", "Sem TUSS"],
+            ["amount", "Sem valor"],
+            ["professional_registry", "Sem registro"],
+            ["card", "Sem carteirinha"],
           ].map(([value, label]) => (
             <button
               key={value}
@@ -574,6 +619,9 @@ export function MonthlyConferenceCenter({
             ["professional", "Por profissional", Users],
             ["payer", "Por pagador", ShieldAlert],
             ["service", "Por especialidade", BarChart3],
+            ["procedure", "Por procedimento", ClipboardCheck],
+            ["tuss", "Por TUSS", FileText],
+            ["guide", "Por guia", Download],
           ].map(([value, label, Icon]: any) => (
             <button
               key={value}
@@ -613,6 +661,7 @@ export function MonthlyConferenceCenter({
                   <th className="px-4 py-3">Paciente</th>
                   <th className="px-4 py-3">Profissional</th>
                   <th className="px-4 py-3">Especialidade</th>
+                  <th className="px-4 py-3">Procedimento/TUSS</th>
                   <th className="px-4 py-3">Pagador</th>
                   <th className="px-4 py-3">Planejado</th>
                   <th className="px-4 py-3">Realizado</th>
@@ -625,9 +674,9 @@ export function MonthlyConferenceCenter({
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {loading ? (
-                  <tr><td colSpan={12} className="px-4 py-10 text-center text-slate-500"><Loader2 className="mx-auto mb-2 animate-spin" size={20} />Carregando conferência</td></tr>
+                  <tr><td colSpan={13} className="px-4 py-10 text-center text-slate-500"><Loader2 className="mx-auto mb-2 animate-spin" size={20} />Carregando conferência</td></tr>
                 ) : rows.length === 0 ? (
-                  <tr><td colSpan={12} className="px-4 py-10 text-center text-slate-500">Nenhuma sessão encontrada no período.</td></tr>
+                  <tr><td colSpan={13} className="px-4 py-10 text-center text-slate-500">Nenhuma sessão encontrada no período.</td></tr>
                 ) : rows.map((row, index) => {
                   const status = normalizeStatus(row.readiness_status);
                   const meta = statusMeta[status];
@@ -642,6 +691,10 @@ export function MonthlyConferenceCenter({
                       <td className="px-4 py-3 font-medium text-slate-800">{safeName(row.patient_name, "Paciente")}</td>
                       <td className="px-4 py-3 text-slate-600">{safeName(row.professional_name, "Equipe")}</td>
                       <td className="px-4 py-3 text-slate-600">{safeName(row.service_type, "Sessão")}</td>
+                      <td className="px-4 py-3 text-slate-600">
+                        <div className="font-medium text-slate-700">{row.internal_procedure_name || "Nao configurado"}</div>
+                        <div className="mt-1 text-xs text-slate-500">{row.tuss_code ? `TUSS ${row.tuss_code}` : "TUSS pendente"}</div>
+                      </td>
                       <td className="px-4 py-3 text-slate-600">{safeName(row.payer_name, "Sem pagador")}</td>
                       <td className="px-4 py-3 text-slate-600">{formatConferenceMinutes(row.scheduled_minutes || 0)}</td>
                       <td className="px-4 py-3 text-slate-600">{formatConferenceMinutes(row.actual_minutes || 0)}</td>
@@ -703,7 +756,7 @@ export function MonthlyConferenceCenter({
             {summaryRows.length === 0 ? (
               <div className="px-4 py-10 text-center text-sm text-slate-500">Sem resumo para os filtros atuais.</div>
             ) : summaryRows.map((item, index) => {
-              const title = item.name || item.payerName || item.serviceType || "Resumo";
+              const title = item.name || item.code || item.guideType || item.payerName || item.serviceType || "Resumo";
               return (
                 <button
                   key={`${title}-${index}`}
@@ -789,6 +842,10 @@ export function MonthlyConferenceCenter({
                   <span>Guia: {detail.guide_number || "Pendente/não exigida"}</span>
                   <span>Autorização: {detail.authorization_code || "Pendente/não exigida"}</span>
                   <span>Plano financeiro: {detail.financial_plan_name || "Não configurado"}</span>
+                  <span>Procedimento: {detail.internal_procedure_name || "Não configurado"}</span>
+                  <span>TUSS: {detail.tuss_code || "Pendente"}</span>
+                  <span>Guia provável: {detail.guide_type || "Não definida"}</span>
+                  <span>Valor previsto: {detail.billing_amount_cents ? `R$ ${(Number(detail.billing_amount_cents) / 100).toFixed(2)}` : "Não configurado"}</span>
                   <span>Carteirinha: {detail.insurance_card_number || "Não informada"}</span>
                   <span>Registro profissional: {detail.professional_registry || "Não informado"}</span>
                   <span>Exportação: {detail.export_status || "Não exportado"}</span>
@@ -854,6 +911,18 @@ export function MonthlyConferenceCenter({
                 ["professionalName", "Profissional"],
                 ["professionalRegistry", "Registro"],
                 ["serviceType", "Especialidade"],
+                ["internalProcedureCode", "Codigo interno"],
+                ["internalProcedureName", "Procedimento"],
+                ["tussCode", "Codigo TUSS"],
+                ["tussDescription", "Descricao TUSS"],
+                ["tussVersion", "Versao TUSS"],
+                ["guideType", "Tipo de guia"],
+                ["billingUnit", "Unidade"],
+                ["billingQuantity", "Quantidade"],
+                ["billingUnitAmount", "Valor unitario"],
+                ["billingExpectedAmount", "Valor previsto TUSS"],
+                ["tussMappingStatus", "Status mapeamento"],
+                ["tussPendingReasons", "Pendencias TUSS"],
                 ["payerName", "Pagador"],
                 ["financialPlanName", "Plano financeiro"],
                 ["insuranceCardNumber", "Carteirinha"],

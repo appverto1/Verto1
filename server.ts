@@ -102,6 +102,13 @@ import {
   type PayerRequirementRule
 } from './src/services/payerRequirementEngine';
 import {
+  humanizeTussPendingReason,
+  normalizeTussBillingUnit,
+  normalizeTussGuideType,
+  normalizeTussQuantityRule,
+  resolveTussBillingItem
+} from './src/services/tussBillingResolutionEngine';
+import {
   buildPatientPortabilitySnapshot,
   normalizePatientPortabilityScope
 } from './src/utils/patientPortability';
@@ -3007,6 +3014,98 @@ const APPOINTMENT_BILLING_CONTEXT_SELECT = [
   'notes',
   'source',
   'metadata',
+  'created_by',
+  'updated_by',
+  'created_at',
+  'updated_at'
+].join(',');
+
+const TUSS_SERVICE_CATALOG_SELECT = [
+  'id',
+  'organization_id',
+  'internal_code',
+  'name',
+  'description',
+  'specialty',
+  'service_type',
+  'default_duration_minutes',
+  'billing_unit',
+  'default_quantity',
+  'default_amount_cents',
+  'active',
+  'created_by',
+  'updated_by',
+  'created_at',
+  'updated_at'
+].join(',');
+
+const TUSS_CODE_SELECT = [
+  'id',
+  'organization_id',
+  'code',
+  'description',
+  'term_type',
+  'version',
+  'valid_from',
+  'valid_to',
+  'active',
+  'source',
+  'created_by',
+  'updated_by',
+  'created_at',
+  'updated_at'
+].join(',');
+
+const PAYER_TUSS_MAPPING_SELECT = [
+  'id',
+  'organization_id',
+  'payer_id',
+  'service_catalog_id',
+  'tuss_code_id',
+  'guide_type',
+  'billing_unit',
+  'quantity_rule',
+  'default_quantity',
+  'amount_cents',
+  'requires_authorization',
+  'requires_guide',
+  'requires_report',
+  'requires_signature',
+  'requires_professional_registry',
+  'requires_patient_document',
+  'use_actual_duration',
+  'active',
+  'valid_from',
+  'valid_to',
+  'created_by',
+  'updated_by',
+  'created_at',
+  'updated_at'
+].join(',');
+
+const APPOINTMENT_BILLING_ITEM_SELECT = [
+  'id',
+  'organization_id',
+  'appointment_id',
+  'patient_id',
+  'professional_id',
+  'payer_id',
+  'service_catalog_id',
+  'tuss_code_id',
+  'payer_tuss_mapping_id',
+  'guide_type',
+  'billing_unit',
+  'quantity',
+  'duration_minutes',
+  'unit_amount_cents',
+  'amount_cents',
+  'authorization_number',
+  'guide_number',
+  'card_number',
+  'status',
+  'readiness_reason',
+  'readiness_reasons',
+  'resolved_at',
   'created_by',
   'updated_by',
   'created_at',
@@ -29676,6 +29775,400 @@ async function startServer() {
     };
   };
 
+  const normalizeTussActiveFlag = (value: unknown) => value !== false && sanitizeString(value, 20).toLowerCase() !== 'false';
+
+  const serializeTussServiceCatalog = (row: any) => ({
+    id: sanitizeString(row?.id, 120),
+    internalCode: sanitizeString(row?.internal_code, 80) || null,
+    name: sanitizeString(row?.name, 180) || 'Procedimento',
+    description: sanitizeTextField(row?.description, 1200) || null,
+    specialty: sanitizeString(row?.specialty, 120) || null,
+    serviceType: sanitizeString(row?.service_type, 120) || null,
+    defaultDurationMinutes: row?.default_duration_minutes ?? null,
+    billingUnit: normalizeTussBillingUnit(row?.billing_unit),
+    defaultQuantity: Number(row?.default_quantity || 1) || 1,
+    defaultAmountCents: row?.default_amount_cents ?? null,
+    active: normalizeTussActiveFlag(row?.active),
+    createdAt: row?.created_at || null,
+    updatedAt: row?.updated_at || null
+  });
+
+  const serializeTussCode = (row: any) => ({
+    id: sanitizeString(row?.id, 120),
+    code: sanitizeString(row?.code, 80) || '',
+    description: sanitizeTextField(row?.description, 600) || '',
+    termType: sanitizeString(row?.term_type, 120) || null,
+    version: sanitizeString(row?.version, 80) || null,
+    validFrom: row?.valid_from || null,
+    validTo: row?.valid_to || null,
+    active: normalizeTussActiveFlag(row?.active),
+    source: sanitizeString(row?.source, 120) || null,
+    createdAt: row?.created_at || null,
+    updatedAt: row?.updated_at || null
+  });
+
+  const serializePayerTussMapping = (row: any, service: any = null, code: any = null) => ({
+    id: sanitizeString(row?.id, 120),
+    payerId: sanitizeString(row?.payer_id, 120),
+    serviceCatalogId: sanitizeString(row?.service_catalog_id, 120),
+    tussCodeId: sanitizeString(row?.tuss_code_id, 120) || null,
+    serviceName: sanitizeString(service?.name, 180) || null,
+    internalCode: sanitizeString(service?.internal_code, 80) || null,
+    tussCode: sanitizeString(code?.code, 80) || null,
+    tussDescription: sanitizeTextField(code?.description, 600) || null,
+    tussVersion: sanitizeString(code?.version, 80) || null,
+    guideType: normalizeTussGuideType(row?.guide_type),
+    billingUnit: normalizeTussBillingUnit(row?.billing_unit),
+    quantityRule: normalizeTussQuantityRule(row?.quantity_rule),
+    defaultQuantity: Number(row?.default_quantity || 1) || 1,
+    amountCents: row?.amount_cents ?? null,
+    requiresAuthorization: Boolean(row?.requires_authorization),
+    requiresGuide: Boolean(row?.requires_guide),
+    requiresReport: Boolean(row?.requires_report),
+    requiresSignature: Boolean(row?.requires_signature),
+    requiresProfessionalRegistry: Boolean(row?.requires_professional_registry),
+    requiresPatientDocument: Boolean(row?.requires_patient_document),
+    useActualDuration: Boolean(row?.use_actual_duration),
+    active: normalizeTussActiveFlag(row?.active),
+    validFrom: row?.valid_from || null,
+    validTo: row?.valid_to || null,
+    createdAt: row?.created_at || null,
+    updatedAt: row?.updated_at || null
+  });
+
+  const serializeAppointmentBillingItem = (row: any, service: any = null, code: any = null, mapping: any = null) => {
+    const readinessReasons = Array.isArray(row?.readiness_reasons)
+      ? row.readiness_reasons.map((reason: any) => sanitizeString(reason, 80)).filter(Boolean)
+      : [];
+    return {
+      id: sanitizeString(row?.id, 120) || null,
+      appointmentId: sanitizeString(row?.appointment_id, 120) || null,
+      patientId: sanitizeString(row?.patient_id, 120) || null,
+      professionalId: sanitizeString(row?.professional_id, 120) || null,
+      payerId: sanitizeString(row?.payer_id, 120) || null,
+      serviceCatalogId: sanitizeString(row?.service_catalog_id, 120) || null,
+      internalProcedureCode: sanitizeString(service?.internal_code, 80) || null,
+      internalProcedureName: sanitizeString(service?.name, 180) || null,
+      tussCodeId: sanitizeString(row?.tuss_code_id, 120) || null,
+      tussCode: sanitizeString(code?.code, 80) || null,
+      tussDescription: sanitizeTextField(code?.description, 600) || null,
+      tussVersion: sanitizeString(code?.version, 80) || null,
+      payerTussMappingId: sanitizeString(row?.payer_tuss_mapping_id, 120) || null,
+      guideType: sanitizeString(row?.guide_type, 40) || null,
+      billingUnit: sanitizeString(row?.billing_unit, 40) || null,
+      quantity: Number(row?.quantity || 0) || 0,
+      durationMinutes: row?.duration_minutes ?? null,
+      unitAmountCents: row?.unit_amount_cents ?? null,
+      amountCents: row?.amount_cents ?? null,
+      authorizationNumber: sanitizeString(row?.authorization_number, 120) || null,
+      guideNumber: sanitizeString(row?.guide_number, 120) || null,
+      cardNumber: sanitizeString(row?.card_number, 120) || null,
+      status: sanitizeString(row?.status, 40) || 'draft',
+      readinessReason: sanitizeTextField(row?.readiness_reason, 1200) || null,
+      readinessReasons,
+      readinessLabels: readinessReasons.map((reason: any) => humanizeTussPendingReason(reason as any)),
+      mappingStatus: row?.payer_tuss_mapping_id || mapping?.id ? 'configured' : 'pending_configuration',
+      mappingValidFrom: mapping?.valid_from || null,
+      mappingValidTo: mapping?.valid_to || null,
+      resolvedAt: row?.resolved_at || null,
+      updatedAt: row?.updated_at || null
+    };
+  };
+
+  const fetchTussServiceCatalogById = async (organizationId: string, serviceId: string) => {
+    if (!isUuid(organizationId) || !isUuid(serviceId)) return null;
+    const { data, error } = await supabase
+      .from('tuss_service_catalog')
+      .select(TUSS_SERVICE_CATALOG_SELECT)
+      .eq('organization_id', organizationId)
+      .eq('id', serviceId)
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      if (hasMissingFinancialSchema(error)) return null;
+      throw error;
+    }
+    return data || null;
+  };
+
+  const fetchTussCodeById = async (organizationId: string, codeId: string) => {
+    if (!isUuid(organizationId) || !isUuid(codeId)) return null;
+    const { data, error } = await supabase
+      .from('tuss_codes')
+      .select(TUSS_CODE_SELECT)
+      .eq('organization_id', organizationId)
+      .eq('id', codeId)
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      if (hasMissingFinancialSchema(error)) return null;
+      throw error;
+    }
+    return data || null;
+  };
+
+  const fetchPayerTussMappingById = async (organizationId: string, mappingId: string) => {
+    if (!isUuid(organizationId) || !isUuid(mappingId)) return null;
+    const { data, error } = await supabase
+      .from('payer_tuss_mappings')
+      .select(PAYER_TUSS_MAPPING_SELECT)
+      .eq('organization_id', organizationId)
+      .eq('id', mappingId)
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      if (hasMissingFinancialSchema(error)) return null;
+      throw error;
+    }
+    return data || null;
+  };
+
+  const fetchPatientFinancialPlanForTuss = async (organizationId: string, patientId: string, payerId: string, serviceType: any) => {
+    if (!isUuid(organizationId) || !isUuid(patientId)) return null;
+    const { data, error } = await supabase
+      .from('patient_financial_plans')
+      .select(PATIENT_FINANCIAL_PLAN_SELECT)
+      .eq('organization_id', organizationId)
+      .eq('patient_id', patientId)
+      .eq('status', 'ACTIVE')
+      .limit(30);
+    if (error) {
+      if (hasMissingFinancialSchema(error)) return null;
+      throw error;
+    }
+    const plans = Array.isArray(data) ? data : [];
+    return plans.find((plan: any) => payerId && sanitizeString(plan?.payer_id, 120) === payerId && financialPlanMatchesAppointmentService(plan, serviceType)) ||
+      plans.find((plan: any) => financialPlanMatchesAppointmentService(plan, serviceType)) ||
+      plans.find((plan: any) => payerId && sanitizeString(plan?.payer_id, 120) === payerId) ||
+      plans[0] ||
+      null;
+  };
+
+  const fetchMatchingTussServiceCatalog = async (organizationId: string, serviceType: any, procedureCode?: any) => {
+    if (!isUuid(organizationId)) return null;
+    const { data, error } = await supabase
+      .from('tuss_service_catalog')
+      .select(TUSS_SERVICE_CATALOG_SELECT)
+      .eq('organization_id', organizationId)
+      .eq('active', true)
+      .order('name', { ascending: true })
+      .limit(120);
+    if (error) {
+      if (hasMissingFinancialSchema(error)) return null;
+      throw error;
+    }
+    const services = Array.isArray(data) ? data : [];
+    const procedureKey = sanitizeString(procedureCode, 80).toLowerCase();
+    if (procedureKey) {
+      const byCode = services.find((service: any) => sanitizeString(service?.internal_code, 80).toLowerCase() === procedureKey);
+      if (byCode) return byCode;
+    }
+    const serviceKey = normalizeBillingServiceMatchKey(serviceType);
+    return services.find((service: any) => normalizeBillingServiceMatchKey(service?.service_type) === serviceKey) ||
+      services.find((service: any) => normalizeBillingServiceMatchKey(service?.name) === serviceKey) ||
+      services[0] ||
+      null;
+  };
+
+  const mappingIsValidForDate = (mapping: any, isoDate: string) => {
+    const date = sanitizeString(isoDate, 40).slice(0, 10);
+    const validFrom = sanitizeString(mapping?.valid_from, 40).slice(0, 10);
+    const validTo = sanitizeString(mapping?.valid_to, 40).slice(0, 10);
+    if (validFrom && date && date < validFrom) return false;
+    if (validTo && date && date > validTo) return false;
+    return true;
+  };
+
+  const fetchActivePayerTussMapping = async (organizationId: string, payerId: string, serviceCatalogId: string, appointmentDate: any) => {
+    if (!isUuid(organizationId) || !isUuid(payerId) || !isUuid(serviceCatalogId)) return null;
+    const { data, error } = await supabase
+      .from('payer_tuss_mappings')
+      .select(PAYER_TUSS_MAPPING_SELECT)
+      .eq('organization_id', organizationId)
+      .eq('payer_id', payerId)
+      .eq('service_catalog_id', serviceCatalogId)
+      .eq('active', true)
+      .order('valid_from', { ascending: false, nullsFirst: false })
+      .limit(20);
+    if (error) {
+      if (hasMissingFinancialSchema(error)) return null;
+      throw error;
+    }
+    const date = sanitizeString(appointmentDate || new Date().toISOString(), 40);
+    return (Array.isArray(data) ? data : []).find((mapping: any) => mappingIsValidForDate(mapping, date)) || null;
+  };
+
+  const fetchTussProfessional = async (professionalId: string) => {
+    if (!isUuid(professionalId)) return null;
+    const { data, error } = await supabase
+      .from('users')
+      .select('id, name, email, crp, council_number, council, professional_registry, registry')
+      .eq('id', professionalId)
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      if (hasMissingFinancialSchema(error)) return null;
+      throw error;
+    }
+    return data || null;
+  };
+
+  const fetchAppointmentBillingItemsBundle = async (organizationId: string, appointmentIds: string[]) => {
+    const validAppointmentIds = Array.from(new Set((appointmentIds || []).map((id) => sanitizeString(id, 120)).filter((id) => isUuid(id)))).slice(0, 2000);
+    const empty = {
+      itemsByAppointment: new Map<string, any>(),
+      servicesById: new Map<string, any>(),
+      codesById: new Map<string, any>(),
+      mappingsById: new Map<string, any>()
+    };
+    if (!isUuid(organizationId) || validAppointmentIds.length === 0) return empty;
+    const itemsResult = await supabase
+      .from('appointment_billing_items')
+      .select(APPOINTMENT_BILLING_ITEM_SELECT)
+      .eq('organization_id', organizationId)
+      .in('appointment_id', validAppointmentIds)
+      .limit(validAppointmentIds.length);
+    if (itemsResult.error) {
+      if (hasMissingFinancialSchema(itemsResult.error)) return empty;
+      throw itemsResult.error;
+    }
+    const items = Array.isArray(itemsResult.data) ? itemsResult.data : [];
+    const serviceIds = Array.from(new Set(items.map((item: any) => sanitizeString(item?.service_catalog_id, 120)).filter((id: string) => isUuid(id))));
+    const codeIds = Array.from(new Set(items.map((item: any) => sanitizeString(item?.tuss_code_id, 120)).filter((id: string) => isUuid(id))));
+    const mappingIds = Array.from(new Set(items.map((item: any) => sanitizeString(item?.payer_tuss_mapping_id, 120)).filter((id: string) => isUuid(id))));
+    const [servicesResult, codesResult, mappingsResult] = await Promise.all([
+      serviceIds.length > 0
+        ? supabase.from('tuss_service_catalog').select(TUSS_SERVICE_CATALOG_SELECT).eq('organization_id', organizationId).in('id', serviceIds).limit(serviceIds.length)
+        : Promise.resolve({ data: [], error: null } as any),
+      codeIds.length > 0
+        ? supabase.from('tuss_codes').select(TUSS_CODE_SELECT).eq('organization_id', organizationId).in('id', codeIds).limit(codeIds.length)
+        : Promise.resolve({ data: [], error: null } as any),
+      mappingIds.length > 0
+        ? supabase.from('payer_tuss_mappings').select(PAYER_TUSS_MAPPING_SELECT).eq('organization_id', organizationId).in('id', mappingIds).limit(mappingIds.length)
+        : Promise.resolve({ data: [], error: null } as any)
+    ]);
+    if (servicesResult.error && !hasMissingFinancialSchema(servicesResult.error)) throw servicesResult.error;
+    if (codesResult.error && !hasMissingFinancialSchema(codesResult.error)) throw codesResult.error;
+    if (mappingsResult.error && !hasMissingFinancialSchema(mappingsResult.error)) throw mappingsResult.error;
+    return {
+      itemsByAppointment: new Map<string, any>(items.map((item: any) => [sanitizeString(item?.appointment_id, 120), item])),
+      servicesById: new Map<string, any>((servicesResult.error ? [] : servicesResult.data || []).map((row: any) => [sanitizeString(row?.id, 120), row])),
+      codesById: new Map<string, any>((codesResult.error ? [] : codesResult.data || []).map((row: any) => [sanitizeString(row?.id, 120), row])),
+      mappingsById: new Map<string, any>((mappingsResult.error ? [] : mappingsResult.data || []).map((row: any) => [sanitizeString(row?.id, 120), row]))
+    };
+  };
+
+  const buildTussConferenceFields = (item: any, bundle: any = {}) => {
+    const service = bundle?.servicesById?.get?.(sanitizeString(item?.service_catalog_id, 120)) || null;
+    const code = bundle?.codesById?.get?.(sanitizeString(item?.tuss_code_id, 120)) || null;
+    const mapping = bundle?.mappingsById?.get?.(sanitizeString(item?.payer_tuss_mapping_id, 120)) || null;
+    const serialized = serializeAppointmentBillingItem(item, service, code, mapping);
+    return {
+      billing_item_id: serialized.id,
+      internal_procedure_code: serialized.internalProcedureCode,
+      internal_procedure_name: serialized.internalProcedureName,
+      tuss_code: serialized.tussCode,
+      tuss_description: serialized.tussDescription,
+      tuss_version: serialized.tussVersion,
+      guide_type: serialized.guideType,
+      billing_unit: serialized.billingUnit,
+      billing_quantity: serialized.quantity,
+      billing_unit_amount_cents: serialized.unitAmountCents,
+      billing_amount_cents: serialized.amountCents,
+      billing_item_status: serialized.status,
+      tuss_mapping_status: serialized.mappingStatus,
+      tuss_pending_reasons: serialized.readinessLabels,
+      tuss_pending_reason_codes: serialized.readinessReasons,
+      tuss_mapping_valid_from: serialized.mappingValidFrom,
+      tuss_mapping_valid_to: serialized.mappingValidTo
+    };
+  };
+
+  const resolveAndPersistAppointmentBillingItem = async (params: {
+    organizationId: string;
+    appointment: any;
+    billingContext: any;
+    payer?: any;
+    user?: any;
+  }) => {
+    const organizationId = sanitizeString(params.organizationId, 120);
+    const appointment = params.appointment || {};
+    const billingContext = params.billingContext || {};
+    const appointmentId = sanitizeString(appointment?.id || billingContext?.appointment_id, 120);
+    const patientId = sanitizeString(appointment?.patient_id || billingContext?.patient_id, 120);
+    if (!isUuid(organizationId) || !isUuid(appointmentId) || !isUuid(patientId)) return null;
+    const serviceType = billingContext?.service_type || appointment?.service_type || appointment?.approach || null;
+    const payerId = sanitizeString(billingContext?.payer_id || params.payer?.id, 120);
+    const professionalId = sanitizeString(appointment?.therapist_id || appointment?.professional_id, 120);
+    const [patientFinancialPlan, serviceCatalog, professional] = await Promise.all([
+      fetchPatientFinancialPlanForTuss(organizationId, patientId, payerId, serviceType),
+      fetchMatchingTussServiceCatalog(organizationId, serviceType, billingContext?.procedure_code),
+      fetchTussProfessional(professionalId)
+    ]);
+    const mapping = serviceCatalog?.id && isUuid(payerId)
+      ? await fetchActivePayerTussMapping(
+          organizationId,
+          payerId,
+          sanitizeString(serviceCatalog.id, 120),
+          appointment?.scheduled_start_at || appointment?.scheduled_at || appointment?.date
+        )
+      : null;
+    const tussCode = mapping?.tuss_code_id ? await fetchTussCodeById(organizationId, mapping.tuss_code_id) : null;
+    const resolution = resolveTussBillingItem({
+      appointment: {
+        ...appointment,
+        scheduled_minutes: appointment?.scheduled_minutes ?? appointment?.scheduled_duration_minutes ?? appointment?.duration_minutes,
+        actual_minutes: appointment?.actual_minutes ?? appointment?.actual_duration_minutes
+      },
+      billingContext,
+      patientFinancialPlan,
+      payer: params.payer,
+      serviceCatalog,
+      mapping,
+      tussCode,
+      professional
+    });
+    const now = new Date().toISOString();
+    const userId = sanitizeString(params.user?.id, 120);
+    const payload = cleanObject({
+      organization_id: organizationId,
+      appointment_id: appointmentId,
+      patient_id: patientId,
+      professional_id: isUuid(professionalId) ? professionalId : null,
+      payer_id: isUuid(payerId) ? payerId : null,
+      service_catalog_id: isUuid(resolution.serviceCatalogId || '') ? resolution.serviceCatalogId : null,
+      tuss_code_id: isUuid(resolution.tussCodeId || '') ? resolution.tussCodeId : null,
+      payer_tuss_mapping_id: isUuid(sanitizeString(mapping?.id, 120)) ? sanitizeString(mapping?.id, 120) : null,
+      guide_type: resolution.guideType,
+      billing_unit: resolution.billingUnit,
+      quantity: resolution.quantity || 1,
+      duration_minutes: resolution.durationMinutes,
+      unit_amount_cents: resolution.unitAmountCents,
+      amount_cents: resolution.amountCents,
+      authorization_number: sanitizeString(billingContext?.authorization_code, 120) || null,
+      guide_number: sanitizeString(billingContext?.guide_number, 120) || null,
+      card_number: sanitizeString(billingContext?.insurance_card_number || patientFinancialPlan?.insurance_card_number, 120) || null,
+      status: resolution.ready ? 'ready' : 'pending',
+      readiness_reason: resolution.readinessReason || null,
+      readiness_reasons: resolution.pendingReasons,
+      resolved_at: now,
+      updated_by: isUuid(userId) ? userId : null,
+      updated_at: now,
+      created_by: isUuid(userId) ? userId : null,
+      created_at: now
+    });
+    const { data, error } = await supabase
+      .from('appointment_billing_items')
+      .upsert(payload, { onConflict: 'organization_id,appointment_id' })
+      .select(APPOINTMENT_BILLING_ITEM_SELECT)
+      .maybeSingle();
+    if (error) {
+      if (hasMissingFinancialSchema(error)) return null;
+      throw error;
+    }
+    return serializeAppointmentBillingItem(data || payload, serviceCatalog, tussCode, mapping);
+  };
+
   const writePayerRequirementAuditLog = async (params: {
     organizationId: string;
     payerId?: string | null;
@@ -30025,6 +30518,390 @@ async function startServer() {
     }
   });
 
+  const isTussUniqueConflict = (error: any) => sanitizeString(error?.code, 40) === '23505' ||
+    /duplicate key|unique constraint|already exists/i.test(String(error?.message || error?.details || ''));
+
+  app.get('/api/admin/tuss/services', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
+      const limit = parseBoundedListLimit(req.query?.limit, 80, 200);
+      let query = supabase
+        .from('tuss_service_catalog')
+        .select(TUSS_SERVICE_CATALOG_SELECT)
+        .eq('organization_id', organizationId)
+        .order('name', { ascending: true })
+        .limit(limit);
+      if (String(req.query?.active || '').toLowerCase() === 'true') query = query.eq('active', true);
+      const { data, error } = await query;
+      if (error) {
+        if (hasMissingFinancialSchema(error)) return res.json({ success: true, data: [] });
+        throw error;
+      }
+      return res.json({ success: true, data: (data || []).map(serializeTussServiceCatalog) });
+    } catch (error: any) {
+      console.warn('[TussReady] service list failed:', error?.message || String(error));
+      return res.status(500).json(payerSafeError(500));
+    }
+  });
+
+  app.post('/api/admin/tuss/services', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de procedimento TUSS-ready')) return;
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
+      const name = sanitizeString(req.body?.name || req.body?.nome, 180);
+      if (name.length < 2) return res.status(400).json(payerSafeError(400));
+      const now = new Date().toISOString();
+      const userId = sanitizeString(req.session.user?.id, 120);
+      const payload = cleanObject({
+        id: isUuid(sanitizeString(req.body?.id, 120)) ? sanitizeString(req.body?.id, 120) : crypto.randomUUID(),
+        organization_id: organizationId,
+        internal_code: sanitizeString(req.body?.internalCode || req.body?.internal_code, 80) || null,
+        name,
+        description: sanitizeTextField(req.body?.description, 1200) || null,
+        specialty: sanitizeString(req.body?.specialty || req.body?.especialidade, 120) || null,
+        service_type: sanitizeString(req.body?.serviceType || req.body?.service_type, 120) || null,
+        default_duration_minutes: req.body?.defaultDurationMinutes || req.body?.default_duration_minutes ? Math.max(1, Math.round(Number(req.body?.defaultDurationMinutes || req.body?.default_duration_minutes) || 0)) : null,
+        billing_unit: normalizeTussBillingUnit(req.body?.billingUnit || req.body?.billing_unit),
+        default_quantity: Math.max(0.01, Number(req.body?.defaultQuantity || req.body?.default_quantity || 1) || 1),
+        default_amount_cents: req.body?.defaultAmountCents || req.body?.default_amount_cents ? Math.max(0, Math.round(Number(req.body?.defaultAmountCents || req.body?.default_amount_cents) || 0)) : null,
+        active: req.body?.active !== false,
+        created_by: isUuid(userId) ? userId : null,
+        updated_by: isUuid(userId) ? userId : null,
+        created_at: now,
+        updated_at: now
+      });
+      const { data, error } = await supabase
+        .from('tuss_service_catalog')
+        .insert([payload])
+        .select(TUSS_SERVICE_CATALOG_SELECT)
+        .maybeSingle();
+      if (error && isTussUniqueConflict(error) && payload.internal_code) {
+        const existing = await supabase
+          .from('tuss_service_catalog')
+          .select(TUSS_SERVICE_CATALOG_SELECT)
+          .eq('organization_id', organizationId)
+          .ilike('internal_code', payload.internal_code)
+          .eq('active', true)
+          .limit(1)
+          .maybeSingle();
+        if (!existing.error && existing.data?.id) return res.json({ success: true, idempotent: true, data: serializeTussServiceCatalog(existing.data) });
+      }
+      if (error) throw error;
+      return res.status(201).json({ success: true, data: serializeTussServiceCatalog(data) });
+    } catch (error: any) {
+      console.warn('[TussReady] service create failed:', error?.message || String(error));
+      return res.status(500).json(payerSafeError(500));
+    }
+  });
+
+  app.patch('/api/admin/tuss/services/:serviceId', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de procedimento TUSS-ready')) return;
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      const serviceId = sanitizeString(req.params.serviceId, 120);
+      if (!isUuid(organizationId) || !isUuid(serviceId)) return res.status(400).json(payerSafeError(400));
+      const existing = await fetchTussServiceCatalogById(organizationId, serviceId);
+      if (!existing?.id) return res.status(404).json(payerSafeError(404));
+      const patch = cleanObject({
+        internal_code: req.body?.internalCode !== undefined || req.body?.internal_code !== undefined ? sanitizeString(req.body?.internalCode || req.body?.internal_code, 80) || null : undefined,
+        name: req.body?.name !== undefined ? sanitizeString(req.body?.name, 180) || existing.name : undefined,
+        description: req.body?.description !== undefined ? sanitizeTextField(req.body?.description, 1200) || null : undefined,
+        specialty: req.body?.specialty !== undefined ? sanitizeString(req.body?.specialty, 120) || null : undefined,
+        service_type: req.body?.serviceType !== undefined || req.body?.service_type !== undefined ? sanitizeString(req.body?.serviceType || req.body?.service_type, 120) || null : undefined,
+        default_duration_minutes: req.body?.defaultDurationMinutes !== undefined || req.body?.default_duration_minutes !== undefined ? Math.max(1, Math.round(Number(req.body?.defaultDurationMinutes || req.body?.default_duration_minutes) || 0)) : undefined,
+        billing_unit: req.body?.billingUnit !== undefined || req.body?.billing_unit !== undefined ? normalizeTussBillingUnit(req.body?.billingUnit || req.body?.billing_unit) : undefined,
+        default_quantity: req.body?.defaultQuantity !== undefined || req.body?.default_quantity !== undefined ? Math.max(0.01, Number(req.body?.defaultQuantity || req.body?.default_quantity || 1) || 1) : undefined,
+        default_amount_cents: req.body?.defaultAmountCents !== undefined || req.body?.default_amount_cents !== undefined ? Math.max(0, Math.round(Number(req.body?.defaultAmountCents || req.body?.default_amount_cents) || 0)) : undefined,
+        active: req.body?.active !== undefined ? Boolean(req.body?.active) : undefined,
+        updated_by: isUuid(sanitizeString(req.session.user?.id, 120)) ? sanitizeString(req.session.user?.id, 120) : null,
+        updated_at: new Date().toISOString()
+      });
+      const { data, error } = await supabase
+        .from('tuss_service_catalog')
+        .update(patch)
+        .eq('organization_id', organizationId)
+        .eq('id', serviceId)
+        .select(TUSS_SERVICE_CATALOG_SELECT)
+        .maybeSingle();
+      if (error) throw error;
+      return res.json({ success: true, data: serializeTussServiceCatalog(data) });
+    } catch (error: any) {
+      console.warn('[TussReady] service update failed:', error?.message || String(error));
+      return res.status(500).json(payerSafeError(500));
+    }
+  });
+
+  app.get('/api/admin/tuss/codes', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
+      const limit = parseBoundedListLimit(req.query?.limit, 100, 300);
+      let query = supabase
+        .from('tuss_codes')
+        .select(TUSS_CODE_SELECT)
+        .eq('organization_id', organizationId)
+        .order('code', { ascending: true })
+        .limit(limit);
+      if (String(req.query?.active || '').toLowerCase() === 'true') query = query.eq('active', true);
+      const { data, error } = await query;
+      if (error) {
+        if (hasMissingFinancialSchema(error)) return res.json({ success: true, data: [] });
+        throw error;
+      }
+      return res.json({ success: true, data: (data || []).map(serializeTussCode) });
+    } catch (error: any) {
+      console.warn('[TussReady] code list failed:', error?.message || String(error));
+      return res.status(500).json(payerSafeError(500));
+    }
+  });
+
+  app.post('/api/admin/tuss/codes', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de codigo TUSS')) return;
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
+      const code = sanitizeString(req.body?.code || req.body?.codigo, 80);
+      const description = sanitizeTextField(req.body?.description || req.body?.descricao, 600);
+      if (!code || description.length < 2) return res.status(400).json(payerSafeError(400));
+      const now = new Date().toISOString();
+      const userId = sanitizeString(req.session.user?.id, 120);
+      const payload = cleanObject({
+        id: isUuid(sanitizeString(req.body?.id, 120)) ? sanitizeString(req.body?.id, 120) : crypto.randomUUID(),
+        organization_id: organizationId,
+        code,
+        description,
+        term_type: sanitizeString(req.body?.termType || req.body?.term_type, 120) || null,
+        version: sanitizeString(req.body?.version, 80) || null,
+        valid_from: sanitizeString(req.body?.validFrom || req.body?.valid_from, 20) || null,
+        valid_to: sanitizeString(req.body?.validTo || req.body?.valid_to, 20) || null,
+        active: req.body?.active !== false,
+        source: sanitizeString(req.body?.source || req.body?.fonte, 120) || 'manual',
+        created_by: isUuid(userId) ? userId : null,
+        updated_by: isUuid(userId) ? userId : null,
+        created_at: now,
+        updated_at: now
+      });
+      const { data, error } = await supabase
+        .from('tuss_codes')
+        .insert([payload])
+        .select(TUSS_CODE_SELECT)
+        .maybeSingle();
+      if (error && isTussUniqueConflict(error)) {
+        let existing = supabase
+          .from('tuss_codes')
+          .select(TUSS_CODE_SELECT)
+          .eq('organization_id', organizationId)
+          .eq('code', code)
+          .eq('active', true)
+          .limit(1);
+        existing = payload.version ? existing.eq('version', payload.version) : existing.is('version', null);
+        const existingResult = await existing.maybeSingle();
+        if (!existingResult.error && existingResult.data?.id) return res.json({ success: true, idempotent: true, data: serializeTussCode(existingResult.data) });
+      }
+      if (error) throw error;
+      return res.status(201).json({ success: true, data: serializeTussCode(data) });
+    } catch (error: any) {
+      console.warn('[TussReady] code create failed:', error?.message || String(error));
+      return res.status(500).json(payerSafeError(500));
+    }
+  });
+
+  app.patch('/api/admin/tuss/codes/:codeId', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de codigo TUSS')) return;
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      const codeId = sanitizeString(req.params.codeId, 120);
+      if (!isUuid(organizationId) || !isUuid(codeId)) return res.status(400).json(payerSafeError(400));
+      const existing = await fetchTussCodeById(organizationId, codeId);
+      if (!existing?.id) return res.status(404).json(payerSafeError(404));
+      const patch = cleanObject({
+        code: req.body?.code !== undefined ? sanitizeString(req.body?.code, 80) || existing.code : undefined,
+        description: req.body?.description !== undefined ? sanitizeTextField(req.body?.description, 600) || existing.description : undefined,
+        term_type: req.body?.termType !== undefined || req.body?.term_type !== undefined ? sanitizeString(req.body?.termType || req.body?.term_type, 120) || null : undefined,
+        version: req.body?.version !== undefined ? sanitizeString(req.body?.version, 80) || null : undefined,
+        valid_from: req.body?.validFrom !== undefined || req.body?.valid_from !== undefined ? sanitizeString(req.body?.validFrom || req.body?.valid_from, 20) || null : undefined,
+        valid_to: req.body?.validTo !== undefined || req.body?.valid_to !== undefined ? sanitizeString(req.body?.validTo || req.body?.valid_to, 20) || null : undefined,
+        active: req.body?.active !== undefined ? Boolean(req.body?.active) : undefined,
+        source: req.body?.source !== undefined ? sanitizeString(req.body?.source, 120) || null : undefined,
+        updated_by: isUuid(sanitizeString(req.session.user?.id, 120)) ? sanitizeString(req.session.user?.id, 120) : null,
+        updated_at: new Date().toISOString()
+      });
+      const { data, error } = await supabase
+        .from('tuss_codes')
+        .update(patch)
+        .eq('organization_id', organizationId)
+        .eq('id', codeId)
+        .select(TUSS_CODE_SELECT)
+        .maybeSingle();
+      if (error) throw error;
+      return res.json({ success: true, data: serializeTussCode(data) });
+    } catch (error: any) {
+      console.warn('[TussReady] code update failed:', error?.message || String(error));
+      return res.status(500).json(payerSafeError(500));
+    }
+  });
+
+  app.get('/api/admin/tuss/mappings', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
+      const limit = parseBoundedListLimit(req.query?.limit, 120, 300);
+      const payerId = sanitizeString(req.query?.payerId || req.query?.payer_id, 120);
+      let query = supabase
+        .from('payer_tuss_mappings')
+        .select(PAYER_TUSS_MAPPING_SELECT)
+        .eq('organization_id', organizationId)
+        .order('updated_at', { ascending: false })
+        .limit(limit);
+      if (isUuid(payerId)) query = query.eq('payer_id', payerId);
+      if (String(req.query?.active || '').toLowerCase() === 'true') query = query.eq('active', true);
+      const { data, error } = await query;
+      if (error) {
+        if (hasMissingFinancialSchema(error)) return res.json({ success: true, data: [] });
+        throw error;
+      }
+      const rows = Array.isArray(data) ? data : [];
+      const serviceIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row.service_catalog_id, 120)).filter((id: string) => isUuid(id))));
+      const codeIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row.tuss_code_id, 120)).filter((id: string) => isUuid(id))));
+      const [servicesResult, codesResult] = await Promise.all([
+        serviceIds.length > 0
+          ? supabase.from('tuss_service_catalog').select(TUSS_SERVICE_CATALOG_SELECT).eq('organization_id', organizationId).in('id', serviceIds).limit(serviceIds.length)
+          : Promise.resolve({ data: [], error: null } as any),
+        codeIds.length > 0
+          ? supabase.from('tuss_codes').select(TUSS_CODE_SELECT).eq('organization_id', organizationId).in('id', codeIds).limit(codeIds.length)
+          : Promise.resolve({ data: [], error: null } as any)
+      ]);
+      if (servicesResult.error && !hasMissingFinancialSchema(servicesResult.error)) throw servicesResult.error;
+      if (codesResult.error && !hasMissingFinancialSchema(codesResult.error)) throw codesResult.error;
+      const servicesById = new Map<string, any>((servicesResult.error ? [] : servicesResult.data || []).map((row: any) => [sanitizeString(row.id, 120), row]));
+      const codesById = new Map<string, any>((codesResult.error ? [] : codesResult.data || []).map((row: any) => [sanitizeString(row.id, 120), row]));
+      return res.json({ success: true, data: rows.map((row: any) => serializePayerTussMapping(row, servicesById.get(sanitizeString(row.service_catalog_id, 120)), codesById.get(sanitizeString(row.tuss_code_id, 120)))) });
+    } catch (error: any) {
+      console.warn('[TussReady] mapping list failed:', error?.message || String(error));
+      return res.status(500).json(payerSafeError(500));
+    }
+  });
+
+  app.post('/api/admin/tuss/mappings', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de mapeamento TUSS-ready')) return;
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      const payerId = sanitizeString(req.body?.payerId || req.body?.payer_id, 120);
+      const serviceCatalogId = sanitizeString(req.body?.serviceCatalogId || req.body?.service_catalog_id, 120);
+      const tussCodeId = sanitizeString(req.body?.tussCodeId || req.body?.tuss_code_id, 120);
+      if (!isUuid(organizationId) || !isUuid(payerId) || !isUuid(serviceCatalogId) || (tussCodeId && !isUuid(tussCodeId))) return res.status(400).json(payerSafeError(400));
+      const [payer, service, code] = await Promise.all([
+        fetchPayerForAdmin(payerId, organizationId),
+        fetchTussServiceCatalogById(organizationId, serviceCatalogId),
+        tussCodeId ? fetchTussCodeById(organizationId, tussCodeId) : Promise.resolve(null)
+      ]);
+      if (!payer?.id || !service?.id || (tussCodeId && !code?.id)) return res.status(404).json(payerSafeError(404));
+      const now = new Date().toISOString();
+      const userId = sanitizeString(req.session.user?.id, 120);
+      const payload = cleanObject({
+        id: isUuid(sanitizeString(req.body?.id, 120)) ? sanitizeString(req.body?.id, 120) : crypto.randomUUID(),
+        organization_id: organizationId,
+        payer_id: payerId,
+        service_catalog_id: serviceCatalogId,
+        tuss_code_id: tussCodeId || null,
+        guide_type: normalizeTussGuideType(req.body?.guideType || req.body?.guide_type),
+        billing_unit: normalizeTussBillingUnit(req.body?.billingUnit || req.body?.billing_unit || service.billing_unit),
+        quantity_rule: normalizeTussQuantityRule(req.body?.quantityRule || req.body?.quantity_rule),
+        default_quantity: Math.max(0.01, Number(req.body?.defaultQuantity || req.body?.default_quantity || 1) || 1),
+        amount_cents: req.body?.amountCents !== undefined || req.body?.amount_cents !== undefined ? Math.max(0, Math.round(Number(req.body?.amountCents || req.body?.amount_cents) || 0)) : null,
+        requires_authorization: Boolean(req.body?.requiresAuthorization ?? req.body?.requires_authorization),
+        requires_guide: Boolean(req.body?.requiresGuide ?? req.body?.requires_guide),
+        requires_report: Boolean(req.body?.requiresReport ?? req.body?.requires_report),
+        requires_signature: Boolean(req.body?.requiresSignature ?? req.body?.requires_signature),
+        requires_professional_registry: Boolean(req.body?.requiresProfessionalRegistry ?? req.body?.requires_professional_registry),
+        requires_patient_document: Boolean(req.body?.requiresPatientDocument ?? req.body?.requires_patient_document),
+        use_actual_duration: Boolean(req.body?.useActualDuration ?? req.body?.use_actual_duration),
+        active: req.body?.active !== false,
+        valid_from: sanitizeString(req.body?.validFrom || req.body?.valid_from, 20) || null,
+        valid_to: sanitizeString(req.body?.validTo || req.body?.valid_to, 20) || null,
+        created_by: isUuid(userId) ? userId : null,
+        updated_by: isUuid(userId) ? userId : null,
+        created_at: now,
+        updated_at: now
+      });
+      const { data, error } = await supabase
+        .from('payer_tuss_mappings')
+        .insert([payload])
+        .select(PAYER_TUSS_MAPPING_SELECT)
+        .maybeSingle();
+      if (error && isTussUniqueConflict(error)) {
+        const existing = await supabase
+          .from('payer_tuss_mappings')
+          .select(PAYER_TUSS_MAPPING_SELECT)
+          .eq('organization_id', organizationId)
+          .eq('payer_id', payerId)
+          .eq('service_catalog_id', serviceCatalogId)
+          .eq('active', true)
+          .limit(1)
+          .maybeSingle();
+        if (!existing.error && existing.data?.id) return res.json({ success: true, idempotent: true, data: serializePayerTussMapping(existing.data, service, code) });
+      }
+      if (error) throw error;
+      return res.status(201).json({ success: true, data: serializePayerTussMapping(data, service, code) });
+    } catch (error: any) {
+      console.warn('[TussReady] mapping create failed:', error?.message || String(error));
+      return res.status(500).json(payerSafeError(500));
+    }
+  });
+
+  app.patch('/api/admin/tuss/mappings/:mappingId', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de mapeamento TUSS-ready')) return;
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      const mappingId = sanitizeString(req.params.mappingId, 120);
+      if (!isUuid(organizationId) || !isUuid(mappingId)) return res.status(400).json(payerSafeError(400));
+      const existing = await fetchPayerTussMappingById(organizationId, mappingId);
+      if (!existing?.id) return res.status(404).json(payerSafeError(404));
+      const serviceCatalogId = sanitizeString(req.body?.serviceCatalogId || req.body?.service_catalog_id || existing.service_catalog_id, 120);
+      const tussCodeId = sanitizeString(req.body?.tussCodeId || req.body?.tuss_code_id || existing.tuss_code_id, 120);
+      const [service, code] = await Promise.all([
+        fetchTussServiceCatalogById(organizationId, serviceCatalogId),
+        tussCodeId ? fetchTussCodeById(organizationId, tussCodeId) : Promise.resolve(null)
+      ]);
+      if (!service?.id || (tussCodeId && !code?.id)) return res.status(404).json(payerSafeError(404));
+      const patch = cleanObject({
+        service_catalog_id: serviceCatalogId,
+        tuss_code_id: tussCodeId || null,
+        guide_type: req.body?.guideType !== undefined || req.body?.guide_type !== undefined ? normalizeTussGuideType(req.body?.guideType || req.body?.guide_type) : undefined,
+        billing_unit: req.body?.billingUnit !== undefined || req.body?.billing_unit !== undefined ? normalizeTussBillingUnit(req.body?.billingUnit || req.body?.billing_unit) : undefined,
+        quantity_rule: req.body?.quantityRule !== undefined || req.body?.quantity_rule !== undefined ? normalizeTussQuantityRule(req.body?.quantityRule || req.body?.quantity_rule) : undefined,
+        default_quantity: req.body?.defaultQuantity !== undefined || req.body?.default_quantity !== undefined ? Math.max(0.01, Number(req.body?.defaultQuantity || req.body?.default_quantity || 1) || 1) : undefined,
+        amount_cents: req.body?.amountCents !== undefined || req.body?.amount_cents !== undefined ? Math.max(0, Math.round(Number(req.body?.amountCents || req.body?.amount_cents) || 0)) : undefined,
+        requires_authorization: req.body?.requiresAuthorization !== undefined || req.body?.requires_authorization !== undefined ? Boolean(req.body?.requiresAuthorization ?? req.body?.requires_authorization) : undefined,
+        requires_guide: req.body?.requiresGuide !== undefined || req.body?.requires_guide !== undefined ? Boolean(req.body?.requiresGuide ?? req.body?.requires_guide) : undefined,
+        requires_report: req.body?.requiresReport !== undefined || req.body?.requires_report !== undefined ? Boolean(req.body?.requiresReport ?? req.body?.requires_report) : undefined,
+        requires_signature: req.body?.requiresSignature !== undefined || req.body?.requires_signature !== undefined ? Boolean(req.body?.requiresSignature ?? req.body?.requires_signature) : undefined,
+        requires_professional_registry: req.body?.requiresProfessionalRegistry !== undefined || req.body?.requires_professional_registry !== undefined ? Boolean(req.body?.requiresProfessionalRegistry ?? req.body?.requires_professional_registry) : undefined,
+        requires_patient_document: req.body?.requiresPatientDocument !== undefined || req.body?.requires_patient_document !== undefined ? Boolean(req.body?.requiresPatientDocument ?? req.body?.requires_patient_document) : undefined,
+        use_actual_duration: req.body?.useActualDuration !== undefined || req.body?.use_actual_duration !== undefined ? Boolean(req.body?.useActualDuration ?? req.body?.use_actual_duration) : undefined,
+        active: req.body?.active !== undefined ? Boolean(req.body?.active) : undefined,
+        valid_from: req.body?.validFrom !== undefined || req.body?.valid_from !== undefined ? sanitizeString(req.body?.validFrom || req.body?.valid_from, 20) || null : undefined,
+        valid_to: req.body?.validTo !== undefined || req.body?.valid_to !== undefined ? sanitizeString(req.body?.validTo || req.body?.valid_to, 20) || null : undefined,
+        updated_by: isUuid(sanitizeString(req.session.user?.id, 120)) ? sanitizeString(req.session.user?.id, 120) : null,
+        updated_at: new Date().toISOString()
+      });
+      const { data, error } = await supabase
+        .from('payer_tuss_mappings')
+        .update(patch)
+        .eq('organization_id', organizationId)
+        .eq('id', mappingId)
+        .select(PAYER_TUSS_MAPPING_SELECT)
+        .maybeSingle();
+      if (error) throw error;
+      return res.json({ success: true, data: serializePayerTussMapping(data, service, code) });
+    } catch (error: any) {
+      console.warn('[TussReady] mapping update failed:', error?.message || String(error));
+      return res.status(500).json(payerSafeError(500));
+    }
+  });
+
   app.get('/api/appointments/:appointmentId/billing-context', checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
       const context = await fetchAppointmentForBillingContext(req.params.appointmentId, req.session.user);
@@ -30039,13 +30916,25 @@ async function startServer() {
         patientId: appointment.patient_id,
         serviceType: appointment.service_type || appointment.approach || null
       });
+      const billingItemsBundle = await fetchAppointmentBillingItemsBundle(organizationId, [appointment.id]);
+      const billingItem = billingItemsBundle.itemsByAppointment.get(sanitizeString(appointment.id, 120));
       return res.json({
         success: true,
-        data: serializeBillingContext(billingContext || {
+        data: {
+          ...serializeBillingContext(billingContext || {
           appointment_id: appointment.id,
           patient_id: appointment.patient_id,
           service_type: appointment.service_type || appointment.approach || null
-        }, payer, documents, suggestion)
+          }, payer, documents, suggestion),
+          billingItem: billingItem
+            ? serializeAppointmentBillingItem(
+                billingItem,
+                billingItemsBundle.servicesById.get(sanitizeString(billingItem.service_catalog_id, 120)),
+                billingItemsBundle.codesById.get(sanitizeString(billingItem.tuss_code_id, 120)),
+                billingItemsBundle.mappingsById.get(sanitizeString(billingItem.payer_tuss_mapping_id, 120))
+              )
+            : null
+        }
       });
     } catch (error: any) {
       console.warn('[PayerRequirements] billing context get failed:', error?.message || String(error));
@@ -30161,6 +31050,18 @@ async function startServer() {
       } catch (documentError: any) {
         console.warn('[PayerRequirements] pendencias apos pagador falharam:', documentError?.message || String(documentError));
       }
+      let billingItem: any = null;
+      try {
+        billingItem = await resolveAndPersistAppointmentBillingItem({
+          organizationId,
+          appointment,
+          billingContext: data,
+          payer,
+          user: req.session.user
+        });
+      } catch (billingItemError: any) {
+        console.warn('[TussReady] item faturavel apos pagador falhou:', billingItemError?.message || String(billingItemError));
+      }
       let documents: any[] = [];
       try {
         documents = await fetchRequiredDocumentsForAppointment(organizationId, appointment.id);
@@ -30176,7 +31077,10 @@ async function startServer() {
       } catch (closureError: any) {
         console.warn('[PayerRequirements] fechamento pontual apos pagador falhou:', closureError?.message || String(closureError));
       }
-      const serialized = serializeBillingContext(data, payer, documents);
+      const serialized = {
+        ...serializeBillingContext(data, payer, documents),
+        billingItem
+      };
       return res.json({ success: true, message: 'Pagador salvo na consulta.', data: serialized, billingContext: serialized });
     } catch (error: any) {
       console.warn('[PayerRequirements] billing context update failed:', error?.message || String(error));
@@ -30191,6 +31095,30 @@ async function startServer() {
         success: false,
         error: 'Não foi possível salvar o pagador da consulta agora.'
       });
+    }
+  });
+
+  app.post('/api/appointments/:appointmentId/billing-item/resolve', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 16 * 1024, 'Payload de resolução TUSS-ready')) return;
+      const context = await fetchAppointmentForBillingContext(req.params.appointmentId, req.session.user);
+      if (!context.ok) return res.status((context as any).status || 404).json(payerSafeError((context as any).status || 404));
+      const organizationId = (context as any).organizationId;
+      const appointment = (context as any).appointment;
+      const billingContext = await fetchAppointmentBillingContextRow(organizationId, appointment.id);
+      if (!billingContext?.id) return res.status(409).json({ success: false, error: 'Informe o contexto financeiro antes de resolver o item faturável.' });
+      const payer = billingContext?.payer_id ? await fetchPayerForAdmin(billingContext.payer_id, organizationId) : null;
+      const billingItem = await resolveAndPersistAppointmentBillingItem({
+        organizationId,
+        appointment,
+        billingContext,
+        payer,
+        user: req.session.user
+      });
+      return res.json({ success: true, data: billingItem });
+    } catch (error: any) {
+      console.warn('[TussReady] billing item resolve failed:', error?.message || String(error));
+      return res.status(500).json(payerSafeError(500));
     }
   });
 
@@ -30368,6 +31296,7 @@ async function startServer() {
 
       const patientIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row.patient_id, 120)).filter((id: string) => isUuid(id))));
       const professionalIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row.professional_id, 120)).filter((id: string) => isUuid(id))));
+      const appointmentIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row.appointment_id, 120)).filter((id: string) => isUuid(id))));
 
       let totalsRows: any[] = [];
       try {
@@ -30398,6 +31327,7 @@ async function startServer() {
       ]);
       if (patientsResult.error) console.warn('[Closure] patient labels unavailable:', patientsResult.error?.message || String(patientsResult.error));
       if (professionalsResult.error) console.warn('[Closure] professional labels unavailable:', professionalsResult.error?.message || String(professionalsResult.error));
+      let billingItemsBundle = await fetchAppointmentBillingItemsBundle(clinicId, appointmentIds);
 
       const patientNames = new Map<string, string>((patientsResult.error ? [] : patientsResult.data || []).map((row: any) => [sanitizeString(row.id, 120), sanitizeString(row.name, 180) || 'Paciente']));
       const professionalNames = new Map<string, string>((professionalsResult.error ? [] : professionalsResult.data || []).map((row: any) => [sanitizeString(row.id, 120), sanitizeString(row.name || row.email, 180) || 'Equipe']));
@@ -30446,12 +31376,17 @@ async function startServer() {
         blockingIssues: totalsRows.reduce((sum: number, row: any) => sum + (Number(row.blocking_issues_count) || 0), 0),
         warningIssues: totalsRows.reduce((sum: number, row: any) => sum + (Number(row.warning_issues_count) || 0), 0)
       };
+      const closureRows = filterHydratedRowsByTussMissingKind(rows.map((row: any) => ({
+        ...normalizeClosureListRow(row, patientNames, professionalNames),
+        financial_plan_name: financialPlanNameForClosureRow(row),
+        ...buildTussConferenceFields(
+          billingItemsBundle.itemsByAppointment.get(sanitizeString(row.appointment_id, 120)),
+          billingItemsBundle
+        )
+      })), missingKind);
       return res.json({
         success: true,
-        data: rows.map((row: any) => ({
-          ...normalizeClosureListRow(row, patientNames, professionalNames),
-          financial_plan_name: financialPlanNameForClosureRow(row)
-        })),
+        data: closureRows,
         page,
         limit,
         totals
@@ -30517,6 +31452,8 @@ async function startServer() {
           selectedFinancialPlan?.payer_name_snapshot,
         180
       ) || null;
+      const billingItemsBundle = await fetchAppointmentBillingItemsBundle(clinicId, [appointmentId]);
+      const billingItem = billingItemsBundle.itemsByAppointment.get(appointmentId);
       await writeClosureAuditLog({
         organizationId: clinicId,
         appointmentId,
@@ -30537,6 +31474,7 @@ async function startServer() {
             new Map([[professionalId, sanitizeString(professionalResult.data?.name || professionalResult.data?.email, 180) || 'Equipe']])
           ),
           financial_plan_name: financialPlanName,
+          ...buildTussConferenceFields(billingItem, billingItemsBundle),
           checklist: Array.isArray(data?.checklist) ? data.checklist : []
         }
       });
@@ -30671,6 +31609,22 @@ async function startServer() {
     if (filters.missingKind === 'authorization' || filters.missingKind === 'autorizacao') scoped = scoped.is('authorization_code', null);
     if (filters.missingKind === 'documents' || filters.missingKind === 'documentos') scoped = scoped.gt('required_document_pending_count', 0);
     return scoped;
+  };
+
+  const filterHydratedRowsByTussMissingKind = (rows: any[], missingKind: string) => {
+    const kind = sanitizeString(missingKind, 80).toLowerCase();
+    if (!['procedure', 'procedimento', 'tuss', 'amount', 'valor', 'professional_registry', 'registro', 'card', 'carteirinha'].includes(kind)) {
+      return rows;
+    }
+    return (Array.isArray(rows) ? rows : []).filter((row: any) => {
+      const pendingCodes = Array.isArray(row?.tuss_pending_reason_codes) ? row.tuss_pending_reason_codes : [];
+      if (kind === 'procedure' || kind === 'procedimento') return !sanitizeString(row?.internal_procedure_name, 180) || pendingCodes.includes('missing_service_catalog');
+      if (kind === 'tuss') return !sanitizeString(row?.tuss_code, 80) || pendingCodes.includes('missing_tuss_mapping') || pendingCodes.includes('missing_tuss_code');
+      if (kind === 'amount' || kind === 'valor') return !Number(row?.billing_amount_cents || row?.expected_amount_cents || 0) || pendingCodes.includes('missing_amount');
+      if (kind === 'professional_registry' || kind === 'registro') return !sanitizeString(row?.professional_registry, 80) || pendingCodes.includes('missing_professional_registry');
+      if (kind === 'card' || kind === 'carteirinha') return !sanitizeString(row?.insurance_card_number, 120) || pendingCodes.includes('missing_card_number');
+      return true;
+    });
   };
 
   const CONFERENCE_STATUS_LABELS: Record<string, string> = {
@@ -30822,6 +31776,7 @@ async function startServer() {
     ]);
     if (billingResult.error && !hasMissingFinancialSchema(billingResult.error)) throw billingResult.error;
     if (financialPlansResult.error && !hasMissingFinancialSchema(financialPlansResult.error)) throw financialPlansResult.error;
+    const billingItemsBundle = await fetchAppointmentBillingItemsBundle(clinicId, appointmentIds);
 
     const exporterIds = Array.from(new Set(Array.from(statusMap.values()).flatMap((statusRow: any) => [
       sanitizeString(statusRow?.exported_by, 120),
@@ -30852,6 +31807,7 @@ async function startServer() {
       const patient = patientsById.get(sanitizeString(row?.patient_id, 120));
       const professional = professionalsById.get(sanitizeString(row?.professional_id, 120));
       const billing = billingByAppointment.get(sanitizeString(row?.appointment_id, 120)) || {};
+      const billingItem = billingItemsBundle.itemsByAppointment.get(sanitizeString(row?.appointment_id, 120));
       const financialPlan = selectConferenceFinancialPlan(financialPlansByPatient.get(sanitizeString(row?.patient_id, 120)) || [], {
         ...row,
         payer_name: base.payer_name
@@ -30886,6 +31842,7 @@ async function startServer() {
         guide_number: sanitizeString(billing?.guide_number || base.guide_number, 120) || null,
         authorization_code: sanitizeString(billing?.authorization_code || base.authorization_code, 120) || null,
         notes: sanitizeTextField(billing?.notes || financialPlan?.notes, 600) || null,
+        ...buildTussConferenceFields(billingItem, billingItemsBundle),
         conference_status: normalizeAppointmentConferenceStatus(conferenceStatus),
         conference_status_label: conferenceStatusLabel(conferenceStatus),
         export_status: conferenceExportStatusLabel(statusRow || { status: conferenceStatus }),
@@ -31082,8 +32039,14 @@ async function startServer() {
         loadConferenceClosureRows({ clinicId, user: req.session.user, filters, paginated: true }),
         loadConferenceClosureRows({ clinicId, user: req.session.user, filters, hardLimit: 2000 })
       ]);
-      const hydratedPageRows = await hydrateConferenceRows(pageRows, clinicId, req.session.user);
-      const hydratedAggregateRows = await hydrateConferenceRows(aggregateRows, clinicId, req.session.user);
+      const hydratedPageRows = filterHydratedRowsByTussMissingKind(
+        await hydrateConferenceRows(pageRows, clinicId, req.session.user),
+        filters.missingKind
+      );
+      const hydratedAggregateRows = filterHydratedRowsByTussMissingKind(
+        await hydrateConferenceRows(aggregateRows, clinicId, req.session.user),
+        filters.missingKind
+      );
       const summary = buildMonthlyConferenceSummary(hydratedAggregateRows);
       await writeClosureAuditLog({
         organizationId: clinicId,
@@ -31122,7 +32085,10 @@ async function startServer() {
       if (!isUuid(clinicId) || !filters.ok) return res.status(400).json(conferenceSafeError(400));
       if (!(await assertConferenceFilterOwnership(filters, clinicId))) return res.status(404).json(conferenceSafeError(404));
       const rows = await loadConferenceClosureRows({ clinicId, user: req.session.user, filters, hardLimit: 2000 });
-      const hydratedRows = await hydrateConferenceRows(rows, clinicId, req.session.user);
+      const hydratedRows = filterHydratedRowsByTussMissingKind(
+        await hydrateConferenceRows(rows, clinicId, req.session.user),
+        filters.missingKind
+      );
       const summary = buildMonthlyConferenceSummary(hydratedRows);
       return res.json({ success: true, data: (summary as any)[summaryKey] || [], kpis: summary.kpis });
     } catch (error: any) {
@@ -31135,6 +32101,9 @@ async function startServer() {
   app.get('/api/conference/monthly/summary-by-professional', checkAuth, requireRoles('coordinator', 'admin', 'owner'), handleConferenceSummary('byProfessional'));
   app.get('/api/conference/monthly/summary-by-payer', checkAuth, requireRoles('coordinator', 'admin', 'owner'), handleConferenceSummary('byPayer'));
   app.get('/api/conference/monthly/summary-by-service-type', checkAuth, requireRoles('coordinator', 'admin', 'owner'), handleConferenceSummary('byServiceType'));
+  app.get('/api/conference/monthly/summary-by-procedure', checkAuth, requireRoles('coordinator', 'admin', 'owner'), handleConferenceSummary('byProcedure' as any));
+  app.get('/api/conference/monthly/summary-by-tuss-code', checkAuth, requireRoles('coordinator', 'admin', 'owner'), handleConferenceSummary('byTussCode' as any));
+  app.get('/api/conference/monthly/summary-by-guide-type', checkAuth, requireRoles('coordinator', 'admin', 'owner'), handleConferenceSummary('byGuideType' as any));
 
   app.get('/api/conference/monthly/session/:appointmentId', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
@@ -31274,7 +32243,10 @@ async function startServer() {
       if (!(await assertConferenceFilterOwnership(filters, clinicId))) return res.status(404).json(conferenceSafeError(404));
       const requestedFields = Array.isArray(req.body?.fields) ? req.body.fields.map((field: any) => sanitizeString(field, 80)) : [];
       const rows = await loadConferenceClosureRows({ clinicId, user: req.session.user, filters, hardLimit: 2000 });
-      let hydratedRows = await hydrateConferenceRows(rows, clinicId, req.session.user);
+      let hydratedRows = filterHydratedRowsByTussMissingKind(
+        await hydrateConferenceRows(rows, clinicId, req.session.user),
+        filters.missingKind
+      );
       const summary = buildMonthlyConferenceSummary(hydratedRows);
       const actorName = actorDisplayName(req.session.user);
       let sessionRows = buildMonthlyConferenceExportRows(hydratedRows);
@@ -31315,7 +32287,7 @@ async function startServer() {
       ];
       if (exportType === 'pending_items') {
         exportRows = sessionRows.filter((row: any) => String(row.pendingKinds || row.pendingDetails || '').trim());
-        defaultFields = ['competenceMonth', 'clinicName', 'scheduledDate', 'patientName', 'professionalName', 'payerName', 'readinessStatus', 'conferenceStatus', 'pendingKinds', 'pendingDetails', 'exportedAt', 'exportedBy', 'exportId'];
+        defaultFields = ['competenceMonth', 'clinicName', 'scheduledDate', 'patientName', 'professionalName', 'professionalRegistry', 'serviceType', 'internalProcedureCode', 'internalProcedureName', 'tussCode', 'tussDescription', 'tussVersion', 'guideType', 'billingUnit', 'billingQuantity', 'billingUnitAmount', 'billingExpectedAmount', 'tussMappingStatus', 'tussPendingReasons', 'payerName', 'financialPlanName', 'insuranceCardNumber', 'guideNumber', 'authorizationCode', 'readinessStatus', 'conferenceStatus', 'pendingKinds', 'pendingDetails', 'exportedAt', 'exportedBy', 'exportId'];
       } else if (exportType === 'patient_time') {
         exportRows = summary.byPatient.map((row: any) => ({ name: row.name, totalSessions: row.totalSessions, realizedSessions: row.realizedSessions, scheduledMinutes: row.scheduledMinutes, actualMinutes: row.actualMinutes, pendingSignatures: row.pendingSignatures, pendingReports: row.pendingReports }));
         defaultFields = ['name', 'totalSessions', 'realizedSessions', 'scheduledMinutes', 'actualMinutes', 'pendingSignatures', 'pendingReports'];
@@ -31338,15 +32310,17 @@ async function startServer() {
       if (!auditRecord?.id) throw new Error('conference_export_audit_unavailable');
 
       let affectedItems: any[] = [];
-      if (isFinalConferenceExportType(exportType) && rows.length > 0) {
+      if (isFinalConferenceExportType(exportType) && hydratedRows.length > 0) {
+        const exportedAppointmentIds = new Set(hydratedRows.map((row: any) => sanitizeString(row?.appointment_id, 120)).filter((id: string) => isUuid(id)));
+        const rowsForStatusUpdate = rows.filter((row: any) => exportedAppointmentIds.has(sanitizeString(row?.appointment_id, 120)));
         await upsertAppointmentConferenceStatuses({
           clinicId,
           user: req.session.user,
-          rows,
+          rows: rowsForStatusUpdate,
           status: 'exported',
           exportId: sanitizeString(auditRecord.id, 120)
         });
-        hydratedRows = await hydrateConferenceRows(rows, clinicId, req.session.user);
+        hydratedRows = filterHydratedRowsByTussMissingKind(await hydrateConferenceRows(rowsForStatusUpdate, clinicId, req.session.user), filters.missingKind);
         affectedItems = hydratedRows;
       } else {
         hydratedRows = hydratedRows.map((row: any) => ({

@@ -2299,6 +2299,196 @@ export const dataService = {
     }
   },
 
+  async getTussServices(options: any = {}) {
+    const endpoint = endpointWithQuery('/api/admin/tuss/services', {
+      active: options.active ? 'true' : undefined,
+      limit: normalizeListLimit(options.limit, 80, 200)
+    });
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getTussServices',
+        operation: 'list',
+        table: 'tuss_service_catalog',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, data: [], error: 'Não foi possível carregar procedimentos agora.' };
+    }
+  },
+
+  async createTussService(payload: any = {}) {
+    try {
+      const response = await fetchClinical('/api/admin/tuss/services', {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'createTussService',
+        operation: 'write',
+        table: 'tuss_service_catalog',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, error: 'Não foi possível criar o procedimento agora.' };
+    }
+  },
+
+  async updateTussService(serviceId: string, payload: any = {}) {
+    const endpoint = `/api/admin/tuss/services/${encodeURIComponent(String(serviceId))}`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'PATCH',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'updateTussService',
+        operation: 'write',
+        table: 'tuss_service_catalog',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, error: 'Não foi possível atualizar o procedimento agora.' };
+    }
+  },
+
+  async getTussCodes(options: any = {}) {
+    const endpoint = endpointWithQuery('/api/admin/tuss/codes', {
+      active: options.active ? 'true' : undefined,
+      limit: normalizeListLimit(options.limit, 100, 300)
+    });
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getTussCodes',
+        operation: 'list',
+        table: 'tuss_codes',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, data: [], error: 'Não foi possível carregar códigos TUSS agora.' };
+    }
+  },
+
+  async createTussCode(payload: any = {}) {
+    try {
+      const response = await fetchClinical('/api/admin/tuss/codes', {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'createTussCode',
+        operation: 'write',
+        table: 'tuss_codes',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, error: 'Não foi possível criar o código TUSS agora.' };
+    }
+  },
+
+  async updateTussCode(codeId: string, payload: any = {}) {
+    const endpoint = `/api/admin/tuss/codes/${encodeURIComponent(String(codeId))}`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'PATCH',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'updateTussCode',
+        operation: 'write',
+        table: 'tuss_codes',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, error: 'Não foi possível atualizar o código TUSS agora.' };
+    }
+  },
+
+  async getPayerTussMappings(options: any = {}) {
+    const endpoint = endpointWithQuery('/api/admin/tuss/mappings', {
+      payerId: options.payerId,
+      active: options.active ? 'true' : undefined,
+      limit: normalizeListLimit(options.limit, 120, 300)
+    });
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getPayerTussMappings',
+        operation: 'list',
+        table: 'payer_tuss_mappings,tuss_service_catalog,tuss_codes',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, data: [], error: 'Não foi possível carregar mapeamentos TUSS-ready agora.' };
+    }
+  },
+
+  async createPayerTussMapping(payload: any = {}) {
+    try {
+      const response = await fetchClinical('/api/admin/tuss/mappings', {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'createPayerTussMapping',
+        operation: 'write',
+        table: 'payer_tuss_mappings',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, error: 'Não foi possível criar o mapeamento TUSS-ready agora.' };
+    }
+  },
+
+  async updatePayerTussMapping(mappingId: string, payload: any = {}) {
+    const endpoint = `/api/admin/tuss/mappings/${encodeURIComponent(String(mappingId))}`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'PATCH',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'updatePayerTussMapping',
+        operation: 'write',
+        table: 'payer_tuss_mappings',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, error: 'Não foi possível atualizar o mapeamento TUSS-ready agora.' };
+    }
+  },
+
   async getAppointmentBillingContext(appointmentId: string) {
     const endpoint = `/api/appointments/${encodeURIComponent(String(appointmentId))}/billing-context`;
     try {
@@ -2329,7 +2519,7 @@ export const dataService = {
       }, {
         helperName: 'updateAppointmentBillingContext',
         operation: 'write',
-        table: 'appointment_billing_contexts,payer_requirement_audit_logs,appointment_closure_checks',
+        table: 'appointment_billing_contexts,appointment_billing_items,payer_requirement_audit_logs,appointment_closure_checks',
         hasExplicitColumns: true,
         requiresPatientOrSession: false
       });
@@ -2344,6 +2534,27 @@ export const dataService = {
       return result;
     } catch {
       return { success: false, error: 'Não foi possível salvar o pagador da consulta agora.' };
+    }
+  },
+
+  async resolveAppointmentBillingItem(appointmentId: string) {
+    const endpoint = `/api/appointments/${encodeURIComponent(String(appointmentId))}/billing-item/resolve`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({})
+      }, {
+        helperName: 'resolveAppointmentBillingItem',
+        operation: 'write',
+        table: 'appointment_billing_items,tuss_service_catalog,tuss_codes,payer_tuss_mappings',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, error: 'Não foi possível resolver o item faturável agora.' };
     }
   },
 
@@ -2510,7 +2721,7 @@ export const dataService = {
     }
   },
 
-  async getMonthlyConferenceSummary(kind: 'patient' | 'professional' | 'payer' | 'service-type', options: any = {}) {
+  async getMonthlyConferenceSummary(kind: 'patient' | 'professional' | 'payer' | 'service-type' | 'procedure' | 'tuss-code' | 'guide-type', options: any = {}) {
     const endpoint = endpointWithQuery(`/api/conference/monthly/summary-by-${kind}`, {
       from: options.from,
       to: options.to,
@@ -2615,7 +2826,7 @@ export const dataService = {
       }, {
         helperName: 'exportMonthlyConference',
         operation: 'write',
-        table: 'appointment_closure_checks,appointment_conference_statuses,operational_closure_exports,appointment_closure_audit_logs',
+        table: 'appointment_closure_checks,appointment_billing_items,appointment_conference_statuses,operational_closure_exports,appointment_closure_audit_logs',
         hasExplicitColumns: true,
         requiresPatientOrSession: false
       });

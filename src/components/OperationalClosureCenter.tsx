@@ -32,6 +32,16 @@ type ClosureRow = {
   service_type?: string | null;
   payer_name?: string | null;
   financial_plan_name?: string | null;
+  internal_procedure_code?: string | null;
+  internal_procedure_name?: string | null;
+  tuss_code?: string | null;
+  tuss_description?: string | null;
+  guide_type?: string | null;
+  billing_unit?: string | null;
+  billing_quantity?: number | null;
+  billing_amount_cents?: number | null;
+  tuss_mapping_status?: string | null;
+  tuss_pending_reasons?: string[] | null;
   guide_number?: string | null;
   authorization_code?: string | null;
   payer_requirement_source?: string | null;
@@ -227,7 +237,7 @@ export function OperationalClosureCenter({
         onlyPending: quickFilter === "pending",
         onlyReady: quickFilter === "ready",
         onlyWarnings: quickFilter === "warning",
-        missing: ["signature", "report", "guide", "authorization", "documents"].includes(quickFilter) ? quickFilter : "",
+        missing: ["signature", "report", "guide", "authorization", "documents", "procedure", "tuss", "amount", "professional_registry", "card"].includes(quickFilter) ? quickFilter : "",
       });
       if (!result?.success) {
         setRows([]);
@@ -469,6 +479,11 @@ export function OperationalClosureCenter({
             ["guide", "Sem guia"],
             ["authorization", "Sem autorização"],
             ["documents", "Documentos pendentes"],
+            ["procedure", "Sem procedimento"],
+            ["tuss", "Sem TUSS"],
+            ["amount", "Sem valor"],
+            ["professional_registry", "Sem registro"],
+            ["card", "Sem carteirinha"],
           ].map(([key, label]) => (
             <button
               key={key}
@@ -535,6 +550,7 @@ export function OperationalClosureCenter({
                 <th className="px-4 py-3">Paciente</th>
                 <th className="px-4 py-3">Profissional</th>
                 <th className="px-4 py-3">Tipo</th>
+                <th className="px-4 py-3">Procedimento/TUSS</th>
                 <th className="px-4 py-3">Pagador</th>
                 <th className="px-4 py-3">Plano</th>
                 <th className="px-4 py-3">Guia/autorização</th>
@@ -548,14 +564,14 @@ export function OperationalClosureCenter({
             <tbody className="divide-y divide-slate-100">
               {loading ? (
                 <tr>
-                  <td colSpan={12} className="px-4 py-10 text-center text-slate-500">
+                  <td colSpan={13} className="px-4 py-10 text-center text-slate-500">
                     <Loader2 size={20} className="mx-auto mb-2 animate-spin" />
                     Carregando fechamento
                   </td>
                 </tr>
               ) : rows.length === 0 ? (
                 <tr>
-                  <td colSpan={12} className="px-4 py-10 text-center text-slate-500">
+                  <td colSpan={13} className="px-4 py-10 text-center text-slate-500">
                     Nenhuma sessão encontrada no período.
                   </td>
                 </tr>
@@ -569,6 +585,10 @@ export function OperationalClosureCenter({
                     <td className="px-4 py-3 font-medium text-slate-800">{row.patient_name || "Paciente"}</td>
                     <td className="px-4 py-3 text-slate-600">{row.professional_name || "Equipe"}</td>
                     <td className="px-4 py-3 text-slate-600">{row.service_type || "Sessão"}</td>
+                    <td className="px-4 py-3 text-slate-600">
+                      <div className="font-medium text-slate-700">{row.internal_procedure_name || "Nao configurado"}</div>
+                      <div className="mt-1 text-xs text-slate-500">{row.tuss_code ? `TUSS ${row.tuss_code}` : "TUSS pendente"}</div>
+                    </td>
                     <td className="px-4 py-3 text-slate-600">{row.payer_name || "Sem pagador"}</td>
                     <td className="px-4 py-3 text-slate-600">{row.financial_plan_name || "Não configurado"}</td>
                     <td className="px-4 py-3 text-slate-600">
@@ -666,6 +686,10 @@ export function OperationalClosureCenter({
                   <span>Pagador: {detail.payer_name || "Sem pagador"}</span>
                   <span>Regra aplicada: {detail.payer_requirement_source || "Default"}</span>
                   <span>Plano financeiro: {detail.financial_plan_name || "Não configurado"}</span>
+                  <span>Procedimento: {detail.internal_procedure_name || "Não configurado"}</span>
+                  <span>TUSS: {detail.tuss_code || "Pendente"}</span>
+                  <span>Guia provável: {detail.guide_type || "Não definida"}</span>
+                  <span>Valor previsto: {detail.billing_amount_cents ? `R$ ${(Number(detail.billing_amount_cents) / 100).toFixed(2)}` : "Não configurado"}</span>
                   <span>Guia: {detail.guide_number || "Pendente/não exigida"}</span>
                   <span>Autorização: {detail.authorization_code || "Pendente/não exigida"}</span>
                 </div>

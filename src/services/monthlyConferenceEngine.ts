@@ -14,6 +14,22 @@ export type MonthlyConferenceRow = {
   unit_name?: string | null;
   financial_plan_name?: string | null;
   insurance_card_number?: string | null;
+  internal_procedure_code?: string | null;
+  internal_procedure_name?: string | null;
+  tuss_code?: string | null;
+  tuss_description?: string | null;
+  tuss_version?: string | null;
+  guide_type?: string | null;
+  billing_unit?: string | null;
+  billing_quantity?: number | null;
+  billing_unit_amount_cents?: number | null;
+  billing_amount_cents?: number | null;
+  billing_item_status?: string | null;
+  tuss_mapping_status?: string | null;
+  tuss_pending_reasons?: string[] | null;
+  tuss_pending_reason_codes?: string[] | null;
+  tuss_mapping_valid_from?: string | null;
+  tuss_mapping_valid_to?: string | null;
   copayment_amount_cents?: number | null;
   expected_amount_cents?: number | null;
   financial_status?: string | null;
@@ -65,6 +81,9 @@ export type MonthlyConferenceSummary = {
   byProfessional: any[];
   byPayer: any[];
   byServiceType: any[];
+  byProcedure: any[];
+  byTussCode: any[];
+  byGuideType: any[];
 };
 
 const statusSet = new Set(['READY', 'PENDING', 'WARNING', 'NOT_BILLABLE', 'DRAFT', 'UNKNOWN']);
@@ -127,6 +146,12 @@ export function classifyConferencePendingKinds(row: MonthlyConferenceRow): strin
   if (hasIssue(row, [/profissional/, /professional/])) kinds.add('Profissional');
   if (hasIssue(row, [/pagador/, /convenio/, /payer/])) kinds.add('Pagador');
   if (Number(row.required_document_pending_count || 0) > 0 || hasIssue(row, [/documento/, /document/])) kinds.add('Documento');
+  const tussPendingCodes = Array.isArray(row.tuss_pending_reason_codes) ? row.tuss_pending_reason_codes : [];
+  const tussPendingLabels = Array.isArray(row.tuss_pending_reasons) ? row.tuss_pending_reasons.join(' ') : '';
+  if (!String(row.internal_procedure_name || '').trim() || tussPendingCodes.includes('missing_service_catalog')) kinds.add('Procedimento');
+  if (!String(row.tuss_code || '').trim() || tussPendingCodes.includes('missing_tuss_mapping') || tussPendingCodes.includes('missing_tuss_code')) kinds.add('TUSS');
+  if (!Number(row.billing_amount_cents || row.expected_amount_cents || 0) || tussPendingCodes.includes('missing_amount')) kinds.add('Valor');
+  if (!String(row.insurance_card_number || '').trim() || tussPendingCodes.includes('missing_card_number') || /carteirinha/i.test(tussPendingLabels)) kinds.add('Carteirinha');
   return Array.from(kinds);
 }
 
@@ -150,6 +175,9 @@ export function buildMonthlyConferenceSummary(rows: MonthlyConferenceRow[]): Mon
   const byProfessional = new Map<string, any>();
   const byPayer = new Map<string, any>();
   const byServiceType = new Map<string, any>();
+  const byProcedure = new Map<string, any>();
+  const byTussCode = new Map<string, any>();
+  const byGuideType = new Map<string, any>();
 
   const kpis = {
     totalSessions: safeRows.length,
@@ -177,6 +205,9 @@ export function buildMonthlyConferenceSummary(rows: MonthlyConferenceRow[]): Mon
     const patientName = String(row.patient_name || 'Paciente').trim() || 'Paciente';
     const professionalName = String(row.professional_name || 'Equipe').trim() || 'Equipe';
     const payerName = String(row.payer_name || row.payer_name_snapshot || 'Sem pagador').trim() || 'Sem pagador';
+    const procedureName = String(row.internal_procedure_name || 'Sem procedimento').trim() || 'Sem procedimento';
+    const tussCode = String(row.tuss_code || 'Sem TUSS').trim() || 'Sem TUSS';
+    const guideType = String(row.guide_type || 'Sem guia provavel').trim() || 'Sem guia provavel';
 
     if (status === 'READY') kpis.ready += 1;
     else if (status === 'PENDING') kpis.pending += 1;
@@ -279,6 +310,48 @@ export function buildMonthlyConferenceSummary(rows: MonthlyConferenceRow[]): Mon
     service.pending += status === 'PENDING' ? 1 : 0;
     addMinutes(service, scheduled, actual);
     byServiceType.set(serviceType, service);
+
+    const procedure = byProcedure.get(procedureName) || {
+      name: procedureName,
+      internalCode: row.internal_procedure_code || '',
+      totalSessions: 0,
+      ready: 0,
+      pending: 0,
+      expectedAmountCents: 0
+    };
+    procedure.totalSessions += 1;
+    procedure.ready += status === 'READY' ? 1 : 0;
+    procedure.pending += pendingKinds.length > 0 ? 1 : 0;
+    procedure.expectedAmountCents += Number(row.billing_amount_cents || row.expected_amount_cents || 0) || 0;
+    byProcedure.set(procedureName, procedure);
+
+    const tuss = byTussCode.get(tussCode) || {
+      code: tussCode,
+      description: row.tuss_description || '',
+      version: row.tuss_version || '',
+      totalSessions: 0,
+      ready: 0,
+      pending: 0,
+      expectedAmountCents: 0
+    };
+    tuss.totalSessions += 1;
+    tuss.ready += status === 'READY' ? 1 : 0;
+    tuss.pending += pendingKinds.length > 0 ? 1 : 0;
+    tuss.expectedAmountCents += Number(row.billing_amount_cents || row.expected_amount_cents || 0) || 0;
+    byTussCode.set(tussCode, tuss);
+
+    const guide = byGuideType.get(guideType) || {
+      guideType,
+      totalSessions: 0,
+      ready: 0,
+      pending: 0,
+      expectedAmountCents: 0
+    };
+    guide.totalSessions += 1;
+    guide.ready += status === 'READY' ? 1 : 0;
+    guide.pending += pendingKinds.length > 0 ? 1 : 0;
+    guide.expectedAmountCents += Number(row.billing_amount_cents || row.expected_amount_cents || 0) || 0;
+    byGuideType.set(guideType, guide);
   }
 
   return {
@@ -291,7 +364,10 @@ export function buildMonthlyConferenceSummary(rows: MonthlyConferenceRow[]): Mon
       workedDays: undefined
     }))),
     byPayer: sortByCountAndName(Array.from(byPayer.values())),
-    byServiceType: sortByCountAndName(Array.from(byServiceType.values()), 'actualMinutes')
+    byServiceType: sortByCountAndName(Array.from(byServiceType.values()), 'actualMinutes'),
+    byProcedure: sortByCountAndName(Array.from(byProcedure.values())),
+    byTussCode: sortByCountAndName(Array.from(byTussCode.values())),
+    byGuideType: sortByCountAndName(Array.from(byGuideType.values()))
   };
 }
 
@@ -306,6 +382,20 @@ export const MONTHLY_CONFERENCE_EXPORT_FIELDS = [
   'professionalName',
   'professionalRegistry',
   'serviceType',
+  'internalProcedureCode',
+  'internalProcedureName',
+  'tussCode',
+  'tussDescription',
+  'tussVersion',
+  'guideType',
+  'billingUnit',
+  'billingQuantity',
+  'billingUnitAmount',
+  'billingExpectedAmount',
+  'tussMappingStatus',
+  'tussPendingReasons',
+  'tussMappingValidFrom',
+  'tussMappingValidTo',
   'payerName',
   'financialPlanName',
   'insuranceCardNumber',
@@ -356,6 +446,20 @@ export function buildMonthlyConferenceExportRows(rows: MonthlyConferenceRow[]) {
     professionalName: row.professional_name || 'Equipe',
     professionalRegistry: row.professional_registry || '',
     serviceType: row.service_type || 'Sessao',
+    internalProcedureCode: row.internal_procedure_code || '',
+    internalProcedureName: row.internal_procedure_name || 'Procedimento nao configurado',
+    tussCode: row.tuss_code || 'TUSS nao configurado',
+    tussDescription: row.tuss_description || '',
+    tussVersion: row.tuss_version || '',
+    guideType: row.guide_type || '',
+    billingUnit: row.billing_unit || '',
+    billingQuantity: row.billing_quantity ?? '',
+    billingUnitAmount: row.billing_unit_amount_cents ? formatCurrencyCents(row.billing_unit_amount_cents) : '',
+    billingExpectedAmount: row.billing_amount_cents ? formatCurrencyCents(row.billing_amount_cents) : 'Valor nao configurado',
+    tussMappingStatus: row.tuss_mapping_status === 'configured' ? 'Configurado' : 'Pendente de configuracao',
+    tussPendingReasons: Array.isArray(row.tuss_pending_reasons) ? row.tuss_pending_reasons.join('; ') : '',
+    tussMappingValidFrom: row.tuss_mapping_valid_from || '',
+    tussMappingValidTo: row.tuss_mapping_valid_to || '',
     payerName: row.payer_name || row.payer_name_snapshot || 'Sem pagador',
     financialPlanName: row.financial_plan_name || '',
     insuranceCardNumber: row.insurance_card_number || '',
