@@ -33,6 +33,7 @@ import {
 } from './utils/peiSessionReset';
 import { normalizeAbaMasteryCriterion } from './utils/abaMasteryEngine';
 import {
+  applyAppointmentActionResult,
   emitAppointmentDomainEvents,
   mergePersistedAppointments,
   removePersistedAppointments,
@@ -1422,6 +1423,8 @@ export default function App() {
 
   const [rooms, setRooms] = useState<any[]>([]);
   const [therapistAgenda, setTherapistAgenda] = useState<any[]>([]);
+  const therapistAgendaRef = useRef<any[]>([]);
+  const appointmentActionSequenceRef = useRef(0);
   const [appointmentConfirmation, setAppointmentConfirmation] = useState<{
     appointmentId: string;
     dateLabel: string;
@@ -1434,6 +1437,54 @@ export default function App() {
   } | null>(null);
 
   const [specialtySettings, setSpecialtySettings] = useState<any>({});
+
+  useEffect(() => {
+    therapistAgendaRef.current = therapistAgenda;
+  }, [therapistAgenda]);
+
+  const nextAppointmentActionSequence = () => {
+    appointmentActionSequenceRef.current += 1;
+    return appointmentActionSequenceRef.current;
+  };
+
+  const applyAppointmentResultToAgenda = (
+    rawResult: any,
+    fallback: { action: string; items?: any[]; removedIds?: string[] } = { action: 'updated' },
+    sequence = appointmentActionSequenceRef.current,
+  ) => {
+    if (sequence < appointmentActionSequenceRef.current) {
+      return { ok: false, reason: 'STALE_RESPONSE', items: therapistAgendaRef.current };
+    }
+    const items = Array.isArray(rawResult?.items)
+      ? rawResult.items
+      : Array.isArray(rawResult?.appointments)
+        ? rawResult.appointments
+        : Array.isArray(rawResult?.affectedAppointments)
+          ? rawResult.affectedAppointments
+          : rawResult?.item || rawResult?.appointment
+            ? [rawResult.item || rawResult.appointment]
+            : fallback.items || [];
+    const removedIds = Array.isArray(rawResult?.removedIds)
+      ? rawResult.removedIds
+      : Array.isArray(rawResult?.deletedAppointmentIds)
+        ? rawResult.deletedAppointmentIds
+        : fallback.removedIds || [];
+    const actionResult = {
+      ...rawResult,
+      success: rawResult?.success !== false,
+      entity: rawResult?.entity || 'appointment',
+      action: rawResult?.action || fallback.action,
+      item: rawResult?.item || rawResult?.appointment || items[0] || null,
+      items,
+      removedIds,
+    };
+    const applied = applyAppointmentActionResult(therapistAgendaRef.current, actionResult);
+    if (!applied.ok) return applied;
+    therapistAgendaRef.current = applied.items;
+    setTherapistAgenda(applied.items);
+    emitAppointmentDomainEvents(actionResult.events);
+    return applied;
+  };
 
   const calculateEndTime = (startTime: string, approach: string, durationMinutes?: any) => {
     const configuredDuration = specialtySettings[approach] || 60;
@@ -2914,6 +2965,7 @@ export default function App() {
     if (!currentAppointment) {
       return { success: false, error: 'Agendamento não encontrado.' };
     }
+    const actionSequence = nextAppointmentActionSequence();
     try {
       const response = await fetch(`/api/appointments/${encodeURIComponent(String(id))}/status`, {
         method: 'PATCH',
@@ -2938,8 +2990,10 @@ export default function App() {
       if (persistedAppointments.length === 0) {
         throw new Error('O servidor não devolveu a consulta confirmada.');
       }
-      setTherapistAgenda((prev) => mergePersistedAppointments(prev, persistedAppointments));
-      emitAppointmentDomainEvents(result?.events);
+      const applied = applyAppointmentResultToAgenda(result, { action: normalizedStatus, items: persistedAppointments }, actionSequence);
+      if (!applied.ok) {
+        throw new Error('Registro salvo, mas a tela não atualizou automaticamente. Recarregue ou tente novamente.');
+      }
       return { success: true, appointments: persistedAppointments };
     } catch (error: any) {
       console.warn('Falha ao persistir status da consulta imediatamente:', error);
@@ -3052,6 +3106,7 @@ export default function App() {
       return { success: false, error: 'Nenhum agendamento encontrado para excluir.' };
     }
 
+    const actionSequence = nextAppointmentActionSequence();
     try {
       const response = await fetch(`/api/appointments/${encodeURIComponent(String(id))}`, {
         method: 'DELETE',
@@ -3070,8 +3125,10 @@ export default function App() {
       const confirmedDeletedIds = Array.isArray(result?.deletedAppointmentIds)
         ? result.deletedAppointmentIds
         : deletedAppointmentIds;
-      setTherapistAgenda((prev) => removePersistedAppointments(prev, confirmedDeletedIds));
-      emitAppointmentDomainEvents(result?.events);
+      const applied = applyAppointmentResultToAgenda(result, { action: 'deleted', removedIds: confirmedDeletedIds }, actionSequence);
+      if (!applied.ok) {
+        throw new Error('Registro salvo, mas a tela não atualizou automaticamente. Recarregue ou tente novamente.');
+      }
       const appointmentLabel = formatPatientLabel({
         name: currentAppointment?.patientName || currentAppointment?.name,
         id: currentAppointment?.patientId
@@ -3341,6 +3398,7 @@ export default function App() {
       ...appointment,
       ...(patchesById.get(String(appointment.id)) || {}),
     }));
+    const actionSequence = nextAppointmentActionSequence();
     const persistenceResult = await dataService.updateAppointment(
       String(id),
       appointmentsToPersist,
@@ -3352,8 +3410,17 @@ export default function App() {
         errors: [persistenceResult?.error || 'Não foi possível confirmar a alteração do agendamento.'],
       };
     }
-    setTherapistAgenda((prev) => mergePersistedAppointments(prev, persistenceResult.appointments));
-    emitAppointmentDomainEvents(persistenceResult?.events);
+    const applied = applyAppointmentResultToAgenda(
+      persistenceResult,
+      { action: 'updated', items: persistenceResult.appointments },
+      actionSequence,
+    );
+    if (!applied.ok) {
+      return {
+        success: false,
+        errors: ['Registro salvo, mas a tela não atualizou automaticamente. Recarregue ou tente novamente.'],
+      };
+    }
     const appointmentLabel = formatPatientLabel({
       name: appointmentsToUpdate[0]?.patientName || appointmentsToUpdate[0]?.name,
       id: appointmentsToUpdate[0]?.patientId
@@ -4152,6 +4219,7 @@ export default function App() {
       return { success: false, errors: conflicts };
     }
 
+    const actionSequence = nextAppointmentActionSequence();
     const persistenceResult = await dataService.createAppointments(
       newItems,
       `${pid}:${sess.date}:${sess.time}:${numSessions}`,
@@ -4163,8 +4231,17 @@ export default function App() {
       };
     }
 
-    setTherapistAgenda((prev) => mergePersistedAppointments(prev, persistenceResult.appointments));
-    emitAppointmentDomainEvents(persistenceResult?.events);
+    const applied = applyAppointmentResultToAgenda(
+      persistenceResult,
+      { action: 'created', items: persistenceResult.appointments },
+      actionSequence,
+    );
+    if (!applied.ok) {
+      return {
+        success: false,
+        errors: ['Registro salvo, mas a tela não atualizou automaticamente. Recarregue ou tente novamente.'],
+      };
+    }
 
     onAddActivityLog("Agendamento de Sessão", `${numSessions} sessões agendadas para "${sess.patientName}" começando em ${sess.date}.`, 'management');
     return { success: true, appointments: persistenceResult.appointments };

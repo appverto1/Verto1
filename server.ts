@@ -1132,6 +1132,39 @@ function hasMissingFinancialSchema(error: any): boolean {
   );
 }
 
+function buildActionResultPayload(params: {
+  entity: string;
+  action: string;
+  item?: any;
+  items?: any[];
+  removedIds?: string[];
+  affected?: Record<string, any>;
+  events?: any[];
+  warnings?: string[];
+  legacy?: Record<string, any>;
+}) {
+  const items = Array.isArray(params.items)
+    ? params.items
+    : params.item
+      ? [params.item]
+      : [];
+  const removedIds = Array.from(
+    new Set((params.removedIds || []).map((id) => sanitizeString(id, 120)).filter(Boolean))
+  );
+  return cleanObject({
+    success: true,
+    entity: params.entity,
+    action: params.action,
+    item: params.item || items[0] || null,
+    items,
+    removedIds,
+    affected: params.affected || {},
+    events: Array.isArray(params.events) ? params.events : [],
+    warnings: Array.isArray(params.warnings) ? params.warnings : [],
+    ...(params.legacy || {})
+  });
+}
+
 function logRouteDbError(route: string, error: any, context: Record<string, any> = {}) {
   console.error(`[DB:${route}]`, {
     message: extractSupabaseErrorMessage(error),
@@ -14090,19 +14123,32 @@ async function startServer() {
     void regenerateClosureForAppointments(appointmentIds, actor, params.eventType);
     triggerAppointmentReminderScan(params.eventType);
 
-    return res.json({
-      success: true,
-      appointment: persistedAppointments[0] || null,
-      appointments: persistedAppointments,
-      affected: {
-        patientId: persistedAppointments[0]?.patientId || persistedAppointments[0]?.patient_id || null,
-        professionalId: persistedAppointments[0]?.professionalId || persistedAppointments[0]?.professional_id || persistedAppointments[0]?.therapistId || null,
-        date: persistedAppointments[0]?.date || null,
-        appointmentIds
-      },
-      clinicStateAppointments,
-      events
-    });
+    const action = params.eventType === 'appointment.created' ? 'created' : 'updated';
+    const affected = {
+      clinicId,
+      organizationId: clinicId,
+      patientId: persistedAppointments[0]?.patientId || persistedAppointments[0]?.patient_id || null,
+      patientIds: Array.from(new Set(persistedAppointments.map((appointment: any) => sanitizeString(appointment?.patientId || appointment?.patient_id, 120)).filter(Boolean))),
+      professionalId: persistedAppointments[0]?.professionalId || persistedAppointments[0]?.professional_id || persistedAppointments[0]?.therapistId || null,
+      professionalIds: Array.from(new Set(persistedAppointments.map((appointment: any) => sanitizeString(appointment?.professionalId || appointment?.professional_id || appointment?.therapistId || appointment?.therapist_id, 120)).filter(Boolean))),
+      date: persistedAppointments[0]?.date || null,
+      appointmentIds,
+      queryKeys: ['appointments']
+    };
+
+    return res.json(buildActionResultPayload({
+      entity: 'appointment',
+      action,
+      item: persistedAppointments[0] || null,
+      items: persistedAppointments,
+      affected,
+      events,
+      legacy: {
+        appointment: persistedAppointments[0] || null,
+        appointments: persistedAppointments,
+        clinicStateAppointments
+      }
+    }));
   };
 
   app.post('/api/appointments', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res: any) => {
@@ -15002,14 +15048,37 @@ async function startServer() {
         'appointment_status_changed'
       );
 
-      return res.json({
-        success: true,
-        appointment: persistedUpdatedAppointment,
-        affectedAppointments: affectedPersistedAppointments,
-        appointments: updatedClinicAppointments || nextAppointments,
-        maintenanceProbeReassignment,
-        events
-      });
+      const action =
+        normalizedStatus === 'canceled'
+          ? 'cancelled'
+          : normalizedStatus === 'reschedule'
+            ? 'rescheduled'
+            : normalizedStatus === 'confirmed'
+              ? 'confirmed'
+              : 'updated';
+      return res.json(buildActionResultPayload({
+        entity: 'appointment',
+        action,
+        item: persistedUpdatedAppointment,
+        items: affectedPersistedAppointments,
+        affected: {
+          clinicId: sanitizeString(foundClinicId || clinicId || updatedAppointment?.clinic_id || foundAppointment?.clinic_id, 120),
+          organizationId: sanitizeString(updatedAppointment?.organization_id || foundAppointment?.organization_id || foundClinicId || clinicId, 120),
+          patientId: persistedUpdatedAppointment?.patientId || persistedUpdatedAppointment?.patient_id || null,
+          patientIds: Array.from(new Set(affectedPersistedAppointments.map((appointment: any) => sanitizeString(appointment?.patientId || appointment?.patient_id, 120)).filter(Boolean))),
+          professionalId: persistedUpdatedAppointment?.professionalId || persistedUpdatedAppointment?.professional_id || persistedUpdatedAppointment?.therapistId || null,
+          professionalIds: Array.from(new Set(affectedPersistedAppointments.map((appointment: any) => sanitizeString(appointment?.professionalId || appointment?.professional_id || appointment?.therapistId || appointment?.therapist_id, 120)).filter(Boolean))),
+          appointmentIds: affectedAppointmentIds,
+          queryKeys: ['appointments']
+        },
+        events,
+        legacy: {
+          appointment: persistedUpdatedAppointment,
+          affectedAppointments: affectedPersistedAppointments,
+          appointments: updatedClinicAppointments || nextAppointments,
+          maintenanceProbeReassignment
+        }
+      }));
     } catch (error: any) {
       console.error('[Appointments] status update error:', error?.message || String(error));
       return res.status(500).json({ success: false, error: 'Erro ao atualizar status da consulta.' });
@@ -15268,14 +15337,29 @@ async function startServer() {
         }
       });
 
-      return res.json({
-        success: true,
-        deletedAppointmentIds: affectedAppointmentIds,
-        appointments: updatedClinicAppointments,
-        recurrenceScope,
-        maintenanceProbeReassignment,
-        events
-      });
+      return res.json(buildActionResultPayload({
+        entity: 'appointment',
+        action: 'deleted',
+        items: [],
+        removedIds: affectedAppointmentIds,
+        affected: {
+          clinicId: sanitizeString(foundClinicId || clinicId || foundAppointment?.clinic_id, 120),
+          organizationId: sanitizeString(foundAppointment?.organization_id || foundClinicId || clinicId, 120),
+          patientId: foundAppointment?.patientId || foundAppointment?.patient_id || null,
+          patientIds: Array.from(new Set(affectedAppointments.map((appointment: any) => sanitizeString(appointment?.patientId || appointment?.patient_id, 120)).filter(Boolean))),
+          professionalId: foundAppointment?.professionalId || foundAppointment?.professional_id || foundAppointment?.therapistId || null,
+          professionalIds: Array.from(new Set(affectedAppointments.map((appointment: any) => sanitizeString(appointment?.professionalId || appointment?.professional_id || appointment?.therapistId || appointment?.therapist_id, 120)).filter(Boolean))),
+          appointmentIds: affectedAppointmentIds,
+          queryKeys: ['appointments']
+        },
+        events,
+        legacy: {
+          deletedAppointmentIds: affectedAppointmentIds,
+          appointments: updatedClinicAppointments,
+          recurrenceScope,
+          maintenanceProbeReassignment
+        }
+      }));
     } catch (error: any) {
       console.error('[Appointments] delete error:', error?.message || String(error));
       return res.status(500).json({ success: false, error: 'Erro ao excluir consulta.' });

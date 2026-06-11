@@ -46,9 +46,10 @@ test('clinic state autosave no longer transports appointments', () => {
 test('schedule and update actions await persisted backend mutations before success', () => {
   assert.match(appCode, /const handleScheduleSession = async/);
   assert.match(appCode, /await dataService\.createAppointments\(/);
-  assert.match(appCode, /setTherapistAgenda\(\(prev\) => mergePersistedAppointments\(prev, persistenceResult\.appointments\)\)/);
   assert.match(appCode, /const handleUpdateAppointment = async/);
   assert.match(appCode, /await dataService\.updateAppointment\(/);
+  assert.match(appCode, /applyAppointmentResultToAgenda/);
+  assert.match(appCode, /if \(!applied\.ok\)/);
   assert.match(coordinatorCode, /await onScheduleSession\(newSession\)/);
   assert.match(coordinatorCode, /await onUpdateAppointment\(editingAppointmentId, updates\)/);
 });

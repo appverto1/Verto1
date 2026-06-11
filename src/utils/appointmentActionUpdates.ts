@@ -1,3 +1,5 @@
+import { applyActionResult, type ActionResult } from './actionResult';
+
 export type AppointmentDomainEvent = {
   eventId: string;
   eventType: string;
@@ -54,6 +56,16 @@ export const removePersistedAppointments = (current: any[], appointmentIds: unkn
   const ids = new Set((Array.isArray(appointmentIds) ? appointmentIds : []).map((id) => String(id)));
   return sortAppointments((Array.isArray(current) ? current : []).filter((appointment) => !ids.has(String(appointment?.id))));
 };
+
+export const applyAppointmentActionResult = (current: any[], result: ActionResult<any>) =>
+  applyActionResult({
+    entity: 'appointment',
+    current,
+    result,
+    merge: mergePersistedAppointments,
+    remove: removePersistedAppointments,
+    sort: sortAppointments,
+  });
 
 export const emitAppointmentDomainEvents = (events: AppointmentDomainEvent[] | undefined) => {
   if (typeof window === "undefined" || !Array.isArray(events)) return;
