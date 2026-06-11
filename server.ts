@@ -1121,6 +1121,17 @@ function extractMissingColumnName(error: any): string | null {
   return null;
 }
 
+function hasMissingFinancialSchema(error: any): boolean {
+  const code = sanitizeString(error?.code, 20).toUpperCase();
+  const message = extractSupabaseErrorMessage(error).toLowerCase();
+  if (code === '42P01' || code === '42703') return true;
+  return (
+    message.includes('schema cache') ||
+    message.includes('does not exist') ||
+    message.includes('relation')
+  );
+}
+
 function logRouteDbError(route: string, error: any, context: Record<string, any> = {}) {
   console.error(`[DB:${route}]`, {
     message: extractSupabaseErrorMessage(error),
@@ -39157,11 +39168,6 @@ async function startServer() {
       return next();
     }
     return res.status(403).json({ error: 'Acesso negado. Apenas super admins podem acessar esta rota.' });
-  };
-
-  const hasMissingFinancialSchema = (error: any) => {
-    const message = (error?.message || '').toLowerCase();
-    return message.includes('schema cache') || message.includes('does not exist') || message.includes('relation');
   };
 
   // Owner-only stats (CEO dashboard)

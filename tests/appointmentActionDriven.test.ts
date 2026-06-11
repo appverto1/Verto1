@@ -63,6 +63,18 @@ test('appointment endpoints use stable idempotency keys and read-after-write', (
   assert.match(serverCode, /Não foi possível confirmar a persistência do agendamento/);
 });
 
+test('appointment mirror helpers can access schema fallback helpers at module scope', () => {
+  const helperIndex = serverCode.indexOf('function hasMissingFinancialSchema');
+  const syncIndex = serverCode.indexOf('async function syncAppointmentsTableFromClinicState');
+  const startServerIndex = serverCode.indexOf('async function startServer');
+  assert.ok(helperIndex > -1, 'hasMissingFinancialSchema must be declared');
+  assert.ok(syncIndex > -1, 'syncAppointmentsTableFromClinicState must be declared');
+  assert.ok(startServerIndex > -1, 'startServer must be declared');
+  assert.ok(helperIndex < syncIndex, 'schema fallback helper must be available to module-scope appointment helpers');
+  assert.ok(helperIndex < startServerIndex, 'schema fallback helper must not be scoped inside startServer');
+  assert.doesNotMatch(serverCode, /const hasMissingFinancialSchema =/);
+});
+
 test('appointment create tolerates optional schema columns after durable write', () => {
   const appointmentRouteSlice = serverCode.slice(
     serverCode.indexOf("const readClinicStateForAppointmentMutation"),
