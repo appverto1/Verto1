@@ -4538,6 +4538,22 @@ export const dataService = {
     }
   },
 
+  async getClinicAnamnesisTemplates(workspaceId?: string) {
+    try {
+      const response = await fetch('/api/clinic/anamnesis-templates', {
+        headers: {
+          ...(await getAuthHeaders()),
+          ...(workspaceId ? { 'X-Workspace-Id': workspaceId } : {})
+        },
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error fetching anamnesis templates:', error);
+      return { success: false, error: String(error), data: [] };
+    }
+  },
+
   async getDefaultClinicAnamnesisTemplate() {
     try {
       const response = await fetch('/api/clinic/anamnesis-template/defaults', {
@@ -4566,6 +4582,42 @@ export const dataService = {
       return await safeJson(response);
     } catch (error) {
       console.error('Error saving anamnesis template:', error);
+      return { success: false, error: String(error) };
+    }
+  },
+
+  async saveClinicAnamnesisTemplateRecord(template: any, workspaceId?: string) {
+    try {
+      const safeTemplate = parseJsonObject(template) || {};
+      const response = await fetch('/api/clinic/anamnesis-templates', {
+        method: 'POST',
+        headers: {
+          ...(await getAuthHeaders()),
+          ...(workspaceId ? { 'X-Workspace-Id': workspaceId } : {})
+        },
+        credentials: 'include',
+        body: JSON.stringify({ template: safeTemplate, workspace_id: workspaceId || undefined })
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error saving anamnesis template record:', error);
+      return { success: false, error: String(error) };
+    }
+  },
+
+  async deleteClinicAnamnesisTemplateRecord(templateId: string, workspaceId?: string) {
+    try {
+      const response = await fetch(`/api/clinic/anamnesis-templates/${encodeURIComponent(templateId)}`, {
+        method: 'DELETE',
+        headers: {
+          ...(await getAuthHeaders()),
+          ...(workspaceId ? { 'X-Workspace-Id': workspaceId } : {})
+        },
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error deleting anamnesis template record:', error);
       return { success: false, error: String(error) };
     }
   },

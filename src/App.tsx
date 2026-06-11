@@ -737,6 +737,10 @@ export default function App() {
       const profileResult = await dataService.getUserProfile(String(restoredUser?.id || ''));
       const professionalProfile = profileResult?.data?.professional_profile;
       if (professionalProfile) {
+        const professionalMetadata =
+          professionalProfile?.metadata && typeof professionalProfile.metadata === 'object'
+            ? professionalProfile.metadata
+            : {};
         const professionalProfileCompleted =
           professionalProfile?.requires_onboarding === false ||
           Boolean(professionalProfile?.onboarding_completed_at);
@@ -762,8 +766,60 @@ export default function App() {
             professionalProfile?.council_number ||
             restoredUser?.crp ||
             null,
+          cpf:
+            professionalMetadata?.cpf ||
+            professionalMetadata?.professionalCpf ||
+            restoredUser?.cpf ||
+            null,
+          phone:
+            professionalProfile?.phone ||
+            professionalMetadata?.phone ||
+            professionalMetadata?.professionalPhone ||
+            restoredUser?.phone ||
+            null,
+          professionalRoleTitle:
+            professionalMetadata?.roleTitle ||
+            professionalMetadata?.professionalRoleTitle ||
+            restoredUser?.professionalRoleTitle ||
+            null,
+          professionalProfile: {
+            ...professionalProfile,
+            fullName:
+              professionalProfile?.full_name ||
+              professionalProfile?.fullName ||
+              restoredUser?.name ||
+              null,
+            cpf:
+              professionalMetadata?.cpf ||
+              professionalMetadata?.professionalCpf ||
+              restoredUser?.cpf ||
+              null,
+            phone:
+              professionalProfile?.phone ||
+              professionalMetadata?.phone ||
+              professionalMetadata?.professionalPhone ||
+              restoredUser?.phone ||
+              null,
+            roleTitle:
+              professionalMetadata?.roleTitle ||
+              professionalMetadata?.professionalRoleTitle ||
+              restoredUser?.professionalRoleTitle ||
+              null,
+          },
           clinicSettings: {
             ...(restoredUser?.clinicSettings || {}),
+            ...(professionalProfile?.clinic_name
+              ? { clinicName: professionalProfile.clinic_name }
+              : {}),
+            ...(professionalProfile?.clinic_phone
+              ? { clinicPhone: professionalProfile.clinic_phone }
+              : {}),
+            ...(professionalMetadata?.clinicEmail
+              ? { clinicEmail: professionalMetadata.clinicEmail }
+              : {}),
+            ...(professionalMetadata?.clinicAddress
+              ? { clinicAddress: professionalMetadata.clinicAddress }
+              : {}),
             ...(professionalProfile?.clinic_logo_url
               ? { clinicLogoUrl: professionalProfile.clinic_logo_url }
               : {}),
@@ -5639,9 +5695,96 @@ export default function App() {
                     ...baseUser,
                     profilePicture: profileUpload.url || baseUser.profilePicture || baseUser.profile_picture || null,
                     profile_picture: profileUpload.url || baseUser.profile_picture || baseUser.profilePicture || null,
+                    cpf:
+                      data?.cpf ??
+                      data?.professionalProfile?.cpf ??
+                      baseUser?.cpf ??
+                      null,
+                    phone:
+                      data?.phone ??
+                      data?.professionalProfile?.phone ??
+                      baseUser?.phone ??
+                      null,
+                    professionalRoleTitle:
+                      data?.professionalRoleTitle ??
+                      data?.professionalProfile?.roleTitle ??
+                      baseUser?.professionalRoleTitle ??
+                      null,
                     signatureDataUrl: signatureUpload.url || baseUser.signatureDataUrl || null,
+                    professionalProfile: {
+                      ...(baseUser?.professionalProfile || {}),
+                      ...(data?.professionalProfile || {}),
+                      fullName:
+                        data?.professionalProfile?.fullName ||
+                        data?.name ||
+                        baseUser?.professionalProfile?.fullName ||
+                        baseUser?.name ||
+                        null,
+                      cpf:
+                        data?.professionalProfile?.cpf ||
+                        data?.cpf ||
+                        baseUser?.professionalProfile?.cpf ||
+                        baseUser?.cpf ||
+                        null,
+                      phone:
+                        data?.professionalProfile?.phone ||
+                        data?.phone ||
+                        baseUser?.professionalProfile?.phone ||
+                        baseUser?.phone ||
+                        null,
+                      roleTitle:
+                        data?.professionalProfile?.roleTitle ||
+                        data?.professionalRoleTitle ||
+                        baseUser?.professionalProfile?.roleTitle ||
+                        baseUser?.professionalRoleTitle ||
+                        null,
+                      profilePicture:
+                        profileUpload.url ||
+                        data?.professionalProfile?.profilePicture ||
+                        baseUser?.professionalProfile?.profilePicture ||
+                        null,
+                      signatureDataUrl:
+                        signatureUpload.url ||
+                        data?.professionalProfile?.signatureDataUrl ||
+                        baseUser?.professionalProfile?.signatureDataUrl ||
+                        null,
+                      metadata: {
+                        ...(baseUser?.professionalProfile?.metadata || {}),
+                        cpf:
+                          data?.cpf ||
+                          data?.professionalProfile?.cpf ||
+                          baseUser?.professionalProfile?.metadata?.cpf ||
+                          undefined,
+                        professionalCpf:
+                          data?.cpf ||
+                          data?.professionalProfile?.cpf ||
+                          baseUser?.professionalProfile?.metadata?.professionalCpf ||
+                          undefined,
+                        phone:
+                          data?.phone ||
+                          data?.professionalProfile?.phone ||
+                          baseUser?.professionalProfile?.metadata?.phone ||
+                          undefined,
+                        professionalPhone:
+                          data?.phone ||
+                          data?.professionalProfile?.phone ||
+                          baseUser?.professionalProfile?.metadata?.professionalPhone ||
+                          undefined,
+                        roleTitle:
+                          data?.professionalRoleTitle ||
+                          data?.professionalProfile?.roleTitle ||
+                          baseUser?.professionalProfile?.metadata?.roleTitle ||
+                          undefined,
+                        professionalRoleTitle:
+                          data?.professionalRoleTitle ||
+                          data?.professionalProfile?.roleTitle ||
+                          baseUser?.professionalProfile?.metadata?.professionalRoleTitle ||
+                          undefined,
+                      },
+                    },
                     clinicSettings: {
                       ...(baseUser?.clinicSettings || {}),
+                      ...(data?.clinicSettings || {}),
                       ...(clinicLogoUpload.url ? { clinicLogoUrl: clinicLogoUpload.url } : {}),
                       ...(signatureUpload.url ? { signatureDataUrl: signatureUpload.url } : {}),
                     },

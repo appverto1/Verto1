@@ -24,7 +24,10 @@ interface AnamnesisModalProps {
   onSave: (payload: any) => void;
   mode?: ModalMode;
   template?: any;
+  savedTemplates?: any[];
   onTemplateSave?: (template: AnamnesisTemplate) => Promise<any> | any;
+  onTemplateSelect?: (template: any) => void;
+  onTemplateDelete?: (templateId: string) => Promise<any> | any;
   canEditTemplate?: boolean;
 }
 
@@ -88,6 +91,33 @@ const serializeQuestionValue = (value: any, questionType: AnamnesisQuestionType)
 };
 
 const generateQuestionId = () => `q_${Date.now()}_${Math.random().toString(16).slice(2, 7)}`;
+
+const createBlankAnamnesisTemplate = (): AnamnesisTemplate => ({
+  version: 1,
+  profiles: {
+    adult: {
+      sections: [{ id: 'personalizadas', title: 'Perguntas da ficha', order: 1, active: true }],
+      questions: []
+    },
+    child: {
+      sections: [{ id: 'personalizadas', title: 'Perguntas da ficha', order: 1, active: true }],
+      questions: []
+    }
+  }
+});
+
+const monthsToYearsInput = (value: any): string => {
+  const months = Number(value);
+  if (!Number.isFinite(months) || months < 0) return '';
+  return String(Math.floor(months / 12));
+};
+
+const yearsInputToMonths = (value: string, endOfYear = false): number | null => {
+  const parsed = Number(String(value || '').replace(',', '.'));
+  if (!Number.isFinite(parsed) || parsed < 0) return null;
+  const years = Math.floor(parsed);
+  return endOfYear ? years * 12 + 11 : years * 12;
+};
 
 function QuestionField({
   question,
@@ -214,7 +244,10 @@ export const AnamnesisModal = ({
   onSave,
   mode = 'create',
   template,
+  savedTemplates = [],
   onTemplateSave,
+  onTemplateSelect,
+  onTemplateDelete,
   canEditTemplate = false
 }: AnamnesisModalProps) => {
   const [profileType, setProfileType] = useState<AnamnesisProfileType>('adult');
@@ -228,6 +261,11 @@ export const AnamnesisModal = ({
   const [draftQuestion, setDraftQuestion] = useState<QuestionDraft | null>(null);
   const [templateDirty, setTemplateDirty] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+  const [templateName, setTemplateName] = useState('Ficha personalizada');
+  const [templateDescription, setTemplateDescription] = useState('');
+  const [templateAgeMinYears, setTemplateAgeMinYears] = useState('');
+  const [templateAgeMaxYears, setTemplateAgeMaxYears] = useState('');
+  const [templatePatientProfileType, setTemplatePatientProfileType] = useState('');
 
   const [scheduleImmediate, setScheduleImmediate] = useState(false);
   const [registerDate, setRegisterDate] = useState('');
@@ -242,6 +280,11 @@ export const AnamnesisModal = ({
 
     const sourceTemplate = normalizeAnamnesisTemplate(template || getDefaultAnamnesisTemplate());
     setTemplateState(sourceTemplate);
+    setTemplateName(String((template as any)?.templateName || (template as any)?.name || 'Ficha personalizada').slice(0, 80));
+    setTemplateDescription(String((template as any)?.templateDescription || (template as any)?.description || '').slice(0, 240));
+    setTemplateAgeMinYears(monthsToYearsInput((template as any)?.ageMinMonths ?? (template as any)?.age_min_months));
+    setTemplateAgeMaxYears(monthsToYearsInput((template as any)?.ageMaxMonths ?? (template as any)?.age_max_months));
+    setTemplatePatientProfileType(String((template as any)?.patientProfileType || (template as any)?.patient_profile_type || '').toUpperCase());
 
     const inferredProfile: AnamnesisProfileType =
       initialData?.formType === 'child' || (typeof initialData?.idade === 'number' && initialData.idade <= 12) ? 'child' : 'adult';
@@ -457,6 +500,24 @@ export const AnamnesisModal = ({
     }));
   };
 
+  const addTemplateSection = () => {
+    const nextOrder = Math.max(0, ...profileTemplate.sections.map((section) => Number(section.order) || 0)) + 1;
+    const sectionId = `sec_${Date.now()}_${Math.random().toString(16).slice(2, 7)}`;
+    updateTemplateProfile((profile) => ({
+      ...profile,
+      sections: [
+        ...profile.sections,
+        {
+          id: sectionId,
+          title: `Nova seção ${nextOrder}`,
+          order: nextOrder,
+          active: true
+        }
+      ]
+    }));
+    setExpandedSections((prev) => ({ ...prev, [sectionId]: true }));
+  };
+
   const toggleQuestion = (questionId: string) => {
     updateTemplateProfile((profile) => ({
       ...profile,
@@ -549,11 +610,33 @@ export const AnamnesisModal = ({
 
   const saveTemplate = async () => {
     if (!canEditTemplate || !onTemplateSave) return;
+    const cleanName = templateName.trim();
+    if (!cleanName) {
+      showFeedback('error', 'Dê um nome para a ficha antes de salvar.');
+      return;
+    }
     setIsSavingTemplate(true);
     try {
-      const normalized = normalizeAnamnesisTemplate(templateState);
+      const normalized = {
+        ...normalizeAnamnesisTemplate(templateState),
+        templateName: cleanName,
+        templateDescription: templateDescription.trim(),
+        ageMinMonths: yearsInputToMonths(templateAgeMinYears),
+        ageMaxMonths: yearsInputToMonths(templateAgeMaxYears, true),
+        patientProfileType: templatePatientProfileType || null,
+        selectedTemplateId: (templateState as any)?.selectedTemplateId || (template as any)?.selectedTemplateId || null
+      };
       const savedTemplate = await onTemplateSave(normalized);
-      setTemplateState(normalizeAnamnesisTemplate(savedTemplate || normalized));
+      const nextTemplate = savedTemplate || normalized;
+      setTemplateState({
+        ...normalizeAnamnesisTemplate(nextTemplate),
+        selectedTemplateId: (nextTemplate as any)?.selectedTemplateId || (normalized as any).selectedTemplateId || null,
+        templateName: (nextTemplate as any)?.templateName || cleanName,
+        templateDescription: (nextTemplate as any)?.templateDescription || templateDescription.trim(),
+        ageMinMonths: (nextTemplate as any)?.ageMinMonths ?? (normalized as any).ageMinMonths,
+        ageMaxMonths: (nextTemplate as any)?.ageMaxMonths ?? (normalized as any).ageMaxMonths,
+        patientProfileType: (nextTemplate as any)?.patientProfileType || templatePatientProfileType || null
+      } as any);
       setTemplateDirty(false);
       try {
         localStorage.removeItem(templateDraftStorageKey);
@@ -566,6 +649,23 @@ export const AnamnesisModal = ({
     } finally {
       setIsSavingTemplate(false);
     }
+  };
+
+  const startBlankTemplate = () => {
+    if (savedTemplates.length >= 5) {
+      showFeedback('error', 'Limite de 5 fichas salvas atingido. Remova uma ficha para criar outra.');
+      return;
+    }
+    setTemplateState(createBlankAnamnesisTemplate());
+    setTemplateName(`Ficha personalizada ${Math.min(savedTemplates.length + 1, 5)}`);
+    setTemplateDescription('');
+    setTemplateAgeMinYears('');
+    setTemplateAgeMaxYears('');
+    setTemplatePatientProfileType('');
+    setTemplateDirty(true);
+    setView('template');
+    setExpandedSections({ personalizadas: true });
+    showFeedback('info', 'Ficha em branco criada. Adicione seções/perguntas e salve para persistir.');
   };
 
   const resetTemplate = async () => {
@@ -623,6 +723,147 @@ export const AnamnesisModal = ({
               {feedback.message}
             </div>
           )}
+          {canEditTemplate && view === 'template' && (
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-400">Fichas salvas</p>
+                  <p className="text-sm font-semibold text-slate-700">Até 5 modelos ativos por clínica, com segmentação por idade.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={startBlankTemplate}
+                  disabled={savedTemplates.length >= 5}
+                  className="rounded-xl bg-[#7a32fc] px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+                >
+                  <Plus size={14} className="inline mr-2" />
+                  Nova ficha do zero
+                </button>
+              </div>
+
+              {savedTemplates.length > 0 && (
+                <div className="flex gap-2 overflow-x-auto pb-1">
+                  {savedTemplates.map((item) => {
+                    const itemId = String(item?.id || item?.selectedTemplateId || '');
+                    const currentId = String((templateState as any)?.selectedTemplateId || (template as any)?.selectedTemplateId || '');
+                    const isActive = itemId && itemId === currentId;
+                    return (
+                      <button
+                        type="button"
+                        key={itemId || item?.name}
+                        onClick={() => onTemplateSelect?.(item)}
+                        className={`min-w-[210px] rounded-xl border px-3 py-2 text-left text-sm transition-all ${
+                          isActive ? 'border-[#7a32fc] bg-white text-[#7a32fc] shadow-sm' : 'border-slate-200 bg-white text-slate-700 hover:border-[#7a32fc]/40'
+                        }`}
+                      >
+                        <span className="block truncate font-bold">{item?.name || item?.templateName || 'Ficha sem nome'}</span>
+                        <span className="block text-[11px] font-semibold text-slate-400">
+                          {item?.ageMinMonths != null || item?.ageMaxMonths != null
+                            ? `${monthsToYearsInput(item?.ageMinMonths) || '0'}-${monthsToYearsInput(item?.ageMaxMonths) || '+18'} anos`
+                            : 'Todas as idades'}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-5">
+                <div className="md:col-span-2">
+                  <label className="block text-[11px] font-bold uppercase tracking-widest text-slate-500 mb-1">Nome da ficha</label>
+                  <input
+                    value={templateName}
+                    onChange={(event) => {
+                      setTemplateName(event.target.value);
+                      setTemplateDirty(true);
+                    }}
+                    maxLength={80}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none focus:ring-2 focus:ring-[#7a32fc]/20"
+                    placeholder="Ex: Anamnese infantil 6-11"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold uppercase tracking-widest text-slate-500 mb-1">Idade mín.</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={templateAgeMinYears}
+                    onChange={(event) => {
+                      setTemplateAgeMinYears(event.target.value);
+                      setTemplateDirty(true);
+                    }}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none focus:ring-2 focus:ring-[#7a32fc]/20"
+                    placeholder="0"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold uppercase tracking-widest text-slate-500 mb-1">Idade máx.</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={templateAgeMaxYears}
+                    onChange={(event) => {
+                      setTemplateAgeMaxYears(event.target.value);
+                      setTemplateDirty(true);
+                    }}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none focus:ring-2 focus:ring-[#7a32fc]/20"
+                    placeholder="Sem limite"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold uppercase tracking-widest text-slate-500 mb-1">Perfil</label>
+                  <select
+                    value={templatePatientProfileType}
+                    onChange={(event) => {
+                      setTemplatePatientProfileType(event.target.value);
+                      setTemplateDirty(true);
+                    }}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none focus:ring-2 focus:ring-[#7a32fc]/20"
+                  >
+                    <option value="">Todos</option>
+                    <option value="KIDS_TEA">Infantil ABA</option>
+                    <option value="TEEN">Adolescente</option>
+                    <option value="ABA">Adulto ABA</option>
+                    <option value="ADULT">Adulto</option>
+                  </select>
+                </div>
+                <div className="md:col-span-5">
+                  <label className="block text-[11px] font-bold uppercase tracking-widest text-slate-500 mb-1">Descrição interna</label>
+                  <input
+                    value={templateDescription}
+                    onChange={(event) => {
+                      setTemplateDescription(event.target.value);
+                      setTemplateDirty(true);
+                    }}
+                    maxLength={240}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none focus:ring-2 focus:ring-[#7a32fc]/20"
+                    placeholder="Opcional: quando usar esta ficha"
+                  />
+                </div>
+              </div>
+
+              {(templateState as any)?.selectedTemplateId && onTemplateDelete && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const id = String((templateState as any)?.selectedTemplateId || '');
+                    if (!id) return;
+                    const shouldDelete = confirm('Remover esta ficha salva? As respostas já enviadas não serão apagadas.');
+                    if (!shouldDelete) return;
+                    try {
+                      await onTemplateDelete(id);
+                      showFeedback('success', 'Ficha removida da lista ativa.');
+                    } catch (error: any) {
+                      showFeedback('error', error?.message || 'Não foi possível remover a ficha.');
+                    }
+                  }}
+                  className="rounded-xl border border-red-200 bg-white px-4 py-2 text-sm font-bold text-red-600 hover:bg-red-50"
+                >
+                  Remover ficha salva
+                </button>
+              )}
+            </div>
+          )}
           <div className="flex flex-wrap items-center gap-2">
             <button
               className={`rounded-xl px-4 py-2 text-sm font-semibold ${profileType === 'adult' ? 'bg-[#7a32fc] text-white' : 'bg-slate-100 text-slate-700'}`}
@@ -657,6 +898,16 @@ export const AnamnesisModal = ({
 
           {view === 'template' && canEditTemplate ? (
             <div className="space-y-4">
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={addTemplateSection}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:border-[#7a32fc]/40 hover:text-[#7a32fc]"
+                >
+                  <Plus size={14} className="inline mr-2" />
+                  Adicionar seção
+                </button>
+              </div>
               {profileTemplate.sections
                 .sort((a, b) => a.order - b.order)
                 .map((section) => {

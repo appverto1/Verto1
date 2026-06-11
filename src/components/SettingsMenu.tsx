@@ -53,7 +53,6 @@ export function SettingsMenu({
     <div className="relative" ref={menuRef} style={{ zIndex: 100 }}>
       <button
         onClick={() => {
-          console.log('Settings gear clicked, current state:', isOpen);
           setIsOpen(!isOpen);
         }}
         className="p-2.5 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-xl transition-all"
@@ -91,7 +90,7 @@ export function SettingsMenu({
               >
                 <div className="flex items-center gap-3">
                   <User size={18} className="text-slate-400 group-hover:text-[#7a32fc]" />
-                  <span className="text-sm font-medium">Meu Perfil</span>
+                  <span className="text-sm font-medium">Perfil e clínica</span>
                 </div>
                 <ChevronRight size={14} className="text-slate-300" />
               </button>

@@ -7227,6 +7227,7 @@ function compactClinicSettingsForSession(settings: any) {
     clinicName: sanitizeString(settings.clinicName, 160) || null,
     clinicCnpj: sanitizeString(settings.clinicCnpj, 30) || null,
     clinicPhone: sanitizeString(settings.clinicPhone, 30) || null,
+    clinicEmail: sanitizeEmail(settings.clinicEmail) || null,
     specialty: sanitizeString(settings.specialty, 160) || null,
     council: sanitizeString(settings.council, 80) || null,
     councilNumber: sanitizeString(settings.councilNumber, 80) || null,
@@ -7287,6 +7288,16 @@ function resolveActiveWorkspaceId(
 }
 
 function buildSessionUserPayload(input: any) {
+  const professionalProfile =
+    input?.professionalProfile && typeof input.professionalProfile === 'object'
+      ? input.professionalProfile
+      : input?.professional_profile && typeof input.professional_profile === 'object'
+        ? input.professional_profile
+        : null;
+  const professionalMetadata =
+    professionalProfile?.metadata && typeof professionalProfile.metadata === 'object'
+      ? professionalProfile.metadata
+      : {};
   const explicitDemoUser = isExplicitDemoUser(input);
   const compactedWorkspaces = compactWorkspacesForSession(input?.workspaces || []);
   const workspaces = explicitDemoUser
@@ -7346,6 +7357,25 @@ function buildSessionUserPayload(input: any) {
       typeof input?.firstLoginCompleted === 'boolean' ? input.firstLoginCompleted : null,
     activationRequired: Boolean(input?.activationRequired),
     crp: resolveStoredCrp(input),
+    cpf:
+      normalizeCpf(input?.cpf) ||
+      normalizeCpf(professionalProfile?.cpf) ||
+      normalizeCpf(professionalMetadata?.cpf || professionalMetadata?.professionalCpf) ||
+      null,
+    phone:
+      sanitizePhone(input?.phone) ||
+      sanitizePhone(professionalProfile?.phone) ||
+      sanitizePhone(professionalMetadata?.phone || professionalMetadata?.professionalPhone) ||
+      null,
+    professionalRoleTitle:
+      sanitizeString(
+        input?.professionalRoleTitle ||
+          professionalProfile?.roleTitle ||
+          professionalProfile?.role_title ||
+          professionalMetadata?.roleTitle ||
+          professionalMetadata?.professionalRoleTitle,
+        160
+      ) || null,
     signatureDataUrl:
       sanitizeSessionUrl(input?.signatureDataUrl) ||
       sanitizeSessionUrl(input?.clinicSettings?.signatureDataUrl) ||
@@ -7357,6 +7387,39 @@ function buildSessionUserPayload(input: any) {
       sanitizeString(input?.miniCurriculum || input?.clinicSettings?.therapistMiniCurriculum, 3000) ||
       null,
     clinicSettings: compactClinicSettingsForSession(input?.clinicSettings),
+    professionalProfile: professionalProfile
+      ? cleanObject({
+          fullName:
+            sanitizeString(professionalProfile.fullName || professionalProfile.full_name || input?.name, 180) ||
+            null,
+          cpf:
+            normalizeCpf(professionalProfile.cpf) ||
+            normalizeCpf(professionalMetadata?.cpf || professionalMetadata?.professionalCpf) ||
+            null,
+          phone:
+            sanitizePhone(professionalProfile.phone) ||
+            sanitizePhone(professionalMetadata?.phone || professionalMetadata?.professionalPhone) ||
+            null,
+          roleTitle:
+            sanitizeString(
+              professionalProfile.roleTitle ||
+                professionalProfile.role_title ||
+                professionalMetadata?.roleTitle ||
+                professionalMetadata?.professionalRoleTitle,
+              160
+            ) || null,
+          crp:
+            sanitizeString(professionalProfile.crp || professionalProfile.council_number || input?.crp, 80) ||
+            null,
+          specialties:
+            sanitizeString(professionalProfile.specialties || professionalProfile.specialty, 240) ||
+            null,
+          miniCurriculum:
+            sanitizeString(professionalProfile.miniCurriculum || professionalProfile.mini_curriculum, 3000) ||
+            null,
+          metadata: Object.keys(professionalMetadata).length > 0 ? professionalMetadata : null
+        })
+      : null,
     workspaces
   };
 }
@@ -7633,6 +7696,38 @@ function buildPublicAnamnesisTemplate(template: any) {
         })).filter((item: any) => item.name)
       : []
   };
+}
+
+function mapAnamnesisTemplateRowForEditor(row: any) {
+  const template = sanitizeAnamnesisTemplate(row?.questions || getDefaultAnamnesisTemplate());
+  return {
+    id: sanitizeString(row?.id, 120),
+    selectedTemplateId: sanitizeString(row?.id, 120),
+    name: sanitizeString(row?.name, 180) || 'Ficha de anamnese',
+    templateName: sanitizeString(row?.name, 180) || 'Ficha de anamnese',
+    description: sanitizeString(row?.description, 500) || '',
+    templateDescription: sanitizeString(row?.description, 500) || '',
+    ageMinMonths: Number.isFinite(Number(row?.age_min_months)) ? Number(row.age_min_months) : null,
+    ageMaxMonths: Number.isFinite(Number(row?.age_max_months)) ? Number(row.age_max_months) : null,
+    patientProfileType: sanitizeString(row?.patient_profile_type, 80) || null,
+    isDefault: Boolean(row?.is_default),
+    isActive: row?.is_active !== false,
+    updatedAt: sanitizeString(row?.updated_at, 80) || null,
+    createdAt: sanitizeString(row?.created_at, 80) || null,
+    ...template
+  };
+}
+
+function normalizeAnamnesisTemplateAgeMonth(value: unknown): number | null {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) return null;
+  return Math.min(1440, Math.floor(parsed));
+}
+
+function normalizeAnamnesisPatientProfileType(value: unknown): string | null {
+  const raw = sanitizeString(value, 80).toUpperCase();
+  if (!raw) return null;
+  return ['KIDS_TEA', 'KIDS', 'TEEN', 'ABA', 'ADULT'].includes(raw) ? raw : null;
 }
 
 async function fetchAnamnesisTemplateForClinic(clinicId: string) {
@@ -13259,6 +13354,177 @@ async function startServer() {
 
   app.get('/api/clinic/anamnesis-template/defaults', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (_req: any, res) => {
     return res.json({ success: true, data: getDefaultAnamnesisTemplate() });
+  });
+
+  app.get('/api/clinic/anamnesis-templates', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const clinicId = currentClinicId(req.session.user);
+      if (!isUuid(clinicId)) {
+        return res.json({ success: true, data: [] });
+      }
+
+      const { data, error } = await supabase
+        .from('anamnesis_templates')
+        .select(ANAMNESIS_TEMPLATE_SELECT)
+        .eq('organization_id', clinicId)
+        .eq('is_active', true)
+        .order('updated_at', { ascending: false })
+        .limit(5);
+
+      if (error) {
+        if (isMissingRelationError(error) || extractMissingColumnName(error)) {
+          return res.json({ success: true, data: [], warning: 'Tabela de fichas personalizadas indisponível.' });
+        }
+        throw error;
+      }
+
+      return res.json({
+        success: true,
+        data: (Array.isArray(data) ? data : []).map(mapAnamnesisTemplateRowForEditor)
+      });
+    } catch (error) {
+      return sendRouteDbError(res, '/api/clinic/anamnesis-templates [GET]', error, {
+        clinicId: sanitizeString(currentClinicId(req.session.user), 120),
+        requestId: requestIdForLogs(req)
+      });
+    }
+  });
+
+  app.post('/api/clinic/anamnesis-templates', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const clinicId = currentClinicId(req.session.user);
+      if (!isUuid(clinicId)) {
+        return res.status(400).json({ success: false, error: 'Clínica inválida para salvar ficha.' });
+      }
+
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      const actorName = sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180);
+      const incomingTemplate = req.body?.template && typeof req.body.template === 'object' ? req.body.template : {};
+      const templateId = sanitizeString(incomingTemplate?.selectedTemplateId || incomingTemplate?.id || req.body?.templateId, 120);
+      const name = sanitizeString(incomingTemplate?.templateName || incomingTemplate?.name, 180);
+      if (!name) {
+        return res.status(400).json({ success: false, error: 'Informe um nome para a ficha.' });
+      }
+
+      const activeCountResult = await supabase
+        .from('anamnesis_templates')
+        .select('id')
+        .eq('organization_id', clinicId)
+        .eq('is_active', true)
+        .limit(6);
+      if (activeCountResult.error) {
+        if (isMissingRelationError(activeCountResult.error) || extractMissingColumnName(activeCountResult.error)) {
+          return res.status(400).json({ success: false, error: 'Estrutura de fichas personalizadas indisponível.' });
+        }
+        throw activeCountResult.error;
+      }
+      const activeRows = Array.isArray(activeCountResult.data) ? activeCountResult.data : [];
+      const isUpdatingExisting = isUuid(templateId) && activeRows.some((row: any) => sanitizeString(row?.id, 120) === templateId);
+      if (!isUpdatingExisting && activeRows.length >= 5) {
+        return res.status(409).json({ success: false, error: 'Limite de 5 fichas salvas atingido.' });
+      }
+
+      const nextTemplate = sanitizeAnamnesisTemplate(incomingTemplate);
+      const payload = cleanObject({
+        organization_id: clinicId,
+        name,
+        description: sanitizeString(incomingTemplate?.templateDescription || incomingTemplate?.description, 500) || null,
+        age_min_months: normalizeAnamnesisTemplateAgeMonth(incomingTemplate?.ageMinMonths ?? incomingTemplate?.age_min_months),
+        age_max_months: normalizeAnamnesisTemplateAgeMonth(incomingTemplate?.ageMaxMonths ?? incomingTemplate?.age_max_months),
+        patient_profile_type: normalizeAnamnesisPatientProfileType(incomingTemplate?.patientProfileType || incomingTemplate?.patient_profile_type),
+        questions: nextTemplate,
+        is_default: false,
+        is_active: true,
+        created_by: actorId || null,
+        updated_at: new Date().toISOString()
+      });
+
+      let savedRow: any = null;
+      if (isUuid(templateId)) {
+        const { data, error } = await supabase
+          .from('anamnesis_templates')
+          .update(payload)
+          .eq('id', templateId)
+          .eq('organization_id', clinicId)
+          .select(ANAMNESIS_TEMPLATE_SELECT)
+          .maybeSingle();
+        if (error) throw error;
+        if (!data?.id) {
+          return res.status(404).json({ success: false, error: 'Ficha não encontrada para atualização.' });
+        }
+        savedRow = data;
+      } else {
+        const { data, error } = await supabase
+          .from('anamnesis_templates')
+          .insert([payload])
+          .select(ANAMNESIS_TEMPLATE_SELECT)
+          .maybeSingle();
+        if (error) throw error;
+        savedRow = data;
+      }
+
+      if (!savedRow?.id || sanitizeString(savedRow?.organization_id, 120) !== clinicId || savedRow?.is_active === false) {
+        return res.status(500).json({ success: false, error: 'Não foi possível confirmar a persistência da ficha.' });
+      }
+
+      void persistActivityLog({
+        userId: actorId,
+        clinicId,
+        actorName,
+        title: 'Template de anamnese atualizado',
+        content: `Ficha "${name}" salva com segmentação de idade.`,
+        type: 'audit'
+      });
+
+      return res.json({ success: true, data: mapAnamnesisTemplateRowForEditor(savedRow) });
+    } catch (error: any) {
+      if (isMissingRelationError(error) || extractMissingColumnName(error)) {
+        return res.status(400).json({ success: false, error: 'Estrutura de fichas personalizadas indisponível.' });
+      }
+      return sendRouteDbError(res, '/api/clinic/anamnesis-templates [POST]', error, {
+        clinicId: sanitizeString(currentClinicId(req.session.user), 120),
+        requestId: requestIdForLogs(req)
+      });
+    }
+  });
+
+  app.delete('/api/clinic/anamnesis-templates/:templateId', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const clinicId = currentClinicId(req.session.user);
+      const templateId = sanitizeString(req.params?.templateId, 120);
+      if (!isUuid(clinicId) || !isUuid(templateId)) {
+        return res.status(400).json({ success: false, error: 'Ficha inválida.' });
+      }
+
+      const { data, error } = await supabase
+        .from('anamnesis_templates')
+        .update({ is_active: false, updated_at: new Date().toISOString() })
+        .eq('id', templateId)
+        .eq('organization_id', clinicId)
+        .select('id')
+        .maybeSingle();
+      if (error) throw error;
+      if (!data?.id) return res.status(404).json({ success: false, error: 'Ficha não encontrada.' });
+
+      void persistActivityLog({
+        userId: sanitizeString(req.session.user?.id, 120),
+        clinicId,
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180),
+        title: 'Ficha de anamnese arquivada',
+        content: 'Uma ficha personalizada de anamnese foi removida da lista ativa.',
+        type: 'audit'
+      });
+
+      return res.json({ success: true });
+    } catch (error: any) {
+      if (isMissingRelationError(error) || extractMissingColumnName(error)) {
+        return res.status(400).json({ success: false, error: 'Estrutura de fichas personalizadas indisponível.' });
+      }
+      return sendRouteDbError(res, '/api/clinic/anamnesis-templates/:templateId [DELETE]', error, {
+        clinicId: sanitizeString(currentClinicId(req.session.user), 120),
+        requestId: requestIdForLogs(req)
+      });
+    }
   });
 
   app.post('/api/clinic/anamnesis-template', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
@@ -22413,25 +22679,57 @@ async function startServer() {
       const profilePicturePath = sanitizeString(req.body?.profilePicturePath || req.body?.profile_picture_path, 260);
       const signaturePath = sanitizeString(req.body?.signaturePath || req.body?.signature_path, 260);
       const clinicLogoPath = sanitizeString(req.body?.clinicLogoPath || req.body?.clinic_logo_path, 260);
+      const professionalProfileInput =
+        req.body?.professionalProfile && typeof req.body.professionalProfile === 'object'
+          ? req.body.professionalProfile
+          : {};
+      const clinicSettingsInput =
+        req.body?.clinicSettings && typeof req.body.clinicSettings === 'object'
+          ? req.body.clinicSettings
+          : {};
       const resolvedCrp = sanitizeString(req.body?.crp, 80);
-      const resolvedCouncil = sanitizeString(req.body?.council || req.body?.clinicSettings?.council, 80);
+      const resolvedCouncil = sanitizeString(req.body?.council || clinicSettingsInput?.council, 80);
       const resolvedCouncilNumber =
-        sanitizeString(req.body?.councilNumber || req.body?.clinicSettings?.councilNumber, 80) ||
+        sanitizeString(req.body?.councilNumber || clinicSettingsInput?.councilNumber, 80) ||
         resolvedCrp;
+      const professionalCpf =
+        normalizeCpf(req.body?.cpf) ||
+        normalizeCpf(professionalProfileInput?.cpf || professionalProfileInput?.professionalCpf);
+      const professionalPhone =
+        sanitizePhone(req.body?.phone) ||
+        sanitizePhone(professionalProfileInput?.phone || professionalProfileInput?.professionalPhone);
+      const professionalRoleTitle = sanitizeString(
+        req.body?.professionalRoleTitle ||
+          professionalProfileInput?.roleTitle ||
+          professionalProfileInput?.professionalRoleTitle,
+        160
+      );
+      const professionalFullName =
+        sanitizeString(professionalProfileInput?.fullName || professionalProfileInput?.full_name || req.body?.name, 180) ||
+        sanitizeString(req.body?.name, 180);
+      const clinicName = sanitizeString(clinicSettingsInput?.clinicName || req.body?.clinicName, 160);
+      const clinicPhone = sanitizePhone(clinicSettingsInput?.clinicPhone || req.body?.clinicPhone);
+      const clinicEmail = sanitizeEmail(clinicSettingsInput?.clinicEmail || req.body?.clinicEmail);
+      const clinicAddress = sanitizeString(clinicSettingsInput?.clinicAddress || req.body?.clinicAddress, 260);
+      const clinicCnpj = sanitizeString(clinicSettingsInput?.clinicCnpj || req.body?.clinicCnpj, 30);
 
       const safePayload = cleanObject({
         id: sanitizeString(req.params.userId, 120),
-        name: sanitizeString(req.body?.name, 180) || undefined,
+        name: professionalFullName || undefined,
         email: sanitizeEmail(req.body?.email) || undefined,
         role: sanitizeString(req.body?.role, 40) || undefined,
         profile_picture: sanitizeUrl(req.body?.profile_picture) || sanitizeUrl(req.body?.profilePicture) || undefined,
         crp: resolvedCrp || undefined,
-        phone: sanitizePhoneE164(req.body?.phone || req.body?.whatsappPhone || req.body?.whatsapp) || undefined,
+        cpf: professionalCpf || undefined,
+        phone:
+          sanitizePhoneE164(req.body?.phone || req.body?.whatsappPhone || req.body?.whatsapp) ||
+          professionalPhone ||
+          undefined,
         signature_url:
           sanitizeUrl(req.body?.signature_url) ||
           sanitizeUrl(req.body?.signatureUrl) ||
           sanitizeUrl(req.body?.signatureDataUrl) ||
-          sanitizeUrl(req.body?.clinicSettings?.signatureDataUrl) ||
+          sanitizeUrl(clinicSettingsInput?.signatureDataUrl) ||
           undefined,
         specialties: sanitizeString(req.body?.specialties, 1000) || undefined,
         mini_curriculum: sanitizeString(req.body?.mini_curriculum || req.body?.miniCurriculum, 4000) || undefined,
@@ -22456,12 +22754,12 @@ async function startServer() {
             sanitizeUrl(req.body?.signature_url) ||
             sanitizeUrl(req.body?.signatureUrl) ||
             sanitizeUrl(req.body?.signatureDataUrl) ||
-            sanitizeUrl(req.body?.clinicSettings?.signatureDataUrl) ||
+            sanitizeUrl(clinicSettingsInput?.signatureDataUrl) ||
             undefined;
           const currentClinicLogoUrl =
             sanitizeUrl(req.body?.clinic_logo_url) ||
             sanitizeUrl(req.body?.clinicLogoUrl) ||
-            sanitizeUrl(req.body?.clinicSettings?.clinicLogoUrl) ||
+            sanitizeUrl(clinicSettingsInput?.clinicLogoUrl) ||
             undefined;
           const pathProfilePictureUrl = profilePicturePath
             ? await resolvePatientPhotoUrl(currentProfilePictureUrl, profilePicturePath)
@@ -22505,6 +22803,14 @@ async function startServer() {
 
           const mergedMetadata = cleanObject({
             ...existingMetadata,
+            cpf: professionalCpf || existingMetadata?.cpf || undefined,
+            professionalCpf: professionalCpf || existingMetadata?.professionalCpf || undefined,
+            phone: professionalPhone || existingMetadata?.phone || undefined,
+            professionalPhone: professionalPhone || existingMetadata?.professionalPhone || undefined,
+            roleTitle: professionalRoleTitle || existingMetadata?.roleTitle || undefined,
+            professionalRoleTitle: professionalRoleTitle || existingMetadata?.professionalRoleTitle || undefined,
+            clinicEmail: clinicEmail || existingMetadata?.clinicEmail || undefined,
+            clinicAddress: clinicAddress || existingMetadata?.clinicAddress || undefined,
             profilePicturePath: profilePicturePath || existingMetadata?.profilePicturePath || undefined,
             signaturePath: signaturePath || existingMetadata?.signaturePath || undefined,
             clinicLogoPath: clinicLogoPath || existingMetadata?.clinicLogoPath || undefined
@@ -22514,9 +22820,19 @@ async function startServer() {
             user_id: sanitizeString(req.params.userId, 120),
             clinic_id: clinicId || undefined,
             role: role || undefined,
+            full_name: professionalFullName || undefined,
+            phone: professionalPhone || undefined,
             council: resolvedCouncil || undefined,
             council_number: resolvedCouncilNumber || undefined,
             crp: resolvedCrp || resolvedCouncilNumber || undefined,
+            specialty:
+              sanitizeString(req.body?.specialties || professionalProfileInput?.specialties, 240) ||
+              undefined,
+            mini_curriculum:
+              sanitizeString(req.body?.miniCurriculum || professionalProfileInput?.miniCurriculum, 3000) ||
+              undefined,
+            clinic_name: clinicName || undefined,
+            clinic_phone: clinicPhone || undefined,
             profile_photo_url: resolvedProfilePictureUrl || undefined,
             signature_data_url: resolvedSignatureUrl || undefined,
             clinic_logo_url: resolvedClinicLogoUrl || undefined,
@@ -22536,23 +22852,38 @@ async function startServer() {
 
           const nextClinicSettings = compactClinicSettingsForSession({
             ...(req.session.user?.clinicSettings || {}),
-            ...(req.body?.clinicSettings && typeof req.body.clinicSettings === 'object' ? req.body.clinicSettings : {}),
+            ...clinicSettingsInput,
+            ...(clinicName ? { clinicName } : {}),
+            ...(clinicCnpj ? { clinicCnpj } : {}),
+            ...(clinicPhone ? { clinicPhone } : {}),
+            ...(clinicEmail ? { clinicEmail } : {}),
+            ...(clinicAddress ? { clinicAddress } : {}),
             ...(resolvedCouncil ? { council: resolvedCouncil } : {}),
             ...(resolvedCouncilNumber ? { councilNumber: resolvedCouncilNumber } : {}),
             clinicLogoUrl: resolvedClinicLogoUrl || null,
             signatureDataUrl: resolvedSignatureUrl || null,
             therapistSpecialties:
-              sanitizeString(req.body?.specialties || req.body?.clinicSettings?.therapistSpecialties, 240) ||
+              sanitizeString(req.body?.specialties || clinicSettingsInput?.therapistSpecialties, 240) ||
               req.session.user?.clinicSettings?.therapistSpecialties ||
               null,
             therapistMiniCurriculum:
-              sanitizeString(req.body?.miniCurriculum || req.body?.clinicSettings?.therapistMiniCurriculum, 3000) ||
+              sanitizeString(req.body?.miniCurriculum || clinicSettingsInput?.therapistMiniCurriculum, 3000) ||
               req.session.user?.clinicSettings?.therapistMiniCurriculum ||
               null,
           });
 
           if (clinicId && (role === 'coordinator' || role === 'admin' || role === 'owner')) {
             await patchTableSafely('clinics', { column: 'id', value: clinicId }, {
+              name: clinicName || undefined,
+              display_name: clinicName || undefined,
+              cnpj: clinicCnpj || undefined,
+              clinic_cnpj: clinicCnpj || undefined,
+              phone: clinicPhone || undefined,
+              clinic_phone: clinicPhone || undefined,
+              email: clinicEmail || undefined,
+              clinic_email: clinicEmail || undefined,
+              address: clinicAddress || undefined,
+              clinic_address: clinicAddress || undefined,
               logo_url: resolvedClinicLogoUrl || undefined,
               signature_data_url: resolvedSignatureUrl || undefined,
               updated_at: new Date().toISOString()
@@ -22561,13 +22892,23 @@ async function startServer() {
 
           if (nextClinicSettings) {
             await supabase.auth.admin.updateUserById(sanitizeString(req.params.userId, 120), {
-              user_metadata: {
+              user_metadata: cleanObject({
+                ...((req.session.user as any)?.user_metadata || {}),
+                professional_profile: cleanObject({
+                  cpf: professionalCpf || undefined,
+                  professionalCpf: professionalCpf || undefined,
+                  phone: professionalPhone || undefined,
+                  professionalPhone: professionalPhone || undefined,
+                  roleTitle: professionalRoleTitle || undefined,
+                  professionalRoleTitle: professionalRoleTitle || undefined,
+                  crp: resolvedCrp || resolvedCouncilNumber || undefined
+                }),
                 clinic_settings: nextClinicSettings,
                 first_login_completed:
                   typeof req.session.user?.firstLoginCompleted === 'boolean'
                     ? req.session.user.firstLoginCompleted
                     : true
-              }
+              })
             });
           }
 
@@ -22577,6 +22918,26 @@ async function startServer() {
             req.session.user?.email ||
             'Profissional';
           req.session.user.profilePicture = resolvedProfilePictureUrl;
+          req.session.user.cpf = professionalCpf || req.session.user?.cpf || null;
+          req.session.user.phone = professionalPhone || req.session.user?.phone || null;
+          req.session.user.professionalRoleTitle = professionalRoleTitle || req.session.user?.professionalRoleTitle || null;
+          req.session.user.professionalProfile = cleanObject({
+            ...(req.session.user?.professionalProfile || {}),
+            fullName: professionalFullName || req.session.user?.professionalProfile?.fullName || null,
+            cpf: professionalCpf || req.session.user?.professionalProfile?.cpf || null,
+            phone: professionalPhone || req.session.user?.professionalProfile?.phone || null,
+            roleTitle: professionalRoleTitle || req.session.user?.professionalProfile?.roleTitle || null,
+            crp: resolvedCrp || resolvedCouncilNumber || req.session.user?.professionalProfile?.crp || null,
+            specialties:
+              sanitizeString(req.body?.specialties || professionalProfileInput?.specialties, 240) ||
+              req.session.user?.professionalProfile?.specialties ||
+              null,
+            miniCurriculum:
+              sanitizeString(req.body?.miniCurriculum || professionalProfileInput?.miniCurriculum, 3000) ||
+              req.session.user?.professionalProfile?.miniCurriculum ||
+              null,
+            metadata: mergedMetadata
+          });
           req.session.user.signatureDataUrl = resolvedSignatureUrl;
           req.session.user.clinicSettings = nextClinicSettings;
           req.session.user.workspaces = compactWorkspacesForSession(await fetchUserWorkspaces(req.session.user.id));
@@ -22604,7 +22965,10 @@ async function startServer() {
             });
           });
 
-          return res.json({ success: true });
+          return res.json({
+            success: true,
+            user: buildSessionUserPayload(req.session.user)
+          });
         }
 
         lastError = error;

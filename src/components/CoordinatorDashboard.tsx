@@ -5,7 +5,6 @@ import {
   TrendingUp,
   Calendar,
   ClipboardList,
-  Settings,
   LogOut,
   Plus,
   Search,
@@ -209,6 +208,26 @@ export function CoordinatorDashboard({
     if (digits.length <= 12) return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8)}`;
     return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8, 12)}-${digits.slice(12)}`;
   };
+  const formatCpfInput = (value: string) => {
+    const digits = String(value || "").replace(/\D/g, "").slice(0, 11);
+    if (digits.length <= 3) return digits;
+    if (digits.length <= 6) return `${digits.slice(0, 3)}.${digits.slice(3)}`;
+    if (digits.length <= 9) return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6)}`;
+    return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9)}`;
+  };
+  const formatPhoneInput = (value: string) => {
+    const digits = String(value || "").replace(/\D/g, "").slice(0, 11);
+    if (digits.length <= 2) return digits;
+    if (digits.length <= 6) return `(${digits.slice(0, 2)}) ${digits.slice(2)}`;
+    if (digits.length <= 10) return `(${digits.slice(0, 2)}) ${digits.slice(2, 6)}-${digits.slice(6)}`;
+    return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
+  };
+  const profileMetadata = (
+    user?.professionalProfile?.metadata ||
+    user?.professional_profile?.metadata ||
+    user?.professionalMetadata ||
+    {}
+  ) as Record<string, any>;
   const role = String(user?.role || "coordinator");
   const capabilityRole: "coordinator" | "receptionist" | "therapist" =
     role === "therapist"
@@ -850,6 +869,7 @@ export function CoordinatorDashboard({
   const [anamnesisTemplate, setAnamnesisTemplate] = useState<any>(
     getDefaultAnamnesisTemplate(),
   );
+  const [anamnesisTemplates, setAnamnesisTemplates] = useState<any[]>([]);
   const [isAnamnesisTemplateModalOpen, setIsAnamnesisTemplateModalOpen] =
     useState(false);
   const [loadingAnamnesisTemplate, setLoadingAnamnesisTemplate] =
@@ -865,6 +885,15 @@ export function CoordinatorDashboard({
   const coordinatorAvatarUrl = user?.profilePicture || user?.profile_picture || null;
   const [therapistCrp, setTherapistCrp] = useState<string>(
     String(user?.crp || ""),
+  );
+  const [therapistCpf, setTherapistCpf] = useState<string>(
+    formatCpfInput(String(user?.cpf || profileMetadata?.cpf || profileMetadata?.professionalCpf || "")),
+  );
+  const [therapistPhone, setTherapistPhone] = useState<string>(
+    formatPhoneInput(String(user?.phone || user?.whatsappPhone || profileMetadata?.phone || profileMetadata?.professionalPhone || "")),
+  );
+  const [therapistRoleTitle, setTherapistRoleTitle] = useState<string>(
+    String(user?.professionalRoleTitle || profileMetadata?.roleTitle || profileMetadata?.professionalRoleTitle || ""),
   );
   const [therapistFullName, setTherapistFullName] = useState<string>(
     String(user?.name || ""),
@@ -892,6 +921,18 @@ export function CoordinatorDashboard({
   >(user?.profilePicture || user?.profile_picture || null);
   const [clinicLogoDataUrl, setClinicLogoDataUrl] = useState<string | null>(
     user?.clinicSettings?.clinicLogoUrl || null,
+  );
+  const [clinicDisplayName, setClinicDisplayName] = useState<string>(
+    String(user?.clinicSettings?.clinicName || user?.workspaceName || ""),
+  );
+  const [clinicPhone, setClinicPhone] = useState<string>(
+    formatPhoneInput(String(user?.clinicSettings?.clinicPhone || "")),
+  );
+  const [clinicEmail, setClinicEmail] = useState<string>(
+    String(user?.clinicSettings?.clinicEmail || ""),
+  );
+  const [clinicAddress, setClinicAddress] = useState<string>(
+    String(user?.clinicSettings?.clinicAddress || ""),
   );
   const [mediaRefreshAttempts, setMediaRefreshAttempts] = useState({
     signature: 0,
@@ -1146,7 +1187,16 @@ export function CoordinatorDashboard({
   }, [activeTab, canAccessClinicFinance]);
 
   useEffect(() => {
+    const nextProfileMetadata = (
+      user?.professionalProfile?.metadata ||
+      user?.professional_profile?.metadata ||
+      user?.professionalMetadata ||
+      {}
+    ) as Record<string, any>;
     setTherapistCrp(String(user?.crp || ""));
+    setTherapistCpf(formatCpfInput(String(user?.cpf || nextProfileMetadata?.cpf || nextProfileMetadata?.professionalCpf || "")));
+    setTherapistPhone(formatPhoneInput(String(user?.phone || user?.whatsappPhone || nextProfileMetadata?.phone || nextProfileMetadata?.professionalPhone || "")));
+    setTherapistRoleTitle(String(user?.professionalRoleTitle || nextProfileMetadata?.roleTitle || nextProfileMetadata?.professionalRoleTitle || ""));
     setTherapistFullName(String(user?.name || ""));
     setTherapistSpecialties(
       String(
@@ -1181,8 +1231,19 @@ export function CoordinatorDashboard({
     setWorkStart(String(user?.clinicSettings?.workStart || "08:00"));
     setWorkEnd(String(user?.clinicSettings?.workEnd || "18:00"));
     setClinicCnpj(formatCnpjInput(String(user?.clinicSettings?.clinicCnpj || "")));
+    setClinicDisplayName(String(user?.clinicSettings?.clinicName || user?.workspaceName || ""));
+    setClinicPhone(formatPhoneInput(String(user?.clinicSettings?.clinicPhone || "")));
+    setClinicEmail(String(user?.clinicSettings?.clinicEmail || ""));
+    setClinicAddress(String(user?.clinicSettings?.clinicAddress || ""));
   }, [
     user?.crp,
+    user?.cpf,
+    user?.phone,
+    user?.whatsappPhone,
+    user?.professionalRoleTitle,
+    user?.professionalProfile,
+    user?.professional_profile,
+    user?.professionalMetadata,
     user?.name,
     user?.specialties,
     user?.miniCurriculum,
@@ -1197,6 +1258,11 @@ export function CoordinatorDashboard({
     user?.clinicSettings?.workStart,
     user?.clinicSettings?.workEnd,
     user?.clinicSettings?.clinicCnpj,
+    user?.clinicSettings?.clinicName,
+    user?.clinicSettings?.clinicPhone,
+    user?.clinicSettings?.clinicEmail,
+    user?.clinicSettings?.clinicAddress,
+    user?.workspaceName,
   ]);
   const refreshSignedMediaUrls = useCallback(async () => {
     try {
@@ -4343,99 +4409,127 @@ export function CoordinatorDashboard({
   };
 
   const handleSaveClinicSettings = () => {
-    if (isTherapist) {
-      const cleanFullName = therapistFullName.trim();
-      const cleanCrp = therapistCrp.trim();
-      const cleanSpecialties = therapistSpecialties.trim();
-      const cleanMiniCurriculum = therapistMiniCurriculum.trim();
-      const isCrpValid =
-        /^[A-Za-z]{2,4}\s?\/?\s?\d{3,10}$/i.test(cleanCrp) ||
-        /^\d{2}\s?\/?\s?\d{4,8}$/i.test(cleanCrp);
+    const cleanFullName = therapistFullName.trim();
+    const cleanCrp = therapistCrp.trim();
+    const cleanCpf = therapistCpf.replace(/\D/g, "");
+    const cleanPhone = therapistPhone.trim();
+    const cleanRoleTitle = therapistRoleTitle.trim();
+    const cleanSpecialties = therapistSpecialties.trim();
+    const cleanMiniCurriculum = therapistMiniCurriculum.trim();
+    const cleanClinicName = clinicDisplayName.trim();
+    const cleanClinicPhone = clinicPhone.trim();
+    const cleanClinicEmail = clinicEmail.trim();
+    const cleanClinicAddress = clinicAddress.trim();
+    const isCrpValid =
+      !cleanCrp ||
+      /^[A-Za-z]{2,4}\s?\/?\s?\d{3,10}$/i.test(cleanCrp) ||
+      /^\d{2}\s?\/?\s?\d{4,8}$/i.test(cleanCrp);
 
-      if (!cleanFullName || cleanFullName.length < 3) {
-        showToast("Informe o nome completo para salvar o perfil.", "error");
-        return;
-      }
-      if (!cleanCrp) {
-        const warning =
-          "Complete seu perfil com o CRP para habilitar registros clínicos";
-        alert(warning);
-        showToast(warning, "error");
-        return;
-      }
-      if (!isCrpValid) {
-        showToast("CRP inválido. Use um formato como CRP 06/123456.", "error");
-        return;
-      }
-      showProcessing("Salvando perfil profissional...");
-      onUpdateProfile({
-        name: cleanFullName,
-        crp: cleanCrp,
-        specialties: cleanSpecialties,
-        miniCurriculum: cleanMiniCurriculum,
-        profilePicture: therapistProfilePhotoUrl,
-        signatureDataUrl: therapistSignatureDataUrl,
-        clinicSettings: {
-          ...(user?.clinicSettings || {}),
-          therapistSpecialties: cleanSpecialties,
-          therapistMiniCurriculum: cleanMiniCurriculum,
-          signatureDataUrl: therapistSignatureDataUrl,
-        },
-      });
-      onAddActivityLog(
-        "Perfil profissional atualizado",
-        "O terapeuta atualizou nome, CRP, especialidades, mini currículo, assinatura digital e foto de perfil.",
-        "management",
-      );
-      hideProcessing();
-      showToast("Perfil atualizado com sucesso!");
+    if (!cleanFullName || cleanFullName.length < 3) {
+      showToast("Informe o nome completo para salvar o perfil.", "error");
       return;
     }
-    if (!canManageClinicSettings) {
+    if (isTherapist && !cleanCrp) {
+      const warning =
+        "Complete seu perfil com o CRP para habilitar registros clínicos";
+      alert(warning);
+      showToast(warning, "error");
+      return;
+    }
+    if (!isCrpValid) {
+      showToast("CRP inválido. Use um formato como CRP 06/123456.", "error");
+      return;
+    }
+    if (cleanCpf && cleanCpf.length !== 11) {
+      showToast("CPF inválido. Informe 11 dígitos.", "error");
+      return;
+    }
+    if (!isTherapist && !canManageClinicSettings) {
       showToast("Apenas a coordenação pode alterar as configurações da clínica.", "error");
       return;
     }
 
-    showProcessing("Salvando configurações da clínica...");
+    showProcessing(isTherapist ? "Salvando perfil profissional..." : "Salvando perfil e dados da clínica...");
     const clinicSettings = {
       ...(user?.clinicSettings || {}),
       defaultSessionDuration,
       workStart,
       workEnd,
       professionalSessionDurations,
+      clinicName: cleanClinicName || user?.clinicSettings?.clinicName || null,
       clinicCnpj,
+      clinicPhone: cleanClinicPhone || null,
+      clinicEmail: cleanClinicEmail || null,
+      clinicAddress: cleanClinicAddress || null,
     };
 
     onUpdateProfile({
       name: therapistFullName?.trim() || user?.name,
+      cpf: cleanCpf || null,
+      phone: cleanPhone || null,
+      professionalRoleTitle: cleanRoleTitle || null,
+      crp: cleanCrp || null,
+      specialties: cleanSpecialties,
+      miniCurriculum: cleanMiniCurriculum,
       profilePicture: therapistProfilePhotoUrl,
       signatureDataUrl: therapistSignatureDataUrl,
+      professionalProfile: {
+        fullName: cleanFullName,
+        cpf: cleanCpf || null,
+        phone: cleanPhone || null,
+        roleTitle: cleanRoleTitle || null,
+        crp: cleanCrp || null,
+        specialties: cleanSpecialties,
+        miniCurriculum: cleanMiniCurriculum,
+        profilePicture: therapistProfilePhotoUrl,
+        signatureDataUrl: therapistSignatureDataUrl,
+      },
       clinicSettings: {
         ...clinicSettings,
-        clinicLogoUrl: clinicLogoDataUrl || undefined,
-        signatureDataUrl: therapistSignatureDataUrl || undefined,
+        clinicLogoUrl: !isTherapist ? clinicLogoDataUrl || undefined : user?.clinicSettings?.clinicLogoUrl,
       },
     });
 
     onAddActivityLog(
-      "Configurações atualizadas",
-      "A coordenação atualizou horários, branding (logo/assinatura/foto) e duração de sessão por profissional.",
+      isTherapist ? "Perfil profissional atualizado" : "Perfil e dados da clínica atualizados",
+      isTherapist
+        ? "O profissional atualizou dados cadastrais, documentos, assinatura e foto de perfil."
+        : "A coordenação atualizou dados profissionais, dados institucionais da clínica, horários e branding.",
       "management",
     );
     hideProcessing();
-    showToast("Configurações salvas com sucesso!");
+    showToast(isTherapist ? "Perfil atualizado com sucesso!" : "Perfil e clínica salvos com sucesso!");
   };
+
+  const normalizeAnamnesisTemplateForEditor = (template: any) => ({
+    ...normalizeAnamnesisTemplate(template || getDefaultAnamnesisTemplate()),
+    selectedTemplateId: template?.selectedTemplateId || template?.id || null,
+    templateName: template?.templateName || template?.name || "Ficha personalizada",
+    templateDescription: template?.templateDescription || template?.description || "",
+    ageMinMonths: template?.ageMinMonths ?? template?.age_min_months ?? null,
+    ageMaxMonths: template?.ageMaxMonths ?? template?.age_max_months ?? null,
+    patientProfileType: template?.patientProfileType || template?.patient_profile_type || null,
+  });
 
   const loadClinicAnamnesisTemplate = async () => {
     setLoadingAnamnesisTemplate(true);
     try {
-      const result = await dataService.getClinicAnamnesisTemplate();
+      const workspaceId = String(user?.activeWorkspaceId || user?.clinicId || '').trim();
+      const listResult = await dataService.getClinicAnamnesisTemplates(workspaceId || undefined);
+      if (listResult?.success && Array.isArray(listResult.data)) {
+        const normalizedList = listResult.data.map(normalizeAnamnesisTemplateForEditor);
+        setAnamnesisTemplates(normalizedList);
+        if (normalizedList.length > 0) {
+          const currentId = String(anamnesisTemplate?.selectedTemplateId || "");
+          const currentStillExists = normalizedList.find((item: any) => String(item?.selectedTemplateId || item?.id || "") === currentId);
+          setAnamnesisTemplate(currentStillExists || normalizedList[0]);
+          return;
+        }
+      }
+
+      const result = await dataService.getClinicAnamnesisTemplate(workspaceId || undefined);
       if (result?.success) {
-        setAnamnesisTemplate(
-          normalizeAnamnesisTemplate(
-            result.data || getDefaultAnamnesisTemplate(),
-          ),
-        );
+        setAnamnesisTemplate(normalizeAnamnesisTemplateForEditor(result.data || getDefaultAnamnesisTemplate()));
       }
     } catch (error) {
       console.error("Falha ao carregar template da anamnese:", error);
@@ -4451,17 +4545,20 @@ export function CoordinatorDashboard({
     }
     showProcessing("Salvando personalização da ficha...");
     const workspaceId = String(user?.activeWorkspaceId || user?.clinicId || '').trim();
-    const result = await dataService.saveClinicAnamnesisTemplate(template, workspaceId || undefined);
+    const result = await dataService.saveClinicAnamnesisTemplateRecord(template, workspaceId || undefined);
     if (!result?.success) {
       hideProcessing();
       throw new Error(
         result?.error || "Não foi possível salvar o template da anamnese.",
       );
     }
-    const normalizedSavedTemplate = normalizeAnamnesisTemplate(
-      result?.data || template,
-    );
+    const normalizedSavedTemplate = normalizeAnamnesisTemplateForEditor(result?.data || template);
     setAnamnesisTemplate(normalizedSavedTemplate);
+    setAnamnesisTemplates((prev) => {
+      const templateId = String((normalizedSavedTemplate as any)?.selectedTemplateId || (normalizedSavedTemplate as any)?.id || "");
+      const withoutCurrent = prev.filter((item: any) => String(item?.selectedTemplateId || item?.id || "") !== templateId);
+      return [normalizedSavedTemplate, ...withoutCurrent].slice(0, 5);
+    });
     onAddActivityLog(
       "Template de anamnese atualizado",
       "A coordenação personalizou perguntas e campos da ficha de anamnese.",
@@ -4470,6 +4567,29 @@ export function CoordinatorDashboard({
     hideProcessing();
     showToast("Dados salvos com sucesso!");
     return normalizedSavedTemplate;
+  };
+
+  const handleSelectClinicAnamnesisTemplate = (template: any) => {
+    setAnamnesisTemplate(normalizeAnamnesisTemplateForEditor(template));
+  };
+
+  const handleDeleteClinicAnamnesisTemplate = async (templateId: string) => {
+    if (!canEditAnamnesisTemplate) {
+      showToast("Apenas a coordenação pode remover fichas de anamnese.", "error");
+      return;
+    }
+    showProcessing("Removendo ficha personalizada...");
+    const workspaceId = String(user?.activeWorkspaceId || user?.clinicId || '').trim();
+    const result = await dataService.deleteClinicAnamnesisTemplateRecord(templateId, workspaceId || undefined);
+    if (!result?.success) {
+      hideProcessing();
+      throw new Error(result?.error || "Não foi possível remover a ficha.");
+    }
+    const nextTemplates = anamnesisTemplates.filter((item: any) => String(item?.selectedTemplateId || item?.id || "") !== String(templateId));
+    setAnamnesisTemplates(nextTemplates);
+    setAnamnesisTemplate(nextTemplates[0] || normalizeAnamnesisTemplateForEditor(getDefaultAnamnesisTemplate()));
+    hideProcessing();
+    showToast("Ficha removida da lista ativa.");
   };
 
   const formatCurrency = (value: any) =>
@@ -5450,10 +5570,7 @@ export function CoordinatorDashboard({
       { id: "conference", label: "Conferência", icon: FileChartColumnIncreasing },
     ],
     [{ id: "flow", label: "Verto Flow", icon: Zap, badge: "EM BREVE" }],
-    [
-      { id: "logs", label: "Log de Atividades", icon: History },
-      { id: "settings", label: "Configurações", icon: Settings },
-    ],
+    [{ id: "logs", label: "Log de Atividades", icon: History }],
   ];
 
   const visibleNavigationGroups = navigationGroups
@@ -5748,16 +5865,25 @@ export function CoordinatorDashboard({
                 userId: user?.id || "",
                 clinicName:
                   user?.clinicSettings?.clinicName ||
-                  user?.name ||
+                  user?.workspaceName ||
                   "Clínica Verto",
                 cnpj: user?.clinicSettings?.clinicCnpj || "",
+                phone: user?.clinicSettings?.clinicPhone || "",
+                email: user?.clinicSettings?.clinicEmail || "",
                 address: user?.clinicSettings?.clinicAddress || "",
-                logoUrl:
-                  user?.clinicSettings?.clinicLogoUrl ||
-                  user?.profilePicture ||
-                  buildInitialAvatarDataUrl(user?.name),
-                professionalName: user?.name || "Profissional",
+                logoUrl: user?.clinicSettings?.clinicLogoUrl || null,
+                professionalName: user?.name || "Profissional responsável",
                 crp: user?.crp || user?.clinicSettings?.crp || "",
+                professionalCpf:
+                  user?.cpf ||
+                  user?.professionalProfile?.cpf ||
+                  user?.professionalProfile?.metadata?.cpf ||
+                  "",
+                professionalRoleTitle:
+                  user?.professionalRoleTitle ||
+                  user?.professionalProfile?.roleTitle ||
+                  user?.professionalProfile?.metadata?.roleTitle ||
+                  "",
                 signatureUrl: user?.signatureDataUrl || user?.clinicSettings?.signatureDataUrl || null,
                 defaultSessionDuration: user?.clinicSettings?.defaultSessionDuration || defaultSessionDuration || 50,
               }}
@@ -7944,6 +8070,45 @@ export function CoordinatorDashboard({
                           )}
                         </div>
 
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-2">
+                            CPF
+                          </label>
+                          <input
+                            type="text"
+                            value={therapistCpf}
+                            onChange={(e) => setTherapistCpf(formatCpfInput(e.target.value))}
+                            placeholder="000.000.000-00"
+                            className="w-full p-4 bg-white border border-slate-200 rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-2">
+                            Telefone / WhatsApp
+                          </label>
+                          <input
+                            type="text"
+                            value={therapistPhone}
+                            onChange={(e) => setTherapistPhone(formatPhoneInput(e.target.value))}
+                            placeholder="(00) 00000-0000"
+                            className="w-full p-4 bg-white border border-slate-200 rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
+                          />
+                        </div>
+
+                        <div className="md:col-span-2">
+                          <label className="block text-xs font-bold text-slate-700 mb-2">
+                            Cargo / Função
+                          </label>
+                          <input
+                            type="text"
+                            value={therapistRoleTitle}
+                            onChange={(e) => setTherapistRoleTitle(e.target.value)}
+                            placeholder="Ex: Psicóloga responsável técnica"
+                            className="w-full p-4 bg-white border border-slate-200 rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
+                          />
+                        </div>
+
                         <div className="md:col-span-2">
                           <label className="block text-xs font-bold text-slate-700 mb-2">
                             Especialidades
@@ -8030,7 +8195,7 @@ export function CoordinatorDashboard({
                     {canManageClinicSettings ? (
                       <div className="space-y-6">
                         <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest">
-                          Meu Perfil e Branding
+                          Perfil do profissional responsável
                         </h4>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-6 bg-slate-50 rounded-3xl border border-slate-100">
                           <div className="md:col-span-2">
@@ -8043,6 +8208,78 @@ export function CoordinatorDashboard({
                               onChange={(e) => setTherapistFullName(e.target.value)}
                               placeholder="Nome do coordenador responsável"
                               className="w-full p-4 bg-white border border-slate-200 rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-2">
+                              CPF
+                            </label>
+                            <input
+                              type="text"
+                              value={therapistCpf}
+                              onChange={(e) => setTherapistCpf(formatCpfInput(e.target.value))}
+                              placeholder="000.000.000-00"
+                              className="w-full p-4 bg-white border border-slate-200 rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-2">
+                              CRP / Registro profissional
+                            </label>
+                            <input
+                              type="text"
+                              value={therapistCrp}
+                              onChange={(e) => setTherapistCrp(e.target.value)}
+                              placeholder="Ex: CRP 06/123456"
+                              className="w-full p-4 bg-white border border-slate-200 rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-2">
+                              Telefone / WhatsApp
+                            </label>
+                            <input
+                              type="text"
+                              value={therapistPhone}
+                              onChange={(e) => setTherapistPhone(formatPhoneInput(e.target.value))}
+                              placeholder="(00) 00000-0000"
+                              className="w-full p-4 bg-white border border-slate-200 rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-2">
+                              Cargo / Função
+                            </label>
+                            <input
+                              type="text"
+                              value={therapistRoleTitle}
+                              onChange={(e) => setTherapistRoleTitle(e.target.value)}
+                              placeholder="Ex: Coordenador clínico"
+                              className="w-full p-4 bg-white border border-slate-200 rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
+                            />
+                          </div>
+                          <div className="md:col-span-2">
+                            <label className="block text-xs font-bold text-slate-700 mb-2">
+                              Especialidades
+                            </label>
+                            <input
+                              type="text"
+                              value={therapistSpecialties}
+                              onChange={(e) => setTherapistSpecialties(e.target.value)}
+                              placeholder="Ex: ABA, Neurodesenvolvimento"
+                              className="w-full p-4 bg-white border border-slate-200 rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
+                            />
+                          </div>
+                          <div className="md:col-span-2">
+                            <label className="block text-xs font-bold text-slate-700 mb-2">
+                              Mini Currículo
+                            </label>
+                            <textarea
+                              rows={3}
+                              value={therapistMiniCurriculum}
+                              onChange={(e) => setTherapistMiniCurriculum(e.target.value)}
+                              placeholder="Resumo profissional usado em relatórios e documentos."
+                              className="w-full p-4 bg-white border border-slate-200 rounded-2xl text-sm font-medium outline-none focus:ring-2 focus:ring-blue-500/20 transition-all resize-none"
                             />
                           </div>
                           <div>
@@ -8089,6 +8326,24 @@ export function CoordinatorDashboard({
                               />
                             </label>
                           </div>
+                        </div>
+
+                        <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest">
+                          Dados da clínica
+                        </h4>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-6 bg-slate-50 rounded-3xl border border-slate-100">
+                          <div className="md:col-span-2">
+                            <label className="block text-xs font-bold text-slate-700 mb-2">
+                              Nome da Clínica
+                            </label>
+                            <input
+                              type="text"
+                              value={clinicDisplayName}
+                              onChange={(e) => setClinicDisplayName(e.target.value)}
+                              placeholder="Nome público da clínica"
+                              className="w-full p-4 bg-white border border-slate-200 rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
+                            />
+                          </div>
                           <div className="md:col-span-2">
                             <label className="block text-xs font-bold text-slate-700 mb-2">
                               Logotipo da Clínica
@@ -8111,7 +8366,56 @@ export function CoordinatorDashboard({
                               />
                             </label>
                           </div>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-2">
+                              CNPJ da Clínica
+                            </label>
+                            <input
+                              type="text"
+                              value={clinicCnpj}
+                              onChange={(e) => setClinicCnpj(formatCnpjInput(e.target.value))}
+                              placeholder="00.000.000/0000-00"
+                              className="w-full p-4 bg-white border border-slate-200 rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-2">
+                              Telefone da Clínica
+                            </label>
+                            <input
+                              type="text"
+                              value={clinicPhone}
+                              onChange={(e) => setClinicPhone(formatPhoneInput(e.target.value))}
+                              placeholder="(00) 00000-0000"
+                              className="w-full p-4 bg-white border border-slate-200 rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-2">
+                              E-mail institucional
+                            </label>
+                            <input
+                              type="email"
+                              value={clinicEmail}
+                              onChange={(e) => setClinicEmail(e.target.value)}
+                              placeholder="contato@clinica.com"
+                              className="w-full p-4 bg-white border border-slate-200 rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-2">
+                              Endereço da Clínica
+                            </label>
+                            <input
+                              type="text"
+                              value={clinicAddress}
+                              onChange={(e) => setClinicAddress(e.target.value)}
+                              placeholder="Rua, número, bairro, cidade"
+                              className="w-full p-4 bg-white border border-slate-200 rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
+                            />
+                          </div>
                         </div>
+
                         <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest">
                           Horários da Clínica
                         </h4>
@@ -8139,18 +8443,6 @@ export function CoordinatorDashboard({
                                 className="w-full p-4 bg-slate-50 border-none rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
                               />
                             </div>
-                          </div>
-                          <div>
-                            <label className="block text-xs font-bold text-slate-700 mb-2">
-                              CNPJ da Clínica
-                            </label>
-                            <input
-                              type="text"
-                              value={clinicCnpj}
-                              onChange={(e) => setClinicCnpj(formatCnpjInput(e.target.value))}
-                              placeholder="00.000.000/0000-00"
-                              className="w-full p-4 bg-slate-50 border-none rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
-                            />
                           </div>
                         </div>
                         <PayerRequirementsPanel />
@@ -8224,8 +8516,11 @@ export function CoordinatorDashboard({
         mode="edit"
         onSave={() => setIsAnamnesisTemplateModalOpen(false)}
         template={anamnesisTemplate}
+        savedTemplates={anamnesisTemplates}
         canEditTemplate={canEditAnamnesisTemplate}
         onTemplateSave={handleSaveClinicAnamnesisTemplate}
+        onTemplateSelect={handleSelectClinicAnamnesisTemplate}
+        onTemplateDelete={handleDeleteClinicAnamnesisTemplate}
       />
 
       {isAddSessionModalOpen && (

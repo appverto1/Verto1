@@ -110,7 +110,7 @@ test('perfil profissional tambem fica em cache pendente sem perder paths de midi
   assert.match(saveMethod, /queued:\s*true/);
   assert.match(saveMethod, /sync_status:\s*'synced'/);
 
-  const profileRoute = routeSlice("app.post('/api/profile/:userId'", 7000);
+  const profileRoute = routeSlice("app.post('/api/profile/:userId'", 9800);
   assert.match(profileRoute, /profilePicturePath/);
   assert.match(profileRoute, /pathProfilePictureUrl/);
   assert.match(profileRoute, /profilePicturePath:\s*profilePicturePath \|\| existingMetadata\?\.profilePicturePath/);

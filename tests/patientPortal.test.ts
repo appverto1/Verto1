@@ -106,11 +106,11 @@ test('endpoint do calendario do portal segue escopo e select explicito', () => {
   assert.match(route, /buildPortalAppointmentRangeQuery\('scheduled_start_at'\)/);
   assert.match(route, /const rowsById = new Map<string, any>\(\)/);
   assert.match(route, /buildCalendarAppointmentStart\(a\)\.getTime\(\) - buildCalendarAppointmentStart\(b\)\.getTime\(\)/);
-  assert.match(route, /visibleRows\.map\(\(row\) => serializePortalAppointment\(row\)\)/);
+  assert.match(route, /visibleRows\.map\(\(row\) => serializePortalAppointmentForFamilyView\(row\)\)/);
 });
 
 test('serializacao do portal nao envia dados financeiros ou identificadores tecnicos como campos visiveis', () => {
-  const serializer = serverSlice('const serializePortalAppointment = (row: any', 2600);
+  const serializer = serverSlice('const serializePortalAppointment = (row: any', 5200);
   assert.match(serializer, /scheduledDurationMinutes/);
   assert.match(serializer, /actualDurationMinutes/);
   assert.match(serializer, /professionalName/);
