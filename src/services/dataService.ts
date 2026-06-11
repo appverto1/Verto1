@@ -1309,12 +1309,13 @@ export const dataService = {
     }
   },
 
-  async sendPatientAnamnesisRequest(patientId: string) {
+  async sendPatientAnamnesisRequest(patientId: string, templateId?: string | null) {
     try {
       const response = await fetch(`/api/patients/${encodeURIComponent(patientId)}/anamnesis/send`, {
         method: 'POST',
         headers: await getAuthHeaders(),
-        credentials: 'include'
+        credentials: 'include',
+        body: JSON.stringify({ templateId: templateId || undefined })
       });
       return await safeJson(response);
     } catch (error) {

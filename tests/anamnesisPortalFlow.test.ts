@@ -248,6 +248,32 @@ test('profissional consegue enviar, acompanhar e revisar ficha sem expor detalhe
   assert.match(appCode, /PENDING_ANAMNESIS/);
 });
 
+test('profissional escolhe ficha no envio e visualiza cadastro do paciente como contexto', () => {
+  const sendRoute = routeSlice("app.post('/api/patients/:patientId/anamnesis/send'", 6500);
+  assert.match(sendRoute, /const requestedTemplateId/);
+  assert.match(sendRoute, /fetchAnamnesisTemplateForPatient\([\s\S]*requestedTemplateId/);
+  assert.match(sendRoute, /selectedTemplateId:\s*isUuid\(resolvedTemplateId\)/);
+  assert.match(sendRoute, /availableTemplates:[\s\S]*id:\s*sanitizeString\(template\?\.id/);
+
+  const clinicalGet = routeSlice("app.get('/api/patients/:patientId/anamnesis'", 3200);
+  assert.match(clinicalGet, /selectedTemplateId/);
+  assert.match(clinicalGet, /availableTemplates:[\s\S]*recommended:/);
+
+  assert.match(dataServiceCode, /async sendPatientAnamnesisRequest\(patientId: string, templateId\?: string \| null\)/);
+  assert.match(dataServiceCode, /JSON\.stringify\(\{ templateId: templateId \|\| undefined \}\)/);
+
+  for (const token of [
+    'showAnamnesisSendModal',
+    'selectedAnamnesisTemplateId',
+    'availableAnamnesisTemplates',
+    'handleConfirmSendAnamnesisRequest',
+    'Ficha para envio',
+    'Dados cadastrais do paciente'
+  ]) {
+    assert.match(patientDetailCode, new RegExp(token));
+  }
+});
+
 test('historico compartilhado depende de autorizacao explicita e snapshot limitado', () => {
   assert.match(serverCode, /patient_shared_history_snapshots/);
   assert.match(serverCode, /existingSnapshots/);

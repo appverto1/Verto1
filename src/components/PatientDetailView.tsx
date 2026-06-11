@@ -292,6 +292,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [anamnesisFlow, setAnamnesisFlow] = useState<any>(null);
   const [anamnesisFlowMessage, setAnamnesisFlowMessage] = useState("");
   const [isSendingAnamnesisRequest, setIsSendingAnamnesisRequest] = useState(false);
+  const [showAnamnesisSendModal, setShowAnamnesisSendModal] = useState(false);
+  const [selectedAnamnesisTemplateId, setSelectedAnamnesisTemplateId] = useState("");
   const [isReviewingAnamnesis, setIsReviewingAnamnesis] = useState(false);
   const [reportPeriod, setReportPeriod] = useState(() => String(initialChartFilters.reportPeriod || 'monthly'));
   const [comparisonDate1, setComparisonDate1] = useState(() => String(initialChartFilters.comparisonDate1 || ''));
@@ -463,15 +465,18 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   }, [patient?.therapist_id, patient?.professional_id, patient?.id]);
 
   const loadAnamnesisFlow = async () => {
-    if (!patient?.id || !canOpenAnamnesis) return;
+    if (!patient?.id || !canOpenAnamnesis) return null;
     try {
       const result = await dataService.getPatientAnamnesisFlow(String(patient.id));
       if (result?.success) {
-        setAnamnesisFlow(result.data || null);
+        const nextFlow = result.data || null;
+        setAnamnesisFlow(nextFlow);
+        return nextFlow;
       }
     } catch (error) {
       console.warn('Falha ao carregar status da anamnese:', error);
     }
+    return null;
   };
 
   useEffect(() => {
@@ -489,6 +494,193 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return 'Anamnese pendente';
   };
   const hasSubmittedAnamnesisFlow = ['SUBMITTED', 'REVIEWED'].includes(String(anamnesisFlow?.response?.status || '').toUpperCase());
+
+  const formatAnamnesisTemplateAge = (months: any) => {
+    const value = Number(months);
+    if (!Number.isFinite(value) || value < 0) return "";
+    const years = Math.floor(value / 12);
+    const restMonths = value % 12;
+    if (years <= 0) return `${restMonths}m`;
+    return restMonths > 0 ? `${years}a ${restMonths}m` : `${years}a`;
+  };
+
+  const formatAnamnesisTemplateAgeRange = (template: any) => {
+    const min = Number(template?.ageMinMonths);
+    const max = Number(template?.ageMaxMonths);
+    const hasMin = Number.isFinite(min);
+    const hasMax = Number.isFinite(max);
+    if (!hasMin && !hasMax) return "Todas as idades";
+    if (!hasMin) return `Até ${formatAnamnesisTemplateAge(max)}`;
+    if (!hasMax) return `${formatAnamnesisTemplateAge(min)}+`;
+    return `${formatAnamnesisTemplateAge(min)} a ${formatAnamnesisTemplateAge(max)}`;
+  };
+
+  const formatAnamnesisTemplateProfile = (value: any) => {
+    const profile = String(value || "").trim().toUpperCase();
+    const labels: Record<string, string> = {
+      KIDS_TEA: "Infantil TEA",
+      KIDS: "Infantil",
+      TEEN: "Adolescente",
+      ABA: "Adulto ABA",
+      ADULT: "Adulto"
+    };
+    return labels[profile] || "Perfil livre";
+  };
+
+  const normalizeAnamnesisTemplateOption = (template: any, selectedId = "") => {
+    if (!template || typeof template !== "object") return null;
+    const id = String(template?.id || template?.selectedTemplateId || "").trim();
+    const name = String(template?.name || template?.templateName || "").trim();
+    if (!name) return null;
+    return {
+      id,
+      name,
+      description: String(template?.description || template?.templateDescription || "").trim(),
+      ageMinMonths: template?.ageMinMonths ?? template?.age_min_months ?? null,
+      ageMaxMonths: template?.ageMaxMonths ?? template?.age_max_months ?? null,
+      patientProfileType: template?.patientProfileType || template?.patient_profile_type || "",
+      recommended: Boolean(template?.recommended) || Boolean(id && selectedId && id === selectedId)
+    };
+  };
+
+  const buildAnamnesisTemplateOptions = (flow: any) => {
+    const selectedId = String(
+      flow?.selectedTemplateId ||
+        flow?.request?.template_id ||
+        flow?.request?.templateId ||
+        flow?.response?.template_id ||
+        flow?.response?.templateId ||
+        ""
+    ).trim();
+    const sources = [
+      ...(Array.isArray(flow?.availableTemplates) ? flow.availableTemplates : []),
+      ...(Array.isArray(flow?.template?.availableTemplates) ? flow.template.availableTemplates : []),
+      ...(Array.isArray(flow?.template?.compatibleTemplates) ? flow.template.compatibleTemplates : []),
+      anamnesisTemplate
+    ];
+    const options = sources
+      .map((template) => normalizeAnamnesisTemplateOption(template, selectedId))
+      .filter(Boolean) as any[];
+    const unique = new Map<string, any>();
+    options.forEach((option) => {
+      const key = option.id || option.name.toLowerCase();
+      if (!unique.has(key)) unique.set(key, option);
+    });
+    const deduped = Array.from(unique.values());
+    if (deduped.length > 0) return deduped;
+    const automaticName =
+      String(flow?.template?.templateName || anamnesisTemplate?.templateName || anamnesisTemplate?.name || "").trim() ||
+      "Seleção automática";
+    return [
+      {
+        id: selectedId,
+        name: automaticName,
+        description: "Ficha definida pela idade e perfil do paciente.",
+        ageMinMonths: flow?.template?.ageMinMonths ?? null,
+        ageMaxMonths: flow?.template?.ageMaxMonths ?? null,
+        patientProfileType: flow?.template?.patientProfileType || "",
+        recommended: true
+      }
+    ];
+  };
+
+  const availableAnamnesisTemplates = useMemo(
+    () => buildAnamnesisTemplateOptions(anamnesisFlow),
+    [anamnesisFlow, anamnesisTemplate]
+  );
+  const availableAnamnesisTemplateKey = availableAnamnesisTemplates
+    .map((template: any) => `${template.id || ""}:${template.name}`)
+    .join("|");
+  const defaultAnamnesisTemplateId = useMemo(() => {
+    const flowSelectedId = String(
+      anamnesisFlow?.selectedTemplateId ||
+        anamnesisFlow?.request?.template_id ||
+        anamnesisFlow?.request?.templateId ||
+        anamnesisFlow?.response?.template_id ||
+        anamnesisFlow?.response?.templateId ||
+        ""
+    ).trim();
+    if (flowSelectedId && availableAnamnesisTemplates.some((template: any) => template.id === flowSelectedId)) {
+      return flowSelectedId;
+    }
+    return (
+      availableAnamnesisTemplates.find((template: any) => template.recommended && template.id)?.id ||
+      availableAnamnesisTemplates.find((template: any) => template.id)?.id ||
+      ""
+    );
+  }, [anamnesisFlow, availableAnamnesisTemplateKey]);
+
+  useEffect(() => {
+    if (!showAnamnesisSendModal) return;
+    setSelectedAnamnesisTemplateId((current) => {
+      if (current && availableAnamnesisTemplates.some((template: any) => template.id === current)) return current;
+      return defaultAnamnesisTemplateId;
+    });
+  }, [showAnamnesisSendModal, defaultAnamnesisTemplateId, availableAnamnesisTemplateKey]);
+
+  const formatPatientContextDate = (value: any) => {
+    const raw = String(value || "").trim();
+    const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (match) return `${match[3]}/${match[2]}/${match[1]}`;
+    return raw;
+  };
+
+  const formatPatientContextValue = (value: any) => {
+    if (typeof value === "boolean") return value ? "Sim" : "Não";
+    if (Array.isArray(value)) return value.filter(Boolean).join(", ") || "Não informado";
+    const text = String(value ?? "").trim();
+    return text || "Não informado";
+  };
+
+  const patientRegistrationContextSections = useMemo(() => {
+    const data = anamnesisInitialData || {};
+    const address =
+      data.endereco ||
+      [data.logradouro, data.numero, data.complemento, data.bairro, data.cidade]
+        .map((item) => String(item || "").trim())
+        .filter(Boolean)
+        .join(", ");
+    const insurance = [data.convenioTipo, data.convenioNome, data.convenioCarteirinha]
+      .map((item) => String(item || "").trim())
+      .filter(Boolean)
+      .join(" - ");
+    return [
+      {
+        title: "Paciente",
+        items: [
+          { label: "Nome", value: data.nome || patient?.name },
+          { label: "Nome social", value: data.nomeSocial },
+          { label: "Nascimento", value: formatPatientContextDate(data.dataNascimento) },
+          { label: "Idade", value: data.idade },
+          { label: "CPF", value: data.cpf },
+          { label: "Telefone", value: data.telefone || patient?.phone },
+          { label: "E-mail", value: data.email || patient?.email }
+        ]
+      },
+      {
+        title: "Cadastro",
+        items: [
+          { label: "Convênio", value: insurance },
+          { label: "Grupo", value: data.grupo },
+          { label: "Origem", value: data.comoConheceu },
+          { label: "Endereço", value: address },
+          { label: "Observações", value: data.outrasInformacoes }
+        ]
+      },
+      {
+        title: "Responsável",
+        items: [
+          { label: "Menor de idade", value: data.menorDeIdade },
+          { label: "Nome", value: data.responsavelNome },
+          { label: "Nascimento", value: formatPatientContextDate(data.responsavelDataNascimento) },
+          { label: "CPF", value: data.responsavelCpf },
+          { label: "Telefone", value: data.responsavelTelefone },
+          { label: "E-mail", value: data.responsavelEmail },
+          { label: "Relação", value: data.responsavelRelacao }
+        ]
+      }
+    ];
+  }, [anamnesisInitialData, patient?.name, patient?.phone, patient?.email]);
 
   const buildQuestionLabelsFromAnamnesisFlow = (flow: any) => {
     const profileType = flow?.profileType === 'child' ? 'child' : 'adult';
@@ -547,13 +739,33 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
   const handleSendAnamnesisRequest = async () => {
     if (!patient?.id || isSendingAnamnesisRequest) return;
+    setAnamnesisFlowMessage("");
+    setShowAnamnesisSendModal(true);
+    const latestFlow = await loadAnamnesisFlow();
+    const nextOptions = buildAnamnesisTemplateOptions(latestFlow || anamnesisFlow);
+    const selectedId =
+      nextOptions.find((template: any) => template.recommended && template.id)?.id ||
+      nextOptions.find((template: any) => template.id)?.id ||
+      "";
+    setSelectedAnamnesisTemplateId(selectedId);
+  };
+
+  const handleConfirmSendAnamnesisRequest = async () => {
+    if (!patient?.id || isSendingAnamnesisRequest) return;
     setIsSendingAnamnesisRequest(true);
     setAnamnesisFlowMessage("");
     try {
-      const result = await dataService.sendPatientAnamnesisRequest(String(patient.id));
+      const selectedTemplate =
+        availableAnamnesisTemplates.find((template: any) => template.id === selectedAnamnesisTemplateId) ||
+        availableAnamnesisTemplates[0] ||
+        null;
+      const templateIdToSend = selectedTemplate?.id || selectedAnamnesisTemplateId || null;
+      const result = await dataService.sendPatientAnamnesisRequest(String(patient.id), templateIdToSend);
       if (!result?.success) throw new Error(result?.error || result?.message || 'Não foi possível enviar a ficha.');
+      const sentTemplateName = selectedTemplate?.name || result?.data?.templateName || "ficha de anamnese";
       setAnamnesisFlowMessage(result?.message || 'Ficha enviada para a família.');
-      onAddActivityLog?.('Ficha de anamnese enviada', `Ficha de anamnese solicitada para ${patient?.name || 'paciente'}.`, 'clinical');
+      onAddActivityLog?.('Ficha de anamnese enviada', `Ficha "${sentTemplateName}" solicitada para ${patient?.name || 'paciente'}.`, 'clinical');
+      setShowAnamnesisSendModal(false);
       await loadAnamnesisFlow();
     } catch (error: any) {
       setAnamnesisFlowMessage(error?.message || 'Não foi possível enviar a ficha agora.');
@@ -8254,6 +8466,126 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         mode="edit"
         template={anamnesisTemplate}
       /> 
+
+      {showAnamnesisSendModal && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm animate-fade-in">
+          <div className={`flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border shadow-2xl ${isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-100 bg-white text-slate-900'}`}>
+            <div className={`flex items-start justify-between gap-4 border-b px-5 py-4 ${isPanelDark ? 'border-slate-800' : 'border-slate-100'}`}>
+              <div className="min-w-0">
+                <h3 className="text-lg font-semibold leading-snug">Enviar ficha de anamnese</h3>
+                <p className={`mt-1 text-sm ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>
+                  {patient?.name || 'Paciente'}
+                </p>
+              </div>
+              <button
+                onClick={() => setShowAnamnesisSendModal(false)}
+                className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition-colors ${isPanelDark ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-400 hover:bg-slate-100 hover:text-slate-700'}`}
+                aria-label="Fechar"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="grid min-h-0 flex-1 gap-4 overflow-y-auto p-5 lg:grid-cols-[0.95fr_1.05fr]">
+              <section className={`rounded-xl border p-4 ${isPanelDark ? 'border-slate-700 bg-slate-800/50' : 'border-slate-100 bg-slate-50'}`}>
+                <h4 className={`text-xs font-semibold uppercase tracking-wide ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>
+                  Ficha para envio
+                </h4>
+                <div className="mt-3 space-y-2">
+                  {availableAnamnesisTemplates.map((template: any, index: number) => {
+                    const optionId = template.id || "";
+                    const checked = optionId
+                      ? selectedAnamnesisTemplateId === optionId
+                      : !selectedAnamnesisTemplateId && index === 0;
+                    return (
+                      <label
+                        key={template.id || `${template.name}-${index}`}
+                        className={`flex cursor-pointer gap-3 rounded-xl border p-3 transition-colors ${checked ? (isPanelDark ? 'border-violet-400 bg-violet-500/10' : 'border-[#7a32fc] bg-violet-50') : (isPanelDark ? 'border-slate-700 bg-slate-900/70 hover:border-slate-500' : 'border-slate-200 bg-white hover:border-violet-200')}`}
+                      >
+                        <input
+                          type="radio"
+                          name="anamnesis-template"
+                          className="mt-1 h-4 w-4 accent-[#7a32fc]"
+                          checked={checked}
+                          onChange={() => setSelectedAnamnesisTemplateId(optionId)}
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="flex flex-wrap items-center gap-2">
+                            <span className="break-words text-sm font-semibold">{template.name}</span>
+                            {template.recommended && (
+                              <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${isPanelDark ? 'bg-emerald-500/10 text-emerald-200' : 'bg-emerald-50 text-emerald-700'}`}>
+                                Recomendada
+                              </span>
+                            )}
+                          </span>
+                          {template.description && (
+                            <span className={`mt-1 block text-xs leading-relaxed ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>
+                              {template.description}
+                            </span>
+                          )}
+                          <span className={`mt-2 flex flex-wrap gap-1.5 text-[11px] ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>
+                            <span className={`rounded-full px-2 py-1 ${isPanelDark ? 'bg-slate-800' : 'bg-slate-100'}`}>
+                              {formatAnamnesisTemplateAgeRange(template)}
+                            </span>
+                            <span className={`rounded-full px-2 py-1 ${isPanelDark ? 'bg-slate-800' : 'bg-slate-100'}`}>
+                              {formatAnamnesisTemplateProfile(template.patientProfileType)}
+                            </span>
+                          </span>
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </section>
+
+              <section className={`rounded-xl border p-4 ${isPanelDark ? 'border-slate-700 bg-slate-800/50' : 'border-slate-100 bg-white'}`}>
+                <h4 className={`text-xs font-semibold uppercase tracking-wide ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>
+                  Dados cadastrais do paciente
+                </h4>
+                <div className="mt-3 space-y-4">
+                  {patientRegistrationContextSections.map((section) => (
+                    <div key={section.title}>
+                      <p className={`mb-2 text-[11px] font-semibold uppercase tracking-wide ${isPanelDark ? 'text-slate-400' : 'text-slate-400'}`}>
+                        {section.title}
+                      </p>
+                      <dl className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                        {section.items.map((item) => (
+                          <div key={`${section.title}-${item.label}`} className={`rounded-lg border px-3 py-2 ${isPanelDark ? 'border-slate-700 bg-slate-900/70' : 'border-slate-100 bg-slate-50'}`}>
+                            <dt className={`text-[10px] font-semibold uppercase tracking-wide ${isPanelDark ? 'text-slate-400' : 'text-slate-400'}`}>
+                              {item.label}
+                            </dt>
+                            <dd className={`mt-1 break-words text-sm font-medium ${isPanelDark ? 'text-slate-100' : 'text-slate-700'}`}>
+                              {formatPatientContextValue(item.value)}
+                            </dd>
+                          </div>
+                        ))}
+                      </dl>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            </div>
+
+            <div className={`flex flex-col-reverse gap-2 border-t px-5 py-4 sm:flex-row sm:justify-end ${isPanelDark ? 'border-slate-800' : 'border-slate-100'}`}>
+              <button
+                onClick={() => setShowAnamnesisSendModal(false)}
+                className={`rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors ${isPanelDark ? 'bg-slate-800 text-slate-200 hover:bg-slate-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={() => void handleConfirmSendAnamnesisRequest()}
+                disabled={isSendingAnamnesisRequest}
+                className="flex items-center justify-center gap-2 rounded-xl bg-[#7a32fc] px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#6424d6] disabled:opacity-60"
+              >
+                <Share2 size={16} />
+                {isSendingAnamnesisRequest ? 'Enviando...' : 'Enviar para família'}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
       
       {isUnlinkingModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in">

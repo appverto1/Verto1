@@ -7651,13 +7651,21 @@ function anamnesisTemplateMatchesPatient(row: any, patient: any) {
   return rowProfile === patientProfile || patientProfile.includes(rowProfile) || rowProfile.includes(patientProfile);
 }
 
-function normalizeAgeBasedAnamnesisTemplate(row: any, patient: any, compatibleRows: any[] = []) {
+function normalizeAgeBasedAnamnesisTemplate(row: any, patient: any, compatibleRows: any[] = [], availableRows: any[] = compatibleRows) {
   const fallback = getDefaultAnamnesisTemplate();
   const profileType = resolvePatientAnamnesisProfile(patient);
   const rawQuestions = row?.questions && typeof row.questions === 'object' ? row.questions : {};
   const template = sanitizeAnamnesisTemplate(
     rawQuestions?.profiles || rawQuestions?.version ? rawQuestions : fallback
   );
+  const mapTemplateSummary = (item: any) => ({
+    id: sanitizeString(item?.id, 120),
+    name: sanitizeString(item?.name, 180),
+    description: sanitizeString(item?.description, 240) || null,
+    ageMinMonths: Number.isFinite(Number(item?.age_min_months)) ? Number(item.age_min_months) : null,
+    ageMaxMonths: Number.isFinite(Number(item?.age_max_months)) ? Number(item.age_max_months) : null,
+    patientProfileType: sanitizeString(item?.patient_profile_type, 80) || null
+  });
   return {
     ...template,
     selectedTemplateId: sanitizeString(row?.id, 120) || null,
@@ -7666,14 +7674,8 @@ function normalizeAgeBasedAnamnesisTemplate(row: any, patient: any, compatibleRo
     ageMinMonths: Number.isFinite(Number(row?.age_min_months)) ? Number(row.age_min_months) : null,
     ageMaxMonths: Number.isFinite(Number(row?.age_max_months)) ? Number(row.age_max_months) : null,
     patientProfileType: sanitizeString(row?.patient_profile_type, 80) || null,
-    compatibleTemplates: compatibleRows.slice(0, 12).map((item: any) => ({
-      id: sanitizeString(item?.id, 120),
-      name: sanitizeString(item?.name, 180),
-      description: sanitizeString(item?.description, 240) || null,
-      ageMinMonths: Number.isFinite(Number(item?.age_min_months)) ? Number(item.age_min_months) : null,
-      ageMaxMonths: Number.isFinite(Number(item?.age_max_months)) ? Number(item.age_max_months) : null,
-      patientProfileType: sanitizeString(item?.patient_profile_type, 80) || null
-    })).filter((item: any) => item.id && item.name)
+    compatibleTemplates: compatibleRows.slice(0, 12).map(mapTemplateSummary).filter((item: any) => item.id && item.name),
+    availableTemplates: availableRows.slice(0, 20).map(mapTemplateSummary).filter((item: any) => item.id && item.name)
   };
 }
 
@@ -7688,6 +7690,15 @@ function buildPublicAnamnesisTemplate(template: any) {
     patientProfileType: sanitizeString(template?.patientProfileType, 80) || null,
     compatibleTemplates: Array.isArray(template?.compatibleTemplates)
       ? template.compatibleTemplates.map((item: any) => ({
+          name: sanitizeString(item?.name, 180),
+          description: sanitizeString(item?.description, 240) || null,
+          ageMinMonths: Number.isFinite(Number(item?.ageMinMonths)) ? Number(item.ageMinMonths) : null,
+          ageMaxMonths: Number.isFinite(Number(item?.ageMaxMonths)) ? Number(item.ageMaxMonths) : null,
+          patientProfileType: sanitizeString(item?.patientProfileType, 80) || null
+        })).filter((item: any) => item.name)
+      : [],
+    availableTemplates: Array.isArray(template?.availableTemplates)
+      ? template.availableTemplates.map((item: any) => ({
           name: sanitizeString(item?.name, 180),
           description: sanitizeString(item?.description, 240) || null,
           ageMinMonths: Number.isFinite(Number(item?.ageMinMonths)) ? Number(item.ageMinMonths) : null,
@@ -7759,7 +7770,6 @@ async function fetchAnamnesisTemplateForPatient(patient: any, clinicId: string, 
       .order('is_default', { ascending: false })
       .order('created_at', { ascending: true })
       .limit(120);
-    if (isUuid(requestedId)) query = query.eq('id', requestedId);
     const { data, error } = await query;
     if (error) {
       if (isMissingRelationError(error) || extractMissingColumnName(error)) return fallback;
@@ -7767,6 +7777,9 @@ async function fetchAnamnesisTemplateForPatient(patient: any, clinicId: string, 
     }
     const rows = Array.isArray(data) ? data : [];
     const compatible = rows.filter((row: any) => anamnesisTemplateMatchesPatient(row, patient));
+    const requestedRow = isUuid(requestedId)
+      ? rows.find((row: any) => sanitizeString(row?.id, 120) === requestedId)
+      : null;
     const patientProfileKey = sanitizeString(
       patient?.patient_profile_type || patient?.panel_type || patient?.profile_type || patient?.type,
       80
@@ -7776,13 +7789,14 @@ async function fetchAnamnesisTemplateForPatient(patient: any, clinicId: string, 
       sanitizeString(row?.patient_profile_type, 80).toUpperCase() === patientProfileKey
     ));
     const selected =
+      requestedRow ||
       exactCompatible.find((row: any) => sanitizeString(row?.organization_id, 120) === safeClinicId) ||
       exactCompatible[0] ||
       compatible.find((row: any) => sanitizeString(row?.organization_id, 120) === safeClinicId) ||
       compatible[0] ||
       rows.find((row: any) => sanitizeString(row?.organization_id, 120) === safeClinicId) ||
       rows[0];
-    return selected ? normalizeAgeBasedAnamnesisTemplate(selected, patient, compatible) : fallback;
+    return selected ? normalizeAgeBasedAnamnesisTemplate(selected, patient, compatible, rows) : fallback;
   } catch (error: any) {
     console.warn('[AnamnesisTemplates] fallback para template legado:', error?.message || String(error));
     return fallback;
@@ -16035,10 +16049,11 @@ async function startServer() {
       const patientContext = buildPatientAnamnesisContext(patient, registrationPayload);
 
       const nowIso = new Date().toISOString();
+      const requestedTemplateId = sanitizeString(req.body?.templateId || req.body?.template_id, 120);
       const selectedTemplate = await fetchAnamnesisTemplateForPatient(
         patientContext,
         clinicId,
-        req.body?.templateId || req.body?.template_id
+        requestedTemplateId
       );
       const patientEmail = sanitizeEmail(patient?.responsible_email || patient?.email);
       if (!patientEmail) {
@@ -16055,7 +16070,11 @@ async function startServer() {
       if (existing.error && !isMissingRelationError(existing.error)) throw existing.error;
 
       const requestId = sanitizeString(existing.data?.id, 120) || crypto.randomUUID();
-      const resolvedTemplateId = sanitizeString(existing.data?.template_id || selectedTemplate?.selectedTemplateId, 120);
+      const resolvedTemplateId = sanitizeString(
+        (isUuid(requestedTemplateId) ? selectedTemplate?.selectedTemplateId : existing.data?.template_id) ||
+          selectedTemplate?.selectedTemplateId,
+        120
+      );
       const requestPayload = cleanObject({
         id: requestId,
         organization_id: clinicId,
@@ -16128,12 +16147,14 @@ async function startServer() {
           requestId,
           status: requestPayload.status,
           emailSent,
+          selectedTemplateId: isUuid(resolvedTemplateId) ? resolvedTemplateId : null,
           templateName: sanitizeString(selectedTemplate?.templateName, 180) || null,
           availableTemplates: Array.isArray(selectedTemplate?.compatibleTemplates)
             ? selectedTemplate.compatibleTemplates.map((template: any) => ({
+                id: sanitizeString(template?.id, 120),
                 name: sanitizeString(template?.name, 180),
                 description: sanitizeString(template?.description, 240) || null
-              })).filter((template: any) => template.name)
+              })).filter((template: any) => template.id && template.name)
             : []
         }
       });
@@ -16166,6 +16187,20 @@ async function startServer() {
           prefillAnswers: flow.prefillAnswers || {},
           prefilledKeys: flow.prefilledKeys || [],
           template: buildPublicAnamnesisTemplate(flow.template),
+          selectedTemplateId: sanitizeString(flow.template?.selectedTemplateId || flow.request?.template_id || flow.response?.template_id, 120) || null,
+          availableTemplates: Array.isArray(flow.template?.availableTemplates)
+            ? flow.template.availableTemplates.map((template: any) => ({
+                id: sanitizeString(template?.id, 120),
+                name: sanitizeString(template?.name, 180),
+                description: sanitizeString(template?.description, 240) || null,
+                ageMinMonths: Number.isFinite(Number(template?.ageMinMonths)) ? Number(template.ageMinMonths) : null,
+                ageMaxMonths: Number.isFinite(Number(template?.ageMaxMonths)) ? Number(template.ageMaxMonths) : null,
+                patientProfileType: sanitizeString(template?.patientProfileType, 80) || null,
+                recommended:
+                  sanitizeString(template?.id, 120) ===
+                  sanitizeString(flow.template?.selectedTemplateId || flow.request?.template_id || flow.response?.template_id, 120)
+              })).filter((template: any) => template.id && template.name)
+            : [],
           profileType: resolvePatientAnamnesisProfile(flow.patientContext || flow.patient)
         }
       });
