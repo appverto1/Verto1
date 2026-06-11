@@ -49,7 +49,11 @@ type SendAppointmentNotificationParams = {
     timeLabel?: string | null;
     dateLabel?: string | null;
     reminderKind?: string | null;
+    clinicName?: string | null;
+    clinicLogoUrl?: string | null;
   };
+  clinicName?: string | null;
+  clinicLogoUrl?: string | null;
   title?: string;
   body?: string;
   reminderKind?: string;
@@ -578,6 +582,8 @@ export async function sendAppointmentNotification(params: SendAppointmentNotific
   const scheduledAt = sanitizeText(params.appointment.scheduledAt, 120);
   const whenLabel = [dateLabel, timeLabel].filter(Boolean).join(' as ');
   const reminderKind = sanitizeText(params.reminderKind || params.appointment.reminderKind || 'appointment', 40);
+  const clinicName = sanitizeText(params.appointment.clinicName || params.clinicName || 'sua clínica', 160) || 'sua clínica';
+  const clinicLogoUrl = sanitizeText(params.appointment.clinicLogoUrl || params.clinicLogoUrl, 2000);
   const appointmentQuery = new URLSearchParams({
     appointment_id: String(params.appointment.id || ''),
     ...(dateLabel ? { appointment_date: dateLabel } : {}),
@@ -585,14 +591,14 @@ export async function sendAppointmentNotification(params: SendAppointmentNotific
     ...(scheduledAt ? { scheduled_at: scheduledAt } : {})
   }).toString();
   const payload = JSON.stringify({
-    title: params.title || 'Confirmacao de Consulta - Verto',
+    title: params.title || `Lembrete de Consulta - ${clinicName}`,
     body:
       params.body ||
       (whenLabel
-        ? `Voce tem uma consulta agendada em ${whenLabel}. ${APPOINTMENT_NOTIFICATION_CTA}`
-        : `Voce tem uma consulta agendada pela Verto. ${APPOINTMENT_NOTIFICATION_CTA}`),
+        ? `Voce tem uma consulta agendada pela ${clinicName} em ${whenLabel}. ${APPOINTMENT_NOTIFICATION_CTA}`
+        : `Voce tem uma consulta agendada pela ${clinicName}. ${APPOINTMENT_NOTIFICATION_CTA}`),
     url: `/?${appointmentQuery}`,
-    icon: '/verto-3d-transparent.png',
+    icon: clinicLogoUrl || '/verto-3d-transparent.png',
     badge: '/verto-3d-transparent.png',
     appointmentId: params.appointment.id,
     scheduledAt: scheduledAt || null,

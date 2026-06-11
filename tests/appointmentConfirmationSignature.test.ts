@@ -5,6 +5,7 @@ import { join } from 'node:path';
 const root = process.cwd();
 const serverCode = readFileSync(join(root, 'server.ts'), 'utf8');
 const dataServiceCode = readFileSync(join(root, 'src/services/dataService.ts'), 'utf8');
+const appCode = readFileSync(join(root, 'src/App.tsx'), 'utf8');
 const patientDashboardCode = readFileSync(join(root, 'src/components/PatientDashboard.tsx'), 'utf8');
 const calendarCode = readFileSync(join(root, 'src/components/Calendar.tsx'), 'utf8');
 const serviceWorkerCode = readFileSync(join(root, 'public/sw.js'), 'utf8');
@@ -73,6 +74,31 @@ test('notifications are app-only and do not expose action buttons', () => {
   assert.doesNotMatch(pushServiceCode, /\.select\('\*'\)/);
   assert.doesNotMatch(cronServiceCode, /\.select\('\*'\)/);
   assert.match(serverCode, /source === 'push_notification_action'[\s\S]*?Ação de notificação expirada/m);
+});
+
+test('appointment reminder popup is clinic-branded and neutral', () => {
+  assert.match(serverCode, /clinicName/);
+  assert.match(serverCode, /clinicLogoUrl/);
+  assert.match(serverCode, /\.from\('clinics'\)/);
+  assert.match(serverCode, /read\('id,name,logo_url'\)/);
+  assert.match(appCode, /appointmentConfirmation\.clinicName \|\| 'sua clínica'/);
+  assert.match(appCode, /appointmentConfirmation\.clinicLogoUrl/);
+  assert.match(appCode, /border-b border-slate-100 bg-slate-50/);
+  assert.doesNotMatch(appCode, /Lembrete de Consulta - Verto/);
+  assert.doesNotMatch(appCode, /bg-gradient-to-br from-violet-600 via-fuchsia-500 to-blue-500/);
+});
+
+test('portal appointment response buttons write legacy-compatible appointment values', () => {
+  const portalActionsSlice = serverCode.slice(
+    serverCode.indexOf("app.post('/api/portal/appointments/:appointmentId/confirm'"),
+    serverCode.indexOf("app.post('/api/portal/sessions/:sessionId/sign'")
+  );
+  assert.match(portalActionsSlice, /status:\s*'confirmed'/);
+  assert.match(portalActionsSlice, /status:\s*'reschedule'/);
+  assert.match(portalActionsSlice, /status:\s*'cancelled'/);
+  assert.match(portalActionsSlice, /patient_response:\s*'cancelled'/);
+  assert.doesNotMatch(portalActionsSlice, /patient_response:\s*'cancel_requested'/);
+  assert.match(serverCode, /hasMissingFinancialSchema\(error\) \|\| isMissingRelationError\(error\)/);
 });
 
 test('frontend exposes portal actions and clinic agenda request decisions without technical ids', () => {

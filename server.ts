@@ -6519,119 +6519,126 @@ async function upsertInitialBillingContextFromAppointment(params: {
   patientId: string;
   appointment: any;
 }) {
-  const organizationId = sanitizeString(params.organizationId, 120);
-  const appointmentId = sanitizeString(params.appointmentId, 120);
-  const patientId = sanitizeString(params.patientId, 120);
-  if (!isUuid(organizationId) || !isUuid(appointmentId) || !isUuid(patientId)) return;
-  const existing = await supabase
-    .from('appointment_billing_contexts')
-    .select('id')
-    .eq('organization_id', organizationId)
-    .eq('appointment_id', appointmentId)
-    .limit(1)
-    .maybeSingle();
-  if (existing.error) {
-    if (hasMissingFinancialSchema(existing.error)) return;
-    throw existing.error;
-  }
-  if (existing.data?.id) return;
-
-  const rawPayerId = sanitizeString(params.appointment?.payerId || params.appointment?.payer_id, 120);
-  let payer: any = null;
-  if (isUuid(rawPayerId)) {
-    const payerResult = await supabase
-      .from('clinic_payers')
-      .select('id, name')
+  try {
+    const organizationId = sanitizeString(params.organizationId, 120);
+    const appointmentId = sanitizeString(params.appointmentId, 120);
+    const patientId = sanitizeString(params.patientId, 120);
+    if (!isUuid(organizationId) || !isUuid(appointmentId) || !isUuid(patientId)) return;
+    const existing = await supabase
+      .from('appointment_billing_contexts')
+      .select('id')
       .eq('organization_id', organizationId)
-      .eq('id', rawPayerId)
+      .eq('appointment_id', appointmentId)
       .limit(1)
       .maybeSingle();
-    if (payerResult.error && !hasMissingFinancialSchema(payerResult.error)) throw payerResult.error;
-    payer = payerResult.data || null;
-  }
-  const serviceType = sanitizeString(
-    params.appointment?.service_type ||
-      params.appointment?.serviceType ||
-      params.appointment?.approach ||
-      params.appointment?.type,
-    120
-  );
-  let payerName = sanitizeString(
-    payer?.name ||
-      params.appointment?.payerName ||
-      params.appointment?.payer_name_snapshot ||
-      params.appointment?.payerNameSnapshot,
-    180
-  );
-  let suggestedBilling: any = null;
-  if (!payer?.id && !payerName) {
-    suggestedBilling = await resolveAppointmentBillingSuggestion({
-      organizationId,
-      patientId,
-      serviceType
-    });
-    const suggestedPayerId = sanitizeString(suggestedBilling?.payerId || suggestedBilling?.payer_id, 120);
-    if (isUuid(suggestedPayerId)) {
-      const suggestedPayerResult = await supabase
+    if (existing.error) {
+      if (hasMissingFinancialSchema(existing.error) || isMissingRelationError(existing.error) || extractMissingColumnName(existing.error)) return;
+      throw existing.error;
+    }
+    if (existing.data?.id) return;
+
+    const rawPayerId = sanitizeString(params.appointment?.payerId || params.appointment?.payer_id, 120);
+    let payer: any = null;
+    if (isUuid(rawPayerId)) {
+      const payerResult = await supabase
         .from('clinic_payers')
         .select('id, name')
         .eq('organization_id', organizationId)
-        .eq('id', suggestedPayerId)
+        .eq('id', rawPayerId)
         .limit(1)
         .maybeSingle();
-      if (suggestedPayerResult.error && !hasMissingFinancialSchema(suggestedPayerResult.error)) throw suggestedPayerResult.error;
-      payer = suggestedPayerResult.data || null;
+      if (payerResult.error && !hasMissingFinancialSchema(payerResult.error) && !isMissingRelationError(payerResult.error)) throw payerResult.error;
+      payer = payerResult.data || null;
     }
-    payerName = sanitizeString(payer?.name || suggestedBilling?.payerName || suggestedBilling?.payer_name_snapshot, 180);
-  }
-  const payload = cleanObject({
-    id: crypto.randomUUID(),
-    organization_id: organizationId,
-    appointment_id: appointmentId,
-    patient_id: patientId,
-    payer_id: payer?.id || null,
-    payer_name_snapshot: payerName || null,
-    service_type: serviceType || sanitizeString(suggestedBilling?.serviceType || suggestedBilling?.service_type, 120) || null,
-    insurance_card_number: sanitizeString(params.appointment?.insuranceCardNumber || params.appointment?.insurance_card_number || params.appointment?.cardNumber || params.appointment?.card_number || suggestedBilling?.insuranceCardNumber || suggestedBilling?.insurance_card_number, 120) || null,
-    insurance_plan_name: sanitizeString(params.appointment?.insurancePlanName || params.appointment?.insurance_plan_name || suggestedBilling?.insurancePlanName || suggestedBilling?.insurance_plan_name, 160) || null,
-    authorization_code: sanitizeString(params.appointment?.authorizationCode || params.appointment?.authorization_code || suggestedBilling?.authorizationCode || suggestedBilling?.authorization_code, 120) || null,
-    guide_number: sanitizeString(params.appointment?.guideNumber || params.appointment?.guide_number || suggestedBilling?.guideNumber || suggestedBilling?.guide_number, 120) || null,
-    procedure_code: sanitizeString(params.appointment?.procedureCode || params.appointment?.procedure_code, 80) || null,
-    notes: sanitizeTextField(params.appointment?.billingNotes || params.appointment?.billing_notes || suggestedBilling?.notes, 1200) || null,
-    source: sanitizeString(suggestedBilling?.source || (suggestedBilling ? 'PATIENT_DEFAULT' : 'MANUAL'), 60) || null,
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString()
-  });
-  const hasContextValue = Boolean(
-    payload.payer_id ||
-      payload.payer_name_snapshot ||
-      payload.authorization_code ||
-      payload.guide_number ||
-      payload.insurance_card_number ||
-      payload.insurance_plan_name ||
-      payload.procedure_code ||
-      payload.notes
-  );
-  if (!hasContextValue) return;
-  const upsertResult = await supabase
-    .from('appointment_billing_contexts')
-    .upsert([payload], { onConflict: 'organization_id,appointment_id' });
-  if (upsertResult.error && extractMissingColumnName(upsertResult.error)) {
-    const legacyPayload = { ...payload };
-    delete legacyPayload.payer_type;
-    delete legacyPayload.insurance_card_number;
-    delete legacyPayload.insurance_plan_name;
-    delete legacyPayload.source;
-    delete legacyPayload.metadata;
-    delete legacyPayload.created_by;
-    delete legacyPayload.updated_by;
-    const legacyResult = await supabase
+    const serviceType = sanitizeString(
+      params.appointment?.service_type ||
+        params.appointment?.serviceType ||
+        params.appointment?.approach ||
+        params.appointment?.type,
+      120
+    );
+    let payerName = sanitizeString(
+      payer?.name ||
+        params.appointment?.payerName ||
+        params.appointment?.payer_name_snapshot ||
+        params.appointment?.payerNameSnapshot,
+      180
+    );
+    let suggestedBilling: any = null;
+    if (!payer?.id && !payerName) {
+      suggestedBilling = await resolveAppointmentBillingSuggestion({
+        organizationId,
+        patientId,
+        serviceType
+      });
+      const suggestedPayerId = sanitizeString(suggestedBilling?.payerId || suggestedBilling?.payer_id, 120);
+      if (isUuid(suggestedPayerId)) {
+        const suggestedPayerResult = await supabase
+          .from('clinic_payers')
+          .select('id, name')
+          .eq('organization_id', organizationId)
+          .eq('id', suggestedPayerId)
+          .limit(1)
+          .maybeSingle();
+        if (suggestedPayerResult.error && !hasMissingFinancialSchema(suggestedPayerResult.error) && !isMissingRelationError(suggestedPayerResult.error)) throw suggestedPayerResult.error;
+        payer = suggestedPayerResult.data || null;
+      }
+      payerName = sanitizeString(payer?.name || suggestedBilling?.payerName || suggestedBilling?.payer_name_snapshot, 180);
+    }
+    const payload = cleanObject({
+      id: crypto.randomUUID(),
+      organization_id: organizationId,
+      appointment_id: appointmentId,
+      patient_id: patientId,
+      payer_id: payer?.id || null,
+      payer_name_snapshot: payerName || null,
+      service_type: serviceType || sanitizeString(suggestedBilling?.serviceType || suggestedBilling?.service_type, 120) || null,
+      insurance_card_number: sanitizeString(params.appointment?.insuranceCardNumber || params.appointment?.insurance_card_number || params.appointment?.cardNumber || params.appointment?.card_number || suggestedBilling?.insuranceCardNumber || suggestedBilling?.insurance_card_number, 120) || null,
+      insurance_plan_name: sanitizeString(params.appointment?.insurancePlanName || params.appointment?.insurance_plan_name || suggestedBilling?.insurancePlanName || suggestedBilling?.insurance_plan_name, 160) || null,
+      authorization_code: sanitizeString(params.appointment?.authorizationCode || params.appointment?.authorization_code || suggestedBilling?.authorizationCode || suggestedBilling?.authorization_code, 120) || null,
+      guide_number: sanitizeString(params.appointment?.guideNumber || params.appointment?.guide_number || suggestedBilling?.guideNumber || suggestedBilling?.guide_number, 120) || null,
+      procedure_code: sanitizeString(params.appointment?.procedureCode || params.appointment?.procedure_code, 80) || null,
+      notes: sanitizeTextField(params.appointment?.billingNotes || params.appointment?.billing_notes || suggestedBilling?.notes, 1200) || null,
+      source: sanitizeString(suggestedBilling?.source || (suggestedBilling ? 'PATIENT_DEFAULT' : 'MANUAL'), 60) || null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    });
+    const hasContextValue = Boolean(
+      payload.payer_id ||
+        payload.payer_name_snapshot ||
+        payload.authorization_code ||
+        payload.guide_number ||
+        payload.insurance_card_number ||
+        payload.insurance_plan_name ||
+        payload.procedure_code ||
+        payload.notes
+    );
+    if (!hasContextValue) return;
+    const upsertResult = await supabase
       .from('appointment_billing_contexts')
-      .upsert([cleanObject(legacyPayload)], { onConflict: 'organization_id,appointment_id' });
-    if (legacyResult.error && !hasMissingFinancialSchema(legacyResult.error)) throw legacyResult.error;
-    return;
+      .upsert([payload], { onConflict: 'organization_id,appointment_id' });
+    if (upsertResult.error && extractMissingColumnName(upsertResult.error)) {
+      const legacyPayload = { ...payload };
+      delete legacyPayload.payer_type;
+      delete legacyPayload.insurance_card_number;
+      delete legacyPayload.insurance_plan_name;
+      delete legacyPayload.source;
+      delete legacyPayload.metadata;
+      delete legacyPayload.created_by;
+      delete legacyPayload.updated_by;
+      const legacyResult = await supabase
+        .from('appointment_billing_contexts')
+        .upsert([cleanObject(legacyPayload)], { onConflict: 'organization_id,appointment_id' });
+      if (legacyResult.error && !hasMissingFinancialSchema(legacyResult.error) && !isMissingRelationError(legacyResult.error)) throw legacyResult.error;
+      return;
+    }
+    if (upsertResult.error && !hasMissingFinancialSchema(upsertResult.error) && !isMissingRelationError(upsertResult.error)) throw upsertResult.error;
+  } catch (error: any) {
+    console.warn('[Appointments] Contexto financeiro inicial ignorado.', {
+      appointmentId: sanitizeString(params.appointmentId, 120) || null,
+      message: sanitizeString(error?.message || String(error), 240)
+    });
   }
-  if (upsertResult.error && !hasMissingFinancialSchema(upsertResult.error)) throw upsertResult.error;
 }
 
 async function syncAppointmentsTableFromClinicState(params: {
@@ -6910,14 +6917,21 @@ async function syncAppointmentsTableFromClinicState(params: {
         patientId,
         appointment
       });
-      await flagPendingMaintenanceProbesForAppointment({
-        appointmentId,
-        organizationId: row.organization_id,
-        clinicId,
-        patientId,
-        scheduledAt,
-        actorId
-      });
+      try {
+        await flagPendingMaintenanceProbesForAppointment({
+          appointmentId,
+          organizationId: row.organization_id,
+          clinicId,
+          patientId,
+          scheduledAt,
+          actorId
+        });
+      } catch (error: any) {
+        console.warn('[Appointments] Sugestao de Maintenance Probe ignorada ao criar consulta.', {
+          appointmentId,
+          message: sanitizeString(error?.message || String(error), 240)
+        });
+      }
     } else skipped += 1;
   }
 
@@ -13601,11 +13615,16 @@ async function startServer() {
   });
 
   const readClinicStateForAppointmentMutation = async (clinicId: string) => {
-    const result = await supabase
-      .from('clinic_state')
-      .select('clinic_id, rooms, appointments, specialty_settings')
-      .eq('clinic_id', clinicId)
-      .maybeSingle();
+    const readState = (columns: string) =>
+      supabase
+        .from('clinic_state')
+        .select(columns)
+        .eq('clinic_id', clinicId)
+        .maybeSingle();
+    let result = await readState('clinic_id, rooms, appointments, specialty_settings');
+    if (result.error && extractMissingColumnName(result.error) === 'specialty_settings') {
+      result = await readState('clinic_id, rooms, appointments');
+    }
     if (result.error) {
       if (isMissingRelationError(result.error)) {
         return { rooms: [], appointments: [], specialtySettings: {} };
@@ -13787,14 +13806,25 @@ async function startServer() {
   const readPersistedAppointmentRows = async (appointmentIds: string[], clinicId: string) => {
     const ids = Array.from(new Set((appointmentIds || []).map((id) => sanitizeString(id, 120)).filter((id) => isUuid(id))));
     if (ids.length === 0) return [];
-    const result = await supabase
-      .from('appointments')
-      .select(APPOINTMENT_SELECT)
-      .eq('clinic_id', clinicId)
-      .in('id', ids)
-      .limit(ids.length);
-    if (result.error) throw result.error;
-    return Array.isArray(result.data) ? result.data : [];
+    const criticalColumns = new Set(['id', 'clinic_id', 'patient_id', 'therapist_id', 'scheduled_at', 'status']);
+    let columns = APPOINTMENT_SELECT.split(',').map((column) => column.trim()).filter(Boolean);
+    while (columns.length > 0) {
+      const result = await supabase
+        .from('appointments')
+        .select(columns.join(','))
+        .eq('clinic_id', clinicId)
+        .in('id', ids)
+        .limit(ids.length);
+      if (!result.error) return Array.isArray(result.data) ? result.data : [];
+
+      const missingColumn = extractMissingColumnName(result.error);
+      if (missingColumn && columns.includes(missingColumn) && !criticalColumns.has(missingColumn)) {
+        columns = columns.filter((column) => column !== missingColumn);
+        continue;
+      }
+      throw result.error;
+    }
+    throw new Error('Não foi possível confirmar a persistência do agendamento.');
   };
 
   const confirmPersistedAppointmentRows = (rows: any[], expectedAppointments: any[], clinicId: string) => {
@@ -13815,16 +13845,24 @@ async function startServer() {
 
   const writeClinicStateAppointmentsAfterPersistence = async (clinicId: string, actorId: string, previousAppointments: any[], persistedAppointments: any[]) => {
     const nextAppointments = mergeClinicStateAppointmentsById(previousAppointments, persistedAppointments);
-    const result = await supabase
-      .from('clinic_state')
-      .upsert([{
-        clinic_id: clinicId,
-        appointments: nextAppointments,
-        updated_by: actorId,
-        updated_at: new Date().toISOString()
-      }], { onConflict: 'clinic_id' })
-      .select('appointments')
-      .single();
+    const basePayload = {
+      clinic_id: clinicId,
+      appointments: nextAppointments,
+      updated_at: new Date().toISOString()
+    };
+    const writeState = (includeUpdatedBy: boolean) =>
+      supabase
+        .from('clinic_state')
+        .upsert([{
+          ...basePayload,
+          ...(includeUpdatedBy ? { updated_by: actorId } : {})
+        }], { onConflict: 'clinic_id' })
+        .select('appointments')
+        .single();
+    let result = await writeState(true);
+    if (result.error && extractMissingColumnName(result.error) === 'updated_by') {
+      result = await writeState(false);
+    }
     if (result.error) throw result.error;
     const confirmedStateAppointments = Array.isArray(result.data?.appointments) ? result.data.appointments : [];
     const confirmedIds = new Set(confirmedStateAppointments.map((appointment: any) => sanitizeString(appointment?.id, 120)).filter(Boolean));
@@ -14353,6 +14391,31 @@ async function startServer() {
 
       const actor = req.session.user;
       const clinicId = currentClinicId(actor);
+      const readClinicBranding = async (rawClinicId: unknown) => {
+        const safeClinicId = sanitizeString(rawClinicId, 120);
+        if (!isUuid(safeClinicId)) return null;
+        const read = (columns: string) =>
+          supabase
+            .from('clinics')
+            .select(columns)
+            .eq('id', safeClinicId)
+            .limit(1)
+            .maybeSingle();
+        let { data: clinic, error: clinicError } = await read('id,name,logo_url');
+        if (clinicError && extractMissingColumnName(clinicError) === 'logo_url') {
+          const fallback = await read('id,name');
+          clinic = fallback.data;
+          clinicError = fallback.error;
+        }
+        if (clinicError) {
+          console.warn('[Appointments] clinic branding read failed:', clinicError.message);
+          return null;
+        }
+        return {
+          clinicName: sanitizeString(clinic?.name, 160) || 'sua clínica',
+          clinicLogoUrl: sanitizeSessionUrl(clinic?.logo_url)
+        };
+      };
       const clinicStateQuery = supabase
         .from('clinic_state')
         .select('clinic_id, appointments');
@@ -14363,10 +14426,14 @@ async function startServer() {
 
       const states = clinicId ? [data].filter(Boolean) : (Array.isArray(data) ? data : []);
       let foundAppointment: any = null;
+      let foundClinicId = '';
       for (const state of states) {
         const appointments = Array.isArray(state?.appointments) ? state.appointments : [];
         foundAppointment = appointments.find((appointment: any) => String(appointment?.id) === appointmentId);
-        if (foundAppointment) break;
+        if (foundAppointment) {
+          foundClinicId = sanitizeString(state?.clinic_id || clinicId, 120);
+          break;
+        }
       }
 
       let foundInAppointmentsTable = false;
@@ -14388,6 +14455,27 @@ async function startServer() {
       if (!foundAppointment) {
         return res.status(404).json({ success: false, error: 'Consulta não encontrada.' });
       }
+
+      const appointmentClinicId = sanitizeString(
+        foundAppointment?.clinic_id ||
+          foundAppointment?.clinicId ||
+          foundAppointment?.organization_id ||
+          foundAppointment?.organizationId ||
+          foundClinicId ||
+          clinicId,
+        120
+      );
+      const clinicBranding = await readClinicBranding(appointmentClinicId);
+      const clinicName =
+        clinicBranding?.clinicName ||
+        sanitizeString(foundAppointment?.clinicName || foundAppointment?.clinic_name, 160) ||
+        sanitizeString(actor?.clinicSettings?.clinicName, 160) ||
+        'sua clínica';
+      const clinicLogoUrl =
+        clinicBranding?.clinicLogoUrl ||
+        sanitizeSessionUrl(foundAppointment?.clinicLogoUrl || foundAppointment?.clinic_logo_url) ||
+        sanitizeSessionUrl(actor?.clinicSettings?.clinicLogoUrl) ||
+        null;
 
       if (sanitizeString(actor?.role, 40) === 'patient') {
         const actorId = sanitizeString(actor?.id, 120);
@@ -14430,6 +14518,8 @@ async function startServer() {
             foundAppointment.patientConfirmationAt ||
             foundAppointment.patient_confirmation_at ||
             null,
+          clinicName,
+          clinicLogoUrl,
           source: foundInAppointmentsTable ? 'appointments' : 'clinic_state'
         }
       });
@@ -15184,6 +15274,47 @@ async function startServer() {
         return res.status(400).json({ success: false, error: 'appointmentId e patientId são obrigatórios.' });
       }
 
+      let reminderClinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (isUuid(appointmentId)) {
+        const { data: appointmentClinic, error: appointmentClinicError } = await supabase
+          .from('appointments')
+          .select('clinic_id')
+          .eq('id', appointmentId)
+          .limit(1)
+          .maybeSingle();
+        if (!appointmentClinicError && appointmentClinic?.clinic_id) {
+          reminderClinicId = sanitizeString(appointmentClinic.clinic_id, 120);
+        } else if (appointmentClinicError && !hasMissingFinancialSchema(appointmentClinicError)) {
+          console.warn('[Push] appointment clinic read failed:', appointmentClinicError.message);
+        }
+      }
+      const readReminderClinicBranding = async (rawClinicId: unknown) => {
+        const safeClinicId = sanitizeString(rawClinicId, 120);
+        if (!isUuid(safeClinicId)) return { clinicName: 'sua clínica', clinicLogoUrl: null };
+        const read = (columns: string) =>
+          supabase
+            .from('clinics')
+            .select(columns)
+            .eq('id', safeClinicId)
+            .limit(1)
+            .maybeSingle();
+        let { data: clinic, error: clinicError } = await read('id,name,logo_url');
+        if (clinicError && extractMissingColumnName(clinicError) === 'logo_url') {
+          const fallback = await read('id,name');
+          clinic = fallback.data;
+          clinicError = fallback.error;
+        }
+        if (clinicError) {
+          console.warn('[Push] clinic branding read failed:', clinicError.message);
+          return { clinicName: 'sua clínica', clinicLogoUrl: null };
+        }
+        return {
+          clinicName: sanitizeString(clinic?.name, 160) || 'sua clínica',
+          clinicLogoUrl: sanitizeSessionUrl(clinic?.logo_url)
+        };
+      };
+      const clinicBranding = await readReminderClinicBranding(reminderClinicId);
+
       const result = await sendAppointmentNotification({
         supabase,
         patientId,
@@ -15193,10 +15324,12 @@ async function startServer() {
           scheduledAt: sanitizeString(req.body?.scheduledAt || req.body?.scheduled_at, 80) || null,
           timeLabel: sanitizeString(req.body?.timeLabel || req.body?.time_label, 80) || null,
           dateLabel: sanitizeString(req.body?.dateLabel || req.body?.date_label, 80) || null,
-          reminderKind: 'manual'
+          reminderKind: 'manual',
+          clinicName: clinicBranding.clinicName,
+          clinicLogoUrl: clinicBranding.clinicLogoUrl
         },
-        title: 'Lembrete de Consulta - Verto',
-        body: 'Voce tem uma consulta agendada. Toque para abrir a Verto e confirmar, remarcar ou cancelar.',
+        title: `Lembrete de Consulta - ${clinicBranding.clinicName}`,
+        body: `Voce tem uma consulta agendada pela ${clinicBranding.clinicName}. Toque para abrir a Verto e confirmar, remarcar ou cancelar.`,
         reminderKind: 'manual',
         logger: console
       });
@@ -26332,7 +26465,10 @@ async function startServer() {
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
-    if (existing.error && !hasMissingFinancialSchema(existing.error)) throw existing.error;
+    if (existing.error) {
+      if (hasMissingFinancialSchema(existing.error) || isMissingRelationError(existing.error)) return null;
+      throw existing.error;
+    }
     if (existing.data?.id) {
       const { data, error } = await supabase
         .from('appointment_action_requests')
@@ -26346,7 +26482,10 @@ async function startServer() {
         .eq('id', existing.data.id)
         .select(APPOINTMENT_ACTION_REQUEST_SELECT)
         .maybeSingle();
-      if (error) throw error;
+      if (error) {
+        if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return null;
+        throw error;
+      }
       return data;
     }
 
@@ -26370,7 +26509,10 @@ async function startServer() {
       .insert([payload])
       .select(APPOINTMENT_ACTION_REQUEST_SELECT)
       .maybeSingle();
-    if (error) throw error;
+    if (error) {
+      if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return null;
+      throw error;
+    }
     return data;
   };
 
@@ -26604,13 +26746,13 @@ async function startServer() {
       const actorId = sanitizeString(req.session.user?.id, 120);
       const actorRole = sanitizeString(req.session.user?.role, 40) || 'responsible';
       const update = await updateAppointmentOperationalPatch(appointment.id, {
-        status: 'CONFIRMED',
+        status: 'confirmed',
         confirmed_at: now,
         confirmed_by: actorId || null,
         confirmed_by_role: actorRole,
         patient_response: 'confirmed',
         patient_responded_at: now,
-        patient_confirmation_status: 'CONFIRMED',
+        patient_confirmation_status: 'confirmed',
         patient_confirmation_at: now,
         patient_confirmation_by: actorId || null,
         patient_confirmation_source: 'portal',
@@ -26629,7 +26771,7 @@ async function startServer() {
         metadata: { source: 'portal' }
       });
       void regenerateClosureForAppointments([appointment.id], req.session.user, 'appointment_confirmed_by_responsible');
-      return res.json({ success: true, message: 'Consulta confirmada.', appointment: serializePortalAppointment(update.data || { ...appointment, status: 'CONFIRMED' }) });
+      return res.json({ success: true, message: 'Consulta confirmada.', appointment: serializePortalAppointment(update.data || { ...appointment, status: 'confirmed' }) });
     } catch (error: any) {
       console.warn('[PortalAppointments] confirm failed:', error?.message || String(error));
       return res.status(500).json(portalSafeError(500));
@@ -26657,7 +26799,7 @@ async function startServer() {
       const actorId = sanitizeString(req.session.user?.id, 120);
       const actorRole = sanitizeString(req.session.user?.role, 40) || 'responsible';
       const update = await updateAppointmentOperationalPatch(appointment.id, {
-        status: 'RESCHEDULE_REQUESTED',
+        status: 'reschedule',
         reschedule_requested_at: now,
         reschedule_requested_by: actorId || null,
         patient_response: 'reschedule',
@@ -26681,7 +26823,7 @@ async function startServer() {
         metadata: { actionRequestId: requestRow?.id || null, source: 'portal' }
       });
       void regenerateClosureForAppointments([appointment.id], req.session.user, 'appointment_reschedule_requested');
-      return res.json({ success: true, message: 'Solicitação de remarcação registrada.', data: requestRow, appointment: serializePortalAppointment(update.data || { ...appointment, status: 'RESCHEDULE_REQUESTED' }) });
+      return res.json({ success: true, message: 'Solicitação de remarcação registrada.', data: requestRow, appointment: serializePortalAppointment(update.data || { ...appointment, status: 'reschedule' }) });
     } catch (error: any) {
       console.warn('[PortalAppointments] reschedule request failed:', error?.message || String(error));
       return res.status(500).json(portalSafeError(500));
@@ -26707,10 +26849,10 @@ async function startServer() {
       const actorId = sanitizeString(req.session.user?.id, 120);
       const actorRole = sanitizeString(req.session.user?.role, 40) || 'responsible';
       const update = await updateAppointmentOperationalPatch(appointment.id, {
-        status: 'CANCEL_REQUESTED',
+        status: 'cancelled',
         cancel_requested_at: now,
         cancel_requested_by: actorId || null,
-        patient_response: 'cancel_requested',
+        patient_response: 'cancelled',
         patient_responded_at: now,
         patient_confirmation_status: 'CANCEL_REQUESTED',
         patient_confirmation_at: now,
@@ -26731,7 +26873,7 @@ async function startServer() {
         metadata: { actionRequestId: requestRow?.id || null, source: 'portal' }
       });
       void regenerateClosureForAppointments([appointment.id], req.session.user, 'appointment_cancel_requested');
-      return res.json({ success: true, message: 'Solicitação de cancelamento registrada.', data: requestRow, appointment: serializePortalAppointment(update.data || { ...appointment, status: 'CANCEL_REQUESTED' }) });
+      return res.json({ success: true, message: 'Solicitação de cancelamento registrada.', data: requestRow, appointment: serializePortalAppointment(update.data || { ...appointment, status: 'cancelled' }) });
     } catch (error: any) {
       console.warn('[PortalAppointments] cancel request failed:', error?.message || String(error));
       return res.status(500).json(portalSafeError(500));

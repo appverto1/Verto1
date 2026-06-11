@@ -63,6 +63,20 @@ test('appointment endpoints use stable idempotency keys and read-after-write', (
   assert.match(serverCode, /Não foi possível confirmar a persistência do agendamento/);
 });
 
+test('appointment create tolerates optional schema columns after durable write', () => {
+  const appointmentRouteSlice = serverCode.slice(
+    serverCode.indexOf("const readClinicStateForAppointmentMutation"),
+    serverCode.indexOf("const handleVapidPublicKey"),
+  );
+  assert.match(appointmentRouteSlice, /criticalColumns = new Set\(\['id', 'clinic_id', 'patient_id', 'therapist_id', 'scheduled_at', 'status'\]\)/);
+  assert.match(appointmentRouteSlice, /extractMissingColumnName\(result\.error\)/);
+  assert.match(appointmentRouteSlice, /columns = columns\.filter/);
+  assert.match(appointmentRouteSlice, /extractMissingColumnName\(result\.error\) === 'specialty_settings'/);
+  assert.match(appointmentRouteSlice, /extractMissingColumnName\(result\.error\) === 'updated_by'/);
+  assert.match(serverCode, /Sugestao de Maintenance Probe ignorada ao criar consulta/);
+  assert.match(serverCode, /Contexto financeiro inicial ignorado/);
+});
+
 test('appointment routes avoid select star and persist domain events', () => {
   const appointmentRouteSlice = serverCode.slice(
     serverCode.indexOf("const readClinicStateForAppointmentMutation"),

@@ -34,6 +34,8 @@ type ReminderKind = '24h' | '12h';
 type ReminderAppointment = {
   appointmentId: string;
   clinicId?: string | null;
+  clinicName?: string | null;
+  clinicLogoUrl?: string | null;
   patientId: string;
   patientEmail?: string | null;
   scheduledAt: string;
@@ -58,13 +60,13 @@ const REMINDER_STEPS = [
   {
     kind: '24h' as ReminderKind,
     hoursBefore: 24,
-    title: 'Confirmacao de consulta - Verto',
-    fallbackBody: `Voce tem uma consulta agendada amanha pela Verto. ${APPOINTMENT_NOTIFICATION_CTA}`
+    titlePrefix: 'Confirmacao de consulta',
+    fallbackBody: `Voce tem uma consulta agendada amanha pela sua clínica. ${APPOINTMENT_NOTIFICATION_CTA}`
   },
   {
     kind: '12h' as ReminderKind,
     hoursBefore: 12,
-    title: 'Consulta chegando - Verto',
+    titlePrefix: 'Consulta chegando',
     fallbackBody: `Sua consulta esta chegando. ${APPOINTMENT_NOTIFICATION_CTA}`
   }
 ];
@@ -119,14 +121,15 @@ const buildScheduledAtFromClinicStateAppointment = (appointment: any) => {
   return candidate.isValid() ? candidate.utc().toISOString() : '';
 };
 
-const formatReminderBody = (scheduledAt: string, fallback: string) => {
+const formatReminderBody = (scheduledAt: string, fallback: string, clinicName = 'sua clínica') => {
+  const safeClinicName = sanitizeText(clinicName, 160) || 'sua clínica';
   const scheduled = dayjs(scheduledAt).tz(BRAZIL_TIMEZONE);
   if (!scheduled.isValid()) return fallback;
   const tomorrow = dayjs().tz(BRAZIL_TIMEZONE).add(1, 'day').format('YYYY-MM-DD');
   const dateLabel = scheduled.format('YYYY-MM-DD') === tomorrow
     ? 'amanha'
     : `em ${scheduled.format('DD/MM')}`;
-  return `Voce tem uma consulta agendada ${dateLabel} as ${scheduled.format('HH:mm')}. ${APPOINTMENT_NOTIFICATION_CTA}`;
+  return `Voce tem uma consulta agendada pela ${safeClinicName} ${dateLabel} as ${scheduled.format('HH:mm')}. ${APPOINTMENT_NOTIFICATION_CTA}`;
 };
 
 const getReminderDueUtc = (scheduledAt: string, hoursBefore: number) =>
@@ -162,6 +165,8 @@ const mergeAppointment = (
   appointments.set(incoming.appointmentId, {
     ...existing,
     clinicId: existing.clinicId || incoming.clinicId,
+    clinicName: existing.clinicName || incoming.clinicName,
+    clinicLogoUrl: existing.clinicLogoUrl || incoming.clinicLogoUrl,
     patientId: existing.patientId || incoming.patientId,
     patientEmail: existing.patientEmail || incoming.patientEmail,
     scheduledAt: existing.scheduledAt || incoming.scheduledAt,
@@ -208,6 +213,7 @@ async function fetchAppointmentsTable(
 
     mergeAppointment(appointments, {
       appointmentId,
+      clinicId: sanitizeText(row?.clinic_id, 120) || null,
       patientId,
       patientEmail: sanitizeEmail(row?.patient_email),
       scheduledAt,
@@ -486,6 +492,51 @@ const chooseDueReminder = (
   return null;
 };
 
+const clinicBrandingCache = new Map<string, { clinicName: string; clinicLogoUrl: string | null }>();
+
+async function resolveReminderClinicBranding(
+  options: ActiveCronServiceOptions,
+  clinicId?: string | null,
+) {
+  const safeClinicId = sanitizeText(clinicId, 120);
+  if (!isUuid(safeClinicId)) {
+    return { clinicName: 'sua clínica', clinicLogoUrl: null };
+  }
+  const cached = clinicBrandingCache.get(safeClinicId);
+  if (cached) return cached;
+
+  const read = (columns: string) =>
+    options.supabase
+      .from('clinics')
+      .select(columns)
+      .eq('id', safeClinicId)
+      .limit(1)
+      .maybeSingle();
+
+  let { data, error } = await read('id,name,logo_url');
+  if (error && String(error.message || '').match(/column\s+"?logo_url"?/i)) {
+    const fallback = await read('id,name');
+    data = fallback.data;
+    error = fallback.error;
+  }
+  if (error) {
+    options.logger.warn('[Appointment Reminder Cron] Branding da clinica nao carregado.', {
+      clinicId: safeClinicId,
+      message: error.message
+    });
+    const fallback = { clinicName: 'sua clínica', clinicLogoUrl: null };
+    clinicBrandingCache.set(safeClinicId, fallback);
+    return fallback;
+  }
+
+  const branding = {
+    clinicName: sanitizeText(data?.name, 160) || 'sua clínica',
+    clinicLogoUrl: sanitizeText(data?.logo_url, 2000) || null
+  };
+  clinicBrandingCache.set(safeClinicId, branding);
+  return branding;
+}
+
 async function persistPortalReminder(params: {
   options: ActiveCronServiceOptions;
   appointment: ReminderAppointment;
@@ -615,12 +666,16 @@ async function runAppointmentReminderJob(
 
       try {
         const scheduled = dayjs(appointment.scheduledAt).tz(BRAZIL_TIMEZONE);
-        const body = formatReminderBody(appointment.scheduledAt, dueReminder.fallbackBody);
+        const clinicBranding = await resolveReminderClinicBranding(options, appointment.clinicId);
+        const clinicName = appointment.clinicName || clinicBranding.clinicName;
+        const clinicLogoUrl = appointment.clinicLogoUrl || clinicBranding.clinicLogoUrl;
+        const title = `${dueReminder.titlePrefix} - ${clinicName}`;
+        const body = formatReminderBody(appointment.scheduledAt, dueReminder.fallbackBody, clinicName);
         const persisted = await persistPortalReminder({
           options,
           appointment,
           kind: dueReminder.kind,
-          title: dueReminder.title,
+          title,
           body,
           scheduledFor: getReminderDueUtc(appointment.scheduledAt, dueReminder.hoursBefore).toISOString()
         });
@@ -634,9 +689,11 @@ async function runAppointmentReminderJob(
                 scheduledAt: appointment.scheduledAt,
                 reminderKind: dueReminder.kind,
                 dateLabel: scheduled.isValid() ? scheduled.format('DD/MM/YYYY') : null,
-                timeLabel: scheduled.isValid() ? scheduled.format('HH:mm') : null
+                timeLabel: scheduled.isValid() ? scheduled.format('HH:mm') : null,
+                clinicName,
+                clinicLogoUrl
               },
-              title: dueReminder.title,
+              title,
               body,
               reminderKind: dueReminder.kind,
               logger: options.logger

@@ -1426,6 +1426,8 @@ export default function App() {
     appointmentId: string;
     dateLabel: string;
     timeLabel: string;
+    clinicName: string;
+    clinicLogoUrl: string;
     isLoading: boolean;
     isUpdating: boolean;
     message: string;
@@ -1726,6 +1728,8 @@ export default function App() {
     setAppointmentConfirmation({
       appointmentId,
       ...fallbackLabels,
+      clinicName: '',
+      clinicLogoUrl: '',
       isLoading: !hasFallbackDateTime,
       isUpdating: false,
       message: '',
@@ -1748,6 +1752,8 @@ export default function App() {
               ? {
                   ...prev,
                   ...labels,
+                  clinicName: String(result.appointment?.clinicName || result.appointment?.clinic_name || '').trim(),
+                  clinicLogoUrl: String(result.appointment?.clinicLogoUrl || result.appointment?.clinic_logo_url || '').trim(),
                   isLoading: false,
                   message: '',
                 }
@@ -5131,6 +5137,13 @@ export default function App() {
 
   const handleAppointmentConfirmationChoice = async (status: 'confirmed' | 'reschedule' | 'canceled') => {
     if (!appointmentConfirmation?.appointmentId) return;
+    const normalizeConfirmationResultStatus = (value: any) => {
+      const normalized = String(value || '').toLowerCase();
+      if (normalized.includes('confirm')) return 'confirmed';
+      if (normalized.includes('reschedule') || normalized.includes('remarc')) return 'reschedule';
+      if (normalized.includes('cancel')) return 'canceled';
+      return normalized || status;
+    };
     const feedback =
       status === 'reschedule'
         ? 'Solicitação de remarcação registrada. A recepção entrará em contato.'
@@ -5149,7 +5162,7 @@ export default function App() {
       if (!result?.success) {
         throw new Error(result?.error || 'Não foi possível atualizar a consulta.');
       }
-      const serverStatus = String(result?.appointment?.status || status).toLowerCase();
+      const serverStatus = normalizeConfirmationResultStatus(result?.appointment?.status || result?.appointment?.patientConfirmationStatus || status);
       setTherapistAgenda(prev =>
         prev.map(item =>
           String(item.id) === String(appointmentConfirmation.appointmentId)
@@ -5228,13 +5241,31 @@ export default function App() {
       <GlobalStyles />
       {appointmentConfirmation && (
         <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-md overflow-hidden rounded-[32px] border border-violet-200 bg-white shadow-[0_30px_80px_rgba(124,58,237,0.28)]">
-            <div className="bg-gradient-to-br from-violet-600 via-fuchsia-500 to-blue-500 p-6 text-white">
-              <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-white/18">
-                <CheckCircle2 size={30} />
+          <div className="w-full max-w-md overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-[0_28px_80px_rgba(15,23,42,0.24)]">
+            <div className="border-b border-slate-100 bg-slate-50 p-6 text-slate-950">
+              <div className="mb-4 flex items-center gap-3">
+                <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-slate-200 bg-white text-slate-500 shadow-sm">
+                  {appointmentConfirmation.clinicLogoUrl ? (
+                    <img
+                      src={appointmentConfirmation.clinicLogoUrl}
+                      alt="Logo da clínica"
+                      className="h-full w-full object-contain p-1.5"
+                      onError={(event) => {
+                        event.currentTarget.style.display = 'none';
+                      }}
+                    />
+                  ) : (
+                    <CheckCircle2 size={30} />
+                  )}
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500">Lembrete de consulta</p>
+                  <h2 className="truncate text-xl font-black tracking-tight">
+                    {appointmentConfirmation.clinicName || 'sua clínica'}
+                  </h2>
+                </div>
               </div>
-              <h2 className="text-2xl font-black tracking-tight">Lembrete de Consulta - Verto</h2>
-              <p className="mt-2 text-sm font-semibold text-white/90">
+              <p className="text-sm font-semibold text-slate-600">
                 {buildAppointmentConfirmationSubtitle()}
               </p>
             </div>
@@ -5245,7 +5276,7 @@ export default function App() {
                 </div>
               )}
               {appointmentConfirmation.message && (
-                <div className="rounded-2xl border border-violet-100 bg-violet-50 px-4 py-3 text-sm font-bold text-violet-700">
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700">
                   {appointmentConfirmation.message}
                 </div>
               )}

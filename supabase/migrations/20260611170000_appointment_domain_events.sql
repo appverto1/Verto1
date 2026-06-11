@@ -37,10 +37,4 @@ using (
       and cm.user_id = auth.uid()
       and cm.status = 'active'
   )
-  or exists (
-    select 1
-    from public.patients p
-    where p.id = appointment_domain_events.patient_id
-      and p.user_id = auth.uid()
-  )
 );
