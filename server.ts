@@ -25,7 +25,7 @@ import {
   syncAllClinicsActivePatientAddonQuantity,
   syncClinicActivePatientAddonQuantity
 } from './services/stripeService';
-import { startAppointmentReminderCron, triggerAppointmentReminderScan } from './services/cronService';
+import { runAppointmentReminderScan, startAppointmentReminderCron, triggerAppointmentReminderScan } from './services/cronService';
 import {
   removePatientPushSubscription,
   resolvePatientIdsForPush,
@@ -8809,6 +8809,15 @@ async function startServer() {
     message: { success: false, error: 'Muitas ações em sequência. Aguarde alguns instantes e tente novamente.' }
   });
 
+  const appointmentReminderCronLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 4,
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: false,
+    message: { success: false, error: 'Execução temporariamente limitada.' }
+  });
+
   const resendActivationLimiter = rateLimit({
     windowMs: 10 * 60 * 1000,
     max: 5,
@@ -10583,7 +10592,7 @@ async function startServer() {
       // Check if user is the therapist for this patient
       const { data: patient, error } = await supabase
         .from('patients')
-        .select('therapist_id,clinic_id,is_demo')
+        .select('therapist_id,clinic_id,is_demo,responsible_user_id,email')
         .eq('id', resolvedPatientId)
         .single();
 
@@ -10596,13 +10605,26 @@ async function startServer() {
       ) {
         return res.status(403).json({ error: 'Acesso negado a este prontuário' });
       }
+      req.resolvedPatientClinicId = sanitizeString(patient.clinic_id, 120);
+
+      const userRole = sanitizeString(user?.role, 40).toLowerCase();
+      const userId = sanitizeString(user?.id, 120);
+      const userEmail = sanitizeEmail(user?.email);
+      const isResponsibleLink =
+        isResponsiblePortalRole(userRole) &&
+        (
+          (isUuid(userId) && sanitizeString(patient.responsible_user_id, 120) === userId) ||
+          (userEmail && sanitizeEmail(patient.email) === userEmail)
+        );
+      if (isResponsibleLink) {
+        return next();
+      }
 
       if (patient.therapist_id === user.id) {
         return next();
       }
 
       // Same-clinic access is reserved for clinic coordination.
-      const userRole = sanitizeString(user?.role, 40).toLowerCase();
       if (
         patient.clinic_id &&
         patient.clinic_id === currentClinicId(user) &&
@@ -13635,6 +13657,29 @@ async function startServer() {
   app.delete('/api/push/subscribe', checkAuth, handlePushUnsubscribe);
   app.delete('/api/notifications/subscribe', checkAuth, handlePushUnsubscribe);
 
+  app.post('/api/internal/notifications/run-appointment-reminders', appointmentReminderCronLimiter, async (req: any, res) => {
+    const configuredSecret = sanitizeString(
+      process.env.APPOINTMENT_REMINDER_CRON_SECRET || process.env.CRON_SECRET || '',
+      240
+    );
+    const providedSecret = sanitizeString(
+      req.headers['x-internal-cron-secret'] || req.headers['x-cron-secret'] || '',
+      240
+    );
+    const authorized = Boolean(
+      configuredSecret &&
+      providedSecret &&
+      Buffer.byteLength(configuredSecret) === Buffer.byteLength(providedSecret) &&
+      crypto.timingSafeEqual(Buffer.from(configuredSecret), Buffer.from(providedSecret))
+    );
+    if (!authorized) {
+      return res.status(403).json({ success: false, error: 'Acesso negado.' });
+    }
+
+    const summary = await runAppointmentReminderScan('internal_endpoint');
+    return res.json({ success: true, data: summary });
+  });
+
   app.patch('/api/patient/self/profile', checkAuth, requireRoles('patient'), async (req: any, res) => {
     try {
       const userId = sanitizeString(req.session.user?.id, 120);
@@ -14548,12 +14593,21 @@ async function startServer() {
   app.post('/api/patient-anamnesis/:patientId', checkAuth, checkPatientAccess, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
       const rawPatientId = sanitizeString(req.params.patientId, 100);
-      const clinicId = sanitizeString(currentClinicId(req.session.user), 100);
+      let clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 100);
       const professionalId = sanitizeString(req.session.user?.id, 100);
       const patientId = await resolvePatientIdForRequest(rawPatientId, req.session.user, {
         createIfMissing: true,
         fallbackName: sanitizeString(req.body?.anamnesisData?.nome, 160) || sanitizeString(req.body?.anamnesisData?.name, 160)
       });
+      if (!clinicId && isUuid(patientId)) {
+        const clinicResult = await supabase
+          .from('patients')
+          .select('clinic_id')
+          .eq('id', patientId)
+          .limit(1)
+          .maybeSingle();
+        clinicId = sanitizeString(clinicResult.data?.clinic_id, 100);
+      }
       const title = sanitizeString(req.body?.title, 220) || `Ficha_Anamnese_${rawPatientId}`;
       const referenceDate = sanitizeDate(req.body?.referenceDate) || new Date().toISOString().slice(0, 10);
       const templateVersion = asSafeNumber(req.body?.templateVersion, 1, 10_000);
@@ -14613,7 +14667,7 @@ async function startServer() {
   app.get('/api/patient-anamnesis/:patientId', checkAuth, checkPatientAccess, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 100);
-      const clinicId = sanitizeString(currentClinicId(req.session.user), 100);
+      let clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 100);
       if (!isUuid(patientId)) return res.json({ success: true, data: [] });
       const limit = parseBoundedListLimit(req.query?.limit, 20, 50);
       const anamnesisResult = await fetchPatientAnamnesisWithSchemaFallback({
@@ -18821,7 +18875,23 @@ async function startServer() {
         limit: parseBoundedListLimit(req.query?.limit, 50, 100),
         logger: console
       });
-      const data = fileResult.data;
+      const role = sanitizeString(req.session.user?.role, 40).toLowerCase();
+      const isPatientPortal = isResponsiblePortalRole(role);
+      const isFileVisibleToPatient = (row: any) => {
+        const source = sanitizeString(row?.source, 60).toLowerCase();
+        const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+        return (
+          source === 'family_portal_document' ||
+          metadata?.releasedToPatient === true ||
+          metadata?.released_to_patient === true ||
+          metadata?.visibleToPatient === true ||
+          metadata?.visible_to_patient === true ||
+          ['patient', 'family', 'shared_patient'].includes(sanitizeString(metadata?.visibility, 40).toLowerCase())
+        );
+      };
+      const data = isPatientPortal
+        ? (Array.isArray(fileResult.data) ? fileResult.data : []).filter(isFileVisibleToPatient)
+        : fileResult.data;
       const error = fileResult.error;
 
       if (error) {
@@ -18854,7 +18924,8 @@ async function startServer() {
       }
 
       const merged = new Map<string, any>();
-      [...withUrls, ...fallbackFiles].forEach((row: any) => {
+      const visibleFallbackFiles = isPatientPortal ? fallbackFiles.filter(isFileVisibleToPatient) : fallbackFiles;
+      [...withUrls, ...visibleFallbackFiles].forEach((row: any) => {
         const key = sanitizeString(row?.id, 120) || sanitizeString(row?.path, 500);
         if (!key || merged.has(key)) return;
         merged.set(key, row);
@@ -18870,7 +18941,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/patient-files/:patientId', checkAuth, checkPatientAccess, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/patient-files/:patientId', checkAuth, checkPatientAccess, requireRoles('coordinator', 'receptionist', 'therapist', 'patient', 'admin', 'owner'), uploadLimiter, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 18 * 1024 * 1024, 'Upload de arquivo do paciente')) return;
       const isMultipart = String(req.headers?.['content-type'] || '').toLowerCase().includes('multipart/form-data');
@@ -18885,14 +18956,18 @@ async function startServer() {
         sanitizeString(multipartFile?.fileName || multipartFields.fileName || req.body?.fileName, 220) ||
         `arquivo_${Date.now()}`;
       const safeName = rawName.replace(/[^\w.\-() ]+/g, '_').slice(0, 220);
-      const source = sanitizeString(multipartFields.source || req.body?.source, 40) || 'upload';
+      const uploaderRole = sanitizeString(req.session.user?.role, 40).toLowerCase();
+      const isPatientUploader = isResponsiblePortalRole(uploaderRole);
+      const source = isPatientUploader
+        ? 'family_portal_document'
+        : sanitizeString(multipartFields.source || req.body?.source, 40) || 'upload';
       const contentType = sanitizeString(
         multipartFile?.contentType || multipartFields.contentType || req.body?.contentType,
         120
       ) || 'application/octet-stream';
       const dataUrl = sanitizeString(req.body?.fileBase64, 20_000_000);
       const metadataRaw = multipartFields.metadata || req.body?.metadata;
-      const metadata =
+      const parsedMetadata =
         typeof metadataRaw === 'string'
           ? (() => {
               try {
@@ -18905,11 +18980,28 @@ async function startServer() {
           : metadataRaw && typeof metadataRaw === 'object'
             ? metadataRaw
             : {};
+      const metadata = isPatientUploader
+        ? {
+            visibility: 'patient',
+            visibleToPatient: true,
+            authorRole: 'patient'
+          }
+        : parsedMetadata;
 
       const patientId = await resolvePatientIdForRequest(rawPatientId, req.session.user, {
         createIfMissing: true,
         fallbackName: sanitizeString(req.body?.metadata?.patientName, 160)
       });
+
+      if (!clinicId && isUuid(patientId)) {
+        const clinicResult = await supabase
+          .from('patients')
+          .select('clinic_id')
+          .eq('id', patientId)
+          .limit(1)
+          .maybeSingle();
+        clinicId = sanitizeString(clinicResult.data?.clinic_id, 100);
+      }
 
       if (!patientId || !clinicId || !uploadedBy) {
         return res.status(400).json({ success: false, error: 'Dados obrigatórios ausentes.' });
@@ -25380,6 +25472,99 @@ async function startServer() {
     }
     return { ok: true, appointment: data };
   };
+
+  app.get('/api/portal/notifications', checkAuth, async (req: any, res) => {
+    try {
+      const userId = sanitizeString(req.session.user?.id, 120);
+      const userEmail = sanitizeEmail(req.session.user?.email);
+      const patientIds = await getPortalPatientIdsForUser(req.session.user);
+      const limit = parseBoundedListLimit(req.query?.limit, 12, 50);
+      if (patientIds.length === 0 || (!isUuid(userId) && !userEmail)) {
+        return res.json({ success: true, data: [], pagination: { limit, hasMore: false } });
+      }
+
+      let query = supabase
+        .from('portal_notifications')
+        .select('id, patient_id, appointment_id, type, title, message, read_at, acknowledged_at, sent_at, scheduled_for, created_at, metadata')
+        .in('patient_id', patientIds)
+        .order('created_at', { ascending: false })
+        .limit(limit + 1);
+      if (isUuid(userId) && userEmail) {
+        query = query.or(`recipient_user_id.eq.${userId},recipient_email.eq.${userEmail}`);
+      } else if (isUuid(userId)) {
+        query = query.eq('recipient_user_id', userId);
+      } else {
+        query = query.eq('recipient_email', userEmail);
+      }
+
+      const { data, error } = await query;
+      if (error) {
+        if (isMissingRelationError(error)) {
+          return res.json({ success: true, data: [], pagination: { limit, hasMore: false } });
+        }
+        throw error;
+      }
+      const rows = Array.isArray(data) ? data : [];
+      return res.json({
+        success: true,
+        data: rows.slice(0, limit),
+        pagination: { limit, hasMore: rows.length > limit }
+      });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/portal/notifications [GET]', error, {
+        requestId: requestIdForLogs(req)
+      });
+    }
+  });
+
+  app.patch('/api/portal/notifications/:notificationId', checkAuth, portalActionLimiter, async (req: any, res) => {
+    try {
+      const notificationId = sanitizeString(req.params.notificationId, 120);
+      const userId = sanitizeString(req.session.user?.id, 120);
+      const userEmail = sanitizeEmail(req.session.user?.email);
+      if (!isUuid(notificationId)) {
+        return res.status(400).json({ success: false, error: 'Notificação inválida.' });
+      }
+      const { data: existing, error: existingError } = await supabase
+        .from('portal_notifications')
+        .select('id, patient_id, recipient_user_id, recipient_email, read_at, acknowledged_at')
+        .eq('id', notificationId)
+        .limit(1)
+        .maybeSingle();
+      if (existingError) {
+        if (isMissingRelationError(existingError)) {
+          return res.status(404).json({ success: false, error: 'Notificação não encontrada.' });
+        }
+        throw existingError;
+      }
+      const patientIds = await getPortalPatientIdsForUser(req.session.user);
+      const belongsToRecipient =
+        (isUuid(userId) && sanitizeString(existing?.recipient_user_id, 120) === userId) ||
+        (userEmail && sanitizeEmail(existing?.recipient_email) === userEmail);
+      if (!existing?.id || !patientIds.includes(sanitizeString(existing.patient_id, 120)) || !belongsToRecipient) {
+        return res.status(404).json({ success: false, error: 'Notificação não encontrada.' });
+      }
+      const now = new Date().toISOString();
+      const acknowledge = req.body?.acknowledged === true;
+      const { data, error } = await supabase
+        .from('portal_notifications')
+        .update({
+          read_at: existing.read_at || now,
+          ...(acknowledge ? { acknowledged_at: existing.acknowledged_at || now } : {}),
+          updated_at: now
+        })
+        .eq('id', notificationId)
+        .select('id, patient_id, appointment_id, type, title, message, read_at, acknowledged_at, sent_at, scheduled_for, created_at, metadata')
+        .single();
+      if (error) throw error;
+      return res.json({ success: true, data });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/portal/notifications/:notificationId [PATCH]', error, {
+        notificationId: sanitizeString(req.params.notificationId, 120),
+        requestId: requestIdForLogs(req)
+      });
+    }
+  });
 
   const serializePortalAppointment = (row: any, extras: Record<string, any> = {}) => {
     const source = parseCalendarSourcePayload(row?.source_payload || row?.sourcePayload);

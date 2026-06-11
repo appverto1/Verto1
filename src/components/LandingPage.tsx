@@ -31,6 +31,7 @@ import {
 } from 'lucide-react';
 import { LogoVerto } from './Common';
 import { SecureImage } from './SecureMedia';
+import { GoogleIcon } from './GoogleIcon';
 import { getSupabase } from '../lib/supabase';
 import { dataService } from '../services/dataService';
 import { formatProfessionalRegistry } from '../utils/professionalRegistry';
@@ -1693,7 +1694,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                         onClick={handleGoogleLogin}
                         className="w-full bg-white border border-gray-200 text-gray-700 py-3.5 rounded-2xl font-bold text-sm shadow-sm hover:bg-gray-50 transition-all active:scale-[0.98] flex items-center justify-center gap-3"
                       >
-                        <ExternalLink size={18} />
+                        <GoogleIcon size={18} />
                         Entrar com Google
                       </button>
 
@@ -1945,7 +1946,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                         onClick={handleGoogleLogin}
                         className="w-full bg-white border border-gray-100 text-gray-600 py-2.5 md:py-3 rounded-2xl font-semibold text-[11px] md:text-xs shadow-sm hover:bg-gray-50 transition-all active:scale-[0.98] flex items-center justify-center gap-3"
                       >
-                        <ExternalLink size={16} />
+                        <GoogleIcon size={16} />
                         Cadastrar com Google
                       </button>
                     </form>

@@ -1154,8 +1154,19 @@ export const dataService = {
     try {
       if (payload?.fileBlob instanceof Blob) {
         const formData = new FormData();
-        const requestedFileName = String(payload?.fileName || 'arquivo.pdf').trim() || 'arquivo.pdf';
-        const requestedMime = String(payload?.contentType || payload?.fileBlob?.type || 'application/octet-stream').trim().toLowerCase();
+        let uploadBlob: Blob = payload.fileBlob;
+        let requestedFileName = String(payload?.fileName || 'arquivo.pdf').trim() || 'arquivo.pdf';
+        let requestedMime = String(payload?.contentType || payload?.fileBlob?.type || 'application/octet-stream').trim().toLowerCase();
+        if (requestedMime.startsWith('image/')) {
+          const prepared = await compressImageDataUrl(uploadBlob, {
+            maxDimension: 1600,
+            quality: 0.78,
+            mimeType: 'image/webp'
+          });
+          uploadBlob = await (await fetch(prepared.dataUrl)).blob();
+          requestedMime = 'image/webp';
+          requestedFileName = requestedFileName.replace(/\.[a-z0-9]+$/i, '') + '.webp';
+        }
         const safeMime =
           requestedMime === 'application/pdf' ||
           requestedMime === 'application/json' ||
@@ -1175,12 +1186,12 @@ export const dataService = {
           requiredExtension && !requestedFileName.toLowerCase().endsWith(requiredExtension)
             ? `${requestedFileName}${requiredExtension}`
             : requestedFileName;
-        const file = new File([payload.fileBlob], normalizedFileName, { type: safeMime });
+        const file = new File([uploadBlob], normalizedFileName, { type: safeMime });
         formData.append('file', file, normalizedFileName);
         formData.append('fileName', normalizedFileName);
         formData.append('contentType', safeMime);
         formData.append('source', String(payload?.source || 'upload'));
-        const fileHash = await sha256Hex(payload.fileBlob);
+        const fileHash = await sha256Hex(uploadBlob);
         const metadataWithHash = {
           ...(payload?.metadata && typeof payload.metadata === 'object' ? payload.metadata : {}),
           ...(fileHash ? { fileSha256: fileHash } : {})
@@ -1966,6 +1977,35 @@ export const dataService = {
       return await safeJson(response);
     } catch {
       return { success: false, data: [], error: 'Não foi possível carregar suas consultas agora.' };
+    }
+  },
+
+  async getPortalNotifications(limit = 12) {
+    try {
+      const safeLimit = Math.max(1, Math.min(50, Number(limit) || 12));
+      const response = await fetch(`/api/portal/notifications?limit=${safeLimit}`, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error fetching portal notifications:', error);
+      return { success: false, error: String(error), data: [] };
+    }
+  },
+
+  async markPortalNotification(notificationId: string, acknowledged = false) {
+    try {
+      const response = await fetch(`/api/portal/notifications/${encodeURIComponent(notificationId)}`, {
+        method: 'PATCH',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({ acknowledged })
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error updating portal notification:', error);
+      return { success: false, error: String(error) };
     }
   },
 

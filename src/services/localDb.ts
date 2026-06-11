@@ -394,6 +394,19 @@ export async function getEndpointCacheMeta(endpoint: string): Promise<OfflineCac
   return row || null;
 }
 
+export async function clearSensitiveOfflineCacheForUser(userId?: string | null) {
+  const safeUserId = String(userId || '').trim();
+  if (safeUserId) {
+    await db.records.where('user_id').equals(safeUserId).delete();
+    localStorage.removeItem(logBackupKeyForUser(safeUserId));
+    localStorage.removeItem(persistentSeedKeyForUser(safeUserId));
+  }
+  await db.cache_meta.clear();
+  sessionStorage.removeItem(SESSION_SEED_KEY);
+  derivedKeyCache = null;
+  seedInFlight = null;
+}
+
 let isSyncing = false;
 let lastSyncAttempt = 0;
 const SYNC_COOLDOWN = 5000;

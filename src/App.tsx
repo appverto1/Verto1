@@ -2,7 +2,7 @@
 import { GlobalStyles, ENERGY_TAGS, ADULT_CONVENTIONAL_TAGS } from './components/Common';
 import { testSupabaseConnection, getSupabase, ensureFreshSession } from './lib/supabase';
 import { Database, CheckCircle2, AlertCircle, Lock, WifiOff, LayoutDashboard } from 'lucide-react';
-import { getFailedSyncRecords, resetFailedSyncRecord, syncOfflineData } from './services/localDb';
+import { clearSensitiveOfflineCacheForUser, getFailedSyncRecords, resetFailedSyncRecord, syncOfflineData } from './services/localDb';
 import { dataService } from './services/dataService';
 import { formatProfessionalRegistry } from './utils/professionalRegistry';
 import { resolveAbaPromptLevel } from './utils/abaPromptLevels';
@@ -169,6 +169,7 @@ export default function App() {
     /^\/portal\/confirmar-vinculo\/?$/i.test(window.location.pathname);
   const isAuthActionRoute = isActivationRoute || isResetPasswordRoute;
   const [user, setUser] = useState<any>(null); 
+  const userResolutionRef = useRef<{ key: string; promise: Promise<any>; settledAt: number } | null>(null);
   const [loading, setLoading] = useState(true);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [deferredInstallPrompt, setDeferredInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
@@ -689,10 +690,42 @@ export default function App() {
   };
 
   const applyResolvedUserState = async (candidateUser: any, supabaseSession?: any) => {
+    const resolutionKey = [
+      String(candidateUser?.id || supabaseSession?.user?.id || '').trim(),
+      String(candidateUser?.activeWorkspaceId || candidateUser?.clinicId || '').trim(),
+      String(candidateUser?.role || '').trim().toLowerCase()
+    ].join('|');
+    const existingResolution = userResolutionRef.current;
+    if (
+      resolutionKey &&
+      existingResolution?.key === resolutionKey &&
+      (existingResolution.settledAt === 0 || Date.now() - existingResolution.settledAt < 1500)
+    ) {
+      return await existingResolution.promise;
+    }
+
+    const resolutionPromise = (async () => {
     const enrichedUser = enrichUserFromSessionMetadata(candidateUser, supabaseSession);
     const alignedUser = alignWorkspaceFromStorage(enrichedUser);
     const restoredUser = await restoreWorkspaceContextIfNeeded(alignedUser);
     let resolvedUser = restoredUser;
+
+    const commitUserState = (nextUser: any) => {
+      setUser(nextUser);
+      setProfilePicture(nextUser?.profilePicture || nextUser?.profile_picture || null);
+      setCrp(formatProfessionalRegistry(nextUser?.crp || ''));
+      if (hasValidWorkspaceContext(nextUser)) {
+        setLastActiveWorkspaceId(nextUser?.activeWorkspaceId || nextUser?.clinicId);
+      }
+      setShowWorkspacePicker(computeWorkspacePickerVisibility(nextUser));
+    };
+
+    // Libera a primeira tela antes de buscar dados profissionais secundários.
+    commitUserState(restoredUser);
+    const role = String(restoredUser?.role || '').trim().toLowerCase();
+    if (['patient', 'responsible', 'responsavel', 'guardian'].includes(role)) {
+      return restoredUser;
+    }
 
     try {
       const profileResult = await dataService.getUserProfile(String(restoredUser?.id || ''));
@@ -744,15 +777,23 @@ export default function App() {
       console.warn('Profile refresh after session failed:', error);
     }
 
-    setUser(resolvedUser);
-    setProfilePicture(resolvedUser?.profilePicture || resolvedUser?.profile_picture || null);
-    setCrp(formatProfessionalRegistry(resolvedUser?.crp || ''));
-    if (hasValidWorkspaceContext(resolvedUser)) {
-      setLastActiveWorkspaceId(resolvedUser?.activeWorkspaceId || resolvedUser?.clinicId);
-    }
-    setShowWorkspacePicker(computeWorkspacePickerVisibility(resolvedUser));
+    commitUserState(resolvedUser);
 
     return resolvedUser;
+    })();
+    userResolutionRef.current = { key: resolutionKey, promise: resolutionPromise, settledAt: 0 };
+    try {
+      const result = await resolutionPromise;
+      if (userResolutionRef.current?.promise === resolutionPromise) {
+        userResolutionRef.current.settledAt = Date.now();
+      }
+      return result;
+    } catch (error) {
+      if (userResolutionRef.current?.promise === resolutionPromise) {
+        userResolutionRef.current = null;
+      }
+      throw error;
+    }
   };
 
   const isDataUrl = (value: unknown) =>
@@ -1569,9 +1610,7 @@ export default function App() {
         if (!keyResponse.ok || !keyPayload?.publicKey) return;
         const applicationServerKey = urlBase64ToUint8Array(String(keyPayload.publicKey));
 
-        if (Notification.permission === 'default') {
-          await Notification.requestPermission();
-        }
+        // A permissão deve ser solicitada somente por ação explícita em Configurações.
         if (cancelled || Notification.permission !== 'granted') return;
 
         const registration = await navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' });
@@ -2158,6 +2197,7 @@ export default function App() {
     let running = false;
     let loadedOnce = false;
     let lastRefreshAt = 0;
+    let requestGeneration = 0;
     const minimumRefreshIntervalMs = 5 * 60 * 1000;
 
     const fetchPatientScopedData = async (force = false) => {
@@ -2167,31 +2207,21 @@ export default function App() {
       if (!force && now - lastRefreshAt < minimumRefreshIntervalMs) return;
       lastRefreshAt = now;
       running = true;
+      const requestId = ++requestGeneration;
       try {
         if (mounted && !loadedOnce) setPatientContextLoaded(false);
         const identity = resolvePatientIdentityForPortal(user);
-        const [historyRes, historyByEmailRes, historyByIdRes, tasksRes, assignedTasksRes, notesRes, protocolsRes] = await Promise.allSettled([
+        const [historyRes, notesRes] = await Promise.allSettled([
           dataService.getPatientSelfHistory(),
-          dataService.getHistoryByEmail(user.email),
-          identity?.patientId ? dataService.getHistory(identity.patientId) : Promise.resolve({ success: true, data: [] }),
-          dataService.getPatientSelfTasks(),
-          dataService.getPatientSelfAssignedTasks(),
-          dataService.getNotesByEmail(user.email),
-          dataService.getPatientSelfProtocols()
+          dataService.getNotesByEmail(user.email)
         ]);
+        if (!mounted || requestId !== requestGeneration) return;
 
       const safeHistoryRes = historyRes.status === 'fulfilled' ? historyRes.value : null;
-      const safeHistoryByEmailRes = historyByEmailRes.status === 'fulfilled' ? historyByEmailRes.value : null;
-      const safeHistoryByIdRes = historyByIdRes.status === 'fulfilled' ? historyByIdRes.value : null;
-      const safeTasksRes = tasksRes.status === 'fulfilled' ? tasksRes.value : null;
-      const safeAssignedTasksRes = assignedTasksRes.status === 'fulfilled' ? assignedTasksRes.value : null;
       const safeNotesRes = notesRes.status === 'fulfilled' ? notesRes.value : null;
-      const safeProtocolsRes = protocolsRes.status === 'fulfilled' ? protocolsRes.value : null;
 
       const mergedHistoryRaw = [
-        ...(Array.isArray(safeHistoryRes?.data) ? safeHistoryRes.data : []),
-        ...(Array.isArray(safeHistoryByEmailRes?.data) ? safeHistoryByEmailRes.data : []),
-        ...(Array.isArray(safeHistoryByIdRes?.data) ? safeHistoryByIdRes.data : [])
+        ...(Array.isArray(safeHistoryRes?.data) ? safeHistoryRes.data : [])
       ];
 
       const historySeen = new Set<string>();
@@ -2210,8 +2240,7 @@ export default function App() {
 
       const candidateResolvedIds = [
         ...(Array.isArray(mergedHistory) ? mergedHistory : []),
-        ...(Array.isArray(safeTasksRes?.data) ? safeTasksRes.data : []),
-        ...(Array.isArray(safeAssignedTasksRes?.data) ? safeAssignedTasksRes.data : [])
+        ...(identity?.patientId ? [{ patient_id: identity.patientId }] : [])
       ]
         .map((row: any) => String(row?.patient_id || row?.patientId || '').trim())
         .filter((id: string) => id.length > 0 && id !== String(user.id || '').trim());
@@ -2226,6 +2255,40 @@ export default function App() {
         historyRef.current = normalizedHistory;
         setHistory(normalizedHistory);
       }
+      if (mounted) setTherapistNotes(
+        normalizeAndDecorateNotes(Array.isArray(safeNotesRes?.data) ? safeNotesRes.data : [])
+      );
+
+      const fetchedTreatmentStatus = String(safeHistoryRes?.treatmentStatus || '').trim().toLowerCase();
+      if (mounted && fetchedTreatmentStatus && fetchedTreatmentStatus !== String(user?.treatmentStatus || '').trim().toLowerCase()) {
+        setUser((prev: any) => {
+          if (!prev || prev.id !== user.id) return prev;
+          return { ...prev, treatmentStatus: fetchedTreatmentStatus };
+        });
+      }
+      if (mounted) {
+        loadedOnce = true;
+        setPatientContextLoaded(true);
+      }
+
+      const [tasksRes, assignedTasksRes, protocolsRes] = await Promise.allSettled([
+        dataService.getPatientSelfTasks(),
+        dataService.getPatientSelfAssignedTasks(),
+        dataService.getPatientSelfProtocols()
+      ]);
+      if (!mounted || requestId !== requestGeneration) return;
+      const safeTasksRes = tasksRes.status === 'fulfilled' ? tasksRes.value : null;
+      const safeAssignedTasksRes = assignedTasksRes.status === 'fulfilled' ? assignedTasksRes.value : null;
+      const safeProtocolsRes = protocolsRes.status === 'fulfilled' ? protocolsRes.value : null;
+
+      const secondaryResolvedId = [
+        ...(Array.isArray(safeTasksRes?.data) ? safeTasksRes.data : []),
+        ...(Array.isArray(safeAssignedTasksRes?.data) ? safeAssignedTasksRes.data : [])
+      ]
+        .map((row: any) => String(row?.patient_id || row?.patientId || '').trim())
+        .find((id: string) => id.length > 0 && id !== String(user.id || '').trim());
+      if (secondaryResolvedId) setResolvedPatientPortalId(secondaryResolvedId);
+
       if (mounted) setTasks((() => {
         const baseTasks = Array.isArray(safeTasksRes?.data)
           ? safeTasksRes.data.map((t: any) => ({
@@ -2277,9 +2340,6 @@ export default function App() {
         return [...baseTasks, ...assignedPending];
       })());
 
-      if (mounted) setTherapistNotes(
-        normalizeAndDecorateNotes(Array.isArray(safeNotesRes?.data) ? safeNotesRes.data : [])
-      );
       if (mounted) setProtocols(Array.isArray(safeProtocolsRes?.data) ? safeProtocolsRes.data : []);
 
       const assignedCount = Array.isArray(safeAssignedTasksRes?.data) ? safeAssignedTasksRes.data.length : 0;
@@ -2289,17 +2349,6 @@ export default function App() {
           (safeAssignedTasksRes?.success === false && assignedCount === 0)
       );
 
-      const fetchedTreatmentStatus = String(safeHistoryRes?.treatmentStatus || '').trim().toLowerCase();
-      if (mounted && fetchedTreatmentStatus && fetchedTreatmentStatus !== String(user?.treatmentStatus || '').trim().toLowerCase()) {
-        setUser((prev: any) => {
-          if (!prev || prev.id !== user.id) return prev;
-          return { ...prev, treatmentStatus: fetchedTreatmentStatus };
-        });
-      }
-        if (mounted) {
-          loadedOnce = true;
-          setPatientContextLoaded(true);
-        }
       } finally {
         running = false;
       }
@@ -4896,12 +4945,19 @@ export default function App() {
     };
   }, [allPatients, therapistNotes]);
 
-  const handleAddFamilyNote = async (pid: any, txt: string, image?: string, imagePath?: string) => {
+  const handleAddFamilyNote = async (
+    pid: any,
+    txt: string,
+    image?: string,
+    imagePath?: string,
+    entryKind: 'diary' | 'note' = 'diary'
+  ) => {
     const identity = resolvePatientIdentityForPortal({ patientId: pid });
     const targetPatientId = String(identity.patientId || pid || user?.id || '').trim();
     const recordId = createAppointmentId();
     const createdAt = new Date().toISOString();
     const isPhotoRecord = Boolean(image);
+    const isSimpleNote = entryKind === 'note';
     // Evita duplicidade: família persiste via histórico clínico (fonte única de verdade).
     
     const newHistoryItem = {
@@ -4910,23 +4966,26 @@ export default function App() {
       patient_id: targetPatientId,
       patient_email: identity.patientEmail,
       type: isPhotoRecord ? 'photo' : 'family_note',
-      title: isPhotoRecord ? "Foto enviada" : "Registro da Família",
+      title: isPhotoRecord ? "Foto enviada" : isSimpleNote ? "Anotação da Família" : "Registro da Família",
       score: 0,
       time: new Date(createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       note: txt,
       image: image,
       image_path: imagePath || null,
-      icon: isPhotoRecord ? "📷" : "🏠",
+      icon: isPhotoRecord ? "📷" : isSimpleNote ? "📝" : "🏠",
       dateGroup: "Hoje",
       date: createdAt,
       created_at: createdAt,
-      source: 'family_portal'
+      source: isSimpleNote ? 'family_portal_note' : 'family_portal'
     };
 
     // Also add to history timeline
     setHistory(prev => [newHistoryItem, ...prev.filter((item: any) => String(item.id) !== recordId)]);
 
-    onAddActivityLog("Registro da Família", `Nova anotação da família adicionada para ${formatPatientLabel({ name: identity.patientName, id: targetPatientId })}.`);
+    onAddActivityLog(
+      isSimpleNote ? "Anotação da Família" : "Registro da Família",
+      `Nova anotação da família adicionada para ${formatPatientLabel({ name: identity.patientName, id: targetPatientId })}.`
+    );
 
     // Sync to Backend
     const { dataService } = await import('./services/dataService');
@@ -4936,15 +4995,15 @@ export default function App() {
       patient_email: identity.patientEmail,
       patient_name: identity.patientName,
       type: isPhotoRecord ? 'photo' : 'family_note',
-      title: isPhotoRecord ? "Foto enviada" : "Registro da Família",
+      title: isPhotoRecord ? "Foto enviada" : isSimpleNote ? "Anotação da Família" : "Registro da Família",
       score: 0,
       note: txt,
       image: image,
       image_path: imagePath || null,
-      icon: isPhotoRecord ? "📷" : "🏠",
+      icon: isPhotoRecord ? "📷" : isSimpleNote ? "📝" : "🏠",
       created_at: createdAt,
       date_group: createdAt.slice(0, 10),
-      source: 'family_portal'
+      source: isSimpleNote ? 'family_portal_note' : 'family_portal'
     });
 
     if (!historySaveResult?.success) {
@@ -4976,6 +5035,7 @@ export default function App() {
 
   const handleLogout = async () => {
     manualLogoutInProgressRef.current = true;
+    const signingOutUserId = String(user?.id || '').trim();
     try {
       await onAddActivityLog("Logout do Sistema", "O profissional encerrou a sessÃ£o com seguranÃ§a.", "system");
       await Promise.race([
@@ -4998,9 +5058,28 @@ export default function App() {
     } catch (error) {
       console.error('Logout error:', error);
     }
+    try {
+      await clearSensitiveOfflineCacheForUser(signingOutUserId);
+      Object.keys(window.localStorage)
+        .filter((key) =>
+          key.startsWith('verto.patient-dashboard-chart-filters:') ||
+          key.startsWith('kids_star_seen_total:')
+        )
+        .forEach((key) => window.localStorage.removeItem(key));
+    } catch (error) {
+      console.warn('Sensitive patient cache cleanup failed:', error);
+    }
     setLastActiveWorkspaceId(null);
     resetWorkspaceScopedState();
     setClinicStateHydrated(false);
+    setResolvedPatientPortalId('');
+    setPatientContextLoaded(false);
+    setHistory([]);
+    historyRef.current = [];
+    setTasks([]);
+    setTherapistNotes([]);
+    setProtocols([]);
+    setProfilePicture(null);
     setUser(null);
     setShowWorkspacePicker(false);
     window.setTimeout(() => {

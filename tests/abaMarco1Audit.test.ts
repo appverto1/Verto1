@@ -151,7 +151,7 @@ test('ABC pos-encerramento exige complemento autorizado', () => {
 
 test('relatorio pos-encerramento deriva do SessionSummary salvo', () => {
   assert.match(sessionModeCode, /const summarySaveResult = await dataService\.saveAbaSessionSummary/);
-  assert.match(sessionModeCode, /setPostClosureSummary\(\{[\s\S]*?summarySaveResult\?\.data\?\.id/m);
+  assert.match(sessionModeCode, /const persistedSummary = \{[\s\S]*?summarySaveResult\?\.data\?\.id[\s\S]*?setPostClosureSummary\(persistedSummary\)/m);
   const summary = calculateSessionSummary('session-1', {
     trials: [{ sessionId: 'session-1', trialOutcome: 'independent', score: 1, independent: true, correct: true }]
   });

@@ -141,7 +141,9 @@ test('frontend expõe anamnese apenas como ficha solicitada e organizada em menu
     assert.match(patientDashboardCode, label);
   }
 
-  assert.match(patientDashboardCode, /shouldOfferPortalAnamnesis \? \[\{ id: 'anamnesis'/);
+  assert.match(patientDashboardCode, /\{ id: 'anamnesis', label: 'Anamnese'/);
+  assert.match(patientDashboardCode, /portalAnamnesisRequestRef/);
+  assert.doesNotMatch(patientDashboardCode, /shouldOfferPortalAnamnesis \? \[\{ id: 'anamnesis'/);
   assert.match(patientDashboardCode, /portalSection === 'appointments' && portalAppointmentsPanel/);
   assert.match(patientDashboardCode, /portalSection === 'anamnesis' && portalAnamnesisPanel/);
   assert.match(patientDashboardCode, /prefillAnswers/);

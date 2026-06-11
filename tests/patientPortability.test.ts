@@ -46,7 +46,7 @@ test('duplicidade entre clinicas bloqueia apenas quando especialidade coincide',
   assert.match(serverCode, /async function findPatientSpecialtyConflictAcrossClinics/);
   assert.match(serverCode, /requested\.size === 0/);
   assert.match(serverCode, /if \(requested\.has\(key\)\)/);
-  const patientPost = routeSlice("app.post('/api/patients',", 6500);
+  const patientPost = routeSlice("app.post('/api/patients',", 9000);
   assert.match(patientPost, /requestedSpecialtyKeys = derivePatientSpecialtyKeysFromPayload/);
   assert.match(patientPost, /PATIENT_SPECIALTY_CONFLICT_OTHER_CLINIC/);
 });

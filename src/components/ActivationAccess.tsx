@@ -1,5 +1,6 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
 import { getSupabase } from '../lib/supabase';
+import { GoogleIcon } from './GoogleIcon';
 
 type ActivationAccessProps = {
   onLogin: (
@@ -350,6 +351,7 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
             disabled={loading}
             className="w-full h-11 rounded-xl border border-slate-200 bg-white text-slate-800 font-semibold hover:bg-slate-50 transition disabled:opacity-60"
           >
+            <GoogleIcon size={18} />
             {isRecoveryRoute ? 'Continuar com Google' : 'Entrar com Google'}
           </button>
 

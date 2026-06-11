@@ -14,6 +14,21 @@ type CronServiceOptions = {
   logger?: Pick<Console, 'log' | 'warn' | 'error'>;
 };
 
+type ActiveCronServiceOptions = {
+  supabase: any;
+  vapidPublicKey: string | null;
+  vapidPrivateKey: string | null;
+  logger: Pick<Console, 'log' | 'warn' | 'error'>;
+};
+
+export type AppointmentReminderRunSummary = {
+  skipped: boolean;
+  totalCandidates: number;
+  sent24h: number;
+  sent12h: number;
+  failed: number;
+};
+
 type ReminderKind = '24h' | '12h';
 
 type ReminderAppointment = {
@@ -58,7 +73,7 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-
 
 let started = false;
 let running = false;
-let activeOptions: Required<CronServiceOptions> | null = null;
+let activeOptions: ActiveCronServiceOptions | null = null;
 const recentlySentReminders = new Map<string, number>();
 
 const sanitizeText = (value: unknown, maxLength = 240) =>
@@ -163,7 +178,7 @@ const mergeAppointment = (
 };
 
 async function fetchAppointmentsTable(
-  options: Required<CronServiceOptions>,
+  options: ActiveCronServiceOptions,
   queryScheduledStartUtc: dayjs.Dayjs,
   queryScheduledEndUtc: dayjs.Dayjs,
 ) {
@@ -212,7 +227,7 @@ async function fetchAppointmentsTable(
 }
 
 async function fetchClinicStateAppointments(
-  options: Required<CronServiceOptions>,
+  options: ActiveCronServiceOptions,
   queryScheduledStartUtc: dayjs.Dayjs,
   queryScheduledEndUtc: dayjs.Dayjs,
 ) {
@@ -278,7 +293,7 @@ async function fetchClinicStateAppointments(
 }
 
 async function fetchReminderAppointments(
-  options: Required<CronServiceOptions>,
+  options: ActiveCronServiceOptions,
   queryScheduledStartUtc: dayjs.Dayjs,
   queryScheduledEndUtc: dayjs.Dayjs,
 ) {
@@ -307,7 +322,7 @@ async function updateAppointmentsTableMarker(params: {
   appointmentId: string;
   kind: ReminderKind;
   sentAt: string;
-  logger: Required<CronServiceOptions>['logger'];
+  logger: ActiveCronServiceOptions['logger'];
 }) {
   if (!isUuid(params.appointmentId)) return;
 
@@ -351,7 +366,7 @@ async function updateClinicStateMarker(params: {
   appointmentId: string;
   kind: ReminderKind;
   sentAt: string;
-  logger: Required<CronServiceOptions>['logger'];
+  logger: ActiveCronServiceOptions['logger'];
 }) {
   const { data, error } = await params.supabase
     .from('clinic_state')
@@ -411,7 +426,7 @@ async function markReminderAsSent(params: {
   supabase: any;
   appointment: ReminderAppointment;
   kind: ReminderKind;
-  logger: Required<CronServiceOptions>['logger'];
+  logger: ActiveCronServiceOptions['logger'];
 }) {
   const sentAt = dayjs().utc().toISOString();
   await updateAppointmentsTableMarker({
@@ -471,10 +486,94 @@ const chooseDueReminder = (
   return null;
 };
 
-async function runAppointmentReminderJob(options: Required<CronServiceOptions>, trigger: string) {
-  if (running) return;
+async function persistPortalReminder(params: {
+  options: ActiveCronServiceOptions;
+  appointment: ReminderAppointment;
+  kind: ReminderKind;
+  title: string;
+  body: string;
+  scheduledFor: string;
+}) {
+  const patientResult = await params.options.supabase
+    .from('patients')
+    .select('id, clinic_id, responsible_user_id, email')
+    .eq('id', params.appointment.patientId)
+    .eq('is_active', true)
+    .is('deleted_at', null)
+    .limit(1)
+    .maybeSingle();
+
+  if (patientResult.error) {
+    params.options.logger.warn('[Appointment Reminder Cron] Paciente do lembrete não pôde ser confirmado.', {
+      appointmentId: params.appointment.appointmentId,
+      message: patientResult.error.message
+    });
+    return false;
+  }
+
+  const patient = patientResult.data;
+  if (!patient?.id) return false;
+  const recipientUserId = isUuid(patient?.responsible_user_id) ? sanitizeText(patient.responsible_user_id, 120) : null;
+  const recipientEmail = sanitizeEmail(params.appointment.patientEmail || patient?.email) || null;
+  if (!recipientUserId && !recipientEmail) return false;
+
+  const recipientKey = recipientUserId || recipientEmail;
+  const idempotencyKey = `${params.appointment.appointmentId}:${params.kind}:${recipientKey}`;
+  const sentAt = dayjs().utc().toISOString();
+  const { error } = await params.options.supabase
+    .from('portal_notifications')
+    .upsert({
+      organization_id: isUuid(params.appointment.clinicId || patient?.clinic_id)
+        ? sanitizeText(params.appointment.clinicId || patient?.clinic_id, 120)
+        : null,
+      clinic_id: isUuid(params.appointment.clinicId || patient?.clinic_id)
+        ? sanitizeText(params.appointment.clinicId || patient?.clinic_id, 120)
+        : null,
+      recipient_user_id: recipientUserId,
+      recipient_email: recipientEmail,
+      patient_id: patient.id,
+      appointment_id: isUuid(params.appointment.appointmentId) ? params.appointment.appointmentId : null,
+      type: `appointment_reminder_${params.kind}`,
+      title: params.title,
+      message: params.body,
+      sent_at: sentAt,
+      scheduled_for: params.scheduledFor,
+      idempotency_key: idempotencyKey,
+      metadata: {
+        reminderKind: params.kind,
+        scheduledAt: params.appointment.scheduledAt
+      }
+    }, { onConflict: 'idempotency_key' });
+
+  if (error) {
+    const missingTable = String(error.code || '') === '42P01' || /portal_notifications/i.test(String(error.message || ''));
+    params.options.logger.warn('[Appointment Reminder Cron] Notificação interna não persistida.', {
+      appointmentId: params.appointment.appointmentId,
+      reminderKind: params.kind,
+      schemaPending: missingTable,
+      message: error.message
+    });
+    return false;
+  }
+  return true;
+}
+
+async function runAppointmentReminderJob(
+  options: ActiveCronServiceOptions,
+  trigger: string
+): Promise<AppointmentReminderRunSummary> {
+  if (running) {
+    return { skipped: true, totalCandidates: 0, sent24h: 0, sent12h: 0, failed: 0 };
+  }
   running = true;
 
+  let summary: AppointmentReminderRunSummary = {
+    skipped: false,
+    totalCandidates: 0,
+    sent24h: 0,
+    sent12h: 0,
+    failed: 0
+  };
   try {
     const nowUtc = dayjs().utc();
     const reminderWindowStartUtc = nowUtc.subtract(CRON_LOOKBACK_MINUTES, 'minute');
@@ -486,6 +585,7 @@ async function runAppointmentReminderJob(options: Required<CronServiceOptions>, 
       queryScheduledStartUtc,
       queryScheduledEndUtc,
     );
+    summary.totalCandidates = appointments.length;
 
     let sent24h = 0;
     let sent12h = 0;
@@ -515,24 +615,35 @@ async function runAppointmentReminderJob(options: Required<CronServiceOptions>, 
 
       try {
         const scheduled = dayjs(appointment.scheduledAt).tz(BRAZIL_TIMEZONE);
-        const result = await sendAppointmentNotification({
-          supabase: options.supabase,
-          patientId: appointment.patientId,
-          patientEmail: appointment.patientEmail,
-          appointment: {
-            id: appointment.appointmentId,
-            scheduledAt: appointment.scheduledAt,
-            reminderKind: dueReminder.kind,
-            dateLabel: scheduled.isValid() ? scheduled.format('DD/MM/YYYY') : null,
-            timeLabel: scheduled.isValid() ? scheduled.format('HH:mm') : null
-          },
+        const body = formatReminderBody(appointment.scheduledAt, dueReminder.fallbackBody);
+        const persisted = await persistPortalReminder({
+          options,
+          appointment,
+          kind: dueReminder.kind,
           title: dueReminder.title,
-          body: formatReminderBody(appointment.scheduledAt, dueReminder.fallbackBody),
-          reminderKind: dueReminder.kind,
-          logger: options.logger
+          body,
+          scheduledFor: getReminderDueUtc(appointment.scheduledAt, dueReminder.hoursBefore).toISOString()
         });
+        const result = options.vapidPublicKey && options.vapidPrivateKey
+          ? await sendAppointmentNotification({
+              supabase: options.supabase,
+              patientId: appointment.patientId,
+              patientEmail: appointment.patientEmail,
+              appointment: {
+                id: appointment.appointmentId,
+                scheduledAt: appointment.scheduledAt,
+                reminderKind: dueReminder.kind,
+                dateLabel: scheduled.isValid() ? scheduled.format('DD/MM/YYYY') : null,
+                timeLabel: scheduled.isValid() ? scheduled.format('HH:mm') : null
+              },
+              title: dueReminder.title,
+              body,
+              reminderKind: dueReminder.kind,
+              logger: options.logger
+            })
+          : { sent: 0, failed: 0 };
 
-        if (result.sent > 0) {
+        if (persisted || result.sent > 0) {
           await markReminderAsSent({
             supabase: options.supabase,
             appointment,
@@ -541,7 +652,7 @@ async function runAppointmentReminderJob(options: Required<CronServiceOptions>, 
           });
           
           if (dueReminder.kind === '24h') {
-            sent24h += result.sent;
+            sent24h += 1;
             options.logger?.log?.('[Appointment Reminder] Notificacao 24h enviada.', {
               appointmentId: appointment.appointmentId,
               patientId: appointment.patientId,
@@ -549,7 +660,7 @@ async function runAppointmentReminderJob(options: Required<CronServiceOptions>, 
             });
           }
           if (dueReminder.kind === '12h') {
-            sent12h += result.sent;
+            sent12h += 1;
             options.logger?.log?.('[Appointment Reminder] Notificacao 12h enviada (24h nao respondida).', {
               appointmentId: appointment.appointmentId,
               patientId: appointment.patientId,
@@ -558,8 +669,9 @@ async function runAppointmentReminderJob(options: Required<CronServiceOptions>, 
             });
           }
         }
-        if (result.sent <= 0) {
+        if (!persisted && result.sent <= 0) {
           recentlySentReminders.delete(dedupeKey);
+          failed += 1;
         }
         failed += result.failed;
       } catch (error: any) {
@@ -583,20 +695,30 @@ async function runAppointmentReminderJob(options: Required<CronServiceOptions>, 
       reminderWindowEndUtc: reminderWindowEndUtc.toISOString(),
       businessTimezone: BRAZIL_TIMEZONE
     });
+    summary = { skipped: false, totalCandidates: appointments.length, sent24h, sent12h, failed };
   } catch (error: any) {
     options.logger.error('[Appointment Reminder Cron] Falha geral nao bloqueante.', {
       trigger,
       message: error?.message || String(error)
     });
+    summary.failed += 1;
   } finally {
     running = false;
   }
+  return summary;
 }
 
 export function triggerAppointmentReminderScan(trigger = 'manual_trigger') {
   if (!activeOptions) return false;
   void runAppointmentReminderJob(activeOptions, trigger);
   return true;
+}
+
+export async function runAppointmentReminderScan(trigger = 'internal_endpoint') {
+  if (!activeOptions) {
+    return { skipped: true, totalCandidates: 0, sent24h: 0, sent12h: 0, failed: 0 };
+  }
+  return await runAppointmentReminderJob(activeOptions, trigger);
 }
 
 export function startAppointmentReminderCron(options: CronServiceOptions) {
@@ -612,11 +734,6 @@ export function startAppointmentReminderCron(options: CronServiceOptions) {
     return;
   }
 
-  if (!options.vapidPublicKey || !options.vapidPrivateKey) {
-    logger.warn('[Appointment Reminder Cron] VAPID ausente. Servico nao iniciado.');
-    return;
-  }
-
   started = true;
   activeOptions = {
     supabase: options.supabase,
@@ -628,17 +745,18 @@ export function startAppointmentReminderCron(options: CronServiceOptions) {
   cron.schedule(
     '*/15 * * * *',
     () => {
-      void runAppointmentReminderJob(activeOptions as Required<CronServiceOptions>, 'node_cron_15_minutes');
+      void runAppointmentReminderJob(activeOptions as ActiveCronServiceOptions, 'node_cron_15_minutes');
     },
     { timezone: 'UTC' }
   );
 
   setTimeout(() => {
-    void runAppointmentReminderJob(activeOptions as Required<CronServiceOptions>, 'startup_warmup');
+    void runAppointmentReminderJob(activeOptions as ActiveCronServiceOptions, 'startup_warmup');
   }, 20 * 1000);
 
   logger.log('[Appointment Reminder Cron] Servico iniciado no backend Node.js a cada 15 minutos.', {
     timezone: 'UTC',
-    businessTimezone: BRAZIL_TIMEZONE
+    businessTimezone: BRAZIL_TIMEZONE,
+    pushEnabled: Boolean(options.vapidPublicKey && options.vapidPrivateKey)
   });
 }

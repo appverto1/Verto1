@@ -61,14 +61,14 @@ test('estado operacional mutavel tem caminho persistente explicito', () => {
 });
 
 test('diario da familia usa historico como fonte persistente e idempotente', () => {
-  const familySave = sliceFrom(appCode, 'const handleAddFamilyNote = async', 3600);
+  const familySave = sliceFrom(appCode, 'const handleAddFamilyNote = async', 4800);
   assert.match(familySave, /const recordId = createAppointmentId\(\)/);
   assert.match(familySave, /const createdAt = new Date\(\)\.toISOString\(\)/);
   assert.match(familySave, /id:\s*recordId/);
   assert.match(familySave, /patient_id:\s*targetPatientId/);
   assert.match(familySave, /image_path:\s*imagePath \|\| null/);
   assert.match(familySave, /created_at:\s*createdAt/);
-  assert.match(familySave, /source:\s*'family_portal'/);
+  assert.match(familySave, /source:\s*isSimpleNote \? 'family_portal_note' : 'family_portal'/);
   assert.match(familySave, /const persistedPatientId = String\(historySaveResult\.data\.patient_id \|\| historySaveResult\.data\.patientId \|\| ''\)\.trim\(\)/);
   assert.match(familySave, /setResolvedPatientPortalId\(persistedPatientId\)/);
   assert.match(familySave, /return \{ success: true, data: historySaveResult\?\.data \|\| newHistoryItem \}/);

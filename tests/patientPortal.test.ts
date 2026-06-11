@@ -74,7 +74,10 @@ test('anotacoes e documentos sao filtrados para familia sem expor conteudo inter
   assert.match(patientDashboardCode, /const isPortalReleasedDocument = \(document: any\) =>/);
   assert.match(patientDashboardCode, /releasedToPatient/);
   assert.match(patientDashboardCode, /portalReleasedDocuments/);
-  assert.doesNotMatch(patientDashboardCode, /getPatientFiles\(/);
+  assert.match(patientDashboardCode, /portalSection !== 'documents'/);
+  assert.match(patientDashboardCode, /dataService\.getPatientFiles\(portalPatientId\)/);
+  assert.match(serverCode, /source === 'family_portal_document'/);
+  assert.match(serverCode, /visibleToPatient/);
   assert.doesNotMatch(patientDashboardCode, /dangerouslySetInnerHTML/);
 });
 

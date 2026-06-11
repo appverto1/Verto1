@@ -51,7 +51,10 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [familyImagePath, setFamilyImagePath] = useState<string | null>(null);
   const [isDrawingMode, setIsDrawingMode] = useState(false);
   const [showFamilySuccess, setShowFamilySuccess] = useState(false);
+  const [isFamilySaving, setIsFamilySaving] = useState(false);
   const [isFamilyLogOpen, setIsFamilyLogOpen] = useState(false);
+  const [familyAnnotation, setFamilyAnnotation] = useState('');
+  const [familyAnnotationState, setFamilyAnnotationState] = useState({ saving: false, message: '', error: '' });
   const initialAddress = String(user?.address || user?.endereco || user?.anamnesisData?.endereco || '').trim();
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [displayName, setDisplayName] = useState(String(user?.name || 'Paciente'));
@@ -74,6 +77,11 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [portalAppointmentsRangeKey, setPortalAppointmentsRangeKey] = useState('');
   const [portalCalendarMonth, setPortalCalendarMonth] = useState(() => new Date());
   const [portalAppointmentsState, setPortalAppointmentsState] = useState({ loading: false, error: '', message: '' });
+  const [portalNotifications, setPortalNotifications] = useState<any[]>([]);
+  const [portalNotificationsLoaded, setPortalNotificationsLoaded] = useState(false);
+  const [portalPatientFiles, setPortalPatientFiles] = useState<any[]>([]);
+  const [portalPatientFilesLoaded, setPortalPatientFilesLoaded] = useState(false);
+  const [portalFileState, setPortalFileState] = useState({ uploading: false, error: '', message: '' });
   const [selectedPortalAppointment, setSelectedPortalAppointment] = useState<any | null>(null);
   const [portalAppointmentDetail, setPortalAppointmentDetail] = useState<any | null>(null);
   const [portalModal, setPortalModal] = useState<'reschedule' | 'cancel' | 'sign' | ''>('');
@@ -85,6 +93,12 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [portalAnamnesisDraft, setPortalAnamnesisDraft] = useState<Record<string, any>>({});
   const [portalAnamnesisState, setPortalAnamnesisState] = useState({ loading: false, saving: false, message: '', error: '' });
   const [expandedAnamnesisSections, setExpandedAnamnesisSections] = useState<Record<string, boolean>>({});
+  const portalAppointmentsRequestRef = useRef(0);
+  const portalAnamnesisRequestRef = useRef(0);
+  const portalAnamnesisLastLoadedAtRef = useRef(0);
+  const portalNotificationsRequestRef = useRef(0);
+  const portalNotificationsLastLoadedAtRef = useRef(0);
+  const portalFilesRequestRef = useRef(0);
 
   const [isUploading, setIsUploading] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -136,8 +150,6 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   );
   const hasPortalAnamnesis =
     Boolean(portalAnamnesis?.available && (portalAnamnesis?.request?.id || portalAnamnesis?.response?.id));
-  const shouldOfferPortalAnamnesis =
-    hasPortalAnamnesis || portalAnamnesisState.loading || (!portalAnamnesisChecked && hasPortalAnamnesisHint);
   const portalAnamnesisRequestStatus = String(portalAnamnesis?.request?.status || '').toUpperCase();
   const portalAnamnesisResponseStatus = String(portalAnamnesis?.response?.status || '').toUpperCase();
   const portalAnamnesisLocked =
@@ -380,9 +392,11 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   };
 
   const loadPortalAppointments = async (range = getPortalDefaultAppointmentsRange()) => {
+    const requestId = ++portalAppointmentsRequestRef.current;
     const rangeKey = getPortalAppointmentsRangeKey(range);
     setPortalAppointmentsState((prev) => ({ ...prev, loading: true, error: '' }));
     const result = await dataService.getPortalAppointments({ from: range.from, to: range.to, limit: range.limit });
+    if (requestId !== portalAppointmentsRequestRef.current) return;
     if (result?.success) {
       setPortalAppointments(Array.isArray(result.data) ? result.data : []);
       setPortalAppointmentsLoaded(true);
@@ -396,6 +410,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   };
 
   useEffect(() => {
+    portalAppointmentsRequestRef.current += 1;
     setPortalAppointments([]);
     setPortalAppointmentsLoaded(false);
     setPortalAppointmentsRangeKey('');
@@ -413,10 +428,54 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [portalSection, portalCalendarMonth, portalAppointmentsLoaded, portalAppointmentsRangeKey, portalAppointmentsState.loading, user?.id, user?.email]);
 
+  const loadPortalNotifications = async () => {
+    const requestId = ++portalNotificationsRequestRef.current;
+    const result = await dataService.getPortalNotifications(12);
+    if (requestId !== portalNotificationsRequestRef.current) return;
+    portalNotificationsLastLoadedAtRef.current = Date.now();
+    if (result?.success) {
+      setPortalNotifications(Array.isArray(result.data) ? result.data : []);
+    }
+    setPortalNotificationsLoaded(true);
+  };
+
+  useEffect(() => {
+    portalNotificationsRequestRef.current += 1;
+    setPortalNotifications([]);
+    setPortalNotificationsLoaded(false);
+    void loadPortalNotifications();
+    const refreshNotifications = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (Date.now() - portalNotificationsLastLoadedAtRef.current < 30_000) return;
+      void loadPortalNotifications();
+    };
+    window.addEventListener('focus', refreshNotifications);
+    document.addEventListener('visibilitychange', refreshNotifications);
+    return () => {
+      window.removeEventListener('focus', refreshNotifications);
+      document.removeEventListener('visibilitychange', refreshNotifications);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, user?.email, portalPatientId]);
+
+  const markPortalNotificationRead = async (notification: any) => {
+    if (!notification?.id || notification?.read_at) return;
+    setPortalNotifications((current) =>
+      current.map((item) => String(item?.id) === String(notification.id)
+        ? { ...item, read_at: new Date().toISOString() }
+        : item)
+    );
+    const result = await dataService.markPortalNotification(String(notification.id));
+    if (!result?.success) void loadPortalNotifications();
+  };
+
   const loadPortalAnamnesis = async () => {
     if (!portalPatientId) return;
+    const requestId = ++portalAnamnesisRequestRef.current;
     setPortalAnamnesisState((prev) => ({ ...prev, loading: true, error: '' }));
     const result = await dataService.getPortalPatientAnamnesis(portalPatientId);
+    if (requestId !== portalAnamnesisRequestRef.current) return;
+    portalAnamnesisLastLoadedAtRef.current = Date.now();
     if (result?.success) {
       const data = result.data || {};
       setPortalAnamnesis(data);
@@ -441,10 +500,26 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   };
 
   useEffect(() => {
+    portalAnamnesisRequestRef.current += 1;
     setPortalAnamnesis(null);
     setPortalAnamnesisDraft({});
     setPortalAnamnesisChecked(false);
   }, [portalPatientId, user?.email]);
+
+  useEffect(() => {
+    const refreshAnamnesisWhenVisible = () => {
+      if (document.visibilityState !== 'visible' || !portalPatientId) return;
+      if (Date.now() - portalAnamnesisLastLoadedAtRef.current < 15_000) return;
+      void loadPortalAnamnesis();
+    };
+    window.addEventListener('focus', refreshAnamnesisWhenVisible);
+    document.addEventListener('visibilitychange', refreshAnamnesisWhenVisible);
+    return () => {
+      window.removeEventListener('focus', refreshAnamnesisWhenVisible);
+      document.removeEventListener('visibilitychange', refreshAnamnesisWhenVisible);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [portalPatientId]);
 
   useEffect(() => {
     if (!portalPatientId || portalAnamnesisChecked || portalAnamnesisState.loading) return;
@@ -1419,6 +1494,23 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       })
       .slice(0, 30);
   }, [user, sharedNotes, portalPatientKeys, portalPatientEmail]);
+  const visiblePortalDocuments = useMemo(() => {
+    const persisted = portalPatientFiles.map((file: any) => ({
+      key: firstPortalText(file?.id, file?.path, file?.fileName),
+      name: firstPortalText(file?.fileName, file?.file_name, file?.name) || 'Documento',
+      category: firstPortalText(file?.source, file?.mimeType, file?.mime_type) || 'Documento',
+      createdAt: firstPortalText(file?.createdAt, file?.created_at),
+      href: firstPortalText(file?.signedUrl, file?.url),
+      mimeType: firstPortalText(file?.mimeType, file?.mime_type)
+    }));
+    const seen = new Set<string>();
+    return [...persisted, ...portalReleasedDocuments].filter((document: any) => {
+      const key = normalizePortalLower(document.key || `${document.name}|${document.createdAt}|${document.href || ''}`);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [portalPatientFiles, portalReleasedDocuments]);
   const portalReportRows = useMemo(() => {
     return portalAppointments
       .map((appointment: any) => {
@@ -1473,8 +1565,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
   const handleConfirmFamilyNote = async () => {
     if (isReadOnlyMode) return;
-    if (familyNote.trim() || familyImage) {
-      setShowFamilySuccess(true);
+    if ((familyNote.trim() || familyImage) && !isFamilySaving) {
+      setIsFamilySaving(true);
       try {
         let persistedImage = familyImage || undefined;
         let persistedImagePath: string | undefined = familyImagePath || undefined;
@@ -1498,10 +1590,12 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         setFamilyImage(null);
         setFamilyImagePath(null);
         setIsFamilyLogOpen(false);
+        setShowFamilySuccess(true);
+        window.setTimeout(() => setShowFamilySuccess(false), 1600);
       } catch (error: any) {
         alert(error?.message || 'Não foi possível salvar o registro da família. Tente novamente.');
       } finally {
-        setShowFamilySuccess(false);
+        setIsFamilySaving(false);
       }
     }
   };
@@ -1790,19 +1884,13 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const portalMenuItems = [
     { id: 'home', label: 'Início', icon: Smile },
     { id: 'appointments', label: isKidsProfile ? 'Calendário' : 'Consultas', icon: CalendarDays },
-    ...(shouldOfferPortalAnamnesis ? [{ id: 'anamnesis', label: 'Anamnese', icon: FileSignature }] : []),
+    { id: 'anamnesis', label: 'Anamnese', icon: FileSignature },
     { id: 'notes', label: 'Anotações', icon: MessageCircle },
     { id: 'documents', label: 'Documentos', icon: BookOpen },
     { id: 'reports', label: 'Relatório', icon: FileText },
     ...(!isKidsProfile ? [{ id: 'tasks', label: 'Tarefas', icon: Zap }] : []),
     { id: 'profile', label: 'Perfil', icon: Settings }
   ] as Array<{ id: PortalSection; label: string; icon: any }>;
-
-  useEffect(() => {
-    if (portalSection === 'anamnesis' && portalAnamnesisChecked && !hasPortalAnamnesis) {
-      setPortalSection('home');
-    }
-  }, [portalSection, hasPortalAnamnesis, portalAnamnesisChecked]);
 
   const portalMenu = isKidsProfile ? null : (
     <div className={`${isKidsProfile ? 'mb-4' : 'mb-6'} overflow-x-auto no-scrollbar`}>
@@ -1849,9 +1937,35 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     </button>
   ) : null;
 
+  const portalNotificationsSummary = !portalNotificationsLoaded ? (
+    <div className="mb-4 h-20 animate-pulse rounded-[24px] border border-slate-100 bg-white/70" />
+  ) : portalNotifications.length > 0 ? (
+    <div className="mb-4 space-y-2">
+      {portalNotifications.slice(0, 3).map((notification: any) => (
+        <button
+          key={notification.id}
+          type="button"
+          onClick={() => void markPortalNotificationRead(notification)}
+          className={`flex w-full items-start gap-3 rounded-[24px] border px-4 py-3 text-left shadow-sm transition ${
+            notification.read_at
+              ? 'border-slate-100 bg-white/75'
+              : 'border-purple-100 bg-purple-50'
+          }`}
+        >
+          <span className="mt-0.5 rounded-full bg-white p-2 text-[#7a32fc]"><Bell size={15} /></span>
+          <span className="min-w-0">
+            <span className="block text-sm font-black text-slate-900">{notification.title || 'Notificação'}</span>
+            <span className="mt-1 block text-xs font-semibold leading-relaxed text-slate-600">{notification.message}</span>
+          </span>
+        </button>
+      ))}
+    </div>
+  ) : null;
+
   const portalHomeSummary = (
     <React.Fragment>
       {portalAnamnesisTopNotice}
+      {portalNotificationsSummary}
       {!isKidsProfile && (
         <div className="mb-6 grid gap-3 sm:grid-cols-2">
           <button type="button" onClick={() => setPortalSection('tasks')} className="rounded-[24px] border border-emerald-100 bg-white p-4 text-left shadow-sm transition hover:bg-emerald-50">
@@ -2001,12 +2115,103 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     );
   })() : portalPlaceholderPanel('Nenhuma ficha de anamnese liberada para preenchimento agora.');
 
+  const saveFamilyAnnotation = async () => {
+    const text = familyAnnotation.trim();
+    if (!text || familyAnnotationState.saving || isReadOnlyMode) return;
+    setFamilyAnnotationState({ saving: true, message: '', error: '' });
+    const result = await onAddFamilyNote(portalPatientId || user.id, text, undefined, undefined, 'note');
+    if (result?.success === false) {
+      setFamilyAnnotationState({ saving: false, message: '', error: result?.error || 'Não foi possível enviar a anotação.' });
+      return;
+    }
+    setFamilyAnnotation('');
+    setFamilyAnnotationState({ saving: false, message: 'Anotação enviada para a equipe.', error: '' });
+  };
+
+  const loadPortalPatientFiles = async () => {
+    if (!portalPatientId) {
+      setPortalPatientFilesLoaded(true);
+      return;
+    }
+    const requestId = ++portalFilesRequestRef.current;
+    const result = await dataService.getPatientFiles(portalPatientId);
+    if (requestId !== portalFilesRequestRef.current) return;
+    if (result?.success) {
+      setPortalPatientFiles(Array.isArray(result.data) ? result.data : []);
+      setPortalFileState((current) => ({ ...current, error: '' }));
+    } else {
+      setPortalFileState((current) => ({ ...current, error: result?.error || 'Não foi possível carregar os documentos.' }));
+    }
+    setPortalPatientFilesLoaded(true);
+  };
+
+  useEffect(() => {
+    portalFilesRequestRef.current += 1;
+    setPortalPatientFiles([]);
+    setPortalPatientFilesLoaded(false);
+    setPortalFileState({ uploading: false, error: '', message: '' });
+  }, [portalPatientId, user?.email]);
+
+  useEffect(() => {
+    if (portalSection !== 'documents' || portalPatientFilesLoaded) return;
+    void loadPortalPatientFiles();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [portalSection, portalPatientFilesLoaded, portalPatientId]);
+
+  const uploadPortalPatientFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file || !portalPatientId || portalFileState.uploading || isReadOnlyMode) return;
+    if (file.size > 10 * 1024 * 1024) {
+      setPortalFileState({ uploading: false, error: 'O arquivo deve ter no máximo 10 MB.', message: '' });
+      return;
+    }
+    setPortalFileState({ uploading: true, error: '', message: '' });
+    const result = await dataService.uploadPatientFile(portalPatientId, {
+      fileBlob: file,
+      fileName: file.name,
+      contentType: file.type || 'application/octet-stream',
+      source: 'family_portal_document'
+    });
+    if (!result?.success) {
+      setPortalFileState({ uploading: false, error: result?.error || 'Não foi possível enviar o documento.', message: '' });
+      return;
+    }
+    setPortalFileState({ uploading: false, error: '', message: 'Documento enviado com segurança.' });
+    setPortalPatientFilesLoaded(false);
+  };
+
   const portalNotesPanel = (
     <div className="mb-6 rounded-[28px] border border-purple-100 bg-white p-4 shadow-sm sm:p-5">
       <div className="mb-4">
         <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-[#7a32fc]">Anotações</p>
         <h2 className="text-lg font-black text-slate-900">Compartilhadas com a família</h2>
       </div>
+      {!isReadOnlyMode && (
+        <div className="mb-4 rounded-2xl border border-purple-100 bg-purple-50/50 p-3">
+          <label className="text-xs font-black text-slate-700" htmlFor="family-annotation">Enviar observação para a equipe</label>
+          <textarea
+            id="family-annotation"
+            value={familyAnnotation}
+            onChange={(event) => setFamilyAnnotation(event.target.value)}
+            maxLength={4000}
+            className="mt-2 min-h-24 w-full resize-y rounded-2xl border border-white bg-white p-3 text-sm text-slate-700 outline-none focus:border-purple-300"
+            placeholder="Escreva uma observação simples sobre o paciente."
+          />
+          {familyAnnotationState.error && <p className="mt-2 text-xs font-bold text-rose-600">{familyAnnotationState.error}</p>}
+          {familyAnnotationState.message && <p className="mt-2 text-xs font-bold text-emerald-700">{familyAnnotationState.message}</p>}
+          <div className="mt-2 flex justify-end">
+            <button
+              type="button"
+              disabled={!familyAnnotation.trim() || familyAnnotationState.saving}
+              onClick={() => void saveFamilyAnnotation()}
+              className="rounded-xl bg-[#7a32fc] px-4 py-2 text-xs font-black text-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {familyAnnotationState.saving ? 'Enviando...' : 'Enviar anotação'}
+            </button>
+          </div>
+        </div>
+      )}
       {portalSharedNotes.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-purple-100 bg-purple-50/60 px-4 py-5 text-center text-sm font-semibold text-purple-700">
           Nenhuma anotação compartilhada pela clínica até agora.
@@ -2030,17 +2235,31 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
   const portalDocumentsPanel = (
     <div className="mb-6 rounded-[28px] border border-purple-100 bg-white p-4 shadow-sm sm:p-5">
-      <div className="mb-4">
-        <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-[#7a32fc]">Documentos</p>
-        <h2 className="text-lg font-black text-slate-900">Liberados pela clínica</h2>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-[#7a32fc]">Documentos</p>
+          <h2 className="text-lg font-black text-slate-900">Compartilhados com a família</h2>
+        </div>
+        {!isReadOnlyMode && portalPatientId && (
+          <label className="cursor-pointer rounded-xl bg-[#7a32fc] px-4 py-2 text-xs font-black text-white">
+            {portalFileState.uploading ? 'Enviando...' : 'Enviar arquivo'}
+            {!portalFileState.uploading && (
+              <input type="file" accept="image/*,application/pdf" className="hidden" onChange={uploadPortalPatientFile} />
+            )}
+          </label>
+        )}
       </div>
-      {portalReleasedDocuments.length === 0 ? (
+      {portalFileState.error && <p className="mb-3 rounded-xl bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700">{portalFileState.error}</p>}
+      {portalFileState.message && <p className="mb-3 rounded-xl bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700">{portalFileState.message}</p>}
+      {!portalPatientFilesLoaded ? (
+        <div className="h-20 animate-pulse rounded-2xl bg-purple-50" />
+      ) : visiblePortalDocuments.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-purple-100 bg-purple-50/60 px-4 py-5 text-center text-sm font-semibold text-purple-700">
           Nenhum documento liberado para o portal neste momento.
         </div>
       ) : (
         <div className="space-y-2">
-          {portalReleasedDocuments.map((document: any, index: number) => (
+          {visiblePortalDocuments.map((document: any, index: number) => (
             <div key={document.key || `${document.name}-${index}`} className="rounded-2xl border border-slate-100 bg-slate-50/70 px-4 py-3">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
@@ -2106,6 +2325,34 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           })}
         </div>
       )}
+    </div>
+  );
+
+  const portalProfilePanel = (
+    <div className="mb-6 rounded-[28px] border border-purple-100 bg-white p-4 shadow-sm sm:p-5">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-[#7a32fc]">Perfil</p>
+          <h2 className="text-lg font-black text-slate-900">{displayName}</h2>
+        </div>
+        <button
+          type="button"
+          onClick={() => setIsSettingsOpen(true)}
+          className="rounded-xl border border-purple-100 px-3 py-2 text-xs font-black text-[#7a32fc]"
+        >
+          Editar dados permitidos
+        </button>
+      </div>
+      <dl className="grid gap-3 text-sm sm:grid-cols-2">
+        <div className="rounded-2xl bg-slate-50 px-4 py-3">
+          <dt className="text-[10px] font-black uppercase tracking-wider text-slate-400">E-mail da conta</dt>
+          <dd className="mt-1 break-words font-bold text-slate-700">{user?.email || 'Não informado'}</dd>
+        </div>
+        <div className="rounded-2xl bg-slate-50 px-4 py-3">
+          <dt className="text-[10px] font-black uppercase tracking-wider text-slate-400">Endereço</dt>
+          <dd className="mt-1 font-bold text-slate-700">{settingsForm.address || 'Não informado'}</dd>
+        </div>
+      </dl>
     </div>
   );
 
@@ -2508,7 +2755,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                 {portalSection === 'tasks' && portalPlaceholderPanel('Tarefas enviadas pela clínica aparecerão aqui.')}
                 {portalSection === 'reports' && portalReportPanel}
                 {portalSection === 'documents' && portalDocumentsPanel}
-                {portalSection === 'profile' && portalPlaceholderPanel('Use Configurações para atualizar os dados do perfil.')}
+                {portalSection === 'profile' && portalProfilePanel}
 
                 {portalSection === 'home' && (
                   <React.Fragment>
@@ -2695,10 +2942,10 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                   </div>
                   <button 
                     onClick={handleConfirmFamilyNote} 
-                    disabled={showFamilySuccess || (!familyNote.trim() && !familyImage)} 
-                    className={`w-full font-bold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 ${showFamilySuccess ? 'bg-green-500 text-white' : 'bg-blue-600 text-white shadow-blue-600/30 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed'}`}
+                    disabled={isFamilySaving || (!familyNote.trim() && !familyImage)}
+                    className="w-full font-bold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 bg-blue-600 text-white shadow-blue-600/30 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
                   > 
-                    {showFamilySuccess ? <React.Fragment><CheckCircle size={24}/> Sucesso!</React.Fragment> : <React.Fragment><Check size={20} strokeWidth={3} /> Registrar no Histórico</React.Fragment>} 
+                    {isFamilySaving ? <React.Fragment><RefreshCcw size={20} className="animate-spin" /> Enviando...</React.Fragment> : <React.Fragment><Check size={20} strokeWidth={3} /> Registrar no Histórico</React.Fragment>}
                   </button> 
                 </div> 
               </div>
@@ -2893,7 +3140,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       {portalSection === 'tasks' && portalPlaceholderPanel('Tarefas enviadas pela clínica aparecerão aqui.')}
       {portalSection === 'reports' && portalReportPanel}
       {portalSection === 'documents' && portalDocumentsPanel}
-      {portalSection === 'profile' && portalPlaceholderPanel('Use Configurações para atualizar os dados do perfil.')}
+      {portalSection === 'profile' && portalProfilePanel}
       {portalSection === 'home' && (
         <React.Fragment>
       {!dailyCheckinDone ? ( 
