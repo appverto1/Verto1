@@ -28835,7 +28835,7 @@ async function startServer() {
       if (patientIds.length > 0) orParts.push(`patient_id.in.(${patientIds.join(',')})`);
       scoped = orParts.length > 0 ? scoped.or(orParts.join(',')) : scoped.eq('professional_id', '00000000-0000-0000-0000-000000000000');
     }
-    return scoped;
+    return { query: scoped };
   };
 
   const writeClosureAuditLog = async (params: {
@@ -29369,7 +29369,7 @@ async function startServer() {
         .eq('organization_id', organizationId)
         .eq('appointment_id', appointmentId)
         .limit(1);
-      query = await applyClosureTenantScope(query, params.user, organizationId);
+      query = (await applyClosureTenantScope(query, params.user, organizationId)).query;
       const result = await query.maybeSingle();
       if (!result.error) return { data: result.data || null, omittedColumns };
       if (isMissingRelationError(result.error)) return { data: null, omittedColumns };
@@ -29948,7 +29948,7 @@ async function startServer() {
       .eq('organization_id', clinicId)
       .in('appointment_id', appointmentIds)
       .limit(appointmentIds.length);
-    existingQuery = await applyClosureTenantScope(existingQuery, params.user, clinicId);
+    existingQuery = (await applyClosureTenantScope(existingQuery, params.user, clinicId)).query;
     const existingRowsResult = await existingQuery;
     if (existingRowsResult.error && !hasMissingFinancialSchema(existingRowsResult.error)) throw existingRowsResult.error;
     const existingIds = new Set<string>((existingRowsResult.error ? [] : existingRowsResult.data || [])
@@ -30047,7 +30047,7 @@ async function startServer() {
       .eq('organization_id', organizationId)
       .in('appointment_id', validAppointmentIds)
       .limit(validAppointmentIds.length);
-    query = await applyClosureTenantScope(query, user, organizationId);
+    query = (await applyClosureTenantScope(query, user, organizationId)).query;
     const { data, error } = await query;
     if (error) {
       if (hasMissingFinancialSchema(error)) return byAppointment;
@@ -31995,7 +31995,7 @@ async function startServer() {
           .gte('scheduled_start', range.fromIso)
           .lte('scheduled_start', range.toIso);
         if (useRange) scopedQuery = scopedQuery.order('scheduled_start', { ascending: true }).range(from, to);
-        scopedQuery = await applyClosureTenantScope(scopedQuery, req.session.user, clinicId);
+        scopedQuery = (await applyClosureTenantScope(scopedQuery, req.session.user, clinicId)).query;
         if (status) scopedQuery = scopedQuery.eq('readiness_status', status);
         if (onlyPending) scopedQuery = scopedQuery.eq('readiness_status', 'PENDING');
         if (onlyReady) scopedQuery = scopedQuery.eq('readiness_status', 'READY');
@@ -32666,7 +32666,7 @@ async function startServer() {
       .order('scheduled_start', { ascending: true });
     query = applyConferenceFilters(query, params.filters);
     query = params.paginated ? query.range(params.filters.from, params.filters.to) : query.limit(limit);
-    query = await applyClosureTenantScope(query, params.user, params.clinicId);
+    query = (await applyClosureTenantScope(query, params.user, params.clinicId)).query;
     const { data, error } = await query;
     if (error) {
       if (hasMissingFinancialSchema(error)) return [];
@@ -32906,7 +32906,7 @@ async function startServer() {
         .eq('organization_id', clinicId)
         .eq('appointment_id', appointmentId)
         .limit(1);
-      query = await applyClosureTenantScope(query, req.session.user, clinicId);
+      query = (await applyClosureTenantScope(query, req.session.user, clinicId)).query;
       const { data, error } = await query.maybeSingle();
       if (error) {
         if (hasMissingFinancialSchema(error)) return res.status(404).json(conferenceSafeError(404));

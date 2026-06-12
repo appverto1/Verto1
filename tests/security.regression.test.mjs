@@ -726,7 +726,7 @@ test('closure security: endpoints require authentication, roles, tenant scope an
     /app\.patch\('\/api\/closure\/appointments\/:appointmentId\/override', portalActionLimiter, checkAuth, requireRoles\('coordinator', 'admin', 'owner'\)/,
     'override de fechamento deve aceitar apenas coordinator/admin/owner e usar rate limit.'
   );
-  assert.match(serverCode, /query = await applyClosureTenantScope\(query, req\.session\.user, clinicId\)/);
+  assert.match(serverCode, /query = \(await applyClosureTenantScope\(query, req\.session\.user, clinicId\)\)\.query/);
   assert.match(serverCode, /canAccessPatientInCurrentClinic\(patientId, req\.session\.user\)/);
   assert.match(serverCode, /const closureSafeError = \(status = 500\) => \(\{[\s\S]*?Não foi possível carregar o fechamento agora\./m);
   const safeErrorSlice = serverCode.slice(serverCode.indexOf('const closureSafeError'), serverCode.indexOf('const getClosureTherapistPatientIds'));
