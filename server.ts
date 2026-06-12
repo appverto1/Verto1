@@ -29191,76 +29191,88 @@ async function startServer() {
     return fallback.data || null;
   };
 
-  const fetchAppointmentClosureContext = async (appointmentId: string, user: any) => {
+  const fetchAppointmentClosureContext = async (appointmentId: string, user: any, options: { scopedAppointment?: any } = {}) => {
     const safeAppointmentId = sanitizeString(appointmentId, 120);
     const clinicId = sanitizeString(currentClinicId(user), 120);
     if (!isUuid(safeAppointmentId) || !isUuid(clinicId)) {
       return { ok: false, status: 400, error: 'Sessão inválida.' };
     }
 
+    const scopedAppointment = options?.scopedAppointment || null;
+    const scopedAppointmentId = sanitizeString(scopedAppointment?.id, 120);
+    const scopedClinicId = sanitizeString(scopedAppointment?.clinic_id || scopedAppointment?.clinicId, 120);
+    const scopedOrganizationId = sanitizeString(scopedAppointment?.organization_id || scopedAppointment?.organizationId, 120);
+    const hasScopedAppointment =
+      scopedAppointmentId === safeAppointmentId &&
+      (scopedClinicId === clinicId || scopedOrganizationId === clinicId);
+    const isTherapistUser = sanitizeString(user?.role, 40).toLowerCase() === 'therapist';
     const appointmentOmittedColumns = new Set<string>();
-    const therapistPatientIds = sanitizeString(user?.role, 40).toLowerCase() === 'therapist'
+    const therapistPatientIds = isTherapistUser && !hasScopedAppointment
       ? await getClosureTherapistPatientIds(user, clinicId)
       : [];
     const therapistUserId = sanitizeString(user?.id, 120);
-    let appointment: any = null;
+    let appointment: any = hasScopedAppointment ? scopedAppointment : null;
     let appointmentLastError: any = null;
-    for (let attempt = 0; attempt <= CLOSURE_APPOINTMENT_SCHEMA_FALLBACK_COLUMNS.size + 2; attempt += 1) {
-      let appointmentQuery = supabase
-        .from('appointments')
-        .select(buildClosureAppointmentSelect(appointmentOmittedColumns))
-        .eq('id', safeAppointmentId)
-        .limit(1);
-      if (!appointmentOmittedColumns.has('organization_id') && !appointmentOmittedColumns.has('clinic_id')) {
-        appointmentQuery = appointmentQuery.or(`organization_id.eq.${clinicId},clinic_id.eq.${clinicId}`);
-      } else if (!appointmentOmittedColumns.has('organization_id')) {
-        appointmentQuery = appointmentQuery.eq('organization_id', clinicId);
-      } else if (!appointmentOmittedColumns.has('clinic_id')) {
-        appointmentQuery = appointmentQuery.eq('clinic_id', clinicId);
+    if (!appointment) {
+      for (let attempt = 0; attempt <= CLOSURE_APPOINTMENT_SCHEMA_FALLBACK_COLUMNS.size + 2; attempt += 1) {
+        let appointmentQuery = supabase
+          .from('appointments')
+          .select(buildClosureAppointmentSelect(appointmentOmittedColumns))
+          .eq('id', safeAppointmentId)
+          .limit(1);
+        if (!appointmentOmittedColumns.has('organization_id') && !appointmentOmittedColumns.has('clinic_id')) {
+          appointmentQuery = appointmentQuery.or(`organization_id.eq.${clinicId},clinic_id.eq.${clinicId}`);
+        } else if (!appointmentOmittedColumns.has('organization_id')) {
+          appointmentQuery = appointmentQuery.eq('organization_id', clinicId);
+        } else if (!appointmentOmittedColumns.has('clinic_id')) {
+          appointmentQuery = appointmentQuery.eq('clinic_id', clinicId);
+        }
+        if (isTherapistUser) {
+          const orParts = [];
+          if (!appointmentOmittedColumns.has('therapist_id') && isUuid(therapistUserId)) orParts.push(`therapist_id.eq.${therapistUserId}`);
+          if (therapistPatientIds.length > 0) orParts.push(`patient_id.in.(${therapistPatientIds.join(',')})`);
+          if (orParts.length > 0) appointmentQuery = appointmentQuery.or(orParts.join(','));
+          else return { ok: false, status: 404, error: 'Sessão não encontrada.' };
+        }
+        const appointmentResult = await appointmentQuery.maybeSingle();
+        if (!appointmentResult.error) {
+          appointment = appointmentResult.data || null;
+          break;
+        }
+        const missingColumn = extractMissingColumnName(appointmentResult.error);
+        if (missingColumn && CLOSURE_APPOINTMENT_SCHEMA_FALLBACK_COLUMNS.has(missingColumn) && !appointmentOmittedColumns.has(missingColumn)) {
+          appointmentOmittedColumns.add(missingColumn);
+          appointmentLastError = appointmentResult.error;
+          continue;
+        }
+        if (hasMissingFinancialSchema(appointmentResult.error)) {
+          return { ok: false, status: 503, error: 'Fechamento indisponível.' };
+        }
+        throw appointmentResult.error;
       }
-      if (sanitizeString(user?.role, 40).toLowerCase() === 'therapist') {
-        const orParts = [];
-        if (!appointmentOmittedColumns.has('therapist_id') && isUuid(therapistUserId)) orParts.push(`therapist_id.eq.${therapistUserId}`);
-        if (therapistPatientIds.length > 0) orParts.push(`patient_id.in.(${therapistPatientIds.join(',')})`);
-        if (orParts.length > 0) appointmentQuery = appointmentQuery.or(orParts.join(','));
-        else return { ok: false, status: 404, error: 'Sessão não encontrada.' };
-      }
-      const appointmentResult = await appointmentQuery.maybeSingle();
-      if (!appointmentResult.error) {
-        appointment = appointmentResult.data || null;
-        break;
-      }
-      const missingColumn = extractMissingColumnName(appointmentResult.error);
-      if (missingColumn && CLOSURE_APPOINTMENT_SCHEMA_FALLBACK_COLUMNS.has(missingColumn) && !appointmentOmittedColumns.has(missingColumn)) {
-        appointmentOmittedColumns.add(missingColumn);
-        appointmentLastError = appointmentResult.error;
-        continue;
-      }
-      if (hasMissingFinancialSchema(appointmentResult.error)) {
-        return { ok: false, status: 503, error: 'Fechamento indisponível.' };
-      }
-      throw appointmentResult.error;
     }
     if (!appointment && appointmentLastError && hasMissingFinancialSchema(appointmentLastError)) {
       return { ok: false, status: 503, error: 'Fechamento indisponível.' };
     }
     if (!appointment?.id) return { ok: false, status: 404, error: 'Sessão não encontrada.' };
     const patientId = sanitizeString(appointment.patient_id, 120);
-    if (!isUuid(patientId) || !(await canAccessPatientInCurrentClinic(patientId, user))) {
+    if (!hasScopedAppointment && (!isUuid(patientId) || !(await canAccessPatientInCurrentClinic(patientId, user)))) {
       return { ok: false, status: 404, error: 'Sessão não encontrada.' };
     }
 
     let abaSession: any = null;
-    const abaResult = await supabase
-      .from('aba_sessions')
-      .select(CLOSURE_ABA_SESSION_SELECT)
-      .eq('appointment_id', safeAppointmentId)
-      .eq('patient_id', patientId)
-      .order('updated_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (!abaResult.error) abaSession = abaResult.data || null;
-    else if (!hasMissingFinancialSchema(abaResult.error)) throw abaResult.error;
+    if (isUuid(patientId)) {
+      const abaResult = await supabase
+        .from('aba_sessions')
+        .select(CLOSURE_ABA_SESSION_SELECT)
+        .eq('appointment_id', safeAppointmentId)
+        .eq('patient_id', patientId)
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (!abaResult.error) abaSession = abaResult.data || null;
+      else if (!hasMissingFinancialSchema(abaResult.error)) throw abaResult.error;
+    }
 
     let sessionSummary: any = null;
     const abaSessionId = sanitizeString(abaSession?.id, 180);
@@ -29278,14 +29290,16 @@ async function startServer() {
     }
 
     let patient: any = null;
-    const patientResult = await supabase
-      .from('patients')
-      .select(CLOSURE_PATIENT_SELECT)
-      .eq('id', patientId)
-      .eq('clinic_id', clinicId)
-      .maybeSingle();
-    if (!patientResult.error) patient = patientResult.data || null;
-    else if (!hasMissingFinancialSchema(patientResult.error)) throw patientResult.error;
+    if (isUuid(patientId)) {
+      const patientResult = await supabase
+        .from('patients')
+        .select(CLOSURE_PATIENT_SELECT)
+        .eq('id', patientId)
+        .eq('clinic_id', clinicId)
+        .maybeSingle();
+      if (!patientResult.error) patient = patientResult.data || null;
+      else if (!hasMissingFinancialSchema(patientResult.error)) throw patientResult.error;
+    }
 
     const professionalId = sanitizeString(
       appointment.therapist_id || appointment.professional_id || abaSession?.therapist_id,
@@ -29531,8 +29545,11 @@ async function startServer() {
     user: any;
     force?: boolean;
     manualNotBillable?: boolean;
+    scopedAppointment?: any;
   }) => {
-    const context = await fetchAppointmentClosureContext(params.appointmentId, params.user);
+    const context = await fetchAppointmentClosureContext(params.appointmentId, params.user, {
+      scopedAppointment: params.scopedAppointment
+    });
     if (!context.ok) return context;
     const appointment = (context as any).appointment;
     const abaSession = (context as any).abaSession;
@@ -29971,7 +29988,8 @@ async function startServer() {
         const generated = await persistAppointmentClosureCheck({
           appointmentId,
           user: params.user,
-          force: false
+          force: false,
+          scopedAppointment: appointmentById.get(appointmentId)
         });
         if (!(generated as any).ok) {
           result.errors += 1;

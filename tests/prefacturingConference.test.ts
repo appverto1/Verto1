@@ -67,6 +67,10 @@ test('revalidacao de periodo materializa checks faltantes sem sobrescrever overr
   assert.match(serverCode, /manualOverrideIds\.has\(appointmentId\)/);
   assert.match(serverCode, /PERIOD_REVALIDATED/);
   assert.match(serverCode, /appointmentIds: \[\] as string\[\]/);
+  assert.match(serverCode, /fetchAppointmentClosureContext\(params\.appointmentId, params\.user, \{[\s\S]*?scopedAppointment: params\.scopedAppointment[\s\S]*?\}\)/);
+  assert.match(serverCode, /hasScopedAppointment[\s\S]*?scopedClinicId === clinicId \|\| scopedOrganizationId === clinicId/);
+  assert.match(serverCode, /!hasScopedAppointment && \(!isUuid\(patientId\) \|\| !\(await canAccessPatientInCurrentClinic\(patientId, user\)\)\)/);
+  assert.match(serverCode, /scopedAppointment: appointmentById\.get\(appointmentId\)/);
   assert.match(serverCode, /isMissingUpsertConflictTargetError/);
   assert.match(serverCode, /writeWithoutConflictTarget/);
   assert.match(serverCode, /\.select\('id'\)[\s\S]*?\.eq\('organization_id', organizationId\)[\s\S]*?\.eq\('appointment_id', appointmentId\)/);
