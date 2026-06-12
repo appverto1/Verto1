@@ -50,6 +50,20 @@ test('appointment action result is enriched with local confirmed identity before
   assert.match(appCode, /\{ action: 'created', items: newItems \}/);
 });
 
+test('appointment mirror persists real patient labels instead of generic Paciente', () => {
+  const syncSlice = serverCode.slice(
+    serverCode.indexOf('async function syncAppointmentsTableFromClinicState'),
+    serverCode.indexOf('async function ensureAppointmentMirrorForBillingContext'),
+  );
+  assert.match(serverCode, /function isGenericAppointmentPatientLabel/);
+  assert.match(serverCode, /function pickAppointmentPatientName/);
+  assert.match(syncSlice, /patientNamesById/);
+  assert.match(syncSlice, /\.from\('patients'\)[\s\S]*?\.select\('id, name'\)[\s\S]*?\.eq\('clinic_id', clinicId\)[\s\S]*?\.in\('id', requestedPatientIds\)/);
+  assert.match(syncSlice, /const resolvedPatientName = pickAppointmentPatientName/);
+  assert.match(syncSlice, /patient_name: resolvedPatientName \|\| null/);
+  assert.match(syncSlice, /patientName: resolvedPatientName/);
+});
+
 test('appointment removal deletes only confirmed deleted ids', () => {
   const next = removePersistedAppointments(
     [

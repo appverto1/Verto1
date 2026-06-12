@@ -47,6 +47,14 @@ test('revalidacao de periodo materializa checks faltantes sem sobrescrever overr
   assert.match(serverCode, /revalidateClosureChecksForPeriod/);
   assert.match(serverCode, /mirrorLegacyClosureAppointmentsForPeriod/);
   assert.match(serverCode, /syncAppointmentsTableFromClinicState/);
+  assert.match(serverCode, /buildClosureRevalidationErrorDetail/);
+  assert.match(serverCode, /stage: 'materialize_closure_check'/);
+  assert.match(serverCode, /reasonCode/);
+  assert.match(serverCode, /partialFailure: false/);
+  assert.match(serverCode, /errorDetails: \[\] as any\[\]/);
+  assert.match(serverCode, /result\.errorDetails\.push\(buildClosureRevalidationErrorDetail/);
+  assert.match(serverCode, /const allFoundItemsFailed = !dryRun && Number\(data\.found \|\| 0\) > 0 && Number\(data\.errors \|\| 0\) >= Number\(data\.found \|\| 0\)/);
+  assert.match(serverCode, /success: !allFoundItemsFailed/);
   assert.match(serverCode, /CLOSURE_APPOINTMENT_SCHEMA_FALLBACK_COLUMNS/);
   assert.match(serverCode, /buildClosureAppointmentSelect\(omittedColumns\)/);
   assert.match(serverCode, /omittedColumns\.has\('organization_id'\) && omittedColumns\.has\('clinic_id'\)/);
@@ -76,6 +84,8 @@ test('fechamento operacional evita cache stale depois de revalidar', () => {
   assert.match(dataServiceCode, /cache: 'no-store' as RequestCache/);
   assert.match(closureCode, /const changed = Number\(counts\.created \|\| 0\) \+ Number\(counts\.updated \|\| 0\)/);
   assert.match(closureCode, /const legacyMirrored = Number\(counts\.legacyMirrored \|\| 0\)/);
+  assert.match(closureCode, /const revalidationErrors = Number\(counts\.errors \|\| 0\)/);
+  assert.match(closureCode, /revalidation\?\.success === false && revalidationErrors > 0/);
   assert.match(closureCode, /const actionRevision = \[[\s\S]*?affectedIds\.slice\(0, 25\)/);
 });
 

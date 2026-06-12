@@ -231,9 +231,10 @@ export function OperationalClosureCenter({
         from: toApiDate(from),
         to: toApiDate(to, true),
       });
-      const counts = revalidation?.success ? (revalidation.data || revalidation.counts || {}) : {};
+      const counts = revalidation?.data || revalidation?.counts || {};
       const changed = Number(counts.created || 0) + Number(counts.updated || 0);
       const legacyMirrored = Number(counts.legacyMirrored || 0);
+      const revalidationErrors = Number(counts.errors || 0);
       const affectedIds = Array.isArray(counts.appointmentIds) ? counts.appointmentIds : [];
       const actionRevision = [
         Date.now(),
@@ -275,7 +276,10 @@ export function OperationalClosureCenter({
       }
       setRows(nextRows);
       setTotals(result.totals || null);
-      if (revalidation?.success) {
+      if (revalidation?.success === false && revalidationErrors > 0) {
+        setRevalidationInfo("");
+        setError(`${revalidationErrors} atendimento(s) falharam ao gerar checks de fechamento. Atualize novamente após corrigir o diagnóstico do período.`);
+      } else if (revalidation?.success) {
         if (changed > 0 && nextRows.length === 0) {
           setRevalidationInfo("");
           setError(

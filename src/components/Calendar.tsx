@@ -654,6 +654,48 @@ const pickPatientLabel = (candidates: any[]) => {
   return labels.find((label) => !isGenericPatientLabel(label)) || labels[0] || 'Paciente';
 };
 
+const getCalendarEventPatientId = (event: any) => {
+  const source = parseEventSourcePayload(event);
+  return String(event?.patient_id || event?.patientId || source?.patient_id || source?.patientId || '').trim();
+};
+
+const getCalendarEventPatientLabel = (event: any) => {
+  const source = parseEventSourcePayload(event);
+  return pickPatientLabel([
+    event?.patientName,
+    event?.patient_name,
+    event?.patient?.name,
+    source?.patientName,
+    source?.patient_name,
+    source?.patient?.name,
+    event?.name,
+    source?.name,
+  ]);
+};
+
+const hydrateCalendarEventsByKnownPatientNames = (events: any[]) => {
+  const namesByPatientId = new Map<string, string>();
+  for (const event of events || []) {
+    const patientId = getCalendarEventPatientId(event);
+    const patientName = getCalendarEventPatientLabel(event);
+    if (patientId && patientName && !isGenericPatientLabel(patientName)) {
+      namesByPatientId.set(patientId, patientName);
+    }
+  }
+  if (namesByPatientId.size === 0) return events;
+  return (events || []).map((event) => {
+    const patientId = getCalendarEventPatientId(event);
+    const patientName = namesByPatientId.get(patientId);
+    if (!patientName || !isGenericPatientLabel(getCalendarEventPatientLabel(event))) return event;
+    return {
+      ...event,
+      patientName,
+      patient_name: patientName,
+      name: patientName,
+    };
+  });
+};
+
 const mergeCalendarEventForRender = (serverEvent: any, localEvent: any) => {
   if (!serverEvent) return localEvent;
   if (!localEvent) return serverEvent;
@@ -697,7 +739,7 @@ const mergeCalendarEventsForRender = (localEvents: any[], serverEvents: any[], r
     if (id) byId.set(id, mergeCalendarEventForRender(byId.get(id), event));
     else withoutId.push(event);
   }
-  return [...withoutId, ...Array.from(byId.values())];
+  return hydrateCalendarEventsByKnownPatientNames([...withoutId, ...Array.from(byId.values())]);
 };
 
 const normalizeClinicalEvent = (event: any, roomLookup?: Map<string, any>) => {

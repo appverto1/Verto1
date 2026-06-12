@@ -47,10 +47,16 @@ test('agenda hidrata nome real do paciente quando recorrencia vem apenas com pat
   assert.match(serverCode, /patient_name: pickCalendarPatientName/);
   assert.match(calendarCode, /parseEventSourcePayload/);
   assert.match(calendarCode, /pickPatientLabel/);
+  assert.match(calendarCode, /getCalendarEventPatientId/);
+  assert.match(calendarCode, /hydrateCalendarEventsByKnownPatientNames/);
+  assert.match(calendarCode, /namesByPatientId\.set\(patientId, patientName\)/);
   assert.match(calendarCode, /mergeCalendarEventsForRender/);
+  assert.match(calendarCode, /return hydrateCalendarEventsByKnownPatientNames\(\[\.\.\.withoutId, \.\.\.Array\.from\(byId\.values\(\)\)\]\)/);
   assert.match(calendarCode, /remoteState\.loaded/);
   assert.match(calendarCode, /source\?\.patientName/);
   assert.match(calendarCode, /source\?\.patient\?\.name/);
+  assert.match(serverCode, /knownNamesById/);
+  assert.match(serverCode, /hydrateRowsFromKnownNames/);
 });
 
 test('detail endpoint carrega dados pesados apenas sob demanda', () => {

@@ -6059,6 +6059,36 @@ function buildAppointmentScheduledAt(appointment: any): string | null {
   return parsed.toISOString();
 }
 
+function normalizeAppointmentPatientLabel(value: any) {
+  return sanitizeString(value, 180)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isGenericAppointmentPatientLabel(value: any) {
+  const normalized = normalizeAppointmentPatientLabel(value);
+  return !normalized || normalized === 'paciente' || normalized === 'patient' || normalized === 'cliente';
+}
+
+function pickAppointmentPatientName(candidates: any[]) {
+  const labels = candidates.map((value) => sanitizeString(value, 180)).filter(Boolean);
+  return labels.find((label) => !isGenericAppointmentPatientLabel(label)) || labels[0] || '';
+}
+
+function readAppointmentPatientId(appointment: any) {
+  const source = parseStoredJsonObject(appointment?.source_payload || appointment?.sourcePayload);
+  return sanitizeString(
+    appointment?.patient_id ||
+      appointment?.patientId ||
+      source?.patient_id ||
+      source?.patientId,
+    120
+  );
+}
+
 function serializePersistedAppointmentForAgenda(row: any) {
   const source = parseStoredJsonObject(row?.source_payload || row?.sourcePayload);
   const scheduledAt = buildAppointmentScheduledAt(row) || buildAppointmentScheduledAt(source);
@@ -6898,6 +6928,31 @@ async function syncAppointmentsTableFromClinicState(params: {
       }
     }
   }
+  const requestedPatientIds = Array.from(
+    new Set(
+      params.appointments
+        .map((appointment: any) => readAppointmentPatientId(appointment))
+        .filter((id: string) => isUuid(id))
+    )
+  ).slice(0, 1000);
+  const patientNamesById = new Map<string, string>();
+  if (requestedPatientIds.length > 0) {
+    const { data: patientRows, error: patientNamesError } = await supabase
+      .from('patients')
+      .select('id, name')
+      .eq('clinic_id', clinicId)
+      .in('id', requestedPatientIds)
+      .limit(requestedPatientIds.length);
+    if (!patientNamesError) {
+      for (const row of patientRows || []) {
+        const id = sanitizeString(row?.id, 120);
+        const name = sanitizeString(row?.name, 180);
+        if (isUuid(id) && !isGenericAppointmentPatientLabel(name)) patientNamesById.set(id, name);
+      }
+    } else if (!hasMissingFinancialSchema(patientNamesError)) {
+      console.warn('[Appointments] Nomes de pacientes indisponíveis ao espelhar agenda.', patientNamesError.message);
+    }
+  }
   const hasOwn = (source: any, key: string) =>
     Object.prototype.hasOwnProperty.call(source || {}, key);
   const hasAnyOwn = (source: any, keys: string[]) =>
@@ -7060,6 +7115,12 @@ async function syncAppointmentsTableFromClinicState(params: {
     const resolvedNotification12hSent = hasIncoming12hMarker
       ? (hasOwn(appointment, 'notification_12h_sent') ? Boolean(appointment.notification_12h_sent) : Boolean(resolved12hSentAt))
       : Boolean(existing.notification_12h_sent || existing.notification_12h_sent_at);
+    const resolvedPatientName = pickAppointmentPatientName([
+      patientNamesById.get(patientId),
+      appointment?.patientName,
+      appointment?.patient_name,
+      appointment?.name
+    ]);
 
     const row = {
       id: appointmentId,
@@ -7094,7 +7155,7 @@ async function syncAppointmentsTableFromClinicState(params: {
       patient_confirmation_by: resolvedPatientConfirmationBy,
       patient_confirmation_source: resolvedPatientConfirmationSource,
       patient_email: patientEmail || null,
-      patient_name: sanitizeString(appointment?.patientName || appointment?.name || appointment?.patient_name, 180) || null,
+      patient_name: resolvedPatientName || null,
       therapist_name: sanitizeString(appointment?.therapistName || appointment?.professional || appointment?.therapist_name, 180) || null,
       approach,
       service_type: sanitizeString(appointment?.service_type || appointment?.serviceType || approach, 120) || null,
@@ -7113,6 +7174,9 @@ async function syncAppointmentsTableFromClinicState(params: {
       recurrence_frequency: sanitizeString(appointment?.recurrenceFrequency || appointment?.recurrence_frequency, 60) || null,
       source_payload: {
         ...appointment,
+        patientName: resolvedPatientName || appointment?.patientName || appointment?.patient_name || appointment?.name || null,
+        patient_name: resolvedPatientName || appointment?.patient_name || appointment?.patientName || appointment?.name || null,
+        name: resolvedPatientName || appointment?.name || appointment?.patientName || appointment?.patient_name || null,
         professionalIds,
         professional_ids: professionalIds,
         room_id: roomId || appointment?.room_id || appointment?.roomId || null,
@@ -26577,24 +26641,51 @@ async function startServer() {
   const hydrateCalendarPatientNames = async (rows: any[], clinicId: string) => {
     const safeClinicId = sanitizeString(clinicId, 120);
     if (!Array.isArray(rows) || rows.length === 0 || !isUuid(safeClinicId)) return rows;
-    const idsNeedingHydration = Array.from(new Set(rows
+    const knownNamesById = new Map<string, string>();
+    const readRowPatientId = (row: any) => {
+      const source = parseCalendarSourcePayload(row?.source_payload || row?.sourcePayload);
+      return sanitizeString(row?.patient_id || row?.patientId || source?.patient_id || source?.patientId, 120);
+    };
+    const readRowPatientName = (row: any) => {
+      const source = parseCalendarSourcePayload(row?.source_payload || row?.sourcePayload);
+      return pickCalendarPatientName([
+        row?.patient_name,
+        row?.patientName,
+        row?.patient?.name,
+        source?.patientName,
+        source?.patient_name,
+        source?.patient?.name,
+        row?.name,
+        source?.name
+      ]);
+    };
+    for (const row of rows) {
+      const patientId = readRowPatientId(row);
+      const currentName = readRowPatientName(row);
+      if (isUuid(patientId) && currentName && !isGenericCalendarPatientName(currentName)) {
+        knownNamesById.set(patientId, currentName);
+      }
+    }
+    const hydrateRowsFromKnownNames = (sourceRows: any[]) => sourceRows.map((row: any) => {
+      const patientId = readRowPatientId(row);
+      const hydratedName = knownNamesById.get(patientId);
+      if (!hydratedName || !isGenericCalendarPatientName(readRowPatientName(row))) return row;
+      return {
+        ...row,
+        patient_name: hydratedName,
+        patientName: hydratedName,
+        name: hydratedName
+      };
+    });
+    let hydratedRows = hydrateRowsFromKnownNames(rows);
+    const idsNeedingHydration = Array.from(new Set(hydratedRows
       .map((row: any) => {
-        const source = parseCalendarSourcePayload(row?.source_payload || row?.sourcePayload);
-        const patientId = sanitizeString(row?.patient_id || row?.patientId || source?.patient_id || source?.patientId, 120);
-        const currentName = pickCalendarPatientName([
-          row?.patient_name,
-          row?.patientName,
-          row?.patient?.name,
-          source?.patientName,
-          source?.patient_name,
-          source?.patient?.name,
-          row?.name,
-          source?.name
-        ]);
+        const patientId = readRowPatientId(row);
+        const currentName = readRowPatientName(row);
         return isUuid(patientId) && isGenericCalendarPatientName(currentName) ? patientId : '';
       })
       .filter(Boolean)));
-    if (idsNeedingHydration.length === 0) return rows;
+    if (idsNeedingHydration.length === 0) return hydratedRows;
     const { data, error } = await supabase
       .from('patients')
       .select('id, name')
@@ -26603,24 +26694,15 @@ async function startServer() {
       .limit(idsNeedingHydration.length);
     if (error) {
       if (!hasMissingFinancialSchema(error)) console.warn('[Calendar] patient label hydration skipped:', error?.message || String(error));
-      return rows;
+      return hydratedRows;
     }
-    const namesById = new Map<string, string>((data || [])
-      .map((row: any) => [sanitizeString(row?.id, 120), sanitizeString(row?.name, 180)])
-      .filter(([id, name]: any[]) => isUuid(id) && !isGenericCalendarPatientName(name)) as any);
-    if (namesById.size === 0) return rows;
-    return rows.map((row: any) => {
-      const source = parseCalendarSourcePayload(row?.source_payload || row?.sourcePayload);
-      const patientId = sanitizeString(row?.patient_id || row?.patientId || source?.patient_id || source?.patientId, 120);
-      const hydratedName = namesById.get(patientId);
-      if (!hydratedName) return row;
-      return {
-        ...row,
-        patient_name: hydratedName,
-        patientName: hydratedName,
-        name: hydratedName
-      };
-    });
+    for (const row of data || []) {
+      const id = sanitizeString(row?.id, 120);
+      const name = sanitizeString(row?.name, 180);
+      if (isUuid(id) && !isGenericCalendarPatientName(name)) knownNamesById.set(id, name);
+    }
+    hydratedRows = hydrateRowsFromKnownNames(hydratedRows);
+    return hydratedRows;
   };
 
   const buildCalendarAppointmentStart = (row: any) => {
@@ -29578,6 +29660,74 @@ async function startServer() {
     };
   };
 
+  const buildClosureRevalidationErrorDetail = (appointment: any, appointmentId: string, failure: any) => {
+    const source = parseCalendarSourcePayload(appointment?.source_payload || appointment?.sourcePayload);
+    const patientId = sanitizeString(appointment?.patient_id || appointment?.patientId || source?.patient_id || source?.patientId, 120);
+    const professionalId = sanitizeString(
+      appointment?.therapist_id ||
+        appointment?.therapistId ||
+        appointment?.professional_id ||
+        appointment?.professionalId ||
+        source?.therapist_id ||
+        source?.therapistId ||
+        source?.professional_id ||
+        source?.professionalId,
+      120
+    );
+    const clinicId = sanitizeString(appointment?.clinic_id || appointment?.clinicId || source?.clinic_id || source?.clinicId, 120);
+    const organizationId = sanitizeString(appointment?.organization_id || appointment?.organizationId || source?.organization_id || source?.organizationId, 120);
+    const appointmentStatus = sanitizeString(appointment?.status || source?.status, 80) || null;
+    const scheduledStart = buildAppointmentScheduledAt(appointment);
+    const scheduledEnd = sanitizeString(
+      appointment?.scheduled_end_at ||
+        appointment?.scheduledEndAt ||
+        appointment?.scheduled_end ||
+        appointment?.scheduledEnd ||
+        source?.scheduled_end_at ||
+        source?.scheduledEndAt,
+      80
+    );
+    const plannedDuration = Number(
+      appointment?.scheduled_duration_minutes ||
+        appointment?.duration_minutes ||
+        appointment?.durationMinutes ||
+        source?.scheduled_duration_minutes ||
+        source?.duration_minutes ||
+        source?.durationMinutes
+    );
+    const dbCode = sanitizeString(failure?.code || failure?.dbCode || failure?.details?.code, 80) || null;
+    const message = sanitizeString(failure?.error || failure?.message || String(failure || ''), 500) || 'Falha ao materializar check de fechamento.';
+    const missingColumn = extractMissingColumnName(failure);
+    const schemaError = missingColumn || (hasMissingFinancialSchema(failure) ? message : '');
+    const failureStatus = Number(failure?.status || 0);
+    let reasonCode = 'MATERIALIZATION_FAILED';
+    if (!isUuid(patientId)) reasonCode = 'MISSING_PATIENT_ID';
+    else if (!scheduledStart) reasonCode = 'MISSING_SCHEDULED_START';
+    else if (failureStatus === 404 || /n[aã]o encontrada|not found/i.test(message)) reasonCode = 'APPOINTMENT_NOT_ACCESSIBLE';
+    else if (failureStatus === 503 || schemaError) reasonCode = 'CLOSURE_SCHEMA_UNAVAILABLE';
+    else if (/conflict|duplicate|constraint/i.test(message)) reasonCode = 'UPSERT_CONSTRAINT_FAILED';
+    else if (dbCode) reasonCode = `DB_${dbCode}`;
+
+    return cleanObject({
+      appointmentId,
+      stage: 'materialize_closure_check',
+      status: 'failed',
+      reasonCode,
+      message,
+      details: cleanObject({
+        hasPatientId: isUuid(patientId),
+        hasProfessionalId: isUuid(professionalId),
+        hasClinicId: isUuid(clinicId),
+        hasOrganizationId: isUuid(organizationId),
+        hasScheduledStart: Boolean(scheduledStart),
+        hasScheduledEndOrDuration: Boolean(scheduledEnd) || (Number.isFinite(plannedDuration) && plannedDuration > 0),
+        appointmentStatus,
+        schemaError: schemaError || null,
+        dbCode
+      })
+    });
+  };
+
   const revalidateClosureChecksForPeriod = async (params: {
     clinicId: string;
     user: any;
@@ -29598,6 +29748,8 @@ async function startServer() {
       legacyMirrored: 0,
       legacySkipped: 0,
       appointmentIds: [] as string[],
+      partialFailure: false,
+      errorDetails: [] as any[],
       dryRun: Boolean(params.dryRun)
     };
     if (!isUuid(clinicId)) return result;
@@ -29655,6 +29807,8 @@ async function startServer() {
       console.warn('[Closure] manual override audit lookup skipped:', auditResult.error?.message || String(auditResult.error));
     }
 
+    const appointmentById = new Map<string, any>(appointmentRows.map((row: any) => [sanitizeString(row?.id, 120), row]));
+
     for (const appointmentId of appointmentIds) {
       if (manualOverrideIds.has(appointmentId)) {
         result.skipped += 1;
@@ -29673,6 +29827,11 @@ async function startServer() {
         });
         if (!(generated as any).ok) {
           result.errors += 1;
+          result.errorDetails.push(buildClosureRevalidationErrorDetail(
+            appointmentById.get(appointmentId),
+            appointmentId,
+            generated
+          ));
         } else if ((generated as any).reused) {
           result.reused += 1;
         } else if (hadExisting) {
@@ -29682,6 +29841,11 @@ async function startServer() {
         }
       } catch (error: any) {
         result.errors += 1;
+        result.errorDetails.push(buildClosureRevalidationErrorDetail(
+          appointmentById.get(appointmentId),
+          appointmentId,
+          error
+        ));
         console.warn('[Closure] period revalidation item failed:', {
           source: sanitizeString(params.source, 80) || 'period_revalidation',
           appointmentId,
@@ -29689,6 +29853,7 @@ async function startServer() {
         });
       }
     }
+    result.partialFailure = result.errors > 0;
 
     if (!params.dryRun) {
       await writeClosureAuditLog({
@@ -31827,10 +31992,19 @@ async function startServer() {
         dryRun,
         source: 'period_endpoint'
       });
+      const hasErrors = Number(data.errors || 0) > 0;
+      const allFoundItemsFailed = !dryRun && Number(data.found || 0) > 0 && Number(data.errors || 0) >= Number(data.found || 0);
       return sendNoStoreJson(res, {
-        success: true,
+        success: !allFoundItemsFailed,
+        partialFailure: hasErrors,
+        error: allFoundItemsFailed
+          ? 'Nenhum check de fechamento foi materializado. Veja errorDetails para o diagnóstico por atendimento.'
+          : hasErrors
+            ? 'Parte dos checks de fechamento não foi materializada.'
+            : undefined,
         data,
-        counts: data
+        counts: data,
+        errorDetails: data.errorDetails || []
       });
     } catch (error: any) {
       console.warn('[Closure] period revalidate failed:', error?.message || String(error));

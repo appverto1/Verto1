@@ -142,6 +142,8 @@ test('conferencia revalida periodo antes de listar em tela e antes de exportar C
   assert.match(conferenceCode, /const revalidation = await dataService\.revalidateClosurePeriod/);
   assert.match(conferenceCode, /const changed = Number\(counts\.created \|\| 0\) \+ Number\(counts\.updated \|\| 0\)/);
   assert.match(conferenceCode, /const legacyMirrored = Number\(counts\.legacyMirrored \|\| 0\)/);
+  assert.match(conferenceCode, /const revalidationErrors = Number\(counts\.errors \|\| 0\)/);
+  assert.match(conferenceCode, /revalidation\?\.success === false && revalidationErrors > 0/);
   assert.match(conferenceCode, /const actionRevision = \[[\s\S]*?affectedIds\.slice\(0, 25\)/);
   assert.match(conferenceCode, /const listPayload = \{ \.\.\.filterPayload, actionRevision \}/);
   assert.match(conferenceCode, /const \[main, byPatient, byProfessional, byPayer, byService, byProcedure, byTuss, byGuide\] = await Promise\.all/);

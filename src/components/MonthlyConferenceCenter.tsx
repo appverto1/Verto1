@@ -289,9 +289,10 @@ export function MonthlyConferenceCenter({
         from: filterPayload.from,
         to: filterPayload.to,
       });
-      const counts = revalidation?.success ? (revalidation.data || revalidation.counts || {}) : {};
+      const counts = revalidation?.data || revalidation?.counts || {};
       const changed = Number(counts.created || 0) + Number(counts.updated || 0);
       const legacyMirrored = Number(counts.legacyMirrored || 0);
+      const revalidationErrors = Number(counts.errors || 0);
       const affectedIds = Array.isArray(counts.appointmentIds) ? counts.appointmentIds : [];
       const actionRevision = [
         Date.now(),
@@ -336,7 +337,10 @@ export function MonthlyConferenceCenter({
       setRows(nextRows);
       setKpis(mainResult.kpis || null);
       setPendingByType(Array.isArray(mainResult.pendingByType) ? mainResult.pendingByType : []);
-      if (revalidation?.success) {
+      if (revalidation?.success === false && revalidationErrors > 0) {
+        setRevalidationInfo("");
+        setError(`${revalidationErrors} atendimento(s) falharam ao gerar checks de conferência. Atualize novamente após corrigir o diagnóstico do período.`);
+      } else if (revalidation?.success) {
         if (changed > 0 && nextRows.length === 0) {
           setRevalidationInfo("");
           setError(
