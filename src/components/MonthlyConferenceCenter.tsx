@@ -125,6 +125,13 @@ const pendingCategoryTone: Record<string, string> = {
   not_applicable: "ring-slate-100",
 };
 
+function pendingChipClass(item: { label: string; category: string }) {
+  if (item.category === "informational" || item.category === "not_applicable") {
+    return "bg-slate-100 text-slate-600 ring-slate-100";
+  }
+  return `${pendingTone[item.label] || "bg-slate-100 text-slate-700"} ${pendingCategoryTone[item.category] || ""}`;
+}
+
 function getLocalDateInput(date: Date) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -550,9 +557,9 @@ export function MonthlyConferenceCenter({
     { label: "A revisar", value: kpis?.unknown ?? 0, tone: "text-zinc-700" },
     { label: "Tempo realizado", value: formatConferenceMinutes(kpis?.actualMinutes || 0), tone: "text-indigo-700" },
     { label: "Tempo previsto", value: formatConferenceMinutes(kpis?.scheduledMinutes || 0), tone: "text-cyan-700" },
-    { label: "Assinaturas", value: kpis?.pendingSignatures ?? 0, tone: "text-rose-700" },
-    { label: "Relatórios", value: kpis?.pendingReports ?? 0, tone: "text-orange-700" },
-    { label: "Guias", value: kpis?.pendingGuides ?? 0, tone: "text-violet-700" },
+    { label: "Assinaturas pendentes", value: kpis?.pendingSignatures ?? 0, tone: "text-rose-700" },
+    { label: "Relatórios pendentes", value: kpis?.pendingReports ?? 0, tone: "text-orange-700" },
+    { label: "Guias pendentes", value: kpis?.pendingGuides ?? 0, tone: "text-violet-700" },
   ];
 
   const summaryRows = activeTab === "patient"
@@ -801,8 +808,8 @@ export function MonthlyConferenceCenter({
                       <td className="px-4 py-3 text-slate-600">{safeName(row.professional_name, "Equipe")}</td>
                       <td className="px-4 py-3 text-slate-600">{safeName(row.service_type, "Sessão")}</td>
                       <td className="px-4 py-3 text-slate-600">
-                        <div className="font-medium text-slate-700">{row.internal_procedure_name || "Nao configurado"}</div>
-                        <div className="mt-1 text-xs text-slate-500">{row.tuss_code ? `TUSS ${row.tuss_code}` : "TUSS pendente"}</div>
+                        <div className="font-medium text-slate-700">{row.internal_procedure_name || "Procedimento nao configurado"}</div>
+                        <div className="mt-1 text-xs text-slate-500">{row.tuss_code ? `TUSS ${row.tuss_code}` : "TUSS: pendente de mapeamento"}</div>
                       </td>
                       <td className="px-4 py-3 text-slate-600">{safeName(row.payer_name, "Sem pagador")}</td>
                       <td className="px-4 py-3 text-slate-600">{formatOptionalMinutes(row.scheduled_minutes)}</td>
@@ -827,7 +834,7 @@ export function MonthlyConferenceCenter({
                           {pendingDetails.visible.length === 0 ? (
                             <span className="rounded-full bg-emerald-50 px-2 py-1 text-xs text-emerald-700">Sem pendência</span>
                           ) : pendingDetails.visible.slice(0, 4).map((item) => (
-                            <span key={`${item.category}-${item.label}`} className={`rounded-full px-2 py-1 text-xs ring-1 ${pendingTone[item.label] || "bg-slate-100 text-slate-700"} ${pendingCategoryTone[item.category] || ""}`}>{item.label}</span>
+                            <span key={`${item.category}-${item.label}`} className={`rounded-full px-2 py-1 text-xs ring-1 ${pendingChipClass(item)}`}>{item.label}</span>
                           ))}
                         </div>
                       </td>

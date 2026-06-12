@@ -153,6 +153,13 @@ const pendingCategoryTone: Record<string, string> = {
   not_applicable: "ring-slate-100",
 };
 
+function pendingChipClass(item: { label: string; category: string }) {
+  if (item.category === "informational" || item.category === "not_applicable") {
+    return "bg-slate-100 text-slate-600 ring-slate-100";
+  }
+  return `${pendingTone[item.label] || "bg-slate-100 text-slate-700"} ${pendingCategoryTone[item.category] || ""}`;
+}
+
 function getLocalDateInput(date: Date) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -705,8 +712,8 @@ export function OperationalClosureCenter({
                     <td className="px-4 py-3 text-slate-600">{row.professional_name || "Equipe"}</td>
                     <td className="px-4 py-3 text-slate-600">{row.service_type || "Sessão"}</td>
                     <td className="px-4 py-3 text-slate-600">
-                      <div className="font-medium text-slate-700">{row.internal_procedure_name || "Nao configurado"}</div>
-                      <div className="mt-1 text-xs text-slate-500">{row.tuss_code ? `TUSS ${row.tuss_code}` : "TUSS pendente"}</div>
+                      <div className="font-medium text-slate-700">{row.internal_procedure_name || "Procedimento nao configurado"}</div>
+                      <div className="mt-1 text-xs text-slate-500">{row.tuss_code ? `TUSS ${row.tuss_code}` : "TUSS: pendente de mapeamento"}</div>
                     </td>
                     <td className="px-4 py-3 text-slate-600">{row.payer_name || "Sem pagador"}</td>
                     <td className="px-4 py-3 text-slate-600">{row.financial_plan_name || "Não configurado"}</td>
@@ -729,7 +736,7 @@ export function OperationalClosureCenter({
                         {pendingDetails.visible.length === 0 ? (
                           <span className="rounded-full bg-emerald-50 px-2 py-1 text-xs text-emerald-700">Sem pendência</span>
                         ) : pendingDetails.visible.slice(0, 4).map((item) => (
-                          <span key={`${item.category}-${item.label}`} className={`rounded-full px-2 py-1 text-xs ring-1 ${pendingTone[item.label] || "bg-slate-100 text-slate-700"} ${pendingCategoryTone[item.category] || ""}`}>{item.label}</span>
+                          <span key={`${item.category}-${item.label}`} className={`rounded-full px-2 py-1 text-xs ring-1 ${pendingChipClass(item)}`}>{item.label}</span>
                         ))}
                       </div>
                       {Array.isArray(row.main_issues) && row.main_issues.length > 0 && (

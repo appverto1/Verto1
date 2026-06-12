@@ -176,7 +176,7 @@ export function classifyConferencePendingDetails(row: MonthlyConferenceRow): Con
   const open = isOpenRow(row);
 
   const addOperational = (label: string) => {
-    if (notBillable) addUnique(informational, label);
+    if (notBillable) return;
     else if (open && ['Assinatura', 'Relatorio', 'Duracao', 'Sessao concluida'].includes(label)) addUnique(notApplicable, label);
     else addUnique(operational, label);
   };
@@ -197,7 +197,7 @@ export function classifyConferencePendingDetails(row: MonthlyConferenceRow): Con
   if (!String(row.tuss_code || '').trim() || tussPendingCodes.includes('missing_tuss_mapping') || tussPendingCodes.includes('missing_tuss_code')) addUnique(configuration, 'TUSS');
   if (!Number(row.billing_amount_cents || row.expected_amount_cents || 0) || tussPendingCodes.includes('missing_amount')) addUnique(configuration, 'Valor');
   if (!String(row.insurance_card_number || '').trim() || tussPendingCodes.includes('missing_card_number') || /carteirinha/i.test(tussPendingLabels)) addUnique(configuration, 'Carteirinha');
-  if (!String(row.professional_registry || '').trim() || tussPendingCodes.includes('missing_professional_registry')) addUnique(configuration, 'Registro profissional');
+  if (tussPendingCodes.includes('missing_professional_registry') || hasIssue(row, [/registro profissional/, /professional registry/, /conselho profissional/])) addUnique(configuration, 'Registro profissional');
 
   if (notBillable) {
     addUnique(informational, 'Nao aplicavel ao faturamento');

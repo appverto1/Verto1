@@ -32415,7 +32415,7 @@ async function startServer() {
       if (kind === 'procedure' || kind === 'procedimento') return !sanitizeString(row?.internal_procedure_name, 180) || pendingCodes.includes('missing_service_catalog');
       if (kind === 'tuss') return !sanitizeString(row?.tuss_code, 80) || pendingCodes.includes('missing_tuss_mapping') || pendingCodes.includes('missing_tuss_code');
       if (kind === 'amount' || kind === 'valor') return !Number(row?.billing_amount_cents || row?.expected_amount_cents || 0) || pendingCodes.includes('missing_amount');
-      if (kind === 'professional_registry' || kind === 'registro') return !sanitizeString(row?.professional_registry, 80) || pendingCodes.includes('missing_professional_registry');
+      if (kind === 'professional_registry' || kind === 'registro') return pendingCodes.includes('missing_professional_registry');
       if (kind === 'card' || kind === 'carteirinha') return !sanitizeString(row?.insurance_card_number, 120) || pendingCodes.includes('missing_card_number');
       return true;
     });

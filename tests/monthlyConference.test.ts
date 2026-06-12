@@ -114,6 +114,7 @@ test('status e pendencias ficam coerentes para agendada, realizada e nao faturav
     scheduled_minutes: 60,
     readiness_status: 'DRAFT',
     main_issues: [],
+    professional_registry: null,
     tuss_pending_reason_codes: ['missing_service_catalog', 'missing_tuss_mapping', 'missing_amount']
   };
   const notBillable = {
@@ -127,12 +128,14 @@ test('status e pendencias ficam coerentes para agendada, realizada e nao faturav
   assert.deepEqual(classifyConferencePendingKinds(scheduled).slice(0, 3), ['Plano financeiro', 'Procedimento', 'TUSS']);
   assert.ok(scheduledDetails.configuration.includes('Procedimento'));
   assert.ok(scheduledDetails.configuration.includes('TUSS'));
+  assert.ok(!scheduledDetails.configuration.includes('Registro profissional'));
   assert.ok(scheduledDetails.notApplicable.includes('Aguardando realizacao'));
   assert.ok(!scheduledDetails.operational.includes('Assinatura'));
 
   const notBillableDetails = classifyConferencePendingDetails(notBillable);
   assert.deepEqual(notBillableDetails.blocking, []);
   assert.ok(notBillableDetails.informational.includes('Nao aplicavel ao faturamento'));
+  assert.ok(!notBillableDetails.visible.some((item) => item.label === 'Assinatura'));
 
   const summary = buildMonthlyConferenceSummary([scheduled, notBillable]);
   assert.equal(summary.kpis.totalSessions, 2);
@@ -177,6 +180,7 @@ test('API da conferencia tem auth, roles, paginacao, filtros e select explicito'
   const conferenceSlice = serverCode.slice(serverCode.indexOf("app.get('/api/conference/monthly'"), serverCode.indexOf('const fetchFutureAppointmentsForMaintenance'));
   assert.doesNotMatch(conferenceSlice, /\.select\('\*'\)/);
   assert.doesNotMatch(conferenceSlice, /aba_recent_session_events|aba_trials|aba_behavior_events/);
+  assert.match(serverCode, /kind === 'professional_registry'[\s\S]*?return pendingCodes\.includes\('missing_professional_registry'\)/);
 });
 
 test('conferencia revalida periodo antes de listar em tela e antes de exportar CSV', () => {
@@ -215,6 +219,9 @@ test('frontend tem tela mensal, filtros, detalhe, exportacao e nao expõe infrae
   assert.match(coordinatorCode, /<MonthlyConferenceCenter/);
   assert.match(conferenceCode, /Em aberto/);
   assert.match(conferenceCode, /classifyConferencePendingDetails/);
+  assert.match(conferenceCode, /Assinaturas pendentes/);
+  assert.match(conferenceCode, /TUSS: pendente de mapeamento/);
+  assert.match(conferenceCode, /pendingChipClass/);
   assert.doesNotMatch(conferenceCode, /dangerouslySetInnerHTML/);
   assert.doesNotMatch(conferenceCode, /Supabase|PostgREST|Railway|schema cache/i);
   assert.doesNotMatch(conferenceCode, /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
