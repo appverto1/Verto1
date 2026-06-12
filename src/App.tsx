@@ -4327,9 +4327,15 @@ export default function App() {
       };
     }
 
+    const persistedAppointments = mergeAppointmentIdentityFallbacks(persistenceResult.appointments, newItems);
+    const enrichedPersistenceResult = {
+      ...persistenceResult,
+      appointments: persistedAppointments,
+      items: persistedAppointments,
+    };
     const applied = applyAppointmentResultToAgenda(
-      persistenceResult,
-      { action: 'created', items: persistenceResult.appointments },
+      enrichedPersistenceResult,
+      { action: 'created', items: newItems },
       actionSequence,
     );
     if (!applied.ok) {
@@ -4340,7 +4346,7 @@ export default function App() {
     }
 
     onAddActivityLog("Agendamento de Sessão", `${numSessions} sessões agendadas para "${sess.patientName}" começando em ${sess.date}.`, 'management');
-    return { success: true, appointments: persistenceResult.appointments };
+    return { success: true, appointments: persistedAppointments };
   };
 
   const handleMoodCheckin = async (l: number | null, n: string, i: string, t: any) => {

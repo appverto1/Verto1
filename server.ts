@@ -3295,6 +3295,40 @@ const CLOSURE_APPOINTMENT_SELECT = [
   'updated_at'
 ].join(',');
 
+const CLOSURE_APPOINTMENT_SCHEMA_FALLBACK_COLUMNS = new Set([
+  'organization_id',
+  'clinic_id',
+  'patient_name',
+  'therapist_id',
+  'therapist_name',
+  'scheduled_at',
+  'scheduled_start_at',
+  'scheduled_end_at',
+  'scheduled_duration_minutes',
+  'actual_start_at',
+  'actual_end_at',
+  'actual_duration_minutes',
+  'duration_minutes',
+  'approach',
+  'service_type',
+  'room_id',
+  'room_name',
+  'location_type',
+  'status',
+  'confirmed_at',
+  'reschedule_requested_at',
+  'cancel_requested_at',
+  'notes',
+  'source_payload',
+  'updated_at'
+]);
+
+const buildClosureAppointmentSelect = (omittedColumns: Set<string> = new Set()) => CLOSURE_APPOINTMENT_SELECT
+  .split(',')
+  .map((column) => column.trim())
+  .filter((column) => column && !omittedColumns.has(column))
+  .join(',');
+
 const BILLING_CONTEXT_APPOINTMENT_SELECT = [
   'id',
   'organization_id',
@@ -29067,27 +29101,52 @@ async function startServer() {
       return { ok: false, status: 400, error: 'Sessão inválida.' };
     }
 
-    let appointmentQuery = supabase
-      .from('appointments')
-      .select(CLOSURE_APPOINTMENT_SELECT)
-      .eq('id', safeAppointmentId)
-      .or(`organization_id.eq.${clinicId},clinic_id.eq.${clinicId}`)
-      .limit(1);
-    if (sanitizeString(user?.role, 40).toLowerCase() === 'therapist') {
-      const patientIds = await getClosureTherapistPatientIds(user, clinicId);
-      const userId = sanitizeString(user?.id, 120);
-      const orParts = [`therapist_id.eq.${userId}`];
-      if (patientIds.length > 0) orParts.push(`patient_id.in.(${patientIds.join(',')})`);
-      appointmentQuery = appointmentQuery.or(orParts.join(','));
-    }
-    const appointmentResult = await appointmentQuery.maybeSingle();
-    if (appointmentResult.error) {
+    const appointmentOmittedColumns = new Set<string>();
+    const therapistPatientIds = sanitizeString(user?.role, 40).toLowerCase() === 'therapist'
+      ? await getClosureTherapistPatientIds(user, clinicId)
+      : [];
+    const therapistUserId = sanitizeString(user?.id, 120);
+    let appointment: any = null;
+    let appointmentLastError: any = null;
+    for (let attempt = 0; attempt <= CLOSURE_APPOINTMENT_SCHEMA_FALLBACK_COLUMNS.size + 2; attempt += 1) {
+      let appointmentQuery = supabase
+        .from('appointments')
+        .select(buildClosureAppointmentSelect(appointmentOmittedColumns))
+        .eq('id', safeAppointmentId)
+        .limit(1);
+      if (!appointmentOmittedColumns.has('organization_id') && !appointmentOmittedColumns.has('clinic_id')) {
+        appointmentQuery = appointmentQuery.or(`organization_id.eq.${clinicId},clinic_id.eq.${clinicId}`);
+      } else if (!appointmentOmittedColumns.has('organization_id')) {
+        appointmentQuery = appointmentQuery.eq('organization_id', clinicId);
+      } else if (!appointmentOmittedColumns.has('clinic_id')) {
+        appointmentQuery = appointmentQuery.eq('clinic_id', clinicId);
+      }
+      if (sanitizeString(user?.role, 40).toLowerCase() === 'therapist') {
+        const orParts = [];
+        if (!appointmentOmittedColumns.has('therapist_id') && isUuid(therapistUserId)) orParts.push(`therapist_id.eq.${therapistUserId}`);
+        if (therapistPatientIds.length > 0) orParts.push(`patient_id.in.(${therapistPatientIds.join(',')})`);
+        if (orParts.length > 0) appointmentQuery = appointmentQuery.or(orParts.join(','));
+        else return { ok: false, status: 404, error: 'Sessão não encontrada.' };
+      }
+      const appointmentResult = await appointmentQuery.maybeSingle();
+      if (!appointmentResult.error) {
+        appointment = appointmentResult.data || null;
+        break;
+      }
+      const missingColumn = extractMissingColumnName(appointmentResult.error);
+      if (missingColumn && CLOSURE_APPOINTMENT_SCHEMA_FALLBACK_COLUMNS.has(missingColumn) && !appointmentOmittedColumns.has(missingColumn)) {
+        appointmentOmittedColumns.add(missingColumn);
+        appointmentLastError = appointmentResult.error;
+        continue;
+      }
       if (hasMissingFinancialSchema(appointmentResult.error)) {
         return { ok: false, status: 503, error: 'Fechamento indisponível.' };
       }
       throw appointmentResult.error;
     }
-    const appointment = appointmentResult.data;
+    if (!appointment && appointmentLastError && hasMissingFinancialSchema(appointmentLastError)) {
+      return { ok: false, status: 503, error: 'Fechamento indisponível.' };
+    }
     if (!appointment?.id) return { ok: false, status: 404, error: 'Sessão não encontrada.' };
     const patientId = sanitizeString(appointment.patient_id, 120);
     if (!isUuid(patientId) || !(await canAccessPatientInCurrentClinic(patientId, user))) {
@@ -29412,33 +29471,58 @@ async function startServer() {
     const rowsById = new Map<string, any>();
     const limit = Math.min(Math.max(Number(params.limit || 800), 1), 1200);
     if (!isUuid(clinicId)) return [];
-    for (const dateColumn of ['scheduled_at', 'scheduled_start_at']) {
-      let query = supabase
-        .from('appointments')
-        .select(CLOSURE_APPOINTMENT_SELECT)
-        .gte(dateColumn, params.fromIso)
-        .lte(dateColumn, params.toIso)
-        .neq('status', 'deleted')
-        .or(`organization_id.eq.${clinicId},clinic_id.eq.${clinicId}`)
-        .order(dateColumn, { ascending: true })
-        .limit(limit);
-      if (sanitizeString(params.user?.role, 40).toLowerCase() === 'therapist') {
-        const patientIds = await getClosureTherapistPatientIds(params.user, clinicId);
-        const userId = sanitizeString(params.user?.id, 120);
-        const orParts = [];
-        if (isUuid(userId)) orParts.push(`therapist_id.eq.${userId}`);
-        if (patientIds.length > 0) orParts.push(`patient_id.in.(${patientIds.join(',')})`);
-        query = orParts.length > 0 ? query.or(orParts.join(',')) : query.eq('therapist_id', '00000000-0000-0000-0000-000000000000');
+    const omittedColumns = new Set<string>();
+    const therapistPatientIds = sanitizeString(params.user?.role, 40).toLowerCase() === 'therapist'
+      ? await getClosureTherapistPatientIds(params.user, clinicId)
+      : [];
+    const therapistUserId = sanitizeString(params.user?.id, 120);
+
+    for (let attempt = 0; attempt <= CLOSURE_APPOINTMENT_SCHEMA_FALLBACK_COLUMNS.size + 2; attempt += 1) {
+      let retriedWithOmittedColumn = false;
+      for (const dateColumn of ['scheduled_at', 'scheduled_start_at']) {
+        if (omittedColumns.has(dateColumn)) continue;
+        let query = supabase
+          .from('appointments')
+          .select(buildClosureAppointmentSelect(omittedColumns))
+          .gte(dateColumn, params.fromIso)
+          .lte(dateColumn, params.toIso)
+          .order(dateColumn, { ascending: true })
+          .limit(limit);
+        if (!omittedColumns.has('status')) query = query.neq('status', 'deleted');
+        if (omittedColumns.has('organization_id') && omittedColumns.has('clinic_id')) return [];
+        if (!omittedColumns.has('organization_id') && !omittedColumns.has('clinic_id')) {
+          query = query.or(`organization_id.eq.${clinicId},clinic_id.eq.${clinicId}`);
+        } else if (!omittedColumns.has('organization_id')) {
+          query = query.eq('organization_id', clinicId);
+        } else if (!omittedColumns.has('clinic_id')) {
+          query = query.eq('clinic_id', clinicId);
+        }
+        if (sanitizeString(params.user?.role, 40).toLowerCase() === 'therapist') {
+          const orParts = [];
+          if (!omittedColumns.has('therapist_id') && isUuid(therapistUserId)) orParts.push(`therapist_id.eq.${therapistUserId}`);
+          if (therapistPatientIds.length > 0) orParts.push(`patient_id.in.(${therapistPatientIds.join(',')})`);
+          if (orParts.length > 0) query = query.or(orParts.join(','));
+          else if (!omittedColumns.has('therapist_id')) query = query.eq('therapist_id', '00000000-0000-0000-0000-000000000000');
+          else return [];
+        }
+        const result = await query;
+        if (result.error) {
+          if (isMissingRelationError(result.error)) return [];
+          const missingColumn = extractMissingColumnName(result.error);
+          if (missingColumn && CLOSURE_APPOINTMENT_SCHEMA_FALLBACK_COLUMNS.has(missingColumn) && !omittedColumns.has(missingColumn)) {
+            omittedColumns.add(missingColumn);
+            retriedWithOmittedColumn = true;
+            break;
+          }
+          if (hasMissingFinancialSchema(result.error)) continue;
+          throw result.error;
+        }
+        (Array.isArray(result.data) ? result.data : []).forEach((row: any) => {
+          const id = sanitizeString(row?.id, 120);
+          if (isUuid(id)) rowsById.set(id, row);
+        });
       }
-      const result = await query;
-      if (result.error) {
-        if (hasMissingFinancialSchema(result.error) || extractMissingColumnName(result.error) === dateColumn) continue;
-        throw result.error;
-      }
-      (Array.isArray(result.data) ? result.data : []).forEach((row: any) => {
-        const id = sanitizeString(row?.id, 120);
-        if (isUuid(id)) rowsById.set(id, row);
-      });
+      if (!retriedWithOmittedColumn) break;
     }
     return Array.from(rowsById.values()).sort((left: any, right: any) => {
       const leftTime = new Date(left?.scheduled_at || left?.scheduled_start_at || 0).getTime();

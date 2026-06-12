@@ -47,6 +47,9 @@ test('revalidacao de periodo materializa checks faltantes sem sobrescrever overr
   assert.match(serverCode, /revalidateClosureChecksForPeriod/);
   assert.match(serverCode, /mirrorLegacyClosureAppointmentsForPeriod/);
   assert.match(serverCode, /syncAppointmentsTableFromClinicState/);
+  assert.match(serverCode, /CLOSURE_APPOINTMENT_SCHEMA_FALLBACK_COLUMNS/);
+  assert.match(serverCode, /buildClosureAppointmentSelect\(omittedColumns\)/);
+  assert.match(serverCode, /omittedColumns\.has\('organization_id'\) && omittedColumns\.has\('clinic_id'\)/);
   assert.match(serverCode, /\.upsert\(\[storagePayload\], \{ onConflict: 'organization_id,appointment_id' \}\)/);
   assert.match(serverCode, /\.in\('action', \['MANUAL_OVERRIDE', 'MARKED_NOT_BILLABLE'\]\)/);
   assert.match(serverCode, /manualOverrideIds\.has\(appointmentId\)/);
@@ -71,6 +74,8 @@ test('fechamento operacional evita cache stale depois de revalidar', () => {
   assert.match(dataServiceCode, /response\.status === 304[\s\S]*endpointWithCacheBust\(endpoint\)/);
   assert.match(dataServiceCode, /actionRevision: options\.actionRevision/);
   assert.match(dataServiceCode, /cache: 'no-store' as RequestCache/);
+  assert.match(closureCode, /const changed = Number\(counts\.created \|\| 0\) \+ Number\(counts\.updated \|\| 0\)/);
+  assert.match(closureCode, /const legacyMirrored = Number\(counts\.legacyMirrored \|\| 0\)/);
   assert.match(closureCode, /const actionRevision = \[[\s\S]*?affectedIds\.slice\(0, 25\)/);
 });
 

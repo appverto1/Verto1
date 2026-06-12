@@ -232,11 +232,13 @@ export function OperationalClosureCenter({
         to: toApiDate(to, true),
       });
       const counts = revalidation?.success ? (revalidation.data || revalidation.counts || {}) : {};
-      const changed = Number(counts.created || 0) + Number(counts.updated || 0) + Number(counts.legacyMirrored || 0);
+      const changed = Number(counts.created || 0) + Number(counts.updated || 0);
+      const legacyMirrored = Number(counts.legacyMirrored || 0);
       const affectedIds = Array.isArray(counts.appointmentIds) ? counts.appointmentIds : [];
       const actionRevision = [
         Date.now(),
         changed,
+        legacyMirrored,
         affectedIds.slice(0, 25).join(",")
       ].filter(Boolean).join(":");
       const requestRows = (pageNumber: number) => dataService.getClosureAppointments({
@@ -281,6 +283,9 @@ export function OperationalClosureCenter({
               ? `${changed} item(ns) foram atualizados, mas os filtros atuais ocultam os resultados.`
               : `${changed} item(ns) foram revalidados, mas não foram carregados na tabela.`
           );
+        } else if (legacyMirrored > 0 && changed === 0 && nextRows.length === 0) {
+          setRevalidationInfo("");
+          setError(`${legacyMirrored} agendamento(s) foram sincronizados, mas os checks de fechamento ainda nÃ£o foram materializados.`);
         } else {
           setRevalidationInfo(
             changed > 0

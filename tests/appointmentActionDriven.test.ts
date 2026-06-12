@@ -46,6 +46,8 @@ test('appointment action result is enriched with local confirmed identity before
   assert.equal(enriched[0].patient_name, 'Pedro Henrique');
   assert.equal(enriched[0].name, 'Pedro Henrique');
   assert.match(appCode, /mergeAppointmentIdentityFallbacks\(rawItems, fallback\.items \|\| \[\]\)/);
+  assert.match(appCode, /const persistedAppointments = mergeAppointmentIdentityFallbacks\(persistenceResult\.appointments, newItems\)/);
+  assert.match(appCode, /\{ action: 'created', items: newItems \}/);
 });
 
 test('appointment removal deletes only confirmed deleted ids', () => {
