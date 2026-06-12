@@ -291,20 +291,27 @@ export function MonthlyConferenceCenter({
       });
       const counts = revalidation?.success ? (revalidation.data || revalidation.counts || {}) : {};
       const changed = Number(counts.created || 0) + Number(counts.updated || 0) + Number(counts.legacyMirrored || 0);
+      const affectedIds = Array.isArray(counts.appointmentIds) ? counts.appointmentIds : [];
+      const actionRevision = [
+        Date.now(),
+        changed,
+        affectedIds.slice(0, 25).join(",")
+      ].filter(Boolean).join(":");
+      const listPayload = { ...filterPayload, actionRevision };
       if (revalidation?.success) {
         setRevalidationInfo("");
       } else {
         setRevalidationInfo("");
       }
       const [main, byPatient, byProfessional, byPayer, byService, byProcedure, byTuss, byGuide] = await Promise.all([
-        dataService.getMonthlyConference({ ...filterPayload, page, limit: 50 }),
-        dataService.getMonthlyConferenceSummary("patient", filterPayload),
-        dataService.getMonthlyConferenceSummary("professional", filterPayload),
-        dataService.getMonthlyConferenceSummary("payer", filterPayload),
-        dataService.getMonthlyConferenceSummary("service-type", filterPayload),
-        dataService.getMonthlyConferenceSummary("procedure", filterPayload),
-        dataService.getMonthlyConferenceSummary("tuss-code", filterPayload),
-        dataService.getMonthlyConferenceSummary("guide-type", filterPayload),
+        dataService.getMonthlyConference({ ...listPayload, page, limit: 50 }),
+        dataService.getMonthlyConferenceSummary("patient", listPayload),
+        dataService.getMonthlyConferenceSummary("professional", listPayload),
+        dataService.getMonthlyConferenceSummary("payer", listPayload),
+        dataService.getMonthlyConferenceSummary("service-type", listPayload),
+        dataService.getMonthlyConferenceSummary("procedure", listPayload),
+        dataService.getMonthlyConferenceSummary("tuss-code", listPayload),
+        dataService.getMonthlyConferenceSummary("guide-type", listPayload),
       ]);
       if (!main?.success) {
         setRows([]);
@@ -317,7 +324,7 @@ export function MonthlyConferenceCenter({
       let nextRows = Array.isArray(main.rows || main.data) ? (main.rows || main.data) : [];
       const totalSessions = Number(main.kpis?.totalSessions || main.kpis?.total || 0);
       if (nextRows.length === 0 && page > 1 && (changed > 0 || totalSessions > 0)) {
-        const firstPage = await dataService.getMonthlyConference({ ...filterPayload, page: 1, limit: 50 });
+        const firstPage = await dataService.getMonthlyConference({ ...listPayload, page: 1, limit: 50 });
         if (firstPage?.success) {
           mainResult = firstPage;
           nextRows = Array.isArray(firstPage.rows || firstPage.data) ? (firstPage.rows || firstPage.data) : [];

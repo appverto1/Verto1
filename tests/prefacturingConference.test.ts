@@ -43,7 +43,7 @@ test('backend tem acoes idempotentes de conferido, reaberto e exportado', () => 
 });
 
 test('revalidacao de periodo materializa checks faltantes sem sobrescrever override manual', () => {
-  assert.match(serverCode, /app\.post\('\/api\/closure\/revalidate-period', portalActionLimiter, checkAuth, requireRoles\('coordinator', 'therapist', 'admin', 'owner'\)/);
+  assert.match(serverCode, /app\.post\('\/api\/closure\/revalidate-period', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles\('coordinator', 'therapist', 'admin', 'owner'\)/);
   assert.match(serverCode, /revalidateClosureChecksForPeriod/);
   assert.match(serverCode, /mirrorLegacyClosureAppointmentsForPeriod/);
   assert.match(serverCode, /syncAppointmentsTableFromClinicState/);
@@ -54,6 +54,20 @@ test('revalidacao de periodo materializa checks faltantes sem sobrescrever overr
   assert.match(serverCode, /appointmentIds: \[\] as string\[\]/);
   const revalidationSlice = serverCode.slice(serverCode.indexOf('const revalidateClosureChecksForPeriod'), serverCode.indexOf('const fetchClosureSummariesByAppointment'));
   assert.doesNotMatch(revalidationSlice, /\.select\('\*'\)/);
+});
+
+test('fechamento operacional evita cache stale depois de revalidar', () => {
+  assert.match(serverCode, /const NO_STORE_DYNAMIC_HEADERS = \{[\s\S]*?no-store, no-cache, must-revalidate, private/);
+  assert.match(serverCode, /function noStoreDynamicResponse/);
+  assert.match(serverCode, /app\.get\('\/api\/closure\/appointments', noStoreDynamicResponse, checkAuth, requireRoles\('coordinator', 'therapist', 'admin', 'owner'\)/);
+  assert.match(serverCode, /return sendNoStoreJson\(res, \{[\s\S]*?data: closureRows/);
+  assert.match(dataServiceCode, /async function getNoStoreAuthHeaders/);
+  assert.match(dataServiceCode, /function endpointWithCacheBust/);
+  assert.match(dataServiceCode, /async function fetchNoStoreJsonWithRetry/);
+  assert.match(dataServiceCode, /response\.status === 304[\s\S]*endpointWithCacheBust\(endpoint\)/);
+  assert.match(dataServiceCode, /actionRevision: options\.actionRevision/);
+  assert.match(dataServiceCode, /cache: 'no-store' as RequestCache/);
+  assert.match(closureCode, /const actionRevision = \[[\s\S]*?affectedIds\.slice\(0, 25\)/);
 });
 
 test('exportacao completa registra auditoria, marca itens e retorna ActionResult', () => {

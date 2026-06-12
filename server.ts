@@ -1261,7 +1261,7 @@ function sendAuthRouteError(res: any, route: string, stage: string, error: any, 
 }
 
 const NO_STORE_DYNAMIC_HEADERS = {
-  'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+  'Cache-Control': 'no-store, no-cache, must-revalidate, private, proxy-revalidate',
   Pragma: 'no-cache',
   Expires: '0',
   'Surrogate-Control': 'no-store'
@@ -31477,7 +31477,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/closure/appointments', checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/closure/appointments', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     const { page, limit, from, to } = parseClosurePageParams(req.query);
     const emptyClosurePayload = (reason = '') => ({ success: true, data: [], page, limit, totals: {
       ready: 0,
@@ -31592,7 +31592,7 @@ async function startServer() {
         if (lastSchemaError) {
           console.warn('[Closure] list returned empty after schema fallback:', lastSchemaError?.message || String(lastSchemaError));
         }
-        return res.json(emptyClosurePayload('closure_schema_unavailable'));
+        return sendNoStoreJson(res, emptyClosurePayload('closure_schema_unavailable'));
       }
 
       const patientIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row.patient_id, 120)).filter((id: string) => isUuid(id))));
@@ -31685,7 +31685,7 @@ async function startServer() {
           billingItemsBundle
         )
       })), missingKind);
-      return res.json({
+      return sendNoStoreJson(res, {
         success: true,
         data: closureRows,
         page,
@@ -31694,11 +31694,11 @@ async function startServer() {
       });
     } catch (error: any) {
       console.warn('[Closure] list degraded to empty payload:', error?.message || String(error));
-      return res.json(emptyClosurePayload('closure_list_degraded'));
+      return sendNoStoreJson(res, emptyClosurePayload('closure_list_degraded'));
     }
   });
 
-  app.post('/api/closure/revalidate-period', portalActionLimiter, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/closure/revalidate-period', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de revalidação de período')) return;
       const range = parseClosureDateRange(req.body || {});
@@ -31713,7 +31713,7 @@ async function startServer() {
         dryRun,
         source: 'period_endpoint'
       });
-      return res.json({
+      return sendNoStoreJson(res, {
         success: true,
         data,
         counts: data
@@ -31724,7 +31724,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/closure/appointments/:appointmentId', checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/closure/appointments/:appointmentId', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
       const appointmentId = sanitizeString(req.params.appointmentId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -31792,7 +31792,7 @@ async function startServer() {
         performedBy: sanitizeString(req.session.user?.id, 120),
         metadata: { source: 'closure_detail' }
       });
-      return res.json({
+      return sendNoStoreJson(res, {
         success: true,
         data: {
           ...normalizeClosureListRow(
@@ -31811,14 +31811,14 @@ async function startServer() {
     }
   });
 
-  app.post('/api/closure/appointments/:appointmentId/revalidate', portalActionLimiter, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/closure/appointments/:appointmentId/revalidate', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de revalidação de fechamento')) return;
       const appointmentId = sanitizeString(req.params.appointmentId, 120);
       if (!isUuid(appointmentId)) return res.status(400).json(closureSafeError(400));
       const generated = await persistAppointmentClosureCheck({ appointmentId, user: req.session.user, force: true });
       if (!generated.ok) return res.status((generated as any).status || 404).json(closureSafeError((generated as any).status || 404));
-      return res.json({ success: true, data: (generated as any).data, reused: Boolean((generated as any).reused) });
+      return sendNoStoreJson(res, { success: true, data: (generated as any).data, reused: Boolean((generated as any).reused) });
     } catch (error: any) {
       console.warn('[Closure] revalidate failed:', error?.message || String(error));
       return res.status(500).json(closureSafeError(500));
@@ -32356,7 +32356,7 @@ async function startServer() {
     return true;
   };
 
-  app.get('/api/conference/monthly', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/conference/monthly', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const filters = parseConferenceFilters(req.query);
@@ -32381,7 +32381,7 @@ async function startServer() {
         performedBy: sanitizeString(req.session.user?.id, 120),
         metadata: { from: filters.fromIso, to: filters.toIso, page: filters.page, limit: filters.limit }
       });
-      return res.json({
+      return sendNoStoreJson(res, {
         success: true,
         data: hydratedPageRows,
         rows: hydratedPageRows,
@@ -32417,22 +32417,22 @@ async function startServer() {
         filters.missingKind
       );
       const summary = buildMonthlyConferenceSummary(hydratedRows);
-      return res.json({ success: true, data: (summary as any)[summaryKey] || [], kpis: summary.kpis });
+      return sendNoStoreJson(res, { success: true, data: (summary as any)[summaryKey] || [], kpis: summary.kpis });
     } catch (error: any) {
       console.warn('[MonthlyConference] summary failed:', error?.message || String(error));
       return res.status(500).json(conferenceSafeError(500));
     }
   };
 
-  app.get('/api/conference/monthly/summary-by-patient', checkAuth, requireRoles('coordinator', 'admin', 'owner'), handleConferenceSummary('byPatient'));
-  app.get('/api/conference/monthly/summary-by-professional', checkAuth, requireRoles('coordinator', 'admin', 'owner'), handleConferenceSummary('byProfessional'));
-  app.get('/api/conference/monthly/summary-by-payer', checkAuth, requireRoles('coordinator', 'admin', 'owner'), handleConferenceSummary('byPayer'));
-  app.get('/api/conference/monthly/summary-by-service-type', checkAuth, requireRoles('coordinator', 'admin', 'owner'), handleConferenceSummary('byServiceType'));
-  app.get('/api/conference/monthly/summary-by-procedure', checkAuth, requireRoles('coordinator', 'admin', 'owner'), handleConferenceSummary('byProcedure' as any));
-  app.get('/api/conference/monthly/summary-by-tuss-code', checkAuth, requireRoles('coordinator', 'admin', 'owner'), handleConferenceSummary('byTussCode' as any));
-  app.get('/api/conference/monthly/summary-by-guide-type', checkAuth, requireRoles('coordinator', 'admin', 'owner'), handleConferenceSummary('byGuideType' as any));
+  app.get('/api/conference/monthly/summary-by-patient', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), handleConferenceSummary('byPatient'));
+  app.get('/api/conference/monthly/summary-by-professional', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), handleConferenceSummary('byProfessional'));
+  app.get('/api/conference/monthly/summary-by-payer', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), handleConferenceSummary('byPayer'));
+  app.get('/api/conference/monthly/summary-by-service-type', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), handleConferenceSummary('byServiceType'));
+  app.get('/api/conference/monthly/summary-by-procedure', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), handleConferenceSummary('byProcedure' as any));
+  app.get('/api/conference/monthly/summary-by-tuss-code', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), handleConferenceSummary('byTussCode' as any));
+  app.get('/api/conference/monthly/summary-by-guide-type', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), handleConferenceSummary('byGuideType' as any));
 
-  app.get('/api/conference/monthly/session/:appointmentId', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/conference/monthly/session/:appointmentId', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
       const appointmentId = sanitizeString(req.params.appointmentId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -32462,7 +32462,7 @@ async function startServer() {
         performedBy: sanitizeString(req.session.user?.id, 120),
         metadata: { source: 'monthly_conference' }
       });
-      return res.json({
+      return sendNoStoreJson(res, {
         success: true,
         data: {
           ...(hydrated[0] || {}),
@@ -32486,7 +32486,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/conference/monthly/session/:appointmentId/revalidate', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/conference/monthly/session/:appointmentId/revalidate', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de revalidação da conferência')) return;
       const appointmentId = sanitizeString(req.params.appointmentId, 120);
@@ -32500,7 +32500,7 @@ async function startServer() {
         performedBy: sanitizeString(req.session.user?.id, 120),
         metadata: { source: 'monthly_conference' }
       });
-      return res.json({ success: true, data: (generated as any).data });
+      return sendNoStoreJson(res, { success: true, data: (generated as any).data });
     } catch (error: any) {
       console.warn('[MonthlyConference] revalidate failed:', error?.message || String(error));
       return res.status(500).json(conferenceSafeError(500));

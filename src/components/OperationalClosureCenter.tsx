@@ -233,6 +233,12 @@ export function OperationalClosureCenter({
       });
       const counts = revalidation?.success ? (revalidation.data || revalidation.counts || {}) : {};
       const changed = Number(counts.created || 0) + Number(counts.updated || 0) + Number(counts.legacyMirrored || 0);
+      const affectedIds = Array.isArray(counts.appointmentIds) ? counts.appointmentIds : [];
+      const actionRevision = [
+        Date.now(),
+        changed,
+        affectedIds.slice(0, 25).join(",")
+      ].filter(Boolean).join(":");
       const requestRows = (pageNumber: number) => dataService.getClosureAppointments({
         from: toApiDate(from),
         to: toApiDate(to, true),
@@ -246,6 +252,7 @@ export function OperationalClosureCenter({
         onlyReady: quickFilter === "ready",
         onlyWarnings: quickFilter === "warning",
         missing: ["signature", "report", "guide", "authorization", "documents", "procedure", "tuss", "amount", "professional_registry", "card"].includes(quickFilter) ? quickFilter : "",
+        actionRevision,
       });
       let result = await requestRows(page);
       let nextRows = Array.isArray(result?.data) ? result.data : [];

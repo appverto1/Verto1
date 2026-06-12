@@ -123,13 +123,15 @@ test('exportacao usa whitelist operacional e CSV sem dados clinicos brutos', () 
 });
 
 test('API da conferencia tem auth, roles, paginacao, filtros e select explicito', () => {
-  assert.match(serverCode, /app\.get\('\/api\/conference\/monthly', checkAuth, requireRoles\('coordinator', 'admin', 'owner'\)/);
-  assert.match(serverCode, /app\.get\('\/api\/conference\/monthly\/summary-by-patient'/);
-  assert.match(serverCode, /app\.get\('\/api\/conference\/monthly\/session\/:appointmentId'/);
+  assert.match(serverCode, /app\.get\('\/api\/conference\/monthly', noStoreDynamicResponse, checkAuth, requireRoles\('coordinator', 'admin', 'owner'\)/);
+  assert.match(serverCode, /app\.get\('\/api\/conference\/monthly\/summary-by-patient', noStoreDynamicResponse, checkAuth/);
+  assert.match(serverCode, /app\.get\('\/api\/conference\/monthly\/session\/:appointmentId', noStoreDynamicResponse, checkAuth/);
   assert.match(serverCode, /app\.post\('\/api\/conference\/monthly\/export', portalActionLimiter, checkAuth, requireRoles\('coordinator', 'admin', 'owner'\)/);
   assert.match(serverCode, /\.select\(APPOINTMENT_CLOSURE_LIST_SELECT\)/);
   assert.match(serverCode, /\.range\(params\.filters\.from, params\.filters\.to\)/);
   assert.match(serverCode, /assertConferenceFilterOwnership/);
+  assert.match(serverCode, /return sendNoStoreJson\(res, \{[\s\S]*?rows: hydratedPageRows/);
+  assert.match(serverCode, /return sendNoStoreJson\(res, \{ success: true, data: \(summary as any\)\[summaryKey\]/);
   const conferenceSlice = serverCode.slice(serverCode.indexOf("app.get('/api/conference/monthly'"), serverCode.indexOf('const fetchFutureAppointmentsForMaintenance'));
   assert.doesNotMatch(conferenceSlice, /\.select\('\*'\)/);
   assert.doesNotMatch(conferenceSlice, /aba_recent_session_events|aba_trials|aba_behavior_events/);
@@ -138,6 +140,8 @@ test('API da conferencia tem auth, roles, paginacao, filtros e select explicito'
 test('conferencia revalida periodo antes de listar em tela e antes de exportar CSV', () => {
   assert.match(dataServiceCode, /async revalidateClosurePeriod/);
   assert.match(conferenceCode, /const revalidation = await dataService\.revalidateClosurePeriod/);
+  assert.match(conferenceCode, /const actionRevision = \[[\s\S]*?affectedIds\.slice\(0, 25\)/);
+  assert.match(conferenceCode, /const listPayload = \{ \.\.\.filterPayload, actionRevision \}/);
   assert.match(conferenceCode, /const \[main, byPatient, byProfessional, byPayer, byService, byProcedure, byTuss, byGuide\] = await Promise\.all/);
   assert.match(conferenceCode, /foram atualizados, mas os filtros atuais ocultam os resultados/);
   assert.match(conferenceCode, /foram revalidados, mas não foram carregados na tabela/);
@@ -172,6 +176,11 @@ test('dataService expõe helpers econômicos da conferência', () => {
   assert.match(dataServiceCode, /async getMonthlyConferenceSummary/);
   assert.match(dataServiceCode, /async exportMonthlyConference/);
   assert.match(dataServiceCode, /helperName: 'getMonthlyConference'/);
+  assert.match(dataServiceCode, /async function getNoStoreAuthHeaders/);
+  assert.match(dataServiceCode, /async function fetchNoStoreJsonWithRetry/);
+  assert.match(dataServiceCode, /response\.status === 304[\s\S]*endpointWithCacheBust\(endpoint\)/);
+  assert.match(dataServiceCode, /actionRevision: options\.actionRevision/);
+  assert.match(dataServiceCode, /cache: 'no-store' as RequestCache/);
   assert.match(dataServiceCode, /hasExplicitColumns: true/);
 });
 

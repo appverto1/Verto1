@@ -436,6 +436,45 @@ async function getAuthHeaders(includeBearer = true) {
   return headers;
 }
 
+async function getNoStoreAuthHeaders(includeBearer = true) {
+  return {
+    ...(await getAuthHeaders(includeBearer)),
+    'Cache-Control': 'no-cache',
+    Pragma: 'no-cache',
+    Expires: '0'
+  };
+}
+
+async function safeNoStoreJson(response: Response, staleError = 'Resposta cacheada rejeitada; atualize a conferência novamente.') {
+  if (response.status === 304) {
+    return { success: false, stale: true, error: staleError, status: 304 };
+  }
+  return await safeJson(response);
+}
+
+function endpointWithCacheBust(endpoint: string) {
+  return endpointWithQuery(endpoint, {
+    cacheBust: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  });
+}
+
+async function fetchNoStoreJsonWithRetry(
+  endpoint: string,
+  init: RequestInit,
+  audit: ClinicalQueryAuditOptions,
+  staleError: string
+) {
+  const requestInit = { ...init, cache: 'no-store' as RequestCache };
+  let response = await fetchClinical(endpoint, requestInit, audit);
+  if (response.status === 304) {
+    response = await fetchClinical(endpointWithCacheBust(endpoint), requestInit, {
+      ...audit,
+      helperName: `${audit.helperName || 'clinical'}:cache-bust-retry`
+    });
+  }
+  return await safeNoStoreJson(response, staleError);
+}
+
 async function fetchWithAuthRetry(url: string, init: RequestInit) {
   let response = await fetch(url, init);
   if (response.status !== 401) return response;
@@ -2593,6 +2632,7 @@ export const dataService = {
     onlyReady?: boolean;
     onlyWarnings?: boolean;
     missing?: string;
+    actionRevision?: string | number;
   }) {
     const endpoint = endpointWithQuery('/api/closure/appointments', {
       from: options.from,
@@ -2607,11 +2647,12 @@ export const dataService = {
       onlyPending: options.onlyPending ? 'true' : undefined,
       onlyReady: options.onlyReady ? 'true' : undefined,
       onlyWarnings: options.onlyWarnings ? 'true' : undefined,
-      missing: options.missing
+      missing: options.missing,
+      actionRevision: options.actionRevision
     });
     try {
-      const response = await fetchClinical(endpoint, {
-        headers: await getAuthHeaders(),
+      return await fetchNoStoreJsonWithRetry(endpoint, {
+        headers: await getNoStoreAuthHeaders(),
         credentials: 'include'
       }, {
         helperName: 'getClosureAppointments',
@@ -2619,8 +2660,7 @@ export const dataService = {
         table: 'appointment_closure_checks',
         hasExplicitColumns: true,
         requiresPatientOrSession: false
-      });
-      return await safeJson(response);
+      }, 'A listagem do fechamento voltou do cache após revalidação. Tente atualizar novamente.');
     } catch {
       return { success: false, data: [], totals: null, error: 'Não foi possível carregar o fechamento agora.' };
     }
@@ -2631,7 +2671,8 @@ export const dataService = {
     try {
       const response = await fetchClinical(endpoint, {
         method: 'POST',
-        headers: await getAuthHeaders(),
+        cache: 'no-store',
+        headers: await getNoStoreAuthHeaders(),
         credentials: 'include',
         body: JSON.stringify({
           from: options.from,
@@ -2645,7 +2686,7 @@ export const dataService = {
         hasExplicitColumns: true,
         requiresPatientOrSession: false
       });
-      return await safeJson(response);
+      return await safeNoStoreJson(response, 'A revalidação do fechamento voltou do cache. Tente atualizar novamente.');
     } catch {
       return { success: false, error: 'Não foi possível revalidar o período agora.' };
     }
@@ -2654,8 +2695,8 @@ export const dataService = {
   async getClosureAppointmentDetail(appointmentId: string) {
     const endpoint = `/api/closure/appointments/${encodeURIComponent(String(appointmentId))}`;
     try {
-      const response = await fetchClinical(endpoint, {
-        headers: await getAuthHeaders(),
+      return await fetchNoStoreJsonWithRetry(endpoint, {
+        headers: await getNoStoreAuthHeaders(),
         credentials: 'include'
       }, {
         helperName: 'getClosureAppointmentDetail',
@@ -2663,8 +2704,7 @@ export const dataService = {
         table: 'appointment_closure_checks',
         hasExplicitColumns: true,
         requiresPatientOrSession: false
-      });
-      return await safeJson(response);
+      }, 'O detalhe do fechamento voltou do cache. Tente abrir novamente.');
     } catch {
       return { success: false, data: null, error: 'Não foi possível carregar o fechamento agora.' };
     }
@@ -2675,7 +2715,8 @@ export const dataService = {
     try {
       const response = await fetchClinical(endpoint, {
         method: 'POST',
-        headers: await getAuthHeaders(),
+        cache: 'no-store',
+        headers: await getNoStoreAuthHeaders(),
         credentials: 'include',
         body: JSON.stringify({})
       }, {
@@ -2685,7 +2726,7 @@ export const dataService = {
         hasExplicitColumns: true,
         requiresPatientOrSession: false
       });
-      return await safeJson(response);
+      return await safeNoStoreJson(response, 'A revalidação da sessão voltou do cache. Tente atualizar novamente.');
     } catch {
       return { success: false, error: 'Não foi possível revalidar o fechamento agora.' };
     }
@@ -2727,11 +2768,12 @@ export const dataService = {
       onlyNotBillable: options.onlyNotBillable ? 'true' : undefined,
       missing: options.missing,
       page: Math.max(1, Math.round(Number(options.page || 1) || 1)),
-      limit: normalizeListLimit(options.limit, 50, 200)
+      limit: normalizeListLimit(options.limit, 50, 200),
+      actionRevision: options.actionRevision
     });
     try {
-      const response = await fetchClinical(endpoint, {
-        headers: await getAuthHeaders(),
+      return await fetchNoStoreJsonWithRetry(endpoint, {
+        headers: await getNoStoreAuthHeaders(),
         credentials: 'include'
       }, {
         helperName: 'getMonthlyConference',
@@ -2739,8 +2781,7 @@ export const dataService = {
         table: 'appointment_closure_checks',
         hasExplicitColumns: true,
         requiresPatientOrSession: false
-      });
-      return await safeJson(response);
+      }, 'A conferência mensal voltou do cache após revalidação. Tente atualizar novamente.');
     } catch {
       return { success: false, data: [], kpis: null, error: 'Não foi possível carregar a conferência agora.' };
     }
@@ -2760,11 +2801,12 @@ export const dataService = {
       onlyReady: options.onlyReady ? 'true' : undefined,
       onlyNotBillable: options.onlyNotBillable ? 'true' : undefined,
       missing: options.missing,
-      limit: normalizeListLimit(options.limit, 200, 200)
+      limit: normalizeListLimit(options.limit, 200, 200),
+      actionRevision: options.actionRevision
     });
     try {
-      const response = await fetchClinical(endpoint, {
-        headers: await getAuthHeaders(),
+      return await fetchNoStoreJsonWithRetry(endpoint, {
+        headers: await getNoStoreAuthHeaders(),
         credentials: 'include'
       }, {
         helperName: `getMonthlyConferenceSummary:${kind}`,
@@ -2772,8 +2814,7 @@ export const dataService = {
         table: 'appointment_closure_checks',
         hasExplicitColumns: true,
         requiresPatientOrSession: false
-      });
-      return await safeJson(response);
+      }, 'O resumo da conferência voltou do cache após revalidação. Tente atualizar novamente.');
     } catch {
       return { success: false, data: [], error: 'Não foi possível carregar os resumos da conferência.' };
     }
@@ -2782,8 +2823,8 @@ export const dataService = {
   async getMonthlyConferenceSession(appointmentId: string) {
     const endpoint = `/api/conference/monthly/session/${encodeURIComponent(String(appointmentId))}`;
     try {
-      const response = await fetchClinical(endpoint, {
-        headers: await getAuthHeaders(),
+      return await fetchNoStoreJsonWithRetry(endpoint, {
+        headers: await getNoStoreAuthHeaders(),
         credentials: 'include'
       }, {
         helperName: 'getMonthlyConferenceSession',
@@ -2791,8 +2832,7 @@ export const dataService = {
         table: 'appointment_closure_checks',
         hasExplicitColumns: true,
         requiresPatientOrSession: false
-      });
-      return await safeJson(response);
+      }, 'O detalhe da conferência voltou do cache. Tente abrir novamente.');
     } catch {
       return { success: false, data: null, error: 'Não foi possível carregar a sessão da conferência.' };
     }
@@ -2803,7 +2843,8 @@ export const dataService = {
     try {
       const response = await fetchClinical(endpoint, {
         method: 'POST',
-        headers: await getAuthHeaders(),
+        cache: 'no-store',
+        headers: await getNoStoreAuthHeaders(),
         credentials: 'include',
         body: JSON.stringify({})
       }, {
@@ -2813,7 +2854,7 @@ export const dataService = {
         hasExplicitColumns: true,
         requiresPatientOrSession: false
       });
-      return await safeJson(response);
+      return await safeNoStoreJson(response, 'A revalidação da conferência voltou do cache. Tente atualizar novamente.');
     } catch {
       return { success: false, error: 'Não foi possível revalidar a sessão da conferência.' };
     }
