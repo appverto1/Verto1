@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import {
   buildMonthlyConferenceExportRows,
   buildMonthlyConferenceSummary,
+  classifyConferencePendingDetails,
+  classifyConferencePendingKinds,
   rowsToCsv
 } from '../src/services/monthlyConferenceEngine';
 
@@ -91,12 +93,52 @@ test('KPIs contam prontas, pendentes, alertas, nao faturaveis e tempo', () => {
   assert.equal(summary.kpis.pending, 1);
   assert.equal(summary.kpis.warning, 1);
   assert.equal(summary.kpis.notBillable, 1);
+  assert.equal(summary.kpis.open, 0);
+  assert.equal(summary.kpis.ready + summary.kpis.pending + summary.kpis.warning + summary.kpis.notBillable + summary.kpis.open + summary.kpis.unknown, summary.kpis.totalSessions);
   assert.equal(summary.kpis.actualMinutes, 130);
   assert.equal(summary.kpis.scheduledMinutes, 215);
   assert.equal(summary.kpis.pendingSignatures, 1);
   assert.equal(summary.kpis.pendingReports, 1);
   assert.equal(summary.kpis.pendingGuides, 1);
   assert.equal(summary.kpis.pendingDocuments, 1);
+});
+
+test('status e pendencias ficam coerentes para agendada, realizada e nao faturavel', () => {
+  const scheduled = {
+    appointment_id: 'appt-open',
+    patient_name: 'Theo',
+    professional_name: 'Lia',
+    service_type: 'ABA',
+    payer_name: 'Unimed',
+    scheduled_start: '2026-06-20T10:00:00.000Z',
+    scheduled_minutes: 60,
+    readiness_status: 'DRAFT',
+    main_issues: [],
+    tuss_pending_reason_codes: ['missing_service_catalog', 'missing_tuss_mapping', 'missing_amount']
+  };
+  const notBillable = {
+    ...scheduled,
+    appointment_id: 'appt-not-billable',
+    readiness_status: 'NOT_BILLABLE',
+    main_issues: ['Sessão cancelada.', 'Assinatura pendente para fechamento da sessão.']
+  };
+
+  const scheduledDetails = classifyConferencePendingDetails(scheduled);
+  assert.deepEqual(classifyConferencePendingKinds(scheduled).slice(0, 3), ['Plano financeiro', 'Procedimento', 'TUSS']);
+  assert.ok(scheduledDetails.configuration.includes('Procedimento'));
+  assert.ok(scheduledDetails.configuration.includes('TUSS'));
+  assert.ok(scheduledDetails.notApplicable.includes('Aguardando realizacao'));
+  assert.ok(!scheduledDetails.operational.includes('Assinatura'));
+
+  const notBillableDetails = classifyConferencePendingDetails(notBillable);
+  assert.deepEqual(notBillableDetails.blocking, []);
+  assert.ok(notBillableDetails.informational.includes('Nao aplicavel ao faturamento'));
+
+  const summary = buildMonthlyConferenceSummary([scheduled, notBillable]);
+  assert.equal(summary.kpis.totalSessions, 2);
+  assert.equal(summary.kpis.open, 1);
+  assert.equal(summary.kpis.notBillable, 1);
+  assert.equal(summary.pendingByType.some((item) => item.type === 'Procedimento' && item.count === 1), true);
 });
 
 test('resumos agrupam paciente, profissional, pagador e especialidade', () => {
@@ -143,13 +185,14 @@ test('conferencia revalida periodo antes de listar em tela e antes de exportar C
   assert.match(conferenceCode, /const changed = Number\(counts\.created \|\| 0\) \+ Number\(counts\.updated \|\| 0\)/);
   assert.match(conferenceCode, /const legacyMirrored = Number\(counts\.legacyMirrored \|\| 0\)/);
   assert.match(conferenceCode, /const revalidationErrors = Number\(counts\.errors \|\| 0\)/);
+  assert.match(conferenceCode, /formatRevalidationMessage\(counts, "conferência mensal"\)/);
   assert.match(conferenceCode, /revalidation\?\.success === false && revalidationErrors > 0/);
   assert.match(conferenceCode, /Primeiro erro:/);
   assert.match(conferenceCode, /const actionRevision = \[[\s\S]*?affectedIds\.slice\(0, 25\)/);
   assert.match(conferenceCode, /const listPayload = \{ \.\.\.filterPayload, actionRevision \}/);
   assert.match(conferenceCode, /const \[main, byPatient, byProfessional, byPayer, byService, byProcedure, byTuss, byGuide\] = await Promise\.all/);
-  assert.match(conferenceCode, /foram atualizados, mas os filtros atuais ocultam os resultados/);
-  assert.match(conferenceCode, /foram revalidados, mas não foram carregados na tabela/);
+  assert.match(conferenceCode, /Os filtros atuais ocultam os resultados/);
+  assert.match(conferenceCode, /Nenhum item foi carregado na tabela/);
   assert.match(conferenceCode, /nextRows\.length === 0 && page > 1/);
   const exportSlice = serverCode.slice(serverCode.indexOf("app.post('/api/conference/monthly/export'"), serverCode.indexOf('let hydratedRows = filterHydratedRowsByTussMissingKind'));
   assert.match(exportSlice, /revalidateClosureChecksForPeriod/);
@@ -170,6 +213,8 @@ test('frontend tem tela mensal, filtros, detalhe, exportacao e nao expõe infrae
     assert.match(conferenceCode, new RegExp(label));
   }
   assert.match(coordinatorCode, /<MonthlyConferenceCenter/);
+  assert.match(conferenceCode, /Em aberto/);
+  assert.match(conferenceCode, /classifyConferencePendingDetails/);
   assert.doesNotMatch(conferenceCode, /dangerouslySetInnerHTML/);
   assert.doesNotMatch(conferenceCode, /Supabase|PostgREST|Railway|schema cache/i);
   assert.doesNotMatch(conferenceCode, /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);

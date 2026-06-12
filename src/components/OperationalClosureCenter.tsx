@@ -16,6 +16,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { dataService } from "../services/dataService";
+import { classifyConferencePendingDetails } from "../services/monthlyConferenceEngine";
 
 type ClosureStatus =
   | "READY"
@@ -42,6 +43,9 @@ type ClosureRow = {
   billing_amount_cents?: number | null;
   tuss_mapping_status?: string | null;
   tuss_pending_reasons?: string[] | null;
+  tuss_pending_reason_codes?: string[] | null;
+  insurance_card_number?: string | null;
+  professional_registry?: string | null;
   guide_number?: string | null;
   authorization_code?: string | null;
   payer_requirement_source?: string | null;
@@ -123,6 +127,32 @@ const severityLabel: Record<string, string> = {
   CRITICAL: "Crítica",
 };
 
+const pendingTone: Record<string, string> = {
+  Assinatura: "bg-rose-50 text-rose-700",
+  Relatorio: "bg-orange-50 text-orange-700",
+  Guia: "bg-indigo-50 text-indigo-700",
+  Autorizacao: "bg-violet-50 text-violet-700",
+  Duracao: "bg-amber-50 text-amber-700",
+  Profissional: "bg-slate-100 text-slate-700",
+  Pagador: "bg-cyan-50 text-cyan-700",
+  Documento: "bg-fuchsia-50 text-fuchsia-700",
+  Procedimento: "bg-sky-50 text-sky-700",
+  TUSS: "bg-indigo-50 text-indigo-700",
+  Valor: "bg-emerald-50 text-emerald-700",
+  Carteirinha: "bg-violet-50 text-violet-700",
+  "Plano financeiro": "bg-cyan-50 text-cyan-700",
+  "Registro profissional": "bg-slate-100 text-slate-700",
+  "Aguardando realizacao": "bg-slate-50 text-slate-500",
+  "Nao aplicavel ao faturamento": "bg-slate-100 text-slate-600",
+};
+
+const pendingCategoryTone: Record<string, string> = {
+  configuration: "ring-sky-100",
+  operational: "ring-rose-100",
+  informational: "ring-slate-100",
+  not_applicable: "ring-slate-100",
+};
+
 function getLocalDateInput(date: Date) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -165,10 +195,33 @@ function normalizeStatus(value?: string | null): ClosureStatus {
   return Object.prototype.hasOwnProperty.call(statusMeta, status) ? (status as ClosureStatus) : "UNKNOWN";
 }
 
+function formatRevalidationMessage(counts: any, contextLabel: string) {
+  const created = Number(counts?.created || 0);
+  const updated = Number(counts?.updated || 0);
+  const changed = created + updated;
+  const reused = Number(counts?.reused || 0);
+  const skipped = Number(counts?.skipped || 0);
+  const errors = Number(counts?.errors || 0);
+  const found = Number(counts?.found || 0);
+  const evaluated = found || changed + reused + skipped + errors;
+  if (evaluated <= 0) return `Período conferido; nenhuma sessão nova para ${contextLabel}.`;
+  const parts = [];
+  if (changed > 0) parts.push(`${changed} atualizado(s)`);
+  if (reused > 0) parts.push(`${reused} sem alteração`);
+  if (skipped > 0) parts.push(`${skipped} preservado(s)`);
+  if (errors > 0) parts.push(`${errors} com erro`);
+  return `${evaluated} item(ns) avaliado(s): ${parts.length > 0 ? parts.join(", ") : "sem alterações"}.`;
+}
+
 function getHumanIssueCount(row: ClosureRow) {
-  const blocking = Number(row.blocking_issues_count || 0);
+  const details = classifyConferencePendingDetails(row);
+  const blocking = details.blocking.length;
   const warnings = Number(row.warning_issues_count || 0);
-  if (blocking === 0 && warnings === 0) return "Sem pendências";
+  if (blocking === 0 && warnings === 0) {
+    if (details.informational.length > 0) return details.informational.join(", ");
+    if (details.notApplicable.length > 0) return details.notApplicable.join(", ");
+    return "Sem pendências";
+  }
   const parts = [];
   if (blocking > 0) parts.push(`${blocking} pendência${blocking > 1 ? "s" : ""}`);
   if (warnings > 0) parts.push(`${warnings} alerta${warnings > 1 ? "s" : ""}`);
@@ -235,13 +288,17 @@ export function OperationalClosureCenter({
       const changed = Number(counts.created || 0) + Number(counts.updated || 0);
       const legacyMirrored = Number(counts.legacyMirrored || 0);
       const revalidationErrors = Number(counts.errors || 0);
+      const revalidationMessage = formatRevalidationMessage(counts, "fechamento");
       const firstRevalidationError = (Array.isArray(revalidation?.errorDetails) ? revalidation.errorDetails[0] : null) ||
         (Array.isArray(counts.errorDetails) ? counts.errorDetails[0] : null);
       const affectedIds = Array.isArray(counts.appointmentIds) ? counts.appointmentIds : [];
       const actionRevision = [
         Date.now(),
         changed,
+        Number(counts.reused || 0),
+        Number(counts.found || 0),
         legacyMirrored,
+        revalidationErrors,
         affectedIds.slice(0, 25).join(",")
       ].filter(Boolean).join(":");
       const requestRows = (pageNumber: number) => dataService.getClosureAppointments({
@@ -282,24 +339,20 @@ export function OperationalClosureCenter({
         setRevalidationInfo("");
         const reason = [firstRevalidationError?.reasonCode, firstRevalidationError?.dbCode].filter(Boolean).join(" · ");
         const detail = firstRevalidationError?.message ? ` Primeiro erro: ${reason || "sem código"} - ${firstRevalidationError.message}` : "";
-        setError(`${revalidationErrors} atendimento(s) falharam ao gerar checks de fechamento.${detail}`);
+        setError(`${revalidationMessage}${detail}`);
       } else if (revalidation?.success) {
         if (changed > 0 && nextRows.length === 0) {
           setRevalidationInfo("");
           setError(
             hasActiveFilters
-              ? `${changed} item(ns) foram atualizados, mas os filtros atuais ocultam os resultados.`
-              : `${changed} item(ns) foram revalidados, mas não foram carregados na tabela.`
+              ? `${revalidationMessage} Os filtros atuais ocultam os resultados.`
+              : `${revalidationMessage} Nenhum item foi carregado na tabela.`
           );
         } else if (legacyMirrored > 0 && changed === 0 && nextRows.length === 0) {
           setRevalidationInfo("");
           setError(`${legacyMirrored} agendamento(s) foram sincronizados, mas os checks de fechamento ainda nÃ£o foram materializados.`);
         } else {
-          setRevalidationInfo(
-            changed > 0
-              ? `${changed} item(ns) atualizados para conferência.`
-              : "Período conferido; nenhuma sessão nova para materializar."
-          );
+          setRevalidationInfo(revalidationMessage);
         }
       } else {
         setRevalidationInfo("");
@@ -394,8 +447,10 @@ export function OperationalClosureCenter({
   const kpis = [
     { label: "Prontas", value: totals?.ready ?? 0, tone: "text-emerald-700" },
     { label: "Pendências", value: totals?.pending ?? 0, tone: "text-rose-700" },
+    { label: "Em aberto", value: totals?.open ?? totals?.draft ?? 0, tone: "text-sky-700" },
     { label: "Atenção", value: totals?.warning ?? 0, tone: "text-amber-700" },
     { label: "Não faturáveis", value: totals?.notBillable ?? 0, tone: "text-slate-700" },
+    { label: "A revisar", value: totals?.unknown ?? 0, tone: "text-zinc-700" },
     { label: "Total de sessões", value: totals?.total ?? rows.length, tone: "text-slate-900" },
     { label: "Minutos realizados", value: totals?.actualMinutes ?? 0, tone: "text-indigo-700" },
   ];
@@ -642,6 +697,7 @@ export function OperationalClosureCenter({
                 const meta = statusMeta[normalizeStatus(row.readiness_status)];
                 const StatusIcon = meta.icon;
                 const isBusy = actionLoadingId === row.appointment_id;
+                const pendingDetails = classifyConferencePendingDetails(row);
                 return (
                   <tr key={String(row.appointment_id || `${row.patient_name}-${row.scheduled_start}`)} className="align-top hover:bg-slate-50/70">
                     <td className="px-4 py-3 text-slate-700">{formatDateTime(row.scheduled_start)}</td>
@@ -669,6 +725,13 @@ export function OperationalClosureCenter({
                     </td>
                     <td className="max-w-[260px] px-4 py-3 text-slate-600">
                       <div>{getHumanIssueCount(row)}</div>
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {pendingDetails.visible.length === 0 ? (
+                          <span className="rounded-full bg-emerald-50 px-2 py-1 text-xs text-emerald-700">Sem pendência</span>
+                        ) : pendingDetails.visible.slice(0, 4).map((item) => (
+                          <span key={`${item.category}-${item.label}`} className={`rounded-full px-2 py-1 text-xs ring-1 ${pendingTone[item.label] || "bg-slate-100 text-slate-700"} ${pendingCategoryTone[item.category] || ""}`}>{item.label}</span>
+                        ))}
+                      </div>
                       {Array.isArray(row.main_issues) && row.main_issues.length > 0 && (
                         <div className="mt-1 truncate text-xs text-slate-500">{row.main_issues[0]}</div>
                       )}

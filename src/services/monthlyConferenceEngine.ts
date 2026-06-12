@@ -66,6 +66,7 @@ export type MonthlyConferenceSummary = {
     pending: number;
     warning: number;
     notBillable: number;
+    open: number;
     draft: number;
     unknown: number;
     actualMinutes: number;
@@ -76,7 +77,7 @@ export type MonthlyConferenceSummary = {
     pendingAuthorizations: number;
     pendingDocuments: number;
   };
-  pendingByType: Array<{ type: string; count: number }>;
+  pendingByType: Array<{ type: string; count: number; category: 'configuration' | 'operational' }>;
   byPatient: any[];
   byProfessional: any[];
   byPayer: any[];
@@ -84,6 +85,23 @@ export type MonthlyConferenceSummary = {
   byProcedure: any[];
   byTussCode: any[];
   byGuideType: any[];
+};
+
+export type ConferencePendingCategory = 'operational' | 'configuration' | 'informational' | 'not_applicable';
+
+export type ConferencePendingDetail = {
+  label: string;
+  category: ConferencePendingCategory;
+  blocking: boolean;
+};
+
+export type ConferencePendingClassification = {
+  operational: string[];
+  configuration: string[];
+  informational: string[];
+  notApplicable: string[];
+  blocking: string[];
+  visible: ConferencePendingDetail[];
 };
 
 const statusSet = new Set(['READY', 'PENDING', 'WARNING', 'NOT_BILLABLE', 'DRAFT', 'UNKNOWN']);
@@ -136,23 +154,86 @@ function hasIssue(row: MonthlyConferenceRow, patterns: RegExp[]) {
   return patterns.some((pattern) => pattern.test(joined));
 }
 
-export function classifyConferencePendingKinds(row: MonthlyConferenceRow): string[] {
-  const kinds = new Set<string>();
-  if (hasIssue(row, [/assinatura/, /signature/])) kinds.add('Assinatura');
-  if (hasIssue(row, [/relatorio/, /evolucao/, /report/])) kinds.add('Relatorio');
-  if (!String(row.guide_number || '').trim() && hasIssue(row, [/guia/, /guide/])) kinds.add('Guia');
-  if (!String(row.authorization_code || '').trim() && hasIssue(row, [/autorizacao/, /authorization/])) kinds.add('Autorizacao');
-  if (hasIssue(row, [/duracao/, /duration/])) kinds.add('Duracao');
-  if (hasIssue(row, [/profissional/, /professional/])) kinds.add('Profissional');
-  if (hasIssue(row, [/pagador/, /convenio/, /payer/])) kinds.add('Pagador');
-  if (Number(row.required_document_pending_count || 0) > 0 || hasIssue(row, [/documento/, /document/])) kinds.add('Documento');
+function isNotBillableRow(row: MonthlyConferenceRow) {
+  return normalizeConferenceStatus(row.readiness_status) === 'NOT_BILLABLE';
+}
+
+function isOpenRow(row: MonthlyConferenceRow) {
+  const status = normalizeConferenceStatus(row.readiness_status);
+  return status === 'DRAFT' || (!row.actual_start && !row.actual_end && !Number(row.actual_minutes || 0));
+}
+
+function addUnique(target: string[], label: string) {
+  if (label && !target.includes(label)) target.push(label);
+}
+
+export function classifyConferencePendingDetails(row: MonthlyConferenceRow): ConferencePendingClassification {
+  const operational: string[] = [];
+  const configuration: string[] = [];
+  const informational: string[] = [];
+  const notApplicable: string[] = [];
+  const notBillable = isNotBillableRow(row);
+  const open = isOpenRow(row);
+
+  const addOperational = (label: string) => {
+    if (notBillable) addUnique(informational, label);
+    else if (open && ['Assinatura', 'Relatorio', 'Duracao', 'Sessao concluida'].includes(label)) addUnique(notApplicable, label);
+    else addUnique(operational, label);
+  };
+
+  if (hasIssue(row, [/assinatura/, /signature/])) addOperational('Assinatura');
+  if (hasIssue(row, [/relatorio/, /evolucao/, /report/])) addOperational('Relatorio');
+  if (!String(row.guide_number || '').trim() && hasIssue(row, [/guia/, /guide/])) addOperational('Guia');
+  if (!String(row.authorization_code || '').trim() && hasIssue(row, [/autorizacao/, /authorization/])) addOperational('Autorizacao');
+  if (hasIssue(row, [/duracao/, /duration/])) addOperational('Duracao');
+  if (hasIssue(row, [/profissional/, /professional/])) addOperational('Profissional');
+  if (Number(row.required_document_pending_count || 0) > 0 || hasIssue(row, [/documento/, /document/])) addOperational('Documento');
+
   const tussPendingCodes = Array.isArray(row.tuss_pending_reason_codes) ? row.tuss_pending_reason_codes : [];
   const tussPendingLabels = Array.isArray(row.tuss_pending_reasons) ? row.tuss_pending_reasons.join(' ') : '';
-  if (!String(row.internal_procedure_name || '').trim() || tussPendingCodes.includes('missing_service_catalog')) kinds.add('Procedimento');
-  if (!String(row.tuss_code || '').trim() || tussPendingCodes.includes('missing_tuss_mapping') || tussPendingCodes.includes('missing_tuss_code')) kinds.add('TUSS');
-  if (!Number(row.billing_amount_cents || row.expected_amount_cents || 0) || tussPendingCodes.includes('missing_amount')) kinds.add('Valor');
-  if (!String(row.insurance_card_number || '').trim() || tussPendingCodes.includes('missing_card_number') || /carteirinha/i.test(tussPendingLabels)) kinds.add('Carteirinha');
-  return Array.from(kinds);
+  if (!String(row.payer_name || row.payer_name_snapshot || '').trim() || hasIssue(row, [/pagador/, /convenio/, /payer/])) addUnique(configuration, 'Pagador');
+  if (!String(row.financial_plan_name || '').trim()) addUnique(configuration, 'Plano financeiro');
+  if (!String(row.internal_procedure_name || '').trim() || tussPendingCodes.includes('missing_service_catalog')) addUnique(configuration, 'Procedimento');
+  if (!String(row.tuss_code || '').trim() || tussPendingCodes.includes('missing_tuss_mapping') || tussPendingCodes.includes('missing_tuss_code')) addUnique(configuration, 'TUSS');
+  if (!Number(row.billing_amount_cents || row.expected_amount_cents || 0) || tussPendingCodes.includes('missing_amount')) addUnique(configuration, 'Valor');
+  if (!String(row.insurance_card_number || '').trim() || tussPendingCodes.includes('missing_card_number') || /carteirinha/i.test(tussPendingLabels)) addUnique(configuration, 'Carteirinha');
+  if (!String(row.professional_registry || '').trim() || tussPendingCodes.includes('missing_professional_registry')) addUnique(configuration, 'Registro profissional');
+
+  if (notBillable) {
+    addUnique(informational, 'Nao aplicavel ao faturamento');
+  } else if (open) {
+    addUnique(notApplicable, 'Aguardando realizacao');
+  }
+
+  const actionableConfiguration = notBillable ? [] : configuration;
+  const blocking = [...actionableConfiguration, ...operational];
+  const visible: ConferencePendingDetail[] = [
+    ...actionableConfiguration.map((label) => ({ label, category: 'configuration' as const, blocking: true })),
+    ...operational.map((label) => ({ label, category: 'operational' as const, blocking: true })),
+    ...informational.map((label) => ({ label, category: 'informational' as const, blocking: false })),
+    ...notApplicable.map((label) => ({ label, category: 'not_applicable' as const, blocking: false }))
+  ];
+
+  return {
+    operational,
+    configuration: actionableConfiguration,
+    informational,
+    notApplicable,
+    blocking,
+    visible
+  };
+}
+
+export function classifyConferencePendingKinds(row: MonthlyConferenceRow): string[] {
+  return classifyConferencePendingDetails(row).blocking;
+}
+
+export function formatConferencePendingSummary(row: MonthlyConferenceRow): string {
+  const details = classifyConferencePendingDetails(row);
+  if (details.blocking.length > 0) return details.blocking.join('; ');
+  if (details.informational.length > 0) return details.informational.join('; ');
+  if (details.notApplicable.length > 0) return details.notApplicable.join('; ');
+  return 'Sem pendencias';
 }
 
 function addMinutes(target: any, scheduled: number, actual: number) {
@@ -170,7 +251,7 @@ function sortByCountAndName(rows: any[], countKey = 'totalSessions') {
 
 export function buildMonthlyConferenceSummary(rows: MonthlyConferenceRow[]): MonthlyConferenceSummary {
   const safeRows = Array.isArray(rows) ? rows : [];
-  const pendingTypeCounts = new Map<string, number>();
+  const pendingTypeCounts = new Map<string, { type: string; count: number; category: 'configuration' | 'operational' }>();
   const byPatient = new Map<string, any>();
   const byProfessional = new Map<string, any>();
   const byPayer = new Map<string, any>();
@@ -185,6 +266,7 @@ export function buildMonthlyConferenceSummary(rows: MonthlyConferenceRow[]): Mon
     pending: 0,
     warning: 0,
     notBillable: 0,
+    open: 0,
     draft: 0,
     unknown: 0,
     actualMinutes: 0,
@@ -200,7 +282,8 @@ export function buildMonthlyConferenceSummary(rows: MonthlyConferenceRow[]): Mon
     const status = normalizeConferenceStatus(row.readiness_status);
     const scheduled = Math.max(0, Math.round(Number(row.scheduled_minutes || 0)));
     const actual = Math.max(0, Math.round(Number(row.actual_minutes || 0)));
-    const pendingKinds = classifyConferencePendingKinds(row);
+    const pendingDetails = classifyConferencePendingDetails(row);
+    const pendingKinds = pendingDetails.blocking;
     const serviceType = String(row.service_type || 'Sessao').trim() || 'Sessao';
     const patientName = String(row.patient_name || 'Paciente').trim() || 'Paciente';
     const professionalName = String(row.professional_name || 'Equipe').trim() || 'Equipe';
@@ -213,16 +296,24 @@ export function buildMonthlyConferenceSummary(rows: MonthlyConferenceRow[]): Mon
     else if (status === 'PENDING') kpis.pending += 1;
     else if (status === 'WARNING') kpis.warning += 1;
     else if (status === 'NOT_BILLABLE') kpis.notBillable += 1;
-    else if (status === 'DRAFT') kpis.draft += 1;
+    else if (status === 'DRAFT') {
+      kpis.draft += 1;
+      kpis.open += 1;
+    }
     else kpis.unknown += 1;
     kpis.scheduledMinutes += scheduled;
     if (status !== 'NOT_BILLABLE') kpis.actualMinutes += actual;
-    if (pendingKinds.includes('Assinatura')) kpis.pendingSignatures += 1;
-    if (pendingKinds.includes('Relatorio')) kpis.pendingReports += 1;
-    if (pendingKinds.includes('Guia')) kpis.pendingGuides += 1;
-    if (pendingKinds.includes('Autorizacao')) kpis.pendingAuthorizations += 1;
-    if (pendingKinds.includes('Documento')) kpis.pendingDocuments += 1;
-    pendingKinds.forEach((kind) => pendingTypeCounts.set(kind, (pendingTypeCounts.get(kind) || 0) + 1));
+    if (pendingDetails.operational.includes('Assinatura')) kpis.pendingSignatures += 1;
+    if (pendingDetails.operational.includes('Relatorio')) kpis.pendingReports += 1;
+    if (pendingDetails.operational.includes('Guia')) kpis.pendingGuides += 1;
+    if (pendingDetails.operational.includes('Autorizacao')) kpis.pendingAuthorizations += 1;
+    if (pendingDetails.operational.includes('Documento')) kpis.pendingDocuments += 1;
+    const addPendingTypeCount = (kind: string, category: 'configuration' | 'operational') => {
+      const current = pendingTypeCounts.get(kind) || { type: kind, count: 0, category };
+      pendingTypeCounts.set(kind, { ...current, count: current.count + 1, category: current.category || category });
+    };
+    pendingDetails.configuration.forEach((kind) => addPendingTypeCount(kind, 'configuration'));
+    pendingDetails.operational.forEach((kind) => addPendingTypeCount(kind, 'operational'));
 
     const patientKey = String(row.patient_id || patientName);
     const patient = byPatient.get(patientKey) || {
@@ -244,8 +335,8 @@ export function buildMonthlyConferenceSummary(rows: MonthlyConferenceRow[]): Mon
     patient.realizedSessions += actual > 0 ? 1 : 0;
     patient.readySessions += status === 'READY' ? 1 : 0;
     patient.pendingSessions += status === 'PENDING' ? 1 : 0;
-    patient.pendingSignatures += pendingKinds.includes('Assinatura') ? 1 : 0;
-    patient.pendingReports += pendingKinds.includes('Relatorio') ? 1 : 0;
+    patient.pendingSignatures += pendingDetails.operational.includes('Assinatura') ? 1 : 0;
+    patient.pendingReports += pendingDetails.operational.includes('Relatorio') ? 1 : 0;
     patient.serviceTypes[serviceType] = (patient.serviceTypes[serviceType] || 0) + actual;
     addMinutes(patient, scheduled, actual);
     byPatient.set(patientKey, patient);
@@ -266,7 +357,7 @@ export function buildMonthlyConferenceSummary(rows: MonthlyConferenceRow[]): Mon
     };
     professional.totalSessions += 1;
     professional.realizedSessions += actual > 0 ? 1 : 0;
-    professional.pendingReports += pendingKinds.includes('Relatorio') ? 1 : 0;
+    professional.pendingReports += pendingDetails.operational.includes('Relatorio') ? 1 : 0;
     if (actual > 0 && row.scheduled_start) professional.workedDays.add(String(row.scheduled_start).slice(0, 10));
     professional.serviceTypes[serviceType] = (professional.serviceTypes[serviceType] || 0) + actual;
     addMinutes(professional, scheduled, actual);
@@ -289,11 +380,11 @@ export function buildMonthlyConferenceSummary(rows: MonthlyConferenceRow[]): Mon
     payer.totalSessions += 1;
     payer.ready += status === 'READY' ? 1 : 0;
     payer.pending += status === 'PENDING' ? 1 : 0;
-    payer.pendingGuides += pendingKinds.includes('Guia') ? 1 : 0;
-    payer.pendingAuthorizations += pendingKinds.includes('Autorizacao') ? 1 : 0;
-    payer.pendingSignatures += pendingKinds.includes('Assinatura') ? 1 : 0;
-    payer.pendingReports += pendingKinds.includes('Relatorio') ? 1 : 0;
-    payer.durationWarnings += pendingKinds.includes('Duracao') ? 1 : 0;
+    payer.pendingGuides += pendingDetails.operational.includes('Guia') ? 1 : 0;
+    payer.pendingAuthorizations += pendingDetails.operational.includes('Autorizacao') ? 1 : 0;
+    payer.pendingSignatures += pendingDetails.operational.includes('Assinatura') ? 1 : 0;
+    payer.pendingReports += pendingDetails.operational.includes('Relatorio') ? 1 : 0;
+    payer.durationWarnings += pendingDetails.operational.includes('Duracao') ? 1 : 0;
     pendingKinds.forEach((kind) => { payer.pendingTypes[kind] = (payer.pendingTypes[kind] || 0) + 1; });
     byPayer.set(payerKey, payer);
 
@@ -356,7 +447,7 @@ export function buildMonthlyConferenceSummary(rows: MonthlyConferenceRow[]): Mon
 
   return {
     kpis,
-    pendingByType: Array.from(pendingTypeCounts.entries()).map(([type, count]) => ({ type, count })).sort((a, b) => b.count - a.count),
+    pendingByType: Array.from(pendingTypeCounts.values()).sort((a, b) => b.count - a.count || a.type.localeCompare(b.type, 'pt-BR')),
     byPatient: sortByCountAndName(Array.from(byPatient.values())),
     byProfessional: sortByCountAndName(Array.from(byProfessional.values()).map((row) => ({
       ...row,
@@ -435,57 +526,60 @@ export const MONTHLY_CONFERENCE_EXPORT_FIELDS = [
 ] as const;
 
 export function buildMonthlyConferenceExportRows(rows: MonthlyConferenceRow[]) {
-  return (Array.isArray(rows) ? rows : []).map((row) => ({
-    competenceMonth: competenceMonth(row.scheduled_start),
-    clinicName: row.clinic_name || '',
-    unitName: row.unit_name || '',
-    scheduledDate: String(row.scheduled_start || '').slice(0, 10),
-    startTime: formatTimeOnly(row.scheduled_start || row.actual_start),
-    endTime: formatTimeOnly(row.scheduled_end || row.actual_end),
-    patientName: row.patient_name || 'Paciente',
-    professionalName: row.professional_name || 'Equipe',
-    professionalRegistry: row.professional_registry || '',
-    serviceType: row.service_type || 'Sessao',
-    internalProcedureCode: row.internal_procedure_code || '',
-    internalProcedureName: row.internal_procedure_name || 'Procedimento nao configurado',
-    tussCode: row.tuss_code || 'TUSS nao configurado',
-    tussDescription: row.tuss_description || '',
-    tussVersion: row.tuss_version || '',
-    guideType: row.guide_type || '',
-    billingUnit: row.billing_unit || '',
-    billingQuantity: row.billing_quantity ?? '',
-    billingUnitAmount: row.billing_unit_amount_cents ? formatCurrencyCents(row.billing_unit_amount_cents) : '',
-    billingExpectedAmount: row.billing_amount_cents ? formatCurrencyCents(row.billing_amount_cents) : 'Valor nao configurado',
-    tussMappingStatus: row.tuss_mapping_status === 'configured' ? 'Configurado' : 'Pendente de configuracao',
-    tussPendingReasons: Array.isArray(row.tuss_pending_reasons) ? row.tuss_pending_reasons.join('; ') : '',
-    tussMappingValidFrom: row.tuss_mapping_valid_from || '',
-    tussMappingValidTo: row.tuss_mapping_valid_to || '',
-    payerName: row.payer_name || row.payer_name_snapshot || 'Sem pagador',
-    financialPlanName: row.financial_plan_name || '',
-    insuranceCardNumber: row.insurance_card_number || '',
-    guideNumber: row.guide_number || '',
-    authorizationCode: row.authorization_code || '',
-    copaymentAmount: formatCurrencyCents(row.copayment_amount_cents),
-    expectedAmount: row.expected_amount_cents ? formatCurrencyCents(row.expected_amount_cents) : 'Valor nao configurado',
-    financialStatus: row.financial_status || '',
-    scheduledMinutes: Math.round(Number(row.scheduled_minutes || 0)),
-    actualMinutes: Math.round(Number(row.actual_minutes || 0)),
-    appointmentStatus: row.appointment_status || (Number(row.actual_minutes || 0) > 0 ? 'Realizada' : 'Agendada'),
-    readinessStatus: normalizeConferenceStatus(row.readiness_status),
-    conferenceStatus: row.conference_status_label || row.conference_status || 'A revisar',
-    exportStatus: row.export_status || (row.export_id ? 'Exportado' : 'Nao exportado'),
-    signaturePresent: classifyConferencePendingKinds(row).includes('Assinatura') ? 'Nao' : 'Sim',
-    reportPresent: classifyConferencePendingKinds(row).includes('Relatorio') ? 'Nao' : 'Sim',
-    pendingDocuments: Math.max(0, Math.round(Number(row.required_document_pending_count || 0))),
-    pendingDetails: Array.isArray(row.main_issues) ? row.main_issues.join('; ') : '',
-    pendingKinds: classifyConferencePendingKinds(row).join('; '),
-    guideStatus: row.guide_number ? 'Informada' : 'Pendente/nao exigida',
-    authorizationStatus: row.authorization_code ? 'Informada' : 'Pendente/nao exigida',
-    exportedAt: row.exported_at || '',
-    exportedBy: row.exported_by_name || '',
-    exportId: row.export_id || '',
-    notes: row.notes || ''
-  }));
+  return (Array.isArray(rows) ? rows : []).map((row) => {
+    const pendingDetails = classifyConferencePendingDetails(row);
+    return {
+      competenceMonth: competenceMonth(row.scheduled_start),
+      clinicName: row.clinic_name || '',
+      unitName: row.unit_name || '',
+      scheduledDate: String(row.scheduled_start || '').slice(0, 10),
+      startTime: formatTimeOnly(row.scheduled_start || row.actual_start),
+      endTime: formatTimeOnly(row.scheduled_end || row.actual_end),
+      patientName: row.patient_name || 'Paciente',
+      professionalName: row.professional_name || 'Equipe',
+      professionalRegistry: row.professional_registry || '',
+      serviceType: row.service_type || 'Sessao',
+      internalProcedureCode: row.internal_procedure_code || '',
+      internalProcedureName: row.internal_procedure_name || 'Procedimento nao configurado',
+      tussCode: row.tuss_code || 'TUSS nao configurado',
+      tussDescription: row.tuss_description || '',
+      tussVersion: row.tuss_version || '',
+      guideType: row.guide_type || '',
+      billingUnit: row.billing_unit || '',
+      billingQuantity: row.billing_quantity ?? '',
+      billingUnitAmount: row.billing_unit_amount_cents ? formatCurrencyCents(row.billing_unit_amount_cents) : '',
+      billingExpectedAmount: row.billing_amount_cents ? formatCurrencyCents(row.billing_amount_cents) : 'Valor nao configurado',
+      tussMappingStatus: row.tuss_mapping_status === 'configured' ? 'Configurado' : 'Pendente de configuracao',
+      tussPendingReasons: Array.isArray(row.tuss_pending_reasons) ? row.tuss_pending_reasons.join('; ') : '',
+      tussMappingValidFrom: row.tuss_mapping_valid_from || '',
+      tussMappingValidTo: row.tuss_mapping_valid_to || '',
+      payerName: row.payer_name || row.payer_name_snapshot || 'Sem pagador',
+      financialPlanName: row.financial_plan_name || '',
+      insuranceCardNumber: row.insurance_card_number || '',
+      guideNumber: row.guide_number || '',
+      authorizationCode: row.authorization_code || '',
+      copaymentAmount: formatCurrencyCents(row.copayment_amount_cents),
+      expectedAmount: row.expected_amount_cents ? formatCurrencyCents(row.expected_amount_cents) : 'Valor nao configurado',
+      financialStatus: row.financial_status || '',
+      scheduledMinutes: Math.round(Number(row.scheduled_minutes || 0)),
+      actualMinutes: Math.round(Number(row.actual_minutes || 0)),
+      appointmentStatus: row.appointment_status || (Number(row.actual_minutes || 0) > 0 ? 'Realizada' : isNotBillableRow(row) ? 'Nao faturavel' : 'Agendada'),
+      readinessStatus: normalizeConferenceStatus(row.readiness_status),
+      conferenceStatus: row.conference_status_label || row.conference_status || 'A revisar',
+      exportStatus: row.export_status || (row.export_id ? 'Exportado' : 'Nao exportado'),
+      signaturePresent: pendingDetails.operational.includes('Assinatura') ? 'Nao' : pendingDetails.notApplicable.includes('Assinatura') ? 'Ainda nao aplicavel' : 'Sim',
+      reportPresent: pendingDetails.operational.includes('Relatorio') ? 'Nao' : pendingDetails.notApplicable.includes('Relatorio') ? 'Ainda nao aplicavel' : 'Sim',
+      pendingDocuments: Math.max(0, Math.round(Number(row.required_document_pending_count || 0))),
+      pendingDetails: formatConferencePendingSummary(row),
+      pendingKinds: pendingDetails.blocking.join('; '),
+      guideStatus: row.guide_number ? 'Informada' : pendingDetails.operational.includes('Guia') ? 'Pendente' : 'Nao exigida/informativa',
+      authorizationStatus: row.authorization_code ? 'Informada' : pendingDetails.operational.includes('Autorizacao') ? 'Pendente' : 'Nao exigida/informativa',
+      exportedAt: row.exported_at || '',
+      exportedBy: row.exported_by_name || '',
+      exportId: row.export_id || '',
+      notes: row.notes || ''
+    };
+  });
 }
 
 export function rowsToCsv(rows: any[], fields: string[]) {

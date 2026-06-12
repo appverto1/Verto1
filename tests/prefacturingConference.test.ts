@@ -190,8 +190,8 @@ test('frontend atualiza conferencia sem F5 e nao promete faturamento eletronico'
   assert.match(dataServiceCode, /\/api\/closure\/revalidate-period/);
   assert.match(closureCode, /dataService\.revalidateClosurePeriod/);
   assert.match(conferenceCode, /dataService\.revalidateClosurePeriod/);
-  assert.match(closureCode, /foram atualizados, mas os filtros atuais ocultam os resultados/);
-  assert.match(closureCode, /foram revalidados, mas não foram carregados na tabela/);
+  assert.match(closureCode, /Os filtros atuais ocultam os resultados/);
+  assert.match(closureCode, /Nenhum item foi carregado na tabela/);
   assert.match(closureCode, /nextRows\.length === 0 && page > 1/);
   assert.match(dataServiceCode, /updateMonthlyConferenceSessionStatus/);
   assert.match(dataServiceCode, /\/api\/conference\/monthly\/session\/\$\{encodeURIComponent\(String\(appointmentId\)\)\}\/status/);

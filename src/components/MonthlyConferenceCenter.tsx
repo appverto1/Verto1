@@ -19,7 +19,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { dataService } from "../services/dataService";
-import { classifyConferencePendingKinds, formatConferenceMinutes } from "../services/monthlyConferenceEngine";
+import { classifyConferencePendingDetails, formatConferenceMinutes } from "../services/monthlyConferenceEngine";
 
 type ConferenceStatus = "READY" | "PENDING" | "WARNING" | "NOT_BILLABLE" | "DRAFT" | "UNKNOWN";
 
@@ -112,6 +112,17 @@ const pendingTone: Record<string, string> = {
   TUSS: "bg-indigo-50 text-indigo-700",
   Valor: "bg-emerald-50 text-emerald-700",
   Carteirinha: "bg-violet-50 text-violet-700",
+  "Plano financeiro": "bg-cyan-50 text-cyan-700",
+  "Registro profissional": "bg-slate-100 text-slate-700",
+  "Aguardando realizacao": "bg-slate-50 text-slate-500",
+  "Nao aplicavel ao faturamento": "bg-slate-100 text-slate-600",
+};
+
+const pendingCategoryTone: Record<string, string> = {
+  configuration: "ring-sky-100",
+  operational: "ring-rose-100",
+  informational: "ring-slate-100",
+  not_applicable: "ring-slate-100",
 };
 
 function getLocalDateInput(date: Date) {
@@ -150,8 +161,31 @@ function formatDateTime(value?: string | null) {
   return date.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
+function formatOptionalMinutes(value?: number | null) {
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return "Não informado";
+  return formatConferenceMinutes(value);
+}
+
 function safeName(value: any, fallback: string) {
   return String(value || fallback).trim() || fallback;
+}
+
+function formatRevalidationMessage(counts: any, contextLabel: string) {
+  const created = Number(counts?.created || 0);
+  const updated = Number(counts?.updated || 0);
+  const changed = created + updated;
+  const reused = Number(counts?.reused || 0);
+  const skipped = Number(counts?.skipped || 0);
+  const errors = Number(counts?.errors || 0);
+  const found = Number(counts?.found || 0);
+  const evaluated = found || changed + reused + skipped + errors;
+  if (evaluated <= 0) return `Período conferido; nenhuma sessão nova para ${contextLabel}.`;
+  const parts = [];
+  if (changed > 0) parts.push(`${changed} atualizado(s)`);
+  if (reused > 0) parts.push(`${reused} sem alteração`);
+  if (skipped > 0) parts.push(`${skipped} preservado(s)`);
+  if (errors > 0) parts.push(`${errors} com erro`);
+  return `${evaluated} item(ns) avaliado(s): ${parts.length > 0 ? parts.join(", ") : "sem alterações"}.`;
 }
 
 function shortIssueLabel(value: string) {
@@ -164,6 +198,14 @@ function shortIssueLabel(value: string) {
   if (normalized.includes("document")) return "Documento";
   if (normalized.includes("pagador") || normalized.includes("convenio")) return "Pagador";
   return "Conferência";
+}
+
+function pendingStatusText(row: ConferenceRow, label: string, pendingText: string, clearText: string) {
+  const details = classifyConferencePendingDetails(row);
+  if (details.operational.includes(label) || details.configuration.includes(label)) return pendingText;
+  if (details.notApplicable.includes(label)) return "Ainda não aplicável.";
+  if (details.informational.includes(label)) return "Não aplicável ao faturamento.";
+  return clearText;
 }
 
 export function MonthlyConferenceCenter({
@@ -293,13 +335,17 @@ export function MonthlyConferenceCenter({
       const changed = Number(counts.created || 0) + Number(counts.updated || 0);
       const legacyMirrored = Number(counts.legacyMirrored || 0);
       const revalidationErrors = Number(counts.errors || 0);
+      const revalidationMessage = formatRevalidationMessage(counts, "conferência mensal");
       const firstRevalidationError = (Array.isArray(revalidation?.errorDetails) ? revalidation.errorDetails[0] : null) ||
         (Array.isArray(counts.errorDetails) ? counts.errorDetails[0] : null);
       const affectedIds = Array.isArray(counts.appointmentIds) ? counts.appointmentIds : [];
       const actionRevision = [
         Date.now(),
         changed,
+        Number(counts.reused || 0),
+        Number(counts.found || 0),
         legacyMirrored,
+        revalidationErrors,
         affectedIds.slice(0, 25).join(",")
       ].filter(Boolean).join(":");
       const listPayload = { ...filterPayload, actionRevision };
@@ -343,24 +389,20 @@ export function MonthlyConferenceCenter({
         setRevalidationInfo("");
         const reason = [firstRevalidationError?.reasonCode, firstRevalidationError?.dbCode].filter(Boolean).join(" · ");
         const detail = firstRevalidationError?.message ? ` Primeiro erro: ${reason || "sem código"} - ${firstRevalidationError.message}` : "";
-        setError(`${revalidationErrors} atendimento(s) falharam ao gerar checks de conferência.${detail}`);
+        setError(`${revalidationMessage}${detail}`);
       } else if (revalidation?.success) {
         if (changed > 0 && nextRows.length === 0) {
           setRevalidationInfo("");
           setError(
             hasActiveFilters
-              ? `${changed} item(ns) foram atualizados, mas os filtros atuais ocultam os resultados.`
-              : `${changed} item(ns) foram revalidados, mas não foram carregados na tabela.`
+              ? `${revalidationMessage} Os filtros atuais ocultam os resultados.`
+              : `${revalidationMessage} Nenhum item foi carregado na tabela.`
           );
         } else if (legacyMirrored > 0 && changed === 0 && nextRows.length === 0) {
           setRevalidationInfo("");
           setError(`${legacyMirrored} agendamento(s) foram sincronizados, mas os checks de conferÃªncia ainda nÃ£o foram materializados.`);
         } else {
-          setRevalidationInfo(
-            changed > 0
-              ? `${changed} item(ns) atualizados para a conferência mensal.`
-              : "Período conferido; nenhuma sessão nova para materializar."
-          );
+          setRevalidationInfo(revalidationMessage);
         }
       }
       setSummaries({
@@ -502,8 +544,10 @@ export function MonthlyConferenceCenter({
     { label: "Total", value: kpis?.totalSessions ?? 0, tone: "text-slate-900" },
     { label: "Prontas", value: kpis?.ready ?? 0, tone: "text-emerald-700" },
     { label: "Pendências", value: kpis?.pending ?? 0, tone: "text-orange-700" },
+    { label: "Em aberto", value: kpis?.open ?? kpis?.draft ?? 0, tone: "text-sky-700" },
     { label: "Atenção", value: kpis?.warning ?? 0, tone: "text-amber-700" },
     { label: "Não faturáveis", value: kpis?.notBillable ?? 0, tone: "text-slate-600" },
+    { label: "A revisar", value: kpis?.unknown ?? 0, tone: "text-zinc-700" },
     { label: "Tempo realizado", value: formatConferenceMinutes(kpis?.actualMinutes || 0), tone: "text-indigo-700" },
     { label: "Tempo previsto", value: formatConferenceMinutes(kpis?.scheduledMinutes || 0), tone: "text-cyan-700" },
     { label: "Assinaturas", value: kpis?.pendingSignatures ?? 0, tone: "text-rose-700" },
@@ -700,9 +744,10 @@ export function MonthlyConferenceCenter({
       {pendingByType.length > 0 && (
         <section className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
           <div className="text-sm font-semibold text-slate-700">Pendências mais frequentes</div>
+          <div className="mt-0.5 text-xs text-slate-500">Bloqueios e configuração de pré-faturamento; itens não aplicáveis ficam apenas na linha.</div>
           <div className="mt-2 flex flex-wrap gap-2">
             {pendingByType.slice(0, 8).map((item) => (
-              <span key={item.type} className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">
+              <span key={item.type} className={`rounded-full px-3 py-1 text-xs font-medium ring-1 ${item.category === "configuration" ? "bg-sky-50 text-sky-700 ring-sky-100" : "bg-rose-50 text-rose-700 ring-rose-100"}`}>
                 {item.type}: {item.count}
               </span>
             ))}
@@ -745,7 +790,7 @@ export function MonthlyConferenceCenter({
                   const status = normalizeStatus(row.readiness_status);
                   const meta = statusMeta[status];
                   const StatusIcon = meta.icon;
-                  const pendingKinds = classifyConferencePendingKinds(row);
+                  const pendingDetails = classifyConferencePendingDetails(row);
                   const workflowStatus = normalizeConferenceWorkflowStatus(row.conference_status);
                   const workflowMeta = conferenceStatusMeta[workflowStatus];
                   const isBusy = actionLoadingId === row.appointment_id;
@@ -760,8 +805,8 @@ export function MonthlyConferenceCenter({
                         <div className="mt-1 text-xs text-slate-500">{row.tuss_code ? `TUSS ${row.tuss_code}` : "TUSS pendente"}</div>
                       </td>
                       <td className="px-4 py-3 text-slate-600">{safeName(row.payer_name, "Sem pagador")}</td>
-                      <td className="px-4 py-3 text-slate-600">{formatConferenceMinutes(row.scheduled_minutes || 0)}</td>
-                      <td className="px-4 py-3 text-slate-600">{formatConferenceMinutes(row.actual_minutes || 0)}</td>
+                      <td className="px-4 py-3 text-slate-600">{formatOptionalMinutes(row.scheduled_minutes)}</td>
+                      <td className="px-4 py-3 text-slate-600">{formatOptionalMinutes(row.actual_minutes)}</td>
                       <td className="px-4 py-3 text-slate-600">{Number(row.actual_minutes || 0) > 0 ? "Realizada" : status === "NOT_BILLABLE" ? "Não faturável" : "Agendada"}</td>
                       <td className="px-4 py-3">
                         <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-xs font-medium ring-1 ${meta.className}`}>
@@ -779,10 +824,10 @@ export function MonthlyConferenceCenter({
                       </td>
                       <td className="max-w-[260px] px-4 py-3">
                         <div className="flex flex-wrap gap-1">
-                          {pendingKinds.length === 0 ? (
+                          {pendingDetails.visible.length === 0 ? (
                             <span className="rounded-full bg-emerald-50 px-2 py-1 text-xs text-emerald-700">Sem pendência</span>
-                          ) : pendingKinds.slice(0, 4).map((kind) => (
-                            <span key={kind} className={`rounded-full px-2 py-1 text-xs ${pendingTone[kind] || "bg-slate-100 text-slate-700"}`}>{kind}</span>
+                          ) : pendingDetails.visible.slice(0, 4).map((item) => (
+                            <span key={`${item.category}-${item.label}`} className={`rounded-full px-2 py-1 text-xs ring-1 ${pendingTone[item.label] || "bg-slate-100 text-slate-700"} ${pendingCategoryTone[item.category] || ""}`}>{item.label}</span>
                           ))}
                         </div>
                       </td>
@@ -874,8 +919,8 @@ export function MonthlyConferenceCenter({
             </div>
             <div className="max-h-[70vh] overflow-y-auto">
               <div className="grid gap-3 p-5 sm:grid-cols-5">
-                <div className="rounded-md border border-slate-200 px-3 py-2"><div className="text-xs text-slate-500">Planejado</div><div className="font-semibold">{formatConferenceMinutes(detail.scheduled_minutes || 0)}</div></div>
-                <div className="rounded-md border border-slate-200 px-3 py-2"><div className="text-xs text-slate-500">Realizado</div><div className="font-semibold">{formatConferenceMinutes(detail.actual_minutes || 0)}</div></div>
+                <div className="rounded-md border border-slate-200 px-3 py-2"><div className="text-xs text-slate-500">Planejado</div><div className="font-semibold">{formatOptionalMinutes(detail.scheduled_minutes)}</div></div>
+                <div className="rounded-md border border-slate-200 px-3 py-2"><div className="text-xs text-slate-500">Realizado</div><div className="font-semibold">{formatOptionalMinutes(detail.actual_minutes)}</div></div>
                 <div className="rounded-md border border-slate-200 px-3 py-2"><div className="text-xs text-slate-500">Pagador</div><div className="font-semibold">{safeName(detail.payer_name, "Sem pagador")}</div></div>
                 <div className="rounded-md border border-slate-200 px-3 py-2"><div className="text-xs text-slate-500">Status</div><div className="font-semibold">{statusMeta[normalizeStatus(detail.readiness_status)].label}</div></div>
                 <div className="rounded-md border border-slate-200 px-3 py-2"><div className="text-xs text-slate-500">Conferência</div><div className="font-semibold">{conferenceStatusMeta[normalizeConferenceWorkflowStatus(detail.conference_status)].label}</div></div>
@@ -916,8 +961,8 @@ export function MonthlyConferenceCenter({
                 </div>
               ))}
               {renderSection("documents", "Documentos obrigatórios", <div className="text-sm text-slate-600">{Number(detail.required_document_pending_count || 0)} documento(s) pendente(s).</div>)}
-              {renderSection("signature", "Assinatura", <div className="text-sm text-slate-600">{classifyConferencePendingKinds(detail).includes("Assinatura") ? "Assinatura pendente." : "Sem pendência de assinatura."}</div>)}
-              {renderSection("report", "Relatório/evolução", <div className="text-sm text-slate-600">{classifyConferencePendingKinds(detail).includes("Relatorio") ? "Relatório pendente." : "Sem pendência de relatório."}</div>)}
+              {renderSection("signature", "Assinatura", <div className="text-sm text-slate-600">{pendingStatusText(detail, "Assinatura", "Assinatura pendente.", "Sem pendência de assinatura.")}</div>)}
+              {renderSection("report", "Relatório/evolução", <div className="text-sm text-slate-600">{pendingStatusText(detail, "Relatorio", "Relatório pendente.", "Sem pendência de relatório.")}</div>)}
               {renderSection("audit", "Histórico/auditoria resumida", <div className="text-sm text-slate-600">Última atualização: {formatDateTime(detail.audit?.updatedAt || detail.audit?.generatedAt)}</div>)}
             </div>
             <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-5 py-3">
