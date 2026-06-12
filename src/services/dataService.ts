@@ -2626,6 +2626,31 @@ export const dataService = {
     }
   },
 
+  async revalidateClosurePeriod(options: { from: string; to: string; dryRun?: boolean }) {
+    const endpoint = '/api/closure/revalidate-period';
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({
+          from: options.from,
+          to: options.to,
+          dryRun: Boolean(options.dryRun)
+        })
+      }, {
+        helperName: 'revalidateClosurePeriod',
+        operation: 'write',
+        table: 'appointments,clinic_state,appointment_closure_checks,appointment_closure_audit_logs',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, error: 'Não foi possível revalidar o período agora.' };
+    }
+  },
+
   async getClosureAppointmentDetail(appointmentId: string) {
     const endpoint = `/api/closure/appointments/${encodeURIComponent(String(appointmentId))}`;
     try {

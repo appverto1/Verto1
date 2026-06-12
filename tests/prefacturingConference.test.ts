@@ -42,6 +42,19 @@ test('backend tem acoes idempotentes de conferido, reaberto e exportado', () => 
   assert.match(serverCode, /CONFERENCE_STATUS_REOPENED/);
 });
 
+test('revalidacao de periodo materializa checks faltantes sem sobrescrever override manual', () => {
+  assert.match(serverCode, /app\.post\('\/api\/closure\/revalidate-period', portalActionLimiter, checkAuth, requireRoles\('coordinator', 'therapist', 'admin', 'owner'\)/);
+  assert.match(serverCode, /revalidateClosureChecksForPeriod/);
+  assert.match(serverCode, /mirrorLegacyClosureAppointmentsForPeriod/);
+  assert.match(serverCode, /syncAppointmentsTableFromClinicState/);
+  assert.match(serverCode, /\.upsert\(\[storagePayload\], \{ onConflict: 'organization_id,appointment_id' \}\)/);
+  assert.match(serverCode, /\.in\('action', \['MANUAL_OVERRIDE', 'MARKED_NOT_BILLABLE'\]\)/);
+  assert.match(serverCode, /manualOverrideIds\.has\(appointmentId\)/);
+  assert.match(serverCode, /PERIOD_REVALIDATED/);
+  const revalidationSlice = serverCode.slice(serverCode.indexOf('const revalidateClosureChecksForPeriod'), serverCode.indexOf('const fetchClosureSummariesByAppointment'));
+  assert.doesNotMatch(revalidationSlice, /\.select\('\*'\)/);
+});
+
 test('exportacao completa registra auditoria, marca itens e retorna ActionResult', () => {
   assert.match(serverCode, /normalizeConferenceExportType/);
   assert.match(serverCode, /billing_conference_full/);
@@ -114,6 +127,10 @@ test('CSV de conferencia mensal inclui campos financeiros e auditoria sem virar 
 });
 
 test('frontend atualiza conferencia sem F5 e nao promete faturamento eletronico', () => {
+  assert.match(dataServiceCode, /async revalidateClosurePeriod/);
+  assert.match(dataServiceCode, /\/api\/closure\/revalidate-period/);
+  assert.match(closureCode, /dataService\.revalidateClosurePeriod/);
+  assert.match(conferenceCode, /dataService\.revalidateClosurePeriod/);
   assert.match(dataServiceCode, /updateMonthlyConferenceSessionStatus/);
   assert.match(dataServiceCode, /\/api\/conference\/monthly\/session\/\$\{encodeURIComponent\(String\(appointmentId\)\)\}\/status/);
   assert.match(conferenceCode, /markReviewed/);

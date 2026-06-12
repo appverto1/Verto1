@@ -135,6 +135,15 @@ test('API da conferencia tem auth, roles, paginacao, filtros e select explicito'
   assert.doesNotMatch(conferenceSlice, /aba_recent_session_events|aba_trials|aba_behavior_events/);
 });
 
+test('conferencia revalida periodo antes de listar em tela e antes de exportar CSV', () => {
+  assert.match(dataServiceCode, /async revalidateClosurePeriod/);
+  assert.match(conferenceCode, /const revalidation = await dataService\.revalidateClosurePeriod/);
+  assert.match(conferenceCode, /const \[main, byPatient, byProfessional, byPayer, byService, byProcedure, byTuss, byGuide\] = await Promise\.all/);
+  const exportSlice = serverCode.slice(serverCode.indexOf("app.post('/api/conference/monthly/export'"), serverCode.indexOf('let hydratedRows = filterHydratedRowsByTussMissingKind'));
+  assert.match(exportSlice, /revalidateClosureChecksForPeriod/);
+  assert.match(exportSlice, /source: 'monthly_conference_export'/);
+});
+
 test('exportacao gera trilha auditavel e tabela com RLS', () => {
   assert.match(migrationCode, /create table if not exists public\.operational_closure_exports/);
   assert.match(migrationCode, /alter table public\.operational_closure_exports enable row level security/);

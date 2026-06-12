@@ -40,6 +40,17 @@ test('calendar endpoint aplica filtros de terapeuta, paciente, tipo e status', (
   assert.match(serverCode, /calendarEventMatchesFilters/);
 });
 
+test('agenda hidrata nome real do paciente quando recorrencia vem apenas com patient_id', () => {
+  assert.match(serverCode, /hydrateCalendarPatientNames/);
+  assert.match(serverCode, /\.from\('patients'\)[\s\S]*?\.select\('id, name'\)[\s\S]*?\.eq\('clinic_id', safeClinicId\)[\s\S]*?\.in\('id', idsNeedingHydration\)/);
+  assert.match(serverCode, /isGenericCalendarPatientName/);
+  assert.match(serverCode, /patient_name: pickCalendarPatientName/);
+  assert.match(calendarCode, /parseEventSourcePayload/);
+  assert.match(calendarCode, /pickPatientLabel/);
+  assert.match(calendarCode, /source\?\.patientName/);
+  assert.match(calendarCode, /source\?\.patient\?\.name/);
+});
+
 test('detail endpoint carrega dados pesados apenas sob demanda', () => {
   assert.match(serverCode, /app\.get\('\/api\/calendar\/events\/:eventId\/detail'/);
   assert.match(serverCode, /\.from\('aba_next_session_plan_items'\)/);

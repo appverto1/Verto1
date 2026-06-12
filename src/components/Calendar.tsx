@@ -628,12 +628,52 @@ const classifyLocation = (event: any) => {
   return 'outro';
 };
 
+const parseEventSourcePayload = (event: any) => {
+  const source = event?.source_payload || event?.sourcePayload;
+  if (!source) return {};
+  if (typeof source === 'object' && !Array.isArray(source)) return source;
+  if (typeof source !== 'string') return {};
+  try {
+    const parsed = JSON.parse(source);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+const isGenericPatientLabel = (value: any) => {
+  const normalized = removeDiacritics(String(value || ''))
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+  return !normalized || normalized === 'paciente' || normalized === 'patient' || normalized === 'cliente';
+};
+
+const pickPatientLabel = (candidates: any[]) => {
+  const labels = candidates.map((value) => String(value || '').trim()).filter(Boolean);
+  return labels.find((label) => !isGenericPatientLabel(label)) || labels[0] || 'Paciente';
+};
+
 const normalizeClinicalEvent = (event: any, roomLookup?: Map<string, any>) => {
+  const source = parseEventSourcePayload(event);
   const start = parseEventStart(event);
   const end = parseEventEnd(event, start);
-  const patientName = event?.patient_name || event?.patientName || event?.name || 'Paciente';
+  const patientName = pickPatientLabel([
+    event?.patient_name,
+    event?.patientName,
+    event?.patientNameSnapshot,
+    event?.patient_name_snapshot,
+    event?.patient?.name,
+    source?.patient_name,
+    source?.patientName,
+    source?.patientNameSnapshot,
+    source?.patient_name_snapshot,
+    source?.patient?.name,
+    source?.name,
+    event?.name
+  ]);
   const therapistName = event?.therapist_name || event?.therapistName || event?.therapistDisplayName || event?.professional || 'Equipe';
-  const patientId = event?.patient_id || event?.patientId || null;
+  const patientId = event?.patient_id || event?.patientId || source?.patient_id || source?.patientId || null;
   const therapistId = event?.therapist_id || event?.therapistId || event?.professionalId || null;
   const type = event?.type || event?.approach || 'Sessão';
   const roomInfo = resolveRoomInfo(event, roomLookup);

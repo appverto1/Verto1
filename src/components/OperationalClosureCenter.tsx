@@ -195,6 +195,7 @@ export function OperationalClosureCenter({
   const [totals, setTotals] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [revalidationInfo, setRevalidationInfo] = useState("");
   const [detail, setDetail] = useState<ClosureRow | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [actionLoadingId, setActionLoadingId] = useState("");
@@ -225,6 +226,21 @@ export function OperationalClosureCenter({
     setLoading(true);
     setError("");
     try {
+      const revalidation = await dataService.revalidateClosurePeriod({
+        from: toApiDate(from),
+        to: toApiDate(to, true),
+      });
+      if (revalidation?.success) {
+        const counts = revalidation.data || revalidation.counts || {};
+        const changed = Number(counts.created || 0) + Number(counts.updated || 0) + Number(counts.legacyMirrored || 0);
+        setRevalidationInfo(
+          changed > 0
+            ? `${changed} item(ns) atualizados para conferência.`
+            : "Período conferido; nenhuma sessão nova para materializar."
+        );
+      } else {
+        setRevalidationInfo("");
+      }
       const result = await dataService.getClosureAppointments({
         from: toApiDate(from),
         to: toApiDate(to, true),
@@ -250,6 +266,7 @@ export function OperationalClosureCenter({
     } catch {
       setRows([]);
       setTotals(null);
+      setRevalidationInfo("");
       setError("Não foi possível carregar o fechamento agora.");
     } finally {
       setLoading(false);
@@ -531,6 +548,11 @@ export function OperationalClosureCenter({
       {error && (
         <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
           {error}
+        </div>
+      )}
+      {!error && revalidationInfo && (
+        <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+          {revalidationInfo}
         </div>
       )}
 

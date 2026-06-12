@@ -26495,6 +26495,70 @@ async function startServer() {
       return Boolean(value);
     });
 
+  const isGenericCalendarPatientName = (value: any) => {
+    const normalized = sanitizeString(value, 180)
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/\s+/g, ' ')
+      .trim();
+    return !normalized || normalized === 'paciente' || normalized === 'patient' || normalized === 'cliente';
+  };
+
+  const pickCalendarPatientName = (candidates: any[]) => {
+    const labels = candidates.map((value) => sanitizeString(value, 180)).filter(Boolean);
+    return labels.find((label) => !isGenericCalendarPatientName(label)) || labels[0] || '';
+  };
+
+  const hydrateCalendarPatientNames = async (rows: any[], clinicId: string) => {
+    const safeClinicId = sanitizeString(clinicId, 120);
+    if (!Array.isArray(rows) || rows.length === 0 || !isUuid(safeClinicId)) return rows;
+    const idsNeedingHydration = Array.from(new Set(rows
+      .map((row: any) => {
+        const source = parseCalendarSourcePayload(row?.source_payload || row?.sourcePayload);
+        const patientId = sanitizeString(row?.patient_id || row?.patientId || source?.patient_id || source?.patientId, 120);
+        const currentName = pickCalendarPatientName([
+          row?.patient_name,
+          row?.patientName,
+          row?.patient?.name,
+          source?.patientName,
+          source?.patient_name,
+          source?.patient?.name,
+          row?.name,
+          source?.name
+        ]);
+        return isUuid(patientId) && isGenericCalendarPatientName(currentName) ? patientId : '';
+      })
+      .filter(Boolean)));
+    if (idsNeedingHydration.length === 0) return rows;
+    const { data, error } = await supabase
+      .from('patients')
+      .select('id, name')
+      .eq('clinic_id', safeClinicId)
+      .in('id', idsNeedingHydration)
+      .limit(idsNeedingHydration.length);
+    if (error) {
+      if (!hasMissingFinancialSchema(error)) console.warn('[Calendar] patient label hydration skipped:', error?.message || String(error));
+      return rows;
+    }
+    const namesById = new Map<string, string>((data || [])
+      .map((row: any) => [sanitizeString(row?.id, 120), sanitizeString(row?.name, 180)])
+      .filter(([id, name]: any[]) => isUuid(id) && !isGenericCalendarPatientName(name)) as any);
+    if (namesById.size === 0) return rows;
+    return rows.map((row: any) => {
+      const source = parseCalendarSourcePayload(row?.source_payload || row?.sourcePayload);
+      const patientId = sanitizeString(row?.patient_id || row?.patientId || source?.patient_id || source?.patientId, 120);
+      const hydratedName = namesById.get(patientId);
+      if (!hydratedName) return row;
+      return {
+        ...row,
+        patient_name: hydratedName,
+        patientName: hydratedName,
+        name: hydratedName
+      };
+    });
+  };
+
   const buildCalendarAppointmentStart = (row: any) => {
     const source = parseCalendarSourcePayload(row?.source_payload || row?.sourcePayload);
     const scheduledAt =
@@ -26600,7 +26664,16 @@ async function startServer() {
     return {
       id: appointmentId,
       patient_id: patientId || null,
-      patient_name: sanitizeString(row?.patient_name || row?.patientName || source?.patientName || source?.name || source?.patient_name, 180) || 'Paciente',
+      patient_name: pickCalendarPatientName([
+        row?.patient_name,
+        row?.patientName,
+        row?.patient?.name,
+        source?.patientName,
+        source?.patient_name,
+        source?.patient?.name,
+        source?.name,
+        row?.name
+      ]) || 'Paciente',
       therapist_id: sanitizeString(row?.therapist_id || row?.therapistId || source?.therapist_id || source?.therapistId || source?.professionalId, 120) || null,
       therapist_name: sanitizeString(row?.therapist_name || row?.therapistName || source?.therapistName || source?.professional || source?.therapist_name, 180) || 'Equipe',
       start_time: start.toISOString(),
@@ -29298,6 +29371,225 @@ async function startServer() {
     }
   };
 
+  const fetchClosurePeriodAppointmentRows = async (params: {
+    clinicId: string;
+    user: any;
+    fromIso: string;
+    toIso: string;
+    limit?: number;
+  }) => {
+    const clinicId = sanitizeString(params.clinicId, 120);
+    const rowsById = new Map<string, any>();
+    const limit = Math.min(Math.max(Number(params.limit || 800), 1), 1200);
+    if (!isUuid(clinicId)) return [];
+    for (const dateColumn of ['scheduled_at', 'scheduled_start_at']) {
+      let query = supabase
+        .from('appointments')
+        .select(CLOSURE_APPOINTMENT_SELECT)
+        .gte(dateColumn, params.fromIso)
+        .lte(dateColumn, params.toIso)
+        .neq('status', 'deleted')
+        .or(`organization_id.eq.${clinicId},clinic_id.eq.${clinicId}`)
+        .order(dateColumn, { ascending: true })
+        .limit(limit);
+      if (sanitizeString(params.user?.role, 40).toLowerCase() === 'therapist') {
+        const patientIds = await getClosureTherapistPatientIds(params.user, clinicId);
+        const userId = sanitizeString(params.user?.id, 120);
+        const orParts = [];
+        if (isUuid(userId)) orParts.push(`therapist_id.eq.${userId}`);
+        if (patientIds.length > 0) orParts.push(`patient_id.in.(${patientIds.join(',')})`);
+        query = orParts.length > 0 ? query.or(orParts.join(',')) : query.eq('therapist_id', '00000000-0000-0000-0000-000000000000');
+      }
+      const result = await query;
+      if (result.error) {
+        if (hasMissingFinancialSchema(result.error) || extractMissingColumnName(result.error) === dateColumn) continue;
+        throw result.error;
+      }
+      (Array.isArray(result.data) ? result.data : []).forEach((row: any) => {
+        const id = sanitizeString(row?.id, 120);
+        if (isUuid(id)) rowsById.set(id, row);
+      });
+    }
+    return Array.from(rowsById.values()).sort((left: any, right: any) => {
+      const leftTime = new Date(left?.scheduled_at || left?.scheduled_start_at || 0).getTime();
+      const rightTime = new Date(right?.scheduled_at || right?.scheduled_start_at || 0).getTime();
+      return (Number.isFinite(leftTime) ? leftTime : 0) - (Number.isFinite(rightTime) ? rightTime : 0);
+    }).slice(0, limit);
+  };
+
+  const mirrorLegacyClosureAppointmentsForPeriod = async (params: {
+    clinicId: string;
+    user: any;
+    fromIso: string;
+    toIso: string;
+    dryRun?: boolean;
+  }) => {
+    const clinicId = sanitizeString(params.clinicId, 120);
+    const actorId = sanitizeString(params.user?.id, 120);
+    if (!isUuid(clinicId)) return { legacyFound: 0, legacyMirrored: 0, legacySkipped: 0 };
+    const stateResult = await fetchClinicStateWithSchemaFallback({ supabase, clinicId, logger: console });
+    if (stateResult.error) {
+      if (hasMissingFinancialSchema(stateResult.error) || isMissingRelationError(stateResult.error)) {
+        return { legacyFound: 0, legacyMirrored: 0, legacySkipped: 0 };
+      }
+      throw stateResult.error;
+    }
+    const fromTime = new Date(params.fromIso).getTime();
+    const toTime = new Date(params.toIso).getTime();
+    const candidates = (Array.isArray(stateResult.data?.appointments) ? stateResult.data.appointments : [])
+      .filter((appointment: any) => {
+        const status = sanitizeString(appointment?.status, 80).toLowerCase();
+        if (appointment?.is_active === false || appointment?.isActive === false || appointment?.deleted_at || appointment?.deletedAt || status === 'deleted') return false;
+        const scheduledAt = buildAppointmentScheduledAt(appointment);
+        const start = scheduledAt ? new Date(scheduledAt).getTime() : NaN;
+        return Number.isFinite(start) && start >= fromTime && start <= toTime;
+      })
+      .slice(0, 800);
+    if (candidates.length === 0 || params.dryRun) {
+      return { legacyFound: candidates.length, legacyMirrored: 0, legacySkipped: 0 };
+    }
+    const summary = await syncAppointmentsTableFromClinicState({
+      clinicId,
+      appointments: candidates,
+      actorId,
+      specialtySettings:
+        stateResult.data?.specialty_settings && typeof stateResult.data.specialty_settings === 'object'
+          ? stateResult.data.specialty_settings
+          : {}
+    });
+    return {
+      legacyFound: candidates.length,
+      legacyMirrored: Number(summary?.mirrored || 0),
+      legacySkipped: Number(summary?.skipped || 0)
+    };
+  };
+
+  const revalidateClosureChecksForPeriod = async (params: {
+    clinicId: string;
+    user: any;
+    fromIso: string;
+    toIso: string;
+    dryRun?: boolean;
+    source?: string;
+  }) => {
+    const clinicId = sanitizeString(params.clinicId, 120);
+    const result = {
+      found: 0,
+      created: 0,
+      updated: 0,
+      reused: 0,
+      skipped: 0,
+      errors: 0,
+      legacyFound: 0,
+      legacyMirrored: 0,
+      legacySkipped: 0,
+      dryRun: Boolean(params.dryRun)
+    };
+    if (!isUuid(clinicId)) return result;
+    const legacy = await mirrorLegacyClosureAppointmentsForPeriod({
+      clinicId,
+      user: params.user,
+      fromIso: params.fromIso,
+      toIso: params.toIso,
+      dryRun: params.dryRun
+    });
+    result.legacyFound = legacy.legacyFound;
+    result.legacyMirrored = legacy.legacyMirrored;
+    result.legacySkipped = legacy.legacySkipped;
+
+    const appointmentRows = await fetchClosurePeriodAppointmentRows({
+      clinicId,
+      user: params.user,
+      fromIso: params.fromIso,
+      toIso: params.toIso
+    });
+    const appointmentIds = appointmentRows
+      .map((row: any) => sanitizeString(row?.id, 120))
+      .filter((id: string) => isUuid(id));
+    result.found = appointmentIds.length;
+    if (appointmentIds.length === 0) return result;
+
+    let existingQuery = supabase
+      .from('appointment_closure_checks')
+      .select('appointment_id, readiness_status')
+      .eq('organization_id', clinicId)
+      .in('appointment_id', appointmentIds)
+      .limit(appointmentIds.length);
+    existingQuery = await applyClosureTenantScope(existingQuery, params.user, clinicId);
+    const existingRowsResult = await existingQuery;
+    if (existingRowsResult.error && !hasMissingFinancialSchema(existingRowsResult.error)) throw existingRowsResult.error;
+    const existingIds = new Set<string>((existingRowsResult.error ? [] : existingRowsResult.data || [])
+      .map((row: any) => sanitizeString(row?.appointment_id, 120))
+      .filter((id: string) => isUuid(id)));
+
+    const manualOverrideIds = new Set<string>();
+    const auditResult = await supabase
+      .from('appointment_closure_audit_logs')
+      .select('appointment_id, action')
+      .eq('organization_id', clinicId)
+      .in('appointment_id', appointmentIds)
+      .in('action', ['MANUAL_OVERRIDE', 'MARKED_NOT_BILLABLE'])
+      .limit(Math.min(appointmentIds.length * 8, 1000));
+    if (!auditResult.error) {
+      (auditResult.data || []).forEach((row: any) => {
+        const appointmentId = sanitizeString(row?.appointment_id, 120);
+        if (isUuid(appointmentId)) manualOverrideIds.add(appointmentId);
+      });
+    } else if (!hasMissingFinancialSchema(auditResult.error)) {
+      console.warn('[Closure] manual override audit lookup skipped:', auditResult.error?.message || String(auditResult.error));
+    }
+
+    for (const appointmentId of appointmentIds) {
+      if (manualOverrideIds.has(appointmentId)) {
+        result.skipped += 1;
+        continue;
+      }
+      if (params.dryRun) {
+        existingIds.has(appointmentId) ? (result.reused += 1) : (result.created += 1);
+        continue;
+      }
+      try {
+        const hadExisting = existingIds.has(appointmentId);
+        const generated = await persistAppointmentClosureCheck({
+          appointmentId,
+          user: params.user,
+          force: false
+        });
+        if (!(generated as any).ok) {
+          result.errors += 1;
+        } else if ((generated as any).reused) {
+          result.reused += 1;
+        } else if (hadExisting) {
+          result.updated += 1;
+        } else {
+          result.created += 1;
+        }
+      } catch (error: any) {
+        result.errors += 1;
+        console.warn('[Closure] period revalidation item failed:', {
+          source: sanitizeString(params.source, 80) || 'period_revalidation',
+          appointmentId,
+          message: error?.message || String(error)
+        });
+      }
+    }
+
+    if (!params.dryRun) {
+      await writeClosureAuditLog({
+        organizationId: clinicId,
+        action: 'PERIOD_REVALIDATED',
+        performedBy: sanitizeString(params.user?.id, 120),
+        metadata: {
+          source: sanitizeString(params.source, 80) || 'manual',
+          from: params.fromIso,
+          to: params.toIso,
+          ...result
+        }
+      });
+    }
+    return result;
+  };
+
   const fetchClosureSummariesByAppointment = async (appointmentIds: string[], organizationId: string, user: any) => {
     const validAppointmentIds = Array.from(new Set(appointmentIds.filter((id) => isUuid(id)))).slice(0, 200);
     const byAppointment = new Map<string, any>();
@@ -29366,8 +29658,13 @@ async function startServer() {
     }
     const fromTime = new Date(range.fromIso).getTime();
     const toTime = new Date(range.toIso).getTime();
-    return (Array.isArray(stateResult.data?.appointments) ? stateResult.data.appointments : [])
-      .map((appointment: any) => normalizeCalendarAppointmentRow({ ...appointment, source_payload: appointment }, counters))
+    const sourceRows = await hydrateCalendarPatientNames(
+      (Array.isArray(stateResult.data?.appointments) ? stateResult.data.appointments : [])
+        .map((appointment: any) => ({ ...appointment, source_payload: appointment })),
+      clinicId
+    );
+    return sourceRows
+      .map((appointment: any) => normalizeCalendarAppointmentRow(appointment, counters))
       .filter((event: any) => {
         const start = new Date(event.start_time).getTime();
         return start >= fromTime && start <= toTime && calendarEventMatchesFilters(event, filters);
@@ -29438,6 +29735,7 @@ async function startServer() {
       }
 
       const rows = Array.isArray(data) ? data : [];
+      const hydratedRows = await hydrateCalendarPatientNames(rows, clinicId);
       const patientIds = rows.map((row: any) => sanitizeString(row?.patient_id, 120)).filter(Boolean);
       const appointmentIds = rows.map((row: any) => sanitizeString(row?.id, 180)).filter(Boolean);
       const [planCountByPatient, probeCountByAppointment] = await Promise.all([
@@ -29446,7 +29744,7 @@ async function startServer() {
       ]);
       const closureByAppointment = await fetchClosureSummariesByAppointment(appointmentIds, organizationId, req.session.user);
       const counters = { planCountByPatient, probeCountByAppointment };
-      const events = rows
+      const events = hydratedRows
         .map((row: any) => {
           const closure = closureByAppointment.get(sanitizeString(row?.id, 120));
           return normalizeCalendarAppointmentRow(
@@ -29473,7 +29771,8 @@ async function startServer() {
       if (!row) return res.status(404).json({ success: false, error: 'Sessão não encontrada.' });
       const closureByAppointment = await fetchClosureSummariesByAppointment([eventId], organizationId, req.session.user);
       const closure = closureByAppointment.get(eventId);
-      const event = normalizeCalendarAppointmentRow(closure ? { ...row, ...mapClosureRowToCalendarFields(closure) } : row);
+      const [hydratedRow] = await hydrateCalendarPatientNames([closure ? { ...row, ...mapClosureRowToCalendarFields(closure) } : row], clinicId);
+      const event = normalizeCalendarAppointmentRow(hydratedRow || row);
       const patientId = sanitizeString(event.patient_id, 120);
 
       let planItems: any[] = [];
@@ -31397,6 +31696,32 @@ async function startServer() {
     }
   });
 
+  app.post('/api/closure/revalidate-period', portalActionLimiter, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de revalidação de período')) return;
+      const range = parseClosureDateRange(req.body || {});
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!range.ok || !isUuid(clinicId)) return res.status(400).json(closureSafeError(400));
+      const dryRun = Boolean(req.body?.dryRun || req.body?.dry_run);
+      const data = await revalidateClosureChecksForPeriod({
+        clinicId,
+        user: req.session.user,
+        fromIso: range.fromIso,
+        toIso: range.toIso,
+        dryRun,
+        source: 'period_endpoint'
+      });
+      return res.json({
+        success: true,
+        data,
+        counts: data
+      });
+    } catch (error: any) {
+      console.warn('[Closure] period revalidate failed:', error?.message || String(error));
+      return res.status(500).json(closureSafeError(500));
+    }
+  });
+
   app.get('/api/closure/appointments/:appointmentId', checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
       const appointmentId = sanitizeString(req.params.appointmentId, 120);
@@ -32242,6 +32567,13 @@ async function startServer() {
       if (!isUuid(clinicId) || !filters.ok) return res.status(400).json(conferenceSafeError(400));
       if (!(await assertConferenceFilterOwnership(filters, clinicId))) return res.status(404).json(conferenceSafeError(404));
       const requestedFields = Array.isArray(req.body?.fields) ? req.body.fields.map((field: any) => sanitizeString(field, 80)) : [];
+      await revalidateClosureChecksForPeriod({
+        clinicId,
+        user: req.session.user,
+        fromIso: filters.fromIso,
+        toIso: filters.toIso,
+        source: 'monthly_conference_export'
+      });
       const rows = await loadConferenceClosureRows({ clinicId, user: req.session.user, filters, hardLimit: 2000 });
       let hydratedRows = filterHydratedRowsByTussMissingKind(
         await hydrateConferenceRows(rows, clinicId, req.session.user),
