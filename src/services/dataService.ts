@@ -2528,6 +2528,28 @@ export const dataService = {
     }
   },
 
+  async revalidatePayerTussMapping(mappingId: string, payload: any = {}) {
+    const endpoint = `/api/admin/tuss/mappings/${encodeURIComponent(String(mappingId))}/revalidate`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        cache: 'no-store',
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'revalidatePayerTussMapping',
+        operation: 'write',
+        table: 'appointments,appointment_billing_contexts,appointment_billing_items,appointment_closure_checks',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeNoStoreJson(response, 'A revalidação TUSS voltou do cache. Tente atualizar novamente.');
+    } catch {
+      return { success: false, error: 'Não foi possível revalidar os atendimentos afetados agora.' };
+    }
+  },
+
   async getAppointmentBillingContext(appointmentId: string) {
     const endpoint = `/api/appointments/${encodeURIComponent(String(appointmentId))}/billing-context`;
     try {

@@ -90,6 +90,7 @@ test('backend tem CRUD TUSS-ready action-driven e resolve ao salvar contexto fin
     "app.get('/api/admin/tuss/mappings'",
     "app.post('/api/admin/tuss/mappings'",
     "app.patch('/api/admin/tuss/mappings/:mappingId'",
+    "app.post('/api/admin/tuss/mappings/:mappingId/revalidate'",
     "app.post('/api/appointments/:appointmentId/billing-item/resolve'"
   ]) {
     assert.match(serverCode, new RegExp(route.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
@@ -117,14 +118,25 @@ test('frontend administra procedimentos codigos e mapeamentos sem F5', () => {
     'getPayerTussMappings',
     'createPayerTussMapping',
     'updatePayerTussMapping',
+    'revalidatePayerTussMapping',
     'resolveAppointmentBillingItem'
   ]) {
     assert.match(dataServiceCode, new RegExp(helper));
   }
-  assert.match(payerPanelCode, /Procedimentos e TUSS-ready/);
+  assert.match(payerPanelCode, /Procedimentos e TUSS/);
   assert.match(payerPanelCode, /createTussService/);
   assert.match(payerPanelCode, /createTussCode/);
   assert.match(payerPanelCode, /createTussMapping/);
+  assert.match(payerPanelCode, /editTussService/);
+  assert.match(payerPanelCode, /disableTussService/);
+  assert.match(payerPanelCode, /editTussCode/);
+  assert.match(payerPanelCode, /disableTussCode/);
+  assert.match(payerPanelCode, /editTussMapping/);
+  assert.match(payerPanelCode, /revalidateAffectedTussMapping/);
+  assert.match(payerPanelCode, /Revalidar atendimentos afetados/);
+  assert.match(payerPanelCode, /defaultDurationMinutes/);
+  assert.match(payerPanelCode, /validFrom/);
+  assert.match(payerPanelCode, /requiresReport/);
   assert.match(payerPanelCode, /setTussServices/);
   assert.match(payerPanelCode, /setTussCodes/);
   assert.match(payerPanelCode, /upsertTussMappingInState/);

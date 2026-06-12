@@ -31648,6 +31648,113 @@ async function startServer() {
     }
   });
 
+  app.post('/api/admin/tuss/mappings/:mappingId/revalidate', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 24 * 1024, 'Payload de revalidação TUSS-ready')) return;
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      const mappingId = sanitizeString(req.params.mappingId, 120);
+      if (!isUuid(organizationId) || !isUuid(mappingId)) return res.status(400).json(payerSafeError(400));
+      const range = parseClosureDateRange(req.body || {});
+      if (!range.ok) return res.status(400).json(payerSafeError(400));
+      const mapping = await fetchPayerTussMappingById(organizationId, mappingId);
+      if (!mapping?.id || mapping.active === false) return res.status(404).json(payerSafeError(404));
+      const [payer, service] = await Promise.all([
+        fetchPayerForAdmin(mapping.payer_id, organizationId),
+        fetchTussServiceCatalogById(organizationId, mapping.service_catalog_id)
+      ]);
+      if (!payer?.id || !service?.id) return res.status(404).json(payerSafeError(404));
+
+      const appointmentRows = await fetchClosurePeriodAppointmentRows({
+        clinicId: organizationId,
+        user: req.session.user,
+        fromIso: range.fromIso,
+        toIso: range.toIso,
+        limit: parseBoundedListLimit(req.body?.limit, 240, 500)
+      });
+      const appointmentIds = Array.from(new Set(appointmentRows.map((row: any) => sanitizeString(row?.id, 120)).filter((id: string) => isUuid(id))));
+      if (appointmentIds.length === 0) {
+        return sendNoStoreJson(res, { success: true, data: [], counts: { found: 0, resolved: 0, closureUpdated: 0, skipped: 0, errors: 0 } });
+      }
+      const contextResult = await supabase
+        .from('appointment_billing_contexts')
+        .select(APPOINTMENT_BILLING_CONTEXT_SELECT)
+        .eq('organization_id', organizationId)
+        .in('appointment_id', appointmentIds)
+        .limit(appointmentIds.length);
+      if (contextResult.error && !hasMissingFinancialSchema(contextResult.error)) throw contextResult.error;
+      const contextsByAppointment = new Map<string, any>((contextResult.error ? [] : contextResult.data || [])
+        .map((row: any) => [sanitizeString(row?.appointment_id, 120), row]));
+      const serviceTargets = [
+        normalizeBillingServiceMatchKey(service?.service_type),
+        normalizeBillingServiceMatchKey(service?.name)
+      ].filter(Boolean);
+      const serviceInternalCode = sanitizeString(service?.internal_code, 80).toLowerCase();
+      const affected = appointmentRows.filter((appointment: any) => {
+        const appointmentId = sanitizeString(appointment?.id, 120);
+        const context = contextsByAppointment.get(appointmentId);
+        if (!context || sanitizeString(context?.payer_id, 120) !== sanitizeString(mapping?.payer_id, 120)) return false;
+        const procedureCode = sanitizeString(context?.procedure_code, 80).toLowerCase();
+        if (serviceInternalCode && procedureCode && procedureCode === serviceInternalCode) return true;
+        const appointmentService = normalizeBillingServiceMatchKey(context?.service_type || appointment?.service_type || appointment?.approach);
+        return Boolean(appointmentService && serviceTargets.includes(appointmentService));
+      });
+
+      const billingItems: any[] = [];
+      const counts = { found: affected.length, resolved: 0, closureUpdated: 0, skipped: 0, errors: 0 };
+      for (const appointment of affected.slice(0, 160)) {
+        const appointmentId = sanitizeString(appointment?.id, 120);
+        const billingContext = contextsByAppointment.get(appointmentId);
+        if (!billingContext?.id) {
+          counts.skipped += 1;
+          continue;
+        }
+        try {
+          const billingItem = await resolveAndPersistAppointmentBillingItem({
+            organizationId,
+            appointment,
+            billingContext,
+            payer,
+            user: req.session.user
+          });
+          if (billingItem) {
+            counts.resolved += 1;
+            billingItems.push(billingItem);
+          }
+          const closure = await persistAppointmentClosureCheck({
+            appointmentId,
+            user: req.session.user,
+            force: true,
+            scopedAppointment: appointment
+          });
+          if ((closure as any)?.ok) counts.closureUpdated += 1;
+        } catch (itemError: any) {
+          counts.errors += 1;
+          console.warn('[TussReady] affected appointment revalidation failed:', {
+            appointmentId,
+            mappingId,
+            message: itemError?.message || String(itemError)
+          });
+        }
+      }
+      await writePayerRequirementAuditLog({
+        organizationId,
+        payerId: mapping.payer_id,
+        action: 'TUSS_MAPPING_REVALIDATED',
+        performedBy: sanitizeString(req.session.user?.id, 120),
+        metadata: { mappingId, from: range.fromIso, to: range.toIso, counts }
+      });
+      return sendNoStoreJson(res, {
+        success: counts.errors < Math.max(1, counts.found),
+        partialFailure: counts.errors > 0,
+        data: billingItems,
+        counts
+      });
+    } catch (error: any) {
+      console.warn('[TussReady] mapping revalidation failed:', error?.message || String(error));
+      return res.status(500).json(payerSafeError(500));
+    }
+  });
+
   app.get('/api/appointments/:appointmentId/billing-context', checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
       const context = await fetchAppointmentForBillingContext(req.params.appointmentId, req.session.user);
