@@ -3561,6 +3561,21 @@ const buildAppointmentClosureCheckStoragePayload = (payload: any, omittedColumns
   return cleanObject(next);
 };
 
+const summarizeClosureCheckPayloadForDiagnostics = (payload: any) => cleanObject({
+  hasOrganizationId: isUuid(sanitizeString(payload?.organization_id, 120)),
+  hasAppointmentId: isUuid(sanitizeString(payload?.appointment_id, 120)),
+  hasPatientId: isUuid(sanitizeString(payload?.patient_id, 120)),
+  hasProfessionalId: isUuid(sanitizeString(payload?.professional_id, 120)),
+  readinessStatus: sanitizeString(payload?.readiness_status, 40) || null,
+  scheduledStart: sanitizeString(payload?.scheduled_start, 80) || null,
+  scheduledEnd: sanitizeString(payload?.scheduled_end, 80) || null,
+  scheduledMinutes: Number.isFinite(Number(payload?.scheduled_minutes)) ? Number(payload.scheduled_minutes) : null,
+  actualMinutes: Number.isFinite(Number(payload?.actual_minutes)) ? Number(payload.actual_minutes) : null,
+  blockingIssuesCount: Number(payload?.blocking_issues_count || 0),
+  warningIssuesCount: Number(payload?.warning_issues_count || 0),
+  omittedColumns: Array.isArray(payload?.omittedColumns) ? payload.omittedColumns.slice(0, 20) : undefined
+});
+
 const ACTIVITY_LOG_SELECT = [
   'id',
   'user_id',
@@ -29360,15 +29375,125 @@ async function startServer() {
   };
 
   const upsertAppointmentClosureCheckRow = async (payload: any) => {
+    const isMissingUpsertConflictTargetError = (error: any) => {
+      const code = sanitizeString(error?.code, 20).toUpperCase();
+      const message = extractSupabaseErrorMessage(error).toLowerCase();
+      return code === '42P10' || (
+        message.includes('unique') &&
+        message.includes('exclusion') &&
+        message.includes('constraint')
+      ) || message.includes('no unique or exclusion constraint matching the on conflict specification');
+    };
+    const withClosureCheckDiagnostics = (error: any, storagePayload: any, omittedColumns: Set<string>) => Object.assign(error || new Error('closure_check_write_failed'), {
+      attemptedPayload: summarizeClosureCheckPayloadForDiagnostics({
+        ...storagePayload,
+        omittedColumns: Array.from(omittedColumns)
+      })
+    });
+    const writeWithoutConflictTarget = async (storagePayload: any, selectColumns: string, omittedColumns: Set<string>) => {
+      const organizationId = sanitizeString(storagePayload?.organization_id, 120);
+      const appointmentId = sanitizeString(storagePayload?.appointment_id, 120);
+      if (!isUuid(organizationId) || !isUuid(appointmentId)) {
+        return {
+          data: null,
+          error: withClosureCheckDiagnostics({
+            code: 'MISSING_CLOSURE_SCOPE',
+            message: 'organization_id e appointment_id são obrigatórios para materializar o check.'
+          }, storagePayload, omittedColumns)
+        };
+      }
+
+      const existingResult = await supabase
+        .from('appointment_closure_checks')
+        .select('id')
+        .eq('organization_id', organizationId)
+        .eq('appointment_id', appointmentId)
+        .limit(1)
+        .maybeSingle();
+      if (existingResult.error) {
+        return {
+          data: null,
+          error: withClosureCheckDiagnostics(existingResult.error, storagePayload, omittedColumns)
+        };
+      }
+
+      if (existingResult.data?.id) {
+        const updatePayload = cleanObject({
+          ...storagePayload,
+          id: sanitizeString(existingResult.data.id, 120)
+        });
+        const updateResult = await supabase
+          .from('appointment_closure_checks')
+          .update(updatePayload)
+          .eq('organization_id', organizationId)
+          .eq('appointment_id', appointmentId)
+          .select(selectColumns)
+          .maybeSingle();
+        return updateResult.error
+          ? { ...updateResult, error: withClosureCheckDiagnostics(updateResult.error, updatePayload, omittedColumns) }
+          : updateResult;
+      }
+
+      const insertResult = await supabase
+        .from('appointment_closure_checks')
+        .insert([storagePayload])
+        .select(selectColumns)
+        .maybeSingle();
+      if (!insertResult.error) return insertResult;
+
+      const duplicateCode = sanitizeString(insertResult.error?.code, 20).toUpperCase();
+      if (duplicateCode === '23505') {
+        const retryExisting = await supabase
+          .from('appointment_closure_checks')
+          .select('id')
+          .eq('organization_id', organizationId)
+          .eq('appointment_id', appointmentId)
+          .limit(1)
+          .maybeSingle();
+        if (!retryExisting.error && retryExisting.data?.id) {
+          const retryPayload = cleanObject({
+            ...storagePayload,
+            id: sanitizeString(retryExisting.data.id, 120)
+          });
+          const retryUpdate = await supabase
+            .from('appointment_closure_checks')
+            .update(retryPayload)
+            .eq('organization_id', organizationId)
+            .eq('appointment_id', appointmentId)
+            .select(selectColumns)
+            .maybeSingle();
+          return retryUpdate.error
+            ? { ...retryUpdate, error: withClosureCheckDiagnostics(retryUpdate.error, retryPayload, omittedColumns) }
+            : retryUpdate;
+        }
+      }
+
+      return {
+        ...insertResult,
+        error: withClosureCheckDiagnostics(insertResult.error, storagePayload, omittedColumns)
+      };
+    };
+
     const omittedColumns = new Set<string>();
     let lastError: any = null;
     for (let attempt = 0; attempt <= APPOINTMENT_CLOSURE_CHECK_SCHEMA_FALLBACK_COLUMNS.size; attempt += 1) {
       const storagePayload = buildAppointmentClosureCheckStoragePayload(payload, omittedColumns);
-      const result = await supabase
+      let result = await supabase
         .from('appointment_closure_checks')
         .upsert([storagePayload], { onConflict: 'organization_id,appointment_id' })
         .select(buildAppointmentClosureCheckSelect(omittedColumns))
         .maybeSingle();
+      if (result.error && isMissingUpsertConflictTargetError(result.error)) {
+        console.warn('[Closure] upsert sem constraint única; usando fallback idempotente por appointment.', {
+          appointmentId: sanitizeString(storagePayload?.appointment_id, 120),
+          code: sanitizeString(result.error?.code, 40) || null
+        });
+        result = await writeWithoutConflictTarget(
+          storagePayload,
+          buildAppointmentClosureCheckSelect(omittedColumns),
+          omittedColumns
+        );
+      }
       if (!result.error) {
         return {
           ok: true,
@@ -29380,24 +29505,24 @@ async function startServer() {
         };
       }
       if (isMissingRelationError(result.error)) {
-        return { ok: false, status: 503, error: 'Fechamento indisponível.' };
+        return { ok: false, status: 503, error: 'Fechamento indisponível.', dbCode: sanitizeString(result.error?.code, 80) || null, dbDetail: sanitizeString(result.error?.details || result.error?.detail, 500) || null, attemptedPayload: (result.error as any)?.attemptedPayload };
       }
 
       const missingColumn = extractMissingColumnName(result.error);
       if (!missingColumn || !APPOINTMENT_CLOSURE_CHECK_SCHEMA_FALLBACK_COLUMNS.has(missingColumn) || omittedColumns.has(missingColumn)) {
         if (hasMissingFinancialSchema(result.error)) {
-          return { ok: false, status: 503, error: 'Fechamento indisponível.' };
+          return { ok: false, status: 503, error: 'Fechamento indisponível.', dbCode: sanitizeString(result.error?.code, 80) || null, dbDetail: sanitizeString(result.error?.details || result.error?.detail, 500) || null, attemptedPayload: (result.error as any)?.attemptedPayload };
         }
-        throw result.error;
+        throw withClosureCheckDiagnostics(result.error, storagePayload, omittedColumns);
       }
       omittedColumns.add(missingColumn);
       lastError = result.error;
     }
 
     if (lastError && hasMissingFinancialSchema(lastError)) {
-      return { ok: false, status: 503, error: 'Fechamento indisponível.' };
+      return { ok: false, status: 503, error: 'Fechamento indisponível.', dbCode: sanitizeString(lastError?.code, 80) || null, dbDetail: sanitizeString(lastError?.details || lastError?.detail, 500) || null, attemptedPayload: (lastError as any)?.attemptedPayload };
     }
-    if (lastError) throw lastError;
+    if (lastError) throw withClosureCheckDiagnostics(lastError, payload, omittedColumns);
     return { ok: false, status: 503, error: 'Fechamento indisponível.' };
   };
 
@@ -29697,6 +29822,14 @@ async function startServer() {
     );
     const dbCode = sanitizeString(failure?.code || failure?.dbCode || failure?.details?.code, 80) || null;
     const message = sanitizeString(failure?.error || failure?.message || String(failure || ''), 500) || 'Falha ao materializar check de fechamento.';
+    const rawDbDetail = typeof failure?.details === 'string'
+      ? failure.details
+      : typeof failure?.detail === 'string'
+        ? failure.detail
+        : failure?.dbDetail;
+    const rawDbHint = typeof failure?.hint === 'string' ? failure.hint : failure?.dbHint;
+    const dbDetail = sanitizeString(rawDbDetail, 500) || null;
+    const dbHint = sanitizeString(rawDbHint, 500) || null;
     const missingColumn = extractMissingColumnName(failure);
     const schemaError = missingColumn || (hasMissingFinancialSchema(failure) ? message : '');
     const failureStatus = Number(failure?.status || 0);
@@ -29706,6 +29839,9 @@ async function startServer() {
     else if (failureStatus === 404 || /n[aã]o encontrada|not found/i.test(message)) reasonCode = 'APPOINTMENT_NOT_ACCESSIBLE';
     else if (failureStatus === 503 || schemaError) reasonCode = 'CLOSURE_SCHEMA_UNAVAILABLE';
     else if (/conflict|duplicate|constraint/i.test(message)) reasonCode = 'UPSERT_CONSTRAINT_FAILED';
+    else if (dbCode === '42P10') reasonCode = 'UPSERT_CONSTRAINT_MISSING';
+    else if (dbCode === '23505') reasonCode = 'CONSTRAINT_DUPLICATE';
+    else if (dbCode === '42501' || /row-level security|rls|permission denied/i.test(message)) reasonCode = 'RLS_OR_PERMISSION_DENIED';
     else if (dbCode) reasonCode = `DB_${dbCode}`;
 
     return cleanObject({
@@ -29714,6 +29850,18 @@ async function startServer() {
       status: 'failed',
       reasonCode,
       message,
+      dbCode,
+      dbDetail,
+      dbHint,
+      payloadTentado: failure?.attemptedPayload || null,
+      appointmentSnapshot: cleanObject({
+        hasClinicId: isUuid(clinicId),
+        hasOrganizationId: isUuid(organizationId),
+        hasPatientId: isUuid(patientId),
+        hasProfessionalId: isUuid(professionalId),
+        status: appointmentStatus,
+        startsAt: scheduledStart || null
+      }),
       details: cleanObject({
         hasPatientId: isUuid(patientId),
         hasProfessionalId: isUuid(professionalId),
@@ -31997,6 +32145,15 @@ async function startServer() {
       return sendNoStoreJson(res, {
         success: !allFoundItemsFailed,
         partialFailure: hasErrors,
+        found: data.found,
+        created: data.created,
+        updated: data.updated,
+        reused: data.reused,
+        skipped: data.skipped,
+        errors: data.errors,
+        legacyFound: data.legacyFound,
+        legacyMirrored: data.legacyMirrored,
+        legacySkipped: data.legacySkipped,
         error: allFoundItemsFailed
           ? 'Nenhum check de fechamento foi materializado. Veja errorDetails para o diagnóstico por atendimento.'
           : hasErrors

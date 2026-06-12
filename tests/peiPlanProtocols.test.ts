@@ -73,7 +73,7 @@ test('rota protocol-import-requests dinamica nao depende de cache/etag', () => {
   const source = readSource('server.ts');
   const routeBlock = source.match(/app\.get\('\/api\/protocol-import-requests'[\s\S]*?app\.delete\('\/api\/protocol-import-requests\/:requestId'/)?.[0] || '';
 
-  assert.ok(source.includes("'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate'"));
+  assert.ok(source.includes("'Cache-Control': 'no-store, no-cache, must-revalidate, private, proxy-revalidate'"));
   assert.ok(source.includes("Pragma: 'no-cache'"));
   assert.ok(source.includes("Expires: '0'"));
   assert.ok(source.includes("'Surrogate-Control': 'no-store'"));

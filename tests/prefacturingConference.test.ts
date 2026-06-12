@@ -14,6 +14,7 @@ const closureCode = readFileSync(join(root, 'src/components/OperationalClosureCe
 const packageJson = readFileSync(join(root, 'package.json'), 'utf8');
 const statusMigration = readFileSync(join(root, 'supabase/migrations/20260611110000_appointment_conference_statuses.sql'), 'utf8');
 const payerMigration = readFileSync(join(root, 'supabase/migrations/20260529123000_payer_requirements_prefacturing.sql'), 'utf8');
+const materializationMigration = readFileSync(join(root, 'supabase/migrations/20260612123000_closure_check_materialization_hardening.sql'), 'utf8');
 
 const tests: Array<{ name: string; fn: () => void }> = [];
 const test = (name: string, fn: () => void) => tests.push({ name, fn });
@@ -50,6 +51,9 @@ test('revalidacao de periodo materializa checks faltantes sem sobrescrever overr
   assert.match(serverCode, /buildClosureRevalidationErrorDetail/);
   assert.match(serverCode, /stage: 'materialize_closure_check'/);
   assert.match(serverCode, /reasonCode/);
+  assert.match(serverCode, /dbCode/);
+  assert.match(serverCode, /dbDetail/);
+  assert.match(serverCode, /payloadTentado/);
   assert.match(serverCode, /partialFailure: false/);
   assert.match(serverCode, /errorDetails: \[\] as any\[\]/);
   assert.match(serverCode, /result\.errorDetails\.push\(buildClosureRevalidationErrorDetail/);
@@ -63,8 +67,22 @@ test('revalidacao de periodo materializa checks faltantes sem sobrescrever overr
   assert.match(serverCode, /manualOverrideIds\.has\(appointmentId\)/);
   assert.match(serverCode, /PERIOD_REVALIDATED/);
   assert.match(serverCode, /appointmentIds: \[\] as string\[\]/);
+  assert.match(serverCode, /isMissingUpsertConflictTargetError/);
+  assert.match(serverCode, /writeWithoutConflictTarget/);
+  assert.match(serverCode, /\.select\('id'\)[\s\S]*?\.eq\('organization_id', organizationId\)[\s\S]*?\.eq\('appointment_id', appointmentId\)/);
+  assert.match(serverCode, /\.insert\(\[storagePayload\]\)/);
+  assert.match(serverCode, /\.update\(updatePayload\)/);
   const revalidationSlice = serverCode.slice(serverCode.indexOf('const revalidateClosureChecksForPeriod'), serverCode.indexOf('const fetchClosureSummariesByAppointment'));
   assert.doesNotMatch(revalidationSlice, /\.select\('\*'\)/);
+});
+
+test('migration reforca upsert idempotente e auditoria da revalidacao', () => {
+  assert.match(materializationMigration, /idx_appointment_closure_checks_org_appointment_conflict/);
+  assert.match(materializationMigration, /on public\.appointment_closure_checks\(organization_id, appointment_id\)/);
+  assert.match(materializationMigration, /PERIOD_REVALIDATED/);
+  assert.match(materializationMigration, /REVALIDATED_FROM_CLOSURE/);
+  assert.match(materializationMigration, /REVALIDATED_FROM_CONFERENCE/);
+  assert.doesNotMatch(materializationMigration, /xml|tiss|remessa|glosa|recurso/i);
 });
 
 test('fechamento operacional evita cache stale depois de revalidar', () => {
@@ -86,6 +104,7 @@ test('fechamento operacional evita cache stale depois de revalidar', () => {
   assert.match(closureCode, /const legacyMirrored = Number\(counts\.legacyMirrored \|\| 0\)/);
   assert.match(closureCode, /const revalidationErrors = Number\(counts\.errors \|\| 0\)/);
   assert.match(closureCode, /revalidation\?\.success === false && revalidationErrors > 0/);
+  assert.match(closureCode, /Primeiro erro:/);
   assert.match(closureCode, /const actionRevision = \[[\s\S]*?affectedIds\.slice\(0, 25\)/);
 });
 
