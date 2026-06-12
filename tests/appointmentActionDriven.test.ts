@@ -2,7 +2,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
-import { mergePersistedAppointments, removePersistedAppointments } from '../src/utils/appointmentActionUpdates';
+import {
+  mergeAppointmentIdentityFallbacks,
+  mergePersistedAppointments,
+  removePersistedAppointments
+} from '../src/utils/appointmentActionUpdates';
 
 const root = process.cwd();
 const appCode = fs.readFileSync(path.join(root, 'src/App.tsx'), 'utf8');
@@ -21,6 +25,27 @@ test('appointment merge updates only matching persisted ids', () => {
   assert.equal(next.length, 2);
   assert.equal(next.find((item) => item.id === 'a')?.status, 'confirmed');
   assert.equal(next.find((item) => item.id === 'b')?.status, 'pending');
+});
+
+test('appointment merge never replaces real patient name with generic Paciente', () => {
+  const next = mergePersistedAppointments(
+    [{ id: 'future-1', patientName: 'Pedro Henrique', patient_name: 'Pedro Henrique', name: 'Pedro Henrique', date: '2026-06-19', time: '14:00' }],
+    [{ id: 'future-1', patientName: 'Paciente', patient_name: 'Paciente', name: 'Paciente', status: 'confirmed' }],
+  );
+  assert.equal(next.find((item) => item.id === 'future-1')?.patientName, 'Pedro Henrique');
+  assert.equal(next.find((item) => item.id === 'future-1')?.patient_name, 'Pedro Henrique');
+  assert.equal(next.find((item) => item.id === 'future-1')?.name, 'Pedro Henrique');
+});
+
+test('appointment action result is enriched with local confirmed identity before rendering', () => {
+  const enriched = mergeAppointmentIdentityFallbacks(
+    [{ id: 'new-1', patientName: 'Paciente', patient_name: 'Paciente', date: '2026-06-26' }],
+    [{ id: 'new-1', patientName: 'Pedro Henrique', patient_name: 'Pedro Henrique', name: 'Pedro Henrique' }],
+  );
+  assert.equal(enriched[0].patientName, 'Pedro Henrique');
+  assert.equal(enriched[0].patient_name, 'Pedro Henrique');
+  assert.equal(enriched[0].name, 'Pedro Henrique');
+  assert.match(appCode, /mergeAppointmentIdentityFallbacks\(rawItems, fallback\.items \|\| \[\]\)/);
 });
 
 test('appointment removal deletes only confirmed deleted ids', () => {

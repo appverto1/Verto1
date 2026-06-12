@@ -51,6 +51,7 @@ test('revalidacao de periodo materializa checks faltantes sem sobrescrever overr
   assert.match(serverCode, /\.in\('action', \['MANUAL_OVERRIDE', 'MARKED_NOT_BILLABLE'\]\)/);
   assert.match(serverCode, /manualOverrideIds\.has\(appointmentId\)/);
   assert.match(serverCode, /PERIOD_REVALIDATED/);
+  assert.match(serverCode, /appointmentIds: \[\] as string\[\]/);
   const revalidationSlice = serverCode.slice(serverCode.indexOf('const revalidateClosureChecksForPeriod'), serverCode.indexOf('const fetchClosureSummariesByAppointment'));
   assert.doesNotMatch(revalidationSlice, /\.select\('\*'\)/);
 });
@@ -131,6 +132,9 @@ test('frontend atualiza conferencia sem F5 e nao promete faturamento eletronico'
   assert.match(dataServiceCode, /\/api\/closure\/revalidate-period/);
   assert.match(closureCode, /dataService\.revalidateClosurePeriod/);
   assert.match(conferenceCode, /dataService\.revalidateClosurePeriod/);
+  assert.match(closureCode, /foram atualizados, mas os filtros atuais ocultam os resultados/);
+  assert.match(closureCode, /foram revalidados, mas não foram carregados na tabela/);
+  assert.match(closureCode, /nextRows\.length === 0 && page > 1/);
   assert.match(dataServiceCode, /updateMonthlyConferenceSessionStatus/);
   assert.match(dataServiceCode, /\/api\/conference\/monthly\/session\/\$\{encodeURIComponent\(String\(appointmentId\)\)\}\/status/);
   assert.match(conferenceCode, /markReviewed/);

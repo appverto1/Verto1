@@ -36,6 +36,80 @@ export const sortAppointments = (appointments: any[]) =>
     return String(left?.id || "").localeCompare(String(right?.id || ""));
   });
 
+const normalizePatientLabel = (value: any) =>
+  String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+
+const isGenericPatientLabel = (value: any) => {
+  const normalized = normalizePatientLabel(value);
+  return !normalized || normalized === "paciente" || normalized === "patient" || normalized === "cliente";
+};
+
+const parseAppointmentSourcePayload = (appointment: any) => {
+  const source = appointment?.source_payload || appointment?.sourcePayload;
+  if (!source) return {};
+  if (typeof source === "object" && !Array.isArray(source)) return source;
+  if (typeof source !== "string") return {};
+  try {
+    const parsed = JSON.parse(source);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+const pickPatientLabel = (candidates: any[]) => {
+  const labels = candidates.map((value) => String(value || "").trim()).filter(Boolean);
+  return labels.find((label) => !isGenericPatientLabel(label)) || labels[0] || "";
+};
+
+const appointmentPatientNameCandidates = (appointment: any) => {
+  const source = parseAppointmentSourcePayload(appointment);
+  return [
+    appointment?.patientName,
+    appointment?.patient_name,
+    appointment?.name,
+    appointment?.patient?.name,
+    source?.patientName,
+    source?.patient_name,
+    source?.name,
+    source?.patient?.name,
+  ];
+};
+
+export const mergeAppointmentIdentity = (current: any = {}, incoming: any = {}) => {
+  const merged = { ...(current || {}), ...(incoming || {}) };
+  const patientName = pickPatientLabel([
+    ...appointmentPatientNameCandidates(incoming),
+    ...appointmentPatientNameCandidates(current),
+  ]);
+  if (!patientName) return merged;
+  return {
+    ...merged,
+    patientName,
+    patient_name: patientName,
+    name: patientName,
+  };
+};
+
+export const mergeAppointmentIdentityFallbacks = (incoming: any[], fallback: any[] = []) => {
+  const fallbackById = new Map(
+    (Array.isArray(fallback) ? fallback : [])
+      .filter((appointment) => String(appointment?.id || "").trim())
+      .map((appointment) => [String(appointment.id), appointment]),
+  );
+  return (Array.isArray(incoming) ? incoming : []).map((appointment) => {
+    const id = String(appointment?.id || "").trim();
+    return id && fallbackById.has(id)
+      ? mergeAppointmentIdentity(fallbackById.get(id), appointment)
+      : mergeAppointmentIdentity({}, appointment);
+  });
+};
+
 export const mergePersistedAppointments = (current: any[], persisted: any[]) => {
   const byId = new Map(
     (Array.isArray(current) ? current : [])
@@ -46,7 +120,7 @@ export const mergePersistedAppointments = (current: any[], persisted: any[]) => 
   for (const appointment of Array.isArray(persisted) ? persisted : []) {
     const id = String(appointment?.id || "").trim();
     if (!id) continue;
-    byId.set(id, { ...(byId.get(id) || {}), ...appointment });
+    byId.set(id, mergeAppointmentIdentity(byId.get(id), appointment));
   }
 
   return sortAppointments(Array.from(byId.values()));

@@ -654,6 +654,52 @@ const pickPatientLabel = (candidates: any[]) => {
   return labels.find((label) => !isGenericPatientLabel(label)) || labels[0] || 'Paciente';
 };
 
+const mergeCalendarEventForRender = (serverEvent: any, localEvent: any) => {
+  if (!serverEvent) return localEvent;
+  if (!localEvent) return serverEvent;
+  const patientName = pickPatientLabel([
+    localEvent?.patientName,
+    localEvent?.patient_name,
+    localEvent?.name,
+    serverEvent?.patientName,
+    serverEvent?.patient_name,
+    serverEvent?.name,
+  ]);
+  return {
+    ...serverEvent,
+    ...localEvent,
+    patientName,
+    patient_name: patientName,
+    name: patientName,
+    closure_readiness_status: localEvent?.closure_readiness_status || serverEvent?.closure_readiness_status || null,
+    closureReadinessStatus: localEvent?.closureReadinessStatus || serverEvent?.closureReadinessStatus || null,
+    closure_blocking_count: Number(localEvent?.closure_blocking_count ?? serverEvent?.closure_blocking_count ?? 0),
+    closure_warning_count: Number(localEvent?.closure_warning_count ?? serverEvent?.closure_warning_count ?? 0),
+    closure_main_issues: Array.isArray(localEvent?.closure_main_issues) && localEvent.closure_main_issues.length > 0
+      ? localEvent.closure_main_issues
+      : Array.isArray(serverEvent?.closure_main_issues)
+        ? serverEvent.closure_main_issues
+        : [],
+  };
+};
+
+const mergeCalendarEventsForRender = (localEvents: any[], serverEvents: any[], remoteLoaded: boolean) => {
+  if (!remoteLoaded) return localEvents;
+  const byId = new Map<string, any>();
+  const withoutId: any[] = [];
+  for (const event of serverEvents || []) {
+    const id = String(event?.id || event?.appointment_id || '').trim();
+    if (id) byId.set(id, event);
+    else withoutId.push(event);
+  }
+  for (const event of localEvents || []) {
+    const id = String(event?.id || event?.appointment_id || '').trim();
+    if (id) byId.set(id, mergeCalendarEventForRender(byId.get(id), event));
+    else withoutId.push(event);
+  }
+  return [...withoutId, ...Array.from(byId.values())];
+};
+
 const normalizeClinicalEvent = (event: any, roomLookup?: Map<string, any>) => {
   const source = parseEventSourcePayload(event);
   const start = parseEventStart(event);
@@ -1029,7 +1075,10 @@ export const ClinicalAgendaBoard = ({
 
   const localEvents = useMemo(() => (agenda || []).filter((event: any) => !isDeletedAppointmentEvent(event)).map((event: any) => normalizeClinicalEvent(event, roomLookup)), [agenda, roomLookup]);
   const serverEvents = useMemo(() => (remoteEvents || []).filter((event: any) => !isDeletedAppointmentEvent(event)).map((event: any) => normalizeClinicalEvent(event, roomLookup)), [remoteEvents, roomLookup]);
-  const baseEvents = remoteState.loaded ? serverEvents : localEvents;
+  const baseEvents = useMemo(
+    () => mergeCalendarEventsForRender(localEvents, serverEvents, remoteState.loaded),
+    [localEvents, serverEvents, remoteState.loaded]
+  );
 
   const selectedDateKey = toDateKey(activeDate);
   const weekDays = useMemo(() => Array.from({ length: 5 }, (_, index) => addDays(startOfWeekMonday(activeDate), index)), [activeDate]);

@@ -29483,6 +29483,7 @@ async function startServer() {
       legacyFound: 0,
       legacyMirrored: 0,
       legacySkipped: 0,
+      appointmentIds: [] as string[],
       dryRun: Boolean(params.dryRun)
     };
     if (!isUuid(clinicId)) return result;
@@ -29507,6 +29508,7 @@ async function startServer() {
       .map((row: any) => sanitizeString(row?.id, 120))
       .filter((id: string) => isUuid(id));
     result.found = appointmentIds.length;
+    result.appointmentIds = appointmentIds;
     if (appointmentIds.length === 0) return result;
 
     let existingQuery = supabase

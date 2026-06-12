@@ -35,6 +35,7 @@ import { normalizeAbaMasteryCriterion } from './utils/abaMasteryEngine';
 import {
   applyAppointmentActionResult,
   emitAppointmentDomainEvents,
+  mergeAppointmentIdentityFallbacks,
   mergePersistedAppointments,
   removePersistedAppointments,
 } from './utils/appointmentActionUpdates';
@@ -1515,7 +1516,7 @@ export default function App() {
     if (sequence < appointmentActionSequenceRef.current) {
       return { ok: false, reason: 'STALE_RESPONSE', items: therapistAgendaRef.current };
     }
-    const items = Array.isArray(rawResult?.items)
+    const rawItems = Array.isArray(rawResult?.items)
       ? rawResult.items
       : Array.isArray(rawResult?.appointments)
         ? rawResult.appointments
@@ -1524,6 +1525,7 @@ export default function App() {
           : rawResult?.item || rawResult?.appointment
             ? [rawResult.item || rawResult.appointment]
             : fallback.items || [];
+    const items = mergeAppointmentIdentityFallbacks(rawItems, fallback.items || []);
     const removedIds = Array.isArray(rawResult?.removedIds)
       ? rawResult.removedIds
       : Array.isArray(rawResult?.deletedAppointmentIds)

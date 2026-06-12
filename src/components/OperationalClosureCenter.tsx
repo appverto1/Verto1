@@ -226,43 +226,64 @@ export function OperationalClosureCenter({
     setLoading(true);
     setError("");
     try {
+      const hasActiveFilters = Boolean(status || patientFilter || professionalFilter || serviceType || quickFilter);
       const revalidation = await dataService.revalidateClosurePeriod({
         from: toApiDate(from),
         to: toApiDate(to, true),
       });
-      if (revalidation?.success) {
-        const counts = revalidation.data || revalidation.counts || {};
-        const changed = Number(counts.created || 0) + Number(counts.updated || 0) + Number(counts.legacyMirrored || 0);
-        setRevalidationInfo(
-          changed > 0
-            ? `${changed} item(ns) atualizados para conferência.`
-            : "Período conferido; nenhuma sessão nova para materializar."
-        );
-      } else {
-        setRevalidationInfo("");
-      }
-      const result = await dataService.getClosureAppointments({
+      const counts = revalidation?.success ? (revalidation.data || revalidation.counts || {}) : {};
+      const changed = Number(counts.created || 0) + Number(counts.updated || 0) + Number(counts.legacyMirrored || 0);
+      const requestRows = (pageNumber: number) => dataService.getClosureAppointments({
         from: toApiDate(from),
         to: toApiDate(to, true),
         status,
         patientId: patientFilter,
         professionalId: professionalFilter,
         serviceType,
-        page,
+        page: pageNumber,
         limit: 50,
         onlyPending: quickFilter === "pending",
         onlyReady: quickFilter === "ready",
         onlyWarnings: quickFilter === "warning",
         missing: ["signature", "report", "guide", "authorization", "documents", "procedure", "tuss", "amount", "professional_registry", "card"].includes(quickFilter) ? quickFilter : "",
       });
+      let result = await requestRows(page);
+      let nextRows = Array.isArray(result?.data) ? result.data : [];
+      if (result?.success && changed > 0 && nextRows.length === 0 && page > 1) {
+        const firstPageResult = await requestRows(1);
+        if (firstPageResult?.success) {
+          result = firstPageResult;
+          nextRows = Array.isArray(firstPageResult.data) ? firstPageResult.data : [];
+          setPage(1);
+        }
+      }
       if (!result?.success) {
         setRows([]);
         setTotals(null);
+        setRevalidationInfo("");
         setError(result?.error || "Não foi possível carregar o fechamento agora.");
         return;
       }
-      setRows(Array.isArray(result.data) ? result.data : []);
+      setRows(nextRows);
       setTotals(result.totals || null);
+      if (revalidation?.success) {
+        if (changed > 0 && nextRows.length === 0) {
+          setRevalidationInfo("");
+          setError(
+            hasActiveFilters
+              ? `${changed} item(ns) foram atualizados, mas os filtros atuais ocultam os resultados.`
+              : `${changed} item(ns) foram revalidados, mas não foram carregados na tabela.`
+          );
+        } else {
+          setRevalidationInfo(
+            changed > 0
+              ? `${changed} item(ns) atualizados para conferência.`
+              : "Período conferido; nenhuma sessão nova para materializar."
+          );
+        }
+      } else {
+        setRevalidationInfo("");
+      }
     } catch {
       setRows([]);
       setTotals(null);

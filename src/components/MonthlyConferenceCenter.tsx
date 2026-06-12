@@ -284,18 +284,15 @@ export function MonthlyConferenceCenter({
     setLoading(true);
     setError("");
     try {
+      const hasActiveFilters = Boolean(patientId || professionalId || payerId || serviceType || readinessStatus || appointmentStatus || quickFilter);
       const revalidation = await dataService.revalidateClosurePeriod({
         from: filterPayload.from,
         to: filterPayload.to,
       });
+      const counts = revalidation?.success ? (revalidation.data || revalidation.counts || {}) : {};
+      const changed = Number(counts.created || 0) + Number(counts.updated || 0) + Number(counts.legacyMirrored || 0);
       if (revalidation?.success) {
-        const counts = revalidation.data || revalidation.counts || {};
-        const changed = Number(counts.created || 0) + Number(counts.updated || 0) + Number(counts.legacyMirrored || 0);
-        setRevalidationInfo(
-          changed > 0
-            ? `${changed} item(ns) atualizados para a conferência mensal.`
-            : "Período conferido; nenhuma sessão nova para materializar."
-        );
+        setRevalidationInfo("");
       } else {
         setRevalidationInfo("");
       }
@@ -316,9 +313,36 @@ export function MonthlyConferenceCenter({
         setError(main?.error || "Não foi possível carregar a conferência agora.");
         return;
       }
-      setRows(Array.isArray(main.rows || main.data) ? (main.rows || main.data) : []);
-      setKpis(main.kpis || null);
-      setPendingByType(Array.isArray(main.pendingByType) ? main.pendingByType : []);
+      let mainResult = main;
+      let nextRows = Array.isArray(main.rows || main.data) ? (main.rows || main.data) : [];
+      const totalSessions = Number(main.kpis?.totalSessions || main.kpis?.total || 0);
+      if (nextRows.length === 0 && page > 1 && (changed > 0 || totalSessions > 0)) {
+        const firstPage = await dataService.getMonthlyConference({ ...filterPayload, page: 1, limit: 50 });
+        if (firstPage?.success) {
+          mainResult = firstPage;
+          nextRows = Array.isArray(firstPage.rows || firstPage.data) ? (firstPage.rows || firstPage.data) : [];
+          setPage(1);
+        }
+      }
+      setRows(nextRows);
+      setKpis(mainResult.kpis || null);
+      setPendingByType(Array.isArray(mainResult.pendingByType) ? mainResult.pendingByType : []);
+      if (revalidation?.success) {
+        if (changed > 0 && nextRows.length === 0) {
+          setRevalidationInfo("");
+          setError(
+            hasActiveFilters
+              ? `${changed} item(ns) foram atualizados, mas os filtros atuais ocultam os resultados.`
+              : `${changed} item(ns) foram revalidados, mas não foram carregados na tabela.`
+          );
+        } else {
+          setRevalidationInfo(
+            changed > 0
+              ? `${changed} item(ns) atualizados para a conferência mensal.`
+              : "Período conferido; nenhuma sessão nova para materializar."
+          );
+        }
+      }
       setSummaries({
         patient: Array.isArray(byPatient?.data) ? byPatient.data : [],
         professional: Array.isArray(byProfessional?.data) ? byProfessional.data : [],
@@ -336,7 +360,7 @@ export function MonthlyConferenceCenter({
     } finally {
       setLoading(false);
     }
-  }, [filterPayload, page]);
+  }, [appointmentStatus, filterPayload, page, patientId, payerId, professionalId, quickFilter, readinessStatus, serviceType]);
 
   useEffect(() => {
     void loadConference();

@@ -139,6 +139,9 @@ test('conferencia revalida periodo antes de listar em tela e antes de exportar C
   assert.match(dataServiceCode, /async revalidateClosurePeriod/);
   assert.match(conferenceCode, /const revalidation = await dataService\.revalidateClosurePeriod/);
   assert.match(conferenceCode, /const \[main, byPatient, byProfessional, byPayer, byService, byProcedure, byTuss, byGuide\] = await Promise\.all/);
+  assert.match(conferenceCode, /foram atualizados, mas os filtros atuais ocultam os resultados/);
+  assert.match(conferenceCode, /foram revalidados, mas não foram carregados na tabela/);
+  assert.match(conferenceCode, /nextRows\.length === 0 && page > 1/);
   const exportSlice = serverCode.slice(serverCode.indexOf("app.post('/api/conference/monthly/export'"), serverCode.indexOf('let hydratedRows = filterHydratedRowsByTussMissingKind'));
   assert.match(exportSlice, /revalidateClosureChecksForPeriod/);
   assert.match(exportSlice, /source: 'monthly_conference_export'/);

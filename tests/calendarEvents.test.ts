@@ -47,6 +47,8 @@ test('agenda hidrata nome real do paciente quando recorrencia vem apenas com pat
   assert.match(serverCode, /patient_name: pickCalendarPatientName/);
   assert.match(calendarCode, /parseEventSourcePayload/);
   assert.match(calendarCode, /pickPatientLabel/);
+  assert.match(calendarCode, /mergeCalendarEventsForRender/);
+  assert.match(calendarCode, /remoteState\.loaded/);
   assert.match(calendarCode, /source\?\.patientName/);
   assert.match(calendarCode, /source\?\.patient\?\.name/);
 });
