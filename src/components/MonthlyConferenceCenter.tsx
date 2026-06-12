@@ -125,11 +125,27 @@ const pendingCategoryTone: Record<string, string> = {
   not_applicable: "ring-slate-100",
 };
 
+const pendingDisplayLabel: Record<string, string> = {
+  Relatorio: "Relatório",
+  Autorizacao: "Autorização",
+  Duracao: "Duração",
+  "Aguardando realizacao": "Aguardando realização",
+  "Nao aplicavel ao faturamento": "Não aplicável ao faturamento",
+};
+
 function pendingChipClass(item: { label: string; category: string }) {
   if (item.category === "informational" || item.category === "not_applicable") {
     return "bg-slate-100 text-slate-600 ring-slate-100";
   }
   return `${pendingTone[item.label] || "bg-slate-100 text-slate-700"} ${pendingCategoryTone[item.category] || ""}`;
+}
+
+function pendingChipLabel(item: { label: string; category: string }) {
+  const label = pendingDisplayLabel[item.label] || item.label;
+  if (item.category === "configuration") return `Configuração: ${label}`;
+  if (item.category === "operational") return `Operacional: ${label}`;
+  if (item.category === "not_applicable" && item.label !== "Aguardando realizacao") return `Ainda não aplicável: ${label}`;
+  return label;
 }
 
 function getLocalDateInput(date: Date) {
@@ -550,7 +566,7 @@ export function MonthlyConferenceCenter({
   const kpiItems = [
     { label: "Total", value: kpis?.totalSessions ?? 0, tone: "text-slate-900" },
     { label: "Prontas", value: kpis?.ready ?? 0, tone: "text-emerald-700" },
-    { label: "Pendências", value: kpis?.pending ?? 0, tone: "text-orange-700" },
+    { label: "Pendências operacionais", value: kpis?.pending ?? 0, tone: "text-orange-700" },
     { label: "Em aberto", value: kpis?.open ?? kpis?.draft ?? 0, tone: "text-sky-700" },
     { label: "Atenção", value: kpis?.warning ?? 0, tone: "text-amber-700" },
     { label: "Não faturáveis", value: kpis?.notBillable ?? 0, tone: "text-slate-600" },
@@ -577,6 +593,15 @@ export function MonthlyConferenceCenter({
             : activeTab === "guide"
               ? summaries.guide
           : [];
+
+  const operationalPendingTypes = useMemo(
+    () => pendingByType.filter((item) => item?.category === "operational"),
+    [pendingByType]
+  );
+  const configurationPendingTypes = useMemo(
+    () => pendingByType.filter((item) => item?.category === "configuration"),
+    [pendingByType]
+  );
 
   const renderSection = (key: string, title: string, children: React.ReactNode) => (
     <div className="border-t border-slate-200 first:border-t-0">
@@ -688,7 +713,7 @@ export function MonthlyConferenceCenter({
 
         <div className="mt-3 flex flex-wrap gap-2">
           {[
-            ["pending", "Somente pendências"],
+            ["pending", "Somente pendências operacionais"],
             ["ready", "Somente prontas"],
             ["not_billable", "Não faturáveis"],
             ["signature", "Sem assinatura"],
@@ -750,14 +775,33 @@ export function MonthlyConferenceCenter({
 
       {pendingByType.length > 0 && (
         <section className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
-          <div className="text-sm font-semibold text-slate-700">Pendências mais frequentes</div>
-          <div className="mt-0.5 text-xs text-slate-500">Bloqueios e configuração de pré-faturamento; itens não aplicáveis ficam apenas na linha.</div>
-          <div className="mt-2 flex flex-wrap gap-2">
-            {pendingByType.slice(0, 8).map((item) => (
-              <span key={item.type} className={`rounded-full px-3 py-1 text-xs font-medium ring-1 ${item.category === "configuration" ? "bg-sky-50 text-sky-700 ring-sky-100" : "bg-rose-50 text-rose-700 ring-rose-100"}`}>
-                {item.type}: {item.count}
-              </span>
-            ))}
+          <div className="text-sm font-semibold text-slate-700">Pendências e configurações mais frequentes</div>
+          <div className="mt-0.5 text-xs text-slate-500">Bloqueios operacionais contam no KPI de pendências operacionais; configurações de pré-faturamento aparecem separadas.</div>
+          <div className="mt-3 grid gap-3 md:grid-cols-2">
+            {operationalPendingTypes.length > 0 && (
+              <div>
+                <div className="text-xs font-semibold uppercase text-rose-700">Bloqueios operacionais</div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {operationalPendingTypes.slice(0, 8).map((item) => (
+                    <span key={`operational-${item.type}`} className="rounded-full bg-rose-50 px-3 py-1 text-xs font-medium text-rose-700 ring-1 ring-rose-100">
+                      {pendingDisplayLabel[item.type] || item.type}: {item.count}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {configurationPendingTypes.length > 0 && (
+              <div>
+                <div className="text-xs font-semibold uppercase text-sky-700">Configurações pendentes</div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {configurationPendingTypes.slice(0, 8).map((item) => (
+                    <span key={`configuration-${item.type}`} className="rounded-full bg-sky-50 px-3 py-1 text-xs font-medium text-sky-700 ring-1 ring-sky-100">
+                      {pendingDisplayLabel[item.type] || item.type}: {item.count}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </section>
       )}
@@ -784,7 +828,7 @@ export function MonthlyConferenceCenter({
                   <th className="px-4 py-3">Consulta</th>
                   <th className="px-4 py-3">Fechamento</th>
                   <th className="px-4 py-3">Conferência</th>
-                  <th className="px-4 py-3">Pendências</th>
+                  <th className="px-4 py-3">Pendências e configurações</th>
                   <th className="px-4 py-3 text-right">Ações</th>
                 </tr>
               </thead>
@@ -834,7 +878,7 @@ export function MonthlyConferenceCenter({
                           {pendingDetails.visible.length === 0 ? (
                             <span className="rounded-full bg-emerald-50 px-2 py-1 text-xs text-emerald-700">Sem pendência</span>
                           ) : pendingDetails.visible.slice(0, 4).map((item) => (
-                            <span key={`${item.category}-${item.label}`} className={`rounded-full px-2 py-1 text-xs ring-1 ${pendingChipClass(item)}`}>{item.label}</span>
+                            <span key={`${item.category}-${item.label}`} className={`rounded-full px-2 py-1 text-xs ring-1 ${pendingChipClass(item)}`}>{pendingChipLabel(item)}</span>
                           ))}
                         </div>
                       </td>

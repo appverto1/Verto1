@@ -203,6 +203,13 @@ test('frontend atualiza conferencia sem F5 e nao promete faturamento eletronico'
   assert.match(conferenceCode, /Exportar CSV/);
   assert.match(closureCode, /Fechamento operacional/);
   assert.match(closureCode, /Pronta para conferência/);
+  assert.match(conferenceCode, /Pendências operacionais/);
+  assert.match(conferenceCode, /Pendências e configurações mais frequentes/);
+  assert.match(closureCode, /Pendências operacionais/);
+  assert.match(closureCode, /Somente pendências operacionais/);
+  assert.match(closureCode, /Pendências e configurações/);
+  assert.match(closureCode, /Configuração: \$\{label\}/);
+  assert.match(closureCode, /configuração\$\{configuration > 1 \? "ões" : ""\} pendente/);
   assert.doesNotMatch(conferenceCode, /XML TISS|lote TISS|remessa|glosa|recurso|faturamento eletrônico/i);
 });
 

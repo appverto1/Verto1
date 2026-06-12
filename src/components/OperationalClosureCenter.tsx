@@ -153,11 +153,27 @@ const pendingCategoryTone: Record<string, string> = {
   not_applicable: "ring-slate-100",
 };
 
+const pendingDisplayLabel: Record<string, string> = {
+  Relatorio: "Relatório",
+  Autorizacao: "Autorização",
+  Duracao: "Duração",
+  "Aguardando realizacao": "Aguardando realização",
+  "Nao aplicavel ao faturamento": "Não aplicável ao faturamento",
+};
+
 function pendingChipClass(item: { label: string; category: string }) {
   if (item.category === "informational" || item.category === "not_applicable") {
     return "bg-slate-100 text-slate-600 ring-slate-100";
   }
   return `${pendingTone[item.label] || "bg-slate-100 text-slate-700"} ${pendingCategoryTone[item.category] || ""}`;
+}
+
+function pendingChipLabel(item: { label: string; category: string }) {
+  const label = pendingDisplayLabel[item.label] || item.label;
+  if (item.category === "configuration") return `Configuração: ${label}`;
+  if (item.category === "operational") return `Operacional: ${label}`;
+  if (item.category === "not_applicable" && item.label !== "Aguardando realizacao") return `Ainda não aplicável: ${label}`;
+  return label;
 }
 
 function getLocalDateInput(date: Date) {
@@ -222,15 +238,18 @@ function formatRevalidationMessage(counts: any, contextLabel: string) {
 
 function getHumanIssueCount(row: ClosureRow) {
   const details = classifyConferencePendingDetails(row);
-  const blocking = details.blocking.length;
+  const operational = details.operational.length;
+  const configuration = details.configuration.length;
+  const blocking = operational + configuration;
   const warnings = Number(row.warning_issues_count || 0);
   if (blocking === 0 && warnings === 0) {
-    if (details.informational.length > 0) return details.informational.join(", ");
-    if (details.notApplicable.length > 0) return details.notApplicable.join(", ");
+    if (details.informational.length > 0) return details.informational.map((item) => pendingDisplayLabel[item] || item).join(", ");
+    if (details.notApplicable.length > 0) return details.notApplicable.map((item) => pendingDisplayLabel[item] || item).join(", ");
     return "Sem pendências";
   }
   const parts = [];
-  if (blocking > 0) parts.push(`${blocking} pendência${blocking > 1 ? "s" : ""}`);
+  if (operational > 0) parts.push(`${operational} pendência${operational > 1 ? "s" : ""} operacional${operational > 1 ? "is" : ""}`);
+  if (configuration > 0) parts.push(`${configuration} configuração${configuration > 1 ? "ões" : ""} pendente${configuration > 1 ? "s" : ""}`);
   if (warnings > 0) parts.push(`${warnings} alerta${warnings > 1 ? "s" : ""}`);
   return parts.join(" + ");
 }
@@ -453,7 +472,7 @@ export function OperationalClosureCenter({
 
   const kpis = [
     { label: "Prontas", value: totals?.ready ?? 0, tone: "text-emerald-700" },
-    { label: "Pendências", value: totals?.pending ?? 0, tone: "text-rose-700" },
+    { label: "Pendências operacionais", value: totals?.pending ?? 0, tone: "text-rose-700" },
     { label: "Em aberto", value: totals?.open ?? totals?.draft ?? 0, tone: "text-sky-700" },
     { label: "Atenção", value: totals?.warning ?? 0, tone: "text-amber-700" },
     { label: "Não faturáveis", value: totals?.notBillable ?? 0, tone: "text-slate-700" },
@@ -591,7 +610,7 @@ export function OperationalClosureCenter({
 
         <div className="mt-3 flex flex-wrap gap-2">
           {[
-            ["pending", "Somente pendências"],
+            ["pending", "Somente pendências operacionais"],
             ["ready", "Somente prontas"],
             ["warning", "Somente alertas"],
             ["signature", "Sem assinatura"],
@@ -682,7 +701,7 @@ export function OperationalClosureCenter({
                 <th className="px-4 py-3">Planejado</th>
                 <th className="px-4 py-3">Realizado</th>
                 <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Pendências</th>
+                <th className="px-4 py-3">Pendências e configurações</th>
                 <th className="px-4 py-3 text-right">Ações</th>
               </tr>
             </thead>
@@ -736,7 +755,7 @@ export function OperationalClosureCenter({
                         {pendingDetails.visible.length === 0 ? (
                           <span className="rounded-full bg-emerald-50 px-2 py-1 text-xs text-emerald-700">Sem pendência</span>
                         ) : pendingDetails.visible.slice(0, 4).map((item) => (
-                          <span key={`${item.category}-${item.label}`} className={`rounded-full px-2 py-1 text-xs ring-1 ${pendingChipClass(item)}`}>{item.label}</span>
+                          <span key={`${item.category}-${item.label}`} className={`rounded-full px-2 py-1 text-xs ring-1 ${pendingChipClass(item)}`}>{pendingChipLabel(item)}</span>
                         ))}
                       </div>
                       {Array.isArray(row.main_issues) && row.main_issues.length > 0 && (

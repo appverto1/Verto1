@@ -139,9 +139,12 @@ test('status e pendencias ficam coerentes para agendada, realizada e nao faturav
 
   const summary = buildMonthlyConferenceSummary([scheduled, notBillable]);
   assert.equal(summary.kpis.totalSessions, 2);
+  assert.equal(summary.kpis.pending, 0);
   assert.equal(summary.kpis.open, 1);
   assert.equal(summary.kpis.notBillable, 1);
   assert.equal(summary.pendingByType.some((item) => item.type === 'Procedimento' && item.count === 1), true);
+  assert.equal(summary.pendingByType.find((item) => item.type === 'Procedimento')?.category, 'configuration');
+  assert.equal(summary.kpis.ready + summary.kpis.pending + summary.kpis.warning + summary.kpis.notBillable + summary.kpis.open + summary.kpis.unknown, summary.kpis.totalSessions);
 });
 
 test('resumos agrupam paciente, profissional, pagador e especialidade', () => {
@@ -219,6 +222,13 @@ test('frontend tem tela mensal, filtros, detalhe, exportacao e nao expõe infrae
   assert.match(coordinatorCode, /<MonthlyConferenceCenter/);
   assert.match(conferenceCode, /Em aberto/);
   assert.match(conferenceCode, /classifyConferencePendingDetails/);
+  assert.match(conferenceCode, /Pendências operacionais/);
+  assert.match(conferenceCode, /Pendências e configurações mais frequentes/);
+  assert.match(conferenceCode, /Bloqueios operacionais/);
+  assert.match(conferenceCode, /Configurações pendentes/);
+  assert.match(conferenceCode, /Somente pendências operacionais/);
+  assert.match(conferenceCode, /Pendências e configurações/);
+  assert.match(conferenceCode, /Configuração: \$\{label\}/);
   assert.match(conferenceCode, /Assinaturas pendentes/);
   assert.match(conferenceCode, /TUSS: pendente de mapeamento/);
   assert.match(conferenceCode, /pendingChipClass/);
