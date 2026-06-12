@@ -1274,13 +1274,42 @@ function applyNoStoreHeaders(res: any) {
   res.removeHeader?.('ETag');
 }
 
+function suppressEtagHeader(res: any) {
+  if (!res || res.__noStoreSuppressEtag) return;
+  const originalSetHeader = res.setHeader?.bind(res);
+  if (!originalSetHeader) return;
+  res.__noStoreSuppressEtag = true;
+  res.setHeader = (name: string, value: any) => {
+    if (String(name || '').toLowerCase() === 'etag') return res;
+    return originalSetHeader(name, value);
+  };
+}
+
 function noStoreDynamicResponse(req: any, res: any, next: any) {
   if (req.headers) {
     delete req.headers['if-none-match'];
     delete req.headers['if-modified-since'];
   }
+  suppressEtagHeader(res);
   applyNoStoreHeaders(res);
   return next();
+}
+
+function isOperationalNoStorePath(value: any) {
+  const pathname = String(value || '').split('?')[0].toLowerCase();
+  return (
+    pathname === '/api/closure/revalidate-period' ||
+    pathname === '/api/closure/appointments' ||
+    pathname.startsWith('/api/closure/appointments/') ||
+    pathname === '/api/conference/monthly' ||
+    pathname.startsWith('/api/conference/monthly/')
+  );
+}
+
+function noStoreOperationalDynamicRoutes(req: any, res: any, next: any) {
+  const pathname = req?.path || req?.originalUrl || req?.url || '';
+  if (!isOperationalNoStorePath(pathname)) return next();
+  return noStoreDynamicResponse(req, res, next);
 }
 
 function sendNoStoreJson(res: any, body: any, statusCode = 200) {
@@ -9099,6 +9128,7 @@ async function startServer() {
     crossOriginEmbedderPolicy: false,
     crossOriginResourcePolicy: { policy: 'same-site' }
   }));
+  app.use(noStoreOperationalDynamicRoutes);
 
   // Rate Limiting (Prevent Brute Force)
   const limiter = rateLimit({

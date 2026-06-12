@@ -59,6 +59,10 @@ test('revalidacao de periodo materializa checks faltantes sem sobrescrever overr
 test('fechamento operacional evita cache stale depois de revalidar', () => {
   assert.match(serverCode, /const NO_STORE_DYNAMIC_HEADERS = \{[\s\S]*?no-store, no-cache, must-revalidate, private/);
   assert.match(serverCode, /function noStoreDynamicResponse/);
+  assert.match(serverCode, /function suppressEtagHeader/);
+  assert.match(serverCode, /String\(name \|\| ''\)\.toLowerCase\(\) === 'etag'/);
+  assert.match(serverCode, /function noStoreOperationalDynamicRoutes/);
+  assert.match(serverCode, /app\.use\(noStoreOperationalDynamicRoutes\)/);
   assert.match(serverCode, /app\.get\('\/api\/closure\/appointments', noStoreDynamicResponse, checkAuth, requireRoles\('coordinator', 'therapist', 'admin', 'owner'\)/);
   assert.match(serverCode, /return sendNoStoreJson\(res, \{[\s\S]*?data: closureRows/);
   assert.match(dataServiceCode, /async function getNoStoreAuthHeaders/);
