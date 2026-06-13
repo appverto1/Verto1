@@ -73,6 +73,8 @@ test('revalidacao de periodo materializa checks faltantes sem sobrescrever overr
   assert.match(serverCode, /scopedAppointment: appointmentById\.get\(appointmentId\)/);
   assert.match(serverCode, /return \{ query: scoped \}/);
   assert.match(serverCode, /query = \(await applyClosureTenantScope\(query, params\.user, organizationId\)\)\.query/);
+  assert.match(serverCode, /\.order\('scheduled_start', \{ ascending: false \}\)\.range\(from, to\)/);
+  assert.match(serverCode, /\.order\('scheduled_start', \{ ascending: false \}\)/);
   assert.match(serverCode, /isMissingUpsertConflictTargetError/);
   assert.match(serverCode, /writeWithoutConflictTarget/);
   assert.match(serverCode, /\.select\('id'\)[\s\S]*?\.eq\('organization_id', organizationId\)[\s\S]*?\.eq\('appointment_id', appointmentId\)/);
@@ -212,6 +214,10 @@ test('frontend atualiza conferencia sem F5 e nao promete faturamento eletronico'
   assert.match(closureCode, /Pendências e configurações/);
   assert.match(closureCode, /Configuração: \$\{label\}/);
   assert.match(closureCode, /configuração\$\{configuration > 1 \? "ões" : ""\} pendente/);
+  assert.match(closureCode, /max-h-\[70vh\] overflow-auto/);
+  assert.match(closureCode, /sticky top-0 z-20 bg-slate-50/);
+  assert.match(conferenceCode, /max-h-\[70vh\] overflow-auto/);
+  assert.match(conferenceCode, /sticky top-0 z-20 bg-slate-50/);
   assert.doesNotMatch(conferenceCode, /XML TISS|lote TISS|remessa|glosa|recurso|faturamento eletrônico/i);
 });
 

@@ -179,6 +179,7 @@ test('API da conferencia tem auth, roles, paginacao, filtros e select explicito'
   assert.match(serverCode, /app\.get\('\/api\/conference\/monthly\/session\/:appointmentId', noStoreDynamicResponse, checkAuth/);
   assert.match(serverCode, /app\.post\('\/api\/conference\/monthly\/export', portalActionLimiter, checkAuth, requireRoles\('coordinator', 'admin', 'owner'\)/);
   assert.match(serverCode, /\.select\(APPOINTMENT_CLOSURE_LIST_SELECT\)/);
+  assert.match(serverCode, /\.order\('scheduled_start', \{ ascending: false \}\)/);
   assert.match(serverCode, /\.range\(params\.filters\.from, params\.filters\.to\)/);
   assert.match(serverCode, /assertConferenceFilterOwnership/);
   assert.match(serverCode, /return sendNoStoreJson\(res, \{[\s\S]*?rows: hydratedPageRows/);
@@ -207,6 +208,11 @@ test('conferencia revalida periodo antes de listar em tela e antes de exportar C
   const exportSlice = serverCode.slice(serverCode.indexOf("app.post('/api/conference/monthly/export'"), serverCode.indexOf('let hydratedRows = filterHydratedRowsByTussMissingKind'));
   assert.match(exportSlice, /revalidateClosureChecksForPeriod/);
   assert.match(exportSlice, /source: 'monthly_conference_export'/);
+});
+
+test('tabela de sessoes da conferencia mantem cabecalho fixo durante scroll', () => {
+  assert.match(conferenceCode, /max-h-\[70vh\] overflow-auto/);
+  assert.match(conferenceCode, /sticky top-0 z-20 bg-slate-50/);
 });
 
 test('exportacao gera trilha auditavel e tabela com RLS', () => {

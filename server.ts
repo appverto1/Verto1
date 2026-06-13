@@ -32204,7 +32204,7 @@ async function startServer() {
           .eq('organization_id', clinicId)
           .gte('scheduled_start', range.fromIso)
           .lte('scheduled_start', range.toIso);
-        if (useRange) scopedQuery = scopedQuery.order('scheduled_start', { ascending: true }).range(from, to);
+        if (useRange) scopedQuery = scopedQuery.order('scheduled_start', { ascending: false }).range(from, to);
         scopedQuery = (await applyClosureTenantScope(scopedQuery, req.session.user, clinicId)).query;
         if (status) scopedQuery = scopedQuery.eq('readiness_status', status);
         if (onlyPending) scopedQuery = scopedQuery.eq('readiness_status', 'PENDING');
@@ -32875,7 +32875,7 @@ async function startServer() {
       .eq('organization_id', params.clinicId)
       .gte('scheduled_start', params.filters.fromIso)
       .lte('scheduled_start', params.filters.toIso)
-      .order('scheduled_start', { ascending: true });
+      .order('scheduled_start', { ascending: false });
     query = applyConferenceFilters(query, params.filters);
     query = params.paginated ? query.range(params.filters.from, params.filters.to) : query.limit(limit);
     query = (await applyClosureTenantScope(query, params.user, params.clinicId)).query;
