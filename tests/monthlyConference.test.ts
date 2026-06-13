@@ -162,6 +162,40 @@ test('resumos agrupam paciente, profissional, pagador e especialidade', () => {
   assert.equal(aba.actualMinutes, 45);
 });
 
+test('resumos agrupam procedimento e TUSS sem misturar configurados e pendentes', () => {
+  const summary = buildMonthlyConferenceSummary([
+    {
+      appointment_id: 'appt-aba-tuss',
+      patient_name: 'Pedro',
+      professional_name: 'Mateus',
+      service_type: 'ABA',
+      payer_id: 'payer-amil',
+      payer_name: 'Amil',
+      scheduled_minutes: 30,
+      actual_minutes: 30,
+      readiness_status: 'DRAFT',
+      internal_procedure_name: 'Sessão ABA individual',
+      internal_procedure_code: 'ABA-IND',
+      tuss_code: 'TESTE-ABA'
+    },
+    {
+      appointment_id: 'appt-missing-tuss',
+      patient_name: 'Pedro',
+      professional_name: 'Mateus',
+      service_type: 'ABA',
+      payer_id: null,
+      payer_name: 'Sem pagador',
+      scheduled_minutes: 30,
+      actual_minutes: 0,
+      readiness_status: 'DRAFT'
+    }
+  ] as any[]);
+  assert.equal(summary.byProcedure.find((item) => item.name === 'Sessão ABA individual')?.totalSessions, 1);
+  assert.equal(summary.byProcedure.find((item) => item.name === 'Sem procedimento')?.totalSessions, 1);
+  assert.equal(summary.byTussCode.find((item) => item.code === 'TESTE-ABA')?.totalSessions, 1);
+  assert.equal(summary.byTussCode.find((item) => item.code === 'Sem TUSS')?.totalSessions, 1);
+});
+
 test('exportacao usa whitelist operacional e CSV sem dados clinicos brutos', () => {
   const exportRows = buildMonthlyConferenceExportRows(rows);
   const csv = rowsToCsv(exportRows, ['scheduledDate', 'patientName', 'professionalName', 'serviceType', 'actualMinutes', 'pendingKinds', 'rawAbaEvents']);
@@ -246,6 +280,25 @@ test('frontend tem tela mensal, filtros, detalhe, exportacao e nao expõe infrae
   assert.doesNotMatch(conferenceCode, /dangerouslySetInnerHTML/);
   assert.doesNotMatch(conferenceCode, /Supabase|PostgREST|Railway|schema cache/i);
   assert.doesNotMatch(conferenceCode, /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+});
+
+test('drilldown visual filtra sessoes por procedimento, TUSS e pagador real', () => {
+  assert.match(conferenceCode, /type ConferenceDrilldownFilter = \{/);
+  assert.match(conferenceCode, /function buildConferenceDrilldownFilter\(tab: ConferenceTab, item: any\)/);
+  assert.match(conferenceCode, /function conferenceRowMatchesDrilldown\(row: ConferenceRow, filter: ConferenceDrilldownFilter\)/);
+  assert.match(conferenceCode, /if \(tab === "procedure"\)[\s\S]*?return \{ type: "procedure"/);
+  assert.match(conferenceCode, /if \(tab === "tuss"\)[\s\S]*?return \{ type: "tuss"/);
+  assert.match(conferenceCode, /if \(filter\.type === "procedure"\)[\s\S]*?!procedureCode && !procedureName/);
+  assert.match(conferenceCode, /if \(filter\.type === "tuss"\)[\s\S]*?!tussCode/);
+  assert.match(conferenceCode, /if \(filter\.type === "payer"\)[\s\S]*?cleanDrilldownValue\(row\.payer_id\)/);
+  assert.doesNotMatch(conferenceCode, /filter\.type === "payer"[\s\S]{0,220}payer_name/);
+  assert.match(conferenceCode, /const drilldownRows = useMemo/);
+  assert.match(conferenceCode, /rows\.filter\(\(row\) => conferenceRowMatchesDrilldown\(row, drilldownFilter\)\)/);
+  assert.match(conferenceCode, /Filtro aplicado: \{drilldownLabel\}/);
+  assert.match(conferenceCode, /Limpar filtro/);
+  assert.match(conferenceCode, /const nextDrilldown = buildConferenceDrilldownFilter\(activeTab, item\)/);
+  assert.match(conferenceCode, /if \(nextDrilldown\) setDrilldownFilter\(nextDrilldown\)/);
+  assert.match(conferenceCode, /drilldownRows\.map\(\(row, index\)/);
 });
 
 test('dataService expõe helpers econômicos da conferência', () => {

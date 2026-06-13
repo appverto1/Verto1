@@ -23,6 +23,12 @@ import { classifyConferencePendingDetails, formatConferenceMinutes } from "../se
 import { formatDateTimeInAppointmentTimezone } from "../utils/scheduling";
 
 type ConferenceStatus = "READY" | "PENDING" | "WARNING" | "NOT_BILLABLE" | "DRAFT" | "UNKNOWN";
+type ConferenceTab = "sessions" | "patient" | "professional" | "payer" | "service" | "procedure" | "tuss" | "guide";
+type ConferenceDrilldownFilter = {
+  type: "patient" | "professional" | "payer" | "specialty" | "procedure" | "tuss" | "guide";
+  label: string;
+  value: string | null;
+};
 
 type ConferenceRow = {
   appointment_id?: string | null;
@@ -31,6 +37,7 @@ type ConferenceRow = {
   professional_id?: string | null;
   professional_name?: string | null;
   service_type?: string | null;
+  payer_id?: string | null;
   payer_name?: string | null;
   clinic_name?: string | null;
   unit_name?: string | null;
@@ -192,6 +199,86 @@ function safeName(value: any, fallback: string) {
   return String(value || fallback).trim() || fallback;
 }
 
+const drilldownTypeLabel: Record<ConferenceDrilldownFilter["type"], string> = {
+  patient: "Paciente",
+  professional: "Profissional",
+  payer: "Pagador",
+  specialty: "Especialidade",
+  procedure: "Procedimento",
+  tuss: "TUSS",
+  guide: "Guia",
+};
+
+function cleanDrilldownValue(value: any) {
+  return String(value || "").trim();
+}
+
+function buildConferenceDrilldownFilter(tab: ConferenceTab, item: any): ConferenceDrilldownFilter | null {
+  if (tab === "sessions") return null;
+  if (tab === "patient") {
+    const label = safeName(item?.name, "Paciente");
+    return { type: "patient", label, value: cleanDrilldownValue(item?.id || label) || null };
+  }
+  if (tab === "professional") {
+    const label = safeName(item?.name, "Equipe");
+    return { type: "professional", label, value: cleanDrilldownValue(item?.id || label) || null };
+  }
+  if (tab === "payer") {
+    const label = safeName(item?.payerName || item?.name, "Sem pagador");
+    const payerId = cleanDrilldownValue(item?.id);
+    return { type: "payer", label, value: payerId && label !== "Sem pagador" ? payerId : null };
+  }
+  if (tab === "service") {
+    const label = safeName(item?.serviceType, "Sessão");
+    return { type: "specialty", label, value: cleanDrilldownValue(item?.serviceType || label) || null };
+  }
+  if (tab === "procedure") {
+    const label = safeName(item?.name, "Sem procedimento");
+    const internalCode = cleanDrilldownValue(item?.internalCode);
+    return { type: "procedure", label, value: label === "Sem procedimento" && !internalCode ? null : internalCode || label };
+  }
+  if (tab === "tuss") {
+    const label = safeName(item?.code, "Sem TUSS");
+    return { type: "tuss", label, value: label === "Sem TUSS" ? null : label };
+  }
+  if (tab === "guide") {
+    const label = safeName(item?.guideType, "Sem guia provável");
+    return { type: "guide", label, value: label === "Sem guia provável" ? null : label };
+  }
+  return null;
+}
+
+function conferenceRowMatchesDrilldown(row: ConferenceRow, filter: ConferenceDrilldownFilter) {
+  if (filter.type === "patient") {
+    return filter.value
+      ? cleanDrilldownValue(row.patient_id) === filter.value || safeName(row.patient_name, "Paciente") === filter.label
+      : !cleanDrilldownValue(row.patient_id);
+  }
+  if (filter.type === "professional") {
+    return filter.value
+      ? cleanDrilldownValue(row.professional_id) === filter.value || safeName(row.professional_name, "Equipe") === filter.label
+      : !cleanDrilldownValue(row.professional_id);
+  }
+  if (filter.type === "payer") {
+    return filter.value ? cleanDrilldownValue(row.payer_id) === filter.value : !cleanDrilldownValue(row.payer_id);
+  }
+  if (filter.type === "specialty") return cleanDrilldownValue(row.service_type) === filter.value;
+  if (filter.type === "procedure") {
+    const procedureCode = cleanDrilldownValue(row.internal_procedure_code);
+    const procedureName = cleanDrilldownValue(row.internal_procedure_name);
+    return filter.value ? procedureCode === filter.value || procedureName === filter.label : !procedureCode && !procedureName;
+  }
+  if (filter.type === "tuss") {
+    const tussCode = cleanDrilldownValue(row.tuss_code);
+    return filter.value ? tussCode === filter.value : !tussCode;
+  }
+  if (filter.type === "guide") {
+    const guideType = cleanDrilldownValue(row.guide_type);
+    return filter.value ? guideType === filter.value : !guideType;
+  }
+  return true;
+}
+
 function formatRevalidationMessage(counts: any, contextLabel: string) {
   const created = Number(counts?.created || 0);
   const updated = Number(counts?.updated || 0);
@@ -248,7 +335,8 @@ export function MonthlyConferenceCenter({
   const [readinessStatus, setReadinessStatus] = useState("");
   const [appointmentStatus, setAppointmentStatus] = useState("");
   const [quickFilter, setQuickFilter] = useState("");
-  const [activeTab, setActiveTab] = useState<"sessions" | "patient" | "professional" | "payer" | "service" | "procedure" | "tuss" | "guide">("sessions");
+  const [activeTab, setActiveTab] = useState<ConferenceTab>("sessions");
+  const [drilldownFilter, setDrilldownFilter] = useState<ConferenceDrilldownFilter | null>(null);
   const [page, setPage] = useState(1);
   const [rows, setRows] = useState<ConferenceRow[]>([]);
   const [kpis, setKpis] = useState<any>(null);
@@ -343,6 +431,10 @@ export function MonthlyConferenceCenter({
     onlyNotBillable: quickFilter === "not_billable",
     missing: ["signature", "report", "guide", "authorization", "documents", "procedure", "tuss", "amount", "professional_registry", "card"].includes(quickFilter) ? quickFilter : "",
   }), [appointmentStatus, from, patientId, payerId, professionalId, quickFilter, readinessStatus, serviceType, to]);
+
+  useEffect(() => {
+    setDrilldownFilter(null);
+  }, [appointmentStatus, filterPayload, patientId, payerId, professionalId, quickFilter, readinessStatus, serviceType]);
 
   const loadConference = useCallback(async () => {
     setLoading(true);
@@ -593,6 +685,12 @@ export function MonthlyConferenceCenter({
               ? summaries.guide
           : [];
 
+  const drilldownRows = useMemo(
+    () => drilldownFilter ? rows.filter((row) => conferenceRowMatchesDrilldown(row, drilldownFilter)) : rows,
+    [drilldownFilter, rows]
+  );
+  const drilldownLabel = drilldownFilter ? `${drilldownTypeLabel[drilldownFilter.type]} = ${drilldownFilter.label}` : "";
+
   const operationalPendingTypes = useMemo(
     () => pendingByType.filter((item) => item?.category === "operational"),
     [pendingByType]
@@ -762,7 +860,10 @@ export function MonthlyConferenceCenter({
             <button
               key={value}
               type="button"
-              onClick={() => setActiveTab(value)}
+              onClick={() => {
+                if (value !== "sessions") setDrilldownFilter(null);
+                setActiveTab(value);
+              }}
               className={`inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium ${activeTab === value ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-50"}`}
             >
               <Icon size={15} />
@@ -809,6 +910,19 @@ export function MonthlyConferenceCenter({
       {!error && revalidationInfo && (
         <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{revalidationInfo}</div>
       )}
+      {drilldownFilter && (
+        <div className="flex flex-col gap-2 rounded-md border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm text-indigo-800 sm:flex-row sm:items-center sm:justify-between">
+          <span>Filtro aplicado: {drilldownLabel}</span>
+          <button
+            type="button"
+            onClick={() => setDrilldownFilter(null)}
+            className="inline-flex w-fit items-center gap-1 rounded-md border border-indigo-200 bg-white px-2.5 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-50"
+          >
+            <X size={13} />
+            Limpar filtro
+          </button>
+        </div>
+      )}
 
       {activeTab === "sessions" ? (
         <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
@@ -834,9 +948,9 @@ export function MonthlyConferenceCenter({
               <tbody className="divide-y divide-slate-100">
                 {loading ? (
                   <tr><td colSpan={13} className="px-4 py-10 text-center text-slate-500"><Loader2 className="mx-auto mb-2 animate-spin" size={20} />Carregando conferência</td></tr>
-                ) : rows.length === 0 ? (
-                  <tr><td colSpan={13} className="px-4 py-10 text-center text-slate-500">Nenhuma sessão encontrada no período.</td></tr>
-                ) : rows.map((row, index) => {
+                ) : drilldownRows.length === 0 ? (
+                  <tr><td colSpan={13} className="px-4 py-10 text-center text-slate-500">{drilldownFilter ? "Nenhuma sessão encontrada para o filtro aplicado." : "Nenhuma sessão encontrada no período."}</td></tr>
+                ) : drilldownRows.map((row, index) => {
                   const status = normalizeStatus(row.readiness_status);
                   const meta = statusMeta[status];
                   const StatusIcon = meta.icon;
@@ -921,10 +1035,8 @@ export function MonthlyConferenceCenter({
                   key={`${title}-${index}`}
                   type="button"
                   onClick={() => {
-                    if (activeTab === "patient") setPatientId(String(item.id || ""));
-                    if (activeTab === "professional") setProfessionalId(String(item.id || ""));
-                    if (activeTab === "payer") setPayerId(String(item.id || ""));
-                    if (activeTab === "service") setServiceType(String(item.serviceType || ""));
+                    const nextDrilldown = buildConferenceDrilldownFilter(activeTab, item);
+                    if (nextDrilldown) setDrilldownFilter(nextDrilldown);
                     setActiveTab("sessions");
                     setPage(1);
                   }}
