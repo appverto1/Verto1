@@ -268,6 +268,7 @@ export function CoordinatorDashboard({
     protocols: "protocol-library",
     financial: "patient-financial",
     team: "team-compensation",
+    payers: "clinic-settings",
     settings: null,
     logs: null,
     billing: "billing-management",
@@ -308,6 +309,7 @@ export function CoordinatorDashboard({
     | "agenda"
     | "closure"
     | "conference"
+    | "payers"
     | "rooms"
     | "protocols"
     | "settings"
@@ -334,6 +336,7 @@ export function CoordinatorDashboard({
       | "agenda"
       | "closure"
       | "conference"
+      | "payers"
       | "rooms"
       | "protocols"
       | "settings"
@@ -592,6 +595,7 @@ export function CoordinatorDashboard({
     agenda: "Agenda",
     closure: "Fechamento operacional",
     conference: "Conferência mensal",
+    payers: "Pagadores e regras",
     rooms: "Reservas de Sala",
     protocols: "Protocolos",
     settings: "Configurações da Clínica",
@@ -5566,6 +5570,7 @@ export function CoordinatorDashboard({
     [{ id: "protocols", label: "Protocolos", icon: BookOpenCheck }],
     [
       { id: "financial", label: "Financeiro", icon: DollarSign, badge: "BETA" },
+      { id: "payers", label: "Pagadores e regras", icon: KeyRound },
       { id: "closure", label: "Fechamento", icon: ReceiptText },
       { id: "conference", label: "Conferência", icon: FileChartColumnIncreasing },
     ],
@@ -7805,6 +7810,17 @@ export function CoordinatorDashboard({
                 />
               </motion.div>
             )}
+            {activeTab === "payers" && (
+              <motion.div
+                key="payers"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }}
+                className="space-y-6"
+              >
+                <PayerRequirementsPanel />
+              </motion.div>
+            )}
             {activeTab === "billing" && (
               <motion.div
                 key="billing"
@@ -8445,7 +8461,6 @@ export function CoordinatorDashboard({
                             </div>
                           </div>
                         </div>
-                        <PayerRequirementsPanel />
                       </div>
                     ) : (
                       <div className="p-6 bg-slate-50 rounded-3xl border border-slate-100 text-sm font-semibold text-slate-500">

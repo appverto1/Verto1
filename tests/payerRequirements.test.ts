@@ -167,7 +167,12 @@ test('UI expõe configuração, agenda e fechamento sem IDs técnicos ou HTML pe
   assert.match(dataServiceCode, /async getPayers/);
   assert.match(dataServiceCode, /async updateAppointmentBillingContext/);
   assert.match(coordinatorCode, /PayerRequirementsPanel/);
+  assert.match(coordinatorCode, /payers:\s*"clinic-settings"/);
+  assert.match(coordinatorCode, /payers:\s*"Pagadores e regras"/);
+  assert.match(coordinatorCode, /id:\s*"payers", label:\s*"Pagadores e regras", icon:\s*KeyRound/);
+  assert.match(coordinatorCode, /activeTab === "payers"[\s\S]*?<PayerRequirementsPanel \/>/);
   assert.match(payerPanelCode, /Pagadores e regras/);
+  assert.match(payerPanelCode, /Procedimentos e TUSS/);
   assert.match(coordinatorCode, /Pagador e conferência/);
   assert.match(calendarCode, /billingContext/);
   assert.match(calendarCode, /Editar pagador/);
