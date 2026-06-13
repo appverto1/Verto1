@@ -168,6 +168,9 @@ test('exportacao usa whitelist operacional e CSV sem dados clinicos brutos', () 
   assert.match(csv, /scheduledDate,patientName,professionalName,serviceType,actualMinutes,pendingKinds/);
   assert.doesNotMatch(csv, /rawAbaEvents/);
   assert.doesNotMatch(csv, /Sessão cancelada/);
+  const localTimeRows = buildMonthlyConferenceExportRows([{ scheduled_start: '2026-06-15T13:00:00+00:00' } as any]);
+  assert.equal(localTimeRows[0].scheduledDate, '2026-06-15');
+  assert.equal(localTimeRows[0].startTime, '10:00');
 });
 
 test('API da conferencia tem auth, roles, paginacao, filtros e select explicito', () => {
@@ -219,6 +222,7 @@ test('frontend tem tela mensal, filtros, detalhe, exportacao e nao expõe infrae
   for (const label of ['Conferência mensal', 'Por paciente', 'Por profissional', 'Por pagador', 'Por especialidade', 'Exportar CSV', 'Conferência da sessão']) {
     assert.match(conferenceCode, new RegExp(label));
   }
+  assert.match(conferenceCode, /formatDateTimeInAppointmentTimezone/);
   assert.match(coordinatorCode, /<MonthlyConferenceCenter/);
   assert.match(conferenceCode, /Em aberto/);
   assert.match(conferenceCode, /classifyConferencePendingDetails/);

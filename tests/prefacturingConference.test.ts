@@ -206,6 +206,8 @@ test('frontend atualiza conferencia sem F5 e nao promete faturamento eletronico'
   assert.match(conferenceCode, /Pendências operacionais/);
   assert.match(conferenceCode, /Pendências e configurações mais frequentes/);
   assert.match(closureCode, /Pendências operacionais/);
+  assert.match(closureCode, /formatDateTimeInAppointmentTimezone/);
+  assert.match(conferenceCode, /formatDateTimeInAppointmentTimezone/);
   assert.match(closureCode, /Somente pendências operacionais/);
   assert.match(closureCode, /Pendências e configurações/);
   assert.match(closureCode, /Configuração: \$\{label\}/);

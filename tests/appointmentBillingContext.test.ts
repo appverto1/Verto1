@@ -144,12 +144,15 @@ test('modal preenche sugestao do paciente com carteirinha sem sobrescrever cadas
   assert.match(serverCode, /insuranceCardNumber: patientInsuranceCardNumber \|\| null/);
   assert.match(serverCode, /insurancePlanName: sanitizeString\(selectedPlan\.insurance_plan_name/);
   assert.match(serverCode, /const patientDefault = serializeBillingSuggestion\(suggestion\)/);
+  assert.match(serverCode, /payerId: sanitizeString\(row\?\.payer_id, 120\) \|\| null/);
+  assert.match(serverCode, /payerName: sanitizeString\(payer\?\.name \|\| row\?\.payer_name_snapshot, 180\) \|\| null/);
   assert.match(serverCode, /insuranceCardNumber: sanitizeString\(row\?\.insurance_card_number, 120\) \|\| patientDefault\?\.insuranceCardNumber \|\| null/);
   assert.match(serverCode, /insurancePlanName: sanitizeString\(row\?\.insurance_plan_name, 160\) \|\| patientDefault\?\.insurancePlanName \|\| null/);
   assert.doesNotMatch(serverCode, /const suggestion = billingContext\?\.id\s*\?\s*null/);
   assert.match(calendarCode, /getBillingFormSource/);
   assert.match(calendarCode, /suggestion\?\.insuranceCardNumber/);
   assert.match(calendarCode, /suggestion\?\.insurancePlanName/);
+  assert.match(calendarCode, /Pagador sugerido pelo plano financeiro, não aplicado ao atendimento/);
   assert.match(calendarCode, /Dados sugeridos a partir do cadastro do paciente/);
   assert.match(calendarCode, /Número da carteirinha/);
   assert.doesNotMatch(calendarCode, /NÃºmero da carteirinha|Plano do convÃªnio/);

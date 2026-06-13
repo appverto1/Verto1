@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import {
   BLOCKING_APPOINTMENT_STATUS_QUERY_VALUES,
   buildAppointmentDateTime,
+  buildClinicDateRange,
   calculateAppointmentEnd,
   checkLocalScheduleConflicts,
   formatTimeInAppointmentTimezone,
@@ -118,6 +119,12 @@ test('timezone America/Sao_Paulo preserva horario local ao salvar em UTC', () =>
   const start = buildAppointmentDateTime('2026-05-27', '12:20', 'America/Sao_Paulo');
   assert.equal(start?.toISOString(), '2026-05-27T15:20:00.000Z');
   assert.equal(formatTimeInAppointmentTimezone(start, 'America/Sao_Paulo'), '12:20');
+});
+
+test('range mensal local usa bordas America/Sao_Paulo em UTC', () => {
+  const range = buildClinicDateRange('2026-06-01', '2026-06-30', 'America/Sao_Paulo');
+  assert.equal(range.from, '2026-06-01T03:00:00.000Z');
+  assert.equal(range.to, '2026-07-01T02:59:59.999Z');
 });
 
 test('payload exige horario HH:mm completo e backend nao usa select estrela', () => {

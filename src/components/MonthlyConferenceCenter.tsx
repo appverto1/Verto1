@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { dataService } from "../services/dataService";
 import { classifyConferencePendingDetails, formatConferenceMinutes } from "../services/monthlyConferenceEngine";
+import { formatDateTimeInAppointmentTimezone } from "../utils/scheduling";
 
 type ConferenceStatus = "READY" | "PENDING" | "WARNING" | "NOT_BILLABLE" | "DRAFT" | "UNKNOWN";
 
@@ -179,9 +180,7 @@ function normalizeConferenceWorkflowStatus(value?: string | null) {
 
 function formatDateTime(value?: string | null) {
   if (!value) return "Sem horário";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "Sem horário";
-  return date.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+  return formatDateTimeInAppointmentTimezone(value) || "Sem horário";
 }
 
 function formatOptionalMinutes(value?: number | null) {

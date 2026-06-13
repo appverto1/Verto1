@@ -3201,6 +3201,13 @@ const CALENDAR_EVENT_SELECT = [
   'location_notes',
   'call_link',
   'status',
+  'payer_id',
+  'payer_name_snapshot',
+  'insurance_card_number',
+  'insurance_plan_name',
+  'authorization_code',
+  'guide_number',
+  'procedure_code',
   'confirmed_at',
   'confirmed_by',
   'confirmed_by_role',
@@ -3287,6 +3294,13 @@ const CLOSURE_APPOINTMENT_SELECT = [
   'room_name',
   'location_type',
   'status',
+  'payer_id',
+  'payer_name_snapshot',
+  'insurance_card_number',
+  'insurance_plan_name',
+  'authorization_code',
+  'guide_number',
+  'procedure_code',
   'confirmed_at',
   'reschedule_requested_at',
   'cancel_requested_at',
@@ -3315,6 +3329,13 @@ const CLOSURE_APPOINTMENT_SCHEMA_FALLBACK_COLUMNS = new Set([
   'room_name',
   'location_type',
   'status',
+  'payer_id',
+  'payer_name_snapshot',
+  'insurance_card_number',
+  'insurance_plan_name',
+  'authorization_code',
+  'guide_number',
+  'procedure_code',
   'confirmed_at',
   'reschedule_requested_at',
   'cancel_requested_at',
@@ -30498,8 +30519,8 @@ async function startServer() {
     return {
       id: sanitizeString(row?.id, 120) || null,
       hasContext,
-      payerId: sanitizeString(row?.payer_id, 120) || (!hasContext ? patientDefault?.payerId : null),
-      payerName: sanitizeString(payer?.name || row?.payer_name_snapshot, 180) || (!hasContext ? patientDefault?.payerName : null),
+      payerId: sanitizeString(row?.payer_id, 120) || null,
+      payerName: sanitizeString(payer?.name || row?.payer_name_snapshot, 180) || null,
       payerType: payer ? normalizePayerType(payer?.payer_type) : null,
       serviceType: sanitizeString(row?.service_type, 120) || patientDefault?.serviceType || null,
       insuranceCardNumber: sanitizeString(row?.insurance_card_number, 120) || patientDefault?.insuranceCardNumber || null,
@@ -31672,49 +31693,118 @@ async function startServer() {
         limit: parseBoundedListLimit(req.body?.limit, 240, 500)
       });
       const appointmentIds = Array.from(new Set(appointmentRows.map((row: any) => sanitizeString(row?.id, 120)).filter((id: string) => isUuid(id))));
-      if (appointmentIds.length === 0) {
-        return sendNoStoreJson(res, {
-          success: true,
-          data: [],
-          affectedItems: [],
-          affectedAppointmentIds: [],
-          updatedCount: 0,
-          counts: { found: 0, resolved: 0, closureUpdated: 0, skipped: 0, errors: 0 }
-        });
-      }
-      const contextResult = await supabase
-        .from('appointment_billing_contexts')
-        .select(APPOINTMENT_BILLING_CONTEXT_SELECT)
-        .eq('organization_id', organizationId)
-        .in('appointment_id', appointmentIds)
-        .limit(appointmentIds.length);
+      const contextResult = appointmentIds.length > 0
+        ? await supabase
+            .from('appointment_billing_contexts')
+            .select(APPOINTMENT_BILLING_CONTEXT_SELECT)
+            .eq('organization_id', organizationId)
+            .in('appointment_id', appointmentIds)
+            .limit(appointmentIds.length)
+        : { data: [], error: null } as any;
       if (contextResult.error && !hasMissingFinancialSchema(contextResult.error)) throw contextResult.error;
       const contextsByAppointment = new Map<string, any>((contextResult.error ? [] : contextResult.data || [])
-        .map((row: any) => [sanitizeString(row?.appointment_id, 120), row]));
+        .map((row: any) => [sanitizeString(row?.appointment_id, 120), mergeBillingContextMetadata(row)]));
       const serviceTargets = [
         normalizeBillingServiceMatchKey(service?.service_type),
+        normalizeBillingServiceMatchKey(service?.specialty),
         normalizeBillingServiceMatchKey(service?.name)
       ].filter(Boolean);
       const serviceInternalCode = sanitizeString(service?.internal_code, 80).toLowerCase();
-      const affected = appointmentRows.filter((appointment: any) => {
+      const mappingPayerId = sanitizeString(mapping?.payer_id, 120);
+      const effectiveBillingContextForAppointment = (appointment: any) => {
         const appointmentId = sanitizeString(appointment?.id, 120);
         const context = contextsByAppointment.get(appointmentId);
-        if (!context || sanitizeString(context?.payer_id, 120) !== sanitizeString(mapping?.payer_id, 120)) return false;
-        const procedureCode = sanitizeString(context?.procedure_code, 80).toLowerCase();
+        return cleanObject({
+          ...(context || {}),
+          appointment_id: appointmentId,
+          patient_id: sanitizeString(context?.patient_id || appointment?.patient_id, 120) || null,
+          payer_id: sanitizeString(context?.payer_id || appointment?.payer_id, 120) || null,
+          payer_name_snapshot: sanitizeString(context?.payer_name_snapshot || appointment?.payer_name_snapshot, 180) || null,
+          service_type: sanitizeString(context?.service_type || appointment?.service_type || appointment?.approach, 120) || null,
+          insurance_card_number: sanitizeString(context?.insurance_card_number || appointment?.insurance_card_number, 120) || null,
+          insurance_plan_name: sanitizeString(context?.insurance_plan_name || appointment?.insurance_plan_name, 160) || null,
+          authorization_code: sanitizeString(context?.authorization_code || appointment?.authorization_code, 120) || null,
+          guide_number: sanitizeString(context?.guide_number || appointment?.guide_number, 120) || null,
+          procedure_code: sanitizeString(context?.procedure_code || appointment?.procedure_code, 80) || null,
+          source: sanitizeString(context?.source || (context?.id ? 'MANUAL' : 'APPOINTMENT_CONTEXT'), 60) || 'APPOINTMENT_CONTEXT'
+        });
+      };
+      const appointmentScheduledStart = (appointment: any) =>
+        sanitizeString(appointment?.scheduled_start_at || appointment?.scheduled_at || appointment?.date, 80);
+      const appointmentMatchesMapping = (appointment: any) => {
+        const effectiveContext = effectiveBillingContextForAppointment(appointment);
+        const appointmentPayerId = sanitizeString(effectiveContext?.payer_id, 120);
+        if (!isUuid(appointmentPayerId) || appointmentPayerId !== mappingPayerId) return false;
+        if (!mappingIsValidForDate(mapping, appointmentScheduledStart(appointment))) return false;
+        const procedureCode = sanitizeString(effectiveContext?.procedure_code, 80).toLowerCase();
         if (serviceInternalCode && procedureCode && procedureCode === serviceInternalCode) return true;
-        const appointmentService = normalizeBillingServiceMatchKey(context?.service_type || appointment?.service_type || appointment?.approach);
+        const appointmentService = normalizeBillingServiceMatchKey(effectiveContext?.service_type || appointment?.service_type || appointment?.approach);
         return Boolean(appointmentService && serviceTargets.includes(appointmentService));
+      };
+      const diagnosticFacts = appointmentRows.map((appointment: any) => {
+        const effectiveContext = effectiveBillingContextForAppointment(appointment);
+        const appointmentId = sanitizeString(appointment?.id, 120);
+        const appointmentPayerId = sanitizeString(effectiveContext?.payer_id, 120);
+        const appointmentServiceType = sanitizeString(effectiveContext?.service_type || appointment?.service_type || appointment?.approach, 120);
+        const appointmentServiceKey = normalizeBillingServiceMatchKey(appointmentServiceType);
+        const procedureCode = sanitizeString(effectiveContext?.procedure_code, 80).toLowerCase();
+        const payerMatches = isUuid(appointmentPayerId) && appointmentPayerId === mappingPayerId;
+        const serviceMatches = Boolean(
+          (serviceInternalCode && procedureCode && procedureCode === serviceInternalCode) ||
+            (appointmentServiceKey && serviceTargets.includes(appointmentServiceKey))
+        );
+        const dateMatches = mappingIsValidForDate(mapping, appointmentScheduledStart(appointment));
+        const reason = !payerMatches
+          ? 'payer_id_mismatch_or_missing'
+          : !serviceMatches
+            ? 'service_type_mismatch'
+            : !dateMatches
+              ? 'mapping_not_valid_for_date'
+              : 'matched';
+        return {
+          appointmentId,
+          appointmentPayerId,
+          appointmentServiceType,
+          appointmentScheduledStart: appointmentScheduledStart(appointment),
+          payerMatches,
+          serviceMatches,
+          dateMatches,
+          reason
+        };
       });
+      const buildRevalidationDiagnostics = () => ({
+        mappingPayerId,
+        mappingServiceType: sanitizeString(service?.service_type, 120) || null,
+        mappingSpecialty: sanitizeString(service?.specialty, 120) || null,
+        mappingValidFrom: sanitizeString(mapping?.valid_from, 40) || null,
+        mappingValidTo: sanitizeString(mapping?.valid_to, 40) || null,
+        appointmentsInRange: appointmentRows.length,
+        appointmentsWithSamePayer: diagnosticFacts.filter((item) => item.payerMatches).length,
+        appointmentsWithSameServiceType: diagnosticFacts.filter((item) => item.serviceMatches).length,
+        appointmentsExcludedByPayer: diagnosticFacts.filter((item) => !item.payerMatches).length,
+        appointmentsExcludedByServiceType: diagnosticFacts.filter((item) => item.payerMatches && !item.serviceMatches).length,
+        appointmentsExcludedByDate: diagnosticFacts.filter((item) => item.payerMatches && item.serviceMatches && !item.dateMatches).length,
+        appointmentsExcludedByClinic: 0,
+        sampleAppointmentPayerIds: Array.from(new Set(diagnosticFacts.map((item) => item.appointmentPayerId).filter(Boolean))).slice(0, 8),
+        sampleAppointmentServiceTypes: Array.from(new Set(diagnosticFacts.map((item) => item.appointmentServiceType).filter(Boolean))).slice(0, 8),
+        sampleExcludedAppointments: diagnosticFacts
+          .filter((item) => item.reason !== 'matched')
+          .slice(0, 5)
+          .map((item) => ({
+            appointmentId: item.appointmentId,
+            appointmentPayerId: item.appointmentPayerId || null,
+            appointmentServiceType: item.appointmentServiceType || null,
+            appointmentScheduledStart: item.appointmentScheduledStart || null,
+            reason: item.reason
+          }))
+      });
+      const affected = appointmentRows.filter(appointmentMatchesMapping);
 
       const billingItems: any[] = [];
       const counts = { found: affected.length, resolved: 0, closureUpdated: 0, skipped: 0, errors: 0 };
       for (const appointment of affected.slice(0, 160)) {
         const appointmentId = sanitizeString(appointment?.id, 120);
-        const billingContext = contextsByAppointment.get(appointmentId);
-        if (!billingContext?.id) {
-          counts.skipped += 1;
-          continue;
-        }
+        const billingContext = effectiveBillingContextForAppointment(appointment);
         try {
           const billingItem = await resolveAndPersistAppointmentBillingItem({
             organizationId,
@@ -31757,7 +31847,8 @@ async function startServer() {
         affectedItems: billingItems,
         affectedAppointmentIds: affected.map((appointment: any) => sanitizeString(appointment?.id, 120)).filter((id: string) => isUuid(id)),
         updatedCount: counts.resolved,
-        counts
+        counts,
+        diagnostics: counts.found === 0 ? buildRevalidationDiagnostics() : undefined
       });
     } catch (error: any) {
       console.warn('[TussReady] mapping revalidation failed:', error?.message || String(error));

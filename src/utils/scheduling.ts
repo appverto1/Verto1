@@ -184,6 +184,14 @@ export function formatTimeInAppointmentTimezone(value: any, timezone = DEFAULT_A
   return `${String(parts.hour).padStart(2, '0')}:${String(parts.minute).padStart(2, '0')}`;
 }
 
+export function formatDateTimeInAppointmentTimezone(value: any, timezone = DEFAULT_APPOINTMENT_TIMEZONE): string {
+  const dateKey = formatDateInAppointmentTimezone(value, timezone);
+  const timeKey = formatTimeInAppointmentTimezone(value, timezone);
+  if (!dateKey || !timeKey) return '';
+  const [, month, day] = dateKey.split('-');
+  return `${day}/${month} ${timeKey}`;
+}
+
 export function buildAppointmentDateTime(date: any, time: any, timezone = DEFAULT_APPOINTMENT_TIMEZONE): Date | null {
   const dateKey = normalizeAppointmentDate(date);
   const timeKey = normalizeAppointmentTime(time);
@@ -200,6 +208,32 @@ export function buildAppointmentDateTime(date: any, time: any, timezone = DEFAUL
   }
   const result = new Date(utcMs);
   return Number.isNaN(result.getTime()) ? null : result;
+}
+
+export function buildClinicDateRange(fromDate: any, toDate: any, timezone = DEFAULT_APPOINTMENT_TIMEZONE) {
+  const fromKey = normalizeAppointmentDate(fromDate);
+  const toKey = normalizeAppointmentDate(toDate);
+  const from = fromKey ? buildAppointmentDateTime(fromKey, '00:00', timezone) : null;
+  const toStart = toKey ? buildAppointmentDateTime(toKey, '23:59', timezone) : null;
+  const to = toStart ? new Date(toStart.getTime() + 59999) : null;
+  return {
+    from: from && !Number.isNaN(from.getTime()) ? from.toISOString() : '',
+    to: to && !Number.isNaN(to.getTime()) ? to.toISOString() : ''
+  };
+}
+
+export function buildClinicMonthDateRange(reference: any = new Date(), timezone = DEFAULT_APPOINTMENT_TIMEZONE) {
+  const referenceKey = formatDateInAppointmentTimezone(reference, timezone) || formatDateInAppointmentTimezone(new Date(), timezone);
+  const [yearText, monthText] = referenceKey.split('-');
+  const year = Number(yearText);
+  const month = Number(monthText);
+  if (!Number.isFinite(year) || !Number.isFinite(month)) return buildClinicDateRange('', '', timezone);
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return buildClinicDateRange(
+    `${yearText}-${monthText}-01`,
+    `${yearText}-${monthText}-${String(lastDay).padStart(2, '0')}`,
+    timezone
+  );
 }
 
 export function calculateAppointmentEnd(startAt: any, durationMinutes: any): Date | null {

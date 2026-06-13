@@ -319,6 +319,18 @@ test('backend tem CRUD TUSS-ready action-driven e resolve ao salvar contexto fin
   assert.match(serverCode, /onConflict: 'organization_id,appointment_id'/);
   assert.match(serverCode, /affectedItems: billingItems/);
   assert.match(serverCode, /updatedCount: counts\.resolved/);
+  assert.match(serverCode, /'payer_id'[\s\S]*?'payer_name_snapshot'[\s\S]*?'insurance_card_number'/);
+  const revalidateRoute = serverCode.slice(
+    serverCode.indexOf("app.post('/api/admin/tuss/mappings/:mappingId/revalidate'"),
+    serverCode.indexOf("app.get('/api/appointments/:appointmentId/billing-context'")
+  );
+  assert.match(revalidateRoute, /effectiveBillingContextForAppointment/);
+  assert.match(revalidateRoute, /context\?\.payer_id \|\| appointment\?\.payer_id/);
+  assert.match(revalidateRoute, /mappingIsValidForDate\(mapping, appointmentScheduledStart\(appointment\)\)/);
+  assert.match(revalidateRoute, /diagnostics: counts\.found === 0 \? buildRevalidationDiagnostics\(\) : undefined/);
+  assert.match(revalidateRoute, /appointmentsWithSamePayer/);
+  assert.match(revalidateRoute, /sampleExcludedAppointments/);
+  assert.doesNotMatch(revalidateRoute, /if \(!billingContext\?\.id\)/);
   const billingRoute = serverCode.slice(
     serverCode.indexOf("app.patch('/api/appointments/:appointmentId/billing-context'"),
     serverCode.indexOf("app.post('/api/appointments/:appointmentId/billing-item/resolve'")
@@ -362,6 +374,9 @@ test('frontend administra procedimentos codigos e mapeamentos sem F5', () => {
   assert.match(payerPanelCode, /upsertTussMappingInState/);
   assert.match(payerPanelCode, /result\.affectedItems/);
   assert.match(payerPanelCode, /result\.updatedCount/);
+  assert.match(payerPanelCode, /buildClinicMonthDateRange/);
+  assert.match(payerPanelCode, /Código TUSS cadastrado\./);
+  assert.doesNotMatch(payerPanelCode, /CÃ|NÃ|perÃ|cÃ/);
 });
 
 test('fechamento e conferencia exibem e filtram dados TUSS-ready', () => {

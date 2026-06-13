@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { CheckCircle2, ClipboardCheck, Loader2, Plus, RefreshCw, Save, ShieldCheck } from "lucide-react";
 import { dataService } from "../services/dataService";
+import { buildClinicMonthDateRange } from "../utils/scheduling";
 
 type Payer = {
   id: string;
@@ -315,10 +316,7 @@ export function PayerRequirementsPanel() {
   };
 
   const currentMonthRange = () => {
-    const now = new Date();
-    const from = new Date(now.getFullYear(), now.getMonth(), 1);
-    const to = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
-    return { from: from.toISOString(), to: to.toISOString() };
+    return buildClinicMonthDateRange(new Date());
   };
 
   const createTussService = async () => {
@@ -381,7 +379,7 @@ export function PayerRequirementsPanel() {
       setTussCodeForm(defaultTussCodeForm);
       setEditingTussCodeId("");
       setTussMappingForm((current) => ({ ...current, tussCodeId: current.tussCodeId || result.data.id }));
-      setTussActionInfo(editingTussCodeId ? "CÃ³digo TUSS atualizado." : "CÃ³digo TUSS cadastrado.");
+      setTussActionInfo(editingTussCodeId ? "Código TUSS atualizado." : "Código TUSS cadastrado.");
     } finally {
       setSaving(false);
     }
@@ -475,7 +473,7 @@ export function PayerRequirementsPanel() {
     try {
       const result = await dataService.updateTussService(serviceId, { active: false });
       if (!result?.success) {
-        setError(result?.error || "NÃ£o foi possÃ­vel inativar o procedimento agora.");
+        setError(result?.error || "Não foi possível inativar o procedimento agora.");
         return;
       }
       setTussServices((current) => current.filter((service) => service.id !== serviceId));
@@ -496,7 +494,7 @@ export function PayerRequirementsPanel() {
     try {
       const result = await dataService.updateTussCode(codeId, { active: false });
       if (!result?.success) {
-        setError(result?.error || "NÃ£o foi possÃ­vel inativar o cÃ³digo TUSS agora.");
+        setError(result?.error || "Não foi possível inativar o código TUSS agora.");
         return;
       }
       setTussCodes((current) => current.filter((code) => code.id !== codeId));
@@ -504,7 +502,7 @@ export function PayerRequirementsPanel() {
         setEditingTussCodeId("");
         setTussCodeForm(defaultTussCodeForm);
       }
-      setTussActionInfo("CÃ³digo TUSS inativado.");
+      setTussActionInfo("Código TUSS inativado.");
     } finally {
       setSaving(false);
     }
@@ -517,14 +515,14 @@ export function PayerRequirementsPanel() {
     try {
       const result = await dataService.revalidatePayerTussMapping(mappingId, currentMonthRange());
       if (!result?.success) {
-        setError(result?.error || "NÃ£o foi possÃ­vel revalidar os atendimentos afetados agora.");
+        setError(result?.error || "Não foi possível revalidar os atendimentos afetados agora.");
         return;
       }
       const counts = result.counts || {};
       const affectedItems = Array.isArray(result.affectedItems) ? result.affectedItems : [];
       const found = Number(counts.found || affectedItems.length || 0);
       const resolved = Number(result.updatedCount ?? counts.resolved ?? counts.updated ?? 0);
-      setTussActionInfo(`${found} atendimento(s) afetado(s), ${resolved} resolvido(s) para o perÃ­odo atual.`);
+      setTussActionInfo(`${found} atendimento(s) afetado(s), ${resolved} resolvido(s) para o período atual.`);
     } finally {
       setSaving(false);
     }

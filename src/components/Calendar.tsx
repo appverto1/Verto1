@@ -2136,8 +2136,10 @@ export const ClinicalAgendaBoard = ({
       : '';
   const billingEditorBadge = billingContext.hasContext
     ? 'Dados desta consulta'
-    : String(billingForm.source || '').toUpperCase() === 'PATIENT_DEFAULT'
-      ? 'Dados sugeridos a partir do cadastro do paciente'
+    : billingSuggestion?.payerName || billingSuggestion?.payerId
+      ? 'Pagador sugerido pelo plano financeiro, não aplicado ao atendimento'
+      : String(billingForm.source || '').toUpperCase() === 'PATIENT_DEFAULT'
+        ? 'Dados sugeridos a partir do cadastro do paciente'
       : '';
 
   return (

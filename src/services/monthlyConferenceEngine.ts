@@ -1,3 +1,5 @@
+import { formatDateInAppointmentTimezone, formatTimeInAppointmentTimezone } from '../utils/scheduling';
+
 export type MonthlyConferenceStatus = 'READY' | 'PENDING' | 'WARNING' | 'NOT_BILLABLE' | 'DRAFT' | 'UNKNOWN';
 
 export type MonthlyConferenceRow = {
@@ -128,13 +130,16 @@ function formatCurrencyCents(value: any): string {
 
 function formatTimeOnly(value: any): string {
   if (!value) return '';
-  const date = new Date(String(value));
-  if (Number.isNaN(date.getTime())) return '';
-  return date.toISOString().slice(11, 16);
+  return formatTimeInAppointmentTimezone(value);
+}
+
+function clinicDateOnly(value: any): string {
+  if (!value) return '';
+  return formatDateInAppointmentTimezone(value);
 }
 
 function competenceMonth(value: any): string {
-  const text = String(value || '');
+  const text = clinicDateOnly(value);
   if (!text) return '';
   return `${text.slice(0, 7)}-01`;
 }
@@ -532,7 +537,7 @@ export function buildMonthlyConferenceExportRows(rows: MonthlyConferenceRow[]) {
       competenceMonth: competenceMonth(row.scheduled_start),
       clinicName: row.clinic_name || '',
       unitName: row.unit_name || '',
-      scheduledDate: String(row.scheduled_start || '').slice(0, 10),
+      scheduledDate: clinicDateOnly(row.scheduled_start),
       startTime: formatTimeOnly(row.scheduled_start || row.actual_start),
       endTime: formatTimeOnly(row.scheduled_end || row.actual_end),
       patientName: row.patient_name || 'Paciente',
