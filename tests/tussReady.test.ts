@@ -191,6 +191,7 @@ test('cenario controlado ABA Amil resolve procedimento TUSS e valor sem afetar p
     patient_name: 'Pedro Henrique',
     professional_name: 'Mateus',
     service_type: 'ABA',
+    payer_id: 'amil-payer',
     payer_name: 'Amil',
     financial_plan_name: 'Plano Amil teste',
     insurance_card_number: 'AMIL-123',
@@ -203,6 +204,32 @@ test('cenario controlado ABA Amil resolve procedimento TUSS e valor sem afetar p
   assert.ok(!afterKinds.includes('Procedimento'));
   assert.ok(!afterKinds.includes('TUSS'));
   assert.ok(!afterKinds.includes('Valor'));
+
+  const staleReasonDetails = classifyConferencePendingDetails({
+    patient_name: 'Pedro Henrique',
+    professional_name: 'Mateus',
+    professional_registry: null,
+    service_type: 'ABA',
+    payer_id: 'amil-payer',
+    payer_name: 'Amil',
+    financial_plan_name: 'Plano Amil teste',
+    insurance_card_number: 'AMIL-123',
+    guide_number: 'GUIA-AMIL',
+    authorization_code: 'AUTH-AMIL',
+    readiness_status: 'DRAFT',
+    internal_procedure_name: after.internalProcedureName,
+    tuss_code: after.tussCode,
+    billing_amount_cents: after.amountCents,
+    required_document_pending_count: 0,
+    main_issues: [],
+    tuss_pending_reason_codes: ['missing_service_catalog', 'missing_tuss_mapping', 'missing_amount', 'missing_card_number', 'missing_professional_registry']
+  } as any);
+  assert.ok(!staleReasonDetails.configuration.includes('Procedimento'));
+  assert.ok(!staleReasonDetails.configuration.includes('TUSS'));
+  assert.ok(!staleReasonDetails.configuration.includes('Valor'));
+  assert.ok(!staleReasonDetails.configuration.includes('Carteirinha'));
+  assert.ok(staleReasonDetails.configuration.includes('Registro profissional'));
+  assert.ok(staleReasonDetails.notApplicable.includes('Aguardando realizacao'));
 
   const withoutPayer = resolveTussBillingItem({
     appointment,
@@ -294,7 +321,7 @@ test('cenario controlado ABA Amil resolve procedimento TUSS e valor sem afetar p
     billing_amount_cents: after.amountCents,
     tuss_pending_reason_codes: []
   } as any);
-  assert.ok(!registryVisualOnlyKinds.includes('Registro profissional'));
+  assert.ok(registryVisualOnlyKinds.includes('Registro profissional'));
 });
 
 test('backend tem CRUD TUSS-ready action-driven e resolve ao salvar contexto financeiro', () => {
@@ -479,6 +506,12 @@ test('script test:tuss-ready existe e modulo nao promete faturamento eletronico 
   );
   for (const code of [serverTussSlice, dataServiceCode, payerPanelCode, conferenceCode, closureCode]) {
     assert.doesNotMatch(code, /XML TISS|lote TISS|remessa|retorno|glosa|recurso|faturamento eletrônico completo/i);
+  }
+});
+
+test('componentes TUSS e conferencia nao exibem mojibake', () => {
+  for (const code of [payerPanelCode, conferenceCode, closureCode]) {
+    assert.doesNotMatch(code, /Ã|Â|�/);
   }
 });
 

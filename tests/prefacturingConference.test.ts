@@ -218,6 +218,8 @@ test('frontend atualiza conferencia sem F5 e nao promete faturamento eletronico'
   assert.match(closureCode, /sticky top-0 z-20 bg-slate-50/);
   assert.match(conferenceCode, /max-h-\[70vh\] overflow-auto/);
   assert.match(conferenceCode, /sticky top-0 z-20 bg-slate-50/);
+  assert.doesNotMatch(closureCode, /Ã|Â|�/);
+  assert.doesNotMatch(conferenceCode, /Ã|Â|�/);
   assert.doesNotMatch(conferenceCode, /XML TISS|lote TISS|remessa|glosa|recurso|faturamento eletrônico/i);
 });
 

@@ -125,10 +125,10 @@ test('status e pendencias ficam coerentes para agendada, realizada e nao faturav
   };
 
   const scheduledDetails = classifyConferencePendingDetails(scheduled);
-  assert.deepEqual(classifyConferencePendingKinds(scheduled).slice(0, 3), ['Plano financeiro', 'Procedimento', 'TUSS']);
+  assert.deepEqual(classifyConferencePendingKinds(scheduled).slice(0, 3), ['Pagador', 'Plano financeiro', 'Procedimento']);
   assert.ok(scheduledDetails.configuration.includes('Procedimento'));
   assert.ok(scheduledDetails.configuration.includes('TUSS'));
-  assert.ok(!scheduledDetails.configuration.includes('Registro profissional'));
+  assert.ok(scheduledDetails.configuration.includes('Registro profissional'));
   assert.ok(scheduledDetails.notApplicable.includes('Aguardando realizacao'));
   assert.ok(!scheduledDetails.operational.includes('Assinatura'));
 

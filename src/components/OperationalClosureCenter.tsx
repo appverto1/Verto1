@@ -370,7 +370,7 @@ export function OperationalClosureCenter({
           );
         } else if (legacyMirrored > 0 && changed === 0 && nextRows.length === 0) {
           setRevalidationInfo("");
-          setError(`${legacyMirrored} agendamento(s) foram sincronizados, mas os checks de fechamento ainda nÃ£o foram materializados.`);
+          setError(`${legacyMirrored} agendamento(s) foram sincronizados, mas os checks de fechamento ainda não foram materializados.`);
         } else {
           setRevalidationInfo(revalidationMessage);
         }

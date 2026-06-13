@@ -728,7 +728,7 @@ export function PayerRequirementsPanel() {
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <p className="text-sm font-bold text-slate-900">Procedimentos e TUSS</p>
-            <p className="mt-1 text-xs text-slate-500">Configure catalogo interno, codigos usados pela clinica e mapeamento por pagador para pre-faturamento.</p>
+            <p className="mt-1 text-xs text-slate-500">Configure catálogo interno, códigos usados pela clínica e mapeamento por pagador para pré-faturamento.</p>
           </div>
           <button
             type="button"
@@ -751,20 +751,20 @@ export function PayerRequirementsPanel() {
             <input
               value={tussServiceForm.name}
               onChange={(event) => setTussServiceForm((current) => ({ ...current, name: event.target.value }))}
-              placeholder="Sessao ABA individual"
+              placeholder="Sessão ABA individual"
               className="mt-3 w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
             />
             <textarea
               value={tussServiceForm.description}
               onChange={(event) => setTussServiceForm((current) => ({ ...current, description: event.target.value }))}
-              placeholder="Descricao do procedimento interno"
+              placeholder="Descrição do procedimento interno"
               className="mt-2 min-h-[72px] w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
             />
             <div className="mt-2 grid gap-2 sm:grid-cols-2">
               <input
                 value={tussServiceForm.internalCode}
                 onChange={(event) => setTussServiceForm((current) => ({ ...current, internalCode: event.target.value }))}
-                placeholder="Codigo interno"
+                placeholder="Código interno"
                 className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
               />
               <input
@@ -778,7 +778,7 @@ export function PayerRequirementsPanel() {
               <input
                 value={tussServiceForm.serviceType}
                 onChange={(event) => setTussServiceForm((current) => ({ ...current, serviceType: event.target.value }))}
-                placeholder="Tipo de sessao"
+                placeholder="Tipo de sessão"
                 className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
               />
               <input
@@ -786,7 +786,7 @@ export function PayerRequirementsPanel() {
                 min="1"
                 value={tussServiceForm.defaultDurationMinutes}
                 onChange={(event) => setTussServiceForm((current) => ({ ...current, defaultDurationMinutes: event.target.value }))}
-                placeholder="Duracao padrao (min)"
+                placeholder="Duração padrão (min)"
                 className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
               />
             </div>
@@ -796,7 +796,7 @@ export function PayerRequirementsPanel() {
                 onChange={(event) => setTussServiceForm((current) => ({ ...current, billingUnit: event.target.value }))}
                 className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
               >
-                <option value="session">Sessao</option>
+                <option value="session">Sessão</option>
                 <option value="hour">Hora</option>
                 <option value="minute">Minuto</option>
                 <option value="unit">Unidade</option>
@@ -808,7 +808,7 @@ export function PayerRequirementsPanel() {
                 step="0.01"
                 value={tussServiceForm.defaultQuantity}
                 onChange={(event) => setTussServiceForm((current) => ({ ...current, defaultQuantity: event.target.value }))}
-                placeholder="Quantidade padrao"
+                placeholder="Quantidade padrão"
                 className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
               />
             </div>
@@ -828,7 +828,7 @@ export function PayerRequirementsPanel() {
                 onClick={() => { setEditingTussServiceId(""); setTussServiceForm(defaultTussServiceForm); }}
                 className="mt-2 w-full rounded-2xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-500"
               >
-                Cancelar edicao
+                Cancelar edição
               </button>
             )}
             <button
@@ -843,17 +843,17 @@ export function PayerRequirementsPanel() {
           </div>
 
           <div className="rounded-2xl border border-slate-100 p-3">
-            <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Codigo TUSS</p>
+            <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Código TUSS</p>
             <input
               value={tussCodeForm.code}
               onChange={(event) => setTussCodeForm((current) => ({ ...current, code: event.target.value }))}
-              placeholder="Codigo"
+              placeholder="Código"
               className="mt-3 w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
             />
             <input
               value={tussCodeForm.description}
               onChange={(event) => setTussCodeForm((current) => ({ ...current, description: event.target.value }))}
-              placeholder="Descricao controlada"
+              placeholder="Descrição controlada"
               className="mt-2 w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
             />
             <div className="mt-2 grid gap-2 sm:grid-cols-2">
@@ -866,7 +866,7 @@ export function PayerRequirementsPanel() {
               <input
                 value={tussCodeForm.version}
                 onChange={(event) => setTussCodeForm((current) => ({ ...current, version: event.target.value }))}
-                placeholder="Versao/tabela"
+                placeholder="Versão/tabela"
                 className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
               />
             </div>
@@ -890,7 +890,7 @@ export function PayerRequirementsPanel() {
                 onClick={() => { setEditingTussCodeId(""); setTussCodeForm(defaultTussCodeForm); }}
                 className="mt-2 w-full rounded-2xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-500"
               >
-                Cancelar edicao
+                Cancelar edição
               </button>
             )}
             <button
@@ -900,7 +900,7 @@ export function PayerRequirementsPanel() {
               className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-900 px-3 py-2 text-sm font-bold text-white disabled:opacity-50"
             >
               <Plus size={15} />
-              {editingTussCodeId ? "Atualizar codigo" : "Salvar codigo"}
+              {editingTussCodeId ? "Atualizar código" : "Salvar código"}
             </button>
           </div>
 
@@ -919,7 +919,7 @@ export function PayerRequirementsPanel() {
               onChange={(event) => setTussMappingForm((current) => ({ ...current, tussCodeId: event.target.value }))}
               className="mt-2 w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
             >
-              <option value="">Sem codigo TUSS</option>
+              <option value="">Sem código TUSS</option>
               {tussCodes.map((code) => <option key={code.id} value={code.id}>{code.code} - {code.description}</option>)}
             </select>
             <div className="mt-2 grid gap-2 sm:grid-cols-2">
@@ -937,7 +937,7 @@ export function PayerRequirementsPanel() {
                 onChange={(event) => setTussMappingForm((current) => ({ ...current, billingUnit: event.target.value }))}
                 className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
               >
-                <option value="session">Sessao</option>
+                <option value="session">Sessão</option>
                 <option value="hour">Hora</option>
                 <option value="minute">Minuto</option>
                 <option value="unit">Unidade</option>
@@ -950,9 +950,9 @@ export function PayerRequirementsPanel() {
                 onChange={(event) => setTussMappingForm((current) => ({ ...current, quantityRule: event.target.value }))}
                 className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
               >
-                <option value="per_session">Por sessao</option>
+                <option value="per_session">Por sessão</option>
                 <option value="per_hour">Por hora</option>
-                <option value="duration_based">Por duracao</option>
+                <option value="duration_based">Por duração</option>
                 <option value="fixed">Fixo</option>
               </select>
               <input
@@ -991,13 +991,13 @@ export function PayerRequirementsPanel() {
             </div>
             <div className="mt-3 grid gap-2 sm:grid-cols-2">
               {[
-                ["requiresAuthorization", "Autorizacao"],
+                ["requiresAuthorization", "Autorização"],
                 ["requiresGuide", "Guia"],
                 ["requiresSignature", "Assinatura"],
-                ["requiresReport", "Relatorio"],
+                ["requiresReport", "Relatório"],
                 ["requiresProfessionalRegistry", "Registro"],
                 ["requiresPatientDocument", "Carteirinha"],
-                ["useActualDuration", "Duracao real"],
+                ["useActualDuration", "Duração real"],
               ].map(([key, label]) => (
                 <label key={key} className="flex items-center gap-2 rounded-2xl border border-slate-100 px-3 py-2 text-xs font-bold text-slate-600">
                   <input
@@ -1016,7 +1016,7 @@ export function PayerRequirementsPanel() {
                 onClick={() => { setEditingTussMappingId(""); setTussMappingForm(defaultTussMappingForm); }}
                 className="mt-2 w-full rounded-2xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-500"
               >
-                Cancelar edicao
+                Cancelar edição
               </button>
             )}
             <button
@@ -1057,10 +1057,10 @@ export function PayerRequirementsPanel() {
           </div>
 
           <div className="rounded-2xl border border-slate-100 p-3">
-            <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Codigos TUSS usados</p>
+            <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Códigos TUSS usados</p>
             <div className="mt-2 space-y-2">
               {tussCodes.length === 0 ? (
-                <p className="rounded-2xl bg-slate-50 p-3 text-xs font-bold text-slate-500">Nenhum codigo TUSS ativo.</p>
+                <p className="rounded-2xl bg-slate-50 p-3 text-xs font-bold text-slate-500">Nenhum código TUSS ativo.</p>
               ) : tussCodes.slice(0, 8).map((code) => (
                 <div key={code.id} className="rounded-2xl border border-slate-100 px-3 py-2">
                   <div className="flex items-start justify-between gap-2">

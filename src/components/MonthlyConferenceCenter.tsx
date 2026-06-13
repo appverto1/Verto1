@@ -422,7 +422,7 @@ export function MonthlyConferenceCenter({
           );
         } else if (legacyMirrored > 0 && changed === 0 && nextRows.length === 0) {
           setRevalidationInfo("");
-          setError(`${legacyMirrored} agendamento(s) foram sincronizados, mas os checks de conferÃªncia ainda nÃ£o foram materializados.`);
+          setError(`${legacyMirrored} agendamento(s) foram sincronizados, mas os checks de conferência ainda não foram materializados.`);
         } else {
           setRevalidationInfo(revalidationMessage);
         }
@@ -1070,11 +1070,11 @@ export function MonthlyConferenceCenter({
                 ["professionalName", "Profissional"],
                 ["professionalRegistry", "Registro"],
                 ["serviceType", "Especialidade"],
-                ["internalProcedureCode", "Codigo interno"],
+                ["internalProcedureCode", "Código interno"],
                 ["internalProcedureName", "Procedimento"],
-                ["tussCode", "Codigo TUSS"],
-                ["tussDescription", "Descricao TUSS"],
-                ["tussVersion", "Versao TUSS"],
+                ["tussCode", "Código TUSS"],
+                ["tussDescription", "Descrição TUSS"],
+                ["tussVersion", "Versão TUSS"],
                 ["guideType", "Tipo de guia"],
                 ["billingUnit", "Unidade"],
                 ["billingQuantity", "Quantidade"],

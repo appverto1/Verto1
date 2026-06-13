@@ -192,17 +192,29 @@ export function classifyConferencePendingDetails(row: MonthlyConferenceRow): Con
   if (!String(row.authorization_code || '').trim() && hasIssue(row, [/autorizacao/, /authorization/])) addOperational('Autorizacao');
   if (hasIssue(row, [/duracao/, /duration/])) addOperational('Duracao');
   if (hasIssue(row, [/profissional/, /professional/])) addOperational('Profissional');
-  if (Number(row.required_document_pending_count || 0) > 0 || hasIssue(row, [/documento/, /document/])) addOperational('Documento');
+  const hasDocumentPendingCount = row.required_document_pending_count !== null && row.required_document_pending_count !== undefined;
+  if (Number(row.required_document_pending_count || 0) > 0 || (!hasDocumentPendingCount && hasIssue(row, [/documento/, /document/]))) addOperational('Documento');
 
   const tussPendingCodes = Array.isArray(row.tuss_pending_reason_codes) ? row.tuss_pending_reason_codes : [];
   const tussPendingLabels = Array.isArray(row.tuss_pending_reasons) ? row.tuss_pending_reasons.join(' ') : '';
-  if (!String(row.payer_name || row.payer_name_snapshot || '').trim() || hasIssue(row, [/pagador/, /convenio/, /payer/])) addUnique(configuration, 'Pagador');
-  if (!String(row.financial_plan_name || '').trim()) addUnique(configuration, 'Plano financeiro');
-  if (!String(row.internal_procedure_name || '').trim() || tussPendingCodes.includes('missing_service_catalog')) addUnique(configuration, 'Procedimento');
-  if (!String(row.tuss_code || '').trim() || tussPendingCodes.includes('missing_tuss_mapping') || tussPendingCodes.includes('missing_tuss_code')) addUnique(configuration, 'TUSS');
-  if (!Number(row.billing_amount_cents || row.expected_amount_cents || 0) || tussPendingCodes.includes('missing_amount')) addUnique(configuration, 'Valor');
-  if (!String(row.insurance_card_number || '').trim() || tussPendingCodes.includes('missing_card_number') || /carteirinha/i.test(tussPendingLabels)) addUnique(configuration, 'Carteirinha');
-  if (tussPendingCodes.includes('missing_professional_registry') || hasIssue(row, [/registro profissional/, /professional registry/, /conselho profissional/])) addUnique(configuration, 'Registro profissional');
+  const hasPayer = Boolean(String(row.payer_id || '').trim());
+  const hasFinancialPlan = Boolean(String(row.financial_plan_name || '').trim());
+  const hasProcedure = Boolean(String(row.internal_procedure_name || row.internal_procedure_code || '').trim());
+  const hasTuss = Boolean(String(row.tuss_code || '').trim());
+  const hasExpectedAmount = Number(row.billing_amount_cents || row.expected_amount_cents || 0) > 0;
+  const hasInsuranceCard = Boolean(String(row.insurance_card_number || '').trim());
+  const hasProfessionalRegistry = Boolean(String(row.professional_registry || '').trim());
+  const hasProfessionalRegistryField = Object.prototype.hasOwnProperty.call(row, 'professional_registry');
+  if (!hasPayer) addUnique(configuration, 'Pagador');
+  if (!hasFinancialPlan) addUnique(configuration, 'Plano financeiro');
+  if (!hasProcedure) addUnique(configuration, 'Procedimento');
+  if (!hasTuss) addUnique(configuration, 'TUSS');
+  if (!hasExpectedAmount) addUnique(configuration, 'Valor');
+  if (!hasInsuranceCard && (tussPendingCodes.includes('missing_card_number') || /carteirinha/i.test(tussPendingLabels))) addUnique(configuration, 'Carteirinha');
+  if (
+    (hasProfessionalRegistryField && !hasProfessionalRegistry) ||
+    (!hasProfessionalRegistryField && (tussPendingCodes.includes('missing_professional_registry') || hasIssue(row, [/registro profissional/, /professional registry/, /conselho profissional/])))
+  ) addUnique(configuration, 'Registro profissional');
 
   if (notBillable) {
     addUnique(informational, 'Nao aplicavel ao faturamento');
