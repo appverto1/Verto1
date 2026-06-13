@@ -32,7 +32,10 @@ type ClosureRow = {
   patient_name?: string | null;
   professional_name?: string | null;
   service_type?: string | null;
+  payer_id?: string | null;
   payer_name?: string | null;
+  suggested_payer_id?: string | null;
+  suggested_payer_name?: string | null;
   financial_plan_name?: string | null;
   internal_procedure_code?: string | null;
   internal_procedure_name?: string | null;
@@ -175,6 +178,14 @@ function pendingChipLabel(item: { label: string; category: string }) {
   if (item.category === "operational") return `Operacional: ${label}`;
   if (item.category === "not_applicable" && item.label !== "Aguardando realizacao") return `Ainda não aplicável: ${label}`;
   return label;
+}
+
+function hasAppliedPayer(row?: ClosureRow | null) {
+  return Boolean(String(row?.payer_id || "").trim());
+}
+
+function appliedPayerLabel(row?: ClosureRow | null) {
+  return hasAppliedPayer(row) ? String(row?.payer_name || "Pagador cadastrado") : "Sem pagador";
 }
 
 function getLocalDateInput(date: Date) {
@@ -728,7 +739,7 @@ export function OperationalClosureCenter({
                       <div className="font-medium text-slate-700">{row.internal_procedure_name || "Procedimento nao configurado"}</div>
                       <div className="mt-1 text-xs text-slate-500">{row.tuss_code ? `TUSS ${row.tuss_code}` : "TUSS: pendente de mapeamento"}</div>
                     </td>
-                    <td className="px-4 py-3 text-slate-600">{row.payer_name || "Sem pagador"}</td>
+                    <td className="px-4 py-3 text-slate-600">{appliedPayerLabel(row)}</td>
                     <td className="px-4 py-3 text-slate-600">{row.financial_plan_name || "Não configurado"}</td>
                     <td className="px-4 py-3 text-slate-600">
                       {row.guide_number || row.authorization_code || Number(row.required_document_pending_count || 0) > 0
@@ -829,7 +840,12 @@ export function OperationalClosureCenter({
               <div className="mb-4 rounded-md border border-violet-100 bg-violet-50 px-3 py-3 text-sm">
                 <div className="font-semibold text-slate-800">Regras do pagador</div>
                 <div className="mt-2 grid gap-2 text-slate-600 sm:grid-cols-2">
-                  <span>Pagador: {detail.payer_name || "Sem pagador"}</span>
+                  <span>Pagador: {appliedPayerLabel(detail)}</span>
+                  {!hasAppliedPayer(detail) && detail.suggested_payer_name && (
+                    <span className="rounded-md bg-sky-50 px-2 py-1 text-sky-700 ring-1 ring-sky-100 sm:col-span-2">
+                      Pagador sugerido pelo plano financeiro: {detail.suggested_payer_name}. Ainda não aplicado ao atendimento.
+                    </span>
+                  )}
                   <span>Regra aplicada: {detail.payer_requirement_source || "Default"}</span>
                   <span>Plano financeiro: {detail.financial_plan_name || "Não configurado"}</span>
                   <span>Procedimento: {detail.internal_procedure_name || "Não configurado"}</span>

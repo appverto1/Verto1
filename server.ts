@@ -30118,6 +30118,61 @@ async function startServer() {
     main_issues: Array.isArray(row.main_issues) ? row.main_issues.slice(0, 4) : []
   });
 
+  const repairChecklistDisplayText = (value: unknown, maxLength = 800) =>
+    sanitizeString(value, maxLength)
+      .replace(/ÃƒÂ§/g, 'ç')
+      .replace(/ÃƒÂ£/g, 'ã')
+      .replace(/ÃƒÂ¡/g, 'á')
+      .replace(/ÃƒÂ©/g, 'é')
+      .replace(/ÃƒÂª/g, 'ê')
+      .replace(/ÃƒÂ­/g, 'í')
+      .replace(/ÃƒÂ³/g, 'ó')
+      .replace(/ÃƒÂµ/g, 'õ')
+      .replace(/ÃƒÂº/g, 'ú')
+      .replace(/ÃƒÂ /g, 'à')
+      .replace(/Ã§/g, 'ç')
+      .replace(/Ã£/g, 'ã')
+      .replace(/Ã¡/g, 'á')
+      .replace(/Ã©/g, 'é')
+      .replace(/Ãª/g, 'ê')
+      .replace(/Ã­/g, 'í')
+      .replace(/Ã³/g, 'ó')
+      .replace(/Ãµ/g, 'õ')
+      .replace(/Ãº/g, 'ú')
+      .replace(/Ã /g, 'à')
+      .replace(/Â·/g, '·');
+
+  function normalizeHydratedClosureChecklist(checklist: any[], hydratedRow: any) {
+    const items = Array.isArray(checklist) ? checklist : [];
+    const hasRealPayer = isUuid(sanitizeString(hydratedRow?.payer_id, 120));
+    const suggestedPayerName = sanitizeString(hydratedRow?.suggested_payer_name, 180);
+    return items.map((item: any) => {
+      const normalizedItem = {
+        ...item,
+        label: repairChecklistDisplayText(item?.label, 180) || item?.label,
+        message: repairChecklistDisplayText(item?.message, 800) || item?.message
+      };
+      if (normalizedItem?.key !== 'payer_linked') return normalizedItem;
+      return {
+        ...normalizedItem,
+        status: hasRealPayer ? 'PASSED' : 'FAILED',
+        required: true,
+        severity: hasRealPayer ? 'LOW' : 'HIGH',
+        message: hasRealPayer
+          ? 'Pagador informado para esta conferência.'
+          : suggestedPayerName
+            ? `Pagador sugerido pelo plano financeiro: ${suggestedPayerName}. Ainda não aplicado ao atendimento.`
+            : 'Pagador não configurado para esta conferência.',
+        evidence: {
+          ...(item?.evidence || {}),
+          present: hasRealPayer,
+          suggested: Boolean(!hasRealPayer && suggestedPayerName),
+          suggestedPayerName: suggestedPayerName || null
+        }
+      };
+    });
+  }
+
   const fetchCalendarEventsFromClinicState = async (clinicId: string, range: any, filters: any, counters: any = {}) => {
     const stateResult = await fetchClinicStateWithSchemaFallback({ supabase, clinicId, logger: console });
     if (stateResult.error) {
@@ -32361,46 +32416,11 @@ async function startServer() {
         else if (!data) return res.status((generated as any).status || 404).json(closureSafeError((generated as any).status || 404));
       }
       const patientId = sanitizeString(data?.patient_id, 120);
-      const professionalId = sanitizeString(data?.professional_id, 120);
       if (patientId && !(await canAccessPatientInCurrentClinic(patientId, req.session.user))) {
         return res.status(404).json(closureSafeError(404));
       }
-      const [patientResult, professionalResult] = await Promise.all([
-        isUuid(patientId)
-          ? supabase.from('patients').select('id, name').eq('id', patientId).eq('clinic_id', clinicId).maybeSingle()
-          : Promise.resolve({ data: null, error: null } as any),
-        isUuid(professionalId)
-          ? supabase.from('users').select('id, name, email').eq('id', professionalId).maybeSingle()
-          : Promise.resolve({ data: null, error: null } as any)
-      ]);
-      if (patientResult.error && !hasMissingFinancialSchema(patientResult.error)) throw patientResult.error;
-      if (professionalResult.error && !hasMissingFinancialSchema(professionalResult.error)) throw professionalResult.error;
-      const financialPlansResult = isUuid(patientId)
-        ? await supabase
-            .from('patient_financial_plans')
-            .select(PATIENT_FINANCIAL_PLAN_SELECT)
-            .eq('organization_id', clinicId)
-            .eq('patient_id', patientId)
-            .eq('status', 'ACTIVE')
-            .limit(8)
-        : { data: [], error: null } as any;
-      if (financialPlansResult.error && !hasMissingFinancialSchema(financialPlansResult.error)) throw financialPlansResult.error;
-      const plans = financialPlansResult.error ? [] : financialPlansResult.data || [];
-      const payerId = sanitizeString(data?.payer_id, 120);
-      const selectedFinancialPlan =
-        plans.find((plan: any) => payerId && sanitizeString(plan?.payer_id, 120) === payerId && financialPlanMatchesAppointmentService(plan, data?.service_type)) ||
-        plans.find((plan: any) => financialPlanMatchesAppointmentService(plan, data?.service_type)) ||
-        plans[0] ||
-        null;
-      const financialPlanName = sanitizeString(
-        selectedFinancialPlan?.insurance_plan_name ||
-          selectedFinancialPlan?.service_name_snapshot ||
-          selectedFinancialPlan?.custom_service_name ||
-          selectedFinancialPlan?.payer_name_snapshot,
-        180
-      ) || null;
-      const billingItemsBundle = await fetchAppointmentBillingItemsBundle(clinicId, [appointmentId]);
-      const billingItem = billingItemsBundle.itemsByAppointment.get(appointmentId);
+      const hydratedRows = await hydrateConferenceRows([data], clinicId, req.session.user);
+      const hydratedDetail = hydratedRows[0] || {};
       await writeClosureAuditLog({
         organizationId: clinicId,
         appointmentId,
@@ -32415,14 +32435,8 @@ async function startServer() {
       return sendNoStoreJson(res, {
         success: true,
         data: {
-          ...normalizeClosureListRow(
-            data,
-            new Map([[patientId, sanitizeString(patientResult.data?.name, 180) || 'Paciente']]),
-            new Map([[professionalId, sanitizeString(professionalResult.data?.name || professionalResult.data?.email, 180) || 'Equipe']])
-          ),
-          financial_plan_name: financialPlanName,
-          ...buildTussConferenceFields(billingItem, billingItemsBundle),
-          checklist: Array.isArray(data?.checklist) ? data.checklist : []
+          ...hydratedDetail,
+          checklist: normalizeHydratedClosureChecklist(data?.checklist, hydratedDetail)
         }
       });
     } catch (error: any) {
@@ -32761,6 +32775,10 @@ async function startServer() {
       const competenceMonth = getConferenceCompetenceMonth(row?.scheduled_start || row?.actual_start);
       const statusRow = statusMap.get(`${sanitizeString(row?.appointment_id, 120)}:${competenceMonth}`);
       const conferenceStatus = statusRow?.status || (base.readiness_status === 'NOT_BILLABLE' ? 'non_billable' : 'pending_review');
+      const hasRealPayer = isUuid(sanitizeString(base.payer_id || row?.payer_id, 120));
+      const financialPlanPayerName = sanitizeString(financialPlan?.payer_name_snapshot, 180);
+      const rowPayerName = sanitizeString(base.payer_name && base.payer_name !== 'Sem pagador' ? base.payer_name : '', 180);
+      const suggestedPayerName = !hasRealPayer ? sanitizeString(financialPlanPayerName || rowPayerName, 180) || null : null;
       const professionalRegistry = sanitizeString(
         professional?.crp ||
           professional?.council_number ||
@@ -32770,6 +32788,9 @@ async function startServer() {
       );
       return {
         ...base,
+        payer_name: hasRealPayer ? base.payer_name : 'Sem pagador',
+        suggested_payer_name: suggestedPayerName,
+        suggested_payer_id: !hasRealPayer && isUuid(sanitizeString(financialPlan?.payer_id, 120)) ? sanitizeString(financialPlan?.payer_id, 120) : null,
         clinic_name: clinicName,
         unit_name: '',
         competence_month: competenceMonth,
@@ -33085,7 +33106,7 @@ async function startServer() {
         success: true,
         data: {
           ...(hydrated[0] || {}),
-          checklist: Array.isArray(data?.checklist) ? data.checklist : [],
+          checklist: normalizeHydratedClosureChecklist(data?.checklist, hydrated[0] || {}),
           payerRules: {
             payerName: sanitizeString(data?.payer_name_snapshot, 180) || null,
             source: sanitizeString(data?.payer_requirement_source, 40) || null,

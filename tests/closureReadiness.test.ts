@@ -23,6 +23,8 @@ const baseInput = {
     actual_start_at: '2026-05-28T09:00:00.000Z',
     actual_end_at: '2026-05-28T09:45:00.000Z',
     actual_duration_minutes: 45,
+    payer_id: 'payer-amil',
+    payer_name_snapshot: 'Amil',
     location_type: 'clinica',
     room_name: 'Sala 1',
     updated_at: '2026-05-28T10:00:00.000Z'
@@ -51,6 +53,9 @@ test('sessão concluída com tudo presente vira READY', () => {
   const result = evaluateAppointmentClosureReadiness(baseInput);
   assert.equal(result.readinessStatus, 'READY');
   assert.equal(result.blockingIssuesCount, 0);
+  const payerCheck = result.checklist.find((item) => item.key === 'payer_linked');
+  assert.equal(payerCheck?.status, 'PASSED');
+  assert.equal(payerCheck?.evidence?.present, true);
 });
 
 test('sem assinatura obrigatória vira PENDING', () => {
@@ -127,6 +132,48 @@ test('sem paciente não passa como READY', () => {
     patient: null
   });
   assert.notEqual(result.readinessStatus, 'READY');
+});
+
+test('payer_id real é a única verdade para convênio vinculado', () => {
+  const result = evaluateAppointmentClosureReadiness({
+    ...baseInput,
+    appointment: { ...baseInput.appointment, payer_id: 'payer-real', payer_name_snapshot: 'Amil' },
+    requirements: { payerId: 'payer-real', payerName: 'Amil' }
+  });
+  const payerCheck = result.checklist.find((item) => item.key === 'payer_linked');
+  assert.equal(payerCheck?.status, 'PASSED');
+  assert.equal(payerCheck?.message, 'Pagador informado para esta conferência.');
+  assert.equal(payerCheck?.evidence?.present, true);
+  assert.equal(payerCheck?.evidence?.suggested, false);
+});
+
+test('pagador sugerido pelo plano financeiro não vira convênio vinculado', () => {
+  const result = evaluateAppointmentClosureReadiness({
+    ...baseInput,
+    appointment: { ...baseInput.appointment, payer_id: null, payer_name_snapshot: 'Amil' },
+    requirements: { payerName: 'Amil' }
+  });
+  const payerCheck = result.checklist.find((item) => item.key === 'payer_linked');
+  assert.equal(result.readinessStatus, 'PENDING');
+  assert.equal(payerCheck?.status, 'FAILED');
+  assert.equal(payerCheck?.message, 'Pagador sugerido pelo plano financeiro: Amil. Ainda não aplicado ao atendimento.');
+  assert.equal(payerCheck?.evidence?.present, false);
+  assert.equal(payerCheck?.evidence?.suggested, true);
+  assert.equal(payerCheck?.evidence?.suggestedPayerName, 'Amil');
+});
+
+test('sem payer_id e sem sugestão mantém convênio pendente sem fallback visual', () => {
+  const result = evaluateAppointmentClosureReadiness({
+    ...baseInput,
+    appointment: { ...baseInput.appointment, payer_id: null, payer_name_snapshot: null },
+    requirements: {}
+  });
+  const payerCheck = result.checklist.find((item) => item.key === 'payer_linked');
+  assert.equal(result.readinessStatus, 'PENDING');
+  assert.equal(payerCheck?.status, 'FAILED');
+  assert.equal(payerCheck?.message, 'Pagador não configurado para esta conferência.');
+  assert.equal(payerCheck?.evidence?.present, false);
+  assert.equal(payerCheck?.evidence?.suggested, false);
 });
 
 test('context hash evita recalcular sem mudança', () => {

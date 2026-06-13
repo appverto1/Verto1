@@ -6,6 +6,7 @@ const root = process.cwd();
 const serverCode = readFileSync(join(root, 'server.ts'), 'utf8');
 const calendarCode = readFileSync(join(root, 'src/components/Calendar.tsx'), 'utf8');
 const coordinatorCode = readFileSync(join(root, 'src/components/CoordinatorDashboard.tsx'), 'utf8');
+const operationalClosureCode = readFileSync(join(root, 'src/components/OperationalClosureCenter.tsx'), 'utf8');
 const closureCode = readFileSync(join(root, 'src/services/closureReadinessEngine.ts'), 'utf8');
 const dataServiceCode = readFileSync(join(root, 'src/services/dataService.ts'), 'utf8');
 const migrationCode = readFileSync(join(root, 'supabase/migrations/20260601120000_appointment_billing_context_patient_index.sql'), 'utf8');
@@ -211,9 +212,40 @@ test('payer_id e appointment_id fora da organizacao sao rejeitados', () => {
 test('fechamento usa pagador da consulta, nao plano do paciente como substituto', () => {
   const payerBlockIndex = closureCode.indexOf("'payer_linked'");
   assert.ok(payerBlockIndex > 0, 'payer_linked deve existir');
-  const payerBlock = closureCode.slice(Math.max(0, payerBlockIndex - 500), payerBlockIndex + 900);
-  assert.match(payerBlock, /appointmentPayerContext/);
+  const payerBlock = closureCode.slice(Math.max(0, payerBlockIndex - 1600), payerBlockIndex + 900);
+  assert.match(closureCode, /const payerLinkedStatus: ClosureCheckStatus = appointmentPayerId \? 'PASSED' : 'FAILED'/);
+  assert.match(closureCode, /Pagador sugerido pelo plano financeiro/);
+  assert.match(payerBlock, /appointmentPayerId/);
+  assert.match(payerBlock, /suggestedPayerName/);
+  assert.doesNotMatch(payerBlock, /suggestedPayerName\s*\?\s*'PASSED'/);
   assert.doesNotMatch(payerBlock, /input\.patient\?\.financialPlans/);
+});
+
+test('modal do fechamento mostra pagador sugerido sem marcar como aplicado', () => {
+  const normalizeStart = serverCode.indexOf('function normalizeHydratedClosureChecklist');
+  assert.ok(normalizeStart > 0, 'normalizador do checklist hidratado deve existir');
+  const normalizeSlice = serverCode.slice(normalizeStart, normalizeStart + 1100);
+  assert.match(serverCode, /const repairChecklistDisplayText/);
+  assert.match(normalizeSlice, /const hasRealPayer = isUuid\(sanitizeString\(hydratedRow\?\.payer_id, 120\)\)/);
+  assert.match(normalizeSlice, /label: repairChecklistDisplayText\(item\?\.label, 180\)/);
+  assert.match(normalizeSlice, /message: repairChecklistDisplayText\(item\?\.message, 800\)/);
+  assert.match(normalizeSlice, /status: hasRealPayer \? 'PASSED' : 'FAILED'/);
+  assert.match(normalizeSlice, /Pagador sugerido pelo plano financeiro/);
+  assert.match(normalizeSlice, /Ainda não aplicado ao atendimento/);
+
+  const detailStart = serverCode.indexOf("app.get('/api/closure/appointments/:appointmentId'");
+  const detailEnd = serverCode.indexOf("app.post('/api/closure/appointments/:appointmentId/revalidate'", detailStart);
+  assert.ok(detailStart > 0 && detailEnd > detailStart, 'detalhe do fechamento deve existir');
+  const detailSlice = serverCode.slice(detailStart, detailEnd);
+  assert.match(detailSlice, /const hydratedRows = await hydrateConferenceRows\(\[data\], clinicId, req\.session\.user\)/);
+  assert.match(detailSlice, /checklist: normalizeHydratedClosureChecklist\(data\?\.checklist, hydratedDetail\)/);
+
+  assert.match(operationalClosureCode, /payer_id\?: string \| null/);
+  assert.match(operationalClosureCode, /suggested_payer_name\?: string \| null/);
+  assert.match(operationalClosureCode, /function hasAppliedPayer/);
+  assert.match(operationalClosureCode, /return Boolean\(String\(row\?\.payer_id \|\| ""\)\.trim\(\)\)/);
+  assert.match(operationalClosureCode, /Pagador sugerido pelo plano financeiro: \{detail\.suggested_payer_name\}\. Ainda não aplicado ao atendimento\./);
+  assert.match(operationalClosureCode, /Pagador: \{appliedPayerLabel\(detail\)\}/);
 });
 
 test('conferencia mensal consome resumo persistido com pagador da consulta', () => {

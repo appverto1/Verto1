@@ -274,14 +274,23 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
     : durationVariance <= requirements.maxDurationVarianceMinutes;
 
   const checklist: ClosureChecklistItem[] = [];
-  const appointmentPayerContext = firstValue(
-    requirements.payerName,
+  const appointmentPayerId = asString(firstValue(
     requirements.payerId,
-    appointment.payer_name_snapshot,
-    appointment.payerNameSnapshot,
     appointment.payer_id,
     appointment.payerId
-  );
+  ));
+  const suggestedPayerName = asString(firstValue(
+    requirements.payerName,
+    appointment.payer_name_snapshot,
+    appointment.payerNameSnapshot,
+    appointment.payerName
+  ));
+  const payerLinkedStatus: ClosureCheckStatus = appointmentPayerId ? 'PASSED' : 'FAILED';
+  const payerLinkedMessage = appointmentPayerId
+    ? 'Pagador informado para esta conferência.'
+    : suggestedPayerName
+      ? `Pagador sugerido pelo plano financeiro: ${suggestedPayerName}. Ainda não aplicado ao atendimento.`
+      : 'Pagador não configurado para esta conferência.';
   const insuranceCardNumber = asString(firstValue(appointment.insurance_card_number, appointment.insuranceCardNumber, appointment.cardNumber));
   checklist.push(buildCheck(
     'session_completed',
@@ -389,14 +398,14 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
   checklist.push(buildCheck(
     'payer_linked',
     'Convênio/pagador vinculado',
-    appointmentPayerContext ? 'PASSED' : 'NOT_APPLICABLE',
-    false,
-    'LOW',
-    appointmentPayerContext
-      ? 'Pagador informado para esta conferÃªncia.'
-      : 'Pagador não configurado para esta conferência.',
+    payerLinkedStatus,
+    true,
+    appointmentPayerId ? 'LOW' : 'HIGH',
+    payerLinkedMessage,
     {
-      present: Boolean(appointmentPayerContext),
+      present: Boolean(appointmentPayerId),
+      suggested: Boolean(!appointmentPayerId && suggestedPayerName),
+      suggestedPayerName: suggestedPayerName || null,
       insuranceCardPresent: Boolean(insuranceCardNumber),
       source: requirements.payerRequirementSource || 'DEFAULT'
     }
