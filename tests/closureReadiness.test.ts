@@ -176,6 +176,44 @@ test('sem payer_id e sem sugestão mantém convênio pendente sem fallback visua
   assert.equal(payerCheck?.evidence?.suggested, false);
 });
 
+test('contexto particular explicito satisfaz checklist sem payer_id', () => {
+  const result = evaluateAppointmentClosureReadiness({
+    ...baseInput,
+    appointment: {
+      ...baseInput.appointment,
+      payer_id: null,
+      payer_name_snapshot: null,
+      payer_type: 'PRIVATE',
+      financial_context_type: 'PRIVATE'
+    },
+    requirements: {}
+  });
+  const payerCheck = result.checklist.find((item) => item.key === 'payer_linked');
+  assert.equal(result.readinessStatus, 'READY');
+  assert.equal(payerCheck?.status, 'PASSED');
+  assert.equal(payerCheck?.required, false);
+  assert.equal(payerCheck?.evidence?.present, true);
+  assert.equal(payerCheck?.evidence?.financialContextType, 'PRIVATE');
+});
+
+test('sem cobrança explicito vira não faturável sem exigir payer_id', () => {
+  const result = evaluateAppointmentClosureReadiness({
+    ...baseInput,
+    appointment: {
+      ...baseInput.appointment,
+      payer_id: null,
+      payer_name_snapshot: null,
+      payer_type: 'NO_CHARGE',
+      financial_context_type: 'NO_CHARGE'
+    },
+    requirements: {}
+  });
+  const payerCheck = result.checklist.find((item) => item.key === 'payer_linked');
+  assert.equal(result.readinessStatus, 'NOT_BILLABLE');
+  assert.equal(payerCheck?.status, 'PASSED');
+  assert.equal(payerCheck?.evidence?.financialContextType, 'NO_CHARGE');
+});
+
 test('context hash evita recalcular sem mudança', () => {
   const first = evaluateAppointmentClosureReadiness(baseInput);
   const second = evaluateAppointmentClosureReadiness({ ...baseInput });

@@ -85,8 +85,9 @@ test('agendamento usa convenio cadastrado do paciente como pagador', () => {
   assert.match(coordinatorCode, /resolvePatientInsurancePayer/);
   assert.match(coordinatorCode, /sessionPayerNameSnapshot/);
   assert.match(coordinatorCode, /Conv.nio do paciente: \{sessionPayerSnapshotOptionLabel\}/);
-  assert.match(coordinatorCode, /payerName: selectedSessionPayerName/);
-  assert.match(coordinatorCode, /payerName: selectedSessionPayerName[\s\S]{0,220}serviceType: sessionApproach/);
+  assert.match(coordinatorCode, /financialContextType: sessionFinancialContextType/);
+  assert.match(coordinatorCode, /payerName: sessionFinancialContextType === "INSURANCE" \? selectedSessionPayerName : (""|null)/);
+  assert.match(coordinatorCode, /payerName: sessionFinancialContextType === "INSURANCE" \? selectedSessionPayerName : null[\s\S]{0,220}serviceType: sessionApproach/);
 });
 
 test('persistencia envia campos cadastrais visiveis e planos para backend', () => {

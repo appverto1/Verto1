@@ -156,6 +156,35 @@ function boolLike(value: any): boolean {
   return Boolean(value);
 }
 
+function normalizeFinancialContextType(value: any): string {
+  const normalized = asString(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  const aliases: Record<string, string> = {
+    CONVENIO: 'INSURANCE',
+    INSURANCE: 'INSURANCE',
+    PARTICULAR: 'PRIVATE',
+    PRIVATE: 'PRIVATE',
+    PACOTE: 'PACKAGE',
+    PACKAGE: 'PACKAGE',
+    MENSALIDADE: 'MONTHLY',
+    MONTHLY: 'MONTHLY',
+    CORTESIA: 'COURTESY',
+    COURTESY: 'COURTESY',
+    SEM_COBRANCA: 'NO_CHARGE',
+    NO_CHARGE: 'NO_CHARGE',
+    NAO_FATURAVEL: 'NOT_BILLABLE',
+    NOT_BILLABLE: 'NOT_BILLABLE'
+  };
+  return aliases[normalized] || '';
+}
+
+const NON_INSURANCE_FINANCIAL_CONTEXTS = new Set(['PRIVATE', 'PACKAGE', 'MONTHLY', 'COURTESY', 'NO_CHARGE', 'NOT_BILLABLE']);
+const NON_BILLABLE_FINANCIAL_CONTEXTS = new Set(['COURTESY', 'NO_CHARGE', 'NOT_BILLABLE']);
+
 function hasText(value: any): boolean {
   if (typeof value === 'string') return value.trim().length > 0;
   if (Array.isArray(value)) return value.length > 0;
@@ -263,7 +292,16 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
   const futureOrOpen = (scheduledStart && new Date(scheduledStart).getTime() > now.getTime()) ||
     ['in_progress', 'active'].includes(status) ||
     (DRAFT_STATUSES.has(status) && !concluded);
-  const notBillable = Boolean(input.manualNotBillable) || NOT_BILLABLE_STATUSES.has(status);
+  const financialContextType = normalizeFinancialContextType(firstValue(
+    appointment.financial_context_type,
+    appointment.financialContextType,
+    appointment.billing_context_type,
+    appointment.billingContextType,
+    appointment.payer_type,
+    appointment.payerType
+  ));
+  const nonInsuranceFinancialContext = NON_INSURANCE_FINANCIAL_CONTEXTS.has(financialContextType);
+  const notBillable = Boolean(input.manualNotBillable) || NOT_BILLABLE_STATUSES.has(status) || NON_BILLABLE_FINANCIAL_CONTEXTS.has(financialContextType);
   const unknown = !patientId && !scheduledStart && !input.appointmentId && !input.abaSessionId;
 
   const durationVariance = scheduledMinutes !== null && actualMinutes !== null
@@ -285,9 +323,11 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
     appointment.payerNameSnapshot,
     appointment.payerName
   ));
-  const payerLinkedStatus: ClosureCheckStatus = appointmentPayerId ? 'PASSED' : 'FAILED';
+  const payerLinkedStatus: ClosureCheckStatus = appointmentPayerId || nonInsuranceFinancialContext ? 'PASSED' : 'FAILED';
   const payerLinkedMessage = appointmentPayerId
     ? 'Pagador informado para esta conferência.'
+    : nonInsuranceFinancialContext
+      ? `Contexto financeiro definido: ${financialContextType === 'PRIVATE' ? 'particular' : financialContextType === 'PACKAGE' || financialContextType === 'MONTHLY' ? 'pacote/mensalidade' : financialContextType === 'COURTESY' ? 'cortesia' : financialContextType === 'NO_CHARGE' ? 'sem cobrança' : 'não faturável'}.`
     : suggestedPayerName
       ? `Pagador sugerido pelo plano financeiro: ${suggestedPayerName}. Ainda não aplicado ao atendimento.`
       : 'Pagador não configurado para esta conferência.';
@@ -399,11 +439,12 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
     'payer_linked',
     'Convênio/pagador vinculado',
     payerLinkedStatus,
-    true,
-    appointmentPayerId ? 'LOW' : 'HIGH',
+    !nonInsuranceFinancialContext,
+    appointmentPayerId || nonInsuranceFinancialContext ? 'LOW' : 'HIGH',
     payerLinkedMessage,
     {
-      present: Boolean(appointmentPayerId),
+      present: Boolean(appointmentPayerId || nonInsuranceFinancialContext),
+      financialContextType: financialContextType || null,
       suggested: Boolean(!appointmentPayerId && suggestedPayerName),
       suggestedPayerName: suggestedPayerName || null,
       insuranceCardPresent: Boolean(insuranceCardNumber),
@@ -504,6 +545,7 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
     authorizationCode,
     guideNumber,
     payerId: requirements.payerId || appointment.payer_id || appointment.payerId || null,
+    financialContextType: financialContextType || null,
     payerRequirementSource: requirements.payerRequirementSource || null,
     appliedPayerRequirementId: requirements.appliedPayerRequirementId || null,
     professionalId,

@@ -196,6 +196,43 @@ test('resumos agrupam procedimento e TUSS sem misturar configurados e pendentes'
   assert.equal(summary.byTussCode.find((item) => item.code === 'Sem TUSS')?.totalSessions, 1);
 });
 
+test('contexto financeiro explicito sem convenio nao gera pendencia de pagador ou TUSS', () => {
+  const details = classifyConferencePendingDetails({
+    appointment_id: 'appt-private',
+    patient_name: 'Pedro',
+    professional_name: 'Mateus',
+    service_type: 'ABA',
+    payer_id: null,
+    payer_type: 'PRIVATE',
+    financial_context_type: 'PRIVATE',
+    scheduled_start: '2026-06-20T10:00:00.000Z',
+    readiness_status: 'DRAFT',
+    professional_registry: null,
+    tuss_pending_reason_codes: ['missing_payer', 'missing_financial_plan', 'missing_service_catalog', 'missing_tuss_mapping', 'missing_amount', 'missing_card_number']
+  } as any);
+
+  assert.ok(!details.configuration.includes('Pagador'));
+  assert.ok(!details.configuration.includes('Plano financeiro'));
+  assert.ok(!details.configuration.includes('Procedimento'));
+  assert.ok(!details.configuration.includes('TUSS'));
+  assert.ok(!details.configuration.includes('Valor'));
+  assert.ok(!details.configuration.includes('Carteirinha'));
+  assert.ok(!details.configuration.includes('Registro profissional'));
+  assert.ok(details.notApplicable.includes('Aguardando realizacao'));
+
+  const noCharge = classifyConferencePendingDetails({
+    appointment_id: 'appt-no-charge',
+    patient_name: 'Pedro',
+    service_type: 'ABA',
+    payer_type: 'NO_CHARGE',
+    financial_context_type: 'NO_CHARGE',
+    readiness_status: 'NOT_BILLABLE',
+    tuss_pending_reason_codes: ['missing_payer', 'missing_tuss_mapping']
+  } as any);
+  assert.deepEqual(noCharge.blocking, []);
+  assert.ok(noCharge.informational.includes('Nao aplicavel ao faturamento'));
+});
+
 test('exportacao usa whitelist operacional e CSV sem dados clinicos brutos', () => {
   const exportRows = buildMonthlyConferenceExportRows(rows);
   const csv = rowsToCsv(exportRows, ['scheduledDate', 'patientName', 'professionalName', 'serviceType', 'actualMinutes', 'pendingKinds', 'rawAbaEvents']);

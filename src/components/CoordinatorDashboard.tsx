@@ -121,6 +121,12 @@ import {
   mapPatientProfileTypeToLegacyPortalType,
   normalizePatientProfileType,
 } from "../utils/patientProfileType";
+import {
+  APPOINTMENT_FINANCIAL_CONTEXT_OPTIONS,
+  APPOINTMENT_FINANCIAL_CONTEXT_REQUIRED_MESSAGE,
+  normalizeAppointmentFinancialContextType,
+  type AppointmentFinancialContextType,
+} from "../utils/appointmentFinancialContext";
 
 interface CoordinatorDashboardProps {
   user: any;
@@ -688,6 +694,8 @@ export function CoordinatorDashboard({
   const [sessionLocationNotes, setSessionLocationNotes] = useState("");
   const [sessionCallLink, setSessionCallLink] = useState("");
   const [sessionProfessional, setSessionProfessional] = useState("");
+  const [sessionFinancialContextType, setSessionFinancialContextType] =
+    useState<AppointmentFinancialContextType>("INSURANCE");
   const [sessionPayerId, setSessionPayerId] = useState("");
   const [sessionPayerNameSnapshot, setSessionPayerNameSnapshot] = useState("");
   const [sessionGuideNumber, setSessionGuideNumber] = useState("");
@@ -1901,6 +1909,7 @@ export function CoordinatorDashboard({
     const matchingPayer = resolveClinicPayerForPatientInsurance(patientPayer);
     lastAutoPayerPatientKeyRef.current = getPatientAutoPayerKey(patient, name);
     setSessionPatientName(name);
+    if (matchingPayer?.id || patientPayer.payerId) setSessionFinancialContextType("INSURANCE");
     setSessionPayerId(String(matchingPayer?.id || patientPayer.payerId || ""));
     setSessionPayerNameSnapshot(String(matchingPayer?.name || patientPayer.payerName || ""));
     setFilteredPatients([]);
@@ -1984,6 +1993,7 @@ export function CoordinatorDashboard({
 
   const handleSessionPayerChange = (value: string) => {
     lastAutoPayerPatientKeyRef.current = getPatientAutoPayerKey(selectedSessionPatient, sessionPatientName);
+    setSessionFinancialContextType("INSURANCE");
     if (value === SESSION_PATIENT_INSURANCE_PAYER_VALUE) {
       setSessionPayerId("");
       setSessionPayerNameSnapshot(sessionPayerSnapshotOptionLabel);
@@ -2006,6 +2016,7 @@ export function CoordinatorDashboard({
     if (!sessionPayerId && !sessionPayerNameSnapshot) {
       if (patientKey && lastAutoPayerPatientKeyRef.current === patientKey) return;
       lastAutoPayerPatientKeyRef.current = patientKey;
+      setSessionFinancialContextType("INSURANCE");
       setSessionPayerId(nextPayerId);
       setSessionPayerNameSnapshot(nextPayerName);
       return;
@@ -2014,6 +2025,7 @@ export function CoordinatorDashboard({
     const currentSnapshotMatchesPatient =
       normalizePayerLookup(sessionPayerNameSnapshot) === normalizePayerLookup(patientPayer.payerName);
     if (!sessionPayerId && matchingPayer?.id && currentSnapshotMatchesPatient) {
+      setSessionFinancialContextType("INSURANCE");
       setSessionPayerId(String(matchingPayer.id));
       setSessionPayerNameSnapshot(String(matchingPayer.name || patientPayer.payerName || ""));
     }
@@ -2048,6 +2060,21 @@ export function CoordinatorDashboard({
       sessionDurationMinutes >= 15 &&
       (sessionLocationType !== "clinica" || sessionRoom),
   );
+  const selectedFinancialContextOption = APPOINTMENT_FINANCIAL_CONTEXT_OPTIONS.find(
+    (option) => option.value === sessionFinancialContextType,
+  );
+  const sessionNeedsFinancialContext = Boolean(sessionApproach.trim());
+  const sessionFinancialContextError =
+    !isTherapist && sessionNeedsFinancialContext && !sessionFinancialContextType
+      ? APPOINTMENT_FINANCIAL_CONTEXT_REQUIRED_MESSAGE
+      : !isTherapist && sessionNeedsFinancialContext && sessionFinancialContextType === "INSURANCE" && !sessionPayerId
+        ? "Selecione um pagador/convênio cadastrado ou escolha outro contexto financeiro válido."
+        : "";
+  const canSubmitSession =
+    requiredSessionFieldsReady &&
+    !scheduleConflictState.blocking &&
+    !scheduleConflictState.loading &&
+    !sessionFinancialContextError;
 
   useEffect(() => {
     if (!isAddSessionModalOpen) return;
@@ -2163,6 +2190,7 @@ export function CoordinatorDashboard({
     setSessionCallLink("");
     setSessionApproach("");
     setSessionProfessional("");
+    setSessionFinancialContextType("INSURANCE");
     setSessionPayerId("");
     setSessionPayerNameSnapshot("");
     setSessionGuideNumber("");
@@ -2203,6 +2231,10 @@ export function CoordinatorDashboard({
   const handleSessionSubmit = async () => {
     if (!requiredSessionFieldsReady) {
       showToast("Preencha paciente, data, horário, duração, tipo, profissional e sala quando o local for clínica.", "error");
+      return;
+    }
+    if (sessionFinancialContextError) {
+      showToast(`${APPOINTMENT_FINANCIAL_CONTEXT_REQUIRED_MESSAGE} ${sessionFinancialContextError}`, "error");
       return;
     }
     if (scheduleConflictState.blocking) {
@@ -2302,10 +2334,16 @@ export function CoordinatorDashboard({
         location_notes: sessionLocationNotes,
         callLink: sessionCallLink,
         call_link: sessionCallLink,
-        payerId: sessionPayerId || null,
-        payer_id: sessionPayerId || null,
-        payerName: selectedSessionPayerName,
-        payer_name_snapshot: selectedSessionPayerName,
+        financialContextType: sessionFinancialContextType,
+        financial_context_type: sessionFinancialContextType,
+        billingContextType: sessionFinancialContextType,
+        billing_context_type: sessionFinancialContextType,
+        payerType: sessionFinancialContextType,
+        payer_type: sessionFinancialContextType,
+        payerId: sessionFinancialContextType === "INSURANCE" ? sessionPayerId || null : null,
+        payer_id: sessionFinancialContextType === "INSURANCE" ? sessionPayerId || null : null,
+        payerName: sessionFinancialContextType === "INSURANCE" ? selectedSessionPayerName : "",
+        payer_name_snapshot: sessionFinancialContextType === "INSURANCE" ? selectedSessionPayerName : "",
         guideNumber: sessionGuideNumber,
         guide_number: sessionGuideNumber,
         authorizationCode: sessionAuthorizationCode,
@@ -2335,14 +2373,21 @@ export function CoordinatorDashboard({
           : `Sessão de ${sessionPatientName} atualizada para ${sessionDate} às ${sessionTime}.`,
         "management",
       );
-      if (sessionPayerId || selectedSessionPayerName || sessionGuideNumber || sessionAuthorizationCode) {
-        void dataService.updateAppointmentBillingContext(String(editingAppointmentId), {
-          payerId: sessionPayerId || null,
-          payerName: selectedSessionPayerName,
-          serviceType: sessionApproach || "Consulta Padrão",
-          guideNumber: sessionGuideNumber,
-          authorizationCode: sessionAuthorizationCode,
-        });
+      const billingResult = await dataService.updateAppointmentBillingContext(String(editingAppointmentId), {
+        financialContextType: sessionFinancialContextType,
+        billingContextType: sessionFinancialContextType,
+        payerType: sessionFinancialContextType,
+        payerId: sessionFinancialContextType === "INSURANCE" ? sessionPayerId || null : null,
+        payerName: sessionFinancialContextType === "INSURANCE" ? selectedSessionPayerName : null,
+        serviceType: sessionApproach || "Consulta Padrão",
+        guideNumber: sessionGuideNumber,
+        authorizationCode: sessionAuthorizationCode,
+        source: "APPOINTMENT_CONTEXT",
+      });
+      if (!billingResult?.success) {
+        hideProcessing();
+        showToast(billingResult?.error || "Não foi possível salvar o contexto financeiro do atendimento.", "error");
+        return;
       }
       setIsAddSessionModalOpen(false);
       resetSessionForm();
@@ -2375,10 +2420,16 @@ export function CoordinatorDashboard({
       location_notes: sessionLocationNotes,
       callLink: sessionCallLink,
       call_link: sessionCallLink,
-      payerId: sessionPayerId || null,
-      payer_id: sessionPayerId || null,
-      payerName: selectedSessionPayerName,
-      payer_name_snapshot: selectedSessionPayerName,
+      financialContextType: sessionFinancialContextType,
+      financial_context_type: sessionFinancialContextType,
+      billingContextType: sessionFinancialContextType,
+      billing_context_type: sessionFinancialContextType,
+      payerType: sessionFinancialContextType,
+      payer_type: sessionFinancialContextType,
+      payerId: sessionFinancialContextType === "INSURANCE" ? sessionPayerId || null : null,
+      payer_id: sessionFinancialContextType === "INSURANCE" ? sessionPayerId || null : null,
+      payerName: sessionFinancialContextType === "INSURANCE" ? selectedSessionPayerName : "",
+      payer_name_snapshot: sessionFinancialContextType === "INSURANCE" ? selectedSessionPayerName : "",
       guideNumber: sessionGuideNumber,
       guide_number: sessionGuideNumber,
       authorizationCode: sessionAuthorizationCode,
@@ -3337,6 +3388,17 @@ export function CoordinatorDashboard({
     setSessionProfessional(
       appointment.therapistName || appointment.professional || "",
     );
+    setSessionFinancialContextType(
+      normalizeAppointmentFinancialContextType(
+        appointment.financialContextType ||
+          appointment.financial_context_type ||
+          appointment.billingContextType ||
+          appointment.billing_context_type ||
+          appointment.payerType ||
+          appointment.payer_type ||
+          (appointment.payerId || appointment.payer_id ? "INSURANCE" : "INSURANCE"),
+      ) || "INSURANCE",
+    );
     setSessionPayerId(String(appointment.payerId || appointment.payer_id || ""));
     setSessionPayerNameSnapshot(String(appointment.payerName || appointment.payer_name_snapshot || ""));
     setSessionGuideNumber(String(appointment.guideNumber || appointment.guide_number || ""));
@@ -3344,6 +3406,17 @@ export function CoordinatorDashboard({
     if (appointment.id && !isTherapist) {
       dataService.getAppointmentBillingContext(String(appointment.id)).then((result: any) => {
         if (!result?.success || !result.data) return;
+        setSessionFinancialContextType(
+          normalizeAppointmentFinancialContextType(
+            result.data.financialContextType ||
+              result.data.financial_context_type ||
+              result.data.billingContextType ||
+              result.data.billing_context_type ||
+              result.data.payerType ||
+              result.data.payer_type ||
+              (result.data.payerId ? "INSURANCE" : ""),
+          ) || "INSURANCE",
+        );
         setSessionPayerId(String(result.data.payerId || ""));
         setSessionPayerNameSnapshot(String(result.data.payerName || ""));
         setSessionGuideNumber(String(result.data.guideNumber || ""));
@@ -8774,31 +8847,58 @@ export function CoordinatorDashboard({
                     Pagador e conferência
                   </p>
                   <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                    <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
-                      Pagador/convênio
+                    <label className="sm:col-span-2 text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                      Contexto financeiro
                       <select
                         className="mt-1 w-full rounded-xl border border-violet-100 bg-white p-3 text-sm font-semibold normal-case tracking-normal text-slate-700 outline-none"
-                        value={sessionPayerSelectValue}
-                        onChange={(e) => handleSessionPayerChange(e.target.value)}
+                        value={sessionFinancialContextType}
+                        onChange={(e) => {
+                          const nextContext =
+                            normalizeAppointmentFinancialContextType(e.target.value) || "INSURANCE";
+                          setSessionFinancialContextType(nextContext);
+                          if (nextContext !== "INSURANCE") {
+                            setSessionPayerId("");
+                            setSessionPayerNameSnapshot("");
+                          }
+                        }}
                       >
-                        <option value="">Sem pagador</option>
-                        {hasPatientInsuranceSnapshotOption && (
-                          <option value={SESSION_PATIENT_INSURANCE_PAYER_VALUE}>
-                            Convênio do paciente: {sessionPayerSnapshotOptionLabel}
-                          </option>
-                        )}
-                        {hasSessionPayerIdOption && (
-                          <option value={sessionPayerId}>
-                            {sessionPayerNameSnapshot || selectedSessionPatientInsurancePayer.payerName || "Pagador cadastrado"}
-                          </option>
-                        )}
-                        {clinicPayers.map((payer: any) => (
-                          <option key={payer.id} value={payer.id}>
-                            {payer.name}
+                        {APPOINTMENT_FINANCIAL_CONTEXT_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
                           </option>
                         ))}
                       </select>
+                      <span className="mt-2 block text-xs font-semibold normal-case tracking-normal text-slate-500">
+                        {selectedFinancialContextOption?.description || APPOINTMENT_FINANCIAL_CONTEXT_REQUIRED_MESSAGE}
+                      </span>
                     </label>
+                    {sessionFinancialContextType === "INSURANCE" && (
+                      <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                        Pagador/convênio
+                        <select
+                          className="mt-1 w-full rounded-xl border border-violet-100 bg-white p-3 text-sm font-semibold normal-case tracking-normal text-slate-700 outline-none"
+                          value={sessionPayerSelectValue}
+                          onChange={(e) => handleSessionPayerChange(e.target.value)}
+                        >
+                          <option value="">Sem pagador</option>
+                          {hasPatientInsuranceSnapshotOption && (
+                            <option value={SESSION_PATIENT_INSURANCE_PAYER_VALUE}>
+                              Convênio do paciente: {sessionPayerSnapshotOptionLabel}
+                            </option>
+                          )}
+                          {hasSessionPayerIdOption && (
+                            <option value={sessionPayerId}>
+                              {sessionPayerNameSnapshot || selectedSessionPatientInsurancePayer.payerName || "Pagador cadastrado"}
+                            </option>
+                          )}
+                          {clinicPayers.map((payer: any) => (
+                            <option key={payer.id} value={payer.id}>
+                              {payer.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
                     <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
                       Guia
                       <input
@@ -8808,7 +8908,7 @@ export function CoordinatorDashboard({
                         placeholder="Número da guia"
                       />
                     </label>
-                    <label className="sm:col-span-2 text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                    <label className={`${sessionFinancialContextType === "INSURANCE" ? "sm:col-span-2" : ""} text-[10px] font-bold uppercase tracking-widest text-slate-500`}>
                       Autorização/senha
                       <input
                         className="mt-1 w-full rounded-xl border border-violet-100 bg-white p-3 text-sm font-semibold normal-case tracking-normal text-slate-700 outline-none"
@@ -8818,6 +8918,11 @@ export function CoordinatorDashboard({
                       />
                     </label>
                   </div>
+                  {sessionFinancialContextError && (
+                    <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">
+                      {APPOINTMENT_FINANCIAL_CONTEXT_REQUIRED_MESSAGE}
+                    </div>
+                  )}
                 </div>
               )}
               {scheduleConflictState.checked && (
@@ -8958,7 +9063,7 @@ export function CoordinatorDashboard({
               )}
               <button
                 onClick={handleSessionSubmit}
-                disabled={!requiredSessionFieldsReady || scheduleConflictState.blocking || scheduleConflictState.loading}
+                disabled={!canSubmitSession}
                 className="w-full bg-[#7a32fc] text-white font-bold py-4 rounded-xl shadow-lg shadow-purple-500/20 hover:opacity-90 transition-all mt-2 active:scale-95 uppercase tracking-widest disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {editingAppointmentId

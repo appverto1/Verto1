@@ -63,6 +63,12 @@ import {
   getDefaultAnamnesisTemplate,
   normalizeAnamnesisTemplate,
 } from "../lib/anamnesisSchema";
+import {
+  APPOINTMENT_FINANCIAL_CONTEXT_REQUIRED_MESSAGE,
+  NON_INSURANCE_APPOINTMENT_FINANCIAL_CONTEXT_OPTIONS,
+  normalizeAppointmentFinancialContextType,
+  type AppointmentFinancialContextType,
+} from "../utils/appointmentFinancialContext";
 
 const ProfileView = ({
   user,
@@ -342,6 +348,8 @@ export const ReceptionistDashboard = ({
   const [sessionRoom, setSessionRoom] = useState("");
   const [sessionProfessional, setSessionProfessional] = useState("Dra. Raísa");
   const [sessionNumSessions, setSessionNumSessions] = useState(1);
+  const [sessionFinancialContextType, setSessionFinancialContextType] =
+    useState<AppointmentFinancialContextType | "">("");
   const agendaViewPreferenceKey = useMemo(
     () => getAgendaViewPreferenceKey(user),
     [user?.id, user?.email, user?.activeWorkspaceId, user?.clinicId],
@@ -617,6 +625,21 @@ export const ReceptionistDashboard = ({
   const handleSessionSubmit = async () => {
     if (!sessionPatientName || !sessionTime || !sessionRoom)
       return alert("Preencha nome, horário e sala");
+    const financialContextType = normalizeAppointmentFinancialContextType(sessionFinancialContextType);
+    const financialContextPayload = financialContextType && financialContextType !== "INSURANCE"
+      ? {
+          financialContextType,
+          financial_context_type: financialContextType,
+          billingContextType: financialContextType,
+          billing_context_type: financialContextType,
+          payerType: financialContextType,
+          payer_type: financialContextType,
+          payerId: null,
+          payer_id: null,
+          payerName: "",
+          payer_name_snapshot: "",
+        }
+      : {};
 
     if (editingAppointmentId) {
       const updates = {
@@ -626,6 +649,7 @@ export const ReceptionistDashboard = ({
         type: sessionApproach || "Consulta Padrão",
         room: sessionRoom,
         professional: sessionProfessional,
+        ...financialContextPayload,
       };
       const result = await onUpdateAppointment(editingAppointmentId, updates);
       if (result?.success === false) {
@@ -644,6 +668,7 @@ export const ReceptionistDashboard = ({
       room: sessionRoom,
       professional: sessionProfessional,
       numSessions: sessionNumSessions,
+      ...financialContextPayload,
     };
     const result = await onScheduleSession(newSession);
     if (result && !result.success) {
@@ -663,6 +688,7 @@ export const ReceptionistDashboard = ({
     setSessionRoom("");
     setSessionProfessional("Dra. Raísa");
     setSessionNumSessions(1);
+    setSessionFinancialContextType("");
   };
 
   const handleEditAppointment = (appointment: any) => {
@@ -673,6 +699,17 @@ export const ReceptionistDashboard = ({
     setSessionApproach(appointment.type);
     setSessionRoom(appointment.room);
     setSessionProfessional(appointment.professional);
+    setSessionFinancialContextType(
+      normalizeAppointmentFinancialContextType(
+        appointment.financialContextType ||
+          appointment.financial_context_type ||
+          appointment.billingContextType ||
+          appointment.billing_context_type ||
+          appointment.payerType ||
+          appointment.payer_type ||
+          (appointment.payerId || appointment.payer_id ? "INSURANCE" : "")
+      ),
+    );
     setIsAddSessionModalOpen(true);
   };
 
@@ -1560,6 +1597,31 @@ export const ReceptionistDashboard = ({
                           ))}
                         </select>
                       </div>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">
+                        Contexto financeiro
+                      </label>
+                      <select
+                        className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm outline-none font-semibold text-gray-700"
+                        value={sessionFinancialContextType}
+                        onChange={(e) => setSessionFinancialContextType(normalizeAppointmentFinancialContextType(e.target.value))}
+                      >
+                        <option value="">Usar plano financeiro do paciente</option>
+                        {sessionFinancialContextType === "INSURANCE" && (
+                          <option value="INSURANCE">Convênio aplicado ao atendimento</option>
+                        )}
+                        {NON_INSURANCE_APPOINTMENT_FINANCIAL_CONTEXT_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="mt-1 text-[11px] font-medium text-gray-400">
+                        {sessionFinancialContextType
+                          ? NON_INSURANCE_APPOINTMENT_FINANCIAL_CONTEXT_OPTIONS.find((option) => option.value === sessionFinancialContextType)?.description || "Convênio já aplicado ao atendimento."
+                          : APPOINTMENT_FINANCIAL_CONTEXT_REQUIRED_MESSAGE}
+                      </p>
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                       <div>

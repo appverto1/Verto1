@@ -10,6 +10,8 @@ export type MonthlyConferenceRow = {
   professional_name?: string | null;
   service_type?: string | null;
   payer_id?: string | null;
+  payer_type?: string | null;
+  financial_context_type?: string | null;
   payer_name?: string | null;
   payer_name_snapshot?: string | null;
   clinic_name?: string | null;
@@ -172,6 +174,35 @@ function addUnique(target: string[], label: string) {
   if (label && !target.includes(label)) target.push(label);
 }
 
+function normalizeFinancialContextType(value: any): string {
+  const normalized = String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  const aliases: Record<string, string> = {
+    CONVENIO: 'INSURANCE',
+    INSURANCE: 'INSURANCE',
+    PARTICULAR: 'PRIVATE',
+    PRIVATE: 'PRIVATE',
+    PACOTE: 'PACKAGE',
+    PACKAGE: 'PACKAGE',
+    MENSALIDADE: 'MONTHLY',
+    MONTHLY: 'MONTHLY',
+    CORTESIA: 'COURTESY',
+    COURTESY: 'COURTESY',
+    SEM_COBRANCA: 'NO_CHARGE',
+    NO_CHARGE: 'NO_CHARGE',
+    NAO_FATURAVEL: 'NOT_BILLABLE',
+    NOT_BILLABLE: 'NOT_BILLABLE'
+  };
+  return aliases[normalized] || '';
+}
+
+const NON_INSURANCE_FINANCIAL_CONTEXTS = new Set(['PRIVATE', 'PACKAGE', 'MONTHLY', 'COURTESY', 'NO_CHARGE', 'NOT_BILLABLE']);
+
 export function classifyConferencePendingDetails(row: MonthlyConferenceRow): ConferencePendingClassification {
   const operational: string[] = [];
   const configuration: string[] = [];
@@ -179,6 +210,8 @@ export function classifyConferencePendingDetails(row: MonthlyConferenceRow): Con
   const notApplicable: string[] = [];
   const notBillable = isNotBillableRow(row);
   const open = isOpenRow(row);
+  const financialContextType = normalizeFinancialContextType(row.financial_context_type || row.payer_type);
+  const explicitNonInsuranceContext = NON_INSURANCE_FINANCIAL_CONTEXTS.has(financialContextType);
 
   const addOperational = (label: string) => {
     if (notBillable) return;
@@ -205,16 +238,18 @@ export function classifyConferencePendingDetails(row: MonthlyConferenceRow): Con
   const hasInsuranceCard = Boolean(String(row.insurance_card_number || '').trim());
   const hasProfessionalRegistry = Boolean(String(row.professional_registry || '').trim());
   const hasProfessionalRegistryField = Object.prototype.hasOwnProperty.call(row, 'professional_registry');
-  if (!hasPayer) addUnique(configuration, 'Pagador');
-  if (!hasFinancialPlan) addUnique(configuration, 'Plano financeiro');
-  if (!hasProcedure) addUnique(configuration, 'Procedimento');
-  if (!hasTuss) addUnique(configuration, 'TUSS');
-  if (!hasExpectedAmount) addUnique(configuration, 'Valor');
-  if (!hasInsuranceCard && (tussPendingCodes.includes('missing_card_number') || /carteirinha/i.test(tussPendingLabels))) addUnique(configuration, 'Carteirinha');
-  if (
-    (hasProfessionalRegistryField && !hasProfessionalRegistry) ||
-    (!hasProfessionalRegistryField && (tussPendingCodes.includes('missing_professional_registry') || hasIssue(row, [/registro profissional/, /professional registry/, /conselho profissional/])))
-  ) addUnique(configuration, 'Registro profissional');
+  if (!explicitNonInsuranceContext) {
+    if (!hasPayer) addUnique(configuration, 'Pagador');
+    if (!hasFinancialPlan) addUnique(configuration, 'Plano financeiro');
+    if (!hasProcedure) addUnique(configuration, 'Procedimento');
+    if (!hasTuss) addUnique(configuration, 'TUSS');
+    if (!hasExpectedAmount) addUnique(configuration, 'Valor');
+    if (!hasInsuranceCard && (tussPendingCodes.includes('missing_card_number') || /carteirinha/i.test(tussPendingLabels))) addUnique(configuration, 'Carteirinha');
+    if (
+      (hasProfessionalRegistryField && !hasProfessionalRegistry) ||
+      (!hasProfessionalRegistryField && (tussPendingCodes.includes('missing_professional_registry') || hasIssue(row, [/registro profissional/, /professional registry/, /conselho profissional/])))
+    ) addUnique(configuration, 'Registro profissional');
+  }
 
   if (notBillable) {
     addUnique(informational, 'Nao aplicavel ao faturamento');

@@ -6,9 +6,12 @@ const root = process.cwd();
 const serverCode = readFileSync(join(root, 'server.ts'), 'utf8');
 const calendarCode = readFileSync(join(root, 'src/components/Calendar.tsx'), 'utf8');
 const coordinatorCode = readFileSync(join(root, 'src/components/CoordinatorDashboard.tsx'), 'utf8');
+const receptionistCode = readFileSync(join(root, 'src/components/ReceptionistDashboard.tsx'), 'utf8');
+const therapistCode = readFileSync(join(root, 'src/components/TherapistDashboard.tsx'), 'utf8');
 const operationalClosureCode = readFileSync(join(root, 'src/components/OperationalClosureCenter.tsx'), 'utf8');
 const closureCode = readFileSync(join(root, 'src/services/closureReadinessEngine.ts'), 'utf8');
 const dataServiceCode = readFileSync(join(root, 'src/services/dataService.ts'), 'utf8');
+const financialContextCode = readFileSync(join(root, 'src/utils/appointmentFinancialContext.ts'), 'utf8');
 const migrationCode = readFileSync(join(root, 'supabase/migrations/20260601120000_appointment_billing_context_patient_index.sql'), 'utf8');
 const patientDefaultMigrationCode = readFileSync(join(root, 'supabase/migrations/20260602123000_appointment_billing_context_patient_defaults.sql'), 'utf8');
 
@@ -118,7 +121,41 @@ test('criacao da consulta cria contexto inicial sem sobrescrever edicao posterio
   assert.match(serverCode, /insurance_card_number: sanitizeString\(params\.appointment\?\.insuranceCardNumber/);
   assert.match(serverCode, /insurance_plan_name: sanitizeString\(params\.appointment\?\.insurancePlanName/);
   assert.match(serverCode, /guide_number: sanitizeString\(params\.appointment\?\.guideNumber/);
-  assert.match(serverCode, /source: sanitizeString\(suggestedBilling\?\.source/);
+  assert.match(serverCode, /financialContextType: financialContextType \|\| undefined/);
+  assert.match(serverCode, /explicitFinancialContext: Boolean\(explicitFinancialContextType\)/);
+  assert.match(serverCode, /skipTussResolution: financialContextSkipsInsuranceBilling\(financialContextType\)/);
+  assert.match(serverCode, /source: sanitizeString\(\s*explicitFinancialContextType[\s\S]*?'APPOINTMENT_CONTEXT'/);
+});
+
+test('agendamento faturavel exige contexto financeiro explicito', () => {
+  assert.match(coordinatorCode, /APPOINTMENT_FINANCIAL_CONTEXT_REQUIRED_MESSAGE/);
+  assert.match(coordinatorCode, /APPOINTMENT_FINANCIAL_CONTEXT_OPTIONS/);
+  assert.match(coordinatorCode, /Contexto financeiro/);
+  assert.match(financialContextCode, /Conv.nio/);
+  assert.match(financialContextCode, /Particular/);
+  assert.match(financialContextCode, /Pacote\/mensalidade/);
+  assert.match(financialContextCode, /Sem cobran.a/);
+  assert.match(financialContextCode, /N.o fatur.vel/);
+  assert.match(coordinatorCode, /disabled=\{!canSubmitSession\}/);
+  assert.match(coordinatorCode, /sessionFinancialContextType === "INSURANCE" \? sessionPayerId \|\| null : null/);
+  assert.match(coordinatorCode, /source: "APPOINTMENT_CONTEXT"/);
+  assert.match(dataServiceCode, /async createAppointments/);
+  assert.match(serverCode, /validateAppointmentFinancialContextForWrite/);
+  assert.match(serverCode, /appointmentRequiresFinancialContext/);
+  assert.match(serverCode, /APPOINTMENT_FINANCIAL_CONTEXT_ERROR/);
+  assert.match(serverCode, /Selecione um pagador\/convênio cadastrado ou escolha outro contexto financeiro válido\./);
+});
+
+test('contextos particular sem cobranca e nao faturavel persistem sem payer_id', () => {
+  assert.match(serverCode, /normalizeAppointmentFinancialContextType/);
+  assert.match(serverCode, /NON_INSURANCE_FINANCIAL_CONTEXT_TYPES/);
+  assert.match(serverCode, /financialContextSkipsInsuranceBilling/);
+  assert.match(serverCode, /payer_id: effectivePayerId/);
+  assert.match(serverCode, /payer_type: effectiveFinancialContextType \|\| null/);
+  assert.match(serverCode, /financialContextIsNotBillable\(billingContext\?\.payer_type\)/);
+  assert.match(serverCode, /if \(financialContextSkipsInsuranceBilling\(billingContext\?\.payer_type\)\) return null/);
+  assert.match(serverCode, /A resolução TUSS exige convênio com pagador cadastrado no atendimento\./);
+  assert.match(serverCode, /appointmentRequiresFinancialContext\(appointment\) && !effectiveFinancialContextType/);
 });
 
 test('sugestao do paciente nao escolhe multiplos planos silenciosamente', () => {
@@ -128,11 +165,25 @@ test('sugestao do paciente nao escolhe multiplos planos silenciosamente', () => 
   assert.match(coordinatorCode, /financialPlanMatchesAppointmentService/);
 });
 
+test('telas simples de agenda enviam contexto financeiro explicito quando escolhido', () => {
+  for (const code of [receptionistCode, therapistCode]) {
+    assert.match(code, /Contexto financeiro/);
+    assert.match(code, /NON_INSURANCE_APPOINTMENT_FINANCIAL_CONTEXT_OPTIONS/);
+    assert.match(code, /const financialContextPayload = financialContextType/);
+    assert.match(code, /financial_context_type: financialContextType/);
+    assert.match(code, /payer_id: null/);
+  }
+});
+
 test('detalhe da consulta salva pagador no contexto administrativo', () => {
   assert.match(calendarCode, /saveBillingContext/);
   assert.match(calendarCode, /dataService\.updateAppointmentBillingContext/);
-  assert.match(calendarCode, /insuranceCardNumber: values\.insuranceCardNumber/);
-  assert.match(calendarCode, /insurancePlanName: values\.insurancePlanName/);
+  assert.match(calendarCode, /Contexto financeiro/);
+  assert.match(calendarCode, /financialContextType,/);
+  assert.match(calendarCode, /payerType: financialContextType/);
+  assert.match(calendarCode, /insuranceCardNumber: usesInsuranceContext \? values\.insuranceCardNumber/);
+  assert.match(calendarCode, /insurancePlanName: usesInsuranceContext \? values\.insurancePlanName/);
+  assert.match(calendarCode, /billingEditorFinancialContextError/);
   assert.match(calendarCode, /source: values\.source/);
   assert.match(calendarCode, /Aplicar . consulta/);
   assert.match(calendarCode, /Definir pagador/);
@@ -205,16 +256,19 @@ test('payer_id e appointment_id fora da organizacao sao rejeitados', () => {
   assert.match(route, /const payer = isUuid\(payerId\) \? await fetchPayerForAdmin\(payerId, organizationId\) : null/);
   assert.match(route, /const requestedPayerName = sanitizeString\(req\.body\?\.payerName \|\| req\.body\?\.payer_name_snapshot, 180\)/);
   assert.match(route, /if \(payerId && !payer && !requestedPayerName\) return res\.status\(404\)\.json\(payerSafeError\(404\)\)/);
-  assert.match(route, /payer_id: payer\?\.id \|\| null/);
-  assert.match(route, /payer_name_snapshot: sanitizeString\(payer\?\.name \|\| requestedPayerName, 180\) \|\| null/);
+  assert.match(route, /const effectivePayerId = effectiveFinancialContextType === 'INSURANCE'/);
+  assert.match(route, /payer_id: effectivePayerId/);
+  assert.match(route, /payer_type: effectiveFinancialContextType \|\| null/);
+  assert.match(route, /payer_name_snapshot: effectiveFinancialContextType === 'INSURANCE'/);
 });
 
 test('fechamento usa pagador da consulta, nao plano do paciente como substituto', () => {
   const payerBlockIndex = closureCode.indexOf("'payer_linked'");
   assert.ok(payerBlockIndex > 0, 'payer_linked deve existir');
   const payerBlock = closureCode.slice(Math.max(0, payerBlockIndex - 1600), payerBlockIndex + 900);
-  assert.match(closureCode, /const payerLinkedStatus: ClosureCheckStatus = appointmentPayerId \? 'PASSED' : 'FAILED'/);
+  assert.match(closureCode, /const payerLinkedStatus: ClosureCheckStatus = appointmentPayerId \|\| nonInsuranceFinancialContext \? 'PASSED' : 'FAILED'/);
   assert.match(closureCode, /Pagador sugerido pelo plano financeiro/);
+  assert.match(closureCode, /Contexto financeiro definido/);
   assert.match(payerBlock, /appointmentPayerId/);
   assert.match(payerBlock, /suggestedPayerName/);
   assert.doesNotMatch(payerBlock, /suggestedPayerName\s*\?\s*'PASSED'/);

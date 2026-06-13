@@ -39,6 +39,7 @@ import {
   mergePersistedAppointments,
   removePersistedAppointments,
 } from './utils/appointmentActionUpdates';
+import { normalizeAppointmentFinancialContextType } from './utils/appointmentFinancialContext';
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>;
@@ -4165,6 +4166,61 @@ export default function App() {
       : '';
     const professionalName = String(sess.professionalName || sess.professional || '').trim();
     const professionalId = String(sess.professionalId || sess.professional_id || sess.therapistId || sess.therapist_id || '').trim();
+    let financialContextType = normalizeAppointmentFinancialContextType(
+      sess.financialContextType ||
+        sess.financial_context_type ||
+        sess.billingContextType ||
+        sess.billing_context_type ||
+        sess.payerType ||
+        sess.payer_type ||
+        (sess.payerId || sess.payer_id ? 'INSURANCE' : '')
+    );
+    let effectivePayerId = String(sess.payerId || sess.payer_id || '').trim();
+    let effectivePayerName = String(sess.payerName || sess.payer_name_snapshot || '').trim();
+    if (!financialContextType && !effectivePayerId) {
+      const serviceKey = String(sess.approach || sess.serviceType || sess.service_type || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .trim()
+        .toUpperCase()
+        .replace(/[^A-Z0-9]+/g, '_');
+      const plans = Array.isArray(patientForSession?.financialPlans)
+        ? patientForSession.financialPlans
+        : Array.isArray((patientForSession as any)?.financial_plans)
+          ? (patientForSession as any).financial_plans
+          : [];
+      const insurancePlans = plans.filter((plan: any) => {
+        const payerId = String(plan?.payerId || plan?.payer_id || '').trim();
+        const billingMode = String(plan?.billingMode || plan?.billing_mode || '').toUpperCase();
+        const status = String(plan?.status || '').toUpperCase();
+        return payerId && billingMode === 'INSURANCE' && status !== 'INACTIVE' && plan?.active !== false && plan?.isActive !== false;
+      });
+      const matchingPlans = insurancePlans.filter((plan: any) => {
+        const planServiceKey = String(
+          plan?.serviceType ||
+            plan?.service_type ||
+            plan?.customServiceName ||
+            plan?.custom_service_name ||
+            plan?.serviceNameSnapshot ||
+            plan?.service_name_snapshot ||
+            ''
+        )
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .trim()
+          .toUpperCase()
+          .replace(/[^A-Z0-9]+/g, '_');
+        return !serviceKey || !planServiceKey || planServiceKey === serviceKey;
+      });
+      const inferredPlan = matchingPlans.length === 1 ? matchingPlans[0] : insurancePlans.length === 1 ? insurancePlans[0] : null;
+      if (inferredPlan) {
+        effectivePayerId = String(inferredPlan?.payerId || inferredPlan?.payer_id || '').trim();
+        effectivePayerName = String(inferredPlan?.payerNameSnapshot || inferredPlan?.payer_name_snapshot || inferredPlan?.insuranceName || inferredPlan?.insurance_name || '').trim();
+        financialContextType = effectivePayerId ? 'INSURANCE' : '';
+      }
+    }
+    if (!financialContextType && effectivePayerId) financialContextType = 'INSURANCE';
+    const usesInsuranceContext = financialContextType.toUpperCase() === 'INSURANCE';
     const newItems = [];
     const conflicts: string[] = [];
 
@@ -4270,10 +4326,16 @@ export default function App() {
           location_notes: sess.locationNotes || '',
           callLink: sess.callLink || '',
           call_link: sess.callLink || '',
-          payerId: sess.payerId || sess.payer_id || null,
-          payer_id: sess.payerId || sess.payer_id || null,
-          payerName: sess.payerName || sess.payer_name_snapshot || '',
-          payer_name_snapshot: sess.payerName || sess.payer_name_snapshot || '',
+          financialContextType,
+          financial_context_type: financialContextType,
+          billingContextType: financialContextType,
+          billing_context_type: financialContextType,
+          payerType: financialContextType,
+          payer_type: financialContextType,
+          payerId: usesInsuranceContext ? effectivePayerId || null : null,
+          payer_id: usesInsuranceContext ? effectivePayerId || null : null,
+          payerName: usesInsuranceContext ? effectivePayerName || '' : '',
+          payer_name_snapshot: usesInsuranceContext ? effectivePayerName || '' : '',
           guideNumber: sess.guideNumber || sess.guide_number || '',
           guide_number: sess.guideNumber || sess.guide_number || '',
           authorizationCode: sess.authorizationCode || sess.authorization_code || '',

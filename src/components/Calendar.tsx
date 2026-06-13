@@ -34,6 +34,13 @@ import {
 import { dataService } from '../services/dataService';
 import { formatMinutesHuman, getActualDurationMinutes, getAppointmentDurationMinutes } from '../utils/scheduling';
 import { resolveMaintenanceTargetDisplay } from '../utils/peiMaintenancePanel';
+import {
+  APPOINTMENT_FINANCIAL_CONTEXT_OPTIONS,
+  APPOINTMENT_FINANCIAL_CONTEXT_REQUIRED_MESSAGE,
+  appointmentFinancialContextRequiresPayer,
+  getAppointmentFinancialContextLabel,
+  normalizeAppointmentFinancialContextType,
+} from '../utils/appointmentFinancialContext';
 
 const isPersistedUuid = (value: any) =>
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || '').trim());
@@ -923,6 +930,7 @@ export const ClinicalAgendaBoard = ({
   const [billingPayers, setBillingPayers] = useState<any[]>([]);
   const [billingPayersLoaded, setBillingPayersLoaded] = useState(false);
   const [billingForm, setBillingForm] = useState({
+    financialContextType: 'INSURANCE',
     payerId: '',
     payerName: '',
     serviceType: '',
@@ -1340,14 +1348,25 @@ export const ClinicalAgendaBoard = ({
   };
 
   const hydrateBillingForm = (source: any = {}) => {
+    const financialContextType =
+      normalizeAppointmentFinancialContextType(
+        source?.financialContextType ||
+          source?.financial_context_type ||
+          source?.billingContextType ||
+          source?.billing_context_type ||
+          source?.payerType ||
+          source?.payer_type ||
+          (source?.payerId || source?.payer_id ? 'INSURANCE' : '')
+      ) || 'INSURANCE';
     setBillingForm({
-      payerId: String(source?.payerId || source?.payer_id || ''),
-      payerName: sanitizeHumanPayerName(source?.payerName || source?.payer_name_snapshot || ''),
+      financialContextType,
+      payerId: financialContextType === 'INSURANCE' ? String(source?.payerId || source?.payer_id || '') : '',
+      payerName: financialContextType === 'INSURANCE' ? sanitizeHumanPayerName(source?.payerName || source?.payer_name_snapshot || '') : '',
       serviceType: String(source?.serviceType || source?.service_type || detailEvent.type || ''),
-      insuranceCardNumber: String(source?.insuranceCardNumber || source?.insurance_card_number || source?.cardNumber || source?.card_number || ''),
-      insurancePlanName: String(source?.insurancePlanName || source?.insurance_plan_name || ''),
-      guideNumber: String(source?.guideNumber || source?.guide_number || ''),
-      authorizationCode: String(source?.authorizationCode || source?.authorization_code || ''),
+      insuranceCardNumber: financialContextType === 'INSURANCE' ? String(source?.insuranceCardNumber || source?.insurance_card_number || source?.cardNumber || source?.card_number || '') : '',
+      insurancePlanName: financialContextType === 'INSURANCE' ? String(source?.insurancePlanName || source?.insurance_plan_name || '') : '',
+      guideNumber: financialContextType === 'INSURANCE' ? String(source?.guideNumber || source?.guide_number || '') : '',
+      authorizationCode: financialContextType === 'INSURANCE' ? String(source?.authorizationCode || source?.authorization_code || '') : '',
       procedureCode: String(source?.procedureCode || source?.procedure_code || ''),
       notes: String(source?.notes || ''),
       source: String(source?.source || '')
@@ -1420,6 +1439,7 @@ export const ClinicalAgendaBoard = ({
     setBillingPayersLoaded(true);
     setBillingForm((prev) => ({
       ...prev,
+      financialContextType: 'INSURANCE',
       payerId: String(payer?.id || ''),
       payerName: sanitizeHumanPayerName(payer?.name || name),
       source: 'MANUAL'
@@ -1438,17 +1458,34 @@ export const ClinicalAgendaBoard = ({
   };
 
   const mergeBillingContextIntoDetail = (nextBillingContext: any) => {
+    const financialContextType =
+      normalizeAppointmentFinancialContextType(
+        nextBillingContext?.financialContextType ||
+          nextBillingContext?.financial_context_type ||
+          nextBillingContext?.billingContextType ||
+          nextBillingContext?.billing_context_type ||
+          nextBillingContext?.payerType ||
+          nextBillingContext?.payer_type ||
+          (nextBillingContext?.payerId || nextBillingContext?.payer_id ? 'INSURANCE' : '')
+      ) || '';
+    const usesInsuranceContext = financialContextType === 'INSURANCE';
     const appointmentPatch = {
-      payer_name_snapshot: nextBillingContext?.payerName || null,
-      payerName: nextBillingContext?.payerName || null,
-      insurance_card_number: nextBillingContext?.insuranceCardNumber || null,
-      insuranceCardNumber: nextBillingContext?.insuranceCardNumber || null,
-      insurance_plan_name: nextBillingContext?.insurancePlanName || null,
-      insurancePlanName: nextBillingContext?.insurancePlanName || null,
-      guide_number: nextBillingContext?.guideNumber || null,
-      guideNumber: nextBillingContext?.guideNumber || null,
-      authorization_code: nextBillingContext?.authorizationCode || null,
-      authorizationCode: nextBillingContext?.authorizationCode || null
+      payer_id: usesInsuranceContext ? nextBillingContext?.payerId || nextBillingContext?.payer_id || null : null,
+      payerId: usesInsuranceContext ? nextBillingContext?.payerId || nextBillingContext?.payer_id || null : null,
+      payer_name_snapshot: usesInsuranceContext ? nextBillingContext?.payerName || null : null,
+      payerName: usesInsuranceContext ? nextBillingContext?.payerName || null : null,
+      payer_type: financialContextType || null,
+      payerType: financialContextType || null,
+      financial_context_type: financialContextType || null,
+      financialContextType: financialContextType || null,
+      insurance_card_number: usesInsuranceContext ? nextBillingContext?.insuranceCardNumber || null : null,
+      insuranceCardNumber: usesInsuranceContext ? nextBillingContext?.insuranceCardNumber || null : null,
+      insurance_plan_name: usesInsuranceContext ? nextBillingContext?.insurancePlanName || null : null,
+      insurancePlanName: usesInsuranceContext ? nextBillingContext?.insurancePlanName || null : null,
+      guide_number: usesInsuranceContext ? nextBillingContext?.guideNumber || null : null,
+      guideNumber: usesInsuranceContext ? nextBillingContext?.guideNumber || null : null,
+      authorization_code: usesInsuranceContext ? nextBillingContext?.authorizationCode || null : null,
+      authorizationCode: usesInsuranceContext ? nextBillingContext?.authorizationCode || null : null
     };
     cacheRef.current.clear();
     setEventDetail((prev: any) => prev ? {
@@ -1466,15 +1503,32 @@ export const ClinicalAgendaBoard = ({
   const saveBillingContext = async (values: any) => {
     const appointmentId = String(detailEvent?.id || selectedEvent?.id || '').trim();
     if (!appointmentId) return false;
+    const financialContextType = normalizeAppointmentFinancialContextType(values.financialContextType) || 'INSURANCE';
+    const usesInsuranceContext = appointmentFinancialContextRequiresPayer(financialContextType);
+    if (usesInsuranceContext && !String(values.payerId || '').trim()) {
+      setBillingEditorState((prev) => ({
+        ...prev,
+        saving: false,
+        error: 'Selecione um pagador/convênio cadastrado ou escolha outro contexto financeiro válido.',
+        success: ''
+      }));
+      return false;
+    }
     setBillingEditorState((prev) => ({ ...prev, saving: true, error: '', success: '' }));
     const result = await dataService.updateAppointmentBillingContext(appointmentId, {
-      payerId: values.payerId || null,
-      payerName: values.payerName || null,
+      financialContextType,
+      financial_context_type: financialContextType,
+      billingContextType: financialContextType,
+      billing_context_type: financialContextType,
+      payerType: financialContextType,
+      payer_type: financialContextType,
+      payerId: usesInsuranceContext ? values.payerId || null : null,
+      payerName: usesInsuranceContext ? values.payerName || null : null,
       serviceType: values.serviceType || detailEvent.type || null,
-      insuranceCardNumber: values.insuranceCardNumber || null,
-      insurancePlanName: values.insurancePlanName || null,
-      guideNumber: values.guideNumber || null,
-      authorizationCode: values.authorizationCode || null,
+      insuranceCardNumber: usesInsuranceContext ? values.insuranceCardNumber || null : null,
+      insurancePlanName: usesInsuranceContext ? values.insurancePlanName || null : null,
+      guideNumber: usesInsuranceContext ? values.guideNumber || null : null,
+      authorizationCode: usesInsuranceContext ? values.authorizationCode || null : null,
       procedureCode: values.procedureCode || null,
       notes: values.notes || null,
       source: values.source || null
@@ -1508,6 +1562,7 @@ export const ClinicalAgendaBoard = ({
     const suggestion = (detail?.billingContext || {}).suggestion;
     if (!suggestion?.payerName && !suggestion?.payerId) return;
     await saveBillingContext({
+      financialContextType: 'INSURANCE',
       payerId: suggestion.payerId || '',
       payerName: suggestion.payerName || '',
       serviceType: suggestion.serviceType || detailEvent.type || '',
@@ -2119,16 +2174,34 @@ export const ClinicalAgendaBoard = ({
   const billingDocuments = Array.isArray(billingContext.documents) ? billingContext.documents : [];
   const pendingBillingDocuments = billingDocuments.filter((doc: any) => ['REQUIRED', 'PENDING', 'EXPIRED'].includes(String(doc.status || '').toUpperCase()));
   const billingSuggestion = billingContext.suggestion || null;
+  const billingFinancialContextType =
+    normalizeAppointmentFinancialContextType(
+      billingContext.financialContextType ||
+        billingContext.financial_context_type ||
+        billingContext.billingContextType ||
+        billingContext.billing_context_type ||
+        billingContext.payerType ||
+        billingContext.payer_type ||
+        (billingContext.payerId || billingContext.payer_id ? 'INSURANCE' : '')
+    ) || '';
+  const billingDetailIsNonInsuranceContext = Boolean(billingFinancialContextType && billingFinancialContextType !== 'INSURANCE');
+  const billingFormFinancialContextType = normalizeAppointmentFinancialContextType(billingForm.financialContextType) || 'INSURANCE';
+  const billingFormUsesInsurance = appointmentFinancialContextRequiresPayer(billingFormFinancialContextType);
+  const billingEditorFinancialContextError =
+    billingFormUsesInsurance && !String(billingForm.payerId || '').trim()
+      ? 'Selecione um pagador/convênio cadastrado ou escolha outro contexto financeiro válido.'
+      : '';
   const hasSavedBillingContext = Boolean(
     billingContext.hasContext ||
+      billingFinancialContextType ||
       billingContext.payerName ||
       billingContext.guideNumber ||
       billingContext.authorizationCode ||
       billingContext.notes
   );
-  const selectedBillingPayerKnown = Boolean(billingForm.payerId && billingPayers.some((payer: any) => String(payer?.id || '') === String(billingForm.payerId || '')));
+  const selectedBillingPayerKnown = Boolean(billingFormUsesInsurance && billingForm.payerId && billingPayers.some((payer: any) => String(payer?.id || '') === String(billingForm.payerId || '')));
   const billingSnapshotSelectValue = billingForm.payerId || '__snapshot__';
-  const billingSnapshotOptionVisible = Boolean(billingForm.payerName && !selectedBillingPayerKnown);
+  const billingSnapshotOptionVisible = Boolean(billingFormUsesInsurance && billingForm.payerName && !selectedBillingPayerKnown);
   const billingPayerSelectValue = selectedBillingPayerKnown
     ? billingForm.payerId
     : billingSnapshotOptionVisible
@@ -2416,6 +2489,50 @@ export const ClinicalAgendaBoard = ({
 
             <div className="mt-5 grid gap-3 sm:grid-cols-2">
               <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                Contexto financeiro
+                <select
+                  className={`mt-1 w-full rounded-xl border p-3 text-sm font-semibold normal-case tracking-normal outline-none ${isDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-violet-100 bg-white text-slate-700'}`}
+                  value={billingFormFinancialContextType}
+                  disabled={billingEditorState.loading || billingEditorState.saving}
+                  onChange={(event) => {
+                    const nextType = normalizeAppointmentFinancialContextType(event.target.value) || 'INSURANCE';
+                    const nextUsesInsurance = appointmentFinancialContextRequiresPayer(nextType);
+                    if (!nextUsesInsurance) setQuickPayerForm((prev) => ({ ...prev, open: false, error: '' }));
+                    setBillingForm((prev) => ({
+                      ...prev,
+                      financialContextType: nextType,
+                      payerId: nextUsesInsurance ? prev.payerId : '',
+                      payerName: nextUsesInsurance ? prev.payerName : '',
+                      insuranceCardNumber: nextUsesInsurance ? prev.insuranceCardNumber : '',
+                      insurancePlanName: nextUsesInsurance ? prev.insurancePlanName : '',
+                      guideNumber: nextUsesInsurance ? prev.guideNumber : '',
+                      authorizationCode: nextUsesInsurance ? prev.authorizationCode : '',
+                      source: 'MANUAL'
+                    }));
+                  }}
+                >
+                  {APPOINTMENT_FINANCIAL_CONTEXT_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <span className="mt-2 block text-xs font-semibold normal-case tracking-normal text-slate-400">
+                  {APPOINTMENT_FINANCIAL_CONTEXT_OPTIONS.find((option) => option.value === billingFormFinancialContextType)?.description || APPOINTMENT_FINANCIAL_CONTEXT_REQUIRED_MESSAGE}
+                </span>
+              </label>
+              {!billingFormUsesInsurance && (
+                <div className={`rounded-2xl border p-3 text-xs font-semibold ${isDark ? 'border-slate-700 bg-slate-900 text-slate-300' : 'border-slate-100 bg-slate-50 text-slate-500'}`}>
+                  Este atendimento ficará registrado como {getAppointmentFinancialContextLabel(billingFormFinancialContextType).toLowerCase()} e não tentará resolver TUSS por pagador.
+                </div>
+              )}
+              {billingEditorFinancialContextError && (
+                <div className="sm:col-span-2 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-bold text-amber-800">
+                  {billingEditorFinancialContextError}
+                </div>
+              )}
+              {billingFormUsesInsurance && (
+              <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
                 Pagador/convênio
                 <select
                   className={`mt-1 w-full rounded-xl border p-3 text-sm font-semibold normal-case tracking-normal outline-none ${isDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-violet-100 bg-white text-slate-700'}`}
@@ -2455,7 +2572,8 @@ export const ClinicalAgendaBoard = ({
                   <Plus size={13} /> Criar pagador
                 </button>
               </label>
-              {quickPayerForm.open && (
+              )}
+              {billingFormUsesInsurance && quickPayerForm.open && (
                 <div className={`sm:col-span-2 rounded-2xl border p-3 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-violet-100 bg-violet-50/40'}`}>
                   <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_180px]">
                     <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
@@ -2511,6 +2629,8 @@ export const ClinicalAgendaBoard = ({
                   placeholder="Tipo de atendimento"
                 />
               </label>
+              {billingFormUsesInsurance && (
+              <>
               <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
                 Número da carteirinha
                 <input
@@ -2547,6 +2667,8 @@ export const ClinicalAgendaBoard = ({
                   placeholder="Código informado pelo pagador"
                 />
               </label>
+              </>
+              )}
               <label className="sm:col-span-2 text-[10px] font-bold uppercase tracking-widest text-slate-500">
                 Observações administrativas
                 <textarea
@@ -2562,7 +2684,7 @@ export const ClinicalAgendaBoard = ({
               <button type="button" disabled={billingEditorState.saving} onClick={() => setBillingEditorOpen(false)} className={`rounded-2xl border px-4 py-3 text-sm font-bold disabled:opacity-60 ${isDark ? 'border-slate-700 text-slate-200 hover:bg-slate-800' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
                 Cancelar
               </button>
-              <button type="button" disabled={billingEditorState.saving} onClick={submitBillingEditor} className="rounded-2xl bg-[#7a32fc] px-4 py-3 text-sm font-bold text-white shadow-lg shadow-violet-500/20 disabled:opacity-60">
+              <button type="button" disabled={billingEditorState.saving || Boolean(billingEditorFinancialContextError)} onClick={submitBillingEditor} className="rounded-2xl bg-[#7a32fc] px-4 py-3 text-sm font-bold text-white shadow-lg shadow-violet-500/20 disabled:opacity-60">
                 {billingEditorState.saving ? 'Salvando...' : billingContext.hasContext ? 'Salvar pagador' : 'Salvar na consulta'}
               </button>
             </div>
@@ -2637,15 +2759,19 @@ export const ClinicalAgendaBoard = ({
                   <div className="mt-2 grid gap-2 text-sm sm:grid-cols-2">
                     <p>
                       <span className="font-semibold">
-                        {hasSavedBillingContext ? 'Pagador:' : billingSuggestion?.payerName ? 'Sugestao do paciente:' : 'Pagador:'}
+                        {billingDetailIsNonInsuranceContext ? 'Contexto:' : hasSavedBillingContext ? 'Pagador:' : billingSuggestion?.payerName ? 'Sugestao do paciente:' : 'Pagador:'}
                       </span>{' '}
-                      {billingContext.payerName || detailEvent.payer_name_snapshot || billingSuggestion?.payerName || 'nao informado'}
+                      {billingDetailIsNonInsuranceContext ? getAppointmentFinancialContextLabel(billingFinancialContextType) : billingContext.payerName || detailEvent.payer_name_snapshot || billingSuggestion?.payerName || 'nao informado'}
                     </p>
                     <p><span className="font-semibold">Serviço:</span> {billingContext.serviceType || detailEvent.service_type || detailEvent.type || 'ABA'}</p>
-                    <p><span className="font-semibold">Carteirinha:</span> {billingContext.insuranceCardNumber || detailEvent.insurance_card_number || 'pendente'}</p>
-                    <p><span className="font-semibold">Guia:</span> {billingContext.guideNumber || detailEvent.guide_number || 'pendente'}</p>
-                    <p><span className="font-semibold">Autorização:</span> {billingContext.authorizationCode || detailEvent.authorization_code || 'pendente'}</p>
-                    <p><span className="font-semibold">Documentos:</span> {pendingBillingDocuments.length > 0 ? `${pendingBillingDocuments.length} pendente(s)` : 'Sem pendência extra'}</p>
+                    {!billingDetailIsNonInsuranceContext && (
+                      <>
+                        <p><span className="font-semibold">Carteirinha:</span> {billingContext.insuranceCardNumber || detailEvent.insurance_card_number || 'pendente'}</p>
+                        <p><span className="font-semibold">Guia:</span> {billingContext.guideNumber || detailEvent.guide_number || 'pendente'}</p>
+                        <p><span className="font-semibold">Autorização:</span> {billingContext.authorizationCode || detailEvent.authorization_code || 'pendente'}</p>
+                        <p><span className="font-semibold">Documentos:</span> {pendingBillingDocuments.length > 0 ? `${pendingBillingDocuments.length} pendente(s)` : 'Sem pendência extra'}</p>
+                      </>
+                    )}
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -2656,7 +2782,7 @@ export const ClinicalAgendaBoard = ({
                   )}
                   {canEditBillingContext && (
                     <button type="button" onClick={() => openBillingEditor()} className={`rounded-2xl px-3 py-2 text-xs font-bold ${hasSavedBillingContext ? 'bg-[#7a32fc] text-white' : 'border border-violet-200 bg-white text-[#7a32fc]'}`}>
-                      {hasSavedBillingContext ? 'Editar pagador' : 'Definir pagador'}
+                      {billingDetailIsNonInsuranceContext ? 'Editar contexto' : hasSavedBillingContext ? 'Editar pagador' : 'Definir pagador'}
                     </button>
                   )}
                   <button type="button" onClick={() => openClosureChecklist(detailEvent)} className={`rounded-2xl border px-3 py-2 text-xs font-bold ${isDark ? 'border-slate-700 text-slate-200' : 'border-violet-200 bg-white text-[#7a32fc]'}`}>
