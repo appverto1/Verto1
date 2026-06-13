@@ -7,6 +7,7 @@ import {
 import {
   buildMonthlyConferenceExportRows,
   buildMonthlyConferenceSummary,
+  classifyConferencePendingDetails,
   classifyConferencePendingKinds,
   rowsToCsv
 } from '../src/services/monthlyConferenceEngine';
@@ -79,6 +80,223 @@ test('engine resolve item pronto e pendencias sem hardcodar codigo TUSS', () => 
   assert.ok(pending.pendingReasons.includes('missing_tuss_mapping'));
 });
 
+test('cenario controlado ABA Amil resolve procedimento TUSS e valor sem afetar pendencias nao relacionadas', () => {
+  const appointment = {
+    id: 'appointment-amil-aba',
+    scheduled_minutes: 50,
+    service_type: 'ABA',
+    approach: 'ABA'
+  };
+  const billingContext = {
+    id: 'billing-context-amil',
+    payer_id: 'amil-payer',
+    service_type: 'ABA',
+    insurance_card_number: 'AMIL-123',
+    guide_number: 'GUIA-AMIL',
+    authorization_code: 'AUTH-AMIL'
+  };
+  const patientFinancialPlan = {
+    id: 'plan-amil',
+    payer_id: 'amil-payer',
+    name: 'Plano Amil teste',
+    insurance_card_number: 'AMIL-123'
+  };
+  const payer = { id: 'amil-payer', name: 'Amil' };
+
+  const before = resolveTussBillingItem({
+    appointment,
+    billingContext,
+    patientFinancialPlan,
+    payer,
+    serviceCatalog: null,
+    mapping: null,
+    tussCode: null
+  });
+  assert.equal(before.ready, false);
+  assert.ok(before.pendingReasons.includes('missing_service_catalog'));
+  assert.ok(before.pendingReasons.includes('missing_tuss_mapping'));
+  assert.ok(before.pendingReasons.includes('missing_amount'));
+
+  const beforeKinds = classifyConferencePendingKinds({
+    patient_name: 'Pedro Henrique',
+    professional_name: 'Mateus',
+    service_type: 'ABA',
+    payer_name: 'Amil',
+    financial_plan_name: 'Plano Amil teste',
+    insurance_card_number: 'AMIL-123',
+    readiness_status: 'PENDING',
+    internal_procedure_name: before.internalProcedureName,
+    tuss_code: before.tussCode,
+    billing_amount_cents: before.amountCents,
+    tuss_pending_reason_codes: before.pendingReasons
+  } as any);
+  assert.ok(beforeKinds.includes('Procedimento'));
+  assert.ok(beforeKinds.includes('TUSS'));
+  assert.ok(beforeKinds.includes('Valor'));
+
+  const serviceCatalog = {
+    id: 'service-aba-individual',
+    name: 'Sessao ABA individual',
+    internal_code: 'ABA-IND',
+    service_type: 'ABA',
+    billing_unit: 'session',
+    default_quantity: 1,
+    default_duration_minutes: 50
+  };
+  const tussCode = {
+    id: 'tuss-demo-aba',
+    code: 'TESTE-ABA',
+    description: 'Codigo TUSS de teste controlado',
+    version: 'demo-2026'
+  };
+  const mapping = {
+    id: 'mapping-amil-aba',
+    payer_id: 'amil-payer',
+    service_catalog_id: 'service-aba-individual',
+    tuss_code_id: 'tuss-demo-aba',
+    guide_type: 'sp_sadt',
+    billing_unit: 'session',
+    quantity_rule: 'per_session',
+    default_quantity: 1,
+    amount_cents: 12000,
+    requires_authorization: false,
+    requires_guide: false,
+    requires_signature: false,
+    requires_report: false,
+    requires_professional_registry: false,
+    requires_patient_document: true
+  };
+
+  const after = resolveTussBillingItem({
+    appointment,
+    billingContext,
+    patientFinancialPlan,
+    payer,
+    serviceCatalog,
+    mapping,
+    tussCode
+  });
+  assert.equal(after.ready, true);
+  assert.equal(after.internalProcedureName, 'Sessao ABA individual');
+  assert.equal(after.tussCode, 'TESTE-ABA');
+  assert.equal(after.tussDescription, 'Codigo TUSS de teste controlado');
+  assert.equal(after.billingUnit, 'session');
+  assert.equal(after.quantity, 1);
+  assert.equal(after.amountCents, 12000);
+  assert.ok(!after.pendingReasons.includes('missing_service_catalog'));
+  assert.ok(!after.pendingReasons.includes('missing_tuss_mapping'));
+  assert.ok(!after.pendingReasons.includes('missing_amount'));
+
+  const afterKinds = classifyConferencePendingKinds({
+    patient_name: 'Pedro Henrique',
+    professional_name: 'Mateus',
+    service_type: 'ABA',
+    payer_name: 'Amil',
+    financial_plan_name: 'Plano Amil teste',
+    insurance_card_number: 'AMIL-123',
+    readiness_status: 'READY',
+    internal_procedure_name: after.internalProcedureName,
+    tuss_code: after.tussCode,
+    billing_amount_cents: after.amountCents,
+    tuss_pending_reason_codes: after.pendingReasons
+  } as any);
+  assert.ok(!afterKinds.includes('Procedimento'));
+  assert.ok(!afterKinds.includes('TUSS'));
+  assert.ok(!afterKinds.includes('Valor'));
+
+  const withoutPayer = resolveTussBillingItem({
+    appointment,
+    billingContext: { service_type: 'ABA' },
+    patientFinancialPlan: null,
+    serviceCatalog,
+    mapping,
+    tussCode
+  });
+  assert.ok(withoutPayer.pendingReasons.includes('missing_payer'));
+  assert.ok(withoutPayer.pendingReasons.includes('missing_financial_plan'));
+  const withoutPayerKinds = classifyConferencePendingKinds({
+    patient_name: 'Pedro Henrique',
+    professional_name: 'Mateus',
+    service_type: 'ABA',
+    payer_name: '',
+    financial_plan_name: '',
+    readiness_status: 'PENDING',
+    internal_procedure_name: after.internalProcedureName,
+    tuss_code: after.tussCode,
+    billing_amount_cents: after.amountCents,
+    tuss_pending_reason_codes: withoutPayer.pendingReasons
+  } as any);
+  assert.ok(withoutPayerKinds.includes('Pagador'));
+  assert.ok(withoutPayerKinds.includes('Plano financeiro'));
+  assert.ok(!withoutPayerKinds.includes('Procedimento'));
+  assert.ok(!withoutPayerKinds.includes('TUSS'));
+
+  const nonBillableDetails = classifyConferencePendingDetails({
+    patient_name: 'Pedro Henrique',
+    professional_name: 'Mateus',
+    service_type: '',
+    payer_name: '',
+    financial_plan_name: '',
+    readiness_status: 'NOT_BILLABLE',
+    issues: ['Tipo de sessao ou especialidade nao informado'],
+    tuss_pending_reason_codes: before.pendingReasons
+  } as any);
+  assert.deepEqual(nonBillableDetails.blocking, []);
+  assert.ok(nonBillableDetails.informational.includes('Nao aplicavel ao faturamento'));
+
+  const registryNotRequired = resolveTussBillingItem({
+    appointment,
+    billingContext,
+    patientFinancialPlan,
+    payer,
+    serviceCatalog,
+    mapping: { ...mapping, requires_professional_registry: false },
+    tussCode,
+    professional: {}
+  });
+  assert.ok(!registryNotRequired.pendingReasons.includes('missing_professional_registry'));
+
+  const registryRequired = resolveTussBillingItem({
+    appointment,
+    billingContext,
+    patientFinancialPlan,
+    payer,
+    serviceCatalog,
+    mapping: { ...mapping, requires_professional_registry: true },
+    tussCode,
+    professional: {}
+  });
+  assert.ok(registryRequired.pendingReasons.includes('missing_professional_registry'));
+
+  const registryConfigured = resolveTussBillingItem({
+    appointment,
+    billingContext,
+    patientFinancialPlan,
+    payer,
+    serviceCatalog,
+    mapping: { ...mapping, requires_professional_registry: true },
+    tussCode,
+    professional: { professional_registry: 'CRP 00/00000' }
+  });
+  assert.ok(!registryConfigured.pendingReasons.includes('missing_professional_registry'));
+
+  const registryVisualOnlyKinds = classifyConferencePendingKinds({
+    patient_name: 'Pedro Henrique',
+    professional_name: 'Mateus',
+    professional_registry: '',
+    service_type: 'ABA',
+    payer_name: 'Amil',
+    financial_plan_name: 'Plano Amil teste',
+    insurance_card_number: 'AMIL-123',
+    readiness_status: 'READY',
+    internal_procedure_name: after.internalProcedureName,
+    tuss_code: after.tussCode,
+    billing_amount_cents: after.amountCents,
+    tuss_pending_reason_codes: []
+  } as any);
+  assert.ok(!registryVisualOnlyKinds.includes('Registro profissional'));
+});
+
 test('backend tem CRUD TUSS-ready action-driven e resolve ao salvar contexto financeiro', () => {
   for (const route of [
     "app.get('/api/admin/tuss/services'",
@@ -99,6 +317,8 @@ test('backend tem CRUD TUSS-ready action-driven e resolve ao salvar contexto fin
   assert.match(serverCode, /const billingItem: any = null|let billingItem: any = null/);
   assert.match(serverCode, /appointment_billing_items/);
   assert.match(serverCode, /onConflict: 'organization_id,appointment_id'/);
+  assert.match(serverCode, /affectedItems: billingItems/);
+  assert.match(serverCode, /updatedCount: counts\.resolved/);
   const billingRoute = serverCode.slice(
     serverCode.indexOf("app.patch('/api/appointments/:appointmentId/billing-context'"),
     serverCode.indexOf("app.post('/api/appointments/:appointmentId/billing-item/resolve'")
@@ -140,6 +360,8 @@ test('frontend administra procedimentos codigos e mapeamentos sem F5', () => {
   assert.match(payerPanelCode, /setTussServices/);
   assert.match(payerPanelCode, /setTussCodes/);
   assert.match(payerPanelCode, /upsertTussMappingInState/);
+  assert.match(payerPanelCode, /result\.affectedItems/);
+  assert.match(payerPanelCode, /result\.updatedCount/);
 });
 
 test('fechamento e conferencia exibem e filtram dados TUSS-ready', () => {

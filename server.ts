@@ -31673,7 +31673,14 @@ async function startServer() {
       });
       const appointmentIds = Array.from(new Set(appointmentRows.map((row: any) => sanitizeString(row?.id, 120)).filter((id: string) => isUuid(id))));
       if (appointmentIds.length === 0) {
-        return sendNoStoreJson(res, { success: true, data: [], counts: { found: 0, resolved: 0, closureUpdated: 0, skipped: 0, errors: 0 } });
+        return sendNoStoreJson(res, {
+          success: true,
+          data: [],
+          affectedItems: [],
+          affectedAppointmentIds: [],
+          updatedCount: 0,
+          counts: { found: 0, resolved: 0, closureUpdated: 0, skipped: 0, errors: 0 }
+        });
       }
       const contextResult = await supabase
         .from('appointment_billing_contexts')
@@ -31747,6 +31754,9 @@ async function startServer() {
         success: counts.errors < Math.max(1, counts.found),
         partialFailure: counts.errors > 0,
         data: billingItems,
+        affectedItems: billingItems,
+        affectedAppointmentIds: affected.map((appointment: any) => sanitizeString(appointment?.id, 120)).filter((id: string) => isUuid(id)),
+        updatedCount: counts.resolved,
         counts
       });
     } catch (error: any) {

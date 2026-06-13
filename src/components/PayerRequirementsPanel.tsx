@@ -520,9 +520,10 @@ export function PayerRequirementsPanel() {
         setError(result?.error || "NÃ£o foi possÃ­vel revalidar os atendimentos afetados agora.");
         return;
       }
-      const counts = result.counts || result.data || {};
-      const resolved = Number(counts.resolved || counts.updated || 0);
-      const found = Number(counts.found || 0);
+      const counts = result.counts || {};
+      const affectedItems = Array.isArray(result.affectedItems) ? result.affectedItems : [];
+      const found = Number(counts.found || affectedItems.length || 0);
+      const resolved = Number(result.updatedCount ?? counts.resolved ?? counts.updated ?? 0);
       setTussActionInfo(`${found} atendimento(s) afetado(s), ${resolved} resolvido(s) para o perÃ­odo atual.`);
     } finally {
       setSaving(false);
