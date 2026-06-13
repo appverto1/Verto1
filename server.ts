@@ -32250,10 +32250,6 @@ async function startServer() {
         return sendNoStoreJson(res, emptyClosurePayload('closure_schema_unavailable'));
       }
 
-      const patientIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row.patient_id, 120)).filter((id: string) => isUuid(id))));
-      const professionalIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row.professional_id, 120)).filter((id: string) => isUuid(id))));
-      const appointmentIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row.appointment_id, 120)).filter((id: string) => isUuid(id))));
-
       let totalsRows: any[] = [];
       try {
         if (canApplyRequestedFilters(activeVariant)) {
@@ -32273,53 +32269,6 @@ async function startServer() {
         console.warn('[Closure] totals unavailable:', totalsError?.message || String(totalsError));
       }
 
-      const [patientsResult, professionalsResult] = await Promise.all([
-        patientIds.length > 0
-          ? supabase.from('patients').select('id, name').eq('clinic_id', clinicId).in('id', patientIds).limit(patientIds.length)
-          : Promise.resolve({ data: [], error: null } as any),
-        professionalIds.length > 0
-          ? supabase.from('users').select('id, name, email').in('id', professionalIds).limit(professionalIds.length)
-          : Promise.resolve({ data: [], error: null } as any)
-      ]);
-      if (patientsResult.error) console.warn('[Closure] patient labels unavailable:', patientsResult.error?.message || String(patientsResult.error));
-      if (professionalsResult.error) console.warn('[Closure] professional labels unavailable:', professionalsResult.error?.message || String(professionalsResult.error));
-      let billingItemsBundle = await fetchAppointmentBillingItemsBundle(clinicId, appointmentIds);
-
-      const patientNames = new Map<string, string>((patientsResult.error ? [] : patientsResult.data || []).map((row: any) => [sanitizeString(row.id, 120), sanitizeString(row.name, 180) || 'Paciente']));
-      const professionalNames = new Map<string, string>((professionalsResult.error ? [] : professionalsResult.data || []).map((row: any) => [sanitizeString(row.id, 120), sanitizeString(row.name || row.email, 180) || 'Equipe']));
-      const financialPlansResult = patientIds.length > 0
-        ? await supabase
-            .from('patient_financial_plans')
-            .select(PATIENT_FINANCIAL_PLAN_SELECT)
-            .eq('organization_id', clinicId)
-            .in('patient_id', patientIds)
-            .eq('status', 'ACTIVE')
-            .limit(Math.min(patientIds.length * 8, 400))
-        : { data: [], error: null } as any;
-      if (financialPlansResult.error && !hasMissingFinancialSchema(financialPlansResult.error)) throw financialPlansResult.error;
-      const financialPlansByPatient = new Map<string, any[]>();
-      (financialPlansResult.error ? [] : financialPlansResult.data || []).forEach((plan: any) => {
-        const patientId = sanitizeString(plan?.patient_id, 120);
-        if (!patientId) return;
-        financialPlansByPatient.set(patientId, [...(financialPlansByPatient.get(patientId) || []), plan]);
-      });
-      const financialPlanNameForClosureRow = (row: any) => {
-        const plans = financialPlansByPatient.get(sanitizeString(row?.patient_id, 120)) || [];
-        const serviceType = sanitizeString(row?.service_type, 120);
-        const payerId = sanitizeString(row?.payer_id, 120);
-        const selected =
-          plans.find((plan: any) => payerId && sanitizeString(plan?.payer_id, 120) === payerId && financialPlanMatchesAppointmentService(plan, serviceType)) ||
-          plans.find((plan: any) => financialPlanMatchesAppointmentService(plan, serviceType)) ||
-          plans[0] ||
-          null;
-        return sanitizeString(
-          selected?.insurance_plan_name ||
-            selected?.service_name_snapshot ||
-            selected?.custom_service_name ||
-            selected?.payer_name_snapshot,
-          180
-        ) || null;
-      };
       const totals = {
         ready: totalsRows.filter((row: any) => row.readiness_status === 'READY').length,
         pending: totalsRows.filter((row: any) => row.readiness_status === 'PENDING').length,
@@ -32334,14 +32283,10 @@ async function startServer() {
         blockingIssues: totalsRows.reduce((sum: number, row: any) => sum + (Number(row.blocking_issues_count) || 0), 0),
         warningIssues: totalsRows.reduce((sum: number, row: any) => sum + (Number(row.warning_issues_count) || 0), 0)
       };
-      const closureRows = filterHydratedRowsByTussMissingKind(rows.map((row: any) => ({
-        ...normalizeClosureListRow(row, patientNames, professionalNames),
-        financial_plan_name: financialPlanNameForClosureRow(row),
-        ...buildTussConferenceFields(
-          billingItemsBundle.itemsByAppointment.get(sanitizeString(row.appointment_id, 120)),
-          billingItemsBundle
-        )
-      })), missingKind);
+      const closureRows = filterHydratedRowsByTussMissingKind(
+        await hydrateConferenceRows(rows, clinicId, req.session.user),
+        missingKind
+      );
       return sendNoStoreJson(res, {
         success: true,
         data: closureRows,
@@ -32619,12 +32564,11 @@ async function startServer() {
       return rows;
     }
     return (Array.isArray(rows) ? rows : []).filter((row: any) => {
-      const pendingCodes = Array.isArray(row?.tuss_pending_reason_codes) ? row.tuss_pending_reason_codes : [];
-      if (kind === 'procedure' || kind === 'procedimento') return !sanitizeString(row?.internal_procedure_name, 180) || pendingCodes.includes('missing_service_catalog');
-      if (kind === 'tuss') return !sanitizeString(row?.tuss_code, 80) || pendingCodes.includes('missing_tuss_mapping') || pendingCodes.includes('missing_tuss_code');
-      if (kind === 'amount' || kind === 'valor') return !Number(row?.billing_amount_cents || row?.expected_amount_cents || 0) || pendingCodes.includes('missing_amount');
-      if (kind === 'professional_registry' || kind === 'registro') return pendingCodes.includes('missing_professional_registry');
-      if (kind === 'card' || kind === 'carteirinha') return !sanitizeString(row?.insurance_card_number, 120) || pendingCodes.includes('missing_card_number');
+      if (kind === 'procedure' || kind === 'procedimento') return !sanitizeString(row?.internal_procedure_name || row?.internal_procedure_code, 180);
+      if (kind === 'tuss') return !sanitizeString(row?.tuss_code, 80);
+      if (kind === 'amount' || kind === 'valor') return !Number(row?.billing_amount_cents || row?.expected_amount_cents || 0);
+      if (kind === 'professional_registry' || kind === 'registro') return !sanitizeString(row?.professional_registry, 120);
+      if (kind === 'card' || kind === 'carteirinha') return !sanitizeString(row?.insurance_card_number, 120);
       return true;
     });
   };
@@ -32745,7 +32689,7 @@ async function startServer() {
         ? supabase.from('patients').select('id, name, clinic_id, insurance_name, insurance_card_number').eq('clinic_id', clinicId).in('id', patientIds).limit(patientIds.length)
         : Promise.resolve({ data: [], error: null } as any),
       professionalIds.length > 0
-        ? supabase.from('users').select('id, name, email, clinic_id, crp, council_number, council').in('id', professionalIds).limit(professionalIds.length)
+        ? supabase.from('users').select('id, name, email, clinic_id, crp, council_number, council, professional_registry, registry').in('id', professionalIds).limit(professionalIds.length)
         : Promise.resolve({ data: [], error: null } as any)
     ]);
     let safePatients = patientsResult.data || [];

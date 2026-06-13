@@ -102,6 +102,12 @@ test('fechamento operacional evita cache stale depois de revalidar', () => {
   assert.match(serverCode, /app\.use\(noStoreOperationalDynamicRoutes\)/);
   assert.match(serverCode, /app\.get\('\/api\/closure\/appointments', noStoreDynamicResponse, checkAuth, requireRoles\('coordinator', 'therapist', 'admin', 'owner'\)/);
   assert.match(serverCode, /return sendNoStoreJson\(res, \{[\s\S]*?data: closureRows/);
+  const closureListSlice = serverCode.slice(serverCode.indexOf("app.get('/api/closure/appointments'"), serverCode.indexOf("app.post('/api/closure/revalidate-period'"));
+  assert.match(closureListSlice, /await hydrateConferenceRows\(rows, clinicId, req\.session\.user\)/);
+  assert.doesNotMatch(closureListSlice, /financialPlanNameForClosureRow/);
+  const missingFilterSlice = serverCode.slice(serverCode.indexOf('const filterHydratedRowsByTussMissingKind'), serverCode.indexOf('const CONFERENCE_STATUS_LABELS'));
+  assert.match(missingFilterSlice, /kind === 'card'[\s\S]*?return !sanitizeString\(row\?\.insurance_card_number, 120\)/);
+  assert.doesNotMatch(missingFilterSlice, /missing_card_number|missing_service_catalog|missing_tuss_mapping|missing_tuss_code|missing_amount/);
   assert.match(dataServiceCode, /async function getNoStoreAuthHeaders/);
   assert.match(dataServiceCode, /function endpointWithCacheBust/);
   assert.match(dataServiceCode, /async function fetchNoStoreJsonWithRetry/);

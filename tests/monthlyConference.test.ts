@@ -187,7 +187,8 @@ test('API da conferencia tem auth, roles, paginacao, filtros e select explicito'
   const conferenceSlice = serverCode.slice(serverCode.indexOf("app.get('/api/conference/monthly'"), serverCode.indexOf('const fetchFutureAppointmentsForMaintenance'));
   assert.doesNotMatch(conferenceSlice, /\.select\('\*'\)/);
   assert.doesNotMatch(conferenceSlice, /aba_recent_session_events|aba_trials|aba_behavior_events/);
-  assert.match(serverCode, /kind === 'professional_registry'[\s\S]*?return pendingCodes\.includes\('missing_professional_registry'\)/);
+  assert.match(serverCode, /kind === 'professional_registry'[\s\S]*?return !sanitizeString\(row\?\.professional_registry, 120\)/);
+  assert.match(serverCode, /kind === 'card'[\s\S]*?return !sanitizeString\(row\?\.insurance_card_number, 120\)/);
 });
 
 test('conferencia revalida periodo antes de listar em tela e antes de exportar CSV', () => {
