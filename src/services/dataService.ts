@@ -2859,7 +2859,7 @@ export const dataService = {
   },
 
   async revalidateTissPreGuide(appointmentId: string) {
-    const endpoint = `/api/tiss/pre-guides/${encodeURIComponent(String(appointmentId))}/revalidate`;
+    const endpoint = `/api/appointments/${encodeURIComponent(String(appointmentId))}/tiss-pre-guide/revalidate`;
     try {
       const response = await fetchClinical(endpoint, {
         method: 'POST',
@@ -2877,6 +2877,35 @@ export const dataService = {
       return await safeNoStoreJson(response, 'A revalidação da Pré-guia TISS voltou do cache. Tente novamente.');
     } catch {
       return { success: false, error: 'Não foi possível revalidar a Pré-guia TISS agora.' };
+    }
+  },
+
+  async revalidateTissPreGuidePeriod(options: any = {}) {
+    try {
+      const response = await fetchClinical('/api/tiss/pre-guides/revalidate-period', {
+        method: 'POST',
+        cache: 'no-store',
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({
+          from: options.from,
+          to: options.to,
+          payerId: options.payerId || undefined,
+          patientId: options.patientId || undefined,
+          professionalId: options.professionalId || undefined,
+          onlyBillable: true,
+          limit: normalizeListLimit(options.limit, 240, 500)
+        })
+      }, {
+        helperName: 'revalidateTissPreGuidePeriod',
+        operation: 'write',
+        table: 'appointment_tiss_pre_guides,appointment_billing_items,appointment_closure_checks',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeNoStoreJson(response, 'A revalidação das Pré-guias TISS voltou do cache. Tente novamente.');
+    } catch {
+      return { success: false, error: 'Não foi possível gerar ou revalidar as Pré-guias TISS do período.' };
     }
   },
 

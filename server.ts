@@ -109,6 +109,7 @@ import {
   resolveTussBillingItem
 } from './src/services/tussBillingResolutionEngine';
 import {
+  evaluateTissPreGuideEligibility,
   validateTissPreGuide
 } from './src/services/tissPreGuideEngine';
 import {
@@ -31958,9 +31959,26 @@ async function startServer() {
       .select(APPOINTMENT_TISS_PRE_GUIDE_SELECT)
       .maybeSingle();
     if (persisted.error) {
-      if (hasMissingFinancialSchema(persisted.error) || isMissingRelationError(persisted.error)) {
-        return { ok: true, schemaAvailable: false, data: null, validation };
+      const missingColumn = extractMissingColumnName(persisted.error);
+      if (missingColumn || isMissingRelationError(persisted.error)) {
+        console.warn('[TissPreGuide] persistence schema unavailable:', {
+          appointmentId,
+          code: sanitizeString(persisted.error?.code, 40) || null,
+          missingColumn
+        });
+        return {
+          ok: false,
+          schemaAvailable: false,
+          data: null,
+          validation,
+          errorCode: 'TISS_PRE_GUIDE_SCHEMA_UNAVAILABLE'
+        };
       }
+      console.warn('[TissPreGuide] persistence failed:', {
+        appointmentId,
+        code: sanitizeString(persisted.error?.code, 40) || null,
+        message: sanitizeTextField(persisted.error?.message, 300) || 'Unknown persistence error'
+      });
       throw persisted.error;
     }
     return {
@@ -32125,6 +32143,12 @@ async function startServer() {
       billingItem,
       billingContext: serializedContext,
       tissPreGuide: tissPreGuide.data || null,
+      tissPreGuideResult: {
+        ok: Boolean(tissPreGuide.ok && tissPreGuide.data),
+        schemaAvailable: tissPreGuide.schemaAvailable !== false,
+        status: tissPreGuide.data?.status || tissPreGuide.validation?.status || null,
+        errorCode: tissPreGuide.errorCode || null
+      },
       message,
       resolution: {
         procedureResolved: Boolean(billingItem?.internalProcedureName),
@@ -32164,6 +32188,50 @@ async function startServer() {
     missing_tuss: ['PROCEDURE_MISSING', 'TUSS_CODE_MISSING', 'TUSS_DESCRIPTION_MISSING'],
     missing_guide_authorization: ['GUIDE_MISSING', 'AUTHORIZATION_MISSING', 'AUTHORIZATION_EXPIRED'],
     missing_amount: ['AMOUNT_MISSING']
+  };
+
+  const handleTissPreGuideRevalidation = async (req: any, res: any) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 16 * 1024, 'Revalidação da Pré-guia TISS')) return;
+      const appointmentId = sanitizeString(req.params.appointmentId, 120);
+      if (!isUuid(appointmentId)) return res.status(400).json(payerSafeError(400));
+      const generated = await revalidateAppointmentBillingForAppointment({
+        appointmentId,
+        user: req.session.user,
+        source: 'tiss_pre_guide_manual_revalidation',
+        forceClosure: true
+      });
+      if (!generated.ok) return res.status((generated as any).status || 404).json(payerSafeError((generated as any).status || 404));
+      const preGuideResult = (generated as any).tissPreGuideResult || null;
+      const preGuide = (generated as any).tissPreGuide || null;
+      if (!preGuide || preGuideResult?.ok === false) {
+        return res.status(503).json({
+          success: false,
+          error: 'A Pré-guia TISS não pôde ser materializada. Verifique a migration e o cache de schema do banco.',
+          code: preGuideResult?.errorCode || 'TISS_PRE_GUIDE_NOT_MATERIALIZED'
+        });
+      }
+      return sendNoStoreJson(res, {
+        success: true,
+        data: preGuide,
+        appointment: (generated as any).data || null,
+        billingItem: (generated as any).billingItem || null,
+        billingContext: (generated as any).billingContext || null,
+        tissPreGuideStatus: preGuide.status || null,
+        message: preGuide.status === 'valid'
+          ? 'Pré-guia TISS revalidada e pronta para conferência interna.'
+          : preGuide.status === 'not_applicable'
+            ? 'Atendimento não aplicável à Pré-guia TISS.'
+            : 'Pré-guia TISS revalidada com pendências.'
+      });
+    } catch (error: any) {
+      console.warn('[TissPreGuide] revalidation failed:', {
+        appointmentId: sanitizeString(req.params?.appointmentId, 120) || null,
+        code: sanitizeString(error?.code, 40) || null,
+        message: sanitizeTextField(error?.message, 300) || String(error)
+      });
+      return res.status(500).json({ success: false, error: 'Não foi possível revalidar a Pré-guia TISS agora.' });
+    }
   };
 
   app.get('/api/admin/tiss/provider-profile', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
@@ -32432,6 +32500,177 @@ async function startServer() {
     }
   });
 
+  app.post('/api/tiss/pre-guides/revalidate-period', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 24 * 1024, 'Revalidação de Pré-guias TISS do período')) return;
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
+      const range = parseClosureDateRange(req.body || {});
+      if (!range.ok) return res.status(400).json({ success: false, error: 'Período inválido para revalidar Pré-guias TISS.' });
+      const payerId = sanitizeString(req.body?.payerId || req.body?.payer_id, 120);
+      const patientId = sanitizeString(req.body?.patientId || req.body?.patient_id, 120);
+      const professionalId = sanitizeString(req.body?.professionalId || req.body?.professional_id, 120);
+      if ((payerId && !isUuid(payerId)) || (patientId && !isUuid(patientId)) || (professionalId && !isUuid(professionalId))) {
+        return res.status(400).json({ success: false, error: 'Filtros inválidos para revalidar Pré-guias TISS.' });
+      }
+      const appointmentRows = await fetchClosurePeriodAppointmentRows({
+        clinicId: organizationId,
+        user: req.session.user,
+        fromIso: range.fromIso,
+        toIso: range.toIso,
+        limit: parseBoundedListLimit(req.body?.limit, 240, 500)
+      });
+      const scopedAppointments = appointmentRows.filter((appointment: any) => {
+        if (patientId && sanitizeString(appointment?.patient_id, 120) !== patientId) return false;
+        const rowProfessionalId = sanitizeString(appointment?.therapist_id || appointment?.professional_id, 120);
+        if (professionalId && rowProfessionalId !== professionalId) return false;
+        return true;
+      });
+      const appointmentIds = Array.from(new Set(
+        scopedAppointments
+          .map((appointment: any) => sanitizeString(appointment?.id, 120))
+          .filter((appointmentId: string) => isUuid(appointmentId))
+      ));
+      const [contextResult, existingPreGuideResult, billingItemResult] = appointmentIds.length > 0
+        ? await Promise.all([
+            supabase
+              .from('appointment_billing_contexts')
+              .select(APPOINTMENT_BILLING_CONTEXT_SELECT)
+              .eq('organization_id', organizationId)
+              .in('appointment_id', appointmentIds)
+              .limit(appointmentIds.length),
+            supabase
+              .from('appointment_tiss_pre_guides')
+              .select('appointment_id,status')
+              .eq('organization_id', organizationId)
+              .in('appointment_id', appointmentIds)
+              .limit(appointmentIds.length),
+            supabase
+              .from('appointment_billing_items')
+              .select('id,appointment_id,service_catalog_id,tuss_code_id,amount_cents')
+              .eq('organization_id', organizationId)
+              .in('appointment_id', appointmentIds)
+              .limit(appointmentIds.length)
+          ])
+        : [
+            { data: [], error: null },
+            { data: [], error: null },
+            { data: [], error: null }
+          ] as any;
+      if (contextResult.error && !hasMissingFinancialSchema(contextResult.error) && !isMissingRelationError(contextResult.error)) throw contextResult.error;
+      if (existingPreGuideResult.error && !hasMissingFinancialSchema(existingPreGuideResult.error) && !isMissingRelationError(existingPreGuideResult.error)) throw existingPreGuideResult.error;
+      if (billingItemResult.error && !hasMissingFinancialSchema(billingItemResult.error) && !isMissingRelationError(billingItemResult.error)) throw billingItemResult.error;
+
+      const contextsByAppointment = new Map<string, any>(
+        (contextResult.error ? [] : contextResult.data || [])
+          .map((row: any) => [sanitizeString(row?.appointment_id, 120), mergeBillingContextMetadata(row)])
+      );
+      const existingPreGuideIds = new Set<string>(
+        (existingPreGuideResult.error ? [] : existingPreGuideResult.data || [])
+          .map((row: any) => sanitizeString(row?.appointment_id, 120))
+          .filter((appointmentId: string) => isUuid(appointmentId))
+      );
+      const billingItemsByAppointment = new Map<string, any>(
+        (billingItemResult.error ? [] : billingItemResult.data || [])
+          .map((row: any) => [sanitizeString(row?.appointment_id, 120), row])
+      );
+      const diagnostics = {
+        totalAppointments: scopedAppointments.length,
+        billableWithInsurance: 0,
+        withRealPayer: 0,
+        withResolvedTuss: 0,
+        withoutBillingItem: 0,
+        notBillable: 0,
+        withoutFinancialContext: 0
+      };
+      const eligibleAppointments: any[] = [];
+      for (const appointment of scopedAppointments) {
+        const appointmentId = sanitizeString(appointment?.id, 120);
+        const billingContext = contextsByAppointment.get(appointmentId) || null;
+        const eligibility = evaluateTissPreGuideEligibility({ appointment, billingContext });
+        if (eligibility.financialContext === 'INSURANCE') diagnostics.billableWithInsurance += 1;
+        if (isUuid(eligibility.payerId || '')) diagnostics.withRealPayer += 1;
+        const billingItem = billingItemsByAppointment.get(appointmentId);
+        if (billingItem?.service_catalog_id && billingItem?.tuss_code_id) diagnostics.withResolvedTuss += 1;
+        if (!billingItem?.id) diagnostics.withoutBillingItem += 1;
+        if (eligibility.reason === 'not_applicable') diagnostics.notBillable += 1;
+        if (eligibility.reason === 'missing_financial_context') diagnostics.withoutFinancialContext += 1;
+        if (!eligibility.eligible) continue;
+        if (payerId && eligibility.payerId !== payerId) continue;
+        eligibleAppointments.push(appointment);
+      }
+
+      const counts = {
+        foundAppointments: scopedAppointments.length,
+        eligible: eligibleAppointments.length,
+        created: 0,
+        updated: 0,
+        valid: 0,
+        pendingData: 0,
+        notApplicable: 0,
+        skipped: Math.max(0, scopedAppointments.length - eligibleAppointments.length),
+        errors: 0
+      };
+      const items: any[] = [];
+      const errorDetails: Array<{ appointmentId: string; code: string }> = [];
+      for (const appointment of eligibleAppointments) {
+        const appointmentId = sanitizeString(appointment?.id, 120);
+        try {
+          const generated = await revalidateAppointmentBillingForAppointment({
+            appointmentId,
+            user: req.session.user,
+            scopedAppointment: appointment,
+            source: 'tiss_pre_guide_period_revalidation',
+            forceClosure: true
+          });
+          const preGuide = (generated as any)?.tissPreGuide || null;
+          const preGuideResult = (generated as any)?.tissPreGuideResult || null;
+          if (!(generated as any)?.ok || !preGuide || preGuideResult?.ok === false) {
+            counts.errors += 1;
+            errorDetails.push({
+              appointmentId,
+              code: preGuideResult?.errorCode || 'TISS_PRE_GUIDE_NOT_MATERIALIZED'
+            });
+            continue;
+          }
+          if (existingPreGuideIds.has(appointmentId)) counts.updated += 1;
+          else counts.created += 1;
+          if (preGuide.status === 'valid') counts.valid += 1;
+          else if (preGuide.status === 'not_applicable') counts.notApplicable += 1;
+          else counts.pendingData += 1;
+          items.push(preGuide);
+        } catch (itemError: any) {
+          counts.errors += 1;
+          errorDetails.push({
+            appointmentId,
+            code: sanitizeString(itemError?.code, 80) || 'TISS_PRE_GUIDE_REVALIDATION_FAILED'
+          });
+          console.warn('[TissPreGuide] period item failed:', {
+            appointmentId,
+            code: sanitizeString(itemError?.code, 40) || null,
+            message: sanitizeTextField(itemError?.message, 300) || String(itemError)
+          });
+        }
+      }
+      return sendNoStoreJson(res, {
+        success: counts.errors === 0 || items.length > 0,
+        data: items,
+        counts,
+        diagnostics,
+        errors: errorDetails,
+        message: counts.eligible === 0
+          ? 'Nenhum atendimento elegível encontrado para materializar Pré-guias TISS.'
+          : `${counts.created} Pré-guia(s) criada(s) e ${counts.updated} atualizada(s).`
+      });
+    } catch (error: any) {
+      console.warn('[TissPreGuide] period revalidation failed:', {
+        code: sanitizeString(error?.code, 40) || null,
+        message: sanitizeTextField(error?.message, 300) || String(error)
+      });
+      return res.status(500).json({ success: false, error: 'Não foi possível gerar ou revalidar as Pré-guias TISS do período.' });
+    }
+  });
+
   app.get('/api/tiss/pre-guides/:appointmentId', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -32456,40 +32695,8 @@ async function startServer() {
     }
   });
 
-  app.post('/api/tiss/pre-guides/:appointmentId/revalidate', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
-    try {
-      if (!enforcePayloadLimit(req, res, 16 * 1024, 'Revalidação da Pré-guia TISS')) return;
-      const appointmentId = sanitizeString(req.params.appointmentId, 120);
-      if (!isUuid(appointmentId)) return res.status(400).json(payerSafeError(400));
-      const generated = await revalidateAppointmentBillingForAppointment({
-        appointmentId,
-        user: req.session.user,
-        source: 'tiss_pre_guide_manual_revalidation',
-        forceClosure: true
-      });
-      if (!generated.ok) return res.status((generated as any).status || 404).json(payerSafeError((generated as any).status || 404));
-      const preGuide = (generated as any).tissPreGuide || null;
-      if (!preGuide) {
-        return res.status(503).json({
-          success: false,
-          error: 'A estrutura de Pré-guia TISS ainda não está disponível no banco.'
-        });
-      }
-      return sendNoStoreJson(res, {
-        success: true,
-        data: preGuide,
-        appointment: (generated as any).data || null,
-        message: preGuide.status === 'valid'
-          ? 'Pré-guia TISS revalidada e pronta para conferência interna.'
-          : preGuide.status === 'not_applicable'
-            ? 'Atendimento não aplicável à Pré-guia TISS.'
-            : 'Pré-guia TISS revalidada com pendências.'
-      });
-    } catch (error: any) {
-      console.warn('[TissPreGuide] revalidation failed:', error?.message || String(error));
-      return res.status(500).json({ success: false, error: 'Não foi possível revalidar a Pré-guia TISS agora.' });
-    }
-  });
+  app.post('/api/tiss/pre-guides/:appointmentId/revalidate', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), handleTissPreGuideRevalidation);
+  app.post('/api/appointments/:appointmentId/tiss-pre-guide/revalidate', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), handleTissPreGuideRevalidation);
 
   app.get('/api/admin/payers', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
@@ -33912,11 +34119,20 @@ async function startServer() {
         forceClosure: true
       });
       if (!generated.ok) return res.status((generated as any).status || 404).json(closureSafeError((generated as any).status || 404));
+      const preGuideResult = (generated as any).tissPreGuideResult || null;
+      if (preGuideResult?.ok === false) {
+        return res.status(503).json({
+          success: false,
+          error: 'O atendimento foi revalidado, mas a Pré-guia TISS não pôde ser materializada.',
+          code: preGuideResult?.errorCode || 'TISS_PRE_GUIDE_NOT_MATERIALIZED'
+        });
+      }
       return sendNoStoreJson(res, {
         success: true,
         data: (generated as any).data,
         billingItem: (generated as any).billingItem || null,
         billingContext: (generated as any).billingContext || null,
+        tissPreGuideStatus: (generated as any).tissPreGuide?.status || null,
         message: (generated as any).message || 'Atendimento revalidado.',
         resolution: (generated as any).resolution || null,
         reused: Boolean((generated as any).reused)
@@ -34742,6 +34958,14 @@ async function startServer() {
         forceClosure: true
       });
       if (!generated.ok) return res.status((generated as any).status || 404).json(conferenceSafeError((generated as any).status || 404));
+      const preGuideResult = (generated as any).tissPreGuideResult || null;
+      if (preGuideResult?.ok === false) {
+        return res.status(503).json({
+          success: false,
+          error: 'O atendimento foi revalidado, mas a Pré-guia TISS não pôde ser materializada.',
+          code: preGuideResult?.errorCode || 'TISS_PRE_GUIDE_NOT_MATERIALIZED'
+        });
+      }
       await writeClosureAuditLog({
         organizationId: sanitizeString(currentClinicId(req.session.user), 120),
         appointmentId,
@@ -34758,6 +34982,8 @@ async function startServer() {
         data: (generated as any).data,
         billingItem: (generated as any).billingItem || null,
         billingContext: (generated as any).billingContext || null,
+        tissPreGuide: (generated as any).tissPreGuide || null,
+        tissPreGuideStatus: (generated as any).tissPreGuide?.status || null,
         message: (generated as any).message || 'Atendimento revalidado.',
         resolution: (generated as any).resolution || null
       });

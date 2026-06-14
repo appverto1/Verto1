@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { validateTissPreGuide } from '../src/services/tissPreGuideEngine';
+import {
+  evaluateTissPreGuideEligibility,
+  validateTissPreGuide,
+} from '../src/services/tissPreGuideEngine';
 
 const root = process.cwd();
 const serverCode = readFileSync(join(root, 'server.ts'), 'utf8');
@@ -147,6 +150,37 @@ test('contextos não faturáveis são não aplicáveis e não tentam resolver TI
   }
 });
 
+test('lote considera elegível somente convênio com payer_id real', () => {
+  const eligible = evaluateTissPreGuideEligibility({
+    appointment: validInput.appointment,
+    billingContext: validInput.billingContext,
+  });
+  assert.equal(eligible.eligible, true);
+  assert.equal(eligible.reason, 'eligible');
+  assert.equal(eligible.payerId, 'payer-1');
+
+  const missingPayer = evaluateTissPreGuideEligibility({
+    appointment: validInput.appointment,
+    billingContext: { payer_type: 'INSURANCE', payer_id: null },
+  });
+  assert.equal(missingPayer.eligible, false);
+  assert.equal(missingPayer.reason, 'missing_payer');
+
+  const directAppointmentPayer = evaluateTissPreGuideEligibility({
+    appointment: { ...validInput.appointment, payer_id: 'payer-from-appointment', financial_context_type: 'INSURANCE' },
+    billingContext: null,
+  });
+  assert.equal(directAppointmentPayer.eligible, true);
+  assert.equal(directAppointmentPayer.payerId, 'payer-from-appointment');
+
+  const notApplicable = evaluateTissPreGuideEligibility({
+    appointment: validInput.appointment,
+    billingContext: { payer_type: 'NO_CHARGE', payer_id: null },
+  });
+  assert.equal(notApplicable.eligible, false);
+  assert.equal(notApplicable.reason, 'not_applicable');
+});
+
 test('validação aponta somente requisitos TISS realmente ausentes', () => {
   const missing = validateTissPreGuide({
     ...validInput,
@@ -232,12 +266,52 @@ test('backend persiste de forma idempotente pelo appointment e revalida só por 
   assert.match(centralRevalidation, /tissPreGuide: tissPreGuide\.data \|\| null/);
   const listRoute = serverCode.slice(
     serverCode.indexOf("app.get('/api/tiss/pre-guides'"),
-    serverCode.indexOf("app.get('/api/tiss/pre-guides/:appointmentId'")
+    serverCode.indexOf("app.post('/api/tiss/pre-guides/revalidate-period'")
   );
   assert.match(listRoute, /\.range\(offset, offset \+ pageSize - 1\)/);
   assert.match(listRoute, /APPOINTMENT_TISS_PRE_GUIDE_LIST_SELECT/);
   assert.doesNotMatch(listRoute, /revalidateAppointmentBillingForAppointment|buildAndPersistTissPreGuideForAppointment/);
   assert.doesNotMatch(listRoute, /\.select\('\*'\)/);
+});
+
+test('revalidação pontual e por período materializam Pré-guias sem backfill no GET', () => {
+  const periodRoute = serverCode.slice(
+    serverCode.indexOf("app.post('/api/tiss/pre-guides/revalidate-period'"),
+    serverCode.indexOf("app.get('/api/tiss/pre-guides/:appointmentId'")
+  );
+  assert.match(periodRoute, /fetchClosurePeriodAppointmentRows/);
+  assert.match(periodRoute, /evaluateTissPreGuideEligibility/);
+  assert.match(periodRoute, /revalidateAppointmentBillingForAppointment/);
+  assert.match(periodRoute, /foundAppointments/);
+  assert.match(periodRoute, /eligible/);
+  assert.match(periodRoute, /created/);
+  assert.match(periodRoute, /updated/);
+  assert.match(periodRoute, /pendingData/);
+  assert.match(periodRoute, /withoutBillingItem/);
+  assert.match(periodRoute, /withoutFinancialContext/);
+  assert.doesNotMatch(periodRoute, /\.select\('\*'\)/);
+  assert.doesNotMatch(periodRoute, /payer_name_snapshot.*eligible|payer_name.*eligible/);
+
+  assert.match(serverCode, /app\.post\('\/api\/appointments\/:appointmentId\/tiss-pre-guide\/revalidate'/);
+  assert.match(serverCode, /handleTissPreGuideRevalidation/);
+  assert.match(serverCode, /TISS_PRE_GUIDE_NOT_MATERIALIZED/);
+  assert.match(serverCode, /onConflict: 'organization_id,appointment_id'/);
+});
+
+test('revalidar sessão em Fechamento e Conferência propaga status da Pré-guia', () => {
+  const closureRoute = serverCode.slice(
+    serverCode.indexOf("app.post('/api/closure/appointments/:appointmentId/revalidate'"),
+    serverCode.indexOf("app.patch('/api/closure/appointments/:appointmentId/override'")
+  );
+  const conferenceRoute = serverCode.slice(
+    serverCode.indexOf("app.post('/api/conference/monthly/session/:appointmentId/revalidate'"),
+    serverCode.indexOf("app.patch('/api/conference/monthly/session/:appointmentId/status'")
+  );
+  assert.match(closureRoute, /tissPreGuideResult/);
+  assert.match(closureRoute, /tissPreGuideStatus/);
+  assert.match(conferenceRoute, /tissPreGuideResult/);
+  assert.match(conferenceRoute, /tissPreGuide:/);
+  assert.match(conferenceRoute, /tissPreGuideStatus/);
 });
 
 test('endpoints protegem perfis e Pré-guias com autenticação, papel e tenant', () => {
@@ -249,8 +323,10 @@ test('endpoints protegem perfis e Pré-guias com autenticação, papel e tenant'
     "app.get('/api/admin/tiss/professional-profiles/:professionalId'",
     "app.patch('/api/admin/tiss/professional-profiles/:professionalId'",
     "app.get('/api/tiss/pre-guides'",
+    "app.post('/api/tiss/pre-guides/revalidate-period'",
     "app.get('/api/tiss/pre-guides/:appointmentId'",
     "app.post('/api/tiss/pre-guides/:appointmentId/revalidate'",
+    "app.post('/api/appointments/:appointmentId/tiss-pre-guide/revalidate'",
   ]) {
     assert.match(serverCode, new RegExp(route.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
@@ -280,6 +356,10 @@ test('frontend oferece cards, paginação, detalhe sob demanda e nenhuma ação 
   assert.match(preGuideUiCode, /dataService\.getTissPreGuides/);
   assert.match(preGuideUiCode, /dataService\.getTissPreGuide/);
   assert.match(preGuideUiCode, /dataService\.revalidateTissPreGuide/);
+  assert.match(preGuideUiCode, /dataService\.revalidateTissPreGuidePeriod/);
+  assert.match(preGuideUiCode, /Gerar\/Revalidar pré-guias do período/);
+  assert.match(preGuideUiCode, /As pré-guias são criadas por revalidação para evitar backfill automático/);
+  assert.match(preGuideUiCode, /Nenhum atendimento elegível encontrado/);
   assert.match(preGuideUiCode, /dataService\.updateClinicTissProfile/);
   assert.match(preGuideUiCode, /dataService\.updatePayerTissProfile/);
   assert.match(preGuideUiCode, /dataService\.updateProfessionalBillingProfile/);
@@ -295,6 +375,7 @@ test('data service usa operações explícitas e o pacote expõe suíte dedicada
     'getTissPreGuides',
     'getTissPreGuide',
     'revalidateTissPreGuide',
+    'revalidateTissPreGuidePeriod',
     'getClinicTissProfile',
     'updateClinicTissProfile',
     'getPayerTissProfile',

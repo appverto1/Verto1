@@ -212,6 +212,7 @@ export function TissPreGuideTab({
   const [detail, setDetail] = useState<TissPreGuideRow | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [revalidatingId, setRevalidatingId] = useState("");
+  const [periodRevalidating, setPeriodRevalidating] = useState(false);
   const [profileEditor, setProfileEditor] = useState<ProfileEditorKind | null>(null);
   const [profileForm, setProfileForm] = useState<Record<string, any>>({});
   const [profileLoading, setProfileLoading] = useState(false);
@@ -232,7 +233,7 @@ export function TissPreGuideTab({
 
   const activeCard = cards.find((card) => card.key === quickFilter);
 
-  const loadRows = useCallback(async () => {
+  const loadRows = useCallback(async (overrides: { page?: number; quickFilter?: QuickFilter | "" } = {}) => {
     setLoading(true);
     setError("");
     try {
@@ -242,8 +243,8 @@ export function TissPreGuideTab({
         patientId,
         professionalId,
         payerId,
-        quickFilter,
-        page,
+        quickFilter: overrides.quickFilter ?? quickFilter,
+        page: overrides.page ?? page,
         pageSize: PAGE_SIZE,
       });
       if (!result?.success) {
@@ -300,6 +301,47 @@ export function TissPreGuideTab({
       await loadRows();
     } finally {
       setRevalidatingId("");
+    }
+  };
+
+  const revalidatePeriod = async () => {
+    if (periodRevalidating) return;
+    setPeriodRevalidating(true);
+    setError("");
+    setMessage("");
+    try {
+      const result = await dataService.revalidateTissPreGuidePeriod({
+        from: toApiDate(from),
+        to: toApiDate(to, true),
+        patientId,
+        professionalId,
+        payerId,
+        onlyBillable: true,
+        limit: 500,
+      });
+      if (!result?.success) {
+        setError(result?.error || "Não foi possível gerar ou revalidar as Pré-guias TISS do período.");
+        return;
+      }
+      const counts = result.counts || {};
+      const diagnostics = result.diagnostics || {};
+      if (Number(counts.eligible || 0) === 0) {
+        setMessage(
+          `Nenhum atendimento elegível encontrado. ${Number(diagnostics.totalAppointments || 0)} atendimento(s) no período, ` +
+          `${Number(diagnostics.billableWithInsurance || 0)} com contexto de convênio e ` +
+          `${Number(diagnostics.withRealPayer || 0)} com pagador real.`
+        );
+      } else {
+        setMessage(
+          `${Number(counts.created || 0)} Pré-guia(s) criada(s), ${Number(counts.updated || 0)} atualizada(s), ` +
+          `${Number(counts.valid || 0)} válida(s) e ${Number(counts.pendingData || 0)} com pendências.`
+        );
+      }
+      setQuickFilter("");
+      setPage(1);
+      await loadRows({ page: 1, quickFilter: "" });
+    } finally {
+      setPeriodRevalidating(false);
     }
   };
 
@@ -396,6 +438,22 @@ export function TissPreGuideTab({
 
   return (
     <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-indigo-100 bg-indigo-50/60 px-3 py-3">
+        <div>
+          <div className="text-sm font-semibold text-slate-800">Materialização action-driven</div>
+          <div className="mt-0.5 text-xs text-slate-600">Gere ou revalide somente os atendimentos faturáveis do período selecionado.</div>
+        </div>
+        <button
+          type="button"
+          onClick={() => void revalidatePeriod()}
+          disabled={periodRevalidating || loading}
+          className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {periodRevalidating ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+          Gerar/Revalidar pré-guias do período
+        </button>
+      </div>
+
       <section className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
         {cards.map((card) => {
           const active = quickFilter === card.key;
@@ -460,7 +518,30 @@ export function TissPreGuideTab({
               {loading ? (
                 <tr><td colSpan={14} className="px-4 py-12 text-center text-slate-500"><Loader2 size={20} className="mx-auto mb-2 animate-spin" />Carregando Pré-guias TISS</td></tr>
               ) : rows.length === 0 ? (
-                <tr><td colSpan={14} className="px-4 py-12 text-center text-slate-500">{quickFilter ? "Nenhuma Pré-guia encontrada para este filtro." : "Nenhuma Pré-guia materializada para o período."}</td></tr>
+                <tr>
+                  <td colSpan={14} className="px-4 py-12 text-center">
+                    {quickFilter ? (
+                      <div className="text-sm text-slate-500">Nenhuma Pré-guia encontrada para este filtro.</div>
+                    ) : (
+                      <div className="mx-auto max-w-xl">
+                        <FileSearch size={26} className="mx-auto text-indigo-500" />
+                        <div className="mt-3 text-sm font-semibold text-slate-800">Nenhuma pré-guia materializada para o período.</div>
+                        <p className="mt-1 text-sm text-slate-500">
+                          As pré-guias são criadas por revalidação para evitar backfill automático. Você pode gerar pré-guias para os atendimentos faturáveis deste período.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => void revalidatePeriod()}
+                          disabled={periodRevalidating}
+                          className="mt-4 inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-60"
+                        >
+                          {periodRevalidating ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+                          Gerar/Revalidar pré-guias do período
+                        </button>
+                      </div>
+                    )}
+                  </td>
+                </tr>
               ) : rows.map((row) => {
                 const meta = statusMeta[String(row.status || "draft")] || statusMeta.draft;
                 const codes = Array.isArray(row.validationErrorCodes) ? row.validationErrorCodes : [];

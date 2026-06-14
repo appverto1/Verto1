@@ -32,6 +32,20 @@ export type TissPreGuideValidationResult = {
   snapshot: Record<string, any>;
 };
 
+export type TissPreGuideEligibilityResult = {
+  eligible: boolean;
+  reason:
+    | 'eligible'
+    | 'appointment_missing'
+    | 'patient_missing'
+    | 'professional_missing'
+    | 'missing_financial_context'
+    | 'missing_payer'
+    | 'not_applicable';
+  financialContext: string | null;
+  payerId: string | null;
+};
+
 const text = (value: unknown) => String(value ?? '').trim();
 const positiveNumber = (value: unknown) => Number.isFinite(Number(value)) && Number(value) > 0;
 
@@ -59,6 +73,41 @@ const NON_TISS_CONTEXTS = new Set([
   'NON_BILLABLE',
   'NAO_FATURAVEL',
 ]);
+
+export function evaluateTissPreGuideEligibility(input: {
+  appointment?: Record<string, any> | null;
+  billingContext?: Record<string, any> | null;
+}): TissPreGuideEligibilityResult {
+  const appointment = input.appointment || {};
+  const billingContext = input.billingContext || {};
+  const financialContext = normalizeContext(
+    billingContext.payer_type ||
+      billingContext.financial_context_type ||
+      appointment.financial_context_type ||
+      appointment.payer_type,
+  ) || null;
+  const payerId = text(billingContext.payer_id || appointment.payer_id || appointment.payerId) || null;
+  const appointmentId = text(appointment.id || appointment.appointment_id);
+  const patientId = text(appointment.patient_id || appointment.patientId);
+  const professionalId = text(
+    appointment.professional_id ||
+      appointment.therapist_id ||
+      appointment.professionalId ||
+      appointment.therapistId,
+  );
+
+  if (!appointmentId) return { eligible: false, reason: 'appointment_missing', financialContext, payerId };
+  if (!patientId) return { eligible: false, reason: 'patient_missing', financialContext, payerId };
+  if (!professionalId) return { eligible: false, reason: 'professional_missing', financialContext, payerId };
+  if (financialContext && NON_TISS_CONTEXTS.has(financialContext)) {
+    return { eligible: false, reason: 'not_applicable', financialContext, payerId };
+  }
+  if (financialContext !== 'INSURANCE') {
+    return { eligible: false, reason: 'missing_financial_context', financialContext, payerId };
+  }
+  if (!payerId) return { eligible: false, reason: 'missing_payer', financialContext, payerId };
+  return { eligible: true, reason: 'eligible', financialContext, payerId };
+}
 
 const addIssue = (
   target: TissPreGuideIssue[],
