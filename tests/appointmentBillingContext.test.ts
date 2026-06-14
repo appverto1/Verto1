@@ -35,18 +35,24 @@ test('endpoint de contexto faz upsert idempotente por consulta', () => {
   assert.doesNotMatch(serverCode, /\.select\('\*'\)/);
 });
 
-test('salvar pagador garante espelho da consulta antes do contexto', () => {
+test('salvar pagador exige appointment persistido e nao cria consulta nova', () => {
   assert.match(serverCode, /ensureAppointmentMirrorForBillingContext/);
-  assert.match(serverCode, /syncAppointmentsTableFromClinicState\(\{\s*clinicId: organizationId,\s*appointments: \[appointmentForMirror\]/);
+  const ensureStart = serverCode.indexOf('async function ensureAppointmentMirrorForBillingContext');
+  const ensureEnd = serverCode.indexOf('async function syncClinicRoomsTableFromClinicState', ensureStart);
+  const ensureSlice = serverCode.slice(ensureStart, ensureEnd);
+  assert.match(ensureSlice, /\.from\('appointments'\)[\s\S]*?\.select\('id'\)[\s\S]*?\.eq\('id', appointmentId\)/);
+  assert.doesNotMatch(ensureSlice, /syncAppointmentsTableFromClinicState/);
+  assert.doesNotMatch(ensureSlice, /\.upsert\(/);
   const routeStart = serverCode.indexOf("app.patch('/api/appointments/:appointmentId/billing-context'");
   const routeEnd = serverCode.indexOf("app.post('/api/appointments/:appointmentId/required-documents", routeStart);
   const route = serverCode.slice(routeStart, routeEnd);
   const mirrorIndex = route.indexOf('ensureAppointmentMirrorForBillingContext');
   const existingIndex = route.indexOf('const existing = await fetchAppointmentBillingContextRow');
   const saveIndex = route.indexOf('const data = await upsertAppointmentBillingContextRow');
-  assert.ok(mirrorIndex > 0, 'rota deve garantir appointments antes de gravar pagador');
-  assert.ok(existingIndex > mirrorIndex, 'contexto existente deve ser buscado depois do espelho');
-  assert.ok(saveIndex > existingIndex, 'upsert do pagador deve acontecer depois do espelho');
+  assert.ok(mirrorIndex > 0, 'rota deve validar appointments antes de gravar pagador');
+  assert.ok(existingIndex > mirrorIndex, 'contexto existente deve ser buscado depois da validacao');
+  assert.ok(saveIndex > existingIndex, 'upsert do pagador deve acontecer depois da validacao');
+  assert.match(route, /Sincronize a agenda e tente salvar o pagador novamente/);
 });
 
 test('conflito de contexto existente vira update idempotente', () => {

@@ -7462,40 +7462,7 @@ async function ensureAppointmentMirrorForBillingContext(params: {
     const missingColumn = extractMissingColumnName(existingResult.error);
     if (!missingColumn) throw existingResult.error;
   }
-
-  const sourceAppointment = parseStoredJsonObject(params.appointment?.source_payload || params.appointment?.sourcePayload);
-  const appointmentForMirror = cleanObject({
-    ...sourceAppointment,
-    ...params.appointment,
-    id: appointmentId,
-    patientId: params.appointment?.patient_id || params.appointment?.patientId || sourceAppointment?.patientId || sourceAppointment?.patient_id,
-    patient_id: params.appointment?.patient_id || params.appointment?.patientId || sourceAppointment?.patient_id || sourceAppointment?.patientId,
-    therapistId: params.appointment?.therapist_id || params.appointment?.therapistId || params.appointment?.professional_id || params.appointment?.professionalId || sourceAppointment?.therapistId || sourceAppointment?.therapist_id || sourceAppointment?.professionalId || sourceAppointment?.professional_id || params.user?.id,
-    therapist_id: params.appointment?.therapist_id || params.appointment?.therapistId || params.appointment?.professional_id || params.appointment?.professionalId || sourceAppointment?.therapist_id || sourceAppointment?.therapistId || sourceAppointment?.professional_id || sourceAppointment?.professionalId || params.user?.id,
-    organization_id: organizationId,
-    organizationId,
-    clinic_id: params.appointment?.clinic_id || params.appointment?.clinicId || organizationId,
-    clinicId: params.appointment?.clinic_id || params.appointment?.clinicId || organizationId,
-    serviceType: params.appointment?.service_type || params.appointment?.serviceType || params.appointment?.approach || sourceAppointment?.serviceType || sourceAppointment?.service_type || sourceAppointment?.approach,
-    service_type: params.appointment?.service_type || params.appointment?.serviceType || params.appointment?.approach || sourceAppointment?.service_type || sourceAppointment?.serviceType || sourceAppointment?.approach
-  });
-
-  const summary = await syncAppointmentsTableFromClinicState({
-    clinicId: organizationId,
-    appointments: [appointmentForMirror],
-    actorId: sanitizeString(params.user?.id, 120),
-    specialtySettings: {}
-  });
-  if (summary.mirrored > 0) return true;
-
-  const retryResult = await supabase
-    .from('appointments')
-    .select('id')
-    .eq('id', appointmentId)
-    .limit(1)
-    .maybeSingle();
-  if (retryResult.error && !hasMissingFinancialSchema(retryResult.error)) throw retryResult.error;
-  return Boolean(retryResult.data?.id);
+  return false;
 }
 
 async function syncClinicRoomsTableFromClinicState(params: {
@@ -14631,6 +14598,60 @@ async function startServer() {
     return true;
   };
 
+  const validateDurableAppointmentConflictsForWrite = async (params: {
+    appointments: any[];
+    user: any;
+    clinicId: string;
+    excludeIds?: string[];
+  }) => {
+    const clinicId = sanitizeString(params.clinicId, 120);
+    const excludeIds = Array.from(new Set((params.excludeIds || []).map((id) => sanitizeString(id, 120)).filter(Boolean)));
+    for (const appointment of Array.isArray(params.appointments) ? params.appointments : []) {
+      const appointmentId = sanitizeString(appointment?.id, 120);
+      const scheduledAt = buildAppointmentScheduledAt(appointment);
+      const start = scheduledAt ? new Date(scheduledAt) : null;
+      const patientId = sanitizeString(appointment?.patient_id || appointment?.patientId, 120);
+      const professionalId = sanitizeString(
+        appointment?.professional_id || appointment?.professionalId || appointment?.therapist_id || appointment?.therapistId,
+        120
+      );
+      const roomId = sanitizeString(appointment?.room_id || appointment?.roomId || appointment?.room, 180);
+      const locationType = normalizeScheduleLocationType(appointment?.location_type || appointment?.locationType || appointment?.location || (roomId ? 'clinica' : ''));
+      if (!isUuid(clinicId) || !isUuid(patientId) || !start || Number.isNaN(start.getTime())) continue;
+      const date = sanitizeDate(appointment?.date) || formatDateInAppointmentTimezone(start);
+      const startTime = normalizeAppointmentTime(appointment?.time) || formatTimeInAppointmentTimezone(start);
+      const durationMinutes = getClinicStateAppointmentDurationMinutes(appointment, {});
+      const result = await checkScheduleConflicts({
+        clinic_id: clinicId,
+        organization_id: sanitizeString(appointment?.organization_id || appointment?.organizationId || clinicId, 120),
+        patient_id: patientId,
+        patient_name: appointment?.patient_name || appointment?.patientName || appointment?.name,
+        professional_ids: professionalId ? [professionalId] : [],
+        professional_names: [appointment?.professional_name || appointment?.professionalName || appointment?.therapist_name || appointment?.therapistName || appointment?.professional]
+          .map((value) => sanitizeString(value, 180))
+          .filter(Boolean),
+        room_id: locationType === 'clinica' ? roomId : null,
+        room_name: appointment?.room_name || appointment?.roomName || appointment?.roomDisplayName || roomId,
+        location_type: locationType,
+        date,
+        start_time: startTime,
+        duration_minutes: durationMinutes,
+        exclude_event_id: appointmentId,
+        exclude_event_ids: Array.from(new Set([appointmentId, ...excludeIds])).filter(Boolean)
+      }, params.user);
+      if (result?.blocking) {
+        return {
+          ok: false,
+          status: 409,
+          appointmentId,
+          conflict: result,
+          error: result.humanMessage || 'Já existe atendimento no mesmo horário para este paciente, profissional ou sala.'
+        };
+      }
+    }
+    return { ok: true, status: 200 };
+  };
+
   const writeClinicStateAppointmentsAfterPersistence = async (clinicId: string, actorId: string, previousAppointments: any[], persistedAppointments: any[]) => {
     const nextAppointments = mergeClinicStateAppointmentsById(previousAppointments, persistedAppointments);
     const basePayload = {
@@ -14770,6 +14791,60 @@ async function startServer() {
     }));
   };
 
+  const fetchPersistedAppointmentActionByIdempotencyKey = async (params: {
+    clinicId: string;
+    eventType: string;
+    idempotencyKey: string;
+  }) => {
+    const clinicId = sanitizeString(params.clinicId, 120);
+    const eventType = sanitizeString(params.eventType, 80);
+    const idempotencyKey = sanitizeString(params.idempotencyKey, 220);
+    if (!isUuid(clinicId) || !eventType || !idempotencyKey) return null;
+    try {
+      const { data, error } = await supabase
+        .from('appointment_domain_events')
+        .select('id, event_type, clinic_id, patient_id, professional_id, appointment_id, created_by, idempotency_key, payload, created_at')
+        .eq('clinic_id', clinicId)
+        .eq('event_type', eventType)
+        .like('idempotency_key', `${idempotencyKey}:${eventType}:%`)
+        .order('created_at', { ascending: true })
+        .limit(80);
+      if (error) {
+        if (isMissingRelationError(error) || hasMissingFinancialSchema(error)) return null;
+        throw error;
+      }
+      const events = Array.isArray(data) ? data : [];
+      if (events.length === 0) return null;
+      const appointmentIds = Array.from(new Set(
+        events
+          .map((row: any) => sanitizeString(row?.appointment_id, 120))
+          .filter((id: string) => isUuid(id))
+      ));
+      if (appointmentIds.length === 0) return null;
+      const persistedRows = await readPersistedAppointmentRows(appointmentIds, clinicId);
+      if (persistedRows.length === 0) return null;
+      const appointments = persistedRows.map((row: any) => serializePersistedAppointmentForAgenda(row));
+      return {
+        appointments,
+        events: events.map((row: any) => ({
+          eventId: sanitizeString(row?.id, 120),
+          eventType: sanitizeString(row?.event_type || eventType, 80),
+          clinicId: sanitizeString(row?.clinic_id || clinicId, 120),
+          patientId: sanitizeString(row?.patient_id, 120) || null,
+          professionalId: sanitizeString(row?.professional_id, 120) || null,
+          appointmentId: sanitizeString(row?.appointment_id, 120),
+          createdBy: sanitizeString(row?.created_by, 120) || null,
+          idempotencyKey: sanitizeString(row?.idempotency_key, 240),
+          payload: row?.payload || {},
+          createdAt: sanitizeString(row?.created_at, 80) || null
+        }))
+      };
+    } catch (error: any) {
+      console.warn('[Appointments] Consulta idempotente de eventos ignorada.', sanitizeString(error?.message || String(error), 300));
+      return null;
+    }
+  };
+
   const persistAppointmentActionBatch = async (params: {
     req: any;
     res: any;
@@ -14814,6 +14889,33 @@ async function startServer() {
       return res.status(400).json({ success: false, error: 'A consulta editada não foi enviada para persistência.' });
     }
 
+    const idempotencyKey = sanitizeString(
+      req.body?.idempotencyKey || req.body?.idempotency_key || req.headers?.['x-idempotency-key'] || `${params.eventType}:${appointmentIds.join(',')}`,
+      240
+    );
+    const previousAction = await fetchPersistedAppointmentActionByIdempotencyKey({
+      clinicId,
+      eventType: params.eventType,
+      idempotencyKey
+    });
+    if (previousAction?.appointments?.length) {
+      const action = params.eventType === 'appointment.created' ? 'created' : 'updated';
+      return res.json({
+        success: true,
+        action,
+        appointments: previousAction.appointments,
+        items: previousAction.appointments,
+        events: previousAction.events,
+        idempotent: true,
+        affected: {
+          clinicId,
+          organizationId: clinicId,
+          appointmentIds: previousAction.appointments.map((appointment: any) => sanitizeString(appointment?.id, 120)).filter(Boolean),
+          count: previousAction.appointments.length
+        }
+      });
+    }
+
     const state = await readClinicStateForAppointmentMutation(clinicId);
     if (params.requireExisting) {
       const existingStateIds = new Set(state.appointments.map((appointment: any) => sanitizeString(appointment?.id, 120)));
@@ -14833,6 +14935,21 @@ async function startServer() {
     });
     if (!scheduleValidation.ok) {
       return res.status(scheduleValidation.status).json({ success: false, error: scheduleValidation.error });
+    }
+
+    const durableConflictValidation = await validateDurableAppointmentConflictsForWrite({
+      appointments: preparedAppointments,
+      user: actor,
+      clinicId,
+      excludeIds: appointmentIds
+    });
+    if (!durableConflictValidation.ok) {
+      return res.status(durableConflictValidation.status || 409).json({
+        success: false,
+        error: durableConflictValidation.error || 'Já existe atendimento no mesmo horário.',
+        conflict: durableConflictValidation.conflict || null,
+        duplicateGuard: true
+      });
     }
 
     const mirror = await syncAppointmentsTableFromClinicState({
@@ -14856,10 +14973,6 @@ async function startServer() {
       actorId,
       state.appointments,
       persistedAppointments
-    );
-    const idempotencyKey = sanitizeString(
-      req.body?.idempotencyKey || req.body?.idempotency_key || req.headers?.['x-idempotency-key'] || `${params.eventType}:${appointmentIds.join(',')}`,
-      240
     );
     const events = await persistAppointmentDomainEvents({
       eventType: params.eventType,
@@ -28747,6 +28860,112 @@ async function startServer() {
     } catch (error: any) {
       console.warn('[Calendar] conflict check failed:', error?.message || String(error));
       return res.status(500).json({ success: false, error: 'Não foi possível verificar conflitos agora.' });
+    }
+  });
+
+  app.get('/api/appointments/duplicates/diagnostics', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      if (!isUuid(clinicId)) return res.status(400).json({ success: false, error: 'Clínica inválida.' });
+      const fromQuery = sanitizeString(req.query?.from, 80);
+      const toQuery = sanitizeString(req.query?.to, 80);
+      const fromDate = fromQuery ? new Date(fromQuery) : new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+      const toDate = toQuery ? new Date(toQuery) : new Date(Date.now() + 180 * 24 * 60 * 60 * 1000);
+      const fromIso = Number.isNaN(fromDate.getTime()) ? new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString() : fromDate.toISOString();
+      const toIso = Number.isNaN(toDate.getTime()) ? new Date(Date.now() + 180 * 24 * 60 * 60 * 1000).toISOString() : toDate.toISOString();
+      let query = supabase
+        .from('appointments')
+        .select(SCHEDULE_CONFLICT_APPOINTMENT_SELECT)
+        .eq('clinic_id', clinicId)
+        .gte('scheduled_at', fromIso)
+        .lte('scheduled_at', toIso)
+        .in('status', BLOCKING_APPOINTMENT_STATUS_QUERY_VALUES)
+        .order('scheduled_at', { ascending: true })
+        .limit(2000);
+      if (isUuid(organizationId)) query = query.eq('organization_id', organizationId);
+      const { data, error } = await query;
+      if (error) {
+        if (hasMissingFinancialSchema(error)) return res.json({ success: true, data: [], groups: [], count: 0 });
+        throw error;
+      }
+      const rows = Array.isArray(data) ? data : [];
+      const groupsByKey = new Map<string, any[]>();
+      for (const row of rows) {
+        const startIso = buildAppointmentScheduledAt(row);
+        if (!startIso) continue;
+        const durationMinutes = getClinicStateAppointmentDurationMinutes(row, {});
+        const endIso = sanitizeString(row?.scheduled_end_at, 80) || calculateAppointmentEnd(new Date(startIso), durationMinutes)?.toISOString() || '';
+        const key = [
+          clinicId,
+          sanitizeString(row?.patient_id, 120),
+          sanitizeString(row?.therapist_id, 120),
+          sanitizeString(row?.room_id, 180),
+          startIso,
+          endIso,
+          sanitizeString(row?.service_type || row?.approach, 120)
+        ].join('|');
+        if (!groupsByKey.has(key)) groupsByKey.set(key, []);
+        groupsByKey.get(key)?.push(row);
+      }
+      const duplicateGroups = Array.from(groupsByKey.values()).filter((group) => group.length > 1);
+      const duplicateAppointmentIds = Array.from(new Set(
+        duplicateGroups.flatMap((group) => group.map((row: any) => sanitizeString(row?.id, 120)).filter((id: string) => isUuid(id)))
+      ));
+      const billingContextByAppointmentId = new Map<string, any>();
+      if (duplicateAppointmentIds.length > 0) {
+        const contextResult = await supabase
+          .from('appointment_billing_contexts')
+          .select('appointment_id, payer_id, payer_type, payer_name_snapshot')
+          .eq('organization_id', isUuid(organizationId) ? organizationId : clinicId)
+          .in('appointment_id', duplicateAppointmentIds)
+          .limit(duplicateAppointmentIds.length);
+        if (!contextResult.error && Array.isArray(contextResult.data)) {
+          for (const contextRow of contextResult.data) {
+            billingContextByAppointmentId.set(sanitizeString(contextRow?.appointment_id, 120), contextRow);
+          }
+        } else if (contextResult.error && !hasMissingFinancialSchema(contextResult.error) && !isMissingRelationError(contextResult.error)) {
+          throw contextResult.error;
+        }
+      }
+      const groups = duplicateGroups.map((group) => {
+        const items = group.map((row: any) => {
+          const appointmentId = sanitizeString(row?.id, 120);
+          const billingContext = billingContextByAppointmentId.get(appointmentId) || null;
+          return {
+            appointmentId,
+            patientId: sanitizeString(row?.patient_id, 120) || null,
+            professionalId: sanitizeString(row?.therapist_id, 120) || null,
+            roomId: sanitizeString(row?.room_id, 180) || null,
+            scheduledStart: buildAppointmentScheduledAt(row),
+            scheduledEnd: sanitizeString(row?.scheduled_end_at, 80) || null,
+            serviceType: sanitizeString(row?.service_type || row?.approach, 120) || null,
+            status: sanitizeString(row?.status, 40) || null,
+            payerId: sanitizeString(billingContext?.payer_id, 120) || null,
+            financialContextType: normalizeAppointmentFinancialContextType(billingContext?.payer_type) || null,
+            payerName: sanitizeString(billingContext?.payer_name_snapshot, 180) || null
+          };
+        });
+        const recommendedKeep = items.find((item) => isUuid(item.payerId || '')) || items[0] || null;
+        return {
+          key: [
+            items[0]?.patientId,
+            items[0]?.professionalId,
+            items[0]?.roomId,
+            items[0]?.scheduledStart,
+            items[0]?.scheduledEnd,
+            items[0]?.serviceType
+          ].join('|'),
+          count: items.length,
+          recommendedKeepAppointmentId: recommendedKeep?.appointmentId || null,
+          recommendation: 'Revisar manualmente; manter preferencialmente a linha com contexto financeiro real e cancelar/inativar a duplicada com auditoria.',
+          items
+        };
+      });
+      return res.json({ success: true, data: groups, groups, count: groups.length, appointmentCount: duplicateAppointmentIds.length });
+    } catch (error: any) {
+      console.warn('[Appointments] duplicate diagnostics failed:', error?.message || String(error));
+      return res.status(500).json({ success: false, error: 'Não foi possível diagnosticar duplicidades agora.' });
     }
   });
 

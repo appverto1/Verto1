@@ -100,9 +100,62 @@ test('appointment endpoints use stable idempotency keys and read-after-write', (
   assert.match(dataServiceCode, /PATCH:\/api\/appointments\/\$\{appointmentId\}:\$\{stableRequestId\}/);
   assert.match(serverCode, /app\.post\('\/api\/appointments'/);
   assert.match(serverCode, /app\.patch\('\/api\/appointments\/:appointmentId'/);
+  assert.match(serverCode, /fetchPersistedAppointmentActionByIdempotencyKey/);
+  assert.match(serverCode, /\.like\('idempotency_key', `\$\{idempotencyKey\}:\$\{eventType\}:%`\)/);
+  assert.match(serverCode, /idempotent: true/);
   assert.match(serverCode, /readPersistedAppointmentRows\(appointmentIds, clinicId\)/);
   assert.match(serverCode, /confirmPersistedAppointmentRows\(persistedRows, preparedAppointments, clinicId\)/);
   assert.match(serverCode, /Não foi possível confirmar a persistência do agendamento/);
+});
+
+test('appointment creation blocks duplicate durable slots and double submit', () => {
+  const batchSlice = serverCode.slice(
+    serverCode.indexOf('const persistAppointmentActionBatch'),
+    serverCode.indexOf("app.post('/api/appointments'", serverCode.indexOf('const persistAppointmentActionBatch')),
+  );
+  assert.match(serverCode, /const validateDurableAppointmentConflictsForWrite/);
+  assert.match(batchSlice, /validateDurableAppointmentConflictsForWrite\(\{/);
+  assert.match(batchSlice, /duplicateGuard: true/);
+  assert.match(batchSlice, /const mirror = await syncAppointmentsTableFromClinicState/);
+  assert.ok(
+    batchSlice.indexOf('validateDurableAppointmentConflictsForWrite') < batchSlice.indexOf('const mirror = await syncAppointmentsTableFromClinicState'),
+    'duplicate guard must run before durable appointment upsert'
+  );
+  assert.match(coordinatorCode, /const sessionSubmitInFlightRef = useRef\(false\)/);
+  assert.match(coordinatorCode, /const \[isSessionSubmitting, setIsSessionSubmitting\] = useState\(false\)/);
+  assert.match(coordinatorCode, /if \(sessionSubmitInFlightRef\.current\) return/);
+  assert.match(coordinatorCode, /sessionSubmitInFlightRef\.current = true/);
+  assert.match(coordinatorCode, /!isSessionSubmitting/);
+  assert.match(coordinatorCode, /isSessionSubmitting[\s\S]*\? "Salvando\.\.\."/);
+});
+
+test('billing context and TUSS revalidation do not create appointments', () => {
+  const billingContextRoute = serverCode.slice(
+    serverCode.indexOf("app.patch('/api/appointments/:appointmentId/billing-context'"),
+    serverCode.indexOf("app.post('/api/appointments/:appointmentId/billing-item/resolve'")
+  );
+  assert.match(billingContextRoute, /ensureAppointmentMirrorForBillingContext/);
+  assert.doesNotMatch(billingContextRoute, /syncAppointmentsTableFromClinicState\(/);
+  assert.doesNotMatch(billingContextRoute, /\.from\('appointments'\)[\s\S]{0,500}\.upsert/);
+  const billingResolveRoute = serverCode.slice(
+    serverCode.indexOf("app.post('/api/appointments/:appointmentId/billing-item/resolve'"),
+    serverCode.indexOf("app.post('/api/appointments/:appointmentId/required-documents")
+  );
+  assert.match(billingResolveRoute, /revalidateAppointmentBillingForAppointment/);
+  assert.doesNotMatch(billingResolveRoute, /syncAppointmentsTableFromClinicState|\.from\('appointments'\)[\s\S]{0,500}\.upsert/);
+});
+
+test('duplicate diagnostics endpoint is read-only and scoped', () => {
+  const routeStart = serverCode.indexOf("app.get('/api/appointments/duplicates/diagnostics'");
+  const routeEnd = serverCode.indexOf("app.get('/api/clinic/rooms'", routeStart);
+  const route = serverCode.slice(routeStart, routeEnd);
+  assert.match(route, /requireRoles\('coordinator', 'admin', 'owner'\)/);
+  assert.match(route, /\.from\('appointments'\)[\s\S]*?\.select\(SCHEDULE_CONFLICT_APPOINTMENT_SELECT\)/);
+  assert.match(route, /\.from\('appointment_billing_contexts'\)[\s\S]*?\.select\('appointment_id, payer_id, payer_type, payer_name_snapshot'\)/);
+  assert.match(route, /recommendedKeepAppointmentId/);
+  assert.match(route, /Revisar manualmente/);
+  assert.doesNotMatch(route, /\.delete\(|\.update\(|\.upsert\(|\.insert\(/);
+  assert.doesNotMatch(route, /\.select\('\*'\)/);
 });
 
 test('appointment mirror helpers can access schema fallback helpers at module scope', () => {

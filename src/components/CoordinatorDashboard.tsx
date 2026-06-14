@@ -702,6 +702,8 @@ export function CoordinatorDashboard({
   const [sessionAuthorizationCode, setSessionAuthorizationCode] = useState("");
   const [clinicPayers, setClinicPayers] = useState<any[]>([]);
   const lastAutoPayerPatientKeyRef = useRef("");
+  const sessionSubmitInFlightRef = useRef(false);
+  const [isSessionSubmitting, setIsSessionSubmitting] = useState(false);
   const [sessionNumSessions, setSessionNumSessions] = useState(1);
   const [sessionRecurrencePattern, setSessionRecurrencePattern] = useState("weekly");
   const [scheduleConflictState, setScheduleConflictState] = useState<{
@@ -2074,6 +2076,7 @@ export function CoordinatorDashboard({
     requiredSessionFieldsReady &&
     !scheduleConflictState.blocking &&
     !scheduleConflictState.loading &&
+    !isSessionSubmitting &&
     !sessionFinancialContextError;
 
   useEffect(() => {
@@ -2241,6 +2244,13 @@ export function CoordinatorDashboard({
       showToast(scheduleConflictState.message || "Existe conflito bloqueante nesse horário.", "error");
       return;
     }
+    if (sessionSubmitInFlightRef.current) return;
+    sessionSubmitInFlightRef.current = true;
+    setIsSessionSubmitting(true);
+    const releaseSessionSubmit = () => {
+      sessionSubmitInFlightRef.current = false;
+      setIsSessionSubmitting(false);
+    };
     showProcessing(
       editingAppointmentId ? "Salvando agendamento..." : "Criando agendamento...",
     );
@@ -2303,6 +2313,7 @@ export function CoordinatorDashboard({
     const conflictPayload = serverConflict?.data || serverConflict;
     if (conflictPayload?.blocking) {
       hideProcessing();
+      releaseSessionSubmit();
       showToast(conflictPayload.humanMessage || "Conflito encontrado nesse horário.", "error");
       return;
     }
@@ -2363,6 +2374,7 @@ export function CoordinatorDashboard({
       const result: any = await onUpdateAppointment(editingAppointmentId, updates);
       if (result && !result.success) {
         hideProcessing();
+        releaseSessionSubmit();
         showToast((result.errors || [result.error || "Não foi possível confirmar o agendamento."]).join(" | "), "error");
         return;
       }
@@ -2386,12 +2398,14 @@ export function CoordinatorDashboard({
       });
       if (!billingResult?.success) {
         hideProcessing();
+        releaseSessionSubmit();
         showToast(billingResult?.error || "Não foi possível salvar o contexto financeiro do atendimento.", "error");
         return;
       }
       setIsAddSessionModalOpen(false);
       resetSessionForm();
       hideProcessing();
+      releaseSessionSubmit();
       showToast("Dados salvos com sucesso!");
       return;
     }
@@ -2446,6 +2460,7 @@ export function CoordinatorDashboard({
     const result = await onScheduleSession(newSession);
     if (result && !result.success) {
       hideProcessing();
+      releaseSessionSubmit();
       showToast((result.errors || [result.error || "Não foi possível confirmar o agendamento."]).join(" | "), "error");
       return;
     }
@@ -2460,6 +2475,7 @@ export function CoordinatorDashboard({
     setIsAddSessionModalOpen(false);
     resetSessionForm();
     hideProcessing();
+    releaseSessionSubmit();
     showToast(
       Number(newSession.numSessions) > 1
         ? "Agendamentos recorrentes criados com sucesso!"
@@ -9066,7 +9082,9 @@ export function CoordinatorDashboard({
                 disabled={!canSubmitSession}
                 className="w-full bg-[#7a32fc] text-white font-bold py-4 rounded-xl shadow-lg shadow-purple-500/20 hover:opacity-90 transition-all mt-2 active:scale-95 uppercase tracking-widest disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {editingAppointmentId
+                {isSessionSubmitting
+                  ? "Salvando..."
+                  : editingAppointmentId
                   ? "Salvar Alterações"
                   : "Confirmar Agendamento"}
               </button>
