@@ -2609,7 +2609,7 @@ export const dataService = {
       }, {
         helperName: 'resolveAppointmentBillingItem',
         operation: 'write',
-        table: 'appointment_billing_items,tuss_service_catalog,tuss_codes,payer_tuss_mappings',
+        table: 'appointment_billing_contexts,appointment_billing_items,appointment_closure_checks,tuss_service_catalog,tuss_codes,payer_tuss_mappings',
         hasExplicitColumns: true,
         requiresPatientOrSession: false
       });
@@ -2744,7 +2744,7 @@ export const dataService = {
       }, {
         helperName: 'revalidateClosureAppointment',
         operation: 'write',
-        table: 'appointment_closure_checks',
+        table: 'appointment_billing_contexts,appointment_billing_items,appointment_closure_checks,appointment_closure_audit_logs,payer_requirement_audit_logs',
         hasExplicitColumns: true,
         requiresPatientOrSession: false
       });
@@ -2872,7 +2872,7 @@ export const dataService = {
       }, {
         helperName: 'revalidateMonthlyConferenceSession',
         operation: 'write',
-        table: 'appointment_closure_checks,appointment_closure_audit_logs',
+        table: 'appointment_billing_contexts,appointment_billing_items,appointment_closure_checks,appointment_closure_audit_logs,payer_requirement_audit_logs',
         hasExplicitColumns: true,
         requiresPatientOrSession: false
       });

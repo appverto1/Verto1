@@ -115,15 +115,17 @@ test('detalhe do fechamento tolera colunas novas do pagador ausentes', () => {
 
 test('criacao da consulta cria contexto inicial sem sobrescrever edicao posterior', () => {
   assert.match(serverCode, /upsertInitialBillingContextFromAppointment/);
-  assert.match(serverCode, /if \(existing\.data\?\.id\) return/);
+  assert.match(serverCode, /overwriteExplicit\?: boolean/);
+  assert.match(serverCode, /if \(existing\.data\?\.id && \(!params\.overwriteExplicit \|\| !explicitFinancialContextType\)\) return/);
   assert.match(serverCode, /suggestedBilling = await resolveAppointmentBillingSuggestion/);
   assert.match(serverCode, /payer_name_snapshot: payerName \|\| null/);
-  assert.match(serverCode, /insurance_card_number: sanitizeString\(params\.appointment\?\.insuranceCardNumber/);
-  assert.match(serverCode, /insurance_plan_name: sanitizeString\(params\.appointment\?\.insurancePlanName/);
-  assert.match(serverCode, /guide_number: sanitizeString\(params\.appointment\?\.guideNumber/);
+  assert.match(serverCode, /insurance_card_number: sanitizeString\(appointmentPayload\?\.insuranceCardNumber/);
+  assert.match(serverCode, /insurance_plan_name: sanitizeString\(appointmentPayload\?\.insurancePlanName/);
+  assert.match(serverCode, /guide_number: sanitizeString\(appointmentPayload\?\.guideNumber/);
   assert.match(serverCode, /financialContextType: financialContextType \|\| undefined/);
   assert.match(serverCode, /explicitFinancialContext: Boolean\(explicitFinancialContextType\)/);
   assert.match(serverCode, /skipTussResolution: financialContextSkipsInsuranceBilling\(financialContextType\)/);
+  assert.match(serverCode, /created_at: existing\.data\?\.created_at \|\| new Date\(\)\.toISOString\(\)/);
   assert.match(serverCode, /source: sanitizeString\(\s*explicitFinancialContextType[\s\S]*?'APPOINTMENT_CONTEXT'/);
 });
 

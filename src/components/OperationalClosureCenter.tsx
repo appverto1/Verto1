@@ -417,6 +417,20 @@ export function OperationalClosureCenter({
     }
   };
 
+  const applyUpdatedClosureRows = (items: ClosureRow[]) => {
+    const updates = new Map(
+      (Array.isArray(items) ? items : [])
+        .filter((item) => item?.appointment_id)
+        .map((item) => [String(item.appointment_id), item])
+    );
+    if (updates.size === 0) return;
+    setRows((current) => current.map((row) => updates.get(String(row.appointment_id || "")) || row));
+    setDetail((current) => {
+      if (!current?.appointment_id) return current;
+      return updates.get(String(current.appointment_id)) || current;
+    });
+  };
+
   const revalidate = async (row: ClosureRow) => {
     const appointmentId = String(row.appointment_id || "");
     if (!appointmentId) return;
@@ -427,8 +441,12 @@ export function OperationalClosureCenter({
       if (!result?.success) {
         setError(result?.error || "Não foi possível revalidar o fechamento agora.");
       } else {
-        await loadRows();
-        if (detail?.appointment_id === appointmentId) await openDetail(row);
+        if (result.data) {
+          applyUpdatedClosureRows([result.data]);
+          if (detail?.appointment_id === appointmentId) setDetail(result.data);
+        }
+        setRevalidationInfo(result.message || "Atendimento revalidado.");
+        void loadRows();
       }
     } finally {
       setActionLoadingId("");

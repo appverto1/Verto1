@@ -406,6 +406,63 @@ test('frontend administra procedimentos codigos e mapeamentos sem F5', () => {
   assert.doesNotMatch(payerPanelCode, /CÃ|NÃ|perÃ|cÃ/);
 });
 
+test('criacao e revalidacao pontual usam o resolvedor TUSS-ready central', () => {
+  const helperSlice = serverCode.slice(
+    serverCode.indexOf('const revalidateAppointmentBillingForAppointment'),
+    serverCode.indexOf("app.get('/api/admin/payers'")
+  );
+  assert.match(helperSlice, /upsertInitialBillingContextFromAppointment/);
+  assert.match(helperSlice, /resolveAndPersistAppointmentBillingItem/);
+  assert.match(helperSlice, /clearAppointmentBillingItemForAppointment/);
+  assert.match(helperSlice, /persistAppointmentClosureCheck/);
+  assert.match(helperSlice, /hydrateConferenceRows/);
+  assert.match(helperSlice, /skippedInsuranceBilling/);
+  assert.match(helperSlice, /payerId: isUuid\(payerId\) \? payerId : null/);
+
+  const appointmentActionSlice = serverCode.slice(
+    serverCode.indexOf('const persistAppointmentActionBatch'),
+    serverCode.indexOf('const affected = {', serverCode.indexOf('const persistAppointmentActionBatch'))
+  );
+  assert.match(appointmentActionSlice, /revalidateAppointmentBillingForAppointment/);
+  assert.match(appointmentActionSlice, /overwriteExplicitContext: true/);
+  assert.match(appointmentActionSlice, /forceClosure: true/);
+  assert.match(appointmentActionSlice, /pendingClosureIds/);
+
+  const billingItemRoute = serverCode.slice(
+    serverCode.indexOf("app.post('/api/appointments/:appointmentId/billing-item/resolve'"),
+    serverCode.indexOf("app.post('/api/appointments/:appointmentId/required-documents")
+  );
+  assert.match(billingItemRoute, /revalidateAppointmentBillingForAppointment/);
+  assert.doesNotMatch(billingItemRoute, /resolveAndPersistAppointmentBillingItem\(\{/);
+
+  const closureRevalidateRoute = serverCode.slice(
+    serverCode.indexOf("app.post('/api/closure/appointments/:appointmentId/revalidate'"),
+    serverCode.indexOf("app.patch('/api/closure/appointments/:appointmentId/override'")
+  );
+  assert.match(closureRevalidateRoute, /revalidateAppointmentBillingForAppointment/);
+  assert.match(closureRevalidateRoute, /billingItem/);
+  assert.match(closureRevalidateRoute, /billingContext/);
+  assert.match(closureRevalidateRoute, /resolution/);
+  assert.doesNotMatch(closureRevalidateRoute, /persistAppointmentClosureCheck\(\{/);
+
+  const conferenceRevalidateRoute = serverCode.slice(
+    serverCode.indexOf("app.post('/api/conference/monthly/session/:appointmentId/revalidate'"),
+    serverCode.indexOf("app.patch('/api/conference/monthly/session/:appointmentId/status'")
+  );
+  assert.match(conferenceRevalidateRoute, /revalidateAppointmentBillingForAppointment/);
+  assert.match(conferenceRevalidateRoute, /REVALIDATED_FROM_CONFERENCE/);
+  assert.match(conferenceRevalidateRoute, /billingItem/);
+  assert.match(conferenceRevalidateRoute, /billingContext/);
+  assert.match(conferenceRevalidateRoute, /resolution/);
+  assert.doesNotMatch(conferenceRevalidateRoute, /persistAppointmentClosureCheck\(\{/);
+
+  assert.match(dataServiceCode, /appointment_billing_contexts,appointment_billing_items,appointment_closure_checks/);
+  assert.match(conferenceCode, /applyUpdatedConferenceRows\(\[result\.data\]\)/);
+  assert.doesNotMatch(conferenceCode, /await loadConference\(\);\s*const refreshed = await dataService\.getMonthlyConferenceSession/);
+  assert.match(closureCode, /applyUpdatedClosureRows\(\[result\.data\]\)/);
+  assert.doesNotMatch(closureCode, /await loadRows\(\);\s*if \(detail\?\.appointment_id === appointmentId\) await openDetail/);
+});
+
 test('fechamento e conferencia exibem e filtram dados TUSS-ready', () => {
   for (const code of [conferenceCode, closureCode]) {
     assert.match(code, /internal_procedure_name/);

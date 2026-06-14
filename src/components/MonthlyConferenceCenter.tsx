@@ -565,9 +565,12 @@ export function MonthlyConferenceCenter({
       const result = await dataService.revalidateMonthlyConferenceSession(appointmentId);
       if (!result?.success) setError(result?.error || "Não foi possível revalidar.");
       else {
-        await loadConference();
-        const refreshed = await dataService.getMonthlyConferenceSession(appointmentId);
-        if (refreshed?.success && refreshed.data) setDetail(refreshed.data);
+        if (result.data) {
+          applyUpdatedConferenceRows([result.data]);
+          setDetail(result.data);
+        }
+        setRevalidationInfo(result.message || "Atendimento revalidado.");
+        void loadConference();
       }
     } finally {
       setDetailLoading(false);

@@ -5896,7 +5896,7 @@ async function resolvePatientIdForRequest(
 
     const { data: byId, error: byIdError } = await supabase
       .from('patients')
-      .select('id')
+      .select('id, created_at, created_by')
       .eq('id', safeRaw)
       .eq('is_active', true)
       .is('deleted_at', null)
@@ -6764,6 +6764,54 @@ function financialContextIsNotBillable(value: any): boolean {
   return contextType === 'COURTESY' || contextType === 'NO_CHARGE' || contextType === 'NOT_BILLABLE';
 }
 
+function mergeAppointmentBillingPayload(appointment: any = {}) {
+  const sourcePayload =
+    appointment?.source_payload &&
+    typeof appointment.source_payload === 'object' &&
+    !Array.isArray(appointment.source_payload)
+      ? appointment.source_payload
+      : {};
+  const first = (...values: any[]) => values.find((value) => value !== undefined && value !== null && sanitizeString(value, 500) !== '');
+  return {
+    ...sourcePayload,
+    ...appointment,
+    financialContextType: first(
+      appointment?.financialContextType,
+      appointment?.financial_context_type,
+      appointment?.billingContextType,
+      appointment?.billing_context_type,
+      appointment?.payerType,
+      appointment?.payer_type,
+      sourcePayload?.financialContextType,
+      sourcePayload?.financial_context_type,
+      sourcePayload?.billingContextType,
+      sourcePayload?.billing_context_type,
+      sourcePayload?.payerType,
+      sourcePayload?.payer_type
+    ),
+    financial_context_type: first(appointment?.financial_context_type, appointment?.financialContextType, sourcePayload?.financial_context_type, sourcePayload?.financialContextType),
+    billingContextType: first(appointment?.billingContextType, appointment?.billing_context_type, sourcePayload?.billingContextType, sourcePayload?.billing_context_type),
+    payerType: first(appointment?.payerType, appointment?.payer_type, sourcePayload?.payerType, sourcePayload?.payer_type),
+    payer_type: first(appointment?.payer_type, appointment?.payerType, sourcePayload?.payer_type, sourcePayload?.payerType),
+    payerId: first(appointment?.payerId, appointment?.payer_id, sourcePayload?.payerId, sourcePayload?.payer_id),
+    payer_id: first(appointment?.payer_id, appointment?.payerId, sourcePayload?.payer_id, sourcePayload?.payerId),
+    payerName: first(appointment?.payerName, appointment?.payer_name_snapshot, appointment?.payerNameSnapshot, sourcePayload?.payerName, sourcePayload?.payer_name_snapshot, sourcePayload?.payerNameSnapshot),
+    payer_name_snapshot: first(appointment?.payer_name_snapshot, appointment?.payerName, appointment?.payerNameSnapshot, sourcePayload?.payer_name_snapshot, sourcePayload?.payerName, sourcePayload?.payerNameSnapshot),
+    serviceType: first(appointment?.serviceType, appointment?.service_type, appointment?.approach, appointment?.type, sourcePayload?.serviceType, sourcePayload?.service_type, sourcePayload?.approach, sourcePayload?.type),
+    service_type: first(appointment?.service_type, appointment?.serviceType, appointment?.approach, appointment?.type, sourcePayload?.service_type, sourcePayload?.serviceType, sourcePayload?.approach, sourcePayload?.type),
+    insuranceCardNumber: first(appointment?.insuranceCardNumber, appointment?.insurance_card_number, appointment?.cardNumber, appointment?.card_number, sourcePayload?.insuranceCardNumber, sourcePayload?.insurance_card_number, sourcePayload?.cardNumber, sourcePayload?.card_number),
+    insurance_card_number: first(appointment?.insurance_card_number, appointment?.insuranceCardNumber, appointment?.cardNumber, appointment?.card_number, sourcePayload?.insurance_card_number, sourcePayload?.insuranceCardNumber, sourcePayload?.cardNumber, sourcePayload?.card_number),
+    insurancePlanName: first(appointment?.insurancePlanName, appointment?.insurance_plan_name, sourcePayload?.insurancePlanName, sourcePayload?.insurance_plan_name),
+    insurance_plan_name: first(appointment?.insurance_plan_name, appointment?.insurancePlanName, sourcePayload?.insurance_plan_name, sourcePayload?.insurancePlanName),
+    authorizationCode: first(appointment?.authorizationCode, appointment?.authorization_code, sourcePayload?.authorizationCode, sourcePayload?.authorization_code),
+    authorization_code: first(appointment?.authorization_code, appointment?.authorizationCode, sourcePayload?.authorization_code, sourcePayload?.authorizationCode),
+    guideNumber: first(appointment?.guideNumber, appointment?.guide_number, sourcePayload?.guideNumber, sourcePayload?.guide_number),
+    guide_number: first(appointment?.guide_number, appointment?.guideNumber, sourcePayload?.guide_number, sourcePayload?.guideNumber),
+    procedureCode: first(appointment?.procedureCode, appointment?.procedure_code, sourcePayload?.procedureCode, sourcePayload?.procedure_code),
+    procedure_code: first(appointment?.procedure_code, appointment?.procedureCode, sourcePayload?.procedure_code, sourcePayload?.procedureCode)
+  };
+}
+
 function appointmentRequiresFinancialContext(appointment: any): boolean {
   const status = sanitizeString(appointment?.status, 80)
     .normalize('NFD')
@@ -6918,6 +6966,7 @@ async function upsertInitialBillingContextFromAppointment(params: {
   appointmentId: string;
   patientId: string;
   appointment: any;
+  overwriteExplicit?: boolean;
 }) {
   try {
     const organizationId = sanitizeString(params.organizationId, 120);
@@ -6926,7 +6975,7 @@ async function upsertInitialBillingContextFromAppointment(params: {
     if (!isUuid(organizationId) || !isUuid(appointmentId) || !isUuid(patientId)) return;
     const existing = await supabase
       .from('appointment_billing_contexts')
-      .select('id')
+      .select('id, created_at')
       .eq('organization_id', organizationId)
       .eq('appointment_id', appointmentId)
       .limit(1)
@@ -6935,11 +6984,11 @@ async function upsertInitialBillingContextFromAppointment(params: {
       if (hasMissingFinancialSchema(existing.error) || isMissingRelationError(existing.error) || extractMissingColumnName(existing.error)) return;
       throw existing.error;
     }
-    if (existing.data?.id) return;
-
-    const explicitFinancialContextType = readAppointmentFinancialContextType(params.appointment);
+    const appointmentPayload = mergeAppointmentBillingPayload(params.appointment);
+    const explicitFinancialContextType = readAppointmentFinancialContextType(appointmentPayload);
+    if (existing.data?.id && (!params.overwriteExplicit || !explicitFinancialContextType)) return;
     const rawPayerId = explicitFinancialContextType === 'INSURANCE'
-      ? sanitizeString(params.appointment?.payerId || params.appointment?.payer_id, 120)
+      ? sanitizeString(appointmentPayload?.payerId || appointmentPayload?.payer_id, 120)
       : '';
     let payer: any = null;
     if (isUuid(rawPayerId)) {
@@ -6954,18 +7003,18 @@ async function upsertInitialBillingContextFromAppointment(params: {
       payer = payerResult.data || null;
     }
     const serviceType = sanitizeString(
-      params.appointment?.service_type ||
-        params.appointment?.serviceType ||
-        params.appointment?.approach ||
-        params.appointment?.type,
+      appointmentPayload?.service_type ||
+        appointmentPayload?.serviceType ||
+        appointmentPayload?.approach ||
+        appointmentPayload?.type,
       120
     );
     let payerName = explicitFinancialContextType === 'INSURANCE'
       ? sanitizeString(
           payer?.name ||
-            params.appointment?.payerName ||
-            params.appointment?.payer_name_snapshot ||
-            params.appointment?.payerNameSnapshot,
+            appointmentPayload?.payerName ||
+            appointmentPayload?.payer_name_snapshot ||
+            appointmentPayload?.payerNameSnapshot,
           180
         )
       : '';
@@ -6995,7 +7044,7 @@ async function upsertInitialBillingContextFromAppointment(params: {
       (payer?.id ? 'INSURANCE' : null) ||
       normalizeAppointmentFinancialContextType(suggestedBilling?.payerType || suggestedBilling?.payer_type);
     const payload = cleanObject({
-      id: crypto.randomUUID(),
+      id: existing.data?.id || crypto.randomUUID(),
       organization_id: organizationId,
       appointment_id: appointmentId,
       patient_id: patientId,
@@ -7003,12 +7052,12 @@ async function upsertInitialBillingContextFromAppointment(params: {
       payer_type: financialContextType || null,
       payer_name_snapshot: payerName || null,
       service_type: serviceType || sanitizeString(suggestedBilling?.serviceType || suggestedBilling?.service_type, 120) || null,
-      insurance_card_number: sanitizeString(params.appointment?.insuranceCardNumber || params.appointment?.insurance_card_number || params.appointment?.cardNumber || params.appointment?.card_number || suggestedBilling?.insuranceCardNumber || suggestedBilling?.insurance_card_number, 120) || null,
-      insurance_plan_name: sanitizeString(params.appointment?.insurancePlanName || params.appointment?.insurance_plan_name || suggestedBilling?.insurancePlanName || suggestedBilling?.insurance_plan_name, 160) || null,
-      authorization_code: sanitizeString(params.appointment?.authorizationCode || params.appointment?.authorization_code || suggestedBilling?.authorizationCode || suggestedBilling?.authorization_code, 120) || null,
-      guide_number: sanitizeString(params.appointment?.guideNumber || params.appointment?.guide_number || suggestedBilling?.guideNumber || suggestedBilling?.guide_number, 120) || null,
-      procedure_code: sanitizeString(params.appointment?.procedureCode || params.appointment?.procedure_code, 80) || null,
-      notes: sanitizeTextField(params.appointment?.billingNotes || params.appointment?.billing_notes || suggestedBilling?.notes, 1200) || null,
+      insurance_card_number: sanitizeString(appointmentPayload?.insuranceCardNumber || appointmentPayload?.insurance_card_number || appointmentPayload?.cardNumber || appointmentPayload?.card_number || suggestedBilling?.insuranceCardNumber || suggestedBilling?.insurance_card_number, 120) || null,
+      insurance_plan_name: sanitizeString(appointmentPayload?.insurancePlanName || appointmentPayload?.insurance_plan_name || suggestedBilling?.insurancePlanName || suggestedBilling?.insurance_plan_name, 160) || null,
+      authorization_code: sanitizeString(appointmentPayload?.authorizationCode || appointmentPayload?.authorization_code || suggestedBilling?.authorizationCode || suggestedBilling?.authorization_code, 120) || null,
+      guide_number: sanitizeString(appointmentPayload?.guideNumber || appointmentPayload?.guide_number || suggestedBilling?.guideNumber || suggestedBilling?.guide_number, 120) || null,
+      procedure_code: sanitizeString(appointmentPayload?.procedureCode || appointmentPayload?.procedure_code, 80) || null,
+      notes: sanitizeTextField(appointmentPayload?.billingNotes || appointmentPayload?.billing_notes || suggestedBilling?.notes, 1200) || null,
       source: sanitizeString(
         explicitFinancialContextType
           ? 'APPOINTMENT_CONTEXT'
@@ -7020,7 +7069,7 @@ async function upsertInitialBillingContextFromAppointment(params: {
         explicitFinancialContext: Boolean(explicitFinancialContextType),
         skipTussResolution: financialContextSkipsInsuranceBilling(financialContextType)
       })),
-      created_at: new Date().toISOString(),
+      created_at: existing.data?.created_at || new Date().toISOString(),
       updated_at: new Date().toISOString()
     });
     const hasContextValue = Boolean(
@@ -9152,7 +9201,8 @@ async function ensureClinicAndMembershipForCoordinator(userId: string, clinicNam
       id: userId,
       owner_user_id: userId,
       name: safeClinicName,
-      created_at: new Date().toISOString()
+      created_by: existing.data?.created_by || null,
+      created_at: existing.data?.created_at || new Date().toISOString()
     }], { onConflict: 'id' });
 
   await supabase
@@ -14820,7 +14870,43 @@ async function startServer() {
       payload: { appointmentIds }
     });
 
-    void regenerateClosureForAppointments(appointmentIds, actor, params.eventType);
+    const preparedById = new Map(preparedAppointments.map((appointment: any) => [sanitizeString(appointment?.id, 120), appointment]));
+    const revalidatedIds = new Set<string>();
+    for (const appointment of persistedAppointments) {
+      const appointmentId = sanitizeString(appointment?.id, 120);
+      if (!isUuid(appointmentId)) continue;
+      try {
+        const preparedAppointment = preparedById.get(appointmentId) || {};
+        const existingSourcePayload =
+          appointment?.source_payload && typeof appointment.source_payload === 'object' && !Array.isArray(appointment.source_payload)
+            ? appointment.source_payload
+            : {};
+        const revalidation = await revalidateAppointmentBillingForAppointment({
+          appointmentId,
+          user: actor,
+          scopedAppointment: {
+            ...appointment,
+            ...preparedAppointment,
+            source_payload: {
+              ...existingSourcePayload,
+              ...preparedAppointment
+            }
+          },
+          source: params.eventType,
+          overwriteExplicitContext: true,
+          forceClosure: true
+        });
+        if ((revalidation as any)?.ok) revalidatedIds.add(appointmentId);
+      } catch (error: any) {
+        console.warn('[Appointments] revalidação TUSS-ready pós-agendamento falhou:', {
+          appointmentId,
+          eventType: params.eventType,
+          message: sanitizeString(error?.message || String(error), 300)
+        });
+      }
+    }
+    const pendingClosureIds = appointmentIds.filter((appointmentId) => !revalidatedIds.has(appointmentId));
+    if (pendingClosureIds.length > 0) void regenerateClosureForAppointments(pendingClosureIds, actor, params.eventType);
     triggerAppointmentReminderScan(params.eventType);
 
     const action = params.eventType === 'appointment.created' ? 'created' : 'updated';
@@ -31255,6 +31341,164 @@ async function startServer() {
     return { ok: true, organizationId, appointment: data };
   };
 
+  const clearAppointmentBillingItemForAppointment = async (organizationId: string, appointmentId: string) => {
+    const safeOrganizationId = sanitizeString(organizationId, 120);
+    const safeAppointmentId = sanitizeString(appointmentId, 120);
+    if (!isUuid(safeOrganizationId) || !isUuid(safeAppointmentId)) return false;
+    const { error } = await supabase
+      .from('appointment_billing_items')
+      .delete()
+      .eq('organization_id', safeOrganizationId)
+      .eq('appointment_id', safeAppointmentId);
+    if (error) {
+      if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return false;
+      throw error;
+    }
+    return true;
+  };
+
+  const buildAppointmentBillingRevalidationMessage = (params: {
+    billingItem?: any;
+    billingContext?: any;
+    cleared?: boolean;
+  }) => {
+    const billingItem = params.billingItem || null;
+    const billingContext = params.billingContext || null;
+    const contextType = normalizeAppointmentFinancialContextType(billingContext?.payer_type);
+    if (params.cleared && financialContextSkipsInsuranceBilling(contextType)) {
+      return 'Atendimento revalidado: contexto financeiro não faturável por convênio.';
+    }
+    if (!isUuid(sanitizeString(billingContext?.payer_id, 120))) {
+      return 'Atendimento revalidado: TUSS não resolvido porque não há convênio aplicado ao atendimento.';
+    }
+    if (billingItem?.internalProcedureName && billingItem?.tussCode) {
+      return 'Atendimento revalidado: Procedimento/TUSS resolvido.';
+    }
+    const reasons = Array.isArray(billingItem?.readinessLabels)
+      ? billingItem.readinessLabels.filter(Boolean)
+      : [];
+    if (reasons.length > 0) {
+      return `Atendimento revalidado: ${reasons.slice(0, 3).join(', ')}.`;
+    }
+    return 'Atendimento revalidado: Procedimento/TUSS ainda pendente de configuração.';
+  };
+
+  const revalidateAppointmentBillingForAppointment = async (params: {
+    appointmentId: string;
+    user: any;
+    scopedAppointment?: any;
+    source?: string;
+    forceClosure?: boolean;
+    overwriteExplicitContext?: boolean;
+  }) => {
+    const appointmentId = sanitizeString(params.appointmentId, 120);
+    const organizationId = sanitizeString(currentClinicId(params.user), 120);
+    if (!isUuid(appointmentId) || !isUuid(organizationId)) {
+      return { ok: false, status: 400, error: 'Consulta inválida.' };
+    }
+
+    let appointment = params.scopedAppointment || null;
+    if (!appointment?.id) {
+      const context = await fetchAppointmentForBillingContext(appointmentId, params.user);
+      if (!context.ok) return context;
+      appointment = (context as any).appointment;
+    }
+    const appointmentOrganizationId = sanitizeString(appointment?.organization_id || appointment?.clinic_id || organizationId, 120);
+    if (isUuid(appointmentOrganizationId) && appointmentOrganizationId !== organizationId) {
+      return { ok: false, status: 404, error: 'Consulta não encontrada.' };
+    }
+    const billingAppointment = mergeAppointmentBillingPayload(appointment);
+    const patientId = sanitizeString(billingAppointment?.patient_id || billingAppointment?.patientId, 120);
+    if (!isUuid(patientId)) return { ok: false, status: 404, error: 'Consulta sem paciente válido.' };
+    if (!(await canAccessPatientInCurrentClinic(patientId, params.user))) {
+      return { ok: false, status: 404, error: 'Consulta não encontrada.' };
+    }
+
+    await upsertInitialBillingContextFromAppointment({
+      organizationId,
+      appointmentId,
+      patientId,
+      appointment: billingAppointment,
+      overwriteExplicit: Boolean(params.overwriteExplicitContext)
+    });
+
+    const billingContext = mergeBillingContextMetadata(await fetchAppointmentBillingContextRow(organizationId, appointmentId));
+    let payer: any = null;
+    let billingItem: any = null;
+    let clearedBillingItem = false;
+    const contextSkipsInsurance = financialContextSkipsInsuranceBilling(billingContext?.payer_type);
+    const payerId = sanitizeString(billingContext?.payer_id, 120);
+
+    if (contextSkipsInsurance || !isUuid(payerId)) {
+      clearedBillingItem = await clearAppointmentBillingItemForAppointment(organizationId, appointmentId);
+    } else {
+      payer = await fetchPayerForAdmin(payerId, organizationId);
+      if (payer?.id) {
+        billingItem = await resolveAndPersistAppointmentBillingItem({
+          organizationId,
+          appointment: billingAppointment,
+          billingContext,
+          payer,
+          user: params.user
+        });
+      } else {
+        clearedBillingItem = await clearAppointmentBillingItemForAppointment(organizationId, appointmentId);
+      }
+    }
+
+    const closure = await persistAppointmentClosureCheck({
+      appointmentId,
+      user: params.user,
+      force: params.forceClosure !== false,
+      scopedAppointment: billingAppointment,
+      manualNotBillable: financialContextIsNotBillable(billingContext?.payer_type)
+    });
+    if (!(closure as any)?.ok) return closure;
+
+    const hydrated = await hydrateConferenceRows([(closure as any).data], organizationId, params.user);
+    const row = hydrated[0] || (closure as any).data;
+    const documents = await fetchRequiredDocumentsForAppointment(organizationId, appointmentId);
+    const serializedContext = serializeBillingContext(billingContext || {
+      appointment_id: appointmentId,
+      patient_id: patientId,
+      service_type: billingAppointment?.service_type || billingAppointment?.serviceType || billingAppointment?.approach || null
+    }, payer, documents);
+    const message = buildAppointmentBillingRevalidationMessage({
+      billingItem,
+      billingContext,
+      cleared: clearedBillingItem
+    });
+    await writePayerRequirementAuditLog({
+      organizationId,
+      payerId: billingContext?.payer_id || null,
+      appointmentId,
+      action: 'APPOINTMENT_BILLING_REVALIDATED',
+      performedBy: sanitizeString(params.user?.id, 120),
+      metadata: {
+        source: sanitizeString(params.source || 'appointment_revalidation', 80),
+        billingItemResolved: Boolean(billingItem?.tussCode && billingItem?.internalProcedureName),
+        billingItemId: billingItem?.id || null,
+        clearedBillingItem
+      }
+    });
+    return {
+      ok: true,
+      data: row,
+      closure: (closure as any).data,
+      billingItem,
+      billingContext: serializedContext,
+      message,
+      resolution: {
+        procedureResolved: Boolean(billingItem?.internalProcedureName),
+        tussResolved: Boolean(billingItem?.tussCode),
+        valueResolved: Number(billingItem?.amountCents || 0) > 0,
+        clearedBillingItem,
+        skippedInsuranceBilling: contextSkipsInsurance,
+        payerId: isUuid(payerId) ? payerId : null
+      }
+    };
+  };
+
   app.get('/api/admin/payers', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -32296,24 +32540,31 @@ async function startServer() {
   app.post('/api/appointments/:appointmentId/billing-item/resolve', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 16 * 1024, 'Payload de resolução TUSS-ready')) return;
-      const context = await fetchAppointmentForBillingContext(req.params.appointmentId, req.session.user);
-      if (!context.ok) return res.status((context as any).status || 404).json(payerSafeError((context as any).status || 404));
-      const organizationId = (context as any).organizationId;
-      const appointment = (context as any).appointment;
-      const billingContext = await fetchAppointmentBillingContextRow(organizationId, appointment.id);
-      if (!billingContext?.id) return res.status(409).json({ success: false, error: 'Informe o contexto financeiro antes de resolver o item faturável.' });
-      if (financialContextSkipsInsuranceBilling(billingContext?.payer_type) || !isUuid(sanitizeString(billingContext?.payer_id, 120))) {
-        return res.status(409).json({ success: false, error: 'A resolução TUSS exige convênio com pagador cadastrado no atendimento.' });
-      }
-      const payer = billingContext?.payer_id ? await fetchPayerForAdmin(billingContext.payer_id, organizationId) : null;
-      const billingItem = await resolveAndPersistAppointmentBillingItem({
-        organizationId,
-        appointment,
-        billingContext,
-        payer,
-        user: req.session.user
+      const appointmentId = sanitizeString(req.params.appointmentId, 120);
+      if (!isUuid(appointmentId)) return res.status(400).json(payerSafeError(400));
+      const generated = await revalidateAppointmentBillingForAppointment({
+        appointmentId,
+        user: req.session.user,
+        source: 'billing_item_resolve_endpoint',
+        forceClosure: true
       });
-      return res.json({ success: true, data: billingItem });
+      if (!generated.ok) return res.status((generated as any).status || 404).json(payerSafeError((generated as any).status || 404));
+      if (!(generated as any).billingItem?.id) {
+        return res.status(409).json({
+          success: false,
+          error: (generated as any).message || 'A resolução TUSS exige convênio com pagador cadastrado no atendimento.',
+          billingContext: (generated as any).billingContext || null,
+          resolution: (generated as any).resolution || null
+        });
+      }
+      return res.json({
+        success: true,
+        data: (generated as any).billingItem,
+        billingItem: (generated as any).billingItem,
+        billingContext: (generated as any).billingContext || null,
+        message: (generated as any).message || 'Atendimento revalidado.',
+        resolution: (generated as any).resolution || null
+      });
     } catch (error: any) {
       console.warn('[TussReady] billing item resolve failed:', error?.message || String(error));
       return res.status(500).json(payerSafeError(500));
@@ -32639,9 +32890,22 @@ async function startServer() {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de revalidação de fechamento')) return;
       const appointmentId = sanitizeString(req.params.appointmentId, 120);
       if (!isUuid(appointmentId)) return res.status(400).json(closureSafeError(400));
-      const generated = await persistAppointmentClosureCheck({ appointmentId, user: req.session.user, force: true });
+      const generated = await revalidateAppointmentBillingForAppointment({
+        appointmentId,
+        user: req.session.user,
+        source: 'closure_revalidate_button',
+        forceClosure: true
+      });
       if (!generated.ok) return res.status((generated as any).status || 404).json(closureSafeError((generated as any).status || 404));
-      return sendNoStoreJson(res, { success: true, data: (generated as any).data, reused: Boolean((generated as any).reused) });
+      return sendNoStoreJson(res, {
+        success: true,
+        data: (generated as any).data,
+        billingItem: (generated as any).billingItem || null,
+        billingContext: (generated as any).billingContext || null,
+        message: (generated as any).message || 'Atendimento revalidado.',
+        resolution: (generated as any).resolution || null,
+        reused: Boolean((generated as any).reused)
+      });
     } catch (error: any) {
       console.warn('[Closure] revalidate failed:', error?.message || String(error));
       return res.status(500).json(closureSafeError(500));
@@ -33325,16 +33589,32 @@ async function startServer() {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de revalidação da conferência')) return;
       const appointmentId = sanitizeString(req.params.appointmentId, 120);
       if (!isUuid(appointmentId)) return res.status(400).json(conferenceSafeError(400));
-      const generated = await persistAppointmentClosureCheck({ appointmentId, user: req.session.user, force: true });
+      const generated = await revalidateAppointmentBillingForAppointment({
+        appointmentId,
+        user: req.session.user,
+        source: 'monthly_conference_revalidate_button',
+        forceClosure: true
+      });
       if (!generated.ok) return res.status((generated as any).status || 404).json(conferenceSafeError((generated as any).status || 404));
       await writeClosureAuditLog({
         organizationId: sanitizeString(currentClinicId(req.session.user), 120),
         appointmentId,
         action: 'REVALIDATED_FROM_CONFERENCE',
         performedBy: sanitizeString(req.session.user?.id, 120),
-        metadata: { source: 'monthly_conference' }
+        metadata: {
+          source: 'monthly_conference',
+          resolution: (generated as any).resolution || null,
+          message: (generated as any).message || null
+        }
       });
-      return sendNoStoreJson(res, { success: true, data: (generated as any).data });
+      return sendNoStoreJson(res, {
+        success: true,
+        data: (generated as any).data,
+        billingItem: (generated as any).billingItem || null,
+        billingContext: (generated as any).billingContext || null,
+        message: (generated as any).message || 'Atendimento revalidado.',
+        resolution: (generated as any).resolution || null
+      });
     } catch (error: any) {
       console.warn('[MonthlyConference] revalidate failed:', error?.message || String(error));
       return res.status(500).json(conferenceSafeError(500));
