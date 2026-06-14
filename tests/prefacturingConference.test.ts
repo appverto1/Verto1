@@ -110,7 +110,7 @@ test('fechamento operacional evita cache stale depois de revalidar', () => {
   const closureListSlice = serverCode.slice(serverCode.indexOf("app.get('/api/closure/appointments'"), serverCode.indexOf("app.post('/api/closure/revalidate-period'"));
   assert.match(closureListSlice, /await hydrateConferenceRows\(rows, clinicId, req\.session\.user\)/);
   assert.doesNotMatch(closureListSlice, /financialPlanNameForClosureRow/);
-  const missingFilterSlice = serverCode.slice(serverCode.indexOf('const filterHydratedRowsByTussMissingKind'), serverCode.indexOf('const CONFERENCE_STATUS_LABELS'));
+  const missingFilterSlice = serverCode.slice(serverCode.indexOf('const filterHydratedRowsByTussMissingKind'), serverCode.indexOf('const normalizePrefacturingQuickFilter'));
   assert.match(missingFilterSlice, /kind === 'card'[\s\S]*?return !sanitizeString\(row\?\.insurance_card_number, 120\)/);
   assert.doesNotMatch(missingFilterSlice, /missing_card_number|missing_service_catalog|missing_tuss_mapping|missing_tuss_code|missing_amount/);
   assert.match(dataServiceCode, /async function getNoStoreAuthHeaders/);
@@ -312,6 +312,24 @@ test('frontend atualiza conferencia sem F5 e nao promete faturamento eletronico'
   assert.match(conferenceCode, /Pendências restantes/);
   assert.match(conferenceCode, /Pendências e configurações mais frequentes/);
   assert.match(closureCode, /Pendências operacionais/);
+  assert.match(closureCode, /type OperationalCardFilterKey =/);
+  assert.match(closureCode, /const \[activeCardFilter, setActiveCardFilter\]/);
+  assert.match(closureCode, /function operationalCardFilterMatches/);
+  assert.match(closureCode, /const visibleOperationalRows = useMemo/);
+  assert.match(closureCode, /quickFilter: activeCardFilter\?\.key \|\| ""/);
+  assert.match(dataServiceCode, /quickFilter: options\.quickFilter/);
+  assert.match(serverCode, /filterHydratedRowsByPrefacturingQuickFilter/);
+  assert.match(closureCode, /missing_financial_context/);
+  assert.match(closureCode, /hasPendingLabel\(viewModel, \["Pagador", "Plano financeiro"\], \["configuration"\]\)/);
+  assert.match(closureCode, /hasPendingLabel\(viewModel, \["Procedimento", "TUSS"\], \["configuration"\]\)/);
+  assert.match(closureCode, /<ActiveFilterBanner/);
+  assert.match(closureCode, /aria-pressed=\{activeCardFilter\?\.key === item\.key\}/);
+  assert.match(closureCode, /cardClass\(activeCardFilter\?\.key === item\.key\)/);
+  const closureCardFilterSlice = closureCode.slice(
+    closureCode.indexOf('const toggleCardFilter'),
+    closureCode.indexOf('const clearCardFilter')
+  );
+  assert.doesNotMatch(closureCardFilterSlice, /revalidateClosurePeriod|loadRows|getClosureAppointments/);
   assert.match(closureCode, /formatDateTimeInAppointmentTimezone/);
   assert.match(conferenceCode, /formatDateTimeInAppointmentTimezone/);
   assert.match(closureCode, /Somente pendências operacionais/);

@@ -1,4 +1,8 @@
 import webpush from 'web-push';
+import {
+  buildPatientReminderNotificationPayload,
+  resolveBrandingContext,
+} from '../src/services/notificationBranding';
 
 type Logger = Pick<Console, 'log' | 'warn' | 'error'>;
 
@@ -51,9 +55,17 @@ type SendAppointmentNotificationParams = {
     reminderKind?: string | null;
     clinicName?: string | null;
     clinicLogoUrl?: string | null;
+    clinicPrimaryColor?: string | null;
+    patientName?: string | null;
+    professionalDisplayName?: string | null;
+    professionalLogoUrl?: string | null;
   };
   clinicName?: string | null;
   clinicLogoUrl?: string | null;
+  clinicPrimaryColor?: string | null;
+  patientName?: string | null;
+  professionalDisplayName?: string | null;
+  professionalLogoUrl?: string | null;
   title?: string;
   body?: string;
   reminderKind?: string;
@@ -112,8 +124,6 @@ const isRemovablePushColumn = (column: string | null) =>
         'updated_at'
       ].includes(column)
   );
-
-const APPOINTMENT_NOTIFICATION_CTA = 'Toque para abrir a Verto e confirmar, remarcar ou cancelar.';
 
 const safeJsonSubscription = (value: any): PushSubscriptionInput | null => {
   if (!value) return null;
@@ -580,9 +590,8 @@ export async function sendAppointmentNotification(params: SendAppointmentNotific
   const timeLabel = sanitizeText(params.appointment.timeLabel, 80);
   const dateLabel = sanitizeText(params.appointment.dateLabel, 80);
   const scheduledAt = sanitizeText(params.appointment.scheduledAt, 120);
-  const whenLabel = [dateLabel, timeLabel].filter(Boolean).join(' as ');
   const reminderKind = sanitizeText(params.reminderKind || params.appointment.reminderKind || 'appointment', 40);
-  const clinicName = sanitizeText(params.appointment.clinicName || params.clinicName || 'sua clínica', 160) || 'sua clínica';
+  const clinicName = sanitizeText(params.appointment.clinicName || params.clinicName, 160);
   const clinicLogoUrl = sanitizeText(params.appointment.clinicLogoUrl || params.clinicLogoUrl, 2000);
   const appointmentQuery = new URLSearchParams({
     appointment_id: String(params.appointment.id || ''),
@@ -590,21 +599,33 @@ export async function sendAppointmentNotification(params: SendAppointmentNotific
     ...(timeLabel ? { appointment_time: timeLabel } : {}),
     ...(scheduledAt ? { scheduled_at: scheduledAt } : {})
   }).toString();
-  const payload = JSON.stringify({
-    title: params.title || `Lembrete de Consulta - ${clinicName}`,
-    body:
-      params.body ||
-      (whenLabel
-        ? `Voce tem uma consulta agendada pela ${clinicName} em ${whenLabel}. ${APPOINTMENT_NOTIFICATION_CTA}`
-        : `Voce tem uma consulta agendada pela ${clinicName}. ${APPOINTMENT_NOTIFICATION_CTA}`),
-    url: `/?${appointmentQuery}`,
-    icon: clinicLogoUrl || '/verto-3d-transparent.png',
-    badge: '/verto-3d-transparent.png',
+  const branding = resolveBrandingContext({
+    clinic: {
+      displayName: clinicName,
+      logoUrl: clinicLogoUrl,
+      primaryColor: params.appointment.clinicPrimaryColor || params.clinicPrimaryColor,
+    },
+    professional: {
+      displayName: params.appointment.professionalDisplayName || params.professionalDisplayName,
+      logoUrl: params.appointment.professionalLogoUrl || params.professionalLogoUrl,
+    },
+    fallbackName: 'Verto',
+    fallbackLogoUrl: '/verto-3d-transparent.png',
+  });
+  const notificationPayload = buildPatientReminderNotificationPayload({
     appointmentId: params.appointment.id,
     scheduledAt: scheduledAt || null,
-    reminderKind,
     dateLabel,
-    timeLabel
+    timeLabel,
+    patientName: params.appointment.patientName || params.patientName,
+    reminderKind,
+    branding,
+    url: `/?${appointmentQuery}`,
+  });
+  const payload = JSON.stringify({
+    ...notificationPayload,
+    title: params.title || notificationPayload.title,
+    body: params.body || notificationPayload.body,
   });
 
   let sent = 0;

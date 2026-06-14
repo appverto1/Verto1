@@ -16486,15 +16486,19 @@ async function startServer() {
       }
 
       let reminderClinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      let reminderAppointmentContext: any = null;
       if (isUuid(appointmentId)) {
         const { data: appointmentClinic, error: appointmentClinicError } = await supabase
           .from('appointments')
-          .select('clinic_id')
+          .select('clinic_id, patient_name, therapist_name, source_payload')
           .eq('id', appointmentId)
           .limit(1)
           .maybeSingle();
-        if (!appointmentClinicError && appointmentClinic?.clinic_id) {
-          reminderClinicId = sanitizeString(appointmentClinic.clinic_id, 120);
+        if (!appointmentClinicError && appointmentClinic) {
+          reminderAppointmentContext = appointmentClinic;
+          if (appointmentClinic?.clinic_id) {
+            reminderClinicId = sanitizeString(appointmentClinic.clinic_id, 120);
+          }
         } else if (appointmentClinicError && !hasMissingFinancialSchema(appointmentClinicError)) {
           console.warn('[Push] appointment clinic read failed:', appointmentClinicError.message);
         }
@@ -16525,6 +16529,36 @@ async function startServer() {
         };
       };
       const clinicBranding = await readReminderClinicBranding(reminderClinicId);
+      const reminderSource = parseAppointmentSourcePayloadForFamilyView(reminderAppointmentContext?.source_payload);
+      const patientName = sanitizeString(
+        reminderAppointmentContext?.patient_name ||
+          reminderSource?.patientName ||
+          reminderSource?.patient_name ||
+          req.body?.patientName ||
+          req.body?.patient_name,
+        180
+      );
+      const professionalDisplayName = sanitizeString(
+        reminderAppointmentContext?.therapist_name ||
+          reminderSource?.professionalDisplayName ||
+          reminderSource?.professionalName ||
+          reminderSource?.professional_name ||
+          reminderSource?.therapistName ||
+          reminderSource?.therapist_name ||
+          req.body?.professionalDisplayName ||
+          req.body?.professionalName,
+        180
+      );
+      const professionalLogoUrl = sanitizeSessionUrl(
+        reminderSource?.professionalLogoUrl ||
+          reminderSource?.professional_logo_url ||
+          reminderSource?.professionalAvatarUrl ||
+          reminderSource?.professional_avatar_url ||
+          reminderSource?.therapistAvatarUrl ||
+          reminderSource?.therapist_avatar_url ||
+          req.body?.professionalLogoUrl ||
+          req.body?.professionalAvatarUrl
+      );
 
       const result = await sendAppointmentNotification({
         supabase,
@@ -16537,10 +16571,11 @@ async function startServer() {
           dateLabel: sanitizeString(req.body?.dateLabel || req.body?.date_label, 80) || null,
           reminderKind: 'manual',
           clinicName: clinicBranding.clinicName,
-          clinicLogoUrl: clinicBranding.clinicLogoUrl
+          clinicLogoUrl: clinicBranding.clinicLogoUrl,
+          patientName,
+          professionalDisplayName,
+          professionalLogoUrl
         },
-        title: `Lembrete de Consulta - ${clinicBranding.clinicName}`,
-        body: `Voce tem uma consulta agendada pela ${clinicBranding.clinicName}. Toque para abrir a Verto e confirmar, remarcar ou cancelar.`,
         reminderKind: 'manual',
         logger: console
       });
@@ -32885,6 +32920,7 @@ async function startServer() {
       const onlyReady = String(req.query?.onlyReady || req.query?.somenteProntas || '').toLowerCase() === 'true';
       const onlyWarnings = String(req.query?.onlyWarnings || req.query?.somenteAlertas || '').toLowerCase() === 'true';
       const missingKind = sanitizeString(req.query?.missing || req.query?.pendencia, 80).toLowerCase();
+      const quickFilter = normalizePrefacturingQuickFilter(req.query?.quickFilter || req.query?.quick_filter || req.query?.cardFilter || req.query?.card_filter);
 
       const isSignatureMissingFilter = missingKind === 'signature' || missingKind === 'assinatura';
       const isReportMissingFilter = missingKind === 'report' || missingKind === 'relatorio';
@@ -32957,7 +32993,8 @@ async function startServer() {
         let query = supabase
           .from('appointment_closure_checks')
           .select(variant.select);
-        query = await applySharedClosureFilters(query, variant, true);
+        query = await applySharedClosureFilters(query, variant, !quickFilter);
+        if (quickFilter) query = query.order('scheduled_start', { ascending: false }).limit(2000);
         const { data, error } = await query;
         if (error) {
           lastSchemaError = error;
@@ -33013,10 +33050,14 @@ async function startServer() {
         warningIssues: totalsRows.reduce((sum: number, row: any) => sum + (Number(row.warning_issues_count) || 0), 0)
       };
       const hydrateStartedAt = Date.now();
-      const closureRows = filterHydratedRowsByTussMissingKind(
-        await hydrateConferenceRows(rows, clinicId, req.session.user),
-        missingKind
+      const hydratedRows = filterHydratedRowsByPrefacturingQuickFilter(
+        filterHydratedRowsByTussMissingKind(
+          await hydrateConferenceRows(rows, clinicId, req.session.user),
+          missingKind
+        ),
+        quickFilter
       );
+      const closureRows = quickFilter ? hydratedRows.slice(from, to + 1) : hydratedRows;
       logPrefacturingReadPerformance('closure.appointments', {
         durationMs: Date.now() - readStartedAt,
         listQueryMs,
@@ -33025,7 +33066,8 @@ async function startServer() {
         page,
         limit,
         rows: closureRows.length,
-        totalsRows: totalsRows.length
+        totalsRows: totalsRows.length,
+        quickFilter: quickFilter || undefined
       });
       return sendNoStoreJson(res, {
         success: true,
@@ -33227,6 +33269,7 @@ async function startServer() {
     const onlyReady = String(source?.onlyReady || source?.only_ready || '').toLowerCase() === 'true';
     const onlyNotBillable = String(source?.onlyNotBillable || source?.only_not_billable || '').toLowerCase() === 'true';
     const missingKind = sanitizeString(source?.missing || source?.pendingKind || source?.pendencia, 80).toLowerCase();
+    const quickFilter = normalizePrefacturingQuickFilter(source?.quickFilter || source?.quick_filter || source?.cardFilter || source?.card_filter || source?.kpiFilter || source?.kpi_filter);
     const invalidUuid =
       (patientId && !isUuid(patientId)) ||
       (professionalId && !isUuid(professionalId)) ||
@@ -33245,7 +33288,8 @@ async function startServer() {
       onlyPending,
       onlyReady,
       onlyNotBillable,
-      missingKind
+      missingKind,
+      quickFilter
     };
   };
 
@@ -33281,6 +33325,93 @@ async function startServer() {
       if (kind === 'amount' || kind === 'valor') return !Number(row?.billing_amount_cents || row?.expected_amount_cents || 0);
       if (kind === 'professional_registry' || kind === 'registro') return !sanitizeString(row?.professional_registry, 120);
       if (kind === 'card' || kind === 'carteirinha') return !sanitizeString(row?.insurance_card_number, 120);
+      return true;
+    });
+  };
+
+  const normalizePrefacturingQuickFilter = (value: any) =>
+    sanitizeString(value, 80).trim().toLowerCase().replace(/-/g, '_');
+
+  const prefacturingFinancialContextType = (row: any) =>
+    sanitizeString(row?.financial_context_type || row?.payer_type, 80).trim().toUpperCase();
+
+  const isExplicitNonInsurancePrefacturingContext = (row: any) =>
+    [
+      'PRIVATE',
+      'PARTICULAR',
+      'PACKAGE',
+      'PACOTE',
+      'MONTHLY_PACKAGE',
+      'MENSALIDADE',
+      'COURTESY',
+      'CORTESIA',
+      'NO_CHARGE',
+      'SEM_COBRANCA',
+      'SEM COBRANCA',
+      'NON_BILLABLE',
+      'NAO_FATURAVEL'
+    ].includes(prefacturingFinancialContextType(row));
+
+  const isNonBillablePrefacturingRow = (row: any) => {
+    const status = sanitizeString(row?.readiness_status, 40).toUpperCase();
+    const conferenceStatus = sanitizeString(row?.conference_status, 40).toLowerCase();
+    const context = prefacturingFinancialContextType(row);
+    return status === 'NOT_BILLABLE' || conferenceStatus === 'non_billable' || ['COURTESY', 'CORTESIA', 'NO_CHARGE', 'SEM_COBRANCA', 'SEM COBRANCA', 'NON_BILLABLE', 'NAO_FATURAVEL'].includes(context);
+  };
+
+  const isBillablePrefacturingRow = (row: any) => !isNonBillablePrefacturingRow(row);
+
+  const prefacturingRowIssuesText = (row: any) =>
+    (Array.isArray(row?.main_issues) ? row.main_issues : [])
+      .map((issue: any) => sanitizeString(issue, 220))
+      .filter(Boolean)
+      .join(' ')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase();
+
+  const prefacturingHasIssue = (row: any, tokens: string[]) => {
+    const text = prefacturingRowIssuesText(row);
+    return tokens.some((token) => text.includes(token));
+  };
+
+  const filterHydratedRowsByPrefacturingQuickFilter = (rows: any[], quickFilter: string) => {
+    const filter = normalizePrefacturingQuickFilter(quickFilter);
+    if (!filter) return rows;
+    return (Array.isArray(rows) ? rows : []).filter((row: any) => {
+      const readinessStatus = sanitizeString(row?.readiness_status, 40).toUpperCase();
+      const conferenceStatus = sanitizeString(row?.conference_status, 40).toLowerCase() || 'pending_review';
+      const billable = isBillablePrefacturingRow(row);
+      const nonInsurance = isExplicitNonInsurancePrefacturingContext(row);
+      const hasPayer = isUuid(sanitizeString(row?.payer_id, 120));
+      const financialContext = prefacturingFinancialContextType(row);
+      const insuranceContexts = ['INSURANCE', 'CONVENIO', 'CONVÊNIO', 'PAYER', 'HEALTH_PLAN'];
+      const hasFinancialContext = hasPayer || Boolean(financialContext && !insuranceContexts.includes(financialContext));
+      const hasProcedure = Boolean(sanitizeString(row?.internal_procedure_name || row?.internal_procedure_code, 180));
+      const hasTuss = Boolean(sanitizeString(row?.tuss_code, 80));
+      const expectedAmount = Number(row?.billing_amount_cents || row?.expected_amount_cents || 0) || 0;
+      if (filter === 'all_sessions') return true;
+      if (filter === 'ready_for_conference' || filter === 'ready_for_prefacturing') return readinessStatus === 'READY';
+      if (filter === 'operational_pending') return readinessStatus === 'PENDING' || Number(row?.blocking_issues_count || 0) > 0;
+      if (filter === 'open') return readinessStatus === 'DRAFT';
+      if (filter === 'attention') return readinessStatus === 'WARNING' || Number(row?.warning_issues_count || 0) > 0;
+      if (filter === 'non_billable') return isNonBillablePrefacturingRow(row);
+      if (filter === 'review_needed' || filter === 'pending_review') return conferenceStatus === 'pending_review' || readinessStatus === 'UNKNOWN';
+      if (filter === 'realized_minutes') return Number(row?.actual_minutes || 0) > 0;
+      if (filter === 'missing_signature') return prefacturingHasIssue(row, ['assinatura']);
+      if (filter === 'missing_report') return prefacturingHasIssue(row, ['relatorio']);
+      if (filter === 'missing_duration') return prefacturingHasIssue(row, ['duracao']);
+      if (filter === 'missing_guide_authorization') return billable && hasPayer && (!sanitizeString(row?.guide_number, 120) || !sanitizeString(row?.authorization_code, 120));
+      if (filter === 'missing_financial_context') return billable && !nonInsurance && !hasFinancialContext;
+      if (filter === 'missing_payer') return billable && !nonInsurance && !hasPayer;
+      if (filter === 'missing_procedure_tuss') return billable && !nonInsurance && (!hasProcedure || !hasTuss);
+      if (filter === 'missing_professional_registry') return !sanitizeString(row?.professional_registry, 120);
+      if (filter === 'missing_amount') return billable && expectedAmount <= 0;
+      if (filter === 'valued_sessions') return billable && expectedAmount > 0;
+      if (filter === 'billable_sessions') return billable;
+      if (filter === 'reviewed') return conferenceStatus === 'reviewed';
+      if (filter === 'exported') return conferenceStatus === 'exported' || Boolean(row?.export_id || row?.exported_at);
+      if (filter === 'reopened') return conferenceStatus === 'reopened';
       return true;
     });
   };
@@ -33711,20 +33842,32 @@ async function startServer() {
       if (!isUuid(clinicId) || !filters.ok) return res.status(400).json(conferenceSafeError(400));
       if (!(await assertConferenceFilterOwnership(filters, clinicId))) return res.status(404).json(conferenceSafeError(404));
       const queryStartedAt = Date.now();
-      const [pageRows, aggregateRows] = await Promise.all([
-        loadConferenceClosureRows({ clinicId, user: req.session.user, filters, paginated: true }),
-        loadConferenceClosureRows({ clinicId, user: req.session.user, filters, hardLimit: 2000 })
-      ]);
+      const hasQuickFilter = Boolean(filters.quickFilter);
+      let pageRows: any[] = [];
+      let aggregateRows: any[] = [];
+      if (hasQuickFilter) {
+        aggregateRows = await loadConferenceClosureRows({ clinicId, user: req.session.user, filters, hardLimit: 2000 });
+      } else {
+        [pageRows, aggregateRows] = await Promise.all([
+          loadConferenceClosureRows({ clinicId, user: req.session.user, filters, paginated: true }),
+          loadConferenceClosureRows({ clinicId, user: req.session.user, filters, hardLimit: 2000 })
+        ]);
+      }
       const queryMs = Date.now() - queryStartedAt;
       const hydrateStartedAt = Date.now();
-      const hydratedPageRows = filterHydratedRowsByTussMissingKind(
-        await hydrateConferenceRows(pageRows, clinicId, req.session.user),
-        filters.missingKind
+      const hydratedAggregateRows = filterHydratedRowsByPrefacturingQuickFilter(
+        filterHydratedRowsByTussMissingKind(
+          await hydrateConferenceRows(aggregateRows, clinicId, req.session.user),
+          filters.missingKind
+        ),
+        filters.quickFilter
       );
-      const hydratedAggregateRows = filterHydratedRowsByTussMissingKind(
-        await hydrateConferenceRows(aggregateRows, clinicId, req.session.user),
-        filters.missingKind
-      );
+      const hydratedPageRows = hasQuickFilter
+        ? hydratedAggregateRows.slice(filters.from, filters.to + 1)
+        : filterHydratedRowsByTussMissingKind(
+            await hydrateConferenceRows(pageRows, clinicId, req.session.user),
+            filters.missingKind
+          );
       const hydrateMs = Date.now() - hydrateStartedAt;
       const summary = buildMonthlyConferenceSummary(hydratedAggregateRows);
       logPrefacturingReadPerformance('conference.monthly', {
@@ -33734,7 +33877,8 @@ async function startServer() {
         page: filters.page,
         limit: filters.limit,
         rows: hydratedPageRows.length,
-        aggregateRows: hydratedAggregateRows.length
+        aggregateRows: hydratedAggregateRows.length,
+        quickFilter: filters.quickFilter || undefined
       });
       return sendNoStoreJson(res, {
         success: true,
@@ -33751,7 +33895,8 @@ async function startServer() {
           professionalId: filters.professionalId || null,
           payerId: filters.payerId || null,
           serviceType: filters.serviceType || null,
-          readinessStatus: filters.readinessStatus || null
+          readinessStatus: filters.readinessStatus || null,
+          quickFilter: filters.quickFilter || null
         }
       });
     } catch (error: any) {
@@ -33771,9 +33916,12 @@ async function startServer() {
       const rows = await loadConferenceClosureRows({ clinicId, user: req.session.user, filters, hardLimit: 2000 });
       const queryMs = Date.now() - queryStartedAt;
       const hydrateStartedAt = Date.now();
-      const hydratedRows = filterHydratedRowsByTussMissingKind(
-        await hydrateConferenceRows(rows, clinicId, req.session.user),
-        filters.missingKind
+      const hydratedRows = filterHydratedRowsByPrefacturingQuickFilter(
+        filterHydratedRowsByTussMissingKind(
+          await hydrateConferenceRows(rows, clinicId, req.session.user),
+          filters.missingKind
+        ),
+        filters.quickFilter
       );
       const hydrateMs = Date.now() - hydrateStartedAt;
       const summary = buildMonthlyConferenceSummary(hydratedRows);
@@ -33961,9 +34109,12 @@ async function startServer() {
         source: 'monthly_conference_export'
       });
       const rows = await loadConferenceClosureRows({ clinicId, user: req.session.user, filters, hardLimit: 2000 });
-      let hydratedRows = filterHydratedRowsByTussMissingKind(
-        await hydrateConferenceRows(rows, clinicId, req.session.user),
-        filters.missingKind
+      let hydratedRows = filterHydratedRowsByPrefacturingQuickFilter(
+        filterHydratedRowsByTussMissingKind(
+          await hydrateConferenceRows(rows, clinicId, req.session.user),
+          filters.missingKind
+        ),
+        filters.quickFilter
       );
       const summary = buildMonthlyConferenceSummary(hydratedRows);
       const actorName = actorDisplayName(req.session.user);
@@ -34038,7 +34189,13 @@ async function startServer() {
           status: 'exported',
           exportId: sanitizeString(auditRecord.id, 120)
         });
-        hydratedRows = filterHydratedRowsByTussMissingKind(await hydrateConferenceRows(rowsForStatusUpdate, clinicId, req.session.user), filters.missingKind);
+        hydratedRows = filterHydratedRowsByPrefacturingQuickFilter(
+          filterHydratedRowsByTussMissingKind(
+            await hydrateConferenceRows(rowsForStatusUpdate, clinicId, req.session.user),
+            filters.missingKind
+          ),
+          filters.quickFilter
+        );
         affectedItems = hydratedRows;
       } else {
         hydratedRows = hydratedRows.map((row: any) => ({

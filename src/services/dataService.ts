@@ -2654,6 +2654,7 @@ export const dataService = {
     onlyReady?: boolean;
     onlyWarnings?: boolean;
     missing?: string;
+    quickFilter?: string;
     actionRevision?: string | number;
   }) {
     const endpoint = endpointWithQuery('/api/closure/appointments', {
@@ -2670,6 +2671,7 @@ export const dataService = {
       onlyReady: options.onlyReady ? 'true' : undefined,
       onlyWarnings: options.onlyWarnings ? 'true' : undefined,
       missing: options.missing,
+      quickFilter: options.quickFilter,
       actionRevision: options.actionRevision
     });
     try {
@@ -2789,6 +2791,7 @@ export const dataService = {
       onlyReady: options.onlyReady ? 'true' : undefined,
       onlyNotBillable: options.onlyNotBillable ? 'true' : undefined,
       missing: options.missing,
+      quickFilter: options.quickFilter,
       page: Math.max(1, Math.round(Number(options.page || 1) || 1)),
       limit: normalizeListLimit(options.limit, 50, 200),
       actionRevision: options.actionRevision
@@ -2823,6 +2826,7 @@ export const dataService = {
       onlyReady: options.onlyReady ? 'true' : undefined,
       onlyNotBillable: options.onlyNotBillable ? 'true' : undefined,
       missing: options.missing,
+      quickFilter: options.quickFilter,
       limit: normalizeListLimit(options.limit, 200, 200),
       actionRevision: options.actionRevision
     });

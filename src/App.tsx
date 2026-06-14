@@ -1,7 +1,7 @@
 ﻿import React, { Suspense, useState, useEffect, useMemo, useRef } from 'react';
 import { GlobalStyles, ENERGY_TAGS, ADULT_CONVENTIONAL_TAGS } from './components/Common';
 import { testSupabaseConnection, getSupabase, ensureFreshSession } from './lib/supabase';
-import { Database, CheckCircle2, AlertCircle, Lock, WifiOff, LayoutDashboard } from 'lucide-react';
+import { Database, CheckCircle2, AlertCircle, Lock, WifiOff, LayoutDashboard, RefreshCw } from 'lucide-react';
 import { clearSensitiveOfflineCacheForUser, getFailedSyncRecords, resetFailedSyncRecord, syncOfflineData } from './services/localDb';
 import { dataService } from './services/dataService';
 import { formatProfessionalRegistry } from './utils/professionalRegistry';
@@ -40,6 +40,12 @@ import {
   removePersistedAppointments,
 } from './utils/appointmentActionUpdates';
 import { normalizeAppointmentFinancialContextType } from './utils/appointmentFinancialContext';
+import {
+  buildBrandingInitials,
+  buildPatientReminderModalViewModel,
+  friendlyPatientNotificationError,
+  resolveBrandingContext,
+} from './services/notificationBranding';
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>;
@@ -1485,18 +1491,23 @@ export default function App() {
   const appointmentActionSequenceRef = useRef(0);
   const [appointmentConfirmation, setAppointmentConfirmation] = useState<{
     appointmentId: string;
+    scheduledAt: string;
     dateLabel: string;
     timeLabel: string;
     clinicName: string;
     clinicLogoUrl: string;
+    clinicPrimaryColor: string;
     patientName: string;
     professionalName: string;
+    professionalLogoUrl: string;
     professionalRole: string;
     status: string;
     isLoading: boolean;
     isUpdating: boolean;
+    hasError: boolean;
     message: string;
   } | null>(null);
+  const [appointmentConfirmationRetry, setAppointmentConfirmationRetry] = useState(0);
 
   const [specialtySettings, setSpecialtySettings] = useState<any>({});
 
@@ -1626,38 +1637,17 @@ export default function App() {
     const scheduledAt = params.get('scheduled_at') || params.get('scheduledAt') || '';
     const appointmentDate = params.get('appointment_date') || params.get('date') || params.get('dateLabel') || '';
     const appointmentTime = params.get('appointment_time') || params.get('time') || params.get('timeLabel') || '';
-    return formatAppointmentConfirmationDateTime({
+    return {
+      ...formatAppointmentConfirmationDateTime({
+        scheduledAt,
+        date: appointmentDate,
+        time: appointmentTime
+      }),
       scheduledAt,
-      date: appointmentDate,
-      time: appointmentTime
-    });
+    };
   };
 
-  const decorateAppointmentDateLabel = (dateLabel: string) => {
-    const safeDate = String(dateLabel || '').trim();
-    if (!safeDate) return '';
-    const [day, month, year] = safeDate.split('/').map((part) => Number(part));
-    const shortDate = day && month ? `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}` : safeDate;
-    if (!day || !month || !year) return shortDate;
-    const appointmentDate = new Date(year, month - 1, day);
-    const today = new Date();
-    const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
-    const targetStart = new Date(appointmentDate.getFullYear(), appointmentDate.getMonth(), appointmentDate.getDate()).getTime();
-    const diffDays = Math.round((targetStart - todayStart) / 86400000);
-    if (diffDays === 0) return `${shortDate} (hoje)`;
-    if (diffDays === 1) return `${shortDate} (amanhã)`;
-    return shortDate;
-  };
-
-  const getClinicInitials = (value: string) => {
-    const words = String(value || 'Clínica')
-      .trim()
-      .split(/\s+/)
-      .filter(Boolean)
-      .slice(0, 2);
-    const initials = words.map((word) => word.charAt(0).toUpperCase()).join('');
-    return initials || 'CV';
-  };
+  const getClinicInitials = (value: string) => buildBrandingInitials(value || 'Clínica');
 
   const getAppointmentConfirmationStatusLabel = (value: string) => {
     const normalized = String(value || '').toLowerCase();
@@ -1669,28 +1659,42 @@ export default function App() {
     return normalized ? 'Atualizada' : '';
   };
 
-  const buildAppointmentConfirmationSubtitle = () => {
-    if (!appointmentConfirmation) return 'Como deseja responder à consulta agendada?';
-    const dateLabel = decorateAppointmentDateLabel(appointmentConfirmation.dateLabel);
-    const timeLabel = appointmentConfirmation.timeLabel;
-    const patientLabel = appointmentConfirmation.patientName
-      ? ` de ${appointmentConfirmation.patientName}`
-      : '';
-    const professionalLabel = appointmentConfirmation.professionalName
-      ? ` com ${appointmentConfirmation.professionalName}`
-      : ' com Profissional a definir';
-    if (dateLabel && timeLabel) return `Consulta${patientLabel}${professionalLabel} dia ${dateLabel} às ${timeLabel}.`;
-    if (dateLabel) return `Consulta${patientLabel}${professionalLabel} dia ${dateLabel}.`;
-    return 'Como deseja responder à consulta agendada?';
+  const buildAppointmentConfirmationViewModel = () => {
+    if (!appointmentConfirmation) {
+      const branding = resolveBrandingContext({ fallbackName: 'Verto', fallbackLogoUrl: '/verto-3d-transparent.png' });
+      return buildPatientReminderModalViewModel({
+        appointmentId: '',
+        branding,
+      });
+    }
+    const branding = resolveBrandingContext({
+      clinic: {
+        displayName: appointmentConfirmation.clinicName,
+        logoUrl: appointmentConfirmation.clinicLogoUrl,
+        primaryColor: appointmentConfirmation.clinicPrimaryColor,
+      },
+      professional: {
+        displayName: appointmentConfirmation.professionalName,
+        logoUrl: appointmentConfirmation.professionalLogoUrl,
+      },
+      fallbackName: 'Verto',
+      fallbackLogoUrl: '/verto-3d-transparent.png',
+    });
+    return buildPatientReminderModalViewModel({
+      appointmentId: appointmentConfirmation.appointmentId,
+      scheduledAt: appointmentConfirmation.scheduledAt,
+      dateLabel: appointmentConfirmation.dateLabel,
+      timeLabel: appointmentConfirmation.timeLabel,
+      patientName: appointmentConfirmation.patientName,
+      status: appointmentConfirmation.status,
+      branding,
+    });
   };
 
   const getFriendlyAppointmentLoadMessage = (raw: any) => {
     const text = String(raw || '').trim();
     if (!text) return '';
-    if (/unauthorized|no valid session|token|sess[aã]o/i.test(text)) {
-      return '';
-    }
-    return text;
+    return friendlyPatientNotificationError(text);
   };
 
   const roomReservations = useMemo(() => {
@@ -1870,12 +1874,15 @@ export default function App() {
       ...fallbackLabels,
       clinicName: '',
       clinicLogoUrl: '',
+      clinicPrimaryColor: '',
       patientName: '',
       professionalName: '',
+      professionalLogoUrl: '',
       professionalRole: '',
       status: '',
       isLoading: !hasFallbackDateTime,
       isUpdating: false,
+      hasError: false,
       message: '',
     });
 
@@ -1896,13 +1903,17 @@ export default function App() {
               ? {
                   ...prev,
                   ...labels,
+                  scheduledAt: String(result.appointment?.scheduledAt || result.appointment?.scheduled_at || prev.scheduledAt || '').trim(),
                   clinicName: String(result.appointment?.clinic?.displayName || result.appointment?.clinicName || result.appointment?.clinic_name || '').trim(),
                   clinicLogoUrl: String(result.appointment?.clinic?.logoUrl || result.appointment?.clinicLogoUrl || result.appointment?.clinic_logo_url || '').trim(),
+                  clinicPrimaryColor: String(result.appointment?.clinic?.primaryColor || result.appointment?.clinicPrimaryColor || result.appointment?.clinic_primary_color || '').trim(),
                   patientName: String(result.appointment?.patient?.name || result.appointment?.patientName || result.appointment?.patient_name || '').trim(),
                   professionalName: String(result.appointment?.professionalName || result.appointment?.professional_name || '').trim(),
+                  professionalLogoUrl: String(result.appointment?.professionalLogoUrl || result.appointment?.professional_logo_url || result.appointment?.professionalAvatarUrl || result.appointment?.professional_avatar_url || '').trim(),
                   professionalRole: String(result.appointment?.professionalRole || result.appointment?.professional_role || '').trim(),
                   status: String(result.appointment?.patientConfirmationStatus || result.appointment?.status || '').trim(),
                   isLoading: false,
+                  hasError: false,
                   message: '',
                 }
               : prev,
@@ -1916,6 +1927,7 @@ export default function App() {
               ? {
                   ...prev,
                   isLoading: false,
+                  hasError: true,
                   message: friendlyMessage,
                 }
               : prev,
@@ -1928,7 +1940,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [appointmentConfirmationRetry]);
 
   const [profilePicture, setProfilePicture] = useState<string | null>(null);
   const [crp, setCrp] = useState<string>('');
@@ -5392,7 +5404,7 @@ export default function App() {
           ? 'Presença confirmada com sucesso.'
           : 'Solicitação de cancelamento registrada. A recepção entrará em contato.';
 
-    setAppointmentConfirmation((prev) => prev ? { ...prev, isUpdating: true, message: '' } : prev);
+    setAppointmentConfirmation((prev) => prev ? { ...prev, isUpdating: true, hasError: false, message: '' } : prev);
     try {
       const result =
         status === 'confirmed'
@@ -5423,13 +5435,17 @@ export default function App() {
         : feedback;
       setAppointmentConfirmation((prev) => prev ? {
         ...prev,
+        scheduledAt: String(resultAppointment?.scheduledAt || resultAppointment?.scheduled_at || prev.scheduledAt || '').trim(),
         clinicName: String(resultAppointment?.clinic?.displayName || resultAppointment?.clinicName || prev.clinicName || '').trim(),
         clinicLogoUrl: String(resultAppointment?.clinic?.logoUrl || resultAppointment?.clinicLogoUrl || prev.clinicLogoUrl || '').trim(),
+        clinicPrimaryColor: String(resultAppointment?.clinic?.primaryColor || resultAppointment?.clinicPrimaryColor || prev.clinicPrimaryColor || '').trim(),
         patientName: String(resultAppointment?.patient?.name || resultAppointment?.patientName || prev.patientName || '').trim(),
         professionalName: String(resultAppointment?.professionalName || prev.professionalName || '').trim(),
+        professionalLogoUrl: String(resultAppointment?.professionalLogoUrl || resultAppointment?.professionalAvatarUrl || prev.professionalLogoUrl || '').trim(),
         professionalRole: String(resultAppointment?.professionalRole || prev.professionalRole || '').trim(),
         status: serverStatus,
         isUpdating: false,
+        hasError: false,
         message: alreadyAnsweredMessage
       } : prev);
       window.history.replaceState({}, document.title, window.location.pathname);
@@ -5443,6 +5459,7 @@ export default function App() {
           ? {
               ...prev,
               isUpdating: false,
+              hasError: true,
               message: friendlyMessage,
             }
           : prev,
@@ -5487,6 +5504,7 @@ export default function App() {
     : activeDemoKind === 'presentation'
       ? 'Demo de apresentacao.'
       : 'Dados ficticios para demonstracao.';
+  const appointmentConfirmationViewModel = appointmentConfirmation ? buildAppointmentConfirmationViewModel() : null;
 
   return (
     <React.Fragment>
@@ -5497,11 +5515,11 @@ export default function App() {
             <div className="border-b border-slate-100 bg-slate-50 p-6 text-slate-950">
               <div className="mb-4 flex items-center gap-3">
                 <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-slate-200 bg-white text-slate-500 shadow-sm">
-                  {appointmentConfirmation.clinicLogoUrl ? (
+                  {appointmentConfirmationViewModel?.brandLogoUrl ? (
                     <>
                       <img
-                        src={appointmentConfirmation.clinicLogoUrl}
-                        alt="Logo da clínica"
+                        src={appointmentConfirmationViewModel.brandLogoUrl}
+                        alt={`Logo de ${appointmentConfirmationViewModel.brandName}`}
                         className="h-full w-full object-contain p-1.5"
                         onError={(event) => {
                           event.currentTarget.style.display = 'none';
@@ -5510,24 +5528,24 @@ export default function App() {
                         }}
                       />
                       <span className="hidden h-full w-full items-center justify-center bg-slate-100 text-sm font-black text-slate-700">
-                        {getClinicInitials(appointmentConfirmation.clinicName)}
+                        {appointmentConfirmationViewModel.initialsFallback}
                       </span>
                     </>
                   ) : (
                     <span className="flex h-full w-full items-center justify-center bg-slate-100 text-sm font-black text-slate-700">
-                      {getClinicInitials(appointmentConfirmation.clinicName)}
+                      {appointmentConfirmationViewModel?.initialsFallback || getClinicInitials(appointmentConfirmation.clinicName)}
                     </span>
                   )}
                 </div>
                 <div className="min-w-0">
                   <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500">Lembrete de consulta</p>
                   <h2 className="truncate text-xl font-black tracking-tight">
-                    {appointmentConfirmation.clinicName || 'sua clínica'}
+                    {appointmentConfirmationViewModel?.brandName || 'Verto'}
                   </h2>
                 </div>
               </div>
               <p className="text-sm font-semibold text-slate-600">
-                {buildAppointmentConfirmationSubtitle()}
+                {appointmentConfirmationViewModel?.appointmentSummaryText || 'Como deseja responder à consulta agendada?'}
               </p>
               {appointmentConfirmation.status ? (
                 <p className="mt-2 text-xs font-bold uppercase tracking-[0.14em] text-slate-400">
@@ -5546,13 +5564,28 @@ export default function App() {
                   {appointmentConfirmation.message}
                 </div>
               )}
+              {appointmentConfirmation.hasError && (
+                <button
+                  type="button"
+                  disabled={appointmentConfirmation.isUpdating || appointmentConfirmation.isLoading}
+                  onClick={() => {
+                    setAppointmentConfirmation((prev) =>
+                      prev ? { ...prev, isLoading: true, hasError: false, message: '' } : prev
+                    );
+                    setAppointmentConfirmationRetry((current) => current + 1);
+                  }}
+                  className="flex w-full items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
+                >
+                  <RefreshCw size={18} /> Tentar novamente
+                </button>
+              )}
               <button
                 type="button"
                 disabled={appointmentConfirmation.isUpdating || appointmentConfirmation.isLoading}
                 onClick={() => void handleAppointmentConfirmationChoice('confirmed')}
                 className="flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-500 px-4 py-3 text-sm font-black text-white shadow-lg shadow-emerald-500/25 transition hover:bg-emerald-600 disabled:opacity-60"
               >
-                <CheckCircle2 size={18} /> Confirmar presença
+                <CheckCircle2 size={18} /> {appointmentConfirmationViewModel?.confirmLabel || 'Confirmar presença'}
               </button>
               <button
                 type="button"
@@ -5560,7 +5593,7 @@ export default function App() {
                 onClick={() => void handleAppointmentConfirmationChoice('reschedule')}
                 className="flex w-full items-center justify-center gap-2 rounded-2xl bg-amber-500 px-4 py-3 text-sm font-black text-white shadow-lg shadow-amber-500/25 transition hover:bg-amber-600 disabled:opacity-60"
               >
-                <AlertCircle size={18} /> Remarcar consulta
+                <AlertCircle size={18} /> {appointmentConfirmationViewModel?.rescheduleLabel || 'Remarcar consulta'}
               </button>
               <button
                 type="button"
@@ -5568,7 +5601,7 @@ export default function App() {
                 onClick={() => void handleAppointmentConfirmationChoice('canceled')}
                 className="flex w-full items-center justify-center gap-2 rounded-2xl bg-rose-500 px-4 py-3 text-sm font-black text-white shadow-lg shadow-rose-500/25 transition hover:bg-rose-600 disabled:opacity-60"
               >
-                Cancelar agendamento
+                {appointmentConfirmationViewModel?.cancelLabel || 'Cancelar agendamento'}
               </button>
             </div>
           </div>

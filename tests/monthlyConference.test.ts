@@ -423,11 +423,37 @@ test('drilldown visual filtra sessoes por procedimento, TUSS e pagador real', ()
   assert.doesNotMatch(conferenceCode, /filter\.type === "payer"[\s\S]{0,220}payer_name/);
   assert.match(conferenceCode, /const drilldownConferenceRows = useMemo/);
   assert.match(conferenceCode, /conferenceRows\.filter\(\(\{ row \}\) => conferenceRowMatchesDrilldown\(row, drilldownFilter\)\)/);
-  assert.match(conferenceCode, /Filtro aplicado: \{drilldownLabel\}/);
-  assert.match(conferenceCode, /Limpar filtro/);
+  assert.match(conferenceCode, /const appliedConferenceFilterLabel = activeKpiFilter\?\.label \|\| drilldownLabel/);
+  assert.match(conferenceCode, /<ActiveFilterBanner/);
+  assert.match(conferenceCode, /label=\{appliedConferenceFilterLabel\}/);
+  assert.match(conferenceCode, /onClear=\{clearAppliedConferenceFilter\}/);
   assert.match(conferenceCode, /const nextDrilldown = buildConferenceDrilldownFilter\(activeTab, item\)/);
+  assert.match(conferenceCode, /setActiveKpiFilter\(null\)/);
   assert.match(conferenceCode, /if \(nextDrilldown\) setDrilldownFilter\(nextDrilldown\)/);
   assert.match(conferenceCode, /visibleConferenceRows\.map\(\(\{ row, viewModel \}, index\)/);
+});
+
+test('cards KPI da conferencia aplicam filtros clicaveis sem revalidacao pesada', () => {
+  assert.match(conferenceCode, /type ConferenceCardFilterKey =/);
+  assert.match(conferenceCode, /const \[activeKpiFilter, setActiveKpiFilter\]/);
+  assert.match(conferenceCode, /function conferenceCardFilterMatches/);
+  assert.match(conferenceCode, /function isExplicitNonInsuranceContext/);
+  assert.match(serverCode, /normalizePrefacturingQuickFilter/);
+  assert.match(serverCode, /filterHydratedRowsByPrefacturingQuickFilter/);
+  assert.match(serverCode, /if \(filter === 'missing_payer'\) return billable && !nonInsurance && !hasPayer/);
+  assert.match(dataServiceCode, /quickFilter: options\.quickFilter/);
+  assert.match(conferenceCode, /quickFilter: activeKpiFilter\?\.key \|\| ""/);
+  assert.match(conferenceCode, /if \(filter\.key === "missing_payer"\) return billable && !nonInsurance && !String\(row\.payer_id/);
+  assert.match(conferenceCode, /if \(filter\.key === "missing_procedure_tuss"\) return billable && !nonInsurance && \(!hasProcedure \|\| !hasTuss\)/);
+  assert.match(conferenceCode, /if \(filter\.key === "missing_amount"\) return billable && viewModel\.expectedAmountCents <= 0/);
+  assert.doesNotMatch(conferenceCode, /filter\.key === "missing_payer"[\s\S]{0,180}payer_name/);
+  assert.match(conferenceCode, /const kpiFilteredConferenceRows = useMemo/);
+  assert.match(conferenceCode, /conferenceCardFilterMatches\(item, activeKpiFilter\)/);
+  assert.match(conferenceCode, /onClick=\{\(\) => toggleKpiFilter\(\{ key: item\.key, label: item\.label \}\)\}/);
+  assert.match(conferenceCode, /aria-pressed=\{activeKpiFilter\?\.key === item\.key\}/);
+  assert.match(conferenceCode, /cardClass\(activeKpiFilter\?\.key === item\.key\)/);
+  const toggleSlice = conferenceCode.slice(conferenceCode.indexOf('const toggleKpiFilter'), conferenceCode.indexOf('const clearAppliedConferenceFilter'));
+  assert.doesNotMatch(toggleSlice, /revalidateClosurePeriod|loadConference|getMonthlyConference/);
 });
 
 test('dataService expõe helpers econômicos da conferência', () => {

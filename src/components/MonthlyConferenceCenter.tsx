@@ -18,6 +18,7 @@ import {
   X,
   XCircle,
 } from "lucide-react";
+import { ActiveFilterBanner } from "./ActiveFilterBanner";
 import { dataService } from "../services/dataService";
 import { classifyConferencePendingDetails, formatConferenceMinutes } from "../services/monthlyConferenceEngine";
 import { buildMonthlyConferenceViewModel } from "../services/prefacturingViewModels";
@@ -33,6 +34,31 @@ type ConferenceDrilldownFilter = {
   value: string | null;
 };
 
+type ConferenceCardFilterKey =
+  | "valued_sessions"
+  | "billable_sessions"
+  | "non_billable"
+  | "pending_review"
+  | "reviewed"
+  | "exported"
+  | "reopened"
+  | "missing_payer"
+  | "missing_procedure_tuss"
+  | "missing_amount";
+
+type ConferenceCardFilter = {
+  key: ConferenceCardFilterKey;
+  label: string;
+};
+
+type ConferenceKpiItem = {
+  key: ConferenceCardFilterKey;
+  label: string;
+  value: React.ReactNode;
+  tone: string;
+  title?: string;
+};
+
 type ConferenceRow = {
   appointment_id?: string | null;
   patient_id?: string | null;
@@ -42,6 +68,8 @@ type ConferenceRow = {
   service_type?: string | null;
   payer_id?: string | null;
   payer_name?: string | null;
+  financial_context_type?: string | null;
+  payer_type?: string | null;
   clinic_name?: string | null;
   unit_name?: string | null;
   financial_plan_name?: string | null;
@@ -231,6 +259,66 @@ function isSessionListTab(tab: ConferenceTab) {
   return tab === "sessions" || tab === "notBillable" || tab === "exported" || tab === "reopened";
 }
 
+function cardClass(active: boolean) {
+  return active
+    ? "border-indigo-300 bg-indigo-50 shadow-sm ring-2 ring-indigo-100"
+    : "border-slate-200 bg-white shadow-sm hover:border-indigo-200 hover:bg-indigo-50/40";
+}
+
+function normalizeFinancialContextType(value?: string | null) {
+  return String(value || "").trim().toUpperCase();
+}
+
+function isExplicitNonInsuranceContext(row: ConferenceRow) {
+  const context = normalizeFinancialContextType(row.financial_context_type || row.payer_type);
+  return [
+    "PRIVATE",
+    "PARTICULAR",
+    "PACKAGE",
+    "PACOTE",
+    "MONTHLY_PACKAGE",
+    "MENSALIDADE",
+    "COURTESY",
+    "CORTESIA",
+    "NO_CHARGE",
+    "SEM_COBRANCA",
+    "SEM COBRANCA",
+    "NON_BILLABLE",
+    "NAO_FATURAVEL",
+  ].includes(context);
+}
+
+function isNonBillableConferenceRow(row: ConferenceRow, viewModel: ReturnType<typeof buildMonthlyConferenceViewModel>) {
+  const context = normalizeFinancialContextType(row.financial_context_type || row.payer_type);
+  return viewModel.billingStatus === "NON_BILLABLE" || normalizeStatus(row.readiness_status) === "NOT_BILLABLE" || ["COURTESY", "CORTESIA", "NO_CHARGE", "SEM_COBRANCA", "SEM COBRANCA", "NON_BILLABLE", "NAO_FATURAVEL"].includes(context);
+}
+
+function isBillableConferenceRow(row: ConferenceRow, viewModel: ReturnType<typeof buildMonthlyConferenceViewModel>) {
+  return !isNonBillableConferenceRow(row, viewModel);
+}
+
+function conferenceCardFilterMatches(
+  item: { row: ConferenceRow; viewModel: ReturnType<typeof buildMonthlyConferenceViewModel> },
+  filter: ConferenceCardFilter
+) {
+  const { row, viewModel } = item;
+  const billable = isBillableConferenceRow(row, viewModel);
+  const nonInsurance = isExplicitNonInsuranceContext(row);
+  const hasProcedure = Boolean(String(row.internal_procedure_name || row.internal_procedure_code || "").trim());
+  const hasTuss = Boolean(String(row.tuss_code || "").trim());
+  if (filter.key === "valued_sessions") return billable && viewModel.expectedAmountCents > 0;
+  if (filter.key === "billable_sessions") return billable;
+  if (filter.key === "non_billable") return isNonBillableConferenceRow(row, viewModel);
+  if (filter.key === "pending_review") return viewModel.conferenceStatus === "pending_review";
+  if (filter.key === "reviewed") return viewModel.conferenceStatus === "reviewed";
+  if (filter.key === "exported") return viewModel.conferenceStatus === "exported" || Boolean(row.export_id || row.exported_at);
+  if (filter.key === "reopened") return viewModel.conferenceStatus === "reopened";
+  if (filter.key === "missing_payer") return billable && !nonInsurance && !String(row.payer_id || "").trim();
+  if (filter.key === "missing_procedure_tuss") return billable && !nonInsurance && (!hasProcedure || !hasTuss);
+  if (filter.key === "missing_amount") return billable && viewModel.expectedAmountCents <= 0;
+  return true;
+}
+
 function safeName(value: any, fallback: string) {
   return String(value || fallback).trim() || fallback;
 }
@@ -373,6 +461,7 @@ export function MonthlyConferenceCenter({
   const [quickFilter, setQuickFilter] = useState("");
   const [activeTab, setActiveTab] = useState<ConferenceTab>("sessions");
   const [drilldownFilter, setDrilldownFilter] = useState<ConferenceDrilldownFilter | null>(null);
+  const [activeKpiFilter, setActiveKpiFilter] = useState<ConferenceCardFilter | null>(null);
   const [page, setPage] = useState(1);
   const [rows, setRows] = useState<ConferenceRow[]>([]);
   const [kpis, setKpis] = useState<any>(null);
@@ -467,7 +556,8 @@ export function MonthlyConferenceCenter({
     onlyReady: quickFilter === "ready",
     onlyNotBillable: quickFilter === "not_billable",
     missing: ["signature", "report", "guide", "authorization", "documents", "procedure", "tuss", "amount", "professional_registry", "card"].includes(quickFilter) ? quickFilter : "",
-  }), [appointmentStatus, from, patientId, payerId, professionalId, quickFilter, readinessStatus, serviceType, to]);
+    quickFilter: activeKpiFilter?.key || "",
+  }), [activeKpiFilter, appointmentStatus, from, patientId, payerId, professionalId, quickFilter, readinessStatus, serviceType, to]);
 
   useEffect(() => {
     setDrilldownFilter(null);
@@ -716,17 +806,31 @@ export function MonthlyConferenceCenter({
     [rows]
   );
 
-  const kpiItems = [
-    { label: "Total previsto", value: formatCurrencyCents(kpis?.expectedAmountCents || 0), tone: "text-emerald-700" },
-    { label: "Sessões faturáveis", value: kpis?.billableSessions ?? kpis?.ready ?? 0, tone: "text-slate-900" },
-    { label: "Não faturáveis", value: kpis?.notBillable ?? 0, tone: "text-slate-600" },
-    { label: "A revisar", value: kpis?.pendingReview ?? kpis?.unknown ?? 0, tone: "text-zinc-700" },
-    { label: "Conferidas", value: kpis?.reviewed ?? 0, tone: "text-emerald-700" },
-    { label: "Exportadas", value: kpis?.exported ?? 0, tone: "text-indigo-700" },
-    { label: "Reabertas", value: kpis?.reopened ?? 0, tone: "text-amber-700" },
-    { label: "Sem pagador", value: kpis?.missingPayer ?? 0, tone: "text-cyan-700" },
-    { label: "Sem Procedimento/TUSS", value: kpis?.missingProcedureOrTuss ?? 0, tone: "text-violet-700" },
-    { label: "Sem valor", value: kpis?.missingAmount ?? 0, tone: "text-rose-700" },
+  const toggleKpiFilter = (filter: ConferenceCardFilter) => {
+    setActiveKpiFilter((current) => current?.key === filter.key ? null : filter);
+    setDrilldownFilter(null);
+    setActiveTab("sessions");
+    setPage(1);
+  };
+
+  const clearAppliedConferenceFilter = () => {
+    setActiveKpiFilter(null);
+    setDrilldownFilter(null);
+    setActiveTab("sessions");
+    setPage(1);
+  };
+
+  const kpiItems: ConferenceKpiItem[] = [
+    { key: "valued_sessions", label: "Total previsto", value: formatCurrencyCents(kpis?.expectedAmountCents || 0), tone: "text-emerald-700", title: "Filtrar sessões faturáveis com valor previsto" },
+    { key: "billable_sessions", label: "Sessões faturáveis", value: kpis?.billableSessions ?? kpis?.ready ?? 0, tone: "text-slate-900" },
+    { key: "non_billable", label: "Não faturáveis", value: kpis?.notBillable ?? 0, tone: "text-slate-600" },
+    { key: "pending_review", label: "A revisar", value: kpis?.pendingReview ?? kpis?.unknown ?? 0, tone: "text-zinc-700" },
+    { key: "reviewed", label: "Conferidas", value: kpis?.reviewed ?? 0, tone: "text-emerald-700" },
+    { key: "exported", label: "Exportadas", value: kpis?.exported ?? 0, tone: "text-indigo-700" },
+    { key: "reopened", label: "Reabertas", value: kpis?.reopened ?? 0, tone: "text-amber-700" },
+    { key: "missing_payer", label: "Sem pagador", value: kpis?.missingPayer ?? 0, tone: "text-cyan-700" },
+    { key: "missing_procedure_tuss", label: "Sem Procedimento/TUSS", value: kpis?.missingProcedureOrTuss ?? 0, tone: "text-violet-700" },
+    { key: "missing_amount", label: "Sem valor", value: kpis?.missingAmount ?? 0, tone: "text-rose-700" },
   ];
 
   const summaryRows = activeTab === "patient"
@@ -749,16 +853,23 @@ export function MonthlyConferenceCenter({
     () => drilldownFilter ? conferenceRows.filter(({ row }) => conferenceRowMatchesDrilldown(row, drilldownFilter)) : conferenceRows,
     [conferenceRows, drilldownFilter]
   );
+  const kpiFilteredConferenceRows = useMemo(
+    () => activeKpiFilter
+      ? drilldownConferenceRows.filter((item) => conferenceCardFilterMatches(item, activeKpiFilter))
+      : drilldownConferenceRows,
+    [activeKpiFilter, drilldownConferenceRows]
+  );
   const visibleConferenceRows = useMemo(
     () => {
-      if (activeTab === "notBillable") return drilldownConferenceRows.filter(({ viewModel }) => viewModel.billingStatus === "NON_BILLABLE");
-      if (activeTab === "exported") return drilldownConferenceRows.filter(({ viewModel }) => viewModel.conferenceStatus === "exported");
-      if (activeTab === "reopened") return drilldownConferenceRows.filter(({ viewModel }) => viewModel.conferenceStatus === "reopened");
-      return drilldownConferenceRows;
+      if (activeTab === "notBillable") return kpiFilteredConferenceRows.filter(({ row, viewModel }) => isNonBillableConferenceRow(row, viewModel));
+      if (activeTab === "exported") return kpiFilteredConferenceRows.filter(({ row, viewModel }) => viewModel.conferenceStatus === "exported" || Boolean(row.export_id || row.exported_at));
+      if (activeTab === "reopened") return kpiFilteredConferenceRows.filter(({ viewModel }) => viewModel.conferenceStatus === "reopened");
+      return kpiFilteredConferenceRows;
     },
-    [activeTab, drilldownConferenceRows]
+    [activeTab, kpiFilteredConferenceRows]
   );
   const drilldownLabel = drilldownFilter ? `${drilldownTypeLabel[drilldownFilter.type]} = ${drilldownFilter.label}` : "";
+  const appliedConferenceFilterLabel = activeKpiFilter?.label || drilldownLabel;
 
   const operationalPendingTypes = useMemo(
     () => pendingByType.filter((item) => item?.category === "operational"),
@@ -896,7 +1007,13 @@ export function MonthlyConferenceCenter({
             <button
               key={value}
               type="button"
-              onClick={() => { setQuickFilter((current) => current === value ? "" : value); setReadinessStatus(""); setPage(1); }}
+              onClick={() => {
+                setQuickFilter((current) => current === value ? "" : value);
+                setReadinessStatus("");
+                setActiveKpiFilter(null);
+                setDrilldownFilter(null);
+                setPage(1);
+              }}
               className={`rounded-md border px-3 py-1.5 text-sm ${quickFilter === value ? "border-indigo-200 bg-indigo-50 text-indigo-700" : "border-slate-200 text-slate-600 hover:bg-slate-50"}`}
             >
               {label}
@@ -907,10 +1024,18 @@ export function MonthlyConferenceCenter({
 
       <section className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
         {kpiItems.map((item) => (
-          <div key={item.label} className="rounded-md border border-slate-200 bg-white px-3 py-2 shadow-sm">
+          <button
+            key={item.label}
+            type="button"
+            onClick={() => toggleKpiFilter({ key: item.key, label: item.label })}
+            aria-pressed={activeKpiFilter?.key === item.key}
+            aria-label={`${item.title || "Filtrar por"} ${item.label}`}
+            title={item.title || `Filtrar por ${item.label}`}
+            className={`rounded-md border px-3 py-2 text-left transition ${cardClass(activeKpiFilter?.key === item.key)}`}
+          >
             <div className="text-xs text-slate-500">{item.label}</div>
             <div className={`mt-1 text-lg font-semibold ${item.tone}`}>{item.value}</div>
-          </div>
+          </button>
         ))}
       </section>
 
@@ -933,7 +1058,10 @@ export function MonthlyConferenceCenter({
               key={value}
               type="button"
               onClick={() => {
-                if (value !== "sessions") setDrilldownFilter(null);
+                if (value !== "sessions") {
+                  setDrilldownFilter(null);
+                  setActiveKpiFilter(null);
+                }
                 setActiveTab(value);
               }}
               className={`inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium ${activeTab === value ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-50"}`}
@@ -982,18 +1110,12 @@ export function MonthlyConferenceCenter({
       {!error && revalidationInfo && (
         <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{revalidationInfo}</div>
       )}
-      {drilldownFilter && (
-        <div className="flex flex-col gap-2 rounded-md border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm text-indigo-800 sm:flex-row sm:items-center sm:justify-between">
-          <span>Filtro aplicado: {drilldownLabel}</span>
-          <button
-            type="button"
-            onClick={() => setDrilldownFilter(null)}
-            className="inline-flex w-fit items-center gap-1 rounded-md border border-indigo-200 bg-white px-2.5 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-50"
-          >
-            <X size={13} />
-            Limpar filtro
-          </button>
-        </div>
+      {appliedConferenceFilterLabel && (
+        <ActiveFilterBanner
+          label={appliedConferenceFilterLabel}
+          count={visibleConferenceRows.length}
+          onClear={clearAppliedConferenceFilter}
+        />
       )}
 
       {isSessionListTab(activeTab) ? (
@@ -1021,7 +1143,7 @@ export function MonthlyConferenceCenter({
                 {loading ? (
                   <tr><td colSpan={13} className="px-4 py-10 text-center text-slate-500"><Loader2 className="mx-auto mb-2 animate-spin" size={20} />Carregando conferência</td></tr>
                 ) : visibleConferenceRows.length === 0 ? (
-                  <tr><td colSpan={13} className="px-4 py-10 text-center text-slate-500">{drilldownFilter ? "Nenhuma sessão encontrada para o filtro aplicado." : "Nenhuma sessão encontrada para esta visão."}</td></tr>
+                  <tr><td colSpan={13} className="px-4 py-10 text-center text-slate-500">{appliedConferenceFilterLabel ? "Nenhuma sessão encontrada para este filtro." : "Nenhuma sessão encontrada para esta visão."}</td></tr>
                 ) : visibleConferenceRows.map(({ row, viewModel }, index) => {
                   const status = normalizeStatus(row.readiness_status);
                   const workflowMeta = conferenceStatusMeta[viewModel.conferenceStatus] || conferenceStatusMeta.pending_review;
@@ -1115,6 +1237,7 @@ export function MonthlyConferenceCenter({
                   type="button"
                   onClick={() => {
                     const nextDrilldown = buildConferenceDrilldownFilter(activeTab, item);
+                    setActiveKpiFilter(null);
                     if (nextDrilldown) setDrilldownFilter(nextDrilldown);
                     setActiveTab("sessions");
                     setPage(1);

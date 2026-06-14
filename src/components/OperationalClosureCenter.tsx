@@ -15,6 +15,7 @@ import {
   X,
   XCircle,
 } from "lucide-react";
+import { ActiveFilterBanner } from "./ActiveFilterBanner";
 import { dataService } from "../services/dataService";
 import { buildOperationalClosureViewModel } from "../services/prefacturingViewModels";
 import { formatDateTimeInAppointmentTimezone } from "../utils/scheduling";
@@ -34,6 +35,8 @@ type ClosureRow = {
   service_type?: string | null;
   payer_id?: string | null;
   payer_name?: string | null;
+  financial_context_type?: string | null;
+  payer_type?: string | null;
   suggested_payer_id?: string | null;
   suggested_payer_name?: string | null;
   financial_plan_name?: string | null;
@@ -65,6 +68,38 @@ type ClosureRow = {
   warning_issues_count?: number;
   main_issues?: string[];
   checklist?: ClosureChecklistItem[];
+};
+
+type OperationalCardFilterKey =
+  | "ready_for_conference"
+  | "operational_pending"
+  | "open"
+  | "attention"
+  | "non_billable"
+  | "review_needed"
+  | "all_sessions"
+  | "realized_minutes"
+  | "missing_signature"
+  | "missing_report"
+  | "missing_duration"
+  | "missing_guide_authorization"
+  | "missing_financial_context"
+  | "missing_procedure_tuss"
+  | "missing_professional_registry"
+  | "ready_for_prefacturing";
+
+type OperationalCardFilter = {
+  key: OperationalCardFilterKey;
+  label: string;
+};
+
+type OperationalCardDefinition = {
+  key: OperationalCardFilterKey;
+  label: string;
+  value: React.ReactNode;
+  tone: string;
+  helper?: string;
+  title?: string;
 };
 
 type ClosureChecklistItem = {
@@ -249,6 +284,44 @@ function operationalStatusClass(status: string) {
   return "bg-rose-50 text-rose-700 ring-rose-200";
 }
 
+function cardClass(active: boolean) {
+  return active
+    ? "border-indigo-300 bg-indigo-50 shadow-sm ring-2 ring-indigo-100"
+    : "border-slate-200 bg-white shadow-sm hover:border-indigo-200 hover:bg-indigo-50/40";
+}
+
+function hasPendingLabel(
+  viewModel: ReturnType<typeof buildOperationalClosureViewModel>,
+  labels: string[],
+  categories?: Array<"operational" | "configuration" | "not_applicable">
+) {
+  return [...viewModel.operationalPendingChips, ...viewModel.configurationPendingChips].some((item) =>
+    labels.includes(item.label) && (!categories || categories.includes(item.category as any))
+  );
+}
+
+function operationalCardFilterMatches(
+  item: { row: ClosureRow; viewModel: ReturnType<typeof buildOperationalClosureViewModel> },
+  filter: OperationalCardFilter
+) {
+  const { row, viewModel } = item;
+  if (filter.key === "ready_for_conference" || filter.key === "ready_for_prefacturing") return viewModel.isReadyForConference;
+  if (filter.key === "operational_pending") return viewModel.operationalPendingChips.some((chip) => chip.category === "operational");
+  if (filter.key === "open") return viewModel.operationalStatus === "OPEN";
+  if (filter.key === "attention") return viewModel.operationalStatus === "NEEDS_REVALIDATION" || normalizeStatus(row.readiness_status) === "WARNING" || Number(row.warning_issues_count || 0) > 0;
+  if (filter.key === "non_billable") return viewModel.operationalStatus === "NOT_BILLABLE" || normalizeStatus(row.readiness_status) === "NOT_BILLABLE";
+  if (filter.key === "review_needed") return viewModel.operationalStatus === "NEEDS_REVALIDATION" || normalizeStatus(row.readiness_status) === "UNKNOWN";
+  if (filter.key === "realized_minutes") return Number(row.actual_minutes || 0) > 0;
+  if (filter.key === "missing_signature") return hasPendingLabel(viewModel, ["Assinatura"], ["operational"]);
+  if (filter.key === "missing_report") return hasPendingLabel(viewModel, ["Relatorio"], ["operational"]);
+  if (filter.key === "missing_duration") return hasPendingLabel(viewModel, ["Duracao"], ["operational"]);
+  if (filter.key === "missing_guide_authorization") return hasPendingLabel(viewModel, ["Guia", "Autorizacao"], ["operational", "configuration"]);
+  if (filter.key === "missing_financial_context") return hasPendingLabel(viewModel, ["Pagador", "Plano financeiro"], ["configuration"]);
+  if (filter.key === "missing_procedure_tuss") return hasPendingLabel(viewModel, ["Procedimento", "TUSS"], ["configuration"]);
+  if (filter.key === "missing_professional_registry") return hasPendingLabel(viewModel, ["Registro profissional"], ["configuration"]);
+  return true;
+}
+
 export function OperationalClosureCenter({
   patients = [],
   professionals = [],
@@ -264,6 +337,7 @@ export function OperationalClosureCenter({
   const [professionalFilter, setProfessionalFilter] = useState("");
   const [serviceType, setServiceType] = useState("");
   const [quickFilter, setQuickFilter] = useState("");
+  const [activeCardFilter, setActiveCardFilter] = useState<OperationalCardFilter | null>(null);
   const [page, setPage] = useState(1);
   const [rows, setRows] = useState<ClosureRow[]>([]);
   const [totals, setTotals] = useState<any>(null);
@@ -299,6 +373,22 @@ export function OperationalClosureCenter({
     () => rows.map((row) => ({ row, viewModel: buildOperationalClosureViewModel(row as any) })),
     [rows]
   );
+  const visibleOperationalRows = useMemo(
+    () => activeCardFilter
+      ? operationalRows.filter((item) => operationalCardFilterMatches(item, activeCardFilter))
+      : operationalRows,
+    [activeCardFilter, operationalRows]
+  );
+
+  const toggleCardFilter = (filter: OperationalCardFilter) => {
+    setActiveCardFilter((current) => current?.key === filter.key ? null : filter);
+    setPage(1);
+  };
+
+  const clearCardFilter = () => {
+    setActiveCardFilter(null);
+    setPage(1);
+  };
 
   const loadRows = useCallback(async (options: { actionRevision?: string | number; preserveMessage?: boolean } = {}) => {
     setLoading(true);
@@ -319,6 +409,7 @@ export function OperationalClosureCenter({
         onlyReady: quickFilter === "ready",
         onlyWarnings: quickFilter === "warning",
         missing: ["signature", "report", "guide", "authorization", "documents", "procedure", "tuss", "amount", "professional_registry", "card"].includes(quickFilter) ? quickFilter : "",
+        quickFilter: activeCardFilter?.key || "",
         actionRevision,
       });
       let result = await requestRows(page);
@@ -348,7 +439,7 @@ export function OperationalClosureCenter({
     } finally {
       setLoading(false);
     }
-  }, [from, page, patientFilter, professionalFilter, quickFilter, serviceType, status, to]);
+  }, [activeCardFilter, from, page, patientFilter, professionalFilter, quickFilter, serviceType, status, to]);
 
   useEffect(() => {
     void loadRows();
@@ -482,32 +573,32 @@ export function OperationalClosureCenter({
     }
   };
 
-  const correctionCards = useMemo(() => {
+  const correctionCards = useMemo<OperationalCardDefinition[]>(() => {
     const countByLabel = (labels: string[]) => operationalRows.filter(({ viewModel }) => {
       const pendingLabels = [...viewModel.operationalPendingChips, ...viewModel.configurationPendingChips].map((item) => item.label);
       return labels.some((label) => pendingLabels.includes(label));
     }).length;
     return [
-      { label: "Sem assinatura", value: countByLabel(["Assinatura"]), tone: "text-rose-700", helper: "Coleta ou confirmação" },
-      { label: "Sem relatório", value: countByLabel(["Relatorio"]), tone: "text-orange-700", helper: "Evolução pendente" },
-      { label: "Sem duração real", value: countByLabel(["Duracao"]), tone: "text-amber-700", helper: "Tempo realizado" },
-      { label: "Sem guia/autorização", value: countByLabel(["Guia", "Autorizacao"]), tone: "text-violet-700", helper: "Dados do convênio" },
-      { label: "Sem contexto financeiro", value: countByLabel(["Pagador", "Plano financeiro"]), tone: "text-cyan-700", helper: "Pagador ou plano" },
-      { label: "Sem Procedimento/TUSS", value: countByLabel(["Procedimento", "TUSS"]), tone: "text-indigo-700", helper: "Configuração TUSS-ready" },
-      { label: "Sem registro profissional", value: countByLabel(["Registro profissional"]), tone: "text-slate-700", helper: "Cadastro profissional" },
-      { label: "Prontas para pré-faturamento", value: operationalRows.filter(({ viewModel }) => viewModel.isReadyForConference).length, tone: "text-emerald-700", helper: "Podem seguir etapa" },
+      { key: "missing_signature", label: "Sem assinatura", value: countByLabel(["Assinatura"]), tone: "text-rose-700", helper: "Coleta ou confirmação" },
+      { key: "missing_report", label: "Sem relatório", value: countByLabel(["Relatorio"]), tone: "text-orange-700", helper: "Evolução pendente" },
+      { key: "missing_duration", label: "Sem duração real", value: countByLabel(["Duracao"]), tone: "text-amber-700", helper: "Tempo realizado" },
+      { key: "missing_guide_authorization", label: "Sem guia/autorização", value: countByLabel(["Guia", "Autorizacao"]), tone: "text-violet-700", helper: "Dados do convênio" },
+      { key: "missing_financial_context", label: "Sem contexto financeiro", value: countByLabel(["Pagador", "Plano financeiro"]), tone: "text-cyan-700", helper: "Pagador ou plano" },
+      { key: "missing_procedure_tuss", label: "Sem Procedimento/TUSS", value: countByLabel(["Procedimento", "TUSS"]), tone: "text-indigo-700", helper: "Configuração TUSS-ready" },
+      { key: "missing_professional_registry", label: "Sem registro profissional", value: countByLabel(["Registro profissional"]), tone: "text-slate-700", helper: "Cadastro profissional" },
+      { key: "ready_for_prefacturing", label: "Prontas para pré-faturamento", value: operationalRows.filter(({ viewModel }) => viewModel.isReadyForConference).length, tone: "text-emerald-700", helper: "Podem seguir etapa" },
     ];
   }, [operationalRows]);
 
-  const kpis = [
-    { label: "Prontas para conferência", value: totals?.ready ?? 0, tone: "text-emerald-700" },
-    { label: "Pendências operacionais", value: totals?.pending ?? 0, tone: "text-rose-700" },
-    { label: "Em aberto", value: totals?.open ?? totals?.draft ?? 0, tone: "text-sky-700" },
-    { label: "Atenção", value: totals?.warning ?? 0, tone: "text-amber-700" },
-    { label: "Não faturáveis", value: totals?.notBillable ?? 0, tone: "text-slate-700" },
-    { label: "A revisar", value: totals?.unknown ?? 0, tone: "text-zinc-700" },
-    { label: "Total de sessões", value: totals?.total ?? rows.length, tone: "text-slate-900" },
-    { label: "Minutos realizados", value: totals?.actualMinutes ?? 0, tone: "text-indigo-700" },
+  const kpis: OperationalCardDefinition[] = [
+    { key: "ready_for_conference", label: "Prontas para conferência", value: totals?.ready ?? 0, tone: "text-emerald-700" },
+    { key: "operational_pending", label: "Pendências operacionais", value: totals?.pending ?? 0, tone: "text-rose-700" },
+    { key: "open", label: "Em aberto", value: totals?.open ?? totals?.draft ?? 0, tone: "text-sky-700" },
+    { key: "attention", label: "Atenção", value: totals?.warning ?? 0, tone: "text-amber-700" },
+    { key: "non_billable", label: "Não faturáveis", value: totals?.notBillable ?? 0, tone: "text-slate-700" },
+    { key: "review_needed", label: "A revisar", value: totals?.unknown ?? 0, tone: "text-zinc-700" },
+    { key: "all_sessions", label: "Total de sessões", value: totals?.total ?? rows.length, tone: "text-slate-900", title: "Limpar filtro aplicado" },
+    { key: "realized_minutes", label: "Minutos realizados", value: totals?.actualMinutes ?? 0, tone: "text-indigo-700", title: "Filtrar sessões com tempo realizado" },
   ];
 
   return (
@@ -536,10 +627,18 @@ export function OperationalClosureCenter({
 
         <div className="mt-4 grid gap-3 md:grid-cols-3 xl:grid-cols-6">
           {kpis.map((item) => (
-            <div key={item.label} className="rounded-md border border-slate-200 px-3 py-2">
+            <button
+              key={item.label}
+              type="button"
+              onClick={() => item.key === "all_sessions" ? clearCardFilter() : toggleCardFilter({ key: item.key, label: item.label })}
+              aria-pressed={activeCardFilter?.key === item.key}
+              aria-label={`${item.title || "Filtrar por"} ${item.label}`}
+              title={item.title || `Filtrar por ${item.label}`}
+              className={`rounded-md border px-3 py-2 text-left transition ${cardClass(activeCardFilter?.key === item.key)}`}
+            >
               <div className="text-xs text-slate-500">{item.label}</div>
               <div className={`mt-1 text-xl font-semibold ${item.tone}`}>{item.value}</div>
-            </div>
+            </button>
           ))}
         </div>
 
@@ -659,6 +758,7 @@ export function OperationalClosureCenter({
               onClick={() => {
                 setQuickFilter((current) => current === key ? "" : key);
                 setStatus("");
+                setActiveCardFilter(null);
                 setPage(1);
               }}
               className={`inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm transition ${
@@ -676,11 +776,19 @@ export function OperationalClosureCenter({
 
       <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         {correctionCards.map((item) => (
-          <div key={item.label} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+          <button
+            key={item.label}
+            type="button"
+            onClick={() => toggleCardFilter({ key: item.key, label: item.label })}
+            aria-pressed={activeCardFilter?.key === item.key}
+            aria-label={`Filtrar por ${item.label}`}
+            title={`Filtrar por ${item.label}`}
+            className={`rounded-lg border p-3 text-left transition ${cardClass(activeCardFilter?.key === item.key)}`}
+          >
             <div className="text-xs font-medium text-slate-500">{item.label}</div>
             <div className={`mt-1 text-xl font-semibold ${item.tone}`}>{item.value}</div>
             <div className="mt-1 text-xs text-slate-500">{item.helper}</div>
-          </div>
+          </button>
         ))}
       </section>
 
@@ -693,6 +801,13 @@ export function OperationalClosureCenter({
         <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
           {revalidationInfo}
         </div>
+      )}
+      {activeCardFilter && (
+        <ActiveFilterBanner
+          label={activeCardFilter.label}
+          count={visibleOperationalRows.length}
+          onClear={clearCardFilter}
+        />
       )}
 
       <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
@@ -727,13 +842,13 @@ export function OperationalClosureCenter({
                     Carregando fechamento
                   </td>
                 </tr>
-              ) : operationalRows.length === 0 ? (
+              ) : visibleOperationalRows.length === 0 ? (
                 <tr>
                   <td colSpan={10} className="px-4 py-10 text-center text-slate-500">
-                    Nenhuma sessão encontrada no período.
+                    {activeCardFilter ? "Nenhuma sessão encontrada para este filtro." : "Nenhuma sessão encontrada no período."}
                   </td>
                 </tr>
-              ) : operationalRows.map(({ row, viewModel }) => {
+              ) : visibleOperationalRows.map(({ row, viewModel }) => {
                 const isBusy = actionLoadingId === row.appointment_id;
                 const visibleChips = [...viewModel.operationalPendingChips, ...viewModel.configurationPendingChips];
                 return (

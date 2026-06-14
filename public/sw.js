@@ -1,5 +1,5 @@
 const SW_VERSION = "appointments-app-only-v7";
-const APPOINTMENT_NOTIFICATION_CTA = "Toque para abrir a Verto e confirmar, remarcar ou cancelar.";
+const APPOINTMENT_NOTIFICATION_CTA = "Toque para confirmar, remarcar ou cancelar.";
 const VERTO_ICON = "/verto-3d-transparent.png";
 
 self.addEventListener("install", (event) => {
@@ -39,23 +39,37 @@ self.addEventListener("push", (event) => {
   }).toString();
   const targetUrl =
     payload.url ||
+    payload.data?.url ||
     `/${fallbackQuery ? `?${fallbackQuery}` : ""}`;
+  const brandName = payload.branding?.displayName || payload.data?.brandName || "Verto";
+  const brandLogo = payload.branding?.logoUrl || payload.data?.brandLogoUrl || "";
+  const actions = Array.isArray(payload.actions) && payload.actions.length
+    ? payload.actions
+    : [
+        { action: "open-confirm", title: "Confirmar presença" },
+        { action: "open-reschedule", title: "Remarcar consulta" },
+      ];
 
   event.waitUntil(
-    self.registration.showNotification(payload.title || "Lembrete de Consulta - Verto", {
-      body: payload.body || `Voce tem uma consulta agendada. ${APPOINTMENT_NOTIFICATION_CTA}`,
-      icon: new URL(payload.icon || VERTO_ICON, self.location.origin).href,
-      badge: new URL(payload.badge || VERTO_ICON, self.location.origin).href,
-      tag: appointmentId ? `appointment-reminder-${appointmentId}-${reminderKind}` : undefined,
+    self.registration.showNotification(payload.title || brandName, {
+      body: payload.body || `Você tem uma consulta agendada. ${APPOINTMENT_NOTIFICATION_CTA}`,
+      icon: new URL(payload.icon || brandLogo || VERTO_ICON, self.location.origin).href,
+      badge: new URL(payload.badge || brandLogo || VERTO_ICON, self.location.origin).href,
+      image: payload.image ? new URL(payload.image, self.location.origin).href : undefined,
+      tag: payload.tag || (appointmentId ? `appointment-reminder-${appointmentId}-${reminderKind}` : undefined),
       renotify: Boolean(appointmentId),
       requireInteraction: true,
       timestamp: Date.now(),
       data: {
+        ...(payload.data || {}),
         url: targetUrl,
         appointmentId,
         reminderKind,
+        brandName,
+        brandLogoUrl: brandLogo || null,
         swVersion: SW_VERSION,
       },
+      actions,
       vibrate: [120, 60, 120],
     }),
   );
@@ -74,7 +88,12 @@ const focusOrOpen = async (targetUrl) => {
 };
 
 self.addEventListener("notificationclick", (event) => {
-  const targetUrl = event.notification?.data?.url || "/";
+  const baseTargetUrl = event.notification?.data?.url || "/";
+  const target = new URL(baseTargetUrl, self.location.origin);
+  if (event.action) {
+    target.searchParams.set("notification_action", event.action);
+  }
+  const targetUrl = target.href;
   event.notification.close();
   event.waitUntil(focusOrOpen(targetUrl));
 });

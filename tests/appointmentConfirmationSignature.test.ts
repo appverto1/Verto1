@@ -64,13 +64,16 @@ test('closure reads responsible signatures and action states affect readiness', 
   assert.match(readFileSync(join(root, 'src/services/closureReadinessEngine.ts'), 'utf8'), /cancel_requested/);
 });
 
-test('notifications are app-only and do not expose action buttons', () => {
-  assert.doesNotMatch(serviceWorkerCode, /actions:\s*\[/);
+test('notifications expose app-opening actions without writing responses in the service worker', () => {
+  assert.match(serviceWorkerCode, /actions/);
+  assert.match(serviceWorkerCode, /notification_action/);
   assert.doesNotMatch(serviceWorkerCode, /persistAppointmentResponse/);
   assert.doesNotMatch(serviceWorkerCode, /\/api\/notifications\/appointments\/.*\/respond/);
   assert.match(serviceWorkerCode, /focusOrOpen\(targetUrl\)/);
-  assert.match(pushServiceCode, /Toque para abrir a Verto/);
-  assert.match(cronServiceCode, /Toque para abrir a Verto/);
+  assert.match(pushServiceCode, /buildPatientReminderNotificationPayload/);
+  assert.match(cronServiceCode, /buildPatientReminderNotificationPayload/);
+  assert.doesNotMatch(pushServiceCode, /Toque para abrir a Verto/);
+  assert.doesNotMatch(cronServiceCode, /Toque para abrir a Verto/);
   assert.doesNotMatch(pushServiceCode, /\.select\('\*'\)/);
   assert.doesNotMatch(cronServiceCode, /\.select\('\*'\)/);
   assert.match(serverCode, /source === 'push_notification_action'[\s\S]*?Ação de notificação expirada/m);
@@ -81,8 +84,9 @@ test('appointment reminder popup is clinic-branded and neutral', () => {
   assert.match(serverCode, /clinicLogoUrl/);
   assert.match(serverCode, /\.from\('clinics'\)/);
   assert.match(serverCode, /read\('id,name,logo_url'\)/);
-  assert.match(appCode, /appointmentConfirmation\.clinicName \|\| 'sua clínica'/);
-  assert.match(appCode, /appointmentConfirmation\.clinicLogoUrl/);
+  assert.match(appCode, /buildPatientReminderModalViewModel/);
+  assert.match(appCode, /appointmentConfirmationViewModel\?\.brandName/);
+  assert.match(appCode, /appointmentConfirmationViewModel\?\.brandLogoUrl/);
   assert.match(appCode, /border-b border-slate-100 bg-slate-50/);
   assert.doesNotMatch(appCode, /Lembrete de Consulta - Verto/);
   assert.doesNotMatch(appCode, /bg-gradient-to-br from-violet-600 via-fuchsia-500 to-blue-500/);

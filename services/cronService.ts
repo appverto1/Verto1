@@ -3,6 +3,10 @@ import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
 import { sendAppointmentNotification } from './pushNotificationService';
+import {
+  buildPatientReminderNotificationPayload,
+  resolveBrandingContext,
+} from '../src/services/notificationBranding';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -37,7 +41,10 @@ type ReminderAppointment = {
   clinicName?: string | null;
   clinicLogoUrl?: string | null;
   patientId: string;
+  patientName?: string | null;
   patientEmail?: string | null;
+  professionalDisplayName?: string | null;
+  professionalLogoUrl?: string | null;
   scheduledAt: string;
   status?: string | null;
   patientResponse?: string | null;
@@ -54,20 +61,15 @@ const BRAZIL_TIMEZONE = 'America/Sao_Paulo';
 const CRON_LOOKBACK_MINUTES = 180;
 const QUERY_AHEAD_HOURS = 28;
 const REMINDER_DEDUPE_TTL_MS = 30 * 60 * 60 * 1000;
-const APPOINTMENT_NOTIFICATION_CTA = 'Toque para abrir a Verto e confirmar, remarcar ou cancelar.';
 
 const REMINDER_STEPS = [
   {
     kind: '24h' as ReminderKind,
     hoursBefore: 24,
-    titlePrefix: 'Confirmacao de consulta',
-    fallbackBody: `Voce tem uma consulta agendada amanha pela sua clínica. ${APPOINTMENT_NOTIFICATION_CTA}`
   },
   {
     kind: '12h' as ReminderKind,
     hoursBefore: 12,
-    titlePrefix: 'Consulta chegando',
-    fallbackBody: `Sua consulta esta chegando. ${APPOINTMENT_NOTIFICATION_CTA}`
   }
 ];
 
@@ -84,6 +86,18 @@ const sanitizeText = (value: unknown, maxLength = 240) =>
 const sanitizeEmail = (value: unknown) => {
   const email = sanitizeText(value, 320).toLowerCase();
   return email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : '';
+};
+
+const parseReminderSourcePayload = (value: unknown): Record<string, any> => {
+  if (!value) return {};
+  if (typeof value === 'object') return value as Record<string, any>;
+  if (typeof value !== 'string') return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
 };
 
 const isUuid = (value: unknown) => UUID_REGEX.test(sanitizeText(value, 120));
@@ -119,17 +133,6 @@ const buildScheduledAtFromClinicStateAppointment = (appointment: any) => {
 
   const candidate = dayjs.tz(`${date} ${time}`, 'YYYY-MM-DD HH:mm', BRAZIL_TIMEZONE);
   return candidate.isValid() ? candidate.utc().toISOString() : '';
-};
-
-const formatReminderBody = (scheduledAt: string, fallback: string, clinicName = 'sua clínica') => {
-  const safeClinicName = sanitizeText(clinicName, 160) || 'sua clínica';
-  const scheduled = dayjs(scheduledAt).tz(BRAZIL_TIMEZONE);
-  if (!scheduled.isValid()) return fallback;
-  const tomorrow = dayjs().tz(BRAZIL_TIMEZONE).add(1, 'day').format('YYYY-MM-DD');
-  const dateLabel = scheduled.format('YYYY-MM-DD') === tomorrow
-    ? 'amanha'
-    : `em ${scheduled.format('DD/MM')}`;
-  return `Voce tem uma consulta agendada pela ${safeClinicName} ${dateLabel} as ${scheduled.format('HH:mm')}. ${APPOINTMENT_NOTIFICATION_CTA}`;
 };
 
 const getReminderDueUtc = (scheduledAt: string, hoursBefore: number) =>
@@ -168,7 +171,10 @@ const mergeAppointment = (
     clinicName: existing.clinicName || incoming.clinicName,
     clinicLogoUrl: existing.clinicLogoUrl || incoming.clinicLogoUrl,
     patientId: existing.patientId || incoming.patientId,
+    patientName: existing.patientName || incoming.patientName,
     patientEmail: existing.patientEmail || incoming.patientEmail,
+    professionalDisplayName: existing.professionalDisplayName || incoming.professionalDisplayName,
+    professionalLogoUrl: existing.professionalLogoUrl || incoming.professionalLogoUrl,
     scheduledAt: existing.scheduledAt || incoming.scheduledAt,
     status: existing.status || incoming.status,
     patientResponse: existing.patientResponse || incoming.patientResponse,
@@ -190,7 +196,7 @@ async function fetchAppointmentsTable(
   const appointments = new Map<string, ReminderAppointment>();
   const { data, error } = await options.supabase
     .from('appointments')
-    .select('id, clinic_id, patient_id, patient_email, scheduled_at, status, patient_response, patient_confirmation_status, notification_24h_sent_at, notification_sent_at, notification_12h_sent_at, notification_sent, notification_12h_sent, is_active, deleted_at')
+    .select('id, clinic_id, patient_id, patient_name, patient_email, therapist_name, source_payload, scheduled_at, status, patient_response, patient_confirmation_status, notification_24h_sent_at, notification_sent_at, notification_12h_sent_at, notification_sent, notification_12h_sent, is_active, deleted_at')
     .gte('scheduled_at', queryScheduledStartUtc.toISOString())
     .lt('scheduled_at', queryScheduledEndUtc.toISOString())
     .order('scheduled_at', { ascending: true })
@@ -204,6 +210,7 @@ async function fetchAppointmentsTable(
   }
 
   for (const row of data || []) {
+    const source = parseReminderSourcePayload(row?.source_payload);
     const appointmentId = sanitizeText(row?.id, 120);
     const patientId = sanitizeText(row?.patient_id, 120);
     const scheduledAt = sanitizeText(row?.scheduled_at, 80);
@@ -215,7 +222,28 @@ async function fetchAppointmentsTable(
       appointmentId,
       clinicId: sanitizeText(row?.clinic_id, 120) || null,
       patientId,
+      patientName: sanitizeText(row?.patient_name || source?.patientName || source?.patient_name, 180) || null,
       patientEmail: sanitizeEmail(row?.patient_email),
+      professionalDisplayName:
+        sanitizeText(
+          row?.therapist_name ||
+            source?.professionalDisplayName ||
+            source?.professionalName ||
+            source?.professional_name ||
+            source?.therapistName ||
+            source?.therapist_name,
+          180,
+        ) || null,
+      professionalLogoUrl:
+        sanitizeText(
+          source?.professionalLogoUrl ||
+            source?.professional_logo_url ||
+            source?.professionalAvatarUrl ||
+            source?.professional_avatar_url ||
+            source?.therapistAvatarUrl ||
+            source?.therapist_avatar_url,
+          2000,
+        ) || null,
       scheduledAt,
       status: sanitizeText(row?.status, 40).toLowerCase(),
       patientResponse: sanitizeText(row?.patient_response, 40).toLowerCase(),
@@ -254,6 +282,7 @@ async function fetchClinicStateAppointments(
     const clinicId = sanitizeText(state?.clinic_id, 120);
     const rows = Array.isArray(state?.appointments) ? state.appointments : [];
     for (const appointment of rows) {
+      const source = parseReminderSourcePayload(appointment?.source_payload || appointment?.sourcePayload);
       const appointmentId = sanitizeText(appointment?.id, 120);
       const patientId = sanitizeText(appointment?.patientId || appointment?.patient_id, 120);
       const scheduledAt = buildScheduledAtFromClinicStateAppointment(appointment);
@@ -266,7 +295,43 @@ async function fetchClinicStateAppointments(
         appointmentId,
         clinicId,
         patientId,
+        patientName:
+          sanitizeText(
+            appointment?.patientName ||
+              appointment?.patient_name ||
+              appointment?.name ||
+              source?.patientName ||
+              source?.patient_name,
+            180,
+          ) || null,
         patientEmail: sanitizeEmail(appointment?.patientEmail || appointment?.patient_email),
+        professionalDisplayName:
+          sanitizeText(
+            appointment?.professionalDisplayName ||
+              appointment?.professionalName ||
+              appointment?.professional_name ||
+              appointment?.therapistName ||
+              appointment?.therapist_name ||
+              appointment?.professional ||
+              source?.professionalName ||
+              source?.professional_name ||
+              source?.therapistName ||
+              source?.therapist_name,
+            180,
+          ) || null,
+        professionalLogoUrl:
+          sanitizeText(
+            appointment?.professionalLogoUrl ||
+              appointment?.professional_logo_url ||
+              appointment?.professionalAvatarUrl ||
+              appointment?.professional_avatar_url ||
+              appointment?.therapistAvatarUrl ||
+              appointment?.therapist_avatar_url ||
+              source?.professionalLogoUrl ||
+              source?.professionalAvatarUrl ||
+              source?.therapistAvatarUrl,
+            2000,
+          ) || null,
         scheduledAt,
         status: sanitizeText(appointment?.status || 'pending', 40).toLowerCase(),
         patientResponse: sanitizeText(appointment?.patientResponse || appointment?.patient_response, 40).toLowerCase(),
@@ -669,8 +734,29 @@ async function runAppointmentReminderJob(
         const clinicBranding = await resolveReminderClinicBranding(options, appointment.clinicId);
         const clinicName = appointment.clinicName || clinicBranding.clinicName;
         const clinicLogoUrl = appointment.clinicLogoUrl || clinicBranding.clinicLogoUrl;
-        const title = `${dueReminder.titlePrefix} - ${clinicName}`;
-        const body = formatReminderBody(appointment.scheduledAt, dueReminder.fallbackBody, clinicName);
+        const branding = resolveBrandingContext({
+          clinic: {
+            displayName: clinicName,
+            logoUrl: clinicLogoUrl,
+          },
+          professional: {
+            displayName: appointment.professionalDisplayName,
+            logoUrl: appointment.professionalLogoUrl,
+          },
+          fallbackName: 'Verto',
+          fallbackLogoUrl: '/verto-3d-transparent.png',
+        });
+        const reminderPayload = buildPatientReminderNotificationPayload({
+          appointmentId: appointment.appointmentId,
+          scheduledAt: appointment.scheduledAt,
+          dateLabel: scheduled.isValid() ? scheduled.format('DD/MM/YYYY') : null,
+          timeLabel: scheduled.isValid() ? scheduled.format('HH:mm') : null,
+          patientName: appointment.patientName,
+          reminderKind: dueReminder.kind,
+          branding,
+        });
+        const title = reminderPayload.title;
+        const body = reminderPayload.body;
         const persisted = await persistPortalReminder({
           options,
           appointment,
@@ -691,10 +777,11 @@ async function runAppointmentReminderJob(
                 dateLabel: scheduled.isValid() ? scheduled.format('DD/MM/YYYY') : null,
                 timeLabel: scheduled.isValid() ? scheduled.format('HH:mm') : null,
                 clinicName,
-                clinicLogoUrl
+                clinicLogoUrl,
+                patientName: appointment.patientName,
+                professionalDisplayName: appointment.professionalDisplayName,
+                professionalLogoUrl: appointment.professionalLogoUrl
               },
-              title,
-              body,
               reminderKind: dueReminder.kind,
               logger: options.logger
             })
