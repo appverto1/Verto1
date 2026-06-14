@@ -19,13 +19,14 @@ import {
   XCircle,
 } from "lucide-react";
 import { ActiveFilterBanner } from "./ActiveFilterBanner";
+import { TissPreGuideTab } from "./TissPreGuideTab";
 import { dataService } from "../services/dataService";
 import { classifyConferencePendingDetails, formatConferenceMinutes } from "../services/monthlyConferenceEngine";
 import { buildMonthlyConferenceViewModel } from "../services/prefacturingViewModels";
 import { formatDateTimeInAppointmentTimezone } from "../utils/scheduling";
 
 type ConferenceStatus = "READY" | "PENDING" | "WARNING" | "NOT_BILLABLE" | "DRAFT" | "UNKNOWN";
-type ConferenceTab = "sessions" | "patient" | "professional" | "payer" | "service" | "procedure" | "tuss" | "guide" | "notBillable" | "exported" | "reopened";
+type ConferenceTab = "sessions" | "patient" | "professional" | "payer" | "service" | "procedure" | "tuss" | "guide" | "preGuides" | "notBillable" | "exported" | "reopened";
 type ConferenceSummaryKey = "patient" | "professional" | "payer" | "service" | "procedure" | "tuss" | "guide";
 type ConferenceSummaryEndpoint = "patient" | "professional" | "payer" | "service-type" | "procedure" | "tuss-code" | "guide-type";
 type ConferenceDrilldownFilter = {
@@ -123,6 +124,9 @@ type MonthlyConferenceCenterProps = {
   canExport?: boolean;
   onOpenAppointment?: (row: ConferenceRow) => void;
   onOpenReport?: (row: ConferenceRow) => void;
+  onNavigatePayers?: () => void;
+  onNavigateSettings?: () => void;
+  onNavigateProfessionals?: () => void;
 };
 
 const statusMeta: Record<ConferenceStatus, { label: string; className: string; icon: React.ComponentType<any> }> = {
@@ -448,6 +452,9 @@ export function MonthlyConferenceCenter({
   canExport = false,
   onOpenAppointment,
   onOpenReport,
+  onNavigatePayers,
+  onNavigateSettings,
+  onNavigateProfessionals,
 }: MonthlyConferenceCenterProps) {
   const initialBounds = useMemo(() => monthBounds(), []);
   const [from, setFrom] = useState(initialBounds.from);
@@ -627,6 +634,7 @@ export function MonthlyConferenceCenter({
   }, [loadConference]);
 
   useEffect(() => {
+    if (activeTab === "preGuides") return;
     if (!isSessionListTab(activeTab)) void loadActiveSummary(activeTab);
   }, [activeTab, loadActiveSummary]);
 
@@ -657,7 +665,7 @@ export function MonthlyConferenceCenter({
         affectedIds.slice(0, 25).join(",")
       ].filter(Boolean).join(":");
       await loadConference({ actionRevision, preserveMessage: true });
-      if (!isSessionListTab(activeTab)) await loadActiveSummary(activeTab, actionRevision);
+      if (!isSessionListTab(activeTab) && activeTab !== "preGuides") await loadActiveSummary(activeTab, actionRevision);
       if (revalidation?.success === false && revalidationErrors > 0) {
         setRevalidationInfo("");
         const reason = [firstRevalidationError?.reasonCode, firstRevalidationError?.dbCode].filter(Boolean).join(" · ");
@@ -1022,7 +1030,7 @@ export function MonthlyConferenceCenter({
         </div>
       </section>
 
-      <section className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+      {activeTab !== "preGuides" && <section className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
         {kpiItems.map((item) => (
           <button
             key={item.label}
@@ -1037,7 +1045,7 @@ export function MonthlyConferenceCenter({
             <div className={`mt-1 text-lg font-semibold ${item.tone}`}>{item.value}</div>
           </button>
         ))}
-      </section>
+      </section>}
 
       <section className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
         <div className="flex flex-wrap items-center gap-2">
@@ -1050,6 +1058,7 @@ export function MonthlyConferenceCenter({
             ["procedure", "Por procedimento", ClipboardCheck],
             ["tuss", "Por TUSS", FileText],
             ["guide", "Por guia", Download],
+            ["preGuides", "Pré-guias TISS", ClipboardCheck],
             ["notBillable", "Não faturáveis", ShieldAlert],
             ["exported", "Exportadas", Download],
             ["reopened", "Reabertas", RefreshCw],
@@ -1073,7 +1082,7 @@ export function MonthlyConferenceCenter({
         </div>
       </section>
 
-      {pendingByType.length > 0 && (
+      {activeTab !== "preGuides" && pendingByType.length > 0 && (
         <section className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
           <div className="text-sm font-semibold text-slate-700">Pendências e configurações mais frequentes</div>
           <div className="mt-0.5 text-xs text-slate-500">Bloqueios operacionais contam no KPI de pendências operacionais; configurações de pré-faturamento aparecem separadas.</div>
@@ -1106,11 +1115,11 @@ export function MonthlyConferenceCenter({
         </section>
       )}
 
-      {error && <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div>}
-      {!error && revalidationInfo && (
+      {activeTab !== "preGuides" && error && <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div>}
+      {activeTab !== "preGuides" && !error && revalidationInfo && (
         <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{revalidationInfo}</div>
       )}
-      {appliedConferenceFilterLabel && (
+      {activeTab !== "preGuides" && appliedConferenceFilterLabel && (
         <ActiveFilterBanner
           label={appliedConferenceFilterLabel}
           count={visibleConferenceRows.length}
@@ -1118,7 +1127,19 @@ export function MonthlyConferenceCenter({
         />
       )}
 
-      {isSessionListTab(activeTab) ? (
+      {activeTab === "preGuides" ? (
+        <TissPreGuideTab
+          from={from}
+          to={to}
+          patientId={patientId}
+          professionalId={professionalId}
+          payerId={payerId}
+          onOpenAppointment={(row) => onOpenAppointment?.(row as ConferenceRow)}
+          onNavigatePayers={onNavigatePayers}
+          onNavigateSettings={onNavigateSettings}
+          onNavigateProfessionals={onNavigateProfessionals}
+        />
+      ) : isSessionListTab(activeTab) ? (
         <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
           <div className="max-h-[70vh] overflow-auto">
             <table className="min-w-[1280px] divide-y divide-slate-200 text-sm">

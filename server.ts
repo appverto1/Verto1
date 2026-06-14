@@ -109,6 +109,9 @@ import {
   resolveTussBillingItem
 } from './src/services/tussBillingResolutionEngine';
 import {
+  validateTissPreGuide
+} from './src/services/tissPreGuideEngine';
+import {
   buildPatientPortabilitySnapshot,
   normalizePatientPortabilityScope
 } from './src/utils/patientPortability';
@@ -3139,6 +3142,144 @@ const APPOINTMENT_BILLING_ITEM_SELECT = [
   'updated_by',
   'created_at',
   'updated_at'
+].join(',');
+
+const CLINIC_TISS_PROFILE_SELECT = [
+  'id',
+  'organization_id',
+  'clinic_id',
+  'legal_name',
+  'trade_name',
+  'document_type',
+  'document_number',
+  'cnes_code',
+  'provider_code',
+  'ans_provider_code',
+  'address_line',
+  'address_number',
+  'address_complement',
+  'district',
+  'city',
+  'state',
+  'postal_code',
+  'phone',
+  'email',
+  'active',
+  'created_at',
+  'updated_at'
+].join(',');
+
+const PAYER_TISS_PROFILE_SELECT = [
+  'id',
+  'organization_id',
+  'clinic_id',
+  'payer_id',
+  'ans_registration',
+  'operator_code',
+  'tiss_version',
+  'default_guide_type',
+  'requires_authorization',
+  'requires_provider_code',
+  'requires_cnes',
+  'requires_cbo',
+  'requires_executant_registry',
+  'requires_beneficiary_card',
+  'active',
+  'created_at',
+  'updated_at'
+].join(',');
+
+const PROFESSIONAL_BILLING_PROFILE_SELECT = [
+  'id',
+  'organization_id',
+  'clinic_id',
+  'professional_id',
+  'display_name',
+  'document_type',
+  'document_number',
+  'council_type',
+  'council_number',
+  'council_state',
+  'cbo_code',
+  'specialty_name',
+  'provider_code',
+  'active',
+  'created_at',
+  'updated_at'
+].join(',');
+
+const APPOINTMENT_TISS_PRE_GUIDE_SELECT = [
+  'id',
+  'organization_id',
+  'clinic_id',
+  'appointment_id',
+  'patient_id',
+  'professional_id',
+  'payer_id',
+  'billing_item_id',
+  'provider_profile_id',
+  'payer_tiss_profile_id',
+  'professional_billing_profile_id',
+  'guide_type',
+  'guide_number',
+  'authorization_code',
+  'authorization_valid_until',
+  'beneficiary_card_number',
+  'internal_procedure_code',
+  'internal_procedure_name',
+  'tuss_code',
+  'tuss_description',
+  'tuss_version',
+  'quantity',
+  'unit',
+  'unit_amount_cents',
+  'total_amount_cents',
+  'scheduled_start',
+  'scheduled_end',
+  'patient_name_snapshot',
+  'professional_name_snapshot',
+  'payer_name_snapshot',
+  'clinic_name_snapshot',
+  'status',
+  'validation_errors',
+  'validation_warnings',
+  'validation_error_codes',
+  'validation_warning_codes',
+  'snapshot_data',
+  'generated_from_version',
+  'stale_reason',
+  'created_at',
+  'updated_at',
+  'last_validated_at'
+].join(',');
+
+const APPOINTMENT_TISS_PRE_GUIDE_LIST_SELECT = [
+  'id',
+  'appointment_id',
+  'patient_id',
+  'professional_id',
+  'payer_id',
+  'guide_type',
+  'guide_number',
+  'authorization_code',
+  'internal_procedure_name',
+  'tuss_code',
+  'tuss_description',
+  'quantity',
+  'unit',
+  'total_amount_cents',
+  'scheduled_start',
+  'scheduled_end',
+  'patient_name_snapshot',
+  'professional_name_snapshot',
+  'payer_name_snapshot',
+  'status',
+  'validation_errors',
+  'validation_error_codes',
+  'validation_warning_codes',
+  'stale_reason',
+  'updated_at',
+  'last_validated_at'
 ].join(',');
 
 const APPOINTMENT_BILLING_CONTEXT_SCHEMA_FALLBACK_COLUMNS = new Set([
@@ -31605,6 +31746,231 @@ async function startServer() {
     return { ok: true, organizationId, appointment: data };
   };
 
+  const serializeTissPreGuide = (row: any) => ({
+    id: sanitizeString(row?.id, 120) || null,
+    appointmentId: sanitizeString(row?.appointment_id, 120) || null,
+    patientId: sanitizeString(row?.patient_id, 120) || null,
+    professionalId: sanitizeString(row?.professional_id, 120) || null,
+    payerId: sanitizeString(row?.payer_id, 120) || null,
+    billingItemId: sanitizeString(row?.billing_item_id, 120) || null,
+    providerProfileId: sanitizeString(row?.provider_profile_id, 120) || null,
+    payerTissProfileId: sanitizeString(row?.payer_tiss_profile_id, 120) || null,
+    professionalBillingProfileId: sanitizeString(row?.professional_billing_profile_id, 120) || null,
+    guideType: sanitizeString(row?.guide_type, 40) || 'sp_sadt',
+    guideNumber: sanitizeString(row?.guide_number, 120) || null,
+    authorizationCode: sanitizeString(row?.authorization_code, 120) || null,
+    authorizationValidUntil: row?.authorization_valid_until || null,
+    beneficiaryCardNumber: sanitizeString(row?.beneficiary_card_number, 120) || null,
+    internalProcedureCode: sanitizeString(row?.internal_procedure_code, 80) || null,
+    internalProcedureName: sanitizeString(row?.internal_procedure_name, 180) || null,
+    tussCode: sanitizeString(row?.tuss_code, 80) || null,
+    tussDescription: sanitizeTextField(row?.tuss_description, 600) || null,
+    tussVersion: sanitizeString(row?.tuss_version, 80) || null,
+    quantity: Number(row?.quantity || 0) || 0,
+    unit: sanitizeString(row?.unit, 40) || null,
+    unitAmountCents: row?.unit_amount_cents ?? null,
+    totalAmountCents: row?.total_amount_cents ?? null,
+    scheduledStart: row?.scheduled_start || null,
+    scheduledEnd: row?.scheduled_end || null,
+    patientName: sanitizeString(row?.patient_name_snapshot, 180) || 'Paciente',
+    professionalName: sanitizeString(row?.professional_name_snapshot, 180) || 'Equipe',
+    payerName: sanitizeString(row?.payer_name_snapshot, 180) || 'Sem pagador',
+    clinicName: sanitizeString(row?.clinic_name_snapshot, 180) || null,
+    status: sanitizeString(row?.status, 40) || 'draft',
+    validationErrors: Array.isArray(row?.validation_errors) ? row.validation_errors : [],
+    validationWarnings: Array.isArray(row?.validation_warnings) ? row.validation_warnings : [],
+    validationErrorCodes: Array.isArray(row?.validation_error_codes) ? row.validation_error_codes : [],
+    validationWarningCodes: Array.isArray(row?.validation_warning_codes) ? row.validation_warning_codes : [],
+    snapshot: row?.snapshot_data && typeof row.snapshot_data === 'object' ? row.snapshot_data : {},
+    generatedFromVersion: sanitizeString(row?.generated_from_version, 80) || null,
+    staleReason: sanitizeTextField(row?.stale_reason, 600) || null,
+    updatedAt: row?.updated_at || null,
+    lastValidatedAt: row?.last_validated_at || null
+  });
+
+  const fetchTissPreGuideProfile = async (
+    tableName: 'clinic_tiss_profiles' | 'payer_tiss_profiles' | 'professional_billing_profiles',
+    selectColumns: string,
+    organizationId: string,
+    extraColumn?: string,
+    extraValue?: string
+  ) => {
+    if (!isUuid(organizationId)) return null;
+    let query = supabase
+      .from(tableName)
+      .select(selectColumns)
+      .eq('organization_id', organizationId)
+      .eq('active', true);
+    if (extraColumn && extraValue) query = query.eq(extraColumn, extraValue);
+    const { data, error } = await query
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return null;
+      throw error;
+    }
+    return data || null;
+  };
+
+  const buildAndPersistTissPreGuideForAppointment = async (params: {
+    organizationId: string;
+    appointment: any;
+    billingContext?: any;
+    payer?: any;
+    user?: any;
+  }) => {
+    const organizationId = sanitizeString(params.organizationId, 120);
+    const appointment = mergeAppointmentBillingPayload(params.appointment || {});
+    const appointmentId = sanitizeString(appointment?.id, 120);
+    const patientId = sanitizeString(appointment?.patient_id || appointment?.patientId, 120);
+    const professionalId = sanitizeString(appointment?.therapist_id || appointment?.professional_id || appointment?.therapistId, 120);
+    if (!isUuid(organizationId) || !isUuid(appointmentId) || !isUuid(patientId)) {
+      return { ok: false, status: 400, error: 'Atendimento inválido para Pré-guia TISS.' };
+    }
+
+    const billingContext = mergeBillingContextMetadata(
+      params.billingContext || await fetchAppointmentBillingContextRow(organizationId, appointmentId) || {}
+    );
+    const payerId = sanitizeString(billingContext?.payer_id, 120);
+    const billingItemResult = await supabase
+      .from('appointment_billing_items')
+      .select(APPOINTMENT_BILLING_ITEM_SELECT)
+      .eq('organization_id', organizationId)
+      .eq('appointment_id', appointmentId)
+      .limit(1)
+      .maybeSingle();
+    if (billingItemResult.error && !hasMissingFinancialSchema(billingItemResult.error) && !isMissingRelationError(billingItemResult.error)) {
+      throw billingItemResult.error;
+    }
+    const billingItem = billingItemResult.error ? null : billingItemResult.data;
+    const [patientResult, clinicResult, clinicProfile, payerProfile, professionalProfile, professional] = await Promise.all([
+      supabase
+        .from('patients')
+        .select('id,name,cpf,insurance_card_number,clinic_id')
+        .eq('clinic_id', organizationId)
+        .eq('id', patientId)
+        .limit(1)
+        .maybeSingle(),
+      supabase
+        .from('clinics')
+        .select('id,name')
+        .eq('id', organizationId)
+        .limit(1)
+        .maybeSingle(),
+      fetchTissPreGuideProfile('clinic_tiss_profiles', CLINIC_TISS_PROFILE_SELECT, organizationId),
+      isUuid(payerId)
+        ? fetchTissPreGuideProfile('payer_tiss_profiles', PAYER_TISS_PROFILE_SELECT, organizationId, 'payer_id', payerId)
+        : Promise.resolve(null),
+      isUuid(professionalId)
+        ? fetchTissPreGuideProfile('professional_billing_profiles', PROFESSIONAL_BILLING_PROFILE_SELECT, organizationId, 'professional_id', professionalId)
+        : Promise.resolve(null),
+      fetchTussProfessional(professionalId)
+    ]);
+    if (patientResult.error && !hasMissingFinancialSchema(patientResult.error)) throw patientResult.error;
+    if (clinicResult.error && !hasMissingFinancialSchema(clinicResult.error)) throw clinicResult.error;
+
+    const [service, tussCode, mapping, payer] = await Promise.all([
+      billingItem?.service_catalog_id
+        ? fetchTussServiceCatalogById(organizationId, sanitizeString(billingItem.service_catalog_id, 120))
+        : Promise.resolve(null),
+      billingItem?.tuss_code_id
+        ? fetchTussCodeById(organizationId, sanitizeString(billingItem.tuss_code_id, 120))
+        : Promise.resolve(null),
+      billingItem?.payer_tuss_mapping_id
+        ? fetchPayerTussMappingById(organizationId, sanitizeString(billingItem.payer_tuss_mapping_id, 120))
+        : Promise.resolve(null),
+      params.payer?.id
+        ? Promise.resolve(params.payer)
+        : isUuid(payerId)
+          ? fetchPayerForAdmin(payerId, organizationId)
+          : Promise.resolve(null)
+    ]);
+    const validation = validateTissPreGuide({
+      appointment,
+      patient: patientResult.data || null,
+      payer,
+      billingContext,
+      billingItem,
+      service,
+      tussCode,
+      mapping,
+      clinicProfile,
+      payerProfile,
+      professionalProfile,
+      professional
+    });
+    const snapshot = validation.snapshot || {};
+    const procedure = snapshot.procedure || {};
+    const beneficiary = snapshot.beneficiary || {};
+    const authorization = snapshot.authorization || {};
+    const provider = snapshot.provider || {};
+    const payerSnapshot = snapshot.payer || {};
+    const professionalSnapshot = snapshot.professional || {};
+    const now = new Date().toISOString();
+    const userId = sanitizeString(params.user?.id, 120);
+    const payload = cleanObject({
+      organization_id: organizationId,
+      clinic_id: organizationId,
+      appointment_id: appointmentId,
+      patient_id: patientId,
+      professional_id: isUuid(professionalId) ? professionalId : null,
+      payer_id: isUuid(payerId) ? payerId : null,
+      billing_item_id: isUuid(sanitizeString(billingItem?.id, 120)) ? sanitizeString(billingItem.id, 120) : null,
+      provider_profile_id: isUuid(sanitizeString(clinicProfile?.id, 120)) ? sanitizeString(clinicProfile.id, 120) : null,
+      payer_tiss_profile_id: isUuid(sanitizeString(payerProfile?.id, 120)) ? sanitizeString(payerProfile.id, 120) : null,
+      professional_billing_profile_id: isUuid(sanitizeString(professionalProfile?.id, 120)) ? sanitizeString(professionalProfile.id, 120) : null,
+      guide_type: validation.guideType,
+      guide_number: sanitizeString(authorization.guideNumber, 120) || null,
+      authorization_code: sanitizeString(authorization.authorizationCode, 120) || null,
+      authorization_valid_until: sanitizeString(authorization.authorizationValidUntil, 40).slice(0, 10) || null,
+      beneficiary_card_number: sanitizeString(beneficiary.cardNumber, 120) || null,
+      internal_procedure_code: sanitizeString(procedure.internalCode, 80) || null,
+      internal_procedure_name: sanitizeString(procedure.name, 180) || null,
+      tuss_code: sanitizeString(procedure.tussCode, 80) || null,
+      tuss_description: sanitizeTextField(procedure.tussDescription, 600) || null,
+      tuss_version: sanitizeString(procedure.tussVersion, 80) || null,
+      quantity: Number(procedure.quantity || 1) || 1,
+      unit: sanitizeString(procedure.unit, 40) || null,
+      unit_amount_cents: Number.isFinite(Number(procedure.unitAmountCents)) ? Number(procedure.unitAmountCents) : null,
+      total_amount_cents: Number.isFinite(Number(procedure.totalAmountCents)) ? Number(procedure.totalAmountCents) : null,
+      scheduled_start: appointment?.scheduled_start_at || appointment?.scheduled_at || appointment?.scheduled_start || null,
+      scheduled_end: appointment?.scheduled_end_at || appointment?.scheduled_end || null,
+      patient_name_snapshot: sanitizeString(beneficiary.name || patientResult.data?.name, 180) || 'Paciente',
+      professional_name_snapshot: sanitizeString(professionalSnapshot.name || professional?.name, 180) || 'Equipe',
+      payer_name_snapshot: sanitizeString(payerSnapshot.name || payer?.name, 180) || 'Sem pagador',
+      clinic_name_snapshot: sanitizeString(provider.tradeName || provider.legalName || clinicResult.data?.name, 180) || null,
+      status: validation.status,
+      validation_errors: validation.errors,
+      validation_warnings: validation.warnings,
+      validation_error_codes: validation.errorCodes,
+      validation_warning_codes: validation.warningCodes,
+      snapshot_data: snapshot,
+      generated_from_version: 'tiss-pre-guide-v1',
+      stale_reason: null,
+      updated_by: isUuid(userId) ? userId : null,
+      updated_at: now,
+      last_validated_at: now
+    });
+    const persisted = await supabase
+      .from('appointment_tiss_pre_guides')
+      .upsert(payload, { onConflict: 'organization_id,appointment_id' })
+      .select(APPOINTMENT_TISS_PRE_GUIDE_SELECT)
+      .maybeSingle();
+    if (persisted.error) {
+      if (hasMissingFinancialSchema(persisted.error) || isMissingRelationError(persisted.error)) {
+        return { ok: true, schemaAvailable: false, data: null, validation };
+      }
+      throw persisted.error;
+    }
+    return {
+      ok: true,
+      schemaAvailable: true,
+      data: serializeTissPreGuide(persisted.data || payload),
+      validation
+    };
+  };
+
   const clearAppointmentBillingItemForAppointment = async (organizationId: string, appointmentId: string) => {
     const safeOrganizationId = sanitizeString(organizationId, 120);
     const safeAppointmentId = sanitizeString(appointmentId, 120);
@@ -31727,6 +32093,13 @@ async function startServer() {
       patient_id: patientId,
       service_type: billingAppointment?.service_type || billingAppointment?.serviceType || billingAppointment?.approach || null
     }, payer, documents);
+    const tissPreGuide = await buildAndPersistTissPreGuideForAppointment({
+      organizationId,
+      appointment: billingAppointment,
+      billingContext,
+      payer,
+      user: params.user
+    });
     const message = buildAppointmentBillingRevalidationMessage({
       billingItem,
       billingContext,
@@ -31751,6 +32124,7 @@ async function startServer() {
       closure: (closure as any).data,
       billingItem,
       billingContext: serializedContext,
+      tissPreGuide: tissPreGuide.data || null,
       message,
       resolution: {
         procedureResolved: Boolean(billingItem?.internalProcedureName),
@@ -31762,6 +32136,360 @@ async function startServer() {
       }
     };
   };
+
+  const markTissPreGuidesStale = async (params: {
+    organizationId: string;
+    reason: string;
+    payerId?: string;
+    professionalId?: string;
+  }) => {
+    let query = supabase
+      .from('appointment_tiss_pre_guides')
+      .update({
+        stale_reason: sanitizeTextField(params.reason, 600),
+        updated_at: new Date().toISOString()
+      })
+      .eq('organization_id', params.organizationId);
+    if (isUuid(sanitizeString(params.payerId, 120))) query = query.eq('payer_id', params.payerId);
+    if (isUuid(sanitizeString(params.professionalId, 120))) query = query.eq('professional_id', params.professionalId);
+    const { error } = await query;
+    if (error && !hasMissingFinancialSchema(error) && !isMissingRelationError(error)) throw error;
+  };
+
+  const tissPreGuideQuickFilterCodes: Record<string, string[]> = {
+    missing_provider: ['CLINIC_TISS_PROFILE_MISSING', 'PROVIDER_DOCUMENT_MISSING', 'PROVIDER_CODE_MISSING', 'CNES_MISSING'],
+    missing_payer_profile: ['PAYER_TISS_PROFILE_MISSING', 'PAYER_ANS_REGISTRATION_MISSING'],
+    missing_professional_registry: ['PROFESSIONAL_BILLING_PROFILE_MISSING', 'PROFESSIONAL_REGISTRY_MISSING', 'PROFESSIONAL_COUNCIL_STATE_MISSING'],
+    missing_cbo: ['CBO_MISSING'],
+    missing_tuss: ['PROCEDURE_MISSING', 'TUSS_CODE_MISSING', 'TUSS_DESCRIPTION_MISSING'],
+    missing_guide_authorization: ['GUIDE_MISSING', 'AUTHORIZATION_MISSING', 'AUTHORIZATION_EXPIRED'],
+    missing_amount: ['AMOUNT_MISSING']
+  };
+
+  app.get('/api/admin/tiss/provider-profile', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
+      const data = await fetchTissPreGuideProfile('clinic_tiss_profiles', CLINIC_TISS_PROFILE_SELECT, organizationId);
+      return sendNoStoreJson(res, { success: true, data });
+    } catch (error: any) {
+      console.warn('[TissPreGuide] provider profile read failed:', error?.message || String(error));
+      return res.status(500).json(payerSafeError(500));
+    }
+  });
+
+  app.patch('/api/admin/tiss/provider-profile', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 48 * 1024, 'Perfil TISS do prestador')) return;
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
+      const now = new Date().toISOString();
+      const userId = sanitizeString(req.session.user?.id, 120);
+      const payload = cleanObject({
+        organization_id: organizationId,
+        clinic_id: organizationId,
+        legal_name: sanitizeString(req.body?.legalName ?? req.body?.legal_name, 180) || null,
+        trade_name: sanitizeString(req.body?.tradeName ?? req.body?.trade_name, 180) || null,
+        document_type: ['CPF', 'CNPJ'].includes(sanitizeString(req.body?.documentType ?? req.body?.document_type, 10).toUpperCase())
+          ? sanitizeString(req.body?.documentType ?? req.body?.document_type, 10).toUpperCase()
+          : null,
+        document_number: sanitizeString(req.body?.documentNumber ?? req.body?.document_number, 40) || null,
+        cnes_code: sanitizeString(req.body?.cnesCode ?? req.body?.cnes_code, 40) || null,
+        provider_code: sanitizeString(req.body?.providerCode ?? req.body?.provider_code, 80) || null,
+        ans_provider_code: sanitizeString(req.body?.ansProviderCode ?? req.body?.ans_provider_code, 80) || null,
+        address_line: sanitizeString(req.body?.addressLine ?? req.body?.address_line, 180) || null,
+        address_number: sanitizeString(req.body?.addressNumber ?? req.body?.address_number, 40) || null,
+        address_complement: sanitizeString(req.body?.addressComplement ?? req.body?.address_complement, 120) || null,
+        district: sanitizeString(req.body?.district, 120) || null,
+        city: sanitizeString(req.body?.city, 120) || null,
+        state: sanitizeString(req.body?.state, 2).toUpperCase() || null,
+        postal_code: sanitizeString(req.body?.postalCode ?? req.body?.postal_code, 20) || null,
+        phone: sanitizeString(req.body?.phone, 40) || null,
+      email: sanitizeEmail(req.body?.email) || null,
+      active: req.body?.active !== false,
+      updated_by: isUuid(userId) ? userId : null,
+      updated_at: now
+      });
+      const { data, error } = await supabase
+        .from('clinic_tiss_profiles')
+        .upsert(payload, { onConflict: 'organization_id' })
+        .select(CLINIC_TISS_PROFILE_SELECT)
+        .maybeSingle();
+      if (error) throw error;
+      await markTissPreGuidesStale({ organizationId, reason: 'Dados TISS do prestador alterados.' });
+      return sendNoStoreJson(res, { success: true, data });
+    } catch (error: any) {
+      console.warn('[TissPreGuide] provider profile update failed:', error?.message || String(error));
+      return res.status(500).json(payerSafeError(500));
+    }
+  });
+
+  app.get('/api/admin/tiss/payer-profiles/:payerId', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      const payerId = sanitizeString(req.params.payerId, 120);
+      if (!isUuid(organizationId) || !isUuid(payerId)) return res.status(400).json(payerSafeError(400));
+      if (!(await fetchPayerForAdmin(payerId, organizationId))) return res.status(404).json(payerSafeError(404));
+      const data = await fetchTissPreGuideProfile('payer_tiss_profiles', PAYER_TISS_PROFILE_SELECT, organizationId, 'payer_id', payerId);
+      return sendNoStoreJson(res, { success: true, data });
+    } catch (error: any) {
+      console.warn('[TissPreGuide] payer profile read failed:', error?.message || String(error));
+      return res.status(500).json(payerSafeError(500));
+    }
+  });
+
+  app.patch('/api/admin/tiss/payer-profiles/:payerId', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 32 * 1024, 'Perfil TISS do pagador')) return;
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      const payerId = sanitizeString(req.params.payerId, 120);
+      if (!isUuid(organizationId) || !isUuid(payerId)) return res.status(400).json(payerSafeError(400));
+      if (!(await fetchPayerForAdmin(payerId, organizationId))) return res.status(404).json(payerSafeError(404));
+      const now = new Date().toISOString();
+      const userId = sanitizeString(req.session.user?.id, 120);
+      const guideType = sanitizeString(req.body?.defaultGuideType ?? req.body?.default_guide_type, 40).toLowerCase();
+      const payload = cleanObject({
+        organization_id: organizationId,
+        clinic_id: organizationId,
+        payer_id: payerId,
+        ans_registration: sanitizeString(req.body?.ansRegistration ?? req.body?.ans_registration, 80) || null,
+        operator_code: sanitizeString(req.body?.operatorCode ?? req.body?.operator_code, 80) || null,
+        tiss_version: sanitizeString(req.body?.tissVersion ?? req.body?.tiss_version, 80) || null,
+        default_guide_type: ['consulta', 'sp_sadt', 'other'].includes(guideType) ? guideType : 'sp_sadt',
+        requires_authorization: Boolean(req.body?.requiresAuthorization ?? req.body?.requires_authorization),
+        requires_provider_code: Boolean(req.body?.requiresProviderCode ?? req.body?.requires_provider_code),
+        requires_cnes: Boolean(req.body?.requiresCnes ?? req.body?.requires_cnes),
+        requires_cbo: Boolean(req.body?.requiresCbo ?? req.body?.requires_cbo),
+        requires_executant_registry: Boolean(req.body?.requiresExecutantRegistry ?? req.body?.requires_executant_registry),
+        requires_beneficiary_card: req.body?.requiresBeneficiaryCard ?? req.body?.requires_beneficiary_card ?? true,
+        active: req.body?.active !== false,
+        updated_by: isUuid(userId) ? userId : null,
+        updated_at: now
+      });
+      const { data, error } = await supabase
+        .from('payer_tiss_profiles')
+        .upsert(payload, { onConflict: 'organization_id,payer_id' })
+        .select(PAYER_TISS_PROFILE_SELECT)
+        .maybeSingle();
+      if (error) throw error;
+      await markTissPreGuidesStale({ organizationId, payerId, reason: 'Dados TISS do pagador alterados.' });
+      return sendNoStoreJson(res, { success: true, data });
+    } catch (error: any) {
+      console.warn('[TissPreGuide] payer profile update failed:', error?.message || String(error));
+      return res.status(500).json(payerSafeError(500));
+    }
+  });
+
+  app.get('/api/admin/tiss/professional-profiles/:professionalId', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      const professionalId = sanitizeString(req.params.professionalId, 120);
+      if (!isUuid(organizationId) || !isUuid(professionalId)) return res.status(400).json(payerSafeError(400));
+      const owner = await supabase
+        .from('users')
+        .select('id,clinic_id')
+        .eq('id', professionalId)
+        .or(`clinic_id.eq.${organizationId},id.eq.${organizationId}`)
+        .limit(1)
+        .maybeSingle();
+      if (owner.error || !owner.data?.id) return res.status(404).json(payerSafeError(404));
+      const data = await fetchTissPreGuideProfile('professional_billing_profiles', PROFESSIONAL_BILLING_PROFILE_SELECT, organizationId, 'professional_id', professionalId);
+      return sendNoStoreJson(res, { success: true, data });
+    } catch (error: any) {
+      console.warn('[TissPreGuide] professional profile read failed:', error?.message || String(error));
+      return res.status(500).json(payerSafeError(500));
+    }
+  });
+
+  app.patch('/api/admin/tiss/professional-profiles/:professionalId', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 32 * 1024, 'Perfil faturável do profissional')) return;
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      const professionalId = sanitizeString(req.params.professionalId, 120);
+      if (!isUuid(organizationId) || !isUuid(professionalId)) return res.status(400).json(payerSafeError(400));
+      const owner = await supabase
+        .from('users')
+        .select('id,clinic_id')
+        .eq('id', professionalId)
+        .or(`clinic_id.eq.${organizationId},id.eq.${organizationId}`)
+        .limit(1)
+        .maybeSingle();
+      if (owner.error || !owner.data?.id) return res.status(404).json(payerSafeError(404));
+      const now = new Date().toISOString();
+      const userId = sanitizeString(req.session.user?.id, 120);
+      const documentType = sanitizeString(req.body?.documentType ?? req.body?.document_type, 20).toUpperCase();
+      const payload = cleanObject({
+        organization_id: organizationId,
+        clinic_id: organizationId,
+        professional_id: professionalId,
+        display_name: sanitizeString(req.body?.displayName ?? req.body?.display_name, 180) || null,
+        document_type: ['CPF', 'CNPJ', 'OTHER'].includes(documentType) ? documentType : null,
+        document_number: sanitizeString(req.body?.documentNumber ?? req.body?.document_number, 40) || null,
+        council_type: sanitizeString(req.body?.councilType ?? req.body?.council_type, 40) || null,
+        council_number: sanitizeString(req.body?.councilNumber ?? req.body?.council_number, 80) || null,
+        council_state: sanitizeString(req.body?.councilState ?? req.body?.council_state, 2).toUpperCase() || null,
+        cbo_code: sanitizeString(req.body?.cboCode ?? req.body?.cbo_code, 40) || null,
+        specialty_name: sanitizeString(req.body?.specialtyName ?? req.body?.specialty_name, 120) || null,
+        provider_code: sanitizeString(req.body?.providerCode ?? req.body?.provider_code, 80) || null,
+        active: req.body?.active !== false,
+        updated_by: isUuid(userId) ? userId : null,
+        updated_at: now
+      });
+      const { data, error } = await supabase
+        .from('professional_billing_profiles')
+        .upsert(payload, { onConflict: 'organization_id,professional_id' })
+        .select(PROFESSIONAL_BILLING_PROFILE_SELECT)
+        .maybeSingle();
+      if (error) throw error;
+      await markTissPreGuidesStale({ organizationId, professionalId, reason: 'Perfil faturável do profissional alterado.' });
+      return sendNoStoreJson(res, { success: true, data });
+    } catch (error: any) {
+      console.warn('[TissPreGuide] professional profile update failed:', error?.message || String(error));
+      return res.status(500).json(payerSafeError(500));
+    }
+  });
+
+  app.get('/api/tiss/pre-guides', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
+      const page = Math.max(1, Math.round(Number(req.query?.page || 1) || 1));
+      const pageSize = parseBoundedListLimit(req.query?.pageSize || req.query?.limit, 50, 200);
+      const from = sanitizeString(req.query?.from, 80);
+      const to = sanitizeString(req.query?.to, 80);
+      const status = sanitizeString(req.query?.status, 40).toLowerCase();
+      const payerId = sanitizeString(req.query?.payerId || req.query?.payer_id, 120);
+      const patientId = sanitizeString(req.query?.patientId || req.query?.patient_id, 120);
+      const professionalId = sanitizeString(req.query?.professionalId || req.query?.professional_id, 120);
+      const quickFilter = sanitizeString(req.query?.quickFilter || req.query?.quick_filter, 80).toLowerCase();
+      const applyFilters = (source: any, includeQuickFilter = true) => {
+        let query = source.eq('organization_id', organizationId);
+        if (from) query = query.gte('scheduled_start', from);
+        if (to) query = query.lte('scheduled_start', to);
+        if (['valid', 'pending_data', 'not_applicable', 'draft', 'cancelled'].includes(status)) query = query.eq('status', status);
+        if (isUuid(payerId)) query = query.eq('payer_id', payerId);
+        if (isUuid(patientId)) query = query.eq('patient_id', patientId);
+        if (isUuid(professionalId)) query = query.eq('professional_id', professionalId);
+        if (includeQuickFilter) {
+          if (quickFilter === 'valid') query = query.eq('status', 'valid');
+          if (quickFilter === 'pending') query = query.eq('status', 'pending_data');
+          if (quickFilter === 'not_applicable') query = query.eq('status', 'not_applicable');
+          const errorCodes = tissPreGuideQuickFilterCodes[quickFilter];
+          if (errorCodes?.length) query = query.overlaps('validation_error_codes', errorCodes);
+        }
+        return query;
+      };
+      const offset = (page - 1) * pageSize;
+      const listQuery = applyFilters(
+        supabase
+          .from('appointment_tiss_pre_guides')
+          .select(APPOINTMENT_TISS_PRE_GUIDE_LIST_SELECT, { count: 'exact' })
+      )
+        .order('scheduled_start', { ascending: false })
+        .range(offset, offset + pageSize - 1);
+      const kpiQuery = applyFilters(
+        supabase
+          .from('appointment_tiss_pre_guides')
+          .select('status,validation_error_codes'),
+        false
+      ).limit(5000);
+      const [listResult, kpiResult] = await Promise.all([listQuery, kpiQuery]);
+      if (listResult.error) {
+        if (hasMissingFinancialSchema(listResult.error) || isMissingRelationError(listResult.error)) {
+          return sendNoStoreJson(res, { success: true, data: [], page, pageSize, total: 0, kpis: {} });
+        }
+        throw listResult.error;
+      }
+      if (kpiResult.error && !hasMissingFinancialSchema(kpiResult.error) && !isMissingRelationError(kpiResult.error)) throw kpiResult.error;
+      const kpiRows = Array.isArray(kpiResult.data) ? kpiResult.data : [];
+      const countCodes = (codes: string[]) => kpiRows.filter((row: any) =>
+        Array.isArray(row?.validation_error_codes) && row.validation_error_codes.some((code: string) => codes.includes(code))
+      ).length;
+      const kpis = {
+        total: kpiRows.length,
+        valid: kpiRows.filter((row: any) => row?.status === 'valid').length,
+        pending: kpiRows.filter((row: any) => row?.status === 'pending_data').length,
+        notApplicable: kpiRows.filter((row: any) => row?.status === 'not_applicable').length,
+        missingProvider: countCodes(tissPreGuideQuickFilterCodes.missing_provider),
+        missingPayerProfile: countCodes(tissPreGuideQuickFilterCodes.missing_payer_profile),
+        missingProfessionalRegistry: countCodes(tissPreGuideQuickFilterCodes.missing_professional_registry),
+        missingCbo: countCodes(tissPreGuideQuickFilterCodes.missing_cbo),
+        missingTuss: countCodes(tissPreGuideQuickFilterCodes.missing_tuss),
+        missingGuideAuthorization: countCodes(tissPreGuideQuickFilterCodes.missing_guide_authorization),
+        missingAmount: countCodes(tissPreGuideQuickFilterCodes.missing_amount)
+      };
+      return sendNoStoreJson(res, {
+        success: true,
+        data: (listResult.data || []).map(serializeTissPreGuide),
+        page,
+        pageSize,
+        total: Number(listResult.count || 0),
+        kpis
+      });
+    } catch (error: any) {
+      console.warn('[TissPreGuide] list failed:', error?.message || String(error));
+      return res.status(500).json({ success: false, error: 'Não foi possível carregar as Pré-guias TISS agora.' });
+    }
+  });
+
+  app.get('/api/tiss/pre-guides/:appointmentId', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      const appointmentId = sanitizeString(req.params.appointmentId, 120);
+      if (!isUuid(organizationId) || !isUuid(appointmentId)) return res.status(400).json(payerSafeError(400));
+      const { data, error } = await supabase
+        .from('appointment_tiss_pre_guides')
+        .select(APPOINTMENT_TISS_PRE_GUIDE_SELECT)
+        .eq('organization_id', organizationId)
+        .eq('appointment_id', appointmentId)
+        .limit(1)
+        .maybeSingle();
+      if (error) {
+        if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return res.status(404).json(payerSafeError(404));
+        throw error;
+      }
+      if (!data?.id) return res.status(404).json(payerSafeError(404));
+      return sendNoStoreJson(res, { success: true, data: serializeTissPreGuide(data) });
+    } catch (error: any) {
+      console.warn('[TissPreGuide] detail failed:', error?.message || String(error));
+      return res.status(500).json(payerSafeError(500));
+    }
+  });
+
+  app.post('/api/tiss/pre-guides/:appointmentId/revalidate', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 16 * 1024, 'Revalidação da Pré-guia TISS')) return;
+      const appointmentId = sanitizeString(req.params.appointmentId, 120);
+      if (!isUuid(appointmentId)) return res.status(400).json(payerSafeError(400));
+      const generated = await revalidateAppointmentBillingForAppointment({
+        appointmentId,
+        user: req.session.user,
+        source: 'tiss_pre_guide_manual_revalidation',
+        forceClosure: true
+      });
+      if (!generated.ok) return res.status((generated as any).status || 404).json(payerSafeError((generated as any).status || 404));
+      const preGuide = (generated as any).tissPreGuide || null;
+      if (!preGuide) {
+        return res.status(503).json({
+          success: false,
+          error: 'A estrutura de Pré-guia TISS ainda não está disponível no banco.'
+        });
+      }
+      return sendNoStoreJson(res, {
+        success: true,
+        data: preGuide,
+        appointment: (generated as any).data || null,
+        message: preGuide.status === 'valid'
+          ? 'Pré-guia TISS revalidada e pronta para conferência interna.'
+          : preGuide.status === 'not_applicable'
+            ? 'Atendimento não aplicável à Pré-guia TISS.'
+            : 'Pré-guia TISS revalidada com pendências.'
+      });
+    } catch (error: any) {
+      console.warn('[TissPreGuide] revalidation failed:', error?.message || String(error));
+      return res.status(500).json({ success: false, error: 'Não foi possível revalidar a Pré-guia TISS agora.' });
+    }
+  });
 
   app.get('/api/admin/payers', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {

@@ -7889,6 +7889,9 @@ export function CoordinatorDashboard({
                   payers={clinicPayers}
                   canExport={!isTherapist}
                   onOpenAppointment={() => navigateToTab("agenda")}
+                  onNavigatePayers={() => navigateToTab("payers")}
+                  onNavigateSettings={() => navigateToTab("settings")}
+                  onNavigateProfessionals={() => navigateToTab("team")}
                   onOpenReport={(appointment) =>
                     onPatientClick(
                       undefined,

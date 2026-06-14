@@ -2812,6 +2812,189 @@ export const dataService = {
     }
   },
 
+  async getTissPreGuides(options: any = {}) {
+    const endpoint = endpointWithQuery('/api/tiss/pre-guides', {
+      from: options.from,
+      to: options.to,
+      status: options.status,
+      payerId: options.payerId,
+      patientId: options.patientId,
+      professionalId: options.professionalId,
+      quickFilter: options.quickFilter,
+      page: Math.max(1, Math.round(Number(options.page || 1) || 1)),
+      pageSize: normalizeListLimit(options.pageSize || options.limit, 50, 200)
+    });
+    try {
+      return await fetchNoStoreJsonWithRetry(endpoint, {
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getTissPreGuides',
+        operation: 'list',
+        table: 'appointment_tiss_pre_guides',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      }, 'A listagem de Pré-guias TISS voltou do cache. Tente atualizar novamente.');
+    } catch {
+      return { success: false, data: [], kpis: null, error: 'Não foi possível carregar as Pré-guias TISS agora.' };
+    }
+  },
+
+  async getTissPreGuide(appointmentId: string) {
+    const endpoint = `/api/tiss/pre-guides/${encodeURIComponent(String(appointmentId))}`;
+    try {
+      return await fetchNoStoreJsonWithRetry(endpoint, {
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getTissPreGuide',
+        operation: 'detail',
+        table: 'appointment_tiss_pre_guides',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      }, 'O detalhe da Pré-guia TISS voltou do cache. Tente abrir novamente.');
+    } catch {
+      return { success: false, data: null, error: 'Não foi possível carregar a Pré-guia TISS agora.' };
+    }
+  },
+
+  async revalidateTissPreGuide(appointmentId: string) {
+    const endpoint = `/api/tiss/pre-guides/${encodeURIComponent(String(appointmentId))}/revalidate`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        cache: 'no-store',
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({})
+      }, {
+        helperName: 'revalidateTissPreGuide',
+        operation: 'write',
+        table: 'appointment_tiss_pre_guides,appointment_billing_items,appointment_closure_checks',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeNoStoreJson(response, 'A revalidação da Pré-guia TISS voltou do cache. Tente novamente.');
+    } catch {
+      return { success: false, error: 'Não foi possível revalidar a Pré-guia TISS agora.' };
+    }
+  },
+
+  async getClinicTissProfile() {
+    try {
+      return await fetchNoStoreJsonWithRetry('/api/admin/tiss/provider-profile', {
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getClinicTissProfile',
+        operation: 'detail',
+        table: 'clinic_tiss_profiles',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      }, 'O perfil TISS do prestador voltou do cache.');
+    } catch {
+      return { success: false, data: null, error: 'Não foi possível carregar o perfil TISS do prestador.' };
+    }
+  },
+
+  async updateClinicTissProfile(payload: any = {}) {
+    try {
+      const response = await fetchClinical('/api/admin/tiss/provider-profile', {
+        method: 'PATCH',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'updateClinicTissProfile',
+        operation: 'write',
+        table: 'clinic_tiss_profiles,appointment_tiss_pre_guides',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, error: 'Não foi possível salvar o perfil TISS do prestador.' };
+    }
+  },
+
+  async getPayerTissProfile(payerId: string) {
+    const endpoint = `/api/admin/tiss/payer-profiles/${encodeURIComponent(String(payerId))}`;
+    try {
+      return await fetchNoStoreJsonWithRetry(endpoint, {
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getPayerTissProfile',
+        operation: 'detail',
+        table: 'payer_tiss_profiles',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      }, 'O perfil TISS do pagador voltou do cache.');
+    } catch {
+      return { success: false, data: null, error: 'Não foi possível carregar o perfil TISS do pagador.' };
+    }
+  },
+
+  async updatePayerTissProfile(payerId: string, payload: any = {}) {
+    const endpoint = `/api/admin/tiss/payer-profiles/${encodeURIComponent(String(payerId))}`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'PATCH',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'updatePayerTissProfile',
+        operation: 'write',
+        table: 'payer_tiss_profiles,appointment_tiss_pre_guides',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, error: 'Não foi possível salvar o perfil TISS do pagador.' };
+    }
+  },
+
+  async getProfessionalBillingProfile(professionalId: string) {
+    const endpoint = `/api/admin/tiss/professional-profiles/${encodeURIComponent(String(professionalId))}`;
+    try {
+      return await fetchNoStoreJsonWithRetry(endpoint, {
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getProfessionalBillingProfile',
+        operation: 'detail',
+        table: 'professional_billing_profiles',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      }, 'O perfil faturável do profissional voltou do cache.');
+    } catch {
+      return { success: false, data: null, error: 'Não foi possível carregar o perfil faturável do profissional.' };
+    }
+  },
+
+  async updateProfessionalBillingProfile(professionalId: string, payload: any = {}) {
+    const endpoint = `/api/admin/tiss/professional-profiles/${encodeURIComponent(String(professionalId))}`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'PATCH',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'updateProfessionalBillingProfile',
+        operation: 'write',
+        table: 'professional_billing_profiles,appointment_tiss_pre_guides',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, error: 'Não foi possível salvar o perfil faturável do profissional.' };
+    }
+  },
+
   async getMonthlyConferenceSummary(kind: 'patient' | 'professional' | 'payer' | 'service-type' | 'procedure' | 'tuss-code' | 'guide-type', options: any = {}) {
     const endpoint = endpointWithQuery(`/api/conference/monthly/summary-by-${kind}`, {
       from: options.from,
