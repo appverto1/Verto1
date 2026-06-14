@@ -20,10 +20,13 @@ import {
 } from "lucide-react";
 import { dataService } from "../services/dataService";
 import { classifyConferencePendingDetails, formatConferenceMinutes } from "../services/monthlyConferenceEngine";
+import { buildMonthlyConferenceViewModel } from "../services/prefacturingViewModels";
 import { formatDateTimeInAppointmentTimezone } from "../utils/scheduling";
 
 type ConferenceStatus = "READY" | "PENDING" | "WARNING" | "NOT_BILLABLE" | "DRAFT" | "UNKNOWN";
-type ConferenceTab = "sessions" | "patient" | "professional" | "payer" | "service" | "procedure" | "tuss" | "guide";
+type ConferenceTab = "sessions" | "patient" | "professional" | "payer" | "service" | "procedure" | "tuss" | "guide" | "notBillable" | "exported" | "reopened";
+type ConferenceSummaryKey = "patient" | "professional" | "payer" | "service" | "procedure" | "tuss" | "guide";
+type ConferenceSummaryEndpoint = "patient" | "professional" | "payer" | "service-type" | "procedure" | "tuss-code" | "guide-type";
 type ConferenceDrilldownFilter = {
   type: "patient" | "professional" | "payer" | "specialty" | "procedure" | "tuss" | "guide";
   label: string;
@@ -75,6 +78,10 @@ type ConferenceRow = {
   exported_at?: string | null;
   exported_by_name?: string | null;
   conference_reason?: string | null;
+  snapshot_status?: string | null;
+  stale_reason?: string | null;
+  source_version?: string | null;
+  snapshot_updated_at?: string | null;
   main_issues?: string[];
   checklist?: any[];
   payerRules?: any;
@@ -91,7 +98,7 @@ type MonthlyConferenceCenterProps = {
 };
 
 const statusMeta: Record<ConferenceStatus, { label: string; className: string; icon: React.ComponentType<any> }> = {
-  READY: { label: "Pronta para faturar", className: "bg-emerald-50 text-emerald-700 ring-emerald-200", icon: CheckCircle2 },
+  READY: { label: "Pronta para conferência", className: "bg-emerald-50 text-emerald-700 ring-emerald-200", icon: CheckCircle2 },
   PENDING: { label: "Pendente", className: "bg-orange-50 text-orange-700 ring-orange-200", icon: XCircle },
   WARNING: { label: "Em atenção", className: "bg-amber-50 text-amber-700 ring-amber-200", icon: AlertTriangle },
   NOT_BILLABLE: { label: "Não faturável", className: "bg-slate-100 text-slate-700 ring-slate-200", icon: ShieldAlert },
@@ -105,6 +112,26 @@ const conferenceStatusMeta: Record<string, { label: string; className: string }>
   exported: { label: "Exportado", className: "bg-indigo-50 text-indigo-700 ring-indigo-200" },
   reopened: { label: "Reaberto", className: "bg-amber-50 text-amber-700 ring-amber-200" },
   non_billable: { label: "Não faturável", className: "bg-slate-100 text-slate-700 ring-slate-200" },
+};
+
+const createEmptyConferenceSummaries = (): Record<ConferenceSummaryKey, any[]> => ({
+  patient: [],
+  professional: [],
+  payer: [],
+  service: [],
+  procedure: [],
+  tuss: [],
+  guide: [],
+});
+
+const conferenceSummaryRequestByTab: Partial<Record<ConferenceTab, { stateKey: ConferenceSummaryKey; endpointKind: ConferenceSummaryEndpoint }>> = {
+  patient: { stateKey: "patient", endpointKind: "patient" },
+  professional: { stateKey: "professional", endpointKind: "professional" },
+  payer: { stateKey: "payer", endpointKind: "payer" },
+  service: { stateKey: "service", endpointKind: "service-type" },
+  procedure: { stateKey: "procedure", endpointKind: "procedure" },
+  tuss: { stateKey: "tuss", endpointKind: "tuss-code" },
+  guide: { stateKey: "guide", endpointKind: "guide-type" },
 };
 
 const pendingTone: Record<string, string> = {
@@ -193,6 +220,15 @@ function formatDateTime(value?: string | null) {
 function formatOptionalMinutes(value?: number | null) {
   if (value === null || value === undefined || !Number.isFinite(Number(value))) return "Não informado";
   return formatConferenceMinutes(value);
+}
+
+function formatCurrencyCents(value?: number | null) {
+  const cents = Number(value || 0);
+  return (cents / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+}
+
+function isSessionListTab(tab: ConferenceTab) {
+  return tab === "sessions" || tab === "notBillable" || tab === "exported" || tab === "reopened";
 }
 
 function safeName(value: any, fallback: string) {
@@ -341,7 +377,8 @@ export function MonthlyConferenceCenter({
   const [rows, setRows] = useState<ConferenceRow[]>([]);
   const [kpis, setKpis] = useState<any>(null);
   const [pendingByType, setPendingByType] = useState<any[]>([]);
-  const [summaries, setSummaries] = useState<Record<string, any[]>>({ patient: [], professional: [], payer: [], service: [], procedure: [], tuss: [], guide: [] });
+  const [summaries, setSummaries] = useState<Record<ConferenceSummaryKey, any[]>>(createEmptyConferenceSummaries);
+  const [summaryLoading, setSummaryLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [revalidationInfo, setRevalidationInfo] = useState("");
@@ -434,9 +471,76 @@ export function MonthlyConferenceCenter({
 
   useEffect(() => {
     setDrilldownFilter(null);
+    setSummaries(createEmptyConferenceSummaries());
   }, [appointmentStatus, filterPayload, patientId, payerId, professionalId, quickFilter, readinessStatus, serviceType]);
 
-  const loadConference = useCallback(async () => {
+  const loadConference = useCallback(async (options: { actionRevision?: string | number; preserveMessage?: boolean } = {}) => {
+    setLoading(true);
+    setError("");
+    if (!options.preserveMessage) setRevalidationInfo("");
+    try {
+      const listPayload = options.actionRevision ? { ...filterPayload, actionRevision: options.actionRevision } : filterPayload;
+      const main = await dataService.getMonthlyConference({ ...listPayload, page, limit: 50 });
+      if (!main?.success) {
+        setRows([]);
+        setKpis(null);
+        setPendingByType([]);
+        setError(main?.error || "Não foi possível carregar a conferência agora.");
+        return;
+      }
+      let mainResult = main;
+      let nextRows = Array.isArray(main.rows || main.data) ? (main.rows || main.data) : [];
+      const totalSessions = Number(main.kpis?.totalSessions || main.kpis?.total || 0);
+      if (nextRows.length === 0 && page > 1 && totalSessions > 0) {
+        const firstPage = await dataService.getMonthlyConference({ ...listPayload, page: 1, limit: 50 });
+        if (firstPage?.success) {
+          mainResult = firstPage;
+          nextRows = Array.isArray(firstPage.rows || firstPage.data) ? (firstPage.rows || firstPage.data) : [];
+          setPage(1);
+        }
+      }
+      setRows(nextRows);
+      setKpis(mainResult.kpis || null);
+      setPendingByType(Array.isArray(mainResult.pendingByType) ? mainResult.pendingByType : []);
+    } catch {
+      setRows([]);
+      setKpis(null);
+      if (!options.preserveMessage) setRevalidationInfo("");
+      setError("Não foi possível carregar a conferência agora.");
+    } finally {
+      setLoading(false);
+    }
+  }, [filterPayload, page]);
+
+  const loadActiveSummary = useCallback(async (tab: ConferenceTab = activeTab, actionRevision?: string | number) => {
+    const request = conferenceSummaryRequestByTab[tab];
+    if (!request) return;
+    setSummaryLoading(true);
+    setError("");
+    try {
+      const result = await dataService.getMonthlyConferenceSummary(request.endpointKind, {
+        ...filterPayload,
+        actionRevision,
+      });
+      setSummaries((current) => ({
+        ...current,
+        [request.stateKey]: result?.success && Array.isArray(result.data) ? result.data : [],
+      }));
+      if (!result?.success) setError(result?.error || "Não foi possível carregar o resumo da conferência.");
+    } finally {
+      setSummaryLoading(false);
+    }
+  }, [activeTab, filterPayload]);
+
+  useEffect(() => {
+    void loadConference();
+  }, [loadConference]);
+
+  useEffect(() => {
+    if (!isSessionListTab(activeTab)) void loadActiveSummary(activeTab);
+  }, [activeTab, loadActiveSummary]);
+
+  const refreshConference = async () => {
     setLoading(true);
     setError("");
     try {
@@ -462,85 +566,35 @@ export function MonthlyConferenceCenter({
         revalidationErrors,
         affectedIds.slice(0, 25).join(",")
       ].filter(Boolean).join(":");
-      const listPayload = { ...filterPayload, actionRevision };
-      if (revalidation?.success) {
-        setRevalidationInfo("");
-      } else {
-        setRevalidationInfo("");
-      }
-      const [main, byPatient, byProfessional, byPayer, byService, byProcedure, byTuss, byGuide] = await Promise.all([
-        dataService.getMonthlyConference({ ...listPayload, page, limit: 50 }),
-        dataService.getMonthlyConferenceSummary("patient", listPayload),
-        dataService.getMonthlyConferenceSummary("professional", listPayload),
-        dataService.getMonthlyConferenceSummary("payer", listPayload),
-        dataService.getMonthlyConferenceSummary("service-type", listPayload),
-        dataService.getMonthlyConferenceSummary("procedure", listPayload),
-        dataService.getMonthlyConferenceSummary("tuss-code", listPayload),
-        dataService.getMonthlyConferenceSummary("guide-type", listPayload),
-      ]);
-      if (!main?.success) {
-        setRows([]);
-        setKpis(null);
-        setPendingByType([]);
-        setError(main?.error || "Não foi possível carregar a conferência agora.");
-        return;
-      }
-      let mainResult = main;
-      let nextRows = Array.isArray(main.rows || main.data) ? (main.rows || main.data) : [];
-      const totalSessions = Number(main.kpis?.totalSessions || main.kpis?.total || 0);
-      if (nextRows.length === 0 && page > 1 && (changed > 0 || totalSessions > 0)) {
-        const firstPage = await dataService.getMonthlyConference({ ...listPayload, page: 1, limit: 50 });
-        if (firstPage?.success) {
-          mainResult = firstPage;
-          nextRows = Array.isArray(firstPage.rows || firstPage.data) ? (firstPage.rows || firstPage.data) : [];
-          setPage(1);
-        }
-      }
-      setRows(nextRows);
-      setKpis(mainResult.kpis || null);
-      setPendingByType(Array.isArray(mainResult.pendingByType) ? mainResult.pendingByType : []);
+      await loadConference({ actionRevision, preserveMessage: true });
+      if (!isSessionListTab(activeTab)) await loadActiveSummary(activeTab, actionRevision);
       if (revalidation?.success === false && revalidationErrors > 0) {
         setRevalidationInfo("");
         const reason = [firstRevalidationError?.reasonCode, firstRevalidationError?.dbCode].filter(Boolean).join(" · ");
         const detail = firstRevalidationError?.message ? ` Primeiro erro: ${reason || "sem código"} - ${firstRevalidationError.message}` : "";
         setError(`${revalidationMessage}${detail}`);
       } else if (revalidation?.success) {
-        if (changed > 0 && nextRows.length === 0) {
+        if (changed > 0 && rows.length === 0) {
           setRevalidationInfo("");
           setError(
             hasActiveFilters
               ? `${revalidationMessage} Os filtros atuais ocultam os resultados.`
               : `${revalidationMessage} Nenhum item foi carregado na tabela.`
           );
-        } else if (legacyMirrored > 0 && changed === 0 && nextRows.length === 0) {
+        } else if (legacyMirrored > 0 && changed === 0 && rows.length === 0) {
           setRevalidationInfo("");
           setError(`${legacyMirrored} agendamento(s) foram sincronizados, mas os checks de conferência ainda não foram materializados.`);
         } else {
           setRevalidationInfo(revalidationMessage);
         }
       }
-      setSummaries({
-        patient: Array.isArray(byPatient?.data) ? byPatient.data : [],
-        professional: Array.isArray(byProfessional?.data) ? byProfessional.data : [],
-        payer: Array.isArray(byPayer?.data) ? byPayer.data : [],
-        service: Array.isArray(byService?.data) ? byService.data : [],
-        procedure: Array.isArray(byProcedure?.data) ? byProcedure.data : [],
-        tuss: Array.isArray(byTuss?.data) ? byTuss.data : [],
-        guide: Array.isArray(byGuide?.data) ? byGuide.data : [],
-      });
     } catch {
-      setRows([]);
-      setKpis(null);
       setRevalidationInfo("");
-      setError("Não foi possível carregar a conferência agora.");
+      setError("Não foi possível revalidar a conferência agora.");
     } finally {
       setLoading(false);
     }
-  }, [appointmentStatus, filterPayload, page, patientId, payerId, professionalId, quickFilter, readinessStatus, serviceType]);
-
-  useEffect(() => {
-    void loadConference();
-  }, [loadConference]);
+  };
 
   const openDetail = async (row: ConferenceRow) => {
     const appointmentId = String(row.appointment_id || "");
@@ -570,7 +624,7 @@ export function MonthlyConferenceCenter({
           setDetail(result.data);
         }
         setRevalidationInfo(result.message || "Atendimento revalidado.");
-        void loadConference();
+        void loadConference({ actionRevision: `${Date.now()}:${appointmentId}`, preserveMessage: true });
       }
     } finally {
       setDetailLoading(false);
@@ -657,19 +711,22 @@ export function MonthlyConferenceCenter({
     }
   };
 
+  const conferenceRows = useMemo(
+    () => rows.map((row) => ({ row, viewModel: buildMonthlyConferenceViewModel(row as any) })),
+    [rows]
+  );
+
   const kpiItems = [
-    { label: "Total", value: kpis?.totalSessions ?? 0, tone: "text-slate-900" },
-    { label: "Prontas", value: kpis?.ready ?? 0, tone: "text-emerald-700" },
-    { label: "Pendências operacionais", value: kpis?.pending ?? 0, tone: "text-orange-700" },
-    { label: "Em aberto", value: kpis?.open ?? kpis?.draft ?? 0, tone: "text-sky-700" },
-    { label: "Atenção", value: kpis?.warning ?? 0, tone: "text-amber-700" },
+    { label: "Total previsto", value: formatCurrencyCents(kpis?.expectedAmountCents || 0), tone: "text-emerald-700" },
+    { label: "Sessões faturáveis", value: kpis?.billableSessions ?? kpis?.ready ?? 0, tone: "text-slate-900" },
     { label: "Não faturáveis", value: kpis?.notBillable ?? 0, tone: "text-slate-600" },
-    { label: "A revisar", value: kpis?.unknown ?? 0, tone: "text-zinc-700" },
-    { label: "Tempo realizado", value: formatConferenceMinutes(kpis?.actualMinutes || 0), tone: "text-indigo-700" },
-    { label: "Tempo previsto", value: formatConferenceMinutes(kpis?.scheduledMinutes || 0), tone: "text-cyan-700" },
-    { label: "Assinaturas pendentes", value: kpis?.pendingSignatures ?? 0, tone: "text-rose-700" },
-    { label: "Relatórios pendentes", value: kpis?.pendingReports ?? 0, tone: "text-orange-700" },
-    { label: "Guias pendentes", value: kpis?.pendingGuides ?? 0, tone: "text-violet-700" },
+    { label: "A revisar", value: kpis?.pendingReview ?? kpis?.unknown ?? 0, tone: "text-zinc-700" },
+    { label: "Conferidas", value: kpis?.reviewed ?? 0, tone: "text-emerald-700" },
+    { label: "Exportadas", value: kpis?.exported ?? 0, tone: "text-indigo-700" },
+    { label: "Reabertas", value: kpis?.reopened ?? 0, tone: "text-amber-700" },
+    { label: "Sem pagador", value: kpis?.missingPayer ?? 0, tone: "text-cyan-700" },
+    { label: "Sem Procedimento/TUSS", value: kpis?.missingProcedureOrTuss ?? 0, tone: "text-violet-700" },
+    { label: "Sem valor", value: kpis?.missingAmount ?? 0, tone: "text-rose-700" },
   ];
 
   const summaryRows = activeTab === "patient"
@@ -688,9 +745,18 @@ export function MonthlyConferenceCenter({
               ? summaries.guide
           : [];
 
-  const drilldownRows = useMemo(
-    () => drilldownFilter ? rows.filter((row) => conferenceRowMatchesDrilldown(row, drilldownFilter)) : rows,
-    [drilldownFilter, rows]
+  const drilldownConferenceRows = useMemo(
+    () => drilldownFilter ? conferenceRows.filter(({ row }) => conferenceRowMatchesDrilldown(row, drilldownFilter)) : conferenceRows,
+    [conferenceRows, drilldownFilter]
+  );
+  const visibleConferenceRows = useMemo(
+    () => {
+      if (activeTab === "notBillable") return drilldownConferenceRows.filter(({ viewModel }) => viewModel.billingStatus === "NON_BILLABLE");
+      if (activeTab === "exported") return drilldownConferenceRows.filter(({ viewModel }) => viewModel.conferenceStatus === "exported");
+      if (activeTab === "reopened") return drilldownConferenceRows.filter(({ viewModel }) => viewModel.conferenceStatus === "reopened");
+      return drilldownConferenceRows;
+    },
+    [activeTab, drilldownConferenceRows]
   );
   const drilldownLabel = drilldownFilter ? `${drilldownTypeLabel[drilldownFilter.type]} = ${drilldownFilter.label}` : "";
 
@@ -724,16 +790,16 @@ export function MonthlyConferenceCenter({
           <div>
             <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
               <ClipboardCheck size={18} className="text-indigo-600" />
-              Conferência mensal
+              Pré-faturamento Mensal
             </div>
             <p className="mt-1 text-sm text-slate-500">
-              Revisão operacional do período para pré-faturamento, auditoria e conferência administrativa.
+              Revise competência, pagadores, valores previstos, conferência e exportação para o financeiro.
             </p>
           </div>
           <div className="flex gap-2">
             <button
               type="button"
-              onClick={loadConference}
+              onClick={refreshConference}
               className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
               disabled={loading}
             >
@@ -813,7 +879,7 @@ export function MonthlyConferenceCenter({
 
         <div className="mt-3 flex flex-wrap gap-2">
           {[
-            ["pending", "Somente pendências operacionais"],
+            ["pending", "Somente pendências"],
             ["ready", "Somente prontas"],
             ["not_billable", "Não faturáveis"],
             ["signature", "Sem assinatura"],
@@ -859,6 +925,9 @@ export function MonthlyConferenceCenter({
             ["procedure", "Por procedimento", ClipboardCheck],
             ["tuss", "Por TUSS", FileText],
             ["guide", "Por guia", Download],
+            ["notBillable", "Não faturáveis", ShieldAlert],
+            ["exported", "Exportadas", Download],
+            ["reopened", "Reabertas", RefreshCw],
           ].map(([value, label, Icon]: any) => (
             <button
               key={value}
@@ -927,87 +996,92 @@ export function MonthlyConferenceCenter({
         </div>
       )}
 
-      {activeTab === "sessions" ? (
+      {isSessionListTab(activeTab) ? (
         <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
           <div className="max-h-[70vh] overflow-auto">
-            <table className="min-w-full divide-y divide-slate-200 text-sm">
+            <table className="min-w-[1280px] divide-y divide-slate-200 text-sm">
               <thead className="sticky top-0 z-20 bg-slate-50 text-left text-xs font-semibold uppercase text-slate-500 shadow-[0_1px_0_0_rgba(148,163,184,0.35)]">
                 <tr>
-                  <th className="px-4 py-3">Data</th>
+                  <th className="px-4 py-3">Data/hora</th>
                   <th className="px-4 py-3">Paciente</th>
                   <th className="px-4 py-3">Profissional</th>
-                  <th className="px-4 py-3">Especialidade</th>
-                  <th className="px-4 py-3">Procedimento/TUSS</th>
                   <th className="px-4 py-3">Pagador</th>
-                  <th className="px-4 py-3">Planejado</th>
-                  <th className="px-4 py-3">Realizado</th>
-                  <th className="px-4 py-3">Consulta</th>
-                  <th className="px-4 py-3">Fechamento</th>
+                  <th className="px-4 py-3">Plano</th>
+                  <th className="px-4 py-3">Guia/autorização</th>
+                  <th className="px-4 py-3">Procedimento</th>
+                  <th className="px-4 py-3">TUSS</th>
+                  <th className="px-4 py-3">Valor previsto</th>
                   <th className="px-4 py-3">Conferência</th>
-                  <th className="px-4 py-3">Pendências e configurações</th>
+                  <th className="px-4 py-3">Exportação</th>
+                  <th className="px-4 py-3">Pendências restantes</th>
                   <th className="px-4 py-3 text-right">Ações</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {loading ? (
                   <tr><td colSpan={13} className="px-4 py-10 text-center text-slate-500"><Loader2 className="mx-auto mb-2 animate-spin" size={20} />Carregando conferência</td></tr>
-                ) : drilldownRows.length === 0 ? (
-                  <tr><td colSpan={13} className="px-4 py-10 text-center text-slate-500">{drilldownFilter ? "Nenhuma sessão encontrada para o filtro aplicado." : "Nenhuma sessão encontrada no período."}</td></tr>
-                ) : drilldownRows.map((row, index) => {
+                ) : visibleConferenceRows.length === 0 ? (
+                  <tr><td colSpan={13} className="px-4 py-10 text-center text-slate-500">{drilldownFilter ? "Nenhuma sessão encontrada para o filtro aplicado." : "Nenhuma sessão encontrada para esta visão."}</td></tr>
+                ) : visibleConferenceRows.map(({ row, viewModel }, index) => {
                   const status = normalizeStatus(row.readiness_status);
-                  const meta = statusMeta[status];
-                  const StatusIcon = meta.icon;
-                  const pendingDetails = classifyConferencePendingDetails(row);
-                  const workflowStatus = normalizeConferenceWorkflowStatus(row.conference_status);
-                  const workflowMeta = conferenceStatusMeta[workflowStatus];
+                  const workflowMeta = conferenceStatusMeta[viewModel.conferenceStatus] || conferenceStatusMeta.pending_review;
                   const isBusy = actionLoadingId === row.appointment_id;
                   return (
                     <tr key={`${row.appointment_id || "session"}-${index}`} className="align-top hover:bg-slate-50/70">
                       <td className="px-4 py-3 text-slate-700">{formatDateTime(row.scheduled_start)}</td>
                       <td className="px-4 py-3 font-medium text-slate-800">{safeName(row.patient_name, "Paciente")}</td>
                       <td className="px-4 py-3 text-slate-600">{safeName(row.professional_name, "Equipe")}</td>
-                      <td className="px-4 py-3 text-slate-600">{safeName(row.service_type, "Sessão")}</td>
-                      <td className="px-4 py-3 text-slate-600">
-                        <div className="font-medium text-slate-700">{row.internal_procedure_name || "Procedimento nao configurado"}</div>
-                        <div className="mt-1 text-xs text-slate-500">{row.tuss_code ? `TUSS ${row.tuss_code}` : "TUSS: pendente de mapeamento"}</div>
-                      </td>
                       <td className="px-4 py-3 text-slate-600">{safeName(row.payer_name, "Sem pagador")}</td>
-                      <td className="px-4 py-3 text-slate-600">{formatOptionalMinutes(row.scheduled_minutes)}</td>
-                      <td className="px-4 py-3 text-slate-600">{formatOptionalMinutes(row.actual_minutes)}</td>
-                      <td className="px-4 py-3 text-slate-600">{Number(row.actual_minutes || 0) > 0 ? "Realizada" : status === "NOT_BILLABLE" ? "Não faturável" : "Agendada"}</td>
-                      <td className="px-4 py-3">
-                        <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-xs font-medium ring-1 ${meta.className}`}>
-                          <StatusIcon size={13} />
-                          {meta.label}
-                        </span>
+                      <td className="px-4 py-3 text-slate-600">{row.financial_plan_name || "Não configurado"}</td>
+                      <td className="px-4 py-3 text-slate-600">
+                        {[row.guide_number ? `Guia ${row.guide_number}` : "", row.authorization_code ? "Autorização informada" : ""].filter(Boolean).join(" · ") || "Pendente/não exigida"}
                       </td>
+                      <td className="px-4 py-3 text-slate-600">
+                        <div className="font-medium text-slate-700">{row.internal_procedure_name || "Procedimento não configurado"}</div>
+                        <div className="mt-1 text-xs text-slate-500">{safeName(row.service_type, "Sessão")}</div>
+                      </td>
+                      <td className="px-4 py-3 text-slate-600">
+                        <div className="font-medium text-slate-700">{row.tuss_code || "Sem TUSS"}</div>
+                        {row.tuss_description && <div className="mt-1 max-w-[160px] truncate text-xs text-slate-500">{row.tuss_description}</div>}
+                      </td>
+                      <td className="px-4 py-3 font-medium text-slate-800">{formatCurrencyCents(viewModel.expectedAmountCents)}</td>
                       <td className="px-4 py-3">
                         <div className="flex flex-col gap-1">
                           <span className={`inline-flex w-fit items-center gap-1.5 rounded-full px-2 py-1 text-xs font-medium ring-1 ${workflowMeta.className}`}>
-                            {workflowMeta.label}
+                            {viewModel.conferenceStatusLabel}
+                          </span>
+                          {status !== "READY" && status !== "NOT_BILLABLE" && (
+                            <span className="text-[11px] text-amber-700">Corrigir no fechamento</span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex flex-col gap-1">
+                          <span className={`inline-flex w-fit rounded-full px-2 py-1 text-xs font-medium ring-1 ${row.export_id ? "bg-indigo-50 text-indigo-700 ring-indigo-200" : "bg-slate-100 text-slate-600 ring-slate-200"}`}>
+                            {viewModel.exportStatus}
                           </span>
                           {row.export_id && <span className="text-[11px] text-slate-500">Export {String(row.export_id).slice(0, 8)}</span>}
                         </div>
                       </td>
                       <td className="max-w-[260px] px-4 py-3">
                         <div className="flex flex-wrap gap-1">
-                          {pendingDetails.visible.length === 0 ? (
+                          {viewModel.remainingPendingChips.length === 0 ? (
                             <span className="rounded-full bg-emerald-50 px-2 py-1 text-xs text-emerald-700">Sem pendência</span>
-                          ) : pendingDetails.visible.slice(0, 4).map((item) => (
+                          ) : viewModel.remainingPendingChips.slice(0, 4).map((item) => (
                             <span key={`${item.category}-${item.label}`} className={`rounded-full px-2 py-1 text-xs ring-1 ${pendingChipClass(item)}`}>{pendingChipLabel(item)}</span>
                           ))}
                         </div>
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex justify-end gap-2">
-                          <button type="button" onClick={() => openDetail(row)} title="Ver checklist" className="rounded-md border border-slate-200 p-2 text-slate-600 hover:bg-white"><ClipboardCheck size={16} /></button>
+                          <button type="button" onClick={() => openDetail(row)} title="Abrir conferência da sessão" className="rounded-md border border-slate-200 p-2 text-slate-600 hover:bg-white"><ClipboardCheck size={16} /></button>
                           <button type="button" onClick={() => onOpenAppointment?.(row)} title="Abrir consulta" className="rounded-md border border-slate-200 p-2 text-slate-600 hover:bg-white"><Stethoscope size={16} /></button>
                           <button type="button" onClick={() => onOpenReport?.(row)} title="Abrir relatório" className="rounded-md border border-slate-200 p-2 text-slate-600 hover:bg-white"><FileText size={16} /></button>
-                          {workflowStatus === "exported" ? (
+                          {viewModel.canReopen ? (
                             <button type="button" onClick={() => setReopenTarget(row)} disabled={isBusy} title="Reabrir conferência" className="rounded-md border border-slate-200 p-2 text-slate-600 hover:bg-white disabled:opacity-60">
                               {isBusy ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
                             </button>
-                          ) : workflowStatus !== "reviewed" && workflowStatus !== "non_billable" ? (
+                          ) : viewModel.canMarkReviewed ? (
                             <button type="button" onClick={() => markReviewed(row)} disabled={isBusy} title="Marcar como conferido" className="rounded-md border border-slate-200 p-2 text-emerald-700 hover:bg-white disabled:opacity-60">
                               {isBusy ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
                             </button>
@@ -1029,7 +1103,9 @@ export function MonthlyConferenceCenter({
       ) : (
         <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
           <div className="divide-y divide-slate-100">
-            {summaryRows.length === 0 ? (
+            {summaryLoading ? (
+              <div className="px-4 py-10 text-center text-sm text-slate-500"><Loader2 className="mx-auto mb-2 animate-spin" size={18} />Carregando resumo</div>
+            ) : summaryRows.length === 0 ? (
               <div className="px-4 py-10 text-center text-sm text-slate-500">Sem resumo para os filtros atuais.</div>
             ) : summaryRows.map((item, index) => {
               const title = item.name || item.code || item.guideType || item.payerName || item.serviceType || "Resumo";
@@ -1165,7 +1241,7 @@ export function MonthlyConferenceCenter({
             <label className="mt-4 block text-sm font-medium text-slate-700">
               Tipo
               <select value={exportType} onChange={(event) => setExportType(event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm">
-                <option value="billing_conference_full">Conferência completa para financeiro</option>
+                <option value="billing_conference_full">Exportação de conferência mensal</option>
                 <option value="sessions_period">Sessões do período</option>
                 <option value="pending_items">Pendências do período</option>
                 <option value="patient_time">Tempo por paciente</option>

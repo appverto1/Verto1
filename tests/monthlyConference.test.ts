@@ -8,6 +8,7 @@ import {
   classifyConferencePendingKinds,
   rowsToCsv
 } from '../src/services/monthlyConferenceEngine';
+import { buildMonthlyConferenceViewModel } from '../src/services/prefacturingViewModels';
 
 const root = process.cwd();
 const serverCode = readFileSync(join(root, 'server.ts'), 'utf8');
@@ -101,6 +102,68 @@ test('KPIs contam prontas, pendentes, alertas, nao faturaveis e tempo', () => {
   assert.equal(summary.kpis.pendingReports, 1);
   assert.equal(summary.kpis.pendingGuides, 1);
   assert.equal(summary.kpis.pendingDocuments, 1);
+});
+
+test('KPIs e view model mensal priorizam pre-faturamento, valores e exportacao', () => {
+  const summary = buildMonthlyConferenceSummary([
+    {
+      appointment_id: 'appt-reviewed',
+      payer_id: 'payer-amil',
+      payer_name: 'Amil',
+      patient_name: 'Pedro',
+      professional_name: 'Mateus',
+      service_type: 'ABA',
+      readiness_status: 'READY',
+      conference_status: 'reviewed',
+      financial_plan_name: 'ABA',
+      insurance_card_number: '123456',
+      internal_procedure_name: 'Sessão ABA individual',
+      internal_procedure_code: 'ABA-IND',
+      tuss_code: 'TESTE-ABA',
+      billing_amount_cents: 12000,
+      professional_registry: 'CRP 00/00000'
+    },
+    {
+      appointment_id: 'appt-exported',
+      payer_id: 'payer-amil',
+      payer_name: 'Amil',
+      patient_name: 'Pedro',
+      professional_name: 'Mateus',
+      service_type: 'ABA',
+      readiness_status: 'READY',
+      conference_status: 'exported',
+      financial_plan_name: 'ABA',
+      insurance_card_number: '123456',
+      internal_procedure_name: 'Sessão ABA individual',
+      internal_procedure_code: 'ABA-IND',
+      tuss_code: 'TESTE-ABA',
+      billing_amount_cents: 8000,
+      professional_registry: 'CRP 00/00000'
+    }
+  ] as any[]);
+  assert.equal(summary.kpis.billableSessions, 2);
+  assert.equal(summary.kpis.expectedAmountCents, 20000);
+  assert.equal(summary.kpis.reviewed, 1);
+  assert.equal(summary.kpis.exported, 1);
+
+  const vm = buildMonthlyConferenceViewModel({
+    appointment_id: 'appt-reviewed',
+    payer_id: 'payer-amil',
+    payer_name: 'Amil',
+    readiness_status: 'READY',
+    conference_status: 'reviewed',
+    financial_plan_name: 'ABA',
+    insurance_card_number: '123456',
+    internal_procedure_name: 'Sessão ABA individual',
+    tuss_code: 'TESTE-ABA',
+    billing_amount_cents: 12000,
+    professional_registry: 'CRP 00/00000'
+  } as any);
+  assert.equal(vm.billingStatus, 'READY');
+  assert.equal(vm.conferenceStatusLabel, 'Conferido');
+  assert.equal(vm.expectedAmountCents, 12000);
+  assert.equal(vm.canExport, true);
+  assert.equal(vm.canReopen, false);
 });
 
 test('status e pendencias ficam coerentes para agendada, realizada e nao faturavel', () => {
@@ -262,24 +325,50 @@ test('API da conferencia tem auth, roles, paginacao, filtros e select explicito'
   assert.match(serverCode, /kind === 'card'[\s\S]*?return !sanitizeString\(row\?\.insurance_card_number, 120\)/);
 });
 
-test('conferencia revalida periodo antes de listar em tela e antes de exportar CSV', () => {
+test('conferencia mensal abre em modo read-only e revalida periodo apenas por acao explicita', () => {
   assert.match(dataServiceCode, /async revalidateClosurePeriod/);
-  assert.match(conferenceCode, /const revalidation = await dataService\.revalidateClosurePeriod/);
-  assert.match(conferenceCode, /const changed = Number\(counts\.created \|\| 0\) \+ Number\(counts\.updated \|\| 0\)/);
-  assert.match(conferenceCode, /const legacyMirrored = Number\(counts\.legacyMirrored \|\| 0\)/);
-  assert.match(conferenceCode, /const revalidationErrors = Number\(counts\.errors \|\| 0\)/);
-  assert.match(conferenceCode, /formatRevalidationMessage\(counts, "conferência mensal"\)/);
-  assert.match(conferenceCode, /revalidation\?\.success === false && revalidationErrors > 0/);
-  assert.match(conferenceCode, /Primeiro erro:/);
-  assert.match(conferenceCode, /const actionRevision = \[[\s\S]*?affectedIds\.slice\(0, 25\)/);
-  assert.match(conferenceCode, /const listPayload = \{ \.\.\.filterPayload, actionRevision \}/);
-  assert.match(conferenceCode, /const \[main, byPatient, byProfessional, byPayer, byService, byProcedure, byTuss, byGuide\] = await Promise\.all/);
-  assert.match(conferenceCode, /Os filtros atuais ocultam os resultados/);
-  assert.match(conferenceCode, /Nenhum item foi carregado na tabela/);
-  assert.match(conferenceCode, /nextRows\.length === 0 && page > 1/);
+  const loadConferenceSlice = conferenceCode.slice(
+    conferenceCode.indexOf('const loadConference = useCallback'),
+    conferenceCode.indexOf('const loadActiveSummary = useCallback')
+  );
+  const refreshConferenceSlice = conferenceCode.slice(
+    conferenceCode.indexOf('const refreshConference = async'),
+    conferenceCode.indexOf('const openDetail = async')
+  );
+  assert.match(loadConferenceSlice, /dataService\.getMonthlyConference/);
+  assert.doesNotMatch(loadConferenceSlice, /revalidateClosurePeriod/);
+  assert.doesNotMatch(loadConferenceSlice, /getMonthlyConferenceSummary/);
+  assert.doesNotMatch(loadConferenceSlice, /getMonthlyConferenceSession/);
+  assert.match(conferenceCode, /const loadActiveSummary = useCallback/);
+  assert.match(conferenceCode, /conferenceSummaryRequestByTab/);
+  assert.match(conferenceCode, /summaryLoading/);
+  assert.match(refreshConferenceSlice, /const revalidation = await dataService\.revalidateClosurePeriod/);
+  assert.match(refreshConferenceSlice, /await loadConference\(\{ actionRevision, preserveMessage: true \}\)/);
+  assert.match(conferenceCode, /onClick=\{refreshConference\}/);
+  assert.match(conferenceCode, /const openDetail = async[\s\S]*?dataService\.getMonthlyConferenceSession/);
+  assert.match(conferenceCode, /useEffect\(\(\) => \{[\s\S]*?void loadConference\(\)/);
+  assert.match(conferenceCode, /if \(!isSessionListTab\(activeTab\)\) void loadActiveSummary\(activeTab\)/);
   const exportSlice = serverCode.slice(serverCode.indexOf("app.post('/api/conference/monthly/export'"), serverCode.indexOf('let hydratedRows = filterHydratedRowsByTussMissingKind'));
   assert.match(exportSlice, /revalidateClosureChecksForPeriod/);
   assert.match(exportSlice, /source: 'monthly_conference_export'/);
+});
+
+test('GET mensal e summaries leem snapshots sem recomputacao nem auditoria de visualizacao', () => {
+  const monthlyGetSlice = serverCode.slice(
+    serverCode.indexOf("app.get('/api/conference/monthly'"),
+    serverCode.indexOf("const handleConferenceSummary")
+  );
+  const summarySlice = serverCode.slice(
+    serverCode.indexOf("const handleConferenceSummary"),
+    serverCode.indexOf("app.get('/api/conference/monthly/summary-by-patient'")
+  );
+  assert.match(monthlyGetSlice, /loadConferenceClosureRows/);
+  assert.match(monthlyGetSlice, /logPrefacturingReadPerformance\('conference\.monthly'/);
+  assert.match(summarySlice, /logPrefacturingReadPerformance\('conference\.summary'/);
+  assert.doesNotMatch(monthlyGetSlice, /revalidateClosureChecksForPeriod/);
+  assert.doesNotMatch(monthlyGetSlice, /writeClosureAuditLog/);
+  assert.doesNotMatch(monthlyGetSlice, /CONFERENCE_VIEWED/);
+  assert.doesNotMatch(summarySlice, /revalidateClosureChecksForPeriod/);
 });
 
 test('tabela de sessoes da conferencia mantem cabecalho fixo durante scroll', () => {
@@ -296,23 +385,26 @@ test('exportacao gera trilha auditavel e tabela com RLS', () => {
   assert.match(serverCode, /\.from\('operational_closure_exports'\)[\s\S]*?\.insert/);
 });
 
-test('frontend tem tela mensal, filtros, detalhe, exportacao e nao expõe infraestrutura', () => {
-  for (const label of ['Conferência mensal', 'Por paciente', 'Por profissional', 'Por pagador', 'Por especialidade', 'Exportar CSV', 'Conferência da sessão']) {
+test('frontend tem tela de pre-faturamento mensal, filtros, detalhe, exportacao e nao expõe infraestrutura', () => {
+  for (const label of ['Pré-faturamento Mensal', 'Por paciente', 'Por profissional', 'Por pagador', 'Por especialidade', 'Exportar CSV', 'Conferência da sessão']) {
     assert.match(conferenceCode, new RegExp(label));
   }
   assert.match(conferenceCode, /formatDateTimeInAppointmentTimezone/);
   assert.match(coordinatorCode, /<MonthlyConferenceCenter/);
   assert.match(conferenceCode, /Em aberto/);
   assert.match(conferenceCode, /classifyConferencePendingDetails/);
-  assert.match(conferenceCode, /Pendências operacionais/);
+  assert.match(conferenceCode, /Total previsto/);
+  assert.match(conferenceCode, /Sessões faturáveis/);
+  assert.match(conferenceCode, /Exportadas/);
+  assert.match(conferenceCode, /Reabertas/);
+  assert.match(conferenceCode, /Valor previsto/);
   assert.match(conferenceCode, /Pendências e configurações mais frequentes/);
   assert.match(conferenceCode, /Bloqueios operacionais/);
   assert.match(conferenceCode, /Configurações pendentes/);
-  assert.match(conferenceCode, /Somente pendências operacionais/);
-  assert.match(conferenceCode, /Pendências e configurações/);
+  assert.match(conferenceCode, /Somente pendências/);
+  assert.match(conferenceCode, /Pendências restantes/);
   assert.match(conferenceCode, /Configuração: \$\{label\}/);
-  assert.match(conferenceCode, /Assinaturas pendentes/);
-  assert.match(conferenceCode, /TUSS: pendente de mapeamento/);
+  assert.match(conferenceCode, /Sem TUSS/);
   assert.match(conferenceCode, /pendingChipClass/);
   assert.doesNotMatch(conferenceCode, /dangerouslySetInnerHTML/);
   assert.doesNotMatch(conferenceCode, /Supabase|PostgREST|Railway|schema cache/i);
@@ -329,13 +421,13 @@ test('drilldown visual filtra sessoes por procedimento, TUSS e pagador real', ()
   assert.match(conferenceCode, /if \(filter\.type === "tuss"\)[\s\S]*?!tussCode/);
   assert.match(conferenceCode, /if \(filter\.type === "payer"\)[\s\S]*?cleanDrilldownValue\(row\.payer_id\)/);
   assert.doesNotMatch(conferenceCode, /filter\.type === "payer"[\s\S]{0,220}payer_name/);
-  assert.match(conferenceCode, /const drilldownRows = useMemo/);
-  assert.match(conferenceCode, /rows\.filter\(\(row\) => conferenceRowMatchesDrilldown\(row, drilldownFilter\)\)/);
+  assert.match(conferenceCode, /const drilldownConferenceRows = useMemo/);
+  assert.match(conferenceCode, /conferenceRows\.filter\(\(\{ row \}\) => conferenceRowMatchesDrilldown\(row, drilldownFilter\)\)/);
   assert.match(conferenceCode, /Filtro aplicado: \{drilldownLabel\}/);
   assert.match(conferenceCode, /Limpar filtro/);
   assert.match(conferenceCode, /const nextDrilldown = buildConferenceDrilldownFilter\(activeTab, item\)/);
   assert.match(conferenceCode, /if \(nextDrilldown\) setDrilldownFilter\(nextDrilldown\)/);
-  assert.match(conferenceCode, /drilldownRows\.map\(\(row, index\)/);
+  assert.match(conferenceCode, /visibleConferenceRows\.map\(\(\{ row, viewModel \}, index\)/);
 });
 
 test('dataService expõe helpers econômicos da conferência', () => {

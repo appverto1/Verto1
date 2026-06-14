@@ -5,6 +5,10 @@ import {
   buildMonthlyConferenceExportRows,
   rowsToCsv
 } from '../src/services/monthlyConferenceEngine';
+import {
+  buildMonthlyConferenceViewModel,
+  buildOperationalClosureViewModel
+} from '../src/services/prefacturingViewModels';
 
 const root = process.cwd();
 const serverCode = readFileSync(join(root, 'server.ts'), 'utf8');
@@ -15,6 +19,7 @@ const packageJson = readFileSync(join(root, 'package.json'), 'utf8');
 const statusMigration = readFileSync(join(root, 'supabase/migrations/20260611110000_appointment_conference_statuses.sql'), 'utf8');
 const payerMigration = readFileSync(join(root, 'supabase/migrations/20260529123000_payer_requirements_prefacturing.sql'), 'utf8');
 const materializationMigration = readFileSync(join(root, 'supabase/migrations/20260612123000_closure_check_materialization_hardening.sql'), 'utf8');
+const readPerformanceMigration = readFileSync(join(root, 'supabase/migrations/20260614120000_prefacturing_read_performance_indexes.sql'), 'utf8');
 
 const tests: Array<{ name: string; fn: () => void }> = [];
 const test = (name: string, fn: () => void) => tests.push({ name, fn });
@@ -122,6 +127,40 @@ test('fechamento operacional evita cache stale depois de revalidar', () => {
   assert.match(closureCode, /const actionRevision = \[[\s\S]*?affectedIds\.slice\(0, 25\)/);
 });
 
+test('fechamento operacional abre em modo read-only e revalida apenas por acao explicita', () => {
+  const closureListSlice = serverCode.slice(serverCode.indexOf("app.get('/api/closure/appointments'"), serverCode.indexOf("app.post('/api/closure/revalidate-period'"));
+  const loadRowsSlice = closureCode.slice(
+    closureCode.indexOf('const loadRows = useCallback'),
+    closureCode.indexOf('useEffect(() => {')
+  );
+  const refreshRowsSlice = closureCode.slice(
+    closureCode.indexOf('const refreshRows = async'),
+    closureCode.indexOf('const openDetail = async')
+  );
+  assert.match(closureListSlice, /\.from\('appointment_closure_checks'\)/);
+  assert.match(closureListSlice, /logPrefacturingReadPerformance\('closure\.appointments'/);
+  assert.doesNotMatch(closureListSlice, /revalidateClosureChecksForPeriod/);
+  assert.match(loadRowsSlice, /dataService\.getClosureAppointments/);
+  assert.doesNotMatch(loadRowsSlice, /revalidateClosurePeriod/);
+  assert.doesNotMatch(loadRowsSlice, /getClosureAppointmentDetail/);
+  assert.match(refreshRowsSlice, /const revalidation = await dataService\.revalidateClosurePeriod/);
+  assert.match(refreshRowsSlice, /await loadRows\(\{ actionRevision, preserveMessage: true \}\)/);
+  assert.match(closureCode, /onClick=\{refreshRows\}/);
+  assert.match(closureCode, /const openDetail = async[\s\S]*?dataService\.getClosureAppointmentDetail/);
+});
+
+test('indices aditivos suportam leitura summary-driven de fechamento e conferencia', () => {
+  assert.match(readPerformanceMigration, /idx_appointment_closure_checks_org_scheduled_read/);
+  assert.match(readPerformanceMigration, /idx_appointment_closure_checks_org_status_scheduled/);
+  assert.match(readPerformanceMigration, /idx_appointment_closure_checks_org_payer_scheduled/);
+  assert.match(readPerformanceMigration, /idx_appointment_billing_contexts_appointment_read/);
+  assert.match(readPerformanceMigration, /idx_appointment_billing_items_appointment_read/);
+  assert.match(readPerformanceMigration, /idx_appointment_conference_statuses_appointment_read/);
+  assert.match(readPerformanceMigration, /idx_payer_tuss_mappings_payer_active_validity/);
+  assert.match(readPerformanceMigration, /idx_appointments_prefacturing_slot_read/);
+  assert.doesNotMatch(readPerformanceMigration, /drop table|delete from|truncate|xml tiss|remessa|glosa/i);
+});
+
 test('exportacao completa registra auditoria, marca itens e retorna ActionResult', () => {
   assert.match(serverCode, /normalizeConferenceExportType/);
   assert.match(serverCode, /billing_conference_full/);
@@ -193,6 +232,55 @@ test('CSV de conferencia mensal inclui campos financeiros e auditoria sem virar 
   assert.doesNotMatch(csv, /xml|tiss|remessa|glosa/i);
 });
 
+test('view models separam fila operacional de pre-faturamento mensal', () => {
+  const readyRow = {
+    appointment_id: 'appt-ready',
+    payer_id: 'payer-amil',
+    payer_name: 'Amil',
+    patient_name: 'Pedro',
+    professional_name: 'Mateus',
+    service_type: 'ABA',
+    readiness_status: 'READY',
+    conference_status: 'pending_review',
+    financial_plan_name: 'ABA',
+    insurance_card_number: '123456',
+    internal_procedure_name: 'Sessão ABA individual',
+    internal_procedure_code: 'ABA-IND',
+    tuss_code: 'TESTE-ABA',
+    billing_amount_cents: 12000,
+    professional_registry: 'CRP 00/00000',
+    checklist: [
+      { status: 'PASSED' },
+      { status: 'PASSED' }
+    ]
+  } as any;
+  const pendingRow = {
+    appointment_id: 'appt-pending',
+    readiness_status: 'PENDING',
+    main_issues: ['Assinatura pendente para fechamento da sessão.'],
+    checklist: [
+      { status: 'FAILED' },
+      { status: 'WARNING' },
+      { status: 'PASSED' }
+    ]
+  } as any;
+
+  const operationalReady = buildOperationalClosureViewModel(readyRow);
+  assert.equal(operationalReady.operationalStatus, 'READY');
+  assert.equal(operationalReady.isReadyForConference, true);
+  assert.equal(operationalReady.nextAction, 'Enviar para conferência');
+
+  const operationalPending = buildOperationalClosureViewModel(pendingRow);
+  assert.equal(operationalPending.operationalStatus, 'OPERATIONAL_PENDING');
+  assert.match(operationalPending.checklistSummary, /1 pendente/);
+
+  const monthly = buildMonthlyConferenceViewModel(readyRow);
+  assert.equal(monthly.billingStatus, 'READY');
+  assert.equal(monthly.conferenceStatusLabel, 'A revisar');
+  assert.equal(monthly.expectedAmountCents, 12000);
+  assert.equal(monthly.exportStatus, 'Não exportado');
+});
+
 test('frontend atualiza conferencia sem F5 e nao promete faturamento eletronico', () => {
   assert.match(dataServiceCode, /async revalidateClosurePeriod/);
   assert.match(dataServiceCode, /\/api\/closure\/revalidate-period/);
@@ -207,19 +295,28 @@ test('frontend atualiza conferencia sem F5 e nao promete faturamento eletronico'
   assert.match(conferenceCode, /submitReopen/);
   assert.match(conferenceCode, /applyUpdatedConferenceRows/);
   assert.match(conferenceCode, /billing_conference_full/);
-  assert.match(conferenceCode, /Conferência completa para financeiro/);
+  assert.match(conferenceCode, /Exportação de conferência mensal/);
   assert.match(conferenceCode, /Exportar CSV/);
   assert.match(closureCode, /Fechamento operacional/);
-  assert.match(closureCode, /Pronta para conferência/);
-  assert.match(conferenceCode, /Pendências operacionais/);
+  assert.match(closureCode, /Fila de preparo operacional/);
+  assert.match(closureCode, /Fila operacional do período/);
+  assert.match(closureCode, /Status operacional/);
+  assert.match(closureCode, /Pendência principal/);
+  assert.match(closureCode, /Checklist resumido/);
+  assert.match(closureCode, /Próxima ação/);
+  assert.match(conferenceCode, /Pré-faturamento Mensal/);
+  assert.match(conferenceCode, /Total previsto/);
+  assert.match(conferenceCode, /Sessões faturáveis/);
+  assert.match(conferenceCode, /Valor previsto/);
+  assert.match(conferenceCode, /Exportação/);
+  assert.match(conferenceCode, /Pendências restantes/);
   assert.match(conferenceCode, /Pendências e configurações mais frequentes/);
   assert.match(closureCode, /Pendências operacionais/);
   assert.match(closureCode, /formatDateTimeInAppointmentTimezone/);
   assert.match(conferenceCode, /formatDateTimeInAppointmentTimezone/);
   assert.match(closureCode, /Somente pendências operacionais/);
-  assert.match(closureCode, /Pendências e configurações/);
+  assert.doesNotMatch(closureCode, /Exportar CSV/);
   assert.match(closureCode, /Configuração: \$\{label\}/);
-  assert.match(closureCode, /configuração\$\{configuration > 1 \? "ões" : ""\} pendente/);
   assert.match(closureCode, /max-h-\[70vh\] overflow-auto/);
   assert.match(closureCode, /sticky top-0 z-20 bg-slate-50/);
   assert.match(conferenceCode, /max-h-\[70vh\] overflow-auto/);

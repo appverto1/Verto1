@@ -58,6 +58,10 @@ export type MonthlyConferenceRow = {
   export_id?: string | null;
   exported_at?: string | null;
   exported_by_name?: string | null;
+  snapshot_status?: string | null;
+  stale_reason?: string | null;
+  source_version?: string | null;
+  snapshot_updated_at?: string | null;
   notes?: string | null;
   main_issues?: string[] | null;
   checklist?: Array<{ key?: string; label?: string; status?: string; required?: boolean; message?: string }> | null;
@@ -80,6 +84,15 @@ export type MonthlyConferenceSummary = {
     pendingGuides: number;
     pendingAuthorizations: number;
     pendingDocuments: number;
+    expectedAmountCents: number;
+    billableSessions: number;
+    pendingReview: number;
+    reviewed: number;
+    exported: number;
+    reopened: number;
+    missingPayer: number;
+    missingProcedureOrTuss: number;
+    missingAmount: number;
   };
   pendingByType: Array<{ type: string; count: number; category: 'configuration' | 'operational' }>;
   byPatient: any[];
@@ -327,7 +340,16 @@ export function buildMonthlyConferenceSummary(rows: MonthlyConferenceRow[]): Mon
     pendingReports: 0,
     pendingGuides: 0,
     pendingAuthorizations: 0,
-    pendingDocuments: 0
+    pendingDocuments: 0,
+    expectedAmountCents: 0,
+    billableSessions: 0,
+    pendingReview: 0,
+    reviewed: 0,
+    exported: 0,
+    reopened: 0,
+    missingPayer: 0,
+    missingProcedureOrTuss: 0,
+    missingAmount: 0
   };
 
   for (const row of safeRows) {
@@ -336,6 +358,8 @@ export function buildMonthlyConferenceSummary(rows: MonthlyConferenceRow[]): Mon
     const actual = Math.max(0, Math.round(Number(row.actual_minutes || 0)));
     const pendingDetails = classifyConferencePendingDetails(row);
     const pendingKinds = pendingDetails.blocking;
+    const expectedAmountCents = Number(row.billing_amount_cents || row.expected_amount_cents || 0) || 0;
+    const workflowStatus = String(row.conference_status || (status === 'NOT_BILLABLE' ? 'non_billable' : 'pending_review')).toLowerCase();
     const serviceType = String(row.service_type || 'Sessao').trim() || 'Sessao';
     const patientName = String(row.patient_name || 'Paciente').trim() || 'Paciente';
     const professionalName = String(row.professional_name || 'Equipe').trim() || 'Equipe';
@@ -353,6 +377,17 @@ export function buildMonthlyConferenceSummary(rows: MonthlyConferenceRow[]): Mon
       kpis.open += 1;
     }
     else kpis.unknown += 1;
+    if (status !== 'NOT_BILLABLE') {
+      kpis.billableSessions += 1;
+      kpis.expectedAmountCents += expectedAmountCents;
+    }
+    if (workflowStatus === 'reviewed') kpis.reviewed += 1;
+    else if (workflowStatus === 'exported') kpis.exported += 1;
+    else if (workflowStatus === 'reopened') kpis.reopened += 1;
+    else if (workflowStatus === 'pending_review') kpis.pendingReview += 1;
+    if (pendingDetails.configuration.includes('Pagador')) kpis.missingPayer += 1;
+    if (pendingDetails.configuration.includes('Procedimento') || pendingDetails.configuration.includes('TUSS')) kpis.missingProcedureOrTuss += 1;
+    if (pendingDetails.configuration.includes('Valor')) kpis.missingAmount += 1;
     kpis.scheduledMinutes += scheduled;
     if (status !== 'NOT_BILLABLE') kpis.actualMinutes += actual;
     if (pendingDetails.operational.includes('Assinatura')) kpis.pendingSignatures += 1;

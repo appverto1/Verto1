@@ -3570,6 +3570,16 @@ const APPOINTMENT_CLOSURE_CHECK_SCHEMA_FALLBACK_COLUMNS = new Set([
   'context_hash'
 ]);
 
+const logPrefacturingReadPerformance = (label: string, stats: Record<string, any>) => {
+  if (process.env.NODE_ENV === 'production') return;
+  console.info('[PrefacturingRead]', cleanObject({
+    label,
+    mode: 'read-only',
+    recompute: false,
+    ...stats
+  }));
+};
+
 const buildAppointmentClosureCheckSelect = (omittedColumns: Set<string> = new Set()) => APPOINTMENT_CLOSURE_CHECK_SELECT
   .split(',')
   .map((column) => column.trim())
@@ -32846,6 +32856,7 @@ async function startServer() {
 
   app.get('/api/closure/appointments', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     const { page, limit, from, to } = parseClosurePageParams(req.query);
+    const readStartedAt = Date.now();
     const emptyClosurePayload = (reason = '') => ({ success: true, data: [], page, limit, totals: {
       ready: 0,
       pending: 0,
@@ -32939,6 +32950,7 @@ async function startServer() {
       let rows: any[] = [];
       let activeVariant: any = null;
       let lastSchemaError: any = null;
+      const listQueryStartedAt = Date.now();
 
       for (const variant of variants) {
         if (!canApplyRequestedFilters(variant)) continue;
@@ -32963,14 +32975,16 @@ async function startServer() {
         }
         return sendNoStoreJson(res, emptyClosurePayload('closure_schema_unavailable'));
       }
+      const listQueryMs = Date.now() - listQueryStartedAt;
 
       let totalsRows: any[] = [];
+      const totalsQueryStartedAt = Date.now();
       try {
         if (canApplyRequestedFilters(activeVariant)) {
           let totalsQuery = supabase
             .from('appointment_closure_checks')
             .select('readiness_status, scheduled_minutes, actual_minutes, blocking_issues_count, warning_issues_count', { count: 'exact' })
-            .limit(1000);
+            .limit(5000);
           totalsQuery = await applySharedClosureFilters(totalsQuery, activeVariant, false);
           const totalsResult = await totalsQuery;
           if (totalsResult.error) {
@@ -32982,6 +32996,7 @@ async function startServer() {
       } catch (totalsError: any) {
         console.warn('[Closure] totals unavailable:', totalsError?.message || String(totalsError));
       }
+      const totalsQueryMs = Date.now() - totalsQueryStartedAt;
 
       const totals = {
         ready: totalsRows.filter((row: any) => row.readiness_status === 'READY').length,
@@ -32997,10 +33012,21 @@ async function startServer() {
         blockingIssues: totalsRows.reduce((sum: number, row: any) => sum + (Number(row.blocking_issues_count) || 0), 0),
         warningIssues: totalsRows.reduce((sum: number, row: any) => sum + (Number(row.warning_issues_count) || 0), 0)
       };
+      const hydrateStartedAt = Date.now();
       const closureRows = filterHydratedRowsByTussMissingKind(
         await hydrateConferenceRows(rows, clinicId, req.session.user),
         missingKind
       );
+      logPrefacturingReadPerformance('closure.appointments', {
+        durationMs: Date.now() - readStartedAt,
+        listQueryMs,
+        totalsQueryMs,
+        hydrateMs: Date.now() - hydrateStartedAt,
+        page,
+        limit,
+        rows: closureRows.length,
+        totalsRows: totalsRows.length
+      });
       return sendNoStoreJson(res, {
         success: true,
         data: closureRows,
@@ -33471,6 +33497,10 @@ async function startServer() {
         clinic_name: clinicName,
         unit_name: '',
         competence_month: competenceMonth,
+        snapshot_status: 'fresh',
+        stale_reason: null,
+        source_version: sanitizeString(row?.updated_at || row?.generated_at, 80) || null,
+        snapshot_updated_at: row?.updated_at || row?.generated_at || null,
         insurance_card_number: sanitizeString(billing?.insurance_card_number || patient?.insurance_card_number, 120) || null,
         financial_plan_name: sanitizeString(
           financialPlan?.insurance_plan_name ||
@@ -33674,15 +33704,19 @@ async function startServer() {
   };
 
   app.get('/api/conference/monthly', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    const readStartedAt = Date.now();
     try {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const filters = parseConferenceFilters(req.query);
       if (!isUuid(clinicId) || !filters.ok) return res.status(400).json(conferenceSafeError(400));
       if (!(await assertConferenceFilterOwnership(filters, clinicId))) return res.status(404).json(conferenceSafeError(404));
+      const queryStartedAt = Date.now();
       const [pageRows, aggregateRows] = await Promise.all([
         loadConferenceClosureRows({ clinicId, user: req.session.user, filters, paginated: true }),
         loadConferenceClosureRows({ clinicId, user: req.session.user, filters, hardLimit: 2000 })
       ]);
+      const queryMs = Date.now() - queryStartedAt;
+      const hydrateStartedAt = Date.now();
       const hydratedPageRows = filterHydratedRowsByTussMissingKind(
         await hydrateConferenceRows(pageRows, clinicId, req.session.user),
         filters.missingKind
@@ -33691,12 +33725,16 @@ async function startServer() {
         await hydrateConferenceRows(aggregateRows, clinicId, req.session.user),
         filters.missingKind
       );
+      const hydrateMs = Date.now() - hydrateStartedAt;
       const summary = buildMonthlyConferenceSummary(hydratedAggregateRows);
-      await writeClosureAuditLog({
-        organizationId: clinicId,
-        action: 'CONFERENCE_VIEWED',
-        performedBy: sanitizeString(req.session.user?.id, 120),
-        metadata: { from: filters.fromIso, to: filters.toIso, page: filters.page, limit: filters.limit }
+      logPrefacturingReadPerformance('conference.monthly', {
+        durationMs: Date.now() - readStartedAt,
+        queryMs,
+        hydrateMs,
+        page: filters.page,
+        limit: filters.limit,
+        rows: hydratedPageRows.length,
+        aggregateRows: hydratedAggregateRows.length
       });
       return sendNoStoreJson(res, {
         success: true,
@@ -33723,17 +33761,30 @@ async function startServer() {
   });
 
   const handleConferenceSummary = (summaryKey: 'byPatient' | 'byProfessional' | 'byPayer' | 'byServiceType') => async (req: any, res: any) => {
+    const readStartedAt = Date.now();
     try {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const filters = parseConferenceFilters(req.query);
       if (!isUuid(clinicId) || !filters.ok) return res.status(400).json(conferenceSafeError(400));
       if (!(await assertConferenceFilterOwnership(filters, clinicId))) return res.status(404).json(conferenceSafeError(404));
+      const queryStartedAt = Date.now();
       const rows = await loadConferenceClosureRows({ clinicId, user: req.session.user, filters, hardLimit: 2000 });
+      const queryMs = Date.now() - queryStartedAt;
+      const hydrateStartedAt = Date.now();
       const hydratedRows = filterHydratedRowsByTussMissingKind(
         await hydrateConferenceRows(rows, clinicId, req.session.user),
         filters.missingKind
       );
+      const hydrateMs = Date.now() - hydrateStartedAt;
       const summary = buildMonthlyConferenceSummary(hydratedRows);
+      logPrefacturingReadPerformance('conference.summary', {
+        summaryKey,
+        durationMs: Date.now() - readStartedAt,
+        queryMs,
+        hydrateMs,
+        rows: hydratedRows.length,
+        limit: filters.limit
+      });
       return sendNoStoreJson(res, { success: true, data: (summary as any)[summaryKey] || [], kpis: summary.kpis });
     } catch (error: any) {
       console.warn('[MonthlyConference] summary failed:', error?.message || String(error));

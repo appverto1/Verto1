@@ -16,7 +16,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { dataService } from "../services/dataService";
-import { classifyConferencePendingDetails } from "../services/monthlyConferenceEngine";
+import { buildOperationalClosureViewModel } from "../services/prefacturingViewModels";
 import { formatDateTimeInAppointmentTimezone } from "../utils/scheduling";
 
 type ClosureStatus =
@@ -241,22 +241,12 @@ function formatRevalidationMessage(counts: any, contextLabel: string) {
   return `${evaluated} item(ns) avaliado(s): ${parts.length > 0 ? parts.join(", ") : "sem alterações"}.`;
 }
 
-function getHumanIssueCount(row: ClosureRow) {
-  const details = classifyConferencePendingDetails(row);
-  const operational = details.operational.length;
-  const configuration = details.configuration.length;
-  const blocking = operational + configuration;
-  const warnings = Number(row.warning_issues_count || 0);
-  if (blocking === 0 && warnings === 0) {
-    if (details.informational.length > 0) return details.informational.map((item) => pendingDisplayLabel[item] || item).join(", ");
-    if (details.notApplicable.length > 0) return details.notApplicable.map((item) => pendingDisplayLabel[item] || item).join(", ");
-    return "Sem pendências";
-  }
-  const parts = [];
-  if (operational > 0) parts.push(`${operational} pendência${operational > 1 ? "s" : ""} operacional${operational > 1 ? "is" : ""}`);
-  if (configuration > 0) parts.push(`${configuration} configuração${configuration > 1 ? "ões" : ""} pendente${configuration > 1 ? "s" : ""}`);
-  if (warnings > 0) parts.push(`${warnings} alerta${warnings > 1 ? "s" : ""}`);
-  return parts.join(" + ");
+function operationalStatusClass(status: string) {
+  if (status === "READY") return "bg-emerald-50 text-emerald-700 ring-emerald-200";
+  if (status === "OPEN") return "bg-sky-50 text-sky-700 ring-sky-200";
+  if (status === "NOT_BILLABLE") return "bg-slate-100 text-slate-700 ring-slate-200";
+  if (status === "NEEDS_REVALIDATION") return "bg-amber-50 text-amber-700 ring-amber-200";
+  return "bg-rose-50 text-rose-700 ring-rose-200";
 }
 
 export function OperationalClosureCenter({
@@ -305,8 +295,66 @@ export function OperationalClosureCenter({
   }, [rows]);
 
   const canGoNext = rows.length >= 50;
+  const operationalRows = useMemo(
+    () => rows.map((row) => ({ row, viewModel: buildOperationalClosureViewModel(row as any) })),
+    [rows]
+  );
 
-  const loadRows = useCallback(async () => {
+  const loadRows = useCallback(async (options: { actionRevision?: string | number; preserveMessage?: boolean } = {}) => {
+    setLoading(true);
+    setError("");
+    if (!options.preserveMessage) setRevalidationInfo("");
+    try {
+      const actionRevision = options.actionRevision;
+      const requestRows = (pageNumber: number) => dataService.getClosureAppointments({
+        from: toApiDate(from),
+        to: toApiDate(to, true),
+        status,
+        patientId: patientFilter,
+        professionalId: professionalFilter,
+        serviceType,
+        page: pageNumber,
+        limit: 50,
+        onlyPending: quickFilter === "pending",
+        onlyReady: quickFilter === "ready",
+        onlyWarnings: quickFilter === "warning",
+        missing: ["signature", "report", "guide", "authorization", "documents", "procedure", "tuss", "amount", "professional_registry", "card"].includes(quickFilter) ? quickFilter : "",
+        actionRevision,
+      });
+      let result = await requestRows(page);
+      let nextRows = Array.isArray(result?.data) ? result.data : [];
+      if (result?.success && nextRows.length === 0 && page > 1) {
+        const firstPageResult = await requestRows(1);
+        if (firstPageResult?.success) {
+          result = firstPageResult;
+          nextRows = Array.isArray(firstPageResult.data) ? firstPageResult.data : [];
+          setPage(1);
+        }
+      }
+      if (!result?.success) {
+        setRows([]);
+        setTotals(null);
+        setRevalidationInfo("");
+        setError(result?.error || "Não foi possível carregar o fechamento agora.");
+        return;
+      }
+      setRows(nextRows);
+      setTotals(result.totals || null);
+    } catch {
+      setRows([]);
+      setTotals(null);
+      if (!options.preserveMessage) setRevalidationInfo("");
+      setError("Não foi possível carregar o fechamento agora.");
+    } finally {
+      setLoading(false);
+    }
+  }, [from, page, patientFilter, professionalFilter, quickFilter, serviceType, status, to]);
+
+  useEffect(() => {
+    void loadRows();
+  }, [loadRows]);
+
+  const refreshRows = async () => {
     setLoading(true);
     setError("");
     try {
@@ -332,75 +380,34 @@ export function OperationalClosureCenter({
         revalidationErrors,
         affectedIds.slice(0, 25).join(",")
       ].filter(Boolean).join(":");
-      const requestRows = (pageNumber: number) => dataService.getClosureAppointments({
-        from: toApiDate(from),
-        to: toApiDate(to, true),
-        status,
-        patientId: patientFilter,
-        professionalId: professionalFilter,
-        serviceType,
-        page: pageNumber,
-        limit: 50,
-        onlyPending: quickFilter === "pending",
-        onlyReady: quickFilter === "ready",
-        onlyWarnings: quickFilter === "warning",
-        missing: ["signature", "report", "guide", "authorization", "documents", "procedure", "tuss", "amount", "professional_registry", "card"].includes(quickFilter) ? quickFilter : "",
-        actionRevision,
-      });
-      let result = await requestRows(page);
-      let nextRows = Array.isArray(result?.data) ? result.data : [];
-      if (result?.success && changed > 0 && nextRows.length === 0 && page > 1) {
-        const firstPageResult = await requestRows(1);
-        if (firstPageResult?.success) {
-          result = firstPageResult;
-          nextRows = Array.isArray(firstPageResult.data) ? firstPageResult.data : [];
-          setPage(1);
-        }
-      }
-      if (!result?.success) {
-        setRows([]);
-        setTotals(null);
-        setRevalidationInfo("");
-        setError(result?.error || "Não foi possível carregar o fechamento agora.");
-        return;
-      }
-      setRows(nextRows);
-      setTotals(result.totals || null);
+      await loadRows({ actionRevision, preserveMessage: true });
       if (revalidation?.success === false && revalidationErrors > 0) {
         setRevalidationInfo("");
         const reason = [firstRevalidationError?.reasonCode, firstRevalidationError?.dbCode].filter(Boolean).join(" · ");
         const detail = firstRevalidationError?.message ? ` Primeiro erro: ${reason || "sem código"} - ${firstRevalidationError.message}` : "";
         setError(`${revalidationMessage}${detail}`);
       } else if (revalidation?.success) {
-        if (changed > 0 && nextRows.length === 0) {
+        if (changed > 0 && rows.length === 0) {
           setRevalidationInfo("");
           setError(
             hasActiveFilters
               ? `${revalidationMessage} Os filtros atuais ocultam os resultados.`
               : `${revalidationMessage} Nenhum item foi carregado na tabela.`
           );
-        } else if (legacyMirrored > 0 && changed === 0 && nextRows.length === 0) {
+        } else if (legacyMirrored > 0 && changed === 0 && rows.length === 0) {
           setRevalidationInfo("");
           setError(`${legacyMirrored} agendamento(s) foram sincronizados, mas os checks de fechamento ainda não foram materializados.`);
         } else {
           setRevalidationInfo(revalidationMessage);
         }
-      } else {
-        setRevalidationInfo("");
       }
     } catch {
-      setRows([]);
-      setTotals(null);
       setRevalidationInfo("");
-      setError("Não foi possível carregar o fechamento agora.");
+      setError("Não foi possível revalidar o fechamento agora.");
     } finally {
       setLoading(false);
     }
-  }, [from, page, patientFilter, professionalFilter, quickFilter, serviceType, status, to]);
-
-  useEffect(() => {
-    void loadRows();
-  }, [loadRows]);
+  };
 
   const openDetail = async (row: ClosureRow) => {
     const appointmentId = String(row.appointment_id || "");
@@ -446,7 +453,7 @@ export function OperationalClosureCenter({
           if (detail?.appointment_id === appointmentId) setDetail(result.data);
         }
         setRevalidationInfo(result.message || "Atendimento revalidado.");
-        void loadRows();
+        void loadRows({ actionRevision: `${Date.now()}:${appointmentId}`, preserveMessage: true });
       }
     } finally {
       setActionLoadingId("");
@@ -468,33 +475,32 @@ export function OperationalClosureCenter({
       } else {
         setOverrideTarget(null);
         setOverrideReason("");
-        await loadRows();
+        await loadRows({ actionRevision: `${Date.now()}:${appointmentId}`, preserveMessage: true });
       }
     } finally {
       setActionLoadingId("");
     }
   };
 
-  const timeGroups = useMemo(() => {
-    const byPatient = new Map<string, number>();
-    const byProfessional = new Map<string, number>();
-    const byType = new Map<string, number>();
-    rows.forEach((row) => {
-      const minutes = Number(row.actual_minutes || 0);
-      if (!Number.isFinite(minutes) || minutes <= 0) return;
-      byPatient.set(row.patient_name || "Paciente", (byPatient.get(row.patient_name || "Paciente") || 0) + minutes);
-      byProfessional.set(row.professional_name || "Equipe", (byProfessional.get(row.professional_name || "Equipe") || 0) + minutes);
-      byType.set(row.service_type || "Sessão", (byType.get(row.service_type || "Sessão") || 0) + minutes);
-    });
-    const top = (map: Map<string, number>) =>
-      Array.from(map.entries())
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 3);
-    return { byPatient: top(byPatient), byProfessional: top(byProfessional), byType: top(byType) };
-  }, [rows]);
+  const correctionCards = useMemo(() => {
+    const countByLabel = (labels: string[]) => operationalRows.filter(({ viewModel }) => {
+      const pendingLabels = [...viewModel.operationalPendingChips, ...viewModel.configurationPendingChips].map((item) => item.label);
+      return labels.some((label) => pendingLabels.includes(label));
+    }).length;
+    return [
+      { label: "Sem assinatura", value: countByLabel(["Assinatura"]), tone: "text-rose-700", helper: "Coleta ou confirmação" },
+      { label: "Sem relatório", value: countByLabel(["Relatorio"]), tone: "text-orange-700", helper: "Evolução pendente" },
+      { label: "Sem duração real", value: countByLabel(["Duracao"]), tone: "text-amber-700", helper: "Tempo realizado" },
+      { label: "Sem guia/autorização", value: countByLabel(["Guia", "Autorizacao"]), tone: "text-violet-700", helper: "Dados do convênio" },
+      { label: "Sem contexto financeiro", value: countByLabel(["Pagador", "Plano financeiro"]), tone: "text-cyan-700", helper: "Pagador ou plano" },
+      { label: "Sem Procedimento/TUSS", value: countByLabel(["Procedimento", "TUSS"]), tone: "text-indigo-700", helper: "Configuração TUSS-ready" },
+      { label: "Sem registro profissional", value: countByLabel(["Registro profissional"]), tone: "text-slate-700", helper: "Cadastro profissional" },
+      { label: "Prontas para pré-faturamento", value: operationalRows.filter(({ viewModel }) => viewModel.isReadyForConference).length, tone: "text-emerald-700", helper: "Podem seguir etapa" },
+    ];
+  }, [operationalRows]);
 
   const kpis = [
-    { label: "Prontas", value: totals?.ready ?? 0, tone: "text-emerald-700" },
+    { label: "Prontas para conferência", value: totals?.ready ?? 0, tone: "text-emerald-700" },
     { label: "Pendências operacionais", value: totals?.pending ?? 0, tone: "text-rose-700" },
     { label: "Em aberto", value: totals?.open ?? totals?.draft ?? 0, tone: "text-sky-700" },
     { label: "Atenção", value: totals?.warning ?? 0, tone: "text-amber-700" },
@@ -514,12 +520,12 @@ export function OperationalClosureCenter({
               Fechamento operacional
             </div>
             <p className="mt-1 max-w-3xl text-sm text-slate-500">
-              Sessões preparadas para conferência administrativa, auditoria e pré-faturamento.
+              Fila de preparo operacional: corrija checklist, contexto financeiro e dados mínimos antes da conferência e pré-faturamento.
             </p>
           </div>
           <button
             type="button"
-            onClick={loadRows}
+            onClick={refreshRows}
             className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
             disabled={loading}
           >
@@ -668,24 +674,12 @@ export function OperationalClosureCenter({
         </div>
       </section>
 
-      <section className="grid gap-3 lg:grid-cols-3">
-        {[
-          ["Tempo por paciente", timeGroups.byPatient],
-          ["Tempo por profissional", timeGroups.byProfessional],
-          ["Tempo por especialidade", timeGroups.byType],
-        ].map(([label, values]) => (
-          <div key={String(label)} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
-            <div className="text-sm font-semibold text-slate-700">{String(label)}</div>
-            <div className="mt-2 space-y-2">
-              {(values as [string, number][]).length === 0 ? (
-                <div className="text-sm text-slate-500">Sem tempo realizado no período.</div>
-              ) : (values as [string, number][]).map(([name, minutes]) => (
-                <div key={name} className="flex items-center justify-between gap-3 text-sm">
-                  <span className="truncate text-slate-600">{name}</span>
-                  <span className="font-medium text-slate-800">{formatMinutes(minutes)}</span>
-                </div>
-              ))}
-            </div>
+      <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        {correctionCards.map((item) => (
+          <div key={item.label} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+            <div className="text-xs font-medium text-slate-500">{item.label}</div>
+            <div className={`mt-1 text-xl font-semibold ${item.tone}`}>{item.value}</div>
+            <div className="mt-1 text-xs text-slate-500">{item.helper}</div>
           </div>
         ))}
       </section>
@@ -705,84 +699,91 @@ export function OperationalClosureCenter({
         <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
           <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
             <Search size={16} className="text-slate-400" />
-            Sessões do período
+            Fila operacional do período
           </div>
           <div className="text-sm text-slate-500">Página {page}</div>
         </div>
         <div className="max-h-[70vh] overflow-auto">
-          <table className="min-w-full divide-y divide-slate-200 text-sm">
+          <table className="min-w-[1120px] divide-y divide-slate-200 text-sm">
             <thead className="sticky top-0 z-20 bg-slate-50 text-left text-xs font-semibold uppercase text-slate-500 shadow-[0_1px_0_0_rgba(148,163,184,0.35)]">
               <tr>
-                <th className="px-4 py-3">Data</th>
-                <th className="px-4 py-3">Paciente</th>
+                <th className="px-4 py-3">Data/hora</th>
+                <th className="px-4 py-3">Atendimento</th>
                 <th className="px-4 py-3">Profissional</th>
-                <th className="px-4 py-3">Tipo</th>
+                <th className="px-4 py-3">Status operacional</th>
+                <th className="px-4 py-3">Pendência principal</th>
+                <th className="px-4 py-3">Checklist resumido</th>
                 <th className="px-4 py-3">Procedimento/TUSS</th>
-                <th className="px-4 py-3">Pagador</th>
-                <th className="px-4 py-3">Plano</th>
-                <th className="px-4 py-3">Guia/autorização</th>
-                <th className="px-4 py-3">Planejado</th>
-                <th className="px-4 py-3">Realizado</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Pendências e configurações</th>
+                <th className="px-4 py-3">Pagador/contexto</th>
+                <th className="px-4 py-3">Próxima ação</th>
                 <th className="px-4 py-3 text-right">Ações</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loading ? (
                 <tr>
-                  <td colSpan={13} className="px-4 py-10 text-center text-slate-500">
+                  <td colSpan={10} className="px-4 py-10 text-center text-slate-500">
                     <Loader2 size={20} className="mx-auto mb-2 animate-spin" />
                     Carregando fechamento
                   </td>
                 </tr>
-              ) : rows.length === 0 ? (
+              ) : operationalRows.length === 0 ? (
                 <tr>
-                  <td colSpan={13} className="px-4 py-10 text-center text-slate-500">
+                  <td colSpan={10} className="px-4 py-10 text-center text-slate-500">
                     Nenhuma sessão encontrada no período.
                   </td>
                 </tr>
-              ) : rows.map((row) => {
-                const meta = statusMeta[normalizeStatus(row.readiness_status)];
-                const StatusIcon = meta.icon;
+              ) : operationalRows.map(({ row, viewModel }) => {
                 const isBusy = actionLoadingId === row.appointment_id;
-                const pendingDetails = classifyConferencePendingDetails(row);
+                const visibleChips = [...viewModel.operationalPendingChips, ...viewModel.configurationPendingChips];
                 return (
                   <tr key={String(row.appointment_id || `${row.patient_name}-${row.scheduled_start}`)} className="align-top hover:bg-slate-50/70">
                     <td className="px-4 py-3 text-slate-700">{formatDateTime(row.scheduled_start)}</td>
-                    <td className="px-4 py-3 font-medium text-slate-800">{row.patient_name || "Paciente"}</td>
-                    <td className="px-4 py-3 text-slate-600">{row.professional_name || "Equipe"}</td>
-                    <td className="px-4 py-3 text-slate-600">{row.service_type || "Sessão"}</td>
-                    <td className="px-4 py-3 text-slate-600">
-                      <div className="font-medium text-slate-700">{row.internal_procedure_name || "Procedimento nao configurado"}</div>
-                      <div className="mt-1 text-xs text-slate-500">{row.tuss_code ? `TUSS ${row.tuss_code}` : "TUSS: pendente de mapeamento"}</div>
-                    </td>
-                    <td className="px-4 py-3 text-slate-600">{appliedPayerLabel(row)}</td>
-                    <td className="px-4 py-3 text-slate-600">{row.financial_plan_name || "Não configurado"}</td>
-                    <td className="px-4 py-3 text-slate-600">
-                      {row.guide_number || row.authorization_code || Number(row.required_document_pending_count || 0) > 0
-                        ? [row.guide_number ? `Guia ${row.guide_number}` : "", row.authorization_code ? "Autorização informada" : "", Number(row.required_document_pending_count || 0) > 0 ? `${row.required_document_pending_count} doc.` : ""].filter(Boolean).join(" · ")
-                        : "Pendente/não exigida"}
-                    </td>
-                    <td className="px-4 py-3 text-slate-600">{formatMinutes(row.scheduled_minutes)}</td>
-                    <td className="px-4 py-3 text-slate-600">{formatMinutes(row.actual_minutes)}</td>
                     <td className="px-4 py-3">
-                      <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-xs font-medium ring-1 ${meta.className}`}>
-                        <StatusIcon size={13} />
-                        {meta.label}
+                      <div className="font-medium text-slate-800">{row.patient_name || "Paciente"}</div>
+                      <div className="mt-1 text-xs text-slate-500">
+                        {row.service_type || "Sessão"} · planejado {formatMinutes(row.scheduled_minutes)} · realizado {formatMinutes(row.actual_minutes)}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-slate-600">{row.professional_name || "Equipe"}</td>
+                    <td className="px-4 py-3">
+                      <span className={`inline-flex items-center rounded-full px-2 py-1 text-xs font-medium ring-1 ${operationalStatusClass(viewModel.operationalStatus)}`}>
+                        {viewModel.operationalStatusLabel}
                       </span>
                     </td>
+                    <td className="px-4 py-3 text-slate-700">
+                      <div className="font-medium">{viewModel.mainBlockingIssue}</div>
+                      {Array.isArray(row.main_issues) && row.main_issues.length > 0 && (
+                        <div className="mt-1 max-w-[220px] truncate text-xs text-slate-500">{row.main_issues[0]}</div>
+                      )}
+                    </td>
                     <td className="max-w-[260px] px-4 py-3 text-slate-600">
-                      <div>{getHumanIssueCount(row)}</div>
+                      <div>{viewModel.checklistSummary}</div>
                       <div className="mt-1 flex flex-wrap gap-1">
-                        {pendingDetails.visible.length === 0 ? (
+                        {visibleChips.length === 0 ? (
                           <span className="rounded-full bg-emerald-50 px-2 py-1 text-xs text-emerald-700">Sem pendência</span>
-                        ) : pendingDetails.visible.slice(0, 4).map((item) => (
+                        ) : visibleChips.slice(0, 3).map((item) => (
                           <span key={`${item.category}-${item.label}`} className={`rounded-full px-2 py-1 text-xs ring-1 ${pendingChipClass(item)}`}>{pendingChipLabel(item)}</span>
                         ))}
                       </div>
-                      {Array.isArray(row.main_issues) && row.main_issues.length > 0 && (
-                        <div className="mt-1 truncate text-xs text-slate-500">{row.main_issues[0]}</div>
+                    </td>
+                    <td className="px-4 py-3 text-slate-600">
+                      <div className="font-medium text-slate-700">{row.internal_procedure_name || "Procedimento não configurado"}</div>
+                      <div className="mt-1 text-xs text-slate-500">{row.tuss_code ? `TUSS ${row.tuss_code}` : "TUSS: pendente de mapeamento"}</div>
+                    </td>
+                    <td className="px-4 py-3 text-slate-600">
+                      <div>{appliedPayerLabel(row)}</div>
+                      <div className="mt-1 text-xs text-slate-500">{row.financial_plan_name || "Plano não configurado"}</div>
+                      {!hasAppliedPayer(row) && row.suggested_payer_name && (
+                        <div className="mt-1 text-xs text-sky-700">Sugerido: {row.suggested_payer_name}</div>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-slate-700">
+                      <div className="font-medium">{viewModel.nextAction}</div>
+                      {viewModel.isReadyForConference && (
+                        <span className="mt-1 inline-flex rounded-full bg-emerald-50 px-2 py-1 text-xs text-emerald-700 ring-1 ring-emerald-100">
+                          Pronta para pré-faturamento
+                        </span>
                       )}
                     </td>
                     <td className="px-4 py-3">
@@ -796,7 +797,7 @@ export function OperationalClosureCenter({
                         <button type="button" className="rounded-md border border-slate-200 p-2 text-slate-600 hover:bg-white" onClick={() => onOpenReport?.(row)} title="Abrir relatório">
                           <FileText size={16} />
                         </button>
-                        <button type="button" className="rounded-md border border-slate-200 p-2 text-slate-600 hover:bg-white disabled:opacity-60" onClick={() => revalidate(row)} disabled={isBusy} title="Revalidar">
+                        <button type="button" className="rounded-md border border-slate-200 p-2 text-slate-600 hover:bg-white disabled:opacity-60" onClick={() => revalidate(row)} disabled={isBusy || !viewModel.canRevalidate} title="Revalidar">
                           {isBusy ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
                         </button>
                         {canOverride && (
