@@ -49,6 +49,8 @@ type SendAppointmentNotificationParams = {
   patientEmail?: string | null;
   appointment: {
     id: string;
+    clinicId?: string | null;
+    professionalId?: string | null;
     scheduledAt?: string | null;
     timeLabel?: string | null;
     dateLabel?: string | null;
@@ -60,6 +62,8 @@ type SendAppointmentNotificationParams = {
     professionalDisplayName?: string | null;
     professionalLogoUrl?: string | null;
   };
+  clinicId?: string | null;
+  professionalId?: string | null;
   clinicName?: string | null;
   clinicLogoUrl?: string | null;
   clinicPrimaryColor?: string | null;
@@ -591,6 +595,8 @@ export async function sendAppointmentNotification(params: SendAppointmentNotific
   const dateLabel = sanitizeText(params.appointment.dateLabel, 80);
   const scheduledAt = sanitizeText(params.appointment.scheduledAt, 120);
   const reminderKind = sanitizeText(params.reminderKind || params.appointment.reminderKind || 'appointment', 40);
+  const clinicId = sanitizeText(params.appointment.clinicId || params.clinicId, 120);
+  const professionalId = sanitizeText(params.appointment.professionalId || params.professionalId, 120);
   const clinicName = sanitizeText(params.appointment.clinicName || params.clinicName, 160);
   const clinicLogoUrl = sanitizeText(params.appointment.clinicLogoUrl || params.clinicLogoUrl, 2000);
   const appointmentQuery = new URLSearchParams({
@@ -601,17 +607,29 @@ export async function sendAppointmentNotification(params: SendAppointmentNotific
   }).toString();
   const branding = resolveBrandingContext({
     clinic: {
+      id: clinicId || null,
       displayName: clinicName,
       logoUrl: clinicLogoUrl,
       primaryColor: params.appointment.clinicPrimaryColor || params.clinicPrimaryColor,
     },
     professional: {
+      id: professionalId || null,
       displayName: params.appointment.professionalDisplayName || params.professionalDisplayName,
       logoUrl: params.appointment.professionalLogoUrl || params.professionalLogoUrl,
     },
+    allowProfessionalFallback: !isUuid(clinicId),
     fallbackName: 'Verto',
     fallbackLogoUrl: '/verto-3d-transparent.png',
   });
+  if (process.env.NODE_ENV !== 'production') {
+    logger.log?.('[PushBranding] context resolved.', {
+      appointmentId: params.appointment.id,
+      brandingSourceType: branding.sourceType,
+      displayName: branding.displayName,
+      clinicId: isUuid(clinicId) ? clinicId : null,
+      professionalId: isUuid(professionalId) ? professionalId : null
+    });
+  }
   const notificationPayload = buildPatientReminderNotificationPayload({
     appointmentId: params.appointment.id,
     scheduledAt: scheduledAt || null,

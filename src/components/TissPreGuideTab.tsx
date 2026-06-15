@@ -704,7 +704,7 @@ export function TissPreGuideTab({
 
                   <Section title="Prestador / clínica" icon={Building2}>
                     <DetailField label="Razão social" value={fieldValue(snapshot.provider?.legalName)} />
-                    <DetailField label="Nome fantasia" value={fieldValue(snapshot.provider?.tradeName || detail.clinicName)} />
+                    <DetailField label="Nome fantasia" value={fieldValue(snapshot.provider?.tradeName)} />
                     <DetailField label="CPF/CNPJ" value={fieldValue(snapshot.provider?.documentNumber)} />
                     <DetailField label="CNES" value={fieldValue(snapshot.provider?.cnesCode)} />
                     <DetailField label="Código do prestador" value={fieldValue(snapshot.provider?.providerCode)} />

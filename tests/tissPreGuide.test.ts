@@ -123,6 +123,37 @@ test('atendimento de convênio com dados mínimos produz Pré-guia válida', () 
   assert.equal(result.snapshot.payer.id, 'payer-1');
 });
 
+test('pre-guia usa dados do prestador da clinica e nao o nome do profissional', () => {
+  const result = validateTissPreGuide({
+    ...validInput,
+    clinic: { id: 'clinic-1', name: 'Mateus' },
+    clinicProfile: {
+      id: 'clinic-profile-1',
+      legal_name: 'Clinica Correta Ltda.',
+      trade_name: '',
+      document_type: 'CNPJ',
+      document_number: '11111111111111',
+      provider_code: 'PREST-1',
+      cnes_code: 'CNES-1',
+    },
+    professionalProfile: {
+      ...validInput.professionalProfile,
+      display_name: 'Terapeuta Mateus',
+    },
+    professional: {
+      id: 'professional-1',
+      name: 'Terapeuta Mateus',
+    },
+  });
+
+  assert.equal(result.snapshot.provider.legalName, 'Clinica Correta Ltda.');
+  assert.equal(result.snapshot.provider.documentNumber, '11111111111111');
+  assert.equal(result.snapshot.provider.tradeName, null);
+  assert.equal(result.snapshot.provider.tradeNameSource, 'blocked_professional_name_match');
+  assert.equal(result.snapshot.provider.didUseProfessionalAsClinicFallback, false);
+  assert.equal(result.snapshot.professional.name, 'Terapeuta Mateus');
+});
+
 test('sem payer_id real não produz Pré-guia faturável válida', () => {
   const result = validateTissPreGuide({
     ...validInput,
@@ -258,6 +289,9 @@ test('migration é aditiva, multi-clínica e não implementa geração eletrôni
 test('backend persiste de forma idempotente pelo appointment e revalida só por ação', () => {
   assert.match(serverCode, /const buildAndPersistTissPreGuideForAppointment/);
   assert.match(serverCode, /\.from\('appointment_tiss_pre_guides'\)[\s\S]*?\.upsert\(payload, \{ onConflict: 'organization_id,appointment_id' \}\)/);
+  assert.match(serverCode, /clinic:\s*clinicResult\.data \|\| null/);
+  assert.match(serverCode, /clinic_name_snapshot:\s*sanitizeString\(provider\.tradeName \|\| provider\.legalName, 180\)/);
+  assert.doesNotMatch(serverCode, /clinic_name_snapshot:\s*sanitizeString\(provider\.tradeName \|\| provider\.legalName \|\| clinicResult\.data\?\.name/);
   const centralRevalidation = serverCode.slice(
     serverCode.indexOf('const revalidateAppointmentBillingForAppointment'),
     serverCode.indexOf('const markTissPreGuidesStale')
@@ -349,6 +383,24 @@ test('endpoints protegem perfis e Pré-guias com autenticação, papel e tenant'
   assert.doesNotMatch(serverCode.slice(serverCode.indexOf("app.get('/api/tiss/pre-guides'"), serverCode.indexOf("app.get('/api/admin/payers'")), /\.select\('\*'\)/);
 });
 
+test('perfil TISS do prestador salva e le clinic_tiss_profiles sem substituir por profissional', () => {
+  const providerReadRoute = serverCode.slice(
+    serverCode.indexOf("app.get('/api/admin/tiss/provider-profile'"),
+    serverCode.indexOf("app.patch('/api/admin/tiss/provider-profile'")
+  );
+  const providerPatchRoute = serverCode.slice(
+    serverCode.indexOf("app.patch('/api/admin/tiss/provider-profile'"),
+    serverCode.indexOf("app.get('/api/admin/tiss/payer-profiles/:payerId'")
+  );
+  assert.match(providerReadRoute, /fetchTissPreGuideProfile\('clinic_tiss_profiles', CLINIC_TISS_PROFILE_SELECT, organizationId\)/);
+  assert.match(providerPatchRoute, /\.from\('clinic_tiss_profiles'\)/);
+  assert.match(providerPatchRoute, /created_at:\s*existingProfile\?\.created_at \|\| now/);
+  assert.match(providerPatchRoute, /document_number:\s*sanitizeString\(req\.body\?\.documentNumber/);
+  assert.match(providerPatchRoute, /cnes_code:\s*sanitizeString\(req\.body\?\.cnesCode/);
+  assert.match(providerPatchRoute, /provider_code:\s*sanitizeString\(req\.body\?\.providerCode/);
+  assert.doesNotMatch(providerPatchRoute, /professionalName|professional_name|user\.name/);
+});
+
 test('frontend oferece cards, paginação, detalhe sob demanda e nenhuma ação de XML', () => {
   assert.match(conferenceCode, /"preGuides", "Pré-guias TISS"/);
   assert.match(conferenceCode, /<TissPreGuideTab/);
@@ -380,6 +432,8 @@ test('frontend oferece cards, paginação, detalhe sob demanda e nenhuma ação 
   assert.match(preGuideUiCode, /Salvar e revalidar/);
   assert.match(preGuideUiCode, /Esta é uma pré-guia para validação interna\. XML TISS ainda não foi gerado\./);
   assert.match(preGuideUiCode, /sticky top-0 z-20/);
+  assert.match(preGuideUiCode, /snapshot\.provider\?\.tradeName/);
+  assert.doesNotMatch(preGuideUiCode, /snapshot\.provider\?\.tradeName \|\| detail\.clinicName/);
   assert.match(preGuideUiCode, /<ActiveFilterBanner/);
   assert.match(preGuideUiCode, /missingPreGuides/);
   assert.match(preGuideUiCode, /stalePreGuides/);

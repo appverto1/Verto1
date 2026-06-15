@@ -736,6 +736,7 @@ async function runAppointmentReminderJob(
         const clinicLogoUrl = appointment.clinicLogoUrl || clinicBranding.clinicLogoUrl;
         const branding = resolveBrandingContext({
           clinic: {
+            id: appointment.clinicId || null,
             displayName: clinicName,
             logoUrl: clinicLogoUrl,
           },
@@ -743,6 +744,7 @@ async function runAppointmentReminderJob(
             displayName: appointment.professionalDisplayName,
             logoUrl: appointment.professionalLogoUrl,
           },
+          allowProfessionalFallback: !isUuid(appointment.clinicId),
           fallbackName: 'Verto',
           fallbackLogoUrl: '/verto-3d-transparent.png',
         });
@@ -774,6 +776,7 @@ async function runAppointmentReminderJob(
                 id: appointment.appointmentId,
                 scheduledAt: appointment.scheduledAt,
                 reminderKind: dueReminder.kind,
+                clinicId: appointment.clinicId || null,
                 dateLabel: scheduled.isValid() ? scheduled.format('DD/MM/YYYY') : null,
                 timeLabel: scheduled.isValid() ? scheduled.format('HH:mm') : null,
                 clinicName,
@@ -782,6 +785,7 @@ async function runAppointmentReminderJob(
                 professionalDisplayName: appointment.professionalDisplayName,
                 professionalLogoUrl: appointment.professionalLogoUrl
               },
+              clinicId: appointment.clinicId || null,
               reminderKind: dueReminder.kind,
               logger: options.logger
             })

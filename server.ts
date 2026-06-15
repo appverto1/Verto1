@@ -15734,6 +15734,23 @@ async function startServer() {
     };
   };
 
+  const normalizeBrandingIdentity = (value: unknown) =>
+    sanitizeString(value, 240)
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim();
+
+  const looksLikeProfessionalNameFallback = (candidate: unknown, professionalName: unknown) => {
+    const clinicName = normalizeBrandingIdentity(candidate);
+    const executorName = normalizeBrandingIdentity(professionalName);
+    if (!clinicName || !executorName) return false;
+    if (clinicName === executorName) return true;
+    const clinicTokens = clinicName.split(/\s+/).filter(Boolean);
+    return clinicTokens.length === 1 && executorName.split(/\s+/).includes(clinicTokens[0]);
+  };
+
   const buildFamilyAppointmentDisplayContext = async (appointment: any) => {
     const source = parseAppointmentSourcePayloadForFamilyView(appointment?.source_payload || appointment?.sourcePayload);
     const clinicId = sanitizeString(
@@ -15748,6 +15765,7 @@ async function startServer() {
       120
     );
     const clinicBranding = await readClinicBrandingForFamilyView(clinicId);
+    const professional = await resolveAppointmentProfessionalForFamilyView(appointment);
     const explicitClinicName = sanitizeString(
       appointment?.clinic_display_name ||
         appointment?.clinicDisplayName ||
@@ -15759,9 +15777,12 @@ async function startServer() {
         source?.clinicName,
       160
     );
-    const clinicName = clinicBranding.displayName !== 'sua clínica'
+    const rawClinicName = clinicBranding.displayName !== 'sua clínica'
       ? clinicBranding.displayName
       : explicitClinicName || clinicBranding.displayName;
+    const clinicName = looksLikeProfessionalNameFallback(rawClinicName, professional.professionalName)
+      ? 'sua clínica'
+      : rawClinicName;
     const clinicLogoUrl =
       clinicBranding.logoUrl ||
       sanitizeSessionUrl(
@@ -15771,7 +15792,6 @@ async function startServer() {
           source?.clinicLogoUrl
       ) ||
       null;
-    const professional = await resolveAppointmentProfessionalForFamilyView(appointment);
     const patientId = sanitizeString(appointment?.patient_id || appointment?.patientId || source?.patient_id || source?.patientId, 120);
     const patientName = sanitizeString(
       appointment?.patient_name ||
@@ -16816,12 +16836,14 @@ async function startServer() {
           timeLabel: sanitizeString(req.body?.timeLabel || req.body?.time_label, 80) || null,
           dateLabel: sanitizeString(req.body?.dateLabel || req.body?.date_label, 80) || null,
           reminderKind: 'manual',
+          clinicId: reminderClinicId,
           clinicName: clinicBranding.clinicName,
           clinicLogoUrl: clinicBranding.clinicLogoUrl,
           patientName,
           professionalDisplayName,
           professionalLogoUrl
         },
+        clinicId: reminderClinicId,
         reminderKind: 'manual',
         logger: console
       });
@@ -32000,6 +32022,7 @@ async function startServer() {
       service,
       tussCode,
       mapping,
+      clinic: clinicResult.data || null,
       clinicProfile,
       payerProfile,
       professionalProfile,
@@ -32044,7 +32067,7 @@ async function startServer() {
       patient_name_snapshot: sanitizeString(beneficiary.name || patientResult.data?.name, 180) || 'Paciente',
       professional_name_snapshot: sanitizeString(professionalSnapshot.name || professional?.name, 180) || 'Equipe',
       payer_name_snapshot: sanitizeString(payerSnapshot.name || payer?.name, 180) || 'Sem pagador',
-      clinic_name_snapshot: sanitizeString(provider.tradeName || provider.legalName || clinicResult.data?.name, 180) || null,
+      clinic_name_snapshot: sanitizeString(provider.tradeName || provider.legalName, 180) || null,
       status: validation.status,
       validation_errors: validation.errors,
       validation_warnings: validation.warnings,
@@ -32057,6 +32080,20 @@ async function startServer() {
       updated_at: now,
       last_validated_at: now
     });
+    if (process.env.NODE_ENV !== 'production') {
+      console.info('[TissPreGuide] provider source resolved:', {
+        organizationId,
+        clinicId: organizationId,
+        appointmentId,
+        resolvedClinicBillingProfileId: sanitizeString(clinicProfile?.id, 120) || null,
+        hasClinicLegalName: Boolean(provider.legalName),
+        hasClinicTradeName: Boolean(provider.tradeName),
+        sourceOfTradeName: sanitizeString(provider.tradeNameSource, 80) || null,
+        professionalId: isUuid(professionalId) ? professionalId : null,
+        professionalName: sanitizeString(professionalSnapshot.name || professional?.name, 180) || null,
+        didUseProfessionalAsClinicFallback: Boolean(provider.didUseProfessionalAsClinicFallback)
+      });
+    }
     const persisted = await supabase
       .from('appointment_tiss_pre_guides')
       .upsert(payload, { onConflict: 'organization_id,appointment_id' })
@@ -32357,6 +32394,7 @@ async function startServer() {
       if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
       const now = new Date().toISOString();
       const userId = sanitizeString(req.session.user?.id, 120);
+      const existingProfile = await fetchTissPreGuideProfile('clinic_tiss_profiles', CLINIC_TISS_PROFILE_SELECT, organizationId);
       const payload = cleanObject({
         organization_id: organizationId,
         clinic_id: organizationId,
@@ -32377,10 +32415,11 @@ async function startServer() {
         state: sanitizeString(req.body?.state, 2).toUpperCase() || null,
         postal_code: sanitizeString(req.body?.postalCode ?? req.body?.postal_code, 20) || null,
         phone: sanitizeString(req.body?.phone, 40) || null,
-      email: sanitizeEmail(req.body?.email) || null,
-      active: req.body?.active !== false,
-      updated_by: isUuid(userId) ? userId : null,
-      updated_at: now
+        email: sanitizeEmail(req.body?.email) || null,
+        active: req.body?.active !== false,
+        created_at: existingProfile?.created_at || now,
+        updated_by: isUuid(userId) ? userId : null,
+        updated_at: now
       });
       const { data, error } = await supabase
         .from('clinic_tiss_profiles')

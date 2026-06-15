@@ -1494,10 +1494,12 @@ export default function App() {
     scheduledAt: string;
     dateLabel: string;
     timeLabel: string;
+    clinicId: string;
     clinicName: string;
     clinicLogoUrl: string;
     clinicPrimaryColor: string;
     patientName: string;
+    professionalId: string;
     professionalName: string;
     professionalLogoUrl: string;
     professionalRole: string;
@@ -1669,14 +1671,17 @@ export default function App() {
     }
     const branding = resolveBrandingContext({
       clinic: {
+        id: appointmentConfirmation.clinicId,
         displayName: appointmentConfirmation.clinicName,
         logoUrl: appointmentConfirmation.clinicLogoUrl,
         primaryColor: appointmentConfirmation.clinicPrimaryColor,
       },
       professional: {
+        id: appointmentConfirmation.professionalId,
         displayName: appointmentConfirmation.professionalName,
         logoUrl: appointmentConfirmation.professionalLogoUrl,
       },
+      allowProfessionalFallback: !appointmentConfirmation.clinicId,
       fallbackName: 'Verto',
       fallbackLogoUrl: '/verto-3d-transparent.png',
     });
@@ -1872,10 +1877,12 @@ export default function App() {
     setAppointmentConfirmation({
       appointmentId,
       ...fallbackLabels,
+      clinicId: '',
       clinicName: '',
       clinicLogoUrl: '',
       clinicPrimaryColor: '',
       patientName: '',
+      professionalId: '',
       professionalName: '',
       professionalLogoUrl: '',
       professionalRole: '',
@@ -1904,10 +1911,12 @@ export default function App() {
                   ...prev,
                   ...labels,
                   scheduledAt: String(result.appointment?.scheduledAt || result.appointment?.scheduled_at || prev.scheduledAt || '').trim(),
+                  clinicId: String(result.appointment?.clinic?.id || result.appointment?.clinicId || result.appointment?.clinic_id || '').trim(),
                   clinicName: String(result.appointment?.clinic?.displayName || result.appointment?.clinicName || result.appointment?.clinic_name || '').trim(),
                   clinicLogoUrl: String(result.appointment?.clinic?.logoUrl || result.appointment?.clinicLogoUrl || result.appointment?.clinic_logo_url || '').trim(),
                   clinicPrimaryColor: String(result.appointment?.clinic?.primaryColor || result.appointment?.clinicPrimaryColor || result.appointment?.clinic_primary_color || '').trim(),
                   patientName: String(result.appointment?.patient?.name || result.appointment?.patientName || result.appointment?.patient_name || '').trim(),
+                  professionalId: String(result.appointment?.professionalId || result.appointment?.professional_id || '').trim(),
                   professionalName: String(result.appointment?.professionalName || result.appointment?.professional_name || '').trim(),
                   professionalLogoUrl: String(result.appointment?.professionalLogoUrl || result.appointment?.professional_logo_url || result.appointment?.professionalAvatarUrl || result.appointment?.professional_avatar_url || '').trim(),
                   professionalRole: String(result.appointment?.professionalRole || result.appointment?.professional_role || '').trim(),

@@ -11,6 +11,7 @@ export type BrandingContext = {
 type BrandingInput = {
   clinic?: Record<string, any> | null;
   professional?: Record<string, any> | null;
+  allowProfessionalFallback?: boolean;
   fallbackName?: string;
   fallbackLogoUrl?: string | null;
   fallbackAccentColor?: string | null;
@@ -67,6 +68,23 @@ const isGenericClinicName = (value: string) =>
       .toLowerCase()
   );
 
+const normalizedIdentity = (value: unknown) =>
+  sanitizeText(value, 240)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+
+const namesLookLikeSamePerson = (left: unknown, right: unknown) => {
+  const clinicName = normalizedIdentity(left);
+  const professionalName = normalizedIdentity(right);
+  if (!clinicName || !professionalName) return false;
+  if (clinicName === professionalName) return true;
+  const clinicTokens = clinicName.split(/\s+/).filter(Boolean);
+  return clinicTokens.length === 1 && professionalName.split(/\s+/).includes(clinicTokens[0]);
+};
+
 export function buildBrandingInitials(value: unknown) {
   const words = sanitizeText(value || "Verto", 120)
     .split(/\s+/)
@@ -79,6 +97,21 @@ export function buildBrandingInitials(value: unknown) {
 export function resolveBrandingContext(input: BrandingInput = {}): BrandingContext {
   const clinic = input.clinic || {};
   const professional = input.professional || {};
+  const hasClinicIdentity = Boolean(firstText(
+    clinic.id,
+    clinic.clinic_id,
+    clinic.clinicId,
+    clinic.organization_id,
+    clinic.organizationId
+  ));
+  const professionalName = firstText(
+    professional.professional_display_name,
+    professional.professionalDisplayName,
+    professional.displayName,
+    professional.fullName,
+    professional.full_name,
+    professional.name
+  );
   const clinicName = firstText(
     clinic.clinic_display_name,
     clinic.clinicDisplayName,
@@ -95,8 +128,12 @@ export function resolveBrandingContext(input: BrandingInput = {}): BrandingConte
     clinic.logo
   );
   const clinicAccent = firstText(clinic.clinic_primary_color, clinic.clinicPrimaryColor, clinic.primaryColor, clinic.primary_color);
-  if ((clinicName && !isGenericClinicName(clinicName)) || clinicLogoUrl) {
-    const displayName = clinicName && !isGenericClinicName(clinicName) ? clinicName : "Clínica";
+  const clinicNameIsUsable =
+    clinicName &&
+    !isGenericClinicName(clinicName) &&
+    !(hasClinicIdentity && namesLookLikeSamePerson(clinicName, professionalName));
+  if (clinicNameIsUsable || clinicLogoUrl) {
+    const displayName = clinicNameIsUsable ? clinicName : "Clínica";
     return {
       displayName,
       logoUrl: clinicLogoUrl || null,
@@ -106,14 +143,6 @@ export function resolveBrandingContext(input: BrandingInput = {}): BrandingConte
     };
   }
 
-  const professionalName = firstText(
-    professional.professional_display_name,
-    professional.professionalDisplayName,
-    professional.displayName,
-    professional.fullName,
-    professional.full_name,
-    professional.name
-  );
   const professionalLogoUrl = firstUrl(
     professional.professional_logo_url,
     professional.professionalLogoUrl,
@@ -125,7 +154,8 @@ export function resolveBrandingContext(input: BrandingInput = {}): BrandingConte
     professional.profile_picture
   );
   const professionalAccent = firstText(professional.professional_primary_color, professional.primaryColor, professional.primary_color);
-  if (professionalName || professionalLogoUrl) {
+  const canUseProfessionalFallback = input.allowProfessionalFallback ?? !hasClinicIdentity;
+  if (canUseProfessionalFallback && (professionalName || professionalLogoUrl)) {
     const displayName = professionalName || "Profissional";
     return {
       displayName,

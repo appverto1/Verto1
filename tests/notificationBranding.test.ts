@@ -53,6 +53,20 @@ assert.match(clinicPush.body, /confirmar, remarcar ou cancelar/);
 assert.doesNotMatch(clinicPush.title, /Verto/);
 assert.doesNotMatch(clinicPush.body, /abrir a Verto/i);
 
+const ambiguousClinicBranding = resolveBrandingContext({
+  clinic: {
+    id: 'clinic-1',
+    displayName: 'Mateus',
+  },
+  professional: {
+    displayName: 'Terapeuta Mateus',
+  },
+  fallbackName: 'Verto',
+});
+
+assert.equal(ambiguousClinicBranding.sourceType, 'verto_fallback');
+assert.equal(ambiguousClinicBranding.displayName, 'Verto');
+
 const clinicModal = buildPatientReminderModalViewModel({
   appointmentId: 'appt-1',
   scheduledAt,
@@ -107,14 +121,18 @@ const docsCode = read('docs/notification-branding.md');
 
 assert.match(pushServiceCode, /resolveBrandingContext/);
 assert.match(pushServiceCode, /buildPatientReminderNotificationPayload/);
+assert.match(pushServiceCode, /allowProfessionalFallback:\s*!isUuid\(clinicId\)/);
+assert.match(pushServiceCode, /clinic:\s*\{[\s\S]*?id:\s*clinicId \|\| null/);
 assert.match(serviceWorkerCode, /brandName/);
 assert.match(serviceWorkerCode, /notification_action/);
 assert.doesNotMatch(serviceWorkerCode, /Lembrete de Consulta - Verto/);
 assert.match(appCode, /buildPatientReminderModalViewModel/);
+assert.match(appCode, /allowProfessionalFallback:\s*!appointmentConfirmation\.clinicId/);
 assert.match(appCode, /friendlyPatientNotificationError/);
 assert.match(appCode, /Tentar novamente/);
 assert.match(appCode, /appointmentConfirmationRetry/);
 assert.match(cronCode, /patient_name, patient_email, therapist_name, source_payload/);
+assert.match(cronCode, /allowProfessionalFallback:\s*!isUuid\(appointment\.clinicId\)/);
 assert.match(cronCode, /professionalDisplayName: appointment\.professionalDisplayName/);
 assert.match(cronCode, /patientName: appointment\.patientName/);
 assert.match(docsCode, /dominio\/origin/);

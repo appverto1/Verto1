@@ -16,6 +16,7 @@ export type TissPreGuideValidationInput = {
   service?: Record<string, any> | null;
   tussCode?: Record<string, any> | null;
   mapping?: Record<string, any> | null;
+  clinic?: Record<string, any> | null;
   clinicProfile?: Record<string, any> | null;
   payerProfile?: Record<string, any> | null;
   professionalProfile?: Record<string, any> | null;
@@ -48,6 +49,62 @@ export type TissPreGuideEligibilityResult = {
 
 const text = (value: unknown) => String(value ?? '').trim();
 const positiveNumber = (value: unknown) => Number.isFinite(Number(value)) && Number(value) > 0;
+const normalizedIdentity = (value: unknown) =>
+  text(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+
+const isLikelyProfessionalNameFallback = (candidate: unknown, professionalName: unknown) => {
+  const clinicName = normalizedIdentity(candidate);
+  const executorName = normalizedIdentity(professionalName);
+  if (!clinicName || !executorName) return false;
+  if (clinicName === executorName) return true;
+  const clinicTokens = clinicName.split(/\s+/).filter(Boolean);
+  return clinicTokens.length === 1 && executorName.split(/\s+/).includes(clinicTokens[0]);
+};
+
+const resolveProviderTradeName = (input: {
+  clinicProfile: Record<string, any>;
+  clinic: Record<string, any>;
+  professionalProfile: Record<string, any>;
+  professional: Record<string, any>;
+}) => {
+  const profileTradeName = text(input.clinicProfile.trade_name);
+  if (profileTradeName) {
+    return {
+      value: profileTradeName,
+      source: 'clinic_tiss_profiles.trade_name',
+      didUseProfessionalAsClinicFallback: false,
+    };
+  }
+
+  const clinicName = text(
+    input.clinic.trade_name ||
+      input.clinic.tradeName ||
+      input.clinic.display_name ||
+      input.clinic.displayName ||
+      input.clinic.name ||
+      input.clinic.clinic_name ||
+      input.clinic.clinicName,
+  );
+  const professionalName = text(input.professionalProfile.display_name || input.professional.name);
+  if (clinicName && !isLikelyProfessionalNameFallback(clinicName, professionalName)) {
+    return {
+      value: clinicName,
+      source: 'clinics.name',
+      didUseProfessionalAsClinicFallback: false,
+    };
+  }
+
+  return {
+    value: '',
+    source: clinicName ? 'blocked_professional_name_match' : null,
+    didUseProfessionalAsClinicFallback: false,
+  };
+};
 
 const normalizeContext = (value: unknown) =>
   text(value)
@@ -170,6 +227,7 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
   const service = input.service || {};
   const tussCode = input.tussCode || {};
   const mapping = input.mapping || {};
+  const clinic = input.clinic || {};
   const clinicProfile = input.clinicProfile || {};
   const payerProfile = input.payerProfile || {};
   const professionalProfile = input.professionalProfile || {};
@@ -320,6 +378,13 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
     addIssue(errors, 'AUTHORIZATION_EXPIRED', 'authorization_valid_until', tissPreGuideIssueLabel('AUTHORIZATION_EXPIRED'), 'authorization');
   }
 
+  const providerTradeName = resolveProviderTradeName({
+    clinicProfile,
+    clinic,
+    professionalProfile,
+    professional,
+  });
+
   return {
     status: errors.length === 0 ? 'valid' : 'pending_data',
     guideType,
@@ -343,7 +408,9 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
       provider: {
         profileId: text(clinicProfile.id) || null,
         legalName: text(clinicProfile.legal_name) || null,
-        tradeName: text(clinicProfile.trade_name) || null,
+        tradeName: providerTradeName.value || null,
+        tradeNameSource: providerTradeName.source,
+        didUseProfessionalAsClinicFallback: providerTradeName.didUseProfessionalAsClinicFallback,
         documentType: text(clinicProfile.document_type) || null,
         documentNumber: text(clinicProfile.document_number) || null,
         cnesCode: text(clinicProfile.cnes_code) || null,
