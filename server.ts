@@ -9312,27 +9312,131 @@ async function updatePatientStatusIfNeeded(user: any): Promise<'active' | 'inact
 }
 
 async function ensureClinicAndMembershipForCoordinator(userId: string, clinicName?: string | null) {
+  const safeUserId = sanitizeString(userId, 120);
+  if (!safeUserId) return;
   const safeClinicName = sanitizeString(clinicName, 160) || 'Minha Clinica';
+  const now = new Date().toISOString();
 
-  await supabase
-    .from('clinics')
-    .upsert([{
-      id: userId,
-      owner_user_id: userId,
-      name: safeClinicName,
-      created_by: existing.data?.created_by || null,
-      created_at: existing.data?.created_at || new Date().toISOString()
-    }], { onConflict: 'id' });
+  let existingClinic: any = null;
+  let clinicSelectColumns = ['id', 'created_at', 'created_by'];
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const existingClinicResult = await supabase
+      .from('clinics')
+      .select(clinicSelectColumns.join(','))
+      .eq('id', safeUserId)
+      .maybeSingle();
 
-  await supabase
-    .from('clinic_memberships')
-    .upsert([{
-      user_id: userId,
-      clinic_id: userId,
-      role: 'coordinator',
-      status: 'active',
-      created_at: new Date().toISOString()
-    }], { onConflict: 'user_id,clinic_id' });
+    if (!existingClinicResult.error) {
+      existingClinic = existingClinicResult.data || null;
+      break;
+    }
+
+    const missingColumn = extractMissingColumnName(existingClinicResult.error);
+    if (missingColumn && clinicSelectColumns.includes(missingColumn)) {
+      clinicSelectColumns = clinicSelectColumns.filter((column) => column !== missingColumn);
+      continue;
+    }
+
+    if (!hasMissingFinancialSchema(existingClinicResult.error) && !isMissingRelationError(existingClinicResult.error)) {
+      console.warn('[Auth] Não foi possível ler clínica do coordenador antes do login:', existingClinicResult.error?.message || existingClinicResult.error);
+    }
+    break;
+  }
+
+  let clinicPayload: Record<string, any> = cleanObject({
+    id: safeUserId,
+    owner_user_id: safeUserId,
+    name: safeClinicName,
+    created_by: existingClinic?.created_by || (isUuid(safeUserId) ? safeUserId : null),
+    created_at: existingClinic?.created_at || now
+  });
+
+  for (let attempt = 0; attempt < 6 && Object.keys(clinicPayload).length > 0; attempt += 1) {
+    const clinicResult = await supabase
+      .from('clinics')
+      .upsert([clinicPayload], { onConflict: 'id' });
+
+    if (!clinicResult.error) break;
+
+    const missingColumn = extractMissingColumnName(clinicResult.error);
+    if (missingColumn && missingColumn in clinicPayload && missingColumn !== 'id' && missingColumn !== 'name') {
+      delete clinicPayload[missingColumn];
+      continue;
+    }
+
+    if (!hasMissingFinancialSchema(clinicResult.error) && !isMissingRelationError(clinicResult.error)) {
+      console.warn('[Auth] Não foi possível garantir clínica do coordenador:', clinicResult.error?.message || clinicResult.error);
+    }
+    break;
+  }
+
+  let membershipPayload: Record<string, any> = cleanObject({
+    user_id: safeUserId,
+    clinic_id: safeUserId,
+    role: 'coordinator',
+    status: 'active',
+    created_at: now
+  });
+
+  for (let attempt = 0; attempt < 6 && Object.keys(membershipPayload).length > 0; attempt += 1) {
+    const membershipResult = await supabase
+      .from('clinic_memberships')
+      .upsert([membershipPayload], { onConflict: 'user_id,clinic_id' });
+
+    if (!membershipResult.error) return;
+
+    const missingColumn = extractMissingColumnName(membershipResult.error);
+    if (missingColumn && missingColumn in membershipPayload && missingColumn !== 'user_id' && missingColumn !== 'clinic_id') {
+      delete membershipPayload[missingColumn];
+      continue;
+    }
+
+    const message = sanitizeString(membershipResult.error?.message || membershipResult.error, 500).toLowerCase();
+    const cannotUseCompositeUpsert =
+      sanitizeString(membershipResult.error?.code, 40).toUpperCase() === '42P10' ||
+      message.includes('no unique or exclusion constraint') ||
+      message.includes('there is no unique or exclusion constraint');
+
+    if (cannotUseCompositeUpsert) {
+      const existingMembership = await supabase
+        .from('clinic_memberships')
+        .select('user_id,clinic_id')
+        .eq('user_id', safeUserId)
+        .eq('clinic_id', safeUserId)
+        .limit(1);
+
+      if (!existingMembership.error && Array.isArray(existingMembership.data) && existingMembership.data.length > 0) {
+        const updatePayload = cleanObject({
+          role: membershipPayload.role,
+          status: membershipPayload.status
+        });
+        const updateResult = await supabase
+          .from('clinic_memberships')
+          .update(updatePayload)
+          .eq('user_id', safeUserId)
+          .eq('clinic_id', safeUserId);
+        if (!updateResult.error) return;
+        if (!hasMissingFinancialSchema(updateResult.error) && !isMissingRelationError(updateResult.error)) {
+          console.warn('[Auth] Não foi possível atualizar vínculo do coordenador:', updateResult.error?.message || updateResult.error);
+        }
+        return;
+      }
+
+      const insertResult = await supabase
+        .from('clinic_memberships')
+        .insert([membershipPayload]);
+      if (!insertResult.error) return;
+      if (!hasMissingFinancialSchema(insertResult.error) && !isMissingRelationError(insertResult.error)) {
+        console.warn('[Auth] Não foi possível criar vínculo do coordenador:', insertResult.error?.message || insertResult.error);
+      }
+      return;
+    }
+
+    if (!hasMissingFinancialSchema(membershipResult.error) && !isMissingRelationError(membershipResult.error)) {
+      console.warn('[Auth] Não foi possível garantir vínculo do coordenador:', membershipResult.error?.message || membershipResult.error);
+    }
+    return;
+  }
 }
 
 // Initialize Supabase Admin Client (using service role for backend access)

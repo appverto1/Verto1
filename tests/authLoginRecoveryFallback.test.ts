@@ -254,6 +254,17 @@ test('/api/auth/login degrades session store schema failures to bearer fallback 
   assert.ok(loginBlock.includes('isRecoverableSessionSaveError(err)'));
 });
 
+test('/api/auth/login coordinator workspace ensure does not reference undeclared existing row', () => {
+  const serverSource = fs.readFileSync(path.resolve('server.ts'), 'utf8');
+  const helperBlock = serverSource.match(/async function ensureClinicAndMembershipForCoordinator[\s\S]*?\n}\n\n\/\/ Initialize Supabase Admin Client/)?.[0] || '';
+
+  assert.ok(helperBlock.includes('const existingClinicResult = await supabase'));
+  assert.ok(helperBlock.includes('existingClinic?.created_by'));
+  assert.ok(!helperBlock.includes('existing.data'));
+  assert.ok(helperBlock.includes('clinicResult.error'));
+  assert.ok(helperBlock.includes('membershipResult.error'));
+});
+
 test('production health exposes short release id for deploy verification', () => {
   const serverSource = fs.readFileSync(path.resolve('server.ts'), 'utf8');
 
