@@ -498,7 +498,7 @@ export function TissPreGuideTab({
             title: "Cadastro global: Perfil faturável do profissional",
             subject: executantValue(detail?.professionalName),
             description: "Você está editando o perfil faturável global deste profissional. Essa alteração será reutilizada em todos os atendimentos deste profissional.",
-            full: "Abrir Equipe / Profissionais",
+            full: "Abrir perfil completo do profissional",
           }
         : null;
 
@@ -797,7 +797,7 @@ export function TissPreGuideTab({
                   <div className="mt-4 flex flex-wrap justify-end gap-2">
                     <button type="button" onClick={() => void openProfileEditor("provider")} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">Cadastro global do prestador</button>
                     <button type="button" onClick={() => void openProfileEditor("payer")} disabled={!detail.payerId} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-40">Cadastro global do pagador</button>
-                    <button type="button" onClick={() => void openProfileEditor("professional")} disabled={!detail.professionalId} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-40">Cadastro global do profissional</button>
+                    <button type="button" onClick={() => void openProfileEditor("professional")} disabled={!detail.professionalId} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-40">Editar perfil do profissional</button>
                     <button type="button" onClick={() => onOpenAppointment?.(detail)} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">Ir para atendimento</button>
                     <button type="button" onClick={() => void revalidate(detail)} disabled={revalidatingId === detail.appointmentId} className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-60">
                       {revalidatingId === detail.appointmentId ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}

@@ -17,7 +17,9 @@ const read = (file: string) => readFileSync(join(root, file), 'utf8');
 const coordinatorCode = read('src/components/CoordinatorDashboard.tsx');
 const settingsPanelCode = read('src/components/ClinicGlobalSettingsPanel.tsx');
 const tissPanelCode = read('src/components/BillingTissSettingsPanel.tsx');
+const dataServiceCode = read('src/services/dataService.ts');
 const serverCode = read('server.ts');
+const professionalSelfServiceMigration = read('supabase/migrations/20260615193000_professional_billing_profile_self_service.sql');
 
 const tests: Array<{ name: string; fn: () => void }> = [];
 const test = (name: string, fn: () => void) => tests.push({ name, fn });
@@ -144,6 +146,39 @@ test('painel Faturamento e TISS mantém formulários próprios para pagadores e 
   }
 });
 
+test('profissional edita o próprio perfil faturável e a clínica mantém gestão global', () => {
+  assert.match(settingsPanelCode, /Perfil profissional e faturável/);
+  assert.match(settingsPanelCode, /cadastro profissional e faturável global/);
+  assert.match(settingsPanelCode, /therapistDocumentType/);
+  assert.match(settingsPanelCode, /therapistProviderCode/);
+  assert.match(coordinatorCode, /dataService\.getOwnProfessionalBillingProfile\(\)/);
+  assert.match(coordinatorCode, /dataService\.updateOwnProfessionalBillingProfile/);
+  assert.match(coordinatorCode, /dataService\.updateProfessionalBillingProfile\(ownProfessionalId/);
+  assert.match(tissPanelCode, /Profissionais executantes/);
+  assert.match(tissPanelCode, /Abrir cadastro completo/);
+  assert.match(tissPanelCode, /!\["equipe", "team"\]\.includes\(name\)/);
+  assert.match(dataServiceCode, /\/api\/tiss\/professional-profile\/me/);
+});
+
+test('backend e RLS restringem autoedição ao próprio profissional', () => {
+  const ownReadStart = serverCode.indexOf("app.get('/api/tiss/professional-profile/me'");
+  const ownPatchStart = serverCode.indexOf("app.patch('/api/tiss/professional-profile/me'");
+  const adminListStart = serverCode.indexOf("app.get('/api/admin/tiss/professional-profiles'", ownPatchStart);
+  const ownReadRoute = serverCode.slice(ownReadStart, ownPatchStart);
+  const ownPatchRoute = serverCode.slice(ownPatchStart, adminListStart);
+  assert.match(ownReadRoute, /requireRoles\('therapist', 'coordinator', 'admin', 'owner'\)/);
+  assert.match(ownReadRoute, /professionalId = sanitizeString\(req\.session\.user\?\.id/);
+  assert.doesNotMatch(ownReadRoute, /req\.params\.professionalId/);
+  assert.match(ownPatchRoute, /professionalId = sanitizeString\(req\.session\.user\?\.id/);
+  assert.match(ownPatchRoute, /upsertProfessionalBillingProfile/);
+  assert.doesNotMatch(ownPatchRoute, /req\.params\.professionalId/);
+  assert.match(serverCode, /\['equipe', 'team'\]\.includes\(ownerName\)/);
+  assert.match(professionalSelfServiceMigration, /professional_id = auth\.uid\(\)/);
+  assert.match(professionalSelfServiceMigration, /u\.role = 'therapist'/);
+  assert.match(professionalSelfServiceMigration, /u\.clinic_id = professional_billing_profiles\.clinic_id/);
+  assert.doesNotMatch(professionalSelfServiceMigration, /using\s*\(\s*true\s*\)/i);
+});
+
 test('endpoints TISS normalizam documento, CNES, telefone, CEP e CBO no backend', () => {
   const providerRoute = sliceFrom(serverCode, "app.patch('/api/admin/tiss/provider-profile'", 3600);
   assert.match(providerRoute, /document_number:[\s\S]*replace\(\/\\D\/g, ''\)/);
@@ -151,9 +186,9 @@ test('endpoints TISS normalizam documento, CNES, telefone, CEP e CBO no backend'
   assert.match(providerRoute, /postal_code:[\s\S]*replace\(\/\\D\/g, ''\)/);
   assert.match(providerRoute, /phone:\s*sanitizePhone\(req\.body\?\.phone\)/);
 
-  const professionalRoute = sliceFrom(serverCode, "app.patch('/api/admin/tiss/professional-profiles/:professionalId'", 2600);
-  assert.match(professionalRoute, /document_number:[\s\S]*replace\(\/\\D\/g, ''\)/);
-  assert.match(professionalRoute, /cbo_code:[\s\S]*replace\(\/\\D\/g, ''\)/);
+  const professionalUpsert = sliceFrom(serverCode, 'const upsertProfessionalBillingProfile = async', 4200);
+  assert.match(professionalUpsert, /document_number:[\s\S]*replace\(\/\\D\/g, ''\)/);
+  assert.match(professionalUpsert, /cbo_code:[\s\S]*replace\(\/\\D\/g, ''\)/);
 });
 
 let passed = 0;

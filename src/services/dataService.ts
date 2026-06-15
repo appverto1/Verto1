@@ -3045,6 +3045,23 @@ export const dataService = {
     }
   },
 
+  async getOwnProfessionalBillingProfile() {
+    try {
+      return await fetchNoStoreJsonWithRetry('/api/tiss/professional-profile/me', {
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getOwnProfessionalBillingProfile',
+        operation: 'detail',
+        table: 'professional_billing_profiles',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      }, 'O seu perfil faturável voltou do cache.');
+    } catch {
+      return { success: false, data: null, error: 'Não foi possível carregar seu perfil faturável.' };
+    }
+  },
+
   async getProfessionalBillingProfiles() {
     try {
       return await fetchNoStoreJsonWithRetry('/api/admin/tiss/professional-profiles', {
@@ -3080,6 +3097,26 @@ export const dataService = {
       return await safeJson(response);
     } catch {
       return { success: false, error: 'Não foi possível salvar o perfil faturável do profissional.' };
+    }
+  },
+
+  async updateOwnProfessionalBillingProfile(payload: any = {}) {
+    try {
+      const response = await fetchClinical('/api/tiss/professional-profile/me', {
+        method: 'PATCH',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'updateOwnProfessionalBillingProfile',
+        operation: 'write',
+        table: 'professional_billing_profiles,appointment_tiss_pre_guides',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, error: 'Não foi possível salvar seu perfil faturável.' };
     }
   },
 

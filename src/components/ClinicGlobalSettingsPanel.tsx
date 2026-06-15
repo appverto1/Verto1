@@ -3,7 +3,7 @@ import { AlertCircle, CheckCircle2 } from "lucide-react";
 import { BillingTissSettingsPanel } from "./BillingTissSettingsPanel";
 import { RoleCapabilityMatrix } from "./RoleCapabilityMatrix";
 import { SecureImage } from "./SecureMedia";
-import { formatDocument, maskCep, maskCpf, maskPhoneBR, onlyDigits, parseDocumentForStorage } from "../utils/brMasks";
+import { formatDocument, maskCep, maskPhoneBR, onlyDigits, parseDocumentForStorage } from "../utils/brMasks";
 
 type SettingsValues = Record<string, any>;
 
@@ -26,6 +26,11 @@ type ClinicGlobalSettingsPanelProps = {
 const inputClass =
   "mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-semibold text-slate-800 outline-none transition-all focus:border-[#7a32fc]/40 focus:ring-2 focus:ring-[#7a32fc]/10";
 const labelClass = "block text-xs font-bold text-slate-600";
+const BRAZILIAN_UFS = [
+  "AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS",
+  "MG", "PA", "PB", "PR", "PE", "PI", "RJ", "RN", "RS", "RO", "RR", "SC",
+  "SP", "SE", "TO",
+];
 
 function StatusBadge({ complete, hasAnyData }: { complete: boolean; hasAnyData: boolean }) {
   const label = complete ? "Completo" : hasAnyData ? "Pendente" : "Incompleto";
@@ -148,19 +153,52 @@ export function ClinicGlobalSettingsPanel({
   const clinicFiscalComplete = Boolean(values.clinicLegalName?.trim() && clinicDocumentDigits && (values.clinicCnesCode?.trim() || values.clinicProviderCode?.trim()));
   const contactComplete = Boolean(values.clinicEmail?.trim() || values.clinicPhone?.trim() || values.clinicWhatsapp?.trim());
   const responsibleComplete = Boolean(values.therapistFullName?.trim() && values.therapistRoleTitle?.trim() && (values.therapistEmail?.trim() || values.therapistPhone?.trim()));
-  const professionalBillingComplete = Boolean(values.therapistCrp?.trim() && values.therapistCouncilState?.trim() && values.therapistCboCode?.trim());
+  const professionalBillingComplete = Boolean(
+    values.therapistCouncilType?.trim() &&
+    values.therapistCrp?.trim() &&
+    values.therapistCouncilState?.trim() &&
+    values.therapistCboCode?.trim(),
+  );
   const mediaComplete = Boolean(values.therapistSignatureDataUrl || values.therapistProfilePhotoUrl);
 
   const professionalFields = (
     <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
+      {isTherapist && (
+        <p className="md:col-span-2 rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3 text-sm font-semibold text-indigo-800">
+          Este é o seu cadastro profissional e faturável global. Ele será reutilizado em Pré-guias TISS, pré-faturamento, relatórios e documentos de todos os seus atendimentos.
+        </p>
+      )}
       <label className={`${labelClass} md:col-span-2`}>
-        Nome completo
+        Nome de exibição
         <input type="text" value={values.therapistFullName} onChange={(event) => setters.setTherapistFullName(event.target.value)} placeholder="Nome do profissional responsável" className={inputClass} />
       </label>
-      <label className={labelClass}>
-        CPF
-        <input type="text" value={values.therapistCpf} onChange={(event) => setters.setTherapistCpf(maskCpf(event.target.value))} placeholder="000.000.000-00" className={inputClass} />
-      </label>
+      <div className="grid grid-cols-[130px_1fr] gap-3">
+        <label className={labelClass}>
+          Tipo de documento
+          <select
+            value={values.therapistDocumentType || "CPF"}
+            onChange={(event) => {
+              setters.setTherapistDocumentType(event.target.value);
+              setters.setTherapistCpf(formatDocument(values.therapistCpf, event.target.value));
+            }}
+            className={inputClass}
+          >
+            <option value="CPF">CPF</option>
+            <option value="CNPJ">CNPJ</option>
+            <option value="OTHER">Outro</option>
+          </select>
+        </label>
+        <label className={labelClass}>
+          Documento
+          <input
+            type="text"
+            value={values.therapistCpf}
+            onChange={(event) => setters.setTherapistCpf(formatDocument(event.target.value, values.therapistDocumentType))}
+            placeholder={values.therapistDocumentType === "CNPJ" ? "00.000.000/0000-00" : "000.000.000-00"}
+            className={inputClass}
+          />
+        </label>
+      </div>
       <label className={labelClass}>
         E-mail
         <input type="email" value={values.therapistEmail} onChange={(event) => setters.setTherapistEmail(event.target.value)} placeholder="responsavel@clinica.com" className={inputClass} />
@@ -183,7 +221,10 @@ export function ClinicGlobalSettingsPanel({
       </label>
       <label className={labelClass}>
         UF do conselho
-        <input type="text" value={values.therapistCouncilState} onChange={(event) => setters.setTherapistCouncilState(event.target.value.toUpperCase().slice(0, 2))} placeholder="SP" maxLength={2} className={inputClass} />
+        <select value={values.therapistCouncilState} onChange={(event) => setters.setTherapistCouncilState(event.target.value)} className={inputClass}>
+          <option value="">Selecione</option>
+          {BRAZILIAN_UFS.map((uf) => <option key={uf} value={uf}>{uf}</option>)}
+        </select>
       </label>
       <label className={labelClass}>
         CBO
@@ -192,6 +233,10 @@ export function ClinicGlobalSettingsPanel({
       <label className={labelClass}>
         Especialidade
         <input type="text" value={values.therapistSpecialtyName} onChange={(event) => setters.setTherapistSpecialtyName(event.target.value)} placeholder="Especialidade principal" className={inputClass} />
+      </label>
+      <label className={labelClass}>
+        Código do prestador
+        <input type="text" value={values.therapistProviderCode} onChange={(event) => setters.setTherapistProviderCode(event.target.value)} placeholder="Opcional, conforme operadora" className={inputClass} />
       </label>
       <label className={`${labelClass} md:col-span-2`}>
         Mini currículo
@@ -262,7 +307,7 @@ export function ClinicGlobalSettingsPanel({
 
       {isTherapist ? (
         <>
-          <SectionCard title="Meu perfil profissional" description="Dados usados em registros clínicos, relatórios, documentos e identificação profissional." complete={responsibleComplete} hasAnyData={Boolean(values.therapistFullName || values.therapistPhone || values.therapistEmail)}>
+          <SectionCard title="Perfil profissional e faturável" description="Cadastre seus dados profissionais uma vez para reutilizá-los em Pré-guias TISS, relatórios, documentos e pré-faturamento." complete={responsibleComplete && professionalBillingComplete} hasAnyData={Boolean(values.therapistFullName || values.therapistPhone || values.therapistEmail || values.therapistCrp || values.therapistCboCode)}>
             {professionalFields}
           </SectionCard>
           <SectionCard title="Dados assistenciais e documentos" description="Assinatura e foto seguem o fluxo existente e continuam sendo usadas em relatórios e documentos." complete={mediaComplete} hasAnyData={mediaComplete}>

@@ -135,6 +135,7 @@ function payerMissing(profile: any) {
 }
 
 function professionalMissing(profile: any) {
+  if (!profile?.id && !profile?.professional_id) return ["não configurado"];
   const missing = [];
   if (!isFilled(profile?.council_type)) missing.push("sem conselho");
   if (!isFilled(profile?.council_number)) missing.push("sem número");
@@ -226,7 +227,11 @@ export function BillingTissSettingsPanel({
   const [professionalForm, setProfessionalForm] = useState<Record<string, any>>(emptyProfessionalForm);
 
   const professionals = useMemo(
-    () => members.filter((member) => !["patient", "receptionist"].includes(String(member.role || "").toLowerCase())),
+    () => members.filter((member) => {
+      const role = String(member.role || "").toLowerCase();
+      const name = String(member.name || "").trim().toLowerCase();
+      return !["patient", "receptionist"].includes(role) && !["equipe", "team"].includes(name);
+    }),
     [members],
   );
   const selectedPayer = payers.find((payer) => payer.id === selectedPayerId) || null;
@@ -473,7 +478,7 @@ export function BillingTissSettingsPanel({
                 <option key={member.id} value={member.id}>{member.name || member.email || "Profissional"}</option>
               ))}
             </select>
-            <button type="button" onClick={onNavigateProfessionals} className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50">Equipe</button>
+            <button type="button" onClick={onNavigateProfessionals} className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50">Abrir cadastro completo</button>
           </div>
           <p className="rounded-md border border-indigo-100 bg-white px-3 py-2 text-xs font-medium text-slate-600">
             Você está editando o perfil faturável global deste profissional. Essa alteração será reutilizada em todos os atendimentos deste profissional.
@@ -503,7 +508,7 @@ export function BillingTissSettingsPanel({
             </button>
           </div>
           <div className="flex flex-wrap gap-1">
-            {professionals.slice(0, 8).map((member) => {
+            {professionals.map((member) => {
               const missing = professionalMissing(professionalProfiles[member.id]);
               return (
                 <button

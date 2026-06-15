@@ -32631,6 +32631,110 @@ async function startServer() {
     }
   });
 
+  const assertProfessionalBillingProfileScope = async (organizationId: string, professionalId: string) => {
+    const owner = await supabase
+      .from('users')
+      .select('id,clinic_id,role,name')
+      .eq('id', professionalId)
+      .or(`clinic_id.eq.${organizationId},id.eq.${organizationId}`)
+      .limit(1)
+      .maybeSingle();
+    if (owner.error) throw owner.error;
+    const ownerName = sanitizeString(owner.data?.name, 180).trim().toLowerCase();
+    if (!owner.data?.id || ['equipe', 'team'].includes(ownerName)) return null;
+    return owner.data;
+  };
+
+  const upsertProfessionalBillingProfile = async ({
+    organizationId,
+    professionalId,
+    updatedBy,
+    body,
+  }: {
+    organizationId: string;
+    professionalId: string;
+    updatedBy: string;
+    body: any;
+  }) => {
+    const existingProfile = await fetchTissPreGuideProfile(
+      'professional_billing_profiles',
+      PROFESSIONAL_BILLING_PROFILE_SELECT,
+      organizationId,
+      'professional_id',
+      professionalId,
+    );
+    const now = new Date().toISOString();
+    const documentType = sanitizeString(body?.documentType ?? body?.document_type, 20).toUpperCase();
+    const payload = cleanObject({
+      organization_id: organizationId,
+      clinic_id: organizationId,
+      professional_id: professionalId,
+      display_name: sanitizeString(body?.displayName ?? body?.display_name, 180) || null,
+      document_type: ['CPF', 'CNPJ', 'OTHER'].includes(documentType) ? documentType : null,
+      document_number: sanitizeString(body?.documentNumber ?? body?.document_number, 40).replace(/\D/g, '') || null,
+      council_type: sanitizeString(body?.councilType ?? body?.council_type, 40) || null,
+      council_number: sanitizeString(body?.councilNumber ?? body?.council_number, 80) || null,
+      council_state: sanitizeString(body?.councilState ?? body?.council_state, 2).toUpperCase() || null,
+      cbo_code: sanitizeString(body?.cboCode ?? body?.cbo_code, 40).replace(/\D/g, '') || null,
+      specialty_name: sanitizeString(body?.specialtyName ?? body?.specialty_name, 120) || null,
+      provider_code: sanitizeString(body?.providerCode ?? body?.provider_code, 80) || null,
+      active: body?.active !== false,
+      created_at: existingProfile?.created_at || now,
+      updated_by: isUuid(updatedBy) ? updatedBy : null,
+      updated_at: now
+    });
+    const { data, error } = await supabase
+      .from('professional_billing_profiles')
+      .upsert(payload, { onConflict: 'organization_id,professional_id' })
+      .select(PROFESSIONAL_BILLING_PROFILE_SELECT)
+      .maybeSingle();
+    if (error) throw error;
+    await markTissPreGuidesStale({ organizationId, professionalId, reason: 'Perfil faturável do profissional alterado.' });
+    return data;
+  };
+
+  app.get('/api/tiss/professional-profile/me', noStoreDynamicResponse, checkAuth, requireRoles('therapist', 'coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      const professionalId = sanitizeString(req.session.user?.id, 120);
+      if (!isUuid(organizationId) || !isUuid(professionalId)) return res.status(400).json(payerSafeError(400));
+      const owner = await assertProfessionalBillingProfileScope(organizationId, professionalId);
+      if (!owner) return res.status(404).json(payerSafeError(404));
+      const data = await fetchTissPreGuideProfile(
+        'professional_billing_profiles',
+        PROFESSIONAL_BILLING_PROFILE_SELECT,
+        organizationId,
+        'professional_id',
+        professionalId,
+      );
+      return sendNoStoreJson(res, { success: true, data });
+    } catch (error: any) {
+      console.warn('[TissPreGuide] own professional profile read failed:', error?.message || String(error));
+      return res.status(500).json(payerSafeError(500));
+    }
+  });
+
+  app.patch('/api/tiss/professional-profile/me', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('therapist', 'coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 32 * 1024, 'Perfil faturável do profissional')) return;
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      const professionalId = sanitizeString(req.session.user?.id, 120);
+      if (!isUuid(organizationId) || !isUuid(professionalId)) return res.status(400).json(payerSafeError(400));
+      const owner = await assertProfessionalBillingProfileScope(organizationId, professionalId);
+      if (!owner) return res.status(404).json(payerSafeError(404));
+      const data = await upsertProfessionalBillingProfile({
+        organizationId,
+        professionalId,
+        updatedBy: professionalId,
+        body: req.body,
+      });
+      return sendNoStoreJson(res, { success: true, data });
+    } catch (error: any) {
+      console.warn('[TissPreGuide] own professional profile update failed:', error?.message || String(error));
+      return res.status(500).json(payerSafeError(500));
+    }
+  });
+
   app.get('/api/admin/tiss/professional-profiles', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -32660,14 +32764,8 @@ async function startServer() {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       const professionalId = sanitizeString(req.params.professionalId, 120);
       if (!isUuid(organizationId) || !isUuid(professionalId)) return res.status(400).json(payerSafeError(400));
-      const owner = await supabase
-        .from('users')
-        .select('id,clinic_id')
-        .eq('id', professionalId)
-        .or(`clinic_id.eq.${organizationId},id.eq.${organizationId}`)
-        .limit(1)
-        .maybeSingle();
-      if (owner.error || !owner.data?.id) return res.status(404).json(payerSafeError(404));
+      const owner = await assertProfessionalBillingProfileScope(organizationId, professionalId);
+      if (!owner) return res.status(404).json(payerSafeError(404));
       const data = await fetchTissPreGuideProfile('professional_billing_profiles', PROFESSIONAL_BILLING_PROFILE_SELECT, organizationId, 'professional_id', professionalId);
       return sendNoStoreJson(res, { success: true, data });
     } catch (error: any) {
@@ -32682,43 +32780,15 @@ async function startServer() {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       const professionalId = sanitizeString(req.params.professionalId, 120);
       if (!isUuid(organizationId) || !isUuid(professionalId)) return res.status(400).json(payerSafeError(400));
-      const owner = await supabase
-        .from('users')
-        .select('id,clinic_id')
-        .eq('id', professionalId)
-        .or(`clinic_id.eq.${organizationId},id.eq.${organizationId}`)
-        .limit(1)
-        .maybeSingle();
-      if (owner.error || !owner.data?.id) return res.status(404).json(payerSafeError(404));
-      const now = new Date().toISOString();
+      const owner = await assertProfessionalBillingProfileScope(organizationId, professionalId);
+      if (!owner) return res.status(404).json(payerSafeError(404));
       const userId = sanitizeString(req.session.user?.id, 120);
-      const existingProfile = await fetchTissPreGuideProfile('professional_billing_profiles', PROFESSIONAL_BILLING_PROFILE_SELECT, organizationId, 'professional_id', professionalId);
-      const documentType = sanitizeString(req.body?.documentType ?? req.body?.document_type, 20).toUpperCase();
-      const payload = cleanObject({
-        organization_id: organizationId,
-        clinic_id: organizationId,
-        professional_id: professionalId,
-        display_name: sanitizeString(req.body?.displayName ?? req.body?.display_name, 180) || null,
-        document_type: ['CPF', 'CNPJ', 'OTHER'].includes(documentType) ? documentType : null,
-        document_number: sanitizeString(req.body?.documentNumber ?? req.body?.document_number, 40).replace(/\D/g, '') || null,
-        council_type: sanitizeString(req.body?.councilType ?? req.body?.council_type, 40) || null,
-        council_number: sanitizeString(req.body?.councilNumber ?? req.body?.council_number, 80) || null,
-        council_state: sanitizeString(req.body?.councilState ?? req.body?.council_state, 2).toUpperCase() || null,
-        cbo_code: sanitizeString(req.body?.cboCode ?? req.body?.cbo_code, 40).replace(/\D/g, '') || null,
-        specialty_name: sanitizeString(req.body?.specialtyName ?? req.body?.specialty_name, 120) || null,
-        provider_code: sanitizeString(req.body?.providerCode ?? req.body?.provider_code, 80) || null,
-        active: req.body?.active !== false,
-        created_at: existingProfile?.created_at || now,
-        updated_by: isUuid(userId) ? userId : null,
-        updated_at: now
+      const data = await upsertProfessionalBillingProfile({
+        organizationId,
+        professionalId,
+        updatedBy: userId,
+        body: req.body,
       });
-      const { data, error } = await supabase
-        .from('professional_billing_profiles')
-        .upsert(payload, { onConflict: 'organization_id,professional_id' })
-        .select(PROFESSIONAL_BILLING_PROFILE_SELECT)
-        .maybeSingle();
-      if (error) throw error;
-      await markTissPreGuidesStale({ organizationId, professionalId, reason: 'Perfil faturável do profissional alterado.' });
       return sendNoStoreJson(res, { success: true, data });
     } catch (error: any) {
       console.warn('[TissPreGuide] professional profile update failed:', error?.message || String(error));

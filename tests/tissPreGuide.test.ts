@@ -390,6 +390,8 @@ test('endpoints protegem perfis e Pré-guias com autenticação, papel e tenant'
     "app.get('/api/admin/tiss/professional-profiles'",
     "app.get('/api/admin/tiss/professional-profiles/:professionalId'",
     "app.patch('/api/admin/tiss/professional-profiles/:professionalId'",
+    "app.get('/api/tiss/professional-profile/me'",
+    "app.patch('/api/tiss/professional-profile/me'",
     "app.get('/api/tiss/pre-guides'",
     "app.get('/api/tiss/pre-guides/coverage'",
     "app.post('/api/tiss/pre-guides/revalidate-period'",
@@ -479,7 +481,7 @@ test('frontend oferece cards, paginação, detalhe sob demanda e nenhuma ação 
   assert.match(preGuideUiCode, /dataService\.updateProfessionalBillingProfile/);
   assert.match(preGuideUiCode, /Cadastro global do prestador/);
   assert.match(preGuideUiCode, /Cadastro global do pagador/);
-  assert.match(preGuideUiCode, /Cadastro global do profissional/);
+  assert.match(preGuideUiCode, /Editar perfil do profissional/);
   assert.match(preGuideUiCode, /Salvar cadastro global e revalidar pré-guia atual/);
   assert.match(preGuideUiCode, /Você está editando o perfil faturável global da clínica/);
   assert.match(preGuideUiCode, /Você está editando o perfil TISS global deste pagador/);
@@ -511,6 +513,8 @@ test('data service usa operações explícitas e o pacote expõe suíte dedicada
     'getProfessionalBillingProfile',
     'getProfessionalBillingProfiles',
     'updateProfessionalBillingProfile',
+    'getOwnProfessionalBillingProfile',
+    'updateOwnProfessionalBillingProfile',
   ]) {
     assert.match(dataServiceCode, new RegExp(`async ${helper}`));
   }

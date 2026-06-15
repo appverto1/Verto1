@@ -38,6 +38,8 @@ const closureMigrationPath = path.resolve(process.cwd(), 'supabase/migrations/20
 const closureMigrationCode = fs.existsSync(closureMigrationPath) ? fs.readFileSync(closureMigrationPath, 'utf8') : '';
 const closureCenterPath = path.resolve(process.cwd(), 'src/components/OperationalClosureCenter.tsx');
 const closureCenterCode = fs.existsSync(closureCenterPath) ? fs.readFileSync(closureCenterPath, 'utf8') : '';
+const professionalBillingSelfServiceMigrationPath = path.resolve(process.cwd(), 'supabase/migrations/20260615193000_professional_billing_profile_self_service.sql');
+const professionalBillingSelfServiceMigrationCode = fs.readFileSync(professionalBillingSelfServiceMigrationPath, 'utf8');
 const landingPagePath = path.resolve(process.cwd(), 'src/components/LandingPage.tsx');
 const landingPageCode = fs.readFileSync(landingPagePath, 'utf8');
 
@@ -245,6 +247,21 @@ test('finance privacy: API endpoints are coordinator/admin/owner only', () => {
       `${marker} nÃ£o deve expor dados financeiros a recepcionista, terapeuta ou paciente.`
     );
   }
+});
+
+test('professional billing profile: therapist edits only own tenant-scoped profile', () => {
+  expectPattern(
+    /app\.patch\('\/api\/tiss\/professional-profile\/me'[\s\S]*?requireRoles\('therapist', 'coordinator', 'admin', 'owner'\)[\s\S]*?professionalId = sanitizeString\(req\.session\.user\?\.id[\s\S]*?upsertProfessionalBillingProfile/m,
+    'autoedicao do perfil faturavel deve derivar professionalId da sessao.'
+  );
+  const ownRouteStart = serverCode.indexOf("app.patch('/api/tiss/professional-profile/me'");
+  const adminRouteStart = serverCode.indexOf("app.get('/api/admin/tiss/professional-profiles'", ownRouteStart);
+  const ownRoute = serverCode.slice(ownRouteStart, adminRouteStart);
+  assert.doesNotMatch(ownRoute, /req\.params\.professionalId/);
+  assert.match(professionalBillingSelfServiceMigrationCode, /professional_id = auth\.uid\(\)/);
+  assert.match(professionalBillingSelfServiceMigrationCode, /u\.role = 'therapist'/);
+  assert.match(professionalBillingSelfServiceMigrationCode, /u\.clinic_id = professional_billing_profiles\.clinic_id/);
+  assert.doesNotMatch(professionalBillingSelfServiceMigrationCode, /using\s*\(\s*true\s*\)/i);
 });
 
 test('finance privacy: patient record payload redacts financial fields for non-finance roles', () => {

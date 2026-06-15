@@ -907,8 +907,14 @@ export function CoordinatorDashboard({
   const [therapistCrp, setTherapistCrp] = useState<string>(
     String(user?.crp || ""),
   );
+  const [therapistDocumentType, setTherapistDocumentType] = useState<string>(
+    String(user?.professionalProfile?.documentType || user?.professional_profile?.document_type || profileMetadata?.documentType || profileMetadata?.document_type || "CPF").toUpperCase(),
+  );
   const [therapistCpf, setTherapistCpf] = useState<string>(
-    formatCpfInput(String(user?.cpf || profileMetadata?.cpf || profileMetadata?.professionalCpf || "")),
+    formatDocument(
+      String(user?.cpf || profileMetadata?.cpf || profileMetadata?.professionalCpf || ""),
+      user?.professionalProfile?.documentType || user?.professional_profile?.document_type || profileMetadata?.documentType || profileMetadata?.document_type || "CPF",
+    ),
   );
   const [therapistPhone, setTherapistPhone] = useState<string>(
     formatPhoneInput(String(user?.phone || user?.whatsappPhone || profileMetadata?.phone || profileMetadata?.professionalPhone || "")),
@@ -957,6 +963,9 @@ export function CoordinatorDashboard({
   );
   const [therapistSpecialtyName, setTherapistSpecialtyName] = useState<string>(
     String(user?.professionalProfile?.specialtyName || user?.professional_profile?.specialty_name || profileMetadata?.specialtyName || profileMetadata?.specialty_name || ""),
+  );
+  const [therapistProviderCode, setTherapistProviderCode] = useState<string>(
+    String(user?.professionalProfile?.providerCode || user?.professional_profile?.provider_code || profileMetadata?.providerCode || profileMetadata?.provider_code || ""),
   );
   const [clinicDisplayName, setClinicDisplayName] = useState<string>(
     String(user?.clinicSettings?.clinicName || user?.workspaceName || ""),
@@ -1256,8 +1265,16 @@ export function CoordinatorDashboard({
       user?.professionalMetadata ||
       {}
     ) as Record<string, any>;
+    const nextDocumentType = String(
+      user?.professionalProfile?.documentType ||
+        user?.professional_profile?.document_type ||
+        nextProfileMetadata?.documentType ||
+        nextProfileMetadata?.document_type ||
+        "CPF",
+    ).toUpperCase();
     setTherapistCrp(String(user?.crp || ""));
-    setTherapistCpf(formatCpfInput(String(user?.cpf || nextProfileMetadata?.cpf || nextProfileMetadata?.professionalCpf || "")));
+    setTherapistDocumentType(nextDocumentType);
+    setTherapistCpf(formatDocument(String(user?.cpf || nextProfileMetadata?.cpf || nextProfileMetadata?.professionalCpf || ""), nextDocumentType));
     setTherapistPhone(formatPhoneInput(String(user?.phone || user?.whatsappPhone || nextProfileMetadata?.phone || nextProfileMetadata?.professionalPhone || "")));
     setTherapistEmail(String(user?.email || nextProfileMetadata?.email || nextProfileMetadata?.professionalEmail || ""));
     setTherapistRoleTitle(String(user?.professionalRoleTitle || nextProfileMetadata?.roleTitle || nextProfileMetadata?.professionalRoleTitle || ""));
@@ -1286,6 +1303,9 @@ export function CoordinatorDashboard({
     setTherapistCboCode(onlyDigits(user?.professionalProfile?.cboCode || user?.professional_profile?.cbo_code || nextProfileMetadata?.cboCode || nextProfileMetadata?.cbo_code || "", 12));
     setTherapistSpecialtyName(
       String(user?.professionalProfile?.specialtyName || user?.professional_profile?.specialty_name || nextProfileMetadata?.specialtyName || nextProfileMetadata?.specialty_name || ""),
+    );
+    setTherapistProviderCode(
+      String(user?.professionalProfile?.providerCode || user?.professional_profile?.provider_code || nextProfileMetadata?.providerCode || nextProfileMetadata?.provider_code || ""),
     );
     setTherapistSignatureDataUrl((prev) =>
       isUnsavedLocalMediaPreview(prev)
@@ -1333,6 +1353,10 @@ export function CoordinatorDashboard({
     user?.professionalProfile,
     user?.professional_profile,
     user?.professionalMetadata,
+    user?.professionalProfile?.documentType,
+    user?.professional_profile?.document_type,
+    user?.professionalProfile?.providerCode,
+    user?.professional_profile?.provider_code,
     user?.name,
     user?.specialties,
     user?.miniCurriculum,
@@ -1380,6 +1404,33 @@ export function CoordinatorDashboard({
     user?.clinicSettings?.postalCode,
     user?.workspaceName,
   ]);
+
+  useEffect(() => {
+    if (activeTab !== "settings" || !isTherapist) return;
+    const professionalId = String(user?.id || "").trim();
+    if (!professionalId) return;
+    let cancelled = false;
+    const loadOwnBillingProfile = async () => {
+      const result = await dataService.getOwnProfessionalBillingProfile();
+      if (cancelled || !result?.success || !result.data) return;
+      const profile = result.data || {};
+      const documentType = String(profile.document_type || profile.documentType || "CPF").toUpperCase();
+      setTherapistDocumentType(documentType);
+      setTherapistCpf(formatDocument(profile.document_number || profile.documentNumber || "", documentType));
+      setTherapistFullName(String(profile.display_name || profile.displayName || user?.name || ""));
+      setTherapistCouncilType(String(profile.council_type || profile.councilType || ""));
+      setTherapistCrp(String(profile.council_number || profile.councilNumber || ""));
+      setTherapistCouncilState(String(profile.council_state || profile.councilState || "").toUpperCase().slice(0, 2));
+      setTherapistCboCode(onlyDigits(profile.cbo_code || profile.cboCode || "", 12));
+      setTherapistSpecialtyName(String(profile.specialty_name || profile.specialtyName || ""));
+      setTherapistProviderCode(String(profile.provider_code || profile.providerCode || ""));
+    };
+    void loadOwnBillingProfile();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, isTherapist, user?.id, user?.name]);
+
   const refreshSignedMediaUrls = useCallback(async () => {
     try {
       const userId = String(user?.id || "").trim();
@@ -4606,7 +4657,10 @@ export function CoordinatorDashboard({
   const handleSaveClinicSettings = async () => {
     const cleanFullName = therapistFullName.trim();
     const cleanCrp = therapistCrp.trim();
-    const cleanCpf = onlyDigits(therapistCpf, 11);
+    const normalizedTherapistDocumentType = ["CPF", "CNPJ", "OTHER"].includes(String(therapistDocumentType || "").toUpperCase())
+      ? String(therapistDocumentType || "").toUpperCase()
+      : "CPF";
+    const cleanCpf = onlyDigits(therapistCpf, normalizedTherapistDocumentType === "CNPJ" ? 14 : 11);
     const cleanPhone = onlyDigits(therapistPhone, 11);
     const cleanTherapistEmail = therapistEmail.trim();
     const cleanRoleTitle = therapistRoleTitle.trim();
@@ -4616,6 +4670,7 @@ export function CoordinatorDashboard({
     const cleanCouncilState = therapistCouncilState.trim().toUpperCase().slice(0, 2);
     const cleanCboCode = onlyDigits(therapistCboCode, 12);
     const cleanSpecialtyName = therapistSpecialtyName.trim();
+    const cleanTherapistProviderCode = therapistProviderCode.trim();
     const cleanClinicName = clinicDisplayName.trim();
     const cleanClinicLegalName = clinicLegalName.trim();
     const normalizedClinicDocumentType = clinicDocumentType === "CPF" ? "CPF" : "CNPJ";
@@ -4640,26 +4695,25 @@ export function CoordinatorDashboard({
     const cleanClinicProviderCode = clinicProviderCode.trim();
     const isCrpValid =
       !cleanCrp ||
-      /^[A-Za-z]{2,4}\s?\/?\s?\d{3,10}$/i.test(cleanCrp) ||
-      /^\d{2}\s?\/?\s?\d{4,8}$/i.test(cleanCrp);
+      /^[A-Za-z0-9À-ÿ .\/-]{2,80}$/u.test(cleanCrp);
 
     if (!cleanFullName || cleanFullName.length < 3) {
       showToast("Informe o nome completo para salvar o perfil.", "error");
       return;
     }
-    if (isTherapist && !cleanCrp) {
-      const warning =
-        "Complete seu perfil com o CRP para habilitar registros clínicos";
-      alert(warning);
-      showToast(warning, "error");
-      return;
-    }
     if (!isCrpValid) {
-      showToast("CRP inválido. Use um formato como CRP 06/123456.", "error");
+      showToast("Registro profissional inválido. Revise o número do conselho.", "error");
       return;
     }
-    if (cleanCpf && cleanCpf.length !== 11) {
-      showToast("CPF inválido. Informe 11 dígitos.", "error");
+    if (cleanCpf && normalizedTherapistDocumentType !== "OTHER") {
+      const expectedLength = normalizedTherapistDocumentType === "CNPJ" ? 14 : 11;
+      if (cleanCpf.length !== expectedLength) {
+        showToast(normalizedTherapistDocumentType === "CNPJ" ? "CNPJ do profissional inválido." : "CPF inválido. Informe 11 dígitos.", "error");
+        return;
+      }
+    }
+    if (normalizedTherapistDocumentType === "OTHER" && cleanCpf && cleanCpf.length < 3) {
+      showToast("Documento profissional inválido.", "error");
       return;
     }
     if (cleanClinicDocumentNumber) {
@@ -4735,17 +4789,37 @@ export function CoordinatorDashboard({
       }
     }
 
-    if (!isTherapist && canManageClinicSettings && String(user?.id || "").trim()) {
-      void dataService.updateProfessionalBillingProfile(String(user.id), {
-        displayName: cleanFullName || null,
-        documentType: "CPF",
-        documentNumber: cleanCpf || null,
-        councilType: cleanCouncilType || cleanCrp.split(/\s|\//)[0] || null,
-        councilNumber: cleanCrp || null,
-        councilState: cleanCouncilState || null,
-        cboCode: cleanCboCode || null,
-        specialtyName: cleanSpecialtyName || cleanSpecialties || null,
-      });
+    const ownProfessionalId = String(user?.id || "").trim();
+    const shouldPersistOwnBillingProfile = Boolean(ownProfessionalId && (isTherapist || (!isTherapist && canManageClinicSettings)));
+    if (shouldPersistOwnBillingProfile) {
+      const professionalBillingResult = isTherapist
+        ? await dataService.updateOwnProfessionalBillingProfile({
+            displayName: cleanFullName || null,
+            documentType: normalizedTherapistDocumentType,
+            documentNumber: cleanCpf || null,
+            councilType: cleanCouncilType || cleanCrp.split(/\s|\//)[0] || null,
+            councilNumber: cleanCrp || null,
+            councilState: cleanCouncilState || null,
+            cboCode: cleanCboCode || null,
+            specialtyName: cleanSpecialtyName || cleanSpecialties || null,
+            providerCode: cleanTherapistProviderCode || null,
+          })
+        : await dataService.updateProfessionalBillingProfile(ownProfessionalId, {
+            displayName: cleanFullName || null,
+            documentType: normalizedTherapistDocumentType,
+            documentNumber: cleanCpf || null,
+            councilType: cleanCouncilType || cleanCrp.split(/\s|\//)[0] || null,
+            councilNumber: cleanCrp || null,
+            councilState: cleanCouncilState || null,
+            cboCode: cleanCboCode || null,
+            specialtyName: cleanSpecialtyName || cleanSpecialties || null,
+            providerCode: cleanTherapistProviderCode || null,
+          });
+      if (!professionalBillingResult?.success) {
+        showToast(professionalBillingResult?.error || "Não foi possível salvar o perfil faturável do profissional.", "error");
+        hideProcessing();
+        return;
+      }
     }
 
     onUpdateProfile({
@@ -4762,6 +4836,7 @@ export function CoordinatorDashboard({
       professionalProfile: {
         fullName: cleanFullName,
         cpf: cleanCpf || null,
+        documentType: normalizedTherapistDocumentType,
         phone: cleanPhone || null,
         email: cleanTherapistEmail || null,
         roleTitle: cleanRoleTitle || null,
@@ -4770,6 +4845,7 @@ export function CoordinatorDashboard({
         councilState: cleanCouncilState || null,
         cboCode: cleanCboCode || null,
         specialtyName: cleanSpecialtyName || null,
+        providerCode: cleanTherapistProviderCode || null,
         specialties: cleanSpecialties,
         miniCurriculum: cleanMiniCurriculum,
         profilePicture: therapistProfilePhotoUrl,
@@ -8324,6 +8400,7 @@ export function CoordinatorDashboard({
                   onSave={handleSaveClinicSettings}
                   values={{
                     therapistFullName,
+                    therapistDocumentType,
                     therapistCpf,
                     therapistEmail,
                     therapistPhone,
@@ -8333,6 +8410,7 @@ export function CoordinatorDashboard({
                     therapistCouncilState,
                     therapistCboCode,
                     therapistSpecialtyName,
+                    therapistProviderCode,
                     therapistSpecialties,
                     therapistMiniCurriculum,
                     therapistSignatureDataUrl,
@@ -8361,6 +8439,7 @@ export function CoordinatorDashboard({
                   }}
                   setters={{
                     setTherapistFullName,
+                    setTherapistDocumentType,
                     setTherapistCpf,
                     setTherapistEmail,
                     setTherapistPhone,
@@ -8370,6 +8449,7 @@ export function CoordinatorDashboard({
                     setTherapistCouncilState,
                     setTherapistCboCode,
                     setTherapistSpecialtyName,
+                    setTherapistProviderCode,
                     setTherapistSpecialties,
                     setTherapistMiniCurriculum,
                     setTherapistSignatureDataUrl,
