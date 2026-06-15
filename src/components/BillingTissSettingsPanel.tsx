@@ -10,6 +10,7 @@ import {
   Stethoscope,
 } from "lucide-react";
 import { dataService } from "../services/dataService";
+import { formatDocument, maskCep, maskPhoneBR, onlyDigits, parseDocumentForStorage } from "../utils/brMasks";
 
 type Payer = {
   id: string;
@@ -74,8 +75,8 @@ const normalizeProfile = (profile: any = {}) => ({
   legalName: profile.legal_name || "",
   tradeName: profile.trade_name || "",
   documentType: profile.document_type || "CNPJ",
-  documentNumber: profile.document_number || "",
-  cnesCode: profile.cnes_code || "",
+  documentNumber: formatDocument(profile.document_number || "", profile.document_type || "CNPJ"),
+  cnesCode: onlyDigits(profile.cnes_code || "", 12),
   providerCode: profile.provider_code || "",
   ansProviderCode: profile.ans_provider_code || "",
   addressLine: profile.address_line || "",
@@ -84,8 +85,8 @@ const normalizeProfile = (profile: any = {}) => ({
   district: profile.district || "",
   city: profile.city || "",
   state: profile.state || "",
-  postalCode: profile.postal_code || "",
-  phone: profile.phone || "",
+  postalCode: maskCep(profile.postal_code || ""),
+  phone: maskPhoneBR(profile.phone || ""),
   email: profile.email || "",
 });
 
@@ -105,11 +106,11 @@ const normalizePayerProfile = (profile: any = {}) => ({
 const normalizeProfessionalProfile = (profile: any = {}, member?: Member | null) => ({
   displayName: profile.display_name || member?.name || "",
   documentType: profile.document_type || "CPF",
-  documentNumber: profile.document_number || "",
+  documentNumber: formatDocument(profile.document_number || "", profile.document_type || "CPF"),
   councilType: profile.council_type || "",
   councilNumber: profile.council_number || "",
   councilState: profile.council_state || "",
-  cboCode: profile.cbo_code || "",
+  cboCode: onlyDigits(profile.cbo_code || "", 12),
   specialtyName: profile.specialty_name || "",
   providerCode: profile.provider_code || "",
 });
@@ -297,7 +298,15 @@ export function BillingTissSettingsPanel({
     setError("");
     setMessage("");
     try {
-      const result = await dataService.updateClinicTissProfile(providerForm);
+      const result = await dataService.updateClinicTissProfile({
+        ...providerForm,
+        documentNumber: parseDocumentForStorage(providerForm.documentNumber),
+        cnesCode: onlyDigits(providerForm.cnesCode, 12),
+        postalCode: onlyDigits(providerForm.postalCode, 8),
+        phone: onlyDigits(providerForm.phone, 11),
+        providerCode: String(providerForm.providerCode || "").trim(),
+        ansProviderCode: String(providerForm.ansProviderCode || "").trim(),
+      });
       if (!result?.success) {
         setError(result?.error || "Não foi possível salvar os dados globais do prestador.");
         return;
@@ -333,7 +342,12 @@ export function BillingTissSettingsPanel({
     setError("");
     setMessage("");
     try {
-      const result = await dataService.updateProfessionalBillingProfile(selectedProfessionalId, professionalForm);
+      const result = await dataService.updateProfessionalBillingProfile(selectedProfessionalId, {
+        ...professionalForm,
+        documentNumber: parseDocumentForStorage(professionalForm.documentNumber),
+        cboCode: onlyDigits(professionalForm.cboCode, 12),
+        providerCode: String(professionalForm.providerCode || "").trim(),
+      });
       if (!result?.success) {
         setError(result?.error || "Não foi possível salvar o perfil faturável global do profissional.");
         return;
@@ -390,19 +404,20 @@ export function BillingTissSettingsPanel({
           <Field label="Nome fantasia" value={providerForm.tradeName} onChange={(value) => updateProvider("tradeName", value)} maxLength={180} />
           <label className="text-xs font-bold text-slate-600">
             Tipo de documento
-            <select value={providerForm.documentType || "CNPJ"} onChange={(event) => updateProvider("documentType", event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium">
+            <select value={providerForm.documentType || "CNPJ"} onChange={(event) => setProviderForm((current) => ({ ...current, documentType: event.target.value, documentNumber: formatDocument(current.documentNumber, event.target.value) }))} className="mt-1 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium">
               <option value="CNPJ">CNPJ</option>
               <option value="CPF">CPF</option>
             </select>
           </label>
-          <Field label="CPF/CNPJ" value={providerForm.documentNumber} onChange={(value) => updateProvider("documentNumber", value)} maxLength={40} />
-          <Field label="CNES" value={providerForm.cnesCode} onChange={(value) => updateProvider("cnesCode", value)} maxLength={40} />
+          <Field label="CPF/CNPJ" value={providerForm.documentNumber} onChange={(value) => updateProvider("documentNumber", formatDocument(value, providerForm.documentType))} maxLength={40} />
+          <Field label="CNES" value={providerForm.cnesCode} onChange={(value) => updateProvider("cnesCode", onlyDigits(value, 12))} maxLength={40} />
           <Field label="Código do prestador" value={providerForm.providerCode} onChange={(value) => updateProvider("providerCode", value)} maxLength={80} />
           <Field label="Endereço" value={providerForm.addressLine} onChange={(value) => updateProvider("addressLine", value)} maxLength={180} />
           <Field label="Número" value={providerForm.addressNumber} onChange={(value) => updateProvider("addressNumber", value)} maxLength={40} />
           <Field label="Cidade" value={providerForm.city} onChange={(value) => updateProvider("city", value)} maxLength={120} />
           <Field label="UF" value={providerForm.state} onChange={(value) => updateProvider("state", value.toUpperCase().slice(0, 2))} maxLength={2} />
-          <Field label="Telefone" value={providerForm.phone} onChange={(value) => updateProvider("phone", value)} maxLength={40} />
+          <Field label="CEP" value={providerForm.postalCode} onChange={(value) => updateProvider("postalCode", maskCep(value))} maxLength={9} />
+          <Field label="Telefone" value={providerForm.phone} onChange={(value) => updateProvider("phone", maskPhoneBR(value))} maxLength={16} />
           <Field label="E-mail" value={providerForm.email} onChange={(value) => updateProvider("email", value)} type="email" maxLength={160} />
         </div>
         <div className="flex justify-end">
@@ -490,17 +505,17 @@ export function BillingTissSettingsPanel({
             <Field label="Nome de exibição" value={professionalForm.displayName} onChange={(value) => updateProfessional("displayName", value)} maxLength={180} />
             <label className="text-xs font-bold text-slate-600">
               Tipo de documento
-              <select value={professionalForm.documentType || "CPF"} onChange={(event) => updateProfessional("documentType", event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium">
+              <select value={professionalForm.documentType || "CPF"} onChange={(event) => setProfessionalForm((current) => ({ ...current, documentType: event.target.value, documentNumber: formatDocument(current.documentNumber, event.target.value) }))} className="mt-1 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium">
                 <option value="CPF">CPF</option>
                 <option value="CNPJ">CNPJ</option>
                 <option value="OTHER">Outro</option>
               </select>
             </label>
-            <Field label="Documento" value={professionalForm.documentNumber} onChange={(value) => updateProfessional("documentNumber", value)} maxLength={40} />
+            <Field label="Documento" value={professionalForm.documentNumber} onChange={(value) => updateProfessional("documentNumber", formatDocument(value, professionalForm.documentType))} maxLength={40} />
             <Field label="Conselho" value={professionalForm.councilType} onChange={(value) => updateProfessional("councilType", value)} maxLength={40} />
             <Field label="Número do conselho" value={professionalForm.councilNumber} onChange={(value) => updateProfessional("councilNumber", value)} maxLength={80} />
             <Field label="UF do conselho" value={professionalForm.councilState} onChange={(value) => updateProfessional("councilState", value.toUpperCase().slice(0, 2))} maxLength={2} />
-            <Field label="CBO" value={professionalForm.cboCode} onChange={(value) => updateProfessional("cboCode", value)} maxLength={40} />
+            <Field label="CBO" value={professionalForm.cboCode} onChange={(value) => updateProfessional("cboCode", onlyDigits(value, 12))} maxLength={40} />
             <Field label="Especialidade" value={professionalForm.specialtyName} onChange={(value) => updateProfessional("specialtyName", value)} maxLength={120} />
             <Field label="Código do prestador" value={professionalForm.providerCode} onChange={(value) => updateProfessional("providerCode", value)} maxLength={80} />
           </div>

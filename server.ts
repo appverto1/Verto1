@@ -7804,13 +7804,29 @@ function compactClinicSettingsForSession(settings: any) {
   if (!settings || typeof settings !== 'object') return null;
   return cleanObject({
     clinicName: sanitizeString(settings.clinicName, 160) || null,
+    clinicLegalName: sanitizeString(settings.clinicLegalName || settings.legalName, 180) || null,
+    legalName: sanitizeString(settings.legalName || settings.clinicLegalName, 180) || null,
+    clinicDocumentType: sanitizeString(settings.clinicDocumentType || settings.documentType, 10).toUpperCase() || null,
+    documentType: sanitizeString(settings.documentType || settings.clinicDocumentType, 10).toUpperCase() || null,
+    clinicDocumentNumber: sanitizeString(settings.clinicDocumentNumber || settings.documentNumber, 30).replace(/\D/g, '') || null,
     clinicCnpj: sanitizeString(settings.clinicCnpj, 30) || null,
     clinicPhone: sanitizeString(settings.clinicPhone, 30) || null,
+    clinicWhatsapp: sanitizeString(settings.clinicWhatsapp || settings.whatsapp, 30) || null,
     clinicEmail: sanitizeEmail(settings.clinicEmail) || null,
+    clinicSite: sanitizeString(settings.clinicSite || settings.site, 180) || null,
     specialty: sanitizeString(settings.specialty, 160) || null,
     council: sanitizeString(settings.council, 80) || null,
     councilNumber: sanitizeString(settings.councilNumber, 80) || null,
     clinicAddress: sanitizeString(settings.clinicAddress, 240) || null,
+    clinicAddressLine: sanitizeString(settings.clinicAddressLine || settings.addressLine, 180) || null,
+    clinicAddressNumber: sanitizeString(settings.clinicAddressNumber || settings.addressNumber, 40) || null,
+    clinicAddressComplement: sanitizeString(settings.clinicAddressComplement || settings.addressComplement, 120) || null,
+    clinicDistrict: sanitizeString(settings.clinicDistrict || settings.district, 120) || null,
+    clinicCity: sanitizeString(settings.clinicCity || settings.city, 120) || null,
+    clinicState: sanitizeString(settings.clinicState || settings.state, 2).toUpperCase() || null,
+    clinicPostalCode: sanitizeString(settings.clinicPostalCode || settings.postalCode, 20).replace(/\D/g, '') || null,
+    clinicCnesCode: sanitizeString(settings.clinicCnesCode || settings.cnesCode, 40).replace(/\D/g, '') || null,
+    clinicProviderCode: sanitizeString(settings.clinicProviderCode || settings.providerCode, 80) || null,
     clinicLogoUrl: sanitizeSessionUrl(settings.clinicLogoUrl),
     signatureDataUrl: sanitizeSessionUrl(settings.signatureDataUrl),
     therapistSpecialties: sanitizeString(settings.therapistSpecialties, 240) || null,
@@ -23671,14 +23687,55 @@ async function startServer() {
           professionalProfileInput?.professionalRoleTitle,
         160
       );
+      const professionalEmail = sanitizeEmail(req.body?.email || professionalProfileInput?.email || professionalProfileInput?.professionalEmail);
+      const professionalCouncilState = sanitizeString(
+        professionalProfileInput?.councilState ||
+          professionalProfileInput?.council_state ||
+          req.body?.councilState,
+        2
+      ).toUpperCase();
+      const professionalCboCode = sanitizeString(
+        professionalProfileInput?.cboCode ||
+          professionalProfileInput?.cbo_code ||
+          req.body?.cboCode,
+        40
+      ).replace(/\D/g, '');
+      const professionalSpecialtyName = sanitizeString(
+        professionalProfileInput?.specialtyName ||
+          professionalProfileInput?.specialty_name ||
+          req.body?.specialtyName,
+        120
+      );
       const professionalFullName =
         sanitizeString(professionalProfileInput?.fullName || professionalProfileInput?.full_name || req.body?.name, 180) ||
         sanitizeString(req.body?.name, 180);
       const clinicName = sanitizeString(clinicSettingsInput?.clinicName || req.body?.clinicName, 160);
+      const clinicLegalName = sanitizeString(clinicSettingsInput?.clinicLegalName || clinicSettingsInput?.legalName || req.body?.clinicLegalName, 180);
+      const clinicDocumentTypeSource = sanitizeString(clinicSettingsInput?.clinicDocumentType || clinicSettingsInput?.documentType || req.body?.clinicDocumentType, 10).toUpperCase();
+      const clinicDocumentType = ['CPF', 'CNPJ'].includes(clinicDocumentTypeSource) ? clinicDocumentTypeSource : null;
+      const clinicDocumentNumber = sanitizeString(
+        clinicSettingsInput?.clinicDocumentNumber ||
+          clinicSettingsInput?.documentNumber ||
+          clinicSettingsInput?.clinicCnpj ||
+          req.body?.clinicDocumentNumber ||
+          req.body?.clinicCnpj,
+        30
+      ).replace(/\D/g, '');
       const clinicPhone = sanitizePhone(clinicSettingsInput?.clinicPhone || req.body?.clinicPhone);
+      const clinicWhatsapp = sanitizePhone(clinicSettingsInput?.clinicWhatsapp || clinicSettingsInput?.whatsapp || req.body?.clinicWhatsapp);
       const clinicEmail = sanitizeEmail(clinicSettingsInput?.clinicEmail || req.body?.clinicEmail);
+      const clinicSite = sanitizeString(clinicSettingsInput?.clinicSite || clinicSettingsInput?.site || req.body?.clinicSite, 180);
       const clinicAddress = sanitizeString(clinicSettingsInput?.clinicAddress || req.body?.clinicAddress, 260);
-      const clinicCnpj = sanitizeString(clinicSettingsInput?.clinicCnpj || req.body?.clinicCnpj, 30);
+      const clinicAddressLine = sanitizeString(clinicSettingsInput?.clinicAddressLine || clinicSettingsInput?.addressLine || req.body?.clinicAddressLine, 180);
+      const clinicAddressNumber = sanitizeString(clinicSettingsInput?.clinicAddressNumber || clinicSettingsInput?.addressNumber || req.body?.clinicAddressNumber, 40);
+      const clinicAddressComplement = sanitizeString(clinicSettingsInput?.clinicAddressComplement || clinicSettingsInput?.addressComplement || req.body?.clinicAddressComplement, 120);
+      const clinicDistrict = sanitizeString(clinicSettingsInput?.clinicDistrict || clinicSettingsInput?.district || req.body?.clinicDistrict, 120);
+      const clinicCity = sanitizeString(clinicSettingsInput?.clinicCity || clinicSettingsInput?.city || req.body?.clinicCity, 120);
+      const clinicState = sanitizeString(clinicSettingsInput?.clinicState || clinicSettingsInput?.state || req.body?.clinicState, 2).toUpperCase();
+      const clinicPostalCode = sanitizeString(clinicSettingsInput?.clinicPostalCode || clinicSettingsInput?.postalCode || req.body?.clinicPostalCode, 20).replace(/\D/g, '');
+      const clinicCnesCode = sanitizeString(clinicSettingsInput?.clinicCnesCode || clinicSettingsInput?.cnesCode || req.body?.clinicCnesCode, 40).replace(/\D/g, '');
+      const clinicProviderCode = sanitizeString(clinicSettingsInput?.clinicProviderCode || clinicSettingsInput?.providerCode || req.body?.clinicProviderCode, 80);
+      const clinicCnpj = clinicDocumentNumber || sanitizeString(clinicSettingsInput?.clinicCnpj || req.body?.clinicCnpj, 30);
 
       const safePayload = cleanObject({
         id: sanitizeString(req.params.userId, 120),
@@ -23774,10 +23831,24 @@ async function startServer() {
             professionalCpf: professionalCpf || existingMetadata?.professionalCpf || undefined,
             phone: professionalPhone || existingMetadata?.phone || undefined,
             professionalPhone: professionalPhone || existingMetadata?.professionalPhone || undefined,
+            email: professionalEmail || existingMetadata?.email || undefined,
+            professionalEmail: professionalEmail || existingMetadata?.professionalEmail || undefined,
             roleTitle: professionalRoleTitle || existingMetadata?.roleTitle || undefined,
             professionalRoleTitle: professionalRoleTitle || existingMetadata?.professionalRoleTitle || undefined,
+            council: resolvedCouncil || existingMetadata?.council || undefined,
+            councilType: resolvedCouncil || existingMetadata?.councilType || undefined,
+            councilState: professionalCouncilState || existingMetadata?.councilState || undefined,
+            cboCode: professionalCboCode || existingMetadata?.cboCode || undefined,
+            specialtyName: professionalSpecialtyName || existingMetadata?.specialtyName || undefined,
             clinicEmail: clinicEmail || existingMetadata?.clinicEmail || undefined,
             clinicAddress: clinicAddress || existingMetadata?.clinicAddress || undefined,
+            clinicLegalName: clinicLegalName || existingMetadata?.clinicLegalName || undefined,
+            clinicDocumentType: clinicDocumentType || existingMetadata?.clinicDocumentType || undefined,
+            clinicDocumentNumber: clinicDocumentNumber || existingMetadata?.clinicDocumentNumber || undefined,
+            clinicWhatsapp: clinicWhatsapp || existingMetadata?.clinicWhatsapp || undefined,
+            clinicSite: clinicSite || existingMetadata?.clinicSite || undefined,
+            clinicCnesCode: clinicCnesCode || existingMetadata?.clinicCnesCode || undefined,
+            clinicProviderCode: clinicProviderCode || existingMetadata?.clinicProviderCode || undefined,
             profilePicturePath: profilePicturePath || existingMetadata?.profilePicturePath || undefined,
             signaturePath: signaturePath || existingMetadata?.signaturePath || undefined,
             clinicLogoPath: clinicLogoPath || existingMetadata?.clinicLogoPath || undefined
@@ -23791,8 +23862,11 @@ async function startServer() {
             phone: professionalPhone || undefined,
             council: resolvedCouncil || undefined,
             council_number: resolvedCouncilNumber || undefined,
+            council_state: professionalCouncilState || undefined,
+            cbo_code: professionalCboCode || undefined,
             crp: resolvedCrp || resolvedCouncilNumber || undefined,
             specialty:
+              professionalSpecialtyName ||
               sanitizeString(req.body?.specialties || professionalProfileInput?.specialties, 240) ||
               undefined,
             mini_curriculum:
@@ -23821,10 +23895,24 @@ async function startServer() {
             ...(req.session.user?.clinicSettings || {}),
             ...clinicSettingsInput,
             ...(clinicName ? { clinicName } : {}),
+            ...(clinicLegalName ? { clinicLegalName, legalName: clinicLegalName } : {}),
+            ...(clinicDocumentType ? { clinicDocumentType, documentType: clinicDocumentType } : {}),
+            ...(clinicDocumentNumber ? { clinicDocumentNumber } : {}),
             ...(clinicCnpj ? { clinicCnpj } : {}),
             ...(clinicPhone ? { clinicPhone } : {}),
+            ...(clinicWhatsapp ? { clinicWhatsapp } : {}),
             ...(clinicEmail ? { clinicEmail } : {}),
+            ...(clinicSite ? { clinicSite } : {}),
             ...(clinicAddress ? { clinicAddress } : {}),
+            ...(clinicAddressLine ? { clinicAddressLine } : {}),
+            ...(clinicAddressNumber ? { clinicAddressNumber } : {}),
+            ...(clinicAddressComplement ? { clinicAddressComplement } : {}),
+            ...(clinicDistrict ? { clinicDistrict } : {}),
+            ...(clinicCity ? { clinicCity } : {}),
+            ...(clinicState ? { clinicState } : {}),
+            ...(clinicPostalCode ? { clinicPostalCode } : {}),
+            ...(clinicCnesCode ? { clinicCnesCode } : {}),
+            ...(clinicProviderCode ? { clinicProviderCode } : {}),
             ...(resolvedCouncil ? { council: resolvedCouncil } : {}),
             ...(resolvedCouncilNumber ? { councilNumber: resolvedCouncilNumber } : {}),
             clinicLogoUrl: resolvedClinicLogoUrl || null,
@@ -23843,14 +23931,28 @@ async function startServer() {
             await patchTableSafely('clinics', { column: 'id', value: clinicId }, {
               name: clinicName || undefined,
               display_name: clinicName || undefined,
+              legal_name: clinicLegalName || undefined,
               cnpj: clinicCnpj || undefined,
               clinic_cnpj: clinicCnpj || undefined,
+              document_type: clinicDocumentType || undefined,
+              document_number: clinicDocumentNumber || undefined,
               phone: clinicPhone || undefined,
               clinic_phone: clinicPhone || undefined,
+              whatsapp: clinicWhatsapp || undefined,
               email: clinicEmail || undefined,
               clinic_email: clinicEmail || undefined,
+              site: clinicSite || undefined,
               address: clinicAddress || undefined,
               clinic_address: clinicAddress || undefined,
+              address_line: clinicAddressLine || undefined,
+              address_number: clinicAddressNumber || undefined,
+              address_complement: clinicAddressComplement || undefined,
+              district: clinicDistrict || undefined,
+              city: clinicCity || undefined,
+              state: clinicState || undefined,
+              postal_code: clinicPostalCode || undefined,
+              cnes_code: clinicCnesCode || undefined,
+              provider_code: clinicProviderCode || undefined,
               logo_url: resolvedClinicLogoUrl || undefined,
               signature_data_url: resolvedSignatureUrl || undefined,
               updated_at: new Date().toISOString()
@@ -23868,6 +23970,11 @@ async function startServer() {
                   professionalPhone: professionalPhone || undefined,
                   roleTitle: professionalRoleTitle || undefined,
                   professionalRoleTitle: professionalRoleTitle || undefined,
+                  council: resolvedCouncil || undefined,
+                  councilType: resolvedCouncil || undefined,
+                  councilState: professionalCouncilState || undefined,
+                  cboCode: professionalCboCode || undefined,
+                  specialtyName: professionalSpecialtyName || undefined,
                   crp: resolvedCrp || resolvedCouncilNumber || undefined
                 }),
                 clinic_settings: nextClinicSettings,
@@ -23895,6 +24002,10 @@ async function startServer() {
             phone: professionalPhone || req.session.user?.professionalProfile?.phone || null,
             roleTitle: professionalRoleTitle || req.session.user?.professionalProfile?.roleTitle || null,
             crp: resolvedCrp || resolvedCouncilNumber || req.session.user?.professionalProfile?.crp || null,
+            council: resolvedCouncil || req.session.user?.professionalProfile?.council || null,
+            councilState: professionalCouncilState || req.session.user?.professionalProfile?.councilState || null,
+            cboCode: professionalCboCode || req.session.user?.professionalProfile?.cboCode || null,
+            specialtyName: professionalSpecialtyName || req.session.user?.professionalProfile?.specialtyName || null,
             specialties:
               sanitizeString(req.body?.specialties || professionalProfileInput?.specialties, 240) ||
               req.session.user?.professionalProfile?.specialties ||
@@ -32406,8 +32517,8 @@ async function startServer() {
         document_type: ['CPF', 'CNPJ'].includes(sanitizeString(req.body?.documentType ?? req.body?.document_type, 10).toUpperCase())
           ? sanitizeString(req.body?.documentType ?? req.body?.document_type, 10).toUpperCase()
           : null,
-        document_number: sanitizeString(req.body?.documentNumber ?? req.body?.document_number, 40) || null,
-        cnes_code: sanitizeString(req.body?.cnesCode ?? req.body?.cnes_code, 40) || null,
+        document_number: sanitizeString(req.body?.documentNumber ?? req.body?.document_number, 40).replace(/\D/g, '') || null,
+        cnes_code: sanitizeString(req.body?.cnesCode ?? req.body?.cnes_code, 40).replace(/\D/g, '') || null,
         provider_code: sanitizeString(req.body?.providerCode ?? req.body?.provider_code, 80) || null,
         ans_provider_code: sanitizeString(req.body?.ansProviderCode ?? req.body?.ans_provider_code, 80) || null,
         address_line: sanitizeString(req.body?.addressLine ?? req.body?.address_line, 180) || null,
@@ -32416,8 +32527,8 @@ async function startServer() {
         district: sanitizeString(req.body?.district, 120) || null,
         city: sanitizeString(req.body?.city, 120) || null,
         state: sanitizeString(req.body?.state, 2).toUpperCase() || null,
-        postal_code: sanitizeString(req.body?.postalCode ?? req.body?.postal_code, 20) || null,
-        phone: sanitizeString(req.body?.phone, 40) || null,
+        postal_code: sanitizeString(req.body?.postalCode ?? req.body?.postal_code, 20).replace(/\D/g, '') || null,
+        phone: sanitizePhone(req.body?.phone) || null,
         email: sanitizeEmail(req.body?.email) || null,
         active: req.body?.active !== false,
         created_at: existingProfile?.created_at || now,
@@ -32589,11 +32700,11 @@ async function startServer() {
         professional_id: professionalId,
         display_name: sanitizeString(req.body?.displayName ?? req.body?.display_name, 180) || null,
         document_type: ['CPF', 'CNPJ', 'OTHER'].includes(documentType) ? documentType : null,
-        document_number: sanitizeString(req.body?.documentNumber ?? req.body?.document_number, 40) || null,
+        document_number: sanitizeString(req.body?.documentNumber ?? req.body?.document_number, 40).replace(/\D/g, '') || null,
         council_type: sanitizeString(req.body?.councilType ?? req.body?.council_type, 40) || null,
         council_number: sanitizeString(req.body?.councilNumber ?? req.body?.council_number, 80) || null,
         council_state: sanitizeString(req.body?.councilState ?? req.body?.council_state, 2).toUpperCase() || null,
-        cbo_code: sanitizeString(req.body?.cboCode ?? req.body?.cbo_code, 40) || null,
+        cbo_code: sanitizeString(req.body?.cboCode ?? req.body?.cbo_code, 40).replace(/\D/g, '') || null,
         specialty_name: sanitizeString(req.body?.specialtyName ?? req.body?.specialty_name, 120) || null,
         provider_code: sanitizeString(req.body?.providerCode ?? req.body?.provider_code, 80) || null,
         active: req.body?.active !== false,

@@ -62,6 +62,7 @@ import { OperationalClosureCenter } from "./OperationalClosureCenter";
 import { MonthlyConferenceCenter } from "./MonthlyConferenceCenter";
 import { PayerRequirementsPanel } from "./PayerRequirementsPanel";
 import { BillingTissSettingsPanel } from "./BillingTissSettingsPanel";
+import { ClinicGlobalSettingsPanel } from "./ClinicGlobalSettingsPanel";
 import { LogoVerto } from "./Common";
 import { SecureImage } from "./SecureMedia";
 import { motion, AnimatePresence } from "framer-motion";
@@ -86,6 +87,15 @@ import {
   writeAgendaViewPreference,
   type AgendaView,
 } from "../utils/agendaViewPreference";
+import {
+  formatDocument,
+  maskCep,
+  maskCnpj,
+  maskCpf,
+  maskPhoneBR,
+  onlyDigits,
+  parseDocumentForStorage,
+} from "../utils/brMasks";
 import { ROLE_CAPABILITY_SECTIONS } from "../constants/roleCapabilities";
 import {
   getDefaultAnamnesisTemplate,
@@ -207,28 +217,9 @@ export function CoordinatorDashboard({
   onAddTask,
   onUpdateTask,
 }: CoordinatorDashboardProps) {
-  const formatCnpjInput = (value: string) => {
-    const digits = String(value || '').replace(/\D/g, '').slice(0, 14);
-    if (digits.length <= 2) return digits;
-    if (digits.length <= 5) return `${digits.slice(0, 2)}.${digits.slice(2)}`;
-    if (digits.length <= 8) return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5)}`;
-    if (digits.length <= 12) return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8)}`;
-    return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8, 12)}-${digits.slice(12)}`;
-  };
-  const formatCpfInput = (value: string) => {
-    const digits = String(value || "").replace(/\D/g, "").slice(0, 11);
-    if (digits.length <= 3) return digits;
-    if (digits.length <= 6) return `${digits.slice(0, 3)}.${digits.slice(3)}`;
-    if (digits.length <= 9) return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6)}`;
-    return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9)}`;
-  };
-  const formatPhoneInput = (value: string) => {
-    const digits = String(value || "").replace(/\D/g, "").slice(0, 11);
-    if (digits.length <= 2) return digits;
-    if (digits.length <= 6) return `(${digits.slice(0, 2)}) ${digits.slice(2)}`;
-    if (digits.length <= 10) return `(${digits.slice(0, 2)}) ${digits.slice(2, 6)}-${digits.slice(6)}`;
-    return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
-  };
+  const formatCnpjInput = (value: string) => maskCnpj(value);
+  const formatCpfInput = (value: string) => maskCpf(value);
+  const formatPhoneInput = (value: string) => maskPhoneBR(value);
   const profileMetadata = (
     user?.professionalProfile?.metadata ||
     user?.professional_profile?.metadata ||
@@ -889,8 +880,23 @@ export function CoordinatorDashboard({
     useState(false);
   const [loadingAnamnesisTemplate, setLoadingAnamnesisTemplate] =
     useState(false);
+  const [clinicDocumentType, setClinicDocumentType] = useState<string>(
+    String(user?.clinicSettings?.clinicDocumentType || user?.clinicSettings?.documentType || "CNPJ").toUpperCase(),
+  );
   const [clinicCnpj, setClinicCnpj] = useState(
-    formatCnpjInput(String(user?.clinicSettings?.clinicCnpj || "")),
+    formatDocument(
+      String(user?.clinicSettings?.clinicDocumentNumber || user?.clinicSettings?.clinicCnpj || ""),
+      user?.clinicSettings?.clinicDocumentType || user?.clinicSettings?.documentType || "CNPJ",
+    ),
+  );
+  const [clinicLegalName, setClinicLegalName] = useState<string>(
+    String(user?.clinicSettings?.clinicLegalName || user?.clinicSettings?.legalName || ""),
+  );
+  const [clinicCnesCode, setClinicCnesCode] = useState<string>(
+    onlyDigits(user?.clinicSettings?.clinicCnesCode || user?.clinicSettings?.cnesCode || "", 12),
+  );
+  const [clinicProviderCode, setClinicProviderCode] = useState<string>(
+    String(user?.clinicSettings?.clinicProviderCode || user?.clinicSettings?.providerCode || ""),
   );
   const buildInitialAvatarDataUrl = (name?: string) => {
     const initial = (name || "P").trim().charAt(0).toUpperCase() || "P";
@@ -906,6 +912,9 @@ export function CoordinatorDashboard({
   );
   const [therapistPhone, setTherapistPhone] = useState<string>(
     formatPhoneInput(String(user?.phone || user?.whatsappPhone || profileMetadata?.phone || profileMetadata?.professionalPhone || "")),
+  );
+  const [therapistEmail, setTherapistEmail] = useState<string>(
+    String(user?.email || profileMetadata?.email || profileMetadata?.professionalEmail || ""),
   );
   const [therapistRoleTitle, setTherapistRoleTitle] = useState<string>(
     String(user?.professionalRoleTitle || profileMetadata?.roleTitle || profileMetadata?.professionalRoleTitle || ""),
@@ -937,17 +946,56 @@ export function CoordinatorDashboard({
   const [clinicLogoDataUrl, setClinicLogoDataUrl] = useState<string | null>(
     user?.clinicSettings?.clinicLogoUrl || null,
   );
+  const [therapistCouncilType, setTherapistCouncilType] = useState<string>(
+    String(user?.professionalProfile?.council || user?.professional_profile?.council || profileMetadata?.council || profileMetadata?.councilType || ""),
+  );
+  const [therapistCouncilState, setTherapistCouncilState] = useState<string>(
+    String(user?.professionalProfile?.councilState || user?.professional_profile?.council_state || profileMetadata?.councilState || profileMetadata?.council_state || "").toUpperCase().slice(0, 2),
+  );
+  const [therapistCboCode, setTherapistCboCode] = useState<string>(
+    onlyDigits(user?.professionalProfile?.cboCode || user?.professional_profile?.cbo_code || profileMetadata?.cboCode || profileMetadata?.cbo_code || "", 12),
+  );
+  const [therapistSpecialtyName, setTherapistSpecialtyName] = useState<string>(
+    String(user?.professionalProfile?.specialtyName || user?.professional_profile?.specialty_name || profileMetadata?.specialtyName || profileMetadata?.specialty_name || ""),
+  );
   const [clinicDisplayName, setClinicDisplayName] = useState<string>(
     String(user?.clinicSettings?.clinicName || user?.workspaceName || ""),
   );
   const [clinicPhone, setClinicPhone] = useState<string>(
     formatPhoneInput(String(user?.clinicSettings?.clinicPhone || "")),
   );
+  const [clinicWhatsapp, setClinicWhatsapp] = useState<string>(
+    formatPhoneInput(String(user?.clinicSettings?.clinicWhatsapp || user?.clinicSettings?.whatsapp || "")),
+  );
   const [clinicEmail, setClinicEmail] = useState<string>(
     String(user?.clinicSettings?.clinicEmail || ""),
   );
+  const [clinicSite, setClinicSite] = useState<string>(
+    String(user?.clinicSettings?.clinicSite || user?.clinicSettings?.site || ""),
+  );
   const [clinicAddress, setClinicAddress] = useState<string>(
     String(user?.clinicSettings?.clinicAddress || ""),
+  );
+  const [clinicAddressLine, setClinicAddressLine] = useState<string>(
+    String(user?.clinicSettings?.clinicAddressLine || user?.clinicSettings?.addressLine || user?.clinicSettings?.clinicAddress || ""),
+  );
+  const [clinicAddressNumber, setClinicAddressNumber] = useState<string>(
+    String(user?.clinicSettings?.clinicAddressNumber || user?.clinicSettings?.addressNumber || ""),
+  );
+  const [clinicAddressComplement, setClinicAddressComplement] = useState<string>(
+    String(user?.clinicSettings?.clinicAddressComplement || user?.clinicSettings?.addressComplement || ""),
+  );
+  const [clinicDistrict, setClinicDistrict] = useState<string>(
+    String(user?.clinicSettings?.clinicDistrict || user?.clinicSettings?.district || ""),
+  );
+  const [clinicCity, setClinicCity] = useState<string>(
+    String(user?.clinicSettings?.clinicCity || user?.clinicSettings?.city || ""),
+  );
+  const [clinicStateUf, setClinicStateUf] = useState<string>(
+    String(user?.clinicSettings?.clinicState || user?.clinicSettings?.state || "").toUpperCase().slice(0, 2),
+  );
+  const [clinicPostalCode, setClinicPostalCode] = useState<string>(
+    maskCep(String(user?.clinicSettings?.clinicPostalCode || user?.clinicSettings?.postalCode || "")),
   );
   const [mediaRefreshAttempts, setMediaRefreshAttempts] = useState({
     signature: 0,
@@ -1211,6 +1259,7 @@ export function CoordinatorDashboard({
     setTherapistCrp(String(user?.crp || ""));
     setTherapistCpf(formatCpfInput(String(user?.cpf || nextProfileMetadata?.cpf || nextProfileMetadata?.professionalCpf || "")));
     setTherapistPhone(formatPhoneInput(String(user?.phone || user?.whatsappPhone || nextProfileMetadata?.phone || nextProfileMetadata?.professionalPhone || "")));
+    setTherapistEmail(String(user?.email || nextProfileMetadata?.email || nextProfileMetadata?.professionalEmail || ""));
     setTherapistRoleTitle(String(user?.professionalRoleTitle || nextProfileMetadata?.roleTitle || nextProfileMetadata?.professionalRoleTitle || ""));
     setTherapistFullName(String(user?.name || ""));
     setTherapistSpecialties(
@@ -1227,6 +1276,16 @@ export function CoordinatorDashboard({
           user?.clinicSettings?.therapistMiniCurriculum ||
           "",
       ),
+    );
+    setTherapistCouncilType(
+      String(user?.professionalProfile?.council || user?.professional_profile?.council || nextProfileMetadata?.council || nextProfileMetadata?.councilType || ""),
+    );
+    setTherapistCouncilState(
+      String(user?.professionalProfile?.councilState || user?.professional_profile?.council_state || nextProfileMetadata?.councilState || nextProfileMetadata?.council_state || "").toUpperCase().slice(0, 2),
+    );
+    setTherapistCboCode(onlyDigits(user?.professionalProfile?.cboCode || user?.professional_profile?.cbo_code || nextProfileMetadata?.cboCode || nextProfileMetadata?.cbo_code || "", 12));
+    setTherapistSpecialtyName(
+      String(user?.professionalProfile?.specialtyName || user?.professional_profile?.specialty_name || nextProfileMetadata?.specialtyName || nextProfileMetadata?.specialty_name || ""),
     );
     setTherapistSignatureDataUrl((prev) =>
       isUnsavedLocalMediaPreview(prev)
@@ -1245,16 +1304,31 @@ export function CoordinatorDashboard({
     );
     setWorkStart(String(user?.clinicSettings?.workStart || "08:00"));
     setWorkEnd(String(user?.clinicSettings?.workEnd || "18:00"));
-    setClinicCnpj(formatCnpjInput(String(user?.clinicSettings?.clinicCnpj || "")));
+    const nextClinicDocumentType = String(user?.clinicSettings?.clinicDocumentType || user?.clinicSettings?.documentType || "CNPJ").toUpperCase();
+    setClinicDocumentType(nextClinicDocumentType);
+    setClinicCnpj(formatDocument(String(user?.clinicSettings?.clinicDocumentNumber || user?.clinicSettings?.clinicCnpj || ""), nextClinicDocumentType));
+    setClinicLegalName(String(user?.clinicSettings?.clinicLegalName || user?.clinicSettings?.legalName || ""));
+    setClinicCnesCode(onlyDigits(user?.clinicSettings?.clinicCnesCode || user?.clinicSettings?.cnesCode || "", 12));
+    setClinicProviderCode(String(user?.clinicSettings?.clinicProviderCode || user?.clinicSettings?.providerCode || ""));
     setClinicDisplayName(String(user?.clinicSettings?.clinicName || user?.workspaceName || ""));
     setClinicPhone(formatPhoneInput(String(user?.clinicSettings?.clinicPhone || "")));
+    setClinicWhatsapp(formatPhoneInput(String(user?.clinicSettings?.clinicWhatsapp || user?.clinicSettings?.whatsapp || "")));
     setClinicEmail(String(user?.clinicSettings?.clinicEmail || ""));
+    setClinicSite(String(user?.clinicSettings?.clinicSite || user?.clinicSettings?.site || ""));
     setClinicAddress(String(user?.clinicSettings?.clinicAddress || ""));
+    setClinicAddressLine(String(user?.clinicSettings?.clinicAddressLine || user?.clinicSettings?.addressLine || user?.clinicSettings?.clinicAddress || ""));
+    setClinicAddressNumber(String(user?.clinicSettings?.clinicAddressNumber || user?.clinicSettings?.addressNumber || ""));
+    setClinicAddressComplement(String(user?.clinicSettings?.clinicAddressComplement || user?.clinicSettings?.addressComplement || ""));
+    setClinicDistrict(String(user?.clinicSettings?.clinicDistrict || user?.clinicSettings?.district || ""));
+    setClinicCity(String(user?.clinicSettings?.clinicCity || user?.clinicSettings?.city || ""));
+    setClinicStateUf(String(user?.clinicSettings?.clinicState || user?.clinicSettings?.state || "").toUpperCase().slice(0, 2));
+    setClinicPostalCode(maskCep(String(user?.clinicSettings?.clinicPostalCode || user?.clinicSettings?.postalCode || "")));
   }, [
     user?.crp,
     user?.cpf,
     user?.phone,
     user?.whatsappPhone,
+    user?.email,
     user?.professionalRoleTitle,
     user?.professionalProfile,
     user?.professional_profile,
@@ -1273,10 +1347,37 @@ export function CoordinatorDashboard({
     user?.clinicSettings?.workStart,
     user?.clinicSettings?.workEnd,
     user?.clinicSettings?.clinicCnpj,
+    user?.clinicSettings?.clinicDocumentNumber,
+    user?.clinicSettings?.clinicDocumentType,
+    user?.clinicSettings?.documentType,
+    user?.clinicSettings?.clinicLegalName,
+    user?.clinicSettings?.legalName,
+    user?.clinicSettings?.clinicCnesCode,
+    user?.clinicSettings?.cnesCode,
+    user?.clinicSettings?.clinicProviderCode,
+    user?.clinicSettings?.providerCode,
     user?.clinicSettings?.clinicName,
     user?.clinicSettings?.clinicPhone,
+    user?.clinicSettings?.clinicWhatsapp,
+    user?.clinicSettings?.whatsapp,
     user?.clinicSettings?.clinicEmail,
+    user?.clinicSettings?.clinicSite,
+    user?.clinicSettings?.site,
     user?.clinicSettings?.clinicAddress,
+    user?.clinicSettings?.clinicAddressLine,
+    user?.clinicSettings?.addressLine,
+    user?.clinicSettings?.clinicAddressNumber,
+    user?.clinicSettings?.addressNumber,
+    user?.clinicSettings?.clinicAddressComplement,
+    user?.clinicSettings?.addressComplement,
+    user?.clinicSettings?.clinicDistrict,
+    user?.clinicSettings?.district,
+    user?.clinicSettings?.clinicCity,
+    user?.clinicSettings?.city,
+    user?.clinicSettings?.clinicState,
+    user?.clinicSettings?.state,
+    user?.clinicSettings?.clinicPostalCode,
+    user?.clinicSettings?.postalCode,
     user?.workspaceName,
   ]);
   const refreshSignedMediaUrls = useCallback(async () => {
@@ -4502,18 +4603,41 @@ export function CoordinatorDashboard({
     );
   };
 
-  const handleSaveClinicSettings = () => {
+  const handleSaveClinicSettings = async () => {
     const cleanFullName = therapistFullName.trim();
     const cleanCrp = therapistCrp.trim();
-    const cleanCpf = therapistCpf.replace(/\D/g, "");
-    const cleanPhone = therapistPhone.trim();
+    const cleanCpf = onlyDigits(therapistCpf, 11);
+    const cleanPhone = onlyDigits(therapistPhone, 11);
+    const cleanTherapistEmail = therapistEmail.trim();
     const cleanRoleTitle = therapistRoleTitle.trim();
     const cleanSpecialties = therapistSpecialties.trim();
     const cleanMiniCurriculum = therapistMiniCurriculum.trim();
+    const cleanCouncilType = therapistCouncilType.trim();
+    const cleanCouncilState = therapistCouncilState.trim().toUpperCase().slice(0, 2);
+    const cleanCboCode = onlyDigits(therapistCboCode, 12);
+    const cleanSpecialtyName = therapistSpecialtyName.trim();
     const cleanClinicName = clinicDisplayName.trim();
-    const cleanClinicPhone = clinicPhone.trim();
+    const cleanClinicLegalName = clinicLegalName.trim();
+    const normalizedClinicDocumentType = clinicDocumentType === "CPF" ? "CPF" : "CNPJ";
+    const cleanClinicDocumentNumber = parseDocumentForStorage(clinicCnpj);
+    const cleanClinicPhone = onlyDigits(clinicPhone, 11);
+    const cleanClinicWhatsapp = onlyDigits(clinicWhatsapp, 11);
     const cleanClinicEmail = clinicEmail.trim();
-    const cleanClinicAddress = clinicAddress.trim();
+    const cleanClinicSite = clinicSite.trim();
+    const cleanClinicAddressLine = clinicAddressLine.trim();
+    const cleanClinicAddressNumber = clinicAddressNumber.trim();
+    const cleanClinicAddressComplement = clinicAddressComplement.trim();
+    const cleanClinicDistrict = clinicDistrict.trim();
+    const cleanClinicCity = clinicCity.trim();
+    const cleanClinicState = clinicStateUf.trim().toUpperCase().slice(0, 2);
+    const cleanClinicPostalCode = onlyDigits(clinicPostalCode, 8);
+    const cleanClinicAddress =
+      clinicAddress.trim() ||
+      [cleanClinicAddressLine, cleanClinicAddressNumber, cleanClinicDistrict, cleanClinicCity, cleanClinicState]
+        .filter(Boolean)
+        .join(", ");
+    const cleanClinicCnesCode = onlyDigits(clinicCnesCode, 12);
+    const cleanClinicProviderCode = clinicProviderCode.trim();
     const isCrpValid =
       !cleanCrp ||
       /^[A-Za-z]{2,4}\s?\/?\s?\d{3,10}$/i.test(cleanCrp) ||
@@ -4538,6 +4662,13 @@ export function CoordinatorDashboard({
       showToast("CPF inválido. Informe 11 dígitos.", "error");
       return;
     }
+    if (cleanClinicDocumentNumber) {
+      const expectedLength = normalizedClinicDocumentType === "CPF" ? 11 : 14;
+      if (cleanClinicDocumentNumber.length !== expectedLength) {
+        showToast(normalizedClinicDocumentType === "CPF" ? "CPF da clínica inválido." : "CNPJ da clínica inválido.", "error");
+        return;
+      }
+    }
     if (!isTherapist && !canManageClinicSettings) {
       showToast("Apenas a coordenação pode alterar as configurações da clínica.", "error");
       return;
@@ -4551,16 +4682,77 @@ export function CoordinatorDashboard({
       workEnd,
       professionalSessionDurations,
       clinicName: cleanClinicName || user?.clinicSettings?.clinicName || null,
-      clinicCnpj,
+      clinicLegalName: cleanClinicLegalName || null,
+      legalName: cleanClinicLegalName || null,
+      clinicDocumentType: normalizedClinicDocumentType,
+      documentType: normalizedClinicDocumentType,
+      clinicDocumentNumber: cleanClinicDocumentNumber || null,
+      clinicCnpj: cleanClinicDocumentNumber || null,
       clinicPhone: cleanClinicPhone || null,
+      clinicWhatsapp: cleanClinicWhatsapp || null,
       clinicEmail: cleanClinicEmail || null,
+      clinicSite: cleanClinicSite || null,
       clinicAddress: cleanClinicAddress || null,
+      clinicAddressLine: cleanClinicAddressLine || null,
+      clinicAddressNumber: cleanClinicAddressNumber || null,
+      clinicAddressComplement: cleanClinicAddressComplement || null,
+      clinicDistrict: cleanClinicDistrict || null,
+      clinicCity: cleanClinicCity || null,
+      clinicState: cleanClinicState || null,
+      clinicPostalCode: cleanClinicPostalCode || null,
+      clinicCnesCode: cleanClinicCnesCode || null,
+      clinicProviderCode: cleanClinicProviderCode || null,
     };
+
+    if (!isTherapist && canManageClinicSettings) {
+      try {
+        const providerResult = await dataService.updateClinicTissProfile({
+          legalName: cleanClinicLegalName || cleanClinicName || null,
+          tradeName: cleanClinicName || null,
+          documentType: normalizedClinicDocumentType,
+          documentNumber: cleanClinicDocumentNumber || null,
+          cnesCode: cleanClinicCnesCode || null,
+          providerCode: cleanClinicProviderCode || null,
+          addressLine: cleanClinicAddressLine || null,
+          addressNumber: cleanClinicAddressNumber || null,
+          addressComplement: cleanClinicAddressComplement || null,
+          district: cleanClinicDistrict || null,
+          city: cleanClinicCity || null,
+          state: cleanClinicState || null,
+          postalCode: cleanClinicPostalCode || null,
+          phone: cleanClinicPhone || cleanClinicWhatsapp || null,
+          email: cleanClinicEmail || null,
+        });
+        if (!providerResult?.success) {
+          showToast(providerResult?.error || "Não foi possível salvar os dados fiscais/TISS da clínica.", "error");
+          hideProcessing();
+          return;
+        }
+      } catch {
+        showToast("Não foi possível salvar os dados fiscais/TISS da clínica.", "error");
+        hideProcessing();
+        return;
+      }
+    }
+
+    if (!isTherapist && canManageClinicSettings && String(user?.id || "").trim()) {
+      void dataService.updateProfessionalBillingProfile(String(user.id), {
+        displayName: cleanFullName || null,
+        documentType: "CPF",
+        documentNumber: cleanCpf || null,
+        councilType: cleanCouncilType || cleanCrp.split(/\s|\//)[0] || null,
+        councilNumber: cleanCrp || null,
+        councilState: cleanCouncilState || null,
+        cboCode: cleanCboCode || null,
+        specialtyName: cleanSpecialtyName || cleanSpecialties || null,
+      });
+    }
 
     onUpdateProfile({
       name: therapistFullName?.trim() || user?.name,
       cpf: cleanCpf || null,
       phone: cleanPhone || null,
+      email: cleanTherapistEmail || user?.email,
       professionalRoleTitle: cleanRoleTitle || null,
       crp: cleanCrp || null,
       specialties: cleanSpecialties,
@@ -4571,8 +4763,13 @@ export function CoordinatorDashboard({
         fullName: cleanFullName,
         cpf: cleanCpf || null,
         phone: cleanPhone || null,
+        email: cleanTherapistEmail || null,
         roleTitle: cleanRoleTitle || null,
         crp: cleanCrp || null,
+        council: cleanCouncilType || null,
+        councilState: cleanCouncilState || null,
+        cboCode: cleanCboCode || null,
+        specialtyName: cleanSpecialtyName || null,
         specialties: cleanSpecialties,
         miniCurriculum: cleanMiniCurriculum,
         profilePicture: therapistProfilePhotoUrl,
@@ -8111,6 +8308,102 @@ export function CoordinatorDashboard({
             {activeTab === "settings" && (
               <motion.div
                 key="settings"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }}
+              >
+                <ClinicGlobalSettingsPanel
+                  isTherapist={isTherapist}
+                  canEditAnamnesisTemplate={canEditAnamnesisTemplate}
+                  loadingAnamnesisTemplate={loadingAnamnesisTemplate}
+                  onOpenAnamnesisTemplate={() => setIsAnamnesisTemplateModalOpen(true)}
+                  canManageClinicSettings={canManageClinicSettings}
+                  canManageBilling={canManageBilling}
+                  normalizedPlanName={normalizedPlanName}
+                  navigateToTab={navigateToTab}
+                  onSave={handleSaveClinicSettings}
+                  values={{
+                    therapistFullName,
+                    therapistCpf,
+                    therapistEmail,
+                    therapistPhone,
+                    therapistRoleTitle,
+                    therapistCouncilType,
+                    therapistCrp,
+                    therapistCouncilState,
+                    therapistCboCode,
+                    therapistSpecialtyName,
+                    therapistSpecialties,
+                    therapistMiniCurriculum,
+                    therapistSignatureDataUrl,
+                    therapistProfilePhotoUrl,
+                    clinicDisplayName,
+                    clinicLegalName,
+                    clinicDocumentType,
+                    clinicCnpj,
+                    clinicCnesCode,
+                    clinicProviderCode,
+                    clinicLogoDataUrl,
+                    clinicEmail,
+                    clinicPhone,
+                    clinicWhatsapp,
+                    clinicSite,
+                    clinicAddress,
+                    clinicAddressLine,
+                    clinicAddressNumber,
+                    clinicAddressComplement,
+                    clinicDistrict,
+                    clinicCity,
+                    clinicStateUf,
+                    clinicPostalCode,
+                    workStart,
+                    workEnd,
+                  }}
+                  setters={{
+                    setTherapistFullName,
+                    setTherapistCpf,
+                    setTherapistEmail,
+                    setTherapistPhone,
+                    setTherapistRoleTitle,
+                    setTherapistCouncilType,
+                    setTherapistCrp,
+                    setTherapistCouncilState,
+                    setTherapistCboCode,
+                    setTherapistSpecialtyName,
+                    setTherapistSpecialties,
+                    setTherapistMiniCurriculum,
+                    setTherapistSignatureDataUrl,
+                    setTherapistProfilePhotoUrl,
+                    setClinicDisplayName,
+                    setClinicLegalName,
+                    setClinicDocumentType,
+                    setClinicCnpj,
+                    setClinicCnesCode,
+                    setClinicProviderCode,
+                    setClinicLogoDataUrl,
+                    setClinicEmail,
+                    setClinicPhone,
+                    setClinicWhatsapp,
+                    setClinicSite,
+                    setClinicAddress,
+                    setClinicAddressLine,
+                    setClinicAddressNumber,
+                    setClinicAddressComplement,
+                    setClinicDistrict,
+                    setClinicCity,
+                    setClinicStateUf,
+                    setClinicPostalCode,
+                    setWorkStart,
+                    setWorkEnd,
+                  }}
+                  readImageAsDataUrl={readImageAsDataUrl}
+                  retryMediaIfBroken={retryMediaIfBroken}
+                />
+              </motion.div>
+            )}
+            {activeTab === "settings_legacy" && (
+              <motion.div
+                key="settings-legacy"
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -20 }}

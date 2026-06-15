@@ -53,7 +53,7 @@ test('contexto do prontuario usa dados da clinica sem cair na foto/nome do profi
 });
 
 test('backend persiste campos profissionais e institucionais de forma tolerante ao schema', () => {
-  const route = sliceFrom(serverCode, "app.post('/api/profile/:userId'", 14000);
+  const route = sliceFrom(serverCode, "app.post('/api/profile/:userId'", 26000);
   for (const token of [
     'professionalProfileInput',
     'clinicSettingsInput',
