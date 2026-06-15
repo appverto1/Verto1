@@ -2989,6 +2989,23 @@ export const dataService = {
     }
   },
 
+  async getPayerTissProfiles() {
+    try {
+      return await fetchNoStoreJsonWithRetry('/api/admin/tiss/payer-profiles', {
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getPayerTissProfiles',
+        operation: 'list',
+        table: 'payer_tiss_profiles',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      }, 'Os perfis TISS dos pagadores voltaram do cache.');
+    } catch {
+      return { success: false, data: [], error: 'Não foi possível carregar os perfis TISS dos pagadores.' };
+    }
+  },
+
   async updatePayerTissProfile(payerId: string, payload: any = {}) {
     const endpoint = `/api/admin/tiss/payer-profiles/${encodeURIComponent(String(payerId))}`;
     try {
@@ -3025,6 +3042,23 @@ export const dataService = {
       }, 'O perfil faturável do profissional voltou do cache.');
     } catch {
       return { success: false, data: null, error: 'Não foi possível carregar o perfil faturável do profissional.' };
+    }
+  },
+
+  async getProfessionalBillingProfiles() {
+    try {
+      return await fetchNoStoreJsonWithRetry('/api/admin/tiss/professional-profiles', {
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getProfessionalBillingProfiles',
+        operation: 'list',
+        table: 'professional_billing_profiles',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      }, 'Os perfis faturáveis dos profissionais voltaram do cache.');
+    } catch {
+      return { success: false, data: [], error: 'Não foi possível carregar os perfis faturáveis dos profissionais.' };
     }
   },
 

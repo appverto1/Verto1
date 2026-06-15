@@ -66,6 +66,11 @@ const isLikelyProfessionalNameFallback = (candidate: unknown, professionalName: 
   return clinicTokens.length === 1 && executorName.split(/\s+/).includes(clinicTokens[0]);
 };
 
+const isPlaceholderExecutorName = (value: unknown) => {
+  const normalized = normalizedIdentity(value);
+  return ['equipe', 'team', 'profissional a definir', 'profissional indefinido'].includes(normalized);
+};
+
 const resolveProviderTradeName = (input: {
   clinicProfile: Record<string, any>;
   clinic: Record<string, any>;
@@ -350,6 +355,7 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
   const unit = text(billingItem.billing_unit || mapping.billing_unit || service.billing_unit);
   const unitAmountCents = Number(billingItem.unit_amount_cents ?? mapping.amount_cents ?? service.default_amount_cents ?? 0);
   const totalAmountCents = Number(billingItem.amount_cents ?? (positiveNumber(quantity) && unitAmountCents > 0 ? quantity * unitAmountCents : 0));
+  const executorName = text(professionalProfile.display_name || professional.name);
 
   if (!procedureCode && !procedureName) addIssue(errors, 'PROCEDURE_MISSING', 'internal_procedure', tissPreGuideIssueLabel('PROCEDURE_MISSING'), 'procedure');
   if (!resolvedTussCode) addIssue(errors, 'TUSS_CODE_MISSING', 'tuss_code', tissPreGuideIssueLabel('TUSS_CODE_MISSING'), 'procedure');
@@ -428,7 +434,7 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
       professional: {
         id: professionalId || null,
         profileId: text(professionalProfile.id) || null,
-        name: text(professionalProfile.display_name || professional.name) || null,
+        name: executorName && !isPlaceholderExecutorName(executorName) ? executorName : null,
         councilType: councilType || null,
         councilNumber: councilNumber || null,
         councilState: text(professionalProfile.council_state || professional.council_state) || null,

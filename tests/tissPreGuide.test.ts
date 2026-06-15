@@ -11,6 +11,8 @@ const serverCode = readFileSync(join(root, 'server.ts'), 'utf8');
 const dataServiceCode = readFileSync(join(root, 'src/services/dataService.ts'), 'utf8');
 const conferenceCode = readFileSync(join(root, 'src/components/MonthlyConferenceCenter.tsx'), 'utf8');
 const preGuideUiCode = readFileSync(join(root, 'src/components/TissPreGuideTab.tsx'), 'utf8');
+const billingTissSettingsCode = readFileSync(join(root, 'src/components/BillingTissSettingsPanel.tsx'), 'utf8');
+const coordinatorCode = readFileSync(join(root, 'src/components/CoordinatorDashboard.tsx'), 'utf8');
 const migrationCode = readFileSync(join(root, 'supabase/migrations/20260614183000_tiss_pre_guides.sql'), 'utf8');
 const packageJson = readFileSync(join(root, 'package.json'), 'utf8');
 
@@ -154,6 +156,21 @@ test('pre-guia usa dados do prestador da clinica e nao o nome do profissional', 
   assert.equal(result.snapshot.professional.name, 'Terapeuta Mateus');
 });
 
+test('Equipe nao e tratada como profissional executante faturavel', () => {
+  const result = validateTissPreGuide({
+    ...validInput,
+    professionalProfile: null,
+    professional: {
+      id: 'professional-1',
+      name: 'Equipe',
+    },
+  });
+
+  assert.equal(result.snapshot.professional.name, null);
+  assert.ok(result.errorCodes.includes('PROFESSIONAL_BILLING_PROFILE_MISSING'));
+  assert.ok(result.errorCodes.includes('PROFESSIONAL_REGISTRY_MISSING'));
+});
+
 test('sem payer_id real não produz Pré-guia faturável válida', () => {
   const result = validateTissPreGuide({
     ...validInput,
@@ -292,6 +309,8 @@ test('backend persiste de forma idempotente pelo appointment e revalida só por 
   assert.match(serverCode, /clinic:\s*clinicResult\.data \|\| null/);
   assert.match(serverCode, /clinic_name_snapshot:\s*sanitizeString\(provider\.tradeName \|\| provider\.legalName, 180\)/);
   assert.doesNotMatch(serverCode, /clinic_name_snapshot:\s*sanitizeString\(provider\.tradeName \|\| provider\.legalName \|\| clinicResult\.data\?\.name/);
+  assert.match(serverCode, /professional_name_snapshot:\s*sanitizeString\(professionalSnapshot\.name, 180\) \|\| null/);
+  assert.doesNotMatch(serverCode, /professional_name_snapshot:\s*sanitizeString\(professionalSnapshot\.name \|\| professional\?\.name, 180\) \|\| 'Equipe'/);
   const centralRevalidation = serverCode.slice(
     serverCode.indexOf('const revalidateAppointmentBillingForAppointment'),
     serverCode.indexOf('const markTissPreGuidesStale')
@@ -365,7 +384,9 @@ test('endpoints protegem perfis e Pré-guias com autenticação, papel e tenant'
     "app.get('/api/admin/tiss/provider-profile'",
     "app.patch('/api/admin/tiss/provider-profile'",
     "app.get('/api/admin/tiss/payer-profiles/:payerId'",
+    "app.get('/api/admin/tiss/payer-profiles'",
     "app.patch('/api/admin/tiss/payer-profiles/:payerId'",
+    "app.get('/api/admin/tiss/professional-profiles'",
     "app.get('/api/admin/tiss/professional-profiles/:professionalId'",
     "app.patch('/api/admin/tiss/professional-profiles/:professionalId'",
     "app.get('/api/tiss/pre-guides'",
@@ -401,6 +422,24 @@ test('perfil TISS do prestador salva e le clinic_tiss_profiles sem substituir po
   assert.doesNotMatch(providerPatchRoute, /professionalName|professional_name|user\.name/);
 });
 
+test('cadastros TISS sao globais e reutilizaveis em Configuracoes', () => {
+  assert.match(coordinatorCode, /import \{ BillingTissSettingsPanel \} from "\.\/BillingTissSettingsPanel"/);
+  assert.match(coordinatorCode, /<BillingTissSettingsPanel/);
+  assert.match(billingTissSettingsCode, /Configurações de Faturamento e TISS/);
+  assert.match(billingTissSettingsCode, /Cadastros mestres reutilizados por Pré-guia TISS, Pré-faturamento, Fechamento, relatórios e exportações/);
+  assert.match(billingTissSettingsCode, /Fonte mestre: clinic_tiss_profiles/);
+  assert.match(billingTissSettingsCode, /Fonte mestre: payer_tiss_profiles/);
+  assert.match(billingTissSettingsCode, /Fonte mestre: professional_billing_profiles/);
+  assert.match(billingTissSettingsCode, /getClinicTissProfile/);
+  assert.match(billingTissSettingsCode, /getPayerTissProfiles/);
+  assert.match(billingTissSettingsCode, /getProfessionalBillingProfiles/);
+  assert.match(billingTissSettingsCode, /updateClinicTissProfile/);
+  assert.match(billingTissSettingsCode, /updatePayerTissProfile/);
+  assert.match(billingTissSettingsCode, /updateProfessionalBillingProfile/);
+  assert.match(billingTissSettingsCode, /Pré-guias afetadas foram marcadas para revalidação/);
+  assert.doesNotMatch(billingTissSettingsCode, /appointmentId|appointment_id/);
+});
+
 test('frontend oferece cards, paginação, detalhe sob demanda e nenhuma ação de XML', () => {
   assert.match(conferenceCode, /"preGuides", "Pré-guias TISS"/);
   assert.match(conferenceCode, /<TissPreGuideTab/);
@@ -429,7 +468,13 @@ test('frontend oferece cards, paginação, detalhe sob demanda e nenhuma ação 
   assert.match(preGuideUiCode, /dataService\.updateClinicTissProfile/);
   assert.match(preGuideUiCode, /dataService\.updatePayerTissProfile/);
   assert.match(preGuideUiCode, /dataService\.updateProfessionalBillingProfile/);
-  assert.match(preGuideUiCode, /Salvar e revalidar/);
+  assert.match(preGuideUiCode, /Cadastro global do prestador/);
+  assert.match(preGuideUiCode, /Cadastro global do pagador/);
+  assert.match(preGuideUiCode, /Cadastro global do profissional/);
+  assert.match(preGuideUiCode, /Salvar cadastro global e revalidar pré-guia atual/);
+  assert.match(preGuideUiCode, /Você está editando o perfil faturável global da clínica/);
+  assert.match(preGuideUiCode, /Você está editando o perfil TISS global deste pagador/);
+  assert.match(preGuideUiCode, /Você está editando o perfil faturável global deste profissional/);
   assert.match(preGuideUiCode, /Esta é uma pré-guia para validação interna\. XML TISS ainda não foi gerado\./);
   assert.match(preGuideUiCode, /sticky top-0 z-20/);
   assert.match(preGuideUiCode, /snapshot\.provider\?\.tradeName/);
@@ -452,8 +497,10 @@ test('data service usa operações explícitas e o pacote expõe suíte dedicada
     'getClinicTissProfile',
     'updateClinicTissProfile',
     'getPayerTissProfile',
+    'getPayerTissProfiles',
     'updatePayerTissProfile',
     'getProfessionalBillingProfile',
+    'getProfessionalBillingProfiles',
     'updateProfessionalBillingProfile',
   ]) {
     assert.match(dataServiceCode, new RegExp(`async ${helper}`));

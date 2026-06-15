@@ -146,6 +146,16 @@ function fieldValue(value: unknown, fallback = "Não informado") {
   return normalized || fallback;
 }
 
+function executantValue(value: unknown) {
+  const normalized = String(value ?? "").trim();
+  const comparable = normalized
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+  if (!normalized || ["equipe", "team"].includes(comparable)) return "Profissional não definido";
+  return normalized;
+}
+
 function issueLabel(code: string) {
   return issueLabels[code] || code.replaceAll("_", " ").toLocaleLowerCase("pt-BR");
 }
@@ -459,7 +469,7 @@ export function TissPreGuideTab({
       }
       setProfileEditor(null);
       if (detail) await revalidate(detail);
-      setMessage("Cadastro salvo e Pré-guia revalidada.");
+      setMessage("Cadastro global salvo. Pré-guia atual revalidada e demais pré-guias afetadas marcadas para revalidação.");
     } finally {
       setProfileSaving(false);
     }
@@ -469,6 +479,28 @@ export function TissPreGuideTab({
   const errors = detail?.validationErrors || [];
   const warnings = detail?.validationWarnings || [];
   const detailStatus = statusMeta[String(detail?.status || "draft")] || statusMeta.draft;
+  const profileEditorMeta = profileEditor === "provider"
+    ? {
+        title: "Cadastro global: Dados TISS do prestador",
+        subject: "Perfil faturável global da clínica",
+        description: "Você está editando o perfil faturável global da clínica. Essa alteração será usada em novas pré-guias e pode revalidar pré-guias pendentes.",
+        full: "Abrir Configurações > Faturamento e TISS",
+      }
+    : profileEditor === "payer"
+      ? {
+          title: "Cadastro global: Dados TISS do pagador",
+          subject: detail?.payerName || "Pagador",
+          description: "Você está editando o perfil TISS global deste pagador. Essa alteração será reutilizada em todos os atendimentos vinculados a este pagador.",
+          full: "Abrir Pagadores e regras",
+        }
+      : profileEditor === "professional"
+        ? {
+            title: "Cadastro global: Perfil faturável do profissional",
+            subject: executantValue(detail?.professionalName),
+            description: "Você está editando o perfil faturável global deste profissional. Essa alteração será reutilizada em todos os atendimentos deste profissional.",
+            full: "Abrir Equipe / Profissionais",
+          }
+        : null;
 
   return (
     <div className="space-y-3">
@@ -630,7 +662,7 @@ export function TissPreGuideTab({
                     <td className="px-4 py-3 text-slate-600">{fieldValue(row.payerName, "Sem pagador")}</td>
                     <td className="px-4 py-3 text-slate-600">{fieldValue(row.guideNumber)}</td>
                     <td className="px-4 py-3 text-slate-600">{fieldValue(row.authorizationCode)}</td>
-                    <td className="px-4 py-3 text-slate-600">{fieldValue(row.professionalName, "Equipe")}</td>
+                    <td className="px-4 py-3 text-slate-600">{executantValue(row.professionalName)}</td>
                     <td className="px-4 py-3 text-slate-600">
                       <div>{[professionalSnapshot.councilType, professionalSnapshot.councilNumber].filter(Boolean).join(" ") || "Registro não informado"}</div>
                       <div className="mt-1 text-xs text-slate-500">CBO: {fieldValue(professionalSnapshot.cboCode)}</div>
@@ -719,7 +751,7 @@ export function TissPreGuideTab({
                   </Section>
 
                   <Section title="Profissional executante" icon={Users}>
-                    <DetailField label="Nome" value={fieldValue(snapshot.professional?.name || detail.professionalName)} />
+                    <DetailField label="Nome" value={executantValue(snapshot.professional?.name || detail.professionalName)} />
                     <DetailField label="Conselho" value={fieldValue(snapshot.professional?.councilType)} />
                     <DetailField label="Número" value={fieldValue(snapshot.professional?.councilNumber)} />
                     <DetailField label="UF" value={fieldValue(snapshot.professional?.councilState)} />
@@ -763,9 +795,9 @@ export function TissPreGuideTab({
                   </div>
 
                   <div className="mt-4 flex flex-wrap justify-end gap-2">
-                    <button type="button" onClick={() => void openProfileEditor("provider")} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">Dados do prestador</button>
-                    <button type="button" onClick={() => void openProfileEditor("payer")} disabled={!detail.payerId} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-40">Dados do pagador</button>
-                    <button type="button" onClick={() => void openProfileEditor("professional")} disabled={!detail.professionalId} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-40">Dados do profissional</button>
+                    <button type="button" onClick={() => void openProfileEditor("provider")} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">Cadastro global do prestador</button>
+                    <button type="button" onClick={() => void openProfileEditor("payer")} disabled={!detail.payerId} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-40">Cadastro global do pagador</button>
+                    <button type="button" onClick={() => void openProfileEditor("professional")} disabled={!detail.professionalId} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-40">Cadastro global do profissional</button>
                     <button type="button" onClick={() => onOpenAppointment?.(detail)} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">Ir para atendimento</button>
                     <button type="button" onClick={() => void revalidate(detail)} disabled={revalidatingId === detail.appointmentId} className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-60">
                       {revalidatingId === detail.appointmentId ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
@@ -785,10 +817,10 @@ export function TissPreGuideTab({
             <header className="flex items-start justify-between border-b border-slate-200 px-5 py-4">
               <div>
                 <h2 className="text-lg font-semibold text-slate-900">
-                  {profileEditor === "provider" ? "Dados TISS do prestador" : profileEditor === "payer" ? "Dados TISS do pagador" : "Perfil faturável do profissional"}
+                  {profileEditorMeta?.title}
                 </h2>
                 <p className="mt-1 text-sm text-slate-500">
-                  {profileEditor === "provider" ? detail?.clinicName || "Clínica" : profileEditor === "payer" ? detail?.payerName || "Pagador" : detail?.professionalName || "Profissional"}
+                  {profileEditorMeta?.subject}
                 </p>
               </div>
               <button type="button" onClick={() => setProfileEditor(null)} className="rounded-md p-2 text-slate-500 hover:bg-slate-100" aria-label="Fechar configuração"><X size={18} /></button>
@@ -798,23 +830,27 @@ export function TissPreGuideTab({
               {profileLoading ? (
                 <div className="py-12 text-center text-sm text-slate-500"><Loader2 className="mx-auto mb-2 animate-spin" size={20} />Carregando cadastro</div>
               ) : profileEditor === "provider" ? (
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <EditorField label="Razão social" value={profileForm.legalName || ""} onChange={(value) => updateProfileField("legalName", value)} maxLength={180} />
-                  <EditorField label="Nome fantasia" value={profileForm.tradeName || ""} onChange={(value) => updateProfileField("tradeName", value)} maxLength={180} />
-                  <label className="text-xs font-medium text-slate-600">
-                    Tipo de documento
-                    <select value={profileForm.documentType || "CNPJ"} onChange={(event) => updateProfileField("documentType", event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm">
-                      <option value="CNPJ">CNPJ</option>
-                      <option value="CPF">CPF</option>
-                    </select>
-                  </label>
-                  <EditorField label="CPF/CNPJ" value={profileForm.documentNumber || ""} onChange={(value) => updateProfileField("documentNumber", value)} maxLength={40} />
-                  <EditorField label="CNES" value={profileForm.cnesCode || ""} onChange={(value) => updateProfileField("cnesCode", value)} maxLength={40} />
-                  <EditorField label="Código do prestador" value={profileForm.providerCode || ""} onChange={(value) => updateProfileField("providerCode", value)} maxLength={80} />
-                  <EditorField label="Código do prestador na operadora" value={profileForm.ansProviderCode || ""} onChange={(value) => updateProfileField("ansProviderCode", value)} maxLength={80} />
+                <div className="space-y-4">
+                  <div className="rounded-md border border-indigo-100 bg-indigo-50 px-3 py-2 text-sm text-indigo-800">{profileEditorMeta?.description}</div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <EditorField label="Razão social" value={profileForm.legalName || ""} onChange={(value) => updateProfileField("legalName", value)} maxLength={180} />
+                    <EditorField label="Nome fantasia" value={profileForm.tradeName || ""} onChange={(value) => updateProfileField("tradeName", value)} maxLength={180} />
+                    <label className="text-xs font-medium text-slate-600">
+                      Tipo de documento
+                      <select value={profileForm.documentType || "CNPJ"} onChange={(event) => updateProfileField("documentType", event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm">
+                        <option value="CNPJ">CNPJ</option>
+                        <option value="CPF">CPF</option>
+                      </select>
+                    </label>
+                    <EditorField label="CPF/CNPJ" value={profileForm.documentNumber || ""} onChange={(value) => updateProfileField("documentNumber", value)} maxLength={40} />
+                    <EditorField label="CNES" value={profileForm.cnesCode || ""} onChange={(value) => updateProfileField("cnesCode", value)} maxLength={40} />
+                    <EditorField label="Código do prestador" value={profileForm.providerCode || ""} onChange={(value) => updateProfileField("providerCode", value)} maxLength={80} />
+                    <EditorField label="Código do prestador na operadora" value={profileForm.ansProviderCode || ""} onChange={(value) => updateProfileField("ansProviderCode", value)} maxLength={80} />
+                  </div>
                 </div>
               ) : profileEditor === "payer" ? (
                 <div className="space-y-5">
+                  <div className="rounded-md border border-indigo-100 bg-indigo-50 px-3 py-2 text-sm text-indigo-800">{profileEditorMeta?.description}</div>
                   <div className="grid gap-4 sm:grid-cols-2">
                     <EditorField label="Registro ANS" value={profileForm.ansRegistration || ""} onChange={(value) => updateProfileField("ansRegistration", value)} maxLength={80} />
                     <EditorField label="Código da operadora" value={profileForm.operatorCode || ""} onChange={(value) => updateProfileField("operatorCode", value)} maxLength={80} />
@@ -845,23 +881,26 @@ export function TissPreGuideTab({
                   </div>
                 </div>
               ) : (
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <EditorField label="Nome de exibição" value={profileForm.displayName || ""} onChange={(value) => updateProfileField("displayName", value)} maxLength={180} />
-                  <label className="text-xs font-medium text-slate-600">
-                    Tipo de documento
-                    <select value={profileForm.documentType || "CPF"} onChange={(event) => updateProfileField("documentType", event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm">
-                      <option value="CPF">CPF</option>
-                      <option value="CNPJ">CNPJ</option>
-                      <option value="OTHER">Outro</option>
-                    </select>
-                  </label>
-                  <EditorField label="Documento" value={profileForm.documentNumber || ""} onChange={(value) => updateProfileField("documentNumber", value)} maxLength={40} />
-                  <EditorField label="Conselho" value={profileForm.councilType || ""} onChange={(value) => updateProfileField("councilType", value)} maxLength={40} />
-                  <EditorField label="Número do conselho" value={profileForm.councilNumber || ""} onChange={(value) => updateProfileField("councilNumber", value)} maxLength={80} />
-                  <EditorField label="UF do conselho" value={profileForm.councilState || ""} onChange={(value) => updateProfileField("councilState", value.toUpperCase().slice(0, 2))} maxLength={2} />
-                  <EditorField label="CBO" value={profileForm.cboCode || ""} onChange={(value) => updateProfileField("cboCode", value)} maxLength={40} />
-                  <EditorField label="Especialidade" value={profileForm.specialtyName || ""} onChange={(value) => updateProfileField("specialtyName", value)} maxLength={120} />
-                  <EditorField label="Código do prestador" value={profileForm.providerCode || ""} onChange={(value) => updateProfileField("providerCode", value)} maxLength={80} />
+                <div className="space-y-4">
+                  <div className="rounded-md border border-indigo-100 bg-indigo-50 px-3 py-2 text-sm text-indigo-800">{profileEditorMeta?.description}</div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <EditorField label="Nome de exibição" value={profileForm.displayName || ""} onChange={(value) => updateProfileField("displayName", value)} maxLength={180} />
+                    <label className="text-xs font-medium text-slate-600">
+                      Tipo de documento
+                      <select value={profileForm.documentType || "CPF"} onChange={(event) => updateProfileField("documentType", event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm">
+                        <option value="CPF">CPF</option>
+                        <option value="CNPJ">CNPJ</option>
+                        <option value="OTHER">Outro</option>
+                      </select>
+                    </label>
+                    <EditorField label="Documento" value={profileForm.documentNumber || ""} onChange={(value) => updateProfileField("documentNumber", value)} maxLength={40} />
+                    <EditorField label="Conselho" value={profileForm.councilType || ""} onChange={(value) => updateProfileField("councilType", value)} maxLength={40} />
+                    <EditorField label="Número do conselho" value={profileForm.councilNumber || ""} onChange={(value) => updateProfileField("councilNumber", value)} maxLength={80} />
+                    <EditorField label="UF do conselho" value={profileForm.councilState || ""} onChange={(value) => updateProfileField("councilState", value.toUpperCase().slice(0, 2))} maxLength={2} />
+                    <EditorField label="CBO" value={profileForm.cboCode || ""} onChange={(value) => updateProfileField("cboCode", value)} maxLength={40} />
+                    <EditorField label="Especialidade" value={profileForm.specialtyName || ""} onChange={(value) => updateProfileField("specialtyName", value)} maxLength={120} />
+                    <EditorField label="Código do prestador" value={profileForm.providerCode || ""} onChange={(value) => updateProfileField("providerCode", value)} maxLength={80} />
+                  </div>
                 </div>
               )}
             </div>
@@ -872,13 +911,13 @@ export function TissPreGuideTab({
                 onClick={profileEditor === "provider" ? onNavigateSettings : profileEditor === "payer" ? onNavigatePayers : onNavigateProfessionals}
                 className="text-sm font-medium text-indigo-700 hover:text-indigo-800"
               >
-                Abrir cadastro completo
+                {profileEditorMeta?.full || "Abrir cadastro completo"}
               </button>
               <div className="flex gap-2">
                 <button type="button" onClick={() => setProfileEditor(null)} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700">Cancelar</button>
                 <button type="button" onClick={() => void saveProfile()} disabled={profileSaving || profileLoading} className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-60">
                   {profileSaving && <Loader2 size={15} className="animate-spin" />}
-                  Salvar e revalidar
+                  Salvar cadastro global e revalidar pré-guia atual
                 </button>
               </div>
             </footer>

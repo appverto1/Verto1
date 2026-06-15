@@ -61,6 +61,7 @@ import { ClinicalAgendaBoard } from "./Calendar";
 import { OperationalClosureCenter } from "./OperationalClosureCenter";
 import { MonthlyConferenceCenter } from "./MonthlyConferenceCenter";
 import { PayerRequirementsPanel } from "./PayerRequirementsPanel";
+import { BillingTissSettingsPanel } from "./BillingTissSettingsPanel";
 import { LogoVerto } from "./Common";
 import { SecureImage } from "./SecureMedia";
 import { motion, AnimatePresence } from "framer-motion";
@@ -8557,6 +8558,15 @@ export function CoordinatorDashboard({
                     ) : (
                       <div className="p-6 bg-slate-50 rounded-3xl border border-slate-100 text-sm font-semibold text-slate-500">
                         Configurações iniciais da clínica disponíveis apenas para coordenação.
+                      </div>
+                    )}
+
+                    {!isTherapist && canManageClinicSettings && (
+                      <div className="md:col-span-2">
+                        <BillingTissSettingsPanel
+                          onNavigatePayers={() => navigateToTab("payers")}
+                          onNavigateProfessionals={() => navigateToTab("team")}
+                        />
                       </div>
                     )}
 

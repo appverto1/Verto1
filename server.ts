@@ -31900,7 +31900,10 @@ async function startServer() {
     scheduledStart: row?.scheduled_start || null,
     scheduledEnd: row?.scheduled_end || null,
     patientName: sanitizeString(row?.patient_name_snapshot, 180) || 'Paciente',
-    professionalName: sanitizeString(row?.professional_name_snapshot, 180) || 'Equipe',
+    professionalName: (() => {
+      const name = sanitizeString(row?.professional_name_snapshot, 180);
+      return ['equipe', 'team'].includes(name.toLowerCase()) ? null : name || 'Profissional não definido';
+    })(),
     payerName: sanitizeString(row?.payer_name_snapshot, 180) || 'Sem pagador',
     clinicName: sanitizeString(row?.clinic_name_snapshot, 180) || null,
     status: sanitizeString(row?.status, 40) || 'draft',
@@ -32065,7 +32068,7 @@ async function startServer() {
       scheduled_start: appointment?.scheduled_start_at || appointment?.scheduled_at || appointment?.scheduled_start || null,
       scheduled_end: appointment?.scheduled_end_at || appointment?.scheduled_end || null,
       patient_name_snapshot: sanitizeString(beneficiary.name || patientResult.data?.name, 180) || 'Paciente',
-      professional_name_snapshot: sanitizeString(professionalSnapshot.name || professional?.name, 180) || 'Equipe',
+      professional_name_snapshot: sanitizeString(professionalSnapshot.name, 180) || null,
       payer_name_snapshot: sanitizeString(payerSnapshot.name || payer?.name, 180) || 'Sem pagador',
       clinic_name_snapshot: sanitizeString(provider.tradeName || provider.legalName, 180) || null,
       status: validation.status,
@@ -32435,6 +32438,30 @@ async function startServer() {
     }
   });
 
+  app.get('/api/admin/tiss/payer-profiles', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
+      const { data, error } = await supabase
+        .from('payer_tiss_profiles')
+        .select(PAYER_TISS_PROFILE_SELECT)
+        .eq('organization_id', organizationId)
+        .eq('active', true)
+        .order('updated_at', { ascending: false })
+        .limit(500);
+      if (error) {
+        if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) {
+          return sendNoStoreJson(res, { success: true, data: [] });
+        }
+        throw error;
+      }
+      return sendNoStoreJson(res, { success: true, data: Array.isArray(data) ? data : [] });
+    } catch (error: any) {
+      console.warn('[TissPreGuide] payer profiles list failed:', error?.message || String(error));
+      return res.status(500).json(payerSafeError(500));
+    }
+  });
+
   app.get('/api/admin/tiss/payer-profiles/:payerId', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -32458,6 +32485,7 @@ async function startServer() {
       if (!(await fetchPayerForAdmin(payerId, organizationId))) return res.status(404).json(payerSafeError(404));
       const now = new Date().toISOString();
       const userId = sanitizeString(req.session.user?.id, 120);
+      const existingProfile = await fetchTissPreGuideProfile('payer_tiss_profiles', PAYER_TISS_PROFILE_SELECT, organizationId, 'payer_id', payerId);
       const guideType = sanitizeString(req.body?.defaultGuideType ?? req.body?.default_guide_type, 40).toLowerCase();
       const payload = cleanObject({
         organization_id: organizationId,
@@ -32474,6 +32502,7 @@ async function startServer() {
         requires_executant_registry: Boolean(req.body?.requiresExecutantRegistry ?? req.body?.requires_executant_registry),
         requires_beneficiary_card: req.body?.requiresBeneficiaryCard ?? req.body?.requires_beneficiary_card ?? true,
         active: req.body?.active !== false,
+        created_at: existingProfile?.created_at || now,
         updated_by: isUuid(userId) ? userId : null,
         updated_at: now
       });
@@ -32487,6 +32516,30 @@ async function startServer() {
       return sendNoStoreJson(res, { success: true, data });
     } catch (error: any) {
       console.warn('[TissPreGuide] payer profile update failed:', error?.message || String(error));
+      return res.status(500).json(payerSafeError(500));
+    }
+  });
+
+  app.get('/api/admin/tiss/professional-profiles', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
+      const { data, error } = await supabase
+        .from('professional_billing_profiles')
+        .select(PROFESSIONAL_BILLING_PROFILE_SELECT)
+        .eq('organization_id', organizationId)
+        .eq('active', true)
+        .order('updated_at', { ascending: false })
+        .limit(1000);
+      if (error) {
+        if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) {
+          return sendNoStoreJson(res, { success: true, data: [] });
+        }
+        throw error;
+      }
+      return sendNoStoreJson(res, { success: true, data: Array.isArray(data) ? data : [] });
+    } catch (error: any) {
+      console.warn('[TissPreGuide] professional profiles list failed:', error?.message || String(error));
       return res.status(500).json(payerSafeError(500));
     }
   });
@@ -32528,6 +32581,7 @@ async function startServer() {
       if (owner.error || !owner.data?.id) return res.status(404).json(payerSafeError(404));
       const now = new Date().toISOString();
       const userId = sanitizeString(req.session.user?.id, 120);
+      const existingProfile = await fetchTissPreGuideProfile('professional_billing_profiles', PROFESSIONAL_BILLING_PROFILE_SELECT, organizationId, 'professional_id', professionalId);
       const documentType = sanitizeString(req.body?.documentType ?? req.body?.document_type, 20).toUpperCase();
       const payload = cleanObject({
         organization_id: organizationId,
@@ -32543,6 +32597,7 @@ async function startServer() {
         specialty_name: sanitizeString(req.body?.specialtyName ?? req.body?.specialty_name, 120) || null,
         provider_code: sanitizeString(req.body?.providerCode ?? req.body?.provider_code, 80) || null,
         active: req.body?.active !== false,
+        created_at: existingProfile?.created_at || now,
         updated_by: isUuid(userId) ? userId : null,
         updated_at: now
       });
