@@ -32037,21 +32037,27 @@ async function startServer() {
     extraValue?: string
   ) => {
     if (!isUuid(organizationId)) return null;
-    let query = supabase
-      .from(tableName)
-      .select(selectColumns)
-      .eq('organization_id', organizationId)
-      .eq('active', true);
-    if (extraColumn && extraValue) query = query.eq(extraColumn, extraValue);
-    const { data, error } = await query
-      .order('updated_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (error) {
-      if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return null;
-      throw error;
+    const scopeColumns = ['organization_id', 'clinic_id'] as const;
+    for (const scopeColumn of scopeColumns) {
+      let query = supabase
+        .from(tableName)
+        .select(selectColumns)
+        .eq(scopeColumn, organizationId)
+        .eq('active', true);
+      if (extraColumn && extraValue) query = query.eq(extraColumn, extraValue);
+      const { data, error } = await query
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error) {
+        const missingColumn = extractMissingColumnName(error);
+        if (missingColumn === scopeColumn) continue;
+        if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return null;
+        throw error;
+      }
+      if (data) return data;
     }
-    return data || null;
+    return null;
   };
 
   const buildAndPersistTissPreGuideForAppointment = async (params: {
@@ -32065,7 +32071,6 @@ async function startServer() {
     const appointment = mergeAppointmentBillingPayload(params.appointment || {});
     const appointmentId = sanitizeString(appointment?.id, 120);
     const patientId = sanitizeString(appointment?.patient_id || appointment?.patientId, 120);
-    const professionalId = sanitizeString(appointment?.therapist_id || appointment?.professional_id || appointment?.therapistId, 120);
     if (!isUuid(organizationId) || !isUuid(appointmentId) || !isUuid(patientId)) {
       return { ok: false, status: 400, error: 'Atendimento inválido para Pré-guia TISS.' };
     }
@@ -32073,18 +32078,64 @@ async function startServer() {
     const billingContext = mergeBillingContextMetadata(
       params.billingContext || await fetchAppointmentBillingContextRow(organizationId, appointmentId) || {}
     );
-    const payerId = sanitizeString(billingContext?.payer_id, 120);
-    const billingItemResult = await supabase
-      .from('appointment_billing_items')
-      .select(APPOINTMENT_BILLING_ITEM_SELECT)
-      .eq('organization_id', organizationId)
-      .eq('appointment_id', appointmentId)
-      .limit(1)
-      .maybeSingle();
+    const [billingItemResult, existingPreGuideResult, closureCheckResult] = await Promise.all([
+      supabase
+        .from('appointment_billing_items')
+        .select(APPOINTMENT_BILLING_ITEM_SELECT)
+        .eq('organization_id', organizationId)
+        .eq('appointment_id', appointmentId)
+        .limit(1)
+        .maybeSingle(),
+      supabase
+        .from('appointment_tiss_pre_guides')
+        .select('id,organization_id,clinic_id,appointment_id,patient_id,professional_id,payer_id,provider_profile_id,payer_tiss_profile_id,professional_billing_profile_id')
+        .eq('organization_id', organizationId)
+        .eq('appointment_id', appointmentId)
+        .limit(1)
+        .maybeSingle(),
+      supabase
+        .from('appointment_closure_checks')
+        .select('appointment_id,organization_id,patient_id,professional_id,payer_id')
+        .eq('organization_id', organizationId)
+        .eq('appointment_id', appointmentId)
+        .limit(1)
+        .maybeSingle()
+    ]);
     if (billingItemResult.error && !hasMissingFinancialSchema(billingItemResult.error) && !isMissingRelationError(billingItemResult.error)) {
       throw billingItemResult.error;
     }
+    if (existingPreGuideResult.error && !hasMissingFinancialSchema(existingPreGuideResult.error) && !isMissingRelationError(existingPreGuideResult.error)) {
+      throw existingPreGuideResult.error;
+    }
+    if (closureCheckResult.error && !hasMissingFinancialSchema(closureCheckResult.error) && !isMissingRelationError(closureCheckResult.error)) {
+      throw closureCheckResult.error;
+    }
     const billingItem = billingItemResult.error ? null : billingItemResult.data;
+    const existingPreGuide = existingPreGuideResult.error ? null : existingPreGuideResult.data;
+    const closureCheck = closureCheckResult.error ? null : closureCheckResult.data;
+    const appointmentProfessionalId = sanitizeString(
+      appointment?.therapist_id ||
+        appointment?.professional_id ||
+        appointment?.therapistId ||
+        appointment?.professionalId,
+      120
+    );
+    const professionalId = [
+      appointmentProfessionalId,
+      sanitizeString(billingItem?.professional_id, 120),
+      sanitizeString(closureCheck?.professional_id, 120),
+      sanitizeString(existingPreGuide?.professional_id, 120)
+    ].find((value) => isUuid(value)) || '';
+    const payerId = [
+      sanitizeString(billingContext?.payer_id, 120),
+      sanitizeString(billingItem?.payer_id, 120),
+      sanitizeString(closureCheck?.payer_id, 120),
+      sanitizeString(existingPreGuide?.payer_id, 120)
+    ].find((value) => isUuid(value)) || '';
+    const appointmentClinicId = sanitizeString(
+      appointment?.clinic_id || appointment?.clinicId || appointment?.organization_id || appointment?.organizationId,
+      120
+    );
     const [patientResult, clinicResult, clinicProfile, payerProfile, professionalProfile, professional] = await Promise.all([
       supabase
         .from('patients')
@@ -32151,6 +32202,22 @@ async function startServer() {
     const professionalSnapshot = snapshot.professional || {};
     const now = new Date().toISOString();
     const userId = sanitizeString(params.user?.id, 120);
+    const diagnostics = {
+      appointmentId,
+      clinicId: isUuid(appointmentClinicId) ? appointmentClinicId : organizationId,
+      organizationId,
+      providerProfileFound: Boolean(clinicProfile?.id),
+      providerProfileId: sanitizeString(clinicProfile?.id, 120) || null,
+      payerId: isUuid(payerId) ? payerId : null,
+      payerProfileFound: Boolean(payerProfile?.id),
+      payerProfileId: sanitizeString(payerProfile?.id, 120) || null,
+      professionalId: isUuid(professionalId) ? professionalId : null,
+      professionalProfileFound: Boolean(professionalProfile?.id),
+      professionalProfileId: sanitizeString(professionalProfile?.id, 120) || null,
+      usedAppointmentProfessionalId: isUuid(appointmentProfessionalId),
+      usedTeamFallback: false,
+      snapshotUpdated: false
+    };
     const payload = cleanObject({
       organization_id: organizationId,
       clinic_id: organizationId,
@@ -32194,20 +32261,6 @@ async function startServer() {
       updated_at: now,
       last_validated_at: now
     });
-    if (process.env.NODE_ENV !== 'production') {
-      console.info('[TissPreGuide] provider source resolved:', {
-        organizationId,
-        clinicId: organizationId,
-        appointmentId,
-        resolvedClinicBillingProfileId: sanitizeString(clinicProfile?.id, 120) || null,
-        hasClinicLegalName: Boolean(provider.legalName),
-        hasClinicTradeName: Boolean(provider.tradeName),
-        sourceOfTradeName: sanitizeString(provider.tradeNameSource, 80) || null,
-        professionalId: isUuid(professionalId) ? professionalId : null,
-        professionalName: sanitizeString(professionalSnapshot.name || professional?.name, 180) || null,
-        didUseProfessionalAsClinicFallback: Boolean(provider.didUseProfessionalAsClinicFallback)
-      });
-    }
     const persisted = await supabase
       .from('appointment_tiss_pre_guides')
       .upsert(payload, { onConflict: 'organization_id,appointment_id' })
@@ -32236,11 +32289,19 @@ async function startServer() {
       });
       throw persisted.error;
     }
+    const persistedDiagnostics = {
+      ...diagnostics,
+      snapshotUpdated: Boolean(persisted.data?.id)
+    };
+    if (process.env.NODE_ENV !== 'production') {
+      console.info('[TissPreGuide] revalidation diagnostics:', persistedDiagnostics);
+    }
     return {
       ok: true,
       schemaAvailable: true,
       data: serializeTissPreGuide(persisted.data || payload),
-      validation
+      validation,
+      diagnostics: persistedDiagnostics
     };
   };
 
@@ -32404,6 +32465,7 @@ async function startServer() {
         status: tissPreGuide.data?.status || tissPreGuide.validation?.status || null,
         errorCode: tissPreGuide.errorCode || null
       },
+      tissPreGuideDiagnostics: (tissPreGuide as any).diagnostics || null,
       message,
       resolution: {
         procedureResolved: Boolean(billingItem?.internalProcedureName),
@@ -32473,11 +32535,14 @@ async function startServer() {
         billingItem: (generated as any).billingItem || null,
         billingContext: (generated as any).billingContext || null,
         tissPreGuideStatus: preGuide.status || null,
+        diagnostics: process.env.NODE_ENV !== 'production'
+          ? (generated as any).tissPreGuideDiagnostics || null
+          : undefined,
         message: preGuide.status === 'valid'
-          ? 'Pré-guia TISS revalidada e pronta para conferência interna.'
+          ? 'Pré-guia revalidada com dados globais atualizados.'
           : preGuide.status === 'not_applicable'
             ? 'Atendimento não aplicável à Pré-guia TISS.'
-            : 'Pré-guia TISS revalidada com pendências.'
+            : 'Pré-guia revalidada com dados globais atualizados. Revise as pendências restantes.'
       });
     } catch (error: any) {
       console.warn('[TissPreGuide] revalidation failed:', {

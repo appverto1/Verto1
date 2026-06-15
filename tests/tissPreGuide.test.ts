@@ -124,6 +124,20 @@ test('atendimento de convênio com dados mínimos produz Pré-guia válida', () 
   assert.equal(result.snapshot.procedure.tussCode, 'CONFIGURADO-PELA-CLINICA');
   assert.equal(result.snapshot.procedure.totalAmountCents, 12000);
   assert.equal(result.snapshot.payer.id, 'payer-1');
+  assert.equal(result.snapshot.provider.profileId, 'clinic-profile-1');
+  assert.equal(result.snapshot.provider.legalName, 'Clínica Exemplo Ltda.');
+  assert.equal(result.snapshot.provider.tradeName, 'Clínica Exemplo');
+  assert.equal(result.snapshot.payer.profileId, 'payer-profile-1');
+  assert.equal(result.snapshot.payer.ansRegistration, 'ANS-1');
+  assert.equal(result.snapshot.payer.operatorCode, 'OP-1');
+  assert.equal(result.snapshot.payer.tissVersion, 'configurável');
+  assert.equal(result.snapshot.professional.id, 'professional-1');
+  assert.equal(result.snapshot.professional.profileId, 'professional-profile-1');
+  assert.equal(result.snapshot.professional.name, 'Terapeuta Mateus');
+  assert.equal(result.snapshot.professional.councilType, 'CRP');
+  assert.equal(result.snapshot.professional.councilNumber, '00/00000');
+  assert.equal(result.snapshot.professional.councilState, 'SP');
+  assert.equal(result.snapshot.professional.cboCode, '000000');
 });
 
 test('pre-guia usa dados do prestador da clinica e nao o nome do profissional', () => {
@@ -340,6 +354,44 @@ test('backend persiste de forma idempotente pelo appointment e revalida só por 
   assert.doesNotMatch(coverageRoute, /\.select\('\*'\)/);
 });
 
+test('revalidação reconstrói snapshots a partir dos cadastros mestres atuais', () => {
+  const builder = serverCode.slice(
+    serverCode.indexOf('const buildAndPersistTissPreGuideForAppointment'),
+    serverCode.indexOf('const clearAppointmentBillingItemForAppointment')
+  );
+  const profileReader = serverCode.slice(
+    serverCode.indexOf('const fetchTissPreGuideProfile'),
+    serverCode.indexOf('const buildAndPersistTissPreGuideForAppointment')
+  );
+  const revalidationHandler = serverCode.slice(
+    serverCode.indexOf('const handleTissPreGuideRevalidation'),
+    serverCode.indexOf("app.get('/api/admin/tiss/provider-profile'")
+  );
+
+  assert.match(profileReader, /const scopeColumns = \['organization_id', 'clinic_id'\]/);
+  assert.match(builder, /\.from\('appointment_tiss_pre_guides'\)[\s\S]*?professional_id,payer_id,provider_profile_id,payer_tiss_profile_id,professional_billing_profile_id/);
+  assert.match(builder, /\.from\('appointment_closure_checks'\)[\s\S]*?professional_id,payer_id/);
+  assert.match(builder, /sanitizeString\(billingItem\?\.professional_id, 120\)/);
+  assert.match(builder, /sanitizeString\(closureCheck\?\.professional_id, 120\)/);
+  assert.match(builder, /sanitizeString\(existingPreGuide\?\.professional_id, 120\)/);
+  assert.match(builder, /sanitizeString\(billingItem\?\.payer_id, 120\)/);
+  assert.match(builder, /fetchTissPreGuideProfile\('clinic_tiss_profiles'/);
+  assert.match(builder, /fetchTissPreGuideProfile\('payer_tiss_profiles'/);
+  assert.match(builder, /fetchTissPreGuideProfile\('professional_billing_profiles'/);
+  assert.match(builder, /provider_profile_id:\s*isUuid\(sanitizeString\(clinicProfile\?\.id/);
+  assert.match(builder, /payer_tiss_profile_id:\s*isUuid\(sanitizeString\(payerProfile\?\.id/);
+  assert.match(builder, /professional_billing_profile_id:\s*isUuid\(sanitizeString\(professionalProfile\?\.id/);
+  assert.match(builder, /snapshot_data:\s*snapshot/);
+  assert.match(builder, /providerProfileFound:/);
+  assert.match(builder, /payerProfileFound:/);
+  assert.match(builder, /professionalProfileFound:/);
+  assert.match(builder, /usedAppointmentProfessionalId:/);
+  assert.match(builder, /usedTeamFallback:\s*false/);
+  assert.match(builder, /snapshotUpdated:\s*Boolean\(persisted\.data\?\.id\)/);
+  assert.match(revalidationHandler, /diagnostics:\s*process\.env\.NODE_ENV !== 'production'/);
+  assert.match(revalidationHandler, /Pré-guia revalidada com dados globais atualizados/);
+});
+
 test('revalidação pontual e por período materializam Pré-guias sem backfill no GET', () => {
   const periodRoute = serverCode.slice(
     serverCode.indexOf("app.post('/api/tiss/pre-guides/revalidate-period'"),
@@ -479,9 +531,11 @@ test('frontend oferece cards, paginação, detalhe sob demanda e nenhuma ação 
   assert.match(preGuideUiCode, /dataService\.updateClinicTissProfile/);
   assert.match(preGuideUiCode, /dataService\.updatePayerTissProfile/);
   assert.match(preGuideUiCode, /dataService\.updateProfessionalBillingProfile/);
-  assert.match(preGuideUiCode, /Cadastro global do prestador/);
-  assert.match(preGuideUiCode, /Cadastro global do pagador/);
-  assert.match(preGuideUiCode, /Editar perfil do profissional/);
+  assert.match(preGuideUiCode, /Editar Dados da clínica/);
+  assert.match(preGuideUiCode, /Editar perfil TISS do pagador/);
+  assert.match(preGuideUiCode, /Editar perfil faturável do profissional/);
+  assert.match(preGuideUiCode, /Pré-guia revalidada com dados globais atualizados/);
+  assert.match(preGuideUiCode, /setDetail\(result\.data\)/);
   assert.match(preGuideUiCode, /Salvar cadastro global e revalidar pré-guia atual/);
   assert.match(preGuideUiCode, /Você está editando o perfil faturável global da clínica/);
   assert.match(preGuideUiCode, /Você está editando o perfil TISS global deste pagador/);
