@@ -43,12 +43,14 @@ function StatusBadge({ complete, hasAnyData }: { complete: boolean; hasAnyData: 
 }
 
 function SectionCard({
+  id,
   title,
   description,
   complete,
   hasAnyData,
   children,
 }: {
+  id?: string;
   title: string;
   description: string;
   complete: boolean;
@@ -56,7 +58,7 @@ function SectionCard({
   children: React.ReactNode;
 }) {
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+    <section id={id} className="scroll-mt-24 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h4 className="text-base font-black text-slate-900">{title}</h4>
@@ -138,6 +140,9 @@ export function ClinicGlobalSettingsPanel({
   readImageAsDataUrl,
   retryMediaIfBroken,
 }: ClinicGlobalSettingsPanelProps) {
+  const scrollToClinicData = () => {
+    document.getElementById("clinic-master-data")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
   const clinicDocumentDigits = parseDocumentForStorage(values.clinicCnpj);
   const clinicCoreComplete = Boolean(values.clinicDisplayName?.trim() && clinicDocumentDigits && (values.clinicPhone?.trim() || values.clinicEmail?.trim()));
   const clinicFiscalComplete = Boolean(values.clinicLegalName?.trim() && clinicDocumentDigits && (values.clinicCnesCode?.trim() || values.clinicProviderCode?.trim()));
@@ -268,7 +273,7 @@ export function ClinicGlobalSettingsPanel({
         <>
           {canManageClinicSettings ? (
             <>
-              <SectionCard title="Dados da clínica" description="Dados usados em documentos, notificações, relatórios e identificação pública da clínica." complete={clinicCoreComplete} hasAnyData={Boolean(values.clinicDisplayName || values.clinicCnpj || values.clinicPhone || values.clinicEmail)}>
+              <SectionCard id="clinic-master-data" title="Dados da clínica" description="Dados usados em documentos, notificações, relatórios e identificação pública da clínica." complete={clinicCoreComplete} hasAnyData={Boolean(values.clinicDisplayName || values.clinicCnpj || values.clinicPhone || values.clinicEmail)}>
                 <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
                   <label className={`${labelClass} md:col-span-2`}>
                     Nome fantasia da clínica
@@ -356,7 +361,7 @@ export function ClinicGlobalSettingsPanel({
                 </div>
               </SectionCard>
 
-              <BillingTissSettingsPanel onNavigatePayers={() => navigateToTab("payers")} onNavigateProfessionals={() => navigateToTab("team")} />
+              <BillingTissSettingsPanel onEditClinicData={scrollToClinicData} onNavigatePayers={() => navigateToTab("payers")} onNavigateProfessionals={() => navigateToTab("team")} />
             </>
           ) : (
             <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm font-semibold text-slate-500 shadow-sm">
@@ -388,4 +393,3 @@ export function ClinicGlobalSettingsPanel({
     </div>
   );
 }
-

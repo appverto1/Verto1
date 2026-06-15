@@ -4789,7 +4789,7 @@ export function CoordinatorDashboard({
       "management",
     );
     hideProcessing();
-    showToast(isTherapist ? "Perfil atualizado com sucesso!" : "Perfil e clínica salvos com sucesso!");
+    showToast(isTherapist ? "Perfil atualizado com sucesso!" : "Perfil e clínica salvos. Pré-guias afetadas podem precisar de revalidação.");
   };
 
   const normalizeAnamnesisTemplateForEditor = (template: any) => ({

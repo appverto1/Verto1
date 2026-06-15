@@ -121,6 +121,9 @@ function providerMissing(form: Record<string, any>) {
   const missing = [];
   if (!isFilled(form.legalName)) missing.push("razão social");
   if (!isFilled(form.documentNumber)) missing.push("CPF/CNPJ");
+  if (!isFilled(form.cnesCode)) missing.push("CNES");
+  if (!isFilled(form.providerCode)) missing.push("código do prestador");
+  if (!isFilled(form.addressLine) && !isFilled(form.city)) missing.push("endereço");
   return missing;
 }
 
@@ -200,9 +203,11 @@ function StatusPill({ missing }: { missing: string[] }) {
 }
 
 export function BillingTissSettingsPanel({
+  onEditClinicData,
   onNavigatePayers,
   onNavigateProfessionals,
 }: {
+  onEditClinicData?: () => void;
   onNavigatePayers?: () => void;
   onNavigateProfessionals?: () => void;
 }) {
@@ -289,34 +294,8 @@ export function BillingTissSettingsPanel({
     });
   }, [professionalProfiles, selectedProfessional, selectedProfessionalId]);
 
-  const updateProvider = (key: string, value: any) => setProviderForm((current) => ({ ...current, [key]: value }));
   const updatePayer = (key: string, value: any) => setPayerForm((current) => ({ ...current, [key]: value }));
   const updateProfessional = (key: string, value: any) => setProfessionalForm((current) => ({ ...current, [key]: value }));
-
-  const saveProvider = async () => {
-    setSavingKind("provider");
-    setError("");
-    setMessage("");
-    try {
-      const result = await dataService.updateClinicTissProfile({
-        ...providerForm,
-        documentNumber: parseDocumentForStorage(providerForm.documentNumber),
-        cnesCode: onlyDigits(providerForm.cnesCode, 12),
-        postalCode: onlyDigits(providerForm.postalCode, 8),
-        phone: onlyDigits(providerForm.phone, 11),
-        providerCode: String(providerForm.providerCode || "").trim(),
-        ansProviderCode: String(providerForm.ansProviderCode || "").trim(),
-      });
-      if (!result?.success) {
-        setError(result?.error || "Não foi possível salvar os dados globais do prestador.");
-        return;
-      }
-      setProviderForm({ ...emptyProviderForm, ...normalizeProfile(result.data || providerForm) });
-      setMessage("Dados do prestador salvos. Pré-guias afetadas foram marcadas para revalidação.");
-    } finally {
-      setSavingKind("");
-    }
-  };
 
   const savePayer = async () => {
     if (!selectedPayerId) return;
@@ -390,40 +369,38 @@ export function BillingTissSettingsPanel({
           <div className="flex items-center gap-2">
             <Building2 size={18} className="text-indigo-600" />
             <div>
-              <div className="text-sm font-bold text-slate-900">Dados do prestador / clínica</div>
+              <div className="text-sm font-bold text-slate-900">Resumo do prestador / clínica</div>
               <div className="text-xs font-medium text-slate-500">Fonte mestre: clinic_tiss_profiles.</div>
             </div>
           </div>
           <StatusPill missing={providerMissing(providerForm)} />
         </div>
         <p className="rounded-md border border-indigo-100 bg-white px-3 py-2 text-xs font-medium text-slate-600">
-          Você está editando o perfil faturável global da clínica. Essa alteração será usada em novas pré-guias e pode revalidar pré-guias pendentes.
+          Estes dados vêm do bloco principal “Dados da clínica”. Edite-os uma única vez ali; a Pré-guia TISS e os documentos consomem a mesma fonte mestre.
         </p>
-        <div className="grid gap-4 md:grid-cols-2">
-          <Field label="Razão social" value={providerForm.legalName} onChange={(value) => updateProvider("legalName", value)} maxLength={180} />
-          <Field label="Nome fantasia" value={providerForm.tradeName} onChange={(value) => updateProvider("tradeName", value)} maxLength={180} />
-          <label className="text-xs font-bold text-slate-600">
-            Tipo de documento
-            <select value={providerForm.documentType || "CNPJ"} onChange={(event) => setProviderForm((current) => ({ ...current, documentType: event.target.value, documentNumber: formatDocument(current.documentNumber, event.target.value) }))} className="mt-1 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium">
-              <option value="CNPJ">CNPJ</option>
-              <option value="CPF">CPF</option>
-            </select>
-          </label>
-          <Field label="CPF/CNPJ" value={providerForm.documentNumber} onChange={(value) => updateProvider("documentNumber", formatDocument(value, providerForm.documentType))} maxLength={40} />
-          <Field label="CNES" value={providerForm.cnesCode} onChange={(value) => updateProvider("cnesCode", onlyDigits(value, 12))} maxLength={40} />
-          <Field label="Código do prestador" value={providerForm.providerCode} onChange={(value) => updateProvider("providerCode", value)} maxLength={80} />
-          <Field label="Endereço" value={providerForm.addressLine} onChange={(value) => updateProvider("addressLine", value)} maxLength={180} />
-          <Field label="Número" value={providerForm.addressNumber} onChange={(value) => updateProvider("addressNumber", value)} maxLength={40} />
-          <Field label="Cidade" value={providerForm.city} onChange={(value) => updateProvider("city", value)} maxLength={120} />
-          <Field label="UF" value={providerForm.state} onChange={(value) => updateProvider("state", value.toUpperCase().slice(0, 2))} maxLength={2} />
-          <Field label="CEP" value={providerForm.postalCode} onChange={(value) => updateProvider("postalCode", maskCep(value))} maxLength={9} />
-          <Field label="Telefone" value={providerForm.phone} onChange={(value) => updateProvider("phone", maskPhoneBR(value))} maxLength={16} />
-          <Field label="E-mail" value={providerForm.email} onChange={(value) => updateProvider("email", value)} type="email" maxLength={160} />
+        <div className="grid gap-3 md:grid-cols-2">
+          {[
+            ["Razão social", providerForm.legalName],
+            ["Nome fantasia", providerForm.tradeName],
+            ["CPF/CNPJ", providerForm.documentNumber],
+            ["CNES", providerForm.cnesCode],
+            ["Código do prestador", providerForm.providerCode],
+            ["Endereço", [providerForm.addressLine, providerForm.addressNumber, providerForm.city, providerForm.state].filter(Boolean).join(", ")],
+          ].map(([label, value]) => (
+            <div key={String(label)} className="rounded-md border border-slate-200 bg-white px-3 py-2">
+              <div className="text-[11px] font-bold uppercase tracking-wide text-slate-400">{label}</div>
+              <div className="mt-1 text-sm font-semibold text-slate-800">{String(value || "Não informado")}</div>
+            </div>
+          ))}
         </div>
+        {providerMissing(providerForm).length > 0 && (
+          <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
+            Pendências para Pré-guia TISS: {providerMissing(providerForm).join(", ")}.
+          </div>
+        )}
         <div className="flex justify-end">
-          <button type="button" onClick={() => void saveProvider()} disabled={savingKind === "provider"} className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-bold text-white disabled:opacity-60">
-            {savingKind === "provider" ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-            Salvar dados do prestador
+          <button type="button" onClick={onEditClinicData} className="rounded-md border border-indigo-200 bg-white px-3 py-2 text-sm font-bold text-indigo-700 hover:bg-indigo-50">
+            Editar em Dados da clínica
           </button>
         </div>
       </div>

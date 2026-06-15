@@ -43,6 +43,8 @@ test('máscaras brasileiras aceitam CPF, CNPJ, telefone fixo/celular e CEP', () 
 test('aba settings usa a nova central global e deixa legado fora da rota ativa', () => {
   assert.match(coordinatorCode, /<ClinicGlobalSettingsPanel/);
   assert.match(coordinatorCode, /activeTab === "settings_legacy"/);
+  assert.match(settingsPanelCode, /id="clinic-master-data"/);
+  assert.match(settingsPanelCode, /onEditClinicData=\{scrollToClinicData\}/);
   for (const label of [
     'Dados da clínica',
     'Dados de contato',
@@ -118,14 +120,23 @@ test('backend persiste novos campos cadastrais em sessão, metadata e clinics', 
   }
 });
 
-test('painel Faturamento e TISS aplica máscaras e salva valores normalizados', () => {
+test('painel Faturamento e TISS não duplica formulário de prestador', () => {
+  assert.match(tissPanelCode, /Resumo do prestador \/ clínica/);
+  assert.match(tissPanelCode, /Editar em Dados da clínica/);
+  assert.match(tissPanelCode, /onEditClinicData/);
+  assert.doesNotMatch(tissPanelCode, /const saveProvider/);
+  assert.doesNotMatch(tissPanelCode, /updateProvider/);
+  assert.doesNotMatch(tissPanelCode, /dataService\.updateClinicTissProfile/);
+  assert.doesNotMatch(tissPanelCode, /Salvar dados do prestador/);
+});
+
+test('painel Faturamento e TISS mantém formulários próprios para pagadores e profissionais', () => {
   for (const token of [
     'formatDocument',
-    'maskCep',
-    'maskPhoneBR',
-    'parseDocumentForStorage(providerForm.documentNumber)',
-    'onlyDigits(providerForm.postalCode, 8)',
-    'onlyDigits(providerForm.phone, 11)',
+    'savePayer',
+    'saveProfessional',
+    'dataService.updatePayerTissProfile',
+    'dataService.updateProfessionalBillingProfile',
     'parseDocumentForStorage(professionalForm.documentNumber)',
     'onlyDigits(professionalForm.cboCode, 12)',
   ]) {

@@ -12,6 +12,7 @@ const dataServiceCode = readFileSync(join(root, 'src/services/dataService.ts'), 
 const conferenceCode = readFileSync(join(root, 'src/components/MonthlyConferenceCenter.tsx'), 'utf8');
 const preGuideUiCode = readFileSync(join(root, 'src/components/TissPreGuideTab.tsx'), 'utf8');
 const billingTissSettingsCode = readFileSync(join(root, 'src/components/BillingTissSettingsPanel.tsx'), 'utf8');
+const settingsPanelCode = readFileSync(join(root, 'src/components/ClinicGlobalSettingsPanel.tsx'), 'utf8');
 const coordinatorCode = readFileSync(join(root, 'src/components/CoordinatorDashboard.tsx'), 'utf8');
 const migrationCode = readFileSync(join(root, 'supabase/migrations/20260614183000_tiss_pre_guides.sql'), 'utf8');
 const packageJson = readFileSync(join(root, 'package.json'), 'utf8');
@@ -431,12 +432,20 @@ test('cadastros TISS sao globais e reutilizaveis em Configuracoes', () => {
   assert.match(billingTissSettingsCode, /Fonte mestre: payer_tiss_profiles/);
   assert.match(billingTissSettingsCode, /Fonte mestre: professional_billing_profiles/);
   assert.match(billingTissSettingsCode, /getClinicTissProfile/);
+  assert.match(billingTissSettingsCode, /Resumo do prestador \/ clínica/);
+  assert.match(billingTissSettingsCode, /Editar em Dados da clínica/);
+  assert.match(settingsPanelCode, /id="clinic-master-data"/);
+  assert.match(settingsPanelCode, /onEditClinicData=\{scrollToClinicData\}/);
+  assert.match(coordinatorCode, /dataService\.updateClinicTissProfile/);
   assert.match(billingTissSettingsCode, /getPayerTissProfiles/);
   assert.match(billingTissSettingsCode, /getProfessionalBillingProfiles/);
-  assert.match(billingTissSettingsCode, /updateClinicTissProfile/);
+  assert.doesNotMatch(billingTissSettingsCode, /dataService\.updateClinicTissProfile/);
+  assert.doesNotMatch(billingTissSettingsCode, /Salvar dados do prestador/);
   assert.match(billingTissSettingsCode, /updatePayerTissProfile/);
   assert.match(billingTissSettingsCode, /updateProfessionalBillingProfile/);
-  assert.match(billingTissSettingsCode, /Pré-guias afetadas foram marcadas para revalidação/);
+  assert.match(coordinatorCode, /Pré-guias afetadas podem precisar de revalidação/);
+  assert.match(billingTissSettingsCode, /Pré-guias deste pagador foram marcadas para revalidação/);
+  assert.match(billingTissSettingsCode, /Pré-guias deste profissional foram marcadas para revalidação/);
   assert.doesNotMatch(billingTissSettingsCode, /appointmentId|appointment_id/);
 });
 
