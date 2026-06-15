@@ -272,6 +272,18 @@ test('backend persiste de forma idempotente pelo appointment e revalida só por 
   assert.match(listRoute, /APPOINTMENT_TISS_PRE_GUIDE_LIST_SELECT/);
   assert.doesNotMatch(listRoute, /revalidateAppointmentBillingForAppointment|buildAndPersistTissPreGuideForAppointment/);
   assert.doesNotMatch(listRoute, /\.select\('\*'\)/);
+
+  const coverageRoute = serverCode.slice(
+    serverCode.indexOf("app.get('/api/tiss/pre-guides/coverage'"),
+    serverCode.indexOf("app.post('/api/tiss/pre-guides/revalidate-period'")
+  );
+  assert.match(coverageRoute, /fetchClosurePeriodAppointmentRows/);
+  assert.match(coverageRoute, /evaluateTissPreGuideEligibility/);
+  assert.match(coverageRoute, /missingPreGuides/);
+  assert.match(coverageRoute, /stalePreGuides/);
+  assert.doesNotMatch(coverageRoute, /revalidateAppointmentBillingForAppointment|buildAndPersistTissPreGuideForAppointment/);
+  assert.doesNotMatch(coverageRoute, /\.(upsert|insert|update|delete)\(/);
+  assert.doesNotMatch(coverageRoute, /\.select\('\*'\)/);
 });
 
 test('revalidação pontual e por período materializam Pré-guias sem backfill no GET', () => {
@@ -323,6 +335,7 @@ test('endpoints protegem perfis e Pré-guias com autenticação, papel e tenant'
     "app.get('/api/admin/tiss/professional-profiles/:professionalId'",
     "app.patch('/api/admin/tiss/professional-profiles/:professionalId'",
     "app.get('/api/tiss/pre-guides'",
+    "app.get('/api/tiss/pre-guides/coverage'",
     "app.post('/api/tiss/pre-guides/revalidate-period'",
     "app.get('/api/tiss/pre-guides/:appointmentId'",
     "app.post('/api/tiss/pre-guides/:appointmentId/revalidate'",
@@ -354,6 +367,7 @@ test('frontend oferece cards, paginação, detalhe sob demanda e nenhuma ação 
     assert.match(preGuideUiCode, new RegExp(label));
   }
   assert.match(preGuideUiCode, /dataService\.getTissPreGuides/);
+  assert.match(preGuideUiCode, /dataService\.getTissPreGuideCoverage/);
   assert.match(preGuideUiCode, /dataService\.getTissPreGuide/);
   assert.match(preGuideUiCode, /dataService\.revalidateTissPreGuide/);
   assert.match(preGuideUiCode, /dataService\.revalidateTissPreGuidePeriod/);
@@ -367,12 +381,17 @@ test('frontend oferece cards, paginação, detalhe sob demanda e nenhuma ação 
   assert.match(preGuideUiCode, /Esta é uma pré-guia para validação interna\. XML TISS ainda não foi gerado\./);
   assert.match(preGuideUiCode, /sticky top-0 z-20/);
   assert.match(preGuideUiCode, /<ActiveFilterBanner/);
+  assert.match(preGuideUiCode, /missingPreGuides/);
+  assert.match(preGuideUiCode, /stalePreGuides/);
+  assert.match(preGuideUiCode, /Gerar\/Revalidar pendentes/);
+  assert.match(preGuideUiCode, /Nenhum atendimento eleg/);
   assert.doesNotMatch(preGuideUiCode, /Gerar XML|Enviar lote|Enviar remessa|Registrar glosa/i);
 });
 
 test('data service usa operações explícitas e o pacote expõe suíte dedicada', () => {
   for (const helper of [
     'getTissPreGuides',
+    'getTissPreGuideCoverage',
     'getTissPreGuide',
     'revalidateTissPreGuide',
     'revalidateTissPreGuidePeriod',

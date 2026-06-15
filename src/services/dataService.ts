@@ -2840,6 +2840,31 @@ export const dataService = {
     }
   },
 
+  async getTissPreGuideCoverage(options: any = {}) {
+    const endpoint = endpointWithQuery('/api/tiss/pre-guides/coverage', {
+      from: options.from,
+      to: options.to,
+      payerId: options.payerId,
+      patientId: options.patientId,
+      professionalId: options.professionalId,
+      limit: normalizeListLimit(options.limit, 500, 2000)
+    });
+    try {
+      return await fetchNoStoreJsonWithRetry(endpoint, {
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getTissPreGuideCoverage',
+        operation: 'list',
+        table: 'appointment_tiss_pre_guides,appointment_billing_contexts,appointment_billing_items',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      }, 'A cobertura de Pré-guias TISS voltou do cache. Tente atualizar novamente.');
+    } catch {
+      return { success: false, data: null, error: 'Não foi possível verificar a cobertura das Pré-guias TISS agora.' };
+    }
+  },
+
   async getTissPreGuide(appointmentId: string) {
     const endpoint = `/api/tiss/pre-guides/${encodeURIComponent(String(appointmentId))}`;
     try {

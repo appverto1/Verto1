@@ -32604,6 +32604,137 @@ async function startServer() {
     }
   });
 
+  app.get('/api/tiss/pre-guides/coverage', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
+      const range = parseClosureDateRange(req.query || {});
+      if (!range.ok) return res.status(400).json({ success: false, error: 'Período inválido para verificar cobertura de Pré-guias TISS.' });
+      const payerId = sanitizeString(req.query?.payerId || req.query?.payer_id, 120);
+      const patientId = sanitizeString(req.query?.patientId || req.query?.patient_id, 120);
+      const professionalId = sanitizeString(req.query?.professionalId || req.query?.professional_id, 120);
+      if ((payerId && !isUuid(payerId)) || (patientId && !isUuid(patientId)) || (professionalId && !isUuid(professionalId))) {
+        return res.status(400).json({ success: false, error: 'Filtros inválidos para verificar cobertura de Pré-guias TISS.' });
+      }
+
+      const appointmentRows = await fetchClosurePeriodAppointmentRows({
+        clinicId: organizationId,
+        user: req.session.user,
+        fromIso: range.fromIso,
+        toIso: range.toIso,
+        limit: parseBoundedListLimit(req.query?.limit, 500, 2000)
+      });
+      const scopedAppointments = appointmentRows.filter((appointment: any) => {
+        if (patientId && sanitizeString(appointment?.patient_id, 120) !== patientId) return false;
+        const rowProfessionalId = sanitizeString(appointment?.therapist_id || appointment?.professional_id, 120);
+        if (professionalId && rowProfessionalId !== professionalId) return false;
+        return true;
+      });
+      const appointmentIds = Array.from(new Set(
+        scopedAppointments
+          .map((appointment: any) => sanitizeString(appointment?.id, 120))
+          .filter((appointmentId: string) => isUuid(appointmentId))
+      ));
+
+      const contextQuery = appointmentIds.length > 0
+        ? supabase
+            .from('appointment_billing_contexts')
+            .select(APPOINTMENT_BILLING_CONTEXT_SELECT)
+            .eq('organization_id', organizationId)
+            .in('appointment_id', appointmentIds)
+            .limit(appointmentIds.length)
+        : Promise.resolve({ data: [], error: null } as any);
+
+      const billingItemQuery = appointmentIds.length > 0
+        ? supabase
+            .from('appointment_billing_items')
+            .select('id,appointment_id,service_catalog_id,tuss_code_id,amount_cents')
+            .eq('organization_id', organizationId)
+            .in('appointment_id', appointmentIds)
+            .limit(appointmentIds.length)
+        : Promise.resolve({ data: [], error: null } as any);
+
+      let preGuideQuery = supabase
+        .from('appointment_tiss_pre_guides')
+        .select('appointment_id,status,stale_reason,validation_error_codes')
+        .eq('organization_id', organizationId)
+        .gte('scheduled_start', range.fromIso)
+        .lte('scheduled_start', range.toIso);
+      if (isUuid(payerId)) preGuideQuery = preGuideQuery.eq('payer_id', payerId);
+      if (isUuid(patientId)) preGuideQuery = preGuideQuery.eq('patient_id', patientId);
+      if (isUuid(professionalId)) preGuideQuery = preGuideQuery.eq('professional_id', professionalId);
+
+      const [contextResult, billingItemResult, preGuideResult] = await Promise.all([
+        contextQuery,
+        billingItemQuery,
+        preGuideQuery.limit(5000)
+      ]);
+
+      if (contextResult.error && !hasMissingFinancialSchema(contextResult.error) && !isMissingRelationError(contextResult.error)) throw contextResult.error;
+      if (billingItemResult.error && !hasMissingFinancialSchema(billingItemResult.error) && !isMissingRelationError(billingItemResult.error)) throw billingItemResult.error;
+      if (preGuideResult.error && !hasMissingFinancialSchema(preGuideResult.error) && !isMissingRelationError(preGuideResult.error)) throw preGuideResult.error;
+
+      const contextsByAppointment = new Map<string, any>(
+        (contextResult.error ? [] : contextResult.data || [])
+          .map((row: any) => [sanitizeString(row?.appointment_id, 120), mergeBillingContextMetadata(row)])
+      );
+      const billingItemsByAppointment = new Map<string, any>(
+        (billingItemResult.error ? [] : billingItemResult.data || [])
+          .map((row: any) => [sanitizeString(row?.appointment_id, 120), row])
+      );
+      const preGuideRows = preGuideResult.error ? [] : Array.isArray(preGuideResult.data) ? preGuideResult.data : [];
+      const preGuidesByAppointment = new Map<string, any>(
+        preGuideRows
+          .map((row: any) => [sanitizeString(row?.appointment_id, 120), row])
+          .filter(([appointmentId]: any) => isUuid(appointmentId))
+      );
+
+      const coverage = {
+        totalAppointmentsInPeriod: scopedAppointments.length,
+        billableAppointments: 0,
+        eligibleForPreGuide: 0,
+        materializedPreGuides: preGuideRows.length,
+        missingPreGuides: 0,
+        stalePreGuides: preGuideRows.filter((row: any) => Boolean(sanitizeString(row?.stale_reason, 600))).length,
+        validPreGuides: preGuideRows.filter((row: any) => row?.status === 'valid').length,
+        pendingPreGuides: preGuideRows.filter((row: any) => row?.status === 'pending_data').length,
+        notApplicablePreGuides: preGuideRows.filter((row: any) => row?.status === 'not_applicable').length,
+        withResolvedTuss: 0,
+        withoutBillingItem: 0,
+        notBillableAppointments: 0,
+        withoutFinancialContext: 0
+      };
+
+      for (const appointment of scopedAppointments) {
+        const appointmentId = sanitizeString(appointment?.id, 120);
+        const billingContext = contextsByAppointment.get(appointmentId) || null;
+        const eligibility = evaluateTissPreGuideEligibility({ appointment, billingContext });
+        if (eligibility.financialContext === 'INSURANCE') coverage.billableAppointments += 1;
+        if (eligibility.reason === 'not_applicable') coverage.notBillableAppointments += 1;
+        if (eligibility.reason === 'missing_financial_context') coverage.withoutFinancialContext += 1;
+        const billingItem = billingItemsByAppointment.get(appointmentId);
+        if (billingItem?.service_catalog_id && billingItem?.tuss_code_id) coverage.withResolvedTuss += 1;
+        if (!billingItem?.id) coverage.withoutBillingItem += 1;
+        if (!eligibility.eligible) continue;
+        if (payerId && eligibility.payerId !== payerId) continue;
+        coverage.eligibleForPreGuide += 1;
+        if (!preGuidesByAppointment.has(appointmentId)) coverage.missingPreGuides += 1;
+      }
+
+      return sendNoStoreJson(res, {
+        success: true,
+        data: coverage,
+        coverage
+      });
+    } catch (error: any) {
+      console.warn('[TissPreGuide] coverage failed:', {
+        code: sanitizeString(error?.code, 40) || null,
+        message: sanitizeTextField(error?.message, 300) || String(error)
+      });
+      return res.status(500).json({ success: false, error: 'Não foi possível verificar a cobertura das Pré-guias TISS agora.' });
+    }
+  });
+
   app.post('/api/tiss/pre-guides/revalidate-period', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 24 * 1024, 'Revalidação de Pré-guias TISS do período')) return;

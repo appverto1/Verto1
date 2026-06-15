@@ -56,6 +56,22 @@ type TissPreGuideRow = {
   lastValidatedAt?: string | null;
 };
 
+type TissPreGuideCoverage = {
+  totalAppointmentsInPeriod?: number;
+  billableAppointments?: number;
+  eligibleForPreGuide?: number;
+  materializedPreGuides?: number;
+  missingPreGuides?: number;
+  stalePreGuides?: number;
+  validPreGuides?: number;
+  pendingPreGuides?: number;
+  notApplicablePreGuides?: number;
+  withResolvedTuss?: number;
+  withoutBillingItem?: number;
+  notBillableAppointments?: number;
+  withoutFinancialContext?: number;
+};
+
 type TissPreGuideTabProps = {
   from: string;
   to: string;
@@ -203,6 +219,7 @@ export function TissPreGuideTab({
 }: TissPreGuideTabProps) {
   const [rows, setRows] = useState<TissPreGuideRow[]>([]);
   const [kpis, setKpis] = useState<Record<string, number>>({});
+  const [coverage, setCoverage] = useState<TissPreGuideCoverage | null>(null);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [quickFilter, setQuickFilter] = useState<QuickFilter | "">("");
@@ -232,12 +249,15 @@ export function TissPreGuideTab({
   ], [kpis]);
 
   const activeCard = cards.find((card) => card.key === quickFilter);
+  const missingPreGuides = Number(coverage?.missingPreGuides || 0);
+  const stalePreGuides = Number(coverage?.stalePreGuides || 0);
+  const eligibleForPreGuide = Number(coverage?.eligibleForPreGuide || 0);
 
   const loadRows = useCallback(async (overrides: { page?: number; quickFilter?: QuickFilter | "" } = {}) => {
     setLoading(true);
     setError("");
     try {
-      const result = await dataService.getTissPreGuides({
+      const query = {
         from: toApiDate(from),
         to: toApiDate(to, true),
         patientId,
@@ -246,7 +266,21 @@ export function TissPreGuideTab({
         quickFilter: overrides.quickFilter ?? quickFilter,
         page: overrides.page ?? page,
         pageSize: PAGE_SIZE,
-      });
+      };
+      const [result, coverageResult] = await Promise.all([
+        dataService.getTissPreGuides(query),
+        dataService.getTissPreGuideCoverage({
+          from: query.from,
+          to: query.to,
+          patientId,
+          professionalId,
+          payerId,
+          limit: 2000,
+        }),
+      ]);
+      if (coverageResult?.success) {
+        setCoverage(coverageResult.coverage || coverageResult.data || null);
+      }
       if (!result?.success) {
         setRows([]);
         setKpis({});
@@ -441,7 +475,9 @@ export function TissPreGuideTab({
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-indigo-100 bg-indigo-50/60 px-3 py-3">
         <div>
           <div className="text-sm font-semibold text-slate-800">Materialização action-driven</div>
-          <div className="mt-0.5 text-xs text-slate-600">Gere ou revalide somente os atendimentos faturáveis do período selecionado.</div>
+          <div className="mt-0.5 text-xs text-slate-600">
+            Use esta ação para materializar dados antigos ou revalidar pré-guias pendentes/stale. O carregamento normal da aba apenas lê as pré-guias já criadas.
+          </div>
         </div>
         <button
           type="button"
@@ -453,6 +489,35 @@ export function TissPreGuideTab({
           Gerar/Revalidar pré-guias do período
         </button>
       </div>
+
+      {(missingPreGuides > 0 || stalePreGuides > 0) && !quickFilter && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-800">
+          <div>
+            {missingPreGuides > 0 && (
+              <div className="font-medium">
+                Existem {missingPreGuides} atendimento(s) faturável(is) elegível(is) sem pré-guia materializada neste período.
+              </div>
+            )}
+            {stalePreGuides > 0 && (
+              <div className={missingPreGuides > 0 ? "mt-1" : "font-medium"}>
+                {stalePreGuides} pré-guia(s) precisam de revalidação por alteração de cadastro/regra.
+              </div>
+            )}
+            <div className="mt-1 text-xs text-amber-700">
+              A verificação é somente leitura. A geração/revalidação em massa acontece apenas ao clicar no botão.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => void revalidatePeriod()}
+            disabled={periodRevalidating || loading}
+            className="inline-flex items-center gap-2 rounded-md border border-amber-300 bg-white px-3 py-2 font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-60"
+          >
+            {periodRevalidating ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+            Gerar/Revalidar pendentes do período
+          </button>
+        </div>
+      )}
 
       <section className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
         {cards.map((card) => {
@@ -522,9 +587,20 @@ export function TissPreGuideTab({
                   <td colSpan={14} className="px-4 py-12 text-center">
                     {quickFilter ? (
                       <div className="text-sm text-slate-500">Nenhuma Pré-guia encontrada para este filtro.</div>
+                    ) : eligibleForPreGuide === 0 ? (
+                      <div className="mx-auto max-w-xl">
+                        <FileSearch size={26} className="mx-auto text-slate-400" />
+                        <div className="mt-3 text-sm font-semibold text-slate-800">Nenhum atendimento elegível para Pré-guia TISS no período.</div>
+                        <p className="mt-1 text-sm text-slate-500">
+                          A aba só materializa pré-guias para atendimentos faturáveis por convênio com pagador real. Contextos particular, sem cobrança e não faturável ficam fora deste fluxo.
+                        </p>
+                      </div>
                     ) : (
                       <div className="mx-auto max-w-xl">
                         <FileSearch size={26} className="mx-auto text-indigo-500" />
+                        <p className="mt-2 text-sm text-slate-500">
+                          Existem {eligibleForPreGuide} atendimento(s) elegível(is) para Pré-guia TISS neste período.
+                        </p>
                         <div className="mt-3 text-sm font-semibold text-slate-800">Nenhuma pré-guia materializada para o período.</div>
                         <p className="mt-1 text-sm text-slate-500">
                           As pré-guias são criadas por revalidação para evitar backfill automático. Você pode gerar pré-guias para os atendimentos faturáveis deste período.
