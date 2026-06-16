@@ -7,6 +7,8 @@ export const ACTIVE_PATIENT_BILLING_MODEL = 'active_patients' as const;
 export const ACTIVE_PATIENT_BILLING_TIERS: Array<never> = [];
 
 export type SafeStripeBillingTier = {
+  from: number;
+  to: number | null;
   upTo: number | null;
   unitAmountCents: number | null;
   flatAmountCents: number | null;
@@ -36,6 +38,17 @@ export type SafeStripeBillingPlan = {
   pricingModel: 'tiered_active_patients' | 'per_patient' | 'fixed_limit' | 'custom';
   usesActivePatientQuantity: boolean;
   isCustom: boolean;
+  enterpriseThreshold: number | null;
+};
+
+export type SafeStripeBillingEstimate = {
+  priceId: string;
+  activePatients: number;
+  matchedTier: SafeStripeBillingTier | null;
+  estimatedAmountCents: number | null;
+  currency: string;
+  isEnterprise: boolean;
+  enterpriseThreshold: number | null;
 };
 
 const ACTIVE_PATIENT_STATUS_VALUES = [
@@ -55,6 +68,13 @@ function toSafeInteger(value: unknown): number | null {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return null;
   return Math.max(0, Math.floor(parsed));
+}
+
+function centsFromStripeDecimal(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.round(value);
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.round(parsed) : null;
 }
 
 function mergeSafeMetadata(...sources: Array<Record<string, string> | null | undefined>): Record<string, string> {
@@ -134,6 +154,9 @@ function buildSafeStripeBillingPlan(params: {
   const maxPatients =
     toSafeInteger(metadataValue(metadata, ['max_patients', 'patient_limit', 'active_patient_limit', 'limit_patients'])) ||
     null;
+  const enterpriseThreshold =
+    toSafeInteger(metadataValue(metadata, ['enterprise_threshold', 'enterprise_from', 'custom_threshold', 'custom_from_patients'])) ||
+    null;
   const quantityMode = metadataValue(metadata, ['quantity_mode', 'billing_quantity_mode']).toLowerCase();
   const usesActivePatientQuantity =
     billingScheme === 'tiered' ||
@@ -151,14 +174,22 @@ function buildSafeStripeBillingPlan(params: {
         ? 'per_patient'
         : 'fixed_limit';
 
+  let previousTierLimit = 0;
   const tiers = Array.isArray((price as any).tiers)
-    ? ((price as any).tiers as Stripe.Price.Tier[]).map((tier) => ({
-        upTo: tier.up_to === 'inf' ? null : toSafeInteger(tier.up_to),
+    ? ((price as any).tiers as Stripe.Price.Tier[]).map((tier) => {
+        const upTo = tier.up_to === 'inf' ? null : toSafeInteger(tier.up_to);
+        const from = previousTierLimit + 1;
+        if (typeof upTo === 'number') previousTierLimit = upTo;
+        return {
+        from,
+        to: upTo,
+        upTo,
         unitAmountCents: typeof tier.unit_amount === 'number' ? tier.unit_amount : null,
         flatAmountCents: typeof tier.flat_amount === 'number' ? tier.flat_amount : null,
         unitAmountDecimal: toSafeString((tier as any).unit_amount_decimal, 80) || null,
         flatAmountDecimal: toSafeString((tier as any).flat_amount_decimal, 80) || null
-      }))
+        };
+      })
     : [];
 
   return {
@@ -182,7 +213,87 @@ function buildSafeStripeBillingPlan(params: {
     maxPatients,
     pricingModel,
     usesActivePatientQuantity,
-    isCustom
+    isCustom,
+    enterpriseThreshold
+  };
+}
+
+export function estimateStripeActivePatientPlan(params: {
+  plan: SafeStripeBillingPlan;
+  activePatients: number;
+  enterpriseThreshold?: number | null;
+}): SafeStripeBillingEstimate {
+  const plan = params.plan;
+  const activePatients = Math.max(1, Math.floor(Number(params.activePatients || 1)));
+  const enterpriseThreshold =
+    typeof params.enterpriseThreshold === 'number' && params.enterpriseThreshold > 0
+      ? Math.floor(params.enterpriseThreshold)
+      : typeof plan.enterpriseThreshold === 'number' && plan.enterpriseThreshold > 0
+        ? Math.floor(plan.enterpriseThreshold)
+        : null;
+  const isEnterprise = Boolean(enterpriseThreshold && activePatients > enterpriseThreshold);
+  const tiers = Array.isArray(plan.tiers) ? plan.tiers : [];
+  const matchedTier =
+    tiers.find((tier) => {
+      const from = Math.max(1, Number(tier.from || 1));
+      const to = tier.to === null ? Number.MAX_SAFE_INTEGER : Number(tier.to || 0);
+      return activePatients >= from && activePatients <= to;
+    }) ||
+    (tiers.length > 0 ? tiers[tiers.length - 1] : null);
+
+  if (isEnterprise) {
+    return {
+      priceId: plan.priceId,
+      activePatients,
+      matchedTier,
+      estimatedAmountCents: null,
+      currency: plan.currency,
+      isEnterprise: true,
+      enterpriseThreshold
+    };
+  }
+
+  let estimatedAmountCents: number | null = null;
+  if (tiers.length > 0) {
+    const tiersMode = toSafeString(plan.tiersMode, 40).toLowerCase() || 'graduated';
+    if (tiersMode === 'volume') {
+      const unit = typeof matchedTier?.unitAmountCents === 'number'
+        ? matchedTier.unitAmountCents
+        : centsFromStripeDecimal(matchedTier?.unitAmountDecimal);
+      const flat = typeof matchedTier?.flatAmountCents === 'number'
+        ? matchedTier.flatAmountCents
+        : centsFromStripeDecimal(matchedTier?.flatAmountDecimal) || 0;
+      estimatedAmountCents = typeof unit === 'number' ? unit * activePatients + flat : flat || null;
+    } else {
+      let total = 0;
+      for (const tier of tiers) {
+        const from = Math.max(1, Number(tier.from || 1));
+        const to = tier.to === null ? activePatients : Number(tier.to || 0);
+        const unitsInTier = Math.max(0, Math.min(activePatients, to) - from + 1);
+        if (unitsInTier <= 0) continue;
+        const unit = typeof tier.unitAmountCents === 'number' ? tier.unitAmountCents : centsFromStripeDecimal(tier.unitAmountDecimal) || 0;
+        const flat = typeof tier.flatAmountCents === 'number' ? tier.flatAmountCents : centsFromStripeDecimal(tier.flatAmountDecimal) || 0;
+        total += unitsInTier * unit + flat;
+      }
+      estimatedAmountCents = total > 0 ? total : null;
+    }
+  } else {
+    const unit = typeof plan.unitAmountCents === 'number' ? plan.unitAmountCents : centsFromStripeDecimal(plan.unitAmountDecimal);
+    if (plan.usesActivePatientQuantity && typeof unit === 'number') {
+      estimatedAmountCents = unit * activePatients;
+    } else if (typeof unit === 'number') {
+      estimatedAmountCents = unit;
+    }
+  }
+
+  return {
+    priceId: plan.priceId,
+    activePatients,
+    matchedTier,
+    estimatedAmountCents,
+    currency: plan.currency,
+    isEnterprise: false,
+    enterpriseThreshold
   };
 }
 

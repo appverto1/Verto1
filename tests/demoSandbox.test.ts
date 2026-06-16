@@ -265,7 +265,7 @@ test('demo expirado e bloqueado no checkAuth antes do billing real', () => {
 });
 
 test('Stripe e convites reais sao bloqueados para ambiente demo antes de side-effect', () => {
-  const checkout = sliceFrom(serverCode, "app.post('/api/stripe/create-checkout'", 3600);
+  const checkout = sliceFrom(serverCode, 'const handleCreateClinicCheckout', 4200);
   assert.match(checkout, /fetchClinicDemoState\(clinicId\)/);
   assert.match(checkout, /isDemoSessionUser\(user\)/);
   assert.match(checkout, /Ambiente demo não cobra Stripe real|Ambiente demo não abre cobrança real/);

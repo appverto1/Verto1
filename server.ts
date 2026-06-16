@@ -19,6 +19,7 @@ import webpush from 'web-push';
 import { generateSecret, verifySync, generateURI } from 'otplib';
 import QRCode from 'qrcode';
 import {
+  estimateStripeActivePatientPlan,
   getClinicBillingSummary,
   listStripeActivePatientBillingPlans,
   reportAllClinicsActivePatientUsage,
@@ -343,6 +344,34 @@ function resolveSalesContactUrl(): string {
     sanitizeString(process.env.WHATSAPP_SALES_URL || '', 1000) ||
     (sanitizeEmail(process.env.SALES_EMAIL) ? `mailto:${sanitizeEmail(process.env.SALES_EMAIL)}` : '')
   );
+}
+
+function resolveActivePatientEnterpriseThreshold(): number {
+  const raw = Number(
+    process.env.ACTIVE_PATIENT_ENTERPRISE_THRESHOLD ||
+    process.env.BILLING_ENTERPRISE_PATIENT_THRESHOLD ||
+    50
+  );
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 50;
+}
+
+function normalizeActivePatientQuantity(value: unknown): number | null {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed < 1) return null;
+  return Math.min(100000, parsed);
+}
+
+function withEnterpriseThreshold<T extends { enterpriseThreshold?: number | null }>(plan: T, fallbackThreshold: number): T & { enterpriseThreshold: number } {
+  const planThreshold = Number(plan.enterpriseThreshold || 0);
+  return {
+    ...plan,
+    enterpriseThreshold: Number.isFinite(planThreshold) && planThreshold > 0 ? Math.floor(planThreshold) : fallbackThreshold
+  };
+}
+
+function isMissingStripeConfigError(error: any): boolean {
+  const message = sanitizeString(error?.message || String(error || ''), 500).toLowerCase();
+  return message.includes('stripe_secret_key') || message.includes('stripe secret key');
 }
 
 const ACTIVE_PATIENT_BILLING_MODEL = 'active_patients';
@@ -47714,17 +47743,19 @@ async function startServer() {
       }
 
       const activePatientPriceId = resolveActivePatientPriceId();
-      const plans = await listStripeActivePatientBillingPlans({
+      const enterpriseThreshold = resolveActivePatientEnterpriseThreshold();
+      const plans = (await listStripeActivePatientBillingPlans({
         stripe: getStripe(),
         activePatientPriceId,
         allowedPriceIds: resolveBillingPlanPriceIds()
-      });
+      })).map((plan) => withEnterpriseThreshold(plan, enterpriseThreshold));
 
       return res.json({
         success: true,
         data: {
           billingModel: ACTIVE_PATIENT_BILLING_MODEL,
           defaultPriceId: activePatientPriceId || plans.find((plan) => !plan.isCustom)?.priceId || null,
+          enterpriseThreshold,
           pricingModel: plans.some((plan) => plan.pricingModel === 'tiered_active_patients')
             ? 'tiered_active_patients'
             : 'plans_by_limit',
@@ -47736,16 +47767,90 @@ async function startServer() {
     } catch (error: any) {
       console.error('[Billing Plans] Falha ao carregar planos Stripe:', {
         message: error?.message || String(error),
-        code: sanitizeString(error?.code, 80) || null
+        code: sanitizeString(error?.code, 80) || (isMissingStripeConfigError(error) ? 'MISSING_STRIPE_CONFIG' : null)
       });
       return res.status(503).json({
         success: false,
+        code: isMissingStripeConfigError(error) ? 'MISSING_STRIPE_CONFIG' : 'BILLING_PLANS_UNAVAILABLE',
         error: 'Não foi possível carregar os planos agora. Tente novamente em alguns instantes.'
       });
     }
   });
 
-  app.post('/api/stripe/create-checkout', checkAuth, async (req, res) => {
+  app.post('/api/billing/estimate', checkAuth, async (req: any, res) => {
+    try {
+      const sessionUser = req.session?.user || {};
+      if (sanitizeString(sessionUser.role, 40).toLowerCase() === 'patient') {
+        return res.status(400).json({
+          success: false,
+          code: 'UNSUPPORTED_BILLING_MODEL',
+          error: 'Este simulador é exclusivo para planos de clínica.'
+        });
+      }
+
+      const activePatients = normalizeActivePatientQuantity(req.body?.activePatients || req.body?.expectedActivePatients);
+      if (!activePatients) {
+        return res.status(400).json({
+          success: false,
+          code: 'INVALID_ACTIVE_PATIENTS',
+          error: 'Informe uma quantidade válida de pacientes ativos.'
+        });
+      }
+
+      const stripe = getStripe();
+      const activePatientPriceId = resolveActivePatientPriceId();
+      const enterpriseThreshold = resolveActivePatientEnterpriseThreshold();
+      const billingPlans = (await listStripeActivePatientBillingPlans({
+        stripe,
+        activePatientPriceId,
+        allowedPriceIds: resolveBillingPlanPriceIds()
+      })).map((plan) => withEnterpriseThreshold(plan, enterpriseThreshold));
+      const requestedPriceId = sanitizeString(req.body?.selectedPriceId || req.body?.priceId, 120);
+      const requestedPlan = requestedPriceId ? billingPlans.find((plan) => plan.priceId === requestedPriceId) || null : null;
+      if (requestedPriceId && !requestedPlan) {
+        return res.status(400).json({
+          success: false,
+          code: 'PRICE_NOT_AVAILABLE',
+          error: 'Plano selecionado não está disponível para contratação.'
+        });
+      }
+
+      const selectedPlan =
+        requestedPlan ||
+        billingPlans.find((plan) => plan.priceId === activePatientPriceId && !plan.isCustom) ||
+        billingPlans.find((plan) => !plan.isCustom) ||
+        null;
+
+      if (!selectedPlan) {
+        return res.status(503).json({
+          success: false,
+          code: 'PLANS_NOT_CONFIGURED',
+          error: 'Planos de assinatura ainda não estão configurados.'
+        });
+      }
+
+      return res.json({
+        success: true,
+        data: estimateStripeActivePatientPlan({
+          plan: selectedPlan,
+          activePatients,
+          enterpriseThreshold: selectedPlan.enterpriseThreshold
+        })
+      });
+    } catch (error: any) {
+      console.error('[Billing Estimate] Falha ao estimar plano Stripe:', {
+        message: error?.message || String(error),
+        code: sanitizeString(error?.code, 80) || (isMissingStripeConfigError(error) ? 'MISSING_STRIPE_CONFIG' : null)
+      });
+      return res.status(503).json({
+        success: false,
+        code: isMissingStripeConfigError(error) ? 'MISSING_STRIPE_CONFIG' : 'BILLING_ESTIMATE_UNAVAILABLE',
+        error: 'Não foi possível calcular a estimativa agora. Tente novamente em alguns instantes.'
+      });
+    }
+  });
+
+  const handleCreateClinicCheckout = async (req: any, res: any) => {
     try {
       const user = req.session.user;
       const origin = req.headers.origin || req.protocol + '://' + req.get('host');
@@ -47758,12 +47863,14 @@ async function startServer() {
       if (demoState.isDemo || isDemoSessionUser(user)) {
         return res.status(403).json({
           success: false,
+          code: 'DEMO_CHECKOUT_DISABLED',
           error: isPatientCheckout
             ? 'Ambiente demo não abre cobrança real.'
             : 'Ambiente demo não cobra Stripe real.'
         });
       }
 
+      const stripe = getStripe();
       const persistedCustomerId = await resolvePersistedStripeCustomerId({
         userId: sanitizeString(user.id, 120),
         clinicId,
@@ -47771,23 +47878,34 @@ async function startServer() {
       });
 
       const activePatientPriceId = isPatientCheckout ? '' : resolveActivePatientPriceId();
-      const stripe = getStripe();
       let selectedClinicPlan: Awaited<ReturnType<typeof listStripeActivePatientBillingPlans>>[number] | null = null;
-      let expectedActivePatients = Math.max(
-        1,
-        Math.min(100000, Math.floor(Number(req.body?.expectedActivePatients || req.body?.activePatients || 1) || 1))
-      );
+      let activePatients = 1;
 
       if (!isPatientCheckout) {
-        const billingPlans = await listStripeActivePatientBillingPlans({
+        const normalizedActivePatients = normalizeActivePatientQuantity(req.body?.activePatients || req.body?.expectedActivePatients);
+        if (!normalizedActivePatients) {
+          return res.status(400).json({
+            success: false,
+            code: 'INVALID_ACTIVE_PATIENTS',
+            error: 'Informe uma quantidade válida de pacientes ativos antes de continuar.'
+          });
+        }
+        activePatients = normalizedActivePatients;
+
+        const enterpriseThreshold = resolveActivePatientEnterpriseThreshold();
+        const billingPlans = (await listStripeActivePatientBillingPlans({
           stripe,
           activePatientPriceId,
           allowedPriceIds: resolveBillingPlanPriceIds()
-        });
+        })).map((plan) => withEnterpriseThreshold(plan, enterpriseThreshold));
         const requestedPriceId = sanitizeString(req.body?.selectedPriceId || req.body?.priceId, 120);
         const requestedPlan = requestedPriceId ? billingPlans.find((plan) => plan.priceId === requestedPriceId) || null : null;
         if (requestedPriceId && !requestedPlan) {
-          return res.status(400).json({ success: false, error: 'Plano selecionado não está disponível para contratação.' });
+          return res.status(400).json({
+            success: false,
+            code: 'PRICE_NOT_AVAILABLE',
+            error: 'Plano selecionado não está disponível para contratação.'
+          });
         }
         selectedClinicPlan =
           requestedPlan ||
@@ -47796,13 +47914,43 @@ async function startServer() {
           null;
 
         if (!selectedClinicPlan) {
-          return res.status(503).json({ success: false, error: 'Planos de assinatura ainda não estão configurados.' });
+          return res.status(503).json({
+            success: false,
+            code: 'PLANS_NOT_CONFIGURED',
+            error: 'Planos de assinatura ainda não estão configurados.'
+          });
+        }
+
+        const estimate = estimateStripeActivePatientPlan({
+          plan: selectedClinicPlan,
+          activePatients,
+          enterpriseThreshold: selectedClinicPlan.enterpriseThreshold
+        });
+        if (estimate.isEnterprise) {
+          return res.status(422).json({
+            success: false,
+            code: 'ENTERPRISE_REQUIRED',
+            error: 'Para clínicas com mais de 50 pacientes ativos, solicite uma proposta personalizada.',
+            data: estimate
+          });
         }
         if (selectedClinicPlan.isCustom) {
-          return res.status(400).json({ success: false, error: 'Este plano exige proposta personalizada.' });
+          return res.status(422).json({
+            success: false,
+            code: 'ENTERPRISE_REQUIRED',
+            error: 'Este plano exige proposta personalizada.'
+          });
         }
-        if (!selectedClinicPlan.usesActivePatientQuantity) {
-          expectedActivePatients = 1;
+        if (
+          !selectedClinicPlan.usesActivePatientQuantity &&
+          typeof selectedClinicPlan.maxPatients === 'number' &&
+          activePatients > selectedClinicPlan.maxPatients
+        ) {
+          return res.status(400).json({
+            success: false,
+            code: 'PATIENT_LIMIT_EXCEEDED',
+            error: 'A quantidade informada excede o limite do plano selecionado.'
+          });
         }
       }
 
@@ -47816,7 +47964,10 @@ async function startServer() {
             },
             quantity: 1
           }
-        : { price: selectedClinicPlan!.priceId, quantity: expectedActivePatients };
+        : {
+            price: selectedClinicPlan!.priceId,
+            quantity: selectedClinicPlan!.usesActivePatientQuantity ? activePatients : 1
+          };
 
       const checkoutPayload: Stripe.Checkout.SessionCreateParams = {
         payment_method_types: ['card'],
@@ -47832,7 +47983,8 @@ async function startServer() {
             : {
                 billingModel: ACTIVE_PATIENT_BILLING_MODEL,
                 selectedPriceId: selectedClinicPlan?.priceId || '',
-                expectedActivePatients: String(expectedActivePatients)
+                activePatients: String(activePatients),
+                expectedActivePatients: String(activePatients)
               })
         },
         subscription_data: {
@@ -47844,7 +47996,8 @@ async function startServer() {
               : {
                   billingModel: ACTIVE_PATIENT_BILLING_MODEL,
                   selectedPriceId: selectedClinicPlan?.priceId || '',
-                  expectedActivePatients: String(expectedActivePatients)
+                  activePatients: String(activePatients),
+                  expectedActivePatients: String(activePatients)
                 })
           }
         }
@@ -47861,14 +48014,25 @@ async function startServer() {
     } catch (error: any) {
       console.error('[Stripe] create-checkout error:', {
         message: error?.message || String(error),
-        code: sanitizeString(error?.code, 60) || null
+        code: sanitizeString(error?.code, 60) || (isMissingStripeConfigError(error) ? 'MISSING_STRIPE_CONFIG' : null),
+        stripeErrorType: sanitizeString(error?.type, 80) || null,
+        priceIdPresent: Boolean(req.body?.selectedPriceId || req.body?.priceId),
+        activePatients: normalizeActivePatientQuantity(req.body?.activePatients || req.body?.expectedActivePatients),
+        organizationIdPresent: Boolean(req.session?.user?.activeWorkspaceId || req.session?.user?.clinicId || req.session?.user?.id)
       });
-      res.status(500).json({
+      const missingConfig = isMissingStripeConfigError(error);
+      res.status(missingConfig ? 503 : 502).json({
         success: false,
-        error: error.message || 'Erro ao criar sessao de pagamento'
+        code: missingConfig ? 'MISSING_STRIPE_CONFIG' : 'CHECKOUT_SESSION_FAILED',
+        error: missingConfig
+          ? 'Pagamento indisponível: configuração Stripe ausente.'
+          : 'Não foi possível iniciar o pagamento agora. Tente novamente ou fale com o suporte.'
       });
     }
-  });
+  };
+
+  app.post('/api/billing/checkout', checkAuth, handleCreateClinicCheckout);
+  app.post('/api/stripe/create-checkout', checkAuth, handleCreateClinicCheckout);
 
   app.post('/api/stripe/customer-portal-session', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {

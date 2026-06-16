@@ -97,7 +97,7 @@ test('dados do usuario pedem apenas nome e telefone no bloqueio inicial', () => 
 });
 
 test('tela de ativacao mostra plano modular e checkout seguro', () => {
-  const subscriptionRequired = sliceFrom(appCode, 'const SubscriptionRequired =', 20000);
+  const subscriptionRequired = sliceFrom(appCode, 'const SubscriptionRequired =', 32000);
   assert.match(subscriptionRequired, /pacientes ativos/);
   assert.match(subscriptionRequired, /\/api\/billing\/plans/);
   assert.match(subscriptionRequired, /Continuar para pagamento/);
@@ -107,11 +107,12 @@ test('tela de ativacao mostra plano modular e checkout seguro', () => {
   assert.doesNotMatch(subscriptionRequired, /Até 10 pacientes ativos|Acima disso|Falar com Mateus|Fale com Mateus/);
   assert.doesNotMatch(subscriptionRequired, /número completo do cartão[\s\S]*localStorage|card_number|cardNumber/);
 
-  const checkout = sliceFrom(serverCode, "app.post('/api/stripe/create-checkout'", 5200);
+  const checkout = sliceFrom(serverCode, 'const handleCreateClinicCheckout', 7600);
   assert.match(checkout, /payment_method_types:\s*\['card'\]/);
   assert.match(checkout, /const activePatientPriceId = isPatientCheckout \? '' : resolveActivePatientPriceId\(\)/);
   assert.match(checkout, /selectedPriceId/);
-  assert.match(checkout, /expectedActivePatients/);
+  assert.match(checkout, /activePatients/);
+  assert.match(checkout, /ENTERPRISE_REQUIRED/);
 });
 
 test('foto cadastrada na Verto tem prioridade sobre avatar OAuth', () => {

@@ -44,6 +44,7 @@ test('env usa apenas o Price modular por paciente ativo no fluxo profissional', 
   assert.match(envExample, /STRIPE_BILLING_PLAN_PRICE_IDS=/);
   assert.match(envExample, /SALES_CONTACT_URL=/);
   assert.match(envExample, /STRIPE_ACTIVE_PATIENT_BILLING_MODE=quantity/);
+  assert.match(envExample, /ACTIVE_PATIENT_ENTERPRISE_THRESHOLD=50/);
   doesNotContain(envExample, [
     'STRIPE_PRICE_ESSENCIAL',
     'STRIPE_PRICE_CRESCIMENTO',
@@ -92,27 +93,46 @@ test('checkout de cadastro profissional nao aceita plano/preco vindo do front', 
 });
 
 test('checkout autenticado preserva paciente separado e usa active patient price para clinica', () => {
-  const route = sliceFrom(serverCode, "app.post('/api/stripe/create-checkout'", 5200);
-  assert.match(route, /const isPatientCheckout/);
-  assert.match(route, /const activePatientPriceId = isPatientCheckout \? '' : resolveActivePatientPriceId\(\)/);
-  assert.match(route, /listStripeActivePatientBillingPlans/);
-  assert.match(route, /selectedPriceId/);
-  assert.match(route, /requestedPlan/);
-  assert.match(route, /Plano selecionado não está disponível para contratação/);
-  assert.match(route, /expectedActivePatients/);
-  assert.match(route, /price: selectedClinicPlan!\.priceId/);
-  assert.match(route, /quantity: expectedActivePatients/);
-  assert.match(route, /billingModel: ACTIVE_PATIENT_BILLING_MODEL/);
-  assert.doesNotMatch(route, /planPrices|STRIPE_PRICE_ESSENCIAL|STRIPE_PRICE_CRESCIMENTO|STRIPE_PRICE_AVANCADO/);
+  const handler = sliceFrom(serverCode, 'const handleCreateClinicCheckout', 7600);
+  assert.match(handler, /const isPatientCheckout/);
+  assert.match(handler, /const activePatientPriceId = isPatientCheckout \? '' : resolveActivePatientPriceId\(\)/);
+  assert.match(handler, /listStripeActivePatientBillingPlans/);
+  assert.match(handler, /selectedPriceId/);
+  assert.match(handler, /requestedPlan/);
+  assert.match(handler, /PRICE_NOT_AVAILABLE/);
+  assert.match(handler, /ENTERPRISE_REQUIRED/);
+  assert.match(handler, /MISSING_STRIPE_CONFIG/);
+  assert.match(handler, /activePatients/);
+  assert.match(handler, /price: selectedClinicPlan!\.priceId/);
+  assert.match(handler, /quantity: selectedClinicPlan!\.usesActivePatientQuantity \? activePatients : 1/);
+  assert.match(handler, /billingModel: ACTIVE_PATIENT_BILLING_MODEL/);
+  assert.match(serverCode, /app\.post\('\/api\/billing\/checkout', checkAuth, handleCreateClinicCheckout\)/);
+  assert.match(serverCode, /app\.post\('\/api\/stripe\/create-checkout', checkAuth, handleCreateClinicCheckout\)/);
+  assert.doesNotMatch(handler, /planPrices|STRIPE_PRICE_ESSENCIAL|STRIPE_PRICE_CRESCIMENTO|STRIPE_PRICE_AVANCADO/);
 });
 
 test('endpoint de planos le Stripe e retorna apenas dados seguros para onboarding', () => {
-  const route = sliceFrom(serverCode, "app.get('/api/billing/plans'", 4200);
+  const route = sliceFrom(serverCode, "app.get('/api/billing/plans'", 4600);
   assert.match(route, /checkAuth/);
   assert.match(route, /listStripeActivePatientBillingPlans/);
   assert.match(route, /resolveBillingPlanPriceIds/);
+  assert.match(route, /enterpriseThreshold/);
   assert.match(route, /salesContactUrl/);
+  assert.match(route, /MISSING_STRIPE_CONFIG/);
   assert.doesNotMatch(route, /STRIPE_SECRET_KEY|sk_|apiKey/);
+});
+
+test('endpoint de estimativa calcula faixa server-side e nao abre checkout enterprise', () => {
+  const estimateRoute = sliceFrom(serverCode, "app.post('/api/billing/estimate'", 4200);
+  assert.match(estimateRoute, /estimateStripeActivePatientPlan/);
+  assert.match(estimateRoute, /PRICE_NOT_AVAILABLE/);
+  assert.match(estimateRoute, /INVALID_ACTIVE_PATIENTS/);
+  assert.match(estimateRoute, /enterpriseThreshold/);
+
+  const serviceEstimate = sliceFrom(stripeServiceCode, 'export function estimateStripeActivePatientPlan', 3800);
+  assert.match(serviceEstimate, /matchedTier/);
+  assert.match(serviceEstimate, /estimatedAmountCents/);
+  assert.match(serviceEstimate, /isEnterprise/);
 });
 
 test('webhook e idempotente, valida price conhecido e salva subscription item', () => {
@@ -172,7 +192,6 @@ test('landing e tela de assinatura nao exibem planos fixos antigos', () => {
   doesNotContain(uiCode, [
     'Essencial',
     'Crescimento',
-    'Avançado',
     'Avancado',
     'R$ 149',
     'R$ 399',
@@ -185,8 +204,15 @@ test('landing e tela de assinatura nao exibem planos fixos antigos', () => {
   assert.match(landingCode, /billingModel:[\s\S]*?'active_patients'/);
   assert.match(appCode, /paciente ativo/i);
   assert.match(appCode, /\/api\/billing\/plans/);
+  assert.match(appCode, /\/api\/billing\/estimate/);
+  assert.match(appCode, /\/api\/billing\/checkout/);
   assert.match(appCode, /selectedPriceId/);
+  assert.match(appCode, /Faixa correspondente/);
+  assert.match(appCode, /Sua faixa/);
   assert.match(appCode, /Solicitar proposta personalizada/);
+  assert.match(appCode, /Plano personalizado/);
+  assert.doesNotMatch(appCode, /Valor no checkout|Erro ao iniciar pagamento/);
+  assert.doesNotMatch(appCode, /alert\('Erro ao iniciar pagamento/);
   assert.doesNotMatch(`${adminCode}\n${superAdminCode}`, /planName:\s*complimentaryPlan|complimentaryPlan/);
   assert.doesNotMatch(invitationCode, /planLimits|user\.planName|Seu plano/);
 });
