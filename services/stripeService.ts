@@ -306,12 +306,22 @@ export async function listStripeActivePatientBillingPlans(params: {
   const primaryPriceId = toSafeString(params.activePatientPriceId, 120);
   const pricesById = new Map<string, Stripe.Price>();
 
-  const recurringPrices = await params.stripe.prices.list({
-    active: true,
-    type: 'recurring',
-    limit: 100,
-    expand: ['data.product']
-  });
+  let recurringPrices: Stripe.ApiList<Stripe.Price>;
+  try {
+    recurringPrices = await params.stripe.prices.list({
+      active: true,
+      type: 'recurring',
+      limit: 100,
+      expand: ['data.product', 'data.tiers']
+    });
+  } catch {
+    recurringPrices = await params.stripe.prices.list({
+      active: true,
+      type: 'recurring',
+      limit: 100,
+      expand: ['data.product']
+    });
+  }
 
   for (const price of recurringPrices.data || []) {
     pricesById.set(price.id, price);
@@ -320,10 +330,15 @@ export async function listStripeActivePatientBillingPlans(params: {
   for (const priceId of [primaryPriceId, ...allowedPriceIds].filter(Boolean)) {
     if (pricesById.has(priceId)) continue;
     try {
-      const price = await params.stripe.prices.retrieve(priceId, { expand: ['product'] });
+      const price = await params.stripe.prices.retrieve(priceId, { expand: ['product', 'tiers'] });
       pricesById.set(price.id, price);
     } catch {
-      // A price configured in env may be unavailable in this Stripe account; ignore here and let checkout fail clearly.
+      try {
+        const price = await params.stripe.prices.retrieve(priceId, { expand: ['product'] });
+        pricesById.set(price.id, price);
+      } catch {
+        // A price configured in env may be unavailable in this Stripe account; ignore here and let checkout fail clearly.
+      }
     }
   }
 
@@ -334,14 +349,29 @@ export async function listStripeActivePatientBillingPlans(params: {
     if (!isActivePatientBillingPrice({ price: resolvedPrice, product, primaryPriceId, allowedPriceIds })) continue;
     if (resolvedPrice.billing_scheme === 'tiered' && !Array.isArray((resolvedPrice as any).tiers)) {
       try {
-        resolvedPrice = await params.stripe.prices.retrieve(resolvedPrice.id, { expand: ['product'] });
+        resolvedPrice = await params.stripe.prices.retrieve(resolvedPrice.id, { expand: ['product', 'tiers'] });
         product = stripeProductFromPrice(resolvedPrice);
       } catch {
-        // Keep the list response as fallback; checkout still uses Stripe's canonical price.
+        try {
+          resolvedPrice = await params.stripe.prices.retrieve(resolvedPrice.id, { expand: ['product'] });
+          product = stripeProductFromPrice(resolvedPrice);
+        } catch {
+          // Keep the list response as fallback; checkout still uses Stripe's canonical price.
+        }
       }
     }
     plans.push(buildSafeStripeBillingPlan({ price: resolvedPrice, product, primaryPriceId }));
   }
+
+  console.info('[Stripe Billing Plans] diagnostics:', {
+    stripeConfigured: true,
+    pricesFound: pricesById.size,
+    activeRecurringPrices: recurringPrices.data?.length || 0,
+    tieredPricesFound: plans.filter((plan) => plan.billingScheme === 'tiered').length,
+    returnedPlans: plans.length,
+    firstPlanHasPriceId: Boolean(plans[0]?.priceId),
+    firstPlanTierCount: plans[0]?.tiers?.length || 0
+  });
 
   return plans.sort((a, b) => {
     if (a.isCustom !== b.isCustom) return a.isCustom ? 1 : -1;

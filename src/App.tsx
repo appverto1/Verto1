@@ -2241,7 +2241,7 @@ export default function App() {
   };
 
   const formatBillingCurrency = (amountCents: number | null | undefined, currency = 'brl') => {
-    if (typeof amountCents !== 'number' || !Number.isFinite(amountCents)) return 'Estimativa indisponível';
+    if (typeof amountCents !== 'number' || !Number.isFinite(amountCents)) return 'Aguardando estimativa';
     return new Intl.NumberFormat('pt-BR', {
       style: 'currency',
       currency: String(currency || 'brl').toUpperCase()
@@ -2285,6 +2285,14 @@ export default function App() {
     if (maxPatients <= 50) return 'Para clínicas com operação consolidada.';
     return 'Para clínicas com maior volume de pacientes ativos.';
   };
+
+  const DEFAULT_SELF_SERVICE_PATIENT_RANGES = [
+    { from: 1, to: 5 },
+    { from: 6, to: 10 },
+    { from: 11, to: 20 },
+    { from: 21, to: 30 },
+    { from: 31, to: 50 }
+  ];
 
   const estimateStripePlanAmountCents = (plan: BillingPlanOption | null, quantity: number) => {
     if (!plan) return null;
@@ -2471,13 +2479,35 @@ export default function App() {
       });
     } else {
       nonCustomPlans.forEach((plan, index) => {
+        const hasUnitEstimate = typeof estimateStripePlanAmountCents(plan, 1) === 'number';
+        const hasExplicitLimit = Boolean(plan.maxPatients || plan.patientLimit);
+        if (plan.usesActivePatientQuantity && !hasExplicitLimit && hasUnitEstimate) {
+          DEFAULT_SELF_SERVICE_PATIENT_RANGES
+            .filter((range) => range.to <= enterpriseThreshold)
+            .forEach((range) => {
+              billingRangeCards.push({
+                key: `linear-${plan.priceId}-${range.from}-${range.to}`,
+                kind: 'self_service',
+                priceId: plan.priceId,
+                label: `${range.from} a ${range.to} pacientes ativos`,
+                description: describeBillingRangeAudience(range.to),
+                activePatients: range.to,
+                estimatedAmountCents: estimateStripePlanAmountCents(plan, range.to),
+                currency: plan.currency
+              });
+            });
+          return;
+        }
+
         const activePatients = Number(plan.maxPatients || plan.patientLimit || plan.minPatients || 1);
         if (!activePatients || activePatients > enterpriseThreshold) return;
+        const label = describeBillingRange(plan, index);
+        if (label === 'Pacientes ativos') return;
         billingRangeCards.push({
           key: `plan-${plan.priceId}-${activePatients}`,
           kind: 'self_service',
           priceId: plan.priceId,
-          label: describeBillingRange(plan, index),
+          label,
           description: describeBillingRangeAudience(activePatients),
           activePatients,
           estimatedAmountCents: estimateStripePlanAmountCents(plan, activePatients),
@@ -2496,17 +2526,18 @@ export default function App() {
     });
     const selectedBillingRange = billingRangeCards.find((card) => card.key === selectedBillingRangeKey) || null;
     const selectedActivePatients = selectedBillingRange?.kind === 'self_service' ? selectedBillingRange.activePatients : null;
+    const selectedBillingPriceId = selectedBillingRange?.kind === 'self_service' ? String(selectedBillingRange.priceId || '') : '';
     const isEnterpriseSelected = !isPatientCheckout && selectedBillingRange?.kind === 'enterprise';
     const fallbackEstimatedAmountCents = selectedBillingRange?.estimatedAmountCents ?? null;
     const estimatedAmountCents =
       selectedActivePatients &&
-      estimateState.data?.priceId === selectedPlan?.priceId &&
+      estimateState.data?.priceId === selectedBillingPriceId &&
       estimateState.data?.activePatients === selectedActivePatients
         ? estimateState.data.estimatedAmountCents
         : fallbackEstimatedAmountCents;
     const matchedTier =
       selectedActivePatients &&
-      estimateState.data?.priceId === selectedPlan?.priceId &&
+      estimateState.data?.priceId === selectedBillingPriceId &&
       estimateState.data?.activePatients === selectedActivePatients
         ? estimateState.data.matchedTier
         : selectedActivePatients
@@ -2527,7 +2558,7 @@ export default function App() {
           : 'As configurações de convênio e TISS podem ser feitas depois, dentro da Verto.';
 
     useEffect(() => {
-      if (isPatientCheckout || !selectedPlan?.priceId || !selectedBillingRange || selectedBillingRange.kind !== 'self_service' || !selectedActivePatients) {
+      if (isPatientCheckout || !selectedBillingPriceId || !selectedBillingRange || selectedBillingRange.kind !== 'self_service' || !selectedActivePatients) {
         setEstimateState({ loading: false, error: '', data: null });
         return;
       }
@@ -2539,7 +2570,8 @@ export default function App() {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              selectedPriceId: selectedPlan.priceId,
+              selectedPriceId: selectedBillingPriceId,
+              priceId: selectedBillingPriceId,
               activePatients: selectedActivePatients
             })
           });
@@ -2568,7 +2600,7 @@ export default function App() {
       return () => {
         cancelled = true;
       };
-    }, [isPatientCheckout, selectedPlan?.priceId, selectedBillingRangeKey, selectedActivePatients]);
+    }, [isPatientCheckout, selectedBillingPriceId, selectedBillingRangeKey, selectedActivePatients]);
 
     const submitCheckout = async () => {
       if (checkoutLoading) return;
@@ -2576,7 +2608,7 @@ export default function App() {
         handleEnterpriseContact(user, plansState.salesContactUrl);
         return;
       }
-      if (!isPatientCheckout && (!selectedBillingRange || selectedBillingRange.kind !== 'self_service' || !selectedActivePatients || !selectedPlan?.priceId)) {
+      if (!isPatientCheckout && (!selectedBillingRange || selectedBillingRange.kind !== 'self_service' || !selectedActivePatients || !selectedBillingPriceId)) {
         setCheckoutError('Selecione uma faixa válida de pacientes antes de continuar.');
         return;
       }
@@ -2587,7 +2619,7 @@ export default function App() {
           isPatientCheckout
             ? undefined
             : {
-                selectedPriceId: selectedPlan?.priceId,
+                selectedPriceId: selectedBillingPriceId,
                 activePatients: selectedActivePatients || undefined
               }
         );
@@ -2817,6 +2849,7 @@ export default function App() {
                   plansState.loading ||
                   Boolean(plansState.error) ||
                   !selectedPlan ||
+                  !selectedBillingPriceId ||
                   !selectedBillingRange ||
                   selectedBillingRange.kind !== 'self_service'
                 }

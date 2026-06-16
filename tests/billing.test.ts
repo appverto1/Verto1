@@ -125,8 +125,19 @@ test('endpoint de planos le Stripe e retorna apenas dados seguros para onboardin
   assert.match(route, /resolveBillingPlanPriceIds/);
   assert.match(route, /enterpriseThreshold/);
   assert.match(route, /salesContactUrl/);
+  assert.match(route, /firstPlanTierCount/);
+  assert.match(route, /tieredPricesFound/);
   assert.match(route, /MISSING_STRIPE_CONFIG/);
   assert.doesNotMatch(route, /STRIPE_SECRET_KEY|sk_|apiKey/);
+});
+
+test('parser Stripe expande tiers e transforma faixas up_to em from/to', () => {
+  assert.match(stripeServiceCode, /expand:\s*\['data\.product', 'data\.tiers'\]/);
+  assert.match(stripeServiceCode, /prices\.retrieve\(priceId, \{ expand: \['product', 'tiers'\] \}\)/);
+  assert.match(stripeServiceCode, /prices\.retrieve\(resolvedPrice\.id, \{ expand: \['product', 'tiers'\] \}\)/);
+  assert.match(stripeServiceCode, /const from = previousTierLimit \+ 1/);
+  assert.match(stripeServiceCode, /tier\.up_to === 'inf' \? null : toSafeInteger\(tier\.up_to\)/);
+  assert.match(stripeServiceCode, /firstPlanTierCount/);
 });
 
 test('endpoint de estimativa calcula faixa server-side e nao abre checkout enterprise', () => {
@@ -135,6 +146,8 @@ test('endpoint de estimativa calcula faixa server-side e nao abre checkout enter
   assert.match(estimateRoute, /PRICE_NOT_AVAILABLE/);
   assert.match(estimateRoute, /INVALID_ACTIVE_PATIENTS/);
   assert.match(estimateRoute, /enterpriseThreshold/);
+  assert.match(estimateRoute, /tierCount/);
+  assert.match(estimateRoute, /estimatedAmountCents/);
 
   const serviceEstimate = sliceFrom(stripeServiceCode, 'export function estimateStripeActivePatientPlan', 3800);
   assert.match(serviceEstimate, /matchedTier/);
@@ -217,14 +230,20 @@ test('landing e tela de assinatura nao exibem planos fixos antigos', () => {
   assert.match(appCode, /selectedPriceId/);
   assert.match(subscriptionRequired, /billingRangeCards/);
   assert.match(subscriptionRequired, /setSelectedBillingRangeKey/);
+  assert.match(subscriptionRequired, /selectedBillingPriceId/);
+  assert.match(subscriptionRequired, /key: `tier-\$\{from\}-\$\{to\}`/);
+  assert.match(subscriptionRequired, /activePatients: to/);
+  assert.match(subscriptionRequired, /selectedPriceId: selectedBillingPriceId/);
+  assert.match(subscriptionRequired, /priceId: selectedBillingPriceId/);
+  assert.match(subscriptionRequired, /label === 'Pacientes ativos'/);
   assert.match(subscriptionRequired, /Selecione uma faixa para ver a estimativa/);
   assert.match(subscriptionRequired, /Estimativa para até/);
   assert.match(subscriptionRequired, /Faixa selecionada/);
   assert.match(subscriptionRequired, /Solicitar proposta personalizada/);
   assert.match(subscriptionRequired, /Plano personalizado/);
-  assert.doesNotMatch(subscriptionRequired, /Valor no checkout|Valor calculado com segurança no checkout|Erro ao iniciar pagamento/);
+  assert.doesNotMatch(subscriptionRequired, /Valor no checkout|Valor calculado com segurança no checkout|Estimativa indisponível|Erro ao iniciar pagamento/);
   assert.doesNotMatch(subscriptionRequired, /alert\('Erro ao iniciar pagamento/);
-  assert.doesNotMatch(subscriptionRequired, /Quantos pacientes ativos sua clínica tem hoje\?|type="number"|Sua faixa|Faixa correspondente/);
+  assert.doesNotMatch(subscriptionRequired, /Quantos pacientes ativos sua clínica tem hoje\?|type="number"|Sua faixa|Faixa correspondente|productId/);
   assert.doesNotMatch(`${adminCode}\n${superAdminCode}`, /planName:\s*complimentaryPlan|complimentaryPlan/);
   assert.doesNotMatch(invitationCode, /planLimits|user\.planName|Seu plano/);
 });
