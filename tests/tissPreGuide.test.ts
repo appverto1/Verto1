@@ -355,6 +355,10 @@ test('backend persiste de forma idempotente pelo appointment e revalida só por 
 });
 
 test('revalidação reconstrói snapshots a partir dos cadastros mestres atuais', () => {
+  const appointmentFetcher = serverCode.slice(
+    serverCode.indexOf('const fetchAppointmentForBillingContext'),
+    serverCode.indexOf('const serializeTissPreGuide')
+  );
   const builder = serverCode.slice(
     serverCode.indexOf('const buildAndPersistTissPreGuideForAppointment'),
     serverCode.indexOf('const clearAppointmentBillingItemForAppointment')
@@ -368,8 +372,13 @@ test('revalidação reconstrói snapshots a partir dos cadastros mestres atuais'
     serverCode.indexOf("app.get('/api/admin/tiss/provider-profile'")
   );
 
+  assert.match(appointmentFetcher, /buildClosureAppointmentSelect\(omittedColumns\)/);
+  assert.match(appointmentFetcher, /CLOSURE_APPOINTMENT_SCHEMA_FALLBACK_COLUMNS/);
+  assert.doesNotMatch(appointmentFetcher, /BILLING_CONTEXT_APPOINTMENT_SELECT[\s\S]*?runAppointmentQuery/);
+  assert.match(appointmentFetcher, /scheduled_start_at:\s*sanitizeString\(stateAppointment\?\.scheduled_start_at/);
+  assert.match(appointmentFetcher, /therapist_id:\s*sanitizeString\(/);
   assert.match(profileReader, /const scopeColumns = \['organization_id', 'clinic_id'\]/);
-  assert.match(builder, /\.from\('appointment_tiss_pre_guides'\)[\s\S]*?professional_id,payer_id,provider_profile_id,payer_tiss_profile_id,professional_billing_profile_id/);
+  assert.match(builder, /\.from\('appointment_tiss_pre_guides'\)[\s\S]*?professional_id,payer_id,provider_profile_id,payer_tiss_profile_id,professional_billing_profile_id,scheduled_start,scheduled_end/);
   assert.match(builder, /\.from\('appointment_closure_checks'\)[\s\S]*?professional_id,payer_id/);
   assert.match(builder, /sanitizeString\(billingItem\?\.professional_id, 120\)/);
   assert.match(builder, /sanitizeString\(closureCheck\?\.professional_id, 120\)/);
@@ -387,7 +396,9 @@ test('revalidação reconstrói snapshots a partir dos cadastros mestres atuais'
   assert.match(builder, /professionalProfileFound:/);
   assert.match(builder, /usedAppointmentProfessionalId:/);
   assert.match(builder, /usedTeamFallback:\s*false/);
+  assert.match(builder, /scheduledStartFound:/);
   assert.match(builder, /snapshotUpdated:\s*Boolean\(persisted\.data\?\.id\)/);
+  assert.match(builder, /returnedDetailHasScheduledStart:\s*Boolean\(serializedPreGuide\.scheduledStart\)/);
   assert.match(revalidationHandler, /diagnostics:\s*process\.env\.NODE_ENV !== 'production'/);
   assert.match(revalidationHandler, /Pré-guia revalidada com dados globais atualizados/);
 });
@@ -404,6 +415,7 @@ test('revalidação pontual e por período materializam Pré-guias sem backfill 
   assert.match(periodRoute, /eligible/);
   assert.match(periodRoute, /created/);
   assert.match(periodRoute, /updated/);
+  assert.match(periodRoute, /staleUpdated/);
   assert.match(periodRoute, /pendingData/);
   assert.match(periodRoute, /withoutBillingItem/);
   assert.match(periodRoute, /withoutFinancialContext/);

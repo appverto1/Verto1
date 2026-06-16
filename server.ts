@@ -31940,9 +31940,42 @@ async function startServer() {
         organization_id: organizationId,
         clinic_id: organizationId,
         patient_id: patientId,
+        patient_name: sanitizeString(stateAppointment?.patient_name || stateAppointment?.patientName || stateAppointment?.patient?.name, 180) || null,
+        therapist_id: sanitizeString(
+          stateAppointment?.therapist_id ||
+            stateAppointment?.therapistId ||
+            stateAppointment?.professional_id ||
+            stateAppointment?.professionalId,
+          120
+        ) || null,
+        therapist_name: sanitizeString(
+          stateAppointment?.therapist_name ||
+            stateAppointment?.therapistName ||
+            stateAppointment?.professional_name ||
+            stateAppointment?.professionalName ||
+            stateAppointment?.professional,
+          180
+        ) || null,
+        scheduled_at: sanitizeString(stateAppointment?.scheduled_at || stateAppointment?.scheduledAt || stateAppointment?.scheduled_start_at || stateAppointment?.scheduledStartAt, 80) || null,
+        scheduled_start_at: sanitizeString(stateAppointment?.scheduled_start_at || stateAppointment?.scheduledStartAt || stateAppointment?.scheduled_at || stateAppointment?.scheduledAt, 80) || null,
+        scheduled_end_at: sanitizeString(stateAppointment?.scheduled_end_at || stateAppointment?.scheduledEndAt, 80) || null,
+        scheduled_duration_minutes: Number(stateAppointment?.scheduled_duration_minutes || stateAppointment?.scheduledDurationMinutes || stateAppointment?.duration_minutes || stateAppointment?.durationMinutes || 0) || null,
+        actual_start_at: sanitizeString(stateAppointment?.actual_start_at || stateAppointment?.actualStartAt, 80) || null,
+        actual_end_at: sanitizeString(stateAppointment?.actual_end_at || stateAppointment?.actualEndAt, 80) || null,
+        actual_duration_minutes: Number(stateAppointment?.actual_duration_minutes || stateAppointment?.actualDurationMinutes || 0) || null,
+        duration_minutes: Number(stateAppointment?.duration_minutes || stateAppointment?.durationMinutes || stateAppointment?.scheduled_duration_minutes || stateAppointment?.scheduledDurationMinutes || 0) || null,
         approach: sanitizeString(stateAppointment?.approach || stateAppointment?.type || stateAppointment?.serviceType, 120) || null,
         service_type: sanitizeString(stateAppointment?.service_type || stateAppointment?.serviceType || stateAppointment?.type || stateAppointment?.approach, 120) || null,
+        room_id: sanitizeString(stateAppointment?.room_id || stateAppointment?.roomId, 120) || null,
+        room_name: sanitizeString(stateAppointment?.room_name || stateAppointment?.roomName, 180) || null,
+        location_type: sanitizeString(stateAppointment?.location_type || stateAppointment?.locationType, 80) || null,
         status: sanitizeString(stateAppointment?.status, 80) || null,
+        payer_id: sanitizeString(stateAppointment?.payer_id || stateAppointment?.payerId, 120) || null,
+        payer_name_snapshot: sanitizeString(stateAppointment?.payer_name_snapshot || stateAppointment?.payerName, 180) || null,
+        insurance_card_number: sanitizeString(stateAppointment?.insurance_card_number || stateAppointment?.insuranceCardNumber, 120) || null,
+        insurance_plan_name: sanitizeString(stateAppointment?.insurance_plan_name || stateAppointment?.insurancePlanName, 180) || null,
+        authorization_code: sanitizeString(stateAppointment?.authorization_code || stateAppointment?.authorizationCode, 120) || null,
+        guide_number: sanitizeString(stateAppointment?.guide_number || stateAppointment?.guideNumber, 120) || null,
         source_payload: sanitizeClinicalPayload(stateAppointment),
         updated_at: sanitizeString(stateAppointment?.updated_at || stateAppointment?.updatedAt, 80) || null
       };
@@ -31957,16 +31990,12 @@ async function startServer() {
     let result = await runAppointmentQuery(CLOSURE_APPOINTMENT_SELECT);
     if (result.error && extractMissingColumnName(result.error)) {
       const omittedColumns = new Set<string>();
-      for (let attempt = 0; attempt <= BILLING_CONTEXT_APPOINTMENT_SCHEMA_FALLBACK_COLUMNS.size; attempt += 1) {
-        const selectColumns = BILLING_CONTEXT_APPOINTMENT_SELECT
-          .split(',')
-          .map((column) => column.trim())
-          .filter((column) => column && !omittedColumns.has(column))
-          .join(',');
+      for (let attempt = 0; attempt <= CLOSURE_APPOINTMENT_SCHEMA_FALLBACK_COLUMNS.size; attempt += 1) {
+        const selectColumns = buildClosureAppointmentSelect(omittedColumns);
         result = await runAppointmentQuery(selectColumns);
         if (!result.error) break;
         const missingColumn = extractMissingColumnName(result.error);
-        if (!missingColumn || !BILLING_CONTEXT_APPOINTMENT_SCHEMA_FALLBACK_COLUMNS.has(missingColumn) || omittedColumns.has(missingColumn)) {
+        if (!missingColumn || !CLOSURE_APPOINTMENT_SCHEMA_FALLBACK_COLUMNS.has(missingColumn) || omittedColumns.has(missingColumn)) {
           break;
         }
         omittedColumns.add(missingColumn);
@@ -32088,7 +32117,7 @@ async function startServer() {
         .maybeSingle(),
       supabase
         .from('appointment_tiss_pre_guides')
-        .select('id,organization_id,clinic_id,appointment_id,patient_id,professional_id,payer_id,provider_profile_id,payer_tiss_profile_id,professional_billing_profile_id')
+        .select('id,organization_id,clinic_id,appointment_id,patient_id,professional_id,payer_id,provider_profile_id,payer_tiss_profile_id,professional_billing_profile_id,scheduled_start,scheduled_end')
         .eq('organization_id', organizationId)
         .eq('appointment_id', appointmentId)
         .limit(1)
@@ -32200,10 +32229,13 @@ async function startServer() {
     const provider = snapshot.provider || {};
     const payerSnapshot = snapshot.payer || {};
     const professionalSnapshot = snapshot.professional || {};
+    const scheduledStart = appointment?.scheduled_start_at || appointment?.scheduled_at || appointment?.scheduled_start || existingPreGuide?.scheduled_start || null;
+    const scheduledEnd = appointment?.scheduled_end_at || appointment?.scheduled_end || existingPreGuide?.scheduled_end || null;
     const now = new Date().toISOString();
     const userId = sanitizeString(params.user?.id, 120);
     const diagnostics = {
       appointmentId,
+      preGuideId: sanitizeString(existingPreGuide?.id, 120) || null,
       clinicId: isUuid(appointmentClinicId) ? appointmentClinicId : organizationId,
       organizationId,
       providerProfileFound: Boolean(clinicProfile?.id),
@@ -32214,9 +32246,12 @@ async function startServer() {
       professionalId: isUuid(professionalId) ? professionalId : null,
       professionalProfileFound: Boolean(professionalProfile?.id),
       professionalProfileId: sanitizeString(professionalProfile?.id, 120) || null,
+      scheduledStartFound: Boolean(scheduledStart),
       usedAppointmentProfessionalId: isUuid(appointmentProfessionalId),
       usedTeamFallback: false,
-      snapshotUpdated: false
+      snapshotUpdated: false,
+      persistedRows: 0,
+      returnedDetailHasScheduledStart: false
     };
     const payload = cleanObject({
       organization_id: organizationId,
@@ -32243,8 +32278,8 @@ async function startServer() {
       unit: sanitizeString(procedure.unit, 40) || null,
       unit_amount_cents: Number.isFinite(Number(procedure.unitAmountCents)) ? Number(procedure.unitAmountCents) : null,
       total_amount_cents: Number.isFinite(Number(procedure.totalAmountCents)) ? Number(procedure.totalAmountCents) : null,
-      scheduled_start: appointment?.scheduled_start_at || appointment?.scheduled_at || appointment?.scheduled_start || null,
-      scheduled_end: appointment?.scheduled_end_at || appointment?.scheduled_end || null,
+      scheduled_start: scheduledStart,
+      scheduled_end: scheduledEnd,
       patient_name_snapshot: sanitizeString(beneficiary.name || patientResult.data?.name, 180) || 'Paciente',
       professional_name_snapshot: sanitizeString(professionalSnapshot.name, 180) || null,
       payer_name_snapshot: sanitizeString(payerSnapshot.name || payer?.name, 180) || 'Sem pagador',
@@ -32289,9 +32324,13 @@ async function startServer() {
       });
       throw persisted.error;
     }
+    const serializedPreGuide = serializeTissPreGuide(persisted.data || payload);
     const persistedDiagnostics = {
       ...diagnostics,
-      snapshotUpdated: Boolean(persisted.data?.id)
+      preGuideId: sanitizeString(persisted.data?.id || existingPreGuide?.id, 120) || null,
+      snapshotUpdated: Boolean(persisted.data?.id),
+      persistedRows: persisted.data?.id ? 1 : 0,
+      returnedDetailHasScheduledStart: Boolean(serializedPreGuide.scheduledStart)
     };
     if (process.env.NODE_ENV !== 'production') {
       console.info('[TissPreGuide] revalidation diagnostics:', persistedDiagnostics);
@@ -32299,7 +32338,7 @@ async function startServer() {
     return {
       ok: true,
       schemaAvailable: true,
-      data: serializeTissPreGuide(persisted.data || payload),
+      data: serializedPreGuide,
       validation,
       diagnostics: persistedDiagnostics
     };
@@ -33116,7 +33155,7 @@ async function startServer() {
               .limit(appointmentIds.length),
             supabase
               .from('appointment_tiss_pre_guides')
-              .select('appointment_id,status')
+              .select('appointment_id,status,stale_reason')
               .eq('organization_id', organizationId)
               .in('appointment_id', appointmentIds)
               .limit(appointmentIds.length),
@@ -33142,6 +33181,12 @@ async function startServer() {
       );
       const existingPreGuideIds = new Set<string>(
         (existingPreGuideResult.error ? [] : existingPreGuideResult.data || [])
+          .map((row: any) => sanitizeString(row?.appointment_id, 120))
+          .filter((appointmentId: string) => isUuid(appointmentId))
+      );
+      const stalePreGuideIds = new Set<string>(
+        (existingPreGuideResult.error ? [] : existingPreGuideResult.data || [])
+          .filter((row: any) => Boolean(sanitizeString(row?.stale_reason, 600)))
           .map((row: any) => sanitizeString(row?.appointment_id, 120))
           .filter((appointmentId: string) => isUuid(appointmentId))
       );
@@ -33180,6 +33225,7 @@ async function startServer() {
         eligible: eligibleAppointments.length,
         created: 0,
         updated: 0,
+        staleUpdated: 0,
         valid: 0,
         pendingData: 0,
         notApplicable: 0,
@@ -33208,8 +33254,12 @@ async function startServer() {
             });
             continue;
           }
-          if (existingPreGuideIds.has(appointmentId)) counts.updated += 1;
-          else counts.created += 1;
+          if (existingPreGuideIds.has(appointmentId)) {
+            counts.updated += 1;
+            if (stalePreGuideIds.has(appointmentId)) counts.staleUpdated += 1;
+          } else {
+            counts.created += 1;
+          }
           if (preGuide.status === 'valid') counts.valid += 1;
           else if (preGuide.status === 'not_applicable') counts.notApplicable += 1;
           else counts.pendingData += 1;

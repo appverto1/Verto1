@@ -377,7 +377,8 @@ export function TissPreGuideTab({
         );
       } else {
         setMessage(
-          `${Number(counts.created || 0)} Pré-guia(s) criada(s), ${Number(counts.updated || 0)} atualizada(s), ` +
+          `${Number(counts.created || 0)} Pré-guia(s) criada(s), ${Number(counts.updated || 0)} atualizada(s) ` +
+          `(${Number(counts.staleUpdated || 0)} desatualizada(s)), ` +
           `${Number(counts.valid || 0)} válida(s) e ${Number(counts.pendingData || 0)} com pendências.`
         );
       }
