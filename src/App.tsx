@@ -2180,12 +2180,98 @@ export default function App() {
   };
   
   
-  const handleCheckout = async (planName?: string) => {
+  type BillingTierOption = {
+    upTo: number | null;
+    unitAmountCents: number | null;
+    flatAmountCents: number | null;
+    unitAmountDecimal?: string | null;
+    flatAmountDecimal?: string | null;
+  };
+
+  type BillingPlanOption = {
+    productId: string;
+    priceId: string;
+    name: string;
+    description?: string | null;
+    currency: string;
+    interval?: string | null;
+    intervalCount?: number | null;
+    billingScheme?: string | null;
+    tiersMode?: string | null;
+    unitAmountCents?: number | null;
+    unitAmountDecimal?: string | null;
+    tiers?: BillingTierOption[];
+    patientLimit?: number | null;
+    minPatients?: number | null;
+    maxPatients?: number | null;
+    pricingModel?: string;
+    usesActivePatientQuantity?: boolean;
+    isCustom?: boolean;
+  };
+
+  const centsFromDecimal = (value: unknown): number | null => {
+    if (typeof value === 'number' && Number.isFinite(value)) return Math.round(value);
+    if (typeof value !== 'string' || !value.trim()) return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? Math.round(parsed) : null;
+  };
+
+  const formatBillingCurrency = (amountCents: number | null | undefined, currency = 'brl') => {
+    if (typeof amountCents !== 'number' || !Number.isFinite(amountCents)) return 'Valor no checkout';
+    return new Intl.NumberFormat('pt-BR', {
+      style: 'currency',
+      currency: String(currency || 'brl').toUpperCase()
+    }).format(amountCents / 100);
+  };
+
+  const describeBillingRange = (plan: BillingPlanOption, index = 0) => {
+    if (plan.isCustom) return 'Plano personalizado';
+    const min = Number(plan.minPatients || (index === 0 ? 1 : 0));
+    const max = Number(plan.maxPatients || plan.patientLimit || 0);
+    if (min > 0 && max > 0 && min !== max) return `${min} a ${max} pacientes ativos`;
+    if (max > 0) return `Até ${max} pacientes ativos`;
+    return 'Pacientes ativos';
+  };
+
+  const estimateStripePlanAmountCents = (plan: BillingPlanOption | null, quantity: number) => {
+    if (!plan) return null;
+    const safeQuantity = Math.max(1, Math.floor(Number(quantity || 1)));
+    const unitAmount = typeof plan.unitAmountCents === 'number' ? plan.unitAmountCents : centsFromDecimal(plan.unitAmountDecimal);
+    const tiers = Array.isArray(plan.tiers) ? plan.tiers : [];
+    if (tiers.length > 0) {
+      const tiersMode = String(plan.tiersMode || 'graduated').toLowerCase();
+      if (tiersMode === 'volume') {
+        const tier = tiers.find((item) => item.upTo === null || safeQuantity <= Number(item.upTo || 0)) || tiers[tiers.length - 1];
+        const tierUnit = typeof tier?.unitAmountCents === 'number' ? tier.unitAmountCents : centsFromDecimal(tier?.unitAmountDecimal);
+        const tierFlat = typeof tier?.flatAmountCents === 'number' ? tier.flatAmountCents : centsFromDecimal(tier?.flatAmountDecimal) || 0;
+        return typeof tierUnit === 'number' ? tierUnit * safeQuantity + tierFlat : tierFlat || null;
+      }
+
+      let remaining = safeQuantity;
+      let previousLimit = 0;
+      let total = 0;
+      for (const tier of tiers) {
+        if (remaining <= 0) break;
+        const limit = tier.upTo === null ? safeQuantity : Number(tier.upTo || 0);
+        const unitsInTier = Math.max(0, Math.min(remaining, limit - previousLimit));
+        const tierUnit = typeof tier.unitAmountCents === 'number' ? tier.unitAmountCents : centsFromDecimal(tier.unitAmountDecimal) || 0;
+        const tierFlat = typeof tier.flatAmountCents === 'number' ? tier.flatAmountCents : centsFromDecimal(tier.flatAmountDecimal) || 0;
+        if (unitsInTier > 0) total += unitsInTier * tierUnit + tierFlat;
+        remaining -= unitsInTier;
+        previousLimit = limit;
+      }
+      return total || null;
+    }
+    if (plan.usesActivePatientQuantity && typeof unitAmount === 'number') return unitAmount * safeQuantity;
+    return unitAmount;
+  };
+
+  const handleCheckout = async (options?: { selectedPriceId?: string; expectedActivePatients?: number }) => {
     try {
       const response = await fetch('/api/stripe/create-checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(planName ? { planName } : {})
+        body: JSON.stringify(options || {})
       });
       const data = await response.json();
       if (data.url) {
@@ -2195,90 +2281,322 @@ export default function App() {
       }
     } catch (error: any) {
       console.error('Checkout error:', error);
-      alert('Erro de conexÃ£o: ' + error.message);
+      alert('Erro de conexão: ' + error.message);
     }
   };
 
-  const handleEnterpriseContact = (currentUser: any) => {
-    const message = `OlÃ¡! Tenho interesse no plano Enterprise da Verto.\n\nNome: ${currentUser?.name || ''}\nEmail: ${currentUser?.email || ''}`;
-    window.open(`https://wa.me/5511959348563?text=${encodeURIComponent(message)}`, '_blank', 'noopener,noreferrer');
+  const handleEnterpriseContact = (currentUser: any, contactUrl?: string | null) => {
+    const message = `Olá! Tenho interesse em uma proposta personalizada da Verto.\n\nNome: ${currentUser?.name || ''}\nEmail: ${currentUser?.email || ''}`;
+    const safeContactUrl = String(contactUrl || '').trim();
+    const target = safeContactUrl
+      ? safeContactUrl.startsWith('mailto:')
+        ? `${safeContactUrl}${safeContactUrl.includes('?') ? '&' : '?'}subject=${encodeURIComponent('Proposta personalizada Verto')}&body=${encodeURIComponent(message)}`
+        : `${safeContactUrl}${safeContactUrl.includes('?') ? '&' : '?'}text=${encodeURIComponent(message)}`
+      : `mailto:comercial@appverto.com.br?subject=${encodeURIComponent('Proposta personalizada Verto')}&body=${encodeURIComponent(message)}`;
+    window.open(target, '_blank', 'noopener,noreferrer');
   };
 
-  const SubscriptionRequired = ({ user, onLogout }: { user: any, onLogout: () => void }) => (
-    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6 font-sans">
-      <div className="bg-white w-full max-w-2xl rounded-[32px] shadow-2xl shadow-blue-500/5 p-10 text-center border border-slate-100 animate-pop">
-        <div className="w-20 h-20 bg-blue-50 text-[#7a32fc] rounded-3xl flex items-center justify-center mx-auto mb-8 shadow-inner">
-          <Lock size={40} />
-        </div>
-        <h2 className="text-3xl font-bold text-slate-900 mb-4 tracking-tight">Escolha o plano e ative sua conta</h2>
-        <p className="text-slate-500 font-normal mb-8 leading-relaxed">
-          Para acessar o painel completo da Verto, é necessário ativar uma assinatura ou um trial autorizado.
-          {user.role === 'patient' ? (
-            <span> O valor para pacientes é de apenas <strong>R$ 4,90/mês</strong>.</span>
-          ) : (
-            <span> A cobrança da clínica é modular por paciente ativo, calculada pelo plano configurado no Stripe.</span>
-          )}
-        </p>
+  const SubscriptionRequired = ({ user, onLogout }: { user: any, onLogout: () => void }) => {
+    const isPatientCheckout = String(user?.role || '').toLowerCase() === 'patient';
+    const [plansState, setPlansState] = useState<{
+      loading: boolean;
+      error: string;
+      plans: BillingPlanOption[];
+      salesContactUrl: string;
+      pricingModel: string;
+    }>({ loading: !isPatientCheckout, error: '', plans: [], salesContactUrl: '', pricingModel: '' });
+    const [plansReloadToken, setPlansReloadToken] = useState(0);
+    const [selectedPriceId, setSelectedPriceId] = useState('');
+    const [expectedActivePatients, setExpectedActivePatients] = useState(10);
+    const [checkoutLoading, setCheckoutLoading] = useState(false);
 
-        {user.role !== 'patient' && (
-          <div className="mb-8 grid gap-3 text-left">
-            {[
-              ['Até 10 pacientes ativos', 'Ideal para início ou consultório pequeno.'],
-              ['Até 30 pacientes ativos', 'Para clínicas em crescimento.'],
-              ['Até 60 pacientes ativos', 'Para operação multidisciplinar.'],
-              ['Até 100 pacientes ativos', 'Para clínicas maiores.'],
-              ['Acima disso', 'Plano personalizado com acompanhamento comercial.'],
-            ].map(([title, description]) => (
-              <div key={title} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                <p className="text-sm font-bold text-slate-900">{title}</p>
-                <p className="text-xs text-slate-500 mt-1">{description}</p>
-              </div>
-            ))}
-            <p className="text-[11px] text-slate-400 leading-relaxed">
-              Os valores e faixas finais são definidos pela configuração server-side do Stripe. A Verto não armazena o número completo do cartão.
+    useEffect(() => {
+      if (isPatientCheckout) return;
+      let cancelled = false;
+      const loadPlans = async () => {
+        setPlansState((current) => ({ ...current, loading: true, error: '' }));
+        try {
+          const response = await fetch('/api/billing/plans');
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok || payload?.success === false) {
+            throw new Error(payload?.error || 'Não foi possível carregar os planos agora.');
+          }
+          if (cancelled) return;
+          const data = payload?.data || {};
+          const loadedPlans = Array.isArray(data.plans) ? data.plans : [];
+          setPlansState({
+            loading: false,
+            error: '',
+            plans: loadedPlans,
+            salesContactUrl: String(data.salesContactUrl || ''),
+            pricingModel: String(data.pricingModel || '')
+          });
+          const defaultPriceId =
+            String(data.defaultPriceId || '') ||
+            String(loadedPlans.find((plan: BillingPlanOption) => !plan.isCustom)?.priceId || '');
+          setSelectedPriceId((current) => current || defaultPriceId);
+        } catch (error: any) {
+          if (cancelled) return;
+          setPlansState((current) => ({
+            ...current,
+            loading: false,
+            error: error?.message || 'Não foi possível carregar os planos agora. Tente novamente em alguns instantes.'
+          }));
+        }
+      };
+      void loadPlans();
+      return () => {
+        cancelled = true;
+      };
+    }, [isPatientCheckout, plansReloadToken]);
+
+    const nonCustomPlans = plansState.plans.filter((plan) => !plan.isCustom);
+    const customPlans = plansState.plans.filter((plan) => plan.isCustom);
+    const selectedPlan =
+      nonCustomPlans.find((plan) => plan.priceId === selectedPriceId) ||
+      nonCustomPlans[0] ||
+      null;
+    const tieredPlan = selectedPlan?.tiers?.length ? selectedPlan : nonCustomPlans.find((plan) => (plan.tiers || []).length > 0) || null;
+    const estimatedAmountCents = estimateStripePlanAmountCents(selectedPlan, expectedActivePatients);
+    const clinicOperationType = String(
+      user?.clinicOperationType ||
+        user?.clinic_operation_type ||
+        user?.clinicSettings?.clinicOperationType ||
+        user?.metadata?.clinicOperationType ||
+        ''
+    ).toLowerCase();
+    const operationCopy =
+      clinicOperationType === 'private'
+        ? 'Você poderá começar sem configurar convênios, TISS ou TUSS.'
+        : clinicOperationType === 'insurance' || clinicOperationType === 'mixed'
+          ? 'Depois da ativação, você poderá configurar pagadores, regras TUSS e pré-faturamento.'
+          : 'As configurações de convênio e TISS podem ser feitas depois, dentro da Verto.';
+
+    const submitCheckout = async () => {
+      if (checkoutLoading) return;
+      setCheckoutLoading(true);
+      try {
+        await handleCheckout(
+          isPatientCheckout
+            ? undefined
+            : {
+                selectedPriceId: selectedPlan?.priceId,
+                expectedActivePatients
+              }
+        );
+      } finally {
+        setCheckoutLoading(false);
+      }
+    };
+
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6 font-sans">
+        <div className="bg-white w-full max-w-4xl rounded-[32px] shadow-2xl shadow-blue-500/5 p-8 sm:p-10 border border-slate-100 animate-pop">
+          <div className="text-center">
+            <div className="w-20 h-20 bg-blue-50 text-[#7a32fc] rounded-3xl flex items-center justify-center mx-auto mb-8 shadow-inner">
+              <Lock size={40} />
+            </div>
+            <h2 className="text-3xl font-bold text-slate-900 mb-4 tracking-tight">Escolha seu plano</h2>
+            <p className="text-slate-500 font-normal mb-8 leading-relaxed">
+              Para acessar o painel completo da Verto, é necessário ativar uma assinatura ou um trial autorizado.
+              {isPatientCheckout ? (
+                <span> O valor para pacientes é de apenas <strong>R$ 4,90/mês</strong>.</span>
+              ) : (
+                <span> A cobrança da Verto é modular, de acordo com a quantidade de pacientes ativos da sua clínica.</span>
+              )}
             </p>
           </div>
-        )}
-        
-        <div className="space-y-4">
-          {user.role === 'patient' ? (
-            <button 
-              onClick={() => handleCheckout()}
-              className="w-full bg-[#7a32fc] text-white py-4 rounded-2xl font-bold text-sm shadow-lg shadow-blue-500/20 hover:scale-[1.02] transition-all active:scale-[0.98]"
-            >
-              Pagar Agora (R$ 4,90)
-            </button>
-          ) : (
-            <React.Fragment>
-              <button 
-                onClick={() => handleCheckout()}
-                className="w-full bg-[#7a32fc] text-white py-4 rounded-2xl font-bold text-sm shadow-lg shadow-blue-500/20 hover:scale-[1.02] transition-all active:scale-[0.98]"
-              >
-                Cadastrar cartão e ativar assinatura
-              </button>
-              <button
-                onClick={() => handleEnterpriseContact(user)}
-                className="w-full bg-slate-900 text-white py-4 rounded-2xl font-bold text-sm shadow-lg shadow-slate-500/20 hover:scale-[1.02] transition-all active:scale-[0.98]"
-              >
-                Falar com Mateus para plano personalizado
-              </button>
-            </React.Fragment>
+
+          {!isPatientCheckout && (
+            <div className="mb-8 space-y-5 text-left">
+              <div className="rounded-2xl border border-violet-100 bg-violet-50 px-4 py-3 text-sm font-semibold text-violet-800">
+                {operationCopy}
+              </div>
+
+              {plansState.loading && (
+                <div className="grid gap-3">
+                  {[1, 2, 3].map((item) => (
+                    <div key={item} className="h-24 animate-pulse rounded-2xl bg-slate-100" />
+                  ))}
+                </div>
+              )}
+
+              {!plansState.loading && plansState.error && (
+                <div className="rounded-3xl border border-rose-100 bg-rose-50 p-5">
+                  <p className="text-sm font-bold text-rose-700">Não foi possível carregar os planos agora.</p>
+                  <p className="mt-1 text-xs font-semibold text-rose-600">{plansState.error}</p>
+                  <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+                    <button
+                      type="button"
+                      onClick={() => setPlansReloadToken((current) => current + 1)}
+                      className="rounded-2xl bg-white px-4 py-3 text-sm font-bold text-rose-700 shadow-sm"
+                    >
+                      Tentar novamente
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleEnterpriseContact(user, plansState.salesContactUrl)}
+                      className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-bold text-white shadow-sm"
+                    >
+                      Falar com o comercial
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {!plansState.loading && !plansState.error && tieredPlan && (
+                <div className="rounded-3xl border border-slate-200 bg-slate-50 p-5">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="text-sm font-black text-slate-900">{tieredPlan.name}</p>
+                      <p className="mt-1 text-xs font-semibold text-slate-500">
+                        Os planos são calculados conforme os pacientes ativos da clínica.
+                      </p>
+                    </div>
+                    <span className="rounded-full bg-white px-3 py-1 text-[10px] font-black uppercase tracking-widest text-violet-700">
+                      Plano modular
+                    </span>
+                  </div>
+                  <div className="mt-4 overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                    <table className="w-full text-sm">
+                      <thead className="bg-slate-100 text-[10px] uppercase tracking-widest text-slate-500">
+                        <tr>
+                          <th className="px-4 py-3 text-left">Faixa de pacientes ativos</th>
+                          <th className="px-4 py-3 text-right">Valor por paciente</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {(tieredPlan.tiers || []).map((tier, index) => {
+                          const previous = index === 0 ? 1 : Number((tieredPlan.tiers || [])[index - 1]?.upTo || 0) + 1;
+                          const label = tier.upTo === null ? `Acima de ${Math.max(0, previous - 1)}` : `${previous} a ${tier.upTo}`;
+                          const unitCents = typeof tier.unitAmountCents === 'number' ? tier.unitAmountCents : centsFromDecimal(tier.unitAmountDecimal);
+                          return (
+                            <tr key={`${label}-${index}`}>
+                              <td className="px-4 py-3 font-semibold text-slate-700">{label}</td>
+                              <td className="px-4 py-3 text-right font-bold text-slate-900">
+                                {formatBillingCurrency(unitCents, tieredPlan.currency)}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {!plansState.loading && !plansState.error && !tieredPlan && nonCustomPlans.length > 0 && (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {nonCustomPlans.map((plan, index) => {
+                    const selected = selectedPlan?.priceId === plan.priceId;
+                    const amountCents = estimateStripePlanAmountCents(plan, expectedActivePatients);
+                    return (
+                      <button
+                        type="button"
+                        key={plan.priceId}
+                        onClick={() => setSelectedPriceId(plan.priceId)}
+                        className={`rounded-3xl border p-5 text-left transition-all ${
+                          selected
+                            ? 'border-[#7a32fc] bg-violet-50 shadow-lg shadow-violet-500/10'
+                            : 'border-slate-200 bg-slate-50 hover:border-violet-200'
+                        }`}
+                      >
+                        <p className="text-sm font-black text-slate-900">{plan.name}</p>
+                        <p className="mt-1 text-xs font-semibold text-slate-500">{describeBillingRange(plan, index)}</p>
+                        <p className="mt-4 text-lg font-black text-slate-950">{formatBillingCurrency(amountCents, plan.currency)}</p>
+                        {plan.description && <p className="mt-2 text-xs font-medium text-slate-500">{plan.description}</p>}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {!plansState.loading && !plansState.error && nonCustomPlans.length === 0 && (
+                <div className="rounded-3xl border border-amber-100 bg-amber-50 p-5">
+                  <p className="text-sm font-bold text-amber-800">Nenhum plano automático disponível no momento.</p>
+                  <p className="mt-1 text-xs font-semibold text-amber-700">
+                    Solicite uma proposta personalizada ou tente carregar os planos novamente.
+                  </p>
+                </div>
+              )}
+
+              {nonCustomPlans.length > 0 && (
+                <div className="rounded-3xl border border-slate-200 bg-white p-5">
+                  <label className="text-xs font-black uppercase tracking-widest text-slate-500">
+                    Quantos pacientes ativos sua clínica tem hoje?
+                  </label>
+                  <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
+                    <input
+                      type="number"
+                      min={1}
+                      max={100000}
+                      value={expectedActivePatients}
+                      onChange={(event) => setExpectedActivePatients(Math.max(1, Math.floor(Number(event.target.value || 1))))}
+                      className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm font-bold text-slate-900 outline-none focus:border-[#7a32fc] sm:max-w-[180px]"
+                    />
+                    <div className="rounded-2xl bg-slate-50 px-4 py-3">
+                      <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Estimativa mensal</p>
+                      <p className="text-lg font-black text-slate-950">
+                        {formatBillingCurrency(estimatedAmountCents, selectedPlan?.currency || 'brl')}
+                      </p>
+                    </div>
+                  </div>
+                  <p className="mt-3 text-[11px] font-semibold leading-relaxed text-slate-500">
+                    Paciente ativo é aquele em atendimento, com agenda/prontuário ativo na clínica. A Verto não armazena o número completo do cartão.
+                  </p>
+                </div>
+              )}
+
+              <div className="rounded-3xl border border-slate-200 bg-slate-950 p-5 text-white">
+                <p className="text-sm font-black">{customPlans[0]?.name || 'Plano personalizado'}</p>
+                <p className="mt-1 text-xs font-semibold text-slate-300">
+                  Para clínicas com alto volume de pacientes ativos, nossa equipe prepara uma proposta sob medida.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => handleEnterpriseContact(user, plansState.salesContactUrl)}
+                  className="mt-4 rounded-2xl bg-white px-4 py-3 text-sm font-bold text-slate-950 shadow-sm"
+                >
+                  Solicitar proposta personalizada
+                </button>
+              </div>
+            </div>
           )}
           
-          <button 
-            onClick={onLogout}
-            className="w-full bg-white text-slate-400 py-4 rounded-2xl font-semibold text-xs hover:text-slate-600 transition-all"
-          >
-            Sair da conta
-          </button>
+          <div className="space-y-4">
+            {isPatientCheckout ? (
+              <button 
+                onClick={submitCheckout}
+                disabled={checkoutLoading}
+                className="w-full bg-[#7a32fc] text-white py-4 rounded-2xl font-bold text-sm shadow-lg shadow-blue-500/20 hover:scale-[1.02] transition-all active:scale-[0.98] disabled:opacity-60"
+              >
+                {checkoutLoading ? 'Abrindo pagamento...' : 'Pagar Agora (R$ 4,90)'}
+              </button>
+            ) : (
+              <button 
+                onClick={submitCheckout}
+                disabled={checkoutLoading || plansState.loading || Boolean(plansState.error) || !selectedPlan}
+                className="w-full bg-[#7a32fc] text-white py-4 rounded-2xl font-bold text-sm shadow-lg shadow-blue-500/20 hover:scale-[1.02] transition-all active:scale-[0.98] disabled:opacity-60"
+              >
+                {checkoutLoading ? 'Abrindo Stripe Checkout...' : 'Continuar para pagamento'}
+              </button>
+            )}
+            
+            <button 
+              onClick={onLogout}
+              className="w-full bg-white text-slate-400 py-4 rounded-2xl font-semibold text-xs hover:text-slate-600 transition-all"
+            >
+              Sair da conta
+            </button>
+          </div>
+          
+          <p className="mt-8 text-center text-[10px] text-slate-400 font-medium uppercase tracking-widest">
+            Pagamento processado com segurança pelo Stripe.
+          </p>
         </div>
-        
-        <p className="mt-8 text-[10px] text-slate-400 font-medium uppercase tracking-widest">
-          Pagamento processado com seguranÃ§a pelo Stripe
-        </p>
       </div>
-    </div>
-  );
+    );
+  };
 
   const [protocols, setProtocols] = useState<any[]>([]);
   const [allPatients, setAllPatients] = useState<any[]>([]);

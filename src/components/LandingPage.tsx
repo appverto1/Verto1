@@ -542,13 +542,25 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
   };
 
   const buildEnterpriseWhatsappUrl = () => {
-    const message = 'Olá, me interessei pelo plano enterprise da Verto';
-    return `https://wa.me/5511959348563?text=${encodeURIComponent(message)}`;
+    const message = 'Olá, tenho interesse em uma proposta personalizada da Verto.';
+    const configuredUrl = String(import.meta.env.VITE_SALES_CONTACT_URL || import.meta.env.VITE_WHATSAPP_SALES_URL || '').trim();
+    if (configuredUrl) {
+      return configuredUrl.startsWith('mailto:')
+        ? `${configuredUrl}${configuredUrl.includes('?') ? '&' : '?'}subject=${encodeURIComponent('Proposta personalizada Verto')}&body=${encodeURIComponent(message)}`
+        : `${configuredUrl}${configuredUrl.includes('?') ? '&' : '?'}text=${encodeURIComponent(message)}`;
+    }
+    return `mailto:comercial@appverto.com.br?subject=${encodeURIComponent('Proposta personalizada Verto')}&body=${encodeURIComponent(message)}`;
   };
 
   const buildDemoWhatsappUrl = () => {
     const message = 'Olá, quero saber mais sobre a Verto.';
-    return `https://wa.me/5511959348563?text=${encodeURIComponent(message)}`;
+    const configuredUrl = String(import.meta.env.VITE_SALES_CONTACT_URL || import.meta.env.VITE_WHATSAPP_SALES_URL || '').trim();
+    if (configuredUrl) {
+      return configuredUrl.startsWith('mailto:')
+        ? `${configuredUrl}${configuredUrl.includes('?') ? '&' : '?'}subject=${encodeURIComponent('Conhecer a Verto')}&body=${encodeURIComponent(message)}`
+        : `${configuredUrl}${configuredUrl.includes('?') ? '&' : '?'}text=${encodeURIComponent(message)}`;
+    }
+    return `mailto:comercial@appverto.com.br?subject=${encodeURIComponent('Conhecer a Verto')}&body=${encodeURIComponent(message)}`;
   };
 
   const audienceCards = [
@@ -2008,7 +2020,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                         className="w-full p-3 md:p-4 bg-gray-50 border border-transparent hover:border-[#7a32fc] hover:bg-purple-50/50 rounded-2xl transition-all flex items-center justify-between group text-left"
                       >
                         <div>
-                          <h3 className="font-semibold text-gray-800 text-[11px] md:text-xs">Cobranca por paciente ativo</h3>
+                          <h3 className="font-semibold text-gray-800 text-[11px] md:text-xs">Cobrança por paciente ativo</h3>
                           <p className="text-[8px] md:text-[9px] text-gray-400 font-normal uppercase tracking-wider">Valor final calculado pela Stripe conforme a quantidade ativa</p>
                         </div>
                         <span className="text-[8px] md:text-[9px] font-semibold uppercase tracking-wider text-[#7a32fc] flex items-center gap-1">
@@ -2021,8 +2033,8 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                         className="w-full p-3 md:p-4 bg-gray-900 text-white rounded-2xl hover:bg-black transition-all flex items-center justify-between group text-left"
                       >
                         <div>
-                          <h3 className="font-semibold text-[11px] md:text-xs">Implantacao assistida</h3>
-                          <p className="text-[8px] md:text-[9px] text-gray-400 font-normal uppercase tracking-wider">Fale com Mateus para organizar onboarding e importacao inicial</p>
+                          <h3 className="font-semibold text-[11px] md:text-xs">Implantação assistida</h3>
+                          <p className="text-[8px] md:text-[9px] text-gray-400 font-normal uppercase tracking-wider">Solicite apoio comercial para onboarding e importação inicial</p>
                         </div>
                         <span className="text-[8px] md:text-[9px] font-semibold uppercase tracking-wider flex items-center gap-1">
                           <MessageCircle size={12} /> Falar com especialista

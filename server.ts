@@ -20,6 +20,7 @@ import { generateSecret, verifySync, generateURI } from 'otplib';
 import QRCode from 'qrcode';
 import {
   getClinicBillingSummary,
+  listStripeActivePatientBillingPlans,
   reportAllClinicsActivePatientUsage,
   syncAllClinicsActivePatientAddonQuantity,
   syncClinicActivePatientAddonQuantity
@@ -323,6 +324,25 @@ async function updateClinicSubscriptionStatus(params: {
 
 function resolveActivePatientPriceId(): string {
   return sanitizeString(process.env.STRIPE_ACTIVE_PATIENT_PRICE_ID || '', 120);
+}
+
+function resolveBillingPlanPriceIds(): string[] {
+  return Array.from(
+    new Set(
+      sanitizeString(process.env.STRIPE_BILLING_PLAN_PRICE_IDS || process.env.STRIPE_CLINIC_PLAN_PRICE_IDS || '', 2000)
+        .split(',')
+        .map((item) => sanitizeString(item, 120))
+        .filter(Boolean)
+    )
+  );
+}
+
+function resolveSalesContactUrl(): string {
+  return (
+    sanitizeString(process.env.SALES_CONTACT_URL || '', 1000) ||
+    sanitizeString(process.env.WHATSAPP_SALES_URL || '', 1000) ||
+    (sanitizeEmail(process.env.SALES_EMAIL) ? `mailto:${sanitizeEmail(process.env.SALES_EMAIL)}` : '')
+  );
 }
 
 const ACTIVE_PATIENT_BILLING_MODEL = 'active_patients';
@@ -47663,6 +47683,68 @@ async function startServer() {
     }
   });
 
+  app.get('/api/billing/plans', checkAuth, async (req: any, res) => {
+    try {
+      const sessionUser = req.session?.user || {};
+      const role = sanitizeString(sessionUser?.role, 40).toLowerCase();
+      if (role === 'patient') {
+        return res.json({
+          success: true,
+          data: {
+            billingModel: 'patient_subscription',
+            plans: [],
+            salesContactUrl: resolveSalesContactUrl()
+          }
+        });
+      }
+
+      const clinicId = sanitizeString(sessionUser.activeWorkspaceId || sessionUser.clinicId || sessionUser.id, 120);
+      const demoState = await fetchClinicDemoState(clinicId);
+      if (demoState.isDemo || isDemoSessionUser(sessionUser)) {
+        return res.json({
+          success: true,
+          data: {
+            billingModel: DEMO_SANDBOX_BILLING_MODEL,
+            plans: [],
+            stripeEnabled: false,
+            demo: true,
+            salesContactUrl: resolveSalesContactUrl()
+          }
+        });
+      }
+
+      const activePatientPriceId = resolveActivePatientPriceId();
+      const plans = await listStripeActivePatientBillingPlans({
+        stripe: getStripe(),
+        activePatientPriceId,
+        allowedPriceIds: resolveBillingPlanPriceIds()
+      });
+
+      return res.json({
+        success: true,
+        data: {
+          billingModel: ACTIVE_PATIENT_BILLING_MODEL,
+          defaultPriceId: activePatientPriceId || plans.find((plan) => !plan.isCustom)?.priceId || null,
+          pricingModel: plans.some((plan) => plan.pricingModel === 'tiered_active_patients')
+            ? 'tiered_active_patients'
+            : 'plans_by_limit',
+          plans,
+          salesContactUrl: resolveSalesContactUrl(),
+          stripeEnabled: true
+        }
+      });
+    } catch (error: any) {
+      console.error('[Billing Plans] Falha ao carregar planos Stripe:', {
+        message: error?.message || String(error),
+        code: sanitizeString(error?.code, 80) || null
+      });
+      return res.status(503).json({
+        success: false,
+        error: 'Não foi possível carregar os planos agora. Tente novamente em alguns instantes.'
+      });
+    }
+  });
+
   app.post('/api/stripe/create-checkout', checkAuth, async (req, res) => {
     try {
       const user = req.session.user;
@@ -47689,10 +47771,40 @@ async function startServer() {
       });
 
       const activePatientPriceId = isPatientCheckout ? '' : resolveActivePatientPriceId();
-      if (!isPatientCheckout && !activePatientPriceId) {
-        return res.status(503).json({ success: false, error: 'Cobranca por paciente ativo ainda nao esta configurada.' });
-      }
       const stripe = getStripe();
+      let selectedClinicPlan: Awaited<ReturnType<typeof listStripeActivePatientBillingPlans>>[number] | null = null;
+      let expectedActivePatients = Math.max(
+        1,
+        Math.min(100000, Math.floor(Number(req.body?.expectedActivePatients || req.body?.activePatients || 1) || 1))
+      );
+
+      if (!isPatientCheckout) {
+        const billingPlans = await listStripeActivePatientBillingPlans({
+          stripe,
+          activePatientPriceId,
+          allowedPriceIds: resolveBillingPlanPriceIds()
+        });
+        const requestedPriceId = sanitizeString(req.body?.selectedPriceId || req.body?.priceId, 120);
+        const requestedPlan = requestedPriceId ? billingPlans.find((plan) => plan.priceId === requestedPriceId) || null : null;
+        if (requestedPriceId && !requestedPlan) {
+          return res.status(400).json({ success: false, error: 'Plano selecionado não está disponível para contratação.' });
+        }
+        selectedClinicPlan =
+          requestedPlan ||
+          billingPlans.find((plan) => plan.priceId === activePatientPriceId && !plan.isCustom) ||
+          billingPlans.find((plan) => !plan.isCustom) ||
+          null;
+
+        if (!selectedClinicPlan) {
+          return res.status(503).json({ success: false, error: 'Planos de assinatura ainda não estão configurados.' });
+        }
+        if (selectedClinicPlan.isCustom) {
+          return res.status(400).json({ success: false, error: 'Este plano exige proposta personalizada.' });
+        }
+        if (!selectedClinicPlan.usesActivePatientQuantity) {
+          expectedActivePatients = 1;
+        }
+      }
 
       const lineItem: Stripe.Checkout.SessionCreateParams.LineItem = isPatientCheckout
         ? {
@@ -47704,7 +47816,7 @@ async function startServer() {
             },
             quantity: 1
           }
-        : { price: activePatientPriceId, quantity: 1 };
+        : { price: selectedClinicPlan!.priceId, quantity: expectedActivePatients };
 
       const checkoutPayload: Stripe.Checkout.SessionCreateParams = {
         payment_method_types: ['card'],
@@ -47715,13 +47827,25 @@ async function startServer() {
         metadata: {
           userId: user.id,
           clinicId,
-          ...(isPatientCheckout ? {} : { billingModel: ACTIVE_PATIENT_BILLING_MODEL })
+          ...(isPatientCheckout
+            ? {}
+            : {
+                billingModel: ACTIVE_PATIENT_BILLING_MODEL,
+                selectedPriceId: selectedClinicPlan?.priceId || '',
+                expectedActivePatients: String(expectedActivePatients)
+              })
         },
         subscription_data: {
           metadata: {
             userId: user.id,
             clinicId,
-            ...(isPatientCheckout ? {} : { billingModel: ACTIVE_PATIENT_BILLING_MODEL })
+            ...(isPatientCheckout
+              ? {}
+              : {
+                  billingModel: ACTIVE_PATIENT_BILLING_MODEL,
+                  selectedPriceId: selectedClinicPlan?.priceId || '',
+                  expectedActivePatients: String(expectedActivePatients)
+                })
           }
         }
       };

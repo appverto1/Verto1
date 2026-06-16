@@ -97,17 +97,21 @@ test('dados do usuario pedem apenas nome e telefone no bloqueio inicial', () => 
 });
 
 test('tela de ativacao mostra plano modular e checkout seguro', () => {
-  const subscriptionRequired = sliceFrom(appCode, 'const SubscriptionRequired =', 4200);
+  const subscriptionRequired = sliceFrom(appCode, 'const SubscriptionRequired =', 20000);
   assert.match(subscriptionRequired, /pacientes ativos/);
-  assert.match(subscriptionRequired, /Cadastrar cartão e ativar assinatura/);
-  assert.match(subscriptionRequired, /Até 10 pacientes ativos/);
-  assert.match(subscriptionRequired, /Acima disso/);
+  assert.match(subscriptionRequired, /\/api\/billing\/plans/);
+  assert.match(subscriptionRequired, /Continuar para pagamento/);
+  assert.match(subscriptionRequired, /Solicitar proposta personalizada/);
+  assert.match(subscriptionRequired, /segurança pelo Stripe/);
   assert.match(subscriptionRequired, /Stripe/);
+  assert.doesNotMatch(subscriptionRequired, /Até 10 pacientes ativos|Acima disso|Falar com Mateus|Fale com Mateus/);
   assert.doesNotMatch(subscriptionRequired, /número completo do cartão[\s\S]*localStorage|card_number|cardNumber/);
 
-  const checkout = sliceFrom(serverCode, "app.post('/api/stripe/create-checkout'", 2300);
+  const checkout = sliceFrom(serverCode, "app.post('/api/stripe/create-checkout'", 5200);
   assert.match(checkout, /payment_method_types:\s*\['card'\]/);
   assert.match(checkout, /const activePatientPriceId = isPatientCheckout \? '' : resolveActivePatientPriceId\(\)/);
+  assert.match(checkout, /selectedPriceId/);
+  assert.match(checkout, /expectedActivePatients/);
 });
 
 test('foto cadastrada na Verto tem prioridade sobre avatar OAuth', () => {

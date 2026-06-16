@@ -41,6 +41,8 @@ test('package expoe script test:billing', () => {
 
 test('env usa apenas o Price modular por paciente ativo no fluxo profissional', () => {
   assert.match(envExample, /STRIPE_ACTIVE_PATIENT_PRICE_ID=/);
+  assert.match(envExample, /STRIPE_BILLING_PLAN_PRICE_IDS=/);
+  assert.match(envExample, /SALES_CONTACT_URL=/);
   assert.match(envExample, /STRIPE_ACTIVE_PATIENT_BILLING_MODE=quantity/);
   doesNotContain(envExample, [
     'STRIPE_PRICE_ESSENCIAL',
@@ -90,12 +92,27 @@ test('checkout de cadastro profissional nao aceita plano/preco vindo do front', 
 });
 
 test('checkout autenticado preserva paciente separado e usa active patient price para clinica', () => {
-  const route = sliceFrom(serverCode, "app.post('/api/stripe/create-checkout'", 2200);
+  const route = sliceFrom(serverCode, "app.post('/api/stripe/create-checkout'", 5200);
   assert.match(route, /const isPatientCheckout/);
   assert.match(route, /const activePatientPriceId = isPatientCheckout \? '' : resolveActivePatientPriceId\(\)/);
-  assert.match(route, /: \{ price: activePatientPriceId, quantity: 1 \}/);
+  assert.match(route, /listStripeActivePatientBillingPlans/);
+  assert.match(route, /selectedPriceId/);
+  assert.match(route, /requestedPlan/);
+  assert.match(route, /Plano selecionado não está disponível para contratação/);
+  assert.match(route, /expectedActivePatients/);
+  assert.match(route, /price: selectedClinicPlan!\.priceId/);
+  assert.match(route, /quantity: expectedActivePatients/);
   assert.match(route, /billingModel: ACTIVE_PATIENT_BILLING_MODEL/);
-  assert.doesNotMatch(route, /requestedPlan|planPrices|STRIPE_PRICE_ESSENCIAL|STRIPE_PRICE_CRESCIMENTO|STRIPE_PRICE_AVANCADO/);
+  assert.doesNotMatch(route, /planPrices|STRIPE_PRICE_ESSENCIAL|STRIPE_PRICE_CRESCIMENTO|STRIPE_PRICE_AVANCADO/);
+});
+
+test('endpoint de planos le Stripe e retorna apenas dados seguros para onboarding', () => {
+  const route = sliceFrom(serverCode, "app.get('/api/billing/plans'", 4200);
+  assert.match(route, /checkAuth/);
+  assert.match(route, /listStripeActivePatientBillingPlans/);
+  assert.match(route, /resolveBillingPlanPriceIds/);
+  assert.match(route, /salesContactUrl/);
+  assert.doesNotMatch(route, /STRIPE_SECRET_KEY|sk_|apiKey/);
 });
 
 test('webhook e idempotente, valida price conhecido e salva subscription item', () => {
@@ -160,11 +177,16 @@ test('landing e tela de assinatura nao exibem planos fixos antigos', () => {
     'R$ 149',
     'R$ 399',
     'R$ 679',
+    'Falar com Mateus',
+    'Fale com Mateus',
     'business_plan_id',
     'enterprise_plan_id'
   ]);
   assert.match(landingCode, /billingModel:[\s\S]*?'active_patients'/);
   assert.match(appCode, /paciente ativo/i);
+  assert.match(appCode, /\/api\/billing\/plans/);
+  assert.match(appCode, /selectedPriceId/);
+  assert.match(appCode, /Solicitar proposta personalizada/);
   assert.doesNotMatch(`${adminCode}\n${superAdminCode}`, /planName:\s*complimentaryPlan|complimentaryPlan/);
   assert.doesNotMatch(invitationCode, /planLimits|user\.planName|Seu plano/);
 });

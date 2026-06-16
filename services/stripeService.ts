@@ -6,6 +6,38 @@ type SupabaseClientLike = any;
 export const ACTIVE_PATIENT_BILLING_MODEL = 'active_patients' as const;
 export const ACTIVE_PATIENT_BILLING_TIERS: Array<never> = [];
 
+export type SafeStripeBillingTier = {
+  upTo: number | null;
+  unitAmountCents: number | null;
+  flatAmountCents: number | null;
+  unitAmountDecimal: string | null;
+  flatAmountDecimal: string | null;
+};
+
+export type SafeStripeBillingPlan = {
+  productId: string;
+  priceId: string;
+  name: string;
+  description: string | null;
+  currency: string;
+  interval: string | null;
+  intervalCount: number | null;
+  billingScheme: string;
+  tiersMode: string | null;
+  usageType: string | null;
+  unitAmountCents: number | null;
+  unitAmountDecimal: string | null;
+  tiers: SafeStripeBillingTier[];
+  active: boolean;
+  metadata: Record<string, string>;
+  patientLimit: number | null;
+  minPatients: number | null;
+  maxPatients: number | null;
+  pricingModel: 'tiered_active_patients' | 'per_patient' | 'fixed_limit' | 'custom';
+  usesActivePatientQuantity: boolean;
+  isCustom: boolean;
+};
+
 const ACTIVE_PATIENT_STATUS_VALUES = [
   'ACTIVE',
   'active',
@@ -17,6 +49,196 @@ const ACTIVE_PATIENT_STATUS_VALUES = [
 function toSafeString(value: unknown, max = 200): string {
   if (typeof value !== 'string') return '';
   return value.trim().slice(0, max);
+}
+
+function toSafeInteger(value: unknown): number | null {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.max(0, Math.floor(parsed));
+}
+
+function mergeSafeMetadata(...sources: Array<Record<string, string> | null | undefined>): Record<string, string> {
+  const safe: Record<string, string> = {};
+  for (const source of sources) {
+    for (const [rawKey, rawValue] of Object.entries(source || {})) {
+      const key = toSafeString(rawKey, 80);
+      if (!key) continue;
+      if (/(secret|token|key|password|credential)/i.test(key)) continue;
+      safe[key] = toSafeString(rawValue, 240);
+    }
+  }
+  return safe;
+}
+
+function metadataValue(metadata: Record<string, string>, keys: string[]): string {
+  for (const key of keys) {
+    const value = toSafeString(metadata[key], 200);
+    if (value) return value;
+  }
+  return '';
+}
+
+function parsePriceIdList(value: string): string[] {
+  return Array.from(
+    new Set(
+      String(value || '')
+        .split(',')
+        .map((item) => toSafeString(item, 120))
+        .filter(Boolean)
+    )
+  );
+}
+
+function stripeProductFromPrice(price: Stripe.Price): Stripe.Product | null {
+  const product = (price as any)?.product;
+  if (product && typeof product === 'object' && !('deleted' in product)) return product as Stripe.Product;
+  return null;
+}
+
+function stripeProductIsActive(product: Stripe.Product | null): boolean {
+  if (!product) return true;
+  return product.active !== false;
+}
+
+function isActivePatientBillingPrice(params: {
+  price: Stripe.Price;
+  product: Stripe.Product | null;
+  primaryPriceId?: string | null;
+  allowedPriceIds?: string[];
+}): boolean {
+  const priceId = toSafeString(params.price.id, 120);
+  if (!params.price.active || !params.price.recurring || !stripeProductIsActive(params.product)) return false;
+  const allowedIds = new Set((params.allowedPriceIds || []).map((id) => toSafeString(id, 120)).filter(Boolean));
+  const primaryPriceId = toSafeString(params.primaryPriceId, 120);
+  if (priceId && (priceId === primaryPriceId || allowedIds.has(priceId))) return true;
+
+  const metadata = mergeSafeMetadata(params.product?.metadata, params.price.metadata);
+  const billingModel = metadataValue(metadata, ['billing_model', 'billingModel', 'verto_billing_model']).toLowerCase();
+  const visible = metadataValue(metadata, ['verto_visible', 'onboarding_visible', 'visible']).toLowerCase();
+  const audience = metadataValue(metadata, ['audience', 'plan_audience', 'verto_audience']).toLowerCase();
+  return billingModel === ACTIVE_PATIENT_BILLING_MODEL || visible === 'true' || audience === 'clinic';
+}
+
+function buildSafeStripeBillingPlan(params: {
+  price: Stripe.Price;
+  product: Stripe.Product | null;
+  primaryPriceId?: string | null;
+}): SafeStripeBillingPlan {
+  const { price, product } = params;
+  const metadata = mergeSafeMetadata(product?.metadata, price.metadata);
+  const priceId = toSafeString(price.id, 120);
+  const billingScheme = toSafeString(price.billing_scheme, 40) || 'per_unit';
+  const tiersMode = toSafeString((price as any).tiers_mode, 40) || null;
+  const usageType = toSafeString(price.recurring?.usage_type, 40) || null;
+  const minPatients = toSafeInteger(metadataValue(metadata, ['min_patients', 'minimum_patients', 'patient_min']));
+  const maxPatients =
+    toSafeInteger(metadataValue(metadata, ['max_patients', 'patient_limit', 'active_patient_limit', 'limit_patients'])) ||
+    null;
+  const quantityMode = metadataValue(metadata, ['quantity_mode', 'billing_quantity_mode']).toLowerCase();
+  const usesActivePatientQuantity =
+    billingScheme === 'tiered' ||
+    quantityMode === 'active_patients' ||
+    quantityMode === 'per_patient' ||
+    priceId === toSafeString(params.primaryPriceId, 120);
+  const isCustom =
+    metadataValue(metadata, ['custom_plan', 'enterprise', 'requires_sales']).toLowerCase() === 'true' ||
+    maxPatients === null && metadataValue(metadata, ['plan_type', 'kind']).toLowerCase() === 'enterprise';
+  const pricingModel: SafeStripeBillingPlan['pricingModel'] = isCustom
+    ? 'custom'
+    : billingScheme === 'tiered'
+      ? 'tiered_active_patients'
+      : usesActivePatientQuantity
+        ? 'per_patient'
+        : 'fixed_limit';
+
+  const tiers = Array.isArray((price as any).tiers)
+    ? ((price as any).tiers as Stripe.Price.Tier[]).map((tier) => ({
+        upTo: tier.up_to === 'inf' ? null : toSafeInteger(tier.up_to),
+        unitAmountCents: typeof tier.unit_amount === 'number' ? tier.unit_amount : null,
+        flatAmountCents: typeof tier.flat_amount === 'number' ? tier.flat_amount : null,
+        unitAmountDecimal: toSafeString((tier as any).unit_amount_decimal, 80) || null,
+        flatAmountDecimal: toSafeString((tier as any).flat_amount_decimal, 80) || null
+      }))
+    : [];
+
+  return {
+    productId: toSafeString(product?.id || String(price.product || ''), 120),
+    priceId,
+    name: toSafeString(metadataValue(metadata, ['display_name', 'plan_name']) || product?.name, 160) || 'Plano Verto',
+    description: toSafeString(product?.description || metadataValue(metadata, ['description']), 500) || null,
+    currency: toSafeString(price.currency, 20).toLowerCase() || 'brl',
+    interval: toSafeString(price.recurring?.interval, 40) || null,
+    intervalCount: typeof price.recurring?.interval_count === 'number' ? price.recurring.interval_count : null,
+    billingScheme,
+    tiersMode,
+    usageType,
+    unitAmountCents: typeof price.unit_amount === 'number' ? price.unit_amount : null,
+    unitAmountDecimal: toSafeString((price as any).unit_amount_decimal, 80) || null,
+    tiers,
+    active: price.active === true,
+    metadata,
+    patientLimit: maxPatients,
+    minPatients,
+    maxPatients,
+    pricingModel,
+    usesActivePatientQuantity,
+    isCustom
+  };
+}
+
+export async function listStripeActivePatientBillingPlans(params: {
+  stripe: Stripe;
+  activePatientPriceId?: string | null;
+  allowedPriceIds?: string[];
+}): Promise<SafeStripeBillingPlan[]> {
+  const allowedPriceIds = parsePriceIdList((params.allowedPriceIds || []).join(','));
+  const primaryPriceId = toSafeString(params.activePatientPriceId, 120);
+  const pricesById = new Map<string, Stripe.Price>();
+
+  const recurringPrices = await params.stripe.prices.list({
+    active: true,
+    type: 'recurring',
+    limit: 100,
+    expand: ['data.product']
+  });
+
+  for (const price of recurringPrices.data || []) {
+    pricesById.set(price.id, price);
+  }
+
+  for (const priceId of [primaryPriceId, ...allowedPriceIds].filter(Boolean)) {
+    if (pricesById.has(priceId)) continue;
+    try {
+      const price = await params.stripe.prices.retrieve(priceId, { expand: ['product'] });
+      pricesById.set(price.id, price);
+    } catch {
+      // A price configured in env may be unavailable in this Stripe account; ignore here and let checkout fail clearly.
+    }
+  }
+
+  const plans: SafeStripeBillingPlan[] = [];
+  for (const price of pricesById.values()) {
+    let resolvedPrice = price;
+    let product = stripeProductFromPrice(resolvedPrice);
+    if (!isActivePatientBillingPrice({ price: resolvedPrice, product, primaryPriceId, allowedPriceIds })) continue;
+    if (resolvedPrice.billing_scheme === 'tiered' && !Array.isArray((resolvedPrice as any).tiers)) {
+      try {
+        resolvedPrice = await params.stripe.prices.retrieve(resolvedPrice.id, { expand: ['product'] });
+        product = stripeProductFromPrice(resolvedPrice);
+      } catch {
+        // Keep the list response as fallback; checkout still uses Stripe's canonical price.
+      }
+    }
+    plans.push(buildSafeStripeBillingPlan({ price: resolvedPrice, product, primaryPriceId }));
+  }
+
+  return plans.sort((a, b) => {
+    if (a.isCustom !== b.isCustom) return a.isCustom ? 1 : -1;
+    const aLimit = a.maxPatients ?? Number.MAX_SAFE_INTEGER;
+    const bLimit = b.maxPatients ?? Number.MAX_SAFE_INTEGER;
+    if (aLimit !== bLimit) return aLimit - bLimit;
+    return a.name.localeCompare(b.name, 'pt-BR');
+  });
 }
 
 function buildIdempotencyKey(seed: string): string {
