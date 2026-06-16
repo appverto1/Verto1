@@ -121,6 +121,52 @@ const scheduleStaleDynamicImportReload = (error: unknown): boolean => {
   return true;
 };
 
+const CLINIC_ACCESS_ACTIVE_STATUSES = new Set([
+  'active',
+  'trial_active',
+  'trialing',
+  'demo',
+  'demo_sandbox',
+]);
+
+const CLINIC_ACCESS_BLOCKED_STATUSES = new Set([
+  '',
+  'pending',
+  'plan_required',
+  'payment_required',
+  'subscription_pending',
+  'incomplete',
+  'incomplete_expired',
+  'past_due',
+  'unpaid',
+  'delinquent',
+  'blocked',
+  'canceled',
+  'cancelled',
+  'checkout_abandoned',
+]);
+
+const normalizeSubscriptionStatusForAccess = (value: unknown): string =>
+  String(value || '').trim().toLowerCase();
+
+const isProfessionalClinicRole = (role: unknown): boolean =>
+  ['therapist', 'coordinator', 'receptionist', 'admin'].includes(
+    String(role || '').trim().toLowerCase(),
+  );
+
+const hasDashboardBillingAccess = (candidateUser: any): boolean => {
+  const role = String(candidateUser?.role || '').trim().toLowerCase();
+  if (!isProfessionalClinicRole(role)) return true;
+  if (role === 'admin' && candidateUser?.isInternalAdmin === true) return true;
+  if (candidateUser?.isDemoUser === true || candidateUser?.is_demo_user === true) return true;
+  const billingModel = String(candidateUser?.billingModel || candidateUser?.billing_model || '').trim().toLowerCase();
+  if (billingModel === 'demo' || billingModel === 'demo_sandbox') return true;
+  const status = normalizeSubscriptionStatusForAccess(candidateUser?.subscriptionStatus || candidateUser?.subscription_status);
+  if (CLINIC_ACCESS_ACTIVE_STATUSES.has(status)) return true;
+  if (CLINIC_ACCESS_BLOCKED_STATUSES.has(status)) return false;
+  return false;
+};
+
 type LazyImportBoundaryProps = {
   children: React.ReactNode;
   fallback: React.ReactNode;
@@ -681,21 +727,23 @@ export default function App() {
   const enrichUserFromSessionMetadata = (candidateUser: any, supabaseSession?: any) => {
     const metadata = supabaseSession?.user?.user_metadata || {};
     const fullName = String(metadata?.full_name || '').trim();
-    const avatarUrl = String(metadata?.avatar_url || '').trim();
+    const oauthAvatarUrl = String(metadata?.avatar_url || metadata?.picture || '').trim();
+    const internalProfilePicture =
+      candidateUser?.profilePicture ||
+      candidateUser?.profile_picture ||
+      candidateUser?.profilePhotoUrl ||
+      candidateUser?.profile_photo_url ||
+      candidateUser?.professionalProfile?.profile_photo_url ||
+      candidateUser?.professional_profile?.profile_photo_url ||
+      null;
 
     return {
       ...candidateUser,
       name: candidateUser?.name || fullName || candidateUser?.email?.split('@')?.[0] || candidateUser?.name,
-      profilePicture:
-        candidateUser?.profilePicture ||
-        candidateUser?.profile_picture ||
-        avatarUrl ||
-        null,
-      profile_picture:
-        candidateUser?.profile_picture ||
-        candidateUser?.profilePicture ||
-        avatarUrl ||
-        null,
+      profilePicture: internalProfilePicture || oauthAvatarUrl || null,
+      profile_picture: internalProfilePicture || oauthAvatarUrl || null,
+      oauthPicture: candidateUser?.oauthPicture || candidateUser?.googlePicture || oauthAvatarUrl || null,
+      googlePicture: candidateUser?.googlePicture || oauthAvatarUrl || null,
       oauthProvider:
         candidateUser?.oauthProvider ||
         supabaseSession?.user?.app_metadata?.provider ||
@@ -2158,19 +2206,39 @@ export default function App() {
 
   const SubscriptionRequired = ({ user, onLogout }: { user: any, onLogout: () => void }) => (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6 font-sans">
-      <div className="bg-white w-full max-w-md rounded-[32px] shadow-2xl shadow-blue-500/5 p-10 text-center border border-slate-100 animate-pop">
+      <div className="bg-white w-full max-w-2xl rounded-[32px] shadow-2xl shadow-blue-500/5 p-10 text-center border border-slate-100 animate-pop">
         <div className="w-20 h-20 bg-blue-50 text-[#7a32fc] rounded-3xl flex items-center justify-center mx-auto mb-8 shadow-inner">
           <Lock size={40} />
         </div>
-        <h2 className="text-3xl font-bold text-slate-900 mb-4 tracking-tight">Ative sua conta</h2>
+        <h2 className="text-3xl font-bold text-slate-900 mb-4 tracking-tight">Escolha o plano e ative sua conta</h2>
         <p className="text-slate-500 font-normal mb-8 leading-relaxed">
-          Para acessar a plataforma Verto, Ã© necessÃ¡rio ativar sua assinatura. 
+          Para acessar o painel completo da Verto, e necessario ativar uma assinatura ou um trial autorizado.
           {user.role === 'patient' ? (
-            <span> O valor para pacientes Ã© de apenas <strong>R$ 4,90/mÃªs</strong>.</span>
+            <span> O valor para pacientes e de apenas <strong>R$ 4,90/mes</strong>.</span>
           ) : (
-            <span> A cobranca da clinica e feita por paciente ativo, com faixas calculadas pela Stripe.</span>
+            <span> A cobranca da clinica e modular por paciente ativo, calculada pelo plano configurado no Stripe.</span>
           )}
         </p>
+
+        {user.role !== 'patient' && (
+          <div className="mb-8 grid gap-3 text-left">
+            {[
+              ['Ate 10 pacientes ativos', 'Ideal para inicio ou consultorio pequeno.'],
+              ['Ate 30 pacientes ativos', 'Para clinicas em crescimento.'],
+              ['Ate 60 pacientes ativos', 'Para operacao multidisciplinar.'],
+              ['Ate 100 pacientes ativos', 'Para clinicas maiores.'],
+              ['Acima disso', 'Plano personalizado com acompanhamento comercial.'],
+            ].map(([title, description]) => (
+              <div key={title} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                <p className="text-sm font-bold text-slate-900">{title}</p>
+                <p className="text-xs text-slate-500 mt-1">{description}</p>
+              </div>
+            ))}
+            <p className="text-[11px] text-slate-400 leading-relaxed">
+              Os valores e faixas finais sao definidos pela configuracao server-side do Stripe. A Verto nao armazena o numero completo do cartao.
+            </p>
+          </div>
+        )}
         
         <div className="space-y-4">
           {user.role === 'patient' ? (
@@ -2186,13 +2254,13 @@ export default function App() {
                 onClick={() => handleCheckout()}
                 className="w-full bg-[#7a32fc] text-white py-4 rounded-2xl font-bold text-sm shadow-lg shadow-blue-500/20 hover:scale-[1.02] transition-all active:scale-[0.98]"
               >
-                Iniciar assinatura por paciente ativo
+                Cadastrar cartao e ativar assinatura
               </button>
               <button
                 onClick={() => handleEnterpriseContact(user)}
                 className="w-full bg-slate-900 text-white py-4 rounded-2xl font-bold text-sm shadow-lg shadow-slate-500/20 hover:scale-[1.02] transition-all active:scale-[0.98]"
               >
-                Falar com Mateus para implantacao
+                Falar com Mateus para plano personalizado
               </button>
             </React.Fragment>
           )}
@@ -5697,13 +5765,6 @@ export default function App() {
               </div>
             </div>
           </div>
-        ) : (user.role === 'therapist' || user.role === 'coordinator' || user.role === 'receptionist') && !clinicStateHydrated ? (
-          <div className="min-h-screen flex items-center justify-center bg-white">
-            <div className="text-center">
-              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#7a32fc] mx-auto"></div>
-              <p className="mt-4 text-sm text-slate-500">Carregando dados da clínica...</p>
-            </div>
-          </div>
         ) : ((user.role === 'therapist' || user.role === 'coordinator' || user.role === 'receptionist') && user.firstLoginCompleted === false) || showOnboarding ? (
           <ProfessionalOnboarding 
             user={user} 
@@ -5721,8 +5782,15 @@ export default function App() {
             }}
             onClose={() => setShowOnboarding(false)}
           />
-        ) : (user.role === 'therapist' || user.role === 'coordinator') && user.subscriptionStatus === 'pending' ? (
+        ) : isProfessionalClinicRole(user.role) && !hasDashboardBillingAccess(user) ? (
           <SubscriptionRequired user={user} onLogout={handleLogout} />
+        ) : (user.role === 'therapist' || user.role === 'coordinator' || user.role === 'receptionist') && !clinicStateHydrated ? (
+          <div className="min-h-screen flex items-center justify-center bg-white">
+            <div className="text-center">
+              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#7a32fc] mx-auto"></div>
+              <p className="mt-4 text-sm text-slate-500">Carregando dados da clínica...</p>
+            </div>
+          </div>
         ) : user.role === 'patient' ? (
           <PatientDashboard 
             user={user} 

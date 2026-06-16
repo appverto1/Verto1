@@ -54,6 +54,7 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
   );
   const [clinicCnpj, setClinicCnpj] = useState('');
   const [clinicPhone, setClinicPhone] = useState('');
+  const [clinicOperationType, setClinicOperationType] = useState<'private' | 'insurance' | 'mixed'>('mixed');
   const [specialty, setSpecialty] = useState('');
   const [council, setCouncil] = useState('');
   const [councilNumber, setCouncilNumber] = useState('');
@@ -93,6 +94,11 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
           setClinicLogoUrl(draft.clinicLogoUrl || user?.clinicSettings?.clinicLogoUrl || null);
           setClinicCnpj(formatCnpjInput(String(draft.clinicCnpj || '')));
           setClinicPhone(String(draft.clinicPhone || ''));
+          setClinicOperationType(
+            draft.clinicOperationType === 'private' || draft.clinicOperationType === 'insurance' || draft.clinicOperationType === 'mixed'
+              ? draft.clinicOperationType
+              : 'mixed',
+          );
           setSpecialty(String(draft.specialty || ''));
           setCouncil(String(draft.council || ''));
           setCouncilNumber(formatProfessionalRegistry(String(draft.councilNumber || '')));
@@ -115,6 +121,12 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
         setClinicLogoUrl(profile.clinic_logo_url || user?.clinicSettings?.clinicLogoUrl || null);
         setClinicCnpj(formatCnpjInput(profile.metadata?.clinicCnpj || profile.address?.cnpj || ""));
         setClinicPhone(profile.clinic_phone || "");
+        const savedOperationType = String(profile.metadata?.clinicOperationType || profile.metadata?.clinic_operation_type || user?.clinicSettings?.clinicOperationType || '');
+        setClinicOperationType(
+          savedOperationType === 'private' || savedOperationType === 'insurance' || savedOperationType === 'mixed'
+            ? savedOperationType
+            : 'mixed',
+        );
         setSpecialty(profile.specialty || "");
         setCouncil(profile.council || "");
         setCouncilNumber(formatProfessionalRegistry(profile.council_number || ""));
@@ -154,6 +166,7 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
       clinicLogoUrl,
       clinicCnpj,
       clinicPhone,
+      clinicOperationType,
       specialty,
       council,
       councilNumber,
@@ -182,6 +195,7 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
     clinicLogoUrl,
     clinicCnpj,
     clinicPhone,
+    clinicOperationType,
     specialty,
     council,
     councilNumber,
@@ -190,7 +204,7 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
 
   const canGoNextPersonal = fullName.trim() && birthDate && gender && cep && logradouro && number && bairro && cidade && phone;
   const councilRequired = isCoordinator || isTherapist;
-  const canGoNextClinic = !isCoordinator || (clinicName.trim() && specialty.trim() && (!councilRequired || (council.trim() && councilNumber.trim())));
+  const canGoNextClinic = !isCoordinator || (clinicName.trim() && clinicOperationType && specialty.trim() && (!councilRequired || (council.trim() && councilNumber.trim())));
 
   const toBase64 = (file: File, cb: (v: string) => void) => {
     if (file.size > 900 * 1024) {
@@ -285,6 +299,7 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
           clinicLogoPath: clinicLogoUpload.path,
           clinicCnpj,
           clinicPhone,
+          clinicOperationType,
           specialty,
           council,
           councilNumber,
@@ -311,13 +326,14 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
           clinicLogoUrl: clinicLogoUpload.url,
           clinicCnpj: clinicCnpj || null,
           clinicPhone: clinicPhone || null,
+          clinicOperationType,
           specialty: specialty || null,
           council: council || null,
           councilNumber: councilNumber || null,
           signatureDataUrl: signatureUpload.url,
         },
         firstLoginCompleted: true,
-        subscriptionStatus: 'active'
+        subscriptionStatus: result?.subscriptionStatus || result?.data?.subscriptionStatus || 'payment_required'
       });
       localStorage.removeItem(onboardingDraftKey);
       localStorage.removeItem(onboardingStepKey);
@@ -335,10 +351,12 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
         <div className="grid md:grid-cols-[320px_1fr] min-h-[680px]">
           <div className="bg-[#7a32fc] text-white p-8 rounded-l-3xl">
             <h2 className="text-2xl font-bold">Boas-vindas a Verto</h2>
-            <p className="text-sm text-violet-100 mt-3">Complete seu onboarding para liberar o painel completo do seu papel.</p>
+            <p className="text-sm text-violet-100 mt-3">Complete seus dados. O painel completo libera depois do plano e pagamento.</p>
             <div className="mt-8 space-y-3 text-xs">
               <div className={step >= 1 ? 'text-white font-semibold' : 'text-violet-200'}>1. Cadastro Profissional</div>
               <div className={step >= 2 ? 'text-white font-semibold' : 'text-violet-200'}>2. Configuracoes da Clinica</div>
+              <div className="text-violet-200">3. Plano por pacientes ativos</div>
+              <div className="text-violet-200">4. Cartao e assinatura</div>
             </div>
           </div>
 
@@ -417,11 +435,43 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
                 )}
 
                 {isCoordinator && (
-                  <div className="grid md:grid-cols-2 gap-4">
-                    <input value={clinicName} onChange={(e) => setClinicName(e.target.value)} placeholder="Nome da clinica" className="px-4 py-3 rounded-xl bg-slate-50" />
-                    <input value={clinicCnpj} onChange={(e) => setClinicCnpj(formatCnpjInput(e.target.value))} placeholder="00.000.000/0000-00" className="px-4 py-3 rounded-xl bg-slate-50" />
-                    <input value={clinicPhone} onChange={(e) => setClinicPhone(e.target.value)} placeholder="Telefone comercial" className="px-4 py-3 rounded-xl bg-slate-50" />
-                    <input value={specialty} onChange={(e) => setSpecialty(e.target.value)} placeholder="Especialidade" className="px-4 py-3 rounded-xl bg-slate-50" />
+                  <div className="space-y-5">
+                    <div className="grid md:grid-cols-2 gap-4">
+                      <input value={clinicName} onChange={(e) => setClinicName(e.target.value)} placeholder="Nome da clinica" className="px-4 py-3 rounded-xl bg-slate-50" />
+                      <input value={clinicCnpj} onChange={(e) => setClinicCnpj(formatCnpjInput(e.target.value))} placeholder="00.000.000/0000-00" className="px-4 py-3 rounded-xl bg-slate-50" />
+                      <input value={clinicPhone} onChange={(e) => setClinicPhone(e.target.value)} placeholder="Telefone comercial" className="px-4 py-3 rounded-xl bg-slate-50" />
+                      <input value={specialty} onChange={(e) => setSpecialty(e.target.value)} placeholder="Especialidade" className="px-4 py-3 rounded-xl bg-slate-50" />
+                    </div>
+
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                      <p className="text-sm font-bold text-slate-900">Como sua clinica atende hoje?</p>
+                      <p className="text-xs text-slate-500 mt-1">
+                        Esta escolha define os padroes iniciais. Clinicas particulares nao precisam configurar TISS/TUSS no primeiro acesso.
+                      </p>
+                      <div className="mt-4 grid md:grid-cols-3 gap-3">
+                        {[
+                          { value: 'private', title: 'Particular', description: 'Atendimentos sem convenio por padrao.' },
+                          { value: 'insurance', title: 'Convenio', description: 'Usa pagadores e pre-faturamento.' },
+                          { value: 'mixed', title: 'Ambos', description: 'Particular e convenio na mesma clinica.' },
+                        ].map((option) => {
+                          const selected = clinicOperationType === option.value;
+                          return (
+                            <button
+                              type="button"
+                              key={option.value}
+                              onClick={() => setClinicOperationType(option.value as 'private' | 'insurance' | 'mixed')}
+                              className={`rounded-2xl border px-4 py-3 text-left transition-all ${
+                                selected ? 'border-[#7a32fc] bg-white shadow-sm ring-2 ring-violet-100' : 'border-slate-200 bg-white hover:border-violet-300'
+                              }`}
+                            >
+                              <span className="block text-sm font-bold text-slate-900">{option.title}</span>
+                              <span className="mt-1 block text-xs text-slate-500">{option.description}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
                     <label className="md:col-span-2 block cursor-pointer">
                       <span className="text-xs text-slate-500 block mb-2">Logotipo da clínica</span>
                       <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 flex items-center gap-4 hover:border-[#7a32fc] transition-all">

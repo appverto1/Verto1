@@ -19,7 +19,6 @@ import webpush from 'web-push';
 import { generateSecret, verifySync, generateURI } from 'otplib';
 import QRCode from 'qrcode';
 import {
-  createClinicMeteredSubscription,
   getClinicBillingSummary,
   reportAllClinicsActivePatientUsage,
   syncAllClinicsActivePatientAddonQuantity,
@@ -327,6 +326,80 @@ function resolveActivePatientPriceId(): string {
 }
 
 const ACTIVE_PATIENT_BILLING_MODEL = 'active_patients';
+const CLINIC_ACCESS_ACTIVE_STATUSES = new Set(['active', 'trial_active', 'trialing', 'demo', 'demo_sandbox']);
+const CLINIC_ACCESS_BLOCKED_STATUSES = new Set([
+  '',
+  'pending',
+  'plan_required',
+  'payment_required',
+  'subscription_pending',
+  'incomplete',
+  'incomplete_expired',
+  'past_due',
+  'unpaid',
+  'delinquent',
+  'blocked',
+  'canceled',
+  'cancelled',
+  'checkout_abandoned'
+]);
+
+function normalizeClinicAccessStatus(value: any): string {
+  return sanitizeString(value, 60).toLowerCase();
+}
+
+function roleRequiresClinicBillingAccess(role: any): boolean {
+  return ['coordinator', 'therapist', 'receptionist', 'admin'].includes(
+    sanitizeString(role, 40).toLowerCase()
+  );
+}
+
+function hasActiveClinicBillingAccess(user: any): boolean {
+  const role = sanitizeString(user?.role, 40).toLowerCase();
+  if (!roleRequiresClinicBillingAccess(role)) return true;
+  if (user?.isDemoUser === true || user?.is_demo_user === true) return true;
+  const billingModel = sanitizeString(user?.billingModel || user?.billing_model, 60).toLowerCase();
+  if (billingModel === 'demo' || billingModel === 'demo_sandbox') return true;
+  const status = normalizeClinicAccessStatus(user?.subscriptionStatus || user?.subscription_status);
+  if (CLINIC_ACCESS_ACTIVE_STATUSES.has(status)) return true;
+  if (CLINIC_ACCESS_BLOCKED_STATUSES.has(status)) return false;
+  return false;
+}
+
+function isBillingOnboardingAllowedPath(pathname: any): boolean {
+  const path = sanitizeString(pathname, 240).toLowerCase();
+  return (
+    path === '/api/auth/me' ||
+    path === '/api/auth/logout' ||
+    path === '/api/workspaces' ||
+    path === '/api/workspaces/select' ||
+    path === '/api/supabase-config' ||
+    path.startsWith('/api/profile/') ||
+    path.startsWith('/api/stripe/') ||
+    path.startsWith('/api/billing/') ||
+    path.startsWith('/api/storage/') ||
+    path.startsWith('/api/config')
+  );
+}
+
+function billingAccessBlockedPayload(user: any) {
+  const status = normalizeClinicAccessStatus(user?.subscriptionStatus || user?.subscription_status) || 'payment_required';
+  return {
+    error: 'SUBSCRIPTION_REQUIRED',
+    message: 'Escolha um plano e ative a assinatura para acessar o painel completo.',
+    onboardingState:
+      status === 'plan_required'
+        ? 'PLAN_REQUIRED'
+        : status === 'subscription_pending' || status === 'pending'
+          ? 'SUBSCRIPTION_PENDING'
+          : status === 'past_due' || status === 'unpaid' || status === 'delinquent'
+            ? 'PAST_DUE'
+            : status === 'blocked'
+              ? 'BLOCKED'
+              : 'PAYMENT_REQUIRED',
+    subscriptionStatus: status
+  };
+}
 const DEMO_SANDBOX_BILLING_MODEL = 'demo';
 const DEMO_SANDBOX_TEMPLATE_NAME = 'Clinica Demo Verto';
 const DEMO_PLAYGROUND_NAME = 'Playground Demo Verto';
@@ -10484,6 +10557,9 @@ async function startServer() {
           message: demoRouteBlock.message
         });
       }
+      if (!hasActiveClinicBillingAccess(req.session.user) && !isBillingOnboardingAllowedPath(req.path || req.originalUrl)) {
+        return res.status(402).json(billingAccessBlockedPayload(req.session.user));
+      }
       if (await isBillingAccessBlocked(req.session.user)) {
         return res.status(402).json({
           error: 'BILLING_ACCESS_BLOCKED',
@@ -10584,6 +10660,9 @@ async function startServer() {
                 error: demoRouteBlock.error,
                 message: demoRouteBlock.message
               });
+            }
+            if (!hasActiveClinicBillingAccess(req.session.user) && !isBillingOnboardingAllowedPath(req.path || req.originalUrl)) {
+              return res.status(402).json(billingAccessBlockedPayload(req.session.user));
             }
             if (await isBillingAccessBlocked(req.session.user)) {
               return res.status(402).json({
@@ -23367,6 +23446,10 @@ async function startServer() {
       const clinicLogoPath = sanitizeString(req.body?.clinicLogoPath, 260);
       const clinicCnpj = sanitizeString(req.body?.clinicCnpj, 24);
       const clinicPhone = sanitizePhone(req.body?.clinicPhone);
+      const clinicOperationTypeRaw = sanitizeString(req.body?.clinicOperationType || req.body?.clinic_operation_type, 40).toLowerCase();
+      const clinicOperationType = ['private', 'insurance', 'mixed'].includes(clinicOperationTypeRaw)
+        ? clinicOperationTypeRaw
+        : 'mixed';
       const specialty = sanitizeString(req.body?.specialty, 120);
       const council = sanitizeString(req.body?.council, 80);
       const councilNumber = sanitizeString(req.body?.councilNumber, 80);
@@ -23374,6 +23457,10 @@ async function startServer() {
       const signaturePath = sanitizeString(req.body?.signaturePath, 260);
       const profilePicture = sanitizeUrl(req.body?.profilePicture);
       const profilePicturePath = sanitizeString(req.body?.profilePicturePath, 260);
+      const currentSubscriptionStatus = normalizeClinicAccessStatus(req.session.user?.subscriptionStatus);
+      const nextSubscriptionStatus = CLINIC_ACCESS_ACTIVE_STATUSES.has(currentSubscriptionStatus)
+        ? currentSubscriptionStatus
+        : 'payment_required';
 
       if (!fullName) {
         return res.status(400).json({ error: 'Nome completo e obrigatorio.' });
@@ -23390,7 +23477,8 @@ async function startServer() {
         .update({
           name: fullName,
           profile_picture: profilePicture,
-          subscription_status: 'active',
+          subscription_status: nextSubscriptionStatus,
+          billing_model: role === 'patient' ? undefined : ACTIVE_PATIENT_BILLING_MODEL,
           first_login_completed: true,
           updated_at: new Date().toISOString()
         })
@@ -23420,6 +23508,7 @@ async function startServer() {
           metadata: {
             role,
             sessionDurationMinutes,
+            clinicOperationType,
             clinicCnpj: clinicCnpj || null,
             profilePicturePath: profilePicturePath || null,
             clinicLogoPath: clinicLogoPath || null,
@@ -23437,6 +23526,8 @@ async function startServer() {
             name: clinicName || 'Minha Clinica',
             logo_url: clinicLogoUrl,
             phone_commercial: clinicPhone,
+            subscription_status: nextSubscriptionStatus,
+            billing_model: ACTIVE_PATIENT_BILLING_MODEL,
             session_duration_minutes: sessionDurationMinutes,
             specialty,
             council,
@@ -23446,41 +23537,6 @@ async function startServer() {
             address,
             updated_at: new Date().toISOString()
           }], { onConflict: 'id' });
-
-        const activePatientPriceId = resolveActivePatientPriceId();
-        const coordinatorEmail = sanitizeEmail(req.session.user?.email);
-        if (activePatientPriceId && coordinatorEmail) {
-          try {
-            const subscription = await createClinicMeteredSubscription({
-              supabase,
-              stripe: getStripe(),
-              clinicId,
-              coordinatorUserId: userId,
-              email: coordinatorEmail,
-              clinicName: clinicName || 'Minha Clinica',
-              activePatientPriceId,
-              logger: console
-            });
-            if (subscription) {
-              await persistStripeSubscriptionReference({
-                customerId: subscription.customerId,
-                subscriptionId: subscription.subscriptionId,
-                subscriptionItemId: subscription.subscriptionItemId,
-                priceId: activePatientPriceId,
-                email: coordinatorEmail,
-                userId,
-                clinicId,
-                status: subscription.status
-              });
-            }
-          } catch (billingError: any) {
-            console.error('[Stripe Billing] Falha ao criar assinatura metered no onboarding (não bloqueante).', {
-              clinicId,
-              userId,
-              message: billingError?.message || String(billingError)
-            });
-          }
-        }
       }
 
       const nextClinicSettings = cleanObject({
@@ -23489,6 +23545,7 @@ async function startServer() {
         clinicLogoUrl: clinicLogoUrl || null,
         clinicCnpj: clinicCnpj || null,
         clinicPhone: clinicPhone || null,
+        clinicOperationType,
         specialty: specialty || null,
         council: council || null,
         councilNumber: councilNumber || null,
@@ -23508,7 +23565,8 @@ async function startServer() {
 
       req.session.user.name = fullName;
       req.session.user.firstLoginCompleted = true;
-      req.session.user.subscriptionStatus = 'active';
+      req.session.user.subscriptionStatus = nextSubscriptionStatus;
+      req.session.user.billingModel = role === 'patient' ? req.session.user?.billingModel : ACTIVE_PATIENT_BILLING_MODEL;
       req.session.user.crp = councilNumber || req.session.user?.crp || null;
       req.session.user.profilePicture = sanitizeSessionUrl(profilePicture) || req.session.user.profilePicture || null;
       req.session.user.clinicSettings = compactClinicSettingsForSession(nextClinicSettings);
@@ -23518,7 +23576,13 @@ async function startServer() {
         if (err) {
           return res.status(500).json({ error: 'Erro ao salvar sessao' });
         }
-        res.json({ success: true });
+        res.json({
+          success: true,
+          subscriptionStatus: nextSubscriptionStatus,
+          onboardingState: nextSubscriptionStatus === 'active' || nextSubscriptionStatus === 'trial_active' || nextSubscriptionStatus === 'trialing'
+            ? 'ACTIVE'
+            : 'PAYMENT_REQUIRED'
+        });
       });
     } catch (error: any) {
       res.status(500).json({ error: error.message || 'Erro interno no servidor' });
