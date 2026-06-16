@@ -4,6 +4,7 @@ import type Stripe from 'stripe';
 type SupabaseClientLike = any;
 
 export const ACTIVE_PATIENT_BILLING_MODEL = 'active_patients' as const;
+export const ACTIVE_PATIENT_BILLING_LOOKUP_KEY = 'verto_active_patients_monthly' as const;
 export const ACTIVE_PATIENT_BILLING_TIERS: Array<never> = [];
 
 export type SafeStripeBillingTier = {
@@ -14,11 +15,15 @@ export type SafeStripeBillingTier = {
   flatAmountCents: number | null;
   unitAmountDecimal: string | null;
   flatAmountDecimal: string | null;
+  displayLabel?: string | null;
+  displayPrice?: string | null;
 };
 
 export type SafeStripeBillingPlan = {
   productId: string;
   priceId: string;
+  lookupKey: string | null;
+  planKey: string | null;
   name: string;
   description: string | null;
   currency: string;
@@ -39,6 +44,9 @@ export type SafeStripeBillingPlan = {
   usesActivePatientQuantity: boolean;
   isCustom: boolean;
   enterpriseThreshold: number | null;
+  selfService: boolean;
+  stripeCreatedAt: string | null;
+  stripeUpdatedAt: string | null;
 };
 
 export type SafeStripeBillingEstimate = {
@@ -98,6 +106,38 @@ function metadataValue(metadata: Record<string, string>, keys: string[]): string
   return '';
 }
 
+function booleanMetadataValue(metadata: Record<string, string>, keys: string[], defaultValue: boolean): boolean {
+  const raw = metadataValue(metadata, keys).toLowerCase();
+  if (!raw) return defaultValue;
+  if (['1', 'true', 'yes', 'sim', 'on'].includes(raw)) return true;
+  if (['0', 'false', 'no', 'nao', 'não', 'off'].includes(raw)) return false;
+  return defaultValue;
+}
+
+function planKeyFromMetadata(metadata: Record<string, string>, lookupKey: string): string | null {
+  return (
+    metadataValue(metadata, [
+      'vertoPlanKey',
+      'verto_plan_key',
+      'plan_key',
+      'billing_plan_key',
+      'billingPlanKey'
+    ]) ||
+    lookupKey ||
+    null
+  );
+}
+
+function metadataIndicatesActivePatients(value: string): boolean {
+  const normalized = toSafeString(value, 160).toLowerCase();
+  return Boolean(
+    normalized === ACTIVE_PATIENT_BILLING_MODEL ||
+    normalized === ACTIVE_PATIENT_BILLING_LOOKUP_KEY ||
+    normalized.includes('active_patient') ||
+    normalized.includes('active_patients')
+  );
+}
+
 function parsePriceIdList(value: string): string[] {
   return Array.from(
     new Set(
@@ -134,9 +174,17 @@ function isActivePatientBillingPrice(params: {
 
   const metadata = mergeSafeMetadata(params.product?.metadata, params.price.metadata);
   const billingModel = metadataValue(metadata, ['billing_model', 'billingModel', 'verto_billing_model']).toLowerCase();
+  const lookupKey = toSafeString((params.price as any).lookup_key, 160).toLowerCase();
+  const planKey = toSafeString(planKeyFromMetadata(metadata, lookupKey), 160).toLowerCase();
   const visible = metadataValue(metadata, ['verto_visible', 'onboarding_visible', 'visible']).toLowerCase();
   const audience = metadataValue(metadata, ['audience', 'plan_audience', 'verto_audience']).toLowerCase();
-  return billingModel === ACTIVE_PATIENT_BILLING_MODEL || visible === 'true' || audience === 'clinic';
+  return (
+    metadataIndicatesActivePatients(billingModel) ||
+    metadataIndicatesActivePatients(lookupKey) ||
+    metadataIndicatesActivePatients(planKey) ||
+    visible === 'true' ||
+    audience === 'clinic'
+  );
 }
 
 function buildSafeStripeBillingPlan(params: {
@@ -147,6 +195,8 @@ function buildSafeStripeBillingPlan(params: {
   const { price, product } = params;
   const metadata = mergeSafeMetadata(product?.metadata, price.metadata);
   const priceId = toSafeString(price.id, 120);
+  const lookupKey = toSafeString((price as any).lookup_key, 160) || null;
+  const planKey = planKeyFromMetadata(metadata, lookupKey || '');
   const billingScheme = toSafeString(price.billing_scheme, 40) || 'per_unit';
   const tiersMode = toSafeString((price as any).tiers_mode, 40) || null;
   const usageType = toSafeString(price.recurring?.usage_type, 40) || null;
@@ -155,7 +205,14 @@ function buildSafeStripeBillingPlan(params: {
     toSafeInteger(metadataValue(metadata, ['max_patients', 'patient_limit', 'active_patient_limit', 'limit_patients'])) ||
     null;
   const enterpriseThreshold =
-    toSafeInteger(metadataValue(metadata, ['enterprise_threshold', 'enterprise_from', 'custom_threshold', 'custom_from_patients'])) ||
+    toSafeInteger(metadataValue(metadata, [
+      'enterpriseRequiredAfter',
+      'enterprise_required_after',
+      'enterprise_threshold',
+      'enterprise_from',
+      'custom_threshold',
+      'custom_from_patients'
+    ])) ||
     null;
   const quantityMode = metadataValue(metadata, ['quantity_mode', 'billing_quantity_mode']).toLowerCase();
   const usesActivePatientQuantity =
@@ -166,6 +223,7 @@ function buildSafeStripeBillingPlan(params: {
   const isCustom =
     metadataValue(metadata, ['custom_plan', 'enterprise', 'requires_sales']).toLowerCase() === 'true' ||
     maxPatients === null && metadataValue(metadata, ['plan_type', 'kind']).toLowerCase() === 'enterprise';
+  const selfService = booleanMetadataValue(metadata, ['selfService', 'self_service', 'verto_self_service'], !isCustom);
   const pricingModel: SafeStripeBillingPlan['pricingModel'] = isCustom
     ? 'custom'
     : billingScheme === 'tiered'
@@ -195,6 +253,8 @@ function buildSafeStripeBillingPlan(params: {
   return {
     productId: toSafeString(product?.id || String(price.product || ''), 120),
     priceId,
+    lookupKey,
+    planKey,
     name: toSafeString(metadataValue(metadata, ['display_name', 'plan_name']) || product?.name, 160) || 'Plano Verto',
     description: toSafeString(product?.description || metadataValue(metadata, ['description']), 500) || null,
     currency: toSafeString(price.currency, 20).toLowerCase() || 'brl',
@@ -214,7 +274,16 @@ function buildSafeStripeBillingPlan(params: {
     pricingModel,
     usesActivePatientQuantity,
     isCustom,
-    enterpriseThreshold
+    enterpriseThreshold,
+    selfService,
+    stripeCreatedAt:
+      typeof (price as any).created === 'number'
+        ? new Date(Number((price as any).created) * 1000).toISOString()
+        : null,
+    stripeUpdatedAt:
+      typeof (product as any)?.updated === 'number'
+        ? new Date(Number((product as any).updated) * 1000).toISOString()
+        : null
   };
 }
 

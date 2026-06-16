@@ -2188,6 +2188,8 @@ export default function App() {
     flatAmountCents: number | null;
     unitAmountDecimal?: string | null;
     flatAmountDecimal?: string | null;
+    displayLabel?: string | null;
+    displayPrice?: string | null;
   };
 
   type BillingPlanOption = {
@@ -2286,14 +2288,6 @@ export default function App() {
     return 'Para clínicas com maior volume de pacientes ativos.';
   };
 
-  const DEFAULT_SELF_SERVICE_PATIENT_RANGES = [
-    { from: 1, to: 5 },
-    { from: 6, to: 10 },
-    { from: 11, to: 20 },
-    { from: 21, to: 30 },
-    { from: 31, to: 50 }
-  ];
-
   const estimateStripePlanAmountCents = (plan: BillingPlanOption | null, quantity: number) => {
     if (!plan) return null;
     const safeQuantity = Math.max(1, Math.floor(Number(quantity || 1)));
@@ -2342,6 +2336,8 @@ export default function App() {
           return 'Não foi possível identificar a clínica para iniciar o pagamento.';
         case 'STRIPE_CUSTOMER_FAILED':
           return 'Não foi possível preparar o cliente de pagamento agora. Tente novamente.';
+        case 'PRICE_USAGE_TYPE_NOT_SUPPORTED_FOR_CHECKOUT':
+          return 'Este plano ainda não está configurado para checkout automático. Fale com o suporte para ajustar a contratação.';
         case 'CHECKOUT_SESSION_FAILED':
           return 'Não foi possível iniciar o pagamento agora. Tente novamente em instantes.';
         default:
@@ -2465,7 +2461,7 @@ export default function App() {
         const from = Number(tier.from || (previousTier?.upTo ? Number(previousTier.upTo) + 1 : 1));
         const to = tier.to === null || tier.upTo === null ? null : Number(tier.to || tier.upTo || 0);
         if (!to || to > enterpriseThreshold) return;
-        const label = describeBillingTierRange(tier, index, rangePlan.tiers || []);
+        const label = String(tier.displayLabel || '') || describeBillingTierRange(tier, index, rangePlan.tiers || []);
         billingRangeCards.push({
           key: `tier-${from}-${to}`,
           kind: 'self_service',
@@ -2479,26 +2475,8 @@ export default function App() {
       });
     } else {
       nonCustomPlans.forEach((plan, index) => {
-        const hasUnitEstimate = typeof estimateStripePlanAmountCents(plan, 1) === 'number';
         const hasExplicitLimit = Boolean(plan.maxPatients || plan.patientLimit);
-        if (plan.usesActivePatientQuantity && !hasExplicitLimit && hasUnitEstimate) {
-          DEFAULT_SELF_SERVICE_PATIENT_RANGES
-            .filter((range) => range.to <= enterpriseThreshold)
-            .forEach((range) => {
-              billingRangeCards.push({
-                key: `linear-${plan.priceId}-${range.from}-${range.to}`,
-                kind: 'self_service',
-                priceId: plan.priceId,
-                label: `${range.from} a ${range.to} pacientes ativos`,
-                description: describeBillingRangeAudience(range.to),
-                activePatients: range.to,
-                estimatedAmountCents: estimateStripePlanAmountCents(plan, range.to),
-                currency: plan.currency
-              });
-            });
-          return;
-        }
-
+        if (!hasExplicitLimit) return;
         const activePatients = Number(plan.maxPatients || plan.patientLimit || plan.minPatients || 1);
         if (!activePatients || activePatients > enterpriseThreshold) return;
         const label = describeBillingRange(plan, index);

@@ -19,6 +19,7 @@ import webpush from 'web-push';
 import { generateSecret, verifySync, generateURI } from 'otplib';
 import QRCode from 'qrcode';
 import {
+  ACTIVE_PATIENT_BILLING_LOOKUP_KEY,
   estimateStripeActivePatientPlan,
   getClinicBillingSummary,
   listStripeActivePatientBillingPlans,
@@ -26,6 +27,7 @@ import {
   syncAllClinicsActivePatientAddonQuantity,
   syncClinicActivePatientAddonQuantity
 } from './services/stripeService';
+import type { SafeStripeBillingPlan, SafeStripeBillingTier } from './services/stripeService';
 import { runAppointmentReminderScan, startAppointmentReminderCron, triggerAppointmentReminderScan } from './services/cronService';
 import {
   removePatientPushSubscription,
@@ -331,6 +333,22 @@ function resolveActivePatientPriceId(): string {
   return sanitizeString(process.env.STRIPE_ACTIVE_PATIENT_PRICE_ID || '', 120);
 }
 
+function resolveActivePatientPlanLookupKeys(): string[] {
+  return Array.from(
+    new Set(
+      [
+        ACTIVE_PATIENT_BILLING_LOOKUP_KEY,
+        ...sanitizeString(process.env.STRIPE_ACTIVE_PATIENT_LOOKUP_KEY || '', 500)
+          .split(',')
+          .map((item) => sanitizeString(item, 160)),
+        ...sanitizeString(process.env.STRIPE_ACTIVE_PATIENT_LOOKUP_KEYS || '', 1000)
+          .split(',')
+          .map((item) => sanitizeString(item, 160))
+      ].filter(Boolean)
+    )
+  );
+}
+
 function resolveBillingPlanPriceIds(): string[] {
   return Array.from(
     new Set(
@@ -359,6 +377,16 @@ function resolveActivePatientEnterpriseThreshold(): number {
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 50;
 }
 
+function resolveBillingPlanSnapshotTtlMs(): number {
+  const minutes = Number(
+    process.env.BILLING_PLAN_SNAPSHOT_TTL_MINUTES ||
+    process.env.STRIPE_PLAN_CACHE_TTL_MINUTES ||
+    10
+  );
+  const safeMinutes = Number.isFinite(minutes) && minutes > 0 ? minutes : 10;
+  return Math.floor(safeMinutes * 60 * 1000);
+}
+
 function normalizeActivePatientQuantity(value: unknown): number | null {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed < 1) return null;
@@ -376,6 +404,303 @@ function withEnterpriseThreshold<T extends { enterpriseThreshold?: number | null
 function isMissingStripeConfigError(error: any): boolean {
   const message = sanitizeString(error?.message || String(error || ''), 500).toLowerCase();
   return message.includes('stripe_secret_key') || message.includes('stripe secret key');
+}
+
+const BILLING_PLAN_SNAPSHOT_COLUMNS = [
+  'id',
+  'stripe_product_id',
+  'stripe_price_id',
+  'lookup_key',
+  'plan_key',
+  'name',
+  'description',
+  'currency',
+  'interval',
+  'interval_count',
+  'billing_scheme',
+  'tiers_mode',
+  'usage_type',
+  'active',
+  'self_service',
+  'enterprise_threshold',
+  'tiers_json',
+  'metadata_json',
+  'last_synced_at',
+  'stripe_created_at',
+  'stripe_updated_at',
+  'created_at',
+  'updated_at'
+].join(', ');
+
+type BillingPlanSnapshotRow = {
+  id?: string | null;
+  stripe_product_id: string;
+  stripe_price_id: string;
+  lookup_key?: string | null;
+  plan_key?: string | null;
+  name: string;
+  description?: string | null;
+  currency: string;
+  interval?: string | null;
+  interval_count?: number | null;
+  billing_scheme?: string | null;
+  tiers_mode?: string | null;
+  usage_type?: string | null;
+  active?: boolean | null;
+  self_service?: boolean | null;
+  enterprise_threshold?: number | null;
+  tiers_json?: unknown;
+  metadata_json?: unknown;
+  last_synced_at?: string | null;
+  stripe_created_at?: string | null;
+  stripe_updated_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+function billingMoneyLabel(amountCents: number | null | undefined, currency = 'brl'): string | null {
+  if (typeof amountCents !== 'number' || !Number.isFinite(amountCents)) return null;
+  return new Intl.NumberFormat('pt-BR', {
+    style: 'currency',
+    currency: sanitizeString(currency, 10).toUpperCase() || 'BRL'
+  }).format(amountCents / 100);
+}
+
+function billingTierDisplayLabel(tier: SafeStripeBillingTier): string {
+  const from = Math.max(1, Number(tier.from || 1));
+  const to = tier.to === null || tier.upTo === null ? null : Number(tier.to || tier.upTo || 0);
+  return to ? `${from} a ${to} pacientes ativos` : `Acima de ${Math.max(0, from - 1)} pacientes ativos`;
+}
+
+function enrichBillingPlanForUi(plan: SafeStripeBillingPlan): SafeStripeBillingPlan {
+  const tiers = Array.isArray(plan.tiers)
+    ? plan.tiers.map((tier) => {
+        const flat = typeof tier.flatAmountCents === 'number' ? tier.flatAmountCents : null;
+        const unit = typeof tier.unitAmountCents === 'number' ? tier.unitAmountCents : null;
+        const primaryAmount = flat !== null ? flat : unit;
+        return {
+          ...tier,
+          displayLabel: billingTierDisplayLabel(tier),
+          displayPrice: flat !== null
+            ? `${billingMoneyLabel(flat, plan.currency)}/mês`
+            : unit !== null
+              ? `${billingMoneyLabel(unit, plan.currency)} por paciente/mês`
+              : null
+        };
+      })
+    : [];
+  return { ...plan, tiers };
+}
+
+function billingPlanToSnapshotPayload(plan: SafeStripeBillingPlan, nowIso: string): BillingPlanSnapshotRow {
+  return {
+    stripe_product_id: sanitizeString(plan.productId, 120),
+    stripe_price_id: sanitizeString(plan.priceId, 120),
+    lookup_key: sanitizeString(plan.lookupKey || '', 160) || null,
+    plan_key: sanitizeString(plan.planKey || '', 160) || null,
+    name: sanitizeString(plan.name, 180) || 'Plano Verto',
+    description: sanitizeString(plan.description || '', 500) || null,
+    currency: sanitizeString(plan.currency, 20).toLowerCase() || 'brl',
+    interval: sanitizeString(plan.interval || '', 40) || null,
+    interval_count: Number.isFinite(Number(plan.intervalCount)) ? Number(plan.intervalCount) : null,
+    billing_scheme: sanitizeString(plan.billingScheme || '', 40) || null,
+    tiers_mode: sanitizeString(plan.tiersMode || '', 40) || null,
+    usage_type: sanitizeString(plan.usageType || '', 40) || null,
+    active: plan.active === true,
+    self_service: plan.selfService !== false && !plan.isCustom,
+    enterprise_threshold: Number.isFinite(Number(plan.enterpriseThreshold || 0)) && Number(plan.enterpriseThreshold) > 0
+      ? Math.floor(Number(plan.enterpriseThreshold))
+      : null,
+    tiers_json: Array.isArray(plan.tiers) ? plan.tiers : [],
+    metadata_json: plan.metadata || {},
+    last_synced_at: nowIso,
+    stripe_created_at: sanitizeString(plan.stripeCreatedAt || '', 80) || null,
+    stripe_updated_at: sanitizeString(plan.stripeUpdatedAt || '', 80) || null,
+    updated_at: nowIso
+  };
+}
+
+function billingPlanFromSnapshot(row: BillingPlanSnapshotRow, fallbackEnterpriseThreshold: number): SafeStripeBillingPlan {
+  const metadata = row.metadata_json && typeof row.metadata_json === 'object'
+    ? row.metadata_json as Record<string, string>
+    : {};
+  const tiers = Array.isArray(row.tiers_json) ? row.tiers_json as SafeStripeBillingTier[] : [];
+  const maxTier = tiers
+    .map((tier) => (tier.to === null || tier.upTo === null ? null : Number(tier.to || tier.upTo || 0)))
+    .filter((value): value is number => Number.isFinite(value) && value > 0)
+    .reduce<number | null>((max, value) => (max === null || value > max ? value : max), null);
+  const enterpriseThreshold =
+    Number.isFinite(Number(row.enterprise_threshold || 0)) && Number(row.enterprise_threshold) > 0
+      ? Math.floor(Number(row.enterprise_threshold))
+      : fallbackEnterpriseThreshold;
+  const billingScheme = sanitizeString(row.billing_scheme || '', 40) || 'per_unit';
+  const selfService = row.self_service !== false;
+  const isCustom = selfService === false;
+  return enrichBillingPlanForUi({
+    productId: sanitizeString(row.stripe_product_id, 120),
+    priceId: sanitizeString(row.stripe_price_id, 120),
+    lookupKey: sanitizeString(row.lookup_key || '', 160) || null,
+    planKey: sanitizeString(row.plan_key || '', 160) || null,
+    name: sanitizeString(row.name, 180) || 'Plano Verto',
+    description: sanitizeString(row.description || '', 500) || null,
+    currency: sanitizeString(row.currency, 20).toLowerCase() || 'brl',
+    interval: sanitizeString(row.interval || '', 40) || null,
+    intervalCount: Number.isFinite(Number(row.interval_count)) ? Number(row.interval_count) : null,
+    billingScheme,
+    tiersMode: sanitizeString(row.tiers_mode || '', 40) || null,
+    usageType: sanitizeString(row.usage_type || '', 40) || null,
+    unitAmountCents: null,
+    unitAmountDecimal: null,
+    tiers,
+    active: row.active !== false,
+    metadata,
+    patientLimit: maxTier,
+    minPatients: tiers[0]?.from || null,
+    maxPatients: maxTier,
+    pricingModel: tiers.length > 0 ? 'tiered_active_patients' : 'per_patient',
+    usesActivePatientQuantity: billingScheme === 'tiered' || selfService,
+    isCustom,
+    enterpriseThreshold,
+    selfService,
+    stripeCreatedAt: sanitizeString(row.stripe_created_at || '', 80) || null,
+    stripeUpdatedAt: sanitizeString(row.stripe_updated_at || '', 80) || null
+  });
+}
+
+async function readActiveBillingPlanSnapshots(): Promise<BillingPlanSnapshotRow[]> {
+  const { data, error } = await supabase
+    .from('billing_plan_snapshots')
+    .select(BILLING_PLAN_SNAPSHOT_COLUMNS)
+    .eq('active', true)
+    .order('last_synced_at', { ascending: false });
+  if (error) throw error;
+  return Array.isArray(data) ? data as BillingPlanSnapshotRow[] : [];
+}
+
+function snapshotsAreFresh(rows: BillingPlanSnapshotRow[]): boolean {
+  if (!rows.length) return false;
+  const ttlMs = resolveBillingPlanSnapshotTtlMs();
+  const newest = rows
+    .map((row) => new Date(String(row.last_synced_at || 0)).getTime())
+    .filter((time) => Number.isFinite(time))
+    .sort((a, b) => b - a)[0] || 0;
+  return newest > 0 && Date.now() - newest <= ttlMs;
+}
+
+type StripePlanSyncResult = {
+  pricesFound: number;
+  activePrices: number;
+  matchedVertoPrices: number;
+  snapshotsCreated: number;
+  snapshotsUpdated: number;
+  snapshotsDeactivated: number;
+  currentActivePriceId: string | null;
+  tierCount: number;
+  plans: SafeStripeBillingPlan[];
+};
+
+async function syncStripeBillingPlanSnapshots(reason = 'manual'): Promise<StripePlanSyncResult> {
+  const stripe = getStripe();
+  const enterpriseThreshold = resolveActivePatientEnterpriseThreshold();
+  const activePatientPriceId = resolveActivePatientPriceId();
+  const plans = (await listStripeActivePatientBillingPlans({
+    stripe,
+    activePatientPriceId,
+    allowedPriceIds: resolveBillingPlanPriceIds()
+  })).map((plan) => enrichBillingPlanForUi(withEnterpriseThreshold(plan, enterpriseThreshold)));
+  const nowIso = new Date().toISOString();
+
+  const { data: existingRows, error: existingError } = await supabase
+    .from('billing_plan_snapshots')
+    .select('id, stripe_price_id, active')
+    .order('created_at', { ascending: true });
+  if (existingError) throw existingError;
+  const existingByPriceId = new Map<string, any>(
+    (Array.isArray(existingRows) ? existingRows : []).map((row: any) => [sanitizeString(row.stripe_price_id, 120), row])
+  );
+
+  let snapshotsCreated = 0;
+  let snapshotsUpdated = 0;
+  const activePriceIds = new Set<string>();
+  for (const plan of plans) {
+    const payload = billingPlanToSnapshotPayload(plan, nowIso);
+    activePriceIds.add(payload.stripe_price_id);
+    const existed = existingByPriceId.has(payload.stripe_price_id);
+    const { error: upsertError } = await supabase
+      .from('billing_plan_snapshots')
+      .upsert(payload, { onConflict: 'stripe_price_id' });
+    if (upsertError) throw upsertError;
+    if (existed) snapshotsUpdated += 1;
+    else snapshotsCreated += 1;
+  }
+
+  let snapshotsDeactivated = 0;
+  for (const row of Array.isArray(existingRows) ? existingRows : []) {
+    const priceId = sanitizeString((row as any).stripe_price_id, 120);
+    if (!priceId || activePriceIds.has(priceId) || (row as any).active === false) continue;
+    const { error: deactivateError } = await supabase
+      .from('billing_plan_snapshots')
+      .update({ active: false, last_synced_at: nowIso, updated_at: nowIso })
+      .eq('stripe_price_id', priceId);
+    if (deactivateError) throw deactivateError;
+    snapshotsDeactivated += 1;
+  }
+
+  const currentActivePriceId = activePatientPriceId || plans.find((plan) => plan.selfService && !plan.isCustom)?.priceId || null;
+  const result = {
+    pricesFound: plans.length,
+    activePrices: plans.filter((plan) => plan.active).length,
+    matchedVertoPrices: plans.length,
+    snapshotsCreated,
+    snapshotsUpdated,
+    snapshotsDeactivated,
+    currentActivePriceId,
+    tierCount: plans.reduce((total, plan) => total + (plan.tiers?.length || 0), 0),
+    plans
+  };
+  console.info('[Stripe Plan Sync] diagnostics:', {
+    reason,
+    ...result,
+    plans: undefined,
+    lookupKeys: resolveActivePatientPlanLookupKeys()
+  });
+  return result;
+}
+
+async function loadBillingPlansFromSnapshots(params: { allowSync?: boolean; forceSync?: boolean } = {}): Promise<{
+  plans: SafeStripeBillingPlan[];
+  source: 'snapshot' | 'stripe_sync' | 'stale_snapshot';
+  sync?: StripePlanSyncResult | null;
+}> {
+  const enterpriseThreshold = resolveActivePatientEnterpriseThreshold();
+  let snapshots = await readActiveBillingPlanSnapshots();
+  let source: 'snapshot' | 'stripe_sync' | 'stale_snapshot' = snapshotsAreFresh(snapshots) ? 'snapshot' : 'stale_snapshot';
+  let sync: StripePlanSyncResult | null = null;
+
+  if ((params.forceSync || (!snapshots.length || !snapshotsAreFresh(snapshots))) && params.allowSync !== false) {
+    try {
+      sync = await syncStripeBillingPlanSnapshots(params.forceSync ? 'force' : 'cache_miss_or_stale');
+      snapshots = await readActiveBillingPlanSnapshots();
+      source = 'stripe_sync';
+    } catch (syncError: any) {
+      if (!snapshots.length) throw syncError;
+      console.warn('[Stripe Plan Sync] usando snapshot antigo como fallback:', {
+        message: sanitizeString(syncError?.message || String(syncError), 240)
+      });
+      source = 'stale_snapshot';
+    }
+  }
+
+  const plans = snapshots
+    .map((row) => billingPlanFromSnapshot(row, enterpriseThreshold))
+    .sort((a, b) => {
+      if (a.isCustom !== b.isCustom) return a.isCustom ? 1 : -1;
+      const aLimit = a.maxPatients ?? Number.MAX_SAFE_INTEGER;
+      const bLimit = b.maxPatients ?? Number.MAX_SAFE_INTEGER;
+      if (aLimit !== bLimit) return aLimit - bLimit;
+      return a.name.localeCompare(b.name, 'pt-BR');
+    });
+  return { plans, source, sync };
 }
 
 const ACTIVE_PATIENT_BILLING_MODEL = 'active_patients';
@@ -8199,12 +8524,24 @@ async function checkoutSessionUsesActivePatientPrice(
   session: Stripe.Checkout.Session,
 ): Promise<boolean> {
   const activePatientPriceId = resolveActivePatientPriceId();
-  if (!activePatientPriceId) return false;
+  const knownPriceIds = new Set<string>([activePatientPriceId].filter(Boolean));
+  try {
+    const { plans } = await loadBillingPlansFromSnapshots({ allowSync: true });
+    for (const plan of plans) {
+      const priceId = sanitizeString(plan.priceId, 120);
+      if (priceId) knownPriceIds.add(priceId);
+    }
+  } catch (error: any) {
+    console.warn('[Stripe] Falha ao carregar snapshots para validar Price ID ativo:', {
+      message: sanitizeString(error?.message || String(error), 200)
+    });
+  }
+  if (!knownPriceIds.size) return false;
   try {
     const lineItems = await stripe.checkout.sessions.listLineItems(session.id, { limit: 10 });
     for (const lineItem of lineItems.data || []) {
       const priceId = sanitizeString(typeof lineItem.price === 'string' ? lineItem.price : lineItem.price?.id, 160);
-      if (priceId === activePatientPriceId) return true;
+      if (knownPriceIds.has(priceId)) return true;
     }
   } catch (error: any) {
     console.warn('[Stripe] Falha ao validar Price ID ativo pelos line items da sessao:', {
@@ -10083,16 +10420,20 @@ async function startServer() {
                   activePatientPriceId
                     ? subscription.items.data.find((item) => sanitizeString((item.price as any)?.id, 120) === activePatientPriceId)
                     : subscription.items.data[0];
+                const subscriptionItemPriceId = sanitizeString((subscriptionItem?.price as any)?.id, 120) || activePatientPriceId;
                 await persistStripeSubscriptionReference({
                   subscriptionId,
                   subscriptionItemId: sanitizeString(subscriptionItem?.id, 120),
                   customerId: stripeCustomerId,
-                  priceId: activePatientPriceId,
+                  priceId: subscriptionItemPriceId,
                   email: customerEmail,
                   userId,
                   clinicId,
                   status: subscription.status
                 });
+                if (clinicId && subscriptionItemPriceId && !activePatientPriceId) {
+                  queueActivePatientSync(clinicId, 'checkout.session.completed');
+                }
               }
             } catch (metadataError: any) {
               console.error('[Stripe Webhook] Falha ao atualizar metadata da subscription:', {
@@ -10277,11 +10618,12 @@ async function startServer() {
               activePatientPriceId
                 ? subscription.items.data.find((item) => sanitizeString((item.price as any)?.id, 120) === activePatientPriceId)
                 : subscription.items.data[0];
+            const subscriptionItemPriceId = sanitizeString((subscriptionItem?.price as any)?.id, 120) || activePatientPriceId;
             await persistStripeSubscriptionReference({
               subscriptionId,
               subscriptionItemId: sanitizeString(subscriptionItem?.id, 120),
               customerId: sanitizeString(String((invoice as any).customer || subscription.customer || ''), 200),
-              priceId: activePatientPriceId,
+              priceId: subscriptionItemPriceId,
               email: customerEmail,
               userId,
               clinicId,
@@ -10309,11 +10651,12 @@ async function startServer() {
             activePatientPriceId
               ? subscription.items.data.find((item) => sanitizeString((item.price as any)?.id, 120) === activePatientPriceId)
               : subscription.items.data[0];
+          const subscriptionItemPriceId = sanitizeString((subscriptionItem?.price as any)?.id, 120) || activePatientPriceId;
           await persistStripeSubscriptionReference({
             subscriptionId: subscription.id,
             subscriptionItemId: sanitizeString(subscriptionItem?.id, 120),
             customerId: sanitizeString(String(subscription.customer || ''), 200),
-            priceId: activePatientPriceId,
+            priceId: subscriptionItemPriceId,
             userId,
             clinicId,
             status: subscription.status
@@ -10323,6 +10666,15 @@ async function startServer() {
             userId,
             status: mappedStatus
           });
+          break;
+        }
+        case 'product.created':
+        case 'product.updated':
+        case 'product.deleted':
+        case 'price.created':
+        case 'price.updated':
+        case 'price.deleted': {
+          await syncStripeBillingPlanSnapshots(`webhook:${event.type}`);
           break;
         }
         default:
@@ -47503,9 +47855,18 @@ async function startServer() {
         return res.status(400).json({ error: 'Dados obrigatorios ausentes para checkout do cadastro profissional.' });
       }
 
-      const activePatientPriceId = resolveActivePatientPriceId();
-      if (!activePatientPriceId) {
-        return res.status(503).json({ error: 'Cobranca por paciente ativo ainda nao esta configurada.' });
+      const { plans: signupBillingPlans } = await loadBillingPlansFromSnapshots({ allowSync: true, forceSync: true });
+      const activePatientSignupPlan =
+        signupBillingPlans.find((plan) => plan.priceId === resolveActivePatientPriceId() && plan.selfService && !plan.isCustom) ||
+        signupBillingPlans.find((plan) => plan.selfService && !plan.isCustom) ||
+        null;
+      if (!activePatientSignupPlan?.priceId) {
+        return res.status(503).json({ error: 'Cobrança por paciente ativo ainda não está configurada.' });
+      }
+      if (!activePatientSignupPlan.interval || activePatientSignupPlan.usageType === 'metered') {
+        return res.status(503).json({
+          error: 'O preço ativo no Stripe precisa ser recorrente/licensed para checkout self-service.'
+        });
       }
 
       let userId: string | null = null;
@@ -47592,7 +47953,7 @@ async function startServer() {
       const origin = req.headers.origin || req.protocol + '://' + req.get('host');
       const session = await stripe.checkout.sessions.create({
         payment_method_types: ['card'],
-        line_items: [{ price: activePatientPriceId, quantity: 1 }],
+        line_items: [{ price: activePatientSignupPlan.priceId, quantity: 1 }],
         mode: 'subscription',
         success_url: origin + '/?payment=success&mode=professional-signup&signup=check-email&checkout_session_id={CHECKOUT_SESSION_ID}',
         cancel_url: origin + '/?payment=cancel&mode=professional-signup&lead_ref=' + encodeURIComponent(userId) + '&checkout_session_id={CHECKOUT_SESSION_ID}',
@@ -47716,6 +48077,35 @@ async function startServer() {
     }
   });
 
+  app.post('/api/admin/billing/sync-stripe-plans', checkAuth, requireRoles('owner', 'admin'), async (_req: any, res) => {
+    try {
+      const sync = await syncStripeBillingPlanSnapshots('admin_endpoint');
+      return res.json({
+        success: true,
+        data: {
+          pricesFound: sync.pricesFound,
+          activePrices: sync.activePrices,
+          matchedVertoPrices: sync.matchedVertoPrices,
+          snapshotsCreated: sync.snapshotsCreated,
+          snapshotsUpdated: sync.snapshotsUpdated,
+          snapshotsDeactivated: sync.snapshotsDeactivated,
+          currentActivePriceId: sync.currentActivePriceId,
+          tierCount: sync.tierCount
+        }
+      });
+    } catch (error: any) {
+      console.error('[Stripe Plan Sync] endpoint failed:', {
+        message: sanitizeString(error?.message || String(error), 240),
+        code: sanitizeString(error?.code, 80) || (isMissingStripeConfigError(error) ? 'MISSING_STRIPE_CONFIG' : null)
+      });
+      return res.status(isMissingStripeConfigError(error) ? 503 : 502).json({
+        success: false,
+        code: isMissingStripeConfigError(error) ? 'MISSING_STRIPE_CONFIG' : 'STRIPE_PLAN_SYNC_FAILED',
+        error: 'Não foi possível sincronizar os planos Stripe agora.'
+      });
+    }
+  });
+
   app.get('/api/billing/plans', checkAuth, async (req: any, res) => {
     try {
       const sessionUser = req.session?.user || {};
@@ -47746,15 +48136,13 @@ async function startServer() {
         });
       }
 
-      const activePatientPriceId = resolveActivePatientPriceId();
       const enterpriseThreshold = resolveActivePatientEnterpriseThreshold();
-      const plans = (await listStripeActivePatientBillingPlans({
-        stripe: getStripe(),
-        activePatientPriceId,
-        allowedPriceIds: resolveBillingPlanPriceIds()
-      })).map((plan) => withEnterpriseThreshold(plan, enterpriseThreshold));
+      const { plans, source, sync } = await loadBillingPlansFromSnapshots({ allowSync: true });
+      const activePatientPriceId = resolveActivePatientPriceId() || plans.find((plan) => plan.selfService && !plan.isCustom)?.priceId || '';
       console.info('[Billing Plans] diagnostics:', {
         stripeConfigured: hasStripeSecretConfigured(),
+        source,
+        cacheSyncTriggered: Boolean(sync),
         pricesFound: plans.length,
         activeRecurringPrices: plans.filter((plan) => Boolean(plan.interval)).length,
         tieredPricesFound: plans.filter((plan) => plan.billingScheme === 'tiered').length,
@@ -47819,14 +48207,8 @@ async function startServer() {
       }
       estimateDiagnostics = { ...estimateDiagnostics, activePatients };
 
-      const stripe = getStripe();
       const activePatientPriceId = resolveActivePatientPriceId();
-      const enterpriseThreshold = resolveActivePatientEnterpriseThreshold();
-      const billingPlans = (await listStripeActivePatientBillingPlans({
-        stripe,
-        activePatientPriceId,
-        allowedPriceIds: resolveBillingPlanPriceIds()
-      })).map((plan) => withEnterpriseThreshold(plan, enterpriseThreshold));
+      const { plans: billingPlans, source } = await loadBillingPlansFromSnapshots({ allowSync: true });
       const requestedPriceId = sanitizeString(req.body?.selectedPriceId || req.body?.priceId, 120);
       const requestedPlan = requestedPriceId ? billingPlans.find((plan) => plan.priceId === requestedPriceId) || null : null;
       if (requestedPriceId && !requestedPlan) {
@@ -47854,6 +48236,7 @@ async function startServer() {
       });
       console.info('[Billing Estimate] diagnostics:', {
         ...estimateDiagnostics,
+        source,
         tierCount: selectedPlan.tiers?.length || 0,
         estimatedAmountCents: estimate.estimatedAmountCents,
         errorCode: null
@@ -47966,7 +48349,7 @@ async function startServer() {
       }
 
       const activePatientPriceId = isPatientCheckout ? '' : resolveActivePatientPriceId();
-      let selectedClinicPlan: Awaited<ReturnType<typeof listStripeActivePatientBillingPlans>>[number] | null = null;
+      let selectedClinicPlan: SafeStripeBillingPlan | null = null;
       let activePatients = 1;
 
       if (!isPatientCheckout) {
@@ -47989,11 +48372,7 @@ async function startServer() {
           ...checkoutDiagnostics,
           enterpriseThreshold
         };
-        const billingPlans = (await listStripeActivePatientBillingPlans({
-          stripe,
-          activePatientPriceId,
-          allowedPriceIds: resolveBillingPlanPriceIds()
-        })).map((plan) => withEnterpriseThreshold(plan, enterpriseThreshold));
+        const { plans: billingPlans, source } = await loadBillingPlansFromSnapshots({ allowSync: true, forceSync: true });
         const requestedPriceId = sanitizeString(req.body?.selectedPriceId || req.body?.priceId, 120);
         const requestedPlan = requestedPriceId ? billingPlans.find((plan) => plan.priceId === requestedPriceId) || null : null;
         if (requestedPriceId && !requestedPlan) {
@@ -48013,6 +48392,7 @@ async function startServer() {
           priceFound: Boolean(selectedClinicPlan),
           selectedPriceIdMatchesActivePrice: Boolean(requestedPriceId && requestedPlan),
           priceRecurring: Boolean(selectedClinicPlan?.interval),
+          planSource: source,
           selectedPriceIdPresent: Boolean(requestedPriceId || selectedClinicPlan?.priceId)
         };
 
@@ -48024,11 +48404,18 @@ async function startServer() {
           );
         }
 
-        if (!selectedClinicPlan.interval || selectedClinicPlan.usageType === 'metered') {
+        if (!selectedClinicPlan.interval) {
           return rejectCheckout(
             400,
             'PRICE_NOT_AVAILABLE',
             'O plano selecionado não está disponível para checkout self-service.'
+          );
+        }
+        if (selectedClinicPlan.usageType === 'metered') {
+          return rejectCheckout(
+            400,
+            'PRICE_USAGE_TYPE_NOT_SUPPORTED_FOR_CHECKOUT',
+            'Este preço está configurado como uso medido no Stripe. Configure um Price recorrente/licensed para checkout self-service.'
           );
         }
 
@@ -48041,8 +48428,15 @@ async function startServer() {
           return rejectCheckout(
             422,
             'ENTERPRISE_REQUIRED',
-            'Para clínicas com mais de 50 pacientes ativos, solicite uma proposta personalizada.',
+            `Para clínicas com mais de ${estimate.enterpriseThreshold || enterpriseThreshold} pacientes ativos, solicite uma proposta personalizada.`,
             estimate
+          );
+        }
+        if (!estimate.matchedTier && selectedClinicPlan.tiers?.length) {
+          return rejectCheckout(
+            400,
+            'INVALID_ACTIVE_PATIENTS',
+            'A quantidade selecionada não pertence a uma faixa self-service ativa.'
           );
         }
         if (selectedClinicPlan.isCustom) {

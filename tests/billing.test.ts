@@ -18,6 +18,7 @@ const coordinatorCode = read('src/components/CoordinatorDashboard.tsx');
 const therapistCode = read('src/components/TherapistDashboard.tsx');
 const receptionistCode = read('src/components/ReceptionistDashboard.tsx');
 const migrationCode = read('supabase/migrations/20260610120000_active_patient_billing_consolidation.sql');
+const snapshotMigrationCode = read('supabase/migrations/20260616120000_billing_plan_snapshots.sql');
 
 const tests: Array<{ name: string; fn: () => void }> = [];
 const test = (name: string, fn: () => void) => tests.push({ name, fn });
@@ -41,10 +42,12 @@ test('package expoe script test:billing', () => {
 
 test('env usa apenas o Price modular por paciente ativo no fluxo profissional', () => {
   assert.match(envExample, /STRIPE_ACTIVE_PATIENT_PRICE_ID=/);
+  assert.match(envExample, /STRIPE_ACTIVE_PATIENT_LOOKUP_KEY=verto_active_patients_monthly/);
   assert.match(envExample, /STRIPE_BILLING_PLAN_PRICE_IDS=/);
   assert.match(envExample, /SALES_CONTACT_URL=/);
   assert.match(envExample, /STRIPE_ACTIVE_PATIENT_BILLING_MODE=quantity/);
   assert.match(envExample, /ACTIVE_PATIENT_ENTERPRISE_THRESHOLD=50/);
+  assert.match(envExample, /BILLING_PLAN_SNAPSHOT_TTL_MINUTES=10/);
   doesNotContain(envExample, [
     'STRIPE_PRICE_ESSENCIAL',
     'STRIPE_PRICE_CRESCIMENTO',
@@ -86,8 +89,9 @@ test('sync Stripe atualiza quantity do subscription item e persiste referencias 
 
 test('checkout de cadastro profissional nao aceita plano/preco vindo do front', () => {
   const route = sliceFrom(serverCode, "app.post('/api/stripe/create-checkout-registration'", 5200);
-  assert.match(route, /const activePatientPriceId = resolveActivePatientPriceId\(\)/);
-  assert.match(route, /line_items: \[\{ price: activePatientPriceId, quantity: 1 \}\]/);
+  assert.match(route, /loadBillingPlansFromSnapshots\(\{ allowSync: true[^}]*\}\)/);
+  assert.match(route, /activePatientSignupPlan\.priceId/);
+  assert.match(route, /line_items: \[\{ price: activePatientSignupPlan\.priceId, quantity: 1 \}\]/);
   assert.match(route, /billingModel: ACTIVE_PATIENT_BILLING_MODEL/);
   assert.doesNotMatch(route, /planPrices|requestedPlan|price_data|planName/);
 });
@@ -96,10 +100,11 @@ test('checkout autenticado preserva paciente separado e usa active patient price
   const handler = sliceFrom(serverCode, 'const handleCreateClinicCheckout', 12000);
   assert.match(handler, /const isPatientCheckout/);
   assert.match(handler, /const activePatientPriceId = isPatientCheckout \? '' : resolveActivePatientPriceId\(\)/);
-  assert.match(handler, /listStripeActivePatientBillingPlans/);
+  assert.match(handler, /loadBillingPlansFromSnapshots\(\{ allowSync: true[^}]*\}\)/);
   assert.match(handler, /selectedPriceId/);
   assert.match(handler, /requestedPlan/);
   assert.match(handler, /PRICE_NOT_AVAILABLE/);
+  assert.match(handler, /PRICE_USAGE_TYPE_NOT_SUPPORTED_FOR_CHECKOUT/);
   assert.match(handler, /INVALID_ACTIVE_PATIENTS/);
   assert.match(handler, /ENTERPRISE_REQUIRED/);
   assert.match(handler, /MISSING_ORGANIZATION/);
@@ -121,8 +126,10 @@ test('checkout autenticado preserva paciente separado e usa active patient price
 test('endpoint de planos le Stripe e retorna apenas dados seguros para onboarding', () => {
   const route = sliceFrom(serverCode, "app.get('/api/billing/plans'", 4600);
   assert.match(route, /checkAuth/);
-  assert.match(route, /listStripeActivePatientBillingPlans/);
-  assert.match(route, /resolveBillingPlanPriceIds/);
+  assert.match(route, /loadBillingPlansFromSnapshots\(\{ allowSync: true \}\)/);
+  assert.match(route, /source/);
+  assert.match(serverCode, /syncStripeBillingPlanSnapshots/);
+  assert.match(serverCode, /app\.post\('\/api\/admin\/billing\/sync-stripe-plans'/);
   assert.match(route, /enterpriseThreshold/);
   assert.match(route, /salesContactUrl/);
   assert.match(route, /firstPlanTierCount/);
@@ -132,6 +139,10 @@ test('endpoint de planos le Stripe e retorna apenas dados seguros para onboardin
 });
 
 test('parser Stripe expande tiers e transforma faixas up_to em from/to', () => {
+  assert.match(stripeServiceCode, /ACTIVE_PATIENT_BILLING_LOOKUP_KEY/);
+  assert.match(stripeServiceCode, /lookup_key/);
+  assert.match(stripeServiceCode, /vertoPlanKey/);
+  assert.match(stripeServiceCode, /enterpriseRequiredAfter/);
   assert.match(stripeServiceCode, /expand:\s*\['data\.product', 'data\.tiers'\]/);
   assert.match(stripeServiceCode, /prices\.retrieve\(priceId, \{ expand: \['product', 'tiers'\] \}\)/);
   assert.match(stripeServiceCode, /prices\.retrieve\(resolvedPrice\.id, \{ expand: \['product', 'tiers'\] \}\)/);
@@ -143,6 +154,7 @@ test('parser Stripe expande tiers e transforma faixas up_to em from/to', () => {
 test('endpoint de estimativa calcula faixa server-side e nao abre checkout enterprise', () => {
   const estimateRoute = sliceFrom(serverCode, "app.post('/api/billing/estimate'", 4200);
   assert.match(estimateRoute, /estimateStripeActivePatientPlan/);
+  assert.match(estimateRoute, /loadBillingPlansFromSnapshots\(\{ allowSync: true \}\)/);
   assert.match(estimateRoute, /PRICE_NOT_AVAILABLE/);
   assert.match(estimateRoute, /INVALID_ACTIVE_PATIENTS/);
   assert.match(estimateRoute, /enterpriseThreshold/);
@@ -160,12 +172,16 @@ test('webhook e idempotente, valida price conhecido e salva subscription item', 
   assert.match(serverCode, /\.from\('stripe_webhook_events'\)[\s\S]*?\.insert\(/);
   assert.match(serverCode, /duplicate/i);
   assert.match(serverCode, /checkoutSessionUsesActivePatientPrice/);
+  assert.match(serverCode, /loadBillingPlansFromSnapshots\(\{ allowSync: true \}\)/);
   assert.match(serverCode, /checkout\.session\.completed/);
   assert.match(serverCode, /customer\.subscription\.created/);
+  assert.match(serverCode, /product\.updated/);
+  assert.match(serverCode, /price\.updated/);
+  assert.match(serverCode, /syncStripeBillingPlanSnapshots\(`webhook:\$\{event\.type\}`\)/);
   assert.match(serverCode, /invoice\.finalized/);
   assert.match(serverCode, /invoice\.payment_succeeded/);
   assert.match(serverCode, /subscriptionItemId/);
-  assert.match(serverCode, /priceId: activePatientPriceId/);
+  assert.match(serverCode, /subscriptionItemPriceId/);
   assert.doesNotMatch(serverCode, /provisionProfessionalFromDirectStripeCheckout|resolveProfessionalPlanPriceId|resolveProfessionalPlanByPriceId/);
 });
 
@@ -195,6 +211,20 @@ test('migration cria campos persistentes e auditoria de webhook/sync', () => {
   }
   assert.match(migrationCode, /alter table public\.stripe_webhook_events enable row level security/i);
   assert.match(migrationCode, /alter table public\.billing_sync_audit_logs enable row level security/i);
+  for (const field of [
+    'billing_plan_snapshots',
+    'stripe_product_id',
+    'stripe_price_id',
+    'lookup_key',
+    'plan_key',
+    'tiers_json',
+    'metadata_json',
+    'last_synced_at',
+    'enterprise_threshold'
+  ]) {
+    assert.match(snapshotMigrationCode, new RegExp(field));
+  }
+  assert.match(snapshotMigrationCode, /alter table public\.billing_plan_snapshots enable row level security/i);
 });
 
 test('landing e tela de assinatura nao exibem planos fixos antigos', () => {
@@ -235,6 +265,8 @@ test('landing e tela de assinatura nao exibem planos fixos antigos', () => {
   assert.match(subscriptionRequired, /activePatients: to/);
   assert.match(subscriptionRequired, /selectedPriceId: selectedBillingPriceId/);
   assert.match(subscriptionRequired, /priceId: selectedBillingPriceId/);
+  assert.match(subscriptionRequired, /tier\.displayLabel/);
+  assert.match(appCode, /PRICE_USAGE_TYPE_NOT_SUPPORTED_FOR_CHECKOUT/);
   assert.match(subscriptionRequired, /label === 'Pacientes ativos'/);
   assert.match(subscriptionRequired, /Selecione uma faixa para ver a estimativa/);
   assert.match(subscriptionRequired, /Estimativa para até/);
@@ -243,7 +275,7 @@ test('landing e tela de assinatura nao exibem planos fixos antigos', () => {
   assert.match(subscriptionRequired, /Plano personalizado/);
   assert.doesNotMatch(subscriptionRequired, /Valor no checkout|Valor calculado com segurança no checkout|Estimativa indisponível|Erro ao iniciar pagamento/);
   assert.doesNotMatch(subscriptionRequired, /alert\('Erro ao iniciar pagamento/);
-  assert.doesNotMatch(subscriptionRequired, /Quantos pacientes ativos sua clínica tem hoje\?|type="number"|Sua faixa|Faixa correspondente|productId/);
+  assert.doesNotMatch(subscriptionRequired, /Quantos pacientes ativos sua clínica tem hoje\?|type="number"|Sua faixa|Faixa correspondente|productId|DEFAULT_SELF_SERVICE_PATIENT_RANGES|linear-\$\{plan\.priceId\}/);
   assert.doesNotMatch(`${adminCode}\n${superAdminCode}`, /planName:\s*complimentaryPlan|complimentaryPlan/);
   assert.doesNotMatch(invitationCode, /planLimits|user\.planName|Seu plano/);
 });
