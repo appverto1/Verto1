@@ -66,22 +66,44 @@ test('rotas necessarias para completar onboarding e billing continuam permitidas
 
 test('onboarding pergunta tipo de operacao e nao exige TISS/TUSS para particular', () => {
   assert.match(onboardingCode, /clinicOperationType/);
-  assert.match(onboardingCode, /Como sua clinica atende hoje\?/);
+  assert.match(onboardingCode, /Como sua clínica atende hoje\?/);
   assert.match(onboardingCode, /Particular/);
-  assert.match(onboardingCode, /Convenio/);
-  assert.match(onboardingCode, /Clinicas particulares nao precisam configurar TISS\/TUSS no primeiro acesso/);
+  assert.match(onboardingCode, /Convênio/);
+  assert.match(onboardingCode, /Clínicas particulares não precisam configurar TISS\/TUSS no primeiro acesso/);
   const route = sliceFrom(serverCode, "app.post('/api/profile/:userId/complete-onboarding'", 8000);
   assert.match(route, /clinicOperationType/);
+});
+
+test('etapa de clinica usa dados minimos e nao mostra workspace generico ou credenciais', () => {
+  const stepTwo = sliceFrom(onboardingCode, '{step === 2 &&', 7000);
+  assert.match(stepTwo, /Configurações da clínica/);
+  assert.match(stepTwo, /Nome da clínica/);
+  assert.match(stepTwo, /Telefone ou WhatsApp da clínica/);
+  assert.match(stepTwo, /Continuar para o plano/);
+  assert.doesNotMatch(stepTwo, /Clínica do workspace/);
+  assert.doesNotMatch(stepTwo, /Conselho \(ex: CRP\)/);
+  assert.doesNotMatch(stepTwo, /Registro profissional/);
+  assert.doesNotMatch(stepTwo, /Assinatura para relatórios|Assinatura para relatorios/);
+  assert.doesNotMatch(stepTwo, /00\.000\.000\/0000-00/);
+});
+
+test('dados do usuario pedem apenas nome e telefone no bloqueio inicial', () => {
+  const validation = sliceFrom(onboardingCode, 'const canGoNextPersonal', 900);
+  assert.match(validation, /fullName\.trim\(\) && phone\.trim\(\)/);
+  assert.doesNotMatch(validation, /birthDate|gender|cep|logradouro|bairro|cidade/);
+
+  const route = sliceFrom(serverCode, "app.post('/api/profile/:userId/complete-onboarding'", 3000);
+  assert.doesNotMatch(route, /Terapeuta precisa informar conselho/);
 });
 
 test('tela de ativacao mostra plano modular e checkout seguro', () => {
   const subscriptionRequired = sliceFrom(appCode, 'const SubscriptionRequired =', 4200);
   assert.match(subscriptionRequired, /pacientes ativos/);
-  assert.match(subscriptionRequired, /Cadastrar cartao e ativar assinatura/);
-  assert.match(subscriptionRequired, /Ate 10 pacientes ativos/);
+  assert.match(subscriptionRequired, /Cadastrar cartão e ativar assinatura/);
+  assert.match(subscriptionRequired, /Até 10 pacientes ativos/);
   assert.match(subscriptionRequired, /Acima disso/);
   assert.match(subscriptionRequired, /Stripe/);
-  assert.doesNotMatch(subscriptionRequired, /numero completo do cartao[\s\S]*localStorage|card_number|cardNumber/);
+  assert.doesNotMatch(subscriptionRequired, /número completo do cartão[\s\S]*localStorage|card_number|cardNumber/);
 
   const checkout = sliceFrom(serverCode, "app.post('/api/stripe/create-checkout'", 2300);
   assert.match(checkout, /payment_method_types:\s*\['card'\]/);

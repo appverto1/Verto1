@@ -2212,21 +2212,21 @@ export default function App() {
         </div>
         <h2 className="text-3xl font-bold text-slate-900 mb-4 tracking-tight">Escolha o plano e ative sua conta</h2>
         <p className="text-slate-500 font-normal mb-8 leading-relaxed">
-          Para acessar o painel completo da Verto, e necessario ativar uma assinatura ou um trial autorizado.
+          Para acessar o painel completo da Verto, é necessário ativar uma assinatura ou um trial autorizado.
           {user.role === 'patient' ? (
-            <span> O valor para pacientes e de apenas <strong>R$ 4,90/mes</strong>.</span>
+            <span> O valor para pacientes é de apenas <strong>R$ 4,90/mês</strong>.</span>
           ) : (
-            <span> A cobranca da clinica e modular por paciente ativo, calculada pelo plano configurado no Stripe.</span>
+            <span> A cobrança da clínica é modular por paciente ativo, calculada pelo plano configurado no Stripe.</span>
           )}
         </p>
 
         {user.role !== 'patient' && (
           <div className="mb-8 grid gap-3 text-left">
             {[
-              ['Ate 10 pacientes ativos', 'Ideal para inicio ou consultorio pequeno.'],
-              ['Ate 30 pacientes ativos', 'Para clinicas em crescimento.'],
-              ['Ate 60 pacientes ativos', 'Para operacao multidisciplinar.'],
-              ['Ate 100 pacientes ativos', 'Para clinicas maiores.'],
+              ['Até 10 pacientes ativos', 'Ideal para início ou consultório pequeno.'],
+              ['Até 30 pacientes ativos', 'Para clínicas em crescimento.'],
+              ['Até 60 pacientes ativos', 'Para operação multidisciplinar.'],
+              ['Até 100 pacientes ativos', 'Para clínicas maiores.'],
               ['Acima disso', 'Plano personalizado com acompanhamento comercial.'],
             ].map(([title, description]) => (
               <div key={title} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
@@ -2235,7 +2235,7 @@ export default function App() {
               </div>
             ))}
             <p className="text-[11px] text-slate-400 leading-relaxed">
-              Os valores e faixas finais sao definidos pela configuracao server-side do Stripe. A Verto nao armazena o numero completo do cartao.
+              Os valores e faixas finais são definidos pela configuração server-side do Stripe. A Verto não armazena o número completo do cartão.
             </p>
           </div>
         )}
@@ -2254,7 +2254,7 @@ export default function App() {
                 onClick={() => handleCheckout()}
                 className="w-full bg-[#7a32fc] text-white py-4 rounded-2xl font-bold text-sm shadow-lg shadow-blue-500/20 hover:scale-[1.02] transition-all active:scale-[0.98]"
               >
-                Cadastrar cartao e ativar assinatura
+                Cadastrar cartão e ativar assinatura
               </button>
               <button
                 onClick={() => handleEnterpriseContact(user)}

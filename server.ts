@@ -23438,6 +23438,7 @@ async function startServer() {
       const complement = sanitizeString(req.body?.complement, 120);
       const bairro = sanitizeString(req.body?.bairro, 120);
       const cidade = sanitizeString(req.body?.cidade, 120);
+      const uf = sanitizeString(req.body?.uf || req.body?.state, 2).toUpperCase();
       const sessionDurationMinutes = asSafeNumber(req.body?.sessionDurationMinutes, 20, 240) || 50;
       const countryCode = sanitizeString(req.body?.countryCode, 8);
       const phone = sanitizePhone(req.body?.phone);
@@ -23466,11 +23467,7 @@ async function startServer() {
         return res.status(400).json({ error: 'Nome completo e obrigatorio.' });
       }
 
-      if (role === 'therapist' && (!council || !councilNumber)) {
-        return res.status(400).json({ error: 'Terapeuta precisa informar conselho e numero do conselho.' });
-      }
-
-      const address = { cep, logradouro, number, complement, bairro, cidade, cnpj: clinicCnpj || null };
+      const address = { cep, logradouro, number, complement, bairro, cidade, uf: uf || null, cnpj: clinicCnpj || null };
 
       const { error: userUpdateError } = await supabase
         .from('users')

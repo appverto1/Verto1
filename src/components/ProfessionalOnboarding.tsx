@@ -1,6 +1,6 @@
 ﻿import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Camera, CheckCircle2, UploadCloud, X } from 'lucide-react';
+import { Camera, X } from 'lucide-react';
 import { dataService } from '../services/dataService';
 import { SecureImage } from './SecureMedia';
 import { formatProfessionalRegistry } from '../utils/professionalRegistry';
@@ -41,6 +41,7 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
   const [complement, setComplement] = useState('');
   const [bairro, setBairro] = useState('');
   const [cidade, setCidade] = useState('');
+  const [uf, setUf] = useState('');
   const [sessionDurationMinutes, setSessionDurationMinutes] = useState('50');
   const [countryCode, setCountryCode] = useState('+55');
   const [phone, setPhone] = useState('');
@@ -86,6 +87,7 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
           setComplement(String(draft.complement || ''));
           setBairro(String(draft.bairro || ''));
           setCidade(String(draft.cidade || ''));
+          setUf(String(draft.uf || ''));
           setSessionDurationMinutes(String(draft.sessionDurationMinutes || '50'));
           setCountryCode(String(draft.countryCode || '+55'));
           setPhone(String(draft.phone || ''));
@@ -140,6 +142,7 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
         setComplement(address.complement || "");
         setBairro(address.bairro || "");
         setCidade(address.cidade || "");
+        setUf(address.uf || address.state || "");
       } catch (error) {
         console.warn("Não foi possível carregar perfil existente para pré-preenchimento.");
       }
@@ -158,6 +161,7 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
       complement,
       bairro,
       cidade,
+      uf,
       sessionDurationMinutes,
       countryCode,
       phone,
@@ -187,6 +191,7 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
     complement,
     bairro,
     cidade,
+    uf,
     sessionDurationMinutes,
     countryCode,
     phone,
@@ -202,9 +207,8 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
     signatureDataUrl
   ]);
 
-  const canGoNextPersonal = fullName.trim() && birthDate && gender && cep && logradouro && number && bairro && cidade && phone;
-  const councilRequired = isCoordinator || isTherapist;
-  const canGoNextClinic = !isCoordinator || (clinicName.trim() && clinicOperationType && specialty.trim() && (!councilRequired || (council.trim() && councilNumber.trim())));
+  const canGoNextPersonal = fullName.trim() && phone.trim();
+  const canGoNextClinic = !isCoordinator || (clinicName.trim() && clinicOperationType);
 
   const toBase64 = (file: File, cb: (v: string) => void) => {
     if (file.size > 900 * 1024) {
@@ -259,11 +263,7 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
 
   const finish = async () => {
     if (!canGoNextPersonal) {
-      alert('Preencha os dados cadastrais obrigatorios.');
-      return;
-    }
-    if (councilRequired && (!council || !councilNumber)) {
-      alert('Conselho e numero do conselho sao obrigatorios para este papel.');
+      alert('Preencha nome e telefone para continuar.');
       return;
     }
 
@@ -291,6 +291,7 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
           complement,
           bairro,
           cidade,
+          uf,
           sessionDurationMinutes: Number(sessionDurationMinutes),
           countryCode,
           phone,
@@ -338,7 +339,7 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
       localStorage.removeItem(onboardingDraftKey);
       localStorage.removeItem(onboardingStepKey);
     } catch (error: any) {
-      alert(error.message || 'Nao foi possivel concluir onboarding.');
+      alert(error.message || 'Não foi possível concluir onboarding.');
     } finally {
       setLoading(false);
     }
@@ -350,13 +351,13 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="bg-white w-full max-w-5xl rounded-3xl shadow-xl border border-slate-100">
         <div className="grid md:grid-cols-[320px_1fr] min-h-[680px]">
           <div className="bg-[#7a32fc] text-white p-8 rounded-l-3xl">
-            <h2 className="text-2xl font-bold">Boas-vindas a Verto</h2>
+            <h2 className="text-2xl font-bold">Boas-vindas à Verto</h2>
             <p className="text-sm text-violet-100 mt-3">Complete seus dados. O painel completo libera depois do plano e pagamento.</p>
             <div className="mt-8 space-y-3 text-xs">
-              <div className={step >= 1 ? 'text-white font-semibold' : 'text-violet-200'}>1. Cadastro Profissional</div>
-              <div className={step >= 2 ? 'text-white font-semibold' : 'text-violet-200'}>2. Configuracoes da Clinica</div>
+              <div className={step >= 1 ? 'text-white font-semibold' : 'text-violet-200'}>1. Dados do usuário</div>
+              <div className={step >= 2 ? 'text-white font-semibold' : 'text-violet-200'}>2. Configurações da clínica</div>
               <div className="text-violet-200">3. Plano por pacientes ativos</div>
-              <div className="text-violet-200">4. Cartao e assinatura</div>
+              <div className="text-violet-200">4. Cartão e assinatura</div>
             </div>
           </div>
 
@@ -369,7 +370,10 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
 
             {step === 1 && (
               <div className="space-y-5">
-                <h3 className="text-lg font-bold text-slate-900">Dados cadastrais</h3>
+                <h3 className="text-lg font-bold text-slate-900">Dados do usuário</h3>
+                <p className="text-sm text-slate-500">
+                  Informe apenas o essencial agora. Dados profissionais e fiscais podem ser completados nas configurações.
+                </p>
 
                 <div className="flex items-center gap-4">
                   <div className="w-20 h-20 rounded-2xl border border-dashed border-slate-300 overflow-hidden flex items-center justify-center bg-slate-50">
@@ -391,29 +395,7 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
 
                 <div className="grid md:grid-cols-2 gap-4">
                   <input value={fullName} onChange={(e) => setFullName(e.target.value)} placeholder="Nome completo" className="px-4 py-3 rounded-xl bg-slate-50" />
-                  <input type="date" value={birthDate} onChange={(e) => setBirthDate(e.target.value)} className="px-4 py-3 rounded-xl bg-slate-50" />
-                  <select value={gender} onChange={(e) => setGender(e.target.value)} className="px-4 py-3 rounded-xl bg-slate-50">
-                    <option value="">Genero</option>
-                    <option value="feminino">Feminino</option>
-                    <option value="masculino">Masculino</option>
-                    <option value="nao_binario">Nao binario</option>
-                    <option value="prefiro_nao_informar">Prefiro nao informar</option>
-                  </select>
-                  <input value={cep} onChange={(e) => setCep(e.target.value)} placeholder="CEP" className="px-4 py-3 rounded-xl bg-slate-50" />
-                  <input value={logradouro} onChange={(e) => setLogradouro(e.target.value)} placeholder="Logradouro" className="px-4 py-3 rounded-xl bg-slate-50" />
-                  <input value={number} onChange={(e) => setNumber(e.target.value)} placeholder="Numero" className="px-4 py-3 rounded-xl bg-slate-50" />
-                  <input value={complement} onChange={(e) => setComplement(e.target.value)} placeholder="Complemento" className="px-4 py-3 rounded-xl bg-slate-50" />
-                  <input value={bairro} onChange={(e) => setBairro(e.target.value)} placeholder="Bairro" className="px-4 py-3 rounded-xl bg-slate-50" />
-                  <input value={cidade} onChange={(e) => setCidade(e.target.value)} placeholder="Cidade" className="px-4 py-3 rounded-xl bg-slate-50" />
-                  <input value={countryCode} onChange={(e) => setCountryCode(e.target.value)} placeholder="Codigo do pais" className="px-4 py-3 rounded-xl bg-slate-50" />
-                  <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Telefone" className="px-4 py-3 rounded-xl bg-slate-50" />
-                  <select value={sessionDurationMinutes} onChange={(e) => setSessionDurationMinutes(e.target.value)} className="px-4 py-3 rounded-xl bg-slate-50">
-                    <option value="30">Sessao 30 min</option>
-                    <option value="45">Sessao 45 min</option>
-                    <option value="50">Sessao 50 min</option>
-                    <option value="60">Sessao 60 min</option>
-                    <option value="90">Sessao 90 min</option>
-                  </select>
+                  <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Telefone ou WhatsApp" className="px-4 py-3 rounded-xl bg-slate-50" />
                 </div>
 
                 <div className="pt-2 flex justify-end">
@@ -424,12 +406,15 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
 
             {step === 2 && (
               <div className="space-y-5">
-                <h3 className="text-lg font-bold text-slate-900">Configuracoes de clinica e credenciais</h3>
+                <h3 className="text-lg font-bold text-slate-900">Configurações da clínica</h3>
+                <p className="text-sm text-slate-500">
+                  Esses dados identificam a clínica no primeiro acesso. Credenciais profissionais, assinatura, CNPJ, CNES e TISS ficam para configurar depois.
+                </p>
                 {isTherapist && (
                   <div className="rounded-2xl border border-violet-200 bg-violet-50 px-4 py-3">
                     <p className="text-[11px] uppercase tracking-widest font-bold text-violet-500">Clínica vinculada</p>
                     <p className="text-base font-bold text-violet-900">
-                      {clinicName || user?.clinicSettings?.clinicName || user?.workspaceName || 'Clínica do workspace'}
+                      {clinicName || user?.clinicSettings?.clinicName || user?.workspaceName || 'Nome da clínica pendente'}
                     </p>
                   </div>
                 )}
@@ -437,22 +422,22 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
                 {isCoordinator && (
                   <div className="space-y-5">
                     <div className="grid md:grid-cols-2 gap-4">
-                      <input value={clinicName} onChange={(e) => setClinicName(e.target.value)} placeholder="Nome da clinica" className="px-4 py-3 rounded-xl bg-slate-50" />
-                      <input value={clinicCnpj} onChange={(e) => setClinicCnpj(formatCnpjInput(e.target.value))} placeholder="00.000.000/0000-00" className="px-4 py-3 rounded-xl bg-slate-50" />
-                      <input value={clinicPhone} onChange={(e) => setClinicPhone(e.target.value)} placeholder="Telefone comercial" className="px-4 py-3 rounded-xl bg-slate-50" />
-                      <input value={specialty} onChange={(e) => setSpecialty(e.target.value)} placeholder="Especialidade" className="px-4 py-3 rounded-xl bg-slate-50" />
+                      <input value={clinicName} onChange={(e) => setClinicName(e.target.value)} placeholder="Nome da clínica" className="px-4 py-3 rounded-xl bg-slate-50" />
+                      <input value={clinicPhone} onChange={(e) => setClinicPhone(e.target.value)} placeholder="Telefone ou WhatsApp da clínica" className="px-4 py-3 rounded-xl bg-slate-50" />
+                      <input value={cidade} onChange={(e) => setCidade(e.target.value)} placeholder="Cidade (opcional)" className="px-4 py-3 rounded-xl bg-slate-50" />
+                      <input value={uf} onChange={(e) => setUf(e.target.value.toUpperCase().slice(0, 2))} placeholder="UF (opcional)" className="px-4 py-3 rounded-xl bg-slate-50" />
                     </div>
 
                     <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                      <p className="text-sm font-bold text-slate-900">Como sua clinica atende hoje?</p>
+                      <p className="text-sm font-bold text-slate-900">Como sua clínica atende hoje?</p>
                       <p className="text-xs text-slate-500 mt-1">
-                        Esta escolha define os padroes iniciais. Clinicas particulares nao precisam configurar TISS/TUSS no primeiro acesso.
+                        Esta escolha define os padrões iniciais. Clínicas particulares não precisam configurar TISS/TUSS no primeiro acesso.
                       </p>
                       <div className="mt-4 grid md:grid-cols-3 gap-3">
                         {[
-                          { value: 'private', title: 'Particular', description: 'Atendimentos sem convenio por padrao.' },
-                          { value: 'insurance', title: 'Convenio', description: 'Usa pagadores e pre-faturamento.' },
-                          { value: 'mixed', title: 'Ambos', description: 'Particular e convenio na mesma clinica.' },
+                          { value: 'private', title: 'Particular', description: 'Atendimentos sem convênio por padrão.' },
+                          { value: 'insurance', title: 'Convênio', description: 'Usa pagadores e pré-faturamento.' },
+                          { value: 'mixed', title: 'Ambos', description: 'Particular e convênio na mesma clínica.' },
                         ].map((option) => {
                           const selected = clinicOperationType === option.value;
                           return (
@@ -472,73 +457,26 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
                       </div>
                     </div>
 
-                    <label className="md:col-span-2 block cursor-pointer">
-                      <span className="text-xs text-slate-500 block mb-2">Logotipo da clínica</span>
-                      <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 flex items-center gap-4 hover:border-[#7a32fc] transition-all">
-                        <div className="w-16 h-16 rounded-xl bg-white border border-slate-200 flex items-center justify-center overflow-hidden">
-                          {clinicLogoUrl ? <SecureImage src={clinicLogoUrl} alt="Logo" className="w-full h-full object-cover" /> : <UploadCloud size={20} className="text-slate-400" />}
-                        </div>
-                        <div>
-                          <p className="text-sm font-semibold text-slate-800">Enviar logo da clínica</p>
-                          <p className="text-xs text-slate-500">JPG ou PNG. Esta logo aparecerá em documentos e relatórios.</p>
-                        </div>
-                      </div>
-                      <input
-                        type="file"
-                        className="hidden"
-                        accept="image/*"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file) toBase64(file, setClinicLogoUrl);
-                        }}
-                      />
-                    </label>
+                    <div className="rounded-2xl border border-violet-100 bg-violet-50 px-4 py-3">
+                      <p className="text-sm font-semibold text-violet-900">Plano e pagamento vêm a seguir.</p>
+                      <p className="text-xs text-violet-700 mt-1">
+                        Depois de concluir esses dados mínimos, escolha o plano por pacientes ativos e cadastre o cartão no Stripe.
+                      </p>
+                    </div>
                   </div>
                 )}
 
                 {!isCoordinator && (
                   <div className="grid md:grid-cols-2 gap-4">
-                    <input value={specialty} onChange={(e) => setSpecialty(e.target.value)} placeholder="Especialidade" className="px-4 py-3 rounded-xl bg-slate-50" />
-                  </div>
-                )}
-
-                {(councilRequired || isCoordinator) && (
-                  <div className="grid md:grid-cols-2 gap-4">
-                    <input value={council} onChange={(e) => setCouncil(e.target.value)} placeholder="Conselho (ex: CRP)" className="px-4 py-3 rounded-xl bg-slate-50" />
-                    <input value={councilNumber} onChange={(e) => setCouncilNumber(formatProfessionalRegistry(e.target.value))} placeholder="00/00000" className="px-4 py-3 rounded-xl bg-slate-50" />
-                  </div>
-                )}
-
-                {(isCoordinator || isTherapist) && (
-                  <div>
-                    <p className="text-sm font-semibold text-slate-800 mb-2">Assinatura para relatorios</p>
-                    <label className="block cursor-pointer mb-3">
-                      <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 flex items-center gap-4 hover:border-[#7a32fc] transition-all">
-                        <div className="w-16 h-16 rounded-xl bg-white border border-slate-200 flex items-center justify-center overflow-hidden">
-                          {signatureDataUrl ? <SecureImage src={signatureDataUrl} alt="Assinatura" className="w-full h-full object-contain" /> : <UploadCloud size={20} className="text-slate-400" />}
-                        </div>
-                        <div>
-                          <p className="text-sm font-semibold text-slate-800">Enviar foto da assinatura</p>
-                          <p className="text-xs text-slate-500">Use apenas uma imagem pronta da assinatura, preferencialmente PNG com fundo transparente.</p>
-                        </div>
-                      </div>
-                      <input
-                        type="file"
-                        className="hidden"
-                        accept="image/*"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file) toBase64(file, setSignatureDataUrl);
-                        }}
-                      />
-                    </label>
+                    <input value={clinicName} onChange={(e) => setClinicName(e.target.value)} placeholder="Nome da clínica" className="px-4 py-3 rounded-xl bg-slate-50" />
+                    <input value={clinicPhone} onChange={(e) => setClinicPhone(e.target.value)} placeholder="Telefone ou WhatsApp da clínica" className="px-4 py-3 rounded-xl bg-slate-50" />
                   </div>
                 )}
 
                 <div className="pt-2 flex justify-between">
                   <button onClick={() => setStep(1)} className="px-6 py-3 rounded-xl bg-slate-100 text-slate-700 font-semibold">Voltar</button>
                   <button disabled={loading || !canGoNextClinic} onClick={finish} className="px-6 py-3 rounded-xl bg-[#7a32fc] text-white font-semibold disabled:opacity-40">
-                    {loading ? 'Salvando...' : 'Concluir'}
+                    {loading ? 'Salvando...' : 'Continuar para o plano'}
                   </button>
                 </div>
               </div>
