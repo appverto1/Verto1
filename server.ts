@@ -47851,14 +47851,55 @@ async function startServer() {
   });
 
   const handleCreateClinicCheckout = async (req: any, res: any) => {
+    let checkoutDiagnostics: Record<string, unknown> = {
+      route: '/api/billing/checkout',
+      selectedPriceIdPresent: Boolean(req.body?.selectedPriceId || req.body?.priceId),
+      activePatients: normalizeActivePatientQuantity(req.body?.activePatients || req.body?.expectedActivePatients),
+      enterpriseThreshold: resolveActivePatientEnterpriseThreshold(),
+      organizationIdPresent: false,
+      userIdPresent: false,
+      stripeConfigured: Boolean(process.env.STRIPE_SECRET_KEY),
+      priceFound: false,
+      priceRecurring: false,
+      checkoutCreated: false,
+      errorCode: null,
+      stripeErrorType: null
+    };
+    const rejectCheckout = (status: number, code: string, error: string, data?: unknown) => {
+      console.warn('[Stripe] billing checkout rejected:', {
+        ...checkoutDiagnostics,
+        errorCode: code
+      });
+      return res.status(status).json({
+        success: false,
+        code,
+        error,
+        ...(data ? { data } : {})
+      });
+    };
+
     try {
       const user = req.session.user;
       const origin = req.headers.origin || req.protocol + '://' + req.get('host');
+      const userId = sanitizeString(user.id, 120);
       const clinicId = sanitizeString(
         user.activeWorkspaceId || user.clinicId || user.id,
         120
       );
       const isPatientCheckout = sanitizeString(user.role, 40).toLowerCase() === 'patient';
+      checkoutDiagnostics = {
+        ...checkoutDiagnostics,
+        organizationIdPresent: Boolean(clinicId),
+        userIdPresent: Boolean(userId)
+      };
+      if (!userId || (!isPatientCheckout && !clinicId)) {
+        return rejectCheckout(
+          400,
+          'MISSING_ORGANIZATION',
+          'Não foi possível identificar a clínica para iniciar o pagamento.'
+        );
+      }
+
       const demoState = await fetchClinicDemoState(clinicId);
       if (demoState.isDemo || isDemoSessionUser(user)) {
         return res.status(403).json({
@@ -47871,11 +47912,25 @@ async function startServer() {
       }
 
       const stripe = getStripe();
-      const persistedCustomerId = await resolvePersistedStripeCustomerId({
-        userId: sanitizeString(user.id, 120),
-        clinicId,
-        email: sanitizeEmail(user.email)
-      });
+      let persistedCustomerId: string | null = null;
+      try {
+        persistedCustomerId = await resolvePersistedStripeCustomerId({
+          userId,
+          clinicId,
+          email: sanitizeEmail(user.email)
+        });
+      } catch (customerError: any) {
+        console.error('[Stripe] billing checkout customer lookup failed:', {
+          ...checkoutDiagnostics,
+          errorCode: 'STRIPE_CUSTOMER_FAILED',
+          message: sanitizeString(customerError?.message || String(customerError), 240)
+        });
+        return res.status(502).json({
+          success: false,
+          code: 'STRIPE_CUSTOMER_FAILED',
+          error: 'Não foi possível preparar o cliente de pagamento agora.'
+        });
+      }
 
       const activePatientPriceId = isPatientCheckout ? '' : resolveActivePatientPriceId();
       let selectedClinicPlan: Awaited<ReturnType<typeof listStripeActivePatientBillingPlans>>[number] | null = null;
@@ -47884,15 +47939,23 @@ async function startServer() {
       if (!isPatientCheckout) {
         const normalizedActivePatients = normalizeActivePatientQuantity(req.body?.activePatients || req.body?.expectedActivePatients);
         if (!normalizedActivePatients) {
-          return res.status(400).json({
-            success: false,
-            code: 'INVALID_ACTIVE_PATIENTS',
-            error: 'Informe uma quantidade válida de pacientes ativos antes de continuar.'
-          });
+          return rejectCheckout(
+            400,
+            'INVALID_ACTIVE_PATIENTS',
+            'Informe uma quantidade válida de pacientes ativos antes de continuar.'
+          );
         }
         activePatients = normalizedActivePatients;
+        checkoutDiagnostics = {
+          ...checkoutDiagnostics,
+          activePatients
+        };
 
         const enterpriseThreshold = resolveActivePatientEnterpriseThreshold();
+        checkoutDiagnostics = {
+          ...checkoutDiagnostics,
+          enterpriseThreshold
+        };
         const billingPlans = (await listStripeActivePatientBillingPlans({
           stripe,
           activePatientPriceId,
@@ -47901,24 +47964,38 @@ async function startServer() {
         const requestedPriceId = sanitizeString(req.body?.selectedPriceId || req.body?.priceId, 120);
         const requestedPlan = requestedPriceId ? billingPlans.find((plan) => plan.priceId === requestedPriceId) || null : null;
         if (requestedPriceId && !requestedPlan) {
-          return res.status(400).json({
-            success: false,
-            code: 'PRICE_NOT_AVAILABLE',
-            error: 'Plano selecionado não está disponível para contratação.'
-          });
+          return rejectCheckout(
+            400,
+            'PRICE_NOT_AVAILABLE',
+            'Plano selecionado não está disponível para contratação.'
+          );
         }
         selectedClinicPlan =
           requestedPlan ||
           billingPlans.find((plan) => plan.priceId === activePatientPriceId && !plan.isCustom) ||
           billingPlans.find((plan) => !plan.isCustom) ||
           null;
+        checkoutDiagnostics = {
+          ...checkoutDiagnostics,
+          priceFound: Boolean(selectedClinicPlan),
+          priceRecurring: Boolean(selectedClinicPlan?.interval),
+          selectedPriceIdPresent: Boolean(requestedPriceId || selectedClinicPlan?.priceId)
+        };
 
         if (!selectedClinicPlan) {
-          return res.status(503).json({
-            success: false,
-            code: 'PLANS_NOT_CONFIGURED',
-            error: 'Planos de assinatura ainda não estão configurados.'
-          });
+          return rejectCheckout(
+            503,
+            'PRICE_NOT_AVAILABLE',
+            'Planos de assinatura ainda não estão configurados.'
+          );
+        }
+
+        if (!selectedClinicPlan.interval || selectedClinicPlan.usageType === 'metered') {
+          return rejectCheckout(
+            400,
+            'PRICE_NOT_AVAILABLE',
+            'O plano selecionado não está disponível para checkout self-service.'
+          );
         }
 
         const estimate = estimateStripeActivePatientPlan({
@@ -47927,30 +48004,26 @@ async function startServer() {
           enterpriseThreshold: selectedClinicPlan.enterpriseThreshold
         });
         if (estimate.isEnterprise) {
-          return res.status(422).json({
-            success: false,
-            code: 'ENTERPRISE_REQUIRED',
-            error: 'Para clínicas com mais de 50 pacientes ativos, solicite uma proposta personalizada.',
-            data: estimate
-          });
+          return rejectCheckout(
+            422,
+            'ENTERPRISE_REQUIRED',
+            'Para clínicas com mais de 50 pacientes ativos, solicite uma proposta personalizada.',
+            estimate
+          );
         }
         if (selectedClinicPlan.isCustom) {
-          return res.status(422).json({
-            success: false,
-            code: 'ENTERPRISE_REQUIRED',
-            error: 'Este plano exige proposta personalizada.'
-          });
+          return rejectCheckout(422, 'ENTERPRISE_REQUIRED', 'Este plano exige proposta personalizada.');
         }
         if (
           !selectedClinicPlan.usesActivePatientQuantity &&
           typeof selectedClinicPlan.maxPatients === 'number' &&
           activePatients > selectedClinicPlan.maxPatients
         ) {
-          return res.status(400).json({
-            success: false,
-            code: 'PATIENT_LIMIT_EXCEEDED',
-            error: 'A quantidade informada excede o limite do plano selecionado.'
-          });
+          return rejectCheckout(
+            400,
+            'INVALID_ACTIVE_PATIENTS',
+            'A quantidade informada excede o limite do plano selecionado.'
+          );
         }
       }
 
@@ -48010,20 +48083,24 @@ async function startServer() {
       }
 
       const session = await stripe.checkout.sessions.create(checkoutPayload);
+      console.info('[Stripe] billing checkout diagnostics:', {
+        ...checkoutDiagnostics,
+        checkoutCreated: Boolean(session?.url)
+      });
       res.json({ success: true, url: session.url });
     } catch (error: any) {
-      console.error('[Stripe] create-checkout error:', {
-        message: error?.message || String(error),
-        code: sanitizeString(error?.code, 60) || (isMissingStripeConfigError(error) ? 'MISSING_STRIPE_CONFIG' : null),
-        stripeErrorType: sanitizeString(error?.type, 80) || null,
-        priceIdPresent: Boolean(req.body?.selectedPriceId || req.body?.priceId),
-        activePatients: normalizeActivePatientQuantity(req.body?.activePatients || req.body?.expectedActivePatients),
-        organizationIdPresent: Boolean(req.session?.user?.activeWorkspaceId || req.session?.user?.clinicId || req.session?.user?.id)
-      });
       const missingConfig = isMissingStripeConfigError(error);
+      const errorCode = missingConfig ? 'MISSING_STRIPE_CONFIG' : 'CHECKOUT_SESSION_FAILED';
+      console.error('[Stripe] create-checkout error:', {
+        ...checkoutDiagnostics,
+        message: error?.message || String(error),
+        code: sanitizeString(error?.code, 60) || errorCode,
+        errorCode,
+        stripeErrorType: sanitizeString(error?.type, 80) || null
+      });
       res.status(missingConfig ? 503 : 502).json({
         success: false,
-        code: missingConfig ? 'MISSING_STRIPE_CONFIG' : 'CHECKOUT_SESSION_FAILED',
+        code: errorCode,
         error: missingConfig
           ? 'Pagamento indisponível: configuração Stripe ausente.'
           : 'Não foi possível iniciar o pagamento agora. Tente novamente ou fale com o suporte.'

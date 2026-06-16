@@ -2222,6 +2222,17 @@ export default function App() {
     enterpriseThreshold?: number | null;
   };
 
+  type BillingRangeCard = {
+    key: string;
+    kind: 'self_service' | 'enterprise';
+    priceId?: string;
+    label: string;
+    description: string;
+    activePatients: number | null;
+    estimatedAmountCents: number | null;
+    currency: string;
+  };
+
   const centsFromDecimal = (value: unknown): number | null => {
     if (typeof value === 'number' && Number.isFinite(value)) return Math.round(value);
     if (typeof value !== 'string' || !value.trim()) return null;
@@ -2230,7 +2241,7 @@ export default function App() {
   };
 
   const formatBillingCurrency = (amountCents: number | null | undefined, currency = 'brl') => {
-    if (typeof amountCents !== 'number' || !Number.isFinite(amountCents)) return 'Valor calculado com segurança no checkout';
+    if (typeof amountCents !== 'number' || !Number.isFinite(amountCents)) return 'Estimativa indisponível';
     return new Intl.NumberFormat('pt-BR', {
       style: 'currency',
       currency: String(currency || 'brl').toUpperCase()
@@ -2264,6 +2275,15 @@ export default function App() {
     if (min > 0 && max > 0 && min !== max) return `${min} a ${max} pacientes ativos`;
     if (max > 0) return `Até ${max} pacientes ativos`;
     return 'Pacientes ativos';
+  };
+
+  const describeBillingRangeAudience = (maxPatients: number | null) => {
+    if (!maxPatients || maxPatients <= 5) return 'Para início ou consultório pequeno.';
+    if (maxPatients <= 10) return 'Para clínicas em crescimento.';
+    if (maxPatients <= 20) return 'Para equipes com agenda mais ativa.';
+    if (maxPatients <= 30) return 'Para clínicas em expansão.';
+    if (maxPatients <= 50) return 'Para clínicas com operação consolidada.';
+    return 'Para clínicas com maior volume de pacientes ativos.';
   };
 
   const estimateStripePlanAmountCents = (plan: BillingPlanOption | null, quantity: number) => {
@@ -2300,6 +2320,28 @@ export default function App() {
   };
 
   const handleCheckout = async (options?: { selectedPriceId?: string; activePatients?: number }) => {
+    const friendlyCheckoutMessage = (code: string, rawError?: string) => {
+      switch (code) {
+        case 'PRICE_NOT_AVAILABLE':
+          return 'Este plano não está disponível no momento.';
+        case 'INVALID_ACTIVE_PATIENTS':
+          return 'Selecione uma faixa válida de pacientes.';
+        case 'ENTERPRISE_REQUIRED':
+          return 'Para esse volume, solicite uma proposta personalizada.';
+        case 'MISSING_STRIPE_CONFIG':
+          return 'Pagamento indisponível no momento. Fale com o suporte.';
+        case 'MISSING_ORGANIZATION':
+          return 'Não foi possível identificar a clínica para iniciar o pagamento.';
+        case 'STRIPE_CUSTOMER_FAILED':
+          return 'Não foi possível preparar o cliente de pagamento agora. Tente novamente.';
+        case 'CHECKOUT_SESSION_FAILED':
+          return 'Não foi possível iniciar o pagamento agora. Tente novamente em instantes.';
+        default:
+          return /erro interno do servidor/i.test(String(rawError || ''))
+            ? 'Não foi possível iniciar o pagamento agora. Tente novamente em instantes.'
+            : rawError || 'Não foi possível iniciar o pagamento agora. Confira os dados ou tente novamente em instantes.';
+      }
+    };
     try {
       const response = await fetch('/api/billing/checkout', {
         method: 'POST',
@@ -2311,10 +2353,11 @@ export default function App() {
         window.location.href = data.url;
         return { success: true };
       }
+      const code = String(data?.code || '');
       return {
         success: false,
-        code: String(data?.code || ''),
-        error: data?.error || 'Não foi possível iniciar o pagamento agora. Confira os dados ou tente novamente em instantes.'
+        code,
+        error: friendlyCheckoutMessage(code, data?.error)
       };
     } catch (error: any) {
       console.error('Checkout error:', error);
@@ -2349,7 +2392,7 @@ export default function App() {
     }>({ loading: !isPatientCheckout, error: '', plans: [], salesContactUrl: '', pricingModel: '', enterpriseThreshold: 50 });
     const [plansReloadToken, setPlansReloadToken] = useState(0);
     const [selectedPriceId, setSelectedPriceId] = useState('');
-    const [expectedActivePatients, setExpectedActivePatients] = useState(10);
+    const [selectedBillingRangeKey, setSelectedBillingRangeKey] = useState('');
     const [checkoutLoading, setCheckoutLoading] = useState(false);
     const [checkoutError, setCheckoutError] = useState('');
     const [estimateState, setEstimateState] = useState<{
@@ -2400,23 +2443,75 @@ export default function App() {
     }, [isPatientCheckout, plansReloadToken]);
 
     const nonCustomPlans = plansState.plans.filter((plan) => !plan.isCustom);
-    const customPlans = plansState.plans.filter((plan) => plan.isCustom);
     const selectedPlan =
       nonCustomPlans.find((plan) => plan.priceId === selectedPriceId) ||
       nonCustomPlans[0] ||
       null;
     const tieredPlan = selectedPlan?.tiers?.length ? selectedPlan : nonCustomPlans.find((plan) => (plan.tiers || []).length > 0) || null;
     const enterpriseThreshold = Number(selectedPlan?.enterpriseThreshold || plansState.enterpriseThreshold || 50);
-    const isEnterpriseQuantity = !isPatientCheckout && Boolean(enterpriseThreshold && expectedActivePatients > enterpriseThreshold);
-    const fallbackEstimatedAmountCents = estimateStripePlanAmountCents(selectedPlan, expectedActivePatients);
+    const billingRangeCards: BillingRangeCard[] = [];
+    const rangePlan = tieredPlan || selectedPlan;
+    if (rangePlan?.tiers?.length) {
+      (rangePlan.tiers || []).forEach((tier, index) => {
+        const previousTier = index > 0 ? (rangePlan.tiers || [])[index - 1] : null;
+        const from = Number(tier.from || (previousTier?.upTo ? Number(previousTier.upTo) + 1 : 1));
+        const to = tier.to === null || tier.upTo === null ? null : Number(tier.to || tier.upTo || 0);
+        if (!to || to > enterpriseThreshold) return;
+        const label = describeBillingTierRange(tier, index, rangePlan.tiers || []);
+        billingRangeCards.push({
+          key: `tier-${from}-${to}`,
+          kind: 'self_service',
+          priceId: rangePlan.priceId,
+          label,
+          description: describeBillingRangeAudience(to),
+          activePatients: to,
+          estimatedAmountCents: estimateStripePlanAmountCents(rangePlan, to),
+          currency: rangePlan.currency
+        });
+      });
+    } else {
+      nonCustomPlans.forEach((plan, index) => {
+        const activePatients = Number(plan.maxPatients || plan.patientLimit || plan.minPatients || 1);
+        if (!activePatients || activePatients > enterpriseThreshold) return;
+        billingRangeCards.push({
+          key: `plan-${plan.priceId}-${activePatients}`,
+          kind: 'self_service',
+          priceId: plan.priceId,
+          label: describeBillingRange(plan, index),
+          description: describeBillingRangeAudience(activePatients),
+          activePatients,
+          estimatedAmountCents: estimateStripePlanAmountCents(plan, activePatients),
+          currency: plan.currency
+        });
+      });
+    }
+    billingRangeCards.push({
+      key: 'enterprise-over-threshold',
+      kind: 'enterprise',
+      label: `Mais de ${enterpriseThreshold} pacientes ativos`,
+      description: 'Plano personalizado com proposta sob medida.',
+      activePatients: null,
+      estimatedAmountCents: null,
+      currency: selectedPlan?.currency || 'brl'
+    });
+    const selectedBillingRange = billingRangeCards.find((card) => card.key === selectedBillingRangeKey) || null;
+    const selectedActivePatients = selectedBillingRange?.kind === 'self_service' ? selectedBillingRange.activePatients : null;
+    const isEnterpriseSelected = !isPatientCheckout && selectedBillingRange?.kind === 'enterprise';
+    const fallbackEstimatedAmountCents = selectedBillingRange?.estimatedAmountCents ?? null;
     const estimatedAmountCents =
-      estimateState.data?.priceId === selectedPlan?.priceId && estimateState.data?.activePatients === expectedActivePatients
+      selectedActivePatients &&
+      estimateState.data?.priceId === selectedPlan?.priceId &&
+      estimateState.data?.activePatients === selectedActivePatients
         ? estimateState.data.estimatedAmountCents
         : fallbackEstimatedAmountCents;
     const matchedTier =
-      estimateState.data?.priceId === selectedPlan?.priceId && estimateState.data?.activePatients === expectedActivePatients
+      selectedActivePatients &&
+      estimateState.data?.priceId === selectedPlan?.priceId &&
+      estimateState.data?.activePatients === selectedActivePatients
         ? estimateState.data.matchedTier
-        : findMatchedBillingTier(tieredPlan, expectedActivePatients);
+        : selectedActivePatients
+          ? findMatchedBillingTier(tieredPlan, selectedActivePatients)
+          : null;
     const clinicOperationType = String(
       user?.clinicOperationType ||
         user?.clinic_operation_type ||
@@ -2432,7 +2527,10 @@ export default function App() {
           : 'As configurações de convênio e TISS podem ser feitas depois, dentro da Verto.';
 
     useEffect(() => {
-      if (isPatientCheckout || !selectedPlan?.priceId) return;
+      if (isPatientCheckout || !selectedPlan?.priceId || !selectedBillingRange || selectedBillingRange.kind !== 'self_service' || !selectedActivePatients) {
+        setEstimateState({ loading: false, error: '', data: null });
+        return;
+      }
       let cancelled = false;
       const loadEstimate = async () => {
         setEstimateState({ loading: true, error: '', data: null });
@@ -2442,7 +2540,7 @@ export default function App() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               selectedPriceId: selectedPlan.priceId,
-              activePatients: expectedActivePatients
+              activePatients: selectedActivePatients
             })
           });
           const payload = await response.json().catch(() => ({}));
@@ -2470,12 +2568,16 @@ export default function App() {
       return () => {
         cancelled = true;
       };
-    }, [isPatientCheckout, selectedPlan?.priceId, expectedActivePatients]);
+    }, [isPatientCheckout, selectedPlan?.priceId, selectedBillingRangeKey, selectedActivePatients]);
 
     const submitCheckout = async () => {
       if (checkoutLoading) return;
-      if (!isPatientCheckout && isEnterpriseQuantity) {
+      if (!isPatientCheckout && isEnterpriseSelected) {
         handleEnterpriseContact(user, plansState.salesContactUrl);
+        return;
+      }
+      if (!isPatientCheckout && (!selectedBillingRange || selectedBillingRange.kind !== 'self_service' || !selectedActivePatients || !selectedPlan?.priceId)) {
+        setCheckoutError('Selecione uma faixa válida de pacientes antes de continuar.');
         return;
       }
       setCheckoutError('');
@@ -2486,7 +2588,7 @@ export default function App() {
             ? undefined
             : {
                 selectedPriceId: selectedPlan?.priceId,
-                activePatients: expectedActivePatients
+                activePatients: selectedActivePatients || undefined
               }
         );
         if (!result?.success) {
@@ -2556,99 +2658,6 @@ export default function App() {
                 </div>
               )}
 
-              {!plansState.loading && !plansState.error && tieredPlan && (
-                <div className="rounded-3xl border border-slate-200 bg-slate-50 p-5">
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                    <div>
-                      <p className="text-sm font-black text-slate-900">{tieredPlan.name}</p>
-                      <p className="mt-1 text-xs font-semibold text-slate-500">
-                        Os planos são calculados conforme os pacientes ativos da clínica.
-                      </p>
-                    </div>
-                    <span className="rounded-full bg-white px-3 py-1 text-[10px] font-black uppercase tracking-widest text-violet-700">
-                      Plano modular
-                    </span>
-                  </div>
-                  <div className="mt-4 overflow-hidden rounded-2xl border border-slate-200 bg-white">
-                    <table className="w-full text-sm">
-                      <thead className="bg-slate-100 text-[10px] uppercase tracking-widest text-slate-500">
-                        <tr>
-                          <th className="px-4 py-3 text-left">Faixa de pacientes ativos</th>
-                          <th className="px-4 py-3 text-right">Valor por paciente</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {(tieredPlan.tiers || []).map((tier, index) => {
-                          const label = describeBillingTierRange(tier, index, tieredPlan.tiers || []);
-                          const unitCents = typeof tier.unitAmountCents === 'number' ? tier.unitAmountCents : centsFromDecimal(tier.unitAmountDecimal);
-                          const tierFrom = Number(tier.from || (index === 0 ? 1 : Number((tieredPlan.tiers || [])[index - 1]?.upTo || 0) + 1));
-                          const matchedFrom = Number(matchedTier?.from || 0);
-                          const tierTo = String(tier.to ?? tier.upTo ?? '');
-                          const matchedTo = String(matchedTier?.to ?? matchedTier?.upTo ?? '');
-                          const isMatched = !isEnterpriseQuantity && Boolean(matchedTier) && matchedFrom === tierFrom && matchedTo === tierTo;
-                          return (
-                            <tr key={`${label}-${index}`} className={isMatched ? 'bg-violet-50' : undefined}>
-                              <td className="px-4 py-3 font-semibold text-slate-700">
-                                <span>{label}</span>
-                                {isMatched && (
-                                  <span className="ml-2 rounded-full bg-violet-100 px-2 py-1 text-[10px] font-black uppercase tracking-widest text-violet-700">
-                                    Sua faixa
-                                  </span>
-                                )}
-                              </td>
-                              <td className="px-4 py-3 text-right font-bold text-slate-900">
-                                {formatBillingCurrency(unitCents, tieredPlan.currency)}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                        {enterpriseThreshold > 0 && (
-                          <tr className={isEnterpriseQuantity ? 'bg-slate-900 text-white' : undefined}>
-                            <td className={`px-4 py-3 font-semibold ${isEnterpriseQuantity ? 'text-white' : 'text-slate-700'}`}>
-                              Acima de {enterpriseThreshold} pacientes ativos
-                              {isEnterpriseQuantity && (
-                                <span className="ml-2 rounded-full bg-white/15 px-2 py-1 text-[10px] font-black uppercase tracking-widest text-white">
-                                  Plano personalizado
-                                </span>
-                              )}
-                            </td>
-                            <td className={`px-4 py-3 text-right font-bold ${isEnterpriseQuantity ? 'text-white' : 'text-slate-900'}`}>
-                              Proposta sob medida
-                            </td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-
-              {!plansState.loading && !plansState.error && !tieredPlan && nonCustomPlans.length > 0 && (
-                <div className="grid gap-3 sm:grid-cols-2">
-                  {nonCustomPlans.map((plan, index) => {
-                    const selected = selectedPlan?.priceId === plan.priceId;
-                    const amountCents = estimateStripePlanAmountCents(plan, expectedActivePatients);
-                    return (
-                      <button
-                        type="button"
-                        key={plan.priceId}
-                        onClick={() => setSelectedPriceId(plan.priceId)}
-                        className={`rounded-3xl border p-5 text-left transition-all ${
-                          selected
-                            ? 'border-[#7a32fc] bg-violet-50 shadow-lg shadow-violet-500/10'
-                            : 'border-slate-200 bg-slate-50 hover:border-violet-200'
-                        }`}
-                      >
-                        <p className="text-sm font-black text-slate-900">{plan.name}</p>
-                        <p className="mt-1 text-xs font-semibold text-slate-500">{describeBillingRange(plan, index)}</p>
-                        <p className="mt-4 text-lg font-black text-slate-950">{formatBillingCurrency(amountCents, plan.currency)}</p>
-                        {plan.description && <p className="mt-2 text-xs font-medium text-slate-500">{plan.description}</p>}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-
               {!plansState.loading && !plansState.error && nonCustomPlans.length === 0 && (
                 <div className="rounded-3xl border border-amber-100 bg-amber-50 p-5">
                   <p className="text-sm font-bold text-amber-800">Nenhum plano automático disponível no momento.</p>
@@ -2658,78 +2667,123 @@ export default function App() {
                 </div>
               )}
 
-              {nonCustomPlans.length > 0 && (
-                <div className="rounded-3xl border border-slate-200 bg-white p-5">
-                  <label className="text-xs font-black uppercase tracking-widest text-slate-500">
-                    Quantos pacientes ativos sua clínica tem hoje?
-                  </label>
-                  <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
-                    <input
-                      type="number"
-                      min={1}
-                      max={100000}
-                      value={expectedActivePatients}
-                      onChange={(event) => {
-                        setCheckoutError('');
-                        setExpectedActivePatients(Math.max(1, Math.floor(Number(event.target.value || 1))));
-                      }}
-                      className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm font-bold text-slate-900 outline-none focus:border-[#7a32fc] sm:max-w-[180px]"
-                    />
-                    <div className="rounded-2xl bg-slate-50 px-4 py-3">
-                      <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Estimativa mensal</p>
-                      <p className="text-lg font-black text-slate-950">
-                        {isEnterpriseQuantity
-                          ? 'Plano personalizado'
-                          : estimateState.loading
-                            ? 'Calculando...'
-                            : formatBillingCurrency(estimatedAmountCents, selectedPlan?.currency || 'brl')}
+              {!plansState.loading && !plansState.error && billingRangeCards.length > 0 && (
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                  {billingRangeCards.map((card) => {
+                    const selected = selectedBillingRangeKey === card.key;
+                    const isEnterprise = card.kind === 'enterprise';
+                    return (
+                      <button
+                        type="button"
+                        key={card.key}
+                        aria-pressed={selected}
+                        onClick={() => {
+                          setCheckoutError('');
+                          setSelectedBillingRangeKey(card.key);
+                          if (card.kind === 'self_service' && card.priceId) {
+                            setSelectedPriceId(card.priceId);
+                          }
+                        }}
+                        className={`rounded-3xl border p-5 text-left transition-all ${
+                          selected
+                            ? isEnterprise
+                              ? 'border-slate-950 bg-slate-950 text-white shadow-xl shadow-slate-500/20'
+                              : 'border-[#7a32fc] bg-violet-50 shadow-xl shadow-violet-500/10'
+                            : 'border-slate-200 bg-white hover:border-violet-200 hover:shadow-lg hover:shadow-slate-200/70'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className={`text-sm font-black ${selected && isEnterprise ? 'text-white' : 'text-slate-900'}`}>
+                              {card.label}
+                            </p>
+                            <p className={`mt-2 text-xs font-semibold leading-relaxed ${selected && isEnterprise ? 'text-slate-300' : 'text-slate-500'}`}>
+                              {card.description}
+                            </p>
+                          </div>
+                          {selected && (
+                            <span className={`rounded-full px-2 py-1 text-[10px] font-black uppercase tracking-widest ${
+                              isEnterprise ? 'bg-white/15 text-white' : 'bg-violet-100 text-violet-700'
+                            }`}>
+                              Escolhido
+                            </span>
+                          )}
+                        </div>
+                        <div className={`mt-5 rounded-2xl px-4 py-3 ${selected && isEnterprise ? 'bg-white/10' : 'bg-slate-50'}`}>
+                          <p className={`text-[10px] font-black uppercase tracking-widest ${selected && isEnterprise ? 'text-slate-300' : 'text-slate-400'}`}>
+                            {isEnterprise ? 'Atendimento comercial' : `Estimativa para até ${card.activePatients} pacientes`}
+                          </p>
+                          <p className={`mt-1 text-base font-black ${selected && isEnterprise ? 'text-white' : 'text-slate-950'}`}>
+                            {isEnterprise ? 'Plano personalizado' : `${formatBillingCurrency(card.estimatedAmountCents, card.currency)}/mês`}
+                          </p>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {!plansState.loading && !plansState.error && (
+                <div className="rounded-3xl border border-slate-200 bg-slate-50 p-5">
+                  {!selectedBillingRange ? (
+                    <div>
+                      <p className="text-sm font-black text-slate-900">Selecione uma faixa para ver a estimativa.</p>
+                      <p className="mt-1 text-xs font-semibold text-slate-500">
+                        Os valores são carregados diretamente da configuração de planos da Verto.
                       </p>
                     </div>
-                  </div>
-                  {!isEnterpriseQuantity && matchedTier && (
-                    <p className="mt-3 rounded-2xl bg-violet-50 px-3 py-2 text-xs font-bold text-violet-800">
-                      Faixa correspondente: {describeBillingTierRange(matchedTier, 0, tieredPlan?.tiers || [])}.
-                    </p>
-                  )}
-                  {isEnterpriseQuantity && (
-                    <div className="mt-3 rounded-2xl bg-slate-950 px-4 py-3 text-white">
-                      <p className="text-sm font-black">Plano personalizado</p>
-                      <p className="mt-1 text-xs font-semibold text-slate-300">
-                        Para clínicas com mais de {enterpriseThreshold} pacientes ativos, nossa equipe prepara uma proposta sob medida.
-                      </p>
+                  ) : isEnterpriseSelected ? (
+                    <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <p className="text-sm font-black text-slate-900">Plano personalizado</p>
+                        <p className="mt-1 text-xs font-semibold leading-relaxed text-slate-500">
+                          Para clínicas com mais de {enterpriseThreshold} pacientes ativos, nossa equipe prepara uma proposta sob medida.
+                        </p>
+                      </div>
                       <button
                         type="button"
                         onClick={() => handleEnterpriseContact(user, plansState.salesContactUrl)}
-                        className="mt-3 rounded-2xl bg-white px-4 py-3 text-xs font-black text-slate-950"
+                        className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-bold text-white shadow-sm"
                       >
                         Solicitar proposta personalizada
                       </button>
                     </div>
+                  ) : (
+                    <div>
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Faixa selecionada</p>
+                          <p className="mt-1 text-sm font-black text-slate-900">{selectedBillingRange.label}</p>
+                          <p className="mt-1 text-xs font-semibold text-slate-500">
+                            O checkout será criado com {selectedActivePatients} pacientes ativos.
+                          </p>
+                        </div>
+                        <div className="rounded-2xl bg-white px-4 py-3 text-left shadow-sm sm:text-right">
+                          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Estimativa mensal</p>
+                          <p className="mt-1 text-lg font-black text-slate-950">
+                            {estimateState.loading
+                              ? 'Calculando...'
+                              : formatBillingCurrency(estimatedAmountCents, selectedBillingRange.currency || selectedPlan?.currency || 'brl')}
+                          </p>
+                        </div>
+                      </div>
+                      {matchedTier && (
+                        <p className="mt-3 rounded-2xl bg-violet-50 px-3 py-2 text-xs font-bold text-violet-800">
+                          Faixa usada no cálculo: {describeBillingTierRange(matchedTier, 0, tieredPlan?.tiers || [])}.
+                        </p>
+                      )}
+                      {estimateState.error && (
+                        <p className="mt-3 rounded-2xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">
+                          Não foi possível calcular a estimativa agora. Tente novamente.
+                        </p>
+                      )}
+                    </div>
                   )}
-                  {estimateState.error && !isEnterpriseQuantity && (
-                    <p className="mt-3 rounded-2xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">
-                      {estimateState.error}
-                    </p>
-                  )}
-                  <p className="mt-3 text-[11px] font-semibold leading-relaxed text-slate-500">
+                  <p className="mt-4 text-[11px] font-semibold leading-relaxed text-slate-500">
                     Paciente ativo é aquele em atendimento, com agenda/prontuário ativo na clínica. A Verto não armazena o número completo do cartão.
                   </p>
                 </div>
               )}
-
-              <div className="rounded-3xl border border-slate-200 bg-slate-950 p-5 text-white">
-                <p className="text-sm font-black">{customPlans[0]?.name || 'Plano personalizado'}</p>
-                <p className="mt-1 text-xs font-semibold text-slate-300">
-                  Para clínicas com alto volume de pacientes ativos, nossa equipe prepara uma proposta sob medida.
-                </p>
-                <button
-                  type="button"
-                  onClick={() => handleEnterpriseContact(user, plansState.salesContactUrl)}
-                  className="mt-4 rounded-2xl bg-white px-4 py-3 text-sm font-bold text-slate-950 shadow-sm"
-                >
-                  Solicitar proposta personalizada
-                </button>
-              </div>
             </div>
           )}
           
@@ -2748,7 +2802,7 @@ export default function App() {
               >
                 {checkoutLoading ? 'Abrindo pagamento...' : 'Pagar Agora (R$ 4,90)'}
               </button>
-            ) : isEnterpriseQuantity ? (
+            ) : isEnterpriseSelected ? (
               <button
                 onClick={() => handleEnterpriseContact(user, plansState.salesContactUrl)}
                 className="w-full bg-slate-950 text-white py-4 rounded-2xl font-bold text-sm shadow-lg shadow-slate-500/20 hover:scale-[1.02] transition-all active:scale-[0.98]"
@@ -2758,7 +2812,14 @@ export default function App() {
             ) : (
               <button 
                 onClick={submitCheckout}
-                disabled={checkoutLoading || plansState.loading || Boolean(plansState.error) || !selectedPlan}
+                disabled={
+                  checkoutLoading ||
+                  plansState.loading ||
+                  Boolean(plansState.error) ||
+                  !selectedPlan ||
+                  !selectedBillingRange ||
+                  selectedBillingRange.kind !== 'self_service'
+                }
                 className="w-full bg-[#7a32fc] text-white py-4 rounded-2xl font-bold text-sm shadow-lg shadow-blue-500/20 hover:scale-[1.02] transition-all active:scale-[0.98] disabled:opacity-60"
               >
                 {checkoutLoading ? 'Abrindo Stripe Checkout...' : 'Continuar para pagamento'}

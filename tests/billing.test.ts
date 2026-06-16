@@ -93,15 +93,22 @@ test('checkout de cadastro profissional nao aceita plano/preco vindo do front', 
 });
 
 test('checkout autenticado preserva paciente separado e usa active patient price para clinica', () => {
-  const handler = sliceFrom(serverCode, 'const handleCreateClinicCheckout', 7600);
+  const handler = sliceFrom(serverCode, 'const handleCreateClinicCheckout', 12000);
   assert.match(handler, /const isPatientCheckout/);
   assert.match(handler, /const activePatientPriceId = isPatientCheckout \? '' : resolveActivePatientPriceId\(\)/);
   assert.match(handler, /listStripeActivePatientBillingPlans/);
   assert.match(handler, /selectedPriceId/);
   assert.match(handler, /requestedPlan/);
   assert.match(handler, /PRICE_NOT_AVAILABLE/);
+  assert.match(handler, /INVALID_ACTIVE_PATIENTS/);
   assert.match(handler, /ENTERPRISE_REQUIRED/);
+  assert.match(handler, /MISSING_ORGANIZATION/);
   assert.match(handler, /MISSING_STRIPE_CONFIG/);
+  assert.match(handler, /STRIPE_CUSTOMER_FAILED/);
+  assert.match(handler, /CHECKOUT_SESSION_FAILED/);
+  assert.match(handler, /selectedPriceIdPresent/);
+  assert.match(handler, /priceRecurring/);
+  assert.match(handler, /checkoutCreated/);
   assert.match(handler, /activePatients/);
   assert.match(handler, /price: selectedClinicPlan!\.priceId/);
   assert.match(handler, /quantity: selectedClinicPlan!\.usesActivePatientQuantity \? activePatients : 1/);
@@ -178,6 +185,7 @@ test('migration cria campos persistentes e auditoria de webhook/sync', () => {
 });
 
 test('landing e tela de assinatura nao exibem planos fixos antigos', () => {
+  const subscriptionRequired = sliceFrom(appCode, 'const SubscriptionRequired =', 34000);
   const uiCode = [
     landingCode,
     appCode,
@@ -207,12 +215,16 @@ test('landing e tela de assinatura nao exibem planos fixos antigos', () => {
   assert.match(appCode, /\/api\/billing\/estimate/);
   assert.match(appCode, /\/api\/billing\/checkout/);
   assert.match(appCode, /selectedPriceId/);
-  assert.match(appCode, /Faixa correspondente/);
-  assert.match(appCode, /Sua faixa/);
-  assert.match(appCode, /Solicitar proposta personalizada/);
-  assert.match(appCode, /Plano personalizado/);
-  assert.doesNotMatch(appCode, /Valor no checkout|Erro ao iniciar pagamento/);
-  assert.doesNotMatch(appCode, /alert\('Erro ao iniciar pagamento/);
+  assert.match(subscriptionRequired, /billingRangeCards/);
+  assert.match(subscriptionRequired, /setSelectedBillingRangeKey/);
+  assert.match(subscriptionRequired, /Selecione uma faixa para ver a estimativa/);
+  assert.match(subscriptionRequired, /Estimativa para até/);
+  assert.match(subscriptionRequired, /Faixa selecionada/);
+  assert.match(subscriptionRequired, /Solicitar proposta personalizada/);
+  assert.match(subscriptionRequired, /Plano personalizado/);
+  assert.doesNotMatch(subscriptionRequired, /Valor no checkout|Valor calculado com segurança no checkout|Erro ao iniciar pagamento/);
+  assert.doesNotMatch(subscriptionRequired, /alert\('Erro ao iniciar pagamento/);
+  assert.doesNotMatch(subscriptionRequired, /Quantos pacientes ativos sua clínica tem hoje\?|type="number"|Sua faixa|Faixa correspondente/);
   assert.doesNotMatch(`${adminCode}\n${superAdminCode}`, /planName:\s*complimentaryPlan|complimentaryPlan/);
   assert.doesNotMatch(invitationCode, /planLimits|user\.planName|Seu plano/);
 });

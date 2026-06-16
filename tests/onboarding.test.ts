@@ -97,22 +97,28 @@ test('dados do usuario pedem apenas nome e telefone no bloqueio inicial', () => 
 });
 
 test('tela de ativacao mostra plano modular e checkout seguro', () => {
-  const subscriptionRequired = sliceFrom(appCode, 'const SubscriptionRequired =', 32000);
+  const subscriptionRequired = sliceFrom(appCode, 'const SubscriptionRequired =', 34000);
   assert.match(subscriptionRequired, /pacientes ativos/);
   assert.match(subscriptionRequired, /\/api\/billing\/plans/);
+  assert.match(subscriptionRequired, /\/api\/billing\/estimate/);
+  assert.match(subscriptionRequired, /billingRangeCards/);
+  assert.match(subscriptionRequired, /Selecione uma faixa para ver a estimativa/);
+  assert.match(subscriptionRequired, /Estimativa para até/);
+  assert.match(subscriptionRequired, /Faixa selecionada/);
   assert.match(subscriptionRequired, /Continuar para pagamento/);
   assert.match(subscriptionRequired, /Solicitar proposta personalizada/);
-  assert.match(subscriptionRequired, /segurança pelo Stripe/);
   assert.match(subscriptionRequired, /Stripe/);
-  assert.doesNotMatch(subscriptionRequired, /Até 10 pacientes ativos|Acima disso|Falar com Mateus|Fale com Mateus/);
+  assert.doesNotMatch(subscriptionRequired, /Até 10 pacientes ativos|Acima disso|Falar com Mateus|Fale com Mateus|Quantos pacientes ativos sua clínica tem hoje\?|type="number"|Valor calculado com segurança no checkout/);
   assert.doesNotMatch(subscriptionRequired, /número completo do cartão[\s\S]*localStorage|card_number|cardNumber/);
 
-  const checkout = sliceFrom(serverCode, 'const handleCreateClinicCheckout', 7600);
+  const checkout = sliceFrom(serverCode, 'const handleCreateClinicCheckout', 12000);
   assert.match(checkout, /payment_method_types:\s*\['card'\]/);
   assert.match(checkout, /const activePatientPriceId = isPatientCheckout \? '' : resolveActivePatientPriceId\(\)/);
   assert.match(checkout, /selectedPriceId/);
   assert.match(checkout, /activePatients/);
   assert.match(checkout, /ENTERPRISE_REQUIRED/);
+  assert.match(checkout, /MISSING_ORGANIZATION/);
+  assert.match(checkout, /CHECKOUT_SESSION_FAILED/);
 });
 
 test('foto cadastrada na Verto tem prioridade sobre avatar OAuth', () => {
