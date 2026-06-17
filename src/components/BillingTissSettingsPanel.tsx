@@ -53,6 +53,7 @@ const emptyPayerForm = {
   defaultGuideType: "sp_sadt",
   beneficiaryIdentificationType: "card_number",
   requiresAuthorization: false,
+  requiresAuthorizedProcedure: false,
   requiresAuthorizationPassword: false,
   requiresGuideNumber: false,
   requiresCid: false,
@@ -110,6 +111,7 @@ const normalizePayerProfile = (profile: any = {}) => ({
   defaultGuideType: profile.default_guide_type || "sp_sadt",
   beneficiaryIdentificationType: profile.beneficiary_identification_type || "card_number",
   requiresAuthorization: Boolean(profile.requires_authorization),
+  requiresAuthorizedProcedure: Boolean(profile.requires_authorized_procedure),
   requiresAuthorizationPassword: Boolean(profile.requires_authorization_password),
   requiresGuideNumber: Boolean(profile.requires_guide_number),
   requiresCid: Boolean(profile.requires_cid),
@@ -484,6 +486,7 @@ export function BillingTissSettingsPanel({
           </div>
           <div className="grid gap-2 md:grid-cols-2">
             <Toggle label="Exige autorização" checked={Boolean(payerForm.requiresAuthorization)} onChange={(value) => updatePayer("requiresAuthorization", value)} />
+            <Toggle label="Exige procedimento autorizado" checked={Boolean(payerForm.requiresAuthorizedProcedure)} onChange={(value) => updatePayer("requiresAuthorizedProcedure", value)} />
             <Toggle label="Exige senha/autorização" checked={Boolean(payerForm.requiresAuthorizationPassword)} onChange={(value) => updatePayer("requiresAuthorizationPassword", value)} />
             <Toggle label="Exige número de guia" checked={Boolean(payerForm.requiresGuideNumber)} onChange={(value) => updatePayer("requiresGuideNumber", value)} />
             <Toggle label="Exige CID" checked={Boolean(payerForm.requiresCid)} onChange={(value) => updatePayer("requiresCid", value)} />

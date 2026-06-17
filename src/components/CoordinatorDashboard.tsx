@@ -4131,6 +4131,45 @@ export function CoordinatorDashboard({
   const getLocalDateKey = (date: Date) =>
     `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 
+  const openAppointmentFromAdministrativeFlow = useCallback((appointment: any) => {
+    const requestedAppointmentId = String(
+      appointment?.appointmentId ||
+        appointment?.appointment_id ||
+        appointment?.id ||
+        "",
+    ).trim();
+    const matchedAppointment = requestedAppointmentId
+      ? (normalizedAgenda || []).find((item: any) => resolvePersistedAppointmentId(item) === requestedAppointmentId)
+      : null;
+
+    navigateToTab("agenda");
+    if (!matchedAppointment) {
+      showToast("Abrimos a agenda. Não foi possível localizar automaticamente este agendamento na lista carregada.", "info");
+      return;
+    }
+
+    const dateKey = getAgendaDateKey(
+      matchedAppointment?.date ||
+        matchedAppointment?.scheduled_at ||
+        matchedAppointment?.scheduledAt ||
+        matchedAppointment?.start,
+    );
+    if (dateKey) {
+      setCalendarDate(new Date(`${dateKey}T12:00:00`));
+      setAgendaView("day");
+    }
+    openAgendaActionModal({
+      ...matchedAppointment,
+      focusPanel: appointment?.focusPanel || null,
+      actionIntent: appointment?.actionIntent || null,
+      abaSessionId: appointment?.abaSessionId || appointment?.aba_session_id || matchedAppointment?.abaSessionId || matchedAppointment?.aba_session_id || null,
+    });
+    if (appointment?.actionIntent === "collect_signature") {
+      setAgendaAppointmentObservation((current) => current || "Pendência TISS: coletar assinatura do responsável.");
+      showToast("Abrimos o agendamento para coletar assinatura.", "success");
+    }
+  }, [normalizedAgenda, openAgendaActionModal, resolvePersistedAppointmentId, showToast]);
+
   const focusedAgendaDate = useMemo(() => {
     const next = new Date(calendarDate);
     next.setHours(0, 0, 0, 0);
@@ -8285,7 +8324,7 @@ export function CoordinatorDashboard({
                   patients={visiblePatients}
                   professionals={Object.values(therapistMembersById)}
                   canOverride={!isTherapist}
-                  onOpenAppointment={() => navigateToTab("agenda")}
+                  onOpenAppointment={openAppointmentFromAdministrativeFlow}
                   onOpenReport={(appointment) =>
                     onPatientClick(
                       undefined,
@@ -8309,7 +8348,7 @@ export function CoordinatorDashboard({
                   professionals={Object.values(therapistMembersById)}
                   payers={clinicPayers}
                   canExport={!isTherapist}
-                  onOpenAppointment={() => navigateToTab("agenda")}
+                  onOpenAppointment={openAppointmentFromAdministrativeFlow}
                   onNavigatePayers={() => navigateToTab("payers")}
                   onNavigateSettings={() => navigateToTab("settings")}
                   onNavigateProfessionals={() => navigateToTab("team")}
@@ -9859,6 +9898,15 @@ export function CoordinatorDashboard({
                 );
               })()}
             </div>
+
+            {selectedAgendaAppointment.actionIntent === "collect_signature" && (
+              <div className="mb-5 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                <p className="font-bold">Coletar assinatura</p>
+                <p className="mt-1 text-xs">
+                  Assinatura do responsável exigida pelo convênio. Abra o atendimento/prontuário da sessão para registrar a assinatura e depois revalide a Pré-guia TISS.
+                </p>
+              </div>
+            )}
 
             <div className="mb-5">
               <label className="mb-2 block text-[11px] font-bold uppercase tracking-[0.16em] text-slate-400">

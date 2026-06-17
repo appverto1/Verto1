@@ -17,6 +17,7 @@ const settingsPanelCode = readFileSync(join(root, 'src/components/ClinicGlobalSe
 const coordinatorCode = readFileSync(join(root, 'src/components/CoordinatorDashboard.tsx'), 'utf8');
 const migrationCode = readFileSync(join(root, 'supabase/migrations/20260614183000_tiss_pre_guides.sql'), 'utf8');
 const payerOperationalMigrationCode = readFileSync(join(root, 'supabase/migrations/20260617110000_payer_tiss_operational_requirements.sql'), 'utf8');
+const authorizationCycleMigrationCode = readFileSync(join(root, 'supabase/migrations/20260617153000_patient_payer_authorizations_operational_cycle.sql'), 'utf8');
 const packageJson = readFileSync(join(root, 'package.json'), 'utf8');
 
 const tests: Array<{ name: string; fn: () => void }> = [];
@@ -114,6 +115,22 @@ const validInput = {
   professional: {
     id: 'professional-1',
     name: 'Terapeuta Mateus',
+  },
+  authorization: {
+    id: 'auth-base-1',
+    status: 'active',
+    authorization_number: 'AUTH-1',
+    authorization_code: 'AUTH-1',
+    guide_number: 'GUIDE-1',
+    issue_date: '2026-06-01',
+    issued_at: '2026-06-01',
+    valid_from: '2026-06-01',
+    valid_until: '2026-06-30',
+    authorized_quantity: 10,
+    authorized_unit: 'session',
+    procedure_tuss_code: 'CONFIGURADO-PELA-CLINICA',
+    procedure_code: 'ABA-IND',
+    procedure_name_snapshot: 'Sessão ABA individual',
   },
 };
 
@@ -342,6 +359,22 @@ test('carteirinha e validade so bloqueiam quando o pagador exige', () => {
 });
 
 test('autorizacao ativa valida e autorizacao vencida ou de outro TUSS gera pendencia', () => {
+  const notRequired = validateTissPreGuide({
+    ...validInput,
+    payerProfile: { ...validInput.payerProfile, requires_authorization: false, requires_guide_number: false },
+    mapping: { ...validInput.mapping, requires_authorization: false, requires_guide: false },
+    authorization: null,
+  });
+  assert.ok(!notRequired.errorCodes.includes('AUTHORIZATION_REQUIRED'));
+
+  const missing = validateTissPreGuide({
+    ...validInput,
+    authorization: null,
+    billingContext: { ...validInput.billingContext, authorization_code: '', guide_number: '' },
+    payerProfile: { ...validInput.payerProfile, requires_authorization: true, requires_guide_number: true },
+  });
+  assert.ok(missing.errorCodes.includes('AUTHORIZATION_REQUIRED'));
+
   const active = validateTissPreGuide({
     ...validInput,
     billingContext: { ...validInput.billingContext, authorization_code: '', guide_number: '' },
@@ -349,16 +382,22 @@ test('autorizacao ativa valida e autorizacao vencida ou de outro TUSS gera pende
     authorization: {
       id: 'auth-1',
       status: 'active',
+      authorization_number: 'AUTH-OK',
       authorization_code: 'AUTH-OK',
       guide_number: 'GUIA-OK',
       valid_from: '2026-06-01',
       valid_until: '2026-06-30',
+      authorized_quantity: 10,
+      authorized_unit: 'session',
       procedure_tuss_code: 'CONFIGURADO-PELA-CLINICA',
+      procedure_code: 'ABA-IND',
     },
   });
-  assert.ok(!active.errorCodes.includes('AUTHORIZATION_MISSING'));
+  assert.ok(!active.errorCodes.includes('AUTHORIZATION_REQUIRED'));
   assert.ok(!active.errorCodes.includes('GUIDE_MISSING'));
   assert.equal(active.snapshot.authorization.authorizationCode, 'AUTH-OK');
+  assert.equal(active.snapshot.authorization.authorizedQuantity, 10);
+  assert.equal(active.snapshot.authorization.authorizedUnit, 'session');
 
   const expired = validateTissPreGuide({
     ...validInput,
@@ -374,6 +413,31 @@ test('autorizacao ativa valida e autorizacao vencida ou de outro TUSS gera pende
   });
   assert.ok(expired.errorCodes.includes('AUTHORIZATION_EXPIRED'));
   assert.ok(expired.errorCodes.includes('AUTHORIZATION_PROCEDURE_MISMATCH'));
+
+  const exhausted = validateTissPreGuide({
+    ...validInput,
+    authorization: {
+      ...validInput.authorization,
+      id: 'auth-exhausted',
+      authorized_quantity: 10,
+      used_quantity: 10,
+    },
+  });
+  assert.ok(exhausted.errorCodes.includes('AUTHORIZATION_EXHAUSTED'));
+
+  const missingAuthorizedProcedure = validateTissPreGuide({
+    ...validInput,
+    payerProfile: { ...validInput.payerProfile, requires_authorized_procedure: true },
+    authorization: {
+      id: 'auth-without-procedure',
+      status: 'active',
+      authorization_code: 'AUTH-NO-PROC',
+      guide_number: 'GUIA-NO-PROC',
+      valid_from: '2026-06-01',
+      valid_until: '2026-06-30',
+    },
+  });
+  assert.ok(missingAuthorizedProcedure.errorCodes.includes('AUTHORIZED_PROCEDURE_NOT_INFORMED'));
 });
 
 test('assinatura do responsavel valida conforme exigencia do pagador', () => {
@@ -403,6 +467,8 @@ test('assinatura do responsavel valida conforme exigencia do pagador', () => {
     payerProfile: { ...validInput.payerProfile, requires_responsible_signature: true },
     signature: {
       id: 'signature-1',
+      appointment_id: 'appointment-1',
+      aba_session_id: 'aba-session-1',
       status: 'SIGNED',
       signed_by_name: 'Maria Responsavel',
       signed_by_role: 'responsible',
@@ -413,6 +479,8 @@ test('assinatura do responsavel valida conforme exigencia do pagador', () => {
   assert.equal(signed.status, 'valid');
   assert.ok(!signed.errorCodes.includes('RESPONSIBLE_SIGNATURE_REQUIRED'));
   assert.equal(signed.snapshot.signature.present, true);
+  assert.equal(signed.snapshot.signature.appointmentId, 'appointment-1');
+  assert.equal(signed.snapshot.signature.abaSessionId, 'aba-session-1');
   assert.equal(signed.snapshot.signature.signedByName, 'Maria Responsavel');
   assert.equal(signed.snapshot.signature.signedByRole, 'responsible');
   assert.equal(signed.snapshot.signature.signatureType, 'DIGITAL_ACCEPTANCE');
@@ -553,6 +621,24 @@ test('migration operacional adiciona requisitos TISS do pagador e autorizacoes s
   assert.doesNotMatch(payerOperationalMigrationCode, /appointments\.professional_id/);
   assert.match(payerOperationalMigrationCode, /does not generate TISS XML, batches, remittances, returns, denials/i);
   assert.doesNotMatch(payerOperationalMigrationCode, /create table if not exists public\.(tiss_batches|tiss_remittances|tiss_returns|tiss_denials)/i);
+});
+
+test('migration de autorizacao operacional completa campos sem XML', () => {
+  for (const column of [
+    'requires_authorized_procedure',
+    'authorization_number',
+    'issue_date',
+    'used_quantity',
+    'service_catalog_id',
+    'tuss_code_id',
+    'procedure_code_snapshot',
+    'procedure_name_snapshot',
+  ]) {
+    assert.match(authorizationCycleMigrationCode, new RegExp(`add column if not exists ${column}`));
+  }
+  assert.match(authorizationCycleMigrationCode, /idx_patient_payer_authorizations_active_period/);
+  assert.match(authorizationCycleMigrationCode, /does not generate TISS XML, batches, remittances, returns, denials/i);
+  assert.doesNotMatch(authorizationCycleMigrationCode, /create table if not exists public\.(tiss_batches|tiss_remittances|tiss_returns|tiss_denials)/i);
 });
 
 test('backend persiste de forma idempotente pelo appointment e revalida só por ação', () => {
@@ -715,6 +801,7 @@ test('endpoints protegem perfis e Pré-guias com autenticação, papel e tenant'
     "app.get('/api/tiss/pre-guides/:appointmentId'",
     "app.post('/api/tiss/pre-guides/:appointmentId/revalidate'",
     "app.post('/api/appointments/:appointmentId/tiss-pre-guide/revalidate'",
+    "app.post('/api/tiss/patient-payer-authorizations'",
   ]) {
     assert.match(serverCode, new RegExp(route.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
@@ -774,6 +861,7 @@ test('Pagadores e regras expoe configuracao TISS guiada por operadora', () => {
   assert.match(payerRequirementsCode, /dataService\.updatePayerTissProfile/);
   assert.match(payerRequirementsCode, /Registro ANS/);
   assert.match(payerRequirementsCode, /Exige validade da carteirinha/);
+  assert.match(payerRequirementsCode, /Exige procedimento autorizado/);
   assert.match(payerRequirementsCode, /Exige número de guia/);
   assert.match(payerRequirementsCode, /Exige CID/);
   assert.match(payerRequirementsCode, /Código do contratado na operadora/);
@@ -810,12 +898,29 @@ test('frontend oferece cards, paginação, detalhe sob demanda e nenhuma ação 
   assert.match(preGuideUiCode, /dataService\.updateClinicTissProfile/);
   assert.match(preGuideUiCode, /dataService\.updatePayerTissProfile/);
   assert.match(preGuideUiCode, /dataService\.updateProfessionalBillingProfile/);
+  assert.match(preGuideUiCode, /dataService\.upsertPatientPayerAuthorization/);
+  assert.match(preGuideUiCode, /AUTHORIZATION_REQUIRED:\s*"Autorização"/);
+  assert.match(preGuideUiCode, /AUTHORIZATION_EXHAUSTED:\s*"Autorização esgotada"/);
+  assert.match(preGuideUiCode, /AUTHORIZED_PROCEDURE_NOT_INFORMED:\s*"Procedimento autorizado"/);
+  assert.match(preGuideUiCode, /isAuthorizationIssue/);
+  assert.match(preGuideUiCode, /authorizationActionLabel/);
+  assert.match(preGuideUiCode, /Salvar autorização e revalidar/);
+  assert.match(preGuideUiCode, /Quantidade autorizada/);
+  assert.match(preGuideUiCode, /Unidade autorizada/);
   assert.match(preGuideUiCode, /Editar Dados da clínica/);
   assert.match(preGuideUiCode, /Editar perfil TISS do pagador/);
   assert.match(preGuideUiCode, /Editar perfil faturável do profissional/);
   assert.match(preGuideUiCode, /RESPONSIBLE_SIGNATURE_REQUIRED:\s*"Assinatura"/);
   assert.match(preGuideUiCode, /<Section title="Assinatura" icon=\{ClipboardCheck\}>/);
   assert.match(preGuideUiCode, /Data\/hora da assinatura/);
+  assert.match(preGuideUiCode, /isResponsibleSignatureIssue/);
+  assert.match(preGuideUiCode, /Ir para atendimento e coletar assinatura/);
+  assert.doesNotMatch(preGuideUiCode.slice(preGuideUiCode.indexOf('signatureIssue'), preGuideUiCode.indexOf('authorizationIssue')), /Adicionar autorização/);
+  assert.match(preGuideUiCode, /focusPanel:\s*"signature"/);
+  assert.match(preGuideUiCode, /actionIntent:\s*"collect_signature"/);
+  assert.match(coordinatorCode, /openAppointmentFromAdministrativeFlow/);
+  assert.match(coordinatorCode, /actionIntent === "collect_signature"/);
+  assert.match(coordinatorCode, /Abrimos o agendamento para coletar assinatura/);
   assert.match(preGuideUiCode, /Pré-guia revalidada com dados globais atualizados/);
   assert.match(preGuideUiCode, /setDetail\(result\.data\)/);
   assert.match(preGuideUiCode, /Salvar cadastro global e revalidar pré-guia atual/);
@@ -846,6 +951,7 @@ test('data service usa operações explícitas e o pacote expõe suíte dedicada
     'getPayerTissProfile',
     'getPayerTissProfiles',
     'updatePayerTissProfile',
+    'upsertPatientPayerAuthorization',
     'getProfessionalBillingProfile',
     'getProfessionalBillingProfiles',
     'updateProfessionalBillingProfile',

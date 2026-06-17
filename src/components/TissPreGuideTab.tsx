@@ -22,6 +22,11 @@ import { formatDateTimeInAppointmentTimezone } from "../utils/scheduling";
 type TissPreGuideRow = {
   id?: string | null;
   appointmentId?: string | null;
+  appointment_id?: string | null;
+  abaSessionId?: string | null;
+  aba_session_id?: string | null;
+  focusPanel?: string | null;
+  actionIntent?: string | null;
   patientId?: string | null;
   professionalId?: string | null;
   payerId?: string | null;
@@ -128,10 +133,13 @@ const issueLabels: Record<string, string> = {
   AMOUNT_MISSING: "Valor",
   GUIDE_MISSING: "Guia",
   AUTHORIZATION_MISSING: "Autorização",
+  AUTHORIZATION_REQUIRED: "Autorização",
   AUTHORIZATION_EXPIRED: "Autorização vencida",
+  AUTHORIZATION_EXHAUSTED: "Autorização esgotada",
   AUTHORIZATION_INACTIVE: "Autorização inativa",
   AUTHORIZATION_NOT_STARTED: "Autorização não vigente",
   AUTHORIZATION_PROCEDURE_MISMATCH: "Procedimento não autorizado",
+  AUTHORIZED_PROCEDURE_NOT_INFORMED: "Procedimento autorizado",
   BENEFICIARY_CARD_MISSING: "Carteirinha",
   BENEFICIARY_CARD_VALIDITY_MISSING: "Validade da carteirinha",
   BENEFICIARY_CARD_EXPIRED: "Carteirinha vencida",
@@ -167,6 +175,34 @@ function executantValue(value: unknown) {
 
 function issueLabel(code: string) {
   return issueLabels[code] || code.replaceAll("_", " ").toLocaleLowerCase("pt-BR");
+}
+
+function isResponsibleSignatureIssue(item?: { code?: string | null; section?: string | null }) {
+  return String(item?.code || "").toUpperCase() === "RESPONSIBLE_SIGNATURE_REQUIRED" || String(item?.section || "").toLowerCase() === "signature";
+}
+
+function isAuthorizationIssue(item?: { code?: string | null; section?: string | null }) {
+  const code = String(item?.code || "").toUpperCase();
+  if (String(item?.section || "").toLowerCase() === "authorization") return true;
+  return [
+    "GUIDE_MISSING",
+    "AUTHORIZATION_MISSING",
+    "AUTHORIZATION_REQUIRED",
+    "AUTHORIZATION_EXPIRED",
+    "AUTHORIZATION_EXHAUSTED",
+    "AUTHORIZATION_INACTIVE",
+    "AUTHORIZATION_NOT_STARTED",
+    "AUTHORIZATION_PROCEDURE_MISMATCH",
+    "AUTHORIZED_PROCEDURE_NOT_INFORMED",
+  ].includes(code);
+}
+
+function authorizationActionLabel(code?: string | null) {
+  const normalized = String(code || "").toUpperCase();
+  if (["AUTHORIZATION_EXPIRED", "AUTHORIZATION_EXHAUSTED", "AUTHORIZATION_INACTIVE", "AUTHORIZATION_NOT_STARTED", "AUTHORIZATION_PROCEDURE_MISMATCH", "AUTHORIZED_PROCEDURE_NOT_INFORMED"].includes(normalized)) {
+    return "Atualizar autorização";
+  }
+  return "Adicionar autorização";
 }
 
 function Section({
@@ -253,6 +289,9 @@ export function TissPreGuideTab({
   const [profileForm, setProfileForm] = useState<Record<string, any>>({});
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileSaving, setProfileSaving] = useState(false);
+  const [authorizationEditorOpen, setAuthorizationEditorOpen] = useState(false);
+  const [authorizationForm, setAuthorizationForm] = useState<Record<string, any>>({});
+  const [authorizationSaving, setAuthorizationSaving] = useState(false);
 
   const cards = useMemo(() => [
     { key: "valid" as const, label: "Pré-guias válidas", value: Number(kpis.valid || 0), tone: "text-emerald-700" },
@@ -439,6 +478,7 @@ export function TissPreGuideTab({
         defaultGuideType: data.default_guide_type || "sp_sadt",
         beneficiaryIdentificationType: data.beneficiary_identification_type || "card_number",
         requiresAuthorization: Boolean(data.requires_authorization),
+        requiresAuthorizedProcedure: Boolean(data.requires_authorized_procedure),
         requiresAuthorizationPassword: Boolean(data.requires_authorization_password),
         requiresGuideNumber: Boolean(data.requires_guide_number),
         requiresCid: Boolean(data.requires_cid),
@@ -498,10 +538,128 @@ export function TissPreGuideTab({
     }
   };
 
+  const openAuthorizationEditor = () => {
+    if (!detail?.patientId || !detail?.payerId) {
+      setError("Aplique paciente e pagador real antes de cadastrar autorização.");
+      return;
+    }
+    const authorization = detail.snapshot?.authorization || {};
+    const procedure = detail.snapshot?.procedure || {};
+    const toDateInput = (value?: unknown) => String(value || "").slice(0, 10);
+    setAuthorizationForm({
+      authorizationNumber: authorization.authorizationCode || detail.authorizationCode || "",
+      guideNumber: authorization.guideNumber || detail.guideNumber || "",
+      issueDate: toDateInput(authorization.authorizationValidFrom),
+      validFrom: toDateInput(authorization.authorizationValidFrom),
+      validUntil: toDateInput(authorization.authorizationValidUntil || detail.authorizationValidUntil),
+      procedureTussCode: authorization.procedureTussCode || procedure.tussCode || detail.tussCode || "",
+      procedureCode: authorization.procedureCode || procedure.internalCode || detail.internalProcedureCode || "",
+      procedureNameSnapshot: authorization.procedureName || procedure.name || detail.internalProcedureName || "",
+      authorizedQuantity: String(authorization.authorizedQuantity || detail.quantity || procedure.quantity || 1),
+      authorizedUnit: authorization.authorizedUnit || detail.unit || procedure.unit || "session",
+      notes: "",
+    });
+    setAuthorizationEditorOpen(true);
+  };
+
+  const updateAuthorizationField = (key: string, value: any) => {
+    setAuthorizationForm((current) => ({ ...current, [key]: value }));
+  };
+
+  const saveAuthorization = async () => {
+    if (!detail?.patientId || !detail?.payerId || authorizationSaving) return;
+    setAuthorizationSaving(true);
+    setError("");
+    setMessage("");
+    try {
+      const result = await dataService.upsertPatientPayerAuthorization({
+        appointmentId: detail.appointmentId,
+        patientId: detail.patientId,
+        payerId: detail.payerId,
+        authorizationNumber: authorizationForm.authorizationNumber,
+        guideNumber: authorizationForm.guideNumber,
+        issueDate: authorizationForm.issueDate,
+        validFrom: authorizationForm.validFrom,
+        validUntil: authorizationForm.validUntil,
+        procedureTussCode: authorizationForm.procedureTussCode,
+        procedureCode: authorizationForm.procedureCode,
+        procedureNameSnapshot: authorizationForm.procedureNameSnapshot,
+        authorizedQuantity: authorizationForm.authorizedQuantity,
+        authorizedUnit: authorizationForm.authorizedUnit,
+        notes: authorizationForm.notes,
+        status: "active",
+      });
+      if (!result?.success) {
+        setError(result?.error || "Não foi possível salvar a autorização.");
+        return;
+      }
+      setAuthorizationEditorOpen(false);
+      await revalidate(detail);
+      setMessage("Autorização salva. Pré-guia revalidada.");
+    } finally {
+      setAuthorizationSaving(false);
+    }
+  };
+
   const snapshot = detail?.snapshot || {};
   const errors = detail?.validationErrors || [];
   const warnings = detail?.validationWarnings || [];
   const detailStatus = statusMeta[String(detail?.status || "draft")] || statusMeta.draft;
+  const openAppointment = (row: TissPreGuideRow, options: Partial<TissPreGuideRow> = {}) => {
+    const appointmentId = row.appointmentId || row.appointment_id || detail?.appointmentId || detail?.appointment_id || null;
+    const abaSessionId =
+      row.abaSessionId ||
+      row.aba_session_id ||
+      row.snapshot?.signature?.abaSessionId ||
+      row.snapshot?.signature?.aba_session_id ||
+      detail?.snapshot?.signature?.abaSessionId ||
+      detail?.snapshot?.signature?.aba_session_id ||
+      null;
+    onOpenAppointment?.({
+      ...row,
+      ...options,
+      appointmentId,
+      appointment_id: appointmentId,
+      abaSessionId,
+      aba_session_id: abaSessionId,
+    });
+    if (detail) setDetail(null);
+  };
+  const renderValidationIssue = (item: { code?: string; field?: string; message?: string; section?: string; action?: string; severity?: string }, index: number, tone: "error" | "warning") => {
+    const signatureIssue = isResponsibleSignatureIssue(item);
+    const authorizationIssue = isAuthorizationIssue(item);
+    const className = tone === "error"
+      ? "rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800"
+      : "rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sky-800";
+    const actionClassName = tone === "error" ? "text-amber-900" : "text-sky-900";
+    const buttonClassName = tone === "error"
+      ? "mt-2 inline-flex rounded-md border border-amber-300 bg-white px-3 py-1.5 text-xs font-bold text-amber-900 hover:bg-amber-100"
+      : "mt-2 inline-flex rounded-md border border-sky-300 bg-white px-3 py-1.5 text-xs font-bold text-sky-900 hover:bg-sky-100";
+    return (
+      <div key={`${tone}-${item.code}-${index}`} className={className}>
+        <div>{item.message || issueLabel(String(item.code || ""))}</div>
+        {signatureIssue ? (
+          <button
+            type="button"
+            onClick={() => openAppointment(detail || {}, { focusPanel: "signature", actionIntent: "collect_signature" })}
+            className={buttonClassName}
+          >
+            Ir para atendimento e coletar assinatura
+          </button>
+        ) : authorizationIssue ? (
+          <button
+            type="button"
+            onClick={() => openAuthorizationEditor()}
+            className={buttonClassName}
+          >
+            {authorizationActionLabel(item.code)}
+          </button>
+        ) : item.action ? (
+          <div className={`mt-1 text-xs font-bold ${actionClassName}`}>{item.action}</div>
+        ) : null}
+      </div>
+    );
+  };
   const profileEditorMeta = profileEditor === "provider"
     ? {
         title: "Cadastro global: Dados TISS do prestador",
@@ -716,7 +874,7 @@ export function TissPreGuideTab({
                         <button type="button" onClick={() => void revalidate(row)} disabled={busy} title="Revalidar Pré-guia" className="rounded-md border border-slate-200 p-2 text-indigo-700 hover:bg-white disabled:opacity-60">
                           {busy ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
                         </button>
-                        <button type="button" onClick={() => onOpenAppointment?.(row)} title="Ir para atendimento" className="rounded-md border border-slate-200 p-2 text-slate-600 hover:bg-white"><Stethoscope size={16} /></button>
+                        <button type="button" onClick={() => openAppointment(row)} title="Ir para atendimento" className="rounded-md border border-slate-200 p-2 text-slate-600 hover:bg-white"><Stethoscope size={16} /></button>
                       </div>
                     </td>
                   </tr>
@@ -799,7 +957,9 @@ export function TissPreGuideTab({
                     <DetailField label="Senha / autorização" value={fieldValue(snapshot.authorization?.authorizationCode || detail.authorizationCode)} />
                     <DetailField label="Início da validade" value={fieldValue(snapshot.authorization?.authorizationValidFrom)} />
                     <DetailField label="Validade" value={fieldValue(snapshot.authorization?.authorizationValidUntil || detail.authorizationValidUntil)} />
-                    <DetailField label="Procedimento autorizado" value={fieldValue(snapshot.authorization?.procedureTussCode)} />
+                    <DetailField label="Procedimento autorizado" value={fieldValue(snapshot.authorization?.procedureName || snapshot.authorization?.procedureTussCode || snapshot.authorization?.procedureCode)} />
+                    <DetailField label="Quantidade autorizada" value={fieldValue(snapshot.authorization?.authorizedQuantity)} />
+                    <DetailField label="Unidade autorizada" value={fieldValue(snapshot.authorization?.authorizedUnit)} />
                   </Section>
 
                   {snapshot.signature?.present && (
@@ -817,18 +977,8 @@ export function TissPreGuideTab({
                         <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-emerald-700">Dados mínimos validados para a futura geração de guia.</div>
                       ) : (
                         <div className="space-y-2">
-                          {errors.map((item, index) => (
-                            <div key={`${item.code}-${index}`} className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800">
-                              <div>{item.message || issueLabel(String(item.code || ""))}</div>
-                              {item.action && <div className="mt-1 text-xs font-bold text-amber-900">{item.action}</div>}
-                            </div>
-                          ))}
-                          {warnings.map((item, index) => (
-                            <div key={`${item.code}-${index}`} className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sky-800">
-                              <div>{item.message || issueLabel(String(item.code || ""))}</div>
-                              {item.action && <div className="mt-1 text-xs font-bold text-sky-900">{item.action}</div>}
-                            </div>
-                          ))}
+                          {errors.map((item, index) => renderValidationIssue(item, index, "error"))}
+                          {warnings.map((item, index) => renderValidationIssue(item, index, "warning"))}
                         </div>
                       )}
                     </div>
@@ -842,7 +992,8 @@ export function TissPreGuideTab({
                     <button type="button" onClick={() => void openProfileEditor("provider")} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">Editar Dados da clínica</button>
                     <button type="button" onClick={() => void openProfileEditor("payer")} disabled={!detail.payerId} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-40">Editar perfil TISS do pagador</button>
                     <button type="button" onClick={() => void openProfileEditor("professional")} disabled={!detail.professionalId} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-40">Editar perfil faturável do profissional</button>
-                    <button type="button" onClick={() => onOpenAppointment?.(detail)} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">Ir para atendimento</button>
+                    <button type="button" onClick={() => openAuthorizationEditor()} disabled={!detail.patientId || !detail.payerId} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-40">Adicionar autorização</button>
+                    <button type="button" onClick={() => openAppointment(detail)} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">Ir para atendimento</button>
                     <button type="button" onClick={() => void revalidate(detail)} disabled={revalidatingId === detail.appointmentId} className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-60">
                       {revalidatingId === detail.appointmentId ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
                       Revalidar pré-guia
@@ -851,6 +1002,61 @@ export function TissPreGuideTab({
                 </>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {authorizationEditorOpen && (
+        <div className="fixed inset-0 z-[160] flex items-end justify-center bg-slate-950/50 p-4 sm:items-center" role="dialog" aria-modal="true" aria-label="Autorização do convênio">
+          <div className="max-h-[90vh] w-full max-w-2xl overflow-hidden rounded-lg bg-white shadow-xl">
+            <header className="flex items-start justify-between border-b border-slate-200 px-5 py-4">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900">Adicionar autorização</h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Autorização operacional de {fieldValue(detail?.patientName, "Paciente")} para {fieldValue(detail?.payerName, "pagador")}.
+                </p>
+              </div>
+              <button type="button" onClick={() => setAuthorizationEditorOpen(false)} className="rounded-md p-2 text-slate-500 hover:bg-slate-100" aria-label="Fechar autorização"><X size={18} /></button>
+            </header>
+
+            <div className="max-h-[calc(90vh-140px)] overflow-y-auto px-5 py-4 pb-24 sm:pb-5">
+              <div className="space-y-4">
+                <div className="rounded-md border border-indigo-100 bg-indigo-50 px-3 py-2 text-sm text-indigo-800">
+                  Cadastre a guia/senha liberada pelo convênio para este paciente, pagador e procedimento. Depois de salvar, a Pré-guia será revalidada.
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <EditorField label="Convênio/pagador" value={fieldValue(detail?.payerName, "")} onChange={() => undefined} maxLength={180} />
+                  <EditorField label="Número da autorização/senha" value={authorizationForm.authorizationNumber || ""} onChange={(value) => updateAuthorizationField("authorizationNumber", value)} maxLength={120} />
+                  <EditorField label="Número da guia" value={authorizationForm.guideNumber || ""} onChange={(value) => updateAuthorizationField("guideNumber", value)} maxLength={120} />
+                  <EditorField label="Data de emissão" type="date" value={authorizationForm.issueDate || ""} onChange={(value) => updateAuthorizationField("issueDate", value)} />
+                  <EditorField label="Início da validade" type="date" value={authorizationForm.validFrom || ""} onChange={(value) => updateAuthorizationField("validFrom", value)} />
+                  <EditorField label="Validade final" type="date" value={authorizationForm.validUntil || ""} onChange={(value) => updateAuthorizationField("validUntil", value)} />
+                  <EditorField label="Procedimento/TUSS autorizado" value={authorizationForm.procedureTussCode || ""} onChange={(value) => updateAuthorizationField("procedureTussCode", value)} maxLength={80} />
+                  <EditorField label="Código interno autorizado" value={authorizationForm.procedureCode || ""} onChange={(value) => updateAuthorizationField("procedureCode", value)} maxLength={80} />
+                  <EditorField label="Nome do procedimento autorizado" value={authorizationForm.procedureNameSnapshot || ""} onChange={(value) => updateAuthorizationField("procedureNameSnapshot", value)} maxLength={180} />
+                  <EditorField label="Quantidade autorizada" type="number" value={authorizationForm.authorizedQuantity || ""} onChange={(value) => updateAuthorizationField("authorizedQuantity", value)} maxLength={20} />
+                  <EditorField label="Unidade autorizada" value={authorizationForm.authorizedUnit || ""} onChange={(value) => updateAuthorizationField("authorizedUnit", value)} maxLength={40} />
+                </div>
+                <label className="block text-xs font-medium text-slate-600">
+                  Observações
+                  <textarea
+                    value={authorizationForm.notes || ""}
+                    onChange={(event) => updateAuthorizationField("notes", event.target.value)}
+                    maxLength={2000}
+                    rows={3}
+                    className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-800 outline-none focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100"
+                  />
+                </label>
+              </div>
+            </div>
+
+            <footer className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 px-5 py-4">
+              <button type="button" onClick={() => setAuthorizationEditorOpen(false)} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700">Cancelar</button>
+              <button type="button" onClick={() => void saveAuthorization()} disabled={authorizationSaving} className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-60">
+                {authorizationSaving && <Loader2 size={15} className="animate-spin" />}
+                Salvar autorização e revalidar
+              </button>
+            </footer>
           </div>
         </div>
       )}
@@ -923,6 +1129,7 @@ export function TissPreGuideTab({
                   <div className="grid gap-2 sm:grid-cols-2">
                     {[
                       ["requiresAuthorization", "Exige autorização"],
+                      ["requiresAuthorizedProcedure", "Exige procedimento autorizado"],
                       ["requiresAuthorizationPassword", "Exige senha/autorização"],
                       ["requiresGuideNumber", "Exige número de guia"],
                       ["requiresCid", "Exige CID"],

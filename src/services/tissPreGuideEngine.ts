@@ -244,11 +244,14 @@ const issueLabelOverrides: Record<string, string> = {
   BILLING_UNIT_MISSING: 'Unidade de cobrança não informada',
   AMOUNT_MISSING: 'Valor previsto não informado',
   GUIDE_MISSING: 'Guia não informada',
+  AUTHORIZATION_REQUIRED: 'Convênio exige autorização, mas nenhuma autorização ativa foi encontrada para este paciente/procedimento',
   AUTHORIZATION_MISSING: 'Convênio exige autorização, mas nenhuma autorização ativa foi encontrada para este paciente/procedimento',
   AUTHORIZATION_INACTIVE: 'Autorização encontrada não está ativa',
   AUTHORIZATION_NOT_STARTED: 'Autorização ainda não está vigente na data do atendimento',
   AUTHORIZATION_EXPIRED: 'Autorização vencida para a data do atendimento',
   AUTHORIZATION_PROCEDURE_MISMATCH: 'Autorização não cobre o procedimento/TUSS do atendimento',
+  AUTHORIZED_PROCEDURE_NOT_INFORMED: 'Procedimento autorizado não informado',
+  AUTHORIZATION_EXHAUSTED: 'Autorização esgotada',
   RESPONSIBLE_SIGNATURE_REQUIRED: 'Assinatura do responsável exigida pelo convênio',
 };
 
@@ -283,8 +286,11 @@ export function tissPreGuideIssueLabel(code: unknown) {
     BILLING_UNIT_MISSING: 'Unidade de cobrança não informada',
     AMOUNT_MISSING: 'Valor previsto não informado',
     GUIDE_MISSING: 'Guia não informada',
+    AUTHORIZATION_REQUIRED: 'Autorização não informada',
     AUTHORIZATION_MISSING: 'Autorização não informada',
     AUTHORIZATION_EXPIRED: 'Autorização vencida',
+    AUTHORIZATION_EXHAUSTED: 'Autorização esgotada',
+    AUTHORIZED_PROCEDURE_NOT_INFORMED: 'Procedimento autorizado não informado',
   };
   return labels[text(code)] || text(code) || 'Pendência TISS';
 }
@@ -297,6 +303,7 @@ export function tissPreGuideIssueAction(code: unknown, section?: TissPreGuideIss
   if (normalized.includes('BENEFICIARY') || section === 'beneficiary') return 'Corrigir paciente';
   if (normalized.includes('PROFESSIONAL') || normalized === 'CBO_MISSING' || section === 'professional') return 'Corrigir profissional';
   if (normalized.includes('PROCEDURE') || normalized.includes('TUSS') || normalized.includes('AMOUNT') || section === 'procedure') return 'Corrigir procedimento/TUSS';
+  if (['AUTHORIZATION_EXPIRED', 'AUTHORIZATION_EXHAUSTED', 'AUTHORIZATION_PROCEDURE_MISMATCH', 'AUTHORIZED_PROCEDURE_NOT_INFORMED'].includes(normalized)) return 'Atualizar autorização';
   if (normalized.includes('AUTHORIZATION') || normalized.includes('GUIDE') || section === 'authorization') return 'Adicionar autorização';
   if (normalized.includes('PROVIDER') || normalized.includes('CNES') || section === 'provider') return 'Corrigir prestador';
   return 'Revisar pendência';
@@ -470,23 +477,36 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
   if (payerProfile.requires_beneficiary_card_validity && cardValidUntil && scheduledStart && isBeforeDate(cardValidUntil, scheduledStart)) {
     addIssue(errors, 'BENEFICIARY_CARD_EXPIRED', 'beneficiary_card_valid_until', tissPreGuideIssueLabel('BENEFICIARY_CARD_EXPIRED'), 'beneficiary');
   }
-  const guideNumber = text(billingContext.guide_number || billingItem.guide_number || authorization.guide_number);
+  const guideNumber = text(authorization.guide_number || billingContext.guide_number || billingItem.guide_number);
   const authorizationCode = text(
-    billingContext.authorization_code ||
-      billingItem.authorization_number ||
+    authorization.authorization_number ||
       authorization.authorization_code ||
       authorization.password ||
-      authorization.code,
+      authorization.code ||
+      billingContext.authorization_code ||
+      billingItem.authorization_number ||
+      billingItem.authorization_code,
   );
   const authorizationStatus = normalizeContext(authorization.status || (authorization.active === false ? 'cancelled' : 'active'));
-  const authorizationValidFrom = text(authorization.valid_from || billingContext.authorization_valid_from || appointment.authorization_valid_from);
+  const authorizationValidFrom = text(authorization.valid_from || authorization.issue_date || authorization.issued_at || billingContext.authorization_valid_from || appointment.authorization_valid_from);
   const authorizationValidUntil = text(
-    billingContext.authorization_valid_until ||
+    authorization.valid_until ||
+      billingContext.authorization_valid_until ||
       billingContext.metadata?.authorization_valid_until ||
-      appointment.authorization_valid_until ||
-      authorization.valid_until,
+      appointment.authorization_valid_until,
   );
-  const authorizationProcedureTussCode = text(authorization.procedure_tuss_code || authorization.tuss_code);
+  const authorizationProcedureTussCode = text(authorization.procedure_tuss_code || authorization.tuss_code || authorization.tuss_code_snapshot);
+  const authorizationProcedureCode = text(authorization.procedure_code || authorization.procedure_code_snapshot);
+  const authorizationProcedureName = text(authorization.procedure_name_snapshot || authorization.procedure_name);
+  const authorizationId = text(authorization.id);
+  const requiresAuthorizedProcedure = Boolean(
+    payerProfile.requires_authorized_procedure ||
+      payerProfile.requires_authorized_procedure_match ||
+      payerProfile.requires_authorization_procedure ||
+      mapping.requires_authorized_procedure,
+  );
+  const authorizedQuantity = Number(authorization.authorized_quantity || 0);
+  const usedQuantity = Number(authorization.used_quantity || 0);
   const requiresGuide = Boolean(mapping.requires_guide || payerProfile.requires_guide_number);
   const requiresAuthorization = Boolean(
     payerProfile.requires_authorization ||
@@ -494,8 +514,14 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
       mapping.requires_authorization,
   );
   if (requiresGuide && !guideNumber) addIssue(errors, 'GUIDE_MISSING', 'guide_number', tissPreGuideIssueLabel('GUIDE_MISSING'), 'authorization');
-  if (requiresAuthorization && !authorizationCode) addIssue(errors, 'AUTHORIZATION_MISSING', 'authorization_code', tissPreGuideIssueLabel('AUTHORIZATION_MISSING'), 'authorization');
-  if (text(authorization.id) && authorizationStatus && authorizationStatus !== 'ACTIVE') {
+  if (requiresAuthorization && (!authorizationId || !authorizationCode)) {
+    addIssue(errors, 'AUTHORIZATION_REQUIRED', 'authorization_code', tissPreGuideIssueLabel('AUTHORIZATION_REQUIRED'), 'authorization');
+  }
+  if (authorizationId && authorizationStatus === 'EXHAUSTED') {
+    addIssue(errors, 'AUTHORIZATION_EXHAUSTED', 'authorization_status', tissPreGuideIssueLabel('AUTHORIZATION_EXHAUSTED'), 'authorization');
+  } else if (authorizationId && authorizationStatus === 'EXPIRED') {
+    addIssue(errors, 'AUTHORIZATION_EXPIRED', 'authorization_status', tissPreGuideIssueLabel('AUTHORIZATION_EXPIRED'), 'authorization');
+  } else if (authorizationId && authorizationStatus && authorizationStatus !== 'ACTIVE') {
     addIssue(errors, 'AUTHORIZATION_INACTIVE', 'authorization_status', tissPreGuideIssueLabel('AUTHORIZATION_INACTIVE'), 'authorization');
   }
   if (authorizationValidFrom && scheduledStart && isAfterDate(authorizationValidFrom, scheduledStart)) {
@@ -504,7 +530,16 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
   if (authorizationValidUntil && scheduledStart && isBeforeDate(authorizationValidUntil, scheduledStart)) {
     addIssue(errors, 'AUTHORIZATION_EXPIRED', 'authorization_valid_until', tissPreGuideIssueLabel('AUTHORIZATION_EXPIRED'), 'authorization');
   }
-  if (authorizationProcedureTussCode && resolvedTussCode && authorizationProcedureTussCode !== resolvedTussCode) {
+  if (authorizationId && positiveNumber(authorizedQuantity) && Number.isFinite(usedQuantity) && usedQuantity >= authorizedQuantity) {
+    addIssue(errors, 'AUTHORIZATION_EXHAUSTED', 'authorization_usage', tissPreGuideIssueLabel('AUTHORIZATION_EXHAUSTED'), 'authorization');
+  }
+  if (authorizationId && requiresAuthorizedProcedure && !authorizationProcedureTussCode && !authorizationProcedureCode) {
+    addIssue(errors, 'AUTHORIZED_PROCEDURE_NOT_INFORMED', 'authorization_procedure', tissPreGuideIssueLabel('AUTHORIZED_PROCEDURE_NOT_INFORMED'), 'authorization');
+  }
+  if (
+    (authorizationProcedureTussCode && resolvedTussCode && authorizationProcedureTussCode !== resolvedTussCode) ||
+    (authorizationProcedureCode && procedureCode && authorizationProcedureCode !== procedureCode)
+  ) {
     addIssue(errors, 'AUTHORIZATION_PROCEDURE_MISMATCH', 'authorization_procedure_tuss_code', tissPreGuideIssueLabel('AUTHORIZATION_PROCEDURE_MISMATCH'), 'authorization');
   }
   const signatureStatus = normalizeContext(signature.status || (signature.id ? 'SIGNED' : ''));
@@ -618,11 +653,16 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
         authorizationValidUntil: authorizationValidUntil || null,
         authorizedQuantity: positiveNumber(authorization.authorized_quantity) ? Number(authorization.authorized_quantity) : null,
         authorizedUnit: text(authorization.authorized_unit) || null,
+        usedQuantity: Number.isFinite(usedQuantity) ? usedQuantity : null,
+        procedureCode: authorizationProcedureCode || null,
+        procedureName: authorizationProcedureName || null,
         procedureTussCode: authorizationProcedureTussCode || null,
       },
       signature: {
         present: hasResponsibleSignature,
         id: text(signature.id) || null,
+        appointmentId: text(signature.appointment_id || signature.appointmentId || appointmentId) || null,
+        abaSessionId: text(signature.aba_session_id || signature.abaSessionId || appointment.aba_session_id || appointment.abaSessionId || billingContext.aba_session_id || billingContext.abaSessionId) || null,
         signedByName: text(signature.signed_by_name || signature.signedByName) || null,
         signedByRole: text(signature.signed_by_role || signature.signedByRole) || null,
         signedAt: text(signature.signed_at || signature.signedAt) || null,

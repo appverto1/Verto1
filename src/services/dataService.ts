@@ -3027,6 +3027,26 @@ export const dataService = {
     }
   },
 
+  async upsertPatientPayerAuthorization(payload: any = {}) {
+    try {
+      const response = await fetchClinical('/api/tiss/patient-payer-authorizations', {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'upsertPatientPayerAuthorization',
+        operation: 'write',
+        table: 'patient_payer_authorizations,appointment_tiss_pre_guides',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: true
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, error: 'Não foi possível salvar a autorização do convênio.' };
+    }
+  },
+
   async getProfessionalBillingProfile(professionalId: string) {
     const endpoint = `/api/admin/tiss/professional-profiles/${encodeURIComponent(String(professionalId))}`;
     try {

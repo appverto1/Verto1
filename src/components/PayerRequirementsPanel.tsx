@@ -86,6 +86,7 @@ type PayerTissForm = {
   requiresBeneficiaryCard: boolean;
   requiresBeneficiaryCardValidity: boolean;
   requiresAuthorization: boolean;
+  requiresAuthorizedProcedure: boolean;
   requiresAuthorizationPassword: boolean;
   requiresGuideNumber: boolean;
   requiresCid: boolean;
@@ -176,6 +177,7 @@ const defaultPayerTissForm: PayerTissForm = {
   requiresBeneficiaryCard: true,
   requiresBeneficiaryCardValidity: false,
   requiresAuthorization: false,
+  requiresAuthorizedProcedure: false,
   requiresAuthorizationPassword: false,
   requiresGuideNumber: false,
   requiresCid: false,
@@ -202,6 +204,7 @@ const normalizePayerTissProfile = (profile: any = {}): PayerTissForm => ({
   requiresBeneficiaryCard: profile.requires_beneficiary_card ?? profile.requiresBeneficiaryCard ?? true,
   requiresBeneficiaryCardValidity: Boolean(profile.requires_beneficiary_card_validity ?? profile.requiresBeneficiaryCardValidity),
   requiresAuthorization: Boolean(profile.requires_authorization ?? profile.requiresAuthorization),
+  requiresAuthorizedProcedure: Boolean(profile.requires_authorized_procedure ?? profile.requiresAuthorizedProcedure),
   requiresAuthorizationPassword: Boolean(profile.requires_authorization_password ?? profile.requiresAuthorizationPassword),
   requiresGuideNumber: Boolean(profile.requires_guide_number ?? profile.requiresGuideNumber),
   requiresCid: Boolean(profile.requires_cid ?? profile.requiresCid),
@@ -839,6 +842,7 @@ export function PayerRequirementsPanel() {
                     ["requiresBeneficiaryCard", "Exige carteirinha"],
                     ["requiresBeneficiaryCardValidity", "Exige validade da carteirinha"],
                     ["requiresAuthorization", "Exige autorização prévia"],
+                    ["requiresAuthorizedProcedure", "Exige procedimento autorizado"],
                     ["requiresAuthorizationPassword", "Exige senha/autorização"],
                     ["requiresGuideNumber", "Exige número de guia"],
                     ["requiresCid", "Exige CID"],

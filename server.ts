@@ -3961,6 +3961,7 @@ const PAYER_TISS_PROFILE_SELECT = [
   'tiss_version',
   'default_guide_type',
   'requires_authorization',
+  'requires_authorized_procedure',
   'beneficiary_identification_type',
   'requires_beneficiary_card_validity',
   'requires_authorization_password',
@@ -4009,18 +4010,27 @@ const PATIENT_PAYER_AUTHORIZATION_SELECT = [
   'clinic_id',
   'patient_id',
   'payer_id',
+  'authorization_number',
   'authorization_code',
   'guide_number',
+  'issue_date',
   'issued_at',
   'valid_from',
   'valid_until',
   'authorized_quantity',
   'authorized_unit',
+  'used_quantity',
+  'service_catalog_id',
+  'tuss_code_id',
   'procedure_tuss_code',
   'procedure_code',
+  'procedure_code_snapshot',
+  'procedure_name_snapshot',
   'status',
   'notes',
   'active',
+  'created_by',
+  'updated_by',
   'created_at',
   'updated_at'
 ].join(',');
@@ -33032,8 +33042,8 @@ async function startServer() {
     });
     if (activeRows.length === 0) return rows[0] || null;
     const matching = activeRows.find((row: any) => {
-      const rowTuss = sanitizeString(row?.procedure_tuss_code, 80);
-      const rowProcedure = sanitizeString(row?.procedure_code, 80);
+      const rowTuss = sanitizeString(row?.procedure_tuss_code || row?.tuss_code_snapshot, 80);
+      const rowProcedure = sanitizeString(row?.procedure_code || row?.procedure_code_snapshot, 80);
       if (rowTuss && resolvedTussCode && rowTuss !== resolvedTussCode) return false;
       if (rowProcedure && resolvedProcedureCode && rowProcedure !== resolvedProcedureCode) return false;
       return true;
@@ -33295,8 +33305,8 @@ async function startServer() {
       professionalId: isUuid(professionalId) ? professionalId : null,
       professionalProfileFound: Boolean(professionalProfile?.id),
       professionalProfileId: sanitizeString(professionalProfile?.id, 120) || null,
-      authorizationProfileFound: Boolean(authorizationSnapshot?.id),
-      authorizationProfileId: sanitizeString(authorizationSnapshot?.id, 120) || null,
+      authorizationProfileFound: Boolean(authorizationSnapshot?.authorizationId || authorizationSnapshot?.id),
+      authorizationProfileId: sanitizeString(authorizationSnapshot?.authorizationId || authorizationSnapshot?.id, 120) || null,
       responsibleSignatureFound: Boolean(responsibleSignature?.id),
       responsibleSignatureId: sanitizeString(responsibleSignature?.id, 120) || null,
       usedAbaSessionSignatureFallback: Boolean(responsibleSignature?.id && !responsibleSignature?.appointment_id && abaSessionIdForSignature),
@@ -33598,7 +33608,7 @@ async function startServer() {
     missing_professional_registry: ['PROFESSIONAL_BILLING_PROFILE_MISSING', 'PROFESSIONAL_REGISTRY_MISSING', 'PROFESSIONAL_COUNCIL_STATE_MISSING'],
     missing_cbo: ['CBO_MISSING'],
     missing_tuss: ['PROCEDURE_MISSING', 'TUSS_CODE_MISSING', 'TUSS_DESCRIPTION_MISSING'],
-    missing_guide_authorization: ['GUIDE_MISSING', 'AUTHORIZATION_MISSING', 'AUTHORIZATION_INACTIVE', 'AUTHORIZATION_NOT_STARTED', 'AUTHORIZATION_EXPIRED', 'AUTHORIZATION_PROCEDURE_MISMATCH'],
+    missing_guide_authorization: ['GUIDE_MISSING', 'AUTHORIZATION_MISSING', 'AUTHORIZATION_REQUIRED', 'AUTHORIZATION_INACTIVE', 'AUTHORIZATION_NOT_STARTED', 'AUTHORIZATION_EXPIRED', 'AUTHORIZATION_EXHAUSTED', 'AUTHORIZATION_PROCEDURE_MISMATCH', 'AUTHORIZED_PROCEDURE_NOT_INFORMED'],
     missing_amount: ['AMOUNT_MISSING']
   };
 
@@ -33768,6 +33778,7 @@ async function startServer() {
         default_guide_type: ['consulta', 'sp_sadt', 'other'].includes(guideType) ? guideType : 'sp_sadt',
         beneficiary_identification_type: sanitizeString(req.body?.beneficiaryIdentificationType ?? req.body?.beneficiary_identification_type, 80) || null,
         requires_authorization: Boolean(req.body?.requiresAuthorization ?? req.body?.requires_authorization),
+        requires_authorized_procedure: Boolean(req.body?.requiresAuthorizedProcedure ?? req.body?.requires_authorized_procedure),
         requires_authorization_password: Boolean(req.body?.requiresAuthorizationPassword ?? req.body?.requires_authorization_password),
         requires_guide_number: Boolean(req.body?.requiresGuideNumber ?? req.body?.requires_guide_number),
         requires_cid: Boolean(req.body?.requiresCid ?? req.body?.requires_cid),
@@ -33801,6 +33812,159 @@ async function startServer() {
     } catch (error: any) {
       console.warn('[TissPreGuide] payer profile update failed:', error?.message || String(error));
       return res.status(500).json(payerSafeError(500));
+    }
+  });
+
+  app.post('/api/tiss/patient-payer-authorizations', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 32 * 1024, 'Autorização do paciente')) return;
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      const authorizationId = sanitizeString(req.body?.id, 120);
+      const patientId = sanitizeString(req.body?.patientId ?? req.body?.patient_id, 120);
+      const payerId = sanitizeString(req.body?.payerId ?? req.body?.payer_id, 120);
+      const appointmentId = sanitizeString(req.body?.appointmentId ?? req.body?.appointment_id, 120);
+      if (!isUuid(organizationId) || !isUuid(patientId) || !isUuid(payerId)) {
+        return res.status(400).json({ success: false, error: 'Informe paciente e pagador válidos.', code: 'INVALID_AUTHORIZATION_SCOPE' });
+      }
+      if (!(await canAccessPatientInCurrentClinic(patientId, req.session.user))) {
+        return res.status(404).json(payerSafeError(404));
+      }
+      if (!(await fetchPayerForAdmin(payerId, organizationId))) {
+        return res.status(404).json({ success: false, error: 'Pagador não encontrado para esta clínica.', code: 'PAYER_NOT_FOUND' });
+      }
+      if (isUuid(appointmentId)) {
+        const appointmentScope = await fetchAppointmentForBillingContext(appointmentId, req.session.user);
+        if (!appointmentScope.ok) return res.status(appointmentScope.status || 404).json(payerSafeError(appointmentScope.status || 404));
+        const appointmentPatientId = sanitizeString((appointmentScope as any).appointment?.patient_id, 120);
+        if (appointmentPatientId && appointmentPatientId !== patientId) {
+          return res.status(400).json({ success: false, error: 'A autorização deve pertencer ao mesmo paciente do atendimento.', code: 'AUTHORIZATION_PATIENT_MISMATCH' });
+        }
+      }
+
+      let existingAuthorization: any = null;
+      if (isUuid(authorizationId)) {
+        const { data, error } = await supabase
+          .from('patient_payer_authorizations')
+          .select(PATIENT_PAYER_AUTHORIZATION_SELECT)
+          .eq('organization_id', organizationId)
+          .eq('id', authorizationId)
+          .limit(1)
+          .maybeSingle();
+        if (error) {
+          if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) {
+            return res.status(503).json({ success: false, error: 'Cadastro de autorizações indisponível. Verifique a migration e o cache do banco.', code: 'AUTHORIZATION_SCHEMA_UNAVAILABLE' });
+          }
+          throw error;
+        }
+        if (!data?.id) return res.status(404).json(payerSafeError(404));
+        existingAuthorization = data;
+      }
+
+      const now = new Date().toISOString();
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      const rawStatus = sanitizeString(req.body?.status, 40).toLowerCase();
+      const status = ['active', 'expired', 'exhausted', 'cancelled'].includes(rawStatus) ? rawStatus : 'active';
+      const authorizationNumber = sanitizeString(
+        req.body?.authorizationNumber ??
+          req.body?.authorization_number ??
+          req.body?.authorizationCode ??
+          req.body?.authorization_code,
+        120
+      ) || null;
+      const guideNumber = sanitizeString(req.body?.guideNumber ?? req.body?.guide_number, 120) || null;
+      const issueDate = sanitizeIsoDateOnly(req.body?.issueDate ?? req.body?.issue_date ?? req.body?.issuedAt ?? req.body?.issued_at);
+      const validFrom = sanitizeIsoDateOnly(req.body?.validFrom ?? req.body?.valid_from);
+      const validUntil = sanitizeIsoDateOnly(req.body?.validUntil ?? req.body?.valid_until);
+      const authorizedQuantity = asSafeNumber(req.body?.authorizedQuantity ?? req.body?.authorized_quantity, 0, 1_000_000);
+      const usedQuantity = asSafeNumber(req.body?.usedQuantity ?? req.body?.used_quantity, 0, 1_000_000);
+      const serviceCatalogId = sanitizeString(req.body?.serviceCatalogId ?? req.body?.service_catalog_id, 120);
+      const tussCodeId = sanitizeString(req.body?.tussCodeId ?? req.body?.tuss_code_id, 120);
+      const procedureTussCode = sanitizeString(
+        req.body?.procedureTussCode ??
+          req.body?.procedure_tuss_code ??
+          req.body?.tussCode ??
+          req.body?.tuss_code,
+        80
+      ) || null;
+      const procedureCode = sanitizeString(req.body?.procedureCode ?? req.body?.procedure_code ?? req.body?.procedureCodeSnapshot ?? req.body?.procedure_code_snapshot, 80) || null;
+      const procedureNameSnapshot = sanitizeString(req.body?.procedureNameSnapshot ?? req.body?.procedure_name_snapshot ?? req.body?.procedureName ?? req.body?.procedure_name, 180) || null;
+      const payload = cleanObject({
+        id: isUuid(authorizationId) ? authorizationId : undefined,
+        organization_id: organizationId,
+        clinic_id: organizationId,
+        patient_id: patientId,
+        payer_id: payerId,
+        authorization_number: authorizationNumber,
+        authorization_code: authorizationNumber,
+        guide_number: guideNumber,
+        issue_date: issueDate,
+        issued_at: issueDate,
+        valid_from: validFrom,
+        valid_until: validUntil,
+        authorized_quantity: authorizedQuantity,
+        authorized_unit: sanitizeString(req.body?.authorizedUnit ?? req.body?.authorized_unit, 40) || null,
+        used_quantity: usedQuantity,
+        service_catalog_id: isUuid(serviceCatalogId) ? serviceCatalogId : null,
+        tuss_code_id: isUuid(tussCodeId) ? tussCodeId : null,
+        procedure_tuss_code: procedureTussCode,
+        procedure_code: procedureCode,
+        procedure_code_snapshot: procedureCode,
+        procedure_name_snapshot: procedureNameSnapshot,
+        status,
+        notes: sanitizeTextField(req.body?.notes, 2000) || null,
+        active: req.body?.active !== false,
+        created_by: existingAuthorization?.created_by || (isUuid(actorId) ? actorId : null),
+        updated_by: isUuid(actorId) ? actorId : null,
+        created_at: existingAuthorization?.created_at || now,
+        updated_at: now
+      });
+
+      const query = isUuid(authorizationId)
+        ? supabase
+            .from('patient_payer_authorizations')
+            .update(payload)
+            .eq('organization_id', organizationId)
+            .eq('id', authorizationId)
+            .select(PATIENT_PAYER_AUTHORIZATION_SELECT)
+            .maybeSingle()
+        : supabase
+            .from('patient_payer_authorizations')
+            .insert(payload)
+            .select(PATIENT_PAYER_AUTHORIZATION_SELECT)
+            .maybeSingle();
+      const { data, error } = await query;
+      if (error) {
+        if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) {
+          return res.status(503).json({ success: false, error: 'Cadastro de autorizações indisponível. Verifique a migration e o cache do banco.', code: 'AUTHORIZATION_SCHEMA_UNAVAILABLE' });
+        }
+        throw error;
+      }
+      if (isUuid(appointmentId)) {
+        const { error: staleError } = await supabase
+          .from('appointment_tiss_pre_guides')
+          .update({
+            stale_reason: 'Autorização do paciente alterada.',
+            updated_at: now
+          })
+          .eq('organization_id', organizationId)
+          .eq('appointment_id', appointmentId);
+        if (staleError && !hasMissingFinancialSchema(staleError) && !isMissingRelationError(staleError)) throw staleError;
+      } else {
+        await markTissPreGuidesStale({ organizationId, payerId, reason: 'Autorização do paciente alterada.' });
+      }
+      return sendNoStoreJson(res, {
+        success: true,
+        data,
+        message: 'Autorização salva. Revalide a Pré-guia para atualizar a validação.'
+      });
+    } catch (error: any) {
+      console.warn('[TissPreGuide] patient payer authorization save failed:', {
+        patientId: sanitizeString(req.body?.patientId ?? req.body?.patient_id, 120) || null,
+        payerId: sanitizeString(req.body?.payerId ?? req.body?.payer_id, 120) || null,
+        code: sanitizeString(error?.code, 40) || null,
+        message: sanitizeTextField(error?.message, 300) || String(error)
+      });
+      return res.status(500).json({ success: false, error: 'Não foi possível salvar a autorização agora.', code: 'AUTHORIZATION_SAVE_FAILED' });
     }
   });
 
