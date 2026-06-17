@@ -33181,7 +33181,7 @@ async function startServer() {
       appointment?.scheduled_start ||
       existingPreGuide?.scheduled_start ||
       null;
-    const authorization = await fetchPatientPayerAuthorizationForPreGuide({
+    const patientPayerAuthorization = await fetchPatientPayerAuthorizationForPreGuide({
       organizationId,
       patientId,
       payerId,
@@ -33203,12 +33203,12 @@ async function startServer() {
       payerProfile,
       professionalProfile,
       professional,
-      authorization
+      authorization: patientPayerAuthorization
     });
     const snapshot = validation.snapshot || {};
     const procedure = snapshot.procedure || {};
     const beneficiary = snapshot.beneficiary || {};
-    const authorization = snapshot.authorization || {};
+    const authorizationSnapshot = snapshot.authorization || {};
     const provider = snapshot.provider || {};
     const payerSnapshot = snapshot.payer || {};
     const professionalSnapshot = snapshot.professional || {};
@@ -33229,8 +33229,8 @@ async function startServer() {
       professionalId: isUuid(professionalId) ? professionalId : null,
       professionalProfileFound: Boolean(professionalProfile?.id),
       professionalProfileId: sanitizeString(professionalProfile?.id, 120) || null,
-      authorizationProfileFound: Boolean(authorization?.id),
-      authorizationProfileId: sanitizeString(authorization?.id, 120) || null,
+      authorizationProfileFound: Boolean(authorizationSnapshot?.id),
+      authorizationProfileId: sanitizeString(authorizationSnapshot?.id, 120) || null,
       scheduledStartFound: Boolean(scheduledStart),
       usedAppointmentProfessionalId: isUuid(linkedAppointmentProfessionalId),
       usedAppointmentTherapistId: isUuid(appointmentTherapistId),
@@ -33252,9 +33252,9 @@ async function startServer() {
       payer_tiss_profile_id: isUuid(sanitizeString(payerProfile?.id, 120)) ? sanitizeString(payerProfile.id, 120) : null,
       professional_billing_profile_id: isUuid(sanitizeString(professionalProfile?.id, 120)) ? sanitizeString(professionalProfile.id, 120) : null,
       guide_type: validation.guideType,
-      guide_number: sanitizeString(authorization.guideNumber, 120) || null,
-      authorization_code: sanitizeString(authorization.authorizationCode, 120) || null,
-      authorization_valid_until: sanitizeString(authorization.authorizationValidUntil, 40).slice(0, 10) || null,
+      guide_number: sanitizeString(authorizationSnapshot.guideNumber, 120) || null,
+      authorization_code: sanitizeString(authorizationSnapshot.authorizationCode, 120) || null,
+      authorization_valid_until: sanitizeString(authorizationSnapshot.authorizationValidUntil, 40).slice(0, 10) || null,
       beneficiary_card_number: sanitizeString(beneficiary.cardNumber, 120) || null,
       internal_procedure_code: sanitizeString(procedure.internalCode, 80) || null,
       internal_procedure_name: sanitizeString(procedure.name, 180) || null,
