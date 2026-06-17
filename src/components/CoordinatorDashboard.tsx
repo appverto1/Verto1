@@ -3985,6 +3985,24 @@ export function CoordinatorDashboard({
     ],
   );
 
+  const openPatientEditFromAdministrativeFlow = useCallback((row: any) => {
+    const patientId = String(row?.patientId || row?.patient_id || "").trim();
+    const fallbackName = normalizeUtf8Text(String(row?.patientName || row?.patient_name || row?.name || "")).trim();
+    const normalizedFallback = fallbackName.toLowerCase();
+    const patient =
+      allPatients.find((item: any) => patientId && String(item?.id) === patientId) ||
+      allPatients.find((item: any) => normalizedFallback && normalizeUtf8Text(String(item?.name || "")).trim().toLowerCase() === normalizedFallback);
+    if (patient?.id && !isTherapist) {
+      handleEditPatient(patient);
+      setActionPopup({
+        title: "Corrigir paciente",
+        message: "Abrimos o cadastro do paciente para revisar carteirinha, validade e elegibilidade do convênio.",
+      });
+      return;
+    }
+    onPatientClick(patientId || undefined, { tab: "history" }, fallbackName || "Paciente");
+  }, [allPatients, handleEditPatient, isTherapist, onPatientClick]);
+
   const openAppointmentChartFromAgenda = useCallback(
     (appointment: any, openAnamnesis = false) => {
       closeAgendaActionModal();
@@ -8349,6 +8367,7 @@ export function CoordinatorDashboard({
                   payers={clinicPayers}
                   canExport={!isTherapist}
                   onOpenAppointment={openAppointmentFromAdministrativeFlow}
+                  onOpenPatient={openPatientEditFromAdministrativeFlow}
                   onNavigatePayers={() => navigateToTab("payers")}
                   onNavigateSettings={() => navigateToTab("settings")}
                   onNavigateProfessionals={() => navigateToTab("team")}

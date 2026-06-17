@@ -123,6 +123,7 @@ type MonthlyConferenceCenterProps = {
   payers?: any[];
   canExport?: boolean;
   onOpenAppointment?: (row: ConferenceRow) => void;
+  onOpenPatient?: (row: ConferenceRow) => void;
   onOpenReport?: (row: ConferenceRow) => void;
   onNavigatePayers?: () => void;
   onNavigateSettings?: () => void;
@@ -451,6 +452,7 @@ export function MonthlyConferenceCenter({
   payers = [],
   canExport = false,
   onOpenAppointment,
+  onOpenPatient,
   onOpenReport,
   onNavigatePayers,
   onNavigateSettings,
@@ -1135,6 +1137,7 @@ export function MonthlyConferenceCenter({
           professionalId={professionalId}
           payerId={payerId}
           onOpenAppointment={(row) => onOpenAppointment?.(row as ConferenceRow)}
+          onOpenPatient={(row) => onOpenPatient?.(row as ConferenceRow)}
           onNavigatePayers={onNavigatePayers}
           onNavigateSettings={onNavigateSettings}
           onNavigateProfessionals={onNavigateProfessionals}

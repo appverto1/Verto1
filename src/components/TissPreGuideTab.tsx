@@ -84,6 +84,7 @@ type TissPreGuideTabProps = {
   professionalId?: string;
   payerId?: string;
   onOpenAppointment?: (row: TissPreGuideRow) => void;
+  onOpenPatient?: (row: TissPreGuideRow) => void;
   onNavigatePayers?: () => void;
   onNavigateSettings?: () => void;
   onNavigateProfessionals?: () => void;
@@ -132,18 +133,27 @@ const issueLabels: Record<string, string> = {
   TUSS_DESCRIPTION_MISSING: "Descrição TUSS",
   AMOUNT_MISSING: "Valor",
   GUIDE_MISSING: "Guia",
-  AUTHORIZATION_MISSING: "Autorização",
-  AUTHORIZATION_REQUIRED: "Autorização",
+  AUTHORIZATION_MISSING: "Sem autorização",
+  AUTHORIZATION_REQUIRED: "Sem autorização",
   AUTHORIZATION_EXPIRED: "Autorização vencida",
   AUTHORIZATION_EXHAUSTED: "Autorização esgotada",
   AUTHORIZATION_INACTIVE: "Autorização inativa",
   AUTHORIZATION_NOT_STARTED: "Autorização não vigente",
-  AUTHORIZATION_PROCEDURE_MISMATCH: "Procedimento não autorizado",
+  AUTHORIZATION_PROCEDURE_MISMATCH: "Procedimento divergente",
   AUTHORIZED_PROCEDURE_NOT_INFORMED: "Procedimento autorizado",
   BENEFICIARY_CARD_MISSING: "Carteirinha",
   BENEFICIARY_CARD_VALIDITY_MISSING: "Validade da carteirinha",
   BENEFICIARY_CARD_EXPIRED: "Carteirinha vencida",
-  RESPONSIBLE_SIGNATURE_REQUIRED: "Assinatura",
+  RESPONSIBLE_SIGNATURE_REQUIRED: "Assinatura do responsável",
+};
+
+const issueCodeAliases: Record<string, string> = {
+  PATIENT_CARD_MISSING: "BENEFICIARY_CARD_MISSING",
+  PATIENT_CARD_VALIDITY_MISSING: "BENEFICIARY_CARD_VALIDITY_MISSING",
+  PATIENT_CARD_EXPIRED: "BENEFICIARY_CARD_EXPIRED",
+  INSURANCE_CARD_MISSING: "BENEFICIARY_CARD_MISSING",
+  INSURANCE_CARD_VALIDITY_MISSING: "BENEFICIARY_CARD_VALIDITY_MISSING",
+  SIGNATURE_REQUIRED: "RESPONSIBLE_SIGNATURE_REQUIRED",
 };
 
 function toApiDate(value: string, endOfDay = false) {
@@ -173,17 +183,39 @@ function executantValue(value: unknown) {
   return normalized;
 }
 
+function normalizeIssueCode(code?: string | null) {
+  const normalized = String(code || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return issueCodeAliases[normalized] || normalized;
+}
+
 function issueLabel(code: string) {
-  return issueLabels[code] || code.replaceAll("_", " ").toLocaleLowerCase("pt-BR");
+  const normalized = normalizeIssueCode(code);
+  if (issueLabels[normalized]) return issueLabels[normalized];
+  if (normalized.includes("AUTHORIZATION")) return "Autorização";
+  if (normalized.includes("SIGNATURE")) return "Assinatura";
+  if (normalized.includes("PAYER")) return "Dados do pagador";
+  if (normalized.includes("PROFESSIONAL")) return "Profissional";
+  if (normalized.includes("CARD") || normalized.includes("BENEFICIARY")) return "Dados do paciente";
+  return "Pendência de validação";
 }
 
 function isResponsibleSignatureIssue(item?: { code?: string | null; section?: string | null }) {
-  return String(item?.code || "").toUpperCase() === "RESPONSIBLE_SIGNATURE_REQUIRED" || String(item?.section || "").toLowerCase() === "signature";
+  return normalizeIssueCode(item?.code) === "RESPONSIBLE_SIGNATURE_REQUIRED" || String(item?.section || "").toLowerCase() === "signature";
 }
 
 function isAuthorizationIssue(item?: { code?: string | null; section?: string | null }) {
-  const code = String(item?.code || "").toUpperCase();
+  const code = normalizeIssueCode(item?.code);
+  const action = String((item as any)?.action || (item as any)?.suggestedAction || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
   if (String(item?.section || "").toLowerCase() === "authorization") return true;
+  if (action.includes("autorizacao")) return true;
   return [
     "GUIDE_MISSING",
     "AUTHORIZATION_MISSING",
@@ -198,11 +230,28 @@ function isAuthorizationIssue(item?: { code?: string | null; section?: string | 
 }
 
 function authorizationActionLabel(code?: string | null) {
-  const normalized = String(code || "").toUpperCase();
-  if (["AUTHORIZATION_EXPIRED", "AUTHORIZATION_EXHAUSTED", "AUTHORIZATION_INACTIVE", "AUTHORIZATION_NOT_STARTED", "AUTHORIZATION_PROCEDURE_MISMATCH", "AUTHORIZED_PROCEDURE_NOT_INFORMED"].includes(normalized)) {
+  const normalized = normalizeIssueCode(code);
+  if (normalized === "AUTHORIZATION_PROCEDURE_MISMATCH") return "Revisar autorização";
+  if (["AUTHORIZATION_EXPIRED", "AUTHORIZATION_EXHAUSTED", "AUTHORIZATION_INACTIVE", "AUTHORIZATION_NOT_STARTED", "AUTHORIZED_PROCEDURE_NOT_INFORMED"].includes(normalized)) {
     return "Atualizar autorização";
   }
   return "Adicionar autorização";
+}
+
+function isPatientIssue(item?: { code?: string | null; section?: string | null }) {
+  const code = normalizeIssueCode(item?.code);
+  return String(item?.section || "").toLowerCase() === "beneficiary" ||
+    ["BENEFICIARY_CARD_MISSING", "BENEFICIARY_CARD_VALIDITY_MISSING", "BENEFICIARY_CARD_EXPIRED"].includes(code);
+}
+
+function isPayerProfileIssue(item?: { code?: string | null; section?: string | null }) {
+  const code = normalizeIssueCode(item?.code);
+  return ["PAYER_TISS_PROFILE_MISSING", "PAYER_ANS_REGISTRATION_MISSING", "PAYER_CONTRACTED_PROVIDER_CODE_MISSING", "PAYER_CID_REQUIRED"].includes(code);
+}
+
+function isProfessionalIssue(item?: { code?: string | null; section?: string | null }) {
+  const code = normalizeIssueCode(item?.code);
+  return ["PROFESSIONAL_BILLING_PROFILE_MISSING", "PROFESSIONAL_REGISTRY_MISSING", "PROFESSIONAL_COUNCIL_STATE_MISSING", "CBO_MISSING"].includes(code);
 }
 
 function Section({
@@ -268,6 +317,7 @@ export function TissPreGuideTab({
   professionalId = "",
   payerId = "",
   onOpenAppointment,
+  onOpenPatient,
   onNavigatePayers,
   onNavigateSettings,
   onNavigateProfessionals,
@@ -625,37 +675,78 @@ export function TissPreGuideTab({
     });
     if (detail) setDetail(null);
   };
+  const openPatientCorrection = () => {
+    const current = detail || {};
+    if (onOpenPatient) {
+      onOpenPatient({
+        ...current,
+        focusPanel: "insurance",
+        actionIntent: "correct_patient",
+      });
+      setDetail(null);
+      return;
+    }
+    openAppointment(current, { focusPanel: "patient", actionIntent: "correct_patient" });
+  };
+  const resolveIssueAction = (item: { code?: string; field?: string; message?: string; section?: string; action?: string; severity?: string }) => {
+    const code = normalizeIssueCode(item.code);
+    if (isResponsibleSignatureIssue(item)) {
+      return {
+        label: "Ir para atendimento e coletar assinatura",
+        onClick: () => openAppointment(detail || {}, { focusPanel: "signature", actionIntent: "collect_signature" }),
+      };
+    }
+    if (isAuthorizationIssue(item)) {
+      return {
+        label: authorizationActionLabel(code),
+        onClick: () => openAuthorizationEditor(),
+      };
+    }
+    if (isPayerProfileIssue(item)) {
+      return {
+        label: "Editar perfil TISS do pagador",
+        onClick: () => void openProfileEditor("payer"),
+      };
+    }
+    if (isPatientIssue(item)) {
+      return {
+        label: "Corrigir paciente",
+        onClick: openPatientCorrection,
+      };
+    }
+    if (code === "PROFESSIONAL_NOT_DEFINED") {
+      return {
+        label: "Ir para atendimento",
+        onClick: () => openAppointment(detail || {}, { focusPanel: "professional", actionIntent: "define_professional" }),
+      };
+    }
+    if (isProfessionalIssue(item)) {
+      return {
+        label: "Editar perfil faturável do profissional",
+        onClick: () => void openProfileEditor("professional"),
+      };
+    }
+    return null;
+  };
   const renderValidationIssue = (item: { code?: string; field?: string; message?: string; section?: string; action?: string; severity?: string }, index: number, tone: "error" | "warning") => {
-    const signatureIssue = isResponsibleSignatureIssue(item);
-    const authorizationIssue = isAuthorizationIssue(item);
+    const issueAction = resolveIssueAction(item);
     const className = tone === "error"
       ? "rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800"
       : "rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sky-800";
-    const actionClassName = tone === "error" ? "text-amber-900" : "text-sky-900";
     const buttonClassName = tone === "error"
       ? "mt-2 inline-flex rounded-md border border-amber-300 bg-white px-3 py-1.5 text-xs font-bold text-amber-900 hover:bg-amber-100"
       : "mt-2 inline-flex rounded-md border border-sky-300 bg-white px-3 py-1.5 text-xs font-bold text-sky-900 hover:bg-sky-100";
     return (
       <div key={`${tone}-${item.code}-${index}`} className={className}>
         <div>{item.message || issueLabel(String(item.code || ""))}</div>
-        {signatureIssue ? (
+        {issueAction ? (
           <button
             type="button"
-            onClick={() => openAppointment(detail || {}, { focusPanel: "signature", actionIntent: "collect_signature" })}
+            onClick={issueAction.onClick}
             className={buttonClassName}
           >
-            Ir para atendimento e coletar assinatura
+            {issueAction.label}
           </button>
-        ) : authorizationIssue ? (
-          <button
-            type="button"
-            onClick={() => openAuthorizationEditor()}
-            className={buttonClassName}
-          >
-            {authorizationActionLabel(item.code)}
-          </button>
-        ) : item.action ? (
-          <div className={`mt-1 text-xs font-bold ${actionClassName}`}>{item.action}</div>
         ) : null}
       </div>
     );
