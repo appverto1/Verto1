@@ -21,6 +21,7 @@ import QRCode from 'qrcode';
 import {
   ACTIVE_PATIENT_BILLING_LOOKUP_KEY,
   estimateStripeActivePatientPlan,
+  getBillableActivePatientCount,
   getClinicBillingSummary,
   listStripeActivePatientBillingPlans,
   reportAllClinicsActivePatientUsage,
@@ -391,6 +392,322 @@ function normalizeActivePatientQuantity(value: unknown): number | null {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed < 1) return null;
   return Math.min(100000, parsed);
+}
+
+const BILLABLE_ACTIVE_PATIENT_STATUSES = new Set([
+  'active',
+  'ativo',
+  'atendimento_ativo',
+  'em_tratamento'
+]);
+
+function isBillableActivePatientStatus(value: unknown): boolean {
+  const normalized = sanitizeString(value, 80).toLowerCase();
+  return BILLABLE_ACTIVE_PATIENT_STATUSES.has(normalized);
+}
+
+function findPlanTierForActivePatients(
+  plans: SafeStripeBillingPlan[],
+  activePatients: number,
+  enterpriseThreshold = resolveActivePatientEnterpriseThreshold()
+): { plan: SafeStripeBillingPlan | null; tier: SafeStripeBillingTier | null; limit: number | null; enterpriseRequired: boolean } {
+  const safeQuantity = Math.max(1, Math.floor(Number(activePatients) || 1));
+  for (const plan of plans) {
+    if (!plan?.selfService || plan.isCustom) continue;
+    const threshold = Number(plan.enterpriseThreshold || enterpriseThreshold || 50);
+    for (const tier of plan.tiers || []) {
+      const tierFrom = Number(tier.from || 1);
+      const tierTo = typeof tier.to === 'number' ? tier.to : null;
+      const matchesLowerBound = safeQuantity >= tierFrom;
+      const matchesUpperBound = tierTo === null || safeQuantity <= tierTo;
+      if (matchesLowerBound && matchesUpperBound) {
+        const limit = tierTo || threshold || null;
+        return {
+          plan,
+          tier,
+          limit,
+          enterpriseRequired: Boolean(limit && threshold && limit > threshold)
+        };
+      }
+    }
+    if (typeof plan.maxPatients === 'number' && safeQuantity <= plan.maxPatients) {
+      return {
+        plan,
+        tier: null,
+        limit: plan.maxPatients,
+        enterpriseRequired: Boolean(threshold && plan.maxPatients > threshold)
+      };
+    }
+  }
+  return {
+    plan: null,
+    tier: null,
+    limit: null,
+    enterpriseRequired: safeQuantity > enterpriseThreshold
+  };
+}
+
+async function readClinicActivePatientBillingState(clinicId: string): Promise<{
+  currentActivePatientLimit: number | null;
+  currentActivePatientCount: number | null;
+  pendingBillingQuantity: number | null;
+  pendingEffectiveDate: string | null;
+  pendingBillingStatus: string | null;
+  stripeSubscriptionId: string | null;
+  stripeSubscriptionItemId: string | null;
+  stripePriceId: string | null;
+  subscriptionStatus: string | null;
+}> {
+  const safeClinicId = sanitizeString(clinicId, 120);
+  const empty = {
+    currentActivePatientLimit: null,
+    currentActivePatientCount: null,
+    pendingBillingQuantity: null,
+    pendingEffectiveDate: null,
+    pendingBillingStatus: null,
+    stripeSubscriptionId: null,
+    stripeSubscriptionItemId: null,
+    stripePriceId: null,
+    subscriptionStatus: null
+  };
+  if (!isUuid(safeClinicId)) return empty;
+
+  const run = (selectColumns: string) =>
+    supabase
+      .from('clinics')
+      .select(selectColumns)
+      .eq('id', safeClinicId)
+      .maybeSingle();
+
+  let result = await run([
+    'id',
+    'subscription_status',
+    'stripe_subscription_id',
+    'stripe_subscription_item_id',
+    'stripe_price_id',
+    'active_patient_count',
+    'current_active_patient_limit',
+    'current_active_patient_count',
+    'pending_billing_quantity',
+    'pending_effective_date',
+    'pending_billing_status'
+  ].join(','));
+  if (result.error && extractMissingColumnName(result.error)) {
+    result = await run('id,subscription_status,stripe_subscription_id,stripe_subscription_item_id,stripe_price_id,active_patient_count');
+  }
+  if (result.error || !result.data) return empty;
+  const row: any = result.data;
+  const pendingStatus = sanitizeString(row.pending_billing_status, 80) || null;
+  return {
+    currentActivePatientLimit: normalizeActivePatientQuantity(row.current_active_patient_limit),
+    currentActivePatientCount: typeof row.current_active_patient_count === 'number'
+      ? Math.max(0, Math.floor(row.current_active_patient_count))
+      : typeof row.active_patient_count === 'number'
+        ? Math.max(0, Math.floor(row.active_patient_count))
+        : null,
+    pendingBillingQuantity: normalizeActivePatientQuantity(row.pending_billing_quantity),
+    pendingEffectiveDate: sanitizeString(row.pending_effective_date, 80) || null,
+    pendingBillingStatus: pendingStatus,
+    stripeSubscriptionId: sanitizeString(row.stripe_subscription_id, 200) || null,
+    stripeSubscriptionItemId: sanitizeString(row.stripe_subscription_item_id, 200) || null,
+    stripePriceId: sanitizeString(row.stripe_price_id, 200) || null,
+    subscriptionStatus: sanitizeString(row.subscription_status, 80) || null
+  };
+}
+
+async function resolveClinicActivePatientLimit(params: {
+  clinicId: string;
+  activePatientCount: number;
+  requiredActivePatientCount?: number;
+  billingState?: Awaited<ReturnType<typeof readClinicActivePatientBillingState>>;
+}): Promise<{
+  currentLimit: number | null;
+  requiredLimit: number | null;
+  enterpriseRequired: boolean;
+  requiredTierLabel: string | null;
+  plansSource: string;
+}> {
+  const activePatientCount = Math.max(0, Math.floor(Number(params.activePatientCount) || 0));
+  const requiredActivePatientCount = Math.max(
+    1,
+    Math.floor(Number(params.requiredActivePatientCount || params.activePatientCount || 1))
+  );
+  const billingState = params.billingState || await readClinicActivePatientBillingState(params.clinicId);
+  const confirmedPendingLimit =
+    billingState.pendingBillingStatus === 'confirmed_next_cycle' && billingState.pendingBillingQuantity
+      ? billingState.pendingBillingQuantity
+      : null;
+  let currentLimit = confirmedPendingLimit || billingState.currentActivePatientLimit || null;
+  const enterpriseThreshold = resolveActivePatientEnterpriseThreshold();
+  let plans: SafeStripeBillingPlan[] = [];
+  let plansSource = 'not_loaded';
+  try {
+    const loaded = await loadBillingPlansFromSnapshots({ allowSync: true });
+    plans = loaded.plans || [];
+    plansSource = loaded.source;
+  } catch (error: any) {
+    console.warn('[Billing Limits] Falha ao carregar planos para validar limite de pacientes ativos.', {
+      clinicId: sanitizeString(params.clinicId, 120),
+      message: sanitizeString(error?.message || String(error), 240)
+    });
+  }
+
+  if (!currentLimit && plans.length > 0) {
+    const currentTier = findPlanTierForActivePatients(plans, Math.max(1, activePatientCount || 1), enterpriseThreshold);
+    currentLimit = currentTier.limit;
+  }
+
+  const requiredTier = plans.length > 0
+    ? findPlanTierForActivePatients(plans, requiredActivePatientCount, enterpriseThreshold)
+    : {
+        tier: null,
+        limit: requiredActivePatientCount > enterpriseThreshold ? null : requiredActivePatientCount,
+        enterpriseRequired: requiredActivePatientCount > enterpriseThreshold
+      };
+  const requiredLimit = requiredTier.limit;
+  const requiredTierLabel =
+    sanitizeString(requiredTier.tier?.displayLabel, 120) ||
+    (requiredLimit ? `até ${requiredLimit} pacientes ativos` : null);
+
+  return {
+    currentLimit,
+    requiredLimit,
+    enterpriseRequired: requiredTier.enterpriseRequired || requiredActivePatientCount > enterpriseThreshold || !requiredLimit,
+    requiredTierLabel,
+    plansSource
+  };
+}
+
+function billingUpgradeRequiredPayload(params: {
+  currentLimit: number;
+  currentActivePatients: number;
+  requiredActivePatients: number;
+  requiredLimit: number | null;
+  requiredTierLabel?: string | null;
+  enterpriseRequired?: boolean;
+}) {
+  const currentLimit = Math.max(0, Math.floor(params.currentLimit || 0));
+  const requiredLimit = params.requiredLimit ? Math.max(0, Math.floor(params.requiredLimit)) : null;
+  const requiredTier = params.enterpriseRequired
+    ? 'plano personalizado'
+    : sanitizeString(params.requiredTierLabel, 120) || (requiredLimit ? `até ${requiredLimit} pacientes ativos` : 'nova faixa');
+  const message = params.enterpriseRequired
+    ? `Seu plano atual cobre até ${currentLimit} pacientes ativos. Para ativar este paciente, solicite uma proposta personalizada.`
+    : `Seu plano atual cobre até ${currentLimit} pacientes ativos. Para ativar este paciente, atualize para a faixa ${requiredTier}.`;
+  return {
+    success: false,
+    code: 'BILLING_UPGRADE_REQUIRED',
+    error: message,
+    message,
+    details: {
+      currentLimit,
+      currentActivePatients: Math.max(0, Math.floor(params.currentActivePatients || 0)),
+      requiredActivePatients: Math.max(1, Math.floor(params.requiredActivePatients || 1)),
+      requiredLimit,
+      requiredTierLabel: requiredTier,
+      enterpriseRequired: Boolean(params.enterpriseRequired),
+      salesContactUrl: params.enterpriseRequired ? resolveSalesContactUrl() : null,
+      policy: {
+        requiresExplicitConfirmation: true,
+        effectiveTiming: 'next_billing_cycle',
+        prorationBehavior: 'none'
+      }
+    }
+  };
+}
+
+function sendBillingUpgradeRequired(res: any, payload: ReturnType<typeof billingUpgradeRequiredPayload>) {
+  return res.status(402).json(payload);
+}
+
+async function isPatientCurrentlyBillableActive(params: {
+  patientId?: string | null;
+  clinicId?: string | null;
+}): Promise<boolean> {
+  const patientId = sanitizeString(params.patientId, 120);
+  const clinicId = sanitizeString(params.clinicId, 120);
+  if (!isUuid(patientId)) return false;
+  let query = supabase
+    .from('patients')
+    .select('id, clinic_id, status, is_active, deleted_at, archived_at')
+    .eq('id', patientId);
+  if (isUuid(clinicId)) query = query.eq('clinic_id', clinicId);
+  const result = await query.maybeSingle();
+  if (result.error && extractMissingColumnName(result.error) === 'archived_at') {
+    let fallbackQuery = supabase
+      .from('patients')
+      .select('id, clinic_id, status, is_active, deleted_at')
+      .eq('id', patientId);
+    if (isUuid(clinicId)) fallbackQuery = fallbackQuery.eq('clinic_id', clinicId);
+    const fallback = await fallbackQuery.maybeSingle();
+    if (fallback.error || !fallback.data) return false;
+    return fallback.data.is_active === true && !fallback.data.deleted_at && isBillableActivePatientStatus(fallback.data.status);
+  }
+  if (result.error || !result.data) return false;
+  return (
+    result.data.is_active === true &&
+    !result.data.deleted_at &&
+    !result.data.archived_at &&
+    isBillableActivePatientStatus(result.data.status)
+  );
+}
+
+async function assertCanActivateBillablePatient(params: {
+  clinicId?: string | null;
+  patientId?: string | null;
+  targetStatus?: string | null;
+  actorUserId?: string | null;
+  trigger: string;
+}): Promise<{ ok: true } | { ok: false; payload: ReturnType<typeof billingUpgradeRequiredPayload> }> {
+  const clinicId = sanitizeString(params.clinicId, 120);
+  if (!isUuid(clinicId) || !isBillableActivePatientStatus(params.targetStatus)) return { ok: true };
+  const demoState = await fetchClinicDemoState(clinicId);
+  if (demoState.isDemo) return { ok: true };
+
+  const currentActivePatients = await getBillableActivePatientCount({ supabase, clinicId });
+  const alreadyBillable = await isPatientCurrentlyBillableActive({ patientId: params.patientId, clinicId });
+  const requiredActivePatients = alreadyBillable ? currentActivePatients : currentActivePatients + 1;
+  const billingState = await readClinicActivePatientBillingState(clinicId);
+  const limitResolution = await resolveClinicActivePatientLimit({
+    clinicId,
+    activePatientCount: currentActivePatients,
+    requiredActivePatientCount: requiredActivePatients,
+    billingState
+  });
+  const currentLimit = limitResolution.currentLimit;
+  if (!currentLimit || requiredActivePatients <= currentLimit) {
+    await patchTableSafely('clinics', { column: 'id', value: clinicId }, {
+      current_active_patient_count: currentActivePatients,
+      active_patient_count: currentActivePatients,
+      updated_at: new Date().toISOString()
+    });
+    return { ok: true };
+  }
+
+  console.info('[Billing Limits] ativacao de paciente exige upgrade confirmado.', {
+    clinicId,
+    patientId: sanitizeString(params.patientId, 120) || null,
+    actorUserId: sanitizeString(params.actorUserId, 120) || null,
+    trigger: sanitizeString(params.trigger, 80),
+    currentActivePatients,
+    requiredActivePatients,
+    currentLimit,
+    requiredLimit: limitResolution.requiredLimit,
+    enterpriseRequired: limitResolution.enterpriseRequired,
+    plansSource: limitResolution.plansSource
+  });
+
+  return {
+    ok: false,
+    payload: billingUpgradeRequiredPayload({
+      currentLimit,
+      currentActivePatients,
+      requiredActivePatients,
+      requiredLimit: limitResolution.requiredLimit,
+      requiredTierLabel: limitResolution.requiredTierLabel,
+      enterpriseRequired: limitResolution.enterpriseRequired
+    })
+  };
 }
 
 function withEnterpriseThreshold<T extends { enterpriseThreshold?: number | null }>(plan: T, fallbackThreshold: number): T & { enterpriseThreshold: number } {
@@ -940,6 +1257,7 @@ async function persistStripeSubscriptionReference(params: {
   customerId?: string | null;
   priceId?: string | null;
   activePatientCount?: number | null;
+  activePatientLimit?: number | null;
   billingSyncStatus?: string | null;
   billingSyncError?: string | null;
   email?: string | null;
@@ -955,6 +1273,10 @@ async function persistStripeSubscriptionReference(params: {
   const clinicId = sanitizeString(params.clinicId, 120);
   const safeEmail = sanitizeEmail(params.email);
   const status = normalizeSubscriptionStatusFromStripe(sanitizeString(params.status, 80));
+  const activePatientLimit = normalizeActivePatientQuantity(params.activePatientLimit);
+  const activePatientCount = typeof params.activePatientCount === 'number'
+    ? Math.max(0, Math.floor(params.activePatientCount))
+    : undefined;
   const patch = cleanObject({
     stripe_subscription_id: subscriptionId || undefined,
     stripe_subscription_item_id: subscriptionItemId || undefined,
@@ -963,7 +1285,9 @@ async function persistStripeSubscriptionReference(params: {
     stripe_price_id: priceId || undefined,
     subscription_status: status,
     billing_model: ACTIVE_PATIENT_BILLING_MODEL,
-    active_patient_count: typeof params.activePatientCount === 'number' ? Math.max(0, Math.floor(params.activePatientCount)) : undefined,
+    active_patient_count: activePatientCount,
+    current_active_patient_count: activePatientCount,
+    current_active_patient_limit: activePatientLimit || undefined,
     billing_sync_status: sanitizeString(params.billingSyncStatus, 80) || undefined,
     billing_sync_error: sanitizeString(params.billingSyncError, 500) || undefined,
     last_billing_sync_at: new Date().toISOString(),
@@ -10426,6 +10750,7 @@ async function startServer() {
                   subscriptionItemId: sanitizeString(subscriptionItem?.id, 120),
                   customerId: stripeCustomerId,
                   priceId: subscriptionItemPriceId,
+                  activePatientLimit: Number((subscriptionItem as any)?.quantity || 0) || null,
                   email: customerEmail,
                   userId,
                   clinicId,
@@ -10624,6 +10949,7 @@ async function startServer() {
               subscriptionItemId: sanitizeString(subscriptionItem?.id, 120),
               customerId: sanitizeString(String((invoice as any).customer || subscription.customer || ''), 200),
               priceId: subscriptionItemPriceId,
+              activePatientLimit: Number((subscriptionItem as any)?.quantity || 0) || null,
               email: customerEmail,
               userId,
               clinicId,
@@ -10657,6 +10983,7 @@ async function startServer() {
             subscriptionItemId: sanitizeString(subscriptionItem?.id, 120),
             customerId: sanitizeString(String(subscription.customer || ''), 200),
             priceId: subscriptionItemPriceId,
+            activePatientLimit: Number((subscriptionItem as any)?.quantity || 0) || null,
             userId,
             clinicId,
             status: subscription.status
@@ -17780,6 +18107,16 @@ async function startServer() {
           context: 'anamnesis-review-request'
         });
       }
+      const activationCheck = await assertCanActivateBillablePatient({
+        clinicId,
+        patientId,
+        targetStatus: PATIENT_STATUS_ACTIVE,
+        actorUserId: actorId,
+        trigger: 'anamnesis_review'
+      });
+      if (!activationCheck.ok) {
+        return sendBillingUpgradeRequired(res, activationCheck.payload);
+      }
       await updatePatientOnboardingWithSchemaFallback({
         patientId,
         clinicId,
@@ -20119,6 +20456,17 @@ async function startServer() {
         });
       }
 
+      const activationCheck = await assertCanActivateBillablePatient({
+        clinicId: safeBody.clinic_id || safeClinicId,
+        patientId: safeBody.id,
+        targetStatus: safeBody.status,
+        actorUserId: sanitizeString(req.session.user?.id, 120),
+        trigger: 'patient_create'
+      });
+      if (!activationCheck.ok) {
+        return sendBillingUpgradeRequired(res, activationCheck.payload);
+      }
+
       const { data, error } = await upsertPatientWithSchemaFallback(safeBody);
       
       if (error) throw error;
@@ -20720,6 +21068,37 @@ async function startServer() {
         clinic_id: canChangeClinic && req.body?.clinic_id !== undefined ? sanitizeString(req.body?.clinic_id, 100) : undefined,
         status: req.body?.status !== undefined ? safeStatusPatch : undefined
       });
+
+      if (updates.status !== undefined && isBillableActivePatientStatus(updates.status)) {
+        let activationScopeQuery = supabase
+          .from('patients')
+          .select('id, clinic_id, status, is_active, deleted_at, therapist_id')
+          .eq('id', req.params.id);
+        if (!hasGlobalClinicAccess(req.session.user) && scopedClinicId) {
+          activationScopeQuery = activationScopeQuery.eq('clinic_id', scopedClinicId);
+        }
+        if (explicitDemoUser) {
+          activationScopeQuery = activationScopeQuery.eq('is_demo', true);
+        }
+        if (role === 'therapist') {
+          activationScopeQuery = activationScopeQuery.eq('therapist_id', sanitizeString(req.session.user?.id, 120));
+        }
+        const { data: activationPatient, error: activationPatientError } = await activationScopeQuery.maybeSingle();
+        if (activationPatientError) throw activationPatientError;
+        if (!activationPatient?.id) {
+          return res.status(404).json({ success: false, error: 'Paciente não encontrado no escopo da clínica.' });
+        }
+        const activationCheck = await assertCanActivateBillablePatient({
+          clinicId: updates.clinic_id || activationPatient.clinic_id || scopedClinicId,
+          patientId: sanitizeString(req.params.id, 120),
+          targetStatus: updates.status,
+          actorUserId: sanitizeString(req.session.user?.id, 120),
+          trigger: 'patient_patch'
+        });
+        if (!activationCheck.ok) {
+          return sendBillingUpgradeRequired(res, activationCheck.payload);
+        }
+      }
 
       let updatedPatient: any = null;
       let error: any = null;
@@ -22542,6 +22921,17 @@ async function startServer() {
         updated_at: nowIso,
         metadata: reactivationMetadata
       });
+
+      const activationCheck = await assertCanActivateBillablePatient({
+        clinicId: sanitizeString(patientRow?.clinic_id || scopedClinicId, 120),
+        patientId,
+        targetStatus: nextStatus,
+        actorUserId: sanitizeString(req.session.user?.id, 120),
+        trigger: 'patient_reactivate'
+      });
+      if (!activationCheck.ok) {
+        return sendBillingUpgradeRequired(res, activationCheck.payload);
+      }
 
       const reactivationResult = await writePatientArchiveStateWithSchemaFallback({
         patientId,
@@ -48256,6 +48646,385 @@ async function startServer() {
         success: false,
         code: isMissingStripeConfigError(error) ? 'MISSING_STRIPE_CONFIG' : 'BILLING_ESTIMATE_UNAVAILABLE',
         error: 'Não foi possível calcular a estimativa agora. Tente novamente em alguns instantes.'
+      });
+    }
+  });
+
+  async function persistBillingPlanChangeAudit(params: {
+    clinicId?: string | null;
+    userId?: string | null;
+    stripeSubscriptionId?: string | null;
+    stripeSubscriptionItemId?: string | null;
+    stripePriceId?: string | null;
+    previousLimit?: number | null;
+    requestedLimit?: number | null;
+    activePatientCount?: number | null;
+    effectiveDate?: string | null;
+    status: string;
+    trigger: string;
+    metadata?: Record<string, any>;
+  }) {
+    try {
+      const payload = cleanObject({
+        clinic_id: isUuid(sanitizeString(params.clinicId, 120)) ? sanitizeString(params.clinicId, 120) : null,
+        user_id: isUuid(sanitizeString(params.userId, 120)) ? sanitizeString(params.userId, 120) : null,
+        stripe_subscription_id: sanitizeString(params.stripeSubscriptionId, 200) || null,
+        stripe_subscription_item_id: sanitizeString(params.stripeSubscriptionItemId, 200) || null,
+        stripe_price_id: sanitizeString(params.stripePriceId, 200) || null,
+        previous_limit: typeof params.previousLimit === 'number' ? Math.max(0, Math.floor(params.previousLimit)) : null,
+        requested_limit: typeof params.requestedLimit === 'number' ? Math.max(0, Math.floor(params.requestedLimit)) : null,
+        active_patient_count: typeof params.activePatientCount === 'number' ? Math.max(0, Math.floor(params.activePatientCount)) : null,
+        effective_date: sanitizeString(params.effectiveDate, 80) || null,
+        status: sanitizeString(params.status, 80),
+        trigger: sanitizeString(params.trigger, 100),
+        metadata: params.metadata || {}
+      });
+      const { error } = await supabase
+        .from('billing_plan_change_audit_logs')
+        .insert([payload]);
+      if (error && !isMissingRelationError(error) && !extractMissingColumnName(error)) {
+        console.warn('[Billing Limits] Falha ao registrar auditoria de mudança de faixa.', {
+          clinicId: sanitizeString(params.clinicId, 120),
+          status: sanitizeString(params.status, 80),
+          message: sanitizeString(error.message, 240)
+        });
+      }
+    } catch (error: any) {
+      console.warn('[Billing Limits] Auditoria de mudança de faixa indisponível.', {
+        clinicId: sanitizeString(params.clinicId, 120),
+        status: sanitizeString(params.status, 80),
+        message: sanitizeString(error?.message || String(error), 240)
+      });
+    }
+  }
+
+  async function resolveStoredSubscriptionItemForClinic(params: {
+    stripe: Stripe;
+    clinicId: string;
+    billingState: Awaited<ReturnType<typeof readClinicActivePatientBillingState>>;
+    priceId?: string | null;
+  }): Promise<{ subscription: Stripe.Subscription; subscriptionItemId: string; priceId: string }> {
+    const subscriptionId = sanitizeString(params.billingState.stripeSubscriptionId, 200);
+    if (!subscriptionId) {
+      throw Object.assign(new Error('Assinatura Stripe não encontrada para esta clínica.'), {
+        code: 'SUBSCRIPTION_NOT_READY'
+      });
+    }
+    const subscription = await params.stripe.subscriptions.retrieve(subscriptionId, { expand: ['items.data.price'] });
+    const requestedPriceId =
+      sanitizeString(params.priceId, 200) ||
+      sanitizeString(params.billingState.stripePriceId, 200) ||
+      resolveActivePatientPriceId();
+    const storedItemId = sanitizeString(params.billingState.stripeSubscriptionItemId, 200);
+    const subscriptionItem =
+      (storedItemId ? subscription.items.data.find((item) => item.id === storedItemId) : null) ||
+      (requestedPriceId
+        ? subscription.items.data.find((item) => sanitizeString((item.price as any)?.id, 200) === requestedPriceId)
+        : null) ||
+      subscription.items.data[0] ||
+      null;
+    const subscriptionItemId = sanitizeString(subscriptionItem?.id, 200);
+    if (!subscriptionItemId) {
+      throw Object.assign(new Error('Item de assinatura Stripe não encontrado para esta clínica.'), {
+        code: 'SUBSCRIPTION_ITEM_NOT_READY'
+      });
+    }
+    return {
+      subscription,
+      subscriptionItemId,
+      priceId: sanitizeString((subscriptionItem?.price as any)?.id, 200) || requestedPriceId
+    };
+  }
+
+  app.post('/api/billing/active-patient-limit/confirm-upgrade', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    let diagnostics: Record<string, unknown> = {
+      route: '/api/billing/active-patient-limit/confirm-upgrade',
+      requestedLimit: normalizeActivePatientQuantity(req.body?.requestedLimit || req.body?.requested_limit || req.body?.activePatients),
+      activePatients: null,
+      stripeConfigured: hasStripeSecretConfigured(),
+      stripeQuantityUpdated: false,
+      prorationBehavior: 'none',
+      errorCode: null
+    };
+    const rejectUpgrade = (status: number, code: string, error: string, data?: unknown) => {
+      console.warn('[Billing Limits] confirm-upgrade rejeitado:', {
+        ...diagnostics,
+        errorCode: code
+      });
+      return res.status(status).json({ success: false, code, error, ...(data ? { data } : {}) });
+    };
+
+    try {
+      const user = req.session.user;
+      const clinicId = sanitizeString(user.activeWorkspaceId || user.clinicId || user.id, 120);
+      if (!isUuid(clinicId)) {
+        return rejectUpgrade(400, 'MISSING_ORGANIZATION', 'Não foi possível identificar a clínica para atualizar a faixa.');
+      }
+      const demoState = await fetchClinicDemoState(clinicId);
+      if (demoState.isDemo || isDemoSessionUser(user)) {
+        return rejectUpgrade(403, 'DEMO_BILLING_DISABLED', 'Ambiente demo não altera cobrança real.');
+      }
+
+      const activePatients = await getBillableActivePatientCount({ supabase, clinicId });
+      const billingState = await readClinicActivePatientBillingState(clinicId);
+      const requestedActivePatients = Math.max(
+        activePatients + 1,
+        normalizeActivePatientQuantity(req.body?.activePatients) || activePatients + 1
+      );
+      const limitResolution = await resolveClinicActivePatientLimit({
+        clinicId,
+        activePatientCount: activePatients,
+        requiredActivePatientCount: requestedActivePatients,
+        billingState
+      });
+      const requestedLimit =
+        normalizeActivePatientQuantity(req.body?.requestedLimit || req.body?.requested_limit || req.body?.selectedTierTo || req.body?.selected_tier_to) ||
+        limitResolution.requiredLimit;
+      diagnostics = {
+        ...diagnostics,
+        requestedLimit,
+        activePatients,
+        currentLimit: limitResolution.currentLimit,
+        requiredLimit: limitResolution.requiredLimit,
+        enterpriseRequired: limitResolution.enterpriseRequired
+      };
+
+      if (!requestedLimit) {
+        return rejectUpgrade(400, 'INVALID_ACTIVE_PATIENT_LIMIT', 'Selecione uma faixa válida de pacientes ativos.');
+      }
+      if (limitResolution.enterpriseRequired || requestedLimit > resolveActivePatientEnterpriseThreshold()) {
+        return rejectUpgrade(422, 'ENTERPRISE_REQUIRED', 'Para esse volume, solicite uma proposta personalizada.', {
+          salesContactUrl: resolveSalesContactUrl()
+        });
+      }
+      if (limitResolution.currentLimit && requestedLimit <= limitResolution.currentLimit) {
+        return res.json({
+          success: true,
+          idempotent: true,
+          message: 'Esta faixa já está disponível para a clínica.',
+          data: {
+            currentActivePatientLimit: limitResolution.currentLimit,
+            currentActivePatientCount: activePatients
+          }
+        });
+      }
+      if (requestedLimit < activePatients) {
+        return rejectUpgrade(400, 'INVALID_ACTIVE_PATIENT_LIMIT', 'A faixa escolhida é menor que os pacientes ativos atuais.');
+      }
+
+      const stripe = getStripe();
+      const subscriptionRef = await resolveStoredSubscriptionItemForClinic({
+        stripe,
+        clinicId,
+        billingState,
+        priceId: billingState.stripePriceId || resolveActivePatientPriceId()
+      });
+      const currentPeriodEnd = Number((subscriptionRef.subscription as any)?.current_period_end || 0);
+      const effectiveDate = currentPeriodEnd > 0
+        ? new Date(currentPeriodEnd * 1000).toISOString()
+        : new Date().toISOString();
+      const idempotencyKey = crypto
+        .createHash('sha256')
+        .update(`active-patient-limit:${clinicId}:${subscriptionRef.subscriptionItemId}:${requestedLimit}`)
+        .digest('hex');
+
+      await stripe.subscriptionItems.update(
+        subscriptionRef.subscriptionItemId,
+        {
+          quantity: requestedLimit,
+          proration_behavior: 'none'
+        } as any,
+        { idempotencyKey }
+      );
+
+      const nowIso = new Date().toISOString();
+      const previousLimit = limitResolution.currentLimit || billingState.currentActivePatientLimit || activePatients;
+      const billingPatch = {
+        current_active_patient_limit: requestedLimit,
+        current_active_patient_count: activePatients,
+        pending_billing_quantity: requestedLimit,
+        pending_effective_date: effectiveDate,
+        pending_billing_status: 'confirmed_next_cycle',
+        pending_billing_requested_at: nowIso,
+        pending_billing_requested_by: sanitizeString(user.id, 120),
+        stripe_subscription_id: subscriptionRef.subscription.id,
+        stripe_subscription_item_id: subscriptionRef.subscriptionItemId,
+        stripe_price_id: subscriptionRef.priceId,
+        active_patient_count: activePatients,
+        billing_model: ACTIVE_PATIENT_BILLING_MODEL,
+        billing_sync_status: 'upgrade_confirmed_next_cycle',
+        billing_sync_error: null,
+        last_billing_sync_at: nowIso,
+        updated_at: nowIso
+      };
+      await patchTableSafely('clinics', { column: 'id', value: clinicId }, billingPatch);
+      await patchTableSafely('users', { column: 'id', value: sanitizeString(user.id, 120) }, billingPatch);
+      await persistBillingPlanChangeAudit({
+        clinicId,
+        userId: sanitizeString(user.id, 120),
+        stripeSubscriptionId: subscriptionRef.subscription.id,
+        stripeSubscriptionItemId: subscriptionRef.subscriptionItemId,
+        stripePriceId: subscriptionRef.priceId,
+        previousLimit,
+        requestedLimit,
+        activePatientCount: activePatients,
+        effectiveDate,
+        status: 'confirmed_next_cycle',
+        trigger: 'explicit_user_confirmation',
+        metadata: {
+          prorationBehavior: 'none',
+          route: '/api/billing/active-patient-limit/confirm-upgrade'
+        }
+      });
+
+      console.info('[Billing Limits] Upgrade de faixa confirmado explicitamente.', {
+        ...diagnostics,
+        clinicId,
+        userId: sanitizeString(user.id, 120),
+        stripeQuantityUpdated: true,
+        effectiveDate
+      });
+
+      return res.json({
+        success: true,
+        message: 'Upgrade confirmado. A nova faixa entra no próximo ciclo, sem cobrança proporcional imediata.',
+        data: {
+          currentActivePatientLimit: requestedLimit,
+          currentActivePatientCount: activePatients,
+          pendingBillingQuantity: requestedLimit,
+          pendingEffectiveDate: effectiveDate,
+          pendingBillingStatus: 'confirmed_next_cycle',
+          prorationBehavior: 'none'
+        }
+      });
+    } catch (error: any) {
+      const errorCode = sanitizeString(error?.code, 100) || (isMissingStripeConfigError(error) ? 'MISSING_STRIPE_CONFIG' : 'BILLING_UPGRADE_FAILED');
+      console.error('[Billing Limits] confirm-upgrade falhou:', {
+        ...diagnostics,
+        errorCode,
+        message: sanitizeString(error?.message || String(error), 240),
+        stripeErrorType: sanitizeString(error?.type, 80) || null
+      });
+      return res.status(isMissingStripeConfigError(error) ? 503 : 502).json({
+        success: false,
+        code: errorCode,
+        error: errorCode === 'MISSING_STRIPE_CONFIG'
+          ? 'Pagamento indisponível no momento. Fale com o suporte.'
+          : 'Não foi possível confirmar o upgrade agora. Tente novamente em instantes.'
+      });
+    }
+  });
+
+  app.post('/api/billing/active-patient-limit/cancel-pending', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const user = req.session.user;
+      const clinicId = sanitizeString(user.activeWorkspaceId || user.clinicId || user.id, 120);
+      if (!isUuid(clinicId)) {
+        return res.status(400).json({ success: false, code: 'MISSING_ORGANIZATION', error: 'Clínica não identificada.' });
+      }
+      const billingState = await readClinicActivePatientBillingState(clinicId);
+      if (billingState.pendingBillingStatus !== 'confirmed_next_cycle' || !billingState.pendingBillingQuantity) {
+        return res.json({ success: true, idempotent: true, message: 'Não há upgrade pendente para cancelar.' });
+      }
+
+      const { data: latestAudit } = await supabase
+        .from('billing_plan_change_audit_logs')
+        .select('id, previous_limit, requested_limit, effective_date')
+        .eq('clinic_id', clinicId)
+        .eq('status', 'confirmed_next_cycle')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const previousLimit = normalizeActivePatientQuantity((latestAudit as any)?.previous_limit);
+      if (!previousLimit) {
+        return res.status(409).json({
+          success: false,
+          code: 'PENDING_UPGRADE_REVIEW_REQUIRED',
+          error: 'Não foi possível determinar a faixa anterior com segurança.'
+        });
+      }
+
+      const activePatients = await getBillableActivePatientCount({ supabase, clinicId });
+      if (activePatients > previousLimit) {
+        return res.status(409).json({
+          success: false,
+          code: 'ACTIVE_PATIENTS_OVER_CURRENT_LIMIT',
+          error: `Existem ${activePatients} pacientes ativos. Para cancelar, reduza os ativos para até ${previousLimit}.`
+        });
+      }
+
+      const stripe = getStripe();
+      const subscriptionRef = await resolveStoredSubscriptionItemForClinic({
+        stripe,
+        clinicId,
+        billingState,
+        priceId: billingState.stripePriceId || resolveActivePatientPriceId()
+      });
+      const idempotencyKey = crypto
+        .createHash('sha256')
+        .update(`active-patient-limit-cancel:${clinicId}:${subscriptionRef.subscriptionItemId}:${previousLimit}`)
+        .digest('hex');
+      await stripe.subscriptionItems.update(
+        subscriptionRef.subscriptionItemId,
+        {
+          quantity: previousLimit,
+          proration_behavior: 'none'
+        } as any,
+        { idempotencyKey }
+      );
+
+      const nowIso = new Date().toISOString();
+      const billingPatch = {
+        current_active_patient_limit: previousLimit,
+        current_active_patient_count: activePatients,
+        pending_billing_quantity: null,
+        pending_effective_date: null,
+        pending_billing_status: null,
+        pending_billing_requested_at: null,
+        pending_billing_requested_by: null,
+        active_patient_count: activePatients,
+        billing_sync_status: 'upgrade_cancelled',
+        billing_sync_error: null,
+        last_billing_sync_at: nowIso,
+        updated_at: nowIso
+      };
+      await patchTableSafely('clinics', { column: 'id', value: clinicId }, billingPatch);
+      await patchTableSafely('users', { column: 'id', value: sanitizeString(user.id, 120) }, billingPatch);
+      await persistBillingPlanChangeAudit({
+        clinicId,
+        userId: sanitizeString(user.id, 120),
+        stripeSubscriptionId: subscriptionRef.subscription.id,
+        stripeSubscriptionItemId: subscriptionRef.subscriptionItemId,
+        stripePriceId: subscriptionRef.priceId,
+        previousLimit: billingState.pendingBillingQuantity,
+        requestedLimit: previousLimit,
+        activePatientCount: activePatients,
+        effectiveDate: nowIso,
+        status: 'cancelled_before_next_cycle',
+        trigger: 'explicit_user_cancellation',
+        metadata: {
+          prorationBehavior: 'none',
+          route: '/api/billing/active-patient-limit/cancel-pending'
+        }
+      });
+
+      return res.json({
+        success: true,
+        message: 'Upgrade pendente cancelado. O limite atual foi preservado.',
+        data: {
+          currentActivePatientLimit: previousLimit,
+          currentActivePatientCount: activePatients
+        }
+      });
+    } catch (error: any) {
+      console.error('[Billing Limits] cancel-pending falhou:', {
+        message: sanitizeString(error?.message || String(error), 240),
+        code: sanitizeString(error?.code, 80) || null
+      });
+      return res.status(isMissingStripeConfigError(error) ? 503 : 502).json({
+        success: false,
+        code: isMissingStripeConfigError(error) ? 'MISSING_STRIPE_CONFIG' : 'PENDING_UPGRADE_CANCEL_FAILED',
+        error: 'Não foi possível cancelar o upgrade pendente agora.'
       });
     }
   });

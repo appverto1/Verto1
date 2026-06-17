@@ -580,6 +580,75 @@ export async function getBillableActivePatientCount(params: {
   return Math.max(0, Number(result.count || 0));
 }
 
+async function getClinicActivePatientLimitState(
+  supabase: SupabaseClientLike,
+  clinicId: string
+): Promise<{
+  currentActivePatientLimit: number | null;
+  currentActivePatientCount: number | null;
+  pendingBillingQuantity: number | null;
+  pendingBillingStatus: string | null;
+  stripeSubscriptionId: string | null;
+  stripeSubscriptionItemId: string | null;
+}> {
+  const safeClinicId = toSafeString(clinicId, 120);
+  if (!safeClinicId) {
+    return {
+      currentActivePatientLimit: null,
+      currentActivePatientCount: null,
+      pendingBillingQuantity: null,
+      pendingBillingStatus: null,
+      stripeSubscriptionId: null,
+      stripeSubscriptionItemId: null
+    };
+  }
+
+  const run = (selectColumns: string) =>
+    supabase
+      .from('clinics')
+      .select(selectColumns)
+      .eq('id', safeClinicId)
+      .limit(1);
+
+  let result = await run(
+    [
+      'current_active_patient_limit',
+      'current_active_patient_count',
+      'pending_billing_quantity',
+      'pending_billing_status',
+      'stripe_subscription_id',
+      'stripe_subscription_item_id'
+    ].join(',')
+  );
+  if (result.error && extractMissingColumnName(result.error)) {
+    result = await run('stripe_subscription_id,stripe_subscription_item_id,active_patient_count');
+  }
+  if (result.error) {
+    return {
+      currentActivePatientLimit: null,
+      currentActivePatientCount: null,
+      pendingBillingQuantity: null,
+      pendingBillingStatus: null,
+      stripeSubscriptionId: null,
+      stripeSubscriptionItemId: null
+    };
+  }
+
+  const row = Array.isArray(result.data) ? result.data[0] : result.data;
+  const currentActivePatientLimit = toSafeInteger(row?.current_active_patient_limit);
+  const activeCount = toSafeInteger(row?.current_active_patient_count ?? row?.active_patient_count);
+  const pendingBillingQuantity = toSafeInteger(row?.pending_billing_quantity);
+  const pendingBillingStatus = toSafeString(row?.pending_billing_status, 80) || null;
+  return {
+    currentActivePatientLimit,
+    currentActivePatientCount: activeCount,
+    pendingBillingQuantity,
+    pendingBillingStatus,
+    stripeSubscriptionId: toSafeString(row?.stripe_subscription_id, 200) || null,
+    stripeSubscriptionItemId: toSafeString(row?.stripe_subscription_item_id, 200) || null
+  };
+}
+
 function resolveSubscriptionItemByPriceId(subscription: Stripe.Subscription, priceId: string): Stripe.SubscriptionItem | null {
   return (
     subscription.items.data.find((item) => {
@@ -674,6 +743,8 @@ export async function syncClinicActivePatientAddonQuantity(params: {
   clinicId: string;
   trigger: string;
   activePatientPriceId: string;
+  allowStripeQuantityUpdate?: boolean;
+  requestedBillingQuantity?: number | null;
   logger?: Pick<Console, 'log' | 'warn' | 'error'>;
 }): Promise<{
   success: boolean;
@@ -702,7 +773,53 @@ export async function syncClinicActivePatientAddonQuantity(params: {
   }
 
   const activePatients = await getBillableActivePatientCount({ supabase: params.supabase, clinicId });
-  const billableQuantity = Math.max(1, activePatients);
+  const limitState = await getClinicActivePatientLimitState(params.supabase, clinicId);
+  const confirmedPendingQuantity =
+    limitState.pendingBillingStatus === 'confirmed_next_cycle' && limitState.pendingBillingQuantity
+      ? limitState.pendingBillingQuantity
+      : null;
+  const currentLimit = confirmedPendingQuantity || limitState.currentActivePatientLimit || null;
+  const requestedBillingQuantity = toSafeInteger(params.requestedBillingQuantity);
+  const billableQuantity = Math.max(
+    1,
+    requestedBillingQuantity || currentLimit || activePatients
+  );
+
+  if (!params.allowStripeQuantityUpdate) {
+    const upgradeRequired = Boolean(currentLimit && activePatients > currentLimit);
+    await patchClinicBillingSafely(params.supabase, clinicId, {
+      billing_model: ACTIVE_PATIENT_BILLING_MODEL,
+      stripe_price_id: priceId,
+      active_patient_count: activePatients,
+      current_active_patient_count: activePatients,
+      billing_sync_status: upgradeRequired ? 'upgrade_required' : 'within_current_limit',
+      billing_sync_error: upgradeRequired
+        ? 'Pacientes ativos acima do limite contratado. Confirme upgrade antes de alterar Stripe.'
+        : null,
+      last_billing_sync_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    });
+    logger.log('[Stripe Sync] Contagem local atualizada sem alterar quantity no Stripe.', {
+      clinicId,
+      activePatients,
+      currentLimit,
+      billableQuantity,
+      trigger: params.trigger,
+      reason: upgradeRequired
+        ? 'upgrade_required_confirm_upgrade_first'
+        : 'within_current_limit_no_stripe_update'
+    });
+    return {
+      success: true,
+      activePatients,
+      billableQuantity,
+      synced: false,
+      reason: upgradeRequired
+        ? 'upgrade_required_confirm_upgrade_first'
+        : 'within_current_limit_no_stripe_update'
+    };
+  }
+
   const clinicEmails = await resolveClinicEmails(params.supabase, clinicId);
   const subscription = await findSubscriptionForClinic({
     stripe: params.stripe,
@@ -751,17 +868,19 @@ export async function syncClinicActivePatientAddonQuantity(params: {
 
   await patchClinicBillingSafely(params.supabase, clinicId, {
     stripe_customer_id: toSafeString(String(subscription.customer || ''), 200) || undefined,
-    stripe_subscription_id: subscription.id,
-    stripe_subscription_item_id: subscriptionItemId || undefined,
-    stripe_price_id: priceId,
-    subscription_status: subscription.status,
-    billing_model: ACTIVE_PATIENT_BILLING_MODEL,
-    active_patient_count: activePatients,
-    billing_sync_status: 'synced',
-    billing_sync_error: null,
-    last_billing_sync_at: new Date().toISOString(),
-    updated_at: new Date().toISOString()
-  });
+      stripe_subscription_id: subscription.id,
+      stripe_subscription_item_id: subscriptionItemId || undefined,
+      stripe_price_id: priceId,
+      subscription_status: subscription.status,
+      billing_model: ACTIVE_PATIENT_BILLING_MODEL,
+      active_patient_count: activePatients,
+      current_active_patient_count: activePatients,
+      current_active_patient_limit: billableQuantity,
+      billing_sync_status: 'synced',
+      billing_sync_error: null,
+      last_billing_sync_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    });
 
   logger.log('[Stripe Sync] Quantidade de pacientes ativos sincronizada.', {
     clinicId,
@@ -809,7 +928,7 @@ export async function reportClinicActivePatientUsage(params: {
     logger
   });
 
-  logger.log('[Stripe Sync] Rota legada report-usage encaminhada para sync de quantity.', {
+  logger.log('[Stripe Sync] Rota legada report-usage atualizou contagem local sem upgrade silencioso.', {
     clinicId,
     subscriptionId: syncResult.subscriptionId,
     subscriptionItemId: syncResult.subscriptionItemId,

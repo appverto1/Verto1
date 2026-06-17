@@ -19,6 +19,7 @@ const therapistCode = read('src/components/TherapistDashboard.tsx');
 const receptionistCode = read('src/components/ReceptionistDashboard.tsx');
 const migrationCode = read('supabase/migrations/20260610120000_active_patient_billing_consolidation.sql');
 const snapshotMigrationCode = read('supabase/migrations/20260616120000_billing_plan_snapshots.sql');
+const activePatientLimitsMigrationCode = read('supabase/migrations/20260617100000_active_patient_billing_limits.sql');
 
 const tests: Array<{ name: string; fn: () => void }> = [];
 const test = (name: string, fn: () => void) => tests.push({ name, fn });
@@ -66,10 +67,14 @@ test('contador de pacientes ativos e central, server-side e sem select star', ()
   assert.doesNotMatch(stripeServiceCode, /\.select\('id,status'\)/);
 });
 
-test('sync Stripe atualiza quantity do subscription item e persiste referencias criticas', () => {
-  assert.match(stripeServiceCode, /const billableQuantity = Math\.max\(1, activePatients\)/);
-  assert.match(stripeServiceCode, /stripe\.subscriptionItems\.update[\s\S]*?quantity: billableQuantity[\s\S]*?proration_behavior: 'none'/);
-  assert.match(stripeServiceCode, /stripe\.subscriptionItems\.create[\s\S]*?price: priceId[\s\S]*?quantity: billableQuantity[\s\S]*?proration_behavior: 'none'/);
+test('sync de rotina nao faz upgrade silencioso no Stripe e persiste referencias criticas', () => {
+  assert.match(stripeServiceCode, /allowStripeQuantityUpdate\?: boolean/);
+  assert.match(stripeServiceCode, /if \(!params\.allowStripeQuantityUpdate\)/);
+  assert.match(stripeServiceCode, /upgrade_required_confirm_upgrade_first/);
+  assert.match(stripeServiceCode, /within_current_limit_no_stripe_update/);
+  const mutationBlock = sliceFrom(stripeServiceCode, 'if (item) {', 1600);
+  assert.match(mutationBlock, /stripe\.subscriptionItems\.update[\s\S]*?quantity: billableQuantity[\s\S]*?proration_behavior: 'none'/);
+  assert.match(mutationBlock, /stripe\.subscriptionItems\.create[\s\S]*?price: priceId[\s\S]*?quantity: billableQuantity[\s\S]*?proration_behavior: 'none'/);
   for (const field of [
     'stripe_customer_id',
     'stripe_subscription_id',
@@ -78,6 +83,9 @@ test('sync Stripe atualiza quantity do subscription item e persiste referencias 
     'subscription_status',
     'billing_model',
     'active_patient_count',
+    'current_active_patient_limit',
+    'current_active_patient_count',
+    'pending_billing_quantity',
     'billing_sync_status',
     'billing_sync_error',
     'last_billing_sync_at'
@@ -121,6 +129,39 @@ test('checkout autenticado preserva paciente separado e usa active patient price
   assert.match(serverCode, /app\.post\('\/api\/billing\/checkout', checkAuth, handleCreateClinicCheckout\)/);
   assert.match(serverCode, /app\.post\('\/api\/stripe\/create-checkout', checkAuth, handleCreateClinicCheckout\)/);
   assert.doesNotMatch(handler, /planPrices|STRIPE_PRICE_ESSENCIAL|STRIPE_PRICE_CRESCIMENTO|STRIPE_PRICE_AVANCADO/);
+});
+
+test('mudanca de faixa por pacientes ativos exige confirmacao explicita e sem prorata', () => {
+  assert.match(serverCode, /BILLING_UPGRADE_REQUIRED/);
+  assert.match(serverCode, /Seu plano atual cobre até \$\{currentLimit\} pacientes ativos/);
+  assert.match(serverCode, /assertCanActivateBillablePatient/);
+  assert.match(serverCode, /trigger: 'patient_create'/);
+  assert.match(serverCode, /trigger: 'patient_patch'/);
+  assert.match(serverCode, /trigger: 'anamnesis_review'/);
+  assert.match(serverCode, /trigger: 'patient_reactivate'/);
+  assert.match(serverCode, /app\.post\('\/api\/billing\/active-patient-limit\/confirm-upgrade'/);
+  assert.match(serverCode, /app\.post\('\/api\/billing\/active-patient-limit\/cancel-pending'/);
+  const confirmRoute = sliceFrom(serverCode, "app.post('/api/billing/active-patient-limit/confirm-upgrade'", 9000);
+  assert.match(confirmRoute, /stripe\.subscriptionItems\.update/);
+  assert.match(confirmRoute, /quantity: requestedLimit/);
+  assert.match(confirmRoute, /proration_behavior: 'none'/);
+  assert.match(confirmRoute, /pending_billing_status: 'confirmed_next_cycle'/);
+  assert.match(confirmRoute, /persistBillingPlanChangeAudit/);
+  assert.match(confirmRoute, /ENTERPRISE_REQUIRED/);
+  assert.doesNotMatch(confirmRoute, /checkout\.sessions\.create/);
+
+  const cancelRoute = sliceFrom(serverCode, "app.post('/api/billing/active-patient-limit/cancel-pending'", 5200);
+  assert.match(cancelRoute, /ACTIVE_PATIENTS_OVER_CURRENT_LIMIT/);
+  assert.match(cancelRoute, /quantity: previousLimit/);
+  assert.match(cancelRoute, /proration_behavior: 'none'/);
+});
+
+test('frontend reconhece bloqueio de limite e confirma upgrade antes de retentar ativacao', () => {
+  assert.match(appCode, /confirmActivePatientBillingUpgrade/);
+  assert.match(appCode, /BILLING_UPGRADE_REQUIRED/);
+  assert.match(appCode, /\/api\/billing\/active-patient-limit\/confirm-upgrade/);
+  assert.match(appCode, /não gera cobrança proporcional imediata/);
+  assert.match(appCode, /dataService\.updatePatient\(String\(updatedData\.id\), patientUpdatePayload\)/);
 });
 
 test('endpoint de planos le Stripe e retorna apenas dados seguros para onboarding', () => {
@@ -225,6 +266,19 @@ test('migration cria campos persistentes e auditoria de webhook/sync', () => {
     assert.match(snapshotMigrationCode, new RegExp(field));
   }
   assert.match(snapshotMigrationCode, /alter table public\.billing_plan_snapshots enable row level security/i);
+  for (const field of [
+    'current_active_patient_limit',
+    'current_active_patient_count',
+    'pending_billing_quantity',
+    'pending_effective_date',
+    'pending_billing_status',
+    'billing_plan_change_audit_logs',
+    'previous_limit',
+    'requested_limit'
+  ]) {
+    assert.match(activePatientLimitsMigrationCode, new RegExp(field));
+  }
+  assert.match(activePatientLimitsMigrationCode, /alter table public\.billing_plan_change_audit_logs enable row level security/i);
 });
 
 test('landing e tela de assinatura nao exibem planos fixos antigos', () => {
