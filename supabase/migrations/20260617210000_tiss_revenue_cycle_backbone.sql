@@ -92,6 +92,8 @@ create table if not exists public.tiss_revenue_cycle_events (
       'XML_DRAFT_GENERATED',
       'XML_DRAFT_VALIDATED',
       'XML_DRAFT_SUPERSEDED',
+      'TISS_BILLING_BATCH_DRAFT_CREATED',
+      'TISS_BILLING_BATCH_DRAFT_CANCELLED',
       'MANUAL_OVERRIDE_APPLIED'
     )
   ),

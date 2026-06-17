@@ -23,6 +23,8 @@ export type TissRevenueCycleEventType =
   | "XML_DRAFT_GENERATED"
   | "XML_DRAFT_VALIDATED"
   | "XML_DRAFT_SUPERSEDED"
+  | "TISS_BILLING_BATCH_DRAFT_CREATED"
+  | "TISS_BILLING_BATCH_DRAFT_CANCELLED"
   | "MANUAL_OVERRIDE_APPLIED";
 
 export type TissRevenueCycleTransition = {

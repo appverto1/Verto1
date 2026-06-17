@@ -3045,6 +3045,112 @@ export const dataService = {
     }
   },
 
+  async getTissRevenueCycleEvents(options: any = {}) {
+    const endpoint = endpointWithQuery('/api/tiss/revenue-cycle/events', {
+      preGuideId: options.preGuideId,
+      appointmentId: options.appointmentId,
+      xmlDraftId: options.xmlDraftId,
+      payerId: options.payerId,
+      limit: normalizeListLimit(options.limit, 40, 100)
+    });
+    try {
+      return await fetchNoStoreJsonWithRetry(endpoint, {
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getTissRevenueCycleEvents',
+        operation: 'list',
+        table: 'tiss_revenue_cycle_events',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      }, 'O histórico do ciclo TISS voltou do cache. Tente atualizar novamente.');
+    } catch {
+      return { success: false, data: [], error: 'Não foi possível carregar o histórico do ciclo TISS agora.' };
+    }
+  },
+
+  async getTissBillingBatchDrafts(options: any = {}) {
+    const endpoint = endpointWithQuery('/api/tiss/billing-batch-drafts', {
+      payerId: options.payerId,
+      competenceMonth: options.competenceMonth,
+      status: options.status,
+      page: Math.max(1, Math.round(Number(options.page || 1) || 1)),
+      pageSize: normalizeListLimit(options.pageSize || options.limit, 20, 100)
+    });
+    try {
+      return await fetchNoStoreJsonWithRetry(endpoint, {
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getTissBillingBatchDrafts',
+        operation: 'list',
+        table: 'tiss_billing_batch_drafts',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      }, 'A listagem de lotes rascunho TISS voltou do cache. Tente atualizar novamente.');
+    } catch {
+      return { success: false, data: [], error: 'Não foi possível carregar os lotes rascunho TISS agora.' };
+    }
+  },
+
+  async getTissBillingBatchDraft(batchId: string) {
+    try {
+      return await fetchNoStoreJsonWithRetry(`/api/tiss/billing-batch-drafts/${encodeURIComponent(String(batchId))}`, {
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getTissBillingBatchDraft',
+        operation: 'detail',
+        table: 'tiss_billing_batch_drafts',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      }, 'O lote rascunho TISS voltou do cache. Tente atualizar novamente.');
+    } catch {
+      return { success: false, data: null, error: 'Não foi possível carregar o lote rascunho TISS agora.' };
+    }
+  },
+
+  async createTissBillingBatchDraft(payload: any = {}) {
+    try {
+      const response = await fetchClinical('/api/tiss/billing-batch-drafts', {
+        method: 'POST',
+        cache: 'no-store',
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      }, {
+        helperName: 'createTissBillingBatchDraft',
+        operation: 'write',
+        table: 'tiss_billing_batch_drafts,appointment_tiss_pre_guides,tiss_revenue_cycle_events',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeNoStoreJson(response, 'A criação do lote rascunho TISS voltou do cache. Tente novamente.');
+    } catch {
+      return { success: false, error: 'Não foi possível criar o lote rascunho TISS agora.' };
+    }
+  },
+
+  async cancelTissBillingBatchDraft(batchId: string) {
+    try {
+      const response = await fetchClinical(`/api/tiss/billing-batch-drafts/${encodeURIComponent(String(batchId))}/cancel`, {
+        method: 'POST',
+        cache: 'no-store',
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'cancelTissBillingBatchDraft',
+        operation: 'write',
+        table: 'tiss_billing_batch_drafts,appointment_tiss_pre_guides,tiss_revenue_cycle_events',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeNoStoreJson(response, 'O cancelamento do lote rascunho TISS voltou do cache. Tente novamente.');
+    } catch {
+      return { success: false, error: 'Não foi possível cancelar o lote rascunho TISS agora.' };
+    }
+  },
+
   async getClinicTissProfile() {
     try {
       return await fetchNoStoreJsonWithRetry('/api/admin/tiss/provider-profile', {

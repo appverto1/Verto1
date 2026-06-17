@@ -901,6 +901,8 @@ test('migration de XML TISS em rascunho cria historico interno sem envio', () =>
   assert.match(revenueCycleMigrationCode, /add column if not exists anti_glosa_checklist/);
   assert.match(revenueCycleMigrationCode, /PRE_GUIDE_READY_FOR_BILLING/);
   assert.match(revenueCycleMigrationCode, /XML_DRAFT_GENERATED/);
+  assert.match(revenueCycleMigrationCode, /TISS_BILLING_BATCH_DRAFT_CREATED/);
+  assert.match(revenueCycleMigrationCode, /TISS_BILLING_BATCH_DRAFT_CANCELLED/);
   assert.match(revenueCycleMigrationCode, /billing_batch_draft/);
   assert.match(revenueCycleMigrationCode, /payer_specific_description/);
   assert.match(revenueCycleMigrationCode, /negotiated_amount_cents/);
@@ -993,6 +995,50 @@ test('backend gera e baixa XML TISS apenas como rascunho interno', () => {
   assert.match(downloadRoute, /Content-Disposition/);
   assert.doesNotMatch(serverCode, /Remessa enviada|Faturamento TISS concluído|Guia oficial enviada|Lote transmitido/i);
   assert.doesNotMatch(createRoute, /enviar|remessa|glosa|retorno/i);
+});
+
+test('backend expõe eventos e lotes rascunho como central operacional sem envio', () => {
+  const eventsRoute = serverCode.slice(
+    serverCode.indexOf("app.get('/api/tiss/revenue-cycle/events'"),
+    serverCode.indexOf("app.get('/api/tiss/billing-batch-drafts'")
+  );
+  const batchListRoute = serverCode.slice(
+    serverCode.indexOf("app.get('/api/tiss/billing-batch-drafts'"),
+    serverCode.indexOf("app.get('/api/tiss/billing-batch-drafts/:batchId'")
+  );
+  const batchDetailRoute = serverCode.slice(
+    serverCode.indexOf("app.get('/api/tiss/billing-batch-drafts/:batchId'"),
+    serverCode.indexOf("app.post('/api/tiss/billing-batch-drafts'")
+  );
+  const batchCreateRoute = serverCode.slice(
+    serverCode.indexOf("app.post('/api/tiss/billing-batch-drafts'"),
+    serverCode.indexOf("app.post('/api/tiss/billing-batch-drafts/:batchId/cancel'")
+  );
+  const batchCancelRoute = serverCode.slice(
+    serverCode.indexOf("app.post('/api/tiss/billing-batch-drafts/:batchId/cancel'"),
+    serverCode.indexOf("app.get('/api/tiss/pre-guides/coverage'")
+  );
+  assert.match(serverCode, /TISS_REVENUE_CYCLE_EVENT_SELECT/);
+  assert.match(serverCode, /TISS_BILLING_BATCH_DRAFT_SELECT/);
+  assert.match(eventsRoute, /\.from\('tiss_revenue_cycle_events'\)/);
+  assert.match(eventsRoute, /\.eq\('organization_id', organizationId\)/);
+  assert.match(eventsRoute, /pre_guide_id/);
+  assert.match(eventsRoute, /appointment_id/);
+  assert.doesNotMatch(eventsRoute, /\.select\('\*'\)/);
+  assert.match(batchListRoute, /\.from\('tiss_billing_batch_drafts'\)/);
+  assert.match(batchListRoute, /\.eq\('organization_id', organizationId\)/);
+  assert.match(batchListRoute, /\.range\(offset, offset \+ pageSize - 1\)/);
+  assert.doesNotMatch(batchListRoute, /\.select\('\*'\)/);
+  assert.match(batchDetailRoute, /\.eq\('organization_id', organizationId\)/);
+  assert.match(batchCreateRoute, /TISS_BILLING_BATCH_PRE_GUIDE_BLOCKED/);
+  assert.match(batchCreateRoute, /blockingCount > 0/);
+  assert.match(batchCreateRoute, /revenue_cycle_state:\s*'billing_batch_draft'/);
+  assert.match(batchCreateRoute, /eventType:\s*'TISS_BILLING_BATCH_DRAFT_CREATED'/);
+  assert.match(batchCreateRoute, /Nenhum dado foi enviado à operadora/);
+  assert.match(batchCancelRoute, /status:\s*'cancelled'/);
+  assert.match(batchCancelRoute, /eventType:\s*'TISS_BILLING_BATCH_DRAFT_CANCELLED'/);
+  assert.match(batchCancelRoute, /revenue_cycle_state:\s*'ready_for_billing'/);
+  assert.doesNotMatch(batchCreateRoute + batchCancelRoute, /Remessa enviada|Lote transmitido|Glosa processada|Retorno importado|protocolo/i);
 });
 
 test('revalidação reconstrói snapshots a partir dos cadastros mestres atuais', () => {
@@ -1235,7 +1281,22 @@ test('frontend separa Pré-guias e Rascunhos XML com preview interno', () => {
   assert.match(preGuideUiCode, /authorization_expired/);
   assert.match(preGuideUiCode, /missing_card/);
   assert.match(preGuideUiCode, /activePanel === "preGuides"/);
+  assert.match(preGuideUiCode, /activePanel === "batchDrafts"/);
   assert.match(preGuideUiCode, /activePanel === "xmlDrafts"/);
+  assert.match(preGuideUiCode, /Central de Fechamento TISS/);
+  assert.match(preGuideUiCode, /Lotes rascunho/);
+  assert.match(preGuideUiCode, /Criar lote rascunho/);
+  assert.match(preGuideUiCode, /dataService\.getTissBillingBatchDrafts/);
+  assert.match(preGuideUiCode, /dataService\.createTissBillingBatchDraft/);
+  assert.match(preGuideUiCode, /dataService\.cancelTissBillingBatchDraft/);
+  assert.match(preGuideUiCode, /Nenhum lote foi enviado/);
+  assert.match(preGuideUiCode, /Estado do ciclo/);
+  assert.match(preGuideUiCode, /revenueCycleMeta/);
+  assert.match(preGuideUiCode, /Pronta para faturamento/);
+  assert.match(preGuideUiCode, /Com pend/);
+  assert.match(preGuideUiCode, /Aguardando autoriza/);
+  assert.match(preGuideUiCode, /XML rascunho gerado/);
+  assert.match(preGuideUiCode, /Em lote rascunho/);
   assert.match(preGuideUiCode, /Gerar XML rascunho com pré-guias prontas/);
   assert.match(preGuideUiCode, /Gerar XML rascunho/);
   assert.match(preGuideUiCode, /Gerar rascunho XML/);
@@ -1280,7 +1341,21 @@ test('frontend separa Pré-guias e Rascunhos XML com preview interno', () => {
   assert.match(preGuideUiCode, /RESPONSIBLE_SIGNATURE_REQUIRED:\s*"Assinatura do responsável"/);
   assert.match(preGuideUiCode, /<Section title="Assinatura" icon=\{ClipboardCheck\}>/);
   assert.match(preGuideUiCode, /Data\/hora da assinatura/);
+  assert.match(preGuideUiCode, /<Section title="Ciclo de receita" icon=\{History\}>/);
+  assert.match(preGuideUiCode, /Histórico do ciclo/);
+  assert.match(preGuideUiCode, /dataService\.getTissRevenueCycleEvents/);
+  assert.match(preGuideUiCode, /revenueCycleEventLabel/);
+  assert.match(preGuideUiCode, /Última validação/);
+  assert.match(preGuideUiCode, /Próxima ação sugerida/);
   assert.match(preGuideUiCode, /Checklist antiglosa/);
+  assert.match(preGuideUiCode, /antiGlosaCategoryLabel/);
+  assert.match(preGuideUiCode, /Convênio e beneficiário/);
+  assert.match(preGuideUiCode, /Autorização e guia/);
+  assert.match(preGuideUiCode, /Profissional executante/);
+  assert.match(preGuideUiCode, /Procedimento\/TUSS/);
+  assert.match(preGuideUiCode, /Execução\/assinatura/);
+  assert.match(preGuideUiCode, /Valores/);
+  assert.match(preGuideUiCode, /Documentos físicos/);
   assert.match(preGuideUiCode, /antiGlosaChecklist/);
   assert.match(preGuideUiCode, /antiGlosaStatusMeta/);
   assert.match(preGuideUiCode, /Bloqueante/);
@@ -1339,6 +1414,11 @@ test('data service usa operações explícitas e o pacote expõe suíte dedicada
     'getTissXmlDraft',
     'validateTissXmlDraft',
     'downloadTissXmlDraft',
+    'getTissRevenueCycleEvents',
+    'getTissBillingBatchDrafts',
+    'getTissBillingBatchDraft',
+    'createTissBillingBatchDraft',
+    'cancelTissBillingBatchDraft',
     'getClinicTissProfile',
     'updateClinicTissProfile',
     'getPayerTissProfile',

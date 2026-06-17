@@ -11,7 +11,10 @@ import {
   Eye,
   FileSearch,
   FileText,
+  History,
+  Layers3,
   Loader2,
+  PackagePlus,
   RefreshCw,
   ShieldAlert,
   Stethoscope,
@@ -126,6 +129,42 @@ type TissXmlDraftValidationSummary = {
     status?: string;
     message?: string;
   };
+};
+
+type TissRevenueCycleEventRow = {
+  id?: string | null;
+  patientId?: string | null;
+  appointmentId?: string | null;
+  preGuideId?: string | null;
+  xmlDraftId?: string | null;
+  payerId?: string | null;
+  eventType?: string | null;
+  previousState?: string | null;
+  newState?: string | null;
+  reason?: string | null;
+  performedBy?: string | null;
+  performedAt?: string | null;
+  metadata?: Record<string, any>;
+};
+
+type TissBillingBatchDraftRow = {
+  id?: string | null;
+  payerId?: string | null;
+  payerName?: string | null;
+  competenceMonth?: string | null;
+  status?: string | null;
+  preGuideIds?: string[];
+  xmlDraftIds?: string[];
+  guideCount?: number | null;
+  totalAmountCents?: number | null;
+  createdBy?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  validatedAt?: string | null;
+  validationSummary?: Record<string, any>;
+  metadata?: Record<string, any>;
+  linkedXmlDraftId?: string | null;
+  notSentToPayer?: boolean;
 };
 
 type TissPreGuideTabProps = {
@@ -348,6 +387,58 @@ function xmlValidationMeta(status?: string | null) {
   return { label: "Não validado", className: "bg-slate-100 text-slate-700 ring-slate-200" };
 }
 
+function revenueCycleMeta(state?: string | null) {
+  const normalized = String(state || "draft").trim();
+  if (normalized === "ready_for_billing") return { label: "Pronta para faturamento", className: "bg-emerald-50 text-emerald-700 ring-emerald-100" };
+  if (normalized === "missing_data") return { label: "Com pendências", className: "bg-amber-50 text-amber-700 ring-amber-100" };
+  if (normalized === "awaiting_authorization") return { label: "Aguardando autorização", className: "bg-amber-50 text-amber-700 ring-amber-100" };
+  if (normalized === "authorized") return { label: "Autorizada", className: "bg-sky-50 text-sky-700 ring-sky-100" };
+  if (normalized === "in_execution") return { label: "Em execução", className: "bg-violet-50 text-violet-700 ring-violet-100" };
+  if (normalized === "xml_draft_generated") return { label: "XML rascunho gerado", className: "bg-indigo-50 text-indigo-700 ring-indigo-100" };
+  if (normalized === "billing_batch_draft") return { label: "Em lote rascunho", className: "bg-cyan-50 text-cyan-700 ring-cyan-100" };
+  return { label: "Em digitação", className: "bg-slate-100 text-slate-700 ring-slate-200" };
+}
+
+function batchDraftStatusMeta(status?: string | null) {
+  const normalized = String(status || "draft").trim();
+  if (normalized === "validated") return { label: "Validado internamente", className: "bg-emerald-50 text-emerald-700 ring-emerald-100" };
+  if (normalized === "cancelled") return { label: "Cancelado", className: "bg-rose-50 text-rose-700 ring-rose-100" };
+  if (normalized === "superseded") return { label: "Substituído", className: "bg-slate-100 text-slate-600 ring-slate-200" };
+  return { label: "Rascunho", className: "bg-indigo-50 text-indigo-700 ring-indigo-100" };
+}
+
+function revenueCycleEventLabel(eventType?: string | null) {
+  const normalized = String(eventType || "").trim();
+  const labels: Record<string, string> = {
+    PRE_GUIDE_MATERIALIZED: "Pré-guia materializada",
+    PRE_GUIDE_VALIDATED: "Pré-guia validada",
+    PRE_GUIDE_READY_FOR_BILLING: "Pré-guia pronta para faturamento",
+    PRE_GUIDE_PENDING: "Pré-guia com pendências",
+    AUTHORIZATION_ATTACHED: "Autorização vinculada",
+    XML_DRAFT_GENERATED: "XML rascunho gerado",
+    XML_DRAFT_VALIDATED: "XML rascunho validado",
+    XML_DRAFT_SUPERSEDED: "XML rascunho substituído",
+    TISS_BILLING_BATCH_DRAFT_CREATED: "Pré-guia incluída em lote rascunho",
+    TISS_BILLING_BATCH_DRAFT_CANCELLED: "Lote rascunho cancelado",
+    MANUAL_OVERRIDE_APPLIED: "Ajuste manual registrado",
+  };
+  return labels[normalized] || "Evento do ciclo TISS";
+}
+
+function antiGlosaCategoryLabel(category?: string | null) {
+  const normalized = String(category || "").trim();
+  const labels: Record<string, string> = {
+    beneficiary: "Convênio e beneficiário",
+    authorization: "Autorização e guia",
+    professional: "Profissional executante",
+    procedure: "Procedimento/TUSS",
+    execution: "Execução/assinatura",
+    amount: "Valores",
+    physical_documents: "Documentos físicos",
+  };
+  return labels[normalized] || "Checklist operacional";
+}
+
 function antiGlosaStatusMeta(status?: string | null) {
   const normalized = String(status || "").trim();
   if (normalized === "ok") return { label: "OK", className: "bg-emerald-50 text-emerald-700 ring-emerald-100" };
@@ -449,13 +540,22 @@ export function TissPreGuideTab({
   const [xmlDraftGenerating, setXmlDraftGenerating] = useState(false);
   const [xmlDraftModalOpen, setXmlDraftModalOpen] = useState(false);
   const [xmlDraftPayerId, setXmlDraftPayerId] = useState("");
-  const [activePanel, setActivePanel] = useState<"preGuides" | "xmlDrafts">("preGuides");
+  const [batchDrafts, setBatchDrafts] = useState<TissBillingBatchDraftRow[]>([]);
+  const [batchDraftsLoading, setBatchDraftsLoading] = useState(false);
+  const [batchDraftCreating, setBatchDraftCreating] = useState(false);
+  const [batchDraftModalOpen, setBatchDraftModalOpen] = useState(false);
+  const [batchDraftPayerId, setBatchDraftPayerId] = useState("");
+  const [batchDraftDetail, setBatchDraftDetail] = useState<TissBillingBatchDraftRow | null>(null);
+  const [batchDraftCancellingId, setBatchDraftCancellingId] = useState("");
+  const [activePanel, setActivePanel] = useState<"preGuides" | "batchDrafts" | "xmlDrafts">("preGuides");
   const [xmlDraftDetail, setXmlDraftDetail] = useState<TissXmlDraftRow | null>(null);
   const [xmlDraftDetailLoading, setXmlDraftDetailLoading] = useState(false);
   const [xmlDraftValidatingId, setXmlDraftValidatingId] = useState("");
   const [xmlValidationDetail, setXmlValidationDetail] = useState<TissXmlDraftRow | null>(null);
   const [createdXmlDraft, setCreatedXmlDraft] = useState<TissXmlDraftRow | null>(null);
   const [highlightedXmlDraftId, setHighlightedXmlDraftId] = useState("");
+  const [revenueCycleEvents, setRevenueCycleEvents] = useState<TissRevenueCycleEventRow[]>([]);
+  const [revenueCycleEventsLoading, setRevenueCycleEventsLoading] = useState(false);
 
   const cards = useMemo(() => [
     { key: "valid" as const, label: "Pré-guias válidas", value: Number(kpis.valid || 0), tone: "text-emerald-700" },
@@ -497,6 +597,30 @@ export function TissPreGuideTab({
   const createdXmlDraftInList = createdXmlDraft?.id
     ? xmlDrafts.find((draft) => draft.id === createdXmlDraft.id) || createdXmlDraft
     : null;
+  const readyForBatchRows = useMemo(() => rows.filter((row) => {
+    const state = String(row.revenueCycleState || row.snapshot?.revenueCycle?.state || (row.status === "valid" ? "ready_for_billing" : "")).trim();
+    const blockingCount = Number(row.antiGlosaChecklist?.blockingCount || row.snapshot?.antiGlosaChecklist?.blockingCount || 0) || 0;
+    const codes = Array.isArray(row.validationErrorCodes) ? row.validationErrorCodes : [];
+    return row.status === "valid" && ["ready_for_billing", "xml_draft_generated"].includes(state) && blockingCount === 0 && codes.length === 0;
+  }), [rows]);
+  const visibleBatchPayers = useMemo(() => {
+    const byId = new Map<string, string>();
+    for (const row of readyForBatchRows) {
+      const id = String(row.payerId || "").trim();
+      if (id) byId.set(id, String(row.payerName || "Pagador"));
+    }
+    return Array.from(byId.entries()).map(([id, name]) => ({ id, name }));
+  }, [readyForBatchRows]);
+  const selectedBatchPayerId = batchDraftPayerId || payerId || (visibleBatchPayers.length === 1 ? visibleBatchPayers[0].id : "");
+  const selectedBatchPayerName = visibleBatchPayers.find((item) => item.id === selectedBatchPayerId)?.name || "Pagador";
+  const selectedBatchRows = useMemo(
+    () => readyForBatchRows.filter((row) => !selectedBatchPayerId || row.payerId === selectedBatchPayerId),
+    [readyForBatchRows, selectedBatchPayerId]
+  );
+  const selectedBatchTotalAmount = selectedBatchRows.reduce((sum, row) => sum + Number(row.totalAmountCents || row.snapshot?.procedure?.totalAmountCents || 0), 0);
+  const latestBatchDraft = batchDrafts[0] || null;
+  const batchDraftGuideCount = batchDrafts.reduce((sum, batch) => sum + Number(batch.guideCount || 0), 0);
+  const batchDraftTotalAmount = batchDrafts.reduce((sum, batch) => sum + Number(batch.totalAmountCents || 0), 0);
 
   const loadRows = useCallback(async (overrides: { page?: number; quickFilter?: QuickFilter | "" } = {}) => {
     setLoading(true);
@@ -556,10 +680,26 @@ export function TissPreGuideTab({
     }
   }, [competenceMonth, payerId]);
 
+  const loadBatchDrafts = useCallback(async () => {
+    setBatchDraftsLoading(true);
+    try {
+      const result = await dataService.getTissBillingBatchDrafts({
+        payerId,
+        competenceMonth,
+        page: 1,
+        pageSize: 20,
+      });
+      setBatchDrafts(result?.success && Array.isArray(result.data) ? result.data : []);
+    } finally {
+      setBatchDraftsLoading(false);
+    }
+  }, [competenceMonth, payerId]);
+
   useEffect(() => {
     void loadRows();
     void loadXmlDrafts();
-  }, [loadRows, loadXmlDrafts]);
+    void loadBatchDrafts();
+  }, [loadRows, loadXmlDrafts, loadBatchDrafts]);
 
   useEffect(() => {
     setPage(1);
@@ -568,14 +708,25 @@ export function TissPreGuideTab({
   const openDetail = async (row: TissPreGuideRow) => {
     if (!row.appointmentId) return;
     setDetail(row);
+    setRevenueCycleEvents([]);
     setDetailLoading(true);
+    setRevenueCycleEventsLoading(true);
     setError("");
     try {
-      const result = await dataService.getTissPreGuide(row.appointmentId);
+      const [result, eventsResult] = await Promise.all([
+        dataService.getTissPreGuide(row.appointmentId),
+        dataService.getTissRevenueCycleEvents({
+          preGuideId: row.id,
+          appointmentId: row.appointmentId,
+          limit: 20,
+        }),
+      ]);
       if (result?.success && result.data) setDetail(result.data);
       else setError(result?.error || "Não foi possível abrir a Pré-guia TISS.");
+      if (eventsResult?.success && Array.isArray(eventsResult.data)) setRevenueCycleEvents(eventsResult.data);
     } finally {
       setDetailLoading(false);
+      setRevenueCycleEventsLoading(false);
     }
   };
 
@@ -591,7 +742,15 @@ export function TissPreGuideTab({
         return;
       }
       setRows((current) => current.map((item) => item.appointmentId === row.appointmentId ? result.data : item));
-      if (detail?.appointmentId === row.appointmentId) setDetail(result.data);
+      if (detail?.appointmentId === row.appointmentId) {
+        setDetail(result.data);
+        const eventsResult = await dataService.getTissRevenueCycleEvents({
+          preGuideId: result.data.id || row.id,
+          appointmentId: row.appointmentId,
+          limit: 20,
+        });
+        if (eventsResult?.success && Array.isArray(eventsResult.data)) setRevenueCycleEvents(eventsResult.data);
+      }
       setMessage(result.message || "Pré-guia revalidada com dados globais atualizados.");
       await loadRows();
     } finally {
@@ -678,9 +837,90 @@ export function TissPreGuideTab({
       setActivePanel("xmlDrafts");
       setMessage(result.message || "XML TISS em rascunho gerado para conferência interna.");
       await loadXmlDrafts();
+      await loadBatchDrafts();
     } finally {
       setXmlDraftGenerating(false);
     }
+  };
+
+  const openBatchDraftModal = () => {
+    if (readyForBatchRows.length === 0) {
+      setError("Não há pré-guias prontas para criar lote rascunho nesta competência.");
+      return;
+    }
+    const defaultPayerId = payerId || (visibleBatchPayers.length === 1 ? visibleBatchPayers[0].id : "");
+    setBatchDraftPayerId(defaultPayerId);
+    setBatchDraftModalOpen(true);
+  };
+
+  const createBatchDraft = async () => {
+    const payerForBatch = selectedBatchPayerId;
+    if (!payerForBatch) {
+      setError("Selecione um pagador para criar o lote rascunho.");
+      return;
+    }
+    setBatchDraftCreating(true);
+    setError("");
+    setMessage("");
+    try {
+      const result = await dataService.createTissBillingBatchDraft({
+        payerId: payerForBatch,
+        competenceMonth,
+        preGuideIds: selectedBatchRows.map((row) => row.id).filter(Boolean),
+      });
+      if (!result?.success) {
+        setError(result?.error || "Não foi possível criar o lote rascunho TISS agora.");
+        return;
+      }
+      setBatchDraftModalOpen(false);
+      setActivePanel("batchDrafts");
+      setMessage(result.message || "Lote rascunho criado para conferência interna. Nenhum dado foi enviado à operadora.");
+      await Promise.all([loadRows(), loadBatchDrafts()]);
+    } finally {
+      setBatchDraftCreating(false);
+    }
+  };
+
+  const openBatchDraftDetail = async (batch: TissBillingBatchDraftRow) => {
+    if (!batch.id) return;
+    setBatchDraftDetail(batch);
+    setError("");
+    try {
+      const result = await dataService.getTissBillingBatchDraft(batch.id);
+      if (result?.success && result.data) setBatchDraftDetail(result.data);
+      else setError(result?.error || "Não foi possível abrir o lote rascunho TISS agora.");
+    } catch {
+      setError("Não foi possível abrir o lote rascunho TISS agora.");
+    }
+  };
+
+  const cancelBatchDraft = async (batch: TissBillingBatchDraftRow) => {
+    if (!batch.id || batchDraftCancellingId) return;
+    setBatchDraftCancellingId(batch.id);
+    setError("");
+    setMessage("");
+    try {
+      const result = await dataService.cancelTissBillingBatchDraft(batch.id);
+      if (!result?.success) {
+        setError(result?.error || "Não foi possível cancelar o lote rascunho TISS agora.");
+        return;
+      }
+      setMessage(result.message || "Lote rascunho cancelado. Nenhum dado havia sido enviado à operadora.");
+      await Promise.all([loadRows(), loadBatchDrafts()]);
+      if (batchDraftDetail?.id === batch.id) setBatchDraftDetail(result.data || null);
+    } finally {
+      setBatchDraftCancellingId("");
+    }
+  };
+
+  const openLinkedXmlDraft = async (batch: TissBillingBatchDraftRow) => {
+    const xmlDraftId = batch.linkedXmlDraftId || batch.xmlDraftIds?.[0];
+    if (!xmlDraftId) {
+      setError("Este lote rascunho ainda não possui XML rascunho vinculado.");
+      return;
+    }
+    setActivePanel("xmlDrafts");
+    await openXmlDraftDetail({ id: xmlDraftId });
   };
 
   const openXmlDraftDetail = async (draft: TissXmlDraftRow) => {
@@ -925,7 +1165,33 @@ export function TissPreGuideTab({
   const antiGlosaChecklist = snapshot.antiGlosaChecklist || detail?.antiGlosaChecklist || {};
   const antiGlosaItems = Array.isArray(antiGlosaChecklist.items) ? antiGlosaChecklist.items : [];
   const antiGlosaReady = String(antiGlosaChecklist.status || "") === "ready";
+  const antiGlosaGroups = useMemo(() => {
+    const groups = new Map<string, any[]>();
+    for (const item of antiGlosaItems) {
+      const key = String(item.category || "operational").trim();
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)?.push(item);
+    }
+    return Array.from(groups.entries()).map(([category, items]) => ({ category, items }));
+  }, [antiGlosaItems]);
   const detailStatus = statusMeta[String(detail?.status || "draft")] || statusMeta.draft;
+  const detailRevenueCycleMeta = revenueCycleMeta(detail?.revenueCycleState || detail?.snapshot?.revenueCycle?.state);
+  const detailRevenueCycleReason = detail?.revenueCycleStateReason || detail?.snapshot?.revenueCycle?.reason || "Estado operacional calculado pela validação da Pré-guia.";
+  const nextRevenueAction = (() => {
+    const state = String(detail?.revenueCycleState || detail?.snapshot?.revenueCycle?.state || "").trim();
+    if (state === "ready_for_billing") return "Gerar XML rascunho ou incluir em lote rascunho.";
+    if (state === "xml_draft_generated") return "Revisar XML rascunho ou incluir em lote rascunho.";
+    if (state === "billing_batch_draft") return "Conferir o lote rascunho antes de qualquer etapa futura.";
+    const firstIssue = errors[0] || warnings[0];
+    const code = normalizeIssueCode(firstIssue?.code);
+    if (code.includes("AUTHORIZATION") || code.includes("GUIDE")) return authorizationActionLabel(code);
+    if (code === "RESPONSIBLE_SIGNATURE_REQUIRED") return "Coletar assinatura";
+    if (code.includes("PAYER")) return "Corrigir dados do pagador";
+    if (code.includes("PROFESSIONAL") || code === "CBO_MISSING") return "Corrigir profissional";
+    if (code.includes("CARD") || code.includes("BENEFICIARY")) return "Corrigir carteirinha";
+    if (code.includes("TUSS") || code.includes("PROCEDURE")) return "Mapear TUSS";
+    return "Corrigir pendências e revalidar a Pré-guia.";
+  })();
   const detailHasAuthorization = hasAuthorizationSnapshot(detail);
   const detailHasAuthorizationIssue = [...errors, ...warnings].some((item) => isAuthorizationIssue(item));
   const authorizationFooterActionLabel = detailHasAuthorization
@@ -1054,9 +1320,23 @@ export function TissPreGuideTab({
 
   return (
     <div className="space-y-3">
+      <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold text-slate-900">Central de Fechamento TISS</div>
+            <p className="mt-1 text-xs text-slate-500">
+              Conferência interna de pré-guias, lotes rascunho e XMLs rascunho. Nenhum dado é enviado à operadora nesta etapa.
+            </p>
+          </div>
+          <span className="rounded-full bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700 ring-1 ring-indigo-100">
+            Validação interna
+          </span>
+        </div>
+      </div>
       <div className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-white p-1 shadow-sm">
         {[
           { key: "preGuides" as const, label: "Pré-guias" },
+          { key: "batchDrafts" as const, label: "Lotes rascunho" },
           { key: "xmlDrafts" as const, label: "Rascunhos XML" },
         ].map((item) => {
           const active = activePanel === item.key;
@@ -1204,9 +1484,32 @@ export function TissPreGuideTab({
         </div>
       </section>
 
+      <section className="rounded-md border border-slate-200 bg-white px-3 py-2 shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+              <Layers3 size={16} className="text-cyan-600" />
+              Criar lote rascunho
+            </div>
+            <p className="mt-1 text-xs text-slate-500">
+              Agrupa pré-guias prontas por pagador e competência para conferência interna. Nenhum lote será enviado à operadora.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={openBatchDraftModal}
+            disabled={readyForBatchRows.length === 0 || loading}
+            className="inline-flex items-center gap-2 rounded-md border border-cyan-200 bg-cyan-50 px-3 py-2 text-sm font-medium text-cyan-800 hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <PackagePlus size={16} />
+            Criar lote rascunho
+          </button>
+        </div>
+      </section>
+
       <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
         <div className="max-h-[70vh] overflow-auto">
-          <table className="min-w-[1500px] divide-y divide-slate-200 text-sm">
+          <table className="min-w-[1640px] divide-y divide-slate-200 text-sm">
             <thead className="sticky top-0 z-20 bg-slate-50 text-left text-xs font-semibold uppercase text-slate-500 shadow-[0_1px_0_0_rgba(148,163,184,0.35)]">
               <tr>
                 <th className="px-4 py-3">Data/hora</th>
@@ -1221,16 +1524,17 @@ export function TissPreGuideTab({
                 <th className="px-4 py-3">Quantidade</th>
                 <th className="px-4 py-3">Valor</th>
                 <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3">Estado do ciclo</th>
                 <th className="px-4 py-3">Pendências TISS</th>
                 <th className="px-4 py-3 text-right">Ações</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loading ? (
-                <tr><td colSpan={14} className="px-4 py-12 text-center text-slate-500"><Loader2 size={20} className="mx-auto mb-2 animate-spin" />Carregando Pré-guias TISS</td></tr>
+                <tr><td colSpan={15} className="px-4 py-12 text-center text-slate-500"><Loader2 size={20} className="mx-auto mb-2 animate-spin" />Carregando Pré-guias TISS</td></tr>
               ) : rows.length === 0 ? (
                 <tr>
-                  <td colSpan={14} className="px-4 py-12 text-center">
+                  <td colSpan={15} className="px-4 py-12 text-center">
                     {quickFilter ? (
                       <div className="text-sm text-slate-500">Nenhuma Pré-guia encontrada para este filtro.</div>
                     ) : eligibleForPreGuide === 0 ? (
@@ -1266,6 +1570,7 @@ export function TissPreGuideTab({
                 </tr>
               ) : rows.map((row) => {
                 const meta = statusMeta[String(row.status || "draft")] || statusMeta.draft;
+                const cycleMeta = revenueCycleMeta(row.revenueCycleState || row.snapshot?.revenueCycle?.state);
                 const codes = Array.isArray(row.validationErrorCodes) ? row.validationErrorCodes : [];
                 const busy = revalidatingId === row.appointmentId;
                 const professionalSnapshot = row.snapshot?.professional || {};
@@ -1291,6 +1596,12 @@ export function TissPreGuideTab({
                     <td className="px-4 py-3">
                       <span className={`inline-flex rounded-full px-2 py-1 text-xs font-medium ring-1 ${meta.className}`}>{meta.label}</span>
                       {row.staleReason && <div className="mt-1 text-xs text-amber-700">Revalidação necessária</div>}
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={`inline-flex rounded-full px-2 py-1 text-xs font-medium ring-1 ${cycleMeta.className}`}>{cycleMeta.label}</span>
+                      {(row.revenueCycleStateReason || row.snapshot?.revenueCycle?.reason) && (
+                        <div className="mt-1 max-w-[220px] text-xs text-slate-500">{row.revenueCycleStateReason || row.snapshot?.revenueCycle?.reason}</div>
+                      )}
                     </td>
                     <td className="max-w-[280px] px-4 py-3">
                       <div className="flex flex-wrap gap-1">
@@ -1326,6 +1637,128 @@ export function TissPreGuideTab({
       </section>
 
         </>
+      )}
+
+      {activePanel === "batchDrafts" && (
+        <section className="space-y-3">
+          <div className="flex flex-wrap items-start justify-between gap-3 rounded-md border border-cyan-100 bg-cyan-50/70 px-3 py-3">
+            <div>
+              <div className="text-sm font-semibold text-slate-800">Lotes rascunho</div>
+              <div className="mt-0.5 text-xs text-slate-600">
+                Agrupamentos internos para conferência. Nenhum lote foi enviado à operadora.
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void loadBatchDrafts()}
+                disabled={batchDraftsLoading}
+                className="inline-flex items-center gap-2 rounded-md border border-cyan-200 bg-white px-3 py-2 text-sm text-cyan-800 hover:bg-cyan-100 disabled:opacity-60"
+              >
+                {batchDraftsLoading ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
+                Atualizar lotes
+              </button>
+              <button
+                type="button"
+                onClick={openBatchDraftModal}
+                disabled={readyForBatchRows.length === 0 || loading}
+                className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <PackagePlus size={16} />
+                Criar lote rascunho
+              </button>
+            </div>
+          </div>
+
+          <section className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="rounded-md border border-slate-200 bg-white px-3 py-2 shadow-sm">
+              <div className="text-xs text-slate-500">Lotes rascunho</div>
+              <div className="mt-1 text-lg font-semibold text-cyan-700">{batchDrafts.length}</div>
+            </div>
+            <div className="rounded-md border border-slate-200 bg-white px-3 py-2 shadow-sm">
+              <div className="text-xs text-slate-500">Último lote</div>
+              <div className="mt-1 text-sm font-semibold text-slate-800">{latestBatchDraft ? formatDate(latestBatchDraft.createdAt) : "Nenhum"}</div>
+            </div>
+            <div className="rounded-md border border-slate-200 bg-white px-3 py-2 shadow-sm">
+              <div className="text-xs text-slate-500">Pré-guias agrupadas</div>
+              <div className="mt-1 text-lg font-semibold text-slate-800">{batchDraftGuideCount}</div>
+            </div>
+            <div className="rounded-md border border-slate-200 bg-white px-3 py-2 shadow-sm">
+              <div className="text-xs text-slate-500">Valor total agrupado</div>
+              <div className="mt-1 text-lg font-semibold text-slate-800">{formatCurrency(batchDraftTotalAmount)}</div>
+            </div>
+          </section>
+
+          <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+            <div className="overflow-auto">
+              <table className="min-w-[1280px] divide-y divide-slate-200 text-sm">
+                <thead className="bg-slate-50 text-left text-xs font-semibold uppercase text-slate-500">
+                  <tr>
+                    <th className="px-4 py-3">Competência</th>
+                    <th className="px-4 py-3">Pagador</th>
+                    <th className="px-4 py-3">Pré-guias</th>
+                    <th className="px-4 py-3">Valor total</th>
+                    <th className="px-4 py-3">Status</th>
+                    <th className="px-4 py-3">Criado por</th>
+                    <th className="px-4 py-3">Criado em</th>
+                    <th className="px-4 py-3">Última validação</th>
+                    <th className="px-4 py-3 text-right">Ações</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {batchDraftsLoading ? (
+                    <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-500"><Loader2 size={18} className="mx-auto mb-2 animate-spin" />Carregando lotes rascunho</td></tr>
+                  ) : batchDrafts.length === 0 ? (
+                    <tr>
+                      <td colSpan={9} className="px-4 py-10 text-center text-slate-500">
+                        Nenhum lote rascunho criado para esta competência. Use apenas pré-guias prontas para criar agrupamentos internos.
+                      </td>
+                    </tr>
+                  ) : batchDrafts.map((batch) => {
+                    const meta = batchDraftStatusMeta(batch.status);
+                    const cancelling = batchDraftCancellingId === batch.id;
+                    return (
+                      <tr key={batch.id || `${batch.payerId}-${batch.createdAt}`} className="hover:bg-slate-50">
+                        <td className="px-4 py-3 text-slate-600">{String(batch.competenceMonth || "").slice(0, 7) || "Não informada"}</td>
+                        <td className="px-4 py-3 text-slate-700">{fieldValue(batch.payerName, "Pagador")}</td>
+                        <td className="px-4 py-3 text-slate-600">{Number(batch.guideCount || 0)}</td>
+                        <td className="px-4 py-3 font-medium text-slate-800">{formatCurrency(batch.totalAmountCents)}</td>
+                        <td className="px-4 py-3"><span className={`rounded-full px-2 py-1 text-xs font-medium ring-1 ${meta.className}`}>{meta.label}</span></td>
+                        <td className="px-4 py-3 text-slate-600">{batch.createdBy ? "Usuário autorizado" : "Não informado"}</td>
+                        <td className="px-4 py-3 text-slate-600">{formatDate(batch.createdAt)}</td>
+                        <td className="px-4 py-3 text-slate-600">{batch.validatedAt ? formatDate(batch.validatedAt) : "Não validado"}</td>
+                        <td className="px-4 py-3 text-right">
+                          <div className="flex flex-wrap justify-end gap-2">
+                            <button type="button" onClick={() => void openBatchDraftDetail(batch)} className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
+                              <Eye size={15} />
+                              Ver lote
+                            </button>
+                            <button type="button" onClick={() => setActivePanel("preGuides")} className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
+                              <FileSearch size={15} />
+                              Ver pré-guias
+                            </button>
+                            {batch.linkedXmlDraftId || batch.xmlDraftIds?.length ? (
+                              <button type="button" onClick={() => void openLinkedXmlDraft(batch)} className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
+                                <FileText size={15} />
+                                Ver XMLs vinculados
+                              </button>
+                            ) : null}
+                            {batch.status !== "cancelled" && (
+                              <button type="button" onClick={() => void cancelBatchDraft(batch)} disabled={cancelling} className="inline-flex items-center gap-2 rounded-md border border-rose-200 px-3 py-2 text-sm text-rose-700 hover:bg-rose-50 disabled:opacity-60">
+                                {cancelling ? <Loader2 size={15} className="animate-spin" /> : <X size={15} />}
+                                Cancelar
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </section>
       )}
 
       {activePanel === "xmlDrafts" && (
@@ -1448,6 +1881,128 @@ export function TissPreGuideTab({
         </div>
       </section>
         </section>
+      )}
+
+      {batchDraftModalOpen && (
+        <div className="fixed inset-0 z-[150] flex items-end justify-center bg-slate-950/45 p-4 sm:items-center" role="dialog" aria-modal="true" aria-label="Criar lote rascunho TISS">
+          <div className="w-full max-w-xl overflow-hidden rounded-lg bg-white shadow-xl">
+            <header className="flex items-start justify-between border-b border-slate-200 px-5 py-4">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900">Criar lote rascunho TISS</h2>
+                <p className="mt-1 text-sm text-slate-500">Agrupamento interno para conferência. Não será enviado à operadora.</p>
+              </div>
+              <button type="button" onClick={() => setBatchDraftModalOpen(false)} className="rounded-md p-2 text-slate-500 hover:bg-slate-100" aria-label="Fechar criação de lote"><X size={18} /></button>
+            </header>
+            <div className="space-y-4 px-5 py-4">
+              {visibleBatchPayers.length > 1 && !payerId && (
+                <label className="block text-sm font-medium text-slate-700">
+                  Pagador
+                  <select
+                    value={batchDraftPayerId}
+                    onChange={(event) => setBatchDraftPayerId(event.target.value)}
+                    className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm outline-none focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100"
+                  >
+                    <option value="">Selecione um pagador</option>
+                    {visibleBatchPayers.map((payer) => <option key={payer.id} value={payer.id}>{payer.name}</option>)}
+                  </select>
+                </label>
+              )}
+              <div className="rounded-md border border-cyan-100 bg-cyan-50 px-3 py-2 text-sm text-cyan-800">
+                Este lote rascunho serve apenas para conferência interna. Nenhum envio, protocolo, retorno ou glosa será registrado.
+              </div>
+              <div className="grid gap-3 text-sm sm:grid-cols-2">
+                <DetailField label="Competência" value={competenceMonth.slice(0, 7)} />
+                <DetailField label="Pagador" value={selectedBatchPayerName} />
+                <DetailField label="Pré-guias prontas" value={String(selectedBatchRows.length)} />
+                <DetailField label="Valor total" value={formatCurrency(selectedBatchTotalAmount)} />
+                <DetailField label="Estado após criação" value="Em lote rascunho" />
+                <DetailField label="Envio à operadora" value="Não enviado" />
+              </div>
+              {selectedBatchRows.length === 0 && (
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                  Não há pré-guias prontas para criar lote rascunho neste pagador/competência.
+                </div>
+              )}
+            </div>
+            <footer className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 px-5 py-4">
+              <button type="button" onClick={() => setBatchDraftModalOpen(false)} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700">Cancelar</button>
+              <button
+                type="button"
+                onClick={() => void createBatchDraft()}
+                disabled={batchDraftCreating || !selectedBatchPayerId || selectedBatchRows.length === 0}
+                className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-60"
+              >
+                {batchDraftCreating ? <Loader2 size={15} className="animate-spin" /> : <PackagePlus size={15} />}
+                Criar lote rascunho
+              </button>
+            </footer>
+          </div>
+        </div>
+      )}
+
+      {batchDraftDetail && (
+        <div className="fixed inset-0 z-[150] flex items-end justify-center bg-slate-950/45 p-4 sm:items-center" role="dialog" aria-modal="true" aria-label="Lote rascunho TISS">
+          <div className="w-full max-w-3xl overflow-hidden rounded-lg bg-white shadow-xl">
+            <header className="flex items-start justify-between border-b border-slate-200 px-5 py-4">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900">Lote rascunho TISS</h2>
+                <p className="mt-1 text-sm text-slate-500">Agrupamento para conferência interna. Nenhum lote foi enviado à operadora.</p>
+              </div>
+              <button type="button" onClick={() => setBatchDraftDetail(null)} className="rounded-md p-2 text-slate-500 hover:bg-slate-100" aria-label="Fechar lote rascunho"><X size={18} /></button>
+            </header>
+            <div className="max-h-[70vh] overflow-y-auto px-5 py-4">
+              <div className="grid gap-4 text-sm sm:grid-cols-2">
+                <DetailField label="Competência" value={String(batchDraftDetail.competenceMonth || "").slice(0, 7) || "Não informada"} />
+                <DetailField label="Pagador" value={fieldValue(batchDraftDetail.payerName, "Pagador")} />
+                <DetailField label="Pré-guias" value={String(Number(batchDraftDetail.guideCount || 0))} />
+                <DetailField label="Valor total" value={formatCurrency(batchDraftDetail.totalAmountCents)} />
+                <DetailField label="Status" value={<span className={`rounded-full px-2 py-1 text-xs font-medium ring-1 ${batchDraftStatusMeta(batchDraftDetail.status).className}`}>{batchDraftStatusMeta(batchDraftDetail.status).label}</span>} />
+                <DetailField label="Criado em" value={formatDate(batchDraftDetail.createdAt)} />
+                <DetailField label="Criado por" value={batchDraftDetail.createdBy ? "Usuário autorizado" : "Não informado"} />
+                <DetailField label="Envio à operadora" value="Não enviado" />
+              </div>
+              <div className="mt-4 rounded-md border border-cyan-100 bg-cyan-50 px-3 py-2 text-sm text-cyan-800">
+                Este lote é um rascunho operacional. Ele não representa remessa oficial, protocolo, retorno, pagamento ou glosa.
+              </div>
+              <section className="mt-4 rounded-md border border-slate-200">
+                <div className="border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-800">Vínculos do lote</div>
+                <div className="space-y-3 px-3 py-3 text-sm">
+                  <div>
+                    <div className="text-xs font-medium uppercase text-slate-400">Pré-guias incluídas</div>
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {(batchDraftDetail.preGuideIds || []).length > 0 ? (batchDraftDetail.preGuideIds || []).map((id) => (
+                        <span key={id} className="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-600">{id.slice(0, 8)}</span>
+                      )) : <span className="text-slate-500">Nenhuma pré-guia vinculada.</span>}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs font-medium uppercase text-slate-400">XMLs vinculados</div>
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {(batchDraftDetail.xmlDraftIds || []).length > 0 ? (batchDraftDetail.xmlDraftIds || []).map((id) => (
+                        <span key={id} className="rounded-full bg-indigo-50 px-2 py-1 text-xs text-indigo-700">{id.slice(0, 8)}</span>
+                      )) : <span className="text-slate-500">Nenhum XML rascunho vinculado.</span>}
+                    </div>
+                  </div>
+                </div>
+              </section>
+            </div>
+            <footer className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 px-5 py-4">
+              {batchDraftDetail.linkedXmlDraftId || batchDraftDetail.xmlDraftIds?.length ? (
+                <button type="button" onClick={() => void openLinkedXmlDraft(batchDraftDetail)} className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
+                  <FileText size={15} />
+                  Ver XMLs vinculados
+                </button>
+              ) : null}
+              {batchDraftDetail.status !== "cancelled" && (
+                <button type="button" onClick={() => void cancelBatchDraft(batchDraftDetail)} disabled={batchDraftCancellingId === batchDraftDetail.id} className="inline-flex items-center gap-2 rounded-md border border-rose-200 px-3 py-2 text-sm text-rose-700 hover:bg-rose-50 disabled:opacity-60">
+                  {batchDraftCancellingId === batchDraftDetail.id ? <Loader2 size={15} className="animate-spin" /> : <X size={15} />}
+                  Cancelar lote rascunho
+                </button>
+              )}
+              <button type="button" onClick={() => setBatchDraftDetail(null)} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700">Fechar</button>
+            </footer>
+          </div>
+        </div>
       )}
 
       {xmlDraftModalOpen && (
@@ -1721,6 +2276,46 @@ export function TissPreGuideTab({
                     </Section>
                   )}
 
+                  <Section title="Ciclo de receita" icon={History}>
+                    <DetailField label="Estado atual" value={<span className={`inline-flex rounded-full px-2 py-1 text-xs font-medium ring-1 ${detailRevenueCycleMeta.className}`}>{detailRevenueCycleMeta.label}</span>} />
+                    <DetailField label="Motivo do estado" value={fieldValue(detailRevenueCycleReason)} />
+                    <DetailField label="Última validação" value={detail?.lastValidatedAt ? formatDate(detail.lastValidatedAt) : "Não validada"} />
+                    <DetailField label="Próxima ação sugerida" value={nextRevenueAction} />
+                    <div className="sm:col-span-2">
+                      <div className="mt-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-3">
+                        <div className="mb-2 flex items-center justify-between gap-2">
+                          <div className="text-sm font-semibold text-slate-800">Histórico do ciclo</div>
+                          {revenueCycleEventsLoading && <Loader2 size={15} className="animate-spin text-slate-400" />}
+                        </div>
+                        {revenueCycleEvents.length === 0 ? (
+                          <div className="text-sm text-slate-500">Nenhum evento administrativo registrado para esta Pré-guia ainda.</div>
+                        ) : (
+                          <div className="space-y-2">
+                            {revenueCycleEvents.slice(0, 8).map((event) => {
+                              const previousMeta = revenueCycleMeta(event.previousState);
+                              const nextMeta = revenueCycleMeta(event.newState);
+                              return (
+                                <div key={event.id || `${event.eventType}-${event.performedAt}`} className="rounded-md border border-slate-200 bg-white px-3 py-2">
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <div className="font-medium text-slate-800">{revenueCycleEventLabel(event.eventType)}</div>
+                                    <div className="text-xs text-slate-500">{formatDate(event.performedAt)}</div>
+                                  </div>
+                                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                                    <span className={`rounded-full px-2 py-0.5 ring-1 ${previousMeta.className}`}>{previousMeta.label}</span>
+                                    <span className="text-slate-400">→</span>
+                                    <span className={`rounded-full px-2 py-0.5 ring-1 ${nextMeta.className}`}>{nextMeta.label}</span>
+                                    <span className="text-slate-500">por {event.performedBy ? "usuário autorizado" : "sistema"}</span>
+                                  </div>
+                                  {event.reason && <div className="mt-2 text-xs text-slate-600">{event.reason}</div>}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </Section>
+
                   <Section title="Resultado da validação" icon={errors.length > 0 ? AlertTriangle : CheckCircle2}>
                     <div className="sm:col-span-2">
                       {errors.length === 0 && warnings.length === 0 ? (
@@ -1748,33 +2343,42 @@ export function TissPreGuideTab({
                           {Number(antiGlosaChecklist.okCount || 0)} OK · {Number(antiGlosaChecklist.blockingCount || 0)} bloqueante(s) · {Number(antiGlosaChecklist.attentionCount || 0)} atenção · {Number(antiGlosaChecklist.notApplicableCount || 0)} não aplicável(is)
                         </div>
                       </div>
-                      {antiGlosaItems.length > 0 ? (
-                        <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                          {antiGlosaItems.map((item: any) => {
-                            const meta = antiGlosaStatusMeta(item.status);
-                            const relatedCodes = Array.isArray(item.relatedIssueCodes) ? item.relatedIssueCodes : [];
-                            return (
-                              <div key={item.code} className="rounded-md border border-slate-200 bg-white px-3 py-2">
-                                <div className="flex items-start justify-between gap-2">
-                                  <div className="font-medium text-slate-800">{fieldValue(item.label, "Item antiglosa")}</div>
-                                  <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ${meta.className}`}>{meta.label}</span>
-                                </div>
-                                <div className="mt-1 text-xs text-slate-500">{fieldValue(item.riskClass, "Risco operacional")}</div>
-                                {item.suggestedAction && item.status !== "ok" && item.status !== "not_applicable" ? (
-                                  <div className="mt-2 text-xs font-medium text-slate-700">Ação sugerida: {item.suggestedAction}</div>
-                                ) : null}
-                                {relatedCodes.length > 0 ? (
-                                  <div className="mt-2 flex flex-wrap gap-1">
-                                    {relatedCodes.map((code: string) => (
-                                      <span key={`${item.code}-${code}`} className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600">
-                                        {issueLabel(code)}
-                                      </span>
-                                    ))}
-                                  </div>
-                                ) : null}
+                      {antiGlosaGroups.length > 0 ? (
+                        <div className="mt-3 space-y-3">
+                          {antiGlosaGroups.map((group) => (
+                            <div key={group.category} className="rounded-md border border-slate-200 bg-white">
+                              <div className="border-b border-slate-100 px-3 py-2 text-xs font-semibold uppercase text-slate-500">
+                                {antiGlosaCategoryLabel(group.category)}
                               </div>
-                            );
-                          })}
+                              <div className="grid gap-2 p-3 sm:grid-cols-2">
+                                {group.items.map((item: any) => {
+                                  const meta = antiGlosaStatusMeta(item.status);
+                                  const relatedCodes = Array.isArray(item.relatedIssueCodes) ? item.relatedIssueCodes : [];
+                                  return (
+                                    <div key={item.code} className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                                      <div className="flex items-start justify-between gap-2">
+                                        <div className="font-medium text-slate-800">{fieldValue(item.label, "Item antiglosa")}</div>
+                                        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ${meta.className}`}>{meta.label}</span>
+                                      </div>
+                                      <div className="mt-1 text-xs text-slate-500">{fieldValue(item.riskClass, "Risco operacional")}</div>
+                                      {item.suggestedAction && item.status !== "ok" && item.status !== "not_applicable" ? (
+                                        <div className="mt-2 text-xs font-medium text-slate-700">Ação sugerida: {item.suggestedAction}</div>
+                                      ) : null}
+                                      {relatedCodes.length > 0 ? (
+                                        <div className="mt-2 flex flex-wrap gap-1">
+                                          {relatedCodes.map((code: string) => (
+                                            <span key={`${item.code}-${code}`} className="rounded-full bg-white px-2 py-0.5 text-[11px] text-slate-600 ring-1 ring-slate-200">
+                                              {issueLabel(code)}
+                                            </span>
+                                          ))}
+                                        </div>
+                                      ) : null}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ))}
                         </div>
                       ) : (
                         <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
