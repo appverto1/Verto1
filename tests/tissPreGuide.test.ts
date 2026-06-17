@@ -188,6 +188,78 @@ test('Equipe nao e tratada como profissional executante faturavel', () => {
   assert.ok(result.errorCodes.includes('PROFESSIONAL_REGISTRY_MISSING'));
 });
 
+test('pre-guia gera pendencia quando profissional executante nao foi resolvido', () => {
+  const result = validateTissPreGuide({
+    ...validInput,
+    appointment: {
+      ...validInput.appointment,
+      therapist_id: '',
+      professional_id: '',
+      professionalId: '',
+      therapistId: '',
+    },
+    billingItem: {
+      ...validInput.billingItem,
+      professional_id: '',
+    },
+    professionalProfile: {},
+    professional: {},
+  });
+
+  assert.equal(result.status, 'pending_data');
+  assert.ok(result.errorCodes.includes('PROFESSIONAL_NOT_DEFINED'));
+  assert.ok(result.errors.some((error) => error.entity === 'professional' && error.severity === 'blocking'));
+  assert.equal(result.snapshot.professional.id, null);
+});
+
+test('pre-guia prefere professional_id do billing item antes do fallback do appointment', () => {
+  const result = validateTissPreGuide({
+    ...validInput,
+    appointment: {
+      ...validInput.appointment,
+      therapist_id: 'professional-fallback',
+    },
+    billingItem: {
+      ...validInput.billingItem,
+      professional_id: 'professional-billing',
+    },
+    professionalProfile: {
+      ...validInput.professionalProfile,
+      professional_id: 'professional-billing',
+    },
+    professional: {
+      id: 'professional-billing',
+      name: 'Executante Billing',
+    },
+  });
+
+  assert.equal(result.snapshot.professional.id, 'professional-billing');
+});
+
+test('pre-guia usa therapist_id como fallback quando nao ha item profissional', () => {
+  const result = validateTissPreGuide({
+    ...validInput,
+    appointment: {
+      ...validInput.appointment,
+      therapist_id: 'professional-therapist',
+    },
+    billingItem: {
+      ...validInput.billingItem,
+      professional_id: '',
+    },
+    professionalProfile: {
+      ...validInput.professionalProfile,
+      professional_id: 'professional-therapist',
+    },
+    professional: {
+      id: 'professional-therapist',
+      name: 'Terapeuta Fallback',
+    },
+  });
+
+  assert.equal(result.snapshot.professional.id, 'professional-therapist');
+});
+
 test('sem payer_id real não produz Pré-guia faturável válida', () => {
   const result = validateTissPreGuide({
     ...validInput,
@@ -327,6 +399,13 @@ test('lote considera elegível somente convênio com payer_id real', () => {
   assert.equal(directAppointmentPayer.eligible, true);
   assert.equal(directAppointmentPayer.payerId, 'payer-from-appointment');
 
+  const missingProfessional = evaluateTissPreGuideEligibility({
+    appointment: { ...validInput.appointment, therapist_id: '', professional_id: '' },
+    billingContext: validInput.billingContext,
+  });
+  assert.equal(missingProfessional.eligible, true);
+  assert.equal(missingProfessional.reason, 'eligible');
+
   const notApplicable = evaluateTissPreGuideEligibility({
     appointment: validInput.appointment,
     billingContext: { payer_type: 'NO_CHARGE', payer_id: null },
@@ -427,6 +506,9 @@ test('migration operacional adiciona requisitos TISS do pagador e autorizacoes s
   assert.match(payerOperationalMigrationCode, /procedure_tuss_code text/);
   assert.match(payerOperationalMigrationCode, /alter table public\.patient_payer_authorizations enable row level security/);
   assert.match(payerOperationalMigrationCode, /patient_payer_authorizations_admin_rw/);
+  assert.match(payerOperationalMigrationCode, /appointment_professionals ap/);
+  assert.doesNotMatch(payerOperationalMigrationCode, /a\.professional_id/);
+  assert.doesNotMatch(payerOperationalMigrationCode, /appointments\.professional_id/);
   assert.match(payerOperationalMigrationCode, /does not generate TISS XML, batches, remittances, returns, denials/i);
   assert.doesNotMatch(payerOperationalMigrationCode, /create table if not exists public\.(tiss_batches|tiss_remittances|tiss_returns|tiss_denials)/i);
 });
@@ -493,9 +575,14 @@ test('revalidação reconstrói snapshots a partir dos cadastros mestres atuais'
   assert.match(profileReader, /const scopeColumns = \['organization_id', 'clinic_id'\]/);
   assert.match(builder, /\.from\('appointment_tiss_pre_guides'\)[\s\S]*?professional_id,payer_id,provider_profile_id,payer_tiss_profile_id,professional_billing_profile_id,scheduled_start,scheduled_end/);
   assert.match(builder, /\.from\('appointment_closure_checks'\)[\s\S]*?professional_id,payer_id/);
+  assert.match(builder, /\.from\('appointment_professionals'\)[\s\S]*?professional_id,role,created_at/);
+  assert.doesNotMatch(builder, /appointment\?\.professional_id/);
   assert.match(builder, /sanitizeString\(billingItem\?\.professional_id, 120\)/);
+  assert.match(builder, /linkedAppointmentProfessionalId/);
   assert.match(builder, /sanitizeString\(closureCheck\?\.professional_id, 120\)/);
-  assert.match(builder, /sanitizeString\(existingPreGuide\?\.professional_id, 120\)/);
+  assert.doesNotMatch(builder, /sanitizeString\(existingPreGuide\?\.professional_id, 120\)/);
+  assert.match(builder, /appointmentTherapistId/);
+  assert.match(builder, /billingItem\?\.professional_id[\s\S]*?linkedAppointmentProfessionalId[\s\S]*?closureCheck\?\.professional_id[\s\S]*?appointmentTherapistId/);
   assert.match(builder, /sanitizeString\(billingItem\?\.payer_id, 120\)/);
   assert.match(builder, /fetchTissPreGuideProfile\('clinic_tiss_profiles'/);
   assert.match(builder, /fetchTissPreGuideProfile\('payer_tiss_profiles'/);
@@ -508,7 +595,9 @@ test('revalidação reconstrói snapshots a partir dos cadastros mestres atuais'
   assert.match(builder, /payerProfileFound:/);
   assert.match(builder, /professionalProfileFound:/);
   assert.match(builder, /usedAppointmentProfessionalId:/);
-  assert.match(builder, /usedTeamFallback:\s*false/);
+  assert.match(builder, /usedAppointmentTherapistId:/);
+  assert.match(builder, /appointmentProfessionalsFound:/);
+  assert.match(builder, /usedTeamFallback:\s*!isUuid\(professionalId\)/);
   assert.match(builder, /scheduledStartFound:/);
   assert.match(builder, /snapshotUpdated:\s*Boolean\(persisted\.data\?\.id\)/);
   assert.match(builder, /returnedDetailHasScheduledStart:\s*Boolean\(serializedPreGuide\.scheduledStart\)/);

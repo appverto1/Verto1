@@ -167,16 +167,9 @@ export function evaluateTissPreGuideEligibility(input: {
   const payerId = text(billingContext.payer_id || appointment.payer_id || appointment.payerId) || null;
   const appointmentId = text(appointment.id || appointment.appointment_id);
   const patientId = text(appointment.patient_id || appointment.patientId);
-  const professionalId = text(
-    appointment.professional_id ||
-      appointment.therapist_id ||
-      appointment.professionalId ||
-      appointment.therapistId,
-  );
 
   if (!appointmentId) return { eligible: false, reason: 'appointment_missing', financialContext, payerId };
   if (!patientId) return { eligible: false, reason: 'patient_missing', financialContext, payerId };
-  if (!professionalId) return { eligible: false, reason: 'professional_missing', financialContext, payerId };
   if (financialContext && NON_TISS_CONTEXTS.has(financialContext)) {
     return { eligible: false, reason: 'not_applicable', financialContext, payerId };
   }
@@ -219,7 +212,8 @@ const issueLabelOverrides: Record<string, string> = {
   APPOINTMENT_MISSING: 'Atendimento não encontrado',
   PATIENT_MISSING: 'Paciente não vinculado',
   PATIENT_NAME_MISSING: 'Nome do beneficiário não informado',
-  PROFESSIONAL_MISSING: 'Profissional executante não vinculado',
+  PROFESSIONAL_MISSING: 'Profissional executante não definido para este agendamento',
+  PROFESSIONAL_NOT_DEFINED: 'Profissional executante não definido para este agendamento',
   SCHEDULE_MISSING: 'Data e horário não informados',
   DURATION_MISSING: 'Duração não informada',
   FINANCIAL_CONTEXT_MISSING: 'Contexto financeiro não informado',
@@ -261,7 +255,8 @@ export function tissPreGuideIssueLabel(code: unknown) {
     APPOINTMENT_MISSING: 'Atendimento não encontrado',
     PATIENT_MISSING: 'Paciente não vinculado',
     PATIENT_NAME_MISSING: 'Nome do beneficiário não informado',
-    PROFESSIONAL_MISSING: 'Profissional executante não vinculado',
+    PROFESSIONAL_MISSING: 'Profissional executante não definido para este agendamento',
+    PROFESSIONAL_NOT_DEFINED: 'Profissional executante não definido para este agendamento',
     SCHEDULE_MISSING: 'Data e horário não informados',
     DURATION_MISSING: 'Duração não informada',
     FINANCIAL_CONTEXT_MISSING: 'Contexto financeiro não informado',
@@ -293,6 +288,7 @@ export function tissPreGuideIssueLabel(code: unknown) {
 
 export function tissPreGuideIssueAction(code: unknown, section?: TissPreGuideIssue['section']) {
   const normalized = text(code);
+  if (normalized === 'PROFESSIONAL_NOT_DEFINED') return 'Vincular profissional executante ao agendamento ou item faturável';
   if (normalized.includes('PAYER') || section === 'payer') return 'Corrigir pagador';
   if (normalized.includes('BENEFICIARY') || section === 'beneficiary') return 'Corrigir paciente';
   if (normalized.includes('PROFESSIONAL') || normalized === 'CBO_MISSING' || section === 'professional') return 'Corrigir profissional';
@@ -331,9 +327,9 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
   const appointmentId = text(appointment.id || appointment.appointment_id || billingItem.appointment_id);
   const patientId = text(appointment.patient_id || billingItem.patient_id || patient.id);
   const professionalId = text(
-    appointment.professional_id ||
+    billingItem.professional_id ||
+      appointment.professional_id ||
       appointment.therapist_id ||
-      billingItem.professional_id ||
       professionalProfile.professional_id ||
       professional.id,
   );
@@ -373,7 +369,7 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
   if (!appointmentId) addIssue(errors, 'APPOINTMENT_MISSING', 'appointment_id', tissPreGuideIssueLabel('APPOINTMENT_MISSING'), 'appointment');
   if (!patientId) addIssue(errors, 'PATIENT_MISSING', 'patient_id', tissPreGuideIssueLabel('PATIENT_MISSING'), 'beneficiary');
   if (!text(patient.name || appointment.patient_name)) addIssue(errors, 'PATIENT_NAME_MISSING', 'patient_name', tissPreGuideIssueLabel('PATIENT_NAME_MISSING'), 'beneficiary');
-  if (!professionalId) addIssue(errors, 'PROFESSIONAL_MISSING', 'professional_id', tissPreGuideIssueLabel('PROFESSIONAL_MISSING'), 'professional');
+  if (!professionalId) addIssue(errors, 'PROFESSIONAL_NOT_DEFINED', 'professional_id', tissPreGuideIssueLabel('PROFESSIONAL_NOT_DEFINED'), 'professional');
   if (!scheduledStart) addIssue(errors, 'SCHEDULE_MISSING', 'scheduled_start', tissPreGuideIssueLabel('SCHEDULE_MISSING'), 'appointment');
   if (!positiveNumber(durationMinutes)) addIssue(errors, 'DURATION_MISSING', 'duration_minutes', tissPreGuideIssueLabel('DURATION_MISSING'), 'appointment');
   if (!financialContext && !payerId) addIssue(errors, 'FINANCIAL_CONTEXT_MISSING', 'financial_context_type', tissPreGuideIssueLabel('FINANCIAL_CONTEXT_MISSING'), 'appointment');

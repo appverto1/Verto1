@@ -118,6 +118,7 @@ const issueLabels: Record<string, string> = {
   PAYER_CONTRACTED_PROVIDER_CODE_MISSING: "Código do contratado",
   PAYER_CID_REQUIRED: "CID",
   PROFESSIONAL_BILLING_PROFILE_MISSING: "Perfil do profissional",
+  PROFESSIONAL_NOT_DEFINED: "Profissional executante",
   PROFESSIONAL_REGISTRY_MISSING: "Registro profissional",
   PROFESSIONAL_COUNCIL_STATE_MISSING: "UF do conselho",
   CBO_MISSING: "CBO",

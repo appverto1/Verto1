@@ -120,7 +120,16 @@ using (
         or exists (
           select 1 from public.appointments a
           where a.patient_id = p.id
-            and (a.therapist_id = auth.uid() or a.professional_id = auth.uid())
+            and a.therapist_id = auth.uid()
+        )
+        or exists (
+          select 1
+          from public.appointments a
+          join public.appointment_professionals ap
+            on ap.appointment_id = a.id
+           and ap.organization_id = a.organization_id
+          where a.patient_id = p.id
+            and ap.professional_id = auth.uid()
         )
       )
   )

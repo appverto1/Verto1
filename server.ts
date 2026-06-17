@@ -33059,7 +33059,7 @@ async function startServer() {
     const billingContext = mergeBillingContextMetadata(
       params.billingContext || await fetchAppointmentBillingContextRow(organizationId, appointmentId) || {}
     );
-    const [billingItemResult, existingPreGuideResult, closureCheckResult] = await Promise.all([
+    const [billingItemResult, existingPreGuideResult, closureCheckResult, appointmentProfessionalsResult] = await Promise.all([
       supabase
         .from('appointment_billing_items')
         .select(APPOINTMENT_BILLING_ITEM_SELECT)
@@ -33080,7 +33080,14 @@ async function startServer() {
         .eq('organization_id', organizationId)
         .eq('appointment_id', appointmentId)
         .limit(1)
-        .maybeSingle()
+        .maybeSingle(),
+      supabase
+        .from('appointment_professionals')
+        .select('appointment_id,organization_id,professional_id,role,created_at')
+        .eq('organization_id', organizationId)
+        .eq('appointment_id', appointmentId)
+        .not('professional_id', 'is', null)
+        .limit(8)
     ]);
     if (billingItemResult.error && !hasMissingFinancialSchema(billingItemResult.error) && !isMissingRelationError(billingItemResult.error)) {
       throw billingItemResult.error;
@@ -33091,21 +33098,30 @@ async function startServer() {
     if (closureCheckResult.error && !hasMissingFinancialSchema(closureCheckResult.error) && !isMissingRelationError(closureCheckResult.error)) {
       throw closureCheckResult.error;
     }
+    if (appointmentProfessionalsResult.error && !hasMissingFinancialSchema(appointmentProfessionalsResult.error) && !isMissingRelationError(appointmentProfessionalsResult.error)) {
+      throw appointmentProfessionalsResult.error;
+    }
     const billingItem = billingItemResult.error ? null : billingItemResult.data;
     const existingPreGuide = existingPreGuideResult.error ? null : existingPreGuideResult.data;
     const closureCheck = closureCheckResult.error ? null : closureCheckResult.data;
-    const appointmentProfessionalId = sanitizeString(
+    const appointmentProfessionalRows = appointmentProfessionalsResult.error || !Array.isArray(appointmentProfessionalsResult.data)
+      ? []
+      : appointmentProfessionalsResult.data;
+    const appointmentProfessionalRow = appointmentProfessionalRows.find((row: any) => {
+      const role = sanitizeString(row?.role, 80).toLowerCase();
+      return ['executante', 'executor', 'principal', 'primary', 'responsavel', 'responsável'].includes(role);
+    }) || appointmentProfessionalRows[0] || null;
+    const linkedAppointmentProfessionalId = sanitizeString(appointmentProfessionalRow?.professional_id, 120);
+    const appointmentTherapistId = sanitizeString(
       appointment?.therapist_id ||
-        appointment?.professional_id ||
-        appointment?.therapistId ||
-        appointment?.professionalId,
+        appointment?.therapistId,
       120
     );
     const professionalId = [
-      appointmentProfessionalId,
       sanitizeString(billingItem?.professional_id, 120),
+      linkedAppointmentProfessionalId,
       sanitizeString(closureCheck?.professional_id, 120),
-      sanitizeString(existingPreGuide?.professional_id, 120)
+      appointmentTherapistId
     ].find((value) => isUuid(value)) || '';
     const payerId = [
       sanitizeString(billingContext?.payer_id, 120),
@@ -33216,8 +33232,10 @@ async function startServer() {
       authorizationProfileFound: Boolean(authorization?.id),
       authorizationProfileId: sanitizeString(authorization?.id, 120) || null,
       scheduledStartFound: Boolean(scheduledStart),
-      usedAppointmentProfessionalId: isUuid(appointmentProfessionalId),
-      usedTeamFallback: false,
+      usedAppointmentProfessionalId: isUuid(linkedAppointmentProfessionalId),
+      usedAppointmentTherapistId: isUuid(appointmentTherapistId),
+      appointmentProfessionalsFound: appointmentProfessionalRows.length,
+      usedTeamFallback: !isUuid(professionalId),
       snapshotUpdated: false,
       persistedRows: 0,
       returnedDetailHasScheduledStart: false
