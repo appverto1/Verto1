@@ -76,8 +76,8 @@ test('UI remove lembrete automatico e expõe plano financeiro por modalidade', (
   assert.doesNotMatch(coordinatorCode, /Renovação da anamnese/);
   assert.doesNotMatch(coordinatorCode, /specialty:\s*String\(plan\.specialty \|\| "Terapia"\)/);
   assert.match(coordinatorCode, /PATIENT_FINANCIAL_BILLING_MODE_OPTIONS/);
-  assert.match(coordinatorCode, /Coparticipação R\$/);
-  assert.match(coordinatorCode, /Autorização/);
+  assert.match(coordinatorCode, /label="Coparticipação"/);
+  assert.match(coordinatorCode, /label="Guia\/autorização"/);
   assert.match(coordinatorCode, /Pagador\/convênio/);
 });
 

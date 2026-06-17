@@ -39,7 +39,7 @@ test('cadastro persiste campos editaveis por migration, backend, payload e hidra
     assert.match(routeSchemaCode, new RegExp(`'${column}'`));
   }
 
-  const identityBuilder = sliceFrom(serverCode, 'function buildPatientIdentityPersistenceFields', 4600);
+  const identityBuilder = sliceFrom(serverCode, 'function buildPatientIdentityPersistenceFields', 6200);
   assert.match(identityBuilder, /birth_date:\s*sanitizeIsoDateOnly/);
   assert.match(identityBuilder, /responsible_email:\s*sanitizeEmail/);
   assert.match(identityBuilder, /responsible_relationship:\s*sanitizeString/);

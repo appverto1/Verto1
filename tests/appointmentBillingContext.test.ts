@@ -85,7 +85,7 @@ test('salvar contexto usa fallback de schema sem expor 503 tecnico', () => {
   assert.doesNotMatch(route, /status\(503\)/);
 
   const fetchStart = serverCode.indexOf('const fetchAppointmentForBillingContext');
-  const fetchSlice = serverCode.slice(fetchStart, fetchStart + 3200);
+  const fetchSlice = serverCode.slice(fetchStart, fetchStart + 7000);
   assert.match(fetchSlice, /runAppointmentQuery\(CLOSURE_APPOINTMENT_SELECT\)/);
   assert.match(fetchSlice, /runAppointmentQuery\(selectColumns\)/);
   assert.match(fetchSlice, /buildClinicStateAppointment/);
@@ -252,7 +252,7 @@ test('criacao de pagador reutiliza nome existente na mesma clinica', () => {
 test('payer_id e appointment_id fora da organizacao sao rejeitados', () => {
   const fetchStart = serverCode.indexOf('const fetchAppointmentForBillingContext');
   assert.ok(fetchStart > 0, 'helper de escopo da consulta deve existir');
-  const fetchSlice = serverCode.slice(fetchStart, fetchStart + 3800);
+  const fetchSlice = serverCode.slice(fetchStart, fetchStart + 7000);
   assert.match(fetchSlice, /\.from\('appointments'\)[\s\S]*\.select\(selectColumns\)[\s\S]*\.eq\('id', safeAppointmentId\)/);
   assert.match(fetchSlice, /runAppointmentQuery\(CLOSURE_APPOINTMENT_SELECT\)/);
   assert.match(fetchSlice, /\.or\(`organization_id\.eq\.\$\{organizationId\},clinic_id\.eq\.\$\{organizationId\}`\)/);

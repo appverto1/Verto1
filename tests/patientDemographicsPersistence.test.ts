@@ -56,13 +56,13 @@ test('cpf tem mascara no front, normalizacao no backend e nao aparece em cards p
   assert.match(coordinatorCode, /const normalizeCpfInput = \(value: string\)/);
   assert.match(coordinatorCode, /const formatCpf = \(value: string\)/);
   assert.match(coordinatorCode, /return `\$\{v\.slice\(0, 3\)\}\.\$\{v\.slice\(3, 6\)\}\.\$\{v\.slice\(6, 9\)\}-\$\{v\.slice\(9, 11\)\}`/);
-  assert.match(coordinatorCode, /field === "cpf" \|\| field === "responsavelCpf"/);
+  assert.match(coordinatorCode, /field === "cpf" \|\| field === "responsavelCpf" \|\| field === "convenioTitularCpf"/);
 
-  const editHydration = sliceFrom(coordinatorCode, 'const handleEditPatient = (patient: any) => {', 1800);
+  const editHydration = sliceFrom(coordinatorCode, 'const handleEditPatient = (patient: any) => {', 3200);
   assert.match(editHydration, /cpf:\s*formatCpf\(patient\.cpf/);
   assert.match(editHydration, /responsavelCpf:\s*formatCpf\(patient\.guardian\?\.cpf/);
 
-  const createPayload = sliceFrom(coordinatorCode, 'const normalizedBirthDate = normalizeBirthDateForStorage', 2200);
+  const createPayload = sliceFrom(coordinatorCode, 'const normalizedBirthDate = normalizeBirthDateForStorage', 5200);
   assert.match(createPayload, /cpf:\s*normalizedCpf \|\| null/);
   assert.doesNotMatch(createPayload, /formatCpf\(/);
 

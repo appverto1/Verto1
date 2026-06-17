@@ -40,7 +40,7 @@ test('app checa retorno de persistencia antes de confirmar update cadastral', ()
   const updatePatient = sliceFrom(appCode, 'const handleUpdatePatient = async', 11000);
   assert.match(updatePatient, /const deleteResult = await dataService\.deletePatient/);
   assert.match(updatePatient, /return \{ success: false, error: errorMessage \}/);
-  assert.match(updatePatient, /const updateResult = await dataService\.updatePatient/);
+  assert.match(updatePatient, /let updateResult = await dataService\.updatePatient/);
   assert.match(updatePatient, /Não foi possível confirmar a persistência do cadastro/);
   assert.match(updatePatient, /const patientRecordResult = await dataService\.savePatientRecord/);
   assert.match(updatePatient, /return \{ success: true \}/);

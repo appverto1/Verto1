@@ -185,6 +185,87 @@ interface CoordinatorDashboardProps {
 
 const SESSION_PATIENT_INSURANCE_PAYER_VALUE = "__patient_insurance__";
 
+const patientFormInputClass =
+  "w-full rounded-xl border border-transparent bg-slate-50 p-3 text-sm text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-[#7a32fc] focus:bg-white focus:ring-4 focus:ring-[#7a32fc]/10";
+
+function FormSection({
+  title,
+  description,
+  badge,
+  children,
+}: {
+  title: string;
+  description?: string;
+  badge?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="rounded-3xl border border-slate-100 bg-white p-4 shadow-sm md:p-5">
+      <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h3 className="text-sm font-black uppercase tracking-[0.16em] text-slate-600">{title}</h3>
+          {description && <p className="mt-1 text-xs font-medium leading-relaxed text-slate-400">{description}</p>}
+        </div>
+        {badge && (
+          <span className="w-fit rounded-full bg-violet-50 px-3 py-1 text-[10px] font-black uppercase tracking-wide text-[#7a32fc]">
+            {badge}
+          </span>
+        )}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function SubSection({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-100 bg-slate-50/70 p-4">
+      <div className="mb-3">
+        <p className="text-xs font-black uppercase tracking-[0.14em] text-slate-500">{title}</p>
+        {description && <p className="mt-1 text-[11px] font-medium leading-relaxed text-slate-400">{description}</p>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function FormField({
+  label,
+  helperText,
+  required,
+  error,
+  children,
+}: {
+  label: string;
+  helperText?: string;
+  required?: boolean;
+  error?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="block">
+      <span className="mb-1.5 block text-xs font-bold text-slate-600">
+        {label}
+        {required && <span className="text-rose-500"> *</span>}
+      </span>
+      {children}
+      {(helperText || error) && (
+        <span className={`mt-1.5 block text-[11px] font-medium leading-relaxed ${error ? "text-rose-500" : "text-slate-400"}`}>
+          {error || helperText}
+        </span>
+      )}
+    </label>
+  );
+}
+
 export function CoordinatorDashboard({
   user,
   onLogout,
@@ -2988,7 +3069,7 @@ export function CoordinatorDashboard({
   };
 
   const handlePatientFormChange = (field: string, value: any) => {
-    if (field === "cpf" || field === "responsavelCpf") {
+    if (field === "cpf" || field === "responsavelCpf" || field === "convenioTitularCpf") {
       setNewPatientForm((prev: any) => ({ ...prev, [field]: formatCpf(String(value || "")) }));
       return;
     }
@@ -3086,6 +3167,12 @@ export function CoordinatorDashboard({
       convenioTipo: "particular",
       convenioNome: "",
       convenioCarteirinha: "",
+      convenioCarteirinhaValidade: "",
+      convenioPlanoCategoria: "",
+      convenioTitularNome: "",
+      convenioTitularCpf: "",
+      convenioTitularRelacao: "",
+      convenioElegibilidadeObs: "",
       grupo: "adulto",
       comoConheceu: "",
       rg: "",
@@ -9888,55 +9975,240 @@ export function CoordinatorDashboard({
                 : "Cadastro Completo de Paciente"}
             </h2>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-              <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="Nome*" value={newPatientForm.nome} onChange={(e) => handlePatientFormChange("nome", e.target.value)} />
-              <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="Nome social" value={newPatientForm.nomeSocial} onChange={(e) => handlePatientFormChange("nomeSocial", e.target.value)} />
-              <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="Telefone*" value={newPatientForm.telefone} onChange={(e) => handlePatientFormChange("telefone", e.target.value)} />
-              <input type="date" className="bg-slate-50 rounded-xl p-3 text-sm" value={newPatientForm.dataNascimento} onChange={(e) => handlePatientFormChange("dataNascimento", e.target.value)} />
-              <select className="bg-slate-50 rounded-xl p-3 text-sm" value={newPatientForm.genero} onChange={(e) => handlePatientFormChange("genero", e.target.value)}>
-                <option value="">Gênero</option>
-                <option value="feminino">Feminino</option>
-                <option value="masculino">Masculino</option>
-                <option value="nao_binario">Não binário</option>
-                <option value="prefiro_nao_informar">Prefiro não informar</option>
-              </select>
-              <select className="bg-slate-50 rounded-xl p-3 text-sm" value={newPatientForm.grupo} onChange={(e) => handlePatientFormChange("grupo", e.target.value)}>
-                <option value="infantil">Infantil</option>
-                <option value="adolescente">Adolescente</option>
-                <option value="adulto">Adulto</option>
-                <option value="idoso">Idoso</option>
-              </select>
-              <select className="bg-slate-50 rounded-xl p-3 text-sm" value={newPatientForm.convenioTipo} onChange={(e) => handlePatientFormChange("convenioTipo", e.target.value)}>
-                <option value="particular">Particular</option>
-                <option value="convenio">Convênio</option>
-              </select>
-              <select className="bg-slate-50 rounded-xl p-3 text-sm" value={newPatientForm.convenioNome} onChange={(e) => handlePatientFormChange("convenioNome", e.target.value)}>
-                <option value="">Selecione o convênio</option>
-                {insuranceOptions.map((ins) => (
-                  <option key={ins} value={ins}>{ins}</option>
-                ))}
-              </select>
-              <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="Carteirinha do convênio" value={newPatientForm.convenioCarteirinha} onChange={(e) => handlePatientFormChange("convenioCarteirinha", e.target.value)} />
-              {newPatientForm.convenioTipo === "convenio" && (
-                <>
-                  <input type="date" className="bg-slate-50 rounded-xl p-3 text-sm" value={newPatientForm.convenioCarteirinhaValidade} onChange={(e) => handlePatientFormChange("convenioCarteirinhaValidade", e.target.value)} title="Validade da carteirinha" />
-                  <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="Plano/categoria" value={newPatientForm.convenioPlanoCategoria} onChange={(e) => handlePatientFormChange("convenioPlanoCategoria", e.target.value)} />
-                  <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="Titular do plano" value={newPatientForm.convenioTitularNome} onChange={(e) => handlePatientFormChange("convenioTitularNome", e.target.value)} />
-                  <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="CPF do titular" value={newPatientForm.convenioTitularCpf} onChange={(e) => handlePatientFormChange("convenioTitularCpf", e.target.value)} />
-                  <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="Relação com titular" value={newPatientForm.convenioTitularRelacao} onChange={(e) => handlePatientFormChange("convenioTitularRelacao", e.target.value)} />
-                  <input className="bg-slate-50 rounded-xl p-3 text-sm md:col-span-2 xl:col-span-3" placeholder="Observações de elegibilidade" value={newPatientForm.convenioElegibilidadeObs} onChange={(e) => handlePatientFormChange("convenioElegibilidadeObs", e.target.value)} />
-                </>
-              )}
+            <div className="space-y-5">
+              <FormSection
+                title="Dados pessoais do paciente"
+                description="Informações principais de identificação, contato e acesso do paciente."
+              >
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                  <FormField label="Nome completo" required>
+                    <input className={patientFormInputClass} placeholder="Nome completo" value={newPatientForm.nome} onChange={(e) => handlePatientFormChange("nome", e.target.value)} />
+                  </FormField>
+                  <FormField label="Nome social">
+                    <input className={patientFormInputClass} placeholder="Nome social" value={newPatientForm.nomeSocial} onChange={(e) => handlePatientFormChange("nomeSocial", e.target.value)} />
+                  </FormField>
+                  <FormField label="Telefone / WhatsApp" required>
+                    <input className={patientFormInputClass} placeholder="(11) 91234-5678" value={newPatientForm.telefone} onChange={(e) => handlePatientFormChange("telefone", e.target.value)} />
+                  </FormField>
+                  <FormField label="Data de nascimento">
+                    <input type="date" className={patientFormInputClass} value={newPatientForm.dataNascimento} onChange={(e) => handlePatientFormChange("dataNascimento", e.target.value)} />
+                  </FormField>
+                  <FormField label="Gênero">
+                    <select className={patientFormInputClass} value={newPatientForm.genero} onChange={(e) => handlePatientFormChange("genero", e.target.value)}>
+                      <option value="">Selecione</option>
+                      <option value="feminino">Feminino</option>
+                      <option value="masculino">Masculino</option>
+                      <option value="nao_binario">Não binário</option>
+                      <option value="prefiro_nao_informar">Prefiro não informar</option>
+                    </select>
+                  </FormField>
+                  <FormField label="Faixa etária / categoria">
+                    <select className={patientFormInputClass} value={newPatientForm.grupo} onChange={(e) => handlePatientFormChange("grupo", e.target.value)}>
+                      <option value="infantil">Infantil</option>
+                      <option value="adolescente">Adolescente</option>
+                      <option value="adulto">Adulto</option>
+                      <option value="idoso">Idoso</option>
+                    </select>
+                  </FormField>
+                  <FormField label="RG">
+                    <input className={patientFormInputClass} placeholder="RG" value={newPatientForm.rg} onChange={(e) => handlePatientFormChange("rg", e.target.value)} />
+                  </FormField>
+                  <FormField label="CPF">
+                    <input className={patientFormInputClass} placeholder="000.000.000-00" value={newPatientForm.cpf} onChange={(e) => handlePatientFormChange("cpf", e.target.value)} />
+                  </FormField>
+                  <FormField label="E-mail">
+                    <input className={patientFormInputClass} placeholder="paciente@email.com" value={newPatientForm.email} onChange={(e) => handlePatientFormChange("email", e.target.value)} />
+                  </FormField>
+                  <FormField label="Como conheceu a clínica?">
+                    <select className={patientFormInputClass} value={newPatientForm.comoConheceu} onChange={(e) => handlePatientFormChange("comoConheceu", e.target.value)}>
+                      <option value="">Selecione</option>
+                      <option value="google">Google</option>
+                      <option value="indicacao">Indicação</option>
+                      <option value="email">Email</option>
+                      <option value="whatsapp">WhatsApp</option>
+                      <option value="rede_social">Rede social</option>
+                      <option value="evento">Evento</option>
+                      <option value="convenio">Convênio</option>
+                      <option value="outro">Outro</option>
+                    </select>
+                  </FormField>
+                  <FormField label="CEP">
+                    <input className={patientFormInputClass} placeholder="00000-000" value={newPatientForm.cep} onChange={(e) => handlePatientFormChange("cep", e.target.value)} />
+                  </FormField>
+                  <FormField label="Logradouro">
+                    <input className={patientFormInputClass} placeholder="Rua, avenida..." value={newPatientForm.logradouro} onChange={(e) => handlePatientFormChange("logradouro", e.target.value)} />
+                  </FormField>
+                  <FormField label="Número">
+                    <input className={patientFormInputClass} placeholder="Número" value={newPatientForm.numero} onChange={(e) => handlePatientFormChange("numero", e.target.value)} />
+                  </FormField>
+                  <FormField label="Complemento">
+                    <input className={patientFormInputClass} placeholder="Apartamento, bloco..." value={newPatientForm.complemento} onChange={(e) => handlePatientFormChange("complemento", e.target.value)} />
+                  </FormField>
+                  <FormField label="Bairro">
+                    <input className={patientFormInputClass} placeholder="Bairro" value={newPatientForm.bairro} onChange={(e) => handlePatientFormChange("bairro", e.target.value)} />
+                  </FormField>
+                  <FormField label="Cidade">
+                    <input className={patientFormInputClass} placeholder="Cidade" value={newPatientForm.cidade} onChange={(e) => handlePatientFormChange("cidade", e.target.value)} />
+                  </FormField>
+                  <FormField
+                    label="Tipo de portal do paciente"
+                    helperText="Define a área de acesso do paciente no aplicativo."
+                  >
+                    <select className={patientFormInputClass} value={newPatientForm.patientProfileType} onChange={(e) => handlePatientFormChange("patientProfileType", e.target.value)}>
+                      {PATIENT_PROFILE_TYPE_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </FormField>
+                  <div className="flex items-center rounded-2xl border border-slate-100 bg-slate-50/70 px-4 py-3">
+                    <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+                      <input type="checkbox" checked={newPatientForm.menorDeIdade} onChange={(e) => handlePatientFormChange("menorDeIdade", e.target.checked)} />
+                      Menor de idade
+                    </label>
+                  </div>
+                </div>
+
+                {newPatientForm.menorDeIdade && (
+                  <SubSection title="Responsável legal" description="Dados usados para contato e documentos quando o paciente é menor de idade.">
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                      <FormField label="Nome do responsável">
+                        <input className={patientFormInputClass} placeholder="Nome do responsável" value={newPatientForm.responsavelNome} onChange={(e) => handlePatientFormChange("responsavelNome", e.target.value)} />
+                      </FormField>
+                      <FormField label="Data de nascimento do responsável">
+                        <input type="date" className={patientFormInputClass} value={newPatientForm.responsavelDataNascimento} onChange={(e) => handlePatientFormChange("responsavelDataNascimento", e.target.value)} />
+                      </FormField>
+                      <FormField label="CPF do responsável">
+                        <input className={patientFormInputClass} placeholder="000.000.000-00" value={newPatientForm.responsavelCpf} onChange={(e) => handlePatientFormChange("responsavelCpf", e.target.value)} />
+                      </FormField>
+                      <FormField label="Telefone do responsável">
+                        <input className={patientFormInputClass} placeholder="(11) 91234-5678" value={newPatientForm.responsavelTelefone} onChange={(e) => handlePatientFormChange("responsavelTelefone", e.target.value)} />
+                      </FormField>
+                      <FormField label="E-mail do responsável">
+                        <input className={patientFormInputClass} placeholder="responsavel@email.com" value={newPatientForm.responsavelEmail} onChange={(e) => handlePatientFormChange("responsavelEmail", e.target.value)} />
+                      </FormField>
+                      <FormField label="Relação com o paciente">
+                        <input className={patientFormInputClass} placeholder="Mãe, pai, tutor..." value={newPatientForm.responsavelRelacao} onChange={(e) => handlePatientFormChange("responsavelRelacao", e.target.value)} />
+                      </FormField>
+                    </div>
+                  </SubSection>
+                )}
+
+                <div className="mt-4">
+                  <FormField label="Outras informações">
+                    <textarea
+                      className="min-h-[110px] w-full rounded-xl border border-transparent bg-slate-50 p-3 text-sm text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-[#7a32fc] focus:bg-white focus:ring-4 focus:ring-[#7a32fc]/10"
+                      placeholder="Observações gerais sobre cadastro, contato ou contexto do paciente."
+                      value={newPatientForm.outrasInformacoes}
+                      onChange={(e) => handlePatientFormChange("outrasInformacoes", e.target.value)}
+                    />
+                  </FormField>
+                </div>
+              </FormSection>
+
+              <FormSection
+                title="Convênio e elegibilidade"
+                description="Dados usados para validação de cobertura, carteirinha, pré-faturamento e Pré-guia TISS."
+                badge="Usado na Pré-guia TISS"
+              >
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <FormField
+                    label="Tipo de atendimento / cobertura"
+                    helperText="Define se este paciente será faturado como particular, convênio ou outro modelo."
+                  >
+                    <select className={patientFormInputClass} value={newPatientForm.convenioTipo} onChange={(e) => handlePatientFormChange("convenioTipo", e.target.value)}>
+                      <option value="particular">Particular</option>
+                      <option value="convenio">Convênio</option>
+                    </select>
+                  </FormField>
+                  <FormField
+                    label="Pagador / convênio"
+                    helperText="Usado nas regras de cobrança, pré-faturamento e validação TISS/TUSS quando aplicável."
+                  >
+                    <select className={patientFormInputClass} value={newPatientForm.convenioNome} onChange={(e) => handlePatientFormChange("convenioNome", e.target.value)}>
+                      <option value="">Selecione o convênio</option>
+                      {insuranceOptions.map((ins) => (
+                        <option key={ins} value={ins}>{ins}</option>
+                      ))}
+                    </select>
+                  </FormField>
+                </div>
+
+                {newPatientForm.convenioTipo !== "convenio" ? (
+                  <div className="mt-4 rounded-2xl border border-slate-100 bg-slate-50 p-4 text-sm font-medium text-slate-500">
+                    Dados de convênio não aplicáveis para paciente particular. Carteirinha, titular e elegibilidade não serão exigidos para Pré-guia TISS.
+                  </div>
+                ) : (
+                  <div className="mt-4 space-y-4">
+                    <SubSection title="Dados da carteirinha" description="Informações do beneficiário usadas para validação com o convênio.">
+                      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                        <FormField
+                          label="Número da carteirinha"
+                          helperText="Número de identificação do beneficiário no convênio."
+                        >
+                          <input className={patientFormInputClass} placeholder="Número da carteirinha" value={newPatientForm.convenioCarteirinha} onChange={(e) => handlePatientFormChange("convenioCarteirinha", e.target.value)} />
+                        </FormField>
+                        <FormField
+                          label="Validade da carteirinha"
+                          helperText="Alguns convênios exigem validade ativa para liberar a pré-guia."
+                        >
+                          <input type="date" className={patientFormInputClass} value={newPatientForm.convenioCarteirinhaValidade} onChange={(e) => handlePatientFormChange("convenioCarteirinhaValidade", e.target.value)} />
+                        </FormField>
+                        <FormField
+                          label="Plano / categoria"
+                          helperText="Ex.: Amil S380, Unimed Nacional, Bradesco Top."
+                        >
+                          <input className={patientFormInputClass} placeholder="Ex.: Amil S380" value={newPatientForm.convenioPlanoCategoria} onChange={(e) => handlePatientFormChange("convenioPlanoCategoria", e.target.value)} />
+                        </FormField>
+                      </div>
+                    </SubSection>
+
+                    <SubSection title="Titular do plano" description="Preencha quando o paciente não for o titular do convênio.">
+                      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                        <FormField
+                          label="Nome do titular"
+                          helperText="Preencha quando o paciente não for o titular do convênio."
+                        >
+                          <input className={patientFormInputClass} placeholder="Nome do titular" value={newPatientForm.convenioTitularNome} onChange={(e) => handlePatientFormChange("convenioTitularNome", e.target.value)} />
+                        </FormField>
+                        <FormField
+                          label="CPF do titular"
+                          helperText="Pode ser exigido pelo convênio para validação do beneficiário."
+                        >
+                          <input className={patientFormInputClass} placeholder="000.000.000-00" value={newPatientForm.convenioTitularCpf} onChange={(e) => handlePatientFormChange("convenioTitularCpf", e.target.value)} />
+                        </FormField>
+                        <FormField
+                          label="Relação com titular"
+                          helperText="Ex.: filho(a), cônjuge, dependente."
+                        >
+                          <input className={patientFormInputClass} placeholder="Ex.: filho(a)" value={newPatientForm.convenioTitularRelacao} onChange={(e) => handlePatientFormChange("convenioTitularRelacao", e.target.value)} />
+                        </FormField>
+                      </div>
+                    </SubSection>
+
+                    <FormField
+                      label="Observações de elegibilidade"
+                      helperText="Informações sobre cobertura, carência, exceções ou regras do convênio."
+                    >
+                      <textarea
+                        className="min-h-[92px] w-full rounded-xl border border-transparent bg-slate-50 p-3 text-sm text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-[#7a32fc] focus:bg-white focus:ring-4 focus:ring-[#7a32fc]/10"
+                        placeholder="Cobertura, carências, exceções ou regras combinadas."
+                        value={newPatientForm.convenioElegibilidadeObs}
+                        onChange={(e) => handlePatientFormChange("convenioElegibilidadeObs", e.target.value)}
+                      />
+                    </FormField>
+                  </div>
+                )}
+              </FormSection>
+
               {canAccessClinicFinance && (
-                <div className="md:col-span-2 xl:col-span-3 rounded-3xl border border-slate-100 bg-slate-50/70 p-4">
+                <FormSection
+                  title="Plano financeiro do tratamento"
+                  description="Modalidade, pagador, autorizações e valores por linha de cuidado."
+                >
                   <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div>
-                      <p className="text-xs font-black uppercase tracking-widest text-slate-500">
-                        Plano financeiro do tratamento
-                      </p>
-                      <p className="text-[11px] font-medium text-slate-400">
-                        Modalidade, pagador, autorizações e valores por linha de cuidado.
-                      </p>
+                      <p className="text-xs font-bold text-slate-500">Linhas de cuidado e cobrança</p>
+                      <p className="text-[11px] font-medium text-slate-400">Guia/autorização aqui é diferente do número da carteirinha.</p>
                     </div>
                     <button
                       type="button"
@@ -9963,219 +10235,208 @@ export function CoordinatorDashboard({
                         const isCourtesyPlan = plan.billingMode === "COURTESY";
                         const isMonthlyPlan = plan.billingMode === "MONTHLY";
                         return (
-                          <div key={plan.id} className="grid grid-cols-1 gap-3 rounded-2xl bg-white p-3 shadow-sm md:grid-cols-6">
-                            <select
-                              className="rounded-xl bg-slate-50 p-3 text-sm md:col-span-2"
-                              value={plan.serviceType}
-                              onChange={(e) => handleFinancialPlanChange(plan.id, "serviceType", e.target.value)}
-                            >
-                              <option value="">Especialidade/serviço</option>
-                              {PATIENT_FINANCIAL_SERVICE_OPTIONS.map((option) => (
-                                <option key={option.value} value={option.value}>{option.label}</option>
-                              ))}
-                            </select>
+                          <div key={plan.id} className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+                            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-6">
+                              <div className="xl:col-span-2">
+                                <FormField label="Linha de cuidado / especialidade">
+                                  <select
+                                    className={patientFormInputClass}
+                                    value={plan.serviceType}
+                                    onChange={(e) => handleFinancialPlanChange(plan.id, "serviceType", e.target.value)}
+                                  >
+                                    <option value="">Especialidade/serviço</option>
+                                    {PATIENT_FINANCIAL_SERVICE_OPTIONS.map((option) => (
+                                      <option key={option.value} value={option.value}>{option.label}</option>
+                                    ))}
+                                  </select>
+                                </FormField>
+                              </div>
                             {plan.serviceType === "CUSTOM" && (
-                              <input
-                                className="rounded-xl bg-slate-50 p-3 text-sm md:col-span-2"
-                                placeholder="Nome do serviço"
-                                value={plan.customServiceName}
-                                onChange={(e) => handleFinancialPlanChange(plan.id, "customServiceName", e.target.value)}
-                              />
+                              <div className="xl:col-span-2">
+                                <FormField label="Nome do serviço">
+                                  <input
+                                    className={patientFormInputClass}
+                                    placeholder="Nome do serviço"
+                                    value={plan.customServiceName}
+                                    onChange={(e) => handleFinancialPlanChange(plan.id, "customServiceName", e.target.value)}
+                                  />
+                                </FormField>
+                              </div>
                             )}
-                            <select
-                              className="rounded-xl bg-slate-50 p-3 text-sm"
-                              value={plan.billingMode}
-                              onChange={(e) => handleFinancialPlanChange(plan.id, "billingMode", e.target.value)}
-                            >
-                              {PATIENT_FINANCIAL_BILLING_MODE_OPTIONS.map((option) => (
-                                <option key={option.value} value={option.value}>{option.label}</option>
-                              ))}
-                            </select>
+                              <FormField label="Modalidade de cobrança">
+                                <select
+                                  className={patientFormInputClass}
+                                  value={plan.billingMode}
+                                  onChange={(e) => handleFinancialPlanChange(plan.id, "billingMode", e.target.value)}
+                                >
+                                  {PATIENT_FINANCIAL_BILLING_MODE_OPTIONS.map((option) => (
+                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                  ))}
+                                </select>
+                              </FormField>
                             {!isCourtesyPlan && (
-                              <input
-                                className="rounded-xl bg-slate-50 p-3 text-sm"
-                                placeholder={isInsurancePlan ? "Valor autorizado R$" : isPackagePlan ? "Valor pacote R$" : isMonthlyPlan ? "Mensalidade R$" : "Valor R$"}
-                                inputMode="decimal"
-                                value={plan.amount}
-                                onChange={(e) => handleFinancialPlanChange(plan.id, "amount", e.target.value)}
-                              />
+                              <FormField label={isInsurancePlan ? "Valor autorizado" : isPackagePlan ? "Valor do pacote" : isMonthlyPlan ? "Mensalidade" : "Valor"}>
+                                <input
+                                  className={patientFormInputClass}
+                                  placeholder="R$ 0,00"
+                                  inputMode="decimal"
+                                  value={plan.amount}
+                                  onChange={(e) => handleFinancialPlanChange(plan.id, "amount", e.target.value)}
+                                />
+                              </FormField>
                             )}
-                            <div className="flex items-center gap-2">
-                              <input
-                                className="min-w-0 flex-1 rounded-xl bg-slate-50 p-3 text-sm"
-                                placeholder={isInsurancePlan ? "Qtde. autorizada" : "Sessões"}
-                                type="number"
-                                min={1}
-                                value={plan.sessionsQuantity}
-                                onChange={(e) => handleFinancialPlanChange(plan.id, "sessionsQuantity", e.target.value)}
-                              />
-                              <button
-                                type="button"
-                                onClick={() => removeFinancialPlanRow(plan.id)}
-                                className="rounded-xl p-3 text-slate-300 transition-colors hover:bg-red-50 hover:text-red-500"
-                                title="Remover plano financeiro"
-                              >
-                                <Trash2 size={16} />
-                              </button>
-                            </div>
-                            <select
-                              className="rounded-xl bg-slate-50 p-3 text-sm"
-                              value={plan.quantityPeriod}
-                              onChange={(e) => handleFinancialPlanChange(plan.id, "quantityPeriod", e.target.value)}
-                            >
-                              {PATIENT_FINANCIAL_QUANTITY_PERIOD_OPTIONS.map((option) => (
-                                <option key={option.value} value={option.value}>{option.label}</option>
-                              ))}
-                            </select>
+                              <FormField label={isInsurancePlan ? "Quantidade autorizada" : "Quantidade"}>
+                                <div className="flex items-center gap-2">
+                                  <input
+                                    className="min-w-0 flex-1 rounded-xl border border-transparent bg-slate-50 p-3 text-sm text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-[#7a32fc] focus:bg-white focus:ring-4 focus:ring-[#7a32fc]/10"
+                                    placeholder={isInsurancePlan ? "Qtde. autorizada" : "Sessões"}
+                                    type="number"
+                                    min={1}
+                                    value={plan.sessionsQuantity}
+                                    onChange={(e) => handleFinancialPlanChange(plan.id, "sessionsQuantity", e.target.value)}
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => removeFinancialPlanRow(plan.id)}
+                                    className="rounded-xl p-3 text-slate-300 transition-colors hover:bg-red-50 hover:text-red-500"
+                                    title="Remover plano financeiro"
+                                  >
+                                    <Trash2 size={16} />
+                                  </button>
+                                </div>
+                              </FormField>
+                              <FormField label="Frequência">
+                                <select
+                                  className={patientFormInputClass}
+                                  value={plan.quantityPeriod}
+                                  onChange={(e) => handleFinancialPlanChange(plan.id, "quantityPeriod", e.target.value)}
+                                >
+                                  {PATIENT_FINANCIAL_QUANTITY_PERIOD_OPTIONS.map((option) => (
+                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                  ))}
+                                </select>
+                              </FormField>
                             {isMonthlyPlan && (
-                              <input
-                                className="rounded-xl bg-slate-50 p-3 text-sm"
-                                placeholder="Venc. dia"
-                                type="number"
-                                min={1}
-                                max={31}
-                                value={plan.dueDay}
-                                onChange={(e) => handleFinancialPlanChange(plan.id, "dueDay", e.target.value)}
-                              />
+                              <FormField label="Dia de vencimento">
+                                <input
+                                  className={patientFormInputClass}
+                                  placeholder="Dia"
+                                  type="number"
+                                  min={1}
+                                  max={31}
+                                  value={plan.dueDay}
+                                  onChange={(e) => handleFinancialPlanChange(plan.id, "dueDay", e.target.value)}
+                                />
+                              </FormField>
                             )}
                             {isPackagePlan && (
-                              <input
-                                type="date"
-                                className="rounded-xl bg-slate-50 p-3 text-sm"
-                                value={plan.packageValidUntil}
-                                onChange={(e) => handleFinancialPlanChange(plan.id, "packageValidUntil", e.target.value)}
-                              />
+                              <FormField label="Validade do pacote">
+                                <input
+                                  type="date"
+                                  className={patientFormInputClass}
+                                  value={plan.packageValidUntil}
+                                  onChange={(e) => handleFinancialPlanChange(plan.id, "packageValidUntil", e.target.value)}
+                                />
+                              </FormField>
                             )}
                             {isInsurancePlan && (
                               <>
-                                <select
-                                  className="rounded-xl bg-slate-50 p-3 text-sm md:col-span-2"
-                                  value={plan.payerId || ""}
-                                  onChange={(e) => {
-                                    const payer = clinicPayers.find((item: any) => String(item?.id) === e.target.value);
-                                    handleFinancialPlanChange(plan.id, "payerId", e.target.value);
-                                    handleFinancialPlanChange(plan.id, "payerNameSnapshot", payer?.name || plan.payerNameSnapshot || "");
-                                  }}
+                                <div className="xl:col-span-2">
+                                  <FormField label="Pagador / convênio">
+                                    <select
+                                      className={patientFormInputClass}
+                                      value={plan.payerId || ""}
+                                      onChange={(e) => {
+                                        const payer = clinicPayers.find((item: any) => String(item?.id) === e.target.value);
+                                        handleFinancialPlanChange(plan.id, "payerId", e.target.value);
+                                        handleFinancialPlanChange(plan.id, "payerNameSnapshot", payer?.name || plan.payerNameSnapshot || "");
+                                      }}
+                                    >
+                                      <option value="">Pagador/convênio</option>
+                                      {clinicPayers.map((payer: any) => (
+                                        <option key={`financial-payer-${plan.id}-${payer.id}`} value={payer.id}>
+                                          {payer.name}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </FormField>
+                                </div>
+                                <FormField label="Convênio exibido">
+                                  <input
+                                    className={patientFormInputClass}
+                                    placeholder="Nome do convênio"
+                                    value={plan.payerNameSnapshot}
+                                    onChange={(e) => handleFinancialPlanChange(plan.id, "payerNameSnapshot", e.target.value)}
+                                  />
+                                </FormField>
+                                <FormField
+                                  label="Guia/autorização"
+                                  helperText="Número da autorização ou guia liberada pelo convênio para esta linha de cuidado."
                                 >
-                                  <option value="">Pagador/convênio</option>
-                                  {clinicPayers.map((payer: any) => (
-                                    <option key={`financial-payer-${plan.id}-${payer.id}`} value={payer.id}>
-                                      {payer.name}
-                                    </option>
-                                  ))}
-                                </select>
-                                <input
-                                  className="rounded-xl bg-slate-50 p-3 text-sm"
-                                  placeholder="Nome do convênio"
-                                  value={plan.payerNameSnapshot}
-                                  onChange={(e) => handleFinancialPlanChange(plan.id, "payerNameSnapshot", e.target.value)}
-                                />
-                                <input
-                                  className="rounded-xl bg-slate-50 p-3 text-sm"
-                                  placeholder="Autorização"
-                                  value={plan.authorizationCode}
-                                  onChange={(e) => handleFinancialPlanChange(plan.id, "authorizationCode", e.target.value)}
-                                />
-                                <input
-                                  type="date"
-                                  className="rounded-xl bg-slate-50 p-3 text-sm"
-                                  value={plan.authorizationValidUntil}
-                                  onChange={(e) => handleFinancialPlanChange(plan.id, "authorizationValidUntil", e.target.value)}
-                                />
-                                <input
-                                  className="rounded-xl bg-slate-50 p-3 text-sm"
-                                  placeholder="Coparticipação R$"
-                                  inputMode="decimal"
-                                  value={plan.copaymentAmount}
-                                  onChange={(e) => handleFinancialPlanChange(plan.id, "copaymentAmount", e.target.value)}
-                                />
+                                  <input
+                                    className={patientFormInputClass}
+                                    placeholder="Número da autorização"
+                                    value={plan.authorizationCode}
+                                    onChange={(e) => handleFinancialPlanChange(plan.id, "authorizationCode", e.target.value)}
+                                  />
+                                </FormField>
+                                <FormField
+                                  label="Validade da autorização"
+                                  helperText="Data limite para uso da autorização nesta linha de cuidado."
+                                >
+                                  <input
+                                    type="date"
+                                    className={patientFormInputClass}
+                                    value={plan.authorizationValidUntil}
+                                    onChange={(e) => handleFinancialPlanChange(plan.id, "authorizationValidUntil", e.target.value)}
+                                  />
+                                </FormField>
+                                <FormField label="Coparticipação">
+                                  <input
+                                    className={patientFormInputClass}
+                                    placeholder="R$ 0,00"
+                                    inputMode="decimal"
+                                    value={plan.copaymentAmount}
+                                    onChange={(e) => handleFinancialPlanChange(plan.id, "copaymentAmount", e.target.value)}
+                                  />
+                                </FormField>
                               </>
                             )}
                             {showPaymentMethod && (
-                              <select
-                                className="rounded-xl bg-slate-50 p-3 text-sm"
-                                value={plan.paymentMethod}
-                                onChange={(e) => handleFinancialPlanChange(plan.id, "paymentMethod", e.target.value)}
-                              >
-                                <option value="">Forma de pagamento</option>
-                                {PATIENT_FINANCIAL_PAYMENT_METHOD_OPTIONS.map((option) => (
-                                  <option key={option.value} value={option.value}>{option.label}</option>
-                                ))}
-                              </select>
+                              <FormField label="Forma de pagamento">
+                                <select
+                                  className={patientFormInputClass}
+                                  value={plan.paymentMethod}
+                                  onChange={(e) => handleFinancialPlanChange(plan.id, "paymentMethod", e.target.value)}
+                                >
+                                  <option value="">Forma de pagamento</option>
+                                  {PATIENT_FINANCIAL_PAYMENT_METHOD_OPTIONS.map((option) => (
+                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                  ))}
+                                </select>
+                              </FormField>
                             )}
                             {(isCourtesyPlan || plan.billingMode === "OTHER") && (
-                              <input
-                                className="rounded-xl bg-slate-50 p-3 text-sm md:col-span-3"
-                                placeholder="Observação"
-                                value={plan.notes}
-                                onChange={(e) => handleFinancialPlanChange(plan.id, "notes", e.target.value)}
-                              />
+                              <div className="md:col-span-2 xl:col-span-3">
+                                <FormField label="Observação">
+                                  <input
+                                    className={patientFormInputClass}
+                                    placeholder="Observação"
+                                    value={plan.notes}
+                                    onChange={(e) => handleFinancialPlanChange(plan.id, "notes", e.target.value)}
+                                  />
+                                </FormField>
+                              </div>
                             )}
+                            </div>
                           </div>
                         );
                       });
                     })()}
                   </div>
-                </div>
+                </FormSection>
               )}
-              <select className="bg-slate-50 rounded-xl p-3 text-sm" value={newPatientForm.comoConheceu} onChange={(e) => handlePatientFormChange("comoConheceu", e.target.value)}>
-                <option value="">Como conheceu a clínica?</option>
-                <option value="google">Google</option>
-                <option value="indicacao">Indicação</option>
-                <option value="email">Email</option>
-                <option value="whatsapp">WhatsApp</option>
-                <option value="rede_social">Rede social</option>
-                <option value="evento">Evento</option>
-                <option value="convenio">Convênio</option>
-                <option value="outro">Outro</option>
-              </select>
-              <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="RG" value={newPatientForm.rg} onChange={(e) => handlePatientFormChange("rg", e.target.value)} />
-              <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="CPF" value={newPatientForm.cpf} onChange={(e) => handlePatientFormChange("cpf", e.target.value)} />
-              <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="CEP" value={newPatientForm.cep} onChange={(e) => handlePatientFormChange("cep", e.target.value)} />
-              <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="E-mail" value={newPatientForm.email} onChange={(e) => handlePatientFormChange("email", e.target.value)} />
-              <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="Logradouro" value={newPatientForm.logradouro} onChange={(e) => handlePatientFormChange("logradouro", e.target.value)} />
-              <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="Número" value={newPatientForm.numero} onChange={(e) => handlePatientFormChange("numero", e.target.value)} />
-              <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="Complemento" value={newPatientForm.complemento} onChange={(e) => handlePatientFormChange("complemento", e.target.value)} />
-              <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="Bairro" value={newPatientForm.bairro} onChange={(e) => handlePatientFormChange("bairro", e.target.value)} />
-              <input className="bg-slate-50 rounded-xl p-3 text-sm md:col-span-2" placeholder="Cidade" value={newPatientForm.cidade} onChange={(e) => handlePatientFormChange("cidade", e.target.value)} />
-
-              <div className="md:col-span-2 xl:col-span-3">
-                <label className="block text-xs font-bold text-slate-600 mb-2">
-                  Selecione o tipo de portal desse paciente
-                </label>
-                <p className="text-[11px] text-slate-400 mb-2">
-                  Qual a área de acesso do paciente no aplicativo?
-                </p>
-              </div>
-              <select className="bg-slate-50 rounded-xl p-3 text-sm md:col-span-2 xl:col-span-3" value={newPatientForm.patientProfileType} onChange={(e) => handlePatientFormChange("patientProfileType", e.target.value)}>
-                {PATIENT_PROFILE_TYPE_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
-              </select>
-
-              <label className="flex items-center gap-2 text-sm text-slate-700">
-                <input type="checkbox" checked={newPatientForm.menorDeIdade} onChange={(e) => handlePatientFormChange("menorDeIdade", e.target.checked)} />
-                Menor de idade
-              </label>
             </div>
-
-            {newPatientForm.menorDeIdade && (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-                <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="Nome do responsável" value={newPatientForm.responsavelNome} onChange={(e) => handlePatientFormChange("responsavelNome", e.target.value)} />
-                <input type="date" className="bg-slate-50 rounded-xl p-3 text-sm" value={newPatientForm.responsavelDataNascimento} onChange={(e) => handlePatientFormChange("responsavelDataNascimento", e.target.value)} />
-                <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="CPF do responsável" value={newPatientForm.responsavelCpf} onChange={(e) => handlePatientFormChange("responsavelCpf", e.target.value)} />
-                <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="Telefone do responsável" value={newPatientForm.responsavelTelefone} onChange={(e) => handlePatientFormChange("responsavelTelefone", e.target.value)} />
-                <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="E-mail do responsável" value={newPatientForm.responsavelEmail} onChange={(e) => handlePatientFormChange("responsavelEmail", e.target.value)} />
-                <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="Relação com o paciente" value={newPatientForm.responsavelRelacao} onChange={(e) => handlePatientFormChange("responsavelRelacao", e.target.value)} />
-              </div>
-            )}
-
-            <textarea
-              className="w-full mt-4 bg-slate-50 rounded-xl p-3 text-sm min-h-[110px]"
-              placeholder="Outras informações"
-              value={newPatientForm.outrasInformacoes}
-              onChange={(e) => handlePatientFormChange("outrasInformacoes", e.target.value)}
-            />
 
             <div className="mt-6 flex justify-end gap-3">
               <button
