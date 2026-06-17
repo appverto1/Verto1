@@ -877,12 +877,11 @@ test('frontend oferece cards, paginação, detalhe sob demanda e nenhuma ação 
     'Pré-guias válidas',
     'Pendentes',
     'Não aplicáveis',
-    'Sem dados do prestador',
+    'Sem autorização',
+    'Autorização vencida',
+    'Sem carteirinha',
     'Sem dados do pagador',
     'Sem registro profissional',
-    'Sem CBO',
-    'Sem TUSS',
-    'Sem guia/autorização',
     'Sem valor',
   ]) {
     assert.match(preGuideUiCode, new RegExp(label));
@@ -904,6 +903,12 @@ test('frontend oferece cards, paginação, detalhe sob demanda e nenhuma ação 
   assert.match(preGuideUiCode, /AUTHORIZATION_PROCEDURE_MISMATCH:\s*"Procedimento divergente"/);
   assert.match(preGuideUiCode, /AUTHORIZED_PROCEDURE_NOT_INFORMED:\s*"Procedimento autorizado"/);
   assert.match(preGuideUiCode, /RESPONSIBLE_SIGNATURE_REQUIRED:\s*"Assinatura do responsável"/);
+  assert.match(preGuideUiCode, /hasAuthorizationSnapshot/);
+  assert.match(preGuideUiCode, /Editar autorização/);
+  assert.match(preGuideUiCode, /Pronta/);
+  assert.match(preGuideUiCode, /missing_authorization/);
+  assert.match(preGuideUiCode, /authorization_expired/);
+  assert.match(preGuideUiCode, /missing_card/);
   assert.match(preGuideUiCode, /isAuthorizationIssue/);
   assert.match(preGuideUiCode, /resolveIssueAction/);
   assert.match(preGuideUiCode, /authorizationActionLabel/);
@@ -933,6 +938,12 @@ test('frontend oferece cards, paginação, detalhe sob demanda e nenhuma ação 
   assert.match(preGuideUiCode, /Você está editando o perfil TISS global deste pagador/);
   assert.match(preGuideUiCode, /Você está editando o perfil faturável global deste profissional/);
   assert.match(preGuideUiCode, /Esta é uma pré-guia para validação interna\. XML TISS ainda não foi gerado\./);
+  assert.match(serverCode, /missing_authorization: \['GUIDE_MISSING', 'AUTHORIZATION_MISSING', 'AUTHORIZATION_REQUIRED'/);
+  assert.match(serverCode, /authorization_expired: \['AUTHORIZATION_EXPIRED'\]/);
+  assert.match(serverCode, /missing_card: \['BENEFICIARY_CARD_MISSING'\]/);
+  assert.match(serverCode, /missingAuthorization: countCodes\(tissPreGuideQuickFilterCodes\.missing_authorization\)/);
+  assert.match(serverCode, /authorizationExpired: countCodes\(tissPreGuideQuickFilterCodes\.authorization_expired\)/);
+  assert.match(serverCode, /missingCard: countCodes\(tissPreGuideQuickFilterCodes\.missing_card\)/);
   assert.match(preGuideUiCode, /sticky top-0 z-20/);
   assert.match(preGuideUiCode, /snapshot\.provider\?\.tradeName/);
   assert.doesNotMatch(preGuideUiCode, /snapshot\.provider\?\.tradeName \|\| detail\.clinicName/);

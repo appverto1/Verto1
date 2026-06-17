@@ -99,6 +99,9 @@ type QuickFilter =
   | "missing_professional_registry"
   | "missing_cbo"
   | "missing_tuss"
+  | "missing_authorization"
+  | "authorization_expired"
+  | "missing_card"
   | "missing_guide_authorization"
   | "missing_amount";
 
@@ -254,6 +257,23 @@ function isProfessionalIssue(item?: { code?: string | null; section?: string | n
   return ["PROFESSIONAL_BILLING_PROFILE_MISSING", "PROFESSIONAL_REGISTRY_MISSING", "PROFESSIONAL_COUNCIL_STATE_MISSING", "CBO_MISSING"].includes(code);
 }
 
+function hasAuthorizationSnapshot(row?: TissPreGuideRow | null) {
+  const authorization = row?.snapshot?.authorization || {};
+  return Boolean(
+    authorization.authorizationId ||
+    authorization.id ||
+    authorization.authorizationCode ||
+    authorization.guideNumber ||
+    authorization.authorizationValidFrom ||
+    authorization.authorizationValidUntil ||
+    authorization.procedureTussCode ||
+    authorization.procedureCode ||
+    row?.authorizationCode ||
+    row?.guideNumber ||
+    row?.authorizationValidUntil
+  );
+}
+
 function Section({
   title,
   icon: Icon,
@@ -347,12 +367,11 @@ export function TissPreGuideTab({
     { key: "valid" as const, label: "Pré-guias válidas", value: Number(kpis.valid || 0), tone: "text-emerald-700" },
     { key: "pending" as const, label: "Pendentes", value: Number(kpis.pending || 0), tone: "text-amber-700" },
     { key: "not_applicable" as const, label: "Não aplicáveis", value: Number(kpis.notApplicable || 0), tone: "text-slate-700" },
-    { key: "missing_provider" as const, label: "Sem dados do prestador", value: Number(kpis.missingProvider || 0), tone: "text-rose-700" },
+    { key: "missing_authorization" as const, label: "Sem autorização", value: Number(kpis.missingAuthorization || kpis.missingGuideAuthorization || 0), tone: "text-violet-700" },
+    { key: "authorization_expired" as const, label: "Autorização vencida", value: Number(kpis.authorizationExpired || 0), tone: "text-rose-700" },
+    { key: "missing_card" as const, label: "Sem carteirinha", value: Number(kpis.missingCard || 0), tone: "text-sky-700" },
     { key: "missing_payer_profile" as const, label: "Sem dados do pagador", value: Number(kpis.missingPayerProfile || 0), tone: "text-rose-700" },
     { key: "missing_professional_registry" as const, label: "Sem registro profissional", value: Number(kpis.missingProfessionalRegistry || 0), tone: "text-orange-700" },
-    { key: "missing_cbo" as const, label: "Sem CBO", value: Number(kpis.missingCbo || 0), tone: "text-orange-700" },
-    { key: "missing_tuss" as const, label: "Sem TUSS", value: Number(kpis.missingTuss || 0), tone: "text-indigo-700" },
-    { key: "missing_guide_authorization" as const, label: "Sem guia/autorização", value: Number(kpis.missingGuideAuthorization || 0), tone: "text-violet-700" },
     { key: "missing_amount" as const, label: "Sem valor", value: Number(kpis.missingAmount || 0), tone: "text-cyan-700" },
   ], [kpis]);
 
@@ -655,6 +674,13 @@ export function TissPreGuideTab({
   const errors = detail?.validationErrors || [];
   const warnings = detail?.validationWarnings || [];
   const detailStatus = statusMeta[String(detail?.status || "draft")] || statusMeta.draft;
+  const detailHasAuthorization = hasAuthorizationSnapshot(detail);
+  const detailHasAuthorizationIssue = [...errors, ...warnings].some((item) => isAuthorizationIssue(item));
+  const authorizationFooterActionLabel = detailHasAuthorization
+    ? "Editar autorização"
+    : detailHasAuthorizationIssue
+      ? "Adicionar autorização"
+      : "";
   const openAppointment = (row: TissPreGuideRow, options: Partial<TissPreGuideRow> = {}) => {
     const appointmentId = row.appointmentId || row.appointment_id || detail?.appointmentId || detail?.appointment_id || null;
     const abaSessionId =
@@ -953,7 +979,9 @@ export function TissPreGuideTab({
                     <td className="max-w-[280px] px-4 py-3">
                       <div className="flex flex-wrap gap-1">
                         {codes.length === 0 ? (
-                          <span className="rounded-full bg-emerald-50 px-2 py-1 text-xs text-emerald-700">Sem pendência bloqueante</span>
+                          <span className="rounded-full bg-emerald-50 px-2 py-1 text-xs text-emerald-700">
+                            {String(row.status || "") === "valid" ? "Pronta" : "Sem pendência"}
+                          </span>
                         ) : codes.slice(0, 4).map((code) => (
                           <span key={code} className="rounded-full bg-amber-50 px-2 py-1 text-xs text-amber-700 ring-1 ring-amber-100">{issueLabel(code)}</span>
                         ))}
@@ -1083,7 +1111,9 @@ export function TissPreGuideTab({
                     <button type="button" onClick={() => void openProfileEditor("provider")} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">Editar Dados da clínica</button>
                     <button type="button" onClick={() => void openProfileEditor("payer")} disabled={!detail.payerId} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-40">Editar perfil TISS do pagador</button>
                     <button type="button" onClick={() => void openProfileEditor("professional")} disabled={!detail.professionalId} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-40">Editar perfil faturável do profissional</button>
-                    <button type="button" onClick={() => openAuthorizationEditor()} disabled={!detail.patientId || !detail.payerId} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-40">Adicionar autorização</button>
+                    {authorizationFooterActionLabel && (
+                      <button type="button" onClick={() => openAuthorizationEditor()} disabled={!detail.patientId || !detail.payerId} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-40">{authorizationFooterActionLabel}</button>
+                    )}
                     <button type="button" onClick={() => openAppointment(detail)} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">Ir para atendimento</button>
                     <button type="button" onClick={() => void revalidate(detail)} disabled={revalidatingId === detail.appointmentId} className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-60">
                       {revalidatingId === detail.appointmentId ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
@@ -1102,7 +1132,7 @@ export function TissPreGuideTab({
           <div className="max-h-[90vh] w-full max-w-2xl overflow-hidden rounded-lg bg-white shadow-xl">
             <header className="flex items-start justify-between border-b border-slate-200 px-5 py-4">
               <div>
-                <h2 className="text-lg font-semibold text-slate-900">Adicionar autorização</h2>
+                <h2 className="text-lg font-semibold text-slate-900">{hasAuthorizationSnapshot(detail) ? "Editar autorização" : "Adicionar autorização"}</h2>
                 <p className="mt-1 text-sm text-slate-500">
                   Autorização operacional de {fieldValue(detail?.patientName, "Paciente")} para {fieldValue(detail?.payerName, "pagador")}.
                 </p>

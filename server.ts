@@ -33608,6 +33608,9 @@ async function startServer() {
     missing_professional_registry: ['PROFESSIONAL_BILLING_PROFILE_MISSING', 'PROFESSIONAL_REGISTRY_MISSING', 'PROFESSIONAL_COUNCIL_STATE_MISSING'],
     missing_cbo: ['CBO_MISSING'],
     missing_tuss: ['PROCEDURE_MISSING', 'TUSS_CODE_MISSING', 'TUSS_DESCRIPTION_MISSING'],
+    missing_authorization: ['GUIDE_MISSING', 'AUTHORIZATION_MISSING', 'AUTHORIZATION_REQUIRED', 'AUTHORIZATION_INACTIVE', 'AUTHORIZATION_NOT_STARTED'],
+    authorization_expired: ['AUTHORIZATION_EXPIRED'],
+    missing_card: ['BENEFICIARY_CARD_MISSING'],
     missing_guide_authorization: ['GUIDE_MISSING', 'AUTHORIZATION_MISSING', 'AUTHORIZATION_REQUIRED', 'AUTHORIZATION_INACTIVE', 'AUTHORIZATION_NOT_STARTED', 'AUTHORIZATION_EXPIRED', 'AUTHORIZATION_EXHAUSTED', 'AUTHORIZATION_PROCEDURE_MISMATCH', 'AUTHORIZED_PROCEDURE_NOT_INFORMED'],
     missing_amount: ['AMOUNT_MISSING']
   };
@@ -34199,6 +34202,9 @@ async function startServer() {
         missingProfessionalRegistry: countCodes(tissPreGuideQuickFilterCodes.missing_professional_registry),
         missingCbo: countCodes(tissPreGuideQuickFilterCodes.missing_cbo),
         missingTuss: countCodes(tissPreGuideQuickFilterCodes.missing_tuss),
+        missingAuthorization: countCodes(tissPreGuideQuickFilterCodes.missing_authorization),
+        authorizationExpired: countCodes(tissPreGuideQuickFilterCodes.authorization_expired),
+        missingCard: countCodes(tissPreGuideQuickFilterCodes.missing_card),
         missingGuideAuthorization: countCodes(tissPreGuideQuickFilterCodes.missing_guide_authorization),
         missingAmount: countCodes(tissPreGuideQuickFilterCodes.missing_amount)
       };
