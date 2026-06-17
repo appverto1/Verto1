@@ -2934,6 +2934,80 @@ export const dataService = {
     }
   },
 
+  async getTissXmlDrafts(options: any = {}) {
+    const endpoint = endpointWithQuery('/api/tiss/xml-drafts', {
+      payerId: options.payerId,
+      competenceMonth: options.competenceMonth,
+      page: Math.max(1, Math.round(Number(options.page || 1) || 1)),
+      pageSize: normalizeListLimit(options.pageSize || options.limit, 20, 100)
+    });
+    try {
+      return await fetchNoStoreJsonWithRetry(endpoint, {
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getTissXmlDrafts',
+        operation: 'list',
+        table: 'tiss_xml_drafts',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      }, 'A listagem de rascunhos XML TISS voltou do cache. Tente atualizar novamente.');
+    } catch {
+      return { success: false, data: [], error: 'Não foi possível carregar os rascunhos XML TISS agora.' };
+    }
+  },
+
+  async createTissXmlDraft(payload: any = {}) {
+    try {
+      const response = await fetchClinical('/api/tiss/xml-drafts', {
+        method: 'POST',
+        cache: 'no-store',
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      }, {
+        helperName: 'createTissXmlDraft',
+        operation: 'write',
+        table: 'tiss_xml_drafts,appointment_tiss_pre_guides',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeNoStoreJson(response, 'A geração do XML TISS em rascunho voltou do cache. Tente novamente.');
+    } catch {
+      return { success: false, error: 'Não foi possível gerar o XML TISS em rascunho agora.' };
+    }
+  },
+
+  async downloadTissXmlDraft(draftId: string) {
+    try {
+      const response = await fetchClinical(`/api/tiss/xml-drafts/${encodeURIComponent(String(draftId))}/download`, {
+        method: 'GET',
+        cache: 'no-store',
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'downloadTissXmlDraft',
+        operation: 'detail',
+        table: 'tiss_xml_drafts',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      if (!response.ok) {
+        return { success: false, error: 'Não foi possível baixar o XML TISS em rascunho agora.' };
+      }
+      const blob = await response.blob();
+      const disposition = response.headers.get('Content-Disposition') || response.headers.get('content-disposition') || '';
+      const match = disposition.match(/filename="?([^";]+)"?/i);
+      return {
+        success: true,
+        blob,
+        fileName: match?.[1] || 'verto-tiss-rascunho.xml'
+      };
+    } catch {
+      return { success: false, error: 'Não foi possível baixar o XML TISS em rascunho agora.' };
+    }
+  },
+
   async getClinicTissProfile() {
     try {
       return await fetchNoStoreJsonWithRetry('/api/admin/tiss/provider-profile', {

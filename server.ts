@@ -117,6 +117,9 @@ import {
   validateTissPreGuide
 } from './src/services/tissPreGuideEngine';
 import {
+  generateTissXmlDraft
+} from './src/services/tissXmlDraftGenerator';
+import {
   buildPatientPortabilitySnapshot,
   normalizePatientPortabilityScope
 } from './src/utils/patientPortability';
@@ -4104,9 +4107,34 @@ const APPOINTMENT_TISS_PRE_GUIDE_LIST_SELECT = [
   'validation_errors',
   'validation_error_codes',
   'validation_warning_codes',
+  'snapshot_data',
   'stale_reason',
   'updated_at',
   'last_validated_at'
+].join(',');
+
+const TISS_XML_DRAFT_SELECT = [
+  'id',
+  'organization_id',
+  'clinic_id',
+  'payer_id',
+  'competence_month',
+  'guide_type',
+  'tiss_version',
+  'status',
+  'xml_hash',
+  'generated_from_pre_guide_ids',
+  'generated_by',
+  'generated_at',
+  'validation_summary',
+  'metadata',
+  'created_at',
+  'updated_at'
+].join(',');
+
+const TISS_XML_DRAFT_DETAIL_SELECT = [
+  ...TISS_XML_DRAFT_SELECT.split(','),
+  'xml_content'
 ].join(',');
 
 const APPOINTMENT_BILLING_CONTEXT_SCHEMA_FALLBACK_COLUMNS = new Set([
@@ -32971,6 +32999,34 @@ async function startServer() {
     lastValidatedAt: row?.last_validated_at || null
   });
 
+  const serializeTissXmlDraft = (row: any, includeXml = false) => {
+    const validationSummary = row?.validation_summary && typeof row.validation_summary === 'object' ? row.validation_summary : {};
+    const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+    const serialized: any = {
+      id: sanitizeString(row?.id, 120) || null,
+      payerId: sanitizeString(row?.payer_id, 120) || null,
+      competenceMonth: sanitizeString(row?.competence_month, 40) || null,
+      guideType: sanitizeString(row?.guide_type, 40) || 'sp_sadt',
+      tissVersion: sanitizeString(row?.tiss_version, 80) || null,
+      status: sanitizeString(row?.status, 40) || 'draft',
+      xmlHash: sanitizeString(row?.xml_hash, 120) || null,
+      generatedFromPreGuideIds: Array.isArray(row?.generated_from_pre_guide_ids) ? row.generated_from_pre_guide_ids : [],
+      generatedBy: sanitizeString(row?.generated_by, 120) || null,
+      generatedAt: row?.generated_at || null,
+      validationSummary,
+      metadata,
+      guideCount: Number(validationSummary.guideCount || metadata.guideCount || 0) || 0,
+      totalAmountCents: Number(validationSummary.totalAmountCents || metadata.totalAmountCents || 0) || 0,
+      payerName: sanitizeString(metadata.payerName, 180) || null,
+      fileName: sanitizeString(metadata.fileName, 220) || null,
+      downloadUrl: row?.id ? `/api/tiss/xml-drafts/${encodeURIComponent(String(row.id))}/download` : null,
+      createdAt: row?.created_at || null,
+      updatedAt: row?.updated_at || null
+    };
+    if (includeXml) serialized.xmlContent = String(row?.xml_content || '');
+    return serialized;
+  };
+
   const fetchTissPreGuideProfile = async (
     tableName: 'clinic_tiss_profiles' | 'payer_tiss_profiles' | 'professional_billing_profiles',
     selectColumns: string,
@@ -34206,7 +34262,7 @@ async function startServer() {
         authorizationExpired: countCodes(tissPreGuideQuickFilterCodes.authorization_expired),
         missingCard: countCodes(tissPreGuideQuickFilterCodes.missing_card),
         missingGuideAuthorization: countCodes(tissPreGuideQuickFilterCodes.missing_guide_authorization),
-        missingAmount: countCodes(tissPreGuideQuickFilterCodes.missing_amount)
+    missingAmount: countCodes(tissPreGuideQuickFilterCodes.missing_amount)
       };
       return sendNoStoreJson(res, {
         success: true,
@@ -34219,6 +34275,249 @@ async function startServer() {
     } catch (error: any) {
       console.warn('[TissPreGuide] list failed:', error?.message || String(error));
       return res.status(500).json({ success: false, error: 'Não foi possível carregar as Pré-guias TISS agora.' });
+    }
+  });
+
+  const normalizeTissXmlCompetenceMonth = (value: unknown, fallbackDate?: unknown) => {
+    const raw = sanitizeString(value, 40);
+    const fallback = sanitizeString(fallbackDate, 80);
+    const source = raw || fallback;
+    const match = source.match(/^(\d{4})-(\d{2})/);
+    if (!match) return '';
+    return `${match[1]}-${match[2]}-01`;
+  };
+
+  const buildTissXmlDraftFileName = (draft: any) => {
+    const month = sanitizeString(draft?.competence_month || draft?.competenceMonth, 40).slice(0, 7) || 'periodo';
+    const payerName = sanitizeString(draft?.metadata?.payerName || draft?.payerName || 'pagador', 80)
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-zA-Z0-9_-]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .toLowerCase() || 'pagador';
+    return `verto-tiss-rascunho-${month}-${payerName}.xml`;
+  };
+
+  app.get('/api/tiss/xml-drafts', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
+      const page = Math.max(1, Math.round(Number(req.query?.page || 1) || 1));
+      const pageSize = parseBoundedListLimit(req.query?.pageSize || req.query?.limit, 20, 100);
+      const payerId = sanitizeString(req.query?.payerId || req.query?.payer_id, 120);
+      const competenceMonth = normalizeTissXmlCompetenceMonth(req.query?.competenceMonth || req.query?.competence_month);
+      let query = supabase
+        .from('tiss_xml_drafts')
+        .select(TISS_XML_DRAFT_SELECT, { count: 'exact' })
+        .eq('organization_id', organizationId);
+      if (isUuid(payerId)) query = query.eq('payer_id', payerId);
+      if (competenceMonth) query = query.eq('competence_month', competenceMonth);
+      const offset = (page - 1) * pageSize;
+      const { data, error, count } = await query
+        .order('generated_at', { ascending: false })
+        .range(offset, offset + pageSize - 1);
+      if (error) {
+        if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) {
+          return sendNoStoreJson(res, { success: true, data: [], page, pageSize, total: 0 });
+        }
+        throw error;
+      }
+      return sendNoStoreJson(res, {
+        success: true,
+        data: (data || []).map((row: any) => serializeTissXmlDraft(row)),
+        page,
+        pageSize,
+        total: Number(count || 0)
+      });
+    } catch (error: any) {
+      console.warn('[TissXmlDraft] list failed:', error?.message || String(error));
+      return res.status(500).json({ success: false, error: 'Não foi possível carregar os rascunhos XML TISS agora.' });
+    }
+  });
+
+  app.post('/api/tiss/xml-drafts', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 32 * 1024, 'XML TISS em rascunho')) return;
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
+      const payerId = sanitizeString(req.body?.payerId || req.body?.payer_id, 120);
+      if (!isUuid(payerId)) {
+        return res.status(400).json({
+          success: false,
+          code: 'TISS_XML_DRAFT_PAYER_REQUIRED',
+          error: 'Selecione um pagador para gerar o XML TISS em rascunho.'
+        });
+      }
+      const rawPreGuideIds = Array.isArray(req.body?.preGuideIds || req.body?.pre_guide_ids)
+        ? (req.body?.preGuideIds || req.body?.pre_guide_ids)
+        : [];
+      const preGuideIds = Array.from(new Set(rawPreGuideIds.map((id: unknown) => sanitizeString(id, 120)).filter((id: string) => isUuid(id)))).slice(0, 200);
+      const dateFrom = sanitizeString(req.body?.dateFrom || req.body?.date_from || req.body?.from, 80);
+      const dateTo = sanitizeString(req.body?.dateTo || req.body?.date_to || req.body?.to, 80);
+      const competenceMonth = normalizeTissXmlCompetenceMonth(req.body?.competenceMonth || req.body?.competence_month, dateFrom);
+      if (!competenceMonth) {
+        return res.status(400).json({
+          success: false,
+          code: 'TISS_XML_DRAFT_COMPETENCE_REQUIRED',
+          error: 'Informe a competência para gerar o XML TISS em rascunho.'
+        });
+      }
+      const monthStart = `${competenceMonth.slice(0, 7)}-01T00:00:00.000Z`;
+      const monthEndDate = new Date(Date.UTC(Number(competenceMonth.slice(0, 4)), Number(competenceMonth.slice(5, 7)), 0, 23, 59, 59, 999));
+      const monthEnd = monthEndDate.toISOString();
+      let query = supabase
+        .from('appointment_tiss_pre_guides')
+        .select(APPOINTMENT_TISS_PRE_GUIDE_SELECT)
+        .eq('organization_id', organizationId)
+        .eq('payer_id', payerId);
+      if (preGuideIds.length > 0) {
+        query = query.in('id', preGuideIds);
+      } else {
+        query = query
+          .eq('status', 'valid')
+          .gte('scheduled_start', dateFrom || monthStart)
+          .lte('scheduled_start', dateTo || monthEnd);
+      }
+      const { data: preGuideRows, error: preGuideError } = await query.limit(500);
+      if (preGuideError) {
+        if (hasMissingFinancialSchema(preGuideError) || isMissingRelationError(preGuideError)) {
+          return res.status(503).json({
+            success: false,
+            code: 'TISS_XML_DRAFT_SCHEMA_MISSING',
+            error: 'A estrutura de rascunho XML TISS ainda não está disponível no banco.'
+          });
+        }
+        throw preGuideError;
+      }
+      const preGuides = (preGuideRows || []).map((row: any) => serializeTissPreGuide(row));
+      const generated = generateTissXmlDraft({
+        preGuides,
+        payerId,
+        competenceMonth,
+        guideType: sanitizeString(req.body?.guideType || req.body?.guide_type, 40),
+        tissVersion: sanitizeString(req.body?.tissVersion || req.body?.tiss_version, 80),
+        generatedAt: new Date().toISOString()
+      });
+      if (!generated.ok) {
+        const status = generated.code === 'TISS_XML_DRAFT_PRE_GUIDE_NOT_READY' ? 409 : 422;
+        return res.status(status).json({
+          success: false,
+          code: generated.code,
+          error: generated.message,
+          issues: generated.issues
+        });
+      }
+      const now = new Date().toISOString();
+      const xmlHash = crypto.createHash('sha256').update(generated.xml, 'utf8').digest('hex');
+      const payerName = sanitizeString(preGuides[0]?.payerName || preGuides[0]?.snapshot?.payer?.name, 180) || 'Pagador';
+      const metadata = {
+        payerName,
+        guideCount: generated.guideCount,
+        totalAmountCents: generated.totalAmountCents,
+        warning: 'Rascunho interno para conferência. Não enviado à operadora.',
+        fileName: buildTissXmlDraftFileName({ competence_month: competenceMonth, payerName })
+      };
+      await supabase
+        .from('tiss_xml_drafts')
+        .update({ status: 'superseded', updated_at: now })
+        .eq('organization_id', organizationId)
+        .eq('payer_id', payerId)
+        .eq('competence_month', competenceMonth)
+        .eq('status', 'draft');
+      const payload = {
+        organization_id: organizationId,
+        clinic_id: organizationId,
+        payer_id: payerId,
+        competence_month: competenceMonth,
+        guide_type: generated.guideType,
+        tiss_version: generated.tissVersion,
+        status: 'draft',
+        xml_content: generated.xml,
+        xml_hash: xmlHash,
+        generated_from_pre_guide_ids: generated.preGuideIds,
+        generated_by: sanitizeString(req.session.user?.id, 120) || null,
+        generated_at: now,
+        validation_summary: generated.validationSummary,
+        metadata,
+        created_at: now,
+        updated_at: now
+      };
+      const { data: draft, error: draftError } = await supabase
+        .from('tiss_xml_drafts')
+        .insert(payload)
+        .select(TISS_XML_DRAFT_SELECT)
+        .single();
+      if (draftError) {
+        if (hasMissingFinancialSchema(draftError) || isMissingRelationError(draftError)) {
+          return res.status(503).json({
+            success: false,
+            code: 'TISS_XML_DRAFT_SCHEMA_MISSING',
+            error: 'A estrutura de rascunho XML TISS ainda não está disponível no banco.'
+          });
+        }
+        throw draftError;
+      }
+      return sendNoStoreJson(res, {
+        success: true,
+        data: serializeTissXmlDraft(draft),
+        message: 'XML TISS em rascunho gerado para conferência interna.'
+      });
+    } catch (error: any) {
+      console.warn('[TissXmlDraft] create failed:', {
+        code: sanitizeString(error?.code, 40) || null,
+        message: sanitizeTextField(error?.message, 300) || String(error)
+      });
+      return res.status(500).json({ success: false, error: 'Não foi possível gerar o XML TISS em rascunho agora.' });
+    }
+  });
+
+  app.get('/api/tiss/xml-drafts/:draftId', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      const draftId = sanitizeString(req.params.draftId, 120);
+      if (!isUuid(organizationId) || !isUuid(draftId)) return res.status(400).json(payerSafeError(400));
+      const { data, error } = await supabase
+        .from('tiss_xml_drafts')
+        .select(TISS_XML_DRAFT_SELECT)
+        .eq('organization_id', organizationId)
+        .eq('id', draftId)
+        .maybeSingle();
+      if (error) {
+        if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return res.status(404).json(payerSafeError(404));
+        throw error;
+      }
+      if (!data) return res.status(404).json(payerSafeError(404));
+      return sendNoStoreJson(res, { success: true, data: serializeTissXmlDraft(data) });
+    } catch (error: any) {
+      console.warn('[TissXmlDraft] detail failed:', error?.message || String(error));
+      return res.status(500).json({ success: false, error: 'Não foi possível carregar o rascunho XML TISS agora.' });
+    }
+  });
+
+  app.get('/api/tiss/xml-drafts/:draftId/download', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      const draftId = sanitizeString(req.params.draftId, 120);
+      if (!isUuid(organizationId) || !isUuid(draftId)) return res.status(400).json(payerSafeError(400));
+      const { data, error } = await supabase
+        .from('tiss_xml_drafts')
+        .select(TISS_XML_DRAFT_DETAIL_SELECT)
+        .eq('organization_id', organizationId)
+        .eq('id', draftId)
+        .maybeSingle();
+      if (error) {
+        if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return res.status(404).json(payerSafeError(404));
+        throw error;
+      }
+      if (!data) return res.status(404).json(payerSafeError(404));
+      const fileName = buildTissXmlDraftFileName(data);
+      res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+      return res.status(200).send(String(data.xml_content || ''));
+    } catch (error: any) {
+      console.warn('[TissXmlDraft] download failed:', error?.message || String(error));
+      return res.status(500).json({ success: false, error: 'Não foi possível baixar o XML TISS em rascunho agora.' });
     }
   });
 

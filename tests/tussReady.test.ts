@@ -555,14 +555,14 @@ test('resumo mensal classifica pendencias e agrupa por procedimento TUSS e guia'
   assert.equal(summary.byGuideType[0].guideType, 'sp_sadt');
 });
 
-test('script test:tuss-ready existe e modulo nao promete faturamento eletronico completo', () => {
+test('script test:tuss-ready existe e modulo nao promete envio ou faturamento eletronico completo', () => {
   assert.match(packageJson, /"test:tuss-ready": "tsx tests\/tussReady\.test\.ts"/);
   const serverTussSlice = serverCode.slice(
     serverCode.indexOf('const normalizeTussActiveFlag'),
     serverCode.indexOf("app.get('/api/appointments/:appointmentId/billing-context'")
   );
   for (const code of [serverTussSlice, dataServiceCode, payerPanelCode, conferenceCode, closureCode]) {
-    assert.doesNotMatch(code, /XML TISS|lote TISS|remessa|retorno|glosa|recurso|faturamento eletrônico completo/i);
+    assert.doesNotMatch(code, /remessa enviada|enviar remessa|retorno|glosa|recurso|faturamento eletrônico completo|lote transmitido|guia oficial enviada/i);
   }
 });
 
