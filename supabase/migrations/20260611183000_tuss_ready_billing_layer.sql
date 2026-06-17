@@ -336,7 +336,7 @@ alter table public.appointment_billing_items enable row level security;
 
 drop policy if exists appointment_billing_items_select_staff on public.appointment_billing_items;
 create policy appointment_billing_items_select_staff on public.appointment_billing_items
-  for select
+  for select to authenticated
   using (
     organization_id in (
       select clinic_id from public.users
@@ -347,7 +347,7 @@ create policy appointment_billing_items_select_staff on public.appointment_billi
 
 drop policy if exists appointment_billing_items_write_staff on public.appointment_billing_items;
 create policy appointment_billing_items_write_staff on public.appointment_billing_items
-  for all
+  for all to authenticated
   using (
     organization_id in (
       select clinic_id from public.users

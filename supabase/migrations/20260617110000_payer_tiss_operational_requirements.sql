@@ -92,6 +92,7 @@ using (
     select 1 from public.users u
     where u.id = auth.uid()
       and u.role in ('owner', 'admin', 'coordinator')
+      -- Legacy clinics created the clinic row with id = owner user id before clinic_id was consistently populated.
       and (u.clinic_id = patient_payer_authorizations.clinic_id or u.id = patient_payer_authorizations.clinic_id)
   )
 )
@@ -100,6 +101,7 @@ with check (
     select 1 from public.users u
     where u.id = auth.uid()
       and u.role in ('owner', 'admin', 'coordinator')
+      -- Legacy clinics created the clinic row with id = owner user id before clinic_id was consistently populated.
       and (u.clinic_id = patient_payer_authorizations.clinic_id or u.id = patient_payer_authorizations.clinic_id)
   )
 );
@@ -112,6 +114,7 @@ using (
     select 1
     from public.users u
     join public.patients p on p.id = patient_payer_authorizations.patient_id
+     and p.clinic_id = patient_payer_authorizations.clinic_id
     where u.id = auth.uid()
       and u.role in ('therapist', 'professional')
       and u.clinic_id = patient_payer_authorizations.clinic_id
@@ -120,6 +123,8 @@ using (
         or exists (
           select 1 from public.appointments a
           where a.patient_id = p.id
+            and a.organization_id = patient_payer_authorizations.organization_id
+            and a.organization_id = patient_payer_authorizations.clinic_id
             and a.therapist_id = auth.uid()
         )
         or exists (
@@ -129,6 +134,10 @@ using (
             on ap.appointment_id = a.id
            and ap.organization_id = a.organization_id
           where a.patient_id = p.id
+            and a.organization_id = patient_payer_authorizations.organization_id
+            and a.organization_id = patient_payer_authorizations.clinic_id
+            and ap.organization_id = patient_payer_authorizations.organization_id
+            and ap.organization_id = patient_payer_authorizations.clinic_id
             and ap.professional_id = auth.uid()
         )
       )
