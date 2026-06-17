@@ -4,8 +4,8 @@ export type TissPreGuideIssue = {
   code: string;
   field: string;
   message: string;
-  section: 'appointment' | 'beneficiary' | 'provider' | 'payer' | 'professional' | 'procedure' | 'authorization';
-  entity?: 'appointment' | 'beneficiary' | 'provider' | 'payer' | 'professional' | 'procedure' | 'authorization';
+  section: 'appointment' | 'beneficiary' | 'provider' | 'payer' | 'professional' | 'procedure' | 'authorization' | 'signature';
+  entity?: 'appointment' | 'beneficiary' | 'provider' | 'payer' | 'professional' | 'procedure' | 'authorization' | 'signature';
   severity?: 'blocking' | 'warning';
   action?: string;
 };
@@ -25,6 +25,7 @@ export type TissPreGuideValidationInput = {
   professionalProfile?: Record<string, any> | null;
   professional?: Record<string, any> | null;
   authorization?: Record<string, any> | null;
+  signature?: Record<string, any> | null;
 };
 
 export type TissPreGuideValidationResult = {
@@ -208,6 +209,8 @@ const normalizeGuideType = (value: unknown): TissPreGuideValidationResult['guide
   return 'sp_sadt';
 };
 
+const VALID_RESPONSIBLE_SIGNATURE_STATUSES = new Set(['SIGNED', 'ACTIVE', 'COMPLETED', 'CONCLUIDA', 'CONCLUIDO']);
+
 const issueLabelOverrides: Record<string, string> = {
   APPOINTMENT_MISSING: 'Atendimento não encontrado',
   PATIENT_MISSING: 'Paciente não vinculado',
@@ -289,6 +292,7 @@ export function tissPreGuideIssueLabel(code: unknown) {
 export function tissPreGuideIssueAction(code: unknown, section?: TissPreGuideIssue['section']) {
   const normalized = text(code);
   if (normalized === 'PROFESSIONAL_NOT_DEFINED') return 'Vincular profissional executante ao agendamento ou item faturável';
+  if (normalized === 'RESPONSIBLE_SIGNATURE_REQUIRED' || section === 'signature') return 'Coletar assinatura';
   if (normalized.includes('PAYER') || section === 'payer') return 'Corrigir pagador';
   if (normalized.includes('BENEFICIARY') || section === 'beneficiary') return 'Corrigir paciente';
   if (normalized.includes('PROFESSIONAL') || normalized === 'CBO_MISSING' || section === 'professional') return 'Corrigir profissional';
@@ -313,6 +317,7 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
   const professionalProfile = input.professionalProfile || {};
   const professional = input.professional || {};
   const authorization = input.authorization || {};
+  const signature = input.signature || {};
   const errors: TissPreGuideIssue[] = [];
   const warnings: TissPreGuideIssue[] = [];
 
@@ -502,8 +507,12 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
   if (authorizationProcedureTussCode && resolvedTussCode && authorizationProcedureTussCode !== resolvedTussCode) {
     addIssue(errors, 'AUTHORIZATION_PROCEDURE_MISMATCH', 'authorization_procedure_tuss_code', tissPreGuideIssueLabel('AUTHORIZATION_PROCEDURE_MISMATCH'), 'authorization');
   }
-  if (payerProfile.requires_responsible_signature && !Boolean(billingContext.responsible_signature_present || billingContext.signature_present || appointment.responsible_signature_present)) {
-    addIssue(warnings, 'RESPONSIBLE_SIGNATURE_REQUIRED', 'responsible_signature', tissPreGuideIssueLabel('RESPONSIBLE_SIGNATURE_REQUIRED'), 'authorization', 'warning');
+  const signatureStatus = normalizeContext(signature.status || (signature.id ? 'SIGNED' : ''));
+  const hasResponsibleSignature = Boolean(
+    text(signature.id) && (!signatureStatus || VALID_RESPONSIBLE_SIGNATURE_STATUSES.has(signatureStatus))
+  ) || Boolean(billingContext.responsible_signature_present || billingContext.signature_present || appointment.responsible_signature_present);
+  if (payerProfile.requires_responsible_signature && !hasResponsibleSignature) {
+    addIssue(errors, 'RESPONSIBLE_SIGNATURE_REQUIRED', 'responsible_signature', tissPreGuideIssueLabel('RESPONSIBLE_SIGNATURE_REQUIRED'), 'signature');
   }
 
   const providerTradeName = resolveProviderTradeName({
@@ -610,6 +619,15 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
         authorizedQuantity: positiveNumber(authorization.authorized_quantity) ? Number(authorization.authorized_quantity) : null,
         authorizedUnit: text(authorization.authorized_unit) || null,
         procedureTussCode: authorizationProcedureTussCode || null,
+      },
+      signature: {
+        present: hasResponsibleSignature,
+        id: text(signature.id) || null,
+        signedByName: text(signature.signed_by_name || signature.signedByName) || null,
+        signedByRole: text(signature.signed_by_role || signature.signedByRole) || null,
+        signedAt: text(signature.signed_at || signature.signedAt) || null,
+        signatureType: text(signature.signature_type || signature.signatureType) || null,
+        status: signatureStatus || null,
       },
     },
   };

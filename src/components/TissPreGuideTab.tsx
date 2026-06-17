@@ -135,7 +135,7 @@ const issueLabels: Record<string, string> = {
   BENEFICIARY_CARD_MISSING: "Carteirinha",
   BENEFICIARY_CARD_VALIDITY_MISSING: "Validade da carteirinha",
   BENEFICIARY_CARD_EXPIRED: "Carteirinha vencida",
-  RESPONSIBLE_SIGNATURE_REQUIRED: "Assinatura do responsável",
+  RESPONSIBLE_SIGNATURE_REQUIRED: "Assinatura",
 };
 
 function toApiDate(value: string, endOfDay = false) {
@@ -801,6 +801,15 @@ export function TissPreGuideTab({
                     <DetailField label="Validade" value={fieldValue(snapshot.authorization?.authorizationValidUntil || detail.authorizationValidUntil)} />
                     <DetailField label="Procedimento autorizado" value={fieldValue(snapshot.authorization?.procedureTussCode)} />
                   </Section>
+
+                  {snapshot.signature?.present && (
+                    <Section title="Assinatura" icon={ClipboardCheck}>
+                      <DetailField label="Responsável" value={fieldValue(snapshot.signature?.signedByName, "Responsável")} />
+                      <DetailField label="Papel" value={fieldValue(snapshot.signature?.signedByRole)} />
+                      <DetailField label="Data/hora da assinatura" value={formatDate(snapshot.signature?.signedAt)} />
+                      <DetailField label="Tipo de assinatura" value={fieldValue(snapshot.signature?.signatureType)} />
+                    </Section>
+                  )}
 
                   <Section title="Resultado da validação" icon={errors.length > 0 ? AlertTriangle : CheckCircle2}>
                     <div className="sm:col-span-2">

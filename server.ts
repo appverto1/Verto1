@@ -33041,6 +33041,56 @@ async function startServer() {
     return matching || activeRows[0] || null;
   };
 
+  const normalizeSessionSignatureStatus = (value: unknown) => sanitizeString(value || 'SIGNED', 40)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  const isValidResponsibleSessionSignature = (row: any) => {
+    if (!row?.id) return false;
+    return ['SIGNED', 'ACTIVE', 'COMPLETED', 'CONCLUIDA', 'CONCLUIDO'].includes(normalizeSessionSignatureStatus(row?.status));
+  };
+  const fetchResponsibleSignatureForPreGuide = async (params: {
+    organizationId: string;
+    patientId: string;
+    appointmentId: string;
+    abaSessionId?: string | null;
+  }) => {
+    const organizationId = sanitizeString(params.organizationId, 120);
+    const patientId = sanitizeString(params.patientId, 120);
+    const appointmentId = sanitizeString(params.appointmentId, 120);
+    const abaSessionId = sanitizeString(params.abaSessionId, 180);
+    if (!isUuid(organizationId) || !isUuid(patientId)) return null;
+
+    const runSignatureQuery = async (column: 'appointment_id' | 'aba_session_id', value: string) => {
+      if (!value) return null;
+      let query = supabase
+        .from('session_signatures')
+        .select(SESSION_SIGNATURE_SELECT)
+        .eq('organization_id', organizationId)
+        .eq('patient_id', patientId);
+      query = column === 'appointment_id'
+        ? query.eq('appointment_id', value)
+        : query.eq('aba_session_id', value);
+      const { data, error } = await query
+        .order('signed_at', { ascending: false })
+        .limit(10);
+      if (error) {
+        if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return null;
+        throw error;
+      }
+      const rows = Array.isArray(data) ? data : [];
+      return rows.find(isValidResponsibleSessionSignature) || null;
+    };
+
+    const byAppointment = isUuid(appointmentId)
+      ? await runSignatureQuery('appointment_id', appointmentId)
+      : null;
+    if (byAppointment) return byAppointment;
+    return abaSessionId ? await runSignatureQuery('aba_session_id', abaSessionId) : null;
+  };
+
   const buildAndPersistTissPreGuideForAppointment = async (params: {
     organizationId: string;
     appointment: any;
@@ -33181,6 +33231,15 @@ async function startServer() {
       appointment?.scheduled_start ||
       existingPreGuide?.scheduled_start ||
       null;
+    const abaSessionIdForSignature = sanitizeString(
+      appointment?.aba_session_id ||
+        appointment?.abaSessionId ||
+        appointment?.source_payload?.abaSessionId ||
+        appointment?.sourcePayload?.abaSessionId ||
+        billingContext?.aba_session_id ||
+        billingContext?.abaSessionId,
+      180
+    ) || null;
     const patientPayerAuthorization = await fetchPatientPayerAuthorizationForPreGuide({
       organizationId,
       patientId,
@@ -33188,6 +33247,12 @@ async function startServer() {
       scheduledStart: scheduledStartForAuthorization,
       tussCode: sanitizeString(tussCode?.code || billingItem?.tuss_code, 80) || null,
       procedureCode: sanitizeString(service?.internal_code || billingItem?.internal_procedure_code, 80) || null
+    });
+    const responsibleSignature = await fetchResponsibleSignatureForPreGuide({
+      organizationId,
+      patientId,
+      appointmentId,
+      abaSessionId: abaSessionIdForSignature
     });
     const validation = validateTissPreGuide({
       appointment,
@@ -33203,7 +33268,8 @@ async function startServer() {
       payerProfile,
       professionalProfile,
       professional,
-      authorization: patientPayerAuthorization
+      authorization: patientPayerAuthorization,
+      signature: responsibleSignature
     });
     const snapshot = validation.snapshot || {};
     const procedure = snapshot.procedure || {};
@@ -33231,6 +33297,9 @@ async function startServer() {
       professionalProfileId: sanitizeString(professionalProfile?.id, 120) || null,
       authorizationProfileFound: Boolean(authorizationSnapshot?.id),
       authorizationProfileId: sanitizeString(authorizationSnapshot?.id, 120) || null,
+      responsibleSignatureFound: Boolean(responsibleSignature?.id),
+      responsibleSignatureId: sanitizeString(responsibleSignature?.id, 120) || null,
+      usedAbaSessionSignatureFallback: Boolean(responsibleSignature?.id && !responsibleSignature?.appointment_id && abaSessionIdForSignature),
       scheduledStartFound: Boolean(scheduledStart),
       usedAppointmentProfessionalId: isUuid(linkedAppointmentProfessionalId),
       usedAppointmentTherapistId: isUuid(appointmentTherapistId),

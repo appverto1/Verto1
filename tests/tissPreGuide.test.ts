@@ -376,6 +376,48 @@ test('autorizacao ativa valida e autorizacao vencida ou de outro TUSS gera pende
   assert.ok(expired.errorCodes.includes('AUTHORIZATION_PROCEDURE_MISMATCH'));
 });
 
+test('assinatura do responsavel valida conforme exigencia do pagador', () => {
+  const notRequired = validateTissPreGuide({
+    ...validInput,
+    payerProfile: { ...validInput.payerProfile, requires_responsible_signature: false },
+    signature: null,
+  });
+  assert.ok(!notRequired.errorCodes.includes('RESPONSIBLE_SIGNATURE_REQUIRED'));
+
+  const missing = validateTissPreGuide({
+    ...validInput,
+    payerProfile: { ...validInput.payerProfile, requires_responsible_signature: true },
+    signature: null,
+  });
+  assert.equal(missing.status, 'pending_data');
+  assert.ok(missing.errorCodes.includes('RESPONSIBLE_SIGNATURE_REQUIRED'));
+  const signatureIssue = missing.errors.find((item) => item.code === 'RESPONSIBLE_SIGNATURE_REQUIRED');
+  assert.equal(signatureIssue?.entity, 'signature');
+  assert.equal(signatureIssue?.section, 'signature');
+  assert.equal(signatureIssue?.severity, 'blocking');
+  assert.equal(signatureIssue?.action, 'Coletar assinatura');
+  assert.ok(!missing.warningCodes.includes('RESPONSIBLE_SIGNATURE_REQUIRED'));
+
+  const signed = validateTissPreGuide({
+    ...validInput,
+    payerProfile: { ...validInput.payerProfile, requires_responsible_signature: true },
+    signature: {
+      id: 'signature-1',
+      status: 'SIGNED',
+      signed_by_name: 'Maria Responsavel',
+      signed_by_role: 'responsible',
+      signed_at: '2026-06-15T15:10:00.000Z',
+      signature_type: 'DIGITAL_ACCEPTANCE',
+    },
+  });
+  assert.equal(signed.status, 'valid');
+  assert.ok(!signed.errorCodes.includes('RESPONSIBLE_SIGNATURE_REQUIRED'));
+  assert.equal(signed.snapshot.signature.present, true);
+  assert.equal(signed.snapshot.signature.signedByName, 'Maria Responsavel');
+  assert.equal(signed.snapshot.signature.signedByRole, 'responsible');
+  assert.equal(signed.snapshot.signature.signatureType, 'DIGITAL_ACCEPTANCE');
+});
+
 test('lote considera elegível somente convênio com payer_id real', () => {
   const eligible = evaluateTissPreGuideEligibility({
     appointment: validInput.appointment,
@@ -562,6 +604,10 @@ test('revalidação reconstrói snapshots a partir dos cadastros mestres atuais'
     serverCode.indexOf('const fetchTissPreGuideProfile'),
     serverCode.indexOf('const buildAndPersistTissPreGuideForAppointment')
   );
+  const signatureReader = serverCode.slice(
+    serverCode.indexOf('const fetchResponsibleSignatureForPreGuide'),
+    serverCode.indexOf('const buildAndPersistTissPreGuideForAppointment')
+  );
   const revalidationHandler = serverCode.slice(
     serverCode.indexOf('const handleTissPreGuideRevalidation'),
     serverCode.indexOf("app.get('/api/admin/tiss/provider-profile'")
@@ -591,6 +637,11 @@ test('revalidação reconstrói snapshots a partir dos cadastros mestres atuais'
   assert.match(builder, /payer_tiss_profile_id:\s*isUuid\(sanitizeString\(payerProfile\?\.id/);
   assert.match(builder, /professional_billing_profile_id:\s*isUuid\(sanitizeString\(professionalProfile\?\.id/);
   assert.match(builder, /snapshot_data:\s*snapshot/);
+  assert.match(builder, /fetchResponsibleSignatureForPreGuide/);
+  assert.match(signatureReader, /\.from\('session_signatures'\)[\s\S]*?\.select\(SESSION_SIGNATURE_SELECT\)/);
+  assert.match(signatureReader, /\.eq\('organization_id', organizationId\)[\s\S]*?\.eq\('patient_id', patientId\)/);
+  assert.match(builder, /signature:\s*responsibleSignature/);
+  assert.match(builder, /responsibleSignatureFound:/);
   assert.match(builder, /providerProfileFound:/);
   assert.match(builder, /payerProfileFound:/);
   assert.match(builder, /professionalProfileFound:/);
@@ -762,6 +813,9 @@ test('frontend oferece cards, paginação, detalhe sob demanda e nenhuma ação 
   assert.match(preGuideUiCode, /Editar Dados da clínica/);
   assert.match(preGuideUiCode, /Editar perfil TISS do pagador/);
   assert.match(preGuideUiCode, /Editar perfil faturável do profissional/);
+  assert.match(preGuideUiCode, /RESPONSIBLE_SIGNATURE_REQUIRED:\s*"Assinatura"/);
+  assert.match(preGuideUiCode, /<Section title="Assinatura" icon=\{ClipboardCheck\}>/);
+  assert.match(preGuideUiCode, /Data\/hora da assinatura/);
   assert.match(preGuideUiCode, /Pré-guia revalidada com dados globais atualizados/);
   assert.match(preGuideUiCode, /setDetail\(result\.data\)/);
   assert.match(preGuideUiCode, /Salvar cadastro global e revalidar pré-guia atual/);
