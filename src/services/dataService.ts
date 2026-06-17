@@ -2995,6 +2995,26 @@ export const dataService = {
     }
   },
 
+  async validateTissXmlDraft(draftId: string) {
+    try {
+      const response = await fetchClinical(`/api/tiss/xml-drafts/${encodeURIComponent(String(draftId))}/validate`, {
+        method: 'POST',
+        cache: 'no-store',
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'validateTissXmlDraft',
+        operation: 'write',
+        table: 'tiss_xml_drafts',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeNoStoreJson(response, 'A validação do XML TISS em rascunho voltou do cache. Tente novamente.');
+    } catch {
+      return { success: false, error: 'Não foi possível validar o XML TISS em rascunho agora.' };
+    }
+  },
+
   async downloadTissXmlDraft(draftId: string) {
     try {
       const response = await fetchClinical(`/api/tiss/xml-drafts/${encodeURIComponent(String(draftId))}/download`, {

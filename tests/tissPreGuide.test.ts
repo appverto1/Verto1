@@ -6,8 +6,12 @@ import {
   validateTissPreGuide,
 } from '../src/services/tissPreGuideEngine';
 import {
+  buildTissSpSadtDraftPayload,
   generateTissXmlDraft,
 } from '../src/services/tissXmlDraftGenerator';
+import {
+  validateTissXmlDraft,
+} from '../src/services/tissXmlDraftValidator';
 
 const root = process.cwd();
 const serverCode = readFileSync(join(root, 'server.ts'), 'utf8');
@@ -23,6 +27,7 @@ const payerOperationalMigrationCode = readFileSync(join(root, 'supabase/migratio
 const authorizationCycleMigrationCode = readFileSync(join(root, 'supabase/migrations/20260617153000_patient_payer_authorizations_operational_cycle.sql'), 'utf8');
 const xmlDraftMigrationCode = readFileSync(join(root, 'supabase/migrations/20260617190000_tiss_xml_drafts.sql'), 'utf8');
 const xmlDraftGeneratorCode = readFileSync(join(root, 'src/services/tissXmlDraftGenerator.ts'), 'utf8');
+const xmlDraftValidatorCode = readFileSync(join(root, 'src/services/tissXmlDraftValidator.ts'), 'utf8');
 const packageJson = readFileSync(join(root, 'package.json'), 'utf8');
 
 const tests: Array<{ name: string; fn: () => void }> = [];
@@ -164,8 +169,30 @@ test('atendimento de convênio com dados mínimos produz Pré-guia válida', () 
   assert.equal(result.snapshot.professional.cboCode, '000000');
 });
 
-test('pre-guia válida gera XML TISS em rascunho interno', () => {
+test('pre-guia válida gera XML TISS-like SP/SADT em rascunho interno', () => {
   const validation = validateTissPreGuide(validInput);
+  const payload = buildTissSpSadtDraftPayload({
+    payerId: 'payer-1',
+    competenceMonth: '2026-06-01',
+    guideType: validation.guideType,
+    tissVersion: validation.snapshot.payer.tissVersion,
+    generatedAt: '2026-06-17T12:00:00.000Z',
+    preGuides: [{
+      id: 'pre-guide-1',
+      appointmentId: 'appointment-1',
+      patientName: 'Pedro Henrique',
+      professionalName: 'Terapeuta Mateus',
+      payerId: 'payer-1',
+      payerName: 'Amil',
+      status: validation.status,
+      validationErrorCodes: validation.errorCodes,
+      scheduledStart: '2026-06-15T15:00:00.000Z',
+      guideType: validation.guideType,
+      quantity: 1,
+      totalAmountCents: 12000,
+      snapshot: validation.snapshot,
+    }],
+  });
   const generated = generateTissXmlDraft({
     payerId: 'payer-1',
     competenceMonth: '2026-06-01',
@@ -189,12 +216,92 @@ test('pre-guia válida gera XML TISS em rascunho interno', () => {
     }],
   });
   if (!generated.ok) assert.fail('XML draft should be generated for a valid pre-guide');
+  assert.equal(payload.draftFormat, 'tiss_sp_sadt_draft');
+  assert.equal(payload.tissVersion, '4.01.00');
+  assert.equal(payload.guides[0].procedure.unit.code, 'sessoes');
+  assert.equal(payload.guides[0].procedure.unit.label, 'sessões');
   assert.match(generated.xml, /^<\?xml version="1\.0" encoding="UTF-8"\?>/);
-  assert.match(generated.xml, /<vertoTissXmlDraft/);
+  assert.match(generated.xml, /<tissSpSadtDraft/);
+  assert.doesNotMatch(generated.xml, /<vertoTissXmlDraft/);
+  assert.doesNotMatch(generated.xml, /version="12345678"/);
+  assert.match(generated.xml, /version="4\.01\.00"/);
   assert.match(generated.xml, /Rascunho interno para conferência\. Não enviado à operadora\./);
+  assert.match(generated.xml, /<spSadtGuides>/);
   assert.match(generated.xml, /<tussCode>CONFIGURADO-PELA-CLINICA<\/tussCode>/);
+  assert.match(generated.xml, /<totalAmount>120\.00<\/totalAmount>/);
+  assert.match(generated.xml, /<currency>BRL<\/currency>/);
+  assert.match(generated.xml, /<code>sessoes<\/code>/);
+  assert.match(generated.xml, /<label>sessões<\/label>/);
   assert.equal(generated.guideCount, 1);
   assert.equal(generated.totalAmountCents, 12000);
+  assert.equal(generated.draftFormat, 'tiss_sp_sadt_draft');
+  assert.equal(generated.technicalValidation.status, 'warning');
+  assert.ok(generated.validationSummary.warnings.some((warning) => warning.code === 'TISS_VERSION_INVALID_FALLBACK_USED'));
+  assert.ok(generated.technicalValidation.warnings.some((warning) => warning.code === 'TISS_XSD_VALIDATION_NOT_CONFIGURED'));
+});
+
+test('validador técnico de XML TISS rascunho aceita novo formato e preserva legado', () => {
+  const validation = validateTissPreGuide({
+    ...validInput,
+    payerProfile: {
+      ...validInput.payerProfile,
+      tiss_version: '4.01.00',
+    },
+    tussCode: {
+      ...validInput.tussCode,
+      code: '10101012',
+      description: 'Terapia individual',
+      version: '4.01.00',
+    },
+    mapping: {
+      ...validInput.mapping,
+      tuss_code: '10101012',
+    },
+    authorization: {
+      ...validInput.authorization,
+      procedure_tuss_code: '10101012',
+    },
+  });
+  const generated = generateTissXmlDraft({
+    payerId: 'payer-1',
+    competenceMonth: '2026-06-01',
+    guideType: validation.guideType,
+    tissVersion: '4.01.00',
+    generatedAt: '2026-06-17T12:00:00.000Z',
+    preGuides: [{
+      id: 'pre-guide-valid-xml',
+      appointmentId: 'appointment-1',
+      patientName: 'Pedro Henrique',
+      professionalName: 'Terapeuta Mateus',
+      payerId: 'payer-1',
+      payerName: 'Amil',
+      status: validation.status,
+      validationErrorCodes: validation.errorCodes,
+      scheduledStart: '2026-06-15T15:00:00.000Z',
+      guideType: validation.guideType,
+      quantity: 1,
+      totalAmountCents: 12000,
+      snapshot: validation.snapshot,
+    }],
+  });
+  if (!generated.ok) assert.fail('XML draft should be generated for a valid pre-guide');
+  const technical = validateTissXmlDraft(generated.xml);
+  assert.equal(technical.status, 'warning');
+  assert.deepEqual(technical.errors, []);
+  assert.ok(technical.warnings.some((warning) => warning.code === 'TISS_XSD_VALIDATION_NOT_CONFIGURED'));
+
+  const legacy = validateTissXmlDraft('<?xml version="1.0" encoding="UTF-8"?><vertoTissXmlDraft><guideCount>1</guideCount></vertoTissXmlDraft>');
+  assert.equal(legacy.status, 'warning');
+  assert.ok(legacy.warnings.some((warning) => warning.code === 'VERTO_INTERNAL_LEGACY_DRAFT'));
+});
+
+test('validador técnico de XML TISS rascunho bloqueia estrutura incompleta', () => {
+  assert.equal(validateTissXmlDraft('<tissSpSadtDraft version="4.01.00"><spSadtGuides></spSadtGuides></tissSpSadtDraft>').status, 'invalid');
+  assert.ok(validateTissXmlDraft('<tissSpSadtDraft version="12345678"><spSadtGuides></spSadtGuides></tissSpSadtDraft>').errors.some((issue) => issue.code === 'TISS_VERSION_INVALID'));
+  assert.ok(validateTissXmlDraft('<tissSpSadtDraft version="4.01.00"><spSadtGuides><spSadtGuide><procedure></procedure></spSadtGuide></spSadtGuides></tissSpSadtDraft>').errors.some((issue) => issue.code === 'BENEFICIARY_MISSING'));
+  assert.ok(validateTissXmlDraft('<tissSpSadtDraft version="4.01.00"><batch><guideCount>2</guideCount><totalAmount>0.00</totalAmount></batch><provider><documentNumber>1</documentNumber></provider><payer><ansRegistration>1</ansRegistration></payer><spSadtGuides><spSadtGuide><beneficiary>ok</beneficiary><professional>ok</professional><authorization>ok</authorization><procedure><tussCode></tussCode><quantity>1</quantity></procedure><values><totalAmount>10.00</totalAmount></values></spSadtGuide></spSadtGuides></tissSpSadtDraft>').errors.some((issue) => issue.code === 'GUIDE_COUNT_MISMATCH'));
+  assert.ok(validateTissXmlDraft('<tissSpSadtDraft version="4.01.00"><batch><guideCount>1</guideCount><totalAmount>20.00</totalAmount></batch><provider><documentNumber>1</documentNumber></provider><payer><ansRegistration>1</ansRegistration></payer><spSadtGuides><spSadtGuide><beneficiary>ok</beneficiary><professional>ok</professional><authorization>ok</authorization><procedure><tussCode>10101012</tussCode><quantity>1</quantity></procedure><values><totalAmount>10.00</totalAmount></values></spSadtGuide></spSadtGuides></tissSpSadtDraft>').errors.some((issue) => issue.code === 'TOTAL_AMOUNT_MISMATCH'));
+  assert.ok(validateTissXmlDraft('<tissSpSadtDraft><open></tissSpSadtDraft>').errors.some((issue) => issue.code === 'XML_MALFORMED'));
 });
 
 test('pre-guia pendente não gera XML TISS em rascunho', () => {
@@ -767,10 +874,12 @@ test('backend gera e baixa XML TISS apenas como rascunho interno', () => {
     serverCode.indexOf("app.get('/api/tiss/xml-drafts/:draftId/download'")
   );
   assert.match(serverCode, /import \{\s*generateTissXmlDraft\s*\} from '\.\/src\/services\/tissXmlDraftGenerator'/);
+  assert.match(serverCode, /import \{\s*validateTissXmlDraft\s*\} from '\.\/src\/services\/tissXmlDraftValidator'/);
   assert.match(createRoute, /requireRoles\('coordinator', 'admin', 'owner'\)/);
   assert.match(createRoute, /appointment_tiss_pre_guides/);
   assert.match(createRoute, /\.eq\('status', 'valid'\)/);
   assert.match(createRoute, /generateTissXmlDraft/);
+  assert.match(createRoute, /draft_format:\s*generated\.draftFormat/);
   assert.match(createRoute, /\.update\(\{ status: 'superseded'/);
   assert.match(createRoute, /\.from\('tiss_xml_drafts'\)[\s\S]*?\.insert\(payload\)/);
   assert.match(createRoute, /XML TISS em rascunho gerado para conferência interna/);
@@ -778,6 +887,11 @@ test('backend gera e baixa XML TISS apenas como rascunho interno', () => {
   assert.doesNotMatch(listRoute, /xml_content/);
   assert.match(detailRoute, /TISS_XML_DRAFT_DETAIL_SELECT/);
   assert.match(detailRoute, /serializeTissXmlDraft\(data, true\)/);
+  assert.match(serverCode, /app\.post\('\/api\/tiss\/xml-drafts\/:draftId\/validate'/);
+  assert.match(serverCode, /technicalValidation = validateTissXmlDraft\(xmlContent\)/);
+  assert.match(serverCode, /validation_summary:\s*nextValidationSummary/);
+  assert.match(serverCode, /technicalValidationStatus/);
+  assert.match(serverCode, /draftFormat/);
   assert.match(downloadRoute, /Content-Type', 'application\/xml; charset=utf-8'/);
   assert.match(downloadRoute, /Content-Disposition/);
   assert.doesNotMatch(serverCode, /Remessa enviada|Faturamento TISS concluído|Guia oficial enviada|Lote transmitido/i);
@@ -1033,6 +1147,19 @@ test('frontend separa Pré-guias e Rascunhos XML com preview interno', () => {
   assert.match(preGuideUiCode, /Ver rascunho/);
   assert.match(preGuideUiCode, /Ir para Rascunhos XML/);
   assert.match(preGuideUiCode, /Ver XML/);
+  assert.match(preGuideUiCode, /Formato/);
+  assert.match(preGuideUiCode, /TISS\/SP-SADT rascunho/);
+  assert.match(preGuideUiCode, /Interno Verto/);
+  assert.match(preGuideUiCode, /Validação/);
+  assert.match(preGuideUiCode, /Não validado/);
+  assert.match(preGuideUiCode, /Válido/);
+  assert.match(preGuideUiCode, /Com avisos/);
+  assert.match(preGuideUiCode, /Inválido/);
+  assert.match(preGuideUiCode, /Validar XML/);
+  assert.match(preGuideUiCode, /Ver validação/);
+  assert.match(preGuideUiCode, /Validação do XML rascunho/);
+  assert.match(preGuideUiCode, /Validação XSD oficial/);
+  assert.match(preGuideUiCode, /A validação contra XSD oficial ainda não está configurada/);
   assert.match(preGuideUiCode, /Copiar XML/);
   assert.match(preGuideUiCode, /Rascunho interno\. Não enviado à operadora\./);
   assert.match(preGuideUiCode, /Este XML é um rascunho para conferência interna\. Ainda não houve envio à operadora\./);
@@ -1094,6 +1221,7 @@ test('data service usa operações explícitas e o pacote expõe suíte dedicada
     'getTissXmlDrafts',
     'createTissXmlDraft',
     'getTissXmlDraft',
+    'validateTissXmlDraft',
     'downloadTissXmlDraft',
     'getClinicTissProfile',
     'updateClinicTissProfile',

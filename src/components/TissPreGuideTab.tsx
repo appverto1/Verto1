@@ -96,8 +96,32 @@ type TissXmlDraftRow = {
   downloadUrl?: string | null;
   xmlContent?: string | null;
   xmlHash?: string | null;
+  draftFormat?: string | null;
+  technicalValidationStatus?: string | null;
+  technicalValidation?: TissXmlDraftValidationSummary | null;
+  validatedAt?: string | null;
   validationSummary?: Record<string, any>;
   metadata?: Record<string, any>;
+};
+
+type TissXmlDraftValidationIssue = {
+  code?: string;
+  message?: string;
+  severity?: string;
+  path?: string;
+  preGuideId?: string | null;
+  entity?: string;
+};
+
+type TissXmlDraftValidationSummary = {
+  status?: string;
+  validatedAt?: string;
+  errors?: TissXmlDraftValidationIssue[];
+  warnings?: TissXmlDraftValidationIssue[];
+  xsdValidation?: {
+    status?: string;
+    message?: string;
+  };
 };
 
 type TissPreGuideTabProps = {
@@ -297,6 +321,28 @@ function hasAuthorizationSnapshot(row?: TissPreGuideRow | null) {
   );
 }
 
+function xmlDraftFormatLabel(value?: string | null) {
+  const normalized = String(value || "").trim();
+  if (normalized === "tiss_sp_sadt_draft") return "TISS/SP-SADT rascunho";
+  return "Interno Verto";
+}
+
+function resolveXmlDraftValidation(draft?: TissXmlDraftRow | null): TissXmlDraftValidationSummary {
+  const validation = draft?.technicalValidation || draft?.validationSummary?.technicalValidation || {};
+  return {
+    ...validation,
+    status: draft?.technicalValidationStatus || validation.status || "not_validated",
+  };
+}
+
+function xmlValidationMeta(status?: string | null) {
+  const normalized = String(status || "not_validated").trim();
+  if (normalized === "valid") return { label: "Válido", className: "bg-emerald-50 text-emerald-700 ring-emerald-100" };
+  if (normalized === "warning") return { label: "Com avisos", className: "bg-amber-50 text-amber-700 ring-amber-100" };
+  if (normalized === "invalid") return { label: "Inválido", className: "bg-rose-50 text-rose-700 ring-rose-100" };
+  return { label: "Não validado", className: "bg-slate-100 text-slate-700 ring-slate-200" };
+}
+
 function Section({
   title,
   icon: Icon,
@@ -393,6 +439,8 @@ export function TissPreGuideTab({
   const [activePanel, setActivePanel] = useState<"preGuides" | "xmlDrafts">("preGuides");
   const [xmlDraftDetail, setXmlDraftDetail] = useState<TissXmlDraftRow | null>(null);
   const [xmlDraftDetailLoading, setXmlDraftDetailLoading] = useState(false);
+  const [xmlDraftValidatingId, setXmlDraftValidatingId] = useState("");
+  const [xmlValidationDetail, setXmlValidationDetail] = useState<TissXmlDraftRow | null>(null);
   const [createdXmlDraft, setCreatedXmlDraft] = useState<TissXmlDraftRow | null>(null);
   const [highlightedXmlDraftId, setHighlightedXmlDraftId] = useState("");
 
@@ -636,6 +684,31 @@ export function TissPreGuideTab({
       setXmlDraftDetail(result.data);
     } finally {
       setXmlDraftDetailLoading(false);
+    }
+  };
+
+  const openXmlValidationDetail = (draft: TissXmlDraftRow) => {
+    setXmlValidationDetail(draft);
+  };
+
+  const validateXmlDraft = async (draft: TissXmlDraftRow) => {
+    if (!draft.id || xmlDraftValidatingId) return;
+    setXmlDraftValidatingId(draft.id);
+    setError("");
+    setMessage("");
+    try {
+      const result = await dataService.validateTissXmlDraft(draft.id);
+      if (!result?.success || !result.data) {
+        setError(result?.error || "Não foi possível validar o XML TISS em rascunho agora.");
+        return;
+      }
+      const updatedDraft = result.data as TissXmlDraftRow;
+      setXmlDrafts((current) => current.map((item) => item.id === updatedDraft.id ? { ...item, ...updatedDraft } : item));
+      if (xmlDraftDetail?.id === updatedDraft.id) setXmlDraftDetail((current) => current ? { ...current, ...updatedDraft } : updatedDraft);
+      setXmlValidationDetail(updatedDraft);
+      setMessage(result.message || "Validação técnica do XML rascunho atualizada.");
+    } finally {
+      setXmlDraftValidatingId("");
     }
   };
 
@@ -1290,16 +1363,18 @@ export function TissPreGuideTab({
           </button>
         </div>
         <div className="overflow-auto">
-          <table className="min-w-[1180px] divide-y divide-slate-200 text-sm">
+          <table className="min-w-[1420px] divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-50 text-left text-xs font-semibold uppercase text-slate-500">
               <tr>
                 <th className="px-4 py-3">Geração</th>
                 <th className="px-4 py-3">Pagador</th>
                 <th className="px-4 py-3">Competência</th>
                 <th className="px-4 py-3">Tipo</th>
+                <th className="px-4 py-3">Formato</th>
                 <th className="px-4 py-3">Versão TISS</th>
                 <th className="px-4 py-3">Pré-guias</th>
                 <th className="px-4 py-3">Valor</th>
+                <th className="px-4 py-3">Validação</th>
                 <th className="px-4 py-3">Status</th>
                 <th className="px-4 py-3">Gerado por</th>
                 <th className="px-4 py-3 text-right">Ações</th>
@@ -1307,21 +1382,26 @@ export function TissPreGuideTab({
             </thead>
             <tbody className="divide-y divide-slate-100">
               {xmlDraftsLoading ? (
-                <tr><td colSpan={10} className="px-4 py-8 text-center text-slate-500"><Loader2 size={18} className="mx-auto mb-2 animate-spin" />Carregando rascunhos XML</td></tr>
+                <tr><td colSpan={12} className="px-4 py-8 text-center text-slate-500"><Loader2 size={18} className="mx-auto mb-2 animate-spin" />Carregando rascunhos XML</td></tr>
               ) : xmlDrafts.length === 0 ? (
-                <tr><td colSpan={10} className="px-4 py-8 text-center text-slate-500">Nenhum XML TISS em rascunho gerado para esta competência.</td></tr>
+                <tr><td colSpan={12} className="px-4 py-8 text-center text-slate-500">Nenhum XML TISS em rascunho gerado para esta competência.</td></tr>
               ) : xmlDrafts.map((draft) => {
                 const status = String(draft.status || "draft");
                 const statusLabel = status === "superseded" ? "Substituído" : status === "cancelled" ? "Cancelado" : "Rascunho";
+                const validation = resolveXmlDraftValidation(draft);
+                const validationMeta = xmlValidationMeta(validation.status);
+                const validating = xmlDraftValidatingId === draft.id;
                 return (
                   <tr key={draft.id || draft.xmlHash} className={`${highlightedXmlDraftId && draft.id === highlightedXmlDraftId ? "bg-indigo-50/60" : "hover:bg-slate-50"}`}>
                     <td className="px-4 py-3 text-slate-600">{formatDate(draft.generatedAt)}</td>
                     <td className="px-4 py-3 text-slate-700">{fieldValue(draft.payerName, "Pagador")}</td>
                     <td className="px-4 py-3 text-slate-600">{String(draft.competenceMonth || "").slice(0, 7) || "Não informada"}</td>
                     <td className="px-4 py-3 text-slate-600">{fieldValue(draft.guideType)}</td>
+                    <td className="px-4 py-3 text-slate-600">{xmlDraftFormatLabel(draft.draftFormat || draft.metadata?.draft_format || draft.validationSummary?.draftFormat)}</td>
                     <td className="px-4 py-3 text-slate-600">{fieldValue(draft.tissVersion)}</td>
                     <td className="px-4 py-3 text-slate-600">{Number(draft.guideCount || 0)}</td>
                     <td className="px-4 py-3 font-medium text-slate-800">{formatCurrency(draft.totalAmountCents)}</td>
+                    <td className="px-4 py-3"><span className={`rounded-full px-2 py-1 text-xs font-medium ring-1 ${validationMeta.className}`}>{validationMeta.label}</span></td>
                     <td className="px-4 py-3"><span className="rounded-full bg-indigo-50 px-2 py-1 text-xs text-indigo-700 ring-1 ring-indigo-100">{statusLabel}</span></td>
                     <td className="px-4 py-3 text-slate-600">{draft.generatedBy ? "Usuário autorizado" : "Não informado"}</td>
                     <td className="px-4 py-3 text-right">
@@ -1333,6 +1413,14 @@ export function TissPreGuideTab({
                         <button type="button" onClick={() => void downloadXmlDraft(draft)} className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
                           <Download size={15} />
                           Baixar XML
+                        </button>
+                        <button type="button" onClick={() => void validateXmlDraft(draft)} disabled={validating} className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-60">
+                          {validating ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />}
+                          Validar XML
+                        </button>
+                        <button type="button" onClick={() => openXmlValidationDetail(draft)} className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
+                          <AlertTriangle size={15} />
+                          Ver validação
                         </button>
                       </div>
                     </td>
@@ -1423,6 +1511,8 @@ export function TissPreGuideTab({
                 <DetailField label="Competência" value={String(xmlDraftDetail.competenceMonth || "").slice(0, 7) || "Não informada"} />
                 <DetailField label="Pré-guias" value={String(Number(xmlDraftDetail.guideCount || 0))} />
                 <DetailField label="Valor total" value={formatCurrency(xmlDraftDetail.totalAmountCents)} />
+                <DetailField label="Formato" value={xmlDraftFormatLabel(xmlDraftDetail.draftFormat || xmlDraftDetail.metadata?.draft_format || xmlDraftDetail.validationSummary?.draftFormat)} />
+                <DetailField label="Validação interna" value={xmlValidationMeta(resolveXmlDraftValidation(xmlDraftDetail).status).label} />
               </div>
               <div className="rounded-md border border-slate-200 bg-slate-950 text-slate-100">
                 {xmlDraftDetailLoading ? (
@@ -1449,6 +1539,90 @@ export function TissPreGuideTab({
           </div>
         </div>
       )}
+
+      {xmlValidationDetail && (() => {
+        const validation = resolveXmlDraftValidation(xmlValidationDetail);
+        const meta = xmlValidationMeta(validation.status);
+        const errorsList = Array.isArray(validation.errors) ? validation.errors : [];
+        const warningsList = Array.isArray(validation.warnings) ? validation.warnings : [];
+        const xsdMessage = validation.xsdValidation?.message || "A validação contra XSD oficial ainda não está configurada.";
+        return (
+          <div className="fixed inset-0 z-[156] flex items-end justify-center bg-slate-950/45 p-4 sm:items-center" role="dialog" aria-modal="true" aria-label="Validação do XML rascunho">
+            <div className="max-h-[92vh] w-full max-w-3xl overflow-hidden rounded-lg bg-white shadow-xl">
+              <header className="flex items-start justify-between border-b border-slate-200 px-5 py-4">
+                <div>
+                  <h2 className="text-lg font-semibold text-slate-900">Validação do XML rascunho</h2>
+                  <p className="mt-1 text-sm text-slate-500">Validação técnica interna. Ainda não houve envio à operadora.</p>
+                </div>
+                <button type="button" onClick={() => setXmlValidationDetail(null)} className="rounded-md p-2 text-slate-500 hover:bg-slate-100" aria-label="Fechar validação do XML"><X size={18} /></button>
+              </header>
+
+              <div className="max-h-[70vh] space-y-4 overflow-y-auto px-5 py-4">
+                <div className="rounded-md border border-indigo-100 bg-indigo-50 px-3 py-2 text-sm text-indigo-800">
+                  {validation.status === "invalid"
+                    ? "Corrija os erros abaixo antes de considerar este XML apto para próximas etapas."
+                    : validation.status === "warning"
+                      ? "O XML rascunho está bem formado, mas possui avisos para revisão."
+                      : validation.status === "valid"
+                        ? "O XML rascunho passou na validação técnica interna."
+                        : "Este XML rascunho ainda não foi validado nesta etapa."}
+                </div>
+
+                <div className="grid gap-3 text-sm sm:grid-cols-2">
+                  <DetailField label="Status geral" value={<span className={`inline-flex rounded-full px-2 py-1 text-xs font-medium ring-1 ${meta.className}`}>{meta.label}</span>} />
+                  <DetailField label="Formato do draft" value={xmlDraftFormatLabel(xmlValidationDetail.draftFormat || xmlValidationDetail.metadata?.draft_format || xmlValidationDetail.validationSummary?.draftFormat)} />
+                  <DetailField label="Versão TISS" value={fieldValue(xmlValidationDetail.tissVersion)} />
+                  <DetailField label="Validado em" value={validation.validatedAt ? formatDate(validation.validatedAt) : "Não validado"} />
+                  <DetailField label="Validação interna" value={meta.label} />
+                  <DetailField label="Validação XSD oficial" value={xsdMessage} />
+                </div>
+
+                <section className="rounded-md border border-rose-100 bg-rose-50/60 px-3 py-3">
+                  <div className="text-sm font-semibold text-rose-800">Erros bloqueantes</div>
+                  {errorsList.length === 0 ? (
+                    <div className="mt-2 text-sm text-rose-700">Nenhum erro bloqueante encontrado.</div>
+                  ) : (
+                    <ul className="mt-2 space-y-2 text-sm text-rose-800">
+                      {errorsList.map((item, index) => (
+                        <li key={`${item.code}-${index}`} className="rounded-md bg-white/70 px-3 py-2">
+                          <div className="font-medium">{item.message || issueLabel(String(item.code || ""))}</div>
+                          {item.code && <div className="mt-1 text-xs text-rose-600">{item.code}</div>}
+                          {item.path && <div className="mt-1 text-xs text-rose-600">{item.path}</div>}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </section>
+
+                <section className="rounded-md border border-amber-100 bg-amber-50/60 px-3 py-3">
+                  <div className="text-sm font-semibold text-amber-800">Avisos</div>
+                  {warningsList.length === 0 ? (
+                    <div className="mt-2 text-sm text-amber-700">Nenhum aviso técnico encontrado.</div>
+                  ) : (
+                    <ul className="mt-2 space-y-2 text-sm text-amber-800">
+                      {warningsList.map((item, index) => (
+                        <li key={`${item.code}-${index}`} className="rounded-md bg-white/70 px-3 py-2">
+                          <div className="font-medium">{item.message || item.code || "Aviso técnico"}</div>
+                          {item.code && <div className="mt-1 text-xs text-amber-600">{item.code}</div>}
+                          {item.path && <div className="mt-1 text-xs text-amber-600">{item.path}</div>}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </section>
+              </div>
+
+              <footer className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 px-5 py-4">
+                <button type="button" onClick={() => void validateXmlDraft(xmlValidationDetail)} disabled={Boolean(xmlDraftValidatingId)} className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-60">
+                  {xmlDraftValidatingId ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />}
+                  Validar novamente
+                </button>
+                <button type="button" onClick={() => setXmlValidationDetail(null)} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700">Fechar</button>
+              </footer>
+            </div>
+          </div>
+        );
+      })()}
 
       {detail && (
         <div className="fixed inset-0 z-[140] flex items-end justify-center bg-slate-950/45 p-4 sm:items-center" role="dialog" aria-modal="true" aria-label="Pré-guia TISS">

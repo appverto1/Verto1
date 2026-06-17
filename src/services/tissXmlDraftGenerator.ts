@@ -1,6 +1,10 @@
+import { validateTissXmlDraft } from "./tissXmlDraftValidator";
+
 type TissXmlDraftIssue = {
   code: string;
   message: string;
+  severity?: "blocking" | "warning";
+  path?: string;
   preGuideId?: string | null;
   appointmentId?: string | null;
   entity?: string;
@@ -15,8 +19,34 @@ type GenerateTissXmlDraftInput = {
   generatedAt?: string;
 };
 
+export type TissSpSadtDraftPayload = {
+  draftMode: true;
+  draftFormat: "tiss_sp_sadt_draft";
+  tissVersion: string;
+  guideType: "sp_sadt" | string;
+  competenceMonth: string;
+  generatedAt: string;
+  batch: {
+    draftBatchId: string;
+    guideCount: number;
+    totalAmount: string;
+    totalAmountCents: number;
+    currency: "BRL";
+  };
+  provider: Record<string, any>;
+  payer: Record<string, any>;
+  guides: Array<Record<string, any>>;
+  warnings: TissXmlDraftIssue[];
+};
+
 const text = (value: unknown) => String(value ?? "").trim();
 const amount = (value: unknown) => Number(value || 0) || 0;
+const onlyDigits = (value: unknown) => text(value).replace(/\D/g, "");
+const TISS_VERSION_PATTERN = /^\d+\.\d{2}\.\d{2}$/;
+const TEST_VERSION_PATTERN = /^(\d)\1{4,}$|^12345678$/;
+const runtimeEnv = typeof globalThis !== "undefined" ? (globalThis as any)?.process?.env : {};
+const DEFAULT_TISS_VERSION =
+  text(runtimeEnv?.DEFAULT_TISS_VERSION) || "4.01.00";
 
 export function escapeXml(value: unknown) {
   return text(value)
@@ -49,14 +79,67 @@ function addIssue(issues: TissXmlDraftIssue[], preGuide: any, code: string, mess
   issues.push({
     code,
     message,
+    severity: "blocking",
     entity,
     preGuideId: text(preGuide?.id) || null,
     appointmentId: text(preGuide?.appointmentId || preGuide?.appointment_id) || null,
   });
 }
 
+function addWarning(warnings: TissXmlDraftIssue[], code: string, message: string, entity = "draft", path?: string, preGuide?: any) {
+  warnings.push({
+    code,
+    message,
+    severity: "warning",
+    entity,
+    path,
+    preGuideId: preGuide ? text(preGuide?.id) || null : null,
+    appointmentId: preGuide ? text(preGuide?.appointmentId || preGuide?.appointment_id) || null : null,
+  });
+}
+
 function hasAny(value: unknown) {
   return text(value).length > 0;
+}
+
+function normalizeTissVersion(value: unknown, warnings: TissXmlDraftIssue[]) {
+  const version = text(value);
+  if (TISS_VERSION_PATTERN.test(version) && !TEST_VERSION_PATTERN.test(version)) return version;
+  addWarning(
+    warnings,
+    "TISS_VERSION_INVALID_FALLBACK_USED",
+    "Versão TISS inválida ou não configurada; foi usado o fallback configurado.",
+    "payer",
+    "tissVersion"
+  );
+  return TISS_VERSION_PATTERN.test(DEFAULT_TISS_VERSION) ? DEFAULT_TISS_VERSION : "4.01.00";
+}
+
+function normalizeUnit(value: unknown) {
+  const unit = text(value).toLowerCase();
+  if (["session", "sessions", "sessao", "sessão", "sessoes", "sessões"].includes(unit)) {
+    return { code: "sessoes", label: "sessões" };
+  }
+  return { code: unit || "unidade", label: unit || "unidade" };
+}
+
+function decimalAmount(cents: unknown) {
+  return (amount(cents) / 100).toFixed(2);
+}
+
+function dateOnly(value: unknown) {
+  const raw = text(value);
+  return raw ? raw.slice(0, 10) : "";
+}
+
+function looksLikeTestTussCode(value: unknown) {
+  const normalized = text(value).toUpperCase();
+  return normalized.includes("TESTE") || normalized.includes("CONFIGURADO-PELA-CLINICA");
+}
+
+function looksInvalidCbo(value: unknown) {
+  const digits = onlyDigits(value);
+  return Boolean(text(value)) && digits.length !== 6;
 }
 
 function validatePreGuideForXml(preGuide: any): TissXmlDraftIssue[] {
@@ -107,18 +190,205 @@ export function validateTissXmlDraftInput(input: GenerateTissXmlDraftInput) {
   const issues = preGuides.flatMap(validatePreGuideForXml);
   const payerIds = new Set(preGuides.map((row) => text(row?.payerId || row?.payer_id || row?.snapshot?.payer?.id)).filter(Boolean));
   if (preGuides.length === 0) {
-    issues.push({ code: "TISS_XML_DRAFT_EMPTY", message: "Nenhuma Pré-guia válida encontrada para gerar XML em rascunho.", entity: "preGuide" });
+    issues.push({ code: "TISS_XML_DRAFT_EMPTY", message: "Nenhuma Pré-guia válida encontrada para gerar XML em rascunho.", entity: "preGuide", severity: "blocking" });
   }
   if (payerIds.size > 1) {
-    issues.push({ code: "TISS_XML_DRAFT_MULTIPLE_PAYERS", message: "Gere um rascunho XML por pagador.", entity: "payer" });
+    issues.push({ code: "TISS_XML_DRAFT_MULTIPLE_PAYERS", message: "Gere um rascunho XML por pagador.", entity: "payer", severity: "blocking" });
   }
   if (input.payerId && payerIds.size === 1 && !payerIds.has(input.payerId)) {
-    issues.push({ code: "TISS_XML_DRAFT_PAYER_MISMATCH", message: "As Pré-guias selecionadas não pertencem ao pagador informado.", entity: "payer" });
+    issues.push({ code: "TISS_XML_DRAFT_PAYER_MISMATCH", message: "As Pré-guias selecionadas não pertencem ao pagador informado.", entity: "payer", severity: "blocking" });
   }
   return {
     ok: issues.length === 0,
     issues,
   };
+}
+
+export function buildTissSpSadtDraftPayload(input: GenerateTissXmlDraftInput): TissSpSadtDraftPayload {
+  const preGuides = Array.isArray(input.preGuides) ? input.preGuides : [];
+  const first = preGuides[0] || {};
+  const snapshot = first.snapshot || {};
+  const provider = snapshot.provider || {};
+  const payer = snapshot.payer || {};
+  const warnings: TissXmlDraftIssue[] = [];
+  const tissVersion = normalizeTissVersion(input.tissVersion || payer.tissVersion || first.tissVersion, warnings);
+  const guideType = text(input.guideType || first.guideType || payer.guideType) || "sp_sadt";
+  const generatedAt = input.generatedAt || new Date().toISOString();
+  const guides = preGuides.map((row, index) => {
+    const rowSnapshot = row.snapshot || {};
+    const beneficiary = rowSnapshot.beneficiary || {};
+    const professional = rowSnapshot.professional || {};
+    const procedure = rowSnapshot.procedure || {};
+    const authorization = rowSnapshot.authorization || {};
+    const quantity = amount(procedure.quantity || row.quantity || 1);
+    const totalAmountCents = amount(procedure.totalAmountCents || row.totalAmountCents);
+    const unit = normalizeUnit(procedure.unit || row.unit);
+    const tussCode = text(procedure.tussCode || row.tussCode);
+    const cboCode = text(professional.cboCode);
+    if (looksLikeTestTussCode(tussCode)) {
+      addWarning(warnings, "TUSS_CODE_LOOKS_LIKE_TEST_DATA", "Código TUSS parece ser dado de teste.", "procedure", `guides.${index}.procedure.tussCode`, row);
+    }
+    if (looksInvalidCbo(cboCode)) {
+      addWarning(warnings, "CBO_CODE_LOOKS_INVALID", "CBO informado não parece seguir formato esperado.", "professional", `guides.${index}.professional.cboCode`, row);
+    }
+    return {
+      preGuideId: text(row.id),
+      appointmentId: text(row.appointmentId || row.appointment_id),
+      scheduledStart: text(row.scheduledStart || row.scheduled_start || rowSnapshot.appointment?.scheduledStart),
+      guideNumber: text(authorization.guideNumber || row.guideNumber),
+      authorizationCode: text(authorization.authorizationCode || row.authorizationCode),
+      authorizationValidFrom: dateOnly(authorization.authorizationValidFrom),
+      authorizationValidUntil: dateOnly(authorization.authorizationValidUntil || row.authorizationValidUntil),
+      beneficiary: {
+        name: text(beneficiary.name || row.patientName),
+        cardNumber: onlyDigits(beneficiary.cardNumber || row.beneficiaryCardNumber),
+        cardValidUntil: dateOnly(beneficiary.cardValidUntil),
+        documentNumber: onlyDigits(beneficiary.documentNumber),
+        planCategory: text(beneficiary.planCategory),
+      },
+      professional: {
+        name: text(professional.name || row.professionalName),
+        councilType: text(professional.councilType),
+        councilNumber: text(professional.councilNumber),
+        councilState: text(professional.councilState),
+        cboCode,
+      },
+      procedure: {
+        internalCode: text(procedure.internalCode || row.internalProcedureCode),
+        name: text(procedure.name || row.internalProcedureName),
+        tussCode,
+        tussDescription: text(procedure.tussDescription || row.tussDescription),
+        quantity,
+        unit,
+      },
+      values: {
+        totalAmount: decimalAmount(totalAmountCents),
+        totalAmountCents,
+        currency: "BRL",
+      },
+      validationMetadata: {
+        preGuideStatus: text(row.status),
+        lastValidatedAt: text(row.lastValidatedAt || row.last_validated_at),
+      },
+    };
+  });
+  const totalAmountCents = guides.reduce((sum, guide) => sum + amount(guide.values.totalAmountCents), 0);
+  return {
+    draftMode: true,
+    draftFormat: "tiss_sp_sadt_draft",
+    tissVersion,
+    guideType,
+    competenceMonth: text(input.competenceMonth),
+    generatedAt,
+    batch: {
+      draftBatchId: `draft-${text(input.payerId).slice(0, 8) || "payer"}-${text(input.competenceMonth).slice(0, 7) || "period"}`,
+      guideCount: guides.length,
+      totalAmount: decimalAmount(totalAmountCents),
+      totalAmountCents,
+      currency: "BRL",
+    },
+    provider: {
+      legalName: text(provider.legalName || provider.tradeName),
+      tradeName: text(provider.tradeName),
+      documentNumber: onlyDigits(provider.documentNumber),
+      cnesCode: onlyDigits(provider.cnesCode),
+      providerCode: text(provider.providerCode),
+    },
+    payer: {
+      name: text(payer.name || first.payerName),
+      ansRegistration: onlyDigits(payer.ansRegistration),
+      operatorCode: text(payer.operatorCode),
+    },
+    guides,
+    warnings,
+  };
+}
+
+function writeObject(lines: string[], name: string, value: any, indent: number) {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    lines.push(open(name, indent));
+    for (const [key, nested] of Object.entries(value)) {
+      writeObject(lines, key, nested, indent + 2);
+    }
+    lines.push(close(name, indent));
+    return;
+  }
+  lines.push(tag(name, value, indent));
+}
+
+export function renderTissSpSadtDraftXml(payload: TissSpSadtDraftPayload) {
+  const lines: string[] = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    open("tissSpSadtDraft", 0, {
+      draftFormat: payload.draftFormat,
+      version: payload.tissVersion,
+      guideType: payload.guideType,
+    }),
+    tag("draftMode", "true", 2),
+    tag("warning", "Rascunho interno para conferência. Não enviado à operadora.", 2),
+    tag("competenceMonth", payload.competenceMonth, 2),
+    tag("generatedAt", payload.generatedAt, 2),
+    open("batch", 2),
+    tag("draftBatchId", payload.batch.draftBatchId, 4),
+    tag("guideCount", payload.batch.guideCount, 4),
+    tag("totalAmount", payload.batch.totalAmount, 4),
+    tag("totalAmountCents", payload.batch.totalAmountCents, 4),
+    tag("currency", payload.batch.currency, 4),
+    close("batch", 2),
+    open("provider", 2),
+    tag("legalName", payload.provider.legalName, 4),
+    tag("tradeName", payload.provider.tradeName, 4),
+    tag("documentNumber", payload.provider.documentNumber, 4),
+    tag("cnesCode", payload.provider.cnesCode, 4),
+    tag("providerCode", payload.provider.providerCode, 4),
+    close("provider", 2),
+    open("payer", 2),
+    tag("name", payload.payer.name, 4),
+    tag("ansRegistration", payload.payer.ansRegistration, 4),
+    tag("operatorCode", payload.payer.operatorCode, 4),
+    close("payer", 2),
+    open("spSadtGuides", 2),
+  ];
+
+  for (const guide of payload.guides) {
+    lines.push(open("spSadtGuide", 4, { preGuideId: guide.preGuideId, appointmentId: guide.appointmentId }));
+    lines.push(tag("scheduledStart", guide.scheduledStart, 6));
+    lines.push(open("authorization", 6));
+    lines.push(tag("guideNumber", guide.guideNumber, 8));
+    lines.push(tag("authorizationCode", guide.authorizationCode, 8));
+    lines.push(tag("validFrom", guide.authorizationValidFrom, 8));
+    lines.push(tag("validUntil", guide.authorizationValidUntil, 8));
+    lines.push(close("authorization", 6));
+    writeObject(lines, "beneficiary", guide.beneficiary, 6);
+    writeObject(lines, "professional", guide.professional, 6);
+    lines.push(open("procedure", 6));
+    lines.push(tag("internalCode", guide.procedure.internalCode, 8));
+    lines.push(tag("name", guide.procedure.name, 8));
+    lines.push(tag("tussCode", guide.procedure.tussCode, 8));
+    lines.push(tag("tussDescription", guide.procedure.tussDescription, 8));
+    lines.push(tag("quantity", guide.procedure.quantity, 8));
+    lines.push(open("unit", 8));
+    lines.push(tag("code", guide.procedure.unit.code, 10));
+    lines.push(tag("label", guide.procedure.unit.label, 10));
+    lines.push(close("unit", 8));
+    lines.push(close("procedure", 6));
+    writeObject(lines, "values", guide.values, 6);
+    writeObject(lines, "validationMetadata", guide.validationMetadata, 6);
+    lines.push(close("spSadtGuide", 4));
+  }
+
+  lines.push(close("spSadtGuides", 2));
+  if (payload.warnings.length > 0) {
+    lines.push(open("technicalWarnings", 2));
+    for (const warning of payload.warnings) {
+      lines.push(open("warning", 4, { code: warning.code, entity: warning.entity, path: warning.path }));
+      lines.push(tag("message", warning.message, 6));
+      lines.push(close("warning", 4));
+    }
+    lines.push(close("technicalWarnings", 2));
+  }
+  lines.push(close("tissSpSadtDraft"));
+  return lines.join("\n");
 }
 
 export function generateTissXmlDraft(input: GenerateTissXmlDraftInput) {
@@ -137,99 +407,34 @@ export function generateTissXmlDraft(input: GenerateTissXmlDraftInput) {
     };
   }
 
-  const preGuides = input.preGuides;
-  const first = preGuides[0] || {};
-  const snapshot = first.snapshot || {};
-  const provider = snapshot.provider || {};
-  const payer = snapshot.payer || {};
-  const tissVersion = text(input.tissVersion || payer.tissVersion || first.tissVersion) || "draft";
-  const guideType = text(input.guideType || first.guideType || payer.guideType) || "sp_sadt";
-  const generatedAt = input.generatedAt || new Date().toISOString();
-  const totalAmountCents = preGuides.reduce((sum, row) => sum + amount(row?.totalAmountCents || row?.snapshot?.procedure?.totalAmountCents), 0);
-
-  const lines: string[] = [
-    '<?xml version="1.0" encoding="UTF-8"?>',
-    open("vertoTissXmlDraft", 0, { version: tissVersion, guideType }),
-    tag("draftMode", "true", 2),
-    tag("warning", "Rascunho interno para conferência. Não enviado à operadora.", 2),
-    tag("competenceMonth", input.competenceMonth, 2),
-    tag("generatedAt", generatedAt, 2),
-    open("provider", 2),
-    tag("legalName", provider.legalName || provider.tradeName, 4),
-    tag("tradeName", provider.tradeName, 4),
-    tag("documentNumber", provider.documentNumber, 4),
-    tag("cnesCode", provider.cnesCode, 4),
-    tag("providerCode", provider.providerCode, 4),
-    close("provider", 2),
-    open("payer", 2),
-    tag("name", payer.name || first.payerName, 4),
-    tag("ansRegistration", payer.ansRegistration, 4),
-    tag("operatorCode", payer.operatorCode, 4),
-    close("payer", 2),
-    open("guides", 2),
-  ];
-
-  for (const row of preGuides) {
-    const rowSnapshot = row.snapshot || {};
-    const beneficiary = rowSnapshot.beneficiary || {};
-    const professional = rowSnapshot.professional || {};
-    const procedure = rowSnapshot.procedure || {};
-    const authorization = rowSnapshot.authorization || {};
-    lines.push(open("guide", 4, { preGuideId: row.id, appointmentId: row.appointmentId || row.appointment_id }));
-    lines.push(tag("scheduledStart", row.scheduledStart || row.scheduled_start || rowSnapshot.appointment?.scheduledStart, 6));
-    lines.push(open("beneficiary", 6));
-    lines.push(tag("name", beneficiary.name || row.patientName, 8));
-    lines.push(tag("cardNumber", beneficiary.cardNumber || row.beneficiaryCardNumber, 8));
-    lines.push(tag("cardValidUntil", beneficiary.cardValidUntil, 8));
-    lines.push(close("beneficiary", 6));
-    lines.push(open("professional", 6));
-    lines.push(tag("name", professional.name || row.professionalName, 8));
-    lines.push(tag("councilType", professional.councilType, 8));
-    lines.push(tag("councilNumber", professional.councilNumber, 8));
-    lines.push(tag("councilState", professional.councilState, 8));
-    lines.push(tag("cboCode", professional.cboCode, 8));
-    lines.push(close("professional", 6));
-    lines.push(open("authorization", 6));
-    lines.push(tag("guideNumber", authorization.guideNumber || row.guideNumber, 8));
-    lines.push(tag("authorizationCode", authorization.authorizationCode || row.authorizationCode, 8));
-    lines.push(tag("validFrom", authorization.authorizationValidFrom, 8));
-    lines.push(tag("validUntil", authorization.authorizationValidUntil || row.authorizationValidUntil, 8));
-    lines.push(close("authorization", 6));
-    lines.push(open("procedure", 6));
-    lines.push(tag("internalCode", procedure.internalCode || row.internalProcedureCode, 8));
-    lines.push(tag("name", procedure.name || row.internalProcedureName, 8));
-    lines.push(tag("tussCode", procedure.tussCode || row.tussCode, 8));
-    lines.push(tag("tussDescription", procedure.tussDescription || row.tussDescription, 8));
-    lines.push(tag("quantity", procedure.quantity || row.quantity, 8));
-    lines.push(tag("unit", procedure.unit || row.unit, 8));
-    lines.push(tag("totalAmountCents", procedure.totalAmountCents || row.totalAmountCents, 8));
-    lines.push(close("procedure", 6));
-    lines.push(close("guide", 4));
-  }
-
-  lines.push(close("guides", 2));
-  lines.push(open("summary", 2));
-  lines.push(tag("guideCount", preGuides.length, 4));
-  lines.push(tag("totalAmountCents", totalAmountCents, 4));
-  lines.push(close("summary", 2));
-  lines.push(close("vertoTissXmlDraft"));
+  const payload = buildTissSpSadtDraftPayload(input);
+  const xml = renderTissSpSadtDraftXml(payload);
+  const technicalValidation = validateTissXmlDraft(xml);
 
   return {
     ok: true as const,
-    xml: lines.join("\n"),
+    xml,
+    payload,
     validationSummary: {
       status: "draft",
-      guideCount: preGuides.length,
-      totalAmountCents,
-      tissVersion,
-      guideType,
+      draftFormat: payload.draftFormat,
+      guideCount: payload.batch.guideCount,
+      totalAmountCents: payload.batch.totalAmountCents,
+      totalAmount: payload.batch.totalAmount,
+      currency: payload.batch.currency,
+      tissVersion: payload.tissVersion,
+      guideType: payload.guideType,
       issues: [],
+      warnings: payload.warnings,
+      technicalValidation,
       warning: "Rascunho interno para conferência. Não enviado à operadora.",
     },
-    preGuideIds: preGuides.map((row) => text(row.id)).filter(Boolean),
-    totalAmountCents,
-    guideCount: preGuides.length,
-    tissVersion,
-    guideType,
+    preGuideIds: payload.guides.map((guide) => text(guide.preGuideId)).filter(Boolean),
+    totalAmountCents: payload.batch.totalAmountCents,
+    guideCount: payload.batch.guideCount,
+    tissVersion: payload.tissVersion,
+    guideType: payload.guideType,
+    draftFormat: payload.draftFormat,
+    technicalValidation,
   };
 }

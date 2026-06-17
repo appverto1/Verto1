@@ -120,6 +120,9 @@ import {
   generateTissXmlDraft
 } from './src/services/tissXmlDraftGenerator';
 import {
+  validateTissXmlDraft
+} from './src/services/tissXmlDraftValidator';
+import {
   buildPatientPortabilitySnapshot,
   normalizePatientPortabilityScope
 } from './src/utils/patientPortability';
@@ -33002,6 +33005,16 @@ async function startServer() {
   const serializeTissXmlDraft = (row: any, includeXml = false) => {
     const validationSummary = row?.validation_summary && typeof row.validation_summary === 'object' ? row.validation_summary : {};
     const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+    const technicalValidation = validationSummary?.technicalValidation && typeof validationSummary.technicalValidation === 'object'
+      ? validationSummary.technicalValidation
+      : {};
+    const draftFormat = sanitizeString(
+      metadata.draft_format ||
+      metadata.draftFormat ||
+      validationSummary.draftFormat ||
+      (String(row?.xml_content || '').includes('<tissSpSadtDraft') ? 'tiss_sp_sadt_draft' : ''),
+      80
+    ) || 'verto_internal';
     const serialized: any = {
       id: sanitizeString(row?.id, 120) || null,
       payerId: sanitizeString(row?.payer_id, 120) || null,
@@ -33014,6 +33027,10 @@ async function startServer() {
       generatedBy: sanitizeString(row?.generated_by, 120) || null,
       generatedAt: row?.generated_at || null,
       validationSummary,
+      technicalValidation,
+      technicalValidationStatus: sanitizeString(technicalValidation.status, 40) || 'not_validated',
+      validatedAt: technicalValidation.validatedAt || null,
+      draftFormat,
       metadata,
       guideCount: Number(validationSummary.guideCount || metadata.guideCount || 0) || 0,
       totalAmountCents: Number(validationSummary.totalAmountCents || metadata.totalAmountCents || 0) || 0,
@@ -34411,6 +34428,7 @@ async function startServer() {
       const xmlHash = crypto.createHash('sha256').update(generated.xml, 'utf8').digest('hex');
       const payerName = sanitizeString(preGuides[0]?.payerName || preGuides[0]?.snapshot?.payer?.name, 180) || 'Pagador';
       const metadata = {
+        draft_format: generated.draftFormat || 'tiss_sp_sadt_draft',
         payerName,
         guideCount: generated.guideCount,
         totalAmountCents: generated.totalAmountCents,
@@ -34491,6 +34509,78 @@ async function startServer() {
     } catch (error: any) {
       console.warn('[TissXmlDraft] detail failed:', error?.message || String(error));
       return res.status(500).json({ success: false, error: 'Não foi possível carregar o rascunho XML TISS agora.' });
+    }
+  });
+
+  app.post('/api/tiss/xml-drafts/:draftId/validate', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      const draftId = sanitizeString(req.params.draftId, 120);
+      if (!isUuid(organizationId) || !isUuid(draftId)) return res.status(400).json(payerSafeError(400));
+      const { data, error } = await supabase
+        .from('tiss_xml_drafts')
+        .select(TISS_XML_DRAFT_DETAIL_SELECT)
+        .eq('organization_id', organizationId)
+        .eq('id', draftId)
+        .maybeSingle();
+      if (error) {
+        if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return res.status(404).json(payerSafeError(404));
+        throw error;
+      }
+      if (!data) return res.status(404).json(payerSafeError(404));
+
+      const xmlContent = String(data.xml_content || '');
+      const validationSummary = data?.validation_summary && typeof data.validation_summary === 'object' ? data.validation_summary : {};
+      const metadata = data?.metadata && typeof data.metadata === 'object' ? data.metadata : {};
+      const draftFormat = sanitizeString(
+        metadata.draft_format ||
+        metadata.draftFormat ||
+        validationSummary.draftFormat ||
+        (xmlContent.includes('<tissSpSadtDraft') ? 'tiss_sp_sadt_draft' : 'verto_internal'),
+        80
+      ) || 'verto_internal';
+      const technicalValidation = validateTissXmlDraft(xmlContent);
+      const nextValidationSummary = {
+        ...validationSummary,
+        draftFormat,
+        technicalValidation
+      };
+      const nextMetadata = {
+        ...metadata,
+        draft_format: draftFormat
+      };
+      const { data: updated, error: updateError } = await supabase
+        .from('tiss_xml_drafts')
+        .update({
+          validation_summary: nextValidationSummary,
+          metadata: nextMetadata,
+          updated_at: new Date().toISOString()
+        })
+        .eq('organization_id', organizationId)
+        .eq('id', draftId)
+        .select(TISS_XML_DRAFT_SELECT)
+        .maybeSingle();
+      if (updateError) {
+        if (hasMissingFinancialSchema(updateError) || isMissingRelationError(updateError)) return res.status(404).json(payerSafeError(404));
+        throw updateError;
+      }
+      if (!updated) return res.status(404).json(payerSafeError(404));
+      return sendNoStoreJson(res, {
+        success: true,
+        data: serializeTissXmlDraft(updated),
+        validation: technicalValidation,
+        message: technicalValidation.status === 'invalid'
+          ? 'O XML rascunho possui erros técnicos para revisão.'
+          : technicalValidation.status === 'warning'
+            ? 'O XML rascunho está bem formado, mas possui avisos para revisão.'
+            : 'O XML rascunho passou na validação técnica interna.'
+      });
+    } catch (error: any) {
+      console.warn('[TissXmlDraft] validate failed:', {
+        code: sanitizeString(error?.code, 40) || null,
+        message: sanitizeTextField(error?.message, 300) || String(error)
+      });
+      return res.status(500).json({ success: false, error: 'Não foi possível validar o XML TISS em rascunho agora.' });
     }
   });
 
