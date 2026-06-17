@@ -6,7 +6,9 @@ import {
   ChevronLeft,
   ChevronRight,
   ClipboardCheck,
+  Copy,
   Download,
+  Eye,
   FileSearch,
   FileText,
   Loader2,
@@ -92,6 +94,8 @@ type TissXmlDraftRow = {
   generatedAt?: string | null;
   generatedBy?: string | null;
   downloadUrl?: string | null;
+  xmlContent?: string | null;
+  xmlHash?: string | null;
   validationSummary?: Record<string, any>;
   metadata?: Record<string, any>;
 };
@@ -386,6 +390,11 @@ export function TissPreGuideTab({
   const [xmlDraftGenerating, setXmlDraftGenerating] = useState(false);
   const [xmlDraftModalOpen, setXmlDraftModalOpen] = useState(false);
   const [xmlDraftPayerId, setXmlDraftPayerId] = useState("");
+  const [activePanel, setActivePanel] = useState<"preGuides" | "xmlDrafts">("preGuides");
+  const [xmlDraftDetail, setXmlDraftDetail] = useState<TissXmlDraftRow | null>(null);
+  const [xmlDraftDetailLoading, setXmlDraftDetailLoading] = useState(false);
+  const [createdXmlDraft, setCreatedXmlDraft] = useState<TissXmlDraftRow | null>(null);
+  const [highlightedXmlDraftId, setHighlightedXmlDraftId] = useState("");
 
   const cards = useMemo(() => [
     { key: "valid" as const, label: "Pré-guias válidas", value: Number(kpis.valid || 0), tone: "text-emerald-700" },
@@ -421,6 +430,12 @@ export function TissPreGuideTab({
   );
   const selectedXmlTotalAmount = selectedXmlRows.reduce((sum, row) => sum + Number(row.totalAmountCents || row.snapshot?.procedure?.totalAmountCents || 0), 0);
   const selectedXmlTissVersion = String(selectedXmlRows[0]?.snapshot?.payer?.tissVersion || selectedXmlRows[0]?.tissVersion || "configurada no pagador").trim();
+  const latestXmlDraft = xmlDrafts[0] || null;
+  const xmlDraftGuideCount = xmlDrafts.reduce((sum, draft) => sum + Number(draft.guideCount || 0), 0);
+  const xmlDraftTotalAmount = xmlDrafts.reduce((sum, draft) => sum + Number(draft.totalAmountCents || 0), 0);
+  const createdXmlDraftInList = createdXmlDraft?.id
+    ? xmlDrafts.find((draft) => draft.id === createdXmlDraft.id) || createdXmlDraft
+    : null;
 
   const loadRows = useCallback(async (overrides: { page?: number; quickFilter?: QuickFilter | "" } = {}) => {
     setLoading(true);
@@ -596,10 +611,31 @@ export function TissPreGuideTab({
         return;
       }
       setXmlDraftModalOpen(false);
+      const draft = result.data || null;
+      setCreatedXmlDraft(draft);
+      setHighlightedXmlDraftId(String(draft?.id || ""));
+      setActivePanel("xmlDrafts");
       setMessage(result.message || "XML TISS em rascunho gerado para conferência interna.");
       await loadXmlDrafts();
     } finally {
       setXmlDraftGenerating(false);
+    }
+  };
+
+  const openXmlDraftDetail = async (draft: TissXmlDraftRow) => {
+    if (!draft.id) return;
+    setXmlDraftDetail(draft);
+    setXmlDraftDetailLoading(true);
+    setError("");
+    try {
+      const result = await dataService.getTissXmlDraft(draft.id);
+      if (!result?.success || !result.data) {
+        setError(result?.error || "Não foi possível abrir o XML TISS em rascunho agora.");
+        return;
+      }
+      setXmlDraftDetail(result.data);
+    } finally {
+      setXmlDraftDetailLoading(false);
     }
   };
 
@@ -618,6 +654,20 @@ export function TissPreGuideTab({
     link.click();
     link.remove();
     URL.revokeObjectURL(url);
+  };
+
+  const copyXmlDraftContent = async () => {
+    const xml = String(xmlDraftDetail?.xmlContent || "");
+    if (!xml) {
+      setError("Não há conteúdo XML carregado para copiar.");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(xml);
+      setMessage("XML em rascunho copiado para a área de transferência.");
+    } catch {
+      setError("Não foi possível copiar o XML automaticamente. Selecione o conteúdo e copie manualmente.");
+    }
   };
 
   const openProfileEditor = async (kind: ProfileEditorKind) => {
@@ -915,6 +965,49 @@ export function TissPreGuideTab({
 
   return (
     <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-white p-1 shadow-sm">
+        {[
+          { key: "preGuides" as const, label: "Pré-guias" },
+          { key: "xmlDrafts" as const, label: "Rascunhos XML" },
+        ].map((item) => {
+          const active = activePanel === item.key;
+          return (
+            <button
+              key={item.key}
+              type="button"
+              onClick={() => setActivePanel(item.key)}
+              className={`rounded-md px-3 py-2 text-sm font-medium transition ${
+                active ? "bg-slate-900 text-white shadow-sm" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+              }`}
+            >
+              {item.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {error && <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div>}
+      {!error && message && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+          <span>{message}</span>
+          {createdXmlDraftInList && (
+            <div className="flex flex-wrap items-center gap-2">
+              <button type="button" onClick={() => void openXmlDraftDetail(createdXmlDraftInList)} className="rounded-md border border-emerald-200 bg-white px-3 py-1.5 text-sm font-medium text-emerald-800 hover:bg-emerald-100">
+                Ver rascunho
+              </button>
+              <button type="button" onClick={() => void downloadXmlDraft(createdXmlDraftInList)} className="rounded-md border border-emerald-200 bg-white px-3 py-1.5 text-sm font-medium text-emerald-800 hover:bg-emerald-100">
+                Baixar XML
+              </button>
+              <button type="button" onClick={() => setActivePanel("xmlDrafts")} className="rounded-md border border-emerald-200 bg-white px-3 py-1.5 text-sm font-medium text-emerald-800 hover:bg-emerald-100">
+                Ir para Rascunhos XML
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {activePanel === "preGuides" && (
+        <>
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-indigo-100 bg-indigo-50/60 px-3 py-3">
         <div>
           <div className="text-sm font-semibold text-slate-800">Materialização action-driven</div>
@@ -998,25 +1091,23 @@ export function TissPreGuideTab({
           }}
         />
       )}
-      {error && <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div>}
-      {!error && message && <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{message}</div>}
 
-      <section className="rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
+      <section className="rounded-md border border-slate-200 bg-white px-3 py-2 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
               <FileText size={16} className="text-indigo-600" />
-              XML TISS em rascunho
+              Gerar XML rascunho com pré-guias prontas
             </div>
-            <p className="mt-1 text-sm text-slate-500">
-              Gere uma prévia XML para conferência interna apenas com Pré-guias TISS prontas. Este rascunho não é enviado à operadora.
+            <p className="mt-1 text-xs text-slate-500">
+              O rascunho gerado aparecerá na subaba Rascunhos XML. Ele não será enviado à operadora.
             </p>
           </div>
           <button
             type="button"
             onClick={openXmlDraftModal}
             disabled={Number(kpis.valid || 0) <= 0 || loading}
-            className="inline-flex items-center gap-2 rounded-md bg-indigo-700 px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-md border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-800 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <FileText size={16} />
             Gerar XML rascunho
@@ -1145,6 +1236,48 @@ export function TissPreGuideTab({
         </div>
       </section>
 
+        </>
+      )}
+
+      {activePanel === "xmlDrafts" && (
+        <section className="space-y-3">
+          <div className="flex flex-wrap items-start justify-between gap-3 rounded-md border border-indigo-100 bg-indigo-50/60 px-3 py-3">
+            <div>
+              <div className="text-sm font-semibold text-slate-800">Rascunhos XML TISS</div>
+              <div className="mt-0.5 text-xs text-slate-600">
+                XMLs gerados apenas para conferência interna. Nenhum rascunho foi enviado à operadora.
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={openXmlDraftModal}
+              disabled={Number(kpis.valid || 0) <= 0 || loading}
+              className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <FileText size={16} />
+              Gerar novo rascunho
+            </button>
+          </div>
+
+          <section className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="rounded-md border border-slate-200 bg-white px-3 py-2 shadow-sm">
+              <div className="text-xs text-slate-500">Rascunhos gerados</div>
+              <div className="mt-1 text-lg font-semibold text-indigo-700">{xmlDrafts.length}</div>
+            </div>
+            <div className="rounded-md border border-slate-200 bg-white px-3 py-2 shadow-sm">
+              <div className="text-xs text-slate-500">Último rascunho</div>
+              <div className="mt-1 text-sm font-semibold text-slate-800">{latestXmlDraft ? formatDate(latestXmlDraft.generatedAt) : "Nenhum"}</div>
+            </div>
+            <div className="rounded-md border border-slate-200 bg-white px-3 py-2 shadow-sm">
+              <div className="text-xs text-slate-500">Pré-guias incluídas</div>
+              <div className="mt-1 text-lg font-semibold text-slate-800">{xmlDraftGuideCount}</div>
+            </div>
+            <div className="rounded-md border border-slate-200 bg-white px-3 py-2 shadow-sm">
+              <div className="text-xs text-slate-500">Valor total em rascunhos</div>
+              <div className="mt-1 text-lg font-semibold text-slate-800">{formatCurrency(xmlDraftTotalAmount)}</div>
+            </div>
+          </section>
+
       <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
           <div>
@@ -1157,41 +1290,51 @@ export function TissPreGuideTab({
           </button>
         </div>
         <div className="overflow-auto">
-          <table className="min-w-[980px] divide-y divide-slate-200 text-sm">
+          <table className="min-w-[1180px] divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-50 text-left text-xs font-semibold uppercase text-slate-500">
               <tr>
                 <th className="px-4 py-3">Geração</th>
                 <th className="px-4 py-3">Pagador</th>
                 <th className="px-4 py-3">Competência</th>
+                <th className="px-4 py-3">Tipo</th>
+                <th className="px-4 py-3">Versão TISS</th>
                 <th className="px-4 py-3">Pré-guias</th>
                 <th className="px-4 py-3">Valor</th>
-                <th className="px-4 py-3">Versão</th>
                 <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3">Gerado por</th>
                 <th className="px-4 py-3 text-right">Ações</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {xmlDraftsLoading ? (
-                <tr><td colSpan={8} className="px-4 py-8 text-center text-slate-500"><Loader2 size={18} className="mx-auto mb-2 animate-spin" />Carregando rascunhos XML</td></tr>
+                <tr><td colSpan={10} className="px-4 py-8 text-center text-slate-500"><Loader2 size={18} className="mx-auto mb-2 animate-spin" />Carregando rascunhos XML</td></tr>
               ) : xmlDrafts.length === 0 ? (
-                <tr><td colSpan={8} className="px-4 py-8 text-center text-slate-500">Nenhum XML TISS em rascunho gerado para esta competência.</td></tr>
+                <tr><td colSpan={10} className="px-4 py-8 text-center text-slate-500">Nenhum XML TISS em rascunho gerado para esta competência.</td></tr>
               ) : xmlDrafts.map((draft) => {
                 const status = String(draft.status || "draft");
                 const statusLabel = status === "superseded" ? "Substituído" : status === "cancelled" ? "Cancelado" : "Rascunho";
                 return (
-                  <tr key={draft.id || draft.xmlHash} className="hover:bg-slate-50">
+                  <tr key={draft.id || draft.xmlHash} className={`${highlightedXmlDraftId && draft.id === highlightedXmlDraftId ? "bg-indigo-50/60" : "hover:bg-slate-50"}`}>
                     <td className="px-4 py-3 text-slate-600">{formatDate(draft.generatedAt)}</td>
                     <td className="px-4 py-3 text-slate-700">{fieldValue(draft.payerName, "Pagador")}</td>
                     <td className="px-4 py-3 text-slate-600">{String(draft.competenceMonth || "").slice(0, 7) || "Não informada"}</td>
+                    <td className="px-4 py-3 text-slate-600">{fieldValue(draft.guideType)}</td>
+                    <td className="px-4 py-3 text-slate-600">{fieldValue(draft.tissVersion)}</td>
                     <td className="px-4 py-3 text-slate-600">{Number(draft.guideCount || 0)}</td>
                     <td className="px-4 py-3 font-medium text-slate-800">{formatCurrency(draft.totalAmountCents)}</td>
-                    <td className="px-4 py-3 text-slate-600">{fieldValue(draft.tissVersion)}</td>
                     <td className="px-4 py-3"><span className="rounded-full bg-indigo-50 px-2 py-1 text-xs text-indigo-700 ring-1 ring-indigo-100">{statusLabel}</span></td>
+                    <td className="px-4 py-3 text-slate-600">{draft.generatedBy ? "Usuário autorizado" : "Não informado"}</td>
                     <td className="px-4 py-3 text-right">
-                      <button type="button" onClick={() => void downloadXmlDraft(draft)} className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
-                        <Download size={15} />
-                        Baixar XML
-                      </button>
+                      <div className="flex justify-end gap-2">
+                        <button type="button" onClick={() => void openXmlDraftDetail(draft)} className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
+                          <Eye size={15} />
+                          Ver XML
+                        </button>
+                        <button type="button" onClick={() => void downloadXmlDraft(draft)} className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
+                          <Download size={15} />
+                          Baixar XML
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );
@@ -1200,6 +1343,8 @@ export function TissPreGuideTab({
           </table>
         </div>
       </section>
+        </section>
+      )}
 
       {xmlDraftModalOpen && (
         <div className="fixed inset-0 z-[150] flex items-end justify-center bg-slate-950/45 p-4 sm:items-center" role="dialog" aria-modal="true" aria-label="Gerar XML TISS em rascunho">
@@ -1236,6 +1381,11 @@ export function TissPreGuideTab({
                 <DetailField label="Versão TISS" value={selectedXmlTissVersion} />
                 <DetailField label="Status após geração" value="Rascunho interno" />
               </div>
+              {selectedXmlRows.length === 0 && (
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                  Não há pré-guias prontas para gerar XML em rascunho.
+                </div>
+              )}
             </div>
             <footer className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 px-5 py-4">
               <button type="button" onClick={() => setXmlDraftModalOpen(false)} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700">Cancelar</button>
@@ -1248,6 +1398,53 @@ export function TissPreGuideTab({
                 {xmlDraftGenerating ? <Loader2 size={15} className="animate-spin" /> : <FileText size={15} />}
                 Gerar rascunho XML
               </button>
+            </footer>
+          </div>
+        </div>
+      )}
+
+      {xmlDraftDetail && (
+        <div className="fixed inset-0 z-[155] flex items-end justify-center bg-slate-950/45 p-4 sm:items-center" role="dialog" aria-modal="true" aria-label="XML TISS em rascunho">
+          <div className="max-h-[92vh] w-full max-w-4xl overflow-hidden rounded-lg bg-white shadow-xl">
+            <header className="flex items-start justify-between border-b border-slate-200 px-5 py-4">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900">XML TISS em rascunho</h2>
+                <p className="mt-1 text-sm text-slate-500">Rascunho interno. Não enviado à operadora.</p>
+              </div>
+              <button type="button" onClick={() => setXmlDraftDetail(null)} className="rounded-md p-2 text-slate-500 hover:bg-slate-100" aria-label="Fechar XML em rascunho"><X size={18} /></button>
+            </header>
+
+            <div className="space-y-4 px-5 py-4">
+              <div className="rounded-md border border-indigo-100 bg-indigo-50 px-3 py-2 text-sm text-indigo-800">
+                Este XML é uma prévia para conferência interna. Ainda não houve envio à operadora.
+              </div>
+              <div className="grid gap-3 text-sm sm:grid-cols-4">
+                <DetailField label="Pagador" value={fieldValue(xmlDraftDetail.payerName, "Pagador")} />
+                <DetailField label="Competência" value={String(xmlDraftDetail.competenceMonth || "").slice(0, 7) || "Não informada"} />
+                <DetailField label="Pré-guias" value={String(Number(xmlDraftDetail.guideCount || 0))} />
+                <DetailField label="Valor total" value={formatCurrency(xmlDraftDetail.totalAmountCents)} />
+              </div>
+              <div className="rounded-md border border-slate-200 bg-slate-950 text-slate-100">
+                {xmlDraftDetailLoading ? (
+                  <div className="py-16 text-center text-sm text-slate-300"><Loader2 className="mx-auto mb-2 animate-spin" size={20} />Carregando XML</div>
+                ) : (
+                  <pre className="max-h-[48vh] overflow-auto whitespace-pre-wrap p-4 text-xs leading-relaxed">
+                    {String(xmlDraftDetail.xmlContent || "XML não carregado. Tente atualizar o rascunho.")}
+                  </pre>
+                )}
+              </div>
+            </div>
+
+            <footer className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 px-5 py-4">
+              <button type="button" onClick={() => void copyXmlDraftContent()} disabled={xmlDraftDetailLoading || !xmlDraftDetail.xmlContent} className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+                <Copy size={15} />
+                Copiar XML
+              </button>
+              <button type="button" onClick={() => void downloadXmlDraft(xmlDraftDetail)} className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white">
+                <Download size={15} />
+                Baixar XML
+              </button>
+              <button type="button" onClick={() => setXmlDraftDetail(null)} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700">Fechar</button>
             </footer>
           </div>
         </div>

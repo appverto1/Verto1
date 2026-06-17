@@ -762,6 +762,10 @@ test('backend gera e baixa XML TISS apenas como rascunho interno', () => {
     serverCode.indexOf("app.get('/api/tiss/xml-drafts/:draftId/download'"),
     serverCode.indexOf("app.get('/api/tiss/pre-guides/coverage'")
   );
+  const detailRoute = serverCode.slice(
+    serverCode.indexOf("app.get('/api/tiss/xml-drafts/:draftId'"),
+    serverCode.indexOf("app.get('/api/tiss/xml-drafts/:draftId/download'")
+  );
   assert.match(serverCode, /import \{\s*generateTissXmlDraft\s*\} from '\.\/src\/services\/tissXmlDraftGenerator'/);
   assert.match(createRoute, /requireRoles\('coordinator', 'admin', 'owner'\)/);
   assert.match(createRoute, /appointment_tiss_pre_guides/);
@@ -772,6 +776,8 @@ test('backend gera e baixa XML TISS apenas como rascunho interno', () => {
   assert.match(createRoute, /XML TISS em rascunho gerado para conferência interna/);
   assert.match(listRoute, /TISS_XML_DRAFT_SELECT/);
   assert.doesNotMatch(listRoute, /xml_content/);
+  assert.match(detailRoute, /TISS_XML_DRAFT_DETAIL_SELECT/);
+  assert.match(detailRoute, /serializeTissXmlDraft\(data, true\)/);
   assert.match(downloadRoute, /Content-Type', 'application\/xml; charset=utf-8'/);
   assert.match(downloadRoute, /Content-Disposition/);
   assert.doesNotMatch(serverCode, /Remessa enviada|Faturamento TISS concluído|Guia oficial enviada|Lote transmitido/i);
@@ -971,7 +977,7 @@ test('Pagadores e regras expoe configuracao TISS guiada por operadora', () => {
   assert.doesNotMatch(payerRequirementsCode, /Gerar XML|Enviar lote|Enviar remessa|Registrar glosa/i);
 });
 
-test('frontend oferece cards, paginação, detalhe sob demanda e nenhuma ação de XML', () => {
+test('frontend separa Pré-guias e Rascunhos XML com preview interno', () => {
   assert.match(conferenceCode, /"preGuides", "Pré-guias TISS"/);
   assert.match(conferenceCode, /<TissPreGuideTab/);
   for (const label of [
@@ -1011,10 +1017,24 @@ test('frontend oferece cards, paginação, detalhe sob demanda e nenhuma ação 
   assert.match(preGuideUiCode, /missing_authorization/);
   assert.match(preGuideUiCode, /authorization_expired/);
   assert.match(preGuideUiCode, /missing_card/);
+  assert.match(preGuideUiCode, /activePanel === "preGuides"/);
+  assert.match(preGuideUiCode, /activePanel === "xmlDrafts"/);
+  assert.match(preGuideUiCode, /Gerar XML rascunho com pré-guias prontas/);
   assert.match(preGuideUiCode, /Gerar XML rascunho/);
   assert.match(preGuideUiCode, /Gerar rascunho XML/);
   assert.match(preGuideUiCode, /Rascunhos XML TISS/);
-  assert.match(preGuideUiCode, /Este rascunho não é enviado à operadora/);
+  assert.match(preGuideUiCode, /XMLs gerados apenas para conferência interna/);
+  assert.match(preGuideUiCode, /Nenhum rascunho foi enviado à operadora/);
+  assert.match(preGuideUiCode, /O rascunho gerado aparecerá na subaba Rascunhos XML/);
+  assert.match(preGuideUiCode, /Rascunhos gerados/);
+  assert.match(preGuideUiCode, /Último rascunho/);
+  assert.match(preGuideUiCode, /Pré-guias incluídas/);
+  assert.match(preGuideUiCode, /Valor total em rascunhos/);
+  assert.match(preGuideUiCode, /Ver rascunho/);
+  assert.match(preGuideUiCode, /Ir para Rascunhos XML/);
+  assert.match(preGuideUiCode, /Ver XML/);
+  assert.match(preGuideUiCode, /Copiar XML/);
+  assert.match(preGuideUiCode, /Rascunho interno\. Não enviado à operadora\./);
   assert.match(preGuideUiCode, /Este XML é um rascunho para conferência interna\. Ainda não houve envio à operadora\./);
   assert.match(preGuideUiCode, /Baixar XML/);
   assert.match(preGuideUiCode, /isAuthorizationIssue/);
@@ -1061,7 +1081,7 @@ test('frontend oferece cards, paginação, detalhe sob demanda e nenhuma ação 
   assert.match(preGuideUiCode, /stalePreGuides/);
   assert.match(preGuideUiCode, /Gerar\/Revalidar pendentes/);
   assert.match(preGuideUiCode, /Nenhum atendimento eleg/);
-  assert.doesNotMatch(preGuideUiCode, /Enviar lote|Enviar remessa|Registrar glosa|Remessa enviada|Faturamento TISS concluído|Guia oficial enviada|Lote transmitido/i);
+  assert.doesNotMatch(preGuideUiCode, /Enviar lote|Enviar remessa|Registrar glosa|Remessa enviada|Faturamento TISS concluído|Guia oficial enviada|Lote transmitido|XML oficial|Retorno|Glosa/i);
 });
 
 test('data service usa operações explícitas e o pacote expõe suíte dedicada', () => {
@@ -1073,6 +1093,7 @@ test('data service usa operações explícitas e o pacote expõe suíte dedicada
     'revalidateTissPreGuidePeriod',
     'getTissXmlDrafts',
     'createTissXmlDraft',
+    'getTissXmlDraft',
     'downloadTissXmlDraft',
     'getClinicTissProfile',
     'updateClinicTissProfile',

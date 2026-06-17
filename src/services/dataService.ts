@@ -2978,6 +2978,23 @@ export const dataService = {
     }
   },
 
+  async getTissXmlDraft(draftId: string) {
+    try {
+      return await fetchNoStoreJsonWithRetry(`/api/tiss/xml-drafts/${encodeURIComponent(String(draftId))}`, {
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getTissXmlDraft',
+        operation: 'detail',
+        table: 'tiss_xml_drafts',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      }, 'O rascunho XML TISS voltou do cache. Tente atualizar novamente.');
+    } catch {
+      return { success: false, data: null, error: 'Não foi possível carregar o rascunho XML TISS agora.' };
+    }
+  },
+
   async downloadTissXmlDraft(draftId: string) {
     try {
       const response = await fetchClinical(`/api/tiss/xml-drafts/${encodeURIComponent(String(draftId))}/download`, {

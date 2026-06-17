@@ -34478,7 +34478,7 @@ async function startServer() {
       if (!isUuid(organizationId) || !isUuid(draftId)) return res.status(400).json(payerSafeError(400));
       const { data, error } = await supabase
         .from('tiss_xml_drafts')
-        .select(TISS_XML_DRAFT_SELECT)
+        .select(TISS_XML_DRAFT_DETAIL_SELECT)
         .eq('organization_id', organizationId)
         .eq('id', draftId)
         .maybeSingle();
@@ -34487,7 +34487,7 @@ async function startServer() {
         throw error;
       }
       if (!data) return res.status(404).json(payerSafeError(404));
-      return sendNoStoreJson(res, { success: true, data: serializeTissXmlDraft(data) });
+      return sendNoStoreJson(res, { success: true, data: serializeTissXmlDraft(data, true) });
     } catch (error: any) {
       console.warn('[TissXmlDraft] detail failed:', error?.message || String(error));
       return res.status(500).json({ success: false, error: 'Não foi possível carregar o rascunho XML TISS agora.' });
