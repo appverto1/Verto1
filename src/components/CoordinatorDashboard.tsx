@@ -1182,6 +1182,12 @@ export function CoordinatorDashboard({
     convenioTipo: "particular",
     convenioNome: "",
     convenioCarteirinha: "",
+    convenioCarteirinhaValidade: "",
+    convenioPlanoCategoria: "",
+    convenioTitularNome: "",
+    convenioTitularCpf: "",
+    convenioTitularRelacao: "",
+    convenioElegibilidadeObs: "",
     grupo: "adulto",
     comoConheceu: "",
     rg: "",
@@ -3205,6 +3211,54 @@ export function CoordinatorDashboard({
         newPatientForm.convenioTipo === "convenio"
           ? newPatientForm.convenioCarteirinha || null
           : null,
+      insuranceCardValidUntil:
+        newPatientForm.convenioTipo === "convenio"
+          ? newPatientForm.convenioCarteirinhaValidade || null
+          : null,
+      insurance_card_valid_until:
+        newPatientForm.convenioTipo === "convenio"
+          ? newPatientForm.convenioCarteirinhaValidade || null
+          : null,
+      insurancePlanCategory:
+        newPatientForm.convenioTipo === "convenio"
+          ? newPatientForm.convenioPlanoCategoria || null
+          : null,
+      insurance_plan_category:
+        newPatientForm.convenioTipo === "convenio"
+          ? newPatientForm.convenioPlanoCategoria || null
+          : null,
+      insuranceHolderName:
+        newPatientForm.convenioTipo === "convenio"
+          ? newPatientForm.convenioTitularNome || null
+          : null,
+      insurance_holder_name:
+        newPatientForm.convenioTipo === "convenio"
+          ? newPatientForm.convenioTitularNome || null
+          : null,
+      insuranceHolderCpf:
+        newPatientForm.convenioTipo === "convenio"
+          ? normalizeCpfInput(newPatientForm.convenioTitularCpf) || null
+          : null,
+      insurance_holder_cpf:
+        newPatientForm.convenioTipo === "convenio"
+          ? normalizeCpfInput(newPatientForm.convenioTitularCpf) || null
+          : null,
+      insuranceHolderRelationship:
+        newPatientForm.convenioTipo === "convenio"
+          ? newPatientForm.convenioTitularRelacao || null
+          : null,
+      insurance_holder_relationship:
+        newPatientForm.convenioTipo === "convenio"
+          ? newPatientForm.convenioTitularRelacao || null
+          : null,
+      eligibilityNotes:
+        newPatientForm.convenioTipo === "convenio"
+          ? newPatientForm.convenioElegibilidadeObs || null
+          : null,
+      eligibility_notes:
+        newPatientForm.convenioTipo === "convenio"
+          ? newPatientForm.convenioElegibilidadeObs || null
+          : null,
       group: newPatientForm.grupo || null,
       source: newPatientForm.comoConheceu || null,
       rg: newPatientForm.rg || null,
@@ -3391,6 +3445,12 @@ export function CoordinatorDashboard({
       convenioTipo: patient.insuranceType === "convenio" ? "convenio" : "particular",
       convenioNome: patient.insuranceName || "",
       convenioCarteirinha: patient.cardNumber || "",
+      convenioCarteirinhaValidade: patient.insuranceCardValidUntil || patient.insurance_card_valid_until || "",
+      convenioPlanoCategoria: patient.insurancePlanCategory || patient.insurance_plan_category || "",
+      convenioTitularNome: patient.insuranceHolderName || patient.insurance_holder_name || "",
+      convenioTitularCpf: formatCpf(patient.insuranceHolderCpf || patient.insurance_holder_cpf || ""),
+      convenioTitularRelacao: patient.insuranceHolderRelationship || patient.insurance_holder_relationship || "",
+      convenioElegibilidadeObs: patient.eligibilityNotes || patient.eligibility_notes || "",
       grupo: patient.group || "adulto",
       comoConheceu: patient.source || "",
       rg: patient.rg || "",
@@ -9857,6 +9917,16 @@ export function CoordinatorDashboard({
                 ))}
               </select>
               <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="Carteirinha do convênio" value={newPatientForm.convenioCarteirinha} onChange={(e) => handlePatientFormChange("convenioCarteirinha", e.target.value)} />
+              {newPatientForm.convenioTipo === "convenio" && (
+                <>
+                  <input type="date" className="bg-slate-50 rounded-xl p-3 text-sm" value={newPatientForm.convenioCarteirinhaValidade} onChange={(e) => handlePatientFormChange("convenioCarteirinhaValidade", e.target.value)} title="Validade da carteirinha" />
+                  <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="Plano/categoria" value={newPatientForm.convenioPlanoCategoria} onChange={(e) => handlePatientFormChange("convenioPlanoCategoria", e.target.value)} />
+                  <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="Titular do plano" value={newPatientForm.convenioTitularNome} onChange={(e) => handlePatientFormChange("convenioTitularNome", e.target.value)} />
+                  <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="CPF do titular" value={newPatientForm.convenioTitularCpf} onChange={(e) => handlePatientFormChange("convenioTitularCpf", e.target.value)} />
+                  <input className="bg-slate-50 rounded-xl p-3 text-sm" placeholder="Relação com titular" value={newPatientForm.convenioTitularRelacao} onChange={(e) => handlePatientFormChange("convenioTitularRelacao", e.target.value)} />
+                  <input className="bg-slate-50 rounded-xl p-3 text-sm md:col-span-2 xl:col-span-3" placeholder="Observações de elegibilidade" value={newPatientForm.convenioElegibilidadeObs} onChange={(e) => handlePatientFormChange("convenioElegibilidadeObs", e.target.value)} />
+                </>
+              )}
               {canAccessClinicFinance && (
                 <div className="md:col-span-2 xl:col-span-3 rounded-3xl border border-slate-100 bg-slate-50/70 p-4">
                   <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

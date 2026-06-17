@@ -12,9 +12,11 @@ const dataServiceCode = readFileSync(join(root, 'src/services/dataService.ts'), 
 const conferenceCode = readFileSync(join(root, 'src/components/MonthlyConferenceCenter.tsx'), 'utf8');
 const preGuideUiCode = readFileSync(join(root, 'src/components/TissPreGuideTab.tsx'), 'utf8');
 const billingTissSettingsCode = readFileSync(join(root, 'src/components/BillingTissSettingsPanel.tsx'), 'utf8');
+const payerRequirementsCode = readFileSync(join(root, 'src/components/PayerRequirementsPanel.tsx'), 'utf8');
 const settingsPanelCode = readFileSync(join(root, 'src/components/ClinicGlobalSettingsPanel.tsx'), 'utf8');
 const coordinatorCode = readFileSync(join(root, 'src/components/CoordinatorDashboard.tsx'), 'utf8');
 const migrationCode = readFileSync(join(root, 'supabase/migrations/20260614183000_tiss_pre_guides.sql'), 'utf8');
+const payerOperationalMigrationCode = readFileSync(join(root, 'supabase/migrations/20260617110000_payer_tiss_operational_requirements.sql'), 'utf8');
 const packageJson = readFileSync(join(root, 'package.json'), 'utf8');
 
 const tests: Array<{ name: string; fn: () => void }> = [];
@@ -213,6 +215,95 @@ test('contextos não faturáveis são não aplicáveis e não tentam resolver TI
   }
 });
 
+test('pagador particular nao exige TISS mesmo se usado como fallback visual', () => {
+  const result = validateTissPreGuide({
+    ...validInput,
+    payer: { id: 'payer-private', name: 'Particular', payer_type: 'PRIVATE' },
+    billingContext: { ...validInput.billingContext, payer_id: 'payer-private', payer_type: 'INSURANCE' },
+    payerProfile: null,
+  });
+
+  assert.equal(result.status, 'not_applicable');
+  assert.deepEqual(result.errorCodes, []);
+  assert.equal(result.snapshot.payerType, 'PRIVATE');
+});
+
+test('pagador convenio sem Registro ANS gera pendencia do pagador', () => {
+  const result = validateTissPreGuide({
+    ...validInput,
+    payerProfile: {
+      ...validInput.payerProfile,
+      ans_registration: '',
+    },
+  });
+
+  assert.equal(result.status, 'pending_data');
+  assert.ok(result.errorCodes.includes('PAYER_ANS_REGISTRATION_MISSING'));
+});
+
+test('carteirinha e validade so bloqueiam quando o pagador exige', () => {
+  const optional = validateTissPreGuide({
+    ...validInput,
+    patient: { ...validInput.patient, insurance_card_number: '', insurance_card_valid_until: '' },
+    billingContext: { ...validInput.billingContext, insurance_card_number: '' },
+    payerProfile: {
+      ...validInput.payerProfile,
+      requires_beneficiary_card: false,
+      requires_beneficiary_card_validity: false,
+    },
+  });
+  assert.ok(!optional.errorCodes.includes('BENEFICIARY_CARD_MISSING'));
+  assert.ok(!optional.errorCodes.includes('BENEFICIARY_CARD_VALIDITY_MISSING'));
+
+  const required = validateTissPreGuide({
+    ...validInput,
+    patient: { ...validInput.patient, insurance_card_number: '', insurance_card_valid_until: '' },
+    billingContext: { ...validInput.billingContext, insurance_card_number: '' },
+    payerProfile: {
+      ...validInput.payerProfile,
+      requires_beneficiary_card: true,
+      requires_beneficiary_card_validity: true,
+    },
+  });
+  assert.ok(required.errorCodes.includes('BENEFICIARY_CARD_MISSING'));
+  assert.ok(required.errorCodes.includes('BENEFICIARY_CARD_VALIDITY_MISSING'));
+});
+
+test('autorizacao ativa valida e autorizacao vencida ou de outro TUSS gera pendencia', () => {
+  const active = validateTissPreGuide({
+    ...validInput,
+    billingContext: { ...validInput.billingContext, authorization_code: '', guide_number: '' },
+    payerProfile: { ...validInput.payerProfile, requires_authorization: true, requires_guide_number: true },
+    authorization: {
+      id: 'auth-1',
+      status: 'active',
+      authorization_code: 'AUTH-OK',
+      guide_number: 'GUIA-OK',
+      valid_from: '2026-06-01',
+      valid_until: '2026-06-30',
+      procedure_tuss_code: 'CONFIGURADO-PELA-CLINICA',
+    },
+  });
+  assert.ok(!active.errorCodes.includes('AUTHORIZATION_MISSING'));
+  assert.ok(!active.errorCodes.includes('GUIDE_MISSING'));
+  assert.equal(active.snapshot.authorization.authorizationCode, 'AUTH-OK');
+
+  const expired = validateTissPreGuide({
+    ...validInput,
+    payerProfile: { ...validInput.payerProfile, requires_authorization: true },
+    authorization: {
+      id: 'auth-expired',
+      status: 'active',
+      authorization_code: 'AUTH-OLD',
+      valid_from: '2026-05-01',
+      valid_until: '2026-05-31',
+      procedure_tuss_code: 'OUTRO-TUSS',
+    },
+  });
+  assert.ok(expired.errorCodes.includes('AUTHORIZATION_EXPIRED'));
+  assert.ok(expired.errorCodes.includes('AUTHORIZATION_PROCEDURE_MISMATCH'));
+});
+
 test('lote considera elegível somente convênio com payer_id real', () => {
   const eligible = evaluateTissPreGuideEligibility({
     appointment: validInput.appointment,
@@ -316,6 +407,28 @@ test('migration é aditiva, multi-clínica e não implementa geração eletrôni
   assert.match(migrationCode, /status in \('draft', 'valid', 'pending_data', 'not_applicable', 'cancelled'\)/);
   assert.match(migrationCode, /does NOT generate TISS XML, batches, remittance/i);
   assert.doesNotMatch(migrationCode, /create table if not exists public\.(tiss_batches|tiss_remittances|tiss_returns|tiss_denials)/i);
+});
+
+test('migration operacional adiciona requisitos TISS do pagador e autorizacoes sem XML', () => {
+  for (const column of [
+    'beneficiary_identification_type',
+    'requires_beneficiary_card_validity',
+    'requires_authorization_password',
+    'requires_guide_number',
+    'requires_cid',
+    'requires_responsible_signature',
+    'contracted_provider_code',
+    'default_attendance_type',
+    'specific_rules',
+  ]) {
+    assert.match(payerOperationalMigrationCode, new RegExp(`add column if not exists ${column}`));
+  }
+  assert.match(payerOperationalMigrationCode, /create table if not exists public\.patient_payer_authorizations/);
+  assert.match(payerOperationalMigrationCode, /procedure_tuss_code text/);
+  assert.match(payerOperationalMigrationCode, /alter table public\.patient_payer_authorizations enable row level security/);
+  assert.match(payerOperationalMigrationCode, /patient_payer_authorizations_admin_rw/);
+  assert.match(payerOperationalMigrationCode, /does not generate TISS XML, batches, remittances, returns, denials/i);
+  assert.doesNotMatch(payerOperationalMigrationCode, /create table if not exists public\.(tiss_batches|tiss_remittances|tiss_returns|tiss_denials)/i);
 });
 
 test('backend persiste de forma idempotente pelo appointment e revalida só por ação', () => {
@@ -513,6 +626,20 @@ test('cadastros TISS sao globais e reutilizaveis em Configuracoes', () => {
   assert.match(billingTissSettingsCode, /Pré-guias deste pagador foram marcadas para revalidação/);
   assert.match(billingTissSettingsCode, /Pré-guias deste profissional foram marcadas para revalidação/);
   assert.doesNotMatch(billingTissSettingsCode, /appointmentId|appointment_id/);
+});
+
+test('Pagadores e regras expoe configuracao TISS guiada por operadora', () => {
+  assert.match(payerRequirementsCode, /Dados TISS da operadora/);
+  assert.match(payerRequirementsCode, /dataService\.getPayerTissProfile/);
+  assert.match(payerRequirementsCode, /dataService\.updatePayerTissProfile/);
+  assert.match(payerRequirementsCode, /Registro ANS/);
+  assert.match(payerRequirementsCode, /Exige validade da carteirinha/);
+  assert.match(payerRequirementsCode, /Exige número de guia/);
+  assert.match(payerRequirementsCode, /Exige CID/);
+  assert.match(payerRequirementsCode, /Código do contratado na operadora/);
+  assert.match(payerRequirementsCode, /Não aplicável/);
+  assert.match(payerRequirementsCode, /Pré-guias deste pagador foram marcadas para revalidação/);
+  assert.doesNotMatch(payerRequirementsCode, /Gerar XML|Enviar lote|Enviar remessa|Registrar glosa/i);
 });
 
 test('frontend oferece cards, paginação, detalhe sob demanda e nenhuma ação de XML', () => {

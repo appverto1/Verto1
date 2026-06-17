@@ -3633,6 +3633,12 @@ const PATIENT_MUTATION_SELECT = [
   'insurance_type',
   'insurance_name',
   'insurance_card_number',
+  'insurance_card_valid_until',
+  'insurance_plan_category',
+  'insurance_holder_name',
+  'insurance_holder_cpf',
+  'insurance_holder_relationship',
+  'eligibility_notes',
   'patient_group',
   'lead_source',
   'notes',
@@ -3955,11 +3961,24 @@ const PAYER_TISS_PROFILE_SELECT = [
   'tiss_version',
   'default_guide_type',
   'requires_authorization',
+  'beneficiary_identification_type',
+  'requires_beneficiary_card_validity',
+  'requires_authorization_password',
+  'requires_guide_number',
+  'requires_cid',
+  'requires_responsible_signature',
   'requires_provider_code',
   'requires_cnes',
   'requires_cbo',
   'requires_executant_registry',
   'requires_beneficiary_card',
+  'contracted_executant',
+  'contracted_provider_code',
+  'operator_provider_code',
+  'default_attendance_type',
+  'default_attendance_regime',
+  'default_attendance_character',
+  'specific_rules',
   'active',
   'created_at',
   'updated_at'
@@ -3979,6 +3998,28 @@ const PROFESSIONAL_BILLING_PROFILE_SELECT = [
   'cbo_code',
   'specialty_name',
   'provider_code',
+  'active',
+  'created_at',
+  'updated_at'
+].join(',');
+
+const PATIENT_PAYER_AUTHORIZATION_SELECT = [
+  'id',
+  'organization_id',
+  'clinic_id',
+  'patient_id',
+  'payer_id',
+  'authorization_code',
+  'guide_number',
+  'issued_at',
+  'valid_from',
+  'valid_until',
+  'authorized_quantity',
+  'authorized_unit',
+  'procedure_tuss_code',
+  'procedure_code',
+  'status',
+  'notes',
   'active',
   'created_at',
   'updated_at'
@@ -9977,6 +10018,12 @@ function buildPatientIdentityPersistenceFields(body: any) {
     insurance_type: sanitizeString(body?.insuranceType || body?.insurance_type || body?.convenioTipo, 60),
     insurance_name: sanitizeString(body?.insuranceName || body?.insurance_name || body?.convenioNome, 160),
     insurance_card_number: sanitizeString(body?.insuranceCardNumber || body?.insurance_card_number || body?.cardNumber || body?.convenioCarteirinha, 120),
+    insurance_card_valid_until: sanitizeIsoDateOnly(body?.insuranceCardValidUntil || body?.insurance_card_valid_until || body?.convenioCarteirinhaValidade),
+    insurance_plan_category: sanitizeString(body?.insurancePlanCategory || body?.insurance_plan_category || body?.convenioPlanoCategoria, 160),
+    insurance_holder_name: sanitizeString(body?.insuranceHolderName || body?.insurance_holder_name || body?.convenioTitularNome, 160),
+    insurance_holder_cpf: normalizeCpf(body?.insuranceHolderCpf || body?.insurance_holder_cpf || body?.convenioTitularCpf) || undefined,
+    insurance_holder_relationship: sanitizeString(body?.insuranceHolderRelationship || body?.insurance_holder_relationship || body?.convenioTitularRelacao, 80),
+    eligibility_notes: sanitizeTextField(body?.eligibilityNotes || body?.eligibility_notes || body?.convenioElegibilidadeObs, 1000),
     patient_group: sanitizeString(body?.group || body?.patient_group || body?.grupo, 80),
     lead_source: sanitizeString(body?.source || body?.lead_source || body?.comoConheceu, 120),
     notes: sanitizeTextField(body?.notes || body?.outrasInformacoes || body?.otherInformation, 4000),
@@ -32945,6 +32992,55 @@ async function startServer() {
     return null;
   };
 
+  const fetchPatientPayerAuthorizationForPreGuide = async (params: {
+    organizationId: string;
+    patientId: string;
+    payerId: string;
+    scheduledStart?: string | null;
+    tussCode?: string | null;
+    procedureCode?: string | null;
+  }) => {
+    const organizationId = sanitizeString(params.organizationId, 120);
+    const patientId = sanitizeString(params.patientId, 120);
+    const payerId = sanitizeString(params.payerId, 120);
+    if (!isUuid(organizationId) || !isUuid(patientId) || !isUuid(payerId)) return null;
+    const scheduledDate = sanitizeString(params.scheduledStart, 40).slice(0, 10);
+    const resolvedTussCode = sanitizeString(params.tussCode, 80);
+    const resolvedProcedureCode = sanitizeString(params.procedureCode, 80);
+    const { data, error } = await supabase
+      .from('patient_payer_authorizations')
+      .select(PATIENT_PAYER_AUTHORIZATION_SELECT)
+      .eq('organization_id', organizationId)
+      .eq('patient_id', patientId)
+      .eq('payer_id', payerId)
+      .eq('active', true)
+      .order('updated_at', { ascending: false })
+      .limit(30);
+    if (error) {
+      if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return null;
+      throw error;
+    }
+    const rows = Array.isArray(data) ? data : [];
+    const activeRows = rows.filter((row: any) => {
+      const status = sanitizeString(row?.status, 40).toLowerCase();
+      if (status && status !== 'active') return false;
+      const validFrom = sanitizeString(row?.valid_from, 40).slice(0, 10);
+      const validUntil = sanitizeString(row?.valid_until, 40).slice(0, 10);
+      if (scheduledDate && validFrom && validFrom > scheduledDate) return false;
+      if (scheduledDate && validUntil && validUntil < scheduledDate) return false;
+      return true;
+    });
+    if (activeRows.length === 0) return rows[0] || null;
+    const matching = activeRows.find((row: any) => {
+      const rowTuss = sanitizeString(row?.procedure_tuss_code, 80);
+      const rowProcedure = sanitizeString(row?.procedure_code, 80);
+      if (rowTuss && resolvedTussCode && rowTuss !== resolvedTussCode) return false;
+      if (rowProcedure && resolvedProcedureCode && rowProcedure !== resolvedProcedureCode) return false;
+      return true;
+    });
+    return matching || activeRows[0] || null;
+  };
+
   const buildAndPersistTissPreGuideForAppointment = async (params: {
     organizationId: string;
     appointment: any;
@@ -33024,7 +33120,7 @@ async function startServer() {
     const [patientResult, clinicResult, clinicProfile, payerProfile, professionalProfile, professional] = await Promise.all([
       supabase
         .from('patients')
-        .select('id,name,cpf,insurance_card_number,clinic_id')
+        .select('id,name,cpf,insurance_card_number,insurance_card_valid_until,insurance_plan_category,insurance_holder_name,insurance_holder_cpf,insurance_holder_relationship,eligibility_notes,clinic_id')
         .eq('clinic_id', organizationId)
         .eq('id', patientId)
         .limit(1)
@@ -33063,6 +33159,20 @@ async function startServer() {
           ? fetchPayerForAdmin(payerId, organizationId)
           : Promise.resolve(null)
     ]);
+    const scheduledStartForAuthorization =
+      appointment?.scheduled_start_at ||
+      appointment?.scheduled_at ||
+      appointment?.scheduled_start ||
+      existingPreGuide?.scheduled_start ||
+      null;
+    const authorization = await fetchPatientPayerAuthorizationForPreGuide({
+      organizationId,
+      patientId,
+      payerId,
+      scheduledStart: scheduledStartForAuthorization,
+      tussCode: sanitizeString(tussCode?.code || billingItem?.tuss_code, 80) || null,
+      procedureCode: sanitizeString(service?.internal_code || billingItem?.internal_procedure_code, 80) || null
+    });
     const validation = validateTissPreGuide({
       appointment,
       patient: patientResult.data || null,
@@ -33076,7 +33186,8 @@ async function startServer() {
       clinicProfile,
       payerProfile,
       professionalProfile,
-      professional
+      professional,
+      authorization
     });
     const snapshot = validation.snapshot || {};
     const procedure = snapshot.procedure || {};
@@ -33102,6 +33213,8 @@ async function startServer() {
       professionalId: isUuid(professionalId) ? professionalId : null,
       professionalProfileFound: Boolean(professionalProfile?.id),
       professionalProfileId: sanitizeString(professionalProfile?.id, 120) || null,
+      authorizationProfileFound: Boolean(authorization?.id),
+      authorizationProfileId: sanitizeString(authorization?.id, 120) || null,
       scheduledStartFound: Boolean(scheduledStart),
       usedAppointmentProfessionalId: isUuid(appointmentProfessionalId),
       usedTeamFallback: false,
@@ -33394,11 +33507,11 @@ async function startServer() {
 
   const tissPreGuideQuickFilterCodes: Record<string, string[]> = {
     missing_provider: ['CLINIC_TISS_PROFILE_MISSING', 'PROVIDER_DOCUMENT_MISSING', 'PROVIDER_CODE_MISSING', 'CNES_MISSING'],
-    missing_payer_profile: ['PAYER_TISS_PROFILE_MISSING', 'PAYER_ANS_REGISTRATION_MISSING'],
+    missing_payer_profile: ['PAYER_TISS_PROFILE_MISSING', 'PAYER_ANS_REGISTRATION_MISSING', 'PAYER_CONTRACTED_PROVIDER_CODE_MISSING', 'PAYER_CID_REQUIRED'],
     missing_professional_registry: ['PROFESSIONAL_BILLING_PROFILE_MISSING', 'PROFESSIONAL_REGISTRY_MISSING', 'PROFESSIONAL_COUNCIL_STATE_MISSING'],
     missing_cbo: ['CBO_MISSING'],
     missing_tuss: ['PROCEDURE_MISSING', 'TUSS_CODE_MISSING', 'TUSS_DESCRIPTION_MISSING'],
-    missing_guide_authorization: ['GUIDE_MISSING', 'AUTHORIZATION_MISSING', 'AUTHORIZATION_EXPIRED'],
+    missing_guide_authorization: ['GUIDE_MISSING', 'AUTHORIZATION_MISSING', 'AUTHORIZATION_INACTIVE', 'AUTHORIZATION_NOT_STARTED', 'AUTHORIZATION_EXPIRED', 'AUTHORIZATION_PROCEDURE_MISMATCH'],
     missing_amount: ['AMOUNT_MISSING']
   };
 
@@ -33566,12 +33679,25 @@ async function startServer() {
         operator_code: sanitizeString(req.body?.operatorCode ?? req.body?.operator_code, 80) || null,
         tiss_version: sanitizeString(req.body?.tissVersion ?? req.body?.tiss_version, 80) || null,
         default_guide_type: ['consulta', 'sp_sadt', 'other'].includes(guideType) ? guideType : 'sp_sadt',
+        beneficiary_identification_type: sanitizeString(req.body?.beneficiaryIdentificationType ?? req.body?.beneficiary_identification_type, 80) || null,
         requires_authorization: Boolean(req.body?.requiresAuthorization ?? req.body?.requires_authorization),
+        requires_authorization_password: Boolean(req.body?.requiresAuthorizationPassword ?? req.body?.requires_authorization_password),
+        requires_guide_number: Boolean(req.body?.requiresGuideNumber ?? req.body?.requires_guide_number),
+        requires_cid: Boolean(req.body?.requiresCid ?? req.body?.requires_cid),
+        requires_responsible_signature: Boolean(req.body?.requiresResponsibleSignature ?? req.body?.requires_responsible_signature),
         requires_provider_code: Boolean(req.body?.requiresProviderCode ?? req.body?.requires_provider_code),
         requires_cnes: Boolean(req.body?.requiresCnes ?? req.body?.requires_cnes),
         requires_cbo: Boolean(req.body?.requiresCbo ?? req.body?.requires_cbo),
         requires_executant_registry: Boolean(req.body?.requiresExecutantRegistry ?? req.body?.requires_executant_registry),
         requires_beneficiary_card: req.body?.requiresBeneficiaryCard ?? req.body?.requires_beneficiary_card ?? true,
+        requires_beneficiary_card_validity: Boolean(req.body?.requiresBeneficiaryCardValidity ?? req.body?.requires_beneficiary_card_validity),
+        contracted_executant: sanitizeString(req.body?.contractedExecutant ?? req.body?.contracted_executant, 160) || null,
+        contracted_provider_code: sanitizeString(req.body?.contractedProviderCode ?? req.body?.contracted_provider_code, 120) || null,
+        operator_provider_code: sanitizeString(req.body?.operatorProviderCode ?? req.body?.operator_provider_code, 120) || null,
+        default_attendance_type: sanitizeString(req.body?.defaultAttendanceType ?? req.body?.default_attendance_type, 80) || null,
+        default_attendance_regime: sanitizeString(req.body?.defaultAttendanceRegime ?? req.body?.default_attendance_regime, 80) || null,
+        default_attendance_character: sanitizeString(req.body?.defaultAttendanceCharacter ?? req.body?.default_attendance_character, 80) || null,
+        specific_rules: sanitizeTextField(req.body?.specificRules ?? req.body?.specific_rules, 2000) || null,
         active: req.body?.active !== false,
         created_at: existingProfile?.created_at || now,
         updated_by: isUuid(userId) ? userId : null,

@@ -77,6 +77,32 @@ type PayerTussMapping = {
   active: boolean;
 };
 
+type PayerTissForm = {
+  ansRegistration: string;
+  operatorCode: string;
+  tissVersion: string;
+  defaultGuideType: string;
+  beneficiaryIdentificationType: string;
+  requiresBeneficiaryCard: boolean;
+  requiresBeneficiaryCardValidity: boolean;
+  requiresAuthorization: boolean;
+  requiresAuthorizationPassword: boolean;
+  requiresGuideNumber: boolean;
+  requiresCid: boolean;
+  requiresExecutantRegistry: boolean;
+  requiresCbo: boolean;
+  requiresCnes: boolean;
+  requiresProviderCode: boolean;
+  requiresResponsibleSignature: boolean;
+  contractedExecutant: string;
+  contractedProviderCode: string;
+  operatorProviderCode: string;
+  defaultAttendanceType: string;
+  defaultAttendanceRegime: string;
+  defaultAttendanceCharacter: string;
+  specificRules: string;
+};
+
 const payerTypeLabels: Record<string, string> = {
   INSURANCE: "Convênio",
   PRIVATE: "Particular",
@@ -141,6 +167,75 @@ const defaultTussMappingForm = {
   validTo: "",
 };
 
+const defaultPayerTissForm: PayerTissForm = {
+  ansRegistration: "",
+  operatorCode: "",
+  tissVersion: "",
+  defaultGuideType: "sp_sadt",
+  beneficiaryIdentificationType: "card_number",
+  requiresBeneficiaryCard: true,
+  requiresBeneficiaryCardValidity: false,
+  requiresAuthorization: false,
+  requiresAuthorizationPassword: false,
+  requiresGuideNumber: false,
+  requiresCid: false,
+  requiresExecutantRegistry: false,
+  requiresCbo: false,
+  requiresCnes: false,
+  requiresProviderCode: false,
+  requiresResponsibleSignature: false,
+  contractedExecutant: "",
+  contractedProviderCode: "",
+  operatorProviderCode: "",
+  defaultAttendanceType: "",
+  defaultAttendanceRegime: "",
+  defaultAttendanceCharacter: "",
+  specificRules: "",
+};
+
+const normalizePayerTissProfile = (profile: any = {}): PayerTissForm => ({
+  ansRegistration: profile.ans_registration || profile.ansRegistration || "",
+  operatorCode: profile.operator_code || profile.operatorCode || "",
+  tissVersion: profile.tiss_version || profile.tissVersion || "",
+  defaultGuideType: profile.default_guide_type || profile.defaultGuideType || "sp_sadt",
+  beneficiaryIdentificationType: profile.beneficiary_identification_type || profile.beneficiaryIdentificationType || "card_number",
+  requiresBeneficiaryCard: profile.requires_beneficiary_card ?? profile.requiresBeneficiaryCard ?? true,
+  requiresBeneficiaryCardValidity: Boolean(profile.requires_beneficiary_card_validity ?? profile.requiresBeneficiaryCardValidity),
+  requiresAuthorization: Boolean(profile.requires_authorization ?? profile.requiresAuthorization),
+  requiresAuthorizationPassword: Boolean(profile.requires_authorization_password ?? profile.requiresAuthorizationPassword),
+  requiresGuideNumber: Boolean(profile.requires_guide_number ?? profile.requiresGuideNumber),
+  requiresCid: Boolean(profile.requires_cid ?? profile.requiresCid),
+  requiresExecutantRegistry: Boolean(profile.requires_executant_registry ?? profile.requiresExecutantRegistry),
+  requiresCbo: Boolean(profile.requires_cbo ?? profile.requiresCbo),
+  requiresCnes: Boolean(profile.requires_cnes ?? profile.requiresCnes),
+  requiresProviderCode: Boolean(profile.requires_provider_code ?? profile.requiresProviderCode),
+  requiresResponsibleSignature: Boolean(profile.requires_responsible_signature ?? profile.requiresResponsibleSignature),
+  contractedExecutant: profile.contracted_executant || profile.contractedExecutant || "",
+  contractedProviderCode: profile.contracted_provider_code || profile.contractedProviderCode || "",
+  operatorProviderCode: profile.operator_provider_code || profile.operatorProviderCode || "",
+  defaultAttendanceType: profile.default_attendance_type || profile.defaultAttendanceType || "",
+  defaultAttendanceRegime: profile.default_attendance_regime || profile.defaultAttendanceRegime || "",
+  defaultAttendanceCharacter: profile.default_attendance_character || profile.defaultAttendanceCharacter || "",
+  specificRules: profile.specific_rules || profile.specificRules || "",
+});
+
+const isInsurancePayer = (payer?: Payer | null) => String(payer?.payerType || "").toUpperCase() === "INSURANCE";
+const isFilled = (value: unknown) => String(value ?? "").trim().length > 0;
+
+const payerTissMissing = (payer: Payer | null, form: PayerTissForm) => {
+  if (!isInsurancePayer(payer)) return [];
+  const missing: string[] = [];
+  if (!isFilled(form.ansRegistration)) missing.push("Registro ANS não informado");
+  if (!isFilled(form.tissVersion)) missing.push("Versão TISS não configurada");
+  if (form.requiresProviderCode && !isFilled(form.contractedProviderCode) && !isFilled(form.operatorProviderCode) && !isFilled(form.operatorCode)) {
+    missing.push("Código do contratado na operadora não informado");
+  }
+  if (form.requiresBeneficiaryCard && !isFilled(form.beneficiaryIdentificationType)) {
+    missing.push("Tipo de identificação do beneficiário não configurado");
+  }
+  return missing;
+};
+
 export function PayerRequirementsPanel() {
   const [payers, setPayers] = useState<Payer[]>([]);
   const [selectedPayerId, setSelectedPayerId] = useState("");
@@ -161,10 +256,17 @@ export function PayerRequirementsPanel() {
   const [editingTussCodeId, setEditingTussCodeId] = useState("");
   const [editingTussMappingId, setEditingTussMappingId] = useState("");
   const [tussActionInfo, setTussActionInfo] = useState("");
+  const [payerTissForm, setPayerTissForm] = useState<PayerTissForm>(defaultPayerTissForm);
+  const [payerTissLoading, setPayerTissLoading] = useState(false);
+  const [payerTissMessage, setPayerTissMessage] = useState("");
 
   const selectedPayer = useMemo(
     () => payers.find((payer) => payer.id === selectedPayerId) || null,
     [payers, selectedPayerId],
+  );
+  const selectedPayerTissMissing = useMemo(
+    () => payerTissMissing(selectedPayer, payerTissForm),
+    [payerTissForm, selectedPayer],
   );
 
   const loadPayers = async () => {
@@ -227,6 +329,26 @@ export function PayerRequirementsPanel() {
     }
   };
 
+  const loadPayerTissProfile = async (payerId: string) => {
+    if (!payerId) {
+      setPayerTissForm(defaultPayerTissForm);
+      return;
+    }
+    setPayerTissLoading(true);
+    setPayerTissMessage("");
+    try {
+      const result = await dataService.getPayerTissProfile(payerId);
+      if (!result?.success) {
+        setError(result?.error || "Não foi possível carregar os dados TISS da operadora agora.");
+        setPayerTissForm(defaultPayerTissForm);
+        return;
+      }
+      setPayerTissForm(normalizePayerTissProfile(result.data || {}));
+    } finally {
+      setPayerTissLoading(false);
+    }
+  };
+
   useEffect(() => {
     void loadPayers();
   }, []);
@@ -237,6 +359,10 @@ export function PayerRequirementsPanel() {
 
   useEffect(() => {
     void loadTussConfig(selectedPayerId);
+  }, [selectedPayerId]);
+
+  useEffect(() => {
+    void loadPayerTissProfile(selectedPayerId);
   }, [selectedPayerId]);
 
   const createPayer = async () => {
@@ -297,6 +423,28 @@ export function PayerRequirementsPanel() {
 
   const toggleRequirementFlag = (key: string) => {
     setRequirementForm((current: any) => ({ ...current, [key]: !current[key] }));
+  };
+
+  const updatePayerTiss = (key: keyof PayerTissForm, value: any) => {
+    setPayerTissForm((current) => ({ ...current, [key]: value }));
+  };
+
+  const savePayerTissProfile = async () => {
+    if (!selectedPayerId || !isInsurancePayer(selectedPayer)) return;
+    setSaving(true);
+    setError("");
+    setPayerTissMessage("");
+    try {
+      const result = await dataService.updatePayerTissProfile(selectedPayerId, payerTissForm);
+      if (!result?.success) {
+        setError(result?.error || "Não foi possível salvar os dados TISS da operadora agora.");
+        return;
+      }
+      setPayerTissForm(normalizePayerTissProfile(result.data || payerTissForm));
+      setPayerTissMessage("Dados TISS da operadora salvos. Pré-guias deste pagador foram marcadas para revalidação.");
+    } finally {
+      setSaving(false);
+    }
   };
 
   const upsertTussMappingInState = (item: PayerTussMapping) => {
@@ -631,6 +779,107 @@ export function PayerRequirementsPanel() {
               </p>
             </div>
             <ClipboardCheck size={18} className="text-slate-400" />
+          </div>
+
+          <div className="mt-4 rounded-2xl border border-indigo-100 bg-indigo-50/50 p-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-widest text-indigo-500">Dados TISS da operadora</p>
+                <p className="mt-1 text-xs font-semibold text-slate-600">
+                  Fonte global do pagador usada pela Pré-guia TISS. Particular fica como não aplicável.
+                </p>
+              </div>
+              <span className={`rounded-full px-2 py-1 text-xs font-bold ${
+                !isInsurancePayer(selectedPayer)
+                  ? "bg-slate-100 text-slate-600"
+                  : selectedPayerTissMissing.length === 0
+                    ? "bg-emerald-50 text-emerald-700"
+                    : "bg-amber-50 text-amber-700"
+              }`}>
+                {!isInsurancePayer(selectedPayer) ? "Não aplicável" : selectedPayerTissMissing.length === 0 ? "Completo" : "Incompleto"}
+              </span>
+            </div>
+
+            {isInsurancePayer(selectedPayer) ? (
+              <>
+                {selectedPayerTissMissing.length > 0 && (
+                  <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
+                    Pendências: {selectedPayerTissMissing.join(", ")}.
+                  </div>
+                )}
+                {payerTissMessage && (
+                  <div className="mt-3 rounded-2xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700">
+                    {payerTissMessage}
+                  </div>
+                )}
+                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                  <input value={payerTissForm.ansRegistration} onChange={(event) => updatePayerTiss("ansRegistration", event.target.value)} placeholder="Registro ANS" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none" />
+                  <input value={payerTissForm.operatorCode} onChange={(event) => updatePayerTiss("operatorCode", event.target.value)} placeholder="Código da operadora" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none" />
+                  <input value={payerTissForm.tissVersion} onChange={(event) => updatePayerTiss("tissVersion", event.target.value)} placeholder="Versão TISS configurada" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none" />
+                  <select value={payerTissForm.defaultGuideType} onChange={(event) => updatePayerTiss("defaultGuideType", event.target.value)} className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none">
+                    <option value="sp_sadt">Guia SP/SADT</option>
+                    <option value="consulta">Guia de consulta</option>
+                    <option value="other">Outra guia</option>
+                  </select>
+                  <select value={payerTissForm.beneficiaryIdentificationType} onChange={(event) => updatePayerTiss("beneficiaryIdentificationType", event.target.value)} className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none">
+                    <option value="card_number">Carteirinha</option>
+                    <option value="cpf">CPF</option>
+                    <option value="document">Documento</option>
+                    <option value="other">Outro</option>
+                  </select>
+                  <input value={payerTissForm.contractedProviderCode} onChange={(event) => updatePayerTiss("contractedProviderCode", event.target.value)} placeholder="Código do contratado na operadora" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none" />
+                  <input value={payerTissForm.contractedExecutant} onChange={(event) => updatePayerTiss("contractedExecutant", event.target.value)} placeholder="Contratado executante" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none" />
+                  <input value={payerTissForm.operatorProviderCode} onChange={(event) => updatePayerTiss("operatorProviderCode", event.target.value)} placeholder="Código na operadora" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none" />
+                  <input value={payerTissForm.defaultAttendanceType} onChange={(event) => updatePayerTiss("defaultAttendanceType", event.target.value)} placeholder="Tipo de atendimento padrão" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none" />
+                  <input value={payerTissForm.defaultAttendanceRegime} onChange={(event) => updatePayerTiss("defaultAttendanceRegime", event.target.value)} placeholder="Regime padrão" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none" />
+                  <input value={payerTissForm.defaultAttendanceCharacter} onChange={(event) => updatePayerTiss("defaultAttendanceCharacter", event.target.value)} placeholder="Caráter padrão" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none" />
+                </div>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  {[
+                    ["requiresBeneficiaryCard", "Exige carteirinha"],
+                    ["requiresBeneficiaryCardValidity", "Exige validade da carteirinha"],
+                    ["requiresAuthorization", "Exige autorização prévia"],
+                    ["requiresAuthorizationPassword", "Exige senha/autorização"],
+                    ["requiresGuideNumber", "Exige número de guia"],
+                    ["requiresCid", "Exige CID"],
+                    ["requiresExecutantRegistry", "Exige conselho do executante"],
+                    ["requiresCbo", "Exige CBO"],
+                    ["requiresCnes", "Exige CNES do prestador"],
+                    ["requiresProviderCode", "Exige código do prestador"],
+                    ["requiresResponsibleSignature", "Exige assinatura do responsável"],
+                  ].map(([key, label]) => (
+                    <label key={key} className="flex items-center gap-2 rounded-2xl border border-slate-100 bg-white px-3 py-2 text-sm font-semibold text-slate-700">
+                      <input
+                        type="checkbox"
+                        checked={Boolean((payerTissForm as any)[key])}
+                        onChange={(event) => updatePayerTiss(key as keyof PayerTissForm, event.target.checked)}
+                        className="h-4 w-4 accent-[#7a32fc]"
+                      />
+                      {label}
+                    </label>
+                  ))}
+                </div>
+                <textarea
+                  value={payerTissForm.specificRules}
+                  onChange={(event) => updatePayerTiss("specificRules", event.target.value)}
+                  placeholder="Observações e regras específicas do convênio"
+                  className="mt-3 min-h-[72px] w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none"
+                />
+                <button
+                  type="button"
+                  disabled={!selectedPayerId || saving || payerTissLoading}
+                  onClick={() => void savePayerTissProfile()}
+                  className="mt-3 inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-900 px-4 py-3 text-sm font-bold text-white disabled:opacity-50"
+                >
+                  {saving || payerTissLoading ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                  Salvar dados TISS da operadora
+                </button>
+              </>
+            ) : (
+              <p className="mt-3 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600">
+                Este pagador não é convênio/plano de saúde. A Pré-guia TISS permanece não aplicável e não exige configuração TISS.
+              </p>
+            )}
           </div>
 
           <div className="mt-4 grid gap-3 md:grid-cols-2">

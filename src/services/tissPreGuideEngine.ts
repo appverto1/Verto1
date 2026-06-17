@@ -5,6 +5,9 @@ export type TissPreGuideIssue = {
   field: string;
   message: string;
   section: 'appointment' | 'beneficiary' | 'provider' | 'payer' | 'professional' | 'procedure' | 'authorization';
+  entity?: 'appointment' | 'beneficiary' | 'provider' | 'payer' | 'professional' | 'procedure' | 'authorization';
+  severity?: 'blocking' | 'warning';
+  action?: string;
 };
 
 export type TissPreGuideValidationInput = {
@@ -21,6 +24,7 @@ export type TissPreGuideValidationInput = {
   payerProfile?: Record<string, any> | null;
   professionalProfile?: Record<string, any> | null;
   professional?: Record<string, any> | null;
+  authorization?: Record<string, any> | null;
 };
 
 export type TissPreGuideValidationResult = {
@@ -136,6 +140,18 @@ const NON_TISS_CONTEXTS = new Set([
   'NAO_FATURAVEL',
 ]);
 
+const dateOnly = (value: unknown) => text(value).slice(0, 10);
+const isBeforeDate = (left: unknown, right: unknown) => {
+  const leftDate = dateOnly(left);
+  const rightDate = dateOnly(right);
+  return Boolean(leftDate && rightDate && leftDate < rightDate);
+};
+const isAfterDate = (left: unknown, right: unknown) => {
+  const leftDate = dateOnly(left);
+  const rightDate = dateOnly(right);
+  return Boolean(leftDate && rightDate && leftDate > rightDate);
+};
+
 export function evaluateTissPreGuideEligibility(input: {
   appointment?: Record<string, any> | null;
   billingContext?: Record<string, any> | null;
@@ -177,8 +193,19 @@ const addIssue = (
   field: string,
   message: string,
   section: TissPreGuideIssue['section'],
+  severity: TissPreGuideIssue['severity'] = 'blocking',
 ) => {
-  if (!target.some((item) => item.code === code)) target.push({ code, field, message, section });
+  if (!target.some((item) => item.code === code)) {
+    target.push({
+      code,
+      field,
+      message,
+      section,
+      entity: section,
+      severity,
+      action: tissPreGuideIssueAction(code, section),
+    });
+  }
 };
 
 const normalizeGuideType = (value: unknown): TissPreGuideValidationResult['guideType'] => {
@@ -188,7 +215,48 @@ const normalizeGuideType = (value: unknown): TissPreGuideValidationResult['guide
   return 'sp_sadt';
 };
 
+const issueLabelOverrides: Record<string, string> = {
+  APPOINTMENT_MISSING: 'Atendimento não encontrado',
+  PATIENT_MISSING: 'Paciente não vinculado',
+  PATIENT_NAME_MISSING: 'Nome do beneficiário não informado',
+  PROFESSIONAL_MISSING: 'Profissional executante não vinculado',
+  SCHEDULE_MISSING: 'Data e horário não informados',
+  DURATION_MISSING: 'Duração não informada',
+  FINANCIAL_CONTEXT_MISSING: 'Contexto financeiro não informado',
+  PAYER_MISSING: 'Pagador não aplicado ao atendimento',
+  BENEFICIARY_CARD_MISSING: 'Carteirinha do beneficiário não informada',
+  BENEFICIARY_CARD_VALIDITY_MISSING: 'Validade da carteirinha não informada',
+  BENEFICIARY_CARD_EXPIRED: 'Carteirinha vencida na data do atendimento',
+  CLINIC_TISS_PROFILE_MISSING: 'Dados do prestador não configurados',
+  PROVIDER_DOCUMENT_MISSING: 'CPF/CNPJ do prestador não informado',
+  PROVIDER_CODE_MISSING: 'Código do prestador não informado',
+  CNES_MISSING: 'CNES não informado',
+  PAYER_TISS_PROFILE_MISSING: 'Dados TISS do pagador não configurados',
+  PAYER_ANS_REGISTRATION_MISSING: 'Registro ANS do pagador não informado',
+  PAYER_CONTRACTED_PROVIDER_CODE_MISSING: 'Código do contratado na operadora não informado',
+  PAYER_CID_REQUIRED: 'Convênio exige CID para a pré-guia',
+  TISS_VERSION_MISSING: 'Versão TISS do pagador não configurada',
+  PROFESSIONAL_BILLING_PROFILE_MISSING: 'Perfil faturável do profissional não configurado',
+  PROFESSIONAL_REGISTRY_MISSING: 'Registro profissional não informado',
+  PROFESSIONAL_COUNCIL_STATE_MISSING: 'UF do conselho não informada',
+  CBO_MISSING: 'CBO não informado',
+  PROCEDURE_MISSING: 'Procedimento interno não resolvido',
+  TUSS_CODE_MISSING: 'Código TUSS não resolvido',
+  TUSS_DESCRIPTION_MISSING: 'Descrição TUSS não informada',
+  QUANTITY_MISSING: 'Quantidade não informada',
+  BILLING_UNIT_MISSING: 'Unidade de cobrança não informada',
+  AMOUNT_MISSING: 'Valor previsto não informado',
+  GUIDE_MISSING: 'Guia não informada',
+  AUTHORIZATION_MISSING: 'Convênio exige autorização, mas nenhuma autorização ativa foi encontrada para este paciente/procedimento',
+  AUTHORIZATION_INACTIVE: 'Autorização encontrada não está ativa',
+  AUTHORIZATION_NOT_STARTED: 'Autorização ainda não está vigente na data do atendimento',
+  AUTHORIZATION_EXPIRED: 'Autorização vencida para a data do atendimento',
+  AUTHORIZATION_PROCEDURE_MISMATCH: 'Autorização não cobre o procedimento/TUSS do atendimento',
+  RESPONSIBLE_SIGNATURE_REQUIRED: 'Assinatura do responsável exigida pelo convênio',
+};
+
 export function tissPreGuideIssueLabel(code: unknown) {
+  if (issueLabelOverrides[text(code)]) return issueLabelOverrides[text(code)];
   const labels: Record<string, string> = {
     APPOINTMENT_MISSING: 'Atendimento não encontrado',
     PATIENT_MISSING: 'Paciente não vinculado',
@@ -223,6 +291,17 @@ export function tissPreGuideIssueLabel(code: unknown) {
   return labels[text(code)] || text(code) || 'Pendência TISS';
 }
 
+export function tissPreGuideIssueAction(code: unknown, section?: TissPreGuideIssue['section']) {
+  const normalized = text(code);
+  if (normalized.includes('PAYER') || section === 'payer') return 'Corrigir pagador';
+  if (normalized.includes('BENEFICIARY') || section === 'beneficiary') return 'Corrigir paciente';
+  if (normalized.includes('PROFESSIONAL') || normalized === 'CBO_MISSING' || section === 'professional') return 'Corrigir profissional';
+  if (normalized.includes('PROCEDURE') || normalized.includes('TUSS') || normalized.includes('AMOUNT') || section === 'procedure') return 'Corrigir procedimento/TUSS';
+  if (normalized.includes('AUTHORIZATION') || normalized.includes('GUIDE') || section === 'authorization') return 'Adicionar autorização';
+  if (normalized.includes('PROVIDER') || normalized.includes('CNES') || section === 'provider') return 'Corrigir prestador';
+  return 'Revisar pendência';
+}
+
 export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPreGuideValidationResult {
   const appointment = input.appointment || {};
   const patient = input.patient || {};
@@ -237,6 +316,7 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
   const payerProfile = input.payerProfile || {};
   const professionalProfile = input.professionalProfile || {};
   const professional = input.professional || {};
+  const authorization = input.authorization || {};
   const errors: TissPreGuideIssue[] = [];
   const warnings: TissPreGuideIssue[] = [];
 
@@ -247,6 +327,7 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
       appointment.payer_type,
   );
   const payerId = text(billingContext.payer_id || billingItem.payer_id || payer.id);
+  const payerType = normalizeContext(payer.payer_type || payer.payerType || payer.type);
   const appointmentId = text(appointment.id || appointment.appointment_id || billingItem.appointment_id);
   const patientId = text(appointment.patient_id || billingItem.patient_id || patient.id);
   const professionalId = text(
@@ -273,7 +354,7 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
   );
   const guideType = normalizeGuideType(billingItem.guide_type || mapping.guide_type || payerProfile.default_guide_type);
 
-  if (NON_TISS_CONTEXTS.has(financialContext)) {
+  if (NON_TISS_CONTEXTS.has(financialContext) || NON_TISS_CONTEXTS.has(payerType)) {
     return {
       status: 'not_applicable',
       guideType,
@@ -283,6 +364,7 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
       warningCodes: [],
       snapshot: {
         financialContext,
+        payerType: payerType || null,
         notApplicableReason: 'Contexto financeiro fora de convênio/TISS.',
       },
     };
@@ -317,8 +399,14 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
     if (!text(payerProfile.ans_registration)) {
       addIssue(errors, 'PAYER_ANS_REGISTRATION_MISSING', 'ans_registration', tissPreGuideIssueLabel('PAYER_ANS_REGISTRATION_MISSING'), 'payer');
     }
+    if (payerProfile.requires_provider_code && !text(payerProfile.contracted_provider_code || payerProfile.operator_provider_code || payerProfile.operator_code)) {
+      addIssue(errors, 'PAYER_CONTRACTED_PROVIDER_CODE_MISSING', 'contracted_provider_code', tissPreGuideIssueLabel('PAYER_CONTRACTED_PROVIDER_CODE_MISSING'), 'payer');
+    }
     if (!text(payerProfile.tiss_version)) {
-      addIssue(warnings, 'TISS_VERSION_MISSING', 'tiss_version', tissPreGuideIssueLabel('TISS_VERSION_MISSING'), 'payer');
+      addIssue(warnings, 'TISS_VERSION_MISSING', 'tiss_version', tissPreGuideIssueLabel('TISS_VERSION_MISSING'), 'payer', 'warning');
+    }
+    if (payerProfile.requires_cid && !text(billingContext.cid_code || billingContext.cid || appointment.cid_code || appointment.cid)) {
+      addIssue(errors, 'PAYER_CID_REQUIRED', 'cid_code', tissPreGuideIssueLabel('PAYER_CID_REQUIRED'), 'payer');
     }
   }
 
@@ -365,23 +453,61 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
   if (!positiveNumber(totalAmountCents)) addIssue(errors, 'AMOUNT_MISSING', 'total_amount_cents', tissPreGuideIssueLabel('AMOUNT_MISSING'), 'procedure');
 
   const cardNumber = text(billingContext.insurance_card_number || billingItem.card_number || patient.insurance_card_number);
+  const cardValidUntil = text(
+    billingContext.insurance_card_valid_until ||
+      billingContext.card_valid_until ||
+      billingContext.metadata?.insurance_card_valid_until ||
+      patient.insurance_card_valid_until ||
+      patient.insurance_card_validity,
+  );
   if (payerProfile.requires_beneficiary_card && !cardNumber) {
     addIssue(errors, 'BENEFICIARY_CARD_MISSING', 'beneficiary_card_number', tissPreGuideIssueLabel('BENEFICIARY_CARD_MISSING'), 'beneficiary');
   }
-  const guideNumber = text(billingContext.guide_number || billingItem.guide_number);
-  const authorizationCode = text(billingContext.authorization_code || billingItem.authorization_number);
-  const requiresGuide = Boolean(mapping.requires_guide);
-  const requiresAuthorization = Boolean(payerProfile.requires_authorization || mapping.requires_authorization);
-  if (requiresGuide && !guideNumber) addIssue(errors, 'GUIDE_MISSING', 'guide_number', tissPreGuideIssueLabel('GUIDE_MISSING'), 'authorization');
-  if (requiresAuthorization && !authorizationCode) addIssue(errors, 'AUTHORIZATION_MISSING', 'authorization_code', tissPreGuideIssueLabel('AUTHORIZATION_MISSING'), 'authorization');
-
+  if (payerProfile.requires_beneficiary_card_validity && !cardValidUntil) {
+    addIssue(errors, 'BENEFICIARY_CARD_VALIDITY_MISSING', 'beneficiary_card_valid_until', tissPreGuideIssueLabel('BENEFICIARY_CARD_VALIDITY_MISSING'), 'beneficiary');
+  }
+  if (payerProfile.requires_beneficiary_card_validity && cardValidUntil && scheduledStart && isBeforeDate(cardValidUntil, scheduledStart)) {
+    addIssue(errors, 'BENEFICIARY_CARD_EXPIRED', 'beneficiary_card_valid_until', tissPreGuideIssueLabel('BENEFICIARY_CARD_EXPIRED'), 'beneficiary');
+  }
+  const guideNumber = text(billingContext.guide_number || billingItem.guide_number || authorization.guide_number);
+  const authorizationCode = text(
+    billingContext.authorization_code ||
+      billingItem.authorization_number ||
+      authorization.authorization_code ||
+      authorization.password ||
+      authorization.code,
+  );
+  const authorizationStatus = normalizeContext(authorization.status || (authorization.active === false ? 'cancelled' : 'active'));
+  const authorizationValidFrom = text(authorization.valid_from || billingContext.authorization_valid_from || appointment.authorization_valid_from);
   const authorizationValidUntil = text(
     billingContext.authorization_valid_until ||
       billingContext.metadata?.authorization_valid_until ||
-      appointment.authorization_valid_until,
+      appointment.authorization_valid_until ||
+      authorization.valid_until,
   );
-  if (authorizationValidUntil && authorizationValidUntil.slice(0, 10) < new Date().toISOString().slice(0, 10)) {
+  const authorizationProcedureTussCode = text(authorization.procedure_tuss_code || authorization.tuss_code);
+  const requiresGuide = Boolean(mapping.requires_guide || payerProfile.requires_guide_number);
+  const requiresAuthorization = Boolean(
+    payerProfile.requires_authorization ||
+      payerProfile.requires_authorization_password ||
+      mapping.requires_authorization,
+  );
+  if (requiresGuide && !guideNumber) addIssue(errors, 'GUIDE_MISSING', 'guide_number', tissPreGuideIssueLabel('GUIDE_MISSING'), 'authorization');
+  if (requiresAuthorization && !authorizationCode) addIssue(errors, 'AUTHORIZATION_MISSING', 'authorization_code', tissPreGuideIssueLabel('AUTHORIZATION_MISSING'), 'authorization');
+  if (text(authorization.id) && authorizationStatus && authorizationStatus !== 'ACTIVE') {
+    addIssue(errors, 'AUTHORIZATION_INACTIVE', 'authorization_status', tissPreGuideIssueLabel('AUTHORIZATION_INACTIVE'), 'authorization');
+  }
+  if (authorizationValidFrom && scheduledStart && isAfterDate(authorizationValidFrom, scheduledStart)) {
+    addIssue(errors, 'AUTHORIZATION_NOT_STARTED', 'authorization_valid_from', tissPreGuideIssueLabel('AUTHORIZATION_NOT_STARTED'), 'authorization');
+  }
+  if (authorizationValidUntil && scheduledStart && isBeforeDate(authorizationValidUntil, scheduledStart)) {
     addIssue(errors, 'AUTHORIZATION_EXPIRED', 'authorization_valid_until', tissPreGuideIssueLabel('AUTHORIZATION_EXPIRED'), 'authorization');
+  }
+  if (authorizationProcedureTussCode && resolvedTussCode && authorizationProcedureTussCode !== resolvedTussCode) {
+    addIssue(errors, 'AUTHORIZATION_PROCEDURE_MISMATCH', 'authorization_procedure_tuss_code', tissPreGuideIssueLabel('AUTHORIZATION_PROCEDURE_MISMATCH'), 'authorization');
+  }
+  if (payerProfile.requires_responsible_signature && !Boolean(billingContext.responsible_signature_present || billingContext.signature_present || appointment.responsible_signature_present)) {
+    addIssue(warnings, 'RESPONSIBLE_SIGNATURE_REQUIRED', 'responsible_signature', tissPreGuideIssueLabel('RESPONSIBLE_SIGNATURE_REQUIRED'), 'authorization', 'warning');
   }
 
   const providerTradeName = resolveProviderTradeName({
@@ -409,7 +535,13 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
         id: patientId || null,
         name: text(patient.name || appointment.patient_name) || null,
         cardNumber: cardNumber || null,
+        cardValidUntil: cardValidUntil || null,
         documentNumber: text(patient.document_number || patient.cpf) || null,
+        planCategory: text(patient.insurance_plan_category || billingContext.plan_name) || null,
+        holderName: text(patient.insurance_holder_name) || null,
+        holderDocument: text(patient.insurance_holder_cpf) || null,
+        holderRelationship: text(patient.insurance_holder_relationship) || null,
+        eligibilityNotes: text(patient.eligibility_notes) || null,
       },
       provider: {
         profileId: text(clinicProfile.id) || null,
@@ -430,6 +562,27 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
         operatorCode: text(payerProfile.operator_code) || null,
         tissVersion: text(payerProfile.tiss_version) || null,
         guideType,
+        beneficiaryIdentificationType: text(payerProfile.beneficiary_identification_type) || null,
+        contractedExecutant: text(payerProfile.contracted_executant) || null,
+        contractedProviderCode: text(payerProfile.contracted_provider_code) || null,
+        operatorProviderCode: text(payerProfile.operator_provider_code) || null,
+        defaultAttendanceType: text(payerProfile.default_attendance_type) || null,
+        defaultAttendanceRegime: text(payerProfile.default_attendance_regime) || null,
+        defaultAttendanceCharacter: text(payerProfile.default_attendance_character) || null,
+        specificRules: text(payerProfile.specific_rules) || null,
+        requirements: {
+          requiresAuthorization: Boolean(payerProfile.requires_authorization),
+          requiresAuthorizationPassword: Boolean(payerProfile.requires_authorization_password),
+          requiresGuideNumber: Boolean(payerProfile.requires_guide_number),
+          requiresCid: Boolean(payerProfile.requires_cid),
+          requiresProviderCode: Boolean(payerProfile.requires_provider_code),
+          requiresCnes: Boolean(payerProfile.requires_cnes),
+          requiresCbo: Boolean(payerProfile.requires_cbo),
+          requiresExecutantRegistry: Boolean(payerProfile.requires_executant_registry),
+          requiresBeneficiaryCard: Boolean(payerProfile.requires_beneficiary_card),
+          requiresBeneficiaryCardValidity: Boolean(payerProfile.requires_beneficiary_card_validity),
+          requiresResponsibleSignature: Boolean(payerProfile.requires_responsible_signature),
+        },
       },
       professional: {
         id: professionalId || null,
@@ -454,7 +607,13 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
       authorization: {
         guideNumber: guideNumber || null,
         authorizationCode: authorizationCode || null,
+        authorizationId: text(authorization.id) || null,
+        authorizationStatus: authorizationStatus || null,
+        authorizationValidFrom: authorizationValidFrom || null,
         authorizationValidUntil: authorizationValidUntil || null,
+        authorizedQuantity: positiveNumber(authorization.authorized_quantity) ? Number(authorization.authorized_quantity) : null,
+        authorizedUnit: text(authorization.authorized_unit) || null,
+        procedureTussCode: authorizationProcedureTussCode || null,
       },
     },
   };

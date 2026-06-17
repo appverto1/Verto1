@@ -46,8 +46,8 @@ type TissPreGuideRow = {
   payerName?: string | null;
   clinicName?: string | null;
   status?: string | null;
-  validationErrors?: Array<{ code?: string; field?: string; message?: string; section?: string }>;
-  validationWarnings?: Array<{ code?: string; field?: string; message?: string; section?: string }>;
+  validationErrors?: Array<{ code?: string; field?: string; message?: string; section?: string; action?: string; severity?: string }>;
+  validationWarnings?: Array<{ code?: string; field?: string; message?: string; section?: string; action?: string; severity?: string }>;
   validationErrorCodes?: string[];
   validationWarningCodes?: string[];
   snapshot?: Record<string, any>;
@@ -115,6 +115,8 @@ const issueLabels: Record<string, string> = {
   CNES_MISSING: "CNES",
   PAYER_TISS_PROFILE_MISSING: "Dados do pagador",
   PAYER_ANS_REGISTRATION_MISSING: "Registro ANS",
+  PAYER_CONTRACTED_PROVIDER_CODE_MISSING: "Código do contratado",
+  PAYER_CID_REQUIRED: "CID",
   PROFESSIONAL_BILLING_PROFILE_MISSING: "Perfil do profissional",
   PROFESSIONAL_REGISTRY_MISSING: "Registro profissional",
   PROFESSIONAL_COUNCIL_STATE_MISSING: "UF do conselho",
@@ -126,7 +128,13 @@ const issueLabels: Record<string, string> = {
   GUIDE_MISSING: "Guia",
   AUTHORIZATION_MISSING: "Autorização",
   AUTHORIZATION_EXPIRED: "Autorização vencida",
+  AUTHORIZATION_INACTIVE: "Autorização inativa",
+  AUTHORIZATION_NOT_STARTED: "Autorização não vigente",
+  AUTHORIZATION_PROCEDURE_MISMATCH: "Procedimento não autorizado",
   BENEFICIARY_CARD_MISSING: "Carteirinha",
+  BENEFICIARY_CARD_VALIDITY_MISSING: "Validade da carteirinha",
+  BENEFICIARY_CARD_EXPIRED: "Carteirinha vencida",
+  RESPONSIBLE_SIGNATURE_REQUIRED: "Assinatura do responsável",
 };
 
 function toApiDate(value: string, endOfDay = false) {
@@ -428,12 +436,25 @@ export function TissPreGuideTab({
         operatorCode: data.operator_code || "",
         tissVersion: data.tiss_version || "",
         defaultGuideType: data.default_guide_type || "sp_sadt",
+        beneficiaryIdentificationType: data.beneficiary_identification_type || "card_number",
         requiresAuthorization: Boolean(data.requires_authorization),
+        requiresAuthorizationPassword: Boolean(data.requires_authorization_password),
+        requiresGuideNumber: Boolean(data.requires_guide_number),
+        requiresCid: Boolean(data.requires_cid),
         requiresProviderCode: Boolean(data.requires_provider_code),
         requiresCnes: Boolean(data.requires_cnes),
         requiresCbo: Boolean(data.requires_cbo),
         requiresExecutantRegistry: Boolean(data.requires_executant_registry),
         requiresBeneficiaryCard: data.requires_beneficiary_card !== false,
+        requiresBeneficiaryCardValidity: Boolean(data.requires_beneficiary_card_validity),
+        requiresResponsibleSignature: Boolean(data.requires_responsible_signature),
+        contractedExecutant: data.contracted_executant || "",
+        contractedProviderCode: data.contracted_provider_code || "",
+        operatorProviderCode: data.operator_provider_code || "",
+        defaultAttendanceType: data.default_attendance_type || "",
+        defaultAttendanceRegime: data.default_attendance_regime || "",
+        defaultAttendanceCharacter: data.default_attendance_character || "",
+        specificRules: data.specific_rules || "",
       } : {
         displayName: data.display_name || detail?.professionalName || "",
         documentType: data.document_type || "CPF",
@@ -732,6 +753,8 @@ export function TissPreGuideTab({
                   <Section title="Beneficiário / paciente" icon={UserRound}>
                     <DetailField label="Nome" value={fieldValue(snapshot.beneficiary?.name || detail.patientName)} />
                     <DetailField label="Carteirinha" value={fieldValue(snapshot.beneficiary?.cardNumber || detail.beneficiaryCardNumber)} />
+                    <DetailField label="Validade da carteirinha" value={fieldValue(snapshot.beneficiary?.cardValidUntil)} />
+                    <DetailField label="Plano/categoria" value={fieldValue(snapshot.beneficiary?.planCategory)} />
                     <DetailField label="Documento" value={fieldValue(snapshot.beneficiary?.documentNumber)} />
                   </Section>
 
@@ -749,6 +772,8 @@ export function TissPreGuideTab({
                     <DetailField label="Código da operadora" value={fieldValue(snapshot.payer?.operatorCode)} />
                     <DetailField label="Versão TISS configurada" value={fieldValue(snapshot.payer?.tissVersion)} />
                     <DetailField label="Tipo de guia" value={fieldValue(snapshot.payer?.guideType || detail.guideType)} />
+                    <DetailField label="Código contratado" value={fieldValue(snapshot.payer?.contractedProviderCode || snapshot.payer?.operatorProviderCode)} />
+                    <DetailField label="Tipo de atendimento" value={fieldValue(snapshot.payer?.defaultAttendanceType)} />
                   </Section>
 
                   <Section title="Profissional executante" icon={Users}>
@@ -771,7 +796,9 @@ export function TissPreGuideTab({
                   <Section title="Guia / autorização" icon={FileSearch}>
                     <DetailField label="Guia" value={fieldValue(snapshot.authorization?.guideNumber || detail.guideNumber)} />
                     <DetailField label="Senha / autorização" value={fieldValue(snapshot.authorization?.authorizationCode || detail.authorizationCode)} />
+                    <DetailField label="Início da validade" value={fieldValue(snapshot.authorization?.authorizationValidFrom)} />
                     <DetailField label="Validade" value={fieldValue(snapshot.authorization?.authorizationValidUntil || detail.authorizationValidUntil)} />
+                    <DetailField label="Procedimento autorizado" value={fieldValue(snapshot.authorization?.procedureTussCode)} />
                   </Section>
 
                   <Section title="Resultado da validação" icon={errors.length > 0 ? AlertTriangle : CheckCircle2}>
@@ -781,10 +808,16 @@ export function TissPreGuideTab({
                       ) : (
                         <div className="space-y-2">
                           {errors.map((item, index) => (
-                            <div key={`${item.code}-${index}`} className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800">{item.message || issueLabel(String(item.code || ""))}</div>
+                            <div key={`${item.code}-${index}`} className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800">
+                              <div>{item.message || issueLabel(String(item.code || ""))}</div>
+                              {item.action && <div className="mt-1 text-xs font-bold text-amber-900">{item.action}</div>}
+                            </div>
                           ))}
                           {warnings.map((item, index) => (
-                            <div key={`${item.code}-${index}`} className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sky-800">{item.message || issueLabel(String(item.code || ""))}</div>
+                            <div key={`${item.code}-${index}`} className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sky-800">
+                              <div>{item.message || issueLabel(String(item.code || ""))}</div>
+                              {item.action && <div className="mt-1 text-xs font-bold text-sky-900">{item.action}</div>}
+                            </div>
                           ))}
                         </div>
                       )}
@@ -864,15 +897,32 @@ export function TissPreGuideTab({
                         <option value="other">Outro</option>
                       </select>
                     </label>
+                    <label className="text-xs font-medium text-slate-600">
+                      Identificação do beneficiário
+                      <select value={profileForm.beneficiaryIdentificationType || "card_number"} onChange={(event) => updateProfileField("beneficiaryIdentificationType", event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm">
+                        <option value="card_number">Carteirinha</option>
+                        <option value="cpf">CPF</option>
+                        <option value="document">Documento</option>
+                        <option value="other">Outro</option>
+                      </select>
+                    </label>
+                    <EditorField label="Código do contratado na operadora" value={profileForm.contractedProviderCode || ""} onChange={(value) => updateProfileField("contractedProviderCode", value)} maxLength={120} />
+                    <EditorField label="Contratado executante" value={profileForm.contractedExecutant || ""} onChange={(value) => updateProfileField("contractedExecutant", value)} maxLength={160} />
+                    <EditorField label="Tipo de atendimento padrão" value={profileForm.defaultAttendanceType || ""} onChange={(value) => updateProfileField("defaultAttendanceType", value)} maxLength={80} />
                   </div>
                   <div className="grid gap-2 sm:grid-cols-2">
                     {[
                       ["requiresAuthorization", "Exige autorização"],
+                      ["requiresAuthorizationPassword", "Exige senha/autorização"],
+                      ["requiresGuideNumber", "Exige número de guia"],
+                      ["requiresCid", "Exige CID"],
                       ["requiresProviderCode", "Exige código do prestador"],
                       ["requiresCnes", "Exige CNES"],
                       ["requiresCbo", "Exige CBO"],
                       ["requiresExecutantRegistry", "Exige registro do executante"],
                       ["requiresBeneficiaryCard", "Exige carteirinha"],
+                      ["requiresBeneficiaryCardValidity", "Exige validade da carteirinha"],
+                      ["requiresResponsibleSignature", "Exige assinatura do responsável"],
                     ].map(([key, label]) => (
                       <label key={key} className="flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700">
                         <input type="checkbox" checked={Boolean(profileForm[key])} onChange={(event) => updateProfileField(key, event.target.checked)} />

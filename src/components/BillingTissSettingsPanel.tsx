@@ -51,12 +51,25 @@ const emptyPayerForm = {
   operatorCode: "",
   tissVersion: "",
   defaultGuideType: "sp_sadt",
+  beneficiaryIdentificationType: "card_number",
   requiresAuthorization: false,
+  requiresAuthorizationPassword: false,
+  requiresGuideNumber: false,
+  requiresCid: false,
   requiresProviderCode: false,
   requiresCnes: false,
   requiresCbo: false,
   requiresExecutantRegistry: false,
   requiresBeneficiaryCard: true,
+  requiresBeneficiaryCardValidity: false,
+  requiresResponsibleSignature: false,
+  contractedExecutant: "",
+  contractedProviderCode: "",
+  operatorProviderCode: "",
+  defaultAttendanceType: "",
+  defaultAttendanceRegime: "",
+  defaultAttendanceCharacter: "",
+  specificRules: "",
 };
 
 const emptyProfessionalForm = {
@@ -95,12 +108,25 @@ const normalizePayerProfile = (profile: any = {}) => ({
   operatorCode: profile.operator_code || "",
   tissVersion: profile.tiss_version || "",
   defaultGuideType: profile.default_guide_type || "sp_sadt",
+  beneficiaryIdentificationType: profile.beneficiary_identification_type || "card_number",
   requiresAuthorization: Boolean(profile.requires_authorization),
+  requiresAuthorizationPassword: Boolean(profile.requires_authorization_password),
+  requiresGuideNumber: Boolean(profile.requires_guide_number),
+  requiresCid: Boolean(profile.requires_cid),
   requiresProviderCode: Boolean(profile.requires_provider_code),
   requiresCnes: Boolean(profile.requires_cnes),
   requiresCbo: Boolean(profile.requires_cbo),
   requiresExecutantRegistry: Boolean(profile.requires_executant_registry),
   requiresBeneficiaryCard: profile.requires_beneficiary_card !== false,
+  requiresBeneficiaryCardValidity: Boolean(profile.requires_beneficiary_card_validity),
+  requiresResponsibleSignature: Boolean(profile.requires_responsible_signature),
+  contractedExecutant: profile.contracted_executant || "",
+  contractedProviderCode: profile.contracted_provider_code || "",
+  operatorProviderCode: profile.operator_provider_code || "",
+  defaultAttendanceType: profile.default_attendance_type || "",
+  defaultAttendanceRegime: profile.default_attendance_regime || "",
+  defaultAttendanceCharacter: profile.default_attendance_character || "",
+  specificRules: profile.specific_rules || "",
 });
 
 const normalizeProfessionalProfile = (profile: any = {}, member?: Member | null) => ({
@@ -443,14 +469,31 @@ export function BillingTissSettingsPanel({
                 <option value="other">Outro</option>
               </select>
             </label>
+            <label className="text-xs font-bold text-slate-600">
+              Identificação do beneficiário
+              <select value={payerForm.beneficiaryIdentificationType || "card_number"} onChange={(event) => updatePayer("beneficiaryIdentificationType", event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium">
+                <option value="card_number">Carteirinha</option>
+                <option value="cpf">CPF</option>
+                <option value="document">Documento</option>
+                <option value="other">Outro</option>
+              </select>
+            </label>
+            <Field label="Código do contratado na operadora" value={payerForm.contractedProviderCode} onChange={(value) => updatePayer("contractedProviderCode", value)} maxLength={120} />
+            <Field label="Contratado executante" value={payerForm.contractedExecutant} onChange={(value) => updatePayer("contractedExecutant", value)} maxLength={160} />
+            <Field label="Tipo de atendimento padrão" value={payerForm.defaultAttendanceType} onChange={(value) => updatePayer("defaultAttendanceType", value)} maxLength={80} />
           </div>
           <div className="grid gap-2 md:grid-cols-2">
             <Toggle label="Exige autorização" checked={Boolean(payerForm.requiresAuthorization)} onChange={(value) => updatePayer("requiresAuthorization", value)} />
+            <Toggle label="Exige senha/autorização" checked={Boolean(payerForm.requiresAuthorizationPassword)} onChange={(value) => updatePayer("requiresAuthorizationPassword", value)} />
+            <Toggle label="Exige número de guia" checked={Boolean(payerForm.requiresGuideNumber)} onChange={(value) => updatePayer("requiresGuideNumber", value)} />
+            <Toggle label="Exige CID" checked={Boolean(payerForm.requiresCid)} onChange={(value) => updatePayer("requiresCid", value)} />
             <Toggle label="Exige CNES" checked={Boolean(payerForm.requiresCnes)} onChange={(value) => updatePayer("requiresCnes", value)} />
             <Toggle label="Exige CBO" checked={Boolean(payerForm.requiresCbo)} onChange={(value) => updatePayer("requiresCbo", value)} />
             <Toggle label="Exige registro profissional" checked={Boolean(payerForm.requiresExecutantRegistry)} onChange={(value) => updatePayer("requiresExecutantRegistry", value)} />
             <Toggle label="Exige código do prestador" checked={Boolean(payerForm.requiresProviderCode)} onChange={(value) => updatePayer("requiresProviderCode", value)} />
             <Toggle label="Exige carteirinha" checked={Boolean(payerForm.requiresBeneficiaryCard)} onChange={(value) => updatePayer("requiresBeneficiaryCard", value)} />
+            <Toggle label="Exige validade da carteirinha" checked={Boolean(payerForm.requiresBeneficiaryCardValidity)} onChange={(value) => updatePayer("requiresBeneficiaryCardValidity", value)} />
+            <Toggle label="Exige assinatura do responsável" checked={Boolean(payerForm.requiresResponsibleSignature)} onChange={(value) => updatePayer("requiresResponsibleSignature", value)} />
           </div>
           <div className="flex justify-end">
             <button type="button" onClick={() => void savePayer()} disabled={!selectedPayerId || savingKind === "payer"} className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-bold text-white disabled:opacity-60">
