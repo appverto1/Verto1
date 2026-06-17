@@ -60,6 +60,10 @@ type TissPreGuideRow = {
   validationErrorCodes?: string[];
   validationWarningCodes?: string[];
   snapshot?: Record<string, any>;
+  revenueCycleState?: string | null;
+  revenueCycleStateReason?: string | null;
+  antiGlosaChecklist?: Record<string, any>;
+  antiGlosaRiskCodes?: string[];
   staleReason?: string | null;
   updatedAt?: string | null;
   lastValidatedAt?: string | null;
@@ -178,6 +182,7 @@ const issueLabels: Record<string, string> = {
   PROFESSIONAL_REGISTRY_MISSING: "Registro profissional",
   PROFESSIONAL_COUNCIL_STATE_MISSING: "UF do conselho",
   CBO_MISSING: "CBO",
+  PAYER_TUSS_MAPPING_MISSING: "Mapeamento TUSS",
   PROCEDURE_MISSING: "Procedimento",
   TUSS_CODE_MISSING: "TUSS",
   TUSS_DESCRIPTION_MISSING: "Descrição TUSS",
@@ -341,6 +346,14 @@ function xmlValidationMeta(status?: string | null) {
   if (normalized === "warning") return { label: "Com avisos", className: "bg-amber-50 text-amber-700 ring-amber-100" };
   if (normalized === "invalid") return { label: "Inválido", className: "bg-rose-50 text-rose-700 ring-rose-100" };
   return { label: "Não validado", className: "bg-slate-100 text-slate-700 ring-slate-200" };
+}
+
+function antiGlosaStatusMeta(status?: string | null) {
+  const normalized = String(status || "").trim();
+  if (normalized === "ok") return { label: "OK", className: "bg-emerald-50 text-emerald-700 ring-emerald-100" };
+  if (normalized === "attention") return { label: "Atenção", className: "bg-amber-50 text-amber-700 ring-amber-100" };
+  if (normalized === "blocking") return { label: "Bloqueante", className: "bg-rose-50 text-rose-700 ring-rose-100" };
+  return { label: "Não aplicável", className: "bg-slate-100 text-slate-600 ring-slate-200" };
 }
 
 function Section({
@@ -909,6 +922,9 @@ export function TissPreGuideTab({
   const snapshot = detail?.snapshot || {};
   const errors = detail?.validationErrors || [];
   const warnings = detail?.validationWarnings || [];
+  const antiGlosaChecklist = snapshot.antiGlosaChecklist || detail?.antiGlosaChecklist || {};
+  const antiGlosaItems = Array.isArray(antiGlosaChecklist.items) ? antiGlosaChecklist.items : [];
+  const antiGlosaReady = String(antiGlosaChecklist.status || "") === "ready";
   const detailStatus = statusMeta[String(detail?.status || "draft")] || statusMeta.draft;
   const detailHasAuthorization = hasAuthorizationSnapshot(detail);
   const detailHasAuthorizationIssue = [...errors, ...warnings].some((item) => isAuthorizationIssue(item));
@@ -1713,6 +1729,56 @@ export function TissPreGuideTab({
                         <div className="space-y-2">
                           {errors.map((item, index) => renderValidationIssue(item, index, "error"))}
                           {warnings.map((item, index) => renderValidationIssue(item, index, "warning"))}
+                        </div>
+                      )}
+                    </div>
+                  </Section>
+
+                  <Section title="Checklist antiglosa" icon={ShieldAlert}>
+                    <div className="sm:col-span-2">
+                      <div className={`rounded-md border px-3 py-2 text-sm ${
+                        antiGlosaReady
+                          ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                          : "border-amber-200 bg-amber-50 text-amber-800"
+                      }`}>
+                        {antiGlosaReady
+                          ? "Checklist operacional pronto para faturamento futuro."
+                          : "Revise os itens pendentes antes de avançar para faturamento futuro."}
+                        <div className="mt-1 text-xs">
+                          {Number(antiGlosaChecklist.okCount || 0)} OK · {Number(antiGlosaChecklist.blockingCount || 0)} bloqueante(s) · {Number(antiGlosaChecklist.attentionCount || 0)} atenção · {Number(antiGlosaChecklist.notApplicableCount || 0)} não aplicável(is)
+                        </div>
+                      </div>
+                      {antiGlosaItems.length > 0 ? (
+                        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                          {antiGlosaItems.map((item: any) => {
+                            const meta = antiGlosaStatusMeta(item.status);
+                            const relatedCodes = Array.isArray(item.relatedIssueCodes) ? item.relatedIssueCodes : [];
+                            return (
+                              <div key={item.code} className="rounded-md border border-slate-200 bg-white px-3 py-2">
+                                <div className="flex items-start justify-between gap-2">
+                                  <div className="font-medium text-slate-800">{fieldValue(item.label, "Item antiglosa")}</div>
+                                  <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ${meta.className}`}>{meta.label}</span>
+                                </div>
+                                <div className="mt-1 text-xs text-slate-500">{fieldValue(item.riskClass, "Risco operacional")}</div>
+                                {item.suggestedAction && item.status !== "ok" && item.status !== "not_applicable" ? (
+                                  <div className="mt-2 text-xs font-medium text-slate-700">Ação sugerida: {item.suggestedAction}</div>
+                                ) : null}
+                                {relatedCodes.length > 0 ? (
+                                  <div className="mt-2 flex flex-wrap gap-1">
+                                    {relatedCodes.map((code: string) => (
+                                      <span key={`${item.code}-${code}`} className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600">
+                                        {issueLabel(code)}
+                                      </span>
+                                    ))}
+                                  </div>
+                                ) : null}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+                          Checklist antiglosa ainda não materializado. Revalide a Pré-guia para atualizar.
                         </div>
                       )}
                     </div>

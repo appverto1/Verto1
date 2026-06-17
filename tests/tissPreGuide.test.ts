@@ -12,6 +12,13 @@ import {
 import {
   validateTissXmlDraft,
 } from '../src/services/tissXmlDraftValidator';
+import {
+  deriveTissRevenueCycleStateFromPreGuide,
+  transitionTissRevenueCycleState,
+} from '../src/services/tissRevenueCycleStateMachine';
+import {
+  buildTissAntiGlosaChecklist,
+} from '../src/services/tissAntiGlosaChecklist';
 
 const root = process.cwd();
 const serverCode = readFileSync(join(root, 'server.ts'), 'utf8');
@@ -26,8 +33,11 @@ const migrationCode = readFileSync(join(root, 'supabase/migrations/2026061418300
 const payerOperationalMigrationCode = readFileSync(join(root, 'supabase/migrations/20260617110000_payer_tiss_operational_requirements.sql'), 'utf8');
 const authorizationCycleMigrationCode = readFileSync(join(root, 'supabase/migrations/20260617153000_patient_payer_authorizations_operational_cycle.sql'), 'utf8');
 const xmlDraftMigrationCode = readFileSync(join(root, 'supabase/migrations/20260617190000_tiss_xml_drafts.sql'), 'utf8');
+const revenueCycleMigrationCode = readFileSync(join(root, 'supabase/migrations/20260617210000_tiss_revenue_cycle_backbone.sql'), 'utf8');
 const xmlDraftGeneratorCode = readFileSync(join(root, 'src/services/tissXmlDraftGenerator.ts'), 'utf8');
 const xmlDraftValidatorCode = readFileSync(join(root, 'src/services/tissXmlDraftValidator.ts'), 'utf8');
+const revenueStateMachineCode = readFileSync(join(root, 'src/services/tissRevenueCycleStateMachine.ts'), 'utf8');
+const antiGlosaChecklistCode = readFileSync(join(root, 'src/services/tissAntiGlosaChecklist.ts'), 'utf8');
 const packageJson = readFileSync(join(root, 'package.json'), 'utf8');
 
 const tests: Array<{ name: string; fn: () => void }> = [];
@@ -167,6 +177,67 @@ test('atendimento de convênio com dados mínimos produz Pré-guia válida', () 
   assert.equal(result.snapshot.professional.councilNumber, '00/00000');
   assert.equal(result.snapshot.professional.councilState, 'SP');
   assert.equal(result.snapshot.professional.cboCode, '000000');
+  assert.equal(result.snapshot.revenueCycle.state, 'ready_for_billing');
+  assert.equal(result.snapshot.revenueCycle.canAdvanceToBilling, true);
+  assert.equal(result.snapshot.antiGlosaChecklist.status, 'ready');
+});
+
+test('maquina de estados permite PrÃ©-guia vÃ¡lida e bloqueia estados oficiais futuros', () => {
+  const validation = validateTissPreGuide(validInput);
+  const readyState = deriveTissRevenueCycleStateFromPreGuide({
+    status: validation.status,
+    validationErrorCodes: validation.errorCodes,
+    snapshot: validation.snapshot,
+  });
+  assert.equal(readyState.state, 'ready_for_billing');
+
+  const pending = validateTissPreGuide({
+    ...validInput,
+    authorization: null,
+    billingContext: { ...validInput.billingContext, authorization_code: '', guide_number: '' },
+  });
+  const pendingState = deriveTissRevenueCycleStateFromPreGuide({
+    status: pending.status,
+    validationErrorCodes: pending.errorCodes,
+    snapshot: pending.snapshot,
+  });
+  assert.equal(pendingState.state, 'awaiting_authorization');
+
+  assert.equal(transitionTissRevenueCycleState({ previousState: 'missing_data', newState: 'ready_for_billing' }).ok, true);
+  const official = transitionTissRevenueCycleState({ previousState: 'ready_for_billing', newState: 'sent' });
+  assert.equal(official.ok, false);
+  assert.equal(official.errorCode, 'TISS_REVENUE_STATE_RESERVED_FOR_FUTURE');
+});
+
+test('checklist antiglosa reflete pendencias e riscos operacionais', () => {
+  const pending = validateTissPreGuide({
+    ...validInput,
+    authorization: null,
+    billingContext: { ...validInput.billingContext, authorization_code: '', guide_number: '' },
+  });
+  const checklist = buildTissAntiGlosaChecklist({
+    status: pending.status,
+    errors: pending.errors,
+    warnings: pending.warnings,
+    errorCodes: pending.errorCodes,
+    warningCodes: pending.warningCodes,
+    snapshot: pending.snapshot,
+  });
+  const authorizationItem = checklist.items.find((item) => item.code === 'authorization_valid');
+  assert.equal(checklist.status, 'pending');
+  assert.equal(authorizationItem?.status, 'blocking');
+  assert.equal(authorizationItem?.riskClass, 'risco de negativa por autorização');
+  assert.equal(authorizationItem?.suggestedAction, 'Adicionar autorização');
+});
+
+test('procedimento de convÃªnio sem De/Para TUSS do pagador fica pendente', () => {
+  const result = validateTissPreGuide({
+    ...validInput,
+    mapping: null,
+  });
+  assert.equal(result.status, 'pending_data');
+  assert.ok(result.errorCodes.includes('PAYER_TUSS_MAPPING_MISSING'));
+  assert.equal(result.snapshot.antiGlosaChecklist.items.find((item: any) => item.code === 'procedure_tuss_mapping')?.status, 'blocking');
 });
 
 test('pre-guia válida gera XML TISS-like SP/SADT em rascunho interno', () => {
@@ -816,6 +887,27 @@ test('migration de XML TISS em rascunho cria historico interno sem envio', () =>
   assert.match(xmlDraftMigrationCode, /status in \('draft', 'superseded', 'cancelled'\)/);
   assert.match(xmlDraftMigrationCode, /alter table public\.tiss_xml_drafts enable row level security/);
   assert.match(xmlDraftMigrationCode, /tiss_xml_drafts_admin_rw/);
+  for (const table of [
+    'tiss_revenue_cycle_events',
+    'tiss_billing_batch_drafts',
+    'tuss_versions',
+    'tuss_categories',
+    'denial_reason_codes',
+  ]) {
+    assert.match(revenueCycleMigrationCode, new RegExp(`create table if not exists public\\.${table}`));
+    assert.match(revenueCycleMigrationCode, new RegExp(`alter table public\\.${table} enable row level security`));
+  }
+  assert.match(revenueCycleMigrationCode, /add column if not exists revenue_cycle_state/);
+  assert.match(revenueCycleMigrationCode, /add column if not exists anti_glosa_checklist/);
+  assert.match(revenueCycleMigrationCode, /PRE_GUIDE_READY_FOR_BILLING/);
+  assert.match(revenueCycleMigrationCode, /XML_DRAFT_GENERATED/);
+  assert.match(revenueCycleMigrationCode, /billing_batch_draft/);
+  assert.match(revenueCycleMigrationCode, /payer_specific_description/);
+  assert.match(revenueCycleMigrationCode, /negotiated_amount_cents/);
+  assert.match(revenueCycleMigrationCode, /Legacy clinics created the clinic row with id = owner user id/);
+  assert.match(revenueCycleMigrationCode, /for all to authenticated/);
+  assert.doesNotMatch(revenueCycleMigrationCode, /for all to public/);
+  assert.match(revenueCycleMigrationCode, /does NOT transmit official batches/i);
   assert.match(xmlDraftMigrationCode, /does NOT send remittances, create official batches, receive returns, handle denials/i);
   assert.doesNotMatch(xmlDraftMigrationCode, /create table if not exists public\.(tiss_batches|tiss_remittances|tiss_returns|tiss_denials)/i);
 });
@@ -882,6 +974,10 @@ test('backend gera e baixa XML TISS apenas como rascunho interno', () => {
   assert.match(createRoute, /draft_format:\s*generated\.draftFormat/);
   assert.match(createRoute, /\.update\(\{ status: 'superseded'/);
   assert.match(createRoute, /\.from\('tiss_xml_drafts'\)[\s\S]*?\.insert\(payload\)/);
+  assert.match(createRoute, /revenue_cycle_state:\s*'xml_draft_generated'/);
+  assert.match(createRoute, /createTissBillingBatchDraftForXmlDraft/);
+  assert.match(createRoute, /eventType:\s*'XML_DRAFT_GENERATED'/);
+  assert.match(createRoute, /notSentToPayer:\s*true/);
   assert.match(createRoute, /XML TISS em rascunho gerado para conferência interna/);
   assert.match(listRoute, /TISS_XML_DRAFT_SELECT/);
   assert.doesNotMatch(listRoute, /xml_content/);
@@ -890,6 +986,7 @@ test('backend gera e baixa XML TISS apenas como rascunho interno', () => {
   assert.match(serverCode, /app\.post\('\/api\/tiss\/xml-drafts\/:draftId\/validate'/);
   assert.match(serverCode, /technicalValidation = validateTissXmlDraft\(xmlContent\)/);
   assert.match(serverCode, /validation_summary:\s*nextValidationSummary/);
+  assert.match(serverCode, /eventType:\s*'XML_DRAFT_VALIDATED'/);
   assert.match(serverCode, /technicalValidationStatus/);
   assert.match(serverCode, /draftFormat/);
   assert.match(downloadRoute, /Content-Type', 'application\/xml; charset=utf-8'/);
@@ -944,6 +1041,12 @@ test('revalidação reconstrói snapshots a partir dos cadastros mestres atuais'
   assert.match(builder, /payer_tiss_profile_id:\s*isUuid\(sanitizeString\(payerProfile\?\.id/);
   assert.match(builder, /professional_billing_profile_id:\s*isUuid\(sanitizeString\(professionalProfile\?\.id/);
   assert.match(builder, /snapshot_data:\s*snapshot/);
+  assert.match(builder, /revenue_cycle_state:\s*revenueCycle\.state/);
+  assert.match(builder, /anti_glosa_checklist:\s*antiGlosaChecklist/);
+  assert.match(builder, /anti_glosa_risk_codes:\s*antiGlosaRiskCodes/);
+  assert.match(builder, /recordTissRevenueCycleEvent/);
+  assert.match(builder, /PRE_GUIDE_READY_FOR_BILLING/);
+  assert.match(builder, /PRE_GUIDE_PENDING/);
   assert.match(builder, /fetchResponsibleSignatureForPreGuide/);
   assert.match(signatureReader, /\.from\('session_signatures'\)[\s\S]*?\.select\(SESSION_SIGNATURE_SELECT\)/);
   assert.match(signatureReader, /\.eq\('organization_id', organizationId\)[\s\S]*?\.eq\('patient_id', patientId\)/);
@@ -1177,6 +1280,13 @@ test('frontend separa Pré-guias e Rascunhos XML com preview interno', () => {
   assert.match(preGuideUiCode, /RESPONSIBLE_SIGNATURE_REQUIRED:\s*"Assinatura do responsável"/);
   assert.match(preGuideUiCode, /<Section title="Assinatura" icon=\{ClipboardCheck\}>/);
   assert.match(preGuideUiCode, /Data\/hora da assinatura/);
+  assert.match(preGuideUiCode, /Checklist antiglosa/);
+  assert.match(preGuideUiCode, /antiGlosaChecklist/);
+  assert.match(preGuideUiCode, /antiGlosaStatusMeta/);
+  assert.match(preGuideUiCode, /Bloqueante/);
+  assert.match(preGuideUiCode, /Aten/);
+  assert.match(preGuideUiCode, /Não aplicável|NÃ£o aplicÃ¡vel/);
+  assert.match(preGuideUiCode, /Ação sugerida|AÃ§Ã£o sugerida/);
   assert.match(preGuideUiCode, /isResponsibleSignatureIssue/);
   assert.match(preGuideUiCode, /Ir para atendimento e coletar assinatura/);
   assert.doesNotMatch(preGuideUiCode.slice(preGuideUiCode.indexOf('isResponsibleSignatureIssue'), preGuideUiCode.indexOf('isAuthorizationIssue')), /Adicionar autorização/);
@@ -1208,10 +1318,16 @@ test('frontend separa Pré-guias e Rascunhos XML com preview interno', () => {
   assert.match(preGuideUiCode, /stalePreGuides/);
   assert.match(preGuideUiCode, /Gerar\/Revalidar pendentes/);
   assert.match(preGuideUiCode, /Nenhum atendimento eleg/);
-  assert.doesNotMatch(preGuideUiCode, /Enviar lote|Enviar remessa|Registrar glosa|Remessa enviada|Faturamento TISS concluído|Guia oficial enviada|Lote transmitido|XML oficial|Retorno|Glosa/i);
+  assert.doesNotMatch(preGuideUiCode, /Enviar lote|Enviar remessa|Registrar glosa|Remessa enviada|Faturamento TISS concluído|Guia oficial enviada|Lote transmitido|XML oficial|Retorno importado|Glosa processada|Recurso de glosa/i);
 });
 
 test('data service usa operações explícitas e o pacote expõe suíte dedicada', () => {
+  assert.match(revenueStateMachineCode, /RESERVED_FUTURE_STATES/);
+  assert.match(revenueStateMachineCode, /TISS_REVENUE_STATE_RESERVED_FOR_FUTURE/);
+  assert.match(antiGlosaChecklistCode, /ChecklistStatus/);
+  assert.match(antiGlosaChecklistCode, /risco de negativa por autoriza/);
+  assert.doesNotMatch(xmlDraftGeneratorCode, /clinical_notes|session_notes|prontuario|prontu[aá]rio|subjective|intervention|aba_trials/i);
+  assert.doesNotMatch(antiGlosaChecklistCode, /clinical_notes|session_notes|prontuario|prontu[aá]rio|subjective|intervention|aba_trials/i);
   for (const helper of [
     'getTissPreGuides',
     'getTissPreGuideCoverage',

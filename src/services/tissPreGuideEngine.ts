@@ -1,3 +1,6 @@
+import { buildTissAntiGlosaChecklist } from './tissAntiGlosaChecklist';
+import { deriveTissRevenueCycleStateFromPreGuide } from './tissRevenueCycleStateMachine';
+
 export type TissPreGuideStatus = 'draft' | 'valid' | 'pending_data' | 'not_applicable' | 'cancelled';
 
 export type TissPreGuideIssue = {
@@ -237,6 +240,7 @@ const issueLabelOverrides: Record<string, string> = {
   PROFESSIONAL_REGISTRY_MISSING: 'Registro profissional não informado',
   PROFESSIONAL_COUNCIL_STATE_MISSING: 'UF do conselho não informada',
   CBO_MISSING: 'CBO não informado',
+  PAYER_TUSS_MAPPING_MISSING: 'Procedimento sem mapeamento TUSS para este convênio',
   PROCEDURE_MISSING: 'Procedimento interno não resolvido',
   TUSS_CODE_MISSING: 'Código TUSS não resolvido',
   TUSS_DESCRIPTION_MISSING: 'Descrição TUSS não informada',
@@ -279,6 +283,7 @@ export function tissPreGuideIssueLabel(code: unknown) {
     PROFESSIONAL_REGISTRY_MISSING: 'Registro profissional não informado',
     PROFESSIONAL_COUNCIL_STATE_MISSING: 'UF do conselho não informada',
     CBO_MISSING: 'CBO não informado',
+    PAYER_TUSS_MAPPING_MISSING: 'Procedimento sem mapeamento TUSS para este convênio',
     PROCEDURE_MISSING: 'Procedimento interno não resolvido',
     TUSS_CODE_MISSING: 'Código TUSS não resolvido',
     TUSS_DESCRIPTION_MISSING: 'Descrição TUSS não informada',
@@ -363,18 +368,38 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
   const guideType = normalizeGuideType(billingItem.guide_type || mapping.guide_type || payerProfile.default_guide_type);
 
   if (NON_TISS_CONTEXTS.has(financialContext) || NON_TISS_CONTEXTS.has(payerType)) {
+    const status: TissPreGuideStatus = 'not_applicable';
+    const snapshot: Record<string, any> = {
+      financialContext,
+      payerType: payerType || null,
+      notApplicableReason: 'Contexto financeiro fora de convênio/TISS.',
+    };
+    snapshot.antiGlosaChecklist = buildTissAntiGlosaChecklist({
+      status,
+      errors: [],
+      warnings: [],
+      errorCodes: [],
+      warningCodes: [],
+      snapshot,
+    });
+    const revenueCycle = deriveTissRevenueCycleStateFromPreGuide({
+      status,
+      validationErrorCodes: [],
+      snapshot,
+    });
+    snapshot.revenueCycle = {
+      state: revenueCycle.state,
+      reason: revenueCycle.reason,
+      canAdvanceToBilling: false,
+    };
     return {
-      status: 'not_applicable',
+      status,
       guideType,
       errors: [],
       warnings: [],
       errorCodes: [],
       warningCodes: [],
-      snapshot: {
-        financialContext,
-        payerType: payerType || null,
-        notApplicableReason: 'Contexto financeiro fora de convênio/TISS.',
-      },
+      snapshot,
     };
   }
 
@@ -452,8 +477,12 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
   const unitAmountCents = Number(billingItem.unit_amount_cents ?? mapping.amount_cents ?? service.default_amount_cents ?? 0);
   const totalAmountCents = Number(billingItem.amount_cents ?? (positiveNumber(quantity) && unitAmountCents > 0 ? quantity * unitAmountCents : 0));
   const executorName = text(professionalProfile.display_name || professional.name);
+  const mappingId = text(mapping.id || billingItem.payer_tuss_mapping_id);
 
   if (!procedureCode && !procedureName) addIssue(errors, 'PROCEDURE_MISSING', 'internal_procedure', tissPreGuideIssueLabel('PROCEDURE_MISSING'), 'procedure');
+  if (payerId && (procedureCode || procedureName || text(service.id || billingItem.service_catalog_id)) && !mappingId) {
+    addIssue(errors, 'PAYER_TUSS_MAPPING_MISSING', 'payer_tuss_mapping_id', tissPreGuideIssueLabel('PAYER_TUSS_MAPPING_MISSING'), 'procedure');
+  }
   if (!resolvedTussCode) addIssue(errors, 'TUSS_CODE_MISSING', 'tuss_code', tissPreGuideIssueLabel('TUSS_CODE_MISSING'), 'procedure');
   if (resolvedTussCode && !tussDescription) addIssue(errors, 'TUSS_DESCRIPTION_MISSING', 'tuss_description', tissPreGuideIssueLabel('TUSS_DESCRIPTION_MISSING'), 'procedure');
   if (!positiveNumber(quantity)) addIssue(errors, 'QUANTITY_MISSING', 'quantity', tissPreGuideIssueLabel('QUANTITY_MISSING'), 'procedure');
@@ -557,14 +586,10 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
     professional,
   });
 
-  return {
-    status: errors.length === 0 ? 'valid' : 'pending_data',
-    guideType,
-    errors,
-    warnings,
-    errorCodes: errors.map((item) => item.code),
-    warningCodes: warnings.map((item) => item.code),
-    snapshot: {
+  const status: TissPreGuideStatus = errors.length === 0 ? 'valid' : 'pending_data';
+  const errorCodes = errors.map((item) => item.code);
+  const warningCodes = warnings.map((item) => item.code);
+  const snapshot: Record<string, any> = {
       appointment: {
         id: appointmentId || null,
         scheduledStart: scheduledStart || null,
@@ -634,6 +659,10 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
         cboCode: text(professionalProfile.cbo_code) || null,
       },
       procedure: {
+        payerTussMappingId: mappingId || null,
+        payerSpecificDescription: text(mapping.description || mapping.payer_description || mapping.procedure_description) || null,
+        payerNegotiatedAmountCents: Number.isFinite(Number(mapping.amount_cents)) ? Number(mapping.amount_cents) : null,
+        tussCodeSource: text(tussCode.source || mapping.source || (resolvedTussCode ? 'manual' : '')) || null,
         internalCode: procedureCode || null,
         name: procedureName || null,
         tussCode: resolvedTussCode || null,
@@ -669,6 +698,34 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
         signatureType: text(signature.signature_type || signature.signatureType) || null,
         status: signatureStatus || null,
       },
-    },
+    };
+  const antiGlosaChecklist = buildTissAntiGlosaChecklist({
+    status,
+    errors,
+    warnings,
+    errorCodes,
+    warningCodes,
+    snapshot,
+  });
+  const revenueCycle = deriveTissRevenueCycleStateFromPreGuide({
+    status,
+    validationErrorCodes: errorCodes,
+    snapshot,
+  });
+  snapshot.antiGlosaChecklist = antiGlosaChecklist;
+  snapshot.revenueCycle = {
+    state: revenueCycle.state,
+    reason: revenueCycle.reason,
+    canAdvanceToBilling: revenueCycle.state === 'ready_for_billing',
+  };
+
+  return {
+    status,
+    guideType,
+    errors,
+    warnings,
+    errorCodes,
+    warningCodes,
+    snapshot,
   };
 }

@@ -117,6 +117,10 @@ import {
   validateTissPreGuide
 } from './src/services/tissPreGuideEngine';
 import {
+  buildTissRevenueCycleEventPayload,
+  deriveTissRevenueCycleStateFromPreGuide
+} from './src/services/tissRevenueCycleStateMachine';
+import {
   generateTissXmlDraft
 } from './src/services/tissXmlDraftGenerator';
 import {
@@ -4079,6 +4083,10 @@ const APPOINTMENT_TISS_PRE_GUIDE_SELECT = [
   'validation_error_codes',
   'validation_warning_codes',
   'snapshot_data',
+  'revenue_cycle_state',
+  'revenue_cycle_state_reason',
+  'anti_glosa_checklist',
+  'anti_glosa_risk_codes',
   'generated_from_version',
   'stale_reason',
   'created_at',
@@ -4111,6 +4119,10 @@ const APPOINTMENT_TISS_PRE_GUIDE_LIST_SELECT = [
   'validation_error_codes',
   'validation_warning_codes',
   'snapshot_data',
+  'revenue_cycle_state',
+  'revenue_cycle_state_reason',
+  'anti_glosa_checklist',
+  'anti_glosa_risk_codes',
   'stale_reason',
   'updated_at',
   'last_validated_at'
@@ -32996,6 +33008,12 @@ async function startServer() {
     validationErrorCodes: Array.isArray(row?.validation_error_codes) ? row.validation_error_codes : [],
     validationWarningCodes: Array.isArray(row?.validation_warning_codes) ? row.validation_warning_codes : [],
     snapshot: row?.snapshot_data && typeof row.snapshot_data === 'object' ? row.snapshot_data : {},
+    revenueCycleState: sanitizeString(row?.revenue_cycle_state, 80) || row?.snapshot_data?.revenueCycle?.state || null,
+    revenueCycleStateReason: sanitizeTextField(row?.revenue_cycle_state_reason || row?.snapshot_data?.revenueCycle?.reason, 600) || null,
+    antiGlosaChecklist: row?.anti_glosa_checklist && typeof row.anti_glosa_checklist === 'object'
+      ? row.anti_glosa_checklist
+      : row?.snapshot_data?.antiGlosaChecklist || {},
+    antiGlosaRiskCodes: Array.isArray(row?.anti_glosa_risk_codes) ? row.anti_glosa_risk_codes : [],
     generatedFromVersion: sanitizeString(row?.generated_from_version, 80) || null,
     staleReason: sanitizeTextField(row?.stale_reason, 600) || null,
     updatedAt: row?.updated_at || null,
@@ -33042,6 +33060,81 @@ async function startServer() {
     };
     if (includeXml) serialized.xmlContent = String(row?.xml_content || '');
     return serialized;
+  };
+
+  const recordTissRevenueCycleEvent = async (params: {
+    organizationId: string;
+    clinicId?: string | null;
+    patientId?: string | null;
+    appointmentId?: string | null;
+    preGuideId?: string | null;
+    xmlDraftId?: string | null;
+    payerId?: string | null;
+    eventType: 'PRE_GUIDE_MATERIALIZED' | 'PRE_GUIDE_VALIDATED' | 'PRE_GUIDE_READY_FOR_BILLING' | 'PRE_GUIDE_PENDING' | 'AUTHORIZATION_ATTACHED' | 'XML_DRAFT_GENERATED' | 'XML_DRAFT_VALIDATED' | 'XML_DRAFT_SUPERSEDED' | 'MANUAL_OVERRIDE_APPLIED';
+    previousState?: string | null;
+    newState: string;
+    reason?: string | null;
+    performedBy?: string | null;
+    metadata?: Record<string, any> | null;
+  }) => {
+    const event = buildTissRevenueCycleEventPayload(params);
+    if (!event.ok) return false;
+    const { error } = await supabase
+      .from('tiss_revenue_cycle_events')
+      .insert(cleanObject(event.payload));
+    if (error) {
+      if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return false;
+      throw error;
+    }
+    return true;
+  };
+
+  const createTissBillingBatchDraftForXmlDraft = async (params: {
+    organizationId: string;
+    payerId: string;
+    competenceMonth: string;
+    preGuideIds: string[];
+    xmlDraftId: string;
+    guideCount: number;
+    totalAmountCents: number;
+    createdBy?: string | null;
+    validationSummary?: Record<string, any> | null;
+  }) => {
+    const organizationId = sanitizeString(params.organizationId, 120);
+    const payerId = sanitizeString(params.payerId, 120);
+    const xmlDraftId = sanitizeString(params.xmlDraftId, 120);
+    if (!isUuid(organizationId) || !isUuid(payerId) || !isUuid(xmlDraftId)) return null;
+    const now = new Date().toISOString();
+    const payload = {
+      organization_id: organizationId,
+      clinic_id: organizationId,
+      payer_id: payerId,
+      competence_month: params.competenceMonth,
+      status: 'draft',
+      pre_guide_ids: params.preGuideIds.filter((id) => isUuid(sanitizeString(id, 120))),
+      xml_draft_ids: [xmlDraftId],
+      guide_count: Math.max(0, Number(params.guideCount || 0)),
+      total_amount_cents: Math.max(0, Number(params.totalAmountCents || 0)),
+      created_by: isUuid(sanitizeString(params.createdBy, 120)) ? sanitizeString(params.createdBy, 120) : null,
+      validation_summary: params.validationSummary || {},
+      metadata: {
+        label: 'Lote rascunho para conferência interna',
+        notSentToPayer: true,
+        scope: 'draft_grouping_only'
+      },
+      created_at: now,
+      updated_at: now
+    };
+    const { data, error } = await supabase
+      .from('tiss_billing_batch_drafts')
+      .insert(cleanObject(payload))
+      .select('id,status,guide_count,total_amount_cents')
+      .maybeSingle();
+    if (error) {
+      if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return null;
+      throw error;
+    }
+    return data || null;
   };
 
   const fetchTissPreGuideProfile = async (
@@ -33202,7 +33295,7 @@ async function startServer() {
         .maybeSingle(),
       supabase
         .from('appointment_tiss_pre_guides')
-        .select('id,organization_id,clinic_id,appointment_id,patient_id,professional_id,payer_id,provider_profile_id,payer_tiss_profile_id,professional_billing_profile_id,scheduled_start,scheduled_end')
+        .select('id,organization_id,clinic_id,appointment_id,patient_id,professional_id,payer_id,provider_profile_id,payer_tiss_profile_id,professional_billing_profile_id,scheduled_start,scheduled_end,snapshot_data,revenue_cycle_state')
         .eq('organization_id', organizationId)
         .eq('appointment_id', appointmentId)
         .limit(1)
@@ -33361,6 +33454,26 @@ async function startServer() {
     const provider = snapshot.provider || {};
     const payerSnapshot = snapshot.payer || {};
     const professionalSnapshot = snapshot.professional || {};
+    const antiGlosaChecklist = snapshot.antiGlosaChecklist && typeof snapshot.antiGlosaChecklist === 'object'
+      ? snapshot.antiGlosaChecklist
+      : {};
+    const revenueCycle = snapshot.revenueCycle?.state
+      ? {
+          state: sanitizeString(snapshot.revenueCycle.state, 80),
+          reason: sanitizeTextField(snapshot.revenueCycle.reason, 600) || null
+        }
+      : deriveTissRevenueCycleStateFromPreGuide({
+          status: validation.status,
+          validationErrorCodes: validation.errorCodes,
+          snapshot
+        });
+    const antiGlosaRiskCodes = Array.isArray(antiGlosaChecklist.items)
+      ? antiGlosaChecklist.items
+          .filter((item: any) => ['blocking', 'attention'].includes(sanitizeString(item?.status, 40)))
+          .map((item: any) => sanitizeString(item?.code, 120))
+          .filter(Boolean)
+          .slice(0, 50)
+      : [];
     const scheduledStart = appointment?.scheduled_start_at || appointment?.scheduled_at || appointment?.scheduled_start || existingPreGuide?.scheduled_start || null;
     const scheduledEnd = appointment?.scheduled_end_at || appointment?.scheduled_end || existingPreGuide?.scheduled_end || null;
     const now = new Date().toISOString();
@@ -33429,6 +33542,10 @@ async function startServer() {
       validation_error_codes: validation.errorCodes,
       validation_warning_codes: validation.warningCodes,
       snapshot_data: snapshot,
+      revenue_cycle_state: revenueCycle.state,
+      revenue_cycle_state_reason: revenueCycle.reason,
+      anti_glosa_checklist: antiGlosaChecklist,
+      anti_glosa_risk_codes: antiGlosaRiskCodes,
       generated_from_version: 'tiss-pre-guide-v1',
       stale_reason: null,
       updated_by: isUuid(userId) ? userId : null,
@@ -33473,6 +33590,41 @@ async function startServer() {
     };
     if (process.env.NODE_ENV !== 'production') {
       console.info('[TissPreGuide] revalidation diagnostics:', persistedDiagnostics);
+    }
+    const persistedPreGuideId = sanitizeString(persisted.data?.id || existingPreGuide?.id, 120);
+    const previousRevenueCycleState = sanitizeString(existingPreGuide?.revenue_cycle_state || existingPreGuide?.snapshot_data?.revenueCycle?.state, 80) || 'draft';
+    const revenueEventType = validation.status === 'valid'
+      ? 'PRE_GUIDE_READY_FOR_BILLING'
+      : validation.status === 'pending_data'
+        ? 'PRE_GUIDE_PENDING'
+        : 'PRE_GUIDE_VALIDATED';
+    if (persistedPreGuideId) {
+      await recordTissRevenueCycleEvent({
+        organizationId,
+        clinicId: organizationId,
+        patientId,
+        appointmentId,
+        preGuideId: persistedPreGuideId,
+        payerId: isUuid(payerId) ? payerId : null,
+        eventType: existingPreGuide?.id ? revenueEventType : 'PRE_GUIDE_MATERIALIZED',
+        previousState: previousRevenueCycleState,
+        newState: revenueCycle.state || 'draft',
+        reason: revenueCycle.reason || 'Pré-guia revalidada no ciclo operacional TISS.',
+        performedBy: isUuid(userId) ? userId : null,
+        metadata: {
+          status: validation.status,
+          validationErrorCodes: validation.errorCodes,
+          validationWarningCodes: validation.warningCodes,
+          antiGlosaSummary: {
+            status: antiGlosaChecklist.status || null,
+            blockingCount: Number(antiGlosaChecklist.blockingCount || 0),
+            attentionCount: Number(antiGlosaChecklist.attentionCount || 0),
+            okCount: Number(antiGlosaChecklist.okCount || 0),
+            notApplicableCount: Number(antiGlosaChecklist.notApplicableCount || 0)
+          },
+          source: 'pre_guide_revalidation'
+        }
+      });
     }
     return {
       ok: true,
@@ -34475,9 +34627,60 @@ async function startServer() {
         }
         throw draftError;
       }
+      const safePreGuideIds = generated.preGuideIds
+        .map((id) => sanitizeString(id, 120))
+        .filter((id) => isUuid(id));
+      if (safePreGuideIds.length > 0) {
+        const stateUpdate = await supabase
+          .from('appointment_tiss_pre_guides')
+          .update({
+            revenue_cycle_state: 'xml_draft_generated',
+            revenue_cycle_state_reason: 'XML TISS em rascunho gerado para conferência interna; não enviado à operadora.',
+            updated_at: now
+          })
+          .eq('organization_id', organizationId)
+          .in('id', safePreGuideIds);
+        if (stateUpdate.error && !hasMissingFinancialSchema(stateUpdate.error) && !isMissingRelationError(stateUpdate.error)) {
+          throw stateUpdate.error;
+        }
+      }
+      const batchDraft = await createTissBillingBatchDraftForXmlDraft({
+        organizationId,
+        payerId,
+        competenceMonth,
+        preGuideIds: safePreGuideIds,
+        xmlDraftId: draft.id,
+        guideCount: generated.guideCount,
+        totalAmountCents: generated.totalAmountCents,
+        createdBy: sanitizeString(req.session.user?.id, 120),
+        validationSummary: generated.validationSummary
+      });
+      await recordTissRevenueCycleEvent({
+        organizationId,
+        clinicId: organizationId,
+        xmlDraftId: draft.id,
+        payerId,
+        eventType: 'XML_DRAFT_GENERATED',
+        previousState: 'ready_for_billing',
+        newState: batchDraft?.id ? 'billing_batch_draft' : 'xml_draft_generated',
+        reason: batchDraft?.id
+          ? 'XML rascunho gerado e agrupado em lote rascunho para conferência interna.'
+          : 'XML rascunho gerado para conferência interna.',
+        performedBy: isUuid(sanitizeString(req.session.user?.id, 120)) ? sanitizeString(req.session.user?.id, 120) : null,
+        metadata: {
+          guideCount: generated.guideCount,
+          totalAmountCents: generated.totalAmountCents,
+          preGuideIds: safePreGuideIds,
+          batchDraftId: batchDraft?.id || null,
+          notSentToPayer: true
+        }
+      });
       return sendNoStoreJson(res, {
         success: true,
-        data: serializeTissXmlDraft(draft),
+        data: {
+          ...serializeTissXmlDraft(draft),
+          batchDraft: batchDraft || null
+        },
         message: 'XML TISS em rascunho gerado para conferência interna.'
       });
     } catch (error: any) {
@@ -34565,6 +34768,24 @@ async function startServer() {
         throw updateError;
       }
       if (!updated) return res.status(404).json(payerSafeError(404));
+      await recordTissRevenueCycleEvent({
+        organizationId,
+        clinicId: organizationId,
+        xmlDraftId: draftId,
+        payerId: sanitizeString(data?.payer_id, 120) || null,
+        eventType: 'XML_DRAFT_VALIDATED',
+        previousState: 'xml_draft_generated',
+        newState: 'xml_draft_generated',
+        reason: 'XML rascunho validado tecnicamente para conferência interna.',
+        performedBy: isUuid(sanitizeString(req.session.user?.id, 120)) ? sanitizeString(req.session.user?.id, 120) : null,
+        metadata: {
+          technicalValidationStatus: technicalValidation.status,
+          errorCount: Array.isArray(technicalValidation.errors) ? technicalValidation.errors.length : 0,
+          warningCount: Array.isArray(technicalValidation.warnings) ? technicalValidation.warnings.length : 0,
+          xsdValidationStatus: technicalValidation.xsdValidation?.status || 'not_configured',
+          notSentToPayer: true
+        }
+      });
       return sendNoStoreJson(res, {
         success: true,
         data: serializeTissXmlDraft(updated),
