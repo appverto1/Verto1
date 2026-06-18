@@ -117,6 +117,9 @@ const validInput = {
     operator_code: 'OP-1',
     tiss_version: 'configurável',
     default_guide_type: 'sp_sadt',
+    default_attendance_type: '03',
+    default_attendance_regime: '01',
+    default_attendance_character: '1',
     requires_authorization: true,
     requires_provider_code: true,
     requires_cnes: true,
@@ -171,6 +174,9 @@ test('atendimento de convênio com dados mínimos produz Pré-guia válida', () 
   assert.equal(result.snapshot.payer.ansRegistration, 'ANS-1');
   assert.equal(result.snapshot.payer.operatorCode, 'OP-1');
   assert.equal(result.snapshot.payer.tissVersion, 'configurável');
+  assert.equal(result.snapshot.payer.defaultAttendanceType, '03');
+  assert.equal(result.snapshot.payer.defaultAttendanceRegime, '01');
+  assert.equal(result.snapshot.payer.defaultAttendanceCharacter, '1');
   assert.equal(result.snapshot.professional.id, 'professional-1');
   assert.equal(result.snapshot.professional.profileId, 'professional-profile-1');
   assert.equal(result.snapshot.professional.name, 'Terapeuta Mateus');
@@ -1361,10 +1367,12 @@ test('cadastros TISS sao globais e reutilizaveis em Configuracoes', () => {
 test('Convênios expõe configuração TISS guiada por operadora', () => {
   assert.match(payerRequirementsCode, /Configuração de Convênios/);
   assert.match(payerRequirementsCode, /Cadastro avançado de operadoras/);
-  assert.match(payerRequirementsCode, /Dados TISS da operadora/);
+  assert.match(payerRequirementsCode, /Configuração do convênio para TISS/);
   assert.match(payerRequirementsCode, /Dados da operadora/);
   assert.match(payerRequirementsCode, /Dados do prestador no convênio/);
-  assert.match(payerRequirementsCode, /Regras TISS e autorização/);
+  assert.match(payerRequirementsCode, /Configuração automática do XML TISS/);
+  assert.match(payerRequirementsCode, /Exigências gerais da operadora/);
+  assert.match(payerRequirementsCode, /Exceções por serviço/);
   assert.match(payerRequirementsCode, /Contatos e observações administrativas/);
   assert.match(payerRequirementsCode, /De\/Para TUSS por Convênio/);
   assert.match(payerRequirementsCode, /Tabela de procedimentos e valores/);
@@ -1380,10 +1388,10 @@ test('Convênios expõe configuração TISS guiada por operadora', () => {
   assert.match(payerRequirementsCode, /Exige procedimento autorizado/);
   assert.match(payerRequirementsCode, /Exige número de guia/);
   assert.match(payerRequirementsCode, /Exige CID/);
-  assert.match(payerRequirementsCode, /Código do contratado na operadora/);
-  assert.match(payerRequirementsCode, /Não aplicável/);
+  assert.match(payerRequirementsCode, /Código do prestador na operadora/);
+  assert.match(payerRequirementsCode, /TISS não aplicável/);
   assert.match(payerRequirementsCode, /Pré-guias deste pagador foram marcadas para revalidação/);
-  assert.doesNotMatch(payerRequirementsCode, /Gerar XML|Enviar lote|Enviar remessa|Registrar glosa/i);
+  assert.doesNotMatch(payerRequirementsCode, /Enviar lote|Enviar remessa|Registrar glosa/i);
 });
 
 test('frontend separa Pré-guias e Rascunhos XML com preview interno', () => {

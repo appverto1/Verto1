@@ -203,8 +203,6 @@ export function resolveTussBillingItem(input: TussBillingResolutionInput): TussB
   });
   const unitAmountCents =
     nonNegativeInteger(price?.amount_cents) ??
-    nonNegativeInteger(mapping?.negotiated_amount_cents) ??
-    nonNegativeInteger(mapping?.amount_cents) ??
     nonNegativeInteger(serviceCatalog?.default_amount_cents) ??
     nonNegativeInteger(patientFinancialPlan?.amount_cents);
   const amountCents = unitAmountCents === null ? null : Math.round(unitAmountCents * quantity);

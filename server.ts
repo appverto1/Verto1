@@ -136,6 +136,15 @@ import {
   getDefaultTissOfficialStrategyDescriptor
 } from './src/services/tissOfficial/capabilities';
 import {
+  guideTypes040300,
+  isSupportedAttendanceCharacter040300,
+  isSupportedAttendanceRegime040300,
+  isSupportedAttendanceType040300,
+  normalizeAttendanceCharacter040300,
+  normalizeAttendanceRegime040300,
+  normalizeAttendanceType040300
+} from './src/services/tissOfficial/versions/communication040300/domains';
+import {
   sanitizeOfficialXmlFilePart
 } from './src/services/tissOfficial/security';
 import {
@@ -34419,6 +34428,23 @@ async function startServer() {
       const userId = sanitizeString(req.session.user?.id, 120);
       const existingProfile = await fetchTissPreGuideProfile('payer_tiss_profiles', PAYER_TISS_PROFILE_SELECT, organizationId, 'payer_id', payerId);
       const guideType = sanitizeString(req.body?.defaultGuideType ?? req.body?.default_guide_type, 40).toLowerCase();
+      const attendanceType = normalizeAttendanceType040300(req.body?.defaultAttendanceType ?? req.body?.default_attendance_type);
+      const attendanceRegime = normalizeAttendanceRegime040300(req.body?.defaultAttendanceRegime ?? req.body?.default_attendance_regime);
+      const attendanceCharacter = normalizeAttendanceCharacter040300(req.body?.defaultAttendanceCharacter ?? req.body?.default_attendance_character);
+      const supportedGuideTypes = new Set(guideTypes040300.map((item) => item.code));
+      const unsupportedCodes = [
+        attendanceType && !isSupportedAttendanceType040300(attendanceType) ? 'Tipo de atendimento padrão' : '',
+        attendanceRegime && !isSupportedAttendanceRegime040300(attendanceRegime) ? 'Regime de atendimento padrão' : '',
+        attendanceCharacter && !isSupportedAttendanceCharacter040300(attendanceCharacter) ? 'Caráter de atendimento padrão' : '',
+        guideType && !supportedGuideTypes.has(guideType) ? 'Tipo de guia' : '',
+      ].filter(Boolean);
+      if (unsupportedCodes.length > 0) {
+        return res.status(422).json({
+          success: false,
+          code: 'TISS_PROFILE_OFFICIAL_CODE_UNSUPPORTED',
+          error: `Selecione opções oficiais suportadas pelo XML TISS 04.03.00: ${unsupportedCodes.join(', ')}.`
+        });
+      }
       const payload = cleanObject({
         organization_id: organizationId,
         clinic_id: organizationId,
@@ -34426,7 +34452,7 @@ async function startServer() {
         ans_registration: sanitizeString(req.body?.ansRegistration ?? req.body?.ans_registration, 80) || null,
         operator_code: sanitizeString(req.body?.operatorCode ?? req.body?.operator_code, 80) || null,
         tiss_version: sanitizeString(req.body?.tissVersion ?? req.body?.tiss_version, 80) || null,
-        default_guide_type: ['consulta', 'sp_sadt', 'other'].includes(guideType) ? guideType : 'sp_sadt',
+        default_guide_type: supportedGuideTypes.has(guideType) ? guideType : 'sp_sadt',
         beneficiary_identification_type: sanitizeString(req.body?.beneficiaryIdentificationType ?? req.body?.beneficiary_identification_type, 80) || null,
         requires_authorization: Boolean(req.body?.requiresAuthorization ?? req.body?.requires_authorization),
         requires_authorized_procedure: Boolean(req.body?.requiresAuthorizedProcedure ?? req.body?.requires_authorized_procedure),
@@ -34448,9 +34474,9 @@ async function startServer() {
         billing_email: sanitizeString(req.body?.billingEmail ?? req.body?.billing_email, 180) || null,
         billing_phone: sanitizeString(req.body?.billingPhone ?? req.body?.billing_phone, 40) || null,
         operator_portal_url: sanitizeString(req.body?.operatorPortalUrl ?? req.body?.operator_portal_url, 300) || null,
-        default_attendance_type: sanitizeString(req.body?.defaultAttendanceType ?? req.body?.default_attendance_type, 80) || null,
-        default_attendance_regime: sanitizeString(req.body?.defaultAttendanceRegime ?? req.body?.default_attendance_regime, 80) || null,
-        default_attendance_character: sanitizeString(req.body?.defaultAttendanceCharacter ?? req.body?.default_attendance_character, 80) || null,
+        default_attendance_type: attendanceType || null,
+        default_attendance_regime: attendanceRegime || null,
+        default_attendance_character: attendanceCharacter || null,
         requires_physical_guide: Boolean(req.body?.requiresPhysicalGuide ?? req.body?.requires_physical_guide),
         requires_signed_guide: Boolean(req.body?.requiresSignedGuide ?? req.body?.requires_signed_guide),
         requires_stamped_dated_guide: Boolean(req.body?.requiresStampedDatedGuide ?? req.body?.requires_stamped_dated_guide),
@@ -34965,7 +34991,8 @@ async function startServer() {
       const payerId = sanitizeString(req.body?.payerId || req.body?.payer_id, 120);
       const competenceMonth = normalizeTissXmlCompetenceMonth(req.body?.competenceMonth || req.body?.competence_month);
       const officialTissStrategy = getDefaultTissOfficialStrategyDescriptor();
-      const communicationVersion = sanitizeString(req.body?.communicationVersion || req.body?.communication_version || officialTissStrategy.communicationVersion, 20);
+      const requestedCommunicationVersion = sanitizeString(req.body?.communicationVersion || req.body?.communication_version, 20);
+      const communicationVersion = officialTissStrategy.communicationVersion;
       if (!isUuid(payerId)) {
         return res.status(400).json({
           success: false,
@@ -34980,7 +35007,7 @@ async function startServer() {
           error: 'Informe uma competência válida para gerar o XML TISS oficial.'
         });
       }
-      if (![officialTissStrategy.communicationVersion, '4.03.00'].includes(communicationVersion)) {
+      if (requestedCommunicationVersion && requestedCommunicationVersion !== officialTissStrategy.communicationVersion) {
         return res.status(422).json({
           success: false,
           code: 'TISS_OFFICIAL_VERSION_NOT_SUPPORTED',
@@ -35059,11 +35086,23 @@ async function startServer() {
         generatedAt: new Date().toISOString()
       });
       if (!built.ok) {
+        const issues = Array.isArray(built.issues) ? built.issues : [];
+        const actionableIssues = issues.filter((issue: any) => sanitizeString(issue?.code, 120) !== 'TISS_OFFICIAL_EMPTY_SELECTION');
+        const issueSummary = actionableIssues.reduce((acc: Record<string, number>, issue: any) => {
+          const code = sanitizeString(issue?.code, 120) || 'UNKNOWN';
+          acc[code] = (acc[code] || 0) + 1;
+          return acc;
+        }, {});
+        const hadSelectedPreGuides = preGuideIds.length > 0;
+        const shouldSurfacePreGuideIssues = hadSelectedPreGuides && actionableIssues.length > 0;
         return res.status(built.code === 'TISS_OFFICIAL_XSD_VALIDATION_FAILED' ? 422 : 409).json({
           success: false,
-          code: built.code,
-          error: built.message,
-          issues: built.issues,
+          code: shouldSurfacePreGuideIssues ? 'TISS_OFFICIAL_PRE_GUIDES_BLOCKED' : built.code,
+          error: shouldSurfacePreGuideIssues
+            ? `${actionableIssues.length} pendência(s) impedem a geração do lote XML. Revalide ou corrija as Pré-guias indicadas.`
+            : built.message,
+          issues,
+          issueSummary,
           xsdValidation: built.xsdValidation || null
         });
       }
@@ -36855,13 +36894,20 @@ async function startServer() {
       const serviceCatalogId = sanitizeString(req.body?.serviceCatalogId || req.body?.service_catalog_id, 120);
       const tussCodeId = sanitizeString(req.body?.tussCodeId || req.body?.tuss_code_id, 120);
       if (!isUuid(organizationId) || !isUuid(payerId) || !isUuid(serviceCatalogId) || (tussCodeId && !isUuid(tussCodeId))) return res.status(400).json(payerSafeError(400));
-      const amount = parseOptionalTussAmountCents(req.body?.amountCents ?? req.body?.amount_cents);
-      const negotiatedAmount = parseOptionalTussAmountCents(req.body?.negotiatedAmountCents ?? req.body?.negotiated_amount_cents);
       const validFrom = sanitizeString(req.body?.validFrom || req.body?.valid_from, 20) || null;
       const validTo = sanitizeString(req.body?.validTo || req.body?.valid_to, 20) || null;
       const active = req.body?.active !== false;
-      if (!amount.valid || !negotiatedAmount.valid || !tussValidityRangeIsValid(validFrom, validTo)) {
-        return res.status(400).json({ success: false, error: 'Revise valor e vigência do mapeamento.', code: 'INVALID_TUSS_MAPPING_CONFIGURATION' });
+      const supportedGuideTypes = new Set(guideTypes040300.map((item: any) => item.code));
+      const guideType = sanitizeString(req.body?.guideType || req.body?.guide_type || 'sp_sadt', 40).toLowerCase();
+      if (!supportedGuideTypes.has(guideType)) {
+        return res.status(422).json({
+          success: false,
+          code: 'TUSS_MAPPING_GUIDE_TYPE_UNSUPPORTED',
+          error: 'Selecione um tipo de guia suportado pelo XML TISS oficial da Verto.'
+        });
+      }
+      if (!tussValidityRangeIsValid(validFrom, validTo)) {
+        return res.status(400).json({ success: false, error: 'Revise a vigência do mapeamento.', code: 'INVALID_TUSS_MAPPING_CONFIGURATION' });
       }
       const [payer, service, code] = await Promise.all([
         fetchPayerForAdmin(payerId, organizationId),
@@ -36884,12 +36930,12 @@ async function startServer() {
         contract_description: sanitizeTextField(req.body?.contractDescription || req.body?.contract_description, 600) || null,
         payer_specific_description: sanitizeTextField(req.body?.payerSpecificDescription || req.body?.payer_specific_description || req.body?.contractDescription || req.body?.contract_description, 600) || null,
         specialty: sanitizeString(req.body?.specialty || req.body?.especialidade || service.specialty, 120) || null,
-        guide_type: normalizeTussGuideType(req.body?.guideType || req.body?.guide_type),
+        guide_type: guideType,
         billing_unit: normalizeTussBillingUnit(req.body?.billingUnit || req.body?.billing_unit || service.billing_unit),
         quantity_rule: normalizeTussQuantityRule(req.body?.quantityRule || req.body?.quantity_rule),
         default_quantity: Math.max(0.01, Number(req.body?.defaultQuantity || req.body?.default_quantity || 1) || 1),
-        amount_cents: amount.provided ? amount.value : null,
-        negotiated_amount_cents: negotiatedAmount.provided ? negotiatedAmount.value : amount.value,
+        amount_cents: null,
+        negotiated_amount_cents: null,
         standard_duration_minutes: req.body?.standardDurationMinutes || req.body?.standard_duration_minutes ? Math.max(1, Math.round(Number(req.body?.standardDurationMinutes || req.body?.standard_duration_minutes) || 0)) : null,
         requires_authorization: Boolean(req.body?.requiresAuthorization ?? req.body?.requires_authorization),
         requires_guide: Boolean(req.body?.requiresGuide ?? req.body?.requires_guide),
@@ -36944,8 +36990,6 @@ async function startServer() {
       if (!existing?.id) return res.status(404).json(payerSafeError(404));
       const serviceCatalogId = sanitizeString(req.body?.serviceCatalogId || req.body?.service_catalog_id || existing.service_catalog_id, 120);
       const tussCodeId = sanitizeString(req.body?.tussCodeId || req.body?.tuss_code_id || existing.tuss_code_id, 120);
-      const amount = parseOptionalTussAmountCents(req.body?.amountCents ?? req.body?.amount_cents);
-      const negotiatedAmount = parseOptionalTussAmountCents(req.body?.negotiatedAmountCents ?? req.body?.negotiated_amount_cents);
       const effectiveValidFrom = req.body?.validFrom !== undefined || req.body?.valid_from !== undefined
         ? sanitizeString(req.body?.validFrom || req.body?.valid_from, 20) || null
         : existing.valid_from;
@@ -36953,8 +36997,18 @@ async function startServer() {
         ? sanitizeString(req.body?.validTo || req.body?.valid_to, 20) || null
         : existing.valid_to;
       const effectiveActive = req.body?.active !== undefined ? Boolean(req.body.active) : existing.active !== false;
-      if (!amount.valid || !negotiatedAmount.valid || !tussValidityRangeIsValid(effectiveValidFrom, effectiveValidTo)) {
-        return res.status(400).json({ success: false, error: 'Revise valor e vigência do mapeamento.', code: 'INVALID_TUSS_MAPPING_CONFIGURATION' });
+      const guideTypeProvided = req.body?.guideType !== undefined || req.body?.guide_type !== undefined;
+      const supportedGuideTypes = new Set(guideTypes040300.map((item: any) => item.code));
+      const guideType = guideTypeProvided ? sanitizeString(req.body?.guideType || req.body?.guide_type, 40).toLowerCase() : '';
+      if (guideTypeProvided && !supportedGuideTypes.has(guideType)) {
+        return res.status(422).json({
+          success: false,
+          code: 'TUSS_MAPPING_GUIDE_TYPE_UNSUPPORTED',
+          error: 'Selecione um tipo de guia suportado pelo XML TISS oficial da Verto.'
+        });
+      }
+      if (!tussValidityRangeIsValid(effectiveValidFrom, effectiveValidTo)) {
+        return res.status(400).json({ success: false, error: 'Revise a vigência do mapeamento.', code: 'INVALID_TUSS_MAPPING_CONFIGURATION' });
       }
       const [service, code] = await Promise.all([
         fetchTussServiceCatalogById(organizationId, serviceCatalogId),
@@ -36971,12 +37025,10 @@ async function startServer() {
         contract_description: req.body?.contractDescription !== undefined || req.body?.contract_description !== undefined ? sanitizeTextField(req.body?.contractDescription || req.body?.contract_description, 600) || null : undefined,
         payer_specific_description: req.body?.payerSpecificDescription !== undefined || req.body?.payer_specific_description !== undefined || req.body?.contractDescription !== undefined || req.body?.contract_description !== undefined ? sanitizeTextField(req.body?.payerSpecificDescription || req.body?.payer_specific_description || req.body?.contractDescription || req.body?.contract_description, 600) || null : undefined,
         specialty: req.body?.specialty !== undefined ? sanitizeString(req.body?.specialty, 120) || null : undefined,
-        guide_type: req.body?.guideType !== undefined || req.body?.guide_type !== undefined ? normalizeTussGuideType(req.body?.guideType || req.body?.guide_type) : undefined,
+        guide_type: guideTypeProvided ? guideType : undefined,
         billing_unit: req.body?.billingUnit !== undefined || req.body?.billing_unit !== undefined ? normalizeTussBillingUnit(req.body?.billingUnit || req.body?.billing_unit) : undefined,
         quantity_rule: req.body?.quantityRule !== undefined || req.body?.quantity_rule !== undefined ? normalizeTussQuantityRule(req.body?.quantityRule || req.body?.quantity_rule) : undefined,
         default_quantity: req.body?.defaultQuantity !== undefined || req.body?.default_quantity !== undefined ? Math.max(0.01, Number(req.body?.defaultQuantity || req.body?.default_quantity || 1) || 1) : undefined,
-        amount_cents: amount.provided ? amount.value : undefined,
-        negotiated_amount_cents: negotiatedAmount.provided ? negotiatedAmount.value : undefined,
         standard_duration_minutes: req.body?.standardDurationMinutes !== undefined || req.body?.standard_duration_minutes !== undefined ? Math.max(1, Math.round(Number(req.body?.standardDurationMinutes || req.body?.standard_duration_minutes) || 0)) : undefined,
         requires_authorization: req.body?.requiresAuthorization !== undefined || req.body?.requires_authorization !== undefined ? Boolean(req.body?.requiresAuthorization ?? req.body?.requires_authorization) : undefined,
         requires_guide: req.body?.requiresGuide !== undefined || req.body?.requires_guide !== undefined ? Boolean(req.body?.requiresGuide ?? req.body?.requires_guide) : undefined,

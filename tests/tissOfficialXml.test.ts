@@ -483,6 +483,10 @@ test("rotas oficiais são paralelas, paginadas, sem XML na listagem e download c
   assert.match(serverCode, /create_tiss_official_document/);
   assert.match(serverCode, /preGuideIds\.length > 500/);
   assert.match(serverCode, /\.limit\(500\)/);
+  assert.match(serverCode, /requestedCommunicationVersion/);
+  assert.match(serverCode, /TISS_OFFICIAL_VERSION_NOT_SUPPORTED/);
+  assert.match(serverCode, /TISS_OFFICIAL_PRE_GUIDES_BLOCKED/);
+  assert.match(serverCode, /issueSummary/);
   assert.match(uiCode, /OFFICIAL_BATCH_GUIDE_LIMIT = 500/);
   assert.match(readFileSync(join(root, "src/services/tissOfficial/versions/communication040300/generator.ts"), "utf8"), /MAX_GUIDES_PER_BATCH = 500/);
   assert.doesNotMatch(serverCode, /app\.(?:post|put|patch)\('\/api\/tiss\/official-documents\/:documentId/);

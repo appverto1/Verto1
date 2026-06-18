@@ -1,5 +1,13 @@
 import { buildTissAntiGlosaChecklist } from './tissAntiGlosaChecklist';
 import { deriveTissRevenueCycleStateFromPreGuide } from './tissRevenueCycleStateMachine';
+import {
+  isSupportedAttendanceCharacter040300,
+  isSupportedAttendanceRegime040300,
+  isSupportedAttendanceType040300,
+  normalizeAttendanceCharacter040300,
+  normalizeAttendanceRegime040300,
+  normalizeAttendanceType040300
+} from './tissOfficial/versions/communication040300/domains';
 
 export type TissPreGuideStatus = 'draft' | 'valid' | 'pending_data' | 'not_applicable' | 'cancelled';
 
@@ -239,11 +247,14 @@ const issueLabelOverrides: Record<string, string> = {
   CNES_MISSING: 'CNES não informado',
   PAYER_TISS_PROFILE_MISSING: 'Dados TISS do pagador não configurados',
   PAYER_CONFIGURATION_INCOMPLETE: 'Configuração do convênio incompleta',
-  PAYER_TISS_VERSION_MISSING: 'Versão TISS do pagador não configurada',
+  PAYER_TISS_VERSION_MISSING: 'Configuração legada de versão TISS do pagador não configurada',
+  PAYER_ATTENDANCE_TYPE_INVALID: 'Tipo de atendimento TISS oficial não configurado',
+  PAYER_ATTENDANCE_REGIME_INVALID: 'Regime de atendimento TISS oficial não configurado',
+  PAYER_ATTENDANCE_CHARACTER_INVALID: 'Caráter de atendimento TISS oficial não configurado',
   PAYER_ANS_REGISTRATION_MISSING: 'Registro ANS do pagador não informado',
   PAYER_CONTRACTED_PROVIDER_CODE_MISSING: 'Código do contratado na operadora não informado',
   PAYER_CID_REQUIRED: 'Convênio exige CID para a pré-guia',
-  TISS_VERSION_MISSING: 'Versão TISS do pagador não configurada',
+  TISS_VERSION_MISSING: 'Configuração legada de versão TISS do pagador não configurada',
   PROFESSIONAL_BILLING_PROFILE_MISSING: 'Perfil faturável do profissional não configurado',
   PROFESSIONAL_REGISTRY_MISSING: 'Registro profissional não informado',
   PROFESSIONAL_COUNCIL_STATE_MISSING: 'UF do conselho não informada',
@@ -291,9 +302,12 @@ export function tissPreGuideIssueLabel(code: unknown) {
     CNES_MISSING: 'CNES não informado',
     PAYER_TISS_PROFILE_MISSING: 'Dados TISS do pagador não configurados',
     PAYER_CONFIGURATION_INCOMPLETE: 'Configuração do convênio incompleta',
-    PAYER_TISS_VERSION_MISSING: 'Versão TISS do pagador não configurada',
+    PAYER_TISS_VERSION_MISSING: 'Configuração legada de versão TISS do pagador não configurada',
+    PAYER_ATTENDANCE_TYPE_INVALID: 'Tipo de atendimento TISS oficial não configurado',
+    PAYER_ATTENDANCE_REGIME_INVALID: 'Regime de atendimento TISS oficial não configurado',
+    PAYER_ATTENDANCE_CHARACTER_INVALID: 'Caráter de atendimento TISS oficial não configurado',
     PAYER_ANS_REGISTRATION_MISSING: 'Registro ANS do pagador não informado',
-    TISS_VERSION_MISSING: 'Versão TISS do pagador não configurada',
+    TISS_VERSION_MISSING: 'Configuração legada de versão TISS do pagador não configurada',
     PROFESSIONAL_BILLING_PROFILE_MISSING: 'Perfil faturável do profissional não configurado',
     PROFESSIONAL_REGISTRY_MISSING: 'Registro profissional não informado',
     PROFESSIONAL_COUNCIL_STATE_MISSING: 'UF do conselho não informada',
@@ -458,9 +472,17 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
     if (payerProfile.requires_provider_code && !text(payerProfile.contracted_provider_code || payerProfile.operator_provider_code || payerProfile.operator_code)) {
       addIssue(errors, 'PAYER_CONTRACTED_PROVIDER_CODE_MISSING', 'contracted_provider_code', tissPreGuideIssueLabel('PAYER_CONTRACTED_PROVIDER_CODE_MISSING'), 'payer');
     }
-    if (!text(payerProfile.tiss_version)) {
-      addIssue(errors, 'PAYER_TISS_VERSION_MISSING', 'tiss_version', tissPreGuideIssueLabel('PAYER_TISS_VERSION_MISSING'), 'payer');
-      addIssue(warnings, 'TISS_VERSION_MISSING', 'tiss_version', tissPreGuideIssueLabel('TISS_VERSION_MISSING'), 'payer', 'warning');
+    const attendanceType = normalizeAttendanceType040300(payerProfile.default_attendance_type);
+    const attendanceRegime = normalizeAttendanceRegime040300(payerProfile.default_attendance_regime);
+    const attendanceCharacter = normalizeAttendanceCharacter040300(payerProfile.default_attendance_character);
+    if (!attendanceType || !isSupportedAttendanceType040300(attendanceType)) {
+      addIssue(errors, 'PAYER_ATTENDANCE_TYPE_INVALID', 'default_attendance_type', tissPreGuideIssueLabel('PAYER_ATTENDANCE_TYPE_INVALID'), 'payer');
+    }
+    if (!attendanceRegime || !isSupportedAttendanceRegime040300(attendanceRegime)) {
+      addIssue(errors, 'PAYER_ATTENDANCE_REGIME_INVALID', 'default_attendance_regime', tissPreGuideIssueLabel('PAYER_ATTENDANCE_REGIME_INVALID'), 'payer');
+    }
+    if (!attendanceCharacter || !isSupportedAttendanceCharacter040300(attendanceCharacter)) {
+      addIssue(errors, 'PAYER_ATTENDANCE_CHARACTER_INVALID', 'default_attendance_character', tissPreGuideIssueLabel('PAYER_ATTENDANCE_CHARACTER_INVALID'), 'payer');
     }
     if (payerProfile.requires_cid && !text(billingContext.cid_code || billingContext.cid || appointment.cid_code || appointment.cid)) {
       addIssue(errors, 'PAYER_CID_REQUIRED', 'cid_code', tissPreGuideIssueLabel('PAYER_CID_REQUIRED'), 'payer');
@@ -501,8 +523,6 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
   const unitAmountCents = amountCentsOrNull(
     price.amount_cents ??
       billingItem.unit_amount_cents ??
-      mapping.negotiated_amount_cents ??
-      mapping.amount_cents ??
       service.default_amount_cents,
   );
   const explicitPriceAmountCents = amountCentsOrNull(price.amount_cents);
@@ -521,8 +541,6 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
   const hasNegotiatedPrice = Boolean(
     text(price.id) ||
       positiveNumber(price.amount_cents) ||
-      positiveNumber(mapping.negotiated_amount_cents) ||
-      positiveNumber(mapping.amount_cents) ||
       positiveNumber(billingItem.unit_amount_cents) ||
       positiveNumber(billingItem.amount_cents),
   );
@@ -548,8 +566,6 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
   }
   if (
     mappingId && !text(price.id) &&
-    !positiveNumber(mapping.negotiated_amount_cents) &&
-    !positiveNumber(mapping.amount_cents) &&
     (positiveNumber(billingItem.unit_amount_cents) || positiveNumber(billingItem.amount_cents))
   ) {
     addIssue(warnings, 'PAYER_PROCEDURE_PRICE_UNRESOLVED_SNAPSHOT_PRESERVED', 'payer_procedure_price_id', tissPreGuideIssueLabel('PAYER_PROCEDURE_PRICE_UNRESOLVED_SNAPSHOT_PRESERVED'), 'procedure', 'warning');
@@ -702,9 +718,9 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
         contractedExecutant: text(payerProfile.contracted_executant) || null,
         contractedProviderCode: text(payerProfile.contracted_provider_code) || null,
         operatorProviderCode: text(payerProfile.operator_provider_code) || null,
-        defaultAttendanceType: text(payerProfile.default_attendance_type) || null,
-        defaultAttendanceRegime: text(payerProfile.default_attendance_regime) || null,
-        defaultAttendanceCharacter: text(payerProfile.default_attendance_character) || null,
+        defaultAttendanceType: normalizeAttendanceType040300(payerProfile.default_attendance_type) || null,
+        defaultAttendanceRegime: normalizeAttendanceRegime040300(payerProfile.default_attendance_regime) || null,
+        defaultAttendanceCharacter: normalizeAttendanceCharacter040300(payerProfile.default_attendance_character) || null,
         specificRules: text(payerProfile.specific_rules) || null,
         requirements: {
           requiresAuthorization: Boolean(payerProfile.requires_authorization),
@@ -745,7 +761,7 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
         contractCode: text(mapping.contract_code) || null,
         contractDescription: text(mapping.contract_description || mapping.payer_specific_description || mapping.description || mapping.payer_description || mapping.procedure_description) || null,
         payerSpecificDescription: text(mapping.payer_specific_description || mapping.contract_description || mapping.description || mapping.payer_description || mapping.procedure_description) || null,
-        payerNegotiatedAmountCents: Number.isFinite(Number(price.amount_cents ?? mapping.negotiated_amount_cents ?? mapping.amount_cents)) ? Number(price.amount_cents ?? mapping.negotiated_amount_cents ?? mapping.amount_cents) : null,
+        payerNegotiatedAmountCents: Number.isFinite(Number(price.amount_cents)) ? Number(price.amount_cents) : null,
         specialty: text(mapping.specialty || service.specialty) || null,
         standardDurationMinutes: positiveNumber(mapping.standard_duration_minutes || service.default_duration_minutes) ? Number(mapping.standard_duration_minutes || service.default_duration_minutes) : null,
         mappingValidFrom: text(mapping.valid_from) || null,

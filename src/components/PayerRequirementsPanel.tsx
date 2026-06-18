@@ -2,6 +2,15 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, CheckCircle2, ClipboardCheck, FileSpreadsheet, Loader2, Plus, RefreshCw, Save, ShieldCheck } from "lucide-react";
 import { dataService } from "../services/dataService";
 import { getDefaultTissOfficialStrategyDescriptor } from "../services/tissOfficial/capabilities";
+import {
+  attendanceCharacters040300,
+  attendanceRegimes040300,
+  attendanceTypes040300,
+  guideTypes040300,
+  isSupportedAttendanceCharacter040300,
+  isSupportedAttendanceRegime040300,
+  isSupportedAttendanceType040300,
+} from "../services/tissOfficial/versions/communication040300/domains";
 import { buildClinicMonthDateRange } from "../utils/scheduling";
 
 type Payer = {
@@ -293,6 +302,9 @@ function PayerTissField({
   );
 }
 
+const hasOption = (options: Array<{ code: string }>, value: string) => options.some((option) => option.code === value);
+const legacyInvalidLabel = (value: string) => value ? `Legado inválido: ${value}` : "Selecione";
+
 const normalizePayerTissProfile = (profile: any = {}): PayerTissForm => ({
   ansRegistration: profile.ans_registration || profile.ansRegistration || "",
   operatorCode: profile.operator_code || profile.operatorCode || "",
@@ -424,6 +436,28 @@ export function PayerRequirementsPanel({
   );
   const selectedPayerMappingCount = tussMappings.filter((mapping) => mapping.active !== false).length;
   const selectedPayerPriceCount = procedurePrices.filter((price) => price.active !== false).length;
+  const selectedPayerOfficialCodeIssues = useMemo(() => {
+    const issues: string[] = [];
+    if (payerTissForm.defaultAttendanceType && !isSupportedAttendanceType040300(payerTissForm.defaultAttendanceType)) issues.push("Tipo de atendimento inválido");
+    if (payerTissForm.defaultAttendanceRegime && !isSupportedAttendanceRegime040300(payerTissForm.defaultAttendanceRegime)) issues.push("Regime de atendimento inválido");
+    if (payerTissForm.defaultAttendanceCharacter && !isSupportedAttendanceCharacter040300(payerTissForm.defaultAttendanceCharacter)) issues.push("Caráter de atendimento inválido");
+    if (payerTissForm.defaultGuideType && !hasOption(guideTypes040300, payerTissForm.defaultGuideType)) issues.push("Tipo de guia inválido");
+    return issues;
+  }, [payerTissForm.defaultAttendanceCharacter, payerTissForm.defaultAttendanceRegime, payerTissForm.defaultAttendanceType, payerTissForm.defaultGuideType]);
+  const selectedPayerReadiness = useMemo(() => {
+    if (!isInsurancePayer(selectedPayer)) return { label: "TISS não aplicável", className: "bg-slate-100 text-slate-600", issues: [] as string[] };
+    const issues = [
+      ...selectedPayerTissMissing,
+      ...selectedPayerOfficialCodeIssues,
+      selectedPayerMappingCount === 0 ? "Sem De/Para TUSS ativo" : "",
+      selectedPayerPriceCount === 0 ? "Sem valor negociado ativo" : "",
+      payerTissMessage ? "Pré-guias precisam ser revalidadas" : "",
+    ].filter(Boolean) as string[];
+    if (selectedPayerOfficialCodeIssues.length > 0) return { label: "Configuração inválida", className: "bg-rose-50 text-rose-700", issues };
+    if (payerTissMessage) return { label: "Pré-guias precisam ser revalidadas", className: "bg-amber-50 text-amber-700", issues };
+    if (issues.length > 0) return { label: "Configuração incompleta", className: "bg-amber-50 text-amber-700", issues };
+    return { label: "Pronto para gerar XML", className: "bg-emerald-50 text-emerald-700", issues };
+  }, [payerTissMessage, selectedPayer, selectedPayerMappingCount, selectedPayerOfficialCodeIssues, selectedPayerPriceCount, selectedPayerTissMissing]);
   const activeTussServices = useMemo(() => tussServices.filter((service) => service.active !== false), [tussServices]);
   const activeTussCodes = useMemo(() => tussCodes.filter((code) => code.active !== false), [tussCodes]);
   const hasDemoTussData = [...tussMappings, ...tussCodes].some((item: any) =>
@@ -665,7 +699,7 @@ export function PayerRequirementsPanel({
         return;
       }
       setPayerTissForm(normalizePayerTissProfile(result.data || payerTissForm));
-      setPayerTissMessage("Dados TISS da operadora salvos. Pré-guias deste pagador foram marcadas para revalidação.");
+      setPayerTissMessage("Configuração do convênio salva. Pré-guias deste pagador foram marcadas para revalidação.");
     } finally {
       setSaving(false);
     }
@@ -773,14 +807,6 @@ export function PayerRequirementsPanel({
 
   const createTussMapping = async () => {
     if (!selectedPayerId || !tussMappingForm.serviceCatalogId) return;
-    const rawLegacyAmount = String(tussMappingForm.amountCents || "").trim();
-    const rawNegotiatedAmount = String(tussMappingForm.negotiatedAmountCents || "").trim();
-    const legacyAmountCents = rawLegacyAmount ? parseBrazilianCurrencyToCents(rawLegacyAmount) : null;
-    const negotiatedAmountCents = rawNegotiatedAmount ? parseBrazilianCurrencyToCents(rawNegotiatedAmount) : null;
-    if ((rawLegacyAmount && legacyAmountCents === null) || (rawNegotiatedAmount && negotiatedAmountCents === null)) {
-      setError("Informe os valores do De/Para em reais, com no máximo duas casas decimais.");
-      return;
-    }
     setSaving(true);
     setError("");
     setTussActionInfo("");
@@ -789,8 +815,8 @@ export function PayerRequirementsPanel({
         ...tussMappingForm,
         payerId: selectedPayerId,
         defaultQuantity: Number(tussMappingForm.defaultQuantity || 1),
-        amountCents: legacyAmountCents,
-        negotiatedAmountCents: negotiatedAmountCents ?? legacyAmountCents,
+        amountCents: undefined,
+        negotiatedAmountCents: undefined,
         standardDurationMinutes: tussMappingForm.standardDurationMinutes ? Number(tussMappingForm.standardDurationMinutes) : null,
         contractCode: tussMappingForm.contractCode.trim(),
         contractDescription: tussMappingForm.contractDescription.trim(),
@@ -1174,8 +1200,8 @@ export function PayerRequirementsPanel({
                 Regra sem tipo de sessão vale para todos os serviços. Uma regra com tipo específico tem prioridade.
               </p>
               <div className="mt-3 flex flex-wrap gap-2">
-                <span className={`rounded-full px-2 py-1 text-xs font-bold ${selectedPayerTissMissing.length === 0 ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
-                  {isInsurancePayer(selectedPayer) ? (selectedPayerTissMissing.length === 0 ? "TISS completo" : "TISS incompleto") : "TISS não aplicável"}
+                <span className={`rounded-full px-2 py-1 text-xs font-normal ${selectedPayerReadiness.className}`}>
+                  {selectedPayerReadiness.label}
                 </span>
                 <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-bold text-slate-600">{selectedPayerMappingCount} De/Para TUSS</span>
                 <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-bold text-slate-600">{selectedPayerPriceCount} valor(es) vigentes</span>
@@ -1193,27 +1219,21 @@ export function PayerRequirementsPanel({
           <div ref={payerRulesSectionRef} className="mt-4 rounded-2xl border border-indigo-100 bg-indigo-50/50 p-3">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <p className="text-xs font-bold uppercase tracking-widest text-indigo-500">Dados TISS da operadora</p>
+                <p className="text-xs font-bold uppercase tracking-widest text-indigo-500">Configuração do convênio para TISS</p>
                 <p className="mt-1 text-xs font-semibold text-slate-600">
-                  Fonte global do pagador usada pela Pré-guia TISS. Particular fica como não aplicável.
+                  Dados administrativos, regras e códigos oficiais usados pela Pré-guia e pelo XML TISS.
                 </p>
               </div>
-              <span className={`rounded-full px-2 py-1 text-xs font-bold ${
-                !isInsurancePayer(selectedPayer)
-                  ? "bg-slate-100 text-slate-600"
-                  : selectedPayerTissMissing.length === 0
-                    ? "bg-emerald-50 text-emerald-700"
-                    : "bg-amber-50 text-amber-700"
-              }`}>
-                {!isInsurancePayer(selectedPayer) ? "Não aplicável" : selectedPayerTissMissing.length === 0 ? "Completo" : "Incompleto"}
+              <span className={`rounded-full px-2 py-1 text-xs font-normal ${selectedPayerReadiness.className}`}>
+                {selectedPayerReadiness.label}
               </span>
             </div>
 
             {isInsurancePayer(selectedPayer) ? (
               <>
-                {selectedPayerTissMissing.length > 0 && (
+                {selectedPayerReadiness.issues.length > 0 && (
                   <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
-                    Pendências: {selectedPayerTissMissing.join(", ")}.
+                    Pontos de atenção: {selectedPayerReadiness.issues.join(", ")}.
                   </div>
                 )}
                 {payerTissMessage && (
@@ -1257,19 +1277,6 @@ export function PayerRequirementsPanel({
 
                 <p className="mt-4 text-xs font-bold uppercase tracking-widest text-indigo-500">Dados do prestador no convênio</p>
                 <div className="mt-3 grid gap-3 md:grid-cols-2">
-                  <PayerTissField id="payer-default-guide-type" label="Tipo de guia" helperText="Tipo de guia usado por padrão para este convênio.">
-                    <select
-                      id="payer-default-guide-type"
-                      aria-describedby="payer-default-guide-type-help"
-                      value={payerTissForm.defaultGuideType}
-                      onChange={(event) => updatePayerTiss("defaultGuideType", event.target.value)}
-                      className={payerTissFieldClass}
-                    >
-                      <option value="sp_sadt">Guia SP/SADT</option>
-                      <option value="consulta">Guia de consulta</option>
-                      <option value="other">Outra guia</option>
-                    </select>
-                  </PayerTissField>
                   <PayerTissField id="payer-beneficiary-identification" label="Tipo de identificação do beneficiário" helperText="Campo usado para validar o paciente nas Pré-guias TISS.">
                     <select
                       id="payer-beneficiary-identification"
@@ -1314,47 +1321,87 @@ export function PayerRequirementsPanel({
                       className={payerTissFieldClass}
                     />
                   </PayerTissField>
-                  <PayerTissField id="payer-default-attendance-type" label="Tipo de atendimento padrão" helperText="Código administrativo usado na guia quando aplicável.">
-                    <input
+                </div>
+
+                <p className="mt-4 text-xs font-bold uppercase tracking-widest text-indigo-500">Configuração automática do XML TISS</p>
+                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                  <div className="rounded-2xl border border-indigo-100 bg-white px-3 py-3">
+                    <p className="text-xs text-slate-500">Versão do XML TISS</p>
+                    <p className="mt-1 text-sm text-slate-900">{OFFICIAL_TISS_XML_STRATEGY.communicationVersion}</p>
+                    <p className="mt-1 text-[11px] leading-4 text-slate-500">
+                      Gerenciada automaticamente pela Verto. A versão é definida pelo gerador oficial e será atualizada somente quando uma nova versão for implementada e validada.
+                    </p>
+                  </div>
+                  <PayerTissField id="payer-default-guide-type" label="Tipo de guia" helperText="Tipo de guia suportado pelo XML oficial gerado pela Verto.">
+                    <select
+                      id="payer-default-guide-type"
+                      aria-describedby="payer-default-guide-type-help"
+                      value={payerTissForm.defaultGuideType}
+                      onChange={(event) => updatePayerTiss("defaultGuideType", event.target.value)}
+                      className={payerTissFieldClass}
+                    >
+                      <option value="">Selecione</option>
+                      {payerTissForm.defaultGuideType && !hasOption(guideTypes040300, payerTissForm.defaultGuideType) && (
+                        <option value={payerTissForm.defaultGuideType}>{legacyInvalidLabel(payerTissForm.defaultGuideType)}</option>
+                      )}
+                      {guideTypes040300.map((option) => (
+                        <option key={option.code} value={option.code}>{option.label}</option>
+                      ))}
+                    </select>
+                  </PayerTissField>
+                  <PayerTissField id="payer-default-attendance-type" label="Tipo de atendimento padrão" helperText="Código oficial usado na guia SP/SADT. Para terapias, normalmente use a opção compatível com o contrato.">
+                    <select
                       id="payer-default-attendance-type"
                       aria-describedby="payer-default-attendance-type-help"
                       value={payerTissForm.defaultAttendanceType}
                       onChange={(event) => updatePayerTiss("defaultAttendanceType", event.target.value)}
-                      placeholder="Ex.: 03"
                       className={payerTissFieldClass}
-                    />
+                    >
+                      <option value="">Selecione</option>
+                      {payerTissForm.defaultAttendanceType && !isSupportedAttendanceType040300(payerTissForm.defaultAttendanceType) && (
+                        <option value={payerTissForm.defaultAttendanceType}>{legacyInvalidLabel(payerTissForm.defaultAttendanceType)}</option>
+                      )}
+                      {attendanceTypes040300.map((option) => (
+                        <option key={option.code} value={option.code}>{option.code} - {option.label}</option>
+                      ))}
+                    </select>
                   </PayerTissField>
-                  <PayerTissField id="payer-default-attendance-regime" label="Regime de atendimento padrão" helperText="Código do regime exigido pelo convênio, se houver.">
-                    <input
+                  <PayerTissField id="payer-default-attendance-regime" label="Regime de atendimento padrão" helperText="Código oficial de regime de atendimento aceito pelo XML TISS.">
+                    <select
                       id="payer-default-attendance-regime"
                       aria-describedby="payer-default-attendance-regime-help"
                       value={payerTissForm.defaultAttendanceRegime}
                       onChange={(event) => updatePayerTiss("defaultAttendanceRegime", event.target.value)}
-                      placeholder="Ex.: 01"
                       className={payerTissFieldClass}
-                    />
+                    >
+                      <option value="">Selecione</option>
+                      {payerTissForm.defaultAttendanceRegime && !isSupportedAttendanceRegime040300(payerTissForm.defaultAttendanceRegime) && (
+                        <option value={payerTissForm.defaultAttendanceRegime}>{legacyInvalidLabel(payerTissForm.defaultAttendanceRegime)}</option>
+                      )}
+                      {attendanceRegimes040300.map((option) => (
+                        <option key={option.code} value={option.code}>{option.code} - {option.label}</option>
+                      ))}
+                    </select>
                   </PayerTissField>
-                  <PayerTissField id="payer-default-attendance-character" label="Caráter de atendimento padrão" helperText="Código do caráter de atendimento usado quando o convênio exige.">
-                    <input
+                  <PayerTissField id="payer-default-attendance-character" label="Caráter de atendimento padrão" helperText="Código oficial que informa se o atendimento é eletivo ou de urgência/emergência.">
+                    <select
                       id="payer-default-attendance-character"
                       aria-describedby="payer-default-attendance-character-help"
                       value={payerTissForm.defaultAttendanceCharacter}
                       onChange={(event) => updatePayerTiss("defaultAttendanceCharacter", event.target.value)}
-                      placeholder="Ex.: 1"
                       className={payerTissFieldClass}
-                    />
+                    >
+                      <option value="">Selecione</option>
+                      {payerTissForm.defaultAttendanceCharacter && !isSupportedAttendanceCharacter040300(payerTissForm.defaultAttendanceCharacter) && (
+                        <option value={payerTissForm.defaultAttendanceCharacter}>{legacyInvalidLabel(payerTissForm.defaultAttendanceCharacter)}</option>
+                      )}
+                      {attendanceCharacters040300.map((option) => (
+                        <option key={option.code} value={option.code}>{option.code} - {option.label}</option>
+                      ))}
+                    </select>
                   </PayerTissField>
                 </div>
-
-                <p className="mt-4 text-xs font-bold uppercase tracking-widest text-indigo-500">Configuração automática do XML TISS</p>
-                <div className="mt-3 rounded-2xl border border-indigo-100 bg-white px-3 py-3">
-                  <p className="text-xs text-slate-500">Versão do XML TISS</p>
-                  <p className="mt-1 text-sm text-slate-900">{OFFICIAL_TISS_XML_STRATEGY.communicationVersion}</p>
-                  <p className="mt-1 text-[11px] leading-4 text-slate-500">
-                    Gerenciada automaticamente pela Verto. A versão é definida pelo gerador oficial e será atualizada somente quando uma nova versão for implementada e validada.
-                  </p>
-                </div>
-                <p className="mt-4 text-xs font-bold uppercase tracking-widest text-indigo-500">Regras TISS e autorização</p>
+                <p className="mt-4 text-xs font-bold uppercase tracking-widest text-indigo-500">Exigências gerais da operadora</p>
                 <div className="mt-3 grid gap-2 sm:grid-cols-2">
                   {[
                     ["requiresBeneficiaryCard", "Exige carteirinha"],
@@ -1469,6 +1516,14 @@ export function PayerRequirementsPanel({
             )}
           </div>
 
+          <details className="mt-4 rounded-2xl border border-slate-100 bg-slate-50/50 p-3">
+            <summary className="cursor-pointer text-sm font-semibold text-slate-800">Exceções por serviço</summary>
+            <p className="mt-2 text-xs text-slate-500">
+              Use somente quando um procedimento possuir exigências diferentes das regras gerais da operadora.
+            </p>
+            <p className="mt-1 text-xs text-slate-500">
+              A exceção substitui a regra geral apenas para este serviço.
+            </p>
           <div className="mt-4 grid gap-3 md:grid-cols-2">
             <label className="text-xs font-bold text-slate-600">
               Tipo de sessão
@@ -1557,6 +1612,7 @@ export function PayerRequirementsPanel({
               </div>
             ))}
           </div>
+          </details>
         </div>
       </div>
 
@@ -1759,144 +1815,190 @@ export function PayerRequirementsPanel({
           </details>
 
           <div className="mt-4 rounded-2xl border border-slate-100 p-3">
-            <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Mapeamento por pagador</p>
-            <select
-              value={tussMappingForm.serviceCatalogId}
-              onChange={(event) => setTussMappingForm((current) => ({ ...current, serviceCatalogId: event.target.value }))}
-              className="mt-3 w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
-            >
-              <option value="">Procedimento</option>
-              {tussServices.filter((service) => service.active !== false || service.id === tussMappingForm.serviceCatalogId).map((service) => <option key={service.id} value={service.id}>{service.name}{service.active === false ? " (inativo)" : ""}</option>)}
-            </select>
-            <select
-              value={tussMappingForm.tussCodeId}
-              onChange={(event) => setTussMappingForm((current) => ({ ...current, tussCodeId: event.target.value }))}
-              className="mt-2 w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
-            >
-              <option value="">Sem código TUSS</option>
-              {tussCodes.filter((code) => code.active !== false || code.id === tussMappingForm.tussCodeId).map((code) => <option key={code.id} value={code.id}>{code.code} - {code.description}{code.active === false ? " (inativo)" : ""}</option>)}
-            </select>
-            <div className="mt-2 grid gap-2 sm:grid-cols-2">
-              <input
-                value={tussMappingForm.contractCode}
-                onChange={(event) => setTussMappingForm((current) => ({ ...current, contractCode: event.target.value }))}
-                placeholder="Código contratual do pagador"
-                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
-              />
-              <input
-                value={tussMappingForm.specialty}
-                onChange={(event) => setTussMappingForm((current) => ({ ...current, specialty: event.target.value }))}
-                placeholder="Especialidade"
-                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
-              />
+            <p className="text-xs font-semibold uppercase tracking-widest text-slate-400">Mapeamento por pagador</p>
+            <p className="mt-1 text-xs text-slate-500">
+              O De/Para define o vínculo contratual entre o procedimento interno e o código TUSS. O preço operacional fica apenas em Tabela de procedimentos e valores.
+            </p>
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              <label htmlFor="payer-mapping-service" className="text-xs font-normal text-slate-700">
+                <span className="mb-1 block">Procedimento interno</span>
+                <select
+                  id="payer-mapping-service"
+                  value={tussMappingForm.serviceCatalogId}
+                  onChange={(event) => setTussMappingForm((current) => ({ ...current, serviceCatalogId: event.target.value }))}
+                  className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-normal outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-100"
+                >
+                  <option value="">Selecione o procedimento</option>
+                  {tussServices.filter((service) => service.active !== false || service.id === tussMappingForm.serviceCatalogId).map((service) => <option key={service.id} value={service.id}>{service.name}{service.active === false ? " (inativo)" : ""}</option>)}
+                </select>
+              </label>
+              <label htmlFor="payer-mapping-tuss-code" className="text-xs font-normal text-slate-700">
+                <span className="mb-1 block">Código TUSS</span>
+                <select
+                  id="payer-mapping-tuss-code"
+                  value={tussMappingForm.tussCodeId}
+                  onChange={(event) => setTussMappingForm((current) => ({ ...current, tussCodeId: event.target.value }))}
+                  className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-normal outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-100"
+                >
+                  <option value="">Selecione o código TUSS</option>
+                  {tussCodes.filter((code) => code.active !== false || code.id === tussMappingForm.tussCodeId).map((code) => <option key={code.id} value={code.id}>{code.code} - {code.description}{code.active === false ? " (inativo)" : ""}</option>)}
+                </select>
+              </label>
+              <label htmlFor="payer-mapping-contract-code" className="text-xs font-normal text-slate-700">
+                <span className="mb-1 block">Código contratual do pagador</span>
+                <input
+                  id="payer-mapping-contract-code"
+                  value={tussMappingForm.contractCode}
+                  onChange={(event) => setTussMappingForm((current) => ({ ...current, contractCode: event.target.value }))}
+                  placeholder="Ex.: ABA-IND-CONTRATO"
+                  className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-normal outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-100"
+                />
+              </label>
+              <label htmlFor="payer-mapping-specialty" className="text-xs font-normal text-slate-700">
+                <span className="mb-1 block">Especialidade</span>
+                <input
+                  id="payer-mapping-specialty"
+                  value={tussMappingForm.specialty}
+                  onChange={(event) => setTussMappingForm((current) => ({ ...current, specialty: event.target.value }))}
+                  placeholder="Ex.: ABA"
+                  className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-normal outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-100"
+                />
+              </label>
+              <label htmlFor="payer-mapping-contract-description" className="text-xs font-normal text-slate-700 md:col-span-2">
+                <span className="mb-1 block">Descrição contratual do pagador</span>
+                <textarea
+                  id="payer-mapping-contract-description"
+                  value={tussMappingForm.contractDescription}
+                  onChange={(event) => setTussMappingForm((current) => ({ ...current, contractDescription: event.target.value }))}
+                  placeholder="Ex.: descrição usada no contrato da operadora"
+                  className="min-h-[64px] w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-normal outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-100"
+                />
+              </label>
+              <label htmlFor="payer-mapping-guide-type" className="text-xs font-normal text-slate-700">
+                <span className="mb-1 block">Tipo de guia</span>
+                <select
+                  id="payer-mapping-guide-type"
+                  value={tussMappingForm.guideType}
+                  onChange={(event) => setTussMappingForm((current) => ({ ...current, guideType: event.target.value }))}
+                  className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-normal outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-100"
+                >
+                  <option value="">Selecione</option>
+                  {tussMappingForm.guideType && !hasOption(guideTypes040300, tussMappingForm.guideType) && (
+                    <option value={tussMappingForm.guideType}>{legacyInvalidLabel(tussMappingForm.guideType)}</option>
+                  )}
+                  {guideTypes040300.map((option) => <option key={option.code} value={option.code}>{option.label}</option>)}
+                </select>
+              </label>
+              <label htmlFor="payer-mapping-billing-unit" className="text-xs font-normal text-slate-700">
+                <span className="mb-1 block">Unidade de cobrança</span>
+                <select
+                  id="payer-mapping-billing-unit"
+                  value={tussMappingForm.billingUnit}
+                  onChange={(event) => setTussMappingForm((current) => ({ ...current, billingUnit: event.target.value }))}
+                  className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-normal outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-100"
+                >
+                  <option value="session">Sessão</option>
+                  <option value="hour">Hora</option>
+                  <option value="minute">Minuto</option>
+                  <option value="unit">Unidade</option>
+                  <option value="package">Pacote</option>
+                </select>
+              </label>
+              <label htmlFor="payer-mapping-quantity-rule" className="text-xs font-normal text-slate-700">
+                <span className="mb-1 block">Forma de cobrança</span>
+                <select
+                  id="payer-mapping-quantity-rule"
+                  value={tussMappingForm.quantityRule}
+                  onChange={(event) => setTussMappingForm((current) => ({ ...current, quantityRule: event.target.value }))}
+                  className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-normal outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-100"
+                >
+                  <option value="per_session">Por sessão</option>
+                  <option value="per_hour">Por hora</option>
+                  <option value="duration_based">Por duração</option>
+                  <option value="fixed">Fixo</option>
+                </select>
+              </label>
+              <label htmlFor="payer-mapping-default-quantity" className="text-xs font-normal text-slate-700">
+                <span className="mb-1 block">Quantidade padrão</span>
+                <input
+                  id="payer-mapping-default-quantity"
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  value={tussMappingForm.defaultQuantity}
+                  onChange={(event) => setTussMappingForm((current) => ({ ...current, defaultQuantity: event.target.value }))}
+                  placeholder="Ex.: 1"
+                  className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-normal outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-100"
+                />
+              </label>
+              <label htmlFor="payer-mapping-valid-from" className="text-xs font-normal text-slate-700">
+                <span className="mb-1 block">Início da vigência</span>
+                <input
+                  id="payer-mapping-valid-from"
+                  type="date"
+                  value={tussMappingForm.validFrom}
+                  onChange={(event) => setTussMappingForm((current) => ({ ...current, validFrom: event.target.value }))}
+                  className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-normal outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-100"
+                />
+              </label>
+              <label htmlFor="payer-mapping-valid-to" className="text-xs font-normal text-slate-700">
+                <span className="mb-1 block">Fim da vigência</span>
+                <input
+                  id="payer-mapping-valid-to"
+                  type="date"
+                  value={tussMappingForm.validTo}
+                  onChange={(event) => setTussMappingForm((current) => ({ ...current, validTo: event.target.value }))}
+                  className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-normal outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-100"
+                />
+              </label>
+              <label htmlFor="payer-mapping-duration" className="text-xs font-normal text-slate-700">
+                <span className="mb-1 block">Duração padrão</span>
+                <input
+                  id="payer-mapping-duration"
+                  type="number"
+                  min="1"
+                  value={tussMappingForm.standardDurationMinutes}
+                  onChange={(event) => setTussMappingForm((current) => ({ ...current, standardDurationMinutes: event.target.value }))}
+                  placeholder="Ex.: 50"
+                  className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-normal outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-100"
+                />
+              </label>
+              <label htmlFor="payer-mapping-source" className="text-xs font-normal text-slate-700">
+                <span className="mb-1 block">Origem do mapeamento</span>
+                <select
+                  id="payer-mapping-source"
+                  value={tussMappingForm.source}
+                  onChange={(event) => setTussMappingForm((current) => ({ ...current, source: event.target.value }))}
+                  className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-normal outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-100"
+                >
+                  <option value="manual">Manual</option>
+                  <option value="imported">Importado</option>
+                  <option value="demo">Demo/teste</option>
+                  <option value="payer_contract">Contrato do pagador</option>
+                </select>
+              </label>
+              <label htmlFor="payer-mapping-notes" className="text-xs font-normal text-slate-700 md:col-span-2">
+                <span className="mb-1 block">Observações administrativas</span>
+                <input
+                  id="payer-mapping-notes"
+                  value={tussMappingForm.notes}
+                  onChange={(event) => setTussMappingForm((current) => ({ ...current, notes: event.target.value }))}
+                  placeholder="Ex.: regra contratual combinada com a operadora"
+                  className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-normal outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-100"
+                />
+              </label>
             </div>
-            <textarea
-              value={tussMappingForm.contractDescription}
-              onChange={(event) => setTussMappingForm((current) => ({ ...current, contractDescription: event.target.value }))}
-              placeholder="Descrição contratual do pagador, se diferente da descrição TUSS"
-              className="mt-2 min-h-[64px] w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
-            />
-            <div className="mt-2 grid gap-2 sm:grid-cols-2">
-              <select
-                value={tussMappingForm.guideType}
-                onChange={(event) => setTussMappingForm((current) => ({ ...current, guideType: event.target.value }))}
-                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
-              >
-                <option value="sp_sadt">SP/SADT</option>
-                <option value="consulta">Consulta</option>
-                <option value="other">Outra</option>
-              </select>
-              <select
-                value={tussMappingForm.billingUnit}
-                onChange={(event) => setTussMappingForm((current) => ({ ...current, billingUnit: event.target.value }))}
-                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
-              >
-                <option value="session">Sessão</option>
-                <option value="hour">Hora</option>
-                <option value="minute">Minuto</option>
-                <option value="unit">Unidade</option>
-                <option value="package">Pacote</option>
-              </select>
-            </div>
-            <div className="mt-2 grid gap-2 sm:grid-cols-2">
-              <select
-                value={tussMappingForm.quantityRule}
-                onChange={(event) => setTussMappingForm((current) => ({ ...current, quantityRule: event.target.value }))}
-                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
-              >
-                <option value="per_session">Por sessão</option>
-                <option value="per_hour">Por hora</option>
-                <option value="duration_based">Por duração</option>
-                <option value="fixed">Fixo</option>
-              </select>
-              <input
-                type="number"
-                min="0.01"
-                step="0.01"
-                value={tussMappingForm.defaultQuantity}
-                onChange={(event) => setTussMappingForm((current) => ({ ...current, defaultQuantity: event.target.value }))}
-                placeholder="Quantidade"
-                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
-              />
-            </div>
-            <div className="mt-2 grid gap-2 sm:grid-cols-2">
-              <input
-                type="date"
-                value={tussMappingForm.validFrom}
-                onChange={(event) => setTussMappingForm((current) => ({ ...current, validFrom: event.target.value }))}
-                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
-              />
-              <input
-                type="date"
-                value={tussMappingForm.validTo}
-                onChange={(event) => setTussMappingForm((current) => ({ ...current, validTo: event.target.value }))}
-                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
-              />
-            </div>
-            <div className="mt-2">
-              <input
-                inputMode="decimal"
-                value={tussMappingForm.amountCents}
-                onChange={(event) => setTussMappingForm((current) => ({ ...current, amountCents: event.target.value }))}
-                placeholder="Ex.: 120,00"
-                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
-              />
-            </div>
-            <div className="mt-2 grid gap-2 sm:grid-cols-2">
-              <input
-                inputMode="decimal"
-                value={tussMappingForm.negotiatedAmountCents}
-                onChange={(event) => setTussMappingForm((current) => ({ ...current, negotiatedAmountCents: event.target.value }))}
-                placeholder="Ex.: 120,00"
-                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
-              />
-              <input
-                type="number"
-                min="1"
-                value={tussMappingForm.standardDurationMinutes}
-                onChange={(event) => setTussMappingForm((current) => ({ ...current, standardDurationMinutes: event.target.value }))}
-                placeholder="Duração padrão (min)"
-                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
-              />
-            </div>
-            <div className="mt-2 grid gap-2 sm:grid-cols-2">
-              <select
-                value={tussMappingForm.source}
-                onChange={(event) => setTussMappingForm((current) => ({ ...current, source: event.target.value }))}
-                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
-              >
-                <option value="manual">Manual</option>
-                <option value="imported">Importado</option>
-                <option value="demo">Demo/teste</option>
-                <option value="payer_contract">Contrato do pagador</option>
-              </select>
-              <input
-                value={tussMappingForm.notes}
-                onChange={(event) => setTussMappingForm((current) => ({ ...current, notes: event.target.value }))}
-                placeholder="Observações administrativas"
-                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
-              />
-            </div>
+            {(tussMappingForm.amountCents || tussMappingForm.negotiatedAmountCents) && (
+              <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                <p className="font-semibold">Dados financeiros legados do De/Para</p>
+                <p className="mt-1">
+                  Valor legado: {tussMappingForm.amountCents || "Não informado"} · Valor negociado legado: {tussMappingForm.negotiatedAmountCents || "Não informado"}
+                </p>
+                <p className="mt-1 text-amber-800">
+                  Estes campos ficam somente para auditoria. O preço operacional é editado em Tabela de procedimentos e valores.
+                </p>
+              </div>
+            )}
             <div className="mt-3 grid gap-2 sm:grid-cols-2">
               {[
                 ["requiresAuthorization", "Autorização"],
@@ -1907,7 +2009,7 @@ export function PayerRequirementsPanel({
                 ["requiresPatientDocument", "Carteirinha"],
                 ["useActualDuration", "Duração real"],
               ].map(([key, label]) => (
-                <label key={key} className="flex items-center gap-2 rounded-2xl border border-slate-100 px-3 py-2 text-xs font-bold text-slate-600">
+                <label key={key} className="flex items-center gap-2 rounded-2xl border border-slate-100 px-3 py-2 text-xs font-normal text-slate-600">
                   <input
                     type="checkbox"
                     checked={Boolean((tussMappingForm as any)[key])}

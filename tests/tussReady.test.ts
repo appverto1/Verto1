@@ -131,7 +131,7 @@ test('engine nao converte preco ausente ou vazio em zero', () => {
       default_quantity: 1,
       amount_cents: 0,
     },
-    price: null,
+    price: { id: 'price-zero', amount_cents: 0 },
     tussCode: { id: 'tuss-1', code: 'TESTE-ABA', description: 'Teste ABA' },
   });
 

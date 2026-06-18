@@ -214,7 +214,7 @@ test('UI expõe configuração, agenda e fechamento sem IDs técnicos ou HTML pe
   assert.match(payerPanelCode, /Tabela de procedimentos e valores/);
   assert.match(payerPanelCode, /Dados da operadora/);
   assert.match(payerPanelCode, /Dados do prestador no convênio/);
-  assert.match(payerPanelCode, /Regras TISS e autorização/);
+  assert.match(payerPanelCode, /Exigências gerais da operadora/);
   assert.match(payerPanelCode, /Contatos e observações administrativas/);
   assert.match(coordinatorCode, /Pagador e conferência/);
   assert.match(calendarCode, /billingContext/);
@@ -257,6 +257,27 @@ test('Tabela de Valores tem rotulos permanentes, reais no formulario e configura
   assert.match(payerPanelCode, /Configurações de faturamento deste convênio/);
   assert.match(payerPanelCode, /Cadastros de apoio/);
   assert.match(payerPanelCode, /Esses cadastros são referências usadas nas configurações de faturamento/);
+  assert.match(payerPanelCode, /Mapeamento por pagador/);
+  assert.match(payerPanelCode, /O De\/Para define o vínculo contratual/);
+  for (const marker of [
+    'htmlFor="payer-mapping-service"',
+    'htmlFor="payer-mapping-tuss-code"',
+    'htmlFor="payer-mapping-contract-code"',
+    'htmlFor="payer-mapping-contract-description"',
+    'htmlFor="payer-mapping-guide-type"',
+    'htmlFor="payer-mapping-billing-unit"',
+    'htmlFor="payer-mapping-quantity-rule"',
+    'htmlFor="payer-mapping-default-quantity"',
+    'htmlFor="payer-mapping-valid-from"',
+    'htmlFor="payer-mapping-valid-to"',
+    'htmlFor="payer-mapping-duration"',
+    'htmlFor="payer-mapping-source"',
+    'htmlFor="payer-mapping-notes"',
+    'Dados financeiros legados do De/Para',
+    'O preço operacional é editado em Tabela de procedimentos e valores',
+  ]) {
+    assert.ok(payerPanelCode.includes(marker), marker);
+  }
   assert.match(payerPanelCode, /open=\{supportFormOpen\}/);
   assert.match(payerPanelCode, /open=\{supportCatalogOpen\}/);
   assert.match(payerPanelCode, /openSupportForm\("service"\)/);
@@ -283,6 +304,10 @@ test('Tabela de Valores tem rotulos permanentes, reais no formulario e configura
   assert.match(payerPanelCode, /Configuração inconsistente/);
   assert.match(payerPanelCode, /procedurePriceSaveInFlightRef/);
   assert.match(payerPanelCode, /parseBrazilianCurrencyToCents\(procedurePriceForm\.amountCents\)/);
+  assert.doesNotMatch(payerPanelCode, /parseBrazilianCurrencyToCents\(tussMappingForm/);
+  assert.match(serverCode, /amount_cents:\s*null/);
+  assert.match(serverCode, /negotiated_amount_cents:\s*null/);
+  assert.match(serverCode, /TUSS_MAPPING_GUIDE_TYPE_UNSUPPORTED/);
   assert.doesNotMatch(payerPanelCode, /placeholder="Valor negociado em centavos"/);
 });
 
@@ -314,12 +339,23 @@ test('Dados TISS da operadora tem rotulos permanentes e versao oficial automatic
     'Versão do XML TISS',
     'Gerenciada automaticamente pela Verto',
     'OFFICIAL_TISS_XML_STRATEGY.communicationVersion',
+    'attendanceTypes040300.map',
+    'attendanceRegimes040300.map',
+    'attendanceCharacters040300.map',
+    'guideTypes040300.map',
+    'Legado inválido',
+    'Configuração do convênio para TISS',
+    'Exigências gerais da operadora',
+    'Exceções por serviço',
+    'A exceção substitui a regra geral apenas para este serviço',
   ]) {
     assert.ok(payerPanelCode.includes(marker), marker);
   }
 
   assert.doesNotMatch(payerPanelCode, /updatePayerTiss\("tissVersion"/);
   assert.doesNotMatch(payerPanelCode, /placeholder="Versão TISS configurada"/);
+  assert.doesNotMatch(payerPanelCode, /placeholder="Ex\.: 03"/);
+  assert.doesNotMatch(payerPanelCode, /placeholder="Ex\.: 01"/);
   assert.doesNotMatch(payerPanelCode, /Versão TISS não configurada/);
 });
 

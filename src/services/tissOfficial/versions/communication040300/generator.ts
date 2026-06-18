@@ -26,6 +26,11 @@ import {
   TISS_OFFICIAL_CONTENT_STRUCTURE_VERSION,
   TISS_OFFICIAL_TUSS_VERSION
 } from "../../capabilities";
+import {
+  attendanceCharacters040300,
+  attendanceRegimes040300,
+  attendanceTypes040300
+} from "./domains";
 
 const ANS_NAMESPACE = "http://www.ans.gov.br/padroes/tiss/schemas";
 const XMLDSIG_NAMESPACE = "http://www.w3.org/2000/09/xmldsig#";
@@ -34,9 +39,9 @@ const DEFAULT_XML_PADRAO_VERSION = "4.03.00";
 const DEFAULT_CONTENT_STRUCTURE_VERSION = TISS_OFFICIAL_CONTENT_STRUCTURE_VERSION;
 const DEFAULT_TUSS_VERSION = TISS_OFFICIAL_TUSS_VERSION;
 const MAX_GUIDES_PER_BATCH = 500;
-const VALID_ATTENDANCE_TYPES = new Set(["01", "02", "03", "04", "08", "09", "10", "13", "23"]);
-const VALID_ATTENDANCE_REGIMES = new Set(["01", "02", "03", "04", "05"]);
-const VALID_ATTENDANCE_CHARACTERS = new Set(["1", "2"]);
+const VALID_ATTENDANCE_TYPES = new Set(attendanceTypes040300.map((item) => item.code));
+const VALID_ATTENDANCE_REGIMES = new Set(attendanceRegimes040300.map((item) => item.code));
+const VALID_ATTENDANCE_CHARACTERS = new Set(attendanceCharacters040300.map((item) => item.code));
 
 const COUNCIL_CODES: Record<string, string> = {
   CRESS: "01",
