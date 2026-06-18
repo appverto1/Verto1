@@ -168,11 +168,14 @@ test('UI expõe configuração, agenda e fechamento sem IDs técnicos ou HTML pe
   assert.match(dataServiceCode, /async updateAppointmentBillingContext/);
   assert.match(coordinatorCode, /PayerRequirementsPanel/);
   assert.match(coordinatorCode, /payers:\s*"clinic-settings"/);
-  assert.match(coordinatorCode, /payers:\s*"Pagadores e regras"/);
-  assert.match(coordinatorCode, /id:\s*"payers", label:\s*"Pagadores e regras", icon:\s*KeyRound/);
+  assert.match(coordinatorCode, /payers:\s*"Convênios"/);
+  assert.match(coordinatorCode, /id:\s*"payers", label:\s*"Convênios", icon:\s*KeyRound/);
   assert.match(coordinatorCode, /activeTab === "payers"[\s\S]*?<PayerRequirementsPanel \/>/);
   assert.match(payerPanelCode, /Configuração de Convênios/);
   assert.match(payerPanelCode, /Cadastro avançado de operadoras/);
+  assert.match(payerPanelCode, /Adicionar convênio/);
+  assert.match(payerPanelCode, /Nenhum convênio configurado/);
+  assert.match(payerPanelCode, /Tentar novamente/);
   assert.match(payerPanelCode, /De\/Para TUSS por Convênio/);
   assert.match(payerPanelCode, /Tabela de procedimentos e valores/);
   assert.match(payerPanelCode, /Dados da operadora/);

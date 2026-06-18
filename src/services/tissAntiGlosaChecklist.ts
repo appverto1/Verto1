@@ -68,7 +68,7 @@ const CATALOG: Array<Omit<TissAntiGlosaChecklistItem, "status" | "relatedIssueCo
     code: "payer_configured",
     label: "Dados do pagador configurados",
     riskClass: "risco de glosa administrativa",
-    suggestedAction: "Editar perfil TISS do pagador",
+    suggestedAction: "Configurar convênio",
     okWhen: (snapshot) => Boolean(snapshot.payer?.profileId && snapshot.payer?.ansRegistration),
   },
   {
@@ -91,7 +91,7 @@ const CATALOG: Array<Omit<TissAntiGlosaChecklistItem, "status" | "relatedIssueCo
     code: "procedure_tuss_mapping",
     label: "Procedimento TUSS mapeado",
     riskClass: "risco de procedimento sem De/Para",
-    suggestedAction: "Mapear TUSS do pagador",
+    suggestedAction: "Configurar convênio",
     okWhen: (snapshot) => Boolean(snapshot.procedure?.tussCode && snapshot.procedure?.name),
   },
   {

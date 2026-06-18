@@ -674,7 +674,7 @@ export function CoordinatorDashboard({
     agenda: "Agenda",
     closure: "Fechamento operacional",
     conference: "Pré-faturamento mensal",
-    payers: "Pagadores e regras",
+    payers: "Convênios",
     rooms: "Reservas de Sala",
     protocols: "Protocolos",
     settings: "Configurações da Clínica",
@@ -6137,7 +6137,7 @@ export function CoordinatorDashboard({
     [{ id: "protocols", label: "Protocolos", icon: BookOpenCheck }],
     [
       { id: "financial", label: "Financeiro", icon: DollarSign, badge: "BETA" },
-      { id: "payers", label: "Pagadores e regras", icon: KeyRound },
+      { id: "payers", label: "Convênios", icon: KeyRound },
       { id: "closure", label: "Fechamento", icon: ReceiptText },
       { id: "conference", label: "Pré-faturamento", icon: FileChartColumnIncreasing },
     ],

@@ -1309,7 +1309,7 @@ test('cadastros TISS sao globais e reutilizaveis em Configuracoes', () => {
   assert.doesNotMatch(billingTissSettingsCode, /appointmentId|appointment_id/);
 });
 
-test('Pagadores e regras expoe configuracao TISS guiada por operadora', () => {
+test('Convênios expõe configuração TISS guiada por operadora', () => {
   assert.match(payerRequirementsCode, /Configuração de Convênios/);
   assert.match(payerRequirementsCode, /Cadastro avançado de operadoras/);
   assert.match(payerRequirementsCode, /Dados TISS da operadora/);
@@ -1434,6 +1434,9 @@ test('frontend separa Pré-guias e Rascunhos XML com preview interno', () => {
   assert.match(preGuideUiCode, /Unidade autorizada/);
   assert.match(preGuideUiCode, /Editar Dados da clínica/);
   assert.match(preGuideUiCode, /Editar perfil TISS do pagador/);
+  assert.match(preGuideUiCode, /Configurar convênio/);
+  assert.match(preGuideUiCode, /onNavigatePayers/);
+  assert.match(preGuideUiCode, /Abrir Convênios/);
   assert.match(preGuideUiCode, /Editar perfil faturável do profissional/);
   assert.match(preGuideUiCode, /RESPONSIBLE_SIGNATURE_REQUIRED:\s*"Assinatura do responsável"/);
   assert.match(preGuideUiCode, /<Section title="Assinatura" icon=\{ClipboardCheck\}>/);

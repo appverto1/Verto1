@@ -1191,8 +1191,8 @@ export function TissPreGuideTab({
     const code = normalizeIssueCode(firstIssue?.code);
     if (code.includes("AUTHORIZATION") || code.includes("GUIDE")) return authorizationActionLabel(code);
     if (code === "RESPONSIBLE_SIGNATURE_REQUIRED") return "Coletar assinatura";
-    if (code.includes("TUSS") || code.includes("PROCEDURE_PRICE") || code.includes("PROCEDURE")) return "Mapear TUSS";
-    if (code.includes("PAYER")) return "Corrigir dados do pagador";
+    if (code.includes("TUSS") || code.includes("PROCEDURE_PRICE") || code.includes("PROCEDURE")) return "Configurar convênio";
+    if (code.includes("PAYER")) return "Configurar convênio";
     if (code.includes("PROFESSIONAL") || code === "CBO_MISSING") return "Corrigir profissional";
     if (code.includes("CARD") || code.includes("BENEFICIARY")) return "Corrigir carteirinha";
     return "Corrigir pendências e revalidar a Pré-guia.";
@@ -1253,14 +1253,28 @@ export function TissPreGuideTab({
     }
     if (code === "PAYER_TUSS_MAPPING_MISSING" || code === "PAYER_TUSS_MAPPING_EXPIRED" || code === "PAYER_PROCEDURE_PRICE_MISSING" || code === "PAYER_PROCEDURE_PRICE_CONFLICT") {
       return {
-        label: code.includes("PRICE") ? "Configurar tabela negociada" : "Mapear TUSS do pagador",
-        onClick: () => void openProfileEditor("payer"),
+        label: "Configurar convênio",
+        onClick: () => {
+          if (onNavigatePayers) {
+            setDetail(null);
+            onNavigatePayers();
+            return;
+          }
+          void openProfileEditor("payer");
+        },
       };
     }
     if (isPayerProfileIssue(item)) {
       return {
-        label: "Editar perfil TISS do pagador",
-        onClick: () => void openProfileEditor("payer"),
+        label: "Configurar convênio",
+        onClick: () => {
+          if (onNavigatePayers) {
+            setDetail(null);
+            onNavigatePayers();
+            return;
+          }
+          void openProfileEditor("payer");
+        },
       };
     }
     if (isPatientIssue(item)) {
@@ -1318,7 +1332,7 @@ export function TissPreGuideTab({
           title: "Cadastro global: Dados TISS do pagador",
           subject: detail?.payerName || "Pagador",
           description: "Você está editando o perfil TISS global deste pagador. Essa alteração será reutilizada em todos os atendimentos vinculados a este pagador.",
-          full: "Abrir Pagadores e regras",
+          full: "Abrir Convênios",
         }
       : profileEditor === "professional"
         ? {

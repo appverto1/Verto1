@@ -315,9 +315,9 @@ export function tissPreGuideIssueAction(code: unknown, section?: TissPreGuideIss
   const normalized = text(code);
   if (normalized === 'PROFESSIONAL_NOT_DEFINED') return 'Vincular profissional executante ao agendamento ou item faturável';
   if (normalized === 'RESPONSIBLE_SIGNATURE_REQUIRED' || section === 'signature') return 'Coletar assinatura';
-  if (normalized === 'PAYER_TUSS_MAPPING_MISSING' || normalized === 'PAYER_TUSS_MAPPING_EXPIRED') return 'Mapear TUSS do pagador';
-  if (normalized === 'PAYER_PROCEDURE_PRICE_MISSING' || normalized === 'PAYER_PROCEDURE_PRICE_CONFLICT') return 'Configurar tabela negociada';
-  if (normalized.includes('PAYER') || section === 'payer') return 'Corrigir pagador';
+  if (normalized === 'PAYER_TUSS_MAPPING_MISSING' || normalized === 'PAYER_TUSS_MAPPING_EXPIRED') return 'Configurar convênio';
+  if (normalized === 'PAYER_PROCEDURE_PRICE_MISSING' || normalized === 'PAYER_PROCEDURE_PRICE_CONFLICT') return 'Configurar convênio';
+  if (normalized.includes('PAYER') || section === 'payer') return 'Configurar convênio';
   if (normalized.includes('BENEFICIARY') || section === 'beneficiary') return 'Corrigir paciente';
   if (normalized.includes('PROFESSIONAL') || normalized === 'CBO_MISSING' || section === 'professional') return 'Corrigir profissional';
   if (normalized.includes('PROCEDURE') || normalized.includes('TUSS') || normalized.includes('AMOUNT') || section === 'procedure') return 'Corrigir procedimento/TUSS';

@@ -372,7 +372,8 @@ export function PayerRequirementsPanel() {
     try {
       const result = await dataService.getPayers({ status: "ACTIVE", limit: 80 });
       if (!result?.success) {
-        setError(result?.error || "Não foi possível carregar pagadores agora.");
+        const loadError = String(result?.error || "").trim();
+        setError(/pagadores/i.test(loadError) ? "Não foi possível carregar os convênios." : loadError || "Não foi possível carregar os convênios.");
         setPayers([]);
         return;
       }
@@ -912,7 +913,18 @@ export function PayerRequirementsPanel() {
         </button>
       </div>
 
-      {error && <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700">{error}</div>}
+      {error && (
+        <div className="mt-4 flex flex-col gap-2 rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700 sm:flex-row sm:items-center sm:justify-between">
+          <span>{error}</span>
+          <button
+            type="button"
+            onClick={() => void loadPayers()}
+            className="inline-flex items-center justify-center rounded-xl border border-rose-200 bg-white px-3 py-1.5 text-xs font-bold text-rose-700 hover:bg-rose-100"
+          >
+            Tentar novamente
+          </button>
+        </div>
+      )}
 
       <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(240px,0.9fr)_minmax(0,1.4fr)]">
         <div className="space-y-3">
@@ -938,13 +950,15 @@ export function PayerRequirementsPanel() {
               className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-[#7a32fc] px-3 py-2 text-sm font-bold text-white disabled:opacity-50"
             >
               <Plus size={15} />
-              Criar pagador
+              Adicionar convênio
             </button>
           </div>
 
           <div className="space-y-2">
-            {payers.length === 0 ? (
-              <p className="rounded-2xl bg-white p-4 text-sm font-semibold text-slate-500">Nenhum pagador cadastrado.</p>
+            {loading && payers.length === 0 ? (
+              <p className="rounded-2xl bg-white p-4 text-sm font-semibold text-slate-500">Carregando convênios...</p>
+            ) : payers.length === 0 ? (
+              <p className="rounded-2xl bg-white p-4 text-sm font-semibold text-slate-500">Nenhum convênio configurado.</p>
             ) : payers.map((payer) => (
               <button
                 key={payer.id}
