@@ -34991,11 +34991,11 @@ async function startServer() {
           .map((id: unknown) => sanitizeString(id, 120))
           .filter((id: string) => isUuid(id))
       ));
-      if (preGuideIds.length === 0 || preGuideIds.length > 100 || preGuideIds.length !== rawPreGuideIds.length) {
+      if (preGuideIds.length === 0 || preGuideIds.length > 500 || preGuideIds.length !== rawPreGuideIds.length) {
         return res.status(400).json({
           success: false,
           code: 'TISS_OFFICIAL_PRE_GUIDE_SELECTION_INVALID',
-          error: 'Selecione entre 1 e 100 Pré-guias válidas do mesmo pagador e competência.'
+          error: 'Selecione entre 1 e 500 Pré-guias válidas do mesmo pagador e competência.'
         });
       }
 
@@ -35005,7 +35005,7 @@ async function startServer() {
         .eq('organization_id', organizationId)
         .eq('payer_id', payerId)
         .in('id', preGuideIds)
-        .limit(100);
+        .limit(500);
       if (preGuideError) {
         if (hasMissingFinancialSchema(preGuideError) || isMissingRelationError(preGuideError)) {
           return res.status(503).json({

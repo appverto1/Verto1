@@ -70,6 +70,7 @@ type TissPreGuideRow = {
   staleReason?: string | null;
   updatedAt?: string | null;
   lastValidatedAt?: string | null;
+  officialDocumentId?: string | null;
 };
 
 type TissPreGuideCoverage = {
@@ -229,6 +230,7 @@ type QuickFilter =
 type ProfileEditorKind = "provider" | "payer" | "professional";
 
 const PAGE_SIZE = 50;
+const OFFICIAL_BATCH_GUIDE_LIMIT = 500;
 
 const statusMeta: Record<string, { label: string; className: string }> = {
   valid: { label: "Válida", className: "bg-emerald-50 text-emerald-700 ring-emerald-200" },
@@ -332,6 +334,36 @@ function issueLabel(code: string) {
   if (normalized.includes("PROFESSIONAL")) return "Profissional";
   if (normalized.includes("CARD") || normalized.includes("BENEFICIARY")) return "Dados do paciente";
   return "Pendência de validação";
+}
+
+function preGuideMonth(row: TissPreGuideRow) {
+  return String(row.scheduledStart || row.snapshot?.appointment?.scheduledStart || "").slice(0, 7);
+}
+
+function officialPreGuideBlockReasons(row: TissPreGuideRow, competenceMonth: string) {
+  const reasons: string[] = [];
+  const codes = Array.isArray(row.validationErrorCodes) ? row.validationErrorCodes : [];
+  const blockingCount = Number(row.antiGlosaChecklist?.blockingCount || row.snapshot?.antiGlosaChecklist?.blockingCount || 0) || 0;
+  if (!row.id) reasons.push("Pré-guia sem identificador persistido");
+  if (String(row.status || "") !== "valid") reasons.push("Pré-guia pendente");
+  if (codes.length > 0) reasons.push(codes.slice(0, 2).map(issueLabel).join(", "));
+  if (blockingCount > 0) reasons.push("Checklist incompleto");
+  if (row.staleReason) reasons.push("Revalidação pendente");
+  if (!row.payerId) reasons.push("Convênio não informado");
+  if (row.officialDocumentId || row.snapshot?.officialDocumentId || row.snapshot?.officialDocument?.id) reasons.push("Já vinculada a lote oficial");
+  if (preGuideMonth(row) && preGuideMonth(row) !== competenceMonth.slice(0, 7)) reasons.push("Competência diferente");
+  if (Number(row.totalAmountCents || row.snapshot?.procedure?.totalAmountCents || 0) <= 0) reasons.push("Sem valor");
+  return Array.from(new Set(reasons.filter(Boolean)));
+}
+
+function sortPreGuidesForOfficialBatch(a: TissPreGuideRow, b: TissPreGuideRow) {
+  const dateA = String(a.scheduledStart || a.snapshot?.appointment?.scheduledStart || "");
+  const dateB = String(b.scheduledStart || b.snapshot?.appointment?.scheduledStart || "");
+  const byDate = dateA.localeCompare(dateB);
+  if (byDate !== 0) return byDate;
+  const byPatient = String(a.patientName || a.snapshot?.beneficiary?.name || "").localeCompare(String(b.patientName || b.snapshot?.beneficiary?.name || ""));
+  if (byPatient !== 0) return byPatient;
+  return String(a.id || "").localeCompare(String(b.id || ""));
 }
 
 function isResponsibleSignatureIssue(item?: { code?: string | null; section?: string | null }) {
@@ -588,7 +620,10 @@ export function TissPreGuideTab({
   const [batchDraftPayerId, setBatchDraftPayerId] = useState("");
   const [batchDraftDetail, setBatchDraftDetail] = useState<TissBillingBatchDraftRow | null>(null);
   const [batchDraftCancellingId, setBatchDraftCancellingId] = useState("");
-  const [activePanel, setActivePanel] = useState<"preGuides" | "batchDrafts" | "xmlDrafts">("preGuides");
+  const [activePanel, setActivePanel] = useState<"batchDrafts" | "xmlDrafts">(
+    initialPanel === "batchDrafts" ? "batchDrafts" : "xmlDrafts"
+  );
+  const [internalToolsOpen, setInternalToolsOpen] = useState(initialPanel === "batchDrafts" || initialPanel === "xmlDrafts");
   const [xmlDraftDetail, setXmlDraftDetail] = useState<TissXmlDraftRow | null>(null);
   const [xmlDraftDetailLoading, setXmlDraftDetailLoading] = useState(false);
   const [xmlDraftValidatingId, setXmlDraftValidatingId] = useState("");
@@ -599,15 +634,21 @@ export function TissPreGuideTab({
   const [officialDocumentsLoading, setOfficialDocumentsLoading] = useState(false);
   const [officialDocumentGenerating, setOfficialDocumentGenerating] = useState(false);
   const [officialDocumentModalOpen, setOfficialDocumentModalOpen] = useState(false);
-  const [officialDocumentPayerId, setOfficialDocumentPayerId] = useState("");
   const [officialDocumentDetail, setOfficialDocumentDetail] = useState<TissOfficialDocumentRow | null>(null);
   const [officialDocumentDetailLoading, setOfficialDocumentDetailLoading] = useState(false);
   const [highlightedOfficialDocumentId, setHighlightedOfficialDocumentId] = useState("");
+  const [selectedOfficialPreGuideIds, setSelectedOfficialPreGuideIds] = useState<string[]>([]);
+  const [officialDocumentGuidePreviewOpen, setOfficialDocumentGuidePreviewOpen] = useState(false);
+  const [officialDocumentBlockedPreviewOpen, setOfficialDocumentBlockedPreviewOpen] = useState(false);
+  const [createdOfficialDocument, setCreatedOfficialDocument] = useState<TissOfficialDocumentRow | null>(null);
   const [revenueCycleEvents, setRevenueCycleEvents] = useState<TissRevenueCycleEventRow[]>([]);
   const [revenueCycleEventsLoading, setRevenueCycleEventsLoading] = useState(false);
 
   useEffect(() => {
-    if (initialPanel) setActivePanel(initialPanel);
+    if (initialPanel === "batchDrafts" || initialPanel === "xmlDrafts") {
+      setActivePanel(initialPanel);
+      setInternalToolsOpen(true);
+    }
   }, [initialPanel, navigationIntentKey]);
 
   const cards = useMemo(() => [
@@ -644,21 +685,55 @@ export function TissPreGuideTab({
   );
   const selectedXmlTotalAmount = selectedXmlRows.reduce((sum, row) => sum + Number(row.totalAmountCents || row.snapshot?.procedure?.totalAmountCents || 0), 0);
   const selectedXmlTissVersion = String(selectedXmlRows[0]?.snapshot?.payer?.tissVersion || selectedXmlRows[0]?.tissVersion || "configurada no pagador").trim();
-  const selectedOfficialPayerId = officialDocumentPayerId || payerId || (visibleXmlPayers.length === 1 ? visibleXmlPayers[0].id : "");
-  const selectedOfficialPayerName = visibleXmlPayers.find((item) => item.id === selectedOfficialPayerId)?.name || "Operadora";
-  const selectedOfficialRows = useMemo(
-    () => validRows.filter((row) => !selectedOfficialPayerId || row.payerId === selectedOfficialPayerId),
-    [selectedOfficialPayerId, validRows]
+  const officialRowsWithEligibility = useMemo(() => rows.map((row) => ({
+    row,
+    reasons: officialPreGuideBlockReasons(row, competenceMonth),
+  })), [competenceMonth, rows]);
+  const eligibleOfficialRows = useMemo(
+    () => officialRowsWithEligibility
+      .filter((item) => item.reasons.length === 0)
+      .map((item) => item.row)
+      .sort(sortPreGuidesForOfficialBatch),
+    [officialRowsWithEligibility]
   );
+  const blockedOfficialRows = useMemo(
+    () => officialRowsWithEligibility
+      .filter((item) => item.reasons.length > 0)
+      .sort((a, b) => sortPreGuidesForOfficialBatch(a.row, b.row)),
+    [officialRowsWithEligibility]
+  );
+  const selectedOfficialIdSet = useMemo(() => new Set(selectedOfficialPreGuideIds), [selectedOfficialPreGuideIds]);
+  const selectedOfficialRows = useMemo(
+    () => eligibleOfficialRows
+      .filter((row) => row.id && selectedOfficialIdSet.has(row.id))
+      .sort(sortPreGuidesForOfficialBatch),
+    [eligibleOfficialRows, selectedOfficialIdSet]
+  );
+  const selectedOfficialPayerIds = useMemo(() => Array.from(new Set(selectedOfficialRows.map((row) => String(row.payerId || "")).filter(Boolean))), [selectedOfficialRows]);
+  const selectedOfficialCompetenceMonths = useMemo(() => Array.from(new Set(selectedOfficialRows.map(preGuideMonth).filter(Boolean))), [selectedOfficialRows]);
+  const selectedOfficialPayerId = selectedOfficialPayerIds.length === 1 ? selectedOfficialPayerIds[0] : "";
+  const selectedOfficialPayerName = selectedOfficialRows.find((row) => row.payerId === selectedOfficialPayerId)?.payerName || "Operadora";
   const selectedOfficialTotalAmount = selectedOfficialRows.reduce(
     (sum, row) => sum + Number(row.totalAmountCents || row.snapshot?.procedure?.totalAmountCents || 0),
     0
   );
+  const selectedOfficialUniquePatients = useMemo(
+    () => new Set(selectedOfficialRows.map((row) => String(row.patientId || row.patientName || row.snapshot?.beneficiary?.id || row.snapshot?.beneficiary?.name || "")).filter(Boolean)).size,
+    [selectedOfficialRows]
+  );
+  const selectedOfficialTissVersion = String(selectedOfficialRows[0]?.snapshot?.payer?.tissVersion || selectedOfficialRows[0]?.tissVersion || "04.03.00").trim();
+  const selectedOfficialTooLarge = selectedOfficialRows.length > OFFICIAL_BATCH_GUIDE_LIMIT;
+  const selectedOfficialHasMixedPayers = selectedOfficialPayerIds.length > 1;
+  const selectedOfficialHasMixedCompetence = selectedOfficialCompetenceMonths.length > 1;
+  const allEligibleOfficialRowsSelected = eligibleOfficialRows.length > 0 && eligibleOfficialRows.every((row) => row.id && selectedOfficialIdSet.has(row.id));
   const latestXmlDraft = xmlDrafts[0] || null;
   const xmlDraftGuideCount = xmlDrafts.reduce((sum, draft) => sum + Number(draft.guideCount || 0), 0);
   const xmlDraftTotalAmount = xmlDrafts.reduce((sum, draft) => sum + Number(draft.totalAmountCents || 0), 0);
   const createdXmlDraftInList = createdXmlDraft?.id
     ? xmlDrafts.find((draft) => draft.id === createdXmlDraft.id) || createdXmlDraft
+    : null;
+  const createdOfficialDocumentInList = createdOfficialDocument?.id
+    ? officialDocuments.find((document) => document.id === createdOfficialDocument.id) || createdOfficialDocument
     : null;
   const readyForBatchRows = useMemo(() => rows.filter((row) => {
     const state = String(row.revenueCycleState || row.snapshot?.revenueCycle?.state || (row.status === "valid" ? "ready_for_billing" : "")).trim();
@@ -684,6 +759,16 @@ export function TissPreGuideTab({
   const latestBatchDraft = batchDrafts[0] || null;
   const batchDraftGuideCount = batchDrafts.reduce((sum, batch) => sum + Number(batch.guideCount || 0), 0);
   const batchDraftTotalAmount = batchDrafts.reduce((sum, batch) => sum + Number(batch.totalAmountCents || 0), 0);
+
+  const eligibleOfficialRowIdKey = eligibleOfficialRows.map((row) => row.id).filter(Boolean).join("|");
+
+  useEffect(() => {
+    const eligibleIds = new Set(eligibleOfficialRows.map((row) => row.id).filter(Boolean) as string[]);
+    setSelectedOfficialPreGuideIds((current) => {
+      const next = current.filter((id) => eligibleIds.has(id));
+      return next.length === current.length ? current : next;
+    });
+  }, [eligibleOfficialRowIdKey, eligibleOfficialRows]);
 
   const loadRows = useCallback(async (overrides: { page?: number; quickFilter?: QuickFilter | "" } = {}) => {
     setLoading(true);
@@ -912,8 +997,10 @@ export function TissPreGuideTab({
       setXmlDraftModalOpen(false);
       const draft = result.data || null;
       setCreatedXmlDraft(draft);
+      setCreatedOfficialDocument(null);
       setHighlightedXmlDraftId(String(draft?.id || ""));
       setActivePanel("xmlDrafts");
+      setInternalToolsOpen(true);
       setMessage(result.message || "XML TISS em rascunho gerado para conferência interna.");
       await loadXmlDrafts();
       await loadBatchDrafts();
@@ -922,19 +1009,77 @@ export function TissPreGuideTab({
     }
   };
 
-  const openOfficialDocumentModal = () => {
-    if (validRows.length === 0) {
-      setError("Não há Pré-guias válidas para gerar XML TISS oficial.");
+  const toggleOfficialPreGuideSelection = (row: TissPreGuideRow) => {
+    const rowId = String(row.id || "");
+    if (!rowId) return;
+    const reasons = officialPreGuideBlockReasons(row, competenceMonth);
+    if (reasons.length > 0) {
+      setError(reasons[0] || "Esta Pré-guia não pode ser incluída no lote XML.");
       return;
     }
-    const defaultPayerId = payerId || (visibleXmlPayers.length === 1 ? visibleXmlPayers[0].id : "");
-    setOfficialDocumentPayerId(defaultPayerId);
+    const existingSelected = selectedOfficialRows.filter((selected) => selected.id !== rowId);
+    if (existingSelected.length > 0) {
+      const payerMismatch = existingSelected.some((selected) => selected.payerId !== row.payerId);
+      const competenceMismatch = existingSelected.some((selected) => preGuideMonth(selected) !== preGuideMonth(row));
+      if (payerMismatch || competenceMismatch) {
+        setError(payerMismatch
+          ? "Selecione Pré-guias do mesmo convênio para gerar um lote XML."
+          : "Selecione Pré-guias da mesma competência para gerar um lote XML.");
+        return;
+      }
+    }
+    setError("");
+    setSelectedOfficialPreGuideIds((current) => current.includes(rowId)
+      ? current.filter((id) => id !== rowId)
+      : [...current, rowId]);
+  };
+
+  const toggleAllEligibleOfficialRows = () => {
+    if (allEligibleOfficialRowsSelected) {
+      setSelectedOfficialPreGuideIds([]);
+      return;
+    }
+    const firstPayerId = eligibleOfficialRows[0]?.payerId || "";
+    const firstCompetence = preGuideMonth(eligibleOfficialRows[0] || {});
+    setSelectedOfficialPreGuideIds(
+      eligibleOfficialRows
+        .filter((row) => row.id && (!firstPayerId || row.payerId === firstPayerId) && (!firstCompetence || preGuideMonth(row) === firstCompetence))
+        .slice(0, OFFICIAL_BATCH_GUIDE_LIMIT)
+        .map((row) => String(row.id))
+    );
+  };
+
+  const openOfficialDocumentModal = () => {
+    setOfficialDocumentGuidePreviewOpen(false);
+    setOfficialDocumentBlockedPreviewOpen(false);
+    if (selectedOfficialRows.length === 0) {
+      setError("Selecione ao menos uma Pré-guia válida para gerar o lote XML.");
+      return;
+    }
+    if (selectedOfficialTooLarge) {
+      setError("O lote suporta até 500 guias. Divida a seleção em mais de um lote.");
+      return;
+    }
+    if (selectedOfficialHasMixedPayers) {
+      setError("Selecione Pré-guias do mesmo convênio para gerar um lote XML.");
+      return;
+    }
+    if (selectedOfficialHasMixedCompetence) {
+      setError("Selecione Pré-guias da mesma competência para gerar um lote XML.");
+      return;
+    }
+    setError("");
     setOfficialDocumentModalOpen(true);
   };
 
   const createOfficialDocument = async () => {
+    if (officialDocumentGenerating) return;
     if (!selectedOfficialPayerId || selectedOfficialRows.length === 0) {
-      setError("Selecione uma operadora com Pré-guias válidas.");
+      setError("Selecione Pré-guias válidas do mesmo convênio.");
+      return;
+    }
+    if (selectedOfficialTooLarge) {
+      setError("O lote suporta até 500 guias. Divida a seleção em mais de um lote.");
       return;
     }
     setOfficialDocumentGenerating(true);
@@ -955,8 +1100,9 @@ export function TissPreGuideTab({
       }
       setOfficialDocumentModalOpen(false);
       setHighlightedOfficialDocumentId(String(result.data.id || ""));
-      setActivePanel("xmlDrafts");
-      setMessage(result.message || "XML TISS oficial validado contra o XSD e armazenado. Nenhum dado foi enviado à operadora.");
+      setCreatedOfficialDocument(result.data);
+      setCreatedXmlDraft(null);
+      setMessage(result.message || "Lote XML validado com sucesso. Nenhum dado foi enviado automaticamente à operadora.");
       await Promise.all([loadRows(), loadOfficialDocuments()]);
     } finally {
       setOfficialDocumentGenerating(false);
@@ -1028,6 +1174,7 @@ export function TissPreGuideTab({
       }
       setBatchDraftModalOpen(false);
       setActivePanel("batchDrafts");
+      setInternalToolsOpen(true);
       setMessage(result.message || "Lote rascunho criado para conferência interna. Nenhum dado foi enviado à operadora.");
       await Promise.all([loadRows(), loadBatchDrafts()]);
     } finally {
@@ -1074,6 +1221,7 @@ export function TissPreGuideTab({
       return;
     }
     setActivePanel("xmlDrafts");
+    setInternalToolsOpen(true);
     await openXmlDraftDetail({ id: xmlDraftId });
   };
 
@@ -1508,28 +1656,6 @@ export function TissPreGuideTab({
           </span>
         </div>
       </div>
-      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-white p-1 shadow-sm">
-        {[
-          { key: "preGuides" as const, label: "Pré-guias" },
-          { key: "batchDrafts" as const, label: "Lotes rascunho" },
-          { key: "xmlDrafts" as const, label: "Rascunhos XML" },
-        ].map((item) => {
-          const active = activePanel === item.key;
-          return (
-            <button
-              key={item.key}
-              type="button"
-              onClick={() => setActivePanel(item.key)}
-              className={`rounded-md px-3 py-2 text-sm font-medium transition ${
-                active ? "bg-slate-900 text-white shadow-sm" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
-              }`}
-            >
-              {item.label}
-            </button>
-          );
-        })}
-      </div>
-
       {error && <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div>}
       {!error && message && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
@@ -1542,15 +1668,28 @@ export function TissPreGuideTab({
               <button type="button" onClick={() => void downloadXmlDraft(createdXmlDraftInList)} className="rounded-md border border-emerald-200 bg-white px-3 py-1.5 text-sm font-medium text-emerald-800 hover:bg-emerald-100">
                 Baixar XML
               </button>
-              <button type="button" onClick={() => setActivePanel("xmlDrafts")} className="rounded-md border border-emerald-200 bg-white px-3 py-1.5 text-sm font-medium text-emerald-800 hover:bg-emerald-100">
+              <button type="button" onClick={() => { setActivePanel("xmlDrafts"); setInternalToolsOpen(true); }} className="rounded-md border border-emerald-200 bg-white px-3 py-1.5 text-sm font-medium text-emerald-800 hover:bg-emerald-100">
                 Ir para Rascunhos XML
+              </button>
+            </div>
+          )}
+          {!createdXmlDraftInList && createdOfficialDocumentInList && (
+            <div className="flex flex-wrap items-center gap-2">
+              <button type="button" onClick={() => void downloadOfficialDocument(createdOfficialDocumentInList)} className="rounded-md border border-emerald-200 bg-white px-3 py-1.5 text-sm font-medium text-emerald-800 hover:bg-emerald-100">
+                Baixar XML
+              </button>
+              <button type="button" onClick={() => void openOfficialDocumentDetail(createdOfficialDocumentInList)} className="rounded-md border border-emerald-200 bg-white px-3 py-1.5 text-sm font-medium text-emerald-800 hover:bg-emerald-100">
+                Ver detalhes
+              </button>
+              <button type="button" onClick={() => setSelectedOfficialPreGuideIds([])} className="rounded-md border border-emerald-200 bg-white px-3 py-1.5 text-sm font-medium text-emerald-800 hover:bg-emerald-100">
+                Voltar às Pré-guias
               </button>
             </div>
           )}
         </div>
       )}
 
-      {activePanel === "preGuides" && (
+      {(
         <>
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-indigo-100 bg-indigo-50/60 px-3 py-3">
         <div>
@@ -1636,80 +1775,73 @@ export function TissPreGuideTab({
         />
       )}
 
-      <section className="rounded-md border border-slate-200 bg-white px-3 py-2 shadow-sm">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
-              <FileText size={16} className="text-indigo-600" />
-              Gerar XML rascunho com pré-guias prontas
-            </div>
-            <p className="mt-1 text-xs text-slate-500">
-              O rascunho gerado aparecerá na subaba Rascunhos XML. Ele não será enviado à operadora.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={openXmlDraftModal}
-            disabled={Number(kpis.valid || 0) <= 0 || loading}
-            className="inline-flex items-center gap-2 rounded-md border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-800 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <FileText size={16} />
-            Gerar XML rascunho
-          </button>
-        </div>
-      </section>
-
-      <section className="rounded-md border border-emerald-200 bg-white px-3 py-2 shadow-sm">
+      <section className="rounded-md border border-emerald-200 bg-white px-3 py-3 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
               <CheckCircle2 size={16} className="text-emerald-600" />
-              XML TISS oficial validado
+              Gerar lote XML para operadora
             </div>
             <p className="mt-1 text-xs text-slate-500">
-              Gera o lote SP/SADT 04.03.00, valida contra o XSD oficial da ANS e armazena o documento sem enviar à operadora.
+              Agrupa as Pré-guias válidas selecionadas do mesmo convênio e competência, valida o XML e permite o download para envio manual no portal da operadora.
             </p>
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+              <span>{selectedOfficialRows.length} selecionada(s)</span>
+              <span>Limite: {OFFICIAL_BATCH_GUIDE_LIMIT} guias por lote</span>
+              {blockedOfficialRows.length > 0 && (
+                <button type="button" onClick={() => setOfficialDocumentBlockedPreviewOpen(true)} className="rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-amber-800">
+                  {blockedOfficialRows.length} sessão(ões) não serão incluídas
+                </button>
+              )}
+            </div>
+            {selectedOfficialTooLarge && (
+              <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                O lote suporta até 500 guias. Divida a seleção em mais de um lote.
+              </div>
+            )}
           </div>
           <button
             type="button"
             onClick={openOfficialDocumentModal}
-            disabled={Number(kpis.valid || 0) <= 0 || loading}
+            disabled={officialDocumentGenerating || selectedOfficialRows.length === 0 || selectedOfficialTooLarge || selectedOfficialHasMixedPayers || selectedOfficialHasMixedCompetence || loading}
             className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-3 py-2 text-sm text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            <CheckCircle2 size={16} />
-            Gerar XML oficial validado
-          </button>
-        </div>
-      </section>
-
-      <section className="rounded-md border border-slate-200 bg-white px-3 py-2 shadow-sm">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
-              <Layers3 size={16} className="text-cyan-600" />
-              Criar lote rascunho
-            </div>
-            <p className="mt-1 text-xs text-slate-500">
-              Agrupa pré-guias prontas por pagador e competência para conferência interna. Nenhum lote será enviado à operadora.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={openBatchDraftModal}
-            disabled={readyForBatchRows.length === 0 || loading}
-            className="inline-flex items-center gap-2 rounded-md border border-cyan-200 bg-cyan-50 px-3 py-2 text-sm font-medium text-cyan-800 hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <PackagePlus size={16} />
-            Criar lote rascunho
+            {officialDocumentGenerating ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
+            Gerar lote XML para operadora
           </button>
         </div>
       </section>
 
       <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+          <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={allEligibleOfficialRowsSelected}
+              onChange={toggleAllEligibleOfficialRows}
+              disabled={eligibleOfficialRows.length === 0 || loading}
+              className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+            />
+            Selecionar todas as válidas
+          </label>
+          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+            <span>{eligibleOfficialRows.length} elegível(is) nesta página</span>
+            <span>{selectedOfficialRows.length} selecionada(s)</span>
+            <button
+              type="button"
+              onClick={() => setOfficialDocumentGuidePreviewOpen(true)}
+              disabled={selectedOfficialRows.length === 0}
+              className="rounded-md border border-slate-200 px-2 py-1 text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+            >
+              Visualizar guias incluídas
+            </button>
+          </div>
+        </div>
         <div className="max-h-[70vh] overflow-auto">
-          <table className="min-w-[1640px] divide-y divide-slate-200 text-sm">
+          <table className="min-w-[1700px] divide-y divide-slate-200 text-sm">
             <thead className="sticky top-0 z-20 bg-slate-50 text-left text-xs font-semibold uppercase text-slate-500 shadow-[0_1px_0_0_rgba(148,163,184,0.35)]">
               <tr>
+                <th className="px-4 py-3">Lote</th>
                 <th className="px-4 py-3">Data/hora</th>
                 <th className="px-4 py-3">Paciente</th>
                 <th className="px-4 py-3">Pagador</th>
@@ -1729,10 +1861,10 @@ export function TissPreGuideTab({
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loading ? (
-                <tr><td colSpan={15} className="px-4 py-12 text-center text-slate-500"><Loader2 size={20} className="mx-auto mb-2 animate-spin" />Carregando Pré-guias TISS</td></tr>
+                <tr><td colSpan={16} className="px-4 py-12 text-center text-slate-500"><Loader2 size={20} className="mx-auto mb-2 animate-spin" />Carregando Pré-guias TISS</td></tr>
               ) : rows.length === 0 ? (
                 <tr>
-                  <td colSpan={15} className="px-4 py-12 text-center">
+                  <td colSpan={16} className="px-4 py-12 text-center">
                     {quickFilter ? (
                       <div className="text-sm text-slate-500">Nenhuma Pré-guia encontrada para este filtro.</div>
                     ) : eligibleForPreGuide === 0 ? (
@@ -1772,8 +1904,34 @@ export function TissPreGuideTab({
                 const codes = Array.isArray(row.validationErrorCodes) ? row.validationErrorCodes : [];
                 const busy = revalidatingId === row.appointmentId;
                 const professionalSnapshot = row.snapshot?.professional || {};
+                const officialBlockReasons = officialPreGuideBlockReasons(row, competenceMonth);
+                const canSelectForOfficial = officialBlockReasons.length === 0;
+                const selectedForOfficial = Boolean(row.id && selectedOfficialIdSet.has(row.id));
                 return (
                   <tr key={row.id || row.appointmentId} className="align-top hover:bg-slate-50/70">
+                    <td className="px-4 py-3">
+                      <label className="inline-flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={selectedForOfficial}
+                          onChange={() => toggleOfficialPreGuideSelection(row)}
+                          disabled={!canSelectForOfficial}
+                          title={canSelectForOfficial ? "Incluir no lote XML" : officialBlockReasons.join("; ")}
+                          aria-label={canSelectForOfficial ? "Incluir Pré-guia no lote XML" : `Pré-guia bloqueada: ${officialBlockReasons.join("; ")}`}
+                          className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 disabled:opacity-40"
+                        />
+                        {!canSelectForOfficial && (
+                          <span className="max-w-[120px] text-xs text-amber-700" title={officialBlockReasons.join("; ")}>
+                            Bloqueada
+                          </span>
+                        )}
+                      </label>
+                      {!canSelectForOfficial && (
+                        <div className="mt-1 max-w-[160px] truncate text-xs text-slate-500" title={officialBlockReasons.join("; ")}>
+                          {officialBlockReasons[0]}
+                        </div>
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-slate-700">{formatDate(row.scheduledStart)}</td>
                     <td className="px-4 py-3 font-medium text-slate-800">{fieldValue(row.patientName, "Paciente")}</td>
                     <td className="px-4 py-3 text-slate-600">{fieldValue(row.payerName, "Sem pagador")}</td>
@@ -1834,8 +1992,110 @@ export function TissPreGuideTab({
         </div>
       </section>
 
+      <section className="overflow-hidden rounded-lg border border-emerald-200 bg-white shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-emerald-100 px-4 py-3">
+          <div>
+            <div className="text-sm font-semibold text-slate-800">Histórico de lotes XML oficiais</div>
+            <div className="mt-0.5 text-xs text-slate-500">
+              Lotes XML validados no XSD e armazenados para download manual. Nenhum lote foi enviado automaticamente à operadora.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => void loadOfficialDocuments()}
+            disabled={officialDocumentsLoading}
+            className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 disabled:opacity-60"
+          >
+            {officialDocumentsLoading ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
+            Atualizar histórico
+          </button>
+        </div>
+        <div className="overflow-auto">
+          <table className="min-w-[1220px] divide-y divide-slate-200 text-sm">
+            <thead className="bg-slate-50 text-left text-xs font-semibold uppercase text-slate-500">
+              <tr>
+                <th className="px-4 py-3">Geração</th>
+                <th className="px-4 py-3">Operadora</th>
+                <th className="px-4 py-3">Competência</th>
+                <th className="px-4 py-3">Lote</th>
+                <th className="px-4 py-3">Guias</th>
+                <th className="px-4 py-3">Valor total</th>
+                <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3">Hash</th>
+                <th className="px-4 py-3 text-right">Ações</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {officialDocumentsLoading ? (
+                <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-500"><Loader2 size={18} className="mx-auto mb-2 animate-spin" />Carregando lotes XML</td></tr>
+              ) : officialDocuments.length === 0 ? (
+                <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-500">Nenhum lote XML validado nesta competência.</td></tr>
+              ) : officialDocuments.map((document) => (
+                <tr key={document.id || document.xmlHash} className={highlightedOfficialDocumentId === document.id ? "bg-emerald-50/60" : "hover:bg-slate-50"}>
+                  <td className="px-4 py-3 text-slate-600">{formatDate(document.generatedAt)}</td>
+                  <td className="px-4 py-3 text-slate-700">{fieldValue(document.payerName, "Operadora")}</td>
+                  <td className="px-4 py-3 text-slate-600">{String(document.competenceMonth || "").slice(0, 7) || "Não informada"}</td>
+                  <td className="px-4 py-3 text-slate-700">{fieldValue(document.batchNumber)}</td>
+                  <td className="px-4 py-3 text-slate-600">{Number(document.guideCount || 0)}</td>
+                  <td className="px-4 py-3 font-medium text-slate-800">{formatCurrency(document.totalAmountCents)}</td>
+                  <td className="px-4 py-3">
+                    <span className="rounded-full bg-emerald-50 px-2 py-1 text-xs text-emerald-700 ring-1 ring-emerald-100">Validado no XSD</span>
+                  </td>
+                  <td className="px-4 py-3 font-mono text-xs text-slate-500">{String(document.xmlHash || "").slice(0, 12) || "Não informado"}</td>
+                  <td className="px-4 py-3 text-right">
+                    <div className="flex justify-end gap-2">
+                      <button type="button" onClick={() => void openOfficialDocumentDetail(document)} className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
+                        <Eye size={15} />
+                        Ver detalhes
+                      </button>
+                      <button type="button" onClick={() => void downloadOfficialDocument(document)} className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
+                        <Download size={15} />
+                        Baixar XML
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
         </>
       )}
+
+      <details
+        open={internalToolsOpen}
+        onToggle={(event) => setInternalToolsOpen(event.currentTarget.open)}
+        className="rounded-lg border border-slate-200 bg-white shadow-sm"
+      >
+        <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-800">
+          Ferramentas internas e histórico
+        </summary>
+        <div className="space-y-3 border-t border-slate-100 px-4 py-4">
+          <p className="text-sm text-slate-500">
+            Os rascunhos são recursos internos de conferência. Eles não são necessários para gerar o lote XML oficial e não são enviados à operadora.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {[
+              { key: "xmlDrafts" as const, label: "Rascunhos XML" },
+              { key: "batchDrafts" as const, label: "Lotes rascunho" },
+            ].map((item) => {
+              const active = activePanel === item.key;
+              return (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() => setActivePanel(item.key)}
+                  className={`rounded-md px-3 py-2 text-sm transition ${
+                    active ? "bg-slate-900 text-white shadow-sm" : "border border-slate-200 text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+                  }`}
+                >
+                  {item.label}
+                </button>
+              );
+            })}
+          </div>
 
       {activePanel === "batchDrafts" && (
         <section className="space-y-3">
@@ -1931,7 +2191,7 @@ export function TissPreGuideTab({
                               <Eye size={15} />
                               Ver lote
                             </button>
-                            <button type="button" onClick={() => setActivePanel("preGuides")} className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
+                            <button type="button" onClick={() => setInternalToolsOpen(false)} className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
                               <FileSearch size={15} />
                               Ver pré-guias
                             </button>
@@ -1995,90 +2255,6 @@ export function TissPreGuideTab({
             <div className="rounded-md border border-slate-200 bg-white px-3 py-2 shadow-sm">
               <div className="text-xs text-slate-500">Valor total em rascunhos</div>
               <div className="mt-1 text-lg font-semibold text-slate-800">{formatCurrency(xmlDraftTotalAmount)}</div>
-            </div>
-          </section>
-
-          <section className="overflow-hidden rounded-lg border border-emerald-200 bg-white shadow-sm">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-emerald-100 px-4 py-3">
-              <div>
-                <div className="text-sm font-semibold text-slate-800">Documentos oficiais TISS</div>
-                <div className="mt-0.5 text-xs text-slate-500">
-                  XMLs SP/SADT validados contra o XSD oficial e armazenados. Nenhum documento foi enviado à operadora.
-                </div>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => void loadOfficialDocuments()}
-                  disabled={officialDocumentsLoading}
-                  className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 disabled:opacity-60"
-                >
-                  {officialDocumentsLoading ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
-                  Atualizar
-                </button>
-                <button
-                  type="button"
-                  onClick={openOfficialDocumentModal}
-                  disabled={Number(kpis.valid || 0) <= 0 || loading}
-                  className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-3 py-2 text-sm text-white disabled:opacity-50"
-                >
-                  <CheckCircle2 size={15} />
-                  Gerar XML oficial validado
-                </button>
-              </div>
-            </div>
-            <div className="overflow-auto">
-              <table className="min-w-[1320px] divide-y divide-slate-200 text-sm">
-                <thead className="bg-slate-50 text-left text-xs font-semibold uppercase text-slate-500">
-                  <tr>
-                    <th className="px-4 py-3">Geração</th>
-                    <th className="px-4 py-3">Operadora</th>
-                    <th className="px-4 py-3">Competência</th>
-                    <th className="px-4 py-3">Lote</th>
-                    <th className="px-4 py-3">Guias</th>
-                    <th className="px-4 py-3">Valor total</th>
-                    <th className="px-4 py-3">Versão</th>
-                    <th className="px-4 py-3">Status</th>
-                    <th className="px-4 py-3">Gerado por</th>
-                    <th className="px-4 py-3">Hash</th>
-                    <th className="px-4 py-3 text-right">Ações</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {officialDocumentsLoading ? (
-                    <tr><td colSpan={11} className="px-4 py-8 text-center text-slate-500"><Loader2 size={18} className="mx-auto mb-2 animate-spin" />Carregando documentos oficiais</td></tr>
-                  ) : officialDocuments.length === 0 ? (
-                    <tr><td colSpan={11} className="px-4 py-8 text-center text-slate-500">Nenhum XML TISS oficial validado nesta competência.</td></tr>
-                  ) : officialDocuments.map((document) => (
-                    <tr key={document.id || document.xmlHash} className={highlightedOfficialDocumentId === document.id ? "bg-emerald-50/60" : "hover:bg-slate-50"}>
-                      <td className="px-4 py-3 text-slate-600">{formatDate(document.generatedAt)}</td>
-                      <td className="px-4 py-3 text-slate-700">{fieldValue(document.payerName, "Operadora")}</td>
-                      <td className="px-4 py-3 text-slate-600">{String(document.competenceMonth || "").slice(0, 7) || "Não informada"}</td>
-                      <td className="px-4 py-3 text-slate-700">{fieldValue(document.batchNumber)}</td>
-                      <td className="px-4 py-3 text-slate-600">{Number(document.guideCount || 0)}</td>
-                      <td className="px-4 py-3 font-medium text-slate-800">{formatCurrency(document.totalAmountCents)}</td>
-                      <td className="px-4 py-3 text-slate-600">{fieldValue(document.communicationVersion)}</td>
-                      <td className="px-4 py-3">
-                        <span className="rounded-full bg-emerald-50 px-2 py-1 text-xs text-emerald-700 ring-1 ring-emerald-100">Validado no XSD</span>
-                      </td>
-                      <td className="px-4 py-3 text-slate-600">{fieldValue(document.generatedByName, "Usuário autorizado")}</td>
-                      <td className="px-4 py-3 font-mono text-xs text-slate-500">{String(document.xmlHash || "").slice(0, 12) || "Não informado"}</td>
-                      <td className="px-4 py-3 text-right">
-                        <div className="flex justify-end gap-2">
-                          <button type="button" onClick={() => void openOfficialDocumentDetail(document)} className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
-                            <Eye size={15} />
-                            Visualizar
-                          </button>
-                          <button type="button" onClick={() => void downloadOfficialDocument(document)} className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
-                            <Download size={15} />
-                            Baixar
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
             </div>
           </section>
 
@@ -2164,6 +2340,8 @@ export function TissPreGuideTab({
       </section>
         </section>
       )}
+        </div>
+      </details>
 
       {batchDraftModalOpen && (
         <div className="fixed inset-0 z-[150] flex items-end justify-center bg-slate-950/45 p-4 sm:items-center" role="dialog" aria-modal="true" aria-label="Criar lote rascunho TISS">
@@ -2345,58 +2523,159 @@ export function TissPreGuideTab({
       )}
 
       {officialDocumentModalOpen && (
-        <div className="fixed inset-0 z-[152] flex items-end justify-center bg-slate-950/45 p-4 sm:items-center" role="dialog" aria-modal="true" aria-label="Gerar XML TISS oficial validado">
-          <div className="w-full max-w-xl overflow-hidden rounded-lg bg-white shadow-xl">
+        <div className="fixed inset-0 z-[152] flex items-end justify-center bg-slate-950/45 p-4 sm:items-center" role="dialog" aria-modal="true" aria-label="Confirmar geração do lote XML">
+          <div className="max-h-[92vh] w-full max-w-3xl overflow-hidden rounded-lg bg-white shadow-xl">
             <header className="flex items-start justify-between border-b border-slate-200 px-5 py-4">
               <div>
-                <h2 className="text-lg font-semibold text-slate-900">Gerar XML oficial validado</h2>
-                <p className="mt-1 text-sm text-slate-500">Cobrança em lote com guias SP/SADT no Padrão TISS 04.03.00.</p>
+                <h2 className="text-lg font-semibold text-slate-900">Confirmar geração do lote XML</h2>
+                <p className="mt-1 text-sm text-slate-500">Será gerado um único arquivo XML contendo uma guia SP/SADT para cada sessão selecionada.</p>
               </div>
-              <button type="button" onClick={() => setOfficialDocumentModalOpen(false)} className="rounded-md p-2 text-slate-500 hover:bg-slate-100" aria-label="Fechar geração de XML oficial"><X size={18} /></button>
+              <button type="button" onClick={() => setOfficialDocumentModalOpen(false)} className="rounded-md p-2 text-slate-500 hover:bg-slate-100" aria-label="Fechar geração do lote XML"><X size={18} /></button>
             </header>
-            <div className="space-y-4 px-5 py-4">
-              {visibleXmlPayers.length > 1 && !payerId && (
-                <label className="block text-sm font-medium text-slate-700">
-                  Operadora
-                  <select
-                    value={officialDocumentPayerId}
-                    onChange={(event) => setOfficialDocumentPayerId(event.target.value)}
-                    className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm outline-none focus:border-emerald-300 focus:ring-2 focus:ring-emerald-100"
-                  >
-                    <option value="">Selecione uma operadora</option>
-                    {visibleXmlPayers.map((payer) => <option key={payer.id} value={payer.id}>{payer.name}</option>)}
-                  </select>
-                </label>
-              )}
+            <div className="max-h-[calc(92vh-150px)] space-y-4 overflow-y-auto px-5 py-4">
               <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-                O XML será validado e armazenado, mas não será enviado à operadora neste marco.
+                Será gerado um único arquivo XML contendo uma guia SP/SADT para cada sessão selecionada. O arquivo será validado e armazenado, mas não será enviado automaticamente à operadora.
               </div>
-              <div className="grid gap-3 text-sm sm:grid-cols-2">
+              <div className="grid gap-3 text-sm sm:grid-cols-3">
                 <DetailField label="Operadora" value={selectedOfficialPayerName} />
                 <DetailField label="Competência" value={competenceMonth.slice(0, 7)} />
-                <DetailField label="Pré-guias" value={String(selectedOfficialRows.length)} />
+                <DetailField label="Sessões" value={String(selectedOfficialRows.length)} />
+                <DetailField label="Pacientes únicos" value={String(selectedOfficialUniquePatients)} />
+                <DetailField label="Guias" value={String(selectedOfficialRows.length)} />
                 <DetailField label="Valor total" value={formatCurrency(selectedOfficialTotalAmount)} />
-                <DetailField label="Comunicação TISS" value="04.03.00" />
-                <DetailField label="Conteúdo e estrutura" value="202511" />
+                <DetailField label="Versão TISS" value={selectedOfficialTissVersion} />
+                <DetailField label="Itens bloqueados fora do lote" value={String(blockedOfficialRows.length)} />
+                <DetailField label="Envio à operadora" value="Não enviado" />
               </div>
               {selectedOfficialRows.length === 0 && (
                 <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                  Não há Pré-guias válidas deste pagador disponíveis nesta página.
+                  Selecione ao menos uma Pré-guia válida para gerar o lote XML.
+                </div>
+              )}
+              {officialDocumentGuidePreviewOpen && (
+                <div className="rounded-md border border-slate-200">
+                  <div className="border-b border-slate-100 px-3 py-2 text-sm font-semibold text-slate-800">Guias incluídas</div>
+                  <div className="max-h-64 overflow-auto">
+                    <table className="min-w-[760px] divide-y divide-slate-100 text-sm">
+                      <thead className="bg-slate-50 text-left text-xs uppercase text-slate-500">
+                        <tr>
+                          <th className="px-3 py-2">Paciente</th>
+                          <th className="px-3 py-2">Data e horário</th>
+                          <th className="px-3 py-2">Procedimento</th>
+                          <th className="px-3 py-2">TUSS</th>
+                          <th className="px-3 py-2">Autorização</th>
+                          <th className="px-3 py-2">Valor</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {selectedOfficialRows.map((row) => (
+                          <tr key={row.id || row.appointmentId}>
+                            <td className="px-3 py-2 text-slate-700">{fieldValue(row.patientName, "Paciente")}</td>
+                            <td className="px-3 py-2 text-slate-600">{formatDate(row.scheduledStart)}</td>
+                            <td className="px-3 py-2 text-slate-600">{fieldValue(row.internalProcedureName)}</td>
+                            <td className="px-3 py-2 text-slate-600">{fieldValue(row.tussCode)}</td>
+                            <td className="px-3 py-2 text-slate-600">{fieldValue(row.authorizationCode)}</td>
+                            <td className="px-3 py-2 text-slate-700">{formatCurrency(row.totalAmountCents)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+              {officialDocumentBlockedPreviewOpen && (
+                <div className="rounded-md border border-amber-200 bg-amber-50">
+                  <div className="border-b border-amber-100 px-3 py-2 text-sm font-semibold text-amber-900">Sessões não incluídas</div>
+                  <div className="max-h-56 overflow-auto divide-y divide-amber-100">
+                    {blockedOfficialRows.map(({ row, reasons }) => (
+                      <div key={row.id || row.appointmentId} className="px-3 py-2 text-sm text-amber-900">
+                        <div>{fieldValue(row.patientName, "Paciente")} · {formatDate(row.scheduledStart)}</div>
+                        <div className="mt-1 text-xs text-amber-800">Motivo: {reasons.join("; ")}</div>
+                        <div className="mt-1 text-xs text-amber-800">Ação recomendada: corrigir a pendência e revalidar a Pré-guia.</div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
             <footer className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 px-5 py-4">
               <button type="button" onClick={() => setOfficialDocumentModalOpen(false)} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700">Cancelar</button>
+              <button type="button" onClick={() => setOfficialDocumentGuidePreviewOpen((current) => !current)} disabled={selectedOfficialRows.length === 0} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 disabled:opacity-50">
+                Visualizar guias incluídas
+              </button>
               <button
                 type="button"
                 onClick={() => void createOfficialDocument()}
-                disabled={officialDocumentGenerating || !selectedOfficialPayerId || selectedOfficialRows.length === 0}
+                disabled={officialDocumentGenerating || !selectedOfficialPayerId || selectedOfficialRows.length === 0 || selectedOfficialTooLarge || selectedOfficialHasMixedPayers || selectedOfficialHasMixedCompetence}
                 className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-3 py-2 text-sm text-white disabled:opacity-60"
               >
                 {officialDocumentGenerating ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />}
-                Gerar e validar no XSD
+                Gerar lote XML
               </button>
             </footer>
+          </div>
+        </div>
+      )}
+
+      {officialDocumentGuidePreviewOpen && !officialDocumentModalOpen && (
+        <div className="fixed inset-0 z-[151] flex items-end justify-center bg-slate-950/45 p-4 sm:items-center" role="dialog" aria-modal="true" aria-label="Guias incluídas no lote XML">
+          <div className="max-h-[86vh] w-full max-w-3xl overflow-hidden rounded-lg bg-white shadow-xl">
+            <header className="flex items-start justify-between border-b border-slate-200 px-5 py-4">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900">Guias incluídas</h2>
+                <p className="mt-1 text-sm text-slate-500">Esta visualização não gera nem persiste XML.</p>
+              </div>
+              <button type="button" onClick={() => setOfficialDocumentGuidePreviewOpen(false)} className="rounded-md p-2 text-slate-500 hover:bg-slate-100" aria-label="Fechar guias incluídas"><X size={18} /></button>
+            </header>
+            <div className="max-h-[calc(86vh-74px)] overflow-auto">
+              <table className="min-w-[760px] divide-y divide-slate-100 text-sm">
+                <thead className="bg-slate-50 text-left text-xs uppercase text-slate-500">
+                  <tr>
+                    <th className="px-4 py-3">Paciente</th>
+                    <th className="px-4 py-3">Data e horário</th>
+                    <th className="px-4 py-3">Procedimento</th>
+                    <th className="px-4 py-3">TUSS</th>
+                    <th className="px-4 py-3">Autorização</th>
+                    <th className="px-4 py-3">Valor</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {selectedOfficialRows.map((row) => (
+                    <tr key={row.id || row.appointmentId}>
+                      <td className="px-4 py-3 text-slate-700">{fieldValue(row.patientName, "Paciente")}</td>
+                      <td className="px-4 py-3 text-slate-600">{formatDate(row.scheduledStart)}</td>
+                      <td className="px-4 py-3 text-slate-600">{fieldValue(row.internalProcedureName)}</td>
+                      <td className="px-4 py-3 text-slate-600">{fieldValue(row.tussCode)}</td>
+                      <td className="px-4 py-3 text-slate-600">{fieldValue(row.authorizationCode)}</td>
+                      <td className="px-4 py-3 text-slate-700">{formatCurrency(row.totalAmountCents)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {officialDocumentBlockedPreviewOpen && !officialDocumentModalOpen && (
+        <div className="fixed inset-0 z-[151] flex items-end justify-center bg-slate-950/45 p-4 sm:items-center" role="dialog" aria-modal="true" aria-label="Sessões bloqueadas fora do lote XML">
+          <div className="max-h-[86vh] w-full max-w-2xl overflow-hidden rounded-lg bg-white shadow-xl">
+            <header className="flex items-start justify-between border-b border-slate-200 px-5 py-4">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900">Sessões não incluídas</h2>
+                <p className="mt-1 text-sm text-slate-500">Essas Pré-guias precisam ser corrigidas e revalidadas antes de entrar em lote XML.</p>
+              </div>
+              <button type="button" onClick={() => setOfficialDocumentBlockedPreviewOpen(false)} className="rounded-md p-2 text-slate-500 hover:bg-slate-100" aria-label="Fechar sessões bloqueadas"><X size={18} /></button>
+            </header>
+            <div className="max-h-[calc(86vh-74px)] overflow-auto divide-y divide-slate-100 px-5 py-2">
+              {blockedOfficialRows.map(({ row, reasons }) => (
+                <div key={row.id || row.appointmentId} className="py-3 text-sm text-slate-700">
+                  <div>{fieldValue(row.patientName, "Paciente")} · {formatDate(row.scheduledStart)}</div>
+                  <div className="mt-1 text-xs text-amber-700">Motivo: {reasons.join("; ")}</div>
+                  <div className="mt-1 text-xs text-slate-500">Ação recomendada: corrigir a pendência e revalidar a Pré-guia.</div>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       )}
@@ -2407,7 +2686,7 @@ export function TissPreGuideTab({
             <header className="flex items-start justify-between border-b border-slate-200 px-5 py-4">
               <div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <h2 className="text-lg font-semibold text-slate-900">XML TISS oficial validado</h2>
+                  <h2 className="text-lg font-semibold text-slate-900">Lote XML validado</h2>
                   <span className="rounded-full bg-emerald-50 px-2 py-1 text-xs text-emerald-700 ring-1 ring-emerald-100">Validado no XSD</span>
                 </div>
                 <p className="mt-1 text-sm text-slate-500">Documento armazenado. Nenhum envio à operadora foi realizado.</p>
@@ -2423,32 +2702,41 @@ export function TissPreGuideTab({
                     <DetailField label="Operadora" value={fieldValue(officialDocumentDetail.payerName, "Operadora")} />
                     <DetailField label="Competência" value={String(officialDocumentDetail.competenceMonth || "").slice(0, 7)} />
                     <DetailField label="Lote" value={fieldValue(officialDocumentDetail.batchNumber)} />
-                    <DetailField label="Comunicação" value={fieldValue(officialDocumentDetail.communicationVersion)} />
-                    <DetailField label="Conteúdo/estrutura" value={fieldValue(officialDocumentDetail.contentStructureVersion)} />
-                    <DetailField label="TUSS" value={fieldValue(officialDocumentDetail.tussVersion)} />
-                    <DetailField label="XSD raiz" value={fieldValue(officialDocumentDetail.schemaRootFile)} />
                     <DetailField label="Guias" value={String(Number(officialDocumentDetail.guideCount || 0))} />
                     <DetailField label="Valor total" value={formatCurrency(officialDocumentDetail.totalAmountCents)} />
+                    <DetailField label="Status" value="Validado no XSD" />
                     <DetailField label="Gerado por" value={fieldValue(officialDocumentDetail.generatedByName, "Usuário autorizado")} />
                     <DetailField label="Gerado em" value={formatDate(officialDocumentDetail.generatedAt)} />
-                    <div className="sm:col-span-3">
-                      <DetailField label="Checksum do manifesto" value={<span className="break-all font-mono text-xs">{fieldValue(officialDocumentDetail.schemaManifestChecksum)}</span>} />
-                    </div>
-                    <div className="sm:col-span-3">
-                      <DetailField label="SHA-256 do XML" value={<span className="break-all font-mono text-xs">{fieldValue(officialDocumentDetail.xmlHash)}</span>} />
-                    </div>
-                    <div className="sm:col-span-3">
-                      <DetailField label="Pré-guias vinculadas" value={(officialDocumentDetail.generatedFromPreGuideIds || []).map((id) => id.slice(0, 8)).join(", ") || "Não informadas"} />
-                    </div>
                   </div>
                   <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
                     Validação XML básica, XSD oficial, totais financeiros e hash concluídos antes da persistência.
                   </div>
-                  <div className="rounded-md border border-slate-200 bg-slate-950 text-slate-100">
-                    <pre className="max-h-[38vh] overflow-auto whitespace-pre-wrap p-4 text-xs leading-relaxed">
-                      {String(officialDocumentDetail.xmlContent || "XML não carregado.")}
-                    </pre>
-                  </div>
+                  <details className="rounded-md border border-slate-200 bg-white">
+                    <summary className="cursor-pointer px-3 py-2 text-sm font-semibold text-slate-800">Detalhes técnicos</summary>
+                    <div className="grid gap-4 border-t border-slate-100 p-4 text-sm sm:grid-cols-3">
+                      <DetailField label="Comunicação" value={fieldValue(officialDocumentDetail.communicationVersion)} />
+                      <DetailField label="Conteúdo/estrutura" value={fieldValue(officialDocumentDetail.contentStructureVersion)} />
+                      <DetailField label="TUSS" value={fieldValue(officialDocumentDetail.tussVersion)} />
+                      <DetailField label="XSD raiz" value={fieldValue(officialDocumentDetail.schemaRootFile)} />
+                      <div className="sm:col-span-3">
+                        <DetailField label="Checksum do manifesto" value={<span className="break-all font-mono text-xs">{fieldValue(officialDocumentDetail.schemaManifestChecksum)}</span>} />
+                      </div>
+                      <div className="sm:col-span-3">
+                        <DetailField label="SHA-256 do XML" value={<span className="break-all font-mono text-xs">{fieldValue(officialDocumentDetail.xmlHash)}</span>} />
+                      </div>
+                      <div className="sm:col-span-3">
+                        <DetailField label="Pré-guias vinculadas" value={(officialDocumentDetail.generatedFromPreGuideIds || []).map((id) => id.slice(0, 8)).join(", ") || "Não informadas"} />
+                      </div>
+                    </div>
+                  </details>
+                  <details className="rounded-md border border-slate-200 bg-white">
+                    <summary className="cursor-pointer px-3 py-2 text-sm font-semibold text-slate-800">Ver XML armazenado</summary>
+                    <div className="border-t border-slate-100 bg-slate-950 text-slate-100">
+                      <pre className="max-h-[38vh] overflow-auto whitespace-pre-wrap p-4 text-xs leading-relaxed">
+                        {String(officialDocumentDetail.xmlContent || "XML não carregado.")}
+                      </pre>
+                    </div>
+                  </details>
                   <div className="flex flex-wrap justify-end gap-2">
                     <button type="button" onClick={() => void downloadOfficialDocument(officialDocumentDetail)} className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-3 py-2 text-sm text-white">
                       <Download size={15} />

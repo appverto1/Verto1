@@ -196,6 +196,113 @@ test("soma centavos inteiros sem cálculo financeiro em ponto flutuante", () => 
   assert.match(result.xml, /<ans:valorTotalGeral>1\.01<\/ans:valorTotalGeral>/);
 });
 
+test("três Pré-guias geram um único lote com três guias SP/SADT sem consolidar sessões", () => {
+  const first = validPreGuide({
+    id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    appointment_id: "aaaaaaaa-1111-4aaa-8aaa-aaaaaaaaaaaa",
+    patient_id: "aaaaaaaa-2222-4aaa-8aaa-aaaaaaaaaaaa",
+    guide_number: "GUIA-2026-003",
+    scheduled_start: "2026-06-12T15:00:00.000Z",
+    scheduled_end: "2026-06-12T15:50:00.000Z",
+    unit_amount_cents: 30000,
+    total_amount_cents: 30000,
+    snapshot_data: {
+      ...validPreGuide().snapshot_data,
+      appointment: {
+        id: "aaaaaaaa-1111-4aaa-8aaa-aaaaaaaaaaaa",
+        scheduledStart: "2026-06-12T15:00:00.000Z",
+        scheduledEnd: "2026-06-12T15:50:00.000Z"
+      },
+      beneficiary: {
+        ...validPreGuide().snapshot_data.beneficiary,
+        id: "aaaaaaaa-2222-4aaa-8aaa-aaaaaaaaaaaa",
+        name: "Carlos"
+      },
+      procedure: {
+        ...validPreGuide().snapshot_data.procedure,
+        unitAmountCents: 30000,
+        totalAmountCents: 30000
+      },
+      authorization: {
+        ...validPreGuide().snapshot_data.authorization,
+        guideNumber: "GUIA-2026-003"
+      }
+    }
+  });
+  const second = validPreGuide({
+    id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    appointment_id: "bbbbbbbb-1111-4bbb-8bbb-bbbbbbbbbbbb",
+    patient_id: "bbbbbbbb-2222-4bbb-8bbb-bbbbbbbbbbbb",
+    guide_number: "GUIA-2026-001",
+    scheduled_start: "2026-06-10T09:00:00.000Z",
+    scheduled_end: "2026-06-10T09:50:00.000Z",
+    unit_amount_cents: 19700,
+    total_amount_cents: 19700,
+    snapshot_data: {
+      ...validPreGuide().snapshot_data,
+      appointment: {
+        id: "bbbbbbbb-1111-4bbb-8bbb-bbbbbbbbbbbb",
+        scheduledStart: "2026-06-10T09:00:00.000Z",
+        scheduledEnd: "2026-06-10T09:50:00.000Z"
+      },
+      beneficiary: {
+        ...validPreGuide().snapshot_data.beneficiary,
+        id: "bbbbbbbb-2222-4bbb-8bbb-bbbbbbbbbbbb",
+        name: "Ana"
+      },
+      authorization: {
+        ...validPreGuide().snapshot_data.authorization,
+        guideNumber: "GUIA-2026-001"
+      }
+    }
+  });
+  const third = validPreGuide({
+    id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+    appointment_id: "cccccccc-1111-4ccc-8ccc-cccccccccccc",
+    patient_id: "cccccccc-2222-4ccc-8ccc-cccccccccccc",
+    guide_number: "GUIA-2026-002",
+    scheduled_start: "2026-06-11T13:00:00.000Z",
+    scheduled_end: "2026-06-11T13:50:00.000Z",
+    unit_amount_cents: 101,
+    total_amount_cents: 101,
+    snapshot_data: {
+      ...validPreGuide().snapshot_data,
+      appointment: {
+        id: "cccccccc-1111-4ccc-8ccc-cccccccccccc",
+        scheduledStart: "2026-06-11T13:00:00.000Z",
+        scheduledEnd: "2026-06-11T13:50:00.000Z"
+      },
+      beneficiary: {
+        ...validPreGuide().snapshot_data.beneficiary,
+        id: "cccccccc-2222-4ccc-8ccc-cccccccccccc",
+        name: "Bruno"
+      },
+      procedure: {
+        ...validPreGuide().snapshot_data.procedure,
+        unitAmountCents: 101,
+        totalAmountCents: 101
+      },
+      authorization: {
+        ...validPreGuide().snapshot_data.authorization,
+        guideNumber: "GUIA-2026-002"
+      }
+    }
+  });
+
+  const result = communication040300Strategy.generate(validInput([first, third, second]));
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal((result.xml.match(/<ans:loteGuias>/g) || []).length, 1);
+  assert.equal((result.xml.match(/<ans:guiaSP-SADT>/g) || []).length, 3);
+  assert.equal(result.guideCount, 3);
+  assert.equal(result.totalAmountCents, 49801);
+  assert.match(result.xml, /<ans:valorTotalGeral>197\.00<\/ans:valorTotalGeral>/);
+  assert.match(result.xml, /<ans:valorTotalGeral>1\.01<\/ans:valorTotalGeral>/);
+  assert.match(result.xml, /<ans:valorTotalGeral>300\.00<\/ans:valorTotalGeral>/);
+  assert.ok(result.xml.indexOf("GUIA-2026-001") < result.xml.indexOf("GUIA-2026-002"));
+  assert.ok(result.xml.indexOf("GUIA-2026-002") < result.xml.indexOf("GUIA-2026-003"));
+});
+
 test("usa somente whitelist administrativa e não inclui prontuário, evolução ou ABA detalhada", () => {
   const row = validPreGuide({
     snapshot_data: {
@@ -355,6 +462,10 @@ test("rotas oficiais são paralelas, paginadas, sem XML na listagem e download c
   assert.match(serverCode, /generatedByName/);
   assert.match(serverCode, /Content-Type', 'application\/xml; charset=utf-8'/);
   assert.match(serverCode, /create_tiss_official_document/);
+  assert.match(serverCode, /preGuideIds\.length > 500/);
+  assert.match(serverCode, /\.limit\(500\)/);
+  assert.match(uiCode, /OFFICIAL_BATCH_GUIDE_LIMIT = 500/);
+  assert.match(readFileSync(join(root, "src/services/tissOfficial/versions/communication040300/generator.ts"), "utf8"), /MAX_GUIDES_PER_BATCH = 500/);
   assert.doesNotMatch(serverCode, /app\.(?:post|put|patch)\('\/api\/tiss\/official-documents\/:documentId/);
 });
 
@@ -367,10 +478,17 @@ test("data service e UI expõem documento oficial sem remover o fluxo de rascunh
   ]) {
     assert.match(dataServiceCode, new RegExp(`async ${helper}`));
   }
-  assert.match(uiCode, /Gerar XML oficial validado/);
+  assert.match(uiCode, /Gerar lote XML para operadora/);
+  assert.match(uiCode, /Confirmar geração do lote XML/);
+  assert.match(uiCode, /Histórico de lotes XML oficiais/);
+  assert.match(uiCode, /Ferramentas internas e histórico/);
+  assert.match(uiCode, /Selecionar todas as válidas/);
+  assert.match(uiCode, /Visualizar guias incluídas/);
+  assert.match(uiCode, /Lote XML validado/);
   assert.match(uiCode, /Validado no XSD/);
-  assert.match(uiCode, /não será enviado à operadora neste marco/i);
+  assert.match(uiCode, /não será enviado automaticamente à operadora/i);
   assert.match(uiCode, /Gerar XML TISS em rascunho/);
+  assert.doesNotMatch(uiCode, /Gerar XML oficial validado/);
   assert.match(draftGeneratorCode, /generateTissXmlDraft/);
   assert.match(serverCode, /app\.post\('\/api\/tiss\/xml-drafts'/);
 });

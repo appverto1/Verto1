@@ -28,7 +28,7 @@ const DEFAULT_TISS_VERSION = "04.03.00";
 const DEFAULT_XML_PADRAO_VERSION = "4.03.00";
 const DEFAULT_CONTENT_STRUCTURE_VERSION = "202511";
 const DEFAULT_TUSS_VERSION = "202605";
-const MAX_GUIDES_PER_BATCH = 100;
+const MAX_GUIDES_PER_BATCH = 500;
 const VALID_ATTENDANCE_TYPES = new Set(["01", "02", "03", "04", "08", "09", "10", "13", "23"]);
 const VALID_ATTENDANCE_REGIMES = new Set(["01", "02", "03", "04", "05"]);
 const VALID_ATTENDANCE_CHARACTERS = new Set(["1", "2"]);
@@ -105,6 +105,7 @@ type NormalizedGuide = OfficialTissCanonicalGuide & {
   providerName: string;
   providerCnes: string;
   beneficiaryCard: string;
+  beneficiaryName: string;
   professionalName: string;
   councilCode: string;
   councilNumber: string;
@@ -486,6 +487,7 @@ function normalizeGuide(row: any, issues: TissOfficialIssue[]): NormalizedGuide 
   }
 
   const beneficiaryCard = normalizeNumberText(firstValue(beneficiary.cardNumber, beneficiary.beneficiaryCardNumber, beneficiary.card_number, row?.beneficiaryCardNumber, row?.beneficiary_card_number), 20);
+  const beneficiaryName = normalizeLimitedText(firstValue(beneficiary.name, beneficiary.fullName, row?.patientName, row?.patient_name), 70);
   if (!beneficiaryCard || isPlaceholder(beneficiaryCard)) {
     addIssue({ issues, preGuideId, entity: "beneficiary", field: "cardNumber", code: "TISS_OFFICIAL_BENEFICIARY_CARD_MISSING", message: "Número da carteirinha do beneficiário é obrigatório para XML TISS oficial." });
   }
@@ -576,6 +578,7 @@ function normalizeGuide(row: any, issues: TissOfficialIssue[]): NormalizedGuide 
     providerName,
     providerCnes,
     beneficiaryCard,
+    beneficiaryName,
     professionalName,
     councilCode,
     councilNumber,
@@ -620,12 +623,20 @@ function buildPayload(input: OfficialTissDocumentInput, guides: NormalizedGuide[
   };
 }
 
+function compareGuidesForOfficialBatch(a: NormalizedGuide, b: NormalizedGuide) {
+  const byDate = a.scheduledStart.localeCompare(b.scheduledStart);
+  if (byDate !== 0) return byDate;
+  const byPatient = (a.beneficiaryName || a.patientId).localeCompare(b.beneficiaryName || b.patientId);
+  if (byPatient !== 0) return byPatient;
+  return a.preGuideId.localeCompare(b.preGuideId);
+}
+
 function validateBatchInput(input: OfficialTissDocumentInput, guides: NormalizedGuide[], issues: TissOfficialIssue[]) {
   if (guides.length === 0) {
     issues.push({ code: "TISS_OFFICIAL_EMPTY_SELECTION", message: "Selecione ao menos uma Pré-guia válida para gerar XML TISS oficial.", severity: "blocking", entity: "preGuide" });
   }
   if (guides.length > MAX_GUIDES_PER_BATCH) {
-    issues.push({ code: "TISS_OFFICIAL_BATCH_TOO_LARGE", message: "O lote SP/SADT oficial suporta no máximo 100 guias nesta versão.", severity: "blocking", entity: "preGuide" });
+    issues.push({ code: "TISS_OFFICIAL_BATCH_TOO_LARGE", message: "O lote SP/SADT oficial suporta no máximo 500 guias nesta versão.", severity: "blocking", entity: "preGuide" });
   }
   if (!normalizeCompetence(input.competenceMonth)) {
     issues.push({ code: "TISS_OFFICIAL_COMPETENCE_INVALID", message: "Competência inválida para XML TISS oficial.", severity: "blocking", entity: "competence", field: "competenceMonth" });
@@ -670,7 +681,8 @@ export const communication040300Strategy: TissXmlGenerationStrategy = {
     const issues: TissOfficialIssue[] = [];
     const guides = (Array.isArray(input.preGuides) ? input.preGuides : [])
       .map((row) => normalizeGuide(row, issues))
-      .filter((row): row is NormalizedGuide => Boolean(row));
+      .filter((row): row is NormalizedGuide => Boolean(row))
+      .sort(compareGuidesForOfficialBatch);
     validateBatchInput(input, guides, issues);
     if (issues.some((issue) => issue.severity === "blocking")) {
       return {
