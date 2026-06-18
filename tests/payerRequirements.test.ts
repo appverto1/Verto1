@@ -170,6 +170,12 @@ test('UI expõe configuração, agenda e fechamento sem IDs técnicos ou HTML pe
   assert.match(coordinatorCode, /payers:\s*"clinic-settings"/);
   assert.match(coordinatorCode, /payers:\s*"Convênios"/);
   assert.match(coordinatorCode, /id:\s*"payers", label:\s*"Convênios", icon:\s*KeyRound/);
+  const financialSection = coordinatorCode.slice(
+    coordinatorCode.indexOf('activeTab === "financial"'),
+    coordinatorCode.indexOf('activeTab === "flow"'),
+  );
+  assert.match(financialSection, /navigateToTab\("payers"\)/);
+  assert.match(financialSection, /<KeyRound size=\{18\} \/> Convênios/);
   assert.match(coordinatorCode, /activeTab === "payers"[\s\S]*?<PayerRequirementsPanel \/>/);
   assert.match(payerPanelCode, /Configuração de Convênios/);
   assert.match(payerPanelCode, /Cadastro avançado de operadoras/);

@@ -7324,25 +7324,25 @@ export function CoordinatorDashboard({
                 className="space-y-8"
               >
                 {!isReceptionist && (
-                  <div className="rounded-[36px] border border-slate-100 bg-white p-6 shadow-sm">
+                  <div className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
                     <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                       <div>
-                        <h3 className="text-2xl font-black tracking-tight text-slate-900">
+                        <h3 className="text-2xl font-semibold tracking-tight text-slate-900">
                           DRE da Clínica
                         </h3>
-                        <p className="text-sm font-medium text-slate-500">
+                        <p className="text-sm text-slate-500">
                           Projeção pelo cadastro dos pacientes e realizado pelos pagamentos confirmados.
                         </p>
                       </div>
                       <div className="flex items-center gap-3">
-                        <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                        <label className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">
                           Mês
                         </label>
                         <input
                           type="month"
                           value={financialMonth}
                           onChange={(e) => setFinancialMonth(e.target.value)}
-                          className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700 outline-none focus:border-[#7a32fc]"
+                          className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-medium text-slate-700 outline-none focus:border-[#7a32fc]"
                         />
                       </div>
                     </div>
@@ -7358,10 +7358,10 @@ export function CoordinatorDashboard({
                         ["Margem contribuição", `${financialDashboard.contributionMarginPct.toFixed(1)}%`, formatCurrency(financialDashboard.contributionMarginValue)],
                         ["Repasses profissionais", formatCurrency(financialDashboard.professionalPaid), `${formatCurrency(financialDashboard.professionalPending)} pendente`],
                       ].map(([label, value, hint]) => (
-                        <div key={label} className="rounded-3xl bg-slate-50 p-5">
-                          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">{label}</p>
-                          <p className="mt-2 text-2xl font-black text-slate-900">{value}</p>
-                          <p className="mt-1 text-[11px] font-semibold text-slate-400">{hint}</p>
+                        <div key={label} className="rounded-3xl bg-slate-50/80 p-5">
+                          <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">{label}</p>
+                          <p className="mt-2 text-2xl font-semibold text-slate-900">{value}</p>
+                          <p className="mt-1 text-[11px] text-slate-400">{hint}</p>
                         </div>
                       ))}
                     </div>
@@ -7371,24 +7371,24 @@ export function CoordinatorDashboard({
                 <div className="flex items-center justify-between">
                   <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                     <div>
-                      <h3 className="text-2xl font-black tracking-tight text-slate-900">
+                      <h3 className="text-2xl font-semibold tracking-tight text-slate-900">
                         {isReceptionist ? "Recebimentos e cobranças" : "Financeiro e DRE Operacional da Clínica"}
                       </h3>
-                      <p className="text-sm font-medium text-slate-500">
+                      <p className="text-sm text-slate-500">
                         {isReceptionist
                           ? "Acompanhe cobranças, vencimentos, recebimentos e comprovantes dos pacientes."
                           : "Recebimentos, convênios, vencimentos, projeção e realizado em um só lugar."}
                       </p>
                     </div>
                     <div className="flex items-center gap-3">
-                      <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                      <label className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">
                         Mês
                       </label>
                       <input
                         type="month"
                         value={financialMonth}
                         onChange={(e) => setFinancialMonth(e.target.value)}
-                        className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700 outline-none focus:border-[#7a32fc]"
+                        className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-medium text-slate-700 outline-none focus:border-[#7a32fc]"
                         />
                       </div>
                     </div>
@@ -7397,38 +7397,47 @@ export function CoordinatorDashboard({
                 <div className="flex flex-wrap gap-2">
                   <button
                     onClick={() => setIsPaymentModalOpen(true)}
-                    className="bg-[#7a32fc] text-white px-6 py-3 rounded-2xl font-bold text-sm shadow-lg shadow-purple-500/20 flex items-center gap-2 hover:scale-105 transition-all"
+                    className="flex items-center gap-2 rounded-2xl bg-[#7a32fc] px-5 py-3 text-sm font-semibold text-white shadow-sm shadow-purple-500/10 transition hover:bg-[#6d28e8]"
                   >
                     <Plus size={18} /> Cobrança / Pagamento
                   </button>
                   <button
                     onClick={() => setIsProfessionalPaymentModalOpen(true)}
-                    className="bg-slate-900 text-white px-6 py-3 rounded-2xl font-bold text-sm shadow-lg shadow-slate-500/20 flex items-center gap-2 hover:scale-105 transition-all"
+                    className="flex items-center gap-2 rounded-2xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white shadow-sm shadow-slate-500/10 transition hover:bg-slate-800"
                   >
                     <CreditCard size={18} /> Pagamento Profissional
                   </button>
+                  {!isReceptionist && (
+                    <button
+                      type="button"
+                      onClick={() => navigateToTab("payers")}
+                      className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-violet-200 hover:text-[#7a32fc]"
+                    >
+                      <KeyRound size={18} /> Convênios
+                    </button>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                   <div className="lg:col-span-2 space-y-8">
                     {!isReceptionist && (
                       <>
-                        <div className="bg-white rounded-[40px] shadow-sm border border-slate-100 overflow-hidden">
-                          <div className="p-8 border-b border-slate-50">
-                            <h4 className="font-bold text-slate-900">
+                        <div className="overflow-hidden rounded-[32px] border border-slate-100 bg-white shadow-sm">
+                          <div className="border-b border-slate-50 p-6">
+                            <h4 className="font-semibold text-slate-900">
                               Resumo Financeiro Operacional
                             </h4>
                           </div>
-                          <div className="p-8">
+                          <div className="p-6">
                             <div className="space-y-4">
                               {dreData.map((item, idx) => (
                                 <div
                                   key={idx}
                                   className={`flex items-center justify-between p-4 rounded-2xl ${
                                     item.type === "total"
-                                      ? "bg-slate-50 font-bold"
+                                      ? "bg-slate-50 font-semibold"
                                       : item.type === "profit"
-                                        ? "bg-emerald-50 text-emerald-700 font-black"
+                                        ? "bg-emerald-50 text-emerald-700 font-semibold"
                                         : "bg-white"
                                   }`}
                                 >
@@ -7444,12 +7453,12 @@ export function CoordinatorDashboard({
                                     />
                                     <div>
                                       <p className="text-sm">{item.label}</p>
-                                      <p className="text-[10px] text-slate-400 font-medium">
+                                      <p className="text-[10px] text-slate-400">
                                         {item.info}
                                       </p>
                                     </div>
                                   </div>
-                                  <p className="text-lg">
+                                  <p className="text-lg font-medium">
                                     {item.value < 0
                                       ? `- ${formatCurrency(Math.abs(item.value))}`
                                       : formatCurrency(item.value)}
@@ -7463,14 +7472,14 @@ export function CoordinatorDashboard({
                         <div className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
                           <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
                             <div>
-                              <h4 className="font-bold text-slate-900">
+                              <h4 className="font-semibold text-slate-900">
                                 DRE por especialidade
                               </h4>
-                              <p className="mt-1 text-xs font-medium text-slate-500">
+                              <p className="mt-1 text-xs text-slate-500">
                                 Projeção vem do cadastro financeiro do paciente. Quando o pagamento não informa especialidade, o valor é distribuído conforme as especialidades cadastradas no paciente.
                               </p>
                             </div>
-                            <span className="w-fit rounded-full bg-violet-50 px-3 py-1 text-[10px] font-black uppercase tracking-widest text-[#7a32fc]">
+                            <span className="w-fit rounded-full bg-violet-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-widest text-[#7a32fc]">
                               Visão gerencial
                             </span>
                           </div>
@@ -7482,39 +7491,39 @@ export function CoordinatorDashboard({
                                   <div key={row.label} className="rounded-[28px] border border-slate-100 bg-slate-50 p-5">
                                     <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                                       <div>
-                                        <p className="text-base font-black text-slate-900">{row.label}</p>
-                                        <p className="mt-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                                        <p className="text-base font-semibold text-slate-900">{row.label}</p>
+                                        <p className="mt-1 text-[10px] font-medium uppercase tracking-widest text-slate-400">
                                           {row.patients} paciente(s) ativo(s) • {row.paidPatients} com pagamento realizado no mês
                                         </p>
                                       </div>
                                       <div className={`rounded-2xl px-4 py-2 text-right ${netPositive ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}>
-                                        <p className="text-[10px] font-black uppercase tracking-widest">Lucro estimado</p>
-                                        <p className="text-lg font-black">{formatCurrency(row.netProfit)}</p>
+                                        <p className="text-[10px] font-semibold uppercase tracking-widest">Lucro estimado</p>
+                                        <p className="text-lg font-semibold">{formatCurrency(row.netProfit)}</p>
                                       </div>
                                     </div>
 
                                     <div className="mt-4 grid grid-cols-2 gap-3 xl:grid-cols-4">
                                       <div className="rounded-2xl bg-white p-4">
-                                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Faturamento projetado</p>
-                                        <p className="mt-1 text-lg font-black text-slate-900">{formatCurrency(row.projected)}</p>
+                                        <p className="text-[9px] font-semibold uppercase tracking-widest text-slate-400">Faturamento projetado</p>
+                                        <p className="mt-1 text-lg font-semibold text-slate-900">{formatCurrency(row.projected)}</p>
                                       </div>
                                       <div className="rounded-2xl bg-white p-4">
-                                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Realizado</p>
-                                        <p className="mt-1 text-lg font-black text-[#7a32fc]">{formatCurrency(row.realized)}</p>
+                                        <p className="text-[9px] font-semibold uppercase tracking-widest text-slate-400">Realizado</p>
+                                        <p className="mt-1 text-lg font-semibold text-[#7a32fc]">{formatCurrency(row.realized)}</p>
                                       </div>
                                       <div className="rounded-2xl bg-white p-4">
-                                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Ticket médio</p>
-                                        <p className="mt-1 text-lg font-black text-slate-900">{formatCurrency(row.averageTicket)}</p>
+                                        <p className="text-[9px] font-semibold uppercase tracking-widest text-slate-400">Ticket médio</p>
+                                        <p className="mt-1 text-lg font-semibold text-slate-900">{formatCurrency(row.averageTicket)}</p>
                                       </div>
                                       <div className="rounded-2xl bg-white p-4">
-                                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Margem líquida</p>
-                                        <p className={`mt-1 text-lg font-black ${netPositive ? "text-emerald-600" : "text-rose-600"}`}>
+                                        <p className="text-[9px] font-semibold uppercase tracking-widest text-slate-400">Margem líquida</p>
+                                        <p className={`mt-1 text-lg font-semibold ${netPositive ? "text-emerald-600" : "text-rose-600"}`}>
                                           {row.netMarginPct.toFixed(1)}%
                                         </p>
                                       </div>
                                     </div>
 
-                                    <div className="mt-4 grid grid-cols-1 gap-2 text-[11px] font-bold text-slate-500 sm:grid-cols-2 xl:grid-cols-5">
+                                    <div className="mt-4 grid grid-cols-1 gap-2 text-[11px] font-medium text-slate-500 sm:grid-cols-2 xl:grid-cols-5">
                                       <div className="rounded-2xl bg-white/70 px-3 py-2">
                                         Ticket realizado: <span className="text-[#7a32fc]">{formatCurrency(row.realizedTicket)}</span>
                                       </div>
@@ -7544,7 +7553,7 @@ export function CoordinatorDashboard({
 
                         <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
                           <div className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
-                            <h4 className="font-bold text-slate-900">
+                            <h4 className="font-semibold text-slate-900">
                               Ranking de faturamento por especialidade
                             </h4>
                             <div className="mt-5 space-y-3">
@@ -7552,14 +7561,14 @@ export function CoordinatorDashboard({
                                 financialDashboard.specialtyRows.map((row: any) => (
                                   <div key={row.label} className="flex items-center justify-between gap-4 rounded-2xl bg-slate-50 p-4">
                                     <div>
-                                      <p className="text-sm font-black text-slate-800">{row.label}</p>
-                                      <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                                      <p className="text-sm font-semibold text-slate-800">{row.label}</p>
+                                      <p className="text-[10px] font-medium uppercase tracking-widest text-slate-400">
                                         {row.patients} paciente(s) • ticket {formatCurrency(row.averageTicket)}
                                       </p>
                                     </div>
                                     <div className="text-right">
-                                      <p className="text-sm font-black text-[#7a32fc]">{formatCurrency(row.projected)}</p>
-                                      <p className="text-[10px] font-bold text-slate-400">
+                                      <p className="text-sm font-semibold text-[#7a32fc]">{formatCurrency(row.projected)}</p>
+                                      <p className="text-[10px] text-slate-400">
                                         {formatCurrency(row.realized)} realizado
                                       </p>
                                     </div>
@@ -7574,29 +7583,29 @@ export function CoordinatorDashboard({
                           </div>
 
                           <div className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
-                            <h4 className="font-bold text-slate-900">
+                            <h4 className="font-semibold text-slate-900">
                               Particular, convênio e faturamento
                             </h4>
                             <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2">
                               {financialDashboard.payerRows.map((row: any) => (
                                 <div key={row.label} className="rounded-2xl bg-slate-50 p-4">
-                                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">{row.label}</p>
-                                  <p className="mt-1 text-lg font-black text-slate-900">{formatCurrency(row.amount)}</p>
-                                  <p className="text-[10px] font-semibold text-slate-400">{row.patients} paciente(s)</p>
+                                  <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">{row.label}</p>
+                                  <p className="mt-1 text-lg font-semibold text-slate-900">{formatCurrency(row.amount)}</p>
+                                  <p className="text-[10px] text-slate-400">{row.patients} paciente(s)</p>
                                 </div>
                               ))}
                               {financialDashboard.billingMethodRows.map((row: any) => (
                                 <div key={row.label} className="rounded-2xl bg-slate-50 p-4">
-                                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">{row.label}</p>
-                                  <p className="mt-1 text-lg font-black text-slate-900">{formatCurrency(row.amount)}</p>
-                                  <p className="text-[10px] font-semibold text-slate-400">Meio de faturamento</p>
+                                  <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">{row.label}</p>
+                                  <p className="mt-1 text-lg font-semibold text-slate-900">{formatCurrency(row.amount)}</p>
+                                  <p className="text-[10px] text-slate-400">Meio de faturamento</p>
                                 </div>
                               ))}
                             </div>
                             {financialDashboard.insuranceRows.length > 0 && (
                               <div className="mt-4 space-y-2 border-t border-slate-100 pt-4">
                                 {financialDashboard.insuranceRows.map((row: any) => (
-                                  <div key={row.label} className="flex items-center justify-between text-xs font-bold text-slate-500">
+                                  <div key={row.label} className="flex items-center justify-between text-xs font-medium text-slate-500">
                                     <span>{row.label}</span>
                                     <span>{formatCurrency(row.amount)}</span>
                                   </div>
@@ -7608,38 +7617,38 @@ export function CoordinatorDashboard({
                       </>
                     )}
 
-                    <div className="bg-white rounded-[40px] shadow-sm border border-slate-100 overflow-hidden">
-                      <div className="p-8 border-b border-slate-50">
-                        <h4 className="font-bold text-slate-900">
+                    <div className="overflow-hidden rounded-[32px] border border-slate-100 bg-white shadow-sm">
+                      <div className="border-b border-slate-50 p-6">
+                        <h4 className="font-semibold text-slate-900">
                           Últimos Recebimentos
                         </h4>
                       </div>
-                      <div className="p-8 overflow-x-auto">
+                      <div className="overflow-x-auto p-6">
                         <table className="w-full">
                           <thead>
                             <tr className="text-left border-b border-slate-50">
-                              <th className="pb-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                              <th className="pb-4 text-[10px] font-semibold text-slate-400 uppercase tracking-widest">
                                 Paciente
                               </th>
-                              <th className="pb-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                              <th className="pb-4 text-[10px] font-semibold text-slate-400 uppercase tracking-widest">
                                 Tipo
                               </th>
-                              <th className="pb-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                              <th className="pb-4 text-[10px] font-semibold text-slate-400 uppercase tracking-widest">
                                 Valor
                               </th>
-                              <th className="pb-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                              <th className="pb-4 text-[10px] font-semibold text-slate-400 uppercase tracking-widest">
                                 Data
                               </th>
-                              <th className="pb-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                              <th className="pb-4 text-[10px] font-semibold text-slate-400 uppercase tracking-widest">
                                 Método
                               </th>
-                              <th className="pb-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                              <th className="pb-4 text-[10px] font-semibold text-slate-400 uppercase tracking-widest">
                                 Comprovante
                               </th>
-                              <th className="pb-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                              <th className="pb-4 text-[10px] font-semibold text-slate-400 uppercase tracking-widest">
                                 Status
                               </th>
-                              <th className="pb-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                              <th className="pb-4 text-[10px] font-semibold text-slate-400 uppercase tracking-widest">
                                 Ações
                               </th>
                             </tr>
@@ -7651,24 +7660,24 @@ export function CoordinatorDashboard({
                                   key={p.id || idx}
                                   className="group hover:bg-slate-50 transition-all"
                                 >
-                                  <td className="py-4 font-semibold text-slate-700">
+                                  <td className="py-4 font-medium text-slate-700">
                                     {p.patient_name}
                                   </td>
                                   <td className="py-4">
                                     <div className="flex flex-col">
                                       <span
-                                        className={`text-[10px] font-bold uppercase ${p.type === "particular" ? "text-blue-600" : "text-purple-600"}`}
+                                        className={`text-[10px] font-semibold uppercase ${p.type === "particular" ? "text-blue-600" : "text-purple-600"}`}
                                       >
                                         {p.type || "Particular"}
                                       </span>
                                       {p.insurance_name && (
-                                        <span className="text-[9px] text-slate-400 font-medium">
+                                        <span className="text-[9px] text-slate-400">
                                           {p.insurance_name}
                                         </span>
                                       )}
                                     </div>
                                   </td>
-                                  <td className="py-4 font-bold text-[#7a32fc]">
+                                  <td className="py-4 font-semibold text-[#7a32fc]">
                                     {formatCurrency(p.amount)}
                                   </td>
                                   <td className="py-4 text-slate-500 text-sm">
@@ -7677,15 +7686,15 @@ export function CoordinatorDashboard({
                                     ).toLocaleDateString()}
                                   </td>
                                   <td className="py-4">
-                                    <span className="px-3 py-1 bg-slate-100 text-slate-600 rounded-full text-[10px] font-bold uppercase">
+                                    <span className="rounded-full bg-slate-100 px-3 py-1 text-[10px] font-medium uppercase text-slate-600">
                                       {p.method}
                                     </span>
                                   </td>
-                                  <td className="py-4 text-xs font-semibold text-slate-500">
+                                  <td className="py-4 text-xs font-medium text-slate-500">
                                     {p.receipt_url ? (
                                       "Anexado"
                                     ) : (
-                                      <label className="inline-flex cursor-pointer items-center rounded-full bg-violet-50 px-3 py-1 text-[10px] font-black uppercase text-[#7a32fc] hover:bg-violet-100">
+                                      <label className="inline-flex cursor-pointer items-center rounded-full bg-violet-50 px-3 py-1 text-[10px] font-semibold uppercase text-[#7a32fc] hover:bg-violet-100">
                                         Anexar
                                         <input
                                           type="file"
@@ -7701,7 +7710,7 @@ export function CoordinatorDashboard({
                                     )}
                                   </td>
                                   <td className="py-4">
-                                    <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase ${
+                                    <span className={`rounded-full px-3 py-1 text-[10px] font-medium uppercase ${
                                       String(p.status || "").toLowerCase() === "paid"
                                         ? "bg-green-100 text-green-600"
                                         : "bg-amber-100 text-amber-700"
@@ -7713,7 +7722,7 @@ export function CoordinatorDashboard({
                                     <button
                                       type="button"
                                       onClick={() => openPaymentEditor(p)}
-                                      className="rounded-xl border border-slate-200 px-3 py-1.5 text-[10px] font-black uppercase text-slate-600 hover:border-[#7a32fc] hover:text-[#7a32fc]"
+                                      className="rounded-xl border border-slate-200 px-3 py-1.5 text-[10px] font-semibold uppercase text-slate-600 hover:border-[#7a32fc] hover:text-[#7a32fc]"
                                     >
                                       Editar
                                     </button>
@@ -7738,8 +7747,8 @@ export function CoordinatorDashboard({
 
                   <div className="space-y-8">
                     {!isReceptionist && (
-                      <div className="bg-white rounded-[40px] shadow-sm border border-slate-100 p-8">
-                        <h4 className="font-bold text-slate-900 mb-6">
+                      <div className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
+                        <h4 className="mb-6 font-semibold text-slate-900">
                           Realizado x projeção
                         </h4>
                         <div className="h-64 min-h-[300px]">
@@ -7785,8 +7794,8 @@ export function CoordinatorDashboard({
                       </div>
                     )}
 
-                    <div className="bg-white rounded-[40px] shadow-sm border border-slate-100 p-8">
-                      <h4 className="font-bold text-slate-900 mb-6">
+                    <div className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
+                      <h4 className="mb-6 font-semibold text-slate-900">
                         Próximos vencimentos
                       </h4>
                       <div className="space-y-4">
@@ -7796,24 +7805,24 @@ export function CoordinatorDashboard({
                             className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl"
                           >
                             <div>
-                              <p className="font-bold text-slate-900 text-sm">
+                              <p className="text-sm font-medium text-slate-900">
                                 {member.patientName}
                               </p>
-                              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">
+                              <p className="text-[10px] font-medium uppercase tracking-widest text-slate-400">
                                 {member.specialty}
                               </p>
-                              <p className="text-[10px] text-slate-500 font-medium mt-1">
+                              <p className="mt-1 text-[10px] text-slate-500">
                                 {member.payerType}{member.insuranceName ? ` • ${member.insuranceName}` : ""}
                               </p>
                             </div>
                             <div className="text-right">
-                              <p className="font-bold text-slate-900 text-sm">
+                              <p className="text-sm font-medium text-slate-900">
                                 {formatCurrency(member.amount)}
                               </p>
-                              <p className="text-[10px] text-emerald-500 font-bold uppercase tracking-widest">
+                              <p className="text-[10px] font-medium uppercase tracking-widest text-emerald-500">
                                 Vence dia {String(member.dueDay).padStart(2, "0")}
                               </p>
-                              <p className="text-[10px] text-slate-400 font-medium">
+                              <p className="text-[10px] text-slate-400">
                                 {member.billingMethod}
                               </p>
                             </div>
@@ -7827,8 +7836,8 @@ export function CoordinatorDashboard({
                       </div>
                     </div>
 
-                    <div className="bg-white rounded-[40px] shadow-sm border border-slate-100 p-8">
-                      <h4 className="font-bold text-slate-900 mb-6">
+                    <div className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
+                      <h4 className="mb-6 font-semibold text-slate-900">
                         Pagamentos de profissionais
                       </h4>
                       <div className="space-y-4">
@@ -7836,21 +7845,21 @@ export function CoordinatorDashboard({
                           financialDashboard.professionalPayments.map((payment: any, index: number) => (
                             <div key={payment.id || index} className="flex items-center justify-between rounded-2xl bg-slate-50 p-4">
                               <div>
-                                <p className="text-sm font-bold text-slate-900">
+                                <p className="text-sm font-medium text-slate-900">
                                   {payment.professional_name || payment.professionalName || "Profissional"}
                                 </p>
-                                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                                <p className="text-[10px] font-medium uppercase tracking-widest text-slate-400">
                                   Vence {new Date(payment.due_date || payment.payment_date).toLocaleDateString("pt-BR")}
                                 </p>
-                                <p className="mt-1 text-[10px] font-medium text-slate-500">
+                                <p className="mt-1 text-[10px] text-slate-500">
                                   {payment.method || "pix"}
                                 </p>
                               </div>
                               <div className="text-right">
-                                <p className="text-sm font-black text-slate-900">
+                                <p className="text-sm font-medium text-slate-900">
                                   {formatCurrency(payment.amount)}
                                 </p>
-                                <span className={`inline-flex rounded-full px-3 py-1 text-[10px] font-black uppercase ${
+                                <span className={`inline-flex rounded-full px-3 py-1 text-[10px] font-medium uppercase ${
                                   String(payment.status || "").toLowerCase() === "paid"
                                     ? "bg-green-100 text-green-600"
                                     : "bg-amber-100 text-amber-700"
@@ -7860,7 +7869,7 @@ export function CoordinatorDashboard({
                                 <button
                                   type="button"
                                   onClick={() => openProfessionalPaymentEditor(payment)}
-                                  className="mt-2 block rounded-xl border border-slate-200 px-3 py-1.5 text-[10px] font-black uppercase text-slate-600 hover:border-[#7a32fc] hover:text-[#7a32fc]"
+                                  className="mt-2 block rounded-xl border border-slate-200 px-3 py-1.5 text-[10px] font-semibold uppercase text-slate-600 hover:border-[#7a32fc] hover:text-[#7a32fc]"
                                 >
                                   Editar
                                 </button>
