@@ -370,13 +370,21 @@ export function PayerRequirementsPanel({
   const [editingProcedurePriceId, setEditingProcedurePriceId] = useState("");
   const [procedurePriceAmountError, setProcedurePriceAmountError] = useState("");
   const [tussActionInfo, setTussActionInfo] = useState("");
+  const [supportFormOpen, setSupportFormOpen] = useState(false);
+  const [supportCatalogOpen, setSupportCatalogOpen] = useState(false);
+  const [supportActionKey, setSupportActionKey] = useState("");
   const [payerTissForm, setPayerTissForm] = useState<PayerTissForm>(defaultPayerTissForm);
   const [payerTissLoading, setPayerTissLoading] = useState(false);
   const [payerTissMessage, setPayerTissMessage] = useState("");
   const payerRulesSectionRef = useRef<HTMLDivElement | null>(null);
   const payerTussSectionRef = useRef<HTMLDivElement | null>(null);
   const payerPricesSectionRef = useRef<HTMLDivElement | null>(null);
+  const tussServiceFormRef = useRef<HTMLDivElement | null>(null);
+  const tussServiceNameInputRef = useRef<HTMLInputElement | null>(null);
+  const tussCodeFormRef = useRef<HTMLDivElement | null>(null);
+  const tussCodeInputRef = useRef<HTMLInputElement | null>(null);
   const procedurePriceSaveInFlightRef = useRef(false);
+  const supportActionInFlightRef = useRef(false);
   const procedurePriceAmountInputRef = useRef<HTMLInputElement | null>(null);
 
   const selectedPayer = useMemo(
@@ -426,6 +434,17 @@ export function PayerRequirementsPanel({
     }
     return rows;
   }, [procedurePrices, tussCodes, tussMappings, tussServices]);
+
+  const openSupportForm = (target: "service" | "code") => {
+    setSupportFormOpen(true);
+    setSupportCatalogOpen(true);
+    window.setTimeout(() => {
+      const formRef = target === "service" ? tussServiceFormRef : tussCodeFormRef;
+      const inputRef = target === "service" ? tussServiceNameInputRef : tussCodeInputRef;
+      formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      inputRef.current?.focus();
+    }, 80);
+  };
 
   const loadPayers = async () => {
     setLoading(true);
@@ -814,6 +833,8 @@ export function PayerRequirementsPanel({
 
   const editTussService = (service: TussService) => {
     setEditingTussServiceId(service.id);
+    setError("");
+    setTussActionInfo("");
     setTussServiceForm({
       internalCode: service.internalCode || "",
       name: service.name || "",
@@ -825,10 +846,13 @@ export function PayerRequirementsPanel({
       defaultQuantity: service.defaultQuantity ? String(service.defaultQuantity) : "1",
       defaultAmountCents: formatCentsForBrazilianInput(service.defaultAmountCents),
     });
+    openSupportForm("service");
   };
 
   const editTussCode = (code: TussCode) => {
     setEditingTussCodeId(code.id);
+    setError("");
+    setTussActionInfo("");
     setTussCodeForm({
       code: code.code || "",
       description: code.description || "",
@@ -837,6 +861,7 @@ export function PayerRequirementsPanel({
       validFrom: code.validFrom || "",
       validTo: code.validTo || "",
     });
+    openSupportForm("code");
   };
 
   const editTussMapping = (mapping: PayerTussMapping) => {
@@ -886,51 +911,81 @@ export function PayerRequirementsPanel({
     window.setTimeout(() => procedurePriceAmountInputRef.current?.focus(), 250);
   };
 
-  const disableTussService = async (serviceId: string) => {
+  const setTussServiceActive = async (serviceId: string, active: boolean) => {
+    if (supportActionInFlightRef.current) return;
+    const actionKey = `service:${serviceId}:${active ? "active" : "inactive"}`;
+    const confirmed = window.confirm(active
+      ? "Deseja reativar este procedimento? Ele voltará a ficar disponível para novas configurações."
+      : "Deseja inativar este procedimento? Ele deixará de ficar disponível para novas configurações.");
+    if (!confirmed) return;
+    supportActionInFlightRef.current = true;
+    setSupportCatalogOpen(true);
+    setSupportActionKey(actionKey);
     setSaving(true);
     setError("");
     setTussActionInfo("");
     try {
-      const result = await dataService.updateTussService(serviceId, { active: false });
+      const result = await dataService.updateTussService(serviceId, { active });
       if (!result?.success) {
-        setError(result?.error || "Não foi possível inativar o procedimento agora.");
+        setError(result?.error || (active ? "Não foi possível reativar o procedimento agora." : "Não foi possível inativar o procedimento agora."));
         return;
       }
       setTussServices((current) => current.map((service) => (
-        service.id === serviceId ? { ...service, active: false } : service
+        service.id === serviceId ? { ...service, ...(result.data || {}), active } : service
       )));
-      if (editingTussServiceId === serviceId) {
+      if (!active && editingTussServiceId === serviceId) {
         setEditingTussServiceId("");
         setTussServiceForm(defaultTussServiceForm);
       }
-      setTussActionInfo("Procedimento inativado.");
+      setTussActionInfo(active ? "Procedimento reativado com sucesso." : "Procedimento inativado.");
     } finally {
+      supportActionInFlightRef.current = false;
       setSaving(false);
+      setSupportActionKey("");
     }
   };
 
-  const disableTussCode = async (codeId: string) => {
+  const disableTussService = (serviceId: string) => setTussServiceActive(serviceId, false);
+
+  const reactivateTussService = (serviceId: string) => setTussServiceActive(serviceId, true);
+
+  const setTussCodeActive = async (codeId: string, active: boolean) => {
+    if (supportActionInFlightRef.current) return;
+    const actionKey = `code:${codeId}:${active ? "active" : "inactive"}`;
+    const confirmed = window.confirm(active
+      ? "Deseja reativar este código TUSS? Ele voltará a ficar disponível para novas configurações."
+      : "Deseja inativar este código TUSS? Ele deixará de ficar disponível para novas configurações.");
+    if (!confirmed) return;
+    supportActionInFlightRef.current = true;
+    setSupportCatalogOpen(true);
+    setSupportActionKey(actionKey);
     setSaving(true);
     setError("");
     setTussActionInfo("");
     try {
-      const result = await dataService.updateTussCode(codeId, { active: false });
+      const result = await dataService.updateTussCode(codeId, { active });
       if (!result?.success) {
-        setError(result?.error || "Não foi possível inativar o código TUSS agora.");
+        setError(result?.error || (active ? "Não foi possível reativar o código TUSS agora." : "Não foi possível inativar o código TUSS agora."));
         return;
       }
       setTussCodes((current) => current.map((code) => (
-        code.id === codeId ? { ...code, active: false } : code
+        code.id === codeId ? { ...code, ...(result.data || {}), active } : code
       )));
-      if (editingTussCodeId === codeId) {
+      if (!active && editingTussCodeId === codeId) {
         setEditingTussCodeId("");
         setTussCodeForm(defaultTussCodeForm);
       }
-      setTussActionInfo("Código TUSS inativado.");
+      setTussActionInfo(active ? "Código TUSS reativado com sucesso." : "Código TUSS inativado.");
     } finally {
+      supportActionInFlightRef.current = false;
       setSaving(false);
+      setSupportActionKey("");
     }
   };
+
+  const disableTussCode = (codeId: string) => setTussCodeActive(codeId, false);
+
+  const reactivateTussCode = (codeId: string) => setTussCodeActive(codeId, true);
 
   const revalidateAffectedTussMapping = async (mappingId: string) => {
     setSaving(true);
@@ -1348,13 +1403,21 @@ export function PayerRequirementsPanel({
         )}
 
         <div className="mt-4">
-          <details className="rounded-2xl border border-slate-100 bg-slate-50/50 p-3">
+          <details
+            open={supportFormOpen}
+            onToggle={(event) => setSupportFormOpen(event.currentTarget.open)}
+            className="rounded-2xl border border-slate-100 bg-slate-50/50 p-3"
+          >
             <summary className="cursor-pointer text-sm font-semibold text-slate-800">Cadastrar procedimento ou código TUSS</summary>
             <p className="mt-2 text-xs text-slate-500">Procedimentos internos e códigos TUSS são referências usadas pelo De/Para; não representam cobranças duplicadas.</p>
             <div className="mt-3 grid gap-4 xl:grid-cols-2">
-          <div className="rounded-2xl border border-slate-100 bg-white p-3">
-            <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Procedimento interno</p>
+          <div ref={tussServiceFormRef} className="rounded-2xl border border-slate-100 bg-white p-3">
+            <p className="text-xs font-bold uppercase tracking-widest text-slate-400">{editingTussServiceId ? "Editando procedimento interno" : "Procedimento interno"}</p>
+            {editingTussServiceId && (
+              <p className="mt-1 text-xs text-slate-500">Atualize somente os dados do procedimento interno selecionado.</p>
+            )}
             <input
+              ref={tussServiceNameInputRef}
               value={tussServiceForm.name}
               onChange={(event) => setTussServiceForm((current) => ({ ...current, name: event.target.value }))}
               placeholder="Sessão ABA individual"
@@ -1447,9 +1510,13 @@ export function PayerRequirementsPanel({
             </button>
           </div>
 
-          <div className="rounded-2xl border border-slate-100 bg-white p-3">
-            <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Código TUSS</p>
+          <div ref={tussCodeFormRef} className="rounded-2xl border border-slate-100 bg-white p-3">
+            <p className="text-xs font-bold uppercase tracking-widest text-slate-400">{editingTussCodeId ? "Editando código TUSS" : "Código TUSS"}</p>
+            {editingTussCodeId && (
+              <p className="mt-1 text-xs text-slate-500">Atualize somente os dados do código TUSS selecionado.</p>
+            )}
             <input
+              ref={tussCodeInputRef}
               value={tussCodeForm.code}
               onChange={(event) => setTussCodeForm((current) => ({ ...current, code: event.target.value }))}
               placeholder="Código"
@@ -1789,15 +1856,16 @@ export function PayerRequirementsPanel({
               const today = new Date().toISOString().slice(0, 10);
               const validFrom = price?.validFrom || mapping?.validFrom || "";
               const validUntil = price?.validUntil || mapping?.validTo || "";
-              const issues = [
-                service?.active === false ? "Procedimento inativo" : "",
-                !mapping ? "De/Para ausente" : "",
-                !price ? "Valor ausente" : "",
-                !code?.id && !price?.tussCode && !mapping?.tussCode ? "Código TUSS ausente" : "",
-                validUntil && validUntil < today ? "Vigência expirada" : "",
-                validFrom && validFrom > today ? "Vigência futura" : "",
-                price && mapping && price.serviceCatalogId !== mapping.serviceCatalogId ? "Configuração inconsistente" : "",
-              ].filter(Boolean);
+              const statusBadges = [
+                { key: "mapping", label: mapping ? "De/Para configurado" : "De/Para ausente", tone: mapping ? "neutral" : "warning" },
+                { key: "procedure_active", label: service?.active === false ? "Procedimento inativo" : "Procedimento ativo", tone: service?.active === false ? "warning" : "neutral" },
+                !price ? { key: "value_missing", label: "Valor ausente", tone: "warning" } : null,
+                !code?.id && !price?.tussCode && !mapping?.tussCode ? { key: "tuss_missing", label: "Código TUSS ausente", tone: "warning" } : null,
+                validUntil && validUntil < today ? { key: "validity_expired", label: "Vigência expirada", tone: "warning" } : null,
+                validFrom && validFrom > today ? { key: "validity_future", label: "Vigência futura", tone: "warning" } : null,
+                price && mapping && price.serviceCatalogId !== mapping.serviceCatalogId ? { key: "inconsistent_configuration", label: "Configuração inconsistente", tone: "warning" } : null,
+              ].filter(Boolean) as Array<{ key: string; label: string; tone: "neutral" | "warning" }>;
+              const uniqueStatusBadges = Array.from(new Map(statusBadges.map((badge) => [badge.key, badge])).values());
               return (
                 <div key={key} className="rounded-lg border border-slate-200 bg-white p-3">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -1805,9 +1873,16 @@ export function PayerRequirementsPanel({
                       <p className="text-sm font-medium text-slate-900">{service?.name || price?.serviceName || mapping?.serviceName || mapping?.internalCode || "Procedimento não identificado"}</p>
                       <p className="mt-1 text-xs text-slate-500">{[code?.code || price?.tussCode || mapping?.tussCode ? `TUSS ${code?.code || price?.tussCode || mapping?.tussCode}` : "Sem TUSS", code?.description || mapping?.tussDescription, price ? formatCurrency(price.amountCents) : "Sem valor negociado", validFrom && `Vigência: ${validFrom}`, validUntil && `até ${validUntil}`, price?.source || mapping?.source].filter(Boolean).join(" · ")}</p>
                       <div className="mt-2 flex flex-wrap gap-1.5">
-                        <span className="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-600">{mapping ? "De/Para configurado" : "De/Para ausente"}</span>
-                        <span className="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-600">{service?.active === false ? "Procedimento inativo" : "Procedimento ativo"}</span>
-                        {issues.map((issue) => <span key={issue} className="rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800">{issue}</span>)}
+                        {uniqueStatusBadges.map((badge) => (
+                          <span
+                            key={badge.key}
+                            className={badge.tone === "warning"
+                              ? "rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800"
+                              : "rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-600"}
+                          >
+                            {badge.label}
+                          </span>
+                        ))}
                       </div>
                     </div>
                     <div className="flex shrink-0 flex-wrap gap-1.5">
@@ -1823,7 +1898,11 @@ export function PayerRequirementsPanel({
           </div>
         </div>
 
-        <details className="mt-4 rounded-2xl border border-slate-100 bg-slate-50/50 p-4">
+        <details
+          open={supportCatalogOpen}
+          onToggle={(event) => setSupportCatalogOpen(event.currentTarget.open)}
+          className="mt-4 rounded-2xl border border-slate-100 bg-slate-50/50 p-4"
+        >
           <summary className="cursor-pointer text-sm font-semibold text-slate-800">Cadastros de apoio</summary>
           <p className="mt-2 text-xs text-slate-500">Esses cadastros são referências usadas nas configurações de faturamento e não representam cobranças duplicadas.</p>
           <div className="mt-3 grid gap-3 lg:grid-cols-2">
@@ -1831,24 +1910,46 @@ export function PayerRequirementsPanel({
               <p className="text-xs font-medium text-slate-700">Catálogo de procedimentos internos</p>
               <p className="mt-1 text-xs text-slate-500">{activeTussServices.length} ativo(s) · {tussServices.length - activeTussServices.length} inativo(s)</p>
               <div className="mt-2 space-y-2">
-                {tussServices.length === 0 ? <p className="text-xs text-slate-500">Nenhum procedimento de referência cadastrado.</p> : tussServices.slice(0, 12).map((service) => (
-                  <div key={service.id} className="flex items-start justify-between gap-2 rounded-lg border border-slate-100 px-3 py-2">
-                    <div><p className="text-sm font-medium text-slate-800">{service.name}</p><p className="text-xs text-slate-500">{[service.internalCode, service.serviceType, service.active === false ? "Procedimento inativo" : "Ativo"].filter(Boolean).join(" · ")}</p></div>
-                    <div className="flex gap-1"><button type="button" onClick={() => editTussService(service)} className="rounded-lg border border-slate-200 px-2 py-1 text-xs font-normal text-slate-600">Editar</button>{service.active !== false && <button type="button" onClick={() => void disableTussService(service.id)} className="rounded-lg border border-slate-200 px-2 py-1 text-xs font-normal text-slate-600">Inativar</button>}</div>
-                  </div>
-                ))}
+                {tussServices.length === 0 ? <p className="text-xs text-slate-500">Nenhum procedimento de referência cadastrado.</p> : tussServices.slice(0, 12).map((service) => {
+                  const serviceActionKey = `service:${service.id}:${service.active === false ? "active" : "inactive"}`;
+                  const serviceActionLoading = supportActionKey === serviceActionKey;
+                  return (
+                    <div key={service.id} className="flex items-start justify-between gap-2 rounded-lg border border-slate-100 px-3 py-2">
+                      <div><p className="text-sm font-medium text-slate-800">{service.name}</p><p className="text-xs text-slate-500">{[service.internalCode, service.serviceType, service.active === false ? "Procedimento inativo" : "Ativo"].filter(Boolean).join(" · ")}</p></div>
+                      <div className="flex gap-1">
+                        <button type="button" aria-label={`Editar procedimento ${service.name || ""}`} onClick={() => editTussService(service)} className="rounded-lg border border-slate-200 px-2 py-1 text-xs font-normal text-slate-600">Editar</button>
+                        {service.active !== false ? (
+                          <button type="button" aria-label={`Inativar procedimento ${service.name || ""}`} disabled={serviceActionLoading} onClick={() => void disableTussService(service.id)} className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-xs font-normal text-slate-600 disabled:opacity-50">{serviceActionLoading ? <Loader2 size={12} className="animate-spin" /> : null}Inativar</button>
+                        ) : (
+                          <button type="button" aria-label={`Reativar procedimento ${service.name || ""}`} disabled={serviceActionLoading} onClick={() => void reactivateTussService(service.id)} className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 px-2 py-1 text-xs font-normal text-emerald-700 disabled:opacity-50">{serviceActionLoading ? <Loader2 size={12} className="animate-spin" /> : null}Reativar</button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
             <div className="rounded-lg border border-slate-100 bg-white p-3">
               <p className="text-xs font-medium text-slate-700">Catálogo de códigos TUSS</p>
               <p className="mt-1 text-xs text-slate-500">{activeTussCodes.length} ativo(s) · {tussCodes.length - activeTussCodes.length} inativo(s)</p>
               <div className="mt-2 space-y-2">
-                {tussCodes.length === 0 ? <p className="text-xs text-slate-500">Nenhum código TUSS de referência cadastrado.</p> : tussCodes.slice(0, 12).map((code) => (
-                  <div key={code.id} className="flex items-start justify-between gap-2 rounded-lg border border-slate-100 px-3 py-2">
-                    <div><p className="text-sm font-medium text-slate-800">TUSS {code.code}</p><p className="text-xs text-slate-500">{[code.description, code.version, code.active === false ? "Inativo" : "Ativo"].filter(Boolean).join(" · ")}</p></div>
-                    <div className="flex gap-1"><button type="button" onClick={() => editTussCode(code)} className="rounded-lg border border-slate-200 px-2 py-1 text-xs font-normal text-slate-600">Editar</button>{code.active !== false && <button type="button" onClick={() => void disableTussCode(code.id)} className="rounded-lg border border-slate-200 px-2 py-1 text-xs font-normal text-slate-600">Inativar</button>}</div>
-                  </div>
-                ))}
+                {tussCodes.length === 0 ? <p className="text-xs text-slate-500">Nenhum código TUSS de referência cadastrado.</p> : tussCodes.slice(0, 12).map((code) => {
+                  const codeActionKey = `code:${code.id}:${code.active === false ? "active" : "inactive"}`;
+                  const codeActionLoading = supportActionKey === codeActionKey;
+                  return (
+                    <div key={code.id} className="flex items-start justify-between gap-2 rounded-lg border border-slate-100 px-3 py-2">
+                      <div><p className="text-sm font-medium text-slate-800">TUSS {code.code}</p><p className="text-xs text-slate-500">{[code.description, code.version, code.active === false ? "Inativo" : "Ativo"].filter(Boolean).join(" · ")}</p></div>
+                      <div className="flex gap-1">
+                        <button type="button" aria-label={`Editar código TUSS ${code.code || ""}`} onClick={() => editTussCode(code)} className="rounded-lg border border-slate-200 px-2 py-1 text-xs font-normal text-slate-600">Editar</button>
+                        {code.active !== false ? (
+                          <button type="button" aria-label={`Inativar código TUSS ${code.code || ""}`} disabled={codeActionLoading} onClick={() => void disableTussCode(code.id)} className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-xs font-normal text-slate-600 disabled:opacity-50">{codeActionLoading ? <Loader2 size={12} className="animate-spin" /> : null}Inativar</button>
+                        ) : (
+                          <button type="button" aria-label={`Reativar código TUSS ${code.code || ""}`} disabled={codeActionLoading} onClick={() => void reactivateTussCode(code.id)} className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 px-2 py-1 text-xs font-normal text-emerald-700 disabled:opacity-50">{codeActionLoading ? <Loader2 size={12} className="animate-spin" /> : null}Reativar</button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           </div>

@@ -449,6 +449,22 @@ test('backend tem CRUD TUSS-ready action-driven e resolve ao salvar contexto fin
     serverCode.indexOf("app.post('/api/admin/tuss/mappings/:mappingId/revalidate'"),
     serverCode.indexOf("app.get('/api/appointments/:appointmentId/billing-context'")
   );
+  const servicePatchRoute = serverCode.slice(
+    serverCode.indexOf("app.patch('/api/admin/tuss/services/:serviceId'"),
+    serverCode.indexOf("app.get('/api/admin/tuss/codes'")
+  );
+  const codePatchRoute = serverCode.slice(
+    serverCode.indexOf("app.patch('/api/admin/tuss/codes/:codeId'"),
+    serverCode.indexOf("app.get('/api/admin/tuss/mappings'")
+  );
+  assert.match(servicePatchRoute, /requireRoles\('coordinator', 'admin', 'owner'\)/);
+  assert.match(servicePatchRoute, /fetchTussServiceCatalogById\(organizationId, serviceId\)/);
+  assert.match(servicePatchRoute, /active: req\.body\?\.active !== undefined \? Boolean\(req\.body\?\.active\) : undefined/);
+  assert.match(servicePatchRoute, /\.eq\('organization_id', organizationId\)[\s\S]*\.eq\('id', serviceId\)/);
+  assert.match(codePatchRoute, /requireRoles\('coordinator', 'admin', 'owner'\)/);
+  assert.match(codePatchRoute, /fetchTussCodeById\(organizationId, codeId\)/);
+  assert.match(codePatchRoute, /active: req\.body\?\.active !== undefined \? Boolean\(req\.body\?\.active\) : undefined/);
+  assert.match(codePatchRoute, /\.eq\('organization_id', organizationId\)[\s\S]*\.eq\('id', codeId\)/);
   assert.match(revalidateRoute, /effectiveBillingContextForAppointment/);
   assert.match(revalidateRoute, /context\?\.payer_id \|\| appointment\?\.payer_id/);
   assert.match(revalidateRoute, /mappingIsValidForDate\(mapping, appointmentScheduledStart\(appointment\)\)/);
@@ -493,8 +509,10 @@ test('frontend administra procedimentos codigos e mapeamentos sem F5', () => {
   assert.match(payerPanelCode, /createTussMapping/);
   assert.match(payerPanelCode, /editTussService/);
   assert.match(payerPanelCode, /disableTussService/);
+  assert.match(payerPanelCode, /reactivateTussService/);
   assert.match(payerPanelCode, /editTussCode/);
   assert.match(payerPanelCode, /disableTussCode/);
+  assert.match(payerPanelCode, /reactivateTussCode/);
   assert.match(payerPanelCode, /editTussMapping/);
   assert.match(payerPanelCode, /revalidateAffectedTussMapping/);
   assert.match(payerPanelCode, /saveProcedurePrice/);
@@ -506,6 +524,12 @@ test('frontend administra procedimentos codigos e mapeamentos sem F5', () => {
   assert.match(payerPanelCode, /requiresReport/);
   assert.match(payerPanelCode, /setTussServices/);
   assert.match(payerPanelCode, /setTussCodes/);
+  assert.match(payerPanelCode, /open=\{supportFormOpen\}/);
+  assert.match(payerPanelCode, /open=\{supportCatalogOpen\}/);
+  assert.match(payerPanelCode, /Editando procedimento interno/);
+  assert.match(payerPanelCode, /Editando código TUSS/);
+  assert.match(payerPanelCode, /Reativar/);
+  assert.match(payerPanelCode, /uniqueStatusBadges/);
   assert.match(payerPanelCode, /upsertTussMappingInState/);
   assert.match(payerPanelCode, /result\.affectedItems/);
   assert.match(payerPanelCode, /result\.updatedCount/);
