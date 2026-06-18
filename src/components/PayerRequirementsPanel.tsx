@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, CheckCircle2, ClipboardCheck, FileSpreadsheet, Loader2, Plus, RefreshCw, Save, ShieldCheck } from "lucide-react";
 import { dataService } from "../services/dataService";
+import { getDefaultTissOfficialStrategyDescriptor } from "../services/tissOfficial/capabilities";
 import { buildClinicMonthDateRange } from "../utils/scheduling";
 
 type Payer = {
@@ -265,6 +266,33 @@ const defaultPayerTissForm: PayerTissForm = {
   specificRules: "",
 };
 
+const OFFICIAL_TISS_XML_STRATEGY = getDefaultTissOfficialStrategyDescriptor();
+const payerTissFieldClass = "mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100";
+
+function PayerTissField({
+  id,
+  label,
+  helperText,
+  children,
+}: {
+  id: string;
+  label: string;
+  helperText?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label htmlFor={id} className="block text-xs font-normal text-slate-600">
+      <span className="block text-slate-700">{label}</span>
+      {children}
+      {helperText ? (
+        <span id={`${id}-help`} className="mt-1 block text-[11px] leading-4 text-slate-500">
+          {helperText}
+        </span>
+      ) : null}
+    </label>
+  );
+}
+
 const normalizePayerTissProfile = (profile: any = {}): PayerTissForm => ({
   ansRegistration: profile.ans_registration || profile.ansRegistration || "",
   operatorCode: profile.operator_code || profile.operatorCode || "",
@@ -328,7 +356,6 @@ const payerTissMissing = (payer: Payer | null, form: PayerTissForm) => {
   if (!isInsurancePayer(payer)) return [];
   const missing: string[] = [];
   if (!isFilled(form.ansRegistration)) missing.push("Registro ANS não informado");
-  if (!isFilled(form.tissVersion)) missing.push("Versão TISS não configurada");
   if (form.requiresProviderCode && !isFilled(form.contractedProviderCode) && !isFilled(form.operatorProviderCode) && !isFilled(form.operatorCode)) {
     missing.push("Código do contratado na operadora não informado");
   }
@@ -1196,30 +1223,136 @@ export function PayerRequirementsPanel({
                 )}
                 <p className="mt-4 text-xs font-bold uppercase tracking-widest text-indigo-500">Dados da operadora</p>
                 <div className="mt-3 grid gap-3 md:grid-cols-2">
-                  <input value={payerTissForm.ansRegistration} onChange={(event) => updatePayerTiss("ansRegistration", event.target.value)} placeholder="Registro ANS" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none" />
-                  <input value={payerTissForm.operatorCode} onChange={(event) => updatePayerTiss("operatorCode", event.target.value)} placeholder="Código da operadora" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none" />
-                  <input value={payerTissForm.operatorDocumentNumber} onChange={(event) => updatePayerTiss("operatorDocumentNumber", event.target.value)} placeholder="CNPJ da operadora" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none" />
-                  <input value={payerTissForm.tissVersion} onChange={(event) => updatePayerTiss("tissVersion", event.target.value)} placeholder="Versão TISS configurada" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none" />
+                  <PayerTissField id="payer-ans-registration" label="Registro ANS da operadora" helperText="Número oficial da operadora na Agência Nacional de Saúde Suplementar.">
+                    <input
+                      id="payer-ans-registration"
+                      aria-describedby="payer-ans-registration-help"
+                      value={payerTissForm.ansRegistration}
+                      onChange={(event) => updatePayerTiss("ansRegistration", event.target.value)}
+                      placeholder="Ex.: 326305"
+                      className={payerTissFieldClass}
+                    />
+                  </PayerTissField>
+                  <PayerTissField id="payer-operator-code" label="Código da operadora" helperText="Identificador usado pela clínica quando a operadora exige um código próprio.">
+                    <input
+                      id="payer-operator-code"
+                      aria-describedby="payer-operator-code-help"
+                      value={payerTissForm.operatorCode}
+                      onChange={(event) => updatePayerTiss("operatorCode", event.target.value)}
+                      placeholder="Ex.: AMIL"
+                      className={payerTissFieldClass}
+                    />
+                  </PayerTissField>
+                  <PayerTissField id="payer-operator-document" label="CNPJ da operadora" helperText="Documento administrativo da operadora, quando disponível no contrato.">
+                    <input
+                      id="payer-operator-document"
+                      aria-describedby="payer-operator-document-help"
+                      value={payerTissForm.operatorDocumentNumber}
+                      onChange={(event) => updatePayerTiss("operatorDocumentNumber", event.target.value)}
+                      placeholder="Ex.: 12.345.678/0001-95"
+                      className={payerTissFieldClass}
+                    />
+                  </PayerTissField>
                 </div>
+
                 <p className="mt-4 text-xs font-bold uppercase tracking-widest text-indigo-500">Dados do prestador no convênio</p>
                 <div className="mt-3 grid gap-3 md:grid-cols-2">
-                  <select value={payerTissForm.defaultGuideType} onChange={(event) => updatePayerTiss("defaultGuideType", event.target.value)} className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none">
-                    <option value="sp_sadt">Guia SP/SADT</option>
-                    <option value="consulta">Guia de consulta</option>
-                    <option value="other">Outra guia</option>
-                  </select>
-                  <select value={payerTissForm.beneficiaryIdentificationType} onChange={(event) => updatePayerTiss("beneficiaryIdentificationType", event.target.value)} className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none">
-                    <option value="card_number">Carteirinha</option>
-                    <option value="cpf">CPF</option>
-                    <option value="document">Documento</option>
-                    <option value="other">Outro</option>
-                  </select>
-                  <input value={payerTissForm.contractedProviderCode} onChange={(event) => updatePayerTiss("contractedProviderCode", event.target.value)} placeholder="Código do contratado na operadora" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none" />
-                  <input value={payerTissForm.contractedExecutant} onChange={(event) => updatePayerTiss("contractedExecutant", event.target.value)} placeholder="Contratado executante" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none" />
-                  <input value={payerTissForm.operatorProviderCode} onChange={(event) => updatePayerTiss("operatorProviderCode", event.target.value)} placeholder="Código na operadora" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none" />
-                  <input value={payerTissForm.defaultAttendanceType} onChange={(event) => updatePayerTiss("defaultAttendanceType", event.target.value)} placeholder="Tipo de atendimento padrão" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none" />
-                  <input value={payerTissForm.defaultAttendanceRegime} onChange={(event) => updatePayerTiss("defaultAttendanceRegime", event.target.value)} placeholder="Regime padrão" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none" />
-                  <input value={payerTissForm.defaultAttendanceCharacter} onChange={(event) => updatePayerTiss("defaultAttendanceCharacter", event.target.value)} placeholder="Caráter padrão" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none" />
+                  <PayerTissField id="payer-default-guide-type" label="Tipo de guia" helperText="Tipo de guia usado por padrão para este convênio.">
+                    <select
+                      id="payer-default-guide-type"
+                      aria-describedby="payer-default-guide-type-help"
+                      value={payerTissForm.defaultGuideType}
+                      onChange={(event) => updatePayerTiss("defaultGuideType", event.target.value)}
+                      className={payerTissFieldClass}
+                    >
+                      <option value="sp_sadt">Guia SP/SADT</option>
+                      <option value="consulta">Guia de consulta</option>
+                      <option value="other">Outra guia</option>
+                    </select>
+                  </PayerTissField>
+                  <PayerTissField id="payer-beneficiary-identification" label="Tipo de identificação do beneficiário" helperText="Campo usado para validar o paciente nas Pré-guias TISS.">
+                    <select
+                      id="payer-beneficiary-identification"
+                      aria-describedby="payer-beneficiary-identification-help"
+                      value={payerTissForm.beneficiaryIdentificationType}
+                      onChange={(event) => updatePayerTiss("beneficiaryIdentificationType", event.target.value)}
+                      className={payerTissFieldClass}
+                    >
+                      <option value="card_number">Carteirinha</option>
+                      <option value="cpf">CPF</option>
+                      <option value="document">Documento</option>
+                      <option value="other">Outro</option>
+                    </select>
+                  </PayerTissField>
+                  <PayerTissField id="payer-contracted-provider-code" label="Código do prestador na operadora" helperText="Código pelo qual a clínica é identificada no contrato com este convênio.">
+                    <input
+                      id="payer-contracted-provider-code"
+                      aria-describedby="payer-contracted-provider-code-help"
+                      value={payerTissForm.contractedProviderCode}
+                      onChange={(event) => updatePayerTiss("contractedProviderCode", event.target.value)}
+                      placeholder="Ex.: PRESTADOR123"
+                      className={payerTissFieldClass}
+                    />
+                  </PayerTissField>
+                  <PayerTissField id="payer-contracted-executant" label="Nome do prestador no contrato" helperText="Nome, razão social ou contratado executante informado pela operadora.">
+                    <input
+                      id="payer-contracted-executant"
+                      aria-describedby="payer-contracted-executant-help"
+                      value={payerTissForm.contractedExecutant}
+                      onChange={(event) => updatePayerTiss("contractedExecutant", event.target.value)}
+                      placeholder="Ex.: Melhorar Clínica Multidisciplinar"
+                      className={payerTissFieldClass}
+                    />
+                  </PayerTissField>
+                  <PayerTissField id="payer-operator-provider-code" label="Código da clínica na operadora" helperText="Use quando a operadora diferencia código da clínica e código do contratado.">
+                    <input
+                      id="payer-operator-provider-code"
+                      aria-describedby="payer-operator-provider-code-help"
+                      value={payerTissForm.operatorProviderCode}
+                      onChange={(event) => updatePayerTiss("operatorProviderCode", event.target.value)}
+                      placeholder="Ex.: CLINICA-001"
+                      className={payerTissFieldClass}
+                    />
+                  </PayerTissField>
+                  <PayerTissField id="payer-default-attendance-type" label="Tipo de atendimento padrão" helperText="Código administrativo usado na guia quando aplicável.">
+                    <input
+                      id="payer-default-attendance-type"
+                      aria-describedby="payer-default-attendance-type-help"
+                      value={payerTissForm.defaultAttendanceType}
+                      onChange={(event) => updatePayerTiss("defaultAttendanceType", event.target.value)}
+                      placeholder="Ex.: 03"
+                      className={payerTissFieldClass}
+                    />
+                  </PayerTissField>
+                  <PayerTissField id="payer-default-attendance-regime" label="Regime de atendimento padrão" helperText="Código do regime exigido pelo convênio, se houver.">
+                    <input
+                      id="payer-default-attendance-regime"
+                      aria-describedby="payer-default-attendance-regime-help"
+                      value={payerTissForm.defaultAttendanceRegime}
+                      onChange={(event) => updatePayerTiss("defaultAttendanceRegime", event.target.value)}
+                      placeholder="Ex.: 01"
+                      className={payerTissFieldClass}
+                    />
+                  </PayerTissField>
+                  <PayerTissField id="payer-default-attendance-character" label="Caráter de atendimento padrão" helperText="Código do caráter de atendimento usado quando o convênio exige.">
+                    <input
+                      id="payer-default-attendance-character"
+                      aria-describedby="payer-default-attendance-character-help"
+                      value={payerTissForm.defaultAttendanceCharacter}
+                      onChange={(event) => updatePayerTiss("defaultAttendanceCharacter", event.target.value)}
+                      placeholder="Ex.: 1"
+                      className={payerTissFieldClass}
+                    />
+                  </PayerTissField>
+                </div>
+
+                <p className="mt-4 text-xs font-bold uppercase tracking-widest text-indigo-500">Configuração automática do XML TISS</p>
+                <div className="mt-3 rounded-2xl border border-indigo-100 bg-white px-3 py-3">
+                  <p className="text-xs text-slate-500">Versão do XML TISS</p>
+                  <p className="mt-1 text-sm text-slate-900">{OFFICIAL_TISS_XML_STRATEGY.communicationVersion}</p>
+                  <p className="mt-1 text-[11px] leading-4 text-slate-500">
+                    Gerenciada automaticamente pela Verto. A versão é definida pelo gerador oficial e será atualizada somente quando uma nova versão for implementada e validada.
+                  </p>
                 </div>
                 <p className="mt-4 text-xs font-bold uppercase tracking-widest text-indigo-500">Regras TISS e autorização</p>
                 <div className="mt-3 grid gap-2 sm:grid-cols-2">
@@ -1243,7 +1376,7 @@ export function PayerRequirementsPanel({
                     ["allowsMixedMultidisciplinaryGuide", "Permite guia mista multidisciplinar"],
                     ["requiresSeparateGuideBySpecialty", "Exige guia segregada por especialidade"],
                   ].map(([key, label]) => (
-                    <label key={key} className="flex items-center gap-2 rounded-2xl border border-slate-100 bg-white px-3 py-2 text-sm font-semibold text-slate-700">
+                    <label key={key} className="flex items-center gap-2 rounded-2xl border border-slate-100 bg-white px-3 py-2 text-sm font-normal text-slate-700">
                       <input
                         type="checkbox"
                         checked={Boolean((payerTissForm as any)[key])}
@@ -1256,23 +1389,69 @@ export function PayerRequirementsPanel({
                 </div>
                 <p className="mt-4 text-xs font-bold uppercase tracking-widest text-indigo-500">Contatos e observações administrativas</p>
                 <div className="mt-3 grid gap-3 md:grid-cols-2">
-                  <input value={payerTissForm.auditorContactName} onChange={(event) => updatePayerTiss("auditorContactName", event.target.value)} placeholder="Contato do auditor/operadora" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none" />
-                  <input value={payerTissForm.billingEmail} onChange={(event) => updatePayerTiss("billingEmail", event.target.value)} placeholder="E-mail de faturamento" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none" />
-                  <input value={payerTissForm.billingPhone} onChange={(event) => updatePayerTiss("billingPhone", event.target.value)} placeholder="Telefone/WhatsApp administrativo" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none" />
-                  <input value={payerTissForm.operatorPortalUrl} onChange={(event) => updatePayerTiss("operatorPortalUrl", event.target.value)} placeholder="Portal da operadora" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none" />
+                  <PayerTissField id="payer-auditor-contact" label="Contato do auditor/operadora" helperText="Pessoa ou setor de referência para dúvidas administrativas do convênio.">
+                    <input
+                      id="payer-auditor-contact"
+                      aria-describedby="payer-auditor-contact-help"
+                      value={payerTissForm.auditorContactName}
+                      onChange={(event) => updatePayerTiss("auditorContactName", event.target.value)}
+                      placeholder="Ex.: Auditoria Amil"
+                      className={payerTissFieldClass}
+                    />
+                  </PayerTissField>
+                  <PayerTissField id="payer-billing-email" label="E-mail de faturamento" helperText="E-mail usado para contato administrativo com a operadora, quando houver.">
+                    <input
+                      id="payer-billing-email"
+                      aria-describedby="payer-billing-email-help"
+                      value={payerTissForm.billingEmail}
+                      onChange={(event) => updatePayerTiss("billingEmail", event.target.value)}
+                      placeholder="Ex.: faturamento@operadora.com.br"
+                      className={payerTissFieldClass}
+                    />
+                  </PayerTissField>
+                  <PayerTissField id="payer-billing-phone" label="Telefone/WhatsApp administrativo" helperText="Contato administrativo do convênio ou portal de faturamento.">
+                    <input
+                      id="payer-billing-phone"
+                      aria-describedby="payer-billing-phone-help"
+                      value={payerTissForm.billingPhone}
+                      onChange={(event) => updatePayerTiss("billingPhone", event.target.value)}
+                      placeholder="Ex.: (11) 99999-9999"
+                      className={payerTissFieldClass}
+                    />
+                  </PayerTissField>
+                  <PayerTissField id="payer-operator-portal" label="Portal da operadora" helperText="Endereço do portal usado para conferência ou envio manual, se existir.">
+                    <input
+                      id="payer-operator-portal"
+                      aria-describedby="payer-operator-portal-help"
+                      value={payerTissForm.operatorPortalUrl}
+                      onChange={(event) => updatePayerTiss("operatorPortalUrl", event.target.value)}
+                      placeholder="Ex.: https://portal.operadora.com.br"
+                      className={payerTissFieldClass}
+                    />
+                  </PayerTissField>
                 </div>
-                <textarea
-                  value={payerTissForm.administrativeNotes}
-                  onChange={(event) => updatePayerTiss("administrativeNotes", event.target.value)}
-                  placeholder="Observações de envio/manual, contato, portal e operação administrativa"
-                  className="mt-3 min-h-[72px] w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none"
-                />
-                <textarea
-                  value={payerTissForm.specificRules}
-                  onChange={(event) => updatePayerTiss("specificRules", event.target.value)}
-                  placeholder="Observações e regras específicas do convênio"
-                  className="mt-3 min-h-[72px] w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none"
-                />
+                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                  <PayerTissField id="payer-administrative-notes" label="Observações administrativas" helperText="Informações sobre portal, contato, envio manual ou operação administrativa.">
+                    <textarea
+                      id="payer-administrative-notes"
+                      aria-describedby="payer-administrative-notes-help"
+                      value={payerTissForm.administrativeNotes}
+                      onChange={(event) => updatePayerTiss("administrativeNotes", event.target.value)}
+                      placeholder="Ex.: faturamento enviado pelo portal até o 5º dia útil"
+                      className={`${payerTissFieldClass} min-h-[72px]`}
+                    />
+                  </PayerTissField>
+                  <PayerTissField id="payer-specific-rules" label="Regras específicas do convênio" helperText="Regras combinadas com a operadora que ajudam a evitar pendências na Pré-guia.">
+                    <textarea
+                      id="payer-specific-rules"
+                      aria-describedby="payer-specific-rules-help"
+                      value={payerTissForm.specificRules}
+                      onChange={(event) => updatePayerTiss("specificRules", event.target.value)}
+                      placeholder="Ex.: exige autorização ativa e guia assinada"
+                      className={`${payerTissFieldClass} min-h-[72px]`}
+                    />
+                  </PayerTissField>
+                </div>
                 <button
                   type="button"
                   disabled={!selectedPayerId || saving || payerTissLoading}

@@ -286,6 +286,43 @@ test('Tabela de Valores tem rotulos permanentes, reais no formulario e configura
   assert.doesNotMatch(payerPanelCode, /placeholder="Valor negociado em centavos"/);
 });
 
+test('Dados TISS da operadora tem rotulos permanentes e versao oficial automatica', () => {
+  for (const marker of [
+    'htmlFor={id}',
+    'id="payer-ans-registration"',
+    'id="payer-operator-code"',
+    'id="payer-operator-document"',
+    'id="payer-default-guide-type"',
+    'id="payer-beneficiary-identification"',
+    'id="payer-contracted-provider-code"',
+    'id="payer-contracted-executant"',
+    'id="payer-operator-provider-code"',
+    'id="payer-default-attendance-type"',
+    'id="payer-default-attendance-regime"',
+    'id="payer-default-attendance-character"',
+    'id="payer-auditor-contact"',
+    'id="payer-billing-email"',
+    'id="payer-billing-phone"',
+    'id="payer-operator-portal"',
+    'id="payer-administrative-notes"',
+    'id="payer-specific-rules"',
+    'Registro ANS da operadora',
+    'Código da operadora',
+    'CNPJ da operadora',
+    'Código do prestador na operadora',
+    'Nome do prestador no contrato',
+    'Versão do XML TISS',
+    'Gerenciada automaticamente pela Verto',
+    'OFFICIAL_TISS_XML_STRATEGY.communicationVersion',
+  ]) {
+    assert.ok(payerPanelCode.includes(marker), marker);
+  }
+
+  assert.doesNotMatch(payerPanelCode, /updatePayerTiss\("tissVersion"/);
+  assert.doesNotMatch(payerPanelCode, /placeholder="Versão TISS configurada"/);
+  assert.doesNotMatch(payerPanelCode, /Versão TISS não configurada/);
+});
+
 let passed = 0;
 for (const entry of tests) {
   try {

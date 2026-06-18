@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { ActiveFilterBanner } from "./ActiveFilterBanner";
 import { dataService } from "../services/dataService";
+import { getDefaultTissOfficialStrategyDescriptor } from "../services/tissOfficial/capabilities";
 import { formatDateTimeInAppointmentTimezone } from "../utils/scheduling";
 
 type TissPreGuideRow = {
@@ -231,6 +232,7 @@ type ProfileEditorKind = "provider" | "payer" | "professional";
 
 const PAGE_SIZE = 50;
 const OFFICIAL_BATCH_GUIDE_LIMIT = 500;
+const OFFICIAL_TISS_XML_STRATEGY = getDefaultTissOfficialStrategyDescriptor();
 
 const statusMeta: Record<string, { label: string; className: string }> = {
   valid: { label: "Válida", className: "bg-emerald-50 text-emerald-700 ring-emerald-200" },
@@ -721,7 +723,7 @@ export function TissPreGuideTab({
     () => new Set(selectedOfficialRows.map((row) => String(row.patientId || row.patientName || row.snapshot?.beneficiary?.id || row.snapshot?.beneficiary?.name || "")).filter(Boolean)).size,
     [selectedOfficialRows]
   );
-  const selectedOfficialTissVersion = String(selectedOfficialRows[0]?.snapshot?.payer?.tissVersion || selectedOfficialRows[0]?.tissVersion || "04.03.00").trim();
+  const selectedOfficialTissVersion = OFFICIAL_TISS_XML_STRATEGY.communicationVersion;
   const selectedOfficialTooLarge = selectedOfficialRows.length > OFFICIAL_BATCH_GUIDE_LIMIT;
   const selectedOfficialHasMixedPayers = selectedOfficialPayerIds.length > 1;
   const selectedOfficialHasMixedCompetence = selectedOfficialCompetenceMonths.length > 1;
@@ -1089,7 +1091,7 @@ export function TissPreGuideTab({
       const result = await dataService.createTissOfficialDocument({
         payerId: selectedOfficialPayerId,
         competenceMonth,
-        communicationVersion: "04.03.00",
+        communicationVersion: OFFICIAL_TISS_XML_STRATEGY.communicationVersion,
         preGuideIds: selectedOfficialRows.map((row) => row.id).filter(Boolean),
       });
       if (!result?.success || !result.data) {
@@ -2543,7 +2545,7 @@ export function TissPreGuideTab({
                 <DetailField label="Pacientes únicos" value={String(selectedOfficialUniquePatients)} />
                 <DetailField label="Guias" value={String(selectedOfficialRows.length)} />
                 <DetailField label="Valor total" value={formatCurrency(selectedOfficialTotalAmount)} />
-                <DetailField label="Versão TISS" value={selectedOfficialTissVersion} />
+                <DetailField label="Versão do XML TISS" value={selectedOfficialTissVersion} />
                 <DetailField label="Itens bloqueados fora do lote" value={String(blockedOfficialRows.length)} />
                 <DetailField label="Envio à operadora" value="Não enviado" />
               </div>
@@ -2714,7 +2716,7 @@ export function TissPreGuideTab({
                   <details className="rounded-md border border-slate-200 bg-white">
                     <summary className="cursor-pointer px-3 py-2 text-sm font-semibold text-slate-800">Detalhes técnicos</summary>
                     <div className="grid gap-4 border-t border-slate-100 p-4 text-sm sm:grid-cols-3">
-                      <DetailField label="Comunicação" value={fieldValue(officialDocumentDetail.communicationVersion)} />
+                      <DetailField label="Versão do XML TISS" value={fieldValue(officialDocumentDetail.communicationVersion)} />
                       <DetailField label="Conteúdo/estrutura" value={fieldValue(officialDocumentDetail.contentStructureVersion)} />
                       <DetailField label="TUSS" value={fieldValue(officialDocumentDetail.tussVersion)} />
                       <DetailField label="XSD raiz" value={fieldValue(officialDocumentDetail.schemaRootFile)} />

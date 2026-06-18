@@ -133,6 +133,9 @@ import {
   generateAndValidateOfficialTissDocument
 } from './src/services/tissOfficial/officialTissDocumentService';
 import {
+  getDefaultTissOfficialStrategyDescriptor
+} from './src/services/tissOfficial/capabilities';
+import {
   sanitizeOfficialXmlFilePart
 } from './src/services/tissOfficial/security';
 import {
@@ -34961,7 +34964,8 @@ async function startServer() {
       if (!isUuid(organizationId) || !isUuid(generatedBy)) return res.status(400).json(payerSafeError(400));
       const payerId = sanitizeString(req.body?.payerId || req.body?.payer_id, 120);
       const competenceMonth = normalizeTissXmlCompetenceMonth(req.body?.competenceMonth || req.body?.competence_month);
-      const communicationVersion = sanitizeString(req.body?.communicationVersion || req.body?.communication_version || '04.03.00', 20);
+      const officialTissStrategy = getDefaultTissOfficialStrategyDescriptor();
+      const communicationVersion = sanitizeString(req.body?.communicationVersion || req.body?.communication_version || officialTissStrategy.communicationVersion, 20);
       if (!isUuid(payerId)) {
         return res.status(400).json({
           success: false,
@@ -34976,7 +34980,7 @@ async function startServer() {
           error: 'Informe uma competência válida para gerar o XML TISS oficial.'
         });
       }
-      if (!['04.03.00', '4.03.00'].includes(communicationVersion)) {
+      if (![officialTissStrategy.communicationVersion, '4.03.00'].includes(communicationVersion)) {
         return res.status(422).json({
           success: false,
           code: 'TISS_OFFICIAL_VERSION_NOT_SUPPORTED',
@@ -35033,9 +35037,9 @@ async function startServer() {
         competenceMonth,
         batchNumber: '',
         generatedBy,
-        communicationVersion: '04.03.00',
-        contentStructureVersion: '202511',
-        tussVersion: '202605'
+        communicationVersion: officialTissStrategy.communicationVersion,
+        contentStructureVersion: officialTissStrategy.contentStructureVersion,
+        tussVersion: officialTissStrategy.tussVersion
       };
       const idempotencyKey = sanitizeString(
         req.body?.idempotencyKey || req.body?.idempotency_key,

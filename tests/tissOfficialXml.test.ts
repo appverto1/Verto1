@@ -7,6 +7,7 @@ import {
   deriveOfficialTissBatchNumber,
   generateAndValidateOfficialTissDocument
 } from "../src/services/tissOfficial/officialTissDocumentService";
+import { getDefaultTissOfficialStrategyDescriptor } from "../src/services/tissOfficial/capabilities";
 import { communication040300Strategy } from "../src/services/tissOfficial/versions/communication040300/generator";
 import { validateOfficialTissXml040300 } from "../src/services/tissOfficial/versions/communication040300/validator";
 import { calculateTissEpilogueHash, sha256Hex } from "../src/services/tissOfficial/security";
@@ -122,6 +123,24 @@ function validInput(preGuides = [validPreGuide()]) {
 type Test = { name: string; fn: () => void | Promise<void> };
 const tests: Test[] = [];
 const test = (name: string, fn: Test["fn"]) => tests.push({ name, fn });
+
+test("versao do XML oficial vem da estrategia 04.03.00, nao do cadastro editavel do pagador", () => {
+  const descriptor = getDefaultTissOfficialStrategyDescriptor();
+  assert.equal(descriptor.strategyKey, "communication040300");
+  assert.equal(descriptor.communicationVersion, "04.03.00");
+  assert.equal(descriptor.communicationVersion, communication040300Strategy.communicationVersion);
+
+  assert.match(uiCode, /getDefaultTissOfficialStrategyDescriptor/);
+  assert.match(uiCode, /OFFICIAL_TISS_XML_STRATEGY\.communicationVersion/);
+  assert.match(uiCode, /Versão do XML TISS/);
+  assert.doesNotMatch(uiCode, /selectedOfficialRows\[0\]\?\.snapshot\?\.payer\?\.tissVersion/);
+  assert.doesNotMatch(uiCode, /selectedOfficialRows\[0\]\?\.tissVersion \|\| "04\.03\.00"/);
+
+  assert.match(serverCode, /getDefaultTissOfficialStrategyDescriptor/);
+  assert.match(serverCode, /communicationVersion:\s*officialTissStrategy\.communicationVersion/);
+  assert.match(serverCode, /contentStructureVersion:\s*officialTissStrategy\.contentStructureVersion/);
+  assert.match(serverCode, /tussVersion:\s*officialTissStrategy\.tussVersion/);
+});
 
 test("gera XML oficial SP/SADT 04.03.00 com raiz, namespace e sequência do XSD", async () => {
   const result = await generateAndValidateOfficialTissDocument(validInput());
