@@ -20,6 +20,7 @@ import {
   Filter,
   Download,
   FileText,
+  FileSpreadsheet,
   DoorOpen,
   Edit2,
   Trash2,
@@ -46,6 +47,7 @@ import {
   XCircle,
   Paperclip,
   KeyRound,
+  ShieldCheck,
 } from "lucide-react";
 import { TeamManagement } from "./TeamManagement";
 import { InvitationModal } from "./InvitationModal";
@@ -113,6 +115,58 @@ import {
   normalizeScheduleLocationType,
   type ScheduleLocationType,
 } from "../utils/scheduling";
+
+type DashboardTab =
+  | "dashboard"
+  | "team"
+  | "financial"
+  | "patients"
+  | "agenda"
+  | "closure"
+  | "conference"
+  | "payers"
+  | "rooms"
+  | "protocols"
+  | "settings"
+  | "logs"
+  | "billing"
+  | "flow"
+  | "birthdays";
+
+type ConferenceNavigationTab =
+  | "sessions"
+  | "patient"
+  | "professional"
+  | "payer"
+  | "service"
+  | "procedure"
+  | "tuss"
+  | "guide"
+  | "preGuides"
+  | "notBillable"
+  | "exported"
+  | "reopened";
+
+type TissPreGuidePanel = "preGuides" | "batchDrafts" | "xmlDrafts";
+type PayerNavigationSection = "convenios" | "tuss" | "prices" | "rules";
+
+type FinancialNavigationIntent = {
+  tab: DashboardTab;
+  breadcrumb: string[];
+  conferenceTab?: ConferenceNavigationTab;
+  tissPanel?: TissPreGuidePanel;
+  payerSection?: PayerNavigationSection;
+};
+
+type NavigationNode = {
+  id: string;
+  label: string;
+  icon: React.ComponentType<{ size?: number }>;
+  badge?: string;
+  tab?: DashboardTab;
+  intent?: FinancialNavigationIntent;
+  children?: NavigationNode[];
+};
 import {
   PATIENT_FINANCIAL_BILLING_MODE_OPTIONS,
   PATIENT_FINANCIAL_PAYMENT_METHOD_OPTIONS,
@@ -375,11 +429,6 @@ export function CoordinatorDashboard({
     return true;
   };
 
-  const filterTabsByRole = <T extends { id: string }>(items: T[]) =>
-    items.filter((item) => {
-      return canAccessTab(item.id);
-    });
-
   const [activeTab, setActiveTab] = useState<
     | "dashboard"
     | "team"
@@ -402,31 +451,58 @@ export function CoordinatorDashboard({
   const [showBillingDetails, setShowBillingDetails] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(false);
+  const [expandedNavigationSections, setExpandedNavigationSections] = useState<Record<string, boolean>>({
+    "finance-root": true,
+    "finance-billing-config": true,
+    "finance-prebilling": true,
+    "finance-closing": true,
+    "finance-clinical": false,
+    "finance-reports": false,
+  });
+  const [financialNavigationContext, setFinancialNavigationContext] = useState<FinancialNavigationIntent & { intentKey: number }>({
+    tab: "financial",
+    breadcrumb: ["Financeiro", "Dashboard Financeiro"],
+    intentKey: 0,
+  });
   const [therapistMembersById, setTherapistMembersById] = useState<Record<string, any>>({});
   const [patientTherapistFilter, setPatientTherapistFilter] = useState<string>("all");
   const [patientQuickFilter, setPatientQuickFilter] = useState<"all" | "birthdaysToday">("all");
 
-  const navigateToTab = (
-    tab:
-      | "dashboard"
-      | "team"
-      | "financial"
-      | "patients"
-      | "agenda"
-      | "closure"
-      | "conference"
-      | "payers"
-      | "rooms"
-      | "protocols"
-      | "settings"
-      | "logs"
-      | "billing"
-      | "flow"
-      | "birthdays",
-  ) => {
+  const defaultFinancialNavigationIntent = (tab: DashboardTab): FinancialNavigationIntent | null => {
+    if (tab === "financial") return { tab, breadcrumb: ["Financeiro", "Dashboard Financeiro"] };
+    if (tab === "payers") {
+      return {
+        tab,
+        breadcrumb: ["Financeiro", "Convênios e Faturamento", "Convênios"],
+        payerSection: "convenios",
+      };
+    }
+    if (tab === "conference") {
+      return {
+        tab,
+        breadcrumb: ["Financeiro", "Pré-Faturamento", "Conferência"],
+        conferenceTab: "sessions",
+      };
+    }
+    if (tab === "closure") {
+      return { tab, breadcrumb: ["Financeiro", "Pré-Faturamento", "Pendências"] };
+    }
+    return null;
+  };
+
+  const navigateToTab = (tab: DashboardTab, intent?: Partial<FinancialNavigationIntent>) => {
     if (!canAccessTab(tab)) {
       setActiveTab("dashboard");
       return;
+    }
+    const navigationIntent = intent?.breadcrumb
+      ? { tab, ...intent, breadcrumb: intent.breadcrumb } as FinancialNavigationIntent
+      : defaultFinancialNavigationIntent(tab);
+    if (navigationIntent) {
+      setFinancialNavigationContext((current) => ({
+        ...navigationIntent,
+        intentKey: current.intentKey + 1,
+      }));
     }
     setActiveTab(tab);
     setTabHistory((prev) => {
@@ -6119,12 +6195,28 @@ export function CoordinatorDashboard({
     </div>
   );
 
-  const navigationGroups: Array<Array<{
-    id: string;
-    label: string;
-    icon: React.ComponentType<{ size?: number }>;
-    badge?: string;
-  }>> = [
+  const payerIntent = (section: PayerNavigationSection, label: string): FinancialNavigationIntent => ({
+    tab: "payers",
+    breadcrumb: ["Financeiro", "Convênios e Faturamento", label],
+    payerSection: section,
+  });
+  const conferenceIntent = (
+    label: string,
+    conferenceTab: ConferenceNavigationTab,
+    tissPanel?: TissPreGuidePanel,
+    group: "Pré-Faturamento" | "Fechamento" = "Pré-Faturamento",
+  ): FinancialNavigationIntent => ({
+    tab: "conference",
+    breadcrumb: ["Financeiro", group, label],
+    conferenceTab,
+    tissPanel,
+  });
+  const financialIntent = (label: string): FinancialNavigationIntent => ({
+    tab: "financial",
+    breadcrumb: ["Financeiro", label],
+  });
+
+  const navigationGroups: NavigationNode[][] = [
     [{ id: "dashboard", label: "Painel", icon: LayoutDashboard }],
     [
       { id: "patients", label: "Pacientes", icon: ClipboardList },
@@ -6136,18 +6228,122 @@ export function CoordinatorDashboard({
     ],
     [{ id: "protocols", label: "Protocolos", icon: BookOpenCheck }],
     [
-      { id: "financial", label: "Financeiro", icon: DollarSign, badge: "BETA" },
-      { id: "payers", label: "Convênios", icon: KeyRound },
-      { id: "closure", label: "Fechamento", icon: ReceiptText },
-      { id: "conference", label: "Pré-faturamento", icon: FileChartColumnIncreasing },
+      {
+        id: "finance-root",
+        label: "Financeiro",
+        icon: DollarSign,
+        badge: "BETA",
+        children: [
+          { id: "finance-dashboard", label: "Dashboard Financeiro", icon: LayoutDashboard, tab: "financial", intent: financialIntent("Dashboard Financeiro") },
+          {
+            id: "finance-billing-config",
+            label: "Convênios e Faturamento",
+            icon: KeyRound,
+            children: [
+              { id: "payer-convenios", label: "Convênios", icon: KeyRound, tab: "payers", intent: payerIntent("convenios", "Convênios") },
+              { id: "payer-tuss", label: "De/Para TUSS", icon: ClipboardCheck, tab: "payers", intent: payerIntent("tuss", "De/Para TUSS") },
+              { id: "payer-prices", label: "Tabela de Valores", icon: FileSpreadsheet, tab: "payers", intent: payerIntent("prices", "Tabela de Valores") },
+              { id: "payer-rules", label: "Regras TISS", icon: ShieldCheck, tab: "payers", intent: payerIntent("rules", "Regras TISS") },
+            ],
+          },
+          {
+            id: "finance-prebilling",
+            label: "Pré-Faturamento",
+            icon: FileChartColumnIncreasing,
+            children: [
+              { id: "prebilling-preguides", label: "Pré-guias TISS", icon: ClipboardCheck, tab: "conference", intent: conferenceIntent("Pré-guias TISS", "preGuides", "preGuides") },
+              { id: "prebilling-conference", label: "Conferência", icon: Search, tab: "conference", intent: conferenceIntent("Conferência", "sessions") },
+              { id: "prebilling-pending", label: "Pendências", icon: AlertCircle, tab: "conference", intent: conferenceIntent("Pendências", "sessions") },
+            ],
+          },
+          {
+            id: "finance-closing",
+            label: "Fechamento",
+            icon: ReceiptText,
+            children: [
+              { id: "closing-tiss", label: "Fechamento TISS", icon: ReceiptText, tab: "conference", intent: conferenceIntent("Fechamento TISS", "preGuides", "preGuides", "Fechamento") },
+              { id: "closing-batches", label: "Lotes Rascunho", icon: ClipboardList, tab: "conference", intent: conferenceIntent("Lotes Rascunho", "preGuides", "batchDrafts", "Fechamento") },
+              { id: "closing-xml", label: "XML Rascunhos", icon: FileText, tab: "conference", intent: conferenceIntent("XML Rascunhos", "preGuides", "xmlDrafts", "Fechamento") },
+            ],
+          },
+          {
+            id: "finance-clinical",
+            label: "Financeiro Clínico",
+            icon: PieChart,
+            children: [
+              { id: "clinical-revenue", label: "Receitas", icon: ArrowUpRight, tab: "financial", intent: financialIntent("Receitas") },
+              { id: "clinical-expenses", label: "Despesas", icon: ArrowDownRight, tab: "financial", intent: financialIntent("Despesas") },
+              { id: "clinical-cashflow", label: "Fluxo de Caixa", icon: TrendingUp, tab: "financial", intent: financialIntent("Fluxo de Caixa") },
+              { id: "clinical-transfers", label: "Repasses", icon: CreditCard, tab: "financial", intent: financialIntent("Repasses") },
+            ],
+          },
+          {
+            id: "finance-reports",
+            label: "Relatórios",
+            icon: FileChartColumnIncreasing,
+            children: [
+              { id: "report-production", label: "Produção", icon: PieChart, tab: "financial", intent: financialIntent("Relatórios de Produção") },
+              { id: "report-billing", label: "Faturamento", icon: ReceiptText, tab: "financial", intent: financialIntent("Relatórios de Faturamento") },
+              { id: "report-payers", label: "Convênios", icon: KeyRound, tab: "payers", intent: payerIntent("convenios", "Relatórios de Convênios") },
+            ],
+          },
+        ],
+      },
     ],
     [{ id: "flow", label: "Verto Flow", icon: Zap, badge: "EM BREVE" }],
     [{ id: "logs", label: "Log de Atividades", icon: History }],
   ];
 
+  const filterNavigationNode = (item: NavigationNode): NavigationNode | null => {
+    if (item.children?.length) {
+      const children = item.children.map(filterNavigationNode).filter(Boolean) as NavigationNode[];
+      return children.length ? { ...item, children } : null;
+    }
+    const targetTab = item.tab || (item.id as DashboardTab);
+    return canAccessTab(targetTab) ? item : null;
+  };
+
   const visibleNavigationGroups = navigationGroups
-    .map((group) => filterTabsByRole(group))
+    .map((group) => group.map(filterNavigationNode).filter(Boolean) as NavigationNode[])
     .filter((group) => group.length > 0);
+
+  const isFinancialBreadcrumbActive = (breadcrumb?: string[]) =>
+    Boolean(
+      breadcrumb?.length &&
+        financialNavigationContext.breadcrumb.join(" > ") === breadcrumb.join(" > "),
+    );
+
+  const isNavigationNodeActive = (item: NavigationNode): boolean => {
+    if (item.intent?.breadcrumb) return activeTab === item.intent.tab && isFinancialBreadcrumbActive(item.intent.breadcrumb);
+    if (item.tab) return activeTab === item.tab;
+    return Boolean(item.children?.some(isNavigationNodeActive));
+  };
+
+  const toggleNavigationSection = (itemId: string) => {
+    setExpandedNavigationSections((current) => ({
+      ...current,
+      [itemId]: !current[itemId],
+    }));
+  };
+
+  const handleNavigationNodeSelect = (item: NavigationNode) => {
+    if (item.children?.length) {
+      toggleNavigationSection(item.id);
+      return false;
+    }
+    const targetTab = item.intent?.tab || item.tab || (item.id as DashboardTab);
+    navigateToTab(targetTab, item.intent);
+    return true;
+  };
+
+  const findFirstNavigationLeaf = (item: NavigationNode): NavigationNode | null => {
+    if (!item.children?.length) return item;
+    for (const child of item.children) {
+      const leaf = findFirstNavigationLeaf(child);
+      if (leaf) return leaf;
+    }
+    return null;
+  };
 
   const renderNavigationGroups = ({
     expanded,
@@ -6156,41 +6352,72 @@ export function CoordinatorDashboard({
   }: {
     expanded: boolean;
     iconSize: number;
-    onNavigate: (tabId: string) => void;
-  }) => (
-    <div className="space-y-3">
-      {visibleNavigationGroups.map((group, groupIndex) => (
-        <div key={`navigation-group-${groupIndex}`} className="space-y-1">
-          {group.map((item) => (
-            <button
-              key={item.id}
-              onClick={() => onNavigate(item.id)}
-              className={`w-full flex items-center ${
-                expanded ? "gap-3 px-3" : "justify-center"
-              } min-h-10 py-2.5 rounded-xl transition-all font-medium text-sm ${
-                activeTab === item.id
-                  ? "text-[#7a32fc] bg-purple-50 shadow-sm"
+    onNavigate?: () => void;
+  }) => {
+    const renderNode = (item: NavigationNode, depth = 0): React.ReactNode => {
+      const hasChildren = Boolean(item.children?.length);
+      const isOpen = expandedNavigationSections[item.id] !== false;
+      const isActive = isNavigationNodeActive(item);
+      const Icon = item.icon;
+      const indentClass = depth === 0 ? "" : depth === 1 ? "ml-3" : "ml-6";
+
+      return (
+        <div key={item.id} className={depth === 0 ? "space-y-1" : "space-y-1"}>
+          <button
+            type="button"
+            onClick={() => {
+              const collapsedLeaf = !expanded && hasChildren ? findFirstNavigationLeaf(item) : null;
+              const navigated = collapsedLeaf ? handleNavigationNodeSelect(collapsedLeaf) : handleNavigationNodeSelect(item);
+              if (navigated) onNavigate?.();
+            }}
+            className={`w-full flex items-center ${
+              expanded ? `gap-3 px-3 ${indentClass}` : "justify-center"
+            } min-h-10 py-2.5 rounded-xl transition-all font-medium ${depth > 0 ? "text-xs" : "text-sm"} ${
+              isActive
+                ? "text-[#7a32fc] bg-purple-50 shadow-sm"
+                : hasChildren && depth > 0
+                  ? "text-slate-500 hover:text-slate-900 hover:bg-slate-50"
                   : "text-slate-400 hover:text-slate-900 hover:bg-slate-50"
-              }`}
-              title={!expanded ? item.label : ""}
-            >
-              <item.icon size={iconSize} />
-              {expanded && (
-                <>
-                  <span className="min-w-0 truncate">{item.label}</span>
-                  {item.badge && (
-                    <span className="ml-auto shrink-0 rounded-full bg-amber-400 px-1.5 py-0.5 text-[8px] font-black text-amber-950 shadow-sm shadow-amber-300/50 ring-1 ring-amber-500/30">
-                      {item.badge}
-                    </span>
-                  )}
-                </>
-              )}
-            </button>
-          ))}
+            }`}
+            title={!expanded ? item.label : ""}
+          >
+            <Icon size={depth > 0 ? Math.max(14, iconSize - 3) : iconSize} />
+            {expanded && (
+              <>
+                <span className="min-w-0 truncate">{item.label}</span>
+                {item.badge && (
+                  <span className="ml-auto shrink-0 rounded-full bg-amber-400 px-1.5 py-0.5 text-[8px] font-black text-amber-950 shadow-sm shadow-amber-300/50 ring-1 ring-amber-500/30">
+                    {item.badge}
+                  </span>
+                )}
+                {hasChildren && (
+                  <ChevronRight
+                    size={14}
+                    className={`ml-auto shrink-0 transition-transform ${isOpen ? "rotate-90" : ""}`}
+                  />
+                )}
+              </>
+            )}
+          </button>
+          {expanded && hasChildren && isOpen && (
+            <div className="space-y-1">
+              {item.children?.map((child) => renderNode(child, depth + 1))}
+            </div>
+          )}
         </div>
-      ))}
-    </div>
-  );
+      );
+    };
+
+    return (
+      <div className="space-y-3">
+        {visibleNavigationGroups.map((group, groupIndex) => (
+          <div key={`navigation-group-${groupIndex}`} className="space-y-1">
+            {group.map((item) => renderNode(item))}
+          </div>
+        ))}
+      </div>
+    );
+  };
 
   if (view === "patient" && selectedPatientId) {
     const patient = allPatients.find(
@@ -6246,8 +6473,7 @@ export function CoordinatorDashboard({
             {renderNavigationGroups({
               expanded: patientSidebarExpanded,
               iconSize: 20,
-              onNavigate: (tabId) => {
-                navigateToTab(tabId as any);
+              onNavigate: () => {
                 setView("home");
               },
             })}
@@ -6405,8 +6631,7 @@ export function CoordinatorDashboard({
                     {renderNavigationGroups({
                       expanded: true,
                       iconSize: 18,
-                      onNavigate: (tabId) => {
-                        navigateToTab(tabId as any);
+                      onNavigate: () => {
                         setView("home");
                         setIsMobileMenuOpen(false);
                       },
@@ -6570,7 +6795,6 @@ export function CoordinatorDashboard({
           {renderNavigationGroups({
             expanded: isSidebarExpanded,
             iconSize: 20,
-            onNavigate: (tabId) => navigateToTab(tabId as any),
           })}
         </nav>
 
@@ -6629,14 +6853,18 @@ export function CoordinatorDashboard({
             )}
             <div>
               <p className={`text-[10px] font-bold uppercase tracking-widest mb-1 ${theme === "dark" ? "text-slate-300" : "text-slate-500"}`}>
-                {activeTab === "rooms" && !isEditingRooms
+                {["financial", "payers", "conference", "closure"].includes(activeTab)
+                  ? financialNavigationContext.breadcrumb.join(" > ")
+                  : activeTab === "rooms" && !isEditingRooms
                   ? "Salas"
                   : activeTab === "dashboard"
                     ? "Painel"
                     : `Páginas / ${tabLabels[activeTab] || "Painel"}`}
               </p>
               <h1 className={`text-base lg:text-2xl font-semibold tracking-tight ${theme === "dark" ? "text-slate-100" : "text-slate-900"} ${activeTab === "dashboard" ? "max-w-[980px] leading-snug" : "capitalize"}`}>
-                {activeTab === "rooms" && !isEditingRooms
+                {["financial", "payers", "conference", "closure"].includes(activeTab)
+                  ? financialNavigationContext.breadcrumb[financialNavigationContext.breadcrumb.length - 1] || tabLabels[activeTab]
+                  : activeTab === "rooms" && !isEditingRooms
                   ? "Reservas de Sala"
                   : activeTab === "dashboard"
                     ? "Visão geral"
@@ -6732,8 +6960,7 @@ export function CoordinatorDashboard({
                   {renderNavigationGroups({
                     expanded: true,
                     iconSize: 18,
-                    onNavigate: (tabId) => {
-                      navigateToTab(tabId as any);
+                    onNavigate: () => {
                       setIsMobileMenuOpen(false);
                     },
                   })}
@@ -7410,7 +7637,7 @@ export function CoordinatorDashboard({
                   {!isReceptionist && (
                     <button
                       type="button"
-                      onClick={() => navigateToTab("payers")}
+                      onClick={() => navigateToTab("payers", payerIntent("convenios", "Convênios"))}
                       className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-violet-200 hover:text-[#7a32fc]"
                     >
                       <KeyRound size={18} /> Convênios
@@ -8375,9 +8602,20 @@ export function CoordinatorDashboard({
                   professionals={Object.values(therapistMembersById)}
                   payers={clinicPayers}
                   canExport={!isTherapist}
+                  initialTab={financialNavigationContext.conferenceTab}
+                  tissInitialPanel={financialNavigationContext.tissPanel}
+                  navigationIntentKey={financialNavigationContext.intentKey}
                   onOpenAppointment={openAppointmentFromAdministrativeFlow}
                   onOpenPatient={openPatientEditFromAdministrativeFlow}
-                  onNavigatePayers={() => navigateToTab("payers")}
+                  onNavigatePayers={(section = "convenios") => {
+                    const labels: Record<PayerNavigationSection, string> = {
+                      convenios: "Convênios",
+                      tuss: "De/Para TUSS",
+                      prices: "Tabela de Valores",
+                      rules: "Regras TISS",
+                    };
+                    navigateToTab("payers", payerIntent(section, labels[section]));
+                  }}
                   onNavigateSettings={() => navigateToTab("settings")}
                   onNavigateProfessionals={() => navigateToTab("team")}
                   onOpenReport={(appointment) =>
@@ -8398,7 +8636,10 @@ export function CoordinatorDashboard({
                 exit={{ opacity: 0, y: -20 }}
                 className="space-y-6"
               >
-                <PayerRequirementsPanel />
+                <PayerRequirementsPanel
+                  initialSection={financialNavigationContext.payerSection}
+                  navigationIntentKey={financialNavigationContext.intentKey}
+                />
               </motion.div>
             )}
             {activeTab === "billing" && (

@@ -173,9 +173,11 @@ type TissPreGuideTabProps = {
   patientId?: string;
   professionalId?: string;
   payerId?: string;
+  initialPanel?: "preGuides" | "batchDrafts" | "xmlDrafts";
+  navigationIntentKey?: number;
   onOpenAppointment?: (row: TissPreGuideRow) => void;
   onOpenPatient?: (row: TissPreGuideRow) => void;
-  onNavigatePayers?: () => void;
+  onNavigatePayers?: (section?: "convenios" | "tuss" | "prices" | "rules") => void;
   onNavigateSettings?: () => void;
   onNavigateProfessionals?: () => void;
 };
@@ -514,6 +516,8 @@ export function TissPreGuideTab({
   patientId = "",
   professionalId = "",
   payerId = "",
+  initialPanel,
+  navigationIntentKey,
   onOpenAppointment,
   onOpenPatient,
   onNavigatePayers,
@@ -561,6 +565,10 @@ export function TissPreGuideTab({
   const [highlightedXmlDraftId, setHighlightedXmlDraftId] = useState("");
   const [revenueCycleEvents, setRevenueCycleEvents] = useState<TissRevenueCycleEventRow[]>([]);
   const [revenueCycleEventsLoading, setRevenueCycleEventsLoading] = useState(false);
+
+  useEffect(() => {
+    if (initialPanel) setActivePanel(initialPanel);
+  }, [initialPanel, navigationIntentKey]);
 
   const cards = useMemo(() => [
     { key: "valid" as const, label: "Pré-guias válidas", value: Number(kpis.valid || 0), tone: "text-emerald-700" },
@@ -1253,11 +1261,11 @@ export function TissPreGuideTab({
     }
     if (code === "PAYER_TUSS_MAPPING_MISSING" || code === "PAYER_TUSS_MAPPING_EXPIRED" || code === "PAYER_PROCEDURE_PRICE_MISSING" || code === "PAYER_PROCEDURE_PRICE_CONFLICT") {
       return {
-        label: "Configurar convênio",
+        label: code.includes("PRICE") ? "Tabela de Valores" : "Configurar convênio",
         onClick: () => {
           if (onNavigatePayers) {
             setDetail(null);
-            onNavigatePayers();
+            onNavigatePayers(code.includes("PRICE") ? "prices" : "tuss");
             return;
           }
           void openProfileEditor("payer");
@@ -1270,7 +1278,7 @@ export function TissPreGuideTab({
         onClick: () => {
           if (onNavigatePayers) {
             setDetail(null);
-            onNavigatePayers();
+            onNavigatePayers("rules");
             return;
           }
           void openProfileEditor("payer");
@@ -2607,7 +2615,11 @@ export function TissPreGuideTab({
             <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 px-5 py-4">
               <button
                 type="button"
-                onClick={profileEditor === "provider" ? onNavigateSettings : profileEditor === "payer" ? onNavigatePayers : onNavigateProfessionals}
+                onClick={() => {
+                  if (profileEditor === "provider") onNavigateSettings?.();
+                  else if (profileEditor === "payer") onNavigatePayers?.("rules");
+                  else onNavigateProfessionals?.();
+                }}
                 className="text-sm font-medium text-indigo-700 hover:text-indigo-800"
               >
                 {profileEditorMeta?.full || "Abrir cadastro completo"}

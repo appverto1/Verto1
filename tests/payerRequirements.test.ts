@@ -169,14 +169,38 @@ test('UI expõe configuração, agenda e fechamento sem IDs técnicos ou HTML pe
   assert.match(coordinatorCode, /PayerRequirementsPanel/);
   assert.match(coordinatorCode, /payers:\s*"clinic-settings"/);
   assert.match(coordinatorCode, /payers:\s*"Convênios"/);
-  assert.match(coordinatorCode, /id:\s*"payers", label:\s*"Convênios", icon:\s*KeyRound/);
+  const navigationSection = coordinatorCode.slice(
+    coordinatorCode.indexOf('const navigationGroups'),
+    coordinatorCode.indexOf('const filterNavigationNode'),
+  );
+  assert.match(navigationSection, /id:\s*"finance-root"[\s\S]*label:\s*"Financeiro"/);
+  assert.match(navigationSection, /id:\s*"finance-dashboard"[\s\S]*label:\s*"Dashboard Financeiro"/);
+  assert.match(navigationSection, /id:\s*"finance-billing-config"[\s\S]*label:\s*"Convênios e Faturamento"/);
+  assert.match(navigationSection, /id:\s*"payer-convenios"[\s\S]*label:\s*"Convênios"/);
+  assert.match(navigationSection, /id:\s*"payer-tuss"[\s\S]*label:\s*"De\/Para TUSS"/);
+  assert.match(navigationSection, /id:\s*"payer-prices"[\s\S]*label:\s*"Tabela de Valores"/);
+  assert.match(navigationSection, /id:\s*"payer-rules"[\s\S]*label:\s*"Regras TISS"/);
+  assert.match(navigationSection, /id:\s*"finance-prebilling"[\s\S]*label:\s*"Pré-Faturamento"/);
+  assert.match(navigationSection, /id:\s*"prebilling-preguides"[\s\S]*label:\s*"Pré-guias TISS"/);
+  assert.match(navigationSection, /id:\s*"prebilling-conference"[\s\S]*label:\s*"Conferência"/);
+  assert.match(navigationSection, /id:\s*"prebilling-pending"[\s\S]*label:\s*"Pendências"/);
+  assert.match(navigationSection, /id:\s*"finance-closing"[\s\S]*label:\s*"Fechamento"/);
+  assert.match(navigationSection, /id:\s*"closing-tiss"[\s\S]*label:\s*"Fechamento TISS"/);
+  assert.match(navigationSection, /id:\s*"closing-batches"[\s\S]*label:\s*"Lotes Rascunho"/);
+  assert.match(navigationSection, /id:\s*"closing-xml"[\s\S]*label:\s*"XML Rascunhos"/);
+  assert.match(navigationSection, /id:\s*"finance-clinical"[\s\S]*label:\s*"Financeiro Clínico"/);
+  assert.match(navigationSection, /id:\s*"finance-reports"[\s\S]*label:\s*"Relatórios"/);
+  assert.match(coordinatorCode, /expandedNavigationSections/);
+  assert.match(coordinatorCode, /financialNavigationContext\.breadcrumb\.join\(" > "\)/);
   const financialSection = coordinatorCode.slice(
     coordinatorCode.indexOf('activeTab === "financial"'),
     coordinatorCode.indexOf('activeTab === "flow"'),
   );
-  assert.match(financialSection, /navigateToTab\("payers"\)/);
+  assert.match(financialSection, /navigateToTab\("payers", payerIntent\("convenios", "Convênios"\)\)/);
   assert.match(financialSection, /<KeyRound size=\{18\} \/> Convênios/);
-  assert.match(coordinatorCode, /activeTab === "payers"[\s\S]*?<PayerRequirementsPanel \/>/);
+  assert.match(coordinatorCode, /activeTab === "payers"[\s\S]*?<PayerRequirementsPanel[\s\S]*initialSection=\{financialNavigationContext\.payerSection\}/);
+  assert.match(coordinatorCode, /activeTab === "conference"[\s\S]*?<MonthlyConferenceCenter[\s\S]*initialTab=\{financialNavigationContext\.conferenceTab\}/);
+  assert.match(coordinatorCode, /tissInitialPanel=\{financialNavigationContext\.tissPanel\}/);
   assert.match(payerPanelCode, /Configuração de Convênios/);
   assert.match(payerPanelCode, /Cadastro avançado de operadoras/);
   assert.match(payerPanelCode, /Adicionar convênio/);

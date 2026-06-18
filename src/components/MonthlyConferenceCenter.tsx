@@ -122,10 +122,13 @@ type MonthlyConferenceCenterProps = {
   professionals?: any[];
   payers?: any[];
   canExport?: boolean;
+  initialTab?: ConferenceTab;
+  tissInitialPanel?: "preGuides" | "batchDrafts" | "xmlDrafts";
+  navigationIntentKey?: number;
   onOpenAppointment?: (row: ConferenceRow) => void;
   onOpenPatient?: (row: ConferenceRow) => void;
   onOpenReport?: (row: ConferenceRow) => void;
-  onNavigatePayers?: () => void;
+  onNavigatePayers?: (section?: "convenios" | "tuss" | "prices" | "rules") => void;
   onNavigateSettings?: () => void;
   onNavigateProfessionals?: () => void;
 };
@@ -451,6 +454,9 @@ export function MonthlyConferenceCenter({
   professionals = [],
   payers = [],
   canExport = false,
+  initialTab,
+  tissInitialPanel,
+  navigationIntentKey,
   onOpenAppointment,
   onOpenPatient,
   onOpenReport,
@@ -542,6 +548,15 @@ export function MonthlyConferenceCenter({
     report: false,
     audit: false,
   });
+
+  useEffect(() => {
+    if (!initialTab) return;
+    setActiveTab(initialTab);
+    if (initialTab !== "sessions") {
+      setDrilldownFilter(null);
+      setActiveKpiFilter(null);
+    }
+  }, [initialTab, navigationIntentKey]);
 
   const serviceTypeOptions = useMemo(() => {
     const values = new Set<string>();
@@ -1136,6 +1151,8 @@ export function MonthlyConferenceCenter({
           patientId={patientId}
           professionalId={professionalId}
           payerId={payerId}
+          initialPanel={tissInitialPanel}
+          navigationIntentKey={navigationIntentKey}
           onOpenAppointment={(row) => onOpenAppointment?.(row as ConferenceRow)}
           onOpenPatient={(row) => onOpenPatient?.(row as ConferenceRow)}
           onNavigatePayers={onNavigatePayers}

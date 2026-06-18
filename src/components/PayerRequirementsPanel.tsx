@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, CheckCircle2, ClipboardCheck, FileSpreadsheet, Loader2, Plus, RefreshCw, Save, ShieldCheck } from "lucide-react";
 import { dataService } from "../services/dataService";
 import { buildClinicMonthDateRange } from "../utils/scheduling";
@@ -321,7 +321,15 @@ const payerTissMissing = (payer: Payer | null, form: PayerTissForm) => {
   return missing;
 };
 
-export function PayerRequirementsPanel() {
+type PayerRequirementsPanelProps = {
+  initialSection?: "convenios" | "tuss" | "prices" | "rules";
+  navigationIntentKey?: number;
+};
+
+export function PayerRequirementsPanel({
+  initialSection,
+  navigationIntentKey,
+}: PayerRequirementsPanelProps = {}) {
   const [payers, setPayers] = useState<Payer[]>([]);
   const [selectedPayerId, setSelectedPayerId] = useState("");
   const [requirements, setRequirements] = useState<Requirement[]>([]);
@@ -347,6 +355,9 @@ export function PayerRequirementsPanel() {
   const [payerTissForm, setPayerTissForm] = useState<PayerTissForm>(defaultPayerTissForm);
   const [payerTissLoading, setPayerTissLoading] = useState(false);
   const [payerTissMessage, setPayerTissMessage] = useState("");
+  const payerRulesSectionRef = useRef<HTMLDivElement | null>(null);
+  const payerTussSectionRef = useRef<HTMLDivElement | null>(null);
+  const payerPricesSectionRef = useRef<HTMLDivElement | null>(null);
 
   const selectedPayer = useMemo(
     () => payers.find((payer) => payer.id === selectedPayerId) || null,
@@ -465,6 +476,18 @@ export function PayerRequirementsPanel() {
   useEffect(() => {
     void loadTussConfig(selectedPayerId);
   }, [selectedPayerId]);
+
+  useEffect(() => {
+    const target =
+      initialSection === "tuss"
+        ? payerTussSectionRef.current
+        : initialSection === "prices"
+          ? payerPricesSectionRef.current
+          : initialSection === "rules"
+            ? payerRulesSectionRef.current
+            : null;
+    if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [initialSection, navigationIntentKey, selectedPayerId]);
 
   useEffect(() => {
     void loadPayerTissProfile(selectedPayerId);
@@ -1001,7 +1024,7 @@ export function PayerRequirementsPanel() {
             <ClipboardCheck size={18} className="text-slate-400" />
           </div>
 
-          <div className="mt-4 rounded-2xl border border-indigo-100 bg-indigo-50/50 p-3">
+          <div ref={payerRulesSectionRef} className="mt-4 rounded-2xl border border-indigo-100 bg-indigo-50/50 p-3">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <p className="text-xs font-bold uppercase tracking-widest text-indigo-500">Dados TISS da operadora</p>
@@ -1219,7 +1242,7 @@ export function PayerRequirementsPanel() {
         </div>
       </div>
 
-      <div className="mt-5 rounded-2xl bg-white p-4">
+      <div ref={payerTussSectionRef} className="mt-5 rounded-2xl bg-white p-4">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <p className="text-sm font-bold text-slate-900">De/Para TUSS por Convênio</p>
@@ -1582,7 +1605,7 @@ export function PayerRequirementsPanel() {
           </div>
         </div>
 
-        <div className="mt-4 rounded-2xl border border-emerald-100 bg-emerald-50/40 p-3">
+        <div ref={payerPricesSectionRef} className="mt-4 rounded-2xl border border-emerald-100 bg-emerald-50/40 p-3">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <p className="flex items-center gap-2 text-sm font-bold text-slate-900">
