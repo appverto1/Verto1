@@ -3110,6 +3110,97 @@ export const dataService = {
     }
   },
 
+  async listTissOfficialDocuments(options: any = {}) {
+    const endpoint = endpointWithQuery('/api/tiss/official-documents', {
+      payerId: options.payerId,
+      competenceMonth: options.competenceMonth,
+      page: Math.max(1, Math.round(Number(options.page || 1) || 1)),
+      pageSize: normalizeListLimit(options.pageSize || options.limit, 20, 100)
+    });
+    try {
+      return await fetchNoStoreJsonWithRetry(endpoint, {
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'listTissOfficialDocuments',
+        operation: 'list',
+        table: 'tiss_official_documents',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      }, 'A listagem de documentos TISS oficiais voltou do cache. Tente atualizar novamente.');
+    } catch {
+      return { success: false, data: [], error: 'Não foi possível carregar os documentos TISS oficiais agora.' };
+    }
+  },
+
+  async createTissOfficialDocument(payload: any = {}) {
+    try {
+      const response = await fetchClinical('/api/tiss/official-documents', {
+        method: 'POST',
+        cache: 'no-store',
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      }, {
+        helperName: 'createTissOfficialDocument',
+        operation: 'write',
+        table: 'tiss_official_documents,appointment_tiss_pre_guides,tiss_revenue_cycle_events',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeNoStoreJson(response, 'A geração do XML TISS oficial voltou do cache. Tente novamente.');
+    } catch {
+      return { success: false, error: 'Não foi possível gerar o XML TISS oficial agora.' };
+    }
+  },
+
+  async getTissOfficialDocument(documentId: string) {
+    try {
+      return await fetchNoStoreJsonWithRetry(`/api/tiss/official-documents/${encodeURIComponent(String(documentId))}`, {
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getTissOfficialDocument',
+        operation: 'detail',
+        table: 'tiss_official_documents',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      }, 'O documento TISS oficial voltou do cache. Tente atualizar novamente.');
+    } catch {
+      return { success: false, data: null, error: 'Não foi possível carregar o documento TISS oficial agora.' };
+    }
+  },
+
+  async downloadTissOfficialDocument(documentId: string) {
+    try {
+      const response = await fetchClinical(`/api/tiss/official-documents/${encodeURIComponent(String(documentId))}/download`, {
+        method: 'GET',
+        cache: 'no-store',
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'downloadTissOfficialDocument',
+        operation: 'detail',
+        table: 'tiss_official_documents',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      if (!response.ok) {
+        return { success: false, error: 'Não foi possível baixar o XML TISS oficial agora.' };
+      }
+      const blob = await response.blob();
+      const disposition = response.headers.get('Content-Disposition') || response.headers.get('content-disposition') || '';
+      const match = disposition.match(/filename="?([^";]+)"?/i);
+      return {
+        success: true,
+        blob,
+        fileName: match?.[1] || 'verto-tiss-oficial.xml'
+      };
+    } catch {
+      return { success: false, error: 'Não foi possível baixar o XML TISS oficial agora.' };
+    }
+  },
+
   async getTissRevenueCycleEvents(options: any = {}) {
     const endpoint = endpointWithQuery('/api/tiss/revenue-cycle/events', {
       preGuideId: options.preGuideId,

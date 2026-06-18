@@ -127,6 +127,14 @@ import {
   validateTissXmlDraft
 } from './src/services/tissXmlDraftValidator';
 import {
+  buildOfficialTissIdempotencyKey,
+  deriveOfficialTissBatchNumber,
+  generateAndValidateOfficialTissDocument
+} from './src/services/tissOfficial/officialTissDocumentService';
+import {
+  sanitizeOfficialXmlFilePart
+} from './src/services/tissOfficial/security';
+import {
   buildPatientPortabilitySnapshot,
   normalizePatientPortabilityScope
 } from './src/utils/patientPortability';
@@ -4195,6 +4203,39 @@ const TISS_XML_DRAFT_DETAIL_SELECT = [
   'xml_content'
 ].join(',');
 
+const TISS_OFFICIAL_DOCUMENT_SELECT = [
+  'id',
+  'organization_id',
+  'clinic_id',
+  'payer_id',
+  'competence_month',
+  'guide_type',
+  'document_type',
+  'communication_version',
+  'content_structure_version',
+  'tuss_version',
+  'schema_root_file',
+  'schema_manifest_checksum',
+  'batch_number',
+  'status',
+  'xml_hash',
+  'generated_from_pre_guide_ids',
+  'idempotency_key',
+  'validation_summary',
+  'metadata',
+  'guide_count',
+  'total_amount_cents',
+  'generated_by',
+  'generated_at',
+  'created_at',
+  'updated_at'
+].join(',');
+
+const TISS_OFFICIAL_DOCUMENT_DETAIL_SELECT = [
+  ...TISS_OFFICIAL_DOCUMENT_SELECT.split(','),
+  'xml_content'
+].join(',');
+
 const TISS_REVENUE_CYCLE_EVENT_SELECT = [
   'id',
   'organization_id',
@@ -4203,6 +4244,7 @@ const TISS_REVENUE_CYCLE_EVENT_SELECT = [
   'appointment_id',
   'pre_guide_id',
   'xml_draft_id',
+  'official_document_id',
   'payer_id',
   'event_type',
   'previous_state',
@@ -33250,12 +33292,52 @@ async function startServer() {
     return serialized;
   };
 
+  const serializeTissOfficialDocument = (row: any, includeXml = false) => {
+    const validationSummary = row?.validation_summary && typeof row.validation_summary === 'object'
+      ? row.validation_summary
+      : {};
+    const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+    const serialized: any = {
+      id: sanitizeString(row?.id, 120) || null,
+      payerId: sanitizeString(row?.payer_id, 120) || null,
+      payerName: sanitizeString(metadata.payerName || metadata.payer_name, 180) || null,
+      competenceMonth: sanitizeString(row?.competence_month, 40) || null,
+      guideType: sanitizeString(row?.guide_type, 40) || 'sp_sadt',
+      documentType: sanitizeString(row?.document_type, 80) || 'official_tiss_sp_sadt_xml',
+      communicationVersion: sanitizeString(row?.communication_version, 40) || null,
+      contentStructureVersion: sanitizeString(row?.content_structure_version, 40) || null,
+      tussVersion: sanitizeString(row?.tuss_version, 40) || null,
+      schemaRootFile: sanitizeString(row?.schema_root_file, 180) || null,
+      schemaManifestChecksum: sanitizeString(row?.schema_manifest_checksum, 120) || null,
+      batchNumber: sanitizeString(row?.batch_number, 40) || null,
+      status: sanitizeString(row?.status, 40) || 'validated',
+      xmlHash: sanitizeString(row?.xml_hash, 120) || null,
+      generatedFromPreGuideIds: Array.isArray(row?.generated_from_pre_guide_ids)
+        ? row.generated_from_pre_guide_ids
+        : [],
+      validationSummary,
+      metadata,
+      guideCount: Number(row?.guide_count || 0) || 0,
+      totalAmountCents: Number(row?.total_amount_cents || 0) || 0,
+      generatedBy: sanitizeString(row?.generated_by, 120) || null,
+      generatedByName: sanitizeString(metadata?.generatedByName, 180) || null,
+      generatedAt: row?.generated_at || null,
+      createdAt: row?.created_at || null,
+      updatedAt: row?.updated_at || null,
+      xsdValidated: row?.status === 'validated' && validationSummary?.xsdValidation?.status === 'valid',
+      downloadUrl: row?.id ? `/api/tiss/official-documents/${encodeURIComponent(String(row.id))}/download` : null
+    };
+    if (includeXml) serialized.xmlContent = String(row?.xml_content || '');
+    return serialized;
+  };
+
   const serializeTissRevenueCycleEvent = (row: any) => ({
     id: sanitizeString(row?.id, 120) || null,
     patientId: sanitizeString(row?.patient_id, 120) || null,
     appointmentId: sanitizeString(row?.appointment_id, 120) || null,
     preGuideId: sanitizeString(row?.pre_guide_id, 120) || null,
     xmlDraftId: sanitizeString(row?.xml_draft_id, 120) || null,
+    officialDocumentId: sanitizeString(row?.official_document_id, 120) || null,
     payerId: sanitizeString(row?.payer_id, 120) || null,
     eventType: sanitizeString(row?.event_type, 80) || null,
     previousState: sanitizeString(row?.previous_state, 80) || null,
@@ -34726,6 +34808,321 @@ async function startServer() {
       .toLowerCase() || 'pagador';
     return `verto-tiss-rascunho-${month}-${payerName}.xml`;
   };
+
+  const buildTissOfficialFileName = (document: any) => {
+    const month = sanitizeString(document?.competence_month || document?.competenceMonth, 40).slice(0, 7) || 'periodo';
+    const payerName = sanitizeOfficialXmlFilePart(
+      document?.metadata?.payerName || document?.payerName || 'operadora'
+    );
+    const batchNumber = sanitizeString(document?.batch_number || document?.batchNumber, 24)
+      .replace(/[^a-zA-Z0-9_-]/g, '') || 'lote';
+    return `verto-tiss-oficial-${month}-${payerName}-lote-${batchNumber}.xml`;
+  };
+
+  app.get('/api/tiss/official-documents', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
+      const page = Math.max(1, Math.round(Number(req.query?.page || 1) || 1));
+      const pageSize = parseBoundedListLimit(req.query?.pageSize || req.query?.limit, 20, 100);
+      const payerId = sanitizeString(req.query?.payerId || req.query?.payer_id, 120);
+      const competenceMonth = normalizeTissXmlCompetenceMonth(req.query?.competenceMonth || req.query?.competence_month);
+      let query = supabase
+        .from('tiss_official_documents')
+        .select(TISS_OFFICIAL_DOCUMENT_SELECT, { count: 'exact' })
+        .eq('organization_id', organizationId);
+      if (isUuid(payerId)) query = query.eq('payer_id', payerId);
+      if (competenceMonth) query = query.eq('competence_month', competenceMonth);
+      const offset = (page - 1) * pageSize;
+      const { data, error, count } = await query
+        .order('generated_at', { ascending: false })
+        .range(offset, offset + pageSize - 1);
+      if (error) {
+        if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) {
+          return res.status(503).json({
+            success: false,
+            code: 'TISS_OFFICIAL_SCHEMA_MISSING',
+            error: 'A estrutura de documentos TISS oficiais ainda não está disponível no banco.'
+          });
+        }
+        throw error;
+      }
+      return sendNoStoreJson(res, {
+        success: true,
+        data: (data || []).map((row: any) => serializeTissOfficialDocument(row)),
+        page,
+        pageSize,
+        total: Number(count || 0)
+      });
+    } catch (error: any) {
+      console.warn('[TissOfficial] list failed:', {
+        code: sanitizeString(error?.code, 80) || null,
+        message: sanitizeTextField(error?.message, 300) || String(error)
+      });
+      return res.status(500).json({ success: false, error: 'Não foi possível carregar os documentos TISS oficiais agora.' });
+    }
+  });
+
+  app.post('/api/tiss/official-documents', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 48 * 1024, 'XML TISS oficial')) return;
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      const generatedBy = sanitizeString(req.session.user?.id, 120);
+      if (!isUuid(organizationId) || !isUuid(generatedBy)) return res.status(400).json(payerSafeError(400));
+      const payerId = sanitizeString(req.body?.payerId || req.body?.payer_id, 120);
+      const competenceMonth = normalizeTissXmlCompetenceMonth(req.body?.competenceMonth || req.body?.competence_month);
+      const communicationVersion = sanitizeString(req.body?.communicationVersion || req.body?.communication_version || '04.03.00', 20);
+      if (!isUuid(payerId)) {
+        return res.status(400).json({
+          success: false,
+          code: 'TISS_OFFICIAL_PAYER_REQUIRED',
+          error: 'Selecione uma operadora para gerar o XML TISS oficial.'
+        });
+      }
+      if (!competenceMonth) {
+        return res.status(400).json({
+          success: false,
+          code: 'TISS_OFFICIAL_COMPETENCE_REQUIRED',
+          error: 'Informe uma competência válida para gerar o XML TISS oficial.'
+        });
+      }
+      if (!['04.03.00', '4.03.00'].includes(communicationVersion)) {
+        return res.status(422).json({
+          success: false,
+          code: 'TISS_OFFICIAL_VERSION_NOT_SUPPORTED',
+          error: 'A versão de comunicação solicitada ainda não é suportada para XML oficial.'
+        });
+      }
+      const rawPreGuideIds = Array.isArray(req.body?.preGuideIds || req.body?.pre_guide_ids)
+        ? (req.body?.preGuideIds || req.body?.pre_guide_ids)
+        : [];
+      const preGuideIds = Array.from(new Set(
+        rawPreGuideIds
+          .map((id: unknown) => sanitizeString(id, 120))
+          .filter((id: string) => isUuid(id))
+      ));
+      if (preGuideIds.length === 0 || preGuideIds.length > 100 || preGuideIds.length !== rawPreGuideIds.length) {
+        return res.status(400).json({
+          success: false,
+          code: 'TISS_OFFICIAL_PRE_GUIDE_SELECTION_INVALID',
+          error: 'Selecione entre 1 e 100 Pré-guias válidas do mesmo pagador e competência.'
+        });
+      }
+
+      const { data: preGuideRows, error: preGuideError } = await supabase
+        .from('appointment_tiss_pre_guides')
+        .select(APPOINTMENT_TISS_PRE_GUIDE_SELECT)
+        .eq('organization_id', organizationId)
+        .eq('payer_id', payerId)
+        .in('id', preGuideIds)
+        .limit(100);
+      if (preGuideError) {
+        if (hasMissingFinancialSchema(preGuideError) || isMissingRelationError(preGuideError)) {
+          return res.status(503).json({
+            success: false,
+            code: 'TISS_OFFICIAL_PRE_GUIDE_SCHEMA_MISSING',
+            error: 'A estrutura de Pré-guias TISS ainda não está disponível no banco.'
+          });
+        }
+        throw preGuideError;
+      }
+      if ((preGuideRows || []).length !== preGuideIds.length) {
+        return res.status(404).json({
+          success: false,
+          code: 'TISS_OFFICIAL_PRE_GUIDE_SCOPE_MISMATCH',
+          error: 'Uma ou mais Pré-guias não pertencem à clínica ou ao pagador selecionado.'
+        });
+      }
+      const preGuides = (preGuideRows || []).map((row: any) => serializeTissPreGuide(row));
+      const preGuideVersions = Object.fromEntries(
+        (preGuideRows || []).map((row: any) => [String(row.id), row.updated_at])
+      );
+      const idempotencyInput = {
+        preGuides,
+        payerId,
+        competenceMonth,
+        batchNumber: '',
+        generatedBy,
+        communicationVersion: '04.03.00',
+        contentStructureVersion: '202511',
+        tussVersion: '202605'
+      };
+      const idempotencyKey = sanitizeString(
+        req.body?.idempotencyKey || req.body?.idempotency_key,
+        128
+      ) || buildOfficialTissIdempotencyKey(idempotencyInput);
+      if (!/^[a-f0-9]{64}$/i.test(idempotencyKey)) {
+        return res.status(400).json({
+          success: false,
+          code: 'TISS_OFFICIAL_IDEMPOTENCY_KEY_INVALID',
+          error: 'A chave de idempotência informada é inválida.'
+        });
+      }
+      const batchNumber = deriveOfficialTissBatchNumber(idempotencyKey);
+      const built = await generateAndValidateOfficialTissDocument({
+        ...idempotencyInput,
+        batchNumber,
+        generatedAt: new Date().toISOString()
+      });
+      if (!built.ok) {
+        return res.status(built.code === 'TISS_OFFICIAL_XSD_VALIDATION_FAILED' ? 422 : 409).json({
+          success: false,
+          code: built.code,
+          error: built.message,
+          issues: built.issues,
+          xsdValidation: built.xsdValidation || null
+        });
+      }
+      const payerName = sanitizeString(
+        preGuides[0]?.payerName || preGuides[0]?.snapshot?.payer?.name,
+        180
+      ) || 'Operadora';
+      const metadata = {
+        payerName,
+        generatedByName: sanitizeString(
+          req.session.user?.name || req.session.user?.displayName || req.session.user?.email,
+          180
+        ) || 'Usuário autorizado',
+        notSentToPayer: true,
+        scope: 'assisted_official_tiss',
+        messageOperation: 'ENVIO_LOTE_GUIAS',
+        schemaSource: 'ANS Maio/2026',
+        clinicalDataExcluded: true
+      };
+      const rpcResult = await supabase.rpc('create_tiss_official_document', {
+        p_payer_id: payerId,
+        p_competence_month: competenceMonth,
+        p_guide_type: 'sp_sadt',
+        p_document_type: 'official_tiss_sp_sadt_xml',
+        p_communication_version: built.generated.communicationVersion,
+        p_content_structure_version: built.generated.contentStructureVersion,
+        p_tuss_version: built.generated.tussVersion,
+        p_schema_root_file: built.generated.schemaRootFile,
+        p_schema_manifest_checksum: built.generated.schemaManifestChecksum,
+        p_batch_number: built.generated.batchNumber,
+        p_xml_content: built.generated.xml,
+        p_xml_hash: built.generated.xmlHash,
+        p_generated_from_pre_guide_ids: built.generated.preGuideIds,
+        p_idempotency_key: idempotencyKey,
+        p_validation_summary: built.generated.validationSummary,
+        p_metadata: metadata,
+        p_guide_count: built.generated.guideCount,
+        p_total_amount_cents: built.generated.totalAmountCents,
+        p_pre_guide_versions: preGuideVersions,
+        p_generated_by: generatedBy
+      });
+      if (rpcResult.error) {
+        const rpcCode = sanitizeString(rpcResult.error?.message, 180).match(/TISS_OFFICIAL_[A-Z0-9_]+/)?.[0];
+        const status = rpcCode === 'TISS_OFFICIAL_FORBIDDEN'
+          ? 403
+          : rpcCode === 'TISS_OFFICIAL_PRE_GUIDE_ALREADY_LINKED'
+            ? 409
+            : hasMissingFinancialSchema(rpcResult.error) || isMissingRelationError(rpcResult.error)
+              ? 503
+              : 422;
+        return res.status(status).json({
+          success: false,
+          code: rpcCode || 'TISS_OFFICIAL_PERSISTENCE_FAILED',
+          error: rpcCode === 'TISS_OFFICIAL_PRE_GUIDE_ALREADY_LINKED'
+            ? 'Uma ou mais Pré-guias já pertencem a outro documento oficial validado.'
+            : rpcCode === 'TISS_OFFICIAL_FORBIDDEN'
+              ? 'Você não tem permissão para gerar documentos TISS oficiais.'
+              : status === 503
+                ? 'A estrutura de documentos TISS oficiais ainda não está disponível no banco.'
+                : 'Não foi possível persistir o documento TISS oficial.'
+        });
+      }
+      const persisted = Array.isArray(rpcResult.data) ? rpcResult.data[0] : rpcResult.data;
+      if (!persisted?.id) {
+        return res.status(500).json({
+          success: false,
+          code: 'TISS_OFFICIAL_PERSISTENCE_EMPTY',
+          error: 'O banco não retornou o documento TISS oficial persistido.'
+        });
+      }
+      return sendNoStoreJson(res, {
+        success: true,
+        data: serializeTissOfficialDocument(persisted),
+        message: 'XML TISS oficial validado contra o XSD e armazenado. Nenhum dado foi enviado à operadora.'
+      });
+    } catch (error: any) {
+      console.warn('[TissOfficial] create failed:', {
+        code: sanitizeString(error?.code, 80) || null,
+        message: sanitizeTextField(error?.message, 300) || String(error)
+      });
+      return res.status(500).json({
+        success: false,
+        code: 'TISS_OFFICIAL_CREATE_FAILED',
+        error: 'Não foi possível gerar o XML TISS oficial agora.'
+      });
+    }
+  });
+
+  app.get('/api/tiss/official-documents/:documentId/download', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      const documentId = sanitizeString(req.params.documentId, 120);
+      if (!isUuid(organizationId) || !isUuid(documentId)) return res.status(400).json(payerSafeError(400));
+      const { data, error } = await supabase
+        .from('tiss_official_documents')
+        .select(TISS_OFFICIAL_DOCUMENT_DETAIL_SELECT)
+        .eq('organization_id', organizationId)
+        .eq('id', documentId)
+        .eq('status', 'validated')
+        .maybeSingle();
+      if (error) {
+        if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return res.status(404).json(payerSafeError(404));
+        throw error;
+      }
+      if (!data) return res.status(404).json(payerSafeError(404));
+      const xmlContent = String(data.xml_content || '');
+      const calculatedHash = crypto.createHash('sha256').update(xmlContent, 'utf8').digest('hex');
+      if (calculatedHash !== sanitizeString(data.xml_hash, 80)) {
+        console.warn('[TissOfficial] download hash mismatch:', {
+          documentId,
+          organizationId
+        });
+        return res.status(409).json({
+          success: false,
+          code: 'TISS_OFFICIAL_XML_HASH_MISMATCH',
+          error: 'A integridade do documento não pôde ser confirmada.'
+        });
+      }
+      res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${buildTissOfficialFileName(data)}"`);
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+      return res.status(200).send(xmlContent);
+    } catch (error: any) {
+      console.warn('[TissOfficial] download failed:', error?.message || String(error));
+      return res.status(500).json({ success: false, error: 'Não foi possível baixar o XML TISS oficial agora.' });
+    }
+  });
+
+  app.get('/api/tiss/official-documents/:documentId', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      const documentId = sanitizeString(req.params.documentId, 120);
+      if (!isUuid(organizationId) || !isUuid(documentId)) return res.status(400).json(payerSafeError(400));
+      const { data, error } = await supabase
+        .from('tiss_official_documents')
+        .select(TISS_OFFICIAL_DOCUMENT_DETAIL_SELECT)
+        .eq('organization_id', organizationId)
+        .eq('id', documentId)
+        .maybeSingle();
+      if (error) {
+        if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return res.status(404).json(payerSafeError(404));
+        throw error;
+      }
+      if (!data) return res.status(404).json(payerSafeError(404));
+      return sendNoStoreJson(res, {
+        success: true,
+        data: serializeTissOfficialDocument(data, true)
+      });
+    } catch (error: any) {
+      console.warn('[TissOfficial] detail failed:', error?.message || String(error));
+      return res.status(500).json({ success: false, error: 'Não foi possível carregar o documento TISS oficial agora.' });
+    }
+  });
 
   app.get('/api/tiss/xml-drafts', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {

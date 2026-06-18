@@ -1,0 +1,406 @@
+import assert from "node:assert/strict";
+import crypto from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import {
+  buildOfficialTissIdempotencyKey,
+  deriveOfficialTissBatchNumber,
+  generateAndValidateOfficialTissDocument
+} from "../src/services/tissOfficial/officialTissDocumentService";
+import { communication040300Strategy } from "../src/services/tissOfficial/versions/communication040300/generator";
+import { validateOfficialTissXml040300 } from "../src/services/tissOfficial/versions/communication040300/validator";
+import { calculateTissEpilogueHash, sha256Hex } from "../src/services/tissOfficial/security";
+import { transitionTissRevenueCycleState } from "../src/services/tissRevenueCycleStateMachine";
+
+const root = process.cwd();
+const serverCode = readFileSync(join(root, "server.ts"), "utf8");
+const dataServiceCode = readFileSync(join(root, "src/services/dataService.ts"), "utf8");
+const uiCode = readFileSync(join(root, "src/components/TissPreGuideTab.tsx"), "utf8");
+const migrationCode = readFileSync(join(root, "supabase/migrations/20260618120000_tiss_official_documents.sql"), "utf8");
+const draftGeneratorCode = readFileSync(join(root, "src/services/tissXmlDraftGenerator.ts"), "utf8");
+const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+
+const ORGANIZATION_ID = "11111111-1111-4111-8111-111111111111";
+const PAYER_ID = "22222222-2222-4222-8222-222222222222";
+const PRE_GUIDE_ID = "33333333-3333-4333-8333-333333333333";
+const APPOINTMENT_ID = "44444444-4444-4444-8444-444444444444";
+const PATIENT_ID = "55555555-5555-4555-8555-555555555555";
+const GENERATED_AT = "2026-06-18T14:30:00.000Z";
+
+function validPreGuide(overrides: Record<string, any> = {}) {
+  const row = {
+    id: PRE_GUIDE_ID,
+    organization_id: ORGANIZATION_ID,
+    clinic_id: ORGANIZATION_ID,
+    payer_id: PAYER_ID,
+    appointment_id: APPOINTMENT_ID,
+    patient_id: PATIENT_ID,
+    status: "valid",
+    validation_error_codes: [],
+    validation_errors: [],
+    scheduled_start: "2026-06-10T13:00:00.000Z",
+    scheduled_end: "2026-06-10T13:50:00.000Z",
+    guide_number: "GUIA-2026-001",
+    authorization_code: "AUT-123",
+    authorization_valid_until: "2026-06-30",
+    tuss_code: "50000000",
+    tuss_description: "Sessão de psicoterapia individual",
+    quantity: 1,
+    unit_amount_cents: 19700,
+    total_amount_cents: 19700,
+    updated_at: "2026-06-18T13:00:00.000Z",
+    snapshot_data: {
+      appointment: {
+        id: APPOINTMENT_ID,
+        scheduledStart: "2026-06-10T13:00:00.000Z",
+        scheduledEnd: "2026-06-10T13:50:00.000Z"
+      },
+      beneficiary: {
+        id: PATIENT_ID,
+        cardNumber: "AMIL123456789"
+      },
+      payer: {
+        id: PAYER_ID,
+        ansRegistration: "326305",
+        contractedProviderCode: "PRESTADOR123",
+        defaultAttendanceType: "03",
+        defaultAttendanceRegime: "01",
+        defaultAttendanceCharacter: "1"
+      },
+      provider: {
+        legalName: "Clínica Verto & Saúde Ltda.",
+        tradeName: "Verto Saúde",
+        documentType: "CNPJ",
+        documentNumber: "12345678000195",
+        cnesCode: "1234567",
+        providerCode: "PRESTADOR123"
+      },
+      professional: {
+        name: "Ana Maria",
+        council: "CRP",
+        councilNumber: "12345",
+        councilState: "SP",
+        cboCode: "251510"
+      },
+      procedure: {
+        tussCode: "50000000",
+        tussDescription: "Sessão de psicoterapia individual",
+        quantity: 1,
+        unitAmountCents: 19700,
+        totalAmountCents: 19700
+      },
+      authorization: {
+        guideNumber: "GUIA-2026-001",
+        authorizationCode: "AUT-123",
+        authorizationValidFrom: "2026-06-01",
+        authorizationValidUntil: "2026-06-30"
+      }
+    }
+  };
+  return {
+    ...row,
+    ...overrides,
+    snapshot_data: overrides.snapshot_data
+      ? { ...row.snapshot_data, ...overrides.snapshot_data }
+      : row.snapshot_data
+  };
+}
+
+function validInput(preGuides = [validPreGuide()]) {
+  return {
+    preGuides,
+    payerId: PAYER_ID,
+    competenceMonth: "2026-06",
+    batchNumber: "000000123456",
+    generatedAt: GENERATED_AT,
+    communicationVersion: "04.03.00",
+    contentStructureVersion: "202511",
+    tussVersion: "202605"
+  };
+}
+
+type Test = { name: string; fn: () => void | Promise<void> };
+const tests: Test[] = [];
+const test = (name: string, fn: Test["fn"]) => tests.push({ name, fn });
+
+test("gera XML oficial SP/SADT 04.03.00 com raiz, namespace e sequência do XSD", async () => {
+  const result = await generateAndValidateOfficialTissDocument(validInput());
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  const xml = result.generated.xml;
+  assert.match(xml, /<ans:mensagemTISS xmlns:ans="http:\/\/www\.ans\.gov\.br\/padroes\/tiss\/schemas"/);
+  assert.match(xml, /<ans:tipoTransacao>ENVIO_LOTE_GUIAS<\/ans:tipoTransacao>/);
+  assert.match(xml, /<ans:Padrao>4\.03\.00<\/ans:Padrao>/);
+  assert.match(xml, /<ans:loteGuias>[\s\S]*<ans:guiasTISS>[\s\S]*<ans:guiaSP-SADT>/);
+  assert.ok(xml.indexOf("<ans:cabecalho>") < xml.indexOf("<ans:prestadorParaOperadora>"));
+  assert.ok(xml.indexOf("<ans:prestadorParaOperadora>") < xml.indexOf("<ans:epilogo>"));
+  assert.equal(result.xsdValidation.status, "valid");
+});
+
+test("serializa datas, horas, quantidades, valores e caracteres XML corretamente", () => {
+  const result = communication040300Strategy.generate(validInput());
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.match(result.xml, /<ans:dataExecucao>2026-06-10<\/ans:dataExecucao>/);
+  assert.match(result.xml, /<ans:horaInicial>13:00:00<\/ans:horaInicial>/);
+  assert.match(result.xml, /<ans:quantidadeExecutada>1<\/ans:quantidadeExecutada>/);
+  assert.match(result.xml, /<ans:valorUnitario>197\.00<\/ans:valorUnitario>/);
+  assert.match(result.xml, /<ans:valorTotalGeral>197\.00<\/ans:valorTotalGeral>/);
+  assert.match(result.xml, /Clínica Verto &amp; Saúde Ltda\./);
+  assert.equal(result.totalAmountCents, 19700);
+});
+
+test("calcula hash TISS MD5 dos valores e SHA-256 determinístico do XML exato", () => {
+  const first = communication040300Strategy.generate(validInput());
+  const second = communication040300Strategy.generate(validInput());
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, true);
+  if (!first.ok || !second.ok) return;
+  assert.equal(first.xml, second.xml);
+  assert.equal(first.epilogueHash, calculateTissEpilogueHash(first.xml));
+  assert.match(first.epilogueHash, /^[a-f0-9]{32}$/);
+  assert.equal(first.xmlHash, sha256Hex(first.xml));
+  assert.equal(first.xmlHash, second.xmlHash);
+});
+
+test("soma centavos inteiros sem cálculo financeiro em ponto flutuante", () => {
+  const second = validPreGuide({
+    id: "66666666-6666-4666-8666-666666666666",
+    appointment_id: "77777777-7777-4777-8777-777777777777",
+    guide_number: "GUIA-2026-002",
+    unit_amount_cents: 101,
+    total_amount_cents: 101,
+    snapshot_data: {
+      ...validPreGuide().snapshot_data,
+      appointment: {
+        id: "77777777-7777-4777-8777-777777777777",
+        scheduledStart: "2026-06-11T13:00:00.000Z",
+        scheduledEnd: "2026-06-11T13:50:00.000Z"
+      },
+      procedure: {
+        ...validPreGuide().snapshot_data.procedure,
+        unitAmountCents: 101,
+        totalAmountCents: 101
+      },
+      authorization: {
+        ...validPreGuide().snapshot_data.authorization,
+        guideNumber: "GUIA-2026-002"
+      }
+    }
+  });
+  const result = communication040300Strategy.generate(validInput([validPreGuide(), second]));
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.totalAmountCents, 19801);
+  assert.equal(result.payload.totalAmountCents, 19801);
+  assert.match(result.xml, /<ans:valorTotalGeral>1\.01<\/ans:valorTotalGeral>/);
+});
+
+test("usa somente whitelist administrativa e não inclui prontuário, evolução ou ABA detalhada", () => {
+  const row = validPreGuide({
+    snapshot_data: {
+      ...validPreGuide().snapshot_data,
+      clinicalNotes: "CONTEUDO_CLINICO_PROIBIDO",
+      evolution: "EVOLUCAO_SUBJETIVA_PROIBIDA",
+      abaData: { prompt: "DADO_ABA_PROIBIDO" }
+    }
+  });
+  const result = communication040300Strategy.generate(validInput([row]));
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.doesNotMatch(result.xml, /CONTEUDO_CLINICO_PROIBIDO|EVOLUCAO_SUBJETIVA_PROIBIDA|DADO_ABA_PROIBIDO/);
+  assert.equal(result.validationSummary.clinicalDataExcluded, true);
+});
+
+test("bloqueia Pré-guia inválida, TUSS ausente, placeholder e campos obrigatórios ausentes", () => {
+  for (const row of [
+    validPreGuide({ status: "pending_data" }),
+    validPreGuide({ tuss_code: "", snapshot_data: { ...validPreGuide().snapshot_data, procedure: { ...validPreGuide().snapshot_data.procedure, tussCode: "" } } }),
+    validPreGuide({ tuss_code: "TESTE-ABA", snapshot_data: { ...validPreGuide().snapshot_data, procedure: { ...validPreGuide().snapshot_data.procedure, tussCode: "TESTE-ABA" } } }),
+    validPreGuide({ snapshot_data: { ...validPreGuide().snapshot_data, payer: { ...validPreGuide().snapshot_data.payer, defaultAttendanceType: "" } } })
+  ]) {
+    const result = communication040300Strategy.generate(validInput([row]));
+    assert.equal(result.ok, false);
+  }
+});
+
+test("bloqueia múltiplos pagadores e competência divergente", () => {
+  const otherPayer = validPreGuide({
+    id: "88888888-8888-4888-8888-888888888888",
+    payer_id: "99999999-9999-4999-8999-999999999999"
+  });
+  const payerResult = communication040300Strategy.generate(validInput([validPreGuide(), otherPayer]));
+  assert.equal(payerResult.ok, false);
+  if (!payerResult.ok) assert.ok(payerResult.issues.some((issue) => issue.code === "TISS_OFFICIAL_PAYER_MISMATCH"));
+
+  const competenceResult = communication040300Strategy.generate(validInput([
+    validPreGuide({ scheduled_start: "2026-07-01T13:00:00.000Z" })
+  ]));
+  assert.equal(competenceResult.ok, false);
+  if (!competenceResult.ok) assert.ok(competenceResult.issues.some((issue) => issue.code === "TISS_OFFICIAL_COMPETENCE_MISMATCH"));
+});
+
+test("bloqueia Pré-guias de clínicas diferentes", () => {
+  const otherClinic = validPreGuide({
+    id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    organization_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    clinic_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+  });
+  const result = communication040300Strategy.generate(validInput([validPreGuide(), otherClinic]));
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.ok(result.issues.some((issue) => issue.code === "TISS_OFFICIAL_MULTIPLE_CLINICS"));
+});
+
+test("XML gerado passa no XSD oficial e falhas estruturais são rejeitadas", async () => {
+  const generated = communication040300Strategy.generate(validInput());
+  assert.equal(generated.ok, true);
+  if (!generated.ok) return;
+
+  const valid = await validateOfficialTissXml040300(generated.xml);
+  assert.equal(valid.status, "valid");
+
+  const missingRequired = await validateOfficialTissXml040300(
+    generated.xml.replace(/<ans:numeroCarteira>[\s\S]*?<\/ans:numeroCarteira>\n/, "")
+  );
+  assert.equal(missingRequired.status, "invalid");
+
+  const wrongOrder = await validateOfficialTissXml040300(
+    generated.xml.replace(
+      /(\s*<ans:tipoAtendimento>03<\/ans:tipoAtendimento>\s*)(<ans:indicacaoAcidente>9<\/ans:indicacaoAcidente>)/,
+      "$2$1"
+    )
+  );
+  assert.equal(wrongOrder.status, "invalid");
+
+  const wrongNamespace = await validateOfficialTissXml040300(
+    generated.xml.replace("http://www.ans.gov.br/padroes/tiss/schemas", "https://example.invalid/tiss")
+  );
+  assert.equal(wrongNamespace.status, "invalid");
+});
+
+test("rejeita DTD, entidade externa e não realiza resolução de rede", async () => {
+  const generated = communication040300Strategy.generate(validInput());
+  assert.equal(generated.ok, true);
+  if (!generated.ok) return;
+  const malicious = generated.xml.replace(
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE x [<!ENTITY xxe SYSTEM "https://example.invalid/secret">]>'
+  );
+  const result = await validateOfficialTissXml040300(malicious);
+  assert.equal(result.status, "invalid");
+  assert.ok(result.errors.some((issue) => issue.code === "XML_DTD_OR_ENTITY_BLOCKED"));
+  assert.match(readFileSync(join(root, "src/services/tissOfficial/versions/communication040300/validator.ts"), "utf8"), /XML_PARSE_NONET/);
+});
+
+test("idempotency key e lote são determinísticos por snapshots e seleção ordenada", () => {
+  const firstInput = validInput([validPreGuide()]);
+  const secondInput = validInput([validPreGuide()]);
+  const firstKey = buildOfficialTissIdempotencyKey(firstInput);
+  const secondKey = buildOfficialTissIdempotencyKey(secondInput);
+  assert.equal(firstKey, secondKey);
+  assert.match(firstKey, /^[a-f0-9]{64}$/);
+  assert.equal(deriveOfficialTissBatchNumber(firstKey), deriveOfficialTissBatchNumber(secondKey));
+  assert.match(deriveOfficialTissBatchNumber(firstKey), /^\d{12}$/);
+});
+
+test("state machine permite apenas a transição pré-envio para XML oficial validado", () => {
+  const allowed = transitionTissRevenueCycleState({
+    previousState: "ready_for_billing",
+    newState: "official_xml_validated",
+    eventType: "TISS_OFFICIAL_XML_XSD_VALIDATED"
+  });
+  assert.equal(allowed.ok, true);
+  assert.equal(allowed.newState, "official_xml_validated");
+
+  const future = transitionTissRevenueCycleState({
+    previousState: "official_xml_validated",
+    newState: "sent"
+  });
+  assert.equal(future.ok, false);
+  assert.equal(future.errorCode, "TISS_REVENUE_STATE_RESERVED_FOR_FUTURE");
+});
+
+test("migration cria persistência imutável, RLS, índices e RPC transacional", () => {
+  assert.match(migrationCode, /create table if not exists public\.tiss_official_documents/i);
+  assert.match(migrationCode, /enable row level security/i);
+  assert.match(migrationCode, /for select to authenticated/i);
+  assert.match(migrationCode, /revoke all on table public\.tiss_official_documents from anon/i);
+  assert.match(migrationCode, /revoke insert, update, delete on table public\.tiss_official_documents from authenticated/i);
+  assert.match(migrationCode, /create unique index if not exists idx_tiss_official_documents_idempotency/i);
+  assert.match(migrationCode, /using gin \(generated_from_pre_guide_ids\)/i);
+  assert.match(migrationCode, /for update/i);
+  assert.match(migrationCode, /Validated TISS official documents are immutable/i);
+  assert.match(migrationCode, /new\.xml_content is distinct from old\.xml_content/i);
+  assert.match(migrationCode, /new\.total_amount_cents is distinct from old\.total_amount_cents/i);
+  assert.match(migrationCode, /create or replace function public\.create_tiss_official_document/i);
+  assert.match(migrationCode, /security definer[\s\S]*set search_path = public/i);
+  assert.match(migrationCode, /TISS_OFFICIAL_XML_GENERATED/);
+  assert.match(migrationCode, /TISS_OFFICIAL_XML_XSD_VALIDATED/);
+  assert.match(migrationCode, /p_pre_guide_versions \? selected\.id::text/);
+  assert.match(migrationCode, /selected\.updated_at is distinct from \(p_pre_guide_versions ->> selected\.id::text\)::timestamptz/);
+  assert.match(migrationCode, /select[\s\S]*d\.id,[\s\S]*idempotency_key = p_idempotency_key[\s\S]*for update[\s\S]*select[\s\S]*d\.id,[\s\S]*idempotency_key = p_idempotency_key/i);
+  assert.doesNotMatch(migrationCode, /select\s+\*/i);
+});
+
+test("rotas oficiais são paralelas, paginadas, sem XML na listagem e download confere hash", () => {
+  assert.match(serverCode, /app\.get\('\/api\/tiss\/official-documents'/);
+  assert.match(serverCode, /app\.post\('\/api\/tiss\/official-documents'/);
+  assert.match(serverCode, /app\.get\('\/api\/tiss\/official-documents\/:documentId'/);
+  assert.match(serverCode, /app\.get\('\/api\/tiss\/official-documents\/:documentId\/download'/);
+  const listSelect = serverCode.match(/const TISS_OFFICIAL_DOCUMENT_SELECT = \[([\s\S]*?)\]\.join/)?.[1] || "";
+  assert.doesNotMatch(listSelect, /xml_content/);
+  assert.match(serverCode, /crypto\.createHash\('sha256'\)\.update\(xmlContent, 'utf8'\)\.digest\('hex'\)/);
+  assert.match(serverCode, /calculatedHash !== sanitizeString\(data\.xml_hash/);
+  assert.match(serverCode, /'official_document_id'/);
+  assert.match(serverCode, /generatedByName/);
+  assert.match(serverCode, /Content-Type', 'application\/xml; charset=utf-8'/);
+  assert.match(serverCode, /create_tiss_official_document/);
+  assert.doesNotMatch(serverCode, /app\.(?:post|put|patch)\('\/api\/tiss\/official-documents\/:documentId/);
+});
+
+test("data service e UI expõem documento oficial sem remover o fluxo de rascunho", () => {
+  for (const helper of [
+    "listTissOfficialDocuments",
+    "createTissOfficialDocument",
+    "getTissOfficialDocument",
+    "downloadTissOfficialDocument"
+  ]) {
+    assert.match(dataServiceCode, new RegExp(`async ${helper}`));
+  }
+  assert.match(uiCode, /Gerar XML oficial validado/);
+  assert.match(uiCode, /Validado no XSD/);
+  assert.match(uiCode, /não será enviado à operadora neste marco/i);
+  assert.match(uiCode, /Gerar XML TISS em rascunho/);
+  assert.match(draftGeneratorCode, /generateTissXmlDraft/);
+  assert.match(serverCode, /app\.post\('\/api\/tiss\/xml-drafts'/);
+});
+
+test("manifests e checksums oficiais são versionados e a dependência WASM está fixa", () => {
+  const manifest = JSON.parse(readFileSync(
+    join(root, "src/services/tissOfficial/versions/communication040300/schemaManifest.json"),
+    "utf8"
+  ));
+  assert.equal(manifest.communicationVersion, "04.03.00");
+  assert.equal(manifest.contentStructureVersion, "202511");
+  assert.equal(manifest.tussVersion, "202605");
+  for (const file of manifest.files) {
+    const bytes = readFileSync(join(root, "src/services/tissOfficial/versions/communication040300/schemas", file.file));
+    assert.equal(crypto.createHash("sha256").update(bytes).digest("hex").toUpperCase(), file.sha256);
+  }
+  assert.equal(packageJson.dependencies["libxml2-wasm"], "0.7.1");
+  assert.equal(packageJson.scripts["test:tiss-official-xml"], "tsx tests/tissOfficialXml.test.ts");
+});
+
+let passed = 0;
+for (const item of tests) {
+  try {
+    await item.fn();
+    passed += 1;
+    console.log(`ok - ${item.name}`);
+  } catch (error) {
+    console.error(`not ok - ${item.name}`);
+    throw error;
+  }
+}
+
+console.log(`${passed}/${tests.length} official TISS XML tests passed`);

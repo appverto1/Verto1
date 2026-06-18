@@ -111,6 +111,34 @@ type TissXmlDraftRow = {
   metadata?: Record<string, any>;
 };
 
+type TissOfficialDocumentRow = {
+  id?: string | null;
+  payerId?: string | null;
+  payerName?: string | null;
+  competenceMonth?: string | null;
+  guideType?: string | null;
+  documentType?: string | null;
+  communicationVersion?: string | null;
+  contentStructureVersion?: string | null;
+  tussVersion?: string | null;
+  schemaRootFile?: string | null;
+  schemaManifestChecksum?: string | null;
+  batchNumber?: string | null;
+  status?: string | null;
+  xmlHash?: string | null;
+  xmlContent?: string | null;
+  generatedFromPreGuideIds?: string[];
+  validationSummary?: Record<string, any>;
+  metadata?: Record<string, any>;
+  guideCount?: number | null;
+  totalAmountCents?: number | null;
+  generatedBy?: string | null;
+  generatedByName?: string | null;
+  generatedAt?: string | null;
+  downloadUrl?: string | null;
+  xsdValidated?: boolean;
+};
+
 type TissXmlDraftValidationIssue = {
   code?: string;
   message?: string;
@@ -137,6 +165,7 @@ type TissRevenueCycleEventRow = {
   appointmentId?: string | null;
   preGuideId?: string | null;
   xmlDraftId?: string | null;
+  officialDocumentId?: string | null;
   payerId?: string | null;
   eventType?: string | null;
   previousState?: string | null;
@@ -403,6 +432,7 @@ function revenueCycleMeta(state?: string | null) {
   if (normalized === "in_execution") return { label: "Em execução", className: "bg-violet-50 text-violet-700 ring-violet-100" };
   if (normalized === "xml_draft_generated") return { label: "XML rascunho gerado", className: "bg-indigo-50 text-indigo-700 ring-indigo-100" };
   if (normalized === "billing_batch_draft") return { label: "Em lote rascunho", className: "bg-cyan-50 text-cyan-700 ring-cyan-100" };
+  if (normalized === "official_xml_validated") return { label: "XML oficial validado", className: "bg-emerald-50 text-emerald-700 ring-emerald-100" };
   return { label: "Em digitação", className: "bg-slate-100 text-slate-700 ring-slate-200" };
 }
 
@@ -427,6 +457,8 @@ function revenueCycleEventLabel(eventType?: string | null) {
     XML_DRAFT_SUPERSEDED: "XML rascunho substituído",
     TISS_BILLING_BATCH_DRAFT_CREATED: "Pré-guia incluída em lote rascunho",
     TISS_BILLING_BATCH_DRAFT_CANCELLED: "Lote rascunho cancelado",
+    TISS_OFFICIAL_XML_GENERATED: "XML TISS oficial gerado",
+    TISS_OFFICIAL_XML_XSD_VALIDATED: "XML TISS oficial validado no XSD",
     MANUAL_OVERRIDE_APPLIED: "Ajuste manual registrado",
   };
   return labels[normalized] || "Evento do ciclo TISS";
@@ -563,6 +595,14 @@ export function TissPreGuideTab({
   const [xmlValidationDetail, setXmlValidationDetail] = useState<TissXmlDraftRow | null>(null);
   const [createdXmlDraft, setCreatedXmlDraft] = useState<TissXmlDraftRow | null>(null);
   const [highlightedXmlDraftId, setHighlightedXmlDraftId] = useState("");
+  const [officialDocuments, setOfficialDocuments] = useState<TissOfficialDocumentRow[]>([]);
+  const [officialDocumentsLoading, setOfficialDocumentsLoading] = useState(false);
+  const [officialDocumentGenerating, setOfficialDocumentGenerating] = useState(false);
+  const [officialDocumentModalOpen, setOfficialDocumentModalOpen] = useState(false);
+  const [officialDocumentPayerId, setOfficialDocumentPayerId] = useState("");
+  const [officialDocumentDetail, setOfficialDocumentDetail] = useState<TissOfficialDocumentRow | null>(null);
+  const [officialDocumentDetailLoading, setOfficialDocumentDetailLoading] = useState(false);
+  const [highlightedOfficialDocumentId, setHighlightedOfficialDocumentId] = useState("");
   const [revenueCycleEvents, setRevenueCycleEvents] = useState<TissRevenueCycleEventRow[]>([]);
   const [revenueCycleEventsLoading, setRevenueCycleEventsLoading] = useState(false);
 
@@ -604,6 +644,16 @@ export function TissPreGuideTab({
   );
   const selectedXmlTotalAmount = selectedXmlRows.reduce((sum, row) => sum + Number(row.totalAmountCents || row.snapshot?.procedure?.totalAmountCents || 0), 0);
   const selectedXmlTissVersion = String(selectedXmlRows[0]?.snapshot?.payer?.tissVersion || selectedXmlRows[0]?.tissVersion || "configurada no pagador").trim();
+  const selectedOfficialPayerId = officialDocumentPayerId || payerId || (visibleXmlPayers.length === 1 ? visibleXmlPayers[0].id : "");
+  const selectedOfficialPayerName = visibleXmlPayers.find((item) => item.id === selectedOfficialPayerId)?.name || "Operadora";
+  const selectedOfficialRows = useMemo(
+    () => validRows.filter((row) => !selectedOfficialPayerId || row.payerId === selectedOfficialPayerId),
+    [selectedOfficialPayerId, validRows]
+  );
+  const selectedOfficialTotalAmount = selectedOfficialRows.reduce(
+    (sum, row) => sum + Number(row.totalAmountCents || row.snapshot?.procedure?.totalAmountCents || 0),
+    0
+  );
   const latestXmlDraft = xmlDrafts[0] || null;
   const xmlDraftGuideCount = xmlDrafts.reduce((sum, draft) => sum + Number(draft.guideCount || 0), 0);
   const xmlDraftTotalAmount = xmlDrafts.reduce((sum, draft) => sum + Number(draft.totalAmountCents || 0), 0);
@@ -693,6 +743,21 @@ export function TissPreGuideTab({
     }
   }, [competenceMonth, payerId]);
 
+  const loadOfficialDocuments = useCallback(async () => {
+    setOfficialDocumentsLoading(true);
+    try {
+      const result = await dataService.listTissOfficialDocuments({
+        payerId,
+        competenceMonth,
+        page: 1,
+        pageSize: 20,
+      });
+      setOfficialDocuments(result?.success && Array.isArray(result.data) ? result.data : []);
+    } finally {
+      setOfficialDocumentsLoading(false);
+    }
+  }, [competenceMonth, payerId]);
+
   const loadBatchDrafts = useCallback(async () => {
     setBatchDraftsLoading(true);
     try {
@@ -712,7 +777,8 @@ export function TissPreGuideTab({
     void loadRows();
     void loadXmlDrafts();
     void loadBatchDrafts();
-  }, [loadRows, loadXmlDrafts, loadBatchDrafts]);
+    void loadOfficialDocuments();
+  }, [loadRows, loadXmlDrafts, loadBatchDrafts, loadOfficialDocuments]);
 
   useEffect(() => {
     setPage(1);
@@ -854,6 +920,81 @@ export function TissPreGuideTab({
     } finally {
       setXmlDraftGenerating(false);
     }
+  };
+
+  const openOfficialDocumentModal = () => {
+    if (validRows.length === 0) {
+      setError("Não há Pré-guias válidas para gerar XML TISS oficial.");
+      return;
+    }
+    const defaultPayerId = payerId || (visibleXmlPayers.length === 1 ? visibleXmlPayers[0].id : "");
+    setOfficialDocumentPayerId(defaultPayerId);
+    setOfficialDocumentModalOpen(true);
+  };
+
+  const createOfficialDocument = async () => {
+    if (!selectedOfficialPayerId || selectedOfficialRows.length === 0) {
+      setError("Selecione uma operadora com Pré-guias válidas.");
+      return;
+    }
+    setOfficialDocumentGenerating(true);
+    setError("");
+    setMessage("");
+    try {
+      const result = await dataService.createTissOfficialDocument({
+        payerId: selectedOfficialPayerId,
+        competenceMonth,
+        communicationVersion: "04.03.00",
+        preGuideIds: selectedOfficialRows.map((row) => row.id).filter(Boolean),
+      });
+      if (!result?.success || !result.data) {
+        const issues = Array.isArray(result?.issues) ? result.issues : [];
+        const firstIssue = issues[0]?.message ? ` ${issues[0].message}` : "";
+        setError(`${result?.error || "Não foi possível gerar o XML TISS oficial agora."}${firstIssue}`);
+        return;
+      }
+      setOfficialDocumentModalOpen(false);
+      setHighlightedOfficialDocumentId(String(result.data.id || ""));
+      setActivePanel("xmlDrafts");
+      setMessage(result.message || "XML TISS oficial validado contra o XSD e armazenado. Nenhum dado foi enviado à operadora.");
+      await Promise.all([loadRows(), loadOfficialDocuments()]);
+    } finally {
+      setOfficialDocumentGenerating(false);
+    }
+  };
+
+  const openOfficialDocumentDetail = async (document: TissOfficialDocumentRow) => {
+    if (!document.id) return;
+    setOfficialDocumentDetail(document);
+    setOfficialDocumentDetailLoading(true);
+    setError("");
+    try {
+      const result = await dataService.getTissOfficialDocument(document.id);
+      if (!result?.success || !result.data) {
+        setError(result?.error || "Não foi possível abrir o documento TISS oficial agora.");
+        return;
+      }
+      setOfficialDocumentDetail(result.data);
+    } finally {
+      setOfficialDocumentDetailLoading(false);
+    }
+  };
+
+  const downloadOfficialDocument = async (document: TissOfficialDocumentRow) => {
+    if (!document.id) return;
+    const result = await dataService.downloadTissOfficialDocument(document.id);
+    if (!result?.success || !result.blob) {
+      setError(result?.error || "Não foi possível baixar o XML TISS oficial agora.");
+      return;
+    }
+    const url = URL.createObjectURL(result.blob);
+    const link = window.document.createElement("a");
+    link.href = url;
+    link.download = result.fileName || "verto-tiss-oficial.xml";
+    window.document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
   };
 
   const openBatchDraftModal = () => {
@@ -1195,6 +1336,7 @@ export function TissPreGuideTab({
     if (state === "ready_for_billing") return "Gerar XML rascunho ou incluir em lote rascunho.";
     if (state === "xml_draft_generated") return "Revisar XML rascunho ou incluir em lote rascunho.";
     if (state === "billing_batch_draft") return "Conferir o lote rascunho antes de qualquer etapa futura.";
+    if (state === "official_xml_validated") return "Conferir ou baixar o XML oficial validado. Nenhum envio foi realizado.";
     const firstIssue = errors[0] || warnings[0];
     const code = normalizeIssueCode(firstIssue?.code);
     if (code.includes("AUTHORIZATION") || code.includes("GUIDE")) return authorizationActionLabel(code);
@@ -1517,6 +1659,29 @@ export function TissPreGuideTab({
         </div>
       </section>
 
+      <section className="rounded-md border border-emerald-200 bg-white px-3 py-2 shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+              <CheckCircle2 size={16} className="text-emerald-600" />
+              XML TISS oficial validado
+            </div>
+            <p className="mt-1 text-xs text-slate-500">
+              Gera o lote SP/SADT 04.03.00, valida contra o XSD oficial da ANS e armazena o documento sem enviar à operadora.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={openOfficialDocumentModal}
+            disabled={Number(kpis.valid || 0) <= 0 || loading}
+            className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-3 py-2 text-sm text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <CheckCircle2 size={16} />
+            Gerar XML oficial validado
+          </button>
+        </div>
+      </section>
+
       <section className="rounded-md border border-slate-200 bg-white px-3 py-2 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -1833,6 +1998,90 @@ export function TissPreGuideTab({
             </div>
           </section>
 
+          <section className="overflow-hidden rounded-lg border border-emerald-200 bg-white shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-emerald-100 px-4 py-3">
+              <div>
+                <div className="text-sm font-semibold text-slate-800">Documentos oficiais TISS</div>
+                <div className="mt-0.5 text-xs text-slate-500">
+                  XMLs SP/SADT validados contra o XSD oficial e armazenados. Nenhum documento foi enviado à operadora.
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void loadOfficialDocuments()}
+                  disabled={officialDocumentsLoading}
+                  className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 disabled:opacity-60"
+                >
+                  {officialDocumentsLoading ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
+                  Atualizar
+                </button>
+                <button
+                  type="button"
+                  onClick={openOfficialDocumentModal}
+                  disabled={Number(kpis.valid || 0) <= 0 || loading}
+                  className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-3 py-2 text-sm text-white disabled:opacity-50"
+                >
+                  <CheckCircle2 size={15} />
+                  Gerar XML oficial validado
+                </button>
+              </div>
+            </div>
+            <div className="overflow-auto">
+              <table className="min-w-[1320px] divide-y divide-slate-200 text-sm">
+                <thead className="bg-slate-50 text-left text-xs font-semibold uppercase text-slate-500">
+                  <tr>
+                    <th className="px-4 py-3">Geração</th>
+                    <th className="px-4 py-3">Operadora</th>
+                    <th className="px-4 py-3">Competência</th>
+                    <th className="px-4 py-3">Lote</th>
+                    <th className="px-4 py-3">Guias</th>
+                    <th className="px-4 py-3">Valor total</th>
+                    <th className="px-4 py-3">Versão</th>
+                    <th className="px-4 py-3">Status</th>
+                    <th className="px-4 py-3">Gerado por</th>
+                    <th className="px-4 py-3">Hash</th>
+                    <th className="px-4 py-3 text-right">Ações</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {officialDocumentsLoading ? (
+                    <tr><td colSpan={11} className="px-4 py-8 text-center text-slate-500"><Loader2 size={18} className="mx-auto mb-2 animate-spin" />Carregando documentos oficiais</td></tr>
+                  ) : officialDocuments.length === 0 ? (
+                    <tr><td colSpan={11} className="px-4 py-8 text-center text-slate-500">Nenhum XML TISS oficial validado nesta competência.</td></tr>
+                  ) : officialDocuments.map((document) => (
+                    <tr key={document.id || document.xmlHash} className={highlightedOfficialDocumentId === document.id ? "bg-emerald-50/60" : "hover:bg-slate-50"}>
+                      <td className="px-4 py-3 text-slate-600">{formatDate(document.generatedAt)}</td>
+                      <td className="px-4 py-3 text-slate-700">{fieldValue(document.payerName, "Operadora")}</td>
+                      <td className="px-4 py-3 text-slate-600">{String(document.competenceMonth || "").slice(0, 7) || "Não informada"}</td>
+                      <td className="px-4 py-3 text-slate-700">{fieldValue(document.batchNumber)}</td>
+                      <td className="px-4 py-3 text-slate-600">{Number(document.guideCount || 0)}</td>
+                      <td className="px-4 py-3 font-medium text-slate-800">{formatCurrency(document.totalAmountCents)}</td>
+                      <td className="px-4 py-3 text-slate-600">{fieldValue(document.communicationVersion)}</td>
+                      <td className="px-4 py-3">
+                        <span className="rounded-full bg-emerald-50 px-2 py-1 text-xs text-emerald-700 ring-1 ring-emerald-100">Validado no XSD</span>
+                      </td>
+                      <td className="px-4 py-3 text-slate-600">{fieldValue(document.generatedByName, "Usuário autorizado")}</td>
+                      <td className="px-4 py-3 font-mono text-xs text-slate-500">{String(document.xmlHash || "").slice(0, 12) || "Não informado"}</td>
+                      <td className="px-4 py-3 text-right">
+                        <div className="flex justify-end gap-2">
+                          <button type="button" onClick={() => void openOfficialDocumentDetail(document)} className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
+                            <Eye size={15} />
+                            Visualizar
+                          </button>
+                          <button type="button" onClick={() => void downloadOfficialDocument(document)} className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
+                            <Download size={15} />
+                            Baixar
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
       <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
           <div>
@@ -2091,6 +2340,125 @@ export function TissPreGuideTab({
                 Gerar rascunho XML
               </button>
             </footer>
+          </div>
+        </div>
+      )}
+
+      {officialDocumentModalOpen && (
+        <div className="fixed inset-0 z-[152] flex items-end justify-center bg-slate-950/45 p-4 sm:items-center" role="dialog" aria-modal="true" aria-label="Gerar XML TISS oficial validado">
+          <div className="w-full max-w-xl overflow-hidden rounded-lg bg-white shadow-xl">
+            <header className="flex items-start justify-between border-b border-slate-200 px-5 py-4">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900">Gerar XML oficial validado</h2>
+                <p className="mt-1 text-sm text-slate-500">Cobrança em lote com guias SP/SADT no Padrão TISS 04.03.00.</p>
+              </div>
+              <button type="button" onClick={() => setOfficialDocumentModalOpen(false)} className="rounded-md p-2 text-slate-500 hover:bg-slate-100" aria-label="Fechar geração de XML oficial"><X size={18} /></button>
+            </header>
+            <div className="space-y-4 px-5 py-4">
+              {visibleXmlPayers.length > 1 && !payerId && (
+                <label className="block text-sm font-medium text-slate-700">
+                  Operadora
+                  <select
+                    value={officialDocumentPayerId}
+                    onChange={(event) => setOfficialDocumentPayerId(event.target.value)}
+                    className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm outline-none focus:border-emerald-300 focus:ring-2 focus:ring-emerald-100"
+                  >
+                    <option value="">Selecione uma operadora</option>
+                    {visibleXmlPayers.map((payer) => <option key={payer.id} value={payer.id}>{payer.name}</option>)}
+                  </select>
+                </label>
+              )}
+              <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+                O XML será validado e armazenado, mas não será enviado à operadora neste marco.
+              </div>
+              <div className="grid gap-3 text-sm sm:grid-cols-2">
+                <DetailField label="Operadora" value={selectedOfficialPayerName} />
+                <DetailField label="Competência" value={competenceMonth.slice(0, 7)} />
+                <DetailField label="Pré-guias" value={String(selectedOfficialRows.length)} />
+                <DetailField label="Valor total" value={formatCurrency(selectedOfficialTotalAmount)} />
+                <DetailField label="Comunicação TISS" value="04.03.00" />
+                <DetailField label="Conteúdo e estrutura" value="202511" />
+              </div>
+              {selectedOfficialRows.length === 0 && (
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                  Não há Pré-guias válidas deste pagador disponíveis nesta página.
+                </div>
+              )}
+            </div>
+            <footer className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 px-5 py-4">
+              <button type="button" onClick={() => setOfficialDocumentModalOpen(false)} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700">Cancelar</button>
+              <button
+                type="button"
+                onClick={() => void createOfficialDocument()}
+                disabled={officialDocumentGenerating || !selectedOfficialPayerId || selectedOfficialRows.length === 0}
+                className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-3 py-2 text-sm text-white disabled:opacity-60"
+              >
+                {officialDocumentGenerating ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />}
+                Gerar e validar no XSD
+              </button>
+            </footer>
+          </div>
+        </div>
+      )}
+
+      {officialDocumentDetail && (
+        <div className="fixed inset-0 z-[156] flex items-end justify-center bg-slate-950/45 p-4 sm:items-center" role="dialog" aria-modal="true" aria-label="Documento TISS oficial validado">
+          <div className="max-h-[92vh] w-full max-w-4xl overflow-hidden rounded-lg bg-white shadow-xl">
+            <header className="flex items-start justify-between border-b border-slate-200 px-5 py-4">
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-lg font-semibold text-slate-900">XML TISS oficial validado</h2>
+                  <span className="rounded-full bg-emerald-50 px-2 py-1 text-xs text-emerald-700 ring-1 ring-emerald-100">Validado no XSD</span>
+                </div>
+                <p className="mt-1 text-sm text-slate-500">Documento armazenado. Nenhum envio à operadora foi realizado.</p>
+              </div>
+              <button type="button" onClick={() => setOfficialDocumentDetail(null)} className="rounded-md p-2 text-slate-500 hover:bg-slate-100" aria-label="Fechar documento oficial"><X size={18} /></button>
+            </header>
+            <div className="max-h-[calc(92vh-76px)] space-y-4 overflow-y-auto px-5 py-4 pb-24 sm:pb-5">
+              {officialDocumentDetailLoading ? (
+                <div className="py-16 text-center text-sm text-slate-500"><Loader2 className="mx-auto mb-2 animate-spin" size={20} />Carregando documento oficial</div>
+              ) : (
+                <>
+                  <div className="grid gap-4 rounded-md border border-slate-200 bg-slate-50 p-4 text-sm sm:grid-cols-3">
+                    <DetailField label="Operadora" value={fieldValue(officialDocumentDetail.payerName, "Operadora")} />
+                    <DetailField label="Competência" value={String(officialDocumentDetail.competenceMonth || "").slice(0, 7)} />
+                    <DetailField label="Lote" value={fieldValue(officialDocumentDetail.batchNumber)} />
+                    <DetailField label="Comunicação" value={fieldValue(officialDocumentDetail.communicationVersion)} />
+                    <DetailField label="Conteúdo/estrutura" value={fieldValue(officialDocumentDetail.contentStructureVersion)} />
+                    <DetailField label="TUSS" value={fieldValue(officialDocumentDetail.tussVersion)} />
+                    <DetailField label="XSD raiz" value={fieldValue(officialDocumentDetail.schemaRootFile)} />
+                    <DetailField label="Guias" value={String(Number(officialDocumentDetail.guideCount || 0))} />
+                    <DetailField label="Valor total" value={formatCurrency(officialDocumentDetail.totalAmountCents)} />
+                    <DetailField label="Gerado por" value={fieldValue(officialDocumentDetail.generatedByName, "Usuário autorizado")} />
+                    <DetailField label="Gerado em" value={formatDate(officialDocumentDetail.generatedAt)} />
+                    <div className="sm:col-span-3">
+                      <DetailField label="Checksum do manifesto" value={<span className="break-all font-mono text-xs">{fieldValue(officialDocumentDetail.schemaManifestChecksum)}</span>} />
+                    </div>
+                    <div className="sm:col-span-3">
+                      <DetailField label="SHA-256 do XML" value={<span className="break-all font-mono text-xs">{fieldValue(officialDocumentDetail.xmlHash)}</span>} />
+                    </div>
+                    <div className="sm:col-span-3">
+                      <DetailField label="Pré-guias vinculadas" value={(officialDocumentDetail.generatedFromPreGuideIds || []).map((id) => id.slice(0, 8)).join(", ") || "Não informadas"} />
+                    </div>
+                  </div>
+                  <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+                    Validação XML básica, XSD oficial, totais financeiros e hash concluídos antes da persistência.
+                  </div>
+                  <div className="rounded-md border border-slate-200 bg-slate-950 text-slate-100">
+                    <pre className="max-h-[38vh] overflow-auto whitespace-pre-wrap p-4 text-xs leading-relaxed">
+                      {String(officialDocumentDetail.xmlContent || "XML não carregado.")}
+                    </pre>
+                  </div>
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <button type="button" onClick={() => void downloadOfficialDocument(officialDocumentDetail)} className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-3 py-2 text-sm text-white">
+                      <Download size={15} />
+                      Baixar XML
+                    </button>
+                    <button type="button" onClick={() => setOfficialDocumentDetail(null)} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700">Fechar</button>
+                  </div>
+                </>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -2422,7 +2790,9 @@ export function TissPreGuideTab({
                   </Section>
 
                   <div className="mt-4 rounded-md border border-indigo-100 bg-indigo-50 px-3 py-2 text-sm text-indigo-800">
-                    Esta é uma pré-guia para validação interna. XML TISS ainda não foi gerado.
+                    {String(detail?.revenueCycleState || detail?.snapshot?.revenueCycle?.state || "") === "official_xml_validated"
+                      ? "XML TISS oficial validado e armazenado. Nenhum envio à operadora foi realizado."
+                      : "Esta é uma pré-guia para validação interna. XML TISS ainda não foi gerado. O documento oficial validado também não foi gerado."}
                   </div>
 
                   <div className="mt-4 flex flex-wrap justify-end gap-2">

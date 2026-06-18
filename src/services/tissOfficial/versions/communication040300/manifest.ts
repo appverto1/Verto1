@@ -1,0 +1,42 @@
+import { canonicalJson, sha256Hex } from "../../security";
+
+export const COMMUNICATION_040300_MANIFEST = {
+  ansEdition: "Maio/2026",
+  obtainedAt: "2026-06-18",
+  officialSource: "https://www.gov.br/ans/pt-br/assuntos/prestadores/padrao-para-troca-de-informacao-de-saude-suplementar-2013-tiss/padrao-tiss-2013-maio-2026",
+  messageOperation: "ENVIO_LOTE_GUIAS - prestador para operadora - guias SP/SADT",
+  communicationVersion: "04.03.00",
+  contentStructureVersion: "202511",
+  tussVersion: "202605",
+  schemaRootFile: "tissV4_03_00.xsd",
+  files: [
+    {
+      file: "tissV4_03_00.xsd",
+      sha256: "D4C421C7E3CF936551B70D6BD794A419867B6DAEA554D557B4D928363C54044C"
+    },
+    {
+      file: "tissSimpleTypesV4_03_00.xsd",
+      sha256: "D854DEBF58AC2D96194F72DB95315EF2D102DE57AEAF0388512F242824FDC794"
+    },
+    {
+      file: "tissComplexTypesV4_03_00.xsd",
+      sha256: "83A24D606620CD3907C5CD574A71BF9C4411A2EC9E0510979F44293FE7C5956A"
+    },
+    {
+      file: "tissGuiasV4_03_00.xsd",
+      sha256: "587F0B6BAC24175C50635EDE52356CAB00FF1AE28B550ADC42E3A7F03CF605C7"
+    },
+    {
+      file: "tissAssinaturaDigital_v1.01.xsd",
+      sha256: "8567690A0EB05B9681FDC575CA7C867F75BF5CB33573175B8D333617EF035221"
+    },
+    {
+      file: "xmldsig-core-schema.xsd",
+      sha256: "B6388292D746C6CC8F932CE3B6BF7C7FC0BF6CBA58EC385B38988887BCF5FDBB"
+    }
+  ]
+} as const;
+
+export const COMMUNICATION_040300_MANIFEST_CHECKSUM = sha256Hex(
+  canonicalJson(COMMUNICATION_040300_MANIFEST)
+);

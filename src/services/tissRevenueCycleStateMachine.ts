@@ -7,6 +7,7 @@ export type TissRevenueCycleState =
   | "ready_for_billing"
   | "xml_draft_generated"
   | "billing_batch_draft"
+  | "official_xml_validated"
   | "sent"
   | "processed"
   | "paid"
@@ -25,6 +26,8 @@ export type TissRevenueCycleEventType =
   | "XML_DRAFT_SUPERSEDED"
   | "TISS_BILLING_BATCH_DRAFT_CREATED"
   | "TISS_BILLING_BATCH_DRAFT_CANCELLED"
+  | "TISS_OFFICIAL_XML_GENERATED"
+  | "TISS_OFFICIAL_XML_XSD_VALIDATED"
   | "MANUAL_OVERRIDE_APPLIED";
 
 export type TissRevenueCycleTransition = {
@@ -51,9 +54,10 @@ const ALLOWED_TRANSITIONS: Record<TissRevenueCycleState, TissRevenueCycleState[]
   awaiting_authorization: ["missing_data", "authorized", "ready_for_billing"],
   authorized: ["missing_data", "in_execution", "ready_for_billing"],
   in_execution: ["missing_data", "authorized", "ready_for_billing"],
-  ready_for_billing: ["missing_data", "xml_draft_generated", "billing_batch_draft"],
-  xml_draft_generated: ["missing_data", "awaiting_authorization", "authorized", "ready_for_billing", "billing_batch_draft", "xml_draft_generated"],
-  billing_batch_draft: ["missing_data", "awaiting_authorization", "authorized", "ready_for_billing", "xml_draft_generated", "billing_batch_draft"],
+  ready_for_billing: ["missing_data", "xml_draft_generated", "billing_batch_draft", "official_xml_validated"],
+  xml_draft_generated: ["missing_data", "awaiting_authorization", "authorized", "ready_for_billing", "billing_batch_draft", "xml_draft_generated", "official_xml_validated"],
+  billing_batch_draft: ["missing_data", "awaiting_authorization", "authorized", "ready_for_billing", "xml_draft_generated", "billing_batch_draft", "official_xml_validated"],
+  official_xml_validated: ["official_xml_validated"],
   sent: [],
   processed: [],
   paid: [],
@@ -144,6 +148,7 @@ export function buildTissRevenueCycleEventPayload(input: {
   appointmentId?: string | null;
   preGuideId?: string | null;
   xmlDraftId?: string | null;
+  officialDocumentId?: string | null;
   payerId?: string | null;
   eventType: TissRevenueCycleEventType;
   previousState?: string | null;
@@ -168,6 +173,7 @@ export function buildTissRevenueCycleEventPayload(input: {
       appointment_id: input.appointmentId || null,
       pre_guide_id: input.preGuideId || null,
       xml_draft_id: input.xmlDraftId || null,
+      official_document_id: input.officialDocumentId || null,
       payer_id: input.payerId || null,
       event_type: input.eventType,
       previous_state: transition.previousState,

@@ -1493,7 +1493,7 @@ test('frontend separa Pré-guias e Rascunhos XML com preview interno', () => {
   assert.match(preGuideUiCode, /stalePreGuides/);
   assert.match(preGuideUiCode, /Gerar\/Revalidar pendentes/);
   assert.match(preGuideUiCode, /Nenhum atendimento eleg/);
-  assert.doesNotMatch(preGuideUiCode, /Enviar lote|Enviar remessa|Registrar glosa|Remessa enviada|Faturamento TISS concluído|Guia oficial enviada|Lote transmitido|XML oficial|Retorno importado|Glosa processada|Recurso de glosa/i);
+  assert.doesNotMatch(preGuideUiCode, /Enviar lote|Enviar remessa|Registrar glosa|Remessa enviada|Faturamento TISS concluído|Guia oficial enviada|Lote transmitido|Retorno importado|Glosa processada|Recurso de glosa/i);
 });
 
 test('data service usa operações explícitas e o pacote expõe suíte dedicada', () => {
