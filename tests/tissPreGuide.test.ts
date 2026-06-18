@@ -34,6 +34,7 @@ const payerOperationalMigrationCode = readFileSync(join(root, 'supabase/migratio
 const authorizationCycleMigrationCode = readFileSync(join(root, 'supabase/migrations/20260617153000_patient_payer_authorizations_operational_cycle.sql'), 'utf8');
 const xmlDraftMigrationCode = readFileSync(join(root, 'supabase/migrations/20260617190000_tiss_xml_drafts.sql'), 'utf8');
 const revenueCycleMigrationCode = readFileSync(join(root, 'supabase/migrations/20260617210000_tiss_revenue_cycle_backbone.sql'), 'utf8');
+const payerTussAdvancedMigrationCode = readFileSync(join(root, 'supabase/migrations/20260617223000_payer_tuss_advanced_contracts.sql'), 'utf8');
 const xmlDraftGeneratorCode = readFileSync(join(root, 'src/services/tissXmlDraftGenerator.ts'), 'utf8');
 const xmlDraftValidatorCode = readFileSync(join(root, 'src/services/tissXmlDraftValidator.ts'), 'utf8');
 const revenueStateMachineCode = readFileSync(join(root, 'src/services/tissRevenueCycleStateMachine.ts'), 'utf8');
@@ -238,6 +239,71 @@ test('procedimento de convÃªnio sem De/Para TUSS do pagador fica pendente', ()
   assert.equal(result.status, 'pending_data');
   assert.ok(result.errorCodes.includes('PAYER_TUSS_MAPPING_MISSING'));
   assert.equal(result.snapshot.antiGlosaChecklist.items.find((item: any) => item.code === 'procedure_tuss_mapping')?.status, 'blocking');
+});
+
+test('pré-guia usa tabela negociada vigente e bloqueia preço ou De/Para inválido', () => {
+  const priced = validateTissPreGuide({
+    ...validInput,
+    price: {
+      id: 'price-1',
+      amount_cents: 13500,
+      currency: 'BRL',
+      valid_from: '2026-06-01',
+      valid_until: '2026-06-30',
+      source: 'payer_contract',
+    },
+    mapping: {
+      ...validInput.mapping,
+      amount_cents: null,
+      negotiated_amount_cents: null,
+      contract_code: 'AMIL-ABA-001',
+      contract_description: 'Sessão ABA individual negociada Amil',
+      specialty: 'ABA',
+      standard_duration_minutes: 50,
+      source: 'payer_contract',
+    },
+    billingItem: {
+      ...validInput.billingItem,
+      unit_amount_cents: null,
+      amount_cents: null,
+    },
+  });
+  assert.equal(priced.status, 'valid');
+  assert.equal(priced.snapshot.procedure.totalAmountCents, 13500);
+  assert.equal(priced.snapshot.procedure.payerProcedurePriceId, 'price-1');
+  assert.equal(priced.snapshot.procedure.contractCode, 'AMIL-ABA-001');
+  assert.equal(priced.snapshot.procedure.mappingSource, 'payer_contract');
+
+  const missingPrice = validateTissPreGuide({
+    ...validInput,
+    mapping: {
+      ...validInput.mapping,
+      amount_cents: null,
+      negotiated_amount_cents: null,
+    },
+    billingItem: {
+      ...validInput.billingItem,
+      unit_amount_cents: null,
+      amount_cents: null,
+    },
+  });
+  assert.ok(missingPrice.errorCodes.includes('PAYER_PROCEDURE_PRICE_MISSING'));
+  assert.equal(missingPrice.snapshot.antiGlosaChecklist.items.find((item: any) => item.code === 'amount_calculated')?.status, 'blocking');
+
+  const conflict = validateTissPreGuide({
+    ...validInput,
+    price: { id: 'price-2', amount_cents: 13500, conflict: true },
+  });
+  assert.ok(conflict.errorCodes.includes('PAYER_PROCEDURE_PRICE_CONFLICT'));
+
+  const expiredMapping = validateTissPreGuide({
+    ...validInput,
+    mapping: {
+      ...validInput.mapping,
+      valid_to: '2026-05-31',
+    },
+  });
+  assert.ok(expiredMapping.errorCodes.includes('PAYER_TUSS_MAPPING_EXPIRED'));
 });
 
 test('pre-guia válida gera XML TISS-like SP/SADT em rascunho interno', () => {
@@ -861,6 +927,24 @@ test('migration operacional adiciona requisitos TISS do pagador e autorizacoes s
   assert.doesNotMatch(payerOperationalMigrationCode, /create table if not exists public\.(tiss_batches|tiss_remittances|tiss_returns|tiss_denials)/i);
 });
 
+test('migration avançada de convênios cria tabela negociada e regras TISS sem remessa oficial', () => {
+  assert.match(payerTussAdvancedMigrationCode, /create table if not exists public\.payer_procedure_prices/);
+  assert.match(payerTussAdvancedMigrationCode, /payer_id uuid not null references public\.clinic_payers/);
+  assert.match(payerTussAdvancedMigrationCode, /service_catalog_id uuid references public\.tuss_service_catalog/);
+  assert.match(payerTussAdvancedMigrationCode, /payer_tuss_mapping_id uuid references public\.payer_tuss_mappings/);
+  assert.match(payerTussAdvancedMigrationCode, /amount_cents integer not null/);
+  assert.match(payerTussAdvancedMigrationCode, /valid_from date/);
+  assert.match(payerTussAdvancedMigrationCode, /valid_until date/);
+  assert.match(payerTussAdvancedMigrationCode, /alter table public\.payer_procedure_prices enable row level security/);
+  assert.match(payerTussAdvancedMigrationCode, /create policy payer_procedure_prices_admin_rw/);
+  assert.match(payerTussAdvancedMigrationCode, /for all to authenticated/);
+  assert.match(payerTussAdvancedMigrationCode, /contract_code text/);
+  assert.match(payerTussAdvancedMigrationCode, /contract_description text/);
+  assert.match(payerTussAdvancedMigrationCode, /requires_signed_guide/);
+  assert.match(payerTussAdvancedMigrationCode, /requires_stamped_dated_guide/);
+  assert.doesNotMatch(payerTussAdvancedMigrationCode, /soap|certificado|remessa oficial|glosa|retorno/i);
+});
+
 test('migration de autorizacao operacional completa campos sem XML', () => {
   for (const column of [
     'requires_authorized_procedure',
@@ -1226,7 +1310,20 @@ test('cadastros TISS sao globais e reutilizaveis em Configuracoes', () => {
 });
 
 test('Pagadores e regras expoe configuracao TISS guiada por operadora', () => {
+  assert.match(payerRequirementsCode, /Configuração de Convênios/);
+  assert.match(payerRequirementsCode, /Cadastro avançado de operadoras/);
   assert.match(payerRequirementsCode, /Dados TISS da operadora/);
+  assert.match(payerRequirementsCode, /Dados da operadora/);
+  assert.match(payerRequirementsCode, /Dados do prestador no convênio/);
+  assert.match(payerRequirementsCode, /Regras TISS e autorização/);
+  assert.match(payerRequirementsCode, /Contatos e observações administrativas/);
+  assert.match(payerRequirementsCode, /De\/Para TUSS por Convênio/);
+  assert.match(payerRequirementsCode, /Tabela de procedimentos e valores/);
+  assert.match(payerRequirementsCode, /Valor negociado/);
+  assert.match(payerRequirementsCode, /Importar tabela/);
+  assert.match(payerRequirementsCode, /dataService\.getPayerProcedurePrices/);
+  assert.match(payerRequirementsCode, /dataService\.createPayerProcedurePrice/);
+  assert.match(payerRequirementsCode, /dataService\.updatePayerProcedurePrice/);
   assert.match(payerRequirementsCode, /dataService\.getPayerTissProfile/);
   assert.match(payerRequirementsCode, /dataService\.updatePayerTissProfile/);
   assert.match(payerRequirementsCode, /Registro ANS/);
@@ -1424,6 +1521,9 @@ test('data service usa operações explícitas e o pacote expõe suíte dedicada
     'getPayerTissProfile',
     'getPayerTissProfiles',
     'updatePayerTissProfile',
+    'getPayerProcedurePrices',
+    'createPayerProcedurePrice',
+    'updatePayerProcedurePrice',
     'upsertPatientPayerAuthorization',
     'getProfessionalBillingProfile',
     'getProfessionalBillingProfiles',

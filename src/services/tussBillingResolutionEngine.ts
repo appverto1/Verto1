@@ -22,6 +22,7 @@ export type TussBillingResolutionInput = {
   payer?: any;
   serviceCatalog?: any;
   mapping?: any;
+  price?: any;
   tussCode?: any;
   professional?: any;
 };
@@ -121,6 +122,7 @@ export function resolveTussBillingItem(input: TussBillingResolutionInput): TussB
   const appointment = input.appointment || {};
   const billingContext = input.billingContext || {};
   const mapping = input.mapping || null;
+  const price = input.price || null;
   const serviceCatalog = input.serviceCatalog || null;
   const tussCode = input.tussCode || null;
   const patientFinancialPlan = input.patientFinancialPlan || null;
@@ -178,6 +180,8 @@ export function resolveTussBillingItem(input: TussBillingResolutionInput): TussB
     durationMinutes
   });
   const unitAmountCents =
+    nonNegativeInteger(price?.amount_cents) ??
+    nonNegativeInteger(mapping?.negotiated_amount_cents) ??
     nonNegativeInteger(mapping?.amount_cents) ??
     nonNegativeInteger(serviceCatalog?.default_amount_cents) ??
     nonNegativeInteger(patientFinancialPlan?.amount_cents);

@@ -20,6 +20,7 @@ const conferenceCode = readFileSync(join(root, 'src/components/MonthlyConference
 const closureCode = readFileSync(join(root, 'src/components/OperationalClosureCenter.tsx'), 'utf8');
 const packageJson = readFileSync(join(root, 'package.json'), 'utf8');
 const migrationCode = readFileSync(join(root, 'supabase/migrations/20260611183000_tuss_ready_billing_layer.sql'), 'utf8');
+const advancedContractsMigrationCode = readFileSync(join(root, 'supabase/migrations/20260617223000_payer_tuss_advanced_contracts.sql'), 'utf8');
 
 const tests: Array<{ name: string; fn: () => void }> = [];
 const test = (name: string, fn: () => void) => tests.push({ name, fn });
@@ -35,6 +36,16 @@ test('migration cria camada TUSS-ready aditiva, versionavel e com RLS', () => {
   assert.match(migrationCode, /status in \('draft', 'ready', 'pending', 'reviewed', 'exported', 'non_billable'\)/);
   assert.match(migrationCode, /NAO implementa XML TISS, remessa, retorno, glosa, recurso/);
   assert.doesNotMatch(migrationCode, /insert into public\.tuss_codes/i);
+  assert.match(advancedContractsMigrationCode, /create table if not exists public\.payer_procedure_prices/);
+  assert.match(advancedContractsMigrationCode, /alter table public\.payer_procedure_prices enable row level security/);
+  assert.match(advancedContractsMigrationCode, /for all to authenticated/);
+  assert.match(advancedContractsMigrationCode, /Legacy clinics created the clinic row with id = owner user id/);
+  assert.match(advancedContractsMigrationCode, /contract_code/);
+  assert.match(advancedContractsMigrationCode, /negotiated_amount_cents/);
+  assert.match(advancedContractsMigrationCode, /requires_physical_guide/);
+  assert.match(advancedContractsMigrationCode, /revoke all on public\.payer_procedure_prices from anon/);
+  assert.doesNotMatch(advancedContractsMigrationCode, /select\s+\*/i);
+  assert.doesNotMatch(advancedContractsMigrationCode, /remessa|glosa|retorno/i);
 });
 
 test('engine resolve item pronto e pendencias sem hardcodar codigo TUSS', () => {
@@ -60,11 +71,12 @@ test('engine resolve item pronto e pendencias sem hardcodar codigo TUSS', () => 
       requires_guide: true,
       requires_patient_document: true
     },
+    price: { id: 'price-1', amount_cents: 13000, source: 'payer_contract' },
     tussCode: { id: 'tuss-1', code: 'CONFIGURADO', description: 'Configurado pela clinica', version: 'manual' }
   });
   assert.equal(ready.ready, true);
   assert.equal(ready.quantity, 1);
-  assert.equal(ready.amountCents, 12000);
+  assert.equal(ready.amountCents, 13000);
   assert.equal(ready.tussCode, 'CONFIGURADO');
 
   const pending = resolveTussBillingItem({
@@ -174,6 +186,7 @@ test('cenario controlado ABA Amil resolve procedimento TUSS e valor sem afetar p
     payer,
     serviceCatalog,
     mapping,
+    price: { id: 'price-amil-aba', amount_cents: 12500 },
     tussCode
   });
   assert.equal(after.ready, true);
@@ -182,7 +195,7 @@ test('cenario controlado ABA Amil resolve procedimento TUSS e valor sem afetar p
   assert.equal(after.tussDescription, 'Codigo TUSS de teste controlado');
   assert.equal(after.billingUnit, 'session');
   assert.equal(after.quantity, 1);
-  assert.equal(after.amountCents, 12000);
+  assert.equal(after.amountCents, 12500);
   assert.ok(!after.pendingReasons.includes('missing_service_catalog'));
   assert.ok(!after.pendingReasons.includes('missing_tuss_mapping'));
   assert.ok(!after.pendingReasons.includes('missing_amount'));
@@ -335,6 +348,9 @@ test('backend tem CRUD TUSS-ready action-driven e resolve ao salvar contexto fin
     "app.get('/api/admin/tuss/mappings'",
     "app.post('/api/admin/tuss/mappings'",
     "app.patch('/api/admin/tuss/mappings/:mappingId'",
+    "app.get('/api/admin/tuss/prices'",
+    "app.post('/api/admin/tuss/prices'",
+    "app.patch('/api/admin/tuss/prices/:priceId'",
     "app.post('/api/admin/tuss/mappings/:mappingId/revalidate'",
     "app.post('/api/appointments/:appointmentId/billing-item/resolve'"
   ]) {
@@ -343,6 +359,8 @@ test('backend tem CRUD TUSS-ready action-driven e resolve ao salvar contexto fin
   assert.match(serverCode, /resolveAndPersistAppointmentBillingItem/);
   assert.match(serverCode, /const billingItem: any = null|let billingItem: any = null/);
   assert.match(serverCode, /appointment_billing_items/);
+  assert.match(serverCode, /fetchActivePayerProcedurePrice/);
+  assert.match(serverCode, /PAYER_PROCEDURE_PRICE_SELECT/);
   assert.match(serverCode, /onConflict: 'organization_id,appointment_id'/);
   assert.match(serverCode, /affectedItems: billingItems/);
   assert.match(serverCode, /updatedCount: counts\.resolved/);
@@ -378,11 +396,18 @@ test('frontend administra procedimentos codigos e mapeamentos sem F5', () => {
     'createPayerTussMapping',
     'updatePayerTussMapping',
     'revalidatePayerTussMapping',
+    'getPayerProcedurePrices',
+    'createPayerProcedurePrice',
+    'updatePayerProcedurePrice',
     'resolveAppointmentBillingItem'
   ]) {
     assert.match(dataServiceCode, new RegExp(helper));
   }
-  assert.match(payerPanelCode, /Procedimentos e TUSS/);
+  assert.match(payerPanelCode, /Configuração de Convênios/);
+  assert.match(payerPanelCode, /De\/Para TUSS por Convênio/);
+  assert.match(payerPanelCode, /Tabela de procedimentos e valores/);
+  assert.match(payerPanelCode, /Importar tabela/);
+  assert.match(payerPanelCode, /Valor negociado/);
   assert.match(payerPanelCode, /createTussService/);
   assert.match(payerPanelCode, /createTussCode/);
   assert.match(payerPanelCode, /createTussMapping/);
@@ -392,6 +417,9 @@ test('frontend administra procedimentos codigos e mapeamentos sem F5', () => {
   assert.match(payerPanelCode, /disableTussCode/);
   assert.match(payerPanelCode, /editTussMapping/);
   assert.match(payerPanelCode, /revalidateAffectedTussMapping/);
+  assert.match(payerPanelCode, /saveProcedurePrice/);
+  assert.match(payerPanelCode, /editProcedurePrice/);
+  assert.match(payerPanelCode, /disableProcedurePrice/);
   assert.match(payerPanelCode, /Revalidar atendimentos afetados/);
   assert.match(payerPanelCode, /defaultDurationMinutes/);
   assert.match(payerPanelCode, /validFrom/);

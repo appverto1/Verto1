@@ -2550,6 +2550,71 @@ export const dataService = {
     }
   },
 
+  async getPayerProcedurePrices(options: any = {}) {
+    const endpoint = endpointWithQuery('/api/admin/tuss/prices', {
+      payerId: options.payerId,
+      serviceCatalogId: options.serviceCatalogId,
+      active: options.active ? 'true' : undefined,
+      limit: normalizeListLimit(options.limit, 120, 300)
+    });
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getPayerProcedurePrices',
+        operation: 'list',
+        table: 'payer_procedure_prices,tuss_service_catalog,tuss_codes,payer_tuss_mappings',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, data: [], error: 'Não foi possível carregar a tabela negociada agora.' };
+    }
+  },
+
+  async createPayerProcedurePrice(payload: any = {}) {
+    try {
+      const response = await fetchClinical('/api/admin/tuss/prices', {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'createPayerProcedurePrice',
+        operation: 'write',
+        table: 'payer_procedure_prices',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, error: 'Não foi possível salvar o valor negociado agora.' };
+    }
+  },
+
+  async updatePayerProcedurePrice(priceId: string, payload: any = {}) {
+    const endpoint = `/api/admin/tuss/prices/${encodeURIComponent(String(priceId))}`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'PATCH',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'updatePayerProcedurePrice',
+        operation: 'write',
+        table: 'payer_procedure_prices',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, error: 'Não foi possível atualizar o valor negociado agora.' };
+    }
+  },
+
   async getAppointmentBillingContext(appointmentId: string) {
     const endpoint = `/api/appointments/${encodeURIComponent(String(appointmentId))}/billing-context`;
     try {

@@ -213,6 +213,8 @@ const issueLabels: Record<string, string> = {
   PROVIDER_CODE_MISSING: "Código do prestador",
   CNES_MISSING: "CNES",
   PAYER_TISS_PROFILE_MISSING: "Dados do pagador",
+  PAYER_CONFIGURATION_INCOMPLETE: "Convênio incompleto",
+  PAYER_TISS_VERSION_MISSING: "Versão TISS",
   PAYER_ANS_REGISTRATION_MISSING: "Registro ANS",
   PAYER_CONTRACTED_PROVIDER_CODE_MISSING: "Código do contratado",
   PAYER_CID_REQUIRED: "CID",
@@ -222,6 +224,9 @@ const issueLabels: Record<string, string> = {
   PROFESSIONAL_COUNCIL_STATE_MISSING: "UF do conselho",
   CBO_MISSING: "CBO",
   PAYER_TUSS_MAPPING_MISSING: "Mapeamento TUSS",
+  PAYER_TUSS_MAPPING_EXPIRED: "Mapeamento vencido",
+  PAYER_PROCEDURE_PRICE_MISSING: "Sem valor negociado",
+  PAYER_PROCEDURE_PRICE_CONFLICT: "Valor conflitante",
   PROCEDURE_MISSING: "Procedimento",
   TUSS_CODE_MISSING: "TUSS",
   TUSS_DESCRIPTION_MISSING: "Descrição TUSS",
@@ -340,7 +345,7 @@ function isPatientIssue(item?: { code?: string | null; section?: string | null }
 
 function isPayerProfileIssue(item?: { code?: string | null; section?: string | null }) {
   const code = normalizeIssueCode(item?.code);
-  return ["PAYER_TISS_PROFILE_MISSING", "PAYER_ANS_REGISTRATION_MISSING", "PAYER_CONTRACTED_PROVIDER_CODE_MISSING", "PAYER_CID_REQUIRED"].includes(code);
+  return ["PAYER_TISS_PROFILE_MISSING", "PAYER_CONFIGURATION_INCOMPLETE", "PAYER_TISS_VERSION_MISSING", "PAYER_ANS_REGISTRATION_MISSING", "PAYER_CONTRACTED_PROVIDER_CODE_MISSING", "PAYER_CID_REQUIRED"].includes(code);
 }
 
 function isProfessionalIssue(item?: { code?: string | null; section?: string | null }) {
@@ -1186,10 +1191,10 @@ export function TissPreGuideTab({
     const code = normalizeIssueCode(firstIssue?.code);
     if (code.includes("AUTHORIZATION") || code.includes("GUIDE")) return authorizationActionLabel(code);
     if (code === "RESPONSIBLE_SIGNATURE_REQUIRED") return "Coletar assinatura";
+    if (code.includes("TUSS") || code.includes("PROCEDURE_PRICE") || code.includes("PROCEDURE")) return "Mapear TUSS";
     if (code.includes("PAYER")) return "Corrigir dados do pagador";
     if (code.includes("PROFESSIONAL") || code === "CBO_MISSING") return "Corrigir profissional";
     if (code.includes("CARD") || code.includes("BENEFICIARY")) return "Corrigir carteirinha";
-    if (code.includes("TUSS") || code.includes("PROCEDURE")) return "Mapear TUSS";
     return "Corrigir pendências e revalidar a Pré-guia.";
   })();
   const detailHasAuthorization = hasAuthorizationSnapshot(detail);
@@ -1244,6 +1249,12 @@ export function TissPreGuideTab({
       return {
         label: authorizationActionLabel(code),
         onClick: () => openAuthorizationEditor(),
+      };
+    }
+    if (code === "PAYER_TUSS_MAPPING_MISSING" || code === "PAYER_TUSS_MAPPING_EXPIRED" || code === "PAYER_PROCEDURE_PRICE_MISSING" || code === "PAYER_PROCEDURE_PRICE_CONFLICT") {
+      return {
+        label: code.includes("PRICE") ? "Configurar tabela negociada" : "Mapear TUSS do pagador",
+        onClick: () => void openProfileEditor("payer"),
       };
     }
     if (isPayerProfileIssue(item)) {

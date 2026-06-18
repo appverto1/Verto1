@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { CheckCircle2, ClipboardCheck, Loader2, Plus, RefreshCw, Save, ShieldCheck } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ClipboardCheck, FileSpreadsheet, Loader2, Plus, RefreshCw, Save, ShieldCheck } from "lucide-react";
 import { dataService } from "../services/dataService";
 import { buildClinicMonthDateRange } from "../utils/scheduling";
 
@@ -60,11 +60,18 @@ type PayerTussMapping = {
   serviceName?: string | null;
   internalCode?: string | null;
   tussCode?: string | null;
+  tussDescription?: string | null;
+  contractCode?: string | null;
+  contractDescription?: string | null;
+  payerSpecificDescription?: string | null;
+  specialty?: string | null;
   guideType?: string | null;
   billingUnit?: string | null;
   quantityRule?: string | null;
   defaultQuantity?: number | null;
   amountCents?: number | null;
+  negotiatedAmountCents?: number | null;
+  standardDurationMinutes?: number | null;
   requiresAuthorization?: boolean;
   requiresGuide?: boolean;
   requiresReport?: boolean;
@@ -74,7 +81,27 @@ type PayerTussMapping = {
   useActualDuration?: boolean;
   validFrom?: string | null;
   validTo?: string | null;
+  source?: string | null;
+  notes?: string | null;
   active: boolean;
+};
+
+type PayerProcedurePrice = {
+  id: string;
+  payerId: string;
+  serviceCatalogId?: string | null;
+  tussCodeId?: string | null;
+  payerTussMappingId?: string | null;
+  serviceName?: string | null;
+  internalCode?: string | null;
+  tussCode?: string | null;
+  amountCents?: number | null;
+  currency?: string | null;
+  validFrom?: string | null;
+  validUntil?: string | null;
+  source?: string | null;
+  notes?: string | null;
+  active?: boolean;
 };
 
 type PayerTissForm = {
@@ -98,9 +125,21 @@ type PayerTissForm = {
   contractedExecutant: string;
   contractedProviderCode: string;
   operatorProviderCode: string;
+  operatorDocumentNumber: string;
+  auditorContactName: string;
+  billingEmail: string;
+  billingPhone: string;
+  operatorPortalUrl: string;
   defaultAttendanceType: string;
   defaultAttendanceRegime: string;
   defaultAttendanceCharacter: string;
+  requiresPhysicalGuide: boolean;
+  requiresSignedGuide: boolean;
+  requiresStampedDatedGuide: boolean;
+  requiresAdministrativeReport: boolean;
+  allowsMixedMultidisciplinaryGuide: boolean;
+  requiresSeparateGuideBySpecialty: boolean;
+  administrativeNotes: string;
   specificRules: string;
 };
 
@@ -152,11 +191,16 @@ const defaultTussCodeForm = {
 const defaultTussMappingForm = {
   serviceCatalogId: "",
   tussCodeId: "",
+  contractCode: "",
+  contractDescription: "",
+  specialty: "",
   guideType: "sp_sadt",
   billingUnit: "session",
   quantityRule: "per_session",
   defaultQuantity: "1",
   amountCents: "",
+  negotiatedAmountCents: "",
+  standardDurationMinutes: "",
   requiresAuthorization: false,
   requiresGuide: false,
   requiresReport: false,
@@ -166,6 +210,20 @@ const defaultTussMappingForm = {
   useActualDuration: false,
   validFrom: "",
   validTo: "",
+  source: "manual",
+  notes: "",
+};
+
+const defaultProcedurePriceForm = {
+  serviceCatalogId: "",
+  tussCodeId: "",
+  payerTussMappingId: "",
+  amountCents: "",
+  currency: "BRL",
+  validFrom: "",
+  validUntil: "",
+  source: "manual",
+  notes: "",
 };
 
 const defaultPayerTissForm: PayerTissForm = {
@@ -189,9 +247,21 @@ const defaultPayerTissForm: PayerTissForm = {
   contractedExecutant: "",
   contractedProviderCode: "",
   operatorProviderCode: "",
+  operatorDocumentNumber: "",
+  auditorContactName: "",
+  billingEmail: "",
+  billingPhone: "",
+  operatorPortalUrl: "",
   defaultAttendanceType: "",
   defaultAttendanceRegime: "",
   defaultAttendanceCharacter: "",
+  requiresPhysicalGuide: false,
+  requiresSignedGuide: false,
+  requiresStampedDatedGuide: false,
+  requiresAdministrativeReport: false,
+  allowsMixedMultidisciplinaryGuide: false,
+  requiresSeparateGuideBySpecialty: false,
+  administrativeNotes: "",
   specificRules: "",
 };
 
@@ -216,9 +286,21 @@ const normalizePayerTissProfile = (profile: any = {}): PayerTissForm => ({
   contractedExecutant: profile.contracted_executant || profile.contractedExecutant || "",
   contractedProviderCode: profile.contracted_provider_code || profile.contractedProviderCode || "",
   operatorProviderCode: profile.operator_provider_code || profile.operatorProviderCode || "",
+  operatorDocumentNumber: profile.operator_document_number || profile.operatorDocumentNumber || "",
+  auditorContactName: profile.auditor_contact_name || profile.auditorContactName || "",
+  billingEmail: profile.billing_email || profile.billingEmail || "",
+  billingPhone: profile.billing_phone || profile.billingPhone || "",
+  operatorPortalUrl: profile.operator_portal_url || profile.operatorPortalUrl || "",
   defaultAttendanceType: profile.default_attendance_type || profile.defaultAttendanceType || "",
   defaultAttendanceRegime: profile.default_attendance_regime || profile.defaultAttendanceRegime || "",
   defaultAttendanceCharacter: profile.default_attendance_character || profile.defaultAttendanceCharacter || "",
+  requiresPhysicalGuide: Boolean(profile.requires_physical_guide ?? profile.requiresPhysicalGuide),
+  requiresSignedGuide: Boolean(profile.requires_signed_guide ?? profile.requiresSignedGuide),
+  requiresStampedDatedGuide: Boolean(profile.requires_stamped_dated_guide ?? profile.requiresStampedDatedGuide),
+  requiresAdministrativeReport: Boolean(profile.requires_administrative_report ?? profile.requiresAdministrativeReport),
+  allowsMixedMultidisciplinaryGuide: Boolean(profile.allows_mixed_multidisciplinary_guide ?? profile.allowsMixedMultidisciplinaryGuide),
+  requiresSeparateGuideBySpecialty: Boolean(profile.requires_separate_guide_by_specialty ?? profile.requiresSeparateGuideBySpecialty),
+  administrativeNotes: profile.administrative_notes || profile.administrativeNotes || "",
   specificRules: profile.specific_rules || profile.specificRules || "",
 });
 
@@ -251,13 +333,16 @@ export function PayerRequirementsPanel() {
   const [tussServices, setTussServices] = useState<TussService[]>([]);
   const [tussCodes, setTussCodes] = useState<TussCode[]>([]);
   const [tussMappings, setTussMappings] = useState<PayerTussMapping[]>([]);
+  const [procedurePrices, setProcedurePrices] = useState<PayerProcedurePrice[]>([]);
   const [tussLoading, setTussLoading] = useState(false);
   const [tussServiceForm, setTussServiceForm] = useState(defaultTussServiceForm);
   const [tussCodeForm, setTussCodeForm] = useState(defaultTussCodeForm);
   const [tussMappingForm, setTussMappingForm] = useState(defaultTussMappingForm);
+  const [procedurePriceForm, setProcedurePriceForm] = useState(defaultProcedurePriceForm);
   const [editingTussServiceId, setEditingTussServiceId] = useState("");
   const [editingTussCodeId, setEditingTussCodeId] = useState("");
   const [editingTussMappingId, setEditingTussMappingId] = useState("");
+  const [editingProcedurePriceId, setEditingProcedurePriceId] = useState("");
   const [tussActionInfo, setTussActionInfo] = useState("");
   const [payerTissForm, setPayerTissForm] = useState<PayerTissForm>(defaultPayerTissForm);
   const [payerTissLoading, setPayerTissLoading] = useState(false);
@@ -271,6 +356,15 @@ export function PayerRequirementsPanel() {
     () => payerTissMissing(selectedPayer, payerTissForm),
     [payerTissForm, selectedPayer],
   );
+  const selectedPayerMappingCount = tussMappings.filter((mapping) => mapping.active !== false).length;
+  const selectedPayerPriceCount = procedurePrices.filter((price) => price.active !== false).length;
+  const hasDemoTussData = [...tussMappings, ...tussCodes].some((item: any) =>
+    /demo|teste/i.test(String(item?.source || item?.tussCode || item?.code || item?.contractCode || "")),
+  );
+  const formatCurrency = (amount?: number | null) =>
+    Number.isFinite(Number(amount))
+      ? `R$ ${(Number(amount) / 100).toFixed(2)}`
+      : "valor pendente";
 
   const loadPayers = async () => {
     setLoading(true);
@@ -314,15 +408,22 @@ export function PayerRequirementsPanel() {
   const loadTussConfig = async (payerId: string) => {
     setTussLoading(true);
     try {
-      const [servicesResult, codesResult, mappingsResult] = await Promise.all([
+      const [servicesResult, codesResult, mappingsResult, pricesResult] = await Promise.all([
         dataService.getTussServices({ active: true, limit: 160 }),
         dataService.getTussCodes({ active: true, limit: 240 }),
         dataService.getPayerTussMappings({ payerId, active: true, limit: 180 }),
+        payerId ? dataService.getPayerProcedurePrices({ payerId, active: true, limit: 180 }) : Promise.resolve({ success: true, data: [] }),
       ]);
       if (servicesResult?.success) setTussServices(Array.isArray(servicesResult.data) ? servicesResult.data : []);
       if (codesResult?.success) setTussCodes(Array.isArray(codesResult.data) ? codesResult.data : []);
       if (mappingsResult?.success) setTussMappings(Array.isArray(mappingsResult.data) ? mappingsResult.data : []);
+      if (pricesResult?.success) setProcedurePrices(Array.isArray(pricesResult.data) ? pricesResult.data : []);
       setTussMappingForm((current) => ({
+        ...current,
+        serviceCatalogId: current.serviceCatalogId || servicesResult?.data?.[0]?.id || "",
+        tussCodeId: current.tussCodeId || codesResult?.data?.[0]?.id || "",
+      }));
+      setProcedurePriceForm((current) => ({
         ...current,
         serviceCatalogId: current.serviceCatalogId || servicesResult?.data?.[0]?.id || "",
         tussCodeId: current.tussCodeId || codesResult?.data?.[0]?.id || "",
@@ -458,6 +559,14 @@ export function PayerRequirementsPanel() {
     });
   };
 
+  const upsertProcedurePriceInState = (item: PayerProcedurePrice) => {
+    setProcedurePrices((current) => {
+      const index = current.findIndex((price) => price.id === item.id);
+      if (index < 0) return [item, ...current];
+      return current.map((price) => price.id === item.id ? item : price);
+    });
+  };
+
   const upsertTussServiceInState = (item: TussService) => {
     setTussServices((current) => Array.from(new Map([item, ...current].map((service) => [service.id, service])).values()));
   };
@@ -547,6 +656,13 @@ export function PayerRequirementsPanel() {
         payerId: selectedPayerId,
         defaultQuantity: Number(tussMappingForm.defaultQuantity || 1),
         amountCents: tussMappingForm.amountCents ? Number(tussMappingForm.amountCents) : null,
+        negotiatedAmountCents: tussMappingForm.negotiatedAmountCents ? Number(tussMappingForm.negotiatedAmountCents) : (tussMappingForm.amountCents ? Number(tussMappingForm.amountCents) : null),
+        standardDurationMinutes: tussMappingForm.standardDurationMinutes ? Number(tussMappingForm.standardDurationMinutes) : null,
+        contractCode: tussMappingForm.contractCode.trim(),
+        contractDescription: tussMappingForm.contractDescription.trim(),
+        specialty: tussMappingForm.specialty.trim(),
+        source: tussMappingForm.source,
+        notes: tussMappingForm.notes.trim(),
       };
       const result = editingTussMappingId
         ? await dataService.updatePayerTussMapping(editingTussMappingId, payload)
@@ -563,6 +679,37 @@ export function PayerRequirementsPanel() {
       }));
       setEditingTussMappingId("");
       setTussActionInfo(editingTussMappingId ? "Mapeamento atualizado." : "Mapeamento criado.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const saveProcedurePrice = async () => {
+    if (!selectedPayerId || !procedurePriceForm.serviceCatalogId || procedurePriceForm.amountCents === "") return;
+    setSaving(true);
+    setError("");
+    setTussActionInfo("");
+    try {
+      const payload = {
+        ...procedurePriceForm,
+        payerId: selectedPayerId,
+        amountCents: Number(procedurePriceForm.amountCents || 0),
+      };
+      const result = editingProcedurePriceId
+        ? await dataService.updatePayerProcedurePrice(editingProcedurePriceId, payload)
+        : await dataService.createPayerProcedurePrice(payload);
+      if (!result?.success || !result.data) {
+        setError(result?.error || "Não foi possível salvar o valor negociado agora.");
+        return;
+      }
+      upsertProcedurePriceInState(result.data);
+      setProcedurePriceForm((current) => ({
+        ...defaultProcedurePriceForm,
+        serviceCatalogId: current.serviceCatalogId,
+        tussCodeId: current.tussCodeId,
+      }));
+      setEditingProcedurePriceId("");
+      setTussActionInfo(editingProcedurePriceId ? "Valor negociado atualizado." : "Valor negociado cadastrado.");
     } finally {
       setSaving(false);
     }
@@ -600,11 +747,16 @@ export function PayerRequirementsPanel() {
     setTussMappingForm({
       serviceCatalogId: mapping.serviceCatalogId || "",
       tussCodeId: mapping.tussCodeId || "",
+      contractCode: mapping.contractCode || "",
+      contractDescription: mapping.contractDescription || mapping.payerSpecificDescription || "",
+      specialty: mapping.specialty || "",
       guideType: mapping.guideType || "sp_sadt",
       billingUnit: mapping.billingUnit || "session",
       quantityRule: mapping.quantityRule || "per_session",
       defaultQuantity: mapping.defaultQuantity ? String(mapping.defaultQuantity) : "1",
       amountCents: mapping.amountCents ? String(mapping.amountCents) : "",
+      negotiatedAmountCents: mapping.negotiatedAmountCents ? String(mapping.negotiatedAmountCents) : "",
+      standardDurationMinutes: mapping.standardDurationMinutes ? String(mapping.standardDurationMinutes) : "",
       requiresAuthorization: Boolean(mapping.requiresAuthorization),
       requiresGuide: Boolean(mapping.requiresGuide),
       requiresReport: Boolean(mapping.requiresReport),
@@ -614,6 +766,23 @@ export function PayerRequirementsPanel() {
       useActualDuration: Boolean(mapping.useActualDuration),
       validFrom: mapping.validFrom || "",
       validTo: mapping.validTo || "",
+      source: mapping.source || "manual",
+      notes: mapping.notes || "",
+    });
+  };
+
+  const editProcedurePrice = (price: PayerProcedurePrice) => {
+    setEditingProcedurePriceId(price.id);
+    setProcedurePriceForm({
+      serviceCatalogId: price.serviceCatalogId || "",
+      tussCodeId: price.tussCodeId || "",
+      payerTussMappingId: price.payerTussMappingId || "",
+      amountCents: price.amountCents ? String(price.amountCents) : "",
+      currency: price.currency || "BRL",
+      validFrom: price.validFrom || "",
+      validUntil: price.validUntil || "",
+      source: price.source || "manual",
+      notes: price.notes || "",
     });
   };
 
@@ -700,16 +869,37 @@ export function PayerRequirementsPanel() {
     }
   };
 
+  const disableProcedurePrice = async (priceId: string) => {
+    setSaving(true);
+    setError("");
+    setTussActionInfo("");
+    try {
+      const result = await dataService.updatePayerProcedurePrice(priceId, { active: false });
+      if (!result?.success) {
+        setError(result?.error || "Não foi possível inativar o valor negociado agora.");
+        return;
+      }
+      setProcedurePrices((current) => current.filter((price) => price.id !== priceId));
+      if (editingProcedurePriceId === priceId) {
+        setEditingProcedurePriceId("");
+        setProcedurePriceForm(defaultProcedurePriceForm);
+      }
+      setTussActionInfo("Valor negociado inativado.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <section className="rounded-3xl border border-slate-100 bg-slate-50/80 p-5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="flex items-center gap-2 text-sm font-bold text-slate-800">
             <ShieldCheck size={18} className="text-[#7a32fc]" />
-            Pagadores e regras
+            Configuração de Convênios
           </p>
           <p className="mt-1 text-sm text-slate-500">
-            Configure exigências mínimas para pré-faturamento e auditoria operacional.
+            Cadastro avançado de operadoras, regras TISS, De/Para TUSS e tabela negociada por pagador.
           </p>
         </div>
         <button
@@ -727,7 +917,7 @@ export function PayerRequirementsPanel() {
       <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(240px,0.9fr)_minmax(0,1.4fr)]">
         <div className="space-y-3">
           <div className="rounded-2xl bg-white p-3">
-            <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Novo pagador</p>
+            <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Novo convênio / pagador</p>
             <input
               value={payerForm.name}
               onChange={(event) => setPayerForm((current) => ({ ...current, name: event.target.value }))}
@@ -780,6 +970,19 @@ export function PayerRequirementsPanel() {
               <p className="mt-1 text-xs text-slate-500">
                 Regra sem tipo de sessão vale para todos os serviços. Uma regra com tipo específico tem prioridade.
               </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <span className={`rounded-full px-2 py-1 text-xs font-bold ${selectedPayerTissMissing.length === 0 ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
+                  {isInsurancePayer(selectedPayer) ? (selectedPayerTissMissing.length === 0 ? "TISS completo" : "TISS incompleto") : "TISS não aplicável"}
+                </span>
+                <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-bold text-slate-600">{selectedPayerMappingCount} De/Para TUSS</span>
+                <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-bold text-slate-600">{selectedPayerPriceCount} valor(es) vigentes</span>
+                {hasDemoTussData && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-1 text-xs font-bold text-amber-700">
+                    <AlertTriangle size={12} />
+                    Dados demo/teste
+                  </span>
+                )}
+              </div>
             </div>
             <ClipboardCheck size={18} className="text-slate-400" />
           </div>
@@ -815,10 +1018,15 @@ export function PayerRequirementsPanel() {
                     {payerTissMessage}
                   </div>
                 )}
+                <p className="mt-4 text-xs font-bold uppercase tracking-widest text-indigo-500">Dados da operadora</p>
                 <div className="mt-3 grid gap-3 md:grid-cols-2">
                   <input value={payerTissForm.ansRegistration} onChange={(event) => updatePayerTiss("ansRegistration", event.target.value)} placeholder="Registro ANS" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none" />
                   <input value={payerTissForm.operatorCode} onChange={(event) => updatePayerTiss("operatorCode", event.target.value)} placeholder="Código da operadora" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none" />
+                  <input value={payerTissForm.operatorDocumentNumber} onChange={(event) => updatePayerTiss("operatorDocumentNumber", event.target.value)} placeholder="CNPJ da operadora" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none" />
                   <input value={payerTissForm.tissVersion} onChange={(event) => updatePayerTiss("tissVersion", event.target.value)} placeholder="Versão TISS configurada" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none" />
+                </div>
+                <p className="mt-4 text-xs font-bold uppercase tracking-widest text-indigo-500">Dados do prestador no convênio</p>
+                <div className="mt-3 grid gap-3 md:grid-cols-2">
                   <select value={payerTissForm.defaultGuideType} onChange={(event) => updatePayerTiss("defaultGuideType", event.target.value)} className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none">
                     <option value="sp_sadt">Guia SP/SADT</option>
                     <option value="consulta">Guia de consulta</option>
@@ -837,6 +1045,7 @@ export function PayerRequirementsPanel() {
                   <input value={payerTissForm.defaultAttendanceRegime} onChange={(event) => updatePayerTiss("defaultAttendanceRegime", event.target.value)} placeholder="Regime padrão" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none" />
                   <input value={payerTissForm.defaultAttendanceCharacter} onChange={(event) => updatePayerTiss("defaultAttendanceCharacter", event.target.value)} placeholder="Caráter padrão" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none" />
                 </div>
+                <p className="mt-4 text-xs font-bold uppercase tracking-widest text-indigo-500">Regras TISS e autorização</p>
                 <div className="mt-3 grid gap-2 sm:grid-cols-2">
                   {[
                     ["requiresBeneficiaryCard", "Exige carteirinha"],
@@ -851,6 +1060,12 @@ export function PayerRequirementsPanel() {
                     ["requiresCnes", "Exige CNES do prestador"],
                     ["requiresProviderCode", "Exige código do prestador"],
                     ["requiresResponsibleSignature", "Exige assinatura do responsável"],
+                    ["requiresPhysicalGuide", "Exige guia física impressa"],
+                    ["requiresSignedGuide", "Exige guia assinada"],
+                    ["requiresStampedDatedGuide", "Exige guia carimbada/datada"],
+                    ["requiresAdministrativeReport", "Exige relatório/evolução administrativa"],
+                    ["allowsMixedMultidisciplinaryGuide", "Permite guia mista multidisciplinar"],
+                    ["requiresSeparateGuideBySpecialty", "Exige guia segregada por especialidade"],
                   ].map(([key, label]) => (
                     <label key={key} className="flex items-center gap-2 rounded-2xl border border-slate-100 bg-white px-3 py-2 text-sm font-semibold text-slate-700">
                       <input
@@ -863,6 +1078,19 @@ export function PayerRequirementsPanel() {
                     </label>
                   ))}
                 </div>
+                <p className="mt-4 text-xs font-bold uppercase tracking-widest text-indigo-500">Contatos e observações administrativas</p>
+                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                  <input value={payerTissForm.auditorContactName} onChange={(event) => updatePayerTiss("auditorContactName", event.target.value)} placeholder="Contato do auditor/operadora" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none" />
+                  <input value={payerTissForm.billingEmail} onChange={(event) => updatePayerTiss("billingEmail", event.target.value)} placeholder="E-mail de faturamento" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none" />
+                  <input value={payerTissForm.billingPhone} onChange={(event) => updatePayerTiss("billingPhone", event.target.value)} placeholder="Telefone/WhatsApp administrativo" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none" />
+                  <input value={payerTissForm.operatorPortalUrl} onChange={(event) => updatePayerTiss("operatorPortalUrl", event.target.value)} placeholder="Portal da operadora" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none" />
+                </div>
+                <textarea
+                  value={payerTissForm.administrativeNotes}
+                  onChange={(event) => updatePayerTiss("administrativeNotes", event.target.value)}
+                  placeholder="Observações de envio/manual, contato, portal e operação administrativa"
+                  className="mt-3 min-h-[72px] w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none"
+                />
                 <textarea
                   value={payerTissForm.specificRules}
                   onChange={(event) => updatePayerTiss("specificRules", event.target.value)}
@@ -980,8 +1208,8 @@ export function PayerRequirementsPanel() {
       <div className="mt-5 rounded-2xl bg-white p-4">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <p className="text-sm font-bold text-slate-900">Procedimentos e TUSS</p>
-            <p className="mt-1 text-xs text-slate-500">Configure catálogo interno, códigos usados pela clínica e mapeamento por pagador para pré-faturamento.</p>
+            <p className="text-sm font-bold text-slate-900">De/Para TUSS por Convênio</p>
+            <p className="mt-1 text-xs text-slate-500">Configure catálogo interno, códigos usados pela clínica, mapeamento por pagador e valores negociados para pré-faturamento.</p>
           </div>
           <button
             type="button"
@@ -1176,6 +1404,26 @@ export function PayerRequirementsPanel() {
               {tussCodes.map((code) => <option key={code.id} value={code.id}>{code.code} - {code.description}</option>)}
             </select>
             <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              <input
+                value={tussMappingForm.contractCode}
+                onChange={(event) => setTussMappingForm((current) => ({ ...current, contractCode: event.target.value }))}
+                placeholder="Código contratual do pagador"
+                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
+              />
+              <input
+                value={tussMappingForm.specialty}
+                onChange={(event) => setTussMappingForm((current) => ({ ...current, specialty: event.target.value }))}
+                placeholder="Especialidade"
+                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
+              />
+            </div>
+            <textarea
+              value={tussMappingForm.contractDescription}
+              onChange={(event) => setTussMappingForm((current) => ({ ...current, contractDescription: event.target.value }))}
+              placeholder="Descrição contratual do pagador, se diferente da descrição TUSS"
+              className="mt-2 min-h-[64px] w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
+            />
+            <div className="mt-2 grid gap-2 sm:grid-cols-2">
               <select
                 value={tussMappingForm.guideType}
                 onChange={(event) => setTussMappingForm((current) => ({ ...current, guideType: event.target.value }))}
@@ -1238,7 +1486,43 @@ export function PayerRequirementsPanel() {
                 min="0"
                 value={tussMappingForm.amountCents}
                 onChange={(event) => setTussMappingForm((current) => ({ ...current, amountCents: event.target.value }))}
-                placeholder="Valor em centavos"
+                placeholder="Valor legado em centavos"
+                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
+              />
+            </div>
+            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              <input
+                type="number"
+                min="0"
+                value={tussMappingForm.negotiatedAmountCents}
+                onChange={(event) => setTussMappingForm((current) => ({ ...current, negotiatedAmountCents: event.target.value }))}
+                placeholder="Valor negociado em centavos"
+                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
+              />
+              <input
+                type="number"
+                min="1"
+                value={tussMappingForm.standardDurationMinutes}
+                onChange={(event) => setTussMappingForm((current) => ({ ...current, standardDurationMinutes: event.target.value }))}
+                placeholder="Duração padrão (min)"
+                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
+              />
+            </div>
+            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              <select
+                value={tussMappingForm.source}
+                onChange={(event) => setTussMappingForm((current) => ({ ...current, source: event.target.value }))}
+                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
+              >
+                <option value="manual">Manual</option>
+                <option value="imported">Importado</option>
+                <option value="demo">Demo/teste</option>
+                <option value="payer_contract">Contrato do pagador</option>
+              </select>
+              <input
+                value={tussMappingForm.notes}
+                onChange={(event) => setTussMappingForm((current) => ({ ...current, notes: event.target.value }))}
+                placeholder="Observações administrativas"
                 className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
               />
             </div>
@@ -1281,6 +1565,133 @@ export function PayerRequirementsPanel() {
               {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
               {editingTussMappingId ? "Atualizar mapeamento" : "Salvar mapeamento"}
             </button>
+          </div>
+        </div>
+
+        <div className="mt-4 rounded-2xl border border-emerald-100 bg-emerald-50/40 p-3">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <p className="flex items-center gap-2 text-sm font-bold text-slate-900">
+                <FileSpreadsheet size={16} className="text-emerald-600" />
+                Tabela de procedimentos e valores
+              </p>
+              <p className="mt-1 text-xs text-slate-600">
+                Valores negociados por convênio, procedimento, TUSS e vigência. A Pré-guia captura snapshot do valor vigente na data do atendimento.
+              </p>
+            </div>
+            <span className="rounded-full bg-white px-2 py-1 text-xs font-bold text-emerald-700">
+              {selectedPayerPriceCount} valor(es) ativo(s)
+            </span>
+          </div>
+
+          <div className="mt-3 grid gap-2 lg:grid-cols-[1.2fr_1.2fr_1fr_0.8fr]">
+            <select
+              value={procedurePriceForm.serviceCatalogId}
+              onChange={(event) => setProcedurePriceForm((current) => ({ ...current, serviceCatalogId: event.target.value }))}
+              className="w-full rounded-2xl border border-emerald-100 bg-white px-3 py-2 text-sm font-semibold outline-none"
+            >
+              <option value="">Procedimento interno</option>
+              {tussServices.map((service) => <option key={service.id} value={service.id}>{service.name}</option>)}
+            </select>
+            <select
+              value={procedurePriceForm.tussCodeId}
+              onChange={(event) => setProcedurePriceForm((current) => ({ ...current, tussCodeId: event.target.value }))}
+              className="w-full rounded-2xl border border-emerald-100 bg-white px-3 py-2 text-sm font-semibold outline-none"
+            >
+              <option value="">TUSS opcional</option>
+              {tussCodes.map((code) => <option key={code.id} value={code.id}>{code.code} - {code.description}</option>)}
+            </select>
+            <input
+              type="number"
+              min="0"
+              value={procedurePriceForm.amountCents}
+              onChange={(event) => setProcedurePriceForm((current) => ({ ...current, amountCents: event.target.value }))}
+              placeholder="Valor negociado em centavos"
+              className="w-full rounded-2xl border border-emerald-100 bg-white px-3 py-2 text-sm font-semibold outline-none"
+            />
+            <select
+              value={procedurePriceForm.source}
+              onChange={(event) => setProcedurePriceForm((current) => ({ ...current, source: event.target.value }))}
+              className="w-full rounded-2xl border border-emerald-100 bg-white px-3 py-2 text-sm font-semibold outline-none"
+            >
+              <option value="manual">Manual</option>
+              <option value="imported">Importado</option>
+              <option value="demo">Demo/teste</option>
+              <option value="payer_contract">Contrato do pagador</option>
+            </select>
+          </div>
+          <div className="mt-2 grid gap-2 md:grid-cols-4">
+            <select
+              value={procedurePriceForm.payerTussMappingId}
+              onChange={(event) => setProcedurePriceForm((current) => ({ ...current, payerTussMappingId: event.target.value }))}
+              className="w-full rounded-2xl border border-emerald-100 bg-white px-3 py-2 text-sm font-semibold outline-none"
+            >
+              <option value="">Vincular De/Para opcional</option>
+              {tussMappings.map((mapping) => <option key={mapping.id} value={mapping.id}>{mapping.serviceName || mapping.internalCode || "Procedimento"} {mapping.tussCode ? `· TUSS ${mapping.tussCode}` : ""}</option>)}
+            </select>
+            <input
+              type="date"
+              value={procedurePriceForm.validFrom}
+              onChange={(event) => setProcedurePriceForm((current) => ({ ...current, validFrom: event.target.value }))}
+              className="w-full rounded-2xl border border-emerald-100 bg-white px-3 py-2 text-sm font-semibold outline-none"
+            />
+            <input
+              type="date"
+              value={procedurePriceForm.validUntil}
+              onChange={(event) => setProcedurePriceForm((current) => ({ ...current, validUntil: event.target.value }))}
+              className="w-full rounded-2xl border border-emerald-100 bg-white px-3 py-2 text-sm font-semibold outline-none"
+            />
+            <input
+              value={procedurePriceForm.notes}
+              onChange={(event) => setProcedurePriceForm((current) => ({ ...current, notes: event.target.value }))}
+              placeholder="Observações"
+              className="w-full rounded-2xl border border-emerald-100 bg-white px-3 py-2 text-sm font-semibold outline-none"
+            />
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {editingProcedurePriceId && (
+              <button
+                type="button"
+                onClick={() => { setEditingProcedurePriceId(""); setProcedurePriceForm(defaultProcedurePriceForm); }}
+                className="rounded-2xl border border-emerald-200 bg-white px-3 py-2 text-xs font-bold text-slate-500"
+              >
+                Cancelar edição
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => void saveProcedurePrice()}
+              disabled={!selectedPayerId || !procedurePriceForm.serviceCatalogId || procedurePriceForm.amountCents === "" || saving}
+              className="inline-flex items-center justify-center gap-2 rounded-2xl bg-emerald-700 px-4 py-2 text-sm font-bold text-white disabled:opacity-50"
+            >
+              {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+              {editingProcedurePriceId ? "Atualizar valor negociado" : "Salvar valor negociado"}
+            </button>
+          </div>
+
+          <div className="mt-3 space-y-2">
+            {procedurePrices.length === 0 ? (
+              <p className="rounded-2xl bg-white p-3 text-xs font-bold text-slate-500">Nenhum valor negociado ativo para este convênio.</p>
+            ) : procedurePrices.map((price) => (
+              <div key={price.id} className="rounded-2xl border border-emerald-100 bg-white px-3 py-3">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <p className="text-sm font-bold text-slate-800">{price.serviceName || price.internalCode || "Procedimento"}</p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      {[price.tussCode && `TUSS ${price.tussCode}`, formatCurrency(price.amountCents), price.currency || "BRL", price.validFrom && `vigência ${price.validFrom}`, price.validUntil && `até ${price.validUntil}`, price.source].filter(Boolean).join(" · ")}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap justify-end gap-1">
+                    <button type="button" onClick={() => editProcedurePrice(price)} className="rounded-xl border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-500 hover:bg-slate-50">Editar</button>
+                    <button type="button" onClick={() => void disableProcedurePrice(price.id)} className="rounded-xl border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-500 hover:bg-slate-50">Inativar</button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-3 rounded-2xl border border-dashed border-emerald-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600">
+            Importar tabela: estrutura preparada para CSV/XLSX em ciclo futuro. Neste ciclo, o cadastro manual é a fonte auditável.
           </div>
         </div>
 
@@ -1341,8 +1752,21 @@ export function PayerRequirementsPanel() {
                 <div>
                   <p className="text-sm font-bold text-slate-800">{mapping.serviceName || mapping.internalCode || "Procedimento"}</p>
                   <p className="mt-1 text-xs text-slate-500">
-                    {[mapping.tussCode && `TUSS ${mapping.tussCode}`, mapping.guideType, mapping.billingUnit, mapping.quantityRule, mapping.amountCents ? `R$ ${(Number(mapping.amountCents) / 100).toFixed(2)}` : "valor pendente"].filter(Boolean).join(" · ")}
+                    {[
+                      mapping.tussCode && `TUSS ${mapping.tussCode}`,
+                      mapping.contractCode && `contrato ${mapping.contractCode}`,
+                      mapping.guideType,
+                      mapping.billingUnit,
+                      mapping.quantityRule,
+                      mapping.negotiatedAmountCents || mapping.amountCents ? formatCurrency(mapping.negotiatedAmountCents || mapping.amountCents) : "valor pendente",
+                      mapping.validFrom && `vigência ${mapping.validFrom}`,
+                      mapping.validTo && `até ${mapping.validTo}`,
+                      mapping.source,
+                    ].filter(Boolean).join(" · ")}
                   </p>
+                  {mapping.contractDescription && (
+                    <p className="mt-1 text-xs font-semibold text-slate-500">{mapping.contractDescription}</p>
+                  )}
                 </div>
                 <div className="flex flex-wrap justify-end gap-1">
                   <button

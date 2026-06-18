@@ -22,6 +22,7 @@ export type TissPreGuideValidationInput = {
   service?: Record<string, any> | null;
   tussCode?: Record<string, any> | null;
   mapping?: Record<string, any> | null;
+  price?: Record<string, any> | null;
   clinic?: Record<string, any> | null;
   clinicProfile?: Record<string, any> | null;
   payerProfile?: Record<string, any> | null;
@@ -232,6 +233,8 @@ const issueLabelOverrides: Record<string, string> = {
   PROVIDER_CODE_MISSING: 'Código do prestador não informado',
   CNES_MISSING: 'CNES não informado',
   PAYER_TISS_PROFILE_MISSING: 'Dados TISS do pagador não configurados',
+  PAYER_CONFIGURATION_INCOMPLETE: 'Configuração do convênio incompleta',
+  PAYER_TISS_VERSION_MISSING: 'Versão TISS do pagador não configurada',
   PAYER_ANS_REGISTRATION_MISSING: 'Registro ANS do pagador não informado',
   PAYER_CONTRACTED_PROVIDER_CODE_MISSING: 'Código do contratado na operadora não informado',
   PAYER_CID_REQUIRED: 'Convênio exige CID para a pré-guia',
@@ -241,6 +244,9 @@ const issueLabelOverrides: Record<string, string> = {
   PROFESSIONAL_COUNCIL_STATE_MISSING: 'UF do conselho não informada',
   CBO_MISSING: 'CBO não informado',
   PAYER_TUSS_MAPPING_MISSING: 'Procedimento sem mapeamento TUSS para este convênio',
+  PAYER_TUSS_MAPPING_EXPIRED: 'Mapeamento TUSS do convênio vencido para a data do atendimento',
+  PAYER_PROCEDURE_PRICE_MISSING: 'Procedimento sem valor negociado vigente para este convênio',
+  PAYER_PROCEDURE_PRICE_CONFLICT: 'Mais de um valor negociado vigente foi encontrado para este procedimento',
   PROCEDURE_MISSING: 'Procedimento interno não resolvido',
   TUSS_CODE_MISSING: 'Código TUSS não resolvido',
   TUSS_DESCRIPTION_MISSING: 'Descrição TUSS não informada',
@@ -277,6 +283,8 @@ export function tissPreGuideIssueLabel(code: unknown) {
     PROVIDER_CODE_MISSING: 'Código do prestador não informado',
     CNES_MISSING: 'CNES não informado',
     PAYER_TISS_PROFILE_MISSING: 'Dados TISS do pagador não configurados',
+    PAYER_CONFIGURATION_INCOMPLETE: 'Configuração do convênio incompleta',
+    PAYER_TISS_VERSION_MISSING: 'Versão TISS do pagador não configurada',
     PAYER_ANS_REGISTRATION_MISSING: 'Registro ANS do pagador não informado',
     TISS_VERSION_MISSING: 'Versão TISS do pagador não configurada',
     PROFESSIONAL_BILLING_PROFILE_MISSING: 'Perfil faturável do profissional não configurado',
@@ -284,6 +292,9 @@ export function tissPreGuideIssueLabel(code: unknown) {
     PROFESSIONAL_COUNCIL_STATE_MISSING: 'UF do conselho não informada',
     CBO_MISSING: 'CBO não informado',
     PAYER_TUSS_MAPPING_MISSING: 'Procedimento sem mapeamento TUSS para este convênio',
+    PAYER_TUSS_MAPPING_EXPIRED: 'Mapeamento TUSS vencido',
+    PAYER_PROCEDURE_PRICE_MISSING: 'Valor negociado ausente',
+    PAYER_PROCEDURE_PRICE_CONFLICT: 'Conflito de valores negociados',
     PROCEDURE_MISSING: 'Procedimento interno não resolvido',
     TUSS_CODE_MISSING: 'Código TUSS não resolvido',
     TUSS_DESCRIPTION_MISSING: 'Descrição TUSS não informada',
@@ -304,6 +315,8 @@ export function tissPreGuideIssueAction(code: unknown, section?: TissPreGuideIss
   const normalized = text(code);
   if (normalized === 'PROFESSIONAL_NOT_DEFINED') return 'Vincular profissional executante ao agendamento ou item faturável';
   if (normalized === 'RESPONSIBLE_SIGNATURE_REQUIRED' || section === 'signature') return 'Coletar assinatura';
+  if (normalized === 'PAYER_TUSS_MAPPING_MISSING' || normalized === 'PAYER_TUSS_MAPPING_EXPIRED') return 'Mapear TUSS do pagador';
+  if (normalized === 'PAYER_PROCEDURE_PRICE_MISSING' || normalized === 'PAYER_PROCEDURE_PRICE_CONFLICT') return 'Configurar tabela negociada';
   if (normalized.includes('PAYER') || section === 'payer') return 'Corrigir pagador';
   if (normalized.includes('BENEFICIARY') || section === 'beneficiary') return 'Corrigir paciente';
   if (normalized.includes('PROFESSIONAL') || normalized === 'CBO_MISSING' || section === 'professional') return 'Corrigir profissional';
@@ -323,6 +336,7 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
   const service = input.service || {};
   const tussCode = input.tussCode || {};
   const mapping = input.mapping || {};
+  const price = input.price || {};
   const clinic = input.clinic || {};
   const clinicProfile = input.clinicProfile || {};
   const payerProfile = input.payerProfile || {};
@@ -436,6 +450,7 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
       addIssue(errors, 'PAYER_CONTRACTED_PROVIDER_CODE_MISSING', 'contracted_provider_code', tissPreGuideIssueLabel('PAYER_CONTRACTED_PROVIDER_CODE_MISSING'), 'payer');
     }
     if (!text(payerProfile.tiss_version)) {
+      addIssue(errors, 'PAYER_TISS_VERSION_MISSING', 'tiss_version', tissPreGuideIssueLabel('PAYER_TISS_VERSION_MISSING'), 'payer');
       addIssue(warnings, 'TISS_VERSION_MISSING', 'tiss_version', tissPreGuideIssueLabel('TISS_VERSION_MISSING'), 'payer', 'warning');
     }
     if (payerProfile.requires_cid && !text(billingContext.cid_code || billingContext.cid || appointment.cid_code || appointment.cid)) {
@@ -474,14 +489,46 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
   const tussDescription = text(tussCode.description || billingItem.tuss_description);
   const quantity = Number(billingItem.quantity || service.default_quantity || mapping.default_quantity || 0);
   const unit = text(billingItem.billing_unit || mapping.billing_unit || service.billing_unit);
-  const unitAmountCents = Number(billingItem.unit_amount_cents ?? mapping.amount_cents ?? service.default_amount_cents ?? 0);
-  const totalAmountCents = Number(billingItem.amount_cents ?? (positiveNumber(quantity) && unitAmountCents > 0 ? quantity * unitAmountCents : 0));
+  const unitAmountCents = Number(
+    price.amount_cents ??
+      billingItem.unit_amount_cents ??
+      mapping.negotiated_amount_cents ??
+      mapping.amount_cents ??
+      service.default_amount_cents ??
+      0,
+  );
+  const totalAmountCents = Number(
+    price.amount_cents && positiveNumber(quantity)
+      ? Number(price.amount_cents) * Number(quantity)
+      : billingItem.amount_cents ?? (positiveNumber(quantity) && unitAmountCents > 0 ? quantity * unitAmountCents : 0)
+  );
   const executorName = text(professionalProfile.display_name || professional.name);
   const mappingId = text(mapping.id || billingItem.payer_tuss_mapping_id);
+  const mappingExpiredForAppointment = Boolean(
+    mappingId &&
+      scheduledStart &&
+      ((mapping.valid_from && isAfterDate(mapping.valid_from, scheduledStart)) ||
+        (mapping.valid_to && isBeforeDate(mapping.valid_to, scheduledStart))),
+  );
+  const hasNegotiatedPrice = Boolean(
+    text(price.id) ||
+      positiveNumber(price.amount_cents) ||
+      positiveNumber(mapping.negotiated_amount_cents) ||
+      positiveNumber(mapping.amount_cents),
+  );
 
   if (!procedureCode && !procedureName) addIssue(errors, 'PROCEDURE_MISSING', 'internal_procedure', tissPreGuideIssueLabel('PROCEDURE_MISSING'), 'procedure');
   if (payerId && (procedureCode || procedureName || text(service.id || billingItem.service_catalog_id)) && !mappingId) {
     addIssue(errors, 'PAYER_TUSS_MAPPING_MISSING', 'payer_tuss_mapping_id', tissPreGuideIssueLabel('PAYER_TUSS_MAPPING_MISSING'), 'procedure');
+  }
+  if (mappingExpiredForAppointment) {
+    addIssue(errors, 'PAYER_TUSS_MAPPING_EXPIRED', 'payer_tuss_mapping_id', tissPreGuideIssueLabel('PAYER_TUSS_MAPPING_EXPIRED'), 'procedure');
+  }
+  if (price.conflict) {
+    addIssue(errors, 'PAYER_PROCEDURE_PRICE_CONFLICT', 'payer_procedure_price_id', tissPreGuideIssueLabel('PAYER_PROCEDURE_PRICE_CONFLICT'), 'procedure');
+  }
+  if (mappingId && !hasNegotiatedPrice) {
+    addIssue(errors, 'PAYER_PROCEDURE_PRICE_MISSING', 'payer_procedure_price_id', tissPreGuideIssueLabel('PAYER_PROCEDURE_PRICE_MISSING'), 'procedure');
   }
   if (!resolvedTussCode) addIssue(errors, 'TUSS_CODE_MISSING', 'tuss_code', tissPreGuideIssueLabel('TUSS_CODE_MISSING'), 'procedure');
   if (resolvedTussCode && !tussDescription) addIssue(errors, 'TUSS_DESCRIPTION_MISSING', 'tuss_description', tissPreGuideIssueLabel('TUSS_DESCRIPTION_MISSING'), 'procedure');
@@ -647,6 +694,12 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
           requiresBeneficiaryCard: Boolean(payerProfile.requires_beneficiary_card),
           requiresBeneficiaryCardValidity: Boolean(payerProfile.requires_beneficiary_card_validity),
           requiresResponsibleSignature: Boolean(payerProfile.requires_responsible_signature),
+          requiresPhysicalGuide: Boolean(payerProfile.requires_physical_guide),
+          requiresSignedGuide: Boolean(payerProfile.requires_signed_guide),
+          requiresStampedDatedGuide: Boolean(payerProfile.requires_stamped_dated_guide),
+          requiresAdministrativeReport: Boolean(payerProfile.requires_administrative_report),
+          allowsMixedMultidisciplinaryGuide: Boolean(payerProfile.allows_mixed_multidisciplinary_guide),
+          requiresSeparateGuideBySpecialty: Boolean(payerProfile.requires_separate_guide_by_specialty),
         },
       },
       professional: {
@@ -660,8 +713,20 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
       },
       procedure: {
         payerTussMappingId: mappingId || null,
-        payerSpecificDescription: text(mapping.description || mapping.payer_description || mapping.procedure_description) || null,
-        payerNegotiatedAmountCents: Number.isFinite(Number(mapping.amount_cents)) ? Number(mapping.amount_cents) : null,
+        payerProcedurePriceId: text(price.id) || null,
+        payerProcedurePriceSource: text(price.source || mapping.source) || null,
+        payerProcedurePriceValidFrom: text(price.valid_from || mapping.valid_from) || null,
+        payerProcedurePriceValidUntil: text(price.valid_until || mapping.valid_to) || null,
+        payerProcedurePriceConflict: Boolean(price.conflict),
+        contractCode: text(mapping.contract_code) || null,
+        contractDescription: text(mapping.contract_description || mapping.payer_specific_description || mapping.description || mapping.payer_description || mapping.procedure_description) || null,
+        payerSpecificDescription: text(mapping.payer_specific_description || mapping.contract_description || mapping.description || mapping.payer_description || mapping.procedure_description) || null,
+        payerNegotiatedAmountCents: Number.isFinite(Number(price.amount_cents ?? mapping.negotiated_amount_cents ?? mapping.amount_cents)) ? Number(price.amount_cents ?? mapping.negotiated_amount_cents ?? mapping.amount_cents) : null,
+        specialty: text(mapping.specialty || service.specialty) || null,
+        standardDurationMinutes: positiveNumber(mapping.standard_duration_minutes || service.default_duration_minutes) ? Number(mapping.standard_duration_minutes || service.default_duration_minutes) : null,
+        mappingValidFrom: text(mapping.valid_from) || null,
+        mappingValidTo: text(mapping.valid_to) || null,
+        mappingSource: text(mapping.source) || null,
         tussCodeSource: text(tussCode.source || mapping.source || (resolvedTussCode ? 'manual' : '')) || null,
         internalCode: procedureCode || null,
         name: procedureName || null,

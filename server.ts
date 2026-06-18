@@ -3886,11 +3886,17 @@ const PAYER_TUSS_MAPPING_SELECT = [
   'payer_id',
   'service_catalog_id',
   'tuss_code_id',
+  'contract_code',
+  'contract_description',
+  'payer_specific_description',
+  'specialty',
   'guide_type',
   'billing_unit',
   'quantity_rule',
   'default_quantity',
   'amount_cents',
+  'negotiated_amount_cents',
+  'standard_duration_minutes',
   'requires_authorization',
   'requires_guide',
   'requires_report',
@@ -3901,6 +3907,31 @@ const PAYER_TUSS_MAPPING_SELECT = [
   'active',
   'valid_from',
   'valid_to',
+  'source',
+  'notes',
+  'metadata',
+  'created_by',
+  'updated_by',
+  'created_at',
+  'updated_at'
+].join(',');
+
+const PAYER_PROCEDURE_PRICE_SELECT = [
+  'id',
+  'organization_id',
+  'clinic_id',
+  'payer_id',
+  'service_catalog_id',
+  'tuss_code_id',
+  'payer_tuss_mapping_id',
+  'tuss_code',
+  'amount_cents',
+  'currency',
+  'valid_from',
+  'valid_until',
+  'active',
+  'source',
+  'notes',
   'created_by',
   'updated_by',
   'created_at',
@@ -3986,9 +4017,21 @@ const PAYER_TISS_PROFILE_SELECT = [
   'contracted_executant',
   'contracted_provider_code',
   'operator_provider_code',
+  'operator_document_number',
+  'auditor_contact_name',
+  'billing_email',
+  'billing_phone',
+  'operator_portal_url',
   'default_attendance_type',
   'default_attendance_regime',
   'default_attendance_character',
+  'requires_physical_guide',
+  'requires_signed_guide',
+  'requires_stamped_dated_guide',
+  'requires_administrative_report',
+  'allows_mixed_multidisciplinary_guide',
+  'requires_separate_guide_by_specialty',
+  'administrative_notes',
   'specific_rules',
   'active',
   'created_at',
@@ -32509,11 +32552,17 @@ async function startServer() {
     tussCode: sanitizeString(code?.code, 80) || null,
     tussDescription: sanitizeTextField(code?.description, 600) || null,
     tussVersion: sanitizeString(code?.version, 80) || null,
+    contractCode: sanitizeString(row?.contract_code, 120) || null,
+    contractDescription: sanitizeTextField(row?.contract_description || row?.payer_specific_description, 600) || null,
+    payerSpecificDescription: sanitizeTextField(row?.payer_specific_description || row?.contract_description, 600) || null,
+    specialty: sanitizeString(row?.specialty || service?.specialty, 120) || null,
     guideType: normalizeTussGuideType(row?.guide_type),
     billingUnit: normalizeTussBillingUnit(row?.billing_unit),
     quantityRule: normalizeTussQuantityRule(row?.quantity_rule),
     defaultQuantity: Number(row?.default_quantity || 1) || 1,
     amountCents: row?.amount_cents ?? null,
+    negotiatedAmountCents: row?.negotiated_amount_cents ?? row?.amount_cents ?? null,
+    standardDurationMinutes: row?.standard_duration_minutes ?? null,
     requiresAuthorization: Boolean(row?.requires_authorization),
     requiresGuide: Boolean(row?.requires_guide),
     requiresReport: Boolean(row?.requires_report),
@@ -32524,6 +32573,31 @@ async function startServer() {
     active: normalizeTussActiveFlag(row?.active),
     validFrom: row?.valid_from || null,
     validTo: row?.valid_to || null,
+    source: sanitizeString(row?.source, 120) || null,
+    notes: sanitizeTextField(row?.notes, 1200) || null,
+    metadata: row?.metadata && typeof row.metadata === 'object' ? row.metadata : {},
+    createdAt: row?.created_at || null,
+    updatedAt: row?.updated_at || null
+  });
+
+  const serializePayerProcedurePrice = (row: any, service: any = null, code: any = null, mapping: any = null) => ({
+    id: sanitizeString(row?.id, 120),
+    payerId: sanitizeString(row?.payer_id, 120),
+    serviceCatalogId: sanitizeString(row?.service_catalog_id, 120) || null,
+    tussCodeId: sanitizeString(row?.tuss_code_id, 120) || null,
+    payerTussMappingId: sanitizeString(row?.payer_tuss_mapping_id, 120) || null,
+    serviceName: sanitizeString(service?.name, 180) || null,
+    internalCode: sanitizeString(service?.internal_code, 80) || null,
+    tussCode: sanitizeString(code?.code || row?.tuss_code, 80) || null,
+    tussDescription: sanitizeTextField(code?.description, 600) || null,
+    mappingContractCode: sanitizeString(mapping?.contract_code, 120) || null,
+    amountCents: Number.isFinite(Number(row?.amount_cents)) ? Number(row.amount_cents) : null,
+    currency: sanitizeString(row?.currency, 12) || 'BRL',
+    validFrom: row?.valid_from || null,
+    validUntil: row?.valid_until || null,
+    active: normalizeTussActiveFlag(row?.active),
+    source: sanitizeString(row?.source, 120) || 'manual',
+    notes: sanitizeTextField(row?.notes, 1200) || null,
     createdAt: row?.created_at || null,
     updatedAt: row?.updated_at || null
   });
@@ -32671,6 +32745,15 @@ async function startServer() {
     return true;
   };
 
+  const priceIsValidForDate = (price: any, isoDate: string) => {
+    const date = sanitizeString(isoDate, 40).slice(0, 10);
+    const validFrom = sanitizeString(price?.valid_from, 40).slice(0, 10);
+    const validUntil = sanitizeString(price?.valid_until, 40).slice(0, 10);
+    if (validFrom && date && date < validFrom) return false;
+    if (validUntil && date && date > validUntil) return false;
+    return true;
+  };
+
   const fetchActivePayerTussMapping = async (organizationId: string, payerId: string, serviceCatalogId: string, appointmentDate: any) => {
     if (!isUuid(organizationId) || !isUuid(payerId) || !isUuid(serviceCatalogId)) return null;
     const { data, error } = await supabase
@@ -32688,6 +32771,62 @@ async function startServer() {
     }
     const date = sanitizeString(appointmentDate || new Date().toISOString(), 40);
     return (Array.isArray(data) ? data : []).find((mapping: any) => mappingIsValidForDate(mapping, date)) || null;
+  };
+
+  const fetchActivePayerProcedurePrice = async (params: {
+    organizationId: string;
+    payerId: string;
+    serviceCatalogId?: string | null;
+    tussCodeId?: string | null;
+    payerTussMappingId?: string | null;
+    tussCode?: string | null;
+    appointmentDate?: any;
+  }) => {
+    const organizationId = sanitizeString(params.organizationId, 120);
+    const payerId = sanitizeString(params.payerId, 120);
+    if (!isUuid(organizationId) || !isUuid(payerId)) return { price: null, conflict: false, candidates: [] as any[] };
+    const { data, error } = await supabase
+      .from('payer_procedure_prices')
+      .select(PAYER_PROCEDURE_PRICE_SELECT)
+      .eq('organization_id', organizationId)
+      .eq('payer_id', payerId)
+      .eq('active', true)
+      .order('valid_from', { ascending: false, nullsFirst: false })
+      .limit(80);
+    if (error) {
+      if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return { price: null, conflict: false, candidates: [] as any[] };
+      throw error;
+    }
+    const appointmentDate = sanitizeString(params.appointmentDate || new Date().toISOString(), 40);
+    const serviceCatalogId = sanitizeString(params.serviceCatalogId, 120);
+    const tussCodeId = sanitizeString(params.tussCodeId, 120);
+    const payerTussMappingId = sanitizeString(params.payerTussMappingId, 120);
+    const tussCode = sanitizeString(params.tussCode, 80).toLowerCase();
+    const rows = (Array.isArray(data) ? data : []).filter((row: any) => priceIsValidForDate(row, appointmentDate));
+    const byMapping = rows.filter((row: any) => payerTussMappingId && sanitizeString(row?.payer_tuss_mapping_id, 120) === payerTussMappingId);
+    const byServiceAndTuss = rows.filter((row: any) =>
+      serviceCatalogId &&
+      sanitizeString(row?.service_catalog_id, 120) === serviceCatalogId &&
+      tussCodeId &&
+      sanitizeString(row?.tuss_code_id, 120) === tussCodeId
+    );
+    const byService = rows.filter((row: any) => serviceCatalogId && sanitizeString(row?.service_catalog_id, 120) === serviceCatalogId);
+    const byTussCodeId = rows.filter((row: any) => tussCodeId && sanitizeString(row?.tuss_code_id, 120) === tussCodeId);
+    const byTussCodeText = rows.filter((row: any) => tussCode && sanitizeString(row?.tuss_code, 80).toLowerCase() === tussCode);
+    const candidates = byMapping.length > 0
+      ? byMapping
+      : byServiceAndTuss.length > 0
+        ? byServiceAndTuss
+        : byService.length > 0
+          ? byService
+          : byTussCodeId.length > 0
+            ? byTussCodeId
+            : byTussCodeText;
+    return {
+      price: candidates[0] || null,
+      conflict: candidates.length > 1,
+      candidates
+    };
   };
 
   const fetchTussProfessional = async (professionalId: string) => {
@@ -32808,6 +32947,17 @@ async function startServer() {
         )
       : null;
     const tussCode = mapping?.tuss_code_id ? await fetchTussCodeById(organizationId, mapping.tuss_code_id) : null;
+    const priceResolution = mapping?.id || serviceCatalog?.id || tussCode?.id
+      ? await fetchActivePayerProcedurePrice({
+          organizationId,
+          payerId,
+          serviceCatalogId: sanitizeString(serviceCatalog?.id, 120),
+          tussCodeId: sanitizeString(tussCode?.id || mapping?.tuss_code_id, 120),
+          payerTussMappingId: sanitizeString(mapping?.id, 120),
+          tussCode: sanitizeString(tussCode?.code, 80),
+          appointmentDate: appointment?.scheduled_start_at || appointment?.scheduled_at || appointment?.date
+        })
+      : { price: null, conflict: false, candidates: [] as any[] };
     const resolution = resolveTussBillingItem({
       appointment: {
         ...appointment,
@@ -32819,6 +32969,7 @@ async function startServer() {
       payer: params.payer,
       serviceCatalog,
       mapping,
+      price: priceResolution.price,
       tussCode,
       professional
     });
@@ -33481,6 +33632,17 @@ async function startServer() {
           ? fetchPayerForAdmin(payerId, organizationId)
           : Promise.resolve(null)
     ]);
+    const priceResolution = isUuid(payerId) && (billingItem?.service_catalog_id || billingItem?.tuss_code_id || billingItem?.payer_tuss_mapping_id || mapping?.id)
+      ? await fetchActivePayerProcedurePrice({
+          organizationId,
+          payerId,
+          serviceCatalogId: sanitizeString(billingItem?.service_catalog_id || service?.id, 120),
+          tussCodeId: sanitizeString(billingItem?.tuss_code_id || tussCode?.id || mapping?.tuss_code_id, 120),
+          payerTussMappingId: sanitizeString(billingItem?.payer_tuss_mapping_id || mapping?.id, 120),
+          tussCode: sanitizeString(tussCode?.code || billingItem?.tuss_code, 80),
+          appointmentDate: appointment?.scheduled_start_at || appointment?.scheduled_at || appointment?.date
+        })
+      : { price: null, conflict: false, candidates: [] as any[] };
     const scheduledStartForAuthorization =
       appointment?.scheduled_start_at ||
       appointment?.scheduled_at ||
@@ -33519,6 +33681,9 @@ async function startServer() {
       service,
       tussCode,
       mapping,
+      price: priceResolution.conflict
+        ? { ...(priceResolution.price || {}), conflict: true, conflictCount: priceResolution.candidates.length }
+        : priceResolution.price,
       clinic: clinicResult.data || null,
       clinicProfile,
       payerProfile,
@@ -33573,6 +33738,9 @@ async function startServer() {
       professionalProfileId: sanitizeString(professionalProfile?.id, 120) || null,
       authorizationProfileFound: Boolean(authorizationSnapshot?.authorizationId || authorizationSnapshot?.id),
       authorizationProfileId: sanitizeString(authorizationSnapshot?.authorizationId || authorizationSnapshot?.id, 120) || null,
+      payerProcedurePriceFound: Boolean(priceResolution.price?.id),
+      payerProcedurePriceId: sanitizeString(priceResolution.price?.id, 120) || null,
+      payerProcedurePriceConflict: Boolean(priceResolution.conflict),
       responsibleSignatureFound: Boolean(responsibleSignature?.id),
       responsibleSignatureId: sanitizeString(responsibleSignature?.id, 120) || null,
       usedAbaSessionSignatureFallback: Boolean(responsibleSignature?.id && !responsibleSignature?.appointment_id && abaSessionIdForSignature),
@@ -34100,9 +34268,21 @@ async function startServer() {
         contracted_executant: sanitizeString(req.body?.contractedExecutant ?? req.body?.contracted_executant, 160) || null,
         contracted_provider_code: sanitizeString(req.body?.contractedProviderCode ?? req.body?.contracted_provider_code, 120) || null,
         operator_provider_code: sanitizeString(req.body?.operatorProviderCode ?? req.body?.operator_provider_code, 120) || null,
+        operator_document_number: sanitizeString(req.body?.operatorDocumentNumber ?? req.body?.operator_document_number, 32) || null,
+        auditor_contact_name: sanitizeString(req.body?.auditorContactName ?? req.body?.auditor_contact_name, 160) || null,
+        billing_email: sanitizeString(req.body?.billingEmail ?? req.body?.billing_email, 180) || null,
+        billing_phone: sanitizeString(req.body?.billingPhone ?? req.body?.billing_phone, 40) || null,
+        operator_portal_url: sanitizeString(req.body?.operatorPortalUrl ?? req.body?.operator_portal_url, 300) || null,
         default_attendance_type: sanitizeString(req.body?.defaultAttendanceType ?? req.body?.default_attendance_type, 80) || null,
         default_attendance_regime: sanitizeString(req.body?.defaultAttendanceRegime ?? req.body?.default_attendance_regime, 80) || null,
         default_attendance_character: sanitizeString(req.body?.defaultAttendanceCharacter ?? req.body?.default_attendance_character, 80) || null,
+        requires_physical_guide: Boolean(req.body?.requiresPhysicalGuide ?? req.body?.requires_physical_guide),
+        requires_signed_guide: Boolean(req.body?.requiresSignedGuide ?? req.body?.requires_signed_guide),
+        requires_stamped_dated_guide: Boolean(req.body?.requiresStampedDatedGuide ?? req.body?.requires_stamped_dated_guide),
+        requires_administrative_report: Boolean(req.body?.requiresAdministrativeReport ?? req.body?.requires_administrative_report),
+        allows_mixed_multidisciplinary_guide: Boolean(req.body?.allowsMixedMultidisciplinaryGuide ?? req.body?.allows_mixed_multidisciplinary_guide),
+        requires_separate_guide_by_specialty: Boolean(req.body?.requiresSeparateGuideBySpecialty ?? req.body?.requires_separate_guide_by_specialty),
+        administrative_notes: sanitizeTextField(req.body?.administrativeNotes ?? req.body?.administrative_notes, 2000) || null,
         specific_rules: sanitizeTextField(req.body?.specificRules ?? req.body?.specific_rules, 2000) || null,
         active: req.body?.active !== false,
         created_at: existingProfile?.created_at || now,
@@ -36166,11 +36346,19 @@ async function startServer() {
         payer_id: payerId,
         service_catalog_id: serviceCatalogId,
         tuss_code_id: tussCodeId || null,
+        contract_code: sanitizeString(req.body?.contractCode || req.body?.contract_code, 120) || null,
+        contract_description: sanitizeTextField(req.body?.contractDescription || req.body?.contract_description, 600) || null,
+        payer_specific_description: sanitizeTextField(req.body?.payerSpecificDescription || req.body?.payer_specific_description || req.body?.contractDescription || req.body?.contract_description, 600) || null,
+        specialty: sanitizeString(req.body?.specialty || req.body?.especialidade || service.specialty, 120) || null,
         guide_type: normalizeTussGuideType(req.body?.guideType || req.body?.guide_type),
         billing_unit: normalizeTussBillingUnit(req.body?.billingUnit || req.body?.billing_unit || service.billing_unit),
         quantity_rule: normalizeTussQuantityRule(req.body?.quantityRule || req.body?.quantity_rule),
         default_quantity: Math.max(0.01, Number(req.body?.defaultQuantity || req.body?.default_quantity || 1) || 1),
         amount_cents: req.body?.amountCents !== undefined || req.body?.amount_cents !== undefined ? Math.max(0, Math.round(Number(req.body?.amountCents || req.body?.amount_cents) || 0)) : null,
+        negotiated_amount_cents: req.body?.negotiatedAmountCents !== undefined || req.body?.negotiated_amount_cents !== undefined
+          ? Math.max(0, Math.round(Number(req.body?.negotiatedAmountCents || req.body?.negotiated_amount_cents) || 0))
+          : (req.body?.amountCents !== undefined || req.body?.amount_cents !== undefined ? Math.max(0, Math.round(Number(req.body?.amountCents || req.body?.amount_cents) || 0)) : null),
+        standard_duration_minutes: req.body?.standardDurationMinutes || req.body?.standard_duration_minutes ? Math.max(1, Math.round(Number(req.body?.standardDurationMinutes || req.body?.standard_duration_minutes) || 0)) : null,
         requires_authorization: Boolean(req.body?.requiresAuthorization ?? req.body?.requires_authorization),
         requires_guide: Boolean(req.body?.requiresGuide ?? req.body?.requires_guide),
         requires_report: Boolean(req.body?.requiresReport ?? req.body?.requires_report),
@@ -36181,6 +36369,9 @@ async function startServer() {
         active: req.body?.active !== false,
         valid_from: sanitizeString(req.body?.validFrom || req.body?.valid_from, 20) || null,
         valid_to: sanitizeString(req.body?.validTo || req.body?.valid_to, 20) || null,
+        source: sanitizeString(req.body?.source || req.body?.fonte, 80) || 'manual',
+        notes: sanitizeTextField(req.body?.notes || req.body?.observations || req.body?.observacoes, 1200) || null,
+        metadata: sanitizeClinicalPayload(req.body?.metadata || {}),
         created_by: isUuid(userId) ? userId : null,
         updated_by: isUuid(userId) ? userId : null,
         created_at: now,
@@ -36229,11 +36420,17 @@ async function startServer() {
       const patch = cleanObject({
         service_catalog_id: serviceCatalogId,
         tuss_code_id: tussCodeId || null,
+        contract_code: req.body?.contractCode !== undefined || req.body?.contract_code !== undefined ? sanitizeString(req.body?.contractCode || req.body?.contract_code, 120) || null : undefined,
+        contract_description: req.body?.contractDescription !== undefined || req.body?.contract_description !== undefined ? sanitizeTextField(req.body?.contractDescription || req.body?.contract_description, 600) || null : undefined,
+        payer_specific_description: req.body?.payerSpecificDescription !== undefined || req.body?.payer_specific_description !== undefined || req.body?.contractDescription !== undefined || req.body?.contract_description !== undefined ? sanitizeTextField(req.body?.payerSpecificDescription || req.body?.payer_specific_description || req.body?.contractDescription || req.body?.contract_description, 600) || null : undefined,
+        specialty: req.body?.specialty !== undefined ? sanitizeString(req.body?.specialty, 120) || null : undefined,
         guide_type: req.body?.guideType !== undefined || req.body?.guide_type !== undefined ? normalizeTussGuideType(req.body?.guideType || req.body?.guide_type) : undefined,
         billing_unit: req.body?.billingUnit !== undefined || req.body?.billing_unit !== undefined ? normalizeTussBillingUnit(req.body?.billingUnit || req.body?.billing_unit) : undefined,
         quantity_rule: req.body?.quantityRule !== undefined || req.body?.quantity_rule !== undefined ? normalizeTussQuantityRule(req.body?.quantityRule || req.body?.quantity_rule) : undefined,
         default_quantity: req.body?.defaultQuantity !== undefined || req.body?.default_quantity !== undefined ? Math.max(0.01, Number(req.body?.defaultQuantity || req.body?.default_quantity || 1) || 1) : undefined,
         amount_cents: req.body?.amountCents !== undefined || req.body?.amount_cents !== undefined ? Math.max(0, Math.round(Number(req.body?.amountCents || req.body?.amount_cents) || 0)) : undefined,
+        negotiated_amount_cents: req.body?.negotiatedAmountCents !== undefined || req.body?.negotiated_amount_cents !== undefined ? Math.max(0, Math.round(Number(req.body?.negotiatedAmountCents || req.body?.negotiated_amount_cents) || 0)) : undefined,
+        standard_duration_minutes: req.body?.standardDurationMinutes !== undefined || req.body?.standard_duration_minutes !== undefined ? Math.max(1, Math.round(Number(req.body?.standardDurationMinutes || req.body?.standard_duration_minutes) || 0)) : undefined,
         requires_authorization: req.body?.requiresAuthorization !== undefined || req.body?.requires_authorization !== undefined ? Boolean(req.body?.requiresAuthorization ?? req.body?.requires_authorization) : undefined,
         requires_guide: req.body?.requiresGuide !== undefined || req.body?.requires_guide !== undefined ? Boolean(req.body?.requiresGuide ?? req.body?.requires_guide) : undefined,
         requires_report: req.body?.requiresReport !== undefined || req.body?.requires_report !== undefined ? Boolean(req.body?.requiresReport ?? req.body?.requires_report) : undefined,
@@ -36244,6 +36441,9 @@ async function startServer() {
         active: req.body?.active !== undefined ? Boolean(req.body?.active) : undefined,
         valid_from: req.body?.validFrom !== undefined || req.body?.valid_from !== undefined ? sanitizeString(req.body?.validFrom || req.body?.valid_from, 20) || null : undefined,
         valid_to: req.body?.validTo !== undefined || req.body?.valid_to !== undefined ? sanitizeString(req.body?.validTo || req.body?.valid_to, 20) || null : undefined,
+        source: req.body?.source !== undefined ? sanitizeString(req.body?.source, 80) || 'manual' : undefined,
+        notes: req.body?.notes !== undefined ? sanitizeTextField(req.body?.notes, 1200) || null : undefined,
+        metadata: req.body?.metadata !== undefined ? sanitizeClinicalPayload(req.body?.metadata || {}) : undefined,
         updated_by: isUuid(sanitizeString(req.session.user?.id, 120)) ? sanitizeString(req.session.user?.id, 120) : null,
         updated_at: new Date().toISOString()
       });
@@ -36258,6 +36458,197 @@ async function startServer() {
       return res.json({ success: true, data: serializePayerTussMapping(data, service, code) });
     } catch (error: any) {
       console.warn('[TussReady] mapping update failed:', error?.message || String(error));
+      return res.status(500).json(payerSafeError(500));
+    }
+  });
+
+  app.get('/api/admin/tuss/prices', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
+      const limit = parseBoundedListLimit(req.query?.limit, 120, 300);
+      const payerId = sanitizeString(req.query?.payerId || req.query?.payer_id, 120);
+      const serviceCatalogId = sanitizeString(req.query?.serviceCatalogId || req.query?.service_catalog_id, 120);
+      let query = supabase
+        .from('payer_procedure_prices')
+        .select(PAYER_PROCEDURE_PRICE_SELECT)
+        .eq('organization_id', organizationId)
+        .order('updated_at', { ascending: false })
+        .limit(limit);
+      if (isUuid(payerId)) query = query.eq('payer_id', payerId);
+      if (isUuid(serviceCatalogId)) query = query.eq('service_catalog_id', serviceCatalogId);
+      if (String(req.query?.active || '').toLowerCase() === 'true') query = query.eq('active', true);
+      const { data, error } = await query;
+      if (error) {
+        if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return res.json({ success: true, data: [] });
+        throw error;
+      }
+      const rows = Array.isArray(data) ? data : [];
+      const serviceIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row.service_catalog_id, 120)).filter((id: string) => isUuid(id))));
+      const codeIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row.tuss_code_id, 120)).filter((id: string) => isUuid(id))));
+      const mappingIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row.payer_tuss_mapping_id, 120)).filter((id: string) => isUuid(id))));
+      const [servicesResult, codesResult, mappingsResult] = await Promise.all([
+        serviceIds.length > 0
+          ? supabase.from('tuss_service_catalog').select(TUSS_SERVICE_CATALOG_SELECT).eq('organization_id', organizationId).in('id', serviceIds).limit(serviceIds.length)
+          : Promise.resolve({ data: [], error: null } as any),
+        codeIds.length > 0
+          ? supabase.from('tuss_codes').select(TUSS_CODE_SELECT).eq('organization_id', organizationId).in('id', codeIds).limit(codeIds.length)
+          : Promise.resolve({ data: [], error: null } as any),
+        mappingIds.length > 0
+          ? supabase.from('payer_tuss_mappings').select(PAYER_TUSS_MAPPING_SELECT).eq('organization_id', organizationId).in('id', mappingIds).limit(mappingIds.length)
+          : Promise.resolve({ data: [], error: null } as any)
+      ]);
+      if (servicesResult.error && !hasMissingFinancialSchema(servicesResult.error)) throw servicesResult.error;
+      if (codesResult.error && !hasMissingFinancialSchema(codesResult.error)) throw codesResult.error;
+      if (mappingsResult.error && !hasMissingFinancialSchema(mappingsResult.error)) throw mappingsResult.error;
+      const servicesById = new Map<string, any>((servicesResult.error ? [] : servicesResult.data || []).map((row: any) => [sanitizeString(row.id, 120), row]));
+      const codesById = new Map<string, any>((codesResult.error ? [] : codesResult.data || []).map((row: any) => [sanitizeString(row.id, 120), row]));
+      const mappingsById = new Map<string, any>((mappingsResult.error ? [] : mappingsResult.data || []).map((row: any) => [sanitizeString(row.id, 120), row]));
+      return res.json({
+        success: true,
+        data: rows.map((row: any) => serializePayerProcedurePrice(
+          row,
+          servicesById.get(sanitizeString(row.service_catalog_id, 120)),
+          codesById.get(sanitizeString(row.tuss_code_id, 120)),
+          mappingsById.get(sanitizeString(row.payer_tuss_mapping_id, 120))
+        ))
+      });
+    } catch (error: any) {
+      console.warn('[TussReady] price list failed:', error?.message || String(error));
+      return res.status(500).json(payerSafeError(500));
+    }
+  });
+
+  app.post('/api/admin/tuss/prices', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de tabela negociada TUSS')) return;
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      const payerId = sanitizeString(req.body?.payerId || req.body?.payer_id, 120);
+      const serviceCatalogId = sanitizeString(req.body?.serviceCatalogId || req.body?.service_catalog_id, 120);
+      const tussCodeId = sanitizeString(req.body?.tussCodeId || req.body?.tuss_code_id, 120);
+      const payerTussMappingId = sanitizeString(req.body?.payerTussMappingId || req.body?.payer_tuss_mapping_id, 120);
+      const amountInput = req.body?.amountCents ?? req.body?.amount_cents;
+      const amountCents = amountInput !== undefined && amountInput !== null && String(amountInput).trim() !== ''
+        ? Math.max(0, Math.round(Number(amountInput)))
+        : Number.NaN;
+      if (!isUuid(organizationId) || !isUuid(payerId) || !Number.isFinite(amountCents) || amountCents < 0) return res.status(400).json(payerSafeError(400));
+      const [payer, service, code, mapping] = await Promise.all([
+        fetchPayerForAdmin(payerId, organizationId),
+        serviceCatalogId ? fetchTussServiceCatalogById(organizationId, serviceCatalogId) : Promise.resolve(null),
+        tussCodeId ? fetchTussCodeById(organizationId, tussCodeId) : Promise.resolve(null),
+        payerTussMappingId ? fetchPayerTussMappingById(organizationId, payerTussMappingId) : Promise.resolve(null)
+      ]);
+      if (!payer?.id || (serviceCatalogId && !service?.id) || (tussCodeId && !code?.id) || (payerTussMappingId && !mapping?.id)) {
+        return res.status(404).json(payerSafeError(404));
+      }
+      const resolvedServiceId = serviceCatalogId || sanitizeString(mapping?.service_catalog_id, 120);
+      const resolvedTussCodeId = tussCodeId || sanitizeString(mapping?.tuss_code_id, 120);
+      if (!isUuid(resolvedServiceId) && !isUuid(resolvedTussCodeId)) return res.status(400).json(payerSafeError(400));
+      const now = new Date().toISOString();
+      const userId = sanitizeString(req.session.user?.id, 120);
+      const payload = cleanObject({
+        id: isUuid(sanitizeString(req.body?.id, 120)) ? sanitizeString(req.body?.id, 120) : crypto.randomUUID(),
+        organization_id: organizationId,
+        clinic_id: organizationId,
+        payer_id: payerId,
+        service_catalog_id: isUuid(resolvedServiceId) ? resolvedServiceId : null,
+        tuss_code_id: isUuid(resolvedTussCodeId) ? resolvedTussCodeId : null,
+        payer_tuss_mapping_id: isUuid(payerTussMappingId) ? payerTussMappingId : null,
+        tuss_code: sanitizeString(req.body?.tussCode || req.body?.tuss_code || code?.code, 80) || null,
+        amount_cents: amountCents,
+        currency: sanitizeString(req.body?.currency, 12).toUpperCase() || 'BRL',
+        valid_from: sanitizeString(req.body?.validFrom || req.body?.valid_from, 20) || null,
+        valid_until: sanitizeString(req.body?.validUntil || req.body?.valid_until || req.body?.validTo || req.body?.valid_to, 20) || null,
+        active: req.body?.active !== false,
+        source: sanitizeString(req.body?.source || req.body?.fonte, 80) || 'manual',
+        notes: sanitizeTextField(req.body?.notes || req.body?.observations || req.body?.observacoes, 1200) || null,
+        created_by: isUuid(userId) ? userId : null,
+        updated_by: isUuid(userId) ? userId : null,
+        created_at: now,
+        updated_at: now
+      });
+      const { data, error } = await supabase
+        .from('payer_procedure_prices')
+        .insert([payload])
+        .select(PAYER_PROCEDURE_PRICE_SELECT)
+        .maybeSingle();
+      if (error) throw error;
+      await writePayerRequirementAuditLog({
+        organizationId,
+        payerId,
+        action: 'PAYER_PROCEDURE_PRICE_CREATED',
+        newValue: data,
+        performedBy: userId
+      });
+      return res.status(201).json({ success: true, data: serializePayerProcedurePrice(data, service, code, mapping) });
+    } catch (error: any) {
+      console.warn('[TussReady] price create failed:', error?.message || String(error));
+      return res.status(500).json(payerSafeError(500));
+    }
+  });
+
+  app.patch('/api/admin/tuss/prices/:priceId', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de tabela negociada TUSS')) return;
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      const priceId = sanitizeString(req.params.priceId, 120);
+      if (!isUuid(organizationId) || !isUuid(priceId)) return res.status(400).json(payerSafeError(400));
+      const existingResult = await supabase
+        .from('payer_procedure_prices')
+        .select(PAYER_PROCEDURE_PRICE_SELECT)
+        .eq('organization_id', organizationId)
+        .eq('id', priceId)
+        .limit(1)
+        .maybeSingle();
+      if (existingResult.error) {
+        if (hasMissingFinancialSchema(existingResult.error) || isMissingRelationError(existingResult.error)) return res.status(404).json(payerSafeError(404));
+        throw existingResult.error;
+      }
+      const existing = existingResult.data;
+      if (!existing?.id) return res.status(404).json(payerSafeError(404));
+      const serviceCatalogId = sanitizeString(req.body?.serviceCatalogId || req.body?.service_catalog_id || existing.service_catalog_id, 120);
+      const tussCodeId = sanitizeString(req.body?.tussCodeId || req.body?.tuss_code_id || existing.tuss_code_id, 120);
+      const payerTussMappingId = sanitizeString(req.body?.payerTussMappingId || req.body?.payer_tuss_mapping_id || existing.payer_tuss_mapping_id, 120);
+      const [service, code, mapping] = await Promise.all([
+        serviceCatalogId ? fetchTussServiceCatalogById(organizationId, serviceCatalogId) : Promise.resolve(null),
+        tussCodeId ? fetchTussCodeById(organizationId, tussCodeId) : Promise.resolve(null),
+        payerTussMappingId ? fetchPayerTussMappingById(organizationId, payerTussMappingId) : Promise.resolve(null)
+      ]);
+      if ((serviceCatalogId && !service?.id) || (tussCodeId && !code?.id) || (payerTussMappingId && !mapping?.id)) return res.status(404).json(payerSafeError(404));
+      const patch = cleanObject({
+        service_catalog_id: req.body?.serviceCatalogId !== undefined || req.body?.service_catalog_id !== undefined ? (isUuid(serviceCatalogId) ? serviceCatalogId : null) : undefined,
+        tuss_code_id: req.body?.tussCodeId !== undefined || req.body?.tuss_code_id !== undefined ? (isUuid(tussCodeId) ? tussCodeId : null) : undefined,
+        payer_tuss_mapping_id: req.body?.payerTussMappingId !== undefined || req.body?.payer_tuss_mapping_id !== undefined ? (isUuid(payerTussMappingId) ? payerTussMappingId : null) : undefined,
+        tuss_code: req.body?.tussCode !== undefined || req.body?.tuss_code !== undefined ? sanitizeString(req.body?.tussCode || req.body?.tuss_code, 80) || null : undefined,
+        amount_cents: req.body?.amountCents !== undefined || req.body?.amount_cents !== undefined ? Math.max(0, Math.round(Number(req.body?.amountCents ?? req.body?.amount_cents) || 0)) : undefined,
+        currency: req.body?.currency !== undefined ? sanitizeString(req.body?.currency, 12).toUpperCase() || 'BRL' : undefined,
+        valid_from: req.body?.validFrom !== undefined || req.body?.valid_from !== undefined ? sanitizeString(req.body?.validFrom || req.body?.valid_from, 20) || null : undefined,
+        valid_until: req.body?.validUntil !== undefined || req.body?.valid_until !== undefined || req.body?.validTo !== undefined || req.body?.valid_to !== undefined ? sanitizeString(req.body?.validUntil || req.body?.valid_until || req.body?.validTo || req.body?.valid_to, 20) || null : undefined,
+        active: req.body?.active !== undefined ? Boolean(req.body?.active) : undefined,
+        source: req.body?.source !== undefined ? sanitizeString(req.body?.source, 80) || 'manual' : undefined,
+        notes: req.body?.notes !== undefined ? sanitizeTextField(req.body?.notes, 1200) || null : undefined,
+        updated_by: isUuid(sanitizeString(req.session.user?.id, 120)) ? sanitizeString(req.session.user?.id, 120) : null,
+        updated_at: new Date().toISOString()
+      });
+      const { data, error } = await supabase
+        .from('payer_procedure_prices')
+        .update(patch)
+        .eq('organization_id', organizationId)
+        .eq('id', priceId)
+        .select(PAYER_PROCEDURE_PRICE_SELECT)
+        .maybeSingle();
+      if (error) throw error;
+      await writePayerRequirementAuditLog({
+        organizationId,
+        payerId: sanitizeString(existing?.payer_id, 120),
+        action: data?.active === false ? 'PAYER_PROCEDURE_PRICE_DISABLED' : 'PAYER_PROCEDURE_PRICE_UPDATED',
+        previousValue: existing,
+        newValue: data,
+        performedBy: sanitizeString(req.session.user?.id, 120)
+      });
+      return res.json({ success: true, data: serializePayerProcedurePrice(data, service, code, mapping) });
+    } catch (error: any) {
+      console.warn('[TussReady] price update failed:', error?.message || String(error));
       return res.status(500).json(payerSafeError(500));
     }
   });

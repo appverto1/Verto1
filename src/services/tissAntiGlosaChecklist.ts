@@ -22,6 +22,8 @@ const text = (value: unknown) => String(value ?? "").trim();
 
 const ISSUE_TO_ITEM: Record<string, string> = {
   PAYER_TISS_PROFILE_MISSING: "payer_configured",
+  PAYER_CONFIGURATION_INCOMPLETE: "payer_configured",
+  PAYER_TISS_VERSION_MISSING: "payer_configured",
   PAYER_ANS_REGISTRATION_MISSING: "payer_configured",
   PAYER_CONTRACTED_PROVIDER_CODE_MISSING: "provider_code",
   PAYER_CID_REQUIRED: "payer_configured",
@@ -29,6 +31,7 @@ const ISSUE_TO_ITEM: Record<string, string> = {
   BENEFICIARY_CARD_VALIDITY_MISSING: "beneficiary_card_validity",
   BENEFICIARY_CARD_EXPIRED: "beneficiary_card_validity",
   PAYER_TUSS_MAPPING_MISSING: "procedure_tuss_mapping",
+  PAYER_TUSS_MAPPING_EXPIRED: "procedure_tuss_mapping",
   PROCEDURE_MISSING: "procedure_tuss_mapping",
   TUSS_CODE_MISSING: "procedure_tuss_mapping",
   TUSS_DESCRIPTION_MISSING: "procedure_tuss_mapping",
@@ -52,6 +55,8 @@ const ISSUE_TO_ITEM: Record<string, string> = {
   RESPONSIBLE_SIGNATURE_REQUIRED: "responsible_signature",
   DURATION_MISSING: "actual_duration",
   AMOUNT_MISSING: "amount_calculated",
+  PAYER_PROCEDURE_PRICE_MISSING: "amount_calculated",
+  PAYER_PROCEDURE_PRICE_CONFLICT: "amount_calculated",
 };
 
 const CATALOG: Array<Omit<TissAntiGlosaChecklistItem, "status" | "relatedIssueCodes"> & {
@@ -156,21 +161,21 @@ const CATALOG: Array<Omit<TissAntiGlosaChecklistItem, "status" | "relatedIssueCo
     label: "Guia física impressa",
     riskClass: "risco operacional de documentação física",
     suggestedAction: "Conferir guia física",
-    requirementPath: "requiresPhysicalGuidePrinted",
+    requirementPath: "requiresPhysicalGuide",
   },
   {
     code: "physical_guide_signed",
     label: "Guia física assinada",
     riskClass: "risco operacional de assinatura física",
     suggestedAction: "Conferir guia assinada",
-    requirementPath: "requiresPhysicalGuideSigned",
+    requirementPath: "requiresSignedGuide",
   },
   {
     code: "physical_guide_stamped",
     label: "Guia carimbada/datada",
     riskClass: "risco operacional de carimbo/data",
     suggestedAction: "Conferir guia carimbada/datada",
-    requirementPath: "requiresPhysicalGuideStamped",
+    requirementPath: "requiresStampedDatedGuide",
   },
   {
     code: "clinical_report_linked",
