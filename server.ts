@@ -110,6 +110,7 @@ import {
   normalizeTussBillingUnit,
   normalizeTussGuideType,
   normalizeTussQuantityRule,
+  preserveHistoricalTussBillingAmount,
   resolveTussBillingItem
 } from './src/services/tussBillingResolutionEngine';
 import {
@@ -32752,7 +32753,12 @@ async function startServer() {
       null;
   };
 
-  const fetchMatchingTussServiceCatalog = async (organizationId: string, serviceType: any, procedureCode?: any) => {
+  const fetchMatchingTussServiceCatalog = async (
+    organizationId: string,
+    serviceType: any,
+    procedureCode?: any,
+    historical?: { serviceCatalogId?: string | null; internalCode?: string | null }
+  ) => {
     if (!isUuid(organizationId)) return null;
     const { data, error } = await supabase
       .from('tuss_service_catalog')
@@ -32772,10 +32778,27 @@ async function startServer() {
       if (byCode) return byCode;
     }
     const serviceKey = normalizeBillingServiceMatchKey(serviceType);
-    return services.find((service: any) => normalizeBillingServiceMatchKey(service?.service_type) === serviceKey) ||
+    const activeMatch = services.find((service: any) => normalizeBillingServiceMatchKey(service?.service_type) === serviceKey) ||
       services.find((service: any) => normalizeBillingServiceMatchKey(service?.name) === serviceKey) ||
-      services[0] ||
       null;
+    if (activeMatch) return activeMatch;
+
+    const historicalServiceId = sanitizeString(historical?.serviceCatalogId, 120);
+    if (isUuid(historicalServiceId)) return fetchTussServiceCatalogById(organizationId, historicalServiceId);
+    const historicalInternalCode = sanitizeString(historical?.internalCode, 80);
+    if (!historicalInternalCode) return null;
+    const historicalResult = await supabase
+      .from('tuss_service_catalog')
+      .select(TUSS_SERVICE_CATALOG_SELECT)
+      .eq('organization_id', organizationId)
+      .ilike('internal_code', historicalInternalCode)
+      .limit(1)
+      .maybeSingle();
+    if (historicalResult.error) {
+      if (hasMissingFinancialSchema(historicalResult.error)) return null;
+      throw historicalResult.error;
+    }
+    return historicalResult.data || null;
   };
 
   const mappingIsValidForDate = (mapping: any, isoDate: string) => {
@@ -32975,12 +32998,54 @@ async function startServer() {
     const payerId = sanitizeString(billingContext?.payer_id || params.payer?.id, 120);
     if (!isUuid(payerId)) return null;
     const professionalId = sanitizeString(appointment?.therapist_id || appointment?.professional_id, 120);
+    const [existingBillingItemResult, existingPreGuideResult] = await Promise.all([
+      supabase
+        .from('appointment_billing_items')
+        .select(APPOINTMENT_BILLING_ITEM_SELECT)
+        .eq('organization_id', organizationId)
+        .eq('appointment_id', appointmentId)
+        .limit(1)
+        .maybeSingle(),
+      supabase
+        .from('appointment_tiss_pre_guides')
+        .select('id,organization_id,appointment_id,patient_id,payer_id,snapshot_data')
+        .eq('organization_id', organizationId)
+        .eq('appointment_id', appointmentId)
+        .limit(1)
+        .maybeSingle()
+    ]);
+    if (existingBillingItemResult.error && !hasMissingFinancialSchema(existingBillingItemResult.error) && !isMissingRelationError(existingBillingItemResult.error)) {
+      throw existingBillingItemResult.error;
+    }
+    if (existingPreGuideResult.error && !hasMissingFinancialSchema(existingPreGuideResult.error) && !isMissingRelationError(existingPreGuideResult.error)) {
+      throw existingPreGuideResult.error;
+    }
+    const existingBillingItem = existingBillingItemResult.error ? null : existingBillingItemResult.data;
+    const existingPreGuide = existingPreGuideResult.error ? null : existingPreGuideResult.data;
+    const billingHistoryMatches = Boolean(
+      existingBillingItem?.appointment_id === appointmentId &&
+      existingBillingItem?.patient_id === patientId &&
+      existingBillingItem?.payer_id === payerId
+    );
+    const preGuideHistoryMatches = Boolean(
+      existingPreGuide?.appointment_id === appointmentId &&
+      existingPreGuide?.patient_id === patientId &&
+      existingPreGuide?.payer_id === payerId
+    );
+    const previousProcedure = preGuideHistoryMatches && existingPreGuide?.snapshot_data?.procedure
+      ? existingPreGuide.snapshot_data.procedure
+      : {};
+    const historicalServiceCatalogId = billingHistoryMatches ? sanitizeString(existingBillingItem?.service_catalog_id, 120) : '';
+    const historicalInternalCode = sanitizeString(previousProcedure?.internalCode, 80);
     const [patientFinancialPlan, serviceCatalog, professional] = await Promise.all([
       fetchPatientFinancialPlanForTuss(organizationId, patientId, payerId, serviceType),
-      fetchMatchingTussServiceCatalog(organizationId, serviceType, billingContext?.procedure_code),
+      fetchMatchingTussServiceCatalog(organizationId, serviceType, billingContext?.procedure_code, {
+        serviceCatalogId: historicalServiceCatalogId,
+        internalCode: historicalInternalCode
+      }),
       fetchTussProfessional(professionalId)
     ]);
-    const mapping = serviceCatalog?.id && isUuid(payerId)
+    let mapping = serviceCatalog?.id && isUuid(payerId)
       ? await fetchActivePayerTussMapping(
           organizationId,
           payerId,
@@ -32988,7 +33053,22 @@ async function startServer() {
           appointment?.scheduled_start_at || appointment?.scheduled_at || appointment?.date
         )
       : null;
-    const tussCode = mapping?.tuss_code_id ? await fetchTussCodeById(organizationId, mapping.tuss_code_id) : null;
+    const historicalMappingId = billingHistoryMatches
+      ? sanitizeString(existingBillingItem?.payer_tuss_mapping_id, 120)
+      : sanitizeString(previousProcedure?.payerTussMappingId, 120);
+    if (!mapping?.id && isUuid(historicalMappingId) && serviceCatalog?.id) {
+      const historicalMapping = await fetchPayerTussMappingById(organizationId, historicalMappingId);
+      if (
+        historicalMapping?.payer_id === payerId &&
+        historicalMapping?.service_catalog_id === serviceCatalog.id &&
+        mappingIsValidForDate(historicalMapping, appointment?.scheduled_start_at || appointment?.scheduled_at || appointment?.date)
+      ) {
+        mapping = historicalMapping;
+      }
+    }
+    const historicalTussCodeId = billingHistoryMatches ? sanitizeString(existingBillingItem?.tuss_code_id, 120) : '';
+    const tussCodeId = sanitizeString(mapping?.tuss_code_id || historicalTussCodeId, 120);
+    const tussCode = isUuid(tussCodeId) ? await fetchTussCodeById(organizationId, tussCodeId) : null;
     const priceResolution = mapping?.id || serviceCatalog?.id || tussCode?.id
       ? await fetchActivePayerProcedurePrice({
           organizationId,
@@ -33000,7 +33080,7 @@ async function startServer() {
           appointmentDate: appointment?.scheduled_start_at || appointment?.scheduled_at || appointment?.date
         })
       : { price: null, conflict: false, candidates: [] as any[] };
-    const resolution = resolveTussBillingItem({
+    const currentResolution = resolveTussBillingItem({
       appointment: {
         ...appointment,
         scheduled_minutes: appointment?.scheduled_minutes ?? appointment?.scheduled_duration_minutes ?? appointment?.duration_minutes,
@@ -33014,6 +33094,16 @@ async function startServer() {
       price: priceResolution.price,
       tussCode,
       professional
+    });
+    const historicalUnitAmountCents = billingHistoryMatches && Number(existingBillingItem?.unit_amount_cents) > 0
+      ? existingBillingItem.unit_amount_cents
+      : previousProcedure?.unitAmountCents;
+    const historicalAmountCents = billingHistoryMatches && Number(existingBillingItem?.amount_cents) > 0
+      ? existingBillingItem.amount_cents
+      : previousProcedure?.totalAmountCents;
+    const resolution = preserveHistoricalTussBillingAmount(currentResolution, {
+      unitAmountCents: historicalUnitAmountCents,
+      amountCents: historicalAmountCents
     });
     const now = new Date().toISOString();
     const userId = sanitizeString(params.user?.id, 120);
@@ -33041,8 +33131,8 @@ async function startServer() {
       resolved_at: now,
       updated_by: isUuid(userId) ? userId : null,
       updated_at: now,
-      created_by: isUuid(userId) ? userId : null,
-      created_at: now
+      created_by: existingBillingItem?.created_by || (isUuid(userId) ? userId : null),
+      created_at: existingBillingItem?.created_at || now
     });
     const { data, error } = await supabase
       .from('appointment_billing_items')
@@ -36458,6 +36548,38 @@ async function startServer() {
   const isTussUniqueConflict = (error: any) => sanitizeString(error?.code, 40) === '23505' ||
     /duplicate key|unique constraint|already exists/i.test(String(error?.message || error?.details || ''));
 
+  const parseOptionalTussAmountCents = (value: unknown) => {
+    if (value === undefined) return { provided: false, valid: true, value: null as number | null };
+    if (value === null || String(value).trim() === '') return { provided: true, valid: true, value: null as number | null };
+    const parsed = Number(value);
+    if (!Number.isSafeInteger(parsed) || parsed < 0) return { provided: true, valid: false, value: null as number | null };
+    return { provided: true, valid: true, value: parsed };
+  };
+
+  const tussValidityRangeIsValid = (validFrom: unknown, validUntil: unknown) => {
+    const from = sanitizeString(validFrom, 20).slice(0, 10);
+    const until = sanitizeString(validUntil, 20).slice(0, 10);
+    return !from || !until || from <= until;
+  };
+
+  const tussConfigurationScopeIsConsistent = (params: {
+    payerId: string;
+    service?: any;
+    code?: any;
+    mapping?: any;
+    active: boolean;
+  }) => {
+    if (!params.service?.id) return false;
+    if (params.active && params.service.active === false) return false;
+    if (params.code?.id && params.active && params.code.active === false) return false;
+    if (!params.mapping?.id) return true;
+    if (params.mapping.payer_id !== params.payerId) return false;
+    if (params.mapping.service_catalog_id !== params.service.id) return false;
+    if (params.code?.id && params.mapping.tuss_code_id && params.mapping.tuss_code_id !== params.code.id) return false;
+    if (params.active && params.mapping.active === false) return false;
+    return true;
+  };
+
   app.get('/api/admin/tuss/services', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -36729,12 +36851,23 @@ async function startServer() {
       const serviceCatalogId = sanitizeString(req.body?.serviceCatalogId || req.body?.service_catalog_id, 120);
       const tussCodeId = sanitizeString(req.body?.tussCodeId || req.body?.tuss_code_id, 120);
       if (!isUuid(organizationId) || !isUuid(payerId) || !isUuid(serviceCatalogId) || (tussCodeId && !isUuid(tussCodeId))) return res.status(400).json(payerSafeError(400));
+      const amount = parseOptionalTussAmountCents(req.body?.amountCents ?? req.body?.amount_cents);
+      const negotiatedAmount = parseOptionalTussAmountCents(req.body?.negotiatedAmountCents ?? req.body?.negotiated_amount_cents);
+      const validFrom = sanitizeString(req.body?.validFrom || req.body?.valid_from, 20) || null;
+      const validTo = sanitizeString(req.body?.validTo || req.body?.valid_to, 20) || null;
+      const active = req.body?.active !== false;
+      if (!amount.valid || !negotiatedAmount.valid || !tussValidityRangeIsValid(validFrom, validTo)) {
+        return res.status(400).json({ success: false, error: 'Revise valor e vigência do mapeamento.', code: 'INVALID_TUSS_MAPPING_CONFIGURATION' });
+      }
       const [payer, service, code] = await Promise.all([
         fetchPayerForAdmin(payerId, organizationId),
         fetchTussServiceCatalogById(organizationId, serviceCatalogId),
         tussCodeId ? fetchTussCodeById(organizationId, tussCodeId) : Promise.resolve(null)
       ]);
       if (!payer?.id || !service?.id || (tussCodeId && !code?.id)) return res.status(404).json(payerSafeError(404));
+      if (!tussConfigurationScopeIsConsistent({ payerId, service, code, active })) {
+        return res.status(409).json({ success: false, error: 'Procedimento ou código TUSS inativo/incompatível com esta clínica.', code: 'TUSS_CONFIGURATION_INCONSISTENT' });
+      }
       const now = new Date().toISOString();
       const userId = sanitizeString(req.session.user?.id, 120);
       const payload = cleanObject({
@@ -36751,10 +36884,8 @@ async function startServer() {
         billing_unit: normalizeTussBillingUnit(req.body?.billingUnit || req.body?.billing_unit || service.billing_unit),
         quantity_rule: normalizeTussQuantityRule(req.body?.quantityRule || req.body?.quantity_rule),
         default_quantity: Math.max(0.01, Number(req.body?.defaultQuantity || req.body?.default_quantity || 1) || 1),
-        amount_cents: req.body?.amountCents !== undefined || req.body?.amount_cents !== undefined ? Math.max(0, Math.round(Number(req.body?.amountCents || req.body?.amount_cents) || 0)) : null,
-        negotiated_amount_cents: req.body?.negotiatedAmountCents !== undefined || req.body?.negotiated_amount_cents !== undefined
-          ? Math.max(0, Math.round(Number(req.body?.negotiatedAmountCents || req.body?.negotiated_amount_cents) || 0))
-          : (req.body?.amountCents !== undefined || req.body?.amount_cents !== undefined ? Math.max(0, Math.round(Number(req.body?.amountCents || req.body?.amount_cents) || 0)) : null),
+        amount_cents: amount.provided ? amount.value : null,
+        negotiated_amount_cents: negotiatedAmount.provided ? negotiatedAmount.value : amount.value,
         standard_duration_minutes: req.body?.standardDurationMinutes || req.body?.standard_duration_minutes ? Math.max(1, Math.round(Number(req.body?.standardDurationMinutes || req.body?.standard_duration_minutes) || 0)) : null,
         requires_authorization: Boolean(req.body?.requiresAuthorization ?? req.body?.requires_authorization),
         requires_guide: Boolean(req.body?.requiresGuide ?? req.body?.requires_guide),
@@ -36763,9 +36894,9 @@ async function startServer() {
         requires_professional_registry: Boolean(req.body?.requiresProfessionalRegistry ?? req.body?.requires_professional_registry),
         requires_patient_document: Boolean(req.body?.requiresPatientDocument ?? req.body?.requires_patient_document),
         use_actual_duration: Boolean(req.body?.useActualDuration ?? req.body?.use_actual_duration),
-        active: req.body?.active !== false,
-        valid_from: sanitizeString(req.body?.validFrom || req.body?.valid_from, 20) || null,
-        valid_to: sanitizeString(req.body?.validTo || req.body?.valid_to, 20) || null,
+        active,
+        valid_from: validFrom,
+        valid_to: validTo,
         source: sanitizeString(req.body?.source || req.body?.fonte, 80) || 'manual',
         notes: sanitizeTextField(req.body?.notes || req.body?.observations || req.body?.observacoes, 1200) || null,
         metadata: sanitizeClinicalPayload(req.body?.metadata || {}),
@@ -36809,11 +36940,26 @@ async function startServer() {
       if (!existing?.id) return res.status(404).json(payerSafeError(404));
       const serviceCatalogId = sanitizeString(req.body?.serviceCatalogId || req.body?.service_catalog_id || existing.service_catalog_id, 120);
       const tussCodeId = sanitizeString(req.body?.tussCodeId || req.body?.tuss_code_id || existing.tuss_code_id, 120);
+      const amount = parseOptionalTussAmountCents(req.body?.amountCents ?? req.body?.amount_cents);
+      const negotiatedAmount = parseOptionalTussAmountCents(req.body?.negotiatedAmountCents ?? req.body?.negotiated_amount_cents);
+      const effectiveValidFrom = req.body?.validFrom !== undefined || req.body?.valid_from !== undefined
+        ? sanitizeString(req.body?.validFrom || req.body?.valid_from, 20) || null
+        : existing.valid_from;
+      const effectiveValidTo = req.body?.validTo !== undefined || req.body?.valid_to !== undefined
+        ? sanitizeString(req.body?.validTo || req.body?.valid_to, 20) || null
+        : existing.valid_to;
+      const effectiveActive = req.body?.active !== undefined ? Boolean(req.body.active) : existing.active !== false;
+      if (!amount.valid || !negotiatedAmount.valid || !tussValidityRangeIsValid(effectiveValidFrom, effectiveValidTo)) {
+        return res.status(400).json({ success: false, error: 'Revise valor e vigência do mapeamento.', code: 'INVALID_TUSS_MAPPING_CONFIGURATION' });
+      }
       const [service, code] = await Promise.all([
         fetchTussServiceCatalogById(organizationId, serviceCatalogId),
         tussCodeId ? fetchTussCodeById(organizationId, tussCodeId) : Promise.resolve(null)
       ]);
       if (!service?.id || (tussCodeId && !code?.id)) return res.status(404).json(payerSafeError(404));
+      if (!tussConfigurationScopeIsConsistent({ payerId: existing.payer_id, service, code, active: effectiveActive })) {
+        return res.status(409).json({ success: false, error: 'Procedimento ou código TUSS inativo/incompatível com esta clínica.', code: 'TUSS_CONFIGURATION_INCONSISTENT' });
+      }
       const patch = cleanObject({
         service_catalog_id: serviceCatalogId,
         tuss_code_id: tussCodeId || null,
@@ -36825,8 +36971,8 @@ async function startServer() {
         billing_unit: req.body?.billingUnit !== undefined || req.body?.billing_unit !== undefined ? normalizeTussBillingUnit(req.body?.billingUnit || req.body?.billing_unit) : undefined,
         quantity_rule: req.body?.quantityRule !== undefined || req.body?.quantity_rule !== undefined ? normalizeTussQuantityRule(req.body?.quantityRule || req.body?.quantity_rule) : undefined,
         default_quantity: req.body?.defaultQuantity !== undefined || req.body?.default_quantity !== undefined ? Math.max(0.01, Number(req.body?.defaultQuantity || req.body?.default_quantity || 1) || 1) : undefined,
-        amount_cents: req.body?.amountCents !== undefined || req.body?.amount_cents !== undefined ? Math.max(0, Math.round(Number(req.body?.amountCents || req.body?.amount_cents) || 0)) : undefined,
-        negotiated_amount_cents: req.body?.negotiatedAmountCents !== undefined || req.body?.negotiated_amount_cents !== undefined ? Math.max(0, Math.round(Number(req.body?.negotiatedAmountCents || req.body?.negotiated_amount_cents) || 0)) : undefined,
+        amount_cents: amount.provided ? amount.value : undefined,
+        negotiated_amount_cents: negotiatedAmount.provided ? negotiatedAmount.value : undefined,
         standard_duration_minutes: req.body?.standardDurationMinutes !== undefined || req.body?.standard_duration_minutes !== undefined ? Math.max(1, Math.round(Number(req.body?.standardDurationMinutes || req.body?.standard_duration_minutes) || 0)) : undefined,
         requires_authorization: req.body?.requiresAuthorization !== undefined || req.body?.requires_authorization !== undefined ? Boolean(req.body?.requiresAuthorization ?? req.body?.requires_authorization) : undefined,
         requires_guide: req.body?.requiresGuide !== undefined || req.body?.requires_guide !== undefined ? Boolean(req.body?.requiresGuide ?? req.body?.requires_guide) : undefined,
@@ -36925,10 +37071,13 @@ async function startServer() {
       const tussCodeId = sanitizeString(req.body?.tussCodeId || req.body?.tuss_code_id, 120);
       const payerTussMappingId = sanitizeString(req.body?.payerTussMappingId || req.body?.payer_tuss_mapping_id, 120);
       const amountInput = req.body?.amountCents ?? req.body?.amount_cents;
-      const amountCents = amountInput !== undefined && amountInput !== null && String(amountInput).trim() !== ''
-        ? Math.max(0, Math.round(Number(amountInput)))
-        : Number.NaN;
-      if (!isUuid(organizationId) || !isUuid(payerId) || !Number.isFinite(amountCents) || amountCents < 0) return res.status(400).json(payerSafeError(400));
+      const amount = parseOptionalTussAmountCents(amountInput);
+      const validFrom = sanitizeString(req.body?.validFrom || req.body?.valid_from, 20) || null;
+      const validUntil = sanitizeString(req.body?.validUntil || req.body?.valid_until || req.body?.validTo || req.body?.valid_to, 20) || null;
+      const active = req.body?.active !== false;
+      if (!isUuid(organizationId) || !isUuid(payerId) || !amount.provided || !amount.valid || amount.value === null || !tussValidityRangeIsValid(validFrom, validUntil)) {
+        return res.status(400).json({ success: false, error: 'Informe valor em centavos e vigência válidos.', code: 'INVALID_PAYER_PROCEDURE_PRICE' });
+      }
       const [payer, service, code, mapping] = await Promise.all([
         fetchPayerForAdmin(payerId, organizationId),
         serviceCatalogId ? fetchTussServiceCatalogById(organizationId, serviceCatalogId) : Promise.resolve(null),
@@ -36941,6 +37090,11 @@ async function startServer() {
       const resolvedServiceId = serviceCatalogId || sanitizeString(mapping?.service_catalog_id, 120);
       const resolvedTussCodeId = tussCodeId || sanitizeString(mapping?.tuss_code_id, 120);
       if (!isUuid(resolvedServiceId) && !isUuid(resolvedTussCodeId)) return res.status(400).json(payerSafeError(400));
+      const resolvedService = service?.id ? service : await fetchTussServiceCatalogById(organizationId, resolvedServiceId);
+      const resolvedCode = code?.id ? code : (isUuid(resolvedTussCodeId) ? await fetchTussCodeById(organizationId, resolvedTussCodeId) : null);
+      if (!tussConfigurationScopeIsConsistent({ payerId, service: resolvedService, code: resolvedCode, mapping, active })) {
+        return res.status(409).json({ success: false, error: 'Preço, procedimento e De/Para precisam pertencer à mesma configuração ativa.', code: 'PAYER_PRICE_SCOPE_INCONSISTENT' });
+      }
       const now = new Date().toISOString();
       const userId = sanitizeString(req.session.user?.id, 120);
       const payload = cleanObject({
@@ -36952,11 +37106,11 @@ async function startServer() {
         tuss_code_id: isUuid(resolvedTussCodeId) ? resolvedTussCodeId : null,
         payer_tuss_mapping_id: isUuid(payerTussMappingId) ? payerTussMappingId : null,
         tuss_code: sanitizeString(req.body?.tussCode || req.body?.tuss_code || code?.code, 80) || null,
-        amount_cents: amountCents,
+        amount_cents: amount.value,
         currency: sanitizeString(req.body?.currency, 12).toUpperCase() || 'BRL',
-        valid_from: sanitizeString(req.body?.validFrom || req.body?.valid_from, 20) || null,
-        valid_until: sanitizeString(req.body?.validUntil || req.body?.valid_until || req.body?.validTo || req.body?.valid_to, 20) || null,
-        active: req.body?.active !== false,
+        valid_from: validFrom,
+        valid_until: validUntil,
+        active,
         source: sanitizeString(req.body?.source || req.body?.fonte, 80) || 'manual',
         notes: sanitizeTextField(req.body?.notes || req.body?.observations || req.body?.observacoes, 1200) || null,
         created_by: isUuid(userId) ? userId : null,
@@ -36964,6 +37118,25 @@ async function startServer() {
         created_at: now,
         updated_at: now
       });
+      const duplicateResult = await supabase
+        .from('payer_procedure_prices')
+        .select(PAYER_PROCEDURE_PRICE_SELECT)
+        .eq('organization_id', organizationId)
+        .eq('payer_id', payerId)
+        .eq('service_catalog_id', resolvedServiceId)
+        .eq('active', active)
+        .limit(40);
+      if (duplicateResult.error && !hasMissingFinancialSchema(duplicateResult.error)) throw duplicateResult.error;
+      const duplicate = (duplicateResult.data || []).find((row: any) =>
+        sanitizeString(row?.tuss_code_id, 120) === (isUuid(resolvedTussCodeId) ? resolvedTussCodeId : '') &&
+        sanitizeString(row?.payer_tuss_mapping_id, 120) === (isUuid(payerTussMappingId) ? payerTussMappingId : '') &&
+        sanitizeString(row?.valid_from, 20) === sanitizeString(validFrom, 20) &&
+        sanitizeString(row?.valid_until, 20) === sanitizeString(validUntil, 20) &&
+        Number(row?.amount_cents) === amount.value
+      );
+      if (duplicate?.id) {
+        return res.json({ success: true, idempotent: true, data: serializePayerProcedurePrice(duplicate, resolvedService, resolvedCode, mapping) });
+      }
       const { data, error } = await supabase
         .from('payer_procedure_prices')
         .insert([payload])
@@ -36977,7 +37150,7 @@ async function startServer() {
         newValue: data,
         performedBy: userId
       });
-      return res.status(201).json({ success: true, data: serializePayerProcedurePrice(data, service, code, mapping) });
+      return res.status(201).json({ success: true, data: serializePayerProcedurePrice(data, resolvedService, resolvedCode, mapping) });
     } catch (error: any) {
       console.warn('[TussReady] price create failed:', error?.message || String(error));
       return res.status(500).json(payerSafeError(500));
@@ -37006,18 +37179,32 @@ async function startServer() {
       const serviceCatalogId = sanitizeString(req.body?.serviceCatalogId || req.body?.service_catalog_id || existing.service_catalog_id, 120);
       const tussCodeId = sanitizeString(req.body?.tussCodeId || req.body?.tuss_code_id || existing.tuss_code_id, 120);
       const payerTussMappingId = sanitizeString(req.body?.payerTussMappingId || req.body?.payer_tuss_mapping_id || existing.payer_tuss_mapping_id, 120);
+      const amount = parseOptionalTussAmountCents(req.body?.amountCents ?? req.body?.amount_cents);
+      const effectiveValidFrom = req.body?.validFrom !== undefined || req.body?.valid_from !== undefined
+        ? sanitizeString(req.body?.validFrom || req.body?.valid_from, 20) || null
+        : existing.valid_from;
+      const effectiveValidUntil = req.body?.validUntil !== undefined || req.body?.valid_until !== undefined || req.body?.validTo !== undefined || req.body?.valid_to !== undefined
+        ? sanitizeString(req.body?.validUntil || req.body?.valid_until || req.body?.validTo || req.body?.valid_to, 20) || null
+        : existing.valid_until;
+      const effectiveActive = req.body?.active !== undefined ? Boolean(req.body.active) : existing.active !== false;
+      if (!amount.valid || (amount.provided && amount.value === null) || !tussValidityRangeIsValid(effectiveValidFrom, effectiveValidUntil)) {
+        return res.status(400).json({ success: false, error: 'Informe valor em centavos e vigência válidos.', code: 'INVALID_PAYER_PROCEDURE_PRICE' });
+      }
       const [service, code, mapping] = await Promise.all([
         serviceCatalogId ? fetchTussServiceCatalogById(organizationId, serviceCatalogId) : Promise.resolve(null),
         tussCodeId ? fetchTussCodeById(organizationId, tussCodeId) : Promise.resolve(null),
         payerTussMappingId ? fetchPayerTussMappingById(organizationId, payerTussMappingId) : Promise.resolve(null)
       ]);
       if ((serviceCatalogId && !service?.id) || (tussCodeId && !code?.id) || (payerTussMappingId && !mapping?.id)) return res.status(404).json(payerSafeError(404));
+      if (!tussConfigurationScopeIsConsistent({ payerId: existing.payer_id, service, code, mapping, active: effectiveActive })) {
+        return res.status(409).json({ success: false, error: 'Preço, procedimento e De/Para precisam pertencer à mesma configuração ativa.', code: 'PAYER_PRICE_SCOPE_INCONSISTENT' });
+      }
       const patch = cleanObject({
         service_catalog_id: req.body?.serviceCatalogId !== undefined || req.body?.service_catalog_id !== undefined ? (isUuid(serviceCatalogId) ? serviceCatalogId : null) : undefined,
         tuss_code_id: req.body?.tussCodeId !== undefined || req.body?.tuss_code_id !== undefined ? (isUuid(tussCodeId) ? tussCodeId : null) : undefined,
         payer_tuss_mapping_id: req.body?.payerTussMappingId !== undefined || req.body?.payer_tuss_mapping_id !== undefined ? (isUuid(payerTussMappingId) ? payerTussMappingId : null) : undefined,
         tuss_code: req.body?.tussCode !== undefined || req.body?.tuss_code !== undefined ? sanitizeString(req.body?.tussCode || req.body?.tuss_code, 80) || null : undefined,
-        amount_cents: req.body?.amountCents !== undefined || req.body?.amount_cents !== undefined ? Math.max(0, Math.round(Number(req.body?.amountCents ?? req.body?.amount_cents) || 0)) : undefined,
+        amount_cents: amount.provided ? amount.value : undefined,
         currency: req.body?.currency !== undefined ? sanitizeString(req.body?.currency, 12).toUpperCase() || 'BRL' : undefined,
         valid_from: req.body?.validFrom !== undefined || req.body?.valid_from !== undefined ? sanitizeString(req.body?.validFrom || req.body?.valid_from, 20) || null : undefined,
         valid_until: req.body?.validUntil !== undefined || req.body?.valid_until !== undefined || req.body?.validTo !== undefined || req.body?.valid_to !== undefined ? sanitizeString(req.body?.validUntil || req.body?.valid_until || req.body?.validTo || req.body?.valid_to, 20) || null : undefined,

@@ -307,6 +307,23 @@ const normalizePayerTissProfile = (profile: any = {}): PayerTissForm => ({
 const isInsurancePayer = (payer?: Payer | null) => String(payer?.payerType || "").toUpperCase() === "INSURANCE";
 const isFilled = (value: unknown) => String(value ?? "").trim().length > 0;
 
+export const formatCentsForBrazilianInput = (value: unknown) => {
+  if (value === null || value === undefined || String(value).trim() === "") return "";
+  const cents = Number(value);
+  if (!Number.isSafeInteger(cents) || cents < 0) return "";
+  const reais = Math.floor(cents / 100);
+  return `${reais},${String(cents % 100).padStart(2, "0")}`;
+};
+
+export const parseBrazilianCurrencyToCents = (value: unknown): number | null => {
+  const normalized = String(value ?? "").trim().replace(/^R\$\s*/i, "").replace(/\s+/g, "");
+  if (!normalized) return null;
+  if (!/^\d+(?:[.,]\d{1,2})?$/.test(normalized)) return null;
+  const [whole, decimal = ""] = normalized.replace(",", ".").split(".");
+  const cents = Number(whole) * 100 + Number(decimal.padEnd(2, "0"));
+  return Number.isSafeInteger(cents) && cents >= 0 ? cents : null;
+};
+
 const payerTissMissing = (payer: Payer | null, form: PayerTissForm) => {
   if (!isInsurancePayer(payer)) return [];
   const missing: string[] = [];
@@ -351,6 +368,7 @@ export function PayerRequirementsPanel({
   const [editingTussCodeId, setEditingTussCodeId] = useState("");
   const [editingTussMappingId, setEditingTussMappingId] = useState("");
   const [editingProcedurePriceId, setEditingProcedurePriceId] = useState("");
+  const [procedurePriceAmountError, setProcedurePriceAmountError] = useState("");
   const [tussActionInfo, setTussActionInfo] = useState("");
   const [payerTissForm, setPayerTissForm] = useState<PayerTissForm>(defaultPayerTissForm);
   const [payerTissLoading, setPayerTissLoading] = useState(false);
@@ -358,6 +376,8 @@ export function PayerRequirementsPanel({
   const payerRulesSectionRef = useRef<HTMLDivElement | null>(null);
   const payerTussSectionRef = useRef<HTMLDivElement | null>(null);
   const payerPricesSectionRef = useRef<HTMLDivElement | null>(null);
+  const procedurePriceSaveInFlightRef = useRef(false);
+  const procedurePriceAmountInputRef = useRef<HTMLInputElement | null>(null);
 
   const selectedPayer = useMemo(
     () => payers.find((payer) => payer.id === selectedPayerId) || null,
@@ -369,13 +389,43 @@ export function PayerRequirementsPanel({
   );
   const selectedPayerMappingCount = tussMappings.filter((mapping) => mapping.active !== false).length;
   const selectedPayerPriceCount = procedurePrices.filter((price) => price.active !== false).length;
+  const activeTussServices = useMemo(() => tussServices.filter((service) => service.active !== false), [tussServices]);
+  const activeTussCodes = useMemo(() => tussCodes.filter((code) => code.active !== false), [tussCodes]);
   const hasDemoTussData = [...tussMappings, ...tussCodes].some((item: any) =>
     /demo|teste/i.test(String(item?.source || item?.tussCode || item?.code || item?.contractCode || "")),
   );
-  const formatCurrency = (amount?: number | null) =>
-    Number.isFinite(Number(amount))
-      ? `R$ ${(Number(amount) / 100).toFixed(2)}`
-      : "valor pendente";
+  const formatCurrency = (amount?: number | null) => {
+    const formatted = formatCentsForBrazilianInput(amount);
+    return formatted ? `R$ ${formatted}` : "valor pendente";
+  };
+  const billingConfigurations = useMemo(() => {
+    const servicesById = new Map(tussServices.map((service) => [service.id, service]));
+    const codesById = new Map(tussCodes.map((code) => [code.id, code]));
+    const mappingsById = new Map(tussMappings.map((mapping) => [mapping.id, mapping]));
+    const usedMappingIds = new Set<string>();
+    const rows = procedurePrices.map((price) => {
+      const mapping = (price.payerTussMappingId && mappingsById.get(price.payerTussMappingId)) ||
+        tussMappings.find((candidate) =>
+          candidate.serviceCatalogId === price.serviceCatalogId &&
+          (!price.tussCodeId || candidate.tussCodeId === price.tussCodeId),
+        ) || null;
+      if (mapping?.id) usedMappingIds.add(mapping.id);
+      const service = servicesById.get(price.serviceCatalogId || mapping?.serviceCatalogId || "") || null;
+      const code = codesById.get(price.tussCodeId || mapping?.tussCodeId || "") || null;
+      return { key: `price:${price.id}`, price, mapping, service, code };
+    });
+    for (const mapping of tussMappings) {
+      if (usedMappingIds.has(mapping.id)) continue;
+      rows.push({
+        key: `mapping:${mapping.id}`,
+        price: null as PayerProcedurePrice | null,
+        mapping,
+        service: servicesById.get(mapping.serviceCatalogId) || null,
+        code: codesById.get(mapping.tussCodeId || "") || null,
+      });
+    }
+    return rows;
+  }, [procedurePrices, tussCodes, tussMappings, tussServices]);
 
   const loadPayers = async () => {
     setLoading(true);
@@ -421,10 +471,10 @@ export function PayerRequirementsPanel({
     setTussLoading(true);
     try {
       const [servicesResult, codesResult, mappingsResult, pricesResult] = await Promise.all([
-        dataService.getTussServices({ active: true, limit: 160 }),
-        dataService.getTussCodes({ active: true, limit: 240 }),
-        dataService.getPayerTussMappings({ payerId, active: true, limit: 180 }),
-        payerId ? dataService.getPayerProcedurePrices({ payerId, active: true, limit: 180 }) : Promise.resolve({ success: true, data: [] }),
+        dataService.getTussServices({ limit: 160 }),
+        dataService.getTussCodes({ limit: 240 }),
+        dataService.getPayerTussMappings({ payerId, limit: 180 }),
+        payerId ? dataService.getPayerProcedurePrices({ payerId, limit: 180 }) : Promise.resolve({ success: true, data: [] }),
       ]);
       if (servicesResult?.success) setTussServices(Array.isArray(servicesResult.data) ? servicesResult.data : []);
       if (codesResult?.success) setTussCodes(Array.isArray(codesResult.data) ? codesResult.data : []);
@@ -432,13 +482,13 @@ export function PayerRequirementsPanel({
       if (pricesResult?.success) setProcedurePrices(Array.isArray(pricesResult.data) ? pricesResult.data : []);
       setTussMappingForm((current) => ({
         ...current,
-        serviceCatalogId: current.serviceCatalogId || servicesResult?.data?.[0]?.id || "",
-        tussCodeId: current.tussCodeId || codesResult?.data?.[0]?.id || "",
+        serviceCatalogId: current.serviceCatalogId || servicesResult?.data?.find((item: TussService) => item.active !== false)?.id || "",
+        tussCodeId: current.tussCodeId || codesResult?.data?.find((item: TussCode) => item.active !== false)?.id || "",
       }));
       setProcedurePriceForm((current) => ({
         ...current,
-        serviceCatalogId: current.serviceCatalogId || servicesResult?.data?.[0]?.id || "",
-        tussCodeId: current.tussCodeId || codesResult?.data?.[0]?.id || "",
+        serviceCatalogId: current.serviceCatalogId || servicesResult?.data?.find((item: TussService) => item.active !== false)?.id || "",
+        tussCodeId: current.tussCodeId || codesResult?.data?.find((item: TussCode) => item.active !== false)?.id || "",
       }));
     } finally {
       setTussLoading(false);
@@ -605,6 +655,12 @@ export function PayerRequirementsPanel({
 
   const createTussService = async () => {
     if (tussServiceForm.name.trim().length < 2) return;
+    const rawDefaultAmount = String(tussServiceForm.defaultAmountCents || "").trim();
+    const defaultAmountCents = rawDefaultAmount ? parseBrazilianCurrencyToCents(rawDefaultAmount) : null;
+    if (rawDefaultAmount && defaultAmountCents === null) {
+      setError("Informe o valor padrão em reais, com no máximo duas casas decimais.");
+      return;
+    }
     setSaving(true);
     setError("");
     setTussActionInfo("");
@@ -618,7 +674,7 @@ export function PayerRequirementsPanel({
         serviceType: tussServiceForm.serviceType.trim(),
         defaultDurationMinutes: tussServiceForm.defaultDurationMinutes ? Number(tussServiceForm.defaultDurationMinutes) : null,
         defaultQuantity: Number(tussServiceForm.defaultQuantity || 1),
-        defaultAmountCents: tussServiceForm.defaultAmountCents ? Number(tussServiceForm.defaultAmountCents) : null,
+        defaultAmountCents,
       };
       const result = editingTussServiceId
         ? await dataService.updateTussService(editingTussServiceId, payload)
@@ -671,6 +727,14 @@ export function PayerRequirementsPanel({
 
   const createTussMapping = async () => {
     if (!selectedPayerId || !tussMappingForm.serviceCatalogId) return;
+    const rawLegacyAmount = String(tussMappingForm.amountCents || "").trim();
+    const rawNegotiatedAmount = String(tussMappingForm.negotiatedAmountCents || "").trim();
+    const legacyAmountCents = rawLegacyAmount ? parseBrazilianCurrencyToCents(rawLegacyAmount) : null;
+    const negotiatedAmountCents = rawNegotiatedAmount ? parseBrazilianCurrencyToCents(rawNegotiatedAmount) : null;
+    if ((rawLegacyAmount && legacyAmountCents === null) || (rawNegotiatedAmount && negotiatedAmountCents === null)) {
+      setError("Informe os valores do De/Para em reais, com no máximo duas casas decimais.");
+      return;
+    }
     setSaving(true);
     setError("");
     setTussActionInfo("");
@@ -679,8 +743,8 @@ export function PayerRequirementsPanel({
         ...tussMappingForm,
         payerId: selectedPayerId,
         defaultQuantity: Number(tussMappingForm.defaultQuantity || 1),
-        amountCents: tussMappingForm.amountCents ? Number(tussMappingForm.amountCents) : null,
-        negotiatedAmountCents: tussMappingForm.negotiatedAmountCents ? Number(tussMappingForm.negotiatedAmountCents) : (tussMappingForm.amountCents ? Number(tussMappingForm.amountCents) : null),
+        amountCents: legacyAmountCents,
+        negotiatedAmountCents: negotiatedAmountCents ?? legacyAmountCents,
         standardDurationMinutes: tussMappingForm.standardDurationMinutes ? Number(tussMappingForm.standardDurationMinutes) : null,
         contractCode: tussMappingForm.contractCode.trim(),
         contractDescription: tussMappingForm.contractDescription.trim(),
@@ -709,15 +773,23 @@ export function PayerRequirementsPanel({
   };
 
   const saveProcedurePrice = async () => {
-    if (!selectedPayerId || !procedurePriceForm.serviceCatalogId || procedurePriceForm.amountCents === "") return;
+    if (procedurePriceSaveInFlightRef.current || !selectedPayerId || !procedurePriceForm.serviceCatalogId) return;
+    const amountCents = parseBrazilianCurrencyToCents(procedurePriceForm.amountCents);
+    if (amountCents === null) {
+      setProcedurePriceAmountError("Informe um valor válido em reais, com no máximo duas casas decimais.");
+      procedurePriceAmountInputRef.current?.focus();
+      return;
+    }
+    procedurePriceSaveInFlightRef.current = true;
     setSaving(true);
     setError("");
+    setProcedurePriceAmountError("");
     setTussActionInfo("");
     try {
       const payload = {
         ...procedurePriceForm,
         payerId: selectedPayerId,
-        amountCents: Number(procedurePriceForm.amountCents || 0),
+        amountCents,
       };
       const result = editingProcedurePriceId
         ? await dataService.updatePayerProcedurePrice(editingProcedurePriceId, payload)
@@ -736,6 +808,7 @@ export function PayerRequirementsPanel({
       setTussActionInfo(editingProcedurePriceId ? "Valor negociado atualizado." : "Valor negociado cadastrado.");
     } finally {
       setSaving(false);
+      procedurePriceSaveInFlightRef.current = false;
     }
   };
 
@@ -750,7 +823,7 @@ export function PayerRequirementsPanel({
       defaultDurationMinutes: service.defaultDurationMinutes ? String(service.defaultDurationMinutes) : "",
       billingUnit: service.billingUnit || "session",
       defaultQuantity: service.defaultQuantity ? String(service.defaultQuantity) : "1",
-      defaultAmountCents: service.defaultAmountCents ? String(service.defaultAmountCents) : "",
+      defaultAmountCents: formatCentsForBrazilianInput(service.defaultAmountCents),
     });
   };
 
@@ -778,8 +851,8 @@ export function PayerRequirementsPanel({
       billingUnit: mapping.billingUnit || "session",
       quantityRule: mapping.quantityRule || "per_session",
       defaultQuantity: mapping.defaultQuantity ? String(mapping.defaultQuantity) : "1",
-      amountCents: mapping.amountCents ? String(mapping.amountCents) : "",
-      negotiatedAmountCents: mapping.negotiatedAmountCents ? String(mapping.negotiatedAmountCents) : "",
+      amountCents: formatCentsForBrazilianInput(mapping.amountCents),
+      negotiatedAmountCents: formatCentsForBrazilianInput(mapping.negotiatedAmountCents),
       standardDurationMinutes: mapping.standardDurationMinutes ? String(mapping.standardDurationMinutes) : "",
       requiresAuthorization: Boolean(mapping.requiresAuthorization),
       requiresGuide: Boolean(mapping.requiresGuide),
@@ -801,13 +874,16 @@ export function PayerRequirementsPanel({
       serviceCatalogId: price.serviceCatalogId || "",
       tussCodeId: price.tussCodeId || "",
       payerTussMappingId: price.payerTussMappingId || "",
-      amountCents: price.amountCents ? String(price.amountCents) : "",
+      amountCents: formatCentsForBrazilianInput(price.amountCents),
       currency: price.currency || "BRL",
       validFrom: price.validFrom || "",
       validUntil: price.validUntil || "",
       source: price.source || "manual",
       notes: price.notes || "",
     });
+    setProcedurePriceAmountError("");
+    payerPricesSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    window.setTimeout(() => procedurePriceAmountInputRef.current?.focus(), 250);
   };
 
   const disableTussService = async (serviceId: string) => {
@@ -820,7 +896,9 @@ export function PayerRequirementsPanel({
         setError(result?.error || "Não foi possível inativar o procedimento agora.");
         return;
       }
-      setTussServices((current) => current.filter((service) => service.id !== serviceId));
+      setTussServices((current) => current.map((service) => (
+        service.id === serviceId ? { ...service, active: false } : service
+      )));
       if (editingTussServiceId === serviceId) {
         setEditingTussServiceId("");
         setTussServiceForm(defaultTussServiceForm);
@@ -841,7 +919,9 @@ export function PayerRequirementsPanel({
         setError(result?.error || "Não foi possível inativar o código TUSS agora.");
         return;
       }
-      setTussCodes((current) => current.filter((code) => code.id !== codeId));
+      setTussCodes((current) => current.map((code) => (
+        code.id === codeId ? { ...code, active: false } : code
+      )));
       if (editingTussCodeId === codeId) {
         setEditingTussCodeId("");
         setTussCodeForm(defaultTussCodeForm);
@@ -882,7 +962,9 @@ export function PayerRequirementsPanel({
         setError(result?.error || "Não foi possível desativar o mapeamento agora.");
         return;
       }
-      setTussMappings((current) => current.filter((mapping) => mapping.id !== mappingId));
+      setTussMappings((current) => current.map((mapping) => (
+        mapping.id === mappingId ? { ...mapping, active: false } : mapping
+      )));
       if (editingTussMappingId === mappingId) {
         setEditingTussMappingId("");
         setTussMappingForm(defaultTussMappingForm);
@@ -903,7 +985,9 @@ export function PayerRequirementsPanel({
         setError(result?.error || "Não foi possível inativar o valor negociado agora.");
         return;
       }
-      setProcedurePrices((current) => current.filter((price) => price.id !== priceId));
+      setProcedurePrices((current) => current.map((price) => (
+        price.id === priceId ? { ...price, active: false } : price
+      )));
       if (editingProcedurePriceId === priceId) {
         setEditingProcedurePriceId("");
         setProcedurePriceForm(defaultProcedurePriceForm);
@@ -1263,8 +1347,12 @@ export function PayerRequirementsPanel({
           </div>
         )}
 
-        <div className="mt-4 grid gap-4 xl:grid-cols-3">
-          <div className="rounded-2xl border border-slate-100 p-3">
+        <div className="mt-4">
+          <details className="rounded-2xl border border-slate-100 bg-slate-50/50 p-3">
+            <summary className="cursor-pointer text-sm font-semibold text-slate-800">Cadastrar procedimento ou código TUSS</summary>
+            <p className="mt-2 text-xs text-slate-500">Procedimentos internos e códigos TUSS são referências usadas pelo De/Para; não representam cobranças duplicadas.</p>
+            <div className="mt-3 grid gap-4 xl:grid-cols-2">
+          <div className="rounded-2xl border border-slate-100 bg-white p-3">
             <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Procedimento interno</p>
             <input
               value={tussServiceForm.name}
@@ -1332,11 +1420,10 @@ export function PayerRequirementsPanel({
             </div>
             <div className="mt-2">
               <input
-                type="number"
-                min="0"
+                inputMode="decimal"
                 value={tussServiceForm.defaultAmountCents}
                 onChange={(event) => setTussServiceForm((current) => ({ ...current, defaultAmountCents: event.target.value }))}
-                placeholder="Valor em centavos"
+                placeholder="Valor padrão. Ex.: 120,00"
                 className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
               />
             </div>
@@ -1360,7 +1447,7 @@ export function PayerRequirementsPanel({
             </button>
           </div>
 
-          <div className="rounded-2xl border border-slate-100 p-3">
+          <div className="rounded-2xl border border-slate-100 bg-white p-3">
             <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Código TUSS</p>
             <input
               value={tussCodeForm.code}
@@ -1422,7 +1509,10 @@ export function PayerRequirementsPanel({
             </button>
           </div>
 
-          <div className="rounded-2xl border border-slate-100 p-3">
+            </div>
+          </details>
+
+          <div className="mt-4 rounded-2xl border border-slate-100 p-3">
             <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Mapeamento por pagador</p>
             <select
               value={tussMappingForm.serviceCatalogId}
@@ -1430,7 +1520,7 @@ export function PayerRequirementsPanel({
               className="mt-3 w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
             >
               <option value="">Procedimento</option>
-              {tussServices.map((service) => <option key={service.id} value={service.id}>{service.name}</option>)}
+              {tussServices.filter((service) => service.active !== false || service.id === tussMappingForm.serviceCatalogId).map((service) => <option key={service.id} value={service.id}>{service.name}{service.active === false ? " (inativo)" : ""}</option>)}
             </select>
             <select
               value={tussMappingForm.tussCodeId}
@@ -1438,7 +1528,7 @@ export function PayerRequirementsPanel({
               className="mt-2 w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
             >
               <option value="">Sem código TUSS</option>
-              {tussCodes.map((code) => <option key={code.id} value={code.id}>{code.code} - {code.description}</option>)}
+              {tussCodes.filter((code) => code.active !== false || code.id === tussMappingForm.tussCodeId).map((code) => <option key={code.id} value={code.id}>{code.code} - {code.description}{code.active === false ? " (inativo)" : ""}</option>)}
             </select>
             <div className="mt-2 grid gap-2 sm:grid-cols-2">
               <input
@@ -1519,21 +1609,19 @@ export function PayerRequirementsPanel({
             </div>
             <div className="mt-2">
               <input
-                type="number"
-                min="0"
+                inputMode="decimal"
                 value={tussMappingForm.amountCents}
                 onChange={(event) => setTussMappingForm((current) => ({ ...current, amountCents: event.target.value }))}
-                placeholder="Valor legado em centavos"
+                placeholder="Ex.: 120,00"
                 className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
               />
             </div>
             <div className="mt-2 grid gap-2 sm:grid-cols-2">
               <input
-                type="number"
-                min="0"
+                inputMode="decimal"
                 value={tussMappingForm.negotiatedAmountCents}
                 onChange={(event) => setTussMappingForm((current) => ({ ...current, negotiatedAmountCents: event.target.value }))}
-                placeholder="Valor negociado em centavos"
+                placeholder="Ex.: 120,00"
                 className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
               />
               <input
@@ -1621,76 +1709,51 @@ export function PayerRequirementsPanel({
             </span>
           </div>
 
-          <div className="mt-3 grid gap-2 lg:grid-cols-[1.2fr_1.2fr_1fr_0.8fr]">
-            <select
-              value={procedurePriceForm.serviceCatalogId}
-              onChange={(event) => setProcedurePriceForm((current) => ({ ...current, serviceCatalogId: event.target.value }))}
-              className="w-full rounded-2xl border border-emerald-100 bg-white px-3 py-2 text-sm font-semibold outline-none"
-            >
-              <option value="">Procedimento interno</option>
-              {tussServices.map((service) => <option key={service.id} value={service.id}>{service.name}</option>)}
-            </select>
-            <select
-              value={procedurePriceForm.tussCodeId}
-              onChange={(event) => setProcedurePriceForm((current) => ({ ...current, tussCodeId: event.target.value }))}
-              className="w-full rounded-2xl border border-emerald-100 bg-white px-3 py-2 text-sm font-semibold outline-none"
-            >
-              <option value="">TUSS opcional</option>
-              {tussCodes.map((code) => <option key={code.id} value={code.id}>{code.code} - {code.description}</option>)}
-            </select>
-            <input
-              type="number"
-              min="0"
-              value={procedurePriceForm.amountCents}
-              onChange={(event) => setProcedurePriceForm((current) => ({ ...current, amountCents: event.target.value }))}
-              placeholder="Valor negociado em centavos"
-              className="w-full rounded-2xl border border-emerald-100 bg-white px-3 py-2 text-sm font-semibold outline-none"
-            />
-            <select
-              value={procedurePriceForm.source}
-              onChange={(event) => setProcedurePriceForm((current) => ({ ...current, source: event.target.value }))}
-              className="w-full rounded-2xl border border-emerald-100 bg-white px-3 py-2 text-sm font-semibold outline-none"
-            >
-              <option value="manual">Manual</option>
-              <option value="imported">Importado</option>
-              <option value="demo">Demo/teste</option>
-              <option value="payer_contract">Contrato do pagador</option>
-            </select>
-          </div>
-          <div className="mt-2 grid gap-2 md:grid-cols-4">
-            <select
-              value={procedurePriceForm.payerTussMappingId}
-              onChange={(event) => setProcedurePriceForm((current) => ({ ...current, payerTussMappingId: event.target.value }))}
-              className="w-full rounded-2xl border border-emerald-100 bg-white px-3 py-2 text-sm font-semibold outline-none"
-            >
-              <option value="">Vincular De/Para opcional</option>
-              {tussMappings.map((mapping) => <option key={mapping.id} value={mapping.id}>{mapping.serviceName || mapping.internalCode || "Procedimento"} {mapping.tussCode ? `· TUSS ${mapping.tussCode}` : ""}</option>)}
-            </select>
-            <input
-              type="date"
-              value={procedurePriceForm.validFrom}
-              onChange={(event) => setProcedurePriceForm((current) => ({ ...current, validFrom: event.target.value }))}
-              className="w-full rounded-2xl border border-emerald-100 bg-white px-3 py-2 text-sm font-semibold outline-none"
-            />
-            <input
-              type="date"
-              value={procedurePriceForm.validUntil}
-              onChange={(event) => setProcedurePriceForm((current) => ({ ...current, validUntil: event.target.value }))}
-              className="w-full rounded-2xl border border-emerald-100 bg-white px-3 py-2 text-sm font-semibold outline-none"
-            />
-            <input
-              value={procedurePriceForm.notes}
-              onChange={(event) => setProcedurePriceForm((current) => ({ ...current, notes: event.target.value }))}
-              placeholder="Observações"
-              className="w-full rounded-2xl border border-emerald-100 bg-white px-3 py-2 text-sm font-semibold outline-none"
-            />
+          {editingProcedurePriceId && <p className="mt-3 text-xs text-emerald-800">Editando uma configuração existente. Salvar atualizará somente este valor negociado.</p>}
+          <div className="mt-3 grid gap-3 lg:grid-cols-2">
+            <label htmlFor="payer-price-service" className="text-xs font-normal text-slate-700">
+              <span className="mb-1 block">Procedimento interno</span>
+              <select id="payer-price-service" value={procedurePriceForm.serviceCatalogId} onChange={(event) => setProcedurePriceForm((current) => ({ ...current, serviceCatalogId: event.target.value }))} className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm font-normal outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100">
+                <option value="">Selecione o procedimento</option>
+                {tussServices.filter((service) => service.active !== false || service.id === procedurePriceForm.serviceCatalogId).map((service) => <option key={service.id} value={service.id}>{service.name}{service.active === false ? " (inativo)" : ""}</option>)}
+              </select>
+            </label>
+            <label htmlFor="payer-price-tuss" className="text-xs font-normal text-slate-700">
+              <span className="mb-1 block">Código TUSS</span>
+              <select id="payer-price-tuss" value={procedurePriceForm.tussCodeId} onChange={(event) => setProcedurePriceForm((current) => ({ ...current, tussCodeId: event.target.value }))} className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm font-normal outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100">
+                <option value="">Selecione o código TUSS</option>
+                {tussCodes.filter((code) => code.active !== false || code.id === procedurePriceForm.tussCodeId).map((code) => <option key={code.id} value={code.id}>{code.code} - {code.description}{code.active === false ? " (inativo)" : ""}</option>)}
+              </select>
+            </label>
+            <label htmlFor="payer-price-amount" className="text-xs font-normal text-slate-700">
+              <span className="mb-1 block">Valor negociado (R$)</span>
+              <input ref={procedurePriceAmountInputRef} id="payer-price-amount" inputMode="decimal" value={procedurePriceForm.amountCents} onChange={(event) => { setProcedurePriceForm((current) => ({ ...current, amountCents: event.target.value })); setProcedurePriceAmountError(""); }} placeholder="Ex.: 120,00" aria-describedby={procedurePriceAmountError ? "payer-price-amount-error" : "payer-price-amount-help"} aria-invalid={Boolean(procedurePriceAmountError)} className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm font-normal outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100" />
+              <span id="payer-price-amount-help" className="mt-1 block text-xs text-slate-500">Informe o valor em reais, com até duas casas decimais.</span>
+              {procedurePriceAmountError && <span id="payer-price-amount-error" className="mt-1 block text-xs text-rose-600">{procedurePriceAmountError}</span>}
+            </label>
+            <label htmlFor="payer-price-source" className="text-xs font-normal text-slate-700">
+              <span className="mb-1 block">Origem do valor</span>
+              <select id="payer-price-source" value={procedurePriceForm.source} onChange={(event) => setProcedurePriceForm((current) => ({ ...current, source: event.target.value }))} className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm font-normal outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100">
+                <option value="manual">Manual</option><option value="imported">Importado</option><option value="demo">Demo/teste</option><option value="payer_contract">Contrato do pagador</option>
+              </select>
+            </label>
+            <label htmlFor="payer-price-mapping" className="text-xs font-normal text-slate-700 lg:col-span-2">
+              <span className="mb-1 block">Vínculo De/Para</span>
+              <select id="payer-price-mapping" value={procedurePriceForm.payerTussMappingId} onChange={(event) => setProcedurePriceForm((current) => ({ ...current, payerTussMappingId: event.target.value }))} className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm font-normal outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100">
+                <option value="">Sem vínculo De/Para</option>
+                {tussMappings.filter((mapping) => mapping.active !== false || mapping.id === procedurePriceForm.payerTussMappingId).map((mapping) => <option key={mapping.id} value={mapping.id}>{mapping.serviceName || mapping.internalCode || "Procedimento"} {mapping.tussCode ? `· TUSS ${mapping.tussCode}` : ""}{mapping.active === false ? " (inativo)" : ""}</option>)}
+              </select>
+            </label>
+            <label htmlFor="payer-price-valid-from" className="text-xs font-normal text-slate-700"><span className="mb-1 block">Início da vigência</span><input id="payer-price-valid-from" type="date" value={procedurePriceForm.validFrom} onChange={(event) => setProcedurePriceForm((current) => ({ ...current, validFrom: event.target.value }))} className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm font-normal outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100" /></label>
+            <label htmlFor="payer-price-valid-until" className="text-xs font-normal text-slate-700"><span className="mb-1 block">Fim da vigência</span><input id="payer-price-valid-until" type="date" value={procedurePriceForm.validUntil} onChange={(event) => setProcedurePriceForm((current) => ({ ...current, validUntil: event.target.value }))} className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm font-normal outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100" /></label>
+            <label htmlFor="payer-price-notes" className="text-xs font-normal text-slate-700 lg:col-span-2"><span className="mb-1 block">Observações</span><input id="payer-price-notes" value={procedurePriceForm.notes} onChange={(event) => setProcedurePriceForm((current) => ({ ...current, notes: event.target.value }))} placeholder="Ex.: valor definido no contrato de junho de 2026" className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm font-normal outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100" /></label>
           </div>
           <div className="mt-3 flex flex-wrap gap-2">
             {editingProcedurePriceId && (
               <button
                 type="button"
-                onClick={() => { setEditingProcedurePriceId(""); setProcedurePriceForm(defaultProcedurePriceForm); }}
-                className="rounded-2xl border border-emerald-200 bg-white px-3 py-2 text-xs font-bold text-slate-500"
+                onClick={() => { setEditingProcedurePriceId(""); setProcedurePriceForm(defaultProcedurePriceForm); setProcedurePriceAmountError(""); }}
+                className="rounded-lg border border-emerald-200 bg-white px-3 py-2 text-xs font-normal text-slate-600"
               >
                 Cancelar edição
               </button>
@@ -1699,32 +1762,11 @@ export function PayerRequirementsPanel({
               type="button"
               onClick={() => void saveProcedurePrice()}
               disabled={!selectedPayerId || !procedurePriceForm.serviceCatalogId || procedurePriceForm.amountCents === "" || saving}
-              className="inline-flex items-center justify-center gap-2 rounded-2xl bg-emerald-700 px-4 py-2 text-sm font-bold text-white disabled:opacity-50"
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-700 px-4 py-2 text-sm font-normal text-white disabled:opacity-50"
             >
               {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
               {editingProcedurePriceId ? "Atualizar valor negociado" : "Salvar valor negociado"}
             </button>
-          </div>
-
-          <div className="mt-3 space-y-2">
-            {procedurePrices.length === 0 ? (
-              <p className="rounded-2xl bg-white p-3 text-xs font-bold text-slate-500">Nenhum valor negociado ativo para este convênio.</p>
-            ) : procedurePrices.map((price) => (
-              <div key={price.id} className="rounded-2xl border border-emerald-100 bg-white px-3 py-3">
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                  <div>
-                    <p className="text-sm font-bold text-slate-800">{price.serviceName || price.internalCode || "Procedimento"}</p>
-                    <p className="mt-1 text-xs text-slate-500">
-                      {[price.tussCode && `TUSS ${price.tussCode}`, formatCurrency(price.amountCents), price.currency || "BRL", price.validFrom && `vigência ${price.validFrom}`, price.validUntil && `até ${price.validUntil}`, price.source].filter(Boolean).join(" · ")}
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap justify-end gap-1">
-                    <button type="button" onClick={() => editProcedurePrice(price)} className="rounded-xl border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-500 hover:bg-slate-50">Editar</button>
-                    <button type="button" onClick={() => void disableProcedurePrice(price.id)} className="rounded-xl border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-500 hover:bg-slate-50">Inativar</button>
-                  </div>
-                </div>
-              </div>
-            ))}
           </div>
 
           <div className="mt-3 rounded-2xl border border-dashed border-emerald-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600">
@@ -1732,106 +1774,85 @@ export function PayerRequirementsPanel({
           </div>
         </div>
 
-        <div className="mt-4 grid gap-3 lg:grid-cols-2">
-          <div className="rounded-2xl border border-slate-100 p-3">
-            <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Procedimentos cadastrados</p>
-            <div className="mt-2 space-y-2">
-              {tussServices.length === 0 ? (
-                <p className="rounded-2xl bg-slate-50 p-3 text-xs font-bold text-slate-500">Nenhum procedimento ativo.</p>
-              ) : tussServices.slice(0, 8).map((service) => (
-                <div key={service.id} className="rounded-2xl border border-slate-100 px-3 py-2">
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <p className="text-sm font-bold text-slate-800">{service.name}</p>
-                      <p className="mt-0.5 text-xs text-slate-500">
-                        {[service.internalCode, service.serviceType, service.billingUnit, service.defaultAmountCents ? `R$ ${(Number(service.defaultAmountCents) / 100).toFixed(2)}` : ""].filter(Boolean).join(" · ") || "Sem detalhes"}
-                      </p>
-                    </div>
-                    <div className="flex shrink-0 gap-1">
-                      <button type="button" onClick={() => editTussService(service)} className="rounded-xl border border-slate-200 px-2 py-1 text-xs font-bold text-slate-500">Editar</button>
-                      <button type="button" onClick={() => void disableTussService(service.id)} className="rounded-xl border border-slate-200 px-2 py-1 text-xs font-bold text-slate-500">Inativar</button>
-                    </div>
-                  </div>
-                </div>
-              ))}
+        <div className="mt-4 rounded-2xl border border-slate-100 p-4">
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-semibold text-slate-900">Configurações de faturamento deste convênio</h3>
+              <p className="mt-1 text-xs text-slate-500">Cada item reúne procedimento, De/Para TUSS, preço e vigência em uma única visão.</p>
             </div>
+            <span className="text-xs text-slate-500">{billingConfigurations.length} configuração(ões) cadastrada(s)</span>
           </div>
-
-          <div className="rounded-2xl border border-slate-100 p-3">
-            <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Códigos TUSS usados</p>
-            <div className="mt-2 space-y-2">
-              {tussCodes.length === 0 ? (
-                <p className="rounded-2xl bg-slate-50 p-3 text-xs font-bold text-slate-500">Nenhum código TUSS ativo.</p>
-              ) : tussCodes.slice(0, 8).map((code) => (
-                <div key={code.id} className="rounded-2xl border border-slate-100 px-3 py-2">
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <p className="text-sm font-bold text-slate-800">TUSS {code.code}</p>
-                      <p className="mt-0.5 text-xs text-slate-500">{[code.description, code.version].filter(Boolean).join(" · ")}</p>
+          <div className="mt-3 space-y-2">
+            {billingConfigurations.length === 0 ? (
+              <p className="rounded-lg bg-slate-50 p-3 text-sm text-slate-500">Nenhuma configuração de faturamento cadastrada para este convênio.</p>
+            ) : billingConfigurations.map(({ key, price, mapping, service, code }) => {
+              const today = new Date().toISOString().slice(0, 10);
+              const validFrom = price?.validFrom || mapping?.validFrom || "";
+              const validUntil = price?.validUntil || mapping?.validTo || "";
+              const issues = [
+                service?.active === false ? "Procedimento inativo" : "",
+                !mapping ? "De/Para ausente" : "",
+                !price ? "Valor ausente" : "",
+                !code?.id && !price?.tussCode && !mapping?.tussCode ? "Código TUSS ausente" : "",
+                validUntil && validUntil < today ? "Vigência expirada" : "",
+                validFrom && validFrom > today ? "Vigência futura" : "",
+                price && mapping && price.serviceCatalogId !== mapping.serviceCatalogId ? "Configuração inconsistente" : "",
+              ].filter(Boolean);
+              return (
+                <div key={key} className="rounded-lg border border-slate-200 bg-white p-3">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-slate-900">{service?.name || price?.serviceName || mapping?.serviceName || mapping?.internalCode || "Procedimento não identificado"}</p>
+                      <p className="mt-1 text-xs text-slate-500">{[code?.code || price?.tussCode || mapping?.tussCode ? `TUSS ${code?.code || price?.tussCode || mapping?.tussCode}` : "Sem TUSS", code?.description || mapping?.tussDescription, price ? formatCurrency(price.amountCents) : "Sem valor negociado", validFrom && `Vigência: ${validFrom}`, validUntil && `até ${validUntil}`, price?.source || mapping?.source].filter(Boolean).join(" · ")}</p>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        <span className="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-600">{mapping ? "De/Para configurado" : "De/Para ausente"}</span>
+                        <span className="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-600">{service?.active === false ? "Procedimento inativo" : "Procedimento ativo"}</span>
+                        {issues.map((issue) => <span key={issue} className="rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800">{issue}</span>)}
+                      </div>
                     </div>
-                    <div className="flex shrink-0 gap-1">
-                      <button type="button" onClick={() => editTussCode(code)} className="rounded-xl border border-slate-200 px-2 py-1 text-xs font-bold text-slate-500">Editar</button>
-                      <button type="button" onClick={() => void disableTussCode(code.id)} className="rounded-xl border border-slate-200 px-2 py-1 text-xs font-bold text-slate-500">Inativar</button>
+                    <div className="flex shrink-0 flex-wrap gap-1.5">
+                      <button type="button" onClick={() => { if (mapping) editTussMapping(mapping); if (price) editProcedurePrice(price); }} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-normal text-slate-600 hover:bg-slate-50">Editar configuração</button>
+                      {mapping && <button type="button" onClick={() => void revalidateAffectedTussMapping(mapping.id)} className="rounded-lg border border-indigo-200 px-3 py-1.5 text-xs font-normal text-indigo-700 hover:bg-indigo-50">Revalidar atendimentos afetados</button>}
+                      {price?.active !== false && <button type="button" onClick={() => void disableProcedurePrice(price.id)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-normal text-slate-600 hover:bg-slate-50">Desativar preço</button>}
+                      {!price && mapping?.active !== false && <button type="button" onClick={() => void disableTussMapping(mapping.id)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-normal text-slate-600 hover:bg-slate-50">Desativar De/Para</button>}
                     </div>
                   </div>
                 </div>
-              ))}
-            </div>
+              );
+            })}
           </div>
         </div>
 
-        <div className="mt-4 space-y-2">
-          {tussMappings.length === 0 ? (
-            <p className="rounded-2xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">Nenhum mapeamento ativo para este pagador.</p>
-          ) : tussMappings.map((mapping) => (
-            <div key={mapping.id} className="rounded-2xl border border-slate-100 px-3 py-3">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-sm font-bold text-slate-800">{mapping.serviceName || mapping.internalCode || "Procedimento"}</p>
-                  <p className="mt-1 text-xs text-slate-500">
-                    {[
-                      mapping.tussCode && `TUSS ${mapping.tussCode}`,
-                      mapping.contractCode && `contrato ${mapping.contractCode}`,
-                      mapping.guideType,
-                      mapping.billingUnit,
-                      mapping.quantityRule,
-                      mapping.negotiatedAmountCents || mapping.amountCents ? formatCurrency(mapping.negotiatedAmountCents || mapping.amountCents) : "valor pendente",
-                      mapping.validFrom && `vigência ${mapping.validFrom}`,
-                      mapping.validTo && `até ${mapping.validTo}`,
-                      mapping.source,
-                    ].filter(Boolean).join(" · ")}
-                  </p>
-                  {mapping.contractDescription && (
-                    <p className="mt-1 text-xs font-semibold text-slate-500">{mapping.contractDescription}</p>
-                  )}
-                </div>
-                <div className="flex flex-wrap justify-end gap-1">
-                  <button
-                    type="button"
-                    onClick={() => editTussMapping(mapping)}
-                    className="rounded-xl border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-500 hover:bg-slate-50"
-                  >
-                    Editar
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void revalidateAffectedTussMapping(mapping.id)}
-                    className="rounded-xl border border-indigo-200 px-3 py-1.5 text-xs font-bold text-indigo-700 hover:bg-indigo-50"
-                  >
-                    Revalidar atendimentos afetados
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void disableTussMapping(mapping.id)}
-                    className="rounded-xl border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-500 hover:bg-slate-50"
-                  >
-                    Desativar
-                  </button>
-                </div>
+        <details className="mt-4 rounded-2xl border border-slate-100 bg-slate-50/50 p-4">
+          <summary className="cursor-pointer text-sm font-semibold text-slate-800">Cadastros de apoio</summary>
+          <p className="mt-2 text-xs text-slate-500">Esses cadastros são referências usadas nas configurações de faturamento e não representam cobranças duplicadas.</p>
+          <div className="mt-3 grid gap-3 lg:grid-cols-2">
+            <div className="rounded-lg border border-slate-100 bg-white p-3">
+              <p className="text-xs font-medium text-slate-700">Catálogo de procedimentos internos</p>
+              <p className="mt-1 text-xs text-slate-500">{activeTussServices.length} ativo(s) · {tussServices.length - activeTussServices.length} inativo(s)</p>
+              <div className="mt-2 space-y-2">
+                {tussServices.length === 0 ? <p className="text-xs text-slate-500">Nenhum procedimento de referência cadastrado.</p> : tussServices.slice(0, 12).map((service) => (
+                  <div key={service.id} className="flex items-start justify-between gap-2 rounded-lg border border-slate-100 px-3 py-2">
+                    <div><p className="text-sm font-medium text-slate-800">{service.name}</p><p className="text-xs text-slate-500">{[service.internalCode, service.serviceType, service.active === false ? "Procedimento inativo" : "Ativo"].filter(Boolean).join(" · ")}</p></div>
+                    <div className="flex gap-1"><button type="button" onClick={() => editTussService(service)} className="rounded-lg border border-slate-200 px-2 py-1 text-xs font-normal text-slate-600">Editar</button>{service.active !== false && <button type="button" onClick={() => void disableTussService(service.id)} className="rounded-lg border border-slate-200 px-2 py-1 text-xs font-normal text-slate-600">Inativar</button>}</div>
+                  </div>
+                ))}
               </div>
             </div>
-          ))}
-        </div>
+            <div className="rounded-lg border border-slate-100 bg-white p-3">
+              <p className="text-xs font-medium text-slate-700">Catálogo de códigos TUSS</p>
+              <p className="mt-1 text-xs text-slate-500">{activeTussCodes.length} ativo(s) · {tussCodes.length - activeTussCodes.length} inativo(s)</p>
+              <div className="mt-2 space-y-2">
+                {tussCodes.length === 0 ? <p className="text-xs text-slate-500">Nenhum código TUSS de referência cadastrado.</p> : tussCodes.slice(0, 12).map((code) => (
+                  <div key={code.id} className="flex items-start justify-between gap-2 rounded-lg border border-slate-100 px-3 py-2">
+                    <div><p className="text-sm font-medium text-slate-800">TUSS {code.code}</p><p className="text-xs text-slate-500">{[code.description, code.version, code.active === false ? "Inativo" : "Ativo"].filter(Boolean).join(" · ")}</p></div>
+                    <div className="flex gap-1"><button type="button" onClick={() => editTussCode(code)} className="rounded-lg border border-slate-200 px-2 py-1 text-xs font-normal text-slate-600">Editar</button>{code.active !== false && <button type="button" onClick={() => void disableTussCode(code.id)} className="rounded-lg border border-slate-200 px-2 py-1 text-xs font-normal text-slate-600">Inativar</button>}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </details>
       </div>
     </section>
   );

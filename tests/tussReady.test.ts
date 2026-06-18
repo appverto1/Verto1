@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  preserveHistoricalTussBillingAmount,
   resolveTussBillingItem
 } from '../src/services/tussBillingResolutionEngine';
 import {
@@ -90,6 +91,85 @@ test('engine resolve item pronto e pendencias sem hardcodar codigo TUSS', () => 
   assert.ok(pending.pendingReasons.includes('missing_payer'));
   assert.ok(pending.pendingReasons.includes('missing_service_catalog'));
   assert.ok(pending.pendingReasons.includes('missing_tuss_mapping'));
+});
+
+test('engine nao converte preco ausente ou vazio em zero', () => {
+  const missingAmount = resolveTussBillingItem({
+    appointment: { scheduled_minutes: 50 },
+    billingContext: { payer_id: 'payer-1' },
+    patientFinancialPlan: { id: 'plan-1', amount_cents: '' },
+    payer: { id: 'payer-1' },
+    serviceCatalog: { id: 'service-1', name: 'Sessao ABA', internal_code: 'ABA-1', billing_unit: 'session' },
+    mapping: {
+      id: 'mapping-1',
+      guide_type: 'sp_sadt',
+      billing_unit: 'session',
+      quantity_rule: 'per_session',
+      default_quantity: 1,
+      amount_cents: null,
+      negotiated_amount_cents: '',
+    },
+    price: { id: 'price-1', amount_cents: null },
+    tussCode: { id: 'tuss-1', code: 'TESTE-ABA', description: 'Teste ABA' },
+  });
+
+  assert.equal(missingAmount.unitAmountCents, null);
+  assert.equal(missingAmount.amountCents, null);
+  assert.ok(missingAmount.pendingReasons.includes('missing_amount'));
+
+  const explicitZero = resolveTussBillingItem({
+    appointment: { scheduled_minutes: 50 },
+    billingContext: { payer_id: 'payer-1' },
+    patientFinancialPlan: null,
+    payer: { id: 'payer-1' },
+    serviceCatalog: { id: 'service-1', name: 'Sessao ABA', internal_code: 'ABA-1', billing_unit: 'session' },
+    mapping: {
+      id: 'mapping-1',
+      guide_type: 'sp_sadt',
+      billing_unit: 'session',
+      quantity_rule: 'per_session',
+      default_quantity: 1,
+      amount_cents: 0,
+    },
+    price: null,
+    tussCode: { id: 'tuss-1', code: 'TESTE-ABA', description: 'Teste ABA' },
+  });
+
+  assert.equal(explicitZero.unitAmountCents, 0);
+  assert.equal(explicitZero.amountCents, 0);
+  assert.ok(!explicitZero.pendingReasons.includes('missing_amount'));
+});
+
+test('revalidacao preserva snapshot financeiro positivo quando preco vigente falha', () => {
+  const unresolved = resolveTussBillingItem({
+    appointment: { scheduled_minutes: 50 },
+    billingContext: { payer_id: 'payer-1' },
+    patientFinancialPlan: null,
+    payer: { id: 'payer-1' },
+    serviceCatalog: { id: 'service-1', name: 'Sessao ABA', internal_code: 'ABA-1', billing_unit: 'session' },
+    mapping: {
+      id: 'mapping-1',
+      guide_type: 'sp_sadt',
+      billing_unit: 'session',
+      quantity_rule: 'per_session',
+      default_quantity: 1,
+      amount_cents: null,
+      negotiated_amount_cents: null,
+    },
+    price: null,
+    tussCode: { id: 'tuss-1', code: 'TESTE-ABA', description: 'Teste ABA' },
+  });
+
+  assert.ok(unresolved.pendingReasons.includes('missing_amount'));
+  const preserved = preserveHistoricalTussBillingAmount(unresolved, {
+    unitAmountCents: 12000,
+    amountCents: 12000,
+  });
+
+  assert.equal(preserved.unitAmountCents, 12000);
+  assert.equal(preserved.amountCents, 12000);
+  assert.equal(preserved.preservedHistoricalAmount, true);
+  assert.ok(!preserved.pendingReasons.includes('missing_amount'));
 });
 
 test('cenario controlado ABA Amil resolve procedimento TUSS e valor sem afetar pendencias nao relacionadas', () => {

@@ -306,6 +306,55 @@ test('pré-guia usa tabela negociada vigente e bloqueia preço ou De/Para invál
   assert.ok(expiredMapping.errorCodes.includes('PAYER_TUSS_MAPPING_EXPIRED'));
 });
 
+test('pre-guia preserva valor financeiro positivo em revalidacao de autorizacao', () => {
+  const result = validateTissPreGuide({
+    ...validInput,
+    price: null,
+    mapping: {
+      ...validInput.mapping,
+      amount_cents: null,
+      negotiated_amount_cents: null,
+    },
+    billingItem: {
+      ...validInput.billingItem,
+      unit_amount_cents: 12000,
+      amount_cents: 12000,
+    },
+  });
+
+  assert.equal(result.snapshot.procedure.unitAmountCents, 12000);
+  assert.equal(result.snapshot.procedure.totalAmountCents, 12000);
+  assert.ok(!result.errorCodes.includes('AMOUNT_MISSING'));
+  assert.ok(!result.errorCodes.includes('PAYER_PROCEDURE_PRICE_MISSING'));
+  assert.ok(result.warningCodes.includes('PAYER_PROCEDURE_PRICE_UNRESOLVED_SNAPSHOT_PRESERVED'));
+});
+
+test('procedimento historico inativo preserva snapshot sem zerar valor', () => {
+  const result = validateTissPreGuide({
+    ...validInput,
+    service: {
+      ...validInput.service,
+      active: false,
+    },
+    price: null,
+    mapping: {
+      ...validInput.mapping,
+      amount_cents: null,
+      negotiated_amount_cents: null,
+    },
+    billingItem: {
+      ...validInput.billingItem,
+      unit_amount_cents: 12000,
+      amount_cents: 12000,
+    },
+  });
+
+  assert.equal(result.snapshot.procedure.unitAmountCents, 12000);
+  assert.equal(result.snapshot.procedure.totalAmountCents, 12000);
+  assert.ok(!result.errorCodes.includes('AMOUNT_MISSING'));
+  assert.ok(result.warningCodes.includes('PROCEDURE_INACTIVE_HISTORICAL_SNAPSHOT'));
+});
+
 test('pre-guia válida gera XML TISS-like SP/SADT em rascunho interno', () => {
   const validation = validateTissPreGuide(validInput);
   const payload = buildTissSpSadtDraftPayload({

@@ -42,6 +42,7 @@ export type TussBillingResolution = {
   durationMinutes: number | null;
   unitAmountCents: number | null;
   amountCents: number | null;
+  preservedHistoricalAmount: boolean;
   pendingReasons: TussBillingPendingReason[];
   readinessReason: string;
   mappingStatus: 'configured' | 'pending_configuration';
@@ -75,9 +76,30 @@ function positiveNumber(value: any): number | null {
 }
 
 function nonNegativeInteger(value: any): number | null {
+  if (value === null || value === undefined || String(value).trim() === '') return null;
   const numberValue = Math.round(Number(value));
   if (!Number.isFinite(numberValue) || numberValue < 0) return null;
   return numberValue;
+}
+
+export function preserveHistoricalTussBillingAmount(
+  resolution: TussBillingResolution,
+  historical: { unitAmountCents?: unknown; amountCents?: unknown } | null | undefined,
+): TussBillingResolution {
+  if (resolution.unitAmountCents !== null || resolution.amountCents !== null) return resolution;
+  const unitAmountCents = nonNegativeInteger(historical?.unitAmountCents);
+  const amountCents = nonNegativeInteger(historical?.amountCents);
+  if (unitAmountCents === null || amountCents === null || unitAmountCents <= 0 || amountCents <= 0) return resolution;
+  const pendingReasons = resolution.pendingReasons.filter((reason) => reason !== 'missing_amount');
+  return {
+    ...resolution,
+    ready: pendingReasons.length === 0,
+    unitAmountCents,
+    amountCents,
+    preservedHistoricalAmount: true,
+    pendingReasons,
+    readinessReason: pendingReasons.map(humanizeTussPendingReason).join(' '),
+  };
 }
 
 function calculateQuantity(params: {
@@ -205,6 +227,7 @@ export function resolveTussBillingItem(input: TussBillingResolutionInput): TussB
     durationMinutes,
     unitAmountCents,
     amountCents,
+    preservedHistoricalAmount: false,
     pendingReasons,
     readinessReason,
     mappingStatus: mapping?.id ? 'configured' : 'pending_configuration'

@@ -6,6 +6,10 @@ import {
   resolvePayerRequirements
 } from '../src/services/payerRequirementEngine';
 import { evaluateAppointmentClosureReadiness } from '../src/services/closureReadinessEngine';
+import {
+  formatCentsForBrazilianInput,
+  parseBrazilianCurrencyToCents,
+} from '../src/components/PayerRequirementsPanel';
 
 const root = process.cwd();
 const serverCode = readFileSync(join(root, 'server.ts'), 'utf8');
@@ -220,6 +224,46 @@ test('UI expõe configuração, agenda e fechamento sem IDs técnicos ou HTML pe
   assert.doesNotMatch(coordinatorCode, /dangerouslySetInnerHTML/);
   assert.doesNotMatch(calendarCode, /PostgREST|Railway|Supabase/i);
   assert.doesNotMatch(closureCenterCode, /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+});
+
+test('Tabela de Valores tem rotulos permanentes, reais no formulario e configuracao consolidada', () => {
+  assert.equal(formatCentsForBrazilianInput(12000), '120,00');
+  assert.equal(formatCentsForBrazilianInput(null), '');
+  assert.equal(parseBrazilianCurrencyToCents('120,00'), 12000);
+  assert.equal(parseBrazilianCurrencyToCents('120.00'), 12000);
+  assert.equal(parseBrazilianCurrencyToCents('R$ 120,00'), 12000);
+  assert.equal(parseBrazilianCurrencyToCents(''), null);
+  assert.equal(parseBrazilianCurrencyToCents('120,001'), null);
+
+  for (const marker of [
+    'htmlFor="payer-price-service"',
+    'htmlFor="payer-price-tuss"',
+    'htmlFor="payer-price-amount"',
+    'htmlFor="payer-price-source"',
+    'htmlFor="payer-price-mapping"',
+    'htmlFor="payer-price-valid-from"',
+    'htmlFor="payer-price-valid-until"',
+    'htmlFor="payer-price-notes"',
+    'Valor negociado (R$)',
+    'Origem do valor',
+    'Vínculo De/Para',
+    'Início da vigência',
+    'Fim da vigência',
+    'Observações',
+  ]) {
+    assert.ok(payerPanelCode.includes(marker), marker);
+  }
+
+  assert.match(payerPanelCode, /Configurações de faturamento deste convênio/);
+  assert.match(payerPanelCode, /Cadastros de apoio/);
+  assert.match(payerPanelCode, /Esses cadastros são referências usadas nas configurações de faturamento/);
+  assert.match(payerPanelCode, /Procedimento inativo/);
+  assert.match(payerPanelCode, /De\/Para ausente/);
+  assert.match(payerPanelCode, /Valor ausente/);
+  assert.match(payerPanelCode, /Configuração inconsistente/);
+  assert.match(payerPanelCode, /procedurePriceSaveInFlightRef/);
+  assert.match(payerPanelCode, /parseBrazilianCurrencyToCents\(procedurePriceForm\.amountCents\)/);
+  assert.doesNotMatch(payerPanelCode, /placeholder="Valor negociado em centavos"/);
 });
 
 let passed = 0;

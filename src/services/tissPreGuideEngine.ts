@@ -58,6 +58,11 @@ export type TissPreGuideEligibilityResult = {
 
 const text = (value: unknown) => String(value ?? '').trim();
 const positiveNumber = (value: unknown) => Number.isFinite(Number(value)) && Number(value) > 0;
+const amountCentsOrNull = (value: unknown) => {
+  if (value === null || value === undefined || String(value).trim() === '') return null;
+  const amount = Number(value);
+  return Number.isFinite(amount) && amount >= 0 ? Math.round(amount) : null;
+};
 const normalizedIdentity = (value: unknown) =>
   text(value)
     .normalize('NFD')
@@ -247,6 +252,8 @@ const issueLabelOverrides: Record<string, string> = {
   PAYER_TUSS_MAPPING_EXPIRED: 'Mapeamento TUSS do convênio vencido para a data do atendimento',
   PAYER_PROCEDURE_PRICE_MISSING: 'Procedimento sem valor negociado vigente para este convênio',
   PAYER_PROCEDURE_PRICE_CONFLICT: 'Mais de um valor negociado vigente foi encontrado para este procedimento',
+  PAYER_PROCEDURE_PRICE_UNRESOLVED_SNAPSHOT_PRESERVED: 'O valor histórico foi preservado, mas a configuração vigente precisa ser revisada',
+  PROCEDURE_INACTIVE_HISTORICAL_SNAPSHOT: 'Procedimento inativo mantido apenas para preservar o histórico deste atendimento',
   PROCEDURE_MISSING: 'Procedimento interno não resolvido',
   TUSS_CODE_MISSING: 'Código TUSS não resolvido',
   TUSS_DESCRIPTION_MISSING: 'Descrição TUSS não informada',
@@ -295,6 +302,8 @@ export function tissPreGuideIssueLabel(code: unknown) {
     PAYER_TUSS_MAPPING_EXPIRED: 'Mapeamento TUSS vencido',
     PAYER_PROCEDURE_PRICE_MISSING: 'Valor negociado ausente',
     PAYER_PROCEDURE_PRICE_CONFLICT: 'Conflito de valores negociados',
+    PAYER_PROCEDURE_PRICE_UNRESOLVED_SNAPSHOT_PRESERVED: 'Valor histórico preservado; revise a configuração vigente',
+    PROCEDURE_INACTIVE_HISTORICAL_SNAPSHOT: 'Procedimento histórico inativo',
     PROCEDURE_MISSING: 'Procedimento interno não resolvido',
     TUSS_CODE_MISSING: 'Código TUSS não resolvido',
     TUSS_DESCRIPTION_MISSING: 'Descrição TUSS não informada',
@@ -489,19 +498,18 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
   const tussDescription = text(tussCode.description || billingItem.tuss_description);
   const quantity = Number(billingItem.quantity || service.default_quantity || mapping.default_quantity || 0);
   const unit = text(billingItem.billing_unit || mapping.billing_unit || service.billing_unit);
-  const unitAmountCents = Number(
+  const unitAmountCents = amountCentsOrNull(
     price.amount_cents ??
       billingItem.unit_amount_cents ??
       mapping.negotiated_amount_cents ??
       mapping.amount_cents ??
-      service.default_amount_cents ??
-      0,
+      service.default_amount_cents,
   );
-  const totalAmountCents = Number(
-    price.amount_cents && positiveNumber(quantity)
-      ? Number(price.amount_cents) * Number(quantity)
-      : billingItem.amount_cents ?? (positiveNumber(quantity) && unitAmountCents > 0 ? quantity * unitAmountCents : 0)
-  );
+  const explicitPriceAmountCents = amountCentsOrNull(price.amount_cents);
+  const persistedTotalAmountCents = amountCentsOrNull(billingItem.amount_cents);
+  const totalAmountCents = explicitPriceAmountCents !== null && positiveNumber(quantity)
+    ? explicitPriceAmountCents * Number(quantity)
+    : persistedTotalAmountCents ?? (positiveNumber(quantity) && unitAmountCents !== null ? quantity * unitAmountCents : null);
   const executorName = text(professionalProfile.display_name || professional.name);
   const mappingId = text(mapping.id || billingItem.payer_tuss_mapping_id);
   const mappingExpiredForAppointment = Boolean(
@@ -514,7 +522,9 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
     text(price.id) ||
       positiveNumber(price.amount_cents) ||
       positiveNumber(mapping.negotiated_amount_cents) ||
-      positiveNumber(mapping.amount_cents),
+      positiveNumber(mapping.amount_cents) ||
+      positiveNumber(billingItem.unit_amount_cents) ||
+      positiveNumber(billingItem.amount_cents),
   );
 
   if (!procedureCode && !procedureName) addIssue(errors, 'PROCEDURE_MISSING', 'internal_procedure', tissPreGuideIssueLabel('PROCEDURE_MISSING'), 'procedure');
@@ -529,6 +539,20 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
   }
   if (mappingId && !hasNegotiatedPrice) {
     addIssue(errors, 'PAYER_PROCEDURE_PRICE_MISSING', 'payer_procedure_price_id', tissPreGuideIssueLabel('PAYER_PROCEDURE_PRICE_MISSING'), 'procedure');
+  }
+  if (
+    service.id && service.active === false &&
+    (positiveNumber(billingItem.unit_amount_cents) || positiveNumber(billingItem.amount_cents))
+  ) {
+    addIssue(warnings, 'PROCEDURE_INACTIVE_HISTORICAL_SNAPSHOT', 'service_catalog_id', tissPreGuideIssueLabel('PROCEDURE_INACTIVE_HISTORICAL_SNAPSHOT'), 'procedure', 'warning');
+  }
+  if (
+    mappingId && !text(price.id) &&
+    !positiveNumber(mapping.negotiated_amount_cents) &&
+    !positiveNumber(mapping.amount_cents) &&
+    (positiveNumber(billingItem.unit_amount_cents) || positiveNumber(billingItem.amount_cents))
+  ) {
+    addIssue(warnings, 'PAYER_PROCEDURE_PRICE_UNRESOLVED_SNAPSHOT_PRESERVED', 'payer_procedure_price_id', tissPreGuideIssueLabel('PAYER_PROCEDURE_PRICE_UNRESOLVED_SNAPSHOT_PRESERVED'), 'procedure', 'warning');
   }
   if (!resolvedTussCode) addIssue(errors, 'TUSS_CODE_MISSING', 'tuss_code', tissPreGuideIssueLabel('TUSS_CODE_MISSING'), 'procedure');
   if (resolvedTussCode && !tussDescription) addIssue(errors, 'TUSS_DESCRIPTION_MISSING', 'tuss_description', tissPreGuideIssueLabel('TUSS_DESCRIPTION_MISSING'), 'procedure');
@@ -735,8 +759,8 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
         tussVersion: text(tussCode.version || payerProfile.tiss_version) || null,
         quantity: positiveNumber(quantity) ? quantity : null,
         unit: unit || null,
-        unitAmountCents: unitAmountCents > 0 ? unitAmountCents : null,
-        totalAmountCents: totalAmountCents > 0 ? totalAmountCents : null,
+        unitAmountCents: unitAmountCents !== null && unitAmountCents > 0 ? unitAmountCents : null,
+        totalAmountCents: totalAmountCents !== null && totalAmountCents > 0 ? totalAmountCents : null,
       },
       authorization: {
         guideNumber: guideNumber || null,
