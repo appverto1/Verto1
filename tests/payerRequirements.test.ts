@@ -212,6 +212,11 @@ test('UI expõe configuração, agenda e fechamento sem IDs técnicos ou HTML pe
   assert.match(payerPanelCode, /Tentar novamente/);
   assert.match(payerPanelCode, /De\/Para TUSS por Convênio/);
   assert.match(payerPanelCode, /Tabela de procedimentos e valores/);
+  assert.match(payerPanelCode, /Sincronizar autorizações e Pré-guias afetadas/);
+  assert.match(payerPanelCode, /Confirmar sincronização/);
+  assert.match(payerPanelCode, /dataService\.syncPayerTussMappingAuthorizations/);
+  assert.match(dataServiceCode, /async syncPayerTussMappingAuthorizations/);
+  assert.match(serverCode, /\/api\/admin\/tuss\/mappings\/:mappingId\/sync-authorizations/);
   assert.match(payerPanelCode, /Dados da operadora/);
   assert.match(payerPanelCode, /Dados do prestador no convênio/);
   assert.match(payerPanelCode, /Exigências gerais da operadora/);

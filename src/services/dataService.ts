@@ -2550,6 +2550,28 @@ export const dataService = {
     }
   },
 
+  async syncPayerTussMappingAuthorizations(mappingId: string, payload: any = {}) {
+    const endpoint = `/api/admin/tuss/mappings/${encodeURIComponent(String(mappingId))}/sync-authorizations`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        cache: 'no-store',
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'syncPayerTussMappingAuthorizations',
+        operation: 'write',
+        table: 'patient_payer_authorizations,appointment_tiss_pre_guides,tiss_revenue_cycle_events',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeNoStoreJson(response, 'A sincronização de autorizações voltou do cache. Tente novamente.');
+    } catch {
+      return { success: false, error: 'Não foi possível sincronizar autorizações e Pré-guias agora.' };
+    }
+  },
+
   async getPayerProcedurePrices(options: any = {}) {
     const endpoint = endpointWithQuery('/api/admin/tuss/prices', {
       payerId: options.payerId,

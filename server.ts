@@ -4096,6 +4096,13 @@ const PATIENT_PAYER_AUTHORIZATION_SELECT = [
   'used_quantity',
   'service_catalog_id',
   'tuss_code_id',
+  'payer_tuss_mapping_id',
+  'tuss_source',
+  'manual_tuss_override',
+  'override_reason',
+  'synchronized_at',
+  'synchronized_by',
+  'sync_metadata',
   'procedure_tuss_code',
   'procedure_code',
   'procedure_code_snapshot',
@@ -4147,6 +4154,7 @@ const APPOINTMENT_TISS_PRE_GUIDE_SELECT = [
   'validation_error_codes',
   'validation_warning_codes',
   'snapshot_data',
+  'official_document_id',
   'revenue_cycle_state',
   'revenue_cycle_state_reason',
   'anti_glosa_checklist',
@@ -4183,6 +4191,7 @@ const APPOINTMENT_TISS_PRE_GUIDE_LIST_SELECT = [
   'validation_error_codes',
   'validation_warning_codes',
   'snapshot_data',
+  'official_document_id',
   'revenue_cycle_state',
   'revenue_cycle_state_reason',
   'anti_glosa_checklist',
@@ -32850,6 +32859,91 @@ async function startServer() {
     return (Array.isArray(data) ? data : []).find((mapping: any) => mappingIsValidForDate(mapping, date)) || null;
   };
 
+  const guideTypeMatchesAuthorizationMapping = (mapping: any, guideType?: string | null) => {
+    const mappingGuideType = sanitizeString(mapping?.guide_type, 40).toLowerCase();
+    const requestedGuideType = sanitizeString(guideType, 40).toLowerCase();
+    return !mappingGuideType || !requestedGuideType || mappingGuideType === requestedGuideType;
+  };
+
+  const resolveAuthorizationTussFromMapping = async (params: {
+    organizationId: string;
+    payerId: string;
+    serviceCatalogId: string;
+    referenceDate?: any;
+    guideType?: string | null;
+  }) => {
+    const organizationId = sanitizeString(params.organizationId, 120);
+    const payerId = sanitizeString(params.payerId, 120);
+    const serviceCatalogId = sanitizeString(params.serviceCatalogId, 120);
+    const referenceDate = sanitizeString(params.referenceDate || new Date().toISOString(), 40);
+    if (!isUuid(organizationId) || !isUuid(payerId) || !isUuid(serviceCatalogId)) {
+      return { status: 'missing', service: null, mapping: null, tussCode: null, candidates: [] as any[] };
+    }
+    const [service, mappingsResult] = await Promise.all([
+      fetchTussServiceCatalogById(organizationId, serviceCatalogId),
+      supabase
+        .from('payer_tuss_mappings')
+        .select(PAYER_TUSS_MAPPING_SELECT)
+        .eq('organization_id', organizationId)
+        .eq('payer_id', payerId)
+        .eq('service_catalog_id', serviceCatalogId)
+        .order('valid_from', { ascending: false, nullsFirst: false })
+        .limit(50)
+    ]);
+    if (!service?.id) return { status: 'missing', service: null, mapping: null, tussCode: null, candidates: [] as any[] };
+    if (service.active === false) return { status: 'inactive', service, mapping: null, tussCode: null, candidates: [] as any[] };
+    if (mappingsResult.error) {
+      if (hasMissingFinancialSchema(mappingsResult.error) || isMissingRelationError(mappingsResult.error)) {
+        return { status: 'missing', service, mapping: null, tussCode: null, candidates: [] as any[] };
+      }
+      throw mappingsResult.error;
+    }
+    const mappings = Array.isArray(mappingsResult.data) ? mappingsResult.data : [];
+    if (mappings.length === 0) return { status: 'missing', service, mapping: null, tussCode: null, candidates: [] as any[] };
+    const activeMappings = mappings.filter((mapping: any) => mapping.active !== false && guideTypeMatchesAuthorizationMapping(mapping, params.guideType));
+    if (activeMappings.length === 0) return { status: 'inactive', service, mapping: null, tussCode: null, candidates: mappings };
+    const validMappings = activeMappings.filter((mapping: any) => mappingIsValidForDate(mapping, referenceDate));
+    if (validMappings.length === 0) return { status: 'out_of_validity', service, mapping: null, tussCode: null, candidates: activeMappings };
+    if (validMappings.length > 1) return { status: 'ambiguous', service, mapping: null, tussCode: null, candidates: validMappings };
+    const mapping = validMappings[0];
+    const tussCodeId = sanitizeString(mapping?.tuss_code_id, 120);
+    const tussCode = isUuid(tussCodeId) ? await fetchTussCodeById(organizationId, tussCodeId) : null;
+    if (!tussCode?.id) return { status: 'missing', service, mapping, tussCode: null, candidates: validMappings };
+    if (tussCode.active === false) return { status: 'inactive', service, mapping, tussCode, candidates: validMappings };
+    return { status: 'resolved', service, mapping, tussCode, candidates: validMappings };
+  };
+
+  const authorizationTussResolutionMessage = (status: string) => {
+    if (status === 'ambiguous') return 'Existem múltiplos códigos aplicáveis. Corrija as vigências ou selecione uma exceção autorizada.';
+    if (status === 'out_of_validity') return 'Nenhum código TUSS vigente foi encontrado para a data desta autorização.';
+    if (status === 'inactive') return 'O procedimento, código TUSS ou De/Para encontrado está inativo.';
+    return 'Nenhum código TUSS vigente foi encontrado para este procedimento e convênio.';
+  };
+
+  const authorizationTussResolutionCode = (status: string) => {
+    if (status === 'ambiguous') return 'AUTHORIZATION_TUSS_MAPPING_AMBIGUOUS';
+    if (status === 'out_of_validity') return 'AUTHORIZATION_TUSS_MAPPING_OUT_OF_VALIDITY';
+    if (status === 'inactive') return 'AUTHORIZATION_TUSS_MAPPING_INACTIVE';
+    return 'AUTHORIZATION_TUSS_MAPPING_MISSING';
+  };
+
+  const fetchOfficialPreGuidesLinkedToAuthorization = async (organizationId: string, authorizationId: string) => {
+    if (!isUuid(organizationId) || !isUuid(authorizationId)) return [];
+    const { data, error } = await supabase
+      .from('appointment_tiss_pre_guides')
+      .select('id,appointment_id,official_document_id,snapshot_data')
+      .eq('organization_id', organizationId)
+      .not('official_document_id', 'is', null)
+      .limit(1000);
+    if (error) {
+      if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return [];
+      throw error;
+    }
+    return (Array.isArray(data) ? data : []).filter((row: any) =>
+      sanitizeString(row?.snapshot_data?.authorization?.authorizationId || row?.snapshot_data?.authorization?.id, 120) === authorizationId
+    );
+  };
+
   const fetchActivePayerProcedurePrice = async (params: {
     organizationId: string;
     payerId: string;
@@ -33348,6 +33442,7 @@ async function startServer() {
     antiGlosaRiskCodes: Array.isArray(row?.anti_glosa_risk_codes) ? row.anti_glosa_risk_codes : [],
     generatedFromVersion: sanitizeString(row?.generated_from_version, 80) || null,
     staleReason: sanitizeTextField(row?.stale_reason, 600) || null,
+    officialDocumentId: sanitizeString(row?.official_document_id, 120) || null,
     updatedAt: row?.updated_at || null,
     lastValidatedAt: row?.last_validated_at || null
   });
@@ -33485,7 +33580,7 @@ async function startServer() {
     preGuideId?: string | null;
     xmlDraftId?: string | null;
     payerId?: string | null;
-    eventType: 'PRE_GUIDE_MATERIALIZED' | 'PRE_GUIDE_VALIDATED' | 'PRE_GUIDE_READY_FOR_BILLING' | 'PRE_GUIDE_PENDING' | 'AUTHORIZATION_ATTACHED' | 'XML_DRAFT_GENERATED' | 'XML_DRAFT_VALIDATED' | 'XML_DRAFT_SUPERSEDED' | 'TISS_BILLING_BATCH_DRAFT_CREATED' | 'TISS_BILLING_BATCH_DRAFT_CANCELLED' | 'MANUAL_OVERRIDE_APPLIED';
+    eventType: 'PRE_GUIDE_MATERIALIZED' | 'PRE_GUIDE_VALIDATED' | 'PRE_GUIDE_READY_FOR_BILLING' | 'PRE_GUIDE_PENDING' | 'AUTHORIZATION_ATTACHED' | 'AUTHORIZATION_TUSS_AUTO_RESOLVED' | 'AUTHORIZATION_TUSS_SYNCHRONIZED' | 'AUTHORIZATION_TUSS_OVERRIDE_APPLIED' | 'PRE_GUIDES_REVALIDATED_AFTER_AUTHORIZATION_SYNC' | 'XML_DRAFT_GENERATED' | 'XML_DRAFT_VALIDATED' | 'XML_DRAFT_SUPERSEDED' | 'TISS_BILLING_BATCH_DRAFT_CREATED' | 'TISS_BILLING_BATCH_DRAFT_CANCELLED' | 'TISS_OFFICIAL_XML_GENERATED' | 'TISS_OFFICIAL_XML_XSD_VALIDATED' | 'MANUAL_OVERRIDE_APPLIED';
     previousState?: string | null;
     newState: string;
     reason?: string | null;
@@ -34521,13 +34616,27 @@ async function startServer() {
       if (!(await fetchPayerForAdmin(payerId, organizationId))) {
         return res.status(404).json({ success: false, error: 'Pagador não encontrado para esta clínica.', code: 'PAYER_NOT_FOUND' });
       }
+      let scopedAuthorizationAppointment: any = null;
+      let scopedAuthorizationBillingItem: any = null;
       if (isUuid(appointmentId)) {
         const appointmentScope = await fetchAppointmentForBillingContext(appointmentId, req.session.user);
         if (!appointmentScope.ok) return res.status(appointmentScope.status || 404).json(payerSafeError(appointmentScope.status || 404));
-        const appointmentPatientId = sanitizeString((appointmentScope as any).appointment?.patient_id, 120);
+        scopedAuthorizationAppointment = (appointmentScope as any).appointment || null;
+        const appointmentPatientId = sanitizeString(scopedAuthorizationAppointment?.patient_id, 120);
         if (appointmentPatientId && appointmentPatientId !== patientId) {
           return res.status(400).json({ success: false, error: 'A autorização deve pertencer ao mesmo paciente do atendimento.', code: 'AUTHORIZATION_PATIENT_MISMATCH' });
         }
+        const billingItemResult = await supabase
+          .from('appointment_billing_items')
+          .select(APPOINTMENT_BILLING_ITEM_SELECT)
+          .eq('organization_id', organizationId)
+          .eq('appointment_id', appointmentId)
+          .limit(1)
+          .maybeSingle();
+        if (billingItemResult.error && !hasMissingFinancialSchema(billingItemResult.error) && !isMissingRelationError(billingItemResult.error)) {
+          throw billingItemResult.error;
+        }
+        scopedAuthorizationBillingItem = billingItemResult.error ? null : billingItemResult.data;
       }
 
       let existingAuthorization: any = null;
@@ -34568,15 +34677,112 @@ async function startServer() {
       const usedQuantity = asSafeNumber(req.body?.usedQuantity ?? req.body?.used_quantity, 0, 1_000_000);
       const serviceCatalogId = sanitizeString(req.body?.serviceCatalogId ?? req.body?.service_catalog_id, 120);
       const tussCodeId = sanitizeString(req.body?.tussCodeId ?? req.body?.tuss_code_id, 120);
-      const procedureTussCode = sanitizeString(
-        req.body?.procedureTussCode ??
-          req.body?.procedure_tuss_code ??
-          req.body?.tussCode ??
-          req.body?.tuss_code,
-        80
+      const payerTussMappingId = sanitizeString(req.body?.payerTussMappingId ?? req.body?.payer_tuss_mapping_id, 120);
+      const manualTussOverride = req.body?.manualTussOverride === true || req.body?.manual_tuss_override === true;
+      const overrideTussCodeId = sanitizeString(req.body?.overrideTussCodeId ?? req.body?.override_tuss_code_id ?? tussCodeId, 120);
+      const overrideReason = sanitizeTextField(req.body?.overrideReason ?? req.body?.override_reason, 600);
+      const submittedProcedureCode = sanitizeString(req.body?.procedureCode ?? req.body?.procedure_code ?? req.body?.procedureCodeSnapshot ?? req.body?.procedure_code_snapshot, 80) || null;
+      const submittedProcedureName = sanitizeString(req.body?.procedureNameSnapshot ?? req.body?.procedure_name_snapshot ?? req.body?.procedureName ?? req.body?.procedure_name, 180) || null;
+      const submittedServiceResult = submittedProcedureCode
+        ? await supabase
+            .from('tuss_service_catalog')
+            .select(TUSS_SERVICE_CATALOG_SELECT)
+            .eq('organization_id', organizationId)
+            .ilike('internal_code', submittedProcedureCode)
+            .limit(1)
+            .maybeSingle()
+        : { data: null, error: null } as any;
+      if (submittedServiceResult.error && !hasMissingFinancialSchema(submittedServiceResult.error) && !isMissingRelationError(submittedServiceResult.error)) {
+        throw submittedServiceResult.error;
+      }
+      const requestedMapping = isUuid(payerTussMappingId) ? await fetchPayerTussMappingById(organizationId, payerTussMappingId) : null;
+      if (isUuid(payerTussMappingId) && (!requestedMapping?.id || requestedMapping.payer_id !== payerId)) {
+        return res.status(404).json(payerSafeError(404));
+      }
+      const resolvedServiceCatalogId = [
+        serviceCatalogId,
+        sanitizeString(existingAuthorization?.service_catalog_id, 120),
+        sanitizeString(scopedAuthorizationBillingItem?.service_catalog_id, 120),
+        sanitizeString(submittedServiceResult.data?.id, 120),
+        sanitizeString(requestedMapping?.service_catalog_id, 120)
+      ].find((value) => isUuid(value)) || '';
+      if (!isUuid(resolvedServiceCatalogId)) {
+        return res.status(422).json({
+          success: false,
+          code: 'AUTHORIZATION_TUSS_MAPPING_MISSING',
+          error: 'Nenhum procedimento interno foi encontrado para resolver o código TUSS autorizado.'
+        });
+      }
+      if (manualTussOverride && !isUuid(overrideTussCodeId)) {
+        return res.status(422).json({
+          success: false,
+          code: 'AUTHORIZATION_TUSS_OVERRIDE_CODE_REQUIRED',
+          error: 'Selecione um código TUSS cadastrado para usar uma exceção de autorização.'
+        });
+      }
+      if (manualTussOverride && !overrideReason) {
+        return res.status(422).json({
+          success: false,
+          code: 'AUTHORIZATION_TUSS_OVERRIDE_REASON_REQUIRED',
+          error: 'Informe a justificativa para usar um código autorizado diferente do De/Para.'
+        });
+      }
+      if (existingAuthorization?.id) {
+        const protectedPreGuides = await fetchOfficialPreGuidesLinkedToAuthorization(organizationId, sanitizeString(existingAuthorization.id, 120));
+        if (protectedPreGuides.length > 0) {
+          return res.status(409).json({
+            success: false,
+            code: 'AUTHORIZATION_HISTORICAL_PROTECTED',
+            error: 'Autorização histórica protegida por XML oficial validado. Crie uma nova autorização para próximas competências.'
+          });
+        }
+      }
+      const referenceDate =
+        scopedAuthorizationAppointment?.scheduled_start_at ||
+        scopedAuthorizationAppointment?.scheduled_at ||
+        scopedAuthorizationAppointment?.date ||
+        validFrom ||
+        issueDate ||
+        new Date().toISOString();
+      const guideType = sanitizeString(req.body?.guideType ?? req.body?.guide_type ?? scopedAuthorizationBillingItem?.guide_type ?? requestedMapping?.guide_type, 40) || 'sp_sadt';
+      const automaticResolution = await resolveAuthorizationTussFromMapping({
+        organizationId,
+        payerId,
+        serviceCatalogId: resolvedServiceCatalogId,
+        referenceDate,
+        guideType
+      });
+      if (automaticResolution.status !== 'resolved') {
+        return res.status(409).json({
+          success: false,
+          code: authorizationTussResolutionCode(String(automaticResolution.status || 'missing')),
+          error: authorizationTussResolutionMessage(String(automaticResolution.status || 'missing')),
+          data: {
+            status: automaticResolution.status,
+            candidateCount: Array.isArray(automaticResolution.candidates) ? automaticResolution.candidates.length : 0
+          }
+        });
+      }
+      const overrideTussCode = manualTussOverride ? await fetchTussCodeById(organizationId, overrideTussCodeId) : null;
+      if (manualTussOverride && (!overrideTussCode?.id || overrideTussCode.active === false)) {
+        return res.status(422).json({
+          success: false,
+          code: 'AUTHORIZATION_TUSS_OVERRIDE_CODE_INVALID',
+          error: 'Selecione um código TUSS ativo desta clínica para a exceção.'
+        });
+      }
+      const resolvedMapping = automaticResolution.mapping;
+      const resolvedService = automaticResolution.service;
+      const resolvedTussCode = manualTussOverride ? overrideTussCode : automaticResolution.tussCode;
+      const resolvedProcedureTussCode = sanitizeString(resolvedTussCode?.code, 80) || null;
+      const resolvedProcedureCode = sanitizeString(resolvedService?.internal_code || submittedProcedureCode, 80) || null;
+      const resolvedProcedureName = sanitizeString(
+        resolvedMapping?.contract_description ||
+          resolvedMapping?.payer_specific_description ||
+          resolvedService?.name ||
+          submittedProcedureName,
+        180
       ) || null;
-      const procedureCode = sanitizeString(req.body?.procedureCode ?? req.body?.procedure_code ?? req.body?.procedureCodeSnapshot ?? req.body?.procedure_code_snapshot, 80) || null;
-      const procedureNameSnapshot = sanitizeString(req.body?.procedureNameSnapshot ?? req.body?.procedure_name_snapshot ?? req.body?.procedureName ?? req.body?.procedure_name, 180) || null;
       const payload = cleanObject({
         id: isUuid(authorizationId) ? authorizationId : undefined,
         organization_id: organizationId,
@@ -34591,14 +34797,27 @@ async function startServer() {
         valid_from: validFrom,
         valid_until: validUntil,
         authorized_quantity: authorizedQuantity,
-        authorized_unit: sanitizeString(req.body?.authorizedUnit ?? req.body?.authorized_unit, 40) || null,
+        authorized_unit: sanitizeString(req.body?.authorizedUnit ?? req.body?.authorized_unit ?? resolvedMapping?.billing_unit ?? resolvedService?.billing_unit, 40) || null,
         used_quantity: usedQuantity,
-        service_catalog_id: isUuid(serviceCatalogId) ? serviceCatalogId : null,
-        tuss_code_id: isUuid(tussCodeId) ? tussCodeId : null,
-        procedure_tuss_code: procedureTussCode,
-        procedure_code: procedureCode,
-        procedure_code_snapshot: procedureCode,
-        procedure_name_snapshot: procedureNameSnapshot,
+        service_catalog_id: isUuid(resolvedServiceCatalogId) ? resolvedServiceCatalogId : null,
+        tuss_code_id: isUuid(sanitizeString(resolvedTussCode?.id, 120)) ? sanitizeString(resolvedTussCode?.id, 120) : null,
+        payer_tuss_mapping_id: isUuid(sanitizeString(resolvedMapping?.id, 120)) ? sanitizeString(resolvedMapping?.id, 120) : null,
+        tuss_source: manualTussOverride ? 'manual_override' : 'payer_mapping',
+        manual_tuss_override: manualTussOverride,
+        override_reason: manualTussOverride ? overrideReason : null,
+        synchronized_at: now,
+        synchronized_by: isUuid(actorId) ? actorId : null,
+        sync_metadata: cleanObject({
+          expectedTussCode: sanitizeString(automaticResolution.tussCode?.code, 80) || null,
+          resolvedTussCode: resolvedProcedureTussCode,
+          payerTussMappingId: sanitizeString(resolvedMapping?.id, 120) || null,
+          referenceDate: sanitizeString(referenceDate, 40) || null,
+          manualOverride: manualTussOverride
+        }),
+        procedure_tuss_code: resolvedProcedureTussCode,
+        procedure_code: resolvedProcedureCode,
+        procedure_code_snapshot: resolvedProcedureCode,
+        procedure_name_snapshot: resolvedProcedureName,
         status,
         notes: sanitizeTextField(req.body?.notes, 2000) || null,
         active: req.body?.active !== false,
@@ -34641,6 +34860,29 @@ async function startServer() {
       } else {
         await markTissPreGuidesStale({ organizationId, payerId, reason: 'Autorização do paciente alterada.' });
       }
+      await recordTissRevenueCycleEvent({
+        organizationId,
+        clinicId: organizationId,
+        patientId,
+        appointmentId: isUuid(appointmentId) ? appointmentId : null,
+        payerId,
+        eventType: manualTussOverride ? 'AUTHORIZATION_TUSS_OVERRIDE_APPLIED' : 'AUTHORIZATION_TUSS_AUTO_RESOLVED',
+        previousState: 'awaiting_authorization',
+        newState: 'authorized',
+        reason: manualTussOverride
+          ? 'Código TUSS autorizado por exceção explícita do usuário.'
+          : 'Código TUSS autorizado resolvido pelo De/Para vigente do convênio.',
+        performedBy: isUuid(actorId) ? actorId : null,
+        metadata: {
+          authorizationId: sanitizeString(data?.id, 120) || null,
+          payerTussMappingId: sanitizeString(resolvedMapping?.id, 120) || null,
+          expectedTussCode: sanitizeString(automaticResolution.tussCode?.code, 80) || null,
+          authorizedTussCode: resolvedProcedureTussCode,
+          manualOverride: manualTussOverride,
+          overrideReason: manualTussOverride ? overrideReason : null,
+          notSentToPayer: true
+        }
+      });
       return sendNoStoreJson(res, {
         success: true,
         data,
@@ -37477,6 +37719,258 @@ async function startServer() {
       });
     } catch (error: any) {
       console.warn('[TussReady] mapping revalidation failed:', error?.message || String(error));
+      return res.status(500).json(payerSafeError(500));
+    }
+  });
+
+  app.post('/api/admin/tuss/mappings/:mappingId/sync-authorizations', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 24 * 1024, 'Sincronização de autorizações TUSS')) return;
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      const mappingId = sanitizeString(req.params.mappingId, 120);
+      const dryRun = req.body?.dryRun !== false && req.body?.dry_run !== false;
+      if (!isUuid(organizationId) || !isUuid(mappingId)) return res.status(400).json(payerSafeError(400));
+      const mapping = await fetchPayerTussMappingById(organizationId, mappingId);
+      if (!mapping?.id || mapping.active === false) return res.status(404).json(payerSafeError(404));
+      const [payer, service, code] = await Promise.all([
+        fetchPayerForAdmin(mapping.payer_id, organizationId),
+        fetchTussServiceCatalogById(organizationId, mapping.service_catalog_id),
+        mapping.tuss_code_id ? fetchTussCodeById(organizationId, mapping.tuss_code_id) : Promise.resolve(null)
+      ]);
+      if (!payer?.id || !service?.id || !code?.id || service.active === false || code.active === false) {
+        return res.status(409).json({
+          success: false,
+          code: 'AUTHORIZATION_TUSS_MAPPING_NOT_SYNCABLE',
+          error: 'O De/Para precisa estar ativo, com procedimento e código TUSS ativos, antes de sincronizar autorizações.'
+        });
+      }
+
+      const resolution = await resolveAuthorizationTussFromMapping({
+        organizationId,
+        payerId: sanitizeString(mapping.payer_id, 120),
+        serviceCatalogId: sanitizeString(mapping.service_catalog_id, 120),
+        referenceDate: sanitizeString(mapping.valid_from || new Date().toISOString(), 40),
+        guideType: sanitizeString(mapping.guide_type, 40) || 'sp_sadt'
+      });
+      if (resolution.status !== 'resolved' || resolution.mapping?.id !== mapping.id) {
+        return res.status(409).json({
+          success: false,
+          code: authorizationTussResolutionCode(String(resolution.status || 'missing')),
+          error: authorizationTussResolutionMessage(String(resolution.status || 'missing')),
+          data: { status: resolution.status, candidateCount: Array.isArray(resolution.candidates) ? resolution.candidates.length : 0 }
+        });
+      }
+
+      const authResult = await supabase
+        .from('patient_payer_authorizations')
+        .select(PATIENT_PAYER_AUTHORIZATION_SELECT)
+        .eq('organization_id', organizationId)
+        .eq('payer_id', mapping.payer_id)
+        .eq('service_catalog_id', mapping.service_catalog_id)
+        .eq('active', true)
+        .limit(parseBoundedListLimit(req.body?.limit, 500, 500));
+      if (authResult.error) {
+        if (hasMissingFinancialSchema(authResult.error) || isMissingRelationError(authResult.error)) {
+          return res.status(503).json({ success: false, code: 'AUTHORIZATION_SCHEMA_UNAVAILABLE', error: 'Cadastro de autorizações indisponível.' });
+        }
+        throw authResult.error;
+      }
+      const authorizations = Array.isArray(authResult.data) ? authResult.data : [];
+      const authorizationIds = authorizations.map((row: any) => sanitizeString(row?.id, 120)).filter((id: string) => isUuid(id));
+      const preGuideResult = authorizationIds.length > 0
+        ? await supabase
+            .from('appointment_tiss_pre_guides')
+            .select('id,appointment_id,patient_id,payer_id,official_document_id,snapshot_data,revenue_cycle_state')
+            .eq('organization_id', organizationId)
+            .eq('payer_id', mapping.payer_id)
+            .limit(2000)
+        : { data: [], error: null } as any;
+      if (preGuideResult.error && !hasMissingFinancialSchema(preGuideResult.error) && !isMissingRelationError(preGuideResult.error)) throw preGuideResult.error;
+      const preGuideRows = preGuideResult.error ? [] : Array.isArray(preGuideResult.data) ? preGuideResult.data : [];
+      const preGuidesByAuthorizationId = new Map<string, any[]>();
+      for (const row of preGuideRows) {
+        const authorizationId = sanitizeString(row?.snapshot_data?.authorization?.authorizationId || row?.snapshot_data?.authorization?.id, 120);
+        if (!isUuid(authorizationId) || !authorizationIds.includes(authorizationId)) continue;
+        const list = preGuidesByAuthorizationId.get(authorizationId) || [];
+        list.push(row);
+        preGuidesByAuthorizationId.set(authorizationId, list);
+      }
+      const protectedAuthorizationIds = new Set<string>();
+      for (const [authorizationId, rows] of preGuidesByAuthorizationId.entries()) {
+        if (rows.some((row: any) => isUuid(sanitizeString(row?.official_document_id, 120)))) {
+          protectedAuthorizationIds.add(authorizationId);
+        }
+      }
+      const expectedTussCode = sanitizeString(code.code, 80);
+      const eligibleAuthorizations = authorizations.filter((row: any) => {
+        const authorizationId = sanitizeString(row?.id, 120);
+        const status = sanitizeString(row?.status, 40).toLowerCase();
+        if (!isUuid(authorizationId) || protectedAuthorizationIds.has(authorizationId)) return false;
+        if (status && status !== 'active') return false;
+        if (row?.manual_tuss_override === true) return false;
+        const currentCode = sanitizeString(row?.procedure_tuss_code, 80);
+        const currentMappingId = sanitizeString(row?.payer_tuss_mapping_id, 120);
+        const currentTussCodeId = sanitizeString(row?.tuss_code_id, 120);
+        return currentCode !== expectedTussCode || currentMappingId !== mapping.id || currentTussCodeId !== code.id;
+      });
+      const protectedCount = authorizations.filter((row: any) => {
+        const authorizationId = sanitizeString(row?.id, 120);
+        const status = sanitizeString(row?.status, 40).toLowerCase();
+        return protectedAuthorizationIds.has(authorizationId) || (status && status !== 'active') || row?.manual_tuss_override === true;
+      }).length;
+      const affectedPreGuides = eligibleAuthorizations.flatMap((row: any) => preGuidesByAuthorizationId.get(sanitizeString(row?.id, 120)) || [])
+        .filter((row: any) => !isUuid(sanitizeString(row?.official_document_id, 120)));
+      const affectedAppointmentIds = Array.from(new Set(
+        affectedPreGuides.map((row: any) => sanitizeString(row?.appointment_id, 120)).filter((id: string) => isUuid(id))
+      ));
+      const previousCodes = Array.from(new Set(authorizations.map((row: any) => sanitizeString(row?.procedure_tuss_code, 80)).filter(Boolean))).slice(0, 12);
+      const summary = {
+        payerId: sanitizeString(mapping.payer_id, 120),
+        payerName: sanitizeString(payer.name, 180) || null,
+        serviceCatalogId: sanitizeString(service.id, 120),
+        procedureName: sanitizeString(service.name, 180) || null,
+        internalCode: sanitizeString(service.internal_code, 80) || null,
+        mappingId: mapping.id,
+        previousTussCodes: previousCodes,
+        newTussCode: expectedTussCode,
+        validFrom: mapping.valid_from || null,
+        validTo: mapping.valid_to || null,
+        authorizationsFound: authorizations.length,
+        authorizationsEligible: eligibleAuthorizations.length,
+        authorizationsProtected: protectedCount,
+        preGuidesToRevalidate: affectedAppointmentIds.length,
+        officialDocumentsChanged: 0
+      };
+      if (dryRun || eligibleAuthorizations.length === 0) {
+        return sendNoStoreJson(res, {
+          success: true,
+          dryRun: true,
+          data: summary,
+          message: eligibleAuthorizations.length === 0
+            ? 'Todas as autorizações elegíveis já estão sincronizadas.'
+            : 'Confira a sincronização antes de confirmar.'
+        });
+      }
+
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      const now = new Date().toISOString();
+      const eligibleIds = eligibleAuthorizations.map((row: any) => sanitizeString(row?.id, 120)).filter((id: string) => isUuid(id));
+      const updateResult = await supabase
+        .from('patient_payer_authorizations')
+        .update({
+          tuss_code_id: code.id,
+          payer_tuss_mapping_id: mapping.id,
+          tuss_source: 'payer_mapping',
+          manual_tuss_override: false,
+          override_reason: null,
+          procedure_tuss_code: expectedTussCode,
+          procedure_code: sanitizeString(service.internal_code, 80) || null,
+          procedure_code_snapshot: sanitizeString(service.internal_code, 80) || null,
+          procedure_name_snapshot: sanitizeString(mapping.contract_description || mapping.payer_specific_description || service.name, 180) || null,
+          authorized_unit: sanitizeString(mapping.billing_unit || service.billing_unit, 40) || null,
+          synchronized_at: now,
+          synchronized_by: isUuid(actorId) ? actorId : null,
+          sync_metadata: cleanObject({
+            source: 'mapping_sync',
+            mappingId: mapping.id,
+            previousTussCodes: previousCodes,
+            newTussCode: expectedTussCode
+          }),
+          updated_by: isUuid(actorId) ? actorId : null,
+          updated_at: now
+        })
+        .eq('organization_id', organizationId)
+        .in('id', eligibleIds)
+        .select(PATIENT_PAYER_AUTHORIZATION_SELECT);
+      if (updateResult.error) throw updateResult.error;
+
+      const appointmentRowsResult = affectedAppointmentIds.length > 0
+        ? await supabase
+            .from('appointments')
+            .select(CLOSURE_APPOINTMENT_SELECT)
+            .eq('organization_id', organizationId)
+            .in('id', affectedAppointmentIds)
+            .limit(affectedAppointmentIds.length)
+        : { data: [], error: null } as any;
+      if (appointmentRowsResult.error && !hasMissingFinancialSchema(appointmentRowsResult.error)) throw appointmentRowsResult.error;
+      const revalidationCounts = { attempted: 0, updated: 0, errors: 0 };
+      for (const appointment of (appointmentRowsResult.data || [])) {
+        revalidationCounts.attempted += 1;
+        try {
+          const generated = await revalidateAppointmentBillingForAppointment({
+            appointmentId: sanitizeString(appointment?.id, 120),
+            user: req.session.user,
+            scopedAppointment: appointment,
+            source: 'authorization_tuss_sync',
+            forceClosure: true
+          });
+          if ((generated as any)?.ok) revalidationCounts.updated += 1;
+          else revalidationCounts.errors += 1;
+        } catch (itemError: any) {
+          revalidationCounts.errors += 1;
+          console.warn('[TussReady] authorization sync pre-guide revalidation failed:', {
+            mappingId,
+            appointmentId: sanitizeString(appointment?.id, 120),
+            message: itemError?.message || String(itemError)
+          });
+        }
+      }
+      await recordTissRevenueCycleEvent({
+        organizationId,
+        clinicId: organizationId,
+        payerId: sanitizeString(mapping.payer_id, 120),
+        eventType: 'AUTHORIZATION_TUSS_SYNCHRONIZED',
+        previousState: 'awaiting_authorization',
+        newState: 'authorized',
+        reason: 'Autorizações elegíveis sincronizadas com o De/Para vigente do convênio.',
+        performedBy: isUuid(actorId) ? actorId : null,
+        metadata: {
+          ...summary,
+          updatedAuthorizationIds: eligibleIds,
+          revalidationCounts,
+          notSentToPayer: true
+        }
+      });
+      if (revalidationCounts.attempted > 0) {
+        await recordTissRevenueCycleEvent({
+          organizationId,
+          clinicId: organizationId,
+          payerId: sanitizeString(mapping.payer_id, 120),
+          eventType: 'PRE_GUIDES_REVALIDATED_AFTER_AUTHORIZATION_SYNC',
+          previousState: 'authorized',
+          newState: revalidationCounts.errors > 0 ? 'missing_data' : 'ready_for_billing',
+          reason: 'Pré-guias vinculadas revalidadas após sincronização do TUSS autorizado.',
+          performedBy: isUuid(actorId) ? actorId : null,
+          metadata: {
+            mappingId,
+            appointmentIds: affectedAppointmentIds,
+            revalidationCounts,
+            notSentToPayer: true
+          }
+        });
+      }
+      await writePayerRequirementAuditLog({
+        organizationId,
+        payerId: mapping.payer_id,
+        action: 'AUTHORIZATION_TUSS_SYNCHRONIZED',
+        performedBy: actorId,
+        metadata: { ...summary, revalidationCounts }
+      });
+      return sendNoStoreJson(res, {
+        success: revalidationCounts.errors === 0,
+        partialFailure: revalidationCounts.errors > 0,
+        data: {
+          ...summary,
+          authorizationsUpdated: Array.isArray(updateResult.data) ? updateResult.data.length : eligibleIds.length,
+          preGuidesRevalidated: revalidationCounts.updated,
+          revalidationCounts
+        },
+        message: revalidationCounts.errors > 0
+          ? 'Sincronização concluída parcialmente. Revise as Pré-guias com erro.'
+          : 'Sincronização concluída.'
+      });
+    } catch (error: any) {
+      console.warn('[TussReady] authorization TUSS sync failed:', error?.message || String(error));
       return res.status(500).json(payerSafeError(500));
     }
   });

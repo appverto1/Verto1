@@ -35,6 +35,7 @@ const authorizationCycleMigrationCode = readFileSync(join(root, 'supabase/migrat
 const xmlDraftMigrationCode = readFileSync(join(root, 'supabase/migrations/20260617190000_tiss_xml_drafts.sql'), 'utf8');
 const revenueCycleMigrationCode = readFileSync(join(root, 'supabase/migrations/20260617210000_tiss_revenue_cycle_backbone.sql'), 'utf8');
 const payerTussAdvancedMigrationCode = readFileSync(join(root, 'supabase/migrations/20260617223000_payer_tuss_advanced_contracts.sql'), 'utf8');
+const authorizationTussSyncMigrationCode = readFileSync(join(root, 'supabase/migrations/20260618143000_authorization_tuss_mapping_sync.sql'), 'utf8');
 const xmlDraftGeneratorCode = readFileSync(join(root, 'src/services/tissXmlDraftGenerator.ts'), 'utf8');
 const xmlDraftValidatorCode = readFileSync(join(root, 'src/services/tissXmlDraftValidator.ts'), 'utf8');
 const revenueStateMachineCode = readFileSync(join(root, 'src/services/tissRevenueCycleStateMachine.ts'), 'utf8');
@@ -164,6 +165,9 @@ test('atendimento de convênio com dados mínimos produz Pré-guia válida', () 
   assert.equal(result.guideType, 'sp_sadt');
   assert.deepEqual(result.errorCodes, []);
   assert.equal(result.snapshot.procedure.name, 'Sessão ABA individual');
+  assert.equal(result.snapshot.procedure.serviceCatalogId, 'service-1');
+  assert.equal(result.snapshot.procedure.tussCodeId, 'tuss-1');
+  assert.equal(result.snapshot.procedure.payerTussMappingId, 'mapping-1');
   assert.equal(result.snapshot.procedure.tussCode, 'CONFIGURADO-PELA-CLINICA');
   assert.equal(result.snapshot.procedure.totalAmountCents, 12000);
   assert.equal(result.snapshot.payer.id, 'payer-1');
@@ -797,6 +801,51 @@ test('autorizacao ativa valida e autorizacao vencida ou de outro TUSS gera pende
     },
   });
   assert.ok(missingAuthorizedProcedure.errorCodes.includes('AUTHORIZED_PROCEDURE_NOT_INFORMED'));
+});
+
+test('autorizacao sincronizada pelo DePara remove divergencia e preserva valor da Pre-guia', () => {
+  const synced = validateTissPreGuide({
+    ...validInput,
+    tussCode: {
+      ...validInput.tussCode,
+      id: 'tuss-real-10101012',
+      code: '10101012',
+      description: 'Sessão terapêutica individual',
+    },
+    mapping: {
+      ...validInput.mapping,
+      id: 'mapping-real-10101012',
+      tuss_code_id: 'tuss-real-10101012',
+    },
+    billingItem: {
+      ...validInput.billingItem,
+      service_catalog_id: 'service-1',
+      tuss_code_id: 'tuss-real-10101012',
+      payer_tuss_mapping_id: 'mapping-real-10101012',
+      unit_amount_cents: 12000,
+      amount_cents: 12000,
+    },
+    authorization: {
+      ...validInput.authorization,
+      id: 'auth-shared-1',
+      service_catalog_id: 'service-1',
+      tuss_code_id: 'tuss-real-10101012',
+      payer_tuss_mapping_id: 'mapping-real-10101012',
+      tuss_source: 'payer_mapping',
+      manual_tuss_override: false,
+      procedure_tuss_code: '10101012',
+      procedure_code: 'ABA-IND',
+      procedure_name_snapshot: 'Sessão ABA individual',
+    },
+  });
+  assert.equal(synced.status, 'valid');
+  assert.ok(!synced.errorCodes.includes('AUTHORIZATION_PROCEDURE_MISMATCH'));
+  assert.ok(!synced.errorCodes.includes('AMOUNT_MISSING'));
+  assert.equal(synced.snapshot.procedure.tussCode, '10101012');
+  assert.equal(synced.snapshot.authorization.procedureTussCode, '10101012');
+  assert.equal(synced.snapshot.authorization.payerTussMappingId, 'mapping-real-10101012');
+  assert.equal(synced.snapshot.procedure.unitAmountCents, 12000);
+  assert.equal(synced.snapshot.procedure.totalAmountCents, 12000);
 });
 
 test('assinatura do responsavel valida conforme exigencia do pagador', () => {
@@ -1502,6 +1551,12 @@ test('frontend separa Pré-guias e Rascunhos XML com preview interno', () => {
   assert.match(preGuideUiCode, /authorizationActionLabel/);
   assert.match(preGuideUiCode, /onClick=\{issueAction\.onClick\}/);
   assert.match(preGuideUiCode, /Salvar autorização e revalidar/);
+  assert.match(preGuideUiCode, /Procedimento autorizado/);
+  assert.match(preGuideUiCode, /Usar código autorizado diferente/);
+  assert.match(preGuideUiCode, /Código TUSS autorizado por exceção/);
+  assert.match(preGuideUiCode, /manualTussOverride/);
+  assert.match(preGuideUiCode, /dataService\.getTussCodes/);
+  assert.doesNotMatch(preGuideUiCode, /EditorField label="Procedimento\/TUSS autorizado"/);
   assert.match(preGuideUiCode, /Quantidade autorizada/);
   assert.match(preGuideUiCode, /Unidade autorizada/);
   assert.match(preGuideUiCode, /Editar Dados da clínica/);
@@ -1566,6 +1621,29 @@ test('frontend separa Pré-guias e Rascunhos XML com preview interno', () => {
   assert.match(preGuideUiCode, /Gerar\/Revalidar pendentes/);
   assert.match(preGuideUiCode, /Nenhum atendimento eleg/);
   assert.doesNotMatch(preGuideUiCode, /Enviar lote|Enviar remessa|Registrar glosa|Remessa enviada|Faturamento TISS concluído|Guia oficial enviada|Lote transmitido|Retorno importado|Glosa processada|Recurso de glosa/i);
+});
+
+test('autorizacao TUSS usa DePara server-side e sincronizacao controlada', () => {
+  assert.match(serverCode, /resolveAuthorizationTussFromMapping/);
+  assert.match(serverCode, /AUTHORIZATION_TUSS_MAPPING_AMBIGUOUS/);
+  assert.match(serverCode, /AUTHORIZATION_TUSS_MAPPING_MISSING/);
+  assert.match(serverCode, /AUTHORIZATION_TUSS_OVERRIDE_REASON_REQUIRED/);
+  assert.match(serverCode, /procedure_tuss_code:\s*resolvedProcedureTussCode/);
+  assert.match(serverCode, /manual_tuss_override:\s*manualTussOverride/);
+  assert.match(serverCode, /payer_tuss_mapping_id:\s*isUuid\(sanitizeString\(resolvedMapping\?\.id/);
+  assert.match(serverCode, /app\.post\('\/api\/admin\/tuss\/mappings\/:mappingId\/sync-authorizations'/);
+  assert.match(serverCode, /dryRun/);
+  assert.match(serverCode, /officialDocumentsChanged:\s*0/);
+  assert.match(serverCode, /AUTHORIZATION_TUSS_SYNCHRONIZED/);
+  assert.match(serverCode, /PRE_GUIDES_REVALIDATED_AFTER_AUTHORIZATION_SYNC/);
+  assert.match(dataServiceCode, /syncPayerTussMappingAuthorizations/);
+  assert.match(payerRequirementsCode, /Sincronizar autorizações e Pré-guias afetadas/);
+  assert.match(payerRequirementsCode, /Confirmar sincronização/);
+  assert.match(authorizationTussSyncMigrationCode, /payer_tuss_mapping_id uuid references public\.payer_tuss_mappings/);
+  assert.match(authorizationTussSyncMigrationCode, /manual_tuss_override boolean not null default false/);
+  assert.match(authorizationTussSyncMigrationCode, /override_reason text/);
+  assert.match(authorizationTussSyncMigrationCode, /AUTHORIZATION_TUSS_AUTO_RESOLVED/);
+  assert.match(authorizationTussSyncMigrationCode, /AUTHORIZATION_TUSS_OVERRIDE_APPLIED/);
 });
 
 test('data service usa operações explícitas e o pacote expõe suíte dedicada', () => {

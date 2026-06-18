@@ -412,6 +412,11 @@ export function PayerRequirementsPanel({
   const [supportFormOpen, setSupportFormOpen] = useState(false);
   const [supportCatalogOpen, setSupportCatalogOpen] = useState(false);
   const [supportActionKey, setSupportActionKey] = useState("");
+  const [authorizationSyncModal, setAuthorizationSyncModal] = useState<{
+    mapping: PayerTussMapping;
+    summary?: Record<string, any> | null;
+  } | null>(null);
+  const [authorizationSyncLoading, setAuthorizationSyncLoading] = useState(false);
   const [payerTissForm, setPayerTissForm] = useState<PayerTissForm>(defaultPayerTissForm);
   const [payerTissLoading, setPayerTissLoading] = useState(false);
   const [payerTissMessage, setPayerTissMessage] = useState("");
@@ -1057,6 +1062,47 @@ export function PayerRequirementsPanel({
       setTussActionInfo(`${found} atendimento(s) afetado(s), ${resolved} resolvido(s) para o período atual.`);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const openAuthorizationSyncModal = async (mapping: PayerTussMapping) => {
+    setAuthorizationSyncModal({ mapping, summary: null });
+    setAuthorizationSyncLoading(true);
+    setError("");
+    setTussActionInfo("");
+    try {
+      const result = await dataService.syncPayerTussMappingAuthorizations(mapping.id, { dryRun: true });
+      if (!result?.success) {
+        setError(result?.error || "Não foi possível conferir as autorizações afetadas agora.");
+        setAuthorizationSyncModal(null);
+        return;
+      }
+      setAuthorizationSyncModal({ mapping, summary: result.data || {} });
+    } finally {
+      setAuthorizationSyncLoading(false);
+    }
+  };
+
+  const confirmAuthorizationSync = async () => {
+    if (!authorizationSyncModal?.mapping?.id || authorizationSyncLoading) return;
+    setAuthorizationSyncLoading(true);
+    setError("");
+    setTussActionInfo("");
+    try {
+      const result = await dataService.syncPayerTussMappingAuthorizations(authorizationSyncModal.mapping.id, { dryRun: false });
+      if (!result?.success) {
+        setError(result?.error || "Não foi possível sincronizar autorizações e Pré-guias agora.");
+        return;
+      }
+      const data = result.data || {};
+      setTussActionInfo(
+        Number(data.authorizationsUpdated || 0) > 0
+          ? `Sincronização concluída: ${Number(data.authorizationsUpdated || 0)} autorização(ões) atualizada(s) e ${Number(data.preGuidesRevalidated || 0)} Pré-guia(s) revalidada(s).`
+          : "Todas as autorizações elegíveis já estão sincronizadas."
+      );
+      setAuthorizationSyncModal(null);
+    } finally {
+      setAuthorizationSyncLoading(false);
     }
   };
 
@@ -2169,6 +2215,7 @@ export function PayerRequirementsPanel({
                     <div className="flex shrink-0 flex-wrap gap-1.5">
                       <button type="button" onClick={() => { if (mapping) editTussMapping(mapping); if (price) editProcedurePrice(price); }} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-normal text-slate-600 hover:bg-slate-50">Editar configuração</button>
                       {mapping && <button type="button" onClick={() => void revalidateAffectedTussMapping(mapping.id)} className="rounded-lg border border-indigo-200 px-3 py-1.5 text-xs font-normal text-indigo-700 hover:bg-indigo-50">Revalidar atendimentos afetados</button>}
+                      {mapping && <button type="button" onClick={() => void openAuthorizationSyncModal(mapping)} className="rounded-lg border border-emerald-200 px-3 py-1.5 text-xs font-normal text-emerald-700 hover:bg-emerald-50">Sincronizar autorizações e Pré-guias afetadas</button>}
                       {price?.active !== false && <button type="button" onClick={() => void disableProcedurePrice(price.id)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-normal text-slate-600 hover:bg-slate-50">Desativar preço</button>}
                       {!price && mapping?.active !== false && <button type="button" onClick={() => void disableTussMapping(mapping.id)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-normal text-slate-600 hover:bg-slate-50">Desativar De/Para</button>}
                     </div>
@@ -2235,6 +2282,53 @@ export function PayerRequirementsPanel({
             </div>
           </div>
         </details>
+        {authorizationSyncModal && (
+          <div className="fixed inset-0 z-[170] flex items-end justify-center bg-slate-950/50 p-4 sm:items-center" role="dialog" aria-modal="true" aria-label="Sincronizar autorizações e Pré-guias">
+            <div className="w-full max-w-xl rounded-2xl bg-white shadow-xl">
+              <div className="border-b border-slate-100 px-5 py-4">
+                <h3 className="text-base font-semibold text-slate-900">Sincronizar autorizações e Pré-guias afetadas</h3>
+                <p className="mt-1 text-sm text-slate-500">
+                  Confira antes de aplicar. A sincronização usa o De/Para vigente e não altera XMLs oficiais já gerados.
+                </p>
+              </div>
+              <div className="space-y-3 px-5 py-4 text-sm text-slate-700">
+                {authorizationSyncLoading && !authorizationSyncModal.summary ? (
+                  <div className="flex items-center gap-2 text-slate-500"><Loader2 size={16} className="animate-spin" />Carregando autorizações afetadas...</div>
+                ) : (
+                  <>
+                    <div className="rounded-xl bg-slate-50 p-3">
+                      <p className="text-xs uppercase text-slate-400">Convênio</p>
+                      <p className="mt-1 text-slate-800">{selectedPayer?.name || authorizationSyncModal.summary?.payerName || "Convênio selecionado"}</p>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="rounded-xl bg-slate-50 p-3"><p className="text-xs uppercase text-slate-400">Procedimento interno</p><p className="mt-1">{authorizationSyncModal.summary?.procedureName || authorizationSyncModal.mapping.serviceName || "Procedimento"}</p></div>
+                      <div className="rounded-xl bg-slate-50 p-3"><p className="text-xs uppercase text-slate-400">Código TUSS novo</p><p className="mt-1">{authorizationSyncModal.summary?.newTussCode || authorizationSyncModal.mapping.tussCode || "Não informado"}</p></div>
+                      <div className="rounded-xl bg-slate-50 p-3"><p className="text-xs uppercase text-slate-400">Autorizações encontradas</p><p className="mt-1">{Number(authorizationSyncModal.summary?.authorizationsFound || 0)}</p></div>
+                      <div className="rounded-xl bg-slate-50 p-3"><p className="text-xs uppercase text-slate-400">Autorizações elegíveis</p><p className="mt-1">{Number(authorizationSyncModal.summary?.authorizationsEligible || 0)}</p></div>
+                      <div className="rounded-xl bg-slate-50 p-3"><p className="text-xs uppercase text-slate-400">Autorizações protegidas</p><p className="mt-1">{Number(authorizationSyncModal.summary?.authorizationsProtected || 0)}</p></div>
+                      <div className="rounded-xl bg-slate-50 p-3"><p className="text-xs uppercase text-slate-400">Pré-guias revalidadas</p><p className="mt-1">{Number(authorizationSyncModal.summary?.preGuidesToRevalidate || 0)}</p></div>
+                    </div>
+                    <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-3 text-sm text-emerald-800">
+                      0 documentos oficiais serão modificados. Senha, guia, validade, quantidade, consumo e preço serão preservados.
+                    </div>
+                  </>
+                )}
+              </div>
+              <div className="flex flex-wrap justify-end gap-2 border-t border-slate-100 px-5 py-4">
+                <button type="button" onClick={() => setAuthorizationSyncModal(null)} disabled={authorizationSyncLoading} className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-normal text-slate-600 disabled:opacity-50">Cancelar</button>
+                <button
+                  type="button"
+                  onClick={() => void confirmAuthorizationSync()}
+                  disabled={authorizationSyncLoading || Number(authorizationSyncModal.summary?.authorizationsEligible || 0) === 0}
+                  className="inline-flex items-center gap-2 rounded-lg bg-emerald-700 px-4 py-2 text-sm font-normal text-white disabled:opacity-50"
+                >
+                  {authorizationSyncLoading ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+                  Confirmar sincronização
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </section>
   );

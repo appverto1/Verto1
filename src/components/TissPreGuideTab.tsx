@@ -609,6 +609,8 @@ export function TissPreGuideTab({
   const [profileSaving, setProfileSaving] = useState(false);
   const [authorizationEditorOpen, setAuthorizationEditorOpen] = useState(false);
   const [authorizationForm, setAuthorizationForm] = useState<Record<string, any>>({});
+  const [authorizationTussCodes, setAuthorizationTussCodes] = useState<Array<{ id: string; code: string; description?: string | null; active?: boolean }>>([]);
+  const [authorizationTussCodesLoading, setAuthorizationTussCodesLoading] = useState(false);
   const [authorizationSaving, setAuthorizationSaving] = useState(false);
   const [xmlDrafts, setXmlDrafts] = useState<TissXmlDraftRow[]>([]);
   const [xmlDraftsLoading, setXmlDraftsLoading] = useState(false);
@@ -1400,25 +1402,44 @@ export function TissPreGuideTab({
     }
   };
 
-  const openAuthorizationEditor = () => {
+  const openAuthorizationEditor = async () => {
     if (!detail?.patientId || !detail?.payerId) {
       setError("Aplique paciente e pagador real antes de cadastrar autorização.");
       return;
     }
+    if (authorizationTussCodes.length === 0 && !authorizationTussCodesLoading) {
+      setAuthorizationTussCodesLoading(true);
+      try {
+        const result = await dataService.getTussCodes({ limit: 300 });
+        if (result?.success && Array.isArray(result.data)) setAuthorizationTussCodes(result.data);
+      } finally {
+        setAuthorizationTussCodesLoading(false);
+      }
+    }
     const authorization = detail.snapshot?.authorization || {};
     const procedure = detail.snapshot?.procedure || {};
     const toDateInput = (value?: unknown) => String(value || "").slice(0, 10);
+    const currentAuthorizationTussCode = authorization.procedureTussCode || "";
+    const expectedTussCode = procedure.tussCode || detail.tussCode || "";
     setAuthorizationForm({
+      id: authorization.authorizationId || authorization.id || "",
       authorizationNumber: authorization.authorizationCode || detail.authorizationCode || "",
       guideNumber: authorization.guideNumber || detail.guideNumber || "",
       issueDate: toDateInput(authorization.authorizationValidFrom),
       validFrom: toDateInput(authorization.authorizationValidFrom),
       validUntil: toDateInput(authorization.authorizationValidUntil || detail.authorizationValidUntil),
-      procedureTussCode: authorization.procedureTussCode || procedure.tussCode || detail.tussCode || "",
+      serviceCatalogId: authorization.serviceCatalogId || procedure.serviceCatalogId || "",
+      tussCodeId: authorization.tussCodeId || procedure.tussCodeId || "",
+      payerTussMappingId: authorization.payerTussMappingId || procedure.payerTussMappingId || "",
+      procedureTussCode: currentAuthorizationTussCode || expectedTussCode,
+      expectedTussCode,
       procedureCode: authorization.procedureCode || procedure.internalCode || detail.internalProcedureCode || "",
       procedureNameSnapshot: authorization.procedureName || procedure.name || detail.internalProcedureName || "",
       authorizedQuantity: String(authorization.authorizedQuantity || detail.quantity || procedure.quantity || 1),
       authorizedUnit: authorization.authorizedUnit || detail.unit || procedure.unit || "session",
+      manualTussOverride: Boolean(authorization.manualTussOverride),
+      overrideTussCodeId: authorization.manualTussOverride ? authorization.tussCodeId || "" : "",
+      overrideReason: authorization.overrideReason || "",
       notes: "",
     });
     setAuthorizationEditorOpen(true);
@@ -1435,6 +1456,7 @@ export function TissPreGuideTab({
     setMessage("");
     try {
       const result = await dataService.upsertPatientPayerAuthorization({
+        id: authorizationForm.id,
         appointmentId: detail.appointmentId,
         patientId: detail.patientId,
         payerId: detail.payerId,
@@ -1443,7 +1465,12 @@ export function TissPreGuideTab({
         issueDate: authorizationForm.issueDate,
         validFrom: authorizationForm.validFrom,
         validUntil: authorizationForm.validUntil,
-        procedureTussCode: authorizationForm.procedureTussCode,
+        serviceCatalogId: authorizationForm.serviceCatalogId,
+        tussCodeId: authorizationForm.tussCodeId,
+        payerTussMappingId: authorizationForm.payerTussMappingId,
+        manualTussOverride: Boolean(authorizationForm.manualTussOverride),
+        overrideTussCodeId: authorizationForm.overrideTussCodeId,
+        overrideReason: authorizationForm.overrideReason,
         procedureCode: authorizationForm.procedureCode,
         procedureNameSnapshot: authorizationForm.procedureNameSnapshot,
         authorizedQuantity: authorizationForm.authorizedQuantity,
@@ -1548,7 +1575,7 @@ export function TissPreGuideTab({
     if (isAuthorizationIssue(item)) {
       return {
         label: authorizationActionLabel(code),
-        onClick: () => openAuthorizationEditor(),
+        onClick: () => void openAuthorizationEditor(),
       };
     }
     if (code === "PAYER_TUSS_MAPPING_MISSING" || code === "PAYER_TUSS_MAPPING_EXPIRED" || code === "PAYER_PROCEDURE_PRICE_MISSING" || code === "PAYER_PROCEDURE_PRICE_CONFLICT") {
@@ -3090,7 +3117,7 @@ export function TissPreGuideTab({
                     <button type="button" onClick={() => void openProfileEditor("payer")} disabled={!detail.payerId} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-40">Editar perfil TISS do pagador</button>
                     <button type="button" onClick={() => void openProfileEditor("professional")} disabled={!detail.professionalId} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-40">Editar perfil faturável do profissional</button>
                     {authorizationFooterActionLabel && (
-                      <button type="button" onClick={() => openAuthorizationEditor()} disabled={!detail.patientId || !detail.payerId} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-40">{authorizationFooterActionLabel}</button>
+                      <button type="button" onClick={() => void openAuthorizationEditor()} disabled={!detail.patientId || !detail.payerId} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-40">{authorizationFooterActionLabel}</button>
                     )}
                     <button type="button" onClick={() => openAppointment(detail)} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">Ir para atendimento</button>
                     <button type="button" onClick={() => void revalidate(detail)} disabled={revalidatingId === detail.appointmentId} className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-60">
@@ -3130,12 +3157,75 @@ export function TissPreGuideTab({
                   <EditorField label="Data de emissão" type="date" value={authorizationForm.issueDate || ""} onChange={(value) => updateAuthorizationField("issueDate", value)} />
                   <EditorField label="Início da validade" type="date" value={authorizationForm.validFrom || ""} onChange={(value) => updateAuthorizationField("validFrom", value)} />
                   <EditorField label="Validade final" type="date" value={authorizationForm.validUntil || ""} onChange={(value) => updateAuthorizationField("validUntil", value)} />
-                  <EditorField label="Procedimento/TUSS autorizado" value={authorizationForm.procedureTussCode || ""} onChange={(value) => updateAuthorizationField("procedureTussCode", value)} maxLength={80} />
-                  <EditorField label="Código interno autorizado" value={authorizationForm.procedureCode || ""} onChange={(value) => updateAuthorizationField("procedureCode", value)} maxLength={80} />
-                  <EditorField label="Nome do procedimento autorizado" value={authorizationForm.procedureNameSnapshot || ""} onChange={(value) => updateAuthorizationField("procedureNameSnapshot", value)} maxLength={180} />
                   <EditorField label="Quantidade autorizada" type="number" value={authorizationForm.authorizedQuantity || ""} onChange={(value) => updateAuthorizationField("authorizedQuantity", value)} maxLength={20} />
-                  <EditorField label="Unidade autorizada" value={authorizationForm.authorizedUnit || ""} onChange={(value) => updateAuthorizationField("authorizedUnit", value)} maxLength={40} />
                 </div>
+                <section className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <h3 className="text-sm font-semibold text-slate-900">Procedimento autorizado</h3>
+                      <p className="mt-1 text-xs text-slate-500">
+                        O código TUSS é resolvido pelo De/Para vigente do convênio ao salvar. O backend valida novamente essa origem.
+                      </p>
+                    </div>
+                    <span className={`rounded-full px-2 py-1 text-xs ${
+                      authorizationForm.manualTussOverride
+                        ? "bg-amber-50 text-amber-700"
+                        : authorizationForm.procedureTussCode && authorizationForm.expectedTussCode && authorizationForm.procedureTussCode !== authorizationForm.expectedTussCode
+                          ? "bg-amber-50 text-amber-700"
+                          : "bg-emerald-50 text-emerald-700"
+                    }`}>
+                      {authorizationForm.manualTussOverride
+                        ? "Código autorizado por exceção"
+                        : authorizationForm.procedureTussCode && authorizationForm.expectedTussCode && authorizationForm.procedureTussCode !== authorizationForm.expectedTussCode
+                          ? "Código diferente do De/Para atual"
+                          : "Sincronizada com o De/Para"}
+                    </span>
+                  </div>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    <DetailField label="Procedimento interno" value={fieldValue(authorizationForm.procedureNameSnapshot || detail?.internalProcedureName, "Será resolvido ao salvar")} />
+                    <DetailField label="Código interno autorizado" value={fieldValue(authorizationForm.procedureCode || detail?.internalProcedureCode, "Será resolvido ao salvar")} />
+                    <DetailField label="Código TUSS autorizado" value={fieldValue(authorizationForm.manualTussOverride ? authorizationTussCodes.find((code) => code.id === authorizationForm.overrideTussCodeId)?.code : authorizationForm.expectedTussCode || authorizationForm.procedureTussCode, "Será resolvido ao salvar")} />
+                    <DetailField label="Unidade autorizada" value={fieldValue(authorizationForm.authorizedUnit || detail?.unit, "Será resolvida ao salvar")} />
+                    <DetailField label="Origem do código" value={authorizationForm.manualTussOverride ? "Exceção manual com justificativa" : `De/Para vigente de ${fieldValue(detail?.payerName, "convênio")}`} />
+                    <DetailField label="Status de sincronização" value={authorizationForm.procedureTussCode && authorizationForm.expectedTussCode && authorizationForm.procedureTussCode !== authorizationForm.expectedTussCode ? "Será sincronizada ao salvar" : "Resolvida automaticamente"} />
+                  </div>
+                  <label className="mt-3 flex items-center gap-2 text-sm text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(authorizationForm.manualTussOverride)}
+                      onChange={(event) => updateAuthorizationField("manualTussOverride", event.target.checked)}
+                      className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-200"
+                    />
+                    Usar código autorizado diferente
+                  </label>
+                  {authorizationForm.manualTussOverride && (
+                    <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                      <label className="text-xs font-medium text-slate-600">
+                        Código TUSS autorizado por exceção
+                        <select
+                          value={authorizationForm.overrideTussCodeId || ""}
+                          onChange={(event) => updateAuthorizationField("overrideTussCodeId", event.target.value)}
+                          className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-800 outline-none focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100"
+                        >
+                          <option value="">{authorizationTussCodesLoading ? "Carregando códigos..." : "Selecione um código TUSS cadastrado"}</option>
+                          {authorizationTussCodes.filter((code) => code.active !== false).map((code) => (
+                            <option key={code.id} value={code.id}>{code.code} - {code.description || "Sem descrição"}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="text-xs font-medium text-slate-600 sm:col-span-2">
+                        Justificativa da exceção
+                        <textarea
+                          value={authorizationForm.overrideReason || ""}
+                          onChange={(event) => updateAuthorizationField("overrideReason", event.target.value)}
+                          maxLength={600}
+                          rows={3}
+                          className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-800 outline-none focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100"
+                        />
+                      </label>
+                    </div>
+                  )}
+                </section>
                 <label className="block text-xs font-medium text-slate-600">
                   Observações
                   <textarea
