@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, CheckCircle2, ClipboardCheck, FileSpreadsheet, Loader2, Plus, RefreshCw, Save, ShieldCheck } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ClipboardCheck, FileSpreadsheet, Loader2, Plus, RefreshCw, Save, ShieldCheck, Trash2 } from "lucide-react";
 import { dataService } from "../services/dataService";
 import { getDefaultTissOfficialStrategyDescriptor } from "../services/tissOfficial/capabilities";
 import {
@@ -112,6 +112,21 @@ type PayerProcedurePrice = {
   source?: string | null;
   notes?: string | null;
   active?: boolean;
+};
+
+type PayerCrudEntityType = "requirement" | "service" | "code" | "mapping" | "price";
+
+type SectionFeedback = {
+  status: "idle" | "saving" | "success" | "error";
+  message?: string;
+};
+
+type DeleteImpact = {
+  canDelete: boolean;
+  dependencies: Record<string, number>;
+  recommendedAction?: "delete" | "deactivate";
+  entityLabel?: string;
+  entityName?: string;
 };
 
 type PayerTissForm = {
@@ -302,6 +317,87 @@ function PayerTissField({
   );
 }
 
+function PayerFormField({
+  id,
+  label,
+  helperText,
+  error,
+  children,
+}: {
+  id: string;
+  label: string;
+  helperText?: string;
+  error?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label htmlFor={id} className="block text-xs font-normal text-slate-700">
+      <span className="mb-1 block">{label}</span>
+      {children}
+      {helperText ? <span id={`${id}-help`} className="mt-1 block text-[11px] leading-4 text-slate-500">{helperText}</span> : null}
+      {error ? <span id={`${id}-error`} className="mt-1 block text-[11px] leading-4 text-rose-600">{error}</span> : null}
+    </label>
+  );
+}
+
+function SectionFormActions({
+  status,
+  primaryLabel,
+  savingLabel = "Salvando...",
+  successLabel = "✓ Salvo",
+  disabled,
+  onCancel,
+  onSubmit,
+}: {
+  status: SectionFeedback["status"];
+  primaryLabel: string;
+  savingLabel?: string;
+  successLabel?: string;
+  disabled?: boolean;
+  onCancel?: () => void;
+  onSubmit: () => void;
+}) {
+  const isSaving = status === "saving";
+  const isSuccess = status === "success";
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-2">
+      {onCancel ? (
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={isSaving}
+          className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-normal text-slate-600 disabled:opacity-50"
+        >
+          Cancelar
+        </button>
+      ) : null}
+      <button
+        type="button"
+        onClick={onSubmit}
+        disabled={disabled || isSaving || isSuccess}
+        className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-normal text-white disabled:opacity-50"
+      >
+        {isSaving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
+        {isSaving ? savingLabel : isSuccess ? successLabel : primaryLabel}
+      </button>
+    </div>
+  );
+}
+
+function SectionFeedbackMessage({ feedback }: { feedback?: SectionFeedback }) {
+  if (!feedback || feedback.status === "idle" || !feedback.message) return null;
+  const tone = feedback.status === "error"
+    ? "border-rose-200 bg-rose-50 text-rose-700"
+    : feedback.status === "success"
+      ? "border-emerald-100 bg-emerald-50 text-emerald-700"
+      : "border-slate-100 bg-slate-50 text-slate-600";
+  return (
+    <div className={`mt-3 rounded-2xl border px-3 py-2 text-xs font-normal ${tone}`}>
+      {feedback.message}
+    </div>
+  );
+}
+
 const hasOption = (options: Array<{ code: string }>, value: string) => options.some((option) => option.code === value);
 const legacyInvalidLabel = (value: string) => value ? `Legado inválido: ${value}` : "Selecione";
 
@@ -412,6 +508,15 @@ export function PayerRequirementsPanel({
   const [supportFormOpen, setSupportFormOpen] = useState(false);
   const [supportCatalogOpen, setSupportCatalogOpen] = useState(false);
   const [supportActionKey, setSupportActionKey] = useState("");
+  const [sectionFeedback, setSectionFeedback] = useState<Record<string, SectionFeedback>>({});
+  const [activeEditingSection, setActiveEditingSection] = useState<string>("");
+  const [deleteModal, setDeleteModal] = useState<{
+    entityType: PayerCrudEntityType;
+    id: string;
+    name: string;
+    impact?: DeleteImpact | null;
+  } | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
   const [authorizationSyncModal, setAuthorizationSyncModal] = useState<{
     mapping: PayerTussMapping;
     summary?: Record<string, any> | null;
@@ -430,6 +535,32 @@ export function PayerRequirementsPanel({
   const procedurePriceSaveInFlightRef = useRef(false);
   const supportActionInFlightRef = useRef(false);
   const procedurePriceAmountInputRef = useRef<HTMLInputElement | null>(null);
+
+  const setLocalFeedback = (section: string, feedback: SectionFeedback) => {
+    setSectionFeedback((current) => ({ ...current, [section]: feedback }));
+  };
+
+  const clearLocalFeedback = (section: string) => {
+    setSectionFeedback((current) => {
+      const next = { ...current };
+      delete next[section];
+      return next;
+    });
+  };
+
+  const beginEditingSection = (section: string) => {
+    if (activeEditingSection && activeEditingSection !== section) {
+      const discard = window.confirm("Existem alterações não salvas nesta seção. Deseja descartá-las?");
+      if (!discard) return false;
+    }
+    setActiveEditingSection(section);
+    clearLocalFeedback(section);
+    return true;
+  };
+
+  const finishEditingSection = (section: string) => {
+    if (activeEditingSection === section) setActiveEditingSection("");
+  };
 
   const selectedPayer = useMemo(
     () => payers.find((payer) => payer.id === selectedPayerId) || null,
@@ -684,6 +815,25 @@ export function PayerRequirementsPanel({
     }
   };
 
+  const setRequirementActive = async (requirementId: string, isActive: boolean) => {
+    setSaving(true);
+    setError("");
+    setLocalFeedback("requirements", { status: "saving", message: isActive ? "Reativando exceção..." : "Inativando exceção..." });
+    try {
+      const result = await dataService.updatePayerRequirement(requirementId, { isActive });
+      if (!result?.success) {
+        setError(result?.error || "Não foi possível atualizar a exceção agora.");
+        setLocalFeedback("requirements", { status: "error", message: "Não foi possível salvar. Revise os campos destacados." });
+        return false;
+      }
+      setRequirements((current) => current.map((rule) => rule.id === requirementId ? { ...rule, ...(result.data || {}), isActive } : rule));
+      setLocalFeedback("requirements", { status: "success", message: isActive ? "Exceção reativada com sucesso." : "Exceção inativada com sucesso." });
+      return true;
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const toggleRequirementFlag = (key: string) => {
     setRequirementForm((current: any) => ({ ...current, [key]: !current[key] }));
   };
@@ -740,6 +890,7 @@ export function PayerRequirementsPanel({
 
   const createTussService = async () => {
     if (tussServiceForm.name.trim().length < 2) return;
+    const wasEditing = Boolean(editingTussServiceId);
     const rawDefaultAmount = String(tussServiceForm.defaultAmountCents || "").trim();
     const defaultAmountCents = rawDefaultAmount ? parseBrazilianCurrencyToCents(rawDefaultAmount) : null;
     if (rawDefaultAmount && defaultAmountCents === null) {
@@ -749,6 +900,7 @@ export function PayerRequirementsPanel({
     setSaving(true);
     setError("");
     setTussActionInfo("");
+    setLocalFeedback("service", { status: "saving", message: "Salvando procedimento interno..." });
     try {
       const payload = {
         ...tussServiceForm,
@@ -772,7 +924,9 @@ export function PayerRequirementsPanel({
       setTussServiceForm(defaultTussServiceForm);
       setEditingTussServiceId("");
       setTussMappingForm((current) => ({ ...current, serviceCatalogId: current.serviceCatalogId || result.data.id }));
-      setTussActionInfo(editingTussServiceId ? "Procedimento atualizado." : "Procedimento criado.");
+      setTussActionInfo(wasEditing ? "Procedimento atualizado." : "Procedimento criado.");
+      setLocalFeedback("service", { status: "success", message: "Alterações salvas com sucesso." });
+      finishEditingSection("service");
     } finally {
       setSaving(false);
     }
@@ -780,9 +934,11 @@ export function PayerRequirementsPanel({
 
   const createTussCode = async () => {
     if (tussCodeForm.code.trim().length < 2 || tussCodeForm.description.trim().length < 2) return;
+    const wasEditing = Boolean(editingTussCodeId);
     setSaving(true);
     setError("");
     setTussActionInfo("");
+    setLocalFeedback("code", { status: "saving", message: "Salvando código TUSS..." });
     try {
       const payload = {
         code: tussCodeForm.code.trim(),
@@ -804,7 +960,9 @@ export function PayerRequirementsPanel({
       setTussCodeForm(defaultTussCodeForm);
       setEditingTussCodeId("");
       setTussMappingForm((current) => ({ ...current, tussCodeId: current.tussCodeId || result.data.id }));
-      setTussActionInfo(editingTussCodeId ? "Código TUSS atualizado." : "Código TUSS cadastrado.");
+      setTussActionInfo(wasEditing ? "Código TUSS atualizado." : "Código TUSS cadastrado.");
+      setLocalFeedback("code", { status: "success", message: "Alterações salvas com sucesso." });
+      finishEditingSection("code");
     } finally {
       setSaving(false);
     }
@@ -812,9 +970,11 @@ export function PayerRequirementsPanel({
 
   const createTussMapping = async () => {
     if (!selectedPayerId || !tussMappingForm.serviceCatalogId) return;
+    const wasEditing = Boolean(editingTussMappingId);
     setSaving(true);
     setError("");
     setTussActionInfo("");
+    setLocalFeedback("mapping", { status: "saving", message: "Salvando De/Para..." });
     try {
       const payload = {
         ...tussMappingForm,
@@ -843,7 +1003,9 @@ export function PayerRequirementsPanel({
         tussCodeId: current.tussCodeId,
       }));
       setEditingTussMappingId("");
-      setTussActionInfo(editingTussMappingId ? "Mapeamento atualizado." : "Mapeamento criado.");
+      setTussActionInfo(wasEditing ? "Mapeamento atualizado." : "Mapeamento criado.");
+      setLocalFeedback("mapping", { status: "success", message: "Alterações salvas com sucesso." });
+      finishEditingSection("mapping");
     } finally {
       setSaving(false);
     }
@@ -851,6 +1013,7 @@ export function PayerRequirementsPanel({
 
   const saveProcedurePrice = async () => {
     if (procedurePriceSaveInFlightRef.current || !selectedPayerId || !procedurePriceForm.serviceCatalogId) return;
+    const wasEditing = Boolean(editingProcedurePriceId);
     const amountCents = parseBrazilianCurrencyToCents(procedurePriceForm.amountCents);
     if (amountCents === null) {
       setProcedurePriceAmountError("Informe um valor válido em reais, com no máximo duas casas decimais.");
@@ -862,6 +1025,7 @@ export function PayerRequirementsPanel({
     setError("");
     setProcedurePriceAmountError("");
     setTussActionInfo("");
+    setLocalFeedback("price", { status: "saving", message: "Salvando valor negociado..." });
     try {
       const payload = {
         ...procedurePriceForm,
@@ -882,7 +1046,9 @@ export function PayerRequirementsPanel({
         tussCodeId: current.tussCodeId,
       }));
       setEditingProcedurePriceId("");
-      setTussActionInfo(editingProcedurePriceId ? "Valor negociado atualizado." : "Valor negociado cadastrado.");
+      setTussActionInfo(wasEditing ? "Valor negociado atualizado." : "Valor negociado cadastrado.");
+      setLocalFeedback("price", { status: "success", message: "Alterações salvas com sucesso." });
+      finishEditingSection("price");
     } finally {
       setSaving(false);
       procedurePriceSaveInFlightRef.current = false;
@@ -890,6 +1056,7 @@ export function PayerRequirementsPanel({
   };
 
   const editTussService = (service: TussService) => {
+    if (!beginEditingSection("service")) return;
     setEditingTussServiceId(service.id);
     setError("");
     setTussActionInfo("");
@@ -908,6 +1075,7 @@ export function PayerRequirementsPanel({
   };
 
   const editTussCode = (code: TussCode) => {
+    if (!beginEditingSection("code")) return;
     setEditingTussCodeId(code.id);
     setError("");
     setTussActionInfo("");
@@ -923,6 +1091,7 @@ export function PayerRequirementsPanel({
   };
 
   const editTussMapping = (mapping: PayerTussMapping) => {
+    if (!beginEditingSection("mapping")) return;
     setEditingTussMappingId(mapping.id);
     setTussMappingForm({
       serviceCatalogId: mapping.serviceCatalogId || "",
@@ -949,9 +1118,11 @@ export function PayerRequirementsPanel({
       source: mapping.source || "manual",
       notes: mapping.notes || "",
     });
+    payerTussSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
   const editProcedurePrice = (price: PayerProcedurePrice) => {
+    if (!beginEditingSection("price")) return;
     setEditingProcedurePriceId(price.id);
     setProcedurePriceForm({
       serviceCatalogId: price.serviceCatalogId || "",
@@ -970,12 +1141,12 @@ export function PayerRequirementsPanel({
   };
 
   const setTussServiceActive = async (serviceId: string, active: boolean) => {
-    if (supportActionInFlightRef.current) return;
+    if (supportActionInFlightRef.current) return false;
     const actionKey = `service:${serviceId}:${active ? "active" : "inactive"}`;
     const confirmed = window.confirm(active
       ? "Deseja reativar este procedimento? Ele voltará a ficar disponível para novas configurações."
       : "Deseja inativar este procedimento? Ele deixará de ficar disponível para novas configurações.");
-    if (!confirmed) return;
+    if (!confirmed) return false;
     supportActionInFlightRef.current = true;
     setSupportCatalogOpen(true);
     setSupportActionKey(actionKey);
@@ -986,7 +1157,7 @@ export function PayerRequirementsPanel({
       const result = await dataService.updateTussService(serviceId, { active });
       if (!result?.success) {
         setError(result?.error || (active ? "Não foi possível reativar o procedimento agora." : "Não foi possível inativar o procedimento agora."));
-        return;
+        return false;
       }
       setTussServices((current) => current.map((service) => (
         service.id === serviceId ? { ...service, ...(result.data || {}), active } : service
@@ -996,6 +1167,7 @@ export function PayerRequirementsPanel({
         setTussServiceForm(defaultTussServiceForm);
       }
       setTussActionInfo(active ? "Procedimento reativado com sucesso." : "Procedimento inativado.");
+      return true;
     } finally {
       supportActionInFlightRef.current = false;
       setSaving(false);
@@ -1008,12 +1180,12 @@ export function PayerRequirementsPanel({
   const reactivateTussService = (serviceId: string) => setTussServiceActive(serviceId, true);
 
   const setTussCodeActive = async (codeId: string, active: boolean) => {
-    if (supportActionInFlightRef.current) return;
+    if (supportActionInFlightRef.current) return false;
     const actionKey = `code:${codeId}:${active ? "active" : "inactive"}`;
     const confirmed = window.confirm(active
       ? "Deseja reativar este código TUSS? Ele voltará a ficar disponível para novas configurações."
       : "Deseja inativar este código TUSS? Ele deixará de ficar disponível para novas configurações.");
-    if (!confirmed) return;
+    if (!confirmed) return false;
     supportActionInFlightRef.current = true;
     setSupportCatalogOpen(true);
     setSupportActionKey(actionKey);
@@ -1024,7 +1196,7 @@ export function PayerRequirementsPanel({
       const result = await dataService.updateTussCode(codeId, { active });
       if (!result?.success) {
         setError(result?.error || (active ? "Não foi possível reativar o código TUSS agora." : "Não foi possível inativar o código TUSS agora."));
-        return;
+        return false;
       }
       setTussCodes((current) => current.map((code) => (
         code.id === codeId ? { ...code, ...(result.data || {}), active } : code
@@ -1034,6 +1206,7 @@ export function PayerRequirementsPanel({
         setTussCodeForm(defaultTussCodeForm);
       }
       setTussActionInfo(active ? "Código TUSS reativado com sucesso." : "Código TUSS inativado.");
+      return true;
     } finally {
       supportActionInFlightRef.current = false;
       setSaving(false);
@@ -1107,6 +1280,8 @@ export function PayerRequirementsPanel({
   };
 
   const disableTussMapping = async (mappingId: string) => {
+    const confirmed = window.confirm("Deseja inativar este mapeamento De/Para? Ele deixará de ser usado em novas configurações.");
+    if (!confirmed) return;
     setSaving(true);
     setError("");
     setTussActionInfo("");
@@ -1130,6 +1305,8 @@ export function PayerRequirementsPanel({
   };
 
   const disableProcedurePrice = async (priceId: string) => {
+    const confirmed = window.confirm("Deseja inativar este valor negociado? Ele deixará de ser usado em novas configurações.");
+    if (!confirmed) return;
     setSaving(true);
     setError("");
     setTussActionInfo("");
@@ -1149,6 +1326,127 @@ export function PayerRequirementsPanel({
       setTussActionInfo("Valor negociado inativado.");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const setTussMappingActive = async (mappingId: string, active: boolean) => {
+    if (active) {
+      const confirmed = window.confirm("Deseja reativar este mapeamento De/Para? Ele voltará a ficar disponível para novas configurações.");
+      if (!confirmed) return false;
+    }
+    setSaving(true);
+    setError("");
+    setLocalFeedback("mapping", { status: "saving", message: active ? "Reativando De/Para..." : "Inativando De/Para..." });
+    try {
+      const result = await dataService.updatePayerTussMapping(mappingId, { active });
+      if (!result?.success) {
+        setError(result?.error || "Não foi possível atualizar o mapeamento agora.");
+        setLocalFeedback("mapping", { status: "error", message: "Não foi possível salvar. Revise os campos destacados." });
+        return false;
+      }
+      setTussMappings((current) => current.map((mapping) => (
+        mapping.id === mappingId ? { ...mapping, ...(result.data || {}), active } : mapping
+      )));
+      setLocalFeedback("mapping", { status: "success", message: active ? "Mapeamento reativado com sucesso." : "Mapeamento inativado com sucesso." });
+      return true;
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const setProcedurePriceActive = async (priceId: string, active: boolean) => {
+    if (active) {
+      const confirmed = window.confirm("Deseja reativar este valor negociado? Ele voltará a ficar disponível para novas configurações.");
+      if (!confirmed) return false;
+    }
+    setSaving(true);
+    setError("");
+    setLocalFeedback("price", { status: "saving", message: active ? "Reativando valor negociado..." : "Inativando valor negociado..." });
+    try {
+      const result = await dataService.updatePayerProcedurePrice(priceId, { active });
+      if (!result?.success) {
+        setError(result?.error || "Não foi possível atualizar o valor negociado agora.");
+        setLocalFeedback("price", { status: "error", message: "Não foi possível salvar. Revise os campos destacados." });
+        return false;
+      }
+      setProcedurePrices((current) => current.map((price) => (
+        price.id === priceId ? { ...price, ...(result.data || {}), active } : price
+      )));
+      setLocalFeedback("price", { status: "success", message: active ? "Valor negociado reativado com sucesso." : "Valor negociado inativado com sucesso." });
+      return true;
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const openDeleteImpactModal = async (entityType: PayerCrudEntityType, id: string, name: string) => {
+    setDeleteModal({ entityType, id, name, impact: null });
+    setDeleteLoading(true);
+    setError("");
+    try {
+      const result = entityType === "requirement"
+        ? await dataService.getPayerRequirementDeleteImpact(id)
+        : await dataService.getTussDeleteImpact(
+            entityType === "service" ? "services" : entityType === "code" ? "codes" : entityType === "mapping" ? "mappings" : "prices",
+            id
+          );
+      if (!result?.success) {
+        setError(result?.error || "Não foi possível conferir dependências agora.");
+        setDeleteModal(null);
+        return;
+      }
+      setDeleteModal({ entityType, id, name, impact: result.data || null });
+    } finally {
+      setDeleteLoading(false);
+    }
+  };
+
+  const removeDeletedEntityFromState = (entityType: PayerCrudEntityType, id: string) => {
+    if (entityType === "requirement") setRequirements((current) => current.filter((item) => item.id !== id));
+    if (entityType === "service") setTussServices((current) => current.filter((item) => item.id !== id));
+    if (entityType === "code") setTussCodes((current) => current.filter((item) => item.id !== id));
+    if (entityType === "mapping") setTussMappings((current) => current.filter((item) => item.id !== id));
+    if (entityType === "price") setProcedurePrices((current) => current.filter((item) => item.id !== id));
+  };
+
+  const deactivateFromDeleteModal = async () => {
+    if (!deleteModal) return;
+    const { entityType, id } = deleteModal;
+    let ok = false;
+    if (entityType === "requirement") ok = await setRequirementActive(id, false);
+    if (entityType === "service") {
+      await setTussServiceActive(id, false);
+      ok = true;
+    }
+    if (entityType === "code") {
+      await setTussCodeActive(id, false);
+      ok = true;
+    }
+    if (entityType === "mapping") ok = await setTussMappingActive(id, false);
+    if (entityType === "price") ok = await setProcedurePriceActive(id, false);
+    if (ok) setDeleteModal(null);
+  };
+
+  const confirmDeleteEntity = async () => {
+    if (!deleteModal?.impact?.canDelete || deleteLoading) return;
+    setDeleteLoading(true);
+    setError("");
+    try {
+      const result = deleteModal.entityType === "requirement"
+        ? await dataService.deletePayerRequirement(deleteModal.id)
+        : await dataService.deleteTussEntity(
+            deleteModal.entityType === "service" ? "services" : deleteModal.entityType === "code" ? "codes" : deleteModal.entityType === "mapping" ? "mappings" : "prices",
+            deleteModal.id
+          );
+      if (!result?.success) {
+        setError(result?.error || "Não foi possível excluir o cadastro agora.");
+        return;
+      }
+      removeDeletedEntityFromState(deleteModal.entityType, deleteModal.id);
+      setTussActionInfo("Cadastro excluído com segurança.");
+      setDeleteModal(null);
+    } finally {
+      setDeleteLoading(false);
     }
   };
 
@@ -1570,6 +1868,7 @@ export function PayerRequirementsPanel({
             <p className="mt-1 text-xs text-slate-500">
               A exceção substitui a regra geral apenas para este serviço.
             </p>
+            <SectionFeedbackMessage feedback={sectionFeedback.requirements} />
           <div className="mt-4 grid gap-3 md:grid-cols-2">
             <label className="text-xs font-bold text-slate-600">
               Tipo de sessão
@@ -1627,9 +1926,9 @@ export function PayerRequirementsPanel({
           </button>
 
           <div className="mt-5 space-y-2">
-            {requirements.filter((rule) => rule.isActive !== false).length === 0 ? (
+            {requirements.length === 0 ? (
               <p className="rounded-2xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">Nenhuma regra ativa para este pagador.</p>
-            ) : requirements.filter((rule) => rule.isActive !== false).map((rule) => (
+            ) : requirements.map((rule) => (
               <div key={rule.id} className="rounded-2xl border border-slate-100 px-3 py-3">
                 <div className="flex items-start justify-between gap-3">
                   <div>
@@ -1647,13 +1946,14 @@ export function PayerRequirementsPanel({
                       ].filter(Boolean).join(" · ") || "Sem exigências adicionais"}
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => void disableRequirement(rule.id)}
-                    className="rounded-xl border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-500 hover:bg-slate-50"
-                  >
-                    Desativar
-                  </button>
+                  <div className="flex flex-wrap gap-1.5">
+                    {rule.isActive !== false ? (
+                      <button type="button" onClick={() => void setRequirementActive(rule.id, false)} className="rounded-xl border border-slate-200 px-3 py-1.5 text-xs font-normal text-slate-500 hover:bg-slate-50">Inativar</button>
+                    ) : (
+                      <button type="button" onClick={() => void setRequirementActive(rule.id, true)} className="rounded-xl border border-emerald-200 px-3 py-1.5 text-xs font-normal text-emerald-700 hover:bg-emerald-50">Reativar</button>
+                    )}
+                    <button type="button" onClick={() => void openDeleteImpactModal("requirement", rule.id, rule.serviceType || "Todos os serviços")} className="rounded-xl border border-rose-100 px-3 py-1.5 text-xs font-normal text-rose-700 hover:bg-rose-50">Excluir</button>
+                  </div>
                 </div>
               </div>
             ))}
@@ -1697,41 +1997,61 @@ export function PayerRequirementsPanel({
             {editingTussServiceId && (
               <p className="mt-1 text-xs text-slate-500">Atualize somente os dados do procedimento interno selecionado.</p>
             )}
+            <SectionFeedbackMessage feedback={sectionFeedback.service} />
+            <label htmlFor="support-service-name" className="mt-3 block text-xs font-normal text-slate-700">Nome do procedimento interno</label>
             <input
+              id="support-service-name"
               ref={tussServiceNameInputRef}
               value={tussServiceForm.name}
               onChange={(event) => setTussServiceForm((current) => ({ ...current, name: event.target.value }))}
               placeholder="Sessão ABA individual"
               className="mt-3 w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
             />
+            <label htmlFor="support-service-description" className="mt-2 block text-xs font-normal text-slate-700">Descrição</label>
             <textarea
+              id="support-service-description"
               value={tussServiceForm.description}
               onChange={(event) => setTussServiceForm((current) => ({ ...current, description: event.target.value }))}
               placeholder="Descrição do procedimento interno"
               className="mt-2 min-h-[72px] w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
             />
             <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              <label htmlFor="support-service-internal-code" className="block text-xs font-normal text-slate-700">
+              Código interno
               <input
+                id="support-service-internal-code"
                 value={tussServiceForm.internalCode}
                 onChange={(event) => setTussServiceForm((current) => ({ ...current, internalCode: event.target.value }))}
                 placeholder="Código interno"
                 className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
               />
+              </label>
+              <label htmlFor="support-service-specialty" className="block text-xs font-normal text-slate-700">
+              Especialidade
               <input
+                id="support-service-specialty"
                 value={tussServiceForm.specialty}
                 onChange={(event) => setTussServiceForm((current) => ({ ...current, specialty: event.target.value }))}
                 placeholder="Especialidade"
                 className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
               />
+              </label>
             </div>
             <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              <label htmlFor="support-service-type" className="block text-xs font-normal text-slate-700">
+              Tipo de sessão
               <input
+                id="support-service-type"
                 value={tussServiceForm.serviceType}
                 onChange={(event) => setTussServiceForm((current) => ({ ...current, serviceType: event.target.value }))}
                 placeholder="Tipo de sessão"
                 className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
               />
+              </label>
+              <label htmlFor="support-service-duration" className="block text-xs font-normal text-slate-700">
+              Duração padrão (min)
               <input
+                id="support-service-duration"
                 type="number"
                 min="1"
                 value={tussServiceForm.defaultDurationMinutes}
@@ -1739,9 +2059,13 @@ export function PayerRequirementsPanel({
                 placeholder="Duração padrão (min)"
                 className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
               />
+              </label>
             </div>
             <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              <label htmlFor="support-service-billing-unit" className="block text-xs font-normal text-slate-700">
+              Unidade
               <select
+                id="support-service-billing-unit"
                 value={tussServiceForm.billingUnit}
                 onChange={(event) => setTussServiceForm((current) => ({ ...current, billingUnit: event.target.value }))}
                 className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
@@ -1752,7 +2076,11 @@ export function PayerRequirementsPanel({
                 <option value="unit">Unidade</option>
                 <option value="package">Pacote</option>
               </select>
+              </label>
+              <label htmlFor="support-service-default-quantity" className="block text-xs font-normal text-slate-700">
+              Quantidade padrão
               <input
+                id="support-service-default-quantity"
                 type="number"
                 min="0.01"
                 step="0.01"
@@ -1761,15 +2089,20 @@ export function PayerRequirementsPanel({
                 placeholder="Quantidade padrão"
                 className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
               />
+              </label>
             </div>
             <div className="mt-2">
+              <label htmlFor="support-service-default-amount" className="block text-xs font-normal text-slate-700">
+              Valor padrão interno — não utilizado como preço do convênio
               <input
+                id="support-service-default-amount"
                 inputMode="decimal"
                 value={tussServiceForm.defaultAmountCents}
                 onChange={(event) => setTussServiceForm((current) => ({ ...current, defaultAmountCents: event.target.value }))}
                 placeholder="Valor padrão. Ex.: 120,00"
                 className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
               />
+              </label>
             </div>
             {editingTussServiceId && (
               <button
@@ -1796,46 +2129,67 @@ export function PayerRequirementsPanel({
             {editingTussCodeId && (
               <p className="mt-1 text-xs text-slate-500">Atualize somente os dados do código TUSS selecionado.</p>
             )}
+            <SectionFeedbackMessage feedback={sectionFeedback.code} />
+            <label htmlFor="support-tuss-code" className="mt-3 block text-xs font-normal text-slate-700">Código TUSS</label>
             <input
+              id="support-tuss-code"
               ref={tussCodeInputRef}
               value={tussCodeForm.code}
               onChange={(event) => setTussCodeForm((current) => ({ ...current, code: event.target.value }))}
               placeholder="Código"
               className="mt-3 w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
             />
+            <label htmlFor="support-tuss-description" className="mt-2 block text-xs font-normal text-slate-700">Descrição TUSS</label>
             <input
+              id="support-tuss-description"
               value={tussCodeForm.description}
               onChange={(event) => setTussCodeForm((current) => ({ ...current, description: event.target.value }))}
               placeholder="Descrição controlada"
               className="mt-2 w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
             />
             <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              <label htmlFor="support-tuss-term-type" className="block text-xs font-normal text-slate-700">
+              Tipo de termo
               <input
+                id="support-tuss-term-type"
                 value={tussCodeForm.termType}
                 onChange={(event) => setTussCodeForm((current) => ({ ...current, termType: event.target.value }))}
                 placeholder="Tipo de termo"
                 className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
               />
+              </label>
+              <label htmlFor="support-tuss-version" className="block text-xs font-normal text-slate-700">
+              Versão/tabela
               <input
+                id="support-tuss-version"
                 value={tussCodeForm.version}
                 onChange={(event) => setTussCodeForm((current) => ({ ...current, version: event.target.value }))}
                 placeholder="Versão/tabela"
                 className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
               />
+              </label>
             </div>
             <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              <label htmlFor="support-tuss-valid-from" className="block text-xs font-normal text-slate-700">
+              Início da vigência
               <input
+                id="support-tuss-valid-from"
                 type="date"
                 value={tussCodeForm.validFrom}
                 onChange={(event) => setTussCodeForm((current) => ({ ...current, validFrom: event.target.value }))}
                 className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
               />
+              </label>
+              <label htmlFor="support-tuss-valid-to" className="block text-xs font-normal text-slate-700">
+              Fim da vigência
               <input
+                id="support-tuss-valid-to"
                 type="date"
                 value={tussCodeForm.validTo}
                 onChange={(event) => setTussCodeForm((current) => ({ ...current, validTo: event.target.value }))}
                 className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none"
               />
+              </label>
             </div>
             {editingTussCodeId && (
               <button
@@ -1865,6 +2219,7 @@ export function PayerRequirementsPanel({
             <p className="mt-1 text-xs text-slate-500">
               O De/Para define o vínculo contratual entre o procedimento interno e o código TUSS. O preço operacional fica apenas em Tabela de procedimentos e valores.
             </p>
+            <SectionFeedbackMessage feedback={sectionFeedback.mapping} />
             <div className="mt-3 grid gap-3 md:grid-cols-2">
               <label htmlFor="payer-mapping-service" className="text-xs font-normal text-slate-700">
                 <span className="mb-1 block">Procedimento interno</span>
@@ -2104,6 +2459,7 @@ export function PayerRequirementsPanel({
           </div>
 
           {editingProcedurePriceId && <p className="mt-3 text-xs text-emerald-800">Editando uma configuração existente. Salvar atualizará somente este valor negociado.</p>}
+          <SectionFeedbackMessage feedback={sectionFeedback.price} />
           <div className="mt-3 grid gap-3 lg:grid-cols-2">
             <label htmlFor="payer-price-service" className="text-xs font-normal text-slate-700">
               <span className="mb-1 block">Procedimento interno</span>
@@ -2213,11 +2569,16 @@ export function PayerRequirementsPanel({
                       </div>
                     </div>
                     <div className="flex shrink-0 flex-wrap gap-1.5">
-                      <button type="button" onClick={() => { if (mapping) editTussMapping(mapping); if (price) editProcedurePrice(price); }} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-normal text-slate-600 hover:bg-slate-50">Editar configuração</button>
+                      {mapping && <button type="button" onClick={() => editTussMapping(mapping)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-normal text-slate-600 hover:bg-slate-50">Editar De/Para</button>}
+                      {price && <button type="button" onClick={() => editProcedurePrice(price)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-normal text-slate-600 hover:bg-slate-50">Editar valor</button>}
                       {mapping && <button type="button" onClick={() => void revalidateAffectedTussMapping(mapping.id)} className="rounded-lg border border-indigo-200 px-3 py-1.5 text-xs font-normal text-indigo-700 hover:bg-indigo-50">Revalidar atendimentos afetados</button>}
                       {mapping && <button type="button" onClick={() => void openAuthorizationSyncModal(mapping)} className="rounded-lg border border-emerald-200 px-3 py-1.5 text-xs font-normal text-emerald-700 hover:bg-emerald-50">Sincronizar autorizações e Pré-guias afetadas</button>}
+                      {mapping?.active !== false && <button type="button" onClick={() => void disableTussMapping(mapping.id)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-normal text-slate-600 hover:bg-slate-50">Desativar De/Para</button>}
+                      {mapping?.active === false && <button type="button" onClick={() => void setTussMappingActive(mapping.id, true)} className="rounded-lg border border-emerald-200 px-3 py-1.5 text-xs font-normal text-emerald-700 hover:bg-emerald-50">Reativar De/Para</button>}
+                      {mapping && <button type="button" onClick={() => void openDeleteImpactModal("mapping", mapping.id, mapping.contractCode || mapping.serviceName || "Mapeamento De/Para")} className="rounded-lg border border-rose-100 px-3 py-1.5 text-xs font-normal text-rose-700 hover:bg-rose-50">Excluir De/Para</button>}
                       {price?.active !== false && <button type="button" onClick={() => void disableProcedurePrice(price.id)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-normal text-slate-600 hover:bg-slate-50">Desativar preço</button>}
-                      {!price && mapping?.active !== false && <button type="button" onClick={() => void disableTussMapping(mapping.id)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-normal text-slate-600 hover:bg-slate-50">Desativar De/Para</button>}
+                      {price?.active === false && <button type="button" onClick={() => void setProcedurePriceActive(price.id, true)} className="rounded-lg border border-emerald-200 px-3 py-1.5 text-xs font-normal text-emerald-700 hover:bg-emerald-50">Reativar preço</button>}
+                      {price && <button type="button" onClick={() => void openDeleteImpactModal("price", price.id, price.serviceName || "Valor negociado")} className="rounded-lg border border-rose-100 px-3 py-1.5 text-xs font-normal text-rose-700 hover:bg-rose-50">Excluir preço</button>}
                     </div>
                   </div>
                 </div>
@@ -2251,6 +2612,7 @@ export function PayerRequirementsPanel({
                         ) : (
                           <button type="button" aria-label={`Reativar procedimento ${service.name || ""}`} disabled={serviceActionLoading} onClick={() => void reactivateTussService(service.id)} className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 px-2 py-1 text-xs font-normal text-emerald-700 disabled:opacity-50">{serviceActionLoading ? <Loader2 size={12} className="animate-spin" /> : null}Reativar</button>
                         )}
+                        <button type="button" aria-label={`Excluir procedimento ${service.name || ""}`} onClick={() => void openDeleteImpactModal("service", service.id, service.name || "Procedimento")} className="inline-flex items-center gap-1 rounded-lg border border-rose-100 px-2 py-1 text-xs font-normal text-rose-700"><Trash2 size={12} />Excluir</button>
                       </div>
                     </div>
                   );
@@ -2274,6 +2636,7 @@ export function PayerRequirementsPanel({
                         ) : (
                           <button type="button" aria-label={`Reativar código TUSS ${code.code || ""}`} disabled={codeActionLoading} onClick={() => void reactivateTussCode(code.id)} className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 px-2 py-1 text-xs font-normal text-emerald-700 disabled:opacity-50">{codeActionLoading ? <Loader2 size={12} className="animate-spin" /> : null}Reativar</button>
                         )}
+                        <button type="button" aria-label={`Excluir código TUSS ${code.code || ""}`} onClick={() => void openDeleteImpactModal("code", code.id, `TUSS ${code.code}`)} className="inline-flex items-center gap-1 rounded-lg border border-rose-100 px-2 py-1 text-xs font-normal text-rose-700"><Trash2 size={12} />Excluir</button>
                       </div>
                     </div>
                   );
@@ -2282,6 +2645,57 @@ export function PayerRequirementsPanel({
             </div>
           </div>
         </details>
+        {deleteModal && (
+          <div className="fixed inset-0 z-[170] flex items-end justify-center bg-slate-950/50 p-4 sm:items-center" role="dialog" aria-modal="true" aria-label="Excluir cadastro">
+            <div className="w-full max-w-lg rounded-2xl bg-white shadow-xl">
+              <div className="border-b border-slate-100 px-5 py-4">
+                <h3 className="text-base font-semibold text-slate-900">Excluir cadastro?</h3>
+                <p className="mt-1 text-sm text-slate-500">
+                  {deleteModal.name}
+                </p>
+              </div>
+              <div className="space-y-3 px-5 py-4 text-sm text-slate-700">
+                {deleteLoading && !deleteModal.impact ? (
+                  <div className="flex items-center gap-2 text-slate-500"><Loader2 size={16} className="animate-spin" />Conferindo dependências...</div>
+                ) : deleteModal.impact?.canDelete ? (
+                  <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-3 text-emerald-800">
+                    Este cadastro nunca foi utilizado e pode ser excluído definitivamente.
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-amber-900">
+                    <p>Este registro já foi utilizado e não pode ser excluído. Você pode inativá-lo para impedir novos usos.</p>
+                  </div>
+                )}
+                {deleteModal.impact?.dependencies ? (
+                  <div className="rounded-xl bg-slate-50 p-3">
+                    <p className="text-xs uppercase tracking-wide text-slate-400">Dependências encontradas</p>
+                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                      {Object.entries(deleteModal.impact.dependencies).map(([key, value]) => (
+                        <div key={key} className="rounded-lg bg-white px-3 py-2">
+                          <p className="text-xs text-slate-500">{key}</p>
+                          <p className="text-sm text-slate-900">{Number(value || 0)}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+              <div className="flex flex-wrap justify-end gap-2 border-t border-slate-100 px-5 py-4">
+                <button type="button" onClick={() => setDeleteModal(null)} disabled={deleteLoading} className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-normal text-slate-600 disabled:opacity-50">Cancelar</button>
+                {deleteModal.impact?.canDelete ? (
+                  <button type="button" onClick={() => void confirmDeleteEntity()} disabled={deleteLoading} className="inline-flex items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-normal text-rose-700 disabled:opacity-50">
+                    {deleteLoading ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
+                    Excluir definitivamente
+                  </button>
+                ) : (
+                  <button type="button" onClick={() => void deactivateFromDeleteModal()} disabled={deleteLoading} className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-normal text-slate-700 disabled:opacity-50">
+                    Inativar cadastro
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
         {authorizationSyncModal && (
           <div className="fixed inset-0 z-[170] flex items-end justify-center bg-slate-950/50 p-4 sm:items-center" role="dialog" aria-modal="true" aria-label="Sincronizar autorizações e Pré-guias">
             <div className="w-full max-w-xl rounded-2xl bg-white shadow-xl">

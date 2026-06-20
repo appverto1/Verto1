@@ -364,6 +364,53 @@ test('Dados TISS da operadora tem rotulos permanentes e versao oficial automatic
   assert.doesNotMatch(payerPanelCode, /Versão TISS não configurada/);
 });
 
+test('CRUD seguro de cadastros de apoio, De/Para e valores tem impacto de exclusao e acoes isoladas', () => {
+  for (const marker of [
+    'type PayerCrudEntityType = "requirement" | "service" | "code" | "mapping" | "price"',
+    'SectionFeedbackMessage',
+    'activeEditingSection',
+    'beginEditingSection("service")',
+    'beginEditingSection("code")',
+    'beginEditingSection("mapping")',
+    'beginEditingSection("price")',
+    'Editar De/Para',
+    'Editar valor',
+    'Excluir De/Para',
+    'Excluir preço',
+    'Reativar De/Para',
+    'Reativar preço',
+    'Excluir definitivamente',
+    'Inativar cadastro',
+    'getPayerRequirementDeleteImpact',
+    'deletePayerRequirement',
+    'getTussDeleteImpact',
+    'deleteTussEntity',
+  ]) {
+    assert.ok(payerPanelCode.includes(marker) || dataServiceCode.includes(marker), marker);
+  }
+
+  assert.match(payerPanelCode, /Este registro j(?:Ã¡|á) foi utilizado e n(?:Ã£|ã)o pode ser exclu(?:Ã­|í)do/);
+  assert.doesNotMatch(payerPanelCode, /Editar configura(?:Ã§Ã£o|ção)/);
+  assert.match(payerPanelCode, /openDeleteImpactModal\("requirement"/);
+  assert.match(payerPanelCode, /openDeleteImpactModal\("service"/);
+  assert.match(payerPanelCode, /openDeleteImpactModal\("code"/);
+  assert.match(payerPanelCode, /openDeleteImpactModal\("mapping"/);
+  assert.match(payerPanelCode, /openDeleteImpactModal\("price"/);
+  assert.match(serverCode, /buildRequirementDeleteImpact/);
+  assert.match(serverCode, /buildTussDeleteImpact/);
+  assert.match(serverCode, /app\.get\('\/api\/admin\/payer-requirements\/:requirementId\/delete-impact'/);
+  assert.match(serverCode, /app\.delete\('\/api\/admin\/payer-requirements\/:requirementId'/);
+  assert.match(serverCode, /app\.get\('\/api\/admin\/tuss\/:entityType\/:entityId\/delete-impact'/);
+  assert.match(serverCode, /app\.delete\('\/api\/admin\/tuss\/:entityType\/:entityId'/);
+  assert.match(serverCode, /PAYER_REQUIREMENT_DELETE_BLOCKED/);
+  assert.match(serverCode, /TUSS_DELETE_BLOCKED_BY_DEPENDENCIES/);
+  assert.match(serverCode, /appointment_tiss_pre_guides/);
+  assert.match(serverCode, /appointment_billing_items/);
+  assert.match(serverCode, /patient_payer_authorizations/);
+  assert.match(serverCode, /official_document_id/);
+  assert.match(serverCode, /requireRoles\('coordinator', 'admin', 'owner'\)/);
+});
+
 let passed = 0;
 for (const entry of tests) {
   try {

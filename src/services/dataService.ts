@@ -2338,6 +2338,45 @@ export const dataService = {
     }
   },
 
+  async getPayerRequirementDeleteImpact(requirementId: string) {
+    const endpoint = `/api/admin/payer-requirements/${encodeURIComponent(String(requirementId))}/delete-impact`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getPayerRequirementDeleteImpact',
+        operation: 'detail',
+        table: 'clinic_payer_requirements,appointment_closure_checks',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, error: 'Não foi possível conferir dependências da exceção agora.' };
+    }
+  },
+
+  async deletePayerRequirement(requirementId: string) {
+    const endpoint = `/api/admin/payer-requirements/${encodeURIComponent(String(requirementId))}`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'DELETE',
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'deletePayerRequirement',
+        operation: 'write',
+        table: 'clinic_payer_requirements,payer_requirement_audit_logs',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, error: 'Não foi possível excluir a exceção agora.' };
+    }
+  },
+
   async getTussServices(options: any = {}) {
     const endpoint = endpointWithQuery('/api/admin/tuss/services', {
       active: options.active ? 'true' : undefined,
@@ -2398,6 +2437,45 @@ export const dataService = {
       return await safeJson(response);
     } catch {
       return { success: false, error: 'Não foi possível atualizar o procedimento agora.' };
+    }
+  },
+
+  async getTussDeleteImpact(entityType: string, entityId: string) {
+    const endpoint = `/api/admin/tuss/${encodeURIComponent(String(entityType))}/${encodeURIComponent(String(entityId))}/delete-impact`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getTussDeleteImpact',
+        operation: 'detail',
+        table: 'tuss_service_catalog,tuss_codes,payer_tuss_mappings,payer_procedure_prices,appointment_billing_items,appointment_tiss_pre_guides,patient_payer_authorizations',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, error: 'Não foi possível conferir dependências agora.' };
+    }
+  },
+
+  async deleteTussEntity(entityType: string, entityId: string) {
+    const endpoint = `/api/admin/tuss/${encodeURIComponent(String(entityType))}/${encodeURIComponent(String(entityId))}`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'DELETE',
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'deleteTussEntity',
+        operation: 'write',
+        table: 'tuss_service_catalog,tuss_codes,payer_tuss_mappings,payer_procedure_prices,payer_requirement_audit_logs',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, error: 'Não foi possível excluir o cadastro agora.' };
     }
   },
 
