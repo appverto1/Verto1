@@ -124,9 +124,14 @@ type SectionFeedback = {
 type DeleteImpact = {
   canDelete: boolean;
   dependencies: Record<string, number>;
-  recommendedAction?: "delete" | "deactivate";
+  isActive?: boolean;
+  recommendedAction?: "delete" | "deactivate" | "keep_inactive";
   entityLabel?: string;
   entityName?: string;
+  table?: string;
+  activeColumn?: string;
+  validFromColumn?: string | null;
+  validToColumn?: string | null;
 };
 
 type PayerTissForm = {
@@ -515,8 +520,10 @@ export function PayerRequirementsPanel({
     id: string;
     name: string;
     impact?: DeleteImpact | null;
+    error?: string;
   } | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const [openBillingActionMenuKey, setOpenBillingActionMenuKey] = useState("");
   const [authorizationSyncModal, setAuthorizationSyncModal] = useState<{
     mapping: PayerTussMapping;
     summary?: Record<string, any> | null;
@@ -1380,7 +1387,7 @@ export function PayerRequirementsPanel({
   };
 
   const openDeleteImpactModal = async (entityType: PayerCrudEntityType, id: string, name: string) => {
-    setDeleteModal({ entityType, id, name, impact: null });
+    setDeleteModal({ entityType, id, name, impact: null, error: "" });
     setDeleteLoading(true);
     setError("");
     try {
@@ -1391,11 +1398,11 @@ export function PayerRequirementsPanel({
             id
           );
       if (!result?.success) {
-        setError(result?.error || "Não foi possível conferir dependências agora.");
-        setDeleteModal(null);
+        const modalError = result?.error || "Não foi possível verificar os vínculos deste cadastro.";
+        setDeleteModal({ entityType, id, name, impact: null, error: modalError });
         return;
       }
-      setDeleteModal({ entityType, id, name, impact: result.data || null });
+      setDeleteModal({ entityType, id, name, impact: result.data || null, error: "" });
     } finally {
       setDeleteLoading(false);
     }
@@ -1411,6 +1418,10 @@ export function PayerRequirementsPanel({
 
   const deactivateFromDeleteModal = async () => {
     if (!deleteModal) return;
+    if (deleteModal.impact?.isActive === false || deleteModal.impact?.recommendedAction === "keep_inactive") {
+      setDeleteModal(null);
+      return;
+    }
     const { entityType, id } = deleteModal;
     let ok = false;
     if (entityType === "requirement") ok = await setRequirementActive(id, false);
@@ -2396,7 +2407,7 @@ export function PayerRequirementsPanel({
                   Valor legado: {tussMappingForm.amountCents || "Não informado"} · Valor negociado legado: {tussMappingForm.negotiatedAmountCents || "Não informado"}
                 </p>
                 <p className="mt-1 text-amber-800">
-                  Estes campos ficam somente para auditoria. O preço operacional é editado em Tabela de procedimentos e valores.
+                  Mantidos apenas para compatibilidade histórica. O preço utilizado atualmente vem de Valores negociados.
                 </p>
               </div>
             )}
@@ -2539,22 +2550,36 @@ export function PayerRequirementsPanel({
               const today = new Date().toISOString().slice(0, 10);
               const validFrom = price?.validFrom || mapping?.validFrom || "";
               const validUntil = price?.validUntil || mapping?.validTo || "";
+              const mappingStatus = mapping
+                ? mapping.active === false ? "De/Para inativo" : "De/Para ativo"
+                : "De/Para ausente";
+              const priceStatus = price
+                ? price.active === false ? "Preço inativo" : "Preço ativo"
+                : "Valor ausente";
+              const tussLabel = code?.code || price?.tussCode || mapping?.tussCode
+                ? `TUSS ${code?.code || price?.tussCode || mapping?.tussCode}`
+                : "Sem TUSS";
+              const validityLabel = validFrom || validUntil
+                ? `${validFrom || "Sem início"} a ${validUntil || "sem fim"}`
+                : "Sem vigência informada";
               const statusBadges = [
-                { key: "mapping", label: mapping ? "De/Para configurado" : "De/Para ausente", tone: mapping ? "neutral" : "warning" },
-                { key: "procedure_active", label: service?.active === false ? "Procedimento inativo" : "Procedimento ativo", tone: service?.active === false ? "warning" : "neutral" },
-                !price ? { key: "value_missing", label: "Valor ausente", tone: "warning" } : null,
+                { key: "mapping_status", label: mappingStatus, tone: mapping?.active === false || !mapping ? "warning" : "neutral" },
+                { key: "price_status", label: priceStatus, tone: price?.active === false || !price ? "warning" : "neutral" },
+                service?.active === false ? { key: "procedure_inactive", label: "Procedimento inativo", tone: "warning" } : null,
                 !code?.id && !price?.tussCode && !mapping?.tussCode ? { key: "tuss_missing", label: "Código TUSS ausente", tone: "warning" } : null,
                 validUntil && validUntil < today ? { key: "validity_expired", label: "Vigência expirada", tone: "warning" } : null,
                 validFrom && validFrom > today ? { key: "validity_future", label: "Vigência futura", tone: "warning" } : null,
                 price && mapping && price.serviceCatalogId !== mapping.serviceCatalogId ? { key: "inconsistent_configuration", label: "Configuração inconsistente", tone: "warning" } : null,
               ].filter(Boolean) as Array<{ key: string; label: string; tone: "neutral" | "warning" }>;
               const uniqueStatusBadges = Array.from(new Map(statusBadges.map((badge) => [badge.key, badge])).values());
+              const actionMenuOpen = openBillingActionMenuKey === key;
               return (
                 <div key={key} className="rounded-lg border border-slate-200 bg-white p-3">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div className="min-w-0">
                       <p className="text-sm font-medium text-slate-900">{service?.name || price?.serviceName || mapping?.serviceName || mapping?.internalCode || "Procedimento não identificado"}</p>
-                      <p className="mt-1 text-xs text-slate-500">{[code?.code || price?.tussCode || mapping?.tussCode ? `TUSS ${code?.code || price?.tussCode || mapping?.tussCode}` : "Sem TUSS", code?.description || mapping?.tussDescription, price ? formatCurrency(price.amountCents) : "Sem valor negociado", validFrom && `Vigência: ${validFrom}`, validUntil && `até ${validUntil}`, price?.source || mapping?.source].filter(Boolean).join(" · ")}</p>
+                      <p className="mt-1 text-xs text-slate-500">{[tussLabel, price ? formatCurrency(price.amountCents) : "Sem valor negociado"].filter(Boolean).join(" · ")}</p>
+                      <p className="mt-0.5 text-xs text-slate-400">{[validityLabel, price?.source || mapping?.source].filter(Boolean).join(" · ")}</p>
                       <div className="mt-2 flex flex-wrap gap-1.5">
                         {uniqueStatusBadges.map((badge) => (
                           <span
@@ -2568,17 +2593,31 @@ export function PayerRequirementsPanel({
                         ))}
                       </div>
                     </div>
-                    <div className="flex shrink-0 flex-wrap gap-1.5">
+                    <div className="relative flex shrink-0 flex-wrap gap-1.5">
                       {mapping && <button type="button" onClick={() => editTussMapping(mapping)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-normal text-slate-600 hover:bg-slate-50">Editar De/Para</button>}
                       {price && <button type="button" onClick={() => editProcedurePrice(price)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-normal text-slate-600 hover:bg-slate-50">Editar valor</button>}
-                      {mapping && <button type="button" onClick={() => void revalidateAffectedTussMapping(mapping.id)} className="rounded-lg border border-indigo-200 px-3 py-1.5 text-xs font-normal text-indigo-700 hover:bg-indigo-50">Revalidar atendimentos afetados</button>}
-                      {mapping && <button type="button" onClick={() => void openAuthorizationSyncModal(mapping)} className="rounded-lg border border-emerald-200 px-3 py-1.5 text-xs font-normal text-emerald-700 hover:bg-emerald-50">Sincronizar autorizações e Pré-guias afetadas</button>}
-                      {mapping?.active !== false && <button type="button" onClick={() => void disableTussMapping(mapping.id)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-normal text-slate-600 hover:bg-slate-50">Desativar De/Para</button>}
-                      {mapping?.active === false && <button type="button" onClick={() => void setTussMappingActive(mapping.id, true)} className="rounded-lg border border-emerald-200 px-3 py-1.5 text-xs font-normal text-emerald-700 hover:bg-emerald-50">Reativar De/Para</button>}
-                      {mapping && <button type="button" onClick={() => void openDeleteImpactModal("mapping", mapping.id, mapping.contractCode || mapping.serviceName || "Mapeamento De/Para")} className="rounded-lg border border-rose-100 px-3 py-1.5 text-xs font-normal text-rose-700 hover:bg-rose-50">Excluir De/Para</button>}
-                      {price?.active !== false && <button type="button" onClick={() => void disableProcedurePrice(price.id)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-normal text-slate-600 hover:bg-slate-50">Desativar preço</button>}
-                      {price?.active === false && <button type="button" onClick={() => void setProcedurePriceActive(price.id, true)} className="rounded-lg border border-emerald-200 px-3 py-1.5 text-xs font-normal text-emerald-700 hover:bg-emerald-50">Reativar preço</button>}
-                      {price && <button type="button" onClick={() => void openDeleteImpactModal("price", price.id, price.serviceName || "Valor negociado")} className="rounded-lg border border-rose-100 px-3 py-1.5 text-xs font-normal text-rose-700 hover:bg-rose-50">Excluir preço</button>}
+                      {(mapping || price) && (
+                        <button
+                          type="button"
+                          aria-expanded={actionMenuOpen}
+                          onClick={() => setOpenBillingActionMenuKey(actionMenuOpen ? "" : key)}
+                          className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-normal text-slate-600 hover:bg-slate-50"
+                        >
+                          Mais ações
+                        </button>
+                      )}
+                      {actionMenuOpen && (
+                        <div className="absolute right-0 top-9 z-20 w-64 rounded-xl border border-slate-200 bg-white p-2 text-xs shadow-lg">
+                          {mapping && <button type="button" onClick={() => { setOpenBillingActionMenuKey(""); void revalidateAffectedTussMapping(mapping.id); }} className="block w-full rounded-lg px-3 py-2 text-left text-slate-700 hover:bg-slate-50">Revalidar atendimentos afetados</button>}
+                          {mapping && <button type="button" onClick={() => { setOpenBillingActionMenuKey(""); void openAuthorizationSyncModal(mapping); }} className="block w-full rounded-lg px-3 py-2 text-left text-slate-700 hover:bg-slate-50">Sincronizar autorizações e Pré-guias</button>}
+                          {mapping?.active !== false && <button type="button" onClick={() => { setOpenBillingActionMenuKey(""); void disableTussMapping(mapping.id); }} className="block w-full rounded-lg px-3 py-2 text-left text-slate-700 hover:bg-slate-50">Inativar De/Para</button>}
+                          {mapping?.active === false && <button type="button" onClick={() => { setOpenBillingActionMenuKey(""); void setTussMappingActive(mapping.id, true); }} className="block w-full rounded-lg px-3 py-2 text-left text-emerald-700 hover:bg-emerald-50">Reativar De/Para</button>}
+                          {price?.active !== false && <button type="button" onClick={() => { setOpenBillingActionMenuKey(""); void disableProcedurePrice(price.id); }} className="block w-full rounded-lg px-3 py-2 text-left text-slate-700 hover:bg-slate-50">Inativar preço</button>}
+                          {price?.active === false && <button type="button" onClick={() => { setOpenBillingActionMenuKey(""); void setProcedurePriceActive(price.id, true); }} className="block w-full rounded-lg px-3 py-2 text-left text-emerald-700 hover:bg-emerald-50">Reativar preço</button>}
+                          {mapping && <button type="button" onClick={() => { setOpenBillingActionMenuKey(""); void openDeleteImpactModal("mapping", mapping.id, mapping.contractCode || mapping.serviceName || "Mapeamento De/Para"); }} className="block w-full rounded-lg px-3 py-2 text-left text-rose-700 hover:bg-rose-50">Excluir De/Para</button>}
+                          {price && <button type="button" onClick={() => { setOpenBillingActionMenuKey(""); void openDeleteImpactModal("price", price.id, price.serviceName || "Valor negociado"); }} className="block w-full rounded-lg px-3 py-2 text-left text-rose-700 hover:bg-rose-50">Excluir preço</button>}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -2649,49 +2688,64 @@ export function PayerRequirementsPanel({
           <div className="fixed inset-0 z-[170] flex items-end justify-center bg-slate-950/50 p-4 sm:items-center" role="dialog" aria-modal="true" aria-label="Excluir cadastro">
             <div className="w-full max-w-lg rounded-2xl bg-white shadow-xl">
               <div className="border-b border-slate-100 px-5 py-4">
-                <h3 className="text-base font-semibold text-slate-900">Excluir cadastro?</h3>
+                <h3 className="text-base font-semibold text-slate-900">
+                  {deleteModal.entityType === "price" ? "Excluir preço negociado?" : deleteModal.entityType === "mapping" ? "Excluir mapeamento De/Para?" : "Excluir cadastro?"}
+                </h3>
                 <p className="mt-1 text-sm text-slate-500">
                   {deleteModal.name}
                 </p>
               </div>
               <div className="space-y-3 px-5 py-4 text-sm text-slate-700">
                 {deleteLoading && !deleteModal.impact ? (
-                  <div className="flex items-center gap-2 text-slate-500"><Loader2 size={16} className="animate-spin" />Conferindo dependências...</div>
+                  <div className="flex items-center gap-2 text-slate-500"><Loader2 size={16} className="animate-spin" />Verificando vínculos...</div>
+                ) : deleteModal.error ? (
+                  <div className="rounded-xl border border-rose-100 bg-rose-50 p-3 text-rose-800">
+                    {deleteModal.error}
+                  </div>
                 ) : deleteModal.impact?.canDelete ? (
                   <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-3 text-emerald-800">
                     Este cadastro nunca foi utilizado e pode ser excluído definitivamente.
                   </div>
                 ) : (
                   <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-amber-900">
-                    <p>Este registro já foi utilizado e não pode ser excluído. Você pode inativá-lo para impedir novos usos.</p>
+                    <p>
+                      {deleteModal.impact?.recommendedAction === "keep_inactive"
+                        ? "Este cadastro possui vínculos históricos e não pode ser excluído. Ele permanecerá inativo para preservar o histórico."
+                        : "Este cadastro possui vínculos históricos e não pode ser excluído. Você pode inativá-lo para impedir novos usos."}
+                    </p>
                   </div>
                 )}
                 {deleteModal.impact?.dependencies ? (
                   <div className="rounded-xl bg-slate-50 p-3">
-                    <p className="text-xs uppercase tracking-wide text-slate-400">Dependências encontradas</p>
+                    <p className="text-xs uppercase tracking-wide text-slate-400">Vínculos encontrados</p>
                     <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                      {Object.entries(deleteModal.impact.dependencies).map(([key, value]) => (
+                      {Object.entries(deleteModal.impact.dependencies).filter(([, value]) => Number(value || 0) > 0).map(([key, value]) => (
                         <div key={key} className="rounded-lg bg-white px-3 py-2">
                           <p className="text-xs text-slate-500">{key}</p>
                           <p className="text-sm text-slate-900">{Number(value || 0)}</p>
                         </div>
                       ))}
+                      {Object.values(deleteModal.impact.dependencies).every((value) => Number(value || 0) === 0) ? (
+                        <div className="rounded-lg bg-white px-3 py-2 text-xs text-slate-500">Nenhum vínculo histórico encontrado.</div>
+                      ) : null}
                     </div>
                   </div>
                 ) : null}
               </div>
               <div className="flex flex-wrap justify-end gap-2 border-t border-slate-100 px-5 py-4">
-                <button type="button" onClick={() => setDeleteModal(null)} disabled={deleteLoading} className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-normal text-slate-600 disabled:opacity-50">Cancelar</button>
+                <button type="button" onClick={() => setDeleteModal(null)} disabled={deleteLoading} className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-normal text-slate-600 disabled:opacity-50">
+                  {deleteModal.impact?.canDelete ? "Cancelar" : "Fechar"}
+                </button>
                 {deleteModal.impact?.canDelete ? (
                   <button type="button" onClick={() => void confirmDeleteEntity()} disabled={deleteLoading} className="inline-flex items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-normal text-rose-700 disabled:opacity-50">
                     {deleteLoading ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
-                    Excluir definitivamente
+                    {deleteLoading ? "Excluindo..." : "Excluir definitivamente"}
                   </button>
-                ) : (
+                ) : deleteModal.impact?.recommendedAction === "deactivate" ? (
                   <button type="button" onClick={() => void deactivateFromDeleteModal()} disabled={deleteLoading} className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-normal text-slate-700 disabled:opacity-50">
                     Inativar cadastro
                   </button>
-                )}
+                ) : null}
               </div>
             </div>
           </div>

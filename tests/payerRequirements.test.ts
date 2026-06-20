@@ -279,7 +279,7 @@ test('Tabela de Valores tem rotulos permanentes, reais no formulario e configura
     'htmlFor="payer-mapping-source"',
     'htmlFor="payer-mapping-notes"',
     'Dados financeiros legados do De/Para',
-    'O preço operacional é editado em Tabela de procedimentos e valores',
+    'O preço utilizado atualmente vem de Valores negociados',
   ]) {
     assert.ok(payerPanelCode.includes(marker), marker);
   }
@@ -375,12 +375,16 @@ test('CRUD seguro de cadastros de apoio, De/Para e valores tem impacto de exclus
     'beginEditingSection("price")',
     'Editar De/Para',
     'Editar valor',
+    'Mais ações',
+    'De/Para inativo',
+    'Preço inativo',
     'Excluir De/Para',
     'Excluir preço',
     'Reativar De/Para',
     'Reativar preço',
     'Excluir definitivamente',
     'Inativar cadastro',
+    'keep_inactive',
     'getPayerRequirementDeleteImpact',
     'deletePayerRequirement',
     'getTussDeleteImpact',
@@ -389,8 +393,9 @@ test('CRUD seguro de cadastros de apoio, De/Para e valores tem impacto de exclus
     assert.ok(payerPanelCode.includes(marker) || dataServiceCode.includes(marker), marker);
   }
 
-  assert.match(payerPanelCode, /Este registro j(?:Ã¡|á) foi utilizado e n(?:Ã£|ã)o pode ser exclu(?:Ã­|í)do/);
+  assert.match(payerPanelCode, /Este cadastro possui v(?:Ã­|í)nculos hist(?:Ã³|ó)ricos e n(?:Ã£|ã)o pode ser exclu(?:Ã­|í)do/);
   assert.doesNotMatch(payerPanelCode, /Editar configura(?:Ã§Ã£o|ção)/);
+  assert.doesNotMatch(payerPanelCode, /De\/Para configurado/);
   assert.match(payerPanelCode, /openDeleteImpactModal\("requirement"/);
   assert.match(payerPanelCode, /openDeleteImpactModal\("service"/);
   assert.match(payerPanelCode, /openDeleteImpactModal\("code"/);
@@ -404,6 +409,14 @@ test('CRUD seguro de cadastros de apoio, De/Para e valores tem impacto de exclus
   assert.match(serverCode, /app\.delete\('\/api\/admin\/tuss\/:entityType\/:entityId'/);
   assert.match(serverCode, /PAYER_REQUIREMENT_DELETE_BLOCKED/);
   assert.match(serverCode, /TUSS_DELETE_BLOCKED_BY_DEPENDENCIES/);
+  assert.match(serverCode, /const TUSS_ENTITY_CONFIG = \{/);
+  assert.match(serverCode, /prices:\s*\{[\s\S]*table:\s*'payer_procedure_prices'[\s\S]*validToColumn:\s*'valid_until'/);
+  assert.match(serverCode, /mappings:\s*\{[\s\S]*table:\s*'payer_tuss_mappings'[\s\S]*validToColumn:\s*'valid_to'/);
+  assert.match(serverCode, /activeColumn:\s*'active'/);
+  assert.match(serverCode, /INVALID_TUSS_DELETE_ENTITY_TYPE/);
+  assert.match(serverCode, /TUSS_DELETE_IMPACT_QUERY_FAILED/);
+  assert.match(serverCode, /logTussDeleteFailure\('\[TussReady\] delete impact failed'/);
+  assert.match(serverCode, /recommendedAction:\s*impact\.recommendedAction/);
   assert.match(serverCode, /appointment_tiss_pre_guides/);
   assert.match(serverCode, /appointment_billing_items/);
   assert.match(serverCode, /patient_payer_authorizations/);

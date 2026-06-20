@@ -33334,49 +33334,208 @@ async function startServer() {
     onlyOfficial ? (query) => query.not('official_document_id', 'is', null) : undefined
   );
 
+  const countTussDeleteDependency = async (params: {
+    table: string;
+    organizationId: string;
+    column: string;
+    value: string | null | undefined;
+    stage: string;
+    extra?: (query: any) => any;
+  }) => {
+    const safeValue = sanitizeString(params.value, 180);
+    if (!isUuid(params.organizationId) || !safeValue) return 0;
+    let query = supabase
+      .from(params.table)
+      .select('id', { count: 'exact', head: true })
+      .eq('organization_id', params.organizationId)
+      .eq(params.column, safeValue);
+    if (params.extra) query = params.extra(query);
+    const { count, error } = await query;
+    if (error) {
+      (error as any).tussDeleteContext = {
+        table: params.table,
+        stage: params.stage,
+        column: params.column
+      };
+      throw error;
+    }
+    return Number(count || 0);
+  };
+
+  const countTussDeletePreGuidesByText = async (
+    organizationId: string,
+    column: string,
+    value: string | null | undefined,
+    stage: string,
+    onlyOfficial = false
+  ) => countTussDeleteDependency({
+    table: 'appointment_tiss_pre_guides',
+    organizationId,
+    column,
+    value,
+    stage,
+    extra: onlyOfficial ? (query) => query.not('official_document_id', 'is', null) : undefined
+  });
+
+  const TUSS_ENTITY_CONFIG = {
+    services: {
+      table: 'tuss_service_catalog',
+      activeColumn: 'active',
+      validFromColumn: null,
+      validToColumn: null,
+      entityLabel: 'Procedimento interno'
+    },
+    codes: {
+      table: 'tuss_codes',
+      activeColumn: 'active',
+      validFromColumn: 'valid_from',
+      validToColumn: 'valid_to',
+      entityLabel: 'Código TUSS'
+    },
+    mappings: {
+      table: 'payer_tuss_mappings',
+      activeColumn: 'active',
+      validFromColumn: 'valid_from',
+      validToColumn: 'valid_to',
+      entityLabel: 'Mapeamento De/Para'
+    },
+    prices: {
+      table: 'payer_procedure_prices',
+      activeColumn: 'active',
+      validFromColumn: 'valid_from',
+      validToColumn: 'valid_until',
+      entityLabel: 'Preço negociado'
+    }
+  } as const;
+
+  type TussDeleteEntityType = keyof typeof TUSS_ENTITY_CONFIG;
+
+  const normalizeTussDeleteEntityType = (value: string): TussDeleteEntityType | null => {
+    const safeValue = sanitizeString(value, 40).toLowerCase();
+    if (safeValue === 'service' || safeValue === 'services') return 'services';
+    if (safeValue === 'code' || safeValue === 'codes') return 'codes';
+    if (safeValue === 'mapping' || safeValue === 'mappings') return 'mappings';
+    if (safeValue === 'price' || safeValue === 'prices') return 'prices';
+    return null;
+  };
+
+  const buildTussDeleteRecommendation = (canDelete: boolean, isActive: boolean) => (
+    canDelete ? 'delete' : isActive ? 'deactivate' : 'keep_inactive'
+  );
+
+  const logTussDeleteFailure = (
+    label: string,
+    req: any,
+    context: Record<string, any>,
+    error: any
+  ) => {
+    const requestHeader = req?.headers?.['x-request-id'] || req?.headers?.['x-correlation-id'];
+    const requestId = sanitizeString(Array.isArray(requestHeader) ? requestHeader[0] : requestHeader, 120) || null;
+    const errorContext = error?.tussDeleteContext && typeof error.tussDeleteContext === 'object'
+      ? error.tussDeleteContext
+      : {};
+    console.error(label, {
+      requestId,
+      entityType: sanitizeString(context.entityType || errorContext.entityType, 40) || null,
+      entityId: sanitizeString(context.entityId || errorContext.entityId, 120) || null,
+      table: sanitizeString(context.table || errorContext.table, 120) || null,
+      stage: sanitizeString(context.stage || errorContext.stage, 120) || null,
+      code: sanitizeString(error?.code, 40) || null,
+      message: sanitizeTextField(error?.message || String(error || ''), 500) || null,
+      details: sanitizeTextField(error?.details, 500) || null,
+      hint: sanitizeTextField(error?.hint, 500) || null
+    });
+  };
+
+  const buildTussDeleteImpactPayload = (params: {
+    entityType: TussDeleteEntityType;
+    record: any;
+    entityName: string;
+    dependencies: Record<string, number>;
+  }) => {
+    const config = TUSS_ENTITY_CONFIG[params.entityType];
+    const isActive = normalizeTussActiveFlag(params.record?.[config.activeColumn]);
+    const canDelete = Object.values(params.dependencies).every((value) => Number(value || 0) === 0);
+    return {
+      entityType: params.entityType,
+      table: config.table,
+      activeColumn: config.activeColumn,
+      validFromColumn: config.validFromColumn,
+      validToColumn: config.validToColumn,
+      record: params.record,
+      entityLabel: config.entityLabel,
+      entityName: params.entityName,
+      isActive,
+      dependencies: params.dependencies,
+      canDelete,
+      recommendedAction: buildTussDeleteRecommendation(canDelete, isActive)
+    };
+  };
+
   const buildTussDeleteImpact = async (organizationId: string, entityType: string, entityId: string) => {
-    if (!isUuid(organizationId) || !isUuid(entityId)) return null;
-    const safeEntityType = sanitizeString(entityType, 40);
-    if (safeEntityType === 'services' || safeEntityType === 'service') {
+    if (!isUuid(organizationId) || !isUuid(entityId)) return { errorStatus: 400 as const, code: 'INVALID_TUSS_DELETE_TARGET' };
+    const safeEntityType = normalizeTussDeleteEntityType(entityType);
+    if (!safeEntityType) return { errorStatus: 400 as const, code: 'INVALID_TUSS_DELETE_ENTITY_TYPE' };
+    if (safeEntityType === 'services') {
       const service = await fetchTussServiceCatalogById(organizationId, entityId);
-      if (!service?.id) return null;
+      if (!service?.id) return { errorStatus: 404 as const, code: 'TUSS_DELETE_RECORD_NOT_FOUND' };
       const dependencies = cleanObject({
-        mappings: await countScopedDependency('payer_tuss_mappings', organizationId, 'service_catalog_id', entityId),
-        prices: await countScopedDependency('payer_procedure_prices', organizationId, 'service_catalog_id', entityId),
-        authorizations: await countScopedDependency('patient_payer_authorizations', organizationId, 'service_catalog_id', entityId),
-        billingItems: await countScopedDependency('appointment_billing_items', organizationId, 'service_catalog_id', entityId),
-        preGuides: await countTissPreGuideByText(organizationId, 'internal_procedure_code', service.internal_code || ''),
-        officialPreGuides: await countTissPreGuideByText(organizationId, 'internal_procedure_code', service.internal_code || '', true)
+        mappings: await countTussDeleteDependency({ table: 'payer_tuss_mappings', organizationId, column: 'service_catalog_id', value: entityId, stage: 'services.mappings' }),
+        prices: await countTussDeleteDependency({ table: 'payer_procedure_prices', organizationId, column: 'service_catalog_id', value: entityId, stage: 'services.prices' }),
+        authorizations: await countTussDeleteDependency({ table: 'patient_payer_authorizations', organizationId, column: 'service_catalog_id', value: entityId, stage: 'services.authorizations' }),
+        billingItems: await countTussDeleteDependency({ table: 'appointment_billing_items', organizationId, column: 'service_catalog_id', value: entityId, stage: 'services.billingItems' }),
+        preGuides: await countTussDeletePreGuidesByText(organizationId, 'internal_procedure_code', service.internal_code || '', 'services.preGuides'),
+        officialPreGuides: await countTussDeletePreGuidesByText(organizationId, 'internal_procedure_code', service.internal_code || '', 'services.officialPreGuides', true)
       });
-      const canDelete = Object.values(dependencies).every((value) => Number(value || 0) === 0);
-      return { entityType: 'service', table: 'tuss_service_catalog', record: service, entityLabel: 'Procedimento interno', entityName: service.name || service.internal_code || 'Procedimento', dependencies, canDelete };
+      return buildTussDeleteImpactPayload({
+        entityType: 'services',
+        record: service,
+        entityName: service.name || service.internal_code || 'Procedimento',
+        dependencies
+      });
     }
-    if (safeEntityType === 'codes' || safeEntityType === 'code') {
+    if (safeEntityType === 'codes') {
       const code = await fetchTussCodeById(organizationId, entityId);
-      if (!code?.id) return null;
+      if (!code?.id) return { errorStatus: 404 as const, code: 'TUSS_DELETE_RECORD_NOT_FOUND' };
       const dependencies = cleanObject({
-        mappings: await countScopedDependency('payer_tuss_mappings', organizationId, 'tuss_code_id', entityId),
-        prices: await countScopedDependency('payer_procedure_prices', organizationId, 'tuss_code_id', entityId),
-        authorizations: await countScopedDependency('patient_payer_authorizations', organizationId, 'tuss_code_id', entityId),
-        billingItems: await countScopedDependency('appointment_billing_items', organizationId, 'tuss_code_id', entityId),
-        preGuides: await countTissPreGuideByText(organizationId, 'tuss_code', code.code || ''),
-        officialPreGuides: await countTissPreGuideByText(organizationId, 'tuss_code', code.code || '', true)
+        mappings: await countTussDeleteDependency({ table: 'payer_tuss_mappings', organizationId, column: 'tuss_code_id', value: entityId, stage: 'codes.mappings' }),
+        prices: await countTussDeleteDependency({ table: 'payer_procedure_prices', organizationId, column: 'tuss_code_id', value: entityId, stage: 'codes.prices' }),
+        authorizations: await countTussDeleteDependency({ table: 'patient_payer_authorizations', organizationId, column: 'tuss_code_id', value: entityId, stage: 'codes.authorizations' }),
+        billingItems: await countTussDeleteDependency({ table: 'appointment_billing_items', organizationId, column: 'tuss_code_id', value: entityId, stage: 'codes.billingItems' }),
+        preGuides: await countTussDeletePreGuidesByText(organizationId, 'tuss_code', code.code || '', 'codes.preGuides'),
+        officialPreGuides: await countTussDeletePreGuidesByText(organizationId, 'tuss_code', code.code || '', 'codes.officialPreGuides', true)
       });
-      const canDelete = Object.values(dependencies).every((value) => Number(value || 0) === 0);
-      return { entityType: 'code', table: 'tuss_codes', record: code, entityLabel: 'Código TUSS', entityName: code.code || 'Código TUSS', dependencies, canDelete };
+      return buildTussDeleteImpactPayload({
+        entityType: 'codes',
+        record: code,
+        entityName: code.code || 'Código TUSS',
+        dependencies
+      });
     }
-    if (safeEntityType === 'mappings' || safeEntityType === 'mapping') {
+    if (safeEntityType === 'mappings') {
       const mapping = await fetchPayerTussMappingById(organizationId, entityId);
-      if (!mapping?.id) return null;
+      if (!mapping?.id) return { errorStatus: 404 as const, code: 'TUSS_DELETE_RECORD_NOT_FOUND' };
+      const mappingCode = mapping.tuss_code_id ? await fetchTussCodeById(organizationId, mapping.tuss_code_id) : null;
+      const mappingTussCode = sanitizeString(mappingCode?.code, 80);
       const dependencies = cleanObject({
-        prices: await countScopedDependency('payer_procedure_prices', organizationId, 'payer_tuss_mapping_id', entityId),
-        authorizations: await countScopedDependency('patient_payer_authorizations', organizationId, 'payer_tuss_mapping_id', entityId),
-        billingItems: await countScopedDependency('appointment_billing_items', organizationId, 'payer_tuss_mapping_id', entityId)
+        prices: await countTussDeleteDependency({ table: 'payer_procedure_prices', organizationId, column: 'payer_tuss_mapping_id', value: entityId, stage: 'mappings.prices' }),
+        authorizations: await countTussDeleteDependency({ table: 'patient_payer_authorizations', organizationId, column: 'payer_tuss_mapping_id', value: entityId, stage: 'mappings.authorizations' }),
+        billingItems: await countTussDeleteDependency({ table: 'appointment_billing_items', organizationId, column: 'payer_tuss_mapping_id', value: entityId, stage: 'mappings.billingItems' }),
+        preGuides: mappingTussCode
+          ? await countTussDeletePreGuidesByText(organizationId, 'tuss_code', mappingTussCode, 'mappings.preGuides')
+          : 0,
+        officialPreGuides: mappingTussCode
+          ? await countTussDeletePreGuidesByText(organizationId, 'tuss_code', mappingTussCode, 'mappings.officialPreGuides', true)
+          : 0
       });
-      const canDelete = Object.values(dependencies).every((value) => Number(value || 0) === 0);
-      return { entityType: 'mapping', table: 'payer_tuss_mappings', record: mapping, entityLabel: 'Mapeamento De/Para', entityName: mapping.contract_code || mapping.id, dependencies, canDelete };
+      return buildTussDeleteImpactPayload({
+        entityType: 'mappings',
+        record: mapping,
+        entityName: mapping.contract_code || mapping.id,
+        dependencies
+      });
     }
-    if (safeEntityType === 'prices' || safeEntityType === 'price') {
+    if (safeEntityType === 'prices') {
       const { data, error } = await supabase
         .from('payer_procedure_prices')
         .select(PAYER_PROCEDURE_PRICE_SELECT)
@@ -33385,29 +33544,42 @@ async function startServer() {
         .limit(1)
         .maybeSingle();
       if (error) {
-        if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return null;
+        (error as any).tussDeleteContext = {
+          table: 'payer_procedure_prices',
+          stage: 'prices.record'
+        };
         throw error;
       }
-      if (!data?.id) return null;
+      if (!data?.id) return { errorStatus: 404 as const, code: 'TUSS_DELETE_RECORD_NOT_FOUND' };
       const dependencies = cleanObject({
-        matchingBillingItems: data.service_catalog_id
-          ? await countScopedDependency('appointment_billing_items', organizationId, 'service_catalog_id', data.service_catalog_id, (query) => {
+        billingItems: data.service_catalog_id
+          ? await countTussDeleteDependency({
+              table: 'appointment_billing_items',
+              organizationId,
+              column: 'service_catalog_id',
+              value: data.service_catalog_id,
+              stage: 'prices.billingItems',
+              extra: (query) => {
               let next = query.eq('payer_id', data.payer_id);
               if (data.tuss_code_id) next = next.eq('tuss_code_id', data.tuss_code_id);
               return next;
-            })
+            }})
           : 0,
-        matchingPreGuides: data.tuss_code
-          ? await countTissPreGuideByText(organizationId, 'tuss_code', data.tuss_code)
+        preGuides: data.tuss_code
+          ? await countTussDeletePreGuidesByText(organizationId, 'tuss_code', data.tuss_code, 'prices.preGuides')
           : 0,
-        officialPreGuides: data.tuss_code
-          ? await countTissPreGuideByText(organizationId, 'tuss_code', data.tuss_code, true)
+        officialDocuments: data.tuss_code
+          ? await countTussDeletePreGuidesByText(organizationId, 'tuss_code', data.tuss_code, 'prices.officialDocuments', true)
           : 0
       });
-      const canDelete = Object.values(dependencies).every((value) => Number(value || 0) === 0);
-      return { entityType: 'price', table: 'payer_procedure_prices', record: data, entityLabel: 'Valor negociado', entityName: `${Number(data.amount_cents || 0)} centavos`, dependencies, canDelete };
+      return buildTussDeleteImpactPayload({
+        entityType: 'prices',
+        record: data,
+        entityName: `${Number(data.amount_cents || 0)} centavos`,
+        dependencies
+      });
     }
-    return null;
+    return { errorStatus: 400 as const, code: 'INVALID_TUSS_DELETE_ENTITY_TYPE' };
   };
 
   const fetchAppointmentForBillingContext = async (appointmentId: string, user: any) => {
@@ -37739,44 +37911,83 @@ async function startServer() {
   });
 
   app.get('/api/admin/tuss/:entityType/:entityId/delete-impact', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    const entityType = sanitizeString(req.params.entityType, 40);
+    const entityId = sanitizeString(req.params.entityId, 120);
+    const normalizedEntityType = normalizeTussDeleteEntityType(entityType);
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
-      const entityType = sanitizeString(req.params.entityType, 40);
-      const entityId = sanitizeString(req.params.entityId, 120);
       const impact = await buildTussDeleteImpact(organizationId, entityType, entityId);
-      if (!impact) return res.status(404).json(payerSafeError(404));
+      if ((impact as any)?.errorStatus) {
+        const status = Number((impact as any).errorStatus || 500);
+        return res.status(status).json({
+          ...payerSafeError(status),
+          code: (impact as any).code
+        });
+      }
       return res.json({
         success: true,
+        entityType: impact.entityType,
+        entityId,
+        canDelete: impact.canDelete,
+        isActive: impact.isActive,
+        dependencies: impact.dependencies,
+        recommendedAction: impact.recommendedAction,
         data: {
+          entityType: impact.entityType,
+          entityId,
           canDelete: impact.canDelete,
+          isActive: impact.isActive,
           dependencies: impact.dependencies,
-          recommendedAction: impact.canDelete ? 'delete' : 'deactivate',
+          recommendedAction: impact.recommendedAction,
           entityLabel: impact.entityLabel,
-          entityName: impact.entityName
+          entityName: impact.entityName,
+          table: impact.table,
+          activeColumn: impact.activeColumn,
+          validFromColumn: impact.validFromColumn,
+          validToColumn: impact.validToColumn
         }
       });
     } catch (error: any) {
-      console.warn('[TussReady] delete impact failed:', error?.message || String(error));
-      return res.status(500).json(payerSafeError(500));
+      logTussDeleteFailure('[TussReady] delete impact failed', req, {
+        entityType,
+        entityId,
+        table: normalizedEntityType ? TUSS_ENTITY_CONFIG[normalizedEntityType].table : null,
+        stage: 'impact'
+      }, error);
+      return res.status(500).json({
+        success: false,
+        code: 'TUSS_DELETE_IMPACT_QUERY_FAILED',
+        error: 'Não foi possível verificar as dependências deste cadastro.'
+      });
     }
   });
 
   app.delete('/api/admin/tuss/:entityType/:entityId', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    const entityType = sanitizeString(req.params.entityType, 40);
+    const entityId = sanitizeString(req.params.entityId, 120);
+    const normalizedEntityType = normalizeTussDeleteEntityType(entityType);
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
-      const entityType = sanitizeString(req.params.entityType, 40);
-      const entityId = sanitizeString(req.params.entityId, 120);
       const impact = await buildTussDeleteImpact(organizationId, entityType, entityId);
-      if (!impact) return res.status(404).json(payerSafeError(404));
+      if ((impact as any)?.errorStatus) {
+        const status = Number((impact as any).errorStatus || 500);
+        return res.status(status).json({
+          ...payerSafeError(status),
+          code: (impact as any).code
+        });
+      }
       if (!impact.canDelete) {
         return res.status(409).json({
           success: false,
           code: 'TUSS_DELETE_BLOCKED_BY_DEPENDENCIES',
-          error: 'Este registro já foi utilizado e não pode ser excluído. Você pode inativá-lo para impedir novos usos.',
+          error: impact.isActive
+            ? 'Este registro já foi utilizado e não pode ser excluído. Você pode inativá-lo para impedir novos usos.'
+            : 'Este cadastro já foi utilizado e não pode ser excluído. Ele permanecerá inativo para preservar o histórico.',
           data: {
             canDelete: false,
+            isActive: impact.isActive,
             dependencies: impact.dependencies,
-            recommendedAction: 'deactivate',
+            recommendedAction: impact.recommendedAction,
             entityLabel: impact.entityLabel,
             entityName: impact.entityName
           }
@@ -37799,8 +38010,17 @@ async function startServer() {
       });
       return res.json({ success: true, data: { id: entityId, entityType: impact.entityType, deleted: true } });
     } catch (error: any) {
-      console.warn('[TussReady] delete failed:', error?.message || String(error));
-      return res.status(500).json(payerSafeError(500));
+      logTussDeleteFailure('[TussReady] delete failed', req, {
+        entityType,
+        entityId,
+        table: normalizedEntityType ? TUSS_ENTITY_CONFIG[normalizedEntityType].table : null,
+        stage: 'delete'
+      }, error);
+      return res.status(500).json({
+        success: false,
+        code: 'TUSS_DELETE_FAILED',
+        error: 'Não foi possível excluir este cadastro agora.'
+      });
     }
   });
 
