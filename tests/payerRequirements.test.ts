@@ -8,6 +8,7 @@ import {
 import { evaluateAppointmentClosureReadiness } from '../src/services/closureReadinessEngine';
 import {
   formatCentsForBrazilianInput,
+  isBillingConfigurationOperational,
   parseBrazilianCurrencyToCents,
 } from '../src/components/PayerRequirementsPanel';
 
@@ -259,7 +260,8 @@ test('Tabela de Valores tem rotulos permanentes, reais no formulario e configura
     assert.ok(payerPanelCode.includes(marker), marker);
   }
 
-  assert.match(payerPanelCode, /Configurações de faturamento deste convênio/);
+  assert.match(payerPanelCode, /Configurações ativas deste convênio/);
+  assert.match(payerPanelCode, /Histórico e configurações inativas/);
   assert.match(payerPanelCode, /Cadastros de apoio/);
   assert.match(payerPanelCode, /Esses cadastros são referências usadas nas configurações de faturamento/);
   assert.match(payerPanelCode, /Mapeamento por pagador/);
@@ -283,14 +285,20 @@ test('Tabela de Valores tem rotulos permanentes, reais no formulario e configura
   ]) {
     assert.ok(payerPanelCode.includes(marker), marker);
   }
-  assert.match(payerPanelCode, /open=\{supportFormOpen\}/);
-  assert.match(payerPanelCode, /open=\{supportCatalogOpen\}/);
+  assert.match(payerPanelCode, /supportFormOpen && supportFormTarget/);
+  assert.match(payerPanelCode, /supportCatalogOpen \? \(/);
   assert.match(payerPanelCode, /openSupportForm\("service"\)/);
   assert.match(payerPanelCode, /openSupportForm\("code"\)/);
+  assert.match(payerPanelCode, /startNewSupportForm\("service"\)/);
+  assert.match(payerPanelCode, /startNewSupportForm\("code"\)/);
+  assert.match(payerPanelCode, /supportFormTarget === "service"/);
+  assert.match(payerPanelCode, /supportFormTarget === "code"/);
   assert.match(payerPanelCode, /Editando procedimento interno/);
   assert.match(payerPanelCode, /Editando código TUSS/);
-  assert.match(payerPanelCode, /Atualizar procedimento/);
-  assert.match(payerPanelCode, /Cancelar edição/);
+  assert.match(payerPanelCode, /Novo procedimento interno/);
+  assert.match(payerPanelCode, /Novo código TUSS/);
+  assert.match(payerPanelCode, /primaryLabel=\{editingTussServiceId \? "Atualizar cadastro" : "Salvar cadastro"\}/);
+  assert.match(payerPanelCode, /primaryLabel=\{editingTussCodeId \? "Atualizar cadastro" : "Salvar cadastro"\}/);
   assert.match(payerPanelCode, /reactivateTussService/);
   assert.match(payerPanelCode, /reactivateTussCode/);
   assert.match(payerPanelCode, /Deseja reativar este procedimento/);
@@ -301,12 +309,9 @@ test('Tabela de Valores tem rotulos permanentes, reais no formulario e configura
   assert.match(payerPanelCode, /supportActionInFlightRef/);
   assert.match(payerPanelCode, /aria-label=\{`Reativar procedimento/);
   assert.match(payerPanelCode, /aria-label=\{`Reativar código TUSS/);
-  assert.match(payerPanelCode, /uniqueStatusBadges/);
-  assert.match(payerPanelCode, /new Map\(statusBadges\.map/);
   assert.match(payerPanelCode, /Procedimento inativo/);
   assert.match(payerPanelCode, /De\/Para ausente/);
   assert.match(payerPanelCode, /Valor ausente/);
-  assert.match(payerPanelCode, /Configuração inconsistente/);
   assert.match(payerPanelCode, /procedurePriceSaveInFlightRef/);
   assert.match(payerPanelCode, /parseBrazilianCurrencyToCents\(procedurePriceForm\.amountCents\)/);
   assert.doesNotMatch(payerPanelCode, /parseBrazilianCurrencyToCents\(tussMappingForm/);
@@ -314,6 +319,71 @@ test('Tabela de Valores tem rotulos permanentes, reais no formulario e configura
   assert.match(serverCode, /negotiated_amount_cents:\s*null/);
   assert.match(serverCode, /TUSS_MAPPING_GUIDE_TYPE_UNSUPPORTED/);
   assert.doesNotMatch(payerPanelCode, /placeholder="Valor negociado em centavos"/);
+});
+
+test('configuracoes de faturamento separam operacionais de historicas e usam acoes contextuais', () => {
+  const activePart = { active: true };
+  const inactivePart = { active: false };
+  assert.equal(isBillingConfigurationOperational({ service: activePart, code: activePart, mapping: activePart, price: activePart }), true);
+  assert.equal(isBillingConfigurationOperational({ service: inactivePart, code: activePart, mapping: activePart, price: activePart }), false);
+  assert.equal(isBillingConfigurationOperational({ service: activePart, code: inactivePart, mapping: activePart, price: activePart }), false);
+  assert.equal(isBillingConfigurationOperational({ service: activePart, code: activePart, mapping: inactivePart, price: activePart }), false);
+  assert.equal(isBillingConfigurationOperational({ service: activePart, code: activePart, mapping: activePart, price: inactivePart }), false);
+  assert.equal(isBillingConfigurationOperational({ service: activePart, code: activePart, mapping: activePart, price: null }), false);
+
+  for (const marker of [
+    'Configurações ativas deste convênio',
+    'Usadas para novas Pré-guias, autorizações e geração de XML.',
+    'Histórico e configurações inativas',
+    'Registros preservados para histórico. Não são usados em novas Pré-guias enquanto estiverem inativos.',
+    'Pronta para novas Pré-guias',
+    'Configuração inativa',
+    'Nenhuma configuração ativa para este convênio.',
+    'Crie ou reative os cadastros necessários para faturar novas sessões.',
+    'Novo procedimento interno',
+    'Novo código TUSS',
+    'Novo De/Para',
+    'Novo valor negociado',
+  ]) assert.ok(payerPanelCode.includes(marker), marker);
+
+  const cardStart = payerPanelCode.indexOf('const renderBillingConfigurationCard =');
+  const renderStart = payerPanelCode.indexOf('  return (', cardStart);
+  const cardEnd = payerPanelCode.indexOf('\n  return (', renderStart + 1);
+  const cardCode = payerPanelCode.slice(cardStart, cardEnd);
+  assert.match(cardCode, /isOperational && mapping[^\n]+Revalidar atendimentos afetados/);
+  assert.match(cardCode, /isOperational && mapping[^\n]+Sincronizar autorizações e Pré-guias/);
+  assert.match(cardCode, /!isOperational && service\?\.active === false[^\n]+Reativar procedimento/);
+  assert.match(cardCode, /!isOperational && code\?\.active === false[^\n]+Reativar código TUSS/);
+  assert.match(cardCode, /!isOperational && mapping\?\.active === false[^\n]+Reativar De\/Para/);
+  assert.match(cardCode, /!isOperational && price\?\.active === false[^\n]+Reativar preço/);
+  assert.match(cardCode, /isOperational && mapping \? <button[^\n]+Editar De\/Para/);
+  assert.match(cardCode, /isOperational && price \? <button[^\n]+Editar valor/);
+  assert.doesNotMatch(cardCode, /!isOperational[^\n]+Revalidar atendimentos afetados/);
+  assert.doesNotMatch(cardCode, /!isOperational[^\n]+Sincronizar autorizações e Pré-guias/);
+
+  const serviceCreate = payerPanelCode.slice(
+    payerPanelCode.indexOf('const createTussService = async'),
+    payerPanelCode.indexOf('const createTussCode = async'),
+  );
+  const codeCreate = payerPanelCode.slice(
+    payerPanelCode.indexOf('const createTussCode = async'),
+    payerPanelCode.indexOf('const createTussMapping = async'),
+  );
+  assert.doesNotMatch(serviceCreate, /createPayerTussMapping|createPayerProcedurePrice/);
+  assert.doesNotMatch(codeCreate, /createPayerTussMapping|createPayerProcedurePrice/);
+});
+
+test('modal de exclusao traduz dependencias tecnicas sem renderizar chaves cruas', () => {
+  for (const label of [
+    'Preços vinculados',
+    'Itens de faturamento',
+    'Pré-guias',
+    'XMLs oficiais',
+    'Autorizações',
+    'Vínculo histórico não confirmado',
+  ]) assert.ok(payerPanelCode.includes(label), label);
+  assert.match(payerPanelCode, /deleteDependencyLabels\[key\] \|\| "Vínculo histórico"/);
+  assert.doesNotMatch(payerPanelCode, /<p className="text-xs text-slate-500">\{key\}<\/p>/);
 });
 
 test('Dados TISS da operadora tem rotulos permanentes e versao oficial automatica', () => {

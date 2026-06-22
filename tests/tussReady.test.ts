@@ -524,12 +524,14 @@ test('frontend administra procedimentos codigos e mapeamentos sem F5', () => {
   assert.match(payerPanelCode, /requiresReport/);
   assert.match(payerPanelCode, /setTussServices/);
   assert.match(payerPanelCode, /setTussCodes/);
-  assert.match(payerPanelCode, /open=\{supportFormOpen\}/);
-  assert.match(payerPanelCode, /open=\{supportCatalogOpen\}/);
+  assert.match(payerPanelCode, /supportFormOpen && supportFormTarget/);
+  assert.match(payerPanelCode, /supportFormTarget === "service"/);
+  assert.match(payerPanelCode, /supportFormTarget === "code"/);
+  assert.match(payerPanelCode, /supportCatalogOpen \?/);
   assert.match(payerPanelCode, /Editando procedimento interno/);
   assert.match(payerPanelCode, /Editando código TUSS/);
   assert.match(payerPanelCode, /Reativar/);
-  assert.match(payerPanelCode, /uniqueStatusBadges/);
+  assert.match(payerPanelCode, /isBillingConfigurationOperational/);
   assert.match(payerPanelCode, /upsertTussMappingInState/);
   assert.match(payerPanelCode, /result\.affectedItems/);
   assert.match(payerPanelCode, /result\.updatedCount/);
