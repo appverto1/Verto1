@@ -1913,6 +1913,55 @@ function redactForLogs(input: any): any {
   return String(input);
 }
 
+function safeJsonPreview(value: unknown, maxLength = 1000): string {
+  try {
+    const preview = JSON.stringify(redactForLogs(value));
+    return sanitizeTextField(preview || '', maxLength) || '';
+  } catch {
+    try {
+      return sanitizeTextField(String(value), maxLength) || '';
+    } catch {
+      return '';
+    }
+  }
+}
+
+function normalizeUnknownError(error: unknown): {
+  code: string | null;
+  message: string;
+  details: string | null;
+  hint: string | null;
+  rawType: string;
+} {
+  const rawType = error === null ? 'null' : Array.isArray(error) ? 'array' : typeof error;
+  const unwrapError = (value: any): any => {
+    if (!value || typeof value !== 'object') return value;
+    if (value.error && value.error !== value) return unwrapError(value.error);
+    if (value.cause && value.cause !== value && !value.message) return unwrapError(value.cause);
+    return value;
+  };
+  const unwrapped: any = unwrapError(error as any);
+  const code = sanitizeString(unwrapped?.code || unwrapped?.statusCode || unwrapped?.status, 80) || null;
+  const details = unwrapped?.details !== undefined ? safeJsonPreview(unwrapped.details, 1000) || null : null;
+  const hint = unwrapped?.hint !== undefined ? safeJsonPreview(unwrapped.hint, 1000) || null : null;
+  let message = '';
+  if (error instanceof Error) message = error.message;
+  else if (typeof unwrapped === 'string') message = unwrapped;
+  else if (typeof unwrapped === 'number' || typeof unwrapped === 'boolean') message = String(unwrapped);
+  else if (unwrapped?.message !== undefined) message = typeof unwrapped.message === 'string' ? unwrapped.message : safeJsonPreview(unwrapped.message, 1000);
+  else if (unwrapped?.error_description !== undefined) message = safeJsonPreview(unwrapped.error_description, 1000);
+  else if (unwrapped?.details !== undefined) message = safeJsonPreview(unwrapped.details, 1000);
+  else message = safeJsonPreview(error, 1000);
+  const safeMessage = sanitizeTextField(message && message !== '[object Object]' ? message : safeJsonPreview(error, 1000), 1000);
+  return {
+    code,
+    message: safeMessage || 'Erro desconhecido.',
+    details,
+    hint,
+    rawType
+  };
+}
+
 function isMissingRelationError(error: any): boolean {
   const code = sanitizeString(error?.code, 20).toUpperCase();
   const message = extractSupabaseErrorMessage(error).toLowerCase();
@@ -33340,6 +33389,11 @@ async function startServer() {
     column: string;
     value: string | null | undefined;
     stage: string;
+    entityType?: string;
+    entityId?: string;
+    requestId?: string;
+    unknownDependencies?: string[];
+    optionalSchema?: boolean;
     extra?: (query: any) => any;
   }) => {
     const safeValue = sanitizeString(params.value, 180);
@@ -33355,8 +33409,39 @@ async function startServer() {
       (error as any).tussDeleteContext = {
         table: params.table,
         stage: params.stage,
-        column: params.column
+        column: params.column,
+        entityType: params.entityType,
+        entityId: params.entityId,
+        requestId: params.requestId
       };
+      const normalized = normalizeUnknownError(error);
+      const code = sanitizeString(normalized.code, 40).toUpperCase();
+      const message = normalized.message.toLowerCase();
+      const isOptionalSchemaGap = params.optionalSchema && (
+        code === '42P01' ||
+        code === '42703' ||
+        message.includes('schema cache') ||
+        message.includes('does not exist') ||
+        message.includes('relation') ||
+        message.includes('column')
+      );
+      if (isOptionalSchemaGap) {
+        params.unknownDependencies?.push(params.stage);
+        console.warn('[TussReady] delete impact optional dependency unknown', {
+          requestId: sanitizeString(params.requestId, 120) || null,
+          entityType: sanitizeString(params.entityType, 40) || null,
+          entityId: sanitizeString(params.entityId, 120) || null,
+          table: params.table,
+          stage: params.stage,
+          column: params.column,
+          code: normalized.code,
+          message: normalized.message,
+          details: normalized.details,
+          hint: normalized.hint,
+          rawType: normalized.rawType
+        });
+        return 0;
+      }
       throw error;
     }
     return Number(count || 0);
@@ -33367,13 +33452,21 @@ async function startServer() {
     column: string,
     value: string | null | undefined,
     stage: string,
-    onlyOfficial = false
+    onlyOfficial = false,
+    context: {
+      entityType?: string;
+      entityId?: string;
+      requestId?: string;
+      unknownDependencies?: string[];
+      optionalSchema?: boolean;
+    } = {}
   ) => countTussDeleteDependency({
     table: 'appointment_tiss_pre_guides',
     organizationId,
     column,
     value,
     stage,
+    ...context,
     extra: onlyOfficial ? (query) => query.not('official_document_id', 'is', null) : undefined
   });
 
@@ -33423,27 +33516,34 @@ async function startServer() {
     canDelete ? 'delete' : isActive ? 'deactivate' : 'keep_inactive'
   );
 
+  const resolveTussDeleteRequestId = (req: any) => {
+    const headerValue = req?.headers?.['x-request-id'] || req?.headers?.['x-correlation-id'] || req?.headers?.['x-verto-request-id'];
+    const safeHeader = sanitizeString(Array.isArray(headerValue) ? headerValue[0] : headerValue, 120);
+    return sanitizeString(req?.requestId || req?.id, 120) || safeHeader || crypto.randomUUID();
+  };
+
   const logTussDeleteFailure = (
     label: string,
     req: any,
     context: Record<string, any>,
     error: any
   ) => {
-    const requestHeader = req?.headers?.['x-request-id'] || req?.headers?.['x-correlation-id'];
-    const requestId = sanitizeString(Array.isArray(requestHeader) ? requestHeader[0] : requestHeader, 120) || null;
     const errorContext = error?.tussDeleteContext && typeof error.tussDeleteContext === 'object'
       ? error.tussDeleteContext
       : {};
+    const normalized = normalizeUnknownError(error);
     console.error(label, {
-      requestId,
-      entityType: sanitizeString(context.entityType || errorContext.entityType, 40) || null,
-      entityId: sanitizeString(context.entityId || errorContext.entityId, 120) || null,
-      table: sanitizeString(context.table || errorContext.table, 120) || null,
-      stage: sanitizeString(context.stage || errorContext.stage, 120) || null,
-      code: sanitizeString(error?.code, 40) || null,
-      message: sanitizeTextField(error?.message || String(error || ''), 500) || null,
-      details: sanitizeTextField(error?.details, 500) || null,
-      hint: sanitizeTextField(error?.hint, 500) || null
+      requestId: sanitizeString(errorContext.requestId || context.requestId || resolveTussDeleteRequestId(req), 120) || null,
+      entityType: sanitizeString(errorContext.entityType || context.entityType, 40) || null,
+      entityId: sanitizeString(errorContext.entityId || context.entityId, 120) || null,
+      table: sanitizeString(errorContext.table || context.table, 120) || null,
+      stage: sanitizeString(errorContext.stage || context.stage, 120) || null,
+      column: sanitizeString(errorContext.column, 120) || null,
+      code: normalized.code,
+      message: normalized.message,
+      details: normalized.details,
+      hint: normalized.hint,
+      rawType: normalized.rawType
     });
   };
 
@@ -33452,10 +33552,16 @@ async function startServer() {
     record: any;
     entityName: string;
     dependencies: Record<string, number>;
+    unknownDependencies?: string[];
   }) => {
     const config = TUSS_ENTITY_CONFIG[params.entityType];
     const isActive = normalizeTussActiveFlag(params.record?.[config.activeColumn]);
-    const canDelete = Object.values(params.dependencies).every((value) => Number(value || 0) === 0);
+    const unknownDependencies = Array.from(new Set((params.unknownDependencies || []).filter(Boolean)));
+    const dependencies = {
+      ...params.dependencies,
+      ...(unknownDependencies.length > 0 ? { unknown: unknownDependencies.length } : {})
+    };
+    const canDelete = unknownDependencies.length === 0 && Object.values(dependencies).every((value) => Number(value || 0) === 0);
     return {
       entityType: params.entityType,
       table: config.table,
@@ -33466,76 +33572,90 @@ async function startServer() {
       entityLabel: config.entityLabel,
       entityName: params.entityName,
       isActive,
-      dependencies: params.dependencies,
+      dependencies,
+      unknownDependencies,
       canDelete,
       recommendedAction: buildTussDeleteRecommendation(canDelete, isActive)
     };
   };
 
-  const buildTussDeleteImpact = async (organizationId: string, entityType: string, entityId: string) => {
+  const buildTussDeleteImpact = async (organizationId: string, entityType: string, entityId: string, requestId = '') => {
     if (!isUuid(organizationId) || !isUuid(entityId)) return { errorStatus: 400 as const, code: 'INVALID_TUSS_DELETE_TARGET' };
     const safeEntityType = normalizeTussDeleteEntityType(entityType);
     if (!safeEntityType) return { errorStatus: 400 as const, code: 'INVALID_TUSS_DELETE_ENTITY_TYPE' };
+    const dependencyContext = {
+      entityType: safeEntityType,
+      entityId,
+      requestId,
+      optionalSchema: true
+    };
     if (safeEntityType === 'services') {
+      const unknownDependencies: string[] = [];
       const service = await fetchTussServiceCatalogById(organizationId, entityId);
       if (!service?.id) return { errorStatus: 404 as const, code: 'TUSS_DELETE_RECORD_NOT_FOUND' };
       const dependencies = cleanObject({
-        mappings: await countTussDeleteDependency({ table: 'payer_tuss_mappings', organizationId, column: 'service_catalog_id', value: entityId, stage: 'services.mappings' }),
-        prices: await countTussDeleteDependency({ table: 'payer_procedure_prices', organizationId, column: 'service_catalog_id', value: entityId, stage: 'services.prices' }),
-        authorizations: await countTussDeleteDependency({ table: 'patient_payer_authorizations', organizationId, column: 'service_catalog_id', value: entityId, stage: 'services.authorizations' }),
-        billingItems: await countTussDeleteDependency({ table: 'appointment_billing_items', organizationId, column: 'service_catalog_id', value: entityId, stage: 'services.billingItems' }),
-        preGuides: await countTussDeletePreGuidesByText(organizationId, 'internal_procedure_code', service.internal_code || '', 'services.preGuides'),
-        officialPreGuides: await countTussDeletePreGuidesByText(organizationId, 'internal_procedure_code', service.internal_code || '', 'services.officialPreGuides', true)
+        mappings: await countTussDeleteDependency({ table: 'payer_tuss_mappings', organizationId, column: 'service_catalog_id', value: entityId, stage: 'impact_service_mappings', unknownDependencies, ...dependencyContext }),
+        prices: await countTussDeleteDependency({ table: 'payer_procedure_prices', organizationId, column: 'service_catalog_id', value: entityId, stage: 'impact_service_prices', unknownDependencies, ...dependencyContext }),
+        authorizations: await countTussDeleteDependency({ table: 'patient_payer_authorizations', organizationId, column: 'service_catalog_id', value: entityId, stage: 'impact_service_authorizations', unknownDependencies, ...dependencyContext }),
+        billingItems: await countTussDeleteDependency({ table: 'appointment_billing_items', organizationId, column: 'service_catalog_id', value: entityId, stage: 'impact_service_billing_items', unknownDependencies, ...dependencyContext }),
+        preGuides: await countTussDeletePreGuidesByText(organizationId, 'internal_procedure_code', service.internal_code || '', 'impact_service_pre_guides_direct', false, { unknownDependencies, ...dependencyContext }),
+        officialPreGuides: await countTussDeletePreGuidesByText(organizationId, 'internal_procedure_code', service.internal_code || '', 'impact_service_official_documents', true, { unknownDependencies, ...dependencyContext })
       });
       return buildTussDeleteImpactPayload({
         entityType: 'services',
         record: service,
         entityName: service.name || service.internal_code || 'Procedimento',
-        dependencies
+        dependencies,
+        unknownDependencies
       });
     }
     if (safeEntityType === 'codes') {
+      const unknownDependencies: string[] = [];
       const code = await fetchTussCodeById(organizationId, entityId);
       if (!code?.id) return { errorStatus: 404 as const, code: 'TUSS_DELETE_RECORD_NOT_FOUND' };
       const dependencies = cleanObject({
-        mappings: await countTussDeleteDependency({ table: 'payer_tuss_mappings', organizationId, column: 'tuss_code_id', value: entityId, stage: 'codes.mappings' }),
-        prices: await countTussDeleteDependency({ table: 'payer_procedure_prices', organizationId, column: 'tuss_code_id', value: entityId, stage: 'codes.prices' }),
-        authorizations: await countTussDeleteDependency({ table: 'patient_payer_authorizations', organizationId, column: 'tuss_code_id', value: entityId, stage: 'codes.authorizations' }),
-        billingItems: await countTussDeleteDependency({ table: 'appointment_billing_items', organizationId, column: 'tuss_code_id', value: entityId, stage: 'codes.billingItems' }),
-        preGuides: await countTussDeletePreGuidesByText(organizationId, 'tuss_code', code.code || '', 'codes.preGuides'),
-        officialPreGuides: await countTussDeletePreGuidesByText(organizationId, 'tuss_code', code.code || '', 'codes.officialPreGuides', true)
+        mappings: await countTussDeleteDependency({ table: 'payer_tuss_mappings', organizationId, column: 'tuss_code_id', value: entityId, stage: 'impact_code_mappings', unknownDependencies, ...dependencyContext }),
+        prices: await countTussDeleteDependency({ table: 'payer_procedure_prices', organizationId, column: 'tuss_code_id', value: entityId, stage: 'impact_code_prices', unknownDependencies, ...dependencyContext }),
+        authorizations: await countTussDeleteDependency({ table: 'patient_payer_authorizations', organizationId, column: 'tuss_code_id', value: entityId, stage: 'impact_code_authorizations', unknownDependencies, ...dependencyContext }),
+        billingItems: await countTussDeleteDependency({ table: 'appointment_billing_items', organizationId, column: 'tuss_code_id', value: entityId, stage: 'impact_code_billing_items', unknownDependencies, ...dependencyContext }),
+        preGuides: await countTussDeletePreGuidesByText(organizationId, 'tuss_code', code.code || '', 'impact_code_pre_guides_direct', false, { unknownDependencies, ...dependencyContext }),
+        officialPreGuides: await countTussDeletePreGuidesByText(organizationId, 'tuss_code', code.code || '', 'impact_code_official_documents', true, { unknownDependencies, ...dependencyContext })
       });
       return buildTussDeleteImpactPayload({
         entityType: 'codes',
         record: code,
         entityName: code.code || 'Código TUSS',
-        dependencies
+        dependencies,
+        unknownDependencies
       });
     }
     if (safeEntityType === 'mappings') {
+      const unknownDependencies: string[] = [];
       const mapping = await fetchPayerTussMappingById(organizationId, entityId);
       if (!mapping?.id) return { errorStatus: 404 as const, code: 'TUSS_DELETE_RECORD_NOT_FOUND' };
       const mappingCode = mapping.tuss_code_id ? await fetchTussCodeById(organizationId, mapping.tuss_code_id) : null;
       const mappingTussCode = sanitizeString(mappingCode?.code, 80);
       const dependencies = cleanObject({
-        prices: await countTussDeleteDependency({ table: 'payer_procedure_prices', organizationId, column: 'payer_tuss_mapping_id', value: entityId, stage: 'mappings.prices' }),
-        authorizations: await countTussDeleteDependency({ table: 'patient_payer_authorizations', organizationId, column: 'payer_tuss_mapping_id', value: entityId, stage: 'mappings.authorizations' }),
-        billingItems: await countTussDeleteDependency({ table: 'appointment_billing_items', organizationId, column: 'payer_tuss_mapping_id', value: entityId, stage: 'mappings.billingItems' }),
+        prices: await countTussDeleteDependency({ table: 'payer_procedure_prices', organizationId, column: 'payer_tuss_mapping_id', value: entityId, stage: 'impact_mapping_prices', unknownDependencies, ...dependencyContext }),
+        authorizations: await countTussDeleteDependency({ table: 'patient_payer_authorizations', organizationId, column: 'payer_tuss_mapping_id', value: entityId, stage: 'impact_mapping_authorizations', unknownDependencies, ...dependencyContext }),
+        billingItems: await countTussDeleteDependency({ table: 'appointment_billing_items', organizationId, column: 'payer_tuss_mapping_id', value: entityId, stage: 'impact_mapping_billing_items', unknownDependencies, ...dependencyContext }),
         preGuides: mappingTussCode
-          ? await countTussDeletePreGuidesByText(organizationId, 'tuss_code', mappingTussCode, 'mappings.preGuides')
+          ? await countTussDeletePreGuidesByText(organizationId, 'tuss_code', mappingTussCode, 'impact_mapping_pre_guides_direct', false, { unknownDependencies, ...dependencyContext })
           : 0,
         officialPreGuides: mappingTussCode
-          ? await countTussDeletePreGuidesByText(organizationId, 'tuss_code', mappingTussCode, 'mappings.officialPreGuides', true)
+          ? await countTussDeletePreGuidesByText(organizationId, 'tuss_code', mappingTussCode, 'impact_mapping_official_documents', true, { unknownDependencies, ...dependencyContext })
           : 0
       });
       return buildTussDeleteImpactPayload({
         entityType: 'mappings',
         record: mapping,
         entityName: mapping.contract_code || mapping.id,
-        dependencies
+        dependencies,
+        unknownDependencies
       });
     }
     if (safeEntityType === 'prices') {
+      const unknownDependencies: string[] = [];
       const { data, error } = await supabase
         .from('payer_procedure_prices')
         .select(PAYER_PROCEDURE_PRICE_SELECT)
@@ -33546,7 +33666,10 @@ async function startServer() {
       if (error) {
         (error as any).tussDeleteContext = {
           table: 'payer_procedure_prices',
-          stage: 'prices.record'
+          stage: 'impact_price_load',
+          entityType: safeEntityType,
+          entityId,
+          requestId
         };
         throw error;
       }
@@ -33558,25 +33681,31 @@ async function startServer() {
               organizationId,
               column: 'service_catalog_id',
               value: data.service_catalog_id,
-              stage: 'prices.billingItems',
+              stage: 'impact_price_billing_items',
+              unknownDependencies,
+              ...dependencyContext,
               extra: (query) => {
               let next = query.eq('payer_id', data.payer_id);
               if (data.tuss_code_id) next = next.eq('tuss_code_id', data.tuss_code_id);
               return next;
             }})
           : 0,
+        authorizations: data.payer_tuss_mapping_id
+          ? await countTussDeleteDependency({ table: 'patient_payer_authorizations', organizationId, column: 'payer_tuss_mapping_id', value: data.payer_tuss_mapping_id, stage: 'impact_price_authorizations', unknownDependencies, ...dependencyContext })
+          : 0,
         preGuides: data.tuss_code
-          ? await countTussDeletePreGuidesByText(organizationId, 'tuss_code', data.tuss_code, 'prices.preGuides')
+          ? await countTussDeletePreGuidesByText(organizationId, 'tuss_code', data.tuss_code, 'impact_price_pre_guides_direct', false, { unknownDependencies, ...dependencyContext })
           : 0,
         officialDocuments: data.tuss_code
-          ? await countTussDeletePreGuidesByText(organizationId, 'tuss_code', data.tuss_code, 'prices.officialDocuments', true)
+          ? await countTussDeletePreGuidesByText(organizationId, 'tuss_code', data.tuss_code, 'impact_price_official_documents', true, { unknownDependencies, ...dependencyContext })
           : 0
       });
       return buildTussDeleteImpactPayload({
         entityType: 'prices',
         record: data,
         entityName: `${Number(data.amount_cents || 0)} centavos`,
-        dependencies
+        dependencies,
+        unknownDependencies
       });
     }
     return { errorStatus: 400 as const, code: 'INVALID_TUSS_DELETE_ENTITY_TYPE' };
@@ -37914,30 +38043,36 @@ async function startServer() {
     const entityType = sanitizeString(req.params.entityType, 40);
     const entityId = sanitizeString(req.params.entityId, 120);
     const normalizedEntityType = normalizeTussDeleteEntityType(entityType);
+    const requestId = resolveTussDeleteRequestId(req);
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
-      const impact = await buildTussDeleteImpact(organizationId, entityType, entityId);
+      const impact = await buildTussDeleteImpact(organizationId, entityType, entityId, requestId);
       if ((impact as any)?.errorStatus) {
         const status = Number((impact as any).errorStatus || 500);
         return res.status(status).json({
           ...payerSafeError(status),
-          code: (impact as any).code
+          code: (impact as any).code,
+          requestId
         });
       }
       return res.json({
         success: true,
+        requestId,
         entityType: impact.entityType,
         entityId,
         canDelete: impact.canDelete,
         isActive: impact.isActive,
         dependencies: impact.dependencies,
+        unknownDependencies: impact.unknownDependencies,
         recommendedAction: impact.recommendedAction,
         data: {
+          requestId,
           entityType: impact.entityType,
           entityId,
           canDelete: impact.canDelete,
           isActive: impact.isActive,
           dependencies: impact.dependencies,
+          unknownDependencies: impact.unknownDependencies,
           recommendedAction: impact.recommendedAction,
           entityLabel: impact.entityLabel,
           entityName: impact.entityName,
@@ -37949,6 +38084,7 @@ async function startServer() {
       });
     } catch (error: any) {
       logTussDeleteFailure('[TussReady] delete impact failed', req, {
+        requestId,
         entityType,
         entityId,
         table: normalizedEntityType ? TUSS_ENTITY_CONFIG[normalizedEntityType].table : null,
@@ -37957,7 +38093,8 @@ async function startServer() {
       return res.status(500).json({
         success: false,
         code: 'TUSS_DELETE_IMPACT_QUERY_FAILED',
-        error: 'Não foi possível verificar as dependências deste cadastro.'
+        error: 'Não foi possível verificar as dependências deste cadastro.',
+        requestId
       });
     }
   });
@@ -37966,14 +38103,16 @@ async function startServer() {
     const entityType = sanitizeString(req.params.entityType, 40);
     const entityId = sanitizeString(req.params.entityId, 120);
     const normalizedEntityType = normalizeTussDeleteEntityType(entityType);
+    const requestId = resolveTussDeleteRequestId(req);
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
-      const impact = await buildTussDeleteImpact(organizationId, entityType, entityId);
+      const impact = await buildTussDeleteImpact(organizationId, entityType, entityId, requestId);
       if ((impact as any)?.errorStatus) {
         const status = Number((impact as any).errorStatus || 500);
         return res.status(status).json({
           ...payerSafeError(status),
-          code: (impact as any).code
+          code: (impact as any).code,
+          requestId
         });
       }
       if (!impact.canDelete) {
@@ -37987,10 +38126,12 @@ async function startServer() {
             canDelete: false,
             isActive: impact.isActive,
             dependencies: impact.dependencies,
+            unknownDependencies: impact.unknownDependencies,
             recommendedAction: impact.recommendedAction,
             entityLabel: impact.entityLabel,
             entityName: impact.entityName
-          }
+          },
+          requestId
         });
       }
       const payerId = sanitizeString((impact.record as any)?.payer_id, 120) || null;
@@ -38008,9 +38149,10 @@ async function startServer() {
         performedBy: sanitizeString(req.session.user?.id, 120),
         metadata: { deleteImpact: impact.dependencies }
       });
-      return res.json({ success: true, data: { id: entityId, entityType: impact.entityType, deleted: true } });
+      return res.json({ success: true, requestId, data: { id: entityId, entityType: impact.entityType, deleted: true } });
     } catch (error: any) {
       logTussDeleteFailure('[TussReady] delete failed', req, {
+        requestId,
         entityType,
         entityId,
         table: normalizedEntityType ? TUSS_ENTITY_CONFIG[normalizedEntityType].table : null,
@@ -38019,7 +38161,8 @@ async function startServer() {
       return res.status(500).json({
         success: false,
         code: 'TUSS_DELETE_FAILED',
-        error: 'Não foi possível excluir este cadastro agora.'
+        error: 'Não foi possível excluir este cadastro agora.',
+        requestId
       });
     }
   });

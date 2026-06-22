@@ -417,11 +417,69 @@ test('CRUD seguro de cadastros de apoio, De/Para e valores tem impacto de exclus
   assert.match(serverCode, /TUSS_DELETE_IMPACT_QUERY_FAILED/);
   assert.match(serverCode, /logTussDeleteFailure\('\[TussReady\] delete impact failed'/);
   assert.match(serverCode, /recommendedAction:\s*impact\.recommendedAction/);
+  assert.match(serverCode, /function safeJsonPreview\(value: unknown, maxLength = 1000\)/);
+  assert.match(serverCode, /function normalizeUnknownError\(error: unknown\)/);
+  assert.match(serverCode, /message !== '\[object Object\]'/);
+  assert.match(serverCode, /resolveTussDeleteRequestId/);
+  assert.match(serverCode, /crypto\.randomUUID\(\)/);
+  assert.match(serverCode, /const requestId = resolveTussDeleteRequestId\(req\)/);
+  assert.match(serverCode, /unknownDependencies\?\s*:\s*string\[\]/);
+  assert.match(serverCode, /optionalSchema\?\s*:\s*boolean/);
+  assert.match(serverCode, /unknownDependencies\?\.push\(params\.stage\)/);
+  assert.match(serverCode, /unknown:\s*unknownDependencies\.length/);
+  assert.match(serverCode, /canDelete = unknownDependencies\.length === 0/);
+  assert.match(serverCode, /impact_price_load/);
+  assert.match(serverCode, /impact_price_billing_items/);
+  assert.match(serverCode, /impact_price_pre_guides_direct/);
+  assert.match(serverCode, /impact_price_official_documents/);
+  assert.match(serverCode, /impact_price_authorizations/);
+  assert.match(serverCode, /impact_mapping_prices/);
+  assert.match(serverCode, /impact_mapping_billing_items/);
+  assert.match(serverCode, /impact_mapping_pre_guides_direct/);
+  assert.match(serverCode, /impact_mapping_official_documents/);
+  assert.match(serverCode, /impact_mapping_authorizations/);
   assert.match(serverCode, /appointment_tiss_pre_guides/);
   assert.match(serverCode, /appointment_billing_items/);
   assert.match(serverCode, /patient_payer_authorizations/);
   assert.match(serverCode, /official_document_id/);
   assert.match(serverCode, /requireRoles\('coordinator', 'admin', 'owner'\)/);
+});
+
+test('delete-impact TUSS normaliza erros e usa schemas especificos por entidade sem 500 opaco', () => {
+  const tussConfigStart = serverCode.indexOf('const TUSS_ENTITY_CONFIG = {');
+  const impactStart = serverCode.indexOf('const buildTussDeleteImpact = async');
+  const tussConfig = serverCode.slice(tussConfigStart, impactStart);
+  const pricesConfig = tussConfig.slice(tussConfig.indexOf('prices:'), tussConfig.indexOf('} as const'));
+  const mappingsConfig = tussConfig.slice(tussConfig.indexOf('mappings:'), tussConfig.indexOf('prices:'));
+  assert.match(pricesConfig, /table:\s*'payer_procedure_prices'/);
+  assert.match(pricesConfig, /activeColumn:\s*'active'/);
+  assert.match(pricesConfig, /validToColumn:\s*'valid_until'/);
+  assert.doesNotMatch(pricesConfig, /validToColumn:\s*'valid_to'/);
+  assert.doesNotMatch(pricesConfig, /is_active|deleted_at|status/);
+  assert.match(mappingsConfig, /table:\s*'payer_tuss_mappings'/);
+  assert.match(mappingsConfig, /activeColumn:\s*'active'/);
+  assert.match(mappingsConfig, /validToColumn:\s*'valid_to'/);
+  assert.doesNotMatch(mappingsConfig, /validToColumn:\s*'valid_until'/);
+  assert.doesNotMatch(mappingsConfig, /is_active|deleted_at|status/);
+
+  const logStart = serverCode.indexOf('const logTussDeleteFailure =');
+  const payloadStart = serverCode.indexOf('const buildTussDeleteImpactPayload =');
+  const logSlice = serverCode.slice(logStart, payloadStart);
+  assert.match(logSlice, /normalizeUnknownError\(error\)/);
+  assert.match(logSlice, /errorContext\.stage \|\| context\.stage/);
+  assert.match(logSlice, /rawType: normalized\.rawType/);
+  assert.doesNotMatch(logSlice, /String\(error \|\| ''\)/);
+
+  const routeSlice = serverCode.slice(
+    serverCode.indexOf("app.get('/api/admin/tuss/:entityType/:entityId/delete-impact'"),
+    serverCode.indexOf("app.post('/api/admin/tuss/mappings/:mappingId/revalidate'")
+  );
+  assert.match(routeSlice, /const requestId = resolveTussDeleteRequestId\(req\)/);
+  assert.match(routeSlice, /requestId,\s*entityType: impact\.entityType/);
+  assert.match(routeSlice, /unknownDependencies: impact\.unknownDependencies/);
+  assert.match(routeSlice, /buildTussDeleteImpact\(organizationId, entityType, entityId, requestId\)/);
+  assert.match(routeSlice, /TUSS_DELETE_BLOCKED_BY_DEPENDENCIES/);
+  assert.match(routeSlice, /Este cadastro já foi utilizado e não pode ser excluído/);
 });
 
 let passed = 0;
