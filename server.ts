@@ -9485,6 +9485,12 @@ const PATIENT_ANAMNESIS_PATIENT_SELECT_COLUMNS = [
   'insurance_type',
   'insurance_name',
   'insurance_card_number',
+  'insurance_card_valid_until',
+  'insurance_plan_category',
+  'insurance_holder_name',
+  'insurance_holder_cpf',
+  'insurance_holder_relationship',
+  'eligibility_notes',
   'patient_group',
   'lead_source',
   'notes',
@@ -9802,6 +9808,12 @@ function buildPatientRegistrationAnamnesisPrefill(patient: any, registrationPayl
     convenioTipo: normalizeOption(firstText(registration?.convenioTipo, registration?.insuranceType, registration?.insurance_type, registrationAnamnesis?.convenioTipo, patientAnamnesis?.convenioTipo, patient?.insurance_type), 'insurance'),
     convenioNome: firstText(registration?.convenioNome, registration?.insuranceName, registration?.insurance_name, registrationAnamnesis?.convenioNome, patientAnamnesis?.convenioNome, patient?.insurance_name),
     convenioCarteirinha: firstText(registration?.convenioCarteirinha, registration?.cardNumber, registration?.insuranceCardNumber, registration?.insurance_card_number, registrationAnamnesis?.convenioCarteirinha, patientAnamnesis?.convenioCarteirinha, patient?.insurance_card_number),
+    convenioCarteirinhaValidade: dateOnly(registration?.convenioCarteirinhaValidade, registration?.insuranceCardValidUntil, registration?.insurance_card_valid_until, registrationAnamnesis?.convenioCarteirinhaValidade, patientAnamnesis?.convenioCarteirinhaValidade, patient?.insurance_card_valid_until),
+    convenioPlanoCategoria: firstText(registration?.convenioPlanoCategoria, registration?.insurancePlanCategory, registration?.insurance_plan_category, registrationAnamnesis?.convenioPlanoCategoria, patientAnamnesis?.convenioPlanoCategoria, patient?.insurance_plan_category),
+    convenioTitularNome: firstText(registration?.convenioTitularNome, registration?.insuranceHolderName, registration?.insurance_holder_name, registrationAnamnesis?.convenioTitularNome, patientAnamnesis?.convenioTitularNome, patient?.insurance_holder_name),
+    convenioTitularCpf: firstText(registration?.convenioTitularCpf, registration?.insuranceHolderCpf, registration?.insurance_holder_cpf, registrationAnamnesis?.convenioTitularCpf, patientAnamnesis?.convenioTitularCpf, patient?.insurance_holder_cpf),
+    convenioTitularRelacao: firstText(registration?.convenioTitularRelacao, registration?.insuranceHolderRelationship, registration?.insurance_holder_relationship, registrationAnamnesis?.convenioTitularRelacao, patientAnamnesis?.convenioTitularRelacao, patient?.insurance_holder_relationship),
+    convenioElegibilidadeObs: firstText(registration?.convenioElegibilidadeObs, registration?.insuranceEligibilityNotes, registration?.eligibilityNotes, registration?.eligibility_notes, registrationAnamnesis?.convenioElegibilidadeObs, patientAnamnesis?.convenioElegibilidadeObs, patient?.eligibility_notes),
     grupo: normalizeOption(firstText(registration?.grupo, registration?.group, registration?.patient_group, registrationAnamnesis?.grupo, patientAnamnesis?.grupo, patient?.patient_group), 'group'),
     comoConheceu: normalizeOption(firstText(registration?.comoConheceu, registration?.source, registration?.lead_source, registrationAnamnesis?.comoConheceu, patientAnamnesis?.comoConheceu, patient?.lead_source), 'source'),
     rg: firstText(registration?.rg, registrationAnamnesis?.rg, patientAnamnesis?.rg, patient?.rg),
@@ -10269,7 +10281,7 @@ function buildPatientIdentityPersistenceFields(body: any) {
     insurance_holder_name: sanitizeString(body?.insuranceHolderName || body?.insurance_holder_name || body?.convenioTitularNome, 160),
     insurance_holder_cpf: normalizeCpf(body?.insuranceHolderCpf || body?.insurance_holder_cpf || body?.convenioTitularCpf) || undefined,
     insurance_holder_relationship: sanitizeString(body?.insuranceHolderRelationship || body?.insurance_holder_relationship || body?.convenioTitularRelacao, 80),
-    eligibility_notes: sanitizeTextField(body?.eligibilityNotes || body?.eligibility_notes || body?.convenioElegibilidadeObs, 1000),
+    eligibility_notes: sanitizeTextField(body?.insuranceEligibilityNotes || body?.eligibilityNotes || body?.eligibility_notes || body?.convenioElegibilidadeObs, 1000),
     patient_group: sanitizeString(body?.group || body?.patient_group || body?.grupo, 80),
     lead_source: sanitizeString(body?.source || body?.lead_source || body?.comoConheceu, 120),
     notes: sanitizeTextField(body?.notes || body?.outrasInformacoes || body?.otherInformation, 4000),
@@ -10282,6 +10294,82 @@ function buildPatientIdentityPersistenceFields(body: any) {
     responsible_email: sanitizeEmail(body?.responsibleEmail || body?.responsible_email || body?.responsavelEmail || guardian?.email) || undefined,
     responsible_relationship: sanitizeString(body?.responsibleRelationship || body?.responsible_relationship || body?.responsavelRelacao || guardian?.relacao || guardian?.relationship, 120),
     metadata: Object.keys(safeMetadata).length ? safeMetadata : undefined,
+  });
+}
+
+function normalizePatientInsuranceEligibilityPayload(input: any) {
+  const payload = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+  const anamnese = payload?.anamnese && typeof payload.anamnese === 'object' && !Array.isArray(payload.anamnese)
+    ? payload.anamnese
+    : {};
+  const firstText = (...values: any[]) => {
+    for (const value of values) {
+      if (typeof value === 'string') {
+        const text = sanitizeString(value, 1000);
+        if (text) return text;
+      }
+      if (typeof value === 'number' || typeof value === 'boolean') {
+        const text = sanitizeString(String(value), 1000);
+        if (text) return text;
+      }
+    }
+    return '';
+  };
+  const normalizeInsuranceType = (value: string) => {
+    const normalized = sanitizeString(value, 60)
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase();
+    if (normalized === 'convenio' || normalized === 'insurance') return 'convenio';
+    if (normalized === 'particular' || normalized === 'private') return 'particular';
+    return normalized || 'particular';
+  };
+
+  const insuranceType = normalizeInsuranceType(firstText(
+    payload?.insuranceType,
+    payload?.convenioTipo,
+    payload?.insurance_type,
+    anamnese?.insuranceType,
+    anamnese?.convenioTipo,
+  ));
+  const insuranceName = firstText(payload?.insuranceName, payload?.convenioNome, payload?.insurance_name, anamnese?.insuranceName, anamnese?.convenioNome);
+  const insuranceCardNumber = firstText(payload?.insuranceCardNumber, payload?.convenioCarteirinha, payload?.cardNumber, payload?.insurance_card_number, anamnese?.insuranceCardNumber, anamnese?.convenioCarteirinha);
+  const insuranceCardValidUntil = sanitizeIsoDateOnly(firstText(payload?.insuranceCardValidUntil, payload?.convenioCarteirinhaValidade, payload?.insurance_card_valid_until, anamnese?.insuranceCardValidUntil, anamnese?.convenioCarteirinhaValidade)) || '';
+  const insurancePlanCategory = firstText(payload?.insurancePlanCategory, payload?.convenioPlanoCategoria, payload?.insurance_plan_category, anamnese?.insurancePlanCategory, anamnese?.convenioPlanoCategoria);
+  const insuranceHolderName = firstText(payload?.insuranceHolderName, payload?.convenioTitularNome, payload?.insurance_holder_name, anamnese?.insuranceHolderName, anamnese?.convenioTitularNome);
+  const insuranceHolderCpf = normalizeCpf(firstText(payload?.insuranceHolderCpf, payload?.convenioTitularCpf, payload?.insurance_holder_cpf, anamnese?.insuranceHolderCpf, anamnese?.convenioTitularCpf)) || firstText(payload?.insuranceHolderCpf, payload?.convenioTitularCpf, anamnese?.insuranceHolderCpf, anamnese?.convenioTitularCpf);
+  const insuranceHolderRelationship = firstText(payload?.insuranceHolderRelationship, payload?.convenioTitularRelacao, payload?.insurance_holder_relationship, anamnese?.insuranceHolderRelationship, anamnese?.convenioTitularRelacao);
+  const insuranceEligibilityNotes = sanitizeTextField(firstText(payload?.insuranceEligibilityNotes, payload?.convenioElegibilidadeObs, payload?.eligibilityNotes, payload?.eligibility_notes, anamnese?.insuranceEligibilityNotes, anamnese?.convenioElegibilidadeObs), 1000);
+
+  const mirrored = cleanObject({
+    insuranceType,
+    insuranceName,
+    insuranceCardNumber,
+    cardNumber: insuranceCardNumber,
+    insuranceCardValidUntil,
+    insurancePlanCategory,
+    insuranceHolderName,
+    insuranceHolderCpf,
+    insuranceHolderRelationship,
+    insuranceEligibilityNotes,
+    eligibilityNotes: insuranceEligibilityNotes,
+    convenioTipo: insuranceType,
+    convenioNome: insuranceName,
+    convenioCarteirinha: insuranceCardNumber,
+    convenioCarteirinhaValidade: insuranceCardValidUntil,
+    convenioPlanoCategoria: insurancePlanCategory,
+    convenioTitularNome: insuranceHolderName,
+    convenioTitularCpf: insuranceHolderCpf,
+    convenioTitularRelacao: insuranceHolderRelationship,
+    convenioElegibilidadeObs: insuranceEligibilityNotes,
+  });
+
+  return cleanObject({
+    ...payload,
+    ...mirrored,
+    ...(payload?.anamnese && typeof payload.anamnese === 'object' && !Array.isArray(payload.anamnese)
+      ? { anamnese: cleanObject({ ...anamnese, ...mirrored }) }
+      : {}),
   });
 }
 
@@ -21321,6 +21409,28 @@ async function startServer() {
         'insurance_name',
         'insuranceCardNumber',
         'insurance_card_number',
+        'insuranceCardValidUntil',
+        'insurance_card_valid_until',
+        'insurancePlanCategory',
+        'insurance_plan_category',
+        'insuranceHolderName',
+        'insurance_holder_name',
+        'insuranceHolderCpf',
+        'insurance_holder_cpf',
+        'insuranceHolderRelationship',
+        'insurance_holder_relationship',
+        'insuranceEligibilityNotes',
+        'eligibilityNotes',
+        'eligibility_notes',
+        'convenioTipo',
+        'convenioNome',
+        'convenioCarteirinha',
+        'convenioCarteirinhaValidade',
+        'convenioPlanoCategoria',
+        'convenioTitularNome',
+        'convenioTitularCpf',
+        'convenioTitularRelacao',
+        'convenioElegibilidadeObs',
         'group',
         'patient_group',
         'source',
@@ -21617,10 +21727,10 @@ async function startServer() {
           error: 'Não foi possível descriptografar o prontuário existente com a chave atual. Nenhum dado foi sobrescrito.'
         });
       }
-      const mergedPayload = sanitizeClinicalPayload(cleanObject({
+      const mergedPayload = normalizePatientInsuranceEligibilityPayload(sanitizeClinicalPayload(cleanObject({
         ...existingPayload,
         ...payload
-      })) || {};
+      })) || {});
 
       const encrypted = encryptJsonPayload(mergedPayload);
       const pseudonymSeed = [
@@ -22857,13 +22967,16 @@ async function startServer() {
           actorId: sanitizeString(req.session.user?.id, 120)
         });
       }
+      const responsePayload = decryptedPayload
+        ? normalizePatientInsuranceEligibilityPayload(redactPatientFinancialPayload(decryptedPayload, req.session.user))
+        : null;
       res.json({
         success: true,
         data: data
           ? {
               patientId: data.patient_id,
               pseudonymId: data.pseudonym_id,
-              payload: redactPatientFinancialPayload(decryptedPayload, req.session.user),
+              payload: responsePayload,
               payloadPreview: data.payload_preview,
               updatedAt: data.updated_at,
               decryptionError: Boolean(encryptedPayload && !decryptedPayload)

@@ -39,7 +39,7 @@ test('data de nascimento percorre formulario, payload, backend, select e hidrata
   assert.match(appCreatePayload, /birthDate:\s*resolvedBirthDate/);
   assert.match(appCreatePayload, /birth_date:\s*resolvedBirthDate/);
 
-  const appUpdatePayload = sliceFrom(appCode, 'const handleUpdatePatient = async', 6200);
+  const appUpdatePayload = sliceFrom(appCode, 'const handleUpdatePatient = async', 9200);
   assert.match(appUpdatePayload, /birthDate:\s*updatedData\.birthDate \|\| updatedData\.dataNascimento/);
   assert.match(appUpdatePayload, /birth_date:\s*updatedData\.birthDate \|\| updatedData\.dataNascimento/);
 

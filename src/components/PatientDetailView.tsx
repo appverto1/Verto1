@@ -21,6 +21,7 @@ import { resolveAbaPromptLevel } from '../utils/abaPromptLevels';
 import { abaMasteryCriterionSourceLabel, formatAbaMasteryCriterion, normalizeAbaMasteryCriterion } from '../utils/abaMasteryEngine';
 import { isAbaV2Enabled } from '../utils/featureFlags';
 import { filterHumanDisplayEntries, formatSessionLabel, safeDisplayValue } from '../utils/displayLabels';
+import { normalizePatientInsuranceEligibility } from '../utils/patientInsuranceEligibility';
 import {
   PEI_PLAN_SUBTABS,
   buildPeiMaintenanceEligibleSkills,
@@ -200,6 +201,15 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       responsavelEmail ||
       responsavelRelacao,
     );
+    const insuranceEligibility = normalizePatientInsuranceEligibility(
+      {
+        ...patientRecord,
+        payload: existing,
+        anamnese: existing,
+        anamnesisData: existing,
+      },
+      { useResponsibleFallback: true },
+    );
 
     return {
       ...existing,
@@ -210,9 +220,26 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       cpf: coalescePatientText(patientRecord?.cpf, existing?.cpf),
       dataNascimento: resolvedBirthDate,
       genero: coalescePatientText(patientRecord?.genero, patientRecord?.gender, existing?.genero),
-      convenioTipo: coalescePatientText(patientRecord?.convenioTipo, patientRecord?.insuranceType, patientRecord?.insurance_type, existing?.convenioTipo) || 'particular',
-      convenioNome: coalescePatientText(patientRecord?.convenioNome, patientRecord?.insuranceName, patientRecord?.insurance_name, existing?.convenioNome),
-      convenioCarteirinha: coalescePatientText(patientRecord?.convenioCarteirinha, patientRecord?.cardNumber, patientRecord?.insuranceCardNumber, patientRecord?.insurance_card_number, existing?.convenioCarteirinha),
+      convenioTipo: insuranceEligibility.convenioTipo,
+      convenioNome: insuranceEligibility.convenioNome,
+      convenioCarteirinha: insuranceEligibility.convenioCarteirinha,
+      convenioCarteirinhaValidade: insuranceEligibility.convenioCarteirinhaValidade,
+      convenioPlanoCategoria: insuranceEligibility.convenioPlanoCategoria,
+      convenioTitularNome: insuranceEligibility.convenioTitularNome,
+      convenioTitularCpf: insuranceEligibility.convenioTitularCpf,
+      convenioTitularRelacao: insuranceEligibility.convenioTitularRelacao,
+      convenioElegibilidadeObs: insuranceEligibility.convenioElegibilidadeObs,
+      insuranceType: insuranceEligibility.insuranceType,
+      insuranceName: insuranceEligibility.insuranceName,
+      insuranceCardNumber: insuranceEligibility.insuranceCardNumber,
+      cardNumber: insuranceEligibility.insuranceCardNumber,
+      insuranceCardValidUntil: insuranceEligibility.insuranceCardValidUntil,
+      insurancePlanCategory: insuranceEligibility.insurancePlanCategory,
+      insuranceHolderName: insuranceEligibility.insuranceHolderName,
+      insuranceHolderCpf: insuranceEligibility.insuranceHolderCpf,
+      insuranceHolderRelationship: insuranceEligibility.insuranceHolderRelationship,
+      insuranceEligibilityNotes: insuranceEligibility.insuranceEligibilityNotes,
+      eligibilityNotes: insuranceEligibility.insuranceEligibilityNotes,
       grupo: coalescePatientText(patientRecord?.grupo, patientRecord?.group, existing?.grupo),
       comoConheceu: coalescePatientText(patientRecord?.comoConheceu, patientRecord?.source, existing?.comoConheceu),
       rg: coalescePatientText(patientRecord?.rg, existing?.rg),

@@ -37,7 +37,7 @@ test('cadastro rapido e edicao nao anunciam sucesso antes da persistencia', () =
 });
 
 test('app checa retorno de persistencia antes de confirmar update cadastral', () => {
-  const updatePatient = sliceFrom(appCode, 'const handleUpdatePatient = async', 11000);
+  const updatePatient = sliceFrom(appCode, 'const handleUpdatePatient = async', 22000);
   assert.match(updatePatient, /const deleteResult = await dataService\.deletePatient/);
   assert.match(updatePatient, /return \{ success: false, error: errorMessage \}/);
   assert.match(updatePatient, /let updateResult = await dataService\.updatePatient/);

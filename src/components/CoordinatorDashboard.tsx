@@ -186,6 +186,7 @@ import {
   mapPatientProfileTypeToLegacyPortalType,
   normalizePatientProfileType,
 } from "../utils/patientProfileType";
+import { normalizePatientInsuranceEligibility } from "../utils/patientInsuranceEligibility";
 import {
   APPOINTMENT_FINANCIAL_CONTEXT_OPTIONS,
   APPOINTMENT_FINANCIAL_CONTEXT_REQUIRED_MESSAGE,
@@ -3144,9 +3145,35 @@ export function CoordinatorDashboard({
     return `(${v.slice(0, 2)}) ${v.slice(2, 7)}-${v.slice(7, 11)}`;
   };
 
+  const applyInsuranceHolderSuggestion = (form: any) => {
+    if (form?.convenioTipo !== "convenio") return form;
+    const hasHolder = Boolean(
+      String(form?.convenioTitularNome || "").trim() ||
+        String(form?.convenioTitularCpf || "").trim() ||
+        String(form?.convenioTitularRelacao || "").trim(),
+    );
+    const hasResponsible = Boolean(
+      String(form?.responsavelNome || "").trim() ||
+        String(form?.responsavelCpf || "").trim() ||
+        String(form?.responsavelRelacao || "").trim(),
+    );
+    if (hasHolder || !hasResponsible) return form;
+    return {
+      ...form,
+      convenioTitularNome: form.responsavelNome || "",
+      convenioTitularCpf: form.responsavelCpf || "",
+      convenioTitularRelacao: form.responsavelRelacao || "",
+      insuranceHolderSuggestedFromResponsible: true,
+    };
+  };
+
   const handlePatientFormChange = (field: string, value: any) => {
     if (field === "cpf" || field === "responsavelCpf" || field === "convenioTitularCpf") {
-      setNewPatientForm((prev: any) => ({ ...prev, [field]: formatCpf(String(value || "")) }));
+      setNewPatientForm((prev: any) => ({
+        ...prev,
+        [field]: formatCpf(String(value || "")),
+        ...(field === "convenioTitularCpf" ? { insuranceHolderSuggestedFromResponsible: false } : {}),
+      }));
       return;
     }
     if (field === "telefone" || field === "responsavelTelefone") {
@@ -3159,8 +3186,10 @@ export function CoordinatorDashboard({
     }
     if (field === "convenioTipo") {
       setNewPatientForm((prev: any) => ({
-        ...prev,
-        convenioTipo: value,
+        ...applyInsuranceHolderSuggestion({
+          ...prev,
+          convenioTipo: value,
+        }),
         financialPlans: normalizePatientFinancialPlans(prev.financialPlans, prev).map((plan: any) => ({
           ...plan,
           ...(value === "convenio" && plan.billingMode === "INSURANCE"
@@ -3179,6 +3208,14 @@ export function CoordinatorDashboard({
           payerNameSnapshot: plan.billingMode === "INSURANCE" ? value : plan.payerNameSnapshot,
           insuranceName: plan.billingMode === "INSURANCE" ? value : plan.insuranceName,
         })),
+      }));
+      return;
+    }
+    if (field === "convenioTitularNome" || field === "convenioTitularRelacao") {
+      setNewPatientForm((prev: any) => ({
+        ...prev,
+        [field]: value,
+        insuranceHolderSuggestedFromResponsible: false,
       }));
       return;
     }
@@ -3249,6 +3286,7 @@ export function CoordinatorDashboard({
       convenioTitularCpf: "",
       convenioTitularRelacao: "",
       convenioElegibilidadeObs: "",
+      insuranceHolderSuggestedFromResponsible: false,
       grupo: "adulto",
       comoConheceu: "",
       rg: "",
@@ -3592,6 +3630,7 @@ export function CoordinatorDashboard({
   };
 
   const handleEditPatient = (patient: any) => {
+    const insuranceEligibility = normalizePatientInsuranceEligibility(patient, { useResponsibleFallback: true });
     setEditingPatientId(String(patient.id));
     setNewPatientForm({
       nome: patient.name || "",
@@ -3605,15 +3644,16 @@ export function CoordinatorDashboard({
           "",
       ),
       genero: patient.gender || "",
-      convenioTipo: patient.insuranceType === "convenio" ? "convenio" : "particular",
-      convenioNome: patient.insuranceName || "",
-      convenioCarteirinha: patient.cardNumber || "",
-      convenioCarteirinhaValidade: patient.insuranceCardValidUntil || patient.insurance_card_valid_until || "",
-      convenioPlanoCategoria: patient.insurancePlanCategory || patient.insurance_plan_category || "",
-      convenioTitularNome: patient.insuranceHolderName || patient.insurance_holder_name || "",
-      convenioTitularCpf: formatCpf(patient.insuranceHolderCpf || patient.insurance_holder_cpf || ""),
-      convenioTitularRelacao: patient.insuranceHolderRelationship || patient.insurance_holder_relationship || "",
-      convenioElegibilidadeObs: patient.eligibilityNotes || patient.eligibility_notes || "",
+      convenioTipo: insuranceEligibility.convenioTipo === "convenio" ? "convenio" : "particular",
+      convenioNome: insuranceEligibility.convenioNome || "",
+      convenioCarteirinha: insuranceEligibility.convenioCarteirinha || "",
+      convenioCarteirinhaValidade: insuranceEligibility.convenioCarteirinhaValidade || "",
+      convenioPlanoCategoria: insuranceEligibility.convenioPlanoCategoria || "",
+      convenioTitularNome: insuranceEligibility.convenioTitularNome || "",
+      convenioTitularCpf: formatCpf(insuranceEligibility.convenioTitularCpf || ""),
+      convenioTitularRelacao: insuranceEligibility.convenioTitularRelacao || "",
+      convenioElegibilidadeObs: insuranceEligibility.convenioElegibilidadeObs || "",
+      insuranceHolderSuggestedFromResponsible: insuranceEligibility.holderPrefilledFromResponsible,
       grupo: patient.group || "adulto",
       comoConheceu: patient.source || "",
       rg: patient.rg || "",
@@ -3642,8 +3682,8 @@ export function CoordinatorDashboard({
       ),
       financialPlans: normalizePatientFinancialPlans(patient.financialPlans, {
         ...patient,
-        convenioTipo: patient.insuranceType === "convenio" ? "convenio" : "particular",
-        convenioNome: patient.insuranceName || "",
+        convenioTipo: insuranceEligibility.convenioTipo === "convenio" ? "convenio" : "particular",
+        convenioNome: insuranceEligibility.convenioNome || "",
       }),
     });
     setIsPatientRegistrationModalOpen(true);
@@ -10483,19 +10523,25 @@ export function CoordinatorDashboard({
                       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                         <FormField
                           label="Nome do titular"
-                          helperText="Preencha quando o paciente não for o titular do convênio."
+                          helperText={newPatientForm.insuranceHolderSuggestedFromResponsible
+                            ? "Pré-preenchido com os dados do responsável. Você pode alterar se o titular do plano for outra pessoa."
+                            : "Preencha quando o paciente não for o titular do convênio."}
                         >
                           <input className={patientFormInputClass} placeholder="Nome do titular" value={newPatientForm.convenioTitularNome} onChange={(e) => handlePatientFormChange("convenioTitularNome", e.target.value)} />
                         </FormField>
                         <FormField
                           label="CPF do titular"
-                          helperText="Pode ser exigido pelo convênio para validação do beneficiário."
+                          helperText={newPatientForm.insuranceHolderSuggestedFromResponsible
+                            ? "Pré-preenchido com os dados do responsável. Você pode alterar se necessário."
+                            : "Pode ser exigido pelo convênio para validação do beneficiário."}
                         >
                           <input className={patientFormInputClass} placeholder="000.000.000-00" value={newPatientForm.convenioTitularCpf} onChange={(e) => handlePatientFormChange("convenioTitularCpf", e.target.value)} />
                         </FormField>
                         <FormField
                           label="Relação com titular"
-                          helperText="Ex.: filho(a), cônjuge, dependente."
+                          helperText={newPatientForm.insuranceHolderSuggestedFromResponsible
+                            ? "Pré-preenchido pela relação do responsável com o paciente."
+                            : "Ex.: filho(a), cônjuge, dependente."}
                         >
                           <input className={patientFormInputClass} placeholder="Ex.: filho(a)" value={newPatientForm.convenioTitularRelacao} onChange={(e) => handlePatientFormChange("convenioTitularRelacao", e.target.value)} />
                         </FormField>

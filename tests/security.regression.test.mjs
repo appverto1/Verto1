@@ -278,7 +278,7 @@ test('finance privacy: patient record payload redacts financial fields for non-f
     'POST /api/patient-records deve remover campos financeiros antes de sanitizar para perfis sem permissÃ£o.'
   );
   expectPattern(
-    /payload: redactPatientFinancialPayload\(decryptedPayload, req\.session\.user\),/m,
+    /const responsePayload = decryptedPayload[\s\S]*?normalizePatientInsuranceEligibilityPayload\(redactPatientFinancialPayload\(decryptedPayload, req\.session\.user\)\)/m,
     'GET /api/patient-records deve redigir campos financeiros para perfis sem permissÃ£o.'
   );
 });

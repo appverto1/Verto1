@@ -63,7 +63,7 @@ test('cadastro persiste campos editaveis por migration, backend, payload e hidra
     assert.match(savePatientPayload, new RegExp(field));
   }
 
-  const hydration = sliceFrom(dataServiceCode, 'hydratedPatients.push', 3200);
+  const hydration = sliceFrom(dataServiceCode, 'hydratedPatients.push', 5200);
   assert.match(hydration, /birthDate:\s*recordPayload\?\.dataNascimento \|\| patient\?\.birth_date/);
   assert.match(hydration, /patient\?\.responsible_email/);
   assert.match(hydration, /patient\?\.responsible_relationship/);

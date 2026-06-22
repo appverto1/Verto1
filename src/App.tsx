@@ -27,6 +27,7 @@ import {
   mapPatientProfileTypeToLegacyPortalType,
   normalizePatientProfileType,
 } from './utils/patientProfileType';
+import { normalizePatientInsuranceEligibility } from './utils/patientInsuranceEligibility';
 import {
   getPeiHistoryProgressMarker,
   getPeiProgressResetMarker,
@@ -657,6 +658,12 @@ export default function App() {
       responsavelEmail ||
       responsavelRelacao,
     );
+    const insuranceEligibility = normalizePatientInsuranceEligibility({
+      ...source,
+      payload: existing,
+      anamnese: existing,
+      anamnesisData: existing,
+    });
 
     return {
       ...existing,
@@ -667,15 +674,26 @@ export default function App() {
       cpf: resolvedCpf,
       dataNascimento: resolvedBirthDate,
       genero: coalescePatientText(source?.gender, source?.genero, existing?.genero),
-      convenioTipo: coalescePatientText(source?.convenioTipo, source?.insuranceType, source?.insurance_type, existing?.convenioTipo) || 'particular',
-      convenioNome: coalescePatientText(source?.convenioNome, source?.insuranceName, source?.insurance_name, existing?.convenioNome),
-      convenioCarteirinha: coalescePatientText(source?.convenioCarteirinha, source?.cardNumber, source?.insuranceCardNumber, source?.insurance_card_number, existing?.convenioCarteirinha),
-      convenioCarteirinhaValidade: coalescePatientText(source?.convenioCarteirinhaValidade, source?.insuranceCardValidUntil, source?.insurance_card_valid_until, existing?.convenioCarteirinhaValidade),
-      convenioPlanoCategoria: coalescePatientText(source?.convenioPlanoCategoria, source?.insurancePlanCategory, source?.insurance_plan_category, existing?.convenioPlanoCategoria),
-      convenioTitularNome: coalescePatientText(source?.convenioTitularNome, source?.insuranceHolderName, source?.insurance_holder_name, existing?.convenioTitularNome),
-      convenioTitularCpf: coalescePatientText(source?.convenioTitularCpf, source?.insuranceHolderCpf, source?.insurance_holder_cpf, existing?.convenioTitularCpf),
-      convenioTitularRelacao: coalescePatientText(source?.convenioTitularRelacao, source?.insuranceHolderRelationship, source?.insurance_holder_relationship, existing?.convenioTitularRelacao),
-      convenioElegibilidadeObs: coalescePatientText(source?.convenioElegibilidadeObs, source?.eligibilityNotes, source?.eligibility_notes, existing?.convenioElegibilidadeObs),
+      convenioTipo: insuranceEligibility.convenioTipo,
+      convenioNome: insuranceEligibility.convenioNome,
+      convenioCarteirinha: insuranceEligibility.convenioCarteirinha,
+      convenioCarteirinhaValidade: insuranceEligibility.convenioCarteirinhaValidade,
+      convenioPlanoCategoria: insuranceEligibility.convenioPlanoCategoria,
+      convenioTitularNome: insuranceEligibility.convenioTitularNome,
+      convenioTitularCpf: insuranceEligibility.convenioTitularCpf,
+      convenioTitularRelacao: insuranceEligibility.convenioTitularRelacao,
+      convenioElegibilidadeObs: insuranceEligibility.convenioElegibilidadeObs,
+      insuranceType: insuranceEligibility.insuranceType,
+      insuranceName: insuranceEligibility.insuranceName,
+      insuranceCardNumber: insuranceEligibility.insuranceCardNumber,
+      cardNumber: insuranceEligibility.insuranceCardNumber,
+      insuranceCardValidUntil: insuranceEligibility.insuranceCardValidUntil,
+      insurancePlanCategory: insuranceEligibility.insurancePlanCategory,
+      insuranceHolderName: insuranceEligibility.insuranceHolderName,
+      insuranceHolderCpf: insuranceEligibility.insuranceHolderCpf,
+      insuranceHolderRelationship: insuranceEligibility.insuranceHolderRelationship,
+      insuranceEligibilityNotes: insuranceEligibility.insuranceEligibilityNotes,
+      eligibilityNotes: insuranceEligibility.insuranceEligibilityNotes,
       financialPlans: Array.isArray(source?.financialPlans)
         ? source.financialPlans
         : Array.isArray(existing?.financialPlans)
@@ -4675,6 +4693,28 @@ export default function App() {
     const { diagnosis, anamnesisData, pei, evaluationLinks, interventionTaskLinks, ...identityData } = updatedData;
     const currentPatient = allPatients.find((p) => String(p?.id) === String(updatedData?.id));
     const mergedIdentityPatient = { ...(currentPatient || {}), ...updatedData };
+    const updatedInsuranceEligibility = normalizePatientInsuranceEligibility(mergedIdentityPatient, { useResponsibleFallback: true });
+    const hasInsuranceEligibilityPatch = [
+      'insuranceType',
+      'insuranceName',
+      'insuranceCardNumber',
+      'insuranceCardValidUntil',
+      'insurancePlanCategory',
+      'insuranceHolderName',
+      'insuranceHolderCpf',
+      'insuranceHolderRelationship',
+      'insuranceEligibilityNotes',
+      'eligibilityNotes',
+      'convenioTipo',
+      'convenioNome',
+      'convenioCarteirinha',
+      'convenioCarteirinhaValidade',
+      'convenioPlanoCategoria',
+      'convenioTitularNome',
+      'convenioTitularCpf',
+      'convenioTitularRelacao',
+      'convenioElegibilidadeObs',
+    ].some((key) => Object.prototype.hasOwnProperty.call(updatedData || {}, key));
     const updatedProfileType = normalizePatientProfileType(
       updatedData?.patientProfileType ||
         updatedData?.panelType ||
@@ -4711,6 +4751,29 @@ export default function App() {
         setAllPatients(prev => prev.map(p => p.id === updatedData.id ? {
           ...p,
           ...identityData,
+          ...(hasInsuranceEligibilityPatch
+            ? {
+                insuranceType: updatedInsuranceEligibility.insuranceType,
+                insuranceName: updatedInsuranceEligibility.insuranceName,
+                cardNumber: updatedInsuranceEligibility.insuranceCardNumber,
+                insuranceCardNumber: updatedInsuranceEligibility.insuranceCardNumber,
+                insuranceCardValidUntil: updatedInsuranceEligibility.insuranceCardValidUntil,
+                insurancePlanCategory: updatedInsuranceEligibility.insurancePlanCategory,
+                insuranceHolderName: updatedInsuranceEligibility.insuranceHolderName,
+                insuranceHolderCpf: updatedInsuranceEligibility.insuranceHolderCpf,
+                insuranceHolderRelationship: updatedInsuranceEligibility.insuranceHolderRelationship,
+                eligibilityNotes: updatedInsuranceEligibility.insuranceEligibilityNotes,
+                convenioTipo: updatedInsuranceEligibility.convenioTipo,
+                convenioNome: updatedInsuranceEligibility.convenioNome,
+                convenioCarteirinha: updatedInsuranceEligibility.convenioCarteirinha,
+                convenioCarteirinhaValidade: updatedInsuranceEligibility.convenioCarteirinhaValidade,
+                convenioPlanoCategoria: updatedInsuranceEligibility.convenioPlanoCategoria,
+                convenioTitularNome: updatedInsuranceEligibility.convenioTitularNome,
+                convenioTitularCpf: updatedInsuranceEligibility.convenioTitularCpf,
+                convenioTitularRelacao: updatedInsuranceEligibility.convenioTitularRelacao,
+                convenioElegibilidadeObs: updatedInsuranceEligibility.convenioElegibilidadeObs,
+              }
+            : {}),
           ...(syncedAnamnesisData !== undefined ? { anamnesisData: syncedAnamnesisData } : {})
         } : p)); 
       }
@@ -4827,6 +4890,7 @@ export default function App() {
           || updatedData?.monthlyTreatmentValue !== undefined
           || updatedData?.billingDueDay !== undefined
           || updatedData?.billingMethod !== undefined
+          || hasInsuranceEligibilityPatch
         )
       ) {
         const recordPayload: any = {
@@ -4844,6 +4908,28 @@ export default function App() {
           }),
           ...(updatedData?.billingDueDay !== undefined && { billingDueDay: updatedData.billingDueDay || null }),
           ...(updatedData?.billingMethod !== undefined && { billingMethod: updatedData.billingMethod || null }),
+          ...(hasInsuranceEligibilityPatch && {
+            insuranceType: updatedInsuranceEligibility.insuranceType,
+            insuranceName: updatedInsuranceEligibility.insuranceName,
+            insuranceCardNumber: updatedInsuranceEligibility.insuranceCardNumber,
+            cardNumber: updatedInsuranceEligibility.insuranceCardNumber,
+            insuranceCardValidUntil: updatedInsuranceEligibility.insuranceCardValidUntil,
+            insurancePlanCategory: updatedInsuranceEligibility.insurancePlanCategory,
+            insuranceHolderName: updatedInsuranceEligibility.insuranceHolderName,
+            insuranceHolderCpf: updatedInsuranceEligibility.insuranceHolderCpf,
+            insuranceHolderRelationship: updatedInsuranceEligibility.insuranceHolderRelationship,
+            insuranceEligibilityNotes: updatedInsuranceEligibility.insuranceEligibilityNotes,
+            eligibilityNotes: updatedInsuranceEligibility.insuranceEligibilityNotes,
+            convenioTipo: updatedInsuranceEligibility.convenioTipo,
+            convenioNome: updatedInsuranceEligibility.convenioNome,
+            convenioCarteirinha: updatedInsuranceEligibility.convenioCarteirinha,
+            convenioCarteirinhaValidade: updatedInsuranceEligibility.convenioCarteirinhaValidade,
+            convenioPlanoCategoria: updatedInsuranceEligibility.convenioPlanoCategoria,
+            convenioTitularNome: updatedInsuranceEligibility.convenioTitularNome,
+            convenioTitularCpf: updatedInsuranceEligibility.convenioTitularCpf,
+            convenioTitularRelacao: updatedInsuranceEligibility.convenioTitularRelacao,
+            convenioElegibilidadeObs: updatedInsuranceEligibility.convenioElegibilidadeObs,
+          }),
           ...(pei !== undefined && { pei }),
           ...(evaluationLinks !== undefined && { evaluationLinks }),
           ...(interventionTaskLinks !== undefined && { interventionTaskLinks }),

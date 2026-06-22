@@ -15,6 +15,10 @@ import { isAbaV2Enabled } from '../utils/featureFlags';
 import { sanitizeTechnicalErrorMessage } from '../utils/displayLabels';
 import { isIdempotentConflictPayload } from '../utils/offlineSyncResilience';
 import { normalizePatientProfileType } from '../utils/patientProfileType';
+import {
+  mirrorPatientInsuranceEligibilityAliases,
+  normalizePatientInsuranceEligibility,
+} from '../utils/patientInsuranceEligibility';
 
 enum OperationType {
   CREATE = 'create',
@@ -1069,12 +1073,18 @@ export const dataService = {
       }, { helperName: 'getPatients', operation: 'list', table: 'patients', hasExplicitColumns: true, requiresPatientOrSession: false });
       if (response.status === 304) {
         const local304 = await getRecordsByType('patient');
-        return { success: true, data: local304.map((r) => r.data) };
+        return {
+          success: true,
+          data: local304.map((r) => mirrorPatientInsuranceEligibilityAliases(r.data || {}, { useResponsibleFallback: true }))
+        };
       }
       if (response.ok) {
         const result = await response.json();
+        const normalizedPatients = (result.data || []).map((p: any) =>
+          mirrorPatientInsuranceEligibilityAliases(p || {}, { useResponsibleFallback: true })
+        );
         let latest = 0;
-        for (const p of result.data || []) {
+        for (const p of normalizedPatients) {
           const updatedAtMs = p?.updated_at ? new Date(p.updated_at).getTime() : Date.now();
           latest = Math.max(latest, Number.isFinite(updatedAtMs) ? updatedAtMs : Date.now());
           await saveEncryptedRecord({
@@ -1088,13 +1098,16 @@ export const dataService = {
           });
         }
         await cacheResponseMetadata(endpoint, response, latest || null);
-        return result;
+        return { ...result, data: normalizedPatients };
       }
     } catch (error) {
       console.log('Fetching patients from local storage...');
     }
     const local = await getRecordsByType('patient');
-    return { success: true, data: local.map((r) => r.data) };
+    return {
+      success: true,
+      data: local.map((r) => mirrorPatientInsuranceEligibilityAliases(r.data || {}, { useResponsibleFallback: true }))
+    };
   },
 
   async savePatient(patient: any) {
@@ -1133,12 +1146,15 @@ export const dataService = {
       });
       const result = await response.json();
       const parsedPayload = parseJsonObject(result?.data?.payload);
+      const normalizedPayload = parsedPayload
+        ? mirrorPatientInsuranceEligibilityAliases(parsedPayload, { useResponsibleFallback: true })
+        : parsedPayload;
       return {
         ...result,
         data: result?.data
           ? {
               ...result.data,
-              payload: parsedPayload || result.data.payload || null
+              payload: normalizedPayload || result.data.payload || null
             }
           : result?.data
       };
@@ -6215,6 +6231,10 @@ export const dataService = {
 
       const recordPayload = parseJsonObject(patientRecordRes?.data?.payload) || {};
       const anamnesisData = parseJsonObject(recordPayload?.anamnese) || null;
+      const insuranceEligibility = normalizePatientInsuranceEligibility(
+        { ...patient, payload: recordPayload, anamnesisData },
+        { useResponsibleFallback: true },
+      );
       const submissions = ensureArray(submissionsRes?.data);
       const peiGoals = normalizePeiGoals(recordPayload, patient);
 
@@ -6223,9 +6243,32 @@ export const dataService = {
         socialName: recordPayload?.nomeSocial || patient?.social_name || patient?.socialName || null,
         birthDate: recordPayload?.dataNascimento || patient?.birth_date || patient?.birthDate || null,
         gender: recordPayload?.genero || patient?.gender || null,
-        insuranceType: recordPayload?.convenioTipo || patient?.insurance_type || patient?.insuranceType || 'particular',
-        insuranceName: recordPayload?.convenioNome || patient?.insurance_name || patient?.insuranceName || null,
-        cardNumber: recordPayload?.convenioCarteirinha || patient?.insurance_card_number || patient?.cardNumber || null,
+        insuranceType: insuranceEligibility.insuranceType,
+        insuranceName: insuranceEligibility.insuranceName || null,
+        cardNumber: insuranceEligibility.insuranceCardNumber || null,
+        insuranceCardNumber: insuranceEligibility.insuranceCardNumber || null,
+        insurance_card_number: insuranceEligibility.insuranceCardNumber || null,
+        insuranceCardValidUntil: insuranceEligibility.insuranceCardValidUntil || null,
+        insurance_card_valid_until: insuranceEligibility.insuranceCardValidUntil || null,
+        insurancePlanCategory: insuranceEligibility.insurancePlanCategory || null,
+        insurance_plan_category: insuranceEligibility.insurancePlanCategory || null,
+        insuranceHolderName: insuranceEligibility.insuranceHolderName || null,
+        insurance_holder_name: insuranceEligibility.insuranceHolderName || null,
+        insuranceHolderCpf: insuranceEligibility.insuranceHolderCpf || null,
+        insurance_holder_cpf: insuranceEligibility.insuranceHolderCpf || null,
+        insuranceHolderRelationship: insuranceEligibility.insuranceHolderRelationship || null,
+        insurance_holder_relationship: insuranceEligibility.insuranceHolderRelationship || null,
+        eligibilityNotes: insuranceEligibility.insuranceEligibilityNotes || null,
+        eligibility_notes: insuranceEligibility.insuranceEligibilityNotes || null,
+        convenioTipo: insuranceEligibility.convenioTipo,
+        convenioNome: insuranceEligibility.convenioNome,
+        convenioCarteirinha: insuranceEligibility.convenioCarteirinha,
+        convenioCarteirinhaValidade: insuranceEligibility.convenioCarteirinhaValidade,
+        convenioPlanoCategoria: insuranceEligibility.convenioPlanoCategoria,
+        convenioTitularNome: insuranceEligibility.convenioTitularNome,
+        convenioTitularCpf: insuranceEligibility.convenioTitularCpf,
+        convenioTitularRelacao: insuranceEligibility.convenioTitularRelacao,
+        convenioElegibilidadeObs: insuranceEligibility.convenioElegibilidadeObs,
         group: recordPayload?.grupo || patient?.patient_group || patient?.group || null,
         source: recordPayload?.comoConheceu || patient?.lead_source || patient?.source || null,
         rg: recordPayload?.rg || patient?.rg || null,
