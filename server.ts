@@ -29621,10 +29621,58 @@ async function startServer() {
         throw error;
       }
       const rows = Array.isArray(data) ? data : [];
+      const appointmentContextById = new Map<string, {
+        clinicId: string;
+        patientId: string;
+        patientName: string;
+        scheduledAt: string;
+      }>();
+      const notificationAppointmentIds = Array.from(new Set(
+        rows.map((row: any) => sanitizeString(row?.appointment_id, 120)).filter((id: string) => isUuid(id))
+      ));
+      if (notificationAppointmentIds.length > 0) {
+        let appointmentResult = await supabase
+          .from('appointments')
+          .select('id,clinic_id,patient_id,patient_email,scheduled_at,scheduled_start_at,source_payload')
+          .in('id', notificationAppointmentIds)
+          .limit(Math.min(notificationAppointmentIds.length, 200));
+        if (appointmentResult.error && extractMissingColumnName(appointmentResult.error) === 'source_payload') {
+          appointmentResult = await supabase
+            .from('appointments')
+            .select('id,clinic_id,patient_id,patient_email,scheduled_at,scheduled_start_at')
+            .in('id', notificationAppointmentIds)
+            .limit(Math.min(notificationAppointmentIds.length, 200));
+        }
+        if (!appointmentResult.error) {
+          for (const appointment of Array.isArray(appointmentResult.data) ? appointmentResult.data : []) {
+            const id = sanitizeString(appointment?.id, 120);
+            if (!isUuid(id)) continue;
+            const source = parseAppointmentSourcePayloadForFamilyView(appointment?.source_payload || appointment?.sourcePayload);
+            appointmentContextById.set(id, {
+              clinicId: sanitizeString(appointment?.clinic_id || source?.clinic_id || source?.clinicId, 120),
+              patientId: sanitizeString(appointment?.patient_id || source?.patient_id || source?.patientId, 120),
+              patientName: sanitizeString(source?.patientName || source?.patient_name || source?.name, 160),
+              scheduledAt: sanitizeString(appointment?.scheduled_at || appointment?.scheduled_start_at || source?.scheduledAt || source?.scheduled_at, 120)
+            });
+          }
+        } else if (!extractMissingColumnName(appointmentResult.error)) {
+          throw appointmentResult.error;
+        }
+      }
       const patientNamesById = new Map<string, string>();
       const patientClinicIdsById = new Map<string, string>();
       const notificationPatientIds = Array.from(new Set(
-        rows.map((row: any) => sanitizeString(row?.patient_id, 120)).filter((id: string) => isUuid(id))
+        rows.flatMap((row: any) => {
+          const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+          const appointmentId = sanitizeString(row?.appointment_id, 120);
+          const appointmentContext = appointmentContextById.get(appointmentId);
+          return [
+            row?.patient_id,
+            metadata.patientId,
+            metadata.patient_id,
+            appointmentContext?.patientId
+          ];
+        }).map((id: any) => sanitizeString(id, 120)).filter((id: string) => isUuid(id))
       ));
       if (notificationPatientIds.length > 0) {
         let patientResult = await supabase
@@ -29705,29 +29753,42 @@ async function startServer() {
       const normalizedRows: any[] = [];
       for (const row of rows) {
         const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
-        const patientId = sanitizeString(row?.patient_id, 120);
+        const appointmentId = sanitizeString(row?.appointment_id, 120);
+        const appointmentContext = appointmentContextById.get(appointmentId);
+        const patientId = sanitizeString(row?.patient_id || metadata.patientId || metadata.patient_id || appointmentContext?.patientId, 120);
         const clinicId = sanitizeString(
           row?.clinic_id ||
             metadata.clinicId ||
             metadata.clinic_id ||
+            appointmentContext?.clinicId ||
             patientClinicIdsById.get(patientId) ||
             row?.organization_id,
           120
         );
         const branding = await resolveNotificationClinicBranding(clinicId);
-        const patientName = sanitizeString(metadata.patientName || patientNamesById.get(patientId), 160) || 'Paciente';
-        const scheduledAt = sanitizeString(metadata.scheduledAt || row?.scheduled_for, 120);
+        const metadataPatientName = sanitizeString(metadata.patientName || metadata.patient_name, 160);
+        const appointmentPatientName = sanitizeString(appointmentContext?.patientName, 160);
+        const patientName =
+          (!isGenericCalendarPatientName(metadataPatientName) ? metadataPatientName : '') ||
+          patientNamesById.get(patientId) ||
+          (!isGenericCalendarPatientName(appointmentPatientName) ? appointmentPatientName : '') ||
+          'Paciente';
+        const scheduledAt = sanitizeString(metadata.scheduledAt || row?.scheduled_for || appointmentContext?.scheduledAt, 120);
+        const normalizedMetadata = {
+          ...metadata,
+          clinicName: branding.displayName,
+          clinicLogoUrl: branding.logoUrl || sanitizeSessionUrl(metadata.clinicLogoUrl) || null,
+          patientName,
+          scheduledAt: scheduledAt || metadata.scheduledAt || null
+        };
         normalizedRows.push({
           ...row,
+          patient_id: patientId || row?.patient_id,
+          clinic_id: isUuid(clinicId) ? clinicId : row?.clinic_id,
+          scheduled_for: scheduledAt || row?.scheduled_for,
           title: branding.displayName,
-          message: formatPortalReminderMessage(row, patientName),
-          metadata: {
-            ...metadata,
-            clinicName: branding.displayName,
-            clinicLogoUrl: branding.logoUrl || sanitizeSessionUrl(metadata.clinicLogoUrl) || null,
-            patientName,
-            scheduledAt: scheduledAt || metadata.scheduledAt || null
-          }
+          message: formatPortalReminderMessage({ ...row, scheduled_for: scheduledAt, metadata: normalizedMetadata }, patientName),
+          metadata: normalizedMetadata
         });
       }
 

@@ -70,10 +70,15 @@ test('portal notifications derive clinic branding from linked patient when notif
     notificationRouteSlice.indexOf('const branding = await resolveNotificationClinicBranding(clinicId);')
   );
   assert.match(notificationRouteSlice, /patientClinicIdsById/);
+  assert.match(notificationRouteSlice, /appointmentContextById/);
+  assert.match(notificationRouteSlice, /\.select\('id,clinic_id,patient_id,patient_email,scheduled_at,scheduled_start_at,source_payload'\)/);
   assert.match(notificationRouteSlice, /\.select\('id,name,email,clinic_id'\)/);
+  assert.match(notificationRouteSlice, /appointmentContext\?\.patientId/);
+  assert.match(notificationRouteSlice, /appointmentContext\?\.clinicId/);
   assert.match(notificationRouteSlice, /patientClinicIdsById\.get\(patientId\)/);
+  assert.match(notificationRouteSlice, /isGenericCalendarPatientName\(metadataPatientName\)/);
   assert.ok(
-    notificationRouteSlice.indexOf('const patientId = sanitizeString(row?.patient_id, 120);') <
+    notificationRouteSlice.indexOf('const patientId = sanitizeString(row?.patient_id || metadata.patientId || metadata.patient_id || appointmentContext?.patientId, 120);') <
       notificationRouteSlice.indexOf('const branding = await resolveNotificationClinicBranding(clinicId);'),
     'Branding da notificacao deve poder usar o paciente antes do fallback Verto.'
   );
