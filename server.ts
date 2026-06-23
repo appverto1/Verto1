@@ -7321,6 +7321,63 @@ function getPatientConfirmationColorForAgenda(status: unknown): 'neutral' | 'gre
   return 'neutral';
 }
 
+function buildPatientConfirmationStateForAgenda(params: {
+  status?: unknown;
+  response?: unknown;
+  respondedAt?: unknown;
+  source?: unknown;
+}) {
+  const status = normalizePatientConfirmationStatusForAgenda(params.status || params.response);
+  return {
+    status,
+    label: getPatientConfirmationLabelForAgenda(status),
+    color: getPatientConfirmationColorForAgenda(status),
+    respondedAt: sanitizeString(params.respondedAt, 80) || null,
+    response: sanitizeString(params.response || status, 80) || null,
+    source: sanitizeString(params.source, 80) || null
+  };
+}
+
+function applyPatientConfirmationStateToCalendarEvent(event: any, state: any) {
+  const eventStatus = normalizeOperationalAppointmentStatus(event?.status || event?.appointment_status);
+  const terminalClinicalState =
+    eventStatus === 'CANCELLED' || eventStatus === 'CANCEL_REQUESTED'
+      ? buildPatientConfirmationStateForAgenda({
+          status: 'declined',
+          response: event?.patientResponse || event?.patient_response || 'declined',
+          respondedAt: event?.patientRespondedAt || event?.patient_responded_at || event?.updated_at,
+          source: event?.patientConfirmationSource || event?.patient_confirmation_source || 'appointment_status'
+        })
+      : null;
+  const resolved = terminalClinicalState || state || buildPatientConfirmationStateForAgenda({
+    status:
+      event?.patientConfirmationStatus ||
+      event?.patient_confirmation_status ||
+      event?.patientResponse ||
+      event?.patient_response ||
+      event?.status,
+    response: event?.patientResponse || event?.patient_response || null,
+    respondedAt: event?.patientRespondedAt || event?.patient_responded_at || event?.patientConfirmationAt || event?.patient_confirmation_at || null,
+    source: event?.patientConfirmationSource || event?.patient_confirmation_source || null
+  });
+  return cleanObject({
+    ...event,
+    patientResponse: resolved.response,
+    patient_response: resolved.response,
+    patientRespondedAt: resolved.respondedAt,
+    patient_responded_at: resolved.respondedAt,
+    patientConfirmationStatus: resolved.status,
+    patient_confirmation_status: resolved.status,
+    patientConfirmationLabel: resolved.label,
+    patient_confirmation_label: resolved.label,
+    patientConfirmationColor: resolved.color,
+    patient_confirmation_color: resolved.color,
+    patientConfirmationSource: resolved.source,
+    patient_confirmation_source: resolved.source,
+    patient_response_source: resolved.source
+  });
+}
+
 function isAppointmentTerminalForPortalAction(status: unknown): boolean {
   return ['CANCELLED', 'COMPLETED', 'NO_SHOW'].includes(normalizeOperationalAppointmentStatus(status));
 }
@@ -33046,7 +33103,147 @@ async function startServer() {
     });
   }
 
-  const fetchCalendarEventsFromClinicState = async (clinicId: string, range: any, filters: any, counters: any = {}) => {
+  const setAppointmentPatientConfirmationStateCandidate = (
+    states: Map<string, any>,
+    appointmentId: string,
+    state: any
+  ) => {
+    if (!isUuid(appointmentId) || !state || state.status === 'pending') return;
+    const previous = states.get(appointmentId);
+    const previousTime = previous?.respondedAt ? new Date(previous.respondedAt).getTime() : 0;
+    const nextTime = state?.respondedAt ? new Date(state.respondedAt).getTime() : 0;
+    if (!previous || nextTime >= previousTime) states.set(appointmentId, state);
+  };
+
+  const mapAppointmentAuditRowToPatientConfirmationState = (row: any) => {
+    const action = sanitizeString(row?.action, 80).toUpperCase();
+    const newStatus = sanitizeString(row?.new_status || row?.newStatus, 80);
+    let status: any = newStatus || action;
+    if (action === 'CONFIRMED_BY_RESPONSIBLE') status = 'confirmed';
+    else if (action === 'RESCHEDULE_REQUESTED') status = 'reschedule_requested';
+    else if (action === 'CANCEL_REQUESTED') status = 'declined';
+    return buildPatientConfirmationStateForAgenda({
+      status,
+      response: status,
+      respondedAt: row?.performed_at || row?.performedAt || row?.created_at || row?.createdAt,
+      source: 'appointment_status_audit_logs'
+    });
+  };
+
+  const resolveAppointmentPatientConfirmationStates = async (
+    appointmentIds: string[],
+    clinicId: string,
+    organizationId?: string
+  ) => {
+    const ids = Array.from(new Set((appointmentIds || []).map((id) => sanitizeString(id, 120)).filter((id) => isUuid(id))));
+    const states = new Map<string, any>();
+    if (ids.length === 0) return states;
+
+    try {
+      const rows = await readPersistedAppointmentRows(ids, clinicId);
+      for (const row of rows || []) {
+        const appointmentId = sanitizeString(row?.id, 120);
+        const appointmentStatus = normalizeOperationalAppointmentStatus(row?.status);
+        const hasAppointmentResponseStatus = [
+          'CONFIRMED',
+          'RESCHEDULE_REQUESTED',
+          'CANCEL_REQUESTED',
+          'CANCELLED'
+        ].includes(appointmentStatus);
+        const hasExplicitResponse = Boolean(
+          row?.patient_confirmation_status ||
+            row?.patientConfirmationStatus ||
+            row?.patient_response ||
+            row?.patientResponse ||
+            row?.patient_confirmation_at ||
+            row?.patient_responded_at ||
+            hasAppointmentResponseStatus
+        );
+        const state = buildPatientConfirmationStateForAgenda({
+          status:
+            row?.patient_confirmation_status ||
+            row?.patientConfirmationStatus ||
+            row?.patient_response ||
+            row?.patientResponse ||
+            (hasExplicitResponse ? row?.status : null),
+          response: row?.patient_response || row?.patientResponse || null,
+          respondedAt:
+            row?.patient_responded_at ||
+            row?.patientRespondedAt ||
+            row?.patient_confirmation_at ||
+            row?.patientConfirmationAt ||
+            row?.updated_at ||
+            null,
+          source: hasExplicitResponse ? 'appointments' : null
+        });
+        if (hasExplicitResponse) setAppointmentPatientConfirmationStateCandidate(states, appointmentId, state);
+      }
+    } catch (error: any) {
+      if (!hasMissingFinancialSchema(error) && !isMissingRelationError(error)) {
+        console.warn('[Calendar] appointment patient confirmation table enrichment skipped:', error?.message || String(error));
+      }
+    }
+
+    try {
+      const organizationIds = Array.from(new Set([
+        sanitizeString(organizationId, 120),
+        sanitizeString(clinicId, 120)
+      ].filter((id) => isUuid(id))));
+      let auditQuery = supabase
+        .from('appointment_status_audit_logs')
+        .select(APPOINTMENT_STATUS_AUDIT_SELECT)
+        .in('appointment_id', ids)
+        .in('action', ['CONFIRMED_BY_RESPONSIBLE', 'RESCHEDULE_REQUESTED', 'CANCEL_REQUESTED'])
+        .order('performed_at', { ascending: false })
+        .limit(Math.min(ids.length * 8, 1000));
+      if (organizationIds.length === 1) auditQuery = auditQuery.eq('organization_id', organizationIds[0]);
+      else if (organizationIds.length > 1) auditQuery = auditQuery.in('organization_id', organizationIds);
+      const auditResult = await auditQuery;
+      if (auditResult.error) {
+        if (!hasMissingFinancialSchema(auditResult.error) && !isMissingRelationError(auditResult.error)) throw auditResult.error;
+      } else {
+        for (const row of auditResult.data || []) {
+          const appointmentId = sanitizeString(row?.appointment_id, 120);
+          setAppointmentPatientConfirmationStateCandidate(
+            states,
+            appointmentId,
+            mapAppointmentAuditRowToPatientConfirmationState(row)
+          );
+        }
+      }
+    } catch (error: any) {
+      console.warn('[Calendar] appointment patient confirmation audit enrichment skipped:', error?.message || String(error));
+    }
+
+    return states;
+  };
+
+  const resolveAppointmentPatientConfirmationState = async (
+    appointmentId: string,
+    clinicId: string,
+    organizationId?: string
+  ) => {
+    const states = await resolveAppointmentPatientConfirmationStates([appointmentId], clinicId, organizationId);
+    return states.get(sanitizeString(appointmentId, 120)) || null;
+  };
+
+  const enrichCalendarEventsWithPatientConfirmationState = async (
+    events: any[],
+    clinicId: string,
+    organizationId?: string
+  ) => {
+    const appointmentIds = (events || [])
+      .map((event: any) => sanitizeString(event?.id || event?.appointment_id || event?.appointmentId, 120))
+      .filter((id: string) => isUuid(id));
+    if (appointmentIds.length === 0) return events;
+    const states = await resolveAppointmentPatientConfirmationStates(appointmentIds, clinicId, organizationId || clinicId);
+    return (events || []).map((event: any) => {
+      const appointmentId = sanitizeString(event?.id || event?.appointment_id || event?.appointmentId, 120);
+      return applyPatientConfirmationStateToCalendarEvent(event, states.get(appointmentId));
+    });
+  };
+
+  const fetchCalendarEventsFromClinicState = async (clinicId: string, range: any, filters: any, counters: any = {}, organizationId?: string) => {
     const stateResult = await fetchClinicStateWithSchemaFallback({ supabase, clinicId, logger: console });
     if (stateResult.error) {
       if (hasMissingFinancialSchema(stateResult.error)) return [];
@@ -33059,13 +33256,14 @@ async function startServer() {
         .map((appointment: any) => ({ ...appointment, source_payload: appointment })),
       clinicId
     );
-    return sourceRows
+    const events = sourceRows
       .map((appointment: any) => normalizeCalendarAppointmentRow(appointment, counters))
       .filter((event: any) => {
         const start = new Date(event.start_time).getTime();
         return start >= fromTime && start <= toTime && calendarEventMatchesFilters(event, filters);
       })
       .slice(0, range.limit);
+    return enrichCalendarEventsWithPatientConfirmationState(events, clinicId, organizationId || clinicId);
   };
 
   const fetchCalendarAppointmentDetailRow = async (eventId: string, clinicId: string, user: any) => {
@@ -33124,7 +33322,7 @@ async function startServer() {
       const { data, error } = await query;
       if (error) {
         if (hasMissingFinancialSchema(error)) {
-          const fallback = await fetchCalendarEventsFromClinicState(clinicId, range, filters);
+          const fallback = await fetchCalendarEventsFromClinicState(clinicId, range, filters, {}, organizationId);
           return res.json({ success: true, data: fallback, source: 'clinic_state_fallback' });
         }
         throw error;
@@ -33140,7 +33338,7 @@ async function startServer() {
       ]);
       const closureByAppointment = await fetchClosureSummariesByAppointment(appointmentIds, organizationId, req.session.user);
       const counters = { planCountByPatient, probeCountByAppointment };
-      const events = hydratedRows
+      const normalizedEvents = hydratedRows
         .map((row: any) => {
           const closure = closureByAppointment.get(sanitizeString(row?.id, 120));
           return normalizeCalendarAppointmentRow(
@@ -33150,6 +33348,11 @@ async function startServer() {
         })
         .filter((event: any) => calendarEventMatchesFilters(event, filters))
         .slice(0, range.limit);
+      const events = await enrichCalendarEventsWithPatientConfirmationState(
+        normalizedEvents,
+        clinicId,
+        organizationId
+      );
       return res.json({ success: true, data: events, source: 'appointments' });
     } catch (error: any) {
       console.warn('[Calendar] event list failed:', error?.message || String(error));
@@ -33168,7 +33371,11 @@ async function startServer() {
       const closureByAppointment = await fetchClosureSummariesByAppointment([eventId], organizationId, req.session.user);
       const closure = closureByAppointment.get(eventId);
       const [hydratedRow] = await hydrateCalendarPatientNames([closure ? { ...row, ...mapClosureRowToCalendarFields(closure) } : row], clinicId);
-      const event = normalizeCalendarAppointmentRow(hydratedRow || row);
+      const baseEvent = normalizeCalendarAppointmentRow(hydratedRow || row);
+      const event = applyPatientConfirmationStateToCalendarEvent(
+        baseEvent,
+        await resolveAppointmentPatientConfirmationState(eventId, clinicId, organizationId)
+      );
       const patientId = sanitizeString(event.patient_id, 120);
 
       let planItems: any[] = [];

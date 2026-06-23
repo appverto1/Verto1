@@ -124,15 +124,33 @@ test('cards mostram informacoes e indicadores essenciais da sessao', () => {
 
 test('agenda usa resposta do paciente como fonte visual canonica', () => {
   assert.match(serverCode, /normalizePatientConfirmationStatusForAgenda/);
+  assert.match(serverCode, /resolveAppointmentPatientConfirmationStates/);
+  assert.match(serverCode, /appointment_status_audit_logs/);
+  assert.match(serverCode, /CONFIRMED_BY_RESPONSIBLE/);
+  assert.match(serverCode, /mapAppointmentAuditRowToPatientConfirmationState/);
   assert.match(serverCode, /patientConfirmationStatus/);
   assert.match(serverCode, /patientConfirmationLabel/);
   assert.match(serverCode, /patientConfirmationColor/);
+  assert.match(serverCode, /clinic_state_fallback/);
+  assert.match(serverCode, /fetchCalendarEventsFromClinicState[\s\S]*?enrichCalendarEventsWithPatientConfirmationState/);
+  assert.match(serverCode, /normalizedEvents[\s\S]*?enrichCalendarEventsWithPatientConfirmationState/);
   assert.match(calendarCode, /normalizeAppointmentPatientConfirmationStatus/);
   assert.match(calendarCode, /getAppointmentPatientConfirmationVisualState\(event\)/);
   assert.match(calendarCode, /detailStatusColor = getAppointmentPatientConfirmationVisualState\(detailEvent\)/);
   assert.match(calendarCode, /CONFIRMADO/);
   assert.match(calendarCode, /REMARCAR/);
   assert.match(calendarCode, /CANCELADO PELO PACIENTE/);
+});
+
+test('clinic_state_fallback enriquece resposta confirmada pelo historico operacional', () => {
+  assert.match(serverCode, /source: 'clinic_state_fallback'/);
+  assert.match(serverCode, /fetchCalendarEventsFromClinicState\(clinicId, range, filters, \{\}, organizationId\)/);
+  assert.match(serverCode, /\.from\('appointment_status_audit_logs'\)[\s\S]*?\.in\('appointment_id', ids\)/);
+  assert.match(serverCode, /\.in\('action', \['CONFIRMED_BY_RESPONSIBLE', 'RESCHEDULE_REQUESTED', 'CANCEL_REQUESTED'\]\)/);
+  assert.match(serverCode, /action === 'CONFIRMED_BY_RESPONSIBLE'[\s\S]*?status = 'confirmed'/);
+  assert.match(serverCode, /applyPatientConfirmationStateToCalendarEvent/);
+  assert.match(serverCode, /patientConfirmationStatus: resolved\.status/);
+  assert.match(serverCode, /patientConfirmationColor: resolved\.color/);
 });
 
 test('popover tem acoes clinicas e nao registra sessao automaticamente', () => {
