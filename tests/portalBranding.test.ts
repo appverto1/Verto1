@@ -60,6 +60,30 @@ test('portal appointment serialization returns branding and action results', () 
   assert.match(portalAppointmentSlice, /acknowledgePortalAppointmentNotifications/);
 });
 
+test('portal notifications derive clinic branding from linked patient when notification lacks clinic id', () => {
+  const notificationRouteSlice = serverCode.slice(
+    serverCode.indexOf("app.get('/api/portal/notifications'"),
+    serverCode.indexOf("app.patch('/api/portal/notifications/:notificationId'")
+  );
+  const notificationClinicResolutionSlice = notificationRouteSlice.slice(
+    notificationRouteSlice.indexOf('const clinicId = sanitizeString('),
+    notificationRouteSlice.indexOf('const branding = await resolveNotificationClinicBranding(clinicId);')
+  );
+  assert.match(notificationRouteSlice, /patientClinicIdsById/);
+  assert.match(notificationRouteSlice, /\.select\('id,name,email,clinic_id'\)/);
+  assert.match(notificationRouteSlice, /patientClinicIdsById\.get\(patientId\)/);
+  assert.ok(
+    notificationRouteSlice.indexOf('const patientId = sanitizeString(row?.patient_id, 120);') <
+      notificationRouteSlice.indexOf('const branding = await resolveNotificationClinicBranding(clinicId);'),
+    'Branding da notificacao deve poder usar o paciente antes do fallback Verto.'
+  );
+  assert.ok(
+    notificationClinicResolutionSlice.indexOf('patientClinicIdsById.get(patientId)') <
+      notificationClinicResolutionSlice.indexOf('row?.organization_id'),
+    'organization_id nao deve ganhar do clinic_id do paciente.'
+  );
+});
+
 test('portal appointment actions do not depend on broad selects or false local success', () => {
   assert.doesNotMatch(portalAppointmentSlice, /\.select\(['"]\*['"]\)/);
   assert.match(portalAppointmentSlice, /\.update\(safePatch\)[\s\S]*?\.select\('id'\)/);

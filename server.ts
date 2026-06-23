@@ -17010,17 +17010,37 @@ async function startServer() {
 
   const buildFamilyAppointmentDisplayContext = async (appointment: any) => {
     const source = parseAppointmentSourcePayloadForFamilyView(appointment?.source_payload || appointment?.sourcePayload);
-    const clinicId = sanitizeString(
-      appointment?.clinic_id ||
-        appointment?.clinicId ||
-        appointment?.organization_id ||
+    const patientId = sanitizeString(appointment?.patient_id || appointment?.patientId || source?.patient_id || source?.patientId, 120);
+    const organizationFallbackId = sanitizeString(
+      appointment?.organization_id ||
         appointment?.organizationId ||
-        source?.clinic_id ||
-        source?.clinicId ||
         source?.organization_id ||
         source?.organizationId,
       120
     );
+    let clinicId = sanitizeString(
+      appointment?.clinic_id ||
+        appointment?.clinicId ||
+        source?.clinic_id ||
+        source?.clinicId,
+      120
+    );
+    if (!isUuid(clinicId) && isUuid(patientId)) {
+      const patientClinicResult = await supabase
+        .from('patients')
+        .select('id,clinic_id')
+        .eq('id', patientId)
+        .limit(1)
+        .maybeSingle();
+      if (!patientClinicResult.error && patientClinicResult.data?.clinic_id) {
+        clinicId = sanitizeString(patientClinicResult.data.clinic_id, 120);
+      } else if (patientClinicResult.error && !extractMissingColumnName(patientClinicResult.error)) {
+        console.warn('[Appointments] patient clinic branding fallback failed:', patientClinicResult.error.message);
+      }
+    }
+    if (!isUuid(clinicId) && isUuid(organizationFallbackId)) {
+      clinicId = organizationFallbackId;
+    }
     const clinicBranding = await readClinicBrandingForFamilyView(clinicId);
     const professional = await resolveAppointmentProfessionalForFamilyView(appointment);
     const explicitClinicName = sanitizeString(
@@ -17049,7 +17069,6 @@ async function startServer() {
           source?.clinicLogoUrl
       ) ||
       null;
-    const patientId = sanitizeString(appointment?.patient_id || appointment?.patientId || source?.patient_id || source?.patientId, 120);
     let patientName = sanitizeString(
       appointment?.patient_name ||
         appointment?.patientName ||
@@ -29603,20 +29622,30 @@ async function startServer() {
       }
       const rows = Array.isArray(data) ? data : [];
       const patientNamesById = new Map<string, string>();
+      const patientClinicIdsById = new Map<string, string>();
       const notificationPatientIds = Array.from(new Set(
         rows.map((row: any) => sanitizeString(row?.patient_id, 120)).filter((id: string) => isUuid(id))
       ));
       if (notificationPatientIds.length > 0) {
-        const patientResult = await supabase
+        let patientResult = await supabase
           .from('patients')
-          .select('id,name,email')
+          .select('id,name,email,clinic_id')
           .in('id', notificationPatientIds)
           .limit(Math.min(notificationPatientIds.length, 200));
+        if (patientResult.error && extractMissingColumnName(patientResult.error) === 'clinic_id') {
+          patientResult = await supabase
+            .from('patients')
+            .select('id,name,email')
+            .in('id', notificationPatientIds)
+            .limit(Math.min(notificationPatientIds.length, 200));
+        }
         if (!patientResult.error) {
           for (const patient of Array.isArray(patientResult.data) ? patientResult.data : []) {
             const id = sanitizeString(patient?.id, 120);
             const name = sanitizeString(patient?.name, 160);
+            const clinicId = sanitizeString(patient?.clinic_id, 120);
             if (id && name) patientNamesById.set(id, name);
+            if (id && isUuid(clinicId)) patientClinicIdsById.set(id, clinicId);
           }
         } else if (!extractMissingColumnName(patientResult.error)) {
           throw patientResult.error;
@@ -29676,9 +29705,16 @@ async function startServer() {
       const normalizedRows: any[] = [];
       for (const row of rows) {
         const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
-        const clinicId = sanitizeString(row?.clinic_id || row?.organization_id || metadata.clinicId, 120);
-        const branding = await resolveNotificationClinicBranding(clinicId);
         const patientId = sanitizeString(row?.patient_id, 120);
+        const clinicId = sanitizeString(
+          row?.clinic_id ||
+            metadata.clinicId ||
+            metadata.clinic_id ||
+            patientClinicIdsById.get(patientId) ||
+            row?.organization_id,
+          120
+        );
+        const branding = await resolveNotificationClinicBranding(clinicId);
         const patientName = sanitizeString(metadata.patientName || patientNamesById.get(patientId), 160) || 'Paciente';
         const scheduledAt = sanitizeString(metadata.scheduledAt || row?.scheduled_for, 120);
         normalizedRows.push({
