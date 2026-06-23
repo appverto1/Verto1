@@ -43,17 +43,17 @@ test('home Kids continua renderizando metricas, graficos, protocolo e diario da 
   }
 });
 
-test('menu Kids usa hamburger sem remover atalhos clinicos da home', () => {
+test('menu Kids usa hamburger e agenda fica fora da home', () => {
   assert.match(patientDashboardCode, /const portalMenu = isKidsProfile \? null : \(/);
   assert.match(patientDashboardCode, /portalMenuItems\.map\(\(item\) =>/);
   assert.match(patientDashboardCode, /onClick=\{\(\) => \{ setPortalSection\(item\.id\); setIsMenuOpen\(false\); \}\}/);
   assert.match(patientDashboardCode, /\.\.\.\(!isKidsProfile \? \[\{ id: 'tasks', label: 'Tarefas'/);
   assert.match(patientDashboardCode, /{!isKidsProfile && \(\s*<div className="mb-6 grid gap-3 sm:grid-cols-2">[\s\S]*setPortalSection\('tasks'\)/);
   const homeSummary = between('const portalAnamnesisTopNotice =', 'const renderPortalAnamnesisField');
-  assert.match(homeSummary, /portalKidsAppointmentsSummary/);
-  assert.match(homeSummary, /setPortalSection\('appointments'\)/);
-  assert.match(homeSummary, /Pr.ximas consultas/);
-  assert.doesNotMatch(homeSummary, /Abrir agenda/);
+  assert.doesNotMatch(homeSummary, /portalKidsAppointmentsSummary/);
+  assert.doesNotMatch(homeSummary, /setPortalSection\('appointments'\)/);
+  assert.doesNotMatch(homeSummary, /Pr.ximas consultas/);
+  assert.match(patientDashboardCode, /\{ id: 'appointments', label: isKidsProfile \? 'Calend.rio' : 'Consultas'/);
 });
 
 test('persistencia visual Kids continua baseada em dados existentes e nao mocks', () => {
@@ -65,6 +65,7 @@ test('persistencia visual Kids continua baseada em dados existentes e nao mocks'
   assert.match(patientDashboardCode, /kidsGamification = useMemo/);
   assert.match(patientDashboardCode, /const stars = portalFamilyHistory\.filter/);
   assert.match(patientDashboardCode, /activeKidsProtocolEvents/);
+  assert.match(patientDashboardCode, /patientId=\{portalPatientId \|\| user\.id\}/);
   assert.doesNotMatch(patientDashboardCode, /mock[A-Z]|fake[A-Z]|dummy[A-Z]/);
 });
 

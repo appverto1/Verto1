@@ -59,16 +59,16 @@ test('cada item novo abre painel proprio e Inicio preserva a home', () => {
   assert.match(patientDashboardCode, /portalSection === 'reports' && portalReportPanel/);
 });
 
-test('home Kids mostra agenda visivel sem esconder consultas agendadas', () => {
+test('home Kids remove agenda da tela inicial e mantem anamnese acessivel', () => {
   const homeSummary = between(patientDashboardCode, 'const portalAnamnesisTopNotice =', 'const renderPortalAnamnesisField');
+  assert.match(patientDashboardCode, /const shouldLoadHomeNotice = portalSection === 'home' && \(isKidsProfile \|\| hasPendingPortalAnamnesisHint\)/);
   assert.match(homeSummary, /portalAnamnesisNeedsAction/);
   assert.match(homeSummary, /hasPendingPortalAnamnesisHint/);
   assert.match(homeSummary, /setPortalSection\('anamnesis'\)/);
   assert.match(homeSummary, /Preencher/);
-  assert.match(homeSummary, /portalKidsAppointmentsSummary/);
-  assert.match(homeSummary, /Pr.ximas consultas/);
-  assert.match(homeSummary, /setPortalSection\('appointments'\)/);
-  assert.match(homeSummary, /Nenhuma consulta agendada\. Quando a cl.nica agendar uma consulta, ela aparecer. aqui\./);
+  assert.doesNotMatch(homeSummary, /portalKidsAppointmentsSummary/);
+  assert.doesNotMatch(homeSummary, /Pr.ximas consultas/);
+  assert.doesNotMatch(homeSummary, /setPortalSection\('appointments'\)/);
 });
 
 test('anotacoes e documentos sao filtrados para familia sem expor conteudo interno', () => {
@@ -86,8 +86,9 @@ test('anotacoes e documentos sao filtrados para familia sem expor conteudo inter
   assert.doesNotMatch(patientDashboardCode, /dangerouslySetInnerHTML/);
 });
 
-test('calendario carrega na home Kids e relatorio continua sob demanda', () => {
-  assert.match(patientDashboardCode, /portalSection === 'home' && isKidsProfile/);
+test('calendario carrega somente pelo menu Kids e relatorio continua sob demanda', () => {
+  assert.match(patientDashboardCode, /const shouldLoadPortalAppointments =\s*portalSection === 'appointments' \|\|\s*portalSection === 'reports';/);
+  assert.doesNotMatch(patientDashboardCode, /\(portalSection === 'home' && isKidsProfile\)/);
   assert.match(patientDashboardCode, /portalAppointmentsLoaded/);
   assert.match(patientDashboardCode, /getPortalCalendarMonthRange\(portalCalendarMonth\)/);
   assert.match(patientDashboardCode, /const portalDefaultAppointmentsRange = useMemo\(\(\) => getPortalDefaultAppointmentsRange\(\), \[portalPatientId\]\)/);
@@ -105,13 +106,16 @@ test('calendario carrega na home Kids e relatorio continua sob demanda', () => {
 
 test('endpoint do calendario do portal segue escopo e select explicito', () => {
   assert.doesNotMatch(serverCode, /\.select\(\s*['"`]\*['"`]\s*\)/);
-  const route = serverSlice("app.get('/api/portal/appointments'", 6200);
+  const route = serverSlice("app.get('/api/portal/appointments'", 9200);
   assert.match(route, /checkAuth/);
   assert.match(route, /getPortalPatientIdsForUser/);
   assert.match(route, /canPortalUserAccessPatient/);
   assert.match(route, /\.select\(PORTAL_APPOINTMENT_SELECT\)/);
   assert.match(route, /buildPortalAppointmentRangeQuery\('scheduled_at'\)/);
   assert.match(route, /buildPortalAppointmentRangeQuery\('scheduled_start_at'\)/);
+  assert.match(route, /patientEmails/);
+  assert.match(route, /\.in\('patient_email', emailList\)/);
+  assert.match(route, /\.in\('clinic_id', clinicList\)/);
   assert.match(route, /portal_notifications/);
   assert.match(route, /notificationAppointmentIds/);
   assert.match(route, /const rowsById = new Map<string, any>\(\)/);
@@ -156,13 +160,17 @@ test('diario e tarefas do portal nao consultam colunas ausentes em producao', ()
   assert.doesNotMatch(notesEmailRoute, /\/api\/patient-records\/:patientId \[POST\]/);
 });
 
-test('notificacoes do portal sao deduplicadas por consulta pendente', () => {
-  const notificationsRoute = serverSlice("app.get('/api/portal/notifications'", 3600);
+test('notificacoes do portal sao deduplicadas e normalizadas por consulta pendente', () => {
+  const notificationsRoute = serverSlice("app.get('/api/portal/notifications'", 9800);
   assert.match(notificationsRoute, /\.is\('acknowledged_at', null\)/);
+  assert.match(notificationsRoute, /title: branding\.displayName/);
+  assert.match(notificationsRoute, /formatPortalReminderMessage/);
+  assert.match(notificationsRoute, /Toque para confirmar, remarcar ou cancelar/);
   assert.match(notificationsRoute, /dedupedRowsByAppointment/);
   assert.match(notificationsRoute, /appointment_id/);
   assert.match(patientDashboardCode, /dedupePortalNotifications/);
   assert.match(patientDashboardCode, /openPortalNotification/);
+  assert.match(patientDashboardCode, /getPortalNotificationMessage/);
   assert.doesNotMatch(patientDashboardCode, /<Bell size=\{15\}/);
 });
 

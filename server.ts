@@ -29468,9 +29468,9 @@ async function startServer() {
   });
 
   const canPortalUserAccessPatient = async (patientId: string, appointment: any, user: any) => {
-    if (!isUuid(patientId)) return false;
     const role = sanitizeString(user?.role, 40).toLowerCase();
     if (!isResponsiblePortalRole(role)) {
+      if (!isUuid(patientId)) return false;
       return canAccessPatientInCurrentClinic(patientId, user);
     }
     const userId = sanitizeString(user?.id, 120);
@@ -29478,6 +29478,7 @@ async function startServer() {
     const appointmentPatientEmail = sanitizeEmail(appointment?.patient_email || appointment?.patientEmail);
     if (patientId === userId) return true;
     if (userEmail && appointmentPatientEmail && userEmail === appointmentPatientEmail) return true;
+    if (!isUuid(patientId)) return false;
     const patientIds = await getPortalPatientIdsForUser(user);
     return patientIds.includes(patientId);
   };
@@ -29536,8 +29537,101 @@ async function startServer() {
         throw error;
       }
       const rows = Array.isArray(data) ? data : [];
-      const dedupedRowsByAppointment = new Map<string, any>();
+      const patientNamesById = new Map<string, string>();
+      const notificationPatientIds = Array.from(new Set(
+        rows.map((row: any) => sanitizeString(row?.patient_id, 120)).filter((id: string) => isUuid(id))
+      ));
+      if (notificationPatientIds.length > 0) {
+        const patientResult = await supabase
+          .from('patients')
+          .select('id,name,email')
+          .in('id', notificationPatientIds)
+          .limit(Math.min(notificationPatientIds.length, 200));
+        if (!patientResult.error) {
+          for (const patient of Array.isArray(patientResult.data) ? patientResult.data : []) {
+            const id = sanitizeString(patient?.id, 120);
+            const name = sanitizeString(patient?.name, 160);
+            if (id && name) patientNamesById.set(id, name);
+          }
+        } else if (!extractMissingColumnName(patientResult.error)) {
+          throw patientResult.error;
+        }
+      }
+
+      const clinicBrandingById = new Map<string, { displayName: string; logoUrl: string | null }>();
+      const resolveNotificationClinicBranding = async (rawClinicId: unknown) => {
+        const clinicId = sanitizeString(rawClinicId, 120);
+        if (!isUuid(clinicId)) return { displayName: 'Verto', logoUrl: null };
+        if (clinicBrandingById.has(clinicId)) return clinicBrandingById.get(clinicId)!;
+        const branding = await readClinicBrandingForFamilyView(clinicId);
+        const resolved = {
+          displayName: sanitizeString(branding.displayName, 160) || 'Verto',
+          logoUrl: sanitizeSessionUrl(branding.logoUrl) || null
+        };
+        clinicBrandingById.set(clinicId, resolved);
+        return resolved;
+      };
+
+      const formatPortalReminderMessage = (row: any, patientName: string) => {
+        const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+        const scheduledAt = sanitizeString(metadata.scheduledAt || row?.scheduled_for, 120);
+        const date = new Date(scheduledAt || '');
+        if (Number.isNaN(date.getTime())) {
+          return `Lembrete de consulta de ${patientName}. Toque para confirmar, remarcar ou cancelar.`;
+        }
+        const shortDate = date.toLocaleDateString('pt-BR', {
+          timeZone: 'America/Sao_Paulo',
+          day: '2-digit',
+          month: '2-digit'
+        });
+        const todayKey = new Intl.DateTimeFormat('en-CA', {
+          timeZone: 'America/Sao_Paulo',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit'
+        }).format(new Date());
+        const targetKey = new Intl.DateTimeFormat('en-CA', {
+          timeZone: 'America/Sao_Paulo',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit'
+        }).format(date);
+        const todayStart = new Date(`${todayKey}T00:00:00-03:00`).getTime();
+        const targetStart = new Date(`${targetKey}T00:00:00-03:00`).getTime();
+        const diffDays = Math.round((targetStart - todayStart) / 86400000);
+        const relative = diffDays === 0 ? ' (hoje)' : diffDays === 1 ? ' (amanhã)' : '';
+        const time = date.toLocaleTimeString('pt-BR', {
+          timeZone: 'America/Sao_Paulo',
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+        return `Lembrete de consulta de ${patientName} dia ${shortDate}${relative} às ${time}. Toque para confirmar, remarcar ou cancelar.`;
+      };
+
+      const normalizedRows: any[] = [];
       for (const row of rows) {
+        const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+        const clinicId = sanitizeString(row?.clinic_id || row?.organization_id || metadata.clinicId, 120);
+        const branding = await resolveNotificationClinicBranding(clinicId);
+        const patientId = sanitizeString(row?.patient_id, 120);
+        const patientName = sanitizeString(metadata.patientName || patientNamesById.get(patientId), 160) || 'Paciente';
+        const scheduledAt = sanitizeString(metadata.scheduledAt || row?.scheduled_for, 120);
+        normalizedRows.push({
+          ...row,
+          title: branding.displayName,
+          message: formatPortalReminderMessage(row, patientName),
+          metadata: {
+            ...metadata,
+            clinicName: branding.displayName,
+            clinicLogoUrl: branding.logoUrl || sanitizeSessionUrl(metadata.clinicLogoUrl) || null,
+            patientName,
+            scheduledAt: scheduledAt || metadata.scheduledAt || null
+          }
+        });
+      }
+
+      const dedupedRowsByAppointment = new Map<string, any>();
+      for (const row of normalizedRows) {
         const appointmentId = sanitizeString(row?.appointment_id, 120);
         const patientId = sanitizeString(row?.patient_id, 120);
         const type = sanitizeString(row?.type, 80).replace(/_(24h|12h)$/i, '');
@@ -29556,7 +29650,7 @@ async function startServer() {
       return res.json({
         success: true,
         data: dedupedRows.slice(0, limit),
-        pagination: { limit, hasMore: dedupedRows.length > limit || rows.length > limit * 4 }
+        pagination: { limit, hasMore: dedupedRows.length > limit || normalizedRows.length > limit * 4 }
       });
     } catch (error: any) {
       return sendRouteDbError(res, '/api/portal/notifications [GET]', error, {
@@ -30014,6 +30108,35 @@ async function startServer() {
       if (isResponsiblePortalRole(role) && patientIds.length === 0) {
         return res.json({ success: true, data: [] });
       }
+      const patientEmails = new Set<string>();
+      const patientClinicIds = new Set<string>();
+      const sessionPatientEmail = sanitizeEmail(req.session.user?.email);
+      const sessionClinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (sessionPatientEmail) patientEmails.add(sessionPatientEmail);
+      if (isUuid(sessionClinicId)) patientClinicIds.add(sessionClinicId);
+      if (patientIds.length > 0) {
+        const readPatients = (columns: string) =>
+          supabase
+            .from('patients')
+            .select(columns)
+            .in('id', patientIds)
+            .limit(50);
+        let patientContextResult = await readPatients('id,email,clinic_id,responsible_email');
+        if (patientContextResult.error && extractMissingColumnName(patientContextResult.error)) {
+          patientContextResult = await readPatients('id,email,clinic_id');
+        }
+        if (patientContextResult.error && !extractMissingColumnName(patientContextResult.error)) {
+          throw patientContextResult.error;
+        }
+        for (const patient of Array.isArray(patientContextResult.data) ? patientContextResult.data : []) {
+          const email = sanitizeEmail(patient?.email);
+          const responsibleEmail = sanitizeEmail(patient?.responsible_email);
+          const clinicId = sanitizeString(patient?.clinic_id, 120);
+          if (email) patientEmails.add(email);
+          if (responsibleEmail) patientEmails.add(responsibleEmail);
+          if (isUuid(clinicId)) patientClinicIds.add(clinicId);
+        }
+      }
       const fromIso = sanitizeIsoDateTime(req.query?.from || new Date(Date.now() - 7 * 86400000).toISOString());
       const toIso = sanitizeIsoDateTime(req.query?.to || new Date(Date.now() + 90 * 86400000).toISOString());
       const limit = parseBoundedListLimit(req.query?.limit, 40, 100);
@@ -30052,6 +30175,35 @@ async function startServer() {
         for (const row of Array.isArray((result as any).data) ? (result as any).data : []) {
           const rowId = sanitizeString(row?.id, 120);
           if (rowId && !rowsById.has(rowId)) rowsById.set(rowId, row);
+        }
+      }
+      if (patientEmails.size > 0 && patientClinicIds.size > 0) {
+        const emailList = Array.from(patientEmails).slice(0, 10);
+        const clinicList = Array.from(patientClinicIds).slice(0, 10);
+        const buildPortalAppointmentEmailRangeQuery = (dateColumn: 'scheduled_at' | 'scheduled_start_at') =>
+          supabase
+            .from('appointments')
+            .select(PORTAL_APPOINTMENT_SELECT)
+            .in('patient_email', emailList)
+            .in('clinic_id', clinicList)
+            .gte(dateColumn, fromIso)
+            .lte(dateColumn, toIso)
+            .order(dateColumn, { ascending: true })
+            .limit(limit);
+        const [emailScheduledAtResult, emailScheduledStartResult] = await Promise.all([
+          buildPortalAppointmentEmailRangeQuery('scheduled_at'),
+          buildPortalAppointmentEmailRangeQuery('scheduled_start_at')
+        ]);
+        for (const result of [emailScheduledAtResult, emailScheduledStartResult]) {
+          const error = (result as any).error;
+          if (error) {
+            if (hasMissingFinancialSchema(error) || extractMissingColumnName(error) === 'patient_email') continue;
+            throw error;
+          }
+          for (const row of Array.isArray((result as any).data) ? (result as any).data : []) {
+            const rowId = sanitizeString(row?.id, 120);
+            if (rowId && !rowsById.has(rowId)) rowsById.set(rowId, row);
+          }
         }
       }
       if (patientIds.length > 0) {

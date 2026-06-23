@@ -39,6 +39,7 @@ type ReminderModalInput = {
 };
 
 const DEFAULT_VERTO_LOGO = "/verto-3d-transparent.png";
+const APPOINTMENT_RESPONSE_COPY = "Toque para confirmar, remarcar ou cancelar.";
 const FRIENDLY_ERROR_COPY = "Não foi possível concluir sua solicitação agora. Tente novamente em alguns instantes.";
 
 const sanitizeText = (value: unknown, maxLength = 240) =>
@@ -211,8 +212,8 @@ export function buildPatientReminderNotificationPayload(input: ReminderPayloadIn
   const whenText = buildWhenText(input);
   const patientName = sanitizeText(input.patientName, 160);
   const body = patientName
-    ? `Consulta agendada para ${patientName}${whenText ? ` ${whenText}` : ""}. Abra o painel para confirmar ou remarcar.`
-    : `Você tem uma consulta agendada${whenText ? ` ${whenText}` : ""}. Abra o painel para confirmar ou remarcar.`;
+    ? `Lembrete de consulta de ${patientName}${whenText ? ` ${whenText}` : ""}. ${APPOINTMENT_RESPONSE_COPY}`
+    : `Lembrete de consulta${whenText ? ` ${whenText}` : ""}. ${APPOINTMENT_RESPONSE_COPY}`;
   const fallbackUrl = appointmentId ? `/?appointment_id=${encodeURIComponent(appointmentId)}` : "/";
   const url = sanitizeText(input.url, 2000) || fallbackUrl;
   const icon = DEFAULT_VERTO_LOGO;

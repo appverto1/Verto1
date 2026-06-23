@@ -1,5 +1,5 @@
 const SW_VERSION = "appointments-app-only-v7";
-const APPOINTMENT_NOTIFICATION_CTA = "Abra o painel para confirmar ou remarcar.";
+const APPOINTMENT_NOTIFICATION_CTA = "Toque para confirmar, remarcar ou cancelar.";
 const VERTO_ICON = "/verto-3d-transparent.png";
 
 self.addEventListener("install", (event) => {

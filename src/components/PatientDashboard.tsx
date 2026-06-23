@@ -451,8 +451,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   useEffect(() => {
     const shouldLoadPortalAppointments =
       portalSection === 'appointments' ||
-      portalSection === 'reports' ||
-      (portalSection === 'home' && isKidsProfile);
+      portalSection === 'reports';
     if (!shouldLoadPortalAppointments) return;
     const range = portalSection === 'appointments'
       ? getPortalCalendarMonthRange(portalCalendarMonth)
@@ -461,7 +460,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     if ((portalAppointmentsLoaded && portalAppointmentsRangeKey === rangeKey) || portalAppointmentsState.loading) return;
     void loadPortalAppointments(range);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [portalSection, portalCalendarMonth, portalAppointmentsLoaded, portalAppointmentsRangeKey, portalAppointmentsState.loading, user?.id, user?.email, isKidsProfile, portalPatientId, portalDefaultAppointmentsRange]);
+  }, [portalSection, portalCalendarMonth, portalAppointmentsLoaded, portalAppointmentsRangeKey, portalAppointmentsState.loading, user?.id, user?.email, portalPatientId, portalDefaultAppointmentsRange]);
 
   const loadPortalNotifications = async () => {
     const requestId = ++portalNotificationsRequestRef.current;
@@ -558,11 +557,11 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
   useEffect(() => {
     if (!portalPatientId || portalAnamnesisChecked || portalAnamnesisState.loading) return;
-    const shouldLoadHomeNotice = portalSection === 'home' && hasPendingPortalAnamnesisHint;
+    const shouldLoadHomeNotice = portalSection === 'home' && (isKidsProfile || hasPendingPortalAnamnesisHint);
     if (portalSection !== 'anamnesis' && !isMenuOpen && !shouldLoadHomeNotice) return;
     void loadPortalAnamnesis();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [portalSection, isMenuOpen, portalPatientId, portalAnamnesisChecked, portalAnamnesisState.loading, hasPendingPortalAnamnesisHint]);
+  }, [portalSection, isMenuOpen, portalPatientId, portalAnamnesisChecked, portalAnamnesisState.loading, hasPendingPortalAnamnesisHint, isKidsProfile]);
 
   const openPortalAppointmentDetail = async (appointment: any) => {
     setSelectedPortalAppointment(appointment);
@@ -584,7 +583,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     await openPortalAppointmentDetail({
       id: appointmentId,
       patientName: metadata.patientName || notification?.patientName || user?.name || 'Paciente',
-      clinicName: metadata.clinicName || notification?.clinicName || notification?.clinic_name || portalContext?.clinicName || 'Verto',
+      clinicName: metadata.clinicName || notification?.clinicName || notification?.clinic_name || portalContext?.clinicName || portalContext?.clinicLegalName || 'Verto',
       clinicLogoUrl: metadata.clinicLogoUrl || notification?.clinicLogoUrl || notification?.clinic_logo_url || portalContext?.clinicLogoUrl || VERTO_NOTIFICATION_LOGO,
       scheduledAt: metadata.scheduledAt || notification?.scheduled_for || notification?.scheduledFor || notification?.created_at
     });
@@ -982,8 +981,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       .filter((t: any) => getEventScore(t) !== null)
       .map((t: any) => ({
         id: t?.id || `task-${t?.task_id || Math.random()}`,
-        patientId: user?.id,
-        patient_id: user?.id,
+        patientId: portalPatientId || user?.id,
+        patient_id: portalPatientId || user?.id,
         type: 'task_scored',
         title: t?.title || t?.task_data?.title || '',
         domain: t?.domain || t?.task_data?.domain || t?.domainName || '',
@@ -1009,7 +1008,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       if (curTs >= prevTs) dedup.set(key, item);
     });
     return Array.from(dedup.values());
-  }, [history, tasks, user?.id]);
+  }, [history, tasks, portalPatientId, user?.id]);
 
   const availableSnapshots = useMemo(() => {
     const dates = scoredClinicalEvents.map((h: any) => getSnapshotKey(h)).filter(Boolean);
@@ -1020,7 +1019,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     let cancelled = false;
 
     const loadLatestProtocolReference = async () => {
-      const patientId = String(user?.id || '').trim();
+      const patientId = String(portalPatientId || user?.patientId || user?.patient_id || user?.id || '').trim();
       if (!patientId) {
         if (!cancelled) setLatestProtocolReference(null);
         return;
@@ -1036,7 +1035,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     return () => {
       cancelled = true;
     };
-  }, [user?.id]);
+  }, [portalPatientId, user?.patientId, user?.patient_id, user?.id]);
 
   const activeKidsProtocol = useMemo(() => {
     const list = Array.isArray(protocols) ? protocols : [];
@@ -2009,69 +2008,56 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     return label.slice(0, 7);
   };
 
-  const portalUpcomingAppointments = useMemo(() => {
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-    return (Array.isArray(portalAppointments) ? portalAppointments : [])
-      .filter((appointment: any) => {
-        const status = String(appointment?.status || '').toUpperCase();
-        if (status.includes('CANCEL') || status.includes('COMPLET') || status.includes('NO_SHOW')) return false;
-        const scheduled = new Date(appointment?.scheduledAt || appointment?.scheduled_at || appointment?.date || '');
-        return !Number.isNaN(scheduled.getTime()) && scheduled.getTime() >= todayStart.getTime();
-      })
-      .sort((a: any, b: any) => new Date(a?.scheduledAt || a?.scheduled_at || 0).getTime() - new Date(b?.scheduledAt || b?.scheduled_at || 0).getTime())
-      .slice(0, 3);
-  }, [portalAppointments]);
+  const formatPortalReminderDay = (value: any) => {
+    const date = new Date(value || '');
+    if (Number.isNaN(date.getTime())) return '';
+    const shortDate = date.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+    const today = new Date();
+    const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+    const targetStart = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+    const diffDays = Math.round((targetStart - todayStart) / 86400000);
+    if (diffDays === 0) return `${shortDate} (hoje)`;
+    if (diffDays === 1) return `${shortDate} (amanhã)`;
+    return shortDate;
+  };
 
-  const portalKidsAppointmentsSummary = isKidsProfile ? (
-    <div className="mb-4 rounded-[24px] border border-blue-100 bg-white/90 p-4 shadow-sm">
-      <div className="mb-3 flex items-start justify-between gap-3">
-        <div>
-          <p className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500">Agenda</p>
-          <h2 className="mt-1 text-base font-black text-slate-900">Próximas consultas</h2>
-        </div>
-        <button type="button" onClick={() => setPortalSection('appointments')} className="rounded-2xl border border-blue-100 px-3 py-2 text-xs font-bold text-[#7a32fc]">
-          Ver agenda
-        </button>
-      </div>
-      {portalAppointmentsState.loading || !portalAppointmentsLoaded ? (
-        <div className="rounded-2xl bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700">Carregando consultas...</div>
-      ) : portalAppointmentsState.error ? (
-        <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">{portalAppointmentsState.error}</div>
-      ) : portalUpcomingAppointments.length === 0 ? (
-        <div className="rounded-2xl border border-dashed border-blue-100 bg-blue-50/70 px-4 py-4 text-sm font-semibold text-blue-700">
-          Nenhuma consulta agendada. Quando a clínica agendar uma consulta, ela aparecerá aqui.
-        </div>
-      ) : (
-        <div className="space-y-2">
-          {portalUpcomingAppointments.map((appointment: any) => (
-            <button
-              key={appointment.id}
-              type="button"
-              onClick={() => void openPortalAppointmentDetail(appointment)}
-              className="flex w-full items-start justify-between gap-3 rounded-2xl border border-slate-100 bg-slate-50/80 px-3 py-3 text-left transition hover:border-blue-100 hover:bg-blue-50"
-            >
-              <span className="min-w-0">
-                <span className="flex items-center gap-2 text-sm font-black text-slate-900">
-                  <CalendarDays size={15} className="text-[#7a32fc]" />
-                  {formatPortalDateTime(appointment.scheduledAt)}
-                </span>
-                <span className="mt-1 block text-xs font-semibold text-slate-500">
-                  {appointment.serviceType || 'Consulta'} · {appointment.professionalName || 'Equipe'}
-                </span>
-                <span className="mt-1 block text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                  {appointment.locationLabel || appointment.roomName || 'Local informado pela clínica'}
-                </span>
-              </span>
-              <span className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-bold ${getPortalStatusPillClass(appointment.status)}`}>
-                {getPortalStatusLabel(appointment.status)}
-              </span>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  ) : null;
+  const getPortalNotificationClinicName = (notification: any) => {
+    const metadata = notification?.metadata && typeof notification.metadata === 'object' ? notification.metadata : {};
+    return firstPortalText(
+      metadata.clinicName,
+      notification?.clinicName,
+      notification?.clinic_name,
+      portalContext?.clinicName,
+      portalContext?.clinicLegalName,
+      'Verto'
+    );
+  };
+
+  const getPortalNotificationMessage = (notification: any) => {
+    const metadata = notification?.metadata && typeof notification.metadata === 'object' ? notification.metadata : {};
+    const scheduledAt = firstPortalText(
+      metadata.scheduledAt,
+      notification?.scheduled_for,
+      notification?.scheduledFor,
+      notification?.scheduledAt,
+      notification?.scheduled_at
+    );
+    const patientName = firstPortalText(
+      metadata.patientName,
+      notification?.patientName,
+      notification?.patient_name,
+      displayName,
+      user?.name,
+      'Paciente'
+    );
+    const dayText = formatPortalReminderDay(scheduledAt);
+    const timeText = formatPortalTime(scheduledAt);
+    const whenText = [dayText ? `dia ${dayText}` : '', timeText ? `às ${timeText}` : ''].filter(Boolean).join(' ');
+    if (whenText) {
+      return `Lembrete de consulta de ${patientName} ${whenText}. Toque para confirmar, remarcar ou cancelar.`;
+    }
+    return firstPortalText(notification?.message) || `Lembrete de consulta de ${patientName}. Toque para confirmar, remarcar ou cancelar.`;
+  };
 
   const portalNotificationsSummary = !portalNotificationsLoaded ? (
     <div className="mb-4 h-20 animate-pulse rounded-[24px] border border-slate-100 bg-white/70" />
@@ -2079,8 +2065,9 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     <div className="mb-4 space-y-2">
       {portalNotifications.slice(0, 3).map((notification: any) => {
         const metadata = notification?.metadata && typeof notification.metadata === 'object' ? notification.metadata : {};
-        const logoUrl = metadata.clinicLogoUrl || notification?.clinicLogoUrl || VERTO_NOTIFICATION_LOGO;
-        const clinicName = metadata.clinicName || portalContext?.clinicName || notification?.title || 'Verto';
+        const logoUrl = metadata.clinicLogoUrl || notification?.clinicLogoUrl || notification?.clinic_logo_url || portalContext?.clinicLogoUrl || VERTO_NOTIFICATION_LOGO;
+        const clinicName = getPortalNotificationClinicName(notification);
+        const message = getPortalNotificationMessage(notification);
         return (
           <button
             key={notification.id}
@@ -2097,8 +2084,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
             </span>
             <span className="min-w-0">
               <span className="block text-[10px] font-black uppercase tracking-[0.18em] text-[#7a32fc]">{clinicName}</span>
-              <span className="mt-1 block text-sm font-black text-slate-900">{notification.title || 'Consulta aguardando resposta'}</span>
-              <span className="mt-1 block text-xs font-semibold leading-relaxed text-slate-600">{notification.message}</span>
+              <span className="mt-1 block text-xs font-semibold leading-relaxed text-slate-600">{message}</span>
             </span>
           </button>
         );
@@ -2109,7 +2095,6 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const portalHomeSummary = (
     <React.Fragment>
       {portalAnamnesisTopNotice}
-      {portalKidsAppointmentsSummary}
       {portalNotificationsSummary}
       {!isKidsProfile && (
         <div className="mb-6 grid gap-3 sm:grid-cols-2">
@@ -2989,13 +2974,13 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
                 <div className="mb-6">
                   <CumulativeGrowthChart
-                    patientId={user.id}
+                    patientId={portalPatientId || user.id}
                     protocols={protocols}
                     protocolId={activeKidsProtocol?.id}
                     history={activeKidsProtocolEvents.map((event: any) => ({
                       ...event,
-                      patientId: event?.patientId || event?.patient_id || user.id,
-                      patient_id: event?.patient_id || event?.patientId || user.id
+                      patientId: event?.patientId || event?.patient_id || portalPatientId || user.id,
+                      patient_id: event?.patient_id || event?.patientId || portalPatientId || user.id
                     }))}
                   />
                 </div>

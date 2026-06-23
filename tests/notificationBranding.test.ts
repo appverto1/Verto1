@@ -51,7 +51,8 @@ assert.equal(clinicPush.badge, '/verto-3d-transparent.png');
 assert.equal(clinicPush.data.brandLogoUrl, 'https://cdn.example.com/clinic-logo.png');
 assert.equal((clinicPush as any).actions, undefined);
 assert.match(clinicPush.body, /Pedro Henrique/);
-assert.match(clinicPush.body, /confirmar ou remarcar/);
+assert.match(clinicPush.body, /Toque para confirmar, remarcar ou cancelar/);
+assert.doesNotMatch(clinicPush.body, /Abra o painel para confirmar ou remarcar/);
 assert.doesNotMatch(clinicPush.title, /Verto/);
 assert.doesNotMatch(clinicPush.body, /abrir a Verto/i);
 

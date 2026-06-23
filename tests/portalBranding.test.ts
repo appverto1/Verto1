@@ -76,6 +76,8 @@ test('patient portal still exposes appointment action controls and notification 
   assert.match(pushServiceCode, /clinicName/);
   assert.match(pushServiceCode, /clinicLogoUrl/);
   assert.match(cronServiceCode, /resolveReminderClinicBranding/);
+  assert.match(cronServiceCode, /const clinicName = clinicBranding\.clinicName \|\| appointment\.clinicName \|\| 'Verto'/);
+  assert.match(cronServiceCode, /appointment: brandedAppointment/);
   assert.doesNotMatch(pushServiceCode, /\.select\(['"]\*['"]\)/);
   assert.doesNotMatch(cronServiceCode, /\.select\(['"]\*['"]\)/);
 });

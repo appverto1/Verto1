@@ -850,8 +850,13 @@ async function runAppointmentReminderJob(
       try {
         const scheduled = dayjs(appointment.scheduledAt).tz(BRAZIL_TIMEZONE);
         const clinicBranding = await resolveReminderClinicBranding(options, appointment.clinicId);
-        const clinicName = appointment.clinicName || clinicBranding.clinicName;
-        const clinicLogoUrl = appointment.clinicLogoUrl || clinicBranding.clinicLogoUrl;
+        const clinicName = clinicBranding.clinicName || appointment.clinicName || 'Verto';
+        const clinicLogoUrl = clinicBranding.clinicLogoUrl || appointment.clinicLogoUrl || null;
+        const brandedAppointment = {
+          ...appointment,
+          clinicName,
+          clinicLogoUrl,
+        };
         const branding = resolveBrandingContext({
           clinic: {
             id: appointment.clinicId || null,
@@ -879,7 +884,7 @@ async function runAppointmentReminderJob(
         const body = reminderPayload.body;
         const persisted = await persistPortalReminder({
           options,
-          appointment,
+          appointment: brandedAppointment,
           kind: dueReminder.kind,
           title,
           body,
