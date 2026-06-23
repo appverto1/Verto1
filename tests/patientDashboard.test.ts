@@ -56,12 +56,28 @@ test('menu Kids usa hamburger e agenda fica fora da home', () => {
   assert.match(patientDashboardCode, /\{ id: 'appointments', label: isKidsProfile \? 'Calend.rio' : 'Consultas'/);
 });
 
+test('notificacoes Kids priorizam nome e logo da clinica resolvida', () => {
+  const notificationName = between('const getPortalNotificationClinicName =', 'const getPortalNotificationMessage');
+  assert.match(notificationName, /portalContext\?\.clinicName/);
+  assert.match(notificationName, /firstPortalClinicText/);
+  assert.match(notificationName, /notification\?\.title/);
+  assert.match(patientDashboardCode, /looksLikePortalProfessionalLabel/);
+  assert.ok(notificationName.indexOf('portalContext?.clinicName') < notificationName.indexOf('metadata.clinicName'));
+  const openNotification = between('const openPortalNotification =', 'const updatePortalAppointmentInList');
+  assert.match(openNotification, /clinicName: firstPortalClinicText/);
+  assert.match(openNotification, /clinicLogoUrl: portalContext\?\.clinicLogoUrl/);
+  const notificationSummary = between('const portalNotificationsSummary =', 'const portalHomeSummary');
+  assert.match(notificationSummary, /<span className="font-black text-slate-950">\{clinicName\}<\/span> \{message\}/);
+});
+
 test('persistencia visual Kids continua baseada em dados existentes e nao mocks', () => {
   assert.match(patientDashboardCode, /portalFamilyHistory = useMemo/);
   assert.match(patientDashboardCode, /familyDiaryHistory = useMemo/);
   assert.match(patientDashboardCode, /const isFamily = item\.type === 'family_note' \|\| item\.type === 'photo'/);
   assert.match(patientDashboardCode, /const itemPatientId = String\(item\?\.patientId \|\| item\?\.patient_id \|\| ''\)\.trim\(\)/);
-  assert.match(patientDashboardCode, /return \[\.\.\.portalFamilyHistory\]/);
+  assert.match(patientDashboardCode, /persistedFamilyDiaryHistory/);
+  assert.match(patientDashboardCode, /portalSharedNotes/);
+  assert.match(patientDashboardCode, /\[\.\.\.persistedFamilyDiaryHistory, \.\.\.normalizedSharedNotes\]/);
   assert.match(patientDashboardCode, /kidsGamification = useMemo/);
   assert.match(patientDashboardCode, /const stars = portalFamilyHistory\.filter/);
   assert.match(patientDashboardCode, /activeKidsProtocolEvents/);

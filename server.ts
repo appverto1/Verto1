@@ -29466,20 +29466,33 @@ async function startServer() {
     }
   });
 
+  const readPortalAppointmentPatientScope = (appointment: any) => {
+    const source = parseCalendarSourcePayload(appointment?.source_payload || appointment?.sourcePayload);
+    return {
+      patientId: sanitizeString(appointment?.patient_id || appointment?.patientId || source?.patient_id || source?.patientId, 120),
+      patientEmail: sanitizeEmail(appointment?.patient_email || appointment?.patientEmail || source?.patient_email || source?.patientEmail),
+      responsibleEmail: sanitizeEmail(source?.responsible_email || source?.responsibleEmail || source?.guardianEmail || source?.guardian_email)
+    };
+  };
+
   const canPortalUserAccessPatient = async (patientId: string, appointment: any, user: any) => {
     const role = sanitizeString(user?.role, 40).toLowerCase();
+    const appointmentScope = readPortalAppointmentPatientScope(appointment);
+    const scopedPatientId = sanitizeString(patientId || appointmentScope.patientId, 120);
     if (!isResponsiblePortalRole(role)) {
-      if (!isUuid(patientId)) return false;
-      return canAccessPatientInCurrentClinic(patientId, user);
+      if (!isUuid(scopedPatientId)) return false;
+      return canAccessPatientInCurrentClinic(scopedPatientId, user);
     }
     const userId = sanitizeString(user?.id, 120);
     const userEmail = sanitizeEmail(user?.email);
-    const appointmentPatientEmail = sanitizeEmail(appointment?.patient_email || appointment?.patientEmail);
-    if (patientId === userId) return true;
-    if (userEmail && appointmentPatientEmail && userEmail === appointmentPatientEmail) return true;
-    if (!isUuid(patientId)) return false;
+    if (scopedPatientId === userId) return true;
+    if (
+      userEmail &&
+      (appointmentScope.patientEmail === userEmail || appointmentScope.responsibleEmail === userEmail)
+    ) return true;
+    if (!isUuid(scopedPatientId)) return false;
     const patientIds = await getPortalPatientIdsForUser(user);
-    return patientIds.includes(patientId);
+    return patientIds.includes(scopedPatientId);
   };
 
   const fetchPortalAppointmentForUser = async (appointmentId: string, user: any) => {
@@ -30212,6 +30225,33 @@ async function startServer() {
           }
         }
       }
+      if (rowsById.size === 0 && patientClinicIds.size > 0) {
+        const clinicList = Array.from(patientClinicIds).slice(0, 10);
+        const buildPortalAppointmentClinicRangeQuery = (dateColumn: 'scheduled_at' | 'scheduled_start_at') =>
+          supabase
+            .from('appointments')
+            .select(PORTAL_APPOINTMENT_SELECT)
+            .in('clinic_id', clinicList)
+            .gte(dateColumn, fromIso)
+            .lte(dateColumn, toIso)
+            .order(dateColumn, { ascending: true })
+            .limit(Math.min(200, limit * 4));
+        const [clinicScheduledAtResult, clinicScheduledStartResult] = await Promise.all([
+          buildPortalAppointmentClinicRangeQuery('scheduled_at'),
+          buildPortalAppointmentClinicRangeQuery('scheduled_start_at')
+        ]);
+        for (const result of [clinicScheduledAtResult, clinicScheduledStartResult]) {
+          const error = (result as any).error;
+          if (error) {
+            if (hasMissingFinancialSchema(error)) continue;
+            throw error;
+          }
+          for (const row of Array.isArray((result as any).data) ? (result as any).data : []) {
+            const rowId = sanitizeString(row?.id, 120);
+            if (rowId && !rowsById.has(rowId)) rowsById.set(rowId, row);
+          }
+        }
+      }
       const notificationScopedAppointmentIds = new Set<string>();
       if (patientIds.length > 0) {
         const notificationResult = await supabase
@@ -30260,10 +30300,10 @@ async function startServer() {
         }
       }
       const rows = Array.from(rowsById.values())
-        .sort((a, b) => buildCalendarAppointmentStart(a).getTime() - buildCalendarAppointmentStart(b).getTime())
-        .slice(0, limit);
+        .sort((a, b) => buildCalendarAppointmentStart(a).getTime() - buildCalendarAppointmentStart(b).getTime());
       const visibleRows = [];
       for (const row of rows) {
+        if (visibleRows.length >= limit) break;
         const rowId = sanitizeString(row?.id, 120);
         if (
           notificationScopedAppointmentIds.has(rowId) ||

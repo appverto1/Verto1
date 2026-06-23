@@ -580,11 +580,33 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     void markPortalNotificationRead(notification);
     if (!appointmentId) return;
     const metadata = notification?.metadata && typeof notification.metadata === 'object' ? notification.metadata : {};
+    const professionalName = firstPortalText(
+      metadata.professionalName,
+      metadata.therapistName,
+      metadata.professional,
+      notification?.professionalName,
+      notification?.professional_name,
+      notification?.therapistName,
+      notification?.therapist_name
+    );
     await openPortalAppointmentDetail({
       id: appointmentId,
       patientName: metadata.patientName || notification?.patientName || user?.name || 'Paciente',
-      clinicName: metadata.clinicName || notification?.clinicName || notification?.clinic_name || portalContext?.clinicName || portalContext?.clinicLegalName || 'Verto',
-      clinicLogoUrl: metadata.clinicLogoUrl || notification?.clinicLogoUrl || notification?.clinic_logo_url || portalContext?.clinicLogoUrl || VERTO_NOTIFICATION_LOGO,
+      clinicName: firstPortalClinicText(
+        [professionalName],
+        portalContext?.clinicName,
+        portalContext?.clinicLegalName,
+        metadata.clinicName,
+        metadata.clinicLegalName,
+        notification?.title,
+        notification?.clinicName,
+        notification?.clinic_name,
+        user?.clinicSettings?.clinicName,
+        user?.workspaceName,
+        user?.clinicName,
+        'Verto'
+      ),
+      clinicLogoUrl: portalContext?.clinicLogoUrl || metadata.clinicLogoUrl || notification?.clinicLogoUrl || notification?.clinic_logo_url || VERTO_NOTIFICATION_LOGO,
       scheduledAt: metadata.scheduledAt || notification?.scheduled_for || notification?.scheduledFor || notification?.created_at
     });
   };
@@ -1365,7 +1387,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     });
   }, [history, portalPatientId, user?.id, user?.patientId, user?.patient_id, user?.email]);
 
-  const familyDiaryHistory = useMemo(() => {
+  const persistedFamilyDiaryHistory = useMemo(() => {
     return [...portalFamilyHistory]
       .sort((a: any, b: any) => {
         const aTime = new Date(a.date || a.created_at || 0).getTime();
@@ -1453,6 +1475,28 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       infrastructureTokens.some((token) => text.toLowerCase().includes(token));
   };
   const firstPortalText = (...values: any[]) => values.map(normalizePortalText).find(Boolean) || '';
+  const portalIdentityKey = (value: any) =>
+    normalizePortalText(value)
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim();
+  const looksLikePortalProfessionalLabel = (candidate: any, professionalName: any) => {
+    const candidateKey = portalIdentityKey(candidate);
+    const professionalKey = portalIdentityKey(professionalName);
+    if (!candidateKey || !professionalKey) return false;
+    if (candidateKey === professionalKey) return true;
+    const candidateTokens = candidateKey.split(/\s+/).filter(Boolean);
+    const professionalTokens = new Set(professionalKey.split(/\s+/).filter(Boolean));
+    return candidateTokens.length > 0 && candidateTokens.length <= 2 && candidateTokens.every((token) => professionalTokens.has(token));
+  };
+  const firstPortalClinicText = (professionalNames: any[], ...values: any[]) => {
+    const professionals = professionalNames.map(normalizePortalText).filter(Boolean);
+    return values
+      .map(normalizePortalText)
+      .find((value) => value && !professionals.some((professional) => looksLikePortalProfessionalLabel(value, professional))) || 'Verto';
+  };
   const hasPortalTrueFlag = (value: any) => value === true || ['true', '1', 'yes', 'sim', 'shared', 'released', 'liberado', 'patient', 'family', 'public'].includes(normalizePortalLower(value));
   const hasPortalPrivateFlag = (item: any) => {
     const visibility = normalizePortalLower(item?.visibility || item?.audience || item?.scope || item?.access);
@@ -1488,6 +1532,40 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       .sort((a: any, b: any) => new Date(b?.created_at || b?.date || 0).getTime() - new Date(a?.created_at || a?.date || 0).getTime())
       .slice(0, 30);
   }, [sharedNotes, portalPatientKeys, portalPatientEmail]);
+  const familyDiaryHistory = useMemo(() => {
+    const normalizedSharedNotes = portalSharedNotes
+      .filter((note: any) => {
+        const visibility = normalizePortalLower(note?.visibility || note?.audience || note?.scope || note?.access);
+        const type = normalizePortalLower(note?.type || note?.kind);
+        return ['family', 'patient', 'shared_patient', 'portal'].includes(visibility) ||
+          ['family_note', 'photo', 'shared_note', 'patient_note'].includes(type);
+      })
+      .map((note: any) => ({
+        ...note,
+        id: firstPortalText(note?.id, note?.created_at, note?.date, note?.subject) ||
+          `shared-${normalizePortalLower(firstPortalText(note?.text, note?.content, note?.note, 'registro'))}`,
+        type: normalizePortalLower(note?.type || note?.kind) === 'photo' ? 'photo' : 'family_note',
+        note: firstPortalText(note?.note, note?.text, note?.content, note?.subject),
+        created_at: firstPortalText(note?.created_at, note?.date),
+        image: firstPortalText(note?.image, note?.image_url, note?.photo_url, note?.url),
+        image_path: firstPortalText(note?.image_path, note?.photo_path, note?.path)
+      }));
+    const seen = new Set<string>();
+    return [...persistedFamilyDiaryHistory, ...normalizedSharedNotes]
+      .filter((entry: any) => {
+        const key = normalizePortalLower(`${entry?.id || ''}|${entry?.created_at || entry?.date || ''}|${entry?.note || ''}`);
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .sort((a: any, b: any) => {
+        const aTime = new Date(a.date || a.created_at || 0).getTime();
+        const bTime = new Date(b.date || b.created_at || 0).getTime();
+        if (aTime === bTime) return String(b.id || '').localeCompare(String(a.id || ''));
+        return bTime - aTime;
+      })
+      .slice(0, 8);
+  }, [persistedFamilyDiaryHistory, portalSharedNotes]);
   const isPortalReleasedDocument = (document: any) => {
     if (!document || hasPortalPrivateFlag(document) || !noteBelongsToPortalPatient(document)) return false;
     const metadata = document?.metadata && typeof document.metadata === 'object' ? document.metadata : {};
@@ -2023,12 +2101,27 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
   const getPortalNotificationClinicName = (notification: any) => {
     const metadata = notification?.metadata && typeof notification.metadata === 'object' ? notification.metadata : {};
-    return firstPortalText(
-      metadata.clinicName,
-      notification?.clinicName,
-      notification?.clinic_name,
+    const professionalName = firstPortalText(
+      metadata.professionalName,
+      metadata.therapistName,
+      metadata.professional,
+      notification?.professionalName,
+      notification?.professional_name,
+      notification?.therapistName,
+      notification?.therapist_name
+    );
+    return firstPortalClinicText(
+      [professionalName],
       portalContext?.clinicName,
       portalContext?.clinicLegalName,
+      metadata.clinicName,
+      metadata.clinicLegalName,
+      notification?.title,
+      notification?.clinicName,
+      notification?.clinic_name,
+      user?.clinicSettings?.clinicName,
+      user?.workspaceName,
+      user?.clinicName,
       'Verto'
     );
   };
@@ -2065,7 +2158,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     <div className="mb-4 space-y-2">
       {portalNotifications.slice(0, 3).map((notification: any) => {
         const metadata = notification?.metadata && typeof notification.metadata === 'object' ? notification.metadata : {};
-        const logoUrl = metadata.clinicLogoUrl || notification?.clinicLogoUrl || notification?.clinic_logo_url || portalContext?.clinicLogoUrl || VERTO_NOTIFICATION_LOGO;
+        const logoUrl = portalContext?.clinicLogoUrl || metadata.clinicLogoUrl || notification?.clinicLogoUrl || notification?.clinic_logo_url || VERTO_NOTIFICATION_LOGO;
         const clinicName = getPortalNotificationClinicName(notification);
         const message = getPortalNotificationMessage(notification);
         return (
@@ -2083,8 +2176,9 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
               <SecureImage src={logoUrl} alt={`Logo ${clinicName}`} className="h-full w-full object-contain p-1" />
             </span>
             <span className="min-w-0">
-              <span className="block text-[10px] font-black uppercase tracking-[0.18em] text-[#7a32fc]">{clinicName}</span>
-              <span className="mt-1 block text-xs font-semibold leading-relaxed text-slate-600">{message}</span>
+              <span className="block text-sm font-bold leading-relaxed text-slate-700">
+                <span className="font-black text-slate-950">{clinicName}</span> {message}
+              </span>
             </span>
           </button>
         );
@@ -2532,12 +2626,23 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   };
   const activePortalAppointment = portalAppointmentDetail?.appointment || selectedPortalAppointment;
   const activePortalStatus = String(activePortalAppointment?.status || '').toUpperCase();
-  const activePortalClinicName = firstPortalText(
+  const activePortalProfessionalName = firstPortalText(
+    activePortalAppointment?.professionalName,
+    activePortalAppointment?.professional_name,
+    activePortalAppointment?.therapistName,
+    activePortalAppointment?.therapist_name
+  );
+  const activePortalClinicName = firstPortalClinicText(
+    [activePortalProfessionalName],
     activePortalAppointment?.clinicName,
     activePortalAppointment?.clinic?.displayName,
     activePortalAppointment?.clinic?.name,
     activePortalAppointment?.clinic_name,
     portalContext?.clinicName,
+    portalContext?.clinicLegalName,
+    user?.clinicSettings?.clinicName,
+    user?.workspaceName,
+    user?.clinicName,
     'Verto'
   );
   const activePortalClinicLogoUrl = firstPortalText(
@@ -2673,7 +2778,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
               <SecureImage src={activePortalClinicLogoUrl} alt={`Logo ${activePortalClinicName}`} className="h-full w-full object-contain p-1" />
             </div>
             <div className="min-w-0">
-            <p className="truncate text-[10px] font-bold uppercase tracking-[0.22em] text-[#7a32fc]">{activePortalClinicName}</p>
+            <p className="truncate text-sm font-black text-slate-900">{activePortalClinicName}</p>
             <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-[#7a32fc]">Detalhes da consulta</p>
             <h3 className="mt-1 text-xl font-black text-slate-900">{activePortalAppointment?.patientName || 'Paciente'}</h3>
             <p className="mt-1 text-sm font-semibold text-slate-500">{formatPortalDateTime(activePortalAppointment?.scheduledAt)}</p>
@@ -2694,7 +2799,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           </div>
           <div className="rounded-2xl bg-slate-50 px-4 py-3">
             <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">Profissional</p>
-            <p className="mt-1 text-sm font-bold text-slate-800">{activePortalAppointment?.professionalName || 'Equipe'}</p>
+            <p className="mt-1 text-sm font-bold text-slate-800">{activePortalProfessionalName || 'Equipe'}</p>
           </div>
         </div>
         {portalAppointmentDetail?.closure?.signaturePending && (

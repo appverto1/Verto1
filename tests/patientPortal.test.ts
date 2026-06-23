@@ -106,7 +106,7 @@ test('calendario carrega somente pelo menu Kids e relatorio continua sob demanda
 
 test('endpoint do calendario do portal segue escopo e select explicito', () => {
   assert.doesNotMatch(serverCode, /\.select\(\s*['"`]\*['"`]\s*\)/);
-  const route = serverSlice("app.get('/api/portal/appointments'", 9200);
+  const route = serverSlice("app.get('/api/portal/appointments'", 12200);
   assert.match(route, /checkAuth/);
   assert.match(route, /getPortalPatientIdsForUser/);
   assert.match(route, /canPortalUserAccessPatient/);
@@ -116,6 +116,9 @@ test('endpoint do calendario do portal segue escopo e select explicito', () => {
   assert.match(route, /patientEmails/);
   assert.match(route, /\.in\('patient_email', emailList\)/);
   assert.match(route, /\.in\('clinic_id', clinicList\)/);
+  assert.match(route, /buildPortalAppointmentClinicRangeQuery/);
+  assert.match(serverCode, /readPortalAppointmentPatientScope/);
+  assert.match(route, /if \(visibleRows\.length >= limit\) break/);
   assert.match(route, /portal_notifications/);
   assert.match(route, /notificationAppointmentIds/);
   assert.match(route, /notificationScopedAppointmentIds/);
