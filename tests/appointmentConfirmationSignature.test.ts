@@ -101,9 +101,21 @@ test('portal appointment response buttons write legacy-compatible appointment va
   assert.match(portalActionsSlice, /status:\s*'confirmed'/);
   assert.match(portalActionsSlice, /status:\s*'reschedule'/);
   assert.match(portalActionsSlice, /status:\s*'cancelled'/);
+  assert.match(portalActionsSlice, /patient_confirmation_status:\s*'confirmed'/);
+  assert.match(portalActionsSlice, /patient_confirmation_status:\s*'RESCHEDULE_REQUESTED'/);
+  assert.match(portalActionsSlice, /patient_confirmation_status:\s*'CANCEL_REQUESTED'/);
   assert.match(portalActionsSlice, /patient_response:\s*'cancelled'/);
   assert.doesNotMatch(portalActionsSlice, /patient_response:\s*'cancel_requested'/);
   assert.match(serverCode, /hasMissingFinancialSchema\(error\) \|\| isMissingRelationError\(error\)/);
+});
+
+test('agenda recebe status canonico de resposta do paciente', () => {
+  assert.match(serverCode, /const CALENDAR_EVENT_SELECT = \[[\s\S]*?'patient_confirmation_status'/);
+  assert.match(serverCode, /normalizePatientConfirmationStatusForAgenda/);
+  assert.match(serverCode, /patientConfirmationLabel: getPatientConfirmationLabelForAgenda/);
+  assert.match(calendarCode, /getAppointmentPatientConfirmationVisualState/);
+  assert.match(calendarCode, /detailStatusColor = getAppointmentPatientConfirmationVisualState\(detailEvent\)/);
+  assert.match(calendarCode, /Consulta confirmada pelo respons/);
 });
 
 test('frontend exposes portal actions and clinic agenda request decisions without technical ids', () => {

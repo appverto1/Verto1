@@ -4403,6 +4403,12 @@ const CALENDAR_EVENT_SELECT = [
   'location_notes',
   'call_link',
   'status',
+  'patient_response',
+  'patient_responded_at',
+  'patient_confirmation_status',
+  'patient_confirmation_at',
+  'patient_confirmation_by',
+  'patient_confirmation_source',
   'payer_id',
   'payer_name_snapshot',
   'insurance_card_number',
@@ -7258,7 +7264,7 @@ function normalizeAppointmentResponseAction(action: unknown): 'confirmed' | 'res
   const normalized = sanitizeString(action, 40).toLowerCase();
   if (['verto_confirm_appointment', 'confirm', 'confirmed', 'confirmar', 'accepted', 'accept'].includes(normalized)) return 'confirmed';
   if (['verto_reschedule_appointment', 'reschedule', 'rescheduled', 'remarcar', 'remarcado'].includes(normalized)) return 'reschedule';
-  if (['cancel', 'canceled', 'cancelled', 'cancelar', 'cancelado'].includes(normalized)) return 'canceled';
+  if (['cancel', 'canceled', 'cancelled', 'cancelar', 'cancelado', 'declined', 'decline', 'recusar', 'recusado'].includes(normalized)) return 'canceled';
   return '';
 }
 
@@ -7274,12 +7280,45 @@ function normalizeOperationalAppointmentStatus(status: unknown): string {
   if (['CONFIRMED', 'CONFIRMADA', 'CONFIRMADO'].includes(normalized)) return 'CONFIRMED';
   if (['RESCHEDULE', 'RESCHEDULE_REQUESTED', 'REMARCAR', 'REMARCACAO_SOLICITADA'].includes(normalized)) return 'RESCHEDULE_REQUESTED';
   if (['RESCHEDULED', 'REMARCADA', 'REMARCADO'].includes(normalized)) return 'RESCHEDULED';
-  if (['CANCEL_REQUESTED', 'CANCELAMENTO_SOLICITADO'].includes(normalized)) return 'CANCEL_REQUESTED';
+  if (['CANCEL_REQUESTED', 'CANCELAMENTO_SOLICITADO', 'DECLINED', 'DECLINE', 'RECUSADO', 'RECUSADA'].includes(normalized)) return 'CANCEL_REQUESTED';
   if (['CANCEL', 'CANCELLED', 'CANCELED', 'CANCELADA', 'CANCELADO'].includes(normalized)) return 'CANCELLED';
   if (['IN_PROGRESS', 'ANDAMENTO', 'EM_ANDAMENTO'].includes(normalized)) return 'IN_PROGRESS';
   if (['COMPLETED', 'CONCLUIDA', 'CONCLUIDO'].includes(normalized)) return 'COMPLETED';
   if (['NO_SHOW', 'MISSED', 'FALTA', 'FALTOU'].includes(normalized)) return 'NO_SHOW';
   return normalized || 'SCHEDULED';
+}
+
+function normalizePatientConfirmationStatusForAgenda(value: unknown, fallbackStatus?: unknown): 'pending' | 'confirmed' | 'reschedule_requested' | 'declined' {
+  const raw = sanitizeString(value, 80);
+  const normalized = normalizeOperationalAppointmentStatus(raw);
+  if (normalized === 'CONFIRMED') return 'confirmed';
+  if (normalized === 'RESCHEDULE_REQUESTED' || normalized === 'RESCHEDULED') return 'reschedule_requested';
+  if (normalized === 'CANCEL_REQUESTED' || normalized === 'CANCELLED') return 'declined';
+  const response = normalizeAppointmentResponseAction(raw);
+  if (response === 'confirmed') return 'confirmed';
+  if (response === 'reschedule') return 'reschedule_requested';
+  if (response === 'canceled') return 'declined';
+  const fallback = normalizeOperationalAppointmentStatus(fallbackStatus);
+  if (fallback === 'CONFIRMED') return 'confirmed';
+  if (fallback === 'RESCHEDULE_REQUESTED' || fallback === 'RESCHEDULED') return 'reschedule_requested';
+  if (fallback === 'CANCEL_REQUESTED' || fallback === 'CANCELLED') return 'declined';
+  return 'pending';
+}
+
+function getPatientConfirmationLabelForAgenda(status: unknown): string {
+  const normalized = normalizePatientConfirmationStatusForAgenda(status);
+  if (normalized === 'confirmed') return 'CONFIRMADO';
+  if (normalized === 'reschedule_requested') return 'REMARCAR';
+  if (normalized === 'declined') return 'CANCELADO PELO PACIENTE';
+  return 'PENDENTE';
+}
+
+function getPatientConfirmationColorForAgenda(status: unknown): 'neutral' | 'green' | 'orange' | 'red' {
+  const normalized = normalizePatientConfirmationStatusForAgenda(status);
+  if (normalized === 'confirmed') return 'green';
+  if (normalized === 'reschedule_requested') return 'orange';
+  if (normalized === 'declined') return 'red';
+  return 'neutral';
 }
 
 function isAppointmentTerminalForPortalAction(status: unknown): boolean {
@@ -7380,6 +7419,27 @@ function serializePersistedAppointmentForAgenda(row: any) {
   const roomName = sanitizeString(row?.room_name || source?.roomName || source?.room_name || source?.roomDisplayName || roomId, 180) || '';
   const locationType = normalizeScheduleLocationType(row?.location_type || source?.locationType || source?.location_type || (roomId ? 'clinica' : 'outro'));
   const uiStatus = normalizeAppointmentStatusForUi(row?.status || source?.status || 'pending');
+  const patientConfirmationStatus = normalizePatientConfirmationStatusForAgenda(
+    row?.patient_confirmation_status ||
+      row?.patientConfirmationStatus ||
+      row?.patient_response ||
+      row?.patientResponse ||
+      source?.patient_confirmation_status ||
+      source?.patientConfirmationStatus ||
+      source?.patient_response ||
+      source?.patientResponse,
+    row?.status || source?.status
+  );
+  const patientRespondedAt =
+    row?.patient_responded_at ||
+    row?.patientRespondedAt ||
+    row?.patient_confirmation_at ||
+    row?.patientConfirmationAt ||
+    source?.patient_responded_at ||
+    source?.patientRespondedAt ||
+    source?.patient_confirmation_at ||
+    source?.patientConfirmationAt ||
+    null;
   const appointment = {
     ...source,
     id: sanitizeString(row?.id || source?.id, 120),
@@ -7439,12 +7499,18 @@ function serializePersistedAppointmentForAgenda(row: any) {
     recurrence_frequency: sanitizeString(row?.recurrence_frequency || source?.recurrence_frequency || source?.recurrenceFrequency, 60) || null,
     patientResponse: row?.patient_response || source?.patientResponse || source?.patient_response || null,
     patient_response: row?.patient_response || source?.patient_response || source?.patientResponse || null,
-    patientRespondedAt: row?.patient_responded_at || source?.patientRespondedAt || source?.patient_responded_at || null,
-    patient_responded_at: row?.patient_responded_at || source?.patient_responded_at || source?.patientRespondedAt || null,
-    patientConfirmationStatus: row?.patient_confirmation_status || source?.patientConfirmationStatus || source?.patient_confirmation_status || null,
-    patient_confirmation_status: row?.patient_confirmation_status || source?.patient_confirmation_status || source?.patientConfirmationStatus || null,
+    patientRespondedAt: patientRespondedAt,
+    patient_responded_at: patientRespondedAt,
+    patientConfirmationStatus,
+    patient_confirmation_status: patientConfirmationStatus,
+    patientConfirmationLabel: getPatientConfirmationLabelForAgenda(patientConfirmationStatus),
+    patient_confirmation_label: getPatientConfirmationLabelForAgenda(patientConfirmationStatus),
+    patientConfirmationColor: getPatientConfirmationColorForAgenda(patientConfirmationStatus),
+    patient_confirmation_color: getPatientConfirmationColorForAgenda(patientConfirmationStatus),
     patientConfirmationAt: row?.patient_confirmation_at || source?.patientConfirmationAt || source?.patient_confirmation_at || null,
     patient_confirmation_at: row?.patient_confirmation_at || source?.patient_confirmation_at || source?.patientConfirmationAt || null,
+    patientConfirmationSource: sanitizeString(row?.patient_confirmation_source || source?.patientConfirmationSource || source?.patient_confirmation_source, 80) || null,
+    patient_confirmation_source: sanitizeString(row?.patient_confirmation_source || source?.patient_confirmation_source || source?.patientConfirmationSource, 80) || null,
     notification_sent: row?.notification_sent ?? source?.notification_sent ?? false,
     notification_sent_at: row?.notification_sent_at || source?.notification_sent_at || null,
     notification_12h_sent: row?.notification_12h_sent ?? source?.notification_12h_sent ?? false,
@@ -28938,6 +29004,27 @@ async function startServer() {
     const appointmentId = sanitizeString(row?.id || source?.id, 180);
     const patientId = sanitizeString(row?.patient_id || row?.patientId || source?.patient_id || source?.patientId, 120);
     const status = normalizeAppointmentStatusForUi(row?.status || source?.status || 'pending');
+    const patientConfirmationStatus = normalizePatientConfirmationStatusForAgenda(
+      row?.patient_confirmation_status ||
+        row?.patientConfirmationStatus ||
+        row?.patient_response ||
+        row?.patientResponse ||
+        source?.patient_confirmation_status ||
+        source?.patientConfirmationStatus ||
+        source?.patient_response ||
+        source?.patientResponse,
+      row?.status || source?.status
+    );
+    const patientRespondedAt =
+      row?.patient_responded_at ||
+      row?.patientRespondedAt ||
+      row?.patient_confirmation_at ||
+      row?.patientConfirmationAt ||
+      source?.patient_responded_at ||
+      source?.patientRespondedAt ||
+      source?.patient_confirmation_at ||
+      source?.patientConfirmationAt ||
+      null;
     const statusText = sanitizeString(row?.status || source?.status, 80).toLowerCase();
     const hasSessionRecord =
       readCalendarBooleanFlag(source, ['has_session_record', 'hasSessionRecord', 'session_registered', 'sessionRegistered', 'registeredSession']) ||
@@ -29020,6 +29107,19 @@ async function startServer() {
       actual_duration_minutes: Number(row?.actual_duration_minutes ?? source?.actual_duration_minutes ?? source?.actualDurationMinutes) || null,
       type: sanitizeString(row?.service_type || row?.approach || row?.type || source?.service_type || source?.serviceType || source?.approach || source?.type, 120) || 'Sessão',
       status,
+      patientResponse: row?.patient_response || row?.patientResponse || source?.patientResponse || source?.patient_response || null,
+      patient_response: row?.patient_response || row?.patientResponse || source?.patient_response || source?.patientResponse || null,
+      patientRespondedAt,
+      patient_responded_at: patientRespondedAt,
+      patientConfirmationStatus,
+      patient_confirmation_status: patientConfirmationStatus,
+      patientConfirmationLabel: getPatientConfirmationLabelForAgenda(patientConfirmationStatus),
+      patient_confirmation_label: getPatientConfirmationLabelForAgenda(patientConfirmationStatus),
+      patientConfirmationColor: getPatientConfirmationColorForAgenda(patientConfirmationStatus),
+      patient_confirmation_color: getPatientConfirmationColorForAgenda(patientConfirmationStatus),
+      patientConfirmationSource: sanitizeString(row?.patient_confirmation_source || row?.patientConfirmationSource || source?.patientConfirmationSource || source?.patient_confirmation_source, 80) || null,
+      patient_confirmation_source: sanitizeString(row?.patient_confirmation_source || row?.patientConfirmationSource || source?.patientConfirmationSource || source?.patient_confirmation_source, 80) || null,
+      patient_response_source: sanitizeString(row?.patient_confirmation_source || row?.patientConfirmationSource || source?.patientConfirmationSource || source?.patient_confirmation_source, 80) || null,
       location: location || (room ? 'sala' : 'clinica'),
       location_type: normalizeScheduleLocationType(location || (room ? 'clinica' : 'outro')),
       location_label: locationLabel,
@@ -29948,6 +30048,44 @@ async function startServer() {
           : sanitizeString(row?.location_notes || source?.locationLabel || source?.location_label, 180) || 'Local informado pela clínica',
       roomName: locationType === 'clinica' ? roomName || 'Sala não informada' : null,
       status: normalizeOperationalAppointmentStatus(row?.status || source?.status),
+      patientConfirmationStatus: normalizePatientConfirmationStatusForAgenda(
+        row?.patient_confirmation_status ||
+          row?.patientConfirmationStatus ||
+          row?.patient_response ||
+          row?.patientResponse ||
+          source?.patient_confirmation_status ||
+          source?.patientConfirmationStatus ||
+          source?.patient_response ||
+          source?.patientResponse,
+        row?.status || source?.status
+      ),
+      patientConfirmationLabel: getPatientConfirmationLabelForAgenda(
+        row?.patient_confirmation_status ||
+          row?.patientConfirmationStatus ||
+          row?.patient_response ||
+          row?.patientResponse ||
+          source?.patient_confirmation_status ||
+          source?.patientConfirmationStatus ||
+          source?.patient_response ||
+          source?.patientResponse ||
+          row?.status ||
+          source?.status
+      ),
+      patientConfirmationColor: getPatientConfirmationColorForAgenda(
+        row?.patient_confirmation_status ||
+          row?.patientConfirmationStatus ||
+          row?.patient_response ||
+          row?.patientResponse ||
+          source?.patient_confirmation_status ||
+          source?.patientConfirmationStatus ||
+          source?.patient_response ||
+          source?.patientResponse ||
+          row?.status ||
+          source?.status
+      ),
+      patientResponse: row?.patient_response || row?.patientResponse || source?.patientResponse || source?.patient_response || null,
+      patientRespondedAt: row?.patient_responded_at || row?.patientRespondedAt || row?.patient_confirmation_at || row?.patientConfirmationAt || source?.patient_responded_at || source?.patientRespondedAt || source?.patient_confirmation_at || source?.patientConfirmationAt || null,
+      patientResponseSource: row?.patient_confirmation_source || row?.patientConfirmationSource || source?.patientConfirmationSource || source?.patient_confirmation_source || null,
       confirmedAt: row?.confirmed_at || row?.patient_confirmation_at || null,
       rescheduleRequestedAt: row?.reschedule_requested_at || null,
       cancelRequestedAt: row?.cancel_requested_at || null,

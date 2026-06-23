@@ -16,6 +16,9 @@ const test = (name: string, fn: () => void) => tests.push({ name, fn });
 test('calendar endpoint usa intervalo visivel, limit e colunas explicitas', () => {
   assert.match(serverCode, /app\.get\('\/api\/calendar\/events'/);
   assert.match(serverCode, /const CALENDAR_EVENT_SELECT = \[/);
+  assert.match(serverCode, /'patient_response'/);
+  assert.match(serverCode, /'patient_confirmation_status'/);
+  assert.match(serverCode, /'patient_confirmation_source'/);
   assert.match(serverCode, /'recurrence_group_id'/);
   assert.match(serverCode, /'recurrence_index'/);
   assert.match(serverCode, /recurrenceGroupId: sanitizeString/);
@@ -102,6 +105,9 @@ test('cards mostram informacoes e indicadores essenciais da sessao', () => {
   assert.match(calendarCode, /event\.time/);
   assert.match(calendarCode, /event\.patientName/);
   assert.match(calendarCode, /getAppointmentStatusColor/);
+  assert.match(calendarCode, /getAppointmentPatientConfirmationVisualState/);
+  assert.match(calendarCode, /patientConfirmationLabel/);
+  assert.match(calendarCode, /patientConfirmationColor/);
   assert.match(calendarCode, /statusColor\.card/);
   assert.match(calendarCode, /bg-emerald-500 text-white/);
   assert.match(calendarCode, /mergeAppointmentStatusForRender/);
@@ -114,6 +120,19 @@ test('cards mostram informacoes e indicadores essenciais da sessao', () => {
   assert.match(calendarCode, /has_pending_signature/);
   assert.match(calendarCode, /closure_readiness_status/);
   assert.match(calendarCode, /getClosureStatusStyle/);
+});
+
+test('agenda usa resposta do paciente como fonte visual canonica', () => {
+  assert.match(serverCode, /normalizePatientConfirmationStatusForAgenda/);
+  assert.match(serverCode, /patientConfirmationStatus/);
+  assert.match(serverCode, /patientConfirmationLabel/);
+  assert.match(serverCode, /patientConfirmationColor/);
+  assert.match(calendarCode, /normalizeAppointmentPatientConfirmationStatus/);
+  assert.match(calendarCode, /getAppointmentPatientConfirmationVisualState\(event\)/);
+  assert.match(calendarCode, /detailStatusColor = getAppointmentPatientConfirmationVisualState\(detailEvent\)/);
+  assert.match(calendarCode, /CONFIRMADO/);
+  assert.match(calendarCode, /REMARCAR/);
+  assert.match(calendarCode, /CANCELADO PELO PACIENTE/);
 });
 
 test('popover tem acoes clinicas e nao registra sessao automaticamente', () => {

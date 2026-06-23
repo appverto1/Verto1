@@ -67,7 +67,7 @@ const canonicalAppointmentStatus = (status: any) => {
   if (normalized.includes('RESCHEDULE_REQUEST')) return 'RESCHEDULE_REQUESTED';
   if (normalized === 'RESCHEDULE' || normalized === 'REMARCAR' || normalized.includes('REMARCACAO_SOLICITADA')) return 'RESCHEDULE_REQUESTED';
   if (normalized.includes('RESCHEDULED') || normalized.includes('REMARCADA')) return 'RESCHEDULED';
-  if (normalized.includes('CANCEL_REQUEST') || normalized.includes('CANCELAMENTO_SOLICITADO')) return 'CANCEL_REQUESTED';
+  if (normalized.includes('CANCEL_REQUEST') || normalized.includes('CANCELAMENTO_SOLICITADO') || normalized.includes('DECLIN') || normalized.includes('RECUS')) return 'CANCEL_REQUESTED';
   if (normalized.includes('CANCEL')) return 'CANCELLED';
   if (normalized.includes('PROGRESS') || normalized.includes('ANDAMENTO')) return 'IN_PROGRESS';
   if (normalized.includes('COMPLET') || normalized.includes('CONCLUID')) return 'COMPLETED';
@@ -187,6 +187,53 @@ export const getAppointmentStatusColor = (status: any) => {
     }
   };
   return colors[canonical] || colors.SCHEDULED;
+};
+
+const normalizeAppointmentPatientConfirmationStatus = (appointment: any) => {
+  const raw =
+    appointment?.patientConfirmationStatus ||
+    appointment?.patient_confirmation_status ||
+    appointment?.patientResponse ||
+    appointment?.patient_response ||
+    appointment?.patientConfirmation ||
+    appointment?.patient_confirmation;
+  const explicit = canonicalAppointmentStatus(raw);
+  if (explicit === 'CONFIRMED') return 'CONFIRMED';
+  if (explicit === 'RESCHEDULE_REQUESTED' || explicit === 'RESCHEDULED') return 'RESCHEDULE_REQUESTED';
+  if (explicit === 'CANCEL_REQUESTED' || explicit === 'CANCELLED') return 'CANCEL_REQUESTED';
+  const fallback = canonicalAppointmentStatus(appointment?.status || appointment?.appointment_status);
+  if (fallback === 'CONFIRMED') return 'CONFIRMED';
+  if (fallback === 'RESCHEDULE_REQUESTED' || fallback === 'RESCHEDULED') return 'RESCHEDULE_REQUESTED';
+  if (fallback === 'CANCEL_REQUESTED' || fallback === 'CANCELLED') return 'CANCEL_REQUESTED';
+  return 'PENDING_CONFIRMATION';
+};
+
+export const getAppointmentPatientConfirmationVisualState = (appointment: any) => {
+  const canonical = normalizeAppointmentPatientConfirmationStatus(appointment);
+  const label =
+    appointment?.patientConfirmationLabel ||
+    appointment?.patient_confirmation_label ||
+    {
+      CONFIRMED: 'CONFIRMADO',
+      RESCHEDULE_REQUESTED: 'REMARCAR',
+      CANCEL_REQUESTED: 'CANCELADO PELO PACIENTE',
+      PENDING_CONFIRMATION: 'PENDENTE'
+    }[canonical] ||
+    'PENDENTE';
+  const statusForColor =
+    canonical === 'CONFIRMED'
+      ? 'confirmed'
+      : canonical === 'RESCHEDULE_REQUESTED'
+        ? 'reschedule_requested'
+        : canonical === 'CANCEL_REQUESTED'
+          ? 'cancel_requested'
+          : 'pending';
+  return {
+    ...getAppointmentStatusColor(statusForColor),
+    canonical,
+    label,
+    responseStatus: canonical
+  };
 };
 
 const normalizeAgendaStatus = (status: any) => canonicalAppointmentStatus(status).toLowerCase();
@@ -747,6 +794,14 @@ const mergeCalendarEventForRender = (serverEvent: any, localEvent: any) => {
     patientConfirmationStatus: serverEvent?.patientConfirmationStatus || localEvent?.patientConfirmationStatus || null,
     patient_confirmation_at: serverEvent?.patient_confirmation_at || localEvent?.patient_confirmation_at || null,
     patientConfirmationAt: serverEvent?.patientConfirmationAt || localEvent?.patientConfirmationAt || null,
+    patient_responded_at: serverEvent?.patient_responded_at || localEvent?.patient_responded_at || null,
+    patientRespondedAt: serverEvent?.patientRespondedAt || localEvent?.patientRespondedAt || null,
+    patient_confirmation_label: serverEvent?.patient_confirmation_label || localEvent?.patient_confirmation_label || null,
+    patientConfirmationLabel: serverEvent?.patientConfirmationLabel || localEvent?.patientConfirmationLabel || null,
+    patient_confirmation_color: serverEvent?.patient_confirmation_color || localEvent?.patient_confirmation_color || null,
+    patientConfirmationColor: serverEvent?.patientConfirmationColor || localEvent?.patientConfirmationColor || null,
+    patient_confirmation_source: serverEvent?.patient_confirmation_source || localEvent?.patient_confirmation_source || null,
+    patientConfirmationSource: serverEvent?.patientConfirmationSource || localEvent?.patientConfirmationSource || null,
     patientName,
     patient_name: patientName,
     name: patientName,
@@ -822,6 +877,18 @@ const normalizeClinicalEvent = (event: any, roomLookup?: Map<string, any>) => {
     therapistName,
     type,
     status: event?.status || 'scheduled',
+    patient_response: event?.patient_response || event?.patientResponse || source?.patient_response || source?.patientResponse || null,
+    patientResponse: event?.patientResponse || event?.patient_response || source?.patientResponse || source?.patient_response || null,
+    patient_responded_at: event?.patient_responded_at || event?.patientRespondedAt || source?.patient_responded_at || source?.patientRespondedAt || null,
+    patientRespondedAt: event?.patientRespondedAt || event?.patient_responded_at || source?.patientRespondedAt || source?.patient_responded_at || null,
+    patient_confirmation_status: event?.patient_confirmation_status || event?.patientConfirmationStatus || source?.patient_confirmation_status || source?.patientConfirmationStatus || null,
+    patientConfirmationStatus: event?.patientConfirmationStatus || event?.patient_confirmation_status || source?.patientConfirmationStatus || source?.patient_confirmation_status || null,
+    patient_confirmation_label: event?.patient_confirmation_label || event?.patientConfirmationLabel || source?.patient_confirmation_label || source?.patientConfirmationLabel || null,
+    patientConfirmationLabel: event?.patientConfirmationLabel || event?.patient_confirmation_label || source?.patientConfirmationLabel || source?.patient_confirmation_label || null,
+    patient_confirmation_color: event?.patient_confirmation_color || event?.patientConfirmationColor || source?.patient_confirmation_color || source?.patientConfirmationColor || null,
+    patientConfirmationColor: event?.patientConfirmationColor || event?.patient_confirmation_color || source?.patientConfirmationColor || source?.patient_confirmation_color || null,
+    patient_confirmation_source: event?.patient_confirmation_source || event?.patientConfirmationSource || source?.patient_confirmation_source || source?.patientConfirmationSource || null,
+    patientConfirmationSource: event?.patientConfirmationSource || event?.patient_confirmation_source || source?.patientConfirmationSource || source?.patient_confirmation_source || null,
     room: roomInfo.roomName,
     roomId: roomInfo.roomId,
     room_id: roomInfo.roomId,
@@ -1372,7 +1439,11 @@ export const ClinicalAgendaBoard = ({
     if (!appointment?.id) return;
     const normalized = normalizeClinicalEvent(appointment, roomLookup);
     cacheRef.current.clear();
-    setRemoteEvents((prev) => prev.map((event: any) => String(event?.id) === String(normalized.id) ? { ...event, ...appointment, status: appointment.status || event.status } : event));
+    setRemoteEvents((prev) => prev.map((event: any) =>
+      String(event?.id) === String(normalized.id)
+        ? normalizeClinicalEvent({ ...event, ...appointment, status: appointment.status || event.status }, roomLookup)
+        : event
+    ));
     setSelectedEvent((prev: any) => prev && String(prev?.id) === String(normalized.id) ? { ...prev, ...normalized } : prev);
     setEventDetail((prev: any) => prev ? { ...prev, event: { ...(prev.event || {}), ...appointment } } : prev);
   };
@@ -1942,9 +2013,8 @@ export const ClinicalAgendaBoard = ({
 
   const renderEventCard = (event: any, compact = false) => {
     const style = getSessionTypeStyle(event.type);
-    const status = getClinicalStatusStyle(event.status, event);
-    const statusColor = getAppointmentStatusColor(event.status);
-    const StatusIcon = status.icon;
+    const statusColor = getAppointmentPatientConfirmationVisualState(event);
+    const StatusIcon = statusColor.icon;
     return (
       <button
         key={event.id}
@@ -1960,9 +2030,9 @@ export const ClinicalAgendaBoard = ({
             <span className="text-[10px] font-semibold leading-tight opacity-85">
               {event.time} - {event.endTime}
             </span>
-            <span className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] font-bold ${status.className}`}>
+            <span className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] font-bold ${statusColor.badge}`}>
               <StatusIcon size={10} />
-              {!compact && status.label}
+              {!compact && statusColor.label}
             </span>
           </div>
           <p className={`mt-1 truncate text-sm font-semibold leading-tight ${compact ? 'text-xs' : ''}`}>{event.patientName}</p>
@@ -2144,7 +2214,7 @@ export const ClinicalAgendaBoard = ({
                 </div>
                 <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto pr-1 custom-scrollbar">
                   {visibleItems.map((event: any) => {
-                    const statusColor = getAppointmentStatusColor(event.status);
+                    const statusColor = getAppointmentPatientConfirmationVisualState(event);
                     return (
                       <button
                         key={event.id}
@@ -2189,10 +2259,8 @@ export const ClinicalAgendaBoard = ({
     ...(detail.event || {}),
     ...(detail.closure || {})
   });
-  const detailStatusColor = getAppointmentStatusColor(detailEvent.status);
-  const detailAppointmentConfirmed =
-    detailStatusColor.canonical === 'CONFIRMED' ||
-    canonicalAppointmentStatus(detailEvent.patientConfirmationStatus || detailEvent.patient_confirmation_status) === 'CONFIRMED';
+  const detailStatusColor = getAppointmentPatientConfirmationVisualState(detailEvent);
+  const detailAppointmentConfirmed = detailStatusColor.canonical === 'CONFIRMED';
   const planItems = Array.isArray(detail.nextSessionPlanItems) ? detail.nextSessionPlanItems : [];
   const maintenanceProbes = [
     ...(Array.isArray(detail.maintenanceProbes) ? detail.maintenanceProbes : []),
@@ -2410,14 +2478,14 @@ export const ClinicalAgendaBoard = ({
             <div className="max-h-[62vh] overflow-y-auto p-4 custom-scrollbar">
               <div className="space-y-2">
                 {selectedDayPanelEvents.map((event: any) => {
-                  const statusColor = getAppointmentStatusColor(event.status);
+                  const statusColor = getAppointmentPatientConfirmationVisualState(event);
                   return (
                     <div key={event.id} className={`rounded-2xl border p-3 ${statusColor.card}`}>
                       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                         <div className="min-w-0">
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="text-sm font-bold tabular-nums">{event.time} - {event.endTime}</span>
-                            <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${statusColor.badge}`}>{getAppointmentStatusLabel(event.status)}</span>
+                            <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${statusColor.badge}`}>{statusColor.label}</span>
                           </div>
                           <p className="mt-1 truncate text-sm font-semibold">{event.patientName}</p>
                           <p className={`mt-1 truncate text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
@@ -2456,7 +2524,7 @@ export const ClinicalAgendaBoard = ({
               <div>
                 <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#7a32fc]">Ações da consulta</p>
                 <h3 className="text-lg font-bold">{statusActionEvent.patientName || statusActionEvent.patient_name || 'Consulta'}</h3>
-                <p className="mt-1 text-xs text-slate-500">{statusActionEvent.time} · {getAppointmentStatusLabel(statusActionEvent.status)}</p>
+                <p className="mt-1 text-xs text-slate-500">{statusActionEvent.time} · {getAppointmentPatientConfirmationVisualState(statusActionEvent).label}</p>
               </div>
               <button type="button" onClick={() => setStatusActionEvent(null)} className="rounded-2xl border border-violet-100 p-2 text-violet-700 hover:bg-violet-50" aria-label="Fechar ações da consulta">
                 <X size={18} />
@@ -2733,7 +2801,7 @@ export const ClinicalAgendaBoard = ({
                     {detailEvent.type}
                   </span>
                   <span className={`rounded-full border px-3 py-1 text-[10px] font-bold uppercase ${detailStatusColor.badge}`}>
-                    {getAppointmentStatusLabel(detailEvent.status)}
+                    {detailStatusColor.label}
                   </span>
                 </div>
                 <h3 className="text-xl font-bold">{detailEvent.patientName}</h3>
