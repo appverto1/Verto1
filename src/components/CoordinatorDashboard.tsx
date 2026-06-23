@@ -1367,8 +1367,38 @@ export function CoordinatorDashboard({
     responsavelRelacao: "",
     patientProfileType: "ADULT",
     financialPlans: [],
+    insuranceHolderSuggestedFromResponsible: false,
   });
   const [editingPatientId, setEditingPatientId] = useState<string | null>(null);
+  const defaultPatientTissAuthorizationForm = {
+    id: "",
+    payerId: "",
+    configurationKey: "",
+    serviceCatalogId: "",
+    payerTussMappingId: "",
+    tussCodeId: "",
+    authorizationNumber: "",
+    guideNumber: "",
+    validFrom: "",
+    validUntil: "",
+    authorizedQuantity: "1",
+    authorizedUnit: "sessions",
+    usedQuantity: "0",
+    status: "active",
+    notes: "",
+  };
+  const [patientTissAuthorizations, setPatientTissAuthorizations] = useState<any[]>([]);
+  const [patientTissAuthorizationLoading, setPatientTissAuthorizationLoading] = useState(false);
+  const [patientTissAuthorizationFormOpen, setPatientTissAuthorizationFormOpen] = useState(false);
+  const [editingPatientTissAuthorizationId, setEditingPatientTissAuthorizationId] = useState("");
+  const [patientTissAuthorizationForm, setPatientTissAuthorizationForm] = useState<any>(defaultPatientTissAuthorizationForm);
+  const [patientTissAuthorizationFeedback, setPatientTissAuthorizationFeedback] = useState<{ type: "idle" | "saving" | "success" | "error"; message: string }>({ type: "idle", message: "" });
+  const [patientTissAuthorizationCatalog, setPatientTissAuthorizationCatalog] = useState<{
+    services: any[];
+    codes: any[];
+    mappings: any[];
+    prices: any[];
+  }>({ services: [], codes: [], mappings: [], prices: [] });
 
   useEffect(() => {
     if (activeTab === "settings" || isAnamnesisTemplateModalOpen) {
@@ -1405,6 +1435,252 @@ export function CoordinatorDashboard({
     "Outro",
   ];
 
+  const normalizeLookupText = (value: any) =>
+    normalizeUtf8Text(String(value || "")).trim().toLowerCase();
+
+  const selectedPatientInsurancePayer = useMemo(() => {
+    const payerName = normalizeLookupText(newPatientForm.convenioNome);
+    if (newPatientForm.convenioTipo !== "convenio" || !payerName) return null;
+    return clinicPayers.find((payer: any) => normalizeLookupText(payer?.name) === payerName) || null;
+  }, [clinicPayers, newPatientForm.convenioNome, newPatientForm.convenioTipo]);
+
+  const patientAuthorizationBillingConfigurations = useMemo(() => {
+    const { services, codes, mappings, prices } = patientTissAuthorizationCatalog;
+    const servicesById = new Map<string, any>(services.map((service: any) => [String(service.id || ""), service]));
+    const codesById = new Map<string, any>(codes.map((code: any) => [String(code.id || ""), code]));
+    const activePrices = prices.filter((price: any) => price?.active === true);
+    return mappings
+      .filter((mapping: any) => mapping?.active === true)
+      .map((mapping: any) => {
+        const service = servicesById.get(String(mapping.serviceCatalogId || ""));
+        const code = codesById.get(String(mapping.tussCodeId || ""));
+        const price =
+          activePrices.find((item: any) => String(item.payerTussMappingId || "") === String(mapping.id || "")) ||
+          activePrices.find((item: any) =>
+            String(item.serviceCatalogId || "") === String(mapping.serviceCatalogId || "") &&
+            String(item.tussCodeId || "") === String(mapping.tussCodeId || "")
+          ) ||
+          null;
+        return {
+          key: `${mapping.id}:${price?.id || "sem-preco"}`,
+          mapping,
+          service,
+          code,
+          price,
+          isOperational: service?.active === true && code?.active === true && mapping?.active === true && price?.active === true,
+        };
+      })
+      .filter((configuration: any) => configuration.isOperational);
+  }, [patientTissAuthorizationCatalog]);
+
+  const selectedPatientAuthorizationConfiguration = useMemo(
+    () => patientAuthorizationBillingConfigurations.find((configuration: any) => configuration.key === patientTissAuthorizationForm.configurationKey) || null,
+    [patientAuthorizationBillingConfigurations, patientTissAuthorizationForm.configurationKey],
+  );
+
+  const formatPatientAuthorizationAmount = (amountCents: any) => {
+    if (!Number.isFinite(Number(amountCents))) return "Valor pendente";
+    return (Number(amountCents) / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  };
+
+  const formatPatientAuthorizationDate = (value: any) => {
+    const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return match ? `${match[3]}/${match[2]}/${match[1]}` : "sem data";
+  };
+
+  const getPatientAuthorizationStatusLabel = (authorization: any) => {
+    if (authorization?.active === false || String(authorization?.status || "").toLowerCase() === "cancelled") return "Inativa";
+    const today = new Date().toISOString().slice(0, 10);
+    if (authorization?.validUntil && String(authorization.validUntil).slice(0, 10) < today) return "Expirada";
+    if (Number(authorization?.authorizedQuantity || 0) > 0 && Number(authorization?.usedQuantity || 0) >= Number(authorization.authorizedQuantity)) return "Esgotada";
+    return "Ativa";
+  };
+
+  const resetPatientTissAuthorizationForm = () => {
+    setEditingPatientTissAuthorizationId("");
+    setPatientTissAuthorizationForm({
+      ...defaultPatientTissAuthorizationForm,
+      payerId: selectedPatientInsurancePayer?.id || "",
+    });
+    setPatientTissAuthorizationFeedback({ type: "idle", message: "" });
+  };
+
+  const loadPatientTissAuthorizations = async (patientId: string) => {
+    if (!patientId || !canAccessClinicFinance) return;
+    setPatientTissAuthorizationLoading(true);
+    try {
+      const result = await dataService.getPatientTissAuthorizations(patientId);
+      setPatientTissAuthorizations(result?.success && Array.isArray(result.data) ? result.data : []);
+    } finally {
+      setPatientTissAuthorizationLoading(false);
+    }
+  };
+
+  const loadPatientTissAuthorizationCatalog = async (payerId: string) => {
+    if (!payerId || !canAccessClinicFinance) {
+      setPatientTissAuthorizationCatalog({ services: [], codes: [], mappings: [], prices: [] });
+      return;
+    }
+    const [servicesResult, codesResult, mappingsResult, pricesResult] = await Promise.all([
+      dataService.getTussServices({ limit: 200 }),
+      dataService.getTussCodes({ limit: 300 }),
+      dataService.getPayerTussMappings({ payerId, limit: 200 }),
+      dataService.getPayerProcedurePrices({ payerId, limit: 200 }),
+    ]);
+    setPatientTissAuthorizationCatalog({
+      services: servicesResult?.success && Array.isArray(servicesResult.data) ? servicesResult.data : [],
+      codes: codesResult?.success && Array.isArray(codesResult.data) ? codesResult.data : [],
+      mappings: mappingsResult?.success && Array.isArray(mappingsResult.data) ? mappingsResult.data : [],
+      prices: pricesResult?.success && Array.isArray(pricesResult.data) ? pricesResult.data : [],
+    });
+  };
+
+  const openNewPatientTissAuthorizationForm = () => {
+    if (!editingPatientId) {
+      showToast("Salve o cadastro do paciente antes de criar uma autorização TISS.", "error");
+      return;
+    }
+    if (!selectedPatientInsurancePayer?.id) {
+      showToast("Configure o convênio do paciente antes de criar uma autorização TISS.", "error");
+      return;
+    }
+    if (patientAuthorizationBillingConfigurations.length === 0) {
+      setPatientTissAuthorizationFeedback({
+        type: "error",
+        message: "Nenhuma configuração ativa com De/Para e valor negociado foi encontrada para este convênio.",
+      });
+      return;
+    }
+    const firstConfig = patientAuthorizationBillingConfigurations[0];
+    setEditingPatientTissAuthorizationId("");
+    setPatientTissAuthorizationForm({
+      ...defaultPatientTissAuthorizationForm,
+      payerId: selectedPatientInsurancePayer.id,
+      configurationKey: firstConfig.key,
+      serviceCatalogId: firstConfig.mapping?.serviceCatalogId || firstConfig.price?.serviceCatalogId || "",
+      payerTussMappingId: firstConfig.mapping?.id || "",
+      tussCodeId: firstConfig.mapping?.tussCodeId || firstConfig.price?.tussCodeId || "",
+    });
+    setPatientTissAuthorizationFormOpen(true);
+    setPatientTissAuthorizationFeedback({ type: "idle", message: "" });
+  };
+
+  const handlePatientTissAuthorizationConfigurationChange = (configurationKey: string) => {
+    const configuration = patientAuthorizationBillingConfigurations.find((item: any) => item.key === configurationKey);
+    setPatientTissAuthorizationForm((current: any) => ({
+      ...current,
+      configurationKey,
+      serviceCatalogId: configuration?.mapping?.serviceCatalogId || configuration?.price?.serviceCatalogId || "",
+      payerTussMappingId: configuration?.mapping?.id || "",
+      tussCodeId: configuration?.mapping?.tussCodeId || configuration?.price?.tussCodeId || "",
+      authorizedUnit: configuration?.mapping?.billingUnit || current.authorizedUnit || "sessions",
+    }));
+  };
+
+  const editPatientTissAuthorization = (authorization: any) => {
+    const config = patientAuthorizationBillingConfigurations.find((item: any) =>
+      String(item.mapping?.id || "") === String(authorization.payerTussMappingId || "") ||
+      String(item.mapping?.serviceCatalogId || "") === String(authorization.serviceCatalogId || "")
+    );
+    setEditingPatientTissAuthorizationId(String(authorization.id || ""));
+    setPatientTissAuthorizationForm({
+      ...defaultPatientTissAuthorizationForm,
+      id: String(authorization.id || ""),
+      payerId: String(authorization.payerId || selectedPatientInsurancePayer?.id || ""),
+      configurationKey: config?.key || "",
+      serviceCatalogId: String(authorization.serviceCatalogId || config?.mapping?.serviceCatalogId || ""),
+      payerTussMappingId: String(authorization.payerTussMappingId || config?.mapping?.id || ""),
+      tussCodeId: String(authorization.tussCodeId || config?.mapping?.tussCodeId || ""),
+      authorizationNumber: String(authorization.authorizationNumber || authorization.authorizationCode || ""),
+      guideNumber: String(authorization.guideNumber || ""),
+      validFrom: String(authorization.validFrom || ""),
+      validUntil: String(authorization.validUntil || ""),
+      authorizedQuantity: String(authorization.authorizedQuantity || "1"),
+      authorizedUnit: String(authorization.authorizedUnit || config?.mapping?.billingUnit || "sessions"),
+      usedQuantity: String(authorization.usedQuantity || "0"),
+      status: authorization.active === false ? "cancelled" : String(authorization.status || "active"),
+      notes: String(authorization.notes || ""),
+    });
+    setPatientTissAuthorizationFormOpen(true);
+    setPatientTissAuthorizationFeedback({ type: "idle", message: "" });
+  };
+
+  const savePatientTissAuthorization = async () => {
+    if (!editingPatientId || patientTissAuthorizationFeedback.type === "saving") return;
+    const configuration = selectedPatientAuthorizationConfiguration;
+    const quantity = Number(patientTissAuthorizationForm.authorizedQuantity || 0);
+    if (!selectedPatientInsurancePayer?.id || !configuration?.isOperational) {
+      setPatientTissAuthorizationFeedback({ type: "error", message: "Selecione uma configuração ativa com De/Para e valor negociado." });
+      return;
+    }
+    if (!patientTissAuthorizationForm.authorizationNumber.trim()) {
+      setPatientTissAuthorizationFeedback({ type: "error", message: "Informe o número da autorização/senha." });
+      return;
+    }
+    if (!patientTissAuthorizationForm.validFrom || !patientTissAuthorizationForm.validUntil || patientTissAuthorizationForm.validUntil < patientTissAuthorizationForm.validFrom) {
+      setPatientTissAuthorizationFeedback({ type: "error", message: "Informe uma vigência válida para a autorização." });
+      return;
+    }
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      setPatientTissAuthorizationFeedback({ type: "error", message: "Informe uma quantidade autorizada maior que zero." });
+      return;
+    }
+    setPatientTissAuthorizationFeedback({ type: "saving", message: "Salvando..." });
+    const payload = {
+      id: editingPatientTissAuthorizationId || undefined,
+      patientId: editingPatientId,
+      payerId: selectedPatientInsurancePayer.id,
+      serviceCatalogId: configuration.mapping?.serviceCatalogId,
+      payerTussMappingId: configuration.mapping?.id,
+      tussCodeId: configuration.mapping?.tussCodeId,
+      authorizationNumber: patientTissAuthorizationForm.authorizationNumber.trim(),
+      guideNumber: patientTissAuthorizationForm.guideNumber.trim() || null,
+      validFrom: patientTissAuthorizationForm.validFrom,
+      validUntil: patientTissAuthorizationForm.validUntil,
+      authorizedQuantity: quantity,
+      authorizedUnit: patientTissAuthorizationForm.authorizedUnit || configuration.mapping?.billingUnit || "sessions",
+      usedQuantity: Number(patientTissAuthorizationForm.usedQuantity || 0) || 0,
+      status: patientTissAuthorizationForm.status === "cancelled" ? "cancelled" : "active",
+      active: patientTissAuthorizationForm.status !== "cancelled",
+      notes: patientTissAuthorizationForm.notes.trim() || null,
+    };
+    const result = await dataService.upsertPatientPayerAuthorization(payload);
+    if (!result?.success) {
+      setPatientTissAuthorizationFeedback({ type: "error", message: result?.error || "Não foi possível salvar a autorização." });
+      return;
+    }
+    setPatientTissAuthorizationFeedback({ type: "success", message: "✓ Salvo" });
+    await loadPatientTissAuthorizations(editingPatientId);
+    window.setTimeout(() => {
+      setPatientTissAuthorizationFormOpen(false);
+      resetPatientTissAuthorizationForm();
+    }, 500);
+  };
+
+  const setPatientTissAuthorizationActive = async (authorization: any, active: boolean) => {
+    if (!editingPatientId) return;
+    const result = await dataService.setPatientTissAuthorizationActive(editingPatientId, authorization.id, active);
+    if (!result?.success) {
+      showToast(result?.error || "Não foi possível atualizar a autorização.", "error");
+      return;
+    }
+    await loadPatientTissAuthorizations(editingPatientId);
+    showToast(active ? "Autorização reativada." : "Autorização inativada.");
+  };
+
+  const deletePatientTissAuthorization = async (authorization: any) => {
+    if (!editingPatientId || !authorization?.id) return;
+    const confirmed = window.confirm("Excluir esta autorização TISS? Se ela já foi usada em Pré-guia ou XML, a exclusão será bloqueada.");
+    if (!confirmed) return;
+    const result = await dataService.deletePatientTissAuthorization(editingPatientId, authorization.id);
+    if (!result?.success) {
+      showToast(result?.error || "Esta autorização não pode ser excluída. Inative para preservar o histórico.", "error");
+      return;
+    }
+    setPatientTissAuthorizations((current) => current.filter((item) => String(item.id) !== String(authorization.id)));
+    showToast("Autorização excluída.");
+  };
+
   useEffect(() => {
     const fetchFinancialData = async () => {
       if (!canAccessClinicFinance) return;
@@ -1421,6 +1697,38 @@ export function CoordinatorDashboard({
       fetchFinancialData();
     }
   }, [activeTab, canAccessClinicFinance]);
+
+  useEffect(() => {
+    if (!isPatientRegistrationModalOpen || !canAccessClinicFinance) return;
+    if (clinicPayers.length > 0) return;
+    let cancelled = false;
+    dataService.getPayers({ status: "ACTIVE", limit: 80 }).then((result: any) => {
+      if (cancelled) return;
+      if (result?.success) setClinicPayers(Array.isArray(result.data) ? result.data : []);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [canAccessClinicFinance, clinicPayers.length, isPatientRegistrationModalOpen]);
+
+  useEffect(() => {
+    if (!isPatientRegistrationModalOpen || !canAccessClinicFinance) return;
+    if (!selectedPatientInsurancePayer?.id) {
+      setPatientTissAuthorizationCatalog({ services: [], codes: [], mappings: [], prices: [] });
+      return;
+    }
+    void loadPatientTissAuthorizationCatalog(selectedPatientInsurancePayer.id);
+  }, [canAccessClinicFinance, isPatientRegistrationModalOpen, selectedPatientInsurancePayer?.id]);
+
+  useEffect(() => {
+    if (!isPatientRegistrationModalOpen || !canAccessClinicFinance) return;
+    if (!editingPatientId) {
+      setPatientTissAuthorizations([]);
+      resetPatientTissAuthorizationForm();
+      return;
+    }
+    void loadPatientTissAuthorizations(editingPatientId);
+  }, [canAccessClinicFinance, editingPatientId, isPatientRegistrationModalOpen]);
 
   useEffect(() => {
     const nextProfileMetadata = (
@@ -10565,13 +10873,217 @@ export function CoordinatorDashboard({
 
               {canAccessClinicFinance && (
                 <FormSection
-                  title="Plano financeiro do tratamento"
-                  description="Modalidade, pagador, autorizações e valores por linha de cuidado."
+                  title="Autorizações TISS do paciente"
+                  description="Cadastre as senhas, guias e quantidades autorizadas pelo convênio para gerar Pré-guias e XML TISS."
+                  badge="Convênio"
                 >
+                  {newPatientForm.convenioTipo !== "convenio" ? (
+                    <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4 text-sm text-slate-500">
+                      Autorizações TISS não são necessárias para paciente particular.
+                    </div>
+                  ) : !editingPatientId ? (
+                    <div className="rounded-2xl border border-amber-100 bg-amber-50 p-4 text-sm text-amber-800">
+                      Salve o cadastro do paciente antes de criar autorizações TISS.
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                          <p className="text-xs text-slate-500">
+                            Convênio selecionado: <span className="text-slate-800">{newPatientForm.convenioNome || "Não informado"}</span>
+                          </p>
+                          {!selectedPatientInsurancePayer?.id && (
+                            <p className="mt-1 text-xs text-amber-700">
+                              Este convênio ainda não foi encontrado no cadastro de Convênios/TUSS.
+                            </p>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={openNewPatientTissAuthorizationForm}
+                          disabled={!selectedPatientInsurancePayer?.id || patientAuthorizationBillingConfigurations.length === 0}
+                          className="inline-flex items-center justify-center gap-2 rounded-2xl bg-[#7a32fc] px-4 py-2 text-xs font-normal text-white shadow-sm disabled:opacity-50"
+                        >
+                          <Plus size={14} />
+                          Nova autorização
+                        </button>
+                      </div>
+
+                      {patientAuthorizationBillingConfigurations.length === 0 && selectedPatientInsurancePayer?.id ? (
+                        <div className="rounded-2xl border border-amber-100 bg-amber-50 p-4 text-sm text-amber-800">
+                          Nenhuma configuração ativa com procedimento, código TUSS, De/Para e valor negociado foi encontrada para este convênio.
+                        </div>
+                      ) : null}
+
+                      {patientTissAuthorizationFeedback.message && (
+                        <div className={`rounded-2xl border px-4 py-3 text-sm ${
+                          patientTissAuthorizationFeedback.type === "error"
+                            ? "border-rose-100 bg-rose-50 text-rose-700"
+                            : patientTissAuthorizationFeedback.type === "success"
+                              ? "border-emerald-100 bg-emerald-50 text-emerald-700"
+                              : "border-slate-100 bg-slate-50 text-slate-600"
+                        }`}>
+                          {patientTissAuthorizationFeedback.message}
+                        </div>
+                      )}
+
+                      {patientTissAuthorizationFormOpen && (
+                        <SubSection
+                          title={editingPatientTissAuthorizationId ? "Editar autorização TISS" : "Nova autorização TISS"}
+                          description="O código TUSS e o valor são resolvidos pelo De/Para e pela Tabela de Valores do convênio."
+                        >
+                          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                            <FormField label="Convênio">
+                              <input className={patientFormInputClass} value={selectedPatientInsurancePayer?.name || newPatientForm.convenioNome || ""} readOnly />
+                            </FormField>
+                            <FormField label="Procedimento faturável">
+                              <select
+                                className={patientFormInputClass}
+                                value={patientTissAuthorizationForm.configurationKey}
+                                onChange={(event) => handlePatientTissAuthorizationConfigurationChange(event.target.value)}
+                              >
+                                {patientAuthorizationBillingConfigurations.map((configuration: any) => (
+                                  <option key={configuration.key} value={configuration.key}>
+                                    {configuration.service?.name || configuration.mapping?.serviceName || "Procedimento"} · TUSS {configuration.code?.code || configuration.mapping?.tussCode || ""}
+                                  </option>
+                                ))}
+                              </select>
+                            </FormField>
+                            <FormField label="Código TUSS resolvido" helperText="Fonte: De/Para ativo do convênio.">
+                              <input
+                                className={patientFormInputClass}
+                                value={selectedPatientAuthorizationConfiguration
+                                  ? `${selectedPatientAuthorizationConfiguration.code?.code || selectedPatientAuthorizationConfiguration.mapping?.tussCode || ""} - ${selectedPatientAuthorizationConfiguration.code?.description || selectedPatientAuthorizationConfiguration.mapping?.tussDescription || ""}`.trim()
+                                  : "Nenhum De/Para ativo"}
+                                readOnly
+                              />
+                            </FormField>
+                            <FormField label="Valor negociado" helperText="Fonte operacional: Tabela de Valores negociados.">
+                              <input className={patientFormInputClass} value={formatPatientAuthorizationAmount(selectedPatientAuthorizationConfiguration?.price?.amountCents)} readOnly />
+                            </FormField>
+                            <FormField label="Número da autorização / senha" required>
+                              <input
+                                className={patientFormInputClass}
+                                placeholder="Ex.: 123456789"
+                                value={patientTissAuthorizationForm.authorizationNumber}
+                                onChange={(event) => setPatientTissAuthorizationForm((current: any) => ({ ...current, authorizationNumber: event.target.value }))}
+                              />
+                            </FormField>
+                            <FormField label="Número da guia">
+                              <input
+                                className={patientFormInputClass}
+                                placeholder="Ex.: 5478"
+                                value={patientTissAuthorizationForm.guideNumber}
+                                onChange={(event) => setPatientTissAuthorizationForm((current: any) => ({ ...current, guideNumber: event.target.value }))}
+                              />
+                            </FormField>
+                            <FormField label="Data inicial" required>
+                              <input type="date" className={patientFormInputClass} value={patientTissAuthorizationForm.validFrom} onChange={(event) => setPatientTissAuthorizationForm((current: any) => ({ ...current, validFrom: event.target.value }))} />
+                            </FormField>
+                            <FormField label="Data final" required>
+                              <input type="date" className={patientFormInputClass} value={patientTissAuthorizationForm.validUntil} onChange={(event) => setPatientTissAuthorizationForm((current: any) => ({ ...current, validUntil: event.target.value }))} />
+                            </FormField>
+                            <FormField label="Quantidade autorizada" required>
+                              <input
+                                type="number"
+                                min={1}
+                                className={patientFormInputClass}
+                                value={patientTissAuthorizationForm.authorizedQuantity}
+                                onChange={(event) => setPatientTissAuthorizationForm((current: any) => ({ ...current, authorizedQuantity: event.target.value }))}
+                              />
+                            </FormField>
+                            <FormField label="Unidade">
+                              <input className={patientFormInputClass} value={patientTissAuthorizationForm.authorizedUnit || "sessions"} readOnly />
+                            </FormField>
+                            <FormField label="Quantidade consumida" helperText="Calculada por Pré-guias/sessões vinculadas quando houver histórico confiável.">
+                              <input className={patientFormInputClass} value={patientTissAuthorizationForm.usedQuantity || "0"} readOnly />
+                            </FormField>
+                            <FormField label="Status">
+                              <select className={patientFormInputClass} value={patientTissAuthorizationForm.status} onChange={(event) => setPatientTissAuthorizationForm((current: any) => ({ ...current, status: event.target.value }))}>
+                                <option value="active">Ativa</option>
+                                <option value="cancelled">Inativa</option>
+                              </select>
+                            </FormField>
+                            <div className="md:col-span-2 xl:col-span-3">
+                              <FormField label="Observações">
+                                <textarea
+                                  className="min-h-[84px] w-full rounded-xl border border-transparent bg-slate-50 p-3 text-sm text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-[#7a32fc] focus:bg-white focus:ring-4 focus:ring-[#7a32fc]/10"
+                                  placeholder="Observações administrativas sobre a autorização."
+                                  value={patientTissAuthorizationForm.notes}
+                                  onChange={(event) => setPatientTissAuthorizationForm((current: any) => ({ ...current, notes: event.target.value }))}
+                                />
+                              </FormField>
+                            </div>
+                          </div>
+                          <div className="mt-4 flex flex-wrap justify-end gap-2">
+                            <button type="button" onClick={() => { setPatientTissAuthorizationFormOpen(false); resetPatientTissAuthorizationForm(); }} className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-normal text-slate-600">
+                              Cancelar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={savePatientTissAuthorization}
+                              disabled={patientTissAuthorizationFeedback.type === "saving"}
+                              className="inline-flex items-center gap-2 rounded-xl bg-[#7a32fc] px-4 py-2 text-sm font-normal text-white disabled:opacity-50"
+                            >
+                              {patientTissAuthorizationFeedback.type === "saving" ? "Salvando..." : editingPatientTissAuthorizationId ? "Atualizar autorização" : "Salvar autorização"}
+                            </button>
+                          </div>
+                        </SubSection>
+                      )}
+
+                      <div className="space-y-3">
+                        {patientTissAuthorizationLoading ? (
+                          <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4 text-sm text-slate-500">Carregando autorizações...</div>
+                        ) : patientTissAuthorizations.length === 0 ? (
+                          <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-4 text-sm text-slate-500">
+                            Nenhuma autorização TISS cadastrada para este paciente.
+                          </div>
+                        ) : patientTissAuthorizations.map((authorization: any) => (
+                          <div key={authorization.id} className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+                            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                              <div>
+                                <p className="text-sm font-semibold text-slate-900">{authorization.serviceName || "Procedimento faturável"}</p>
+                                <p className="mt-1 text-xs text-slate-500">Convênio: {authorization.payerName || newPatientForm.convenioNome || "Não informado"}</p>
+                                <p className="mt-1 text-xs text-slate-600">TUSS {authorization.tussCode || "não informado"} · {formatPatientAuthorizationAmount(authorization.amountCents)}</p>
+                                <div className="mt-2 grid gap-1 text-xs text-slate-500 sm:grid-cols-2">
+                                  <span>Autorização/Senha: {authorization.authorizationNumber || authorization.authorizationCode || "-"}</span>
+                                  <span>Guia: {authorization.guideNumber || "-"}</span>
+                                  <span>Quantidade: {Number(authorization.authorizedQuantity || 0)} {authorization.authorizedUnit || "sessões"}</span>
+                                  <span>Consumidas: {Number(authorization.usedQuantity || 0)}</span>
+                                  <span>Validade: {formatPatientAuthorizationDate(authorization.validFrom)} a {formatPatientAuthorizationDate(authorization.validUntil)}</span>
+                                  <span>Status: {getPatientAuthorizationStatusLabel(authorization)}</span>
+                                </div>
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                <button type="button" onClick={() => editPatientTissAuthorization(authorization)} className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-normal text-slate-600">Editar</button>
+                                {authorization.active === false ? (
+                                  <button type="button" onClick={() => void setPatientTissAuthorizationActive(authorization, true)} className="rounded-xl border border-emerald-200 px-3 py-2 text-xs font-normal text-emerald-700">Reativar</button>
+                                ) : (
+                                  <button type="button" onClick={() => void setPatientTissAuthorizationActive(authorization, false)} className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-normal text-slate-600">Inativar</button>
+                                )}
+                                <button type="button" onClick={() => void deletePatientTissAuthorization(authorization)} className="rounded-xl border border-rose-100 px-3 py-2 text-xs font-normal text-rose-700">Excluir</button>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </FormSection>
+              )}
+
+              {canAccessClinicFinance && (
+                <FormSection
+                  title="Plano financeiro do tratamento"
+                  description="Planejamento financeiro e recorrência do tratamento. Não substitui a autorização TISS do convênio."
+                >
+                  <div className="mb-4 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+                    Alguns dados antigos de autorização podem existir no plano financeiro por compatibilidade. Para gerar Pré-guias TISS, use a seção Autorizações TISS do paciente.
+                  </div>
                   <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div>
                       <p className="text-xs font-bold text-slate-500">Linhas de cuidado e cobrança</p>
-                      <p className="text-[11px] font-medium text-slate-400">Guia/autorização aqui é diferente do número da carteirinha.</p>
+                      <p className="text-[11px] font-medium text-slate-400">Use esta seção para planejamento financeiro, recorrência e cobrança geral.</p>
                     </div>
                     <button
                       type="button"
@@ -10638,7 +11150,7 @@ export function CoordinatorDashboard({
                                 </select>
                               </FormField>
                             {!isCourtesyPlan && (
-                              <FormField label={isInsurancePlan ? "Valor autorizado" : isPackagePlan ? "Valor do pacote" : isMonthlyPlan ? "Mensalidade" : "Valor"}>
+                              <FormField label={isInsurancePlan ? "Valor planejado do convênio" : isPackagePlan ? "Valor do pacote" : isMonthlyPlan ? "Mensalidade" : "Valor"}>
                                 <input
                                   className={patientFormInputClass}
                                   placeholder="R$ 0,00"
@@ -10648,7 +11160,7 @@ export function CoordinatorDashboard({
                                 />
                               </FormField>
                             )}
-                              <FormField label={isInsurancePlan ? "Quantidade autorizada" : "Quantidade"}>
+                              <FormField label={isInsurancePlan ? "Quantidade planejada" : "Quantidade"}>
                                 <div className="flex items-center gap-2">
                                   <input
                                     className="min-w-0 flex-1 rounded-xl border border-transparent bg-slate-50 p-3 text-sm text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-[#7a32fc] focus:bg-white focus:ring-4 focus:ring-[#7a32fc]/10"
@@ -10732,20 +11244,20 @@ export function CoordinatorDashboard({
                                     onChange={(e) => handleFinancialPlanChange(plan.id, "payerNameSnapshot", e.target.value)}
                                   />
                                 </FormField>
-                                <FormField
-                                  label="Guia/autorização"
-                                  helperText="Número da autorização ou guia liberada pelo convênio para esta linha de cuidado."
+                                  <FormField
+                                  label="Autorização legada do plano"
+                                  helperText="Campo antigo de compatibilidade financeira. Para TISS, use Autorizações TISS do paciente."
                                 >
                                   <input
                                     className={patientFormInputClass}
-                                    placeholder="Número da autorização"
+                                    placeholder="Ex.: autorização legada"
                                     value={plan.authorizationCode}
                                     onChange={(e) => handleFinancialPlanChange(plan.id, "authorizationCode", e.target.value)}
                                   />
                                 </FormField>
                                 <FormField
-                                  label="Validade da autorização"
-                                  helperText="Data limite para uso da autorização nesta linha de cuidado."
+                                  label="Validade legada"
+                                  helperText="Campo antigo de compatibilidade financeira. Não substitui a validade da autorização TISS."
                                 >
                                   <input
                                     type="date"

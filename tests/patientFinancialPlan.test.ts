@@ -77,8 +77,49 @@ test('UI remove lembrete automatico e expõe plano financeiro por modalidade', (
   assert.doesNotMatch(coordinatorCode, /specialty:\s*String\(plan\.specialty \|\| "Terapia"\)/);
   assert.match(coordinatorCode, /PATIENT_FINANCIAL_BILLING_MODE_OPTIONS/);
   assert.match(coordinatorCode, /label="Coparticipação"/);
-  assert.match(coordinatorCode, /label="Guia\/autorização"/);
+  assert.match(coordinatorCode, /label="Autorização legada do plano"/);
+  assert.match(coordinatorCode, /Valor planejado do convênio/);
+  assert.match(coordinatorCode, /Quantidade planejada/);
+  assert.match(coordinatorCode, /Para gerar Pré-guias TISS, use a seção Autorizações TISS do paciente/);
   assert.match(coordinatorCode, /Pagador\/convênio/);
+});
+
+test('UI separa Autorizações TISS do paciente do plano financeiro legado', () => {
+  for (const marker of [
+    'Autorizações TISS do paciente',
+    'Cadastre as senhas, guias e quantidades autorizadas pelo convênio para gerar Pré-guias e XML TISS.',
+    'Nova autorização',
+    'Procedimento faturável',
+    'Código TUSS resolvido',
+    'Fonte: De/Para ativo do convênio.',
+    'Valor negociado',
+    'Fonte operacional: Tabela de Valores negociados.',
+    'Número da autorização / senha',
+    'Número da guia',
+    'Quantidade autorizada',
+    'Quantidade consumida',
+    'Nenhuma autorização TISS cadastrada para este paciente.',
+  ]) {
+    assert.ok(coordinatorCode.includes(marker), marker);
+  }
+
+  assert.match(coordinatorCode, /selectedPatientAuthorizationConfiguration/);
+  assert.match(coordinatorCode, /patientAuthorizationBillingConfigurations/);
+  assert.match(coordinatorCode, /dataService\.getPatientTissAuthorizations/);
+  assert.match(coordinatorCode, /dataService\.upsertPatientPayerAuthorization/);
+  assert.match(coordinatorCode, /dataService\.setPatientTissAuthorizationActive/);
+  assert.match(coordinatorCode, /dataService\.deletePatientTissAuthorization/);
+  assert.match(dataServiceCode, /async getPatientTissAuthorizations/);
+  assert.match(dataServiceCode, /async setPatientTissAuthorizationActive/);
+  assert.match(dataServiceCode, /async deletePatientTissAuthorization/);
+  assert.match(serverCode, /app\.get\('\/api\/patients\/:patientId\/tiss-authorizations'/);
+  assert.match(serverCode, /app\.patch\('\/api\/patients\/:patientId\/tiss-authorizations\/:authorizationId'/);
+  assert.match(serverCode, /app\.delete\('\/api\/patients\/:patientId\/tiss-authorizations\/:authorizationId'/);
+  assert.match(serverCode, /AUTHORIZATION_PAYER_PRICE_MISSING/);
+  assert.match(serverCode, /AUTHORIZATION_REACTIVATION_PRICE_MISSING/);
+  assert.match(serverCode, /fetchActivePayerProcedurePrice/);
+  assert.doesNotMatch(coordinatorCode, /label=\{isInsurancePlan \? "Valor autorizado"/);
+  assert.doesNotMatch(coordinatorCode, /label=\{isInsurancePlan \? "Quantidade autorizada"/);
 });
 
 test('agendamento usa convenio cadastrado do paciente como pagador', () => {

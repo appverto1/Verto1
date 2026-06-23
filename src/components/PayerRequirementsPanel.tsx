@@ -121,6 +121,7 @@ type BillingConfigurationRow = {
   service: TussService | null;
   code: TussCode | null;
   isOperational: boolean;
+  completionState: "active" | "awaiting_price" | "inactive";
 };
 
 type PayerCrudEntityType = "requirement" | "service" | "code" | "mapping" | "price";
@@ -318,6 +319,24 @@ export const isBillingConfigurationOperational = (configuration: {
   configuration.mapping?.active === true &&
   configuration.price?.active === true
 );
+
+export const getBillingConfigurationCompletionState = (configuration: {
+  service?: { active?: boolean } | null;
+  code?: { active?: boolean } | null;
+  mapping?: { active?: boolean } | null;
+  price?: { active?: boolean } | null;
+}): "active" | "awaiting_price" | "inactive" => {
+  if (isBillingConfigurationOperational(configuration)) return "active";
+  if (
+    configuration.service?.active === true &&
+    configuration.code?.active === true &&
+    configuration.mapping?.active === true &&
+    configuration.price?.active !== true
+  ) {
+    return "awaiting_price";
+  }
+  return "inactive";
+};
 
 const deleteDependencyLabels: Record<string, string> = {
   prices: "Preços vinculados",
@@ -658,7 +677,7 @@ export function PayerRequirementsPanel({
       const service = servicesById.get(price.serviceCatalogId || mapping?.serviceCatalogId || "") || null;
       const code = codesById.get(price.tussCodeId || mapping?.tussCodeId || "") || null;
       const row = { key: `price:${price.id}`, price, mapping, service, code };
-      return { ...row, isOperational: isBillingConfigurationOperational(row) };
+      return { ...row, isOperational: isBillingConfigurationOperational(row), completionState: getBillingConfigurationCompletionState(row) };
     });
     for (const mapping of tussMappings) {
       if (usedMappingIds.has(mapping.id)) continue;
@@ -669,17 +688,21 @@ export function PayerRequirementsPanel({
         service: servicesById.get(mapping.serviceCatalogId) || null,
         code: codesById.get(mapping.tussCodeId || "") || null,
       };
-      rows.push({ ...row, isOperational: isBillingConfigurationOperational(row) });
+      rows.push({ ...row, isOperational: isBillingConfigurationOperational(row), completionState: getBillingConfigurationCompletionState(row) });
     }
     return rows;
   }, [procedurePrices, tussCodes, tussMappings, tussServices]);
 
   const activeBillingConfigurations = useMemo(
-    () => billingConfigurations.filter((configuration) => configuration.isOperational),
+    () => billingConfigurations.filter((configuration) => configuration.completionState === "active"),
+    [billingConfigurations],
+  );
+  const pendingBillingConfigurations = useMemo(
+    () => billingConfigurations.filter((configuration) => configuration.completionState === "awaiting_price"),
     [billingConfigurations],
   );
   const inactiveBillingConfigurations = useMemo(
-    () => billingConfigurations.filter((configuration) => !configuration.isOperational),
+    () => billingConfigurations.filter((configuration) => configuration.completionState === "inactive"),
     [billingConfigurations],
   );
 
@@ -739,6 +762,22 @@ export function PayerRequirementsPanel({
       ...defaultProcedurePriceForm,
       serviceCatalogId: activeTussServices[0]?.id || "",
       tussCodeId: activeTussCodes[0]?.id || "",
+    });
+    setProcedurePriceAmountError("");
+    payerPricesSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    window.setTimeout(() => procedurePriceAmountInputRef.current?.focus(), 250);
+  };
+
+  const startPriceForMapping = (mapping: PayerTussMapping) => {
+    if (!beginEditingSection("price")) return;
+    setEditingProcedurePriceId("");
+    setProcedurePriceForm({
+      ...defaultProcedurePriceForm,
+      serviceCatalogId: mapping.serviceCatalogId || "",
+      tussCodeId: mapping.tussCodeId || "",
+      payerTussMappingId: mapping.id || "",
+      validFrom: mapping.validFrom || "",
+      validUntil: mapping.validTo || "",
     });
     setProcedurePriceAmountError("");
     payerPricesSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -1562,7 +1601,8 @@ export function PayerRequirementsPanel({
   };
 
   const renderBillingConfigurationCard = (configuration: BillingConfigurationRow) => {
-    const { key, price, mapping, service, code, isOperational } = configuration;
+    const { key, price, mapping, service, code, isOperational, completionState } = configuration;
+    const isAwaitingPrice = completionState === "awaiting_price";
     const validFrom = price?.validFrom || mapping?.validFrom || "";
     const validUntil = price?.validUntil || mapping?.validTo || "";
     const tussCode = code?.code || price?.tussCode || mapping?.tussCode || "";
@@ -1574,7 +1614,7 @@ export function PayerRequirementsPanel({
       price?.active !== true ? { key: "price_inactive", label: price ? "Preço inativo" : "Valor ausente" } : null,
     ].filter(Boolean) as Array<{ key: string; label: string }>;
     return (
-      <div key={key} className={`rounded-lg border bg-white p-3 ${isOperational ? "border-emerald-100" : "border-slate-200"}`}>
+      <div key={key} className={`rounded-lg border bg-white p-3 ${isOperational ? "border-emerald-100" : isAwaitingPrice ? "border-amber-100" : "border-slate-200"}`}>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
             <p className="text-sm font-medium text-slate-900">{service?.name || price?.serviceName || mapping?.serviceName || mapping?.internalCode || "Procedimento não identificado"}</p>
@@ -1587,20 +1627,29 @@ export function PayerRequirementsPanel({
             <div className="mt-2 flex flex-wrap gap-1.5">
               <span className={isOperational
                 ? "rounded-full bg-emerald-50 px-2 py-1 text-xs text-emerald-700"
-                : "rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-700"}
+                : isAwaitingPrice
+                  ? "rounded-full bg-amber-50 px-2 py-1 text-xs text-amber-800"
+                  : "rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-700"}
               >
-                {isOperational ? "Pronta para novas Pré-guias" : "Configuração inativa"}
+                {isOperational ? "Pronta para novas Pré-guias" : isAwaitingPrice ? "De/Para configurado" : "Configuração inativa"}
               </span>
-              {!isOperational && inactiveBadges.map((badge) => (
+              {isAwaitingPrice ? (
+                <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800">
+                  Preço pendente
+                </span>
+              ) : null}
+              {!isOperational && !isAwaitingPrice && inactiveBadges.map((badge) => (
                 <span key={badge.key} className="rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800">
                   {badge.label}
                 </span>
               ))}
             </div>
+            {isAwaitingPrice ? <p className="mt-2 text-xs text-amber-700">Próximo passo: cadastrar valor negociado.</p> : null}
           </div>
           <div className="relative flex shrink-0 flex-wrap gap-1.5">
-            {isOperational && mapping ? <button type="button" onClick={() => editTussMapping(mapping)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-normal text-slate-600 hover:bg-slate-50">Editar De/Para</button> : null}
+            {(isOperational || isAwaitingPrice) && mapping ? <button type="button" onClick={() => editTussMapping(mapping)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-normal text-slate-600 hover:bg-slate-50">Editar De/Para</button> : null}
             {isOperational && price ? <button type="button" onClick={() => editProcedurePrice(price)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-normal text-slate-600 hover:bg-slate-50">Editar valor</button> : null}
+            {isAwaitingPrice && mapping ? <button type="button" onClick={() => startPriceForMapping(mapping)} className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-normal text-amber-800 hover:bg-amber-100">Cadastrar valor negociado</button> : null}
             {(mapping || price) ? (
               <button
                 type="button"
@@ -1617,10 +1666,11 @@ export function PayerRequirementsPanel({
                 {isOperational && mapping ? <button type="button" onClick={() => { setOpenBillingActionMenuKey(""); void openAuthorizationSyncModal(mapping); }} className="block w-full rounded-lg px-3 py-2 text-left text-slate-700 hover:bg-slate-50">Sincronizar autorizações e Pré-guias</button> : null}
                 {isOperational && mapping ? <button type="button" onClick={() => { setOpenBillingActionMenuKey(""); void disableTussMapping(mapping.id); }} className="block w-full rounded-lg px-3 py-2 text-left text-slate-700 hover:bg-slate-50">Inativar De/Para</button> : null}
                 {isOperational && price ? <button type="button" onClick={() => { setOpenBillingActionMenuKey(""); void disableProcedurePrice(price.id); }} className="block w-full rounded-lg px-3 py-2 text-left text-slate-700 hover:bg-slate-50">Inativar preço</button> : null}
-                {!isOperational && service?.active === false ? <button type="button" onClick={() => { setOpenBillingActionMenuKey(""); void setTussServiceActive(service.id, true); }} className="block w-full rounded-lg px-3 py-2 text-left text-emerald-700 hover:bg-emerald-50">Reativar procedimento</button> : null}
-                {!isOperational && code?.active === false ? <button type="button" onClick={() => { setOpenBillingActionMenuKey(""); void setTussCodeActive(code.id, true); }} className="block w-full rounded-lg px-3 py-2 text-left text-emerald-700 hover:bg-emerald-50">Reativar código TUSS</button> : null}
-                {!isOperational && mapping?.active === false ? <button type="button" onClick={() => { setOpenBillingActionMenuKey(""); void setTussMappingActive(mapping.id, true); }} className="block w-full rounded-lg px-3 py-2 text-left text-emerald-700 hover:bg-emerald-50">Reativar De/Para</button> : null}
-                {!isOperational && price?.active === false ? <button type="button" onClick={() => { setOpenBillingActionMenuKey(""); void setProcedurePriceActive(price.id, true); }} className="block w-full rounded-lg px-3 py-2 text-left text-emerald-700 hover:bg-emerald-50">Reativar preço</button> : null}
+                {isAwaitingPrice && mapping ? <button type="button" onClick={() => { setOpenBillingActionMenuKey(""); startPriceForMapping(mapping); }} className="block w-full rounded-lg px-3 py-2 text-left text-amber-800 hover:bg-amber-50">Cadastrar valor negociado</button> : null}
+                {!isOperational && !isAwaitingPrice && service?.active === false ? <button type="button" onClick={() => { setOpenBillingActionMenuKey(""); void setTussServiceActive(service.id, true); }} className="block w-full rounded-lg px-3 py-2 text-left text-emerald-700 hover:bg-emerald-50">Reativar procedimento</button> : null}
+                {!isOperational && !isAwaitingPrice && code?.active === false ? <button type="button" onClick={() => { setOpenBillingActionMenuKey(""); void setTussCodeActive(code.id, true); }} className="block w-full rounded-lg px-3 py-2 text-left text-emerald-700 hover:bg-emerald-50">Reativar código TUSS</button> : null}
+                {!isOperational && !isAwaitingPrice && mapping?.active === false ? <button type="button" onClick={() => { setOpenBillingActionMenuKey(""); void setTussMappingActive(mapping.id, true); }} className="block w-full rounded-lg px-3 py-2 text-left text-emerald-700 hover:bg-emerald-50">Reativar De/Para</button> : null}
+                {!isOperational && !isAwaitingPrice && price?.active === false ? <button type="button" onClick={() => { setOpenBillingActionMenuKey(""); void setProcedurePriceActive(price.id, true); }} className="block w-full rounded-lg px-3 py-2 text-left text-emerald-700 hover:bg-emerald-50">Reativar preço</button> : null}
                 {mapping ? <button type="button" onClick={() => { setOpenBillingActionMenuKey(""); void openDeleteImpactModal("mapping", mapping.id, mapping.contractCode || mapping.serviceName || "Mapeamento De/Para"); }} className="block w-full rounded-lg px-3 py-2 text-left text-rose-700 hover:bg-rose-50">Excluir De/Para</button> : null}
                 {price ? <button type="button" onClick={() => { setOpenBillingActionMenuKey(""); void openDeleteImpactModal("price", price.id, price.serviceName || "Valor negociado"); }} className="block w-full rounded-lg px-3 py-2 text-left text-rose-700 hover:bg-rose-50">Excluir preço</button> : null}
               </div>
@@ -2718,6 +2768,21 @@ export function PayerRequirementsPanel({
                 </div>
               </div>
             )}
+          </div>
+        </div>
+
+        <div className="mt-4 rounded-2xl border border-amber-100 bg-amber-50/30 p-4">
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-semibold text-slate-900">Configurações incompletas</h3>
+              <p className="mt-1 text-xs text-slate-500">De/Para já salvo aguardando valor negociado. Ainda não é usado em novas Pré-guias.</p>
+            </div>
+            <span className="text-xs text-slate-500">{pendingBillingConfigurations.length} aguardando valor</span>
+          </div>
+          <div className="mt-3 space-y-2">
+            {pendingBillingConfigurations.length > 0
+              ? pendingBillingConfigurations.map(renderBillingConfigurationCard)
+              : <p className="rounded-lg bg-white p-3 text-sm text-slate-500">Nenhum De/Para ativo aguardando valor negociado.</p>}
           </div>
         </div>
 

@@ -8,6 +8,7 @@ import {
 import { evaluateAppointmentClosureReadiness } from '../src/services/closureReadinessEngine';
 import {
   formatCentsForBrazilianInput,
+  getBillingConfigurationCompletionState,
   isBillingConfigurationOperational,
   parseBrazilianCurrencyToCents,
 } from '../src/components/PayerRequirementsPanel';
@@ -330,13 +331,22 @@ test('configuracoes de faturamento separam operacionais de historicas e usam aco
   assert.equal(isBillingConfigurationOperational({ service: activePart, code: activePart, mapping: inactivePart, price: activePart }), false);
   assert.equal(isBillingConfigurationOperational({ service: activePart, code: activePart, mapping: activePart, price: inactivePart }), false);
   assert.equal(isBillingConfigurationOperational({ service: activePart, code: activePart, mapping: activePart, price: null }), false);
+  assert.equal(getBillingConfigurationCompletionState({ service: activePart, code: activePart, mapping: activePart, price: activePart }), 'active');
+  assert.equal(getBillingConfigurationCompletionState({ service: activePart, code: activePart, mapping: activePart, price: null }), 'awaiting_price');
+  assert.equal(getBillingConfigurationCompletionState({ service: activePart, code: activePart, mapping: activePart, price: inactivePart }), 'awaiting_price');
+  assert.equal(getBillingConfigurationCompletionState({ service: inactivePart, code: activePart, mapping: activePart, price: activePart }), 'inactive');
 
   for (const marker of [
     'Configurações ativas deste convênio',
     'Usadas para novas Pré-guias, autorizações e geração de XML.',
+    'Configurações incompletas',
+    'De/Para já salvo aguardando valor negociado. Ainda não é usado em novas Pré-guias.',
     'Histórico e configurações inativas',
     'Registros preservados para histórico. Não são usados em novas Pré-guias enquanto estiverem inativos.',
     'Pronta para novas Pré-guias',
+    'De/Para configurado',
+    'Preço pendente',
+    'Próximo passo: cadastrar valor negociado.',
     'Configuração inativa',
     'Nenhuma configuração ativa para este convênio.',
     'Crie ou reative os cadastros necessários para faturar novas sessões.',
@@ -344,6 +354,7 @@ test('configuracoes de faturamento separam operacionais de historicas e usam aco
     'Novo código TUSS',
     'Novo De/Para',
     'Novo valor negociado',
+    'Cadastrar valor negociado',
   ]) assert.ok(payerPanelCode.includes(marker), marker);
 
   const cardStart = payerPanelCode.indexOf('const renderBillingConfigurationCard =');
@@ -352,14 +363,17 @@ test('configuracoes de faturamento separam operacionais de historicas e usam aco
   const cardCode = payerPanelCode.slice(cardStart, cardEnd);
   assert.match(cardCode, /isOperational && mapping[^\n]+Revalidar atendimentos afetados/);
   assert.match(cardCode, /isOperational && mapping[^\n]+Sincronizar autorizações e Pré-guias/);
-  assert.match(cardCode, /!isOperational && service\?\.active === false[^\n]+Reativar procedimento/);
-  assert.match(cardCode, /!isOperational && code\?\.active === false[^\n]+Reativar código TUSS/);
-  assert.match(cardCode, /!isOperational && mapping\?\.active === false[^\n]+Reativar De\/Para/);
-  assert.match(cardCode, /!isOperational && price\?\.active === false[^\n]+Reativar preço/);
-  assert.match(cardCode, /isOperational && mapping \? <button[^\n]+Editar De\/Para/);
+  assert.match(cardCode, /!isOperational && !isAwaitingPrice && service\?\.active === false[^\n]+Reativar procedimento/);
+  assert.match(cardCode, /!isOperational && !isAwaitingPrice && code\?\.active === false[^\n]+Reativar código TUSS/);
+  assert.match(cardCode, /!isOperational && !isAwaitingPrice && mapping\?\.active === false[^\n]+Reativar De\/Para/);
+  assert.match(cardCode, /!isOperational && !isAwaitingPrice && price\?\.active === false[^\n]+Reativar preço/);
+  assert.match(cardCode, /\(isOperational \|\| isAwaitingPrice\) && mapping \? <button[^\n]+Editar De\/Para/);
   assert.match(cardCode, /isOperational && price \? <button[^\n]+Editar valor/);
+  assert.match(cardCode, /isAwaitingPrice && mapping \? <button[^\n]+Cadastrar valor negociado/);
   assert.doesNotMatch(cardCode, /!isOperational[^\n]+Revalidar atendimentos afetados/);
   assert.doesNotMatch(cardCode, /!isOperational[^\n]+Sincronizar autorizações e Pré-guias/);
+  assert.doesNotMatch(cardCode, /isAwaitingPrice[^\n]+Revalidar atendimentos afetados/);
+  assert.doesNotMatch(cardCode, /isAwaitingPrice[^\n]+Sincronizar autorizações e Pré-guias/);
 
   const serviceCreate = payerPanelCode.slice(
     payerPanelCode.indexOf('const createTussService = async'),
@@ -465,7 +479,8 @@ test('CRUD seguro de cadastros de apoio, De/Para e valores tem impacto de exclus
 
   assert.match(payerPanelCode, /Este cadastro possui v(?:Ã­|í)nculos hist(?:Ã³|ó)ricos e n(?:Ã£|ã)o pode ser exclu(?:Ã­|í)do/);
   assert.doesNotMatch(payerPanelCode, /Editar configura(?:Ã§Ã£o|ção)/);
-  assert.doesNotMatch(payerPanelCode, /De\/Para configurado/);
+  assert.match(payerPanelCode, /De\/Para configurado/);
+  assert.match(payerPanelCode, /isAwaitingPrice \? "De\/Para configurado"/);
   assert.match(payerPanelCode, /openDeleteImpactModal\("requirement"/);
   assert.match(payerPanelCode, /openDeleteImpactModal\("service"/);
   assert.match(payerPanelCode, /openDeleteImpactModal\("code"/);

@@ -3536,6 +3536,65 @@ export const dataService = {
     }
   },
 
+  async getPatientTissAuthorizations(patientId: string) {
+    const endpoint = `/api/patients/${encodeURIComponent(String(patientId))}/tiss-authorizations`;
+    try {
+      return await fetchNoStoreJsonWithRetry(endpoint, {
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getPatientTissAuthorizations',
+        operation: 'list',
+        table: 'patient_payer_authorizations,payer_tuss_mappings,payer_procedure_prices',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: true
+      }, 'As autorizações TISS do paciente voltaram do cache. Tente atualizar novamente.');
+    } catch {
+      return { success: false, data: [], error: 'Não foi possível carregar as autorizações TISS do paciente.' };
+    }
+  },
+
+  async deletePatientTissAuthorization(patientId: string, authorizationId: string) {
+    const endpoint = `/api/patients/${encodeURIComponent(String(patientId))}/tiss-authorizations/${encodeURIComponent(String(authorizationId))}`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'DELETE',
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'deletePatientTissAuthorization',
+        operation: 'write',
+        table: 'patient_payer_authorizations,appointment_tiss_pre_guides',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: true
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, error: 'Não foi possível excluir a autorização TISS.' };
+    }
+  },
+
+  async setPatientTissAuthorizationActive(patientId: string, authorizationId: string, active: boolean) {
+    const endpoint = `/api/patients/${encodeURIComponent(String(patientId))}/tiss-authorizations/${encodeURIComponent(String(authorizationId))}`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'PATCH',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({ active: active === true })
+      }, {
+        helperName: 'setPatientTissAuthorizationActive',
+        operation: 'write',
+        table: 'patient_payer_authorizations',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: true
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, error: 'Não foi possível atualizar a autorização TISS.' };
+    }
+  },
+
   async getProfessionalBillingProfile(professionalId: string) {
     const endpoint = `/api/admin/tiss/professional-profiles/${encodeURIComponent(String(professionalId))}`;
     try {
