@@ -147,6 +147,25 @@ test('/api/history remove coluna opcional ausente e remove filtro legado quebrad
   assert.equal(supabase.calls[1].filters.some((item) => item.op === 'eq' && item.column === 'is_active'), false);
 });
 
+test('/api/history retorna vazio quando schema legado tambem diverge', async () => {
+  const supabase = new FakeSupabase({
+    history: [
+      { data: null, error: { code: '42703', message: 'column history.title does not exist' } },
+      { data: null, error: { code: '42703', message: 'column history.title does not exist' } }
+    ]
+  });
+
+  const result = await fetchHistoryWithSchemaFallback({
+    supabase,
+    patientId: 'patient-1',
+    limit: 20,
+    logger: silentLogger
+  });
+
+  assert.equal(result.error, null);
+  assert.deepEqual(result.data, []);
+});
+
 test('/api/tasks nao quebra quando patient_email opcional falta em busca auxiliar', async () => {
   const supabase = new FakeSupabase({
     tasks: [

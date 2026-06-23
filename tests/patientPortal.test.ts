@@ -118,7 +118,9 @@ test('endpoint do calendario do portal segue escopo e select explicito', () => {
   assert.match(route, /\.in\('clinic_id', clinicList\)/);
   assert.match(route, /portal_notifications/);
   assert.match(route, /notificationAppointmentIds/);
+  assert.match(route, /notificationScopedAppointmentIds/);
   assert.match(route, /const rowsById = new Map<string, any>\(\)/);
+  assert.match(route, /notificationScopedAppointmentIds\.has\(rowId\)/);
   assert.match(route, /buildCalendarAppointmentStart\(a\)\.getTime\(\) - buildCalendarAppointmentStart\(b\)\.getTime\(\)/);
   assert.match(route, /visibleRows\.map\(\(row\) => serializePortalAppointmentForFamilyView\(row\)\)/);
   assert.doesNotMatch(route, /patient_name/);
@@ -158,6 +160,10 @@ test('diario e tarefas do portal nao consultam colunas ausentes em producao', ()
   assert.doesNotMatch(notesEmailRoute, /\.from\('notes'\)[\s\S]{0,120}\.select\(NOTE_SELECT\)/);
   assert.match(notesEmailRoute, /\/api\/notes\/email\/:email \[GET\]/);
   assert.doesNotMatch(notesEmailRoute, /\/api\/patient-records\/:patientId \[POST\]/);
+  const selfHistoryRoute = serverSlice("app.get('/api/patient/self/history'", 6200);
+  assert.match(selfHistoryRoute, /fetchHistoryWithSchemaFallback/);
+  assert.doesNotMatch(selfHistoryRoute, /\.from\('history'\)[\s\S]{0,160}\.select\(HISTORY_SELECT\)/);
+  assert.match(selfHistoryRoute, /success: true, data: \[\], reason: 'missing_resolved_patient'/);
 });
 
 test('notificacoes do portal sao deduplicadas e normalizadas por consulta pendente', () => {
@@ -167,6 +173,8 @@ test('notificacoes do portal sao deduplicadas e normalizadas por consulta penden
   assert.match(notificationsRoute, /formatPortalReminderMessage/);
   assert.match(notificationsRoute, /Toque para confirmar, remarcar ou cancelar/);
   assert.match(notificationsRoute, /dedupedRowsByAppointment/);
+  assert.match(notificationsRoute, /latestPendingAppointmentReminder/);
+  assert.match(notificationsRoute, /data: visibleRows/);
   assert.match(notificationsRoute, /appointment_id/);
   assert.match(patientDashboardCode, /dedupePortalNotifications/);
   assert.match(patientDashboardCode, /openPortalNotification/);

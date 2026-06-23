@@ -23698,28 +23698,27 @@ async function startServer() {
         return res.json({ success: true, data: [], reason: 'missing_resolved_patient' });
       }
 
-      const { data: historyByEmail, error: historyByEmailError } = await supabase
-        .from('history')
-        .select(HISTORY_SELECT)
-        .eq('patient_email', patientEmail)
-        .eq('is_active', true)
-        .is('deleted_at', null)
-        .order('created_at', { ascending: false })
-        .limit(limit);
-      if (historyByEmailError) throw historyByEmailError;
+      const historyByEmailResult = await fetchHistoryWithSchemaFallback({
+        supabase,
+        patientEmail,
+        limit,
+        route: '/api/patient/self/history',
+        logger: console
+      });
+      if (historyByEmailResult.error) throw historyByEmailResult.error;
+      const historyByEmail = historyByEmailResult.data;
 
       let historyById: any[] = [];
       if (scopedPatientIds.length > 0) {
-        const { data: historyByIdData, error: historyByIdError } = await supabase
-          .from('history')
-          .select(HISTORY_SELECT)
-          .in('patient_id', scopedPatientIds)
-          .eq('is_active', true)
-          .is('deleted_at', null)
-          .order('created_at', { ascending: false })
-          .limit(limit);
-        if (historyByIdError) throw historyByIdError;
-        historyById = Array.isArray(historyByIdData) ? historyByIdData : [];
+        const historyByIdResult = await fetchHistoryWithSchemaFallback({
+          supabase,
+          patientIds: scopedPatientIds,
+          limit,
+          route: '/api/patient/self/history',
+          logger: console
+        });
+        if (historyByIdResult.error) throw historyByIdResult.error;
+        historyById = Array.isArray(historyByIdResult.data) ? historyByIdResult.data : [];
       }
 
       const mergedHistory = [...(Array.isArray(historyByEmail) ? historyByEmail : []), ...historyById];
@@ -29646,10 +29645,17 @@ async function startServer() {
         if (!groupKey || dedupedRowsByAppointment.has(groupKey)) continue;
         dedupedRowsByAppointment.set(groupKey, row);
       }
-      const dedupedRows = Array.from(dedupedRowsByAppointment.values());
+      const dedupedRows = Array.from(dedupedRowsByAppointment.values())
+        .sort((a: any, b: any) => new Date(b?.created_at || b?.sent_at || 0).getTime() - new Date(a?.created_at || a?.sent_at || 0).getTime());
+      const latestPendingAppointmentReminder = dedupedRows.find((row: any) =>
+        sanitizeString(row?.type, 80).replace(/_(24h|12h)$/i, '') === 'appointment_reminder'
+      );
+      const visibleRows = latestPendingAppointmentReminder
+        ? [latestPendingAppointmentReminder]
+        : dedupedRows.slice(0, limit);
       return res.json({
         success: true,
-        data: dedupedRows.slice(0, limit),
+        data: visibleRows,
         pagination: { limit, hasMore: dedupedRows.length > limit || normalizedRows.length > limit * 4 }
       });
     } catch (error: any) {
@@ -30206,6 +30212,7 @@ async function startServer() {
           }
         }
       }
+      const notificationScopedAppointmentIds = new Set<string>();
       if (patientIds.length > 0) {
         const notificationResult = await supabase
           .from('portal_notifications')
@@ -30214,11 +30221,13 @@ async function startServer() {
           .is('acknowledged_at', null)
           .limit(Math.min(200, limit * 4));
         if (!notificationResult.error) {
-          const notificationAppointmentIds = Array.from(new Set(
+          const scopedNotificationAppointmentIds = Array.from(new Set(
             (notificationResult.data || [])
               .map((row: any) => sanitizeString(row?.appointment_id, 120))
-              .filter((id: string) => isUuid(id) && !rowsById.has(id))
+              .filter((id: string) => isUuid(id))
           ));
+          for (const id of scopedNotificationAppointmentIds) notificationScopedAppointmentIds.add(id);
+          const notificationAppointmentIds = scopedNotificationAppointmentIds.filter((id) => !rowsById.has(id));
           if (notificationAppointmentIds.length > 0) {
             const notificationAppointments = await supabase
               .from('appointments')
@@ -30255,7 +30264,11 @@ async function startServer() {
         .slice(0, limit);
       const visibleRows = [];
       for (const row of rows) {
-        if (await canPortalUserAccessPatient(sanitizeString(row?.patient_id, 120), row, req.session.user)) {
+        const rowId = sanitizeString(row?.id, 120);
+        if (
+          notificationScopedAppointmentIds.has(rowId) ||
+          await canPortalUserAccessPatient(sanitizeString(row?.patient_id, 120), row, req.session.user)
+        ) {
           visibleRows.push(row);
         }
       }

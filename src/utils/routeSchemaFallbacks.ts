@@ -1367,8 +1367,10 @@ export async function fetchHistoryWithSchemaFallback(params: {
     route: params.route || '/api/history/:patientId',
     table: 'history',
     initialColumns: HISTORY_SELECT_COLUMNS,
+    legacyColumns: HISTORY_LEGACY_SELECT_COLUMNS,
     optionalColumns: new Set([...HISTORY_OPTIONAL_COLUMNS, 'patient_email']),
     logger: params.logger,
+    fallbackEmptyOnSchemaError: true,
     buildQuery: (selectColumns, removedColumns) => {
       let query = params.supabase.from('history').select(selectColumns);
       const patientId = cleanString(params.patientId, 120);
