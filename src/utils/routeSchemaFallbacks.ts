@@ -4,6 +4,7 @@ type SupabaseLike = {
 
 type LoggerLike = Pick<Console, 'warn'>;
 
+// Centraliza selects tolerantes a schemas legados usados por rotas do portal.
 export type PatientListRole = 'coordinator' | 'receptionist' | 'therapist' | 'admin' | 'owner' | string;
 
 export const PROFILE_SELECT_COLUMNS = [
