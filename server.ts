@@ -53978,14 +53978,28 @@ async function startServer() {
   } else {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath, {
+      acceptRanges: false,
+      etag: false,
+      lastModified: false,
       setHeaders: (res, filePath) => {
         const normalizedPath = filePath.replace(/\\/g, '/');
+        res.setHeader('X-Content-Type-Options', 'nosniff');
         if (normalizedPath.endsWith('/index.html') || normalizedPath.endsWith('/sw.js')) {
-          res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+          res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, no-transform');
+          return;
+        }
+        if (normalizedPath.endsWith('/manifest.webmanifest')) {
+          res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
+          res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, no-transform');
+          return;
+        }
+        if (normalizedPath.endsWith('.png')) {
+          res.setHeader('Content-Type', 'image/png');
+          res.setHeader('Cache-Control', 'public, max-age=86400, must-revalidate, no-transform');
           return;
         }
         if (normalizedPath.includes('/assets/')) {
-          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable, no-transform');
         }
       }
     }));
