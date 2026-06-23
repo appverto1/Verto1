@@ -16887,11 +16887,12 @@ async function startServer() {
       }
     }
     const institutionalProfile = profileBranding.find((row: any) => sanitizeString(row?.clinic_name, 160));
+    const clinicDisplayName = sanitizeString(clinic?.display_name || clinic?.legal_name || clinic?.name, 160);
     return {
       id: safeClinicId,
       displayName:
+        clinicDisplayName ||
         sanitizeString(institutionalProfile?.clinic_name, 160) ||
-        sanitizeString(clinic?.display_name || clinic?.legal_name || clinic?.name, 160) ||
         fallback.displayName,
       logoUrl: sanitizeSessionUrl(clinic?.logo_url || institutionalProfile?.clinic_logo_url),
       primaryColor: fallback.primaryColor

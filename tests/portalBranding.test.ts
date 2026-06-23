@@ -21,6 +21,10 @@ const portalAppointmentSlice = serverCode.slice(
   serverCode.indexOf('const serializePortalAppointment ='),
   serverCode.indexOf("app.post('/api/portal/sessions/:sessionId/sign'")
 );
+const familyBrandingSlice = serverCode.slice(
+  serverCode.indexOf('const readClinicBrandingForFamilyView = async'),
+  serverCode.indexOf('const parseAppointmentSourcePayloadForFamilyView')
+);
 
 test('appointment confirmation branding is clinic-first and never falls back to actor clinic settings', () => {
   assert.match(serverCode, /const readClinicBrandingForFamilyView = async/);
@@ -29,6 +33,10 @@ test('appointment confirmation branding is clinic-first and never falls back to 
   assert.match(serverCode, /\.from\('professional_profiles'\)[\s\S]*?\.select\('clinic_name,clinic_logo_url,updated_at'\)/);
   assert.match(serverCode, /institutionalProfile\?\.clinic_name/);
   assert.match(serverCode, /clinic\?\.display_name \|\| clinic\?\.legal_name \|\| clinic\?\.name/);
+  assert.ok(
+    familyBrandingSlice.indexOf('clinicDisplayName ||') < familyBrandingSlice.indexOf('institutionalProfile?.clinic_name'),
+    'Nome institucional da clinica deve ter prioridade sobre professional_profiles.clinic_name.'
+  );
   assert.match(confirmationRouteSlice, /buildFamilyAppointmentDisplayContext/);
   assert.doesNotMatch(confirmationRouteSlice, /actor\?\.clinicSettings\?\.clinicName/);
   assert.doesNotMatch(confirmationRouteSlice, /actor\?\.clinicSettings\?\.clinicLogoUrl/);

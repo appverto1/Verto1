@@ -593,17 +593,17 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       id: appointmentId,
       patientName: metadata.patientName || notification?.patientName || user?.name || 'Paciente',
       clinicName: firstPortalClinicText(
-        [professionalName],
+        getPortalClinicNameExclusions(professionalName, notification?.title),
         portalContext?.clinicName,
         portalContext?.clinicLegalName,
-        metadata.clinicName,
-        metadata.clinicLegalName,
-        notification?.title,
-        notification?.clinicName,
-        notification?.clinic_name,
         user?.clinicSettings?.clinicName,
         user?.workspaceName,
         user?.clinicName,
+        metadata.clinicName,
+        metadata.clinicLegalName,
+        notification?.clinicName,
+        notification?.clinic_name,
+        notification?.title,
         'Verto'
       ),
       clinicLogoUrl: portalContext?.clinicLogoUrl || metadata.clinicLogoUrl || notification?.clinicLogoUrl || notification?.clinic_logo_url || VERTO_NOTIFICATION_LOGO,
@@ -1497,6 +1497,16 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       .map(normalizePortalText)
       .find((value) => value && !professionals.some((professional) => looksLikePortalProfessionalLabel(value, professional))) || 'Verto';
   };
+  const getPortalClinicNameExclusions = (...values: any[]) => ([
+    ...values,
+    user?.professionalName,
+    user?.professional_name,
+    user?.clinicSettings?.professionalName,
+    user?.clinicSettings?.professionalDisplayName,
+    user?.clinicSettings?.technicalResponsibleName,
+    user?.clinicSettings?.responsibleName,
+    user?.clinicSettings?.responsavelTecnicoNome
+  ]);
   const hasPortalTrueFlag = (value: any) => value === true || ['true', '1', 'yes', 'sim', 'shared', 'released', 'liberado', 'patient', 'family', 'public'].includes(normalizePortalLower(value));
   const hasPortalPrivateFlag = (item: any) => {
     const visibility = normalizePortalLower(item?.visibility || item?.audience || item?.scope || item?.access);
@@ -2111,17 +2121,17 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       notification?.therapist_name
     );
     return firstPortalClinicText(
-      [professionalName],
+      getPortalClinicNameExclusions(professionalName, notification?.title),
       portalContext?.clinicName,
       portalContext?.clinicLegalName,
-      metadata.clinicName,
-      metadata.clinicLegalName,
-      notification?.title,
-      notification?.clinicName,
-      notification?.clinic_name,
       user?.clinicSettings?.clinicName,
       user?.workspaceName,
       user?.clinicName,
+      metadata.clinicName,
+      metadata.clinicLegalName,
+      notification?.clinicName,
+      notification?.clinic_name,
+      notification?.title,
       'Verto'
     );
   };
@@ -2633,16 +2643,20 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     activePortalAppointment?.therapist_name
   );
   const activePortalClinicName = firstPortalClinicText(
-    [activePortalProfessionalName],
-    activePortalAppointment?.clinicName,
-    activePortalAppointment?.clinic?.displayName,
-    activePortalAppointment?.clinic?.name,
-    activePortalAppointment?.clinic_name,
+    getPortalClinicNameExclusions(
+      activePortalProfessionalName,
+      activePortalAppointment?.clinicName,
+      activePortalAppointment?.clinic_name
+    ),
     portalContext?.clinicName,
     portalContext?.clinicLegalName,
     user?.clinicSettings?.clinicName,
     user?.workspaceName,
     user?.clinicName,
+    activePortalAppointment?.clinicName,
+    activePortalAppointment?.clinic?.displayName,
+    activePortalAppointment?.clinic?.name,
+    activePortalAppointment?.clinic_name,
     'Verto'
   );
   const activePortalClinicLogoUrl = firstPortalText(
