@@ -2788,20 +2788,6 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
             <X size={18} />
           </button>
         </div>
-        <div className="mt-4 grid gap-2">
-          <div className="rounded-2xl bg-slate-50 px-4 py-3">
-            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">Status</p>
-            <p className="mt-1 text-sm font-bold text-slate-800">{getPortalStatusLabel(activePortalAppointment?.status)}</p>
-          </div>
-          <div className="rounded-2xl bg-slate-50 px-4 py-3">
-            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">Local</p>
-            <p className="mt-1 text-sm font-bold text-slate-800">{activePortalAppointment?.locationLabel || 'Local informado pela clínica'}</p>
-          </div>
-          <div className="rounded-2xl bg-slate-50 px-4 py-3">
-            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">Profissional</p>
-            <p className="mt-1 text-sm font-bold text-slate-800">{activePortalProfessionalName || 'Equipe'}</p>
-          </div>
-        </div>
         {portalAppointmentDetail?.closure?.signaturePending && (
           <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
             <p className="text-sm font-black text-amber-800">Assinatura pendente</p>

@@ -16865,10 +16865,35 @@ async function startServer() {
       console.warn('[Appointments] clinic branding read failed:', clinicError.message);
       return fallback;
     }
+    let profileBranding: any[] = [];
+    const profileBrandingResult = await supabase
+      .from('professional_profiles')
+      .select('clinic_name,clinic_logo_url,updated_at')
+      .eq('clinic_id', safeClinicId)
+      .not('clinic_name', 'is', null)
+      .order('updated_at', { ascending: false })
+      .limit(10);
+    if (!profileBrandingResult.error) {
+      profileBranding = Array.isArray(profileBrandingResult.data) ? profileBrandingResult.data : [];
+    } else if (extractMissingColumnName(profileBrandingResult.error)) {
+      const legacyProfileBrandingResult = await supabase
+        .from('professional_profiles')
+        .select('clinic_name,clinic_logo_url')
+        .eq('clinic_id', safeClinicId)
+        .not('clinic_name', 'is', null)
+        .limit(10);
+      if (!legacyProfileBrandingResult.error) {
+        profileBranding = Array.isArray(legacyProfileBrandingResult.data) ? legacyProfileBrandingResult.data : [];
+      }
+    }
+    const institutionalProfile = profileBranding.find((row: any) => sanitizeString(row?.clinic_name, 160));
     return {
       id: safeClinicId,
-      displayName: sanitizeString(clinic?.display_name || clinic?.legal_name || clinic?.name, 160) || fallback.displayName,
-      logoUrl: sanitizeSessionUrl(clinic?.logo_url),
+      displayName:
+        sanitizeString(institutionalProfile?.clinic_name, 160) ||
+        sanitizeString(clinic?.display_name || clinic?.legal_name || clinic?.name, 160) ||
+        fallback.displayName,
+      logoUrl: sanitizeSessionUrl(clinic?.logo_url || institutionalProfile?.clinic_logo_url),
       primaryColor: fallback.primaryColor
     };
   };
@@ -29475,6 +29500,29 @@ async function startServer() {
     };
   };
 
+  const queryPortalAppointmentsWithSchemaFallback = async (
+    buildQuery: (selectColumns: string) => PromiseLike<any>,
+    stage: string
+  ) => {
+    let columns = PORTAL_APPOINTMENT_SELECT.split(',').map((column) => column.trim()).filter(Boolean);
+    const removedColumns = new Set<string>();
+    for (let attempt = 0; attempt < 24 && columns.length > 1; attempt += 1) {
+      const result = await buildQuery(columns.join(','));
+      if (!result?.error) return result;
+      const missingColumn = extractMissingColumnName(result.error);
+      if (!missingColumn || missingColumn === 'id' || removedColumns.has(missingColumn) || !columns.includes(missingColumn)) {
+        return result;
+      }
+      removedColumns.add(missingColumn);
+      columns = columns.filter((column) => column !== missingColumn);
+      console.warn('[PortalAppointments] optional column unavailable', {
+        stage,
+        removedColumn: missingColumn
+      });
+    }
+    return buildQuery(columns.join(','));
+  };
+
   const canPortalUserAccessPatient = async (patientId: string, appointment: any, user: any) => {
     const role = sanitizeString(user?.role, 40).toLowerCase();
     const appointmentScope = readPortalAppointmentPatientScope(appointment);
@@ -29498,12 +29546,16 @@ async function startServer() {
   const fetchPortalAppointmentForUser = async (appointmentId: string, user: any) => {
     const safeAppointmentId = sanitizeString(appointmentId, 120);
     if (!isUuid(safeAppointmentId)) return { ok: false, status: 400, error: 'Consulta inválida.' };
-    const { data, error } = await supabase
-      .from('appointments')
-      .select(PORTAL_APPOINTMENT_SELECT)
-      .eq('id', safeAppointmentId)
-      .limit(1)
-      .maybeSingle();
+    const { data, error } = await queryPortalAppointmentsWithSchemaFallback(
+      (selectColumns) =>
+        supabase
+          .from('appointments')
+          .select(selectColumns)
+          .eq('id', safeAppointmentId)
+          .limit(1)
+          .maybeSingle(),
+      'appointment_detail'
+    );
     if (error) {
       if (hasMissingFinancialSchema(error)) return { ok: false, status: 503, error: 'Agenda indisponível.' };
       throw error;
@@ -30169,14 +30221,18 @@ async function startServer() {
         return query;
       };
       const buildPortalAppointmentRangeQuery = (dateColumn: 'scheduled_at' | 'scheduled_start_at') =>
-        applyPortalAppointmentScope(
-          supabase
-            .from('appointments')
-            .select(PORTAL_APPOINTMENT_SELECT)
-            .gte(dateColumn, fromIso)
-            .lte(dateColumn, toIso)
-            .order(dateColumn, { ascending: true })
-            .limit(limit)
+        queryPortalAppointmentsWithSchemaFallback(
+          (selectColumns) =>
+            applyPortalAppointmentScope(
+              supabase
+                .from('appointments')
+                .select(selectColumns)
+                .gte(dateColumn, fromIso)
+                .lte(dateColumn, toIso)
+                .order(dateColumn, { ascending: true })
+                .limit(limit)
+            ),
+          `patient_range_${dateColumn}`
         );
 
       const [scheduledAtResult, scheduledStartResult] = await Promise.all([
@@ -30200,15 +30256,19 @@ async function startServer() {
         const emailList = Array.from(patientEmails).slice(0, 10);
         const clinicList = Array.from(patientClinicIds).slice(0, 10);
         const buildPortalAppointmentEmailRangeQuery = (dateColumn: 'scheduled_at' | 'scheduled_start_at') =>
-          supabase
-            .from('appointments')
-            .select(PORTAL_APPOINTMENT_SELECT)
-            .in('patient_email', emailList)
-            .in('clinic_id', clinicList)
-            .gte(dateColumn, fromIso)
-            .lte(dateColumn, toIso)
-            .order(dateColumn, { ascending: true })
-            .limit(limit);
+          queryPortalAppointmentsWithSchemaFallback(
+            (selectColumns) =>
+              supabase
+                .from('appointments')
+                .select(selectColumns)
+                .in('patient_email', emailList)
+                .in('clinic_id', clinicList)
+                .gte(dateColumn, fromIso)
+                .lte(dateColumn, toIso)
+                .order(dateColumn, { ascending: true })
+                .limit(limit),
+            `patient_email_range_${dateColumn}`
+          );
         const [emailScheduledAtResult, emailScheduledStartResult] = await Promise.all([
           buildPortalAppointmentEmailRangeQuery('scheduled_at'),
           buildPortalAppointmentEmailRangeQuery('scheduled_start_at')
@@ -30225,17 +30285,21 @@ async function startServer() {
           }
         }
       }
-      if (rowsById.size === 0 && patientClinicIds.size > 0) {
+      if (rowsById.size < limit && patientClinicIds.size > 0) {
         const clinicList = Array.from(patientClinicIds).slice(0, 10);
         const buildPortalAppointmentClinicRangeQuery = (dateColumn: 'scheduled_at' | 'scheduled_start_at') =>
-          supabase
-            .from('appointments')
-            .select(PORTAL_APPOINTMENT_SELECT)
-            .in('clinic_id', clinicList)
-            .gte(dateColumn, fromIso)
-            .lte(dateColumn, toIso)
-            .order(dateColumn, { ascending: true })
-            .limit(Math.min(200, limit * 4));
+          queryPortalAppointmentsWithSchemaFallback(
+            (selectColumns) =>
+              supabase
+                .from('appointments')
+                .select(selectColumns)
+                .in('clinic_id', clinicList)
+                .gte(dateColumn, fromIso)
+                .lte(dateColumn, toIso)
+                .order(dateColumn, { ascending: true })
+                .limit(Math.min(200, limit * 4)),
+            `clinic_range_${dateColumn}`
+          );
         const [clinicScheduledAtResult, clinicScheduledStartResult] = await Promise.all([
           buildPortalAppointmentClinicRangeQuery('scheduled_at'),
           buildPortalAppointmentClinicRangeQuery('scheduled_start_at')
@@ -30269,11 +30333,15 @@ async function startServer() {
           for (const id of scopedNotificationAppointmentIds) notificationScopedAppointmentIds.add(id);
           const notificationAppointmentIds = scopedNotificationAppointmentIds.filter((id) => !rowsById.has(id));
           if (notificationAppointmentIds.length > 0) {
-            const notificationAppointments = await supabase
-              .from('appointments')
-              .select(PORTAL_APPOINTMENT_SELECT)
-              .in('id', notificationAppointmentIds)
-              .limit(Math.min(100, notificationAppointmentIds.length));
+            const notificationAppointments = await queryPortalAppointmentsWithSchemaFallback(
+              (selectColumns) =>
+                supabase
+                  .from('appointments')
+                  .select(selectColumns)
+                  .in('id', notificationAppointmentIds)
+                  .limit(Math.min(100, notificationAppointmentIds.length)),
+              'notification_appointments'
+            );
             if (notificationAppointments.error) {
               if (!hasMissingFinancialSchema(notificationAppointments.error)) throw notificationAppointments.error;
             } else {

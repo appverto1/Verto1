@@ -110,13 +110,16 @@ test('endpoint do calendario do portal segue escopo e select explicito', () => {
   assert.match(route, /checkAuth/);
   assert.match(route, /getPortalPatientIdsForUser/);
   assert.match(route, /canPortalUserAccessPatient/);
-  assert.match(route, /\.select\(PORTAL_APPOINTMENT_SELECT\)/);
+  assert.match(serverCode, /queryPortalAppointmentsWithSchemaFallback/);
+  assert.match(route, /\.select\(selectColumns\)/);
+  assert.match(serverCode, /optional column unavailable/);
   assert.match(route, /buildPortalAppointmentRangeQuery\('scheduled_at'\)/);
   assert.match(route, /buildPortalAppointmentRangeQuery\('scheduled_start_at'\)/);
   assert.match(route, /patientEmails/);
   assert.match(route, /\.in\('patient_email', emailList\)/);
   assert.match(route, /\.in\('clinic_id', clinicList\)/);
   assert.match(route, /buildPortalAppointmentClinicRangeQuery/);
+  assert.match(route, /rowsById\.size < limit/);
   assert.match(serverCode, /readPortalAppointmentPatientScope/);
   assert.match(route, /if \(visibleRows\.length >= limit\) break/);
   assert.match(route, /portal_notifications/);

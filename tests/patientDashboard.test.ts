@@ -68,6 +68,10 @@ test('notificacoes Kids priorizam nome e logo da clinica resolvida', () => {
   assert.match(openNotification, /clinicLogoUrl: portalContext\?\.clinicLogoUrl/);
   const notificationSummary = between('const portalNotificationsSummary =', 'const portalHomeSummary');
   assert.match(notificationSummary, /<span className="font-black text-slate-950">\{clinicName\}<\/span> \{message\}/);
+  const appointmentModal = between('const portalAppointmentDetailModal =', 'const portalActionModal =');
+  assert.doesNotMatch(appointmentModal, />Status</);
+  assert.doesNotMatch(appointmentModal, />Local</);
+  assert.doesNotMatch(appointmentModal, />Profissional</);
 });
 
 test('persistencia visual Kids continua baseada em dados existentes e nao mocks', () => {
