@@ -122,6 +122,20 @@ test('UI separa Autorizações TISS do paciente do plano financeiro legado', () 
   assert.doesNotMatch(coordinatorCode, /label=\{isInsurancePlan \? "Quantidade autorizada"/);
 });
 
+test('helpers das Autorizações TISS não entram em temporal dead zone no render', () => {
+  const helperIndex = coordinatorCode.indexOf('const normalizeUtf8Text =');
+  const componentIndex = coordinatorCode.indexOf('export function CoordinatorDashboard');
+  const lookupIndex = coordinatorCode.indexOf('const normalizeLookupText =');
+  const authorizationMemoIndex = coordinatorCode.indexOf('const selectedPatientInsurancePayer = useMemo');
+  assert.ok(helperIndex >= 0, 'normalizeUtf8Text deve existir.');
+  assert.ok(componentIndex >= 0, 'CoordinatorDashboard deve existir.');
+  assert.ok(lookupIndex >= 0, 'normalizeLookupText deve existir.');
+  assert.ok(authorizationMemoIndex >= 0, 'memo de pagador da autorização deve existir.');
+  assert.ok(helperIndex < componentIndex, 'normalizeUtf8Text deve ser helper puro fora do componente.');
+  assert.ok(helperIndex < lookupIndex, 'normalizeUtf8Text precisa estar inicializado antes de normalizeLookupText.');
+  assert.ok(lookupIndex < authorizationMemoIndex, 'normalizeLookupText precisa ser declarado antes do useMemo.');
+});
+
 test('agendamento usa convenio cadastrado do paciente como pagador', () => {
   assert.match(coordinatorCode, /resolvePatientInsurancePayer/);
   assert.match(coordinatorCode, /sessionPayerNameSnapshot/);

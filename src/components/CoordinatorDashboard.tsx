@@ -194,6 +194,8 @@ import {
   type AppointmentFinancialContextType,
 } from "../utils/appointmentFinancialContext";
 
+const normalizeUtf8Text = (value: any) => String(value ?? "").normalize("NFC");
+
 interface CoordinatorDashboardProps {
   user: any;
   onLogout: () => void;
@@ -2367,7 +2369,6 @@ export function CoordinatorDashboard({
     localStorage.setItem("verto_theme", theme);
   }, [theme, themeStorageKey]);
 
-  const normalizeUtf8Text = (value: any) => String(value ?? "").normalize("NFC");
   const repairMojibakeText = (value: any) => {
     const text = normalizeUtf8Text(value ?? "");
     if (!text) return "";
