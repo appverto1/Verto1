@@ -78,6 +78,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [portalAppointmentsLoaded, setPortalAppointmentsLoaded] = useState(false);
   const [portalAppointmentsRangeKey, setPortalAppointmentsRangeKey] = useState('');
   const [portalCalendarMonth, setPortalCalendarMonth] = useState(() => new Date());
+  const [selectedPortalCalendarDateKey, setSelectedPortalCalendarDateKey] = useState('');
   const [portalAppointmentsState, setPortalAppointmentsState] = useState({ loading: false, error: '', message: '' });
   const [portalNotifications, setPortalNotifications] = useState<any[]>([]);
   const [portalNotificationsLoaded, setPortalNotificationsLoaded] = useState(false);
@@ -2602,7 +2603,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     month: 'long',
     year: 'numeric'
   });
-  const portalCalendarWeekdays = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+  const portalMiniCalendarWeekdays = ['D', 'S', 'T', 'Q', 'Q', 'S', 'S'];
   const getPortalAppointmentDateKey = (appointment: any) =>
     toLocalDateKey(appointment?.scheduledAt || appointment?.scheduled_at || appointment?.date);
   const portalMonthAppointments = useMemo(() => {
@@ -2627,12 +2628,32 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     }
     return cells;
   }, [portalCalendarMonth, portalMonthAppointments]);
+  const selectedPortalCalendarAppointments = useMemo(() => {
+    if (!selectedPortalCalendarDateKey) return [];
+    return portalMonthAppointments.filter((appointment: any) => getPortalAppointmentDateKey(appointment) === selectedPortalCalendarDateKey);
+  }, [portalMonthAppointments, selectedPortalCalendarDateKey]);
+  const selectedPortalCalendarLabel = selectedPortalCalendarDateKey
+    ? (() => {
+        const date = new Date(`${selectedPortalCalendarDateKey}T12:00:00`);
+        return Number.isNaN(date.getTime())
+          ? ''
+          : date.toLocaleDateString('pt-BR', { day: '2-digit', month: 'long' });
+      })()
+    : '';
+  const handlePortalCalendarDayClick = (cell: { day: number | null; dateKey: string; appointments: any[] }) => {
+    if (!cell.day || cell.appointments.length === 0) return;
+    setSelectedPortalCalendarDateKey(cell.dateKey);
+    if (cell.appointments.length === 1) {
+      void openPortalAppointmentDetail(cell.appointments[0]);
+    }
+  };
   const changePortalCalendarMonth = (direction: -1 | 1) => {
     setPortalCalendarMonth((previous) => {
       const next = new Date(previous);
       next.setMonth(next.getMonth() + direction);
       return next;
     });
+    setSelectedPortalCalendarDateKey('');
   };
   const activePortalAppointment = portalAppointmentDetail?.appointment || selectedPortalAppointment;
   const activePortalStatus = String(activePortalAppointment?.status || '').toUpperCase();
@@ -2671,23 +2692,23 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     <div className="mb-6 rounded-[28px] border border-purple-100 bg-white p-4 shadow-sm sm:p-5">
       <div className="mb-4 flex items-center justify-between gap-3">
         <div>
-          <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-[#7a32fc]">Calendário</p>
+          <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-500">Mini calendário</p>
           <h2 className="text-lg font-black text-slate-900">Minhas consultas</h2>
-          <p className="mt-1 text-xs font-semibold text-slate-500">Agenda mensal da clínica</p>
+          <p className="mt-1 text-xs font-semibold text-slate-500">Toque em um dia marcado para abrir a consulta.</p>
         </div>
-        <button type="button" onClick={() => void loadPortalAppointments(getPortalCalendarMonthRange(portalCalendarMonth))} className="rounded-2xl border border-purple-100 px-3 py-2 text-xs font-bold text-[#7a32fc]">
+        <button type="button" onClick={() => void loadPortalAppointments(getPortalCalendarMonthRange(portalCalendarMonth))} className="rounded-2xl border border-purple-100 px-3 py-2 text-xs font-bold text-[#7a32fc]" aria-label="Atualizar consultas">
           Atualizar
         </button>
       </div>
-      <div className="mb-4 flex items-center justify-between gap-3 rounded-3xl border border-slate-100 bg-slate-50/70 px-3 py-2">
-        <button type="button" onClick={() => changePortalCalendarMonth(-1)} className="rounded-2xl bg-white p-2 text-slate-500 shadow-sm" aria-label="Mês anterior">
+      <div className="mb-4 flex items-center justify-between gap-3 px-1">
+        <button type="button" onClick={() => changePortalCalendarMonth(-1)} className="rounded-2xl p-2 text-slate-600 transition hover:bg-purple-50" aria-label="Mês anterior">
           <ChevronLeft size={18} />
         </button>
         <div className="text-center">
           <p className="text-sm font-black capitalize text-slate-900">{portalCalendarMonthLabel}</p>
           <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Próximos agendamentos do paciente</p>
         </div>
-        <button type="button" onClick={() => changePortalCalendarMonth(1)} className="rounded-2xl bg-white p-2 text-slate-500 shadow-sm" aria-label="Próximo mês">
+        <button type="button" onClick={() => changePortalCalendarMonth(1)} className="rounded-2xl p-2 text-slate-600 transition hover:bg-purple-50" aria-label="Próximo mês">
           <ChevronRight size={18} />
         </button>
       </div>
@@ -2700,84 +2721,74 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         <div className="rounded-2xl bg-purple-50 px-4 py-3 text-sm font-semibold text-purple-700">Carregando consultas...</div>
       ) : portalAppointmentsState.error ? (
         <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">{portalAppointmentsState.error}</div>
-      ) : portalAppointments.length === 0 ? (
+      ) : portalMonthAppointments.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-purple-100 bg-purple-50/60 px-4 py-5 text-center text-sm font-semibold text-purple-700">
           Nenhuma consulta encontrada neste mês.
         </div>
       ) : (
         <div className="space-y-4">
-          <div className="grid grid-cols-7 gap-1 text-center text-[10px] font-black uppercase tracking-wider text-slate-400">
-            {portalCalendarWeekdays.map((day) => <div key={day}>{day}</div>)}
+          <div className="grid grid-cols-7 gap-y-3 text-center text-[10px] font-bold uppercase tracking-[0.2em] text-slate-400">
+            {portalMiniCalendarWeekdays.map((day, index) => <div key={`${day}-${index}`}>{day}</div>)}
           </div>
-          <div className="grid grid-cols-7 gap-1">
+          <div className="grid grid-cols-7 gap-y-2 text-center">
             {portalCalendarCells.map((cell, index) => (
               <div
                 key={cell.dateKey || `empty-${index}`}
-                className={`min-h-[82px] rounded-2xl border p-1.5 text-left ${cell.day ? 'border-slate-100 bg-slate-50/70' : 'border-transparent bg-transparent'}`}
+                className="flex min-h-[38px] items-center justify-center"
               >
                 {cell.day ? (
-                  <React.Fragment>
-                    <p className={`mb-1 text-xs font-black ${cell.dateKey === toLocalDateKey(new Date()) ? 'text-[#7a32fc]' : 'text-slate-500'}`}>{cell.day}</p>
-                    <div className="space-y-1">
-                      {cell.appointments.slice(0, 2).map((appointment: any) => (
-                        <button
-                          type="button"
-                          key={appointment.id}
-                          onClick={() => void openPortalAppointmentDetail(appointment)}
-                          className="block w-full rounded-xl bg-white px-1.5 py-1 text-left shadow-sm transition hover:bg-purple-50"
-                        >
-                          <span className="block truncate text-[10px] font-black text-slate-800">{formatPortalTime(appointment.scheduledAt)}</span>
-                          <span className={`mt-0.5 block max-w-full truncate rounded-full px-1.5 py-0.5 text-[8px] font-black uppercase ${getPortalStatusPillClass(appointment.status)}`}>
-                            {getPortalStatusShortLabel(appointment.status)}
-                          </span>
-                        </button>
-                      ))}
-                      {cell.appointments.length > 2 && (
-                        <span className="block rounded-xl bg-white px-1.5 py-1 text-[9px] font-black text-slate-500">
-                          +{cell.appointments.length - 2}
-                        </span>
-                      )}
-                    </div>
-                  </React.Fragment>
+                  <button
+                    type="button"
+                    onClick={() => handlePortalCalendarDayClick(cell)}
+                    disabled={cell.appointments.length === 0}
+                    className={`relative flex h-9 w-9 items-center justify-center rounded-full text-sm font-black transition focus:outline-none focus:ring-2 focus:ring-[#7a32fc]/40 disabled:cursor-default ${
+                      selectedPortalCalendarDateKey === cell.dateKey
+                        ? 'bg-[#7a32fc] text-white shadow-lg shadow-purple-500/30'
+                        : cell.dateKey === toLocalDateKey(new Date())
+                          ? 'bg-purple-50 text-[#7a32fc]'
+                          : cell.appointments.length > 0
+                            ? 'text-slate-800 hover:bg-purple-50'
+                            : 'text-slate-600'
+                    }`}
+                    aria-label={cell.appointments.length > 0 ? `Abrir consulta de ${cell.day}` : `Dia ${cell.day} sem consulta`}
+                  >
+                    {cell.day}
+                    {cell.appointments.length > 0 && (
+                      <span className={`absolute bottom-1 h-1.5 w-1.5 rounded-full ${selectedPortalCalendarDateKey === cell.dateKey ? 'bg-white' : 'bg-[#7a32fc]'}`} />
+                    )}
+                  </button>
                 ) : null}
               </div>
             ))}
           </div>
-          <div>
-            <p className="mb-2 text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">Consultas do mês</p>
-            {portalMonthAppointments.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-purple-100 bg-purple-50/60 px-4 py-5 text-center text-sm font-semibold text-purple-700">
-                Nenhum agendamento visível neste mês.
-              </div>
-            ) : (
+          {selectedPortalCalendarDateKey && selectedPortalCalendarAppointments.length > 1 && (
+            <div className="rounded-3xl border border-purple-100 bg-purple-50/60 p-3">
+              <p className="mb-2 text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">Consultas de {selectedPortalCalendarLabel}</p>
               <div className="space-y-2">
-                {portalMonthAppointments.slice(0, 30).map((appointment) => (
+                {selectedPortalCalendarAppointments.map((appointment: any) => (
                   <button
                     type="button"
                     key={appointment.id}
                     onClick={() => void openPortalAppointmentDetail(appointment)}
-                    className="flex w-full items-start justify-between gap-3 rounded-2xl border border-slate-100 bg-slate-50/70 px-3 py-3 text-left transition hover:border-purple-100 hover:bg-purple-50"
+                    className="flex w-full items-center justify-between gap-3 rounded-2xl bg-white px-3 py-2 text-left shadow-sm transition hover:bg-purple-50"
                   >
-                    <div className="min-w-0">
-                      <p className="flex items-center gap-2 text-sm font-black text-slate-900">
-                        <CalendarDays size={15} className="text-[#7a32fc]" />
-                        {formatPortalDateTime(appointment.scheduledAt)}
-                      </p>
-                      <p className="mt-1 text-xs font-semibold text-slate-500">
-                        {appointment.serviceType || 'Consulta'} · {appointment.professionalName || 'Equipe'}
-                      </p>
-                      <p className="mt-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                        {appointment.locationLabel || appointment.roomName || 'Local informado pela clínica'}
-                      </p>
-                    </div>
+                    <span className="min-w-0">
+                      <span className="block text-sm font-black text-slate-900">{formatPortalTime(appointment.scheduledAt)}</span>
+                      <span className="block truncate text-xs font-semibold text-slate-500">{appointment.serviceType || 'Consulta'}</span>
+                    </span>
                     <span className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-bold ${getPortalStatusPillClass(appointment.status)}`}>
-                      {getPortalStatusLabel(appointment.status)}
+                      {getPortalStatusShortLabel(appointment.status)}
                     </span>
                   </button>
                 ))}
               </div>
-            )}
-          </div>
+            </div>
+          )}
+          {selectedPortalCalendarDateKey && selectedPortalCalendarAppointments.length === 0 && (
+            <div className="rounded-2xl border border-dashed border-purple-100 bg-purple-50/60 px-4 py-4 text-center text-sm font-semibold text-purple-700">
+              Nenhuma consulta neste dia.
+            </div>
+          )}
         </div>
       )}
     </div>

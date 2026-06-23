@@ -96,7 +96,10 @@ test('calendario carrega somente pelo menu Kids e relatorio continua sob demanda
   assert.doesNotMatch(patientDashboardCode, /: getPortalDefaultAppointmentsRange\(\)/);
   assert.match(patientDashboardCode, /portalAppointmentsRangeKey/);
   assert.match(patientDashboardCode, /portalCalendarCells/);
-  assert.match(patientDashboardCode, /Agenda mensal da cl.nica/);
+  assert.match(patientDashboardCode, /Mini calend.rio/);
+  assert.match(patientDashboardCode, /handlePortalCalendarDayClick/);
+  assert.match(patientDashboardCode, /openPortalAppointmentDetail\(cell\.appointments\[0\]\)/);
+  assert.match(patientDashboardCode, /selectedPortalCalendarAppointments/);
   assert.match(patientDashboardCode, /Pr.ximos agendamentos do paciente/);
   assert.match(patientDashboardCode, /portalReportPanel/);
   assert.match(patientDashboardCode, /actualDurationMinutes/);
@@ -173,7 +176,11 @@ test('diario e tarefas do portal nao consultam colunas ausentes em producao', ()
 });
 
 test('notificacoes do portal sao deduplicadas e normalizadas por consulta pendente', () => {
-  const notificationsRoute = serverSlice("app.get('/api/portal/notifications'", 9800);
+  const notificationsRoute = between(
+    serverCode,
+    "app.get('/api/portal/notifications'",
+    "app.patch('/api/portal/notifications/:notificationId'"
+  );
   assert.match(notificationsRoute, /\.is\('acknowledged_at', null\)/);
   assert.match(notificationsRoute, /title: branding\.displayName/);
   assert.match(notificationsRoute, /formatPortalReminderMessage/);
