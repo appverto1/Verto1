@@ -141,7 +141,11 @@ test('diario e tarefas do portal nao consultam colunas ausentes em producao', ()
   const noteSelectColumns = between(routeSchemaCode, 'export const NOTE_SELECT_COLUMNS = [', '];');
   const taskSelectColumns = between(routeSchemaCode, 'export const TASK_SELECT_COLUMNS = [', '];');
   const taskLegacySelectColumns = between(routeSchemaCode, 'export const TASK_LEGACY_SELECT_COLUMNS = [', '];');
+  assert.doesNotMatch(noteSelectColumns, /'note'/);
+  assert.doesNotMatch(noteSelectColumns, /'created_by'/);
+  assert.doesNotMatch(noteSelectColumns, /'updated_at'/);
   assert.doesNotMatch(noteSelectColumns, /'visibility'/);
+  assert.doesNotMatch(taskSelectColumns, /'icon'/);
   assert.doesNotMatch(taskSelectColumns, /'type'/);
   assert.doesNotMatch(taskLegacySelectColumns, /'type'/);
   assert.doesNotMatch(routeSchemaCode, /\.in\('visibility'/);

@@ -23068,8 +23068,10 @@ async function startServer() {
     role: string;
     limit?: number;
     requestId?: string | null;
+    route?: string;
   }) => {
     const limit = parseBoundedListLimit(params.limit, 20, 50);
+    const route = params.route || (params.patientId ? '/api/notes/:patientId' : '/api/notes/email/:email');
     return fetchNotesWithSchemaFallback({
       supabase,
       patientId: params.patientId,
@@ -23078,7 +23080,7 @@ async function startServer() {
       excludePatientId: params.excludePatientId,
       role: params.role,
       limit,
-      route: '/api/notes/:patientId',
+      route,
       requestId: params.requestId,
       logger: console
     });
@@ -23461,7 +23463,8 @@ async function startServer() {
         patientIds: scopedPatientIds || undefined,
         role: roleForFilter,
         limit,
-        requestId: requestIdForLogs(req)
+        requestId: requestIdForLogs(req),
+        route: '/api/notes/email/:email'
       });
       const data = notesResult.data;
       const error = notesResult.error;
@@ -23682,11 +23685,18 @@ async function startServer() {
       const patientIds = await getPatientIdsByEmailAcrossClinics(patientEmail, sessionUserId, currentClinicId(req.session.user));
       const scopedPatientIds = Array.from(
         new Set(
-          [sessionUserId, ...patientIds]
+          patientIds
             .map((id) => sanitizeString(id, 120))
             .filter((id) => isUuid(id))
         )
       );
+      if (scopedPatientIds.length === 0) {
+        console.warn('[PatientSelfHistory] skipped: missing resolvedPatientId', {
+          actorId: sessionUserId || null,
+          requestId: requestIdForLogs(req)
+        });
+        return res.json({ success: true, data: [], reason: 'missing_resolved_patient' });
+      }
 
       const { data: historyByEmail, error: historyByEmailError } = await supabase
         .from('history')
@@ -23777,28 +23787,34 @@ async function startServer() {
         };
       });
 
-      const { data: tasksByEmail, error: tasksByEmailError } = await supabase
-        .from('tasks')
-        .select(TASK_SELECT)
-        .ilike('patient_email', patientEmail)
-        .order('created_at', { ascending: false })
-        .limit(limit);
-      if (tasksByEmailError) {
-        console.warn('[PatientSelfHistory] tasks by email warning:', tasksByEmailError.message || String(tasksByEmailError));
+      const tasksByEmailResult = await fetchTasksWithSchemaFallback({
+        supabase,
+        patientEmail,
+        emailMatch: 'ilike',
+        limit,
+        route: '/api/patient/self/history',
+        requestId: requestIdForLogs(req),
+        logger: console
+      });
+      const tasksByEmail = tasksByEmailResult.data;
+      if (tasksByEmailResult.error) {
+        console.warn('[PatientSelfHistory] tasks by email warning:', tasksByEmailResult.error.message || String(tasksByEmailResult.error));
       }
 
       let tasksById: any[] = [];
       if (scopedPatientIds.length > 0) {
-        const { data: tasksByIdData, error: tasksByIdError } = await supabase
-          .from('tasks')
-          .select(TASK_SELECT)
-          .in('patient_id', scopedPatientIds)
-          .order('created_at', { ascending: false })
-          .limit(limit);
-        if (tasksByIdError) {
-          console.warn('[PatientSelfHistory] tasks by id warning:', tasksByIdError.message || String(tasksByIdError));
+        const tasksByIdResult = await fetchTasksWithSchemaFallback({
+          supabase,
+          patientIds: scopedPatientIds,
+          limit,
+          route: '/api/patient/self/history',
+          requestId: requestIdForLogs(req),
+          logger: console
+        });
+        if (tasksByIdResult.error) {
+          console.warn('[PatientSelfHistory] tasks by id warning:', tasksByIdResult.error.message || String(tasksByIdResult.error));
         } else {
-          tasksById = Array.isArray(tasksByIdData) ? tasksByIdData : [];
+          tasksById = Array.isArray(tasksByIdResult.data) ? tasksByIdResult.data : [];
         }
       }
 
@@ -25495,24 +25511,36 @@ async function startServer() {
 
       const limit = parseBoundedListLimit(req.query?.limit, 20, 50);
       const patientIds = await getPatientIdsByEmailAcrossClinics(patientEmail, sanitizeString(req.session.user?.id, 120), currentClinicId(req.session.user));
-      const { data: tasksByEmail, error: tasksByEmailError } = await supabase
-        .from('tasks')
-        .select(TASK_SELECT)
-        .eq('patient_email', patientEmail)
-        .order('created_at', { ascending: false })
-        .limit(limit);
-      if (tasksByEmailError) throw tasksByEmailError;
+      if (patientIds.length === 0) {
+        console.warn('[PatientSelfTasks] skipped: missing resolvedPatientId', {
+          actorId: sanitizeString(req.session.user?.id, 120) || null,
+          requestId: requestIdForLogs(req)
+        });
+        return res.json({ success: true, data: [], reason: 'missing_resolved_patient' });
+      }
+      const tasksByEmailResult = await fetchTasksWithSchemaFallback({
+        supabase,
+        patientEmail,
+        limit,
+        route: '/api/patient/self/tasks',
+        requestId: requestIdForLogs(req),
+        logger: console
+      });
+      if (tasksByEmailResult.error) throw tasksByEmailResult.error;
+      const tasksByEmail = tasksByEmailResult.data;
 
       let tasksById: any[] = [];
       if (patientIds.length > 0) {
-        const { data: tasksByIdData, error: tasksByIdError } = await supabase
-          .from('tasks')
-          .select(TASK_SELECT)
-          .in('patient_id', patientIds)
-          .order('created_at', { ascending: false })
-          .limit(limit);
-        if (tasksByIdError) throw tasksByIdError;
-        tasksById = Array.isArray(tasksByIdData) ? tasksByIdData : [];
+        const tasksByIdResult = await fetchTasksWithSchemaFallback({
+          supabase,
+          patientIds,
+          limit,
+          route: '/api/patient/self/tasks',
+          requestId: requestIdForLogs(req),
+          logger: console
+        });
+        if (tasksByIdResult.error) throw tasksByIdResult.error;
+        tasksById = Array.isArray(tasksByIdResult.data) ? tasksByIdResult.data : [];
       }
 
       const merged = Array.from(

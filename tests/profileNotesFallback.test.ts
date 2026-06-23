@@ -178,7 +178,11 @@ test('/api/notes retorna 200-equivalente com select atual', async () => {
   });
 
   assert.equal(result.error, null);
-  assert.deepEqual(result.data, [{ id: 'note-1', patient_id: 'patient-1', created_at: '2026-05-25T10:00:00Z' }]);
+  assert.equal(result.data?.[0]?.id, 'note-1');
+  assert.equal(result.data?.[0]?.patient_id, 'patient-1');
+  assert.equal(result.data?.[0]?.created_at, '2026-05-25T10:00:00Z');
+  assert.equal(result.data?.[0]?.updated_at, '2026-05-25T10:00:00Z');
+  assert.equal(result.data?.[0]?.visibility, 'private');
   assert.equal(supabase.calls[0].selectColumns, NOTE_SELECT);
 });
 

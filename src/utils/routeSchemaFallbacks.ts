@@ -151,7 +151,6 @@ export const NOTE_SELECT_COLUMNS = [
   'type',
   'subject',
   'content',
-  'note',
   'assigned_task_id',
   'source',
   'portability_scope',
@@ -160,9 +159,7 @@ export const NOTE_SELECT_COLUMNS = [
   'shared_with_professionals',
   'original_organization_id',
   'original_author_id',
-  'created_by',
   'created_at',
-  'updated_at',
   'is_active',
   'deleted_at'
 ];
@@ -174,8 +171,6 @@ export const NOTE_LEGACY_SELECT_COLUMNS = [
   'type',
   'subject',
   'content',
-  'note',
-  'created_by',
   'created_at'
 ];
 
@@ -264,7 +259,6 @@ export const TASK_SELECT_COLUMNS = [
   'patient_email',
   'title',
   'description',
-  'icon',
   'color',
   'completed',
   'is_daily_reminder',
@@ -1407,7 +1401,7 @@ export async function fetchTasksWithSchemaFallback(params: {
   requestId?: string | null;
   logger?: LoggerLike;
 }) {
-  return fetchListWithColumnFallback({
+  const result = await fetchListWithColumnFallback({
     supabase: params.supabase,
     route: params.route || '/api/tasks/:patientId',
     table: 'tasks',
@@ -1441,6 +1435,11 @@ export async function fetchTasksWithSchemaFallback(params: {
       return query.limit(params.limit);
     }
   });
+
+  return {
+    ...result,
+    data: Array.isArray(result.data) ? result.data.map(normalizeTaskRowForUi) : result.data
+  };
 }
 
 export async function fetchAssignedTasksWithSchemaFallback(params: {
@@ -1716,6 +1715,43 @@ function noteIsReadableWithoutVisibility(note: any): boolean {
     ['patient', 'shared', 'family', 'shared_patient'].includes(cleanString(metadata?.visibility, 40).toLowerCase());
 }
 
+function normalizeNoteRowForUi(row: any): any {
+  if (!row || typeof row !== 'object') return row;
+  const type = cleanString(row.type, 80);
+  const scope = cleanString(row.portability_scope, 80);
+  const visibility =
+    row.shared_with_patient === true || ['patient', 'shared', 'family', 'shared_patient'].includes(type.toLowerCase())
+      ? 'shared_patient'
+      : row.shared_with_professionals === true
+        ? 'shared_clinic'
+        : row.is_portable === true && scope
+          ? scope
+          : 'private';
+
+  return {
+    ...row,
+    note: row.note ?? row.content ?? row.subject ?? '',
+    text: row.text ?? row.content ?? row.note ?? '',
+    created_by: row.created_by ?? row.original_author_id ?? null,
+    createdBy: row.createdBy ?? row.created_by ?? row.original_author_id ?? null,
+    updated_at: row.updated_at ?? row.created_at ?? null,
+    updatedAt: row.updatedAt ?? row.updated_at ?? row.created_at ?? null,
+    visibility: row.visibility ?? visibility
+  };
+}
+
+function normalizeTaskRowForUi(row: any): any {
+  if (!row || typeof row !== 'object') return row;
+  return {
+    ...row,
+    type: row.type ?? 'task',
+    icon: row.icon ?? '📋',
+    color: row.color ?? 'bg-blue-100 text-blue-600',
+    updated_at: row.updated_at ?? row.created_at ?? null,
+    updatedAt: row.updatedAt ?? row.updated_at ?? row.created_at ?? null
+  };
+}
+
 export async function fetchNotesWithSchemaFallback(params: {
   supabase: SupabaseLike;
   patientId?: string | null;
@@ -1733,6 +1769,20 @@ export async function fetchNotesWithSchemaFallback(params: {
   const patientEmail = cleanString(params.patientEmail, 320).toLowerCase();
   const patientIds = Array.from(new Set((params.patientIds || []).map((id) => cleanString(id, 120)).filter(Boolean)));
   const excludePatientId = cleanString(params.excludePatientId, 120);
+  if (!patientId && !patientEmail && patientIds.length === 0) {
+    params.logger?.warn?.('[PatientNotes] skipped: missing patientId', {
+      route,
+      patientId: null,
+      requestId: cleanString(params.requestId, 160) || null
+    });
+    return {
+      data: [],
+      error: null,
+      select: NOTE_SELECT,
+      removedColumns: new Set<string>(),
+      stage: 'fallback_empty'
+    };
+  }
 
   const runStage = async (stage: 'primary_select' | 'legacy_select', baseColumns: string[]) => {
     let columns = [...baseColumns];
@@ -1761,7 +1811,7 @@ export async function fetchNotesWithSchemaFallback(params: {
       const result = await query.limit(params.limit);
 
       if (!result.error) {
-        const rows = Array.isArray(result.data) ? result.data : [];
+        const rows = (Array.isArray(result.data) ? result.data : []).map(normalizeNoteRowForUi);
         return {
           data: shouldFilterPatientReadableNotes
             ? rows.filter(noteIsReadableWithoutVisibility)

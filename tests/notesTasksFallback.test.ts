@@ -101,7 +101,10 @@ test('/api/tasks retorna 200-equivalente com schema atual e respeita limit', asy
   });
 
   assert.equal(result.error, null);
-  assert.deepEqual(result.data, [{ id: 'task-1', patient_id: 'patient-1' }]);
+  assert.equal(result.data?.[0]?.id, 'task-1');
+  assert.equal(result.data?.[0]?.patient_id, 'patient-1');
+  assert.equal(result.data?.[0]?.type, 'task');
+  assert.equal(result.data?.[0]?.icon, '📋');
   assert.equal(supabase.calls[0].selectColumns, TASK_SELECT);
   assert.equal(supabase.calls[0].filters.some((item) => item.op === 'limit' && item.value === 7), true);
 });
@@ -218,7 +221,10 @@ test('/api/notes retorna 200-equivalente com schema atual e respeita limit', asy
   });
 
   assert.equal(result.error, null);
-  assert.deepEqual(result.data, [{ id: 'note-1', patient_id: 'patient-1' }]);
+  assert.equal(result.data?.[0]?.id, 'note-1');
+  assert.equal(result.data?.[0]?.patient_id, 'patient-1');
+  assert.equal(result.data?.[0]?.note, '');
+  assert.equal(result.data?.[0]?.visibility, 'private');
   assert.equal(supabase.calls[0].selectColumns, NOTE_SELECT);
   assert.equal(supabase.calls[0].filters.some((item) => item.op === 'limit' && item.value === 9), true);
 });
@@ -297,6 +303,12 @@ test('notes/tasks nao usam select amplo operacional', () => {
   assert.doesNotMatch(fallbackCode, /select\(['"]\*['"]\)/);
   assert.doesNotMatch(TASK_SELECT, /\*/);
   assert.doesNotMatch(NOTE_SELECT, /\*/);
+  assert.doesNotMatch(NOTE_SELECT, /(?:^|,)note(?:,|$)/);
+  assert.doesNotMatch(NOTE_SELECT, /created_by/);
+  assert.doesNotMatch(NOTE_SELECT, /updated_at/);
+  assert.doesNotMatch(NOTE_SELECT, /visibility/);
+  assert.doesNotMatch(TASK_SELECT, /(?:^|,)icon(?:,|$)/);
+  assert.doesNotMatch(TASK_SELECT, /(?:^|,)type(?:,|$)/);
   assert.match(taskDeleteCode, /softDeletePatch/);
   assert.match(taskDeleteCode, /\.from\('tasks'\)[\s\S]*?\.update\(softDeletePatch\)/m);
   assert.match(taskDeleteCode, /softDeleted: true/);
