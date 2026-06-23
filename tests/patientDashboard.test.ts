@@ -74,8 +74,12 @@ test('notificacoes Kids priorizam nome e logo da clinica resolvida', () => {
   assert.match(notificationSummary, /<span className="font-black text-slate-950">\{clinicName\}<\/span> \{message\}/);
   const appointmentModal = between('const portalAppointmentDetailModal =', 'const portalActionModal =');
   const activeClinicName = between('const activePortalClinicName =', 'const activePortalClinicLogoUrl');
+  const confirmPortalAppointment = between('const confirmPortalAppointment =', 'const submitPortalAction =');
   assert.match(activeClinicName, /getPortalClinicNameExclusions/);
   assert.ok(activeClinicName.lastIndexOf('portalContext?.clinicName') < activeClinicName.lastIndexOf('activePortalAppointment?.clinicName'));
+  assert.match(confirmPortalAppointment, /result\?\.item \|\| result\?\.appointment/);
+  assert.match(appointmentModal, /Presença confirmada/);
+  assert.match(appointmentModal, /A clínica já recebeu sua confirmação desta consulta/);
   assert.doesNotMatch(appointmentModal, />Status</);
   assert.doesNotMatch(appointmentModal, />Local</);
   assert.doesNotMatch(appointmentModal, />Profissional</);

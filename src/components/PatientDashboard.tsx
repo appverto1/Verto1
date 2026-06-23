@@ -627,8 +627,9 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       setPortalAppointmentsState((prev) => ({ ...prev, error: result?.error || 'Não foi possível confirmar a consulta agora.' }));
       return;
     }
-    updatePortalAppointmentInList(result.appointment);
-    setPortalAppointmentsState((prev) => ({ ...prev, error: '', message: 'Consulta confirmada.' }));
+    const confirmedAppointment = result?.item || result?.appointment;
+    if (confirmedAppointment) updatePortalAppointmentInList(confirmedAppointment);
+    setPortalAppointmentsState((prev) => ({ ...prev, error: '', message: result?.message || 'Consulta confirmada com sucesso.' }));
   };
 
   const submitPortalAction = async () => {
@@ -653,7 +654,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       setPortalAppointmentsState((prev) => ({ ...prev, error: result?.error || 'Não foi possível concluir a ação agora.' }));
       return;
     }
-    if (result.appointment) updatePortalAppointmentInList(result.appointment);
+    const resultAppointment = result?.item || result?.appointment;
+    if (resultAppointment) updatePortalAppointmentInList(resultAppointment);
     setPortalModal('');
     setPortalActionForm({ reason: '', note: '', requestedStart: '', accepted: false });
     setPortalAppointmentsState((prev) => ({
@@ -2657,6 +2659,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   };
   const activePortalAppointment = portalAppointmentDetail?.appointment || selectedPortalAppointment;
   const activePortalStatus = String(activePortalAppointment?.status || '').toUpperCase();
+  const activePortalConfirmationStatus = String(activePortalAppointment?.patientConfirmationStatus || activePortalAppointment?.patient_confirmation_status || '').toUpperCase();
+  const activePortalConfirmed = activePortalStatus.includes('CONFIRM') || activePortalConfirmationStatus.includes('CONFIRM');
   const activePortalProfessionalName = firstPortalText(
     activePortalAppointment?.professionalName,
     activePortalAppointment?.professional_name,
@@ -2705,8 +2709,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           <ChevronLeft size={18} />
         </button>
         <div className="text-center">
-          <p className="text-sm font-black capitalize text-slate-900">{portalCalendarMonthLabel}</p>
-          <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Próximos agendamentos do paciente</p>
+          <p className="text-sm font-semibold capitalize text-slate-900">{portalCalendarMonthLabel}</p>
+          <p className="text-[10px] font-medium uppercase tracking-wider text-slate-400">Próximos agendamentos do paciente</p>
         </div>
         <button type="button" onClick={() => changePortalCalendarMonth(1)} className="rounded-2xl p-2 text-slate-600 transition hover:bg-purple-50" aria-label="Próximo mês">
           <ChevronRight size={18} />
@@ -2727,7 +2731,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         </div>
       ) : (
         <div className="space-y-4">
-          <div className="grid grid-cols-7 gap-y-3 text-center text-[10px] font-bold uppercase tracking-[0.2em] text-slate-400">
+          <div className="grid grid-cols-7 gap-y-3 text-center text-[10px] font-medium uppercase tracking-[0.2em] text-slate-400">
             {portalMiniCalendarWeekdays.map((day, index) => <div key={`${day}-${index}`}>{day}</div>)}
           </div>
           <div className="grid grid-cols-7 gap-y-2 text-center">
@@ -2741,7 +2745,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                     type="button"
                     onClick={() => handlePortalCalendarDayClick(cell)}
                     disabled={cell.appointments.length === 0}
-                    className={`relative flex h-9 w-9 items-center justify-center rounded-full text-sm font-black transition focus:outline-none focus:ring-2 focus:ring-[#7a32fc]/40 disabled:cursor-default ${
+                    className={`relative flex h-9 w-9 items-center justify-center rounded-full text-sm font-semibold transition focus:outline-none focus:ring-2 focus:ring-[#7a32fc]/40 disabled:cursor-default ${
                       selectedPortalCalendarDateKey === cell.dateKey
                         ? 'bg-[#7a32fc] text-white shadow-lg shadow-purple-500/30'
                         : cell.dateKey === toLocalDateKey(new Date())
@@ -2763,7 +2767,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           </div>
           {selectedPortalCalendarDateKey && selectedPortalCalendarAppointments.length > 1 && (
             <div className="rounded-3xl border border-purple-100 bg-purple-50/60 p-3">
-              <p className="mb-2 text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">Consultas de {selectedPortalCalendarLabel}</p>
+              <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-400">Consultas de {selectedPortalCalendarLabel}</p>
               <div className="space-y-2">
                 {selectedPortalCalendarAppointments.map((appointment: any) => (
                   <button
@@ -2773,7 +2777,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                     className="flex w-full items-center justify-between gap-3 rounded-2xl bg-white px-3 py-2 text-left shadow-sm transition hover:bg-purple-50"
                   >
                     <span className="min-w-0">
-                      <span className="block text-sm font-black text-slate-900">{formatPortalTime(appointment.scheduledAt)}</span>
+                      <span className="block text-sm font-semibold text-slate-900">{formatPortalTime(appointment.scheduledAt)}</span>
                       <span className="block truncate text-xs font-semibold text-slate-500">{appointment.serviceType || 'Consulta'}</span>
                     </span>
                     <span className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-bold ${getPortalStatusPillClass(appointment.status)}`}>
@@ -2819,9 +2823,20 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
             <p className="mt-1 text-xs font-medium text-amber-700">Confirme a realização da sessão dentro do app.</p>
           </div>
         )}
+        {activePortalConfirmed && (
+          <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+            <p className="text-sm font-black text-emerald-800">Presença confirmada</p>
+            <p className="mt-1 text-xs font-medium text-emerald-700">A clínica já recebeu sua confirmação desta consulta.</p>
+          </div>
+        )}
+        {portalAppointmentsState.message && (
+          <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">
+            {portalAppointmentsState.message}
+          </div>
+        )}
         <div className="mt-4 grid gap-2">
-          <button type="button" disabled={portalActionSaving || portalActionBlocked} onClick={() => void confirmPortalAppointment(activePortalAppointment)} className="flex items-center justify-center gap-2 rounded-2xl bg-[#7a32fc] px-4 py-3 text-sm font-black text-white disabled:opacity-50">
-            <CheckCircle size={17} /> Confirmar presença
+          <button type="button" disabled={portalActionSaving || portalActionBlocked || activePortalConfirmed} onClick={() => void confirmPortalAppointment(activePortalAppointment)} className="flex items-center justify-center gap-2 rounded-2xl bg-[#7a32fc] px-4 py-3 text-sm font-black text-white disabled:opacity-50">
+            <CheckCircle size={17} /> {activePortalConfirmed ? 'Presença confirmada' : 'Confirmar presença'}
           </button>
           <button type="button" disabled={portalActionBlocked} onClick={() => setPortalModal('reschedule')} className="flex items-center justify-center gap-2 rounded-2xl border border-purple-100 bg-white px-4 py-3 text-sm font-black text-[#7a32fc] disabled:opacity-50">
             <RefreshCcw size={17} /> Solicitar remarcação

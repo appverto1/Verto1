@@ -100,6 +100,7 @@ export const getAppointmentStatusColor = (status: any) => {
       dot: 'bg-slate-400',
       badge: 'border-slate-200 bg-slate-100 text-slate-600',
       soft: 'border-slate-200 bg-white text-slate-800',
+      shadow: 'shadow-[0_10px_26px_rgba(100,116,139,0.12)]',
       text: 'text-slate-600',
       icon: Clock
     },
@@ -108,6 +109,7 @@ export const getAppointmentStatusColor = (status: any) => {
       dot: 'bg-sky-400',
       badge: 'border-sky-200 bg-sky-50 text-sky-700',
       soft: 'border-sky-100 bg-sky-50/70 text-sky-950',
+      shadow: 'shadow-[0_10px_30px_rgba(14,165,233,0.20)]',
       text: 'text-sky-700',
       icon: Clock
     },
@@ -116,6 +118,7 @@ export const getAppointmentStatusColor = (status: any) => {
       dot: 'bg-emerald-500',
       badge: 'border-emerald-200 bg-emerald-50 text-emerald-700',
       soft: 'border-emerald-100 bg-emerald-50/70 text-emerald-950',
+      shadow: 'shadow-[0_12px_34px_rgba(16,185,129,0.28)]',
       text: 'text-emerald-700',
       icon: CheckCircle2
     },
@@ -124,6 +127,7 @@ export const getAppointmentStatusColor = (status: any) => {
       dot: 'bg-amber-500',
       badge: 'border-amber-200 bg-amber-50 text-amber-700',
       soft: 'border-amber-100 bg-amber-50/70 text-amber-950',
+      shadow: 'shadow-[0_12px_34px_rgba(245,158,11,0.24)]',
       text: 'text-amber-700',
       icon: RefreshCcw
     },
@@ -132,6 +136,7 @@ export const getAppointmentStatusColor = (status: any) => {
       dot: 'bg-orange-500',
       badge: 'border-orange-200 bg-orange-50 text-orange-700',
       soft: 'border-orange-100 bg-orange-50/70 text-orange-950',
+      shadow: 'shadow-[0_12px_34px_rgba(249,115,22,0.24)]',
       text: 'text-orange-700',
       icon: RefreshCcw
     },
@@ -140,6 +145,7 @@ export const getAppointmentStatusColor = (status: any) => {
       dot: 'bg-rose-500',
       badge: 'border-rose-200 bg-rose-50 text-rose-700',
       soft: 'border-rose-100 bg-rose-50/70 text-rose-950',
+      shadow: 'shadow-[0_12px_34px_rgba(244,63,94,0.24)]',
       text: 'text-rose-700',
       icon: Ban
     },
@@ -148,6 +154,7 @@ export const getAppointmentStatusColor = (status: any) => {
       dot: 'bg-red-500',
       badge: 'border-red-200 bg-red-50 text-red-700',
       soft: 'border-red-100 bg-red-50/70 text-red-950',
+      shadow: 'shadow-[0_12px_34px_rgba(239,68,68,0.24)]',
       text: 'text-red-700',
       icon: Ban
     },
@@ -156,6 +163,7 @@ export const getAppointmentStatusColor = (status: any) => {
       dot: 'bg-violet-500',
       badge: 'border-violet-200 bg-violet-50 text-violet-700',
       soft: 'border-violet-100 bg-violet-50/70 text-violet-950',
+      shadow: 'shadow-[0_12px_34px_rgba(122,50,252,0.24)]',
       text: 'text-violet-700',
       icon: Play
     },
@@ -164,6 +172,7 @@ export const getAppointmentStatusColor = (status: any) => {
       dot: 'bg-emerald-600',
       badge: 'border-emerald-200 bg-emerald-50 text-emerald-700',
       soft: 'border-emerald-100 bg-emerald-50/60 text-emerald-950',
+      shadow: 'shadow-[0_12px_34px_rgba(5,150,105,0.24)]',
       text: 'text-emerald-700',
       icon: CheckCircle2
     },
@@ -172,6 +181,7 @@ export const getAppointmentStatusColor = (status: any) => {
       dot: 'bg-pink-500',
       badge: 'border-pink-200 bg-pink-50 text-pink-700',
       soft: 'border-pink-100 bg-pink-50/70 text-pink-950',
+      shadow: 'shadow-[0_12px_34px_rgba(236,72,153,0.22)]',
       text: 'text-pink-700',
       icon: AlertCircle
     }
@@ -703,6 +713,18 @@ const hydrateCalendarEventsByKnownPatientNames = (events: any[]) => {
   });
 };
 
+const mergeAppointmentStatusForRender = (serverEvent: any, localEvent: any) => {
+  const serverStatus = serverEvent?.status || serverEvent?.appointment_status;
+  const localStatus = localEvent?.status || localEvent?.appointment_status;
+  const isResolvedStatus = (status: any) => {
+    const canonical = canonicalAppointmentStatus(status);
+    return canonical !== 'SCHEDULED' && canonical !== 'PENDING_CONFIRMATION';
+  };
+  if (isResolvedStatus(serverStatus)) return serverStatus;
+  if (isResolvedStatus(localStatus)) return localStatus;
+  return localStatus || serverStatus || 'scheduled';
+};
+
 const mergeCalendarEventForRender = (serverEvent: any, localEvent: any) => {
   if (!serverEvent) return localEvent;
   if (!localEvent) return serverEvent;
@@ -717,6 +739,14 @@ const mergeCalendarEventForRender = (serverEvent: any, localEvent: any) => {
   return {
     ...serverEvent,
     ...localEvent,
+    status: mergeAppointmentStatusForRender(serverEvent, localEvent),
+    appointment_status: mergeAppointmentStatusForRender(serverEvent, localEvent),
+    patient_response: serverEvent?.patient_response || localEvent?.patient_response || null,
+    patientResponse: serverEvent?.patientResponse || localEvent?.patientResponse || null,
+    patient_confirmation_status: serverEvent?.patient_confirmation_status || localEvent?.patient_confirmation_status || null,
+    patientConfirmationStatus: serverEvent?.patientConfirmationStatus || localEvent?.patientConfirmationStatus || null,
+    patient_confirmation_at: serverEvent?.patient_confirmation_at || localEvent?.patient_confirmation_at || null,
+    patientConfirmationAt: serverEvent?.patientConfirmationAt || localEvent?.patientConfirmationAt || null,
     patientName,
     patient_name: patientName,
     name: patientName,
@@ -1923,9 +1953,8 @@ export const ClinicalAgendaBoard = ({
           clickEvent.stopPropagation();
           openEventDetail(event);
         }}
-        className={`group relative w-full overflow-hidden rounded-xl border p-2 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md ${statusColor.soft}`}
+        className={`group relative w-full overflow-hidden rounded-xl border p-2 text-left transition-all hover:-translate-y-0.5 hover:shadow-md ${statusColor.soft} ${statusColor.shadow}`}
       >
-        <span className={`absolute inset-y-0 left-0 w-1 ${statusColor.dot}`} />
         <div className="pl-1">
           <div className="flex items-start justify-between gap-2">
             <span className="text-[10px] font-semibold leading-tight opacity-75">
@@ -2125,9 +2154,8 @@ export const ClinicalAgendaBoard = ({
                           clickEvent.stopPropagation();
                           openEventDetail(event);
                         }}
-                        className={`flex w-full items-center gap-1 rounded-md px-1 py-0.5 text-left text-[10px] font-semibold leading-tight transition-colors ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-white'}`}
+                        className={`flex w-full items-center gap-1 rounded-md px-1 py-0.5 text-left text-[10px] font-semibold leading-tight transition-colors ${statusColor.shadow} ${isDark ? 'bg-slate-900/70 text-slate-200 hover:bg-slate-800' : 'bg-white/95 text-slate-700 hover:bg-white'}`}
                       >
-                        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${statusColor.dot}`} />
                         <span className="shrink-0 tabular-nums">{event.time}</span>
                         <span className="min-w-0 truncate">{event.patientName}</span>
                       </button>
@@ -2161,6 +2189,10 @@ export const ClinicalAgendaBoard = ({
     ...(detail.event || {}),
     ...(detail.closure || {})
   });
+  const detailStatusColor = getAppointmentStatusColor(detailEvent.status);
+  const detailAppointmentConfirmed =
+    detailStatusColor.canonical === 'CONFIRMED' ||
+    canonicalAppointmentStatus(detailEvent.patientConfirmationStatus || detailEvent.patient_confirmation_status) === 'CONFIRMED';
   const planItems = Array.isArray(detail.nextSessionPlanItems) ? detail.nextSessionPlanItems : [];
   const maintenanceProbes = [
     ...(Array.isArray(detail.maintenanceProbes) ? detail.maintenanceProbes : []),
@@ -2380,11 +2412,10 @@ export const ClinicalAgendaBoard = ({
                 {selectedDayPanelEvents.map((event: any) => {
                   const statusColor = getAppointmentStatusColor(event.status);
                   return (
-                    <div key={event.id} className={`rounded-2xl border p-3 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-100 bg-slate-50/70'}`}>
+                    <div key={event.id} className={`rounded-2xl border p-3 ${statusColor.shadow} ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-100 bg-slate-50/70'}`}>
                       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                         <div className="min-w-0">
                           <div className="flex flex-wrap items-center gap-2">
-                            <span className={`h-2.5 w-2.5 rounded-full ${statusColor.dot}`} />
                             <span className="text-sm font-bold tabular-nums">{event.time} - {event.endTime}</span>
                             <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${statusColor.badge}`}>{getAppointmentStatusLabel(event.status)}</span>
                           </div>
@@ -2694,15 +2725,15 @@ export const ClinicalAgendaBoard = ({
 
       {selectedEvent && (
         <div className="fixed inset-0 z-[140] flex items-end justify-center bg-black/40 p-0 backdrop-blur-sm sm:items-center sm:p-4" onClick={() => setSelectedEvent(null)}>
-          <div className={`max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-t-[28px] p-5 pb-[calc(env(safe-area-inset-bottom)+1.5rem)] shadow-2xl sm:rounded-[28px] sm:p-6 ${isDark ? 'bg-[#101827] text-slate-100' : 'bg-white text-slate-900'}`} onClick={(event) => event.stopPropagation()}>
+          <div className={`max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-t-[28px] p-5 pb-[calc(env(safe-area-inset-bottom)+1.5rem)] shadow-2xl sm:rounded-[28px] sm:p-6 ${detailStatusColor.shadow} ${isDark ? 'bg-[#101827] text-slate-100' : 'bg-white text-slate-900'}`} onClick={(event) => event.stopPropagation()}>
             <div className="flex items-start justify-between gap-4">
               <div>
                 <div className="mb-2 flex flex-wrap items-center gap-2">
                   <span className={`rounded-full border px-3 py-1 text-[10px] font-bold uppercase ${getSessionTypeStyle(detailEvent.type).badge}`}>
                     {detailEvent.type}
                   </span>
-                  <span className={`rounded-full border px-3 py-1 text-[10px] font-bold uppercase ${getClinicalStatusStyle(detailEvent.status, detailEvent).className}`}>
-                    {getClinicalStatusStyle(detailEvent.status, detailEvent).label}
+                  <span className={`rounded-full border px-3 py-1 text-[10px] font-bold uppercase ${detailStatusColor.badge}`}>
+                    {getAppointmentStatusLabel(detailEvent.status)}
                   </span>
                 </div>
                 <h3 className="text-xl font-bold">{detailEvent.patientName}</h3>
@@ -2729,6 +2760,11 @@ export const ClinicalAgendaBoard = ({
             {detailState.error && (
               <div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
                 {detailState.error}
+              </div>
+            )}
+            {detailAppointmentConfirmed && (
+              <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">
+                Consulta confirmada pelo responsável.
               </div>
             )}
 
