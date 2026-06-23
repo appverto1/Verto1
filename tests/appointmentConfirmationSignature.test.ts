@@ -64,9 +64,9 @@ test('closure reads responsible signatures and action states affect readiness', 
   assert.match(readFileSync(join(root, 'src/services/closureReadinessEngine.ts'), 'utf8'), /cancel_requested/);
 });
 
-test('notifications expose app-opening actions without writing responses in the service worker', () => {
-  assert.match(serviceWorkerCode, /actions/);
-  assert.match(serviceWorkerCode, /notification_action/);
+test('notifications open app without native browser action buttons', () => {
+  assert.doesNotMatch(serviceWorkerCode, /actions/);
+  assert.doesNotMatch(serviceWorkerCode, /notification_action/);
   assert.doesNotMatch(serviceWorkerCode, /persistAppointmentResponse/);
   assert.doesNotMatch(serviceWorkerCode, /\/api\/notifications\/appointments\/.*\/respond/);
   assert.match(serviceWorkerCode, /focusOrOpen\(targetUrl\)/);

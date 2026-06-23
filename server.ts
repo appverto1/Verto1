@@ -29276,6 +29276,29 @@ async function startServer() {
       userId,
       clinicId
     });
+    const appendLinkedPatientIds = async (column: 'responsible_user_id' | 'responsible_email', value: string) => {
+      if (!value) return;
+      let query = supabase
+        .from('patients')
+        .select('id')
+        .eq(column, value)
+        .eq('is_active', true)
+        .is('deleted_at', null)
+        .limit(50);
+      if (isUuid(clinicId)) query = query.eq('clinic_id', clinicId);
+      const { data, error } = await query;
+      if (error) {
+        const missingColumn = extractMissingColumnName(error);
+        if (missingColumn === column) return;
+        throw error;
+      }
+      (Array.isArray(data) ? data : []).forEach((row: any) => {
+        const id = sanitizeString(row?.id, 120);
+        if (isUuid(id)) ids.push(id);
+      });
+    };
+    if (isUuid(userId)) await appendLinkedPatientIds('responsible_user_id', userId);
+    if (userEmail) await appendLinkedPatientIds('responsible_email', userEmail);
     if (isUuid(userId)) {
       const direct = await supabase
         .from('patients')
@@ -29338,10 +29361,11 @@ async function startServer() {
 
       let query = supabase
         .from('portal_notifications')
-        .select('id, patient_id, appointment_id, type, title, message, read_at, acknowledged_at, sent_at, scheduled_for, created_at, metadata')
+        .select('id, organization_id, clinic_id, patient_id, appointment_id, type, title, message, read_at, acknowledged_at, sent_at, scheduled_for, created_at, metadata')
         .in('patient_id', patientIds)
+        .is('acknowledged_at', null)
         .order('created_at', { ascending: false })
-        .limit(limit + 1);
+        .limit(Math.min(200, limit * 4 + 1));
       if (isUuid(userId) && userEmail) {
         query = query.or(`recipient_user_id.eq.${userId},recipient_email.eq.${userEmail}`);
       } else if (isUuid(userId)) {
@@ -29358,10 +29382,27 @@ async function startServer() {
         throw error;
       }
       const rows = Array.isArray(data) ? data : [];
+      const dedupedRowsByAppointment = new Map<string, any>();
+      for (const row of rows) {
+        const appointmentId = sanitizeString(row?.appointment_id, 120);
+        const patientId = sanitizeString(row?.patient_id, 120);
+        const type = sanitizeString(row?.type, 80).replace(/_(24h|12h)$/i, '');
+        const groupKey = appointmentId
+          ? [
+              sanitizeString(row?.clinic_id || row?.organization_id, 120),
+              patientId,
+              appointmentId,
+              type || 'appointment_reminder'
+            ].join(':')
+          : sanitizeString(row?.id, 120);
+        if (!groupKey || dedupedRowsByAppointment.has(groupKey)) continue;
+        dedupedRowsByAppointment.set(groupKey, row);
+      }
+      const dedupedRows = Array.from(dedupedRowsByAppointment.values());
       return res.json({
         success: true,
-        data: rows.slice(0, limit),
-        pagination: { limit, hasMore: rows.length > limit }
+        data: dedupedRows.slice(0, limit),
+        pagination: { limit, hasMore: dedupedRows.length > limit || rows.length > limit * 4 }
       });
     } catch (error: any) {
       return sendRouteDbError(res, '/api/portal/notifications [GET]', error, {

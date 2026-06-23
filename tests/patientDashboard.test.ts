@@ -50,7 +50,10 @@ test('menu Kids usa hamburger sem remover atalhos clinicos da home', () => {
   assert.match(patientDashboardCode, /\.\.\.\(!isKidsProfile \? \[\{ id: 'tasks', label: 'Tarefas'/);
   assert.match(patientDashboardCode, /{!isKidsProfile && \(\s*<div className="mb-6 grid gap-3 sm:grid-cols-2">[\s\S]*setPortalSection\('tasks'\)/);
   const homeSummary = between('const portalAnamnesisTopNotice =', 'const renderPortalAnamnesisField');
-  assert.doesNotMatch(homeSummary, /setPortalSection\('appointments'\)|Pr.xima consulta|Abrir agenda/);
+  assert.match(homeSummary, /portalKidsAppointmentsSummary/);
+  assert.match(homeSummary, /setPortalSection\('appointments'\)/);
+  assert.match(homeSummary, /Pr.ximas consultas/);
+  assert.doesNotMatch(homeSummary, /Abrir agenda/);
 });
 
 test('persistencia visual Kids continua baseada em dados existentes e nao mocks', () => {

@@ -634,7 +634,7 @@ async function persistPortalReminder(params: {
   if (!recipientUserId && !recipientEmail) return false;
 
   const recipientKey = recipientUserId || recipientEmail;
-  const idempotencyKey = `${params.appointment.appointmentId}:${params.kind}:${recipientKey}`;
+  const idempotencyKey = `${params.appointment.appointmentId}:appointment:${recipientKey}`;
   const sentAt = dayjs().utc().toISOString();
   const { error } = await params.options.supabase
     .from('portal_notifications')
@@ -649,7 +649,7 @@ async function persistPortalReminder(params: {
       recipient_email: recipientEmail,
       patient_id: patient.id,
       appointment_id: isUuid(params.appointment.appointmentId) ? params.appointment.appointmentId : null,
-      type: `appointment_reminder_${params.kind}`,
+      type: 'appointment_reminder',
       title: params.title,
       message: params.body,
       sent_at: sentAt,
@@ -657,7 +657,10 @@ async function persistPortalReminder(params: {
       idempotency_key: idempotencyKey,
       metadata: {
         reminderKind: params.kind,
-        scheduledAt: params.appointment.scheduledAt
+        scheduledAt: params.appointment.scheduledAt,
+        clinicName: params.appointment.clinicName || null,
+        clinicLogoUrl: params.appointment.clinicLogoUrl || null,
+        patientName: params.appointment.patientName || null
       }
     }, { onConflict: 'idempotency_key' });
 

@@ -211,11 +211,11 @@ export function buildPatientReminderNotificationPayload(input: ReminderPayloadIn
   const whenText = buildWhenText(input);
   const patientName = sanitizeText(input.patientName, 160);
   const body = patientName
-    ? `Lembrete de consulta de ${patientName}${whenText ? ` ${whenText}` : ""}. Toque para confirmar, remarcar ou cancelar.`
-    : `Você tem uma consulta agendada${whenText ? ` ${whenText}` : ""}. Toque para confirmar, remarcar ou cancelar.`;
+    ? `Consulta agendada para ${patientName}${whenText ? ` ${whenText}` : ""}. Abra o painel para confirmar ou remarcar.`
+    : `Você tem uma consulta agendada${whenText ? ` ${whenText}` : ""}. Abra o painel para confirmar ou remarcar.`;
   const fallbackUrl = appointmentId ? `/?appointment_id=${encodeURIComponent(appointmentId)}` : "/";
   const url = sanitizeText(input.url, 2000) || fallbackUrl;
-  const icon = input.branding.logoUrl || DEFAULT_VERTO_LOGO;
+  const icon = DEFAULT_VERTO_LOGO;
   return {
     title: input.branding.displayName,
     body,
@@ -238,11 +238,6 @@ export function buildPatientReminderNotificationPayload(input: ReminderPayloadIn
       brandLogoUrl: input.branding.logoUrl,
       brandSourceType: input.branding.sourceType,
     },
-    actions: [
-      { action: "open-confirm", title: "Confirmar presença" },
-      { action: "open-reschedule", title: "Remarcar consulta" },
-      { action: "open-cancel", title: "Cancelar agendamento" },
-    ],
   };
 }
 

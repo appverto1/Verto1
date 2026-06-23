@@ -56,14 +56,16 @@ test('cada item novo abre painel proprio e Inicio preserva a home', () => {
   assert.match(patientDashboardCode, /portalSection === 'reports' && portalReportPanel/);
 });
 
-test('home mostra aviso de anamnese apenas enquanto ficha esta pendente e nao mostra card de calendario', () => {
+test('home Kids mostra agenda visivel sem esconder consultas agendadas', () => {
   const homeSummary = between(patientDashboardCode, 'const portalAnamnesisTopNotice =', 'const renderPortalAnamnesisField');
   assert.match(homeSummary, /portalAnamnesisNeedsAction/);
   assert.match(homeSummary, /hasPendingPortalAnamnesisHint/);
   assert.match(homeSummary, /setPortalSection\('anamnesis'\)/);
   assert.match(homeSummary, /Preencher/);
-  assert.doesNotMatch(homeSummary, /setPortalSection\('appointments'\)/);
-  assert.doesNotMatch(homeSummary, /Pr.xima consulta|Abrir agenda/);
+  assert.match(homeSummary, /portalKidsAppointmentsSummary/);
+  assert.match(homeSummary, /Pr.ximas consultas/);
+  assert.match(homeSummary, /setPortalSection\('appointments'\)/);
+  assert.match(homeSummary, /Nenhuma consulta agendada\. Quando a cl.nica agendar uma consulta, ela aparecer. aqui\./);
 });
 
 test('anotacoes e documentos sao filtrados para familia sem expor conteudo interno', () => {
@@ -81,10 +83,11 @@ test('anotacoes e documentos sao filtrados para familia sem expor conteudo inter
   assert.doesNotMatch(patientDashboardCode, /dangerouslySetInnerHTML/);
 });
 
-test('calendario e relatorio carregam sob demanda e nao na home Kids', () => {
-  assert.match(patientDashboardCode, /\['appointments', 'reports'\]\.includes\(portalSection\)/);
+test('calendario carrega na home Kids e relatorio continua sob demanda', () => {
+  assert.match(patientDashboardCode, /portalSection === 'home' && isKidsProfile/);
   assert.match(patientDashboardCode, /portalAppointmentsLoaded/);
   assert.match(patientDashboardCode, /getPortalCalendarMonthRange\(portalCalendarMonth\)/);
+  assert.match(patientDashboardCode, /getPortalDefaultAppointmentsRange\(\)/);
   assert.match(patientDashboardCode, /portalAppointmentsRangeKey/);
   assert.match(patientDashboardCode, /portalCalendarCells/);
   assert.match(patientDashboardCode, /Agenda mensal da cl.nica/);
@@ -107,6 +110,25 @@ test('endpoint do calendario do portal segue escopo e select explicito', () => {
   assert.match(route, /const rowsById = new Map<string, any>\(\)/);
   assert.match(route, /buildCalendarAppointmentStart\(a\)\.getTime\(\) - buildCalendarAppointmentStart\(b\)\.getTime\(\)/);
   assert.match(route, /visibleRows\.map\(\(row\) => serializePortalAppointmentForFamilyView\(row\)\)/);
+});
+
+test('portal resolve paciente Kids tambem pelo responsavel vinculado', () => {
+  const resolver = serverSlice('const getPortalPatientIdsForUser = async', 2200);
+  assert.match(resolver, /responsible_user_id/);
+  assert.match(resolver, /responsible_email/);
+  assert.match(resolver, /appendLinkedPatientIds/);
+  assert.match(resolver, /\.eq\('is_active', true\)/);
+  assert.match(resolver, /\.is\('deleted_at', null\)/);
+});
+
+test('notificacoes do portal sao deduplicadas por consulta pendente', () => {
+  const notificationsRoute = serverSlice("app.get('/api/portal/notifications'", 3600);
+  assert.match(notificationsRoute, /\.is\('acknowledged_at', null\)/);
+  assert.match(notificationsRoute, /dedupedRowsByAppointment/);
+  assert.match(notificationsRoute, /appointment_id/);
+  assert.match(patientDashboardCode, /dedupePortalNotifications/);
+  assert.match(patientDashboardCode, /openPortalNotification/);
+  assert.doesNotMatch(patientDashboardCode, /<Bell size=\{15\}/);
 });
 
 test('serializacao do portal nao envia dados financeiros ou identificadores tecnicos como campos visiveis', () => {

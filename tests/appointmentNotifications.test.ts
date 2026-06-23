@@ -14,11 +14,16 @@ assert.match(migration, /create unique index if not exists portal_notifications_
 assert.match(migration, /recipient_user_id = auth\.uid\(\)/);
 assert.match(migration, /revoke insert, delete, update on table public\.portal_notifications from anon, authenticated/);
 assert.match(migration, /grant update \(read_at, acknowledged_at, updated_at\)/);
-assert.match(cron, /appointmentId\}:\$\{params\.kind\}:\$\{recipientKey\}/);
+assert.match(cron, /appointmentId\}:appointment:\$\{recipientKey\}/);
+assert.match(cron, /type: 'appointment_reminder'/);
 assert.match(cron, /if \(!had24h\)/);
 assert.match(cron, /if \(hasPatientResponse\)/);
 assert.match(cron, /persistPortalReminder/);
 assert.match(cron, /persisted \|\| result\.sent > 0/);
+assert.doesNotMatch(read('src/services/notificationBranding.ts'), /actions:\s*\[/);
+assert.match(read('src/services/notificationBranding.ts'), /const icon = DEFAULT_VERTO_LOGO/);
+assert.doesNotMatch(read('public/sw.js'), /actions,/);
+assert.doesNotMatch(read('public/sw.js'), /notification_action/);
 assert.match(server, /POST|post\('\/api\/internal\/notifications\/run-appointment-reminders/);
 assert.match(server, /APPOINTMENT_REMINDER_CRON_SECRET/);
 assert.match(server, /crypto\.timingSafeEqual/);

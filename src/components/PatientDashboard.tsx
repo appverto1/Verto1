@@ -14,6 +14,8 @@ import { getDefaultAnamnesisTemplate, getProfileTemplate, normalizeAnamnesisTemp
 
 type PortalSection = 'home' | 'appointments' | 'anamnesis' | 'notes' | 'tasks' | 'reports' | 'documents' | 'profile';
 
+const VERTO_NOTIFICATION_LOGO = '/verto-3d-transparent.png';
+
 export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompleteTask, history, energyTags, sharedNotes, protocols, onAddFamilyNote, isReadOnlyMode = false, patientPortalId = '' }: any) => { 
   const FAMILY_DAILY_PHOTO_LIMIT = 5;
   const chartFiltersStorageKey = `verto.patient-dashboard-chart-filters:${String(user?.id || patientPortalId || 'unknown')}`;
@@ -391,6 +393,25 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     return parts.join(' ');
   };
 
+  const dedupePortalNotifications = (items: any[]) => {
+    const byAppointment = new Map<string, any>();
+    for (const item of Array.isArray(items) ? items : []) {
+      const appointmentId = String(item?.appointment_id || item?.appointmentId || '').trim();
+      const type = String(item?.type || 'appointment_reminder').replace(/_(24h|12h)$/i, '');
+      const key = appointmentId
+        ? [
+            String(item?.clinic_id || item?.clinicId || item?.organization_id || '').trim(),
+            String(item?.patient_id || item?.patientId || '').trim(),
+            appointmentId,
+            type
+          ].join(':')
+        : String(item?.id || '').trim();
+      if (!key || byAppointment.has(key)) continue;
+      byAppointment.set(key, item);
+    }
+    return Array.from(byAppointment.values());
+  };
+
   const loadPortalAppointments = async (range = getPortalDefaultAppointmentsRange()) => {
     const requestId = ++portalAppointmentsRequestRef.current;
     const rangeKey = getPortalAppointmentsRangeKey(range);
@@ -418,7 +439,11 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   }, [user?.id, user?.email]);
 
   useEffect(() => {
-    if (!['appointments', 'reports'].includes(portalSection)) return;
+    const shouldLoadPortalAppointments =
+      portalSection === 'appointments' ||
+      portalSection === 'reports' ||
+      (portalSection === 'home' && isKidsProfile);
+    if (!shouldLoadPortalAppointments) return;
     const range = portalSection === 'appointments'
       ? getPortalCalendarMonthRange(portalCalendarMonth)
       : getPortalDefaultAppointmentsRange();
@@ -426,7 +451,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     if ((portalAppointmentsLoaded && portalAppointmentsRangeKey === rangeKey) || portalAppointmentsState.loading) return;
     void loadPortalAppointments(range);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [portalSection, portalCalendarMonth, portalAppointmentsLoaded, portalAppointmentsRangeKey, portalAppointmentsState.loading, user?.id, user?.email]);
+  }, [portalSection, portalCalendarMonth, portalAppointmentsLoaded, portalAppointmentsRangeKey, portalAppointmentsState.loading, user?.id, user?.email, isKidsProfile]);
 
   const loadPortalNotifications = async () => {
     const requestId = ++portalNotificationsRequestRef.current;
@@ -434,7 +459,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     if (requestId !== portalNotificationsRequestRef.current) return;
     portalNotificationsLastLoadedAtRef.current = Date.now();
     if (result?.success) {
-      setPortalNotifications(Array.isArray(result.data) ? result.data : []);
+      setPortalNotifications(dedupePortalNotifications(Array.isArray(result.data) ? result.data : []));
     }
     setPortalNotificationsLoaded(true);
   };
@@ -539,6 +564,20 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       return;
     }
     setPortalAppointmentsState((prev) => ({ ...prev, error: result?.error || 'Não foi possível carregar a consulta agora.' }));
+  };
+
+  const openPortalNotification = async (notification: any) => {
+    const appointmentId = String(notification?.appointment_id || notification?.appointmentId || '').trim();
+    void markPortalNotificationRead(notification);
+    if (!appointmentId) return;
+    const metadata = notification?.metadata && typeof notification.metadata === 'object' ? notification.metadata : {};
+    await openPortalAppointmentDetail({
+      id: appointmentId,
+      patientName: metadata.patientName || notification?.patientName || user?.name || 'Paciente',
+      clinicName: metadata.clinicName || notification?.clinicName || notification?.clinic_name || 'Verto',
+      clinicLogoUrl: metadata.clinicLogoUrl || notification?.clinicLogoUrl || notification?.clinic_logo_url || VERTO_NOTIFICATION_LOGO,
+      scheduledAt: metadata.scheduledAt || notification?.scheduled_for || notification?.scheduledFor || notification?.created_at
+    });
   };
 
   const updatePortalAppointmentInList = (appointment: any) => {
@@ -1937,34 +1976,125 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     </button>
   ) : null;
 
+  const getPortalStatusPillClass = (status: any) => {
+    const normalized = String(status || '').toUpperCase();
+    if (normalized.includes('CONFIRM')) return 'bg-emerald-50 text-emerald-700';
+    if (normalized.includes('CANCEL')) return 'bg-rose-50 text-rose-700';
+    if (normalized.includes('RESCHEDULE')) return 'bg-amber-50 text-amber-700';
+    if (normalized.includes('COMPLET') || normalized.includes('REALIZ')) return 'bg-blue-50 text-blue-700';
+    if (normalized.includes('PEND')) return 'bg-slate-100 text-slate-600';
+    return 'bg-purple-50 text-[#7a32fc]';
+  };
+  const getPortalStatusShortLabel = (status: any) => {
+    const label = getPortalStatusLabel(status);
+    const normalized = String(status || '').toUpperCase();
+    if (normalized.includes('CONFIRM')) return 'Conf.';
+    if (normalized.includes('RESCHEDULE')) return 'Remarc.';
+    if (normalized.includes('CANCEL')) return 'Cancel.';
+    if (normalized.includes('COMPLET') || normalized.includes('REALIZ')) return 'Realiz.';
+    if (normalized.includes('PEND')) return 'Pend.';
+    return label.slice(0, 7);
+  };
+
+  const portalUpcomingAppointments = useMemo(() => {
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    return (Array.isArray(portalAppointments) ? portalAppointments : [])
+      .filter((appointment: any) => {
+        const status = String(appointment?.status || '').toUpperCase();
+        if (status.includes('CANCEL') || status.includes('COMPLET') || status.includes('NO_SHOW')) return false;
+        const scheduled = new Date(appointment?.scheduledAt || appointment?.scheduled_at || appointment?.date || '');
+        return !Number.isNaN(scheduled.getTime()) && scheduled.getTime() >= todayStart.getTime();
+      })
+      .sort((a: any, b: any) => new Date(a?.scheduledAt || a?.scheduled_at || 0).getTime() - new Date(b?.scheduledAt || b?.scheduled_at || 0).getTime())
+      .slice(0, 3);
+  }, [portalAppointments]);
+
+  const portalKidsAppointmentsSummary = isKidsProfile ? (
+    <div className="mb-4 rounded-[24px] border border-blue-100 bg-white/90 p-4 shadow-sm">
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div>
+          <p className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500">Agenda</p>
+          <h2 className="mt-1 text-base font-black text-slate-900">Próximas consultas</h2>
+        </div>
+        <button type="button" onClick={() => setPortalSection('appointments')} className="rounded-2xl border border-blue-100 px-3 py-2 text-xs font-bold text-[#7a32fc]">
+          Ver agenda
+        </button>
+      </div>
+      {portalAppointmentsState.loading || !portalAppointmentsLoaded ? (
+        <div className="rounded-2xl bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700">Carregando consultas...</div>
+      ) : portalUpcomingAppointments.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-blue-100 bg-blue-50/70 px-4 py-4 text-sm font-semibold text-blue-700">
+          Nenhuma consulta agendada. Quando a clínica agendar uma consulta, ela aparecerá aqui.
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {portalUpcomingAppointments.map((appointment: any) => (
+            <button
+              key={appointment.id}
+              type="button"
+              onClick={() => void openPortalAppointmentDetail(appointment)}
+              className="flex w-full items-start justify-between gap-3 rounded-2xl border border-slate-100 bg-slate-50/80 px-3 py-3 text-left transition hover:border-blue-100 hover:bg-blue-50"
+            >
+              <span className="min-w-0">
+                <span className="flex items-center gap-2 text-sm font-black text-slate-900">
+                  <CalendarDays size={15} className="text-[#7a32fc]" />
+                  {formatPortalDateTime(appointment.scheduledAt)}
+                </span>
+                <span className="mt-1 block text-xs font-semibold text-slate-500">
+                  {appointment.serviceType || 'Consulta'} · {appointment.professionalName || 'Equipe'}
+                </span>
+                <span className="mt-1 block text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                  {appointment.locationLabel || appointment.roomName || 'Local informado pela clínica'}
+                </span>
+              </span>
+              <span className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-bold ${getPortalStatusPillClass(appointment.status)}`}>
+                {getPortalStatusLabel(appointment.status)}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  ) : null;
+
   const portalNotificationsSummary = !portalNotificationsLoaded ? (
     <div className="mb-4 h-20 animate-pulse rounded-[24px] border border-slate-100 bg-white/70" />
   ) : portalNotifications.length > 0 ? (
     <div className="mb-4 space-y-2">
-      {portalNotifications.slice(0, 3).map((notification: any) => (
-        <button
-          key={notification.id}
-          type="button"
-          onClick={() => void markPortalNotificationRead(notification)}
-          className={`flex w-full items-start gap-3 rounded-[24px] border px-4 py-3 text-left shadow-sm transition ${
-            notification.read_at
-              ? 'border-slate-100 bg-white/75'
-              : 'border-purple-100 bg-purple-50'
-          }`}
-        >
-          <span className="mt-0.5 rounded-full bg-white p-2 text-[#7a32fc]"><Bell size={15} /></span>
-          <span className="min-w-0">
-            <span className="block text-sm font-black text-slate-900">{notification.title || 'Notificação'}</span>
-            <span className="mt-1 block text-xs font-semibold leading-relaxed text-slate-600">{notification.message}</span>
-          </span>
-        </button>
-      ))}
+      {portalNotifications.slice(0, 3).map((notification: any) => {
+        const metadata = notification?.metadata && typeof notification.metadata === 'object' ? notification.metadata : {};
+        const logoUrl = metadata.clinicLogoUrl || notification?.clinicLogoUrl || VERTO_NOTIFICATION_LOGO;
+        const clinicName = metadata.clinicName || notification?.title || 'Verto';
+        return (
+          <button
+            key={notification.id}
+            type="button"
+            onClick={() => void openPortalNotification(notification)}
+            className={`flex w-full items-start gap-3 rounded-[24px] border px-4 py-3 text-left shadow-sm transition ${
+              notification.read_at
+                ? 'border-slate-100 bg-white/75'
+                : 'border-purple-100 bg-purple-50'
+            }`}
+          >
+            <span className="mt-0.5 h-10 w-10 shrink-0 overflow-hidden rounded-2xl border border-white bg-white shadow-sm">
+              <SecureImage src={logoUrl} alt={`Logo ${clinicName}`} className="h-full w-full object-contain p-1" />
+            </span>
+            <span className="min-w-0">
+              <span className="block text-[10px] font-black uppercase tracking-[0.18em] text-[#7a32fc]">{clinicName}</span>
+              <span className="mt-1 block text-sm font-black text-slate-900">{notification.title || 'Consulta aguardando resposta'}</span>
+              <span className="mt-1 block text-xs font-semibold leading-relaxed text-slate-600">{notification.message}</span>
+            </span>
+          </button>
+        );
+      })}
     </div>
   ) : null;
 
   const portalHomeSummary = (
     <React.Fragment>
       {portalAnamnesisTopNotice}
+      {portalKidsAppointmentsSummary}
       {portalNotificationsSummary}
       {!isKidsProfile && (
         <div className="mb-6 grid gap-3 sm:grid-cols-2">
@@ -2392,28 +2522,21 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       return next;
     });
   };
-  const getPortalStatusPillClass = (status: any) => {
-    const normalized = String(status || '').toUpperCase();
-    if (normalized.includes('CONFIRM')) return 'bg-emerald-50 text-emerald-700';
-    if (normalized.includes('CANCEL')) return 'bg-rose-50 text-rose-700';
-    if (normalized.includes('RESCHEDULE')) return 'bg-amber-50 text-amber-700';
-    if (normalized.includes('COMPLET') || normalized.includes('REALIZ')) return 'bg-blue-50 text-blue-700';
-    if (normalized.includes('PEND')) return 'bg-slate-100 text-slate-600';
-    return 'bg-purple-50 text-[#7a32fc]';
-  };
-  const getPortalStatusShortLabel = (status: any) => {
-    const label = getPortalStatusLabel(status);
-    const normalized = String(status || '').toUpperCase();
-    if (normalized.includes('CONFIRM')) return 'Conf.';
-    if (normalized.includes('RESCHEDULE')) return 'Remarc.';
-    if (normalized.includes('CANCEL')) return 'Cancel.';
-    if (normalized.includes('COMPLET') || normalized.includes('REALIZ')) return 'Realiz.';
-    if (normalized.includes('PEND')) return 'Pend.';
-    return label.slice(0, 7);
-  };
-
   const activePortalAppointment = portalAppointmentDetail?.appointment || selectedPortalAppointment;
   const activePortalStatus = String(activePortalAppointment?.status || '').toUpperCase();
+  const activePortalClinicName = firstPortalText(
+    activePortalAppointment?.clinicName,
+    activePortalAppointment?.clinic?.displayName,
+    activePortalAppointment?.clinic?.name,
+    activePortalAppointment?.clinic_name,
+    'Verto'
+  );
+  const activePortalClinicLogoUrl = firstPortalText(
+    activePortalAppointment?.clinicLogoUrl,
+    activePortalAppointment?.clinic?.logoUrl,
+    activePortalAppointment?.clinic_logo_url,
+    VERTO_NOTIFICATION_LOGO
+  );
   const portalActionBlocked = activePortalStatus.includes('CANCEL') || activePortalStatus.includes('COMPLET') || activePortalStatus.includes('NO_SHOW');
   const portalAppointmentsPanel = (
     <div className="mb-6 rounded-[28px] border border-purple-100 bg-white p-4 shadow-sm sm:p-5">
@@ -2538,10 +2661,16 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     <div className="fixed inset-0 z-[95] flex items-end justify-center bg-slate-950/45 p-0 backdrop-blur-sm sm:items-center sm:p-4" onClick={() => { setSelectedPortalAppointment(null); setPortalAppointmentDetail(null); }}>
       <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-t-[28px] bg-white p-5 shadow-2xl sm:rounded-[28px]" onClick={(event) => event.stopPropagation()}>
         <div className="flex items-start justify-between gap-4">
-          <div>
+          <div className="flex min-w-0 items-start gap-3">
+            <div className="h-12 w-12 shrink-0 overflow-hidden rounded-2xl border border-purple-100 bg-white shadow-sm">
+              <SecureImage src={activePortalClinicLogoUrl} alt={`Logo ${activePortalClinicName}`} className="h-full w-full object-contain p-1" />
+            </div>
+            <div className="min-w-0">
+            <p className="truncate text-[10px] font-bold uppercase tracking-[0.22em] text-[#7a32fc]">{activePortalClinicName}</p>
             <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-[#7a32fc]">Detalhes da consulta</p>
             <h3 className="mt-1 text-xl font-black text-slate-900">{activePortalAppointment?.patientName || 'Paciente'}</h3>
             <p className="mt-1 text-sm font-semibold text-slate-500">{formatPortalDateTime(activePortalAppointment?.scheduledAt)}</p>
+            </div>
           </div>
           <button type="button" onClick={() => { setSelectedPortalAppointment(null); setPortalAppointmentDetail(null); }} className="rounded-2xl border border-slate-100 p-2 text-slate-500">
             <X size={18} />

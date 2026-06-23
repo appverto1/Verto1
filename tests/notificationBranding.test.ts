@@ -46,10 +46,12 @@ const clinicPush = buildPatientReminderNotificationPayload({
 
 assert.equal(clinicBranding.sourceType, 'clinic');
 assert.equal(clinicPush.title, 'Clínica ABC');
-assert.equal(clinicPush.icon, 'https://cdn.example.com/clinic-logo.png');
-assert.equal(clinicPush.badge, 'https://cdn.example.com/clinic-logo.png');
+assert.equal(clinicPush.icon, '/verto-3d-transparent.png');
+assert.equal(clinicPush.badge, '/verto-3d-transparent.png');
+assert.equal(clinicPush.data.brandLogoUrl, 'https://cdn.example.com/clinic-logo.png');
+assert.equal((clinicPush as any).actions, undefined);
 assert.match(clinicPush.body, /Pedro Henrique/);
-assert.match(clinicPush.body, /confirmar, remarcar ou cancelar/);
+assert.match(clinicPush.body, /confirmar ou remarcar/);
 assert.doesNotMatch(clinicPush.title, /Verto/);
 assert.doesNotMatch(clinicPush.body, /abrir a Verto/i);
 
@@ -102,7 +104,8 @@ const professionalPush = buildPatientReminderNotificationPayload({
 
 assert.equal(professionalBranding.sourceType, 'professional');
 assert.equal(professionalPush.title, 'Mateus Psicologia');
-assert.equal(professionalPush.icon, 'https://cdn.example.com/professional.png');
+assert.equal(professionalPush.icon, '/verto-3d-transparent.png');
+assert.equal(professionalPush.data.brandLogoUrl, 'https://cdn.example.com/professional.png');
 
 const fallbackBranding = resolveBrandingContext({});
 assert.equal(fallbackBranding.sourceType, 'verto_fallback');
@@ -124,7 +127,8 @@ assert.match(pushServiceCode, /buildPatientReminderNotificationPayload/);
 assert.match(pushServiceCode, /allowProfessionalFallback:\s*!isUuid\(clinicId\)/);
 assert.match(pushServiceCode, /clinic:\s*\{[\s\S]*?id:\s*clinicId \|\| null/);
 assert.match(serviceWorkerCode, /brandName/);
-assert.match(serviceWorkerCode, /notification_action/);
+assert.doesNotMatch(serviceWorkerCode, /notification_action/);
+assert.doesNotMatch(serviceWorkerCode, /\bactions\s*:/);
 assert.doesNotMatch(serviceWorkerCode, /Lembrete de Consulta - Verto/);
 assert.match(appCode, /buildPatientReminderModalViewModel/);
 assert.match(appCode, /allowProfessionalFallback:\s*!appointmentConfirmation\.clinicId/);
