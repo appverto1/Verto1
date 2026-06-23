@@ -625,15 +625,36 @@ const sanitizeHumanPayerName = (value: any) => {
   return text && !looksLikeTechnicalId(text) ? text : '';
 };
 
+const normalizePayerNameKey = (value: any) => removeDiacritics(sanitizeHumanPayerName(value)).replace(/\s+/g, ' ').trim();
+
 const normalizePayerOptions = (items: any[] = []) => {
-  const seen = new Set<string>();
+  const byId = new Map<string, any>();
+  const byName = new Map<string, any>();
   return (Array.isArray(items) ? items : [])
     .map((payer: any) => ({
       ...payer,
       id: String(payer?.id || '').trim(),
-      name: sanitizeHumanPayerName(payer?.name)
+      name: sanitizeHumanPayerName(payer?.name),
+      active: payer?.active !== false && payer?.is_active !== false && String(payer?.status || 'ACTIVE').toUpperCase() !== 'INACTIVE'
     }))
-    .filter((payer: any) => payer.id && payer.name && !seen.has(payer.id) && seen.add(payer.id))
+    .filter((payer: any) => payer.id && payer.name)
+    .reduce((acc: any[], payer: any) => {
+      if (byId.has(payer.id)) return acc;
+      byId.set(payer.id, payer);
+      const nameKey = normalizePayerNameKey(payer.name);
+      const existingByName = byName.get(nameKey);
+      if (existingByName) {
+        if (!existingByName.active && payer.active) {
+          const index = acc.findIndex((item) => String(item.id) === String(existingByName.id));
+          if (index >= 0) acc[index] = payer;
+          byName.set(nameKey, payer);
+        }
+        return acc;
+      }
+      byName.set(nameKey, payer);
+      acc.push(payer);
+      return acc;
+    }, [])
     .sort((a: any, b: any) => String(a?.name || '').localeCompare(String(b?.name || ''), 'pt-BR'));
 };
 
@@ -1548,6 +1569,25 @@ export const ClinicalAgendaBoard = ({
     setQuickPayerForm({ open: false, saving: false, error: '', name: '', payerType: 'INSURANCE' });
   };
 
+  const findUniqueBillingPayerByName = (payerName: any) => {
+    const payerNameKey = normalizePayerNameKey(payerName);
+    if (!payerNameKey) return null;
+    const matches = billingPayers.filter((payer: any) => normalizePayerNameKey(payer?.name) === payerNameKey);
+    return matches.length === 1 ? matches[0] : null;
+  };
+
+  const normalizeBillingFormWithResolvedPayer = (values: any) => {
+    const payerId = String(values?.payerId || '').trim();
+    const selectedPayer = payerId
+      ? billingPayers.find((payer: any) => String(payer?.id || '') === payerId)
+      : findUniqueBillingPayerByName(values?.payerName);
+    return {
+      ...values,
+      payerId: selectedPayer?.id || payerId,
+      payerName: selectedPayer?.name || sanitizeHumanPayerName(values?.payerName)
+    };
+  };
+
   const openBillingEditor = (source: any = null) => {
     if (!canEditBillingContext) return;
     const currentBilling = detail?.billingContext || {};
@@ -1557,6 +1597,17 @@ export const ClinicalAgendaBoard = ({
     setBillingEditorState({ loading: false, saving: false, error: '', success: '' });
     void loadBillingPayers();
   };
+
+  useEffect(() => {
+    if (!billingEditorOpen || !billingPayersLoaded) return;
+    setBillingForm((prev) => {
+      const financialContextType = normalizeAppointmentFinancialContextType(prev.financialContextType) || 'INSURANCE';
+      if (!appointmentFinancialContextRequiresPayer(financialContextType) || prev.payerId || !prev.payerName) return prev;
+      const payer = findUniqueBillingPayerByName(prev.payerName);
+      if (!payer?.id) return prev;
+      return { ...prev, payerId: String(payer.id), payerName: String(payer.name || prev.payerName) };
+    });
+  }, [billingEditorOpen, billingPayersLoaded, billingPayers]);
 
   const mergeBillingContextIntoDetail = (nextBillingContext: any) => {
     const financialContextType =
@@ -1604,9 +1655,10 @@ export const ClinicalAgendaBoard = ({
   const saveBillingContext = async (values: any) => {
     const appointmentId = String(detailEvent?.id || selectedEvent?.id || '').trim();
     if (!appointmentId) return false;
-    const financialContextType = normalizeAppointmentFinancialContextType(values.financialContextType) || 'INSURANCE';
+    const resolvedValues = normalizeBillingFormWithResolvedPayer(values);
+    const financialContextType = normalizeAppointmentFinancialContextType(resolvedValues.financialContextType) || 'INSURANCE';
     const usesInsuranceContext = appointmentFinancialContextRequiresPayer(financialContextType);
-    if (usesInsuranceContext && !String(values.payerId || '').trim()) {
+    if (usesInsuranceContext && !String(resolvedValues.payerId || '').trim()) {
       setBillingEditorState((prev) => ({
         ...prev,
         saving: false,
@@ -1623,16 +1675,16 @@ export const ClinicalAgendaBoard = ({
       billing_context_type: financialContextType,
       payerType: financialContextType,
       payer_type: financialContextType,
-      payerId: usesInsuranceContext ? values.payerId || null : null,
-      payerName: usesInsuranceContext ? values.payerName || null : null,
-      serviceType: values.serviceType || detailEvent.type || null,
-      insuranceCardNumber: usesInsuranceContext ? values.insuranceCardNumber || null : null,
-      insurancePlanName: usesInsuranceContext ? values.insurancePlanName || null : null,
-      guideNumber: usesInsuranceContext ? values.guideNumber || null : null,
-      authorizationCode: usesInsuranceContext ? values.authorizationCode || null : null,
-      procedureCode: values.procedureCode || null,
-      notes: values.notes || null,
-      source: values.source || null
+      payerId: usesInsuranceContext ? resolvedValues.payerId || null : null,
+      payerName: usesInsuranceContext ? resolvedValues.payerName || null : null,
+      serviceType: resolvedValues.serviceType || detailEvent.type || null,
+      insuranceCardNumber: usesInsuranceContext ? resolvedValues.insuranceCardNumber || null : null,
+      insurancePlanName: usesInsuranceContext ? resolvedValues.insurancePlanName || null : null,
+      guideNumber: usesInsuranceContext ? resolvedValues.guideNumber || null : null,
+      authorizationCode: usesInsuranceContext ? resolvedValues.authorizationCode || null : null,
+      procedureCode: resolvedValues.procedureCode || null,
+      notes: resolvedValues.notes || null,
+      source: resolvedValues.source || null
     });
     if (!result?.success) {
       setBillingEditorState((prev) => ({
@@ -2287,8 +2339,13 @@ export const ClinicalAgendaBoard = ({
   const billingDetailIsNonInsuranceContext = Boolean(billingFinancialContextType && billingFinancialContextType !== 'INSURANCE');
   const billingFormFinancialContextType = normalizeAppointmentFinancialContextType(billingForm.financialContextType) || 'INSURANCE';
   const billingFormUsesInsurance = appointmentFinancialContextRequiresPayer(billingFormFinancialContextType);
+  const matchedBillingPayerByName =
+    billingFormUsesInsurance && !billingForm.payerId
+      ? findUniqueBillingPayerByName(billingForm.payerName)
+      : null;
+  const effectiveBillingPayerId = billingForm.payerId || matchedBillingPayerByName?.id || '';
   const billingEditorFinancialContextError =
-    billingFormUsesInsurance && !String(billingForm.payerId || '').trim()
+    billingFormUsesInsurance && !String(effectiveBillingPayerId || '').trim()
       ? 'Selecione um pagador/convênio cadastrado ou escolha outro contexto financeiro válido.'
       : '';
   const hasSavedBillingContext = Boolean(
@@ -2299,11 +2356,11 @@ export const ClinicalAgendaBoard = ({
       billingContext.authorizationCode ||
       billingContext.notes
   );
-  const selectedBillingPayerKnown = Boolean(billingFormUsesInsurance && billingForm.payerId && billingPayers.some((payer: any) => String(payer?.id || '') === String(billingForm.payerId || '')));
+  const selectedBillingPayerKnown = Boolean(billingFormUsesInsurance && effectiveBillingPayerId && billingPayers.some((payer: any) => String(payer?.id || '') === String(effectiveBillingPayerId || '')));
   const billingSnapshotSelectValue = billingForm.payerId || '__snapshot__';
-  const billingSnapshotOptionVisible = Boolean(billingFormUsesInsurance && billingForm.payerName && !selectedBillingPayerKnown);
+  const billingSnapshotOptionVisible = Boolean(billingFormUsesInsurance && billingForm.payerName && !selectedBillingPayerKnown && !matchedBillingPayerByName);
   const billingPayerSelectValue = selectedBillingPayerKnown
-    ? billingForm.payerId
+    ? effectiveBillingPayerId
     : billingSnapshotOptionVisible
       ? billingSnapshotSelectValue
       : '';

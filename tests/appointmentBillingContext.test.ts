@@ -189,10 +189,10 @@ test('detalhe da consulta salva pagador no contexto administrativo', () => {
   assert.match(calendarCode, /Contexto financeiro/);
   assert.match(calendarCode, /financialContextType,/);
   assert.match(calendarCode, /payerType: financialContextType/);
-  assert.match(calendarCode, /insuranceCardNumber: usesInsuranceContext \? values\.insuranceCardNumber/);
-  assert.match(calendarCode, /insurancePlanName: usesInsuranceContext \? values\.insurancePlanName/);
+  assert.match(calendarCode, /insuranceCardNumber: usesInsuranceContext \? resolvedValues\.insuranceCardNumber/);
+  assert.match(calendarCode, /insurancePlanName: usesInsuranceContext \? resolvedValues\.insurancePlanName/);
   assert.match(calendarCode, /billingEditorFinancialContextError/);
-  assert.match(calendarCode, /source: values\.source/);
+  assert.match(calendarCode, /source: resolvedValues\.source/);
   assert.match(calendarCode, /Aplicar . consulta/);
   assert.match(calendarCode, /Definir pagador/);
   assert.match(calendarCode, /Editar pagador/);
@@ -238,6 +238,21 @@ test('modal carrega pagadores ativos e permite criar pagador rapido', () => {
   assert.match(calendarCode, /normalizePayerOptions\(result\.data\)/);
   assert.match(calendarCode, /selectedBillingPayerKnown/);
   assert.match(calendarCode, /billingSnapshotSelectValue/);
+});
+
+test('modal de editar pagador usa payerId canonico e deduplica nomes legados', () => {
+  assert.match(calendarCode, /normalizePayerNameKey/);
+  assert.match(calendarCode, /const byId = new Map/);
+  assert.match(calendarCode, /const byName = new Map/);
+  assert.match(calendarCode, /findUniqueBillingPayerByName/);
+  assert.match(calendarCode, /normalizeBillingFormWithResolvedPayer/);
+  assert.match(calendarCode, /payerId: selectedPayer\?\.id \|\| payerId/);
+  assert.match(calendarCode, /const effectiveBillingPayerId = billingForm\.payerId \|\| matchedBillingPayerByName\?\.id \|\| ''/);
+  assert.match(calendarCode, /billingEditorFinancialContextError[\s\S]*?!String\(effectiveBillingPayerId/);
+  assert.match(calendarCode, /billingSnapshotOptionVisible[\s\S]*?!matchedBillingPayerByName/);
+  assert.match(calendarCode, /payerId: usesInsuranceContext \? resolvedValues\.payerId \|\| null : null/);
+  assert.match(calendarCode, /guideNumber: usesInsuranceContext \? resolvedValues\.guideNumber \|\| null : null/);
+  assert.match(calendarCode, /authorizationCode: usesInsuranceContext \? resolvedValues\.authorizationCode \|\| null : null/);
 });
 
 test('criacao de pagador reutiliza nome existente na mesma clinica', () => {
