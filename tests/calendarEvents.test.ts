@@ -102,7 +102,8 @@ test('cards mostram informacoes e indicadores essenciais da sessao', () => {
   assert.match(calendarCode, /event\.time/);
   assert.match(calendarCode, /event\.patientName/);
   assert.match(calendarCode, /getAppointmentStatusColor/);
-  assert.match(calendarCode, /statusColor\.shadow/);
+  assert.match(calendarCode, /statusColor\.card/);
+  assert.match(calendarCode, /bg-emerald-500 text-white/);
   assert.match(calendarCode, /mergeAppointmentStatusForRender/);
   assert.match(calendarCode, /Consulta confirmada pelo responsável/);
   assert.match(calendarCode, /style\.label/);

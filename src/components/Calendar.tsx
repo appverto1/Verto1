@@ -100,7 +100,7 @@ export const getAppointmentStatusColor = (status: any) => {
       dot: 'bg-slate-400',
       badge: 'border-slate-200 bg-slate-100 text-slate-600',
       soft: 'border-slate-200 bg-white text-slate-800',
-      shadow: 'shadow-[0_10px_26px_rgba(100,116,139,0.12)]',
+      card: 'border-slate-300 bg-slate-200 text-slate-900 shadow-[0_10px_22px_rgba(100,116,139,0.20)] hover:bg-slate-300',
       text: 'text-slate-600',
       icon: Clock
     },
@@ -109,7 +109,7 @@ export const getAppointmentStatusColor = (status: any) => {
       dot: 'bg-sky-400',
       badge: 'border-sky-200 bg-sky-50 text-sky-700',
       soft: 'border-sky-100 bg-sky-50/70 text-sky-950',
-      shadow: 'shadow-[0_10px_30px_rgba(14,165,233,0.20)]',
+      card: 'border-sky-400 bg-sky-400 text-sky-950 shadow-[0_10px_24px_rgba(14,165,233,0.30)] hover:bg-sky-300',
       text: 'text-sky-700',
       icon: Clock
     },
@@ -118,7 +118,7 @@ export const getAppointmentStatusColor = (status: any) => {
       dot: 'bg-emerald-500',
       badge: 'border-emerald-200 bg-emerald-50 text-emerald-700',
       soft: 'border-emerald-100 bg-emerald-50/70 text-emerald-950',
-      shadow: 'shadow-[0_12px_34px_rgba(16,185,129,0.28)]',
+      card: 'border-emerald-500 bg-emerald-500 text-white shadow-[0_10px_26px_rgba(16,185,129,0.36)] hover:bg-emerald-400',
       text: 'text-emerald-700',
       icon: CheckCircle2
     },
@@ -127,7 +127,7 @@ export const getAppointmentStatusColor = (status: any) => {
       dot: 'bg-amber-500',
       badge: 'border-amber-200 bg-amber-50 text-amber-700',
       soft: 'border-amber-100 bg-amber-50/70 text-amber-950',
-      shadow: 'shadow-[0_12px_34px_rgba(245,158,11,0.24)]',
+      card: 'border-amber-400 bg-amber-400 text-amber-950 shadow-[0_10px_26px_rgba(245,158,11,0.34)] hover:bg-amber-300',
       text: 'text-amber-700',
       icon: RefreshCcw
     },
@@ -136,7 +136,7 @@ export const getAppointmentStatusColor = (status: any) => {
       dot: 'bg-orange-500',
       badge: 'border-orange-200 bg-orange-50 text-orange-700',
       soft: 'border-orange-100 bg-orange-50/70 text-orange-950',
-      shadow: 'shadow-[0_12px_34px_rgba(249,115,22,0.24)]',
+      card: 'border-orange-500 bg-orange-500 text-white shadow-[0_10px_26px_rgba(249,115,22,0.34)] hover:bg-orange-400',
       text: 'text-orange-700',
       icon: RefreshCcw
     },
@@ -145,7 +145,7 @@ export const getAppointmentStatusColor = (status: any) => {
       dot: 'bg-rose-500',
       badge: 'border-rose-200 bg-rose-50 text-rose-700',
       soft: 'border-rose-100 bg-rose-50/70 text-rose-950',
-      shadow: 'shadow-[0_12px_34px_rgba(244,63,94,0.24)]',
+      card: 'border-rose-500 bg-rose-500 text-white shadow-[0_10px_26px_rgba(244,63,94,0.34)] hover:bg-rose-400',
       text: 'text-rose-700',
       icon: Ban
     },
@@ -154,7 +154,7 @@ export const getAppointmentStatusColor = (status: any) => {
       dot: 'bg-red-500',
       badge: 'border-red-200 bg-red-50 text-red-700',
       soft: 'border-red-100 bg-red-50/70 text-red-950',
-      shadow: 'shadow-[0_12px_34px_rgba(239,68,68,0.24)]',
+      card: 'border-red-500 bg-red-500 text-white shadow-[0_10px_26px_rgba(239,68,68,0.34)] hover:bg-red-400',
       text: 'text-red-700',
       icon: Ban
     },
@@ -163,7 +163,7 @@ export const getAppointmentStatusColor = (status: any) => {
       dot: 'bg-violet-500',
       badge: 'border-violet-200 bg-violet-50 text-violet-700',
       soft: 'border-violet-100 bg-violet-50/70 text-violet-950',
-      shadow: 'shadow-[0_12px_34px_rgba(122,50,252,0.24)]',
+      card: 'border-violet-500 bg-violet-500 text-white shadow-[0_10px_26px_rgba(122,50,252,0.34)] hover:bg-violet-400',
       text: 'text-violet-700',
       icon: Play
     },
@@ -172,7 +172,7 @@ export const getAppointmentStatusColor = (status: any) => {
       dot: 'bg-emerald-600',
       badge: 'border-emerald-200 bg-emerald-50 text-emerald-700',
       soft: 'border-emerald-100 bg-emerald-50/60 text-emerald-950',
-      shadow: 'shadow-[0_12px_34px_rgba(5,150,105,0.24)]',
+      card: 'border-emerald-600 bg-emerald-600 text-white shadow-[0_10px_26px_rgba(5,150,105,0.34)] hover:bg-emerald-500',
       text: 'text-emerald-700',
       icon: CheckCircle2
     },
@@ -181,7 +181,7 @@ export const getAppointmentStatusColor = (status: any) => {
       dot: 'bg-pink-500',
       badge: 'border-pink-200 bg-pink-50 text-pink-700',
       soft: 'border-pink-100 bg-pink-50/70 text-pink-950',
-      shadow: 'shadow-[0_12px_34px_rgba(236,72,153,0.22)]',
+      card: 'border-pink-500 bg-pink-500 text-white shadow-[0_10px_26px_rgba(236,72,153,0.32)] hover:bg-pink-400',
       text: 'text-pink-700',
       icon: AlertCircle
     }
@@ -1953,11 +1953,11 @@ export const ClinicalAgendaBoard = ({
           clickEvent.stopPropagation();
           openEventDetail(event);
         }}
-        className={`group relative w-full overflow-hidden rounded-xl border p-2 text-left transition-all hover:-translate-y-0.5 hover:shadow-md ${statusColor.soft} ${statusColor.shadow}`}
+        className={`group relative w-full overflow-hidden rounded-xl border p-2 text-left transition-all hover:-translate-y-0.5 hover:shadow-md ${statusColor.card}`}
       >
         <div className="pl-1">
           <div className="flex items-start justify-between gap-2">
-            <span className="text-[10px] font-semibold leading-tight opacity-75">
+            <span className="text-[10px] font-semibold leading-tight opacity-85">
               {event.time} - {event.endTime}
             </span>
             <span className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] font-bold ${status.className}`}>
@@ -1966,11 +1966,11 @@ export const ClinicalAgendaBoard = ({
             </span>
           </div>
           <p className={`mt-1 truncate text-sm font-semibold leading-tight ${compact ? 'text-xs' : ''}`}>{event.patientName}</p>
-          <p className="mt-1 truncate text-[11px] font-medium opacity-75">
+          <p className="mt-1 truncate text-[11px] font-medium opacity-85">
             <span className={`rounded-full border px-1.5 py-0.5 text-[9px] font-bold ${style.badge}`}>{style.label}</span>
             <span className="ml-1">{getRoomDisplayLine(event)}</span>
           </p>
-          {!compact && <p className="mt-1 truncate text-[10px] opacity-65">{event.therapistName}</p>}
+          {!compact && <p className="mt-1 truncate text-[10px] opacity-80">{event.therapistName}</p>}
           {!compact && renderIndicators(event)}
         </div>
       </button>
@@ -2154,7 +2154,7 @@ export const ClinicalAgendaBoard = ({
                           clickEvent.stopPropagation();
                           openEventDetail(event);
                         }}
-                        className={`flex w-full items-center gap-1 rounded-md px-1 py-0.5 text-left text-[10px] font-semibold leading-tight transition-colors ${statusColor.shadow} ${isDark ? 'bg-slate-900/70 text-slate-200 hover:bg-slate-800' : 'bg-white/95 text-slate-700 hover:bg-white'}`}
+                        className={`flex w-full items-center gap-1 rounded-md border px-1 py-0.5 text-left text-[10px] font-semibold leading-tight transition-colors ${statusColor.card}`}
                       >
                         <span className="shrink-0 tabular-nums">{event.time}</span>
                         <span className="min-w-0 truncate">{event.patientName}</span>
@@ -2412,7 +2412,7 @@ export const ClinicalAgendaBoard = ({
                 {selectedDayPanelEvents.map((event: any) => {
                   const statusColor = getAppointmentStatusColor(event.status);
                   return (
-                    <div key={event.id} className={`rounded-2xl border p-3 ${statusColor.shadow} ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-100 bg-slate-50/70'}`}>
+                    <div key={event.id} className={`rounded-2xl border p-3 ${statusColor.card}`}>
                       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                         <div className="min-w-0">
                           <div className="flex flex-wrap items-center gap-2">
@@ -2725,7 +2725,7 @@ export const ClinicalAgendaBoard = ({
 
       {selectedEvent && (
         <div className="fixed inset-0 z-[140] flex items-end justify-center bg-black/40 p-0 backdrop-blur-sm sm:items-center sm:p-4" onClick={() => setSelectedEvent(null)}>
-          <div className={`max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-t-[28px] p-5 pb-[calc(env(safe-area-inset-bottom)+1.5rem)] shadow-2xl sm:rounded-[28px] sm:p-6 ${detailStatusColor.shadow} ${isDark ? 'bg-[#101827] text-slate-100' : 'bg-white text-slate-900'}`} onClick={(event) => event.stopPropagation()}>
+          <div className={`max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-t-[28px] p-5 pb-[calc(env(safe-area-inset-bottom)+1.5rem)] shadow-2xl sm:rounded-[28px] sm:p-6 ${isDark ? 'bg-[#101827] text-slate-100' : 'bg-white text-slate-900'}`} onClick={(event) => event.stopPropagation()}>
             <div className="flex items-start justify-between gap-4">
               <div>
                 <div className="mb-2 flex flex-wrap items-center gap-2">
