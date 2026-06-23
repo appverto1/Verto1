@@ -1120,9 +1120,14 @@ export const dataService = {
   },
 
   async savePatientRecord(patientId: string, payload: any) {
+    const safePatientId = String(patientId || '').trim();
+    if (!safePatientId) {
+      console.warn('[PatientPortal] skipped patient-scoped save: missing resolvedPatientId');
+      return { success: false, error: 'Paciente não resolvido para este acesso.' };
+    }
     try {
       const workspaceId = String(payload?.workspace_id || '').trim();
-      const response = await fetch(`/api/patient-records/${patientId}`, {
+      const response = await fetch(`/api/patient-records/${safePatientId}`, {
         method: 'POST',
         headers: await getAuthHeaders(),
         credentials: 'include',
@@ -1139,8 +1144,13 @@ export const dataService = {
   },
 
   async getPatientRecord(patientId: string) {
+    const safePatientId = String(patientId || '').trim();
+    if (!safePatientId) {
+      console.warn('[PatientPortal] skipped patient-scoped fetch: missing resolvedPatientId');
+      return { success: false, data: null, error: 'Paciente não resolvido para este acesso.' };
+    }
     try {
-      const response = await fetch(`/api/patient-records/${patientId}`, {
+      const response = await fetch(`/api/patient-records/${safePatientId}`, {
         headers: await getAuthHeaders(),
         credentials: 'include'
       });
@@ -2033,6 +2043,24 @@ export const dataService = {
       return await safeJson(response);
     } catch {
       return { success: false, data: [], error: 'Não foi possível carregar suas consultas agora.' };
+    }
+  },
+
+  async getPortalContext() {
+    try {
+      const response = await fetchClinical('/api/portal/context', {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getPortalContext',
+        operation: 'detail',
+        table: 'patients,clinics',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, data: null, error: 'Não foi possível identificar o paciente vinculado a este acesso.' };
     }
   },
 

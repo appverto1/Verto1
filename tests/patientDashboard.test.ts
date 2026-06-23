@@ -74,7 +74,9 @@ test('diario da familia preserva path de foto e aguarda persistencia do historic
   assert.match(patientDashboardCode, /const familyPhotoCountToday = useMemo/);
   assert.match(patientDashboardCode, /familyPhotoCountToday >= FAMILY_DAILY_PHOTO_LIMIT/);
   assert.match(patientDashboardCode, /let persistedImagePath: string \| undefined = familyImagePath \|\| undefined/);
-  assert.match(patientDashboardCode, /const saveResult = await onAddFamilyNote\(portalPatientId \|\| user\.id, familyNote, persistedImage, persistedImagePath\)/);
+  assert.match(patientDashboardCode, /if \(!portalPatientId\) \{\s*throw new Error\('Não encontramos um paciente vinculado/);
+  assert.match(patientDashboardCode, /const saveResult = await onAddFamilyNote\(portalPatientId, familyNote, persistedImage, persistedImagePath\)/);
+  assert.doesNotMatch(patientDashboardCode, /onAddFamilyNote\(portalPatientId \|\| user\.id/);
   assert.match(patientDashboardCode, /setFamilyImagePath\(result\.path \|\| null\)/);
   assert.match(patientDashboardCode, /setFamilyImagePath\(null\); setIsDrawingMode\(false\)/);
   assert.match(patientDashboardCode, /setFamilyImagePath\(null\);\s*setIsFamilyLogOpen\(false\)/);

@@ -135,7 +135,9 @@ assert.match(appCode, /allowProfessionalFallback:\s*!appointmentConfirmation\.cl
 assert.match(appCode, /friendlyPatientNotificationError/);
 assert.match(appCode, /Tentar novamente/);
 assert.match(appCode, /appointmentConfirmationRetry/);
-assert.match(cronCode, /patient_name, patient_email, therapist_name, source_payload/);
+assert.match(cronCode, /\.select\('id, clinic_id, patient_id, patient_email, therapist_name, source_payload/);
+assert.doesNotMatch(cronCode, /\.select\('id, clinic_id, patient_id, patient_name, patient_email, therapist_name, source_payload/);
+assert.match(cronCode, /hydrateReminderAppointmentPatientNames/);
 assert.match(cronCode, /allowProfessionalFallback:\s*!isUuid\(appointment\.clinicId\)/);
 assert.match(cronCode, /professionalDisplayName: appointment\.professionalDisplayName/);
 assert.match(cronCode, /patientName: appointment\.patientName/);

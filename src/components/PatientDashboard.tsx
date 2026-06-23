@@ -129,7 +129,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     ? 'Quanto mais alto o humor, mais fácil foi fazer essa tarefa'
     : 'Quanto mais energia, mais fácil foi fazer essa tarefa';
   const readOnlyNotice = "Você não possui um tratamento ativo no momento. Entre em contato com sua clínica para retomar o acompanhamento.";
-  const portalPatientId = String(patientPortalId || user?.patientId || user?.patient_id || user?.id || '').trim();
+  const portalContext = user?.portalContext && typeof user.portalContext === 'object' ? user.portalContext : {};
+  const portalPatientId = String(patientPortalId || portalContext?.resolvedPatientId || user?.patientId || user?.patient_id || '').trim();
   const portalAnamnesisStatusHint = String(user?.onboardingStatus || user?.onboarding_status || user?.status || '').toUpperCase();
   const hasPortalAnamnesisHint = Boolean(
     user?.anamnesisRequired ||
@@ -343,6 +344,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
   const getPortalAppointmentsRangeKey = (range: { from: string; to: string; limit?: number }) =>
     `${range.from}|${range.to}|${range.limit || ''}`;
+  const portalDefaultAppointmentsRange = useMemo(() => getPortalDefaultAppointmentsRange(), [portalPatientId]);
 
   const getPortalStatusLabel = (status: any) => {
     const normalized = String(status || '').toUpperCase();
@@ -412,7 +414,15 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     return Array.from(byAppointment.values());
   };
 
-  const loadPortalAppointments = async (range = getPortalDefaultAppointmentsRange()) => {
+  const loadPortalAppointments = async (range = portalDefaultAppointmentsRange) => {
+    if (!portalPatientId) {
+      console.warn('[PatientPortal] skipped appointment fetch: missing resolvedPatientId');
+      setPortalAppointments([]);
+      setPortalAppointmentsLoaded(true);
+      setPortalAppointmentsRangeKey(getPortalAppointmentsRangeKey(range));
+      setPortalAppointmentsState({ loading: false, error: 'Não encontramos um paciente vinculado a este acesso. Entre em contato com a clínica.', message: '' });
+      return;
+    }
     const requestId = ++portalAppointmentsRequestRef.current;
     const rangeKey = getPortalAppointmentsRangeKey(range);
     setPortalAppointmentsState((prev) => ({ ...prev, loading: true, error: '' }));
@@ -436,7 +446,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     setPortalAppointmentsLoaded(false);
     setPortalAppointmentsRangeKey('');
     setPortalAppointmentsState({ loading: false, error: '', message: '' });
-  }, [user?.id, user?.email]);
+  }, [user?.id, user?.email, portalPatientId]);
 
   useEffect(() => {
     const shouldLoadPortalAppointments =
@@ -446,12 +456,12 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     if (!shouldLoadPortalAppointments) return;
     const range = portalSection === 'appointments'
       ? getPortalCalendarMonthRange(portalCalendarMonth)
-      : getPortalDefaultAppointmentsRange();
+      : portalDefaultAppointmentsRange;
     const rangeKey = getPortalAppointmentsRangeKey(range);
     if ((portalAppointmentsLoaded && portalAppointmentsRangeKey === rangeKey) || portalAppointmentsState.loading) return;
     void loadPortalAppointments(range);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [portalSection, portalCalendarMonth, portalAppointmentsLoaded, portalAppointmentsRangeKey, portalAppointmentsState.loading, user?.id, user?.email, isKidsProfile]);
+  }, [portalSection, portalCalendarMonth, portalAppointmentsLoaded, portalAppointmentsRangeKey, portalAppointmentsState.loading, user?.id, user?.email, isKidsProfile, portalPatientId, portalDefaultAppointmentsRange]);
 
   const loadPortalNotifications = async () => {
     const requestId = ++portalNotificationsRequestRef.current;
@@ -574,8 +584,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     await openPortalAppointmentDetail({
       id: appointmentId,
       patientName: metadata.patientName || notification?.patientName || user?.name || 'Paciente',
-      clinicName: metadata.clinicName || notification?.clinicName || notification?.clinic_name || 'Verto',
-      clinicLogoUrl: metadata.clinicLogoUrl || notification?.clinicLogoUrl || notification?.clinic_logo_url || VERTO_NOTIFICATION_LOGO,
+      clinicName: metadata.clinicName || notification?.clinicName || notification?.clinic_name || portalContext?.clinicName || 'Verto',
+      clinicLogoUrl: metadata.clinicLogoUrl || notification?.clinicLogoUrl || notification?.clinic_logo_url || portalContext?.clinicLogoUrl || VERTO_NOTIFICATION_LOGO,
       scheduledAt: metadata.scheduledAt || notification?.scheduled_for || notification?.scheduledFor || notification?.created_at
     });
   };
@@ -681,7 +691,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           applicationServerKey,
         }));
 
-      const patientIdForPush = String(patientPortalId || user?.patientId || user?.patient_id || '').trim();
+      const patientIdForPush = String(portalPatientId || '').trim();
       const safePatientIdForPush =
         patientIdForPush && patientIdForPush !== String(user?.id || '').trim()
           ? patientIdForPush
@@ -1621,7 +1631,10 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           }
         }
 
-        const saveResult = await onAddFamilyNote(portalPatientId || user.id, familyNote, persistedImage, persistedImagePath);
+        if (!portalPatientId) {
+          throw new Error('Não encontramos um paciente vinculado a este acesso. Entre em contato com a clínica.');
+        }
+        const saveResult = await onAddFamilyNote(portalPatientId, familyNote, persistedImage, persistedImagePath);
         if (saveResult?.success === false) {
           throw new Error(saveResult?.error || 'Não foi possível persistir o registro no histórico.');
         }
@@ -2023,6 +2036,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       </div>
       {portalAppointmentsState.loading || !portalAppointmentsLoaded ? (
         <div className="rounded-2xl bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700">Carregando consultas...</div>
+      ) : portalAppointmentsState.error ? (
+        <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">{portalAppointmentsState.error}</div>
       ) : portalUpcomingAppointments.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-blue-100 bg-blue-50/70 px-4 py-4 text-sm font-semibold text-blue-700">
           Nenhuma consulta agendada. Quando a clínica agendar uma consulta, ela aparecerá aqui.
@@ -2065,7 +2080,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       {portalNotifications.slice(0, 3).map((notification: any) => {
         const metadata = notification?.metadata && typeof notification.metadata === 'object' ? notification.metadata : {};
         const logoUrl = metadata.clinicLogoUrl || notification?.clinicLogoUrl || VERTO_NOTIFICATION_LOGO;
-        const clinicName = metadata.clinicName || notification?.title || 'Verto';
+        const clinicName = metadata.clinicName || portalContext?.clinicName || notification?.title || 'Verto';
         return (
           <button
             key={notification.id}
@@ -2249,7 +2264,11 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     const text = familyAnnotation.trim();
     if (!text || familyAnnotationState.saving || isReadOnlyMode) return;
     setFamilyAnnotationState({ saving: true, message: '', error: '' });
-    const result = await onAddFamilyNote(portalPatientId || user.id, text, undefined, undefined, 'note');
+    if (!portalPatientId) {
+      setFamilyAnnotationState({ saving: false, message: '', error: 'Não encontramos um paciente vinculado a este acesso. Entre em contato com a clínica.' });
+      return;
+    }
+    const result = await onAddFamilyNote(portalPatientId, text, undefined, undefined, 'note');
     if (result?.success === false) {
       setFamilyAnnotationState({ saving: false, message: '', error: result?.error || 'Não foi possível enviar a anotação.' });
       return;
@@ -2291,12 +2310,16 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const uploadPortalPatientFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     event.target.value = '';
-    if (!file || !portalPatientId || portalFileState.uploading || isReadOnlyMode) return;
+    if (!file || portalFileState.uploading || isReadOnlyMode) return;
     if (file.size > 10 * 1024 * 1024) {
       setPortalFileState({ uploading: false, error: 'O arquivo deve ter no máximo 10 MB.', message: '' });
       return;
     }
     setPortalFileState({ uploading: true, error: '', message: '' });
+    if (!portalPatientId) {
+      setPortalFileState({ uploading: false, error: 'Não encontramos um paciente vinculado a este acesso. Entre em contato com a clínica.', message: '' });
+      return;
+    }
     const result = await dataService.uploadPatientFile(portalPatientId, {
       fileBlob: file,
       fileName: file.name,
@@ -2529,12 +2552,14 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     activePortalAppointment?.clinic?.displayName,
     activePortalAppointment?.clinic?.name,
     activePortalAppointment?.clinic_name,
+    portalContext?.clinicName,
     'Verto'
   );
   const activePortalClinicLogoUrl = firstPortalText(
     activePortalAppointment?.clinicLogoUrl,
     activePortalAppointment?.clinic?.logoUrl,
     activePortalAppointment?.clinic_logo_url,
+    portalContext?.clinicLogoUrl,
     VERTO_NOTIFICATION_LOGO
   );
   const portalActionBlocked = activePortalStatus.includes('CANCEL') || activePortalStatus.includes('COMPLET') || activePortalStatus.includes('NO_SHOW');
@@ -2562,11 +2587,6 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           <ChevronRight size={18} />
         </button>
       </div>
-      {portalAppointmentsState.error && (
-        <div className="mb-3 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
-          {portalAppointmentsState.error}
-        </div>
-      )}
       {portalAppointmentsState.message && (
         <div className="mb-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800">
           {portalAppointmentsState.message}
@@ -2574,6 +2594,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       )}
       {portalAppointmentsState.loading || !portalAppointmentsLoaded ? (
         <div className="rounded-2xl bg-purple-50 px-4 py-3 text-sm font-semibold text-purple-700">Carregando consultas...</div>
+      ) : portalAppointmentsState.error ? (
+        <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">{portalAppointmentsState.error}</div>
       ) : portalAppointments.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-purple-100 bg-purple-50/60 px-4 py-5 text-center text-sm font-semibold text-purple-700">
           Nenhuma consulta encontrada neste mês.

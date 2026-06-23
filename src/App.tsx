@@ -3042,7 +3042,7 @@ export default function App() {
         : null;
 
     return {
-      patientId: String(byId?.id || byEmail?.id || byUserEmail?.id || resolvedPatientPortalId || candidateId || user?.id || '').trim(),
+      patientId: String(byId?.id || byEmail?.id || byUserEmail?.id || resolvedPatientPortalId || candidateId || '').trim(),
       patientEmail: String(
         byId?.email ||
           byEmail?.email ||
@@ -3094,10 +3094,56 @@ export default function App() {
       const requestId = ++requestGeneration;
       try {
         if (mounted && !loadedOnce) setPatientContextLoaded(false);
-        const identity = resolvePatientIdentityForPortal(user);
+        const portalContextResult = await dataService.getPortalContext();
+        if (!mounted || requestId !== requestGeneration) return;
+        const portalContext = portalContextResult?.success && portalContextResult?.data ? portalContextResult.data : null;
+        const resolvedContextPatientId = String(portalContext?.resolvedPatientId || '').trim();
+        if (!resolvedContextPatientId) {
+          console.warn('[PatientPortal] skipped patient-scoped fetch: missing resolvedPatientId');
+          if (mounted) {
+            setResolvedPatientPortalId('');
+            setHistory([]);
+            setTherapistNotes([]);
+            setTasks([]);
+            setProtocols([]);
+            setPatientContextLoaded(true);
+          }
+          loadedOnce = true;
+          return;
+        }
+        setResolvedPatientPortalId(resolvedContextPatientId);
+        setUser((prev: any) => {
+          if (!prev || prev.id !== user.id) return prev;
+          const previousContext = prev.portalContext || {};
+          if (
+            String(previousContext.resolvedPatientId || '') === resolvedContextPatientId &&
+            String(previousContext.clinicName || '') === String(portalContext?.clinicName || '') &&
+            String(previousContext.clinicLogoUrl || '') === String(portalContext?.clinicLogoUrl || '')
+          ) {
+            return prev;
+          }
+          return {
+            ...prev,
+            patientId: resolvedContextPatientId,
+            patient_id: resolvedContextPatientId,
+            portalContext,
+            clinicSettings: {
+              ...(prev?.clinicSettings || {}),
+              ...(portalContext?.clinicName ? { clinicName: portalContext.clinicName } : {}),
+              ...(portalContext?.clinicLogoUrl ? { clinicLogoUrl: portalContext.clinicLogoUrl } : {})
+            }
+          };
+        });
+        const identity = resolvePatientIdentityForPortal({
+          ...user,
+          patientId: resolvedContextPatientId,
+          patient_id: resolvedContextPatientId,
+          patient_email: portalContext?.resolvedPatientEmail || user.email,
+          email: portalContext?.resolvedPatientEmail || user.email
+        });
         const [historyRes, notesRes] = await Promise.allSettled([
           dataService.getPatientSelfHistory(),
-          dataService.getNotesByEmail(user.email)
+          dataService.getNotesByEmail(portalContext?.resolvedPatientEmail || user.email)
         ]);
         if (!mounted || requestId !== requestGeneration) return;
 

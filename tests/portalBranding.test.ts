@@ -25,7 +25,8 @@ const portalAppointmentSlice = serverCode.slice(
 test('appointment confirmation branding is clinic-first and never falls back to actor clinic settings', () => {
   assert.match(serverCode, /const readClinicBrandingForFamilyView = async/);
   assert.match(serverCode, /\.from\('clinics'\)[\s\S]*?\.select\(columns\)/);
-  assert.match(serverCode, /read\('id,name,logo_url'\)/);
+  assert.match(serverCode, /read\('id,name,display_name,legal_name,logo_url'\)/);
+  assert.match(serverCode, /clinic\?\.display_name \|\| clinic\?\.legal_name \|\| clinic\?\.name/);
   assert.match(confirmationRouteSlice, /buildFamilyAppointmentDisplayContext/);
   assert.doesNotMatch(confirmationRouteSlice, /actor\?\.clinicSettings\?\.clinicName/);
   assert.doesNotMatch(confirmationRouteSlice, /actor\?\.clinicSettings\?\.clinicLogoUrl/);

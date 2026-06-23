@@ -16,10 +16,17 @@ assert.match(migration, /revoke insert, delete, update on table public\.portal_n
 assert.match(migration, /grant update \(read_at, acknowledged_at, updated_at\)/);
 assert.match(cron, /appointmentId\}:appointment:\$\{recipientKey\}/);
 assert.match(cron, /type: 'appointment_reminder'/);
+assert.match(cron, /\.eq\('appointment_id', params\.appointment\.appointmentId\)/);
+assert.match(cron, /\.in\('type', \['appointment_reminder', 'appointment_reminder_24h', 'appointment_reminder_12h'\]\)/);
+assert.match(cron, /if \(existingResult\.data\.acknowledged_at\) return false/);
+assert.match(cron, /\.update\(updatePayload\)/);
 assert.match(cron, /if \(!had24h\)/);
 assert.match(cron, /if \(hasPatientResponse\)/);
 assert.match(cron, /persistPortalReminder/);
 assert.match(cron, /persisted \|\| result\.sent > 0/);
+assert.match(cron, /\.select\('id, clinic_id, patient_id, patient_email, therapist_name, source_payload/);
+assert.doesNotMatch(cron, /\.select\('id, clinic_id, patient_id, patient_name, patient_email, therapist_name, source_payload/);
+assert.match(cron, /hydrateReminderAppointmentPatientNames/);
 assert.doesNotMatch(read('src/services/notificationBranding.ts'), /actions:\s*\[/);
 assert.match(read('src/services/notificationBranding.ts'), /const icon = DEFAULT_VERTO_LOGO/);
 assert.doesNotMatch(read('public/sw.js'), /actions,/);

@@ -83,7 +83,8 @@ test('appointment reminder popup is clinic-branded and neutral', () => {
   assert.match(serverCode, /clinicName/);
   assert.match(serverCode, /clinicLogoUrl/);
   assert.match(serverCode, /\.from\('clinics'\)/);
-  assert.match(serverCode, /read\('id,name,logo_url'\)/);
+  assert.match(serverCode, /read\('id,name,display_name,legal_name,logo_url'\)/);
+  assert.match(serverCode, /clinic\?\.display_name \|\| clinic\?\.legal_name \|\| clinic\?\.name/);
   assert.match(appCode, /buildPatientReminderModalViewModel/);
   assert.match(appCode, /appointmentConfirmationViewModel\?\.brandName/);
   assert.match(appCode, /appointmentConfirmationViewModel\?\.brandLogoUrl/);

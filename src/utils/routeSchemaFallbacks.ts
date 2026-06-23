@@ -148,7 +148,6 @@ export const NOTE_SELECT_COLUMNS = [
   'patient_id',
   'patient_email',
   'type',
-  'visibility',
   'subject',
   'content',
   'note',
@@ -264,7 +263,6 @@ export const TASK_SELECT_COLUMNS = [
   'patient_email',
   'title',
   'description',
-  'type',
   'icon',
   'color',
   'completed',
@@ -286,7 +284,6 @@ export const TASK_LEGACY_SELECT_COLUMNS = [
   'patient_email',
   'title',
   'description',
-  'type',
   'completed',
   'created_at'
 ];
@@ -1709,14 +1706,20 @@ export async function fetchFinancialEntriesWithSchemaFallback(params: {
 function noteIsReadableWithoutVisibility(note: any): boolean {
   const visibility = cleanString(note?.visibility, 40).toLowerCase();
   const legacyType = cleanString(note?.type, 40).toLowerCase();
+  const metadata = note?.metadata && typeof note.metadata === 'object' ? note.metadata : {};
   return ['patient', 'shared', 'family', 'shared_patient'].includes(visibility) ||
-    ['patient', 'shared', 'family', 'shared_patient'].includes(legacyType);
+    ['patient', 'shared', 'family', 'shared_patient'].includes(legacyType) ||
+    note?.shared_with_patient === true ||
+    metadata?.sharedWithPatient === true ||
+    metadata?.visibleToPatient === true ||
+    ['patient', 'shared', 'family', 'shared_patient'].includes(cleanString(metadata?.visibility, 40).toLowerCase());
 }
 
 export async function fetchNotesWithSchemaFallback(params: {
   supabase: SupabaseLike;
   patientId?: string | null;
   patientEmail?: string | null;
+  patientIds?: string[];
   excludePatientId?: string | null;
   role: string;
   limit: number;
@@ -1727,6 +1730,7 @@ export async function fetchNotesWithSchemaFallback(params: {
   const route = params.route || '/api/notes/:patientId';
   const patientId = cleanString(params.patientId, 120);
   const patientEmail = cleanString(params.patientEmail, 320).toLowerCase();
+  const patientIds = Array.from(new Set((params.patientIds || []).map((id) => cleanString(id, 120)).filter(Boolean)));
   const excludePatientId = cleanString(params.excludePatientId, 120);
 
   const runStage = async (stage: 'primary_select' | 'legacy_select', baseColumns: string[]) => {
@@ -1734,7 +1738,7 @@ export async function fetchNotesWithSchemaFallback(params: {
     const removedColumns = new Set<string>();
     let filterIsActive = true;
     let filterDeletedAt = true;
-    let filterVisibility = cleanString(params.role, 40).toLowerCase() === 'patient';
+    const shouldFilterPatientReadableNotes = cleanString(params.role, 40).toLowerCase() === 'patient';
     let lastError: any = null;
 
     for (let attempt = 0; attempt < 12; attempt += 1) {
@@ -1744,13 +1748,11 @@ export async function fetchNotesWithSchemaFallback(params: {
 
       let query = params.supabase.from('notes').select(joinColumns(columns));
       if (patientId) query = query.eq('patient_id', patientId);
+      if (!patientId && patientIds.length > 0) query = query.in('patient_id', patientIds);
       if (patientEmail) query = query.eq('patient_email', patientEmail);
       if (excludePatientId) query = query.neq('patient_id', excludePatientId);
       if (filterIsActive && !removedColumns.has('is_active')) query = query.eq('is_active', true);
       if (filterDeletedAt && !removedColumns.has('deleted_at')) query = query.is('deleted_at', null);
-      if (filterVisibility && !removedColumns.has('visibility')) {
-        query = query.in('visibility', ['patient', 'shared', 'family', 'shared_patient']);
-      }
       if (!removedColumns.has('created_at')) {
         query = query.order('created_at', { ascending: false });
       }
@@ -1760,7 +1762,7 @@ export async function fetchNotesWithSchemaFallback(params: {
       if (!result.error) {
         const rows = Array.isArray(result.data) ? result.data : [];
         return {
-          data: filterVisibility && removedColumns.has('visibility')
+          data: shouldFilterPatientReadableNotes
             ? rows.filter(noteIsReadableWithoutVisibility)
             : rows,
           error: null,
@@ -1782,7 +1784,6 @@ export async function fetchNotesWithSchemaFallback(params: {
       if (columns.includes(missingColumn)) {
         columns = columns.filter((column) => column !== missingColumn);
       }
-      if (missingColumn === 'visibility') filterVisibility = false;
       if (missingColumn === 'is_active') filterIsActive = false;
       if (missingColumn === 'deleted_at') filterDeletedAt = false;
 

@@ -7,6 +7,9 @@ const read = (file: string) => readFileSync(join(root, file), 'utf8');
 
 const patientDashboardCode = read('src/components/PatientDashboard.tsx');
 const serverCode = read('server.ts');
+const appCode = read('src/App.tsx');
+const dataServiceCode = read('src/services/dataService.ts');
+const routeSchemaCode = read('src/utils/routeSchemaFallbacks.ts');
 const packageJson = read('package.json');
 
 const tests: Array<{ name: string; fn: () => void }> = [];
@@ -87,7 +90,9 @@ test('calendario carrega na home Kids e relatorio continua sob demanda', () => {
   assert.match(patientDashboardCode, /portalSection === 'home' && isKidsProfile/);
   assert.match(patientDashboardCode, /portalAppointmentsLoaded/);
   assert.match(patientDashboardCode, /getPortalCalendarMonthRange\(portalCalendarMonth\)/);
-  assert.match(patientDashboardCode, /getPortalDefaultAppointmentsRange\(\)/);
+  assert.match(patientDashboardCode, /const portalDefaultAppointmentsRange = useMemo\(\(\) => getPortalDefaultAppointmentsRange\(\), \[portalPatientId\]\)/);
+  assert.match(patientDashboardCode, /: portalDefaultAppointmentsRange/);
+  assert.doesNotMatch(patientDashboardCode, /: getPortalDefaultAppointmentsRange\(\)/);
   assert.match(patientDashboardCode, /portalAppointmentsRangeKey/);
   assert.match(patientDashboardCode, /portalCalendarCells/);
   assert.match(patientDashboardCode, /Agenda mensal da cl.nica/);
@@ -100,16 +105,19 @@ test('calendario carrega na home Kids e relatorio continua sob demanda', () => {
 
 test('endpoint do calendario do portal segue escopo e select explicito', () => {
   assert.doesNotMatch(serverCode, /\.select\(\s*['"`]\*['"`]\s*\)/);
-  const route = serverSlice("app.get('/api/portal/appointments'", 4400);
+  const route = serverSlice("app.get('/api/portal/appointments'", 6200);
   assert.match(route, /checkAuth/);
   assert.match(route, /getPortalPatientIdsForUser/);
   assert.match(route, /canPortalUserAccessPatient/);
   assert.match(route, /\.select\(PORTAL_APPOINTMENT_SELECT\)/);
   assert.match(route, /buildPortalAppointmentRangeQuery\('scheduled_at'\)/);
   assert.match(route, /buildPortalAppointmentRangeQuery\('scheduled_start_at'\)/);
+  assert.match(route, /portal_notifications/);
+  assert.match(route, /notificationAppointmentIds/);
   assert.match(route, /const rowsById = new Map<string, any>\(\)/);
   assert.match(route, /buildCalendarAppointmentStart\(a\)\.getTime\(\) - buildCalendarAppointmentStart\(b\)\.getTime\(\)/);
   assert.match(route, /visibleRows\.map\(\(row\) => serializePortalAppointmentForFamilyView\(row\)\)/);
+  assert.doesNotMatch(route, /patient_name/);
 });
 
 test('portal resolve paciente Kids tambem pelo responsavel vinculado', () => {
@@ -119,6 +127,29 @@ test('portal resolve paciente Kids tambem pelo responsavel vinculado', () => {
   assert.match(resolver, /appendLinkedPatientIds/);
   assert.match(resolver, /\.eq\('is_active', true\)/);
   assert.match(resolver, /\.is\('deleted_at', null\)/);
+  const contextRoute = serverSlice("app.get('/api/portal/context'", 900);
+  assert.match(serverCode, /const resolvePatientPortalContext = async/);
+  assert.match(contextRoute, /resolvePatientPortalContext/);
+  assert.match(dataServiceCode, /async getPortalContext\(\)/);
+  assert.match(appCode, /const portalContextResult = await dataService\.getPortalContext\(\)/);
+  assert.match(appCode, /if \(!resolvedContextPatientId\)/);
+  assert.match(dataServiceCode, /skipped patient-scoped fetch: missing resolvedPatientId/);
+  assert.doesNotMatch(appCode, /candidateId \|\| user\?\.id \|\| ''/);
+});
+
+test('diario e tarefas do portal nao consultam colunas ausentes em producao', () => {
+  const noteSelectColumns = between(routeSchemaCode, 'export const NOTE_SELECT_COLUMNS = [', '];');
+  const taskSelectColumns = between(routeSchemaCode, 'export const TASK_SELECT_COLUMNS = [', '];');
+  const taskLegacySelectColumns = between(routeSchemaCode, 'export const TASK_LEGACY_SELECT_COLUMNS = [', '];');
+  assert.doesNotMatch(noteSelectColumns, /'visibility'/);
+  assert.doesNotMatch(taskSelectColumns, /'type'/);
+  assert.doesNotMatch(taskLegacySelectColumns, /'type'/);
+  assert.doesNotMatch(routeSchemaCode, /\.in\('visibility'/);
+  const notesEmailRoute = serverSlice("app.get('/api/notes/email/:email'", 2200);
+  assert.match(notesEmailRoute, /fetchNotesWithRoleFilter/);
+  assert.doesNotMatch(notesEmailRoute, /\.from\('notes'\)[\s\S]{0,120}\.select\(NOTE_SELECT\)/);
+  assert.match(notesEmailRoute, /\/api\/notes\/email\/:email \[GET\]/);
+  assert.doesNotMatch(notesEmailRoute, /\/api\/patient-records\/:patientId \[POST\]/);
 });
 
 test('notificacoes do portal sao deduplicadas por consulta pendente', () => {

@@ -3526,7 +3526,6 @@ const APPOINTMENT_SELECT = [
   'clinic_id',
   'patient_id',
   'patient_email',
-  'patient_name',
   'therapist_id',
   'therapist_name',
   'scheduled_at',
@@ -3566,7 +3565,6 @@ const PORTAL_APPOINTMENT_SELECT = [
   'clinic_id',
   'patient_id',
   'patient_email',
-  'patient_name',
   'therapist_id',
   'therapist_name',
   'scheduled_at',
@@ -7042,20 +7040,40 @@ async function getClinicPatientIdsByEmail(clinicId: string, patientEmail: string
     .filter((id: string) => isUuid(id));
 }
 
-async function getPatientIdsByEmailAcrossClinics(patientEmail: string): Promise<string[]> {
+async function getPatientIdsByEmailAcrossClinics(patientEmail: string, responsibleUserId?: string | null, clinicId?: string | null): Promise<string[]> {
   const safeEmail = sanitizeEmail(patientEmail);
-  if (!safeEmail) return [];
-  const { data, error } = await supabase
-    .from('patients')
-    .select('id')
-    .ilike('email', safeEmail)
-    .eq('is_active', true)
-    .is('deleted_at', null)
-    .limit(1000);
-  if (error) return [];
-  return (data || [])
+  const safeResponsibleUserId = sanitizeString(responsibleUserId, 120);
+  const safeClinicId = sanitizeString(clinicId, 120);
+  if (!safeEmail && !isUuid(safeResponsibleUserId)) return [];
+  const rows: any[] = [];
+  const run = async (column: 'email' | 'responsible_email' | 'responsible_user_id', value: string, operator: 'ilike' | 'eq' = 'eq') => {
+    if (!value) return;
+    let query = supabase
+      .from('patients')
+      .select('id')
+      .eq('is_active', true)
+      .is('deleted_at', null)
+      .limit(1000);
+    query = operator === 'ilike' ? query.ilike(column, value) : query.eq(column, value);
+    if (isUuid(safeClinicId)) query = query.eq('clinic_id', safeClinicId);
+    const { data, error } = await query;
+    if (error) {
+      const missingColumn = extractMissingColumnName(error);
+      if (missingColumn === column) return;
+      return;
+    }
+    rows.push(...(Array.isArray(data) ? data : []));
+  };
+  if (safeEmail) {
+    await run('email', safeEmail, 'ilike');
+    await run('responsible_email', safeEmail, 'ilike');
+  }
+  if (isUuid(safeResponsibleUserId)) {
+    await run('responsible_user_id', safeResponsibleUserId, 'eq');
+  }
+  return Array.from(new Set(rows
     .map((row: any) => sanitizeString(row?.id, 120))
-    .filter((id: string) => isUuid(id));
+    .filter((id: string) => isUuid(id))));
 }
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -16832,8 +16850,13 @@ async function startServer() {
         .eq('id', safeClinicId)
         .limit(1)
         .maybeSingle();
-    let { data: clinic, error: clinicError } = await read('id,name,logo_url');
-    if (clinicError && extractMissingColumnName(clinicError) === 'logo_url') {
+    let { data: clinic, error: clinicError } = await read('id,name,display_name,legal_name,logo_url');
+    if (clinicError && extractMissingColumnName(clinicError)) {
+      const fallbackRead = await read('id,name,display_name,legal_name');
+      clinic = fallbackRead.data;
+      clinicError = fallbackRead.error;
+    }
+    if (clinicError && extractMissingColumnName(clinicError)) {
       const fallbackRead = await read('id,name');
       clinic = fallbackRead.data;
       clinicError = fallbackRead.error;
@@ -16844,7 +16867,7 @@ async function startServer() {
     }
     return {
       id: safeClinicId,
-      displayName: sanitizeString(clinic?.name, 160) || fallback.displayName,
+      displayName: sanitizeString(clinic?.display_name || clinic?.legal_name || clinic?.name, 160) || fallback.displayName,
       logoUrl: sanitizeSessionUrl(clinic?.logo_url),
       primaryColor: fallback.primaryColor
     };
@@ -17001,7 +17024,7 @@ async function startServer() {
       ) ||
       null;
     const patientId = sanitizeString(appointment?.patient_id || appointment?.patientId || source?.patient_id || source?.patientId, 120);
-    const patientName = sanitizeString(
+    let patientName = sanitizeString(
       appointment?.patient_name ||
         appointment?.patientName ||
         appointment?.name ||
@@ -17009,7 +17032,19 @@ async function startServer() {
         source?.patientName ||
         source?.name,
       180
-    ) || 'Paciente';
+    );
+    if ((!patientName || isGenericCalendarPatientName(patientName)) && isUuid(patientId)) {
+      const patientQuery = await supabase
+        .from('patients')
+        .select('id,name')
+        .eq('id', patientId)
+        .limit(1)
+        .maybeSingle();
+      if (!patientQuery.error && patientQuery.data?.name) {
+        patientName = sanitizeString(patientQuery.data.name, 180);
+      }
+    }
+    patientName = patientName || 'Paciente';
 
     return {
       clinicId: clinicBranding.id || (isUuid(clinicId) ? clinicId : null),
@@ -17964,7 +17999,7 @@ async function startServer() {
       if (isUuid(appointmentId)) {
         const { data: appointmentClinic, error: appointmentClinicError } = await supabase
           .from('appointments')
-          .select('clinic_id, patient_name, therapist_name, source_payload')
+          .select('clinic_id, patient_id, therapist_name, source_payload')
           .eq('id', appointmentId)
           .limit(1)
           .maybeSingle();
@@ -17987,8 +18022,13 @@ async function startServer() {
             .eq('id', safeClinicId)
             .limit(1)
             .maybeSingle();
-        let { data: clinic, error: clinicError } = await read('id,name,logo_url');
-        if (clinicError && extractMissingColumnName(clinicError) === 'logo_url') {
+        let { data: clinic, error: clinicError } = await read('id,name,display_name,legal_name,logo_url');
+        if (clinicError && extractMissingColumnName(clinicError)) {
+          const fallback = await read('id,name,display_name,legal_name');
+          clinic = fallback.data;
+          clinicError = fallback.error;
+        }
+        if (clinicError && extractMissingColumnName(clinicError)) {
           const fallback = await read('id,name');
           clinic = fallback.data;
           clinicError = fallback.error;
@@ -17998,20 +18038,30 @@ async function startServer() {
           return { clinicName: 'sua clínica', clinicLogoUrl: null };
         }
         return {
-          clinicName: sanitizeString(clinic?.name, 160) || 'sua clínica',
+          clinicName: sanitizeString(clinic?.display_name || clinic?.legal_name || clinic?.name, 160) || 'Verto',
           clinicLogoUrl: sanitizeSessionUrl(clinic?.logo_url)
         };
       };
       const clinicBranding = await readReminderClinicBranding(reminderClinicId);
       const reminderSource = parseAppointmentSourcePayloadForFamilyView(reminderAppointmentContext?.source_payload);
-      const patientName = sanitizeString(
-        reminderAppointmentContext?.patient_name ||
-          reminderSource?.patientName ||
+      let patientName = sanitizeString(
+        reminderSource?.patientName ||
           reminderSource?.patient_name ||
           req.body?.patientName ||
           req.body?.patient_name,
         180
       );
+      if (!patientName && isUuid(patientId)) {
+        const patientNameResult = await supabase
+          .from('patients')
+          .select('id,name')
+          .eq('id', patientId)
+          .limit(1)
+          .maybeSingle();
+        if (!patientNameResult.error && patientNameResult.data?.name) {
+          patientName = sanitizeString(patientNameResult.data.name, 180);
+        }
+      }
       const professionalDisplayName = sanitizeString(
         reminderAppointmentContext?.therapist_name ||
           reminderSource?.professionalDisplayName ||
@@ -23013,6 +23063,7 @@ async function startServer() {
   const fetchNotesWithRoleFilter = async (params: {
     patientId?: string;
     patientEmail?: string;
+    patientIds?: string[];
     excludePatientId?: string;
     role: string;
     limit?: number;
@@ -23023,6 +23074,7 @@ async function startServer() {
       supabase,
       patientId: params.patientId,
       patientEmail: params.patientEmail,
+      patientIds: params.patientIds,
       excludePatientId: params.excludePatientId,
       role: params.role,
       limit,
@@ -23393,15 +23445,7 @@ async function startServer() {
 
       const roleForFilter = !isPrivileged && isSelfRequest ? 'patient' : userRole;
       const limit = parseBoundedListLimit(req.query?.limit, 20, 50);
-      let query = supabase
-        .from('notes')
-        .select(NOTE_SELECT)
-        .eq('patient_email', safeEmail)
-        .eq('is_active', true)
-        .is('deleted_at', null)
-        .order('created_at', { ascending: false })
-        .limit(limit);
-
+      let scopedPatientIds: string[] | null = null;
       if (!hasGlobalClinicAccess(req.session.user) && isPrivileged) {
         const clinicId = currentClinicId(req.session.user);
         if (!clinicId) return res.status(403).json({ error: 'Clínica não identificada.' });
@@ -23409,10 +23453,18 @@ async function startServer() {
         if (clinicPatientIds.length === 0) {
           return res.json({ success: true, data: [] });
         }
-        query = query.in('patient_id', clinicPatientIds);
+        scopedPatientIds = clinicPatientIds;
       }
 
-      const { data, error } = await query;
+      const notesResult = await fetchNotesWithRoleFilter({
+        patientEmail: safeEmail,
+        patientIds: scopedPatientIds || undefined,
+        role: roleForFilter,
+        limit,
+        requestId: requestIdForLogs(req)
+      });
+      const data = notesResult.data;
+      const error = notesResult.error;
       if (error) throw error;
       let filtered = Array.isArray(data) ? data : [];
       if (roleForFilter === 'patient') {
@@ -23421,8 +23473,8 @@ async function startServer() {
 
       res.json({ success: true, data: filtered.slice(0, limit) });
     } catch (error) {
-      logRouteDbError('/api/patient-records/:patientId [POST]', error, {
-        patientId: sanitizeString(req.params.patientId, 120),
+      logRouteDbError('/api/notes/email/:email [GET]', error, {
+        email: sanitizeEmail(req.params.email),
         actorId: sanitizeString(req.session.user?.id, 120)
       });
       res.status(500).json({ error: 'Erro interno do servidor.' });
@@ -23627,7 +23679,7 @@ async function startServer() {
 
       const limit = parseBoundedListLimit(req.query?.limit, 20, 50);
       const sessionUserId = sanitizeString(req.session.user?.id, 120);
-      const patientIds = await getPatientIdsByEmailAcrossClinics(patientEmail);
+      const patientIds = await getPatientIdsByEmailAcrossClinics(patientEmail, sessionUserId, currentClinicId(req.session.user));
       const scopedPatientIds = Array.from(
         new Set(
           [sessionUserId, ...patientIds]
@@ -25442,7 +25494,7 @@ async function startServer() {
       }
 
       const limit = parseBoundedListLimit(req.query?.limit, 20, 50);
-      const patientIds = await getPatientIdsByEmailAcrossClinics(patientEmail);
+      const patientIds = await getPatientIdsByEmailAcrossClinics(patientEmail, sanitizeString(req.session.user?.id, 120), currentClinicId(req.session.user));
       const { data: tasksByEmail, error: tasksByEmailError } = await supabase
         .from('tasks')
         .select(TASK_SELECT)
@@ -25938,7 +25990,7 @@ async function startServer() {
       }
 
       const limit = parseBoundedListLimit(req.query?.limit, 20, 50);
-      const patientIds = await getPatientIdsByEmailAcrossClinics(patientEmail);
+      const patientIds = await getPatientIdsByEmailAcrossClinics(patientEmail, sanitizeString(req.session.user?.id, 120), currentClinicId(req.session.user));
       const { data: byEmail, error: byEmailError } = await supabase
         .from('assigned_tasks')
         .select(ASSIGNED_TASK_SELECT)
@@ -26212,7 +26264,9 @@ async function startServer() {
       if (!existing) return res.status(404).json({ success: false, error: 'Tarefa não encontrada.' });
 
       const sessionEmail = sanitizeEmail(req.session.user?.email);
-      const linkedPatientIds = sessionEmail ? await getPatientIdsByEmailAcrossClinics(sessionEmail) : [];
+      const linkedPatientIds = sessionEmail
+        ? await getPatientIdsByEmailAcrossClinics(sessionEmail, sanitizeString(req.session.user?.id, 120), currentClinicId(req.session.user))
+        : [];
       const canAccessByEmail = sessionEmail && sessionEmail === sanitizeEmail(existing.patient_email);
       const canAccessByPatientId = linkedPatientIds.includes(String(existing.patient_id));
       if (!canAccessByEmail && !canAccessByPatientId) {
@@ -29313,6 +29367,78 @@ async function startServer() {
     return Array.from(new Set(ids.filter((id) => isUuid(id)))).slice(0, 50);
   };
 
+  const resolvePatientPortalContext = async (user: any) => {
+    const patientIds = await getPortalPatientIdsForUser(user);
+    if (patientIds.length === 0) {
+      return {
+        resolvedPatientId: null,
+        resolvedPatientEmail: sanitizeEmail(user?.email) || null,
+        responsibleUserId: sanitizeString(user?.id, 120) || null,
+        responsibleEmail: sanitizeEmail(user?.email) || null,
+        clinicId: sanitizeString(currentClinicId(user), 120) || null,
+        clinicName: null,
+        clinicLegalName: null,
+        clinicLogoUrl: null,
+        portalType: sanitizeString(user?.type || user?.portalType, 80) || null,
+        patientProfileType: null,
+        patientIds: []
+      };
+    }
+
+    const primaryPatientId = patientIds[0];
+    let patientRead = await supabase
+      .from('patients')
+      .select('id,email,clinic_id,name,type,patient_profile_type,panel_type,profile_type,responsible_user_id,responsible_email')
+      .eq('id', primaryPatientId)
+      .limit(1)
+      .maybeSingle();
+    if (patientRead.error && extractMissingColumnName(patientRead.error)) {
+      patientRead = await supabase
+        .from('patients')
+        .select('id,email,clinic_id,name,type,responsible_user_id,responsible_email')
+        .eq('id', primaryPatientId)
+        .limit(1)
+        .maybeSingle();
+    }
+    if (patientRead.error && extractMissingColumnName(patientRead.error)) {
+      patientRead = await supabase
+        .from('patients')
+        .select('id,email,clinic_id,name')
+        .eq('id', primaryPatientId)
+        .limit(1)
+        .maybeSingle();
+    }
+    if (patientRead.error && !extractMissingColumnName(patientRead.error)) throw patientRead.error;
+    const patient = patientRead.data;
+    const row = patient || { id: primaryPatientId };
+    const clinicId = sanitizeString(row?.clinic_id || currentClinicId(user), 120);
+    const clinicBranding = await readClinicBrandingForFamilyView(clinicId);
+    return {
+      resolvedPatientId: sanitizeString(row?.id || primaryPatientId, 120),
+      resolvedPatientEmail: sanitizeEmail(row?.email) || sanitizeEmail(user?.email) || null,
+      responsibleUserId: sanitizeString(row?.responsible_user_id || user?.id, 120) || null,
+      responsibleEmail: sanitizeEmail(row?.responsible_email || user?.email) || null,
+      clinicId: clinicBranding.id || (isUuid(clinicId) ? clinicId : null),
+      clinicName: clinicBranding.displayName !== 'sua clínica' ? clinicBranding.displayName : null,
+      clinicLegalName: null,
+      clinicLogoUrl: clinicBranding.logoUrl,
+      portalType: sanitizeString(user?.portalType || user?.type || row?.panel_type || row?.type, 80) || null,
+      patientProfileType: sanitizeString(row?.patient_profile_type || row?.profile_type || row?.type, 80) || null,
+      patientIds
+    };
+  };
+
+  app.get('/api/portal/context', checkAuth, requireRoles('patient'), async (req: any, res) => {
+    try {
+      const context = await resolvePatientPortalContext(req.session.user);
+      return res.json({ success: true, data: context });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/portal/context [GET]', error, {
+        requestId: requestIdForLogs(req)
+      });
+    }
+  });
+
   const canPortalUserAccessPatient = async (patientId: string, appointment: any, user: any) => {
     if (!isUuid(patientId)) return false;
     const role = sanitizeString(user?.role, 40).toLowerCase();
@@ -29898,6 +30024,44 @@ async function startServer() {
         for (const row of Array.isArray((result as any).data) ? (result as any).data : []) {
           const rowId = sanitizeString(row?.id, 120);
           if (rowId && !rowsById.has(rowId)) rowsById.set(rowId, row);
+        }
+      }
+      if (patientIds.length > 0) {
+        const notificationResult = await supabase
+          .from('portal_notifications')
+          .select('appointment_id')
+          .in('patient_id', patientIds)
+          .is('acknowledged_at', null)
+          .limit(Math.min(200, limit * 4));
+        if (!notificationResult.error) {
+          const notificationAppointmentIds = Array.from(new Set(
+            (notificationResult.data || [])
+              .map((row: any) => sanitizeString(row?.appointment_id, 120))
+              .filter((id: string) => isUuid(id) && !rowsById.has(id))
+          ));
+          if (notificationAppointmentIds.length > 0) {
+            const notificationAppointments = await supabase
+              .from('appointments')
+              .select(PORTAL_APPOINTMENT_SELECT)
+              .in('id', notificationAppointmentIds)
+              .limit(Math.min(100, notificationAppointmentIds.length));
+            if (notificationAppointments.error) {
+              if (!hasMissingFinancialSchema(notificationAppointments.error)) throw notificationAppointments.error;
+            } else {
+              const fromTime = new Date(fromIso).getTime();
+              const toTime = new Date(toIso).getTime();
+              for (const row of Array.isArray(notificationAppointments.data) ? notificationAppointments.data : []) {
+                const rowId = sanitizeString(row?.id, 120);
+                const startsAt = buildCalendarAppointmentStart(row).getTime();
+                if (!rowId || rowsById.has(rowId)) continue;
+                if (Number.isFinite(fromTime) && startsAt < fromTime) continue;
+                if (Number.isFinite(toTime) && startsAt > toTime) continue;
+                rowsById.set(rowId, row);
+              }
+            }
+          }
+        } else if (!isMissingRelationError(notificationResult.error)) {
+          throw notificationResult.error;
         }
       }
       if (rowsById.size === 0) {

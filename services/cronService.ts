@@ -196,7 +196,7 @@ async function fetchAppointmentsTable(
   const appointments = new Map<string, ReminderAppointment>();
   const { data, error } = await options.supabase
     .from('appointments')
-    .select('id, clinic_id, patient_id, patient_name, patient_email, therapist_name, source_payload, scheduled_at, status, patient_response, patient_confirmation_status, notification_24h_sent_at, notification_sent_at, notification_12h_sent_at, notification_sent, notification_12h_sent, is_active, deleted_at')
+    .select('id, clinic_id, patient_id, patient_email, therapist_name, source_payload, scheduled_at, status, patient_response, patient_confirmation_status, notification_24h_sent_at, notification_sent_at, notification_12h_sent_at, notification_sent, notification_12h_sent, is_active, deleted_at')
     .gte('scheduled_at', queryScheduledStartUtc.toISOString())
     .lt('scheduled_at', queryScheduledEndUtc.toISOString())
     .order('scheduled_at', { ascending: true })
@@ -222,7 +222,7 @@ async function fetchAppointmentsTable(
       appointmentId,
       clinicId: sanitizeText(row?.clinic_id, 120) || null,
       patientId,
-      patientName: sanitizeText(row?.patient_name || source?.patientName || source?.patient_name, 180) || null,
+      patientName: sanitizeText(source?.patientName || source?.patient_name, 180) || null,
       patientEmail: sanitizeEmail(row?.patient_email),
       professionalDisplayName:
         sanitizeText(
@@ -363,6 +363,44 @@ async function fetchClinicStateAppointments(
   return appointments;
 }
 
+async function hydrateReminderAppointmentPatientNames(
+  options: ActiveCronServiceOptions,
+  appointments: ReminderAppointment[],
+) {
+  const missingPatientIds = Array.from(new Set(
+    appointments
+      .filter((appointment) => !sanitizeText(appointment.patientName, 180))
+      .map((appointment) => sanitizeText(appointment.patientId, 120))
+      .filter((id) => isUuid(id))
+  ));
+  if (missingPatientIds.length === 0) return appointments;
+
+  const { data, error } = await options.supabase
+    .from('patients')
+    .select('id,name')
+    .in('id', missingPatientIds)
+    .limit(missingPatientIds.length);
+  if (error) {
+    options.logger.warn('[Appointment Reminder Cron] Nomes de pacientes nao carregados.', {
+      count: missingPatientIds.length,
+      message: error.message
+    });
+    return appointments;
+  }
+
+  const namesById = new Map<string, string>();
+  for (const row of data || []) {
+    const id = sanitizeText(row?.id, 120);
+    const name = sanitizeText(row?.name, 180);
+    if (id && name) namesById.set(id, name);
+  }
+
+  return appointments.map((appointment) => ({
+    ...appointment,
+    patientName: sanitizeText(appointment.patientName, 180) || namesById.get(appointment.patientId) || null
+  }));
+}
+
 async function fetchReminderAppointments(
   options: ActiveCronServiceOptions,
   queryScheduledStartUtc: dayjs.Dayjs,
@@ -383,9 +421,10 @@ async function fetchReminderAppointments(
     mergeAppointment(tableAppointments, appointment);
   }
 
-  return Array.from(tableAppointments.values()).sort((a, b) =>
+  const appointments = Array.from(tableAppointments.values()).sort((a, b) =>
     a.scheduledAt.localeCompare(b.scheduledAt),
   );
+  return hydrateReminderAppointmentPatientNames(options, appointments);
 }
 
 async function updateAppointmentsTableMarker(params: {
@@ -578,8 +617,13 @@ async function resolveReminderClinicBranding(
       .limit(1)
       .maybeSingle();
 
-  let { data, error } = await read('id,name,logo_url');
-  if (error && String(error.message || '').match(/column\s+"?logo_url"?/i)) {
+  let { data, error } = await read('id,name,display_name,legal_name,logo_url');
+  if (error && String(error.message || '').match(/column\s+"?(display_name|legal_name|logo_url)"?/i)) {
+    const fallback = await read('id,name,display_name,legal_name');
+    data = fallback.data;
+    error = fallback.error;
+  }
+  if (error && String(error.message || '').match(/column\s+"?(display_name|legal_name)"?/i)) {
     const fallback = await read('id,name');
     data = fallback.data;
     error = fallback.error;
@@ -595,7 +639,7 @@ async function resolveReminderClinicBranding(
   }
 
   const branding = {
-    clinicName: sanitizeText(data?.name, 160) || 'sua clínica',
+    clinicName: sanitizeText(data?.display_name || data?.legal_name || data?.name, 160) || 'Verto',
     clinicLogoUrl: sanitizeText(data?.logo_url, 2000) || null
   };
   clinicBrandingCache.set(safeClinicId, branding);
@@ -610,14 +654,20 @@ async function persistPortalReminder(params: {
   body: string;
   scheduledFor: string;
 }) {
-  const patientResult = await params.options.supabase
-    .from('patients')
-    .select('id, clinic_id, responsible_user_id, email')
-    .eq('id', params.appointment.patientId)
-    .eq('is_active', true)
-    .is('deleted_at', null)
-    .limit(1)
-    .maybeSingle();
+  const readPatient = (columns: string) =>
+    params.options.supabase
+      .from('patients')
+      .select(columns)
+      .eq('id', params.appointment.patientId)
+      .eq('is_active', true)
+      .is('deleted_at', null)
+      .limit(1)
+      .maybeSingle();
+
+  let patientResult = await readPatient('id, clinic_id, responsible_user_id, responsible_email, email, name');
+  if (patientResult.error && /column\s+"?responsible_email"?/i.test(String(patientResult.error.message || ''))) {
+    patientResult = await readPatient('id, clinic_id, responsible_user_id, email, name');
+  }
 
   if (patientResult.error) {
     params.options.logger.warn('[Appointment Reminder Cron] Paciente do lembrete não pôde ser confirmado.', {
@@ -630,12 +680,83 @@ async function persistPortalReminder(params: {
   const patient = patientResult.data;
   if (!patient?.id) return false;
   const recipientUserId = isUuid(patient?.responsible_user_id) ? sanitizeText(patient.responsible_user_id, 120) : null;
-  const recipientEmail = sanitizeEmail(params.appointment.patientEmail || patient?.email) || null;
+  const recipientEmail = sanitizeEmail(params.appointment.patientEmail || patient?.responsible_email || patient?.email) || null;
   if (!recipientUserId && !recipientEmail) return false;
 
   const recipientKey = recipientUserId || recipientEmail;
   const idempotencyKey = `${params.appointment.appointmentId}:appointment:${recipientKey}`;
   const sentAt = dayjs().utc().toISOString();
+  const notificationMetadata = {
+    reminderKind: params.kind,
+    scheduledAt: params.appointment.scheduledAt,
+    clinicName: params.appointment.clinicName || null,
+    clinicLogoUrl: params.appointment.clinicLogoUrl || null,
+    patientName: params.appointment.patientName || sanitizeText(patient?.name, 180) || null
+  };
+
+  if (isUuid(params.appointment.appointmentId)) {
+    let existingQuery = params.options.supabase
+      .from('portal_notifications')
+      .select('id, acknowledged_at, metadata, created_at')
+      .eq('patient_id', patient.id)
+      .eq('appointment_id', params.appointment.appointmentId)
+      .in('type', ['appointment_reminder', 'appointment_reminder_24h', 'appointment_reminder_12h'])
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (recipientUserId && recipientEmail) {
+      existingQuery = existingQuery.or(`recipient_user_id.eq.${recipientUserId},recipient_email.eq.${recipientEmail}`);
+    } else if (recipientUserId) {
+      existingQuery = existingQuery.eq('recipient_user_id', recipientUserId);
+    } else if (recipientEmail) {
+      existingQuery = existingQuery.eq('recipient_email', recipientEmail);
+    }
+
+    const existingResult = await existingQuery.maybeSingle();
+    if (existingResult.error) {
+      const missingTable = String(existingResult.error.code || '') === '42P01' || /portal_notifications/i.test(String(existingResult.error.message || ''));
+      if (missingTable) return false;
+      params.options.logger.warn('[Appointment Reminder Cron] Dedupe de notificacao interna falhou; tentando upsert idempotente.', {
+        appointmentId: params.appointment.appointmentId,
+        reminderKind: params.kind,
+        message: existingResult.error.message
+      });
+    } else if (existingResult.data?.id) {
+      if (existingResult.data.acknowledged_at) return false;
+      const metadata = existingResult.data.metadata && typeof existingResult.data.metadata === 'object'
+        ? { ...existingResult.data.metadata, ...notificationMetadata }
+        : notificationMetadata;
+      let updatePayload: Record<string, any> = {
+        type: 'appointment_reminder',
+        title: params.title,
+        message: params.body,
+        sent_at: sentAt,
+        scheduled_for: params.scheduledFor,
+        idempotency_key: idempotencyKey,
+        metadata,
+        updated_at: sentAt
+      };
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const { error: updateError } = await params.options.supabase
+          .from('portal_notifications')
+          .update(updatePayload)
+          .eq('id', existingResult.data.id);
+        if (!updateError) return true;
+        if (attempt === 0 && /column\s+"?updated_at"?/i.test(String(updateError.message || ''))) {
+          const { updated_at: _removed, ...withoutUpdatedAt } = updatePayload;
+          updatePayload = withoutUpdatedAt;
+          continue;
+        }
+        params.options.logger.warn('[Appointment Reminder Cron] Notificacao interna pendente nao atualizada.', {
+          appointmentId: params.appointment.appointmentId,
+          reminderKind: params.kind,
+          message: updateError.message
+        });
+        return false;
+      }
+    }
+  }
+
   const { error } = await params.options.supabase
     .from('portal_notifications')
     .upsert({
@@ -655,13 +776,7 @@ async function persistPortalReminder(params: {
       sent_at: sentAt,
       scheduled_for: params.scheduledFor,
       idempotency_key: idempotencyKey,
-      metadata: {
-        reminderKind: params.kind,
-        scheduledAt: params.appointment.scheduledAt,
-        clinicName: params.appointment.clinicName || null,
-        clinicLogoUrl: params.appointment.clinicLogoUrl || null,
-        patientName: params.appointment.patientName || null
-      }
+      metadata: notificationMetadata
     }, { onConflict: 'idempotency_key' });
 
   if (error) {
