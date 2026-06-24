@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 const root = process.cwd();
 const serverCode = readFileSync(join(root, 'server.ts'), 'utf8');
+const appCode = readFileSync(join(root, 'src/App.tsx'), 'utf8');
 const calendarCode = readFileSync(join(root, 'src/components/Calendar.tsx'), 'utf8');
 const coordinatorCode = readFileSync(join(root, 'src/components/CoordinatorDashboard.tsx'), 'utf8');
 const receptionistCode = readFileSync(join(root, 'src/components/ReceptionistDashboard.tsx'), 'utf8');
@@ -152,6 +153,37 @@ test('agendamento faturavel exige contexto financeiro explicito', () => {
   assert.match(serverCode, /appointmentRequiresFinancialContext/);
   assert.match(serverCode, /APPOINTMENT_FINANCIAL_CONTEXT_ERROR/);
   assert.match(serverCode, /Selecione um pagador\/convênio cadastrado ou escolha outro contexto financeiro válido\./);
+});
+
+test('criacao e edicao da consulta exibem e persistem plano e carteirinha', () => {
+  assert.match(coordinatorCode, /const \[sessionInsurancePlanName, setSessionInsurancePlanName\] = useState\(""\)/);
+  assert.match(coordinatorCode, /const \[sessionInsuranceCardNumber, setSessionInsuranceCardNumber\] = useState\(""\)/);
+  assert.match(coordinatorCode, /normalizePatientInsuranceEligibility\(patient\)/);
+  assert.match(coordinatorCode, /insurancePlanName: String\(\s*insurancePlan\?\.insurancePlanName \|\| insuranceEligibility\.insurancePlanCategory/);
+  assert.match(coordinatorCode, /insuranceCardNumber: String\(insuranceEligibility\.insuranceCardNumber/);
+  assert.match(coordinatorCode, /Plano do convênio/);
+  assert.match(coordinatorCode, /Número da carteirinha/);
+  assert.match(coordinatorCode, /Plano não cadastrado para este paciente\./);
+  assert.match(coordinatorCode, /insurancePlanName: sessionFinancialContextType === "INSURANCE" \? sessionInsurancePlanName/);
+  assert.match(coordinatorCode, /insuranceCardNumber: sessionFinancialContextType === "INSURANCE" \? sessionInsuranceCardNumber/);
+  assert.match(coordinatorCode, /const appointmentInsurancePlanSnapshot = String/);
+  assert.match(coordinatorCode, /const appointmentInsuranceCardSnapshot = String/);
+  assert.match(coordinatorCode, /result\.data\.hasContext[\s\S]*?appointmentInsurancePlanSnapshot \|\| result\.data\.insurancePlanName/);
+  assert.match(coordinatorCode, /result\.data\.hasContext[\s\S]*?appointmentInsuranceCardSnapshot \|\| result\.data\.insuranceCardNumber/);
+  assert.match(coordinatorCode, /\(histórico\/inativo\)/);
+  assert.match(serverCode, /insurance_plan_name: sanitizeString\(appointmentPayload\?\.insurancePlanName/);
+  assert.match(serverCode, /insurance_card_number: sanitizeString\(appointmentPayload\?\.insuranceCardNumber/);
+});
+
+test('novas consultas copiam o vinculo atual sem alterar snapshots antigos', () => {
+  assert.match(appCode, /const patientInsuranceEligibility = normalizePatientInsuranceEligibility\(patientForSession \|\| \{\}\)/);
+  assert.match(appCode, /const effectiveInsurancePlanName = usesInsuranceContext/);
+  assert.match(appCode, /const effectiveInsuranceCardNumber = usesInsuranceContext/);
+  assert.match(appCode, /insurancePlanName: effectiveInsurancePlanName/);
+  assert.match(appCode, /insuranceCardNumber: effectiveInsuranceCardNumber/);
+  assert.match(serverCode, /if \(existing\.data\?\.id && \(!params\.overwriteExplicit \|\| !explicitFinancialContextType\)\) return/);
+  assert.match(serverCode, /appointmentPayload\?\.insurancePlanName \|\| appointmentPayload\?\.insurance_plan_name \|\| suggestedBilling/);
+  assert.match(serverCode, /appointmentPayload\?\.insuranceCardNumber \|\| appointmentPayload\?\.insurance_card_number/);
 });
 
 test('contextos particular sem cobranca e nao faturavel persistem sem payer_id', () => {

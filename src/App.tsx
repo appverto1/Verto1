@@ -5079,6 +5079,25 @@ export default function App() {
     }
     if (!financialContextType && effectivePayerId) financialContextType = 'INSURANCE';
     const usesInsuranceContext = financialContextType.toUpperCase() === 'INSURANCE';
+    const patientInsuranceEligibility = normalizePatientInsuranceEligibility(patientForSession || {});
+    const effectiveInsurancePlanName = usesInsuranceContext
+      ? String(
+          sess.insurancePlanName ||
+            sess.insurance_plan_name ||
+            patientInsuranceEligibility.insurancePlanCategory ||
+            ''
+        ).trim()
+      : '';
+    const effectiveInsuranceCardNumber = usesInsuranceContext
+      ? String(
+          sess.insuranceCardNumber ||
+            sess.insurance_card_number ||
+            sess.cardNumber ||
+            sess.card_number ||
+            patientInsuranceEligibility.insuranceCardNumber ||
+            ''
+        ).trim()
+      : '';
     const newItems = [];
     const conflicts: string[] = [];
 
@@ -5194,6 +5213,10 @@ export default function App() {
           payer_id: usesInsuranceContext ? effectivePayerId || null : null,
           payerName: usesInsuranceContext ? effectivePayerName || '' : '',
           payer_name_snapshot: usesInsuranceContext ? effectivePayerName || '' : '',
+          insurancePlanName: effectiveInsurancePlanName,
+          insurance_plan_name: effectiveInsurancePlanName,
+          insuranceCardNumber: effectiveInsuranceCardNumber,
+          insurance_card_number: effectiveInsuranceCardNumber,
           guideNumber: sess.guideNumber || sess.guide_number || '',
           guide_number: sess.guideNumber || sess.guide_number || '',
           authorizationCode: sess.authorizationCode || sess.authorization_code || '',

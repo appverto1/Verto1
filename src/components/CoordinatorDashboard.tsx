@@ -850,6 +850,8 @@ export function CoordinatorDashboard({
     useState<AppointmentFinancialContextType>("INSURANCE");
   const [sessionPayerId, setSessionPayerId] = useState("");
   const [sessionPayerNameSnapshot, setSessionPayerNameSnapshot] = useState("");
+  const [sessionInsurancePlanName, setSessionInsurancePlanName] = useState("");
+  const [sessionInsuranceCardNumber, setSessionInsuranceCardNumber] = useState("");
   const [sessionGuideNumber, setSessionGuideNumber] = useState("");
   const [sessionAuthorizationCode, setSessionAuthorizationCode] = useState("");
   const [clinicPayers, setClinicPayers] = useState<any[]>([]);
@@ -2438,7 +2440,15 @@ export function CoordinatorDashboard({
   };
 
   const resolvePatientInsurancePayer = (patient: any, serviceType: any = "") => {
-    if (!patient) return { payerId: "", payerName: "" };
+    if (!patient) {
+      return {
+        payerId: "",
+        payerName: "",
+        insurancePlanName: "",
+        insuranceCardNumber: "",
+      };
+    }
+    const insuranceEligibility = normalizePatientInsuranceEligibility(patient);
     const plans = normalizePatientFinancialPlans(
       Array.isArray(patient?.financialPlans)
         ? patient.financialPlans
@@ -2471,7 +2481,14 @@ export function CoordinatorDashboard({
       ),
     ).trim();
     if (planPayerId || planPayerName) {
-      return { payerId: planPayerId, payerName: planPayerName };
+      return {
+        payerId: planPayerId,
+        payerName: planPayerName,
+        insurancePlanName: String(
+          insurancePlan?.insurancePlanName || insuranceEligibility.insurancePlanCategory || "",
+        ).trim(),
+        insuranceCardNumber: String(insuranceEligibility.insuranceCardNumber || "").trim(),
+      };
     }
 
     const insuranceType = normalizePayerLookup(
@@ -2490,9 +2507,19 @@ export function CoordinatorDashboard({
       ),
     ).trim();
     if (!insuranceName || insuranceType === "particular" || insuranceType === "private") {
-      return { payerId: "", payerName: "" };
+      return {
+        payerId: "",
+        payerName: "",
+        insurancePlanName: "",
+        insuranceCardNumber: "",
+      };
     }
-    return { payerId: "", payerName: insuranceName };
+    return {
+      payerId: "",
+      payerName: insuranceName,
+      insurancePlanName: String(insuranceEligibility.insurancePlanCategory || "").trim(),
+      insuranceCardNumber: String(insuranceEligibility.insuranceCardNumber || "").trim(),
+    };
   };
 
   const resolveClinicPayerForPatientInsurance = (patientPayer: any) => {
@@ -2540,6 +2567,8 @@ export function CoordinatorDashboard({
     if (matchingPayer?.id || patientPayer.payerId) setSessionFinancialContextType("INSURANCE");
     setSessionPayerId(String(matchingPayer?.id || patientPayer.payerId || ""));
     setSessionPayerNameSnapshot(String(matchingPayer?.name || patientPayer.payerName || ""));
+    setSessionInsurancePlanName(String(patientPayer.insurancePlanName || ""));
+    setSessionInsuranceCardNumber(String(patientPayer.insuranceCardNumber || ""));
     setFilteredPatients([]);
   };
 
@@ -2625,11 +2654,24 @@ export function CoordinatorDashboard({
     if (value === SESSION_PATIENT_INSURANCE_PAYER_VALUE) {
       setSessionPayerId("");
       setSessionPayerNameSnapshot(sessionPayerSnapshotOptionLabel);
+      setSessionInsurancePlanName(selectedSessionPatientInsurancePayer.insurancePlanName || "");
+      setSessionInsuranceCardNumber(selectedSessionPatientInsurancePayer.insuranceCardNumber || "");
       return;
     }
     const payer = clinicPayers.find((item: any) => String(item?.id || "") === String(value || ""));
     setSessionPayerId(value);
     setSessionPayerNameSnapshot(payer?.name || "");
+    const payerMatchesPatient =
+      Boolean(value) &&
+      (String(selectedSessionPatientInsuranceClinicPayer?.id || "") === String(value) ||
+        normalizePayerLookup(payer?.name) ===
+          normalizePayerLookup(selectedSessionPatientInsurancePayer.payerName));
+    setSessionInsurancePlanName(
+      payerMatchesPatient ? selectedSessionPatientInsurancePayer.insurancePlanName || "" : "",
+    );
+    setSessionInsuranceCardNumber(
+      payerMatchesPatient ? selectedSessionPatientInsurancePayer.insuranceCardNumber || "" : "",
+    );
   };
 
   useEffect(() => {
@@ -2647,6 +2689,8 @@ export function CoordinatorDashboard({
       setSessionFinancialContextType("INSURANCE");
       setSessionPayerId(nextPayerId);
       setSessionPayerNameSnapshot(nextPayerName);
+      setSessionInsurancePlanName(patientPayer.insurancePlanName || "");
+      setSessionInsuranceCardNumber(patientPayer.insuranceCardNumber || "");
       return;
     }
 
@@ -2656,6 +2700,8 @@ export function CoordinatorDashboard({
       setSessionFinancialContextType("INSURANCE");
       setSessionPayerId(String(matchingPayer.id));
       setSessionPayerNameSnapshot(String(matchingPayer.name || patientPayer.payerName || ""));
+      setSessionInsurancePlanName((current) => current || patientPayer.insurancePlanName || "");
+      setSessionInsuranceCardNumber((current) => current || patientPayer.insuranceCardNumber || "");
     }
   }, [
     clinicPayers,
@@ -2822,6 +2868,8 @@ export function CoordinatorDashboard({
     setSessionFinancialContextType("INSURANCE");
     setSessionPayerId("");
     setSessionPayerNameSnapshot("");
+    setSessionInsurancePlanName("");
+    setSessionInsuranceCardNumber("");
     setSessionGuideNumber("");
     setSessionAuthorizationCode("");
     setSessionNumSessions(1);
@@ -2981,6 +3029,10 @@ export function CoordinatorDashboard({
         payer_id: sessionFinancialContextType === "INSURANCE" ? sessionPayerId || null : null,
         payerName: sessionFinancialContextType === "INSURANCE" ? selectedSessionPayerName : "",
         payer_name_snapshot: sessionFinancialContextType === "INSURANCE" ? selectedSessionPayerName : "",
+        insurancePlanName: sessionFinancialContextType === "INSURANCE" ? sessionInsurancePlanName : "",
+        insurance_plan_name: sessionFinancialContextType === "INSURANCE" ? sessionInsurancePlanName : "",
+        insuranceCardNumber: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardNumber : "",
+        insurance_card_number: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardNumber : "",
         guideNumber: sessionGuideNumber,
         guide_number: sessionGuideNumber,
         authorizationCode: sessionAuthorizationCode,
@@ -3018,6 +3070,8 @@ export function CoordinatorDashboard({
         payerId: sessionFinancialContextType === "INSURANCE" ? sessionPayerId || null : null,
         payerName: sessionFinancialContextType === "INSURANCE" ? selectedSessionPayerName : null,
         serviceType: sessionApproach || "Consulta Padrão",
+        insurancePlanName: sessionFinancialContextType === "INSURANCE" ? sessionInsurancePlanName || null : null,
+        insuranceCardNumber: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardNumber || null : null,
         guideNumber: sessionGuideNumber,
         authorizationCode: sessionAuthorizationCode,
         source: "APPOINTMENT_CONTEXT",
@@ -3070,6 +3124,10 @@ export function CoordinatorDashboard({
       payer_id: sessionFinancialContextType === "INSURANCE" ? sessionPayerId || null : null,
       payerName: sessionFinancialContextType === "INSURANCE" ? selectedSessionPayerName : "",
       payer_name_snapshot: sessionFinancialContextType === "INSURANCE" ? selectedSessionPayerName : "",
+      insurancePlanName: sessionFinancialContextType === "INSURANCE" ? sessionInsurancePlanName : "",
+      insurance_plan_name: sessionFinancialContextType === "INSURANCE" ? sessionInsurancePlanName : "",
+      insuranceCardNumber: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardNumber : "",
+      insurance_card_number: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardNumber : "",
       guideNumber: sessionGuideNumber,
       guide_number: sessionGuideNumber,
       authorizationCode: sessionAuthorizationCode,
@@ -4101,6 +4159,12 @@ export function CoordinatorDashboard({
   };
 
   const handleEditAppointment = (appointment: any) => {
+    const appointmentInsurancePlanSnapshot = String(
+      appointment.insurancePlanName || appointment.insurance_plan_name || "",
+    );
+    const appointmentInsuranceCardSnapshot = String(
+      appointment.insuranceCardNumber || appointment.insurance_card_number || "",
+    );
     setEditingAppointmentId(appointment.id);
     setAppointmentEditScope("single");
     setSessionNumSessions(1);
@@ -4142,6 +4206,8 @@ export function CoordinatorDashboard({
     );
     setSessionPayerId(String(appointment.payerId || appointment.payer_id || ""));
     setSessionPayerNameSnapshot(String(appointment.payerName || appointment.payer_name_snapshot || ""));
+    setSessionInsurancePlanName(appointmentInsurancePlanSnapshot);
+    setSessionInsuranceCardNumber(appointmentInsuranceCardSnapshot);
     setSessionGuideNumber(String(appointment.guideNumber || appointment.guide_number || ""));
     setSessionAuthorizationCode(String(appointment.authorizationCode || appointment.authorization_code || ""));
     if (appointment.id && !isTherapist) {
@@ -4160,6 +4226,16 @@ export function CoordinatorDashboard({
         );
         setSessionPayerId(String(result.data.payerId || ""));
         setSessionPayerNameSnapshot(String(result.data.payerName || ""));
+        setSessionInsurancePlanName(String(
+          result.data.hasContext
+            ? result.data.insurancePlanName || ""
+            : appointmentInsurancePlanSnapshot || result.data.insurancePlanName || "",
+        ));
+        setSessionInsuranceCardNumber(String(
+          result.data.hasContext
+            ? result.data.insuranceCardNumber || ""
+            : appointmentInsuranceCardSnapshot || result.data.insuranceCardNumber || "",
+        ));
         setSessionGuideNumber(String(result.data.guideNumber || ""));
         setSessionAuthorizationCode(String(result.data.authorizationCode || ""));
       });
@@ -10094,7 +10170,7 @@ export function CoordinatorDashboard({
                           )}
                           {hasSessionPayerIdOption && (
                             <option value={sessionPayerId}>
-                              {sessionPayerNameSnapshot || selectedSessionPatientInsurancePayer.payerName || "Pagador cadastrado"}
+                              {sessionPayerNameSnapshot || selectedSessionPatientInsurancePayer.payerName || "Pagador cadastrado"} (histórico/inativo)
                             </option>
                           )}
                           {clinicPayers.map((payer: any) => (
@@ -10103,6 +10179,33 @@ export function CoordinatorDashboard({
                             </option>
                           ))}
                         </select>
+                      </label>
+                    )}
+                    {sessionFinancialContextType === "INSURANCE" && (
+                      <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                        Plano do convênio
+                        <input
+                          className="mt-1 w-full rounded-xl border border-violet-100 bg-white p-3 text-sm font-semibold normal-case tracking-normal text-slate-700 outline-none"
+                          value={sessionInsurancePlanName}
+                          onChange={(e) => setSessionInsurancePlanName(e.target.value)}
+                          placeholder="Ex.: S380"
+                        />
+                        {selectedSessionPatient && !sessionInsurancePlanName.trim() && (
+                          <span className="mt-1 block text-[11px] font-medium normal-case tracking-normal text-amber-700">
+                            Plano não cadastrado para este paciente.
+                          </span>
+                        )}
+                      </label>
+                    )}
+                    {sessionFinancialContextType === "INSURANCE" && (
+                      <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                        Número da carteirinha
+                        <input
+                          className="mt-1 w-full rounded-xl border border-violet-100 bg-white p-3 text-sm font-semibold normal-case tracking-normal text-slate-700 outline-none"
+                          value={sessionInsuranceCardNumber}
+                          onChange={(e) => setSessionInsuranceCardNumber(e.target.value)}
+                          placeholder="Ex.: 123456789"
+                        />
                       </label>
                     )}
                     <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
