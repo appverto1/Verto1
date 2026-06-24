@@ -8239,7 +8239,7 @@ async function resolveAppointmentBillingSuggestion(params: {
   const plans = planResult.error ? [] : Array.isArray(planResult.data) ? planResult.data : [];
   const patientResult = await supabase
     .from('patients')
-    .select('id, insurance_type, insurance_name, insurance_card_number')
+    .select('id, insurance_type, insurance_name, insurance_card_number, insurance_plan_category')
     .eq('id', patientId)
     .eq('clinic_id', organizationId)
     .limit(1)
@@ -8249,6 +8249,7 @@ async function resolveAppointmentBillingSuggestion(params: {
   }
   const patientBillingRow = patientResult.error ? null : patientResult.data;
   const patientInsuranceCardNumber = sanitizeString(patientBillingRow?.insurance_card_number, 120);
+  const patientInsurancePlanName = sanitizeString(patientBillingRow?.insurance_plan_category, 160);
   const usablePlans = plans.filter((plan: any) =>
     isUuid(sanitizeString(plan?.payer_id, 120)) || Boolean(sanitizeString(plan?.payer_name_snapshot, 180))
   );
@@ -8280,7 +8281,7 @@ async function resolveAppointmentBillingSuggestion(params: {
       payerName: payerName || null,
       serviceType: sanitizeString(selectedPlan.service_type || serviceType, 120) || null,
       insuranceCardNumber: patientInsuranceCardNumber || null,
-      insurancePlanName: sanitizeString(selectedPlan.insurance_plan_name, 160) || null,
+      insurancePlanName: sanitizeString(selectedPlan.insurance_plan_name, 160) || patientInsurancePlanName || null,
       authorizationCode: sanitizeString(selectedPlan.authorization_code, 120) || null,
       guideNumber: null,
       notes: sanitizeTextField(selectedPlan.notes, 1200) || null,
@@ -8308,7 +8309,7 @@ async function resolveAppointmentBillingSuggestion(params: {
     payerName: sanitizeString(matchingPayer?.name || insuranceName, 180) || null,
     serviceType: serviceType || null,
     insuranceCardNumber: patientInsuranceCardNumber || null,
-    insurancePlanName: null,
+    insurancePlanName: patientInsurancePlanName || null,
     authorizationCode: null,
     guideNumber: null,
     notes: null,
@@ -40952,7 +40953,7 @@ async function startServer() {
     const appointmentIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row.appointment_id, 120)).filter((id: string) => isUuid(id))));
     const [patientsResult, professionalsResult] = await Promise.all([
       patientIds.length > 0
-        ? supabase.from('patients').select('id, name, clinic_id, insurance_name, insurance_card_number').eq('clinic_id', clinicId).in('id', patientIds).limit(patientIds.length)
+        ? supabase.from('patients').select('id, name, clinic_id, insurance_name, insurance_card_number, insurance_plan_category').eq('clinic_id', clinicId).in('id', patientIds).limit(patientIds.length)
         : Promise.resolve({ data: [], error: null } as any),
       professionalIds.length > 0
         ? supabase.from('users').select('id, name, email, clinic_id, crp, council_number, council, professional_registry, registry').in('id', professionalIds).limit(professionalIds.length)
@@ -41030,10 +41031,19 @@ async function startServer() {
       const competenceMonth = getConferenceCompetenceMonth(row?.scheduled_start || row?.actual_start);
       const statusRow = statusMap.get(`${sanitizeString(row?.appointment_id, 120)}:${competenceMonth}`);
       const conferenceStatus = statusRow?.status || (base.readiness_status === 'NOT_BILLABLE' ? 'non_billable' : 'pending_review');
-      const hasRealPayer = isUuid(sanitizeString(base.payer_id || row?.payer_id, 120));
+      const rowPayerId = sanitizeString(base.payer_id || row?.payer_id, 120);
+      const billingPayerId = sanitizeString(billing?.payer_id, 120);
+      const appliedPayerId = isUuid(rowPayerId) ? rowPayerId : isUuid(billingPayerId) ? billingPayerId : null;
+      const hasRealPayer = isUuid(appliedPayerId);
       const financialPlanPayerName = sanitizeString(financialPlan?.payer_name_snapshot, 180);
       const rowPayerName = sanitizeString(base.payer_name && base.payer_name !== 'Sem pagador' ? base.payer_name : '', 180);
       const suggestedPayerName = !hasRealPayer ? sanitizeString(financialPlanPayerName || rowPayerName, 180) || null : null;
+      const appliedPayerName = sanitizeString(
+        billing?.payer_name_snapshot ||
+          rowPayerName ||
+          base.payer_name,
+        180
+      ) || 'Pagador cadastrado';
       const professionalRegistry = sanitizeString(
         professional?.crp ||
           professional?.council_number ||
@@ -41043,7 +41053,8 @@ async function startServer() {
       );
       return {
         ...base,
-        payer_name: hasRealPayer ? base.payer_name : 'Sem pagador',
+        payer_id: appliedPayerId,
+        payer_name: hasRealPayer ? appliedPayerName : 'Sem pagador',
         payer_type: billingContextType || null,
         financial_context_type: billingContextType || null,
         suggested_payer_name: suggestedPayerName,
@@ -41056,6 +41067,7 @@ async function startServer() {
         source_version: sanitizeString(row?.updated_at || row?.generated_at, 80) || null,
         snapshot_updated_at: row?.updated_at || row?.generated_at || null,
         insurance_card_number: sanitizeString(billing?.insurance_card_number || patient?.insurance_card_number, 120) || null,
+        insurance_plan_name: sanitizeString(billing?.insurance_plan_name || patient?.insurance_plan_category, 160) || null,
         financial_plan_name: sanitizeString(
           financialPlan?.insurance_plan_name ||
             financialPlan?.service_name_snapshot ||

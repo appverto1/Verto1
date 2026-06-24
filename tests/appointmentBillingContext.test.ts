@@ -200,9 +200,11 @@ test('detalhe da consulta salva pagador no contexto administrativo', () => {
 });
 
 test('modal preenche sugestao do paciente com carteirinha sem sobrescrever cadastro', () => {
-  assert.match(serverCode, /\.from\('patients'\)[\s\S]*\.select\('id, insurance_type, insurance_name, insurance_card_number'\)/);
+  assert.match(serverCode, /\.from\('patients'\)[\s\S]*\.select\('id, insurance_type, insurance_name, insurance_card_number, insurance_plan_category'\)/);
   assert.match(serverCode, /insuranceCardNumber: patientInsuranceCardNumber \|\| null/);
-  assert.match(serverCode, /insurancePlanName: sanitizeString\(selectedPlan\.insurance_plan_name/);
+  assert.match(serverCode, /const patientInsurancePlanName = sanitizeString\(patientBillingRow\?\.insurance_plan_category, 160\)/);
+  assert.match(serverCode, /insurancePlanName: sanitizeString\(selectedPlan\.insurance_plan_name, 160\) \|\| patientInsurancePlanName \|\| null/);
+  assert.match(serverCode, /insurancePlanName: patientInsurancePlanName \|\| null/);
   assert.match(serverCode, /const patientDefault = serializeBillingSuggestion\(suggestion\)/);
   assert.match(serverCode, /payerId: sanitizeString\(row\?\.payer_id, 120\) \|\| null/);
   assert.match(serverCode, /payerName: sanitizeString\(payer\?\.name \|\| row\?\.payer_name_snapshot, 180\) \|\| null/);
@@ -212,6 +214,7 @@ test('modal preenche sugestao do paciente com carteirinha sem sobrescrever cadas
   assert.match(calendarCode, /getBillingFormSource/);
   assert.match(calendarCode, /suggestion\?\.insuranceCardNumber/);
   assert.match(calendarCode, /suggestion\?\.insurancePlanName/);
+  assert.match(calendarCode, /<span className="font-semibold">Plano:<\/span>/);
   assert.match(calendarCode, /Pagador sugerido pelo plano financeiro, não aplicado ao atendimento/);
   assert.match(calendarCode, /Dados sugeridos a partir do cadastro do paciente/);
   assert.match(calendarCode, /Número da carteirinha/);
@@ -317,12 +320,29 @@ test('modal do fechamento mostra pagador sugerido sem marcar como aplicado', () 
   assert.match(detailSlice, /const hydratedRows = await hydrateConferenceRows\(\[data\], clinicId, req\.session\.user\)/);
   assert.match(detailSlice, /checklist: normalizeHydratedClosureChecklist\(data\?\.checklist, hydratedDetail\)/);
 
+  const hydrateStart = serverCode.indexOf('const hydrateConferenceRows');
+  const hydrateEnd = serverCode.indexOf('const loadConferenceClosureRows', hydrateStart);
+  assert.ok(hydrateStart > 0 && hydrateEnd > hydrateStart, 'hidratação do fechamento deve existir');
+  const hydrateSlice = serverCode.slice(hydrateStart, hydrateEnd);
+  assert.match(hydrateSlice, /const billingPayerId = sanitizeString\(billing\?\.payer_id, 120\)/);
+  assert.match(hydrateSlice, /const appliedPayerId = isUuid\(rowPayerId\) \? rowPayerId : isUuid\(billingPayerId\) \? billingPayerId : null/);
+  assert.match(hydrateSlice, /payer_id: appliedPayerId/);
+  assert.match(hydrateSlice, /payer_name: hasRealPayer \? appliedPayerName : 'Sem pagador'/);
+  assert.match(hydrateSlice, /insurance_plan_name: sanitizeString\(billing\?\.insurance_plan_name \|\| patient\?\.insurance_plan_category, 160\) \|\| null/);
+
   assert.match(operationalClosureCode, /payer_id\?: string \| null/);
   assert.match(operationalClosureCode, /suggested_payer_name\?: string \| null/);
   assert.match(operationalClosureCode, /function hasAppliedPayer/);
   assert.match(operationalClosureCode, /return Boolean\(String\(row\?\.payer_id \|\| ""\)\.trim\(\)\)/);
   assert.match(operationalClosureCode, /Pagador sugerido pelo plano financeiro: \{detail\.suggested_payer_name\}\. Ainda não aplicado ao atendimento\./);
   assert.match(operationalClosureCode, /Pagador: \{appliedPayerLabel\(detail\)\}/);
+});
+
+test('detalhe corrige labels do histórico operacional sem mojibake', () => {
+  assert.match(calendarCode, /Histórico operacional/);
+  assert.match(calendarCode, /Sessão assinada por/);
+  assert.match(calendarCode, /Ação registrada/);
+  assert.doesNotMatch(calendarCode, /HistÃ³rico operacional/);
 });
 
 test('conferencia mensal consome resumo persistido com pagador da consulta', () => {

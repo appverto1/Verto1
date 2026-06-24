@@ -2928,6 +2928,7 @@ export const ClinicalAgendaBoard = ({
                     {!billingDetailIsNonInsuranceContext && (
                       <>
                         <p><span className="font-semibold">Carteirinha:</span> {billingContext.insuranceCardNumber || detailEvent.insurance_card_number || 'pendente'}</p>
+                        <p><span className="font-semibold">Plano:</span> {billingContext.insurancePlanName || detailEvent.insurance_plan_name || billingSuggestion?.insurancePlanName || 'não cadastrado'}</p>
                         <p><span className="font-semibold">Guia:</span> {billingContext.guideNumber || detailEvent.guide_number || 'pendente'}</p>
                         <p><span className="font-semibold">Autorização:</span> {billingContext.authorizationCode || detailEvent.authorization_code || 'pendente'}</p>
                         <p><span className="font-semibold">Documentos:</span> {pendingBillingDocuments.length > 0 ? `${pendingBillingDocuments.length} pendente(s)` : 'Sem pendência extra'}</p>
@@ -3010,18 +3011,18 @@ export const ClinicalAgendaBoard = ({
               <div className={`mt-5 rounded-3xl border p-4 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-100 bg-slate-50/70'}`}>
                 <h4 className="flex items-center gap-2 text-sm font-bold">
                   <ClipboardCheck size={16} className="text-slate-600" />
-                  HistÃ³rico operacional
+                  Histórico operacional
                 </h4>
                 <div className="mt-3 space-y-2">
                   {signatures.slice(0, 2).map((signature: any, index: number) => (
                     <div key={`signature-${index}`} className="rounded-2xl bg-white/80 px-3 py-2 text-sm">
-                      <p className="font-semibold text-slate-800">SessÃ£o assinada por {signature.signedByName || 'responsÃ¡vel'}</p>
+                      <p className="font-semibold text-slate-800">Sessão assinada por {signature.signedByName || 'responsável'}</p>
                       {signature.signedAt && <p className="mt-0.5 text-xs text-slate-500">{new Date(signature.signedAt).toLocaleString('pt-BR')}</p>}
                     </div>
                   ))}
                   {statusHistory.slice(0, 4).map((entry: any, index: number) => (
                     <div key={`history-${index}`} className="rounded-2xl bg-white/80 px-3 py-2 text-sm">
-                      <p className="font-semibold text-slate-800">{entry.label || 'AÃ§Ã£o registrada'}</p>
+                      <p className="font-semibold text-slate-800">{entry.label || 'Ação registrada'}</p>
                       {entry.performedAt && <p className="mt-0.5 text-xs text-slate-500">{new Date(entry.performedAt).toLocaleString('pt-BR')}</p>}
                     </div>
                   ))}
