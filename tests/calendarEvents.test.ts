@@ -167,6 +167,14 @@ test('popover tem acoes clinicas e nao registra sessao automaticamente', () => {
   assert.match(calendarCode, /Manutencoes vinculadas/);
   assert.match(calendarCode, /Plano sugerido para esta sessão/);
   assert.match(calendarCode, /Fechamento/);
+  assert.match(calendarCode, /Preparação do atendimento/);
+  assert.match(calendarCode, /Sessão em aberto/);
+  assert.match(calendarCode, /Faturamento TISS/);
+  assert.match(calendarCode, /CLOSURE_SECTION_META/);
+  assert.match(calendarCode, /Antes da sessão/);
+  assert.match(calendarCode, /Depois da sessão/);
+  assert.match(calendarCode, /Ver Pré-guias TISS/);
+  assert.match(calendarCode, /future_check/);
   assert.match(calendarCode, /Ver checklist/);
   assert.match(calendarCode, /getClosureAppointmentDetail/);
   assert.match(calendarCode, /isDeletedAppointmentEvent/);

@@ -92,6 +92,7 @@ import {
   normalizeScheduleLocationType
 } from './src/utils/scheduling';
 import {
+  buildAppointmentClosureOperationalView,
   evaluateAppointmentClosureReadiness,
   type ClosureReadinessStatus
 } from './src/services/closureReadinessEngine';
@@ -32218,6 +32219,8 @@ async function startServer() {
       requireActualDuration: resolved.requireActualDuration,
       requireAuthorization: resolved.requireAuthorization,
       requireGuide: resolved.requireGuide,
+      requireAuthorizationBeforeSession: resolved.requireAuthorization,
+      requireGuideBeforeSession: false,
       requireProfessionalRegistry: resolved.requireProfessionalRegistry,
       requirePatientDocument: resolved.requirePatientDocument,
       allowManualOverride: resolved.allowManualOverride,
@@ -32724,7 +32727,10 @@ async function startServer() {
       return {
         ok: true,
         reused: true,
-        data: existing
+        data: {
+          ...existing,
+          ...buildAppointmentClosureOperationalView(existing?.checklist || [], evaluation.phase)
+        }
       };
     }
 
@@ -32780,7 +32786,16 @@ async function startServer() {
         || financialContextIsNotBillable(billingContext?.payer_type)
       }
     });
-    return { ok: true, reused: false, data: result.data || payload };
+    return {
+      ok: true,
+      reused: false,
+      data: {
+        ...(result.data || payload),
+        phase: evaluation.phase,
+        phaseSummary: evaluation.phaseSummary,
+        sections: evaluation.sections
+      }
+    };
   };
 
   const regenerateClosureForAppointments = async (appointmentIds: any[], user: any, source: string) => {
@@ -33263,6 +33278,8 @@ async function startServer() {
           : suggestedPayerName
             ? `Pagador sugerido pelo plano financeiro: ${suggestedPayerName}. Ainda não aplicado ao atendimento.`
             : 'Pagador não configurado para esta conferência.',
+        section: 'preSession',
+        operationalStatus: hasRealPayer ? 'passed' : 'blocking_now',
         evidence: {
           ...(item?.evidence || {}),
           present: hasRealPayer,
@@ -40743,10 +40760,27 @@ async function startServer() {
         performedBy: sanitizeString(req.session.user?.id, 120),
         metadata: { source: 'closure_detail' }
       });
+      const normalizedChecklist = normalizeHydratedClosureChecklist(data?.checklist, hydratedDetail);
+      const readinessStatus = sanitizeString(data?.readiness_status, 40).toUpperCase();
+      const inferredOperationalPhase =
+        data?.phase ||
+        normalizedChecklist.find((item: any) => item?.operationalPhase)?.operationalPhase ||
+        (readinessStatus === 'NOT_BILLABLE'
+          ? 'cancelled'
+          : data?.actual_end || ['READY', 'PENDING', 'WARNING'].includes(readinessStatus)
+            ? 'completed_pending_closure'
+            : data?.actual_start
+              ? 'in_session'
+              : 'scheduled_pre_session');
+      const operationalView = buildAppointmentClosureOperationalView(
+        normalizedChecklist,
+        inferredOperationalPhase
+      );
       return sendNoStoreJson(res, {
         success: true,
         data: {
           ...hydratedDetail,
+          ...operationalView,
           checklist: normalizeHydratedClosureChecklist(data?.checklist, hydratedDetail)
         }
       });

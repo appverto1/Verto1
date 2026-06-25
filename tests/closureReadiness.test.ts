@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { evaluateAppointmentClosureReadiness } from '../src/services/closureReadinessEngine';
+import {
+  buildAppointmentClosureOperationalView,
+  evaluateAppointmentClosureReadiness
+} from '../src/services/closureReadinessEngine';
 
 const now = '2026-05-28T12:00:00.000Z';
 
@@ -111,6 +114,173 @@ test('futura vira DRAFT', () => {
     signature: null
   });
   assert.equal(result.readinessStatus, 'DRAFT');
+  assert.equal(result.phase, 'scheduled_pre_session');
+  assert.equal(result.phaseSummary.message, 'Pronto para receber o paciente.');
+  assert.equal(result.blockingIssuesCount, 0);
+  assert.equal(
+    result.checklist.find((item) => item.key === 'report_present')?.operationalStatus,
+    'future_check'
+  );
+  assert.equal(
+    result.checklist.find((item) => item.key === 'signature_present')?.operationalStatus,
+    'future_check'
+  );
+  assert.equal(
+    result.checklist.find((item) => item.key === 'actual_duration_registered')?.operationalStatus,
+    'future_check'
+  );
+});
+
+test('futura sem autorização exigida mostra apenas pendência pré-sessão acionável', () => {
+  const result = evaluateAppointmentClosureReadiness({
+    ...baseInput,
+    appointment: {
+      ...baseInput.appointment,
+      status: 'scheduled',
+      scheduled_start_at: '2026-05-29T09:00:00.000Z',
+      scheduled_end_at: '2026-05-29T09:45:00.000Z',
+      actual_start_at: null,
+      actual_end_at: null,
+      actual_duration_minutes: null,
+      authorization_code: ''
+    },
+    abaSession: null,
+    sessionSummary: null,
+    signature: null,
+    requirements: {
+      requireAuthorization: true
+    }
+  });
+  const authorization = result.checklist.find((item) => item.key === 'payer_authorization_required');
+  assert.equal(result.phase, 'scheduled_pre_session');
+  assert.equal(result.blockingIssuesCount, 1);
+  assert.equal(authorization?.section, 'preSession');
+  assert.equal(authorization?.operationalStatus, 'blocking_now');
+  assert.equal(authorization?.message, 'Autorização do convênio pendente para esta consulta.');
+  assert.ok(result.summary.mainIssues.includes('Autorização do convênio pendente para esta consulta.'));
+  assert.ok(!result.summary.mainIssues.some((message) => /relatório|assinatura|duração real/i.test(message)));
+});
+
+test('guia exigida para Pré-guia não vira ruído antes da sessão', () => {
+  const result = evaluateAppointmentClosureReadiness({
+    ...baseInput,
+    appointment: {
+      ...baseInput.appointment,
+      status: 'scheduled',
+      scheduled_start_at: '2026-05-29T09:00:00.000Z',
+      scheduled_end_at: '2026-05-29T09:45:00.000Z',
+      actual_start_at: null,
+      actual_end_at: null,
+      actual_duration_minutes: null,
+      guide_number: ''
+    },
+    abaSession: null,
+    sessionSummary: null,
+    signature: null,
+    requirements: {
+      requireGuide: true
+    }
+  });
+  const guide = result.checklist.find((item) => item.key === 'payer_guide_required');
+  assert.equal(guide?.section, 'tissBilling');
+  assert.equal(guide?.operationalStatus, 'future_check');
+  assert.equal(guide?.message, 'Guia será conferida na Pré-guia TISS após a sessão.');
+  assert.equal(result.blockingIssuesCount, 0);
+});
+
+test('guia configurada como obrigatória antes da sessão vira pendência pré-sessão', () => {
+  const result = evaluateAppointmentClosureReadiness({
+    ...baseInput,
+    appointment: {
+      ...baseInput.appointment,
+      status: 'scheduled',
+      scheduled_start_at: '2026-05-29T09:00:00.000Z',
+      scheduled_end_at: '2026-05-29T09:45:00.000Z',
+      actual_start_at: null,
+      actual_end_at: null,
+      actual_duration_minutes: null,
+      guide_number: ''
+    },
+    abaSession: null,
+    sessionSummary: null,
+    signature: null,
+    requirements: {
+      requireGuide: true,
+      requireGuideBeforeSession: true
+    }
+  });
+  const guide = result.checklist.find((item) => item.key === 'payer_guide_required');
+  assert.equal(guide?.section, 'preSession');
+  assert.equal(guide?.operationalStatus, 'blocking_now');
+  assert.equal(guide?.message, 'Número da guia pendente antes do atendimento.');
+  assert.equal(result.blockingIssuesCount, 1);
+});
+
+test('sessão em aberto não conta relatório assinatura ou duração como pendência', () => {
+  const result = evaluateAppointmentClosureReadiness({
+    ...baseInput,
+    appointment: {
+      ...baseInput.appointment,
+      status: 'in_progress',
+      actual_start_at: '2026-05-28T11:50:00.000Z',
+      actual_end_at: null,
+      actual_duration_minutes: null
+    },
+    abaSession: { ...baseInput.abaSession, status: 'active' },
+    sessionSummary: null,
+    signature: null
+  });
+  assert.equal(result.phase, 'in_session');
+  assert.equal(result.phaseSummary.title, 'Sessão em aberto');
+  assert.equal(result.blockingIssuesCount, 0);
+  for (const key of ['report_present', 'signature_present', 'actual_duration_registered']) {
+    assert.equal(result.checklist.find((item) => item.key === key)?.operationalStatus, 'future_check');
+  }
+});
+
+test('sessão concluída avalia fechamento e depois separa bloqueios TISS', () => {
+  const pendingClosure = evaluateAppointmentClosureReadiness({
+    ...baseInput,
+    sessionSummary: { ...baseInput.sessionSummary, session_note: '' },
+    signature: false
+  });
+  assert.equal(pendingClosure.phase, 'completed_pending_closure');
+  assert.ok(pendingClosure.sections.postSession.some((item) => item.key === 'report_present' && item.operationalStatus === 'blocking_now'));
+
+  const pendingTiss = evaluateAppointmentClosureReadiness({
+    ...baseInput,
+    appointment: { ...baseInput.appointment, guide_number: '' },
+    requirements: { requireGuide: true }
+  });
+  assert.equal(pendingTiss.phase, 'prefacturing_blocked');
+  assert.equal(pendingTiss.phaseSummary.title, 'Faturamento TISS');
+  assert.ok(pendingTiss.sections.tissBilling.some((item) => item.key === 'payer_guide_required' && item.operationalStatus === 'blocking_now'));
+});
+
+test('checklist legado é classificado em memória sem exigir escrita no GET', () => {
+  const view = buildAppointmentClosureOperationalView([
+    {
+      key: 'report_present',
+      label: 'Relatório/evolução presente',
+      status: 'FAILED',
+      required: true,
+      severity: 'CRITICAL',
+      message: 'Relatório pendente.',
+      evidence: {}
+    },
+    {
+      key: 'professional_linked',
+      label: 'Profissional vinculado',
+      status: 'PASSED',
+      required: true,
+      severity: 'HIGH',
+      message: 'Profissional vinculado.',
+      evidence: {}
+    }
+  ], 'scheduled_pre_session');
+  assert.equal(view.phase, 'scheduled_pre_session');
+  assert.equal(view.sections.postSession[0]?.operationalStatus, 'future_check');
+  assert.equal(view.phaseSummary.actionableCount, 0);
 });
 
 test('sem profissional vira PENDING', () => {

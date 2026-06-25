@@ -10,6 +10,16 @@ export type ClosureReadinessStatus =
 
 export type ClosureCheckStatus = 'PASSED' | 'FAILED' | 'WARNING' | 'NOT_APPLICABLE';
 export type ClosureCheckSeverity = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+export type AppointmentOperationalPhase =
+  | 'scheduled_pre_session'
+  | 'in_session'
+  | 'completed_pending_closure'
+  | 'closed_ready_for_prefacturing'
+  | 'prefacturing_ready'
+  | 'prefacturing_blocked'
+  | 'cancelled';
+export type ClosureChecklistSection = 'preSession' | 'postSession' | 'tissBilling';
+export type ClosureOperationalStatus = 'blocking_now' | 'actionable_now' | 'future_check' | 'info' | 'passed';
 
 export type ClosureChecklistItem = {
   key: string;
@@ -19,6 +29,9 @@ export type ClosureChecklistItem = {
   severity: ClosureCheckSeverity;
   message: string;
   evidence: Record<string, any>;
+  section?: ClosureChecklistSection;
+  operationalStatus?: ClosureOperationalStatus;
+  operationalPhase?: AppointmentOperationalPhase;
 };
 
 export type ClosureRequirements = {
@@ -28,6 +41,8 @@ export type ClosureRequirements = {
   requireRoomWhenClinic?: boolean;
   requireAuthorization?: boolean;
   requireGuide?: boolean;
+  requireAuthorizationBeforeSession?: boolean;
+  requireGuideBeforeSession?: boolean;
   requireProfessionalRegistry?: boolean;
   requirePatientDocument?: boolean;
   allowManualOverride?: boolean;
@@ -59,6 +74,18 @@ export type AppointmentClosureInput = {
 
 export type AppointmentClosureOutput = {
   readinessStatus: ClosureReadinessStatus;
+  phase: AppointmentOperationalPhase;
+  phaseSummary: {
+    title: string;
+    message: string;
+    status: 'ready' | 'open' | 'blocked' | 'info';
+    actionableCount: number;
+  };
+  sections: {
+    preSession: ClosureChecklistItem[];
+    postSession: ClosureChecklistItem[];
+    tissBilling: ClosureChecklistItem[];
+  };
   checklist: ClosureChecklistItem[];
   blockingIssuesCount: number;
   warningIssuesCount: number;
@@ -85,6 +112,8 @@ const DEFAULT_REQUIREMENTS: Required<ClosureRequirements> = {
   requireRoomWhenClinic: true,
   requireAuthorization: false,
   requireGuide: false,
+  requireAuthorizationBeforeSession: true,
+  requireGuideBeforeSession: false,
   requireProfessionalRegistry: false,
   requirePatientDocument: false,
   allowManualOverride: true,
@@ -230,6 +259,184 @@ function failed(required: boolean, severity: ClosureCheckSeverity) {
   return required ? severity : 'LOW';
 }
 
+const PAYER_LINKED_CHECK_KEY = ['payer', 'linked'].join('_');
+
+const PRE_SESSION_KEYS = new Set([
+  'patient_linked',
+  'professional_linked',
+  'service_type_linked',
+  'date_time_registered',
+  'scheduled_duration_registered',
+  'room_or_location_registered',
+  PAYER_LINKED_CHECK_KEY,
+  'payer_authorization_required',
+  'payer_professional_registry',
+  'payer_patient_document',
+  'no_pending_reschedule_or_cancellation'
+]);
+
+const POST_SESSION_KEYS = new Set([
+  'session_completed',
+  'actual_duration_registered',
+  'actual_duration_compatible',
+  'report_present',
+  'signature_present',
+  'payer_signature',
+  'payer_report',
+  'payer_actual_duration',
+  'payer_min_duration',
+  'status_billable'
+]);
+
+function checklistSectionFor(
+  item: ClosureChecklistItem,
+  requireGuideBeforeSession: boolean
+): ClosureChecklistSection {
+  if (item.key === 'payer_guide_required') {
+    return requireGuideBeforeSession ? 'preSession' : 'tissBilling';
+  }
+  if (PRE_SESSION_KEYS.has(item.key)) return 'preSession';
+  if (POST_SESSION_KEYS.has(item.key)) return 'postSession';
+  return 'tissBilling';
+}
+
+function operationalStatusFor(
+  item: ClosureChecklistItem,
+  section: ClosureChecklistSection,
+  phase: AppointmentOperationalPhase
+): ClosureOperationalStatus {
+  if (item.status === 'PASSED') return 'passed';
+  if (phase === 'cancelled') return 'info';
+  if (
+    section === 'postSession' &&
+    (phase === 'scheduled_pre_session' || phase === 'in_session')
+  ) {
+    return 'future_check';
+  }
+  if (
+    section === 'tissBilling' &&
+    (phase === 'scheduled_pre_session' || phase === 'in_session')
+  ) {
+    return item.status === 'NOT_APPLICABLE' ? 'info' : 'future_check';
+  }
+  if (item.status === 'NOT_APPLICABLE') return 'info';
+  if (item.status === 'FAILED' && item.required) return 'blocking_now';
+  return 'actionable_now';
+}
+
+function buildPhaseSummary(
+  phase: AppointmentOperationalPhase,
+  checklist: ClosureChecklistItem[]
+): AppointmentClosureOutput['phaseSummary'] {
+  const actionableCount = checklist.filter((item) =>
+    item.operationalStatus === 'blocking_now' || item.operationalStatus === 'actionable_now'
+  ).length;
+  if (phase === 'scheduled_pre_session') {
+    return actionableCount > 0
+      ? {
+          title: 'Preparação do atendimento',
+          message: `${actionableCount} pendência(s) antes da sessão.`,
+          status: 'blocked',
+          actionableCount
+        }
+      : {
+          title: 'Preparação do atendimento',
+          message: 'Pronto para receber o paciente.',
+          status: 'ready',
+          actionableCount: 0
+        };
+  }
+  if (phase === 'in_session') {
+    return {
+      title: 'Sessão em aberto',
+      message: actionableCount > 0
+        ? `${actionableCount} item(ns) de preparação ainda precisam de atenção. Os itens de fechamento serão conferidos após a conclusão.`
+        : 'Os itens de fechamento serão conferidos após a conclusão.',
+      status: actionableCount > 0 ? 'blocked' : 'open',
+      actionableCount
+    };
+  }
+  if (phase === 'completed_pending_closure') {
+    return {
+      title: 'Fechamento da sessão',
+      message: `${actionableCount} pendência(s) para concluir o fechamento.`,
+      status: 'blocked',
+      actionableCount
+    };
+  }
+  if (phase === 'prefacturing_blocked') {
+    return {
+      title: 'Faturamento TISS',
+      message: `${actionableCount} bloqueio(s) para Pré-guia TISS.`,
+      status: 'blocked',
+      actionableCount
+    };
+  }
+  if (phase === 'prefacturing_ready' || phase === 'closed_ready_for_prefacturing') {
+    return {
+      title: 'Faturamento TISS',
+      message: 'Pronto para Pré-guia TISS.',
+      status: 'ready',
+      actionableCount: 0
+    };
+  }
+  return {
+    title: 'Atendimento cancelado',
+    message: 'Esta consulta não segue para fechamento ou faturamento.',
+    status: 'info',
+    actionableCount: 0
+  };
+}
+
+export function buildAppointmentClosureOperationalView(
+  checklistInput: ClosureChecklistItem[],
+  phaseInput?: AppointmentOperationalPhase | null
+) {
+  const sourceChecklist = Array.isArray(checklistInput) ? checklistInput : [];
+  let phase =
+    phaseInput ||
+    sourceChecklist.find((item) => item?.operationalPhase)?.operationalPhase ||
+    'scheduled_pre_session';
+  const classify = (currentPhase: AppointmentOperationalPhase) => sourceChecklist.map((item) => {
+    const section = item.section || checklistSectionFor(item, false);
+    return {
+      ...item,
+      section,
+      operationalStatus: item.operationalStatus || (
+        item.key === 'authorization_linked'
+          ? item.status === 'PASSED' ? 'passed' : 'info'
+          : operationalStatusFor(item, section, currentPhase)
+      ),
+      operationalPhase: currentPhase
+    };
+  });
+  let checklist = classify(phase);
+  if (phase === 'completed_pending_closure') {
+    const hasPostSessionIssues = checklist.some((item) =>
+      item.section === 'postSession' &&
+      (item.operationalStatus === 'blocking_now' || item.operationalStatus === 'actionable_now')
+    );
+    const hasTissIssues = checklist.some((item) =>
+      item.section === 'tissBilling' &&
+      (item.operationalStatus === 'blocking_now' || item.operationalStatus === 'actionable_now')
+    );
+    if (!hasPostSessionIssues) {
+      phase = hasTissIssues ? 'prefacturing_blocked' : 'prefacturing_ready';
+      checklist = classify(phase);
+    }
+  }
+  const sections = {
+    preSession: checklist.filter((item) => item.section === 'preSession'),
+    postSession: checklist.filter((item) => item.section === 'postSession'),
+    tissBilling: checklist.filter((item) => item.section === 'tissBilling')
+  };
+  return {
+    phase,
+    phaseSummary: buildPhaseSummary(phase, checklist),
+    sections
+  };
+}
+
 export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInput): AppointmentClosureOutput {
   const appointment = input.appointment || {};
   const abaSession = input.abaSession || {};
@@ -303,8 +510,12 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
     boolLike(appointment.has_session_record || appointment.hasSessionRecord) ||
     asString(abaSession.status).toLowerCase() === 'completed' ||
     Boolean(actualEnd);
-  const futureOrOpen = (scheduledStart && new Date(scheduledStart).getTime() > now.getTime()) ||
+  const inSession = !concluded && (
     ['in_progress', 'active'].includes(status) ||
+    Boolean(actualStart)
+  );
+  const futureOrOpen = (scheduledStart && new Date(scheduledStart).getTime() > now.getTime()) ||
+    inSession ||
     (DRAFT_STATUSES.has(status) && !concluded);
   const financialContextType = normalizeFinancialContextType(firstValue(
     appointment.financial_context_type,
@@ -425,10 +636,10 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
   checklist.push(buildCheck(
     'room_or_location_registered',
     'Sala/local registrado',
-    requirements.requireRoomWhenClinic && (locationType.includes('clinic') || locationType.includes('clinica') || locationType.includes('sala')) && !room ? 'WARNING' : room || locationType ? 'PASSED' : 'NOT_APPLICABLE',
-    false,
-    'LOW',
-    room || locationType ? 'Sala ou local registrado.' : 'Sala/local não informado para conferência.',
+    room || locationType ? 'PASSED' : requirements.requireRoomWhenClinic ? 'FAILED' : 'NOT_APPLICABLE',
+    requirements.requireRoomWhenClinic,
+    requirements.requireRoomWhenClinic ? 'HIGH' : 'LOW',
+    room || locationType ? 'Sala ou local registrado.' : 'Defina a sala ou o local antes do atendimento.',
     { room: Boolean(room), locationType }
   ));
   checklist.push(buildCheck(
@@ -493,6 +704,14 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
     }
   });
   payerEvaluation.checklistItems.forEach((payerItem) => {
+    if (payerItem.key === 'payer_authorization_required' && payerItem.status === 'FAILED') {
+      payerItem.message = 'Autorização do convênio pendente para esta consulta.';
+    }
+    if (payerItem.key === 'payer_guide_required' && payerItem.status === 'FAILED') {
+      payerItem.message = requirements.requireGuideBeforeSession
+        ? 'Número da guia pendente antes do atendimento.'
+        : 'Guia será conferida na Pré-guia TISS após a sessão.';
+    }
     if (payerItem.key === 'payer_professional_registry' && payerItem.status === 'FAILED') {
       payerItem.message = !professionalId
         ? 'Defina um profissional responsável para validar o registro exigido pelo pagador.'
@@ -539,8 +758,46 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
     { present: hasPendingRescheduleOrCancellation }
   ));
 
-  const blockingIssues = checklist.filter((item) => item.required && item.status === 'FAILED');
-  const warningIssues = checklist.filter((item) => item.status === 'WARNING');
+  let phase: AppointmentOperationalPhase = notBillable
+    ? 'cancelled'
+    : concluded
+      ? 'completed_pending_closure'
+      : inSession
+        ? 'in_session'
+        : 'scheduled_pre_session';
+  const classifyChecklist = (currentPhase: AppointmentOperationalPhase) => checklist.map((item) => {
+    const section = checklistSectionFor(item, requirements.requireGuideBeforeSession);
+    const operationalStatus: ClosureOperationalStatus = item.key === 'authorization_linked'
+      ? item.status === 'PASSED' ? 'passed' : 'info'
+      : operationalStatusFor(item, section, currentPhase);
+    return {
+      ...item,
+      section,
+      operationalStatus,
+      operationalPhase: currentPhase
+    };
+  });
+  let operationalChecklist = classifyChecklist(phase);
+  if (concluded && !notBillable) {
+    const hasPostSessionIssues = operationalChecklist.some((item) =>
+      item.section === 'postSession' &&
+      (item.operationalStatus === 'blocking_now' || item.operationalStatus === 'actionable_now')
+    );
+    const hasTissIssues = operationalChecklist.some((item) =>
+      item.section === 'tissBilling' &&
+      (item.operationalStatus === 'blocking_now' || item.operationalStatus === 'actionable_now')
+    );
+    phase = hasPostSessionIssues
+      ? 'completed_pending_closure'
+      : hasTissIssues
+        ? 'prefacturing_blocked'
+        : nonInsuranceFinancialContext
+          ? 'closed_ready_for_prefacturing'
+          : 'prefacturing_ready';
+    operationalChecklist = classifyChecklist(phase);
+  }
+  const blockingIssues = operationalChecklist.filter((item) => item.operationalStatus === 'blocking_now');
+  const warningIssues = operationalChecklist.filter((item) => item.operationalStatus === 'actionable_now');
   const missingRequiredCount = blockingIssues.length;
   let readinessStatus: ClosureReadinessStatus = 'READY';
   if (unknown) readinessStatus = 'UNKNOWN';
@@ -553,8 +810,10 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
     ...blockingIssues.map((item) => item.message),
     ...warningIssues.map((item) => item.message)
   ].filter(Boolean).slice(0, 4);
+  const operationalView = buildAppointmentClosureOperationalView(operationalChecklist, phase);
 
   const contextHash = stableHash({
+    engineVersion: 'operational-phases-v1',
     organizationId: input.organizationId,
     appointmentId: input.appointmentId,
     abaSessionId: input.abaSessionId,
@@ -572,6 +831,8 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
     financialContextType: financialContextType || null,
     payerRequirementSource: requirements.payerRequirementSource || null,
     appliedPayerRequirementId: requirements.appliedPayerRequirementId || null,
+    requireAuthorizationBeforeSession: requirements.requireAuthorizationBeforeSession,
+    requireGuideBeforeSession: requirements.requireGuideBeforeSession,
     professionalId,
     professionalName,
     professionalRegistryPresent,
@@ -588,7 +849,10 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
 
   return {
     readinessStatus,
-    checklist,
+    phase,
+    phaseSummary: operationalView.phaseSummary,
+    sections: operationalView.sections,
+    checklist: operationalChecklist,
     blockingIssuesCount: blockingIssues.length,
     warningIssuesCount: warningIssues.length,
     missingRequiredCount,

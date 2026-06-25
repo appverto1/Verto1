@@ -6159,6 +6159,17 @@ export function CoordinatorDashboard({
       onCancelAppointment={handleCancelAppointmentFromAgenda}
       onDeleteAppointment={handleDeleteAppointmentFromAgenda}
       onOpenPatient={onPatientClick}
+      onNavigateTissPreGuides={
+        ["owner", "admin", "coordinator"].includes(String(user?.role || "").toLowerCase())
+          ? () =>
+              navigateToTab("conference", {
+                tab: "conference",
+                breadcrumb: ["Financeiro", "Pré-Faturamento", "Pré-guias TISS"],
+                conferenceTab: "preGuides",
+                tissPanel: "preGuides",
+              })
+          : undefined
+      }
       onStartSession={(appointment: any) =>
         {
           const sessionAppointment = buildAppointmentSessionContext(appointment);

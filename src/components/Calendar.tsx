@@ -546,6 +546,88 @@ const getClosureStatusStyle = (status: any) => {
   return styles[normalized] || null;
 };
 
+const CLOSURE_SECTION_META: Record<string, { title: string; description: string }> = {
+  preSession: {
+    title: 'Antes da sessão',
+    description: 'Preparação que pode ser resolvida pela recepção antes do atendimento.'
+  },
+  postSession: {
+    title: 'Depois da sessão',
+    description: 'Conferências clínicas feitas após a conclusão do atendimento.'
+  },
+  tissBilling: {
+    title: 'Faturamento TISS',
+    description: 'Itens usados na conferência e na preparação da Pré-guia TISS.'
+  }
+};
+
+export const getAppointmentClosureOperationalView = (event: any, detail: any = null) => {
+  const checklist = Array.isArray(detail?.checklist) ? detail.checklist : [];
+  const status = String(event?.status || event?.appointment_status || '').toLowerCase();
+  const explicitPhase =
+    detail?.phase ||
+    checklist.find((item: any) => item?.operationalPhase)?.operationalPhase ||
+    event?.closure_operational_phase ||
+    event?.closureOperationalPhase;
+  const concluded = Boolean(
+    event?.has_session_record ||
+    event?.hasSessionRecord ||
+    event?.actual_end_at ||
+    event?.actualEndAt ||
+    ['completed', 'concluida', 'concluída', 'concluido', 'concluído'].includes(status)
+  );
+  const inSession = !concluded && Boolean(
+    event?.actual_start_at ||
+    event?.actualStartAt ||
+    ['in_progress', 'active'].includes(status)
+  );
+  const cancelled = ['canceled', 'cancelled', 'cancelada', 'cancelado', 'no_show', 'missed', 'falta', 'faltou'].includes(status);
+  const phase =
+    explicitPhase ||
+    (cancelled
+      ? 'cancelled'
+      : concluded
+        ? normalizeClosureStatus(event?.closure_readiness_status) === 'READY'
+          ? 'prefacturing_ready'
+          : 'completed_pending_closure'
+        : inSession
+          ? 'in_session'
+          : 'scheduled_pre_session');
+  const blockingCount = Number(
+    detail?.phaseSummary?.actionableCount ??
+    detail?.blocking_issues_count ??
+    event?.closure_blocking_count ??
+    0
+  );
+  const warningCount = Number(detail?.warning_issues_count ?? event?.closure_warning_count ?? 0);
+  const actionableCount = detail?.phaseSummary?.actionableCount ?? (blockingCount + warningCount);
+  const fallbackSummary: Record<string, { title: string; message: string; status: string }> = {
+    scheduled_pre_session: actionableCount > 0
+      ? { title: 'Preparação do atendimento', message: `${actionableCount} pendência(s) antes da sessão.`, status: 'blocked' }
+      : { title: 'Preparação do atendimento', message: 'Pronto para receber o paciente.', status: 'ready' },
+    in_session: { title: 'Sessão em aberto', message: 'Os itens de fechamento serão conferidos após a conclusão.', status: 'open' },
+    completed_pending_closure: { title: 'Fechamento da sessão', message: `${actionableCount} pendência(s) para concluir o fechamento.`, status: 'blocked' },
+    prefacturing_blocked: { title: 'Faturamento TISS', message: `${actionableCount} bloqueio(s) para Pré-guia TISS.`, status: 'blocked' },
+    prefacturing_ready: { title: 'Faturamento TISS', message: 'Pronto para Pré-guia TISS.', status: 'ready' },
+    closed_ready_for_prefacturing: { title: 'Faturamento TISS', message: 'Pronto para Pré-guia TISS.', status: 'ready' },
+    cancelled: { title: 'Atendimento cancelado', message: 'Esta consulta não segue para fechamento ou faturamento.', status: 'info' }
+  };
+  const sections = detail?.sections || {
+    preSession: checklist.filter((item: any) => item?.section === 'preSession'),
+    postSession: checklist.filter((item: any) => item?.section === 'postSession'),
+    tissBilling: checklist.filter((item: any) => item?.section === 'tissBilling')
+  };
+  return {
+    phase,
+    phaseSummary: {
+      ...(fallbackSummary[phase] || fallbackSummary.scheduled_pre_session),
+      ...(detail?.phaseSummary || {}),
+      actionableCount
+    },
+    sections
+  };
+};
+
 const pad2 = (value: number) => String(value).padStart(2, '0');
 
 const toDateKey = (date: Date) =>
@@ -1017,6 +1099,7 @@ export const ClinicalAgendaBoard = ({
   onDeleteAppointment,
   onOpenPatient,
   onStartSession,
+  onNavigateTissPreGuides,
   theme = 'light'
 }: any) => {
   const isDark = theme === 'dark';
@@ -1063,6 +1146,7 @@ export const ClinicalAgendaBoard = ({
   const [eventDetail, setEventDetail] = useState<any>(null);
   const [detailState, setDetailState] = useState<{ loading: boolean; error: string }>({ loading: false, error: '' });
   const [closureDetailState, setClosureDetailState] = useState<{ loading: boolean; error: string; data: any | null }>({ loading: false, error: '', data: null });
+  const [closureChecklistExpanded, setClosureChecklistExpanded] = useState(false);
   const [actionRequestState, setActionRequestState] = useState<{ loadingId: string; error: string; message?: string }>({ loadingId: '', error: '', message: '' });
   const [billingEditorOpen, setBillingEditorOpen] = useState(false);
   const [billingEditorState, setBillingEditorState] = useState<{ loading: boolean; saving: boolean; error: string; success: string }>({
@@ -1439,7 +1523,8 @@ export const ClinicalAgendaBoard = ({
     setSelectedEvent(normalized);
     setEventDetail(null);
     setDetailState({ loading: true, error: '' });
-    setClosureDetailState({ loading: false, error: '', data: null });
+    setClosureChecklistExpanded(false);
+    setClosureDetailState({ loading: true, error: '', data: null });
     dataService.getCalendarEventDetail(normalized.id)
       .then((result: any) => {
         if (result?.success) {
@@ -1450,11 +1535,25 @@ export const ClinicalAgendaBoard = ({
         setDetailState({ loading: false, error: result?.error || 'Não foi possível carregar os detalhes da sessão agora.' });
       })
       .catch(() => setDetailState({ loading: false, error: 'Não foi possível carregar os detalhes da sessão agora.' }));
+    dataService.getClosureAppointmentDetail(normalized.id)
+      .then((result: any) => {
+        if (result?.success) {
+          setClosureDetailState({ loading: false, error: '', data: result.data || null });
+          return;
+        }
+        setClosureDetailState({ loading: false, error: result?.error || 'Não foi possível carregar o fechamento agora.', data: null });
+      })
+      .catch(() => setClosureDetailState({ loading: false, error: 'Não foi possível carregar o fechamento agora.', data: null }));
   };
 
   const openClosureChecklist = (event: any) => {
+    if (closureDetailState.data) {
+      setClosureChecklistExpanded((current) => !current);
+      return;
+    }
     const appointmentId = String(event?.id || '').trim();
     if (!appointmentId) return;
+    setClosureChecklistExpanded(true);
     setClosureDetailState({ loading: true, error: '', data: null });
     dataService.getClosureAppointmentDetail(appointmentId)
       .then((result: any) => {
@@ -2337,6 +2436,7 @@ export const ClinicalAgendaBoard = ({
     ...(detail.event || {}),
     ...(detail.closure || {})
   });
+  const closureOperationalView = getAppointmentClosureOperationalView(detailEvent, closureDetailState.data);
   const detailStatusColor = getAppointmentPatientConfirmationVisualState(detailEvent);
   const detailAppointmentConfirmed = detailStatusColor.canonical === 'CONFIRMED';
   const planItems = Array.isArray(detail.nextSessionPlanItems) ? detail.nextSessionPlanItems : [];
@@ -3060,67 +3160,102 @@ export const ClinicalAgendaBoard = ({
               <div className={`mt-5 rounded-3xl border p-4 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-100 bg-slate-50/70'}`}>
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div>
-                    <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">Fechamento</p>
+                    <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">
+                      {closureOperationalView.phaseSummary.title}
+                    </p>
                     <div className="mt-2 flex flex-wrap items-center gap-2">
                       {(() => {
-                        const closureStyle = getClosureStatusStyle(detailEvent.closure_readiness_status);
-                        const ClosureIcon = closureStyle?.icon || AlertCircle;
+                        const summaryStatus = closureOperationalView.phaseSummary.status;
+                        const closureStyle =
+                          summaryStatus === 'ready'
+                            ? { label: 'Pronto', className: 'bg-emerald-100 text-emerald-700', icon: CheckCircle2 }
+                            : summaryStatus === 'blocked'
+                              ? { label: 'Atenção necessária', className: 'bg-amber-100 text-amber-800', icon: AlertCircle }
+                              : summaryStatus === 'open'
+                                ? { label: 'Em andamento', className: 'bg-sky-100 text-sky-700', icon: Clock }
+                                : { label: 'Informativo', className: 'bg-slate-200 text-slate-700', icon: ClipboardCheck };
+                        const ClosureIcon = closureStyle.icon;
                         return (
-                          <span className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-bold ${closureStyle?.className || 'bg-slate-100 text-slate-600'}`}>
+                          <span className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-bold ${closureStyle.className}`}>
                             <ClosureIcon size={13} />
-                            {closureStyle?.label || 'Dados insuficientes'}
+                            {closureStyle.label}
                           </span>
                         );
                       })()}
-                      {Number(detailEvent.closure_blocking_count || 0) > 0 && (
+                      {Number(closureOperationalView.phaseSummary.actionableCount || 0) > 0 && (
                         <span className="rounded-full bg-rose-50 px-2 py-1 text-xs font-semibold text-rose-700">
-                          {detailEvent.closure_blocking_count} pendência(s)
-                        </span>
-                      )}
-                      {Number(detailEvent.closure_warning_count || 0) > 0 && (
-                        <span className="rounded-full bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-700">
-                          {detailEvent.closure_warning_count} alerta(s)
+                          {closureOperationalView.phaseSummary.actionableCount} pendência(s)
                         </span>
                       )}
                     </div>
-                    {Array.isArray(detailEvent.closure_main_issues) && detailEvent.closure_main_issues.length > 0 && (
-                      <p className={`mt-2 text-sm ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
-                        {detailEvent.closure_main_issues.slice(0, 2).join(' e ')}.
-                      </p>
-                    )}
+                    <p className={`mt-2 text-sm ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
+                      {closureOperationalView.phaseSummary.message}
+                    </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => openClosureChecklist(detailEvent)}
-                    className={`inline-flex items-center justify-center gap-2 rounded-2xl border px-3 py-2 text-xs font-bold ${isDark ? 'border-slate-700 text-slate-200 hover:bg-slate-800' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'}`}
-                  >
-                    {closureDetailState.loading ? <Loader2 size={14} className="animate-spin" /> : <ClipboardCheck size={14} />}
-                    Ver checklist
-                  </button>
+                  <div className="flex flex-wrap gap-2">
+                    {[
+                      'completed_pending_closure',
+                      'closed_ready_for_prefacturing',
+                      'prefacturing_ready',
+                      'prefacturing_blocked'
+                    ].includes(closureOperationalView.phase) && onNavigateTissPreGuides && (
+                      <button
+                        type="button"
+                        onClick={() => onNavigateTissPreGuides(detailEvent)}
+                        className="inline-flex items-center justify-center gap-2 rounded-2xl bg-[#7a32fc] px-3 py-2 text-xs font-bold text-white hover:bg-[#6a28df]"
+                      >
+                        <FileText size={14} />
+                        Ver Pré-guias TISS
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => openClosureChecklist(detailEvent)}
+                      className={`inline-flex items-center justify-center gap-2 rounded-2xl border px-3 py-2 text-xs font-bold ${isDark ? 'border-slate-700 text-slate-200 hover:bg-slate-800' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'}`}
+                    >
+                      {closureDetailState.loading ? <Loader2 size={14} className="animate-spin" /> : <ClipboardCheck size={14} />}
+                      {closureChecklistExpanded ? 'Ocultar checklist' : 'Ver checklist'}
+                    </button>
+                  </div>
                 </div>
                 {closureDetailState.error && (
                   <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
                     {closureDetailState.error}
                   </div>
                 )}
-                {Array.isArray(closureDetailState.data?.checklist) && closureDetailState.data.checklist.length > 0 && (
-                  <div className="mt-3 space-y-2">
-                    {closureDetailState.data.checklist.map((item: any) => {
-                      const failed = item.status === 'FAILED';
-                      const warning = item.status === 'WARNING';
-                      const passed = item.status === 'PASSED';
-                      const Icon = passed ? CheckCircle2 : warning ? AlertCircle : failed ? X : Clock;
-                      const color = passed ? 'text-emerald-600' : warning ? 'text-amber-600' : failed ? 'text-rose-600' : 'text-slate-400';
+                {closureChecklistExpanded && Array.isArray(closureDetailState.data?.checklist) && closureDetailState.data.checklist.length > 0 && (
+                  <div className="mt-4 space-y-4">
+                    {Object.entries(CLOSURE_SECTION_META).map(([sectionKey, meta]) => {
+                      const items = Array.isArray(closureOperationalView.sections?.[sectionKey])
+                        ? closureOperationalView.sections[sectionKey]
+                        : [];
+                      if (items.length === 0) return null;
                       return (
-                        <div key={item.key || item.label} className={`rounded-2xl border px-3 py-2 ${isDark ? 'border-slate-700 bg-slate-950' : 'border-slate-100 bg-white'}`}>
-                          <div className="flex items-start gap-2">
-                            <Icon size={16} className={`${color} mt-0.5`} />
-                            <div>
-                              <p className="text-sm font-semibold">{item.label || 'Item de fechamento'}</p>
-                              {item.message && <p className={`mt-0.5 text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>{item.message}</p>}
-                            </div>
+                        <section key={sectionKey}>
+                          <h5 className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">{meta.title}</h5>
+                          <p className={`mt-1 text-xs ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>{meta.description}</p>
+                          <div className="mt-2 space-y-2">
+                            {items.map((item: any) => {
+                              const operationalStatus = item.operationalStatus || 'info';
+                              const passed = operationalStatus === 'passed';
+                              const future = operationalStatus === 'future_check' || operationalStatus === 'info';
+                              const blocking = operationalStatus === 'blocking_now';
+                              const Icon = passed ? CheckCircle2 : future ? Clock : blocking ? X : AlertCircle;
+                              const color = passed ? 'text-emerald-600' : future ? 'text-slate-400' : blocking ? 'text-rose-600' : 'text-amber-600';
+                              return (
+                                <div key={item.key || item.label} className={`rounded-2xl border px-3 py-2 ${future ? 'opacity-75' : ''} ${isDark ? 'border-slate-700 bg-slate-950' : 'border-slate-100 bg-white'}`}>
+                                  <div className="flex items-start gap-2">
+                                    <Icon size={16} className={`${color} mt-0.5 shrink-0`} />
+                                    <div>
+                                      <p className="text-sm font-semibold">{item.label || 'Item do checklist'}</p>
+                                      {item.message && <p className={`mt-0.5 text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>{item.message}</p>}
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
                           </div>
-                        </div>
+                        </section>
                       );
                     })}
                   </div>

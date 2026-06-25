@@ -37,6 +37,17 @@ test('closure engine exposes planned versus realized summary values', () => {
   assert.match(closureEngineCode, /actualMinutes: number \| null/);
 });
 
+test('closure detail materializes and returns the operational phase view', () => {
+  assert.match(closureEngineCode, /scheduled_pre_session/);
+  assert.match(closureEngineCode, /completed_pending_closure/);
+  assert.match(closureEngineCode, /prefacturing_blocked/);
+  assert.match(closureEngineCode, /operationalStatus/);
+  assert.match(serverCode, /buildAppointmentClosureOperationalView/);
+  assert.match(serverCode, /inferredOperationalPhase/);
+  assert.match(serverCode, /requireAuthorizationBeforeSession: resolved\.requireAuthorization/);
+  assert.match(serverCode, /requireGuideBeforeSession: false/);
+});
+
 test('no broad select star is introduced', () => {
   assert.doesNotMatch(serverCode, /select\('\*'\)/);
 });
