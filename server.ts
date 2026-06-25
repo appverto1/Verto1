@@ -7348,17 +7348,79 @@ function buildPatientConfirmationStateForAgenda(params: {
   };
 }
 
-function applyPatientConfirmationStateToCalendarEvent(event: any, state: any) {
+function resolveCalendarCancellationState(event: any, state: any) {
   const eventStatus = normalizeOperationalAppointmentStatus(event?.status || event?.appointment_status);
-  const terminalClinicalState =
-    eventStatus === 'CANCELLED' || eventStatus === 'CANCEL_REQUESTED'
-      ? buildPatientConfirmationStateForAgenda({
-          status: 'declined',
-          response: event?.patientResponse || event?.patient_response || 'declined',
-          respondedAt: event?.patientRespondedAt || event?.patient_responded_at || event?.updated_at,
-          source: event?.patientConfirmationSource || event?.patient_confirmation_source || 'appointment_status'
-        })
-      : null;
+  if (eventStatus !== 'CANCELLED' && eventStatus !== 'CANCEL_REQUESTED') return null;
+
+  const source = sanitizeString(
+    event?.patientConfirmationSource ||
+      event?.patient_confirmation_source ||
+      event?.patient_response_source ||
+      state?.source,
+    80
+  ).toLowerCase();
+  const explicitPatientDecline =
+    state?.status === 'declined' ||
+    normalizeOperationalAppointmentStatus(
+      event?.patientConfirmationStatus ||
+        event?.patient_confirmation_status ||
+        event?.patientResponse ||
+        event?.patient_response
+    ) === 'CANCEL_REQUESTED';
+  const patientSource =
+    source === 'portal' ||
+    source === 'patient' ||
+    source === 'responsible' ||
+    source === 'family' ||
+    (source === 'appointments' && explicitPatientDecline) ||
+    source === 'appointment_status_audit_logs' ||
+    source.includes('patient_portal') ||
+    source.includes('responsible') ||
+    source.includes('family');
+  const clinicSource =
+    source === 'clinic' ||
+    source === 'agenda_management' ||
+    source === 'appointment_confirmation_popup' ||
+    source === 'coordinator' ||
+    source === 'receptionist' ||
+    source === 'therapist' ||
+    source === 'admin' ||
+    source === 'owner' ||
+    source.includes('clinic') ||
+    source.includes('agenda_management');
+
+  if (explicitPatientDecline && patientSource) {
+    return {
+      status: 'declined',
+      label: 'CANCELADO PELO PACIENTE',
+      color: 'red',
+      respondedAt: state?.respondedAt || event?.patientRespondedAt || event?.patient_responded_at || event?.updated_at || null,
+      response: state?.response || event?.patientResponse || event?.patient_response || 'declined',
+      source: source || 'patient'
+    };
+  }
+  if (clinicSource || !source || (!explicitPatientDecline && patientSource)) {
+    return {
+      status: 'cancelled_by_clinic',
+      label: 'CANCELADO PELA CLÍNICA',
+      color: 'red',
+      respondedAt: event?.updated_at || null,
+      response: null,
+      source: source || 'clinic'
+    };
+  }
+  return {
+    status: 'cancelled',
+    label: 'CANCELADO',
+    color: 'red',
+    respondedAt: event?.updated_at || null,
+    response: null,
+    source: source || null
+  };
+}
+
+function applyPatientConfirmationStateToCalendarEvent(event: any, state: any) {
+  const terminalClinicalState = resolveCalendarCancellationState(event, state);
   const resolved = terminalClinicalState || state || buildPatientConfirmationStateForAgenda({
     status:
       event?.patientConfirmationStatus ||
@@ -17471,6 +17533,7 @@ async function startServer() {
       const clinicId = currentClinicId(actor);
       const now = new Date().toISOString();
       const safeSource = sanitizeString(req.body?.source, 80) || 'appointment_confirmation_popup';
+      const canonicalResponseSource = isPatientActor ? 'portal' : safeSource;
       const recurrenceScope =
         sanitizeString(req.body?.recurrenceScope, 20).toLowerCase() === 'future'
           ? 'future'
@@ -17535,8 +17598,10 @@ async function startServer() {
             patient_confirmation_status: normalizedStatus,
             patient_confirmation_at: now,
             patient_confirmation_by: actorId,
-            patient_confirmation_source: safeSource
+            patient_confirmation_source: canonicalResponseSource
           });
+        } else if (isProfessionalActor && normalizedStatus === 'canceled') {
+          patchWithConfirmation.patient_confirmation_source = 'clinic';
         }
 
         const updatedAppointments = new Map<string, any>();
@@ -17733,8 +17798,15 @@ async function startServer() {
               ? actorId
               : appointment?.patientConfirmationBy,
             patientConfirmationSource: isPatientActor
-              ? safeSource
-              : appointment?.patientConfirmationSource
+              ? canonicalResponseSource
+              : normalizedStatus === 'canceled'
+                ? 'clinic'
+                : appointment?.patientConfirmationSource,
+            patient_confirmation_source: isPatientActor
+              ? canonicalResponseSource
+              : normalizedStatus === 'canceled'
+                ? 'clinic'
+                : appointment?.patient_confirmation_source
           };
           
           // If appointment was rescheduled, reset notification markers so new 24h/12h reminders are sent
@@ -17802,7 +17874,12 @@ async function startServer() {
             patientConfirmationAt: now,
             patient_confirmation_at: now,
             patientConfirmationBy: actorId,
-            patient_confirmation_by: actorId
+            patient_confirmation_by: actorId,
+            patientConfirmationSource: canonicalResponseSource,
+            patient_confirmation_source: canonicalResponseSource
+          } : normalizedStatus === 'canceled' ? {
+            patientConfirmationSource: 'clinic',
+            patient_confirmation_source: 'clinic'
           } : {})
         };
       const updatedAppointment = {
@@ -17836,6 +17913,26 @@ async function startServer() {
       const persistedUpdatedAppointment =
         affectedPersistedAppointments.find((appointment: any) => sanitizeString(appointment?.id, 120) === appointmentId) ||
         updatedAppointment;
+      if (normalizedStatus === 'canceled') {
+        await Promise.all(affectedPersistedAppointments.map((appointment: any) => {
+          const affectedId = sanitizeString(appointment?.id, 120);
+          const previousAppointment = affectedAppointments.find((item: any) => sanitizeString(item?.id, 120) === affectedId);
+          return writeAppointmentStatusAuditLog({
+            organizationId: appointment?.organization_id || appointment?.clinic_id || foundClinicId || clinicId,
+            appointmentId: affectedId,
+            patientId: appointment?.patientId || appointment?.patient_id || null,
+            action: isPatientActor ? 'CANCEL_REQUESTED' : 'CANCELLED',
+            previousStatus: normalizeOperationalAppointmentStatus(previousAppointment?.status),
+            newStatus: isPatientActor ? 'CANCEL_REQUESTED' : 'CANCELLED',
+            performedBy: actorId,
+            performedByRole: actorRole,
+            metadata: {
+              source: isPatientActor ? canonicalResponseSource : 'clinic',
+              recurrenceScope
+            }
+          });
+        }));
+      }
       const events = await persistAppointmentDomainEvents({
         eventType: 'appointment.status.updated',
         appointments: affectedPersistedAppointments,
@@ -30566,10 +30663,10 @@ async function startServer() {
         RESCHEDULE_REQUESTED: 'Responsável solicitou remarcação',
         RESCHEDULE_APPROVED: 'Remarcação aprovada pela clínica',
         RESCHEDULE_REJECTED: 'Remarcação recusada pela clínica',
-        CANCEL_REQUESTED: 'Responsável solicitou cancelamento',
+        CANCEL_REQUESTED: 'Responsável cancelou a consulta',
         CANCEL_APPROVED: 'Cancelamento aprovado pela clínica',
         CANCEL_REJECTED: 'Cancelamento recusado pela clínica',
-        CANCELLED: 'Consulta cancelada',
+        CANCELLED: 'Consulta cancelada pela clínica',
         SIGNATURE_CREATED: 'Sessão assinada',
         SIGNATURE_REVOKED: 'Assinatura revogada'
       };
@@ -33334,8 +33431,7 @@ async function startServer() {
         const hasAppointmentResponseStatus = [
           'CONFIRMED',
           'RESCHEDULE_REQUESTED',
-          'CANCEL_REQUESTED',
-          'CANCELLED'
+          'CANCEL_REQUESTED'
         ].includes(appointmentStatus);
         const hasExplicitResponse = Boolean(
           row?.patient_confirmation_status ||
@@ -33361,7 +33457,9 @@ async function startServer() {
             row?.patientConfirmationAt ||
             row?.updated_at ||
             null,
-          source: hasExplicitResponse ? 'appointments' : null
+          source: hasExplicitResponse
+            ? row?.patient_confirmation_source || row?.patientConfirmationSource || 'appointments'
+            : null
         });
         if (hasExplicitResponse) setAppointmentPatientConfirmationStateCandidate(states, appointmentId, state);
       }

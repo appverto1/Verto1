@@ -385,8 +385,8 @@ function buildPhaseSummary(
     };
   }
   return {
-    title: 'Atendimento cancelado',
-    message: 'Esta consulta não segue para fechamento ou faturamento.',
+    title: 'Consulta cancelada',
+    message: 'Esta consulta foi cancelada e não segue para fechamento ou faturamento.',
     status: 'info',
     actionableCount: 0
   };
@@ -426,7 +426,11 @@ export function buildAppointmentClosureOperationalView(
       checklist = classify(phase);
     }
   }
-  const sections = {
+  const sections = phase === 'cancelled' ? {
+    preSession: [],
+    postSession: [],
+    tissBilling: []
+  } : {
     preSession: checklist.filter((item) => item.section === 'preSession'),
     postSession: checklist.filter((item) => item.section === 'postSession'),
     tissBilling: checklist.filter((item) =>

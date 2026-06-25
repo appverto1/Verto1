@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { resolveAppointmentCancellationState } from '../src/utils/appointmentCancellationState';
 import { getAppointmentPrimaryAction } from '../src/utils/appointmentPrimaryAction';
 
 const root = process.cwd();
@@ -155,6 +156,57 @@ test('clinic_state_fallback enriquece resposta confirmada pelo historico operaci
   assert.match(serverCode, /patientConfirmationColor: resolved\.color/);
 });
 
+test('cancelamento diferencia origem da clínica, paciente e desconhecida', () => {
+  assert.deepEqual(
+    resolveAppointmentCancellationState({ status: 'cancelled' }),
+    {
+      isCancelled: true,
+      origin: 'clinic',
+      status: 'cancelled_by_clinic',
+      label: 'CANCELADO PELA CLÍNICA',
+      message: 'Esta consulta foi cancelada pela clínica.',
+      source: 'clinic'
+    }
+  );
+  assert.equal(
+    resolveAppointmentCancellationState({
+      status: 'cancelled',
+      patient_confirmation_status: 'CANCEL_REQUESTED',
+      patient_confirmation_source: 'portal'
+    }).label,
+    'CANCELADO PELO PACIENTE'
+  );
+  assert.equal(
+    resolveAppointmentCancellationState({
+      status: 'cancelled',
+      patient_confirmation_status: 'confirmed',
+      patient_confirmation_source: 'portal'
+    }).label,
+    'CANCELADO PELA CLÍNICA'
+  );
+  assert.equal(
+    resolveAppointmentCancellationState({
+      status: 'cancelled',
+      patient_confirmation_source: 'legacy_unknown'
+    }).label,
+    'CANCELADO'
+  );
+  assert.equal(
+    resolveAppointmentCancellationState({
+      status: 'reschedule',
+      patient_confirmation_status: 'RESCHEDULE_REQUESTED',
+      patient_confirmation_source: 'portal'
+    }).isCancelled,
+    false
+  );
+  assert.match(serverCode, /function resolveCalendarCancellationState/);
+  assert.match(serverCode, /status: 'cancelled_by_clinic'/);
+  assert.match(serverCode, /label: 'CANCELADO PELA CLÍNICA'/);
+  assert.match(serverCode, /patient_confirmation_source = 'clinic'/);
+  assert.match(serverCode, /action: isPatientActor \? 'CANCEL_REQUESTED' : 'CANCELLED'/);
+  assert.match(serverCode, /CANCELLED: 'Consulta cancelada pela clínica'/);
+});
+
 test('popover tem acoes clinicas e nao registra sessao automaticamente', () => {
   assert.match(calendarCode, /Ações da consulta/);
   assert.match(calendarCode, /Confirmar/);
@@ -216,6 +268,15 @@ test('ação principal respeita a fase operacional da consulta', () => {
   assert.match(calendarCode, /detailPrimaryAction\.label/);
   assert.match(calendarCode, /primaryAction\.kind === 'closure'/);
   assert.match(calendarCode, /\['READY', 'PENDING', 'WARNING'\]\.includes\(closureReadinessStatus\)/);
+});
+
+test('consulta cancelada não oferece fechamento, pré-guia ou novo cancelamento', () => {
+  assert.match(calendarCode, /const detailCancellationState = resolveAppointmentCancellationState\(detailEvent\)/);
+  assert.match(calendarCode, /cancelled\s*\?\s*'cancelled'\s*:\s*explicitPhase/);
+  assert.match(calendarCode, /!detailCancellationState\.isCancelled && \[/);
+  assert.match(calendarCode, /!detailCancellationState\.isCancelled && \(\s*<button[\s\S]*?onCancelAppointment/);
+  assert.match(calendarCode, /!resolveAppointmentCancellationState\(statusActionEvent\)\.isCancelled && \(\s*<button[\s\S]*?handleStatusAction\(statusActionEvent, 'cancel'\)/);
+  assert.match(calendarCode, /title: 'Consulta cancelada'/);
 });
 
 test('coordinator usa agenda clinica e padrao inicial mensal persistido', () => {

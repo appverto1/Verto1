@@ -370,6 +370,28 @@ test('sessão concluída avalia fechamento e depois separa bloqueios TISS', () =
   assert.ok(pendingTiss.sections.tissBilling.some((item) => item.key === 'payer_guide_required' && item.operationalStatus === 'blocking_now'));
 });
 
+test('consulta cancelada tem prioridade e não expõe fechamento ou faturamento', () => {
+  const result = evaluateAppointmentClosureReadiness({
+    ...baseInput,
+    appointment: {
+      ...baseInput.appointment,
+      status: 'cancelled'
+    }
+  });
+  assert.equal(result.phase, 'cancelled');
+  assert.equal(result.readinessStatus, 'NOT_BILLABLE');
+  assert.equal(result.phaseSummary.title, 'Consulta cancelada');
+  assert.equal(result.phaseSummary.actionableCount, 0);
+  assert.deepEqual(result.sections.preSession, []);
+  assert.deepEqual(result.sections.postSession, []);
+  assert.deepEqual(result.sections.tissBilling, []);
+
+  const legacyView = buildAppointmentClosureOperationalView(result.checklist, 'cancelled');
+  assert.equal(legacyView.phase, 'cancelled');
+  assert.deepEqual(legacyView.sections.postSession, []);
+  assert.deepEqual(legacyView.sections.tissBilling, []);
+});
+
 test('checklist legado é classificado em memória sem exigir escrita no GET', () => {
   const view = buildAppointmentClosureOperationalView([
     {

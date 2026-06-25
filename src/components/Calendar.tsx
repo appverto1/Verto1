@@ -41,6 +41,7 @@ import {
   getAppointmentFinancialContextLabel,
   normalizeAppointmentFinancialContextType,
 } from '../utils/appointmentFinancialContext';
+import { resolveAppointmentCancellationState } from '../utils/appointmentCancellationState';
 import { getAppointmentPrimaryAction } from '../utils/appointmentPrimaryAction';
 
 const isPersistedUuid = (value: any) =>
@@ -191,6 +192,10 @@ export const getAppointmentStatusColor = (status: any) => {
 };
 
 const normalizeAppointmentPatientConfirmationStatus = (appointment: any) => {
+  const cancellationState = resolveAppointmentCancellationState(appointment);
+  if (cancellationState.status === 'declined') return 'CANCEL_REQUESTED';
+  if (cancellationState.status === 'cancelled_by_clinic') return 'CANCELLED_BY_CLINIC';
+  if (cancellationState.status === 'cancelled') return 'CANCELLED';
   const raw =
     appointment?.patientConfirmationStatus ||
     appointment?.patient_confirmation_status ||
@@ -201,23 +206,27 @@ const normalizeAppointmentPatientConfirmationStatus = (appointment: any) => {
   const explicit = canonicalAppointmentStatus(raw);
   if (explicit === 'CONFIRMED') return 'CONFIRMED';
   if (explicit === 'RESCHEDULE_REQUESTED' || explicit === 'RESCHEDULED') return 'RESCHEDULE_REQUESTED';
-  if (explicit === 'CANCEL_REQUESTED' || explicit === 'CANCELLED') return 'CANCEL_REQUESTED';
+  if (explicit === 'CANCEL_REQUESTED') return 'CANCEL_REQUESTED';
   const fallback = canonicalAppointmentStatus(appointment?.status || appointment?.appointment_status);
   if (fallback === 'CONFIRMED') return 'CONFIRMED';
   if (fallback === 'RESCHEDULE_REQUESTED' || fallback === 'RESCHEDULED') return 'RESCHEDULE_REQUESTED';
-  if (fallback === 'CANCEL_REQUESTED' || fallback === 'CANCELLED') return 'CANCEL_REQUESTED';
+  if (fallback === 'CANCEL_REQUESTED') return 'CANCEL_REQUESTED';
   return 'PENDING_CONFIRMATION';
 };
 
 export const getAppointmentPatientConfirmationVisualState = (appointment: any) => {
   const canonical = normalizeAppointmentPatientConfirmationStatus(appointment);
+  const cancellationState = resolveAppointmentCancellationState(appointment);
   const label =
+    cancellationState.label ||
     appointment?.patientConfirmationLabel ||
     appointment?.patient_confirmation_label ||
     {
       CONFIRMED: 'CONFIRMADO',
       RESCHEDULE_REQUESTED: 'REMARCAR',
       CANCEL_REQUESTED: 'CANCELADO PELO PACIENTE',
+      CANCELLED_BY_CLINIC: 'CANCELADO PELA CLÍNICA',
+      CANCELLED: 'CANCELADO',
       PENDING_CONFIRMATION: 'PENDENTE'
     }[canonical] ||
     'PENDENTE';
@@ -226,7 +235,7 @@ export const getAppointmentPatientConfirmationVisualState = (appointment: any) =
       ? 'confirmed'
       : canonical === 'RESCHEDULE_REQUESTED'
         ? 'reschedule_requested'
-        : canonical === 'CANCEL_REQUESTED'
+        : canonical === 'CANCEL_REQUESTED' || canonical === 'CANCELLED_BY_CLINIC' || canonical === 'CANCELLED'
           ? 'cancel_requested'
           : 'pending';
   return {
@@ -588,18 +597,21 @@ export const getAppointmentClosureOperationalView = (event: any, detail: any = n
     event?.actualStartAt ||
     ['in_progress', 'active'].includes(status)
   );
-  const cancelled = ['canceled', 'cancelled', 'cancelada', 'cancelado', 'no_show', 'missed', 'falta', 'faltou'].includes(status);
+  const cancellationState = resolveAppointmentCancellationState(event);
+  const cancelled = cancellationState.isCancelled || ['no_show', 'missed', 'falta', 'faltou'].includes(status);
   const phase =
-    explicitPhase ||
-    (cancelled
+    cancelled
       ? 'cancelled'
-      : concluded
-        ? closureReadinessStatus === 'READY'
-          ? 'prefacturing_ready'
-          : 'completed_pending_closure'
-        : inSession
-          ? 'in_session'
-          : 'scheduled_pre_session');
+      : explicitPhase ||
+      (
+        concluded
+          ? closureReadinessStatus === 'READY'
+            ? 'prefacturing_ready'
+            : 'completed_pending_closure'
+          : inSession
+            ? 'in_session'
+            : 'scheduled_pre_session'
+      );
   const blockingCount = Number(
     detail?.phaseSummary?.actionableCount ??
     detail?.blocking_issues_count ??
@@ -617,9 +629,17 @@ export const getAppointmentClosureOperationalView = (event: any, detail: any = n
     prefacturing_blocked: { title: 'Faturamento TISS', message: `${actionableCount} bloqueio(s) para Pré-guia TISS.`, status: 'blocked' },
     prefacturing_ready: { title: 'Faturamento TISS', message: 'Pronto para Pré-guia TISS.', status: 'ready' },
     closed_ready_for_prefacturing: { title: 'Faturamento TISS', message: 'Pronto para Pré-guia TISS.', status: 'ready' },
-    cancelled: { title: 'Atendimento cancelado', message: 'Esta consulta não segue para fechamento ou faturamento.', status: 'info' }
+    cancelled: {
+      title: 'Consulta cancelada',
+      message: cancellationState.message || 'Esta consulta foi cancelada.',
+      status: 'info'
+    }
   };
-  const sections = detail?.sections || {
+  const sections = cancelled ? {
+    preSession: [],
+    postSession: [],
+    tissBilling: []
+  } : detail?.sections || {
     preSession: checklist.filter((item: any) => item?.section === 'preSession'),
     postSession: checklist.filter((item: any) => item?.section === 'postSession'),
     tissBilling: checklist.filter((item: any) => item?.section === 'tissBilling')
@@ -628,8 +648,8 @@ export const getAppointmentClosureOperationalView = (event: any, detail: any = n
     phase,
     phaseSummary: {
       ...(fallbackSummary[phase] || fallbackSummary.scheduled_pre_session),
-      ...(detail?.phaseSummary || {}),
-      actionableCount
+      ...(cancelled ? {} : detail?.phaseSummary || {}),
+      actionableCount: cancelled ? 0 : actionableCount
     },
     sections
   };
@@ -2444,6 +2464,7 @@ export const ClinicalAgendaBoard = ({
     ...(detail.closure || {})
   });
   const closureOperationalView = getAppointmentClosureOperationalView(detailEvent, closureDetailState.data);
+  const detailCancellationState = resolveAppointmentCancellationState(detailEvent);
   const detailPrimaryAction = getAppointmentPrimaryAction(detailEvent, closureOperationalView.phase);
   const detailStatusColor = getAppointmentPatientConfirmationVisualState(detailEvent);
   const detailAppointmentConfirmed = detailStatusColor.canonical === 'CONFIRMED';
@@ -2737,15 +2758,19 @@ export const ClinicalAgendaBoard = ({
               </button>
             </div>
             <div className="mt-5 grid gap-2">
-              <button type="button" onClick={() => handleStatusAction(statusActionEvent, 'confirm')} className="rounded-2xl bg-[#7a32fc] px-4 py-3 text-sm font-bold text-white shadow-lg shadow-violet-500/20">
-                Confirmar
-              </button>
+              {!resolveAppointmentCancellationState(statusActionEvent).isCancelled && (
+                <button type="button" onClick={() => handleStatusAction(statusActionEvent, 'confirm')} className="rounded-2xl bg-[#7a32fc] px-4 py-3 text-sm font-bold text-white shadow-lg shadow-violet-500/20">
+                  Confirmar
+                </button>
+              )}
               <button type="button" onClick={() => handleStatusAction(statusActionEvent, 'reschedule')} className="rounded-2xl border border-violet-200 bg-white px-4 py-3 text-sm font-bold text-[#7a32fc] hover:bg-violet-50">
                 Remarcar
               </button>
-              <button type="button" onClick={() => handleStatusAction(statusActionEvent, 'cancel')} className="rounded-2xl border border-violet-200 bg-white px-4 py-3 text-sm font-bold text-[#7a32fc] hover:bg-violet-50">
-                Cancelar
-              </button>
+              {!resolveAppointmentCancellationState(statusActionEvent).isCancelled && (
+                <button type="button" onClick={() => handleStatusAction(statusActionEvent, 'cancel')} className="rounded-2xl border border-violet-200 bg-white px-4 py-3 text-sm font-bold text-[#7a32fc] hover:bg-violet-50">
+                  Cancelar
+                </button>
+              )}
               <button type="button" onClick={() => handleStatusAction(statusActionEvent, 'delete')} className="rounded-2xl border border-rose-200 bg-white px-4 py-3 text-sm font-bold text-rose-600 hover:bg-rose-50">
                 Excluir
               </button>
@@ -3179,7 +3204,7 @@ export const ClinicalAgendaBoard = ({
               </div>
             )}
 
-            {detailEvent.closure_readiness_status && (
+            {(detailEvent.closure_readiness_status || detailCancellationState.isCancelled) && (
               <div className={`mt-5 rounded-3xl border p-4 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-100 bg-slate-50/70'}`}>
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div>
@@ -3216,7 +3241,7 @@ export const ClinicalAgendaBoard = ({
                     </p>
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    {[
+                    {!detailCancellationState.isCancelled && [
                       'completed_pending_closure',
                       'closed_ready_for_prefacturing',
                       'prefacturing_ready',
@@ -3231,22 +3256,24 @@ export const ClinicalAgendaBoard = ({
                         Ver Pré-guias TISS
                       </button>
                     )}
-                    <button
-                      type="button"
-                      onClick={() => openClosureChecklist(detailEvent)}
-                      className={`inline-flex items-center justify-center gap-2 rounded-2xl border px-3 py-2 text-xs font-bold ${isDark ? 'border-slate-700 text-slate-200 hover:bg-slate-800' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'}`}
-                    >
-                      {closureDetailState.loading ? <Loader2 size={14} className="animate-spin" /> : <ClipboardCheck size={14} />}
-                      {closureChecklistExpanded ? 'Ocultar checklist' : 'Ver checklist'}
-                    </button>
+                    {!detailCancellationState.isCancelled && (
+                      <button
+                        type="button"
+                        onClick={() => openClosureChecklist(detailEvent)}
+                        className={`inline-flex items-center justify-center gap-2 rounded-2xl border px-3 py-2 text-xs font-bold ${isDark ? 'border-slate-700 text-slate-200 hover:bg-slate-800' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'}`}
+                      >
+                        {closureDetailState.loading ? <Loader2 size={14} className="animate-spin" /> : <ClipboardCheck size={14} />}
+                        {closureChecklistExpanded ? 'Ocultar checklist' : 'Ver checklist'}
+                      </button>
+                    )}
                   </div>
                 </div>
-                {closureDetailState.error && (
+                {!detailCancellationState.isCancelled && closureDetailState.error && (
                   <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
                     {closureDetailState.error}
                   </div>
                 )}
-                {closureChecklistExpanded && Array.isArray(closureDetailState.data?.checklist) && closureDetailState.data.checklist.length > 0 && (
+                {!detailCancellationState.isCancelled && closureChecklistExpanded && Array.isArray(closureDetailState.data?.checklist) && closureDetailState.data.checklist.length > 0 && (
                   <div className="mt-4 space-y-4">
                     {Object.entries(CLOSURE_SECTION_META).map(([sectionKey, meta]) => {
                       const items = Array.isArray(closureOperationalView.sections?.[sectionKey])
@@ -3327,17 +3354,19 @@ export const ClinicalAgendaBoard = ({
                 <RefreshCcw size={16} />
                 Remarcar
               </button>
-              <button type="button" onClick={() => onCancelAppointment?.(detailEvent)} className="flex items-center justify-center gap-2 rounded-2xl border border-rose-200 px-4 py-3 text-sm font-bold text-rose-600 hover:bg-rose-50">
-                <Ban size={16} />
-                Cancelar
-              </button>
+              {!detailCancellationState.isCancelled && (
+                <button type="button" onClick={() => onCancelAppointment?.(detailEvent)} className="flex items-center justify-center gap-2 rounded-2xl border border-rose-200 px-4 py-3 text-sm font-bold text-rose-600 hover:bg-rose-50">
+                  <Ban size={16} />
+                  Cancelar
+                </button>
+              )}
               <button type="button" onClick={() => onDeleteAppointment?.(detailEvent)} className="flex items-center justify-center gap-2 rounded-2xl border border-rose-200 px-4 py-3 text-sm font-bold text-rose-700 hover:bg-rose-50">
                 <Trash2 size={16} />
                 Excluir
               </button>
             </div>
 
-            {detailEvent.has_session_record && (
+            {detailEvent.has_session_record && !detailCancellationState.isCancelled && (
               <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">
                 Sessão registrada. Use os botões acima para abrir relatório e gráficos.
               </div>
