@@ -3582,6 +3582,28 @@ export const dataService = {
     }
   },
 
+  async getPatientTissAuthorizationsOverview(params: any = {}) {
+    const endpoint = endpointWithQuery('/api/patients/tiss-authorizations', {
+      patientId: params.patientId || params.patient_id || '',
+      payerId: params.payerId || params.payer_id || '',
+      limit: params.limit || 500
+    });
+    try {
+      return await fetchNoStoreJsonWithRetry(endpoint, {
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getPatientTissAuthorizationsOverview',
+        operation: 'list',
+        table: 'patient_payer_authorizations,patients,clinic_payers,payer_tuss_mappings,payer_procedure_prices',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      }, 'As autorizações TISS dos pacientes voltaram do cache. Tente atualizar novamente.');
+    } catch {
+      return { success: false, data: [], error: 'Não foi possível carregar as autorizações TISS dos pacientes.' };
+    }
+  },
+
   async deletePatientTissAuthorization(patientId: string, authorizationId: string) {
     const endpoint = `/api/patients/${encodeURIComponent(String(patientId))}/tiss-authorizations/${encodeURIComponent(String(authorizationId))}`;
     try {

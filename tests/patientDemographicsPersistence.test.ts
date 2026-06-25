@@ -30,7 +30,7 @@ test('data de nascimento percorre formulario, payload, backend, select e hidrata
     assert.match(newPatientPayload, new RegExp(`${field}:\\s*normalizedBirthDate`));
   }
 
-  const editHydration = sliceFrom(coordinatorCode, 'const handleEditPatient = (patient: any) => {', 1800);
+  const editHydration = sliceFrom(coordinatorCode, 'const handleEditPatient = (patient: any, initialTab: PatientRegistrationTab = "personal") => {', 1800);
   assert.match(editHydration, /formatBirthDateForInput\(/);
   assert.match(editHydration, /patient\.birth_date/);
   assert.match(editHydration, /patient\.anamnesisData\?\.dataNascimento/);
@@ -58,7 +58,7 @@ test('cpf tem mascara no front, normalizacao no backend e nao aparece em cards p
   assert.match(coordinatorCode, /return `\$\{v\.slice\(0, 3\)\}\.\$\{v\.slice\(3, 6\)\}\.\$\{v\.slice\(6, 9\)\}-\$\{v\.slice\(9, 11\)\}`/);
   assert.match(coordinatorCode, /field === "cpf" \|\| field === "responsavelCpf" \|\| field === "convenioTitularCpf"/);
 
-  const editHydration = sliceFrom(coordinatorCode, 'const handleEditPatient = (patient: any) => {', 3200);
+  const editHydration = sliceFrom(coordinatorCode, 'const handleEditPatient = (patient: any, initialTab: PatientRegistrationTab = "personal") => {', 3200);
   assert.match(editHydration, /cpf:\s*formatCpf\(patient\.cpf/);
   assert.match(editHydration, /responsavelCpf:\s*formatCpf\(patient\.guardian\?\.cpf/);
 

@@ -133,6 +133,7 @@ type DashboardTab =
   | "closure"
   | "conference"
   | "payers"
+  | "patientAuthorizations"
   | "rooms"
   | "protocols"
   | "settings"
@@ -421,6 +422,7 @@ export function CoordinatorDashboard({
     financial: "patient-financial",
     team: "team-compensation",
     payers: "clinic-settings",
+    patientAuthorizations: "clinic-settings",
     settings: null,
     logs: null,
     billing: "billing-management",
@@ -457,6 +459,7 @@ export function CoordinatorDashboard({
     | "closure"
     | "conference"
     | "payers"
+    | "patientAuthorizations"
     | "rooms"
     | "protocols"
     | "settings"
@@ -471,16 +474,17 @@ export function CoordinatorDashboard({
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(false);
   const [expandedNavigationSections, setExpandedNavigationSections] = useState<Record<string, boolean>>({
+    "care-root": true,
+    "tiss-root": true,
+    "prebilling-root": true,
     "finance-root": true,
-    "finance-billing-config": true,
-    "finance-prebilling": true,
-    "finance-closing": true,
+    "settings-root": true,
     "finance-clinical": false,
     "finance-reports": false,
   });
   const [financialNavigationContext, setFinancialNavigationContext] = useState<FinancialNavigationIntent & { intentKey: number }>({
     tab: "financial",
-    breadcrumb: ["Financeiro", "Dashboard Financeiro"],
+    breadcrumb: ["Financeiro", "Dashboard financeiro"],
     intentKey: 0,
   });
   const [therapistMembersById, setTherapistMembersById] = useState<Record<string, any>>({});
@@ -488,23 +492,26 @@ export function CoordinatorDashboard({
   const [patientQuickFilter, setPatientQuickFilter] = useState<"all" | "birthdaysToday">("all");
 
   const defaultFinancialNavigationIntent = (tab: DashboardTab): FinancialNavigationIntent | null => {
-    if (tab === "financial") return { tab, breadcrumb: ["Financeiro", "Dashboard Financeiro"] };
+    if (tab === "financial") return { tab, breadcrumb: ["Financeiro", "Dashboard financeiro"] };
     if (tab === "payers") {
       return {
         tab,
-        breadcrumb: ["Financeiro", "Convênios e Faturamento", "Convênios"],
+        breadcrumb: ["Convênios e TISS", "Convênios"],
         payerSection: "convenios",
       };
+    }
+    if (tab === "patientAuthorizations") {
+      return { tab, breadcrumb: ["Convênios e TISS", "Autorizações dos pacientes"] };
     }
     if (tab === "conference") {
       return {
         tab,
-        breadcrumb: ["Financeiro", "Pré-Faturamento", "Conferência"],
+        breadcrumb: ["Pré-faturamento TISS", "Conferência"],
         conferenceTab: "sessions",
       };
     }
     if (tab === "closure") {
-      return { tab, breadcrumb: ["Financeiro", "Pré-Faturamento", "Pendências"] };
+      return { tab, breadcrumb: ["Pré-faturamento TISS", "Pendências"] };
     }
     return null;
   };
@@ -770,6 +777,7 @@ export function CoordinatorDashboard({
     closure: "Fechamento operacional",
     conference: "Pré-faturamento mensal",
     payers: "Convênios",
+    patientAuthorizations: "Autorizações dos pacientes",
     rooms: "Reservas de Sala",
     protocols: "Protocolos",
     settings: "Configurações da Clínica",
@@ -1478,6 +1486,14 @@ export function CoordinatorDashboard({
   const [editingPatientTissAuthorizationId, setEditingPatientTissAuthorizationId] = useState("");
   const [patientTissAuthorizationForm, setPatientTissAuthorizationForm] = useState<any>(defaultPatientTissAuthorizationForm);
   const [patientTissAuthorizationFeedback, setPatientTissAuthorizationFeedback] = useState<{ type: "idle" | "saving" | "success" | "error"; message: string }>({ type: "idle", message: "" });
+  const [patientAuthorizationOverview, setPatientAuthorizationOverview] = useState<any[]>([]);
+  const [patientAuthorizationOverviewLoading, setPatientAuthorizationOverviewLoading] = useState(false);
+  const [patientAuthorizationOverviewError, setPatientAuthorizationOverviewError] = useState("");
+  const [patientAuthorizationOverviewFilters, setPatientAuthorizationOverviewFilters] = useState({
+    search: "",
+    payerId: "all",
+    status: "all",
+  });
   const [patientTissAuthorizationCatalog, setPatientTissAuthorizationCatalog] = useState<{
     services: any[];
     codes: any[];
@@ -1633,6 +1649,83 @@ export function CoordinatorDashboard({
     const until = formatPatientAuthorizationDate(authorization.validUntil);
     return `Senha ${authorization.authorizationNumber || authorization.authorizationCode || "-"} · saldo ${balance} · válida até ${until}`;
   };
+
+  const loadPatientAuthorizationOverview = useCallback(async () => {
+    setPatientAuthorizationOverviewLoading(true);
+    setPatientAuthorizationOverviewError("");
+    try {
+      const result = await dataService.getPatientTissAuthorizationsOverview({ limit: 800 });
+      if (!result?.success) {
+        setPatientAuthorizationOverview([]);
+        setPatientAuthorizationOverviewError(result?.error || "Não foi possível carregar as autorizações TISS dos pacientes.");
+        return;
+      }
+      setPatientAuthorizationOverview(Array.isArray(result.data) ? result.data : []);
+    } catch {
+      setPatientAuthorizationOverview([]);
+      setPatientAuthorizationOverviewError("Não foi possível carregar as autorizações TISS dos pacientes.");
+    } finally {
+      setPatientAuthorizationOverviewLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === "patientAuthorizations") {
+      void loadPatientAuthorizationOverview();
+    }
+  }, [activeTab, loadPatientAuthorizationOverview]);
+
+  const patientAuthorizationOverviewPayerOptions = useMemo(() => {
+    const options = new Map<string, string>();
+    for (const authorization of patientAuthorizationOverview) {
+      const payerId = String(authorization?.payerId || authorization?.payer_id || authorization?.payerName || "").trim();
+      const payerName = normalizeUtf8Text(String(authorization?.payerName || authorization?.payer_name || "Convênio não informado")).trim();
+      if (payerId) options.set(payerId, payerName || "Convênio não informado");
+    }
+    return Array.from(options.entries())
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+  }, [patientAuthorizationOverview]);
+
+  const filteredPatientAuthorizationOverview = useMemo(() => {
+    const search = normalizeLookupText(patientAuthorizationOverviewFilters.search);
+    return patientAuthorizationOverview.filter((authorization: any) => {
+      const state = getPatientTissAuthorizationVisualState(authorization);
+      const payerId = String(authorization?.payerId || authorization?.payer_id || authorization?.payerName || "").trim();
+      if (patientAuthorizationOverviewFilters.payerId !== "all" && payerId !== patientAuthorizationOverviewFilters.payerId) {
+        return false;
+      }
+      if (patientAuthorizationOverviewFilters.status !== "all") {
+        if (patientAuthorizationOverviewFilters.status === "legacy") {
+          if (!state.isLegacyOrInadequate) return false;
+        } else if (patientAuthorizationOverviewFilters.status === "current") {
+          if (!["current", "expiring"].includes(state.status)) return false;
+        } else if (state.status !== patientAuthorizationOverviewFilters.status) {
+          return false;
+        }
+      }
+      if (!search) return true;
+      const haystack = normalizeLookupText([
+        authorization?.patientName,
+        authorization?.patient_name,
+        authorization?.payerName,
+        authorization?.payer_name,
+        authorization?.serviceName,
+        authorization?.service_name,
+        authorization?.internalCode,
+        authorization?.internal_code,
+        authorization?.tussCode,
+        authorization?.tuss_code,
+        authorization?.guideNumber,
+        authorization?.guide_number,
+        authorization?.authorizationNumber,
+        authorization?.authorization_number,
+        authorization?.authorizationCode,
+        authorization?.authorization_code,
+      ].filter(Boolean).join(" "));
+      return haystack.includes(search);
+    });
+  }, [patientAuthorizationOverview, patientAuthorizationOverviewFilters, normalizeLookupText]);
 
   const resetPatientTissAuthorizationForm = () => {
     setEditingPatientTissAuthorizationId("");
@@ -4244,10 +4337,10 @@ export function CoordinatorDashboard({
     return "Anamnese pendente";
   };
 
-  const handleEditPatient = (patient: any) => {
+  const handleEditPatient = (patient: any, initialTab: PatientRegistrationTab = "personal") => {
     const insuranceEligibility = normalizePatientInsuranceEligibility(patient, { useResponsibleFallback: true });
     setEditingPatientId(String(patient.id));
-    setActivePatientRegistrationTab("personal");
+    setActivePatientRegistrationTab(initialTab);
     setNewPatientForm({
       nome: patient.name || "",
       nomeSocial: patient.socialName || "",
@@ -4814,6 +4907,26 @@ export function CoordinatorDashboard({
       return;
     }
     onPatientClick(patientId || undefined, { tab: "history" }, fallbackName || "Paciente");
+  }, [allPatients, handleEditPatient, isTherapist, onPatientClick]);
+
+  const openPatientAuthorizationRegistration = useCallback((authorization: any, action: "view" | "edit" | "add" = "view") => {
+    const patientId = String(authorization?.patientId || authorization?.patient_id || "").trim();
+    const patientName = normalizeUtf8Text(String(authorization?.patientName || authorization?.patient_name || "Paciente")).trim();
+    const patient =
+      allPatients.find((item: any) => patientId && String(item?.id) === patientId) ||
+      (patientId ? { id: patientId, name: patientName } : null);
+    if (!patient?.id || isTherapist) {
+      onPatientClick(patientId || undefined, { tab: "history" }, patientName || "Paciente");
+      return;
+    }
+    handleEditPatient(patient, "tiss");
+    setActionPopup({
+      title: action === "add" ? "Adicionar autorização TISS" : action === "edit" ? "Editar autorização TISS" : "Autorizações TISS",
+      message:
+        action === "add"
+          ? "Abrimos a aba Autorizações TISS do paciente para cadastrar uma nova senha/guia."
+          : "Abrimos a aba Autorizações TISS do paciente para revisar esta autorização.",
+    });
   }, [allPatients, handleEditPatient, isTherapist, onPatientClick]);
 
   const openAppointmentChartFromAgenda = useCallback(
@@ -6358,7 +6471,7 @@ export function CoordinatorDashboard({
           ? () =>
               navigateToTab("conference", {
                 tab: "conference",
-                breadcrumb: ["Financeiro", "Pré-Faturamento", "Pré-guias TISS"],
+                breadcrumb: ["Pré-faturamento TISS", "Pré-guias TISS"],
                 conferenceTab: "preGuides",
                 tissPanel: "preGuides",
               })
@@ -6945,19 +7058,23 @@ export function CoordinatorDashboard({
 
   const payerIntent = (section: PayerNavigationSection, label: string): FinancialNavigationIntent => ({
     tab: "payers",
-    breadcrumb: ["Financeiro", "Convênios e Faturamento", label],
+    breadcrumb: ["Convênios e TISS", label],
     payerSection: section,
   });
   const conferenceIntent = (
     label: string,
     conferenceTab: ConferenceNavigationTab,
     tissPanel?: TissPreGuidePanel,
-    group: "Pré-Faturamento" | "Fechamento" = "Pré-Faturamento",
+    group: "Pré-faturamento TISS" | "Fechamento" = "Pré-faturamento TISS",
   ): FinancialNavigationIntent => ({
     tab: "conference",
-    breadcrumb: ["Financeiro", group, label],
+    breadcrumb: [group, label],
     conferenceTab,
     tissPanel,
+  });
+  const patientAuthorizationsIntent = (): FinancialNavigationIntent => ({
+    tab: "patientAuthorizations",
+    breadcrumb: ["Convênios e TISS", "Autorizações dos pacientes"],
   });
   const financialIntent = (label: string): FinancialNavigationIntent => ({
     tab: "financial",
@@ -6965,16 +7082,47 @@ export function CoordinatorDashboard({
   });
 
   const navigationGroups: NavigationNode[][] = [
-    [{ id: "dashboard", label: "Painel", icon: LayoutDashboard }],
     [
-      { id: "patients", label: "Pacientes", icon: ClipboardList },
-      { id: "birthdays", label: "Aniversariantes", icon: Heart },
+      {
+        id: "care-root",
+        label: "Atendimento",
+        icon: ClipboardList,
+        children: [
+          { id: "dashboard", label: "Painel", icon: LayoutDashboard },
+          { id: "agenda", label: "Agenda", icon: CalendarDays },
+          { id: "patients", label: "Pacientes", icon: ClipboardList },
+          { id: "birthdays", label: "Aniversariantes", icon: Heart },
+          { id: "protocols", label: "Protocolos", icon: BookOpenCheck },
+        ],
+      },
     ],
     [
-      { id: "agenda", label: "Agenda", icon: CalendarDays },
-      { id: "rooms", label: "Salas", icon: DoorOpen },
+      {
+        id: "tiss-root",
+        label: "Convênios e TISS",
+        icon: KeyRound,
+        children: [
+          { id: "payer-convenios", label: "Convênios", icon: KeyRound, tab: "payers", intent: payerIntent("convenios", "Convênios") },
+          { id: "patient-authorizations", label: "Autorizações dos pacientes", icon: ClipboardCheck, tab: "patientAuthorizations", intent: patientAuthorizationsIntent() },
+          { id: "payer-prices", label: "Tabela de valores", icon: FileSpreadsheet, tab: "payers", intent: payerIntent("prices", "Tabela de valores") },
+          { id: "payer-tuss", label: "De/Para TUSS", icon: ClipboardCheck, tab: "payers", intent: payerIntent("tuss", "De/Para TUSS") },
+          { id: "payer-rules", label: "Regras TISS", icon: ShieldCheck, tab: "payers", intent: payerIntent("rules", "Regras TISS") },
+        ],
+      },
     ],
-    [{ id: "protocols", label: "Protocolos", icon: BookOpenCheck }],
+    [
+      {
+        id: "prebilling-root",
+        label: "Pré-faturamento TISS",
+        icon: FileChartColumnIncreasing,
+        children: [
+          { id: "prebilling-preguides", label: "Pré-guias TISS", icon: ClipboardCheck, tab: "conference", intent: conferenceIntent("Pré-guias TISS", "preGuides", "preGuides") },
+          { id: "prebilling-conference", label: "Conferência", icon: Search, tab: "conference", intent: conferenceIntent("Conferência", "sessions") },
+          { id: "prebilling-pending", label: "Pendências", icon: AlertCircle, tab: "conference", intent: conferenceIntent("Pendências", "sessions") },
+          { id: "prebilling-batches", label: "Lotes XML", icon: FileText, tab: "conference", intent: conferenceIntent("Lotes XML", "preGuides", "xmlDrafts") },
+        ],
+      },
+    ],
     [
       {
         id: "finance-root",
@@ -6982,41 +7130,10 @@ export function CoordinatorDashboard({
         icon: DollarSign,
         badge: "BETA",
         children: [
-          { id: "finance-dashboard", label: "Dashboard Financeiro", icon: LayoutDashboard, tab: "financial", intent: financialIntent("Dashboard Financeiro") },
-          {
-            id: "finance-billing-config",
-            label: "Convênios e Faturamento",
-            icon: KeyRound,
-            children: [
-              { id: "payer-convenios", label: "Convênios", icon: KeyRound, tab: "payers", intent: payerIntent("convenios", "Convênios") },
-              { id: "payer-tuss", label: "De/Para TUSS", icon: ClipboardCheck, tab: "payers", intent: payerIntent("tuss", "De/Para TUSS") },
-              { id: "payer-prices", label: "Tabela de Valores", icon: FileSpreadsheet, tab: "payers", intent: payerIntent("prices", "Tabela de Valores") },
-              { id: "payer-rules", label: "Regras TISS", icon: ShieldCheck, tab: "payers", intent: payerIntent("rules", "Regras TISS") },
-            ],
-          },
-          {
-            id: "finance-prebilling",
-            label: "Pré-Faturamento",
-            icon: FileChartColumnIncreasing,
-            children: [
-              { id: "prebilling-preguides", label: "Pré-guias TISS", icon: ClipboardCheck, tab: "conference", intent: conferenceIntent("Pré-guias TISS", "preGuides", "preGuides") },
-              { id: "prebilling-conference", label: "Conferência", icon: Search, tab: "conference", intent: conferenceIntent("Conferência", "sessions") },
-              { id: "prebilling-pending", label: "Pendências", icon: AlertCircle, tab: "conference", intent: conferenceIntent("Pendências", "sessions") },
-            ],
-          },
-          {
-            id: "finance-closing",
-            label: "Fechamento",
-            icon: ReceiptText,
-            children: [
-              { id: "closing-tiss", label: "Fechamento TISS", icon: ReceiptText, tab: "conference", intent: conferenceIntent("Fechamento TISS", "preGuides", "preGuides", "Fechamento") },
-              { id: "closing-batches", label: "Lotes Rascunho", icon: ClipboardList, tab: "conference", intent: conferenceIntent("Lotes Rascunho", "preGuides", "batchDrafts", "Fechamento") },
-              { id: "closing-xml", label: "XML Rascunhos", icon: FileText, tab: "conference", intent: conferenceIntent("XML Rascunhos", "preGuides", "xmlDrafts", "Fechamento") },
-            ],
-          },
+          { id: "finance-dashboard", label: "Dashboard financeiro", icon: LayoutDashboard, tab: "financial", intent: financialIntent("Dashboard financeiro") },
           {
             id: "finance-clinical",
-            label: "Financeiro Clínico",
+            label: "Movimentação",
             icon: PieChart,
             children: [
               { id: "clinical-revenue", label: "Receitas", icon: ArrowUpRight, tab: "financial", intent: financialIntent("Receitas") },
@@ -7032,14 +7149,26 @@ export function CoordinatorDashboard({
             children: [
               { id: "report-production", label: "Produção", icon: PieChart, tab: "financial", intent: financialIntent("Relatórios de Produção") },
               { id: "report-billing", label: "Faturamento", icon: ReceiptText, tab: "financial", intent: financialIntent("Relatórios de Faturamento") },
-              { id: "report-payers", label: "Convênios", icon: KeyRound, tab: "payers", intent: payerIntent("convenios", "Relatórios de Convênios") },
             ],
           },
         ],
       },
     ],
+    [
+      {
+        id: "settings-root",
+        label: "Configurações",
+        icon: ShieldCheck,
+        children: [
+          { id: "settings-clinic", label: "Clínica", icon: ShieldCheck, tab: "settings" },
+          { id: "settings-team", label: "Profissionais", icon: Users, tab: "team" },
+          { id: "settings-rooms", label: "Salas", icon: DoorOpen, tab: "rooms" },
+          { id: "settings-billing", label: "Assinatura", icon: CreditCard, tab: "billing" },
+          { id: "settings-logs", label: "Log de atividades", icon: History, tab: "logs" },
+        ],
+      },
+    ],
     [{ id: "flow", label: "Verto Flow", icon: Zap, badge: "EM BREVE" }],
-    [{ id: "logs", label: "Log de Atividades", icon: History }],
   ];
 
   const filterNavigationNode = (item: NavigationNode): NavigationNode | null => {
@@ -7684,7 +7813,7 @@ export function CoordinatorDashboard({
             )}
             <div>
               <p className={`text-[10px] font-bold uppercase tracking-widest mb-1 ${theme === "dark" ? "text-slate-300" : "text-slate-500"}`}>
-                {["financial", "payers", "conference", "closure"].includes(activeTab)
+                {["financial", "payers", "patientAuthorizations", "conference", "closure"].includes(activeTab)
                   ? financialNavigationContext.breadcrumb.join(" > ")
                   : activeTab === "rooms" && !isEditingRooms
                   ? "Salas"
@@ -7693,7 +7822,7 @@ export function CoordinatorDashboard({
                     : `Páginas / ${tabLabels[activeTab] || "Painel"}`}
               </p>
               <h1 className={`text-base lg:text-2xl font-semibold tracking-tight ${theme === "dark" ? "text-slate-100" : "text-slate-900"} ${activeTab === "dashboard" ? "max-w-[980px] leading-snug" : "capitalize"}`}>
-                {["financial", "payers", "conference", "closure"].includes(activeTab)
+                {["financial", "payers", "patientAuthorizations", "conference", "closure"].includes(activeTab)
                   ? financialNavigationContext.breadcrumb[financialNavigationContext.breadcrumb.length - 1] || tabLabels[activeTab]
                   : activeTab === "rooms" && !isEditingRooms
                   ? "Reservas de Sala"
@@ -9466,6 +9595,196 @@ export function CoordinatorDashboard({
                     )
                   }
                 />
+              </motion.div>
+            )}
+            {activeTab === "patientAuthorizations" && (
+              <motion.div
+                key="patientAuthorizations"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }}
+                className="space-y-6"
+              >
+                <div className="rounded-[32px] border border-slate-100 bg-white p-5 shadow-sm sm:p-8">
+                  <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="max-w-3xl">
+                      <div className="mb-2 inline-flex items-center gap-2 rounded-full bg-purple-50 px-3 py-1 text-[10px] font-black uppercase tracking-[0.18em] text-[#7a32fc]">
+                        <ClipboardCheck size={14} />
+                        Convênios e TISS
+                      </div>
+                      <h3 className="text-xl font-bold text-slate-900 sm:text-2xl">
+                        Autorizações dos pacientes
+                      </h3>
+                      <p className="mt-2 text-sm font-medium leading-relaxed text-slate-500">
+                        Controle as senhas/guias autorizadas pelos convênios e acompanhe validade, saldo e status por paciente.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void loadPatientAuthorizationOverview()}
+                      className="inline-flex items-center justify-center rounded-2xl border border-slate-200 px-4 py-3 text-sm font-bold text-slate-700 transition-all hover:border-[#7a32fc] hover:text-[#7a32fc]"
+                    >
+                      Atualizar
+                    </button>
+                  </div>
+
+                  <div className="mb-5 grid grid-cols-1 gap-3 lg:grid-cols-[1.5fr_1fr_1fr]">
+                    <label className="block">
+                      <span className="mb-1.5 ml-1 block text-[10px] font-black uppercase tracking-widest text-slate-400">
+                        Buscar por paciente
+                      </span>
+                      <input
+                        className="w-full rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700 outline-none transition-all focus:border-[#7a32fc] focus:bg-white"
+                        value={patientAuthorizationOverviewFilters.search}
+                        onChange={(event) => setPatientAuthorizationOverviewFilters((current) => ({ ...current, search: event.target.value }))}
+                        placeholder="Paciente, convênio, senha, guia ou TUSS"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1.5 ml-1 block text-[10px] font-black uppercase tracking-widest text-slate-400">
+                        Convênio
+                      </span>
+                      <select
+                        className="w-full rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700 outline-none transition-all focus:border-[#7a32fc] focus:bg-white"
+                        value={patientAuthorizationOverviewFilters.payerId}
+                        onChange={(event) => setPatientAuthorizationOverviewFilters((current) => ({ ...current, payerId: event.target.value }))}
+                      >
+                        <option value="all">Todos os convênios</option>
+                        {patientAuthorizationOverviewPayerOptions.map((payer) => (
+                          <option key={payer.id} value={payer.id}>{payer.name}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="block">
+                      <span className="mb-1.5 ml-1 block text-[10px] font-black uppercase tracking-widest text-slate-400">
+                        Status
+                      </span>
+                      <select
+                        className="w-full rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700 outline-none transition-all focus:border-[#7a32fc] focus:bg-white"
+                        value={patientAuthorizationOverviewFilters.status}
+                        onChange={(event) => setPatientAuthorizationOverviewFilters((current) => ({ ...current, status: event.target.value }))}
+                      >
+                        <option value="all">Todos os status</option>
+                        <option value="current">Vigentes</option>
+                        <option value="expiring">A vencer</option>
+                        <option value="future">Futuras</option>
+                        <option value="expired">Expiradas</option>
+                        <option value="consumed">Sem saldo</option>
+                        <option value="inactive">Inativas</option>
+                        <option value="legacy">TUSS legado/inadequado</option>
+                      </select>
+                    </label>
+                  </div>
+
+                  {patientAuthorizationOverviewError && (
+                    <div className="mb-4 rounded-2xl border border-rose-100 bg-rose-50 p-4 text-sm font-semibold text-rose-700">
+                      {patientAuthorizationOverviewError}
+                    </div>
+                  )}
+
+                  <div className="overflow-hidden rounded-3xl border border-slate-100">
+                    <div className="overflow-x-auto">
+                      <table className="min-w-[1080px] w-full text-left text-sm">
+                        <thead className="bg-slate-50 text-[10px] font-black uppercase tracking-widest text-slate-400">
+                          <tr>
+                            <th className="px-4 py-3">Paciente</th>
+                            <th className="px-4 py-3">Convênio</th>
+                            <th className="px-4 py-3">Procedimento</th>
+                            <th className="px-4 py-3">TUSS</th>
+                            <th className="px-4 py-3">Guia</th>
+                            <th className="px-4 py-3">Autorização/Senha</th>
+                            <th className="px-4 py-3">Validade</th>
+                            <th className="px-4 py-3">Consumo</th>
+                            <th className="px-4 py-3">Saldo</th>
+                            <th className="px-4 py-3">Status</th>
+                            <th className="px-4 py-3 text-right">Ações</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 bg-white">
+                          {patientAuthorizationOverviewLoading ? (
+                            <tr>
+                              <td colSpan={11} className="px-4 py-8 text-center text-sm font-semibold text-slate-400">
+                                Carregando autorizações TISS...
+                              </td>
+                            </tr>
+                          ) : filteredPatientAuthorizationOverview.length === 0 ? (
+                            <tr>
+                              <td colSpan={11} className="px-4 py-8 text-center text-sm font-semibold text-slate-400">
+                                Nenhuma autorização encontrada para os filtros selecionados.
+                              </td>
+                            </tr>
+                          ) : (
+                            filteredPatientAuthorizationOverview.map((authorization: any) => {
+                              const visualState = getPatientTissAuthorizationVisualState(authorization);
+                              const authorized = Number(authorization?.authorizedQuantity || 0) || 0;
+                              const used = Number(authorization?.usedQuantity || 0) || 0;
+                              return (
+                                <tr key={authorization.id || `${authorization.patientId}-${authorization.authorizationNumber}`} className="align-top">
+                                  <td className="px-4 py-4">
+                                    <p className="font-bold text-slate-900">{normalizeUtf8Text(authorization.patientName || "Paciente")}</p>
+                                    {authorization.patientEmail && <p className="mt-0.5 text-xs font-medium text-slate-400">{authorization.patientEmail}</p>}
+                                  </td>
+                                  <td className="px-4 py-4 font-semibold text-slate-700">{authorization.payerName || authorization.patientInsuranceName || "Convênio não informado"}</td>
+                                  <td className="px-4 py-4">
+                                    <p className="font-semibold text-slate-700">{authorization.serviceName || "Procedimento faturável"}</p>
+                                    {authorization.internalCode && <p className="mt-0.5 text-xs font-medium text-slate-400">{authorization.internalCode}</p>}
+                                  </td>
+                                  <td className="px-4 py-4">
+                                    <p className="font-mono text-xs font-bold text-slate-700">{authorization.tussCode || "-"}</p>
+                                    {visualState.isLegacyOrInadequate && (
+                                      <p className="mt-1 max-w-[220px] text-[10px] font-semibold leading-snug text-amber-700">
+                                        Revisar De/Para TUSS. Esperado: {visualState.expectedTussCode}.
+                                      </p>
+                                    )}
+                                  </td>
+                                  <td className="px-4 py-4 font-semibold text-slate-700">{authorization.guideNumber || "pendente"}</td>
+                                  <td className="px-4 py-4 font-semibold text-slate-700">{authorization.authorizationNumber || authorization.authorizationCode || "pendente"}</td>
+                                  <td className="px-4 py-4 text-xs font-semibold text-slate-500">
+                                    {formatPatientAuthorizationDate(authorization.validFrom)} até {formatPatientAuthorizationDate(authorization.validUntil)}
+                                  </td>
+                                  <td className="px-4 py-4 text-xs font-semibold text-slate-500">
+                                    {used} de {authorized || "sem limite"}
+                                  </td>
+                                  <td className="px-4 py-4 text-xs font-semibold text-slate-500">{formatPatientAuthorizationBalance(authorization)}</td>
+                                  <td className="px-4 py-4">
+                                    <span className={`inline-flex rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-wider ring-1 ${patientAuthorizationStatusClass(authorization)}`}>
+                                      {visualState.label}
+                                    </span>
+                                  </td>
+                                  <td className="px-4 py-4">
+                                    <div className="flex flex-col items-end gap-2">
+                                      <button
+                                        type="button"
+                                        onClick={() => openPatientAuthorizationRegistration(authorization, "view")}
+                                        className="rounded-xl border border-slate-200 px-3 py-1.5 text-[10px] font-black uppercase tracking-wider text-slate-600 transition-all hover:border-[#7a32fc] hover:text-[#7a32fc]"
+                                      >
+                                        Ver paciente
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => openPatientAuthorizationRegistration(authorization, "edit")}
+                                        className="rounded-xl border border-purple-100 bg-purple-50 px-3 py-1.5 text-[10px] font-black uppercase tracking-wider text-[#7a32fc] transition-all hover:bg-purple-100"
+                                      >
+                                        Editar autorização
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => openPatientAuthorizationRegistration(authorization, "add")}
+                                        className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-1.5 text-[10px] font-black uppercase tracking-wider text-emerald-700 transition-all hover:bg-emerald-100"
+                                      >
+                                        Adicionar autorização
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
               </motion.div>
             )}
             {activeTab === "payers" && (

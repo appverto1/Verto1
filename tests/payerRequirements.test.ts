@@ -181,23 +181,25 @@ test('UI expõe configuração, agenda e fechamento sem IDs técnicos ou HTML pe
     coordinatorCode.indexOf('const navigationGroups'),
     coordinatorCode.indexOf('const filterNavigationNode'),
   );
-  assert.match(navigationSection, /id:\s*"finance-root"[\s\S]*label:\s*"Financeiro"/);
-  assert.match(navigationSection, /id:\s*"finance-dashboard"[\s\S]*label:\s*"Dashboard Financeiro"/);
-  assert.match(navigationSection, /id:\s*"finance-billing-config"[\s\S]*label:\s*"Convênios e Faturamento"/);
+  assert.match(navigationSection, /id:\s*"care-root"[\s\S]*label:\s*"Atendimento"/);
+  assert.match(navigationSection, /id:\s*"tiss-root"[\s\S]*label:\s*"Convênios e TISS"/);
   assert.match(navigationSection, /id:\s*"payer-convenios"[\s\S]*label:\s*"Convênios"/);
+  assert.match(navigationSection, /id:\s*"patient-authorizations"[\s\S]*label:\s*"Autorizações dos pacientes"/);
   assert.match(navigationSection, /id:\s*"payer-tuss"[\s\S]*label:\s*"De\/Para TUSS"/);
-  assert.match(navigationSection, /id:\s*"payer-prices"[\s\S]*label:\s*"Tabela de Valores"/);
+  assert.match(navigationSection, /id:\s*"payer-prices"[\s\S]*label:\s*"Tabela de valores"/);
   assert.match(navigationSection, /id:\s*"payer-rules"[\s\S]*label:\s*"Regras TISS"/);
-  assert.match(navigationSection, /id:\s*"finance-prebilling"[\s\S]*label:\s*"Pré-Faturamento"/);
+  assert.doesNotMatch(navigationSection, /Convênios e Faturamento/);
+  assert.match(navigationSection, /id:\s*"prebilling-root"[\s\S]*label:\s*"Pré-faturamento TISS"/);
   assert.match(navigationSection, /id:\s*"prebilling-preguides"[\s\S]*label:\s*"Pré-guias TISS"/);
   assert.match(navigationSection, /id:\s*"prebilling-conference"[\s\S]*label:\s*"Conferência"/);
   assert.match(navigationSection, /id:\s*"prebilling-pending"[\s\S]*label:\s*"Pendências"/);
-  assert.match(navigationSection, /id:\s*"finance-closing"[\s\S]*label:\s*"Fechamento"/);
-  assert.match(navigationSection, /id:\s*"closing-tiss"[\s\S]*label:\s*"Fechamento TISS"/);
-  assert.match(navigationSection, /id:\s*"closing-batches"[\s\S]*label:\s*"Lotes Rascunho"/);
-  assert.match(navigationSection, /id:\s*"closing-xml"[\s\S]*label:\s*"XML Rascunhos"/);
-  assert.match(navigationSection, /id:\s*"finance-clinical"[\s\S]*label:\s*"Financeiro Clínico"/);
+  assert.match(navigationSection, /id:\s*"prebilling-batches"[\s\S]*label:\s*"Lotes XML"/);
+  assert.match(navigationSection, /id:\s*"finance-root"[\s\S]*label:\s*"Financeiro"/);
+  assert.match(navigationSection, /id:\s*"finance-dashboard"[\s\S]*label:\s*"Dashboard financeiro"/);
+  assert.doesNotMatch(navigationSection, /id:\s*"report-payers"/);
+  assert.match(navigationSection, /id:\s*"finance-clinical"[\s\S]*label:\s*"Movimentação"/);
   assert.match(navigationSection, /id:\s*"finance-reports"[\s\S]*label:\s*"Relatórios"/);
+  assert.match(navigationSection, /id:\s*"settings-root"[\s\S]*label:\s*"Configurações"/);
   assert.match(coordinatorCode, /expandedNavigationSections/);
   assert.match(coordinatorCode, /financialNavigationContext\.breadcrumb\.join\(" > "\)/);
   const financialSection = coordinatorCode.slice(
@@ -207,6 +209,11 @@ test('UI expõe configuração, agenda e fechamento sem IDs técnicos ou HTML pe
   assert.match(financialSection, /navigateToTab\("payers", payerIntent\("convenios", "Convênios"\)\)/);
   assert.match(financialSection, /<KeyRound size=\{18\} \/> Convênios/);
   assert.match(coordinatorCode, /activeTab === "payers"[\s\S]*?<PayerRequirementsPanel[\s\S]*initialSection=\{financialNavigationContext\.payerSection\}/);
+  assert.match(coordinatorCode, /activeTab === "patientAuthorizations"[\s\S]*Autorizações dos pacientes/);
+  assert.match(coordinatorCode, /dataService\.getPatientTissAuthorizationsOverview/);
+  assert.match(dataServiceCode, /async getPatientTissAuthorizationsOverview/);
+  assert.match(serverCode, /app\.get\('\/api\/patients\/tiss-authorizations'/);
+  assert.match(serverCode, /hydratePatientPayerAuthorizations/);
   assert.match(coordinatorCode, /activeTab === "conference"[\s\S]*?<MonthlyConferenceCenter[\s\S]*initialTab=\{financialNavigationContext\.conferenceTab\}/);
   assert.match(coordinatorCode, /tissInitialPanel=\{financialNavigationContext\.tissPanel\}/);
   assert.match(payerPanelCode, /Configuração de Convênios/);
@@ -479,8 +486,8 @@ test('CRUD seguro de cadastros de apoio, De/Para e valores tem impacto de exclus
     assert.ok(payerPanelCode.includes(marker) || dataServiceCode.includes(marker), marker);
   }
 
-  assert.match(payerPanelCode, /Este cadastro possui v(?:Ã­|í)nculos hist(?:Ã³|ó)ricos e n(?:Ã£|ã)o pode ser exclu(?:Ã­|í)do/);
-  assert.doesNotMatch(payerPanelCode, /Editar configura(?:Ã§Ã£o|ção)/);
+  assert.match(payerPanelCode, /Este cadastro possui vínculos históricos e não pode ser excluído/);
+  assert.doesNotMatch(payerPanelCode, /Editar configuração/);
   assert.match(payerPanelCode, /De\/Para configurado/);
   assert.match(payerPanelCode, /isAwaitingPrice \? "De\/Para configurado"/);
   assert.match(payerPanelCode, /openDeleteImpactModal\("requirement"/);

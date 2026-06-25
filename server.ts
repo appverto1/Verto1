@@ -34154,6 +34154,100 @@ async function startServer() {
     };
   };
 
+  const hydratePatientPayerAuthorizations = async (
+    organizationId: string,
+    rows: any[],
+    options: { includePatients?: boolean } = {}
+  ) => {
+    const safeRows = Array.isArray(rows) ? rows : [];
+    const payerIds = Array.from(new Set(safeRows.map((row: any) => sanitizeString(row?.payer_id, 120)).filter((id: string) => isUuid(id))));
+    const serviceIds = Array.from(new Set(safeRows.map((row: any) => sanitizeString(row?.service_catalog_id, 120)).filter((id: string) => isUuid(id))));
+    const codeIds = Array.from(new Set(safeRows.map((row: any) => sanitizeString(row?.tuss_code_id, 120)).filter((id: string) => isUuid(id))));
+    const mappingIds = Array.from(new Set(safeRows.map((row: any) => sanitizeString(row?.payer_tuss_mapping_id, 120)).filter((id: string) => isUuid(id))));
+    const patientIds = Array.from(new Set(safeRows.map((row: any) => sanitizeString(row?.patient_id, 120)).filter((id: string) => isUuid(id))));
+    const [payersResult, servicesResult, codesResult, mappingsResult, pricesResult, preGuidesResult, patientsResult] = await Promise.all([
+      payerIds.length > 0
+        ? supabase.from('clinic_payers').select(CLINIC_PAYER_SELECT).eq('organization_id', organizationId).in('id', payerIds).limit(payerIds.length)
+        : Promise.resolve({ data: [], error: null } as any),
+      serviceIds.length > 0
+        ? supabase.from('tuss_service_catalog').select(TUSS_SERVICE_CATALOG_SELECT).eq('organization_id', organizationId).in('id', serviceIds).limit(serviceIds.length)
+        : Promise.resolve({ data: [], error: null } as any),
+      codeIds.length > 0
+        ? supabase.from('tuss_codes').select(TUSS_CODE_SELECT).eq('organization_id', organizationId).in('id', codeIds).limit(codeIds.length)
+        : Promise.resolve({ data: [], error: null } as any),
+      mappingIds.length > 0
+        ? supabase.from('payer_tuss_mappings').select(PAYER_TUSS_MAPPING_SELECT).eq('organization_id', organizationId).in('id', mappingIds).limit(mappingIds.length)
+        : Promise.resolve({ data: [], error: null } as any),
+      payerIds.length > 0
+        ? supabase.from('payer_procedure_prices').select(PAYER_PROCEDURE_PRICE_SELECT).eq('organization_id', organizationId).in('payer_id', payerIds).eq('active', true).limit(400)
+        : Promise.resolve({ data: [], error: null } as any),
+      patientIds.length > 0
+        ? supabase.from('appointment_tiss_pre_guides').select('id,patient_id,official_document_id,snapshot_data').eq('organization_id', organizationId).in('patient_id', patientIds).limit(5000)
+        : Promise.resolve({ data: [], error: null } as any),
+      options.includePatients && patientIds.length > 0
+        ? supabase.from('patients').select('id,name,email,clinic_id,insurance_name,insurance_card_number,insurance_plan_category').eq('clinic_id', organizationId).in('id', patientIds).limit(patientIds.length)
+        : Promise.resolve({ data: [], error: null } as any)
+    ]);
+    for (const result of [payersResult, servicesResult, codesResult, mappingsResult, pricesResult, preGuidesResult, patientsResult]) {
+      if (result.error && !hasMissingFinancialSchema(result.error) && !isMissingRelationError(result.error)) throw result.error;
+    }
+    const payersById = new Map<string, any>((payersResult.error ? [] : payersResult.data || []).map((row: any) => [sanitizeString(row.id, 120), row]));
+    const servicesById = new Map<string, any>((servicesResult.error ? [] : servicesResult.data || []).map((row: any) => [sanitizeString(row.id, 120), row]));
+    const codesById = new Map<string, any>((codesResult.error ? [] : codesResult.data || []).map((row: any) => [sanitizeString(row.id, 120), row]));
+    const mappingsById = new Map<string, any>((mappingsResult.error ? [] : mappingsResult.data || []).map((row: any) => [sanitizeString(row.id, 120), row]));
+    const patientsById = new Map<string, any>((patientsResult.error ? [] : patientsResult.data || []).map((row: any) => [sanitizeString(row.id, 120), row]));
+    const prices = pricesResult.error ? [] : (pricesResult.data || []);
+    const preGuides = preGuidesResult.error ? [] : (preGuidesResult.data || []);
+    const preGuidesByAuthorizationId = new Map<string, { count: number; officialCount: number }>();
+    for (const preGuide of preGuides) {
+      const authorizationId = sanitizeString(preGuide?.snapshot_data?.authorization?.authorizationId || preGuide?.snapshot_data?.authorization?.id, 120);
+      if (!isUuid(authorizationId)) continue;
+      const current = preGuidesByAuthorizationId.get(authorizationId) || { count: 0, officialCount: 0 };
+      current.count += 1;
+      if (sanitizeString(preGuide?.official_document_id, 120)) current.officialCount += 1;
+      preGuidesByAuthorizationId.set(authorizationId, current);
+    }
+    const findPriceForAuthorization = (row: any) => {
+      const referenceDate = row?.valid_from || row?.issue_date || row?.issued_at || new Date().toISOString();
+      const mappingId = sanitizeString(row?.payer_tuss_mapping_id, 120);
+      const serviceId = sanitizeString(row?.service_catalog_id, 120);
+      const codeId = sanitizeString(row?.tuss_code_id, 120);
+      const tussCode = sanitizeString(row?.procedure_tuss_code, 80).toLowerCase();
+      const candidates = prices.filter((price: any) =>
+        sanitizeString(price?.payer_id, 120) === sanitizeString(row?.payer_id, 120) &&
+        priceIsValidForDate(price, referenceDate)
+      );
+      return candidates.find((price: any) => mappingId && sanitizeString(price?.payer_tuss_mapping_id, 120) === mappingId) ||
+        candidates.find((price: any) => serviceId && codeId && sanitizeString(price?.service_catalog_id, 120) === serviceId && sanitizeString(price?.tuss_code_id, 120) === codeId) ||
+        candidates.find((price: any) => serviceId && sanitizeString(price?.service_catalog_id, 120) === serviceId && tussCode && sanitizeString(price?.tuss_code, 80).toLowerCase() === tussCode) ||
+        null;
+    };
+    return safeRows.map((row: any) => {
+      const authorizationId = sanitizeString(row?.id, 120);
+      const patientId = sanitizeString(row?.patient_id, 120);
+      const patient = patientsById.get(patientId);
+      const preGuideCounts = preGuidesByAuthorizationId.get(authorizationId) || { count: 0, officialCount: 0 };
+      const serialized = serializePatientPayerAuthorization(row, {
+        payer: payersById.get(sanitizeString(row?.payer_id, 120)),
+        service: servicesById.get(sanitizeString(row?.service_catalog_id, 120)),
+        code: codesById.get(sanitizeString(row?.tuss_code_id, 120)),
+        mapping: mappingsById.get(sanitizeString(row?.payer_tuss_mapping_id, 120)),
+        price: findPriceForAuthorization(row),
+        preGuideCount: preGuideCounts.count,
+        officialPreGuideCount: preGuideCounts.officialCount
+      });
+      if (!options.includePatients) return serialized;
+      return {
+        ...serialized,
+        patientName: sanitizeString(patient?.name, 180) || 'Paciente',
+        patientEmail: sanitizeString(patient?.email, 180) || null,
+        patientInsuranceName: sanitizeString(patient?.insurance_name, 180) || null,
+        patientInsuranceCardNumber: sanitizeString(patient?.insurance_card_number, 120) || null,
+        patientInsurancePlan: sanitizeString(patient?.insurance_plan_category, 180) || null
+      };
+    });
+  };
+
   const serializeAppointmentBillingItem = (row: any, service: any = null, code: any = null, mapping: any = null) => {
     const readinessReasons = Array.isArray(row?.readiness_reasons)
       ? row.readiness_reasons.map((reason: any) => sanitizeString(reason, 80)).filter(Boolean)
@@ -36469,6 +36563,51 @@ async function startServer() {
     }
   });
 
+  app.get('/api/patients/tiss-authorizations', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
+      const patientId = sanitizeString(req.query?.patientId ?? req.query?.patient_id, 120);
+      const payerId = sanitizeString(req.query?.payerId ?? req.query?.payer_id, 120);
+      const rawLimit = Number(req.query?.limit || 500);
+      const limit = Math.min(1000, Math.max(1, Number.isFinite(rawLimit) ? rawLimit : 500));
+      let query = supabase
+        .from('patient_payer_authorizations')
+        .select(PATIENT_PAYER_AUTHORIZATION_SELECT)
+        .eq('organization_id', organizationId)
+        .order('updated_at', { ascending: false })
+        .limit(limit);
+      if (patientId) {
+        if (!isUuid(patientId) || !(await canAccessPatientInCurrentClinic(patientId, req.session.user))) {
+          return res.status(404).json(payerSafeError(404));
+        }
+        query = query.eq('patient_id', patientId);
+      }
+      if (payerId) {
+        if (!isUuid(payerId) || !(await fetchPayerForAdmin(payerId, organizationId))) {
+          return res.status(404).json(payerSafeError(404));
+        }
+        query = query.eq('payer_id', payerId);
+      }
+      const { data, error } = await query;
+      if (error) {
+        if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return sendNoStoreJson(res, { success: true, data: [] });
+        throw error;
+      }
+      const rows = Array.isArray(data) ? data : [];
+      return sendNoStoreJson(res, {
+        success: true,
+        data: await hydratePatientPayerAuthorizations(organizationId, rows, { includePatients: true })
+      });
+    } catch (error: any) {
+      console.warn('[TissPreGuide] patient authorization overview failed:', {
+        code: sanitizeString(error?.code, 40) || null,
+        message: sanitizeTextField(error?.message, 300) || String(error)
+      });
+      return res.status(500).json({ success: false, error: 'Não foi possível carregar as autorizações TISS dos pacientes.', code: 'AUTHORIZATION_OVERVIEW_FAILED' });
+    }
+  });
+
   app.get('/api/patients/:patientId/tiss-authorizations', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -36489,76 +36628,9 @@ async function startServer() {
         throw error;
       }
       const rows = Array.isArray(data) ? data : [];
-      const payerIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row?.payer_id, 120)).filter((id: string) => isUuid(id))));
-      const serviceIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row?.service_catalog_id, 120)).filter((id: string) => isUuid(id))));
-      const codeIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row?.tuss_code_id, 120)).filter((id: string) => isUuid(id))));
-      const mappingIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row?.payer_tuss_mapping_id, 120)).filter((id: string) => isUuid(id))));
-      const [payersResult, servicesResult, codesResult, mappingsResult, pricesResult, preGuidesResult] = await Promise.all([
-        payerIds.length > 0
-          ? supabase.from('clinic_payers').select(CLINIC_PAYER_SELECT).eq('organization_id', organizationId).in('id', payerIds).limit(payerIds.length)
-          : Promise.resolve({ data: [], error: null } as any),
-        serviceIds.length > 0
-          ? supabase.from('tuss_service_catalog').select(TUSS_SERVICE_CATALOG_SELECT).eq('organization_id', organizationId).in('id', serviceIds).limit(serviceIds.length)
-          : Promise.resolve({ data: [], error: null } as any),
-        codeIds.length > 0
-          ? supabase.from('tuss_codes').select(TUSS_CODE_SELECT).eq('organization_id', organizationId).in('id', codeIds).limit(codeIds.length)
-          : Promise.resolve({ data: [], error: null } as any),
-        mappingIds.length > 0
-          ? supabase.from('payer_tuss_mappings').select(PAYER_TUSS_MAPPING_SELECT).eq('organization_id', organizationId).in('id', mappingIds).limit(mappingIds.length)
-          : Promise.resolve({ data: [], error: null } as any),
-        payerIds.length > 0
-          ? supabase.from('payer_procedure_prices').select(PAYER_PROCEDURE_PRICE_SELECT).eq('organization_id', organizationId).in('payer_id', payerIds).eq('active', true).limit(400)
-          : Promise.resolve({ data: [], error: null } as any),
-        supabase.from('appointment_tiss_pre_guides').select('id,patient_id,official_document_id,snapshot_data').eq('organization_id', organizationId).eq('patient_id', patientId).limit(2000)
-      ]);
-      for (const result of [payersResult, servicesResult, codesResult, mappingsResult, pricesResult, preGuidesResult]) {
-        if (result.error && !hasMissingFinancialSchema(result.error) && !isMissingRelationError(result.error)) throw result.error;
-      }
-      const payersById = new Map<string, any>((payersResult.error ? [] : payersResult.data || []).map((row: any) => [sanitizeString(row.id, 120), row]));
-      const servicesById = new Map<string, any>((servicesResult.error ? [] : servicesResult.data || []).map((row: any) => [sanitizeString(row.id, 120), row]));
-      const codesById = new Map<string, any>((codesResult.error ? [] : codesResult.data || []).map((row: any) => [sanitizeString(row.id, 120), row]));
-      const mappingsById = new Map<string, any>((mappingsResult.error ? [] : mappingsResult.data || []).map((row: any) => [sanitizeString(row.id, 120), row]));
-      const prices = pricesResult.error ? [] : (pricesResult.data || []);
-      const preGuides = preGuidesResult.error ? [] : (preGuidesResult.data || []);
-      const preGuidesByAuthorizationId = new Map<string, { count: number; officialCount: number }>();
-      for (const preGuide of preGuides) {
-        const authorizationId = sanitizeString(preGuide?.snapshot_data?.authorization?.authorizationId || preGuide?.snapshot_data?.authorization?.id, 120);
-        if (!isUuid(authorizationId)) continue;
-        const current = preGuidesByAuthorizationId.get(authorizationId) || { count: 0, officialCount: 0 };
-        current.count += 1;
-        if (sanitizeString(preGuide?.official_document_id, 120)) current.officialCount += 1;
-        preGuidesByAuthorizationId.set(authorizationId, current);
-      }
-      const findPriceForAuthorization = (row: any) => {
-        const referenceDate = row?.valid_from || row?.issue_date || row?.issued_at || new Date().toISOString();
-        const mappingId = sanitizeString(row?.payer_tuss_mapping_id, 120);
-        const serviceId = sanitizeString(row?.service_catalog_id, 120);
-        const codeId = sanitizeString(row?.tuss_code_id, 120);
-        const tussCode = sanitizeString(row?.procedure_tuss_code, 80).toLowerCase();
-        const candidates = prices.filter((price: any) =>
-          sanitizeString(price?.payer_id, 120) === sanitizeString(row?.payer_id, 120) &&
-          priceIsValidForDate(price, referenceDate)
-        );
-        return candidates.find((price: any) => mappingId && sanitizeString(price?.payer_tuss_mapping_id, 120) === mappingId) ||
-          candidates.find((price: any) => serviceId && codeId && sanitizeString(price?.service_catalog_id, 120) === serviceId && sanitizeString(price?.tuss_code_id, 120) === codeId) ||
-          candidates.find((price: any) => serviceId && sanitizeString(price?.service_catalog_id, 120) === serviceId && tussCode && sanitizeString(price?.tuss_code, 80).toLowerCase() === tussCode) ||
-          null;
-      };
       return sendNoStoreJson(res, {
         success: true,
-        data: rows.map((row: any) => {
-          const authorizationId = sanitizeString(row?.id, 120);
-          const preGuideCounts = preGuidesByAuthorizationId.get(authorizationId) || { count: 0, officialCount: 0 };
-          return serializePatientPayerAuthorization(row, {
-            payer: payersById.get(sanitizeString(row?.payer_id, 120)),
-            service: servicesById.get(sanitizeString(row?.service_catalog_id, 120)),
-            code: codesById.get(sanitizeString(row?.tuss_code_id, 120)),
-            mapping: mappingsById.get(sanitizeString(row?.payer_tuss_mapping_id, 120)),
-            price: findPriceForAuthorization(row),
-            preGuideCount: preGuideCounts.count,
-            officialPreGuideCount: preGuideCounts.officialCount
-          });
-        })
+        data: await hydratePatientPayerAuthorizations(organizationId, rows)
       });
     } catch (error: any) {
       console.warn('[TissPreGuide] patient authorization list failed:', {
