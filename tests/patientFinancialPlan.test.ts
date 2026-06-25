@@ -8,6 +8,11 @@ import {
   serializePatientFinancialPlanForPayload
 } from '../src/utils/patientFinancialPlan';
 import {
+  findSuggestedTissAuthorizationForFinancialPlan,
+  getPatientTissAuthorizationVisualState,
+  groupPatientTissAuthorizations
+} from '../src/utils/patientTissAuthorizationView';
+import {
   mapPatientProfileTypeToLegacyPortalType,
   normalizePatientProfileType,
   PATIENT_PROFILE_TYPE_OPTIONS
@@ -80,14 +85,14 @@ test('UI remove lembrete automatico e expõe plano financeiro por modalidade', (
   assert.match(coordinatorCode, /label="Autorização legada do plano"/);
   assert.match(coordinatorCode, /Valor planejado do convênio/);
   assert.match(coordinatorCode, /Quantidade planejada/);
-  assert.match(coordinatorCode, /Para gerar Pré-guias TISS, use a seção Autorizações TISS do paciente/);
+  assert.match(coordinatorCode, /Senhas, guias e saldo autorizado para Pré-guia\/XML devem ser mantidos em Autorizações TISS do paciente/);
   assert.match(coordinatorCode, /Pagador\/convênio/);
 });
 
 test('UI separa Autorizações TISS do paciente do plano financeiro legado', () => {
   for (const marker of [
     'Autorizações TISS do paciente',
-    'Cadastre as senhas, guias e quantidades autorizadas pelo convênio para gerar Pré-guias e XML TISS.',
+    'Use esta seção para cadastrar as senhas/guias autorizadas pelo convênio. Esses dados são usados na Pré-guia TISS e no XML quando aplicável.',
     'Nova autorização',
     'Procedimento faturável',
     'Código TUSS resolvido',
@@ -99,12 +104,23 @@ test('UI separa Autorizações TISS do paciente do plano financeiro legado', () 
     'Quantidade autorizada',
     'Quantidade consumida',
     'Nenhuma autorização TISS cadastrada para este paciente.',
+    'Autorização vigente sugerida para novas sessões',
+    'Nenhuma autorização vigente para este procedimento',
+    'Histórico / inativas deste procedimento',
+    'Autorização TISS vinculada/sugerida',
+    'Dados legados de autorização',
+    'Estes campos foram preservados apenas para compatibilidade com cadastros antigos.',
+    'A Pré-guia TISS usará a autorização vigente compatível com a sessão, quando exigida pelo convênio.',
+    'Qtde. planejada',
   ]) {
     assert.ok(coordinatorCode.includes(marker), marker);
   }
 
   assert.match(coordinatorCode, /selectedPatientAuthorizationConfiguration/);
   assert.match(coordinatorCode, /patientAuthorizationBillingConfigurations/);
+  assert.match(coordinatorCode, /groupPatientTissAuthorizations/);
+  assert.match(coordinatorCode, /getPatientTissAuthorizationVisualState/);
+  assert.match(coordinatorCode, /findSuggestedTissAuthorizationForFinancialPlan/);
   assert.match(coordinatorCode, /dataService\.getPatientTissAuthorizations/);
   assert.match(coordinatorCode, /dataService\.upsertPatientPayerAuthorization/);
   assert.match(coordinatorCode, /dataService\.setPatientTissAuthorizationActive/);
@@ -120,6 +136,78 @@ test('UI separa Autorizações TISS do paciente do plano financeiro legado', () 
   assert.match(serverCode, /fetchActivePayerProcedurePrice/);
   assert.doesNotMatch(coordinatorCode, /label=\{isInsurancePlan \? "Valor autorizado"/);
   assert.doesNotMatch(coordinatorCode, /label=\{isInsurancePlan \? "Quantidade autorizada"/);
+  assert.doesNotMatch(coordinatorCode, /Qtde\. autorizada/);
+});
+
+test('autorizações TISS agrupam, deduplicam e calculam status comercial', () => {
+  const base = {
+    id: 'auth-1',
+    payerId: 'payer-amil',
+    payerName: 'Amil',
+    serviceCatalogId: 'service-aba',
+    serviceName: 'Sessão ABA individual',
+    tussCodeId: 'tuss-50000470',
+    tussCode: '50000470',
+    authorizationNumber: 'AUTH-123',
+    guideNumber: 'GUIA-1',
+    validFrom: '2026-06-01',
+    validUntil: '2026-06-30',
+    authorizedQuantity: 10,
+    usedQuantity: 2,
+    active: true,
+    status: 'active'
+  };
+  const groups = groupPatientTissAuthorizations([
+    base,
+    { ...base },
+    { ...base, id: 'auth-expired', authorizationNumber: 'AUTH-OLD', validFrom: '2026-05-01', validUntil: '2026-05-30' },
+    { ...base, id: 'auth-consumed', authorizationNumber: 'AUTH-USED', usedQuantity: 10 },
+    { ...base, id: 'auth-inactive', authorizationNumber: 'AUTH-OFF', active: false, status: 'cancelled' },
+    { ...base, id: 'auth-future', authorizationNumber: 'AUTH-NEXT', validFrom: '2026-07-01', validUntil: '2026-07-31' },
+  ], '2026-06-15');
+
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].authorizations.length, 5);
+  assert.equal(groups[0].suggestedAuthorization?.authorizationNumber, 'AUTH-123');
+  assert.equal(getPatientTissAuthorizationVisualState(base, '2026-06-10').label, 'Vigente');
+  assert.equal(getPatientTissAuthorizationVisualState({ ...base, validUntil: '2026-06-20' }, '2026-06-15').label, 'A vencer');
+  assert.equal(getPatientTissAuthorizationVisualState({ ...base, validUntil: '2026-05-30' }, '2026-06-15').label, 'Expirada');
+  assert.equal(getPatientTissAuthorizationVisualState({ ...base, usedQuantity: 10 }, '2026-06-15').label, 'Consumida');
+  assert.equal(getPatientTissAuthorizationVisualState({ ...base, active: false }, '2026-06-15').label, 'Inativa');
+  assert.equal(getPatientTissAuthorizationVisualState({ ...base, validFrom: '2026-07-01', validUntil: '2026-07-31' }, '2026-06-15').label, 'Futura');
+});
+
+test('plano financeiro mostra resumo da autorização vigente sem virar fonte TISS', () => {
+  const groups = groupPatientTissAuthorizations([
+    {
+      id: 'auth-aba',
+      payerId: 'payer-amil',
+      payerName: 'Amil',
+      serviceCatalogId: 'service-aba',
+      serviceName: 'Sessão ABA individual',
+      internalCode: 'ABA',
+      tussCodeId: 'tuss-50000470',
+      tussCode: '50000470',
+      authorizationNumber: 'AUTH-OK',
+      validFrom: '2026-06-01',
+      validUntil: '2026-06-30',
+      authorizedQuantity: 3,
+      usedQuantity: 0,
+      active: true
+    }
+  ], '2026-06-15');
+  const plan = createPatientFinancialPlan({
+    billingMode: 'INSURANCE',
+    payerId: 'payer-amil',
+    payerNameSnapshot: 'Amil',
+    serviceType: 'ABA',
+    authorizationCode: 'LEGACY-ONLY'
+  });
+
+  assert.equal(findSuggestedTissAuthorizationForFinancialPlan(plan, groups)?.authorizationNumber, 'AUTH-OK');
+  assert.match(coordinatorCode, /Dados legados de autorização[\s\S]*Autorização legada do plano/);
+  assert.match(coordinatorCode, /Autorização TISS vinculada\/sugerida/);
+  assert.match(coordinatorCode, /Adicionar autorização TISS/);
 });
 
 test('helpers das Autorizações TISS não entram em temporal dead zone no render', () => {

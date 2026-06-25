@@ -196,6 +196,11 @@ import {
 } from "../utils/patientProfileType";
 import { normalizePatientInsuranceEligibility } from "../utils/patientInsuranceEligibility";
 import {
+  findSuggestedTissAuthorizationForFinancialPlan,
+  getPatientTissAuthorizationVisualState,
+  groupPatientTissAuthorizations,
+} from "../utils/patientTissAuthorizationView";
+import {
   APPOINTMENT_FINANCIAL_CONTEXT_OPTIONS,
   APPOINTMENT_FINANCIAL_CONTEXT_REQUIRED_MESSAGE,
   normalizeAppointmentFinancialContextType,
@@ -1561,12 +1566,32 @@ export function CoordinatorDashboard({
     return match ? `${match[3]}/${match[2]}/${match[1]}` : "sem data";
   };
 
-  const getPatientAuthorizationStatusLabel = (authorization: any) => {
-    if (authorization?.active === false || String(authorization?.status || "").toLowerCase() === "cancelled") return "Inativa";
-    const today = new Date().toISOString().slice(0, 10);
-    if (authorization?.validUntil && String(authorization.validUntil).slice(0, 10) < today) return "Expirada";
-    if (Number(authorization?.authorizedQuantity || 0) > 0 && Number(authorization?.usedQuantity || 0) >= Number(authorization.authorizedQuantity)) return "Esgotada";
-    return "Ativa";
+  const patientTissAuthorizationGroups = useMemo(
+    () => groupPatientTissAuthorizations(patientTissAuthorizations),
+    [patientTissAuthorizations],
+  );
+
+  const patientAuthorizationStatusClass = (authorization: any) => {
+    const state = getPatientTissAuthorizationVisualState(authorization);
+    if (state.tone === "green") return "bg-emerald-50 text-emerald-700 ring-emerald-100";
+    if (state.tone === "amber") return "bg-amber-50 text-amber-700 ring-amber-100";
+    if (state.tone === "blue") return "bg-sky-50 text-sky-700 ring-sky-100";
+    if (state.tone === "red") return "bg-rose-50 text-rose-700 ring-rose-100";
+    return "bg-slate-50 text-slate-600 ring-slate-100";
+  };
+
+  const formatPatientAuthorizationBalance = (authorization: any) => {
+    const authorized = Number(authorization?.authorizedQuantity || 0) || 0;
+    const used = Number(authorization?.usedQuantity || 0) || 0;
+    if (!authorized) return "sem limite informado";
+    return String(Math.max(0, authorized - used));
+  };
+
+  const describePatientAuthorizationSuggestion = (authorization: any) => {
+    if (!authorization) return "";
+    const balance = formatPatientAuthorizationBalance(authorization);
+    const until = formatPatientAuthorizationDate(authorization.validUntil);
+    return `Senha ${authorization.authorizationNumber || authorization.authorizationCode || "-"} · saldo ${balance} · válida até ${until}`;
   };
 
   const resetPatientTissAuthorizationForm = () => {
@@ -1752,6 +1777,52 @@ export function CoordinatorDashboard({
     }
     setPatientTissAuthorizations((current) => current.filter((item) => String(item.id) !== String(authorization.id)));
     showToast("Autorização excluída.");
+  };
+
+  const renderPatientTissAuthorizationCard = (authorization: any, options: { compact?: boolean } = {}) => {
+    const visualState = getPatientTissAuthorizationVisualState(authorization);
+    const authorized = Number(authorization?.authorizedQuantity || 0) || 0;
+    const used = Number(authorization?.usedQuantity || 0) || 0;
+    const balance = formatPatientAuthorizationBalance(authorization);
+    return (
+      <div key={authorization.id || `${authorization.authorizationNumber}-${authorization.validFrom}-${authorization.validUntil}`} className={`rounded-2xl border border-slate-100 bg-white p-4 shadow-sm ${options.compact ? "opacity-90" : ""}`}>
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-sm font-semibold text-slate-900">{authorization.serviceName || "Procedimento faturável"}</p>
+              <span className={`rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-wide ring-1 ${patientAuthorizationStatusClass(authorization)}`}>
+                {visualState.label}
+              </span>
+            </div>
+            <p className="mt-1 text-xs text-slate-500">Convênio: {authorization.payerName || newPatientForm.convenioNome || "Não informado"}</p>
+            <p className="mt-1 text-xs text-slate-600">
+              TUSS {authorization.tussCode || "não informado"} · {formatPatientAuthorizationAmount(authorization.amountCents)}
+            </p>
+            <div className="mt-3 grid gap-1 text-xs text-slate-500 sm:grid-cols-2">
+              <span>Autorização/Senha: {authorization.authorizationNumber || authorization.authorizationCode || "-"}</span>
+              <span>Guia: {authorization.guideNumber || "-"}</span>
+              <span>Validade: {formatPatientAuthorizationDate(authorization.validFrom)} a {formatPatientAuthorizationDate(authorization.validUntil)}</span>
+              <span>Consumo: {used} de {authorized || "sem limite"} {authorization.authorizedUnit || "sessões"}</span>
+              <span>Saldo: {balance}</span>
+              {authorization.preGuideCount ? <span>Usado em Pré-guia TISS: {authorization.preGuideCount}</span> : <span>Pré-guia TISS: ainda não usada</span>}
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={() => editPatientTissAuthorization(authorization)} className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-normal text-slate-600">Editar</button>
+            {authorization.active === false ? (
+              <button type="button" onClick={() => void setPatientTissAuthorizationActive(authorization, true)} className="rounded-xl border border-emerald-200 px-3 py-2 text-xs font-normal text-emerald-700">Reativar</button>
+            ) : (
+              <button type="button" onClick={() => void setPatientTissAuthorizationActive(authorization, false)} className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-normal text-slate-600">Inativar</button>
+            )}
+            <button type="button" onClick={() => void deletePatientTissAuthorization(authorization)} className="rounded-xl border border-rose-100 px-3 py-2 text-xs font-normal text-rose-700">Excluir</button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const scrollToPatientTissAuthorizations = () => {
+    document.getElementById("patient-tiss-authorizations-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
   useEffect(() => {
@@ -11195,11 +11266,12 @@ export function CoordinatorDashboard({
               </FormSection>
 
               {canAccessClinicFinance && (
-                <FormSection
-                  title="Autorizações TISS do paciente"
-                  description="Cadastre as senhas, guias e quantidades autorizadas pelo convênio para gerar Pré-guias e XML TISS."
-                  badge="Convênio"
-                >
+                <div id="patient-tiss-authorizations-section">
+                  <FormSection
+                    title="Autorizações TISS do paciente"
+                    description="Use esta seção para cadastrar as senhas/guias autorizadas pelo convênio. Esses dados são usados na Pré-guia TISS e no XML quando aplicável."
+                    badge="Convênio"
+                  >
                   {newPatientForm.convenioTipo !== "convenio" ? (
                     <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4 text-sm text-slate-500">
                       Autorizações TISS não são necessárias para paciente particular.
@@ -11361,47 +11433,70 @@ export function CoordinatorDashboard({
                           <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-4 text-sm text-slate-500">
                             Nenhuma autorização TISS cadastrada para este paciente.
                           </div>
-                        ) : patientTissAuthorizations.map((authorization: any) => (
-                          <div key={authorization.id} className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+                        ) : patientTissAuthorizationGroups.map((group: any) => (
+                          <div key={group.key} className="rounded-3xl border border-slate-100 bg-slate-50/60 p-4">
                             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                               <div>
-                                <p className="text-sm font-semibold text-slate-900">{authorization.serviceName || "Procedimento faturável"}</p>
-                                <p className="mt-1 text-xs text-slate-500">Convênio: {authorization.payerName || newPatientForm.convenioNome || "Não informado"}</p>
-                                <p className="mt-1 text-xs text-slate-600">TUSS {authorization.tussCode || "não informado"} · {formatPatientAuthorizationAmount(authorization.amountCents)}</p>
-                                <div className="mt-2 grid gap-1 text-xs text-slate-500 sm:grid-cols-2">
-                                  <span>Autorização/Senha: {authorization.authorizationNumber || authorization.authorizationCode || "-"}</span>
-                                  <span>Guia: {authorization.guideNumber || "-"}</span>
-                                  <span>Quantidade: {Number(authorization.authorizedQuantity || 0)} {authorization.authorizedUnit || "sessões"}</span>
-                                  <span>Consumidas: {Number(authorization.usedQuantity || 0)}</span>
-                                  <span>Validade: {formatPatientAuthorizationDate(authorization.validFrom)} a {formatPatientAuthorizationDate(authorization.validUntil)}</span>
-                                  <span>Status: {getPatientAuthorizationStatusLabel(authorization)}</span>
-                                </div>
+                                <p className="text-xs font-black uppercase tracking-[0.14em] text-slate-500">{group.payerName}</p>
+                                <h4 className="mt-1 text-base font-black text-slate-900">{group.serviceName}</h4>
+                                <p className="mt-1 text-xs text-slate-500">TUSS {group.tussCode || "não informado"}{group.tussDescription ? ` · ${group.tussDescription}` : ""}</p>
                               </div>
-                              <div className="flex flex-wrap gap-2">
-                                <button type="button" onClick={() => editPatientTissAuthorization(authorization)} className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-normal text-slate-600">Editar</button>
-                                {authorization.active === false ? (
-                                  <button type="button" onClick={() => void setPatientTissAuthorizationActive(authorization, true)} className="rounded-xl border border-emerald-200 px-3 py-2 text-xs font-normal text-emerald-700">Reativar</button>
-                                ) : (
-                                  <button type="button" onClick={() => void setPatientTissAuthorizationActive(authorization, false)} className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-normal text-slate-600">Inativar</button>
-                                )}
-                                <button type="button" onClick={() => void deletePatientTissAuthorization(authorization)} className="rounded-xl border border-rose-100 px-3 py-2 text-xs font-normal text-rose-700">Excluir</button>
+                              <div className={`rounded-2xl border px-4 py-3 text-xs ${
+                                group.suggestedAuthorization
+                                  ? "border-emerald-100 bg-emerald-50 text-emerald-800"
+                                  : "border-amber-100 bg-amber-50 text-amber-800"
+                              }`}>
+                                <p className="font-black uppercase tracking-wide">
+                                  {group.suggestedAuthorization ? "Autorização vigente sugerida para novas sessões" : "Nenhuma autorização vigente para este procedimento"}
+                                </p>
+                                <p className="mt-1 font-medium">
+                                  {group.suggestedAuthorization
+                                    ? describePatientAuthorizationSuggestion(group.suggestedAuthorization)
+                                    : "Cadastre uma autorização antes de gerar Pré-guia/XML, se o convênio exigir."}
+                                </p>
                               </div>
                             </div>
+
+                            {group.duplicateLikeCount > 0 && (
+                              <div className="mt-3 rounded-2xl border border-amber-100 bg-white px-4 py-3 text-xs text-amber-700">
+                                Há autorizações semelhantes neste grupo. Elas foram preservadas para conferência; revise validade, saldo e status antes de usar em novas Pré-guias.
+                              </div>
+                            )}
+
+                            <div className="mt-4 space-y-3">
+                              {(group.currentAuthorizations.length ? group.currentAuthorizations : group.authorizations).map((authorization: any) =>
+                                renderPatientTissAuthorizationCard(authorization),
+                              )}
+                            </div>
+
+                            {group.historicalAuthorizations.length > 0 && group.currentAuthorizations.length > 0 && (
+                              <details className="mt-3 rounded-2xl border border-slate-100 bg-white">
+                                <summary className="cursor-pointer px-4 py-3 text-xs font-black uppercase tracking-wide text-slate-500">
+                                  Histórico / inativas deste procedimento ({group.historicalAuthorizations.length})
+                                </summary>
+                                <div className="space-y-3 border-t border-slate-100 p-3">
+                                  {group.historicalAuthorizations.map((authorization: any) =>
+                                    renderPatientTissAuthorizationCard(authorization, { compact: true }),
+                                  )}
+                                </div>
+                              </details>
+                            )}
                           </div>
                         ))}
                       </div>
                     </div>
                   )}
-                </FormSection>
+                  </FormSection>
+                </div>
               )}
 
               {canAccessClinicFinance && (
                 <FormSection
                   title="Plano financeiro do tratamento"
-                  description="Planejamento financeiro e recorrência do tratamento. Não substitui a autorização TISS do convênio."
+                  description="Use esta seção para planejar valores, frequência e modalidade de cobrança. Autorizações TISS ficam na seção própria acima."
                 >
-                  <div className="mb-4 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs text-amber-800">
-                    Alguns dados antigos de autorização podem existir no plano financeiro por compatibilidade. Para gerar Pré-guias TISS, use a seção Autorizações TISS do paciente.
+                  <div className="mb-4 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-xs text-slate-600">
+                    O plano financeiro organiza cobrança e recorrência. Senhas, guias e saldo autorizado para Pré-guia/XML devem ser mantidos em Autorizações TISS do paciente.
                   </div>
                   <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div>
@@ -11432,6 +11527,9 @@ export function CoordinatorDashboard({
                         const isPackagePlan = plan.billingMode === "PACKAGE";
                         const isCourtesyPlan = plan.billingMode === "COURTESY";
                         const isMonthlyPlan = plan.billingMode === "MONTHLY";
+                        const suggestedFinancialPlanAuthorization = isInsurancePlan
+                          ? findSuggestedTissAuthorizationForFinancialPlan(plan, patientTissAuthorizationGroups)
+                          : null;
                         return (
                           <div key={plan.id} className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
                             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-6">
@@ -11487,7 +11585,7 @@ export function CoordinatorDashboard({
                                 <div className="flex items-center gap-2">
                                   <input
                                     className="min-w-0 flex-1 rounded-xl border border-transparent bg-slate-50 p-3 text-sm text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-[#7a32fc] focus:bg-white focus:ring-4 focus:ring-[#7a32fc]/10"
-                                    placeholder={isInsurancePlan ? "Qtde. autorizada" : "Sessões"}
+                                    placeholder={isInsurancePlan ? "Qtde. planejada" : "Sessões"}
                                     type="number"
                                     min={1}
                                     value={plan.sessionsQuantity}
@@ -11567,28 +11665,6 @@ export function CoordinatorDashboard({
                                     onChange={(e) => handleFinancialPlanChange(plan.id, "payerNameSnapshot", e.target.value)}
                                   />
                                 </FormField>
-                                  <FormField
-                                  label="Autorização legada do plano"
-                                  helperText="Campo antigo de compatibilidade financeira. Para TISS, use Autorizações TISS do paciente."
-                                >
-                                  <input
-                                    className={patientFormInputClass}
-                                    placeholder="Ex.: autorização legada"
-                                    value={plan.authorizationCode}
-                                    onChange={(e) => handleFinancialPlanChange(plan.id, "authorizationCode", e.target.value)}
-                                  />
-                                </FormField>
-                                <FormField
-                                  label="Validade legada"
-                                  helperText="Campo antigo de compatibilidade financeira. Não substitui a validade da autorização TISS."
-                                >
-                                  <input
-                                    type="date"
-                                    className={patientFormInputClass}
-                                    value={plan.authorizationValidUntil}
-                                    onChange={(e) => handleFinancialPlanChange(plan.id, "authorizationValidUntil", e.target.value)}
-                                  />
-                                </FormField>
                                 <FormField label="Coparticipação">
                                   <input
                                     className={patientFormInputClass}
@@ -11598,6 +11674,64 @@ export function CoordinatorDashboard({
                                     onChange={(e) => handleFinancialPlanChange(plan.id, "copaymentAmount", e.target.value)}
                                   />
                                 </FormField>
+                                <div className="md:col-span-2 xl:col-span-6">
+                                  <div className={`rounded-2xl border px-4 py-3 text-xs ${
+                                    suggestedFinancialPlanAuthorization
+                                      ? "border-emerald-100 bg-emerald-50 text-emerald-800"
+                                      : "border-slate-100 bg-slate-50 text-slate-600"
+                                  }`}>
+                                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                                      <div>
+                                        <p className="font-black uppercase tracking-wide">Autorização TISS vinculada/sugerida</p>
+                                        <p className="mt-1 font-medium">
+                                          {suggestedFinancialPlanAuthorization
+                                            ? describePatientAuthorizationSuggestion(suggestedFinancialPlanAuthorization)
+                                            : "Nenhuma autorização TISS vigente para este plano."}
+                                        </p>
+                                      </div>
+                                      <button
+                                        type="button"
+                                        onClick={scrollToPatientTissAuthorizations}
+                                        className="w-fit rounded-xl border border-white/70 bg-white px-3 py-2 text-xs font-bold text-[#7a32fc] shadow-sm"
+                                      >
+                                        {suggestedFinancialPlanAuthorization ? "Ver autorizações TISS" : "Adicionar autorização TISS"}
+                                      </button>
+                                    </div>
+                                    <p className="mt-2 text-[11px] font-medium opacity-80">
+                                      A Pré-guia TISS usará a autorização vigente compatível com a sessão, quando exigida pelo convênio.
+                                    </p>
+                                  </div>
+                                </div>
+                                {(plan.authorizationCode || plan.authorizationValidUntil) && (
+                                  <details className="md:col-span-2 xl:col-span-6 rounded-2xl border border-slate-100 bg-slate-50">
+                                    <summary className="cursor-pointer px-4 py-3 text-xs font-black uppercase tracking-wide text-slate-500">
+                                      Dados legados de autorização
+                                    </summary>
+                                    <div className="space-y-3 border-t border-slate-100 p-4">
+                                      <p className="text-xs font-medium leading-relaxed text-slate-500">
+                                        Estes campos foram preservados apenas para compatibilidade com cadastros antigos. Para Pré-guias e XML, use “Autorizações TISS do paciente”.
+                                      </p>
+                                      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                                        <FormField label="Autorização legada do plano">
+                                          <input
+                                            className={patientFormInputClass}
+                                            placeholder="Ex.: autorização legada"
+                                            value={plan.authorizationCode}
+                                            onChange={(e) => handleFinancialPlanChange(plan.id, "authorizationCode", e.target.value)}
+                                          />
+                                        </FormField>
+                                        <FormField label="Validade legada">
+                                          <input
+                                            type="date"
+                                            className={patientFormInputClass}
+                                            value={plan.authorizationValidUntil}
+                                            onChange={(e) => handleFinancialPlanChange(plan.id, "authorizationValidUntil", e.target.value)}
+                                          />
+                                        </FormField>
+                                      </div>
+                                    </div>
+                                  </details>
+                                )}
                               </>
                             )}
                             {showPaymentMethod && (

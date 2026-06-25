@@ -31,7 +31,7 @@ export const PATIENT_FINANCIAL_QUANTITY_PERIOD_OPTIONS = [
   { value: 'WEEK', label: 'por semana' },
   { value: 'MONTH', label: 'por mês' },
   { value: 'PACKAGE', label: 'no pacote' },
-  { value: 'AUTHORIZATION', label: 'autorizadas' },
+  { value: 'AUTHORIZATION', label: 'planejadas' },
 ] as const;
 
 export type PatientFinancialBillingMode =
