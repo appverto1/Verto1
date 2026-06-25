@@ -13,6 +13,10 @@ export type PatientTissAuthorizationVisualState = {
   sortRank: number;
   isCurrent: boolean;
   isHistorical: boolean;
+  isLegacyOrInadequate: boolean;
+  legacyReason?: string;
+  expectedTussCode?: string;
+  expectedTussDescription?: string;
 };
 
 export type PatientTissAuthorizationGroup = {
@@ -24,9 +28,15 @@ export type PatientTissAuthorizationGroup = {
   authorizations: any[];
   currentAuthorizations: any[];
   historicalAuthorizations: any[];
+  legacyAuthorizations: any[];
   suggestedAuthorization: any | null;
   duplicateLikeCount: number;
 };
+
+export const ABA_INDIVIDUAL_EXPECTED_TUSS_CODE = '50000470';
+export const ABA_INDIVIDUAL_EXPECTED_TUSS_DESCRIPTION = 'Sessão de psicoterapia individual por psicólogo';
+
+const LEGACY_ABA_TUSS_CODES = new Set(['10101012', 'TESTE-ABA']);
 
 const cleanText = (value: any) => String(value ?? '').trim();
 
@@ -54,6 +64,33 @@ const daysBetween = (fromKey: string, toKey: string) => {
   return Math.round((to - from) / 86400000);
 };
 
+export const isAbaIndividualAuthorization = (authorization: any) => {
+  const serviceKey = normalizeKey([
+    authorization?.serviceName,
+    authorization?.service_name,
+    authorization?.procedureNameSnapshot,
+    authorization?.procedure_name_snapshot,
+    authorization?.internalCode,
+    authorization?.internal_code,
+    authorization?.serviceType,
+    authorization?.service_type,
+  ].filter(Boolean).join(' '));
+  return serviceKey.includes('aba') || serviceKey.includes('sessao aba') || serviceKey.includes('terapia aba');
+};
+
+export const getPatientTissAuthorizationTussReview = (authorization: any) => {
+  const tussCode = cleanText(authorization?.tussCode || authorization?.procedureTussCode || authorization?.procedure_tuss_code).toUpperCase();
+  const isLegacyOrInadequate = isAbaIndividualAuthorization(authorization) && LEGACY_ABA_TUSS_CODES.has(tussCode);
+  return {
+    isLegacyOrInadequate,
+    expectedTussCode: ABA_INDIVIDUAL_EXPECTED_TUSS_CODE,
+    expectedTussDescription: ABA_INDIVIDUAL_EXPECTED_TUSS_DESCRIPTION,
+    message: isLegacyOrInadequate
+      ? 'Este código TUSS parece legado ou inadequado para o XML atual. Revise o De/Para TUSS do convênio antes de usar em Pré-guia.'
+      : '',
+  };
+};
+
 export const getPatientTissAuthorizationVisualState = (
   authorization: any,
   referenceDateKey = todayKey(),
@@ -64,25 +101,40 @@ export const getPatientTissAuthorizationVisualState = (
   const usedQuantity = Number(authorization?.usedQuantity ?? authorization?.used_quantity ?? 0) || 0;
   const validFrom = asDateKey(authorization?.validFrom ?? authorization?.valid_from);
   const validUntil = asDateKey(authorization?.validUntil ?? authorization?.valid_until);
+  const tussReview = getPatientTissAuthorizationTussReview(authorization);
 
+  if (tussReview.isLegacyOrInadequate) {
+    return {
+      status: 'inactive',
+      label: 'Legado',
+      tone: 'amber',
+      sortRank: 6,
+      isCurrent: false,
+      isHistorical: true,
+      isLegacyOrInadequate: true,
+      legacyReason: tussReview.message,
+      expectedTussCode: tussReview.expectedTussCode,
+      expectedTussDescription: tussReview.expectedTussDescription,
+    };
+  }
   if (!active) {
-    return { status: 'inactive', label: 'Inativa', tone: 'slate', sortRank: 5, isCurrent: false, isHistorical: true };
+    return { status: 'inactive', label: 'Inativa', tone: 'slate', sortRank: 5, isCurrent: false, isHistorical: true, isLegacyOrInadequate: false };
   }
   if (authorizedQuantity > 0 && usedQuantity >= authorizedQuantity) {
-    return { status: 'consumed', label: 'Consumida', tone: 'slate', sortRank: 4, isCurrent: false, isHistorical: true };
+    return { status: 'consumed', label: 'Consumida', tone: 'slate', sortRank: 4, isCurrent: false, isHistorical: true, isLegacyOrInadequate: false };
   }
   if (validUntil && validUntil < referenceDateKey) {
-    return { status: 'expired', label: 'Expirada', tone: 'red', sortRank: 3, isCurrent: false, isHistorical: true };
+    return { status: 'expired', label: 'Expirada', tone: 'red', sortRank: 3, isCurrent: false, isHistorical: true, isLegacyOrInadequate: false };
   }
   if (validFrom && validFrom > referenceDateKey) {
-    return { status: 'future', label: 'Futura', tone: 'blue', sortRank: 2, isCurrent: false, isHistorical: false };
+    return { status: 'future', label: 'Futura', tone: 'blue', sortRank: 2, isCurrent: false, isHistorical: false, isLegacyOrInadequate: false };
   }
 
   const daysToExpire = validUntil ? daysBetween(referenceDateKey, validUntil) : null;
   if (daysToExpire !== null && daysToExpire <= 15) {
-    return { status: 'expiring', label: 'A vencer', tone: 'amber', sortRank: 1, isCurrent: true, isHistorical: false };
+    return { status: 'expiring', label: 'A vencer', tone: 'amber', sortRank: 1, isCurrent: true, isHistorical: false, isLegacyOrInadequate: false };
   }
-  return { status: 'current', label: 'Vigente', tone: 'green', sortRank: 0, isCurrent: true, isHistorical: false };
+  return { status: 'current', label: 'Vigente', tone: 'green', sortRank: 0, isCurrent: true, isHistorical: false, isLegacyOrInadequate: false };
 };
 
 const authorizationGroupKey = (authorization: any) => {
@@ -137,8 +189,17 @@ export const groupPatientTissAuthorizations = (
       });
       const first = sorted[0] || {};
       const duplicateKeys = new Set(sorted.map(duplicateLikeKey));
-      const currentAuthorizations = sorted.filter((authorization) => !getPatientTissAuthorizationVisualState(authorization, referenceDateKey).isHistorical);
-      const historicalAuthorizations = sorted.filter((authorization) => getPatientTissAuthorizationVisualState(authorization, referenceDateKey).isHistorical);
+      const legacyAuthorizations = sorted.filter((authorization) =>
+        getPatientTissAuthorizationVisualState(authorization, referenceDateKey).isLegacyOrInadequate,
+      );
+      const currentAuthorizations = sorted.filter((authorization) => {
+        const state = getPatientTissAuthorizationVisualState(authorization, referenceDateKey);
+        return !state.isHistorical && !state.isLegacyOrInadequate;
+      });
+      const historicalAuthorizations = sorted.filter((authorization) => {
+        const state = getPatientTissAuthorizationVisualState(authorization, referenceDateKey);
+        return state.isHistorical && !state.isLegacyOrInadequate;
+      });
       return {
         key,
         payerName: cleanText(first.payerName || first.payer_name) || 'Convênio não informado',
@@ -148,7 +209,11 @@ export const groupPatientTissAuthorizations = (
         authorizations: sorted,
         currentAuthorizations,
         historicalAuthorizations,
-        suggestedAuthorization: sorted.find((authorization) => getPatientTissAuthorizationVisualState(authorization, referenceDateKey).isCurrent) || null,
+        legacyAuthorizations,
+        suggestedAuthorization: sorted.find((authorization) => {
+          const state = getPatientTissAuthorizationVisualState(authorization, referenceDateKey);
+          return state.isCurrent && !state.isLegacyOrInadequate;
+        }) || null,
         duplicateLikeCount: Math.max(0, sorted.length - duplicateKeys.size),
       };
     })

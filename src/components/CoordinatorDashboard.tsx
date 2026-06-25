@@ -197,6 +197,8 @@ import {
 } from "../utils/patientProfileType";
 import { normalizePatientInsuranceEligibility } from "../utils/patientInsuranceEligibility";
 import {
+  ABA_INDIVIDUAL_EXPECTED_TUSS_CODE,
+  ABA_INDIVIDUAL_EXPECTED_TUSS_DESCRIPTION,
   findSuggestedTissAuthorizationForFinancialPlan,
   getPatientTissAuthorizationVisualState,
   groupPatientTissAuthorizations,
@@ -1527,6 +1529,17 @@ export function CoordinatorDashboard({
     return clinicPayers.find((payer: any) => normalizeLookupText(payer?.name) === payerName) || null;
   }, [clinicPayers, newPatientForm.convenioNome, newPatientForm.convenioTipo]);
 
+  const resolveFinancialPlanPayer = (plan: any) => {
+    const payerId = String(plan?.payerId || plan?.payer_id || "").trim();
+    if (payerId) {
+      const byId = clinicPayers.find((payer: any) => String(payer?.id || "") === payerId);
+      if (byId) return byId;
+    }
+    const payerName = normalizeLookupText(plan?.payerNameSnapshot || plan?.payer_name_snapshot || plan?.insuranceName || plan?.insurance_name || newPatientForm.convenioNome);
+    if (!payerName) return null;
+    return clinicPayers.find((payer: any) => normalizeLookupText(payer?.name) === payerName) || null;
+  };
+
   const patientAuthorizationBillingConfigurations = useMemo(() => {
     const { services, codes, mappings, prices } = patientTissAuthorizationCatalog;
     const servicesById = new Map<string, any>(services.map((service: any) => [String(service.id || ""), service]));
@@ -1575,6 +1588,28 @@ export function CoordinatorDashboard({
     () => groupPatientTissAuthorizations(patientTissAuthorizations),
     [patientTissAuthorizations],
   );
+  const getPatientTissAuthorizationIdentity = (authorization: any) =>
+    String(authorization?.id || [
+      authorization?.authorizationNumber || authorization?.authorizationCode || "",
+      authorization?.guideNumber || "",
+      authorization?.validFrom || "",
+      authorization?.validUntil || "",
+      authorization?.tussCode || "",
+    ].join("|"));
+  const patientTissSuggestedAuthorizationGroup = patientTissAuthorizationGroups.find((group: any) => group.suggestedAuthorization) || null;
+  const patientTissSuggestedAuthorization = patientTissSuggestedAuthorizationGroup?.suggestedAuthorization || null;
+  const patientTissSuggestedAuthorizationIdentity = getPatientTissAuthorizationIdentity(patientTissSuggestedAuthorization);
+  const patientTissSimilarAuthorizations = patientTissSuggestedAuthorizationGroup
+    ? patientTissSuggestedAuthorizationGroup.currentAuthorizations.filter((authorization: any) =>
+        getPatientTissAuthorizationIdentity(authorization) !== patientTissSuggestedAuthorizationIdentity,
+      )
+    : [];
+  const patientTissOtherCurrentAuthorizations = patientTissAuthorizationGroups
+    .filter((group: any) => group.key !== patientTissSuggestedAuthorizationGroup?.key)
+    .flatMap((group: any) => group.currentAuthorizations || []);
+  const patientTissCollapsedCurrentAuthorizations = [...patientTissSimilarAuthorizations, ...patientTissOtherCurrentAuthorizations];
+  const patientTissLegacyAuthorizations = patientTissAuthorizationGroups.flatMap((group: any) => group.legacyAuthorizations || []);
+  const patientTissHistoricalAuthorizations = patientTissAuthorizationGroups.flatMap((group: any) => group.historicalAuthorizations || []);
 
   const patientAuthorizationStatusClass = (authorization: any) => {
     const state = getPatientTissAuthorizationVisualState(authorization);
@@ -1803,6 +1838,14 @@ export function CoordinatorDashboard({
             <p className="mt-1 text-xs text-slate-600">
               TUSS {authorization.tussCode || "não informado"} · {formatPatientAuthorizationAmount(authorization.amountCents)}
             </p>
+            {visualState.isLegacyOrInadequate && (
+              <div className="mt-3 rounded-2xl border border-amber-100 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
+                <p>{visualState.legacyReason || "Este código TUSS parece legado ou inadequado para o XML atual."}</p>
+                <p className="mt-1 font-black">
+                  De/Para ativo esperado: {visualState.expectedTussCode || ABA_INDIVIDUAL_EXPECTED_TUSS_CODE} — {visualState.expectedTussDescription || ABA_INDIVIDUAL_EXPECTED_TUSS_DESCRIPTION}.
+                </p>
+              </div>
+            )}
             <div className="mt-3 grid gap-1 text-xs text-slate-500 sm:grid-cols-2">
               <span>Autorização/Senha: {authorization.authorizationNumber || authorization.authorizationCode || "-"}</span>
               <span>Guia: {authorization.guideNumber || "-"}</span>
@@ -11511,7 +11554,7 @@ export function CoordinatorDashboard({
                 <div id="patient-tiss-authorizations-section">
                   <FormSection
                     title="Autorizações TISS do paciente"
-                    description="Use esta seção para cadastrar as senhas/guias autorizadas pelo convênio. Esses dados são usados na Pré-guia TISS e no XML quando aplicável."
+                    description="Use esta seção para controlar senhas/guias autorizadas pelo convênio. O Verto sugere a autorização vigente compatível para novas sessões e Pré-guias."
                     badge="Convênio"
                   >
                   {newPatientForm.convenioTipo !== "convenio" ? (
@@ -11675,56 +11718,72 @@ export function CoordinatorDashboard({
                           <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-4 text-sm text-slate-500">
                             Nenhuma autorização TISS cadastrada para este paciente.
                           </div>
-                        ) : patientTissAuthorizationGroups.map((group: any) => (
-                          <div key={group.key} className="rounded-3xl border border-slate-100 bg-slate-50/60 p-4">
-                            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                              <div>
-                                <p className="text-xs font-black uppercase tracking-[0.14em] text-slate-500">{group.payerName}</p>
-                                <h4 className="mt-1 text-base font-black text-slate-900">{group.serviceName}</h4>
-                                <p className="mt-1 text-xs text-slate-500">TUSS {group.tussCode || "não informado"}{group.tussDescription ? ` · ${group.tussDescription}` : ""}</p>
-                              </div>
-                              <div className={`rounded-2xl border px-4 py-3 text-xs ${
-                                group.suggestedAuthorization
-                                  ? "border-emerald-100 bg-emerald-50 text-emerald-800"
-                                  : "border-amber-100 bg-amber-50 text-amber-800"
-                              }`}>
-                                <p className="font-black uppercase tracking-wide">
-                                  {group.suggestedAuthorization ? "Autorização vigente sugerida para novas sessões" : "Nenhuma autorização vigente para este procedimento"}
+                        ) : (
+                          <>
+                            <div className="rounded-3xl border border-emerald-100 bg-emerald-50/70 p-4">
+                              <div className="flex flex-col gap-1">
+                                <p className="text-xs font-black uppercase tracking-[0.14em] text-emerald-700">
+                                  Autorização vigente sugerida para novas sessões
                                 </p>
-                                <p className="mt-1 font-medium">
-                                  {group.suggestedAuthorization
-                                    ? describePatientAuthorizationSuggestion(group.suggestedAuthorization)
-                                    : "Cadastre uma autorização antes de gerar Pré-guia/XML, se o convênio exigir."}
+                                <p className="text-sm font-medium text-emerald-800">
+                                  Esta é a autorização que o Verto sugere para as próximas sessões, considerando validade, saldo e compatibilidade visual com o De/Para TUSS.
                                 </p>
                               </div>
-                            </div>
-
-                            {group.duplicateLikeCount > 0 && (
-                              <div className="mt-3 rounded-2xl border border-amber-100 bg-white px-4 py-3 text-xs text-amber-700">
-                                Há autorizações semelhantes neste grupo. Elas foram preservadas para conferência; revise validade, saldo e status antes de usar em novas Pré-guias.
-                              </div>
-                            )}
-
-                            <div className="mt-4 space-y-3">
-                              {(group.currentAuthorizations.length ? group.currentAuthorizations : group.authorizations).map((authorization: any) =>
-                                renderPatientTissAuthorizationCard(authorization),
+                              {patientTissSuggestedAuthorization ? (
+                                <div className="mt-4">
+                                  {renderPatientTissAuthorizationCard(patientTissSuggestedAuthorization)}
+                                </div>
+                              ) : (
+                                <div className="mt-4 rounded-2xl border border-amber-100 bg-white px-4 py-3 text-sm text-amber-800">
+                                  <p className="font-black">Nenhuma autorização TISS vigente elegível para novas sessões.</p>
+                                  <p className="mt-1 text-xs font-medium">Verifique validade, saldo e De/Para TUSS do convênio.</p>
+                                </div>
                               )}
                             </div>
 
-                            {group.historicalAuthorizations.length > 0 && group.currentAuthorizations.length > 0 && (
-                              <details className="mt-3 rounded-2xl border border-slate-100 bg-white">
+                            {patientTissCollapsedCurrentAuthorizations.length > 0 && (
+                              <details className="rounded-2xl border border-slate-100 bg-white">
                                 <summary className="cursor-pointer px-4 py-3 text-xs font-black uppercase tracking-wide text-slate-500">
-                                  Histórico / inativas deste procedimento ({group.historicalAuthorizations.length})
+                                  Autorizações semelhantes ({patientTissCollapsedCurrentAuthorizations.length})
                                 </summary>
                                 <div className="space-y-3 border-t border-slate-100 p-3">
-                                  {group.historicalAuthorizations.map((authorization: any) =>
+                                  {patientTissCollapsedCurrentAuthorizations.map((authorization: any) =>
                                     renderPatientTissAuthorizationCard(authorization, { compact: true }),
                                   )}
                                 </div>
                               </details>
                             )}
-                          </div>
-                        ))}
+
+                            {patientTissLegacyAuthorizations.length > 0 && (
+                              <details className="rounded-2xl border border-amber-100 bg-amber-50/70">
+                                <summary className="cursor-pointer px-4 py-3 text-xs font-black uppercase tracking-wide text-amber-700">
+                                  Autorizações legadas/inadequadas para Pré-guia ({patientTissLegacyAuthorizations.length})
+                                </summary>
+                                <div className="space-y-3 border-t border-amber-100 p-3">
+                                  <p className="rounded-2xl bg-white px-4 py-3 text-xs font-medium text-amber-800">
+                                    Registros antigos ou incompatíveis ficam preservados aqui para conferência, mas não serão sugeridos para novas Pré-guias.
+                                  </p>
+                                  {patientTissLegacyAuthorizations.map((authorization: any) =>
+                                    renderPatientTissAuthorizationCard(authorization, { compact: true }),
+                                  )}
+                                </div>
+                              </details>
+                            )}
+
+                            {patientTissHistoricalAuthorizations.length > 0 && (
+                              <details className="rounded-2xl border border-slate-100 bg-white">
+                                <summary className="cursor-pointer px-4 py-3 text-xs font-black uppercase tracking-wide text-slate-500">
+                                  Autorizações históricas/inativas ({patientTissHistoricalAuthorizations.length})
+                                </summary>
+                                <div className="space-y-3 border-t border-slate-100 p-3">
+                                  {patientTissHistoricalAuthorizations.map((authorization: any) =>
+                                    renderPatientTissAuthorizationCard(authorization, { compact: true }),
+                                  )}
+                                </div>
+                              </details>
+                            )}
+                          </>
+                        )}
                       </div>
                     </div>
                   )}
@@ -11772,6 +11831,13 @@ export function CoordinatorDashboard({
                         const suggestedFinancialPlanAuthorization = isInsurancePlan
                           ? findSuggestedTissAuthorizationForFinancialPlan(plan, patientTissAuthorizationGroups)
                           : null;
+                        const resolvedFinancialPlanPayer = isInsurancePlan ? resolveFinancialPlanPayer(plan) : null;
+                        const financialPlanPayerDisplayName =
+                          resolvedFinancialPlanPayer?.name ||
+                          plan.payerNameSnapshot ||
+                          plan.insuranceName ||
+                          newPatientForm.convenioNome ||
+                          "";
                         return (
                           <div key={plan.id} className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
                             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-6">
@@ -11880,17 +11946,20 @@ export function CoordinatorDashboard({
                             {isInsurancePlan && (
                               <>
                                 <div className="xl:col-span-2">
-                                  <FormField label="Pagador / convênio">
+                                  <FormField
+                                    label="Convênio"
+                                    helperText={financialPlanPayerDisplayName ? `Convênio: ${financialPlanPayerDisplayName}` : "Convênio não definido. Defina o convênio na aba Convênio e elegibilidade."}
+                                  >
                                     <select
                                       className={patientFormInputClass}
-                                      value={plan.payerId || ""}
+                                      value={plan.payerId || resolvedFinancialPlanPayer?.id || ""}
                                       onChange={(e) => {
                                         const payer = clinicPayers.find((item: any) => String(item?.id) === e.target.value);
                                         handleFinancialPlanChange(plan.id, "payerId", e.target.value);
                                         handleFinancialPlanChange(plan.id, "payerNameSnapshot", payer?.name || plan.payerNameSnapshot || "");
                                       }}
                                     >
-                                      <option value="">Pagador/convênio</option>
+                                      <option value="">Convênio não definido</option>
                                       {clinicPayers.map((payer: any) => (
                                         <option key={`financial-payer-${plan.id}-${payer.id}`} value={payer.id}>
                                           {payer.name}
@@ -11899,14 +11968,16 @@ export function CoordinatorDashboard({
                                     </select>
                                   </FormField>
                                 </div>
-                                <FormField label="Convênio exibido">
-                                  <input
-                                    className={patientFormInputClass}
-                                    placeholder="Nome do convênio"
-                                    value={plan.payerNameSnapshot}
-                                    onChange={(e) => handleFinancialPlanChange(plan.id, "payerNameSnapshot", e.target.value)}
-                                  />
-                                </FormField>
+                                {!resolvedFinancialPlanPayer && plan.payerNameSnapshot && (
+                                  <FormField label="Convênio exibido">
+                                    <input
+                                      className={patientFormInputClass}
+                                      placeholder="Nome do convênio"
+                                      value={plan.payerNameSnapshot}
+                                      onChange={(e) => handleFinancialPlanChange(plan.id, "payerNameSnapshot", e.target.value)}
+                                    />
+                                  </FormField>
+                                )}
                                 <FormField label="Coparticipação">
                                   <input
                                     className={patientFormInputClass}
