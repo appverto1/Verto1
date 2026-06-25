@@ -3529,10 +3529,19 @@ const APPOINTMENT_SELECT = [
   'therapist_id',
   'therapist_name',
   'scheduled_at',
+  'scheduled_start_at',
+  'scheduled_end_at',
+  'scheduled_duration_minutes',
   'date',
   'time',
   'duration_minutes',
   'approach',
+  'service_type',
+  'room_id',
+  'room_name',
+  'location_type',
+  'location_notes',
+  'call_link',
   'status',
   'patient_response',
   'patient_responded_at',
@@ -7474,7 +7483,14 @@ function serializePersistedAppointmentForAgenda(row: any) {
   const professionalId = sanitizeString(row?.therapist_id || source?.professionalId || source?.professional_id || source?.therapistId || source?.therapist_id, 120) || null;
   const roomId = sanitizeString(row?.room_id || source?.roomId || source?.room_id || source?.room, 180) || '';
   const roomName = sanitizeString(row?.room_name || source?.roomName || source?.room_name || source?.roomDisplayName || roomId, 180) || '';
-  const locationType = normalizeScheduleLocationType(row?.location_type || source?.locationType || source?.location_type || (roomId ? 'clinica' : 'outro'));
+  const locationType = roomId
+    ? 'clinica'
+    : normalizeScheduleLocationType(
+        row?.location_type ||
+          source?.locationType ||
+          source?.location_type ||
+          'outro'
+      );
   const uiStatus = normalizeAppointmentStatusForUi(row?.status || source?.status || 'pending');
   const patientConfirmationStatus = normalizePatientConfirmationStatusForAgenda(
     row?.patient_confirmation_status ||
@@ -7514,9 +7530,13 @@ function serializePersistedAppointmentForAgenda(row: any) {
     therapist_id: professionalId,
     professionalId,
     professional_id: professionalId,
-    therapistName: sanitizeString(row?.therapist_name || source?.therapistName || source?.therapist_name || source?.professional, 180) || 'Equipe',
-    therapist_name: sanitizeString(row?.therapist_name || source?.therapist_name || source?.therapistName || source?.professional, 180) || 'Equipe',
-    professional: sanitizeString(row?.therapist_name || source?.professional || source?.therapistName || source?.therapist_name, 180) || 'Equipe',
+    therapistName: sanitizeString(row?.therapist_name || source?.therapistName || source?.therapist_name || source?.professional, 180) || null,
+    therapist_name: sanitizeString(row?.therapist_name || source?.therapist_name || source?.therapistName || source?.professional, 180) || null,
+    professional: sanitizeString(row?.therapist_name || source?.professional || source?.therapistName || source?.therapist_name, 180) || null,
+    responsibleProfessionalId: professionalId,
+    responsible_professional_id: professionalId,
+    responsibleProfessionalName: sanitizeString(row?.therapist_name || source?.therapistName || source?.therapist_name || source?.professional, 180) || null,
+    responsible_professional_name: sanitizeString(row?.therapist_name || source?.therapist_name || source?.therapistName || source?.professional, 180) || null,
     date,
     time,
     scheduledAt: scheduledAt || source?.scheduledAt || source?.scheduled_at || null,
@@ -8556,8 +8576,7 @@ async function syncAppointmentsTableFromClinicState(params: {
       appointment?.therapistId,
       appointment?.therapist_id,
       appointment?.professionalId,
-      appointment?.professional_id,
-      actorId
+      appointment?.professional_id
     ];
     const therapistId = therapistIdCandidates
       .map((value) => sanitizeString(value, 120))
@@ -8587,9 +8606,14 @@ async function syncAppointmentsTableFromClinicState(params: {
       appointment?.room_name || appointment?.roomName || appointment?.roomDisplayName,
       180
     );
-    const locationType = normalizeScheduleLocationType(
-      appointment?.location_type || appointment?.locationType || appointment?.location || (roomId ? 'clinica' : '')
-    );
+    const locationType = roomId
+      ? 'clinica'
+      : normalizeScheduleLocationType(
+          appointment?.location_type ||
+            appointment?.locationType ||
+            appointment?.location ||
+            'outro'
+        );
     const professionalIds = Array.from(
       new Set(
         [
@@ -16085,13 +16109,32 @@ async function startServer() {
           rawAppointment?.therapist_id ||
           rawAppointment?.therapistId,
         120
-      ) || sanitizeString(actor?.id, 120);
+      );
     if (!isUuid(professionalId)) {
-      return { ok: false, status: 400, error: 'Profissional inválido para este agendamento.' };
+      return { ok: false, status: 400, error: 'Selecione um profissional responsável para este agendamento.' };
     }
     const professionalAllowed = await professionalBelongsToClinic(professionalId, clinicId, actor);
     if (!professionalAllowed) {
       return { ok: false, status: 403, error: 'Profissional não pertence à clínica atual.' };
+    }
+    const [professionalUserResult, professionalProfileResult] = await Promise.all([
+      supabase
+        .from('users')
+        .select('id, name, email, clinic_id')
+        .eq('id', professionalId)
+        .limit(1)
+        .maybeSingle(),
+      fetchProfessionalProfileWithSchemaFallback({
+        supabase,
+        userId: professionalId,
+        logger: console
+      })
+    ]);
+    if (professionalUserResult.error && !extractMissingColumnName(professionalUserResult.error)) {
+      throw professionalUserResult.error;
+    }
+    if (professionalProfileResult.error && !hasMissingFinancialSchema(professionalProfileResult.error)) {
+      throw professionalProfileResult.error;
     }
 
     const scheduledAt = buildAppointmentScheduledAt(rawAppointment);
@@ -16113,14 +16156,39 @@ async function startServer() {
     const patientEmail = sanitizeEmail(patientResult.data.email || rawAppointment?.patientEmail || rawAppointment?.patient_email) || null;
     const professionalName =
       sanitizeString(
-        rawAppointment?.therapistName ||
+        professionalProfileResult.data?.full_name ||
+          professionalProfileResult.data?.fullName ||
+          professionalUserResult.data?.name ||
+          rawAppointment?.therapistName ||
           rawAppointment?.therapist_name ||
           rawAppointment?.professionalName ||
-          rawAppointment?.professional ||
-          actor?.name ||
-          actor?.email,
+          rawAppointment?.professional,
         180
-      ) || 'Equipe';
+      );
+    if (!professionalName || ['equipe', 'team'].includes(professionalName.toLowerCase())) {
+      return { ok: false, status: 400, error: 'O profissional responsável selecionado não possui um nome válido.' };
+    }
+    const roomId = sanitizeString(
+      rawAppointment?.room_id || rawAppointment?.roomId || rawAppointment?.room,
+      180
+    );
+    const roomName = sanitizeString(
+      rawAppointment?.room_name ||
+        rawAppointment?.roomName ||
+        rawAppointment?.roomDisplayName,
+      180
+    );
+    const locationType = roomId
+      ? 'clinica'
+      : normalizeScheduleLocationType(
+          rawAppointment?.location_type ||
+            rawAppointment?.locationType ||
+            rawAppointment?.location ||
+            'outro'
+        );
+    if (locationType === 'clinica' && !roomId) {
+      return { ok: false, status: 400, error: 'Selecione uma sala da clínica para este atendimento.' };
+    }
 
     return {
       ok: true,
@@ -16145,6 +16213,17 @@ async function startServer() {
         therapist_name: professionalName,
         therapistName: professionalName,
         professional: professionalName,
+        responsible_professional_id: professionalId,
+        responsibleProfessionalId: professionalId,
+        responsible_professional_name: professionalName,
+        responsibleProfessionalName: professionalName,
+        room_id: roomId || null,
+        roomId: roomId || null,
+        room: roomId || null,
+        room_name: roomName || null,
+        roomName: roomName || null,
+        location_type: locationType,
+        locationType,
         scheduled_at: scheduledAt,
         scheduledAt,
         scheduled_start_at: scheduledAt,
@@ -16197,6 +16276,11 @@ async function startServer() {
       if (sanitizeString(row?.clinic_id, 120) !== clinicId) return false;
       if (sanitizeString(row?.patient_id, 120) !== sanitizeString(appointment?.patient_id || appointment?.patientId, 120)) return false;
       if (sanitizeString(row?.therapist_id, 120) !== sanitizeString(appointment?.therapist_id || appointment?.therapistId, 120)) return false;
+      const expectedRoomId = sanitizeString(
+        appointment?.room_id || appointment?.roomId || appointment?.room,
+        180
+      );
+      if (expectedRoomId && sanitizeString(row?.room_id, 180) !== expectedRoomId) return false;
       const status = normalizeAppointmentStatusForUi(row?.status || 'pending');
       if (['deleted'].includes(status)) return false;
       if (!buildAppointmentScheduledAt(row)) return false;
@@ -29104,17 +29188,19 @@ async function startServer() {
       if (isUuid(text) || /^[0-9a-f]{20,}$/i.test(text) || /^(clinic_room|room|sala)_[0-9a-f-]{8,}$/i.test(text)) return '';
       return text;
     };
-    const location = sanitizeString(
-      row?.location_type ||
-      row?.locationType ||
-      source?.location ||
-      source?.locationType ||
-      source?.location_type ||
-      source?.local ||
-      source?.place ||
-      (String(row?.room_name || row?.roomName || row?.room || source?.roomDisplayName || source?.roomName || source?.room || '').toLowerCase().includes('online') ? 'online' : ''),
-      120
-    );
+    const location = roomId
+      ? 'clinica'
+      : sanitizeString(
+          row?.location_type ||
+            row?.locationType ||
+            source?.location ||
+            source?.locationType ||
+            source?.location_type ||
+            source?.local ||
+            source?.place ||
+            (String(row?.room_name || row?.roomName || row?.room || source?.roomDisplayName || source?.roomName || source?.room || '').toLowerCase().includes('online') ? 'online' : ''),
+          120
+        );
     const isClinicLocation = /clinic|clinica|sala/i.test(location) || Boolean(roomId);
     const room = sanitizeHumanRoom(
       row?.room_name ||
@@ -29135,6 +29221,22 @@ async function startServer() {
       /clinic|clinica|sala/i.test(location) ? 'Clínica' :
       'Outro'
     ) : (room ? 'Clínica' : 'Local não informado');
+    const therapistId = sanitizeString(
+      row?.therapist_id ||
+        row?.therapistId ||
+        source?.therapist_id ||
+        source?.therapistId ||
+        source?.professionalId,
+      120
+    ) || null;
+    const therapistName = sanitizeString(
+      row?.therapist_name ||
+        row?.therapistName ||
+        source?.therapistName ||
+        source?.professional ||
+        source?.therapist_name,
+      180
+    ) || null;
 
     return {
       id: appointmentId,
@@ -29149,8 +29251,14 @@ async function startServer() {
         source?.name,
         row?.name
       ]) || 'Paciente',
-      therapist_id: sanitizeString(row?.therapist_id || row?.therapistId || source?.therapist_id || source?.therapistId || source?.professionalId, 120) || null,
-      therapist_name: sanitizeString(row?.therapist_name || row?.therapistName || source?.therapistName || source?.professional || source?.therapist_name, 180) || 'Equipe',
+      therapist_id: therapistId,
+      therapistId,
+      therapist_name: therapistName,
+      therapistName,
+      responsible_professional_id: therapistId,
+      responsibleProfessionalId: therapistId,
+      responsible_professional_name: therapistName,
+      responsibleProfessionalName: therapistName,
       start_time: start.toISOString(),
       end_time: end.toISOString(),
       date: sourceDate || formatDateInAppointmentTimezone(start),
@@ -29182,9 +29290,14 @@ async function startServer() {
       location_type: normalizeScheduleLocationType(location || (room ? 'clinica' : 'outro')),
       location_label: locationLabel,
       room_id: roomId || null,
+      roomId: roomId || null,
       room: room || null,
       room_name: room || null,
+      roomName: room || null,
       room_specialties: roomSpecialties,
+      roomSpecialties,
+      locationType: normalizeScheduleLocationType(location || (room ? 'clinica' : 'outro')),
+      locationLabel,
       has_session_record: hasSessionRecord,
       has_report: hasReport,
       has_pending_signature: hasPendingSignature,
@@ -32118,26 +32231,82 @@ async function startServer() {
     };
   };
 
-  const fetchClosureProfessional = async (professionalId: string) => {
+  const fetchClosureProfessional = async (professionalId: string, clinicId: string) => {
     if (!isUuid(professionalId)) return null;
-    const result = await supabase
+    let userResult = await supabase
       .from('users')
       .select(CLOSURE_PROFESSIONAL_SELECT)
       .eq('id', professionalId)
       .maybeSingle();
-    if (!result.error) return result.data || null;
-    const missingColumn = extractMissingColumnName(result.error);
-    if (!missingColumn) throw result.error;
-    const fallback = await supabase
-      .from('users')
-      .select('id, name, email, role, clinic_id, updated_at')
-      .eq('id', professionalId)
-      .maybeSingle();
-    if (fallback.error) {
-      if (hasMissingFinancialSchema(fallback.error)) return null;
-      throw fallback.error;
+    if (userResult.error && extractMissingColumnName(userResult.error)) {
+      userResult = await supabase
+        .from('users')
+        .select('id, name, email, role, clinic_id, updated_at')
+        .eq('id', professionalId)
+        .maybeSingle();
     }
-    return fallback.data || null;
+    if (userResult.error) {
+      if (hasMissingFinancialSchema(userResult.error)) return null;
+      throw userResult.error;
+    }
+    const profileResult = await fetchProfessionalProfileWithSchemaFallback({
+      supabase,
+      userId: professionalId,
+      logger: console
+    });
+    if (profileResult.error && !hasMissingFinancialSchema(profileResult.error)) {
+      throw profileResult.error;
+    }
+    let billingProfile: any = null;
+    if (isUuid(clinicId)) {
+      const billingResult = await supabase
+        .from('professional_billing_profiles')
+        .select(PROFESSIONAL_BILLING_PROFILE_SELECT)
+        .eq('organization_id', clinicId)
+        .eq('professional_id', professionalId)
+        .limit(1)
+        .maybeSingle();
+      if (!billingResult.error) billingProfile = billingResult.data || null;
+      else if (!hasMissingFinancialSchema(billingResult.error) && !isMissingRelationError(billingResult.error)) {
+        throw billingResult.error;
+      }
+    }
+    const userData = userResult.data || {};
+    const profileData = profileResult.data || {};
+    const registry = sanitizeString(
+      billingProfile?.council_number ||
+        profileData?.council_number ||
+        profileData?.councilNumber ||
+        profileData?.crp ||
+        userData?.professional_registry ||
+        userData?.registry ||
+        userData?.crp,
+      80
+    );
+    return cleanObject({
+      ...userData,
+      ...profileData,
+      id: professionalId,
+      name: sanitizeString(
+        profileData?.full_name ||
+          profileData?.fullName ||
+          billingProfile?.display_name ||
+          userData?.name ||
+          userData?.email,
+        180
+      ) || null,
+      registry: registry || null,
+      professional_registry: registry || null,
+      councilNumber: registry || null,
+      council_number: registry || null,
+      council: sanitizeString(
+        billingProfile?.council_type ||
+          profileData?.council ||
+          profileData?.council_type,
+        40
+      ) || null,
+      cbo_code: sanitizeString(billingProfile?.cbo_code || profileData?.cbo_code, 40) || null
+    });
   };
 
   const fetchAppointmentClosureContext = async (appointmentId: string, user: any, options: { scopedAppointment?: any } = {}) => {
@@ -32254,7 +32423,7 @@ async function startServer() {
       appointment.therapist_id || appointment.professional_id || abaSession?.therapist_id,
       120
     );
-    const professional = await fetchClosureProfessional(professionalId);
+    const professional = await fetchClosureProfessional(professionalId, clinicId);
     const serviceType = sanitizeString(appointment.service_type || appointment.approach || appointment.type, 120) || null;
     const requirements = await fetchClosureRequirements(clinicId, serviceType, safeAppointmentId);
     const billingContext = (requirements as any)?.billingContext || null;
@@ -33030,7 +33199,7 @@ async function startServer() {
     professional_id: row.professional_id || null,
     payer_id: row.payer_id || null,
     patient_name: patientNames.get(sanitizeString(row.patient_id, 120)) || 'Paciente',
-    professional_name: professionalNames.get(sanitizeString(row.professional_id, 120)) || 'Equipe',
+    professional_name: professionalNames.get(sanitizeString(row.professional_id, 120)) || 'Profissional não definido',
     service_type: sanitizeString(row.service_type, 120) || 'Sessão',
     payer_name: sanitizeString(row.payer_name_snapshot, 180) || 'Sem pagador',
     guide_number: sanitizeString(row.guide_number, 120) || null,
@@ -46796,8 +46965,8 @@ async function startServer() {
           type: sanitizeString(appointment.service_type || appointment.approach, 120) || 'Sessao',
           durationMinutes: Number(appointment.scheduled_duration_minutes || appointment.duration_minutes || 0) || null,
           duration_minutes: Number(appointment.scheduled_duration_minutes || appointment.duration_minutes || 0) || null,
-          therapistName: sanitizeString(appointment.therapist_name, 180) || 'Equipe',
-          professionalName: sanitizeString(appointment.professional_name || appointment.therapist_name, 180) || 'Equipe',
+          therapistName: sanitizeString(appointment.therapist_name, 180) || 'Profissional não definido',
+          professionalName: sanitizeString(appointment.professional_name || appointment.therapist_name, 180) || 'Profissional não definido',
           location: sanitizeString(appointment.room_name || appointment.location_type, 180) || 'Local a definir',
           roomName: sanitizeString(appointment.room_name, 180) || null,
           maintenanceProbeCount: totalProbeCount,

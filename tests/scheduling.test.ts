@@ -5,6 +5,7 @@ import {
   buildPatientTimeReport,
   buildProfessionalWorkReport,
   checkLocalScheduleConflicts,
+  resolveRecurringAppointmentBillingFields,
 } from '../src/utils/scheduling';
 
 const root = process.cwd();
@@ -158,6 +159,48 @@ test('remarcacao em lote ignora as ocorrencias da propria serie', () => {
     exclude_event_ids: ['series-1', 'series-2'],
   });
   assert.equal(result.hasConflict, false);
+});
+
+test('recorrencia copia autorizacao quando confirmada e deixa guia pendente nas demais', () => {
+  const first = resolveRecurringAppointmentBillingFields({
+    occurrenceIndex: 0,
+    totalOccurrences: 4,
+    guideNumber: 'GUIA-1',
+    authorizationCode: 'AUTH-1',
+    applyAuthorizationToRecurrence: true,
+    reuseGuideAcrossRecurrence: false,
+  });
+  const second = resolveRecurringAppointmentBillingFields({
+    occurrenceIndex: 1,
+    totalOccurrences: 4,
+    guideNumber: 'GUIA-1',
+    authorizationCode: 'AUTH-1',
+    applyAuthorizationToRecurrence: true,
+    reuseGuideAcrossRecurrence: false,
+  });
+  assert.deepEqual(first, {
+    guideNumber: 'GUIA-1',
+    authorizationCode: 'AUTH-1',
+  });
+  assert.deepEqual(second, {
+    guideNumber: '',
+    authorizationCode: 'AUTH-1',
+  });
+});
+
+test('guia so replica na recorrencia com escolha explicita', () => {
+  const occurrence = resolveRecurringAppointmentBillingFields({
+    occurrenceIndex: 2,
+    totalOccurrences: 4,
+    guideNumber: 'GUIA-LOTE',
+    authorizationCode: 'AUTH-1',
+    applyAuthorizationToRecurrence: false,
+    reuseGuideAcrossRecurrence: true,
+  });
+  assert.deepEqual(occurrence, {
+    guideNumber: 'GUIA-LOTE',
+    authorizationCode: '',
+  });
 });
 
 test('relatórios somam paciente e profissional com duração real', () => {

@@ -270,7 +270,21 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
   const room = asString(firstValue(appointment.room_name, appointment.roomName, appointment.room_id, appointment.roomId, abaSession.room_name, abaSession.room_id));
   const authorizationCode = asString(firstValue(appointment.authorization_code, appointment.authorizationCode, appointment.authorization_id, appointment.authorizationId));
   const guideNumber = asString(firstValue(appointment.guide_number, appointment.guideNumber));
-  const professionalRegistryPresent = hasText(firstValue(input.professional?.registry, input.professional?.professional_registry, input.professional?.crp, input.professional?.councilNumber));
+  const professionalName = asString(firstValue(
+    input.professional?.full_name,
+    input.professional?.fullName,
+    input.professional?.name,
+    appointment.therapist_name,
+    appointment.therapistName
+  )) || null;
+  const professionalRegistryPresent = hasText(firstValue(
+    input.professional?.registry,
+    input.professional?.professional_registry,
+    input.professional?.crp,
+    input.professional?.councilNumber,
+    input.professional?.council_number,
+    input.professional?.document_number
+  ));
   const patientDocumentPresent = hasText(firstValue(input.patient?.document, input.patient?.cpf, input.patient?.responsavelCpf, appointment.patient_document_present));
   const requiredDocuments = Array.isArray(appointment.required_documents) ? appointment.required_documents : [];
   const pendingRequiredDocuments = requiredDocuments.filter((doc: any) => ['REQUIRED', 'PENDING', 'EXPIRED'].includes(asString(doc?.status).toUpperCase()));
@@ -479,6 +493,16 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
     }
   });
   payerEvaluation.checklistItems.forEach((payerItem) => {
+    if (payerItem.key === 'payer_professional_registry' && payerItem.status === 'FAILED') {
+      payerItem.message = !professionalId
+        ? 'Defina um profissional responsável para validar o registro exigido pelo pagador.'
+        : `O profissional responsável ${professionalName || 'selecionado'} precisa ter registro profissional cadastrado para este pagador.`;
+      payerItem.evidence = {
+        ...payerItem.evidence,
+        professionalId,
+        professionalName
+      };
+    }
     if (!checklist.some((existing) => existing.key === payerItem.key)) {
       checklist.push(payerItem);
     }
@@ -549,6 +573,8 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
     payerRequirementSource: requirements.payerRequirementSource || null,
     appliedPayerRequirementId: requirements.appliedPayerRequirementId || null,
     professionalId,
+    professionalName,
+    professionalRegistryPresent,
     serviceType,
     room,
     locationType,

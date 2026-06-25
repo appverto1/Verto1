@@ -48,6 +48,8 @@ import {
   Paperclip,
   KeyRound,
   ShieldCheck,
+  LayoutGrid,
+  List,
 } from "lucide-react";
 import { TeamManagement } from "./TeamManagement";
 import { InvitationModal } from "./InvitationModal";
@@ -89,6 +91,12 @@ import {
   writeAgendaViewPreference,
   type AgendaView,
 } from "../utils/agendaViewPreference";
+import {
+  getPatientViewPreferenceKey,
+  readPatientViewPreference,
+  writePatientViewPreference,
+  type PatientViewMode,
+} from "../utils/patientViewPreference";
 import {
   formatDocument,
   maskCep,
@@ -797,6 +805,58 @@ export function CoordinatorDashboard({
     },
     [agendaViewPreferenceKey],
   );
+  const patientViewPreferenceKey = useMemo(
+    () => getPatientViewPreferenceKey(user),
+    [user?.id, user?.email, user?.activeWorkspaceId, user?.clinicId],
+  );
+  const [patientViewMode, setPatientViewMode] = useState<PatientViewMode>(() =>
+    readPatientViewPreference(patientViewPreferenceKey),
+  );
+  useEffect(() => {
+    setPatientViewMode(readPatientViewPreference(patientViewPreferenceKey));
+  }, [patientViewPreferenceKey]);
+  const handlePatientViewModeChange = useCallback(
+    (nextMode: PatientViewMode) => {
+      setPatientViewMode(nextMode);
+      writePatientViewPreference(patientViewPreferenceKey, nextMode);
+    },
+    [patientViewPreferenceKey],
+  );
+  const renderPatientViewModeToggle = () => (
+    <div
+      className="flex rounded-xl border border-slate-200 bg-slate-50 p-1"
+      aria-label="Modo de visualização dos pacientes"
+    >
+      <button
+        type="button"
+        title="Visualizar em cards"
+        aria-label="Visualizar pacientes em cards"
+        aria-pressed={patientViewMode === "cards"}
+        onClick={() => handlePatientViewModeChange("cards")}
+        className={`rounded-lg p-2 transition-colors ${
+          patientViewMode === "cards"
+            ? "bg-white text-[#7a32fc] shadow-sm"
+            : "text-slate-400 hover:text-slate-700"
+        }`}
+      >
+        <LayoutGrid size={16} />
+      </button>
+      <button
+        type="button"
+        title="Visualizar em lista"
+        aria-label="Visualizar pacientes em lista"
+        aria-pressed={patientViewMode === "list"}
+        onClick={() => handlePatientViewModeChange("list")}
+        className={`rounded-lg p-2 transition-colors ${
+          patientViewMode === "list"
+            ? "bg-white text-[#7a32fc] shadow-sm"
+            : "text-slate-400 hover:text-slate-700"
+        }`}
+      >
+        <List size={16} />
+      </button>
+    </div>
+  );
   const [professionalFilter, setProfessionalFilter] = useState("all");
   const [isAddSessionModalOpen, setIsAddSessionModalOpen] = useState(false);
   const [isQuickRegisterModalOpen, setIsQuickRegisterModalOpen] = useState(false);
@@ -846,6 +906,7 @@ export function CoordinatorDashboard({
   const [sessionLocationNotes, setSessionLocationNotes] = useState("");
   const [sessionCallLink, setSessionCallLink] = useState("");
   const [sessionProfessional, setSessionProfessional] = useState("");
+  const [sessionProfessionalId, setSessionProfessionalId] = useState("");
   const [sessionFinancialContextType, setSessionFinancialContextType] =
     useState<AppointmentFinancialContextType>("INSURANCE");
   const [sessionPayerId, setSessionPayerId] = useState("");
@@ -860,6 +921,10 @@ export function CoordinatorDashboard({
   const [isSessionSubmitting, setIsSessionSubmitting] = useState(false);
   const [sessionNumSessions, setSessionNumSessions] = useState(1);
   const [sessionRecurrencePattern, setSessionRecurrencePattern] = useState("weekly");
+  const [sessionApplyAuthorizationToRecurrence, setSessionApplyAuthorizationToRecurrence] =
+    useState(true);
+  const [sessionReuseGuideAcrossRecurrence, setSessionReuseGuideAcrossRecurrence] =
+    useState(false);
   const [scheduleConflictState, setScheduleConflictState] = useState<{
     loading: boolean;
     checked: boolean;
@@ -2618,11 +2683,28 @@ export function CoordinatorDashboard({
   const selectedSessionProfessional = useMemo(() => {
     const normalizedName = normalizeUtf8Text(sessionProfessional).trim();
     return (
-      therapistFilterOptions.find((member) => member.label === normalizedName) ||
+      therapistFilterOptions.find(
+        (member) => String(member.id || "") === String(sessionProfessionalId || ""),
+      ) ||
       therapistFilterOptions.find((member) => String(member.id || "") === normalizedName) ||
+      therapistFilterOptions.find((member) => member.label === normalizedName) ||
       null
     );
-  }, [sessionProfessional, therapistFilterOptions]);
+  }, [sessionProfessional, sessionProfessionalId, therapistFilterOptions]);
+  useEffect(() => {
+    if (!selectedSessionProfessional?.id || !selectedSessionProfessional?.label) return;
+    if (sessionProfessionalId !== String(selectedSessionProfessional.id)) {
+      setSessionProfessionalId(String(selectedSessionProfessional.id));
+    }
+    if (sessionProfessional !== selectedSessionProfessional.label) {
+      setSessionProfessional(selectedSessionProfessional.label);
+    }
+  }, [
+    selectedSessionProfessional?.id,
+    selectedSessionProfessional?.label,
+    sessionProfessional,
+    sessionProfessionalId,
+  ]);
 
   const selectedSessionRoom = useMemo(
     () => activeClinicRooms.find((room: any) => String(room?.id || "") === String(sessionRoom || "")) || null,
@@ -2730,7 +2812,7 @@ export function CoordinatorDashboard({
       sessionDate &&
       sessionTime &&
       sessionApproach &&
-      sessionProfessional &&
+      selectedSessionProfessional?.id &&
       sessionDurationMinutes >= 15 &&
       (sessionLocationType !== "clinica" || sessionRoom),
   );
@@ -2753,7 +2835,7 @@ export function CoordinatorDashboard({
 
   useEffect(() => {
     if (!isAddSessionModalOpen) return;
-    if (!sessionPatientName || !sessionDate || !sessionTime || !sessionApproach || !sessionProfessional) {
+    if (!sessionPatientName || !sessionDate || !sessionTime || !sessionApproach || !selectedSessionProfessional?.id) {
       setScheduleConflictState({ loading: false, checked: false, blocking: false, message: "", conflicts: [] });
       return;
     }
@@ -2865,6 +2947,7 @@ export function CoordinatorDashboard({
     setSessionCallLink("");
     setSessionApproach("");
     setSessionProfessional("");
+    setSessionProfessionalId("");
     setSessionFinancialContextType("INSURANCE");
     setSessionPayerId("");
     setSessionPayerNameSnapshot("");
@@ -2874,6 +2957,8 @@ export function CoordinatorDashboard({
     setSessionAuthorizationCode("");
     setSessionNumSessions(1);
     setSessionRecurrencePattern("weekly");
+    setSessionApplyAuthorizationToRecurrence(true);
+    setSessionReuseGuideAcrossRecurrence(false);
     setEditingAppointmentId(null);
     setAppointmentEditScope("single");
     setScheduleConflictState({ loading: false, checked: false, blocking: false, message: "", conflicts: [] });
@@ -3037,13 +3122,13 @@ export function CoordinatorDashboard({
         guide_number: sessionGuideNumber,
         authorizationCode: sessionAuthorizationCode,
         authorization_code: sessionAuthorizationCode,
-        professional: sessionProfessional,
-        professionalId: selectedSessionProfessional?.id,
-        professional_id: selectedSessionProfessional?.id,
-        therapistId: selectedSessionProfessional?.id,
-        therapist_id: selectedSessionProfessional?.id,
-        therapistName: sessionProfessional,
-        therapist_name: sessionProfessional,
+        professional: selectedSessionProfessional?.label || sessionProfessional,
+        professionalId: selectedSessionProfessional?.id || sessionProfessionalId,
+        professional_id: selectedSessionProfessional?.id || sessionProfessionalId,
+        therapistId: selectedSessionProfessional?.id || sessionProfessionalId,
+        therapist_id: selectedSessionProfessional?.id || sessionProfessionalId,
+        therapistName: selectedSessionProfessional?.label || sessionProfessional,
+        therapist_name: selectedSessionProfessional?.label || sessionProfessional,
         recurrencePattern: sessionRecurrencePattern,
         recurrenceScope: isEditingRecurringAppointment
           ? appointmentEditScope
@@ -3132,14 +3217,22 @@ export function CoordinatorDashboard({
       guide_number: sessionGuideNumber,
       authorizationCode: sessionAuthorizationCode,
       authorization_code: sessionAuthorizationCode,
-      professional: sessionProfessional,
-      professionalName: sessionProfessional,
-      professionalId: selectedSessionProfessional?.id,
-      professional_id: selectedSessionProfessional?.id,
-      therapistId: selectedSessionProfessional?.id,
-      therapist_id: selectedSessionProfessional?.id,
+      professional: selectedSessionProfessional?.label || sessionProfessional,
+      professionalName: selectedSessionProfessional?.label || sessionProfessional,
+      professionalId: selectedSessionProfessional?.id || sessionProfessionalId,
+      professional_id: selectedSessionProfessional?.id || sessionProfessionalId,
+      therapistId: selectedSessionProfessional?.id || sessionProfessionalId,
+      therapist_id: selectedSessionProfessional?.id || sessionProfessionalId,
       numSessions: Math.min(52, Math.max(1, Number(sessionNumSessions) || 1)),
       recurrencePattern: sessionRecurrencePattern,
+      applyAuthorizationToRecurrence:
+        Number(sessionNumSessions) <= 1 || sessionApplyAuthorizationToRecurrence,
+      apply_authorization_to_recurrence:
+        Number(sessionNumSessions) <= 1 || sessionApplyAuthorizationToRecurrence,
+      reuseGuideAcrossRecurrence:
+        Number(sessionNumSessions) > 1 && sessionReuseGuideAcrossRecurrence,
+      reuse_guide_across_recurrence:
+        Number(sessionNumSessions) > 1 && sessionReuseGuideAcrossRecurrence,
     };
     const result = await onScheduleSession(newSession);
     if (result && !result.success) {
@@ -4183,15 +4276,40 @@ export function CoordinatorDashboard({
     );
     setSessionDurationOption(getAppointmentDurationOption(duration));
     setSessionCustomDuration(String(duration));
-    const nextLocationType = normalizeScheduleLocationType(
-      appointment.location_type || appointment.locationType || appointment.location || (appointment.room ? "clinica" : "online"),
-    );
+    const appointmentRoomId = String(
+      appointment.roomId || appointment.room_id || appointment.room || "",
+    ).trim();
+    const nextLocationType = appointmentRoomId
+      ? "clinica"
+      : normalizeScheduleLocationType(
+          appointment.location_type ||
+            appointment.locationType ||
+            appointment.location ||
+            "online",
+        );
     setSessionLocationType(nextLocationType);
-    setSessionRoom(nextLocationType === "clinica" ? String(appointment.roomId || appointment.room_id || appointment.room || "") : "");
+    setSessionRoom(nextLocationType === "clinica" ? appointmentRoomId : "");
     setSessionLocationNotes(String(appointment.locationNotes || appointment.location_notes || ""));
     setSessionCallLink(String(appointment.callLink || appointment.call_link || ""));
+    const appointmentProfessionalId = String(
+      appointment.therapistId ||
+        appointment.therapist_id ||
+        appointment.professionalId ||
+        appointment.professional_id ||
+        "",
+    ).trim();
+    const appointmentProfessionalName = String(
+      appointment.therapistName ||
+        appointment.therapist_name ||
+        appointment.professionalName ||
+        appointment.professional ||
+        "",
+    ).trim();
+    setSessionProfessionalId(appointmentProfessionalId);
     setSessionProfessional(
-      appointment.therapistName || appointment.professional || "",
+      ["equipe", "team"].includes(appointmentProfessionalName.toLowerCase())
+        ? ""
+        : appointmentProfessionalName,
     );
     setSessionFinancialContextType(
       normalizeAppointmentFinancialContextType(
@@ -8662,21 +8780,24 @@ export function CoordinatorDashboard({
                 className="bg-white p-4 sm:p-8 rounded-[32px] sm:rounded-[40px] shadow-sm border border-slate-100"
               >
                 <div className="flex flex-col gap-3 mb-8">
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
                     <h3 className="text-lg sm:text-xl font-bold text-slate-900">
                       Gestão de Pacientes
                     </h3>
-                    {canCreatePatients && (
-                      <button
-                        onClick={() => {
-                          resetPatientForm();
-                          setIsPatientRegistrationModalOpen(true);
-                        }}
-                        className="px-4 sm:px-6 py-2 sm:py-3 bg-[#7a32fc] text-white rounded-2xl font-bold text-xs sm:text-sm shadow-lg shadow-purple-500/20 hover:bg-blue-700 transition-all"
-                      >
-                        Novo Paciente
-                      </button>
-                    )}
+                    <div className="flex items-center gap-2">
+                      {renderPatientViewModeToggle()}
+                      {canCreatePatients && (
+                        <button
+                          onClick={() => {
+                            resetPatientForm();
+                            setIsPatientRegistrationModalOpen(true);
+                          }}
+                          className="px-4 sm:px-6 py-2 sm:py-3 bg-[#7a32fc] text-white rounded-2xl font-bold text-xs sm:text-sm shadow-lg shadow-purple-500/20 hover:bg-blue-700 transition-all"
+                        >
+                          Novo Paciente
+                        </button>
+                      )}
+                    </div>
                   </div>
                   {!isReceptionist && (
                     <div className="w-full sm:w-[360px]">
@@ -8717,7 +8838,13 @@ export function CoordinatorDashboard({
                     </div>
                   )}
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
+                <div
+                  className={
+                    patientViewMode === "list"
+                      ? "grid grid-cols-1 gap-3"
+                      : "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6"
+                  }
+                >
                   {visiblePatients.map((patient, i) => (
                     <div
                       key={i}
@@ -8740,7 +8867,7 @@ export function CoordinatorDashboard({
                           onPatientClick(patient.id, { tab: "history" });
                         }
                       }}
-                      className={`p-4 sm:p-6 rounded-3xl border transition-all group relative cursor-pointer focus:outline-none focus:ring-4 focus:ring-[#7a32fc]/15 ${
+                      className={`${patientViewMode === "list" ? "p-4 rounded-2xl" : "p-4 sm:p-6 rounded-3xl"} border transition-all group relative cursor-pointer focus:outline-none focus:ring-4 focus:ring-[#7a32fc]/15 ${
                         patientQuickFilter === "birthdaysToday"
                           ? "border-pink-200 bg-pink-50/70 hover:border-pink-300"
                           : "border-slate-100 bg-slate-50 hover:border-blue-500/30"
@@ -10106,20 +10233,29 @@ export function CoordinatorDashboard({
                 <select
                   className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
                   placeholder="Nome do Profissional"
-                  value={sessionProfessional}
-                  onChange={(e) => setSessionProfessional(e.target.value)}
+                  value={sessionProfessionalId}
+                  onChange={(e) => {
+                    const nextId = e.target.value;
+                    const nextProfessional = therapistFilterOptions.find(
+                      (member) => String(member.id) === nextId,
+                    );
+                    setSessionProfessionalId(nextId);
+                    setSessionProfessional(nextProfessional?.label || "");
+                  }}
                 >
                   <option value="">Selecione...</option>
                   {therapistFilterOptions.map((member) => (
-                    <option key={member.id} value={member.label}>
+                    <option key={member.id} value={member.id}>
                       {member.label}
                     </option>
                   ))}
-                  {sessionProfessional &&
+                  {sessionProfessionalId &&
                     !therapistFilterOptions.some(
-                      (member) => member.label === sessionProfessional,
+                      (member) => String(member.id) === sessionProfessionalId,
                     ) && (
-                      <option value={sessionProfessional}>{sessionProfessional}</option>
+                      <option value={sessionProfessionalId} disabled>
+                        Profissional não definido
+                      </option>
                   )}
                 </select>
               </div>
@@ -10226,6 +10362,39 @@ export function CoordinatorDashboard({
                         placeholder="Código informado pelo pagador"
                       />
                     </label>
+                    {!editingAppointmentId && Number(sessionNumSessions) > 1 && (
+                      <div className="sm:col-span-2 space-y-3 rounded-2xl border border-violet-100 bg-white p-3">
+                        <label className="flex items-start gap-3 text-xs font-semibold normal-case tracking-normal text-slate-700">
+                          <input
+                            type="checkbox"
+                            className="mt-0.5 h-4 w-4 rounded border-slate-300 text-[#7a32fc]"
+                            checked={sessionApplyAuthorizationToRecurrence}
+                            onChange={(event) =>
+                              setSessionApplyAuthorizationToRecurrence(event.target.checked)
+                            }
+                          />
+                          <span>
+                            Aplicar esta autorização às {sessionNumSessions} sessões
+                          </span>
+                        </label>
+                        <label className="flex items-start gap-3 text-xs font-semibold normal-case tracking-normal text-slate-700">
+                          <input
+                            type="checkbox"
+                            className="mt-0.5 h-4 w-4 rounded border-slate-300 text-[#7a32fc]"
+                            checked={sessionReuseGuideAcrossRecurrence}
+                            onChange={(event) =>
+                              setSessionReuseGuideAcrossRecurrence(event.target.checked)
+                            }
+                          />
+                          <span>Usar esta mesma guia em todas as sessões</span>
+                        </label>
+                        {!sessionReuseGuideAcrossRecurrence && (
+                          <p className="text-[11px] font-medium text-slate-500">
+                            A primeira consulta mantém a guia informada. As demais ficam com guia pendente por ocorrência.
+                          </p>
+                        )}
+                      </div>
+                    )}
                   </div>
                   {sessionFinancialContextError && (
                     <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">

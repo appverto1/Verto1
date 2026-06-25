@@ -123,6 +123,66 @@ test('sem profissional vira PENDING', () => {
   assert.equal(result.readinessStatus, 'PENDING');
 });
 
+test('registro profissional válido do responsável satisfaz exigência do pagador', () => {
+  const result = evaluateAppointmentClosureReadiness({
+    ...baseInput,
+    professional: {
+      id: 'professional-1',
+      name: 'Terapeuta Mateus',
+      council_number: '12/3456'
+    },
+    requirements: {
+      requireProfessionalRegistry: true
+    }
+  });
+  const registryCheck = result.checklist.find(
+    (item) => item.key === 'payer_professional_registry',
+  );
+  assert.equal(registryCheck?.status, 'PASSED');
+  assert.equal(registryCheck?.message, 'Registro profissional presente.');
+});
+
+test('registro ausente identifica o profissional responsável real', () => {
+  const result = evaluateAppointmentClosureReadiness({
+    ...baseInput,
+    professional: {
+      id: 'professional-1',
+      name: 'Terapeuta Mateus'
+    },
+    requirements: {
+      requireProfessionalRegistry: true
+    }
+  });
+  const registryCheck = result.checklist.find(
+    (item) => item.key === 'payer_professional_registry',
+  );
+  assert.equal(registryCheck?.status, 'FAILED');
+  assert.equal(
+    registryCheck?.message,
+    'O profissional responsável Terapeuta Mateus precisa ter registro profissional cadastrado para este pagador.',
+  );
+});
+
+test('profissional ausente gera pendência específica sem usar Equipe', () => {
+  const result = evaluateAppointmentClosureReadiness({
+    ...baseInput,
+    appointment: { ...baseInput.appointment, therapist_id: null },
+    abaSession: { ...baseInput.abaSession, therapist_id: null },
+    professional: null,
+    requirements: {
+      requireProfessionalRegistry: true
+    }
+  });
+  const registryCheck = result.checklist.find(
+    (item) => item.key === 'payer_professional_registry',
+  );
+  assert.equal(
+    registryCheck?.message,
+    'Defina um profissional responsável para validar o registro exigido pelo pagador.',
+  );
+  assert.doesNotMatch(String(registryCheck?.message || ''), /Equipe/);
+});
+
 test('sem paciente não passa como READY', () => {
   const result = evaluateAppointmentClosureReadiness({
     ...baseInput,

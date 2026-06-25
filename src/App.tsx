@@ -22,6 +22,7 @@ import {
   normalizeAppointmentTime,
   normalizeDurationMinutes,
   normalizeScheduleLocationType,
+  resolveRecurringAppointmentBillingFields,
 } from './utils/scheduling';
 import {
   mapPatientProfileTypeToLegacyPortalType,
@@ -5016,9 +5017,16 @@ export default function App() {
       count: numSessions,
       pattern: sess.recurrencePattern || 'weekly',
     });
-    const locationType = normalizeScheduleLocationType(sess.locationType || sess.location_type || (sess.room ? 'clinica' : 'outro'));
+    const requestedRoomId = String(
+      sess.roomId || sess.room_id || sess.room || '',
+    ).trim();
+    const locationType = requestedRoomId
+      ? 'clinica'
+      : normalizeScheduleLocationType(
+          sess.locationType || sess.location_type || 'outro',
+        );
     const durationMinutes = normalizeDurationMinutes(sess.durationMinutes || sess.duration_minutes || 50, 50);
-    const roomId = locationType === 'clinica' ? String(sess.roomId || sess.room_id || sess.room || '').trim() : '';
+    const roomId = locationType === 'clinica' ? requestedRoomId : '';
     const roomName = locationType === 'clinica'
       ? String(sess.roomName || sess.room_name || rooms.find((room: any) => String(room?.id || '') === roomId)?.name || roomId).trim()
       : '';
@@ -5098,6 +5106,26 @@ export default function App() {
             ''
         ).trim()
       : '';
+    const recurringAuthorizationEnabled =
+      numSessions <= 1 ||
+      Boolean(
+        sess.applyAuthorizationToRecurrence ??
+          sess.apply_authorization_to_recurrence ??
+          true,
+      );
+    const recurringGuideReuseEnabled =
+      numSessions > 1 &&
+      Boolean(
+        sess.reuseGuideAcrossRecurrence ??
+          sess.reuse_guide_across_recurrence ??
+          false,
+      );
+    const sourceGuideNumber = String(
+      sess.guideNumber || sess.guide_number || '',
+    ).trim();
+    const sourceAuthorizationCode = String(
+      sess.authorizationCode || sess.authorization_code || '',
+    ).trim();
     const newItems = [];
     const conflicts: string[] = [];
 
@@ -5119,7 +5147,14 @@ export default function App() {
         );
         if (!appointmentTimesOverlap(startTime, endTime, item.time, existingEndTime)) return;
 
-        const existingLocationType = normalizeScheduleLocationType(item.location_type || item.locationType || item.location || (item.room ? 'clinica' : 'outro'));
+        const existingRoomId = String(
+          item.roomId || item.room_id || item.room || '',
+        ).trim();
+        const existingLocationType = existingRoomId
+          ? 'clinica'
+          : normalizeScheduleLocationType(
+              item.location_type || item.locationType || item.location || 'outro',
+            );
         const sameRoom =
           locationType === 'clinica' &&
           existingLocationType === 'clinica' &&
@@ -5157,6 +5192,14 @@ export default function App() {
         }
         const scheduledAt = startAt.toISOString();
         const scheduledEndAt = endAt.toISOString();
+        const occurrenceBillingFields = resolveRecurringAppointmentBillingFields({
+          occurrenceIndex: i,
+          totalOccurrences: numSessions,
+          guideNumber: sourceGuideNumber,
+          authorizationCode: sourceAuthorizationCode,
+          applyAuthorizationToRecurrence: recurringAuthorizationEnabled,
+          reuseGuideAcrossRecurrence: recurringGuideReuseEnabled,
+        });
         newItems.push({
           id: appointmentId,
           patientId: pid,
@@ -5217,10 +5260,14 @@ export default function App() {
           insurance_plan_name: effectiveInsurancePlanName,
           insuranceCardNumber: effectiveInsuranceCardNumber,
           insurance_card_number: effectiveInsuranceCardNumber,
-          guideNumber: sess.guideNumber || sess.guide_number || '',
-          guide_number: sess.guideNumber || sess.guide_number || '',
-          authorizationCode: sess.authorizationCode || sess.authorization_code || '',
-          authorization_code: sess.authorizationCode || sess.authorization_code || '',
+          guideNumber: occurrenceBillingFields.guideNumber,
+          guide_number: occurrenceBillingFields.guideNumber,
+          authorizationCode: occurrenceBillingFields.authorizationCode,
+          authorization_code: occurrenceBillingFields.authorizationCode,
+          applyAuthorizationToRecurrence: recurringAuthorizationEnabled,
+          apply_authorization_to_recurrence: recurringAuthorizationEnabled,
+          reuseGuideAcrossRecurrence: recurringGuideReuseEnabled,
+          reuse_guide_across_recurrence: recurringGuideReuseEnabled,
           isRecurring: numSessions > 1,
           is_recurring: numSessions > 1,
           recurrenceGroupId,

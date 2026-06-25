@@ -395,7 +395,14 @@ export function getAppointmentRoomId(appointment: any): string {
 }
 
 export function getAppointmentLocationType(appointment: any): ScheduleLocationType {
-  return normalizeScheduleLocationType(appointment?.location_type || appointment?.locationType || appointment?.location || appointment?.local || appointment?.room);
+  return getAppointmentRoomId(appointment)
+    ? 'clinica'
+    : normalizeScheduleLocationType(
+        appointment?.location_type ||
+          appointment?.locationType ||
+          appointment?.location ||
+          appointment?.local
+      );
 }
 
 export function getAppointmentPatientId(appointment: any): string {
@@ -438,6 +445,35 @@ export function getAppointmentProfessionalNames(appointment: any): string[] {
 
 export function getAppointmentServiceType(appointment: any): string {
   return String(appointment?.service_type || appointment?.serviceType || appointment?.type || appointment?.approach || 'Sessao').trim();
+}
+
+export function resolveRecurringAppointmentBillingFields(input: {
+  occurrenceIndex: number;
+  totalOccurrences: number;
+  guideNumber?: string | null;
+  authorizationCode?: string | null;
+  applyAuthorizationToRecurrence?: boolean;
+  reuseGuideAcrossRecurrence?: boolean;
+}) {
+  const occurrenceIndex = Math.max(0, Number(input.occurrenceIndex) || 0);
+  const totalOccurrences = Math.max(1, Number(input.totalOccurrences) || 1);
+  const guideNumber = String(input.guideNumber || '').trim();
+  const authorizationCode = String(input.authorizationCode || '').trim();
+  const isFirstOccurrence = occurrenceIndex === 0;
+  return {
+    authorizationCode:
+      totalOccurrences === 1 ||
+      input.applyAuthorizationToRecurrence !== false ||
+      isFirstOccurrence
+        ? authorizationCode
+        : '',
+    guideNumber:
+      totalOccurrences === 1 ||
+      input.reuseGuideAcrossRecurrence === true ||
+      isFirstOccurrence
+        ? guideNumber
+        : '',
+  };
 }
 
 export function formatMinutesHuman(minutes: number): string {

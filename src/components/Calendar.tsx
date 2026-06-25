@@ -671,8 +671,12 @@ const locationTypeLabel = (value: any) => {
 const resolveRoomInfo = (event: any, roomLookup?: Map<string, any>) => {
   const roomId = String(event?.room_id || event?.roomId || '').trim();
   const matchedRoom = roomId ? roomLookup?.get(roomId) : null;
-  const locationType = event?.location_type || event?.locationType || event?.location || (roomId ? 'clinica' : '');
-  const locationLabel = event?.location_label || event?.locationLabel || locationTypeLabel(locationType);
+  const locationType = roomId
+    ? 'clinica'
+    : event?.location_type || event?.locationType || event?.location || '';
+  const locationLabel = roomId
+    ? 'Clínica'
+    : event?.location_label || event?.locationLabel || locationTypeLabel(locationType);
   const roomName =
     sanitizeHumanRoomName(event?.room_name) ||
     sanitizeHumanRoomName(event?.roomName) ||
@@ -873,9 +877,27 @@ const normalizeClinicalEvent = (event: any, roomLookup?: Map<string, any>) => {
     source?.name,
     event?.name
   ]);
-  const therapistName = event?.therapist_name || event?.therapistName || event?.therapistDisplayName || event?.professional || 'Equipe';
+  const rawTherapistName =
+    event?.responsible_professional_name ||
+    event?.responsibleProfessionalName ||
+    event?.therapist_name ||
+    event?.therapistName ||
+    event?.therapistDisplayName ||
+    event?.professional ||
+    '';
+  const therapistName = ['equipe', 'team'].includes(
+    String(rawTherapistName).trim().toLowerCase(),
+  )
+    ? ''
+    : String(rawTherapistName).trim();
   const patientId = event?.patient_id || event?.patientId || source?.patient_id || source?.patientId || null;
-  const therapistId = event?.therapist_id || event?.therapistId || event?.professionalId || null;
+  const therapistId =
+    event?.responsible_professional_id ||
+    event?.responsibleProfessionalId ||
+    event?.therapist_id ||
+    event?.therapistId ||
+    event?.professionalId ||
+    null;
   const type = event?.type || event?.approach || 'Sessão';
   const roomInfo = resolveRoomInfo(event, roomLookup);
   const closureSource = event?.closure && typeof event.closure === 'object' ? event.closure : {};
@@ -896,6 +918,10 @@ const normalizeClinicalEvent = (event: any, roomLookup?: Map<string, any>) => {
     therapistId,
     therapist_name: therapistName,
     therapistName,
+    responsible_professional_id: therapistId,
+    responsibleProfessionalId: therapistId,
+    responsible_professional_name: therapistName || null,
+    responsibleProfessionalName: therapistName || null,
     type,
     status: event?.status || 'scheduled',
     patient_response: event?.patient_response || event?.patientResponse || source?.patient_response || source?.patientResponse || null,
@@ -2546,7 +2572,7 @@ export const ClinicalAgendaBoard = ({
                           </div>
                           <p className="mt-1 truncate text-sm font-semibold">{event.patientName}</p>
                           <p className={`mt-1 truncate text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                            {event.type || 'Sessão'} · {event.therapistName || 'Equipe'} · {getRoomDisplayLine(event)}
+                            {event.type || 'Sessão'} · {event.therapistName || 'Profissional não definido'} · {getRoomDisplayLine(event)}
                           </p>
                         </div>
                         <div className="flex flex-wrap gap-1.5">
@@ -2897,8 +2923,8 @@ export const ClinicalAgendaBoard = ({
               {[
                 { label: 'Duração', value: `${Math.max(1, Math.round((detailEvent.end.getTime() - detailEvent.start.getTime()) / 60000))} min`, icon: Clock },
                 { label: 'Sala/local', value: getRoomDisplayLine(detailEvent), icon: MapPin },
-                { label: 'Equipe', value: detailEvent.therapistName || 'Equipe', icon: Users },
-                { label: 'Responsável', value: detailEvent.therapistName || 'Não informado', icon: User }
+                { label: 'Equipe', value: detailEvent.therapistName || 'Profissional não definido', icon: Users },
+                { label: 'Responsável', value: detailEvent.therapistName || 'Profissional não definido', icon: User }
               ].map((item) => {
                 const Icon = item.icon;
                 return (
