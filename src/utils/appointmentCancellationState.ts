@@ -53,6 +53,8 @@ const isPatientSource = (value: unknown) => {
     normalized === 'responsible' ||
     normalized === 'family' ||
     normalized === 'appointment_status_audit_logs' ||
+    normalized.includes('patient_request') ||
+    normalized.includes('patient') ||
     normalized.includes('patient_portal') ||
     normalized.includes('responsible') ||
     normalized.includes('family')
@@ -89,7 +91,7 @@ export function resolveAppointmentCancellationState(appointment: any): Appointme
     appointment?.cancellationSource ||
     appointment?.cancellation_source ||
     null;
-  const cancelled = isCancelledStatus(appointmentStatus) || isCancelledStatus(confirmationStatus) || isPatientDecline(confirmationStatus);
+  const cancelled = isCancelledStatus(appointmentStatus);
 
   if (!cancelled) {
     return {
@@ -103,7 +105,7 @@ export function resolveAppointmentCancellationState(appointment: any): Appointme
   }
 
   const patientDecline = isPatientDecline(confirmationStatus);
-  if (patientDecline && (isPatientSource(source) || !source)) {
+  if (patientDecline && isPatientSource(source)) {
     return {
       isCancelled: true,
       origin: 'patient',

@@ -69,6 +69,11 @@ test('portal notifications derive clinic branding from linked patient when notif
     notificationRouteSlice.indexOf('const clinicId = sanitizeString('),
     notificationRouteSlice.indexOf('const branding = await resolveNotificationClinicBranding(clinicId);')
   );
+  const patientNameResolutionStart = notificationRouteSlice.indexOf('const patientName =');
+  const notificationPatientNameResolutionSlice = notificationRouteSlice.slice(
+    patientNameResolutionStart,
+    notificationRouteSlice.indexOf('const scheduledAt =', patientNameResolutionStart)
+  );
   assert.match(notificationRouteSlice, /patientClinicIdsById/);
   assert.match(notificationRouteSlice, /appointmentContextById/);
   assert.match(notificationRouteSlice, /\.select\('id,clinic_id,patient_id,patient_email,scheduled_at,scheduled_start_at,source_payload'\)/);
@@ -86,6 +91,11 @@ test('portal notifications derive clinic branding from linked patient when notif
     notificationClinicResolutionSlice.indexOf('patientClinicIdsById.get(patientId)') <
       notificationClinicResolutionSlice.indexOf('row?.organization_id'),
     'organization_id nao deve ganhar do clinic_id do paciente.'
+  );
+  assert.ok(
+    notificationPatientNameResolutionSlice.indexOf('patientNamesById.get(patientId)') <
+      notificationPatientNameResolutionSlice.indexOf('metadataPatientName'),
+    'Nome real do cadastro do paciente deve ganhar de metadados incompletos da notificacao.'
   );
 });
 

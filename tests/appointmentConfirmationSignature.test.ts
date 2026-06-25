@@ -93,19 +93,19 @@ test('appointment reminder popup is clinic-branded and neutral', () => {
   assert.doesNotMatch(appCode, /bg-gradient-to-br from-violet-600 via-fuchsia-500 to-blue-500/);
 });
 
-test('portal appointment response buttons write legacy-compatible appointment values', () => {
+test('portal appointment response buttons keep requests pending for clinic decision', () => {
   const portalActionsSlice = serverCode.slice(
     serverCode.indexOf("app.post('/api/portal/appointments/:appointmentId/confirm'"),
     serverCode.indexOf("app.post('/api/portal/sessions/:sessionId/sign'")
   );
   assert.match(portalActionsSlice, /status:\s*'confirmed'/);
-  assert.match(portalActionsSlice, /status:\s*'reschedule'/);
-  assert.match(portalActionsSlice, /status:\s*'cancelled'/);
+  assert.doesNotMatch(portalActionsSlice, /status:\s*'reschedule'/);
+  assert.doesNotMatch(portalActionsSlice, /status:\s*'cancelled'/);
   assert.match(portalActionsSlice, /patient_confirmation_status:\s*'confirmed'/);
   assert.match(portalActionsSlice, /patient_confirmation_status:\s*'RESCHEDULE_REQUESTED'/);
   assert.match(portalActionsSlice, /patient_confirmation_status:\s*'CANCEL_REQUESTED'/);
-  assert.match(portalActionsSlice, /patient_response:\s*'cancelled'/);
-  assert.doesNotMatch(portalActionsSlice, /patient_response:\s*'cancel_requested'/);
+  assert.match(portalActionsSlice, /patient_response:\s*'cancel_requested'/);
+  assert.doesNotMatch(portalActionsSlice, /patient_response:\s*'cancelled'/);
   assert.match(serverCode, /hasMissingFinancialSchema\(error\) \|\| isMissingRelationError\(error\)/);
 });
 
@@ -132,6 +132,11 @@ test('frontend exposes portal actions and clinic agenda request decisions withou
   assert.match(calendarCode, /actionRequests/);
   assert.match(calendarCode, /approveAppointmentActionRequest/);
   assert.match(calendarCode, /rejectAppointmentActionRequest/);
+  assert.match(calendarCode, /Cancelar consulta/);
+  assert.match(calendarCode, /Remarcar consulta/);
+  assert.match(calendarCode, /Manter horário/);
+  assert.doesNotMatch(calendarCode, /Aprovar cancelamento/);
+  assert.doesNotMatch(calendarCode, /Recusar/);
   assert.doesNotMatch(patientDashboardCode, /dangerouslySetInnerHTML/);
   assert.doesNotMatch(patientDashboardCode, /PostgREST|Railway|schema cache/i);
 });

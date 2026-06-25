@@ -7274,7 +7274,7 @@ function normalizeAppointmentResponseAction(action: unknown): 'confirmed' | 'res
   const normalized = sanitizeString(action, 40).toLowerCase();
   if (['verto_confirm_appointment', 'confirm', 'confirmed', 'confirmar', 'accepted', 'accept'].includes(normalized)) return 'confirmed';
   if (['verto_reschedule_appointment', 'reschedule', 'rescheduled', 'remarcar', 'remarcado'].includes(normalized)) return 'reschedule';
-  if (['cancel', 'canceled', 'cancelled', 'cancelar', 'cancelado', 'declined', 'decline', 'recusar', 'recusado'].includes(normalized)) return 'canceled';
+  if (['cancel', 'canceled', 'cancelled', 'cancel_requested', 'cancelar', 'cancelado', 'declined', 'decline', 'recusar', 'recusado'].includes(normalized)) return 'canceled';
   return '';
 }
 
@@ -7302,7 +7302,7 @@ function normalizePatientConfirmationStatusForAgenda(value: unknown, fallbackSta
   const raw = sanitizeString(value, 80);
   const normalized = normalizeOperationalAppointmentStatus(raw);
   if (normalized === 'CONFIRMED') return 'confirmed';
-  if (normalized === 'RESCHEDULE_REQUESTED' || normalized === 'RESCHEDULED') return 'reschedule_requested';
+  if (normalized === 'RESCHEDULE_REQUESTED') return 'reschedule_requested';
   if (normalized === 'CANCEL_REQUESTED' || normalized === 'CANCELLED') return 'declined';
   const response = normalizeAppointmentResponseAction(raw);
   if (response === 'confirmed') return 'confirmed';
@@ -7310,7 +7310,7 @@ function normalizePatientConfirmationStatusForAgenda(value: unknown, fallbackSta
   if (response === 'canceled') return 'declined';
   const fallback = normalizeOperationalAppointmentStatus(fallbackStatus);
   if (fallback === 'CONFIRMED') return 'confirmed';
-  if (fallback === 'RESCHEDULE_REQUESTED' || fallback === 'RESCHEDULED') return 'reschedule_requested';
+  if (fallback === 'RESCHEDULE_REQUESTED') return 'reschedule_requested';
   if (fallback === 'CANCEL_REQUESTED' || fallback === 'CANCELLED') return 'declined';
   return 'pending';
 }
@@ -7318,8 +7318,8 @@ function normalizePatientConfirmationStatusForAgenda(value: unknown, fallbackSta
 function getPatientConfirmationLabelForAgenda(status: unknown): string {
   const normalized = normalizePatientConfirmationStatusForAgenda(status);
   if (normalized === 'confirmed') return 'CONFIRMADO';
-  if (normalized === 'reschedule_requested') return 'REMARCAR';
-  if (normalized === 'declined') return 'CANCELADO PELO PACIENTE';
+  if (normalized === 'reschedule_requested') return 'REMARCAÇÃO SOLICITADA';
+  if (normalized === 'declined') return 'CANCELAMENTO SOLICITADO';
   return 'PENDENTE';
 }
 
@@ -7350,7 +7350,7 @@ function buildPatientConfirmationStateForAgenda(params: {
 
 function resolveCalendarCancellationState(event: any, state: any) {
   const eventStatus = normalizeOperationalAppointmentStatus(event?.status || event?.appointment_status);
-  if (eventStatus !== 'CANCELLED' && eventStatus !== 'CANCEL_REQUESTED') return null;
+  if (eventStatus !== 'CANCELLED') return null;
 
   const source = sanitizeString(
     event?.patientConfirmationSource ||
@@ -7374,6 +7374,8 @@ function resolveCalendarCancellationState(event: any, state: any) {
     source === 'family' ||
     (source === 'appointments' && explicitPatientDecline) ||
     source === 'appointment_status_audit_logs' ||
+    source.includes('patient_request') ||
+    source.includes('patient') ||
     source.includes('patient_portal') ||
     source.includes('responsible') ||
     source.includes('family');
@@ -29127,6 +29129,15 @@ async function startServer() {
     const labels = candidates.map((value) => sanitizeString(value, 180)).filter(Boolean);
     return labels.find((label) => !isGenericCalendarPatientName(label)) || labels[0] || '';
   };
+  const isMoreCompleteCalendarPatientName = (candidate: string, current: string) => {
+    const cleanCandidate = sanitizeString(candidate, 180);
+    const cleanCurrent = sanitizeString(current, 180);
+    if (!cleanCandidate) return false;
+    if (!cleanCurrent || isGenericCalendarPatientName(cleanCurrent)) return true;
+    const candidateParts = cleanCandidate.split(/\s+/).filter(Boolean).length;
+    const currentParts = cleanCurrent.split(/\s+/).filter(Boolean).length;
+    return candidateParts > currentParts || (candidateParts === currentParts && cleanCandidate.length > cleanCurrent.length + 2);
+  };
 
   const hydrateCalendarPatientNames = async (rows: any[], clinicId: string) => {
     const safeClinicId = sanitizeString(clinicId, 120);
@@ -29159,7 +29170,7 @@ async function startServer() {
     const hydrateRowsFromKnownNames = (sourceRows: any[]) => sourceRows.map((row: any) => {
       const patientId = readRowPatientId(row);
       const hydratedName = knownNamesById.get(patientId);
-      if (!hydratedName || !isGenericCalendarPatientName(readRowPatientName(row))) return row;
+      if (!hydratedName || !isMoreCompleteCalendarPatientName(hydratedName, readRowPatientName(row))) return row;
       return {
         ...row,
         patient_name: hydratedName,
@@ -29172,7 +29183,7 @@ async function startServer() {
       .map((row: any) => {
         const patientId = readRowPatientId(row);
         const currentName = readRowPatientName(row);
-        return isUuid(patientId) && isGenericCalendarPatientName(currentName) ? patientId : '';
+        return isUuid(patientId) && (!currentName || isGenericCalendarPatientName(currentName) || currentName.split(/\s+/).filter(Boolean).length < 2) ? patientId : '';
       })
       .filter(Boolean)));
     if (idsNeedingHydration.length === 0) return hydratedRows;
@@ -30138,9 +30149,9 @@ async function startServer() {
         const metadataPatientName = sanitizeString(metadata.patientName || metadata.patient_name, 160);
         const appointmentPatientName = sanitizeString(appointmentContext?.patientName, 160);
         const patientName =
-          (!isGenericCalendarPatientName(metadataPatientName) ? metadataPatientName : '') ||
           patientNamesById.get(patientId) ||
           (!isGenericCalendarPatientName(appointmentPatientName) ? appointmentPatientName : '') ||
+          (!isGenericCalendarPatientName(metadataPatientName) ? metadataPatientName : '') ||
           'Paciente';
         const scheduledAt = sanitizeString(metadata.scheduledAt || row?.scheduled_for || appointmentContext?.scheduledAt, 120);
         const normalizedMetadata = {
@@ -30271,6 +30282,11 @@ async function startServer() {
         : null;
     const roomName = sanitizePortalRoomName(row?.room_name || source?.room_name || source?.roomName);
     const locationType = normalizeScheduleLocationType(row?.location_type || source?.location_type || source?.locationType || (roomName ? 'clinica' : 'outro'));
+    const locationLabel = locationType === 'online'
+      ? 'Online'
+      : locationType === 'clinica'
+        ? roomName || 'Sala não informada'
+        : sanitizeString(row?.location_notes || source?.locationLabel || source?.location_label, 180) || 'Local informado pela clínica';
     const serviceType = sanitizeString(row?.service_type || row?.approach || source?.service_type || source?.type, 120) || 'Sessão';
     const clinicId = sanitizeString(row?.clinic_id || row?.clinicId || row?.organization_id || row?.organizationId || source?.clinic_id || source?.clinicId, 120);
     const patientId = sanitizeString(row?.patient_id || row?.patientId || source?.patient_id || source?.patientId, 120);
@@ -30279,6 +30295,22 @@ async function startServer() {
     const professionalName = sanitizeString(row?.therapist_name || source?.therapistName || source?.professionalName || source?.professional, 180) || 'Profissional a definir';
     const clinicName = sanitizeString(row?.clinic_display_name || row?.clinicDisplayName || row?.clinic_name || row?.clinicName || source?.clinic_display_name || source?.clinicDisplayName || source?.clinic_name || source?.clinicName, 160) || null;
     const clinicLogoUrl = sanitizeSessionUrl(row?.clinic_logo_url || row?.clinicLogoUrl || source?.clinic_logo_url || source?.clinicLogoUrl) || null;
+    const patientConfirmationState = buildPatientConfirmationStateForAgenda({
+      status:
+        row?.patient_confirmation_status ||
+        row?.patientConfirmationStatus ||
+        row?.patient_response ||
+        row?.patientResponse ||
+        source?.patient_confirmation_status ||
+        source?.patientConfirmationStatus ||
+        source?.patient_response ||
+        source?.patientResponse,
+      response: row?.patient_response || row?.patientResponse || source?.patientResponse || source?.patient_response || null,
+      respondedAt: row?.patient_responded_at || row?.patientRespondedAt || row?.patient_confirmation_at || row?.patientConfirmationAt || source?.patient_responded_at || source?.patientRespondedAt || source?.patient_confirmation_at || source?.patientConfirmationAt || null,
+      source: row?.patient_confirmation_source || row?.patientConfirmationSource || source?.patientConfirmationSource || source?.patient_confirmation_source || null
+    });
+    const terminalPatientConfirmationState = resolveCalendarCancellationState(row, patientConfirmationState);
+    const resolvedPatientConfirmationState = terminalPatientConfirmationState || patientConfirmationState;
     return {
       id: sanitizeString(row?.id, 120),
       clinicId: isUuid(clinicId) ? clinicId : null,
@@ -30310,51 +30342,15 @@ async function startServer() {
           }
         : null,
       locationType,
-      locationLabel: locationType === 'online'
-        ? 'Online'
-        : locationType === 'clinica'
-          ? roomName || 'Sala não informada'
-          : sanitizeString(row?.location_notes || source?.locationLabel || source?.location_label, 180) || 'Local informado pela clínica',
+      locationLabel,
       roomName: locationType === 'clinica' ? roomName || 'Sala não informada' : null,
       status: normalizeOperationalAppointmentStatus(row?.status || source?.status),
-      patientConfirmationStatus: normalizePatientConfirmationStatusForAgenda(
-        row?.patient_confirmation_status ||
-          row?.patientConfirmationStatus ||
-          row?.patient_response ||
-          row?.patientResponse ||
-          source?.patient_confirmation_status ||
-          source?.patientConfirmationStatus ||
-          source?.patient_response ||
-          source?.patientResponse,
-        row?.status || source?.status
-      ),
-      patientConfirmationLabel: getPatientConfirmationLabelForAgenda(
-        row?.patient_confirmation_status ||
-          row?.patientConfirmationStatus ||
-          row?.patient_response ||
-          row?.patientResponse ||
-          source?.patient_confirmation_status ||
-          source?.patientConfirmationStatus ||
-          source?.patient_response ||
-          source?.patientResponse ||
-          row?.status ||
-          source?.status
-      ),
-      patientConfirmationColor: getPatientConfirmationColorForAgenda(
-        row?.patient_confirmation_status ||
-          row?.patientConfirmationStatus ||
-          row?.patient_response ||
-          row?.patientResponse ||
-          source?.patient_confirmation_status ||
-          source?.patientConfirmationStatus ||
-          source?.patient_response ||
-          source?.patientResponse ||
-          row?.status ||
-          source?.status
-      ),
-      patientResponse: row?.patient_response || row?.patientResponse || source?.patientResponse || source?.patient_response || null,
-      patientRespondedAt: row?.patient_responded_at || row?.patientRespondedAt || row?.patient_confirmation_at || row?.patientConfirmationAt || source?.patient_responded_at || source?.patientRespondedAt || source?.patient_confirmation_at || source?.patientConfirmationAt || null,
-      patientResponseSource: row?.patient_confirmation_source || row?.patientConfirmationSource || source?.patientConfirmationSource || source?.patient_confirmation_source || null,
+      patientConfirmationStatus: resolvedPatientConfirmationState.status,
+      patientConfirmationLabel: resolvedPatientConfirmationState.label,
+      patientConfirmationColor: resolvedPatientConfirmationState.color,
+      patientResponse: resolvedPatientConfirmationState.response,
+      patientRespondedAt: resolvedPatientConfirmationState.respondedAt,
+      patientResponseSource: resolvedPatientConfirmationState.source,
       confirmedAt: row?.confirmed_at || row?.patient_confirmation_at || null,
       rescheduleRequestedAt: row?.reschedule_requested_at || null,
       cancelRequestedAt: row?.cancel_requested_at || null,
@@ -30663,9 +30659,9 @@ async function startServer() {
         RESCHEDULE_REQUESTED: 'Responsável solicitou remarcação',
         RESCHEDULE_APPROVED: 'Remarcação aprovada pela clínica',
         RESCHEDULE_REJECTED: 'Remarcação recusada pela clínica',
-        CANCEL_REQUESTED: 'Responsável cancelou a consulta',
-        CANCEL_APPROVED: 'Cancelamento aprovado pela clínica',
-        CANCEL_REJECTED: 'Cancelamento recusado pela clínica',
+        CANCEL_REQUESTED: 'Responsável solicitou cancelamento da consulta',
+        CANCEL_APPROVED: 'Clínica aprovou o cancelamento solicitado pelo responsável',
+        CANCEL_REJECTED: 'Clínica manteve o horário solicitado',
         CANCELLED: 'Consulta cancelada pela clínica',
         SIGNATURE_CREATED: 'Sessão assinada',
         SIGNATURE_REVOKED: 'Assinatura revogada'
@@ -31092,7 +31088,6 @@ async function startServer() {
       const actorId = sanitizeString(req.session.user?.id, 120);
       const actorRole = sanitizeString(req.session.user?.role, 40) || 'responsible';
       const update = await updateAppointmentOperationalPatch(appointment.id, {
-        status: 'reschedule',
         reschedule_requested_at: now,
         reschedule_requested_by: actorId || null,
         patient_response: 'reschedule',
@@ -31106,7 +31101,7 @@ async function startServer() {
       if (update.error) throw update.error;
       const persistedRows = await readPersistedAppointmentRows([appointment.id], sanitizeString(appointment.clinic_id, 120));
       const persistedAppointment = persistedRows.find((row: any) => sanitizeString(row?.id, 120) === sanitizeString(appointment.id, 120));
-      if (!persistedAppointment || normalizeOperationalAppointmentStatus(persistedAppointment.status) !== 'RESCHEDULE_REQUESTED') {
+      if (!persistedAppointment || normalizeOperationalAppointmentStatus(persistedAppointment.patient_confirmation_status || persistedAppointment.patient_response) !== 'RESCHEDULE_REQUESTED') {
         return res.status(500).json({ success: false, error: 'Não foi possível confirmar a persistência da resposta.' });
       }
       const notificationUpdate = await acknowledgePortalAppointmentNotifications({
@@ -31164,10 +31159,9 @@ async function startServer() {
       const actorId = sanitizeString(req.session.user?.id, 120);
       const actorRole = sanitizeString(req.session.user?.role, 40) || 'responsible';
       const update = await updateAppointmentOperationalPatch(appointment.id, {
-        status: 'cancelled',
         cancel_requested_at: now,
         cancel_requested_by: actorId || null,
-        patient_response: 'cancelled',
+        patient_response: 'cancel_requested',
         patient_responded_at: now,
         patient_confirmation_status: 'CANCEL_REQUESTED',
         patient_confirmation_at: now,
@@ -31180,7 +31174,7 @@ async function startServer() {
       const persistedAppointment = persistedRows.find((row: any) => sanitizeString(row?.id, 120) === sanitizeString(appointment.id, 120));
       const persistedCancelStatus = normalizeOperationalAppointmentStatus(persistedAppointment?.status);
       const persistedCancelResponse = normalizeOperationalAppointmentStatus(persistedAppointment?.patient_confirmation_status || persistedAppointment?.patient_response);
-      if (!persistedAppointment || (persistedCancelStatus !== 'CANCELLED' && persistedCancelResponse !== 'CANCEL_REQUESTED')) {
+      if (!persistedAppointment || persistedCancelStatus === 'CANCELLED' || persistedCancelResponse !== 'CANCEL_REQUESTED') {
         return res.status(500).json({ success: false, error: 'Não foi possível confirmar a persistência da resposta.' });
       }
       const notificationUpdate = await acknowledgePortalAppointmentNotifications({
@@ -31407,6 +31401,9 @@ async function startServer() {
           scheduled_end_at: requestedEnd || new Date(new Date(requestedStart).getTime() + durationMinutes * 60000).toISOString(),
           scheduled_duration_minutes: durationMinutes,
           duration_minutes: durationMinutes,
+          patient_response: null,
+          patient_confirmation_status: null,
+          patient_confirmation_source: null,
           notification_24h_sent_at: null,
           notification_12h_sent_at: null,
           notification_sent: false,
@@ -31414,16 +31411,39 @@ async function startServer() {
           updated_at: now
         });
         if (update.error) throw update.error;
-        nextAppointment = update.data || { ...appointment, status: 'RESCHEDULED', scheduled_at: requestedStart };
+        nextAppointment = {
+          ...appointment,
+          status: 'RESCHEDULED',
+          scheduled_at: requestedStart,
+          scheduled_start_at: requestedStart,
+          scheduled_end_at: requestedEnd || new Date(new Date(requestedStart).getTime() + durationMinutes * 60000).toISOString(),
+          duration_minutes: durationMinutes,
+          patient_response: null,
+          patient_confirmation_status: null,
+          patient_confirmation_source: null
+        };
       } else {
         auditAction = 'CANCEL_APPROVED';
         newStatus = 'CANCELLED';
         const update = await updateAppointmentOperationalPatch(appointment.id, {
           status: 'CANCELLED',
+          patient_response: 'cancelled',
+          patient_confirmation_status: 'CANCEL_REQUESTED',
+          patient_confirmation_source: 'patient_request_approved_by_clinic',
+          patient_responded_at: appointment.patient_responded_at || appointment.patientRespondedAt || now,
+          patient_confirmation_at: appointment.patient_confirmation_at || appointment.patientConfirmationAt || now,
           updated_at: now
         });
         if (update.error) throw update.error;
-        nextAppointment = update.data || { ...appointment, status: 'CANCELLED' };
+        nextAppointment = {
+          ...appointment,
+          status: 'CANCELLED',
+          patient_response: 'cancelled',
+          patient_confirmation_status: 'CANCEL_REQUESTED',
+          patient_confirmation_source: 'patient_request_approved_by_clinic',
+          patient_responded_at: appointment.patient_responded_at || appointment.patientRespondedAt || now,
+          patient_confirmation_at: appointment.patient_confirmation_at || appointment.patientConfirmationAt || now
+        };
       }
       const resolutionNote = sanitizeTextField(req.body?.resolutionNote || req.body?.resolution_note || req.body?.note, 800) || null;
       await supabase
@@ -31467,9 +31487,21 @@ async function startServer() {
       const actorId = sanitizeString(req.session.user?.id, 120);
       const actorRole = sanitizeString(req.session.user?.role, 40);
       const now = new Date().toISOString();
-      const fallbackStatus = normalizeOperationalAppointmentStatus(appointment.status) === 'CONFIRMED' ? 'CONFIRMED' : 'SCHEDULED';
+      const currentStatus = normalizeOperationalAppointmentStatus(appointment.status);
+      const fallbackStatus =
+        currentStatus === 'CONFIRMED'
+          ? 'CONFIRMED'
+          : ['CANCEL_REQUESTED', 'RESCHEDULE_REQUESTED'].includes(currentStatus)
+            ? 'SCHEDULED'
+            : currentStatus === 'CANCELLED'
+              ? 'SCHEDULED'
+              : currentStatus || 'SCHEDULED';
+      const restoredPatientConfirmation = fallbackStatus === 'CONFIRMED' ? 'confirmed' : null;
       const update = await updateAppointmentOperationalPatch(appointment.id, {
         status: fallbackStatus,
+        patient_response: restoredPatientConfirmation,
+        patient_confirmation_status: restoredPatientConfirmation,
+        patient_confirmation_source: restoredPatientConfirmation ? 'appointments' : null,
         updated_at: now
       });
       if (update.error) throw update.error;
@@ -31497,7 +31529,13 @@ async function startServer() {
         metadata: { actionRequestId: requestRow.id, resolutionNote }
       });
       void regenerateClosureForAppointments([appointment.id], req.session.user, 'appointment_action_request_rejected');
-      return res.json({ success: true, appointment: serializePortalAppointment(update.data || { ...appointment, status: fallbackStatus }) });
+      return res.json({ success: true, appointment: serializePortalAppointment({
+        ...appointment,
+        status: fallbackStatus,
+        patient_response: restoredPatientConfirmation,
+        patient_confirmation_status: restoredPatientConfirmation,
+        patient_confirmation_source: restoredPatientConfirmation ? 'appointments' : null
+      }) });
     } catch (error: any) {
       console.warn('[AppointmentActions] reject failed:', error?.message || String(error));
       return res.status(500).json(portalSafeError(500));

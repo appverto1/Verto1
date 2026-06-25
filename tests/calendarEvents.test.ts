@@ -141,8 +141,8 @@ test('agenda usa resposta do paciente como fonte visual canonica', () => {
   assert.match(calendarCode, /getAppointmentPatientConfirmationVisualState\(event\)/);
   assert.match(calendarCode, /detailStatusColor = getAppointmentPatientConfirmationVisualState\(detailEvent\)/);
   assert.match(calendarCode, /CONFIRMADO/);
-  assert.match(calendarCode, /REMARCAR/);
-  assert.match(calendarCode, /CANCELADO PELO PACIENTE/);
+  assert.match(calendarCode, /REMARCAÇÃO SOLICITADA/);
+  assert.match(calendarCode, /CANCELAMENTO SOLICITADO/);
 });
 
 test('clinic_state_fallback enriquece resposta confirmada pelo historico operacional', () => {
@@ -156,6 +156,13 @@ test('clinic_state_fallback enriquece resposta confirmada pelo historico operaci
   assert.match(serverCode, /patientConfirmationColor: resolved\.color/);
 });
 
+test('agenda atualiza automaticamente apos resposta do portal', () => {
+  assert.match(calendarCode, /remoteRefreshNonce/);
+  assert.match(calendarCode, /verto:appointment-domain-event/);
+  assert.match(calendarCode, /setInterval\(refreshWhenVisible, 15000\)/);
+  assert.match(readFileSync(join(root, 'src/App.tsx'), 'utf8'), /window\.dispatchEvent\(new CustomEvent\('verto:appointment-domain-event'/);
+});
+
 test('cancelamento diferencia origem da clínica, paciente e desconhecida', () => {
   assert.deepEqual(
     resolveAppointmentCancellationState({ status: 'cancelled' }),
@@ -167,6 +174,14 @@ test('cancelamento diferencia origem da clínica, paciente e desconhecida', () =
       message: 'Esta consulta foi cancelada pela clínica.',
       source: 'clinic'
     }
+  );
+  assert.equal(
+    resolveAppointmentCancellationState({
+      status: 'scheduled',
+      patient_confirmation_status: 'CANCEL_REQUESTED',
+      patient_confirmation_source: 'portal'
+    }).isCancelled,
+    false
   );
   assert.equal(
     resolveAppointmentCancellationState({

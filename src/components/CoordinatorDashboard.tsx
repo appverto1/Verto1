@@ -935,6 +935,10 @@ export function CoordinatorDashboard({
   const [editingAppointmentId, setEditingAppointmentId] = useState<
     string | number | null
   >(null);
+  const [editingAppointmentActionRequest, setEditingAppointmentActionRequest] = useState<{
+    id: string;
+    type: string;
+  } | null>(null);
   const [appointmentEditScope, setAppointmentEditScope] = useState<"single" | "future">("single");
   const [selectedPatientId, setSelectedPatientId] = useState<any>(null);
   const [view, setView] = useState<"home" | "patient">("home");
@@ -2960,6 +2964,7 @@ export function CoordinatorDashboard({
     setSessionApplyAuthorizationToRecurrence(true);
     setSessionReuseGuideAcrossRecurrence(false);
     setEditingAppointmentId(null);
+    setEditingAppointmentActionRequest(null);
     setAppointmentEditScope("single");
     setScheduleConflictState({ loading: false, checked: false, blocking: false, message: "", conflicts: [] });
   };
@@ -3166,6 +3171,25 @@ export function CoordinatorDashboard({
         releaseSessionSubmit();
         showToast(billingResult?.error || "Não foi possível salvar o contexto financeiro do atendimento.", "error");
         return;
+      }
+      if (editingAppointmentActionRequest?.id) {
+        const buildEditedAppointmentIso = (timeValue: string) => {
+          const parsed = new Date(`${sessionDate}T${timeValue}:00`);
+          return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+        };
+        const actionResult = await dataService.approveAppointmentActionRequest(editingAppointmentActionRequest.id, {
+          scheduledStart: buildEditedAppointmentIso(sessionTime),
+          scheduledEnd: buildEditedAppointmentIso(sessionEndTime),
+          resolutionNote: editingAppointmentActionRequest.type === "RESCHEDULE"
+            ? "Consulta remarcada pela clínica após solicitação do responsável."
+            : "",
+        });
+        if (!actionResult?.success) {
+          hideProcessing();
+          releaseSessionSubmit();
+          showToast(actionResult?.error || "Não foi possível resolver a solicitação do responsável.", "error");
+          return;
+        }
       }
       setIsAddSessionModalOpen(false);
       resetSessionForm();
@@ -4258,7 +4282,22 @@ export function CoordinatorDashboard({
     const appointmentInsuranceCardSnapshot = String(
       appointment.insuranceCardNumber || appointment.insurance_card_number || "",
     );
+    const actionRequestId = String(
+      appointment.pendingActionRequestId ||
+        appointment.actionRequestId ||
+        appointment.action_request_id ||
+        appointment.appointment_action_request_id ||
+        "",
+    ).trim();
     setEditingAppointmentId(appointment.id);
+    setEditingAppointmentActionRequest(
+      actionRequestId
+        ? {
+            id: actionRequestId,
+            type: String(appointment.pendingActionRequestType || appointment.actionRequestType || appointment.request_type || ""),
+          }
+        : null,
+    );
     setAppointmentEditScope("single");
     setSessionNumSessions(1);
     setSessionRecurrencePattern(appointment.recurrencePattern || appointment.recurrence_pattern || "weekly");

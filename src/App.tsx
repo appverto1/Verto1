@@ -6332,7 +6332,12 @@ export default function App() {
         throw new Error(result?.error || 'Não foi possível atualizar a consulta.');
       }
       const resultAppointment = result?.item || result?.appointment || null;
-      const serverStatus = normalizeConfirmationResultStatus(resultAppointment?.status || resultAppointment?.patientConfirmationStatus || status);
+      const serverStatus = normalizeConfirmationResultStatus(
+        resultAppointment?.patientConfirmationStatus ||
+          resultAppointment?.patient_confirmation_status ||
+          resultAppointment?.status ||
+          status,
+      );
       setTherapistAgenda(prev =>
         prev.map(item =>
           String(item.id) === String(appointmentConfirmation.appointmentId)
@@ -6340,6 +6345,13 @@ export default function App() {
             : item
         )
       );
+      window.dispatchEvent(new CustomEvent('verto:appointment-domain-event', {
+        detail: {
+          appointmentId: appointmentConfirmation.appointmentId,
+          status: serverStatus,
+          action: status,
+        },
+      }));
       const alreadyAnsweredMessage = result?.alreadyAnswered
         ? serverStatus === 'confirmed'
           ? 'Essa presença já estava confirmada.'

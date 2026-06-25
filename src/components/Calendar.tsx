@@ -223,8 +223,8 @@ export const getAppointmentPatientConfirmationVisualState = (appointment: any) =
     appointment?.patient_confirmation_label ||
     {
       CONFIRMED: 'CONFIRMADO',
-      RESCHEDULE_REQUESTED: 'REMARCAR',
-      CANCEL_REQUESTED: 'CANCELADO PELO PACIENTE',
+      RESCHEDULE_REQUESTED: 'REMARCAÇÃO SOLICITADA',
+      CANCEL_REQUESTED: 'CANCELAMENTO SOLICITADO',
       CANCELLED_BY_CLINIC: 'CANCELADO PELA CLÍNICA',
       CANCELLED: 'CANCELADO',
       PENDING_CONFIRMATION: 'PENDENTE'
@@ -1167,6 +1167,7 @@ export const ClinicalAgendaBoard = ({
     error: '',
     loaded: false
   });
+  const [remoteRefreshNonce, setRemoteRefreshNonce] = useState(0);
   const [selectedEvent, setSelectedEvent] = useState<any>(null);
   const [selectedDayKeyForPanel, setSelectedDayKeyForPanel] = useState('');
   const [statusActionEvent, setStatusActionEvent] = useState<any>(null);
@@ -1342,7 +1343,7 @@ export const ClinicalAgendaBoard = ({
     };
     const key = JSON.stringify(params);
     const cached = cacheRef.current.get(key);
-    if (cached) {
+    if (cached && remoteRefreshNonce === 0) {
       setRemoteEvents(cached);
       setRemoteState({ loading: false, error: '', loaded: true });
       return;
@@ -1375,8 +1376,28 @@ export const ClinicalAgendaBoard = ({
     selectedPatientIds.join(','),
     selectedTypes.join(','),
     selectedStatuses.join(','),
-    selectedLocations.join(',')
+    selectedLocations.join(','),
+    remoteRefreshNonce
   ]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const requestRefresh = () => {
+      cacheRef.current.clear();
+      setRemoteRefreshNonce((value) => value + 1);
+    };
+    const refreshWhenVisible = () => {
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') requestRefresh();
+    };
+    window.addEventListener('focus', refreshWhenVisible);
+    window.addEventListener('verto:appointment-domain-event', requestRefresh as EventListener);
+    const intervalId = window.setInterval(refreshWhenVisible, 15000);
+    return () => {
+      window.removeEventListener('focus', refreshWhenVisible);
+      window.removeEventListener('verto:appointment-domain-event', requestRefresh as EventListener);
+      window.clearInterval(intervalId);
+    };
+  }, []);
 
   const localEvents = useMemo(() => (agenda || []).filter((event: any) => !isDeletedAppointmentEvent(event)).map((event: any) => normalizeClinicalEvent(event, roomLookup)), [agenda, roomLookup]);
   const serverEvents = useMemo(() => (remoteEvents || []).filter((event: any) => !isDeletedAppointmentEvent(event)).map((event: any) => normalizeClinicalEvent(event, roomLookup)), [remoteEvents, roomLookup]);
@@ -3132,7 +3153,7 @@ export const ClinicalAgendaBoard = ({
               <div className={`mt-5 rounded-3xl border p-4 ${isDark ? 'border-violet-500/30 bg-violet-500/10' : 'border-violet-100 bg-violet-50/70'}`}>
                 <h4 className="flex items-center gap-2 text-sm font-bold text-[#7a32fc]">
                   <RefreshCcw size={16} />
-                  SolicitaÃ§Ãµes do responsÃ¡vel
+                  Solicitações do responsável
                 </h4>
                 {actionRequestState.error && (
                   <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
@@ -3143,34 +3164,44 @@ export const ClinicalAgendaBoard = ({
                   {actionRequests.filter((request: any) => request.status === 'PENDING').slice(0, 4).map((request: any) => {
                     const isCancel = request.request_type === 'CANCEL';
                     const requestedStart = request.requested_start ? new Date(request.requested_start) : null;
-                    const canApprove = isCancel || (requestedStart && !Number.isNaN(requestedStart.getTime()));
                     const loading = actionRequestState.loadingId === String(request.id || '');
+                    const requestAppointment = {
+                      ...detailEvent,
+                      pendingActionRequestId: request.id,
+                      pendingActionRequestType: request.request_type,
+                      requestedStart: request.requested_start,
+                      requestedEnd: request.requested_end
+                    };
                     return (
                       <div key={request.id} className={`rounded-2xl border px-3 py-3 ${isDark ? 'border-slate-700 bg-slate-950' : 'border-white bg-white'}`}>
                         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                           <div>
-                            <p className="text-sm font-bold">{isCancel ? 'Cancelamento solicitado' : 'RemarcaÃ§Ã£o solicitada'}</p>
+                            <p className="text-sm font-bold">{isCancel ? 'Cancelamento solicitado' : 'Remarcação solicitada'}</p>
+                            <p className={`mt-1 text-xs ${isDark ? 'text-slate-300' : 'text-slate-500'}`}>
+                              {isCancel
+                                ? 'O responsável solicitou o cancelamento desta consulta.'
+                                : 'O responsável solicitou a remarcação desta consulta.'}
+                            </p>
                             {request.reason && <p className={`mt-1 text-xs ${isDark ? 'text-slate-300' : 'text-slate-500'}`}>Motivo: {request.reason}</p>}
                             {request.note && <p className={`mt-1 text-xs ${isDark ? 'text-slate-300' : 'text-slate-500'}`}>{request.note}</p>}
                             {!isCancel && requestedStart && !Number.isNaN(requestedStart.getTime()) && (
                               <p className={`mt-1 text-xs font-semibold ${isDark ? 'text-slate-200' : 'text-slate-600'}`}>
-                                SugestÃ£o: {requestedStart.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                                Sugestão: {requestedStart.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
                               </p>
                             )}
                           </div>
                           <div className="flex flex-wrap gap-2">
-                            {!canApprove && (
-                              <button type="button" onClick={() => onEditAppointment?.(detailEvent)} className="rounded-xl bg-[#7a32fc] px-3 py-2 text-[11px] font-bold text-white">
-                                Escolher horÃ¡rio
-                              </button>
-                            )}
-                            {canApprove && (
+                            {isCancel ? (
                               <button type="button" disabled={loading} onClick={() => void handleActionRequestDecision(request, 'approve')} className="rounded-xl bg-[#7a32fc] px-3 py-2 text-[11px] font-bold text-white disabled:opacity-60">
-                                {loading ? 'Atualizando...' : isCancel ? 'Aprovar cancelamento' : 'Aprovar'}
+                                {loading ? 'Atualizando...' : 'Cancelar consulta'}
+                              </button>
+                            ) : (
+                              <button type="button" onClick={() => onEditAppointment?.(requestAppointment)} className="rounded-xl bg-[#7a32fc] px-3 py-2 text-[11px] font-bold text-white">
+                                Remarcar consulta
                               </button>
                             )}
                             <button type="button" disabled={loading} onClick={() => void handleActionRequestDecision(request, 'reject')} className="rounded-xl border border-violet-200 bg-white px-3 py-2 text-[11px] font-bold text-[#7a32fc] hover:bg-violet-50 disabled:opacity-60">
-                              Recusar
+                              Manter horário
                             </button>
                           </div>
                         </div>

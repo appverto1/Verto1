@@ -367,9 +367,19 @@ async function hydrateReminderAppointmentPatientNames(
   options: ActiveCronServiceOptions,
   appointments: ReminderAppointment[],
 ) {
+  const isIncompletePatientName = (value: unknown) => {
+    const label = sanitizeText(value, 180);
+    if (!label) return true;
+    const normalized = label
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .trim();
+    return ['paciente', 'patient', 'cliente'].includes(normalized) || label.split(/\s+/).filter(Boolean).length < 2;
+  };
   const missingPatientIds = Array.from(new Set(
     appointments
-      .filter((appointment) => !sanitizeText(appointment.patientName, 180))
+      .filter((appointment) => isIncompletePatientName(appointment.patientName))
       .map((appointment) => sanitizeText(appointment.patientId, 120))
       .filter((id) => isUuid(id))
   ));
@@ -397,7 +407,9 @@ async function hydrateReminderAppointmentPatientNames(
 
   return appointments.map((appointment) => ({
     ...appointment,
-    patientName: sanitizeText(appointment.patientName, 180) || namesById.get(appointment.patientId) || null
+    patientName: isIncompletePatientName(appointment.patientName)
+      ? namesById.get(appointment.patientId) || sanitizeText(appointment.patientName, 180) || null
+      : sanitizeText(appointment.patientName, 180) || null
   }));
 }
 
