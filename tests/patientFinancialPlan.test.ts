@@ -139,6 +139,82 @@ test('UI separa Autorizações TISS do paciente do plano financeiro legado', () 
   assert.doesNotMatch(coordinatorCode, /Qtde\. autorizada/);
 });
 
+test('modal de edição do paciente organiza cadastro em abas sem perder estado único', () => {
+  for (const marker of [
+    'type PatientRegistrationTab = "personal" | "insurance" | "tiss" | "financial" | "legacy"',
+    'Dados pessoais',
+    'Convênio e elegibilidade',
+    'Autorizações TISS',
+    'Plano financeiro',
+    'Histórico / dados legados',
+    'activePatientRegistrationTab === "personal"',
+    'activePatientRegistrationTab === "insurance"',
+    'activePatientRegistrationTab === "tiss"',
+    'activePatientRegistrationTab === "financial"',
+    'activePatientRegistrationTab === "legacy"',
+    'Campos preservados por compatibilidade com cadastros antigos. Para Pré-guias e XML, use Autorizações TISS do paciente.',
+    'Nenhum dado legado de autorização neste cadastro.'
+  ]) {
+    assert.ok(coordinatorCode.includes(marker), marker);
+  }
+
+  assert.match(coordinatorCode, /const \[activePatientRegistrationTab, setActivePatientRegistrationTab\]/);
+  assert.match(coordinatorCode, /onClick=\{\(\) => setActivePatientRegistrationTab\(tab\.id\)\}/);
+  assert.match(coordinatorCode, /onClick=\{handleCreatePatientFromFullForm\}/);
+  assert.match(coordinatorCode, /value=\{newPatientForm\.nome\}/);
+  assert.match(coordinatorCode, /value=\{newPatientForm\.convenioNome\}/);
+  assert.match(coordinatorCode, /value=\{plan\.authorizationCode\}/);
+  assert.match(coordinatorCode, /scrollToPatientTissAuthorizations[\s\S]*setActivePatientRegistrationTab\("tiss"\)/);
+  assert.match(coordinatorCode, /goToNewPatientTissAuthorization[\s\S]*openNewPatientTissAuthorizationForm\(\)/);
+});
+
+test('Ver cadastro mostra resumo operacional sem truncar nome completo', () => {
+  for (const marker of [
+    'Visão operacional do cadastro, convênio, autorização TISS e plano financeiro.',
+    'Informações cadastrais',
+    'Nome completo',
+    'Convênio atual',
+    'Carteirinha',
+    'Plano / categoria',
+    'Titular',
+    'Autorização TISS vigente',
+    'Nenhuma autorização TISS vigente encontrada.',
+    'Plano financeiro',
+    'Alertas operacionais',
+    'Sem autorização TISS vigente',
+    'Autorização TISS vencida',
+    'Autorização TISS consumida',
+    'Sem De/Para TUSS ativo',
+    'Sem preço negociado ativo',
+    'Convênio incompleto'
+  ]) {
+    assert.ok(coordinatorCode.includes(marker), marker);
+  }
+
+  assert.match(coordinatorCode, /name: readFirstText\(profile\?\.name, profile\?\.fullName, profile\?\.full_name, profile\?\.nome, anamnesisData\?\.nome\)/);
+  assert.match(coordinatorCode, /dataService\.getPatientTissAuthorizations\(profilePatientId\)/);
+  assert.match(coordinatorCode, /selectedPatientProfileAuthorizations/);
+  assert.match(coordinatorCode, /selectedProfileOperationalAlerts/);
+  assert.match(coordinatorCode, /renderPatientProfileSummaryField\("Nome completo", selectedPatientProfile\.name\)/);
+  assert.doesNotMatch(coordinatorCode, /selectedPatientProfile\.name\.split/);
+});
+
+test('áreas de cadastro do paciente não exibem mojibake', () => {
+  const start = coordinatorCode.indexOf('const patientRegistrationTabs');
+  const end = coordinatorCode.indexOf('{processingState.active', start);
+  const patientRegistrationArea = coordinatorCode.slice(start, end);
+
+  for (const brokenText of [
+    'AutorizaÃ§Ãµes',
+    'ConvÃªnio',
+    'HistÃ³rico',
+    'InformaÃ§Ãµes',
+    'ResponsÃ¡vel'
+  ]) {
+    assert.doesNotMatch(patientRegistrationArea, new RegExp(brokenText));
+  }
+});
+
 test('autorizações TISS agrupam, deduplicam e calculam status comercial', () => {
   const base = {
     id: 'auth-1',

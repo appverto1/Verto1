@@ -157,6 +157,7 @@ type ConferenceNavigationTab =
 
 type TissPreGuidePanel = "preGuides" | "batchDrafts" | "xmlDrafts";
 type PayerNavigationSection = "convenios" | "tuss" | "prices" | "rules";
+type PatientRegistrationTab = "personal" | "insurance" | "tiss" | "financial" | "legacy";
 
 type FinancialNavigationIntent = {
   tab: DashboardTab;
@@ -867,6 +868,8 @@ export function CoordinatorDashboard({
   const [isQuickRegisterModalOpen, setIsQuickRegisterModalOpen] = useState(false);
   const [isPatientRegistrationModalOpen, setIsPatientRegistrationModalOpen] =
     useState(false);
+  const [activePatientRegistrationTab, setActivePatientRegistrationTab] =
+    useState<PatientRegistrationTab>("personal");
   const [agendaSearchMode, setAgendaSearchMode] = useState<
     "patient" | "professional"
   >("patient");
@@ -955,6 +958,8 @@ export function CoordinatorDashboard({
   const [isPatientProfileModalOpen, setIsPatientProfileModalOpen] =
     useState(false);
   const [selectedPatientProfile, setSelectedPatientProfile] = useState<any>(null);
+  const [selectedPatientProfileAuthorizations, setSelectedPatientProfileAuthorizations] = useState<any[]>([]);
+  const [selectedPatientProfileAuthorizationsLoading, setSelectedPatientProfileAuthorizationsLoading] = useState(false);
   const [selectedAgendaAppointment, setSelectedAgendaAppointment] =
     useState<any>(null);
   const [scheduledSessionContext, setScheduledSessionContext] =
@@ -1822,7 +1827,18 @@ export function CoordinatorDashboard({
   };
 
   const scrollToPatientTissAuthorizations = () => {
-    document.getElementById("patient-tiss-authorizations-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setActivePatientRegistrationTab("tiss");
+    window.setTimeout(() => {
+      document.getElementById("patient-tiss-authorizations-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 0);
+  };
+
+  const goToNewPatientTissAuthorization = () => {
+    setActivePatientRegistrationTab("tiss");
+    window.setTimeout(() => {
+      openNewPatientTissAuthorizationForm();
+      document.getElementById("patient-tiss-authorizations-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 0);
   };
 
   useEffect(() => {
@@ -3826,6 +3842,7 @@ export function CoordinatorDashboard({
 
   const resetPatientForm = () => {
     setEditingPatientId(null);
+    setActivePatientRegistrationTab("personal");
     setNewPatientForm({
       nome: "",
       nomeSocial: "",
@@ -4187,6 +4204,7 @@ export function CoordinatorDashboard({
   const handleEditPatient = (patient: any) => {
     const insuranceEligibility = normalizePatientInsuranceEligibility(patient, { useResponsibleFallback: true });
     setEditingPatientId(String(patient.id));
+    setActivePatientRegistrationTab("personal");
     setNewPatientForm({
       nome: patient.name || "",
       nomeSocial: patient.socialName || "",
@@ -4557,10 +4575,12 @@ export function CoordinatorDashboard({
 
   const openPatientProfileModal = (patient: any) => {
     const profile = patient && typeof patient === "object" ? patient : {};
+    const profilePatientId = String(profile?.id || profile?.patient_id || "").trim();
     const anamnesisData =
       profile?.anamnesisData && typeof profile.anamnesisData === "object"
         ? profile.anamnesisData
         : {};
+    const insuranceEligibility = normalizePatientInsuranceEligibility(profile);
     const address =
       profile?.address && typeof profile.address === "object"
         ? profile.address
@@ -4577,13 +4597,19 @@ export function CoordinatorDashboard({
 
     setSelectedPatientProfile({
       ...profile,
-      name: readFirstText(profile?.name, anamnesisData?.nome),
+      name: readFirstText(profile?.name, profile?.fullName, profile?.full_name, profile?.nome, anamnesisData?.nome),
       socialName: readFirstText(profile?.socialName, profile?.nomeSocial, anamnesisData?.nomeSocial),
       phone: readFirstText(profile?.phone, anamnesisData?.telefone),
       email: readFirstText(profile?.email, anamnesisData?.email),
-      insuranceType: readFirstText(profile?.insuranceType, anamnesisData?.convenioTipo),
-      insuranceName: readFirstText(profile?.insuranceName, anamnesisData?.convenioNome),
-      cardNumber: readFirstText(profile?.cardNumber, anamnesisData?.convenioCarteirinha),
+      insuranceType: insuranceEligibility.convenioTipo || readFirstText(profile?.insuranceType, anamnesisData?.convenioTipo),
+      insuranceName: insuranceEligibility.convenioNome || readFirstText(profile?.insuranceName, anamnesisData?.convenioNome),
+      cardNumber: insuranceEligibility.convenioCarteirinha || readFirstText(profile?.cardNumber, anamnesisData?.convenioCarteirinha),
+      insurancePlanCategory: insuranceEligibility.convenioPlanoCategoria || readFirstText(profile?.insurancePlanCategory, profile?.insurance_plan_category),
+      insuranceCardValidUntil: insuranceEligibility.convenioCarteirinhaValidade || readFirstText(profile?.insuranceCardValidUntil, profile?.insurance_card_valid_until),
+      insuranceHolderName: insuranceEligibility.convenioTitularNome || readFirstText(profile?.insuranceHolderName, profile?.insurance_holder_name),
+      insuranceHolderCpf: insuranceEligibility.convenioTitularCpf || readFirstText(profile?.insuranceHolderCpf, profile?.insurance_holder_cpf),
+      insuranceHolderRelationship: insuranceEligibility.convenioTitularRelacao || readFirstText(profile?.insuranceHolderRelationship, profile?.insurance_holder_relationship),
+      eligibilityNotes: insuranceEligibility.convenioElegibilidadeObs || readFirstText(profile?.eligibilityNotes, profile?.eligibility_notes),
       rg: readFirstText(profile?.rg, anamnesisData?.rg),
       cpf: readFirstText(profile?.cpf, anamnesisData?.cpf),
       patientProfileType: normalizePatientProfileType(
@@ -4599,7 +4625,22 @@ export function CoordinatorDashboard({
         cidade: readFirstText(address?.cidade, profile?.cidade, anamnesisData?.cidade),
       },
       notes: readFirstText(profile?.notes, profile?.outrasInformacoes, anamnesisData?.outrasInformacoes),
+      financialPlans: normalizePatientFinancialPlans(profile?.financialPlans || profile?.financial_plans, profile),
     });
+    setSelectedPatientProfileAuthorizations([]);
+    if (canAccessClinicFinance && profilePatientId) {
+      setSelectedPatientProfileAuthorizationsLoading(true);
+      void dataService.getPatientTissAuthorizations(profilePatientId)
+        .then((result) => {
+          setSelectedPatientProfileAuthorizations(result?.success && Array.isArray(result.data) ? result.data : []);
+        })
+        .catch(() => {
+          setSelectedPatientProfileAuthorizations([]);
+        })
+        .finally(() => setSelectedPatientProfileAuthorizationsLoading(false));
+    } else {
+      setSelectedPatientProfileAuthorizationsLoading(false);
+    }
     setIsPatientProfileModalOpen(true);
   };
 
@@ -7082,6 +7123,89 @@ export function CoordinatorDashboard({
       </div>
     );
   };
+
+  const patientRegistrationFinancialPlans = normalizePatientFinancialPlans(newPatientForm.financialPlans, newPatientForm);
+  const patientRegistrationHasLegacyData = patientRegistrationFinancialPlans.some(
+    (plan: any) => Boolean(plan.authorizationCode || plan.authorizationValidUntil),
+  );
+  const patientRegistrationHasSuggestedTissAuthorization = patientTissAuthorizationGroups.some((group: any) => Boolean(group.suggestedAuthorization));
+  const patientRegistrationHasFinancialPlanWithoutValue = patientRegistrationFinancialPlans.some(
+    (plan: any) => !["COURTESY", "OTHER"].includes(String(plan.billingMode || "")) && Number(plan.amountCents || 0) <= 0,
+  );
+  const patientRegistrationInsuranceIncomplete =
+    newPatientForm.convenioTipo === "convenio" &&
+    (!String(newPatientForm.convenioNome || "").trim() ||
+      !String(newPatientForm.convenioCarteirinha || "").trim() ||
+      !String(newPatientForm.convenioPlanoCategoria || "").trim());
+  const patientRegistrationTabs: Array<{ id: PatientRegistrationTab; label: string; badge?: string }> = [
+    { id: "personal", label: "Dados pessoais" },
+    { id: "insurance", label: "Convênio e elegibilidade", badge: patientRegistrationInsuranceIncomplete ? "Atenção" : undefined },
+    ...(canAccessClinicFinance
+      ? [
+          { id: "tiss" as PatientRegistrationTab, label: "Autorizações TISS", badge: newPatientForm.convenioTipo === "convenio" && !patientRegistrationHasSuggestedTissAuthorization ? "Sem vigente" : undefined },
+          { id: "financial" as PatientRegistrationTab, label: "Plano financeiro", badge: patientRegistrationHasFinancialPlanWithoutValue ? "Revisar" : undefined },
+          { id: "legacy" as PatientRegistrationTab, label: "Histórico / dados legados", badge: patientRegistrationHasLegacyData ? "Legado" : undefined },
+        ]
+      : [{ id: "legacy" as PatientRegistrationTab, label: "Histórico / dados legados", badge: patientRegistrationHasLegacyData ? "Legado" : undefined }]),
+  ];
+
+  const selectedProfileEligibility = normalizePatientInsuranceEligibility(selectedPatientProfile || {});
+  const selectedProfileFinancialPlans = normalizePatientFinancialPlans(
+    selectedPatientProfile?.financialPlans || selectedPatientProfile?.financial_plans || [],
+    selectedPatientProfile || {},
+  );
+  const selectedProfileAuthorizationGroups = groupPatientTissAuthorizations(selectedPatientProfileAuthorizations);
+  const selectedProfileSuggestedAuthorization =
+    selectedProfileAuthorizationGroups.find((group: any) => group.suggestedAuthorization)?.suggestedAuthorization || null;
+  const selectedProfilePrimaryFinancialPlan =
+    selectedProfileFinancialPlans.find((plan: any) => String(plan.status || "ACTIVE").toUpperCase() === "ACTIVE") ||
+    selectedProfileFinancialPlans[0] ||
+    null;
+  const selectedProfileAuthorizationStates = selectedPatientProfileAuthorizations.map((authorization: any) =>
+    getPatientTissAuthorizationVisualState(authorization),
+  );
+  const selectedProfileOperationalAlerts = (() => {
+    const alerts: string[] = [];
+    if (
+      selectedProfileEligibility.convenioTipo === "convenio" &&
+      (!selectedProfileEligibility.convenioNome ||
+        !selectedProfileEligibility.convenioCarteirinha ||
+        !selectedProfileEligibility.convenioPlanoCategoria)
+    ) {
+      alerts.push("Convênio incompleto");
+    }
+    if (
+      selectedProfileEligibility.convenioTipo === "convenio" &&
+      !selectedPatientProfileAuthorizationsLoading &&
+      selectedPatientProfileAuthorizations.length > 0 &&
+      !selectedProfileSuggestedAuthorization
+    ) {
+      alerts.push("Sem autorização TISS vigente");
+    }
+    if (!selectedProfileSuggestedAuthorization && selectedProfileAuthorizationStates.some((state) => state.status === "expired")) {
+      alerts.push("Autorização TISS vencida");
+    }
+    if (!selectedProfileSuggestedAuthorization && selectedProfileAuthorizationStates.some((state) => state.status === "consumed")) {
+      alerts.push("Autorização TISS consumida");
+    }
+    if (selectedPatientProfileAuthorizations.some((authorization: any) => authorization && !authorization.tussCode && !authorization.tussCodeId)) {
+      alerts.push("Sem De/Para TUSS ativo");
+    }
+    if (selectedPatientProfileAuthorizations.some((authorization: any) => authorization && authorization.amountCents === null)) {
+      alerts.push("Sem preço negociado ativo");
+    }
+    if (selectedProfilePrimaryFinancialPlan && Number(selectedProfilePrimaryFinancialPlan.amountCents || 0) <= 0) {
+      alerts.push("Plano financeiro sem valor");
+    }
+    return alerts;
+  })();
+
+  const renderPatientProfileSummaryField = (label: string, value: any, className = "") => (
+    <div className={className}>
+      <span className="text-[11px] font-black uppercase tracking-wide text-slate-400">{label}</span>
+      <p className="mt-1 text-sm font-semibold text-slate-800">{value || "-"}</p>
+    </div>
+  );
 
   if (view === "patient" && selectedPatientId) {
     const patient = allPatients.find(
@@ -10765,13 +10889,19 @@ export function CoordinatorDashboard({
           onClick={() => setIsPatientProfileModalOpen(false)}
         >
           <div
-            className="bg-white w-full max-w-2xl rounded-3xl p-6 md:p-8 shadow-2xl max-h-[85vh] overflow-y-auto"
+            className="bg-white w-full max-w-4xl rounded-3xl p-6 md:p-8 shadow-2xl max-h-[85vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between mb-6">
-              <h3 className="text-xl font-bold text-slate-900">
-                Informações cadastrais
-              </h3>
+            <div className="mb-6 flex items-start justify-between gap-4">
+              <div>
+                <p className="text-[11px] font-black uppercase tracking-[0.18em] text-[#7a32fc]">Ver cadastro</p>
+                <h3 className="mt-1 text-2xl font-black text-slate-900">
+                  {selectedPatientProfile.name || "Paciente"}
+                </h3>
+                <p className="mt-1 text-sm font-medium text-slate-400">
+                  Visão operacional do cadastro, convênio, autorização TISS e plano financeiro.
+                </p>
+              </div>
               <button
                 onClick={() => setIsPatientProfileModalOpen(false)}
                 className="text-slate-400 hover:text-slate-700"
@@ -10779,19 +10909,103 @@ export function CoordinatorDashboard({
                 <X size={22} />
               </button>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-              <div><span className="text-slate-400">Nome:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.name || "-"}</p></div>
-              <div><span className="text-slate-400">Nome social:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.socialName || "-"}</p></div>
-              <div><span className="text-slate-400">Nascimento:</span> <p className="font-semibold text-slate-800">{formatBirthDateForDisplay(selectedPatientProfile.birthDate || selectedPatientProfile.birth_date || selectedPatientProfile.dataNascimento) || "-"}</p></div>
-              <div><span className="text-slate-400">Telefone:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.phone || "-"}</p></div>
-              <div><span className="text-slate-400">Email:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.email || "-"}</p></div>
-              <div><span className="text-slate-400">Convênio:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.insuranceName || selectedPatientProfile.insuranceType || "-"}</p></div>
-              <div><span className="text-slate-400">Carteirinha:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.cardNumber || "-"}</p></div>
-              <div><span className="text-slate-400">RG:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.rg || "-"}</p></div>
-              <div><span className="text-slate-400">CPF:</span> <p className="font-semibold text-slate-800">{formatCpf(selectedPatientProfile.cpf || "") || "-"}</p></div>
-              <div><span className="text-slate-400">Perfil:</span> <p className="font-semibold text-slate-800">{getPatientProfileTypeLabel(selectedPatientProfile.patientProfileType)}</p></div>
-              <div className="md:col-span-2"><span className="text-slate-400">Endereço:</span> <p className="font-semibold text-slate-800">{[selectedPatientProfile.address?.logradouro, selectedPatientProfile.address?.numero, selectedPatientProfile.address?.complemento, selectedPatientProfile.address?.bairro, selectedPatientProfile.address?.cidade].filter(Boolean).join(" - ") || "-"}</p></div>
-              <div className="md:col-span-2"><span className="text-slate-400">Observações:</span> <p className="font-semibold text-slate-800">{selectedPatientProfile.notes || "-"}</p></div>
+
+            <div className="space-y-4">
+              <section className="rounded-2xl border border-slate-100 bg-slate-50/70 p-4">
+                <h4 className="text-xs font-black uppercase tracking-[0.14em] text-slate-500">Informações cadastrais</h4>
+                <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                  {renderPatientProfileSummaryField("Nome completo", selectedPatientProfile.name)}
+                  {renderPatientProfileSummaryField("Nome social", selectedPatientProfile.socialName)}
+                  {renderPatientProfileSummaryField("Nascimento", formatBirthDateForDisplay(selectedPatientProfile.birthDate || selectedPatientProfile.birth_date || selectedPatientProfile.dataNascimento))}
+                  {renderPatientProfileSummaryField("Telefone", selectedPatientProfile.phone)}
+                  {renderPatientProfileSummaryField("Email", selectedPatientProfile.email)}
+                  {renderPatientProfileSummaryField("CPF", formatCpf(selectedPatientProfile.cpf || ""))}
+                  {renderPatientProfileSummaryField("RG", selectedPatientProfile.rg)}
+                  {renderPatientProfileSummaryField("Perfil / portal", getPatientProfileTypeLabel(selectedPatientProfile.patientProfileType))}
+                  {renderPatientProfileSummaryField("Endereço", [selectedPatientProfile.address?.logradouro, selectedPatientProfile.address?.numero, selectedPatientProfile.address?.complemento, selectedPatientProfile.address?.bairro, selectedPatientProfile.address?.cidade].filter(Boolean).join(" - "), "xl:col-span-2")}
+                  {selectedPatientProfile.guardian?.nome || selectedPatientProfile.responsavelNome ? (
+                    renderPatientProfileSummaryField("Responsável legal", selectedPatientProfile.guardian?.nome || selectedPatientProfile.responsavelNome, "xl:col-span-3")
+                  ) : null}
+                  {renderPatientProfileSummaryField("Observações", selectedPatientProfile.notes, "xl:col-span-3")}
+                </div>
+              </section>
+
+              <section className="rounded-2xl border border-slate-100 bg-white p-4">
+                <h4 className="text-xs font-black uppercase tracking-[0.14em] text-slate-500">Convênio e elegibilidade</h4>
+                <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                  {renderPatientProfileSummaryField("Convênio atual", selectedProfileEligibility.convenioNome || selectedPatientProfile.insuranceName || selectedPatientProfile.insuranceType)}
+                  {renderPatientProfileSummaryField("Carteirinha", selectedProfileEligibility.convenioCarteirinha || selectedPatientProfile.cardNumber)}
+                  {renderPatientProfileSummaryField("Plano / categoria", selectedProfileEligibility.convenioPlanoCategoria || selectedPatientProfile.insurancePlanCategory)}
+                  {renderPatientProfileSummaryField("Validade da carteirinha", formatPatientAuthorizationDate(selectedProfileEligibility.convenioCarteirinhaValidade || selectedPatientProfile.insuranceCardValidUntil))}
+                  {renderPatientProfileSummaryField("Titular", selectedProfileEligibility.convenioTitularNome || selectedPatientProfile.insuranceHolderName)}
+                  {renderPatientProfileSummaryField("CPF do titular", formatCpf(selectedProfileEligibility.convenioTitularCpf || selectedPatientProfile.insuranceHolderCpf || ""))}
+                  {renderPatientProfileSummaryField("Relação com titular", selectedProfileEligibility.convenioTitularRelacao || selectedPatientProfile.insuranceHolderRelationship)}
+                  {renderPatientProfileSummaryField("Observações de elegibilidade", selectedProfileEligibility.convenioElegibilidadeObs || selectedPatientProfile.eligibilityNotes, "xl:col-span-3")}
+                </div>
+              </section>
+
+              <section className="rounded-2xl border border-slate-100 bg-white p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <h4 className="text-xs font-black uppercase tracking-[0.14em] text-slate-500">Autorização TISS vigente</h4>
+                  {selectedPatientProfileAuthorizationsLoading && <span className="text-xs font-semibold text-slate-400">Carregando...</span>}
+                </div>
+                {selectedProfileSuggestedAuthorization ? (
+                  <div className="mt-3 rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-sm font-black text-slate-900">{selectedProfileSuggestedAuthorization.serviceName || "Procedimento faturável"}</p>
+                      <span className={`rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-wide ring-1 ${patientAuthorizationStatusClass(selectedProfileSuggestedAuthorization)}`}>
+                        {getPatientTissAuthorizationVisualState(selectedProfileSuggestedAuthorization).label}
+                      </span>
+                    </div>
+                    <div className="mt-3 grid grid-cols-1 gap-2 text-xs text-slate-600 md:grid-cols-2">
+                      <span>TUSS: {selectedProfileSuggestedAuthorization.tussCode || "-"}</span>
+                      <span>Guia: {selectedProfileSuggestedAuthorization.guideNumber || "-"}</span>
+                      <span>Autorização/Senha: {selectedProfileSuggestedAuthorization.authorizationNumber || selectedProfileSuggestedAuthorization.authorizationCode || "-"}</span>
+                      <span>Validade: {formatPatientAuthorizationDate(selectedProfileSuggestedAuthorization.validFrom)} a {formatPatientAuthorizationDate(selectedProfileSuggestedAuthorization.validUntil)}</span>
+                      <span>Consumo: {Number(selectedProfileSuggestedAuthorization.usedQuantity || 0)} de {Number(selectedProfileSuggestedAuthorization.authorizedQuantity || 0) || "sem limite"}</span>
+                      <span>Saldo: {formatPatientAuthorizationBalance(selectedProfileSuggestedAuthorization)}</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-3 rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm font-medium text-slate-500">
+                    {selectedPatientProfileAuthorizationsLoading ? "Buscando autorização TISS vigente..." : "Nenhuma autorização TISS vigente encontrada."}
+                  </div>
+                )}
+              </section>
+
+              <section className="rounded-2xl border border-slate-100 bg-white p-4">
+                <h4 className="text-xs font-black uppercase tracking-[0.14em] text-slate-500">Plano financeiro</h4>
+                {selectedProfilePrimaryFinancialPlan ? (
+                  <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                    {renderPatientProfileSummaryField("Linha de cuidado", selectedProfilePrimaryFinancialPlan.specialty || selectedProfilePrimaryFinancialPlan.customServiceName || selectedProfilePrimaryFinancialPlan.serviceType)}
+                    {renderPatientProfileSummaryField("Modalidade de cobrança", PATIENT_FINANCIAL_BILLING_MODE_OPTIONS.find((option) => option.value === selectedProfilePrimaryFinancialPlan.billingMode)?.label || selectedProfilePrimaryFinancialPlan.billingMode)}
+                    {renderPatientProfileSummaryField("Valor planejado", selectedProfilePrimaryFinancialPlan.amount || formatPatientAuthorizationAmount(selectedProfilePrimaryFinancialPlan.amountCents))}
+                    {renderPatientProfileSummaryField("Quantidade planejada", selectedProfilePrimaryFinancialPlan.sessionsQuantity)}
+                    {renderPatientProfileSummaryField("Frequência", PATIENT_FINANCIAL_QUANTITY_PERIOD_OPTIONS.find((option) => option.value === selectedProfilePrimaryFinancialPlan.quantityPeriod)?.label || selectedProfilePrimaryFinancialPlan.quantityPeriod)}
+                    {renderPatientProfileSummaryField("Coparticipação", selectedProfilePrimaryFinancialPlan.copaymentAmount)}
+                    {renderPatientProfileSummaryField("Pagador de referência", selectedProfilePrimaryFinancialPlan.payerNameSnapshot || selectedProfilePrimaryFinancialPlan.insuranceName, "xl:col-span-3")}
+                  </div>
+                ) : (
+                  <div className="mt-3 rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm font-medium text-slate-500">
+                    Nenhum plano financeiro ativo/resumido encontrado.
+                  </div>
+                )}
+              </section>
+
+              <section className="rounded-2xl border border-slate-100 bg-white p-4">
+                <h4 className="text-xs font-black uppercase tracking-[0.14em] text-slate-500">Alertas operacionais</h4>
+                {selectedProfileOperationalAlerts.length ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {selectedProfileOperationalAlerts.map((alert) => (
+                      <span key={alert} className="rounded-full border border-amber-100 bg-amber-50 px-3 py-1.5 text-xs font-bold text-amber-700">
+                        {alert}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="mt-3 text-sm font-medium text-slate-500">Nenhum alerta operacional seguro para exibir agora.</p>
+                )}
+              </section>
             </div>
           </div>
         </div>
@@ -11034,7 +11248,32 @@ export function CoordinatorDashboard({
                 : "Cadastro Completo de Paciente"}
             </h2>
 
+            <div className="mb-5 overflow-x-auto pb-1">
+              <div className="flex min-w-max gap-2 rounded-2xl border border-slate-100 bg-slate-50 p-1">
+                {patientRegistrationTabs.map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setActivePatientRegistrationTab(tab.id)}
+                    className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-bold transition-all ${
+                      activePatientRegistrationTab === tab.id
+                        ? "bg-white text-[#7a32fc] shadow-sm"
+                        : "text-slate-500 hover:bg-white/70 hover:text-slate-800"
+                    }`}
+                  >
+                    {tab.label}
+                    {tab.badge && (
+                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-amber-700">
+                        {tab.badge}
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <div className="space-y-5">
+              {activePatientRegistrationTab === "personal" && (
               <FormSection
                 title="Dados pessoais do paciente"
                 description="Informações principais de identificação, contato e acesso do paciente."
@@ -11163,7 +11402,9 @@ export function CoordinatorDashboard({
                   </FormField>
                 </div>
               </FormSection>
+              )}
 
+              {activePatientRegistrationTab === "insurance" && (
               <FormSection
                 title="Convênio e elegibilidade"
                 description="Dados usados para validação de cobertura, carteirinha, pré-faturamento e Pré-guia TISS."
@@ -11264,8 +11505,9 @@ export function CoordinatorDashboard({
                   </div>
                 )}
               </FormSection>
+              )}
 
-              {canAccessClinicFinance && (
+              {canAccessClinicFinance && activePatientRegistrationTab === "tiss" && (
                 <div id="patient-tiss-authorizations-section">
                   <FormSection
                     title="Autorizações TISS do paciente"
@@ -11490,7 +11732,7 @@ export function CoordinatorDashboard({
                 </div>
               )}
 
-              {canAccessClinicFinance && (
+              {canAccessClinicFinance && activePatientRegistrationTab === "financial" && (
                 <FormSection
                   title="Plano financeiro do tratamento"
                   description="Use esta seção para planejar valores, frequência e modalidade de cobrança. Autorizações TISS ficam na seção própria acima."
@@ -11691,7 +11933,7 @@ export function CoordinatorDashboard({
                                       </div>
                                       <button
                                         type="button"
-                                        onClick={scrollToPatientTissAuthorizations}
+                                        onClick={suggestedFinancialPlanAuthorization ? scrollToPatientTissAuthorizations : goToNewPatientTissAuthorization}
                                         className="w-fit rounded-xl border border-white/70 bg-white px-3 py-2 text-xs font-bold text-[#7a32fc] shadow-sm"
                                       >
                                         {suggestedFinancialPlanAuthorization ? "Ver autorizações TISS" : "Adicionar autorização TISS"}
@@ -11702,36 +11944,6 @@ export function CoordinatorDashboard({
                                     </p>
                                   </div>
                                 </div>
-                                {(plan.authorizationCode || plan.authorizationValidUntil) && (
-                                  <details className="md:col-span-2 xl:col-span-6 rounded-2xl border border-slate-100 bg-slate-50">
-                                    <summary className="cursor-pointer px-4 py-3 text-xs font-black uppercase tracking-wide text-slate-500">
-                                      Dados legados de autorização
-                                    </summary>
-                                    <div className="space-y-3 border-t border-slate-100 p-4">
-                                      <p className="text-xs font-medium leading-relaxed text-slate-500">
-                                        Estes campos foram preservados apenas para compatibilidade com cadastros antigos. Para Pré-guias e XML, use “Autorizações TISS do paciente”.
-                                      </p>
-                                      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                                        <FormField label="Autorização legada do plano">
-                                          <input
-                                            className={patientFormInputClass}
-                                            placeholder="Ex.: autorização legada"
-                                            value={plan.authorizationCode}
-                                            onChange={(e) => handleFinancialPlanChange(plan.id, "authorizationCode", e.target.value)}
-                                          />
-                                        </FormField>
-                                        <FormField label="Validade legada">
-                                          <input
-                                            type="date"
-                                            className={patientFormInputClass}
-                                            value={plan.authorizationValidUntil}
-                                            onChange={(e) => handleFinancialPlanChange(plan.id, "authorizationValidUntil", e.target.value)}
-                                          />
-                                        </FormField>
-                                      </div>
-                                    </div>
-                                  </details>
-                                )}
                               </>
                             )}
                             {showPaymentMethod && (
@@ -11766,6 +11978,52 @@ export function CoordinatorDashboard({
                       });
                     })()}
                   </div>
+                </FormSection>
+              )}
+
+              {activePatientRegistrationTab === "legacy" && (
+                <FormSection
+                  title="Histórico / dados legados"
+                  description="Campos preservados por compatibilidade com cadastros antigos. Para Pré-guias e XML, use Autorizações TISS do paciente."
+                >
+                  <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs font-medium leading-relaxed text-amber-800">
+                    Estes campos foram preservados apenas para compatibilidade com cadastros antigos. Para Pré-guias e XML, use Autorizações TISS do paciente.
+                  </div>
+                  {patientRegistrationFinancialPlans.some((plan: any) => plan.authorizationCode || plan.authorizationValidUntil) ? (
+                    <div className="mt-4 space-y-3">
+                      {patientRegistrationFinancialPlans
+                        .filter((plan: any) => plan.authorizationCode || plan.authorizationValidUntil)
+                        .map((plan: any) => (
+                          <details key={`legacy-financial-plan-${plan.id}`} className="rounded-2xl border border-slate-100 bg-white">
+                            <summary className="cursor-pointer px-4 py-3 text-xs font-black uppercase tracking-wide text-slate-500">
+                              Dados legados de autorização · {plan.customServiceName || plan.specialty || plan.serviceType || "Plano financeiro"} · {plan.payerNameSnapshot || plan.insuranceName || "Sem convênio"}
+                            </summary>
+                            <div className="grid grid-cols-1 gap-3 border-t border-slate-100 p-4 md:grid-cols-2">
+                              <FormField label="Autorização legada do plano">
+                                <input
+                                  className={patientFormInputClass}
+                                  placeholder="Ex.: autorização legada"
+                                  value={plan.authorizationCode}
+                                  onChange={(e) => handleFinancialPlanChange(plan.id, "authorizationCode", e.target.value)}
+                                />
+                              </FormField>
+                              <FormField label="Validade legada">
+                                <input
+                                  type="date"
+                                  className={patientFormInputClass}
+                                  value={plan.authorizationValidUntil}
+                                  onChange={(e) => handleFinancialPlanChange(plan.id, "authorizationValidUntil", e.target.value)}
+                                />
+                              </FormField>
+                            </div>
+                          </details>
+                        ))}
+                    </div>
+                  ) : (
+                    <div className="mt-4 rounded-2xl border border-dashed border-slate-200 bg-white p-4 text-sm font-semibold text-slate-400">
+                      Nenhum dado legado de autorização neste cadastro.
+                    </div>
+                  )}
                 </FormSection>
               )}
             </div>
