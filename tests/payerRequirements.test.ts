@@ -124,7 +124,9 @@ test('engine gera pendências humanas para assinatura, relatório, guia e duraç
     }
   });
   assert.equal(closure.readinessStatus, 'PENDING');
-  assert.ok(closure.checklist.some((item) => item.key === 'authorization_linked' && item.status === 'FAILED'));
+  assert.ok(closure.checklist.some((item) => item.key === 'payer_authorization_required' && item.status === 'FAILED'));
+  assert.ok(closure.checklist.some((item) => item.key === 'payer_guide_required' && item.status === 'FAILED'));
+  assert.ok(!closure.checklist.some((item) => item.key === 'authorization_linked'));
   assert.ok(closure.checklist.some((item) => item.key === 'required_documents_status' && item.status === 'FAILED'));
 });
 

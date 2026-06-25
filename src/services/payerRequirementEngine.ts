@@ -160,33 +160,35 @@ export function evaluatePayerRequirementsForClosure(input: {
   const context = input.context || {};
   const checklistItems: PayerRequirementChecklistItem[] = [];
 
-  if (requirements.requireAuthorization) {
-    checklistItems.push(item(
-      'payer_authorization_required',
-      'Autorização do pagador',
-      hasValue(context.authorizationCode) ? 'PASSED' : 'FAILED',
-      true,
-      'CRITICAL',
-      hasValue(context.authorizationCode)
-        ? 'Autorização/senha informada para este pagador.'
-        : 'Este pagador exige autorização/senha.',
-      { present: hasValue(context.authorizationCode) }
-    ));
-  }
+  const authorizationPresent = hasValue(context.authorizationCode);
+  checklistItems.push(item(
+    'payer_authorization_required',
+    'Autorização do pagador',
+    authorizationPresent ? 'PASSED' : requirements.requireAuthorization ? 'FAILED' : 'NOT_APPLICABLE',
+    requirements.requireAuthorization,
+    requirements.requireAuthorization ? 'CRITICAL' : 'LOW',
+    authorizationPresent
+      ? 'Autorização/senha informada para este pagador.'
+      : requirements.requireAuthorization
+        ? 'Este pagador exige autorização/senha.'
+        : 'Autorização não exigida para este pagador.',
+    { present: authorizationPresent }
+  ));
 
-  if (requirements.requireGuide) {
-    checklistItems.push(item(
-      'payer_guide_required',
-      'Guia do pagador',
-      hasValue(context.guideNumber) ? 'PASSED' : 'FAILED',
-      true,
-      'CRITICAL',
-      hasValue(context.guideNumber)
-        ? 'Guia informada para este pagador.'
-        : 'Este pagador exige guia.',
-      { present: hasValue(context.guideNumber) }
-    ));
-  }
+  const guidePresent = hasValue(context.guideNumber);
+  checklistItems.push(item(
+    'payer_guide_required',
+    'Guia do pagador',
+    guidePresent ? 'PASSED' : requirements.requireGuide ? 'FAILED' : 'NOT_APPLICABLE',
+    requirements.requireGuide,
+    requirements.requireGuide ? 'CRITICAL' : 'LOW',
+    guidePresent
+      ? 'Guia informada para este pagador.'
+      : requirements.requireGuide
+        ? 'Este pagador exige guia.'
+        : 'Guia não exigida para este pagador.',
+    { present: guidePresent }
+  ));
 
   if (requirements.minDurationMinutes !== null && context.actualMinutes !== null && context.actualMinutes !== undefined) {
     const belowMinimum = Number(context.actualMinutes) < requirements.minDurationMinutes;

@@ -290,10 +290,14 @@ const POST_SESSION_KEYS = new Set([
 
 function checklistSectionFor(
   item: ClosureChecklistItem,
+  requireAuthorizationBeforeSession: boolean,
   requireGuideBeforeSession: boolean
 ): ClosureChecklistSection {
+  if (item.key === 'payer_authorization_required') {
+    return item.required && requireAuthorizationBeforeSession ? 'preSession' : 'tissBilling';
+  }
   if (item.key === 'payer_guide_required') {
-    return requireGuideBeforeSession ? 'preSession' : 'tissBilling';
+    return item.required && requireGuideBeforeSession ? 'preSession' : 'tissBilling';
   }
   if (PRE_SESSION_KEYS.has(item.key)) return 'preSession';
   if (POST_SESSION_KEYS.has(item.key)) return 'postSession';
@@ -392,21 +396,18 @@ export function buildAppointmentClosureOperationalView(
   checklistInput: ClosureChecklistItem[],
   phaseInput?: AppointmentOperationalPhase | null
 ) {
-  const sourceChecklist = Array.isArray(checklistInput) ? checklistInput : [];
+  const sourceChecklist = (Array.isArray(checklistInput) ? checklistInput : [])
+    .filter((item) => item?.key !== 'authorization_linked');
   let phase =
     phaseInput ||
     sourceChecklist.find((item) => item?.operationalPhase)?.operationalPhase ||
     'scheduled_pre_session';
   const classify = (currentPhase: AppointmentOperationalPhase) => sourceChecklist.map((item) => {
-    const section = item.section || checklistSectionFor(item, false);
+    const section = item.section || checklistSectionFor(item, true, false);
     return {
       ...item,
       section,
-      operationalStatus: item.operationalStatus || (
-        item.key === 'authorization_linked'
-          ? item.status === 'PASSED' ? 'passed' : 'info'
-          : operationalStatusFor(item, section, currentPhase)
-      ),
+      operationalStatus: item.operationalStatus || operationalStatusFor(item, section, currentPhase),
       operationalPhase: currentPhase
     };
   });
@@ -428,7 +429,11 @@ export function buildAppointmentClosureOperationalView(
   const sections = {
     preSession: checklist.filter((item) => item.section === 'preSession'),
     postSession: checklist.filter((item) => item.section === 'postSession'),
-    tissBilling: checklist.filter((item) => item.section === 'tissBilling')
+    tissBilling: checklist.filter((item) =>
+      item.section === 'tissBilling' ||
+      item.key === 'payer_authorization_required' ||
+      item.key === 'payer_guide_required'
+    )
   };
   return {
     phase,
@@ -475,8 +480,23 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
   );
   const locationType = asString(firstValue(appointment.location_type, appointment.locationType, abaSession.location_type)).toLowerCase();
   const room = asString(firstValue(appointment.room_name, appointment.roomName, appointment.room_id, appointment.roomId, abaSession.room_name, abaSession.room_id));
-  const authorizationCode = asString(firstValue(appointment.authorization_code, appointment.authorizationCode, appointment.authorization_id, appointment.authorizationId));
-  const guideNumber = asString(firstValue(appointment.guide_number, appointment.guideNumber));
+  const authorizationCode = asString(firstValue(
+    appointment.authorization_code,
+    appointment.authorizationCode,
+    appointment.authorization_number,
+    appointment.authorizationNumber,
+    appointment.authorization_id,
+    appointment.authorizationId,
+    appointment.patient_payer_authorization_id,
+    appointment.patientPayerAuthorizationId
+  ));
+  const guideNumber = asString(firstValue(
+    appointment.guide_number,
+    appointment.guideNumber,
+    appointment.guia,
+    appointment.tiss_guide_number,
+    appointment.tissGuideNumber
+  ));
   const professionalName = asString(firstValue(
     input.professional?.full_name,
     input.professional?.fullName,
@@ -676,21 +696,6 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
       source: requirements.payerRequirementSource || 'DEFAULT'
     }
   ));
-  checklist.push(buildCheck(
-    'authorization_linked',
-    'Guia/autorização vinculada',
-    firstValue(authorizationCode, guideNumber) ? 'PASSED' : (requirements.requireAuthorization || requirements.requireGuide) ? 'FAILED' : 'NOT_APPLICABLE',
-    Boolean(requirements.requireAuthorization || requirements.requireGuide),
-    'MEDIUM',
-    firstValue(authorizationCode, guideNumber)
-      ? 'Guia ou autorização vinculada.'
-      : 'Guia ou autorização não configurada para esta conferência.',
-    {
-      present: Boolean(firstValue(authorizationCode, guideNumber)),
-      requireAuthorization: requirements.requireAuthorization,
-      requireGuide: requirements.requireGuide
-    }
-  ));
   const payerEvaluation = evaluatePayerRequirementsForClosure({
     requirements: payerRequirements,
     context: {
@@ -766,10 +771,12 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
         ? 'in_session'
         : 'scheduled_pre_session';
   const classifyChecklist = (currentPhase: AppointmentOperationalPhase) => checklist.map((item) => {
-    const section = checklistSectionFor(item, requirements.requireGuideBeforeSession);
-    const operationalStatus: ClosureOperationalStatus = item.key === 'authorization_linked'
-      ? item.status === 'PASSED' ? 'passed' : 'info'
-      : operationalStatusFor(item, section, currentPhase);
+    const section = checklistSectionFor(
+      item,
+      requirements.requireAuthorizationBeforeSession,
+      requirements.requireGuideBeforeSession
+    );
+    const operationalStatus = operationalStatusFor(item, section, currentPhase);
     return {
       ...item,
       section,
@@ -813,7 +820,7 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
   const operationalView = buildAppointmentClosureOperationalView(operationalChecklist, phase);
 
   const contextHash = stableHash({
-    engineVersion: 'operational-phases-v1',
+    engineVersion: 'operational-phases-v2-split-payer-documents',
     organizationId: input.organizationId,
     appointmentId: input.appointmentId,
     abaSessionId: input.abaSessionId,

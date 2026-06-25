@@ -41,6 +41,7 @@ import {
   getAppointmentFinancialContextLabel,
   normalizeAppointmentFinancialContextType,
 } from '../utils/appointmentFinancialContext';
+import { getAppointmentPrimaryAction } from '../utils/appointmentPrimaryAction';
 
 const isPersistedUuid = (value: any) =>
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || '').trim());
@@ -564,6 +565,11 @@ const CLOSURE_SECTION_META: Record<string, { title: string; description: string 
 export const getAppointmentClosureOperationalView = (event: any, detail: any = null) => {
   const checklist = Array.isArray(detail?.checklist) ? detail.checklist : [];
   const status = String(event?.status || event?.appointment_status || '').toLowerCase();
+  const closureReadinessStatus = normalizeClosureStatus(
+    event?.closure_readiness_status ||
+    event?.closureReadinessStatus ||
+    detail?.readiness_status
+  );
   const explicitPhase =
     detail?.phase ||
     checklist.find((item: any) => item?.operationalPhase)?.operationalPhase ||
@@ -574,6 +580,7 @@ export const getAppointmentClosureOperationalView = (event: any, detail: any = n
     event?.hasSessionRecord ||
     event?.actual_end_at ||
     event?.actualEndAt ||
+    ['READY', 'PENDING', 'WARNING'].includes(closureReadinessStatus) ||
     ['completed', 'concluida', 'concluída', 'concluido', 'concluído'].includes(status)
   );
   const inSession = !concluded && Boolean(
@@ -587,7 +594,7 @@ export const getAppointmentClosureOperationalView = (event: any, detail: any = n
     (cancelled
       ? 'cancelled'
       : concluded
-        ? normalizeClosureStatus(event?.closure_readiness_status) === 'READY'
+        ? closureReadinessStatus === 'READY'
           ? 'prefacturing_ready'
           : 'completed_pending_closure'
         : inSession
@@ -2437,6 +2444,7 @@ export const ClinicalAgendaBoard = ({
     ...(detail.closure || {})
   });
   const closureOperationalView = getAppointmentClosureOperationalView(detailEvent, closureDetailState.data);
+  const detailPrimaryAction = getAppointmentPrimaryAction(detailEvent, closureOperationalView.phase);
   const detailStatusColor = getAppointmentPatientConfirmationVisualState(detailEvent);
   const detailAppointmentConfirmed = detailStatusColor.canonical === 'CONFIRMED';
   const planItems = Array.isArray(detail.nextSessionPlanItems) ? detail.nextSessionPlanItems : [];
@@ -2662,6 +2670,8 @@ export const ClinicalAgendaBoard = ({
               <div className="space-y-2">
                 {selectedDayPanelEvents.map((event: any) => {
                   const statusColor = getAppointmentPatientConfirmationVisualState(event);
+                  const eventClosureView = getAppointmentClosureOperationalView(event);
+                  const primaryAction = getAppointmentPrimaryAction(event, eventClosureView.phase);
                   return (
                     <div key={event.id} className={`rounded-2xl border p-3 ${statusColor.card}`}>
                       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -2685,9 +2695,22 @@ export const ClinicalAgendaBoard = ({
                           <button type="button" onClick={() => { setSelectedDayKeyForPanel(''); openEventDetail(event); }} className={`rounded-xl border px-3 py-2 text-[11px] font-bold ${isDark ? 'border-slate-700 text-slate-200 hover:bg-slate-800' : 'border-slate-200 text-slate-600 hover:bg-white'}`}>
                             Detalhes
                           </button>
-                          <button type="button" onClick={() => onStartSession?.(event)} className={`rounded-xl border px-3 py-2 text-[11px] font-bold ${isDark ? 'border-violet-500/40 text-violet-200 hover:bg-violet-500/10' : 'border-violet-100 text-[#7a32fc] hover:bg-violet-50'}`}>
-                            Iniciar
-                          </button>
+                          {primaryAction.kind !== 'none' && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (primaryAction.kind === 'closure') {
+                                  setSelectedDayKeyForPanel('');
+                                  openEventDetail(event);
+                                  return;
+                                }
+                                onStartSession?.(event);
+                              }}
+                              className={`rounded-xl border px-3 py-2 text-[11px] font-bold ${isDark ? 'border-violet-500/40 text-violet-200 hover:bg-violet-500/10' : 'border-violet-100 text-[#7a32fc] hover:bg-violet-50'}`}
+                            >
+                              {primaryAction.label}
+                            </button>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -3264,10 +3287,22 @@ export const ClinicalAgendaBoard = ({
             )}
 
             <div className="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-2">
-              <button type="button" onClick={() => onStartSession?.(detailEvent)} className="flex items-center justify-center gap-2 rounded-2xl bg-[#7a32fc] px-4 py-3 text-sm font-bold text-white shadow-lg shadow-violet-500/20">
-                <Play size={16} />
-                Iniciar sessão
-              </button>
+              {detailPrimaryAction.kind !== 'none' && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (detailPrimaryAction.kind === 'closure') {
+                      if (!closureChecklistExpanded) openClosureChecklist(detailEvent);
+                      return;
+                    }
+                    onStartSession?.(detailEvent);
+                  }}
+                  className="flex items-center justify-center gap-2 rounded-2xl bg-[#7a32fc] px-4 py-3 text-sm font-bold text-white shadow-lg shadow-violet-500/20"
+                >
+                  {detailPrimaryAction.kind === 'closure' ? <ClipboardCheck size={16} /> : <Play size={16} />}
+                  {detailPrimaryAction.label}
+                </button>
+              )}
               <button type="button" onClick={() => setStatusActionEvent(detailEvent)} className="flex items-center justify-center gap-2 rounded-2xl border border-violet-200 bg-white px-4 py-3 text-sm font-bold text-[#7a32fc] hover:bg-violet-50">
                 <CheckCircle2 size={16} />
                 Ações de status

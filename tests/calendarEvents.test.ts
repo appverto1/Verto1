@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { getAppointmentPrimaryAction } from '../src/utils/appointmentPrimaryAction';
 
 const root = process.cwd();
 const serverCode = readFileSync(join(root, 'server.ts'), 'utf8');
@@ -8,6 +9,7 @@ const dataServiceCode = readFileSync(join(root, 'src/services/dataService.ts'), 
 const calendarCode = readFileSync(join(root, 'src/components/Calendar.tsx'), 'utf8');
 const coordinatorCode = readFileSync(join(root, 'src/components/CoordinatorDashboard.tsx'), 'utf8');
 const agendaPreferenceCode = readFileSync(join(root, 'src/utils/agendaViewPreference.ts'), 'utf8');
+const primaryActionCode = readFileSync(join(root, 'src/utils/appointmentPrimaryAction.ts'), 'utf8');
 const packageJson = readFileSync(join(root, 'package.json'), 'utf8');
 
 const tests: Array<{ name: string; fn: () => void }> = [];
@@ -159,7 +161,9 @@ test('popover tem acoes clinicas e nao registra sessao automaticamente', () => {
   assert.match(calendarCode, /Remarcar/);
   assert.match(calendarCode, /Cancelar/);
   assert.match(calendarCode, /Excluir/);
-  assert.match(calendarCode, /Iniciar sessão/);
+  assert.match(primaryActionCode, /Iniciar sessão/);
+  assert.match(primaryActionCode, /Continuar sessão/);
+  assert.match(primaryActionCode, /Ver fechamento/);
   assert.match(calendarCode, /Ver prontuário/);
   assert.match(calendarCode, /Ver plano sugerido/);
   assert.match(calendarCode, /Ver relatório/);
@@ -182,6 +186,36 @@ test('popover tem acoes clinicas e nao registra sessao automaticamente', () => {
   assert.match(serverCode, /\.neq\('status', 'deleted'\)/);
   assert.doesNotMatch(calendarCode, /completeMaintenanceSchedule\(/);
   assert.doesNotMatch(calendarCode, /saveAbaSessionSummary\(/);
+});
+
+test('ação principal respeita a fase operacional da consulta', () => {
+  assert.deepEqual(
+    getAppointmentPrimaryAction({ status: 'scheduled' }, 'scheduled_pre_session'),
+    { kind: 'start', label: 'Iniciar sessão' }
+  );
+  assert.deepEqual(
+    getAppointmentPrimaryAction({ status: 'in_progress', actual_start_at: '2026-06-25T10:00:00.000Z' }, 'in_session'),
+    { kind: 'continue', label: 'Continuar sessão' }
+  );
+  for (const phase of [
+    'completed_pending_closure',
+    'closed_ready_for_prefacturing',
+    'prefacturing_ready',
+    'prefacturing_blocked'
+  ]) {
+    assert.deepEqual(
+      getAppointmentPrimaryAction({ status: 'completed', has_session_record: true }, phase),
+      { kind: 'closure', label: 'Ver fechamento' }
+    );
+  }
+  assert.deepEqual(
+    getAppointmentPrimaryAction({ status: 'cancelled' }, 'cancelled'),
+    { kind: 'none', label: '' }
+  );
+  assert.match(calendarCode, /detailPrimaryAction\.kind !== 'none'/);
+  assert.match(calendarCode, /detailPrimaryAction\.label/);
+  assert.match(calendarCode, /primaryAction\.kind === 'closure'/);
+  assert.match(calendarCode, /\['READY', 'PENDING', 'WARNING'\]\.includes\(closureReadinessStatus\)/);
 });
 
 test('coordinator usa agenda clinica e padrao inicial mensal persistido', () => {

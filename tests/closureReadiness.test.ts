@@ -216,6 +216,119 @@ test('guia configurada como obrigatória antes da sessão vira pendência pré-s
   assert.equal(result.blockingIssuesCount, 1);
 });
 
+test('guia preenchida não aprova autorização pendente', () => {
+  const result = evaluateAppointmentClosureReadiness({
+    ...baseInput,
+    appointment: {
+      ...baseInput.appointment,
+      status: 'scheduled',
+      scheduled_start_at: '2026-05-29T09:00:00.000Z',
+      scheduled_end_at: '2026-05-29T09:45:00.000Z',
+      actual_start_at: null,
+      actual_end_at: null,
+      actual_duration_minutes: null,
+      authorization_code: '',
+      guide_number: 'GUIA-123'
+    },
+    abaSession: null,
+    sessionSummary: null,
+    signature: null,
+    requirements: {
+      requireAuthorization: true,
+      requireGuide: true
+    }
+  });
+  const authorization = result.checklist.find((item) => item.key === 'payer_authorization_required');
+  const guide = result.checklist.find((item) => item.key === 'payer_guide_required');
+  assert.equal(authorization?.status, 'FAILED');
+  assert.equal(authorization?.operationalStatus, 'blocking_now');
+  assert.equal(guide?.status, 'PASSED');
+  assert.equal(guide?.operationalStatus, 'passed');
+  assert.equal(result.blockingIssuesCount, 1);
+  assert.ok(result.sections.tissBilling.some((item) => item.key === 'payer_authorization_required' && item.status === 'FAILED'));
+  assert.ok(result.sections.tissBilling.some((item) => item.key === 'payer_guide_required' && item.status === 'PASSED'));
+  assert.ok(!result.checklist.some((item) => item.key === 'authorization_linked'));
+});
+
+test('autorização preenchida não aprova guia pendente', () => {
+  const result = evaluateAppointmentClosureReadiness({
+    ...baseInput,
+    appointment: {
+      ...baseInput.appointment,
+      status: 'scheduled',
+      scheduled_start_at: '2026-05-29T09:00:00.000Z',
+      scheduled_end_at: '2026-05-29T09:45:00.000Z',
+      actual_start_at: null,
+      actual_end_at: null,
+      actual_duration_minutes: null,
+      authorization_code: 'AUT-456',
+      guide_number: ''
+    },
+    abaSession: null,
+    sessionSummary: null,
+    signature: null,
+    requirements: {
+      requireAuthorization: true,
+      requireGuide: true
+    }
+  });
+  const authorization = result.checklist.find((item) => item.key === 'payer_authorization_required');
+  const guide = result.checklist.find((item) => item.key === 'payer_guide_required');
+  assert.equal(authorization?.status, 'PASSED');
+  assert.equal(authorization?.operationalStatus, 'passed');
+  assert.equal(guide?.status, 'FAILED');
+  assert.equal(guide?.operationalStatus, 'future_check');
+  assert.equal(result.blockingIssuesCount, 0);
+});
+
+test('guia e autorização preenchidas são aprovadas separadamente', () => {
+  const result = evaluateAppointmentClosureReadiness({
+    ...baseInput,
+    appointment: {
+      ...baseInput.appointment,
+      authorization_number: 'AUT-789',
+      tiss_guide_number: 'GUIA-789'
+    },
+    requirements: {
+      requireAuthorization: true,
+      requireGuide: true
+    }
+  });
+  assert.equal(result.checklist.find((item) => item.key === 'payer_authorization_required')?.status, 'PASSED');
+  assert.equal(result.checklist.find((item) => item.key === 'payer_guide_required')?.status, 'PASSED');
+  assert.ok(!result.checklist.some((item) => item.key === 'authorization_linked'));
+});
+
+test('guia e autorização ausentes permanecem itens independentes', () => {
+  const result = evaluateAppointmentClosureReadiness({
+    ...baseInput,
+    appointment: {
+      ...baseInput.appointment,
+      status: 'scheduled',
+      scheduled_start_at: '2026-05-29T09:00:00.000Z',
+      scheduled_end_at: '2026-05-29T09:45:00.000Z',
+      actual_start_at: null,
+      actual_end_at: null,
+      actual_duration_minutes: null,
+      authorization_code: '',
+      guide_number: ''
+    },
+    abaSession: null,
+    sessionSummary: null,
+    signature: null,
+    requirements: {
+      requireAuthorization: true,
+      requireGuide: true
+    }
+  });
+  const authorization = result.checklist.find((item) => item.key === 'payer_authorization_required');
+  const guide = result.checklist.find((item) => item.key === 'payer_guide_required');
+  assert.equal(authorization?.operationalStatus, 'blocking_now');
+  assert.equal(guide?.operationalStatus, 'future_check');
+  assert.equal(result.blockingIssuesCount, 1);
+  assert.ok(!result.checklist.some((item) => /Guia\/autorização vinculada/i.test(item.label)));
+});
+
 test('sessão em aberto não conta relatório assinatura ou duração como pendência', () => {
   const result = evaluateAppointmentClosureReadiness({
     ...baseInput,
