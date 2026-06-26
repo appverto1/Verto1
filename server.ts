@@ -33092,6 +33092,54 @@ async function startServer() {
     return { data: null, omittedColumns };
   };
 
+  const normalizeClinicPayerNameForUniqueMatch = (value: any) => sanitizeString(value, 180)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const isMissingPayerDisplayName = (value: any) => {
+    const normalized = normalizeClinicPayerNameForUniqueMatch(value);
+    return !normalized || ['sem pagador', 'sem convenio', 'sem convênio', 'nao informado', 'não informado'].includes(normalized);
+  };
+
+  const resolveClinicPayerByUniqueNameForTissPreGuide = async (organizationId: string, payerName: string) => {
+    const normalizedName = normalizeClinicPayerNameForUniqueMatch(payerName);
+    if (!isUuid(organizationId) || !normalizedName || isMissingPayerDisplayName(payerName)) {
+      return { status: 'missing_name', reasonCode: 'WITHOUT_REAL_PAYER', payer: null as any };
+    }
+    const { data, error } = await supabase
+      .from('clinic_payers')
+      .select(CLINIC_PAYER_SELECT)
+      .eq('organization_id', organizationId)
+      .ilike('name', payerName)
+      .limit(20);
+    if (error) {
+      if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) {
+        return { status: 'not_found', reasonCode: 'PAYER_NAME_NOT_FOUND', payer: null as any };
+      }
+      throw error;
+    }
+    const exactMatches = (Array.isArray(data) ? data : []).filter((payer: any) =>
+      normalizeClinicPayerNameForUniqueMatch(payer?.name) === normalizedName
+    );
+    const activeMatches = exactMatches.filter((payer: any) => {
+      const status = sanitizeString(payer?.status, 40)
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toUpperCase();
+      return !['INACTIVE', 'INATIVO', 'ARCHIVED', 'DELETED'].includes(status);
+    });
+    if (activeMatches.length === 1) {
+      return { status: 'matched', reasonCode: 'OK', payer: activeMatches[0] };
+    }
+    if (activeMatches.length > 1) {
+      return { status: 'ambiguous', reasonCode: 'AMBIGUOUS_PAYER_NAME', payer: null as any };
+    }
+    return { status: 'not_found', reasonCode: 'PAYER_NAME_NOT_FOUND', payer: null as any };
+  };
+
   const resolveEffectiveClosureBillingContext = async (params: {
     organizationId: string;
     patientId: string;
@@ -33232,6 +33280,30 @@ async function startServer() {
 
     const patientId = sanitizeString(appointment?.patient_id || appointment?.patientId || rawContext?.patient_id, 120);
     if (!isUuid(organizationId) || !isUuid(patientId)) return rawContext;
+    const resolvePayerIdByTrustedName = async (context: any) => {
+      const contextPayerId = sanitizeString(context?.payer_id || context?.payerId, 120);
+      if (isUuid(contextPayerId)) return context;
+      const payerName = sanitizeString(context?.payer_name_snapshot || context?.payerName || context?.payer_name, 180);
+      if (isMissingPayerDisplayName(payerName)) return context;
+      const resolution = await resolveClinicPayerByUniqueNameForTissPreGuide(organizationId, payerName);
+      if (resolution.status === 'matched' && resolution.payer?.id) {
+        return cleanObject({
+          ...context,
+          payer_id: sanitizeString(resolution.payer.id, 120),
+          payer_name_snapshot: sanitizeString(resolution.payer.name || payerName, 180) || payerName,
+          payer_type: normalizeAppointmentFinancialContextType(context?.payer_type) || 'INSURANCE',
+          payer_resolution_source: 'name_unique_match'
+        });
+      }
+      return cleanObject({
+        ...context,
+        payer_id: null,
+        payer_name_snapshot: payerName,
+        payer_type: normalizeAppointmentFinancialContextType(context?.payer_type) || 'INSURANCE',
+        payer_resolution_status: resolution.status,
+        payer_resolution_reason_code: resolution.reasonCode
+      });
+    };
     try {
       const effectiveContext = await resolveEffectiveAppointmentBillingContext({
         organizationId,
@@ -33239,13 +33311,14 @@ async function startServer() {
         appointment,
         billingContext: rawContext
       });
-      return mergeBillingContextMetadata(effectiveContext || rawContext) || rawContext;
+      const mergedEffectiveContext = mergeBillingContextMetadata(effectiveContext || rawContext) || rawContext;
+      return resolvePayerIdByTrustedName(mergedEffectiveContext);
     } catch (error: any) {
       console.warn('[TissPreGuide] effective billing context skipped:', {
         appointmentId: sanitizeString(appointment?.id || appointment?.appointment_id, 120),
         message: sanitizeTextField(error?.message, 300) || String(error)
       });
-      return rawContext;
+      return resolvePayerIdByTrustedName(rawContext);
     }
   };
 
@@ -39433,6 +39506,7 @@ async function startServer() {
         if (eligibility.reason === 'not_applicable') diagnostics.notBillable += 1;
         if (eligibility.reason === 'missing_financial_context') diagnostics.withoutFinancialContext += 1;
         const filteredByPayer = Boolean(payerId && eligibility.payerId !== payerId);
+        const payerResolutionReasonCode = sanitizeString(billingContext?.payer_resolution_reason_code, 80);
         const reasonCode = filteredByPayer
           ? 'PAYER_FILTER_MISMATCH'
           : eligibility.eligible
@@ -39442,7 +39516,9 @@ async function startServer() {
               : eligibility.reason === 'missing_financial_context'
                 ? 'WITHOUT_FINANCIAL_CONTEXT'
                 : eligibility.reason === 'missing_payer'
-                  ? 'WITHOUT_REAL_PAYER'
+                  ? payerResolutionReasonCode === 'AMBIGUOUS_PAYER_NAME' || payerResolutionReasonCode === 'PAYER_NAME_NOT_FOUND'
+                    ? payerResolutionReasonCode
+                    : 'WITHOUT_REAL_PAYER'
                   : eligibility.reason === 'patient_missing'
                     ? 'PATIENT_MISSING'
                     : eligibility.reason === 'professional_missing'
@@ -39460,13 +39536,19 @@ async function startServer() {
               ? 'Atendimento fora do fluxo de Pré-guia TISS por contexto financeiro.'
               : reasonCode === 'WITHOUT_FINANCIAL_CONTEXT'
                 ? 'Atendimento sem contexto financeiro de convênio aplicado.'
-                : reasonCode === 'WITHOUT_REAL_PAYER'
-                  ? 'Atendimento de convênio sem pagador real aplicado.'
-                  : reasonCode === 'PAYER_FILTER_MISMATCH'
-                    ? 'Atendimento pertence a outro pagador no filtro informado.'
+              : reasonCode === 'WITHOUT_REAL_PAYER'
+                ? 'Atendimento de convênio sem pagador real aplicado.'
+              : reasonCode === 'AMBIGUOUS_PAYER_NAME'
+                ? `Mais de um pagador ativo encontrado para ${sanitizeString(billingContext?.payer_name_snapshot, 180) || 'este convênio'}. Selecione o convênio diretamente no atendimento.`
+              : reasonCode === 'PAYER_NAME_NOT_FOUND'
+                ? `Pagador ${sanitizeString(billingContext?.payer_name_snapshot, 180) || 'informado'} não encontrado como convênio ativo da clínica.`
+              : reasonCode === 'PAYER_FILTER_MISMATCH'
+                ? 'Atendimento pertence a outro pagador no filtro informado.'
                     : 'Atendimento sem dados mínimos para Pré-guia TISS.',
           payerName: sanitizeString(billingContext?.payer_name_snapshot || appointment?.payer_name || appointment?.payerName, 180) || null,
-          payerId: eligibility.payerId || null,
+          payerId: eligibility.payerId || sanitizeString(billingContext?.payer_id, 120) || null,
+          payerResolutionSource: sanitizeString(billingContext?.payer_resolution_source, 80) || null,
+          payerResolutionStatus: sanitizeString(billingContext?.payer_resolution_status, 80) || null,
           guideNumber: sanitizeString(billingContext?.guide_number || billingContext?.guideNumber, 120) || null,
           authorizationCode: sanitizeString(billingContext?.authorization_code || billingContext?.authorizationCode || billingContext?.authorization_password || billingContext?.authorizationPassword, 120) || null,
           insuranceCardNumber: sanitizeString(billingContext?.insurance_card_number || billingContext?.insuranceCardNumber, 120) || null,
@@ -39583,10 +39665,13 @@ async function startServer() {
                 : 'Pré-guia TISS revalidada com pendências de dados.';
             detail.payerName = preGuide.payerName || detail.payerName || null;
             detail.payerId = preGuide.payerId || detail.payerId || null;
+            detail.payerResolutionSource = detail.payerResolutionSource || sanitizeString((effectiveContextsByAppointment.get(appointmentId) || {})?.payer_resolution_source, 80) || null;
             detail.tussCode = preGuide.tussCode || detail.tussCode || null;
             detail.guideNumber = preGuide.guideNumber || detail.guideNumber || null;
             detail.authorizationCode = preGuide.authorizationCode || detail.authorizationCode || null;
+            detail.unitAmountCents = preGuide.unitAmountCents ?? null;
             detail.totalAmountCents = preGuide.totalAmountCents ?? null;
+            detail.blockingCount = Number(preGuide.antiGlosaChecklist?.blockingCount || 0) || 0;
             detail.preGuideId = preGuide.id || null;
           }
           items.push(preGuide);
