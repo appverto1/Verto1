@@ -2413,11 +2413,11 @@ export const ClinicalAgendaBoard = ({
     const dayCells = Array.from({ length: daysInMonth }, (_, index) => index + 1);
     const trailingBlanks = Array.from({ length: Math.max(0, 42 - blanks.length - dayCells.length) }, (_, index) => index);
     return (
-      <div className={`flex h-full min-h-0 flex-col overflow-hidden rounded-[18px] border p-1.5 ${isDark ? 'border-slate-700 bg-slate-950' : 'border-slate-200 bg-white'}`}>
-        <div className="grid shrink-0 grid-cols-7 gap-1.5 pb-2 text-center text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
+      <div className={`flex h-full min-h-0 flex-col overflow-hidden rounded-[18px] border p-1 ${isDark ? 'border-slate-700 bg-slate-950' : 'border-slate-200 bg-white'}`}>
+        <div className="grid shrink-0 grid-cols-7 gap-1 pb-1 text-center text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
           {['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map((day) => <span key={day}>{day}</span>)}
         </div>
-        <div className="grid min-h-0 flex-1 grid-cols-7 grid-rows-6 gap-1.5 overflow-hidden">
+        <div className="grid min-h-0 flex-1 grid-cols-7 grid-rows-6 gap-1 overflow-hidden">
           {blanks.map((blank) => <div key={`month-blank-${blank}`} className={`min-h-0 rounded-lg border ${isDark ? 'border-slate-900 bg-slate-900/40' : 'border-slate-50 bg-slate-50/40'}`} />)}
           {dayCells.map((day) => {
             const date = new Date(year, month, day);
@@ -2445,7 +2445,7 @@ export const ClinicalAgendaBoard = ({
                   event.preventDefault();
                   onCreateAppointment?.(key, '08:00');
                 }}
-                className={`flex min-h-0 cursor-pointer flex-col overflow-hidden rounded-lg border p-1.5 text-left transition-all ${
+                className={`flex min-h-0 cursor-pointer flex-col overflow-hidden rounded-lg border p-1 text-left transition-all ${
                   key === selectedDateKey
                     ? 'border-[#7a32fc]/40 bg-[#7a32fc]/5'
                     : isToday
@@ -2453,18 +2453,18 @@ export const ClinicalAgendaBoard = ({
                       : isDark ? 'border-slate-800 bg-slate-900 hover:bg-slate-800' : 'border-slate-100 bg-slate-50/60 hover:bg-white'
                 }`}
               >
-                <div className="mb-1 flex shrink-0 items-center justify-between gap-2">
-                  <span className={`text-xs font-bold ${isToday ? 'text-[#7a32fc]' : isDark ? 'text-slate-200' : 'text-slate-700'}`}>{day}</span>
+                <div className="mb-0.5 flex shrink-0 items-center justify-between gap-1.5">
+                  <span className={`text-[11px] font-bold ${isToday ? 'text-[#7a32fc]' : isDark ? 'text-slate-200' : 'text-slate-700'}`}>{day}</span>
                   {items.length > 0 && (
                     <span className="flex items-center gap-1">
                       {dayMaintenancePendingCount > 0 && <span title={`${dayMaintenancePendingCount} sondagem(ns) pendente(s)`} className="h-2 w-2 rounded-full bg-amber-500" />}
-                      <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-bold ${isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-500'}`}>
+                      <span className={`rounded-full px-1 py-0 text-[8px] font-bold ${isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-500'}`}>
                         {items.length}
                       </span>
                     </span>
                   )}
                 </div>
-                <div className="min-h-0 flex-1 space-y-1 overflow-y-auto pr-1 overscroll-contain custom-scrollbar">
+                <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto pr-0.5 overscroll-contain custom-scrollbar">
                   {items.map((event: any) => {
                     const statusColor = getAppointmentPatientConfirmationVisualState(event);
                     return (
@@ -2476,7 +2476,7 @@ export const ClinicalAgendaBoard = ({
                           clickEvent.stopPropagation();
                           openEventDetail(event);
                         }}
-                        className={`flex min-h-[22px] w-full items-center gap-1.5 rounded-md border px-1.5 py-0.5 text-left text-[11px] font-semibold leading-4 transition-colors ${statusColor.card}`}
+                        className={`flex min-h-[20px] w-full items-center gap-1 rounded-md border px-1.5 py-0 text-left text-[10px] font-medium leading-4 transition-colors ${statusColor.card}`}
                       >
                         <span className="shrink-0 tabular-nums">{event.time}</span>
                         <span className="min-w-0 truncate">{event.patientName}</span>
@@ -2586,7 +2586,7 @@ export const ClinicalAgendaBoard = ({
   };
 
   return (
-    <div className="flex flex-col gap-2 pb-[calc(env(safe-area-inset-bottom)+5rem)] xl:h-[calc(100vh-5rem)] xl:min-h-[560px] xl:overflow-hidden xl:pb-0">
+    <div className="flex flex-col gap-2 pb-[calc(env(safe-area-inset-bottom)+5rem)] xl:h-[calc(100vh-4.25rem)] xl:min-h-[580px] xl:overflow-hidden xl:pb-0">
       <div className="shrink-0 px-1 py-1">
         <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
           <div className="flex min-w-0 items-center gap-1.5">

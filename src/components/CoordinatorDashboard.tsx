@@ -7942,7 +7942,7 @@ export function CoordinatorDashboard({
           )}
         </AnimatePresence>
 
-        <main className="px-4 lg:px-8 pt-2 pb-16">
+        <main className={`px-4 lg:px-8 pt-2 ${activeTab === "agenda" ? "pb-2" : "pb-16"}`}>
           {isPaymentModalOpen && (
             <div
               className="fixed inset-0 z-[130] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in"

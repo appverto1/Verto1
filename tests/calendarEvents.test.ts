@@ -177,7 +177,7 @@ test('agenda atualiza automaticamente apos resposta do portal', () => {
 test('agenda mensal usa scroll interno por dia sem janela de excedentes', () => {
   assert.match(calendarCode, /grid-rows-6/);
   assert.match(calendarCode, /items\.map\(\(event: any\) =>/);
-  assert.match(calendarCode, /overflow-y-auto pr-1 overscroll-contain custom-scrollbar/);
+  assert.match(calendarCode, /overflow-y-auto pr-0\.5 overscroll-contain custom-scrollbar/);
   assert.match(calendarCode, /onCreateAppointment\?\.\(key, '08:00'\)/);
   assert.doesNotMatch(calendarCode, /CALENDAR_MONTH_VISIBLE_EVENT_LIMIT/);
   assert.doesNotMatch(calendarCode, /\+\{items\.length/);
@@ -351,12 +351,14 @@ test('coordinator usa agenda clinica e padrao inicial mensal persistido', () => 
 });
 
 test('visao mensal prioriza calendario amplo e eventos rolaveis no proprio dia', () => {
-  assert.match(calendarCode, /xl:h-\[calc\(100vh-5rem\)\]/);
+  assert.match(calendarCode, /xl:h-\[calc\(100vh-4\.25rem\)\]/);
+  assert.match(coordinatorCode, /activeTab === "agenda" \? "pb-2" : "pb-16"/);
   assert.match(calendarCode, /xl:grid-cols-\[260px_minmax\(0,1fr\)\]/);
   assert.match(calendarCode, /h-full overflow-y-auto p-3 pr-2 custom-scrollbar/);
   assert.match(calendarCode, /grid-rows-6/);
   assert.match(calendarCode, /items\.map\(\(event: any\) =>/);
-  assert.match(calendarCode, /overflow-y-auto pr-1 overscroll-contain custom-scrollbar/);
+  assert.match(calendarCode, /space-y-0\.5 overflow-y-auto pr-0\.5 overscroll-contain custom-scrollbar/);
+  assert.match(calendarCode, /min-h-\[20px\]/);
   assert.doesNotMatch(calendarCode, /Agenda cl.nica/);
   assert.doesNotMatch(calendarCode, /Agenda operacional/);
   assert.doesNotMatch(calendarCode, /\+\{items\.length/);
