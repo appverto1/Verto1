@@ -558,6 +558,35 @@ test('billing aplicado com autorização TISS vigente alinha pagador guia e auto
   assert.equal(result.sections.preSession.some((item) => item.key === 'payer_linked' && item.operationalStatus !== 'passed'), false);
 });
 
+test('billing context de convênio com payer_name aplicado passa mesmo sem payer_id', () => {
+  const result = evaluateAppointmentClosureReadiness({
+    ...baseInput,
+    appointment: {
+      ...baseInput.appointment,
+      payer_id: null,
+      payer_name_snapshot: 'Amil',
+      payer_type: 'INSURANCE',
+      financial_context_type: 'INSURANCE',
+      guide_number: '12345679',
+      authorization_code: '123456789'
+    },
+    requirements: {
+      payerName: 'Amil',
+      requireAuthorization: true,
+      requireGuide: true
+    }
+  });
+  const payerCheck = result.checklist.find((item) => item.key === 'payer_linked');
+  const authorization = result.checklist.find((item) => item.key === 'payer_authorization_required');
+  const guide = result.checklist.find((item) => item.key === 'payer_guide_required');
+  assert.equal(payerCheck?.status, 'PASSED');
+  assert.equal(payerCheck?.message, 'Pagador Amil aplicado ao atendimento.');
+  assert.equal(payerCheck?.evidence?.present, true);
+  assert.equal(payerCheck?.evidence?.suggested, false);
+  assert.equal(authorization?.status, 'PASSED');
+  assert.equal(guide?.status, 'PASSED');
+});
+
 test('pagador sugerido pelo plano financeiro não vira convênio vinculado', () => {
   const result = evaluateAppointmentClosureReadiness({
     ...baseInput,

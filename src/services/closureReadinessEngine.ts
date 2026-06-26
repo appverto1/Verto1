@@ -580,8 +580,10 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
     appointment.payerNameSnapshot,
     appointment.payerName
   ));
-  const payerLinkedStatus: ClosureCheckStatus = appointmentPayerId || nonInsuranceFinancialContext ? 'PASSED' : 'FAILED';
-  const payerLinkedMessage = appointmentPayerId
+  const hasAppliedPayerByName = !appointmentPayerId && financialContextType === 'INSURANCE' && Boolean(appointmentPayerName);
+  const hasAppliedPayer = Boolean(appointmentPayerId || hasAppliedPayerByName);
+  const payerLinkedStatus: ClosureCheckStatus = hasAppliedPayer || nonInsuranceFinancialContext ? 'PASSED' : 'FAILED';
+  const payerLinkedMessage = hasAppliedPayer
     ? `Pagador ${appointmentPayerName || 'informado'} aplicado ao atendimento.`
     : nonInsuranceFinancialContext
       ? `Contexto financeiro definido: ${financialContextType === 'PRIVATE' ? 'particular' : financialContextType === 'PACKAGE' || financialContextType === 'MONTHLY' ? 'pacote/mensalidade' : financialContextType === 'COURTESY' ? 'cortesia' : financialContextType === 'NO_CHARGE' ? 'sem cobrança' : 'não faturável'}.`
@@ -697,14 +699,14 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
     'Convênio/pagador vinculado',
     payerLinkedStatus,
     !nonInsuranceFinancialContext,
-    appointmentPayerId || nonInsuranceFinancialContext ? 'LOW' : 'HIGH',
+    hasAppliedPayer || nonInsuranceFinancialContext ? 'LOW' : 'HIGH',
     payerLinkedMessage,
     {
-      present: Boolean(appointmentPayerId || nonInsuranceFinancialContext),
+      present: Boolean(hasAppliedPayer || nonInsuranceFinancialContext),
       financialContextType: financialContextType || null,
-      suggested: Boolean(!appointmentPayerId && suggestedPayerName),
-      suggestedPayerName: suggestedPayerName || null,
-      payerName: appointmentPayerId ? appointmentPayerName || null : null,
+      suggested: Boolean(!hasAppliedPayer && suggestedPayerName),
+      suggestedPayerName: !hasAppliedPayer ? suggestedPayerName || null : null,
+      payerName: hasAppliedPayer ? appointmentPayerName || null : null,
       insuranceCardPresent: Boolean(insuranceCardNumber),
       source: requirements.payerRequirementSource || 'DEFAULT'
     }

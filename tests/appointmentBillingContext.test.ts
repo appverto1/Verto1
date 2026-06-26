@@ -356,8 +356,12 @@ test('payer_id e appointment_id fora da organizacao sao rejeitados', () => {
 test('fechamento usa pagador da consulta, nao plano do paciente como substituto', () => {
   const payerBlockIndex = closureCode.indexOf("'payer_linked'");
   assert.ok(payerBlockIndex > 0, 'payer_linked deve existir');
-  const payerBlock = closureCode.slice(Math.max(0, payerBlockIndex - 1600), payerBlockIndex + 900);
-  assert.match(closureCode, /const payerLinkedStatus: ClosureCheckStatus = appointmentPayerId \|\| nonInsuranceFinancialContext \? 'PASSED' : 'FAILED'/);
+  const payerInputIndex = closureCode.indexOf('const appointmentPayerId');
+  assert.ok(payerInputIndex > 0, 'entrada de pagador do fechamento deve existir');
+  const payerBlock = closureCode.slice(payerInputIndex, payerBlockIndex + 900);
+  assert.match(closureCode, /const hasAppliedPayerByName = !appointmentPayerId && financialContextType === 'INSURANCE' && Boolean\(appointmentPayerName\)/);
+  assert.match(closureCode, /const hasAppliedPayer = Boolean\(appointmentPayerId \|\| hasAppliedPayerByName\)/);
+  assert.match(closureCode, /const payerLinkedStatus: ClosureCheckStatus = hasAppliedPayer \|\| nonInsuranceFinancialContext \? 'PASSED' : 'FAILED'/);
   assert.match(closureCode, /Pagador sugerido pelo plano financeiro/);
   assert.match(closureCode, /Contexto financeiro definido/);
   assert.match(payerBlock, /appointmentPayerId/);
@@ -371,8 +375,8 @@ test('modal do fechamento mostra pagador sugerido sem marcar como aplicado', () 
   assert.ok(normalizeStart > 0, 'normalizador do checklist hidratado deve existir');
   const normalizeSlice = serverCode.slice(normalizeStart, normalizeStart + 1500);
   assert.match(serverCode, /const repairChecklistDisplayText/);
-  assert.match(normalizeSlice, /const hasRealPayer = isUuid\(sanitizeString\(hydratedRow\?\.payer_id, 120\)\)/);
   assert.match(normalizeSlice, /const payerName = sanitizeString\(hydratedRow\?\.payer_name \|\| hydratedRow\?\.payer_name_snapshot, 180\)/);
+  assert.match(normalizeSlice, /const hasRealPayer = isUuid\(sanitizeString\(hydratedRow\?\.payer_id, 120\)\) \|\| Boolean\(payerName && payerName !== 'Sem pagador'\)/);
   assert.match(normalizeSlice, /label: repairChecklistDisplayText\(item\?\.label, 180\)/);
   assert.match(normalizeSlice, /message: repairChecklistDisplayText\(item\?\.message, 800\)/);
   assert.match(normalizeSlice, /status: hasRealPayer \? 'PASSED' : 'FAILED'/);
@@ -392,8 +396,12 @@ test('modal do fechamento mostra pagador sugerido sem marcar como aplicado', () 
   const hydrateEnd = serverCode.indexOf('const loadConferenceClosureRows', hydrateStart);
   assert.ok(hydrateStart > 0 && hydrateEnd > hydrateStart, 'hidratação do fechamento deve existir');
   const hydrateSlice = serverCode.slice(hydrateStart, hydrateEnd);
+  assert.match(hydrateSlice, /const billingPayerName = sanitizeString\(billing\?\.payer_name_snapshot, 180\)/);
+  assert.match(hydrateSlice, /billing\?\.payer_id \|\| billingPayerName \? 'INSURANCE' : null/);
   assert.match(hydrateSlice, /const billingPayerId = sanitizeString\(billing\?\.payer_id, 120\)/);
   assert.match(hydrateSlice, /const appliedPayerId = isUuid\(rowPayerId\) \? rowPayerId : isUuid\(billingPayerId\) \? billingPayerId : null/);
+  assert.match(hydrateSlice, /const hasBillingPayerName = billingContextType === 'INSURANCE' && Boolean\(billingPayerName && billingPayerName !== 'Sem pagador'\)/);
+  assert.match(hydrateSlice, /const hasRealPayer = isUuid\(appliedPayerId\) \|\| hasBillingPayerName/);
   assert.match(hydrateSlice, /payer_id: appliedPayerId/);
   assert.match(hydrateSlice, /payer_name: hasRealPayer \? appliedPayerName : 'Sem pagador'/);
   assert.match(hydrateSlice, /insurance_plan_name: sanitizeString\(billing\?\.insurance_plan_name \|\| patient\?\.insurance_plan_category, 160\) \|\| null/);
