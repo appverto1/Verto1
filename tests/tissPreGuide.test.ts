@@ -1305,8 +1305,20 @@ test('revalidação pontual e por período materializam Pré-guias sem backfill 
     serverCode.indexOf("app.post('/api/tiss/pre-guides/revalidate-period'"),
     serverCode.indexOf("app.get('/api/tiss/pre-guides/:appointmentId'")
   );
+  const builder = serverCode.slice(
+    serverCode.indexOf('const buildAndPersistTissPreGuideForAppointment'),
+    serverCode.indexOf('const clearAppointmentBillingItemForAppointment')
+  );
   assert.match(periodRoute, /fetchClosurePeriodAppointmentRows/);
   assert.match(periodRoute, /evaluateTissPreGuideEligibility/);
+  assert.match(periodRoute, /checkTissPreGuidePersistenceAvailability/);
+  assert.match(serverCode, /checkedBeforeProcessing:\s*true/);
+  assert.match(periodRoute, /detailsByAppointment/);
+  assert.match(periodRoute, /reasonCode/);
+  assert.match(periodRoute, /WITHOUT_FINANCIAL_CONTEXT/);
+  assert.match(periodRoute, /WITHOUT_REAL_PAYER/);
+  assert.match(periodRoute, /READY_FOR_REVALIDATION/);
+  assert.match(periodRoute, /TISS_PRE_GUIDE_SCHEMA_UNAVAILABLE/);
   assert.match(periodRoute, /revalidateAppointmentBillingForAppointment/);
   assert.match(periodRoute, /foundAppointments/);
   assert.match(periodRoute, /eligible/);
@@ -1316,6 +1328,12 @@ test('revalidação pontual e por período materializam Pré-guias sem backfill 
   assert.match(periodRoute, /pendingData/);
   assert.match(periodRoute, /withoutBillingItem/);
   assert.match(periodRoute, /withoutFinancialContext/);
+  assert.match(periodRoute, /details/);
+  assert.match(serverCode, /APPOINTMENT_TISS_PRE_GUIDE_BASE_SELECT/);
+  assert.match(serverCode, /APPOINTMENT_TISS_PRE_GUIDE_LIST_BASE_SELECT/);
+  assert.match(serverCode, /isOptionalTissPreGuideColumn/);
+  assert.match(builder, /optional persistence column unavailable, retrying base schema/);
+  assert.match(builder, /withoutOptionalTissPreGuidePayloadColumns/);
   assert.doesNotMatch(periodRoute, /\.select\('\*'\)/);
   assert.doesNotMatch(periodRoute, /payer_name_snapshot.*eligible|payer_name.*eligible/);
 
@@ -1323,6 +1341,17 @@ test('revalidação pontual e por período materializam Pré-guias sem backfill 
   assert.match(serverCode, /handleTissPreGuideRevalidation/);
   assert.match(serverCode, /TISS_PRE_GUIDE_NOT_MATERIALIZED/);
   assert.match(serverCode, /onConflict: 'organization_id,appointment_id'/);
+});
+
+test('botão de revalidação do período é único e comunica schema indisponível', () => {
+  const periodButtonCount = (preGuideUiCode.match(/Gerar\/Revalidar pré-guias do período/g) || []).length;
+  assert.equal(periodButtonCount, 1);
+  const revalidateClickCount = (preGuideUiCode.match(/onClick=\{\(\) => void revalidatePeriod\(\)\}/g) || []).length;
+  assert.equal(revalidateClickCount, 1);
+  assert.match(preGuideUiCode, /Estrutura de Pré-guia TISS indisponível/);
+  assert.match(preGuideUiCode, /Use a ação primária acima para gerar\/revalidar o período/);
+  assert.match(preGuideUiCode, /Use a ação primária acima para gerar ou revalidar as pré-guias do período/);
+  assert.doesNotMatch(preGuideUiCode, /Gerar\/Revalidar pendentes do período/);
 });
 
 test('revalidar sessão em Fechamento e Conferência propaga status da Pré-guia', () => {
@@ -1618,7 +1647,8 @@ test('frontend separa Pré-guias e Rascunhos XML com preview interno', () => {
   assert.match(preGuideUiCode, /<ActiveFilterBanner/);
   assert.match(preGuideUiCode, /missingPreGuides/);
   assert.match(preGuideUiCode, /stalePreGuides/);
-  assert.match(preGuideUiCode, /Gerar\/Revalidar pendentes/);
+  assert.doesNotMatch(preGuideUiCode, /Gerar\/Revalidar pendentes/);
+  assert.match(preGuideUiCode, /Use a ação primária acima para gerar\/revalidar o período/);
   assert.match(preGuideUiCode, /Nenhum atendimento eleg/);
   assert.doesNotMatch(preGuideUiCode, /Enviar lote|Enviar remessa|Registrar glosa|Remessa enviada|Faturamento TISS concluído|Guia oficial enviada|Lote transmitido|Retorno importado|Glosa processada|Recurso de glosa/i);
 });

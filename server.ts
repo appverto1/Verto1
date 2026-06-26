@@ -4177,7 +4177,7 @@ const PATIENT_PAYER_AUTHORIZATION_SELECT = [
   'updated_at'
 ].join(',');
 
-const APPOINTMENT_TISS_PRE_GUIDE_SELECT = [
+const APPOINTMENT_TISS_PRE_GUIDE_BASE_COLUMNS = [
   'id',
   'organization_id',
   'clinic_id',
@@ -4215,17 +4215,46 @@ const APPOINTMENT_TISS_PRE_GUIDE_SELECT = [
   'validation_error_codes',
   'validation_warning_codes',
   'snapshot_data',
-  'official_document_id',
-  'revenue_cycle_state',
-  'revenue_cycle_state_reason',
-  'anti_glosa_checklist',
-  'anti_glosa_risk_codes',
   'generated_from_version',
   'stale_reason',
   'created_at',
   'updated_at',
   'last_validated_at'
+];
+
+const APPOINTMENT_TISS_PRE_GUIDE_OPTIONAL_COLUMNS = [
+  'official_document_id',
+  'revenue_cycle_state',
+  'revenue_cycle_state_reason',
+  'anti_glosa_checklist',
+  'anti_glosa_risk_codes'
+];
+
+const APPOINTMENT_TISS_PRE_GUIDE_SELECT = [
+  ...APPOINTMENT_TISS_PRE_GUIDE_BASE_COLUMNS,
+  ...APPOINTMENT_TISS_PRE_GUIDE_OPTIONAL_COLUMNS
 ].join(',');
+
+const APPOINTMENT_TISS_PRE_GUIDE_BASE_SELECT = APPOINTMENT_TISS_PRE_GUIDE_BASE_COLUMNS.join(',');
+
+const APPOINTMENT_TISS_PRE_GUIDE_OPTIONAL_PAYLOAD_COLUMNS = new Set([
+  'revenue_cycle_state',
+  'revenue_cycle_state_reason',
+  'anti_glosa_checklist',
+  'anti_glosa_risk_codes'
+]);
+
+const isOptionalTissPreGuideColumn = (column: string | null | undefined) =>
+  Boolean(column && (
+    APPOINTMENT_TISS_PRE_GUIDE_OPTIONAL_COLUMNS.includes(column) ||
+    APPOINTMENT_TISS_PRE_GUIDE_OPTIONAL_PAYLOAD_COLUMNS.has(column)
+  ));
+
+const withoutOptionalTissPreGuidePayloadColumns = (payload: Record<string, any>) => {
+  const next = { ...payload };
+  for (const column of APPOINTMENT_TISS_PRE_GUIDE_OPTIONAL_PAYLOAD_COLUMNS) delete next[column];
+  return next;
+};
 
 const APPOINTMENT_TISS_PRE_GUIDE_LIST_SELECT = [
   'id',
@@ -4261,6 +4290,11 @@ const APPOINTMENT_TISS_PRE_GUIDE_LIST_SELECT = [
   'updated_at',
   'last_validated_at'
 ].join(',');
+
+const APPOINTMENT_TISS_PRE_GUIDE_LIST_BASE_SELECT = APPOINTMENT_TISS_PRE_GUIDE_LIST_SELECT
+  .split(',')
+  .filter((column) => !APPOINTMENT_TISS_PRE_GUIDE_OPTIONAL_COLUMNS.includes(column))
+  .join(',');
 
 const TISS_XML_DRAFT_SELECT = [
   'id',
@@ -36173,6 +36207,47 @@ async function startServer() {
     return true;
   };
 
+  const checkTissPreGuidePersistenceAvailability = async (organizationId: string) => {
+    const strategy = getDefaultTissOfficialStrategyDescriptor();
+    const { error } = await supabase
+      .from('appointment_tiss_pre_guides')
+      .select('id,appointment_id,status')
+      .eq('organization_id', organizationId)
+      .limit(1);
+    const missingColumn = extractMissingColumnName(error);
+    if (error && (isMissingRelationError(error) || hasMissingFinancialSchema(error))) {
+      return {
+        available: false,
+        code: 'TISS_PRE_GUIDE_SCHEMA_UNAVAILABLE',
+        missingColumn,
+        diagnostics: {
+          schemaAvailable: false,
+          checkedBeforeProcessing: true,
+          strategyKey: strategy.strategyKey,
+          communicationVersion: strategy.communicationVersion,
+          contentStructureVersion: strategy.contentStructureVersion,
+          tussVersion: strategy.tussVersion,
+          missingColumn: missingColumn || null,
+          errorCode: sanitizeString(error?.code, 40) || null
+        }
+      };
+    }
+    if (error) throw error;
+    return {
+      available: true,
+      code: null,
+      missingColumn: null,
+      diagnostics: {
+        schemaAvailable: true,
+        checkedBeforeProcessing: true,
+        strategyKey: strategy.strategyKey,
+        communicationVersion: strategy.communicationVersion,
+        contentStructureVersion: strategy.contentStructureVersion,
+        tussVersion: strategy.tussVersion
+      }
+    };
+  };
+
   const createTissBillingBatchDraftForXmlDraft = async (params: {
     organizationId: string;
     payerId: string;
@@ -36653,11 +36728,28 @@ async function startServer() {
       updated_at: now,
       last_validated_at: now
     });
-    const persisted = await supabase
+    let persisted = await supabase
       .from('appointment_tiss_pre_guides')
       .upsert(payload, { onConflict: 'organization_id,appointment_id' })
       .select(APPOINTMENT_TISS_PRE_GUIDE_SELECT)
       .maybeSingle();
+    if (persisted.error) {
+      const missingColumn = extractMissingColumnName(persisted.error);
+      if (isOptionalTissPreGuideColumn(missingColumn)) {
+        console.warn('[TissPreGuide] optional persistence column unavailable, retrying base schema:', {
+          appointmentId,
+          missingColumn
+        });
+        const fallbackPayload = APPOINTMENT_TISS_PRE_GUIDE_OPTIONAL_PAYLOAD_COLUMNS.has(String(missingColumn || ''))
+          ? withoutOptionalTissPreGuidePayloadColumns(payload)
+          : payload;
+        persisted = await supabase
+          .from('appointment_tiss_pre_guides')
+          .upsert(fallbackPayload, { onConflict: 'organization_id,appointment_id' })
+          .select(APPOINTMENT_TISS_PRE_GUIDE_BASE_SELECT)
+          .maybeSingle();
+      }
+    }
     if (persisted.error) {
       const missingColumn = extractMissingColumnName(persisted.error);
       if (missingColumn || isMissingRelationError(persisted.error)) {
@@ -37890,10 +37982,10 @@ async function startServer() {
         return query;
       };
       const offset = (page - 1) * pageSize;
-      const listQuery = applyFilters(
+      const buildListQuery = (selectColumns: string) => applyFilters(
         supabase
           .from('appointment_tiss_pre_guides')
-          .select(APPOINTMENT_TISS_PRE_GUIDE_LIST_SELECT, { count: 'exact' })
+          .select(selectColumns, { count: 'exact' })
       )
         .order('scheduled_start', { ascending: false })
         .range(offset, offset + pageSize - 1);
@@ -37903,7 +37995,11 @@ async function startServer() {
           .select('status,validation_error_codes'),
         false
       ).limit(5000);
-      const [listResult, kpiResult] = await Promise.all([listQuery, kpiQuery]);
+      let listResult = await buildListQuery(APPOINTMENT_TISS_PRE_GUIDE_LIST_SELECT);
+      if (listResult.error && isOptionalTissPreGuideColumn(extractMissingColumnName(listResult.error))) {
+        listResult = await buildListQuery(APPOINTMENT_TISS_PRE_GUIDE_LIST_BASE_SELECT);
+      }
+      const kpiResult = await kpiQuery;
       if (listResult.error) {
         if (hasMissingFinancialSchema(listResult.error) || isMissingRelationError(listResult.error)) {
           return sendNoStoreJson(res, { success: true, data: [], page, pageSize, total: 0, kpis: {} });
@@ -39271,6 +39367,8 @@ async function startServer() {
         withoutFinancialContext: 0
       };
       const eligibleAppointments: any[] = [];
+      const details: any[] = [];
+      const detailsByAppointment = new Map<string, any>();
       for (const appointment of scopedAppointments) {
         const appointmentId = sanitizeString(appointment?.id, 120);
         const billingContext = contextsByAppointment.get(appointmentId) || null;
@@ -39282,8 +39380,51 @@ async function startServer() {
         if (!billingItem?.id) diagnostics.withoutBillingItem += 1;
         if (eligibility.reason === 'not_applicable') diagnostics.notBillable += 1;
         if (eligibility.reason === 'missing_financial_context') diagnostics.withoutFinancialContext += 1;
+        const filteredByPayer = Boolean(payerId && eligibility.payerId !== payerId);
+        const reasonCode = filteredByPayer
+          ? 'PAYER_FILTER_MISMATCH'
+          : eligibility.eligible
+            ? 'READY_FOR_REVALIDATION'
+            : eligibility.reason === 'not_applicable'
+              ? 'NOT_BILLABLE'
+              : eligibility.reason === 'missing_financial_context'
+                ? 'WITHOUT_FINANCIAL_CONTEXT'
+                : eligibility.reason === 'missing_payer'
+                  ? 'WITHOUT_REAL_PAYER'
+                  : eligibility.reason === 'patient_missing'
+                    ? 'PATIENT_MISSING'
+                    : eligibility.reason === 'professional_missing'
+                      ? 'PROFESSIONAL_MISSING'
+                      : eligibility.reason === 'appointment_missing'
+                        ? 'APPOINTMENT_MISSING'
+                        : 'NOT_ELIGIBLE';
+        const detail = {
+          appointmentId,
+          status: eligibility.eligible && !filteredByPayer ? 'eligible' : eligibility.reason === 'not_applicable' ? 'notApplicable' : 'skipped',
+          reasonCode,
+          message: eligibility.eligible && !filteredByPayer
+            ? 'Atendimento elegível para revalidação de Pré-guia TISS.'
+            : reasonCode === 'NOT_BILLABLE'
+              ? 'Atendimento fora do fluxo de Pré-guia TISS por contexto financeiro.'
+              : reasonCode === 'WITHOUT_FINANCIAL_CONTEXT'
+                ? 'Atendimento sem contexto financeiro de convênio aplicado.'
+                : reasonCode === 'WITHOUT_REAL_PAYER'
+                  ? 'Atendimento de convênio sem pagador real aplicado.'
+                  : reasonCode === 'PAYER_FILTER_MISMATCH'
+                    ? 'Atendimento pertence a outro pagador no filtro informado.'
+                    : 'Atendimento sem dados mínimos para Pré-guia TISS.',
+          payerName: sanitizeString(billingContext?.payer_name_snapshot || appointment?.payer_name || appointment?.payerName, 180) || null,
+          payerId: eligibility.payerId || null,
+          guideNumber: sanitizeString(billingContext?.guide_number || billingContext?.guideNumber, 120) || null,
+          authorizationCode: sanitizeString(billingContext?.authorization_code || billingContext?.authorizationCode || billingContext?.authorization_password || billingContext?.authorizationPassword, 120) || null,
+          insuranceCardNumber: sanitizeString(billingContext?.insurance_card_number || billingContext?.insuranceCardNumber, 120) || null,
+          insurancePlanName: sanitizeString(billingContext?.insurance_plan_name || billingContext?.insurancePlanName, 180) || null,
+          tussCode: sanitizeString(billingItem?.tuss_code || billingItem?.tussCode, 80) || null
+        };
+        details.push(detail);
+        detailsByAppointment.set(appointmentId, detail);
         if (!eligibility.eligible) continue;
-        if (payerId && eligibility.payerId !== payerId) continue;
+        if (filteredByPayer) continue;
         eligibleAppointments.push(appointment);
       }
 
@@ -39299,6 +39440,33 @@ async function startServer() {
         skipped: Math.max(0, scopedAppointments.length - eligibleAppointments.length),
         errors: 0
       };
+      const schemaCheck = await checkTissPreGuidePersistenceAvailability(organizationId);
+      if (!schemaCheck.available) {
+        return sendNoStoreJson(res, {
+          success: false,
+          code: schemaCheck.code,
+          error: 'Estrutura de Pré-guia TISS indisponível.',
+          message: 'Não foi possível carregar a estrutura de Pré-guia TISS 04.03.00.',
+          data: [],
+          counts: {
+            ...counts,
+            created: 0,
+            updated: 0,
+            staleUpdated: 0,
+            valid: 0,
+            pendingData: 0,
+            notApplicable: 0,
+            skipped: 0,
+            errors: 0
+          },
+          diagnostics: {
+            ...diagnostics,
+            ...schemaCheck.diagnostics
+          },
+          errors: [],
+          details: []
+        });
+      }
       const items: any[] = [];
       const errorDetails: Array<{ appointmentId: string; code: string }> = [];
       for (const appointment of eligibleAppointments) {
@@ -39315,9 +39483,18 @@ async function startServer() {
           const preGuideResult = (generated as any)?.tissPreGuideResult || null;
           if (!(generated as any)?.ok || !preGuide || preGuideResult?.ok === false) {
             counts.errors += 1;
+            const code = preGuideResult?.errorCode || 'TISS_PRE_GUIDE_NOT_MATERIALIZED';
+            const detail = detailsByAppointment.get(appointmentId);
+            if (detail) {
+              detail.status = 'error';
+              detail.reasonCode = code;
+              detail.message = code === 'TISS_PRE_GUIDE_SCHEMA_UNAVAILABLE'
+                ? 'Estrutura de Pré-guia TISS indisponível para materializar este atendimento.'
+                : 'Pré-guia TISS não foi materializada para este atendimento.';
+            }
             errorDetails.push({
               appointmentId,
-              code: preGuideResult?.errorCode || 'TISS_PRE_GUIDE_NOT_MATERIALIZED'
+              code
             });
             continue;
           }
@@ -39330,13 +39507,34 @@ async function startServer() {
           if (preGuide.status === 'valid') counts.valid += 1;
           else if (preGuide.status === 'not_applicable') counts.notApplicable += 1;
           else counts.pendingData += 1;
+          const detail = detailsByAppointment.get(appointmentId);
+          if (detail) {
+            detail.status = preGuide.status === 'valid' ? 'valid' : preGuide.status === 'not_applicable' ? 'notApplicable' : 'pendingData';
+            detail.reasonCode = preGuide.status === 'valid' ? 'OK' : preGuide.status === 'not_applicable' ? 'NOT_APPLICABLE' : 'PENDING_DATA';
+            detail.message = preGuide.status === 'valid'
+              ? 'Pré-guia TISS revalidada com dados suficientes.'
+              : preGuide.status === 'not_applicable'
+                ? 'Atendimento não aplicável para Pré-guia TISS.'
+                : 'Pré-guia TISS revalidada com pendências de dados.';
+            detail.payerName = preGuide.payerName || detail.payerName || null;
+            detail.payerId = preGuide.payerId || detail.payerId || null;
+            detail.tussCode = preGuide.tussCode || detail.tussCode || null;
+            detail.guideNumber = preGuide.guideNumber || detail.guideNumber || null;
+            detail.authorizationCode = preGuide.authorizationCode || detail.authorizationCode || null;
+            detail.totalAmountCents = preGuide.totalAmountCents ?? null;
+            detail.preGuideId = preGuide.id || null;
+          }
           items.push(preGuide);
         } catch (itemError: any) {
           counts.errors += 1;
-          errorDetails.push({
-            appointmentId,
-            code: sanitizeString(itemError?.code, 80) || 'TISS_PRE_GUIDE_REVALIDATION_FAILED'
-          });
+          const code = sanitizeString(itemError?.code, 80) || 'TISS_PRE_GUIDE_REVALIDATION_FAILED';
+          const detail = detailsByAppointment.get(appointmentId);
+          if (detail) {
+            detail.status = 'error';
+            detail.reasonCode = code;
+            detail.message = 'Erro controlado ao revalidar a Pré-guia TISS deste atendimento.';
+          }
+          errorDetails.push({ appointmentId, code });
           console.warn('[TissPreGuide] period item failed:', {
             appointmentId,
             code: sanitizeString(itemError?.code, 40) || null,
@@ -39348,8 +39546,12 @@ async function startServer() {
         success: counts.errors === 0 || items.length > 0,
         data: items,
         counts,
-        diagnostics,
+        diagnostics: {
+          ...diagnostics,
+          ...schemaCheck.diagnostics
+        },
         errors: errorDetails,
+        details,
         message: counts.eligible === 0
           ? 'Nenhum atendimento elegível encontrado para materializar Pré-guias TISS.'
           : `${counts.created} Pré-guia(s) criada(s) e ${counts.updated} atualizada(s).`
@@ -39368,13 +39570,23 @@ async function startServer() {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       const appointmentId = sanitizeString(req.params.appointmentId, 120);
       if (!isUuid(organizationId) || !isUuid(appointmentId)) return res.status(400).json(payerSafeError(400));
-      const { data, error } = await supabase
+      let detailResult = await supabase
         .from('appointment_tiss_pre_guides')
         .select(APPOINTMENT_TISS_PRE_GUIDE_SELECT)
         .eq('organization_id', organizationId)
         .eq('appointment_id', appointmentId)
         .limit(1)
         .maybeSingle();
+      if (detailResult.error && isOptionalTissPreGuideColumn(extractMissingColumnName(detailResult.error))) {
+        detailResult = await supabase
+          .from('appointment_tiss_pre_guides')
+          .select(APPOINTMENT_TISS_PRE_GUIDE_BASE_SELECT)
+          .eq('organization_id', organizationId)
+          .eq('appointment_id', appointmentId)
+          .limit(1)
+          .maybeSingle();
+      }
+      const { data, error } = detailResult;
       if (error) {
         if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return res.status(404).json(payerSafeError(404));
         throw error;

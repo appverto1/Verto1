@@ -942,7 +942,11 @@ export function TissPreGuideTab({
         limit: 500,
       });
       if (!result?.success) {
-        setError(result?.error || "Não foi possível gerar ou revalidar as Pré-guias TISS do período.");
+        setError(
+          result?.code === "TISS_PRE_GUIDE_SCHEMA_UNAVAILABLE"
+            ? "Estrutura de Pré-guia TISS indisponível. Tente novamente em instantes ou acione o suporte."
+            : result?.error || "Não foi possível gerar ou revalidar as Pré-guias TISS do período."
+        );
         return;
       }
       const counts = result.counts || {};
@@ -1755,15 +1759,9 @@ export function TissPreGuideTab({
               A verificação é somente leitura. A geração/revalidação em massa acontece apenas ao clicar no botão.
             </div>
           </div>
-          <button
-            type="button"
-            onClick={() => void revalidatePeriod()}
-            disabled={periodRevalidating || loading}
-            className="inline-flex items-center gap-2 rounded-md border border-amber-300 bg-white px-3 py-2 font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-60"
-          >
-            {periodRevalidating ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
-            Gerar/Revalidar pendentes do período
-          </button>
+          <div className="rounded-md border border-amber-200 bg-white/70 px-3 py-2 text-xs font-medium text-amber-800">
+            Use a ação primária acima para gerar/revalidar o período.
+          </div>
         </div>
       )}
 
@@ -1914,15 +1912,9 @@ export function TissPreGuideTab({
                         <p className="mt-1 text-sm text-slate-500">
                           As pré-guias são criadas por revalidação para evitar backfill automático. Você pode gerar pré-guias para os atendimentos faturáveis deste período.
                         </p>
-                        <button
-                          type="button"
-                          onClick={() => void revalidatePeriod()}
-                          disabled={periodRevalidating}
-                          className="mt-4 inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-60"
-                        >
-                          {periodRevalidating ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
-                          Gerar/Revalidar pré-guias do período
-                        </button>
+                        <div className="mt-4 text-xs font-medium text-slate-500">
+                          Use a ação primária acima para gerar ou revalidar as pré-guias do período.
+                        </div>
                       </div>
                     )}
                   </td>
