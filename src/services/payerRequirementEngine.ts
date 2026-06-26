@@ -161,6 +161,7 @@ export function evaluatePayerRequirementsForClosure(input: {
   const checklistItems: PayerRequirementChecklistItem[] = [];
 
   const authorizationPresent = hasValue(context.authorizationCode);
+  const authorizationCode = normalizeText(context.authorizationCode);
   checklistItems.push(item(
     'payer_authorization_required',
     'Autorização do pagador',
@@ -168,14 +169,15 @@ export function evaluatePayerRequirementsForClosure(input: {
     requirements.requireAuthorization,
     requirements.requireAuthorization ? 'CRITICAL' : 'LOW',
     authorizationPresent
-      ? 'Autorização/senha informada para este pagador.'
+      ? `Autorização ${authorizationCode || 'informada'} informada.`
       : requirements.requireAuthorization
         ? 'Este pagador exige autorização/senha.'
         : 'Autorização não exigida para este pagador.',
-    { present: authorizationPresent }
+    { present: authorizationPresent, authorizationCode: authorizationCode || null }
   ));
 
   const guidePresent = hasValue(context.guideNumber);
+  const guideNumber = normalizeText(context.guideNumber);
   checklistItems.push(item(
     'payer_guide_required',
     'Guia do pagador',
@@ -183,11 +185,11 @@ export function evaluatePayerRequirementsForClosure(input: {
     requirements.requireGuide,
     requirements.requireGuide ? 'CRITICAL' : 'LOW',
     guidePresent
-      ? 'Guia informada para este pagador.'
+      ? `Guia ${guideNumber || 'informada'} informada.`
       : requirements.requireGuide
         ? 'Este pagador exige guia.'
         : 'Guia não exigida para este pagador.',
-    { present: guidePresent }
+    { present: guidePresent, guideNumber: guideNumber || null }
   ));
 
   if (requirements.minDurationMinutes !== null && context.actualMinutes !== null && context.actualMinutes !== undefined) {

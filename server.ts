@@ -33779,6 +33779,7 @@ async function startServer() {
   function normalizeHydratedClosureChecklist(checklist: any[], hydratedRow: any) {
     const items = Array.isArray(checklist) ? checklist : [];
     const hasRealPayer = isUuid(sanitizeString(hydratedRow?.payer_id, 120));
+    const payerName = sanitizeString(hydratedRow?.payer_name || hydratedRow?.payer_name_snapshot, 180);
     const suggestedPayerName = sanitizeString(hydratedRow?.suggested_payer_name, 180);
     return items.map((item: any) => {
       const normalizedItem = {
@@ -33793,7 +33794,7 @@ async function startServer() {
         required: true,
         severity: hasRealPayer ? 'LOW' : 'HIGH',
         message: hasRealPayer
-          ? 'Pagador informado para esta conferência.'
+          ? `Pagador ${payerName || 'informado'} aplicado ao atendimento.`
           : suggestedPayerName
             ? `Pagador sugerido pelo plano financeiro: ${suggestedPayerName}. Ainda não aplicado ao atendimento.`
             : 'Pagador não configurado para esta conferência.',
@@ -33803,7 +33804,8 @@ async function startServer() {
           ...(item?.evidence || {}),
           present: hasRealPayer,
           suggested: Boolean(!hasRealPayer && suggestedPayerName),
-          suggestedPayerName: suggestedPayerName || null
+          suggestedPayerName: suggestedPayerName || null,
+          payerName: hasRealPayer ? payerName || null : null
         }
       };
     });
@@ -34075,6 +34077,19 @@ async function startServer() {
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
       const row = await fetchCalendarAppointmentDetailRow(eventId, clinicId, req.session.user);
       if (!row) return res.status(404).json({ success: false, error: 'Sessão não encontrada.' });
+      try {
+        await persistAppointmentClosureCheck({
+          appointmentId: eventId,
+          user: req.session.user,
+          force: true,
+          scopedAppointment: row
+        });
+      } catch (closureRefreshError: any) {
+        console.warn('[Calendar] detail closure refresh skipped:', {
+          appointmentId: eventId,
+          message: closureRefreshError?.message || String(closureRefreshError)
+        });
+      }
       const closureByAppointment = await fetchClosureSummariesByAppointment([eventId], organizationId, req.session.user);
       const closure = closureByAppointment.get(eventId);
       const [hydratedRow] = await hydrateCalendarPatientNames([closure ? { ...row, ...mapClosureRowToCalendarFields(closure) } : row], clinicId);
@@ -41380,11 +41395,9 @@ async function startServer() {
         user: req.session.user
       });
       let data = closureResult.data;
-      if (!data || closureResult.omittedColumns.size > 0) {
-        const generated = await persistAppointmentClosureCheck({ appointmentId, user: req.session.user, force: true });
-        if ((generated as any).ok) data = (generated as any).data;
-        else if (!data) return res.status((generated as any).status || 404).json(closureSafeError((generated as any).status || 404));
-      }
+      const generated = await persistAppointmentClosureCheck({ appointmentId, user: req.session.user, force: true });
+      if ((generated as any).ok) data = (generated as any).data;
+      else if (!data || closureResult.omittedColumns.size > 0) return res.status((generated as any).status || 404).json(closureSafeError((generated as any).status || 404));
       const patientId = sanitizeString(data?.patient_id, 120);
       if (patientId && !(await canAccessPatientInCurrentClinic(patientId, req.session.user))) {
         return res.status(404).json(closureSafeError(404));

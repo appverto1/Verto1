@@ -369,12 +369,14 @@ test('fechamento usa pagador da consulta, nao plano do paciente como substituto'
 test('modal do fechamento mostra pagador sugerido sem marcar como aplicado', () => {
   const normalizeStart = serverCode.indexOf('function normalizeHydratedClosureChecklist');
   assert.ok(normalizeStart > 0, 'normalizador do checklist hidratado deve existir');
-  const normalizeSlice = serverCode.slice(normalizeStart, normalizeStart + 1100);
+  const normalizeSlice = serverCode.slice(normalizeStart, normalizeStart + 1500);
   assert.match(serverCode, /const repairChecklistDisplayText/);
   assert.match(normalizeSlice, /const hasRealPayer = isUuid\(sanitizeString\(hydratedRow\?\.payer_id, 120\)\)/);
+  assert.match(normalizeSlice, /const payerName = sanitizeString\(hydratedRow\?\.payer_name \|\| hydratedRow\?\.payer_name_snapshot, 180\)/);
   assert.match(normalizeSlice, /label: repairChecklistDisplayText\(item\?\.label, 180\)/);
   assert.match(normalizeSlice, /message: repairChecklistDisplayText\(item\?\.message, 800\)/);
   assert.match(normalizeSlice, /status: hasRealPayer \? 'PASSED' : 'FAILED'/);
+  assert.match(normalizeSlice, /Pagador \$\{payerName \|\| 'informado'\} aplicado ao atendimento/);
   assert.match(normalizeSlice, /Pagador sugerido pelo plano financeiro/);
   assert.match(normalizeSlice, /Ainda não aplicado ao atendimento/);
 
@@ -382,6 +384,7 @@ test('modal do fechamento mostra pagador sugerido sem marcar como aplicado', () 
   const detailEnd = serverCode.indexOf("app.post('/api/closure/appointments/:appointmentId/revalidate'", detailStart);
   assert.ok(detailStart > 0 && detailEnd > detailStart, 'detalhe do fechamento deve existir');
   const detailSlice = serverCode.slice(detailStart, detailEnd);
+  assert.match(detailSlice, /const generated = await persistAppointmentClosureCheck\(\{ appointmentId, user: req\.session\.user, force: true \}\)/);
   assert.match(detailSlice, /const hydratedRows = await hydrateConferenceRows\(\[data\], clinicId, req\.session\.user\)/);
   assert.match(detailSlice, /checklist: normalizeHydratedClosureChecklist\(data\?\.checklist, hydratedDetail\)/);
 

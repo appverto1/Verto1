@@ -491,6 +491,8 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
     appointment.authorizationNumber,
     appointment.authorization_id,
     appointment.authorizationId,
+    appointment.patient_tiss_authorization_id,
+    appointment.patientTissAuthorizationId,
     appointment.patient_payer_authorization_id,
     appointment.patientPayerAuthorizationId
   ));
@@ -566,6 +568,12 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
     appointment.payer_id,
     appointment.payerId
   ));
+  const appointmentPayerName = asString(firstValue(
+    appointment.payer_name_snapshot,
+    appointment.payerNameSnapshot,
+    appointment.payerName,
+    requirements.payerName
+  ));
   const suggestedPayerName = asString(firstValue(
     requirements.payerName,
     appointment.payer_name_snapshot,
@@ -574,7 +582,7 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
   ));
   const payerLinkedStatus: ClosureCheckStatus = appointmentPayerId || nonInsuranceFinancialContext ? 'PASSED' : 'FAILED';
   const payerLinkedMessage = appointmentPayerId
-    ? 'Pagador informado para esta conferência.'
+    ? `Pagador ${appointmentPayerName || 'informado'} aplicado ao atendimento.`
     : nonInsuranceFinancialContext
       ? `Contexto financeiro definido: ${financialContextType === 'PRIVATE' ? 'particular' : financialContextType === 'PACKAGE' || financialContextType === 'MONTHLY' ? 'pacote/mensalidade' : financialContextType === 'COURTESY' ? 'cortesia' : financialContextType === 'NO_CHARGE' ? 'sem cobrança' : 'não faturável'}.`
     : suggestedPayerName
@@ -696,6 +704,7 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
       financialContextType: financialContextType || null,
       suggested: Boolean(!appointmentPayerId && suggestedPayerName),
       suggestedPayerName: suggestedPayerName || null,
+      payerName: appointmentPayerId ? appointmentPayerName || null : null,
       insuranceCardPresent: Boolean(insuranceCardNumber),
       source: requirements.payerRequirementSource || 'DEFAULT'
     }

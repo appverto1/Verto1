@@ -507,9 +507,55 @@ test('payer_id real é a única verdade para convênio vinculado', () => {
   });
   const payerCheck = result.checklist.find((item) => item.key === 'payer_linked');
   assert.equal(payerCheck?.status, 'PASSED');
-  assert.equal(payerCheck?.message, 'Pagador informado para esta conferência.');
+  assert.equal(payerCheck?.message, 'Pagador Amil aplicado ao atendimento.');
   assert.equal(payerCheck?.evidence?.present, true);
   assert.equal(payerCheck?.evidence?.suggested, false);
+});
+
+test('billing aplicado com autorização TISS vigente alinha pagador guia e autorização no checklist', () => {
+  const result = evaluateAppointmentClosureReadiness({
+    ...baseInput,
+    appointment: {
+      ...baseInput.appointment,
+      status: 'scheduled',
+      scheduled_start_at: '2026-06-26T12:00:00.000Z',
+      scheduled_end_at: '2026-06-26T12:30:00.000Z',
+      actual_start_at: null,
+      actual_end_at: null,
+      actual_duration_minutes: null,
+      payer_id: 'payer-amil',
+      payer_name_snapshot: 'Amil',
+      insurance_plan_name: 'Platinum',
+      insurance_card_number: '123456789',
+      guide_number: '12345679',
+      authorization_code: '123456789',
+      patient_tiss_authorization_id: 'auth-tiss-1'
+    },
+    abaSession: null,
+    sessionSummary: null,
+    signature: null,
+    requirements: {
+      payerId: 'payer-amil',
+      payerName: 'Amil',
+      requireAuthorization: true,
+      requireGuide: true
+    }
+  });
+  const payerCheck = result.checklist.find((item) => item.key === 'payer_linked');
+  const authorization = result.checklist.find((item) => item.key === 'payer_authorization_required');
+  const guide = result.checklist.find((item) => item.key === 'payer_guide_required');
+  assert.equal(payerCheck?.status, 'PASSED');
+  assert.equal(payerCheck?.message, 'Pagador Amil aplicado ao atendimento.');
+  assert.equal(payerCheck?.evidence?.present, true);
+  assert.equal(payerCheck?.evidence?.suggested, false);
+  assert.doesNotMatch(String(payerCheck?.message || ''), /Ainda não aplicado/);
+  assert.equal(authorization?.status, 'PASSED');
+  assert.equal(authorization?.message, 'Autorização 123456789 informada.');
+  assert.equal(authorization?.evidence?.authorizationCode, '123456789');
+  assert.equal(guide?.status, 'PASSED');
+  assert.equal(guide?.message, 'Guia 12345679 informada.');
+  assert.equal(guide?.evidence?.guideNumber, '12345679');
+  assert.equal(result.sections.preSession.some((item) => item.key === 'payer_linked' && item.operationalStatus !== 'passed'), false);
 });
 
 test('pagador sugerido pelo plano financeiro não vira convênio vinculado', () => {
