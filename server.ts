@@ -8344,6 +8344,194 @@ const serializeAppointmentTissAuthorizationSuggestion = (authorization: any, ref
   });
 };
 
+const appointmentTissRecordIsActive = (value: unknown) =>
+  value !== false && sanitizeString(value, 20).toLowerCase() !== 'false';
+
+const appointmentTissMappingIsValidForDate = (mapping: any, isoDate: string) => {
+  const date = appointmentDateKeyForAuthorization(isoDate);
+  const validFrom = sanitizeString(mapping?.valid_from, 40).slice(0, 10);
+  const validTo = sanitizeString(mapping?.valid_to, 40).slice(0, 10);
+  if (validFrom && date < validFrom) return false;
+  if (validTo && date > validTo) return false;
+  return true;
+};
+
+async function fetchPayerForAppointmentTissBilling(payerId: string, organizationId: string) {
+  if (!isUuid(payerId) || !isUuid(organizationId)) return null;
+  const { data, error } = await supabase
+    .from('clinic_payers')
+    .select(CLINIC_PAYER_SELECT)
+    .eq('organization_id', organizationId)
+    .eq('id', payerId)
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return null;
+    throw error;
+  }
+  return data || null;
+}
+
+async function fetchTussServiceCatalogByIdForAppointmentTissBilling(organizationId: string, serviceId: string) {
+  if (!isUuid(organizationId) || !isUuid(serviceId)) return null;
+  const { data, error } = await supabase
+    .from('tuss_service_catalog')
+    .select(TUSS_SERVICE_CATALOG_SELECT)
+    .eq('organization_id', organizationId)
+    .eq('id', serviceId)
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return null;
+    throw error;
+  }
+  return data || null;
+}
+
+async function fetchTussCodeByIdForAppointmentTissBilling(organizationId: string, codeId: string) {
+  if (!isUuid(organizationId) || !isUuid(codeId)) return null;
+  const { data, error } = await supabase
+    .from('tuss_codes')
+    .select(TUSS_CODE_SELECT)
+    .eq('organization_id', organizationId)
+    .eq('id', codeId)
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return null;
+    throw error;
+  }
+  return data || null;
+}
+
+async function fetchMatchingTussServiceCatalogForAppointmentTissBilling(
+  organizationId: string,
+  serviceType: any,
+  procedureCode?: any
+) {
+  if (!isUuid(organizationId)) return null;
+  const { data, error } = await supabase
+    .from('tuss_service_catalog')
+    .select(TUSS_SERVICE_CATALOG_SELECT)
+    .eq('organization_id', organizationId)
+    .eq('active', true)
+    .order('name', { ascending: true })
+    .limit(120);
+  if (error) {
+    if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return null;
+    throw error;
+  }
+  const services = Array.isArray(data) ? data : [];
+  const procedureKey = sanitizeString(procedureCode, 80).toLowerCase();
+  if (procedureKey) {
+    const byCode = services.find((service: any) => sanitizeString(service?.internal_code, 80).toLowerCase() === procedureKey);
+    if (byCode) return byCode;
+  }
+  const serviceKey = normalizeBillingServiceMatchKey(serviceType);
+  const activeMatch = services.find((service: any) => normalizeBillingServiceMatchKey(service?.service_type) === serviceKey) ||
+    services.find((service: any) => normalizeBillingServiceMatchKey(service?.name) === serviceKey) ||
+    null;
+  if (activeMatch) return activeMatch;
+  return services.find((service: any) => {
+    const serviceCompositeKey = [
+      service?.service_type,
+      service?.name,
+      service?.internal_code,
+      service?.specialty
+    ].map(normalizeBillingServiceMatchKey).filter(Boolean).join('_');
+    return Boolean(serviceKey && serviceCompositeKey && (serviceCompositeKey.includes(serviceKey) || serviceKey.includes(serviceCompositeKey)));
+  }) || null;
+}
+
+async function fetchActivePayerTussMappingForAppointmentTissBilling(
+  organizationId: string,
+  payerId: string,
+  serviceCatalogId: string,
+  appointmentDate: any
+) {
+  if (!isUuid(organizationId) || !isUuid(payerId) || !isUuid(serviceCatalogId)) return null;
+  const { data, error } = await supabase
+    .from('payer_tuss_mappings')
+    .select(PAYER_TUSS_MAPPING_SELECT)
+    .eq('organization_id', organizationId)
+    .eq('payer_id', payerId)
+    .eq('service_catalog_id', serviceCatalogId)
+    .eq('active', true)
+    .order('valid_from', { ascending: false, nullsFirst: false })
+    .limit(20);
+  if (error) {
+    if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return null;
+    throw error;
+  }
+  const date = appointmentDateKeyForAuthorization(appointmentDate);
+  return (Array.isArray(data) ? data : []).find((mapping: any) => appointmentTissMappingIsValidForDate(mapping, date)) || null;
+}
+
+async function hydratePatientPayerAuthorizationsForAppointmentTissBilling(organizationId: string, rows: any[]) {
+  const safeRows = Array.isArray(rows) ? rows : [];
+  const payerIds = Array.from(new Set(safeRows.map((row: any) => sanitizeString(row?.payer_id, 120)).filter((id: string) => isUuid(id))));
+  const serviceIds = Array.from(new Set(safeRows.map((row: any) => sanitizeString(row?.service_catalog_id, 120)).filter((id: string) => isUuid(id))));
+  const codeIds = Array.from(new Set(safeRows.map((row: any) => sanitizeString(row?.tuss_code_id, 120)).filter((id: string) => isUuid(id))));
+  const mappingIds = Array.from(new Set(safeRows.map((row: any) => sanitizeString(row?.payer_tuss_mapping_id, 120)).filter((id: string) => isUuid(id))));
+  const [payersResult, servicesResult, codesResult, mappingsResult] = await Promise.all([
+    payerIds.length > 0
+      ? supabase.from('clinic_payers').select(CLINIC_PAYER_SELECT).eq('organization_id', organizationId).in('id', payerIds).limit(payerIds.length)
+      : Promise.resolve({ data: [], error: null } as any),
+    serviceIds.length > 0
+      ? supabase.from('tuss_service_catalog').select(TUSS_SERVICE_CATALOG_SELECT).eq('organization_id', organizationId).in('id', serviceIds).limit(serviceIds.length)
+      : Promise.resolve({ data: [], error: null } as any),
+    codeIds.length > 0
+      ? supabase.from('tuss_codes').select(TUSS_CODE_SELECT).eq('organization_id', organizationId).in('id', codeIds).limit(codeIds.length)
+      : Promise.resolve({ data: [], error: null } as any),
+    mappingIds.length > 0
+      ? supabase.from('payer_tuss_mappings').select(PAYER_TUSS_MAPPING_SELECT).eq('organization_id', organizationId).in('id', mappingIds).limit(mappingIds.length)
+      : Promise.resolve({ data: [], error: null } as any)
+  ]);
+  for (const result of [payersResult, servicesResult, codesResult, mappingsResult]) {
+    if (result.error && !hasMissingFinancialSchema(result.error) && !isMissingRelationError(result.error)) throw result.error;
+  }
+  const payersById = new Map<string, any>((payersResult.error ? [] : payersResult.data || []).map((row: any) => [sanitizeString(row.id, 120), row]));
+  const servicesById = new Map<string, any>((servicesResult.error ? [] : servicesResult.data || []).map((row: any) => [sanitizeString(row.id, 120), row]));
+  const codesById = new Map<string, any>((codesResult.error ? [] : codesResult.data || []).map((row: any) => [sanitizeString(row.id, 120), row]));
+  const mappingsById = new Map<string, any>((mappingsResult.error ? [] : mappingsResult.data || []).map((row: any) => [sanitizeString(row.id, 120), row]));
+
+  return safeRows.map((row: any) => {
+    const payer = payersById.get(sanitizeString(row?.payer_id, 120));
+    const service = servicesById.get(sanitizeString(row?.service_catalog_id, 120));
+    const code = codesById.get(sanitizeString(row?.tuss_code_id, 120));
+    const mapping = mappingsById.get(sanitizeString(row?.payer_tuss_mapping_id, 120));
+    const authorizedQuantity = Number(row?.authorized_quantity ?? 0) || 0;
+    const usedQuantity = Number(row?.used_quantity ?? 0) || 0;
+    return {
+      id: sanitizeString(row?.id, 120),
+      patientId: sanitizeString(row?.patient_id, 120),
+      payerId: sanitizeString(row?.payer_id, 120),
+      payerName: sanitizeString(payer?.name, 180) || null,
+      authorizationNumber: sanitizeString(row?.authorization_number || row?.authorization_code, 120) || null,
+      authorizationCode: sanitizeString(row?.authorization_code || row?.authorization_number, 120) || null,
+      guideNumber: sanitizeString(row?.guide_number, 120) || null,
+      validFrom: row?.valid_from || null,
+      validUntil: row?.valid_until || null,
+      authorizedQuantity,
+      usedQuantity,
+      serviceCatalogId: sanitizeString(row?.service_catalog_id, 120) || null,
+      serviceName: sanitizeString(service?.name || row?.procedure_name_snapshot, 180) || null,
+      internalCode: sanitizeString(service?.internal_code || row?.procedure_code || row?.procedure_code_snapshot, 80) || null,
+      serviceType: sanitizeString(service?.service_type, 120) || null,
+      tussCodeId: sanitizeString(row?.tuss_code_id, 120) || null,
+      tussCode: sanitizeString(code?.code || row?.procedure_tuss_code, 80) || null,
+      tussDescription: sanitizeTextField(code?.description || row?.procedure_name_snapshot, 600) || null,
+      payerTussMappingId: sanitizeString(row?.payer_tuss_mapping_id, 120) || null,
+      status: sanitizeString(row?.status, 40) || 'active',
+      active: appointmentTissRecordIsActive(row?.active),
+      createdAt: row?.created_at || null,
+      updatedAt: row?.updated_at || null,
+      procedureNameSnapshot: sanitizeString(row?.procedure_name_snapshot, 180) || null,
+      procedureTussCode: sanitizeString(row?.procedure_tuss_code, 80) || null
+    };
+  });
+}
+
 async function resolveAppointmentTissAuthorizationForBilling(params: {
   organizationId: string;
   patientId: string;
@@ -8357,63 +8545,72 @@ async function resolveAppointmentTissAuthorizationForBilling(params: {
   const organizationId = sanitizeString(params.organizationId, 120);
   const patientId = sanitizeString(params.patientId, 120);
   if (!isUuid(organizationId) || !isUuid(patientId)) return null;
-  const referenceDateKey = appointmentDateKeyForAuthorization(params.appointmentDate);
-  let payerId = sanitizeString(params.payerId, 120);
-  const payerName = sanitizeString(params.payerName, 180);
-  let payer: any = isUuid(payerId) ? await fetchPayerForAdmin(payerId, organizationId) : null;
-  if (!payer?.id && payerName) {
-    const payerResult = await supabase
-      .from('clinic_payers')
-      .select(CLINIC_PAYER_SELECT)
+  try {
+    const referenceDateKey = appointmentDateKeyForAuthorization(params.appointmentDate);
+    let payerId = sanitizeString(params.payerId, 120);
+    const payerName = sanitizeString(params.payerName, 180);
+    let payer: any = isUuid(payerId) ? await fetchPayerForAppointmentTissBilling(payerId, organizationId) : null;
+    if (!payer?.id && payerName) {
+      const payerResult = await supabase
+        .from('clinic_payers')
+        .select(CLINIC_PAYER_SELECT)
+        .eq('organization_id', organizationId)
+        .ilike('name', payerName)
+        .limit(2);
+      if (payerResult.error && !hasMissingFinancialSchema(payerResult.error) && !isMissingRelationError(payerResult.error)) throw payerResult.error;
+      payer = Array.isArray(payerResult.data) && payerResult.data.length === 1 ? payerResult.data[0] : null;
+      payerId = sanitizeString(payer?.id, 120);
+    }
+    if (!isUuid(payerId)) return null;
+
+    const serviceType = sanitizeString(params.serviceType, 120);
+    const serviceCatalog = await fetchMatchingTussServiceCatalogForAppointmentTissBilling(organizationId, serviceType, params.procedureCode);
+    const mapping = serviceCatalog?.id
+      ? await fetchActivePayerTussMappingForAppointmentTissBilling(organizationId, payerId, sanitizeString(serviceCatalog.id, 120), referenceDateKey)
+      : null;
+    const tussCode = isUuid(sanitizeString(mapping?.tuss_code_id, 120))
+      ? await fetchTussCodeByIdForAppointmentTissBilling(organizationId, sanitizeString(mapping.tuss_code_id, 120))
+      : null;
+    if (!mapping?.id || !tussCode?.id) return null;
+
+    let query = supabase
+      .from('patient_payer_authorizations')
+      .select(PATIENT_PAYER_AUTHORIZATION_SELECT)
       .eq('organization_id', organizationId)
-      .ilike('name', payerName)
-      .limit(2);
-    if (payerResult.error && !hasMissingFinancialSchema(payerResult.error) && !isMissingRelationError(payerResult.error)) throw payerResult.error;
-    payer = Array.isArray(payerResult.data) && payerResult.data.length === 1 ? payerResult.data[0] : null;
-    payerId = sanitizeString(payer?.id, 120);
+      .eq('patient_id', patientId)
+      .eq('payer_id', payerId)
+      .limit(120);
+    const requestedAuthorizationId = sanitizeString(params.authorizationId, 120);
+    if (isUuid(requestedAuthorizationId)) query = query.eq('id', requestedAuthorizationId);
+    const { data, error } = await query;
+    if (error) {
+      if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return null;
+      throw error;
+    }
+    const hydrated = await hydratePatientPayerAuthorizationsForAppointmentTissBilling(organizationId, Array.isArray(data) ? data : []);
+    const enriched = hydrated.map((authorization: any) => ({
+      ...authorization,
+      serviceType: authorization?.serviceType || serviceType
+    }));
+    const suggested = findSuggestedTissAuthorizationForAppointment({
+      payerId,
+      payerName: payer?.name || payerName,
+      serviceType,
+      serviceCatalogId: sanitizeString(serviceCatalog?.id, 120),
+      payerTussMappingId: sanitizeString(mapping?.id, 120),
+      tussCodeId: sanitizeString(tussCode?.id, 120),
+      tussCode: sanitizeString(tussCode?.code, 80),
+      appointmentDate: referenceDateKey
+    }, enriched);
+    return serializeAppointmentTissAuthorizationSuggestion(suggested, referenceDateKey);
+  } catch (error: any) {
+    console.warn('[AppointmentTissAuthorization] resolver failed.', {
+      organizationId,
+      patientId,
+      message: error?.message || String(error)
+    });
+    return null;
   }
-  if (!isUuid(payerId)) return null;
-
-  const serviceType = sanitizeString(params.serviceType, 120);
-  const serviceCatalog = await fetchMatchingTussServiceCatalog(organizationId, serviceType, params.procedureCode);
-  const mapping = serviceCatalog?.id
-    ? await fetchActivePayerTussMapping(organizationId, payerId, sanitizeString(serviceCatalog.id, 120), referenceDateKey)
-    : null;
-  const tussCode = isUuid(sanitizeString(mapping?.tuss_code_id, 120))
-    ? await fetchTussCodeById(organizationId, sanitizeString(mapping.tuss_code_id, 120))
-    : null;
-  if (!mapping?.id || !tussCode?.id) return null;
-
-  let query = supabase
-    .from('patient_payer_authorizations')
-    .select(PATIENT_PAYER_AUTHORIZATION_SELECT)
-    .eq('organization_id', organizationId)
-    .eq('patient_id', patientId)
-    .eq('payer_id', payerId)
-    .limit(120);
-  const requestedAuthorizationId = sanitizeString(params.authorizationId, 120);
-  if (isUuid(requestedAuthorizationId)) query = query.eq('id', requestedAuthorizationId);
-  const { data, error } = await query;
-  if (error) {
-    if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return null;
-    throw error;
-  }
-  const hydrated = await hydratePatientPayerAuthorizations(organizationId, Array.isArray(data) ? data : []);
-  const enriched = hydrated.map((authorization: any) => ({
-    ...authorization,
-    serviceType: authorization?.serviceType || serviceType
-  }));
-  const suggested = findSuggestedTissAuthorizationForAppointment({
-    payerId,
-    payerName: payer?.name || payerName,
-    serviceType,
-    serviceCatalogId: sanitizeString(serviceCatalog?.id, 120),
-    payerTussMappingId: sanitizeString(mapping?.id, 120),
-    tussCodeId: sanitizeString(tussCode?.id, 120),
-    tussCode: sanitizeString(tussCode?.code, 80),
-    appointmentDate: referenceDateKey
-  }, enriched);
-  return serializeAppointmentTissAuthorizationSuggestion(suggested, referenceDateKey);
 }
 
 async function resolveAppointmentBillingSuggestion(params: {

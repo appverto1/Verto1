@@ -293,6 +293,7 @@ test('modal de editar pagador usa payerId canonico e deduplica nomes legados', (
 test('consulta e modal sugerem autorização TISS vigente do paciente sem usar TUSS legado', () => {
   assert.match(serverCode, /function appointmentDateKeyForAuthorization/);
   assert.match(serverCode, /resolveAppointmentTissAuthorizationForBilling/);
+  assert.match(serverCode, /fetchMatchingTussServiceCatalogForAppointmentTissBilling/);
   assert.match(serverCode, /findSuggestedTissAuthorizationForAppointment/);
   assert.match(serverCode, /patient_payer_authorizations/);
   assert.match(serverCode, /getPatientTissAuthorizationVisualState/);
@@ -304,6 +305,22 @@ test('consulta e modal sugerem autorização TISS vigente do paciente sem usar T
   assert.match(calendarCode, /applySuggestedTissAuthorizationToBillingForm/);
   assert.match(calendarCode, /patientTissAuthorizationId: usesInsuranceContext \? resolvedValues\.patientTissAuthorizationId \|\| null : null/);
   assert.match(calendarCode, /Autorização TISS vigente do paciente/);
+});
+
+test('hotfix detalhe de calendario nao chama helper TUSS fora de escopo', () => {
+  const resolverStart = serverCode.indexOf('async function resolveAppointmentTissAuthorizationForBilling');
+  const resolverEnd = serverCode.indexOf('async function resolveAppointmentBillingSuggestion', resolverStart);
+  assert.ok(resolverStart > 0 && resolverEnd > resolverStart, 'resolvedor de autorização da consulta deve existir');
+  const resolver = serverCode.slice(resolverStart, resolverEnd);
+  assert.match(resolver, /fetchMatchingTussServiceCatalogForAppointmentTissBilling/);
+  assert.doesNotMatch(resolver, /fetchMatchingTussServiceCatalog\(/);
+  assert.match(resolver, /catch \(error: any\)[\s\S]*return null/);
+
+  const detailStart = serverCode.indexOf("app.get('/api/calendar/events/:eventId/detail'");
+  const detailEnd = serverCode.indexOf('const payerSafeError', detailStart);
+  assert.ok(detailStart > 0, 'endpoint de detalhe do calendário deve existir');
+  const detailRoute = serverCode.slice(detailStart, detailEnd > detailStart ? detailEnd : detailStart + 16000);
+  assert.match(detailRoute, /serializeBillingContext\([\s\S]*await resolveAppointmentBillingSuggestion/);
 });
 
 test('criacao de pagador reutiliza nome existente na mesma clinica', () => {
