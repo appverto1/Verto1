@@ -1973,6 +1973,7 @@ export const dataService = {
     roomId?: string;
     locationType?: string;
     limit?: number;
+    signal?: AbortSignal;
   }) {
     const endpoint = endpointWithQuery('/api/calendar/events', {
       from: options.from,
@@ -1989,7 +1990,8 @@ export const dataService = {
     try {
       const response = await fetchClinical(endpoint, {
         headers: await getAuthHeaders(),
-        credentials: 'include'
+        credentials: 'include',
+        signal: options.signal
       }, {
         helperName: 'getCalendarEvents',
         operation: 'list',
@@ -1999,6 +2001,7 @@ export const dataService = {
       });
       return await safeJson(response);
     } catch (error) {
+      if ((error as any)?.name === 'AbortError') return { success: false, data: [], aborted: true };
       if (import.meta.env.DEV) console.log('Fetching calendar events from local agenda only...');
       return { success: false, data: [], error: 'Não foi possível carregar a agenda agora.' };
     }

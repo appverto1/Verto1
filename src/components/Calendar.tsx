@@ -448,6 +448,10 @@ const LOCATION_FILTERS = [
 const HOUR_START = 7;
 const HOUR_END = 20;
 const HOUR_HEIGHT = 56;
+const CALENDAR_EVENTS_CACHE_TTL_MS = 60_000;
+const CALENDAR_EVENTS_FOCUS_REFRESH_TTL_MS = 3 * 60_000;
+const CALENDAR_DOMAIN_EVENT_DEBOUNCE_MS = 350;
+const CALENDAR_MONTH_VISIBLE_EVENT_LIMIT = 5;
 
 const SESSION_TYPE_STYLES: Record<string, any> = {
   aba: {
@@ -1162,8 +1166,9 @@ export const ClinicalAgendaBoard = ({
     }
   });
   const [remoteEvents, setRemoteEvents] = useState<any[]>([]);
-  const [remoteState, setRemoteState] = useState<{ loading: boolean; error: string; loaded: boolean }>({
+  const [remoteState, setRemoteState] = useState<{ loading: boolean; refreshing: boolean; error: string; loaded: boolean }>({
     loading: false,
+    refreshing: false,
     error: '',
     loaded: false
   });
@@ -1206,7 +1211,11 @@ export const ClinicalAgendaBoard = ({
     name: '',
     payerType: 'INSURANCE'
   });
-  const cacheRef = useRef<Map<string, any[]>>(new Map());
+  const cacheRef = useRef<Map<string, { data: any[]; fetchedAt: number }>>(new Map());
+  const inFlightRequestRef = useRef<{ key: string; controller: AbortController | null } | null>(null);
+  const lastSuccessfulFetchAtRef = useRef(0);
+  const refreshDebounceTimerRef = useRef<number | null>(null);
+  const pendingVisibilityRefreshRef = useRef(false);
   const localAgendaIdsRef = useRef(new Set<string>());
   const canEditBillingContext = ['coordinator', 'admin', 'owner'].includes(String(currentUser?.role || '').toLowerCase());
   const roomLookup = useMemo(() => {
@@ -1344,34 +1353,59 @@ export const ClinicalAgendaBoard = ({
     };
     const key = JSON.stringify(params);
     const cached = cacheRef.current.get(key);
-    if (cached && remoteRefreshNonce === 0) {
-      setRemoteEvents(cached);
-      setRemoteState({ loading: false, error: '', loaded: true });
+    if (cached && Date.now() - cached.fetchedAt < CALENDAR_EVENTS_CACHE_TTL_MS) {
+      setRemoteEvents(cached.data);
+      setRemoteState({ loading: false, refreshing: false, error: '', loaded: true });
       return;
     }
+    if (inFlightRequestRef.current?.key === key) return;
+    if (inFlightRequestRef.current?.controller) {
+      inFlightRequestRef.current.controller.abort();
+    }
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    inFlightRequestRef.current = { key, controller };
 
-    setRemoteState((prev) => ({ ...prev, loading: true, error: '' }));
-    dataService.getCalendarEvents(params)
+    setRemoteState((prev) => ({ ...prev, loading: !prev.loaded, refreshing: prev.loaded, error: '' }));
+    dataService.getCalendarEvents({ ...params, signal: controller?.signal })
       .then((result: any) => {
-        if (cancelled) return;
+        if (cancelled || inFlightRequestRef.current?.key !== key || result?.aborted) return;
         if (result?.success && Array.isArray(result?.data)) {
-          cacheRef.current.set(key, result.data);
+          const fetchedAt = Date.now();
+          lastSuccessfulFetchAtRef.current = fetchedAt;
+          cacheRef.current.set(key, { data: result.data, fetchedAt });
           setRemoteEvents(result.data);
-          setRemoteState({ loading: false, error: '', loaded: true });
+          setRemoteState({ loading: false, refreshing: false, error: '', loaded: true });
           return;
         }
-        setRemoteState({ loading: false, error: result?.error || 'Não foi possível carregar a agenda agora.', loaded: false });
+        setRemoteState((prev) => ({
+          loading: false,
+          refreshing: false,
+          error: result?.error || 'Não foi possível carregar a agenda agora.',
+          loaded: prev.loaded
+        }));
       })
-      .catch(() => {
-        if (!cancelled) setRemoteState({ loading: false, error: 'Não foi possível carregar a agenda agora.', loaded: false });
+      .catch((error: any) => {
+        if (cancelled || error?.name === 'AbortError') return;
+        setRemoteState((prev) => ({
+          loading: false,
+          refreshing: false,
+          error: 'Não foi possível carregar a agenda agora.',
+          loaded: prev.loaded
+        }));
+      })
+      .finally(() => {
+        if (inFlightRequestRef.current?.key === key) inFlightRequestRef.current = null;
       });
 
     return () => {
       cancelled = true;
+      if (inFlightRequestRef.current?.key === key) {
+        inFlightRequestRef.current.controller?.abort();
+      }
     };
   }, [
-    visibleRange.start,
-    visibleRange.end,
+    visibleRange.start.getTime(),
+    visibleRange.end.getTime(),
     view,
     selectedTherapistIds.join(','),
     selectedPatientIds.join(','),
@@ -1383,20 +1417,43 @@ export const ClinicalAgendaBoard = ({
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
-    const requestRefresh = () => {
+    const forceRefresh = () => {
+      pendingVisibilityRefreshRef.current = false;
       cacheRef.current.clear();
       setRemoteRefreshNonce((value) => value + 1);
     };
+    const requestRefresh = () => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+        pendingVisibilityRefreshRef.current = true;
+        return;
+      }
+      if (refreshDebounceTimerRef.current) return;
+      refreshDebounceTimerRef.current = window.setTimeout(() => {
+        refreshDebounceTimerRef.current = null;
+        forceRefresh();
+      }, CALENDAR_DOMAIN_EVENT_DEBOUNCE_MS);
+    };
     const refreshWhenVisible = () => {
-      if (typeof document === 'undefined' || document.visibilityState === 'visible') requestRefresh();
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      if (
+        !pendingVisibilityRefreshRef.current &&
+        Date.now() - lastSuccessfulFetchAtRef.current < CALENDAR_EVENTS_FOCUS_REFRESH_TTL_MS
+      ) {
+        return;
+      }
+      forceRefresh();
     };
     window.addEventListener('focus', refreshWhenVisible);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
     window.addEventListener('verto:appointment-domain-event', requestRefresh as EventListener);
-    const intervalId = window.setInterval(refreshWhenVisible, 15000);
     return () => {
       window.removeEventListener('focus', refreshWhenVisible);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
       window.removeEventListener('verto:appointment-domain-event', requestRefresh as EventListener);
-      window.clearInterval(intervalId);
+      if (refreshDebounceTimerRef.current) {
+        window.clearTimeout(refreshDebounceTimerRef.current);
+        refreshDebounceTimerRef.current = null;
+      }
     };
   }, []);
 
@@ -2392,14 +2449,14 @@ export const ClinicalAgendaBoard = ({
         <div className="grid shrink-0 grid-cols-7 gap-1.5 pb-2 text-center text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
           {['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map((day) => <span key={day}>{day}</span>)}
         </div>
-        <div className="grid min-h-0 flex-1 grid-cols-7 grid-rows-6 gap-1.5">
-          {blanks.map((blank) => <div key={`month-blank-${blank}`} className={`min-h-0 rounded-xl border ${isDark ? 'border-slate-900 bg-slate-900/40' : 'border-slate-50 bg-slate-50/40'}`} />)}
+        <div className="grid min-h-0 flex-1 grid-cols-7 auto-rows-[minmax(154px,1fr)] gap-1.5 overflow-y-auto pr-1 custom-scrollbar">
+          {blanks.map((blank) => <div key={`month-blank-${blank}`} className={`min-h-[154px] rounded-xl border ${isDark ? 'border-slate-900 bg-slate-900/40' : 'border-slate-50 bg-slate-50/40'}`} />)}
           {dayCells.map((day) => {
             const date = new Date(year, month, day);
             const key = toDateKey(date);
             const items = eventsByDate[key] || [];
             const isToday = key === toDateKey(new Date());
-            const visibleItems = items.slice(0, 10);
+            const visibleItems = items.slice(0, CALENDAR_MONTH_VISIBLE_EVENT_LIMIT);
             const dayMaintenancePendingCount = items.reduce((total: number, event: any) => (
               total +
               Number(event.pending_maintenance_probe_count || 0) +
@@ -2414,16 +2471,16 @@ export const ClinicalAgendaBoard = ({
                 tabIndex={0}
                 onClick={() => {
                   onDateChange?.(date);
-                  if (items.length > 10) openDayPanel(key);
+                  if (items.length > CALENDAR_MONTH_VISIBLE_EVENT_LIMIT) openDayPanel(key);
                   else onCreateAppointment?.(key, '08:00');
                 }}
                 onKeyDown={(event) => {
                   if (event.key !== 'Enter' && event.key !== ' ') return;
                   event.preventDefault();
-                  if (items.length > 10) openDayPanel(key);
+                  if (items.length > CALENDAR_MONTH_VISIBLE_EVENT_LIMIT) openDayPanel(key);
                   else onCreateAppointment?.(key, '08:00');
                 }}
-                className={`flex min-h-0 cursor-pointer flex-col overflow-hidden rounded-xl border p-2 text-left transition-all ${
+                className={`flex min-h-[154px] cursor-pointer flex-col overflow-hidden rounded-xl border p-2 text-left transition-all ${
                   key === selectedDateKey
                     ? 'border-[#7a32fc]/40 bg-[#7a32fc]/5'
                     : isToday
@@ -2442,7 +2499,7 @@ export const ClinicalAgendaBoard = ({
                     </span>
                   )}
                 </div>
-                <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto pr-1 custom-scrollbar">
+                <div className="min-h-0 flex-1 space-y-1 overflow-hidden">
                   {visibleItems.map((event: any) => {
                     const statusColor = getAppointmentPatientConfirmationVisualState(event);
                     return (
@@ -2454,7 +2511,7 @@ export const ClinicalAgendaBoard = ({
                           clickEvent.stopPropagation();
                           openEventDetail(event);
                         }}
-                        className={`flex w-full items-center gap-1 rounded-md border px-1 py-0.5 text-left text-[10px] font-semibold leading-tight transition-colors ${statusColor.card}`}
+                        className={`flex min-h-[22px] w-full items-center gap-1.5 rounded-md border px-1.5 py-0.5 text-left text-[11px] font-semibold leading-4 transition-colors ${statusColor.card}`}
                       >
                         <span className="shrink-0 tabular-nums">{event.time}</span>
                         <span className="min-w-0 truncate">{event.patientName}</span>
@@ -2462,7 +2519,7 @@ export const ClinicalAgendaBoard = ({
                     );
                   })}
                 </div>
-                {items.length > 10 && (
+                {items.length > CALENDAR_MONTH_VISIBLE_EVENT_LIMIT && (
                   <button
                     type="button"
                     onClick={(clickEvent) => {
@@ -2471,13 +2528,13 @@ export const ClinicalAgendaBoard = ({
                     }}
                     className={`mt-1 shrink-0 rounded-md px-1 py-0.5 text-left text-[10px] font-bold ${isDark ? 'text-violet-300 hover:bg-slate-800' : 'text-[#7a32fc] hover:bg-violet-50'}`}
                   >
-                    ver mais
+                    +{items.length - CALENDAR_MONTH_VISIBLE_EVENT_LIMIT} mais
                   </button>
                 )}
               </div>
             );
           })}
-          {trailingBlanks.map((blank) => <div key={`month-trailing-${blank}`} className={`min-h-0 rounded-xl border ${isDark ? 'border-slate-900 bg-slate-900/40' : 'border-slate-50 bg-slate-50/40'}`} />)}
+          {trailingBlanks.map((blank) => <div key={`month-trailing-${blank}`} className={`min-h-[154px] rounded-xl border ${isDark ? 'border-slate-900 bg-slate-900/40' : 'border-slate-50 bg-slate-50/40'}`} />)}
         </div>
       </div>
     );
@@ -2588,6 +2645,19 @@ export const ClinicalAgendaBoard = ({
             <button type="button" onClick={() => onDateChange?.(new Date())} className={`rounded-2xl border px-4 py-2 text-xs font-bold ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`}>
               Hoje
             </button>
+            <button
+              type="button"
+              onClick={() => {
+                cacheRef.current.clear();
+                setRemoteRefreshNonce((value) => value + 1);
+              }}
+              className={`inline-flex items-center gap-2 rounded-2xl border px-3 py-2 text-xs font-bold ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`}
+              aria-label="Atualizar agenda"
+              title="Atualizar agenda"
+            >
+              <RefreshCcw size={14} className={remoteState.refreshing ? 'animate-spin' : ''} />
+              Atualizar
+            </button>
             <button type="button" onClick={() => moveDate(-1)} className={`rounded-2xl border p-2 ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`} aria-label="Período anterior">
               <ChevronLeft size={18} />
             </button>
@@ -2656,10 +2726,16 @@ export const ClinicalAgendaBoard = ({
           </div>
         </aside>
         <main className="flex min-h-0 min-w-0 flex-col gap-3 overflow-hidden">
-          {remoteState.loading && (
+          {remoteState.loading && !remoteState.loaded && (
             <div className={`flex items-center gap-2 rounded-2xl border px-4 py-3 text-sm font-semibold ${isDark ? 'border-slate-700 bg-slate-900 text-slate-300' : 'border-slate-100 bg-white text-slate-500'}`}>
               <Loader2 size={16} className="animate-spin" />
               Carregando agenda...
+            </div>
+          )}
+          {remoteState.refreshing && remoteState.loaded && (
+            <div className={`self-end inline-flex items-center gap-2 rounded-2xl border px-3 py-2 text-xs font-bold ${isDark ? 'border-slate-700 bg-slate-900 text-slate-300' : 'border-slate-100 bg-white text-slate-500'}`}>
+              <Loader2 size={14} className="animate-spin" />
+              Atualizando...
             </div>
           )}
           {remoteState.error && !remoteState.loaded && (

@@ -995,7 +995,16 @@ export default function App() {
 
     const refreshSignedProfileMedia = async () => {
       if (cancelled || inFlight) return;
+      const previous = profileMediaFetchRef.current;
+      if (
+        previous?.userId === currentUserId &&
+        !previous.inFlight &&
+        Date.now() - previous.fetchedAt < PROFILE_MEDIA_REFRESH_TTL_MS
+      ) {
+        return;
+      }
       inFlight = true;
+      profileMediaFetchRef.current = { userId: currentUserId, fetchedAt: previous?.fetchedAt || 0, inFlight: true };
       try {
         const result = await dataService.getUserProfileMedia(currentUserId);
         if (cancelled || !result?.success) return;
@@ -1027,14 +1036,11 @@ export default function App() {
         console.warn('Profile media refresh failed:', error);
       } finally {
         inFlight = false;
+        profileMediaFetchRef.current = { userId: currentUserId, fetchedAt: Date.now(), inFlight: false };
       }
     };
 
     void refreshSignedProfileMedia();
-
-    const interval = window.setInterval(() => {
-      void refreshSignedProfileMedia();
-    }, 1000 * 60 * 4);
 
     const handleVisibilityRefresh = () => {
       if (document.visibilityState === 'visible') {
@@ -1047,7 +1053,6 @@ export default function App() {
 
     return () => {
       cancelled = true;
-      window.clearInterval(interval);
       window.removeEventListener('focus', handleVisibilityRefresh);
       document.removeEventListener('visibilitychange', handleVisibilityRefresh);
     };
@@ -2157,10 +2162,14 @@ export default function App() {
   const [clinicStateHydrated, setClinicStateHydrated] = useState(false);
   const [clinicStateSyncReady, setClinicStateSyncReady] = useState(false);
   const clinicStateSyncTimerRef = useRef<any>(null);
+  const profileMediaFetchRef = useRef<{ userId: string; fetchedAt: number; inFlight: boolean } | null>(null);
+  const activityLogsFetchRef = useRef<{ key: string; fetchedAt: number; inFlight: boolean } | null>(null);
   const inactivityTimerRef = useRef<any>(null);
   const autoLogoutInProgressRef = useRef(false);
   const manualLogoutInProgressRef = useRef(false);
   const AUTO_LOGOUT_IDLE_MS = 15 * 60 * 1000;
+  const PROFILE_MEDIA_REFRESH_TTL_MS = 5 * 60 * 1000;
+  const ACTIVITY_LOGS_REFRESH_TTL_MS = 5 * 60 * 1000;
 
   const isAgendaStatusInteractionLog = (action: string, details: string) => {
     const normalized = `${action || ""} ${details || ""}`
@@ -3381,15 +3390,25 @@ export default function App() {
   useEffect(() => {
     const fetchLogs = async () => {
       if (user && (user.role === 'therapist' || user.role === 'coordinator' || user.role === 'receptionist' || user.role === 'admin' || user.role === 'owner')) {
-        const { dataService } = await import('./services/dataService');
-        const { success, data } = await dataService.getActivityLogs();
-        if (success && data) {
-          setActivityLogs((data || []).map(normalizeActivityLog));
+        const key = `${String(user?.id || '').trim()}:${String(user?.role || '').trim()}`;
+        const previous = activityLogsFetchRef.current;
+        if (previous?.key === key && (previous.inFlight || Date.now() - previous.fetchedAt < ACTIVITY_LOGS_REFRESH_TTL_MS)) {
+          return;
+        }
+        activityLogsFetchRef.current = { key, fetchedAt: previous?.key === key ? previous.fetchedAt : 0, inFlight: true };
+        try {
+          const { dataService } = await import('./services/dataService');
+          const { success, data } = await dataService.getActivityLogs();
+          if (success && data) {
+            setActivityLogs((data || []).map(normalizeActivityLog));
+          }
+        } finally {
+          activityLogsFetchRef.current = { key, fetchedAt: Date.now(), inFlight: false };
         }
       }
     };
     fetchLogs();
-  }, [user]);
+  }, [user?.id, user?.role]);
 
   const handleAddTask = async (t: any) => {
     const patient = allPatients.find(p => p.id === t.patientId);

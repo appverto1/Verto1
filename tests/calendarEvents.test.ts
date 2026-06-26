@@ -159,8 +159,50 @@ test('clinic_state_fallback enriquece resposta confirmada pelo historico operaci
 test('agenda atualiza automaticamente apos resposta do portal', () => {
   assert.match(calendarCode, /remoteRefreshNonce/);
   assert.match(calendarCode, /verto:appointment-domain-event/);
-  assert.match(calendarCode, /setInterval\(refreshWhenVisible, 15000\)/);
+  assert.match(calendarCode, /CALENDAR_EVENTS_CACHE_TTL_MS = 60_000/);
+  assert.match(calendarCode, /CALENDAR_EVENTS_FOCUS_REFRESH_TTL_MS = 3 \* 60_000/);
+  assert.match(calendarCode, /CALENDAR_DOMAIN_EVENT_DEBOUNCE_MS = 350/);
+  assert.match(calendarCode, /inFlightRequestRef/);
+  assert.match(calendarCode, /AbortController/);
+  assert.match(calendarCode, /signal: controller\?\.signal/);
+  assert.match(calendarCode, /refreshDebounceTimerRef/);
+  assert.match(calendarCode, /document\.visibilityState !== 'visible'/);
+  assert.doesNotMatch(calendarCode, /setInterval\(refreshWhenVisible, 15000\)/);
   assert.match(readFileSync(join(root, 'src/App.tsx'), 'utf8'), /window\.dispatchEvent\(new CustomEvent\('verto:appointment-domain-event'/);
+});
+
+test('agenda mensal exibe cinco agendamentos por dia antes do excedente', () => {
+  assert.match(calendarCode, /CALENDAR_MONTH_VISIBLE_EVENT_LIMIT = 5/);
+  assert.match(calendarCode, /items\.slice\(0, CALENDAR_MONTH_VISIBLE_EVENT_LIMIT\)/);
+  assert.match(calendarCode, /items\.length > CALENDAR_MONTH_VISIBLE_EVENT_LIMIT/);
+  assert.match(calendarCode, /auto-rows-\[minmax\(154px,1fr\)\]/);
+  assert.match(calendarCode, /min-h-\[154px\]/);
+  assert.match(calendarCode, /\+\{items\.length - CALENDAR_MONTH_VISIBLE_EVENT_LIMIT\} mais/);
+  assert.doesNotMatch(calendarCode, /items\.slice\(0, 10\)/);
+});
+
+test('clinic state logs e media nao ficam em polling pela agenda', () => {
+  const appCode = readFileSync(join(root, 'src/App.tsx'), 'utf8');
+  const mediaSlice = appCode.slice(
+    appCode.indexOf('const refreshSignedProfileMedia = async'),
+    appCode.indexOf('const handleVisibilityRefresh = () =>', appCode.indexOf('const refreshSignedProfileMedia = async')),
+  );
+  const logsSlice = appCode.slice(
+    appCode.indexOf('// Fetch activity logs from Backend on load'),
+    appCode.indexOf('const handleAddTask = async', appCode.indexOf('// Fetch activity logs from Backend on load')),
+  );
+  const clinicStateSlice = appCode.slice(
+    appCode.indexOf('clinicStateSyncTimerRef.current = setTimeout'),
+    appCode.indexOf('// Fetch activity logs from Backend on load'),
+  );
+  assert.match(appCode, /profileMediaFetchRef/);
+  assert.match(appCode, /PROFILE_MEDIA_REFRESH_TTL_MS = 5 \* 60 \* 1000/);
+  assert.doesNotMatch(mediaSlice, /setInterval/);
+  assert.match(appCode, /activityLogsFetchRef/);
+  assert.match(logsSlice, /ACTIVITY_LOGS_REFRESH_TTL_MS/);
+  assert.match(logsSlice, /\[user\?\.id, user\?\.role\]/);
+  assert.doesNotMatch(logsSlice, /\[user\]/);
+  assert.doesNotMatch(clinicStateSlice, /appointments:\s*therapistAgenda/);
 });
 
 test('cancelamento diferencia origem da clínica, paciente e desconhecida', () => {
@@ -302,12 +344,12 @@ test('coordinator usa agenda clinica e padrao inicial mensal persistido', () => 
   assert.match(agendaPreferenceCode, /const DEFAULT_AGENDA_VIEW: AgendaView = "month"/);
 });
 
-test('visao mensal mantem calendario fixo, scroll interno e ver mais acima de dez consultas', () => {
+test('visao mensal mantem calendario fixo, cinco itens visiveis e excedente clicavel', () => {
   assert.match(calendarCode, /xl:h-\[calc\(100vh-2rem\)\]/);
   assert.match(calendarCode, /h-full overflow-y-auto p-4 pr-3 custom-scrollbar/);
-  assert.match(calendarCode, /items\.slice\(0, 10\)/);
-  assert.match(calendarCode, /items\.length > 10/);
-  assert.match(calendarCode, /ver mais/);
+  assert.match(calendarCode, /items\.slice\(0, CALENDAR_MONTH_VISIBLE_EVENT_LIMIT\)/);
+  assert.match(calendarCode, /items\.length > CALENDAR_MONTH_VISIBLE_EVENT_LIMIT/);
+  assert.match(calendarCode, /\+\{items\.length - CALENDAR_MONTH_VISIBLE_EVENT_LIMIT\} mais/);
   assert.match(calendarCode, /openDayPanel/);
   assert.match(calendarCode, /overflow-y-auto pr-1 custom-scrollbar/);
 });
