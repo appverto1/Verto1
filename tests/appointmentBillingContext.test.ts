@@ -290,6 +290,22 @@ test('modal de editar pagador usa payerId canonico e deduplica nomes legados', (
   assert.match(calendarCode, /authorizationCode: usesInsuranceContext \? resolvedValues\.authorizationCode \|\| null : null/);
 });
 
+test('consulta e modal sugerem autorização TISS vigente do paciente sem usar TUSS legado', () => {
+  assert.match(serverCode, /function appointmentDateKeyForAuthorization/);
+  assert.match(serverCode, /resolveAppointmentTissAuthorizationForBilling/);
+  assert.match(serverCode, /findSuggestedTissAuthorizationForAppointment/);
+  assert.match(serverCode, /patient_payer_authorizations/);
+  assert.match(serverCode, /getPatientTissAuthorizationVisualState/);
+  assert.match(serverCode, /suggestedBilling = await resolveAppointmentBillingSuggestion\(/);
+  assert.match(serverCode, /patient_tiss_authorization_id: suggestedTissAuthorization\?\.authorizationId/);
+  assert.match(serverCode, /A autorização TISS selecionada não é elegível para este paciente, convênio e serviço\./);
+  assert.match(calendarCode, /Autorização TISS sugerida/);
+  assert.match(calendarCode, /Usar esta autorização/);
+  assert.match(calendarCode, /applySuggestedTissAuthorizationToBillingForm/);
+  assert.match(calendarCode, /patientTissAuthorizationId: usesInsuranceContext \? resolvedValues\.patientTissAuthorizationId \|\| null : null/);
+  assert.match(calendarCode, /Autorização TISS vigente do paciente/);
+});
+
 test('criacao de pagador reutiliza nome existente na mesma clinica', () => {
   const routeStart = serverCode.indexOf("app.post('/api/admin/payers'");
   assert.ok(routeStart > 0, 'rota de criar pagador deve existir');

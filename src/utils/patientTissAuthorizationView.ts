@@ -247,3 +247,92 @@ export const findSuggestedTissAuthorizationForFinancialPlan = (
       })?.suggestedAuthorization || null
   );
 };
+
+const authorizationBalance = (authorization: any) => {
+  const authorizedQuantity = Number(authorization?.authorizedQuantity ?? authorization?.authorized_quantity ?? 0) || 0;
+  const usedQuantity = Number(authorization?.usedQuantity ?? authorization?.used_quantity ?? 0) || 0;
+  if (authorizedQuantity <= 0) return Number.MAX_SAFE_INTEGER;
+  return Math.max(0, authorizedQuantity - usedQuantity);
+};
+
+export const findSuggestedTissAuthorizationForAppointment = (
+  appointment: {
+    payerId?: any;
+    payerName?: any;
+    serviceType?: any;
+    serviceName?: any;
+    serviceCatalogId?: any;
+    tussCodeId?: any;
+    tussCode?: any;
+    payerTussMappingId?: any;
+    appointmentDate?: any;
+  },
+  authorizations: any[],
+) => {
+  const referenceDateKey = asDateKey(appointment?.appointmentDate) || todayKey();
+  const payerId = cleanText(appointment?.payerId);
+  const payerNameKey = normalizeKey(appointment?.payerName);
+  const serviceCatalogId = cleanText(appointment?.serviceCatalogId);
+  const serviceKey = normalizeKey(appointment?.serviceType || appointment?.serviceName);
+  const tussCodeId = cleanText(appointment?.tussCodeId);
+  const tussCode = cleanText(appointment?.tussCode).toUpperCase();
+  const payerTussMappingId = cleanText(appointment?.payerTussMappingId);
+
+  const candidates = (Array.isArray(authorizations) ? authorizations : []).filter((authorization) => {
+    const state = getPatientTissAuthorizationVisualState(
+      serviceKey ? { ...authorization, serviceType: authorization?.serviceType || serviceKey } : authorization,
+      referenceDateKey,
+    );
+    if (!state.isCurrent || state.isLegacyOrInadequate) return false;
+
+    const authorizationPayerId = cleanText(authorization?.payerId || authorization?.payer_id);
+    const authorizationPayerNameKey = normalizeKey(authorization?.payerName || authorization?.payer_name);
+    const payerMatches =
+      (payerId && authorizationPayerId === payerId) ||
+      (!payerId && payerNameKey && authorizationPayerNameKey === payerNameKey) ||
+      (!payerId && !payerNameKey);
+    if (!payerMatches) return false;
+
+    const authorizationServiceCatalogId = cleanText(authorization?.serviceCatalogId || authorization?.service_catalog_id);
+    const authorizationMappingId = cleanText(authorization?.payerTussMappingId || authorization?.payer_tuss_mapping_id);
+    const authorizationTussCodeId = cleanText(authorization?.tussCodeId || authorization?.tuss_code_id);
+    const authorizationTussCode = cleanText(
+      authorization?.tussCode ||
+        authorization?.procedureTussCode ||
+        authorization?.procedure_tuss_code,
+    ).toUpperCase();
+    const authorizationServiceKey = normalizeKey([
+      authorization?.serviceName,
+      authorization?.service_name,
+      authorization?.procedureNameSnapshot,
+      authorization?.procedure_name_snapshot,
+      authorization?.internalCode,
+      authorization?.internal_code,
+      authorization?.serviceType,
+      authorization?.service_type,
+    ].filter(Boolean).join(' '));
+
+    const mappingMatches = payerTussMappingId && authorizationMappingId === payerTussMappingId;
+    const expectedTussMatches =
+      (tussCodeId && authorizationTussCodeId === tussCodeId) ||
+      (tussCode && authorizationTussCode === tussCode);
+    const serviceMatches =
+      (serviceCatalogId && authorizationServiceCatalogId === serviceCatalogId) ||
+      (serviceKey && authorizationServiceKey && (authorizationServiceKey.includes(serviceKey) || serviceKey.includes(authorizationServiceKey)));
+
+    if (tussCode || tussCodeId || payerTussMappingId) return Boolean(mappingMatches || expectedTussMatches);
+    return Boolean(serviceMatches);
+  });
+
+  return candidates.sort((a, b) => {
+    const balanceDelta = authorizationBalance(b) - authorizationBalance(a);
+    if (balanceDelta !== 0) return balanceDelta;
+    const aValidUntil = asDateKey(a?.validUntil || a?.valid_until) || '9999-12-31';
+    const bValidUntil = asDateKey(b?.validUntil || b?.valid_until) || '9999-12-31';
+    if (aValidUntil !== bValidUntil) return aValidUntil.localeCompare(bValidUntil);
+    const aUpdatedAt = cleanText(a?.updatedAt || a?.updated_at || a?.createdAt || a?.created_at);
+    const bUpdatedAt = cleanText(b?.updatedAt || b?.updated_at || b?.createdAt || b?.created_at);
+    if (aUpdatedAt !== bUpdatedAt) return bUpdatedAt.localeCompare(aUpdatedAt);
+    return cleanText(a?.id).localeCompare(cleanText(b?.id));
+  })[0] || null;
+};

@@ -9,6 +9,7 @@ import {
 } from '../src/utils/patientFinancialPlan';
 import {
   ABA_INDIVIDUAL_EXPECTED_TUSS_CODE,
+  findSuggestedTissAuthorizationForAppointment,
   findSuggestedTissAuthorizationForFinancialPlan,
   getPatientTissAuthorizationVisualState,
   getPatientTissAuthorizationTussReview,
@@ -291,6 +292,50 @@ test('autorizações ABA com TUSS legado não são sugeridas para novas Pré-gui
   assert.match(coordinatorCode, /Autorizações legadas\/inadequadas para Pré-guia \(\{patientTissLegacyAuthorizations\.length\}\)/);
   assert.match(coordinatorCode, /Autorizações históricas\/inativas \(\{patientTissHistoricalAuthorizations\.length\}\)/);
   assert.match(coordinatorCode, /De\/Para ativo esperado: \{visualState\.expectedTussCode \|\| ABA_INDIVIDUAL_EXPECTED_TUSS_CODE\}/);
+});
+
+test('resolvedor de consulta sugere autorizacao TISS vigente por paciente pagador servico data e TUSS', () => {
+  const base = {
+    patientId: 'patient-pedro',
+    payerId: 'payer-amil',
+    payerName: 'Amil',
+    serviceCatalogId: 'service-aba',
+    serviceName: 'Sessão ABA individual - teste XML',
+    internalCode: 'ABA',
+    payerTussMappingId: 'mapping-amil-aba',
+    tussCodeId: 'tuss-50000470',
+    tussCode: '50000470',
+    authorizationNumber: '123456789',
+    authorizationCode: '123456789',
+    guideNumber: '12345679',
+    validFrom: '2026-06-01',
+    validUntil: '2026-06-30',
+    authorizedQuantity: 10,
+    usedQuantity: 0,
+    active: true,
+    status: 'active'
+  };
+  const suggested = findSuggestedTissAuthorizationForAppointment({
+    payerId: 'payer-amil',
+    serviceType: 'ABA',
+    serviceCatalogId: 'service-aba',
+    payerTussMappingId: 'mapping-amil-aba',
+    tussCodeId: 'tuss-50000470',
+    tussCode: '50000470',
+    appointmentDate: '2026-06-26'
+  }, [
+    { ...base, id: 'auth-good' },
+    { ...base, id: 'auth-other-payer', payerId: 'payer-unimed', payerName: 'Unimed' },
+    { ...base, id: 'auth-old-code', tussCodeId: 'tuss-10101012', tussCode: '10101012', authorizationNumber: 'OLD' },
+    { ...base, id: 'auth-test-code', tussCodeId: 'tuss-teste-aba', tussCode: 'TESTE-ABA', authorizationNumber: 'TEST' },
+    { ...base, id: 'auth-expired', validUntil: '2026-05-30', authorizationNumber: 'EXP' },
+    { ...base, id: 'auth-consumed', usedQuantity: 10, authorizationNumber: 'USED' },
+    { ...base, id: 'auth-inactive', active: false, authorizationNumber: 'OFF' }
+  ]);
+
+  assert.equal(suggested?.authorizationNumber, '123456789');
+  assert.equal(suggested?.guideNumber, '12345679');
+  assert.equal(suggested?.tussCode, '50000470');
 });
 
 test('plano financeiro mostra resumo da autorização vigente sem virar fonte TISS', () => {

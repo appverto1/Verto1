@@ -92,6 +92,10 @@ import {
   normalizeScheduleLocationType
 } from './src/utils/scheduling';
 import {
+  findSuggestedTissAuthorizationForAppointment,
+  getPatientTissAuthorizationVisualState
+} from './src/utils/patientTissAuthorizationView';
+import {
   buildAppointmentClosureOperationalView,
   evaluateAppointmentClosureReadiness,
   type ClosureReadinessStatus
@@ -8302,15 +8306,133 @@ async function validateAppointmentFinancialContextForWrite(appointment: any, cli
   return { ok: true };
 }
 
+function appointmentDateKeyForAuthorization(value: any): string {
+  const safe = sanitizeString(value, 80).slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(safe) ? safe : new Date().toISOString().slice(0, 10);
+}
+
+const serializeAppointmentTissAuthorizationSuggestion = (authorization: any, referenceDateKey: string) => {
+  if (!authorization) return null;
+  const authorizedQuantity = Number(authorization?.authorizedQuantity ?? authorization?.authorized_quantity ?? 0) || 0;
+  const usedQuantity = Number(authorization?.usedQuantity ?? authorization?.used_quantity ?? 0) || 0;
+  const balance = authorizedQuantity > 0 ? Math.max(0, authorizedQuantity - usedQuantity) : null;
+  const visualState = getPatientTissAuthorizationVisualState(authorization, referenceDateKey);
+  return cleanObject({
+    authorizationId: sanitizeString(authorization?.id, 120) || null,
+    patientTissAuthorizationId: sanitizeString(authorization?.id, 120) || null,
+    patientId: sanitizeString(authorization?.patientId || authorization?.patient_id, 120) || null,
+    payerId: sanitizeString(authorization?.payerId || authorization?.payer_id, 120) || null,
+    payerName: sanitizeString(authorization?.payerName || authorization?.payer_name, 180) || null,
+    procedureName: sanitizeString(authorization?.serviceName || authorization?.procedureNameSnapshot || authorization?.procedure_name_snapshot, 180) || null,
+    serviceCatalogId: sanitizeString(authorization?.serviceCatalogId || authorization?.service_catalog_id, 120) || null,
+    payerTussMappingId: sanitizeString(authorization?.payerTussMappingId || authorization?.payer_tuss_mapping_id, 120) || null,
+    tussCodeId: sanitizeString(authorization?.tussCodeId || authorization?.tuss_code_id, 120) || null,
+    tussCode: sanitizeString(authorization?.tussCode || authorization?.procedureTussCode || authorization?.procedure_tuss_code, 80) || null,
+    tussDescription: sanitizeTextField(authorization?.tussDescription || authorization?.procedureNameSnapshot || authorization?.procedure_name_snapshot, 600) || null,
+    guideNumber: sanitizeString(authorization?.guideNumber || authorization?.guide_number, 120) || null,
+    authorizationCode: sanitizeString(authorization?.authorizationCode || authorization?.authorizationNumber || authorization?.authorization_code || authorization?.authorization_number, 120) || null,
+    authorizationNumber: sanitizeString(authorization?.authorizationNumber || authorization?.authorizationCode || authorization?.authorization_number || authorization?.authorization_code, 120) || null,
+    validFrom: authorization?.validFrom || authorization?.valid_from || null,
+    validUntil: authorization?.validUntil || authorization?.valid_until || null,
+    quantityAuthorized: authorizedQuantity,
+    quantityConsumed: usedQuantity,
+    balance,
+    status: visualState.label,
+    isEligibleForAppointment: visualState.isCurrent && !visualState.isLegacyOrInadequate,
+    isLegacyOrInvalidForTiss: visualState.isLegacyOrInadequate,
+    source: 'PATIENT_TISS_AUTHORIZATION'
+  });
+};
+
+async function resolveAppointmentTissAuthorizationForBilling(params: {
+  organizationId: string;
+  patientId: string;
+  payerId?: any;
+  payerName?: any;
+  serviceType?: any;
+  procedureCode?: any;
+  appointmentDate?: any;
+  authorizationId?: any;
+}) {
+  const organizationId = sanitizeString(params.organizationId, 120);
+  const patientId = sanitizeString(params.patientId, 120);
+  if (!isUuid(organizationId) || !isUuid(patientId)) return null;
+  const referenceDateKey = appointmentDateKeyForAuthorization(params.appointmentDate);
+  let payerId = sanitizeString(params.payerId, 120);
+  const payerName = sanitizeString(params.payerName, 180);
+  let payer: any = isUuid(payerId) ? await fetchPayerForAdmin(payerId, organizationId) : null;
+  if (!payer?.id && payerName) {
+    const payerResult = await supabase
+      .from('clinic_payers')
+      .select(CLINIC_PAYER_SELECT)
+      .eq('organization_id', organizationId)
+      .ilike('name', payerName)
+      .limit(2);
+    if (payerResult.error && !hasMissingFinancialSchema(payerResult.error) && !isMissingRelationError(payerResult.error)) throw payerResult.error;
+    payer = Array.isArray(payerResult.data) && payerResult.data.length === 1 ? payerResult.data[0] : null;
+    payerId = sanitizeString(payer?.id, 120);
+  }
+  if (!isUuid(payerId)) return null;
+
+  const serviceType = sanitizeString(params.serviceType, 120);
+  const serviceCatalog = await fetchMatchingTussServiceCatalog(organizationId, serviceType, params.procedureCode);
+  const mapping = serviceCatalog?.id
+    ? await fetchActivePayerTussMapping(organizationId, payerId, sanitizeString(serviceCatalog.id, 120), referenceDateKey)
+    : null;
+  const tussCode = isUuid(sanitizeString(mapping?.tuss_code_id, 120))
+    ? await fetchTussCodeById(organizationId, sanitizeString(mapping.tuss_code_id, 120))
+    : null;
+  if (!mapping?.id || !tussCode?.id) return null;
+
+  let query = supabase
+    .from('patient_payer_authorizations')
+    .select(PATIENT_PAYER_AUTHORIZATION_SELECT)
+    .eq('organization_id', organizationId)
+    .eq('patient_id', patientId)
+    .eq('payer_id', payerId)
+    .limit(120);
+  const requestedAuthorizationId = sanitizeString(params.authorizationId, 120);
+  if (isUuid(requestedAuthorizationId)) query = query.eq('id', requestedAuthorizationId);
+  const { data, error } = await query;
+  if (error) {
+    if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return null;
+    throw error;
+  }
+  const hydrated = await hydratePatientPayerAuthorizations(organizationId, Array.isArray(data) ? data : []);
+  const enriched = hydrated.map((authorization: any) => ({
+    ...authorization,
+    serviceType: authorization?.serviceType || serviceType
+  }));
+  const suggested = findSuggestedTissAuthorizationForAppointment({
+    payerId,
+    payerName: payer?.name || payerName,
+    serviceType,
+    serviceCatalogId: sanitizeString(serviceCatalog?.id, 120),
+    payerTussMappingId: sanitizeString(mapping?.id, 120),
+    tussCodeId: sanitizeString(tussCode?.id, 120),
+    tussCode: sanitizeString(tussCode?.code, 80),
+    appointmentDate: referenceDateKey
+  }, enriched);
+  return serializeAppointmentTissAuthorizationSuggestion(suggested, referenceDateKey);
+}
+
 async function resolveAppointmentBillingSuggestion(params: {
   organizationId: string;
   patientId: string;
   serviceType?: string | null;
+  payerId?: string | null;
+  payerName?: string | null;
+  appointmentDate?: string | null;
+  procedureCode?: string | null;
 }) {
   const organizationId = sanitizeString(params.organizationId, 120);
   const patientId = sanitizeString(params.patientId, 120);
   if (!isUuid(organizationId) || !isUuid(patientId)) return null;
   const serviceType = sanitizeString(params.serviceType, 120);
+  const requestedPayerId = sanitizeString(params.payerId, 120);
+  const requestedPayerName = sanitizeString(params.payerName, 180);
+  const appointmentDate = sanitizeString(params.appointmentDate, 80) || new Date().toISOString();
+  const procedureCode = sanitizeString(params.procedureCode, 80);
 
   const planResult = await supabase
     .from('patient_financial_plans')
@@ -8338,15 +8460,40 @@ async function resolveAppointmentBillingSuggestion(params: {
   const usablePlans = plans.filter((plan: any) =>
     isUuid(sanitizeString(plan?.payer_id, 120)) || Boolean(sanitizeString(plan?.payer_name_snapshot, 180))
   );
+  const payerScopedPlans = isUuid(requestedPayerId)
+    ? usablePlans.filter((plan: any) => sanitizeString(plan?.payer_id, 120) === requestedPayerId)
+    : requestedPayerName
+      ? usablePlans.filter((plan: any) => sanitizeString(plan?.payer_name_snapshot, 180).toLowerCase() === requestedPayerName.toLowerCase())
+      : usablePlans;
   const matchingPlans = serviceType
-    ? usablePlans.filter((plan: any) => financialPlanMatchesAppointmentService(plan, serviceType))
+    ? payerScopedPlans.filter((plan: any) => financialPlanMatchesAppointmentService(plan, serviceType))
     : [];
   const selectedPlan =
     matchingPlans.length === 1
       ? matchingPlans[0]
-      : !serviceType && usablePlans.length === 1
-        ? usablePlans[0]
+      : !serviceType && payerScopedPlans.length === 1
+        ? payerScopedPlans[0]
         : null;
+  const attachTissAuthorization = async (suggestion: any) => {
+    const tissAuthorization = await resolveAppointmentTissAuthorizationForBilling({
+      organizationId,
+      patientId,
+      payerId: suggestion?.payerId || requestedPayerId,
+      payerName: suggestion?.payerName || requestedPayerName,
+      serviceType: suggestion?.serviceType || serviceType,
+      procedureCode,
+      appointmentDate
+    });
+    if (!tissAuthorization?.authorizationId) return suggestion;
+    return {
+      ...suggestion,
+      authorizationCode: tissAuthorization.authorizationCode || suggestion?.authorizationCode || null,
+      guideNumber: tissAuthorization.guideNumber || suggestion?.guideNumber || null,
+      patientTissAuthorizationId: tissAuthorization.authorizationId,
+      tissAuthorization,
+      source: 'PATIENT_TISS_AUTHORIZATION'
+    };
+  };
   if (selectedPlan) {
     let payerName = sanitizeString(selectedPlan.payer_name_snapshot, 180);
     const payerId = sanitizeString(selectedPlan.payer_id, 120);
@@ -8361,7 +8508,7 @@ async function resolveAppointmentBillingSuggestion(params: {
       if (payerResult.error && !hasMissingFinancialSchema(payerResult.error)) throw payerResult.error;
       payerName = sanitizeString(payerResult.data?.name, 180);
     }
-    return {
+    return attachTissAuthorization({
       payerId: isUuid(payerId) ? payerId : null,
       payerName: payerName || null,
       serviceType: sanitizeString(selectedPlan.service_type || serviceType, 120) || null,
@@ -8371,7 +8518,33 @@ async function resolveAppointmentBillingSuggestion(params: {
       guideNumber: null,
       notes: sanitizeTextField(selectedPlan.notes, 1200) || null,
       source: 'PATIENT_DEFAULT'
-    };
+    });
+  }
+
+  if (isUuid(requestedPayerId) || requestedPayerName) {
+    let payerName = requestedPayerName;
+    if (!payerName && isUuid(requestedPayerId)) {
+      const payerResult = await supabase
+        .from('clinic_payers')
+        .select('id, name')
+        .eq('organization_id', organizationId)
+        .eq('id', requestedPayerId)
+        .limit(1)
+        .maybeSingle();
+      if (payerResult.error && !hasMissingFinancialSchema(payerResult.error)) throw payerResult.error;
+      payerName = sanitizeString(payerResult.data?.name, 180);
+    }
+    return attachTissAuthorization({
+      payerId: isUuid(requestedPayerId) ? requestedPayerId : null,
+      payerName: payerName || null,
+      serviceType: serviceType || null,
+      insuranceCardNumber: patientInsuranceCardNumber || null,
+      insurancePlanName: patientInsurancePlanName || null,
+      authorizationCode: null,
+      guideNumber: null,
+      notes: null,
+      source: 'PATIENT_DEFAULT'
+    });
   }
 
   const insuranceName = sanitizeString(patientBillingRow?.insurance_name, 180);
@@ -8389,7 +8562,7 @@ async function resolveAppointmentBillingSuggestion(params: {
     .limit(2);
   if (payerResult.error && !hasMissingFinancialSchema(payerResult.error)) throw payerResult.error;
   const matchingPayer = Array.isArray(payerResult.data) && payerResult.data.length === 1 ? payerResult.data[0] : null;
-  return {
+  return attachTissAuthorization({
     payerId: isUuid(sanitizeString(matchingPayer?.id, 120)) ? sanitizeString(matchingPayer.id, 120) : null,
     payerName: sanitizeString(matchingPayer?.name || insuranceName, 180) || null,
     serviceType: serviceType || null,
@@ -8399,7 +8572,7 @@ async function resolveAppointmentBillingSuggestion(params: {
     guideNumber: null,
     notes: null,
     source: 'PATIENT_DEFAULT'
-  };
+  });
 }
 
 async function upsertInitialBillingContextFromAppointment(params: {
@@ -8484,6 +8657,18 @@ async function upsertInitialBillingContextFromAppointment(params: {
       explicitFinancialContextType ||
       (payer?.id ? 'INSURANCE' : null) ||
       normalizeAppointmentFinancialContextType(suggestedBilling?.payerType || suggestedBilling?.payer_type);
+    if (financialContextType === 'INSURANCE' && (payer?.id || payerName) && !suggestedBilling) {
+      suggestedBilling = await resolveAppointmentBillingSuggestion({
+        organizationId,
+        patientId,
+        serviceType,
+        payerId: sanitizeString(payer?.id || rawPayerId, 120),
+        payerName,
+        appointmentDate: appointmentPayload?.scheduled_start_at || appointmentPayload?.scheduled_at || appointmentPayload?.date,
+        procedureCode: appointmentPayload?.procedureCode || appointmentPayload?.procedure_code
+      });
+    }
+    const suggestedTissAuthorization = suggestedBilling?.tissAuthorization || null;
     const payload = cleanObject({
       id: existing.data?.id || crypto.randomUUID(),
       organization_id: organizationId,
@@ -8508,7 +8693,9 @@ async function upsertInitialBillingContextFromAppointment(params: {
       metadata: sanitizeClinicalPayload(cleanObject({
         financialContextType: financialContextType || undefined,
         explicitFinancialContext: Boolean(explicitFinancialContextType),
-        skipTussResolution: financialContextSkipsInsuranceBilling(financialContextType)
+        skipTussResolution: financialContextSkipsInsuranceBilling(financialContextType),
+        patient_tiss_authorization_id: suggestedTissAuthorization?.authorizationId || undefined,
+        tiss_authorization: suggestedTissAuthorization || undefined
       })),
       created_at: existing.data?.created_at || new Date().toISOString(),
       updated_at: new Date().toISOString()
@@ -33887,7 +34074,11 @@ async function startServer() {
           }, null, billingDocuments, await resolveAppointmentBillingSuggestion({
             organizationId,
             patientId: event.patient_id,
-            serviceType: event.type || event.service_type || null
+            serviceType: event.type || event.service_type || null,
+            payerId: event.payer_id || billingContext?.payer_id || null,
+            payerName: event.payer_name_snapshot || billingContext?.payer_name_snapshot || null,
+            appointmentDate: event.scheduled_start_at || event.scheduled_at || event.date || null,
+            procedureCode: event.procedure_code || billingContext?.procedure_code || null
           })),
           actionRequests,
           statusHistory,
@@ -33918,7 +34109,7 @@ async function startServer() {
 
   const normalizeBillingContextSource = (value: unknown) => {
     const safe = sanitizeString(value, 60).toUpperCase();
-    return ['PATIENT_DEFAULT', 'MANUAL', 'APPOINTMENT_CONTEXT'].includes(safe) ? safe : 'MANUAL';
+    return ['PATIENT_DEFAULT', 'PATIENT_TISS_AUTHORIZATION', 'MANUAL', 'APPOINTMENT_CONTEXT'].includes(safe) ? safe : 'MANUAL';
   };
 
   const normalizePayerStatus = (value: unknown) => {
@@ -33974,6 +34165,8 @@ async function startServer() {
     insurancePlanName: sanitizeString(suggestion?.insurancePlanName || suggestion?.insurance_plan_name, 160) || null,
     authorizationCode: sanitizeString(suggestion?.authorizationCode || suggestion?.authorization_code, 120) || null,
     guideNumber: sanitizeString(suggestion?.guideNumber || suggestion?.guide_number, 120) || null,
+    patientTissAuthorizationId: sanitizeString(suggestion?.patientTissAuthorizationId || suggestion?.patient_tiss_authorization_id || suggestion?.authorizationId || suggestion?.authorization_id, 120) || null,
+    tissAuthorization: suggestion?.tissAuthorization && typeof suggestion.tissAuthorization === 'object' ? suggestion.tissAuthorization : null,
     notes: sanitizeTextField(suggestion?.notes, 1200) || null,
     source: sanitizeString(suggestion?.source, 60) || 'PATIENT_DEFAULT'
   } : null;
@@ -33993,6 +34186,8 @@ async function startServer() {
       insurancePlanName: sanitizeString(row?.insurance_plan_name, 160) || patientDefault?.insurancePlanName || null,
       authorizationCode: sanitizeString(row?.authorization_code, 120) || (!hasContext ? patientDefault?.authorizationCode : null),
       guideNumber: sanitizeString(row?.guide_number, 120) || (!hasContext ? patientDefault?.guideNumber : null),
+      patientTissAuthorizationId: sanitizeString(row?.metadata?.patient_tiss_authorization_id || row?.metadata?.patientTissAuthorizationId, 120) || null,
+      tissAuthorization: row?.metadata?.tiss_authorization && typeof row.metadata.tiss_authorization === 'object' ? row.metadata.tiss_authorization : null,
       procedureCode: sanitizeString(row?.procedure_code, 80) || null,
       notes: sanitizeTextField(row?.notes, 1200) || (!hasContext ? patientDefault?.notes : null),
       source: sanitizeString(row?.source, 60) || (!hasContext ? patientDefault?.source : null),
@@ -34385,6 +34580,16 @@ async function startServer() {
       services.find((service: any) => normalizeBillingServiceMatchKey(service?.name) === serviceKey) ||
       null;
     if (activeMatch) return activeMatch;
+    const compatibleMatch = services.find((service: any) => {
+      const serviceCompositeKey = [
+        service?.service_type,
+        service?.name,
+        service?.internal_code,
+        service?.specialty
+      ].map(normalizeBillingServiceMatchKey).filter(Boolean).join('_');
+      return Boolean(serviceKey && serviceCompositeKey && (serviceCompositeKey.includes(serviceKey) || serviceKey.includes(serviceCompositeKey)));
+    });
+    if (compatibleMatch) return compatibleMatch;
 
     const historicalServiceId = sanitizeString(historical?.serviceCatalogId, 120);
     if (isUuid(historicalServiceId)) return fetchTussServiceCatalogById(organizationId, historicalServiceId);
@@ -40391,7 +40596,11 @@ async function startServer() {
       const suggestion = await resolveAppointmentBillingSuggestion({
         organizationId,
         patientId: appointment.patient_id,
-        serviceType: appointment.service_type || appointment.approach || null
+        serviceType: appointment.service_type || appointment.approach || null,
+        payerId: billingContext?.payer_id || appointment.payer_id || null,
+        payerName: billingContext?.payer_name_snapshot || appointment.payer_name_snapshot || null,
+        appointmentDate: appointment.scheduled_start_at || appointment.scheduled_at || appointment.date || null,
+        procedureCode: billingContext?.procedure_code || appointment.procedure_code || null
       });
       const billingItemsBundle = await fetchAppointmentBillingItemsBundle(organizationId, [appointment.id]);
       const billingItem = !financialContextSkipsInsuranceBilling(billingContext?.payer_type)
@@ -40480,6 +40689,32 @@ async function startServer() {
           error: 'Selecione um pagador/convênio cadastrado ou escolha outro contexto financeiro válido.'
         });
       }
+      const requestedPatientTissAuthorizationId = sanitizeString(
+        req.body?.patientTissAuthorizationId ||
+          req.body?.patient_tiss_authorization_id ||
+          req.body?.authorizationId ||
+          req.body?.authorization_id,
+        120
+      );
+      let appliedTissAuthorization: any = null;
+      if (isUuid(requestedPatientTissAuthorizationId)) {
+        appliedTissAuthorization = await resolveAppointmentTissAuthorizationForBilling({
+          organizationId,
+          patientId: appointment.patient_id,
+          payerId: effectivePayerId,
+          payerName: payer?.name || requestedPayerName || existing?.payer_name_snapshot,
+          serviceType: req.body?.serviceType || req.body?.service_type || existing?.service_type || appointment.service_type || appointment.approach,
+          procedureCode: req.body?.procedureCode || req.body?.procedure_code || existing?.procedure_code || appointment.procedure_code,
+          appointmentDate: appointment.scheduled_start_at || appointment.scheduled_at || appointment.date,
+          authorizationId: requestedPatientTissAuthorizationId
+        });
+        if (appliedTissAuthorization?.authorizationId !== requestedPatientTissAuthorizationId) {
+          return res.status(400).json({
+            success: false,
+            error: 'A autorização TISS selecionada não é elegível para este paciente, convênio e serviço.'
+          });
+        }
+      }
       const now = new Date().toISOString();
       const payload = cleanObject({
         id: existing?.id || crypto.randomUUID(),
@@ -40494,18 +40729,20 @@ async function startServer() {
         service_type: sanitizeString(req.body?.serviceType || req.body?.service_type || appointment.service_type || appointment.approach, 120) || null,
         insurance_card_number: sanitizeString(req.body?.insuranceCardNumber || req.body?.insurance_card_number || req.body?.cardNumber || req.body?.card_number, 120) || null,
         insurance_plan_name: sanitizeString(req.body?.insurancePlanName || req.body?.insurance_plan_name, 160) || null,
-        authorization_code: sanitizeString(req.body?.authorizationCode || req.body?.authorization_code, 120) || null,
-        guide_number: sanitizeString(req.body?.guideNumber || req.body?.guide_number, 120) || null,
+        authorization_code: sanitizeString(req.body?.authorizationCode || req.body?.authorization_code || appliedTissAuthorization?.authorizationCode, 120) || null,
+        guide_number: sanitizeString(req.body?.guideNumber || req.body?.guide_number || appliedTissAuthorization?.guideNumber, 120) || null,
         procedure_code: sanitizeString(req.body?.procedureCode || req.body?.procedure_code, 80) || null,
         notes: sanitizeTextField(req.body?.notes, 1200) || null,
-        source: normalizeBillingContextSource(req.body?.source),
+        source: appliedTissAuthorization?.authorizationId ? 'PATIENT_TISS_AUTHORIZATION' : normalizeBillingContextSource(req.body?.source),
         metadata: sanitizeClinicalPayload(cleanObject({
           financialContextType: effectiveFinancialContextType || undefined,
           explicitFinancialContext: Boolean(requestedFinancialContextType),
           skipTussResolution: financialContextSkipsInsuranceBilling(effectiveFinancialContextType),
           insurance_card_number: sanitizeString(req.body?.insuranceCardNumber || req.body?.insurance_card_number || req.body?.cardNumber || req.body?.card_number, 120) || undefined,
           insurance_plan_name: sanitizeString(req.body?.insurancePlanName || req.body?.insurance_plan_name, 160) || undefined,
-          source: normalizeBillingContextSource(req.body?.source)
+          patient_tiss_authorization_id: appliedTissAuthorization?.authorizationId || undefined,
+          tiss_authorization: appliedTissAuthorization || undefined,
+          source: appliedTissAuthorization?.authorizationId ? 'PATIENT_TISS_AUTHORIZATION' : normalizeBillingContextSource(req.body?.source)
         })),
         created_by: existing?.created_by || (isUuid(sanitizeString(req.session.user?.id, 120)) ? sanitizeString(req.session.user?.id, 120) : null),
         updated_by: isUuid(sanitizeString(req.session.user?.id, 120)) ? sanitizeString(req.session.user?.id, 120) : null,

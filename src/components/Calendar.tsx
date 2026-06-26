@@ -1194,6 +1194,7 @@ export const ClinicalAgendaBoard = ({
     insurancePlanName: '',
     guideNumber: '',
     authorizationCode: '',
+    patientTissAuthorizationId: '',
     procedureCode: '',
     notes: '',
     source: ''
@@ -1662,6 +1663,7 @@ export const ClinicalAgendaBoard = ({
       insurancePlanName: financialContextType === 'INSURANCE' ? String(source?.insurancePlanName || source?.insurance_plan_name || '') : '',
       guideNumber: financialContextType === 'INSURANCE' ? String(source?.guideNumber || source?.guide_number || '') : '',
       authorizationCode: financialContextType === 'INSURANCE' ? String(source?.authorizationCode || source?.authorization_code || '') : '',
+      patientTissAuthorizationId: financialContextType === 'INSURANCE' ? String(source?.patientTissAuthorizationId || source?.patient_tiss_authorization_id || source?.authorizationId || source?.authorization_id || '') : '',
       procedureCode: String(source?.procedureCode || source?.procedure_code || ''),
       notes: String(source?.notes || ''),
       source: String(source?.source || '')
@@ -1737,6 +1739,7 @@ export const ClinicalAgendaBoard = ({
       financialContextType: 'INSURANCE',
       payerId: String(payer?.id || ''),
       payerName: sanitizeHumanPayerName(payer?.name || name),
+      patientTissAuthorizationId: '',
       source: 'MANUAL'
     }));
     setQuickPayerForm({ open: false, saving: false, error: '', name: '', payerType: 'INSURANCE' });
@@ -1855,6 +1858,7 @@ export const ClinicalAgendaBoard = ({
       insurancePlanName: usesInsuranceContext ? resolvedValues.insurancePlanName || null : null,
       guideNumber: usesInsuranceContext ? resolvedValues.guideNumber || null : null,
       authorizationCode: usesInsuranceContext ? resolvedValues.authorizationCode || null : null,
+      patientTissAuthorizationId: usesInsuranceContext ? resolvedValues.patientTissAuthorizationId || null : null,
       procedureCode: resolvedValues.procedureCode || null,
       notes: resolvedValues.notes || null,
       source: resolvedValues.source || null
@@ -1896,6 +1900,7 @@ export const ClinicalAgendaBoard = ({
       insurancePlanName: suggestion.insurancePlanName || '',
       guideNumber: suggestion.guideNumber || '',
       authorizationCode: suggestion.authorizationCode || '',
+      patientTissAuthorizationId: suggestion.patientTissAuthorizationId || suggestion.patient_tiss_authorization_id || suggestion.authorizationId || suggestion.authorization_id || suggestion.tissAuthorization?.authorizationId || '',
       procedureCode: '',
       notes: suggestion.notes || '',
       source: suggestion.source || 'PATIENT_DEFAULT'
@@ -2502,6 +2507,9 @@ export const ClinicalAgendaBoard = ({
   const billingDocuments = Array.isArray(billingContext.documents) ? billingContext.documents : [];
   const pendingBillingDocuments = billingDocuments.filter((doc: any) => ['REQUIRED', 'PENDING', 'EXPIRED'].includes(String(doc.status || '').toUpperCase()));
   const billingSuggestion = billingContext.suggestion || null;
+  const billingSuggestedTissAuthorization = billingSuggestion?.tissAuthorization || null;
+  const billingContextTissAuthorization = billingContext?.tissAuthorization || null;
+  const visibleBillingTissAuthorization = billingContextTissAuthorization || billingSuggestedTissAuthorization;
   const billingFinancialContextType =
     normalizeAppointmentFinancialContextType(
       billingContext.financialContextType ||
@@ -2547,6 +2555,25 @@ export const ClinicalAgendaBoard = ({
       : String(billingForm.source || '').toUpperCase() === 'PATIENT_DEFAULT'
         ? 'Dados sugeridos a partir do cadastro do paciente'
       : '';
+  const billingTissAuthorizationSummary = billingSuggestedTissAuthorization
+    ? [
+        billingSuggestedTissAuthorization.authorizationCode ? `Senha ${billingSuggestedTissAuthorization.authorizationCode}` : '',
+        billingSuggestedTissAuthorization.guideNumber ? `Guia ${billingSuggestedTissAuthorization.guideNumber}` : '',
+        billingSuggestedTissAuthorization.tussCode ? `TUSS ${billingSuggestedTissAuthorization.tussCode}` : '',
+        billingSuggestedTissAuthorization.balance !== null && billingSuggestedTissAuthorization.balance !== undefined ? `saldo ${billingSuggestedTissAuthorization.balance}` : '',
+        billingSuggestedTissAuthorization.validUntil ? `válida até ${String(billingSuggestedTissAuthorization.validUntil).slice(0, 10).split('-').reverse().join('/')}` : ''
+      ].filter(Boolean).join(' · ')
+    : '';
+  const applySuggestedTissAuthorizationToBillingForm = () => {
+    if (!billingSuggestedTissAuthorization) return;
+    setBillingForm((prev: any) => ({
+      ...prev,
+      guideNumber: billingSuggestedTissAuthorization.guideNumber || prev.guideNumber,
+      authorizationCode: billingSuggestedTissAuthorization.authorizationCode || prev.authorizationCode,
+      source: 'PATIENT_TISS_AUTHORIZATION',
+      patientTissAuthorizationId: billingSuggestedTissAuthorization.authorizationId || billingSuggestedTissAuthorization.patientTissAuthorizationId || ''
+    }));
+  };
 
   return (
     <div className="flex flex-col gap-3 pb-[calc(env(safe-area-inset-bottom)+5rem)] xl:h-[calc(100vh-2rem)] xl:min-h-[680px] xl:overflow-hidden xl:pb-0">
@@ -2837,6 +2864,25 @@ export const ClinicalAgendaBoard = ({
                 {billingEditorBadge}
               </div>
             )}
+            {billingFormUsesInsurance && billingSuggestedTissAuthorization && (
+              <div className={`mt-4 rounded-2xl border p-4 ${isDark ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100' : 'border-emerald-200 bg-emerald-50 text-emerald-900'}`}>
+                <p className="text-[10px] font-bold uppercase tracking-[0.16em]">Autorização TISS sugerida</p>
+                <p className="mt-1 text-sm font-semibold">{billingTissAuthorizationSummary || 'Autorização vigente do paciente disponível para esta consulta.'}</p>
+                <button
+                  type="button"
+                  disabled={billingEditorState.saving}
+                  onClick={applySuggestedTissAuthorizationToBillingForm}
+                  className="mt-3 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-bold text-white disabled:opacity-60"
+                >
+                  Usar esta autorização
+                </button>
+              </div>
+            )}
+            {billingFormUsesInsurance && !billingSuggestedTissAuthorization && billingSuggestion?.payerName && (
+              <div className={`mt-4 rounded-2xl border px-4 py-3 text-xs font-semibold ${isDark ? 'border-slate-700 bg-slate-900 text-slate-300' : 'border-slate-100 bg-slate-50 text-slate-500'}`}>
+                Nenhuma autorização TISS vigente encontrada para este paciente, convênio e serviço.
+              </div>
+            )}
 
             <div className="mt-5 grid gap-3 sm:grid-cols-2">
               <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
@@ -2858,6 +2904,7 @@ export const ClinicalAgendaBoard = ({
                       insurancePlanName: nextUsesInsurance ? prev.insurancePlanName : '',
                       guideNumber: nextUsesInsurance ? prev.guideNumber : '',
                       authorizationCode: nextUsesInsurance ? prev.authorizationCode : '',
+                      patientTissAuthorizationId: nextUsesInsurance ? prev.patientTissAuthorizationId : '',
                       source: 'MANUAL'
                     }));
                   }}
@@ -2897,6 +2944,7 @@ export const ClinicalAgendaBoard = ({
                       ...prev,
                       payerId: value,
                       payerName: payer?.name || '',
+                      patientTissAuthorizationId: '',
                       source: 'MANUAL'
                     }));
                   }}
@@ -2976,7 +3024,7 @@ export const ClinicalAgendaBoard = ({
                 <input
                   className={`mt-1 w-full rounded-xl border p-3 text-sm font-semibold normal-case tracking-normal outline-none ${isDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-violet-100 bg-white text-slate-700'}`}
                   value={billingForm.serviceType}
-                  onChange={(event) => setBillingForm((prev) => ({ ...prev, serviceType: event.target.value, source: 'MANUAL' }))}
+                  onChange={(event) => setBillingForm((prev) => ({ ...prev, serviceType: event.target.value, patientTissAuthorizationId: '', source: 'MANUAL' }))}
                   placeholder="Tipo de atendimento"
                 />
               </label>
@@ -3005,7 +3053,7 @@ export const ClinicalAgendaBoard = ({
                 <input
                   className={`mt-1 w-full rounded-xl border p-3 text-sm font-semibold normal-case tracking-normal outline-none ${isDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-violet-100 bg-white text-slate-700'}`}
                   value={billingForm.guideNumber}
-                  onChange={(event) => setBillingForm((prev) => ({ ...prev, guideNumber: event.target.value, source: 'MANUAL' }))}
+                  onChange={(event) => setBillingForm((prev) => ({ ...prev, guideNumber: event.target.value, patientTissAuthorizationId: '', source: 'MANUAL' }))}
                   placeholder="Número da guia"
                 />
               </label>
@@ -3014,7 +3062,7 @@ export const ClinicalAgendaBoard = ({
                 <input
                   className={`mt-1 w-full rounded-xl border p-3 text-sm font-semibold normal-case tracking-normal outline-none ${isDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-violet-100 bg-white text-slate-700'}`}
                   value={billingForm.authorizationCode}
-                  onChange={(event) => setBillingForm((prev) => ({ ...prev, authorizationCode: event.target.value, source: 'MANUAL' }))}
+                  onChange={(event) => setBillingForm((prev) => ({ ...prev, authorizationCode: event.target.value, patientTissAuthorizationId: '', source: 'MANUAL' }))}
                   placeholder="Código informado pelo pagador"
                 />
               </label>
@@ -3126,6 +3174,9 @@ export const ClinicalAgendaBoard = ({
                         <p><span className="font-semibold">Plano:</span> {billingContext.insurancePlanName || detailEvent.insurance_plan_name || billingSuggestion?.insurancePlanName || 'não cadastrado'}</p>
                         <p><span className="font-semibold">Guia:</span> {billingContext.guideNumber || detailEvent.guide_number || 'pendente'}</p>
                         <p><span className="font-semibold">Autorização:</span> {billingContext.authorizationCode || detailEvent.authorization_code || 'pendente'}</p>
+                        {visibleBillingTissAuthorization && (
+                          <p className="sm:col-span-2 text-xs font-semibold text-emerald-700">Autorização TISS vigente do paciente</p>
+                        )}
                         <p><span className="font-semibold">Documentos:</span> {pendingBillingDocuments.length > 0 ? `${pendingBillingDocuments.length} pendente(s)` : 'Sem pendência extra'}</p>
                       </>
                     )}

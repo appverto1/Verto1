@@ -2768,7 +2768,7 @@ export const dataService = {
       }, {
         helperName: 'getAppointmentBillingContext',
         operation: 'detail',
-        table: 'appointment_billing_contexts,appointment_required_documents',
+        table: 'appointment_billing_contexts,appointment_required_documents,patient_payer_authorizations',
         hasExplicitColumns: true,
         requiresPatientOrSession: false
       });
@@ -2789,7 +2789,7 @@ export const dataService = {
       }, {
         helperName: 'updateAppointmentBillingContext',
         operation: 'write',
-        table: 'appointment_billing_contexts,appointment_billing_items,payer_requirement_audit_logs,appointment_closure_checks',
+        table: 'appointment_billing_contexts,appointment_billing_items,patient_payer_authorizations,payer_requirement_audit_logs,appointment_closure_checks',
         hasExplicitColumns: true,
         requiresPatientOrSession: false
       });
