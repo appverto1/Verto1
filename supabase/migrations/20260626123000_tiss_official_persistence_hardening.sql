@@ -56,7 +56,12 @@ alter table public.tiss_revenue_cycle_events
     )
   );
 
+drop function if exists public.create_tiss_official_document(
+  uuid, date, text, text, text, text, text, text, text, text, text, text, uuid[], text, jsonb, jsonb, integer, integer, jsonb, uuid
+);
+
 create or replace function public.create_tiss_official_document(
+  p_organization_id uuid,
   p_payer_id uuid,
   p_competence_month date,
   p_guide_type text,
@@ -110,6 +115,10 @@ begin
   limit 1;
 
   if v_clinic_id is null or v_role not in ('owner', 'admin', 'coordinator') then
+    raise exception 'TISS_OFFICIAL_FORBIDDEN';
+  end if;
+
+  if p_organization_id is null or p_organization_id <> v_clinic_id then
     raise exception 'TISS_OFFICIAL_FORBIDDEN';
   end if;
 
@@ -455,8 +464,13 @@ end;
 $$;
 
 revoke all on function public.create_tiss_official_document(
-  uuid, date, text, text, text, text, text, text, text, text, text, text, uuid[], text, jsonb, jsonb, integer, integer, jsonb, uuid
+  uuid, uuid, date, text, text, text, text, text, text, text, text, text, text, uuid[], text, jsonb, jsonb, integer, integer, jsonb, uuid
 ) from public;
 grant execute on function public.create_tiss_official_document(
-  uuid, date, text, text, text, text, text, text, text, text, text, text, uuid[], text, jsonb, jsonb, integer, integer, jsonb, uuid
+  uuid, uuid, date, text, text, text, text, text, text, text, text, text, text, uuid[], text, jsonb, jsonb, integer, integer, jsonb, uuid
 ) to authenticated;
+grant execute on function public.create_tiss_official_document(
+  uuid, uuid, date, text, text, text, text, text, text, text, text, text, text, uuid[], text, jsonb, jsonb, integer, integer, jsonb, uuid
+) to service_role;
+
+notify pgrst, 'reload schema';

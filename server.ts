@@ -36298,6 +36298,11 @@ async function startServer() {
       reasonCode = officialCode.replace(/^TISS_OFFICIAL_/, '');
       status = officialCode.includes('MISMATCH') || officialCode.includes('INVALID') ? 409 : 422;
       safeMessage = 'Não foi possível persistir o documento TISS oficial.';
+    } else if (postgresCode === '42883') {
+      stage = 'insert_official_document';
+      reasonCode = 'RPC_SIGNATURE_MISMATCH';
+      status = 503;
+      safeMessage = 'A função de persistência do XML oficial não foi encontrada com a assinatura esperada. Verifique a migration e o reload do schema.';
     } else if (missingColumn) {
       reasonCode = 'SCHEMA_COLUMN_MISSING';
       status = 503;
@@ -38578,6 +38583,7 @@ async function startServer() {
         clinicalDataExcluded: true
       };
       const rpcResult = await supabase.rpc('create_tiss_official_document', {
+        p_organization_id: organizationId,
         p_payer_id: payerId,
         p_competence_month: competenceMonth,
         p_guide_type: 'sp_sadt',
