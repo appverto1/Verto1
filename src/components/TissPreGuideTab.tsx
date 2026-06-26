@@ -1103,7 +1103,13 @@ export function TissPreGuideTab({
       if (!result?.success || !result.data) {
         const issues = Array.isArray(result?.issues) ? result.issues : [];
         const firstIssue = issues[0]?.message ? ` ${issues[0].message}` : "";
-        setError(`${result?.error || "Não foi possível gerar o XML TISS oficial agora."}${firstIssue}`);
+        const schemaErrorMessage = [
+          "TISS_OFFICIAL_PRE_GUIDE_SCHEMA_MISSING",
+          "TISS_OFFICIAL_PRE_GUIDE_BASE_SCHEMA_MISSING"
+        ].includes(String(result?.code || ""))
+          ? "N\u00e3o foi poss\u00edvel carregar a estrutura das Pr\u00e9-guias para gerar o XML oficial."
+          : "";
+        setError(`${schemaErrorMessage || result?.error || "Não foi possível gerar o XML TISS oficial agora."}${firstIssue}`);
         return;
       }
       setOfficialDocumentModalOpen(false);

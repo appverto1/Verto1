@@ -473,11 +473,22 @@ test("rotas oficiais são paralelas, paginadas, sem XML na listagem e download c
   assert.match(serverCode, /app\.post\('\/api\/tiss\/official-documents'/);
   assert.match(serverCode, /app\.get\('\/api\/tiss\/official-documents\/:documentId'/);
   assert.match(serverCode, /app\.get\('\/api\/tiss\/official-documents\/:documentId\/download'/);
+  const officialCreateRoute = serverCode.slice(
+    serverCode.indexOf("app.post('/api/tiss/official-documents'"),
+    serverCode.indexOf("app.get('/api/tiss/official-documents/:documentId/download'")
+  );
   const listSelect = serverCode.match(/const TISS_OFFICIAL_DOCUMENT_SELECT = \[([\s\S]*?)\]\.join/)?.[1] || "";
   assert.doesNotMatch(listSelect, /xml_content/);
   assert.match(serverCode, /crypto\.createHash\('sha256'\)\.update\(xmlContent, 'utf8'\)\.digest\('hex'\)/);
   assert.match(serverCode, /calculatedHash !== sanitizeString\(data\.xml_hash/);
   assert.match(serverCode, /'official_document_id'/);
+  assert.match(serverCode, /const loadTissPreGuidesSchemaSafe = async/);
+  assert.match(serverCode, /APPOINTMENT_TISS_PRE_GUIDE_BASE_SELECT/);
+  assert.match(serverCode, /isOptionalTissPreGuideColumn\(missingOptionalColumn\)/);
+  assert.match(serverCode, /TISS_OFFICIAL_PRE_GUIDE_BASE_SCHEMA_MISSING/);
+  assert.match(officialCreateRoute, /loadTissPreGuidesSchemaSafe\(\{ organizationId, preGuideIds \}\)/);
+  assert.match(officialCreateRoute, /TISS_OFFICIAL_PRE_GUIDE_PAYER_MISMATCH/);
+  assert.doesNotMatch(officialCreateRoute, /\.eq\('payer_id', payerId\)[\s\S]*?\.in\('id', preGuideIds\)/);
   assert.match(serverCode, /generatedByName/);
   assert.match(serverCode, /Content-Type', 'application\/xml; charset=utf-8'/);
   assert.match(serverCode, /create_tiss_official_document/);
@@ -487,6 +498,8 @@ test("rotas oficiais são paralelas, paginadas, sem XML na listagem e download c
   assert.match(serverCode, /TISS_OFFICIAL_VERSION_NOT_SUPPORTED/);
   assert.match(serverCode, /TISS_OFFICIAL_PRE_GUIDES_BLOCKED/);
   assert.match(serverCode, /issueSummary/);
+  assert.match(uiCode, /TISS_OFFICIAL_PRE_GUIDE_BASE_SCHEMA_MISSING/);
+  assert.match(uiCode, /N\\u00e3o foi poss\\u00edvel carregar a estrutura das Pr\\u00e9-guias/);
   assert.match(uiCode, /OFFICIAL_BATCH_GUIDE_LIMIT = 500/);
   assert.match(readFileSync(join(root, "src/services/tissOfficial/versions/communication040300/generator.ts"), "utf8"), /MAX_GUIDES_PER_BATCH = 500/);
   assert.doesNotMatch(serverCode, /app\.(?:post|put|patch)\('\/api\/tiss\/official-documents\/:documentId/);

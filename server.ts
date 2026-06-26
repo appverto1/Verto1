@@ -36165,6 +36165,81 @@ async function startServer() {
     lastValidatedAt: row?.last_validated_at || null
   });
 
+  const loadTissPreGuidesSchemaSafe = async (params: {
+    organizationId: string;
+    preGuideIds: string[];
+  }) => {
+    const queryPreGuides = (selectColumns: string) => supabase
+      .from('appointment_tiss_pre_guides')
+      .select(selectColumns)
+      .eq('organization_id', params.organizationId)
+      .in('id', params.preGuideIds)
+      .limit(500);
+
+    const fullResult = await queryPreGuides(APPOINTMENT_TISS_PRE_GUIDE_SELECT);
+    if (!fullResult.error) {
+      return {
+        ok: true,
+        data: fullResult.data || [],
+        diagnostics: {
+          schemaSafe: true,
+          usedBaseFallback: false,
+          omittedOptionalColumns: [] as string[]
+        }
+      };
+    }
+
+    const missingOptionalColumn = extractMissingColumnName(fullResult.error);
+    if (isOptionalTissPreGuideColumn(missingOptionalColumn)) {
+      const baseResult = await queryPreGuides(APPOINTMENT_TISS_PRE_GUIDE_BASE_SELECT);
+      if (!baseResult.error) {
+        return {
+          ok: true,
+          data: baseResult.data || [],
+          diagnostics: {
+            schemaSafe: true,
+            usedBaseFallback: true,
+            omittedOptionalColumns: [missingOptionalColumn].filter(Boolean) as string[]
+          }
+        };
+      }
+      const missingBaseColumn = extractMissingColumnName(baseResult.error);
+      if (hasMissingFinancialSchema(baseResult.error) || isMissingRelationError(baseResult.error) || missingBaseColumn) {
+        return {
+          ok: false,
+          status: 503,
+          code: 'TISS_OFFICIAL_PRE_GUIDE_BASE_SCHEMA_MISSING',
+          error: 'Estrutura base de Pré-guia TISS indisponível para gerar XML oficial.',
+          diagnostics: {
+            schemaSafe: true,
+            usedBaseFallback: true,
+            omittedOptionalColumns: [missingOptionalColumn].filter(Boolean) as string[],
+            missingBaseColumns: missingBaseColumn ? [missingBaseColumn] : []
+          }
+        };
+      }
+      throw baseResult.error;
+    }
+
+    const missingBaseColumn = extractMissingColumnName(fullResult.error);
+    if (hasMissingFinancialSchema(fullResult.error) || isMissingRelationError(fullResult.error) || missingBaseColumn) {
+      return {
+        ok: false,
+        status: 503,
+        code: 'TISS_OFFICIAL_PRE_GUIDE_BASE_SCHEMA_MISSING',
+        error: 'Estrutura base de Pré-guia TISS indisponível para gerar XML oficial.',
+        diagnostics: {
+          schemaSafe: true,
+          usedBaseFallback: false,
+          omittedOptionalColumns: [] as string[],
+          missingBaseColumns: missingBaseColumn ? [missingBaseColumn] : []
+        }
+      };
+    }
+
+    throw fullResult.error;
+  };
+
   const serializeTissXmlDraft = (row: any, includeXml = false) => {
     const validationSummary = row?.validation_summary && typeof row.validation_summary === 'object' ? row.validation_summary : {};
     const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
@@ -38278,28 +38353,35 @@ async function startServer() {
         });
       }
 
-      const { data: preGuideRows, error: preGuideError } = await supabase
-        .from('appointment_tiss_pre_guides')
-        .select(APPOINTMENT_TISS_PRE_GUIDE_SELECT)
-        .eq('organization_id', organizationId)
-        .eq('payer_id', payerId)
-        .in('id', preGuideIds)
-        .limit(500);
-      if (preGuideError) {
-        if (hasMissingFinancialSchema(preGuideError) || isMissingRelationError(preGuideError)) {
-          return res.status(503).json({
-            success: false,
-            code: 'TISS_OFFICIAL_PRE_GUIDE_SCHEMA_MISSING',
-            error: 'A estrutura de Pré-guias TISS ainda não está disponível no banco.'
-          });
-        }
-        throw preGuideError;
+      const preGuideLoad = await loadTissPreGuidesSchemaSafe({ organizationId, preGuideIds });
+      if (!preGuideLoad.ok) {
+        return res.status(preGuideLoad.status).json({
+          success: false,
+          code: preGuideLoad.code,
+          error: preGuideLoad.error,
+          diagnostics: preGuideLoad.diagnostics
+        });
       }
+      const preGuideRows = preGuideLoad.data || [];
       if ((preGuideRows || []).length !== preGuideIds.length) {
         return res.status(404).json({
           success: false,
           code: 'TISS_OFFICIAL_PRE_GUIDE_SCOPE_MISMATCH',
-          error: 'Uma ou mais Pré-guias não pertencem à clínica ou ao pagador selecionado.'
+          error: 'Uma ou mais Pré-guias não pertencem à clínica selecionada.'
+        });
+      }
+      const payerMismatchRows = (preGuideRows || []).filter((row: any) => sanitizeString(row?.payer_id, 120) !== payerId);
+      if (payerMismatchRows.length > 0) {
+        return res.status(409).json({
+          success: false,
+          code: 'TISS_OFFICIAL_PRE_GUIDE_PAYER_MISMATCH',
+          error: 'Uma ou mais Pré-guias não pertencem à operadora selecionada.',
+          diagnostics: {
+            expectedPayerId: payerId,
+            mismatchedPreGuideIds: payerMismatchRows
+              .map((row: any) => sanitizeString(row?.id, 120))
+              .filter(Boolean)
+          }
         });
       }
       const preGuides = (preGuideRows || []).map((row: any) => serializeTissPreGuide(row));
