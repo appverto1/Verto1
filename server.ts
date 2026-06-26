@@ -36240,6 +36240,131 @@ async function startServer() {
     throw fullResult.error;
   };
 
+  const classifyTissOfficialPersistenceFailure = (error: any) => {
+    const postgresCode = sanitizeString(error?.code, 40).toUpperCase();
+    const rawMessage = extractSupabaseErrorMessage(error);
+    const safeRawMessage = sanitizeTextField(rawMessage, 300) || 'Falha de persistência do XML oficial.';
+    const officialCode = sanitizeString(rawMessage, 300).match(/TISS_OFFICIAL_[A-Z0-9_]+/)?.[0] || null;
+    const missingColumn = extractMissingColumnName(error);
+    const normalizedMessage = safeRawMessage.toLowerCase();
+
+    let stage: 'insert_official_document' | 'storage_upload' | 'update_pre_guides' | 'audit_event' | 'hash_calculation' | 'rpc_persistence' = 'rpc_persistence';
+    let reasonCode = 'UNKNOWN';
+    let status = 422;
+    let safeMessage = 'Não foi possível salvar o lote XML oficial.';
+
+    if (officialCode === 'TISS_OFFICIAL_XML_HASH_MISMATCH') {
+      stage = 'hash_calculation';
+      reasonCode = 'HASH_MISMATCH';
+      status = 409;
+      safeMessage = 'A integridade do XML oficial não pôde ser confirmada.';
+    } else if (officialCode === 'TISS_OFFICIAL_PRE_GUIDE_ALREADY_LINKED') {
+      stage = 'update_pre_guides';
+      reasonCode = 'PRE_GUIDE_ALREADY_LINKED';
+      status = 409;
+      safeMessage = 'Uma ou mais Pré-guias já pertencem a outro documento oficial validado.';
+    } else if (officialCode === 'TISS_OFFICIAL_IDEMPOTENCY_CONFLICT') {
+      stage = 'insert_official_document';
+      reasonCode = 'UNIQUE_CONSTRAINT';
+      status = 409;
+      safeMessage = 'A chave de idempotência informada pertence a outro lote XML oficial.';
+    } else if (officialCode === 'TISS_OFFICIAL_FORBIDDEN') {
+      stage = 'insert_official_document';
+      reasonCode = 'PERMISSION_DENIED';
+      status = 403;
+      safeMessage = 'Você não tem permissão para gerar documentos TISS oficiais.';
+    } else if (officialCode === 'TISS_OFFICIAL_PRE_GUIDE_LINK_SCHEMA_MISSING') {
+      stage = 'update_pre_guides';
+      reasonCode = 'SCHEMA_COLUMN_MISSING';
+      status = 503;
+      safeMessage = 'A estrutura de vínculo das Pré-guias ao XML oficial ainda não está disponível.';
+    } else if (officialCode === 'TISS_OFFICIAL_AUDIT_SCHEMA_MISSING') {
+      stage = 'audit_event';
+      reasonCode = 'SCHEMA_COLUMN_MISSING';
+      status = 503;
+      safeMessage = 'A estrutura de auditoria do XML oficial ainda não está disponível.';
+    } else if (officialCode === 'TISS_OFFICIAL_PAYER_NOT_FOUND') {
+      stage = 'insert_official_document';
+      reasonCode = 'FOREIGN_KEY_FAILED';
+      status = 409;
+      safeMessage = 'A operadora selecionada não foi encontrada para esta clínica.';
+    } else if (officialCode === 'TISS_OFFICIAL_PRE_GUIDE_SCOPE_MISMATCH' || officialCode === 'TISS_OFFICIAL_PRE_GUIDE_NOT_ELIGIBLE') {
+      stage = 'update_pre_guides';
+      reasonCode = 'PRE_GUIDE_NOT_ELIGIBLE';
+      status = 409;
+      safeMessage = 'Uma ou mais Pré-guias não estão elegíveis para persistir o XML oficial.';
+    } else if (officialCode) {
+      stage = 'rpc_persistence';
+      reasonCode = officialCode.replace(/^TISS_OFFICIAL_/, '');
+      status = officialCode.includes('MISMATCH') || officialCode.includes('INVALID') ? 409 : 422;
+      safeMessage = 'Não foi possível persistir o documento TISS oficial.';
+    } else if (missingColumn) {
+      reasonCode = 'SCHEMA_COLUMN_MISSING';
+      status = 503;
+      if (['official_document_id', 'revenue_cycle_state', 'revenue_cycle_state_reason'].includes(missingColumn)) {
+        stage = 'update_pre_guides';
+        safeMessage = 'A estrutura de vínculo das Pré-guias ao XML oficial ainda não está disponível.';
+      } else if (normalizedMessage.includes('tiss_revenue_cycle_events')) {
+        stage = 'audit_event';
+        safeMessage = 'A estrutura de auditoria do XML oficial ainda não está disponível.';
+      } else {
+        stage = 'insert_official_document';
+        safeMessage = 'A estrutura de documentos TISS oficiais ainda não está disponível no banco.';
+      }
+    } else if (isMissingRelationError(error) || hasMissingFinancialSchema(error)) {
+      reasonCode = 'SCHEMA_RELATION_MISSING';
+      status = 503;
+      if (normalizedMessage.includes('tiss_revenue_cycle_events')) {
+        stage = 'audit_event';
+        safeMessage = 'A estrutura de auditoria do XML oficial ainda não está disponível.';
+      } else if (normalizedMessage.includes('appointment_tiss_pre_guides')) {
+        stage = 'update_pre_guides';
+        safeMessage = 'A estrutura de vínculo das Pré-guias ao XML oficial ainda não está disponível.';
+      } else {
+        stage = 'insert_official_document';
+        safeMessage = 'A estrutura de documentos TISS oficiais ainda não está disponível no banco.';
+      }
+    } else if (postgresCode === '23505') {
+      stage = 'insert_official_document';
+      reasonCode = 'UNIQUE_CONSTRAINT';
+      status = 409;
+      safeMessage = 'Já existe um lote XML oficial equivalente.';
+    } else if (postgresCode === '23503') {
+      stage = 'insert_official_document';
+      reasonCode = 'FOREIGN_KEY_FAILED';
+      status = 409;
+      safeMessage = 'O lote XML oficial referencia dados que não pertencem mais ao escopo esperado.';
+    } else if (postgresCode === '23502') {
+      stage = 'insert_official_document';
+      reasonCode = 'NOT_NULL_VIOLATION';
+      status = 422;
+      safeMessage = 'O documento oficial está sem dado obrigatório para persistência.';
+    } else if (postgresCode === '23514') {
+      stage = normalizedMessage.includes('tiss_revenue_cycle_events') ? 'audit_event' : 'insert_official_document';
+      reasonCode = 'CHECK_CONSTRAINT';
+      status = 422;
+      safeMessage = 'O documento oficial não atende uma regra de persistência do banco.';
+    } else if (postgresCode === '42501' || normalizedMessage.includes('permission denied')) {
+      stage = 'insert_official_document';
+      reasonCode = 'PERMISSION_DENIED';
+      status = 403;
+      safeMessage = 'Sem permissão para salvar o XML oficial.';
+    }
+
+    return {
+      status,
+      code: officialCode || 'TISS_OFFICIAL_PERSISTENCE_FAILED',
+      error: safeMessage,
+      diagnostics: {
+        stage,
+        reasonCode,
+        safeMessage,
+        postgresCode: postgresCode || null,
+        missingColumn: missingColumn || null
+      }
+    };
+  };
+
   const serializeTissXmlDraft = (row: any, includeXml = false) => {
     const validationSummary = row?.validation_summary && typeof row.validation_summary === 'object' ? row.validation_summary : {};
     const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
@@ -38475,24 +38600,16 @@ async function startServer() {
         p_generated_by: generatedBy
       });
       if (rpcResult.error) {
-        const rpcCode = sanitizeString(rpcResult.error?.message, 180).match(/TISS_OFFICIAL_[A-Z0-9_]+/)?.[0];
-        const status = rpcCode === 'TISS_OFFICIAL_FORBIDDEN'
-          ? 403
-          : rpcCode === 'TISS_OFFICIAL_PRE_GUIDE_ALREADY_LINKED'
-            ? 409
-            : hasMissingFinancialSchema(rpcResult.error) || isMissingRelationError(rpcResult.error)
-              ? 503
-              : 422;
-        return res.status(status).json({
+        const persistenceFailure = classifyTissOfficialPersistenceFailure(rpcResult.error);
+        console.warn('[TissOfficial] persistence failed:', {
+          code: persistenceFailure.code,
+          diagnostics: persistenceFailure.diagnostics
+        });
+        return res.status(persistenceFailure.status).json({
           success: false,
-          code: rpcCode || 'TISS_OFFICIAL_PERSISTENCE_FAILED',
-          error: rpcCode === 'TISS_OFFICIAL_PRE_GUIDE_ALREADY_LINKED'
-            ? 'Uma ou mais Pré-guias já pertencem a outro documento oficial validado.'
-            : rpcCode === 'TISS_OFFICIAL_FORBIDDEN'
-              ? 'Você não tem permissão para gerar documentos TISS oficiais.'
-              : status === 503
-                ? 'A estrutura de documentos TISS oficiais ainda não está disponível no banco.'
-                : 'Não foi possível persistir o documento TISS oficial.'
+          code: persistenceFailure.code,
+          error: persistenceFailure.error,
+          diagnostics: persistenceFailure.diagnostics
         });
       }
       const persisted = Array.isArray(rpcResult.data) ? rpcResult.data[0] : rpcResult.data;
@@ -38503,9 +38620,15 @@ async function startServer() {
           error: 'O banco não retornou o documento TISS oficial persistido.'
         });
       }
+      const serializedDocument = serializeTissOfficialDocument(persisted);
       return sendNoStoreJson(res, {
         success: true,
-        data: serializeTissOfficialDocument(persisted),
+        data: {
+          ...serializedDocument,
+          officialDocumentId: serializedDocument.id,
+          revenueCycleState: 'official_xml_validated',
+          xsdValidation: built.xsdValidation || serializedDocument.validationSummary?.xsdValidation || null
+        },
         message: 'XML TISS oficial validado contra o XSD e armazenado. Nenhum dado foi enviado à operadora.'
       });
     } catch (error: any) {

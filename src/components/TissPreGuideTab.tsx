@@ -1109,7 +1109,9 @@ export function TissPreGuideTab({
         ].includes(String(result?.code || ""))
           ? "N\u00e3o foi poss\u00edvel carregar a estrutura das Pr\u00e9-guias para gerar o XML oficial."
           : "";
-        setError(`${schemaErrorMessage || result?.error || "Não foi possível gerar o XML TISS oficial agora."}${firstIssue}`);
+        const persistenceStage = result?.diagnostics?.stage ? ` Etapa: ${result.diagnostics.stage}.` : "";
+        const persistenceMessage = result?.diagnostics?.safeMessage ? ` ${result.diagnostics.safeMessage}` : "";
+        setError(`${schemaErrorMessage || result?.error || "Não foi possível gerar o XML TISS oficial agora."}${persistenceStage}${persistenceMessage}${firstIssue}`);
         return;
       }
       setOfficialDocumentModalOpen(false);

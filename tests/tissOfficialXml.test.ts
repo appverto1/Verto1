@@ -18,6 +18,7 @@ const serverCode = readFileSync(join(root, "server.ts"), "utf8");
 const dataServiceCode = readFileSync(join(root, "src/services/dataService.ts"), "utf8");
 const uiCode = readFileSync(join(root, "src/components/TissPreGuideTab.tsx"), "utf8");
 const migrationCode = readFileSync(join(root, "supabase/migrations/20260618120000_tiss_official_documents.sql"), "utf8");
+const persistenceHardeningMigrationCode = readFileSync(join(root, "supabase/migrations/20260626123000_tiss_official_persistence_hardening.sql"), "utf8");
 const draftGeneratorCode = readFileSync(join(root, "src/services/tissXmlDraftGenerator.ts"), "utf8");
 const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 
@@ -466,6 +467,18 @@ test("migration cria persistência imutável, RLS, índices e RPC transacional",
   assert.match(migrationCode, /selected\.updated_at is distinct from \(p_pre_guide_versions ->> selected\.id::text\)::timestamptz/);
   assert.match(migrationCode, /select[\s\S]*d\.id,[\s\S]*idempotency_key = p_idempotency_key[\s\S]*for update[\s\S]*select[\s\S]*d\.id,[\s\S]*idempotency_key = p_idempotency_key/i);
   assert.doesNotMatch(migrationCode, /select\s+\*/i);
+  assert.match(persistenceHardeningMigrationCode, /create or replace function public\.create_tiss_official_document/i);
+  assert.match(persistenceHardeningMigrationCode, /TISS_OFFICIAL_PRE_GUIDE_LINK_SCHEMA_MISSING/);
+  assert.match(persistenceHardeningMigrationCode, /TISS_OFFICIAL_AUDIT_SCHEMA_MISSING/);
+  assert.match(persistenceHardeningMigrationCode, /TISS_OFFICIAL_IDEMPOTENCY_CONFLICT/);
+  assert.match(persistenceHardeningMigrationCode, /v_existing\.generated_from_pre_guide_ids @> p_generated_from_pre_guide_ids/);
+  assert.match(persistenceHardeningMigrationCode, /v_link_update_sql := 'update public\.appointment_tiss_pre_guides pg set official_document_id = \$1'/);
+  assert.match(persistenceHardeningMigrationCode, /execute v_link_update_sql using v_document\.id, v_clinic_id, p_generated_from_pre_guide_ids/);
+  assert.match(persistenceHardeningMigrationCode, /execute v_link_update_sql using v_existing\.id, v_clinic_id, p_generated_from_pre_guide_ids/);
+  assert.match(persistenceHardeningMigrationCode, /official_document_id uuid references public\.tiss_official_documents\(id\) on delete set null/);
+  assert.match(persistenceHardeningMigrationCode, /TISS_OFFICIAL_XML_GENERATED/);
+  assert.match(persistenceHardeningMigrationCode, /TISS_OFFICIAL_XML_XSD_VALIDATED/);
+  assert.doesNotMatch(persistenceHardeningMigrationCode, /select\s+\*/i);
 });
 
 test("rotas oficiais são paralelas, paginadas, sem XML na listagem e download confere hash", () => {
@@ -483,11 +496,25 @@ test("rotas oficiais são paralelas, paginadas, sem XML na listagem e download c
   assert.match(serverCode, /calculatedHash !== sanitizeString\(data\.xml_hash/);
   assert.match(serverCode, /'official_document_id'/);
   assert.match(serverCode, /const loadTissPreGuidesSchemaSafe = async/);
+  assert.match(serverCode, /const classifyTissOfficialPersistenceFailure = \(error: any\)/);
+  assert.match(serverCode, /stage: 'insert_official_document'/);
+  assert.match(serverCode, /stage = 'update_pre_guides'/);
+  assert.match(serverCode, /stage = 'audit_event'/);
+  assert.match(serverCode, /stage = 'hash_calculation'/);
+  assert.match(serverCode, /reasonCode = 'SCHEMA_COLUMN_MISSING'/);
+  assert.match(serverCode, /reasonCode = 'UNIQUE_CONSTRAINT'/);
+  assert.match(serverCode, /reasonCode = 'FOREIGN_KEY_FAILED'/);
+  assert.match(serverCode, /reasonCode = 'NOT_NULL_VIOLATION'/);
   assert.match(serverCode, /APPOINTMENT_TISS_PRE_GUIDE_BASE_SELECT/);
   assert.match(serverCode, /isOptionalTissPreGuideColumn\(missingOptionalColumn\)/);
   assert.match(serverCode, /TISS_OFFICIAL_PRE_GUIDE_BASE_SCHEMA_MISSING/);
   assert.match(officialCreateRoute, /loadTissPreGuidesSchemaSafe\(\{ organizationId, preGuideIds \}\)/);
   assert.match(officialCreateRoute, /TISS_OFFICIAL_PRE_GUIDE_PAYER_MISMATCH/);
+  assert.match(officialCreateRoute, /classifyTissOfficialPersistenceFailure\(rpcResult\.error\)/);
+  assert.match(officialCreateRoute, /diagnostics: persistenceFailure\.diagnostics/);
+  assert.match(officialCreateRoute, /officialDocumentId: serializedDocument\.id/);
+  assert.match(officialCreateRoute, /revenueCycleState: 'official_xml_validated'/);
+  assert.match(officialCreateRoute, /xsdValidation: built\.xsdValidation/);
   assert.doesNotMatch(officialCreateRoute, /\.eq\('payer_id', payerId\)[\s\S]*?\.in\('id', preGuideIds\)/);
   assert.match(serverCode, /generatedByName/);
   assert.match(serverCode, /Content-Type', 'application\/xml; charset=utf-8'/);
@@ -500,6 +527,8 @@ test("rotas oficiais são paralelas, paginadas, sem XML na listagem e download c
   assert.match(serverCode, /issueSummary/);
   assert.match(uiCode, /TISS_OFFICIAL_PRE_GUIDE_BASE_SCHEMA_MISSING/);
   assert.match(uiCode, /N\\u00e3o foi poss\\u00edvel carregar a estrutura das Pr\\u00e9-guias/);
+  assert.match(uiCode, /result\?\.diagnostics\?\.stage/);
+  assert.match(uiCode, /result\?\.diagnostics\?\.safeMessage/);
   assert.match(uiCode, /OFFICIAL_BATCH_GUIDE_LIMIT = 500/);
   assert.match(readFileSync(join(root, "src/services/tissOfficial/versions/communication040300/generator.ts"), "utf8"), /MAX_GUIDES_PER_BATCH = 500/);
   assert.doesNotMatch(serverCode, /app\.(?:post|put|patch)\('\/api\/tiss\/official-documents\/:documentId/);
