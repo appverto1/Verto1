@@ -33058,6 +33058,126 @@ async function startServer() {
     return { data: null, omittedColumns };
   };
 
+  const resolveEffectiveClosureBillingContext = async (params: {
+    organizationId: string;
+    patientId: string;
+    appointment: any;
+    billingContext: any;
+  }) => {
+    const organizationId = sanitizeString(params.organizationId, 120);
+    const patientId = sanitizeString(params.patientId, 120);
+    const appointment = params.appointment || {};
+    const base = mergeBillingContextMetadata(params.billingContext || {}) || {};
+    const appointmentBillingPayload = mergeAppointmentBillingPayload(appointment);
+    const appointmentPayerId = sanitizeString(appointmentBillingPayload?.payer_id || appointmentBillingPayload?.payerId, 120);
+    const appointmentPayerName = sanitizeString(
+      appointmentBillingPayload?.payer_name_snapshot ||
+        appointmentBillingPayload?.payerName ||
+        appointmentBillingPayload?.payerNameSnapshot,
+      180
+    );
+    const serviceType = sanitizeString(
+      base?.service_type ||
+        appointmentBillingPayload?.service_type ||
+        appointmentBillingPayload?.serviceType ||
+        appointment?.service_type ||
+        appointment?.approach ||
+        appointment?.type,
+      120
+    ) || null;
+    const appointmentDate = sanitizeString(appointment?.scheduled_start_at || appointment?.scheduled_at || appointment?.date || appointment?.start_time, 80) || null;
+    const procedureCode = sanitizeString(base?.procedure_code || appointmentBillingPayload?.procedure_code || appointmentBillingPayload?.procedureCode || appointment?.procedure_code, 80) || null;
+    let suggestion: any = null;
+    try {
+      suggestion = await resolveAppointmentBillingSuggestion({
+        organizationId,
+        patientId,
+        serviceType,
+        payerId: sanitizeString(base?.payer_id || appointmentPayerId, 120) || null,
+        payerName: sanitizeString(base?.payer_name_snapshot || appointmentPayerName, 180) || null,
+        appointmentDate,
+        procedureCode
+      });
+    } catch (error: any) {
+      console.warn('[Closure] billing suggestion skipped:', {
+        appointmentId: sanitizeString(appointment?.id, 120),
+        message: error?.message || String(error)
+      });
+    }
+    const suggestionHasTissAuthorization = Boolean(
+      sanitizeString(suggestion?.patientTissAuthorizationId || suggestion?.patient_tiss_authorization_id, 120) ||
+        sanitizeString(suggestion?.tissAuthorization?.authorizationId || suggestion?.tissAuthorization?.authorization_id, 120) ||
+        sanitizeString(suggestion?.authorizationCode || suggestion?.authorization_code, 120) ||
+        sanitizeString(suggestion?.guideNumber || suggestion?.guide_number, 120)
+    );
+    const metadata = parseStoredJsonObject(base?.metadata);
+    const effectiveMetadata = suggestionHasTissAuthorization
+      ? cleanObject({
+          ...metadata,
+          patient_tiss_authorization_id: sanitizeString(
+            suggestion?.patientTissAuthorizationId ||
+              suggestion?.patient_tiss_authorization_id ||
+              suggestion?.tissAuthorization?.authorizationId ||
+              suggestion?.tissAuthorization?.authorization_id,
+            120
+          ) || undefined,
+          tiss_authorization: suggestion?.tissAuthorization || metadata?.tiss_authorization || undefined
+        })
+      : metadata;
+    const effectivePayerName = sanitizeString(
+      base?.payer_name_snapshot ||
+        appointmentPayerName ||
+        (suggestionHasTissAuthorization ? suggestion?.payerName || suggestion?.payer_name_snapshot : null),
+      180
+    );
+    const effectivePayerId = sanitizeString(
+      base?.payer_id ||
+        appointmentPayerId ||
+        (suggestionHasTissAuthorization ? suggestion?.payerId || suggestion?.payer_id : null),
+      120
+    );
+    return cleanObject({
+      ...base,
+      payer_id: isUuid(effectivePayerId) ? effectivePayerId : null,
+      payer_name_snapshot: effectivePayerName || null,
+      payer_type: normalizeAppointmentFinancialContextType(base?.payer_type) || (effectivePayerId || effectivePayerName ? 'INSURANCE' : null),
+      service_type: serviceType,
+      insurance_card_number: sanitizeString(
+        base?.insurance_card_number ||
+          appointmentBillingPayload?.insurance_card_number ||
+          appointmentBillingPayload?.insuranceCardNumber ||
+          suggestion?.insuranceCardNumber ||
+          suggestion?.insurance_card_number,
+        120
+      ) || null,
+      insurance_plan_name: sanitizeString(
+        base?.insurance_plan_name ||
+          appointmentBillingPayload?.insurance_plan_name ||
+          appointmentBillingPayload?.insurancePlanName ||
+          suggestion?.insurancePlanName ||
+          suggestion?.insurance_plan_name,
+        160
+      ) || null,
+      authorization_code: sanitizeString(
+        base?.authorization_code ||
+          appointmentBillingPayload?.authorization_code ||
+          appointmentBillingPayload?.authorizationCode ||
+          (suggestionHasTissAuthorization ? suggestion?.authorizationCode || suggestion?.authorization_code : null),
+        120
+      ) || null,
+      guide_number: sanitizeString(
+        base?.guide_number ||
+          appointmentBillingPayload?.guide_number ||
+          appointmentBillingPayload?.guideNumber ||
+          (suggestionHasTissAuthorization ? suggestion?.guideNumber || suggestion?.guide_number : null),
+        120
+      ) || null,
+      procedure_code: procedureCode,
+      metadata: effectiveMetadata,
+      source: sanitizeString(base?.source || (suggestionHasTissAuthorization ? 'PATIENT_TISS_AUTHORIZATION' : null), 60) || null
+    });
+  };
+
   const upsertAppointmentClosureCheckRow = async (payload: any) => {
     const isMissingUpsertConflictTargetError = (error: any) => {
       const code = sanitizeString(error?.code, 20).toUpperCase();
@@ -33236,7 +33356,17 @@ async function startServer() {
       user: params.user
     });
 
-    const billingContext = (context as any).billingContext || {};
+    const billingContext = await resolveEffectiveClosureBillingContext({
+      organizationId,
+      patientId,
+      appointment,
+      billingContext: (context as any).billingContext || {}
+    });
+    const closureRequirements = {
+      ...((context as any).requirements || {}),
+      payerId: (context as any).requirements?.payerId || billingContext?.payer_id || null,
+      payerName: (context as any).requirements?.payerName || billingContext?.payer_name_snapshot || null
+    };
     const billingContextTypeForEvaluation =
       normalizeAppointmentFinancialContextType(billingContext?.payer_type) ||
       (sanitizeString(billingContext?.payer_id || billingContext?.payer_name_snapshot, 180) ? 'INSURANCE' : null);
@@ -33244,8 +33374,8 @@ async function startServer() {
     const pendingRequiredDocuments = requiredDocuments.filter((doc: any) => ['REQUIRED', 'PENDING', 'EXPIRED'].includes(sanitizeString(doc?.status, 40).toUpperCase()));
     const appointmentForEvaluation = {
       ...appointment,
-      payer_id: billingContext?.payer_id || (context as any).requirements?.payerId || null,
-      payer_name_snapshot: billingContext?.payer_name_snapshot || (context as any).requirements?.payerName || null,
+      payer_id: billingContext?.payer_id || closureRequirements?.payerId || null,
+      payer_name_snapshot: billingContext?.payer_name_snapshot || null,
       payer_type: billingContextTypeForEvaluation,
       financial_context_type: billingContextTypeForEvaluation,
       insurance_card_number: billingContext?.insurance_card_number || null,
@@ -33270,7 +33400,7 @@ async function startServer() {
       signature: (context as any).signature,
       patient,
       professional,
-      requirements: (context as any).requirements,
+      requirements: closureRequirements,
       manualNotBillable: params.manualNotBillable || financialContextIsNotBillable(billingContext?.payer_type)
     });
 
@@ -33295,12 +33425,12 @@ async function startServer() {
       patient_id: isUuid(patientId) ? patientId : null,
       professional_id: isUuid(professionalId) ? professionalId : null,
       service_type: evaluation.summary.serviceType,
-      payer_id: isUuid(sanitizeString(billingContext?.payer_id || (context as any).requirements?.payerId, 120)) ? sanitizeString(billingContext?.payer_id || (context as any).requirements?.payerId, 120) : null,
-      payer_name_snapshot: sanitizeString(billingContext?.payer_name_snapshot || (context as any).requirements?.payerName, 180) || null,
+      payer_id: isUuid(sanitizeString(billingContext?.payer_id || closureRequirements?.payerId, 120)) ? sanitizeString(billingContext?.payer_id || closureRequirements?.payerId, 120) : null,
+      payer_name_snapshot: sanitizeString(billingContext?.payer_name_snapshot, 180) || null,
       authorization_code: sanitizeString(billingContext?.authorization_code, 120) || null,
       guide_number: sanitizeString(billingContext?.guide_number, 120) || null,
-      applied_payer_requirement_id: isUuid(sanitizeString((context as any).requirements?.appliedPayerRequirementId, 120)) ? sanitizeString((context as any).requirements?.appliedPayerRequirementId, 120) : null,
-      payer_requirement_source: sanitizeString((context as any).requirements?.payerRequirementSource, 40) || null,
+      applied_payer_requirement_id: isUuid(sanitizeString(closureRequirements?.appliedPayerRequirementId, 120)) ? sanitizeString(closureRequirements?.appliedPayerRequirementId, 120) : null,
+      payer_requirement_source: sanitizeString(closureRequirements?.payerRequirementSource, 40) || null,
       required_document_pending_count: pendingRequiredDocuments.length,
       readiness_status: evaluation.readinessStatus,
       checklist: sanitizeClinicalPayload(evaluation.checklist),
@@ -41942,7 +42072,12 @@ async function startServer() {
       const professional = professionalsById.get(sanitizeString(row?.professional_id, 120));
       const billing = billingByAppointment.get(sanitizeString(row?.appointment_id, 120)) || {};
       const billingPayerName = sanitizeString(billing?.payer_name_snapshot, 180);
-      const billingContextType = normalizeAppointmentFinancialContextType(billing?.payer_type || (billing?.payer_id || billingPayerName ? 'INSURANCE' : null));
+      const rowFinancialContextType = normalizeAppointmentFinancialContextType(row?.payer_type || row?.financial_context_type);
+      const billingContextType = normalizeAppointmentFinancialContextType(
+        billing?.payer_type ||
+          rowFinancialContextType ||
+          (billing?.payer_id || billingPayerName ? 'INSURANCE' : null)
+      );
       const billingItem = !financialContextSkipsInsuranceBilling(billingContextType)
         ? billingItemsBundle.itemsByAppointment.get(sanitizeString(row?.appointment_id, 120))
         : null;
@@ -41957,9 +42092,10 @@ async function startServer() {
       const billingPayerId = sanitizeString(billing?.payer_id, 120);
       const appliedPayerId = isUuid(rowPayerId) ? rowPayerId : isUuid(billingPayerId) ? billingPayerId : null;
       const hasBillingPayerName = billingContextType === 'INSURANCE' && Boolean(billingPayerName && billingPayerName !== 'Sem pagador');
-      const hasRealPayer = isUuid(appliedPayerId) || hasBillingPayerName;
       const financialPlanPayerName = sanitizeString(financialPlan?.payer_name_snapshot, 180);
       const rowPayerName = sanitizeString(base.payer_name && base.payer_name !== 'Sem pagador' ? base.payer_name : '', 180);
+      const hasClosurePayerName = Boolean(rowPayerName && rowPayerName !== 'Sem pagador');
+      const hasRealPayer = isUuid(appliedPayerId) || hasBillingPayerName || hasClosurePayerName;
       const suggestedPayerName = !hasRealPayer ? sanitizeString(financialPlanPayerName || rowPayerName, 180) || null : null;
       const appliedPayerName = sanitizeString(
         billingPayerName ||
@@ -41978,8 +42114,8 @@ async function startServer() {
         ...base,
         payer_id: appliedPayerId,
         payer_name: hasRealPayer ? appliedPayerName : 'Sem pagador',
-        payer_type: billingContextType || null,
-        financial_context_type: billingContextType || null,
+        payer_type: billingContextType || (hasClosurePayerName ? 'INSURANCE' : null),
+        financial_context_type: billingContextType || (hasClosurePayerName ? 'INSURANCE' : null),
         suggested_payer_name: suggestedPayerName,
         suggested_payer_id: !hasRealPayer && isUuid(sanitizeString(financialPlan?.payer_id, 120)) ? sanitizeString(financialPlan?.payer_id, 120) : null,
         clinic_name: clinicName,

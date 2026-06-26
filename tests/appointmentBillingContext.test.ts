@@ -370,6 +370,36 @@ test('fechamento usa pagador da consulta, nao plano do paciente como substituto'
   assert.doesNotMatch(payerBlock, /input\.patient\?\.financialPlans/);
 });
 
+test('endpoint de fechamento usa billing context efetivo antes de montar checklist', () => {
+  assert.match(serverCode, /const resolveEffectiveClosureBillingContext = async/);
+  const effectiveStart = serverCode.indexOf('const resolveEffectiveClosureBillingContext = async');
+  const persistStart = serverCode.indexOf('const persistAppointmentClosureCheck = async');
+  assert.ok(effectiveStart > 0 && persistStart > effectiveStart, 'resolvedor efetivo deve existir antes da persistencia do fechamento');
+  const effectiveSlice = serverCode.slice(effectiveStart, persistStart);
+  assert.match(effectiveSlice, /const appointmentBillingPayload = mergeAppointmentBillingPayload\(appointment\)/);
+  assert.match(effectiveSlice, /resolveAppointmentBillingSuggestion/);
+  assert.match(effectiveSlice, /payerId: sanitizeString\(base\?\.payer_id \|\| appointmentPayerId, 120\) \|\| null/);
+  assert.match(effectiveSlice, /payerName: sanitizeString\(base\?\.payer_name_snapshot \|\| appointmentPayerName, 180\) \|\| null/);
+  assert.match(effectiveSlice, /const suggestionHasTissAuthorization = Boolean/);
+  assert.match(effectiveSlice, /base\?\.payer_name_snapshot \|\|\s*appointmentPayerName \|\|/);
+  assert.match(effectiveSlice, /payer_name_snapshot: effectivePayerName \|\| null/);
+  assert.match(effectiveSlice, /appointmentBillingPayload\?\.insurance_card_number/);
+  assert.match(effectiveSlice, /appointmentBillingPayload\?\.insurance_plan_name/);
+  assert.match(effectiveSlice, /authorization_code: sanitizeString\(/);
+  assert.match(effectiveSlice, /appointmentBillingPayload\?\.authorization_code/);
+  assert.match(effectiveSlice, /guide_number: sanitizeString\(/);
+  assert.match(effectiveSlice, /appointmentBillingPayload\?\.guide_number/);
+  assert.match(effectiveSlice, /source: sanitizeString\(base\?\.source \|\| \(suggestionHasTissAuthorization \? 'PATIENT_TISS_AUTHORIZATION' : null\), 60\) \|\| null/);
+
+  const persistEnd = serverCode.indexOf('const result = await upsertAppointmentClosureCheckRow', persistStart);
+  const persistSlice = serverCode.slice(persistStart, persistEnd);
+  assert.match(persistSlice, /const billingContext = await resolveEffectiveClosureBillingContext/);
+  assert.match(persistSlice, /payer_name_snapshot: billingContext\?\.payer_name_snapshot \|\| null/);
+  assert.match(persistSlice, /authorization_code: billingContext\?\.authorization_code \|\| null/);
+  assert.match(persistSlice, /guide_number: billingContext\?\.guide_number \|\| null/);
+  assert.doesNotMatch(persistSlice, /payer_name_snapshot: sanitizeString\(billingContext\?\.payer_name_snapshot \|\| \(context as any\)\.requirements\?\.payerName/);
+});
+
 test('modal do fechamento mostra pagador sugerido sem marcar como aplicado', () => {
   const normalizeStart = serverCode.indexOf('function normalizeHydratedClosureChecklist');
   assert.ok(normalizeStart > 0, 'normalizador do checklist hidratado deve existir');
@@ -401,9 +431,11 @@ test('modal do fechamento mostra pagador sugerido sem marcar como aplicado', () 
   assert.match(hydrateSlice, /const billingPayerId = sanitizeString\(billing\?\.payer_id, 120\)/);
   assert.match(hydrateSlice, /const appliedPayerId = isUuid\(rowPayerId\) \? rowPayerId : isUuid\(billingPayerId\) \? billingPayerId : null/);
   assert.match(hydrateSlice, /const hasBillingPayerName = billingContextType === 'INSURANCE' && Boolean\(billingPayerName && billingPayerName !== 'Sem pagador'\)/);
-  assert.match(hydrateSlice, /const hasRealPayer = isUuid\(appliedPayerId\) \|\| hasBillingPayerName/);
+  assert.match(hydrateSlice, /const hasClosurePayerName = Boolean\(rowPayerName && rowPayerName !== 'Sem pagador'\)/);
+  assert.match(hydrateSlice, /const hasRealPayer = isUuid\(appliedPayerId\) \|\| hasBillingPayerName \|\| hasClosurePayerName/);
   assert.match(hydrateSlice, /payer_id: appliedPayerId/);
   assert.match(hydrateSlice, /payer_name: hasRealPayer \? appliedPayerName : 'Sem pagador'/);
+  assert.match(hydrateSlice, /financial_context_type: billingContextType \|\| \(hasClosurePayerName \? 'INSURANCE' : null\)/);
   assert.match(hydrateSlice, /insurance_plan_name: sanitizeString\(billing\?\.insurance_plan_name \|\| patient\?\.insurance_plan_category, 160\) \|\| null/);
 
   assert.match(operationalClosureCode, /payer_id\?: string \| null/);
