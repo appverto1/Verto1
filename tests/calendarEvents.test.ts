@@ -88,7 +88,7 @@ test('dataService expõe agenda leve e detalhe sob demanda', () => {
   assert.match(dataServiceCode, /helperName: 'getCalendarEventDetail'/);
 });
 
-test('agenda operacional mensal tem sidebar, filtros, KPIs discretos e cards clinicos', () => {
+test('agenda mensal tem sidebar, filtros e barra compacta sem cabecalho redundante', () => {
   assert.match(calendarCode, /export const ClinicalAgendaBoard/);
   for (const label of ['Mini calendário', 'Equipe', 'Paciente', 'Local/Sala', 'Tipo de sessão', 'Status e pendências']) {
     assert.match(calendarCode, new RegExp(label));
@@ -96,9 +96,12 @@ test('agenda operacional mensal tem sidebar, filtros, KPIs discretos e cards cli
   for (const label of ['Somente significativas', 'Somente melhora', 'Somente piora', 'Somente alertas']) {
     assert.match(calendarCode, new RegExp(label));
   }
-  for (const label of ['Sessões', 'Registradas', 'Plano', 'Probes', 'Pendências']) {
-    assert.match(calendarCode, new RegExp(label));
-  }
+  assert.match(calendarCode, /periodLabel/);
+  assert.match(calendarCode, /aria-label="Atualizar agenda"/);
+  assert.match(calendarCode, /aria-label="Relatórios de tempo"/);
+  assert.doesNotMatch(calendarCode, /Agenda cl.nica/);
+  assert.doesNotMatch(calendarCode, /Agenda operacional/);
+  assert.doesNotMatch(calendarCode, /headerKpis/);
   for (const label of ['ABA', 'Fonoaudiologia', 'Terapia Ocupacional', 'Psicologia', 'Avaliação', 'Supervisão']) {
     assert.match(calendarCode, new RegExp(label));
   }
@@ -171,13 +174,14 @@ test('agenda atualiza automaticamente apos resposta do portal', () => {
   assert.match(readFileSync(join(root, 'src/App.tsx'), 'utf8'), /window\.dispatchEvent\(new CustomEvent\('verto:appointment-domain-event'/);
 });
 
-test('agenda mensal exibe cinco agendamentos por dia antes do excedente', () => {
-  assert.match(calendarCode, /CALENDAR_MONTH_VISIBLE_EVENT_LIMIT = 5/);
-  assert.match(calendarCode, /items\.slice\(0, CALENDAR_MONTH_VISIBLE_EVENT_LIMIT\)/);
-  assert.match(calendarCode, /items\.length > CALENDAR_MONTH_VISIBLE_EVENT_LIMIT/);
-  assert.match(calendarCode, /auto-rows-\[minmax\(154px,1fr\)\]/);
-  assert.match(calendarCode, /min-h-\[154px\]/);
-  assert.match(calendarCode, /\+\{items\.length - CALENDAR_MONTH_VISIBLE_EVENT_LIMIT\} mais/);
+test('agenda mensal usa scroll interno por dia sem janela de excedentes', () => {
+  assert.match(calendarCode, /grid-rows-6/);
+  assert.match(calendarCode, /items\.map\(\(event: any\) =>/);
+  assert.match(calendarCode, /overflow-y-auto pr-1 overscroll-contain custom-scrollbar/);
+  assert.match(calendarCode, /onCreateAppointment\?\.\(key, '08:00'\)/);
+  assert.doesNotMatch(calendarCode, /CALENDAR_MONTH_VISIBLE_EVENT_LIMIT/);
+  assert.doesNotMatch(calendarCode, /\+\{items\.length/);
+  assert.doesNotMatch(calendarCode, /openDayPanel/);
   assert.doesNotMatch(calendarCode, /items\.slice\(0, 10\)/);
 });
 
@@ -323,7 +327,7 @@ test('ação principal respeita a fase operacional da consulta', () => {
   );
   assert.match(calendarCode, /detailPrimaryAction\.kind !== 'none'/);
   assert.match(calendarCode, /detailPrimaryAction\.label/);
-  assert.match(calendarCode, /primaryAction\.kind === 'closure'/);
+  assert.match(calendarCode, /detailPrimaryAction\.kind === 'closure'/);
   assert.match(calendarCode, /\['READY', 'PENDING', 'WARNING'\]\.includes\(closureReadinessStatus\)/);
 });
 
@@ -340,18 +344,23 @@ test('coordinator usa agenda clinica e padrao inicial mensal persistido', () => 
   assert.match(coordinatorCode, /import \{ ClinicalAgendaBoard \} from "\.\/Calendar"/);
   assert.match(coordinatorCode, /<ClinicalAgendaBoard/);
   assert.match(coordinatorCode, /onStartSession=\{\(appointment: any\) =>/);
+  assert.match(coordinatorCode, /activeTab === "agenda" \? "py-2\.5"/);
+  assert.match(coordinatorCode, /activeTab !== "agenda" && \(/);
   assert.match(agendaPreferenceCode, /CALENDAR_LAST_VIEW_MODE_KEY = "calendar:lastViewMode"/);
   assert.match(agendaPreferenceCode, /const DEFAULT_AGENDA_VIEW: AgendaView = "month"/);
 });
 
-test('visao mensal mantem calendario fixo, cinco itens visiveis e excedente clicavel', () => {
-  assert.match(calendarCode, /xl:h-\[calc\(100vh-2rem\)\]/);
-  assert.match(calendarCode, /h-full overflow-y-auto p-4 pr-3 custom-scrollbar/);
-  assert.match(calendarCode, /items\.slice\(0, CALENDAR_MONTH_VISIBLE_EVENT_LIMIT\)/);
-  assert.match(calendarCode, /items\.length > CALENDAR_MONTH_VISIBLE_EVENT_LIMIT/);
-  assert.match(calendarCode, /\+\{items\.length - CALENDAR_MONTH_VISIBLE_EVENT_LIMIT\} mais/);
-  assert.match(calendarCode, /openDayPanel/);
-  assert.match(calendarCode, /overflow-y-auto pr-1 custom-scrollbar/);
+test('visao mensal prioriza calendario amplo e eventos rolaveis no proprio dia', () => {
+  assert.match(calendarCode, /xl:h-\[calc\(100vh-5rem\)\]/);
+  assert.match(calendarCode, /xl:grid-cols-\[260px_minmax\(0,1fr\)\]/);
+  assert.match(calendarCode, /h-full overflow-y-auto p-3 pr-2 custom-scrollbar/);
+  assert.match(calendarCode, /grid-rows-6/);
+  assert.match(calendarCode, /items\.map\(\(event: any\) =>/);
+  assert.match(calendarCode, /overflow-y-auto pr-1 overscroll-contain custom-scrollbar/);
+  assert.doesNotMatch(calendarCode, /Agenda cl.nica/);
+  assert.doesNotMatch(calendarCode, /Agenda operacional/);
+  assert.doesNotMatch(calendarCode, /\+\{items\.length/);
+  assert.doesNotMatch(calendarCode, /openDayPanel/);
 });
 
 test('nomes reais de sala aparecem como dado humano e nunca como uuid', () => {

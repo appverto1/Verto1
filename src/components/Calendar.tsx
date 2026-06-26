@@ -451,7 +451,6 @@ const HOUR_HEIGHT = 56;
 const CALENDAR_EVENTS_CACHE_TTL_MS = 60_000;
 const CALENDAR_EVENTS_FOCUS_REFRESH_TTL_MS = 3 * 60_000;
 const CALENDAR_DOMAIN_EVENT_DEBOUNCE_MS = 350;
-const CALENDAR_MONTH_VISIBLE_EVENT_LIMIT = 5;
 
 const SESSION_TYPE_STYLES: Record<string, any> = {
   aba: {
@@ -1174,7 +1173,6 @@ export const ClinicalAgendaBoard = ({
   });
   const [remoteRefreshNonce, setRemoteRefreshNonce] = useState(0);
   const [selectedEvent, setSelectedEvent] = useState<any>(null);
-  const [selectedDayKeyForPanel, setSelectedDayKeyForPanel] = useState('');
   const [statusActionEvent, setStatusActionEvent] = useState<any>(null);
   const [eventDetail, setEventDetail] = useState<any>(null);
   const [detailState, setDetailState] = useState<{ loading: boolean; error: string }>({ loading: false, error: '' });
@@ -1536,25 +1534,6 @@ export const ClinicalAgendaBoard = ({
     return `${start} - ${end}`;
   }, [activeDate, view, visibleRange]);
 
-  const kpis = useMemo(() => {
-    const total = filteredEvents.length;
-    const registered = filteredEvents.filter((event: any) => event.has_session_record).length;
-    const plan = filteredEvents.filter((event: any) => event.has_next_session_plan).length;
-    const probes = filteredEvents.filter((event: any) => event.has_maintenance_probe).length;
-    const pending = filteredEvents.filter((event: any) => event.has_pending_signature || (!event.has_report && removeDiacritics(event.status).includes('conclu'))).length;
-    return { total, registered, plan, probes, pending };
-  }, [filteredEvents]);
-  const headerKpis = useMemo(() => {
-    const items = [
-      { label: 'Sessões', value: kpis.total, icon: BarChart3, color: 'text-slate-700', bg: 'bg-slate-100' },
-      { label: 'Registradas', value: kpis.registered, icon: CheckCircle2, color: 'text-emerald-700', bg: 'bg-emerald-100' },
-      { label: 'Plano', value: kpis.plan, icon: Zap, color: 'text-violet-700', bg: 'bg-violet-100' },
-      { label: 'Probes', value: kpis.probes, icon: AlertCircle, color: 'text-amber-700', bg: 'bg-amber-100' },
-      { label: 'Pendências', value: kpis.pending, icon: ClipboardCheck, color: 'text-rose-700', bg: 'bg-rose-100' }
-    ];
-    return items.filter((item) => item.label === 'Sessões' || item.value > 0);
-  }, [kpis]);
-
   const timeReports = useMemo(() => {
     const byPatient = new Map<string, any>();
     const byProfessional = new Map<string, any>();
@@ -1670,12 +1649,6 @@ export const ClinicalAgendaBoard = ({
         setClosureDetailState({ loading: false, error: result?.error || 'Não foi possível carregar o fechamento agora.', data: null });
       })
       .catch(() => setClosureDetailState({ loading: false, error: 'Não foi possível carregar o fechamento agora.', data: null }));
-  };
-
-  const openDayPanel = (dateKey: string) => {
-    const date = dateFromKey(dateKey);
-    onDateChange?.(date);
-    setSelectedDayKeyForPanel(dateKey);
   };
 
   const handleStatusAction = (event: any, action: 'confirm' | 'reschedule' | 'cancel' | 'delete') => {
@@ -2265,11 +2238,6 @@ export const ClinicalAgendaBoard = ({
     });
     return grouped;
   }, [filteredEvents]);
-  const selectedDayPanelEvents = selectedDayKeyForPanel ? eventsByDate[selectedDayKeyForPanel] || [] : [];
-  const selectedDayPanelLabel = selectedDayKeyForPanel
-    ? dateFromKey(selectedDayKeyForPanel).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })
-    : '';
-
   const renderIndicators = (event: any) => {
     const closureStyle = getClosureStatusStyle(event.closure_readiness_status);
     const indicators = [
@@ -2445,18 +2413,17 @@ export const ClinicalAgendaBoard = ({
     const dayCells = Array.from({ length: daysInMonth }, (_, index) => index + 1);
     const trailingBlanks = Array.from({ length: Math.max(0, 42 - blanks.length - dayCells.length) }, (_, index) => index);
     return (
-      <div className={`flex h-full min-h-0 flex-col overflow-hidden rounded-[22px] border p-2 ${isDark ? 'border-slate-700 bg-slate-950' : 'border-slate-200 bg-white'}`}>
+      <div className={`flex h-full min-h-0 flex-col overflow-hidden rounded-[18px] border p-1.5 ${isDark ? 'border-slate-700 bg-slate-950' : 'border-slate-200 bg-white'}`}>
         <div className="grid shrink-0 grid-cols-7 gap-1.5 pb-2 text-center text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
           {['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map((day) => <span key={day}>{day}</span>)}
         </div>
-        <div className="grid min-h-0 flex-1 grid-cols-7 auto-rows-[minmax(154px,1fr)] gap-1.5 overflow-y-auto pr-1 custom-scrollbar">
-          {blanks.map((blank) => <div key={`month-blank-${blank}`} className={`min-h-[154px] rounded-xl border ${isDark ? 'border-slate-900 bg-slate-900/40' : 'border-slate-50 bg-slate-50/40'}`} />)}
+        <div className="grid min-h-0 flex-1 grid-cols-7 grid-rows-6 gap-1.5 overflow-hidden">
+          {blanks.map((blank) => <div key={`month-blank-${blank}`} className={`min-h-0 rounded-lg border ${isDark ? 'border-slate-900 bg-slate-900/40' : 'border-slate-50 bg-slate-50/40'}`} />)}
           {dayCells.map((day) => {
             const date = new Date(year, month, day);
             const key = toDateKey(date);
             const items = eventsByDate[key] || [];
             const isToday = key === toDateKey(new Date());
-            const visibleItems = items.slice(0, CALENDAR_MONTH_VISIBLE_EVENT_LIMIT);
             const dayMaintenancePendingCount = items.reduce((total: number, event: any) => (
               total +
               Number(event.pending_maintenance_probe_count || 0) +
@@ -2471,16 +2438,14 @@ export const ClinicalAgendaBoard = ({
                 tabIndex={0}
                 onClick={() => {
                   onDateChange?.(date);
-                  if (items.length > CALENDAR_MONTH_VISIBLE_EVENT_LIMIT) openDayPanel(key);
-                  else onCreateAppointment?.(key, '08:00');
+                  onCreateAppointment?.(key, '08:00');
                 }}
                 onKeyDown={(event) => {
                   if (event.key !== 'Enter' && event.key !== ' ') return;
                   event.preventDefault();
-                  if (items.length > CALENDAR_MONTH_VISIBLE_EVENT_LIMIT) openDayPanel(key);
-                  else onCreateAppointment?.(key, '08:00');
+                  onCreateAppointment?.(key, '08:00');
                 }}
-                className={`flex min-h-[154px] cursor-pointer flex-col overflow-hidden rounded-xl border p-2 text-left transition-all ${
+                className={`flex min-h-0 cursor-pointer flex-col overflow-hidden rounded-lg border p-1.5 text-left transition-all ${
                   key === selectedDateKey
                     ? 'border-[#7a32fc]/40 bg-[#7a32fc]/5'
                     : isToday
@@ -2499,8 +2464,8 @@ export const ClinicalAgendaBoard = ({
                     </span>
                   )}
                 </div>
-                <div className="min-h-0 flex-1 space-y-1 overflow-hidden">
-                  {visibleItems.map((event: any) => {
+                <div className="min-h-0 flex-1 space-y-1 overflow-y-auto pr-1 overscroll-contain custom-scrollbar">
+                  {items.map((event: any) => {
                     const statusColor = getAppointmentPatientConfirmationVisualState(event);
                     return (
                       <button
@@ -2519,22 +2484,10 @@ export const ClinicalAgendaBoard = ({
                     );
                   })}
                 </div>
-                {items.length > CALENDAR_MONTH_VISIBLE_EVENT_LIMIT && (
-                  <button
-                    type="button"
-                    onClick={(clickEvent) => {
-                      clickEvent.stopPropagation();
-                      openDayPanel(key);
-                    }}
-                    className={`mt-1 shrink-0 rounded-md px-1 py-0.5 text-left text-[10px] font-bold ${isDark ? 'text-violet-300 hover:bg-slate-800' : 'text-[#7a32fc] hover:bg-violet-50'}`}
-                  >
-                    +{items.length - CALENDAR_MONTH_VISIBLE_EVENT_LIMIT} mais
-                  </button>
-                )}
               </div>
             );
           })}
-          {trailingBlanks.map((blank) => <div key={`month-trailing-${blank}`} className={`min-h-[154px] rounded-xl border ${isDark ? 'border-slate-900 bg-slate-900/40' : 'border-slate-50 bg-slate-50/40'}`} />)}
+          {trailingBlanks.map((blank) => <div key={`month-trailing-${blank}`} className={`min-h-0 rounded-lg border ${isDark ? 'border-slate-900 bg-slate-900/40' : 'border-slate-50 bg-slate-50/40'}`} />)}
         </div>
       </div>
     );
@@ -2633,39 +2586,23 @@ export const ClinicalAgendaBoard = ({
   };
 
   return (
-    <div className="flex flex-col gap-3 pb-[calc(env(safe-area-inset-bottom)+5rem)] xl:h-[calc(100vh-2rem)] xl:min-h-[680px] xl:overflow-hidden xl:pb-0">
-      <div className={`shrink-0 rounded-[24px] border p-3 shadow-sm ${isDark ? 'border-slate-700 bg-[#101827] text-slate-100' : 'border-slate-100 bg-white text-slate-900'}`}>
-        <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-          <div>
-            <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-[#7a32fc]">Agenda clínica</p>
-            <h2 className="mt-0.5 text-xl font-bold tracking-tight">Agenda operacional</h2>
-            <p className={`mt-0.5 text-xs ${isDark ? 'text-slate-300' : 'text-slate-500'}`}>Sessões, status e pendências com a agenda sempre à vista.</p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <button type="button" onClick={() => onDateChange?.(new Date())} className={`rounded-2xl border px-4 py-2 text-xs font-bold ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`}>
+    <div className="flex flex-col gap-2 pb-[calc(env(safe-area-inset-bottom)+5rem)] xl:h-[calc(100vh-5rem)] xl:min-h-[560px] xl:overflow-hidden xl:pb-0">
+      <div className="shrink-0 px-1 py-1">
+        <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <button type="button" onClick={() => moveDate(-1)} className={`rounded-xl border p-1.5 ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-white'}`} aria-label="Período anterior">
+              <ChevronLeft size={17} />
+            </button>
+            <h2 className={`min-w-0 px-2 text-base font-semibold capitalize tracking-tight lg:text-lg ${isDark ? 'text-slate-100' : 'text-slate-900'}`}>{periodLabel}</h2>
+            <button type="button" onClick={() => moveDate(1)} className={`rounded-xl border p-1.5 ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-white'}`} aria-label="Próximo período">
+              <ChevronRight size={17} />
+            </button>
+            <button type="button" onClick={() => onDateChange?.(new Date())} className={`ml-1 rounded-xl border px-2.5 py-1.5 text-[11px] font-semibold ${isDark ? 'border-slate-700 text-slate-300 hover:bg-slate-800' : 'border-slate-200 text-slate-500 hover:bg-white'}`}>
               Hoje
             </button>
-            <button
-              type="button"
-              onClick={() => {
-                cacheRef.current.clear();
-                setRemoteRefreshNonce((value) => value + 1);
-              }}
-              className={`inline-flex items-center gap-2 rounded-2xl border px-3 py-2 text-xs font-bold ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`}
-              aria-label="Atualizar agenda"
-              title="Atualizar agenda"
-            >
-              <RefreshCcw size={14} className={remoteState.refreshing ? 'animate-spin' : ''} />
-              Atualizar
-            </button>
-            <button type="button" onClick={() => moveDate(-1)} className={`rounded-2xl border p-2 ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`} aria-label="Período anterior">
-              <ChevronLeft size={18} />
-            </button>
-            <button type="button" onClick={() => moveDate(1)} className={`rounded-2xl border p-2 ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`} aria-label="Próximo período">
-              <ChevronRight size={18} />
-            </button>
-            <div className="min-w-[190px] text-sm font-bold capitalize">{periodLabel}</div>
-            <div className={`flex rounded-2xl p-1 ${isDark ? 'bg-slate-900' : 'bg-slate-100'}`}>
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <div className={`flex rounded-xl p-0.5 ${isDark ? 'bg-slate-900' : 'bg-slate-100'}`}>
               {[
                 { value: 'day', label: 'Dia', icon: CalendarIcon },
                 { value: 'week', label: 'Semana', icon: CalendarRange },
@@ -2678,50 +2615,51 @@ export const ClinicalAgendaBoard = ({
                     key={item.value}
                     type="button"
                     onClick={() => onViewChange?.(item.value as ClinicalAgendaView)}
-                    className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-bold transition-all ${active ? 'bg-white text-[#7a32fc] shadow-sm' : isDark ? 'text-slate-400 hover:text-white' : 'text-slate-500 hover:text-slate-800'}`}
+                    className={`inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-[11px] font-semibold transition-all ${active ? 'bg-white text-[#7a32fc] shadow-sm' : isDark ? 'text-slate-400 hover:text-white' : 'text-slate-500 hover:text-slate-800'}`}
                   >
-                    <Icon size={14} />
+                    <Icon size={13} />
                     {item.label}
                   </button>
                 );
               })}
             </div>
-            <button type="button" onClick={() => setFilterSheetOpen(true)} className="inline-flex rounded-2xl bg-slate-900 p-2 text-white xl:hidden" aria-label="Abrir filtros">
-              <Filter size={18} />
+            {filteredEvents.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setTimeReportsOpen(true)}
+                className={`rounded-xl border p-1.5 ${isDark ? 'border-slate-700 text-slate-300 hover:bg-slate-800' : 'border-slate-200 text-slate-500 hover:bg-white'}`}
+                aria-label="Relatórios de tempo"
+                title={`Tempo: ${formatMinutesHuman(timeReports.scheduledMinutes)} previsto`}
+              >
+                <Clock size={15} />
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                cacheRef.current.clear();
+                setRemoteRefreshNonce((value) => value + 1);
+              }}
+              className={`rounded-xl border p-1.5 ${isDark ? 'border-slate-700 text-slate-300 hover:bg-slate-800' : 'border-slate-200 text-slate-500 hover:bg-white'}`}
+              aria-label="Atualizar agenda"
+              title="Atualizar agenda"
+            >
+              <RefreshCcw size={15} className={remoteState.refreshing ? 'animate-spin' : ''} />
             </button>
-            <button type="button" onClick={() => onCreateAppointment?.(selectedDateKey, '08:00')} className="inline-flex items-center gap-2 rounded-2xl bg-[#7a32fc] px-4 py-2 text-xs font-bold text-white shadow-lg shadow-violet-500/20">
-              <Plus size={16} />
+            <button type="button" onClick={() => setFilterSheetOpen(true)} className="inline-flex rounded-xl bg-slate-900 p-1.5 text-white xl:hidden" aria-label="Abrir filtros">
+              <Filter size={17} />
+            </button>
+            <button type="button" onClick={() => onCreateAppointment?.(selectedDateKey, '08:00')} className="inline-flex items-center gap-1.5 rounded-xl bg-[#7a32fc] px-3 py-1.5 text-[11px] font-semibold text-white shadow-sm shadow-violet-500/20">
+              <Plus size={14} />
               Nova sessão
             </button>
           </div>
         </div>
-
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          {headerKpis.map((item) => {
-            const Icon = item.icon;
-            return (
-              <span key={item.label} className={`inline-flex items-center gap-2 rounded-2xl border px-3 py-2 text-xs font-bold ${isDark ? 'border-slate-700 bg-slate-900 text-slate-200' : 'border-slate-100 bg-slate-50/80 text-slate-700'}`}>
-                <span className={`rounded-xl p-1 ${item.bg} ${item.color}`}><Icon size={12} /></span>
-                {item.label}: <strong className={isDark ? 'text-white' : 'text-slate-900'}>{item.value}</strong>
-              </span>
-            );
-          })}
-          {filteredEvents.length > 0 && (
-            <button
-              type="button"
-              onClick={() => setTimeReportsOpen(true)}
-              className={`inline-flex items-center gap-2 rounded-2xl border px-3 py-2 text-xs font-bold ${isDark ? 'border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800' : 'border-slate-100 bg-white text-slate-600 hover:bg-slate-50'}`}
-            >
-              <Clock size={13} />
-              Tempo: {formatMinutesHuman(timeReports.scheduledMinutes)} previsto
-            </button>
-          )}
-        </div>
       </div>
 
-      <div className="grid flex-1 min-h-0 gap-3 xl:grid-cols-[300px_minmax(0,1fr)]">
-        <aside className={`hidden min-h-0 overflow-hidden rounded-[24px] border shadow-sm xl:block ${isDark ? 'border-slate-700 bg-[#101827] text-slate-100' : 'border-slate-100 bg-white text-slate-900'}`}>
-          <div className="h-full overflow-y-auto p-4 pr-3 custom-scrollbar">
+      <div className="grid flex-1 min-h-0 gap-2 xl:grid-cols-[260px_minmax(0,1fr)]">
+        <aside className={`hidden min-h-0 overflow-hidden rounded-[18px] border shadow-sm xl:block ${isDark ? 'border-slate-700 bg-[#101827] text-slate-100' : 'border-slate-100 bg-white text-slate-900'}`}>
+          <div className="h-full overflow-y-auto p-3 pr-2 custom-scrollbar">
             {renderSidebarContent()}
           </div>
         </aside>
@@ -2793,76 +2731,6 @@ export const ClinicalAgendaBoard = ({
                   </div>
                 </div>
               ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {selectedDayKeyForPanel && (
-        <div className="fixed inset-0 z-[142] flex items-end justify-center bg-black/35 p-0 backdrop-blur-sm sm:items-center sm:p-4" onClick={() => setSelectedDayKeyForPanel('')}>
-          <div className={`max-h-[88vh] w-full max-w-3xl overflow-hidden rounded-t-[28px] shadow-2xl sm:rounded-[28px] ${isDark ? 'bg-[#101827] text-slate-100' : 'bg-white text-slate-900'}`} onClick={(event) => event.stopPropagation()}>
-            <div className={`flex items-start justify-between gap-4 border-b p-5 ${isDark ? 'border-slate-700' : 'border-slate-100'}`}>
-              <div>
-                <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#7a32fc]">Dia selecionado</p>
-                <h3 className="text-lg font-bold">Consultas de {selectedDayPanelLabel}</h3>
-                <p className={`mt-1 text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>{selectedDayPanelEvents.length} consulta(s) no período visível.</p>
-              </div>
-              <button type="button" onClick={() => setSelectedDayKeyForPanel('')} className={`rounded-2xl border p-2 ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`} aria-label="Fechar consultas do dia">
-                <X size={18} />
-              </button>
-            </div>
-            <div className="max-h-[62vh] overflow-y-auto p-4 custom-scrollbar">
-              <div className="space-y-2">
-                {selectedDayPanelEvents.map((event: any) => {
-                  const statusColor = getAppointmentPatientConfirmationVisualState(event);
-                  const eventClosureView = getAppointmentClosureOperationalView(event);
-                  const primaryAction = getAppointmentPrimaryAction(event, eventClosureView.phase);
-                  return (
-                    <div key={event.id} className={`rounded-2xl border p-3 ${statusColor.card}`}>
-                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                        <div className="min-w-0">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="text-sm font-bold tabular-nums">{event.time} - {event.endTime}</span>
-                            <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${statusColor.badge}`}>{statusColor.label}</span>
-                          </div>
-                          <p className="mt-1 truncate text-sm font-semibold">{event.patientName}</p>
-                          <p className={`mt-1 truncate text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                            {event.type || 'Sessão'} · {event.therapistName || 'Profissional não definido'} · {getRoomDisplayLine(event)}
-                          </p>
-                        </div>
-                        <div className="flex flex-wrap gap-1.5">
-                          <button type="button" onClick={() => setStatusActionEvent(event)} className="rounded-xl bg-[#7a32fc] px-3 py-2 text-[11px] font-bold text-white">
-                            Ações
-                          </button>
-                          <button type="button" onClick={() => onEditAppointment?.(event)} className={`rounded-xl border px-3 py-2 text-[11px] font-bold ${isDark ? 'border-slate-700 text-slate-200 hover:bg-slate-800' : 'border-slate-200 text-slate-600 hover:bg-white'}`}>
-                            Editar
-                          </button>
-                          <button type="button" onClick={() => { setSelectedDayKeyForPanel(''); openEventDetail(event); }} className={`rounded-xl border px-3 py-2 text-[11px] font-bold ${isDark ? 'border-slate-700 text-slate-200 hover:bg-slate-800' : 'border-slate-200 text-slate-600 hover:bg-white'}`}>
-                            Detalhes
-                          </button>
-                          {primaryAction.kind !== 'none' && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (primaryAction.kind === 'closure') {
-                                  setSelectedDayKeyForPanel('');
-                                  openEventDetail(event);
-                                  return;
-                                }
-                                onStartSession?.(event);
-                              }}
-                              className={`rounded-xl border px-3 py-2 text-[11px] font-bold ${isDark ? 'border-violet-500/40 text-violet-200 hover:bg-violet-500/10' : 'border-violet-100 text-[#7a32fc] hover:bg-violet-50'}`}
-                            >
-                              {primaryAction.label}
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-                {selectedDayPanelEvents.length === 0 && <p className="py-8 text-center text-sm font-semibold text-slate-400">Nenhuma consulta neste dia.</p>}
-              </div>
             </div>
           </div>
         </div>

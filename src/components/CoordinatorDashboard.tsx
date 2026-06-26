@@ -7792,7 +7792,7 @@ export function CoordinatorDashboard({
       <div className="h-screen min-w-0 flex-1 overflow-y-auto relative z-10">
         {/* Header */}
         <header
-          className={`px-4 lg:px-8 ${activeTab === "dashboard" ? "py-5 lg:py-6" : "py-4"} flex items-center justify-between sticky top-0 backdrop-blur-md z-30 ${
+          className={`px-4 lg:px-8 ${activeTab === "dashboard" ? "py-5 lg:py-6" : activeTab === "agenda" ? "py-2.5" : "py-4"} flex items-center justify-between sticky top-0 backdrop-blur-md z-30 ${
             theme === "dark"
               ? "bg-[#0f172a]/85 border-b border-slate-800/80"
               : "bg-[#F4F7FE]/85 border-b border-slate-100/90"
@@ -7812,15 +7812,17 @@ export function CoordinatorDashboard({
               </button>
             )}
             <div>
-              <p className={`text-[10px] font-bold uppercase tracking-widest mb-1 ${theme === "dark" ? "text-slate-300" : "text-slate-500"}`}>
-                {["financial", "payers", "patientAuthorizations", "conference", "closure"].includes(activeTab)
-                  ? financialNavigationContext.breadcrumb.join(" > ")
-                  : activeTab === "rooms" && !isEditingRooms
-                  ? "Salas"
-                  : activeTab === "dashboard"
-                    ? "Painel"
-                    : `Páginas / ${tabLabels[activeTab] || "Painel"}`}
-              </p>
+              {activeTab !== "agenda" && (
+                <p className={`text-[10px] font-bold uppercase tracking-widest mb-1 ${theme === "dark" ? "text-slate-300" : "text-slate-500"}`}>
+                  {["financial", "payers", "patientAuthorizations", "conference", "closure"].includes(activeTab)
+                    ? financialNavigationContext.breadcrumb.join(" > ")
+                    : activeTab === "rooms" && !isEditingRooms
+                    ? "Salas"
+                    : activeTab === "dashboard"
+                      ? "Painel"
+                      : `Páginas / ${tabLabels[activeTab] || "Painel"}`}
+                </p>
+              )}
               <h1 className={`text-base lg:text-2xl font-semibold tracking-tight ${theme === "dark" ? "text-slate-100" : "text-slate-900"} ${activeTab === "dashboard" ? "max-w-[980px] leading-snug" : "capitalize"}`}>
                 {["financial", "payers", "patientAuthorizations", "conference", "closure"].includes(activeTab)
                   ? financialNavigationContext.breadcrumb[financialNavigationContext.breadcrumb.length - 1] || tabLabels[activeTab]
