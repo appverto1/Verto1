@@ -33212,6 +33212,43 @@ async function startServer() {
     });
   };
 
+  const resolveEffectiveAppointmentBillingContext = resolveEffectiveClosureBillingContext;
+
+  const resolveEffectiveTissPreGuideBillingContext = async (params: {
+    organizationId: string;
+    appointment: any;
+    billingContext?: any;
+  }) => {
+    const organizationId = sanitizeString(params.organizationId, 120);
+    const appointment = mergeAppointmentBillingPayload(params.appointment || {});
+    const rawContext = mergeBillingContextMetadata(params.billingContext || {}) || {};
+    const rawEligibility = evaluateTissPreGuideEligibility({ appointment, billingContext: rawContext });
+    const rawHasPayerName = Boolean(sanitizeString(rawContext?.payer_name_snapshot, 180));
+    const rawHasGuideAndAuthorization = Boolean(
+      sanitizeString(rawContext?.guide_number || rawContext?.guideNumber, 120) &&
+        sanitizeString(rawContext?.authorization_code || rawContext?.authorizationCode || rawContext?.authorization_password || rawContext?.authorizationPassword, 120)
+    );
+    if (rawEligibility.eligible && rawHasPayerName && rawHasGuideAndAuthorization) return rawContext;
+
+    const patientId = sanitizeString(appointment?.patient_id || appointment?.patientId || rawContext?.patient_id, 120);
+    if (!isUuid(organizationId) || !isUuid(patientId)) return rawContext;
+    try {
+      const effectiveContext = await resolveEffectiveAppointmentBillingContext({
+        organizationId,
+        patientId,
+        appointment,
+        billingContext: rawContext
+      });
+      return mergeBillingContextMetadata(effectiveContext || rawContext) || rawContext;
+    } catch (error: any) {
+      console.warn('[TissPreGuide] effective billing context skipped:', {
+        appointmentId: sanitizeString(appointment?.id || appointment?.appointment_id, 120),
+        message: sanitizeTextField(error?.message, 300) || String(error)
+      });
+      return rawContext;
+    }
+  };
+
   const upsertAppointmentClosureCheckRow = async (payload: any) => {
     const isMissingUpsertConflictTargetError = (error: any) => {
       const code = sanitizeString(error?.code, 20).toUpperCase();
@@ -36909,7 +36946,12 @@ async function startServer() {
       overwriteExplicit: Boolean(params.overwriteExplicitContext)
     });
 
-    const billingContext = mergeBillingContextMetadata(await fetchAppointmentBillingContextRow(organizationId, appointmentId));
+    const persistedBillingContext = mergeBillingContextMetadata(await fetchAppointmentBillingContextRow(organizationId, appointmentId));
+    const billingContext = await resolveEffectiveTissPreGuideBillingContext({
+      organizationId,
+      appointment: billingAppointment,
+      billingContext: persistedBillingContext
+    });
     let payer: any = null;
     let billingItem: any = null;
     let clearedBillingItem = false;
@@ -39249,7 +39291,11 @@ async function startServer() {
 
       for (const appointment of scopedAppointments) {
         const appointmentId = sanitizeString(appointment?.id, 120);
-        const billingContext = contextsByAppointment.get(appointmentId) || null;
+        const billingContext = await resolveEffectiveTissPreGuideBillingContext({
+          organizationId,
+          appointment,
+          billingContext: contextsByAppointment.get(appointmentId) || null
+        });
         const eligibility = evaluateTissPreGuideEligibility({ appointment, billingContext });
         if (eligibility.financialContext === 'INSURANCE') coverage.billableAppointments += 1;
         if (eligibility.reason === 'not_applicable') coverage.notBillableAppointments += 1;
@@ -39369,9 +39415,15 @@ async function startServer() {
       const eligibleAppointments: any[] = [];
       const details: any[] = [];
       const detailsByAppointment = new Map<string, any>();
+      const effectiveContextsByAppointment = new Map<string, any>();
       for (const appointment of scopedAppointments) {
         const appointmentId = sanitizeString(appointment?.id, 120);
-        const billingContext = contextsByAppointment.get(appointmentId) || null;
+        const billingContext = await resolveEffectiveTissPreGuideBillingContext({
+          organizationId,
+          appointment,
+          billingContext: contextsByAppointment.get(appointmentId) || null
+        });
+        effectiveContextsByAppointment.set(appointmentId, billingContext);
         const eligibility = evaluateTissPreGuideEligibility({ appointment, billingContext });
         if (eligibility.financialContext === 'INSURANCE') diagnostics.billableWithInsurance += 1;
         if (isUuid(eligibility.payerId || '')) diagnostics.withRealPayer += 1;
@@ -39472,10 +39524,23 @@ async function startServer() {
       for (const appointment of eligibleAppointments) {
         const appointmentId = sanitizeString(appointment?.id, 120);
         try {
+          const effectiveContext = effectiveContextsByAppointment.get(appointmentId) || {};
           const generated = await revalidateAppointmentBillingForAppointment({
             appointmentId,
             user: req.session.user,
-            scopedAppointment: appointment,
+            scopedAppointment: cleanObject({
+              ...appointment,
+              payer_id: effectiveContext?.payer_id || appointment?.payer_id || null,
+              payer_type: effectiveContext?.payer_type || appointment?.payer_type || null,
+              financial_context_type: effectiveContext?.payer_type || appointment?.financial_context_type || null,
+              payer_name_snapshot: effectiveContext?.payer_name_snapshot || appointment?.payer_name_snapshot || null,
+              service_type: effectiveContext?.service_type || appointment?.service_type || appointment?.approach || null,
+              insurance_card_number: effectiveContext?.insurance_card_number || appointment?.insurance_card_number || null,
+              insurance_plan_name: effectiveContext?.insurance_plan_name || appointment?.insurance_plan_name || null,
+              authorization_code: effectiveContext?.authorization_code || appointment?.authorization_code || null,
+              guide_number: effectiveContext?.guide_number || appointment?.guide_number || null,
+              procedure_code: effectiveContext?.procedure_code || appointment?.procedure_code || null
+            }),
             source: 'tiss_pre_guide_period_revalidation',
             forceClosure: true
           });

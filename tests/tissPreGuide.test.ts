@@ -667,6 +667,36 @@ test('contextos não faturáveis são não aplicáveis e não tentam resolver TI
   }
 });
 
+test('contexto financeiro efetivo evita WITHOUT_FINANCIAL_CONTEXT em Pre-guia', () => {
+  const appointment = {
+    id: 'd5529ff3-0d6b-4861-921b-10ea22fdd375',
+    patient_id: 'patient-pedro',
+    scheduled_start_at: '2026-06-26T18:00:00.000Z',
+    service_type: 'ABA',
+  };
+  const raw = evaluateTissPreGuideEligibility({
+    appointment,
+    billingContext: {},
+  });
+  assert.equal(raw.reason, 'missing_financial_context');
+
+  const effective = evaluateTissPreGuideEligibility({
+    appointment,
+    billingContext: {
+      payer_type: 'INSURANCE',
+      payer_id: 'payer-amil',
+      payer_name_snapshot: 'Amil',
+      insurance_plan_name: 'Platinum',
+      insurance_card_number: '123456789',
+      guide_number: '12345679',
+      authorization_code: '123456789',
+    },
+  });
+  assert.equal(effective.eligible, true);
+  assert.equal(effective.reason, 'eligible');
+  assert.equal(effective.financialContext, 'INSURANCE');
+});
+
 test('pagador particular nao exige TISS mesmo se usado como fallback visual', () => {
   const result = validateTissPreGuide({
     ...validInput,
@@ -1311,6 +1341,14 @@ test('revalidação pontual e por período materializam Pré-guias sem backfill 
   );
   assert.match(periodRoute, /fetchClosurePeriodAppointmentRows/);
   assert.match(periodRoute, /evaluateTissPreGuideEligibility/);
+  assert.match(serverCode, /const resolveEffectiveAppointmentBillingContext = resolveEffectiveClosureBillingContext/);
+  assert.match(serverCode, /const resolveEffectiveTissPreGuideBillingContext/);
+  assert.match(periodRoute, /resolveEffectiveTissPreGuideBillingContext\(\{/);
+  assert.match(periodRoute, /effectiveContextsByAppointment\.set\(appointmentId, billingContext\)/);
+  assert.match(periodRoute, /const effectiveContext = effectiveContextsByAppointment\.get\(appointmentId\) \|\| \{\}/);
+  assert.match(periodRoute, /scopedAppointment:\s*cleanObject\(\{/);
+  assert.match(periodRoute, /payer_id:\s*effectiveContext\?\.payer_id \|\| appointment\?\.payer_id/);
+  assert.doesNotMatch(periodRoute, /scopedAppointment:\s*\{\s*\.\.\.appointment,\s*\.\.\.\(effectiveContextsByAppointment\.get\(appointmentId\) \|\| \{\}\)/);
   assert.match(periodRoute, /checkTissPreGuidePersistenceAvailability/);
   assert.match(serverCode, /checkedBeforeProcessing:\s*true/);
   assert.match(periodRoute, /detailsByAppointment/);
