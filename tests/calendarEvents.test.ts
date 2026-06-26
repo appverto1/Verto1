@@ -97,8 +97,15 @@ test('agenda mensal tem sidebar, filtros e barra compacta sem cabecalho redundan
     assert.match(calendarCode, new RegExp(label));
   }
   assert.match(calendarCode, /periodLabel/);
+  assert.match(calendarCode, /xl:grid-cols-\[1fr_auto_1fr\]/);
+  assert.match(calendarCode, /min-w-\[180px\]/);
   assert.match(calendarCode, /aria-label="Atualizar agenda"/);
   assert.match(calendarCode, /aria-label="Relatórios de tempo"/);
+  assert.doesNotMatch(calendarCode, /onDateChange\?\.\(new Date\(\)\)/);
+  assert.doesNotMatch(calendarCode, /Nova sessão/);
+  assert.doesNotMatch(calendarCode, /moveMiniCalendarMonth/);
+  assert.doesNotMatch(calendarCode, /aria-label="Mês anterior"/);
+  assert.doesNotMatch(calendarCode, /aria-label="Próximo mês"/);
   assert.doesNotMatch(calendarCode, /Agenda cl.nica/);
   assert.doesNotMatch(calendarCode, /Agenda operacional/);
   assert.doesNotMatch(calendarCode, /headerKpis/);
@@ -363,6 +370,14 @@ test('visao mensal prioriza calendario amplo e eventos rolaveis no proprio dia',
   assert.doesNotMatch(calendarCode, /Agenda operacional/);
   assert.doesNotMatch(calendarCode, /\+\{items\.length/);
   assert.doesNotMatch(calendarCode, /openDayPanel/);
+});
+
+test('filtro de equipe reutiliza foto de perfil com fallback para iniciais', () => {
+  assert.match(coordinatorCode, /profilePicture:/);
+  assert.match(calendarCode, /const memberPhotoUrl = String/);
+  assert.match(calendarCode, /src=\{memberPhotoUrl\}/);
+  assert.match(calendarCode, /data-avatar-fallback="true"/);
+  assert.match(calendarCode, /getInitials\(member\.label \|\| member\.name\)/);
 });
 
 test('nomes reais de sala aparecem como dado humano e nunca como uuid', () => {

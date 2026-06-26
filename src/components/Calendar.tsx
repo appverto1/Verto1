@@ -1597,12 +1597,6 @@ export const ClinicalAgendaBoard = ({
     onDateChange?.(next);
   };
 
-  const moveMiniCalendarMonth = (direction: -1 | 1) => {
-    const next = new Date(activeDate);
-    next.setMonth(next.getMonth() + direction);
-    onDateChange?.(next);
-  };
-
   const openEventDetail = (event: any) => {
     const normalized = normalizeClinicalEvent(event);
     setSelectedEvent(normalized);
@@ -2028,16 +2022,10 @@ export const ClinicalAgendaBoard = ({
     const eventDays = new Set(baseEvents.map((event: any) => event.date));
     return (
       <div>
-        <div className="mb-3 flex items-center justify-between">
-          <button type="button" onClick={() => moveMiniCalendarMonth(-1)} className={`rounded-xl p-2 ${isDark ? 'hover:bg-slate-800' : 'hover:bg-slate-100'}`} aria-label="Mês anterior">
-            <ChevronLeft size={16} />
-          </button>
-          <p className={`text-sm font-bold capitalize ${isDark ? 'text-white' : 'text-slate-900'}`}>
+        <div className="mb-3 flex items-center justify-center">
+          <p className={`text-sm font-semibold capitalize ${isDark ? 'text-white' : 'text-slate-900'}`}>
             {activeDate.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}
           </p>
-          <button type="button" onClick={() => moveMiniCalendarMonth(1)} className={`rounded-xl p-2 ${isDark ? 'hover:bg-slate-800' : 'hover:bg-slate-100'}`} aria-label="Próximo mês">
-            <ChevronRight size={16} />
-          </button>
         </div>
         <div className="grid grid-cols-7 gap-1 text-center text-[10px] font-bold uppercase text-slate-400">
           {['D', 'S', 'T', 'Q', 'Q', 'S', 'S'].map((day, index) => <span key={`${day}-${index}`}>{day}</span>)}
@@ -2097,26 +2085,56 @@ export const ClinicalAgendaBoard = ({
             )}
           </div>
           <div className="space-y-2">
-            {(teamMembers || []).slice(0, 8).map((member: any) => (
-              <button
-                type="button"
-                key={member.id || member.label}
-                onClick={() => setSelectedTherapistIds((prev) => toggleArrayValue(prev, String(member.id || member.label)))}
-                className={`flex w-full items-center gap-3 rounded-2xl border px-3 py-2 text-left transition-all ${
-                  selectedTherapistIds.includes(String(member.id || member.label))
-                    ? 'border-[#7a32fc]/40 bg-[#7a32fc]/10'
-                    : isDark ? 'border-slate-700 bg-slate-900 hover:bg-slate-800' : 'border-slate-100 bg-white hover:bg-slate-50'
-                }`}
-              >
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-900 text-[11px] font-bold text-white">
-                  {getInitials(member.label || member.name)}
-                </span>
-                <span className="min-w-0">
-                  <span className={`block truncate text-xs font-semibold ${isDark ? 'text-slate-100' : 'text-slate-800'}`}>{member.label || member.name}</span>
-                  {member.specialty && <span className="block truncate text-[10px] text-slate-400">{member.specialty}</span>}
-                </span>
-              </button>
-            ))}
+            {(teamMembers || []).slice(0, 8).map((member: any) => {
+              const memberPhotoUrl = String(
+                member?.profilePicture ||
+                member?.profile_picture ||
+                member?.profilePhotoUrl ||
+                member?.profile_photo_url ||
+                member?.avatarUrl ||
+                member?.avatar_url ||
+                member?.photoUrl ||
+                member?.photo_url ||
+                member?.imageUrl ||
+                member?.image_url ||
+                ''
+              ).trim();
+              return (
+                <button
+                  type="button"
+                  key={member.id || member.label}
+                  onClick={() => setSelectedTherapistIds((prev) => toggleArrayValue(prev, String(member.id || member.label)))}
+                  className={`flex w-full items-center gap-3 rounded-2xl border px-3 py-2 text-left transition-all ${
+                    selectedTherapistIds.includes(String(member.id || member.label))
+                      ? 'border-[#7a32fc]/40 bg-[#7a32fc]/10'
+                      : isDark ? 'border-slate-700 bg-slate-900 hover:bg-slate-800' : 'border-slate-100 bg-white hover:bg-slate-50'
+                  }`}
+                >
+                  <span className="relative flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-slate-900 text-[11px] font-bold text-white">
+                    {memberPhotoUrl ? (
+                      <img
+                        src={memberPhotoUrl}
+                        alt=""
+                        loading="lazy"
+                        referrerPolicy="no-referrer"
+                        className="h-full w-full rounded-full object-cover"
+                        onError={(event) => {
+                          event.currentTarget.style.display = 'none';
+                          event.currentTarget.parentElement?.querySelector('[data-avatar-fallback="true"]')?.classList.remove('hidden');
+                        }}
+                      />
+                    ) : null}
+                    <span data-avatar-fallback="true" className={memberPhotoUrl ? 'hidden' : ''}>
+                      {getInitials(member.label || member.name)}
+                    </span>
+                  </span>
+                  <span className="min-w-0">
+                    <span className={`block truncate text-xs font-semibold ${isDark ? 'text-slate-100' : 'text-slate-800'}`}>{member.label || member.name}</span>
+                    {member.specialty && <span className="block truncate text-[10px] text-slate-400">{member.specialty}</span>}
+                  </span>
+                </button>
+              );
+            })}
           </div>
         </div>
       ))}
@@ -2588,20 +2606,18 @@ export const ClinicalAgendaBoard = ({
   return (
     <div className="flex flex-col gap-2 pb-[calc(env(safe-area-inset-bottom)+5rem)] xl:h-[calc(100vh-4.25rem)] xl:min-h-[580px] xl:overflow-hidden xl:pb-0">
       <div className="shrink-0 px-1 py-1">
-        <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
-          <div className="flex min-w-0 items-center gap-1.5">
+        <div className="grid gap-2 xl:grid-cols-[1fr_auto_1fr] xl:items-center">
+          <div className="hidden xl:block" aria-hidden="true" />
+          <div className="flex min-w-0 items-center justify-center gap-1.5">
             <button type="button" onClick={() => moveDate(-1)} className={`rounded-xl border p-1.5 ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-white'}`} aria-label="Período anterior">
               <ChevronLeft size={17} />
             </button>
-            <h2 className={`min-w-0 px-2 text-base font-semibold capitalize tracking-tight lg:text-lg ${isDark ? 'text-slate-100' : 'text-slate-900'}`}>{periodLabel}</h2>
+            <h2 className={`min-w-[180px] px-2 text-center text-base font-semibold capitalize tracking-tight lg:text-lg ${isDark ? 'text-slate-100' : 'text-slate-900'}`}>{periodLabel}</h2>
             <button type="button" onClick={() => moveDate(1)} className={`rounded-xl border p-1.5 ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-white'}`} aria-label="Próximo período">
               <ChevronRight size={17} />
             </button>
-            <button type="button" onClick={() => onDateChange?.(new Date())} className={`ml-1 rounded-xl border px-2.5 py-1.5 text-[11px] font-semibold ${isDark ? 'border-slate-700 text-slate-300 hover:bg-slate-800' : 'border-slate-200 text-slate-500 hover:bg-white'}`}>
-              Hoje
-            </button>
           </div>
-          <div className="flex flex-wrap items-center gap-1.5">
+          <div className="flex flex-wrap items-center justify-center gap-1.5 xl:justify-end">
             <div className={`flex rounded-xl p-0.5 ${isDark ? 'bg-slate-900' : 'bg-slate-100'}`}>
               {[
                 { value: 'day', label: 'Dia', icon: CalendarIcon },
@@ -2648,10 +2664,6 @@ export const ClinicalAgendaBoard = ({
             </button>
             <button type="button" onClick={() => setFilterSheetOpen(true)} className="inline-flex rounded-xl bg-slate-900 p-1.5 text-white xl:hidden" aria-label="Abrir filtros">
               <Filter size={17} />
-            </button>
-            <button type="button" onClick={() => onCreateAppointment?.(selectedDateKey, '08:00')} className="inline-flex items-center gap-1.5 rounded-xl bg-[#7a32fc] px-3 py-1.5 text-[11px] font-semibold text-white shadow-sm shadow-violet-500/20">
-              <Plus size={14} />
-              Nova sessão
             </button>
           </div>
         </div>

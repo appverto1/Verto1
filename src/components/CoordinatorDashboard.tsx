@@ -596,6 +596,18 @@ export function CoordinatorDashboard({
             member?.full_name || member?.fullName || member?.name || member?.email || id,
           ).trim(),
           specialty,
+          profilePicture:
+            member?.profilePicture ||
+            member?.profile_picture ||
+            member?.profilePhotoUrl ||
+            member?.profile_photo_url ||
+            member?.avatarUrl ||
+            member?.avatar_url ||
+            member?.photoUrl ||
+            member?.photo_url ||
+            member?.imageUrl ||
+            member?.image_url ||
+            "",
         };
       })
       .sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
