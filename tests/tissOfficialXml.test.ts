@@ -508,7 +508,21 @@ test("rotas oficiais são paralelas, paginadas, sem XML na listagem e download c
   assert.match(serverCode, /stage = 'audit_event'/);
   assert.match(serverCode, /stage = 'hash_calculation'/);
   assert.match(serverCode, /postgresCode === '42883'/);
-  assert.match(serverCode, /reasonCode = 'RPC_SIGNATURE_MISMATCH'/);
+  assert.match(serverCode, /: 'RPC_SIGNATURE_MISMATCH'/);
+  assert.match(serverCode, /RPC_INTERNAL_SQL_FUNCTION_MISSING/);
+  assert.match(serverCode, /RPC_TYPE_MISMATCH/);
+  assert.match(serverCode, /RPC_ENV_OR_SCHEMA_CACHE_MISMATCH/);
+  assert.match(serverCode, /RPC_PERSISTENCE_UNKNOWN_42883/);
+  assert.match(serverCode, /const extractSupabasePostgresDiagnostics = \(error: any\) =>/);
+  assert.match(serverCode, /postgresMessage: sanitizePostgresDiagnosticText\(error\?\.message/);
+  assert.match(serverCode, /postgresDetails: sanitizePostgresDiagnosticText\(error\?\.details/);
+  assert.match(serverCode, /postgresHint: sanitizePostgresDiagnosticText\(error\?\.hint/);
+  assert.match(serverCode, /const classifyPostgres42883TissOfficialReason = /);
+  assert.match(serverCode, /messageBundle\.includes\('create_tiss_official_document'\)/);
+  assert.match(serverCode, /messageBundle\.includes\('could not find the function'\)/);
+  assert.match(serverCode, /messageBundle\.includes\('explicit type casts'\)/);
+  assert.match(serverCode, /hasPerfectRpcPayload \? 'RPC_ENV_OR_SCHEMA_CACHE_MISMATCH' : 'RPC_SIGNATURE_MISMATCH'/);
+  assert.match(serverCode, /\[TISS Official Persistence\] RPC failed/);
   assert.match(serverCode, /reasonCode = 'SCHEMA_COLUMN_MISSING'/);
   assert.match(serverCode, /reasonCode = 'UNIQUE_CONSTRAINT'/);
   assert.match(serverCode, /reasonCode = 'FOREIGN_KEY_FAILED'/);
@@ -531,6 +545,15 @@ test("rotas oficiais são paralelas, paginadas, sem XML na listagem e download c
   assert.match(serverCode, /rpcPayloadKeys/);
   assert.match(serverCode, /missingRpcKeys/);
   assert.match(serverCode, /unexpectedRpcKeys/);
+  assert.match(serverCode, /organizationIdPresent/);
+  assert.match(serverCode, /payerIdPresent/);
+  assert.match(serverCode, /preGuideCount/);
+  assert.match(serverCode, /replace\(\/<\\\?xml\[\\s\\S\]\*\/gi, '\[xml_redacted\]'\)/);
+  assert.match(serverCode, /replace\(\/<ans:\[\\s\\S\]\*\/gi, '\[xml_redacted\]'\)/);
+  assert.match(serverCode, /replace\(\/\\bBearer\\s\+\[A-Za-z0-9\._~\+\/-\]\+=\*\/gi, 'Bearer \[redacted\]'\)/);
+  assert.match(serverCode, /replace\(\/\\bAuthorization\\s\*\[:=\]\\s\*\[\^,\\s;\]\+\/gi, 'Authorization=\[redacted\]'\)/);
+  assert.match(serverCode, /replace\(\/\\bcookie\\s\*\[:=\]\\s\*\[\^,\\s;\]\+\/gi, 'cookie=\[redacted\]'\)/);
+  assert.match(serverCode, /replace\(\/\\bservice_role\\b\/gi, '\[redacted_role\]'\)/);
   assert.match(serverCode, /JSON\.stringify\(payload\)/);
   const expectedRpcParams = [
     "p_organization_id",

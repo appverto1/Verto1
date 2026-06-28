@@ -36497,6 +36497,58 @@ async function startServer() {
     };
   };
 
+  const sanitizePostgresDiagnosticText = (value: unknown, maxLength = 700) => {
+    const raw = sanitizeString(value, maxLength);
+    if (!raw) return null;
+    const redacted = raw
+      .replace(/<\?xml[\s\S]*/gi, '[xml_redacted]')
+      .replace(/<ans:[\s\S]*/gi, '[xml_redacted]')
+      .replace(/<[^>]+>[\s\S]*/g, '[markup_redacted]')
+      .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi, 'Bearer [redacted]')
+      .replace(/\bAuthorization\s*[:=]\s*[^,\s;]+/gi, 'Authorization=[redacted]')
+      .replace(/\bcookie\s*[:=]\s*[^,\s;]+/gi, 'cookie=[redacted]')
+      .replace(/\bservice_role\b/gi, '[redacted_role]');
+    return sanitizeTextField(redacted, maxLength) || null;
+  };
+
+  const extractSupabasePostgresDiagnostics = (error: any) => ({
+    postgresMessage: sanitizePostgresDiagnosticText(error?.message, 700),
+    postgresDetails: sanitizePostgresDiagnosticText(error?.details, 700),
+    postgresHint: sanitizePostgresDiagnosticText(error?.hint, 700)
+  });
+
+  const classifyPostgres42883TissOfficialReason = (
+    error: any,
+    payloadKeyDiagnostics: ReturnType<typeof describeCreateTissOfficialDocumentRpcPayloadKeys>
+  ) => {
+    const messageBundle = [
+      sanitizeString(error?.message, 1000),
+      sanitizeString(error?.details, 1000),
+      sanitizeString(error?.hint, 1000)
+    ].filter(Boolean).join(' ').toLowerCase();
+    const hasPerfectRpcPayload =
+      payloadKeyDiagnostics.rpcPayloadKeyCount === payloadKeyDiagnostics.expectedRpcPayloadKeys.length &&
+      payloadKeyDiagnostics.missingRpcKeys.length === 0 &&
+      payloadKeyDiagnostics.unexpectedRpcKeys.length === 0;
+    const mentionsExternalRpc = messageBundle.includes('create_tiss_official_document');
+    const saysFunctionMissing =
+      messageBundle.includes('could not find the function') ||
+      (messageBundle.includes('function') && messageBundle.includes('does not exist'));
+    const saysTypeMismatch =
+      messageBundle.includes('argument types') ||
+      messageBundle.includes('explicit type casts') ||
+      messageBundle.includes('type cast') ||
+      messageBundle.includes('cannot cast') ||
+      messageBundle.includes('operator does not exist');
+
+    if (mentionsExternalRpc && saysFunctionMissing) {
+      return hasPerfectRpcPayload ? 'RPC_ENV_OR_SCHEMA_CACHE_MISMATCH' : 'RPC_SIGNATURE_MISMATCH';
+    }
+    if (!mentionsExternalRpc && saysFunctionMissing) return 'RPC_INTERNAL_SQL_FUNCTION_MISSING';
+    if (saysTypeMismatch) return 'RPC_TYPE_MISMATCH';
+    return 'RPC_PERSISTENCE_UNKNOWN_42883';
+  };
+
   const classifyTissOfficialPersistenceFailure = (error: any, rpcPayload?: Record<string, any> | null) => {
     const postgresCode = sanitizeString(error?.code, 40).toUpperCase();
     const rawMessage = extractSupabaseErrorMessage(error);
@@ -36504,6 +36556,8 @@ async function startServer() {
     const officialCode = sanitizeString(rawMessage, 300).match(/TISS_OFFICIAL_[A-Z0-9_]+/)?.[0] || null;
     const missingColumn = extractMissingColumnName(error);
     const normalizedMessage = safeRawMessage.toLowerCase();
+    const postgresDiagnostics = extractSupabasePostgresDiagnostics(error);
+    const rpcPayloadDiagnostics = describeCreateTissOfficialDocumentRpcPayloadKeys(rpcPayload);
 
     let stage: 'insert_official_document' | 'storage_upload' | 'update_pre_guides' | 'audit_event' | 'hash_calculation' | 'rpc_persistence' = 'rpc_persistence';
     let reasonCode = 'UNKNOWN';
@@ -36557,9 +36611,19 @@ async function startServer() {
       safeMessage = 'Não foi possível persistir o documento TISS oficial.';
     } else if (postgresCode === '42883') {
       stage = 'insert_official_document';
-      reasonCode = 'RPC_SIGNATURE_MISMATCH';
+      reasonCode = classifyPostgres42883TissOfficialReason(error, rpcPayloadDiagnostics);
       status = 503;
-      safeMessage = 'A função de persistência do XML oficial não foi encontrada com a assinatura esperada. Verifique a migration e o reload do schema.';
+      if (reasonCode === 'RPC_INTERNAL_SQL_FUNCTION_MISSING') {
+        safeMessage = 'A função SQL de persistência foi encontrada, mas uma função auxiliar interna não existe no banco.';
+      } else if (reasonCode === 'RPC_TYPE_MISMATCH') {
+        safeMessage = 'A função de persistência do XML oficial recebeu ou processou tipos incompatíveis.';
+      } else if (reasonCode === 'RPC_ENV_OR_SCHEMA_CACHE_MISMATCH') {
+        safeMessage = 'O payload da RPC está correto, mas o runtime/PostgREST ainda não encontra a função esperada.';
+      } else if (reasonCode === 'RPC_SIGNATURE_MISMATCH') {
+        safeMessage = 'A função de persistência do XML oficial não foi encontrada com a assinatura esperada. Verifique a migration e o reload do schema.';
+      } else {
+        safeMessage = 'O banco retornou erro 42883 ao persistir o XML oficial, mas a causa exata não foi identificada.';
+      }
     } else if (missingColumn) {
       reasonCode = 'SCHEMA_COLUMN_MISSING';
       status = 503;
@@ -36623,9 +36687,15 @@ async function startServer() {
         safeMessage,
         postgresCode: postgresCode || null,
         missingColumn: missingColumn || null,
-        ...(reasonCode === 'RPC_SIGNATURE_MISMATCH'
-          ? describeCreateTissOfficialDocumentRpcPayloadKeys(rpcPayload)
-          : {})
+        ...postgresDiagnostics,
+        ...(postgresCode === '42883' ? {
+          ...rpcPayloadDiagnostics,
+          organizationIdPresent: Boolean(rpcPayload?.p_organization_id),
+          payerIdPresent: Boolean(rpcPayload?.p_payer_id),
+          preGuideCount: Array.isArray(rpcPayload?.p_generated_from_pre_guide_ids)
+            ? rpcPayload.p_generated_from_pre_guide_ids.length
+            : 0
+        } : {})
       }
     };
   };
@@ -38868,7 +38938,7 @@ async function startServer() {
       const rpcResult = await supabase.rpc('create_tiss_official_document', rpcPayload);
       if (rpcResult.error) {
         const persistenceFailure = classifyTissOfficialPersistenceFailure(rpcResult.error, rpcPayload);
-        console.warn('[TissOfficial] persistence failed:', {
+        console.warn('[TISS Official Persistence] RPC failed:', {
           code: persistenceFailure.code,
           diagnostics: persistenceFailure.diagnostics
         });
