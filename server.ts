@@ -36401,7 +36401,103 @@ async function startServer() {
     throw fullResult.error;
   };
 
-  const classifyTissOfficialPersistenceFailure = (error: any) => {
+  const CREATE_TISS_OFFICIAL_DOCUMENT_RPC_KEYS = [
+    'p_organization_id',
+    'p_payer_id',
+    'p_competence_month',
+    'p_guide_type',
+    'p_document_type',
+    'p_communication_version',
+    'p_content_structure_version',
+    'p_tuss_version',
+    'p_schema_root_file',
+    'p_schema_manifest_checksum',
+    'p_batch_number',
+    'p_xml_content',
+    'p_xml_hash',
+    'p_generated_from_pre_guide_ids',
+    'p_idempotency_key',
+    'p_validation_summary',
+    'p_metadata',
+    'p_guide_count',
+    'p_total_amount_cents',
+    'p_pre_guide_versions',
+    'p_generated_by'
+  ] as const;
+
+  type CreateTissOfficialDocumentRpcPayload = Record<typeof CREATE_TISS_OFFICIAL_DOCUMENT_RPC_KEYS[number], any>;
+
+  const buildCreateTissOfficialDocumentRpcPayload = (input: {
+    organizationId: string;
+    payerId: string;
+    competenceMonth: string;
+    guideType: string;
+    documentType: string;
+    communicationVersion: string;
+    contentStructureVersion: string;
+    tussVersion: string;
+    schemaRootFile: string | null;
+    schemaManifestChecksum: string | null;
+    batchNumber: string;
+    xmlContent: string;
+    xmlHash: string;
+    generatedFromPreGuideIds: string[];
+    idempotencyKey: string;
+    validationSummary: Record<string, any> | null;
+    metadata: Record<string, any> | null;
+    guideCount: number;
+    totalAmountCents: number;
+    preGuideVersions: Record<string, any> | null;
+    generatedBy: string | null;
+  }): CreateTissOfficialDocumentRpcPayload => ({
+    p_organization_id: sanitizeString(input.organizationId, 120),
+    p_payer_id: sanitizeString(input.payerId, 120),
+    p_competence_month: sanitizeString(input.competenceMonth, 20),
+    p_guide_type: sanitizeString(input.guideType, 40),
+    p_document_type: sanitizeString(input.documentType, 80),
+    p_communication_version: sanitizeString(input.communicationVersion, 20),
+    p_content_structure_version: sanitizeString(input.contentStructureVersion, 20),
+    p_tuss_version: sanitizeString(input.tussVersion, 20),
+    p_schema_root_file: sanitizeString(input.schemaRootFile, 180) || null,
+    p_schema_manifest_checksum: sanitizeString(input.schemaManifestChecksum, 160) || null,
+    p_batch_number: sanitizeString(input.batchNumber, 40),
+    p_xml_content: String(input.xmlContent ?? ''),
+    p_xml_hash: sanitizeString(input.xmlHash, 160),
+    p_generated_from_pre_guide_ids: Array.isArray(input.generatedFromPreGuideIds)
+      ? input.generatedFromPreGuideIds.map((id) => sanitizeString(id, 120)).filter((id) => isUuid(id))
+      : [],
+    p_idempotency_key: sanitizeString(input.idempotencyKey, 128),
+    p_validation_summary: input.validationSummary && typeof input.validationSummary === 'object' ? input.validationSummary : {},
+    p_metadata: input.metadata && typeof input.metadata === 'object' ? input.metadata : {},
+    p_guide_count: Math.trunc(Number(input.guideCount) || 0),
+    p_total_amount_cents: Math.trunc(Number(input.totalAmountCents) || 0),
+    p_pre_guide_versions: input.preGuideVersions && typeof input.preGuideVersions === 'object' ? input.preGuideVersions : {},
+    p_generated_by: isUuid(sanitizeString(input.generatedBy, 120)) ? sanitizeString(input.generatedBy, 120) : null
+  });
+
+  const getSerializedRpcPayloadKeys = (payload: Record<string, any> | null | undefined) => {
+    if (!payload || typeof payload !== 'object') return [] as string[];
+    try {
+      return Object.keys(JSON.parse(JSON.stringify(payload))).sort();
+    } catch {
+      return Object.keys(payload).filter((key) => payload[key] !== undefined).sort();
+    }
+  };
+
+  const describeCreateTissOfficialDocumentRpcPayloadKeys = (payload: Record<string, any> | null | undefined) => {
+    const expectedRpcPayloadKeys = [...CREATE_TISS_OFFICIAL_DOCUMENT_RPC_KEYS].sort();
+    const rpcPayloadKeys = getSerializedRpcPayloadKeys(payload);
+    return {
+      rpcName: 'create_tiss_official_document',
+      rpcPayloadKeys,
+      rpcPayloadKeyCount: rpcPayloadKeys.length,
+      expectedRpcPayloadKeys,
+      missingRpcKeys: expectedRpcPayloadKeys.filter((key) => !rpcPayloadKeys.includes(key)),
+      unexpectedRpcKeys: rpcPayloadKeys.filter((key) => !expectedRpcPayloadKeys.includes(key))
+    };
+  };
+
+  const classifyTissOfficialPersistenceFailure = (error: any, rpcPayload?: Record<string, any> | null) => {
     const postgresCode = sanitizeString(error?.code, 40).toUpperCase();
     const rawMessage = extractSupabaseErrorMessage(error);
     const safeRawMessage = sanitizeTextField(rawMessage, 300) || 'Falha de persistência do XML oficial.';
@@ -36526,7 +36622,10 @@ async function startServer() {
         reasonCode,
         safeMessage,
         postgresCode: postgresCode || null,
-        missingColumn: missingColumn || null
+        missingColumn: missingColumn || null,
+        ...(reasonCode === 'RPC_SIGNATURE_MISMATCH'
+          ? describeCreateTissOfficialDocumentRpcPayloadKeys(rpcPayload)
+          : {})
       }
     };
   };
@@ -38743,31 +38842,32 @@ async function startServer() {
         schemaSource: 'ANS Maio/2026',
         clinicalDataExcluded: true
       };
-      const rpcResult = await supabase.rpc('create_tiss_official_document', {
-        p_organization_id: organizationId,
-        p_payer_id: payerId,
-        p_competence_month: competenceMonth,
-        p_guide_type: 'sp_sadt',
-        p_document_type: 'official_tiss_sp_sadt_xml',
-        p_communication_version: built.generated.communicationVersion,
-        p_content_structure_version: built.generated.contentStructureVersion,
-        p_tuss_version: built.generated.tussVersion,
-        p_schema_root_file: built.generated.schemaRootFile,
-        p_schema_manifest_checksum: built.generated.schemaManifestChecksum,
-        p_batch_number: built.generated.batchNumber,
-        p_xml_content: built.generated.xml,
-        p_xml_hash: built.generated.xmlHash,
-        p_generated_from_pre_guide_ids: built.generated.preGuideIds,
-        p_idempotency_key: idempotencyKey,
-        p_validation_summary: built.generated.validationSummary,
-        p_metadata: metadata,
-        p_guide_count: built.generated.guideCount,
-        p_total_amount_cents: built.generated.totalAmountCents,
-        p_pre_guide_versions: preGuideVersions,
-        p_generated_by: generatedBy
+      const rpcPayload = buildCreateTissOfficialDocumentRpcPayload({
+        organizationId,
+        payerId,
+        competenceMonth,
+        guideType: 'sp_sadt',
+        documentType: 'official_tiss_sp_sadt_xml',
+        communicationVersion: built.generated.communicationVersion,
+        contentStructureVersion: built.generated.contentStructureVersion,
+        tussVersion: built.generated.tussVersion,
+        schemaRootFile: built.generated.schemaRootFile,
+        schemaManifestChecksum: built.generated.schemaManifestChecksum,
+        batchNumber: built.generated.batchNumber,
+        xmlContent: built.generated.xml,
+        xmlHash: built.generated.xmlHash,
+        generatedFromPreGuideIds: built.generated.preGuideIds,
+        idempotencyKey,
+        validationSummary: built.generated.validationSummary,
+        metadata,
+        guideCount: built.generated.guideCount,
+        totalAmountCents: built.generated.totalAmountCents,
+        preGuideVersions,
+        generatedBy
       });
+      const rpcResult = await supabase.rpc('create_tiss_official_document', rpcPayload);
       if (rpcResult.error) {
-        const persistenceFailure = classifyTissOfficialPersistenceFailure(rpcResult.error);
+        const persistenceFailure = classifyTissOfficialPersistenceFailure(rpcResult.error, rpcPayload);
         console.warn('[TissOfficial] persistence failed:', {
           code: persistenceFailure.code,
           diagnostics: persistenceFailure.diagnostics

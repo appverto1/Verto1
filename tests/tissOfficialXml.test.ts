@@ -502,7 +502,7 @@ test("rotas oficiais são paralelas, paginadas, sem XML na listagem e download c
   assert.match(serverCode, /calculatedHash !== sanitizeString\(data\.xml_hash/);
   assert.match(serverCode, /'official_document_id'/);
   assert.match(serverCode, /const loadTissPreGuidesSchemaSafe = async/);
-  assert.match(serverCode, /const classifyTissOfficialPersistenceFailure = \(error: any\)/);
+  assert.match(serverCode, /const classifyTissOfficialPersistenceFailure = \(error: any, rpcPayload\?: Record<string, any> \| null\)/);
   assert.match(serverCode, /stage: 'insert_official_document'/);
   assert.match(serverCode, /stage = 'update_pre_guides'/);
   assert.match(serverCode, /stage = 'audit_event'/);
@@ -518,7 +518,21 @@ test("rotas oficiais são paralelas, paginadas, sem XML na listagem e download c
   assert.match(serverCode, /TISS_OFFICIAL_PRE_GUIDE_BASE_SCHEMA_MISSING/);
   assert.match(officialCreateRoute, /loadTissPreGuidesSchemaSafe\(\{ organizationId, preGuideIds \}\)/);
   assert.match(officialCreateRoute, /TISS_OFFICIAL_PRE_GUIDE_PAYER_MISMATCH/);
-  for (const rpcParam of [
+  const rpcPayloadHelper = serverCode.slice(
+    serverCode.indexOf("const CREATE_TISS_OFFICIAL_DOCUMENT_RPC_KEYS = ["),
+    serverCode.indexOf("const classifyTissOfficialPersistenceFailure =")
+  );
+  const rpcPayloadReturn = rpcPayloadHelper.slice(
+    rpcPayloadHelper.indexOf("): CreateTissOfficialDocumentRpcPayload => ({"),
+    rpcPayloadHelper.indexOf("  });", rpcPayloadHelper.indexOf("): CreateTissOfficialDocumentRpcPayload => ({"))
+  );
+  assert.match(serverCode, /const buildCreateTissOfficialDocumentRpcPayload = \(/);
+  assert.match(serverCode, /const describeCreateTissOfficialDocumentRpcPayloadKeys = /);
+  assert.match(serverCode, /rpcPayloadKeys/);
+  assert.match(serverCode, /missingRpcKeys/);
+  assert.match(serverCode, /unexpectedRpcKeys/);
+  assert.match(serverCode, /JSON\.stringify\(payload\)/);
+  const expectedRpcParams = [
     "p_organization_id",
     "p_payer_id",
     "p_competence_month",
@@ -540,10 +554,31 @@ test("rotas oficiais são paralelas, paginadas, sem XML na listagem e download c
     "p_total_amount_cents",
     "p_pre_guide_versions",
     "p_generated_by"
-  ]) {
-    assert.match(officialCreateRoute, new RegExp(`${rpcParam}:`));
+  ];
+  const expectedRpcParamsSorted = [...expectedRpcParams].sort();
+  const declaredRpcParams = Array.from(
+    rpcPayloadHelper.matchAll(/'([^']+)'/g),
+    (match) => match[1]
+  ).filter((key) => key.startsWith("p_"));
+  assert.deepEqual([...declaredRpcParams].sort(), expectedRpcParamsSorted);
+  for (const rpcParam of expectedRpcParams) {
+    assert.match(rpcPayloadReturn, new RegExp(`${rpcParam}:`));
   }
-  assert.match(officialCreateRoute, /classifyTissOfficialPersistenceFailure\(rpcResult\.error\)/);
+  for (const legacyParam of [
+    "organization_id:",
+    "payer_id:",
+    "competence_month:",
+    "communicationVersion:",
+    "contentStructureVersion:",
+    "tussVersion:",
+    "xmlContent:",
+    "generatedBy:"
+  ]) {
+    assert.doesNotMatch(rpcPayloadReturn, new RegExp(`\\n\\s+${legacyParam}`));
+  }
+  assert.match(officialCreateRoute, /const rpcPayload = buildCreateTissOfficialDocumentRpcPayload\(/);
+  assert.match(officialCreateRoute, /supabase\.rpc\('create_tiss_official_document', rpcPayload\)/);
+  assert.match(officialCreateRoute, /classifyTissOfficialPersistenceFailure\(rpcResult\.error, rpcPayload\)/);
   assert.match(officialCreateRoute, /diagnostics: persistenceFailure\.diagnostics/);
   assert.match(officialCreateRoute, /officialDocumentId: serializedDocument\.id/);
   assert.match(officialCreateRoute, /revenueCycleState: 'official_xml_validated'/);
