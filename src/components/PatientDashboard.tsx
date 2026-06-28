@@ -64,7 +64,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [settingsForm, setSettingsForm] = useState({
     name: String(user?.name || 'Paciente'),
     address: initialAddress,
-    profilePicture: user?.profilePicture || user?.profile_picture || ''
+    profilePicture: user?.profilePicture || user?.profile_picture || '',
+    profilePicturePath: user?.profilePicturePath || user?.profile_picture_path || ''
   });
   const [settingsMessage, setSettingsMessage] = useState('');
   const [isSavingSettings, setIsSavingSettings] = useState(false);
@@ -230,9 +231,10 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     setSettingsForm({
       name: nextName,
       address: nextAddress,
-      profilePicture: nextPicture || ''
+      profilePicture: nextPicture || '',
+      profilePicturePath: user?.profilePicturePath || user?.profile_picture_path || ''
     });
-  }, [user?.name, user?.profilePicture, user?.profile_picture, user?.address, user?.endereco, user?.anamnesisData?.endereco]);
+  }, [user?.name, user?.profilePicture, user?.profile_picture, user?.profilePicturePath, user?.profile_picture_path, user?.address, user?.endereco, user?.anamnesisData?.endereco]);
 
   const urlBase64ToUint8Array = (base64String: string) => {
     const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
@@ -783,7 +785,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     setSettingsMessage('Enviando foto...');
     try {
       const extension = file.type.includes('jpeg') || file.type.includes('jpg') ? 'jpg' : file.type.includes('webp') ? 'webp' : 'png';
-      const fileName = `${user.id}/profile-${Date.now()}.${extension}`;
+      const fileName = `${portalPatientId || user.id}/profile-${Date.now()}.${extension}`;
       const upload = await dataService.uploadFile('patient-photos', fileName, file);
       if (!upload?.success || !upload.url) {
         setSettingsMessage(upload?.error || 'Não foi possível enviar a foto.');
@@ -797,12 +799,21 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       setSettingsForm(nextForm);
       setProfilePicture(upload.url);
       const persistResult = await dataService.updatePatientSelfProfile({
-        name: nextForm.name.trim() || displayName,
+        patientId: portalPatientId || undefined,
         address: String(nextForm.address || '').trim(),
         profilePicture: upload.url,
         profilePicturePath: upload.path
       });
       if (persistResult?.success) {
+        const persistedPicture = persistResult?.data?.profilePicture || upload.url;
+        const persistedPath = persistResult?.data?.profilePicturePath || upload.path;
+        setProfilePicture(persistedPicture);
+        setSettingsForm((prev: any) => ({
+          ...prev,
+          profilePicture: persistedPicture,
+          profilePicturePath: persistedPath
+        }));
+        if (persistResult?.data?.name) setDisplayName(String(persistResult.data.name));
         setSettingsMessage('Foto salva com segurança.');
       } else if (persistResult?.queued) {
         setSettingsMessage('Foto salva localmente. A sincronização será retomada automaticamente.');
@@ -826,6 +837,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     setSettingsMessage('');
     try {
       const result = await dataService.updatePatientSelfProfile({
+        patientId: portalPatientId || undefined,
         name: nextName,
         address: settingsForm.address.trim(),
         profilePicture: settingsForm.profilePicture || null,
@@ -837,8 +849,17 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         return;
       }
 
-      setDisplayName(nextName);
-      setProfilePicture(settingsForm.profilePicture || null);
+      const persistedName = String(result?.data?.name || nextName);
+      const persistedPicture = result?.data?.profilePicture || settingsForm.profilePicture || null;
+      const persistedPath = result?.data?.profilePicturePath || (settingsForm as any).profilePicturePath || null;
+      setDisplayName(persistedName);
+      setProfilePicture(persistedPicture);
+      setSettingsForm((prev: any) => ({
+        ...prev,
+        name: persistedName,
+        profilePicture: persistedPicture || '',
+        profilePicturePath: persistedPath || ''
+      }));
       setSettingsMessage(result?.queued ? 'Configurações salvas localmente. A sincronização será retomada automaticamente.' : 'Configurações salvas com sucesso.');
       setTimeout(() => setIsSettingsOpen(false), 700);
     } catch (error: any) {

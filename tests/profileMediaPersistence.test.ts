@@ -27,6 +27,8 @@ test('backend normaliza paths com prefixo do bucket antes de renovar URL assinad
   assert.ok(helperStart >= 0 && helperEnd > helperStart, 'helper de path de foto nao encontrado.');
   const helper = serverCode.slice(helperStart, helperEnd);
   assert.match(helper, /value\.startsWith\('patient-photos\/'\)/);
+  assert.match(helper, /value\.startsWith\('\/api\/storage\/patient-photos\/view\?'\)/);
+  assert.match(helper, /new URLSearchParams/);
   assert.ok(
     helper.indexOf("value.startsWith('patient-photos/')") < helper.indexOf("!value.includes('://')"),
     'prefixo patient-photos precisa ser removido antes do fallback generico de path.'
@@ -97,6 +99,34 @@ test('perfil de paciente salva foto imediatamente e enfileira PATCH quando servi
   assert.match(patientDashboardCode, /Foto salva com seguran.a/);
   assert.match(patientDashboardCode, /Foto salva localmente/);
   assert.match(patientDashboardCode, /dataService\.updatePatientSelfProfile\(\{/);
+  assert.match(patientDashboardCode, /patientId:\s*portalPatientId \|\| undefined/);
+  assert.match(patientDashboardCode, /const fileName = `\$\{portalPatientId \|\| user\.id\}\/profile-\$\{Date\.now\(\)\}\.\$\{extension\}`/);
+  const photoUploadSlice = patientDashboardCode.slice(
+    patientDashboardCode.indexOf('const handleProfilePhotoChange = async'),
+    patientDashboardCode.indexOf('const handleSavePatientSettings')
+  );
+  assert.doesNotMatch(photoUploadSlice, /name:\s*nextForm\.name/);
+});
+
+test('listagem de pacientes carrega foto persistida e cards exibem imagem com fallback de iniciais', () => {
+  assert.match(serverCode, /function serializePatientMediaForClient/);
+  assert.match(serverCode, /profile_picture_path:\s*profilePicturePath/);
+  assert.match(serverCode, /profilePicturePath:\s*profilePicturePath/);
+  assert.match(serverCode, /patients\.map\(serializePatientMediaForClient\)/);
+  assert.match(serverCode, /profile_picture:\s*safeProfilePicture/);
+  assert.match(serverCode, /profile_picture_path:\s*safeProfilePicturePath/);
+
+  const routeSchemaCode = read('src/utils/routeSchemaFallbacks.ts');
+  assert.match(routeSchemaCode, /'profile_picture'/);
+  assert.match(routeSchemaCode, /'profile_picture_path'/);
+
+  const coordinatorCode = read('src/components/CoordinatorDashboard.tsx');
+  const registryCode = read('src/components/PatientRegistry.tsx');
+  assert.match(coordinatorCode, /getPatientPhotoSource/);
+  assert.match(coordinatorCode, /<SecureImage[\s\S]*getPatientPhotoSource\(patient\)/);
+  assert.match(coordinatorCode, /<SecureImage[\s\S]*getPatientPhotoSource\(selectedPatientProfile\)/);
+  assert.match(registryCode, /getPatientPhotoSource/);
+  assert.match(registryCode, /<SecureImage[\s\S]*getPatientPhotoSource\(p\)/);
 });
 
 test('perfil profissional tambem fica em cache pendente sem perder paths de midia', () => {

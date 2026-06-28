@@ -46,7 +46,7 @@ test('card do painel ativa filtro de aniversariantes na lista de pacientes', () 
 });
 
 test('aba de aniversariantes usa os mesmos pacientes filtrados e nao esta marcada como em breve', () => {
-  const birthdayTab = sliceFrom(coordinatorCode, '{activeTab === "birthdays" &&', 3000);
+  const birthdayTab = sliceFrom(coordinatorCode, '{activeTab === "birthdays" &&', 3800);
   assert.match(birthdayTab, /Aniversariantes de hoje/);
   assert.match(birthdayTab, /birthdayPatients\.map/);
   assert.match(birthdayTab, /formatBirthDateForDisplay/);

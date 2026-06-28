@@ -8,6 +8,7 @@ const read = (file: string) => readFileSync(join(root, file), 'utf8');
 const serverCode = read('server.ts');
 const appCode = read('src/App.tsx');
 const coordinatorCode = read('src/components/CoordinatorDashboard.tsx');
+const patientDashboardCode = read('src/components/PatientDashboard.tsx');
 const dataServiceCode = read('src/services/dataService.ts');
 const routeSchemaCode = read('src/utils/routeSchemaFallbacks.ts');
 const migrationCode = read('supabase/migrations/20260531150000_patient_registration_anamnesis_age_templates.sql');
@@ -50,6 +51,34 @@ test('data de nascimento percorre formulario, payload, backend, select e hidrata
 
   const dataHydration = sliceFrom(dataServiceCode, 'hydratedPatients.push', 2600);
   assert.match(dataHydration, /birthDate:\s*recordPayload\?\.dataNascimento \|\| patient\?\.birth_date/);
+});
+
+test('patch parcial nao trunca nome completo canonico do paciente', () => {
+  const patientPatchRoute = sliceFrom(serverCode, "app.patch('/api/patients/:id'", 9200);
+  assert.match(serverCode, /function shouldPreserveExistingPatientFullName/);
+  assert.match(serverCode, /patientNameWordCount\(currentPatientForNameGuard\?\.name\)/);
+  assert.match(patientPatchRoute, /currentPatientForNameGuard/);
+  assert.match(patientPatchRoute, /preserveExistingFullName/);
+  assert.match(patientPatchRoute, /name:\s*req\.body\?\.name !== undefined && !preserveExistingFullName/);
+  assert.match(patientPatchRoute, /Preservando nome completo canônico contra payload curto/);
+
+  const appUpdatePatient = sliceFrom(appCode, 'const handleUpdatePatient = async', 9200);
+  assert.match(appUpdatePatient, /shouldPreservePatientFullName\(currentPatient\?\.name, updatedData\?\.name\)/);
+  assert.match(appUpdatePatient, /safeIdentityData/);
+  assert.match(appUpdatePatient, /name:\s*preserveCurrentFullName \? undefined : updatedData\.name/);
+});
+
+test('perfil do portal nao sobrescreve nome completo ao salvar apenas foto ou payload curto', () => {
+  const patientSelfRoute = sliceFrom(serverCode, "app.patch('/api/patient/self/profile'", 5200);
+  assert.match(patientSelfRoute, /requestedPatientId/);
+  assert.match(patientSelfRoute, /responsible_user_id/);
+  assert.match(patientSelfRoute, /preserveLinkedPatientName/);
+  assert.match(patientSelfRoute, /name:\s*req\.body\?\.name !== undefined \? name : undefined/);
+  assert.match(patientSelfRoute, /profile_picture_path:\s*profilePicturePath/);
+
+  const patientDashboardPhoto = sliceFrom(patientDashboardCode, 'const handleProfilePhotoChange = async', 2200);
+  assert.doesNotMatch(patientDashboardPhoto, /name:\s*nextForm\.name/);
+  assert.match(patientDashboardPhoto, /patientId:\s*portalPatientId \|\| undefined/);
 });
 
 test('cpf tem mascara no front, normalizacao no backend e nao aparece em cards principais', () => {

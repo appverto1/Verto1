@@ -1562,6 +1562,17 @@ export default function App() {
   const [clinicalRecords, setClinicalRecords] = useState<any[]>([]);
   const [activityLogs, setActivityLogs] = useState<any[]>([]);
   const todayStr = new Date().toISOString().split('T')[0];
+  const normalizeCanonicalPatientName = (value: any) => String(value ?? '').replace(/\s+/g, ' ').trim();
+  const patientNameWordCount = (value: any) =>
+    normalizeCanonicalPatientName(value).split(/\s+/).filter(Boolean).length;
+  const shouldPreservePatientFullName = (currentName: any, incomingName: any) => {
+    const current = normalizeCanonicalPatientName(currentName);
+    const incoming = normalizeCanonicalPatientName(incomingName);
+    if (!incoming) return Boolean(current);
+    if (!current) return false;
+    if (current.toLocaleLowerCase('pt-BR') === incoming.toLocaleLowerCase('pt-BR')) return false;
+    return patientNameWordCount(current) >= 2 && patientNameWordCount(incoming) <= 1;
+  };
 
   const [rooms, setRooms] = useState<any[]>([]);
   const [therapistAgenda, setTherapistAgenda] = useState<any[]>([]);
@@ -4758,7 +4769,16 @@ export default function App() {
     // Split updates
     const { diagnosis, anamnesisData, pei, evaluationLinks, interventionTaskLinks, ...identityData } = updatedData;
     const currentPatient = allPatients.find((p) => String(p?.id) === String(updatedData?.id));
-    const mergedIdentityPatient = { ...(currentPatient || {}), ...updatedData };
+    const hasNamePatch = Object.prototype.hasOwnProperty.call(updatedData || {}, 'name');
+    const preserveCurrentFullName = hasNamePatch && shouldPreservePatientFullName(currentPatient?.name, updatedData?.name);
+    const safeIdentityData = preserveCurrentFullName
+      ? { ...identityData, name: currentPatient?.name }
+      : identityData;
+    const mergedIdentityPatient = {
+      ...(currentPatient || {}),
+      ...updatedData,
+      ...(preserveCurrentFullName ? { name: currentPatient?.name } : {})
+    };
     const updatedInsuranceEligibility = normalizePatientInsuranceEligibility(mergedIdentityPatient, { useResponsibleFallback: true });
     const hasInsuranceEligibilityPatch = [
       'insuranceType',
@@ -4816,7 +4836,7 @@ export default function App() {
       if (Object.keys(identityData).length > 1) { // More than just 'id'
         setAllPatients(prev => prev.map(p => p.id === updatedData.id ? {
           ...p,
-          ...identityData,
+          ...safeIdentityData,
           ...(hasInsuranceEligibilityPatch
             ? {
                 insuranceType: updatedInsuranceEligibility.insuranceType,
@@ -4881,7 +4901,7 @@ export default function App() {
         }
       } else {
         const patientUpdatePayload = {
-          name: updatedData.name,
+          name: preserveCurrentFullName ? undefined : updatedData.name,
           socialName: updatedData.socialName || updatedData.nomeSocial,
           email: updatedData.email,
           phone: updatedData.phone,

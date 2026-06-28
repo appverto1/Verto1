@@ -213,6 +213,20 @@ import {
 
 const normalizeUtf8Text = (value: any) => String(value ?? "").normalize("NFC");
 
+const getPatientPhotoSource = (patient: any) =>
+  String(
+    patient?.profilePicture ||
+      patient?.profile_picture ||
+      patient?.profilePictureUrl ||
+      patient?.profile_picture_url ||
+      patient?.photoUrl ||
+      patient?.photo_url ||
+      ""
+  ).trim();
+
+const getPatientInitial = (patient: any) =>
+  (String(patient?.name || "P").trim().charAt(0) || "P").toUpperCase();
+
 interface CoordinatorDashboardProps {
   user: any;
   onLogout: () => void;
@@ -9155,8 +9169,13 @@ export function CoordinatorDashboard({
                         className="rounded-3xl border border-pink-100 bg-pink-50/50 p-5 shadow-sm"
                       >
                         <div className="flex items-center gap-3">
-                          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-lg font-black text-pink-600 shadow-sm">
-                            {(String(patient?.name || "P").trim().charAt(0) || "P").toUpperCase()}
+                          <div className="flex h-12 w-12 overflow-hidden items-center justify-center rounded-2xl bg-white text-lg font-black text-pink-600 shadow-sm">
+                            <SecureImage
+                              src={getPatientPhotoSource(patient)}
+                              alt={`Foto de ${normalizeUtf8Text(patient?.name || "Paciente")}`}
+                              className="h-full w-full object-cover"
+                              fallback={<span>{getPatientInitial(patient)}</span>}
+                            />
                           </div>
                           <div className="min-w-0">
                             <h4 className="truncate text-sm font-bold text-slate-900">
@@ -9305,8 +9324,13 @@ export function CoordinatorDashboard({
                       }`}
                     >
                       <div className="flex items-center gap-4 mb-4">
-                        <div className="w-10 h-10 sm:w-12 sm:h-12 bg-white rounded-2xl flex items-center justify-center font-bold text-slate-900 shadow-sm group-hover:scale-110 transition-transform">
-                          {(String(patient?.name || "P").trim().charAt(0) || "P").toUpperCase()}
+                        <div className="w-10 h-10 sm:w-12 sm:h-12 bg-white rounded-2xl overflow-hidden flex items-center justify-center font-bold text-slate-900 shadow-sm group-hover:scale-110 transition-transform">
+                          <SecureImage
+                            src={getPatientPhotoSource(patient)}
+                            alt={`Foto de ${normalizeUtf8Text(patient?.name || "Paciente")}`}
+                            className="h-full w-full object-cover"
+                            fallback={<span>{getPatientInitial(patient)}</span>}
+                          />
                         </div>
                         <div className="flex-1 min-w-0">
                           <h4 className="font-medium text-slate-900 truncate flex items-center gap-2">
@@ -11269,14 +11293,24 @@ export function CoordinatorDashboard({
             onClick={(e) => e.stopPropagation()}
           >
             <div className="mb-6 flex items-start justify-between gap-4">
-              <div>
-                <p className="text-[11px] font-black uppercase tracking-[0.18em] text-[#7a32fc]">Ver cadastro</p>
-                <h3 className="mt-1 text-2xl font-black text-slate-900">
-                  {selectedPatientProfile.name || "Paciente"}
-                </h3>
-                <p className="mt-1 text-sm font-medium text-slate-400">
-                  Visão operacional do cadastro, convênio, autorização TISS e plano financeiro.
-                </p>
+              <div className="flex min-w-0 items-start gap-3">
+                <div className="flex h-14 w-14 shrink-0 overflow-hidden items-center justify-center rounded-2xl bg-slate-100 text-lg font-black text-slate-700">
+                  <SecureImage
+                    src={getPatientPhotoSource(selectedPatientProfile)}
+                    alt={`Foto de ${normalizeUtf8Text(selectedPatientProfile?.name || "Paciente")}`}
+                    className="h-full w-full object-cover"
+                    fallback={<span>{getPatientInitial(selectedPatientProfile)}</span>}
+                  />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[11px] font-black uppercase tracking-[0.18em] text-[#7a32fc]">Ver cadastro</p>
+                  <h3 className="mt-1 truncate text-2xl font-black text-slate-900">
+                    {selectedPatientProfile.name || "Paciente"}
+                  </h3>
+                  <p className="mt-1 text-sm font-medium text-slate-400">
+                    Visão operacional do cadastro, convênio, autorização TISS e plano financeiro.
+                  </p>
+                </div>
               </div>
               <button
                 onClick={() => setIsPatientProfileModalOpen(false)}

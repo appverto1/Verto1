@@ -2951,6 +2951,15 @@ function extractPatientPhotosStoragePath(raw: unknown): string | null {
     const pathPart = value.slice('patient-photos/'.length);
     return pathPart ? pathPart : null;
   }
+  if (value.startsWith('/api/storage/patient-photos/view?')) {
+    try {
+      const params = new URLSearchParams(value.slice(value.indexOf('?') + 1));
+      const proxyPath = params.get('path') || '';
+      return proxyPath ? proxyPath : null;
+    } catch {
+      return null;
+    }
+  }
   if (value.startsWith('onboarding/')) return value;
   if (value.startsWith('patients/')) return value;
   if (!value.includes('://') && value.includes('/') && !value.startsWith('data:')) return value;
@@ -2971,6 +2980,42 @@ function buildPatientPhotoViewUrl(storagePath: unknown): string | null {
   const path = extractPatientPhotosStoragePath(storagePath);
   if (!path) return null;
   return `/api/storage/patient-photos/view?path=${encodeURIComponent(path)}`;
+}
+
+function normalizeCanonicalPatientName(value: unknown): string {
+  return sanitizeString(value, 180).replace(/\s+/g, ' ').trim();
+}
+
+function patientNameWordCount(value: unknown): number {
+  return normalizeCanonicalPatientName(value).split(/\s+/).filter(Boolean).length;
+}
+
+function shouldPreserveExistingPatientFullName(existingName: unknown, incomingName: unknown): boolean {
+  const current = normalizeCanonicalPatientName(existingName);
+  const incoming = normalizeCanonicalPatientName(incomingName);
+  if (!incoming) return Boolean(current);
+  if (!current) return false;
+  if (current.toLocaleLowerCase('pt-BR') === incoming.toLocaleLowerCase('pt-BR')) return false;
+  return patientNameWordCount(current) >= 2 && patientNameWordCount(incoming) <= 1;
+}
+
+function serializePatientMediaForClient(row: any) {
+  if (!row || typeof row !== 'object') return row;
+  const profilePicturePath =
+    extractPatientPhotosStoragePath(row?.profile_picture_path) ||
+    extractPatientPhotosStoragePath(row?.profilePicturePath) ||
+    extractPatientPhotosStoragePath(row?.profile_picture) ||
+    extractPatientPhotosStoragePath(row?.profilePicture);
+  const profilePicture = profilePicturePath
+    ? buildPatientPhotoViewUrl(profilePicturePath)
+    : sanitizeSessionUrl(row?.profile_picture || row?.profilePicture);
+  return {
+    ...row,
+    profile_picture: profilePicture || row?.profile_picture || null,
+    profilePicture: profilePicture || row?.profilePicture || null,
+    profile_picture_path: profilePicturePath || row?.profile_picture_path || null,
+    profilePicturePath: profilePicturePath || row?.profilePicturePath || null
+  };
 }
 
 async function resolvePatientPhotoUrl(rawUrl: unknown, rawPath?: unknown): Promise<string | null> {
@@ -12374,6 +12419,7 @@ async function startServer() {
                 name: profile.name,
                 sessionToken: issueSessionToken(sanitizeString(user.id, 120)),
                 profilePicture: await resolvePatientPhotoUrl(profile.profile_picture, (profile as any)?.profile_picture_path),
+                profilePicturePath: extractPatientPhotosStoragePath((profile as any)?.profile_picture_path || profile.profile_picture),
                 address: sanitizeString((profile as any)?.address || (profile as any)?.endereco, 320) || null,
                 type: profile.type || user.user_metadata?.type || null,
                 age: typeof profile.age === 'number' ? profile.age : null,
@@ -13724,6 +13770,7 @@ async function startServer() {
         name: profile.name,
         sessionToken: issueSessionToken(sanitizeString(user.id, 120)),
         profilePicture: await resolvePatientPhotoUrl(profile.profile_picture, (profile as any)?.profile_picture_path),
+        profilePicturePath: extractPatientPhotosStoragePath((profile as any)?.profile_picture_path || profile.profile_picture),
         address: sanitizeString((profile as any)?.address || (profile as any)?.endereco, 320) || null,
         type: profile.type || user.user_metadata?.type || null,
         age: typeof profile.age === 'number' ? profile.age : null,
@@ -14383,6 +14430,7 @@ async function startServer() {
         name: profile.name || authUser.user_metadata?.full_name || email.split('@')[0],
         sessionToken: issueSessionToken(sanitizeString(authUser.id, 120)),
         profilePicture: await resolvePatientPhotoUrl(profile.profile_picture, (profile as any)?.profile_picture_path),
+        profilePicturePath: extractPatientPhotosStoragePath((profile as any)?.profile_picture_path || profile.profile_picture),
         address: sanitizeString((profile as any)?.address || (profile as any)?.endereco, 320) || null,
         type: profile.type || authUser.user_metadata?.type || null,
         age: typeof profile.age === 'number' ? profile.age : null,
@@ -15005,6 +15053,7 @@ async function startServer() {
         name: profile.name,
         sessionToken: issueSessionToken(sanitizeString(user.id, 120)),
         profilePicture: await resolvePatientPhotoUrl(profile.profile_picture, (profile as any)?.profile_picture_path),
+        profilePicturePath: extractPatientPhotosStoragePath((profile as any)?.profile_picture_path || profile.profile_picture),
         address: sanitizeString((profile as any)?.address || (profile as any)?.endereco, 320) || null,
         type: profile.type || user.user_metadata?.type || null,
         age: typeof profile.age === 'number' ? profile.age : null,
@@ -17447,9 +17496,60 @@ async function startServer() {
         return res.status(401).json({ success: false, error: 'Sessão inválida.' });
       }
 
+      const requestedName = sanitizeString(req.body?.name, 180);
+      const requestedPatientId = sanitizeString(req.body?.patientId || req.body?.patient_id, 120);
+      let linkedPatientForProfile: any = null;
+      const activeClinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (isUuid(requestedPatientId)) {
+        const readLinkedPatient = (columns: string) => {
+          let query = supabase
+            .from('patients')
+            .select(columns)
+            .eq('id', requestedPatientId)
+            .eq('is_active', true)
+            .is('deleted_at', null);
+          if (isUuid(activeClinicId)) query = query.eq('clinic_id', activeClinicId);
+          return query.maybeSingle();
+        };
+        let linkedPatientResult = await readLinkedPatient('id, name, email, clinic_id, responsible_user_id');
+        if (linkedPatientResult.error && extractMissingColumnName(linkedPatientResult.error) === 'responsible_user_id') {
+          linkedPatientResult = await readLinkedPatient('id, name, email, clinic_id');
+        }
+        if (!linkedPatientResult.error && linkedPatientResult.data?.id) {
+          const patientEmailMatches = email && sanitizeEmail(linkedPatientResult.data.email) === email;
+          const responsibleMatches = sanitizeString(linkedPatientResult.data.responsible_user_id, 120) === userId;
+          if (patientEmailMatches || responsibleMatches) {
+            linkedPatientForProfile = linkedPatientResult.data;
+          } else {
+            return res.status(403).json({ success: false, error: 'Paciente não pertence a este acesso do portal.' });
+          }
+        } else if (linkedPatientResult.error && !isMissingRelationError(linkedPatientResult.error)) {
+          console.warn('[PatientProfile] linked patient id lookup warning:', linkedPatientResult.error?.message || String(linkedPatientResult.error));
+        }
+      }
+      if (!linkedPatientForProfile && email) {
+        let linkedPatientQuery = supabase
+          .from('patients')
+          .select('id, name, email, clinic_id')
+          .eq('email', email)
+          .eq('is_active', true)
+          .is('deleted_at', null)
+          .order('updated_at', { ascending: false })
+          .limit(1);
+        if (isUuid(activeClinicId)) linkedPatientQuery = linkedPatientQuery.eq('clinic_id', activeClinicId);
+        const { data: linkedPatient, error: linkedPatientError } = await linkedPatientQuery.maybeSingle();
+        if (!linkedPatientError && linkedPatient?.id) {
+          linkedPatientForProfile = linkedPatient;
+        } else if (linkedPatientError && !isMissingRelationError(linkedPatientError)) {
+          console.warn('[PatientProfile] linked patient lookup warning:', linkedPatientError?.message || String(linkedPatientError));
+        }
+      }
+      const linkedPatientName = normalizeCanonicalPatientName(linkedPatientForProfile?.name);
+      const preserveLinkedPatientName = shouldPreserveExistingPatientFullName(linkedPatientName, requestedName);
       const name =
-        sanitizeString(req.body?.name, 180) ||
+        (preserveLinkedPatientName ? linkedPatientName : requestedName) ||
         sanitizeString(req.session.user?.name, 180) ||
+        linkedPatientName ||
         'Paciente';
       const address = sanitizeString(req.body?.address || req.body?.endereco, 320) || null;
       const requestedProfilePicture =
@@ -17457,7 +17557,10 @@ async function startServer() {
         sanitizeSessionUrl(req.body?.profile_picture) ||
         sanitizeSessionUrl(req.session.user?.profilePicture) ||
         null;
-      const profilePicturePath = sanitizeString(req.body?.profilePicturePath || req.body?.profile_picture_path, 500) || null;
+      const profilePicturePath =
+        extractPatientPhotosStoragePath(req.body?.profilePicturePath || req.body?.profile_picture_path) ||
+        extractPatientPhotosStoragePath(requestedProfilePicture) ||
+        null;
       const profilePicture =
         (profilePicturePath ? await resolvePatientPhotoUrl(requestedProfilePicture, profilePicturePath) : null) ||
         requestedProfilePicture;
@@ -17472,15 +17575,22 @@ async function startServer() {
         updated_at: updatedAt
       });
 
-      if (email) {
-        await patchTableSafely('patients', { column: 'email', value: email }, {
-          name,
+      if (linkedPatientForProfile?.id || email) {
+        const patientProfilePatch = {
+          name: req.body?.name !== undefined ? name : undefined,
           address: address || undefined,
           endereco: address || undefined,
           profile_picture: profilePicture || undefined,
           profile_picture_path: profilePicturePath || undefined,
           updated_at: updatedAt
-        });
+        };
+        await patchTableSafely(
+          'patients',
+          linkedPatientForProfile?.id
+            ? { column: 'id', value: sanitizeString(linkedPatientForProfile.id, 120) }
+            : { column: 'email', value: email as string },
+          patientProfilePatch
+        );
       }
 
       try {
@@ -17502,7 +17612,8 @@ async function startServer() {
         ...req.session.user,
         name,
         address,
-        profilePicture
+        profilePicture,
+        profilePicturePath
       });
 
       await new Promise<void>((resolve, reject) => {
@@ -21505,7 +21616,7 @@ async function startServer() {
       const patients = isExplicitDemoUser(req.session.user)
         ? (result.data || []).filter((patient: any) => patient?.is_demo === true)
         : result.data || [];
-      res.json({ success: true, data: patients });
+      res.json({ success: true, data: patients.map(serializePatientMediaForClient) });
     } catch (error: any) {
       return sendRouteDbError(res, '/api/patients [GET]', error, {
         userId: sanitizeString(req.session?.user?.id, 120),
@@ -22213,6 +22324,50 @@ async function startServer() {
         !['READY_FOR_CARE', 'ANAMNESIS_REVIEWED'].includes(requestedOnboardingPatch)
           ? PATIENT_STATUS_PENDING_ANAMNESIS
           : requestedStatusPatch;
+      let currentPatientForNameGuard: any = null;
+      if (req.body?.name !== undefined) {
+        let currentPatientQuery = supabase
+          .from('patients')
+          .select('id, name, clinic_id, therapist_id')
+          .eq('id', req.params.id)
+          .eq('is_active', true)
+          .is('deleted_at', null);
+        if (!hasGlobalClinicAccess(req.session.user) && scopedClinicId) {
+          currentPatientQuery = currentPatientQuery.eq('clinic_id', scopedClinicId);
+        }
+        if (explicitDemoUser) {
+          currentPatientQuery = currentPatientQuery.eq('is_demo', true);
+        }
+        if (role === 'therapist') {
+          currentPatientQuery = currentPatientQuery.eq('therapist_id', sanitizeString(req.session.user?.id, 120));
+        }
+        const { data: currentPatientData, error: currentPatientError } = await currentPatientQuery.maybeSingle();
+        if (!currentPatientError) {
+          currentPatientForNameGuard = currentPatientData;
+        } else if (!isMissingRelationError(currentPatientError)) {
+          console.warn('[Patients] name guard lookup warning:', currentPatientError?.message || String(currentPatientError));
+        }
+      }
+      const requestedPatientName =
+        req.body?.name !== undefined ? normalizeCanonicalPatientName(req.body?.name) : undefined;
+      const preserveExistingFullName = req.body?.name !== undefined
+        ? shouldPreserveExistingPatientFullName(currentPatientForNameGuard?.name, requestedPatientName)
+        : false;
+      if (preserveExistingFullName) {
+        console.warn('[Patients] Preservando nome completo canônico contra payload curto.', {
+          patientId: sanitizeString(req.params.id, 120),
+          currentWords: patientNameWordCount(currentPatientForNameGuard?.name),
+          incomingWords: patientNameWordCount(requestedPatientName)
+        });
+      }
+      const rawProfilePicturePath = req.body?.profilePicturePath ?? req.body?.profile_picture_path;
+      const safeProfilePicturePath = rawProfilePicturePath !== undefined
+        ? extractPatientPhotosStoragePath(rawProfilePicturePath)
+        : undefined;
+      const safeProfilePicture =
+        req.body?.profilePicture !== undefined || req.body?.profile_picture !== undefined || safeProfilePicturePath !== undefined
+          ? await resolvePatientPhotoUrl(req.body?.profilePicture || req.body?.profile_picture, safeProfilePicturePath)
+          : undefined;
 
       const hasIdentityPersistencePatch = [
         'type',
@@ -22280,16 +22435,22 @@ async function startServer() {
         'address',
         'isMinor',
         'is_minor',
-        'menorDeIdade'
+        'menorDeIdade',
+        'profilePicture',
+        'profile_picture',
+        'profilePicturePath',
+        'profile_picture_path'
       ].some((key) => req.body?.[key] !== undefined);
       const updates = cleanObject({
-        name: req.body?.name !== undefined ? sanitizeString(req.body?.name, 160) : undefined,
+        name: req.body?.name !== undefined && !preserveExistingFullName ? (requestedPatientName || undefined) : undefined,
         email: safeEmail,
         phone: safePhone !== undefined ? safePhone : undefined,
         cpf: safeCpf !== undefined ? safeCpf : undefined,
         age: req.body?.age !== undefined ? asSafeNumber(req.body?.age, 0, 130) : undefined,
         diagnosis: req.body?.diagnosis !== undefined ? sanitizeString(req.body?.diagnosis, 2000) : undefined,
         ...(hasIdentityPersistencePatch ? buildPatientIdentityPersistenceFields(req.body) : {}),
+        profile_picture: safeProfilePicture !== undefined ? safeProfilePicture : undefined,
+        profile_picture_path: safeProfilePicturePath !== undefined ? safeProfilePicturePath : undefined,
         therapist_id:
           canAssignTherapist && rawTherapistId !== undefined
             ? (isUuid(safeTherapistId) ? safeTherapistId : null)

@@ -5527,6 +5527,7 @@ export const dataService = {
   },
 
   async updatePatientSelfProfile(profile: {
+    patientId?: string;
     name?: string;
     address?: string;
     profilePicture?: string | null;
