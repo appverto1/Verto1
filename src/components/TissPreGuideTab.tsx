@@ -526,7 +526,7 @@ function antiGlosaStatusMeta(status?: string | null) {
 
 function antiGlosaOperationalMeta(status?: string | null) {
   const normalized = String(status || "").trim();
-  if (normalized === "ready_for_xml") return { label: "Pronta para XML", className: "bg-emerald-50 text-emerald-700 ring-emerald-100" };
+  if (normalized === "ready_for_xml") return { label: "Pronta", className: "bg-emerald-50 text-emerald-700 ring-emerald-100" };
   if (normalized === "low_risk") return { label: "Risco baixo", className: "bg-sky-50 text-sky-700 ring-sky-100" };
   if (normalized === "medium_risk") return { label: "Risco médio", className: "bg-amber-50 text-amber-700 ring-amber-100" };
   return { label: "Bloqueada", className: "bg-rose-50 text-rose-700 ring-rose-100" };
@@ -536,23 +536,68 @@ function antiGlosaValidation(row: TissPreGuideRow) {
   return validateAntiGlosaForPreGuide({ preGuide: row as Record<string, any> });
 }
 
+function tissTechnicalMeta(status?: string | null) {
+  const normalized = String(status || "").trim();
+  if (normalized === "valid") return { label: "Válida", className: "bg-emerald-50 text-emerald-700 ring-emerald-100" };
+  if (normalized === "not_applicable" || normalized === "cancelled") return { label: "Bloqueada", className: "bg-rose-50 text-rose-700 ring-rose-100" };
+  return { label: "Com pendências", className: "bg-amber-50 text-amber-700 ring-amber-100" };
+}
+
+function xmlDecisionMeta(row: TissPreGuideRow, antiGlosa: ReturnType<typeof antiGlosaValidation>, blockReasons: string[]) {
+  if (row.officialDocumentId || row.snapshot?.officialDocumentId || row.snapshot?.officialDocument?.id) {
+    return { label: "Já vinculada a lote", className: "bg-indigo-50 text-indigo-700 ring-indigo-100", reason: "Esta Pré-guia já está em um XML oficial." };
+  }
+  if (blockReasons.length > 0 || !antiGlosa.canGenerateXml) {
+    return { label: "Não pode gerar", className: "bg-rose-50 text-rose-700 ring-rose-100", reason: blockReasons[0] || "Corrija os bloqueios antes do XML." };
+  }
+  if (antiGlosa.antiGlosaStatus === "medium_risk" || antiGlosa.antiGlosaStatus === "low_risk") {
+    return { label: "Pode gerar com alerta", className: "bg-amber-50 text-amber-700 ring-amber-100", reason: antiGlosa.issues[0]?.title || "Há alerta operacional anti-glosa." };
+  }
+  return { label: "Pode gerar", className: "bg-emerald-50 text-emerald-700 ring-emerald-100", reason: "Sem bloqueios para o XML." };
+}
+
+function primaryAntiGlosaIssueTitle(antiGlosa: ReturnType<typeof antiGlosaValidation>) {
+  return antiGlosa.issues.find((issue) => issue.severity === "blocking")?.title ||
+    antiGlosa.issues.find((issue) => issue.severity === "warning")?.title ||
+    antiGlosa.issues[0]?.title ||
+    "";
+}
+
+function CompactBadge({ label, className }: { label: string; className: string }) {
+  return (
+    <span className={`inline-flex max-w-full rounded-full px-2 py-1 text-xs font-medium ring-1 ${className}`}>
+      <span className="truncate">{label}</span>
+    </span>
+  );
+}
+
+function TruncatedText({ children, className = "", title }: { children: React.ReactNode; className?: string; title?: string }) {
+  return (
+    <div className={`min-w-0 truncate ${className}`} title={title}>
+      {children}
+    </div>
+  );
+}
+
 function Section({
   title,
   icon: Icon,
   children,
+  defaultOpen = false,
 }: {
   title: string;
   icon: React.ComponentType<{ size?: number; className?: string }>;
   children: React.ReactNode;
+  defaultOpen?: boolean;
 }) {
   return (
-    <section className="border-b border-slate-100 py-4 last:border-b-0">
-      <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-800">
+    <details className="border-b border-slate-100 py-3 last:border-b-0" open={defaultOpen}>
+      <summary className="flex cursor-pointer list-none items-center gap-2 text-sm font-semibold text-slate-800">
         <Icon size={16} className="text-indigo-600" />
         {title}
-      </div>
-      <div className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2">{children}</div>
-    </section>
+      </summary>
+      <div className="mt-3 grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2">{children}</div>
+    </details>
   );
 }
 
@@ -1544,7 +1589,22 @@ export function TissPreGuideTab({
     }
     return Array.from(groups.entries()).map(([category, items]) => ({ category, items }));
   }, [antiGlosaItems]);
-  const detailStatus = statusMeta[String(detail?.status || "draft")] || statusMeta.draft;
+  const detailTissTechnicalMeta = tissTechnicalMeta(detail?.status);
+  const detailOfficialBlockReasons = detail ? officialPreGuideBlockReasons(detail, competenceMonth) : [];
+  const detailXmlDecisionMeta = detail ? xmlDecisionMeta(detail, antiGlosaOperational, detailOfficialBlockReasons) : xmlDecisionMeta({} as TissPreGuideRow, antiGlosaOperational, []);
+  const detailAntiGlosaIssues = antiGlosaOperational.issues || [];
+  const detailBlockingAntiGlosaIssues = detailAntiGlosaIssues.filter((issue) => issue.severity === "blocking");
+  const detailWarningAntiGlosaIssues = detailAntiGlosaIssues.filter((issue) => issue.severity !== "blocking");
+  const openChecklistItems = antiGlosaItems.filter((item: any) => item.status === "blocking" || item.status === "attention");
+  const hiddenChecklistItems = antiGlosaItems.filter((item: any) => item.status === "ok" || item.status === "not_applicable");
+  const openAntiGlosaGroups = antiGlosaGroups
+    .map((group) => ({ ...group, items: group.items.filter((item: any) => item.status === "blocking" || item.status === "attention") }))
+    .filter((group) => group.items.length > 0);
+  const hiddenAntiGlosaGroups = antiGlosaGroups
+    .map((group) => ({ ...group, items: group.items.filter((item: any) => item.status === "ok" || item.status === "not_applicable") }))
+    .filter((group) => group.items.length > 0);
+  const checklistOkCount = Number(antiGlosaChecklist.okCount || hiddenChecklistItems.filter((item: any) => item.status === "ok").length || 0);
+  const checklistNotApplicableCount = Number(antiGlosaChecklist.notApplicableCount || hiddenChecklistItems.filter((item: any) => item.status === "not_applicable").length || 0);
   const detailRevenueCycleMeta = revenueCycleMeta(detail?.revenueCycleState || detail?.snapshot?.revenueCycle?.state);
   const detailRevenueCycleReason = detail?.revenueCycleStateReason || detail?.snapshot?.revenueCycle?.reason || "Estado operacional calculado pela validação da Pré-guia.";
   const nextRevenueAction = (() => {
@@ -1668,21 +1728,10 @@ export function TissPreGuideTab({
     const className = tone === "error"
       ? "rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800"
       : "rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sky-800";
-    const buttonClassName = tone === "error"
-      ? "mt-2 inline-flex rounded-md border border-amber-300 bg-white px-3 py-1.5 text-xs font-bold text-amber-900 hover:bg-amber-100"
-      : "mt-2 inline-flex rounded-md border border-sky-300 bg-white px-3 py-1.5 text-xs font-bold text-sky-900 hover:bg-sky-100";
     return (
       <div key={`${tone}-${item.code}-${index}`} className={className}>
         <div>{item.message || issueLabel(String(item.code || ""))}</div>
-        {issueAction ? (
-          <button
-            type="button"
-            onClick={issueAction.onClick}
-            className={buttonClassName}
-          >
-            {issueAction.label}
-          </button>
-        ) : null}
+        {issueAction ? <div className="mt-2 text-xs font-semibold">Ação recomendada: {issueAction.label}</div> : null}
       </div>
     );
   };
@@ -1899,34 +1948,30 @@ export function TissPreGuideTab({
             </button>
           </div>
         </div>
-        <div className="max-h-[70vh] overflow-auto">
-          <table className="min-w-[1700px] divide-y divide-slate-200 text-sm">
+        <div className="max-h-[70vh] overflow-x-auto overflow-y-auto">
+          <table className="min-w-[1320px] table-fixed divide-y divide-slate-200 text-sm">
             <thead className="sticky top-0 z-20 bg-slate-50 text-left text-xs font-semibold uppercase text-slate-500 shadow-[0_1px_0_0_rgba(148,163,184,0.35)]">
               <tr>
-                <th className="px-4 py-3">Lote</th>
-                <th className="px-4 py-3">Data/hora</th>
-                <th className="px-4 py-3">Paciente</th>
-                <th className="px-4 py-3">Pagador</th>
-                <th className="px-4 py-3">Guia</th>
-                <th className="px-4 py-3">Autorização</th>
-                <th className="px-4 py-3">Profissional</th>
-                <th className="px-4 py-3">Registro/CBO</th>
-                <th className="px-4 py-3">Procedimento</th>
-                <th className="px-4 py-3">TUSS</th>
-                <th className="px-4 py-3">Quantidade</th>
-                <th className="px-4 py-3">Valor</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Estado do ciclo</th>
-                <th className="px-4 py-3">Pendências TISS</th>
-                <th className="px-4 py-3 text-right">Ações</th>
+                <th className="w-[72px] px-3 py-3">Seleção</th>
+                <th className="w-[132px] px-3 py-3">Data/hora</th>
+                <th className="w-[180px] px-3 py-3">Paciente</th>
+                <th className="w-[128px] px-3 py-3">Pagador</th>
+                <th className="w-[118px] px-3 py-3">Guia</th>
+                <th className="w-[130px] px-3 py-3">Autorização</th>
+                <th className="w-[220px] px-3 py-3">Procedimento/TUSS</th>
+                <th className="w-[96px] px-3 py-3">Valor</th>
+                <th className="w-[118px] px-3 py-3">TISS técnico</th>
+                <th className="w-[154px] px-3 py-3">Anti-glosa</th>
+                <th className="w-[154px] px-3 py-3">XML</th>
+                <th className="w-[112px] px-3 py-3 text-right">Ações</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loading ? (
-                <tr><td colSpan={16} className="px-4 py-12 text-center text-slate-500"><Loader2 size={20} className="mx-auto mb-2 animate-spin" />Carregando Pré-guias TISS</td></tr>
+                <tr><td colSpan={12} className="px-4 py-12 text-center text-slate-500"><Loader2 size={20} className="mx-auto mb-2 animate-spin" />Carregando Pré-guias TISS</td></tr>
               ) : rows.length === 0 ? (
                 <tr>
-                  <td colSpan={16} className="px-4 py-12 text-center">
+                  <td colSpan={12} className="px-4 py-12 text-center">
                     {quickFilter ? (
                       <div className="text-sm text-slate-500">Nenhuma Pré-guia encontrada para este filtro.</div>
                     ) : eligibleForPreGuide === 0 ? (
@@ -1955,19 +2000,18 @@ export function TissPreGuideTab({
                   </td>
                 </tr>
               ) : rows.map((row) => {
-                const meta = statusMeta[String(row.status || "draft")] || statusMeta.draft;
-                const cycleMeta = revenueCycleMeta(row.revenueCycleState || row.snapshot?.revenueCycle?.state);
-                const codes = Array.isArray(row.validationErrorCodes) ? row.validationErrorCodes : [];
                 const busy = revalidatingId === row.appointmentId;
-                const professionalSnapshot = row.snapshot?.professional || {};
                 const officialBlockReasons = officialPreGuideBlockReasons(row, competenceMonth);
                 const canSelectForOfficial = officialBlockReasons.length === 0;
                 const selectedForOfficial = Boolean(row.id && selectedOfficialIdSet.has(row.id));
                 const antiGlosa = antiGlosaValidation(row);
                 const antiGlosaMeta = antiGlosaOperationalMeta(antiGlosa.antiGlosaStatus);
+                const tissMeta = tissTechnicalMeta(row.status);
+                const xmlMeta = xmlDecisionMeta(row, antiGlosa, officialBlockReasons);
+                const antiGlosaIssue = primaryAntiGlosaIssueTitle(antiGlosa);
                 return (
-                  <tr key={row.id || row.appointmentId} className="align-top hover:bg-slate-50/70">
-                    <td className="px-4 py-3">
+                  <tr key={row.id || row.appointmentId} className="h-[72px] align-middle hover:bg-slate-50/70">
+                    <td className="px-3 py-3">
                       <label className="inline-flex items-center gap-2">
                         <input
                           type="checkbox"
@@ -1978,60 +2022,56 @@ export function TissPreGuideTab({
                           aria-label={canSelectForOfficial ? "Incluir Pré-guia no lote XML" : `Pré-guia bloqueada: ${officialBlockReasons.join("; ")}`}
                           className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 disabled:opacity-40"
                         />
-                        {!canSelectForOfficial && (
-                          <span className="max-w-[120px] text-xs text-amber-700" title={officialBlockReasons.join("; ")}>
-                            Bloqueada
-                          </span>
-                        )}
                       </label>
                       {!canSelectForOfficial && (
-                        <div className="mt-1 max-w-[160px] truncate text-xs text-slate-500" title={officialBlockReasons.join("; ")}>
+                        <div className="mt-1 max-w-[56px] truncate text-xs text-amber-700" title={officialBlockReasons.join("; ")}>
                           {officialBlockReasons[0]}
                         </div>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-slate-700">{formatDate(row.scheduledStart)}</td>
-                    <td className="px-4 py-3 font-medium text-slate-800">{fieldValue(row.patientName, "Paciente")}</td>
-                    <td className="px-4 py-3 text-slate-600">{fieldValue(row.payerName, "Sem pagador")}</td>
-                    <td className="px-4 py-3 text-slate-600">{fieldValue(row.guideNumber)}</td>
-                    <td className="px-4 py-3 text-slate-600">{fieldValue(row.authorizationCode)}</td>
-                    <td className="px-4 py-3 text-slate-600">{executantValue(row.professionalName)}</td>
-                    <td className="px-4 py-3 text-slate-600">
-                      <div>{[professionalSnapshot.councilType, professionalSnapshot.councilNumber].filter(Boolean).join(" ") || "Registro não informado"}</div>
-                      <div className="mt-1 text-xs text-slate-500">CBO: {fieldValue(professionalSnapshot.cboCode)}</div>
+                    <td className="px-3 py-3 text-slate-700">
+                      <TruncatedText title={formatDate(row.scheduledStart)}>{formatDate(row.scheduledStart)}</TruncatedText>
                     </td>
-                    <td className="px-4 py-3 text-slate-600">{fieldValue(row.internalProcedureName)}</td>
-                    <td className="px-4 py-3 text-slate-600">
-                      <div className="font-medium text-slate-700">{fieldValue(row.tussCode)}</div>
-                      {row.tussDescription && <div className="mt-1 max-w-[180px] truncate text-xs text-slate-500">{row.tussDescription}</div>}
+                    <td className="px-3 py-3 font-medium text-slate-800">
+                      <TruncatedText title={fieldValue(row.patientName, "Paciente")}>{fieldValue(row.patientName, "Paciente")}</TruncatedText>
                     </td>
-                    <td className="px-4 py-3 text-slate-600">{row.quantity || 0} {row.unit || ""}</td>
-                    <td className="px-4 py-3 font-medium text-slate-800">{formatCurrency(row.totalAmountCents)}</td>
-                    <td className="px-4 py-3">
-                      <span className={`inline-flex rounded-full px-2 py-1 text-xs font-medium ring-1 ${meta.className}`}>{meta.label}</span>
+                    <td className="px-3 py-3 text-slate-600">
+                      <TruncatedText title={fieldValue(row.payerName, "Sem pagador")}>{fieldValue(row.payerName, "Sem pagador")}</TruncatedText>
+                    </td>
+                    <td className="px-3 py-3 text-slate-600">
+                      <TruncatedText title={fieldValue(row.guideNumber)}>{fieldValue(row.guideNumber)}</TruncatedText>
+                    </td>
+                    <td className="px-3 py-3 text-slate-600">
+                      <TruncatedText title={fieldValue(row.authorizationCode)}>{fieldValue(row.authorizationCode)}</TruncatedText>
+                    </td>
+                    <td className="px-3 py-3 text-slate-600">
+                      <TruncatedText className="font-medium text-slate-700" title={fieldValue(row.internalProcedureName)}>
+                        {fieldValue(row.internalProcedureName)}
+                      </TruncatedText>
+                      <TruncatedText className="mt-1 text-xs text-slate-500" title={[row.tussCode, row.tussDescription].filter(Boolean).join(" - ")}>
+                        TUSS {fieldValue(row.tussCode)}
+                      </TruncatedText>
+                    </td>
+                    <td className="px-3 py-3 font-medium text-slate-800">{formatCurrency(row.totalAmountCents)}</td>
+                    <td className="px-3 py-3">
+                      <CompactBadge label={tissMeta.label} className={tissMeta.className} />
                       {row.staleReason && <div className="mt-1 text-xs text-amber-700">Revalidação necessária</div>}
                     </td>
-                    <td className="px-4 py-3">
-                      <span className={`inline-flex rounded-full px-2 py-1 text-xs font-medium ring-1 ${cycleMeta.className}`}>{cycleMeta.label}</span>
-                      {(row.revenueCycleStateReason || row.snapshot?.revenueCycle?.reason) && (
-                        <div className="mt-1 max-w-[220px] text-xs text-slate-500">{row.revenueCycleStateReason || row.snapshot?.revenueCycle?.reason}</div>
+                    <td className="px-3 py-3">
+                      <CompactBadge label={antiGlosaMeta.label} className={antiGlosaMeta.className} />
+                      {antiGlosaIssue && (
+                        <TruncatedText className="mt-1 text-xs text-slate-500" title={antiGlosaIssue}>
+                          {antiGlosaIssue}
+                        </TruncatedText>
                       )}
                     </td>
-                    <td className="max-w-[280px] px-4 py-3">
-                      <div className="flex flex-wrap gap-1">
-                        <span className={`rounded-full px-2 py-1 text-xs ring-1 ${antiGlosaMeta.className}`}>
-                          Anti-glosa: {antiGlosaMeta.label}
-                        </span>
-                        {codes.length === 0 ? (
-                          <span className="rounded-full bg-emerald-50 px-2 py-1 text-xs text-emerald-700">
-                            {String(row.status || "") === "valid" ? "Pronta" : "Sem pendência"}
-                          </span>
-                        ) : codes.slice(0, 4).map((code) => (
-                          <span key={code} className="rounded-full bg-amber-50 px-2 py-1 text-xs text-amber-700 ring-1 ring-amber-100">{issueLabel(code)}</span>
-                        ))}
-                      </div>
+                    <td className="px-3 py-3">
+                      <CompactBadge label={xmlMeta.label} className={xmlMeta.className} />
+                      <TruncatedText className="mt-1 text-xs text-slate-500" title={xmlMeta.reason}>
+                        {xmlMeta.reason}
+                      </TruncatedText>
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-3">
                       <div className="flex justify-end gap-2">
                         <button type="button" onClick={() => void openDetail(row)} title="Ver Pré-guia" className="rounded-md border border-slate-200 p-2 text-slate-600 hover:bg-white"><FileSearch size={16} /></button>
                         <button type="button" onClick={() => void revalidate(row)} disabled={busy} title="Revalidar Pré-guia" className="rounded-md border border-slate-200 p-2 text-indigo-700 hover:bg-white disabled:opacity-60">
@@ -2955,23 +2995,98 @@ export function TissPreGuideTab({
 
       {detail && (
         <div className="fixed inset-0 z-[140] flex items-end justify-center bg-slate-950/45 p-4 sm:items-center" role="dialog" aria-modal="true" aria-label="Pré-guia TISS">
-          <div className="max-h-[92vh] w-full max-w-4xl overflow-hidden rounded-lg bg-white shadow-xl">
+          <div className="flex max-h-[92vh] w-full max-w-4xl flex-col overflow-hidden rounded-lg bg-white shadow-xl">
             <header className="flex items-start justify-between border-b border-slate-200 px-5 py-4">
               <div>
                 <div className="flex items-center gap-2">
                   <h2 className="text-lg font-semibold text-slate-900">Pré-guia TISS</h2>
-                  <span className={`rounded-full px-2 py-1 text-xs font-medium ring-1 ${detailStatus.className}`}>{detailStatus.label}</span>
+                  <CompactBadge label={`TISS: ${detailTissTechnicalMeta.label}`} className={detailTissTechnicalMeta.className} />
                 </div>
                 <div className="mt-1 text-sm text-slate-500">{fieldValue(detail.patientName, "Paciente")} · {formatDate(detail.scheduledStart)}</div>
               </div>
               <button type="button" onClick={() => setDetail(null)} className="rounded-md p-2 text-slate-500 hover:bg-slate-100" aria-label="Fechar Pré-guia"><X size={18} /></button>
             </header>
 
-            <div className="max-h-[calc(92vh-76px)] overflow-y-auto px-5 pb-24 sm:pb-6">
+            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
               {detailLoading ? (
                 <div className="py-16 text-center text-sm text-slate-500"><Loader2 className="mx-auto mb-2 animate-spin" size={20} />Carregando dados da Pré-guia</div>
               ) : (
                 <>
+                  <section className="rounded-lg border border-slate-200 bg-slate-50/70 px-4 py-3">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold text-slate-900">Resumo da Pré-guia</div>
+                        <div className="mt-1 text-xs text-slate-500">Dados principais para decidir se a guia pode entrar no XML.</div>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <CompactBadge label={`TISS: ${detailTissTechnicalMeta.label}`} className={detailTissTechnicalMeta.className} />
+                        <CompactBadge label={`Anti-glosa: ${antiGlosaOperationalStatus.label}`} className={antiGlosaOperationalStatus.className} />
+                        <CompactBadge label={`XML: ${detailXmlDecisionMeta.label}`} className={detailXmlDecisionMeta.className} />
+                      </div>
+                    </div>
+                    <div className="mt-3 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
+                      <DetailField label="Paciente" value={fieldValue(snapshot.beneficiary?.name || detail.patientName)} />
+                      <DetailField label="Data/hora" value={formatDate(detail.scheduledStart)} />
+                      <DetailField label="Pagador" value={fieldValue(snapshot.payer?.name || detail.payerName, "Sem pagador")} />
+                      <DetailField label="Valor" value={formatCurrency(detail.totalAmountCents || snapshot.procedure?.totalAmountCents)} />
+                      <DetailField label="Guia" value={fieldValue(snapshot.authorization?.guideNumber || detail.guideNumber)} />
+                      <DetailField label="Senha" value={fieldValue(snapshot.authorization?.authorizationCode || detail.authorizationCode)} />
+                      <DetailField label="TUSS" value={fieldValue(snapshot.procedure?.tussCode || detail.tussCode)} />
+                      <DetailField label="Procedimento" value={fieldValue(snapshot.procedure?.name || detail.internalProcedureName)} />
+                    </div>
+                  </section>
+
+                  <section className={`mt-3 rounded-lg border px-4 py-3 ${
+                    detailXmlDecisionMeta.label === "Não pode gerar"
+                      ? "border-rose-200 bg-rose-50"
+                      : detailXmlDecisionMeta.label === "Pode gerar com alerta"
+                        ? "border-amber-200 bg-amber-50"
+                        : "border-emerald-200 bg-emerald-50"
+                  }`}>
+                    <div className="text-sm font-semibold text-slate-900">Decisão XML</div>
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
+                      <CompactBadge label={detailXmlDecisionMeta.label} className={detailXmlDecisionMeta.className} />
+                      <span className="text-slate-700">{detailXmlDecisionMeta.reason}</span>
+                    </div>
+                  </section>
+
+                  <section className="mt-3 grid gap-3 lg:grid-cols-2">
+                    <div className="rounded-lg border border-rose-100 bg-white px-4 py-3">
+                      <div className="text-sm font-semibold text-slate-900">Bloqueios</div>
+                      {detailBlockingAntiGlosaIssues.length === 0 && errors.length === 0 ? (
+                        <div className="mt-2 text-sm text-slate-500">Nenhum bloqueio encontrado.</div>
+                      ) : (
+                        <div className="mt-2 space-y-2">
+                          {detailBlockingAntiGlosaIssues.map((issue) => (
+                            <div key={`${issue.code}-${issue.fieldPath || ""}`} className="rounded-md border border-rose-100 bg-rose-50 px-3 py-2 text-sm text-rose-800">
+                              <div className="font-semibold">{issue.title}</div>
+                              {issue.description && <div className="mt-1 text-xs">{issue.description}</div>}
+                              {issue.recommendedAction && <div className="mt-2 text-xs font-semibold">Como corrigir: {issue.recommendedAction}</div>}
+                            </div>
+                          ))}
+                          {errors.map((item, index) => renderValidationIssue(item, index, "error"))}
+                        </div>
+                      )}
+                    </div>
+                    <div className="rounded-lg border border-amber-100 bg-white px-4 py-3">
+                      <div className="text-sm font-semibold text-slate-900">Alertas anti-glosa</div>
+                      {detailWarningAntiGlosaIssues.length === 0 && warnings.length === 0 ? (
+                        <div className="mt-2 text-sm text-slate-500">Nenhum alerta operacional encontrado.</div>
+                      ) : (
+                        <div className="mt-2 space-y-2">
+                          {detailWarningAntiGlosaIssues.map((issue) => (
+                            <div key={`${issue.code}-${issue.fieldPath || ""}`} className="rounded-md border border-amber-100 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                              <div className="font-semibold">{issue.title}</div>
+                              {issue.description && <div className="mt-1 text-xs">{issue.description}</div>}
+                              {issue.recommendedAction && <div className="mt-2 text-xs font-semibold">Como corrigir: {issue.recommendedAction}</div>}
+                            </div>
+                          ))}
+                          {warnings.map((item, index) => renderValidationIssue(item, index, "warning"))}
+                        </div>
+                      )}
+                    </div>
+                  </section>
+
                   <Section title="Beneficiário / paciente" icon={UserRound}>
                     <DetailField label="Nome" value={fieldValue(snapshot.beneficiary?.name || detail.patientName)} />
                     <DetailField label="Carteirinha" value={fieldValue(snapshot.beneficiary?.cardNumber || detail.beneficiaryCardNumber)} />
@@ -3087,7 +3202,7 @@ export function TissPreGuideTab({
                     </div>
                   </Section>
 
-                  <Section title="Checklist antiglosa" icon={ShieldAlert}>
+                  <Section title={`Checklist anti-glosa · ${Number(antiGlosaOperational.blockingIssuesCount || 0)} bloqueios · ${Number(antiGlosaOperational.warningIssuesCount || 0)} alertas · ${checklistOkCount} OK · ${checklistNotApplicableCount} não aplicáveis`} icon={ShieldAlert}>
                     <div className="sm:col-span-2">
                       <div className={`mb-3 rounded-md border px-3 py-2 text-sm ${antiGlosaReady ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-rose-200 bg-rose-50 text-rose-800"}`}>
                         <div className="flex flex-wrap items-center gap-2">
@@ -3107,7 +3222,6 @@ export function TissPreGuideTab({
                               <div className="font-medium text-slate-800">{issue.title}</div>
                               <div className="mt-1 text-xs text-slate-500">Impacto: {issue.severity === "blocking" ? "Bloqueia envio para esta operadora" : "Risco operacional de glosa"}</div>
                               {issue.recommendedAction && <div className="mt-1 text-xs text-slate-700">Como corrigir: {issue.recommendedAction}</div>}
-                              {issue.fieldPath && <div className="mt-1 text-[11px] text-slate-400">Campo: {issue.fieldPath}</div>}
                             </div>
                           ))}
                         </div>
@@ -3124,9 +3238,9 @@ export function TissPreGuideTab({
                           {Number(antiGlosaChecklist.okCount || 0)} OK · {Number(antiGlosaChecklist.blockingCount || 0)} bloqueante(s) · {Number(antiGlosaChecklist.attentionCount || 0)} atenção · {Number(antiGlosaChecklist.notApplicableCount || 0)} não aplicável(is)
                         </div>
                       </div>
-                      {antiGlosaGroups.length > 0 ? (
+                      {openAntiGlosaGroups.length > 0 ? (
                         <div className="mt-3 space-y-3">
-                          {antiGlosaGroups.map((group) => (
+                          {openAntiGlosaGroups.map((group) => (
                             <div key={group.category} className="rounded-md border border-slate-200 bg-white">
                               <div className="border-b border-slate-100 px-3 py-2 text-xs font-semibold uppercase text-slate-500">
                                 {antiGlosaCategoryLabel(group.category)}
@@ -3161,10 +3275,43 @@ export function TissPreGuideTab({
                             </div>
                           ))}
                         </div>
+                      ) : hiddenChecklistItems.length > 0 ? (
+                        <div className="mt-3 rounded-md border border-emerald-100 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+                          Nenhum bloqueio ou alerta no checklist detalhado.
+                        </div>
                       ) : (
                         <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
                           Checklist antiglosa ainda não materializado. Revalide a Pré-guia para atualizar.
                         </div>
+                      )}
+                      {hiddenAntiGlosaGroups.length > 0 && (
+                        <details className="mt-3 rounded-md border border-slate-200 bg-white">
+                          <summary className="cursor-pointer px-3 py-2 text-sm font-semibold text-slate-700">
+                            Ver itens OK e não aplicáveis ({hiddenChecklistItems.length})
+                          </summary>
+                          <div className="space-y-3 border-t border-slate-100 p-3">
+                            {hiddenAntiGlosaGroups.map((group) => (
+                              <div key={`hidden-${group.category}`} className="rounded-md border border-slate-200 bg-white">
+                                <div className="border-b border-slate-100 px-3 py-2 text-xs font-semibold uppercase text-slate-500">
+                                  {antiGlosaCategoryLabel(group.category)}
+                                </div>
+                                <div className="grid gap-2 p-3 sm:grid-cols-2">
+                                  {group.items.map((item: any) => {
+                                    const meta = antiGlosaStatusMeta(item.status);
+                                    return (
+                                      <div key={item.code} className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                                        <div className="flex items-start justify-between gap-2">
+                                          <div className="font-medium text-slate-800">{fieldValue(item.label, "Item anti-glosa")}</div>
+                                          <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ${meta.className}`}>{meta.label}</span>
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </details>
                       )}
                     </div>
                   </Section>
@@ -3175,22 +3322,24 @@ export function TissPreGuideTab({
                       : "Esta é uma pré-guia para validação interna. XML TISS ainda não foi gerado. O documento oficial validado também não foi gerado."}
                   </div>
 
-                  <div className="mt-4 flex flex-wrap justify-end gap-2">
-                    <button type="button" onClick={() => void openProfileEditor("provider")} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">Editar Dados da clínica</button>
-                    <button type="button" onClick={() => void openProfileEditor("payer")} disabled={!detail.payerId} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-40">Editar perfil TISS do pagador</button>
-                    <button type="button" onClick={() => void openProfileEditor("professional")} disabled={!detail.professionalId} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-40">Editar perfil faturável do profissional</button>
-                    {authorizationFooterActionLabel && (
-                      <button type="button" onClick={() => void openAuthorizationEditor()} disabled={!detail.patientId || !detail.payerId} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-40">{authorizationFooterActionLabel}</button>
-                    )}
-                    <button type="button" onClick={() => openAppointment(detail)} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">Ir para atendimento</button>
-                    <button type="button" onClick={() => void revalidate(detail)} disabled={revalidatingId === detail.appointmentId} className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-60">
-                      {revalidatingId === detail.appointmentId ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
-                      Revalidar pré-guia
-                    </button>
-                  </div>
                 </>
               )}
             </div>
+            {!detailLoading && (
+              <footer className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 bg-white px-5 py-3">
+                <button type="button" onClick={() => void openProfileEditor("provider")} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">Editar dados da clínica</button>
+                <button type="button" onClick={() => void openProfileEditor("payer")} disabled={!detail.payerId} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-40">Editar perfil TISS do pagador</button>
+                <button type="button" onClick={() => void openProfileEditor("professional")} disabled={!detail.professionalId} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-40">Editar profissional</button>
+                {authorizationFooterActionLabel && (
+                  <button type="button" onClick={() => void openAuthorizationEditor()} disabled={!detail.patientId || !detail.payerId} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-40">{authorizationFooterActionLabel}</button>
+                )}
+                <button type="button" onClick={() => openAppointment(detail)} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">Ir para atendimento</button>
+                <button type="button" onClick={() => void revalidate(detail)} disabled={revalidatingId === detail.appointmentId} className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-60">
+                  {revalidatingId === detail.appointmentId ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
+                  Revalidar pré-guia
+                </button>
+              </footer>
+            )}
           </div>
         </div>
       )}

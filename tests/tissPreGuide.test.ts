@@ -1896,7 +1896,7 @@ test('frontend separa Pré-guias e Rascunhos XML com preview interno', () => {
   assert.match(preGuideUiCode, /hasAuthorizationSnapshot/);
   assert.match(preGuideUiCode, /Editar autorização/);
   assert.match(preGuideUiCode, /Pronta/);
-  assert.match(preGuideUiCode, /professionalSnapshot\.cboCode/);
+  assert.match(preGuideUiCode, /snapshot\.professional\?\.cboCode/);
   assert.match(preGuideUiCode, /missing_authorization/);
   assert.match(preGuideUiCode, /authorization_expired/);
   assert.match(preGuideUiCode, /missing_card/);
@@ -1927,7 +1927,7 @@ test('frontend separa Pré-guias e Rascunhos XML com preview interno', () => {
   assert.match(preGuideUiCode, /dataService\.createTissBillingBatchDraft/);
   assert.match(preGuideUiCode, /dataService\.cancelTissBillingBatchDraft/);
   assert.match(preGuideUiCode, /Nenhum lote foi enviado/);
-  assert.match(preGuideUiCode, /Estado do ciclo/);
+  assert.match(preGuideUiCode, /Ciclo de receita/);
   assert.match(preGuideUiCode, /revenueCycleMeta/);
   assert.match(preGuideUiCode, /Pronta para faturamento/);
   assert.match(preGuideUiCode, /Com pend/);
@@ -1966,7 +1966,7 @@ test('frontend separa Pré-guias e Rascunhos XML com preview interno', () => {
   assert.match(preGuideUiCode, /isAuthorizationIssue/);
   assert.match(preGuideUiCode, /resolveIssueAction/);
   assert.match(preGuideUiCode, /authorizationActionLabel/);
-  assert.match(preGuideUiCode, /onClick=\{issueAction\.onClick\}/);
+  assert.match(preGuideUiCode, /Ação recomendada: \{issueAction\.label\}/);
   assert.match(preGuideUiCode, /Salvar autorização e revalidar/);
   assert.match(preGuideUiCode, /Procedimento autorizado/);
   assert.match(preGuideUiCode, /Usar código autorizado diferente/);
@@ -1976,12 +1976,12 @@ test('frontend separa Pré-guias e Rascunhos XML com preview interno', () => {
   assert.doesNotMatch(preGuideUiCode, /EditorField label="Procedimento\/TUSS autorizado"/);
   assert.match(preGuideUiCode, /Quantidade autorizada/);
   assert.match(preGuideUiCode, /Unidade autorizada/);
-  assert.match(preGuideUiCode, /Editar Dados da clínica/);
+  assert.match(preGuideUiCode, /Editar dados da clínica/);
   assert.match(preGuideUiCode, /Editar perfil TISS do pagador/);
   assert.match(preGuideUiCode, /Configurar convênio/);
   assert.match(preGuideUiCode, /onNavigatePayers/);
   assert.match(preGuideUiCode, /Abrir Convênios/);
-  assert.match(preGuideUiCode, /Editar perfil faturável do profissional/);
+  assert.match(preGuideUiCode, /Editar profissional/);
   assert.match(preGuideUiCode, /RESPONSIBLE_SIGNATURE_REQUIRED:\s*"Assinatura do responsável"/);
   assert.match(preGuideUiCode, /<Section title="Assinatura" icon=\{ClipboardCheck\}>/);
   assert.match(preGuideUiCode, /Data\/hora da assinatura/);
@@ -1991,10 +1991,14 @@ test('frontend separa Pré-guias e Rascunhos XML com preview interno', () => {
   assert.match(preGuideUiCode, /revenueCycleEventLabel/);
   assert.match(preGuideUiCode, /Última validação/);
   assert.match(preGuideUiCode, /Próxima ação sugerida/);
-  assert.match(preGuideUiCode, /Checklist antiglosa/);
+  assert.match(preGuideUiCode, /Checklist anti-glosa/);
   assert.match(preGuideUiCode, /validateAntiGlosaForPreGuide/);
   assert.match(preGuideUiCode, /Anti-glosa:/);
-  assert.match(preGuideUiCode, /Pronta para XML/);
+  assert.match(preGuideUiCode, /Pode gerar com alerta/);
+  assert.match(preGuideUiCode, /TISS técnico/);
+  assert.match(preGuideUiCode, /XML:/);
+  assert.match(preGuideUiCode, /Ver itens OK e não aplicáveis/);
+  assert.doesNotMatch(preGuideUiCode, /Pronta para XML/);
   assert.match(preGuideUiCode, /Risco m/);
   assert.match(preGuideUiCode, /Bloqueadas fora do lote/);
   assert.match(serverCode, /TISS_OFFICIAL_ANTI_GLOSA_BLOCKED/);
@@ -2049,6 +2053,41 @@ test('frontend separa Pré-guias e Rascunhos XML com preview interno', () => {
   assert.match(preGuideUiCode, /Use a ação primária acima para gerar\/revalidar o período/);
   assert.match(preGuideUiCode, /Nenhum atendimento eleg/);
   assert.doesNotMatch(preGuideUiCode, /Enviar lote|Enviar remessa|Registrar glosa|Remessa enviada|Faturamento TISS concluído|Guia oficial enviada|Lote transmitido|Retorno importado|Glosa processada|Recurso de glosa/i);
+});
+
+test('frontend de Pré-guias apresenta status operacionais sem contradição visual', () => {
+  assert.match(preGuideUiCode, /table-fixed/);
+  assert.match(preGuideUiCode, /overflow-x-auto overflow-y-auto/);
+  assert.match(preGuideUiCode, /Procedimento\/TUSS/);
+  assert.doesNotMatch(preGuideUiCode, /<th className="px-4 py-3">Registro\/CBO<\/th>/);
+  assert.match(preGuideUiCode, /function tissTechnicalMeta/);
+  assert.match(preGuideUiCode, /function xmlDecisionMeta/);
+  assert.match(preGuideUiCode, /TISS técnico/);
+  assert.match(preGuideUiCode, /Anti-glosa/);
+  assert.match(preGuideUiCode, /XML/);
+  assert.match(preGuideUiCode, /Pode gerar com alerta/);
+  assert.doesNotMatch(preGuideUiCode, /Pronta para XML/);
+  assert.doesNotMatch(preGuideUiCode, /Sem pendência/);
+  assert.doesNotMatch(preGuideUiCode, /Campo: \{issue\.fieldPath\}/);
+  assert.match(preGuideUiCode, /Resumo da Pré-guia/);
+  assert.match(preGuideUiCode, /Decisão XML/);
+  assert.match(preGuideUiCode, /Bloqueios/);
+  assert.match(preGuideUiCode, /Alertas anti-glosa/);
+  assert.match(preGuideUiCode, /Ver itens OK e não aplicáveis/);
+  assert.match(preGuideUiCode, /<footer className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 bg-white px-5 py-3">/);
+  const detailFooter = preGuideUiCode.slice(
+    preGuideUiCode.indexOf('<footer className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 bg-white px-5 py-3">'),
+    preGuideUiCode.indexOf('{authorizationEditorOpen &&')
+  );
+  for (const label of [
+    'Editar dados da clínica',
+    'Editar perfil TISS do pagador',
+    'Editar profissional',
+    'Ir para atendimento',
+    'Revalidar pré-guia',
+  ]) {
+    assert.equal((detailFooter.match(new RegExp(label, 'g')) || []).length, 1);
+  }
 });
 
 test('autorizacao TUSS usa DePara server-side e sincronizacao controlada', () => {
