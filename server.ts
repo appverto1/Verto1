@@ -123,6 +123,9 @@ import {
   validateTissPreGuide
 } from './src/services/tissPreGuideEngine';
 import {
+  validateAntiGlosaForPreGuide
+} from './src/services/tissAntiGlosaChecklist';
+import {
   buildTissRevenueCycleEventPayload,
   deriveTissRevenueCycleStateFromPreGuide
 } from './src/services/tissRevenueCycleStateMachine';
@@ -38845,6 +38848,40 @@ async function startServer() {
         });
       }
       const preGuides = (preGuideRows || []).map((row: any) => serializeTissPreGuide(row));
+      const antiGlosaResults = preGuides.map((preGuide: any) => ({
+        preGuide,
+        validation: validateAntiGlosaForPreGuide({ preGuide })
+      }));
+      const antiGlosaBlocked = antiGlosaResults.filter((item) => !item.validation.canGenerateXml);
+      if (antiGlosaBlocked.length > 0) {
+        const issues = antiGlosaBlocked.flatMap((item) => item.validation.issues.map((issue) => ({
+          ...issue,
+          preGuideId: sanitizeString(issue.preGuideId || item.preGuide?.id, 120) || null,
+          patientName: sanitizeString(item.preGuide?.patientName || item.preGuide?.snapshot?.beneficiary?.name, 180) || null,
+          payerName: sanitizeString(item.preGuide?.payerName || item.preGuide?.snapshot?.payer?.name, 180) || null,
+          guideNumber: sanitizeString(item.preGuide?.guideNumber || item.preGuide?.snapshot?.authorization?.guideNumber, 120) || null,
+          authorizationCode: sanitizeString(item.preGuide?.authorizationCode || item.preGuide?.snapshot?.authorization?.authorizationCode, 120) || null,
+          tussCode: sanitizeString(item.preGuide?.tussCode || item.preGuide?.snapshot?.procedure?.tussCode, 80) || null
+        })));
+        const issueSummary = issues.reduce((acc: Record<string, number>, issue: any) => {
+          const code = sanitizeString(issue?.code, 120) || 'UNKNOWN';
+          acc[code] = (acc[code] || 0) + 1;
+          return acc;
+        }, {});
+        return res.status(409).json({
+          success: false,
+          code: 'TISS_OFFICIAL_ANTI_GLOSA_BLOCKED',
+          error: `${antiGlosaBlocked.length} Pré-guia(s) bloqueada(s) pela validação anti-glosa da operadora. Corrija os motivos e revalide antes de gerar o XML.`,
+          issues,
+          issueSummary,
+          antiGlosaSummary: {
+            readyForXml: antiGlosaResults.filter((item) => item.validation.antiGlosaStatus === 'ready_for_xml').length,
+            lowRisk: antiGlosaResults.filter((item) => item.validation.antiGlosaStatus === 'low_risk').length,
+            mediumRisk: antiGlosaResults.filter((item) => item.validation.antiGlosaStatus === 'medium_risk').length,
+            blocked: antiGlosaBlocked.length
+          }
+        });
+      }
       const preGuideVersions = Object.fromEntries(
         (preGuideRows || []).map((row: any) => [String(row.id), row.updated_at])
       );

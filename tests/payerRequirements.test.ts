@@ -230,7 +230,7 @@ test('UI expõe configuração, agenda e fechamento sem IDs técnicos ou HTML pe
   assert.match(serverCode, /\/api\/admin\/tuss\/mappings\/:mappingId\/sync-authorizations/);
   assert.match(payerPanelCode, /Dados da operadora/);
   assert.match(payerPanelCode, /Dados do prestador no convênio/);
-  assert.match(payerPanelCode, /Exigências gerais da operadora/);
+  assert.match(payerPanelCode, /Exigências anti-glosa da operadora/);
   assert.match(payerPanelCode, /Contatos e observações administrativas/);
   assert.match(coordinatorCode, /Pagador e conferência/);
   assert.match(calendarCode, /billingContext/);
@@ -443,7 +443,7 @@ test('Dados TISS da operadora tem rotulos permanentes e versao oficial automatic
     'guideTypes040300.map',
     'Legado inválido',
     'Configuração do convênio para TISS',
-    'Exigências gerais da operadora',
+    'Exigências anti-glosa da operadora',
     'Exceções por serviço',
     'A exceção substitui a regra geral apenas para este serviço',
   ]) {

@@ -18,6 +18,7 @@ import {
 } from '../src/services/tissRevenueCycleStateMachine';
 import {
   buildTissAntiGlosaChecklist,
+  validateAntiGlosaForPreGuide,
 } from '../src/services/tissAntiGlosaChecklist';
 
 const root = process.cwd();
@@ -159,6 +160,25 @@ const validInput = {
   },
 };
 
+const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value));
+
+function antiGlosaFor(input: any) {
+  const validation = validateTissPreGuide(input);
+  const antiGlosa = validateAntiGlosaForPreGuide({
+    status: validation.status,
+    errors: validation.errors,
+    warnings: validation.warnings,
+    errorCodes: validation.errorCodes,
+    warningCodes: validation.warningCodes,
+    snapshot: validation.snapshot,
+  });
+  return { validation, antiGlosa };
+}
+
+function issueCodes(result: ReturnType<typeof validateAntiGlosaForPreGuide>) {
+  return result.issues.map((issue) => issue.code);
+}
+
 test('atendimento de convênio com dados mínimos produz Pré-guia válida', () => {
   const result = validateTissPreGuide(validInput);
   assert.equal(result.status, 'valid');
@@ -239,6 +259,215 @@ test('checklist antiglosa reflete pendencias e riscos operacionais', () => {
   assert.equal(authorizationItem?.status, 'blocking');
   assert.equal(authorizationItem?.riskClass, 'risco de negativa por autorização');
   assert.equal(authorizationItem?.suggestedAction, 'Adicionar autorização');
+});
+
+test('validacao anti-glosa classifica pre-guia completa como pronta para XML', () => {
+  const { antiGlosa } = antiGlosaFor({
+    ...clone(validInput),
+    price: {
+      id: 'price-120',
+      amount_cents: 12000,
+      currency: 'BRL',
+      valid_from: '2026-06-01',
+      source: 'payer_contract',
+    },
+    tussCode: {
+      ...validInput.tussCode,
+      code: '50000470',
+      description: 'Sessao de psicoterapia individual por psicologo',
+      version: '202605',
+    },
+    mapping: {
+      ...validInput.mapping,
+      tuss_code: '50000470',
+    },
+    authorization: {
+      ...validInput.authorization,
+      procedure_tuss_code: '50000470',
+    },
+    professionalProfile: {
+      ...validInput.professionalProfile,
+      council_type: 'CRP',
+      council_number: '123456',
+      council_state: 'SP',
+      cbo_code: '251510',
+    },
+    clinicProfile: {
+      ...validInput.clinicProfile,
+      cnes_code: '4578848',
+      provider_code: 'PROVIDER-1',
+    },
+  });
+
+  assert.equal(antiGlosa.antiGlosaStatus, 'ready_for_xml');
+  assert.equal(antiGlosa.canGenerateXml, true);
+  assert.equal(antiGlosa.blockingIssuesCount, 0);
+  assert.deepEqual(antiGlosa.issues, []);
+});
+
+test('validacao anti-glosa bloqueia campos obrigatorios ausentes por operadora', () => {
+  const missingCard = antiGlosaFor({
+    ...clone(validInput),
+    patient: { ...validInput.patient, insurance_card_number: '' },
+    billingContext: { ...validInput.billingContext, insurance_card_number: '' },
+  }).antiGlosa;
+  assert.equal(missingCard.canGenerateXml, false);
+  assert.ok(issueCodes(missingCard).includes('MISSING_CARD_NUMBER'));
+
+  const missingAuthorizationPassword = antiGlosaFor({
+    ...clone(validInput),
+    billingContext: { ...validInput.billingContext, authorization_code: '' },
+    billingItem: { ...validInput.billingItem, authorization_code: '' },
+    authorization: {
+      ...validInput.authorization,
+      authorization_number: '',
+      authorization_code: '',
+      password: '',
+      code: '',
+    },
+    payerProfile: {
+      ...validInput.payerProfile,
+      requires_authorization_password: true,
+    },
+  }).antiGlosa;
+  assert.equal(missingAuthorizationPassword.canGenerateXml, false);
+  assert.ok(issueCodes(missingAuthorizationPassword).includes('MISSING_AUTHORIZATION_PASSWORD'));
+
+  const missingCnes = antiGlosaFor({
+    ...clone(validInput),
+    clinicProfile: {
+      ...validInput.clinicProfile,
+      cnes_code: '',
+    },
+  }).antiGlosa;
+  assert.equal(missingCnes.canGenerateXml, false);
+  assert.ok(issueCodes(missingCnes).includes('MISSING_CNES'));
+
+  const missingCbos = antiGlosaFor({
+    ...clone(validInput),
+    professionalProfile: {
+      ...validInput.professionalProfile,
+      cbo_code: '',
+    },
+  }).antiGlosa;
+  assert.equal(missingCbos.canGenerateXml, false);
+  assert.ok(issueCodes(missingCbos).includes('MISSING_CBOS'));
+});
+
+test('validacao anti-glosa bloqueia autorizacao vencida ou sem saldo', () => {
+  const expired = antiGlosaFor({
+    ...clone(validInput),
+    authorization: {
+      ...validInput.authorization,
+      valid_until: '2026-06-01',
+    },
+  }).antiGlosa;
+  assert.equal(expired.canGenerateXml, false);
+  assert.ok(issueCodes(expired).includes('AUTHORIZATION_EXPIRED'));
+
+  const exhausted = antiGlosaFor({
+    ...clone(validInput),
+    authorization: {
+      ...validInput.authorization,
+      authorized_quantity: 10,
+      used_quantity: 10,
+    },
+  }).antiGlosa;
+  assert.equal(exhausted.canGenerateXml, false);
+  assert.ok(issueCodes(exhausted).includes('AUTHORIZATION_INSUFFICIENT_BALANCE'));
+});
+
+test('validacao anti-glosa bloqueia DePara ausente, TUSS legado e preco ausente', () => {
+  const withoutMapping = antiGlosaFor({
+    ...clone(validInput),
+    mapping: null,
+  }).antiGlosa;
+  assert.equal(withoutMapping.canGenerateXml, false);
+  assert.ok(issueCodes(withoutMapping).includes('MISSING_TUSS_MAPPING'));
+
+  const withoutPrice = antiGlosaFor({
+    ...clone(validInput),
+    mapping: {
+      ...validInput.mapping,
+      amount_cents: null,
+      negotiated_amount_cents: null,
+    },
+    billingItem: {
+      ...validInput.billingItem,
+      unit_amount_cents: null,
+      amount_cents: null,
+    },
+  }).antiGlosa;
+  assert.equal(withoutPrice.canGenerateXml, false);
+  assert.ok(issueCodes(withoutPrice).includes('MISSING_NEGOTIATED_PRICE'));
+
+  for (const tussCode of ['10101012', 'TESTE-ABA']) {
+    const legacy = validateAntiGlosaForPreGuide({
+      preGuide: {
+        id: `legacy-${tussCode}`,
+        status: 'valid',
+        validationErrorCodes: [],
+        validationWarningCodes: [],
+        snapshot: {
+          payer: { requirements: {} },
+          procedure: {
+            name: 'Sessao ABA individual',
+            internalCode: 'ABA-IND',
+            tussCode,
+            quantity: 1,
+            unitAmountCents: 12000,
+            totalAmountCents: 12000,
+          },
+          authorization: {
+            procedureName: 'Sessao ABA individual',
+            procedureTussCode: tussCode,
+          },
+        },
+        antiGlosaChecklist: {
+          items: [],
+        },
+      },
+    });
+    assert.equal(legacy.canGenerateXml, false);
+    assert.ok(issueCodes(legacy).includes('LEGACY_OR_INVALID_TUSS_CODE'));
+  }
+});
+
+test('validacao anti-glosa permite risco medio por valor divergente sem bloquear XML', () => {
+  const mismatch = validateAntiGlosaForPreGuide({
+    preGuide: {
+      id: 'price-mismatch',
+      status: 'valid',
+      snapshot: {
+        procedure: {
+          payerNegotiatedAmountCents: 12000,
+          unitAmountCents: 13000,
+          totalAmountCents: 13000,
+          quantity: 1,
+        },
+      },
+      antiGlosaChecklist: {
+        items: [],
+      },
+    },
+  });
+
+  assert.equal(mismatch.antiGlosaStatus, 'medium_risk');
+  assert.equal(mismatch.canGenerateXml, true);
+  assert.ok(issueCodes(mismatch).includes('PRICE_MISMATCH'));
+});
+
+test('validacao anti-glosa respeita exigencia de relatorio ou anexo configurada na operadora', () => {
+  const report = antiGlosaFor({
+    ...clone(validInput),
+    payerProfile: {
+      ...validInput.payerProfile,
+      requires_administrative_report: true,
+    },
+  }).antiGlosa;
+
+  assert.equal(report.canGenerateXml, false);
+  assert.ok(issueCodes(report).includes('OPERATOR_REQUIRES_REPORT'));
 });
 
 test('procedimento de convÃªnio sem De/Para TUSS do pagador fica pendente', () => {
@@ -1500,7 +1729,7 @@ test('Convênios expõe configuração TISS guiada por operadora', () => {
   assert.match(payerRequirementsCode, /Dados da operadora/);
   assert.match(payerRequirementsCode, /Dados do prestador no convênio/);
   assert.match(payerRequirementsCode, /Configuração automática do XML TISS/);
-  assert.match(payerRequirementsCode, /Exigências gerais da operadora/);
+  assert.match(payerRequirementsCode, /Exigências anti-glosa da operadora/);
   assert.match(payerRequirementsCode, /Exceções por serviço/);
   assert.match(payerRequirementsCode, /Contatos e observações administrativas/);
   assert.match(payerRequirementsCode, /De\/Para TUSS por Convênio/);
@@ -1515,7 +1744,7 @@ test('Convênios expõe configuração TISS guiada por operadora', () => {
   assert.match(payerRequirementsCode, /Registro ANS/);
   assert.match(payerRequirementsCode, /Exige validade da carteirinha/);
   assert.match(payerRequirementsCode, /Exige procedimento autorizado/);
-  assert.match(payerRequirementsCode, /Exige número de guia/);
+  assert.match(payerRequirementsCode, /Número da guia da operadora obrigatório/);
   assert.match(payerRequirementsCode, /Exige CID/);
   assert.match(payerRequirementsCode, /Código do prestador na operadora/);
   assert.match(payerRequirementsCode, /TISS não aplicável/);
@@ -1655,6 +1884,16 @@ test('frontend separa Pré-guias e Rascunhos XML com preview interno', () => {
   assert.match(preGuideUiCode, /Última validação/);
   assert.match(preGuideUiCode, /Próxima ação sugerida/);
   assert.match(preGuideUiCode, /Checklist antiglosa/);
+  assert.match(preGuideUiCode, /validateAntiGlosaForPreGuide/);
+  assert.match(preGuideUiCode, /Anti-glosa:/);
+  assert.match(preGuideUiCode, /Pronta para XML/);
+  assert.match(preGuideUiCode, /Risco m/);
+  assert.match(preGuideUiCode, /Bloqueadas fora do lote/);
+  assert.match(serverCode, /TISS_OFFICIAL_ANTI_GLOSA_BLOCKED/);
+  assert.match(serverCode, /validateAntiGlosaForPreGuide/);
+  assert.match(payerRequirementsCode, /Exigências anti-glosa da operadora/);
+  assert.match(payerRequirementsCode, /Carteirinha obrigatória/);
+  assert.match(payerRequirementsCode, /Senha da autorização obrigatória/);
   assert.match(preGuideUiCode, /antiGlosaCategoryLabel/);
   assert.match(preGuideUiCode, /Convênio e beneficiário/);
   assert.match(preGuideUiCode, /Autorização e guia/);

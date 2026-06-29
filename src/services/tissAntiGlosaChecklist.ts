@@ -1,18 +1,42 @@
 export type TissAntiGlosaChecklistStatus = "ok" | "attention" | "blocking" | "not_applicable";
+export type AntiGlosaSeverity = "info" | "warning" | "blocking";
+export type AntiGlosaStatus = "ready_for_xml" | "low_risk" | "medium_risk" | "blocked";
 
 export type TissAntiGlosaChecklistItem = {
   code: string;
   label: string;
   status: TissAntiGlosaChecklistStatus;
   riskClass: string;
+  category?: string;
   relatedIssueCodes: string[];
+  antiGlosaIssueCode?: string;
+  severity?: AntiGlosaSeverity;
+  title?: string;
+  description?: string;
+  fieldPath?: string;
+  recommendedAction?: string;
   suggestedAction?: string;
+};
+
+export type AntiGlosaIssue = {
+  code: string;
+  severity: AntiGlosaSeverity;
+  title: string;
+  description: string;
+  fieldPath?: string;
+  recommendedAction?: string;
+  preGuideId?: string | null;
 };
 
 export type TissAntiGlosaChecklistResult = {
   status: "ready" | "pending" | "not_applicable";
+  antiGlosaStatus: AntiGlosaStatus;
+  canGenerateXml: boolean;
+  issues: AntiGlosaIssue[];
   blockingCount: number;
   attentionCount: number;
+  blockingIssuesCount: number;
+  warningIssuesCount: number;
   okCount: number;
   notApplicableCount: number;
   items: TissAntiGlosaChecklistItem[];
@@ -58,6 +82,135 @@ const ISSUE_TO_ITEM: Record<string, string> = {
   PAYER_PROCEDURE_PRICE_MISSING: "amount_calculated",
   PAYER_PROCEDURE_PRICE_CONFLICT: "amount_calculated",
 };
+
+const ISSUE_CODE_MAP: Record<string, string> = {
+  BENEFICIARY_CARD_MISSING: "MISSING_CARD_NUMBER",
+  AUTHORIZATION_REQUIRED: "MISSING_AUTHORIZATION",
+  AUTHORIZATION_MISSING: "MISSING_AUTHORIZATION",
+  AUTHORIZATION_INACTIVE: "MISSING_AUTHORIZATION",
+  AUTHORIZATION_NOT_STARTED: "AUTHORIZATION_NOT_STARTED",
+  AUTHORIZATION_EXPIRED: "AUTHORIZATION_EXPIRED",
+  AUTHORIZATION_EXHAUSTED: "AUTHORIZATION_INSUFFICIENT_BALANCE",
+  GUIDE_MISSING: "MISSING_OPERATOR_GUIDE",
+  AUTHORIZED_PROCEDURE_NOT_INFORMED: "MISSING_TUSS_MAPPING",
+  AUTHORIZATION_PROCEDURE_MISMATCH: "MISSING_TUSS_MAPPING",
+  PAYER_TUSS_MAPPING_MISSING: "MISSING_TUSS_MAPPING",
+  PAYER_TUSS_MAPPING_EXPIRED: "MISSING_TUSS_MAPPING",
+  TUSS_CODE_MISSING: "MISSING_TUSS_MAPPING",
+  TUSS_DESCRIPTION_MISSING: "MISSING_TUSS_MAPPING",
+  PAYER_PROCEDURE_PRICE_MISSING: "MISSING_NEGOTIATED_PRICE",
+  AMOUNT_MISSING: "MISSING_NEGOTIATED_PRICE",
+  PAYER_PROCEDURE_PRICE_CONFLICT: "PRICE_MISMATCH",
+  PAYER_PROCEDURE_PRICE_UNRESOLVED_SNAPSHOT_PRESERVED: "PRICE_MISMATCH",
+  PROVIDER_CODE_MISSING: "MISSING_PROVIDER_CODE",
+  PAYER_CONTRACTED_PROVIDER_CODE_MISSING: "MISSING_PROVIDER_CODE",
+  CNES_MISSING: "MISSING_CNES",
+  PROFESSIONAL_BILLING_PROFILE_MISSING: "MISSING_PROFESSIONAL_COUNCIL",
+  PROFESSIONAL_REGISTRY_MISSING: "MISSING_PROFESSIONAL_COUNCIL_NUMBER",
+  PROFESSIONAL_COUNCIL_STATE_MISSING: "MISSING_PROFESSIONAL_COUNCIL_UF",
+  CBO_MISSING: "MISSING_CBOS",
+  PAYER_ATTENDANCE_TYPE_INVALID: "MISSING_CARE_TYPE",
+  PAYER_ATTENDANCE_REGIME_INVALID: "MISSING_ATTENDANCE_REGIME",
+  PAYER_ATTENDANCE_CHARACTER_INVALID: "MISSING_ATTENDANCE_CHARACTER",
+  RESPONSIBLE_SIGNATURE_REQUIRED: "OPERATOR_REQUIRES_SIGNATURE",
+};
+
+const ITEM_CODE_MAP: Record<string, string> = {
+  beneficiary_card: "MISSING_CARD_NUMBER",
+  procedure_tuss_mapping: "MISSING_TUSS_MAPPING",
+  professional_registry: "MISSING_PROFESSIONAL_COUNCIL",
+  professional_cbo: "MISSING_CBOS",
+  provider_code: "MISSING_PROVIDER_CODE",
+  authorization_valid: "MISSING_AUTHORIZATION",
+  guide_number: "MISSING_OPERATOR_GUIDE",
+  authorization_password: "MISSING_AUTHORIZATION_PASSWORD",
+  responsible_signature: "OPERATOR_REQUIRES_SIGNATURE",
+  physical_guide_printed: "OPERATOR_REQUIRES_ATTACHMENT",
+  physical_guide_signed: "OPERATOR_REQUIRES_SIGNATURE",
+  physical_guide_stamped: "OPERATOR_SPECIFIC_RULE",
+  clinical_report_linked: "OPERATOR_REQUIRES_REPORT",
+  amount_calculated: "MISSING_NEGOTIATED_PRICE",
+  authorization_procedure_match: "MISSING_TUSS_MAPPING",
+};
+
+const ITEM_CATEGORY_MAP: Record<string, string> = {
+  payer_configured: "payer",
+  beneficiary_card: "beneficiary",
+  beneficiary_card_validity: "beneficiary",
+  procedure_tuss_mapping: "procedure",
+  professional_defined: "professional",
+  professional_registry: "professional",
+  professional_cbo: "professional",
+  provider_code: "provider",
+  authorization_valid: "authorization",
+  guide_number: "authorization",
+  authorization_password: "authorization",
+  authorization_procedure_match: "authorization",
+  responsible_signature: "execution",
+  actual_duration: "execution",
+  amount_calculated: "amount",
+  physical_guide_printed: "physical_documents",
+  physical_guide_signed: "physical_documents",
+  physical_guide_stamped: "physical_documents",
+  clinical_report_linked: "physical_documents",
+};
+
+const ISSUE_TITLES: Record<string, string> = {
+  MISSING_CARD_NUMBER: "Carteirinha ausente",
+  MISSING_AUTHORIZATION: "Autorização obrigatória ausente",
+  MISSING_AUTHORIZATION_PASSWORD: "Senha obrigatória ausente",
+  MISSING_OPERATOR_GUIDE: "Guia da operadora ausente",
+  AUTHORIZATION_EXPIRED: "Autorização vencida para a data da sessão",
+  AUTHORIZATION_NOT_STARTED: "Autorização ainda não vigente na data da sessão",
+  AUTHORIZATION_INSUFFICIENT_BALANCE: "Quantidade autorizada insuficiente",
+  MISSING_NEGOTIATED_PRICE: "Valor negociado ausente",
+  PRICE_MISMATCH: "Valor da sessão diferente do valor contratado",
+  MISSING_TUSS_MAPPING: "TUSS sem De/Para ativo",
+  LEGACY_OR_INVALID_TUSS_CODE: "Código TUSS legado/inadequado para XML",
+  MISSING_PROVIDER_CODE: "Código do prestador na operadora ausente",
+  MISSING_CNES: "Clínica sem CNES",
+  MISSING_PROFESSIONAL_COUNCIL: "Profissional sem conselho",
+  MISSING_PROFESSIONAL_COUNCIL_NUMBER: "Profissional sem número do conselho",
+  MISSING_PROFESSIONAL_COUNCIL_UF: "Profissional sem UF do conselho",
+  MISSING_CBOS: "Profissional sem CBOS",
+  MISSING_CARE_TYPE: "Tipo de atendimento ausente",
+  MISSING_ATTENDANCE_REGIME: "Regime de atendimento ausente",
+  MISSING_ATTENDANCE_CHARACTER: "Caráter de atendimento ausente",
+  MISSING_ACCIDENT_INDICATION: "Indicação de acidente ausente",
+  OPERATOR_REQUIRES_ATTACHMENT: "Operadora exige anexo antes do envio",
+  OPERATOR_REQUIRES_REPORT: "Operadora exige relatório antes do envio",
+  OPERATOR_REQUIRES_SIGNATURE: "Operadora exige assinatura antes do envio",
+  OPERATOR_SPECIFIC_RULE: "Regra específica da operadora",
+};
+
+const ISSUE_ACTIONS: Record<string, string> = {
+  MISSING_CARD_NUMBER: "Corrija a carteirinha na aba Convênio e elegibilidade do paciente.",
+  MISSING_AUTHORIZATION: "Abra Autorizações TISS do paciente e cadastre uma autorização vigente.",
+  MISSING_AUTHORIZATION_PASSWORD: "Informe a senha/autorização na autorização TISS do paciente.",
+  MISSING_OPERATOR_GUIDE: "Informe o número da guia na autorização ou no pagador da consulta.",
+  AUTHORIZATION_EXPIRED: "Atualize a validade ou cadastre uma nova autorização vigente.",
+  AUTHORIZATION_NOT_STARTED: "Use uma autorização vigente na data da sessão.",
+  AUTHORIZATION_INSUFFICIENT_BALANCE: "Atualize o saldo ou cadastre nova autorização antes do XML.",
+  MISSING_NEGOTIATED_PRICE: "Cadastre o valor negociado ativo em Convênios e TISS > Tabela de valores.",
+  PRICE_MISMATCH: "Confira o valor contratado e revalide a Pré-guia.",
+  MISSING_TUSS_MAPPING: "Revise o De/Para TUSS ativo do convênio antes do XML.",
+  LEGACY_OR_INVALID_TUSS_CODE: "Revise o De/Para TUSS do convênio e use o código ativo adequado.",
+  MISSING_PROVIDER_CODE: "Informe o código do prestador no perfil TISS da operadora.",
+  MISSING_CNES: "Informe o CNES nos dados TISS da clínica.",
+  MISSING_PROFESSIONAL_COUNCIL: "Complete o perfil faturável do profissional.",
+  MISSING_PROFESSIONAL_COUNCIL_NUMBER: "Informe o número do conselho do profissional.",
+  MISSING_PROFESSIONAL_COUNCIL_UF: "Informe a UF do conselho do profissional.",
+  MISSING_CBOS: "Informe o CBOS no perfil faturável do profissional.",
+  MISSING_CARE_TYPE: "Configure o tipo de atendimento TISS da operadora.",
+  MISSING_ATTENDANCE_REGIME: "Configure o regime de atendimento TISS da operadora.",
+  MISSING_ATTENDANCE_CHARACTER: "Configure o caráter de atendimento TISS da operadora.",
+  OPERATOR_REQUIRES_ATTACHMENT: "Anexe ou confira a documentação exigida pela operadora.",
+  OPERATOR_REQUIRES_REPORT: "Vincule o relatório/evolução exigido pela operadora.",
+  OPERATOR_REQUIRES_SIGNATURE: "Colete ou confira a assinatura exigida pela operadora.",
+  OPERATOR_SPECIFIC_RULE: "Confira as regras específicas cadastradas para esta operadora.",
+};
+
+const LEGACY_TUSS_CODES = new Set(["10101012", "TESTE-ABA"]);
 
 const CATALOG: Array<Omit<TissAntiGlosaChecklistItem, "status" | "relatedIssueCodes"> & {
   requirementPath?: string;
@@ -220,6 +373,146 @@ function isRequired(snapshot: Record<string, any>, requirementPath?: string) {
   return Boolean(requirements(snapshot)[requirementPath]);
 }
 
+const normalize = (value: unknown) =>
+  text(value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+
+const numberOrNull = (value: unknown) => {
+  if (value === null || value === undefined || text(value) === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+};
+
+const antiGlosaTitle = (code: string) => ISSUE_TITLES[code] || code;
+
+const addIssue = (issues: AntiGlosaIssue[], issue: AntiGlosaIssue) => {
+  if (issues.some((item) => item.code === issue.code && item.fieldPath === issue.fieldPath)) return;
+  issues.push(issue);
+};
+
+const isAbaLikePreGuide = (snapshot: Record<string, any>) => {
+  const haystack = [
+    snapshot.procedure?.internalCode,
+    snapshot.procedure?.name,
+    snapshot.procedure?.specialty,
+    snapshot.authorization?.procedureCode,
+    snapshot.authorization?.procedureName,
+  ].map(normalize).join("_");
+  return haystack.includes("ABA");
+};
+
+function summarizeAntiGlosaChecklist(params: {
+  checklist: Partial<TissAntiGlosaChecklistResult>;
+  snapshot?: Record<string, any> | null;
+  preGuideId?: string | null;
+}) {
+  const snapshot = params.snapshot || {};
+  const issues: AntiGlosaIssue[] = [];
+  const items = Array.isArray(params.checklist.items) ? params.checklist.items : [];
+  for (const item of items) {
+    const itemStatus = text(item.status);
+    if (!["blocking", "attention"].includes(itemStatus)) continue;
+    const relatedCodes = Array.isArray(item.relatedIssueCodes) ? item.relatedIssueCodes.map(normalize).filter(Boolean) : [];
+    const code = relatedCodes.map((related) => ISSUE_CODE_MAP[related]).find(Boolean) || ITEM_CODE_MAP[item.code] || "OPERATOR_SPECIFIC_RULE";
+    const severity: AntiGlosaSeverity = itemStatus === "blocking" ? "blocking" : "warning";
+    addIssue(issues, {
+      code,
+      severity,
+      title: antiGlosaTitle(code),
+      description: item.riskClass || "Risco operacional de glosa identificado antes da geração do XML oficial.",
+      fieldPath: item.code,
+      recommendedAction: item.suggestedAction || ISSUE_ACTIONS[code],
+      preGuideId: params.preGuideId || null,
+    });
+  }
+
+  const tussCode = text(snapshot.procedure?.tussCode).toUpperCase();
+  if (LEGACY_TUSS_CODES.has(tussCode) && isAbaLikePreGuide(snapshot)) {
+    addIssue(issues, {
+      code: "LEGACY_OR_INVALID_TUSS_CODE",
+      severity: "blocking",
+      title: antiGlosaTitle("LEGACY_OR_INVALID_TUSS_CODE"),
+      description: "Este código TUSS parece legado ou inadequado para o XML atual.",
+      fieldPath: "procedure.tussCode",
+      recommendedAction: ISSUE_ACTIONS.LEGACY_OR_INVALID_TUSS_CODE,
+      preGuideId: params.preGuideId || null,
+    });
+  }
+
+  const negotiated = numberOrNull(snapshot.procedure?.payerNegotiatedAmountCents);
+  const unitAmount = numberOrNull(snapshot.procedure?.unitAmountCents);
+  const totalAmount = numberOrNull(snapshot.procedure?.totalAmountCents);
+  const quantity = numberOrNull(snapshot.procedure?.quantity) || 1;
+  if (negotiated !== null && unitAmount !== null && negotiated > 0 && unitAmount > 0 && negotiated !== unitAmount) {
+    addIssue(issues, {
+      code: "PRICE_MISMATCH",
+      severity: "warning",
+      title: antiGlosaTitle("PRICE_MISMATCH"),
+      description: "O valor unitário da sessão não confere com o valor negociado ativo.",
+      fieldPath: "procedure.unitAmountCents",
+      recommendedAction: ISSUE_ACTIONS.PRICE_MISMATCH,
+      preGuideId: params.preGuideId || null,
+    });
+  }
+  if (negotiated !== null && totalAmount !== null && negotiated > 0 && totalAmount > 0 && negotiated * quantity !== totalAmount) {
+    addIssue(issues, {
+      code: "PRICE_MISMATCH",
+      severity: "warning",
+      title: antiGlosaTitle("PRICE_MISMATCH"),
+      description: "O total da sessão não confere com quantidade e valor negociado ativo.",
+      fieldPath: "procedure.totalAmountCents",
+      recommendedAction: ISSUE_ACTIONS.PRICE_MISMATCH,
+      preGuideId: params.preGuideId || null,
+    });
+  }
+
+  const blockingIssuesCount = issues.filter((issue) => issue.severity === "blocking").length;
+  const warningIssuesCount = issues.filter((issue) => issue.severity === "warning").length;
+  const infoCount = issues.filter((issue) => issue.severity === "info").length;
+  const antiGlosaStatus: AntiGlosaStatus = blockingIssuesCount > 0
+    ? "blocked"
+    : warningIssuesCount > 0
+      ? "medium_risk"
+      : infoCount > 0
+        ? "low_risk"
+        : "ready_for_xml";
+  return {
+    antiGlosaStatus,
+    canGenerateXml: blockingIssuesCount === 0,
+    issues,
+    blockingIssuesCount,
+    warningIssuesCount,
+  };
+}
+
+export function validateAntiGlosaForPreGuide(input: {
+  preGuide?: Record<string, any> | null;
+  status?: string | null;
+  errors?: Array<{ code?: string; severity?: string }> | null;
+  warnings?: Array<{ code?: string; severity?: string }> | null;
+  errorCodes?: string[] | null;
+  warningCodes?: string[] | null;
+  snapshot?: Record<string, any> | null;
+  antiGlosaChecklist?: Partial<TissAntiGlosaChecklistResult> | null;
+}): Pick<TissAntiGlosaChecklistResult, "antiGlosaStatus" | "canGenerateXml" | "issues" | "blockingIssuesCount" | "warningIssuesCount"> {
+  const preGuide = input.preGuide || {};
+  const snapshot = input.snapshot || preGuide.snapshot || preGuide.snapshot_data || {};
+  const preGuideId = text(preGuide.id || preGuide.preGuideId || preGuide.pre_guide_id) || null;
+  const checklist = input.antiGlosaChecklist || preGuide.antiGlosaChecklist || preGuide.anti_glosa_checklist || snapshot.antiGlosaChecklist || buildTissAntiGlosaChecklist({
+    status: input.status || preGuide.status,
+    errors: input.errors || preGuide.validationErrors || preGuide.validation_errors,
+    warnings: input.warnings || preGuide.validationWarnings || preGuide.validation_warnings,
+    errorCodes: input.errorCodes || preGuide.validationErrorCodes || preGuide.validation_error_codes,
+    warningCodes: input.warningCodes || preGuide.validationWarningCodes || preGuide.validation_warning_codes,
+    snapshot,
+  });
+  return summarizeAntiGlosaChecklist({ checklist, snapshot, preGuideId });
+}
+
 export function buildTissAntiGlosaChecklist(input: {
   status?: string | null;
   errors?: Array<{ code?: string; severity?: string }> | null;
@@ -234,14 +527,20 @@ export function buildTissAntiGlosaChecklist(input: {
       code: item.code,
       label: item.label,
       riskClass: item.riskClass,
+      category: ITEM_CATEGORY_MAP[item.code] || "operational",
       suggestedAction: item.suggestedAction,
       status: "not_applicable" as const,
       relatedIssueCodes: [],
     }));
     return {
       status: "not_applicable",
+      antiGlosaStatus: "ready_for_xml",
+      canGenerateXml: false,
+      issues: [],
       blockingCount: 0,
       attentionCount: 0,
+      blockingIssuesCount: 0,
+      warningIssuesCount: 0,
       okCount: 0,
       notApplicableCount: items.length,
       items,
@@ -272,6 +571,7 @@ export function buildTissAntiGlosaChecklist(input: {
         code: item.code,
         label: item.label,
         riskClass: item.riskClass,
+        category: ITEM_CATEGORY_MAP[item.code] || "operational",
         suggestedAction: item.suggestedAction,
         status: "not_applicable" as const,
         relatedIssueCodes,
@@ -282,6 +582,7 @@ export function buildTissAntiGlosaChecklist(input: {
         code: item.code,
         label: item.label,
         riskClass: item.riskClass,
+        category: ITEM_CATEGORY_MAP[item.code] || "operational",
         suggestedAction: item.suggestedAction,
         status: "blocking" as const,
         relatedIssueCodes,
@@ -292,6 +593,7 @@ export function buildTissAntiGlosaChecklist(input: {
         code: item.code,
         label: item.label,
         riskClass: item.riskClass,
+        category: ITEM_CATEGORY_MAP[item.code] || "operational",
         suggestedAction: item.suggestedAction,
         status: "ok" as const,
         relatedIssueCodes,
@@ -301,6 +603,7 @@ export function buildTissAntiGlosaChecklist(input: {
       code: item.code,
       label: item.label,
       riskClass: item.riskClass,
+      category: ITEM_CATEGORY_MAP[item.code] || "operational",
       suggestedAction: item.suggestedAction,
       status: item.requirementPath ? "blocking" as const : "attention" as const,
       relatedIssueCodes,
@@ -311,10 +614,16 @@ export function buildTissAntiGlosaChecklist(input: {
   const attentionCount = items.filter((item) => item.status === "attention").length;
   const okCount = items.filter((item) => item.status === "ok").length;
   const notApplicableCount = items.filter((item) => item.status === "not_applicable").length;
+  const operational = summarizeAntiGlosaChecklist({ checklist: { items }, snapshot });
   return {
     status: blockingCount > 0 ? "pending" : "ready",
+    antiGlosaStatus: operational.antiGlosaStatus,
+    canGenerateXml: operational.canGenerateXml,
+    issues: operational.issues,
     blockingCount,
     attentionCount,
+    blockingIssuesCount: operational.blockingIssuesCount,
+    warningIssuesCount: operational.warningIssuesCount,
     okCount,
     notApplicableCount,
     items,

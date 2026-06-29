@@ -25,6 +25,7 @@ import {
 import { ActiveFilterBanner } from "./ActiveFilterBanner";
 import { dataService } from "../services/dataService";
 import { getDefaultTissOfficialStrategyDescriptor } from "../services/tissOfficial/capabilities";
+import { validateAntiGlosaForPreGuide } from "../services/tissAntiGlosaChecklist";
 import { formatDateTimeInAppointmentTimezone } from "../utils/scheduling";
 
 type TissPreGuideRow = {
@@ -345,11 +346,14 @@ function preGuideMonth(row: TissPreGuideRow) {
 function officialPreGuideBlockReasons(row: TissPreGuideRow, competenceMonth: string) {
   const reasons: string[] = [];
   const codes = Array.isArray(row.validationErrorCodes) ? row.validationErrorCodes : [];
-  const blockingCount = Number(row.antiGlosaChecklist?.blockingCount || row.snapshot?.antiGlosaChecklist?.blockingCount || 0) || 0;
+  const antiGlosa = antiGlosaValidation(row);
   if (!row.id) reasons.push("Pré-guia sem identificador persistido");
   if (String(row.status || "") !== "valid") reasons.push("Pré-guia pendente");
   if (codes.length > 0) reasons.push(codes.slice(0, 2).map(issueLabel).join(", "));
-  if (blockingCount > 0) reasons.push("Checklist incompleto");
+  if (!antiGlosa.canGenerateXml) {
+    const antiGlosaReasons = antiGlosa.issues.filter((issue) => issue.severity === "blocking").map((issue) => issue.title).slice(0, 3);
+    reasons.push(...(antiGlosaReasons.length > 0 ? antiGlosaReasons : ["Validação anti-glosa bloqueada"]));
+  }
   if (row.staleReason) reasons.push("Revalidação pendente");
   if (!row.payerId) reasons.push("Convênio não informado");
   if (row.officialDocumentId || row.snapshot?.officialDocumentId || row.snapshot?.officialDocument?.id) reasons.push("Já vinculada a lote oficial");
@@ -518,6 +522,18 @@ function antiGlosaStatusMeta(status?: string | null) {
   if (normalized === "attention") return { label: "Atenção", className: "bg-amber-50 text-amber-700 ring-amber-100" };
   if (normalized === "blocking") return { label: "Bloqueante", className: "bg-rose-50 text-rose-700 ring-rose-100" };
   return { label: "Não aplicável", className: "bg-slate-100 text-slate-600 ring-slate-200" };
+}
+
+function antiGlosaOperationalMeta(status?: string | null) {
+  const normalized = String(status || "").trim();
+  if (normalized === "ready_for_xml") return { label: "Pronta para XML", className: "bg-emerald-50 text-emerald-700 ring-emerald-100" };
+  if (normalized === "low_risk") return { label: "Risco baixo", className: "bg-sky-50 text-sky-700 ring-sky-100" };
+  if (normalized === "medium_risk") return { label: "Risco médio", className: "bg-amber-50 text-amber-700 ring-amber-100" };
+  return { label: "Bloqueada", className: "bg-rose-50 text-rose-700 ring-rose-100" };
+}
+
+function antiGlosaValidation(row: TissPreGuideRow) {
+  return validateAntiGlosaForPreGuide({ preGuide: row as Record<string, any> });
 }
 
 function Section({
@@ -721,6 +737,15 @@ export function TissPreGuideTab({
     (sum, row) => sum + Number(row.totalAmountCents || row.snapshot?.procedure?.totalAmountCents || 0),
     0
   );
+  const selectedOfficialAntiGlosaSummary = useMemo(() => selectedOfficialRows.reduce((acc, row) => {
+    const status = antiGlosaValidation(row).antiGlosaStatus;
+    if (status === "ready_for_xml") acc.readyForXml += 1;
+    else if (status === "low_risk") acc.lowRisk += 1;
+    else if (status === "medium_risk") acc.mediumRisk += 1;
+    else acc.blocked += 1;
+    return acc;
+  }, { readyForXml: 0, lowRisk: 0, mediumRisk: 0, blocked: 0 }), [selectedOfficialRows]);
+  const blockedOfficialAntiGlosaCount = useMemo(() => blockedOfficialRows.filter(({ row }) => !antiGlosaValidation(row).canGenerateXml).length, [blockedOfficialRows]);
   const selectedOfficialUniquePatients = useMemo(
     () => new Set(selectedOfficialRows.map((row) => String(row.patientId || row.patientName || row.snapshot?.beneficiary?.id || row.snapshot?.beneficiary?.name || "")).filter(Boolean)).size,
     [selectedOfficialRows]
@@ -1507,7 +1532,9 @@ export function TissPreGuideTab({
   const warnings = detail?.validationWarnings || [];
   const antiGlosaChecklist = snapshot.antiGlosaChecklist || detail?.antiGlosaChecklist || {};
   const antiGlosaItems = Array.isArray(antiGlosaChecklist.items) ? antiGlosaChecklist.items : [];
-  const antiGlosaReady = String(antiGlosaChecklist.status || "") === "ready";
+  const antiGlosaOperational = detail ? antiGlosaValidation(detail) : validateAntiGlosaForPreGuide({ antiGlosaChecklist, snapshot });
+  const antiGlosaOperationalStatus = antiGlosaOperationalMeta(antiGlosaOperational.antiGlosaStatus);
+  const antiGlosaReady = antiGlosaOperational.canGenerateXml;
   const antiGlosaGroups = useMemo(() => {
     const groups = new Map<string, any[]>();
     for (const item of antiGlosaItems) {
@@ -1936,6 +1963,8 @@ export function TissPreGuideTab({
                 const officialBlockReasons = officialPreGuideBlockReasons(row, competenceMonth);
                 const canSelectForOfficial = officialBlockReasons.length === 0;
                 const selectedForOfficial = Boolean(row.id && selectedOfficialIdSet.has(row.id));
+                const antiGlosa = antiGlosaValidation(row);
+                const antiGlosaMeta = antiGlosaOperationalMeta(antiGlosa.antiGlosaStatus);
                 return (
                   <tr key={row.id || row.appointmentId} className="align-top hover:bg-slate-50/70">
                     <td className="px-4 py-3">
@@ -1990,6 +2019,9 @@ export function TissPreGuideTab({
                     </td>
                     <td className="max-w-[280px] px-4 py-3">
                       <div className="flex flex-wrap gap-1">
+                        <span className={`rounded-full px-2 py-1 text-xs ring-1 ${antiGlosaMeta.className}`}>
+                          Anti-glosa: {antiGlosaMeta.label}
+                        </span>
                         {codes.length === 0 ? (
                           <span className="rounded-full bg-emerald-50 px-2 py-1 text-xs text-emerald-700">
                             {String(row.status || "") === "valid" ? "Pronta" : "Sem pendência"}
@@ -2572,10 +2604,18 @@ export function TissPreGuideTab({
                 <DetailField label="Pacientes únicos" value={String(selectedOfficialUniquePatients)} />
                 <DetailField label="Guias" value={String(selectedOfficialRows.length)} />
                 <DetailField label="Valor total" value={formatCurrency(selectedOfficialTotalAmount)} />
+                <DetailField label="Anti-glosa prontas" value={String(selectedOfficialAntiGlosaSummary.readyForXml)} />
+                <DetailField label="Risco baixo" value={String(selectedOfficialAntiGlosaSummary.lowRisk)} />
+                <DetailField label="Risco médio" value={String(selectedOfficialAntiGlosaSummary.mediumRisk)} />
                 <DetailField label="Versão do XML TISS" value={selectedOfficialTissVersion} />
-                <DetailField label="Itens bloqueados fora do lote" value={String(blockedOfficialRows.length)} />
+                <DetailField label="Bloqueadas fora do lote" value={String(blockedOfficialAntiGlosaCount)} />
                 <DetailField label="Envio à operadora" value="Não enviado" />
               </div>
+              {selectedOfficialAntiGlosaSummary.mediumRisk > 0 && (
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                  Há Pré-guia(s) com risco médio de glosa. O XML pode ser gerado, mas revise os motivos antes do envio manual à operadora.
+                </div>
+              )}
               {selectedOfficialRows.length === 0 && (
                 <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
                   Selecione ao menos uma Pré-guia válida para gerar o lote XML.
@@ -3049,6 +3089,29 @@ export function TissPreGuideTab({
 
                   <Section title="Checklist antiglosa" icon={ShieldAlert}>
                     <div className="sm:col-span-2">
+                      <div className={`mb-3 rounded-md border px-3 py-2 text-sm ${antiGlosaReady ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-rose-200 bg-rose-50 text-rose-800"}`}>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className={`rounded-full px-2 py-0.5 text-xs ring-1 ${antiGlosaOperationalStatus.className}`}>
+                            Anti-glosa: {antiGlosaOperationalStatus.label}
+                          </span>
+                          <span>{antiGlosaReady ? "Pré-guia sem bloqueio anti-glosa para entrar no XML." : "Corrija os motivos bloqueantes antes de gerar o XML oficial."}</span>
+                        </div>
+                        <div className="mt-1 text-xs">
+                          {Number(antiGlosaOperational.blockingIssuesCount || 0)} bloqueante(s) · {Number(antiGlosaOperational.warningIssuesCount || 0)} risco(s) médio(s)
+                        </div>
+                      </div>
+                      {antiGlosaOperational.issues.length > 0 && (
+                        <div className="mb-3 grid gap-2 sm:grid-cols-2">
+                          {antiGlosaOperational.issues.map((issue) => (
+                            <div key={`${issue.code}-${issue.fieldPath || ""}`} className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm">
+                              <div className="font-medium text-slate-800">{issue.title}</div>
+                              <div className="mt-1 text-xs text-slate-500">Impacto: {issue.severity === "blocking" ? "Bloqueia envio para esta operadora" : "Risco operacional de glosa"}</div>
+                              {issue.recommendedAction && <div className="mt-1 text-xs text-slate-700">Como corrigir: {issue.recommendedAction}</div>}
+                              {issue.fieldPath && <div className="mt-1 text-[11px] text-slate-400">Campo: {issue.fieldPath}</div>}
+                            </div>
+                          ))}
+                        </div>
+                      )}
                       <div className={`rounded-md border px-3 py-2 text-sm ${
                         antiGlosaReady
                           ? "border-emerald-200 bg-emerald-50 text-emerald-800"

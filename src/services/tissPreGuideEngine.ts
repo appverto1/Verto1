@@ -738,6 +738,7 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
           requiresSignedGuide: Boolean(payerProfile.requires_signed_guide),
           requiresStampedDatedGuide: Boolean(payerProfile.requires_stamped_dated_guide),
           requiresAdministrativeReport: Boolean(payerProfile.requires_administrative_report),
+          requiresReport: Boolean(payerProfile.requires_administrative_report),
           allowsMixedMultidisciplinaryGuide: Boolean(payerProfile.allows_mixed_multidisciplinary_guide),
           requiresSeparateGuideBySpecialty: Boolean(payerProfile.requires_separate_guide_by_specialty),
         },

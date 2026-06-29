@@ -1976,15 +1976,18 @@ export function PayerRequirementsPanel({
                     </select>
                   </PayerTissField>
                 </div>
-                <p className="mt-4 text-xs font-bold uppercase tracking-widest text-indigo-500">Exigências gerais da operadora</p>
+                <p className="mt-4 text-xs font-bold uppercase tracking-widest text-indigo-500">Exigências anti-glosa da operadora</p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Essas regras alimentam a conferência anti-glosa antes do XML oficial. Marque apenas exigências reais do contrato ou portal da operadora.
+                </p>
                 <div className="mt-3 grid gap-2 sm:grid-cols-2">
                   {[
-                    ["requiresBeneficiaryCard", "Exige carteirinha"],
+                    ["requiresBeneficiaryCard", "Carteirinha obrigatória"],
                     ["requiresBeneficiaryCardValidity", "Exige validade da carteirinha"],
-                    ["requiresAuthorization", "Exige autorização prévia"],
+                    ["requiresAuthorization", "Autorização obrigatória"],
                     ["requiresAuthorizedProcedure", "Exige procedimento autorizado"],
-                    ["requiresAuthorizationPassword", "Exige senha/autorização"],
-                    ["requiresGuideNumber", "Exige número de guia"],
+                    ["requiresAuthorizationPassword", "Senha da autorização obrigatória"],
+                    ["requiresGuideNumber", "Número da guia da operadora obrigatório"],
                     ["requiresCid", "Exige CID"],
                     ["requiresExecutantRegistry", "Exige conselho do executante"],
                     ["requiresCbo", "Exige CBO"],
@@ -1994,7 +1997,7 @@ export function PayerRequirementsPanel({
                     ["requiresPhysicalGuide", "Exige guia física impressa"],
                     ["requiresSignedGuide", "Exige guia assinada"],
                     ["requiresStampedDatedGuide", "Exige guia carimbada/datada"],
-                    ["requiresAdministrativeReport", "Exige relatório/evolução administrativa"],
+                    ["requiresAdministrativeReport", "Relatório/anexo obrigatório antes do envio"],
                     ["allowsMixedMultidisciplinaryGuide", "Permite guia mista multidisciplinar"],
                     ["requiresSeparateGuideBySpecialty", "Exige guia segregada por especialidade"],
                   ].map(([key, label]) => (
