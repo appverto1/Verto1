@@ -231,6 +231,10 @@ test('UI expõe configuração, agenda e fechamento sem IDs técnicos ou HTML pe
   assert.match(payerPanelCode, /Dados da operadora/);
   assert.match(payerPanelCode, /Dados do prestador no convênio/);
   assert.match(payerPanelCode, /Exigências anti-glosa da operadora/);
+  assert.match(payerPanelCode, /Status da configura/);
+  assert.match(payerPanelCode, /Revisei as exig/);
+  assert.match(payerPanelCode, /Esta operadora n/);
+  assert.match(payerPanelCode, /Perfil anti-glosa ainda n/);
   assert.match(payerPanelCode, /Contatos e observações administrativas/);
   assert.match(coordinatorCode, /Pagador e conferência/);
   assert.match(calendarCode, /billingContext/);
@@ -444,6 +448,9 @@ test('Dados TISS da operadora tem rotulos permanentes e versao oficial automatic
     'Legado inválido',
     'Configuração do convênio para TISS',
     'Exigências anti-glosa da operadora',
+    'Status da configuração anti-glosa',
+    'Revisei as exigências anti-glosa desta operadora',
+    'Esta operadora não possui exigências adicionais',
     'Exceções por serviço',
     'A exceção substitui a regra geral apenas para este serviço',
   ]) {

@@ -37,6 +37,7 @@ const xmlDraftMigrationCode = readFileSync(join(root, 'supabase/migrations/20260
 const revenueCycleMigrationCode = readFileSync(join(root, 'supabase/migrations/20260617210000_tiss_revenue_cycle_backbone.sql'), 'utf8');
 const payerTussAdvancedMigrationCode = readFileSync(join(root, 'supabase/migrations/20260617223000_payer_tuss_advanced_contracts.sql'), 'utf8');
 const authorizationTussSyncMigrationCode = readFileSync(join(root, 'supabase/migrations/20260618143000_authorization_tuss_mapping_sync.sql'), 'utf8');
+const payerAntiGlosaReviewMigrationCode = readFileSync(join(root, 'supabase/migrations/20260629103000_payer_anti_glosa_review_state.sql'), 'utf8');
 const xmlDraftGeneratorCode = readFileSync(join(root, 'src/services/tissXmlDraftGenerator.ts'), 'utf8');
 const xmlDraftValidatorCode = readFileSync(join(root, 'src/services/tissXmlDraftValidator.ts'), 'utf8');
 const revenueStateMachineCode = readFileSync(join(root, 'src/services/tissRevenueCycleStateMachine.ts'), 'utf8');
@@ -128,6 +129,8 @@ const validInput = {
     requires_cbo: true,
     requires_executant_registry: true,
     requires_beneficiary_card: true,
+    anti_glosa_reviewed: true,
+    operator_has_no_additional_requirements: false,
   },
   professionalProfile: {
     id: 'professional-profile-1',
@@ -303,6 +306,88 @@ test('validacao anti-glosa classifica pre-guia completa como pronta para XML', (
   assert.equal(antiGlosa.canGenerateXml, true);
   assert.equal(antiGlosa.blockingIssuesCount, 0);
   assert.deepEqual(antiGlosa.issues, []);
+});
+
+test('validacao anti-glosa marca perfil da operadora nao revisado como risco medio', () => {
+  const input = clone(validInput);
+  input.payerProfile = {
+    ...input.payerProfile,
+    requires_beneficiary_card: false,
+    requires_authorization: false,
+    requires_authorized_procedure: false,
+    requires_authorization_password: false,
+    requires_guide_number: false,
+    requires_cid: false,
+    requires_executant_registry: false,
+    requires_cbo: false,
+    requires_cnes: false,
+    requires_provider_code: false,
+    requires_responsible_signature: false,
+    requires_physical_guide: false,
+    requires_signed_guide: false,
+    requires_stamped_dated_guide: false,
+    requires_administrative_report: false,
+    anti_glosa_reviewed: false,
+    operator_has_no_additional_requirements: false,
+  };
+  const { antiGlosa } = antiGlosaFor(input);
+
+  assert.equal(antiGlosa.antiGlosaStatus, 'medium_risk');
+  assert.equal(antiGlosa.canGenerateXml, true);
+  assert.ok(issueCodes(antiGlosa).includes('OPERATOR_ANTI_GLOSA_PROFILE_NOT_REVIEWED'));
+  assert.ok(!issueCodes(antiGlosa).includes('MISSING_CARD_NUMBER'));
+});
+
+test('validacao anti-glosa permite perfil revisado sem exigencias adicionais com universais ok', () => {
+  const input = clone(validInput);
+  input.payerProfile = {
+    ...input.payerProfile,
+    requires_beneficiary_card: false,
+    requires_authorization: false,
+    requires_authorized_procedure: false,
+    requires_authorization_password: false,
+    requires_guide_number: false,
+    requires_cid: false,
+    requires_executant_registry: false,
+    requires_cbo: false,
+    requires_cnes: false,
+    requires_provider_code: false,
+    requires_responsible_signature: false,
+    requires_physical_guide: false,
+    requires_signed_guide: false,
+    requires_stamped_dated_guide: false,
+    requires_administrative_report: false,
+    anti_glosa_reviewed: true,
+    operator_has_no_additional_requirements: true,
+  };
+  const { antiGlosa } = antiGlosaFor(input);
+
+  assert.equal(antiGlosa.antiGlosaStatus, 'ready_for_xml');
+  assert.equal(antiGlosa.canGenerateXml, true);
+  assert.deepEqual(antiGlosa.issues, []);
+});
+
+test('sem exigencias adicionais nao desativa requisitos universais TISS', () => {
+  const input = clone(validInput);
+  input.payerProfile = {
+    ...input.payerProfile,
+    requires_beneficiary_card: false,
+    requires_cnes: false,
+    requires_cbo: false,
+    requires_executant_registry: false,
+    anti_glosa_reviewed: true,
+    operator_has_no_additional_requirements: true,
+  };
+  input.patient = { ...input.patient, insurance_card_number: '' };
+  input.billingContext = { ...input.billingContext, insurance_card_number: '' };
+  input.clinicProfile = { ...input.clinicProfile, cnes_code: '' };
+  input.professionalProfile = { ...input.professionalProfile, cbo_code: '' };
+  const { antiGlosa } = antiGlosaFor(input);
+
+  assert.equal(antiGlosa.canGenerateXml, false);
+  assert.ok(issueCodes(antiGlosa).includes('MISSING_CARD_NUMBER'));
+  assert.ok(issueCodes(antiGlosa).includes('MISSING_CNES'));
+  assert.ok(issueCodes(antiGlosa).includes('MISSING_CBOS'));
 });
 
 test('validacao anti-glosa bloqueia campos obrigatorios ausentes por operadora', () => {
@@ -1308,6 +1393,20 @@ test('migration avançada de convênios cria tabela negociada e regras TISS sem 
   assert.doesNotMatch(payerTussAdvancedMigrationCode, /soap|certificado|remessa oficial|glosa|retorno/i);
 });
 
+test('migration anti-glosa adiciona estado de revisao do perfil da operadora sem mexer em XML', () => {
+  for (const column of [
+    'anti_glosa_reviewed',
+    'anti_glosa_reviewed_at',
+    'anti_glosa_reviewed_by',
+    'operator_has_no_additional_requirements',
+  ]) {
+    assert.match(payerAntiGlosaReviewMigrationCode, new RegExp(`add column if not exists ${column}`));
+  }
+  assert.match(payerAntiGlosaReviewMigrationCode, /idx_payer_tiss_profiles_anti_glosa_review/);
+  assert.match(payerAntiGlosaReviewMigrationCode, /notify pgrst, 'reload schema'/);
+  assert.doesNotMatch(payerAntiGlosaReviewMigrationCode, /tiss_official_documents|appointment_tiss_pre_guides|create_tiss_official_document|xml_content/i);
+});
+
 test('migration de autorizacao operacional completa campos sem XML', () => {
   for (const column of [
     'requires_authorized_procedure',
@@ -1581,6 +1680,14 @@ test('revalidação pontual e por período materializam Pré-guias sem backfill 
   assert.match(serverCode, /payer_resolution_source:\s*'name_unique_match'/);
   assert.match(periodRoute, /resolveEffectiveTissPreGuideBillingContext\(\{/);
   assert.match(periodRoute, /effectiveContextsByAppointment\.set\(appointmentId, billingContext\)/);
+  assert.match(periodRoute, /activeTissPreGuidePeriodRevalidations/);
+  assert.match(periodRoute, /TISS_PRE_GUIDE_REVALIDATION_ALREADY_RUNNING/);
+  assert.match(periodRoute, /loadDurationMs/);
+  assert.match(periodRoute, /validationDurationMs/);
+  assert.match(periodRoute, /persistDurationMs/);
+  assert.match(periodRoute, /\[TISS PreGuide Revalidation\] batch completed/);
+  assert.match(periodRoute, /Promise\.all\(batch\.map\(processEligibleAppointment\)\)/);
+  assert.match(periodRoute, /revalidationConcurrency/);
   assert.match(periodRoute, /payerResolutionReasonCode/);
   assert.match(periodRoute, /AMBIGUOUS_PAYER_NAME/);
   assert.match(periodRoute, /PAYER_NAME_NOT_FOUND/);
@@ -1616,6 +1723,7 @@ test('revalidação pontual e por período materializam Pré-guias sem backfill 
   assert.match(builder, /withoutOptionalTissPreGuidePayloadColumns/);
   assert.doesNotMatch(periodRoute, /\.select\('\*'\)/);
   assert.doesNotMatch(periodRoute, /payer_name_snapshot.*eligible|payer_name.*eligible/);
+  assert.doesNotMatch(periodRoute, /validateOfficialTissXml|validateTissOfficialXml|xsdValidation/);
 
   assert.match(serverCode, /app\.post\('\/api\/appointments\/:appointmentId\/tiss-pre-guide\/revalidate'/);
   assert.match(serverCode, /handleTissPreGuideRevalidation/);

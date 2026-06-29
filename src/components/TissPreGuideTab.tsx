@@ -1773,7 +1773,7 @@ export function TissPreGuideTab({
           className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
         >
           {periodRevalidating ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
-          Gerar/Revalidar pré-guias do período
+          {periodRevalidating ? "Revalidando Pré-guias..." : "Gerar/Revalidar pré-guias do período"}
         </button>
       </div>
 

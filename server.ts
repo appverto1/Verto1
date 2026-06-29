@@ -4159,6 +4159,10 @@ const PAYER_TISS_PROFILE_SELECT = [
   'requires_signed_guide',
   'requires_stamped_dated_guide',
   'requires_administrative_report',
+  'anti_glosa_reviewed',
+  'anti_glosa_reviewed_at',
+  'anti_glosa_reviewed_by',
+  'operator_has_no_additional_requirements',
   'allows_mixed_multidisciplinary_guide',
   'requires_separate_guide_by_specialty',
   'administrative_notes',
@@ -4167,6 +4171,18 @@ const PAYER_TISS_PROFILE_SELECT = [
   'created_at',
   'updated_at'
 ].join(',');
+
+const PAYER_TISS_PROFILE_OPTIONAL_REVIEW_COLUMNS = [
+  'anti_glosa_reviewed',
+  'anti_glosa_reviewed_at',
+  'anti_glosa_reviewed_by',
+  'operator_has_no_additional_requirements'
+];
+
+const PAYER_TISS_PROFILE_BASE_SELECT = PAYER_TISS_PROFILE_SELECT
+  .split(',')
+  .filter((column) => !PAYER_TISS_PROFILE_OPTIONAL_REVIEW_COLUMNS.includes(column))
+  .join(',');
 
 const PROFESSIONAL_BILLING_PROFILE_SELECT = [
   'id',
@@ -36967,6 +36983,30 @@ async function startServer() {
       if (error) {
         const missingColumn = extractMissingColumnName(error);
         if (missingColumn === scopeColumn) continue;
+        if (
+          tableName === 'payer_tiss_profiles' &&
+          PAYER_TISS_PROFILE_OPTIONAL_REVIEW_COLUMNS.includes(String(missingColumn || '')) &&
+          selectColumns !== PAYER_TISS_PROFILE_BASE_SELECT
+        ) {
+          let fallbackQuery = supabase
+            .from(tableName)
+            .select(PAYER_TISS_PROFILE_BASE_SELECT)
+            .eq(scopeColumn, organizationId)
+            .eq('active', true);
+          if (extraColumn && extraValue) fallbackQuery = fallbackQuery.eq(extraColumn, extraValue);
+          const fallback = await fallbackQuery
+            .order('updated_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          if (fallback.error) {
+            const fallbackMissingColumn = extractMissingColumnName(fallback.error);
+            if (fallbackMissingColumn === scopeColumn) continue;
+            if (hasMissingFinancialSchema(fallback.error) || isMissingRelationError(fallback.error)) return null;
+            throw fallback.error;
+          }
+          if (fallback.data) return fallback.data;
+          continue;
+        }
         if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return null;
         throw error;
       }
@@ -37805,6 +37845,22 @@ async function startServer() {
         .order('updated_at', { ascending: false })
         .limit(500);
       if (error) {
+        if (PAYER_TISS_PROFILE_OPTIONAL_REVIEW_COLUMNS.includes(String(extractMissingColumnName(error) || ''))) {
+          const fallback = await supabase
+            .from('payer_tiss_profiles')
+            .select(PAYER_TISS_PROFILE_BASE_SELECT)
+            .eq('organization_id', organizationId)
+            .eq('active', true)
+            .order('updated_at', { ascending: false })
+            .limit(500);
+          if (!fallback.error) {
+            return sendNoStoreJson(res, { success: true, data: Array.isArray(fallback.data) ? fallback.data : [] });
+          }
+          if (hasMissingFinancialSchema(fallback.error) || isMissingRelationError(fallback.error)) {
+            return sendNoStoreJson(res, { success: true, data: [] });
+          }
+          throw fallback.error;
+        }
         if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) {
           return sendNoStoreJson(res, { success: true, data: [] });
         }
@@ -37859,6 +37915,20 @@ async function startServer() {
           error: `Selecione opções oficiais suportadas pelo XML TISS 04.03.00: ${unsupportedCodes.join(', ')}.`
         });
       }
+      const hasAntiGlosaReviewedInput = Object.prototype.hasOwnProperty.call(req.body || {}, 'antiGlosaReviewed') ||
+        Object.prototype.hasOwnProperty.call(req.body || {}, 'anti_glosa_reviewed');
+      const hasNoAdditionalInput = Object.prototype.hasOwnProperty.call(req.body || {}, 'operatorHasNoAdditionalRequirements') ||
+        Object.prototype.hasOwnProperty.call(req.body || {}, 'operator_has_no_additional_requirements');
+      const operatorHasNoAdditionalRequirements = hasNoAdditionalInput
+        ? Boolean(req.body?.operatorHasNoAdditionalRequirements ?? req.body?.operator_has_no_additional_requirements)
+        : Boolean(existingProfile?.operator_has_no_additional_requirements);
+      const antiGlosaReviewed = operatorHasNoAdditionalRequirements || (hasAntiGlosaReviewedInput
+        ? Boolean(req.body?.antiGlosaReviewed ?? req.body?.anti_glosa_reviewed)
+        : Boolean(existingProfile?.anti_glosa_reviewed));
+      const previousAntiGlosaReviewed = Boolean(existingProfile?.anti_glosa_reviewed);
+      const antiGlosaReviewedAt = antiGlosaReviewed
+        ? sanitizeString(existingProfile?.anti_glosa_reviewed_at, 40) || now
+        : null;
       const payload = cleanObject({
         organization_id: organizationId,
         clinic_id: organizationId,
@@ -37895,6 +37965,10 @@ async function startServer() {
         requires_signed_guide: Boolean(req.body?.requiresSignedGuide ?? req.body?.requires_signed_guide),
         requires_stamped_dated_guide: Boolean(req.body?.requiresStampedDatedGuide ?? req.body?.requires_stamped_dated_guide),
         requires_administrative_report: Boolean(req.body?.requiresAdministrativeReport ?? req.body?.requires_administrative_report),
+        anti_glosa_reviewed: antiGlosaReviewed,
+        anti_glosa_reviewed_at: antiGlosaReviewed ? (previousAntiGlosaReviewed ? antiGlosaReviewedAt : now) : null,
+        anti_glosa_reviewed_by: antiGlosaReviewed && isUuid(userId) ? userId : null,
+        operator_has_no_additional_requirements: operatorHasNoAdditionalRequirements,
         allows_mixed_multidisciplinary_guide: Boolean(req.body?.allowsMixedMultidisciplinaryGuide ?? req.body?.allows_mixed_multidisciplinary_guide),
         requires_separate_guide_by_specialty: Boolean(req.body?.requiresSeparateGuideBySpecialty ?? req.body?.requires_separate_guide_by_specialty),
         administrative_notes: sanitizeTextField(req.body?.administrativeNotes ?? req.body?.administrative_notes, 2000) || null,
@@ -37904,14 +37978,23 @@ async function startServer() {
         updated_by: isUuid(userId) ? userId : null,
         updated_at: now
       });
-      const { data, error } = await supabase
+      let upsertResult = await supabase
         .from('payer_tiss_profiles')
         .upsert(payload, { onConflict: 'organization_id,payer_id' })
         .select(PAYER_TISS_PROFILE_SELECT)
         .maybeSingle();
-      if (error) throw error;
+      if (upsertResult.error && PAYER_TISS_PROFILE_OPTIONAL_REVIEW_COLUMNS.includes(String(extractMissingColumnName(upsertResult.error) || ''))) {
+        const fallbackPayload = { ...payload };
+        for (const column of PAYER_TISS_PROFILE_OPTIONAL_REVIEW_COLUMNS) delete (fallbackPayload as any)[column];
+        upsertResult = await supabase
+          .from('payer_tiss_profiles')
+          .upsert(fallbackPayload, { onConflict: 'organization_id,payer_id' })
+          .select(PAYER_TISS_PROFILE_BASE_SELECT)
+          .maybeSingle();
+      }
+      if (upsertResult.error) throw upsertResult.error;
       await markTissPreGuidesStale({ organizationId, payerId, reason: 'Dados TISS do pagador alterados.' });
-      return sendNoStoreJson(res, { success: true, data });
+      return sendNoStoreJson(res, { success: true, data: upsertResult.data });
     } catch (error: any) {
       console.warn('[TissPreGuide] payer profile update failed:', error?.message || String(error));
       return res.status(500).json(payerSafeError(500));
@@ -39975,9 +40058,12 @@ async function startServer() {
     }
   });
 
+  const activeTissPreGuidePeriodRevalidations = new Set<string>();
+
   app.post('/api/tiss/pre-guides/revalidate-period', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 24 * 1024, 'Revalidação de Pré-guias TISS do período')) return;
+      const startedAt = Date.now();
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
       const range = parseClosureDateRange(req.body || {});
@@ -39988,6 +40074,29 @@ async function startServer() {
       if ((payerId && !isUuid(payerId)) || (patientId && !isUuid(patientId)) || (professionalId && !isUuid(professionalId))) {
         return res.status(400).json({ success: false, error: 'Filtros inválidos para revalidar Pré-guias TISS.' });
       }
+      const revalidationJobKey = [
+        organizationId,
+        range.fromIso,
+        range.toIso,
+        payerId || '*',
+        patientId || '*',
+        professionalId || '*'
+      ].join(':');
+      if (activeTissPreGuidePeriodRevalidations.has(revalidationJobKey)) {
+        return res.status(409).json({
+          success: false,
+          code: 'TISS_PRE_GUIDE_REVALIDATION_ALREADY_RUNNING',
+          error: 'A revalidação deste período já está em andamento. Aguarde a conclusão para executar novamente.',
+          diagnostics: {
+            deduplicated: true
+          }
+        });
+      }
+      activeTissPreGuidePeriodRevalidations.add(revalidationJobKey);
+      res.once('finish', () => {
+        activeTissPreGuidePeriodRevalidations.delete(revalidationJobKey);
+      });
+      const loadStartedAt = Date.now();
       const appointmentRows = await fetchClosurePeriodAppointmentRows({
         clinicId: organizationId,
         user: req.session.user,
@@ -40035,6 +40144,7 @@ async function startServer() {
       if (contextResult.error && !hasMissingFinancialSchema(contextResult.error) && !isMissingRelationError(contextResult.error)) throw contextResult.error;
       if (existingPreGuideResult.error && !hasMissingFinancialSchema(existingPreGuideResult.error) && !isMissingRelationError(existingPreGuideResult.error)) throw existingPreGuideResult.error;
       if (billingItemResult.error && !hasMissingFinancialSchema(billingItemResult.error) && !isMissingRelationError(billingItemResult.error)) throw billingItemResult.error;
+      const loadDurationMs = Date.now() - loadStartedAt;
 
       const contextsByAppointment = new Map<string, any>(
         (contextResult.error ? [] : contextResult.data || [])
@@ -40068,6 +40178,7 @@ async function startServer() {
       const details: any[] = [];
       const detailsByAppointment = new Map<string, any>();
       const effectiveContextsByAppointment = new Map<string, any>();
+      const validationStartedAt = Date.now();
       for (const appointment of scopedAppointments) {
         const appointmentId = sanitizeString(appointment?.id, 120);
         const billingContext = await resolveEffectiveTissPreGuideBillingContext({
@@ -40140,6 +40251,7 @@ async function startServer() {
         if (filteredByPayer) continue;
         eligibleAppointments.push(appointment);
       }
+      const validationDurationMs = Date.now() - validationStartedAt;
 
       const counts = {
         foundAppointments: scopedAppointments.length,
@@ -40174,7 +40286,19 @@ async function startServer() {
           },
           diagnostics: {
             ...diagnostics,
-            ...schemaCheck.diagnostics
+            ...schemaCheck.diagnostics,
+            performance: {
+              preGuideCount: eligibleAppointments.length,
+              durationMs: Date.now() - startedAt,
+              loadDurationMs,
+              validationDurationMs,
+              persistDurationMs: 0,
+              changedCount: 0,
+              blockedCount: 0,
+              mediumRiskCount: 0,
+              readyCount: 0
+            },
+            deduplicated: false
           },
           errors: [],
           details: []
@@ -40182,7 +40306,8 @@ async function startServer() {
       }
       const items: any[] = [];
       const errorDetails: Array<{ appointmentId: string; code: string }> = [];
-      for (const appointment of eligibleAppointments) {
+      const persistStartedAt = Date.now();
+      const processEligibleAppointment = async (appointment: any) => {
         const appointmentId = sanitizeString(appointment?.id, 120);
         try {
           const effectiveContext = effectiveContextsByAppointment.get(appointmentId) || {};
@@ -40208,22 +40333,43 @@ async function startServer() {
           const preGuide = (generated as any)?.tissPreGuide || null;
           const preGuideResult = (generated as any)?.tissPreGuideResult || null;
           if (!(generated as any)?.ok || !preGuide || preGuideResult?.ok === false) {
-            counts.errors += 1;
             const code = preGuideResult?.errorCode || 'TISS_PRE_GUIDE_NOT_MATERIALIZED';
+            return { appointmentId, ok: false, code };
+          }
+          return { appointmentId, ok: true, preGuide };
+        } catch (itemError: any) {
+          const code = sanitizeString(itemError?.code, 80) || 'TISS_PRE_GUIDE_REVALIDATION_FAILED';
+          console.warn('[TissPreGuide] period item failed:', {
+            appointmentId,
+            code: sanitizeString(itemError?.code, 40) || null,
+            message: sanitizeTextField(itemError?.message, 300) || String(itemError)
+          });
+          return { appointmentId, ok: false, code, controlledError: true };
+        }
+      };
+      const revalidationConcurrency = Math.min(8, Math.max(1, Number(req.body?.concurrency || 6) || 6));
+      for (let index = 0; index < eligibleAppointments.length; index += revalidationConcurrency) {
+        const batch = eligibleAppointments.slice(index, index + revalidationConcurrency);
+        const batchResults = await Promise.all(batch.map(processEligibleAppointment));
+        for (const result of batchResults) {
+          const appointmentId = sanitizeString((result as any)?.appointmentId, 120);
+          if (!(result as any)?.ok) {
+            counts.errors += 1;
+            const code = sanitizeString((result as any)?.code, 80) || 'TISS_PRE_GUIDE_NOT_MATERIALIZED';
             const detail = detailsByAppointment.get(appointmentId);
             if (detail) {
               detail.status = 'error';
               detail.reasonCode = code;
               detail.message = code === 'TISS_PRE_GUIDE_SCHEMA_UNAVAILABLE'
                 ? 'Estrutura de Pré-guia TISS indisponível para materializar este atendimento.'
-                : 'Pré-guia TISS não foi materializada para este atendimento.';
+                : (result as any)?.controlledError
+                  ? 'Erro controlado ao revalidar a Pré-guia TISS deste atendimento.'
+                  : 'Pré-guia TISS não foi materializada para este atendimento.';
             }
-            errorDetails.push({
-              appointmentId,
-              code
-            });
+            errorDetails.push({ appointmentId, code });
             continue;
           }
+          const preGuide = (result as any).preGuide;
           if (existingPreGuideIds.has(appointmentId)) {
             counts.updated += 1;
             if (stalePreGuideIds.has(appointmentId)) counts.staleUpdated += 1;
@@ -40254,30 +40400,42 @@ async function startServer() {
             detail.preGuideId = preGuide.id || null;
           }
           items.push(preGuide);
-        } catch (itemError: any) {
-          counts.errors += 1;
-          const code = sanitizeString(itemError?.code, 80) || 'TISS_PRE_GUIDE_REVALIDATION_FAILED';
-          const detail = detailsByAppointment.get(appointmentId);
-          if (detail) {
-            detail.status = 'error';
-            detail.reasonCode = code;
-            detail.message = 'Erro controlado ao revalidar a Pré-guia TISS deste atendimento.';
-          }
-          errorDetails.push({ appointmentId, code });
-          console.warn('[TissPreGuide] period item failed:', {
-            appointmentId,
-            code: sanitizeString(itemError?.code, 40) || null,
-            message: sanitizeTextField(itemError?.message, 300) || String(itemError)
-          });
         }
       }
+      const persistDurationMs = Date.now() - persistStartedAt;
+      const durationMs = Date.now() - startedAt;
+      const performance = {
+        preGuideCount: eligibleAppointments.length,
+        durationMs,
+        loadDurationMs,
+        validationDurationMs,
+        persistDurationMs,
+        concurrency: revalidationConcurrency,
+        changedCount: counts.created + counts.updated,
+        blockedCount: details.filter((detail) => Number(detail.blockingCount || 0) > 0).length,
+        mediumRiskCount: items.filter((item) => sanitizeString(validateAntiGlosaForPreGuide({ preGuide: item }).antiGlosaStatus, 40) === 'medium_risk').length,
+        readyCount: items.filter((item) => sanitizeString(validateAntiGlosaForPreGuide({ preGuide: item }).antiGlosaStatus, 40) === 'ready_for_xml').length
+      };
+      console.info('[TISS PreGuide Revalidation] batch completed', {
+        preGuideCount: performance.preGuideCount,
+        durationMs: performance.durationMs,
+        loadDurationMs: performance.loadDurationMs,
+        validationDurationMs: performance.validationDurationMs,
+        persistDurationMs: performance.persistDurationMs,
+        changedCount: performance.changedCount,
+        blockedCount: performance.blockedCount,
+        mediumRiskCount: performance.mediumRiskCount,
+        readyCount: performance.readyCount
+      });
       return sendNoStoreJson(res, {
         success: counts.errors === 0 || items.length > 0,
         data: items,
         counts,
         diagnostics: {
           ...diagnostics,
-          ...schemaCheck.diagnostics
+          ...schemaCheck.diagnostics,
+          performance,
+          deduplicated: false
         },
         errors: errorDetails,
         details,

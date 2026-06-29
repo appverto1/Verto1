@@ -179,6 +179,10 @@ type PayerTissForm = {
   requiresAdministrativeReport: boolean;
   allowsMixedMultidisciplinaryGuide: boolean;
   requiresSeparateGuideBySpecialty: boolean;
+  antiGlosaReviewed: boolean;
+  antiGlosaReviewedAt: string;
+  antiGlosaReviewedBy: string;
+  operatorHasNoAdditionalRequirements: boolean;
   administrativeNotes: string;
   specificRules: string;
 };
@@ -301,9 +305,32 @@ const defaultPayerTissForm: PayerTissForm = {
   requiresAdministrativeReport: false,
   allowsMixedMultidisciplinaryGuide: false,
   requiresSeparateGuideBySpecialty: false,
+  antiGlosaReviewed: false,
+  antiGlosaReviewedAt: "",
+  antiGlosaReviewedBy: "",
+  operatorHasNoAdditionalRequirements: false,
   administrativeNotes: "",
   specificRules: "",
 };
+
+const antiGlosaRequirementKeys: Array<keyof PayerTissForm> = [
+  "requiresBeneficiaryCard",
+  "requiresBeneficiaryCardValidity",
+  "requiresAuthorization",
+  "requiresAuthorizedProcedure",
+  "requiresAuthorizationPassword",
+  "requiresGuideNumber",
+  "requiresCid",
+  "requiresExecutantRegistry",
+  "requiresCbo",
+  "requiresCnes",
+  "requiresProviderCode",
+  "requiresResponsibleSignature",
+  "requiresPhysicalGuide",
+  "requiresSignedGuide",
+  "requiresStampedDatedGuide",
+  "requiresAdministrativeReport",
+];
 
 const OFFICIAL_TISS_XML_STRATEGY = getDefaultTissOfficialStrategyDescriptor();
 const payerTissFieldClass = "mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100";
@@ -492,6 +519,10 @@ const normalizePayerTissProfile = (profile: any = {}): PayerTissForm => ({
   requiresAdministrativeReport: Boolean(profile.requires_administrative_report ?? profile.requiresAdministrativeReport),
   allowsMixedMultidisciplinaryGuide: Boolean(profile.allows_mixed_multidisciplinary_guide ?? profile.allowsMixedMultidisciplinaryGuide),
   requiresSeparateGuideBySpecialty: Boolean(profile.requires_separate_guide_by_specialty ?? profile.requiresSeparateGuideBySpecialty),
+  antiGlosaReviewed: Boolean(profile.anti_glosa_reviewed ?? profile.antiGlosaReviewed),
+  antiGlosaReviewedAt: profile.anti_glosa_reviewed_at || profile.antiGlosaReviewedAt || "",
+  antiGlosaReviewedBy: profile.anti_glosa_reviewed_by || profile.antiGlosaReviewedBy || "",
+  operatorHasNoAdditionalRequirements: Boolean(profile.operator_has_no_additional_requirements ?? profile.operatorHasNoAdditionalRequirements),
   administrativeNotes: profile.administrative_notes || profile.administrativeNotes || "",
   specificRules: profile.specific_rules || profile.specificRules || "",
 });
@@ -639,20 +670,29 @@ export function PayerRequirementsPanel({
     if (payerTissForm.defaultGuideType && !hasOption(guideTypes040300, payerTissForm.defaultGuideType)) issues.push("Tipo de guia inválido");
     return issues;
   }, [payerTissForm.defaultAttendanceCharacter, payerTissForm.defaultAttendanceRegime, payerTissForm.defaultAttendanceType, payerTissForm.defaultGuideType]);
+  const hasAnySpecificAntiGlosaRequirement = useMemo(
+    () => antiGlosaRequirementKeys.some((key) => Boolean((payerTissForm as any)[key])),
+    [payerTissForm],
+  );
+  const antiGlosaProfileNeedsReview = isInsurancePayer(selectedPayer) &&
+    !payerTissForm.antiGlosaReviewed &&
+    !payerTissForm.operatorHasNoAdditionalRequirements;
   const selectedPayerReadiness = useMemo(() => {
     if (!isInsurancePayer(selectedPayer)) return { label: "TISS não aplicável", className: "bg-slate-100 text-slate-600", issues: [] as string[] };
     const issues = [
       ...selectedPayerTissMissing,
       ...selectedPayerOfficialCodeIssues,
+      antiGlosaProfileNeedsReview ? "Perfil anti-glosa não revisado" : "",
       selectedPayerMappingCount === 0 ? "Sem De/Para TUSS ativo" : "",
       selectedPayerPriceCount === 0 ? "Sem valor negociado ativo" : "",
       payerTissMessage ? "Pré-guias precisam ser revalidadas" : "",
     ].filter(Boolean) as string[];
     if (selectedPayerOfficialCodeIssues.length > 0) return { label: "Configuração inválida", className: "bg-rose-50 text-rose-700", issues };
     if (payerTissMessage) return { label: "Pré-guias precisam ser revalidadas", className: "bg-amber-50 text-amber-700", issues };
+    if (antiGlosaProfileNeedsReview) return { label: "Anti-glosa não revisada", className: "bg-amber-50 text-amber-700", issues };
     if (issues.length > 0) return { label: "Configuração incompleta", className: "bg-amber-50 text-amber-700", issues };
     return { label: "Pronto para gerar XML", className: "bg-emerald-50 text-emerald-700", issues };
-  }, [payerTissMessage, selectedPayer, selectedPayerMappingCount, selectedPayerOfficialCodeIssues, selectedPayerPriceCount, selectedPayerTissMissing]);
+  }, [antiGlosaProfileNeedsReview, payerTissMessage, selectedPayer, selectedPayerMappingCount, selectedPayerOfficialCodeIssues, selectedPayerPriceCount, selectedPayerTissMissing]);
   const activeTussServices = useMemo(() => tussServices.filter((service) => service.active === true), [tussServices]);
   const activeTussCodes = useMemo(() => tussCodes.filter((code) => code.active === true), [tussCodes]);
   const hasDemoTussData = [...tussMappings, ...tussCodes].some((item: any) =>
@@ -983,11 +1023,36 @@ export function PayerRequirementsPanel({
     setPayerTissForm((current) => ({ ...current, [key]: value }));
   };
 
+  const updateAntiGlosaRequirement = (key: keyof PayerTissForm, value: boolean) => {
+    setPayerTissForm((current) => ({
+      ...current,
+      [key]: value,
+      operatorHasNoAdditionalRequirements: value ? false : current.operatorHasNoAdditionalRequirements,
+    }));
+  };
+
+  const updateAntiGlosaReviewed = (value: boolean) => {
+    setPayerTissForm((current) => ({
+      ...current,
+      antiGlosaReviewed: value,
+      operatorHasNoAdditionalRequirements: value ? current.operatorHasNoAdditionalRequirements : false,
+    }));
+  };
+
+  const updateOperatorNoAdditionalRequirements = (value: boolean) => {
+    setPayerTissForm((current) => ({
+      ...current,
+      operatorHasNoAdditionalRequirements: value,
+      antiGlosaReviewed: value ? true : current.antiGlosaReviewed,
+    }));
+  };
+
   const savePayerTissProfile = async () => {
     if (!selectedPayerId || !isInsurancePayer(selectedPayer)) return;
     setSaving(true);
     setError("");
     setPayerTissMessage("");
+    const savingWithoutAntiGlosaReview = !payerTissForm.antiGlosaReviewed && !payerTissForm.operatorHasNoAdditionalRequirements;
     try {
       const result = await dataService.updatePayerTissProfile(selectedPayerId, payerTissForm);
       if (!result?.success) {
@@ -995,7 +1060,9 @@ export function PayerRequirementsPanel({
         return;
       }
       setPayerTissForm(normalizePayerTissProfile(result.data || payerTissForm));
-      setPayerTissMessage("Configuração do convênio salva. Pré-guias deste pagador foram marcadas para revalidação.");
+      setPayerTissMessage(savingWithoutAntiGlosaReview
+        ? "Perfil anti-glosa ainda não revisado. As Pré-guias dessa operadora aparecerão com risco médio até a revisão ser confirmada."
+        : "Configuração do convênio salva. Pré-guias deste pagador foram marcadas para revalidação.");
     } finally {
       setSaving(false);
     }
@@ -1980,6 +2047,50 @@ export function PayerRequirementsPanel({
                 <p className="mt-1 text-xs text-slate-500">
                   Essas regras alimentam a conferência anti-glosa antes do XML oficial. Marque apenas exigências reais do contrato ou portal da operadora.
                 </p>
+                <div className={`mt-3 rounded-2xl border px-3 py-3 ${antiGlosaProfileNeedsReview ? "border-amber-200 bg-amber-50" : "border-emerald-100 bg-emerald-50"}`}>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="text-sm font-semibold text-slate-900">Status da configuração anti-glosa</p>
+                      <p className="mt-1 text-xs leading-5 text-slate-600">
+                        Confirme a revisão das exigências da operadora para que as Pré-guias possam sair como prontas para XML. Requisitos universais de TISS e contrato continuam valendo.
+                      </p>
+                    </div>
+                    <span className={`rounded-full px-2.5 py-1 text-xs font-normal ${antiGlosaProfileNeedsReview ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-800"}`}>
+                      {antiGlosaProfileNeedsReview ? "Não revisado" : "Revisado"}
+                    </span>
+                  </div>
+                  <div className="mt-3 grid gap-2">
+                    <label className="flex items-start gap-2 text-sm font-normal text-slate-700">
+                      <input
+                        type="checkbox"
+                        checked={payerTissForm.antiGlosaReviewed}
+                        onChange={(event) => updateAntiGlosaReviewed(event.target.checked)}
+                        className="mt-0.5 h-4 w-4 accent-[#7a32fc]"
+                      />
+                      <span>Revisei as exigências anti-glosa desta operadora</span>
+                    </label>
+                    <label className={`flex items-start gap-2 text-sm font-normal ${hasAnySpecificAntiGlosaRequirement ? "text-slate-400" : "text-slate-700"}`}>
+                      <input
+                        type="checkbox"
+                        checked={payerTissForm.operatorHasNoAdditionalRequirements}
+                        disabled={hasAnySpecificAntiGlosaRequirement}
+                        onChange={(event) => updateOperatorNoAdditionalRequirements(event.target.checked)}
+                        className="mt-0.5 h-4 w-4 accent-[#7a32fc] disabled:opacity-50"
+                      />
+                      <span>Esta operadora não possui exigências adicionais além do TISS padrão e do contrato cadastrado</span>
+                    </label>
+                    {hasAnySpecificAntiGlosaRequirement ? (
+                      <p className="text-[11px] leading-4 text-slate-500">
+                        A confirmação de sem exigências adicionais fica disponível quando todas as exigências específicas estiverem desmarcadas.
+                      </p>
+                    ) : null}
+                    {antiGlosaProfileNeedsReview ? (
+                      <p className="rounded-xl border border-amber-200 bg-white/70 px-3 py-2 text-xs leading-5 text-amber-800">
+                        Perfil anti-glosa ainda não revisado. As Pré-guias dessa operadora aparecerão com risco médio até a revisão ser confirmada.
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
                 <div className="mt-3 grid gap-2 sm:grid-cols-2">
                   {[
                     ["requiresBeneficiaryCard", "Carteirinha obrigatória"],
@@ -2005,7 +2116,7 @@ export function PayerRequirementsPanel({
                       <input
                         type="checkbox"
                         checked={Boolean((payerTissForm as any)[key])}
-                        onChange={(event) => updatePayerTiss(key as keyof PayerTissForm, event.target.checked)}
+                        onChange={(event) => updateAntiGlosaRequirement(key as keyof PayerTissForm, event.target.checked)}
                         className="h-4 w-4 accent-[#7a32fc]"
                       />
                       {label}

@@ -180,6 +180,7 @@ const ISSUE_TITLES: Record<string, string> = {
   OPERATOR_REQUIRES_ATTACHMENT: "Operadora exige anexo antes do envio",
   OPERATOR_REQUIRES_REPORT: "Operadora exige relatório antes do envio",
   OPERATOR_REQUIRES_SIGNATURE: "Operadora exige assinatura antes do envio",
+  OPERATOR_ANTI_GLOSA_PROFILE_NOT_REVIEWED: "Exigências da operadora ainda não revisadas",
   OPERATOR_SPECIFIC_RULE: "Regra específica da operadora",
 };
 
@@ -207,6 +208,7 @@ const ISSUE_ACTIONS: Record<string, string> = {
   OPERATOR_REQUIRES_ATTACHMENT: "Anexe ou confira a documentação exigida pela operadora.",
   OPERATOR_REQUIRES_REPORT: "Vincule o relatório/evolução exigido pela operadora.",
   OPERATOR_REQUIRES_SIGNATURE: "Colete ou confira a assinatura exigida pela operadora.",
+  OPERATOR_ANTI_GLOSA_PROFILE_NOT_REVIEWED: "Abra Convênios e TISS > Exigências anti-glosa da operadora e marque as exigências reais ou confirme que não há exigências adicionais.",
   OPERATOR_SPECIFIC_RULE: "Confira as regras específicas cadastradas para esta operadora.",
 };
 
@@ -368,6 +370,23 @@ function requirements(snapshot: Record<string, any>) {
   return snapshot.payer?.requirements || {};
 }
 
+const booleanRequirement = (snapshot: Record<string, any>, camelKey: string, snakeKey?: string) => {
+  const payerRequirements = requirements(snapshot);
+  return Boolean(
+    payerRequirements[camelKey] ??
+      (snakeKey ? payerRequirements[snakeKey] : undefined) ??
+      snapshot.payer?.[camelKey] ??
+      (snakeKey ? snapshot.payer?.[snakeKey] : undefined),
+  );
+};
+
+const hasInsurancePayerContext = (snapshot: Record<string, any>) =>
+  Boolean(snapshot.payer?.id || snapshot.payer?.profileId || snapshot.payer?.name);
+
+const hasReviewedAntiGlosaProfile = (snapshot: Record<string, any>) =>
+  booleanRequirement(snapshot, "antiGlosaReviewed", "anti_glosa_reviewed") ||
+  booleanRequirement(snapshot, "operatorHasNoAdditionalRequirements", "operator_has_no_additional_requirements");
+
 function isRequired(snapshot: Record<string, any>, requirementPath?: string) {
   if (!requirementPath) return true;
   return Boolean(requirements(snapshot)[requirementPath]);
@@ -405,6 +424,81 @@ const isAbaLikePreGuide = (snapshot: Record<string, any>) => {
   return haystack.includes("ABA");
 };
 
+const dateOnly = (value: unknown) => text(value).slice(0, 10);
+
+function addUniversalTissBillingIssues(params: {
+  issues: AntiGlosaIssue[];
+  snapshot: Record<string, any>;
+  preGuideId?: string | null;
+}) {
+  const { issues, snapshot } = params;
+  if (!hasInsurancePayerContext(snapshot)) return;
+  const preGuideId = params.preGuideId || null;
+  const scheduledStart = text(snapshot.appointment?.scheduledStart);
+  const authorization = snapshot.authorization || {};
+  const hasAuthorizationContext = Boolean(
+    text(authorization.authorizationId) ||
+      text(authorization.authorizationCode) ||
+      text(authorization.guideNumber) ||
+      text(authorization.authorizationValidFrom) ||
+      text(authorization.authorizationValidUntil),
+  );
+  const addBlocking = (code: string, description: string, fieldPath: string) => addIssue(issues, {
+    code,
+    severity: "blocking",
+    title: antiGlosaTitle(code),
+    description,
+    fieldPath,
+    recommendedAction: ISSUE_ACTIONS[code],
+    preGuideId,
+  });
+
+  if (!text(snapshot.beneficiary?.cardNumber)) {
+    addBlocking("MISSING_CARD_NUMBER", "Atendimento de convênio precisa identificar a carteirinha do beneficiário.", "beneficiary_card");
+  }
+  if (!text(snapshot.procedure?.tussCode) || !text(snapshot.procedure?.name)) {
+    addBlocking("MISSING_TUSS_MAPPING", "Pré-guia de convênio precisa de procedimento TUSS oficial resolvido por De/Para.", "procedure_tuss_mapping");
+  }
+  if (!numberOrNull(snapshot.procedure?.totalAmountCents) || Number(snapshot.procedure?.totalAmountCents || 0) <= 0) {
+    addBlocking("MISSING_NEGOTIATED_PRICE", "Pré-guia de convênio precisa de valor negociado positivo antes do XML.", "amount_calculated");
+  }
+  if (!text(snapshot.provider?.providerCode) && !text(snapshot.payer?.contractedProviderCode) && !text(snapshot.payer?.operatorProviderCode)) {
+    addBlocking("MISSING_PROVIDER_CODE", "Código do prestador/contratado na operadora precisa estar configurado.", "provider_code");
+  }
+  if (!text(snapshot.provider?.cnesCode)) {
+    addBlocking("MISSING_CNES", "CNES do prestador precisa estar configurado para a conferência TISS.", "provider_code");
+  }
+  if (!text(snapshot.professional?.councilType)) {
+    addBlocking("MISSING_PROFESSIONAL_COUNCIL", "Profissional executante precisa de conselho informado.", "professional_registry");
+  }
+  if (!text(snapshot.professional?.councilNumber)) {
+    addBlocking("MISSING_PROFESSIONAL_COUNCIL_NUMBER", "Profissional executante precisa de número do conselho informado.", "professional_registry");
+  }
+  if (!text(snapshot.professional?.councilState)) {
+    addBlocking("MISSING_PROFESSIONAL_COUNCIL_UF", "Profissional executante precisa de UF do conselho informada.", "professional_registry");
+  }
+  if (!text(snapshot.professional?.cboCode)) {
+    addBlocking("MISSING_CBOS", "Profissional executante precisa de CBOS informado.", "professional_cbo");
+  }
+  if (hasAuthorizationContext && !text(authorization.authorizationCode)) {
+    addBlocking("MISSING_AUTHORIZATION", "Autorização vinculada sem senha/código informado.", "authorization_valid");
+  }
+  if (hasAuthorizationContext && !text(authorization.guideNumber)) {
+    addBlocking("MISSING_OPERATOR_GUIDE", "Autorização vinculada sem número de guia informado.", "guide_number");
+  }
+  if (text(authorization.authorizationValidFrom) && scheduledStart && dateOnly(authorization.authorizationValidFrom) > dateOnly(scheduledStart)) {
+    addBlocking("AUTHORIZATION_NOT_STARTED", "Autorização ainda não estava vigente na data da sessão.", "authorization_valid");
+  }
+  if (text(authorization.authorizationValidUntil) && scheduledStart && dateOnly(authorization.authorizationValidUntil) < dateOnly(scheduledStart)) {
+    addBlocking("AUTHORIZATION_EXPIRED", "Autorização estava vencida na data da sessão.", "authorization_valid");
+  }
+  const authorizedQuantity = numberOrNull(authorization.authorizedQuantity);
+  const usedQuantity = numberOrNull(authorization.usedQuantity);
+  if (authorizedQuantity !== null && authorizedQuantity > 0 && usedQuantity !== null && usedQuantity >= authorizedQuantity) {
+    addBlocking("AUTHORIZATION_INSUFFICIENT_BALANCE", "Quantidade autorizada já foi consumida.", "authorization_valid");
+  }
+}
+
 function summarizeAntiGlosaChecklist(params: {
   checklist: Partial<TissAntiGlosaChecklistResult>;
   snapshot?: Record<string, any> | null;
@@ -429,6 +523,8 @@ function summarizeAntiGlosaChecklist(params: {
       preGuideId: params.preGuideId || null,
     });
   }
+
+  addUniversalTissBillingIssues({ issues, snapshot, preGuideId: params.preGuideId || null });
 
   const tussCode = text(snapshot.procedure?.tussCode).toUpperCase();
   if (LEGACY_TUSS_CODES.has(tussCode) && isAbaLikePreGuide(snapshot)) {
@@ -466,6 +562,18 @@ function summarizeAntiGlosaChecklist(params: {
       description: "O total da sessão não confere com quantidade e valor negociado ativo.",
       fieldPath: "procedure.totalAmountCents",
       recommendedAction: ISSUE_ACTIONS.PRICE_MISMATCH,
+      preGuideId: params.preGuideId || null,
+    });
+  }
+
+  if (hasInsurancePayerContext(snapshot) && !hasReviewedAntiGlosaProfile(snapshot)) {
+    addIssue(issues, {
+      code: "OPERATOR_ANTI_GLOSA_PROFILE_NOT_REVIEWED",
+      severity: "warning",
+      title: antiGlosaTitle("OPERATOR_ANTI_GLOSA_PROFILE_NOT_REVIEWED"),
+      description: "Revise o contrato ou portal da operadora e confirme as exigências anti-glosa para reduzir risco de glosa.",
+      fieldPath: "payer.requirements.antiGlosaReviewed",
+      recommendedAction: ISSUE_ACTIONS.OPERATOR_ANTI_GLOSA_PROFILE_NOT_REVIEWED,
       preGuideId: params.preGuideId || null,
     });
   }
