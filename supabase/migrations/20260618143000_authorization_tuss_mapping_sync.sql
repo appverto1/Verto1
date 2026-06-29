@@ -41,6 +41,6 @@ alter table public.tiss_revenue_cycle_events
       'TISS_OFFICIAL_XML_XSD_VALIDATED',
       'MANUAL_OVERRIDE_APPLIED'
     )
-  );
+  ) not valid;
 
 notify pgrst, 'reload schema';

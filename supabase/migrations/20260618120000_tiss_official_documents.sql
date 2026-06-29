@@ -139,7 +139,7 @@ alter table public.tiss_revenue_cycle_events
       'TISS_OFFICIAL_XML_XSD_VALIDATED',
       'MANUAL_OVERRIDE_APPLIED'
     )
-  );
+  ) not valid;
 
 alter table public.tiss_revenue_cycle_events
   drop constraint if exists tiss_revenue_cycle_events_state_check;
@@ -162,7 +162,7 @@ alter table public.tiss_revenue_cycle_events
       'partially_denied',
       'appealed'
     )
-  );
+  ) not valid;
 
 create or replace function public.create_tiss_official_document(
   p_payer_id uuid,

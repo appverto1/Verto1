@@ -34,7 +34,7 @@ alter table public.tiss_revenue_cycle_events
       'TISS_OFFICIAL_XML_XSD_VALIDATED',
       'MANUAL_OVERRIDE_APPLIED'
     )
-  );
+  ) not valid;
 
 alter table public.tiss_revenue_cycle_events
   drop constraint if exists tiss_revenue_cycle_events_state_check;
@@ -57,7 +57,7 @@ alter table public.tiss_revenue_cycle_events
       'partially_denied',
       'appealed'
     )
-  );
+  ) not valid;
 
 drop function if exists public.create_tiss_official_document(
   uuid, date, text, text, text, text, text, text, text, text, text, text, uuid[], text, jsonb, jsonb, integer, integer, jsonb, uuid

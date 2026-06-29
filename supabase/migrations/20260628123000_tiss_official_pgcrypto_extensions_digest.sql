@@ -1,6 +1,8 @@
 -- Qualify pgcrypto digest for official TISS XML persistence.
 -- Non-destructive hotfix: keeps the RPC signature, XML generation, XSD validation,
 -- idempotency, pre-guide linking and audit semantics unchanged.
+-- Intentionally does not alter revenue-cycle event constraints; production may
+-- contain legacy event rows outside older enumerations.
 
 create schema if not exists extensions;
 create extension if not exists pgcrypto with schema extensions;
