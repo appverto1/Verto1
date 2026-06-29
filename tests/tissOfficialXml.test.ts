@@ -19,6 +19,7 @@ const dataServiceCode = readFileSync(join(root, "src/services/dataService.ts"), 
 const uiCode = readFileSync(join(root, "src/components/TissPreGuideTab.tsx"), "utf8");
 const migrationCode = readFileSync(join(root, "supabase/migrations/20260618120000_tiss_official_documents.sql"), "utf8");
 const persistenceHardeningMigrationCode = readFileSync(join(root, "supabase/migrations/20260626123000_tiss_official_persistence_hardening.sql"), "utf8");
+const pgcryptoDigestHotfixMigrationCode = readFileSync(join(root, "supabase/migrations/20260628123000_tiss_official_pgcrypto_extensions_digest.sql"), "utf8");
 const draftGeneratorCode = readFileSync(join(root, "src/services/tissXmlDraftGenerator.ts"), "utf8");
 const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 
@@ -449,6 +450,8 @@ test("state machine permite apenas a transição pré-envio para XML oficial val
 
 test("migration cria persistência imutável, RLS, índices e RPC transacional", () => {
   assert.match(migrationCode, /create table if not exists public\.tiss_official_documents/i);
+  assert.match(migrationCode, /create schema if not exists extensions/i);
+  assert.match(migrationCode, /create extension if not exists pgcrypto with schema extensions/i);
   assert.match(migrationCode, /enable row level security/i);
   assert.match(migrationCode, /for select to authenticated/i);
   assert.match(migrationCode, /revoke all on table public\.tiss_official_documents from anon/i);
@@ -461,12 +464,16 @@ test("migration cria persistência imutável, RLS, índices e RPC transacional",
   assert.match(migrationCode, /new\.total_amount_cents is distinct from old\.total_amount_cents/i);
   assert.match(migrationCode, /create or replace function public\.create_tiss_official_document/i);
   assert.match(migrationCode, /security definer[\s\S]*set search_path = public/i);
+  assert.match(migrationCode, /encode\(extensions\.digest\(p_xml_content::text, 'sha256'::text\), 'hex'\)/);
   assert.match(migrationCode, /TISS_OFFICIAL_XML_GENERATED/);
   assert.match(migrationCode, /TISS_OFFICIAL_XML_XSD_VALIDATED/);
   assert.match(migrationCode, /p_pre_guide_versions \? selected\.id::text/);
   assert.match(migrationCode, /selected\.updated_at is distinct from \(p_pre_guide_versions ->> selected\.id::text\)::timestamptz/);
   assert.match(migrationCode, /select[\s\S]*d\.id,[\s\S]*idempotency_key = p_idempotency_key[\s\S]*for update[\s\S]*select[\s\S]*d\.id,[\s\S]*idempotency_key = p_idempotency_key/i);
   assert.doesNotMatch(migrationCode, /select\s+\*/i);
+  assert.doesNotMatch(migrationCode, /(^|[^.\w])digest\s*\(/i);
+  assert.match(persistenceHardeningMigrationCode, /create schema if not exists extensions/i);
+  assert.match(persistenceHardeningMigrationCode, /create extension if not exists pgcrypto with schema extensions/i);
   assert.match(persistenceHardeningMigrationCode, /create or replace function public\.create_tiss_official_document/i);
   assert.match(persistenceHardeningMigrationCode, /drop function if exists public\.create_tiss_official_document/);
   assert.match(persistenceHardeningMigrationCode, /p_organization_id uuid/);
@@ -481,10 +488,24 @@ test("migration cria persistência imutável, RLS, índices e RPC transacional",
   assert.match(persistenceHardeningMigrationCode, /official_document_id uuid references public\.tiss_official_documents\(id\) on delete set null/);
   assert.match(persistenceHardeningMigrationCode, /TISS_OFFICIAL_XML_GENERATED/);
   assert.match(persistenceHardeningMigrationCode, /TISS_OFFICIAL_XML_XSD_VALIDATED/);
+  assert.match(persistenceHardeningMigrationCode, /encode\(extensions\.digest\(p_xml_content::text, 'sha256'::text\), 'hex'\)/);
   assert.match(persistenceHardeningMigrationCode, /grant execute on function public\.create_tiss_official_document\([\s\S]*?\) to authenticated;/);
   assert.match(persistenceHardeningMigrationCode, /grant execute on function public\.create_tiss_official_document\([\s\S]*?\) to service_role;/);
   assert.match(persistenceHardeningMigrationCode, /notify pgrst, 'reload schema';/);
   assert.doesNotMatch(persistenceHardeningMigrationCode, /select\s+\*/i);
+  assert.doesNotMatch(persistenceHardeningMigrationCode, /(^|[^.\w])digest\s*\(/i);
+  assert.match(pgcryptoDigestHotfixMigrationCode, /create schema if not exists extensions/i);
+  assert.match(pgcryptoDigestHotfixMigrationCode, /create extension if not exists pgcrypto with schema extensions/i);
+  assert.match(pgcryptoDigestHotfixMigrationCode, /perform encode\(extensions\.digest\('teste'::text, 'sha256'::text\), 'hex'\)/);
+  assert.match(pgcryptoDigestHotfixMigrationCode, /create or replace function public\.create_tiss_official_document/i);
+  assert.match(pgcryptoDigestHotfixMigrationCode, /p_organization_id uuid/);
+  assert.match(pgcryptoDigestHotfixMigrationCode, /p_generated_by uuid default null/);
+  assert.match(pgcryptoDigestHotfixMigrationCode, /encode\(extensions\.digest\(p_xml_content::text, 'sha256'::text\), 'hex'\)/);
+  assert.match(pgcryptoDigestHotfixMigrationCode, /grant execute on function public\.create_tiss_official_document\([\s\S]*?\) to authenticated;/);
+  assert.match(pgcryptoDigestHotfixMigrationCode, /grant execute on function public\.create_tiss_official_document\([\s\S]*?\) to service_role;/);
+  assert.match(pgcryptoDigestHotfixMigrationCode, /notify pgrst, 'reload schema';/);
+  assert.doesNotMatch(pgcryptoDigestHotfixMigrationCode, /(^|[^.\w])digest\s*\(/i);
+  assert.doesNotMatch(pgcryptoDigestHotfixMigrationCode, /select\s+\*/i);
 });
 
 test("rotas oficiais são paralelas, paginadas, sem XML na listagem e download confere hash", () => {

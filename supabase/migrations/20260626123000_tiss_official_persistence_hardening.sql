@@ -2,6 +2,9 @@
 -- Additive only: keeps generated XML/XSD/hash rules intact and fixes the
 -- durable link between selected pre-guides and the official document.
 
+create schema if not exists extensions;
+create extension if not exists pgcrypto with schema extensions;
+
 alter table public.appointment_tiss_pre_guides
   add column if not exists official_document_id uuid references public.tiss_official_documents(id) on delete set null;
 
@@ -187,7 +190,7 @@ begin
     raise exception 'TISS_OFFICIAL_XML_TOO_LARGE';
   end if;
 
-  if p_xml_hash <> encode(digest(p_xml_content, 'sha256'), 'hex') then
+  if p_xml_hash <> encode(extensions.digest(p_xml_content::text, 'sha256'::text), 'hex') then
     raise exception 'TISS_OFFICIAL_XML_HASH_MISMATCH';
   end if;
 

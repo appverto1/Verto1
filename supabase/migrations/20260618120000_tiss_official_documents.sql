@@ -3,7 +3,8 @@
 -- It does NOT transmit SOAP, create remittances, receive returns, process denials,
 -- use certificates, perform mTLS, or integrate with payer portals.
 
-create extension if not exists pgcrypto;
+create schema if not exists extensions;
+create extension if not exists pgcrypto with schema extensions;
 
 create table if not exists public.tiss_official_documents (
   id uuid primary key default gen_random_uuid(),
@@ -231,7 +232,7 @@ begin
     raise exception 'TISS_OFFICIAL_XML_TOO_LARGE';
   end if;
 
-  if p_xml_hash <> encode(digest(p_xml_content, 'sha256'), 'hex') then
+  if p_xml_hash <> encode(extensions.digest(p_xml_content::text, 'sha256'::text), 'hex') then
     raise exception 'TISS_OFFICIAL_XML_HASH_MISMATCH';
   end if;
 
