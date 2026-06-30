@@ -666,7 +666,7 @@ test("data service e UI expõem documento oficial sem remover o fluxo de rascunh
   assert.match(uiCode, /Gerar lote XML para operadora/);
   assert.match(uiCode, /Confirmar geração do lote XML/);
   assert.match(uiCode, /Histórico de lotes XML oficiais/);
-  assert.match(uiCode, /Ferramentas internas e histórico/);
+  assert.match(uiCode, /Ferramentas avançadas/);
   assert.match(uiCode, /Selecionar todas as válidas/);
   assert.match(uiCode, /Visualizar guias incluídas/);
   assert.match(uiCode, /Lote XML validado/);

@@ -19,6 +19,9 @@ const dataServiceCode = readFileSync(join(root, 'src/services/dataService.ts'), 
 const closureCenterCode = readFileSync(join(root, 'src/components/OperationalClosureCenter.tsx'), 'utf8');
 const calendarCode = readFileSync(join(root, 'src/components/Calendar.tsx'), 'utf8');
 const coordinatorCode = readFileSync(join(root, 'src/components/CoordinatorDashboard.tsx'), 'utf8');
+const adminDashboardCode = readFileSync(join(root, 'src/components/AdminDashboard.tsx'), 'utf8');
+const therapistDashboardCode = readFileSync(join(root, 'src/components/TherapistDashboard.tsx'), 'utf8');
+const receptionistDashboardCode = readFileSync(join(root, 'src/components/ReceptionistDashboard.tsx'), 'utf8');
 const payerPanelCode = readFileSync(join(root, 'src/components/PayerRequirementsPanel.tsx'), 'utf8');
 const migrationCode = readFileSync(join(root, 'supabase/migrations/20260529123000_payer_requirements_prefacturing.sql'), 'utf8');
 
@@ -244,6 +247,22 @@ test('UI expõe configuração, agenda e fechamento sem IDs técnicos ou HTML pe
   assert.doesNotMatch(coordinatorCode, /dangerouslySetInnerHTML/);
   assert.doesNotMatch(calendarCode, /PostgREST|Railway|Supabase/i);
   assert.doesNotMatch(closureCenterCode, /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+});
+
+test('sidebar expande apenas por clique, persiste preferencia e usa cor principal unica', () => {
+  for (const code of [coordinatorCode, adminDashboardCode, therapistDashboardCode, receptionistDashboardCode]) {
+    assert.doesNotMatch(code, /onMouseEnter=\{\(\) => setIsSidebarExpanded\(true\)\}/);
+    assert.doesNotMatch(code, /onMouseLeave=\{\(\) => setIsSidebarExpanded\(false\)\}/);
+    assert.match(code, /Recolher menu lateral/);
+    assert.match(code, /Expandir menu lateral/);
+    assert.match(code, /localStorage\.setItem\([^,]+,\s*expanded \? ['"]true['"] : ['"]false['"]\)/);
+  }
+
+  assert.match(coordinatorCode, /COORDINATOR_SIDEBAR_PREFERENCE_KEY/);
+  assert.match(coordinatorCode, /space-y-5/);
+  assert.match(coordinatorCode, /border-t border-slate-100 pt-4/);
+  assert.match(coordinatorCode, /text-\[#7a32fc\] bg-violet-50/);
+  assert.doesNotMatch(coordinatorCode, /bg-amber-400 px-1\.5 py-0\.5 text-\[8px\]/);
 });
 
 test('Tabela de Valores tem rotulos permanentes, reais no formulario e configuracao consolidada', () => {

@@ -177,6 +177,26 @@ type NavigationNode = {
   intent?: FinancialNavigationIntent;
   children?: NavigationNode[];
 };
+
+const COORDINATOR_SIDEBAR_PREFERENCE_KEY = "verto:coordinator-sidebar-expanded";
+
+const readSidebarPreference = (key: string) => {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(key) === "true";
+  } catch {
+    return false;
+  }
+};
+
+const writeSidebarPreference = (key: string, expanded: boolean) => {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(key, expanded ? "true" : "false");
+  } catch {
+    // Prefer stable navigation over failing when storage is unavailable.
+  }
+};
 import {
   PATIENT_FINANCIAL_BILLING_MODE_OPTIONS,
   PATIENT_FINANCIAL_PAYMENT_METHOD_OPTIONS,
@@ -486,7 +506,14 @@ export function CoordinatorDashboard({
   const [showInvitationModal, setShowInvitationModal] = useState(false);
   const [showBillingDetails, setShowBillingDetails] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [isSidebarExpanded, setIsSidebarExpanded] = useState(false);
+  const [isSidebarExpanded, setIsSidebarExpanded] = useState(() => readSidebarPreference(COORDINATOR_SIDEBAR_PREFERENCE_KEY));
+  const toggleSidebarExpanded = useCallback(() => {
+    setIsSidebarExpanded((current) => {
+      const next = !current;
+      writeSidebarPreference(COORDINATOR_SIDEBAR_PREFERENCE_KEY, next);
+      return next;
+    });
+  }, []);
   const [expandedNavigationSections, setExpandedNavigationSections] = useState<Record<string, boolean>>({
     "care-root": true,
     "tiss-root": true,
@@ -7277,7 +7304,7 @@ export function CoordinatorDashboard({
               expanded ? `gap-3 px-3 ${indentClass}` : "justify-center"
             } min-h-10 py-2.5 rounded-xl transition-all font-medium ${depth > 0 ? "text-xs" : "text-sm"} ${
               isActive
-                ? "text-[#7a32fc] bg-purple-50 shadow-sm"
+                ? "text-[#7a32fc] bg-violet-50 shadow-sm ring-1 ring-violet-100"
                 : hasChildren && depth > 0
                   ? "text-slate-500 hover:text-slate-900 hover:bg-slate-50"
                   : "text-slate-400 hover:text-slate-900 hover:bg-slate-50"
@@ -7289,7 +7316,7 @@ export function CoordinatorDashboard({
               <>
                 <span className="min-w-0 truncate">{item.label}</span>
                 {item.badge && (
-                  <span className="ml-auto shrink-0 rounded-full bg-amber-400 px-1.5 py-0.5 text-[8px] font-black text-amber-950 shadow-sm shadow-amber-300/50 ring-1 ring-amber-500/30">
+                  <span className="ml-auto shrink-0 rounded-full bg-violet-50 px-1.5 py-0.5 text-[8px] font-semibold text-[#7a32fc] ring-1 ring-violet-100">
                     {item.badge}
                   </span>
                 )}
@@ -7312,9 +7339,9 @@ export function CoordinatorDashboard({
     };
 
     return (
-      <div className="space-y-3">
+      <div className="space-y-5">
         {visibleNavigationGroups.map((group, groupIndex) => (
-          <div key={`navigation-group-${groupIndex}`} className="space-y-1">
+          <div key={`navigation-group-${groupIndex}`} className={`${groupIndex > 0 ? "border-t border-slate-100 pt-4" : ""} space-y-2`}>
             {group.map((item) => renderNode(item))}
           </div>
         ))}
@@ -7435,12 +7462,10 @@ export function CoordinatorDashboard({
       <div className="h-screen overflow-hidden bg-[#F4F7FE] flex">
         {/* Sidebar */}
         <div
-          onMouseEnter={() => setIsSidebarExpanded(true)}
-          onMouseLeave={() => setIsSidebarExpanded(false)}
           className={`${patientSidebarExpanded ? "w-64" : "w-20"} h-screen shrink-0 overflow-hidden bg-white hidden lg:flex flex-col px-4 py-4 border-r border-slate-100 transition-all duration-300 ease-in-out z-20`}
         >
           <div
-            className={`flex shrink-0 items-center ${patientSidebarExpanded ? "gap-2" : "justify-center"} mb-5 px-1 transition-all duration-300`}
+            className={`flex shrink-0 items-center ${patientSidebarExpanded ? "gap-2" : "flex-col justify-center gap-2"} mb-5 px-1 transition-all duration-300`}
           >
             <LogoVerto size={38} />
             {patientSidebarExpanded && (
@@ -7453,6 +7478,15 @@ export function CoordinatorDashboard({
                 </span>
               </div>
             )}
+            <button
+              type="button"
+              onClick={toggleSidebarExpanded}
+              className={`${patientSidebarExpanded ? "ml-auto" : ""} rounded-xl border border-slate-100 bg-white p-2 text-slate-400 shadow-sm transition-all hover:bg-violet-50 hover:text-[#7a32fc]`}
+              aria-label={patientSidebarExpanded ? "Recolher menu lateral" : "Expandir menu lateral"}
+              title={patientSidebarExpanded ? "Recolher menu" : "Expandir menu"}
+            >
+              {patientSidebarExpanded ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
+            </button>
           </div>
 
           <nav className="min-h-0 flex-1 overflow-y-auto no-scrollbar pr-1">
@@ -7491,7 +7525,7 @@ export function CoordinatorDashboard({
             </div>
             <button
               onClick={onLogout}
-              className={`w-full flex items-center ${patientSidebarExpanded ? "gap-3 justify-start px-3" : "justify-center px-2"} py-2.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all font-bold text-sm`}
+              className={`w-full flex items-center ${patientSidebarExpanded ? "gap-3 justify-start px-3" : "justify-center px-2"} py-2.5 text-slate-400 hover:text-[#7a32fc] hover:bg-violet-50 rounded-xl transition-all font-bold text-sm`}
             >
               <LogOut size={18} />
               {patientSidebarExpanded && "Sair do Sistema"}
@@ -7758,12 +7792,10 @@ export function CoordinatorDashboard({
   return (
     <div className="h-screen overflow-hidden bg-[#F4F7FE] flex">
       {/* Sidebar */}
-      <aside 
-        onMouseEnter={() => setIsSidebarExpanded(true)}
-        onMouseLeave={() => setIsSidebarExpanded(false)}
+      <aside
         className={`${isSidebarExpanded ? 'w-64' : 'w-20'} h-screen shrink-0 overflow-hidden bg-white hidden lg:flex flex-col px-4 py-4 border-r border-slate-100 transition-all duration-300 ease-in-out z-20`}
       >
-        <div className={`flex shrink-0 items-center ${isSidebarExpanded ? 'gap-2' : 'justify-center'} mb-5 px-1 transition-all duration-300`}>
+        <div className={`flex shrink-0 items-center ${isSidebarExpanded ? 'gap-2' : 'flex-col justify-center gap-2'} mb-5 px-1 transition-all duration-300`}>
           <LogoVerto size={38} />
           {isSidebarExpanded && (
             <div>
@@ -7775,6 +7807,15 @@ export function CoordinatorDashboard({
               </span>
             </div>
           )}
+          <button
+            type="button"
+            onClick={toggleSidebarExpanded}
+            className={`${isSidebarExpanded ? "ml-auto" : ""} rounded-xl border border-slate-100 bg-white p-2 text-slate-400 shadow-sm transition-all hover:bg-violet-50 hover:text-[#7a32fc]`}
+            aria-label={isSidebarExpanded ? "Recolher menu lateral" : "Expandir menu lateral"}
+            title={isSidebarExpanded ? "Recolher menu" : "Expandir menu"}
+          >
+            {isSidebarExpanded ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
+          </button>
         </div>
 
         <nav className="min-h-0 flex-1 overflow-y-auto no-scrollbar pr-1">
@@ -7805,7 +7846,7 @@ export function CoordinatorDashboard({
           )}
           <button
             onClick={onLogout}
-            className={`w-full flex items-center ${isSidebarExpanded ? 'gap-3 px-4' : 'justify-center'} py-3 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-2xl transition-all font-bold text-sm`}
+            className={`w-full flex items-center ${isSidebarExpanded ? 'gap-3 px-4' : 'justify-center'} py-3 text-slate-400 hover:text-[#7a32fc] hover:bg-violet-50 rounded-2xl transition-all font-bold text-sm`}
             title={!isSidebarExpanded ? "Sair" : ""}
           >
             <LogOut size={20} />

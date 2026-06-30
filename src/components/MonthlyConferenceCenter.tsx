@@ -1079,7 +1079,7 @@ export function MonthlyConferenceCenter({
             ["notBillable", "Não faturáveis", ShieldAlert],
             ["exported", "Exportadas", Download],
             ["reopened", "Reabertas", RefreshCw],
-          ].map(([value, label, Icon]: any) => (
+          ].filter(([value]) => !(activeTab === "preGuides" && value === "preGuides")).map(([value, label, Icon]: any) => (
             <button
               key={value}
               type="button"
@@ -1090,7 +1090,7 @@ export function MonthlyConferenceCenter({
                 }
                 setActiveTab(value);
               }}
-              className={`inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium ${activeTab === value ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-50"}`}
+              className={`inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium ${activeTab === value ? "bg-violet-50 text-[#7a32fc] ring-1 ring-violet-100" : "text-slate-600 hover:bg-slate-50 hover:text-[#7a32fc]"}`}
             >
               <Icon size={15} />
               {label}

@@ -1789,13 +1789,13 @@ test('revalidação pontual e por período materializam Pré-guias sem backfill 
 });
 
 test('botão de revalidação do período é único e comunica schema indisponível', () => {
-  const periodButtonCount = (preGuideUiCode.match(/Gerar\/Revalidar pré-guias do período/g) || []).length;
+  const periodButtonCount = (preGuideUiCode.match(/Atualizar pré-guias do período/g) || []).length;
   assert.equal(periodButtonCount, 1);
   const revalidateClickCount = (preGuideUiCode.match(/onClick=\{\(\) => void revalidatePeriod\(\)\}/g) || []).length;
   assert.equal(revalidateClickCount, 1);
   assert.match(preGuideUiCode, /Estrutura de Pré-guia TISS indisponível/);
-  assert.match(preGuideUiCode, /Use a ação primária acima para gerar\/revalidar o período/);
-  assert.match(preGuideUiCode, /Use a ação primária acima para gerar ou revalidar as pré-guias do período/);
+  assert.match(preGuideUiCode, /Abra Ferramentas avançadas para atualizar as pré-guias do período/);
+  assert.match(preGuideUiCode, /Atualizar pré-guias do período/);
   assert.doesNotMatch(preGuideUiCode, /Gerar\/Revalidar pendentes do período/);
 });
 
@@ -1919,6 +1919,8 @@ test('Convênios expõe configuração TISS guiada por operadora', () => {
 
 test('frontend separa Pré-guias e Rascunhos XML com preview interno', () => {
   assert.match(conferenceCode, /"preGuides", "Pré-guias TISS"/);
+  assert.match(conferenceCode, /filter\(\(\[value\]\) => !\(activeTab === "preGuides" && value === "preGuides"\)\)/);
+  assert.match(conferenceCode, /bg-violet-50 text-\[#7a32fc\]/);
   assert.match(conferenceCode, /<TissPreGuideTab/);
   for (const label of [
     'Pré-guias válidas',
@@ -1938,7 +1940,7 @@ test('frontend separa Pré-guias e Rascunhos XML com preview interno', () => {
   assert.match(preGuideUiCode, /dataService\.getTissPreGuide/);
   assert.match(preGuideUiCode, /dataService\.revalidateTissPreGuide/);
   assert.match(preGuideUiCode, /dataService\.revalidateTissPreGuidePeriod/);
-  assert.match(preGuideUiCode, /Gerar\/Revalidar pré-guias do período/);
+  assert.match(preGuideUiCode, /Atualizar pré-guias do período/);
   assert.match(preGuideUiCode, /As pré-guias são criadas por revalidação para evitar backfill automático/);
   assert.match(preGuideUiCode, /Nenhum atendimento elegível encontrado/);
   assert.match(preGuideUiCode, /dataService\.updateClinicTissProfile/);
@@ -1975,8 +1977,11 @@ test('frontend separa Pré-guias e Rascunhos XML com preview interno', () => {
   assert.match(preGuideUiCode, /toggleOfficialPreGuideSelection/);
   assert.match(preGuideUiCode, /activePanel === "batchDrafts"/);
   assert.match(preGuideUiCode, /activePanel === "xmlDrafts"/);
-  assert.match(preGuideUiCode, /Central de Fechamento TISS/);
-  assert.match(preGuideUiCode, /Ferramentas internas e histórico/);
+  assert.match(preGuideUiCode, /Conferência das Pré-guias/);
+  assert.match(preGuideUiCode, /Ferramentas avançadas/);
+  assert.match(preGuideUiCode, /Manutenção das Pré-guias/);
+  assert.doesNotMatch(preGuideUiCode, /Central de Fechamento TISS/);
+  assert.doesNotMatch(preGuideUiCode, /Materialização action-driven/);
   assert.match(preGuideUiCode, /Os rascunhos são recursos internos de conferência/);
   assert.match(preGuideUiCode, /Lotes rascunho/);
   assert.match(preGuideUiCode, /Criar lote rascunho/);
@@ -2107,7 +2112,7 @@ test('frontend separa Pré-guias e Rascunhos XML com preview interno', () => {
   assert.match(preGuideUiCode, /missingPreGuides/);
   assert.match(preGuideUiCode, /stalePreGuides/);
   assert.doesNotMatch(preGuideUiCode, /Gerar\/Revalidar pendentes/);
-  assert.match(preGuideUiCode, /Use a ação primária acima para gerar\/revalidar o período/);
+  assert.match(preGuideUiCode, /Abra Ferramentas avançadas para atualizar as pré-guias do período/);
   assert.match(preGuideUiCode, /Nenhum atendimento eleg/);
   assert.doesNotMatch(preGuideUiCode, /Enviar lote|Enviar remessa|Registrar glosa|Remessa enviada|Faturamento TISS concluído|Guia oficial enviada|Lote transmitido|Retorno importado|Glosa processada|Recurso de glosa/i);
 });

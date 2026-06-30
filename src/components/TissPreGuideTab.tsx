@@ -1767,13 +1767,13 @@ export function TissPreGuideTab({
       <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <div className="text-sm font-semibold text-slate-900">Central de Fechamento TISS</div>
+            <div className="text-sm font-semibold text-slate-900">Conferência das Pré-guias</div>
             <p className="mt-1 text-xs text-slate-500">
-              Conferência interna de pré-guias, lotes rascunho e XMLs rascunho. Nenhum dado é enviado à operadora nesta etapa.
+              Revise dados TISS, riscos anti-glosa e gere o lote XML oficial para a operadora. Ferramentas de manutenção ficam recolhidas abaixo.
             </p>
           </div>
           <span className="rounded-full bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700 ring-1 ring-indigo-100">
-            Validação interna
+            Pré-faturamento
           </span>
         </div>
       </div>
@@ -1812,24 +1812,6 @@ export function TissPreGuideTab({
 
       {(
         <>
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-indigo-100 bg-indigo-50/60 px-3 py-3">
-        <div>
-          <div className="text-sm font-semibold text-slate-800">Materialização action-driven</div>
-          <div className="mt-0.5 text-xs text-slate-600">
-            Use esta ação para materializar dados antigos ou revalidar pré-guias pendentes/stale. O carregamento normal da aba apenas lê as pré-guias já criadas.
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={() => void revalidatePeriod()}
-          disabled={periodRevalidating || loading}
-          className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {periodRevalidating ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
-          {periodRevalidating ? "Revalidando Pré-guias..." : "Gerar/Revalidar pré-guias do período"}
-        </button>
-      </div>
-
       {(missingPreGuides > 0 || stalePreGuides > 0) && !quickFilter && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-800">
           <div>
@@ -1848,7 +1830,7 @@ export function TissPreGuideTab({
             </div>
           </div>
           <div className="rounded-md border border-amber-200 bg-white/70 px-3 py-2 text-xs font-medium text-amber-800">
-            Use a ação primária acima para gerar/revalidar o período.
+            Abra Ferramentas avançadas para atualizar as pré-guias do período.
           </div>
         </div>
       )}
@@ -1997,7 +1979,7 @@ export function TissPreGuideTab({
                           As pré-guias são criadas por revalidação para evitar backfill automático. Você pode gerar pré-guias para os atendimentos faturáveis deste período.
                         </p>
                         <div className="mt-4 text-xs font-medium text-slate-500">
-                          Use a ação primária acima para gerar ou revalidar as pré-guias do período.
+                          Abra Ferramentas avançadas para atualizar as pré-guias do período.
                         </div>
                       </div>
                     )}
@@ -2175,9 +2157,26 @@ export function TissPreGuideTab({
         className="rounded-lg border border-slate-200 bg-white shadow-sm"
       >
         <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-800">
-          Ferramentas internas e histórico
+          Ferramentas avançadas
         </summary>
         <div className="space-y-3 border-t border-slate-100 px-4 py-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-indigo-100 bg-indigo-50/60 px-3 py-3">
+            <div>
+              <div className="text-sm font-semibold text-slate-800">Manutenção das Pré-guias</div>
+              <div className="mt-0.5 text-xs text-slate-600">
+                Use quando alterar agenda, convênio, autorização ou valores e precisar recalcular as pré-guias.
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => void revalidatePeriod()}
+              disabled={periodRevalidating || loading}
+              className="inline-flex items-center gap-2 rounded-md bg-[#7a32fc] px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {periodRevalidating ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+              {periodRevalidating ? "Atualizando Pré-guias..." : "Atualizar pré-guias do período"}
+            </button>
+          </div>
           <p className="text-sm text-slate-500">
             Os rascunhos são recursos internos de conferência. Eles não são necessários para gerar o lote XML oficial e não são enviados à operadora.
           </p>

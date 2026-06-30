@@ -9,6 +9,7 @@ import {
   Search, 
   Filter, 
   Download, 
+  ChevronLeft,
   ChevronRight, 
   ArrowUpRight, 
   ArrowDownRight,
@@ -42,6 +43,26 @@ import { LogoVerto } from './Common';
 import { SecureImage } from './SecureMedia';
 import { getSupabase } from '../lib/supabase';
 
+const ADMIN_SIDEBAR_PREFERENCE_KEY = 'verto:admin-sidebar-expanded';
+
+const readAdminSidebarPreference = () => {
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.localStorage.getItem(ADMIN_SIDEBAR_PREFERENCE_KEY) === 'true';
+  } catch {
+    return false;
+  }
+};
+
+const writeAdminSidebarPreference = (expanded: boolean) => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(ADMIN_SIDEBAR_PREFERENCE_KEY, expanded ? 'true' : 'false');
+  } catch {
+    // Storage can be unavailable in private contexts; navigation still works.
+  }
+};
+
 export const AdminDashboard = ({ onLogout }: any) => {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [searchTerm, setSearchTerm] = useState('');
@@ -53,7 +74,14 @@ export const AdminDashboard = ({ onLogout }: any) => {
   const [qrCodeUrl, setQrCodeUrl] = useState('');
   const [twoFactorToken, setTwoFactorToken] = useState('');
   const [is2FAEnabled, setIs2FAEnabled] = useState(false);
-  const [isSidebarExpanded, setIsSidebarExpanded] = useState(false);
+  const [isSidebarExpanded, setIsSidebarExpanded] = useState(readAdminSidebarPreference);
+  const toggleSidebarExpanded = () => {
+    setIsSidebarExpanded((current) => {
+      const next = !current;
+      writeAdminSidebarPreference(next);
+      return next;
+    });
+  };
   const [complimentaryEmail, setComplimentaryEmail] = useState('');
   const [complimentaryNote, setComplimentaryNote] = useState('');
   const [grantingComplimentaryPlan, setGrantingComplimentaryPlan] = useState(false);
@@ -250,14 +278,21 @@ export const AdminDashboard = ({ onLogout }: any) => {
   return (
     <div className="min-h-screen bg-[#F4F7FE] flex font-sans text-gray-900">
       {/* Sidebar */}
-      <aside 
-        onMouseEnter={() => setIsSidebarExpanded(true)}
-        onMouseLeave={() => setIsSidebarExpanded(false)}
+      <aside
         className={`${isSidebarExpanded ? 'w-72' : 'w-24'} bg-white border-r border-gray-100 flex flex-col sticky top-0 h-screen transition-all duration-300 ease-in-out z-50`}
       >
-        <div className={`p-8 flex items-center ${isSidebarExpanded ? 'gap-3' : 'justify-center'} transition-all duration-300`}>
+        <div className={`p-8 flex items-center ${isSidebarExpanded ? 'gap-3' : 'flex-col justify-center gap-2'} transition-all duration-300`}>
           <LogoVerto size={40} />
           {isSidebarExpanded && <span className="text-2xl font-bold tracking-tighter text-[#7a32fc]">ADMIN</span>}
+          <button
+            type="button"
+            onClick={toggleSidebarExpanded}
+            className={`${isSidebarExpanded ? 'ml-auto' : ''} rounded-xl border border-gray-100 bg-white p-2 text-gray-400 shadow-sm transition-all hover:bg-violet-50 hover:text-[#7a32fc]`}
+            aria-label={isSidebarExpanded ? 'Recolher menu lateral' : 'Expandir menu lateral'}
+            title={isSidebarExpanded ? 'Recolher menu' : 'Expandir menu'}
+          >
+            {isSidebarExpanded ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
+          </button>
         </div>
 
         <nav className="flex-1 px-4 py-4 space-y-2">
@@ -302,7 +337,7 @@ export const AdminDashboard = ({ onLogout }: any) => {
         <div className="p-6 border-t border-gray-50">
           <button 
             onClick={onLogout}
-            className={`w-full flex items-center ${isSidebarExpanded ? 'gap-3 px-4' : 'justify-center'} py-3 text-gray-400 font-bold hover:text-red-500 hover:bg-red-50 rounded-2xl transition-all`}
+            className={`w-full flex items-center ${isSidebarExpanded ? 'gap-3 px-4' : 'justify-center'} py-3 text-gray-400 font-bold hover:text-[#7a32fc] hover:bg-violet-50 rounded-2xl transition-all`}
             title={!isSidebarExpanded ? "Sair" : ""}
           >
             <LogOut size={20} />
@@ -731,7 +766,7 @@ const SidebarItem = ({ icon, label, active, onClick, badge, isExpanded }: any) =
     onClick={onClick}
     className={`w-full flex items-center ${isExpanded ? 'gap-3 px-4' : 'justify-center px-4'} py-3 rounded-2xl font-bold transition-all ${
       active 
-        ? 'bg-[#7a32fc] text-white shadow-lg shadow-purple-500/20' 
+        ? 'bg-violet-50 text-[#7a32fc] shadow-sm ring-1 ring-violet-100'
         : 'text-gray-400 hover:text-gray-600 hover:bg-gray-50'
     }`}
     title={!isExpanded ? label : ""}
@@ -739,7 +774,7 @@ const SidebarItem = ({ icon, label, active, onClick, badge, isExpanded }: any) =
     {icon}
     {isExpanded && <span className="text-sm">{label}</span>}
     {isExpanded && badge && <span className="ml-auto text-[8px] bg-purple-100 text-[#7a32fc] px-1.5 py-0.5 rounded-full">{badge}</span>}
-    {isExpanded && active && !badge && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-white"></div>}
+    {isExpanded && active && !badge && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-[#7a32fc]"></div>}
   </button>
 );
 
