@@ -25,7 +25,7 @@ import {
 import { ActiveFilterBanner } from "./ActiveFilterBanner";
 import { dataService } from "../services/dataService";
 import { getDefaultTissOfficialStrategyDescriptor } from "../services/tissOfficial/capabilities";
-import { validateAntiGlosaForPreGuide } from "../services/tissAntiGlosaChecklist";
+import { validateAntiGlosaBatchForOfficialXml, validateAntiGlosaForPreGuide } from "../services/tissAntiGlosaChecklist";
 import { formatDateTimeInAppointmentTimezone } from "../utils/scheduling";
 
 type TissPreGuideRow = {
@@ -790,6 +790,10 @@ export function TissPreGuideTab({
     else acc.blocked += 1;
     return acc;
   }, { readyForXml: 0, lowRisk: 0, mediumRisk: 0, blocked: 0 }), [selectedOfficialRows]);
+  const selectedOfficialBatchAntiGlosa = useMemo(
+    () => validateAntiGlosaBatchForOfficialXml({ preGuides: selectedOfficialRows as Array<Record<string, any>> }),
+    [selectedOfficialRows]
+  );
   const blockedOfficialAntiGlosaCount = useMemo(() => blockedOfficialRows.filter(({ row }) => !antiGlosaValidation(row).canGenerateXml).length, [blockedOfficialRows]);
   const selectedOfficialUniquePatients = useMemo(
     () => new Set(selectedOfficialRows.map((row) => String(row.patientId || row.patientName || row.snapshot?.beneficiary?.id || row.snapshot?.beneficiary?.name || "")).filter(Boolean)).size,
@@ -2647,6 +2651,7 @@ export function TissPreGuideTab({
                 <DetailField label="Anti-glosa prontas" value={String(selectedOfficialAntiGlosaSummary.readyForXml)} />
                 <DetailField label="Risco baixo" value={String(selectedOfficialAntiGlosaSummary.lowRisk)} />
                 <DetailField label="Risco médio" value={String(selectedOfficialAntiGlosaSummary.mediumRisk)} />
+                <DetailField label="Alertas do lote" value={String(selectedOfficialBatchAntiGlosa.warningIssuesCount)} />
                 <DetailField label="Versão do XML TISS" value={selectedOfficialTissVersion} />
                 <DetailField label="Bloqueadas fora do lote" value={String(blockedOfficialAntiGlosaCount)} />
                 <DetailField label="Envio à operadora" value="Não enviado" />
@@ -2655,6 +2660,40 @@ export function TissPreGuideTab({
                 <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
                   Há Pré-guia(s) com risco médio de glosa. O XML pode ser gerado, mas revise os motivos antes do envio manual à operadora.
                 </div>
+              )}
+              {selectedOfficialBatchAntiGlosa.warningIssuesCount > 0 && (
+                <section className="rounded-md border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-900">
+                  <div className="flex items-start gap-2">
+                    <ShieldAlert size={17} className="mt-0.5 flex-none text-amber-600" />
+                    <div>
+                      <div className="font-semibold">Alertas anti-glosa do lote</div>
+                      <p className="mt-1 text-xs text-amber-800">Você pode gerar o XML, mas há alertas anti-glosa para revisar antes do envio à operadora.</p>
+                    </div>
+                  </div>
+                  <div className="mt-3 space-y-3">
+                    {selectedOfficialBatchAntiGlosa.issues.map((issue) => (
+                      <div key={`${issue.code}-${issue.guideNumber || "sem-guia"}`} className="rounded-md border border-amber-200 bg-white/70 px-3 py-2">
+                        <div className="font-semibold text-amber-950">{issue.title}</div>
+                        <p className="mt-1 text-xs text-amber-900">{issue.description}</p>
+                        {issue.guideNumber && (
+                          <div className="mt-2 text-xs text-amber-900">
+                            Guia {issue.guideNumber} aparece em {issue.occurrenceCount || 0} Pré-guias selecionadas.
+                          </div>
+                        )}
+                        {issue.examples && issue.examples.length > 0 && (
+                          <div className="mt-1 text-xs text-amber-800">
+                            Envolvidas: {issue.examples.map((example) => `${fieldValue(example.patientName, "Paciente")} · ${formatDate(example.scheduledStart)}`).join("; ")}
+                          </div>
+                        )}
+                        {issue.recommendedAction && (
+                          <div className="mt-2 text-xs text-amber-900">
+                            <span className="font-semibold">Ação recomendada:</span> {issue.recommendedAction}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </section>
               )}
               {selectedOfficialRows.length === 0 && (
                 <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">

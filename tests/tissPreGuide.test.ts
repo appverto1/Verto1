@@ -18,6 +18,7 @@ import {
 } from '../src/services/tissRevenueCycleStateMachine';
 import {
   buildTissAntiGlosaChecklist,
+  validateAntiGlosaBatchForOfficialXml,
   validateAntiGlosaForPreGuide,
 } from '../src/services/tissAntiGlosaChecklist';
 
@@ -516,6 +517,62 @@ test('validacao anti-glosa bloqueia DePara ausente, TUSS legado e preco ausente'
     assert.equal(legacy.canGenerateXml, false);
     assert.ok(issueCodes(legacy).includes('LEGACY_OR_INVALID_TUSS_CODE'));
   }
+});
+
+test('validacao anti-glosa de lote alerta numero de guia prestador repetido sem bloquear XML', () => {
+  const preGuides = Array.from({ length: 5 }, (_, index) => ({
+    id: `pre-guide-${index + 1}`,
+    patientName: `Paciente ${index + 1}`,
+    scheduledStart: `2026-06-${String(index + 1).padStart(2, '0')}T15:00:00.000Z`,
+    guideNumber: '12345679',
+    authorizationCode: '123456789',
+  }));
+
+  const result = validateAntiGlosaBatchForOfficialXml({ preGuides });
+
+  assert.equal(result.antiGlosaStatus, 'medium_risk');
+  assert.equal(result.canGenerateXml, true);
+  assert.equal(result.blockingIssuesCount, 0);
+  assert.equal(result.warningIssuesCount, 1);
+  assert.equal(result.issues[0]?.code, 'DUPLICATED_PROVIDER_GUIDE_NUMBER_IN_BATCH');
+  assert.equal(result.issues[0]?.severity, 'warning');
+  assert.equal(result.issues[0]?.guideNumber, '12345679');
+  assert.equal(result.issues[0]?.occurrenceCount, 5);
+});
+
+test('validacao anti-glosa de lote nao alerta senha repetida quando guias sao distintas', () => {
+  const preGuides = Array.from({ length: 5 }, (_, index) => ({
+    id: `pre-guide-auth-${index + 1}`,
+    guideNumber: `GUIA-${index + 1}`,
+    authorizationCode: '123456789',
+  }));
+
+  const result = validateAntiGlosaBatchForOfficialXml({ preGuides });
+
+  assert.equal(result.antiGlosaStatus, 'ready_for_xml');
+  assert.equal(result.canGenerateXml, true);
+  assert.deepEqual(result.issues, []);
+});
+
+test('validacao anti-glosa de lote ignora guia vazia e respeita operadora que aceita repeticao', () => {
+  const emptyGuides = validateAntiGlosaBatchForOfficialXml({
+    preGuides: [
+      { id: 'empty-1', guideNumber: '', authorizationCode: 'AUTH-1' },
+      { id: 'empty-2', guideNumber: null, authorizationCode: 'AUTH-1' },
+    ],
+  });
+  assert.equal(emptyGuides.antiGlosaStatus, 'ready_for_xml');
+  assert.deepEqual(emptyGuides.issues, []);
+
+  const acceptedDuplicate = validateAntiGlosaBatchForOfficialXml({
+    preGuides: [
+      { id: 'accepted-1', guideNumber: '12345679' },
+      { id: 'accepted-2', guideNumber: '12345679' },
+    ],
+    operatorAllowsRepeatedGuideNumberForSameAuthorization: true,
+  });
+  assert.equal(acceptedDuplicate.antiGlosaStatus, 'ready_for_xml');
+  assert.deepEqual(acceptedDuplicate.issues, []);
 });
 
 test('validacao anti-glosa permite risco medio por valor divergente sem bloquear XML', () => {
@@ -2073,6 +2130,10 @@ test('frontend de Pré-guias apresenta status operacionais sem contradição vis
   assert.match(preGuideUiCode, /Decisão XML/);
   assert.match(preGuideUiCode, /Bloqueios/);
   assert.match(preGuideUiCode, /Alertas anti-glosa/);
+  assert.match(preGuideUiCode, /validateAntiGlosaBatchForOfficialXml/);
+  assert.match(preGuideUiCode, /Alertas anti-glosa do lote/);
+  assert.match(preGuideUiCode, /Guia \{issue\.guideNumber\} aparece em \{issue\.occurrenceCount \|\| 0\} Pré-guias selecionadas/);
+  assert.match(preGuideUiCode, /Você pode gerar o XML, mas há alertas anti-glosa/);
   assert.match(preGuideUiCode, /Ver itens OK e não aplicáveis/);
   assert.match(preGuideUiCode, /<footer className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 bg-white px-5 py-3">/);
   const detailFooter = preGuideUiCode.slice(

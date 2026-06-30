@@ -28,6 +28,25 @@ export type AntiGlosaIssue = {
   preGuideId?: string | null;
 };
 
+export type AntiGlosaBatchIssue = AntiGlosaIssue & {
+  guideNumber?: string | null;
+  occurrenceCount?: number;
+  preGuideIds?: string[];
+  examples?: Array<{
+    preGuideId?: string | null;
+    patientName?: string | null;
+    scheduledStart?: string | null;
+  }>;
+};
+
+export type AntiGlosaBatchValidationResult = {
+  antiGlosaStatus: AntiGlosaStatus;
+  canGenerateXml: boolean;
+  issues: AntiGlosaBatchIssue[];
+  blockingIssuesCount: number;
+  warningIssuesCount: number;
+};
+
 export type TissAntiGlosaChecklistResult = {
   status: "ready" | "pending" | "not_applicable";
   antiGlosaStatus: AntiGlosaStatus;
@@ -181,6 +200,7 @@ const ISSUE_TITLES: Record<string, string> = {
   OPERATOR_REQUIRES_REPORT: "Operadora exige relatório antes do envio",
   OPERATOR_REQUIRES_SIGNATURE: "Operadora exige assinatura antes do envio",
   OPERATOR_ANTI_GLOSA_PROFILE_NOT_REVIEWED: "Exigências da operadora ainda não revisadas",
+  DUPLICATED_PROVIDER_GUIDE_NUMBER_IN_BATCH: "Número de guia repetido no lote",
   OPERATOR_SPECIFIC_RULE: "Regra específica da operadora",
 };
 
@@ -209,6 +229,7 @@ const ISSUE_ACTIONS: Record<string, string> = {
   OPERATOR_REQUIRES_REPORT: "Vincule o relatório/evolução exigido pela operadora.",
   OPERATOR_REQUIRES_SIGNATURE: "Colete ou confira a assinatura exigida pela operadora.",
   OPERATOR_ANTI_GLOSA_PROFILE_NOT_REVIEWED: "Abra Convênios e TISS > Exigências anti-glosa da operadora e marque as exigências reais ou confirme que não há exigências adicionais.",
+  DUPLICATED_PROVIDER_GUIDE_NUMBER_IN_BATCH: "Confirme se a operadora aceita repetir o número da guia para sessões da mesma autorização. Se não aceitar, informe números de guia distintos antes de gerar o XML.",
   OPERATOR_SPECIFIC_RULE: "Confira as regras específicas cadastradas para esta operadora.",
 };
 
@@ -619,6 +640,105 @@ export function validateAntiGlosaForPreGuide(input: {
     snapshot,
   });
   return summarizeAntiGlosaChecklist({ checklist, snapshot, preGuideId });
+}
+
+const firstTextValue = (...values: unknown[]) => values.map(text).find(Boolean) || "";
+
+const normalizedGuideKey = (value: unknown) => text(value).replace(/\s+/g, " ").toUpperCase();
+
+const truthyConfigValue = (value: unknown) => {
+  if (value === true) return true;
+  const normalized = text(value).toLowerCase();
+  return ["1", "true", "yes", "sim"].includes(normalized);
+};
+
+const batchPreGuideSnapshot = (preGuide: Record<string, any>) => (
+  preGuide.snapshot || preGuide.snapshot_data || {}
+);
+
+const batchProviderGuideNumber = (preGuide: Record<string, any>) => {
+  const snapshot = batchPreGuideSnapshot(preGuide);
+  return firstTextValue(
+    preGuide.providerGuideNumber,
+    preGuide.provider_guide_number,
+    preGuide.guideNumber,
+    preGuide.guide_number,
+    snapshot.authorization?.providerGuideNumber,
+    snapshot.authorization?.provider_guide_number,
+    snapshot.authorization?.guideNumber,
+    snapshot.authorization?.guide_number,
+    snapshot.guide?.providerGuideNumber,
+    snapshot.guide?.provider_guide_number,
+    snapshot.guide?.number,
+  );
+};
+
+const payerAllowsRepeatedGuideNumber = (preGuide: Record<string, any>) => {
+  const snapshot = batchPreGuideSnapshot(preGuide);
+  const requirements = snapshot.payer?.requirements || snapshot.payerRequirements || snapshot.payer_requirements || {};
+  return truthyConfigValue(requirements.operatorAllowsRepeatedGuideNumberForSameAuthorization) ||
+    truthyConfigValue(requirements.operator_allows_repeated_guide_number_for_same_authorization) ||
+    truthyConfigValue(requirements.allowsRepeatedGuideNumberForSameAuthorization) ||
+    truthyConfigValue(requirements.allows_repeated_guide_number_for_same_authorization);
+};
+
+export function validateAntiGlosaBatchForOfficialXml(input: {
+  preGuides?: Array<Record<string, any>> | null;
+  operatorAllowsRepeatedGuideNumberForSameAuthorization?: boolean | null;
+}): AntiGlosaBatchValidationResult {
+  const preGuides = Array.isArray(input.preGuides) ? input.preGuides : [];
+  const allowsRepeatedGuideNumber = input.operatorAllowsRepeatedGuideNumberForSameAuthorization === true ||
+    preGuides.some(payerAllowsRepeatedGuideNumber);
+  if (allowsRepeatedGuideNumber || preGuides.length < 2) {
+    return {
+      antiGlosaStatus: "ready_for_xml",
+      canGenerateXml: true,
+      issues: [],
+      blockingIssuesCount: 0,
+      warningIssuesCount: 0,
+    };
+  }
+
+  const byProviderGuideNumber = new Map<string, Array<Record<string, any>>>();
+  const originalGuideNumbers = new Map<string, string>();
+  for (const preGuide of preGuides) {
+    const guideNumber = batchProviderGuideNumber(preGuide);
+    const key = normalizedGuideKey(guideNumber);
+    if (!key) continue;
+    originalGuideNumbers.set(key, guideNumber);
+    const grouped = byProviderGuideNumber.get(key) || [];
+    grouped.push(preGuide);
+    byProviderGuideNumber.set(key, grouped);
+  }
+
+  const issues: AntiGlosaBatchIssue[] = [];
+  for (const [key, repeatedPreGuides] of byProviderGuideNumber.entries()) {
+    if (repeatedPreGuides.length < 2) continue;
+    const guideNumber = originalGuideNumbers.get(key) || key;
+    issues.push({
+      code: "DUPLICATED_PROVIDER_GUIDE_NUMBER_IN_BATCH",
+      severity: "warning",
+      title: antiGlosaTitle("DUPLICATED_PROVIDER_GUIDE_NUMBER_IN_BATCH"),
+      description: "Há mais de uma guia SP/SADT no mesmo lote usando o mesmo número de guia do prestador. Algumas operadoras exigem numeração única por guia, mesmo quando a senha/autorização cobre várias sessões.",
+      recommendedAction: ISSUE_ACTIONS.DUPLICATED_PROVIDER_GUIDE_NUMBER_IN_BATCH,
+      guideNumber,
+      occurrenceCount: repeatedPreGuides.length,
+      preGuideIds: repeatedPreGuides.map((item) => text(item.id || item.preGuideId || item.pre_guide_id)).filter(Boolean),
+      examples: repeatedPreGuides.slice(0, 5).map((item) => ({
+        preGuideId: text(item.id || item.preGuideId || item.pre_guide_id) || null,
+        patientName: firstTextValue(item.patientName, item.patient_name, batchPreGuideSnapshot(item).beneficiary?.name) || null,
+        scheduledStart: firstTextValue(item.scheduledStart, item.scheduled_start, item.scheduled_start_at, batchPreGuideSnapshot(item).appointment?.scheduledStart) || null,
+      })),
+    });
+  }
+
+  return {
+    antiGlosaStatus: issues.length > 0 ? "medium_risk" : "ready_for_xml",
+    canGenerateXml: true,
+    issues,
+    blockingIssuesCount: 0,
+    warningIssuesCount: issues.length,
+  };
 }
 
 export function buildTissAntiGlosaChecklist(input: {
