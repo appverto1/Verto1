@@ -4417,6 +4417,87 @@ const TISS_OFFICIAL_DOCUMENT_DETAIL_SELECT = [
   'xml_content'
 ].join(',');
 
+const TISS_OFFICIAL_DOCUMENT_TRACKING_SELECT = [
+  'id',
+  'organization_id',
+  'clinic_id',
+  'official_document_id',
+  'payer_id',
+  'competence_month',
+  'batch_number',
+  'status',
+  'sent_at',
+  'sent_channel',
+  'operator_protocol',
+  'sent_registered_by',
+  'expected_return_date',
+  'returned_at',
+  'return_status',
+  'return_registered_by',
+  'total_sent_amount_cents',
+  'total_paid_amount_cents',
+  'total_glossed_amount_cents',
+  'total_pending_amount_cents',
+  'notes',
+  'metadata',
+  'created_by',
+  'created_at',
+  'updated_at'
+].join(',');
+
+const TISS_OFFICIAL_GUIDE_TRACKING_SELECT = [
+  'id',
+  'organization_id',
+  'clinic_id',
+  'official_document_id',
+  'official_tracking_id',
+  'pre_guide_id',
+  'appointment_id',
+  'patient_id',
+  'payer_id',
+  'provider_guide_number',
+  'operator_guide_number',
+  'authorization_code',
+  'patient_name',
+  'scheduled_start',
+  'tuss_code',
+  'procedure_name',
+  'status',
+  'sent_amount_cents',
+  'paid_amount_cents',
+  'glossed_amount_cents',
+  'pending_amount_cents',
+  'denial_reason',
+  'operator_reason_code',
+  'internal_note',
+  'return_date',
+  'payment_date',
+  'appeal_deadline',
+  'appeal_status',
+  'appeal_sent_at',
+  'appeal_result',
+  'appeal_note',
+  'metadata',
+  'created_at',
+  'updated_at'
+].join(',');
+
+const TISS_OFFICIAL_TRACKING_EVENT_SELECT = [
+  'id',
+  'organization_id',
+  'clinic_id',
+  'official_document_id',
+  'official_tracking_id',
+  'guide_tracking_id',
+  'pre_guide_id',
+  'user_id',
+  'event_type',
+  'previous_status',
+  'new_status',
+  'metadata',
+  'created_at'
+].join(',');
+
 const TISS_REVENUE_CYCLE_EVENT_SELECT = [
   'id',
   'organization_id',
@@ -36800,6 +36881,127 @@ async function startServer() {
     return serialized;
   };
 
+  const OFFICIAL_XML_TRACKING_STATUSES = new Set([
+    'generated',
+    'sent_to_operator',
+    'protocol_registered',
+    'under_review',
+    'paid',
+    'partially_paid',
+    'denied_or_rejected',
+    'glossed',
+    'appeal_prepared',
+    'appeal_sent',
+    'appeal_accepted',
+    'appeal_rejected',
+    'cancelled',
+    'replaced'
+  ]);
+
+  const OFFICIAL_XML_GUIDE_TRACKING_STATUSES = new Set([
+    'sent',
+    'under_review',
+    'paid',
+    'partially_paid',
+    'glossed',
+    'rejected',
+    'appeal_pending',
+    'appeal_sent',
+    'appeal_accepted',
+    'appeal_rejected',
+    'cancelled'
+  ]);
+
+  const normalizeNonNegativeCents = (value: unknown, fallback = 0) => {
+    const numeric = Math.round(Number(value));
+    if (!Number.isFinite(numeric)) return Math.max(0, Math.round(Number(fallback || 0)));
+    return Math.max(0, numeric);
+  };
+
+  const serializeTissOfficialTracking = (row: any) => {
+    if (!row) return null;
+    return {
+      id: sanitizeString(row?.id, 120) || null,
+      officialDocumentId: sanitizeString(row?.official_document_id, 120) || null,
+      payerId: sanitizeString(row?.payer_id, 120) || null,
+      competenceMonth: sanitizeString(row?.competence_month, 40) || null,
+      batchNumber: sanitizeString(row?.batch_number, 80) || null,
+      status: sanitizeString(row?.status, 60) || 'generated',
+      sentAt: row?.sent_at || null,
+      sentChannel: sanitizeString(row?.sent_channel, 80) || null,
+      operatorProtocol: sanitizeString(row?.operator_protocol, 160) || null,
+      sentRegisteredBy: sanitizeString(row?.sent_registered_by, 120) || null,
+      expectedReturnDate: sanitizeString(row?.expected_return_date, 40) || null,
+      returnedAt: row?.returned_at || null,
+      returnStatus: sanitizeString(row?.return_status, 80) || null,
+      returnRegisteredBy: sanitizeString(row?.return_registered_by, 120) || null,
+      totalSentAmountCents: normalizeNonNegativeCents(row?.total_sent_amount_cents),
+      totalPaidAmountCents: normalizeNonNegativeCents(row?.total_paid_amount_cents),
+      totalGlossedAmountCents: normalizeNonNegativeCents(row?.total_glossed_amount_cents),
+      totalPendingAmountCents: normalizeNonNegativeCents(row?.total_pending_amount_cents),
+      notes: sanitizeTextField(row?.notes, 1200) || null,
+      metadata: row?.metadata && typeof row.metadata === 'object' ? row.metadata : {},
+      createdBy: sanitizeString(row?.created_by, 120) || null,
+      createdAt: row?.created_at || null,
+      updatedAt: row?.updated_at || null
+    };
+  };
+
+  const serializeTissOfficialGuideTracking = (row: any) => {
+    if (!row) return null;
+    return {
+      id: sanitizeString(row?.id, 120) || null,
+      officialDocumentId: sanitizeString(row?.official_document_id, 120) || null,
+      officialTrackingId: sanitizeString(row?.official_tracking_id, 120) || null,
+      preGuideId: sanitizeString(row?.pre_guide_id, 120) || null,
+      appointmentId: sanitizeString(row?.appointment_id, 120) || null,
+      patientId: sanitizeString(row?.patient_id, 120) || null,
+      payerId: sanitizeString(row?.payer_id, 120) || null,
+      providerGuideNumber: sanitizeString(row?.provider_guide_number, 160) || null,
+      operatorGuideNumber: sanitizeString(row?.operator_guide_number, 160) || null,
+      authorizationCode: sanitizeString(row?.authorization_code, 160) || null,
+      patientName: sanitizeString(row?.patient_name, 180) || null,
+      scheduledStart: row?.scheduled_start || null,
+      tussCode: sanitizeString(row?.tuss_code, 80) || null,
+      procedureName: sanitizeString(row?.procedure_name, 240) || null,
+      status: sanitizeString(row?.status, 60) || 'sent',
+      sentAmountCents: normalizeNonNegativeCents(row?.sent_amount_cents),
+      paidAmountCents: normalizeNonNegativeCents(row?.paid_amount_cents),
+      glossedAmountCents: normalizeNonNegativeCents(row?.glossed_amount_cents),
+      pendingAmountCents: normalizeNonNegativeCents(row?.pending_amount_cents),
+      denialReason: sanitizeTextField(row?.denial_reason, 800) || null,
+      operatorReasonCode: sanitizeString(row?.operator_reason_code, 120) || null,
+      internalNote: sanitizeTextField(row?.internal_note, 1200) || null,
+      returnDate: sanitizeString(row?.return_date, 40) || null,
+      paymentDate: sanitizeString(row?.payment_date, 40) || null,
+      appealDeadline: sanitizeString(row?.appeal_deadline, 40) || null,
+      appealStatus: sanitizeString(row?.appeal_status, 80) || null,
+      appealSentAt: row?.appeal_sent_at || null,
+      appealResult: sanitizeString(row?.appeal_result, 80) || null,
+      appealNote: sanitizeTextField(row?.appeal_note, 1200) || null,
+      metadata: row?.metadata && typeof row.metadata === 'object' ? row.metadata : {},
+      createdAt: row?.created_at || null,
+      updatedAt: row?.updated_at || null
+    };
+  };
+
+  const serializeTissOfficialTrackingEvent = (row: any) => {
+    if (!row) return null;
+    return {
+      id: sanitizeString(row?.id, 120) || null,
+      officialDocumentId: sanitizeString(row?.official_document_id, 120) || null,
+      officialTrackingId: sanitizeString(row?.official_tracking_id, 120) || null,
+      guideTrackingId: sanitizeString(row?.guide_tracking_id, 120) || null,
+      preGuideId: sanitizeString(row?.pre_guide_id, 120) || null,
+      userId: sanitizeString(row?.user_id, 120) || null,
+      eventType: sanitizeString(row?.event_type, 120) || null,
+      previousStatus: sanitizeString(row?.previous_status, 80) || null,
+      newStatus: sanitizeString(row?.new_status, 80) || null,
+      metadata: row?.metadata && typeof row.metadata === 'object' ? row.metadata : {},
+      createdAt: row?.created_at || null
+    };
+  };
+
   const serializeTissRevenueCycleEvent = (row: any) => ({
     id: sanitizeString(row?.id, 120) || null,
     patientId: sanitizeString(row?.patient_id, 120) || null,
@@ -36869,6 +37071,322 @@ async function startServer() {
       throw error;
     }
     return true;
+  };
+
+  const recordTissOfficialTrackingEvent = async (params: {
+    organizationId: string;
+    officialDocumentId: string;
+    officialTrackingId?: string | null;
+    guideTrackingId?: string | null;
+    preGuideId?: string | null;
+    userId?: string | null;
+    eventType: string;
+    previousStatus?: string | null;
+    newStatus?: string | null;
+    metadata?: Record<string, any> | null;
+  }) => {
+    const organizationId = sanitizeString(params.organizationId, 120);
+    const officialDocumentId = sanitizeString(params.officialDocumentId, 120);
+    if (!isUuid(organizationId) || !isUuid(officialDocumentId)) return false;
+    const payload = cleanObject({
+      organization_id: organizationId,
+      clinic_id: organizationId,
+      official_document_id: officialDocumentId,
+      official_tracking_id: isUuid(sanitizeString(params.officialTrackingId, 120)) ? sanitizeString(params.officialTrackingId, 120) : null,
+      guide_tracking_id: isUuid(sanitizeString(params.guideTrackingId, 120)) ? sanitizeString(params.guideTrackingId, 120) : null,
+      pre_guide_id: isUuid(sanitizeString(params.preGuideId, 120)) ? sanitizeString(params.preGuideId, 120) : null,
+      user_id: isUuid(sanitizeString(params.userId, 120)) ? sanitizeString(params.userId, 120) : null,
+      event_type: sanitizeString(params.eventType, 120),
+      previous_status: sanitizeString(params.previousStatus, 80) || null,
+      new_status: sanitizeString(params.newStatus, 80) || null,
+      metadata: params.metadata && typeof params.metadata === 'object' ? params.metadata : {},
+      created_at: new Date().toISOString()
+    });
+    const { error } = await supabase
+      .from('tiss_official_tracking_events')
+      .insert(payload);
+    if (error) {
+      if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return false;
+      throw error;
+    }
+    return true;
+  };
+
+  const fetchTissOfficialDocumentForTracking = async (organizationId: string, documentId: string) => {
+    if (!isUuid(organizationId) || !isUuid(documentId)) return null;
+    const { data, error } = await supabase
+      .from('tiss_official_documents')
+      .select(TISS_OFFICIAL_DOCUMENT_SELECT)
+      .eq('organization_id', organizationId)
+      .eq('id', documentId)
+      .eq('status', 'validated')
+      .maybeSingle();
+    if (error) {
+      if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return null;
+      throw error;
+    }
+    return data || null;
+  };
+
+  const buildOfficialGuideTrackingSeed = (params: {
+    organizationId: string;
+    officialDocument: any;
+    officialTrackingId: string;
+    preGuideRow: any;
+  }) => {
+    const preGuide = serializeTissPreGuide(params.preGuideRow || {});
+    const snapshot = preGuide?.snapshot || {};
+    const sentAmount = normalizeNonNegativeCents(
+      preGuide.totalAmountCents || snapshot?.procedure?.totalAmountCents || params.preGuideRow?.total_amount_cents
+    );
+    return cleanObject({
+      organization_id: params.organizationId,
+      clinic_id: params.organizationId,
+      official_document_id: sanitizeString(params.officialDocument?.id, 120),
+      official_tracking_id: params.officialTrackingId,
+      pre_guide_id: sanitizeString(params.preGuideRow?.id || preGuide.id, 120),
+      appointment_id: isUuid(sanitizeString(preGuide.appointmentId || params.preGuideRow?.appointment_id, 120))
+        ? sanitizeString(preGuide.appointmentId || params.preGuideRow?.appointment_id, 120)
+        : null,
+      patient_id: isUuid(sanitizeString(preGuide.patientId || params.preGuideRow?.patient_id, 120))
+        ? sanitizeString(preGuide.patientId || params.preGuideRow?.patient_id, 120)
+        : null,
+      payer_id: isUuid(sanitizeString(preGuide.payerId || params.officialDocument?.payer_id, 120))
+        ? sanitizeString(preGuide.payerId || params.officialDocument?.payer_id, 120)
+        : null,
+      provider_guide_number: sanitizeString(preGuide.guideNumber || snapshot?.authorization?.guideNumber, 160) || null,
+      operator_guide_number: sanitizeString(snapshot?.authorization?.operatorGuideNumber || preGuide.guideNumber, 160) || null,
+      authorization_code: sanitizeString(preGuide.authorizationCode || snapshot?.authorization?.authorizationCode, 160) || null,
+      patient_name: sanitizeString(preGuide.patientName || snapshot?.beneficiary?.name, 180) || null,
+      scheduled_start: preGuide.scheduledStart || params.preGuideRow?.scheduled_start || null,
+      tuss_code: sanitizeString(preGuide.tussCode || snapshot?.procedure?.tussCode, 80) || null,
+      procedure_name: sanitizeString(preGuide.tussDescription || preGuide.internalProcedureName || snapshot?.procedure?.name, 240) || null,
+      status: 'sent',
+      sent_amount_cents: sentAmount,
+      paid_amount_cents: 0,
+      glossed_amount_cents: 0,
+      pending_amount_cents: sentAmount,
+      metadata: {
+        createdFromOfficialDocument: true,
+        originalPreGuideStatus: sanitizeString(preGuide.status, 80) || null
+      }
+    });
+  };
+
+  const ensureTissOfficialDocumentTracking = async (params: {
+    organizationId: string;
+    documentId: string;
+    userId?: string | null;
+  }) => {
+    const organizationId = sanitizeString(params.organizationId, 120);
+    const documentId = sanitizeString(params.documentId, 120);
+    const userId = sanitizeString(params.userId, 120);
+    if (!isUuid(organizationId) || !isUuid(documentId)) {
+      return { ok: false, status: 400, code: 'TISS_OFFICIAL_TRACKING_INVALID_DOCUMENT', error: 'Documento oficial inválido.' };
+    }
+    const officialDocument = await fetchTissOfficialDocumentForTracking(organizationId, documentId);
+    if (!officialDocument) {
+      return { ok: false, status: 404, code: 'TISS_OFFICIAL_DOCUMENT_NOT_FOUND', error: 'Lote XML oficial não encontrado.' };
+    }
+
+    let tracking: any = null;
+    const trackingResult = await supabase
+      .from('tiss_official_document_tracking')
+      .select(TISS_OFFICIAL_DOCUMENT_TRACKING_SELECT)
+      .eq('organization_id', organizationId)
+      .eq('official_document_id', documentId)
+      .maybeSingle();
+    if (trackingResult.error) {
+      if (hasMissingFinancialSchema(trackingResult.error) || isMissingRelationError(trackingResult.error)) {
+        return { ok: false, status: 503, code: 'TISS_OFFICIAL_TRACKING_SCHEMA_MISSING', error: 'A estrutura de acompanhamento de lotes XML ainda não está disponível.' };
+      }
+      throw trackingResult.error;
+    }
+    tracking = trackingResult.data || null;
+    if (!tracking) {
+      const totalSentAmount = normalizeNonNegativeCents(officialDocument.total_amount_cents);
+      const pendingAmount = totalSentAmount;
+      const insertPayload = cleanObject({
+        organization_id: organizationId,
+        clinic_id: organizationId,
+        official_document_id: documentId,
+        payer_id: officialDocument.payer_id || null,
+        competence_month: officialDocument.competence_month || null,
+        batch_number: officialDocument.batch_number || null,
+        status: 'generated',
+        total_sent_amount_cents: totalSentAmount,
+        total_paid_amount_cents: 0,
+        total_glossed_amount_cents: 0,
+        total_pending_amount_cents: pendingAmount,
+        metadata: { initializedFromOfficialDocument: true },
+        created_by: isUuid(userId) ? userId : null
+      });
+      const inserted = await supabase
+        .from('tiss_official_document_tracking')
+        .insert(insertPayload)
+        .select(TISS_OFFICIAL_DOCUMENT_TRACKING_SELECT)
+        .maybeSingle();
+      if (inserted.error) {
+        if (inserted.error.code === '23505') {
+          const retry = await supabase
+            .from('tiss_official_document_tracking')
+            .select(TISS_OFFICIAL_DOCUMENT_TRACKING_SELECT)
+            .eq('organization_id', organizationId)
+            .eq('official_document_id', documentId)
+            .maybeSingle();
+          if (retry.error) throw retry.error;
+          tracking = retry.data || null;
+        } else {
+          throw inserted.error;
+        }
+      } else {
+        tracking = inserted.data || null;
+      }
+      if (tracking?.id) {
+        await recordTissOfficialTrackingEvent({
+          organizationId,
+          officialDocumentId: documentId,
+          officialTrackingId: tracking.id,
+          userId,
+          eventType: 'official_xml_tracking_created',
+          previousStatus: null,
+          newStatus: 'generated',
+          metadata: {
+            totalSentAmountCents: totalSentAmount,
+            guideCount: Number(officialDocument.guide_count || 0)
+          }
+        });
+      }
+    }
+
+    if (!tracking?.id) {
+      return { ok: false, status: 500, code: 'TISS_OFFICIAL_TRACKING_CREATE_FAILED', error: 'Não foi possível iniciar o acompanhamento do lote XML.' };
+    }
+
+    const guideResult = await supabase
+      .from('tiss_official_guide_tracking')
+      .select(TISS_OFFICIAL_GUIDE_TRACKING_SELECT)
+      .eq('organization_id', organizationId)
+      .eq('official_document_id', documentId)
+      .order('scheduled_start', { ascending: true });
+    if (guideResult.error) {
+      if (hasMissingFinancialSchema(guideResult.error) || isMissingRelationError(guideResult.error)) {
+        return { ok: false, status: 503, code: 'TISS_OFFICIAL_TRACKING_SCHEMA_MISSING', error: 'A estrutura de acompanhamento de guias ainda não está disponível.' };
+      }
+      throw guideResult.error;
+    }
+    let guides = Array.isArray(guideResult.data) ? guideResult.data : [];
+    const existingPreGuideIds = new Set(guides.map((row: any) => sanitizeString(row?.pre_guide_id, 120)).filter(Boolean));
+    const preGuideIds = Array.isArray(officialDocument.generated_from_pre_guide_ids)
+      ? officialDocument.generated_from_pre_guide_ids.map((id: unknown) => sanitizeString(id, 120)).filter((id: string) => isUuid(id))
+      : [];
+    const missingPreGuideIds = preGuideIds.filter((id: string) => !existingPreGuideIds.has(id));
+    if (missingPreGuideIds.length > 0) {
+      const preGuideLoad = await loadTissPreGuidesSchemaSafe({ organizationId, preGuideIds: missingPreGuideIds });
+      if (preGuideLoad.ok && Array.isArray(preGuideLoad.data) && preGuideLoad.data.length > 0) {
+        const seeds = preGuideLoad.data
+          .map((row: any) => buildOfficialGuideTrackingSeed({ organizationId, officialDocument, officialTrackingId: tracking.id, preGuideRow: row }))
+          .filter((row: any) => isUuid(sanitizeString(row?.pre_guide_id, 120)));
+        if (seeds.length > 0) {
+          const insertedGuides = await supabase
+            .from('tiss_official_guide_tracking')
+            .insert(seeds)
+            .select(TISS_OFFICIAL_GUIDE_TRACKING_SELECT);
+          if (insertedGuides.error && insertedGuides.error.code !== '23505') throw insertedGuides.error;
+          if (!insertedGuides.error) {
+            guides = [...guides, ...((insertedGuides.data || []) as any[])];
+          } else {
+            const refreshedGuides = await supabase
+              .from('tiss_official_guide_tracking')
+              .select(TISS_OFFICIAL_GUIDE_TRACKING_SELECT)
+              .eq('organization_id', organizationId)
+              .eq('official_document_id', documentId)
+              .order('scheduled_start', { ascending: true });
+            if (refreshedGuides.error) throw refreshedGuides.error;
+            guides = Array.isArray(refreshedGuides.data) ? refreshedGuides.data : guides;
+          }
+        }
+      }
+    }
+
+    return {
+      ok: true,
+      document: officialDocument,
+      tracking,
+      guides
+    };
+  };
+
+  const calculateTissOfficialTrackingTotals = (guides: any[], fallbackSentAmount = 0) => {
+    const totalSent = guides.reduce((sum, guide) => sum + normalizeNonNegativeCents(guide?.sent_amount_cents), 0)
+      || normalizeNonNegativeCents(fallbackSentAmount);
+    const totalPaid = guides.reduce((sum, guide) => sum + normalizeNonNegativeCents(guide?.paid_amount_cents), 0);
+    const totalGlossed = guides.reduce((sum, guide) => sum + normalizeNonNegativeCents(guide?.glossed_amount_cents), 0);
+    const totalPending = Math.max(0, totalSent - totalPaid - totalGlossed);
+    return {
+      totalSentAmountCents: totalSent,
+      totalPaidAmountCents: totalPaid,
+      totalGlossedAmountCents: totalGlossed,
+      totalPendingAmountCents: totalPending
+    };
+  };
+
+  const serializeTissOfficialTrackingBundle = (bundle: any, events: any[] = []) => {
+    const document = serializeTissOfficialDocument(bundle.document);
+    const tracking = serializeTissOfficialTracking(bundle.tracking);
+    const guides = Array.isArray(bundle.guides) ? bundle.guides.map(serializeTissOfficialGuideTracking).filter(Boolean) : [];
+    return {
+      ...document,
+      tracking,
+      guideTracking: guides,
+      trackingEvents: events.map(serializeTissOfficialTrackingEvent).filter(Boolean)
+    };
+  };
+
+  const refreshTissOfficialDocumentTrackingTotals = async (params: {
+    organizationId: string;
+    officialDocumentId: string;
+    officialTrackingId: string;
+    fallbackSentAmount?: number;
+    preferredStatus?: string | null;
+  }) => {
+    const organizationId = sanitizeString(params.organizationId, 120);
+    const officialDocumentId = sanitizeString(params.officialDocumentId, 120);
+    const officialTrackingId = sanitizeString(params.officialTrackingId, 120);
+    const guidesResult = await supabase
+      .from('tiss_official_guide_tracking')
+      .select(TISS_OFFICIAL_GUIDE_TRACKING_SELECT)
+      .eq('organization_id', organizationId)
+      .eq('official_document_id', officialDocumentId);
+    if (guidesResult.error) throw guidesResult.error;
+    const guides = Array.isArray(guidesResult.data) ? guidesResult.data : [];
+    const totals = calculateTissOfficialTrackingTotals(guides, params.fallbackSentAmount);
+    const guideStatuses = guides.map((guide: any) => sanitizeString(guide?.status, 80));
+    let status = sanitizeString(params.preferredStatus, 80);
+    if (!status) {
+      if (guideStatuses.length > 0 && guideStatuses.every((value: string) => value === 'paid')) status = 'paid';
+      else if (guideStatuses.some((value: string) => value === 'glossed')) status = totals.totalPaidAmountCents > 0 ? 'partially_paid' : 'glossed';
+      else if (guideStatuses.some((value: string) => value === 'rejected')) status = 'denied_or_rejected';
+      else if (totals.totalPaidAmountCents > 0) status = 'partially_paid';
+      else status = 'under_review';
+    }
+    if (!OFFICIAL_XML_TRACKING_STATUSES.has(status)) status = 'under_review';
+    const updated = await supabase
+      .from('tiss_official_document_tracking')
+      .update(cleanObject({
+        status,
+        total_sent_amount_cents: totals.totalSentAmountCents,
+        total_paid_amount_cents: totals.totalPaidAmountCents,
+        total_glossed_amount_cents: totals.totalGlossedAmountCents,
+        total_pending_amount_cents: totals.totalPendingAmountCents,
+        updated_at: new Date().toISOString()
+      }))
+      .eq('organization_id', organizationId)
+      .eq('id', officialTrackingId)
+      .select(TISS_OFFICIAL_DOCUMENT_TRACKING_SELECT)
+      .maybeSingle();
+    if (updated.error) throw updated.error;
+    return { tracking: updated.data, guides };
   };
 
   const checkTissPreGuidePersistenceAvailability = async (organizationId: string) => {
@@ -38835,9 +39353,36 @@ async function startServer() {
         }
         throw error;
       }
+      const documentRows = data || [];
+      let trackingByDocumentId = new Map<string, any>();
+      const documentIds = documentRows.map((row: any) => sanitizeString(row?.id, 120)).filter((id: string) => isUuid(id));
+      if (documentIds.length > 0) {
+        const trackingResult = await supabase
+          .from('tiss_official_document_tracking')
+          .select(TISS_OFFICIAL_DOCUMENT_TRACKING_SELECT)
+          .eq('organization_id', organizationId)
+          .in('official_document_id', documentIds);
+        if (!trackingResult.error && Array.isArray(trackingResult.data)) {
+          trackingByDocumentId = new Map(
+            trackingResult.data.map((row: any) => [sanitizeString(row?.official_document_id, 120), row])
+          );
+        } else if (trackingResult.error && !hasMissingFinancialSchema(trackingResult.error) && !isMissingRelationError(trackingResult.error)) {
+          throw trackingResult.error;
+        }
+      }
       return sendNoStoreJson(res, {
         success: true,
-        data: (data || []).map((row: any) => serializeTissOfficialDocument(row)),
+        data: documentRows.map((row: any) => ({
+          ...serializeTissOfficialDocument(row),
+          tracking: serializeTissOfficialTracking(trackingByDocumentId.get(sanitizeString(row?.id, 120))) || {
+            officialDocumentId: sanitizeString(row?.id, 120) || null,
+            status: 'generated',
+            totalSentAmountCents: normalizeNonNegativeCents(row?.total_amount_cents),
+            totalPaidAmountCents: 0,
+            totalGlossedAmountCents: 0,
+            totalPendingAmountCents: normalizeNonNegativeCents(row?.total_amount_cents)
+          }
+        })),
         page,
         pageSize,
         total: Number(count || 0)
@@ -39077,11 +39622,18 @@ async function startServer() {
           error: 'O banco não retornou o documento TISS oficial persistido.'
         });
       }
+      const trackingBundle = await ensureTissOfficialDocumentTracking({
+        organizationId,
+        documentId: sanitizeString(persisted.id, 120),
+        userId: generatedBy
+      });
       const serializedDocument = serializeTissOfficialDocument(persisted);
       return sendNoStoreJson(res, {
         success: true,
         data: {
           ...serializedDocument,
+          tracking: trackingBundle.ok ? serializeTissOfficialTracking(trackingBundle.tracking) : null,
+          guideTracking: trackingBundle.ok ? (trackingBundle.guides || []).map(serializeTissOfficialGuideTracking).filter(Boolean) : [],
           officialDocumentId: serializedDocument.id,
           revenueCycleState: 'official_xml_validated',
           xsdValidation: built.xsdValidation || serializedDocument.validationSummary?.xsdValidation || null
@@ -39098,6 +39650,408 @@ async function startServer() {
         code: 'TISS_OFFICIAL_CREATE_FAILED',
         error: 'Não foi possível gerar o XML TISS oficial agora.'
       });
+    }
+  });
+
+  app.get('/api/tiss/official-documents/tracking', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
+      const page = Math.max(1, Math.round(Number(req.query?.page || 1) || 1));
+      const pageSize = parseBoundedListLimit(req.query?.pageSize || req.query?.limit, 20, 100);
+      const status = sanitizeString(req.query?.status, 80);
+      let query = supabase
+        .from('tiss_official_document_tracking')
+        .select(TISS_OFFICIAL_DOCUMENT_TRACKING_SELECT, { count: 'exact' })
+        .eq('organization_id', organizationId);
+      if (OFFICIAL_XML_TRACKING_STATUSES.has(status)) query = query.eq('status', status);
+      const offset = (page - 1) * pageSize;
+      const { data, error, count } = await query
+        .order('updated_at', { ascending: false })
+        .range(offset, offset + pageSize - 1);
+      if (error) {
+        if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) {
+          return sendNoStoreJson(res, { success: true, data: [], page, pageSize, total: 0 });
+        }
+        throw error;
+      }
+      return sendNoStoreJson(res, {
+        success: true,
+        data: (data || []).map(serializeTissOfficialTracking).filter(Boolean),
+        page,
+        pageSize,
+        total: Number(count || 0)
+      });
+    } catch (error: any) {
+      console.warn('[TissOfficialTracking] list failed:', error?.message || String(error));
+      return res.status(500).json({ success: false, error: 'Não foi possível carregar o acompanhamento dos lotes XML agora.' });
+    }
+  });
+
+  app.get('/api/tiss/official-documents/:documentId/tracking', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      const documentId = sanitizeString(req.params.documentId, 120);
+      const userId = sanitizeString(req.session.user?.id, 120);
+      const bundle = await ensureTissOfficialDocumentTracking({ organizationId, documentId, userId });
+      if (!bundle.ok) return res.status(bundle.status).json({ success: false, code: bundle.code, error: bundle.error });
+      const eventsResult = await supabase
+        .from('tiss_official_tracking_events')
+        .select(TISS_OFFICIAL_TRACKING_EVENT_SELECT)
+        .eq('organization_id', organizationId)
+        .eq('official_document_id', documentId)
+        .order('created_at', { ascending: false })
+        .limit(80);
+      if (eventsResult.error) {
+        if (!hasMissingFinancialSchema(eventsResult.error) && !isMissingRelationError(eventsResult.error)) throw eventsResult.error;
+      }
+      return sendNoStoreJson(res, {
+        success: true,
+        data: serializeTissOfficialTrackingBundle(bundle, eventsResult.data || [])
+      });
+    } catch (error: any) {
+      console.warn('[TissOfficialTracking] detail failed:', error?.message || String(error));
+      return res.status(500).json({ success: false, error: 'Não foi possível carregar o acompanhamento do lote XML agora.' });
+    }
+  });
+
+  app.post('/api/tiss/official-documents/:documentId/tracking/sent', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 12 * 1024, 'acompanhamento de lote XML')) return;
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      const documentId = sanitizeString(req.params.documentId, 120);
+      const userId = sanitizeString(req.session.user?.id, 120);
+      const bundle = await ensureTissOfficialDocumentTracking({ organizationId, documentId, userId });
+      if (!bundle.ok) return res.status(bundle.status).json({ success: false, code: bundle.code, error: bundle.error });
+      const sentAtInput = sanitizeString(req.body?.sentAt || req.body?.sent_at || req.body?.sentDate || req.body?.sent_date, 80);
+      const sentAt = sentAtInput ? new Date(sentAtInput).toISOString() : new Date().toISOString();
+      const sentChannel = sanitizeString(req.body?.sentChannel || req.body?.sent_channel || 'portal', 80);
+      const operatorProtocol = sanitizeString(req.body?.operatorProtocol || req.body?.operator_protocol || req.body?.protocol, 160);
+      const notes = sanitizeTextField(req.body?.notes || req.body?.observations, 1200);
+      const expectedReturnDate = sanitizeString(req.body?.expectedReturnDate || req.body?.expected_return_date, 40).slice(0, 10);
+      const previousStatus = sanitizeString(bundle.tracking?.status, 80) || 'generated';
+      const nextStatus = operatorProtocol ? 'protocol_registered' : 'sent_to_operator';
+      const updated = await supabase
+        .from('tiss_official_document_tracking')
+        .update(cleanObject({
+          status: nextStatus,
+          sent_at: sentAt,
+          sent_channel: sentChannel || null,
+          operator_protocol: operatorProtocol || null,
+          sent_registered_by: isUuid(userId) ? userId : null,
+          expected_return_date: expectedReturnDate || null,
+          notes: notes || bundle.tracking?.notes || null,
+          updated_at: new Date().toISOString()
+        }))
+        .eq('organization_id', organizationId)
+        .eq('id', bundle.tracking.id)
+        .select(TISS_OFFICIAL_DOCUMENT_TRACKING_SELECT)
+        .maybeSingle();
+      if (updated.error) throw updated.error;
+      await recordTissOfficialTrackingEvent({
+        organizationId,
+        officialDocumentId: documentId,
+        officialTrackingId: bundle.tracking.id,
+        userId,
+        eventType: operatorProtocol ? 'official_xml_protocol_registered' : 'official_xml_marked_sent',
+        previousStatus,
+        newStatus: nextStatus,
+        metadata: { sentAt, sentChannel, operatorProtocol: operatorProtocol || null, notes: notes || null }
+      });
+      const refreshed = await ensureTissOfficialDocumentTracking({ organizationId, documentId, userId });
+      return sendNoStoreJson(res, {
+        success: true,
+        data: serializeTissOfficialTrackingBundle({ ...refreshed, tracking: updated.data || bundle.tracking }),
+        message: operatorProtocol ? 'Protocolo da operadora registrado.' : 'Envio manual à operadora registrado.'
+      });
+    } catch (error: any) {
+      console.warn('[TissOfficialTracking] sent failed:', error?.message || String(error));
+      return res.status(500).json({ success: false, error: 'Não foi possível registrar o envio do lote XML agora.' });
+    }
+  });
+
+  app.post('/api/tiss/official-documents/:documentId/tracking/return', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 12 * 1024, 'retorno de lote XML')) return;
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      const documentId = sanitizeString(req.params.documentId, 120);
+      const userId = sanitizeString(req.session.user?.id, 120);
+      const bundle = await ensureTissOfficialDocumentTracking({ organizationId, documentId, userId });
+      if (!bundle.ok) return res.status(bundle.status).json({ success: false, code: bundle.code, error: bundle.error });
+      const returnStatusInput = sanitizeString(req.body?.returnStatus || req.body?.return_status || req.body?.status, 80);
+      const statusMap: Record<string, string> = {
+        paid: 'paid',
+        fully_paid: 'paid',
+        partially_paid: 'partially_paid',
+        partial: 'partially_paid',
+        glossed: 'glossed',
+        denied: 'denied_or_rejected',
+        rejected: 'denied_or_rejected',
+        denied_or_rejected: 'denied_or_rejected',
+        under_review: 'under_review'
+      };
+      const nextStatus = statusMap[returnStatusInput] || '';
+      if (!nextStatus) {
+        return res.status(400).json({ success: false, code: 'TISS_OFFICIAL_RETURN_STATUS_INVALID', error: 'Selecione um status de retorno válido.' });
+      }
+      const totalSentAmount = normalizeNonNegativeCents(bundle.tracking?.total_sent_amount_cents || bundle.document?.total_amount_cents);
+      let paidAmount = normalizeNonNegativeCents(req.body?.paidAmountCents ?? req.body?.paid_amount_cents);
+      let glossedAmount = normalizeNonNegativeCents(req.body?.glossedAmountCents ?? req.body?.glossed_amount_cents);
+      if (nextStatus === 'paid') {
+        paidAmount = totalSentAmount;
+        glossedAmount = 0;
+      }
+      if (nextStatus === 'glossed' || nextStatus === 'denied_or_rejected') {
+        paidAmount = 0;
+        glossedAmount = totalSentAmount;
+      }
+      if (paidAmount + glossedAmount > totalSentAmount) {
+        return res.status(422).json({
+          success: false,
+          code: 'TISS_OFFICIAL_RETURN_AMOUNTS_INVALID',
+          error: 'Valor pago e valor glosado não podem ultrapassar o valor enviado.'
+        });
+      }
+      const returnedAtInput = sanitizeString(req.body?.returnedAt || req.body?.returned_at || req.body?.returnDate || req.body?.return_date, 80);
+      const returnedAt = returnedAtInput ? new Date(returnedAtInput).toISOString() : new Date().toISOString();
+      const notes = sanitizeTextField(req.body?.notes || req.body?.observations, 1200);
+      const previousStatus = sanitizeString(bundle.tracking?.status, 80) || 'generated';
+      if (nextStatus === 'paid' || nextStatus === 'glossed' || nextStatus === 'denied_or_rejected') {
+        const guideUpdates = (bundle.guides || []).map((guide: any) => {
+          const sent = normalizeNonNegativeCents(guide?.sent_amount_cents);
+          return {
+            id: guide.id,
+            status: nextStatus === 'paid' ? 'paid' : nextStatus === 'glossed' ? 'glossed' : 'rejected',
+            paid_amount_cents: nextStatus === 'paid' ? sent : 0,
+            glossed_amount_cents: nextStatus === 'paid' ? 0 : sent,
+            pending_amount_cents: 0,
+            return_date: returnedAt.slice(0, 10),
+            payment_date: nextStatus === 'paid' ? returnedAt.slice(0, 10) : null,
+            updated_at: new Date().toISOString()
+          };
+        });
+        for (const guideUpdate of guideUpdates) {
+          await supabase
+            .from('tiss_official_guide_tracking')
+            .update(cleanObject(guideUpdate))
+            .eq('organization_id', organizationId)
+            .eq('id', guideUpdate.id);
+        }
+      }
+      const pendingAmount = Math.max(0, totalSentAmount - paidAmount - glossedAmount);
+      const updated = await supabase
+        .from('tiss_official_document_tracking')
+        .update(cleanObject({
+          status: nextStatus,
+          returned_at: returnedAt,
+          return_status: nextStatus,
+          return_registered_by: isUuid(userId) ? userId : null,
+          total_sent_amount_cents: totalSentAmount,
+          total_paid_amount_cents: paidAmount,
+          total_glossed_amount_cents: glossedAmount,
+          total_pending_amount_cents: pendingAmount,
+          notes: notes || bundle.tracking?.notes || null,
+          updated_at: new Date().toISOString()
+        }))
+        .eq('organization_id', organizationId)
+        .eq('id', bundle.tracking.id)
+        .select(TISS_OFFICIAL_DOCUMENT_TRACKING_SELECT)
+        .maybeSingle();
+      if (updated.error) throw updated.error;
+      await recordTissOfficialTrackingEvent({
+        organizationId,
+        officialDocumentId: documentId,
+        officialTrackingId: bundle.tracking.id,
+        userId,
+        eventType: 'official_xml_return_registered',
+        previousStatus,
+        newStatus: nextStatus,
+        metadata: { returnedAt, paidAmountCents: paidAmount, glossedAmountCents: glossedAmount, pendingAmountCents: pendingAmount, notes: notes || null }
+      });
+      const refreshed = await ensureTissOfficialDocumentTracking({ organizationId, documentId, userId });
+      return sendNoStoreJson(res, {
+        success: true,
+        data: serializeTissOfficialTrackingBundle({ ...refreshed, tracking: updated.data || bundle.tracking }),
+        message: 'Retorno da operadora registrado.'
+      });
+    } catch (error: any) {
+      console.warn('[TissOfficialTracking] return failed:', error?.message || String(error));
+      return res.status(500).json({ success: false, error: 'Não foi possível registrar o retorno da operadora agora.' });
+    }
+  });
+
+  app.post('/api/tiss/official-documents/:documentId/guides/:guideId/tracking', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 12 * 1024, 'acompanhamento de guia XML')) return;
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      const documentId = sanitizeString(req.params.documentId, 120);
+      const guideId = sanitizeString(req.params.guideId, 120);
+      const userId = sanitizeString(req.session.user?.id, 120);
+      const bundle = await ensureTissOfficialDocumentTracking({ organizationId, documentId, userId });
+      if (!bundle.ok) return res.status(bundle.status).json({ success: false, code: bundle.code, error: bundle.error });
+      const guide = (bundle.guides || []).find((row: any) => sanitizeString(row?.id, 120) === guideId || sanitizeString(row?.pre_guide_id, 120) === guideId);
+      if (!guide) return res.status(404).json({ success: false, code: 'TISS_OFFICIAL_GUIDE_TRACKING_NOT_FOUND', error: 'Guia não encontrada neste lote.' });
+      const sentAmount = normalizeNonNegativeCents(guide.sent_amount_cents);
+      const paidAmount = normalizeNonNegativeCents(req.body?.paidAmountCents ?? req.body?.paid_amount_cents);
+      const glossedAmount = normalizeNonNegativeCents(req.body?.glossedAmountCents ?? req.body?.glossed_amount_cents);
+      if (paidAmount + glossedAmount > sentAmount) {
+        return res.status(422).json({
+          success: false,
+          code: 'TISS_OFFICIAL_GUIDE_AMOUNTS_INVALID',
+          error: 'Valor pago e valor glosado da guia não podem ultrapassar o valor enviado.'
+        });
+      }
+      const statusInput = sanitizeString(req.body?.status, 80);
+      let nextStatus = statusInput && OFFICIAL_XML_GUIDE_TRACKING_STATUSES.has(statusInput)
+        ? statusInput
+        : glossedAmount > 0
+          ? 'glossed'
+          : paidAmount >= sentAmount
+            ? 'paid'
+            : paidAmount > 0
+              ? 'partially_paid'
+              : 'under_review';
+      if (!OFFICIAL_XML_GUIDE_TRACKING_STATUSES.has(nextStatus)) nextStatus = 'under_review';
+      const previousStatus = sanitizeString(guide.status, 80) || 'sent';
+      const pendingAmount = Math.max(0, sentAmount - paidAmount - glossedAmount);
+      const updated = await supabase
+        .from('tiss_official_guide_tracking')
+        .update(cleanObject({
+          status: nextStatus,
+          paid_amount_cents: paidAmount,
+          glossed_amount_cents: glossedAmount,
+          pending_amount_cents: pendingAmount,
+          denial_reason: sanitizeTextField(req.body?.denialReason || req.body?.denial_reason, 800) || null,
+          operator_reason_code: sanitizeString(req.body?.operatorReasonCode || req.body?.operator_reason_code, 120) || null,
+          internal_note: sanitizeTextField(req.body?.internalNote || req.body?.internal_note || req.body?.notes, 1200) || null,
+          return_date: sanitizeString(req.body?.returnDate || req.body?.return_date, 40).slice(0, 10) || null,
+          payment_date: sanitizeString(req.body?.paymentDate || req.body?.payment_date, 40).slice(0, 10) || null,
+          appeal_deadline: sanitizeString(req.body?.appealDeadline || req.body?.appeal_deadline, 40).slice(0, 10) || null,
+          updated_at: new Date().toISOString()
+        }))
+        .eq('organization_id', organizationId)
+        .eq('id', guide.id)
+        .select(TISS_OFFICIAL_GUIDE_TRACKING_SELECT)
+        .maybeSingle();
+      if (updated.error) throw updated.error;
+      const eventType = nextStatus === 'glossed'
+        ? 'official_xml_guide_glossed'
+        : nextStatus === 'paid'
+          ? 'official_xml_guide_paid'
+          : nextStatus === 'partially_paid'
+            ? 'official_xml_guide_partially_paid'
+            : nextStatus === 'rejected'
+              ? 'official_xml_guide_rejected'
+              : 'official_xml_return_registered';
+      await recordTissOfficialTrackingEvent({
+        organizationId,
+        officialDocumentId: documentId,
+        officialTrackingId: bundle.tracking.id,
+        guideTrackingId: guide.id,
+        preGuideId: guide.pre_guide_id,
+        userId,
+        eventType,
+        previousStatus,
+        newStatus: nextStatus,
+        metadata: { paidAmountCents: paidAmount, glossedAmountCents: glossedAmount, pendingAmountCents: pendingAmount }
+      });
+      const totals = await refreshTissOfficialDocumentTrackingTotals({
+        organizationId,
+        officialDocumentId: documentId,
+        officialTrackingId: bundle.tracking.id,
+        fallbackSentAmount: bundle.document?.total_amount_cents
+      });
+      return sendNoStoreJson(res, {
+        success: true,
+        data: serializeTissOfficialTrackingBundle({ ...bundle, tracking: totals.tracking, guides: totals.guides }),
+        guide: serializeTissOfficialGuideTracking(updated.data),
+        message: 'Acompanhamento da guia atualizado.'
+      });
+    } catch (error: any) {
+      console.warn('[TissOfficialTracking] guide update failed:', error?.message || String(error));
+      return res.status(500).json({ success: false, error: 'Não foi possível atualizar a guia do lote XML agora.' });
+    }
+  });
+
+  app.post('/api/tiss/official-documents/:documentId/guides/:guideId/appeal', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 12 * 1024, 'recurso de glosa')) return;
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      const documentId = sanitizeString(req.params.documentId, 120);
+      const guideId = sanitizeString(req.params.guideId, 120);
+      const userId = sanitizeString(req.session.user?.id, 120);
+      const bundle = await ensureTissOfficialDocumentTracking({ organizationId, documentId, userId });
+      if (!bundle.ok) return res.status(bundle.status).json({ success: false, code: bundle.code, error: bundle.error });
+      const guide = (bundle.guides || []).find((row: any) => sanitizeString(row?.id, 120) === guideId || sanitizeString(row?.pre_guide_id, 120) === guideId);
+      if (!guide) return res.status(404).json({ success: false, code: 'TISS_OFFICIAL_GUIDE_TRACKING_NOT_FOUND', error: 'Guia não encontrada neste lote.' });
+      const appealStatusInput = sanitizeString(req.body?.appealStatus || req.body?.appeal_status || 'appeal_prepared', 80);
+      const allowedAppealStatus = new Set(['appeal_pending', 'appeal_prepared', 'appeal_sent', 'appeal_accepted', 'appeal_rejected']);
+      const appealStatus = allowedAppealStatus.has(appealStatusInput) ? appealStatusInput : 'appeal_prepared';
+      const nextGuideStatus = appealStatus === 'appeal_sent'
+        ? 'appeal_sent'
+        : appealStatus === 'appeal_accepted'
+          ? 'appeal_accepted'
+          : appealStatus === 'appeal_rejected'
+            ? 'appeal_rejected'
+            : 'appeal_pending';
+      const previousStatus = sanitizeString(guide.status, 80) || 'glossed';
+      const updated = await supabase
+        .from('tiss_official_guide_tracking')
+        .update(cleanObject({
+          status: nextGuideStatus,
+          appeal_status: appealStatus,
+          appeal_deadline: sanitizeString(req.body?.appealDeadline || req.body?.appeal_deadline, 40).slice(0, 10) || guide.appeal_deadline || null,
+          appeal_sent_at: appealStatus === 'appeal_sent'
+            ? (sanitizeString(req.body?.appealSentAt || req.body?.appeal_sent_at, 80) ? new Date(req.body?.appealSentAt || req.body?.appeal_sent_at).toISOString() : new Date().toISOString())
+            : guide.appeal_sent_at || null,
+          appeal_result: sanitizeString(req.body?.appealResult || req.body?.appeal_result, 80) || null,
+          appeal_note: sanitizeTextField(req.body?.appealNote || req.body?.appeal_note || req.body?.notes, 1200) || null,
+          updated_at: new Date().toISOString()
+        }))
+        .eq('organization_id', organizationId)
+        .eq('id', guide.id)
+        .select(TISS_OFFICIAL_GUIDE_TRACKING_SELECT)
+        .maybeSingle();
+      if (updated.error) throw updated.error;
+      const eventType = appealStatus === 'appeal_sent'
+        ? 'official_xml_appeal_sent'
+        : appealStatus === 'appeal_accepted' || appealStatus === 'appeal_rejected'
+          ? 'official_xml_appeal_resolved'
+          : 'official_xml_appeal_prepared';
+      await recordTissOfficialTrackingEvent({
+        organizationId,
+        officialDocumentId: documentId,
+        officialTrackingId: bundle.tracking.id,
+        guideTrackingId: guide.id,
+        preGuideId: guide.pre_guide_id,
+        userId,
+        eventType,
+        previousStatus,
+        newStatus: nextGuideStatus,
+        metadata: { appealStatus }
+      });
+      const totals = await refreshTissOfficialDocumentTrackingTotals({
+        organizationId,
+        officialDocumentId: documentId,
+        officialTrackingId: bundle.tracking.id,
+        fallbackSentAmount: bundle.document?.total_amount_cents,
+        preferredStatus: appealStatus === 'appeal_sent'
+          ? 'appeal_sent'
+          : appealStatus === 'appeal_accepted'
+            ? 'appeal_accepted'
+            : appealStatus === 'appeal_rejected'
+              ? 'appeal_rejected'
+              : 'appeal_prepared'
+      });
+      return sendNoStoreJson(res, {
+        success: true,
+        data: serializeTissOfficialTrackingBundle({ ...bundle, tracking: totals.tracking, guides: totals.guides }),
+        guide: serializeTissOfficialGuideTracking(updated.data),
+        message: 'Recurso de glosa registrado.'
+      });
+    } catch (error: any) {
+      console.warn('[TissOfficialTracking] appeal failed:', error?.message || String(error));
+      return res.status(500).json({ success: false, error: 'Não foi possível registrar o recurso de glosa agora.' });
     }
   });
 
@@ -39157,9 +40111,34 @@ async function startServer() {
         throw error;
       }
       if (!data) return res.status(404).json(payerSafeError(404));
+      const trackingBundle = await ensureTissOfficialDocumentTracking({
+        organizationId,
+        documentId,
+        userId: sanitizeString(req.session.user?.id, 120)
+      });
+      let trackingEvents: any[] = [];
+      if (trackingBundle.ok) {
+        const eventsResult = await supabase
+          .from('tiss_official_tracking_events')
+          .select(TISS_OFFICIAL_TRACKING_EVENT_SELECT)
+          .eq('organization_id', organizationId)
+          .eq('official_document_id', documentId)
+          .order('created_at', { ascending: false })
+          .limit(80);
+        if (!eventsResult.error && Array.isArray(eventsResult.data)) {
+          trackingEvents = eventsResult.data;
+        } else if (eventsResult.error && !hasMissingFinancialSchema(eventsResult.error) && !isMissingRelationError(eventsResult.error)) {
+          throw eventsResult.error;
+        }
+      }
       return sendNoStoreJson(res, {
         success: true,
-        data: serializeTissOfficialDocument(data, true)
+        data: {
+          ...serializeTissOfficialDocument(data, true),
+          tracking: trackingBundle.ok ? serializeTissOfficialTracking(trackingBundle.tracking) : null,
+          guideTracking: trackingBundle.ok ? (trackingBundle.guides || []).map(serializeTissOfficialGuideTracking).filter(Boolean) : [],
+          trackingEvents: trackingEvents.map(serializeTissOfficialTrackingEvent).filter(Boolean)
+        }
       });
     } catch (error: any) {
       console.warn('[TissOfficial] detail failed:', error?.message || String(error));

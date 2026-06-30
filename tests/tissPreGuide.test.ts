@@ -2114,7 +2114,7 @@ test('frontend separa Pré-guias e Rascunhos XML com preview interno', () => {
   assert.doesNotMatch(preGuideUiCode, /Gerar\/Revalidar pendentes/);
   assert.match(preGuideUiCode, /Abra Ferramentas avançadas para atualizar as pré-guias do período/);
   assert.match(preGuideUiCode, /Nenhum atendimento eleg/);
-  assert.doesNotMatch(preGuideUiCode, /Enviar lote|Enviar remessa|Registrar glosa|Remessa enviada|Faturamento TISS concluído|Guia oficial enviada|Lote transmitido|Retorno importado|Glosa processada|Recurso de glosa/i);
+  assert.doesNotMatch(preGuideUiCode, /Enviar lote|Enviar remessa|Remessa enviada|Faturamento TISS concluído|Guia oficial enviada|Lote transmitido|Retorno importado|Glosa processada/i);
 });
 
 test('frontend de Pré-guias apresenta status operacionais sem contradição visual', () => {

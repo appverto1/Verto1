@@ -696,7 +696,7 @@ test('script test:tuss-ready existe e modulo nao promete envio ou faturamento el
     serverCode.indexOf("app.get('/api/appointments/:appointmentId/billing-context'")
   );
   for (const code of [serverTussSlice, dataServiceCode, payerPanelCode, conferenceCode, closureCode]) {
-    assert.doesNotMatch(code, /remessa enviada|enviar remessa|retorno importado|glosa processada|recurso de glosa|faturamento eletrônico completo|lote transmitido|guia oficial enviada/i);
+    assert.doesNotMatch(code, /remessa enviada|enviar remessa|retorno importado|glosa processada|faturamento eletrônico completo|lote transmitido|guia oficial enviada/i);
   }
 });
 

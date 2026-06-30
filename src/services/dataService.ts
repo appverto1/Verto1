@@ -3348,6 +3348,107 @@ export const dataService = {
     }
   },
 
+  async getTissOfficialDocumentTracking(documentId: string) {
+    try {
+      return await fetchNoStoreJsonWithRetry(`/api/tiss/official-documents/${encodeURIComponent(String(documentId))}/tracking`, {
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getTissOfficialDocumentTracking',
+        operation: 'detail',
+        table: 'tiss_official_document_tracking,tiss_official_guide_tracking,tiss_official_tracking_events',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      }, 'O acompanhamento do lote XML voltou do cache. Tente atualizar novamente.');
+    } catch {
+      return { success: false, data: null, error: 'Não foi possível carregar o acompanhamento do lote XML agora.' };
+    }
+  },
+
+  async markTissOfficialDocumentSent(documentId: string, payload: any = {}) {
+    try {
+      const response = await fetchClinical(`/api/tiss/official-documents/${encodeURIComponent(String(documentId))}/tracking/sent`, {
+        method: 'POST',
+        cache: 'no-store',
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      }, {
+        helperName: 'markTissOfficialDocumentSent',
+        operation: 'write',
+        table: 'tiss_official_document_tracking,tiss_official_tracking_events',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeNoStoreJson(response, 'O registro de envio do lote XML voltou do cache. Tente novamente.');
+    } catch {
+      return { success: false, error: 'Não foi possível registrar o envio do lote XML agora.' };
+    }
+  },
+
+  async registerTissOfficialDocumentReturn(documentId: string, payload: any = {}) {
+    try {
+      const response = await fetchClinical(`/api/tiss/official-documents/${encodeURIComponent(String(documentId))}/tracking/return`, {
+        method: 'POST',
+        cache: 'no-store',
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      }, {
+        helperName: 'registerTissOfficialDocumentReturn',
+        operation: 'write',
+        table: 'tiss_official_document_tracking,tiss_official_guide_tracking,tiss_official_tracking_events',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeNoStoreJson(response, 'O retorno do lote XML voltou do cache. Tente novamente.');
+    } catch {
+      return { success: false, error: 'Não foi possível registrar o retorno da operadora agora.' };
+    }
+  },
+
+  async updateTissOfficialGuideTracking(documentId: string, guideId: string, payload: any = {}) {
+    try {
+      const response = await fetchClinical(`/api/tiss/official-documents/${encodeURIComponent(String(documentId))}/guides/${encodeURIComponent(String(guideId))}/tracking`, {
+        method: 'POST',
+        cache: 'no-store',
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      }, {
+        helperName: 'updateTissOfficialGuideTracking',
+        operation: 'write',
+        table: 'tiss_official_guide_tracking,tiss_official_document_tracking,tiss_official_tracking_events',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeNoStoreJson(response, 'O acompanhamento da guia voltou do cache. Tente novamente.');
+    } catch {
+      return { success: false, error: 'Não foi possível atualizar a guia do lote XML agora.' };
+    }
+  },
+
+  async updateTissOfficialGuideAppeal(documentId: string, guideId: string, payload: any = {}) {
+    try {
+      const response = await fetchClinical(`/api/tiss/official-documents/${encodeURIComponent(String(documentId))}/guides/${encodeURIComponent(String(guideId))}/appeal`, {
+        method: 'POST',
+        cache: 'no-store',
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      }, {
+        helperName: 'updateTissOfficialGuideAppeal',
+        operation: 'write',
+        table: 'tiss_official_guide_tracking,tiss_official_document_tracking,tiss_official_tracking_events',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeNoStoreJson(response, 'O recurso de glosa voltou do cache. Tente novamente.');
+    } catch {
+      return { success: false, error: 'Não foi possível registrar o recurso de glosa agora.' };
+    }
+  },
+
   async getTissRevenueCycleEvents(options: any = {}) {
     const endpoint = endpointWithQuery('/api/tiss/revenue-cycle/events', {
       preGuideId: options.preGuideId,

@@ -21,6 +21,7 @@ const migrationCode = readFileSync(join(root, "supabase/migrations/2026061812000
 const authorizationTussSyncMigrationCode = readFileSync(join(root, "supabase/migrations/20260618143000_authorization_tuss_mapping_sync.sql"), "utf8");
 const persistenceHardeningMigrationCode = readFileSync(join(root, "supabase/migrations/20260626123000_tiss_official_persistence_hardening.sql"), "utf8");
 const pgcryptoDigestHotfixMigrationCode = readFileSync(join(root, "supabase/migrations/20260628123000_tiss_official_pgcrypto_extensions_digest.sql"), "utf8");
+const officialTrackingMigrationCode = readFileSync(join(root, "supabase/migrations/20260630120000_tiss_official_tracking.sql"), "utf8");
 const draftGeneratorCode = readFileSync(join(root, "src/services/tissXmlDraftGenerator.ts"), "utf8");
 const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 
@@ -516,6 +517,54 @@ test("migration cria persistência imutável, RLS, índices e RPC transacional",
   assert.match(authorizationTussSyncMigrationCode, /tiss_revenue_cycle_events_type_check check \([\s\S]*?\)\s+not valid;/i);
 });
 
+test("migration de acompanhamento de lotes XML oficiais e aditiva, auditavel e multi-tenant", () => {
+  assert.match(officialTrackingMigrationCode, /create table if not exists public\.tiss_official_document_tracking/i);
+  assert.match(officialTrackingMigrationCode, /create table if not exists public\.tiss_official_guide_tracking/i);
+  assert.match(officialTrackingMigrationCode, /create table if not exists public\.tiss_official_tracking_events/i);
+  assert.match(officialTrackingMigrationCode, /official_document_id uuid not null references public\.tiss_official_documents\(id\)/i);
+  assert.match(officialTrackingMigrationCode, /pre_guide_id uuid references public\.appointment_tiss_pre_guides\(id\)/i);
+  assert.match(officialTrackingMigrationCode, /organization_id uuid not null references public\.clinics\(id\)/i);
+  assert.match(officialTrackingMigrationCode, /constraint tiss_official_document_tracking_status_check check/i);
+  for (const status of [
+    "generated",
+    "sent_to_operator",
+    "protocol_registered",
+    "under_review",
+    "paid",
+    "partially_paid",
+    "denied_or_rejected",
+    "glossed",
+    "appeal_prepared",
+    "appeal_sent",
+    "appeal_accepted",
+    "appeal_rejected"
+  ]) {
+    assert.match(officialTrackingMigrationCode, new RegExp(`'${status}'`));
+  }
+  for (const eventType of [
+    "official_xml_tracking_created",
+    "official_xml_marked_sent",
+    "official_xml_protocol_registered",
+    "official_xml_return_registered",
+    "official_xml_guide_paid",
+    "official_xml_guide_glossed",
+    "official_xml_appeal_sent"
+  ]) {
+    assert.match(officialTrackingMigrationCode, new RegExp(`'${eventType}'`));
+  }
+  assert.match(officialTrackingMigrationCode, /alter table public\.tiss_official_document_tracking enable row level security/i);
+  assert.match(officialTrackingMigrationCode, /alter table public\.tiss_official_guide_tracking enable row level security/i);
+  assert.match(officialTrackingMigrationCode, /alter table public\.tiss_official_tracking_events enable row level security/i);
+  assert.match(officialTrackingMigrationCode, /role in \('owner', 'admin', 'coordinator'\)/i);
+  assert.match(officialTrackingMigrationCode, /grant select, insert, update on table public\.tiss_official_document_tracking to authenticated/i);
+  assert.match(officialTrackingMigrationCode, /grant select, insert, update on table public\.tiss_official_guide_tracking to authenticated/i);
+  assert.match(officialTrackingMigrationCode, /grant select, insert on table public\.tiss_official_tracking_events to authenticated/i);
+  assert.match(officialTrackingMigrationCode, /notify pgrst, 'reload schema';/i);
+  assert.doesNotMatch(officialTrackingMigrationCode, /alter table public\.tiss_official_documents/i);
+  assert.doesNotMatch(officialTrackingMigrationCode, /update public\.tiss_official_documents/i);
+  assert.doesNotMatch(officialTrackingMigrationCode, /delete from public\.tiss_official_documents/i);
+});
+
 test("rotas oficiais são paralelas, paginadas, sem XML na listagem e download confere hash", () => {
   assert.match(serverCode, /app\.get\('\/api\/tiss\/official-documents'/);
   assert.match(serverCode, /app\.post\('\/api\/tiss\/official-documents'/);
@@ -651,7 +700,42 @@ test("rotas oficiais são paralelas, paginadas, sem XML na listagem e download c
   assert.match(uiCode, /result\?\.diagnostics\?\.safeMessage/);
   assert.match(uiCode, /OFFICIAL_BATCH_GUIDE_LIMIT = 500/);
   assert.match(readFileSync(join(root, "src/services/tissOfficial/versions/communication040300/generator.ts"), "utf8"), /MAX_GUIDES_PER_BATCH = 500/);
-  assert.doesNotMatch(serverCode, /app\.(?:post|put|patch)\('\/api\/tiss\/official-documents\/:documentId/);
+  assert.doesNotMatch(serverCode, /app\.(?:post|put|patch)\('\/api\/tiss\/official-documents\/:documentId'\s*,/);
+});
+
+test("endpoints de acompanhamento operam em camada separada sem mutar XML oficial", () => {
+  for (const route of [
+    "app.get('/api/tiss/official-documents/tracking'",
+    "app.get('/api/tiss/official-documents/:documentId/tracking'",
+    "app.post('/api/tiss/official-documents/:documentId/tracking/sent'",
+    "app.post('/api/tiss/official-documents/:documentId/tracking/return'",
+    "app.post('/api/tiss/official-documents/:documentId/guides/:guideId/tracking'",
+    "app.post('/api/tiss/official-documents/:documentId/guides/:guideId/appeal'"
+  ]) {
+    assert.match(serverCode, new RegExp(route.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+  assert.match(serverCode, /const ensureTissOfficialDocumentTracking = async/);
+  assert.match(serverCode, /\.from\('tiss_official_document_tracking'\)/);
+  assert.match(serverCode, /\.from\('tiss_official_guide_tracking'\)/);
+  assert.match(serverCode, /\.from\('tiss_official_tracking_events'\)/);
+  assert.match(serverCode, /recordTissOfficialTrackingEvent/);
+  assert.match(serverCode, /calculateTissOfficialTrackingTotals/);
+  assert.match(serverCode, /serializeTissOfficialTrackingBundle/);
+  assert.match(serverCode, /official_xml_protocol_registered/);
+  assert.match(serverCode, /official_xml_return_registered/);
+  assert.match(serverCode, /official_xml_guide_glossed/);
+  assert.match(serverCode, /official_xml_appeal_sent/);
+  const trackingRegion = serverCode.slice(
+    serverCode.indexOf("const ensureTissOfficialDocumentTracking = async"),
+    serverCode.indexOf("app.get('/api/tiss/official-documents/:documentId/download'")
+  );
+  assert.match(trackingRegion, /\.eq\('organization_id', organizationId\)/);
+  assert.match(trackingRegion, /\.eq\('official_document_id', documentId\)/);
+  assert.match(trackingRegion, /paidAmount \+ glossedAmount > totalSentAmount/);
+  assert.match(trackingRegion, /paidAmount \+ glossedAmount > sentAmount/);
+  assert.doesNotMatch(trackingRegion, /xml_content\s*:/);
+  assert.doesNotMatch(trackingRegion, /\.update\([\s\S]*?xml_content/);
+  assert.doesNotMatch(trackingRegion, /\.from\('tiss_official_documents'\)(?:[^\n]*\n){0,4}\s*\.update\(/);
 });
 
 test("data service e UI expõem documento oficial sem remover o fluxo de rascunho", () => {
@@ -659,7 +743,12 @@ test("data service e UI expõem documento oficial sem remover o fluxo de rascunh
     "listTissOfficialDocuments",
     "createTissOfficialDocument",
     "getTissOfficialDocument",
-    "downloadTissOfficialDocument"
+    "downloadTissOfficialDocument",
+    "getTissOfficialDocumentTracking",
+    "markTissOfficialDocumentSent",
+    "registerTissOfficialDocumentReturn",
+    "updateTissOfficialGuideTracking",
+    "updateTissOfficialGuideAppeal"
   ]) {
     assert.match(dataServiceCode, new RegExp(`async ${helper}`));
   }
@@ -667,6 +756,16 @@ test("data service e UI expõem documento oficial sem remover o fluxo de rascunh
   assert.match(uiCode, /Confirmar geração do lote XML/);
   assert.match(uiCode, /Histórico de lotes XML oficiais/);
   assert.match(uiCode, /Ferramentas avançadas/);
+  assert.match(uiCode, /Acompanhamento do lote/);
+  assert.match(uiCode, /Guias do lote/);
+  assert.match(uiCode, /Histórico de acompanhamento/);
+  assert.match(uiCode, /Registrar envio/);
+  assert.match(uiCode, /Registrar retorno/);
+  assert.match(uiCode, /Registrar glosa\/pagamento/);
+  assert.match(uiCode, /Preparar recurso/);
+  assert.match(uiCode, /Valor pago/);
+  assert.match(uiCode, /Valor glosado/);
+  assert.match(uiCode, /Pendente/);
   assert.match(uiCode, /Selecionar todas as válidas/);
   assert.match(uiCode, /Visualizar guias incluídas/);
   assert.match(uiCode, /Lote XML validado/);

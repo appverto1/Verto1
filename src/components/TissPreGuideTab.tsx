@@ -140,6 +140,63 @@ type TissOfficialDocumentRow = {
   generatedAt?: string | null;
   downloadUrl?: string | null;
   xsdValidated?: boolean;
+  tracking?: TissOfficialDocumentTrackingRow | null;
+  guideTracking?: TissOfficialGuideTrackingRow[];
+  trackingEvents?: TissOfficialTrackingEventRow[];
+};
+
+type TissOfficialDocumentTrackingRow = {
+  id?: string | null;
+  officialDocumentId?: string | null;
+  status?: string | null;
+  sentAt?: string | null;
+  sentChannel?: string | null;
+  operatorProtocol?: string | null;
+  expectedReturnDate?: string | null;
+  returnedAt?: string | null;
+  returnStatus?: string | null;
+  totalSentAmountCents?: number | null;
+  totalPaidAmountCents?: number | null;
+  totalGlossedAmountCents?: number | null;
+  totalPendingAmountCents?: number | null;
+  notes?: string | null;
+  updatedAt?: string | null;
+};
+
+type TissOfficialGuideTrackingRow = {
+  id?: string | null;
+  preGuideId?: string | null;
+  providerGuideNumber?: string | null;
+  operatorGuideNumber?: string | null;
+  authorizationCode?: string | null;
+  patientName?: string | null;
+  scheduledStart?: string | null;
+  tussCode?: string | null;
+  procedureName?: string | null;
+  status?: string | null;
+  sentAmountCents?: number | null;
+  paidAmountCents?: number | null;
+  glossedAmountCents?: number | null;
+  pendingAmountCents?: number | null;
+  denialReason?: string | null;
+  operatorReasonCode?: string | null;
+  internalNote?: string | null;
+  returnDate?: string | null;
+  paymentDate?: string | null;
+  appealDeadline?: string | null;
+  appealStatus?: string | null;
+  appealSentAt?: string | null;
+  appealResult?: string | null;
+  appealNote?: string | null;
+};
+
+type TissOfficialTrackingEventRow = {
+  id?: string | null;
+  eventType?: string | null;
+  previousStatus?: string | null;
+  newStatus?: string | null;
+  metadata?: Record<string, any>;
+  createdAt?: string | null;
 };
 
 type TissXmlDraftValidationIssue = {
@@ -297,6 +354,18 @@ function toApiDate(value: string, endOfDay = false) {
 
 function formatCurrency(value?: number | null) {
   return (Number(value || 0) / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+}
+
+function currencyInputToCents(value?: string | number | null) {
+  if (typeof value === "number") return Math.max(0, Math.round(value));
+  const normalized = String(value || "")
+    .trim()
+    .replace(/[^\d,.-]/g, "")
+    .replace(/\./g, "")
+    .replace(",", ".");
+  const numeric = Number(normalized || 0);
+  if (!Number.isFinite(numeric)) return 0;
+  return Math.max(0, Math.round(numeric * 100));
 }
 
 function formatDate(value?: string | null) {
@@ -480,6 +549,63 @@ function batchDraftStatusMeta(status?: string | null) {
   if (normalized === "cancelled") return { label: "Cancelado", className: "bg-rose-50 text-rose-700 ring-rose-100" };
   if (normalized === "superseded") return { label: "Substituído", className: "bg-slate-100 text-slate-600 ring-slate-200" };
   return { label: "Rascunho", className: "bg-indigo-50 text-indigo-700 ring-indigo-100" };
+}
+
+function officialTrackingStatusMeta(status?: string | null) {
+  const normalized = String(status || "generated").trim();
+  const map: Record<string, { label: string; className: string }> = {
+    generated: { label: "Gerado", className: "bg-slate-100 text-slate-700 ring-slate-200" },
+    sent_to_operator: { label: "Enviado", className: "bg-sky-50 text-sky-700 ring-sky-100" },
+    protocol_registered: { label: "Protocolo registrado", className: "bg-violet-50 text-violet-700 ring-violet-100" },
+    under_review: { label: "Em análise", className: "bg-indigo-50 text-indigo-700 ring-indigo-100" },
+    paid: { label: "Pago", className: "bg-emerald-50 text-emerald-700 ring-emerald-100" },
+    partially_paid: { label: "Pago parcialmente", className: "bg-amber-50 text-amber-700 ring-amber-100" },
+    denied_or_rejected: { label: "Rejeitado", className: "bg-rose-50 text-rose-700 ring-rose-100" },
+    glossed: { label: "Glosado", className: "bg-rose-50 text-rose-700 ring-rose-100" },
+    appeal_prepared: { label: "Recurso preparado", className: "bg-violet-50 text-violet-700 ring-violet-100" },
+    appeal_sent: { label: "Recurso enviado", className: "bg-violet-50 text-violet-700 ring-violet-100" },
+    appeal_accepted: { label: "Recurso aceito", className: "bg-emerald-50 text-emerald-700 ring-emerald-100" },
+    appeal_rejected: { label: "Recurso negado", className: "bg-rose-50 text-rose-700 ring-rose-100" },
+    cancelled: { label: "Cancelado", className: "bg-slate-100 text-slate-600 ring-slate-200" },
+    replaced: { label: "Substituído", className: "bg-slate-100 text-slate-600 ring-slate-200" },
+  };
+  return map[normalized] || map.generated;
+}
+
+function officialGuideTrackingStatusMeta(status?: string | null) {
+  const normalized = String(status || "sent").trim();
+  const map: Record<string, { label: string; className: string }> = {
+    sent: { label: "Enviada", className: "bg-sky-50 text-sky-700 ring-sky-100" },
+    under_review: { label: "Em análise", className: "bg-indigo-50 text-indigo-700 ring-indigo-100" },
+    paid: { label: "Paga", className: "bg-emerald-50 text-emerald-700 ring-emerald-100" },
+    partially_paid: { label: "Parcial", className: "bg-amber-50 text-amber-700 ring-amber-100" },
+    glossed: { label: "Glosada", className: "bg-rose-50 text-rose-700 ring-rose-100" },
+    rejected: { label: "Rejeitada", className: "bg-rose-50 text-rose-700 ring-rose-100" },
+    appeal_pending: { label: "Recurso pendente", className: "bg-violet-50 text-violet-700 ring-violet-100" },
+    appeal_sent: { label: "Recurso enviado", className: "bg-violet-50 text-violet-700 ring-violet-100" },
+    appeal_accepted: { label: "Recurso aceito", className: "bg-emerald-50 text-emerald-700 ring-emerald-100" },
+    appeal_rejected: { label: "Recurso negado", className: "bg-rose-50 text-rose-700 ring-rose-100" },
+    cancelled: { label: "Cancelada", className: "bg-slate-100 text-slate-600 ring-slate-200" },
+  };
+  return map[normalized] || map.sent;
+}
+
+function officialTrackingEventLabel(eventType?: string | null) {
+  const map: Record<string, string> = {
+    official_xml_tracking_created: "Acompanhamento criado",
+    official_xml_marked_sent: "Envio registrado",
+    official_xml_protocol_registered: "Protocolo registrado",
+    official_xml_return_registered: "Retorno registrado",
+    official_xml_guide_paid: "Guia paga",
+    official_xml_guide_partially_paid: "Guia parcialmente paga",
+    official_xml_guide_glossed: "Guia glosada",
+    official_xml_guide_rejected: "Guia rejeitada",
+    official_xml_appeal_prepared: "Recurso preparado",
+    official_xml_appeal_sent: "Recurso enviado",
+    official_xml_appeal_resolved: "Recurso concluído",
+    official_xml_tracking_note_added: "Observação registrada",
+  };
+  return map[String(eventType || "")] || "Evento de acompanhamento";
 }
 
 function revenueCycleEventLabel(eventType?: string | null) {
@@ -706,6 +832,34 @@ export function TissPreGuideTab({
   const [officialDocumentGuidePreviewOpen, setOfficialDocumentGuidePreviewOpen] = useState(false);
   const [officialDocumentBlockedPreviewOpen, setOfficialDocumentBlockedPreviewOpen] = useState(false);
   const [createdOfficialDocument, setCreatedOfficialDocument] = useState<TissOfficialDocumentRow | null>(null);
+  const [officialTrackingAction, setOfficialTrackingAction] = useState<"sent" | "return" | null>(null);
+  const [officialTrackingDocument, setOfficialTrackingDocument] = useState<TissOfficialDocumentRow | null>(null);
+  const [officialTrackingSaving, setOfficialTrackingSaving] = useState(false);
+  const [officialSentForm, setOfficialSentForm] = useState({
+    sentAt: "",
+    sentChannel: "portal",
+    operatorProtocol: "",
+    expectedReturnDate: "",
+    notes: "",
+  });
+  const [officialReturnForm, setOfficialReturnForm] = useState({
+    returnStatus: "paid",
+    returnedAt: "",
+    paidAmountCents: "",
+    glossedAmountCents: "",
+    notes: "",
+  });
+  const [officialGuideTrackingEdit, setOfficialGuideTrackingEdit] = useState<TissOfficialGuideTrackingRow | null>(null);
+  const [officialGuideTrackingSaving, setOfficialGuideTrackingSaving] = useState(false);
+  const [officialGuideTrackingForm, setOfficialGuideTrackingForm] = useState({
+    paidAmountCents: "",
+    glossedAmountCents: "",
+    denialReason: "",
+    operatorReasonCode: "",
+    appealDeadline: "",
+    internalNote: "",
+  });
+  const [officialGuideAppealMode, setOfficialGuideAppealMode] = useState(false);
   const [revenueCycleEvents, setRevenueCycleEvents] = useState<TissRevenueCycleEventRow[]>([]);
   const [revenueCycleEventsLoading, setRevenueCycleEventsLoading] = useState(false);
 
@@ -1231,6 +1385,132 @@ export function TissPreGuideTab({
     link.click();
     link.remove();
     URL.revokeObjectURL(url);
+  };
+
+  const mergeOfficialDocumentTrackingResult = (document: TissOfficialDocumentRow | null | undefined) => {
+    if (!document?.id) return;
+    setOfficialDocuments((current) => current.map((item) => item.id === document.id ? { ...item, ...document } : item));
+    setCreatedOfficialDocument((current) => current?.id === document.id ? { ...current, ...document } : current);
+    setOfficialDocumentDetail((current) => current?.id === document.id ? { ...current, ...document } : current);
+  };
+
+  const openOfficialTrackingAction = (document: TissOfficialDocumentRow, action: "sent" | "return") => {
+    if (!document.id) return;
+    const tracking = document.tracking || {};
+    setOfficialTrackingDocument(document);
+    setOfficialTrackingAction(action);
+    setError("");
+    if (action === "sent") {
+      setOfficialSentForm({
+        sentAt: String(tracking.sentAt || new Date().toISOString()).slice(0, 16),
+        sentChannel: tracking.sentChannel || "portal",
+        operatorProtocol: tracking.operatorProtocol || "",
+        expectedReturnDate: String(tracking.expectedReturnDate || "").slice(0, 10),
+        notes: tracking.notes || "",
+      });
+    } else {
+      const totalSent = Number(tracking.totalSentAmountCents || document.totalAmountCents || 0);
+      setOfficialReturnForm({
+        returnStatus: "paid",
+        returnedAt: new Date().toISOString().slice(0, 16),
+        paidAmountCents: (totalSent / 100).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+        glossedAmountCents: "0,00",
+        notes: tracking.notes || "",
+      });
+    }
+  };
+
+  const saveOfficialTrackingSent = async () => {
+    if (!officialTrackingDocument?.id || officialTrackingSaving) return;
+    setOfficialTrackingSaving(true);
+    setError("");
+    setMessage("");
+    try {
+      const result = await dataService.markTissOfficialDocumentSent(officialTrackingDocument.id, officialSentForm);
+      if (!result?.success || !result.data) {
+        setError(result?.error || "Não foi possível registrar o envio do lote XML.");
+        return;
+      }
+      mergeOfficialDocumentTrackingResult(result.data);
+      setOfficialTrackingAction(null);
+      setOfficialTrackingDocument(null);
+      setMessage(result.message || "Envio do lote XML registrado.");
+      await loadOfficialDocuments();
+    } finally {
+      setOfficialTrackingSaving(false);
+    }
+  };
+
+  const saveOfficialTrackingReturn = async () => {
+    if (!officialTrackingDocument?.id || officialTrackingSaving) return;
+    setOfficialTrackingSaving(true);
+    setError("");
+    setMessage("");
+    try {
+      const result = await dataService.registerTissOfficialDocumentReturn(officialTrackingDocument.id, {
+        ...officialReturnForm,
+        paidAmountCents: currencyInputToCents(officialReturnForm.paidAmountCents),
+        glossedAmountCents: currencyInputToCents(officialReturnForm.glossedAmountCents),
+      });
+      if (!result?.success || !result.data) {
+        setError(result?.error || "Não foi possível registrar o retorno da operadora.");
+        return;
+      }
+      mergeOfficialDocumentTrackingResult(result.data);
+      setOfficialTrackingAction(null);
+      setOfficialTrackingDocument(null);
+      setMessage(result.message || "Retorno da operadora registrado.");
+      await loadOfficialDocuments();
+    } finally {
+      setOfficialTrackingSaving(false);
+    }
+  };
+
+  const openOfficialGuideTrackingEdit = (guide: TissOfficialGuideTrackingRow, appealMode = false) => {
+    setOfficialGuideTrackingEdit(guide);
+    setOfficialGuideAppealMode(appealMode);
+    setOfficialGuideTrackingForm({
+      paidAmountCents: (Number(guide.paidAmountCents || 0) / 100).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+      glossedAmountCents: (Number(guide.glossedAmountCents || 0) / 100).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+      denialReason: guide.denialReason || "",
+      operatorReasonCode: guide.operatorReasonCode || "",
+      appealDeadline: String(guide.appealDeadline || "").slice(0, 10),
+      internalNote: appealMode ? (guide.appealNote || guide.internalNote || "") : (guide.internalNote || ""),
+    });
+  };
+
+  const saveOfficialGuideTracking = async () => {
+    if (!officialDocumentDetail?.id || !officialGuideTrackingEdit?.id || officialGuideTrackingSaving) return;
+    setOfficialGuideTrackingSaving(true);
+    setError("");
+    setMessage("");
+    try {
+      const result = officialGuideAppealMode
+        ? await dataService.updateTissOfficialGuideAppeal(officialDocumentDetail.id, officialGuideTrackingEdit.id, {
+            appealStatus: "appeal_prepared",
+            appealDeadline: officialGuideTrackingForm.appealDeadline,
+            appealNote: officialGuideTrackingForm.internalNote,
+          })
+        : await dataService.updateTissOfficialGuideTracking(officialDocumentDetail.id, officialGuideTrackingEdit.id, {
+            paidAmountCents: currencyInputToCents(officialGuideTrackingForm.paidAmountCents),
+            glossedAmountCents: currencyInputToCents(officialGuideTrackingForm.glossedAmountCents),
+            denialReason: officialGuideTrackingForm.denialReason,
+            operatorReasonCode: officialGuideTrackingForm.operatorReasonCode,
+            appealDeadline: officialGuideTrackingForm.appealDeadline,
+            internalNote: officialGuideTrackingForm.internalNote,
+          });
+      if (!result?.success || !result.data) {
+        setError(result?.error || "Não foi possível atualizar o acompanhamento da guia.");
+        return;
+      }
+      mergeOfficialDocumentTrackingResult(result.data);
+      setOfficialGuideTrackingEdit(null);
+      setOfficialGuideAppealMode(false);
+      setMessage(result.message || "Acompanhamento da guia atualizado.");
+      await loadOfficialDocuments();
+    } finally {
+      setOfficialGuideTrackingSaving(false);
+    }
   };
 
   const openBatchDraftModal = () => {
@@ -2098,51 +2378,71 @@ export function TissPreGuideTab({
           </button>
         </div>
         <div className="overflow-auto">
-          <table className="min-w-[1220px] divide-y divide-slate-200 text-sm">
+          <table className="min-w-[1500px] divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-50 text-left text-xs font-semibold uppercase text-slate-500">
               <tr>
-                <th className="px-4 py-3">Geração</th>
-                <th className="px-4 py-3">Operadora</th>
                 <th className="px-4 py-3">Competência</th>
+                <th className="px-4 py-3">Operadora</th>
                 <th className="px-4 py-3">Lote</th>
+                <th className="px-4 py-3">Geração</th>
                 <th className="px-4 py-3">Guias</th>
-                <th className="px-4 py-3">Valor total</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Hash</th>
+                <th className="px-4 py-3">Valor enviado</th>
+                <th className="px-4 py-3">Acompanhamento</th>
+                <th className="px-4 py-3">Protocolo</th>
+                <th className="px-4 py-3">Pago</th>
+                <th className="px-4 py-3">Glosado</th>
+                <th className="px-4 py-3">Pendente</th>
                 <th className="px-4 py-3 text-right">Ações</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {officialDocumentsLoading ? (
-                <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-500"><Loader2 size={18} className="mx-auto mb-2 animate-spin" />Carregando lotes XML</td></tr>
+                <tr><td colSpan={12} className="px-4 py-8 text-center text-slate-500"><Loader2 size={18} className="mx-auto mb-2 animate-spin" />Carregando lotes XML</td></tr>
               ) : officialDocuments.length === 0 ? (
-                <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-500">Nenhum lote XML validado nesta competência.</td></tr>
-              ) : officialDocuments.map((document) => (
-                <tr key={document.id || document.xmlHash} className={highlightedOfficialDocumentId === document.id ? "bg-emerald-50/60" : "hover:bg-slate-50"}>
-                  <td className="px-4 py-3 text-slate-600">{formatDate(document.generatedAt)}</td>
-                  <td className="px-4 py-3 text-slate-700">{fieldValue(document.payerName, "Operadora")}</td>
-                  <td className="px-4 py-3 text-slate-600">{String(document.competenceMonth || "").slice(0, 7) || "Não informada"}</td>
-                  <td className="px-4 py-3 text-slate-700">{fieldValue(document.batchNumber)}</td>
-                  <td className="px-4 py-3 text-slate-600">{Number(document.guideCount || 0)}</td>
-                  <td className="px-4 py-3 font-medium text-slate-800">{formatCurrency(document.totalAmountCents)}</td>
-                  <td className="px-4 py-3">
-                    <span className="rounded-full bg-emerald-50 px-2 py-1 text-xs text-emerald-700 ring-1 ring-emerald-100">Validado no XSD</span>
-                  </td>
-                  <td className="px-4 py-3 font-mono text-xs text-slate-500">{String(document.xmlHash || "").slice(0, 12) || "Não informado"}</td>
-                  <td className="px-4 py-3 text-right">
-                    <div className="flex justify-end gap-2">
-                      <button type="button" onClick={() => void openOfficialDocumentDetail(document)} className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
-                        <Eye size={15} />
-                        Ver detalhes
-                      </button>
-                      <button type="button" onClick={() => void downloadOfficialDocument(document)} className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
-                        <Download size={15} />
-                        Baixar XML
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                <tr><td colSpan={12} className="px-4 py-8 text-center text-slate-500">Nenhum lote XML validado nesta competência.</td></tr>
+              ) : officialDocuments.map((document) => {
+                const tracking = document.tracking || {};
+                const trackingMeta = officialTrackingStatusMeta(tracking.status);
+                const sentAmount = Number(tracking.totalSentAmountCents ?? document.totalAmountCents ?? 0);
+                return (
+                  <tr key={document.id || document.xmlHash} className={highlightedOfficialDocumentId === document.id ? "bg-emerald-50/60" : "hover:bg-slate-50"}>
+                    <td className="px-4 py-3 text-slate-600">{String(document.competenceMonth || "").slice(0, 7) || "Não informada"}</td>
+                    <td className="px-4 py-3 text-slate-700">{fieldValue(document.payerName, "Operadora")}</td>
+                    <td className="px-4 py-3 text-slate-700">{fieldValue(document.batchNumber)}</td>
+                    <td className="px-4 py-3 text-slate-600">{formatDate(document.generatedAt)}</td>
+                    <td className="px-4 py-3 text-slate-600">{Number(document.guideCount || 0)}</td>
+                    <td className="px-4 py-3 font-medium text-slate-800">{formatCurrency(sentAmount)}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex flex-col gap-1">
+                        <span className={`w-fit rounded-full px-2 py-1 text-xs font-medium ring-1 ${trackingMeta.className}`}>{trackingMeta.label}</span>
+                        <span className="text-[11px] text-emerald-700">XML validado</span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-slate-600">{fieldValue(tracking.operatorProtocol, "Sem protocolo")}</td>
+                    <td className="px-4 py-3 text-emerald-700">{formatCurrency(tracking.totalPaidAmountCents)}</td>
+                    <td className="px-4 py-3 text-rose-700">{formatCurrency(tracking.totalGlossedAmountCents)}</td>
+                    <td className="px-4 py-3 text-slate-700">{formatCurrency(tracking.totalPendingAmountCents ?? sentAmount)}</td>
+                    <td className="px-4 py-3 text-right">
+                      <div className="flex flex-wrap justify-end gap-2">
+                        <button type="button" onClick={() => void openOfficialDocumentDetail(document)} className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
+                          <Eye size={15} />
+                          Detalhes
+                        </button>
+                        <button type="button" onClick={() => void downloadOfficialDocument(document)} className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
+                          <Download size={15} />
+                          Baixar XML
+                        </button>
+                        <button type="button" onClick={() => openOfficialTrackingAction(document, "sent")} className="inline-flex items-center gap-2 rounded-md border border-sky-200 px-3 py-2 text-sm text-sky-700 hover:bg-sky-50">
+                          Registrar envio
+                        </button>
+                        <button type="button" onClick={() => openOfficialTrackingAction(document, "return")} className="inline-flex items-center gap-2 rounded-md border border-violet-200 px-3 py-2 text-sm text-violet-700 hover:bg-violet-50">
+                          Registrar retorno
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -2858,6 +3158,99 @@ export function TissPreGuideTab({
                   <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
                     Validação XML básica, XSD oficial, totais financeiros e hash concluídos antes da persistência.
                   </div>
+                  {(() => {
+                    const tracking = officialDocumentDetail.tracking || {};
+                    const meta = officialTrackingStatusMeta(tracking.status);
+                    return (
+                      <section className="space-y-3 rounded-md border border-violet-100 bg-violet-50/40 p-4">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <div className="text-sm font-semibold text-slate-900">Acompanhamento do lote</div>
+                            <p className="mt-1 text-xs text-slate-600">Controle manual de envio, protocolo, pagamento e glosas. O XML oficial permanece imutável.</p>
+                          </div>
+                          <span className={`rounded-full px-2 py-1 text-xs font-medium ring-1 ${meta.className}`}>{meta.label}</span>
+                        </div>
+                        <div className="grid gap-3 text-sm sm:grid-cols-4">
+                          <DetailField label="Protocolo" value={fieldValue(tracking.operatorProtocol, "Sem protocolo")} />
+                          <DetailField label="Enviado em" value={tracking.sentAt ? formatDate(tracking.sentAt) : "Não enviado"} />
+                          <DetailField label="Canal" value={fieldValue(tracking.sentChannel, "Não informado")} />
+                          <DetailField label="Previsão de retorno" value={tracking.expectedReturnDate ? formatDate(tracking.expectedReturnDate) : "Não informada"} />
+                          <DetailField label="Valor enviado" value={formatCurrency(tracking.totalSentAmountCents ?? officialDocumentDetail.totalAmountCents)} />
+                          <DetailField label="Valor pago" value={formatCurrency(tracking.totalPaidAmountCents)} />
+                          <DetailField label="Valor glosado" value={formatCurrency(tracking.totalGlossedAmountCents)} />
+                          <DetailField label="Valor pendente" value={formatCurrency(tracking.totalPendingAmountCents ?? officialDocumentDetail.totalAmountCents)} />
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <button type="button" onClick={() => openOfficialTrackingAction(officialDocumentDetail, "sent")} className="rounded-md border border-sky-200 bg-white px-3 py-2 text-sm text-sky-700 hover:bg-sky-50">
+                            Registrar envio
+                          </button>
+                          <button type="button" onClick={() => openOfficialTrackingAction(officialDocumentDetail, "return")} className="rounded-md border border-violet-200 bg-white px-3 py-2 text-sm text-violet-700 hover:bg-violet-50">
+                            Registrar retorno
+                          </button>
+                        </div>
+                      </section>
+                    );
+                  })()}
+                  <section className="rounded-md border border-slate-200 bg-white">
+                    <div className="border-b border-slate-100 px-3 py-2 text-sm font-semibold text-slate-800">Guias do lote</div>
+                    <div className="max-h-72 overflow-auto">
+                      <table className="min-w-[980px] divide-y divide-slate-100 text-sm">
+                        <thead className="bg-slate-50 text-left text-xs uppercase text-slate-500">
+                          <tr>
+                            <th className="px-3 py-2">Paciente</th>
+                            <th className="px-3 py-2">Data</th>
+                            <th className="px-3 py-2">Guia</th>
+                            <th className="px-3 py-2">TUSS</th>
+                            <th className="px-3 py-2">Enviado</th>
+                            <th className="px-3 py-2">Pago</th>
+                            <th className="px-3 py-2">Glosado</th>
+                            <th className="px-3 py-2">Status</th>
+                            <th className="px-3 py-2 text-right">Ações</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {(officialDocumentDetail.guideTracking || []).length === 0 ? (
+                            <tr><td colSpan={9} className="px-3 py-6 text-center text-slate-500">Nenhuma guia de acompanhamento carregada.</td></tr>
+                          ) : (officialDocumentDetail.guideTracking || []).map((guide) => {
+                            const guideMeta = officialGuideTrackingStatusMeta(guide.status);
+                            return (
+                              <tr key={guide.id || guide.preGuideId}>
+                                <td className="px-3 py-2 text-slate-700">{fieldValue(guide.patientName, "Paciente")}</td>
+                                <td className="px-3 py-2 text-slate-600">{formatDate(guide.scheduledStart)}</td>
+                                <td className="px-3 py-2 text-slate-600">{fieldValue(guide.providerGuideNumber || guide.operatorGuideNumber)}</td>
+                                <td className="px-3 py-2 text-slate-600">{fieldValue(guide.tussCode)}</td>
+                                <td className="px-3 py-2 text-slate-700">{formatCurrency(guide.sentAmountCents)}</td>
+                                <td className="px-3 py-2 text-emerald-700">{formatCurrency(guide.paidAmountCents)}</td>
+                                <td className="px-3 py-2 text-rose-700">{formatCurrency(guide.glossedAmountCents)}</td>
+                                <td className="px-3 py-2"><span className={`rounded-full px-2 py-1 text-xs font-medium ring-1 ${guideMeta.className}`}>{guideMeta.label}</span></td>
+                                <td className="px-3 py-2 text-right">
+                                  <div className="flex justify-end gap-2">
+                                    <button type="button" onClick={() => openOfficialGuideTrackingEdit(guide)} className="rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50">Registrar glosa/pagamento</button>
+                                    {(guide.status === "glossed" || Number(guide.glossedAmountCents || 0) > 0) && (
+                                      <button type="button" onClick={() => openOfficialGuideTrackingEdit(guide, true)} className="rounded-md border border-violet-200 px-2 py-1 text-xs text-violet-700 hover:bg-violet-50">Preparar recurso</button>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </section>
+                  <details className="rounded-md border border-slate-200 bg-white">
+                    <summary className="cursor-pointer px-3 py-2 text-sm font-semibold text-slate-800">Histórico de acompanhamento</summary>
+                    <div className="divide-y divide-slate-100 border-t border-slate-100">
+                      {(officialDocumentDetail.trackingEvents || []).length === 0 ? (
+                        <div className="px-3 py-4 text-sm text-slate-500">Nenhum evento de acompanhamento registrado.</div>
+                      ) : (officialDocumentDetail.trackingEvents || []).map((event) => (
+                        <div key={event.id || `${event.eventType}-${event.createdAt}`} className="px-3 py-3 text-sm">
+                          <div className="font-medium text-slate-800">{officialTrackingEventLabel(event.eventType)}</div>
+                          <div className="mt-0.5 text-xs text-slate-500">{formatDate(event.createdAt)} · {fieldValue(event.previousStatus)} → {fieldValue(event.newStatus)}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </details>
                   <details className="rounded-md border border-slate-200 bg-white">
                     <summary className="cursor-pointer px-3 py-2 text-sm font-semibold text-slate-800">Detalhes técnicos</summary>
                     <div className="grid gap-4 border-t border-slate-100 p-4 text-sm sm:grid-cols-3">
@@ -2894,6 +3287,124 @@ export function TissPreGuideTab({
                 </>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {officialTrackingAction && officialTrackingDocument && (
+        <div className="fixed inset-0 z-[160] flex items-end justify-center bg-slate-950/45 p-4 sm:items-center" role="dialog" aria-modal="true" aria-label={officialTrackingAction === "sent" ? "Registrar envio do lote XML" : "Registrar retorno da operadora"}>
+          <div className="w-full max-w-xl rounded-lg bg-white shadow-xl">
+            <header className="flex items-start justify-between border-b border-slate-200 px-5 py-4">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900">{officialTrackingAction === "sent" ? "Registrar envio" : "Registrar retorno"}</h2>
+                <p className="mt-1 text-sm text-slate-500">Lote {fieldValue(officialTrackingDocument.batchNumber)} · {fieldValue(officialTrackingDocument.payerName, "Operadora")}</p>
+              </div>
+              <button type="button" onClick={() => setOfficialTrackingAction(null)} className="rounded-md p-2 text-slate-500 hover:bg-slate-100" aria-label="Fechar acompanhamento"><X size={18} /></button>
+            </header>
+            <div className="space-y-3 px-5 py-4">
+              {officialTrackingAction === "sent" ? (
+                <>
+                  <label className="block text-sm font-medium text-slate-700">Data de envio
+                    <input type="datetime-local" value={officialSentForm.sentAt} onChange={(event) => setOfficialSentForm((current) => ({ ...current, sentAt: event.target.value }))} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+                  </label>
+                  <label className="block text-sm font-medium text-slate-700">Canal de envio
+                    <select value={officialSentForm.sentChannel} onChange={(event) => setOfficialSentForm((current) => ({ ...current, sentChannel: event.target.value }))} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm">
+                      <option value="portal">Portal da operadora</option>
+                      <option value="email">E-mail</option>
+                      <option value="sistema_proprio">Sistema próprio</option>
+                      <option value="outro">Outro</option>
+                    </select>
+                  </label>
+                  <label className="block text-sm font-medium text-slate-700">Protocolo da operadora
+                    <input value={officialSentForm.operatorProtocol} onChange={(event) => setOfficialSentForm((current) => ({ ...current, operatorProtocol: event.target.value }))} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm" placeholder="Opcional" />
+                  </label>
+                  <label className="block text-sm font-medium text-slate-700">Previsão de retorno/pagamento
+                    <input type="date" value={officialSentForm.expectedReturnDate} onChange={(event) => setOfficialSentForm((current) => ({ ...current, expectedReturnDate: event.target.value }))} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+                  </label>
+                  <label className="block text-sm font-medium text-slate-700">Observações
+                    <textarea value={officialSentForm.notes} onChange={(event) => setOfficialSentForm((current) => ({ ...current, notes: event.target.value }))} className="mt-1 min-h-20 w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+                  </label>
+                </>
+              ) : (
+                <>
+                  <label className="block text-sm font-medium text-slate-700">Status do retorno
+                    <select value={officialReturnForm.returnStatus} onChange={(event) => setOfficialReturnForm((current) => ({ ...current, returnStatus: event.target.value }))} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm">
+                      <option value="paid">Pago integralmente</option>
+                      <option value="partially_paid">Pago parcialmente</option>
+                      <option value="glossed">Glosado</option>
+                      <option value="denied_or_rejected">Rejeitado</option>
+                      <option value="under_review">Ainda em análise</option>
+                    </select>
+                  </label>
+                  <label className="block text-sm font-medium text-slate-700">Data do retorno
+                    <input type="datetime-local" value={officialReturnForm.returnedAt} onChange={(event) => setOfficialReturnForm((current) => ({ ...current, returnedAt: event.target.value }))} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+                  </label>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <label className="block text-sm font-medium text-slate-700">Valor pago
+                      <input value={officialReturnForm.paidAmountCents} onChange={(event) => setOfficialReturnForm((current) => ({ ...current, paidAmountCents: event.target.value }))} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+                    </label>
+                    <label className="block text-sm font-medium text-slate-700">Valor glosado
+                      <input value={officialReturnForm.glossedAmountCents} onChange={(event) => setOfficialReturnForm((current) => ({ ...current, glossedAmountCents: event.target.value }))} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+                    </label>
+                  </div>
+                  <label className="block text-sm font-medium text-slate-700">Observações
+                    <textarea value={officialReturnForm.notes} onChange={(event) => setOfficialReturnForm((current) => ({ ...current, notes: event.target.value }))} className="mt-1 min-h-20 w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+                  </label>
+                </>
+              )}
+            </div>
+            <footer className="flex justify-end gap-2 border-t border-slate-200 px-5 py-4">
+              <button type="button" onClick={() => setOfficialTrackingAction(null)} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700">Cancelar</button>
+              <button type="button" onClick={() => officialTrackingAction === "sent" ? void saveOfficialTrackingSent() : void saveOfficialTrackingReturn()} disabled={officialTrackingSaving} className="inline-flex items-center gap-2 rounded-md bg-[#7a32fc] px-3 py-2 text-sm text-white disabled:opacity-60">
+                {officialTrackingSaving && <Loader2 size={15} className="animate-spin" />}
+                Salvar
+              </button>
+            </footer>
+          </div>
+        </div>
+      )}
+
+      {officialGuideTrackingEdit && (
+        <div className="fixed inset-0 z-[161] flex items-end justify-center bg-slate-950/45 p-4 sm:items-center" role="dialog" aria-modal="true" aria-label="Registrar glosa ou recurso">
+          <div className="w-full max-w-xl rounded-lg bg-white shadow-xl">
+            <header className="flex items-start justify-between border-b border-slate-200 px-5 py-4">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900">{officialGuideAppealMode ? "Preparar recurso" : "Registrar pagamento/glosa da guia"}</h2>
+                <p className="mt-1 text-sm text-slate-500">{fieldValue(officialGuideTrackingEdit.patientName, "Paciente")} · Guia {fieldValue(officialGuideTrackingEdit.providerGuideNumber)}</p>
+              </div>
+              <button type="button" onClick={() => setOfficialGuideTrackingEdit(null)} className="rounded-md p-2 text-slate-500 hover:bg-slate-100" aria-label="Fechar guia"><X size={18} /></button>
+            </header>
+            <div className="space-y-3 px-5 py-4">
+              {!officialGuideAppealMode && (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="block text-sm font-medium text-slate-700">Valor pago
+                    <input value={officialGuideTrackingForm.paidAmountCents} onChange={(event) => setOfficialGuideTrackingForm((current) => ({ ...current, paidAmountCents: event.target.value }))} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+                  </label>
+                  <label className="block text-sm font-medium text-slate-700">Valor glosado
+                    <input value={officialGuideTrackingForm.glossedAmountCents} onChange={(event) => setOfficialGuideTrackingForm((current) => ({ ...current, glossedAmountCents: event.target.value }))} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+                  </label>
+                </div>
+              )}
+              <label className="block text-sm font-medium text-slate-700">Motivo/código da operadora
+                <input value={officialGuideTrackingForm.operatorReasonCode} onChange={(event) => setOfficialGuideTrackingForm((current) => ({ ...current, operatorReasonCode: event.target.value }))} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+              </label>
+              <label className="block text-sm font-medium text-slate-700">Motivo da glosa
+                <textarea value={officialGuideTrackingForm.denialReason} onChange={(event) => setOfficialGuideTrackingForm((current) => ({ ...current, denialReason: event.target.value }))} className="mt-1 min-h-20 w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+              </label>
+              <label className="block text-sm font-medium text-slate-700">Prazo para recurso
+                <input type="date" value={officialGuideTrackingForm.appealDeadline} onChange={(event) => setOfficialGuideTrackingForm((current) => ({ ...current, appealDeadline: event.target.value }))} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+              </label>
+              <label className="block text-sm font-medium text-slate-700">{officialGuideAppealMode ? "Observação do recurso" : "Observação interna"}
+                <textarea value={officialGuideTrackingForm.internalNote} onChange={(event) => setOfficialGuideTrackingForm((current) => ({ ...current, internalNote: event.target.value }))} className="mt-1 min-h-20 w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+              </label>
+            </div>
+            <footer className="flex justify-end gap-2 border-t border-slate-200 px-5 py-4">
+              <button type="button" onClick={() => setOfficialGuideTrackingEdit(null)} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700">Cancelar</button>
+              <button type="button" onClick={() => void saveOfficialGuideTracking()} disabled={officialGuideTrackingSaving} className="inline-flex items-center gap-2 rounded-md bg-[#7a32fc] px-3 py-2 text-sm text-white disabled:opacity-60">
+                {officialGuideTrackingSaving && <Loader2 size={15} className="animate-spin" />}
+                Salvar
+              </button>
+            </footer>
           </div>
         </div>
       )}
