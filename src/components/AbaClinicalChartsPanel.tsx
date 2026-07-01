@@ -647,6 +647,8 @@ const ClinicalChangeCard: React.FC<{ change: AbaAggregatedClinicalChange; index:
   const sessionLabel = changeSessionLabel(change, index);
   const previous = formatClinicalValue(change.previousValue, metricType, (change as any).previousStatus);
   const current = formatClinicalValue((change as ChartPoint).value ?? change.metricValue, metricType, change.currentStatus || change.masteryStatus || change.statusLabel);
+  const contextPattern = (change as any).contextPattern || (change as any).context_pattern || null;
+  const contextInsights = Array.isArray(contextPattern?.insights) ? contextPattern.insights.slice(0, 4) : [];
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
@@ -682,6 +684,20 @@ const ClinicalChangeCard: React.FC<{ change: AbaAggregatedClinicalChange; index:
       <p className="mt-3 text-xs leading-relaxed text-slate-600">
         <span className="font-medium text-slate-700">Interpretação:</span> {interpretation}
       </p>
+      {change.changeCategory === 'behavior' && contextPattern && (
+        <div className="mt-3 rounded-lg border border-sky-100 bg-sky-50/70 px-3 py-2" data-aba-behavior-context-insights>
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-sky-700">Contextos associados</p>
+          {contextPattern.enoughData === false ? (
+            <p className="mt-1 text-xs font-semibold text-slate-600">Dados ainda insuficientes para padrão contextual confiável.</p>
+          ) : (
+            <ul className="mt-1 space-y-1 text-xs leading-relaxed text-slate-600">
+              {contextInsights.map((insight: string, insightIndex: number) => (
+                <li key={`${change.id || change.metricLabel}-context-${insightIndex}`}>{insight}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
     </div>
   );
 };

@@ -63,6 +63,7 @@ import {
 } from './src/utils/abaPlanningEngine';
 import {
   aggregateAbaClinicalLinePoints,
+  analyzeBehaviorContextPatterns,
   buildAbaClinicalLinePointsFromSnapshots,
   buildAbaClinicalLinePointsFromTargetSummaries,
   buildAbaClinicalLineSummary,
@@ -51457,8 +51458,39 @@ async function startServer() {
         dateToIso: params.dateToIso,
         behaviorId: params.behaviorId
       });
-      const points = snapshotRows.length > 0 ? snapshotRows.map(normalizeAbaSnapshotPoint) : dailyPoints.slice(0, params.limit);
-      return res.json({ success: true, data: { points, dailySummaries: dailyResult.error ? [] : dailyResult.data || [], annotations }, source: snapshotRows.length > 0 ? 'aba_session_metric_snapshots' : 'aba_behavior_daily_summaries' });
+      let contextPatterns: any[] = [];
+      try {
+        let behaviorContextQuery = supabase
+          .from('aba_behavior_events')
+          .select('id,behavior_id,behavior_name,measurement_type,count_delta,duration_seconds,severity,location,antecedent,consequence,occurred_at,created_at,session_id,therapist_id,raw_payload')
+          .eq('patient_id', patientId)
+          .gte('occurred_at', params.dateFromIso)
+          .lte('occurred_at', params.dateToIso)
+          .order('occurred_at', { ascending: false })
+          .limit(Math.min(Math.max(params.limit * 4, 120), 500));
+        behaviorContextQuery = applyAbaChartTenantScope(behaviorContextQuery, req.session.user, clinicId, organizationId);
+        if (params.behaviorId) behaviorContextQuery = behaviorContextQuery.eq('behavior_id', params.behaviorId);
+        const behaviorContextResult = await behaviorContextQuery;
+        if (!behaviorContextResult.error) {
+          contextPatterns = analyzeBehaviorContextPatterns(behaviorContextResult.data || []);
+        }
+      } catch (contextError) {
+        console.warn('[ABA Behavior Context] context pattern load skipped', {
+          patientIdPresent: Boolean(patientId),
+          behaviorIdPresent: Boolean(params.behaviorId),
+          message: (contextError as any)?.message
+        });
+      }
+      const patternById = new Map(contextPatterns.filter((pattern) => pattern.behaviorId).map((pattern) => [String(pattern.behaviorId), pattern]));
+      const patternByName = new Map(contextPatterns.map((pattern) => [String(pattern.behaviorName || '').trim().toLowerCase(), pattern]));
+      const attachContextPattern = (point: any) => {
+        const behaviorKey = String(point.behaviorId || '').trim();
+        const nameKey = String(point.metricLabel || '').trim().toLowerCase();
+        const contextPattern = (behaviorKey && patternById.get(behaviorKey)) || patternByName.get(nameKey) || null;
+        return contextPattern ? { ...point, contextPattern } : point;
+      };
+      const points = (snapshotRows.length > 0 ? snapshotRows.map(normalizeAbaSnapshotPoint) : dailyPoints.slice(0, params.limit)).map(attachContextPattern);
+      return res.json({ success: true, data: { points, dailySummaries: dailyResult.error ? [] : dailyResult.data || [], annotations, contextPatterns }, source: snapshotRows.length > 0 ? 'aba_session_metric_snapshots' : 'aba_behavior_daily_summaries' });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
     }
@@ -52967,6 +52999,30 @@ async function startServer() {
         clinicId,
         user: req.session.user
       });
+      const incomingRawPayload = req.body?.raw_payload || req.body?.rawPayload || {};
+      const behaviorContextSnapshot = sanitizeClinicalPayload({
+        ...(incomingRawPayload?.contextSnapshot || incomingRawPayload?.context_snapshot || {}),
+        location: sanitizeTextField(req.body?.location, 240) || incomingRawPayload?.contextSnapshot?.location || incomingRawPayload?.context_snapshot?.location,
+        severity: req.body?.severity !== undefined ? asSafeNumber(req.body?.severity, 0, 5) : incomingRawPayload?.contextSnapshot?.severity ?? incomingRawPayload?.context_snapshot?.severity ?? null,
+        durationSeconds: req.body?.duration_seconds !== undefined || req.body?.durationSeconds !== undefined
+          ? asSafeNumber(req.body?.duration_seconds ?? req.body?.durationSeconds, 0, 86400)
+          : incomingRawPayload?.contextSnapshot?.durationSeconds ?? incomingRawPayload?.context_snapshot?.durationSeconds ?? null,
+        quantity: req.body?.count_delta !== undefined || req.body?.countDelta !== undefined
+          ? asSafeNumber(req.body?.count_delta ?? req.body?.countDelta, -10000, 10000)
+          : incomingRawPayload?.contextSnapshot?.quantity ?? incomingRawPayload?.context_snapshot?.quantity ?? null,
+        collectionMethod: measurementType,
+        behaviorName,
+        behaviorId: behaviorId || null,
+        sessionId: sessionId || null,
+        patientId,
+        professionalId: sanitizeString(req.body?.therapist_id || req.body?.therapistId || req.session.user?.id, 120) || null,
+        timestamp: occurredAt,
+        abc: {
+          antecedent: sanitizeTextField(req.body?.antecedent, 500) || undefined,
+          behavior: behaviorName,
+          consequence: sanitizeTextField(req.body?.consequence, 500) || undefined
+        }
+      });
 
       let payload: Record<string, any> = cleanObject({
         id: sanitizeString(req.body?.id || req.body?.event_id || req.body?.eventId || crypto.randomUUID(), 180),
@@ -53003,7 +53059,9 @@ async function startServer() {
         sync_status: 'synced',
         source: requestSource,
         raw_payload: sanitizeClinicalPayload({
-          ...(req.body?.raw_payload || req.body?.rawPayload || {}),
+          ...incomingRawPayload,
+          contextSnapshot: behaviorContextSnapshot,
+          context_snapshot: behaviorContextSnapshot,
           source: requestSource,
           patientId,
           appointmentId: appointmentId || undefined,

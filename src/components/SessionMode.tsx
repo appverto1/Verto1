@@ -31,11 +31,14 @@ import { buildClinicalActionToast, buildClinicalOfflineToast, buildClinicalSaveE
 import { getCrisisShortcutIds, getDockVisibleShortcuts, normalizeQuickBehaviorShortcuts } from '../utils/abaClinicalDock';
 import {
   behaviorAllowsMeasurement,
+  buildBehaviorEventContextSnapshot,
   formatBehaviorHistoryDetail,
   getBehaviorAllowedMeasurements,
   getBehaviorDefaultMeasurement,
   isIntervalMeasurementType,
-  resolveBehaviorMeasurementForAction
+  readBehaviorEventContextSnapshot,
+  resolveBehaviorMeasurementForAction,
+  type BehaviorEventContextSnapshot
 } from '../utils/abaBehaviorCapture';
 import { formatPatientLabel, formatTherapistLabel, safeDisplayValue } from '../utils/displayLabels';
 import {
@@ -125,6 +128,7 @@ type SessionRecord = {
   intervalCancelled?: boolean;
   clinicalAudit?: boolean;
   rawPayload?: Record<string, any>;
+  contextSnapshot?: BehaviorEventContextSnapshot | null;
   location?: string;
   severity?: number | null;
   antecedent?: string;
@@ -367,12 +371,13 @@ const mapRecentAbaEventToSessionRecord = (event: any): SessionRecord | null => {
   const measurementType = String(event.measurement_type || event.measurementType || 'frequency');
   const durationSeconds = event.duration_seconds ?? event.durationSeconds ?? null;
   const countDelta = event.count_delta ?? event.countDelta ?? null;
+  const contextSnapshot = readBehaviorEventContextSnapshot(event);
   const detail = formatBehaviorHistoryDetail({
     measurementType,
     durationSeconds,
     countDelta,
-    location: event.location,
-    severity: event.severity,
+    location: contextSnapshot?.location ?? event.location,
+    severity: contextSnapshot?.severity ?? event.severity,
     status: event.status
   });
 
@@ -394,10 +399,12 @@ const mapRecentAbaEventToSessionRecord = (event: any): SessionRecord | null => {
     intervalOccurred: event.interval_occurred ?? event.intervalOccurred ?? event.occurred ?? null,
     intervalStartedAt: event.interval_started_at || event.intervalStartedAt || null,
     intervalEndedAt: event.interval_ended_at || event.intervalEndedAt || null,
-    location: event.location,
-    severity: event.severity ?? null,
-    antecedent: event.antecedent,
-    consequence: event.consequence,
+    contextSnapshot,
+    rawPayload: event.raw_payload || event.rawPayload || null,
+    location: contextSnapshot?.location ?? event.location,
+    severity: contextSnapshot?.severity ?? event.severity ?? null,
+    antecedent: contextSnapshot?.abc?.antecedent || event.antecedent,
+    consequence: contextSnapshot?.abc?.consequence || event.consequence,
     notes: event.notes
   };
 };
@@ -1519,6 +1526,43 @@ export const SessionMode = ({
 
   const buildBehaviorPayload = (behaviorName: string, measurementType: string, overrides: any = {}) => {
     const timestamp = overrides.timestamp || new Date().toISOString();
+    const overrideRawPayload = {
+      ...(overrides.rawPayload || {}),
+      ...(overrides.raw_payload || {})
+    };
+    const contextSnapshot = buildBehaviorEventContextSnapshot({
+      ...overrideRawPayload.contextSnapshot,
+      ...overrideRawPayload.context_snapshot,
+      behaviorName,
+      behaviorId: overrides.behaviorId || overrides.behavior_id || selectedBehavior?.id || null,
+      collectionMethod: measurementType,
+      location: overrides.location ?? selectedLocation,
+      severity: overrides.severity ?? selectedSeverity,
+      durationSeconds: overrides.durationSeconds ?? overrides.duration_seconds ?? null,
+      quantity: overrides.quantity ?? overrides.countDelta ?? overrides.count_delta ?? null,
+      alertTarget: overrides.alertTarget ?? overrides.alert_type ?? overrides.alertType ?? intervalAlertType,
+      sessionId,
+      patientId,
+      professionalId: resolvedTherapistId || null,
+      timestamp,
+      antecedent: overrides.antecedent,
+      consequence: overrides.consequence,
+      activityName: activeSession?.activityName || activeSession?.activity_name || null,
+      goalName: overrides.goalName || overrides.goal_name || overrides.targetName || overrides.target_name || null
+    });
+    const rawPayload = {
+      ...overrideRawPayload,
+      contextSnapshot,
+      context_snapshot: contextSnapshot,
+      clinicId: resolvedClinicId || undefined,
+      patientId,
+      sessionId,
+      therapistId: resolvedTherapistId || null,
+      source: 'session_mode_intelligent_behavior',
+      clientSource: 'verto_web',
+      sessionReferenceDate: activeSession?.referenceDate || null,
+      syncStatus: 'local'
+    };
     return {
       id: overrides.id || crypto.randomUUID(),
       clinic_id: resolvedClinicId || undefined,
@@ -1542,18 +1586,10 @@ export const SessionMode = ({
       location: overrides.location ?? selectedLocation,
       severity: overrides.severity ?? selectedSeverity,
       notes: overrides.notes || '',
-      raw_payload: {
-        ...(overrides.raw_payload || {}),
-        clinicId: resolvedClinicId || undefined,
-        patientId,
-        sessionId,
-        therapistId: resolvedTherapistId || null,
-        source: 'session_mode_intelligent_behavior',
-        clientSource: 'verto_web',
-        sessionReferenceDate: activeSession?.referenceDate || null,
-        syncStatus: 'local'
-      },
-      ...overrides
+      ...overrides,
+      raw_payload: rawPayload,
+      rawPayload,
+      contextSnapshot
     };
   };
 
@@ -2246,6 +2282,7 @@ export const SessionMode = ({
       timestamp: payload.timestamp,
       measurementType: 'frequency',
       countDelta,
+      contextSnapshot: payload.contextSnapshot,
       location: selectedLocation,
       severity: selectedSeverity
     });
@@ -2317,6 +2354,7 @@ export const SessionMode = ({
       measurementType: 'duration',
       startedAt,
       durationSeconds: null,
+      contextSnapshot: payload.contextSnapshot,
       location: selectedLocation,
       severity: selectedSeverity
     });
@@ -2370,6 +2408,7 @@ export const SessionMode = ({
       startedAt: event.startedAt,
       endedAt,
       durationSeconds,
+      contextSnapshot: payload.contextSnapshot,
       location: event.location || selectedLocation,
       severity: event.severity ?? selectedSeverity
     }).finally(() => releaseActionLock(durationEndLockKey));
@@ -2452,6 +2491,7 @@ export const SessionMode = ({
       timestamp: payload.timestamp,
       measurementType: 'rate',
       countDelta: 1,
+      contextSnapshot: payload.contextSnapshot,
       location: selectedLocation,
       severity: selectedSeverity
     });
@@ -2463,6 +2503,20 @@ export const SessionMode = ({
     const intervalStartedAt = run.intervalStartedAt || run.startedAt || occurredAt;
     const intervalDurationSeconds = Math.max(1, Number(run.intervalSeconds || intervalSeconds || 1));
     const lifecycleId = `${run.id}-lifecycle-${String(status).toLowerCase()}-${Date.parse(occurredAt) || Date.now()}`;
+    const contextSnapshot = buildBehaviorEventContextSnapshot({
+      behaviorName: run.behaviorName,
+      behaviorId,
+      collectionMethod: run.measurementType || run.method || 'partial_interval',
+      location: run.location || selectedLocation,
+      severity: run.severity ?? selectedSeverity,
+      durationSeconds: intervalDurationSeconds,
+      quantity: run.totalIntervals || intervalTotalIntervals,
+      alertTarget: run.alertType || intervalAlertType,
+      sessionId,
+      patientId,
+      professionalId: resolvedTherapistId || null,
+      timestamp: occurredAt
+    });
     void dataService.saveAbaIntervalRecord({
       id: lifecycleId,
       clinic_id: resolvedClinicId || undefined,
@@ -2500,6 +2554,8 @@ export const SessionMode = ({
       source: 'verto_web',
       raw_payload: {
         intervalRunId: run.id,
+        contextSnapshot,
+        context_snapshot: contextSnapshot,
         intervalLifecycle: true,
         lifecycleStatus: status,
         lifecycleAction: String(status).toLowerCase(),
@@ -2633,6 +2689,7 @@ export const SessionMode = ({
       occurredCount: safeOccurredTotal,
       notOccurredCount: notOccurredTotal,
       occurrencePercent: percent,
+      contextSnapshot: payload.contextSnapshot,
       location: run.location || selectedLocation,
       severity: run.severity ?? selectedSeverity
     });
@@ -2757,6 +2814,7 @@ export const SessionMode = ({
       resumedAt: run.resumedAt || null,
       endedEarlyAt: aggregate.endedEarlyAt || null,
       endReason: endReason || undefined,
+      contextSnapshot: payload.contextSnapshot,
       notes: collectionStatus === 'PARTIALLY_COMPLETED'
         ? `${safeOccurredTotal} SIM • ${notOccurredTotal} NÃO • ${percent}% • finalizada antecipadamente`
         : `${safeOccurredTotal} SIM • ${notOccurredTotal} NÃO • ${percent}%`,
@@ -3165,10 +3223,15 @@ export const SessionMode = ({
       id: String(payload.id),
       kind: 'behavior',
       title: behavior.name,
-      detail: `ABC - severidade ${abcSeverity}`,
+      detail: formatBehaviorHistoryDetail({
+        measurementType: 'abc',
+        location: abcLocation,
+        severity: abcSeverity
+      }),
       timestamp: payload.timestamp,
       measurementType: 'abc',
       behaviorId: behavior.id,
+      contextSnapshot: payload.contextSnapshot,
       location: abcLocation,
       severity: abcSeverity,
       antecedent: abcAntecedent,
@@ -5148,7 +5211,7 @@ export const SessionMode = ({
       ref={clinicalDockRef}
       data-aba-clinical-dock
       data-aba-clinical-dock-compact={clinicalDockCompact ? 'true' : 'false'}
-      className={`xl:hidden fixed inset-x-0 bottom-0 z-[130] px-2 pb-[calc(0.55rem+env(safe-area-inset-bottom))] pt-2 ${clinicalDockSheetOpen ? 'pointer-events-none' : 'pointer-events-auto'}`}
+      className={`fixed inset-x-0 bottom-0 z-[130] px-2 pb-[calc(0.55rem+env(safe-area-inset-bottom))] pt-2 ${clinicalDockSheetOpen ? 'pointer-events-none' : 'pointer-events-auto'}`}
     >
       <div className={`mx-auto max-w-3xl rounded-[24px] border p-1.5 shadow-xl backdrop-blur-xl ${clinicalDockCompact ? 'opacity-95' : 'p-2 shadow-2xl'} ${crisisMode ? 'border-red-300 bg-slate-950/95 shadow-red-950/30' : 'border-blue-100 bg-white/95 shadow-blue-950/15'}`}>
         {!clinicalDockPausedCompact && openDurations.length > 0 && (
@@ -5200,14 +5263,14 @@ export const SessionMode = ({
   ) : null;
 
   const clinicalDockSheet = clinicalDockSheetOpen && !intervalResponseActive ? (
-    <div className="fixed inset-0 z-[210] xl:hidden" data-aba-clinical-dock-sheet>
+    <div className="fixed inset-0 z-[210]" data-aba-clinical-dock-sheet>
       <button
         type="button"
         aria-label="Fechar dock clínico"
         onClick={() => setClinicalDockSheetOpen(false)}
         className="absolute inset-0 h-full w-full bg-slate-950/35 backdrop-blur-[2px]"
       />
-      <div className="absolute inset-x-0 bottom-0 max-h-[88vh] overflow-y-auto rounded-t-[32px] border border-blue-100 bg-white p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl">
+      <div className="absolute inset-x-0 bottom-0 max-h-[88vh] overflow-y-auto rounded-t-[32px] border border-blue-100 bg-white p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl xl:left-1/2 xl:right-auto xl:bottom-4 xl:w-[520px] xl:-translate-x-1/2 xl:rounded-[32px]">
         <div className="mx-auto mb-3 h-1.5 w-12 rounded-full bg-slate-200" />
         <div className="flex items-start justify-between gap-3">
           <div>
@@ -5280,6 +5343,77 @@ export const SessionMode = ({
               </select>
             </label>
           </div>
+        </section>
+
+        <section className="mt-4 rounded-[24px] border border-blue-100 bg-white p-3">
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">ConfiguraÃ§Ãµes rÃ¡pidas</p>
+          <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+              Comportamento
+              <select
+                value={selectedBehaviorId}
+                onChange={(event) => {
+                  const behavior = behaviorPresets.find((item) => item.id === event.target.value);
+                  if (behavior) selectBehavior(behavior);
+                }}
+                className="mt-1 w-full rounded-2xl border border-blue-100 bg-[#F4F7FE] px-3 py-3 text-xs font-bold text-slate-700 outline-none"
+              >
+                {behaviorPresets.map((behavior) => (
+                  <option key={behavior.id} value={behavior.id}>{behavior.name}</option>
+                ))}
+              </select>
+            </label>
+            <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+              MÃ©todo de coleta
+              <select
+                value={behaviorMeasurementType}
+                onChange={(event) => setBehaviorMeasurementType(event.target.value)}
+                className="mt-1 w-full rounded-2xl border border-blue-100 bg-[#F4F7FE] px-3 py-3 text-xs font-bold text-slate-700 outline-none"
+              >
+                {selectedBehaviorMethodOptions.map((option) => (
+                  <option key={option.key} value={option.key}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+          {isIntervalMeasurementType(behaviorMeasurementType) && (
+            <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
+              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                DuraÃ§Ã£o
+                <select value={intervalDurationMode} onChange={(event) => setIntervalDurationMode(event.target.value)} disabled={Boolean(intervalRun)} className="mt-1 w-full rounded-2xl border border-blue-100 bg-[#F4F7FE] px-3 py-3 text-xs font-bold text-slate-700 outline-none disabled:opacity-60">
+                  {intervalDurationOptions.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
+                </select>
+              </label>
+              {intervalDurationMode === 'custom' && (
+                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                  Segundos
+                  <input type="number" min={1} max={3600} value={intervalCustomSeconds} onChange={(event) => setIntervalCustomSeconds(Number(event.target.value))} disabled={Boolean(intervalRun)} className="mt-1 w-full rounded-2xl border border-blue-100 bg-[#F4F7FE] px-3 py-3 text-xs font-bold text-slate-700 outline-none disabled:opacity-60" />
+                </label>
+              )}
+              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                Quantidade
+                <input type="number" min={1} max={200} value={intervalTotalIntervals} onChange={(event) => setIntervalTotalIntervals(Math.max(1, Number(event.target.value) || 1))} disabled={Boolean(intervalRun)} className="mt-1 w-full rounded-2xl border border-blue-100 bg-[#F4F7FE] px-3 py-3 text-xs font-bold text-slate-700 outline-none disabled:opacity-60" />
+              </label>
+              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                Alerta
+                <select value={intervalAlertType} onChange={(event) => setIntervalAlertType(event.target.value)} disabled={Boolean(intervalRun)} className="mt-1 w-full rounded-2xl border border-blue-100 bg-[#F4F7FE] px-3 py-3 text-xs font-bold text-slate-700 outline-none disabled:opacity-60">
+                  {intervalAlertOptions.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
+                </select>
+              </label>
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={() => {
+              handleSelectedBehaviorAction();
+              if (!isIntervalMeasurementType(behaviorMeasurementType)) setClinicalDockSheetOpen(false);
+            }}
+            disabled={Boolean(intervalRun && isIntervalMeasurementType(behaviorMeasurementType))}
+            className="mt-3 inline-flex min-h-[52px] w-full items-center justify-center gap-2 rounded-2xl bg-[#7a32fc] px-4 text-xs font-black uppercase tracking-widest text-white disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {behaviorMeasurementType === 'duration' ? <Play size={16} /> : behaviorMeasurementType === 'abc' ? <FileText size={16} /> : <Plus size={16} />}
+            Registrar com contexto atual
+          </button>
         </section>
 
         {openDurations.length > 0 && (
@@ -5653,6 +5787,7 @@ export const SessionMode = ({
             </div>
           )}
 
+          {false && (
           <div className="bg-white rounded-[24px] sm:rounded-[28px] p-4 sm:p-5 shadow-xl shadow-blue-900/5 border border-white">
             <div className="flex flex-col gap-3 mb-5 sm:flex-row sm:items-center sm:justify-between">
               <div>
@@ -5895,6 +6030,7 @@ export const SessionMode = ({
               )}
             </div>
           </div>
+          )}
 
           {nextSessionPlanItems.length > 0 && (
             <section className="rounded-[24px] sm:rounded-[28px] border border-emerald-100 bg-white p-4 sm:p-5 shadow-xl shadow-emerald-900/5">
@@ -6377,7 +6513,7 @@ export const SessionMode = ({
           </div>
         </div>
 
-        <aside className="bg-white border-t xl:border-t-0 xl:border-l border-gray-100 p-3 sm:p-5 xl:overflow-y-auto pb-[calc(1rem+env(safe-area-inset-bottom))]">
+        <aside className="bg-white border-t xl:border-t-0 xl:border-l border-gray-100 p-3 sm:p-5 xl:overflow-y-auto pb-[calc(1rem+env(safe-area-inset-bottom))]" style={scrollBottomPaddingStyle}>
           <div className="flex items-center justify-between gap-3 mb-4">
             <div>
               <p className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.2em]">Histórico da sessão</p>

@@ -138,6 +138,19 @@ export type AbaAggregatedClinicalChangeGroup = {
   hasReviewReady: boolean;
 };
 
+export type AbaBehaviorContextPattern = {
+  behaviorKey: string;
+  behaviorId?: string | null;
+  behaviorName: string;
+  totalRecords: number;
+  contextualRecords: number;
+  enoughData: boolean;
+  dominantLocation?: { value: string; count: number; percent: number } | null;
+  commonSeverity?: { value: number; count: number; percent: number } | null;
+  commonTimeOfDay?: { value: string; count: number; percent: number } | null;
+  insights: string[];
+};
+
 export const ABA_CLINICAL_CHART_DEFAULT_THRESHOLDS: AbaClinicalChartThresholds = {
   stablePercent: 5,
   meaningfulPercent: 10,
@@ -229,6 +242,125 @@ const safeNumber = (value: unknown, fallback = 0) => {
 
 const round2 = (value: number | null) =>
   value === null || !Number.isFinite(value) ? null : Math.round(value * 100) / 100;
+
+const normalizeContextKey = (value: unknown) =>
+  String(value || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+
+const firstContextValue = (source: any, ...keys: string[]) => {
+  for (const key of keys) {
+    const value = source?.[key];
+    if (value !== null && value !== undefined && String(value).trim() !== '') return value;
+  }
+  return undefined;
+};
+
+const readContextSnapshot = (event: any = {}) => {
+  const raw = event?.raw_payload || event?.rawPayload || {};
+  return event?.contextSnapshot ||
+    event?.context_snapshot ||
+    raw?.contextSnapshot ||
+    raw?.context_snapshot ||
+    raw?.behaviorEventContext ||
+    raw?.eventContext ||
+    {};
+};
+
+const timeOfDayLabel = (value: unknown) => {
+  const date = new Date(String(value || ''));
+  if (Number.isNaN(date.getTime())) return '';
+  const hour = date.getHours();
+  if (hour >= 5 && hour < 12) return 'manhã';
+  if (hour >= 12 && hour < 18) return 'tarde';
+  if (hour >= 18 && hour < 23) return 'noite';
+  return 'madrugada';
+};
+
+const topDistributionValue = <T extends string | number>(values: T[]) => {
+  const counts = new Map<T, number>();
+  values.forEach((value) => counts.set(value, (counts.get(value) || 0) + 1));
+  const sorted = Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
+  const top = sorted[0];
+  if (!top) return null;
+  return {
+    value: top[0],
+    count: top[1],
+    percent: Math.round((top[1] / Math.max(values.length, 1)) * 100)
+  };
+};
+
+export function analyzeBehaviorContextPatterns(events: any[] = []): AbaBehaviorContextPattern[] {
+  const grouped = new Map<string, any[]>();
+  (Array.isArray(events) ? events : []).forEach((event) => {
+    const context = readContextSnapshot(event);
+    const behaviorId = String(firstContextValue(context, 'behaviorId', 'behavior_id') || firstContextValue(event, 'behaviorId', 'behavior_id') || '').trim();
+    const behaviorName = String(firstContextValue(context, 'behaviorName', 'behavior_name') || firstContextValue(event, 'behaviorName', 'behavior_name') || 'Comportamento').trim();
+    const behaviorKey = behaviorId || normalizeContextKey(behaviorName) || 'behavior';
+    if (!grouped.has(behaviorKey)) grouped.set(behaviorKey, []);
+    grouped.get(behaviorKey)!.push({ event, context, behaviorId, behaviorName });
+  });
+
+  return Array.from(grouped.entries()).map(([behaviorKey, rows]) => {
+    const behaviorId = rows.find((row) => row.behaviorId)?.behaviorId || null;
+    const behaviorName = rows.find((row) => row.behaviorName)?.behaviorName || 'Comportamento';
+    const locations = rows
+      .map(({ event, context }) => String(firstContextValue(context, 'location') || firstContextValue(event, 'location') || '').trim())
+      .filter(Boolean);
+    const severities = rows
+      .map(({ event, context }) => Number(firstContextValue(context, 'severity', 'intensity') ?? firstContextValue(event, 'severity')))
+      .filter((value) => Number.isFinite(value));
+    const periods = rows
+      .map(({ event, context }) => timeOfDayLabel(firstContextValue(context, 'timestamp') || firstContextValue(event, 'occurredAt', 'occurred_at', 'timestamp', 'createdAt', 'created_at')))
+      .filter(Boolean);
+    const contextualRecords = rows.filter(({ event, context }) => (
+      firstContextValue(context, 'location', 'severity', 'intensity', 'activityName', 'activity_name', 'goalName', 'goal_name') ||
+      firstContextValue(event, 'location', 'severity')
+    )).length;
+    const dominantLocation = topDistributionValue(locations);
+    const commonSeverity = topDistributionValue(severities);
+    const commonTimeOfDay = topDistributionValue(periods);
+    const totalRecords = rows.length;
+    const enoughData = totalRecords >= 3;
+    const insights: string[] = [];
+
+    if (!enoughData) {
+      insights.push('Dados ainda insuficientes para padrão contextual confiável.');
+    } else {
+      if (dominantLocation && totalRecords >= 5) {
+        insights.push(`${behaviorName} teve maior concentração em ${dominantLocation.value}: ${dominantLocation.count} de ${totalRecords} registros recentes.`);
+      } else if (dominantLocation) {
+        insights.push(`As ocorrências recentes apareceram com mais frequência em ${dominantLocation.value}.`);
+      }
+      if (commonSeverity) {
+        insights.push(`Severidade mais comum: ${commonSeverity.value}.`);
+      }
+      if (commonTimeOfDay && commonTimeOfDay.count >= 2) {
+        insights.push(`Horário mais comum: ${commonTimeOfDay.value}.`);
+      }
+      if (insights.length === 0) {
+        insights.push('Contextos registrados, sem predominância clara no período.');
+      }
+    }
+
+    return {
+      behaviorKey,
+      behaviorId,
+      behaviorName,
+      totalRecords,
+      contextualRecords,
+      enoughData,
+      dominantLocation: dominantLocation as AbaBehaviorContextPattern['dominantLocation'],
+      commonSeverity: commonSeverity as AbaBehaviorContextPattern['commonSeverity'],
+      commonTimeOfDay: commonTimeOfDay as AbaBehaviorContextPattern['commonTimeOfDay'],
+      insights
+    };
+  });
+}
 
 const metricStatusScore = (metricType: string, status: unknown, fallbackValue: number) => {
   const normalized = normalizeStatus(status);

@@ -3,7 +3,9 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   behaviorAllowsMeasurement,
+  buildBehaviorEventContextSnapshot,
   formatBehaviorHistoryDetail,
+  readBehaviorEventContextSnapshot,
   getBehaviorDefaultMeasurement,
   isDurationOnlyBehavior,
   resolveBehaviorMeasurementForAction
@@ -64,6 +66,41 @@ test('duration history includes duration, severity and location in one human lab
   }), 'Duração 02:13 · severidade 2 · Mesa');
 });
 
+test('behavior context snapshot preserves the location used when event was recorded', () => {
+  const firstSnapshot = buildBehaviorEventContextSnapshot({
+    behaviorName: 'Estereotipia',
+    behaviorId: 'stereotypy',
+    measurementType: 'partial_interval',
+    location: 'Brinquedoteca',
+    severity: 3,
+    sessionId: 'session-1',
+    patientId: 'patient-1',
+    timestamp: '2026-06-26T16:00:00.000Z'
+  });
+  const secondSnapshot = buildBehaviorEventContextSnapshot({
+    behaviorName: 'Estereotipia',
+    behaviorId: 'stereotypy',
+    measurementType: 'partial_interval',
+    location: 'Mesa',
+    severity: 2,
+    sessionId: 'session-1',
+    patientId: 'patient-1',
+    timestamp: '2026-06-26T16:05:00.000Z'
+  });
+  assert.equal(firstSnapshot.location, 'Brinquedoteca');
+  assert.equal(firstSnapshot.severity, 3);
+  assert.equal(secondSnapshot.location, 'Mesa');
+
+  const readBack = readBehaviorEventContextSnapshot({
+    behavior_name: 'Estereotipia',
+    location: 'Mesa',
+    severity: 1,
+    raw_payload: { contextSnapshot: firstSnapshot }
+  });
+  assert.equal(readBack?.location, 'Brinquedoteca');
+  assert.equal(readBack?.severity, 3);
+});
+
 test('duration episodes derive occurrence counts without frequency duplication', () => {
   const summary = calculateSessionSummary('session-1', {
     behaviorEvents: [
@@ -95,7 +132,7 @@ test('duration episodes derive occurrence counts without frequency duplication',
 test('SessionMode renders duration-only actions without + ocorrência inside duration block', () => {
   assert.match(sessionModeCode, /id: 'crying'[\s\S]*?allowedMeasurements: \['duration'\]/m);
   assert.match(sessionModeCode, /id: 'escape'[\s\S]*?allowedMeasurements: \['duration'\]/m);
-  const durationBlockStart = sessionModeCode.indexOf("{behaviorMeasurementType === 'duration'");
+  const durationBlockStart = sessionModeCode.indexOf("{behaviorMeasurementType === 'duration' &&");
   const durationBlockEnd = sessionModeCode.indexOf("{behaviorMeasurementType === 'rate'", durationBlockStart);
   const durationBlock = sessionModeCode.slice(durationBlockStart, durationBlockEnd);
   assert.match(durationBlock, /Iniciar dura/);
@@ -104,6 +141,12 @@ test('SessionMode renders duration-only actions without + ocorrência inside dur
   assert.doesNotMatch(durationBlock, /\+ ocorr/);
   assert.match(sessionModeCode, /aria-pressed=\{selectedLocation === location\}/m);
   assert.match(sessionModeCode, /aria-pressed=\{selectedSeverity === severity\}/m);
+});
+
+test('SessionMode keeps behavior controls in the clinical dock sheet, not the initial body', () => {
+  assert.match(sessionModeCode, /\{false && \(\s*<div className="bg-white rounded-\[24px\][\s\S]*?Evento comportamental inteligente/m);
+  assert.match(sessionModeCode, /data-aba-clinical-dock[\s\S]*?Contexto atual[\s\S]*?Configura[\s\S]*?ltimos registros/m);
+  assert.match(sessionModeCode, /buildBehaviorEventContextSnapshot[\s\S]*?contextSnapshot[\s\S]*?context_snapshot/m);
 });
 
 for (const item of tests) {

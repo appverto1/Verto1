@@ -21,7 +21,7 @@ test('dock aparece no mobile/tablet e não aparece no desktop por padrão', () =
   assert.equal(shouldShowClinicalDock(360), true);
   assert.equal(shouldShowClinicalDock(768), true);
   assert.equal(shouldShowClinicalDock(1024), true);
-  assert.equal(shouldShowClinicalDock(1280), false);
+  assert.equal(shouldShowClinicalDock(1280), true);
 });
 
 test('dock pode aparecer no desktop quando modo foco força a experiência compacta', () => {

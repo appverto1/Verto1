@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import {
   aggregateClinicalChangesBySession,
   aggregateAbaClinicalLinePoints,
+  analyzeBehaviorContextPatterns,
   buildAbaClinicalLinePointsFromTargetSummaries,
   buildAbaClinicalLineSummary,
   buildSessionMetricSnapshotsFromSummaries,
@@ -538,6 +539,49 @@ test('container responsivo mede dimensoes antes de montar graficos recharts', ()
 });
 
 let passed = 0;
+test('behavior context patterns identify dominant context without causal language', () => {
+  const patterns = analyzeBehaviorContextPatterns([
+    { behavior_id: 'stereotypy', behavior_name: 'Estereotipia', location: 'Brinquedoteca', severity: 3, occurred_at: '2026-06-26T13:00:00.000Z' },
+    { behavior_id: 'stereotypy', behavior_name: 'Estereotipia', location: 'Brinquedoteca', severity: 3, occurred_at: '2026-06-26T13:05:00.000Z' },
+    { behavior_id: 'stereotypy', behavior_name: 'Estereotipia', location: 'Brinquedoteca', severity: 3, occurred_at: '2026-06-26T13:10:00.000Z' },
+    { behavior_id: 'stereotypy', behavior_name: 'Estereotipia', location: 'Brinquedoteca', severity: 2, occurred_at: '2026-06-26T13:15:00.000Z' },
+    { behavior_id: 'stereotypy', behavior_name: 'Estereotipia', location: 'Mesa', severity: 2, occurred_at: '2026-06-26T10:00:00.000Z' },
+    { behavior_id: 'stereotypy', behavior_name: 'Estereotipia', location: 'Sala de terapia', severity: 1, occurred_at: '2026-06-26T09:00:00.000Z' }
+  ]);
+  const pattern = patterns[0];
+  assert.equal(pattern.behaviorName, 'Estereotipia');
+  assert.equal(pattern.dominantLocation?.value, 'Brinquedoteca');
+  assert.equal(pattern.dominantLocation?.count, 4);
+  assert.equal(pattern.commonSeverity?.value, 3);
+  const insightText = pattern.insights.join(' ');
+  assert.match(insightText, /maior concentra/i);
+  assert.doesNotMatch(insightText, /caus/i);
+});
+
+test('behavior context patterns avoid strong conclusions with little data or no context', () => {
+  const insufficient = analyzeBehaviorContextPatterns([
+    { behavior_id: 'crying', behavior_name: 'Choro', raw_payload: { contextSnapshot: { location: 'Mesa', severity: 2 } } },
+    { behavior_id: 'crying', behavior_name: 'Choro', raw_payload: { contextSnapshot: { location: 'Mesa', severity: 2 } } }
+  ]);
+  assert.equal(insufficient[0].enoughData, false);
+  assert.match(insufficient[0].insights[0], /insuficientes/i);
+
+  const noContext = analyzeBehaviorContextPatterns([
+    { behavior_id: 'escape', behavior_name: 'Fuga da atividade' },
+    { behavior_id: 'escape', behavior_name: 'Fuga da atividade' },
+    { behavior_id: 'escape', behavior_name: 'Fuga da atividade' }
+  ]);
+  assert.equal(noContext[0].contextualRecords, 0);
+  assert.equal(noContext[0].enoughData, true);
+  assert.match(noContext[0].insights.join(' '), /sem predomin/i);
+});
+
+test('behavior chart endpoint and panel expose context insights safely', () => {
+  assert.match(serverCode, /from\('aba_behavior_events'\)[\s\S]*?raw_payload[\s\S]*?analyzeBehaviorContextPatterns[\s\S]*?contextPatterns/m);
+  assert.match(panelCode, /data-aba-behavior-context-insights[\s\S]*?Contextos associados/m);
+  assert.doesNotMatch(panelCode, /causou|causa da piora/i);
+});
+
 for (const item of tests) {
   item.fn();
   passed += 1;

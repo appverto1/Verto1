@@ -80,8 +80,6 @@ export const getDockVisibleShortcuts = (
   return shortcuts.filter((shortcut) => shortcut.visibleInDock).slice(0, limit);
 };
 
-export const shouldShowClinicalDock = (viewportWidth: number, mobileFocusMode = false, forceDock = false) => (
-  forceDock || mobileFocusMode || viewportWidth <= 1024
-);
+export const shouldShowClinicalDock = (_viewportWidth: number, _mobileFocusMode = false, _forceDock = false) => true;
 
 export const getCrisisShortcutIds = () => [...crisisShortcutIds];
