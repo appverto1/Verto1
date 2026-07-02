@@ -726,6 +726,31 @@ test('botao padrao de salvar confirma no proprio botao e usa cor principal', () 
   assert.match(payerPanelCode, /<SaveActionButton[\s\S]*idleLabel=\{setupPrimaryLabel\(activeSetupStep\.key\)\}/);
 });
 
+test('layout de convenios usa lista horizontal no topo e esteira abaixo com largura ampla', () => {
+  assert.match(payerPanelCode, /data-payer-list-grid/);
+  assert.match(payerPanelCode, /grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4/);
+  assert.match(payerPanelCode, /data-payer-card/);
+  assert.match(payerPanelCode, /aria-pressed=\{isSelected\}/);
+  assert.match(payerPanelCode, /data-payer-setup-area/);
+  assert.match(payerPanelCode, /lg:grid-cols-\[minmax\(240px,0\.42fr\)_minmax\(0,1fr\)\]/);
+  assert.doesNotMatch(payerPanelCode, /mt-5 grid gap-5 xl:grid-cols-\[minmax\(240px,0\.9fr\)_minmax\(0,1\.4fr\)\]/);
+});
+
+test('modo avancado fica secundario e link avancado abre as secoes tecnicas', () => {
+  assert.match(payerPanelCode, /advancedModeOpen/);
+  assert.match(payerPanelCode, /setAdvancedModeOpen\(true\)/);
+  assert.match(payerPanelCode, /Modo avan.ado/s);
+  assert.match(payerPanelCode, /De\/Para completo, tabela de valores, regras TISS e cadastros de apoio/s);
+  assert.match(payerPanelCode, /Editar avan.ado em tabela de valores/s);
+  assert.match(payerPanelCode, /Editar avan.ado em De\/Para TUSS/s);
+});
+
+test('salvar etapa confirma e avanca automaticamente para a proxima etapa', () => {
+  assert.match(payerPanelCode, /setSetupStepStatus\(stepKey, "loading"\)/);
+  assert.match(payerPanelCode, /setSetupStepStatus\(stepKey, "success"\)/);
+  assert.match(payerPanelCode, /window\.setTimeout\(\(\) => \{[\s\S]*goToAdjacentSetupStep\(1\)/);
+});
+
 let passed = 0;
 for (const entry of tests) {
   try {

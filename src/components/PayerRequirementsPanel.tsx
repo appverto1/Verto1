@@ -911,6 +911,7 @@ export function PayerRequirementsPanel({
   const [payerTissMessage, setPayerTissMessage] = useState("");
   const [activeSetupStepKey, setActiveSetupStepKey] = useState<PayerSetupStepKey>("identification");
   const [setupActionStatus, setSetupActionStatus] = useState<Record<string, SaveActionStatus>>({});
+  const [advancedModeOpen, setAdvancedModeOpen] = useState(false);
   const payerRulesSectionRef = useRef<HTMLDivElement | null>(null);
   const payerTussSectionRef = useRef<HTMLDivElement | null>(null);
   const payerPricesSectionRef = useRef<HTMLDivElement | null>(null);
@@ -1081,6 +1082,7 @@ export function PayerRequirementsPanel({
   const activeSetupStepIndex = Math.max(0, payerSetupReadiness.steps.findIndex((step) => step.key === activeSetupStep.key));
 
   const scrollToSetupAdvanced = (stepKey: PayerSetupStepKey) => {
+    setAdvancedModeOpen(true);
     const target = ["procedures", "tuss"].includes(stepKey)
       ? payerTussSectionRef.current
       : stepKey === "prices"
@@ -1088,7 +1090,9 @@ export function PayerRequirementsPanel({
         : ["identification", "clinic", "tiss", "anti_glosa"].includes(stepKey)
           ? payerRulesSectionRef.current
           : null;
-    if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+    window.setTimeout(() => {
+      if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 80);
   };
 
   const selectSetupStep = (stepKey: PayerSetupStepKey) => {
@@ -2576,8 +2580,8 @@ export function PayerRequirementsPanel({
         </span>
       </div>
 
-      <div className="mt-4 grid gap-3 xl:grid-cols-[minmax(220px,0.85fr)_minmax(0,1.4fr)]">
-        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
+      <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(240px,0.42fr)_minmax(0,1fr)] xl:grid-cols-[minmax(260px,0.36fr)_minmax(0,1fr)]">
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-1">
           {payerSetupReadiness.steps.map((step, index) => (
             <button
               key={step.key}
@@ -2705,9 +2709,10 @@ export function PayerRequirementsPanel({
         </div>
       )}
 
-      <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(240px,0.9fr)_minmax(0,1.4fr)]">
-        <div className="space-y-3">
-          <div className="rounded-2xl bg-white p-3">
+      <div className="mt-5 space-y-5">
+        <div className="rounded-3xl border border-slate-100 bg-white p-4">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
+          <div className="rounded-2xl border border-slate-100 bg-slate-50/70 p-3 lg:w-72 lg:shrink-0">
             <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Novo convênio / pagador</p>
             <input
               value={payerForm.name}
@@ -2733,35 +2738,60 @@ export function PayerRequirementsPanel({
             </button>
           </div>
 
-          <div className="space-y-2">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Convênios cadastrados</p>
+                <p className="mt-1 text-xs text-slate-500">Escolha um convênio para seguir a esteira abaixo.</p>
+              </div>
+              <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">{payers.length} cadastrado(s)</span>
+            </div>
+            <div data-payer-list-grid className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
             {loading && payers.length === 0 ? (
               <p className="rounded-2xl bg-white p-4 text-sm font-semibold text-slate-500">Carregando convênios...</p>
             ) : payers.length === 0 ? (
               <p className="rounded-2xl bg-white p-4 text-sm font-semibold text-slate-500">Nenhum convênio configurado.</p>
-            ) : payers.map((payer) => (
+            ) : payers.map((payer) => {
+              const isSelected = payer.id === selectedPayerId;
+              return (
               <button
                 key={payer.id}
                 type="button"
                 onClick={() => setSelectedPayerId(payer.id)}
-                className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
-                  payer.id === selectedPayerId
-                    ? "border-violet-200 bg-white text-slate-900 shadow-sm"
-                    : "border-transparent bg-white/60 text-slate-600 hover:bg-white"
+                data-payer-card
+                aria-pressed={isSelected}
+                className={`min-h-[132px] w-full rounded-2xl border px-4 py-3 text-left transition ${
+                  isSelected
+                    ? "border-[#7a32fc] bg-violet-50 text-slate-950 shadow-sm"
+                    : "border-slate-100 bg-white text-slate-700 hover:border-violet-100 hover:bg-violet-50/40"
                 }`}
               >
                 <span className="block text-sm font-bold">{payer.name}</span>
                 <span className="mt-1 block text-xs text-slate-500">{payerTypeLabels[payer.payerType] || "Pagador"} · {payer.status === "ACTIVE" ? "Ativo" : "Inativo"}</span>
+                <span className={`mt-3 inline-flex rounded-full px-2 py-1 text-[11px] font-semibold ${isSelected ? selectedPayerReadiness.className : "bg-slate-100 text-slate-600"}`}>
+                  {isSelected ? selectedPayerReadiness.label : "Selecionar para configurar"}
+                </span>
+                {isSelected ? (
+                  <span className="mt-3 flex flex-wrap gap-1.5">
+                    <span className="rounded-full bg-white px-2 py-1 text-[11px] font-semibold text-slate-600">{selectedPayerMappingCount} De/Para</span>
+                    <span className="rounded-full bg-white px-2 py-1 text-[11px] font-semibold text-slate-600">{selectedPayerPriceCount} valores</span>
+                    <span className="rounded-full bg-white px-2 py-1 text-[11px] font-semibold text-slate-600">{antiGlosaProfileNeedsReview ? "Anti-glosa pendente" : "Anti-glosa ok"}</span>
+                  </span>
+                ) : null}
               </button>
-            ))}
+              );
+            })}
+          </div>
+        </div>
           </div>
         </div>
 
-        <div className="rounded-2xl bg-white p-4">
+        <div data-payer-setup-area className="rounded-2xl bg-white p-4">
           <div className="flex items-start justify-between gap-3">
             <div>
               <p className="text-sm font-bold text-slate-900">{selectedPayer?.name || "Selecione um pagador"}</p>
               <p className="mt-1 text-xs text-slate-500">
-                Regra sem tipo de sessão vale para todos os serviços. Uma regra com tipo específico tem prioridade.
+                Fluxo principal: configure o básico pela esteira. Use o modo avançado apenas para ajustes completos ou técnicos.
               </p>
               <div className="mt-3 flex flex-wrap gap-2">
                 <span className={`rounded-full px-2 py-1 text-xs font-normal ${selectedPayerReadiness.className}`}>
@@ -2781,7 +2811,17 @@ export function PayerRequirementsPanel({
           </div>
 
           {selectedPayer ? renderPayerSetupWizard() : null}
-
+        </div>
+          <details
+            open={advancedModeOpen}
+            onToggle={(event) => setAdvancedModeOpen(event.currentTarget.open)}
+            className="mt-4 rounded-2xl border border-slate-200 bg-slate-50/80 p-3"
+          >
+            <summary className="cursor-pointer list-none rounded-xl px-2 py-1 text-sm font-semibold text-slate-800">
+              Modo avançado
+              <span className="ml-2 text-xs font-normal text-slate-500">De/Para completo, tabela de valores, regras TISS e cadastros de apoio.</span>
+            </summary>
+            <div className="mt-3">
           <div ref={payerRulesSectionRef} className="mt-4 rounded-2xl border border-indigo-100 bg-indigo-50/50 p-3">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
@@ -3229,7 +3269,6 @@ export function PayerRequirementsPanel({
           </div>
           </details>
         </div>
-      </div>
 
       <div ref={payerTussSectionRef} className="mt-5 rounded-2xl bg-white p-4">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
@@ -3906,6 +3945,8 @@ export function PayerRequirementsPanel({
           </div>
           ) : null}
         </section>
+            </div>
+          </details>
         {deleteModal && (
           <div className="fixed inset-0 z-[170] flex items-end justify-center bg-slate-950/50 p-4 sm:items-center" role="dialog" aria-modal="true" aria-label="Excluir cadastro">
             <div className="w-full max-w-lg rounded-2xl bg-white shadow-xl">
