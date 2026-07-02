@@ -223,6 +223,15 @@ export type PayerSetupReadiness = {
   warnings: string[];
 };
 
+type SetupPreGuideTestStatus = "not_tested" | "ready" | "warning" | "blocked";
+
+type SetupPreGuideTestResult = {
+  status: SetupPreGuideTestStatus;
+  issues: string[];
+  preGuide?: any | null;
+  message?: string;
+};
+
 const payerTypeLabels: Record<string, string> = {
   INSURANCE: "Convênio",
   PRIVATE: "Particular",
@@ -605,6 +614,61 @@ const normalizePayerTissProfile = (profile: any = {}): PayerTissForm => ({
 const isInsurancePayer = (payer?: Payer | null) => String(payer?.payerType || "").toUpperCase() === "INSURANCE";
 const isFilled = (value: unknown) => String(value ?? "").trim().length > 0;
 
+const normalizeSetupText = (value: unknown) =>
+  String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+
+const setupEventPatientId = (event: any) => String(event?.patientId || event?.patient_id || event?.patient?.id || "").trim();
+const setupEventPayerId = (event: any) => String(
+  event?.payerId ||
+    event?.payer_id ||
+    event?.billingContext?.payerId ||
+    event?.billing_context?.payer_id ||
+    event?.sourcePayload?.payerId ||
+    event?.sourcePayload?.payer_id ||
+    event?.source_payload?.payerId ||
+    event?.source_payload?.payer_id ||
+    "",
+).trim();
+const setupEventPayerName = (event: any) => String(
+  event?.payerName ||
+    event?.payer_name ||
+    event?.payer_name_snapshot ||
+    event?.billingContext?.payerName ||
+    event?.billing_context?.payer_name ||
+    event?.sourcePayload?.payerName ||
+    event?.sourcePayload?.payer_name ||
+    event?.source_payload?.payerName ||
+    event?.source_payload?.payer_name ||
+    "",
+).trim();
+const setupEventPatientName = (event: any) => String(event?.patientName || event?.patient_name || event?.patient?.name || event?.name || "Paciente não informado").trim();
+const setupEventProfessionalName = (event: any) => String(
+  event?.therapistName ||
+    event?.therapist_name ||
+    event?.professionalName ||
+    event?.professional_name ||
+    event?.responsibleProfessionalName ||
+    event?.responsible_professional_name ||
+    event?.professional ||
+    "",
+).trim();
+const setupEventProfessionalId = (event: any) => String(event?.therapistId || event?.therapist_id || event?.professionalId || event?.professional_id || "").trim();
+const setupEventRoomName = (event: any) => String(event?.roomName || event?.room_name || event?.roomDisplayName || event?.room_display_name || "").trim();
+const setupEventRoomId = (event: any) => String(event?.roomId || event?.room_id || event?.room || "").trim();
+const setupEventProcedureName = (event: any) => String(event?.serviceType || event?.service_type || event?.procedureName || event?.procedure_name || event?.type || event?.approach || "Procedimento não informado").trim();
+
+const formatSetupSessionDateTime = (event: any) => {
+  const raw = event?.start || event?.scheduledStart || event?.scheduled_start || event?.start_at || event?.date;
+  const start = raw ? new Date(raw) : null;
+  if (!start || Number.isNaN(start.getTime())) return event?.time || "Data não informada";
+  return start.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+};
+
 export const formatCentsForBrazilianInput = (value: unknown) => {
   if (value === null || value === undefined || String(value).trim() === "") return "";
   const cents = Number(value);
@@ -911,6 +975,12 @@ export function PayerRequirementsPanel({
   const [payerTissMessage, setPayerTissMessage] = useState("");
   const [activeSetupStepKey, setActiveSetupStepKey] = useState<PayerSetupStepKey>("identification");
   const [setupActionStatus, setSetupActionStatus] = useState<Record<string, SaveActionStatus>>({});
+  const [setupPatients, setSetupPatients] = useState<any[]>([]);
+  const [setupAppointments, setSetupAppointments] = useState<any[]>([]);
+  const [setupPatientId, setSetupPatientId] = useState("");
+  const [setupAppointmentId, setSetupAppointmentId] = useState("");
+  const [setupTestLoadState, setSetupTestLoadState] = useState<{ loading: boolean; error: string }>({ loading: false, error: "" });
+  const [setupTestResult, setSetupTestResult] = useState<SetupPreGuideTestResult>({ status: "not_tested", issues: [] });
   const [advancedModeOpen, setAdvancedModeOpen] = useState(false);
   const payerRulesSectionRef = useRef<HTMLDivElement | null>(null);
   const payerTussSectionRef = useRef<HTMLDivElement | null>(null);
@@ -1048,6 +1118,36 @@ export function PayerRequirementsPanel({
       .filter(isLegacyOrInvalidTussCodeForSetup),
     [billingConfigurations],
   );
+  const setupPayerAppointments = useMemo(() => {
+    const payerNameKey = normalizeSetupText(selectedPayer?.name);
+    return setupAppointments
+      .filter((appointment) => {
+        const appointmentPayerId = setupEventPayerId(appointment);
+        const appointmentPayerNameKey = normalizeSetupText(setupEventPayerName(appointment));
+        return (selectedPayerId && appointmentPayerId === selectedPayerId) || (payerNameKey && appointmentPayerNameKey === payerNameKey);
+      })
+      .sort((left, right) => {
+        const leftTime = new Date(left?.start || left?.scheduledStart || left?.scheduled_start || 0).getTime();
+        const rightTime = new Date(right?.start || right?.scheduledStart || right?.scheduled_start || 0).getTime();
+        return (Number.isNaN(rightTime) ? 0 : rightTime) - (Number.isNaN(leftTime) ? 0 : leftTime);
+      });
+  }, [selectedPayer?.name, selectedPayerId, setupAppointments]);
+  const setupPatientIdsForPayer = useMemo(
+    () => new Set(setupPayerAppointments.map(setupEventPatientId).filter(Boolean)),
+    [setupPayerAppointments],
+  );
+  const setupPatientsForPayer = useMemo(() => {
+    if (setupPatientIdsForPayer.size === 0) return setupPatients;
+    return setupPatients.filter((patient) => setupPatientIdsForPayer.has(String(patient?.id || patient?.patientId || "").trim()));
+  }, [setupPatientIdsForPayer, setupPatients]);
+  const setupAppointmentsForSelectedPatient = useMemo(
+    () => setupPayerAppointments.filter((appointment) => !setupPatientId || setupEventPatientId(appointment) === setupPatientId),
+    [setupPatientId, setupPayerAppointments],
+  );
+  const selectedSetupAppointment = useMemo(
+    () => setupAppointments.find((appointment) => String(appointment?.id || appointment?.appointmentId || appointment?.appointment_id || "") === setupAppointmentId) || null,
+    [setupAppointmentId, setupAppointments],
+  );
   const payerSetupReadiness = useMemo(
     () => getPayerSetupReadiness({
       payer: selectedPayer,
@@ -1062,6 +1162,8 @@ export function PayerRequirementsPanel({
       hasLegacyTussCode: selectedPayerLegacyTussCodes.length > 0,
       antiGlosaProfileNeedsReview,
       payerTissMessage,
+      preGuideTestStatus: setupTestResult.status,
+      preGuideTestIssues: setupTestResult.issues,
     }),
     [
       activeBillingConfigurations.length,
@@ -1076,6 +1178,8 @@ export function PayerRequirementsPanel({
       selectedPayerOfficialCodeIssues,
       selectedPayerPriceCount,
       selectedPayerTissMissing,
+      setupTestResult.issues,
+      setupTestResult.status,
     ],
   );
   const activeSetupStep = payerSetupReadiness.steps.find((step) => step.key === activeSetupStepKey) || payerSetupReadiness.steps[0];
@@ -1110,6 +1214,64 @@ export function PayerRequirementsPanel({
     setSetupActionStatus((current) => ({ ...current, [stepKey]: status }));
   };
 
+  const runSetupPreGuideTest = async () => {
+    if (!setupAppointmentId) {
+      setSetupTestResult({
+        status: "blocked",
+        issues: ["Selecione uma sessão elegível para rodar o teste de Pré-guia."],
+        message: "Nenhuma sessão selecionada.",
+      });
+      return false;
+    }
+    const result = await dataService.revalidateTissPreGuide(setupAppointmentId);
+    if (!result?.success || !result.data) {
+      setSetupTestResult({
+        status: "blocked",
+        issues: [result?.error || "Não foi possível revalidar a Pré-guia de teste."],
+        message: "Teste não concluído.",
+      });
+      return false;
+    }
+    const preGuide = result.data || {};
+    const checklist = preGuide?.antiGlosaChecklist && typeof preGuide.antiGlosaChecklist === "object" ? preGuide.antiGlosaChecklist : {};
+    const blockingCount = Number(checklist.blockingCount ?? preGuide.blockingCount ?? 0) || 0;
+    const warningCount = Number(checklist.warningCount ?? checklist.attentionCount ?? preGuide.warningCount ?? 0) || 0;
+    const preGuideStatus = String(preGuide.status || result?.tissPreGuideStatus || "").toLowerCase();
+    const antiGlosaStatus = String(checklist.status || preGuide.antiGlosaStatus || "").toLowerCase();
+    const issues = [
+      ...(Array.isArray(checklist.items) ? checklist.items : [])
+        .filter((item: any) => ["blocking", "warning"].includes(String(item?.severity || "").toLowerCase()))
+        .map((item: any) => String(item?.title || item?.description || item?.code || "").trim())
+        .filter(Boolean),
+      ...(!preGuideStatus || preGuideStatus === "valid" ? [] : [`Pré-guia com status ${preGuide.status}.`]),
+    ];
+    if (blockingCount > 0 || (preGuideStatus && preGuideStatus !== "valid")) {
+      setSetupTestResult({
+        status: "blocked",
+        issues: issues.length > 0 ? issues : ["Pré-guia de teste ainda possui bloqueios."],
+        preGuide,
+        message: "Teste concluído com bloqueios.",
+      });
+      return true;
+    }
+    if (warningCount > 0 || antiGlosaStatus === "medium_risk" || antiGlosaStatus === "low_risk" || antiGlosaProfileNeedsReview) {
+      setSetupTestResult({
+        status: "warning",
+        issues: issues.length > 0 ? issues : ["Teste aprovado com alerta anti-glosa."],
+        preGuide,
+        message: "Teste concluído com alerta.",
+      });
+      return true;
+    }
+    setSetupTestResult({
+      status: "ready",
+      issues: [],
+      preGuide,
+      message: "Teste de Pré-guia aprovado.",
+    });
+    return true;
+  };
+
   const canAdvanceSetupStep = (stepKey: PayerSetupStepKey) => {
     if (stepKey === "identification") return Boolean(selectedPayerId && isInsurancePayer(selectedPayer) && payerSetupIdentityForm.name.trim().length >= 2 && payerTissForm.ansRegistration.trim());
     if (stepKey === "clinic") return Boolean(selectedPayerId && isInsurancePayer(selectedPayer) && (payerTissForm.contractedProviderCode.trim() || payerTissForm.operatorProviderCode.trim() || payerTissForm.operatorCode.trim()));
@@ -1118,6 +1280,7 @@ export function PayerRequirementsPanel({
     if (stepKey === "procedures") return activeTussServices.length > 0 || tussServiceForm.name.trim().length >= 2;
     if (stepKey === "tuss") return selectedPayerMappingCount > 0 || Boolean(tussMappingForm.serviceCatalogId && tussMappingForm.tussCodeId);
     if (stepKey === "prices") return selectedPayerPriceCount > 0 || Boolean(procedurePriceForm.serviceCatalogId && procedurePriceForm.amountCents);
+    if (stepKey === "test") return Boolean(setupAppointmentId);
     return true;
   };
 
@@ -1140,6 +1303,8 @@ export function PayerRequirementsPanel({
         saved = await createTussMapping() === true;
       } else if (stepKey === "prices" && procedurePriceForm.serviceCatalogId && procedurePriceForm.amountCents) {
         saved = await saveProcedurePrice() === true;
+      } else if (stepKey === "test") {
+        saved = await runSetupPreGuideTest() === true;
       }
       if (!saved) {
         setSetupStepStatus(stepKey, "error");
@@ -1549,6 +1714,64 @@ export function PayerRequirementsPanel({
   const currentMonthRange = () => {
     return buildClinicMonthDateRange(new Date());
   };
+
+  useEffect(() => {
+    setSetupPatientId("");
+    setSetupAppointmentId("");
+    setSetupTestResult({ status: "not_tested", issues: [] });
+  }, [selectedPayerId]);
+
+  useEffect(() => {
+    if (activeSetupStepKey !== "test" || !selectedPayerId) return undefined;
+    let cancelled = false;
+    const loadSetupTestOptions = async () => {
+      setSetupTestLoadState({ loading: true, error: "" });
+      const range = currentMonthRange();
+      try {
+        const [patientsResult, appointmentsResult] = await Promise.all([
+          dataService.getPatients(),
+          dataService.getCalendarEvents({ from: range.from, to: range.to, view: "month", limit: 120 }),
+        ]);
+        if (cancelled) return;
+        setSetupPatients(patientsResult?.success && Array.isArray(patientsResult.data) ? patientsResult.data : []);
+        setSetupAppointments(appointmentsResult?.success && Array.isArray(appointmentsResult.data) ? appointmentsResult.data : []);
+        setSetupTestLoadState({
+          loading: false,
+          error: appointmentsResult?.success ? "" : appointmentsResult?.error || "Não foi possível carregar sessões elegíveis agora.",
+        });
+      } catch {
+        if (cancelled) return;
+        setSetupPatients([]);
+        setSetupAppointments([]);
+        setSetupTestLoadState({ loading: false, error: "Não foi possível carregar sessões elegíveis agora." });
+      }
+    };
+    void loadSetupTestOptions();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSetupStepKey, selectedPayerId]);
+
+  useEffect(() => {
+    if (activeSetupStepKey !== "test") return;
+    const firstAppointment = setupPayerAppointments[0] || null;
+    const currentPatientIsEligible = setupPatientId ? setupPatientIdsForPayer.has(setupPatientId) : false;
+    if (!setupPatientId && firstAppointment) {
+      setSetupPatientId(setupEventPatientId(firstAppointment));
+      return;
+    }
+    if (setupPatientId && setupPatientIdsForPayer.size > 0 && !currentPatientIsEligible) {
+      setSetupPatientId(firstAppointment ? setupEventPatientId(firstAppointment) : "");
+      setSetupAppointmentId("");
+    }
+  }, [activeSetupStepKey, setupPatientId, setupPatientIdsForPayer, setupPayerAppointments]);
+
+  useEffect(() => {
+    if (activeSetupStepKey !== "test") return;
+    if (setupAppointmentId && setupAppointmentsForSelectedPatient.some((appointment) => String(appointment?.id || appointment?.appointmentId || appointment?.appointment_id || "") === setupAppointmentId)) return;
+    const firstAppointment = setupAppointmentsForSelectedPatient[0] || null;
+    setSetupAppointmentId(firstAppointment ? String(firstAppointment?.id || firstAppointment?.appointmentId || firstAppointment?.appointment_id || "") : "");
+  }, [activeSetupStepKey, setupAppointmentId, setupAppointmentsForSelectedPatient]);
 
   const createTussService = async () => {
     if (tussServiceForm.name.trim().length < 2) return false;
@@ -2249,7 +2472,7 @@ export function PayerRequirementsPanel({
     if (stepKey === "prices") return "Salvar valores e continuar";
     if (stepKey === "authorizations") return "Continuar sem autorização agora";
     if (stepKey === "anti_glosa") return "Salvar anti-glosa e continuar";
-    if (stepKey === "test") return "Concluir configuração";
+    if (stepKey === "test") return "Rodar teste de Pré-guia";
     if (stepKey === "ready") return "Ir para Pré-Guias TISS";
     return "Salvar e continuar";
   };
@@ -2536,27 +2759,143 @@ export function PayerRequirementsPanel({
     }
 
     if (activeSetupStep.key === "test") {
+      const selectedProfessionalName = setupEventProfessionalName(selectedSetupAppointment);
+      const selectedProfessionalId = setupEventProfessionalId(selectedSetupAppointment);
+      const selectedRoomName = setupEventRoomName(selectedSetupAppointment);
+      const selectedRoomId = setupEventRoomId(selectedSetupAppointment);
+      const preGuide = setupTestResult.preGuide || null;
+      const checklist = preGuide?.antiGlosaChecklist && typeof preGuide.antiGlosaChecklist === "object" ? preGuide.antiGlosaChecklist : {};
+      const technicalStatus = preGuide?.status === "valid" ? "Válida" : preGuide ? "Com pendências" : "Aguardando teste";
+      const antiGlosaStatus = setupTestResult.status === "blocked"
+        ? "Bloqueada"
+        : setupTestResult.status === "warning"
+          ? "Risco médio"
+          : setupTestResult.status === "ready"
+            ? "Pronta"
+            : antiGlosaProfileNeedsReview ? "Risco médio" : "Aguardando teste";
+      const xmlDecision = setupTestResult.status === "blocked"
+        ? "Não pode gerar"
+        : setupTestResult.status === "warning"
+          ? "Pode gerar com alerta"
+          : setupTestResult.status === "ready"
+            ? "Pode gerar"
+            : "Aguardando teste";
       return (
         <div className="mt-4 rounded-2xl border border-indigo-50 bg-white p-3">
-          <p className="text-xs font-semibold uppercase tracking-widest text-slate-400">Teste de Pré-guia</p>
-          <div className="mt-3 grid gap-3 md:grid-cols-3">
-            <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2"><p className="text-xs text-slate-500">TISS técnico</p><p className="text-sm font-semibold text-slate-900">Validado na Pré-guia</p></div>
-            <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2"><p className="text-xs text-slate-500">Anti-glosa</p><p className="text-sm font-semibold text-slate-900">{antiGlosaProfileNeedsReview ? "Risco médio" : "Pronta"}</p></div>
-            <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2"><p className="text-xs text-slate-500">XML</p><p className="text-sm font-semibold text-slate-900">{antiGlosaProfileNeedsReview ? "Pode gerar com alerta" : "Pode gerar"}</p></div>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-xs font-semibold uppercase tracking-widest text-slate-400">Teste de Pré-guia</p>
+            {setupTestLoadState.loading ? (
+              <span className="inline-flex items-center gap-2 text-xs font-semibold text-indigo-700"><Loader2 size={14} className="animate-spin" />Carregando sessões</span>
+            ) : null}
           </div>
-          <p className="mt-3 text-sm leading-6 text-slate-600">Use uma sessão real na aba Pré-Guias TISS para rodar a revalidação. O resultado do teste aparece como TISS técnico, Anti-glosa e decisão XML.</p>
+          <div className="mt-3 grid gap-3 md:grid-cols-2">
+            <label className="text-xs font-normal text-slate-700">
+              <span className="mb-1 block">Paciente</span>
+              <select
+                value={setupPatientId}
+                onChange={(event) => {
+                  setSetupPatientId(event.target.value);
+                  setSetupAppointmentId("");
+                  setSetupTestResult({ status: "not_tested", issues: [] });
+                }}
+                className={setupFieldClass}
+              >
+                <option value="">Selecione</option>
+                {setupPatientsForPayer.map((patient) => <option key={patient.id || patient.patientId} value={patient.id || patient.patientId}>{patient.name || patient.fullName || patient.full_name || "Paciente"}</option>)}
+              </select>
+            </label>
+            <label className="text-xs font-normal text-slate-700">
+              <span className="mb-1 block">Sessão/atendimento</span>
+              <select
+                value={setupAppointmentId}
+                onChange={(event) => {
+                  setSetupAppointmentId(event.target.value);
+                  setSetupTestResult({ status: "not_tested", issues: [] });
+                }}
+                className={setupFieldClass}
+              >
+                <option value="">Selecione</option>
+                {setupAppointmentsForSelectedPatient.map((appointment) => {
+                  const id = String(appointment?.id || appointment?.appointmentId || appointment?.appointment_id || "");
+                  return <option key={id} value={id}>{formatSetupSessionDateTime(appointment)} - {setupEventPatientName(appointment)} - {setupEventProcedureName(appointment)}</option>;
+                })}
+              </select>
+            </label>
+          </div>
+          {setupTestLoadState.error ? <div className="mt-3 rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-sm text-amber-800">{setupTestLoadState.error}</div> : null}
+          {!setupTestLoadState.loading && setupPayerAppointments.length === 0 ? (
+            <div className="mt-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+              Nenhuma sessão elegível encontrada para este convênio. Crie uma sessão ou edite o pagador de uma sessão existente para este convênio.
+            </div>
+          ) : null}
+          <div className="mt-3 grid gap-3 md:grid-cols-3">
+            <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2"><p className="text-xs text-slate-500">Convênio/pagador selecionado</p><p className="text-sm font-semibold text-slate-900">{selectedPayer?.name || "Selecione um convênio"}</p></div>
+            <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2"><p className="text-xs text-slate-500">Procedimento</p><p className="text-sm font-semibold text-slate-900">{selectedSetupAppointment ? setupEventProcedureName(selectedSetupAppointment) : "Selecione uma sessão"}</p></div>
+            <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2"><p className="text-xs text-slate-500">Data/hora da sessão</p><p className="text-sm font-semibold text-slate-900">{selectedSetupAppointment ? formatSetupSessionDateTime(selectedSetupAppointment) : "Selecione uma sessão"}</p></div>
+            <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2"><p className="text-xs text-slate-500">Profissional</p><p className={`text-sm font-semibold ${selectedProfessionalName || selectedProfessionalId ? "text-slate-900" : "text-amber-800"}`}>{selectedProfessionalName || (selectedProfessionalId ? "Profissional cadastrado não carregado" : "Profissional não definido")}</p></div>
+            <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2"><p className="text-xs text-slate-500">Sala/local</p><p className={`text-sm font-semibold ${selectedRoomName || selectedRoomId ? "text-slate-900" : "text-amber-800"}`}>{selectedRoomName || (selectedRoomId ? "Sala cadastrada não carregada" : "Sala/local não definido")}</p></div>
+            <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2"><p className="text-xs text-slate-500">Pré-guia</p><p className="text-sm font-semibold text-slate-900">{preGuide?.id ? `ID ${String(preGuide.id).slice(0, 8)}` : "Ainda não testada"}</p></div>
+          </div>
+          <div className="mt-3 grid gap-3 md:grid-cols-3">
+            <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2"><p className="text-xs text-slate-500">TISS técnico</p><p className="text-sm font-semibold text-slate-900">{technicalStatus}</p></div>
+            <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2"><p className="text-xs text-slate-500">Anti-glosa</p><p className="text-sm font-semibold text-slate-900">{antiGlosaStatus}</p></div>
+            <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2"><p className="text-xs text-slate-500">XML</p><p className="text-sm font-semibold text-slate-900">{xmlDecision}</p></div>
+          </div>
+          {setupTestResult.message ? <p className="mt-3 text-sm font-semibold text-slate-700">{setupTestResult.message}</p> : null}
+          {setupTestResult.issues.length > 0 ? (
+            <div className="mt-3 rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              {setupTestResult.issues.join(" ")}
+            </div>
+          ) : null}
+          {Number(checklist.blockingCount || 0) > 0 ? <p className="mt-2 text-xs text-rose-700">A Pré-guia de teste ainda tem {Number(checklist.blockingCount || 0)} bloqueio(s).</p> : null}
         </div>
       );
     }
 
     if (activeSetupStep.key === "ready") {
+      const isReady = payerSetupReadiness.overallStatus === "ready_for_xml";
+      const isReadyWithWarning = payerSetupReadiness.overallStatus === "ready_for_xml_with_warning";
+      const title = isReady
+        ? "Convênio pronto para XML"
+        : isReadyWithWarning
+          ? "Convênio pronto para XML com alerta"
+          : "Configuração ainda não está pronta para XML";
+      const summaryItems = [
+        ["Identificação da operadora", payerSetupReadiness.steps.find((step) => step.key === "identification")?.status],
+        ["Dados da clínica", payerSetupReadiness.steps.find((step) => step.key === "clinic")?.status],
+        ["Padrão TISS", payerSetupReadiness.steps.find((step) => step.key === "tiss")?.status],
+        ["Procedimentos", payerSetupReadiness.steps.find((step) => step.key === "procedures")?.status],
+        ["TUSS/DePara", payerSetupReadiness.steps.find((step) => step.key === "tuss")?.status],
+        ["Valores", payerSetupReadiness.steps.find((step) => step.key === "prices")?.status],
+        ["Autorizações", payerSetupReadiness.steps.find((step) => step.key === "authorizations")?.status],
+        ["Anti-glosa", payerSetupReadiness.steps.find((step) => step.key === "anti_glosa")?.status],
+        ["Teste de Pré-guia", payerSetupReadiness.steps.find((step) => step.key === "test")?.status],
+      ];
       return (
-        <div className="mt-4 rounded-2xl border border-emerald-100 bg-emerald-50 p-3">
-          <p className="text-sm font-semibold text-emerald-900">Convênio pronto para seguir para Pré-Guias TISS</p>
+        <div className={`mt-4 rounded-2xl border p-3 ${isReady ? "border-emerald-100 bg-emerald-50" : isReadyWithWarning ? "border-amber-100 bg-amber-50" : "border-rose-100 bg-rose-50"}`}>
+          <p className={`text-sm font-semibold ${isReady ? "text-emerald-900" : isReadyWithWarning ? "text-amber-900" : "text-rose-900"}`}>{title}</p>
           <div className="mt-3 grid gap-2 md:grid-cols-2">
-            {["Convênio configurado", "Procedimentos prontos", "TUSS/DePara prontos", "Valores prontos", "Anti-glosa revisada", "Teste de Pré-guia aprovado"].map((item) => (
-              <span key={item} className="inline-flex items-center gap-2 rounded-xl bg-white px-3 py-2 text-sm text-emerald-800"><CheckCircle2 size={15} />{item}</span>
+            {summaryItems.map(([item, status]) => (
+              <span key={item} className={`inline-flex items-center justify-between gap-2 rounded-xl bg-white px-3 py-2 text-sm ${status === "ready" ? "text-emerald-800" : status === "warning" ? "text-amber-800" : "text-rose-800"}`}>
+                <span className="inline-flex items-center gap-2"><CheckCircle2 size={15} />{item}</span>
+                <span className="text-xs font-semibold">{setupStatusLabel[(status || "incomplete") as PayerSetupStepStatus]}</span>
+              </span>
             ))}
+          </div>
+          {payerSetupReadiness.blockers.length > 0 ? (
+            <div className="mt-3 rounded-xl border border-rose-200 bg-white px-3 py-2 text-sm text-rose-800">
+              {payerSetupReadiness.blockers.join(" ")}
+            </div>
+          ) : null}
+          {payerSetupReadiness.warnings.length > 0 ? (
+            <div className="mt-3 rounded-xl border border-amber-200 bg-white px-3 py-2 text-sm text-amber-800">
+              {payerSetupReadiness.warnings.join(" ")}
+            </div>
+          ) : null}
+          <div className="mt-3 flex flex-wrap gap-2">
+            <span className="rounded-xl border border-white bg-white px-3 py-2 text-xs font-semibold text-slate-700">Ir para Pré-Guias TISS</span>
+            <span className="rounded-xl border border-white bg-white px-3 py-2 text-xs font-semibold text-slate-700">Gerar lote XML</span>
+            <span className="rounded-xl border border-white bg-white px-3 py-2 text-xs font-semibold text-slate-700">Ver lotes XML</span>
           </div>
         </div>
       );
@@ -2657,7 +2996,8 @@ export function PayerRequirementsPanel({
             <SaveActionButton
               status={setupStepStatus(activeSetupStep.key)}
               idleLabel={setupPrimaryLabel(activeSetupStep.key)}
-              successLabel="Salvo"
+              loadingLabel={activeSetupStep.key === "test" ? "Testando..." : "Salvando..."}
+              successLabel={activeSetupStep.key === "test" ? "Teste concluído" : "Salvo"}
               disabled={saving || !canAdvanceSetupStep(activeSetupStep.key)}
               onClick={() => void runSetupPrimaryAction()}
             />

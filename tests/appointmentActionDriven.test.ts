@@ -37,6 +37,33 @@ test('appointment merge never replaces real patient name with generic Paciente',
   assert.equal(next.find((item) => item.id === 'future-1')?.name, 'Pedro Henrique');
 });
 
+test('appointment merge preserves professional and room on partial patches', () => {
+  const next = mergeAppointmentIdentityFallbacks(
+    [{
+      id: 'appointment-1',
+      status: 'confirmed',
+      therapistName: 'Profissional não definido',
+      professional: 'Equipe',
+      location: 'outro',
+    }],
+    [{
+      id: 'appointment-1',
+      therapist_id: 'professional-1',
+      therapistName: 'Terapeuta Mateus',
+      room_id: 'room-1',
+      roomName: 'Sala ABA',
+      location: 'clinica',
+    }],
+  );
+  assert.equal(next[0].therapist_id, 'professional-1');
+  assert.equal(next[0].therapistId, 'professional-1');
+  assert.equal(next[0].professionalId, 'professional-1');
+  assert.equal(next[0].therapistName, 'Terapeuta Mateus');
+  assert.equal(next[0].room_id, 'room-1');
+  assert.equal(next[0].roomName, 'Sala ABA');
+  assert.equal(next[0].location, 'clinica');
+});
+
 test('appointment action result is enriched with local confirmed identity before rendering', () => {
   const enriched = mergeAppointmentIdentityFallbacks(
     [{ id: 'new-1', patientName: 'Paciente', patient_name: 'Paciente', date: '2026-06-26' }],
@@ -82,6 +109,20 @@ test('clinic state autosave no longer transports appointments', () => {
   );
   assert.match(effectSlice, /dataService\.saveClinicState\(payload\)/);
   assert.doesNotMatch(effectSlice, /appointments:\s*therapistAgenda/);
+});
+
+test('clinic_state appointment merge preserves professional and room unless explicitly cleared', () => {
+  const mergeSlice = serverCode.slice(
+    serverCode.indexOf('const mergeClinicStateAppointmentsById'),
+    serverCode.indexOf('const normalizeAppointmentPatchStatus', serverCode.indexOf('const mergeClinicStateAppointmentsById')),
+  );
+  assert.match(mergeSlice, /mergeAppointmentClinicalAssignment/);
+  assert.match(mergeSlice, /clearProfessional/);
+  assert.match(mergeSlice, /clearRoom/);
+  assert.match(mergeSlice, /professional_id/);
+  assert.match(mergeSlice, /room_id/);
+  assert.match(mergeSlice, /location_type = 'clinica'|location_type': 'clinica'|location_type/);
+  assert.match(mergeSlice, /byId\.set\(id, mergeAppointmentClinicalAssignment\(byId\.get\(id\) \|\| \{\}, appointment\)\)/);
 });
 
 test('schedule and update actions await persisted backend mutations before success', () => {

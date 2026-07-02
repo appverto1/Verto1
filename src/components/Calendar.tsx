@@ -34,6 +34,7 @@ import {
 import { dataService } from '../services/dataService';
 import { formatMinutesHuman, getActualDurationMinutes, getAppointmentDurationMinutes } from '../utils/scheduling';
 import { resolveMaintenanceTargetDisplay } from '../utils/peiMaintenancePanel';
+import { mergeAppointmentIdentity } from '../utils/appointmentActionUpdates';
 import {
   APPOINTMENT_FINANCIAL_CONTEXT_OPTIONS,
   APPOINTMENT_FINANCIAL_CONTEXT_REQUIRED_MESSAGE,
@@ -820,6 +821,46 @@ const getRoomDisplayLine = (event: any) => {
   return event?.locationLabel || event?.location || 'Não informado';
 };
 
+const getProfessionalDisplayLine = (event: any) => {
+  const name = String(
+    event?.therapistName ||
+      event?.therapist_name ||
+      event?.responsibleProfessionalName ||
+      event?.responsible_professional_name ||
+      event?.professionalName ||
+      event?.professional_name ||
+      event?.professional ||
+      '',
+  ).trim();
+  const normalized = removeDiacritics(name).toLowerCase();
+  if (name && !['equipe', 'team', 'profissional', 'profissional nao definido', 'nao informado'].includes(normalized)) {
+    return name;
+  }
+  return event?.therapistId || event?.therapist_id || event?.professionalId || event?.professional_id
+    ? 'Profissional cadastrado não carregado'
+    : 'Profissional não definido';
+};
+
+const getFamilyResponsibleDisplayLine = (event: any) => {
+  const source = parseEventSourcePayload(event);
+  const name = String(
+    event?.guardianName ||
+      event?.guardian_name ||
+      event?.familyResponsibleName ||
+      event?.family_responsible_name ||
+      event?.responsibleName ||
+      event?.responsible_name ||
+      source?.guardianName ||
+      source?.guardian_name ||
+      source?.familyResponsibleName ||
+      source?.family_responsible_name ||
+      source?.responsibleName ||
+      source?.responsible_name ||
+      '',
+  ).trim();
+  return name || 'Não informado';
+};
+
 const classifyLocation = (event: any) => {
   const value = removeDiacritics(`${event?.location || ''} ${event?.location_type || ''} ${event?.room || ''} ${event?.room_name || ''} ${event?.roomDisplayName || ''}`);
   if (value.includes('online') || value.includes('remoto')) return 'online';
@@ -912,6 +953,7 @@ const mergeAppointmentStatusForRender = (serverEvent: any, localEvent: any) => {
 const mergeCalendarEventForRender = (serverEvent: any, localEvent: any) => {
   if (!serverEvent) return localEvent;
   if (!localEvent) return serverEvent;
+  const mergedEvent = mergeAppointmentIdentity(serverEvent, localEvent);
   const patientName = pickPatientLabel([
     localEvent?.patientName,
     localEvent?.patient_name,
@@ -921,8 +963,7 @@ const mergeCalendarEventForRender = (serverEvent: any, localEvent: any) => {
     serverEvent?.name,
   ]);
   return {
-    ...serverEvent,
-    ...localEvent,
+    ...mergedEvent,
     status: mergeAppointmentStatusForRender(serverEvent, localEvent),
     appointment_status: mergeAppointmentStatusForRender(serverEvent, localEvent),
     patient_response: serverEvent?.patient_response || localEvent?.patient_response || null,
@@ -995,7 +1036,17 @@ const normalizeClinicalEvent = (event: any, roomLookup?: Map<string, any>) => {
     event?.therapist_name ||
     event?.therapistName ||
     event?.therapistDisplayName ||
+    event?.professionalName ||
+    event?.professional_name ||
     event?.professional ||
+    source?.responsible_professional_name ||
+    source?.responsibleProfessionalName ||
+    source?.therapist_name ||
+    source?.therapistName ||
+    source?.therapistDisplayName ||
+    source?.professionalName ||
+    source?.professional_name ||
+    source?.professional ||
     '';
   const therapistName = ['equipe', 'team'].includes(
     String(rawTherapistName).trim().toLowerCase(),
@@ -1008,7 +1059,14 @@ const normalizeClinicalEvent = (event: any, roomLookup?: Map<string, any>) => {
     event?.responsibleProfessionalId ||
     event?.therapist_id ||
     event?.therapistId ||
+    event?.professional_id ||
     event?.professionalId ||
+    source?.responsible_professional_id ||
+    source?.responsibleProfessionalId ||
+    source?.therapist_id ||
+    source?.therapistId ||
+    source?.professional_id ||
+    source?.professionalId ||
     null;
   const type = event?.type || event?.approach || 'Sessão';
   const roomInfo = resolveRoomInfo(event, roomLookup);
@@ -3096,8 +3154,8 @@ export const ClinicalAgendaBoard = ({
               {[
                 { label: 'Duração', value: `${Math.max(1, Math.round((detailEvent.end.getTime() - detailEvent.start.getTime()) / 60000))} min`, icon: Clock },
                 { label: 'Sala/local', value: getRoomDisplayLine(detailEvent), icon: MapPin },
-                { label: 'Equipe', value: detailEvent.therapistName || 'Profissional não definido', icon: Users },
-                { label: 'Responsável', value: detailEvent.therapistName || 'Profissional não definido', icon: User }
+                { label: 'Equipe/profissional', value: getProfessionalDisplayLine(detailEvent), icon: Users },
+                { label: 'Responsável familiar', value: getFamilyResponsibleDisplayLine(detailEvent), icon: User }
               ].map((item) => {
                 const Icon = item.icon;
                 return (

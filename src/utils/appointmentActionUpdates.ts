@@ -49,6 +49,24 @@ const isGenericPatientLabel = (value: any) => {
   return !normalized || normalized === "paciente" || normalized === "patient" || normalized === "cliente";
 };
 
+const normalizeAssignmentText = (value: any) =>
+  String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+
+const isGenericProfessionalLabel = (value: any) => {
+  const normalized = normalizeAssignmentText(value);
+  return !normalized || normalized === "equipe" || normalized === "team" || normalized === "profissional" || normalized === "profissional nao definido" || normalized === "nao informado";
+};
+
+const isGenericRoomLabel = (value: any) => {
+  const normalized = normalizeAssignmentText(value);
+  return !normalized || normalized === "outro" || normalized === "nao informado" || normalized === "sala nao informada" || normalized === "sala nao identificada";
+};
+
 const parseAppointmentSourcePayload = (appointment: any) => {
   const source = appointment?.source_payload || appointment?.sourcePayload;
   if (!source) return {};
@@ -81,8 +99,78 @@ const appointmentPatientNameCandidates = (appointment: any) => {
   ];
 };
 
+const firstMeaningfulValue = (sources: any[], keys: string[], isGeneric: (value: any) => boolean) => {
+  for (const source of sources) {
+    for (const key of keys) {
+      const value = source?.[key];
+      if (value !== null && value !== undefined && !isGeneric(value)) return value;
+    }
+  }
+  return undefined;
+};
+
+const preserveAppointmentClinicalAssignment = (current: any = {}, incoming: any = {}, merged: any = {}) => {
+  const clearProfessional = incoming?.clearProfessional === true || incoming?.clear_professional === true;
+  const clearRoom = incoming?.clearRoom === true || incoming?.clear_room === true;
+  const professionalId = clearProfessional ? null : firstMeaningfulValue(
+    [incoming, current],
+    ["therapist_id", "therapistId", "professional_id", "professionalId", "responsible_professional_id", "responsibleProfessionalId"],
+    (value) => !String(value || "").trim(),
+  );
+  const professionalName = clearProfessional ? null : firstMeaningfulValue(
+    [incoming, current],
+    ["therapist_name", "therapistName", "professional_name", "professionalName", "professional", "responsible_professional_name", "responsibleProfessionalName"],
+    isGenericProfessionalLabel,
+  );
+  const roomId = clearRoom ? null : firstMeaningfulValue(
+    [incoming, current],
+    ["room_id", "roomId", "room"],
+    isGenericRoomLabel,
+  );
+  const roomName = clearRoom ? null : firstMeaningfulValue(
+    [incoming, current],
+    ["room_name", "roomName", "roomDisplayName"],
+    isGenericRoomLabel,
+  );
+  const clinicLocationType = roomId || roomName ? "clinica" : undefined;
+
+  return {
+    ...merged,
+    ...(professionalId !== undefined ? {
+      therapist_id: professionalId,
+      therapistId: professionalId,
+      professional_id: professionalId,
+      professionalId,
+      responsible_professional_id: professionalId,
+      responsibleProfessionalId: professionalId,
+    } : {}),
+    ...(professionalName !== undefined ? {
+      therapist_name: professionalName,
+      therapistName: professionalName,
+      professional: professionalName,
+      responsible_professional_name: professionalName,
+      responsibleProfessionalName: professionalName,
+    } : {}),
+    ...(roomId !== undefined ? {
+      room_id: roomId,
+      roomId,
+      room: roomId,
+    } : {}),
+    ...(roomName !== undefined ? {
+      room_name: roomName,
+      roomName,
+      roomDisplayName: roomName,
+    } : {}),
+    ...(clinicLocationType ? {
+      location_type: clinicLocationType,
+      locationType: clinicLocationType,
+      location: clinicLocationType,
+    } : {}),
+  };
+};
+
 export const mergeAppointmentIdentity = (current: any = {}, incoming: any = {}) => {
-  const merged = { ...(current || {}), ...(incoming || {}) };
+  const merged = preserveAppointmentClinicalAssignment(current, incoming, { ...(current || {}), ...(incoming || {}) });
   const patientName = pickPatientLabel([
     ...appointmentPatientNameCandidates(incoming),
     ...appointmentPatientNameCandidates(current),

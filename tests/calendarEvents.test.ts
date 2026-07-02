@@ -135,6 +135,18 @@ test('cards mostram informacoes e indicadores essenciais da sessao', () => {
   assert.match(calendarCode, /getClosureStatusStyle/);
 });
 
+test('detalhe da consulta hidrata profissional e separa responsavel familiar', () => {
+  assert.match(calendarCode, /mergeAppointmentIdentity\(serverEvent, localEvent\)/);
+  assert.match(calendarCode, /source\?\.therapistName/);
+  assert.match(calendarCode, /source\?\.professional_id/);
+  assert.match(calendarCode, /getProfessionalDisplayLine\(detailEvent\)/);
+  assert.match(calendarCode, /getFamilyResponsibleDisplayLine\(detailEvent\)/);
+  assert.match(calendarCode, /Equipe\/profissional/);
+  assert.match(calendarCode, /Responsável familiar/);
+  assert.match(calendarCode, /Profissional cadastrado não carregado/);
+  assert.doesNotMatch(calendarCode, /label: 'Responsável', value: detailEvent\.therapistName/);
+});
+
 test('agenda usa resposta do paciente como fonte visual canonica', () => {
   assert.match(serverCode, /normalizePatientConfirmationStatusForAgenda/);
   assert.match(serverCode, /resolveAppointmentPatientConfirmationStates/);

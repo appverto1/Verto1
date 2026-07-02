@@ -687,6 +687,46 @@ test('esteira reconhece convenio ja configurado e teste de pre-guia aprovado com
   assert.equal(readiness.currentStepKey, 'ready');
 });
 
+test('esteira leva teste de pre-guia com alerta para pronto para XML com alerta', () => {
+  const readiness = getPayerSetupReadiness({
+    payer: { name: 'Amil', payerType: 'INSURANCE', status: 'ACTIVE' },
+    tissProfile: {
+      ansRegistration: '326305',
+      contractedProviderCode: 'PREST-1',
+      antiGlosaReviewed: true,
+    },
+    activeProcedureCount: 1,
+    activeMappingCount: 1,
+    activePriceCount: 1,
+    activeBillingConfigurationCount: 1,
+    preGuideTestStatus: 'warning',
+    preGuideTestIssues: ['Exigências da operadora ainda não revisadas'],
+  });
+  assert.equal(readiness.overallStatus, 'ready_for_xml_with_warning');
+  assert.equal(readiness.steps.find((step) => step.key === 'test')?.status, 'warning');
+  assert.match(readiness.warnings.join(' '), /Exig/);
+});
+
+test('esteira bloqueada por teste de pre-guia explica pendencias', () => {
+  const readiness = getPayerSetupReadiness({
+    payer: { name: 'Amil', payerType: 'INSURANCE', status: 'ACTIVE' },
+    tissProfile: {
+      ansRegistration: '326305',
+      contractedProviderCode: 'PREST-1',
+      antiGlosaReviewed: true,
+    },
+    activeProcedureCount: 1,
+    activeMappingCount: 1,
+    activePriceCount: 1,
+    activeBillingConfigurationCount: 1,
+    preGuideTestStatus: 'blocked',
+    preGuideTestIssues: ['Profissional não definido'],
+  });
+  assert.equal(readiness.steps.find((step) => step.key === 'test')?.status, 'blocked');
+  assert.match(readiness.blockers.join(' '), /Profissional/);
+  assert.notEqual(readiness.overallStatus, 'ready_for_xml');
+});
+
 test('UI de convenios exibe esteira guiada e mantem modo avancado existente', () => {
   assert.match(payerPanelCode, /Esteira de configura/);
   assert.match(payerPanelCode, /Configurar conv.nio at. ficar pronto para XML/s);
@@ -711,6 +751,30 @@ test('esteira executavel embute campos praticos de DePara, valores e anti-glosa'
   assert.match(payerPanelCode, /Editar avan.ado em De\/Para TUSS/s);
 });
 
+test('etapa 9 da esteira executa teste de pre-guia dentro do fluxo', () => {
+  assert.match(payerPanelCode, /activeSetupStep\.key === "test"[\s\S]*Paciente[\s\S]*Sess.o\/atendimento/s);
+  assert.match(payerPanelCode, /activeSetupStep\.key === "test"[\s\S]*Profissional[\s\S]*Sala\/local/s);
+  assert.match(payerPanelCode, /activeSetupStep\.key === "test"[\s\S]*TISS t.cnico[\s\S]*Anti-glosa[\s\S]*XML/s);
+  assert.match(payerPanelCode, /Rodar teste de Pr.-guia/s);
+  assert.match(payerPanelCode, /dataService\.getPatients\(\)/);
+  assert.match(payerPanelCode, /dataService\.getCalendarEvents\(\{ from: range\.from, to: range\.to, view: "month", limit: 120 \}\)/);
+  assert.match(payerPanelCode, /dataService\.revalidateTissPreGuide\(setupAppointmentId\)/);
+  assert.match(payerPanelCode, /setupEventProfessionalName\(selectedSetupAppointment\)/);
+  assert.match(payerPanelCode, /setupEventRoomName\(selectedSetupAppointment\)/);
+  assert.doesNotMatch(payerPanelCode, /Use uma sess.o real na aba Pr.-Guias TISS para rodar a revalida/s);
+});
+
+test('etapa 10 resume pronto, alerta e bloqueio com acoes finais', () => {
+  assert.match(payerPanelCode, /Conv.nio pronto para XML/s);
+  assert.match(payerPanelCode, /Conv.nio pronto para XML com alerta/s);
+  assert.match(payerPanelCode, /Configura..o ainda n.o est. pronta para XML/s);
+  assert.match(payerPanelCode, /Identifica..o da operadora/);
+  assert.match(payerPanelCode, /Teste de Pr.-guia/);
+  assert.match(payerPanelCode, /Ir para Pr.-Guias TISS/);
+  assert.match(payerPanelCode, /Gerar lote XML/);
+  assert.match(payerPanelCode, /Ver lotes XML/);
+});
+
 test('botao padrao de salvar confirma no proprio botao e usa cor principal', () => {
   assert.match(payerPanelCode, /function SaveActionButton/);
   assert.match(payerPanelCode, /data-save-action-button/);
@@ -724,6 +788,8 @@ test('botao padrao de salvar confirma no proprio botao e usa cor principal', () 
   assert.match(payerPanelCode, /status === "error"/);
   assert.match(payerPanelCode, /`✓ \$\{successLabel\}`/);
   assert.match(payerPanelCode, /<SaveActionButton[\s\S]*idleLabel=\{setupPrimaryLabel\(activeSetupStep\.key\)\}/);
+  assert.match(payerPanelCode, /loadingLabel=\{activeSetupStep\.key === "test" \? "Testando\.\.\." : "Salvando\.\.\."\}/);
+  assert.match(payerPanelCode, /successLabel=\{activeSetupStep\.key === "test" \? "Teste conclu.do" : "Salvo"\}/);
 });
 
 test('layout de convenios usa lista horizontal no topo e esteira abaixo com largura ampla', () => {

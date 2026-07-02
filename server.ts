@@ -16672,6 +16672,85 @@ async function startServer() {
   };
 
   const mergeClinicStateAppointmentsById = (existingAppointments: any[], persistedAppointments: any[]) => {
+    const normalizeAssignmentText = (value: any) => sanitizeString(value, 180)
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/\s+/g, ' ')
+      .trim();
+    const isGenericProfessionalLabel = (value: any) => {
+      const normalized = normalizeAssignmentText(value);
+      return !normalized || normalized === 'equipe' || normalized === 'team' || normalized === 'profissional' || normalized === 'profissional nao definido' || normalized === 'nao informado';
+    };
+    const isGenericRoomLabel = (value: any) => {
+      const normalized = normalizeAssignmentText(value);
+      return !normalized || normalized === 'outro' || normalized === 'nao informado' || normalized === 'sala nao informada' || normalized === 'sala nao identificada';
+    };
+    const firstMeaningfulValue = (sources: any[], keys: string[], isGeneric: (value: any) => boolean) => {
+      for (const source of sources) {
+        for (const key of keys) {
+          const value = source?.[key];
+          if (value !== null && value !== undefined && !isGeneric(value)) return value;
+        }
+      }
+      return undefined;
+    };
+    const mergeAppointmentClinicalAssignment = (existing: any, incoming: any) => {
+      const clearProfessional = incoming?.clearProfessional === true || incoming?.clear_professional === true;
+      const clearRoom = incoming?.clearRoom === true || incoming?.clear_room === true;
+      const professionalId = clearProfessional ? null : firstMeaningfulValue(
+        [incoming, existing],
+        ['therapist_id', 'therapistId', 'professional_id', 'professionalId', 'responsible_professional_id', 'responsibleProfessionalId'],
+        (value) => !sanitizeString(value, 120)
+      );
+      const professionalName = clearProfessional ? null : firstMeaningfulValue(
+        [incoming, existing],
+        ['therapist_name', 'therapistName', 'professional_name', 'professionalName', 'professional', 'responsible_professional_name', 'responsibleProfessionalName'],
+        isGenericProfessionalLabel
+      );
+      const roomId = clearRoom ? null : firstMeaningfulValue(
+        [incoming, existing],
+        ['room_id', 'roomId', 'room'],
+        isGenericRoomLabel
+      );
+      const roomName = clearRoom ? null : firstMeaningfulValue(
+        [incoming, existing],
+        ['room_name', 'roomName', 'roomDisplayName'],
+        isGenericRoomLabel
+      );
+      const merged = { ...(existing || {}), ...(incoming || {}) };
+      if (professionalId !== undefined) {
+        merged.therapist_id = professionalId;
+        merged.therapistId = professionalId;
+        merged.professional_id = professionalId;
+        merged.professionalId = professionalId;
+        merged.responsible_professional_id = professionalId;
+        merged.responsibleProfessionalId = professionalId;
+      }
+      if (professionalName !== undefined) {
+        merged.therapist_name = professionalName;
+        merged.therapistName = professionalName;
+        merged.professional = professionalName;
+        merged.responsible_professional_name = professionalName;
+        merged.responsibleProfessionalName = professionalName;
+      }
+      if (roomId !== undefined) {
+        merged.room_id = roomId;
+        merged.roomId = roomId;
+        merged.room = roomId;
+      }
+      if (roomName !== undefined) {
+        merged.room_name = roomName;
+        merged.roomName = roomName;
+        merged.roomDisplayName = roomName;
+      }
+      if (roomId || roomName) {
+        merged.location_type = 'clinica';
+        merged.locationType = 'clinica';
+        merged.location = 'clinica';
+      }
+      return merged;
+    };
     const byId = new Map<string, any>();
     for (const appointment of Array.isArray(existingAppointments) ? existingAppointments : []) {
       const id = sanitizeString(appointment?.id, 120);
@@ -16679,7 +16758,7 @@ async function startServer() {
     }
     for (const appointment of Array.isArray(persistedAppointments) ? persistedAppointments : []) {
       const id = sanitizeString(appointment?.id, 120);
-      if (id) byId.set(id, { ...(byId.get(id) || {}), ...appointment });
+      if (id) byId.set(id, mergeAppointmentClinicalAssignment(byId.get(id) || {}, appointment));
     }
     return Array.from(byId.values()).sort((left, right) => {
       const byDate = appointmentSortValue(left) - appointmentSortValue(right);
