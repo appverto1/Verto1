@@ -8,7 +8,9 @@ import {
 import { evaluateAppointmentClosureReadiness } from '../src/services/closureReadinessEngine';
 import {
   formatCentsForBrazilianInput,
+  getPayerSetupReadiness,
   getBillingConfigurationCompletionState,
+  isLegacyOrInvalidTussCodeForSetup,
   isBillingConfigurationOperational,
   parseBrazilianCurrencyToCents,
 } from '../src/components/PayerRequirementsPanel';
@@ -600,6 +602,101 @@ test('delete-impact TUSS normaliza erros e usa schemas especificos por entidade 
   assert.match(routeSlice, /buildTussDeleteImpact\(organizationId, entityType, entityId, requestId\)/);
   assert.match(routeSlice, /TUSS_DELETE_BLOCKED_BY_DEPENDENCIES/);
   assert.match(routeSlice, /Este cadastro já foi utilizado e não pode ser excluído/);
+});
+
+test('esteira de convenio novo recomenda identificacao e marca configuracao incompleta', () => {
+  const readiness = getPayerSetupReadiness({
+    payer: { name: 'Amil', payerType: 'INSURANCE', status: 'ACTIVE' },
+    tissProfile: {},
+  });
+  assert.equal(readiness.currentStepKey, 'identification');
+  assert.equal(readiness.overallStatus, 'incomplete');
+  assert.equal(readiness.steps.find((step) => step.key === 'identification')?.status, 'incomplete');
+});
+
+test('esteira avanca para dados da clinica quando identificacao esta pronta', () => {
+  const readiness = getPayerSetupReadiness({
+    payer: { name: 'Amil', payerType: 'INSURANCE', status: 'ACTIVE' },
+    tissProfile: { ansRegistration: '326305' },
+  });
+  assert.equal(readiness.steps.find((step) => step.key === 'identification')?.status, 'ready');
+  assert.equal(readiness.currentStepKey, 'clinic');
+  assert.match(readiness.blockers.join(' '), /c[oó]digo da cl[ií]nica|clinica/i);
+});
+
+test('esteira bloqueia TUSS legado ou inadequado antes de XML', () => {
+  assert.equal(isLegacyOrInvalidTussCodeForSetup('10101012'), true);
+  assert.equal(isLegacyOrInvalidTussCodeForSetup('TESTE-ABA'), true);
+  const readiness = getPayerSetupReadiness({
+    payer: { name: 'Amil', payerType: 'INSURANCE', status: 'ACTIVE' },
+    tissProfile: { ansRegistration: '326305', contractedProviderCode: 'PREST-1' },
+    activeProcedureCount: 1,
+    activeMappingCount: 1,
+    activePriceCount: 1,
+    activeBillingConfigurationCount: 1,
+    hasLegacyTussCode: true,
+  });
+  assert.equal(readiness.steps.find((step) => step.key === 'tuss')?.status, 'blocked');
+  assert.notEqual(readiness.overallStatus, 'ready_for_xml');
+});
+
+test('esteira pede valor negociado quando DePara existe sem preco vigente', () => {
+  const readiness = getPayerSetupReadiness({
+    payer: { name: 'Amil', payerType: 'INSURANCE', status: 'ACTIVE' },
+    tissProfile: { ansRegistration: '326305', contractedProviderCode: 'PREST-1' },
+    activeProcedureCount: 1,
+    activeMappingCount: 1,
+    activePriceCount: 0,
+    pendingPriceCount: 1,
+  });
+  assert.equal(readiness.steps.find((step) => step.key === 'prices')?.status, 'incomplete');
+  assert.match(readiness.steps.find((step) => step.key === 'prices')?.blockingReasons?.join(' ') || '', /valor negociado/i);
+});
+
+test('esteira marca anti-glosa nao revisada como alerta sem bloquear geracao futura', () => {
+  const readiness = getPayerSetupReadiness({
+    payer: { name: 'Amil', payerType: 'INSURANCE', status: 'ACTIVE' },
+    tissProfile: { ansRegistration: '326305', contractedProviderCode: 'PREST-1' },
+    activeProcedureCount: 1,
+    activeMappingCount: 1,
+    activePriceCount: 1,
+    activeBillingConfigurationCount: 1,
+    antiGlosaProfileNeedsReview: true,
+  });
+  const antiGlosaStep = readiness.steps.find((step) => step.key === 'anti_glosa');
+  assert.equal(antiGlosaStep?.status, 'warning');
+  assert.equal(antiGlosaStep?.canContinue, true);
+  assert.equal(readiness.overallStatus, 'ready_for_xml_with_warning');
+});
+
+test('esteira reconhece convenio ja configurado e teste de pre-guia aprovado como pronto para XML', () => {
+  const readiness = getPayerSetupReadiness({
+    payer: { name: 'Amil', payerType: 'INSURANCE', status: 'ACTIVE' },
+    tissProfile: {
+      ansRegistration: '326305',
+      contractedProviderCode: 'PREST-1',
+      antiGlosaReviewed: true,
+    },
+    activeProcedureCount: 1,
+    activeMappingCount: 1,
+    activePriceCount: 1,
+    activeBillingConfigurationCount: 1,
+    preGuideTestStatus: 'ready',
+  });
+  assert.equal(readiness.overallStatus, 'ready_for_xml');
+  assert.equal(readiness.currentStepKey, 'ready');
+});
+
+test('UI de convenios exibe esteira guiada e mantem modo avancado existente', () => {
+  assert.match(payerPanelCode, /Esteira de configura/);
+  assert.match(payerPanelCode, /Configurar conv.nio at. ficar pronto para XML/s);
+  assert.match(payerPanelCode, /Identifica..o da operadora/s);
+  assert.match(payerPanelCode, /Dados da cl.nica no conv.nio/s);
+  assert.match(payerPanelCode, /TUSS e De\/Para/);
+  assert.match(payerPanelCode, /Valores negociados/);
+  assert.match(payerPanelCode, /Exig.ncias anti-glosa/s);
+  assert.match(payerPanelCode, /Teste de Pr.-guia/s);
+  assert.match(payerPanelCode, /Editar avan.ado/s);
 });
 
 let passed = 0;

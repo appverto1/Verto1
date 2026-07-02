@@ -187,6 +187,42 @@ type PayerTissForm = {
   specificRules: string;
 };
 
+export type PayerSetupStepStatus = "not_started" | "incomplete" | "ready" | "warning" | "blocked";
+
+export type PayerSetupStepKey =
+  | "identification"
+  | "clinic"
+  | "tiss"
+  | "procedures"
+  | "tuss"
+  | "prices"
+  | "authorizations"
+  | "anti_glosa"
+  | "test"
+  | "ready";
+
+export type PayerSetupStep = {
+  key: PayerSetupStepKey;
+  title: string;
+  shortDescription: string;
+  status: PayerSetupStepStatus;
+  requiredActions: string[];
+  nextActionLabel: string;
+  canContinue: boolean;
+  blockingReasons?: string[];
+  warnings?: string[];
+};
+
+export type PayerSetupReadiness = {
+  overallStatus: "not_started" | "incomplete" | "ready_for_pre_guide" | "ready_for_xml_with_warning" | "ready_for_xml";
+  overallLabel: string;
+  currentStepKey: PayerSetupStepKey;
+  nextActionLabel: string;
+  steps: PayerSetupStep[];
+  blockers: string[];
+  warnings: string[];
+};
+
 const payerTypeLabels: Record<string, string> = {
   INSURANCE: "Convênio",
   PRIVATE: "Particular",
@@ -560,6 +596,224 @@ const payerTissMissing = (payer: Payer | null, form: PayerTissForm) => {
   return missing;
 };
 
+const setupStatusLabel: Record<PayerSetupStepStatus, string> = {
+  not_started: "Pendente",
+  incomplete: "Incompleta",
+  ready: "Pronta",
+  warning: "Alerta",
+  blocked: "Bloqueada",
+};
+
+const legacyTussCodesForSetup = new Set(["10101012", "TESTE-ABA"]);
+
+export const isLegacyOrInvalidTussCodeForSetup = (code: unknown) => (
+  legacyTussCodesForSetup.has(String(code ?? "").trim().toUpperCase())
+);
+
+const makeSetupStep = (step: PayerSetupStep): PayerSetupStep => step;
+
+export function getPayerSetupReadiness(input: {
+  payer?: { name?: string | null; payerType?: string | null; status?: string | null } | null;
+  tissProfile?: Partial<PayerTissForm> | null;
+  tissMissing?: string[];
+  officialCodeIssues?: string[];
+  activeProcedureCount?: number;
+  activeMappingCount?: number;
+  activePriceCount?: number;
+  activeBillingConfigurationCount?: number;
+  pendingPriceCount?: number;
+  hasLegacyTussCode?: boolean;
+  antiGlosaProfileNeedsReview?: boolean;
+  payerTissMessage?: string;
+  preGuideTestStatus?: "not_tested" | "ready" | "warning" | "blocked";
+  preGuideTestIssues?: string[];
+}): PayerSetupReadiness {
+  const payer = input.payer || null;
+  const tiss = input.tissProfile || {};
+  const isInsurance = String(payer?.payerType || "").toUpperCase() === "INSURANCE";
+  const hasPayer = Boolean(payer && isFilled(payer.name));
+  const hasProviderCode = isFilled(tiss.contractedProviderCode) || isFilled(tiss.operatorProviderCode) || isFilled(tiss.operatorCode);
+  const hasAns = !isInsurance || isFilled(tiss.ansRegistration);
+  const officialIssues = input.officialCodeIssues || [];
+  const tissMissing = input.tissMissing || [];
+  const activeProcedureCount = Number(input.activeProcedureCount || 0);
+  const activeMappingCount = Number(input.activeMappingCount || 0);
+  const activePriceCount = Number(input.activePriceCount || 0);
+  const activeBillingConfigurationCount = Number(input.activeBillingConfigurationCount || 0);
+  const pendingPriceCount = Number(input.pendingPriceCount || 0);
+  const hasLegacyTussCode = Boolean(input.hasLegacyTussCode);
+  const antiGlosaProfileNeedsReview = Boolean(input.antiGlosaProfileNeedsReview);
+  const preGuideTestStatus = input.preGuideTestStatus || "not_tested";
+  const preGuideTestIssues = input.preGuideTestIssues || [];
+
+  const steps: PayerSetupStep[] = [
+    makeSetupStep({
+      key: "identification",
+      title: "Identificação da operadora",
+      shortDescription: "Informe quem é a operadora e o registro ANS usado no XML TISS.",
+      status: !hasPayer ? "not_started" : hasAns ? "ready" : "incomplete",
+      requiredActions: hasPayer && hasAns ? ["Operadora identificada."] : ["Informe nome da operadora e Registro ANS."],
+      nextActionLabel: hasPayer && hasAns ? "Avançar para dados da clínica" : "Completar identificação",
+      canContinue: hasPayer && hasAns,
+      blockingReasons: hasPayer && hasAns ? [] : ["Registro ANS e nome da operadora são necessários para convênio TISS."],
+    }),
+    makeSetupStep({
+      key: "clinic",
+      title: "Dados da clínica no convênio",
+      shortDescription: "Informe como a clínica é reconhecida por esta operadora.",
+      status: !hasPayer ? "not_started" : hasProviderCode ? "ready" : "incomplete",
+      requiredActions: hasProviderCode ? ["Código da clínica/prestador informado."] : ["Informe o código da clínica ou prestador na operadora."],
+      nextActionLabel: hasProviderCode ? "Avançar para padrão TISS" : "Informar código da clínica",
+      canContinue: hasProviderCode,
+      blockingReasons: hasProviderCode ? [] : ["Informe o código da clínica na operadora."],
+    }),
+    makeSetupStep({
+      key: "tiss",
+      title: "Padrão TISS",
+      shortDescription: "O Verto usa o padrão oficial 04.03.00 para gerar o XML.",
+      status: officialIssues.length > 0 ? "blocked" : tissMissing.length > 0 ? "warning" : "ready",
+      requiredActions: officialIssues.length > 0
+        ? officialIssues
+        : ["Comunicação 04.03.00, estrutura 202511 e TUSS 202605 serão usados pelo gerador oficial."],
+      nextActionLabel: officialIssues.length > 0 ? "Revisar códigos oficiais" : "Confirmar padrão TISS",
+      canContinue: officialIssues.length === 0,
+      blockingReasons: officialIssues,
+      warnings: tissMissing,
+    }),
+    makeSetupStep({
+      key: "procedures",
+      title: "Procedimentos atendidos",
+      shortDescription: "Selecione quais procedimentos internos podem ser faturados por convênio.",
+      status: activeProcedureCount > 0 ? "ready" : "incomplete",
+      requiredActions: activeProcedureCount > 0 ? [`${activeProcedureCount} procedimento(s) interno(s) ativo(s).`] : ["Cadastre pelo menos um procedimento faturável."],
+      nextActionLabel: activeProcedureCount > 0 ? "Avançar para TUSS/DePara" : "Adicionar procedimento",
+      canContinue: activeProcedureCount > 0,
+      blockingReasons: activeProcedureCount > 0 ? [] : ["Cadastre um procedimento interno faturável."],
+    }),
+    makeSetupStep({
+      key: "tuss",
+      title: "TUSS e De/Para",
+      shortDescription: "Vincule cada procedimento ao código TUSS aceito pela operadora.",
+      status: hasLegacyTussCode ? "blocked" : activeMappingCount > 0 ? "ready" : "incomplete",
+      requiredActions: hasLegacyTussCode
+        ? ["Troque códigos legados/inadequados por TUSS oficial ativo."]
+        : activeMappingCount > 0 ? [`${activeMappingCount} De/Para ativo(s).`] : ["Crie De/Para entre procedimento interno e código TUSS oficial."],
+      nextActionLabel: hasLegacyTussCode ? "Corrigir TUSS legado" : activeMappingCount > 0 ? "Avançar para valores" : "Criar De/Para",
+      canContinue: activeMappingCount > 0 && !hasLegacyTussCode,
+      blockingReasons: hasLegacyTussCode ? ["Código TUSS legado/inadequado para XML."] : activeMappingCount > 0 ? [] : ["De/Para TUSS ativo é obrigatório para Pré-guia/XML."],
+    }),
+    makeSetupStep({
+      key: "prices",
+      title: "Valores negociados",
+      shortDescription: "Cadastre o valor contratado por procedimento para calcular Pré-guia e XML.",
+      status: activePriceCount > 0 ? "ready" : pendingPriceCount > 0 ? "incomplete" : "incomplete",
+      requiredActions: activePriceCount > 0 ? [`${activePriceCount} valor(es) negociado(s) vigente(s).`] : ["Cadastre valor negociado positivo e ativo."],
+      nextActionLabel: activePriceCount > 0 ? "Avançar para autorizações" : "Cadastrar valor negociado",
+      canContinue: activePriceCount > 0,
+      blockingReasons: activePriceCount > 0 ? [] : ["Cadastre valor negociado vigente."],
+    }),
+    makeSetupStep({
+      key: "authorizations",
+      title: "Autorizações dos pacientes",
+      shortDescription: "Acompanhe autorizações, senhas, guias, validade e saldo por paciente.",
+      status: "ready",
+      requiredActions: ["Cadastre autorizações quando o paciente e a sessão exigirem convênio/autorização."],
+      nextActionLabel: "Abrir autorizações dos pacientes",
+      canContinue: true,
+      warnings: [],
+    }),
+    makeSetupStep({
+      key: "anti_glosa",
+      title: "Exigências anti-glosa",
+      shortDescription: "Revise regras operacionais da operadora antes do XML.",
+      status: antiGlosaProfileNeedsReview ? "warning" : "ready",
+      requiredActions: antiGlosaProfileNeedsReview
+        ? ["Revise exigências reais da operadora ou confirme que não há exigências adicionais."]
+        : ["Perfil anti-glosa revisado ou confirmado sem exigências adicionais."],
+      nextActionLabel: antiGlosaProfileNeedsReview ? "Revisar anti-glosa" : "Avançar para teste",
+      canContinue: true,
+      warnings: antiGlosaProfileNeedsReview ? ["Pré-guias terão risco médio até revisar."] : [],
+    }),
+    makeSetupStep({
+      key: "test",
+      title: "Teste de Pré-guia",
+      shortDescription: "Valide uma sessão real ou de teste antes de gerar XML em lote.",
+      status: preGuideTestStatus === "blocked"
+        ? "blocked"
+        : preGuideTestStatus === "ready"
+          ? "ready"
+          : preGuideTestStatus === "warning"
+            ? "warning"
+            : activeBillingConfigurationCount > 0 ? "warning" : "incomplete",
+      requiredActions: preGuideTestStatus === "ready"
+        ? ["Teste de Pré-guia aprovado."]
+        : ["Revalide uma Pré-guia de teste e confira TISS técnico e anti-glosa."],
+      nextActionLabel: preGuideTestStatus === "ready" ? "Ver resumo final" : "Ir para Pré-Guias TISS",
+      canContinue: preGuideTestStatus !== "blocked",
+      blockingReasons: preGuideTestStatus === "blocked" ? preGuideTestIssues : [],
+      warnings: preGuideTestStatus === "ready" ? [] : preGuideTestIssues.length > 0 ? preGuideTestIssues : ["Teste ainda não executado nesta esteira."],
+    }),
+  ];
+
+  const criticalSteps = steps.filter((step) => !["authorizations", "anti_glosa", "test"].includes(step.key));
+  const blockers = steps.flatMap((step) => step.blockingReasons || []);
+  const warnings = [
+    ...steps.flatMap((step) => step.warnings || []),
+    input.payerTissMessage ? "Pré-guias afetadas podem precisar de revalidação." : "",
+  ].filter(Boolean) as string[];
+  const hasCriticalIncomplete = criticalSteps.some((step) => ["not_started", "incomplete", "blocked"].includes(step.status));
+  const coreReadyForPreGuide = !hasCriticalIncomplete && activeBillingConfigurationCount > 0;
+  let overallStatus: PayerSetupReadiness["overallStatus"] = "incomplete";
+  let overallLabel = "Configuração incompleta";
+
+  if (!hasPayer) {
+    overallStatus = "not_started";
+    overallLabel = "Configuração não iniciada";
+  } else if (coreReadyForPreGuide && !antiGlosaProfileNeedsReview && preGuideTestStatus === "ready") {
+    overallStatus = "ready_for_xml";
+    overallLabel = "Pronto para XML";
+  } else if (coreReadyForPreGuide && (antiGlosaProfileNeedsReview || preGuideTestStatus !== "ready" || warnings.length > 0)) {
+    overallStatus = "ready_for_xml_with_warning";
+    overallLabel = "Pronto para XML com alerta";
+  } else if (coreReadyForPreGuide) {
+    overallStatus = "ready_for_pre_guide";
+    overallLabel = "Pronto para Pré-guia";
+  }
+
+  const finalStatus: PayerSetupStepStatus = overallStatus === "ready_for_xml"
+    ? "ready"
+    : overallStatus === "ready_for_xml_with_warning" || overallStatus === "ready_for_pre_guide"
+      ? "warning"
+      : blockers.length > 0 ? "blocked" : "incomplete";
+
+  const finalStep = makeSetupStep({
+    key: "ready",
+    title: "Pronto para XML",
+    shortDescription: "Resumo final da configuração do convênio.",
+    status: finalStatus,
+    requiredActions: overallStatus === "ready_for_xml"
+      ? ["Convênio configurado para XML oficial."]
+      : ["Conclua os bloqueios e revise alertas antes de gerar XML em lote."],
+    nextActionLabel: overallStatus === "ready_for_xml" ? "Ir para Pré-Guias TISS" : "Concluir etapas pendentes",
+    canContinue: finalStatus !== "blocked",
+    blockingReasons: finalStatus === "blocked" ? blockers : [],
+    warnings: finalStatus === "warning" ? warnings : [],
+  });
+
+  const allSteps = [...steps, finalStep];
+  const current = allSteps.find((step) => step.status !== "ready") || finalStep;
+
+  return {
+    overallStatus,
+    overallLabel,
+    currentStepKey: current.key,
+    nextActionLabel: current.nextActionLabel,
+    steps: allSteps,
+    blockers,
+    warnings,
+  };
+}
+
 type PayerRequirementsPanelProps = {
   initialSection?: "convenios" | "tuss" | "prices" | "rules";
   navigationIntentKey?: number;
@@ -615,6 +869,7 @@ export function PayerRequirementsPanel({
   const [payerTissForm, setPayerTissForm] = useState<PayerTissForm>(defaultPayerTissForm);
   const [payerTissLoading, setPayerTissLoading] = useState(false);
   const [payerTissMessage, setPayerTissMessage] = useState("");
+  const [activeSetupStepKey, setActiveSetupStepKey] = useState<PayerSetupStepKey>("identification");
   const payerRulesSectionRef = useRef<HTMLDivElement | null>(null);
   const payerTussSectionRef = useRef<HTMLDivElement | null>(null);
   const payerPricesSectionRef = useRef<HTMLDivElement | null>(null);
@@ -745,6 +1000,64 @@ export function PayerRequirementsPanel({
     () => billingConfigurations.filter((configuration) => configuration.completionState === "inactive"),
     [billingConfigurations],
   );
+  const selectedPayerLegacyTussCodes = useMemo(
+    () => billingConfigurations
+      .map((configuration) => configuration.code?.code || configuration.mapping?.tussCode || configuration.price?.tussCode || "")
+      .filter(isLegacyOrInvalidTussCodeForSetup),
+    [billingConfigurations],
+  );
+  const payerSetupReadiness = useMemo(
+    () => getPayerSetupReadiness({
+      payer: selectedPayer,
+      tissProfile: payerTissForm,
+      tissMissing: selectedPayerTissMissing,
+      officialCodeIssues: selectedPayerOfficialCodeIssues,
+      activeProcedureCount: activeTussServices.length,
+      activeMappingCount: selectedPayerMappingCount,
+      activePriceCount: selectedPayerPriceCount,
+      activeBillingConfigurationCount: activeBillingConfigurations.length,
+      pendingPriceCount: pendingBillingConfigurations.length,
+      hasLegacyTussCode: selectedPayerLegacyTussCodes.length > 0,
+      antiGlosaProfileNeedsReview,
+      payerTissMessage,
+    }),
+    [
+      activeBillingConfigurations.length,
+      activeTussServices.length,
+      antiGlosaProfileNeedsReview,
+      payerTissForm,
+      payerTissMessage,
+      pendingBillingConfigurations.length,
+      selectedPayer,
+      selectedPayerLegacyTussCodes.length,
+      selectedPayerMappingCount,
+      selectedPayerOfficialCodeIssues,
+      selectedPayerPriceCount,
+      selectedPayerTissMissing,
+    ],
+  );
+  const activeSetupStep = payerSetupReadiness.steps.find((step) => step.key === activeSetupStepKey) || payerSetupReadiness.steps[0];
+  const activeSetupStepIndex = Math.max(0, payerSetupReadiness.steps.findIndex((step) => step.key === activeSetupStep.key));
+
+  const scrollToSetupAdvanced = (stepKey: PayerSetupStepKey) => {
+    const target = ["procedures", "tuss"].includes(stepKey)
+      ? payerTussSectionRef.current
+      : stepKey === "prices"
+        ? payerPricesSectionRef.current
+        : ["identification", "clinic", "tiss", "anti_glosa"].includes(stepKey)
+          ? payerRulesSectionRef.current
+          : null;
+    if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  const selectSetupStep = (stepKey: PayerSetupStepKey) => {
+    setActiveSetupStepKey(stepKey);
+  };
+
+  const goToAdjacentSetupStep = (direction: -1 | 1) => {
+    const next = payerSetupReadiness.steps[activeSetupStepIndex + direction];
+    if (next) selectSetupStep(next.key);
+  };
 
   const openSupportForm = (target: "service" | "code") => {
     setSupportFormTarget(target);
@@ -940,6 +1253,10 @@ export function PayerRequirementsPanel({
     void loadPayerTissProfile(selectedPayerId);
   }, [selectedPayerId]);
 
+  useEffect(() => {
+    setActiveSetupStepKey(payerSetupReadiness.currentStepKey);
+  }, [payerSetupReadiness.currentStepKey, selectedPayerId]);
+
   const createPayer = async () => {
     if (payerForm.name.trim().length < 2) return;
     setSaving(true);
@@ -1048,7 +1365,7 @@ export function PayerRequirementsPanel({
   };
 
   const savePayerTissProfile = async () => {
-    if (!selectedPayerId || !isInsurancePayer(selectedPayer)) return;
+    if (!selectedPayerId || !isInsurancePayer(selectedPayer)) return false;
     setSaving(true);
     setError("");
     setPayerTissMessage("");
@@ -1748,6 +2065,149 @@ export function PayerRequirementsPanel({
     );
   };
 
+  const setupStatusClass = (status: PayerSetupStepStatus) => {
+    if (status === "ready") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    if (status === "warning") return "border-amber-200 bg-amber-50 text-amber-800";
+    if (status === "blocked") return "border-rose-200 bg-rose-50 text-rose-700";
+    if (status === "not_started") return "border-slate-200 bg-slate-50 text-slate-500";
+    return "border-amber-200 bg-white text-amber-700";
+  };
+
+  const advancedActionLabel = (stepKey: PayerSetupStepKey) => {
+    if (stepKey === "procedures") return "Editar procedimentos";
+    if (stepKey === "tuss") return "Editar De/Para TUSS";
+    if (stepKey === "prices") return "Editar valores";
+    if (stepKey === "anti_glosa") return "Editar anti-glosa";
+    if (["identification", "clinic", "tiss"].includes(stepKey)) return "Editar dados TISS";
+    if (stepKey === "authorizations") return "Abrir Autorizações dos pacientes no menu";
+    if (stepKey === "test" || stepKey === "ready") return "Abrir Pré-Guias TISS no menu";
+    return "Editar avançado";
+  };
+
+  const setupStepGuidance = (stepKey: PayerSetupStepKey) => {
+    if (stepKey === "tiss") {
+      return `Comunicação ${OFFICIAL_TISS_XML_STRATEGY.communicationVersion} · Estrutura ${OFFICIAL_TISS_XML_STRATEGY.contentStructureVersion} · TUSS ${OFFICIAL_TISS_XML_STRATEGY.tussVersion}.`;
+    }
+    if (stepKey === "authorizations") {
+      return "Esta etapa orienta o cadastro; a validação de autorização acontece na Pré-guia da sessão.";
+    }
+    if (stepKey === "test") {
+      return "Use uma sessão real ou de teste para confirmar TISS técnico, De/Para, preço, autorização e anti-glosa antes do lote.";
+    }
+    if (stepKey === "ready") {
+      return "Quando o teste de Pré-guia estiver aprovado, siga para Pré-Guias TISS e gere o XML como antes.";
+    }
+    return "Agora faça isso e depois avance para a próxima etapa.";
+  };
+
+  const renderPayerSetupWizard = () => (
+    <div className="mt-4 rounded-3xl border border-indigo-100 bg-gradient-to-br from-white to-indigo-50/40 p-4">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-widest text-indigo-500">Esteira de configuração</p>
+          <h3 className="mt-1 text-lg font-semibold text-slate-950">Configurar convênio até ficar pronto para XML</h3>
+          <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">
+            Siga uma sequência única para sair do cadastro da operadora até o teste de Pré-guia, sem alternar entre topo, meio e fim da tela.
+          </p>
+        </div>
+        <span className={`inline-flex w-fit rounded-full border px-3 py-1.5 text-xs font-semibold ${setupStatusClass(activeSetupStep.status)}`}>
+          {payerSetupReadiness.overallLabel}
+        </span>
+      </div>
+
+      <div className="mt-4 grid gap-3 xl:grid-cols-[minmax(220px,0.85fr)_minmax(0,1.4fr)]">
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
+          {payerSetupReadiness.steps.map((step, index) => (
+            <button
+              key={step.key}
+              type="button"
+              onClick={() => selectSetupStep(step.key)}
+              className={`flex items-start gap-3 rounded-2xl border px-3 py-3 text-left transition ${
+                step.key === activeSetupStep.key
+                  ? "border-indigo-200 bg-white shadow-sm"
+                  : "border-transparent bg-white/60 hover:bg-white"
+              }`}
+            >
+              <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs font-semibold ${setupStatusClass(step.status)}`}>
+                {index + 1}
+              </span>
+              <span className="min-w-0">
+                <span className="block truncate text-sm font-semibold text-slate-900">{step.title}</span>
+                <span className={`mt-1 inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${setupStatusClass(step.status)}`}>
+                  {setupStatusLabel[step.status]}
+                </span>
+              </span>
+            </button>
+          ))}
+        </div>
+
+        <div className="rounded-2xl border border-white bg-white p-4 shadow-sm">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-widest text-slate-400">Etapa {activeSetupStepIndex + 1}</p>
+              <h4 className="mt-1 text-base font-semibold text-slate-950">{activeSetupStep.title}</h4>
+              <p className="mt-1 text-sm leading-6 text-slate-600">{activeSetupStep.shortDescription}</p>
+            </div>
+            <span className={`inline-flex w-fit rounded-full border px-2.5 py-1 text-xs font-semibold ${setupStatusClass(activeSetupStep.status)}`}>
+              {setupStatusLabel[activeSetupStep.status]}
+            </span>
+          </div>
+
+          <div className="mt-4 rounded-2xl border border-slate-100 bg-slate-50/70 p-3">
+            <p className="text-xs font-semibold uppercase tracking-widest text-slate-400">Agora faça isso</p>
+            <ul className="mt-2 space-y-1 text-sm leading-6 text-slate-700">
+              {activeSetupStep.requiredActions.map((action) => (
+                <li key={action} className="flex gap-2">
+                  <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-[#7a32fc]" />
+                  <span>{action}</span>
+                </li>
+              ))}
+            </ul>
+            <p className="mt-3 text-xs leading-5 text-slate-500">{setupStepGuidance(activeSetupStep.key)}</p>
+          </div>
+
+          {activeSetupStep.blockingReasons && activeSetupStep.blockingReasons.length > 0 ? (
+            <div className="mt-3 rounded-2xl border border-rose-100 bg-rose-50 px-3 py-2 text-sm text-rose-800">
+              {activeSetupStep.blockingReasons.join(" ")}
+            </div>
+          ) : null}
+
+          {activeSetupStep.warnings && activeSetupStep.warnings.length > 0 ? (
+            <div className="mt-3 rounded-2xl border border-amber-100 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              {activeSetupStep.warnings.join(" ")}
+            </div>
+          ) : null}
+
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => goToAdjacentSetupStep(-1)}
+              disabled={activeSetupStepIndex === 0}
+              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 disabled:opacity-40"
+            >
+              Voltar
+            </button>
+            <button
+              type="button"
+              onClick={() => goToAdjacentSetupStep(1)}
+              disabled={activeSetupStepIndex >= payerSetupReadiness.steps.length - 1}
+              className="rounded-xl bg-[#7a32fc] px-3 py-2 text-xs font-semibold text-white disabled:opacity-40"
+            >
+              Continuar
+            </button>
+            <button
+              type="button"
+              onClick={() => scrollToSetupAdvanced(activeSetupStep.key)}
+              className="rounded-xl border border-indigo-100 bg-indigo-50 px-3 py-2 text-xs font-semibold text-indigo-700"
+            >
+              {advancedActionLabel(activeSetupStep.key)}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <section className="rounded-3xl border border-slate-100 bg-slate-50/80 p-5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -1857,6 +2317,8 @@ export function PayerRequirementsPanel({
             </div>
             <ClipboardCheck size={18} className="text-slate-400" />
           </div>
+
+          {selectedPayer ? renderPayerSetupWizard() : null}
 
           <div ref={payerRulesSectionRef} className="mt-4 rounded-2xl border border-indigo-100 bg-indigo-50/50 p-3">
             <div className="flex flex-wrap items-start justify-between gap-3">
