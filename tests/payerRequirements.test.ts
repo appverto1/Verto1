@@ -699,6 +699,33 @@ test('UI de convenios exibe esteira guiada e mantem modo avancado existente', ()
   assert.match(payerPanelCode, /Editar avan.ado/s);
 });
 
+test('esteira executavel embute campos praticos de DePara, valores e anti-glosa', () => {
+  assert.match(payerPanelCode, /activeSetupStep\.key === "tuss"[\s\S]*Procedimento interno para c.digo TUSS/s);
+  assert.match(payerPanelCode, /activeSetupStep\.key === "tuss"[\s\S]*C.digo TUSS[\s\S]*Descri..o TUSS/s);
+  assert.match(payerPanelCode, /Salvar De\/Para e continuar/);
+  assert.match(payerPanelCode, /activeSetupStep\.key === "prices"[\s\S]*Valores negociados[\s\S]*Valor negociado[\s\S]*Vig.ncia inicial[\s\S]*Vig.ncia final opcional/s);
+  assert.match(payerPanelCode, /Salvar valores e continuar/);
+  assert.match(payerPanelCode, /Informe o valor contratado para este procedimento/);
+  assert.match(payerPanelCode, /activeSetupStep\.key === "anti_glosa"[\s\S]*Revisei as exig.ncias anti-glosa desta operadora/s);
+  assert.match(payerPanelCode, /Editar avan.ado em tabela de valores/s);
+  assert.match(payerPanelCode, /Editar avan.ado em De\/Para TUSS/s);
+});
+
+test('botao padrao de salvar confirma no proprio botao e usa cor principal', () => {
+  assert.match(payerPanelCode, /function SaveActionButton/);
+  assert.match(payerPanelCode, /data-save-action-button/);
+  assert.match(payerPanelCode, /data-save-action-status=\{status\}/);
+  assert.match(payerPanelCode, /min-h-\[42px\]/);
+  assert.match(payerPanelCode, /bg-\[#7a32fc\]/);
+  assert.match(payerPanelCode, /Salvando\.\.\./);
+  assert.match(payerPanelCode, /status: SaveActionStatus/);
+  assert.match(payerPanelCode, /status === "loading"/);
+  assert.match(payerPanelCode, /status === "success"/);
+  assert.match(payerPanelCode, /status === "error"/);
+  assert.match(payerPanelCode, /`✓ \$\{successLabel\}`/);
+  assert.match(payerPanelCode, /<SaveActionButton[\s\S]*idleLabel=\{setupPrimaryLabel\(activeSetupStep\.key\)\}/);
+});
+
 let passed = 0;
 for (const entry of tests) {
   try {

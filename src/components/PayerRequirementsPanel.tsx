@@ -517,6 +517,45 @@ function SectionFeedbackMessage({ feedback }: { feedback?: SectionFeedback }) {
   );
 }
 
+type SaveActionStatus = "idle" | "loading" | "success" | "error";
+
+function SaveActionButton({
+  status,
+  idleLabel,
+  loadingLabel = "Salvando...",
+  successLabel = "Salvo",
+  errorLabel = "Não foi possível salvar",
+  disabled,
+  onClick,
+}: {
+  status: SaveActionStatus;
+  idleLabel: string;
+  loadingLabel?: string;
+  successLabel?: string;
+  errorLabel?: string;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  const isLoading = status === "loading";
+  const isSuccess = status === "success";
+  const isError = status === "error";
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled || isLoading}
+      data-save-action-button
+      data-save-action-status={status}
+      className={`inline-flex min-h-[42px] items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold text-white transition disabled:cursor-not-allowed disabled:opacity-50 ${
+        isError ? "bg-rose-600 hover:bg-rose-700" : "bg-[#7a32fc] hover:bg-[#6827df]"
+      }`}
+    >
+      {isLoading ? <Loader2 size={16} className="animate-spin" /> : isSuccess ? <CheckCircle2 size={16} /> : isError ? <AlertTriangle size={16} /> : <Save size={16} />}
+      {isLoading ? loadingLabel : isSuccess ? `✓ ${successLabel}` : isError ? errorLabel : idleLabel}
+    </button>
+  );
+}
+
 const hasOption = (options: Array<{ code: string }>, value: string) => options.some((option) => option.code === value);
 const legacyInvalidLabel = (value: string) => value ? `Legado inválido: ${value}` : "Selecione";
 
@@ -830,6 +869,7 @@ export function PayerRequirementsPanel({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [payerForm, setPayerForm] = useState({ name: "", payerType: "INSURANCE", notes: "" });
+  const [payerSetupIdentityForm, setPayerSetupIdentityForm] = useState({ name: "", status: "ACTIVE", notes: "" });
   const [requirementForm, setRequirementForm] = useState(defaultRequirement());
   const [tussServices, setTussServices] = useState<TussService[]>([]);
   const [tussCodes, setTussCodes] = useState<TussCode[]>([]);
@@ -870,6 +910,7 @@ export function PayerRequirementsPanel({
   const [payerTissLoading, setPayerTissLoading] = useState(false);
   const [payerTissMessage, setPayerTissMessage] = useState("");
   const [activeSetupStepKey, setActiveSetupStepKey] = useState<PayerSetupStepKey>("identification");
+  const [setupActionStatus, setSetupActionStatus] = useState<Record<string, SaveActionStatus>>({});
   const payerRulesSectionRef = useRef<HTMLDivElement | null>(null);
   const payerTussSectionRef = useRef<HTMLDivElement | null>(null);
   const payerPricesSectionRef = useRef<HTMLDivElement | null>(null);
@@ -1057,6 +1098,59 @@ export function PayerRequirementsPanel({
   const goToAdjacentSetupStep = (direction: -1 | 1) => {
     const next = payerSetupReadiness.steps[activeSetupStepIndex + direction];
     if (next) selectSetupStep(next.key);
+  };
+
+  const setupStepStatus = (stepKey: PayerSetupStepKey): SaveActionStatus => setupActionStatus[stepKey] || "idle";
+
+  const setSetupStepStatus = (stepKey: PayerSetupStepKey, status: SaveActionStatus) => {
+    setSetupActionStatus((current) => ({ ...current, [stepKey]: status }));
+  };
+
+  const canAdvanceSetupStep = (stepKey: PayerSetupStepKey) => {
+    if (stepKey === "identification") return Boolean(selectedPayerId && isInsurancePayer(selectedPayer) && payerSetupIdentityForm.name.trim().length >= 2 && payerTissForm.ansRegistration.trim());
+    if (stepKey === "clinic") return Boolean(selectedPayerId && isInsurancePayer(selectedPayer) && (payerTissForm.contractedProviderCode.trim() || payerTissForm.operatorProviderCode.trim() || payerTissForm.operatorCode.trim()));
+    if (stepKey === "tiss") return Boolean(selectedPayerId && isInsurancePayer(selectedPayer) && payerTissForm.tissVersion === OFFICIAL_TISS_XML_STRATEGY.communicationVersion);
+    if (stepKey === "anti_glosa") return Boolean(selectedPayerId && isInsurancePayer(selectedPayer));
+    if (stepKey === "procedures") return activeTussServices.length > 0 || tussServiceForm.name.trim().length >= 2;
+    if (stepKey === "tuss") return selectedPayerMappingCount > 0 || Boolean(tussMappingForm.serviceCatalogId && tussMappingForm.tussCodeId);
+    if (stepKey === "prices") return selectedPayerPriceCount > 0 || Boolean(procedurePriceForm.serviceCatalogId && procedurePriceForm.amountCents);
+    return true;
+  };
+
+  const runSetupPrimaryAction = async () => {
+    const stepKey = activeSetupStep.key;
+    setSetupStepStatus(stepKey, "loading");
+    let saved = true;
+    try {
+      if (["identification", "clinic", "tiss", "anti_glosa"].includes(stepKey)) {
+        if (stepKey === "identification") {
+          const payerSaved = await saveSetupPayerIdentity();
+          const tissSaved = await savePayerTissProfile();
+          saved = payerSaved && tissSaved === true;
+        } else {
+          saved = await savePayerTissProfile() === true;
+        }
+      } else if (stepKey === "procedures" && tussServiceForm.name.trim().length >= 2) {
+        saved = await createTussService() === true;
+      } else if (stepKey === "tuss" && tussMappingForm.serviceCatalogId && tussMappingForm.tussCodeId) {
+        saved = await createTussMapping() === true;
+      } else if (stepKey === "prices" && procedurePriceForm.serviceCatalogId && procedurePriceForm.amountCents) {
+        saved = await saveProcedurePrice() === true;
+      }
+      if (!saved) {
+        setSetupStepStatus(stepKey, "error");
+        window.setTimeout(() => setSetupStepStatus(stepKey, "idle"), 2600);
+        return;
+      }
+      setSetupStepStatus(stepKey, "success");
+      window.setTimeout(() => {
+        setSetupStepStatus(stepKey, "idle");
+        goToAdjacentSetupStep(1);
+      }, 900);
+    } catch {
+      setSetupStepStatus(stepKey, "error");
+      window.setTimeout(() => setSetupStepStatus(stepKey, "idle"), 2600);
+    }
   };
 
   const openSupportForm = (target: "service" | "code") => {
@@ -1257,6 +1351,14 @@ export function PayerRequirementsPanel({
     setActiveSetupStepKey(payerSetupReadiness.currentStepKey);
   }, [payerSetupReadiness.currentStepKey, selectedPayerId]);
 
+  useEffect(() => {
+    setPayerSetupIdentityForm({
+      name: selectedPayer?.name || "",
+      status: selectedPayer?.status || "ACTIVE",
+      notes: selectedPayer?.notes || "",
+    });
+  }, [selectedPayer]);
+
   const createPayer = async () => {
     if (payerForm.name.trim().length < 2) return;
     setSaving(true);
@@ -1274,6 +1376,29 @@ export function PayerRequirementsPanel({
       setPayerForm({ name: "", payerType: "INSURANCE", notes: "" });
       await loadPayers();
       if (result.data?.id) setSelectedPayerId(result.data.id);
+      return true;
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const saveSetupPayerIdentity = async () => {
+    if (!selectedPayerId || payerSetupIdentityForm.name.trim().length < 2) return false;
+    setSaving(true);
+    setError("");
+    try {
+      const result = await dataService.updatePayer(selectedPayerId, {
+        name: payerSetupIdentityForm.name.trim(),
+        payerType: selectedPayer?.payerType || "INSURANCE",
+        status: payerSetupIdentityForm.status,
+        notes: payerSetupIdentityForm.notes.trim(),
+      });
+      if (!result?.success || !result.data) {
+        setError(result?.error || "Não foi possível salvar a identificação do convênio agora.");
+        return false;
+      }
+      setPayers((current) => current.map((payer) => payer.id === selectedPayerId ? { ...payer, ...(result.data || {}) } : payer));
+      return true;
     } finally {
       setSaving(false);
     }
@@ -1340,6 +1465,13 @@ export function PayerRequirementsPanel({
     setPayerTissForm((current) => ({ ...current, [key]: value }));
   };
 
+  const setOfficialTissVersionConfirmation = (checked: boolean) => {
+    setPayerTissForm((current) => ({
+      ...current,
+      tissVersion: checked ? OFFICIAL_TISS_XML_STRATEGY.communicationVersion : "",
+    }));
+  };
+
   const updateAntiGlosaRequirement = (key: keyof PayerTissForm, value: boolean) => {
     setPayerTissForm((current) => ({
       ...current,
@@ -1374,12 +1506,13 @@ export function PayerRequirementsPanel({
       const result = await dataService.updatePayerTissProfile(selectedPayerId, payerTissForm);
       if (!result?.success) {
         setError(result?.error || "Não foi possível salvar os dados TISS da operadora agora.");
-        return;
+        return false;
       }
       setPayerTissForm(normalizePayerTissProfile(result.data || payerTissForm));
       setPayerTissMessage(savingWithoutAntiGlosaReview
         ? "Perfil anti-glosa ainda não revisado. As Pré-guias dessa operadora aparecerão com risco médio até a revisão ser confirmada."
         : "Configuração do convênio salva. Pré-guias deste pagador foram marcadas para revalidação.");
+      return true;
     } finally {
       setSaving(false);
     }
@@ -1414,13 +1547,13 @@ export function PayerRequirementsPanel({
   };
 
   const createTussService = async () => {
-    if (tussServiceForm.name.trim().length < 2) return;
+    if (tussServiceForm.name.trim().length < 2) return false;
     const wasEditing = Boolean(editingTussServiceId);
     const rawDefaultAmount = String(tussServiceForm.defaultAmountCents || "").trim();
     const defaultAmountCents = rawDefaultAmount ? parseBrazilianCurrencyToCents(rawDefaultAmount) : null;
     if (rawDefaultAmount && defaultAmountCents === null) {
       setError("Informe o valor padrão em reais, com no máximo duas casas decimais.");
-      return;
+      return false;
     }
     setSaving(true);
     setError("");
@@ -1443,7 +1576,7 @@ export function PayerRequirementsPanel({
         : await dataService.createTussService(payload);
       if (!result?.success || !result.data) {
         setError(result?.error || "Não foi possível salvar o procedimento agora.");
-        return;
+        return false;
       }
       upsertTussServiceInState(result.data);
       setTussServiceForm(defaultTussServiceForm);
@@ -1452,6 +1585,7 @@ export function PayerRequirementsPanel({
       setTussActionInfo(wasEditing ? "Procedimento atualizado." : "Procedimento criado.");
       setLocalFeedback("service", { status: "success", message: "Alterações salvas com sucesso." });
       finishEditingSection("service");
+      return true;
     } finally {
       setSaving(false);
     }
@@ -1494,7 +1628,7 @@ export function PayerRequirementsPanel({
   };
 
   const createTussMapping = async () => {
-    if (!selectedPayerId || !tussMappingForm.serviceCatalogId) return;
+    if (!selectedPayerId || !tussMappingForm.serviceCatalogId) return false;
     const wasEditing = Boolean(editingTussMappingId);
     setSaving(true);
     setError("");
@@ -1519,7 +1653,7 @@ export function PayerRequirementsPanel({
         : await dataService.createPayerTussMapping(payload);
       if (!result?.success || !result.data) {
         setError(result?.error || "Não foi possível salvar o mapeamento agora.");
-        return;
+        return false;
       }
       upsertTussMappingInState(result.data);
       setTussMappingForm((current) => ({
@@ -1531,19 +1665,20 @@ export function PayerRequirementsPanel({
       setTussActionInfo(wasEditing ? "Mapeamento atualizado." : "Mapeamento criado.");
       setLocalFeedback("mapping", { status: "success", message: "Alterações salvas com sucesso." });
       finishEditingSection("mapping");
+      return true;
     } finally {
       setSaving(false);
     }
   };
 
   const saveProcedurePrice = async () => {
-    if (procedurePriceSaveInFlightRef.current || !selectedPayerId || !procedurePriceForm.serviceCatalogId) return;
+    if (procedurePriceSaveInFlightRef.current || !selectedPayerId || !procedurePriceForm.serviceCatalogId) return false;
     const wasEditing = Boolean(editingProcedurePriceId);
     const amountCents = parseBrazilianCurrencyToCents(procedurePriceForm.amountCents);
     if (amountCents === null) {
       setProcedurePriceAmountError("Informe um valor válido em reais, com no máximo duas casas decimais.");
       procedurePriceAmountInputRef.current?.focus();
-      return;
+      return false;
     }
     procedurePriceSaveInFlightRef.current = true;
     setSaving(true);
@@ -1562,7 +1697,7 @@ export function PayerRequirementsPanel({
         : await dataService.createPayerProcedurePrice(payload);
       if (!result?.success || !result.data) {
         setError(result?.error || "Não foi possível salvar o valor negociado agora.");
-        return;
+        return false;
       }
       upsertProcedurePriceInState(result.data);
       setProcedurePriceForm((current) => ({
@@ -1574,6 +1709,7 @@ export function PayerRequirementsPanel({
       setTussActionInfo(wasEditing ? "Valor negociado atualizado." : "Valor negociado cadastrado.");
       setLocalFeedback("price", { status: "success", message: "Alterações salvas com sucesso." });
       finishEditingSection("price");
+      return true;
     } finally {
       setSaving(false);
       procedurePriceSaveInFlightRef.current = false;
@@ -2074,11 +2210,11 @@ export function PayerRequirementsPanel({
   };
 
   const advancedActionLabel = (stepKey: PayerSetupStepKey) => {
-    if (stepKey === "procedures") return "Editar procedimentos";
-    if (stepKey === "tuss") return "Editar De/Para TUSS";
-    if (stepKey === "prices") return "Editar valores";
-    if (stepKey === "anti_glosa") return "Editar anti-glosa";
-    if (["identification", "clinic", "tiss"].includes(stepKey)) return "Editar dados TISS";
+    if (stepKey === "procedures") return "Editar avançado em procedimentos";
+    if (stepKey === "tuss") return "Editar avançado em De/Para TUSS";
+    if (stepKey === "prices") return "Editar avançado em tabela de valores";
+    if (stepKey === "anti_glosa") return "Editar avançado em anti-glosa";
+    if (["identification", "clinic", "tiss"].includes(stepKey)) return "Editar avançado em dados TISS";
     if (stepKey === "authorizations") return "Abrir Autorizações dos pacientes no menu";
     if (stepKey === "test" || stepKey === "ready") return "Abrir Pré-Guias TISS no menu";
     return "Editar avançado";
@@ -2098,6 +2234,331 @@ export function PayerRequirementsPanel({
       return "Quando o teste de Pré-guia estiver aprovado, siga para Pré-Guias TISS e gere o XML como antes.";
     }
     return "Agora faça isso e depois avance para a próxima etapa.";
+  };
+
+  const setupPrimaryLabel = (stepKey: PayerSetupStepKey) => {
+    if (stepKey === "identification") return "Salvar identificação e continuar";
+    if (stepKey === "clinic") return "Salvar dados da clínica e continuar";
+    if (stepKey === "tiss") return "Confirmar padrão TISS e continuar";
+    if (stepKey === "procedures") return "Salvar procedimentos e continuar";
+    if (stepKey === "tuss") return "Salvar De/Para e continuar";
+    if (stepKey === "prices") return "Salvar valores e continuar";
+    if (stepKey === "authorizations") return "Continuar sem autorização agora";
+    if (stepKey === "anti_glosa") return "Salvar anti-glosa e continuar";
+    if (stepKey === "test") return "Concluir configuração";
+    if (stepKey === "ready") return "Ir para Pré-Guias TISS";
+    return "Salvar e continuar";
+  };
+
+  const setupFieldClass = "mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100";
+
+  const renderSetupCheckbox = (checked: boolean, onChange: (checked: boolean) => void, label: string, helper?: string) => (
+    <label className="flex gap-3 rounded-xl border border-slate-100 bg-white px-3 py-2 text-sm text-slate-700">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+        className="mt-1 h-4 w-4 rounded border-slate-300 text-[#7a32fc] focus:ring-[#7a32fc]"
+      />
+      <span>
+        <span className="block font-medium text-slate-800">{label}</span>
+        {helper ? <span className="mt-1 block text-xs leading-5 text-slate-500">{helper}</span> : null}
+      </span>
+    </label>
+  );
+
+  const renderSetupStepFields = () => {
+    const selectedMappingTussCode = tussCodes.find((code) => code.id === tussMappingForm.tussCodeId) || null;
+    const selectedPriceTussCode = tussCodes.find((code) => code.id === procedurePriceForm.tussCodeId) || null;
+    const selectedPriceMapping = tussMappings.find((mapping) => mapping.id === procedurePriceForm.payerTussMappingId) || null;
+    const selectedProcedure = tussServices.find((service) => service.id === tussMappingForm.serviceCatalogId || service.id === procedurePriceForm.serviceCatalogId) || null;
+    const selectedCodeText = selectedMappingTussCode?.code || "";
+    const hasLegacySetupCode = isLegacyOrInvalidTussCodeForSetup(selectedCodeText);
+
+    if (activeSetupStep.key === "identification") {
+      return (
+        <div className="mt-4 rounded-2xl border border-indigo-50 bg-white p-3">
+          <p className="text-xs font-semibold uppercase tracking-widest text-slate-400">Dados principais</p>
+          <div className="mt-3 grid gap-3 md:grid-cols-2">
+            <label className="text-xs font-normal text-slate-700">
+              <span className="mb-1 block">Nome da operadora</span>
+              <input value={payerSetupIdentityForm.name} onChange={(event) => setPayerSetupIdentityForm((current) => ({ ...current, name: event.target.value }))} className={setupFieldClass} placeholder="Ex.: Amil" />
+            </label>
+            <label className="text-xs font-normal text-slate-700">
+              <span className="mb-1 block">Registro ANS</span>
+              <input value={payerTissForm.ansRegistration} onChange={(event) => updatePayerTiss("ansRegistration", event.target.value)} className={setupFieldClass} placeholder="Ex.: 326305" />
+            </label>
+            <label className="text-xs font-normal text-slate-700">
+              <span className="mb-1 block">CNPJ da operadora</span>
+              <input value={payerTissForm.operatorDocumentNumber} onChange={(event) => updatePayerTiss("operatorDocumentNumber", event.target.value)} className={setupFieldClass} placeholder="Opcional" />
+            </label>
+            <label className="text-xs font-normal text-slate-700">
+              <span className="mb-1 block">Status</span>
+              <select value={payerSetupIdentityForm.status} onChange={(event) => setPayerSetupIdentityForm((current) => ({ ...current, status: event.target.value }))} className={setupFieldClass}>
+                <option value="ACTIVE">Ativo</option>
+                <option value="INACTIVE">Inativo</option>
+              </select>
+            </label>
+          </div>
+        </div>
+      );
+    }
+
+    if (activeSetupStep.key === "clinic") {
+      return (
+        <div className="mt-4 rounded-2xl border border-indigo-50 bg-white p-3">
+          <p className="text-xs font-semibold uppercase tracking-widest text-slate-400">Como a clínica aparece para a operadora</p>
+          <div className="mt-3 grid gap-3 md:grid-cols-2">
+            <label className="text-xs font-normal text-slate-700">
+              <span className="mb-1 block">Código da clínica/prestador na operadora</span>
+              <input value={payerTissForm.contractedProviderCode} onChange={(event) => updatePayerTiss("contractedProviderCode", event.target.value)} className={setupFieldClass} placeholder="Informe o código contratual" />
+            </label>
+            <label className="text-xs font-normal text-slate-700">
+              <span className="mb-1 block">Nome contratado</span>
+              <input value={payerTissForm.contractedExecutant} onChange={(event) => updatePayerTiss("contractedExecutant", event.target.value)} className={setupFieldClass} placeholder="Nome da clínica no contrato" />
+            </label>
+            <label className="text-xs font-normal text-slate-700">
+              <span className="mb-1 block">Código operacional na operadora</span>
+              <input value={payerTissForm.operatorProviderCode} onChange={(event) => updatePayerTiss("operatorProviderCode", event.target.value)} className={setupFieldClass} placeholder="Se houver outro código de envio" />
+            </label>
+            <label className="text-xs font-normal text-slate-700">
+              <span className="mb-1 block">Código da operadora</span>
+              <input value={payerTissForm.operatorCode} onChange={(event) => updatePayerTiss("operatorCode", event.target.value)} className={setupFieldClass} placeholder="Código interno/portal, se usado" />
+            </label>
+          </div>
+          <p className="mt-3 text-xs leading-5 text-slate-500">CNES e dados fiscais da clínica continuam no cadastro da clínica; aqui ficam os identificadores específicos deste convênio.</p>
+        </div>
+      );
+    }
+
+    if (activeSetupStep.key === "tiss") {
+      const confirmed = payerTissForm.tissVersion === OFFICIAL_TISS_XML_STRATEGY.communicationVersion;
+      return (
+        <div className="mt-4 rounded-2xl border border-indigo-50 bg-white p-3">
+          <div className="grid gap-3 md:grid-cols-3">
+            <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
+              <p className="text-[11px] uppercase tracking-widest text-slate-400">Comunicação</p>
+              <p className="mt-1 text-sm font-semibold text-slate-900">{OFFICIAL_TISS_XML_STRATEGY.communicationVersion}</p>
+            </div>
+            <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
+              <p className="text-[11px] uppercase tracking-widest text-slate-400">Conteúdo/Estrutura</p>
+              <p className="mt-1 text-sm font-semibold text-slate-900">{OFFICIAL_TISS_XML_STRATEGY.contentStructureVersion}</p>
+            </div>
+            <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
+              <p className="text-[11px] uppercase tracking-widest text-slate-400">TUSS</p>
+              <p className="mt-1 text-sm font-semibold text-slate-900">{OFFICIAL_TISS_XML_STRATEGY.tussVersion}</p>
+            </div>
+          </div>
+          <div className="mt-3">
+            {renderSetupCheckbox(confirmed, setOfficialTissVersionConfirmation, "Confirmei que a operadora aceita este padrão TISS", "A versão é oficial e gerenciada pelo Verto; esta etapa só registra a confirmação operacional.")}
+          </div>
+        </div>
+      );
+    }
+
+    if (activeSetupStep.key === "procedures") {
+      return (
+        <div className="mt-4 rounded-2xl border border-indigo-50 bg-white p-3">
+          <p className="text-xs font-semibold uppercase tracking-widest text-slate-400">Procedimentos atendidos</p>
+          <div className="mt-3 grid gap-2">
+            {activeTussServices.length > 0 ? activeTussServices.slice(0, 5).map((service) => (
+              <label key={service.id} className="flex items-center gap-2 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                <input type="checkbox" checked readOnly className="h-4 w-4 rounded border-slate-300 text-[#7a32fc]" />
+                <span className="min-w-0 truncate">{service.name}</span>
+              </label>
+            )) : (
+              <p className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-sm text-amber-800">Nenhum procedimento faturável ativo encontrado. Cadastre o primeiro procedimento abaixo.</p>
+            )}
+          </div>
+          <div className="mt-3 grid gap-3 md:grid-cols-2">
+            <label className="text-xs font-normal text-slate-700 md:col-span-2">
+              <span className="mb-1 block">Adicionar procedimento ao convênio</span>
+              <input value={tussServiceForm.name} onChange={(event) => setTussServiceForm((current) => ({ ...current, name: event.target.value }))} className={setupFieldClass} placeholder="Ex.: Sessão ABA individual" />
+            </label>
+            <label className="text-xs font-normal text-slate-700">
+              <span className="mb-1 block">Código interno</span>
+              <input value={tussServiceForm.internalCode} onChange={(event) => setTussServiceForm((current) => ({ ...current, internalCode: event.target.value }))} className={setupFieldClass} placeholder="Opcional" />
+            </label>
+            <label className="text-xs font-normal text-slate-700">
+              <span className="mb-1 block">Tipo de serviço</span>
+              <input value={tussServiceForm.serviceType} onChange={(event) => setTussServiceForm((current) => ({ ...current, serviceType: event.target.value }))} className={setupFieldClass} placeholder="Ex.: ABA" />
+            </label>
+          </div>
+        </div>
+      );
+    }
+
+    if (activeSetupStep.key === "tuss") {
+      return (
+        <div className="mt-4 rounded-2xl border border-indigo-50 bg-white p-3">
+          <p className="text-xs font-semibold uppercase tracking-widest text-slate-400">Procedimento interno para código TUSS</p>
+          <div className="mt-3 grid gap-3 md:grid-cols-2">
+            <label className="text-xs font-normal text-slate-700">
+              <span className="mb-1 block">Procedimento interno</span>
+              <select value={tussMappingForm.serviceCatalogId} onChange={(event) => setTussMappingForm((current) => ({ ...current, serviceCatalogId: event.target.value }))} className={setupFieldClass}>
+                <option value="">Selecione</option>
+                {activeTussServices.map((service) => <option key={service.id} value={service.id}>{service.name}</option>)}
+              </select>
+            </label>
+            <label className="text-xs font-normal text-slate-700">
+              <span className="mb-1 block">Código TUSS</span>
+              <select value={tussMappingForm.tussCodeId} onChange={(event) => setTussMappingForm((current) => ({ ...current, tussCodeId: event.target.value }))} className={setupFieldClass}>
+                <option value="">Selecione</option>
+                {activeTussCodes.map((code) => <option key={code.id} value={code.id}>{code.code} - {code.description}</option>)}
+              </select>
+            </label>
+            <label className="text-xs font-normal text-slate-700 md:col-span-2">
+              <span className="mb-1 block">Descrição TUSS</span>
+              <input value={selectedMappingTussCode?.description || ""} readOnly className={`${setupFieldClass} bg-slate-50 text-slate-600`} placeholder="Selecione um código TUSS oficial" />
+            </label>
+            <label className="text-xs font-normal text-slate-700">
+              <span className="mb-1 block">Código no contrato, se diferente</span>
+              <input value={tussMappingForm.contractCode} onChange={(event) => setTussMappingForm((current) => ({ ...current, contractCode: event.target.value }))} className={setupFieldClass} placeholder="Opcional" />
+            </label>
+            <label className="text-xs font-normal text-slate-700">
+              <span className="mb-1 block">Vigência inicial</span>
+              <input type="date" value={tussMappingForm.validFrom} onChange={(event) => setTussMappingForm((current) => ({ ...current, validFrom: event.target.value }))} className={setupFieldClass} />
+            </label>
+          </div>
+          {hasLegacySetupCode ? <div className="mt-3 rounded-xl border border-rose-100 bg-rose-50 px-3 py-2 text-sm text-rose-700">Código TUSS legado/inadequado para XML. Use um código oficial, como 50000470 quando aplicável ao procedimento.</div> : null}
+          {selectedProcedure ? <p className="mt-3 text-xs text-slate-500">Procedimento selecionado: {selectedProcedure.name}</p> : null}
+        </div>
+      );
+    }
+
+    if (activeSetupStep.key === "prices") {
+      return (
+        <div className="mt-4 rounded-2xl border border-indigo-50 bg-white p-3">
+          <p className="text-xs font-semibold uppercase tracking-widest text-slate-400">Valores negociados</p>
+          <div className="mt-3 grid gap-3 md:grid-cols-2">
+            <label className="text-xs font-normal text-slate-700">
+              <span className="mb-1 block">Procedimento</span>
+              <select value={procedurePriceForm.serviceCatalogId} onChange={(event) => setProcedurePriceForm((current) => ({ ...current, serviceCatalogId: event.target.value }))} className={setupFieldClass}>
+                <option value="">Selecione</option>
+                {activeTussServices.map((service) => <option key={service.id} value={service.id}>{service.name}</option>)}
+              </select>
+            </label>
+            <label className="text-xs font-normal text-slate-700">
+              <span className="mb-1 block">TUSS</span>
+              <select value={procedurePriceForm.tussCodeId} onChange={(event) => setProcedurePriceForm((current) => ({ ...current, tussCodeId: event.target.value }))} className={setupFieldClass}>
+                <option value="">Selecione</option>
+                {activeTussCodes.map((code) => <option key={code.id} value={code.id}>{code.code} - {code.description}</option>)}
+              </select>
+            </label>
+            <label className="text-xs font-normal text-slate-700">
+              <span className="mb-1 block">Valor negociado</span>
+              <input inputMode="decimal" value={procedurePriceForm.amountCents} onChange={(event) => { setProcedurePriceForm((current) => ({ ...current, amountCents: event.target.value })); setProcedurePriceAmountError(""); }} className={setupFieldClass} placeholder="Ex.: 120,00" />
+              {procedurePriceAmountError ? <span className="mt-1 block text-[11px] text-rose-600">{procedurePriceAmountError}</span> : null}
+            </label>
+            <label className="text-xs font-normal text-slate-700">
+              <span className="mb-1 block">Vínculo De/Para</span>
+              <select
+                value={procedurePriceForm.payerTussMappingId}
+                onChange={(event) => {
+                  const mapping = tussMappings.find((item) => item.id === event.target.value);
+                  setProcedurePriceForm((current) => ({
+                    ...current,
+                    payerTussMappingId: event.target.value,
+                    serviceCatalogId: mapping?.serviceCatalogId || current.serviceCatalogId,
+                    tussCodeId: mapping?.tussCodeId || current.tussCodeId,
+                  }));
+                }}
+                className={setupFieldClass}
+              >
+                <option value="">Sem vínculo direto</option>
+                {tussMappings.filter((mapping) => mapping.active === true).map((mapping) => <option key={mapping.id} value={mapping.id}>{mapping.serviceName || "Procedimento"} {mapping.tussCode ? `· TUSS ${mapping.tussCode}` : ""}</option>)}
+              </select>
+            </label>
+            <label className="text-xs font-normal text-slate-700">
+              <span className="mb-1 block">Vigência inicial</span>
+              <input type="date" value={procedurePriceForm.validFrom} onChange={(event) => setProcedurePriceForm((current) => ({ ...current, validFrom: event.target.value }))} className={setupFieldClass} />
+            </label>
+            <label className="text-xs font-normal text-slate-700">
+              <span className="mb-1 block">Vigência final opcional</span>
+              <input type="date" value={procedurePriceForm.validUntil} onChange={(event) => setProcedurePriceForm((current) => ({ ...current, validUntil: event.target.value }))} className={setupFieldClass} />
+            </label>
+          </div>
+          <p className="mt-3 text-xs leading-5 text-slate-500">
+            Informe o valor contratado para este procedimento. Esse valor será usado na Pré-guia e no XML.
+            {selectedPriceTussCode ? ` TUSS selecionado: ${selectedPriceTussCode.code}.` : ""}
+            {selectedPriceMapping ? ` De/Para: ${selectedPriceMapping.serviceName || selectedPriceMapping.contractCode || "selecionado"}.` : ""}
+          </p>
+        </div>
+      );
+    }
+
+    if (activeSetupStep.key === "authorizations") {
+      return (
+        <div className="mt-4 rounded-2xl border border-indigo-50 bg-white p-3">
+          <p className="text-xs font-semibold uppercase tracking-widest text-slate-400">Autorizações dos pacientes</p>
+          <div className="mt-3 grid gap-3 md:grid-cols-3">
+            <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2"><p className="text-xs text-slate-500">Vigentes</p><p className="text-lg font-semibold text-slate-900">Ver no painel</p></div>
+            <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2"><p className="text-xs text-slate-500">Vencidas</p><p className="text-lg font-semibold text-slate-900">Revisar</p></div>
+            <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2"><p className="text-xs text-slate-500">Sem autorização</p><p className="text-lg font-semibold text-slate-900">Cadastrar quando houver paciente</p></div>
+          </div>
+          <p className="mt-3 text-sm leading-6 text-slate-600">A autorização conecta paciente, convênio, procedimento, guia, senha, validade e quantidade autorizada. O convênio pode avançar sem cadastrar todas agora; a Pré-guia valida cada sessão.</p>
+        </div>
+      );
+    }
+
+    if (activeSetupStep.key === "anti_glosa") {
+      return (
+        <div className="mt-4 rounded-2xl border border-indigo-50 bg-white p-3">
+          <p className="text-xs font-semibold uppercase tracking-widest text-slate-400">Exigências anti-glosa da operadora</p>
+          <div className="mt-3 grid gap-2">
+            {renderSetupCheckbox(payerTissForm.antiGlosaReviewed, updateAntiGlosaReviewed, "Revisei as exigências anti-glosa desta operadora")}
+            {renderSetupCheckbox(payerTissForm.operatorHasNoAdditionalRequirements, updateOperatorNoAdditionalRequirements, "Esta operadora não possui exigências adicionais além do TISS padrão e do contrato cadastrado")}
+          </div>
+          <div className="mt-3 grid gap-2 md:grid-cols-2">
+            {[
+              ["requiresBeneficiaryCard", "Carteirinha obrigatória"],
+              ["requiresAuthorization", "Autorização obrigatória"],
+              ["requiresAuthorizationPassword", "Senha obrigatória"],
+              ["requiresGuideNumber", "Guia da operadora obrigatória"],
+              ["requiresProviderCode", "Código do prestador obrigatório"],
+              ["requiresCnes", "CNES obrigatório"],
+              ["requiresCbo", "CBOS obrigatório"],
+              ["requiresAdministrativeReport", "Relatório/anexo obrigatório"],
+              ["requiresResponsibleSignature", "Assinatura obrigatória"],
+            ].map(([key, label]) => (
+              <label key={key} className="flex items-center gap-2 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                <input type="checkbox" checked={Boolean((payerTissForm as any)[key])} onChange={(event) => updateAntiGlosaRequirement(key as keyof PayerTissForm, event.target.checked)} className="h-4 w-4 rounded border-slate-300 text-[#7a32fc] focus:ring-[#7a32fc]" />
+                <span>{label}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    if (activeSetupStep.key === "test") {
+      return (
+        <div className="mt-4 rounded-2xl border border-indigo-50 bg-white p-3">
+          <p className="text-xs font-semibold uppercase tracking-widest text-slate-400">Teste de Pré-guia</p>
+          <div className="mt-3 grid gap-3 md:grid-cols-3">
+            <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2"><p className="text-xs text-slate-500">TISS técnico</p><p className="text-sm font-semibold text-slate-900">Validado na Pré-guia</p></div>
+            <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2"><p className="text-xs text-slate-500">Anti-glosa</p><p className="text-sm font-semibold text-slate-900">{antiGlosaProfileNeedsReview ? "Risco médio" : "Pronta"}</p></div>
+            <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2"><p className="text-xs text-slate-500">XML</p><p className="text-sm font-semibold text-slate-900">{antiGlosaProfileNeedsReview ? "Pode gerar com alerta" : "Pode gerar"}</p></div>
+          </div>
+          <p className="mt-3 text-sm leading-6 text-slate-600">Use uma sessão real na aba Pré-Guias TISS para rodar a revalidação. O resultado do teste aparece como TISS técnico, Anti-glosa e decisão XML.</p>
+        </div>
+      );
+    }
+
+    if (activeSetupStep.key === "ready") {
+      return (
+        <div className="mt-4 rounded-2xl border border-emerald-100 bg-emerald-50 p-3">
+          <p className="text-sm font-semibold text-emerald-900">Convênio pronto para seguir para Pré-Guias TISS</p>
+          <div className="mt-3 grid gap-2 md:grid-cols-2">
+            {["Convênio configurado", "Procedimentos prontos", "TUSS/DePara prontos", "Valores prontos", "Anti-glosa revisada", "Teste de Pré-guia aprovado"].map((item) => (
+              <span key={item} className="inline-flex items-center gap-2 rounded-xl bg-white px-3 py-2 text-sm text-emerald-800"><CheckCircle2 size={15} />{item}</span>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    return null;
   };
 
   const renderPayerSetupWizard = () => (
@@ -2166,6 +2627,8 @@ export function PayerRequirementsPanel({
             <p className="mt-3 text-xs leading-5 text-slate-500">{setupStepGuidance(activeSetupStep.key)}</p>
           </div>
 
+          {renderSetupStepFields()}
+
           {activeSetupStep.blockingReasons && activeSetupStep.blockingReasons.length > 0 ? (
             <div className="mt-3 rounded-2xl border border-rose-100 bg-rose-50 px-3 py-2 text-sm text-rose-800">
               {activeSetupStep.blockingReasons.join(" ")}
@@ -2187,14 +2650,13 @@ export function PayerRequirementsPanel({
             >
               Voltar
             </button>
-            <button
-              type="button"
-              onClick={() => goToAdjacentSetupStep(1)}
-              disabled={activeSetupStepIndex >= payerSetupReadiness.steps.length - 1}
-              className="rounded-xl bg-[#7a32fc] px-3 py-2 text-xs font-semibold text-white disabled:opacity-40"
-            >
-              Continuar
-            </button>
+            <SaveActionButton
+              status={setupStepStatus(activeSetupStep.key)}
+              idleLabel={setupPrimaryLabel(activeSetupStep.key)}
+              successLabel="Salvo"
+              disabled={saving || !canAdvanceSetupStep(activeSetupStep.key)}
+              onClick={() => void runSetupPrimaryAction()}
+            />
             <button
               type="button"
               onClick={() => scrollToSetupAdvanced(activeSetupStep.key)}
