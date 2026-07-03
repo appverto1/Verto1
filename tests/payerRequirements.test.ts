@@ -625,6 +625,7 @@ test('esteira avanca para dados da clinica quando identificacao esta pronta', ()
 });
 
 test('esteira bloqueia TUSS legado ou inadequado antes de XML', () => {
+  assert.equal(isLegacyOrInvalidTussCodeForSetup('50000470'), false);
   assert.equal(isLegacyOrInvalidTussCodeForSetup('10101012'), true);
   assert.equal(isLegacyOrInvalidTussCodeForSetup('TESTE-ABA'), true);
   const readiness = getPayerSetupReadiness({
@@ -638,6 +639,8 @@ test('esteira bloqueia TUSS legado ou inadequado antes de XML', () => {
   });
   assert.equal(readiness.steps.find((step) => step.key === 'tuss')?.status, 'blocked');
   assert.notEqual(readiness.overallStatus, 'ready_for_xml');
+  assert.match(payerPanelCode, /getOfficialTussCodeForSetupValidation/);
+  assert.match(payerPanelCode, /selectedPayerLegacyTussCodes[\s\S]*getOfficialTussCodeForSetupValidation/);
 });
 
 test('esteira pede valor negociado quando DePara existe sem preco vigente', () => {
@@ -759,8 +762,13 @@ test('etapa 9 da esteira executa teste de pre-guia dentro do fluxo', () => {
   assert.match(payerPanelCode, /dataService\.getPatients\(\)/);
   assert.match(payerPanelCode, /dataService\.getCalendarEvents\(\{ from: range\.from, to: range\.to, view: "month", limit: 120 \}\)/);
   assert.match(payerPanelCode, /dataService\.revalidateTissPreGuide\(setupAppointmentId\)/);
-  assert.match(payerPanelCode, /setupEventProfessionalName\(selectedSetupAppointment\)/);
-  assert.match(payerPanelCode, /setupEventRoomName\(selectedSetupAppointment\)/);
+  assert.match(payerPanelCode, /setupEventResolvedProfessionalName\(selectedSetupAppointment\)/);
+  assert.match(payerPanelCode, /setupEventResolvedRoomName\(selectedSetupAppointment\)/);
+  assert.match(payerPanelCode, /buildSetupPreGuideEligibilityReasons/);
+  assert.match(payerPanelCode, /Sess.es encontradas, mas n.o eleg.veis/);
+  assert.match(payerPanelCode, /Sess.o est. com outro pagador/);
+  assert.match(payerPanelCode, /Sess.o sem guia ou autoriza..o vigente vinculada/);
+  assert.match(payerPanelCode, /Nenhuma sess.o encontrada para este paciente e per.odo/);
   assert.doesNotMatch(payerPanelCode, /Use uma sess.o real na aba Pr.-Guias TISS para rodar a revalida/s);
 });
 

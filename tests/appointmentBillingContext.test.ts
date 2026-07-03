@@ -446,14 +446,21 @@ test('GET de billing-context resolve sugestao pelo payerId solicitado sem salvar
 
 test('billing-context expõe autorizações disponíveis por pagador sem reaproveitar outro convênio', () => {
   assert.match(serverCode, /async function listAppointmentTissAuthorizationOptionsForBilling/);
+  assert.match(serverCode, /app\.get\('\/api\/appointments\/billing-suggestion'/);
+  assert.match(dataServiceCode, /async getAppointmentBillingSuggestion/);
   assert.match(serverCode, /availableTissAuthorizations/);
   assert.match(serverCode, /availabilityGroup/);
   assert.match(serverCode, /no_balance/);
   assert.match(serverCode, /other_service/);
+  assert.match(serverCode, /expectedTussCode/);
+  assert.match(serverCode, /sameTussCode/);
   assert.match(serverCode, /\.eq\('payer_id', payerId\)/);
   assert.match(calendarCode, /Autorizacoes disponiveis|Autoriza/);
   assert.match(calendarCode, /applyAvailableTissAuthorizationToBillingForm/);
   assert.match(calendarCode, /canUseForAppointment/);
+  assert.match(coordinatorCode, /Autoriza..es dispon.veis/);
+  assert.match(coordinatorCode, /Usar esta autoriza..o/);
+  assert.match(coordinatorCode, /Selecionar n.o consome saldo/);
 });
 
 test('detalhe da consulta mostra validação financeira guiada', () => {

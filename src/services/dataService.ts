@@ -2786,6 +2786,32 @@ export const dataService = {
     }
   },
 
+  async getAppointmentBillingSuggestion(options: any = {}) {
+    const endpoint = endpointWithQuery('/api/appointments/billing-suggestion', {
+      patientId: options.patientId,
+      payerId: options.payerId,
+      payerName: options.payerName,
+      serviceType: options.serviceType,
+      procedureCode: options.procedureCode,
+      appointmentDate: options.appointmentDate
+    });
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getAppointmentBillingSuggestion',
+        operation: 'detail',
+        table: 'patient_payer_authorizations,patient_financial_plans',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: true
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, data: null, error: 'Não foi possível carregar autorizações disponíveis agora.' };
+    }
+  },
+
   async updateAppointmentBillingContext(appointmentId: string, payload: any = {}) {
     const endpoint = `/api/appointments/${encodeURIComponent(String(appointmentId))}/billing-context`;
     try {

@@ -8866,12 +8866,26 @@ async function listAppointmentTissAuthorizationOptionsForBilling(params: {
     const hydrated = await hydratePatientPayerAuthorizationsForAppointmentTissBilling(organizationId, Array.isArray(data) ? data : []);
     const expectedServiceCatalogId = sanitizeString(serviceCatalog?.id, 120);
     const expectedMappingId = sanitizeString(mapping?.id, 120);
+    const expectedTussCodeId = sanitizeString(mapping?.tuss_code_id || mapping?.tussCodeId, 120);
+    const expectedTussCodeRow = isUuid(expectedTussCodeId)
+      ? await fetchTussCodeByIdForAppointmentTissBilling(organizationId, expectedTussCodeId)
+      : null;
+    const expectedTussCode = sanitizeString(expectedTussCodeRow?.code || mapping?.tussCode || mapping?.procedure_tuss_code, 80).toUpperCase();
     return hydrated.map((authorization: any) => {
       const serialized = serializeAppointmentTissAuthorizationSuggestion(authorization, referenceDateKey);
       if (!serialized) return null;
       const active = authorization?.active !== false && !['inactive', 'inativo', 'cancelled', 'canceled'].includes(sanitizeString(authorization?.status, 40).toLowerCase());
-      const sameService = !expectedServiceCatalogId || sanitizeString(authorization?.serviceCatalogId, 120) === expectedServiceCatalogId;
-      const sameMapping = !expectedMappingId || sanitizeString(authorization?.payerTussMappingId, 120) === expectedMappingId;
+      const authorizationServiceCatalogId = sanitizeString(authorization?.serviceCatalogId, 120);
+      const authorizationMappingId = sanitizeString(authorization?.payerTussMappingId, 120);
+      const authorizationTussCodeId = sanitizeString(authorization?.tussCodeId, 120);
+      const authorizationTussCode = sanitizeString(authorization?.tussCode || authorization?.procedureTussCode, 80).toUpperCase();
+      const sameService = !expectedServiceCatalogId || !authorizationServiceCatalogId || authorizationServiceCatalogId === expectedServiceCatalogId;
+      const sameMapping = !expectedMappingId || !authorizationMappingId || authorizationMappingId === expectedMappingId;
+      const sameTussCode =
+        (!expectedTussCodeId && !expectedTussCode) ||
+        (!authorizationTussCodeId && !authorizationTussCode) ||
+        (expectedTussCodeId && authorizationTussCodeId === expectedTussCodeId) ||
+        (expectedTussCode && authorizationTussCode === expectedTussCode);
       const dateStatus = getPatientTissAuthorizationVisualState(authorization, referenceDateKey);
       let availabilityGroup = 'usable';
       let availabilityLabel = 'Vigente e utilizavel';
@@ -8891,10 +8905,10 @@ async function listAppointmentTissAuthorizationOptionsForBilling(params: {
         availabilityGroup = 'no_balance';
         availabilityLabel = 'Sem saldo';
         unavailableReason = 'Quantidade autorizada ja foi consumida.';
-      } else if (!sameService || !sameMapping) {
+      } else if (!sameService || !sameMapping || !sameTussCode) {
         availabilityGroup = 'other_service';
         availabilityLabel = 'Outro servico/procedimento';
-        unavailableReason = 'Autorizacao pertence a outro servico, procedimento ou De/Para.';
+        unavailableReason = 'Autorizacao pertence a outro servico, procedimento, TUSS ou De/Para.';
       }
       return cleanObject({
         ...serialized,
@@ -30896,6 +30910,77 @@ async function startServer() {
     };
   };
 
+  const normalizePortalNotificationType = (value: unknown) =>
+    sanitizeString(value, 80).replace(/_(24h|12h)$/i, '') || 'appointment_reminder';
+
+  const isPatientAppointmentNotificationActionable = (appointment: any, notification?: any) => {
+    if (normalizePortalNotificationType(notification?.type) !== 'appointment_reminder') return true;
+    if (!appointment?.id) return false;
+    const source = parseCalendarSourcePayload(appointment?.source_payload || appointment?.sourcePayload);
+    const appointmentStatus = normalizeOperationalAppointmentStatus(appointment?.status || appointment?.appointment_status || source?.status);
+    const responseStatus = normalizeOperationalAppointmentStatus(
+      appointment?.patient_confirmation_status ||
+        appointment?.patientConfirmationStatus ||
+        appointment?.patient_response ||
+        appointment?.patientResponse ||
+        source?.patient_confirmation_status ||
+        source?.patientConfirmationStatus ||
+        source?.patient_response ||
+        source?.patientResponse
+    );
+    const nonActionableStatuses = new Set([
+      'CONFIRMED',
+      'CANCELLED',
+      'COMPLETED',
+      'NO_SHOW',
+      'RESCHEDULE_REQUESTED',
+      'CANCEL_REQUESTED',
+      'DECLINED',
+      'REFUSED'
+    ]);
+    if (nonActionableStatuses.has(appointmentStatus) || nonActionableStatuses.has(responseStatus)) return false;
+    if (
+      appointment?.patient_responded_at ||
+      appointment?.patientRespondedAt ||
+      appointment?.patient_confirmation_at ||
+      appointment?.patientConfirmationAt ||
+      appointment?.confirmed_at ||
+      appointment?.confirmedAt ||
+      appointment?.cancel_requested_at ||
+      appointment?.cancelRequestedAt ||
+      appointment?.reschedule_requested_at ||
+      appointment?.rescheduleRequestedAt
+    ) {
+      return false;
+    }
+    const scheduledAt = sanitizeString(
+      appointment?.scheduled_start_at ||
+        appointment?.scheduledStartAt ||
+        appointment?.scheduled_at ||
+        appointment?.scheduledAt ||
+        source?.scheduled_start_at ||
+        source?.scheduledStartAt ||
+        source?.scheduled_at ||
+        source?.scheduledAt,
+      120
+    );
+    const parsedStart = scheduledAt ? new Date(scheduledAt) : null;
+    if (parsedStart && !Number.isNaN(parsedStart.getTime())) {
+      const durationMinutes = Number(
+        appointment?.scheduled_duration_minutes ||
+          appointment?.scheduledDurationMinutes ||
+          appointment?.duration_minutes ||
+          appointment?.durationMinutes ||
+          source?.duration_minutes ||
+          source?.durationMinutes ||
+          90
+      ) || 90;
+      const actionWindowEndedAt = parsedStart.getTime() + Math.max(30, durationMinutes) * 60_000;
+      if (actionWindowEndedAt < Date.now()) return false;
+    }
+    return true;
+  };
+
   const queryPortalAppointmentsWithSchemaFallback = async (
     buildQuery: (selectColumns: string) => PromiseLike<any>,
     stage: string
@@ -31002,23 +31087,21 @@ async function startServer() {
         patientId: string;
         patientName: string;
         scheduledAt: string;
+        appointment: any;
       }>();
       const notificationAppointmentIds = Array.from(new Set(
         rows.map((row: any) => sanitizeString(row?.appointment_id, 120)).filter((id: string) => isUuid(id))
       ));
       if (notificationAppointmentIds.length > 0) {
-        let appointmentResult = await supabase
-          .from('appointments')
-          .select('id,clinic_id,patient_id,patient_email,scheduled_at,scheduled_start_at,source_payload')
-          .in('id', notificationAppointmentIds)
-          .limit(Math.min(notificationAppointmentIds.length, 200));
-        if (appointmentResult.error && extractMissingColumnName(appointmentResult.error) === 'source_payload') {
-          appointmentResult = await supabase
-            .from('appointments')
-            .select('id,clinic_id,patient_id,patient_email,scheduled_at,scheduled_start_at')
-            .in('id', notificationAppointmentIds)
-            .limit(Math.min(notificationAppointmentIds.length, 200));
-        }
+        const appointmentResult = await queryPortalAppointmentsWithSchemaFallback(
+          (selectColumns) =>
+            supabase
+              .from('appointments')
+              .select(selectColumns)
+              .in('id', notificationAppointmentIds)
+              .limit(Math.min(notificationAppointmentIds.length, 200)),
+          'portal_notifications'
+        );
         if (!appointmentResult.error) {
           for (const appointment of Array.isArray(appointmentResult.data) ? appointmentResult.data : []) {
             const id = sanitizeString(appointment?.id, 120);
@@ -31028,7 +31111,8 @@ async function startServer() {
               clinicId: sanitizeString(appointment?.clinic_id || source?.clinic_id || source?.clinicId, 120),
               patientId: sanitizeString(appointment?.patient_id || source?.patient_id || source?.patientId, 120),
               patientName: sanitizeString(source?.patientName || source?.patient_name || source?.name, 160),
-              scheduledAt: sanitizeString(appointment?.scheduled_at || appointment?.scheduled_start_at || source?.scheduledAt || source?.scheduled_at, 120)
+              scheduledAt: sanitizeString(appointment?.scheduled_at || appointment?.scheduled_start_at || source?.scheduledAt || source?.scheduled_at, 120),
+              appointment
             });
           }
         } else if (!extractMissingColumnName(appointmentResult.error)) {
@@ -31131,6 +31215,12 @@ async function startServer() {
         const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
         const appointmentId = sanitizeString(row?.appointment_id, 120);
         const appointmentContext = appointmentContextById.get(appointmentId);
+        if (
+          normalizePortalNotificationType(row?.type) === 'appointment_reminder' &&
+          (!appointmentContext?.appointment || !isPatientAppointmentNotificationActionable(appointmentContext.appointment, row))
+        ) {
+          continue;
+        }
         const patientId = sanitizeString(row?.patient_id || metadata.patientId || metadata.patient_id || appointmentContext?.patientId, 120);
         const clinicId = sanitizeString(
           row?.clinic_id ||
@@ -43375,6 +43465,30 @@ async function startServer() {
       });
     } catch (error: any) {
       console.warn('[TussReady] authorization TUSS sync failed:', error?.message || String(error));
+      return res.status(500).json(payerSafeError(500));
+    }
+  });
+
+  app.get('/api/appointments/billing-suggestion', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.query?.patientId || req.query?.patient_id, 120);
+      if (!isUuid(patientId)) return res.status(400).json(payerSafeError(400));
+      if (!(await canAccessPatientInCurrentClinic(patientId, req.session.user))) {
+        return res.status(404).json(payerSafeError(404));
+      }
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      const suggestion = await resolveAppointmentBillingSuggestion({
+        organizationId,
+        patientId,
+        serviceType: req.query?.serviceType || req.query?.service_type || null,
+        payerId: req.query?.payerId || req.query?.payer_id || null,
+        payerName: req.query?.payerName || req.query?.payer_name || null,
+        appointmentDate: req.query?.appointmentDate || req.query?.appointment_date || null,
+        procedureCode: req.query?.procedureCode || req.query?.procedure_code || null
+      });
+      return res.json({ success: true, data: suggestion ? { ...suggestion, suggestion } : { suggestion: null } });
+    } catch (error: any) {
+      console.warn('[PayerRequirements] billing suggestion get failed:', error?.message || String(error));
       return res.status(500).json(payerSafeError(500));
     }
   });

@@ -76,7 +76,12 @@ test('portal notifications derive clinic branding from linked patient when notif
   );
   assert.match(notificationRouteSlice, /patientClinicIdsById/);
   assert.match(notificationRouteSlice, /appointmentContextById/);
-  assert.match(notificationRouteSlice, /\.select\('id,clinic_id,patient_id,patient_email,scheduled_at,scheduled_start_at,source_payload'\)/);
+  assert.match(notificationRouteSlice, /queryPortalAppointmentsWithSchemaFallback/);
+  assert.match(notificationRouteSlice, /\.select\(selectColumns\)/);
+  assert.match(notificationRouteSlice, /isPatientAppointmentNotificationActionable/);
+  assert.match(serverCode, /patient_confirmation_status/);
+  assert.match(serverCode, /RESCHEDULE_REQUESTED/);
+  assert.match(serverCode, /CANCEL_REQUESTED/);
   assert.match(notificationRouteSlice, /\.select\('id,name,email,clinic_id'\)/);
   assert.match(notificationRouteSlice, /appointmentContext\?\.patientId/);
   assert.match(notificationRouteSlice, /appointmentContext\?\.clinicId/);

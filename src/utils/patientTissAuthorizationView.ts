@@ -320,7 +320,13 @@ export const findSuggestedTissAuthorizationForAppointment = (
       (serviceCatalogId && authorizationServiceCatalogId === serviceCatalogId) ||
       (serviceKey && authorizationServiceKey && (authorizationServiceKey.includes(serviceKey) || serviceKey.includes(authorizationServiceKey)));
 
-    if (tussCode || tussCodeId || payerTussMappingId) return Boolean(mappingMatches || expectedTussMatches);
+    if (tussCode || tussCodeId || payerTussMappingId) {
+      if (mappingMatches || expectedTussMatches) return true;
+      const authorizationHasExplicitTussScope = Boolean(
+        authorizationMappingId || authorizationTussCodeId || authorizationTussCode,
+      );
+      return !authorizationHasExplicitTussScope && Boolean(serviceMatches);
+    }
     return Boolean(serviceMatches);
   });
 

@@ -622,7 +622,22 @@ const normalizeSetupText = (value: unknown) =>
     .replace(/\s+/g, " ")
     .trim();
 
-const setupEventPatientId = (event: any) => String(event?.patientId || event?.patient_id || event?.patient?.id || "").trim();
+const setupEventSourcePayload = (event: any) => {
+  const raw = event?.sourcePayload || event?.source_payload || {};
+  if (raw && typeof raw === "object") return raw;
+  if (typeof raw !== "string") return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+const setupEventPatientId = (event: any) => {
+  const source = setupEventSourcePayload(event);
+  return String(event?.patientId || event?.patient_id || event?.patient?.id || source?.patientId || source?.patient_id || "").trim();
+};
 const setupEventPayerId = (event: any) => String(
   event?.payerId ||
     event?.payer_id ||
@@ -661,6 +676,90 @@ const setupEventProfessionalId = (event: any) => String(event?.therapistId || ev
 const setupEventRoomName = (event: any) => String(event?.roomName || event?.room_name || event?.roomDisplayName || event?.room_display_name || "").trim();
 const setupEventRoomId = (event: any) => String(event?.roomId || event?.room_id || event?.room || "").trim();
 const setupEventProcedureName = (event: any) => String(event?.serviceType || event?.service_type || event?.procedureName || event?.procedure_name || event?.type || event?.approach || "Procedimento não informado").trim();
+
+const setupEventResolvedPatientName = (event: any) => {
+  const source = setupEventSourcePayload(event);
+  return String(setupEventPatientName(event) || source?.patientName || source?.patient_name || "Paciente não informado").trim();
+};
+
+const setupEventResolvedProfessionalName = (event: any) => {
+  const source = setupEventSourcePayload(event);
+  return String(
+    setupEventProfessionalName(event) ||
+      event?.professional?.name ||
+      event?.therapist?.name ||
+      source?.therapistName ||
+      source?.therapist_name ||
+      source?.professionalName ||
+      source?.professional_name ||
+      source?.professional?.name ||
+      "",
+  ).trim();
+};
+
+const setupEventResolvedProfessionalId = (event: any) => {
+  const source = setupEventSourcePayload(event);
+  return String(setupEventProfessionalId(event) || source?.therapistId || source?.therapist_id || source?.professionalId || source?.professional_id || "").trim();
+};
+
+const setupEventResolvedRoomName = (event: any) => {
+  const source = setupEventSourcePayload(event);
+  return String(
+    setupEventRoomName(event) ||
+      event?.room?.name ||
+      source?.roomName ||
+      source?.room_name ||
+      source?.room?.name ||
+      "",
+  ).trim();
+};
+
+const setupEventResolvedRoomId = (event: any) => {
+  const source = setupEventSourcePayload(event);
+  return String(setupEventRoomId(event) || source?.roomId || source?.room_id || "").trim();
+};
+
+const setupEventAuthorizationCode = (event: any) => {
+  const source = setupEventSourcePayload(event);
+  return String(event?.authorizationCode || event?.authorization_code || event?.billingContext?.authorizationCode || event?.billing_context?.authorization_code || source?.authorizationCode || source?.authorization_code || "").trim();
+};
+
+const setupEventGuideNumber = (event: any) => {
+  const source = setupEventSourcePayload(event);
+  return String(event?.guideNumber || event?.guide_number || event?.billingContext?.guideNumber || event?.billing_context?.guide_number || source?.guideNumber || source?.guide_number || "").trim();
+};
+
+const setupEventStatusKey = (event: any) => normalizeSetupText(event?.status || event?.appointment_status || setupEventSourcePayload(event)?.status || "");
+const setupEventSyncStatusKey = (event: any) => normalizeSetupText(event?.syncStatus || event?.sync_status || event?.offlineSyncStatus || event?.offline_sync_status || "");
+const setupEventOfficialDocumentId = (event: any) => String(event?.officialDocumentId || event?.official_document_id || event?.preGuide?.officialDocumentId || event?.pre_guide?.official_document_id || event?.billingContext?.officialDocumentId || event?.billing_context?.official_document_id || "").trim();
+
+const buildSetupPreGuideEligibilityReasons = (event: any, payerId: string, payerName?: string | null) => {
+  const reasons: string[] = [];
+  const eventPayerId = setupEventPayerId(event);
+  const eventPayerName = setupEventPayerName(event);
+  const expectedPayerNameKey = normalizeSetupText(payerName);
+  const eventPayerNameKey = normalizeSetupText(eventPayerName);
+  const hasExpectedPayer = Boolean(payerId || expectedPayerNameKey);
+  const payerMatches =
+    !hasExpectedPayer ||
+    (payerId && eventPayerId === payerId) ||
+    (expectedPayerNameKey && eventPayerNameKey === expectedPayerNameKey);
+  if (hasExpectedPayer && !eventPayerId && !eventPayerNameKey) reasons.push("Sessão sem pagador de convênio.");
+  else if (!payerMatches) reasons.push(`Sessão está com outro pagador${eventPayerName ? ` (${eventPayerName})` : ""}.`);
+  if (/cancel|cancell|remarc|resched|recus|refus/.test(setupEventStatusKey(event))) reasons.push("Sessão cancelada, recusada ou remarcada.");
+  if (/pending sync|pendente.*sincron|offline/.test(setupEventSyncStatusKey(event))) reasons.push("Sessão pendente de sincronização.");
+  if (setupEventOfficialDocumentId(event)) reasons.push("Sessão ou Pré-guia já vinculada a lote XML.");
+  if (!setupEventResolvedProfessionalId(event) && !setupEventResolvedProfessionalName(event)) reasons.push("Sessão sem profissional carregado.");
+  if (!setupEventResolvedRoomId(event) && !setupEventResolvedRoomName(event)) reasons.push("Sessão sem sala/local carregado.");
+  if (!setupEventAuthorizationCode(event) && !setupEventGuideNumber(event)) reasons.push("Sessão sem guia ou autorização vigente vinculada.");
+  return reasons;
+};
+
+const summarizeSetupEligibilityDiagnostics = (diagnostics: Array<{ reasons: string[] }>) => {
+  const counts = new Map<string, number>();
+  diagnostics.forEach((item) => item.reasons.forEach((reason) => counts.set(reason, (counts.get(reason) || 0) + 1)));
+  return Array.from(counts.entries()).map(([reason, count]) => `${count} sessão(ões): ${reason}`);
+};
 
 const formatSetupSessionDateTime = (event: any) => {
   const raw = event?.start || event?.scheduledStart || event?.scheduled_start || event?.start_at || event?.date;
@@ -712,6 +811,20 @@ const legacyTussCodesForSetup = new Set(["10101012", "TESTE-ABA"]);
 export const isLegacyOrInvalidTussCodeForSetup = (code: unknown) => (
   legacyTussCodesForSetup.has(String(code ?? "").trim().toUpperCase())
 );
+
+const getOfficialTussCodeForSetupValidation = (configuration: BillingConfigurationRow) => {
+  const resolvedOfficialCode = String(configuration.code?.code || "").trim();
+  if (resolvedOfficialCode) return resolvedOfficialCode;
+  const mappingHasUnresolvedCode = Boolean(configuration.mapping?.tussCodeId) && !configuration.code?.id;
+  const priceHasUnresolvedCode = Boolean(configuration.price?.tussCodeId) && !configuration.code?.id;
+  if (!mappingHasUnresolvedCode && String(configuration.mapping?.tussCode || "").trim()) {
+    return String(configuration.mapping?.tussCode || "").trim();
+  }
+  if (!priceHasUnresolvedCode && String(configuration.price?.tussCode || "").trim()) {
+    return String(configuration.price?.tussCode || "").trim();
+  }
+  return "";
+};
 
 const makeSetupStep = (step: PayerSetupStep): PayerSetupStep => step;
 
@@ -1114,27 +1227,44 @@ export function PayerRequirementsPanel({
   );
   const selectedPayerLegacyTussCodes = useMemo(
     () => billingConfigurations
-      .map((configuration) => configuration.code?.code || configuration.mapping?.tussCode || configuration.price?.tussCode || "")
+      .filter((configuration) => configuration.completionState !== "inactive")
+      .map(getOfficialTussCodeForSetupValidation)
       .filter(isLegacyOrInvalidTussCodeForSetup),
     [billingConfigurations],
   );
-  const setupPayerAppointments = useMemo(() => {
+  const setupAppointmentDiagnostics = useMemo(() => {
     const payerNameKey = normalizeSetupText(selectedPayer?.name);
     return setupAppointments
-      .filter((appointment) => {
+      .map((appointment) => {
         const appointmentPayerId = setupEventPayerId(appointment);
         const appointmentPayerNameKey = normalizeSetupText(setupEventPayerName(appointment));
-        return (selectedPayerId && appointmentPayerId === selectedPayerId) || (payerNameKey && appointmentPayerNameKey === payerNameKey);
+        const payerRelated = (selectedPayerId && appointmentPayerId === selectedPayerId) || (payerNameKey && appointmentPayerNameKey === payerNameKey);
+        const reasons = buildSetupPreGuideEligibilityReasons(appointment, selectedPayerId, selectedPayer?.name);
+        return { appointment, reasons, eligible: payerRelated && reasons.length === 0, payerRelated };
       })
       .sort((left, right) => {
-        const leftTime = new Date(left?.start || left?.scheduledStart || left?.scheduled_start || 0).getTime();
-        const rightTime = new Date(right?.start || right?.scheduledStart || right?.scheduled_start || 0).getTime();
+        const leftAppointment = left.appointment;
+        const rightAppointment = right.appointment;
+        const leftTime = new Date(leftAppointment?.start || leftAppointment?.scheduledStart || leftAppointment?.scheduled_start || 0).getTime();
+        const rightTime = new Date(rightAppointment?.start || rightAppointment?.scheduledStart || rightAppointment?.scheduled_start || 0).getTime();
         return (Number.isNaN(rightTime) ? 0 : rightTime) - (Number.isNaN(leftTime) ? 0 : leftTime);
       });
   }, [selectedPayer?.name, selectedPayerId, setupAppointments]);
+  const setupPayerAppointments = useMemo(
+    () => setupAppointmentDiagnostics.filter((item) => item.eligible).map((item) => item.appointment),
+    [setupAppointmentDiagnostics],
+  );
+  const setupIneligibleAppointments = useMemo(
+    () => setupAppointmentDiagnostics.filter((item) => !item.eligible),
+    [setupAppointmentDiagnostics],
+  );
+  const setupEligibilitySummary = useMemo(
+    () => summarizeSetupEligibilityDiagnostics(setupIneligibleAppointments),
+    [setupIneligibleAppointments],
+  );
   const setupPatientIdsForPayer = useMemo(
-    () => new Set(setupPayerAppointments.map(setupEventPatientId).filter(Boolean)),
-    [setupPayerAppointments],
+    () => new Set(setupAppointmentDiagnostics.map((item) => setupEventPatientId(item.appointment)).filter(Boolean)),
+    [setupAppointmentDiagnostics],
   );
   const setupPatientsForPayer = useMemo(() => {
     if (setupPatientIdsForPayer.size === 0) return setupPatients;
@@ -1143,6 +1273,10 @@ export function PayerRequirementsPanel({
   const setupAppointmentsForSelectedPatient = useMemo(
     () => setupPayerAppointments.filter((appointment) => !setupPatientId || setupEventPatientId(appointment) === setupPatientId),
     [setupPatientId, setupPayerAppointments],
+  );
+  const setupIneligibleAppointmentsForSelectedPatient = useMemo(
+    () => setupIneligibleAppointments.filter((item) => !setupPatientId || setupEventPatientId(item.appointment) === setupPatientId),
+    [setupIneligibleAppointments, setupPatientId],
   );
   const selectedSetupAppointment = useMemo(
     () => setupAppointments.find((appointment) => String(appointment?.id || appointment?.appointmentId || appointment?.appointment_id || "") === setupAppointmentId) || null,
@@ -2759,10 +2893,10 @@ export function PayerRequirementsPanel({
     }
 
     if (activeSetupStep.key === "test") {
-      const selectedProfessionalName = setupEventProfessionalName(selectedSetupAppointment);
-      const selectedProfessionalId = setupEventProfessionalId(selectedSetupAppointment);
-      const selectedRoomName = setupEventRoomName(selectedSetupAppointment);
-      const selectedRoomId = setupEventRoomId(selectedSetupAppointment);
+      const selectedProfessionalName = setupEventResolvedProfessionalName(selectedSetupAppointment);
+      const selectedProfessionalId = setupEventResolvedProfessionalId(selectedSetupAppointment);
+      const selectedRoomName = setupEventResolvedRoomName(selectedSetupAppointment);
+      const selectedRoomId = setupEventResolvedRoomId(selectedSetupAppointment);
       const preGuide = setupTestResult.preGuide || null;
       const checklist = preGuide?.antiGlosaChecklist && typeof preGuide.antiGlosaChecklist === "object" ? preGuide.antiGlosaChecklist : {};
       const technicalStatus = preGuide?.status === "valid" ? "Válida" : preGuide ? "Com pendências" : "Aguardando teste";
@@ -2823,9 +2957,34 @@ export function PayerRequirementsPanel({
             </label>
           </div>
           {setupTestLoadState.error ? <div className="mt-3 rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-sm text-amber-800">{setupTestLoadState.error}</div> : null}
-          {!setupTestLoadState.loading && setupPayerAppointments.length === 0 ? (
+          {!setupTestLoadState.loading && setupPayerAppointments.length === 0 && setupIneligibleAppointments.length > 0 ? (
+            <div className="mt-3 rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              <p className="font-semibold">Sessões encontradas, mas não elegíveis:</p>
+              <ul className="mt-2 list-disc space-y-1 pl-4">
+                {setupEligibilitySummary.map((item) => <li key={item}>{item}</li>)}
+              </ul>
+            </div>
+          ) : null}
+          {!setupTestLoadState.loading && setupPayerAppointments.length === 0 && setupIneligibleAppointments.length === 0 ? (
             <div className="mt-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-sm text-slate-600">
-              Nenhuma sessão elegível encontrada para este convênio. Crie uma sessão ou edite o pagador de uma sessão existente para este convênio.
+              Nenhuma sessão encontrada para este paciente e período.
+            </div>
+          ) : null}
+          {setupIneligibleAppointmentsForSelectedPatient.length > 0 ? (
+            <div className="mt-3 rounded-xl border border-slate-100 bg-white px-3 py-2 text-sm text-slate-700">
+              <p className="font-semibold">Sessões não elegíveis deste paciente</p>
+              <div className="mt-2 space-y-2">
+                {setupIneligibleAppointmentsForSelectedPatient.slice(0, 4).map((item) => {
+                  const appointment = item.appointment;
+                  const id = String(appointment?.id || appointment?.appointmentId || appointment?.appointment_id || formatSetupSessionDateTime(appointment));
+                  return (
+                    <div key={id} className="rounded-lg bg-slate-50 px-3 py-2 text-xs">
+                      <p className="font-semibold text-slate-800">{formatSetupSessionDateTime(appointment)} - {setupEventResolvedPatientName(appointment)}</p>
+                      <p className="mt-1 text-slate-500">{item.reasons.join(" ")}</p>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           ) : null}
           <div className="mt-3 grid gap-3 md:grid-cols-3">

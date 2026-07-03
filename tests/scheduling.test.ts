@@ -203,6 +203,17 @@ test('guia so replica na recorrencia com escolha explicita', () => {
   });
 });
 
+test('agendamento mostra autorizacoes disponiveis e permite usar guia sem consumir saldo', () => {
+  assert.match(coordinatorCode, /dataService\.getAppointmentBillingSuggestion/);
+  assert.match(coordinatorCode, /Autoriza..es dispon.veis/);
+  assert.match(coordinatorCode, /Guia\/senha do paciente neste conv.nio, servi.o e data/);
+  assert.match(coordinatorCode, /Selecionar n.o consome saldo/);
+  assert.match(coordinatorCode, /Usar esta autoriza..o/);
+  assert.match(coordinatorCode, /setSessionGuideNumber\(String\(authorization\?\.guideNumber/);
+  assert.match(coordinatorCode, /setSessionAuthorizationCode\(String\(authorization\?\.authorizationCode/);
+  assert.match(coordinatorCode, /sessionPatientTissAuthorizationId/);
+});
+
 test('relatórios somam paciente e profissional com duração real', () => {
   const appointments = [
     ...baseAppointments.map((item) => ({
