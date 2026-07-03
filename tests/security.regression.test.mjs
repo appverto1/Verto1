@@ -602,8 +602,8 @@ test('aba session mode: trials and behavior events are one-touch and session-sco
   );
   assert.match(
     sessionModeCode,
-    /scrollBottomPaddingStyle[\s\S]*?closeAfterAction[\s\S]*?data-aba-dock-duration-active[\s\S]*?animate-pulse[\s\S]*?-top-3 right-2[\s\S]*?data-aba-dock-open-duration-badge[\s\S]*?Local atual[\s\S]*?Severidade atual[\s\S]*?Últimos registros[\s\S]*?style=\{scrollBottomPaddingStyle\}/m,
-    'Dock clínico mobile deve reservar espaço, indicar duração ativa, mostrar +1 flutuante e fechar ações rápidas da sheet.'
+    /scrollBottomPaddingStyle[\s\S]*?closeAfterAction[\s\S]*?data-aba-dock-duration-active[\s\S]*?animate-pulse[\s\S]*?-top-3 right-2[\s\S]*?data-aba-dock-open-duration-badge[\s\S]*?data-aba-dock-context-summary[\s\S]*?Ajustar contexto[\s\S]*?\{clinicalDockContextOpen &&[\s\S]*?data-aba-dock-context-panel[\s\S]*?Últimos registros[\s\S]*?style=\{scrollBottomPaddingStyle\}/m,
+    'Dock clínico mobile deve reservar espaço, indicar duração ativa, mostrar +1 flutuante, abrir compacto e recolher ajustes de contexto.'
   );
   assert.match(
     sessionModeCode,

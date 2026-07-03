@@ -716,6 +716,7 @@ export const SessionMode = ({
   const [mobileExpandedCriteriaKey, setMobileExpandedCriteriaKey] = useState('');
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const [clinicalDockSheetOpen, setClinicalDockSheetOpen] = useState(false);
+  const [clinicalDockContextOpen, setClinicalDockContextOpen] = useState(false);
   const [crisisMode, setCrisisMode] = useState(false);
   const [actionToast, setActionToast] = useState<ClinicalActionToast | null>(null);
   const [actionLocks, setActionLocks] = useState<Record<string, boolean>>({});
@@ -1752,7 +1753,7 @@ export const SessionMode = ({
       showClinicalToast({
         variant: 'success',
         title: 'Maintenance Probe registrada.',
-        subtitle: 'Resultado salvo no registro clinico.'
+        subtitle: 'Resultado salvo no registro clínico.'
       });
     }
     void refreshMaintenanceOverview();
@@ -2167,7 +2168,7 @@ export const SessionMode = ({
       sessionId.startsWith('draft-') ||
       !canRecordInAbaSession({ sessionCompleted, status: activeSession?.status })
     ) {
-      setPlanActionMessage('Maintenance Probe indisponivel nesta sessao.');
+      setPlanActionMessage('Maintenance Probe indisponível nesta sessão.');
       showClinicalToast({
         variant: 'error',
         title: 'Nao foi possivel ativar a Maintenance Probe.',
@@ -4469,7 +4470,7 @@ export const SessionMode = ({
       const persistedSummary = result?.success ? normalizePersistedSessionSummary(result.data) : null;
       if (persistedSummary) setPostClosureSummary(persistedSummary);
     } catch (error) {
-      console.warn('Relatorio ABA persistido indisponivel; usando resumo local.', error);
+      console.warn('Relatório ABA persistido indisponível; usando resumo local.', error);
     } finally {
       setShowPostClosureReport(true);
     }
@@ -4847,7 +4848,7 @@ export const SessionMode = ({
                         <p className="mt-1 text-xs font-semibold text-gray-600">{recommendation.rationale}</p>
                         <p className="mt-2 rounded-xl bg-white px-3 py-2 text-xs font-bold text-emerald-800">{recommendation.suggested_action}</p>
                         <p className="mt-2 text-[11px] font-semibold text-gray-500">
-                          Vinculo: {recommendation.target_id ? 'target do PEI' : recommendation.behavior_id ? 'comportamento' : 'resumo clinico'}
+                          Vínculo: {recommendation.target_id ? 'target do PEI' : recommendation.behavior_id ? 'comportamento' : 'resumo clínico'}
                         </p>
                         <div className="mt-3 flex flex-wrap gap-2">
                           {recommendation.recommendation_type === 'MAINTENANCE_PROBE' && (
@@ -5112,10 +5113,10 @@ export const SessionMode = ({
               <div className="min-w-0">
                 <p className="text-sm font-bold text-gray-800 truncate">{event.behaviorName}</p>
                 <p className="text-xs text-gray-500 mt-1">{event.location || 'Sem local'} - severidade {event.severity || '-'}</p>
-                <p className="text-[11px] text-gray-400 mt-1">Inicio {new Date(event.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                <p className="text-[11px] text-gray-400 mt-1">Início {new Date(event.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
               </div>
               <div className="text-right shrink-0">
-                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Cronometro</p>
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Cronômetro</p>
                 <p className="text-3xl sm:text-2xl font-bold text-[#7a32fc] leading-none">{formatElapsed(event.startedAt, nowMs)}</p>
               </div>
             </div>
@@ -5131,7 +5132,7 @@ export const SessionMode = ({
                 onClick={() => openAbcModalForBehaviorName(event.behaviorName)}
                 className="min-h-[48px] bg-white text-[#7a32fc] border border-purple-100 rounded-xl px-3 py-2 text-[11px] sm:text-xs font-bold uppercase tracking-widest inline-flex items-center justify-center gap-2"
               >
-                <FileText size={14} /> ABC rapido
+                <FileText size={14} /> ABC rápido
               </button>
             </div>
           </div>
@@ -5262,6 +5263,18 @@ export const SessionMode = ({
     </div>
   ) : null;
 
+  const selectedIntervalAlertLabel = intervalAlertOptions.find((option) => option.key === intervalAlertType)?.label || intervalAlertType;
+  const selectedIntervalDurationLabel = `${Number(intervalSeconds || 0)}s`;
+  const contextSummaryItems = [
+    selectedLocation,
+    `Severidade ${selectedSeverity}`,
+    selectedBehavior.name,
+    getMeasurementLabel(behaviorMeasurementType),
+    isIntervalMeasurementType(behaviorMeasurementType) ? selectedIntervalDurationLabel : null,
+    isIntervalMeasurementType(behaviorMeasurementType) ? `Quantidade ${intervalTotalIntervals}` : null,
+    isIntervalMeasurementType(behaviorMeasurementType) ? `Alerta ${selectedIntervalAlertLabel}` : null
+  ].filter(Boolean);
+
   const clinicalDockSheet = clinicalDockSheetOpen && !intervalResponseActive ? (
     <div className="fixed inset-0 z-[210]" data-aba-clinical-dock-sheet>
       <button
@@ -5270,17 +5283,17 @@ export const SessionMode = ({
         onClick={() => setClinicalDockSheetOpen(false)}
         className="absolute inset-0 h-full w-full bg-slate-950/35 backdrop-blur-[2px]"
       />
-      <div className="absolute inset-x-0 bottom-0 max-h-[88vh] overflow-y-auto rounded-t-[32px] border border-blue-100 bg-white p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl xl:left-1/2 xl:right-auto xl:bottom-4 xl:w-[520px] xl:-translate-x-1/2 xl:rounded-[32px]">
-        <div className="mx-auto mb-3 h-1.5 w-12 rounded-full bg-slate-200" />
+      <div className="absolute inset-x-0 bottom-0 max-h-[86vh] overflow-y-auto rounded-t-[28px] border border-blue-100 bg-white p-3 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:p-4 xl:left-1/2 xl:right-auto xl:bottom-4 xl:w-[560px] xl:-translate-x-1/2 xl:rounded-[28px]">
+        <div className="mx-auto mb-2 h-1.5 w-12 rounded-full bg-slate-200" />
         <div className="flex items-start justify-between gap-3">
-          <div>
-            <p className="text-[10px] font-black uppercase tracking-[0.24em] text-[#7a32fc]">Dock clínico</p>
-            <h2 className="text-xl font-black text-slate-900">Registro sem sair da meta</h2>
+          <div className="min-w-0">
+            <p className="text-[10px] font-black uppercase tracking-[0.22em] text-[#7a32fc]">Dock clínico</p>
+            <h2 className="text-lg font-black leading-tight text-slate-900">Registro sem sair da meta</h2>
           </div>
           <button
             type="button"
             onClick={() => setCrisisMode((value) => !value)}
-            className={`inline-flex min-h-[44px] items-center gap-2 rounded-2xl px-3 text-[10px] font-black uppercase tracking-widest ${crisisMode ? 'bg-red-600 text-white' : 'bg-red-50 text-red-600'}`}
+            className={`inline-flex min-h-[40px] shrink-0 items-center gap-2 rounded-2xl px-3 text-[10px] font-black uppercase tracking-widest ${crisisMode ? 'bg-red-600 text-white' : 'bg-red-50 text-red-600'}`}
           >
             <ShieldAlert size={15} /> Modo crise
           </button>
@@ -5298,14 +5311,14 @@ export const SessionMode = ({
           </section>
         ) : (
           <>
-            <section className="mt-4">
-              <p className="text-[10px] font-black uppercase tracking-widest text-red-600">Crise / alta prioridade</p>
+            <section className="mt-3 rounded-[22px] border border-blue-100 bg-[#F8FAFF] p-3">
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Ações rápidas</p>
               <div className="mt-2 grid grid-cols-2 gap-2">
                 {quickBehaviorShortcuts.filter((shortcut) => ['aggression', 'self_injury', 'escape', 'refusal'].includes(shortcut.behaviorId)).map((shortcut) => renderDockShortcutButton(shortcut, false, true))}
               </div>
             </section>
 
-            <section className="mt-4">
+            <section className="mt-3 rounded-[22px] border border-blue-100 bg-white p-3">
               <p className="text-[10px] font-black uppercase tracking-widest text-[#7a32fc]">Duração</p>
               <div className="mt-2 grid grid-cols-2 gap-2">
                 {behaviorPresets.filter((behavior) => behaviorAllowsMeasurement(behavior, 'duration')).slice(0, 4).map((behavior) => renderDockShortcutButton({
@@ -5320,24 +5333,65 @@ export const SessionMode = ({
           </>
         )}
 
-        <section className="mt-4 rounded-[24px] border border-blue-100 bg-[#F4F7FE] p-3">
+        <section className="mt-3 rounded-[22px] border border-blue-100 bg-[#F4F7FE] p-3" data-aba-dock-context-summary>
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Contexto atual</p>
+              <p className="mt-1 text-sm font-black leading-snug text-slate-900">{contextSummaryItems.join(' · ')}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setClinicalDockContextOpen((open) => !open)}
+              className="inline-flex min-h-[36px] shrink-0 items-center justify-center rounded-2xl border border-purple-100 bg-white px-3 text-[10px] font-black uppercase tracking-widest text-[#7a32fc]"
+            >
+              Ajustar contexto
+            </button>
+          </div>
+          {!clinicalDockContextOpen && (
+            <button
+              type="button"
+              onClick={() => {
+                handleSelectedBehaviorAction();
+                if (!isIntervalMeasurementType(behaviorMeasurementType)) setClinicalDockSheetOpen(false);
+              }}
+              disabled={Boolean(intervalRun && isIntervalMeasurementType(behaviorMeasurementType))}
+              className="mt-3 inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-2xl bg-[#7a32fc] px-4 text-xs font-black uppercase tracking-widest text-white disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {behaviorMeasurementType === 'duration' ? <Play size={16} /> : behaviorMeasurementType === 'abc' ? <FileText size={16} /> : <Plus size={16} />}
+              Registrar com contexto atual
+            </button>
+          )}
+        </section>
+
+        <section className="mt-3 rounded-[22px] border border-blue-100 bg-white p-3">
           <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">ABC rápido</p>
           <button onClick={() => { setClinicalDockSheetOpen(false); openAbcModal(); }} className="mt-2 inline-flex min-h-[52px] w-full items-center justify-center gap-2 rounded-2xl bg-[#1B254B] px-4 text-xs font-black uppercase tracking-widest text-white">
             <FileText size={16} /> Abrir ABC rápido
           </button>
         </section>
 
-        <section className="mt-4 rounded-[24px] border border-blue-100 bg-white p-3">
-          <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Contexto atual</p>
+        {clinicalDockContextOpen && (
+        <>
+        <section className="mt-3 rounded-[22px] border border-blue-100 bg-white p-3" data-aba-dock-context-panel>
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Ajustar contexto</p>
+            <button
+              type="button"
+              onClick={() => setClinicalDockContextOpen(false)}
+              className="text-[10px] font-black uppercase tracking-widest text-slate-400"
+            >
+              Fechar
+            </button>
+          </div>
           <div className="mt-2 grid grid-cols-2 gap-2">
             <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">
-              Local atual
+              Local
               <select value={selectedLocation} onChange={(event) => setSelectedLocation(event.target.value)} className="mt-1 w-full rounded-2xl border border-blue-100 bg-[#F4F7FE] px-3 py-3 text-xs font-bold text-slate-700 outline-none">
                 {locationOptions.map((location) => <option key={location} value={location}>{location}</option>)}
               </select>
             </label>
             <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">
-              Severidade atual
+              Severidade
               <select value={selectedSeverity} onChange={(event) => setSelectedSeverity(Number(event.target.value))} className="mt-1 w-full rounded-2xl border border-blue-100 bg-[#F4F7FE] px-3 py-3 text-xs font-bold text-slate-700 outline-none">
                 {severityOptions.map((severity) => <option key={severity} value={severity}>{severity}</option>)}
               </select>
@@ -5345,8 +5399,8 @@ export const SessionMode = ({
           </div>
         </section>
 
-        <section className="mt-4 rounded-[24px] border border-blue-100 bg-white p-3">
-          <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">ConfiguraÃ§Ãµes rÃ¡pidas</p>
+        <section className="mt-3 rounded-[22px] border border-blue-100 bg-white p-3">
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Configurações rápidas</p>
           <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
             <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">
               Comportamento
@@ -5364,7 +5418,7 @@ export const SessionMode = ({
               </select>
             </label>
             <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">
-              MÃ©todo de coleta
+              Método de coleta
               <select
                 value={behaviorMeasurementType}
                 onChange={(event) => setBehaviorMeasurementType(event.target.value)}
@@ -5379,7 +5433,7 @@ export const SessionMode = ({
           {isIntervalMeasurementType(behaviorMeasurementType) && (
             <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
               <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">
-                DuraÃ§Ã£o
+                Duração
                 <select value={intervalDurationMode} onChange={(event) => setIntervalDurationMode(event.target.value)} disabled={Boolean(intervalRun)} className="mt-1 w-full rounded-2xl border border-blue-100 bg-[#F4F7FE] px-3 py-3 text-xs font-bold text-slate-700 outline-none disabled:opacity-60">
                   {intervalDurationOptions.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
                 </select>
@@ -5406,6 +5460,7 @@ export const SessionMode = ({
             type="button"
             onClick={() => {
               handleSelectedBehaviorAction();
+              setClinicalDockContextOpen(false);
               if (!isIntervalMeasurementType(behaviorMeasurementType)) setClinicalDockSheetOpen(false);
             }}
             disabled={Boolean(intervalRun && isIntervalMeasurementType(behaviorMeasurementType))}
@@ -5414,7 +5469,16 @@ export const SessionMode = ({
             {behaviorMeasurementType === 'duration' ? <Play size={16} /> : behaviorMeasurementType === 'abc' ? <FileText size={16} /> : <Plus size={16} />}
             Registrar com contexto atual
           </button>
+          <button
+            type="button"
+            onClick={() => setClinicalDockContextOpen(false)}
+            className="mt-2 inline-flex min-h-[44px] w-full items-center justify-center rounded-2xl border border-blue-100 bg-white px-4 text-xs font-black uppercase tracking-widest text-slate-600"
+          >
+            Salvar contexto
+          </button>
         </section>
+        </>
+        )}
 
         {openDurations.length > 0 && (
           <section className="mt-4">
@@ -5521,10 +5585,10 @@ export const SessionMode = ({
                       <div>
                         <p className="text-sm font-bold text-gray-800">{event.behaviorName}</p>
                         <p className="text-xs text-gray-500 mt-1">{event.location || 'Sem local'} - severidade {event.severity || '-'}</p>
-                        <p className="text-[11px] text-gray-400 mt-1">Inicio {new Date(event.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                        <p className="text-[11px] text-gray-400 mt-1">Início {new Date(event.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
                       </div>
                       <div className="text-right">
-                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Cronometro</p>
+                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Cronômetro</p>
                         <p className="text-3xl font-bold text-[#7a32fc] leading-none">{formatElapsed(event.startedAt, nowMs)}</p>
                       </div>
                     </div>
@@ -5540,7 +5604,7 @@ export const SessionMode = ({
                         onClick={() => openAbcModalForBehaviorName(event.behaviorName)}
                         className="min-h-[48px] bg-white text-[#7a32fc] border border-purple-100 rounded-xl px-4 py-2 text-xs font-bold uppercase tracking-widest inline-flex items-center justify-center gap-2"
                       >
-                        <FileText size={14} /> ABC rapido
+                <FileText size={14} /> ABC rápido
                       </button>
                     </div>
                   </div>
@@ -5759,7 +5823,7 @@ export const SessionMode = ({
               <h2 className="mt-1 text-xl font-bold text-emerald-900">{intervalSummary.behaviorName}</h2>
               <div className="mt-4 grid grid-cols-2 md:grid-cols-5 gap-3">
                 <div className="rounded-2xl bg-white/70 border border-emerald-100 p-3">
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-600">Metodo</p>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-600">Método</p>
                   <p className="text-sm font-bold text-emerald-950">{getMeasurementLabel(intervalSummary.measurementType)}</p>
                 </div>
                 <div className="rounded-2xl bg-white/70 border border-emerald-100 p-3">
@@ -5775,7 +5839,7 @@ export const SessionMode = ({
                   <p className="text-2xl font-bold text-emerald-700">{intervalSummaryTotals.notOccurred}</p>
                 </div>
                 <div className="rounded-2xl bg-white/70 border border-emerald-100 p-3">
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-600">Ocorrencia</p>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-600">Ocorrência</p>
                   <p className="text-2xl font-bold text-emerald-700">{intervalSummaryTotals.percent}%</p>
                 </div>
               </div>
@@ -5792,11 +5856,11 @@ export const SessionMode = ({
             <div className="flex flex-col gap-3 mb-5 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.2em]">Evento comportamental inteligente</p>
-                <h2 className="text-xl font-bold text-gray-800">Registro rapido</h2>
+                <h2 className="text-xl font-bold text-gray-800">Registro rápido</h2>
               </div>
               {selectedBehaviorAllowsMultipleMethods ? (
                 <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
-                  Metodo
+                  Método
                   <select
                     value={behaviorMeasurementType}
                     onChange={(event) => setBehaviorMeasurementType(event.target.value)}
@@ -5809,7 +5873,7 @@ export const SessionMode = ({
                 </label>
               ) : (
                 <div className="rounded-2xl bg-[#F4F7FE] border border-blue-100 px-4 py-3 text-right">
-                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Metodo</p>
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Método</p>
                   <p className="text-sm font-bold text-gray-800">{getMeasurementLabel(behaviorMeasurementType)}</p>
                 </div>
               )}
@@ -5841,7 +5905,7 @@ export const SessionMode = ({
                       onClick={() => openAbcModal(behavior.id)}
                       className="mt-3 inline-flex min-h-[48px] w-full items-center justify-center gap-1 rounded-xl bg-white/70 px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-[#7a32fc] border border-white/80"
                     >
-                      <FileText size={13} /> ABC rapido
+                      <FileText size={13} /> ABC rápido
                     </button>
                   </div>
                 );
@@ -5909,7 +5973,7 @@ export const SessionMode = ({
                     <Plus size={16} /> + ocorrência
                   </button>
                   <button onClick={() => openAbcModal()} className="min-h-[52px] w-full sm:w-auto px-5 py-3 rounded-2xl bg-white text-[#7a32fc] border border-purple-100 text-xs font-bold uppercase tracking-widest flex items-center justify-center gap-2">
-                    <FileText size={16} /> ABC rapido
+                    <FileText size={16} /> ABC rápido
                   </button>
                 </div>
               )}
@@ -5929,7 +5993,7 @@ export const SessionMode = ({
                     </button>
                   ))}
                   <button onClick={() => openAbcModal()} className="min-h-[52px] w-full sm:w-auto px-5 py-3 rounded-2xl bg-white text-[#7a32fc] border border-purple-100 text-xs font-bold uppercase tracking-widest flex items-center justify-center gap-2">
-                    <FileText size={16} /> ABC rapido
+                    <FileText size={16} /> ABC rápido
                   </button>
                 </div>
               )}
@@ -5944,7 +6008,7 @@ export const SessionMode = ({
                     <>
                       <span className="text-sm font-bold text-gray-700">Janela {formatElapsed(rateWindow.startedAt, nowMs)} - {rateWindow.count} ocorrência(s)</span>
                       <button onClick={registerRateOccurrence} className="min-h-[52px] w-full sm:w-auto px-5 py-3 rounded-2xl bg-emerald-500 text-white text-xs font-bold uppercase tracking-widest flex items-center justify-center gap-2">
-                        <Plus size={16} /> Ocorrencia
+                        <Plus size={16} /> Ocorrência
                       </button>
                       <button onClick={() => setRateWindow(null)} className="min-h-[52px] w-full sm:w-auto px-5 py-3 rounded-2xl bg-slate-700 text-white text-xs font-bold uppercase tracking-widest flex items-center justify-center gap-2">
                         <Square size={16} /> Finalizar janela
@@ -5958,7 +6022,7 @@ export const SessionMode = ({
                 <div className="space-y-4">
                   <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                     <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
-                      Duracao do intervalo
+                      Duração do intervalo
                       <select
                         value={intervalDurationMode}
                         onChange={(event) => setIntervalDurationMode(event.target.value)}
@@ -6024,7 +6088,7 @@ export const SessionMode = ({
               {behaviorMeasurementType === 'abc' && (
                 <div className="grid grid-cols-1 gap-3 sm:flex sm:flex-wrap">
                   <button onClick={handleSelectedBehaviorAction} className="min-h-[52px] w-full sm:w-auto px-5 py-3 rounded-2xl bg-[#7a32fc] text-white text-xs font-bold uppercase tracking-widest flex items-center justify-center gap-2">
-                    <FileText size={16} /> Abrir ABC rapido
+                    <FileText size={16} /> Abrir ABC rápido
                   </button>
                 </div>
               )}
@@ -6046,8 +6110,8 @@ export const SessionMode = ({
                   <div key={item.id} className="rounded-2xl border border-emerald-100 bg-[#F6FFFB] p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div>
-                        <p className="text-sm font-bold text-gray-900">{item.instructions || 'Sugestao para revisar na sessao'}</p>
-                        <p className="mt-1 text-xs font-semibold text-gray-500">{item.planned_trial_type === 'maintenance_probe' ? 'Maintenance Probe' : 'Plano clinico'} - {item.priority || 'MEDIUM'}</p>
+                        <p className="text-sm font-bold text-gray-900">{item.instructions || 'Sugestão para revisar na sessão'}</p>
+                        <p className="mt-1 text-xs font-semibold text-gray-500">{item.planned_trial_type === 'maintenance_probe' ? 'Maintenance Probe' : 'Plano clínico'} - {item.priority || 'MEDIUM'}</p>
                       </div>
                     </div>
                     <div className="mt-3 flex flex-wrap gap-2">
@@ -6395,7 +6459,7 @@ export const SessionMode = ({
                           </p>
                           {maintenanceDisplay?.clinicalMilestoneLabel && (
                             <p className="text-xs font-semibold text-amber-800">
-                              Marco clinico: {maintenanceDisplay.clinicalMilestoneLabel}
+                              Marco clínico: {maintenanceDisplay.clinicalMilestoneLabel}
                             </p>
                           )}
                           {!maintenanceInfo.nextSchedule && (
@@ -6927,7 +6991,7 @@ export const SessionMode = ({
           <div className="bg-white rounded-[28px] sm:rounded-[32px] p-4 sm:p-6 shadow-2xl max-w-lg w-full max-h-[calc(100vh-2rem)] overflow-y-auto border border-purple-100">
             <div className="flex items-center justify-between gap-3 mb-5">
               <div>
-                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">ABC rapido</p>
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">ABC rápido</p>
                 <h2 className="text-xl font-bold text-gray-800">Evento comportamental</h2>
               </div>
               <button onClick={() => setAbcModalOpen(false)} className="p-2 rounded-full hover:bg-gray-100">

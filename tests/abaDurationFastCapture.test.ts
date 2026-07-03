@@ -137,7 +137,7 @@ test('SessionMode renders duration-only actions without + ocorrência inside dur
   const durationBlock = sessionModeCode.slice(durationBlockStart, durationBlockEnd);
   assert.match(durationBlock, /Iniciar dura/);
   assert.match(durationBlock, /Encerrar/);
-  assert.match(durationBlock, /ABC rapido/);
+  assert.match(durationBlock, /ABC rápido/);
   assert.doesNotMatch(durationBlock, /\+ ocorr/);
   assert.match(sessionModeCode, /aria-pressed=\{selectedLocation === location\}/m);
   assert.match(sessionModeCode, /aria-pressed=\{selectedSeverity === severity\}/m);
@@ -145,8 +145,42 @@ test('SessionMode renders duration-only actions without + ocorrência inside dur
 
 test('SessionMode keeps behavior controls in the clinical dock sheet, not the initial body', () => {
   assert.match(sessionModeCode, /\{false && \(\s*<div className="bg-white rounded-\[24px\][\s\S]*?Evento comportamental inteligente/m);
-  assert.match(sessionModeCode, /data-aba-clinical-dock[\s\S]*?Contexto atual[\s\S]*?Configura[\s\S]*?ltimos registros/m);
+  assert.match(sessionModeCode, /data-aba-clinical-dock[\s\S]*?Ações rápidas[\s\S]*?Contexto atual[\s\S]*?Ajustar contexto[\s\S]*?Últimos registros/m);
   assert.match(sessionModeCode, /buildBehaviorEventContextSnapshot[\s\S]*?contextSnapshot[\s\S]*?context_snapshot/m);
+});
+
+test('Dock Clínico abre compacto e recolhe seletores em Ajustar contexto', () => {
+  const sheetStart = sessionModeCode.indexOf('data-aba-clinical-dock-sheet');
+  const contextPanelGate = sessionModeCode.indexOf('{clinicalDockContextOpen &&', sheetStart);
+  const sheetEnd = sessionModeCode.indexOf('const sessionModeContent', sheetStart);
+  assert.ok(sheetStart > 0);
+  assert.ok(contextPanelGate > sheetStart);
+  assert.ok(sheetEnd > contextPanelGate);
+
+  const defaultDockView = sessionModeCode.slice(sheetStart, contextPanelGate);
+  assert.match(defaultDockView, /Ações rápidas/);
+  assert.match(defaultDockView, /Contexto atual/);
+  assert.match(defaultDockView, /Ajustar contexto/);
+  assert.match(defaultDockView, /Registrar com contexto atual/);
+  assert.match(defaultDockView, /ABC rápido/);
+  assert.doesNotMatch(defaultDockView, /<select/);
+
+  const contextPanel = sessionModeCode.slice(contextPanelGate, sheetEnd);
+  assert.match(contextPanel, /data-aba-dock-context-panel/);
+  assert.match(contextPanel, /Local[\s\S]*?<select/);
+  assert.match(contextPanel, /Severidade[\s\S]*?<select/);
+  assert.match(contextPanel, /Comportamento[\s\S]*?<select/);
+  assert.match(contextPanel, /Método de coleta[\s\S]*?<select/);
+  assert.match(contextPanel, /Duração/);
+  assert.match(contextPanel, /Quantidade/);
+  assert.match(contextPanel, /Alerta/);
+});
+
+test('Dock Clínico não exibe mojibake em textos visíveis', () => {
+  const sheetStart = sessionModeCode.indexOf('data-aba-clinical-dock-sheet');
+  const sheetEnd = sessionModeCode.indexOf('const sessionModeContent', sheetStart);
+  const dockSheet = sessionModeCode.slice(sheetStart, sheetEnd);
+  assert.doesNotMatch(dockSheet, /DuraÃ|ConfiguraÃ|MÃ©|SessÃ|HistÃ|Ãƒ|â€¢|â–|ABC rapido|Registro rapido/);
 });
 
 for (const item of tests) {
