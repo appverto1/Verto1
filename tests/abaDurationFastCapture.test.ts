@@ -167,13 +167,52 @@ test('Dock Clínico abre compacto e recolhe seletores em Ajustar contexto', () =
 
   const contextPanel = sessionModeCode.slice(contextPanelGate, sheetEnd);
   assert.match(contextPanel, /data-aba-dock-context-panel/);
-  assert.match(contextPanel, /Local[\s\S]*?<select/);
-  assert.match(contextPanel, /Severidade[\s\S]*?<select/);
+  assert.match(contextPanel, /data-aba-dock-location-chips/);
+  assert.match(contextPanel, /data-aba-dock-severity-chips/);
+  assert.match(contextPanel, /data-aba-dock-duration-chips/);
+  assert.match(contextPanel, /Gerenciar locais/);
+  assert.match(contextPanel, /Mais durações/);
+  assert.match(contextPanel, /Personalizar/);
+  const locationBlock = contextPanel.slice(contextPanel.indexOf('data-aba-dock-location-chips'), contextPanel.indexOf('data-aba-dock-severity-chips'));
+  const severityBlock = contextPanel.slice(contextPanel.indexOf('data-aba-dock-severity-chips'), contextPanel.indexOf('Configurações rápidas'));
+  const durationBlock = contextPanel.slice(contextPanel.indexOf('data-aba-dock-duration-chips'), contextPanel.indexOf('Quantidade'));
+  assert.doesNotMatch(locationBlock, /<select/);
+  assert.doesNotMatch(severityBlock, /<select/);
+  assert.doesNotMatch(durationBlock, /<select/);
   assert.match(contextPanel, /Comportamento[\s\S]*?<select/);
   assert.match(contextPanel, /Método de coleta[\s\S]*?<select/);
   assert.match(contextPanel, /Duração/);
   assert.match(contextPanel, /Quantidade/);
   assert.match(contextPanel, /Alerta/);
+});
+
+test('Dock Clínico usa seleção rápida de local, severidade e duração no contexto salvo', () => {
+  const sheetStart = sessionModeCode.indexOf('data-aba-clinical-dock-sheet');
+  const sheetEnd = sessionModeCode.indexOf('const sessionModeContent', sheetStart);
+  const dockSheet = sessionModeCode.slice(sheetStart, sheetEnd);
+  assert.match(dockSheet, /onClick=\{\(\) => setSelectedLocation\(location\)\}/);
+  assert.match(dockSheet, /aria-pressed=\{selectedLocation === location\}/);
+  assert.match(dockSheet, /onClick=\{\(\) => setSelectedSeverity\(severity\)\}/);
+  assert.match(dockSheet, /aria-pressed=\{selectedSeverity === severity\}/);
+  assert.match(dockSheet, /quickIntervalDurationOptions\.map/);
+  assert.match(dockSheet, /onClick=\{\(\) => setIntervalDurationMode\(option\.key\)\}/);
+  assert.match(sessionModeCode, /location: overrides\.location \?\? selectedLocation/);
+  assert.match(sessionModeCode, /severity: overrides\.severity \?\? selectedSeverity/);
+  assert.match(sessionModeCode, /durationSeconds: overrides\.durationSeconds \?\? overrides\.duration_seconds \?\? null/);
+});
+
+test('Dock Clínico gerencia muitos locais sem requisitar backend nem alterar eventos antigos', () => {
+  assert.match(sessionModeCode, /verto\.aba_dock_locations:\$\{resolvedClinicId \|\| patientId \|\| 'local'\}/);
+  assert.match(sessionModeCode, /window\.localStorage\.getItem\(dockLocationStorageKey\)/);
+  assert.match(sessionModeCode, /window\.localStorage\.setItem\(dockLocationStorageKey/);
+  assert.match(sessionModeCode, /visibleDockLocationOptions = dockLocationsExpanded \? dockLocationOptions : dockLocationOptions\.slice\(0, 6\)/);
+  assert.match(sessionModeCode, /dockLocationOptions\.length > 6/);
+  assert.match(sessionModeCode, /Ver mais/);
+  assert.match(sessionModeCode, /Mostrar menos/);
+  assert.match(sessionModeCode, /addDockLocation/);
+  assert.match(sessionModeCode, /renameDockLocation/);
+  assert.match(sessionModeCode, /removeDockLocation/);
+  assert.doesNotMatch(sessionModeCode, /saveAbaDockLocation|fetchAbaDockLocation|deleteAbaDockLocation/);
 });
 
 test('Dock Clínico não exibe mojibake em textos visíveis', () => {

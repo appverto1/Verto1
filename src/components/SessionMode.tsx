@@ -197,11 +197,21 @@ const locationOptions = ['Mesa', 'Sala de terapia', 'Brinquedoteca', 'Corredor',
 const severityOptions = [1, 2, 3, 4, 5];
 const intervalDurationOptions = [
   { key: '10', label: '10s', seconds: 10 },
+  { key: '20', label: '20s', seconds: 20 },
   { key: '30', label: '30s', seconds: 30 },
-  { key: '60', label: '1min', seconds: 60 },
+  { key: '45', label: '45s', seconds: 45 },
+  { key: '60', label: '60s', seconds: 60 },
   { key: '120', label: '2min', seconds: 120 },
   { key: 'custom', label: 'Customizado', seconds: null }
 ];
+const quickIntervalDurationKeys = new Set(['10', '20', '30', '45', '60']);
+const quickIntervalDurationOptions = intervalDurationOptions.filter((option) => quickIntervalDurationKeys.has(option.key));
+const extraIntervalDurationOptions = intervalDurationOptions.filter((option) => !quickIntervalDurationKeys.has(option.key) && option.key !== 'custom');
+const normalizeDockLocationLabel = (value: unknown) => String(value || '').trim().replace(/\s+/g, ' ').slice(0, 40);
+const mergeDockLocationOptions = (customOptions: string[]) => Array.from(new Set([
+  ...locationOptions,
+  ...customOptions.map(normalizeDockLocationLabel).filter(Boolean)
+]));
 const intervalAlertOptions = [
   { key: 'vibration', label: 'Vibração' },
   { key: 'sound', label: 'Som' },
@@ -717,6 +727,13 @@ export const SessionMode = ({
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const [clinicalDockSheetOpen, setClinicalDockSheetOpen] = useState(false);
   const [clinicalDockContextOpen, setClinicalDockContextOpen] = useState(false);
+  const [dockLocationsExpanded, setDockLocationsExpanded] = useState(false);
+  const [dockLocationManagerOpen, setDockLocationManagerOpen] = useState(false);
+  const [customDockLocations, setCustomDockLocations] = useState<string[]>([]);
+  const [newDockLocationName, setNewDockLocationName] = useState('');
+  const [editingDockLocationName, setEditingDockLocationName] = useState('');
+  const [editingDockLocationValue, setEditingDockLocationValue] = useState('');
+  const [dockMoreDurationsOpen, setDockMoreDurationsOpen] = useState(false);
   const [crisisMode, setCrisisMode] = useState(false);
   const [actionToast, setActionToast] = useState<ClinicalActionToast | null>(null);
   const [actionLocks, setActionLocks] = useState<Record<string, boolean>>({});
@@ -764,6 +781,9 @@ export const SessionMode = ({
   ), [patient?.abaSettings?.quickBehaviorShortcuts, patient?.clinicSettings?.abaQuickBehaviorShortcuts, patient?.clinicSettings?.quickBehaviorShortcuts, patient?.quickBehaviorShortcuts, patient?.quick_behavior_shortcuts]);
   const dockShortcuts = useMemo(() => getDockVisibleShortcuts(quickBehaviorShortcuts, { crisisMode, limit: 3 }), [crisisMode, quickBehaviorShortcuts]);
   const crisisShortcutIdSet = useMemo(() => new Set(getCrisisShortcutIds()), []);
+  const dockLocationStorageKey = useMemo(() => `verto.aba_dock_locations:${resolvedClinicId || patientId || 'local'}`, [patientId, resolvedClinicId]);
+  const dockLocationOptions = useMemo(() => mergeDockLocationOptions(customDockLocations), [customDockLocations]);
+  const visibleDockLocationOptions = dockLocationsExpanded ? dockLocationOptions : dockLocationOptions.slice(0, 6);
   const recentBehaviorRecords = useMemo(() => records.filter((record) => record.kind === 'behavior' && !isCancelledIntervalClinicalRecord(record)).slice(0, 5), [records]);
   const intervalRunStatus = getIntervalRunStatus(intervalRun);
   const intervalRunPaused = intervalRunStatus === 'PAUSED';
@@ -800,6 +820,59 @@ export const SessionMode = ({
       showClinicalToast(buildClinicalOfflineToast(), 'none');
     }
   };
+
+  const persistCustomDockLocations = (nextOptions: string[]) => {
+    const normalizedOptions = Array.from(new Set(
+      nextOptions
+        .map(normalizeDockLocationLabel)
+        .filter((location) => location && !locationOptions.includes(location))
+    ));
+    setCustomDockLocations(normalizedOptions);
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(dockLocationStorageKey, JSON.stringify(normalizedOptions));
+    } catch {
+      // Custom dock locations are a UI preference; clinical event persistence stays unchanged.
+    }
+  };
+
+  const addDockLocation = () => {
+    const nextLocation = normalizeDockLocationLabel(newDockLocationName);
+    if (!nextLocation) return;
+    persistCustomDockLocations([...customDockLocations, nextLocation]);
+    setSelectedLocation(nextLocation);
+    setNewDockLocationName('');
+    setDockLocationsExpanded(true);
+  };
+
+  const startRenameDockLocation = (location: string) => {
+    setEditingDockLocationName(location);
+    setEditingDockLocationValue(location);
+  };
+
+  const renameDockLocation = () => {
+    const currentLocation = normalizeDockLocationLabel(editingDockLocationName);
+    const nextLocation = normalizeDockLocationLabel(editingDockLocationValue);
+    if (!currentLocation || !nextLocation) return;
+    persistCustomDockLocations(customDockLocations.map((location) => (
+      location === currentLocation ? nextLocation : location
+    )));
+    if (selectedLocation === currentLocation) setSelectedLocation(nextLocation);
+    setEditingDockLocationName('');
+    setEditingDockLocationValue('');
+  };
+
+  const removeDockLocation = (location: string) => {
+    const removedLocation = normalizeDockLocationLabel(location);
+    persistCustomDockLocations(customDockLocations.filter((item) => item !== removedLocation));
+    if (selectedLocation === removedLocation) setSelectedLocation(locationOptions[0]);
+    if (editingDockLocationName === removedLocation) {
+      setEditingDockLocationName('');
+      setEditingDockLocationValue('');
+    }
+  };
+
+  const dockChipClass = (active: boolean) => `inline-flex min-h-[38px] items-center justify-center rounded-2xl border px-3 py-2 text-[11px] font-black transition-all focus:outline-none focus:ring-2 focus:ring-[#7a32fc]/30 active:scale-[0.98] ${active ? 'border-[#7a32fc] bg-[#7a32fc] text-white shadow-sm shadow-purple-500/20' : 'border-blue-100 bg-[#F8FAFF] text-slate-600 hover:border-purple-200 hover:bg-white'}`;
 
   const releaseActionLock = (key: string) => {
     const nextLocks = { ...actionLocksRef.current };
@@ -845,6 +918,23 @@ export const SessionMode = ({
     Object.values(actionLockTimersRef.current).forEach((timer) => window.clearTimeout(Number(timer)));
     Object.values(microFeedbackTimersRef.current).forEach((timer) => window.clearTimeout(Number(timer)));
   }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const persistedLocations = JSON.parse(window.localStorage.getItem(dockLocationStorageKey) || '[]');
+      const nextLocations = Array.isArray(persistedLocations)
+        ? persistedLocations.map(normalizeDockLocationLabel).filter((location) => location && !locationOptions.includes(location))
+        : [];
+      setCustomDockLocations(Array.from(new Set(nextLocations)));
+    } catch {
+      setCustomDockLocations([]);
+    }
+    setDockLocationsExpanded(false);
+    setDockLocationManagerOpen(false);
+    setEditingDockLocationName('');
+    setEditingDockLocationValue('');
+  }, [dockLocationStorageKey]);
 
   useEffect(() => {
     setBehaviorMeasurementType(getBehaviorDefaultMeasurement(selectedBehavior));
@@ -5383,19 +5473,102 @@ export const SessionMode = ({
               Fechar
             </button>
           </div>
-          <div className="mt-2 grid grid-cols-2 gap-2">
-            <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">
-              Local
-              <select value={selectedLocation} onChange={(event) => setSelectedLocation(event.target.value)} className="mt-1 w-full rounded-2xl border border-blue-100 bg-[#F4F7FE] px-3 py-3 text-xs font-bold text-slate-700 outline-none">
-                {locationOptions.map((location) => <option key={location} value={location}>{location}</option>)}
-              </select>
-            </label>
-            <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">
-              Severidade
-              <select value={selectedSeverity} onChange={(event) => setSelectedSeverity(Number(event.target.value))} className="mt-1 w-full rounded-2xl border border-blue-100 bg-[#F4F7FE] px-3 py-3 text-xs font-bold text-slate-700 outline-none">
-                {severityOptions.map((severity) => <option key={severity} value={severity}>{severity}</option>)}
-              </select>
-            </label>
+          <div className="mt-2 space-y-3">
+            <div className="text-[10px] font-black uppercase tracking-widest text-slate-400" data-aba-dock-location-chips>
+              <div className="flex items-center justify-between gap-2">
+                <span>Local</span>
+                <button
+                  type="button"
+                  onClick={() => setDockLocationManagerOpen((open) => !open)}
+                  className="text-[10px] font-black uppercase tracking-widest text-[#7a32fc]"
+                >
+                  Gerenciar locais
+                </button>
+              </div>
+              <div className="mt-1 flex max-h-[88px] flex-wrap gap-2 overflow-y-auto pr-1">
+                {visibleDockLocationOptions.map((location) => (
+                  <button
+                    key={location}
+                    type="button"
+                    onClick={() => setSelectedLocation(location)}
+                    aria-pressed={selectedLocation === location}
+                    className={dockChipClass(selectedLocation === location)}
+                  >
+                    {location}
+                  </button>
+                ))}
+              </div>
+              {dockLocationOptions.length > 6 && (
+                <button
+                  type="button"
+                  onClick={() => setDockLocationsExpanded((expanded) => !expanded)}
+                  className="mt-2 text-[10px] font-black uppercase tracking-widest text-slate-500"
+                >
+                  {dockLocationsExpanded ? 'Mostrar menos' : 'Ver mais'}
+                </button>
+              )}
+              {dockLocationManagerOpen && (
+                <div className="mt-3 rounded-2xl border border-blue-100 bg-[#F8FAFF] p-3 normal-case tracking-normal" data-aba-dock-location-manager>
+                  <p className="text-[11px] font-bold text-slate-600">Adicionar local</p>
+                  <div className="mt-2 flex gap-2">
+                    <input
+                      value={newDockLocationName}
+                      onChange={(event) => setNewDockLocationName(event.target.value)}
+                      placeholder="Ex.: Cozinha"
+                      className="min-h-[38px] min-w-0 flex-1 rounded-2xl border border-blue-100 bg-white px-3 text-xs font-bold text-slate-700 outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={addDockLocation}
+                      className="inline-flex min-h-[38px] items-center justify-center rounded-2xl bg-[#7a32fc] px-3 text-[10px] font-black uppercase tracking-widest text-white"
+                    >
+                      Adicionar
+                    </button>
+                  </div>
+                  {customDockLocations.length > 0 && (
+                    <div className="mt-3 space-y-2">
+                      <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Locais adicionados</p>
+                      {customDockLocations.map((location) => (
+                        <div key={location} className="flex flex-wrap items-center gap-2 rounded-2xl border border-blue-100 bg-white p-2">
+                          {editingDockLocationName === location ? (
+                            <>
+                              <input
+                                value={editingDockLocationValue}
+                                onChange={(event) => setEditingDockLocationValue(event.target.value)}
+                                className="min-h-[36px] min-w-0 flex-1 rounded-xl border border-blue-100 bg-[#F4F7FE] px-3 text-xs font-bold text-slate-700 outline-none"
+                              />
+                              <button type="button" onClick={renameDockLocation} className="min-h-[36px] rounded-xl bg-[#7a32fc] px-3 text-[10px] font-black uppercase tracking-widest text-white">Salvar</button>
+                            </>
+                          ) : (
+                            <>
+                              <span className="min-w-0 flex-1 truncate text-xs font-bold text-slate-700">{location}</span>
+                              <button type="button" onClick={() => startRenameDockLocation(location)} className="text-[10px] font-black uppercase tracking-widest text-[#7a32fc]">Renomear</button>
+                              <button type="button" onClick={() => removeDockLocation(location)} className="text-[10px] font-black uppercase tracking-widest text-slate-400">Remover</button>
+                            </>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="text-[10px] font-black uppercase tracking-widest text-slate-400" data-aba-dock-severity-chips>
+              <span>Severidade</span>
+              <div className="mt-1 flex gap-2">
+                {severityOptions.map((severity) => (
+                  <button
+                    key={severity}
+                    type="button"
+                    onClick={() => setSelectedSeverity(severity)}
+                    aria-pressed={selectedSeverity === severity}
+                    className={`inline-flex min-h-[38px] min-w-[38px] items-center justify-center rounded-2xl border px-3 py-2 text-xs font-black transition-all focus:outline-none focus:ring-2 focus:ring-[#7a32fc]/30 active:scale-[0.98] ${selectedSeverity === severity ? 'border-[#1B254B] bg-[#1B254B] text-white shadow-sm shadow-slate-900/20' : 'border-blue-100 bg-[#F8FAFF] text-slate-600 hover:border-slate-300 hover:bg-white'}`}
+                  >
+                    {severity}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
         </section>
 
@@ -5432,12 +5605,56 @@ export const SessionMode = ({
           </div>
           {isIntervalMeasurementType(behaviorMeasurementType) && (
             <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
-              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">
-                Duração
-                <select value={intervalDurationMode} onChange={(event) => setIntervalDurationMode(event.target.value)} disabled={Boolean(intervalRun)} className="mt-1 w-full rounded-2xl border border-blue-100 bg-[#F4F7FE] px-3 py-3 text-xs font-bold text-slate-700 outline-none disabled:opacity-60">
-                  {intervalDurationOptions.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
-                </select>
-              </label>
+              <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 sm:col-span-2" data-aba-dock-duration-chips>
+                <span>Duração</span>
+                <div className="mt-1 flex flex-wrap gap-2">
+                  {quickIntervalDurationOptions.map((option) => (
+                    <button
+                      key={option.key}
+                      type="button"
+                      onClick={() => setIntervalDurationMode(option.key)}
+                      disabled={Boolean(intervalRun)}
+                      aria-pressed={intervalDurationMode === option.key}
+                      className={`${dockChipClass(intervalDurationMode === option.key)} disabled:cursor-not-allowed disabled:opacity-60`}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => setDockMoreDurationsOpen((open) => !open)}
+                    disabled={Boolean(intervalRun)}
+                    className="inline-flex min-h-[38px] items-center justify-center rounded-2xl border border-blue-100 bg-white px-3 py-2 text-[11px] font-black text-[#7a32fc] disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    Mais durações
+                  </button>
+                </div>
+                {dockMoreDurationsOpen && (
+                  <div className="mt-2 flex flex-wrap gap-2 rounded-2xl border border-blue-100 bg-[#F8FAFF] p-2">
+                    {extraIntervalDurationOptions.map((option) => (
+                      <button
+                        key={option.key}
+                        type="button"
+                        onClick={() => setIntervalDurationMode(option.key)}
+                        disabled={Boolean(intervalRun)}
+                        aria-pressed={intervalDurationMode === option.key}
+                        className={`${dockChipClass(intervalDurationMode === option.key)} disabled:cursor-not-allowed disabled:opacity-60`}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => setIntervalDurationMode('custom')}
+                      disabled={Boolean(intervalRun)}
+                      aria-pressed={intervalDurationMode === 'custom'}
+                      className={`${dockChipClass(intervalDurationMode === 'custom')} disabled:cursor-not-allowed disabled:opacity-60`}
+                    >
+                      Personalizar
+                    </button>
+                  </div>
+                )}
+              </div>
               {intervalDurationMode === 'custom' && (
                 <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">
                   Segundos
