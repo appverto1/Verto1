@@ -3016,10 +3016,20 @@ export default function App() {
       }
 
       const hydrated = result.data;
+      const remoteAppointments = Array.isArray(hydrated.clinicState?.appointments) ? hydrated.clinicState.appointments : [];
+      const offlineAppointmentResult = await dataService.getOfflineAppointmentDrafts?.();
+      const offlineAppointments = Array.isArray(offlineAppointmentResult?.data) ? offlineAppointmentResult.data : [];
+      const appointmentsById = new Map<string, any>();
+      for (const appointment of remoteAppointments) {
+        const id = String(appointment?.id || appointment?.appointment_id || '').trim();
+        if (id) appointmentsById.set(id, appointment);
+      }
+      for (const appointment of offlineAppointments) {
+        const id = String(appointment?.id || appointment?.appointment_id || appointment?.clientAppointmentId || '').trim();
+        if (id && !appointmentsById.has(id)) appointmentsById.set(id, appointment);
+      }
       setRooms(Array.isArray(hydrated.clinicState?.rooms) ? hydrated.clinicState.rooms : []);
-      setTherapistAgenda(
-        Array.isArray(hydrated.clinicState?.appointments) ? hydrated.clinicState.appointments : [],
-      );
+      setTherapistAgenda(Array.from(appointmentsById.values()));
       setProtocols(Array.isArray(hydrated.clinicState?.protocols) ? hydrated.clinicState.protocols : []);
       setSpecialtySettings(
         hydrated.clinicState?.specialtySettings &&

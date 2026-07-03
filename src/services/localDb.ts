@@ -11,7 +11,7 @@ import {
 export interface OfflineRecord {
   id: string;
   data: any;
-  type: 'patient' | 'note' | 'history' | 'log' | 'profile' | 'task' | 'payment' | 'aba';
+  type: 'patient' | 'note' | 'history' | 'log' | 'profile' | 'task' | 'payment' | 'aba' | 'appointment';
   sync_status: OfflineSyncStatus;
   last_updated: number;
   retry_count?: number;

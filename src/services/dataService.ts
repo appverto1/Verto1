@@ -824,7 +824,7 @@ function normalizeNoteVisibility(value: any): 'private' | 'shared_patient' | 'sh
   return 'private';
 }
 
-type OfflineType = 'patient' | 'note' | 'history' | 'log' | 'profile' | 'task' | 'payment' | 'aba';
+type OfflineType = 'patient' | 'note' | 'history' | 'log' | 'profile' | 'task' | 'payment' | 'aba' | 'appointment';
 
 async function buildConditionalHeaders(endpoint: string, type: OfflineType, includeBearer = false) {
   const headers = await getAuthHeaders(includeBearer);
@@ -5635,6 +5635,7 @@ export const dataService = {
   async updatePatientSelfProfile(profile: {
     patientId?: string;
     name?: string;
+    portalDisplayName?: string;
     address?: string;
     profilePicture?: string | null;
     profilePicturePath?: string | null;
@@ -6219,22 +6220,74 @@ export const dataService = {
   },
 
   async createAppointments(appointments: any[], clientRequestId?: string) {
+    const stableRequestId =
+      clientRequestId ||
+      appointments.map((appointment) => String(appointment?.id || "")).filter(Boolean).join(",") ||
+      generateId();
+    const idempotencyKey = `POST:/api/appointments:${stableRequestId}`;
+    const endpoint = "/api/appointments";
+    const payload = { appointments, idempotencyKey };
+    const buildPendingAppointments = () =>
+      (appointments || []).map((appointment) => ({
+        ...(appointment || {}),
+        id: appointment?.id || appointment?.clientAppointmentId || generateId(),
+        clientAppointmentId: appointment?.clientAppointmentId || appointment?.id || stableRequestId,
+        idempotencyKey,
+        pendingSync: true,
+        syncStatus: 'pending_sync',
+        sync_status: 'pending_sync',
+        appointment_status: appointment?.appointment_status || appointment?.status || 'pending',
+        status: appointment?.status || 'pending'
+      }));
+    const queueOfflineAppointment = async (reason: string) => {
+      const pendingAppointments = buildPendingAppointments();
+      await saveEncryptedRecord({
+        id: `appointment:${idempotencyKey}`,
+        data: {
+          ...payload,
+          clientAppointmentId: stableRequestId,
+          offlineReason: reason,
+          queuedAt: new Date().toISOString()
+        },
+        type: 'appointment',
+        sync_status: 'pending',
+        last_updated: Date.now(),
+        retry_count: 0,
+        last_attempt_at: null,
+        next_retry_at: null,
+        last_error: reason,
+        method: 'POST',
+        endpoint
+      });
+      return {
+        success: true,
+        queued: true,
+        offline: true,
+        pending: true,
+        idempotencyKey,
+        appointments: pendingAppointments,
+        data: pendingAppointments,
+        message: 'Agendamento salvo localmente. Ele sera sincronizado automaticamente quando a internet voltar.'
+      };
+    };
     try {
-      const stableRequestId =
-        clientRequestId ||
-        appointments.map((appointment) => String(appointment?.id || "")).filter(Boolean).join(",");
-      const idempotencyKey = `POST:/api/appointments:${stableRequestId}`;
-      const response = await fetch("/api/appointments", {
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+        return await queueOfflineAppointment('offline');
+      }
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: {
           ...(await getAuthHeaders()),
           "X-Idempotency-Key": idempotencyKey,
         },
         credentials: "include",
-        body: JSON.stringify({ appointments, idempotencyKey }),
+        body: JSON.stringify(payload),
       });
       const result = await safeJson(response);
       if (!response.ok || result?.success === false) {
+        if ([408, 429].includes(response.status) || response.status >= 500) {
+          return await queueOfflineAppointment(result?.error || `sync_retryable_${response.status}`);
+        }
         return {
           success: false,
           error: result?.error || `Falha ao criar agendamento (HTTP ${response.status}).`,
@@ -6243,7 +6296,33 @@ export const dataService = {
       return result;
     } catch (error) {
       console.error("Error creating appointments:", error);
-      return { success: false, error: "Não foi possível confirmar o agendamento." };
+      return await queueOfflineAppointment('network_error');
+    }
+  },
+
+  async getOfflineAppointmentDrafts() {
+    try {
+      const records = await getRecordsByType('appointment');
+      const drafts = records
+        .filter((record) => record.sync_status !== 'synced')
+        .flatMap((record) => {
+          const idempotencyKey = String(record?.data?.idempotencyKey || '').trim();
+          const syncStatus = record.sync_status === 'pending' ? 'pending_sync' : record.sync_status;
+          return (Array.isArray(record?.data?.appointments) ? record.data.appointments : []).map((appointment: any) => ({
+            ...(appointment || {}),
+            id: appointment?.id || appointment?.clientAppointmentId || record.id,
+            clientAppointmentId: appointment?.clientAppointmentId || appointment?.id || record?.data?.clientAppointmentId || record.id,
+            idempotencyKey,
+            pendingSync: record.sync_status === 'pending',
+            syncStatus,
+            sync_status: syncStatus,
+            status: appointment?.status || 'pending'
+          }));
+        });
+      return { success: true, data: drafts };
+    } catch (error: any) {
+      console.warn('[offline-cache] failed to read appointment drafts:', error);
+      return { success: false, data: [], error: error?.message || String(error) };
     }
   },
 

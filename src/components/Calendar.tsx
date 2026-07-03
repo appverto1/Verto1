@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   Ban,
@@ -827,14 +827,23 @@ const getRoomDisplayLine = (event: any) => {
 };
 
 const getProfessionalDisplayLine = (event: any) => {
+  const source = parseEventSourcePayload(event);
   const name = String(
     event?.therapistName ||
       event?.therapist_name ||
+      event?.therapist?.name ||
       event?.responsibleProfessionalName ||
       event?.responsible_professional_name ||
       event?.professionalName ||
       event?.professional_name ||
+      event?.professional?.name ||
       event?.professional ||
+      source?.therapistName ||
+      source?.therapist_name ||
+      source?.professionalName ||
+      source?.professional_name ||
+      source?.professional?.name ||
+      source?.professional ||
       '',
   ).trim();
   const normalized = removeDiacritics(name).toLowerCase();
@@ -855,15 +864,30 @@ const getFamilyResponsibleDisplayLine = (event: any) => {
       event?.family_responsible_name ||
       event?.responsibleName ||
       event?.responsible_name ||
+      event?.patient?.responsibleName ||
+      event?.patient?.responsible_name ||
+      event?.patient?.guardian?.nome ||
+      event?.patient?.guardian?.name ||
+      event?.patient?.metadata?.guardian?.nome ||
+      event?.patient?.metadata?.responsible?.name ||
       source?.guardianName ||
       source?.guardian_name ||
       source?.familyResponsibleName ||
       source?.family_responsible_name ||
       source?.responsibleName ||
       source?.responsible_name ||
+      source?.patient?.responsibleName ||
+      source?.patient?.responsible_name ||
+      source?.patient?.guardian?.nome ||
+      source?.patient?.guardian?.name ||
       '',
   ).trim();
   return name || 'Não informado';
+};
+
+const isAppointmentPendingOfflineSync = (event: any) => {
+  const status = String(event?.syncStatus || event?.sync_status || '').trim().toLowerCase();
+  return Boolean(event?.pendingSync || event?.pending_sync || status === 'pending_sync' || status === 'pending');
 };
 
 const classifyLocation = (event: any) => {
@@ -1059,6 +1083,29 @@ const normalizeClinicalEvent = (event: any, roomLookup?: Map<string, any>) => {
     ? ''
     : String(rawTherapistName).trim();
   const patientId = event?.patient_id || event?.patientId || source?.patient_id || source?.patientId || null;
+  const familyResponsibleName = String(
+    event?.guardianName ||
+      event?.guardian_name ||
+      event?.familyResponsibleName ||
+      event?.family_responsible_name ||
+      event?.responsibleName ||
+      event?.responsible_name ||
+      event?.patient?.responsibleName ||
+      event?.patient?.responsible_name ||
+      event?.patient?.guardian?.nome ||
+      event?.patient?.guardian?.name ||
+      source?.guardianName ||
+      source?.guardian_name ||
+      source?.familyResponsibleName ||
+      source?.family_responsible_name ||
+      source?.responsibleName ||
+      source?.responsible_name ||
+      source?.patient?.responsibleName ||
+      source?.patient?.responsible_name ||
+      source?.patient?.guardian?.nome ||
+      source?.patient?.guardian?.name ||
+      ''
+  ).trim();
   const therapistId =
     event?.responsible_professional_id ||
     event?.responsibleProfessionalId ||
@@ -1089,6 +1136,10 @@ const normalizeClinicalEvent = (event: any, roomLookup?: Map<string, any>) => {
     patientId,
     patient_name: patientName,
     patientName,
+    guardianName: familyResponsibleName || null,
+    guardian_name: familyResponsibleName || null,
+    familyResponsibleName: familyResponsibleName || null,
+    family_responsible_name: familyResponsibleName || null,
     therapist_id: therapistId,
     therapistId,
     therapist_name: therapistName,
@@ -1243,6 +1294,7 @@ export const ClinicalAgendaBoard = ({
   const [closureChecklistExpanded, setClosureChecklistExpanded] = useState(false);
   const [actionRequestState, setActionRequestState] = useState<{ loadingId: string; error: string; message?: string }>({ loadingId: '', error: '', message: '' });
   const [billingEditorOpen, setBillingEditorOpen] = useState(false);
+  const [financialValidationOpen, setFinancialValidationOpen] = useState(false);
   const [billingEditorState, setBillingEditorState] = useState<{ loading: boolean; saving: boolean; error: string; success: string }>({
     loading: false,
     saving: false,
@@ -2661,6 +2713,11 @@ export const ClinicalAgendaBoard = ({
   const billingSuggestion = billingContext.suggestion || null;
   const billingEditorSuggestion = billingPayerResolution.searched ? billingPayerResolution.suggestion : billingSuggestion;
   const billingSuggestedTissAuthorization = billingEditorSuggestion?.tissAuthorization || null;
+  const billingAvailableTissAuthorizations = Array.isArray(billingEditorSuggestion?.availableTissAuthorizations)
+    ? billingEditorSuggestion.availableTissAuthorizations
+    : Array.isArray(billingEditorSuggestion?.available_tiss_authorizations)
+      ? billingEditorSuggestion.available_tiss_authorizations
+      : [];
   const billingContextTissAuthorization = billingContext?.tissAuthorization || null;
   const visibleBillingTissAuthorization = billingContextTissAuthorization || billingSuggestedTissAuthorization;
   const billingFinancialContextType =
@@ -2717,6 +2774,53 @@ export const ClinicalAgendaBoard = ({
         billingSuggestedTissAuthorization.validUntil ? `válida até ${String(billingSuggestedTissAuthorization.validUntil).slice(0, 10).split('-').reverse().join('/')}` : ''
       ].filter(Boolean).join(' · ')
     : '';
+  const financialValidationItems = [
+    {
+      label: 'Pagador',
+      ok: billingDetailIsNonInsuranceContext || Boolean(billingContext.payerName || billingContext.payerId || billingSuggestion?.payerName),
+      message: billingDetailIsNonInsuranceContext
+        ? `Contexto ${getAppointmentFinancialContextLabel(billingFinancialContextType).toLowerCase()} definido.`
+        : 'Selecione o convenio/pagador da consulta.'
+    },
+    {
+      label: 'Plano/carteirinha',
+      ok: billingDetailIsNonInsuranceContext || Boolean(billingContext.insuranceCardNumber || billingSuggestion?.insuranceCardNumber),
+      message: 'Confirme carteirinha e plano do paciente neste convenio.'
+    },
+    {
+      label: 'Guia/autorizacao',
+      ok: billingDetailIsNonInsuranceContext || Boolean(billingContext.guideNumber || billingContext.authorizationCode || visibleBillingTissAuthorization),
+      message: 'Use uma autorizacao vigente ou registre override manual justificado.'
+    },
+    {
+      label: 'Servico',
+      ok: Boolean(billingContext.serviceType || detailEvent.service_type || detailEvent.type),
+      message: 'Servico/tipo de atendimento precisa estar definido.'
+    },
+    {
+      label: 'TUSS/DePara',
+      ok: billingDetailIsNonInsuranceContext || Boolean(visibleBillingTissAuthorization?.tussCode || billingContext.procedureCode || billingContext.procedure_code),
+      message: 'Confirme De/Para TUSS do convenio para este servico.'
+    },
+    {
+      label: 'Valor',
+      ok: pendingBillingDocuments.length === 0 && !billingDetailIsNonInsuranceContext ? Boolean(billingContext.payerName || billingSuggestion?.payerName) : true,
+      message: 'Valor negociado deve estar vigente na tabela do convenio.'
+    },
+    {
+      label: 'Anti-glosa',
+      ok: Number(detailEvent.closure_blocking_count || 0) === 0,
+      warning: Number(detailEvent.closure_warning_count || 0) > 0,
+      message: Number(detailEvent.closure_warning_count || 0) > 0 ? 'Ha alertas operacionais. Revise antes do XML.' : 'Sem bloqueios anti-glosa carregados nesta consulta.'
+    }
+  ];
+  const financialBlockingCount = financialValidationItems.filter((item: any) => !item.ok).length;
+  const financialWarningCount = financialValidationItems.filter((item: any) => item.ok && item.warning).length;
+  const financialValidationStatus = financialBlockingCount > 0
+    ? 'Bloqueada para faturamento'
+    : financialWarningCount > 0
+      ? 'Pronta com alerta'
+      : 'Pronta para faturamento';
   const applySuggestedTissAuthorizationToBillingForm = () => {
     if (!billingSuggestedTissAuthorization) return;
     setBillingForm((prev: any) => ({
@@ -2725,6 +2829,17 @@ export const ClinicalAgendaBoard = ({
       authorizationCode: billingSuggestedTissAuthorization.authorizationCode || prev.authorizationCode,
       source: 'PATIENT_TISS_AUTHORIZATION',
       patientTissAuthorizationId: billingSuggestedTissAuthorization.authorizationId || billingSuggestedTissAuthorization.patientTissAuthorizationId || ''
+    }));
+  };
+  const applyAvailableTissAuthorizationToBillingForm = (authorization: any) => {
+    if (!authorization?.authorizationId && !authorization?.patientTissAuthorizationId) return;
+    setBillingForm((prev: any) => ({
+      ...prev,
+      guideNumber: authorization.guideNumber || prev.guideNumber,
+      authorizationCode: authorization.authorizationCode || authorization.authorizationNumber || prev.authorizationCode,
+      procedureCode: authorization.tussCode || prev.procedureCode,
+      source: 'PATIENT_TISS_AUTHORIZATION',
+      patientTissAuthorizationId: authorization.authorizationId || authorization.patientTissAuthorizationId || ''
     }));
   };
 
@@ -2961,7 +3076,59 @@ export const ClinicalAgendaBoard = ({
             )}
             {billingFormUsesInsurance && !billingSuggestedTissAuthorization && (billingEditorSuggestion?.payerName || billingPayerResolution.searched) && (
               <div className={`mt-4 rounded-2xl border px-4 py-3 text-xs font-semibold ${isDark ? 'border-slate-700 bg-slate-900 text-slate-300' : 'border-slate-100 bg-slate-50 text-slate-500'}`}>
-                Nenhuma autorização TISS vigente encontrada para este paciente, convênio e serviço.
+                Nenhuma autorizacao TISS vigente encontrada para este paciente, convenio e servico.
+              </div>
+            )}
+
+            {billingFormUsesInsurance && billingAvailableTissAuthorizations.length > 0 && (
+              <div className={`mt-4 rounded-2xl border p-4 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-violet-100 bg-violet-50/40'}`}>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#7a32fc]">Autorizacoes disponiveis</p>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">Use apenas guias/senhas vinculadas a este paciente, convenio e servico.</p>
+                  </div>
+                  <span className="rounded-full bg-white px-2 py-1 text-[11px] font-bold text-slate-500">{billingAvailableTissAuthorizations.length}</span>
+                </div>
+                <div className="mt-3 grid gap-2">
+                  {billingAvailableTissAuthorizations.slice(0, 6).map((authorization: any) => {
+                    const canUse = Boolean(authorization?.canUseForAppointment || authorization?.isEligibleForAppointment);
+                    const key = authorization?.authorizationId || authorization?.patientTissAuthorizationId || `${authorization?.guideNumber}-${authorization?.authorizationCode}`;
+                    const validity = [authorization?.validFrom, authorization?.validUntil]
+                      .filter(Boolean)
+                      .map((value: string) => String(value).slice(0, 10).split('-').reverse().join('/'))
+                      .join(' a ');
+                    return (
+                      <div key={key} className={`rounded-xl border px-3 py-2 ${canUse ? 'border-emerald-200 bg-emerald-50' : isDark ? 'border-slate-700 bg-[#101827]' : 'border-slate-100 bg-white'}`}>
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                          <div className="min-w-0">
+                            <p className={`text-sm font-bold ${canUse ? 'text-emerald-800' : isDark ? 'text-slate-100' : 'text-slate-700'}`}>
+                              Guia {authorization?.guideNumber || 'sem guia'} - Senha {authorization?.authorizationCode || authorization?.authorizationNumber || 'sem senha'}
+                            </p>
+                            <p className="mt-1 text-xs font-semibold text-slate-500">
+                              {authorization?.payerName || billingForm.payerName || 'Convenio'} - {authorization?.procedureName || authorization?.tussDescription || 'Procedimento'} {authorization?.tussCode ? `- TUSS ${authorization.tussCode}` : ''}
+                            </p>
+                            <p className="mt-1 text-[11px] font-semibold text-slate-400">
+                              {authorization?.availabilityLabel || authorization?.status || 'Status nao informado'}
+                              {validity ? ` - Validade ${validity}` : ''}
+                              {authorization?.balance !== null && authorization?.balance !== undefined ? ` - Saldo ${authorization.balance}` : ''}
+                            </p>
+                            {!canUse && authorization?.unavailableReason && (
+                              <p className="mt-1 text-[11px] font-bold text-amber-700">{authorization.unavailableReason}</p>
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            disabled={!canUse || billingEditorState.saving}
+                            onClick={() => applyAvailableTissAuthorizationToBillingForm(authorization)}
+                            className={`rounded-xl px-3 py-2 text-xs font-bold disabled:opacity-50 ${canUse ? 'bg-emerald-600 text-white' : 'border border-slate-200 text-slate-400'}`}
+                          >
+                            Usar
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
 
@@ -3215,6 +3382,11 @@ export const ClinicalAgendaBoard = ({
                   <span className={`rounded-full border px-3 py-1 text-[10px] font-bold uppercase ${detailStatusColor.badge}`}>
                     {detailStatusColor.label}
                   </span>
+                  {isAppointmentPendingOfflineSync(detailEvent) && (
+                    <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-[10px] font-bold uppercase text-amber-800">
+                      Pendente de sincronizacao
+                    </span>
+                  )}
                 </div>
                 <h3 className="text-xl font-bold">{detailEvent.patientName}</h3>
                 <p className={`mt-1 text-sm ${isDark ? 'text-slate-300' : 'text-slate-500'}`}>
@@ -3305,11 +3477,47 @@ export const ClinicalAgendaBoard = ({
                       {billingDetailIsNonInsuranceContext ? 'Editar contexto' : hasSavedBillingContext ? 'Editar pagador' : 'Definir pagador'}
                     </button>
                   )}
-                  <button type="button" onClick={() => openClosureChecklist(detailEvent)} className={`rounded-2xl border px-3 py-2 text-xs font-bold ${isDark ? 'border-slate-700 text-slate-200' : 'border-violet-200 bg-white text-[#7a32fc]'}`}>
-                    Ver checklist
+                  <button type="button" onClick={() => setFinancialValidationOpen((value) => !value)} className={`rounded-2xl border px-3 py-2 text-xs font-bold ${isDark ? 'border-slate-700 text-slate-200' : 'border-violet-200 bg-white text-[#7a32fc]'}`}>
+                    Validar financeiro da consulta
                   </button>
                 </div>
               </div>
+              {financialValidationOpen && (
+                <div className={`mt-4 rounded-2xl border p-4 ${isDark ? 'border-slate-700 bg-[#101827]' : 'border-white bg-white'}`}>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#7a32fc]">Validacao financeira da consulta</p>
+                      <h4 className={`mt-1 text-base font-bold ${financialBlockingCount > 0 ? 'text-rose-700' : financialWarningCount > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
+                        {financialValidationStatus}
+                      </h4>
+                    </div>
+                    <button type="button" onClick={() => openBillingEditor()} className="rounded-xl bg-[#7a32fc] px-3 py-2 text-xs font-bold text-white">
+                      Corrigir pagador
+                    </button>
+                  </div>
+                  <div className="mt-3 grid gap-2">
+                    {financialValidationItems.map((item: any) => {
+                      const statusLabel = !item.ok ? 'Pendente' : item.warning ? 'Alerta' : 'OK';
+                      const statusClass = !item.ok
+                        ? 'bg-rose-50 text-rose-700'
+                        : item.warning
+                          ? 'bg-amber-50 text-amber-700'
+                          : 'bg-emerald-50 text-emerald-700';
+                      return (
+                        <div key={item.label} className={`rounded-xl border px-3 py-2 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-100 bg-slate-50'}`}>
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-bold">{item.label}</p>
+                              <p className="mt-0.5 text-xs font-semibold text-slate-500">{item.message}</p>
+                            </div>
+                            <span className={`shrink-0 rounded-full px-2 py-1 text-[11px] font-bold ${statusClass}`}>{statusLabel}</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
 
             {actionRequests.filter((request: any) => request.status === 'PENDING').length > 0 && (

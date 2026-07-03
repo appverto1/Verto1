@@ -20,6 +20,10 @@ import {
   shouldAttemptOfflineRecord
 } from '../src/utils/offlineSyncResilience.ts';
 
+const root = process.cwd();
+const dataServiceCode = fs.readFileSync(path.join(root, 'src/services/dataService.ts'), 'utf8');
+const localDbCode = fs.readFileSync(path.join(root, 'src/services/localDb.ts'), 'utf8');
+
 type FakeResult = { data?: any | null; error?: any | null };
 
 class FakeMutation {
@@ -292,6 +296,20 @@ test('App reativa falhas transitorias antes de exibir aviso superior', () => {
   assert.doesNotMatch(appCode, /failedSyncCount/);
   assert.doesNotMatch(appCode, /role="status" className="sticky top-0 z-20 border-b border-amber-200/);
   assert.doesNotMatch(appCode, /registro\(s\) local\(is\) n.o puderam sincronizar/);
+});
+
+test('agendamento offline usa fila persistente e idempotencia', () => {
+  assert.match(localDbCode, /'appointment'/);
+  const createStart = dataServiceCode.indexOf('async createAppointments');
+  const updateStart = dataServiceCode.indexOf('async updateAppointment', createStart);
+  assert.ok(createStart > 0 && updateStart > createStart, 'createAppointments deve existir antes de updateAppointment');
+  const createAppointments = dataServiceCode.slice(createStart, updateStart);
+  assert.match(createAppointments, /const idempotencyKey = `POST:\/api\/appointments:\$\{stableRequestId\}`/);
+  assert.match(createAppointments, /X-Idempotency-Key/);
+  assert.match(createAppointments, /queueOfflineAppointment/);
+  assert.match(createAppointments, /type:\s*'appointment'/);
+  assert.match(createAppointments, /syncStatus:\s*'pending_sync'/);
+  assert.match(dataServiceCode, /async getOfflineAppointmentDrafts/);
 });
 
 for (const item of tests) {

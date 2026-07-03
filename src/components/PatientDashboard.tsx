@@ -839,6 +839,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       const result = await dataService.updatePatientSelfProfile({
         patientId: portalPatientId || undefined,
         name: nextName,
+        portalDisplayName: nextName,
         address: settingsForm.address.trim(),
         profilePicture: settingsForm.profilePicture || null,
         profilePicturePath: (settingsForm as any).profilePicturePath || null
@@ -1975,14 +1976,17 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           <div className="grid gap-4">
             <label className="block">
               <span className="mb-2 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.22em] text-slate-400">
-                <User size={14} /> Nome
+                <User size={14} /> Nome exibido no portal
               </span>
               <input
                 value={settingsForm.name}
                 onChange={(e) => setSettingsForm((prev) => ({ ...prev, name: e.target.value }))}
                 className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-800 outline-none transition focus:border-[#7a32fc] focus:bg-white"
-                placeholder="Seu nome"
+                placeholder="Como deseja aparecer no portal"
               />
+              <span className="mt-2 block text-xs font-semibold text-slate-400">
+                Este nome aparece apenas no portal e nao altera o nome clinico cadastrado pela clinica.
+              </span>
             </label>
 
             <label className="block">

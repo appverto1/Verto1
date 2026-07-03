@@ -65,6 +65,19 @@ test('agenda hidrata nome real do paciente quando recorrencia vem apenas com pat
   assert.match(serverCode, /hydrateRowsFromKnownNames/);
 });
 
+test('detalhe da consulta hidrata profissional, sala e responsavel familiar sem fallback destrutivo', () => {
+  assert.match(serverCode, /patientResponsibleNamesById/);
+  assert.match(serverCode, /responsible_name/);
+  assert.match(serverCode, /familyResponsibleName: resolvedFamilyResponsibleName/);
+  assert.match(calendarCode, /getProfessionalDisplayLine/);
+  assert.match(calendarCode, /source\?\.professionalName/);
+  assert.match(calendarCode, /getFamilyResponsibleDisplayLine/);
+  assert.match(calendarCode, /event\?\.patient\?\.guardian\?\.nome/);
+  assert.match(calendarCode, /familyResponsibleName: familyResponsibleName \|\| null/);
+  assert.match(calendarCode, /isAppointmentPendingOfflineSync/);
+  assert.match(calendarCode, /Pendente de sincronizacao/);
+});
+
 test('detail endpoint carrega dados pesados apenas sob demanda', () => {
   assert.match(serverCode, /app\.get\('\/api\/calendar\/events\/:eventId\/detail'/);
   assert.match(serverCode, /\.from\('aba_next_session_plan_items'\)/);

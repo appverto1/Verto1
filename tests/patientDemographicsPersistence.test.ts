@@ -69,11 +69,13 @@ test('patch parcial nao trunca nome completo canonico do paciente', () => {
 });
 
 test('perfil do portal nao sobrescreve nome completo ao salvar apenas foto ou payload curto', () => {
-  const patientSelfRoute = sliceFrom(serverCode, "app.patch('/api/patient/self/profile'", 5200);
+  const patientSelfRoute = sliceFrom(serverCode, "app.patch('/api/patient/self/profile'", 10500);
   assert.match(patientSelfRoute, /requestedPatientId/);
   assert.match(patientSelfRoute, /responsible_user_id/);
-  assert.match(patientSelfRoute, /preserveLinkedPatientName/);
-  assert.match(patientSelfRoute, /name:\s*req\.body\?\.name !== undefined \? name : undefined/);
+  assert.match(patientSelfRoute, /portalDisplayName/);
+  assert.match(patientSelfRoute, /portal_display_name/);
+  assert.match(patientSelfRoute, /clinicalPatientName/);
+  assert.doesNotMatch(patientSelfRoute, /name:\s*req\.body\?\.name !== undefined \? name : undefined/);
   assert.match(patientSelfRoute, /profile_picture_path:\s*profilePicturePath/);
 
   const patientDashboardPhoto = sliceFrom(patientDashboardCode, 'const handleProfilePhotoChange = async', 2200);

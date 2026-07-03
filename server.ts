@@ -8816,6 +8816,105 @@ async function resolveAppointmentTissAuthorizationForBilling(params: {
   }
 }
 
+async function listAppointmentTissAuthorizationOptionsForBilling(params: {
+  organizationId: string;
+  patientId: string;
+  payerId?: any;
+  payerName?: any;
+  serviceType?: any;
+  procedureCode?: any;
+  appointmentDate?: any;
+}) {
+  const organizationId = sanitizeString(params.organizationId, 120);
+  const patientId = sanitizeString(params.patientId, 120);
+  if (!isUuid(organizationId) || !isUuid(patientId)) return [];
+  try {
+    const referenceDateKey = appointmentDateKeyForAuthorization(params.appointmentDate);
+    let payerId = sanitizeString(params.payerId, 120);
+    const payerName = sanitizeString(params.payerName, 180);
+    let payer: any = isUuid(payerId) ? await fetchPayerForAppointmentTissBilling(payerId, organizationId) : null;
+    if (!payer?.id && payerName) {
+      const payerResult = await supabase
+        .from('clinic_payers')
+        .select(CLINIC_PAYER_SELECT)
+        .eq('organization_id', organizationId)
+        .ilike('name', payerName)
+        .limit(2);
+      if (payerResult.error && !hasMissingFinancialSchema(payerResult.error) && !isMissingRelationError(payerResult.error)) throw payerResult.error;
+      payer = Array.isArray(payerResult.data) && payerResult.data.length === 1 ? payerResult.data[0] : null;
+      payerId = sanitizeString(payer?.id, 120);
+    }
+    if (!isUuid(payerId)) return [];
+
+    const serviceType = sanitizeString(params.serviceType, 120);
+    const serviceCatalog = await fetchMatchingTussServiceCatalogForAppointmentTissBilling(organizationId, serviceType, params.procedureCode);
+    const mapping = serviceCatalog?.id
+      ? await fetchActivePayerTussMappingForAppointmentTissBilling(organizationId, payerId, sanitizeString(serviceCatalog.id, 120), referenceDateKey)
+      : null;
+
+    const { data, error } = await supabase
+      .from('patient_payer_authorizations')
+      .select(PATIENT_PAYER_AUTHORIZATION_SELECT)
+      .eq('organization_id', organizationId)
+      .eq('patient_id', patientId)
+      .eq('payer_id', payerId)
+      .limit(120);
+    if (error) {
+      if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return [];
+      throw error;
+    }
+    const hydrated = await hydratePatientPayerAuthorizationsForAppointmentTissBilling(organizationId, Array.isArray(data) ? data : []);
+    const expectedServiceCatalogId = sanitizeString(serviceCatalog?.id, 120);
+    const expectedMappingId = sanitizeString(mapping?.id, 120);
+    return hydrated.map((authorization: any) => {
+      const serialized = serializeAppointmentTissAuthorizationSuggestion(authorization, referenceDateKey);
+      if (!serialized) return null;
+      const active = authorization?.active !== false && !['inactive', 'inativo', 'cancelled', 'canceled'].includes(sanitizeString(authorization?.status, 40).toLowerCase());
+      const sameService = !expectedServiceCatalogId || sanitizeString(authorization?.serviceCatalogId, 120) === expectedServiceCatalogId;
+      const sameMapping = !expectedMappingId || sanitizeString(authorization?.payerTussMappingId, 120) === expectedMappingId;
+      const dateStatus = getPatientTissAuthorizationVisualState(authorization, referenceDateKey);
+      let availabilityGroup = 'usable';
+      let availabilityLabel = 'Vigente e utilizavel';
+      let unavailableReason = '';
+      if (!active) {
+        availabilityGroup = 'inactive';
+        availabilityLabel = 'Inativa';
+        unavailableReason = 'Autorizacao inativa no cadastro.';
+      } else if (!dateStatus.isCurrent) {
+        const validFrom = sanitizeString(authorization?.validFrom || authorization?.valid_from, 40).slice(0, 10);
+        availabilityGroup = validFrom && referenceDateKey < validFrom ? 'future' : 'expired';
+        availabilityLabel = availabilityGroup === 'future' ? 'Futura' : 'Vencida';
+        unavailableReason = availabilityGroup === 'future'
+          ? 'Autorizacao ainda nao vigente na data da consulta.'
+          : 'Autorizacao vencida para a data da consulta.';
+      } else if (serialized.balance !== null && serialized.balance <= 0) {
+        availabilityGroup = 'no_balance';
+        availabilityLabel = 'Sem saldo';
+        unavailableReason = 'Quantidade autorizada ja foi consumida.';
+      } else if (!sameService || !sameMapping) {
+        availabilityGroup = 'other_service';
+        availabilityLabel = 'Outro servico/procedimento';
+        unavailableReason = 'Autorizacao pertence a outro servico, procedimento ou De/Para.';
+      }
+      return cleanObject({
+        ...serialized,
+        availabilityGroup,
+        availabilityLabel,
+        unavailableReason,
+        canUseForAppointment: availabilityGroup === 'usable',
+        isEligibleForAppointment: availabilityGroup === 'usable'
+      });
+    }).filter(Boolean);
+  } catch (error: any) {
+    console.warn('[AppointmentTissAuthorization] options failed.', {
+      organizationId,
+      patientId,
+      message: error?.message || String(error)
+    });
+    return [];
+  }
+}
+
 async function resolveAppointmentBillingSuggestion(params: {
   organizationId: string;
   patientId: string;
@@ -8875,7 +8974,7 @@ async function resolveAppointmentBillingSuggestion(params: {
         ? payerScopedPlans[0]
         : null;
   const attachTissAuthorization = async (suggestion: any) => {
-    const tissAuthorization = await resolveAppointmentTissAuthorizationForBilling({
+    const availableTissAuthorizations = await listAppointmentTissAuthorizationOptionsForBilling({
       organizationId,
       patientId,
       payerId: suggestion?.payerId || requestedPayerId,
@@ -8884,9 +8983,24 @@ async function resolveAppointmentBillingSuggestion(params: {
       procedureCode,
       appointmentDate
     });
-    if (!tissAuthorization?.authorizationId) return suggestion;
-    return {
+    const tissAuthorization = availableTissAuthorizations.find((authorization: any) => authorization?.canUseForAppointment) ||
+      await resolveAppointmentTissAuthorizationForBilling({
+        organizationId,
+        patientId,
+        payerId: suggestion?.payerId || requestedPayerId,
+        payerName: suggestion?.payerName || requestedPayerName,
+        serviceType: suggestion?.serviceType || serviceType,
+        procedureCode,
+        appointmentDate
+      });
+    const suggestionWithOptions = {
       ...suggestion,
+      availableTissAuthorizations,
+      available_tiss_authorizations: availableTissAuthorizations
+    };
+    if (!tissAuthorization?.authorizationId) return suggestionWithOptions;
+    return {
+      ...suggestionWithOptions,
       authorizationCode: tissAuthorization.authorizationCode || suggestion?.authorizationCode || null,
       guideNumber: tissAuthorization.guideNumber || suggestion?.guideNumber || null,
       patientTissAuthorizationId: tissAuthorization.authorizationId,
@@ -9178,18 +9292,58 @@ async function syncAppointmentsTableFromClinicState(params: {
     )
   ).slice(0, 1000);
   const patientNamesById = new Map<string, string>();
+  const patientResponsibleNamesById = new Map<string, string>();
   if (requestedPatientIds.length > 0) {
-    const { data: patientRows, error: patientNamesError } = await supabase
+    let patientNamesResult = await supabase
       .from('patients')
-      .select('id, name')
+      .select('id, name, responsible_name, metadata')
       .eq('clinic_id', clinicId)
       .in('id', requestedPatientIds)
       .limit(requestedPatientIds.length);
+    if (patientNamesResult.error && extractMissingColumnName(patientNamesResult.error) === 'metadata') {
+      patientNamesResult = await supabase
+        .from('patients')
+        .select('id, name, responsible_name')
+        .eq('clinic_id', clinicId)
+        .in('id', requestedPatientIds)
+        .limit(requestedPatientIds.length);
+    }
+    if (patientNamesResult.error && extractMissingColumnName(patientNamesResult.error) === 'responsible_name') {
+      patientNamesResult = await supabase
+        .from('patients')
+        .select('id, name, metadata')
+        .eq('clinic_id', clinicId)
+        .in('id', requestedPatientIds)
+        .limit(requestedPatientIds.length);
+    }
+    if (
+      patientNamesResult.error &&
+      ['metadata', 'responsible_name'].includes(String(extractMissingColumnName(patientNamesResult.error) || ''))
+    ) {
+      patientNamesResult = await supabase
+        .from('patients')
+        .select('id, name')
+        .eq('clinic_id', clinicId)
+        .in('id', requestedPatientIds)
+        .limit(requestedPatientIds.length);
+    }
+    const { data: patientRows, error: patientNamesError } = patientNamesResult;
     if (!patientNamesError) {
       for (const row of patientRows || []) {
         const id = sanitizeString(row?.id, 120);
         const name = sanitizeString(row?.name, 180);
         if (isUuid(id) && !isGenericAppointmentPatientLabel(name)) patientNamesById.set(id, name);
+        const metadata = parseStoredJsonObject(row?.metadata);
+        const responsibleName = sanitizeString(
+          row?.responsible_name ||
+            metadata?.guardian?.nome ||
+            metadata?.guardian?.name ||
+            metadata?.responsible?.nome ||
+            metadata?.responsible?.name ||
+            metadata?.responsavelNome,
+          180
+        );
+        if (isUuid(id) && responsibleName) patientResponsibleNamesById.set(id, responsibleName);
       }
     } else if (!hasMissingFinancialSchema(patientNamesError)) {
       console.warn('[Appointments] Nomes de pacientes indisponíveis ao espelhar agenda.', patientNamesError.message);
@@ -9367,6 +9521,16 @@ async function syncAppointmentsTableFromClinicState(params: {
       appointment?.patient_name,
       appointment?.name
     ]);
+    const resolvedFamilyResponsibleName = sanitizeString(
+      appointment?.familyResponsibleName ||
+        appointment?.family_responsible_name ||
+        appointment?.guardianName ||
+        appointment?.guardian_name ||
+        appointment?.responsibleName ||
+        appointment?.responsible_name ||
+        patientResponsibleNamesById.get(patientId),
+      180
+    ) || null;
 
     const row = {
       id: appointmentId,
@@ -9423,6 +9587,10 @@ async function syncAppointmentsTableFromClinicState(params: {
         patientName: resolvedPatientName || appointment?.patientName || appointment?.patient_name || appointment?.name || null,
         patient_name: resolvedPatientName || appointment?.patient_name || appointment?.patientName || appointment?.name || null,
         name: resolvedPatientName || appointment?.name || appointment?.patientName || appointment?.patient_name || null,
+        familyResponsibleName: resolvedFamilyResponsibleName,
+        family_responsible_name: resolvedFamilyResponsibleName,
+        guardianName: resolvedFamilyResponsibleName,
+        guardian_name: resolvedFamilyResponsibleName,
         professionalIds,
         professional_ids: professionalIds,
         room_id: roomId || appointment?.room_id || appointment?.roomId || null,
@@ -17695,6 +17863,15 @@ async function startServer() {
       }
 
       const requestedName = sanitizeString(req.body?.name, 180);
+      const portalDisplayName =
+        sanitizeString(
+          req.body?.portalDisplayName ||
+            req.body?.portal_display_name ||
+            req.body?.displayName ||
+            req.body?.display_name ||
+            req.body?.name,
+          180
+        ) || null;
       const requestedPatientId = sanitizeString(req.body?.patientId || req.body?.patient_id, 120);
       let linkedPatientForProfile: any = null;
       const activeClinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -17709,8 +17886,17 @@ async function startServer() {
           if (isUuid(activeClinicId)) query = query.eq('clinic_id', activeClinicId);
           return query.maybeSingle();
         };
-        let linkedPatientResult = await readLinkedPatient('id, name, email, clinic_id, responsible_user_id');
+        let linkedPatientResult = await readLinkedPatient('id, name, email, clinic_id, responsible_user_id, metadata');
         if (linkedPatientResult.error && extractMissingColumnName(linkedPatientResult.error) === 'responsible_user_id') {
+          linkedPatientResult = await readLinkedPatient('id, name, email, clinic_id, metadata');
+        }
+        if (linkedPatientResult.error && extractMissingColumnName(linkedPatientResult.error) === 'metadata') {
+          linkedPatientResult = await readLinkedPatient('id, name, email, clinic_id, responsible_user_id');
+        }
+        if (
+          linkedPatientResult.error &&
+          ['metadata', 'responsible_user_id'].includes(String(extractMissingColumnName(linkedPatientResult.error) || ''))
+        ) {
           linkedPatientResult = await readLinkedPatient('id, name, email, clinic_id');
         }
         if (!linkedPatientResult.error && linkedPatientResult.data?.id) {
@@ -17728,14 +17914,27 @@ async function startServer() {
       if (!linkedPatientForProfile && email) {
         let linkedPatientQuery = supabase
           .from('patients')
-          .select('id, name, email, clinic_id')
+          .select('id, name, email, clinic_id, metadata')
           .eq('email', email)
           .eq('is_active', true)
           .is('deleted_at', null)
           .order('updated_at', { ascending: false })
           .limit(1);
         if (isUuid(activeClinicId)) linkedPatientQuery = linkedPatientQuery.eq('clinic_id', activeClinicId);
-        const { data: linkedPatient, error: linkedPatientError } = await linkedPatientQuery.maybeSingle();
+        let linkedPatientLookup = await linkedPatientQuery.maybeSingle();
+        if (linkedPatientLookup.error && extractMissingColumnName(linkedPatientLookup.error) === 'metadata') {
+          linkedPatientQuery = supabase
+            .from('patients')
+            .select('id, name, email, clinic_id')
+            .eq('email', email)
+            .eq('is_active', true)
+            .is('deleted_at', null)
+            .order('updated_at', { ascending: false })
+            .limit(1);
+          if (isUuid(activeClinicId)) linkedPatientQuery = linkedPatientQuery.eq('clinic_id', activeClinicId);
+          linkedPatientLookup = await linkedPatientQuery.maybeSingle();
+        }
+        const { data: linkedPatient, error: linkedPatientError } = linkedPatientLookup;
         if (!linkedPatientError && linkedPatient?.id) {
           linkedPatientForProfile = linkedPatient;
         } else if (linkedPatientError && !isMissingRelationError(linkedPatientError)) {
@@ -17745,6 +17944,7 @@ async function startServer() {
       const linkedPatientName = normalizeCanonicalPatientName(linkedPatientForProfile?.name);
       const preserveLinkedPatientName = shouldPreserveExistingPatientFullName(linkedPatientName, requestedName);
       const name =
+        portalDisplayName ||
         (preserveLinkedPatientName ? linkedPatientName : requestedName) ||
         sanitizeString(req.session.user?.name, 180) ||
         linkedPatientName ||
@@ -17774,8 +17974,19 @@ async function startServer() {
       });
 
       if (linkedPatientForProfile?.id || email) {
+        const currentPatientMetadata = parseStoredJsonObject(linkedPatientForProfile?.metadata);
+        const nextPatientMetadata = portalDisplayName
+          ? cleanObject({
+              ...currentPatientMetadata,
+              portalDisplayName,
+              portal_display_name: portalDisplayName,
+              preferredName: portalDisplayName,
+              preferred_name: portalDisplayName,
+              portalIdentitySource: 'patient_portal'
+            })
+          : currentPatientMetadata;
         const patientProfilePatch = {
-          name: req.body?.name !== undefined ? name : undefined,
+          metadata: portalDisplayName ? nextPatientMetadata : undefined,
           address: address || undefined,
           endereco: address || undefined,
           profile_picture: profilePicture || undefined,
@@ -17796,6 +18007,7 @@ async function startServer() {
           user_metadata: cleanObject({
             ...((req.session.user as any)?.user_metadata || {}),
             full_name: name,
+            portal_display_name: portalDisplayName || undefined,
             address,
             avatar_url: profilePicture || undefined,
             profile_picture: profilePicture || undefined,
@@ -17828,6 +18040,8 @@ async function startServer() {
         success: true,
         data: {
           name,
+          clinicalPatientName: linkedPatientName || null,
+          portalDisplayName: portalDisplayName || name,
           address,
           profilePicture,
           profilePicturePath

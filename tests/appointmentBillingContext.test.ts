@@ -444,6 +444,30 @@ test('GET de billing-context resolve sugestao pelo payerId solicitado sem salvar
   assert.doesNotMatch(route, /upsertAppointmentBillingContextRow/);
 });
 
+test('billing-context expõe autorizações disponíveis por pagador sem reaproveitar outro convênio', () => {
+  assert.match(serverCode, /async function listAppointmentTissAuthorizationOptionsForBilling/);
+  assert.match(serverCode, /availableTissAuthorizations/);
+  assert.match(serverCode, /availabilityGroup/);
+  assert.match(serverCode, /no_balance/);
+  assert.match(serverCode, /other_service/);
+  assert.match(serverCode, /\.eq\('payer_id', payerId\)/);
+  assert.match(calendarCode, /Autorizacoes disponiveis|Autoriza/);
+  assert.match(calendarCode, /applyAvailableTissAuthorizationToBillingForm/);
+  assert.match(calendarCode, /canUseForAppointment/);
+});
+
+test('detalhe da consulta mostra validação financeira guiada', () => {
+  assert.match(calendarCode, /financialValidationItems/);
+  assert.match(calendarCode, /Validar financeiro da consulta/);
+  assert.match(calendarCode, /Validacao financeira da consulta/);
+  assert.match(calendarCode, /Pronta para faturamento/);
+  assert.match(calendarCode, /Pronta com alerta/);
+  assert.match(calendarCode, /Bloqueada para faturamento/);
+  for (const label of ['Pagador', 'Plano/carteirinha', 'Guia/autorizacao', 'Servico', 'TUSS/DePara', 'Valor', 'Anti-glosa']) {
+    assert.match(calendarCode, new RegExp(label));
+  }
+});
+
 test('override manual de pagador fica marcado em metadata sem apagar sala ou profissional', () => {
   const routeStart = serverCode.indexOf("app.patch('/api/appointments/:appointmentId/billing-context'");
   const routeEnd = serverCode.indexOf("app.post('/api/appointments/:appointmentId/required-documents", routeStart);
