@@ -2267,6 +2267,15 @@ export default function App() {
     currency: string;
     isEnterprise: boolean;
     enterpriseThreshold?: number | null;
+    patientBasedBillingEnabled?: boolean;
+    patientBasedBillingPreview?: {
+      activePatientCount: number;
+      unitPriceCents: number;
+      totalAmountCents: number;
+      nextMilestone: number | null;
+      patientsUntilMilestone: number | null;
+      milestonePriceCents: number | null;
+    } | null;
   };
 
   type BillingRangeCard = {
@@ -2865,6 +2874,19 @@ export default function App() {
                         <p className="mt-3 rounded-2xl bg-violet-50 px-3 py-2 text-xs font-bold text-violet-800">
                           Faixa usada no cálculo: {describeBillingTierRange(matchedTier, 0, tieredPlan?.tiers || [])}.
                         </p>
+                      )}
+                      {estimateState.data?.patientBasedBillingPreview && (
+                        <div className="mt-3 rounded-2xl border border-violet-100 bg-white px-3 py-3 text-xs font-bold text-slate-700">
+                          <p className="text-[10px] uppercase tracking-widest text-violet-600">Previa por paciente ativo</p>
+                          <p className="mt-1">
+                            Pacientes ativos: {estimateState.data.patientBasedBillingPreview.activePatientCount} · Preco por paciente neste marco: {formatBillingCurrency(estimateState.data.patientBasedBillingPreview.unitPriceCents, selectedBillingRange.currency || selectedPlan?.currency || 'brl')} · Mensalidade prevista: {formatBillingCurrency(estimateState.data.patientBasedBillingPreview.totalAmountCents, selectedBillingRange.currency || selectedPlan?.currency || 'brl')}
+                          </p>
+                          {estimateState.data.patientBasedBillingPreview.nextMilestone && (
+                            <p className="mt-1 text-slate-500">
+                              Proximo marco: {estimateState.data.patientBasedBillingPreview.nextMilestone} pacientes. Ao atingir o marco: {formatBillingCurrency(estimateState.data.patientBasedBillingPreview.milestonePriceCents, selectedBillingRange.currency || selectedPlan?.currency || 'brl')}.
+                            </p>
+                          )}
+                        </div>
                       )}
                       {estimateState.error && (
                         <p className="mt-3 rounded-2xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">

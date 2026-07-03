@@ -2762,8 +2762,13 @@ export const dataService = {
     }
   },
 
-  async getAppointmentBillingContext(appointmentId: string) {
-    const endpoint = `/api/appointments/${encodeURIComponent(String(appointmentId))}/billing-context`;
+  async getAppointmentBillingContext(appointmentId: string, options: any = {}) {
+    const endpoint = endpointWithQuery(`/api/appointments/${encodeURIComponent(String(appointmentId))}/billing-context`, {
+      payerId: options.payerId,
+      payerName: options.payerName,
+      serviceType: options.serviceType,
+      procedureCode: options.procedureCode
+    });
     try {
       const response = await fetchClinical(endpoint, {
         headers: await getAuthHeaders(),

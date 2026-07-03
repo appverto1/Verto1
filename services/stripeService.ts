@@ -483,6 +483,127 @@ export function estimateGraduatedActivePatientBilling(activePatients: number): {
   };
 }
 
+export type VertoPricingTier = {
+  patientLimit: number;
+  fixedMonthlyPriceCents: number;
+};
+
+export type VertoPatientBasedMonthlyPrice = {
+  activePatientCount: number;
+  patientBasedBillingEnabled: boolean;
+  pricingModel: 'patient_based_active_patients' | 'legacy';
+  appliedTier: VertoPricingTier | null;
+  unitPriceCents: number;
+  totalAmountCents: number;
+  nextMilestone: number | null;
+  patientsUntilMilestone: number | null;
+  milestonePriceCents: number | null;
+  requiresCustomPricing: boolean;
+};
+
+export const DEFAULT_VERTO_PATIENT_PRICING_TIERS: VertoPricingTier[] = [
+  { patientLimit: 5, fixedMonthlyPriceCents: 19700 },
+  { patientLimit: 30, fixedMonthlyPriceCents: 69700 }
+];
+
+function normalizeVertoPricingTiers(tiers: VertoPricingTier[] = []): VertoPricingTier[] {
+  return (Array.isArray(tiers) ? tiers : [])
+    .map((tier) => ({
+      patientLimit: Math.max(1, Math.floor(Number(tier?.patientLimit || 0))),
+      fixedMonthlyPriceCents: Math.max(0, Math.round(Number(tier?.fixedMonthlyPriceCents || 0)))
+    }))
+    .filter((tier) => tier.patientLimit > 0 && tier.fixedMonthlyPriceCents > 0)
+    .sort((a, b) => a.patientLimit - b.patientLimit);
+}
+
+export function isVertoPatientBasedBillingEnabled(value: unknown): boolean {
+  if (typeof value === 'boolean') return value;
+  const normalized = toSafeString(value, 40).toLowerCase();
+  return ['1', 'true', 'enabled', 'on', 'patient_based', 'patient_based_active_patients'].includes(normalized);
+}
+
+export function calculateVertoPatientBasedMonthlyPrice(
+  activePatientCount: number,
+  pricingTiers: VertoPricingTier[] = DEFAULT_VERTO_PATIENT_PRICING_TIERS
+): VertoPatientBasedMonthlyPrice {
+  const safeCount = Math.max(0, Math.floor(Number(activePatientCount || 0)));
+  const tiers = normalizeVertoPricingTiers(pricingTiers);
+  const appliedTier = tiers.find((tier) => tier.patientLimit >= Math.max(1, safeCount)) || null;
+  if (!appliedTier) {
+    return {
+      activePatientCount: safeCount,
+      patientBasedBillingEnabled: true,
+      pricingModel: 'patient_based_active_patients',
+      appliedTier: null,
+      unitPriceCents: 0,
+      totalAmountCents: 0,
+      nextMilestone: null,
+      patientsUntilMilestone: null,
+      milestonePriceCents: null,
+      requiresCustomPricing: safeCount > 0
+    };
+  }
+
+  const unitPriceCents = Math.ceil((appliedTier.fixedMonthlyPriceCents / appliedTier.patientLimit) / 100) * 100;
+  const totalAmountCents = safeCount === appliedTier.patientLimit
+    ? appliedTier.fixedMonthlyPriceCents
+    : safeCount * unitPriceCents;
+
+  return {
+    activePatientCount: safeCount,
+    patientBasedBillingEnabled: true,
+    pricingModel: 'patient_based_active_patients',
+    appliedTier,
+    unitPriceCents,
+    totalAmountCents,
+    nextMilestone: appliedTier.patientLimit,
+    patientsUntilMilestone: Math.max(0, appliedTier.patientLimit - safeCount),
+    milestonePriceCents: appliedTier.fixedMonthlyPriceCents,
+    requiresCustomPricing: false
+  };
+}
+
+export function previewVertoPatientBillingPrice(params: {
+  activePatientCount: number;
+  pricingTiers?: VertoPricingTier[];
+  patientBasedBillingEnabled?: boolean | string | null;
+  legacyMonthlyPriceCents?: number | null;
+}): VertoPatientBasedMonthlyPrice {
+  const enabled = isVertoPatientBasedBillingEnabled(params.patientBasedBillingEnabled);
+  if (!enabled) {
+    return {
+      activePatientCount: Math.max(0, Math.floor(Number(params.activePatientCount || 0))),
+      patientBasedBillingEnabled: false,
+      pricingModel: 'legacy',
+      appliedTier: null,
+      unitPriceCents: 0,
+      totalAmountCents: Math.max(0, Math.round(Number(params.legacyMonthlyPriceCents || 0))),
+      nextMilestone: null,
+      patientsUntilMilestone: null,
+      milestonePriceCents: null,
+      requiresCustomPricing: false
+    };
+  }
+  return calculateVertoPatientBasedMonthlyPrice(params.activePatientCount, params.pricingTiers || DEFAULT_VERTO_PATIENT_PRICING_TIERS);
+}
+
+export function isVertoBillableActivePatientRecord(patient: any, organizationId?: string | null): boolean {
+  if (!patient) return false;
+  const scopedOrganizationId = toSafeString(organizationId, 120);
+  if (scopedOrganizationId) {
+    const patientOrganizationId = toSafeString(patient.organization_id || patient.organizationId || patient.clinic_id || patient.clinicId, 120);
+    if (patientOrganizationId !== scopedOrganizationId) return false;
+  }
+  const status = toSafeString(patient.status || 'active', 80).toLowerCase();
+  if (patient.is_active === false || patient.isActive === false) return false;
+  if (patient.deleted_at || patient.deletedAt || patient.archived_at || patient.archivedAt || patient.unlinkedAt) return false;
+  return !['inactive', 'inativo', 'deleted', 'archived', 'cancelled', 'canceled', 'unlinked'].includes(status);
+}
+
+export function countVertoBillableActivePatients(patients: any[] = [], organizationId?: string | null): number {
+  return (Array.isArray(patients) ? patients : []).filter((patient) => isVertoBillableActivePatientRecord(patient, organizationId)).length;
+}
+
 function activePatientStatusFilter(): string {
   return `status.is.null,status.in.(${ACTIVE_PATIENT_STATUS_VALUES.join(',')})`;
 }

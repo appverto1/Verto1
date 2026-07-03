@@ -42,6 +42,11 @@ import {
   getAppointmentFinancialContextLabel,
   normalizeAppointmentFinancialContextType,
 } from '../utils/appointmentFinancialContext';
+import {
+  buildPayerScopedBillingForm,
+  clearPayerDependentBillingFields,
+  payerScopedBillingSourceLabel,
+} from '../utils/appointmentBillingPayerSwitch';
 import { resolveAppointmentCancellationState } from '../utils/appointmentCancellationState';
 import { getAppointmentPrimaryAction } from '../utils/appointmentPrimaryAction';
 
@@ -1246,6 +1251,14 @@ export const ClinicalAgendaBoard = ({
   });
   const [billingPayers, setBillingPayers] = useState<any[]>([]);
   const [billingPayersLoaded, setBillingPayersLoaded] = useState(false);
+  const [billingPayerResolution, setBillingPayerResolution] = useState<{
+    loading: boolean;
+    error: string;
+    payerId: string;
+    suggestion: any | null;
+    searched: boolean;
+  }>({ loading: false, error: '', payerId: '', suggestion: null, searched: false });
+  const [billingManualOverrideOpen, setBillingManualOverrideOpen] = useState(false);
   const [billingForm, setBillingForm] = useState({
     financialContextType: 'INSURANCE',
     payerId: '',
@@ -1816,15 +1829,18 @@ export const ClinicalAgendaBoard = ({
       return normalizePayerOptions([...withoutDuplicate, payer]);
     });
     setBillingPayersLoaded(true);
-    setBillingForm((prev) => ({
+    const payerId = String(payer?.id || '');
+    const payerName = sanitizeHumanPayerName(payer?.name || name);
+    setBillingManualOverrideOpen(false);
+    setBillingForm((prev) => clearPayerDependentBillingFields({
       ...prev,
       financialContextType: 'INSURANCE',
-      payerId: String(payer?.id || ''),
-      payerName: sanitizeHumanPayerName(payer?.name || name),
-      patientTissAuthorizationId: '',
-      source: 'MANUAL'
+      payerId,
+      payerName,
+      source: 'PATIENT_DEFAULT'
     }));
     setQuickPayerForm({ open: false, saving: false, error: '', name: '', payerType: 'INSURANCE' });
+    if (payerId) void loadBillingSuggestionForPayer(payerId, payerName);
   };
 
   const findUniqueBillingPayerByName = (payerName: any) => {
@@ -1846,10 +1862,60 @@ export const ClinicalAgendaBoard = ({
     };
   };
 
+  const loadBillingSuggestionForPayer = async (payerId: string, payerName = '') => {
+    const appointmentId = String(detailEvent?.id || selectedEvent?.id || '').trim();
+    const safePayerId = String(payerId || '').trim();
+    if (!appointmentId || !safePayerId) {
+      setBillingPayerResolution({ loading: false, error: '', payerId: safePayerId, suggestion: null, searched: Boolean(safePayerId) });
+      return;
+    }
+    setBillingPayerResolution({ loading: true, error: '', payerId: safePayerId, suggestion: null, searched: true });
+    const result = await dataService.getAppointmentBillingContext(appointmentId, {
+      payerId: safePayerId,
+      payerName,
+      serviceType: billingForm.serviceType || detailEvent?.type || ''
+    });
+    if (!result?.success) {
+      setBillingPayerResolution({
+        loading: false,
+        error: result?.error || 'Nao foi possivel buscar dados deste convenio.',
+        payerId: safePayerId,
+        suggestion: null,
+        searched: true
+      });
+      return;
+    }
+    const suggestion = result?.data?.suggestion || null;
+    setBillingPayerResolution({ loading: false, error: '', payerId: safePayerId, suggestion, searched: true });
+    setBillingForm((prev: any) => {
+      if (String(prev.payerId || '') !== safePayerId) return prev;
+      return buildPayerScopedBillingForm(prev, { payerId: safePayerId, payerName, suggestion });
+    });
+  };
+
+  const handleBillingPayerChange = (value: string) => {
+    if (billingSnapshotOptionVisible && value === billingSnapshotSelectValue) return;
+    const payer = billingPayers.find((item: any) => String(item?.id || '') === value);
+    setBillingManualOverrideOpen(false);
+    setBillingForm((prev: any) => clearPayerDependentBillingFields({
+      ...prev,
+      payerId: value,
+      payerName: payer?.name || '',
+      source: value ? 'PATIENT_DEFAULT' : 'MANUAL'
+    }));
+    if (!value) {
+      setBillingPayerResolution({ loading: false, error: '', payerId: '', suggestion: null, searched: false });
+      return;
+    }
+    void loadBillingSuggestionForPayer(value, payer?.name || '');
+  };
+
   const openBillingEditor = (source: any = null) => {
     if (!canEditBillingContext) return;
     const currentBilling = detail?.billingContext || {};
     hydrateBillingForm(source || getBillingFormSource(currentBilling));
+    setBillingManualOverrideOpen(false);
+    setBillingPayerResolution({ loading: false, error: '', payerId: '', suggestion: currentBilling?.suggestion || null, searched: false });
     setQuickPayerForm({ open: false, saving: false, error: '', name: '', payerType: 'INSURANCE' });
     setBillingEditorOpen(true);
     setBillingEditorState({ loading: false, saving: false, error: '', success: '' });
@@ -2593,7 +2659,8 @@ export const ClinicalAgendaBoard = ({
   const billingDocuments = Array.isArray(billingContext.documents) ? billingContext.documents : [];
   const pendingBillingDocuments = billingDocuments.filter((doc: any) => ['REQUIRED', 'PENDING', 'EXPIRED'].includes(String(doc.status || '').toUpperCase()));
   const billingSuggestion = billingContext.suggestion || null;
-  const billingSuggestedTissAuthorization = billingSuggestion?.tissAuthorization || null;
+  const billingEditorSuggestion = billingPayerResolution.searched ? billingPayerResolution.suggestion : billingSuggestion;
+  const billingSuggestedTissAuthorization = billingEditorSuggestion?.tissAuthorization || null;
   const billingContextTissAuthorization = billingContext?.tissAuthorization || null;
   const visibleBillingTissAuthorization = billingContextTissAuthorization || billingSuggestedTissAuthorization;
   const billingFinancialContextType =
@@ -2892,7 +2959,7 @@ export const ClinicalAgendaBoard = ({
                 </button>
               </div>
             )}
-            {billingFormUsesInsurance && !billingSuggestedTissAuthorization && billingSuggestion?.payerName && (
+            {billingFormUsesInsurance && !billingSuggestedTissAuthorization && (billingEditorSuggestion?.payerName || billingPayerResolution.searched) && (
               <div className={`mt-4 rounded-2xl border px-4 py-3 text-xs font-semibold ${isDark ? 'border-slate-700 bg-slate-900 text-slate-300' : 'border-slate-100 bg-slate-50 text-slate-500'}`}>
                 Nenhuma autorização TISS vigente encontrada para este paciente, convênio e serviço.
               </div>
@@ -2950,18 +3017,7 @@ export const ClinicalAgendaBoard = ({
                   className={`mt-1 w-full rounded-xl border p-3 text-sm font-semibold normal-case tracking-normal outline-none ${isDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-violet-100 bg-white text-slate-700'}`}
                   value={billingPayerSelectValue}
                   disabled={billingEditorState.loading || billingEditorState.saving}
-                  onChange={(event) => {
-                    const value = event.target.value;
-                    if (billingSnapshotOptionVisible && value === billingSnapshotSelectValue) return;
-                    const payer = billingPayers.find((item: any) => String(item?.id || '') === value);
-                    setBillingForm((prev) => ({
-                      ...prev,
-                      payerId: value,
-                      payerName: payer?.name || '',
-                      patientTissAuthorizationId: '',
-                      source: 'MANUAL'
-                    }));
-                  }}
+                  onChange={(event) => handleBillingPayerChange(event.target.value)}
                 >
                   <option value="">Sem pagador</option>
                   {billingSnapshotOptionVisible && (
@@ -3044,6 +3100,46 @@ export const ClinicalAgendaBoard = ({
               </label>
               {billingFormUsesInsurance && (
               <>
+              <div className={`sm:col-span-2 rounded-2xl border p-4 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-100 bg-slate-50/80'}`}>
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#7a32fc]">Dados encontrados para este convenio</p>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">Ao trocar o pagador, carteirinha, plano, guia e autorizacao sao recarregados apenas da fonte deste convenio.</p>
+                  </div>
+                  {billingPayerResolution.loading && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-violet-50 px-3 py-1 text-[11px] font-bold text-[#7a32fc]">
+                      <Loader2 size={12} className="animate-spin" /> Buscando
+                    </span>
+                  )}
+                </div>
+                {billingPayerResolution.error && (
+                  <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">{billingPayerResolution.error}</p>
+                )}
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  {[
+                    { label: 'Carteirinha', value: billingForm.insuranceCardNumber || 'Nao encontrada', source: payerScopedBillingSourceLabel({ field: 'card', form: billingForm }) },
+                    { label: 'Plano', value: billingForm.insurancePlanName || 'Nao encontrado', source: payerScopedBillingSourceLabel({ field: 'plan', form: billingForm }) },
+                    { label: 'Guia', value: billingForm.guideNumber || 'Nao encontrada', source: payerScopedBillingSourceLabel({ field: 'guide', form: billingForm }) },
+                    { label: 'Autorizacao/senha', value: billingForm.authorizationCode || 'Nao encontrada', source: payerScopedBillingSourceLabel({ field: 'authorization', form: billingForm }) }
+                  ].map((item) => (
+                    <div key={item.label} className={`rounded-xl border px-3 py-2 ${isDark ? 'border-slate-700 bg-[#101827]' : 'border-white bg-white'}`}>
+                      <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">{item.label}</p>
+                      <p className={`mt-1 truncate text-sm font-bold ${item.value.startsWith('Nao ') ? 'text-slate-400' : isDark ? 'text-slate-100' : 'text-slate-800'}`}>{item.value}</p>
+                      <p className="mt-1 text-[11px] font-semibold text-slate-400">{item.source}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <details
+                className={`sm:col-span-2 rounded-2xl border p-4 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-amber-100 bg-amber-50/40'}`}
+                open={billingManualOverrideOpen}
+                onToggle={(event) => setBillingManualOverrideOpen(event.currentTarget.open)}
+              >
+                <summary className="cursor-pointer text-sm font-bold text-slate-700">Ajuste manual avancado</summary>
+                <p className="mt-2 text-xs font-semibold leading-relaxed text-amber-700">
+                  Use apenas se a operadora orientou preencher dados diferentes do cadastro/autorizacao. Esses dados serao salvos apenas para esta consulta.
+                </p>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
               <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
                 Número da carteirinha
                 <input
@@ -3080,6 +3176,8 @@ export const ClinicalAgendaBoard = ({
                   placeholder="Código informado pelo pagador"
                 />
               </label>
+                </div>
+              </details>
               </>
               )}
               <label className="sm:col-span-2 text-[10px] font-bold uppercase tracking-widest text-slate-500">

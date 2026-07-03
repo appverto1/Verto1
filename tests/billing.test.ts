@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import {
+  calculateVertoPatientBasedMonthlyPrice,
+  countVertoBillableActivePatients,
+  isVertoPatientBasedBillingEnabled,
+  previewVertoPatientBillingPrice,
+} from '../services/stripeService';
 
 const root = process.cwd();
 const read = (file: string) => readFileSync(join(root, file), 'utf8');
@@ -48,6 +54,8 @@ test('env usa apenas o Price modular por paciente ativo no fluxo profissional', 
   assert.match(envExample, /SALES_CONTACT_URL=/);
   assert.match(envExample, /STRIPE_ACTIVE_PATIENT_BILLING_MODE=quantity/);
   assert.match(envExample, /ACTIVE_PATIENT_ENTERPRISE_THRESHOLD=50/);
+  assert.match(envExample, /PATIENT_BASED_BILLING_ENABLED=false/);
+  assert.match(envExample, /PATIENT_BASED_BILLING_TIERS=5:19700,30:69700/);
   assert.match(envExample, /BILLING_PLAN_SNAPSHOT_TTL_MINUTES=10/);
   doesNotContain(envExample, [
     'STRIPE_PRICE_ESSENCIAL',
@@ -55,6 +63,59 @@ test('env usa apenas o Price modular por paciente ativo no fluxo profissional', 
     'STRIPE_PRICE_AVANCADO',
     'STRIPE_ACTIVE_PATIENT_METER_EVENT_NAME'
   ]);
+});
+
+test('motor por paciente ativo calcula tier de 5 pacientes com teto unitario e marco fechado', () => {
+  const tiers = [{ patientLimit: 5, fixedMonthlyPriceCents: 19700 }];
+  assert.equal(calculateVertoPatientBasedMonthlyPrice(1, tiers).totalAmountCents, 4000);
+  assert.equal(calculateVertoPatientBasedMonthlyPrice(2, tiers).totalAmountCents, 8000);
+  assert.equal(calculateVertoPatientBasedMonthlyPrice(3, tiers).totalAmountCents, 12000);
+  assert.equal(calculateVertoPatientBasedMonthlyPrice(4, tiers).totalAmountCents, 16000);
+  assert.equal(calculateVertoPatientBasedMonthlyPrice(5, tiers).totalAmountCents, 19700);
+});
+
+test('motor por paciente ativo calcula marco de 30 pacientes sem inventar tier intermediario', () => {
+  const tiers = [{ patientLimit: 30, fixedMonthlyPriceCents: 69700 }];
+  const beforeMilestone = calculateVertoPatientBasedMonthlyPrice(29, tiers);
+  const atMilestone = calculateVertoPatientBasedMonthlyPrice(30, tiers);
+  assert.equal(beforeMilestone.unitPriceCents, 2400);
+  assert.equal(beforeMilestone.totalAmountCents, 69600);
+  assert.equal(atMilestone.totalAmountCents, 69700);
+});
+
+test('contador puro de pacientes ativos exclui inativos, arquivados, deletados e outra organizacao', () => {
+  const patients = [
+    { id: '1', organization_id: 'org-1', status: 'active', is_active: true },
+    { id: '2', organization_id: 'org-1', status: null, is_active: true },
+    { id: '3', organization_id: 'org-1', status: 'inactive', is_active: true },
+    { id: '4', organization_id: 'org-1', status: 'active', is_active: false },
+    { id: '5', organization_id: 'org-1', status: 'active', archived_at: '2026-01-01' },
+    { id: '6', organization_id: 'org-1', status: 'active', deleted_at: '2026-01-01' },
+    { id: '7', organization_id: 'org-2', status: 'active', is_active: true }
+  ];
+  assert.equal(countVertoBillableActivePatients(patients, 'org-1'), 2);
+});
+
+test('motor por paciente ativo informa proximo marco e feature flag preserva modelo legado desligado', () => {
+  const preview = calculateVertoPatientBasedMonthlyPrice(4, [{ patientLimit: 5, fixedMonthlyPriceCents: 19700 }]);
+  assert.equal(preview.nextMilestone, 5);
+  assert.equal(preview.patientsUntilMilestone, 1);
+  assert.equal(preview.milestonePriceCents, 19700);
+  assert.equal(isVertoPatientBasedBillingEnabled('true'), true);
+  assert.equal(isVertoPatientBasedBillingEnabled(false), false);
+  const legacy = previewVertoPatientBillingPrice({
+    activePatientCount: 4,
+    patientBasedBillingEnabled: false,
+    legacyMonthlyPriceCents: 19700
+  });
+  assert.equal(legacy.pricingModel, 'legacy');
+  assert.equal(legacy.totalAmountCents, 19700);
+  const enabled = previewVertoPatientBillingPrice({
+    activePatientCount: 4,
+    patientBasedBillingEnabled: true,
+    pricingTiers: [{ patientLimit: 5, fixedMonthlyPriceCents: 19700 }]
+  });
+  assert.equal(enabled.totalAmountCents, 16000);
 });
 
 test('contador de pacientes ativos e central, server-side e sem select star', () => {
@@ -195,6 +256,9 @@ test('parser Stripe expande tiers e transforma faixas up_to em from/to', () => {
 test('endpoint de estimativa calcula faixa server-side e nao abre checkout enterprise', () => {
   const estimateRoute = sliceFrom(serverCode, "app.post('/api/billing/estimate'", 4200);
   assert.match(estimateRoute, /estimateStripeActivePatientPlan/);
+  assert.match(estimateRoute, /isVertoPatientBasedBillingEnabled/);
+  assert.match(estimateRoute, /calculateVertoPatientBasedMonthlyPrice\(activePatients, resolveVertoPatientPricingTiers\(\)\)/);
+  assert.match(estimateRoute, /patientBasedBillingPreview/);
   assert.match(estimateRoute, /loadBillingPlansFromSnapshots\(\{ allowSync: true \}\)/);
   assert.match(estimateRoute, /PRICE_NOT_AVAILABLE/);
   assert.match(estimateRoute, /INVALID_ACTIVE_PATIENTS/);

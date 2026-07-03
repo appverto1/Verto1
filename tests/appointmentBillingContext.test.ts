@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import {
+  buildPayerScopedBillingForm,
+  clearPayerDependentBillingFields,
+  payerScopedBillingSourceLabel,
+} from '../src/utils/appointmentBillingPayerSwitch';
 
 const root = process.cwd();
 const serverCode = readFileSync(join(root, 'server.ts'), 'utf8');
@@ -267,8 +272,9 @@ test('modal carrega pagadores ativos e permite criar pagador rapido', () => {
   assert.match(calendarCode, /dataService\.createPayer/);
   assert.match(calendarCode, /Salvar e selecionar/);
   assert.match(calendarCode, /setBillingPayers/);
-  assert.match(calendarCode, /payerId: String\(payer\?\.id/);
-  assert.match(calendarCode, /payerName: sanitizeHumanPayerName\(payer\?\.name/);
+  assert.match(calendarCode, /const payerId = String\(payer\?\.id/);
+  assert.match(calendarCode, /const payerName = sanitizeHumanPayerName\(payer\?\.name/);
+  assert.match(calendarCode, /clearPayerDependentBillingFields\(\{[\s\S]*payerId,[\s\S]*payerName/);
   assert.match(calendarCode, /billingPayersLoaded/);
   assert.match(calendarCode, /normalizePayerOptions\(result\.data\)/);
   assert.match(calendarCode, /selectedBillingPayerKnown/);
@@ -288,6 +294,79 @@ test('modal de editar pagador usa payerId canonico e deduplica nomes legados', (
   assert.match(calendarCode, /payerId: usesInsuranceContext \? resolvedValues\.payerId \|\| null : null/);
   assert.match(calendarCode, /guideNumber: usesInsuranceContext \? resolvedValues\.guideNumber \|\| null : null/);
   assert.match(calendarCode, /authorizationCode: usesInsuranceContext \? resolvedValues\.authorizationCode \|\| null : null/);
+});
+
+test('troca de pagador limpa dados dependentes do convenio anterior', () => {
+  const amilForm = {
+    financialContextType: 'INSURANCE',
+    payerId: 'amil-id',
+    payerName: 'Amil',
+    serviceType: 'ABA',
+    insuranceCardNumber: '123456789',
+    insurancePlanName: 'Platinum',
+    guideNumber: '6549874132',
+    authorizationCode: '1235987',
+    patientTissAuthorizationId: 'auth-amil',
+    procedureCode: '50000470',
+    notes: 'mantem observacao'
+  };
+  const switched = clearPayerDependentBillingFields({
+    ...amilForm,
+    payerId: 'unimed-id',
+    payerName: 'Unimed'
+  });
+  assert.equal(switched.payerId, 'unimed-id');
+  assert.equal(switched.payerName, 'Unimed');
+  assert.equal(switched.insuranceCardNumber, '');
+  assert.equal(switched.insurancePlanName, '');
+  assert.equal(switched.guideNumber, '');
+  assert.equal(switched.authorizationCode, '');
+  assert.equal(switched.patientTissAuthorizationId, '');
+  assert.equal(switched.procedureCode, '');
+  assert.equal(switched.notes, 'mantem observacao');
+});
+
+test('troca para pagador com autorizacao vigente aplica somente dados do novo convenio', () => {
+  const base = clearPayerDependentBillingFields({
+    payerId: 'unimed-id',
+    payerName: 'Unimed',
+    serviceType: 'ABA',
+    insuranceCardNumber: 'AMIL-CARD',
+    guideNumber: 'GUIA-AMIL',
+    authorizationCode: 'AUTH-AMIL'
+  });
+  const hydrated = buildPayerScopedBillingForm(base, {
+    payerId: 'unimed-id',
+    payerName: 'Unimed',
+    suggestion: {
+      payerId: 'unimed-id',
+      payerName: 'Unimed',
+      insuranceCardNumber: 'UNIMED-CARD',
+      insurancePlanName: 'Unimed Terapias',
+      tissAuthorization: {
+        authorizationId: 'auth-unimed',
+        guideNumber: 'GUIA-UNIMED',
+        authorizationCode: 'AUTH-UNIMED'
+      }
+    }
+  });
+  assert.equal(hydrated.insuranceCardNumber, 'UNIMED-CARD');
+  assert.equal(hydrated.insurancePlanName, 'Unimed Terapias');
+  assert.equal(hydrated.guideNumber, 'GUIA-UNIMED');
+  assert.equal(hydrated.authorizationCode, 'AUTH-UNIMED');
+  assert.equal(hydrated.patientTissAuthorizationId, 'auth-unimed');
+  assert.equal(hydrated.source, 'PATIENT_TISS_AUTHORIZATION');
+  assert.equal(payerScopedBillingSourceLabel({ field: 'authorization', form: hydrated }), 'Origem: autorizacao TISS vigente');
+});
+
+test('modal recarrega sugestao por payerId e rebaixa edicao livre para ajuste avancado', () => {
+  assert.match(calendarCode, /handleBillingPayerChange/);
+  assert.match(calendarCode, /clearPayerDependentBillingFields/);
+  assert.match(calendarCode, /buildPayerScopedBillingForm/);
+  assert.match(calendarCode, /dataService\.getAppointmentBillingContext\(appointmentId, \{\s*payerId: safePayerId/);
+  assert.match(calendarCode, /Dados encontrados para este convenio/);
+  assert.match(calendarCode, /Ajuste manual avancado/);
+  assert.match(calendarCode, /Ao trocar o pagador, carteirinha, plano, guia e autorizacao sao recarregados apenas da fonte deste convenio/);
 });
 
 test('consulta e modal sugerem autorização TISS vigente do paciente sem usar TUSS legado', () => {
@@ -351,6 +430,29 @@ test('payer_id e appointment_id fora da organizacao sao rejeitados', () => {
   assert.match(route, /payer_id: effectivePayerId/);
   assert.match(route, /payer_type: effectiveFinancialContextType \|\| null/);
   assert.match(route, /payer_name_snapshot: effectiveFinancialContextType === 'INSURANCE'/);
+});
+
+test('GET de billing-context resolve sugestao pelo payerId solicitado sem salvar contexto', () => {
+  const routeStart = serverCode.indexOf("app.get('/api/appointments/:appointmentId/billing-context'");
+  const routeEnd = serverCode.indexOf("app.patch('/api/appointments/:appointmentId/billing-context'", routeStart);
+  const route = serverCode.slice(routeStart, routeEnd);
+  assert.match(route, /const requestedSuggestionPayerId = sanitizeString\(req\.query\?\.payerId \|\| req\.query\?\.payer_id, 120\)/);
+  assert.match(route, /const suggestionPayer = isUuid\(requestedSuggestionPayerId\)/);
+  assert.match(route, /if \(requestedSuggestionPayerId && !suggestionPayer\) return res\.status\(404\)\.json\(payerSafeError\(404\)\)/);
+  assert.match(route, /payerId: suggestionPayer\?\.id \|\| billingContext\?\.payer_id/);
+  assert.match(route, /payerName: suggestionPayer\?\.name \|\| requestedSuggestionPayerName/);
+  assert.doesNotMatch(route, /upsertAppointmentBillingContextRow/);
+});
+
+test('override manual de pagador fica marcado em metadata sem apagar sala ou profissional', () => {
+  const routeStart = serverCode.indexOf("app.patch('/api/appointments/:appointmentId/billing-context'");
+  const routeEnd = serverCode.indexOf("app.post('/api/appointments/:appointmentId/required-documents", routeStart);
+  const route = serverCode.slice(routeStart, routeEnd);
+  assert.match(route, /const normalizedBillingContextSource = appliedTissAuthorization\?\.authorizationId/);
+  assert.match(route, /const hasManualBillingOverride = normalizedBillingContextSource === 'MANUAL'/);
+  assert.match(route, /manual_override: hasManualBillingOverride \|\| undefined/);
+  assert.match(route, /manual_override_fields: hasManualBillingOverride \? manualOverrideFields : undefined/);
+  assert.doesNotMatch(route, /room_id|roomId|therapist_id|professional_id|responsible_professional_id/);
 });
 
 test('fechamento usa pagador da consulta, nao plano do paciente como substituto', () => {

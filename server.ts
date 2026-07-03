@@ -20,9 +20,12 @@ import { generateSecret, verifySync, generateURI } from 'otplib';
 import QRCode from 'qrcode';
 import {
   ACTIVE_PATIENT_BILLING_LOOKUP_KEY,
+  DEFAULT_VERTO_PATIENT_PRICING_TIERS,
+  calculateVertoPatientBasedMonthlyPrice,
   estimateStripeActivePatientPlan,
   getBillableActivePatientCount,
   getClinicBillingSummary,
+  isVertoPatientBasedBillingEnabled,
   listStripeActivePatientBillingPlans,
   reportAllClinicsActivePatientUsage,
   syncAllClinicsActivePatientAddonQuantity,
@@ -416,6 +419,21 @@ function resolveActivePatientEnterpriseThreshold(): number {
     50
   );
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 50;
+}
+
+function resolveVertoPatientPricingTiers() {
+  const raw = sanitizeString(process.env.VERTO_PATIENT_PRICING_TIERS || process.env.PATIENT_BASED_BILLING_TIERS || '', 2000);
+  if (!raw) return DEFAULT_VERTO_PATIENT_PRICING_TIERS;
+  const parsed = raw
+    .split(',')
+    .map((entry) => {
+      const [limitRaw, priceRaw] = entry.split(':');
+      const patientLimit = Math.floor(Number(limitRaw));
+      const fixedMonthlyPriceCents = Math.round(Number(priceRaw));
+      return { patientLimit, fixedMonthlyPriceCents };
+    })
+    .filter((tier) => Number.isFinite(tier.patientLimit) && tier.patientLimit > 0 && Number.isFinite(tier.fixedMonthlyPriceCents) && tier.fixedMonthlyPriceCents > 0);
+  return parsed.length > 0 ? parsed : DEFAULT_VERTO_PATIENT_PRICING_TIERS;
 }
 
 function resolveBillingPlanSnapshotTtlMs(): number {
@@ -43155,15 +43173,21 @@ async function startServer() {
       const appointment = (context as any).appointment;
       const billingContext = await fetchAppointmentBillingContextRow(organizationId, appointment.id);
       const payer = billingContext?.payer_id ? await fetchPayerForAdmin(billingContext.payer_id, organizationId) : null;
+      const requestedSuggestionPayerId = sanitizeString(req.query?.payerId || req.query?.payer_id, 120);
+      const requestedSuggestionPayerName = sanitizeString(req.query?.payerName || req.query?.payer_name, 180);
+      const suggestionPayer = isUuid(requestedSuggestionPayerId)
+        ? await fetchPayerForAdmin(requestedSuggestionPayerId, organizationId)
+        : null;
+      if (requestedSuggestionPayerId && !suggestionPayer) return res.status(404).json(payerSafeError(404));
       const documents = await fetchRequiredDocumentsForAppointment(organizationId, appointment.id);
       const suggestion = await resolveAppointmentBillingSuggestion({
         organizationId,
         patientId: appointment.patient_id,
-        serviceType: appointment.service_type || appointment.approach || null,
-        payerId: billingContext?.payer_id || appointment.payer_id || null,
-        payerName: billingContext?.payer_name_snapshot || appointment.payer_name_snapshot || null,
+        serviceType: req.query?.serviceType || req.query?.service_type || appointment.service_type || appointment.approach || null,
+        payerId: suggestionPayer?.id || billingContext?.payer_id || appointment.payer_id || null,
+        payerName: suggestionPayer?.name || requestedSuggestionPayerName || billingContext?.payer_name_snapshot || appointment.payer_name_snapshot || null,
         appointmentDate: appointment.scheduled_start_at || appointment.scheduled_at || appointment.date || null,
-        procedureCode: billingContext?.procedure_code || appointment.procedure_code || null
+        procedureCode: req.query?.procedureCode || req.query?.procedure_code || billingContext?.procedure_code || appointment.procedure_code || null
       });
       const billingItemsBundle = await fetchAppointmentBillingItemsBundle(organizationId, [appointment.id]);
       const billingItem = !financialContextSkipsInsuranceBilling(billingContext?.payer_type)
@@ -43278,6 +43302,16 @@ async function startServer() {
           });
         }
       }
+      const normalizedBillingContextSource = appliedTissAuthorization?.authorizationId
+        ? 'PATIENT_TISS_AUTHORIZATION'
+        : normalizeBillingContextSource(req.body?.source);
+      const manualOverrideFields = cleanObject({
+        insurance_card_number: sanitizeString(req.body?.insuranceCardNumber || req.body?.insurance_card_number || req.body?.cardNumber || req.body?.card_number, 120) || undefined,
+        insurance_plan_name: sanitizeString(req.body?.insurancePlanName || req.body?.insurance_plan_name, 160) || undefined,
+        authorization_code: sanitizeString(req.body?.authorizationCode || req.body?.authorization_code, 120) || undefined,
+        guide_number: sanitizeString(req.body?.guideNumber || req.body?.guide_number, 120) || undefined
+      });
+      const hasManualBillingOverride = normalizedBillingContextSource === 'MANUAL' && !appliedTissAuthorization?.authorizationId && Object.keys(manualOverrideFields).length > 0;
       const now = new Date().toISOString();
       const payload = cleanObject({
         id: existing?.id || crypto.randomUUID(),
@@ -43296,7 +43330,7 @@ async function startServer() {
         guide_number: sanitizeString(req.body?.guideNumber || req.body?.guide_number || appliedTissAuthorization?.guideNumber, 120) || null,
         procedure_code: sanitizeString(req.body?.procedureCode || req.body?.procedure_code, 80) || null,
         notes: sanitizeTextField(req.body?.notes, 1200) || null,
-        source: appliedTissAuthorization?.authorizationId ? 'PATIENT_TISS_AUTHORIZATION' : normalizeBillingContextSource(req.body?.source),
+        source: normalizedBillingContextSource,
         metadata: sanitizeClinicalPayload(cleanObject({
           financialContextType: effectiveFinancialContextType || undefined,
           explicitFinancialContext: Boolean(requestedFinancialContextType),
@@ -43305,7 +43339,9 @@ async function startServer() {
           insurance_plan_name: sanitizeString(req.body?.insurancePlanName || req.body?.insurance_plan_name, 160) || undefined,
           patient_tiss_authorization_id: appliedTissAuthorization?.authorizationId || undefined,
           tiss_authorization: appliedTissAuthorization || undefined,
-          source: appliedTissAuthorization?.authorizationId ? 'PATIENT_TISS_AUTHORIZATION' : normalizeBillingContextSource(req.body?.source)
+          manual_override: hasManualBillingOverride || undefined,
+          manual_override_fields: hasManualBillingOverride ? manualOverrideFields : undefined,
+          source: normalizedBillingContextSource
         })),
         created_by: existing?.created_by || (isUuid(sanitizeString(req.session.user?.id, 120)) ? sanitizeString(req.session.user?.id, 120) : null),
         updated_by: isUuid(sanitizeString(req.session.user?.id, 120)) ? sanitizeString(req.session.user?.id, 120) : null,
@@ -56908,17 +56944,30 @@ async function startServer() {
         activePatients,
         enterpriseThreshold: selectedPlan.enterpriseThreshold
       });
+      const patientBasedBillingEnabled = isVertoPatientBasedBillingEnabled(
+        process.env.PATIENT_BASED_BILLING_ENABLED ||
+          process.env.VERTO_PATIENT_BASED_BILLING_ENABLED ||
+          ''
+      );
+      const patientBasedBillingPreview = patientBasedBillingEnabled
+        ? calculateVertoPatientBasedMonthlyPrice(activePatients, resolveVertoPatientPricingTiers())
+        : null;
       console.info('[Billing Estimate] diagnostics:', {
         ...estimateDiagnostics,
         source,
         tierCount: selectedPlan.tiers?.length || 0,
         estimatedAmountCents: estimate.estimatedAmountCents,
+        patientBasedBillingEnabled,
         errorCode: null
       });
 
       return res.json({
         success: true,
-        data: estimate
+        data: {
+          ...estimate,
+          patientBasedBillingEnabled,
+          patientBasedBillingPreview
+        }
       });
     } catch (error: any) {
       console.error('[Billing Estimate] Falha ao estimar plano Stripe:', {
