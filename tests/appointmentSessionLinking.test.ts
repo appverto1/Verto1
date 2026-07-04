@@ -203,6 +203,8 @@ test('maintenance probes da sessao usam appointment_id e escopo da sessao', () =
   assert.match(route, /\.eq\('patient_id', patientId\)/);
   assert.match(route, /select\(ABA_MAINTENANCE_SCHEDULE_SELECT\)/);
   assert.match(route, /resolveMaintenanceProbeAvailability/);
+  assert.match(route, /linkedToActiveAppointment/);
+  assert.match(route, /missingLinkedAppointment = Boolean\(appointmentId && !appointment\?\.id && !linkedToActiveAppointment\)/);
   assert.match(route, /available[\s\S]*upcoming/);
   assert.doesNotMatch(route, /select\('\*'\)|targetName[\s\S]{0,120}availableSchedule/);
 });

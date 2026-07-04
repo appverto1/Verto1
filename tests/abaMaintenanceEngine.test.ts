@@ -370,6 +370,10 @@ test('backend e frontend usam summaries e rotas de manutencao paginadas', () => 
   assert.match(dataServiceCode, /async saveAbaMaintenanceProbeResult\(result: any\)/);
   assert.match(sessionModeCode, /dataService\.getAbaMaintenanceOverview\(patientId/);
   assert.match(sessionModeCode, /dataService\.getAbaSessionMaintenanceProbes\(sessionId,\s*\{[\s\S]*?appointmentId: activeAppointmentId/m);
+  assert.match(sessionModeCode, /const loadSessionMaintenanceProbeState = useCallback/);
+  assert.match(sessionModeCode, /refreshSessionMaintenanceProbes[\s\S]*?loadSessionMaintenanceProbeState\('manual_reload'\)/m);
+  assert.match(sessionModeCode, /overviewAppointmentMaintenanceProbeAvailability/);
+  assert.match(sessionModeCode, /mergeMaintenanceScheduleLists\([\s\S]*?sessionMaintenanceProbes\?\.available[\s\S]*?overviewAppointmentMaintenanceProbeAvailability\.available/m);
   assert.match(sessionModeCode, /sessionAvailableMaintenanceProbeSchedules/);
   assert.match(sessionModeCode, /schedules: \[\]/);
   assert.match(sessionModeCode, /appointmentId: activeAppointmentId/);

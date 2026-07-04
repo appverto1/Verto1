@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   AlertCircle,
@@ -1083,38 +1083,58 @@ export const SessionMode = ({
     };
   }, [activeAppointmentId, patientId, sessionId, sessionCompleted]);
 
+  const loadSessionMaintenanceProbeState = useCallback(async (source: 'auto' | 'manual_reload' = 'auto') => {
+    if (!patientId || !sessionId || sessionId.startsWith('draft-') || sessionCompleted) {
+      return { available: [], upcoming: [], loaded: false, error: '' };
+    }
+    try {
+      const result = await dataService.getAbaSessionMaintenanceProbes(sessionId, {
+        appointmentId: activeAppointmentId || undefined,
+        clinicalDate: sessionClinicalDate || undefined,
+        timeZone: maintenanceTimeZone || undefined
+      });
+      const payload = result?.data || result || {};
+      const nextState = {
+        available: result?.success === false ? [] : Array.isArray(payload?.available) ? payload.available : [],
+        upcoming: result?.success === false ? [] : Array.isArray(payload?.upcoming) ? payload.upcoming : [],
+        loaded: true,
+        error: result?.success === false ? (result?.error || 'Não foi possível carregar Maintenance Probes.') : ''
+      };
+      if (import.meta.env.DEV) {
+        console.info('[Maintenance Probes] load attempt', {
+          sessionIdPresent: Boolean(sessionId && !sessionId.startsWith('draft-')),
+          appointmentIdPresent: Boolean(activeAppointmentId),
+          clinicalDate: String(sessionClinicalDate || '').slice(0, 10),
+          timeZone: maintenanceTimeZone,
+          resultCount: nextState.available.length + nextState.upcoming.length,
+          source
+        });
+      }
+      return nextState;
+    } catch {
+      if (import.meta.env.DEV) {
+        console.info('[Maintenance Probes] load attempt', {
+          sessionIdPresent: Boolean(sessionId && !sessionId.startsWith('draft-')),
+          appointmentIdPresent: Boolean(activeAppointmentId),
+          clinicalDate: String(sessionClinicalDate || '').slice(0, 10),
+          timeZone: maintenanceTimeZone,
+          resultCount: 0,
+          source
+        });
+      }
+      return { available: [], upcoming: [], loaded: true, error: 'Não foi possível carregar Maintenance Probes.' };
+    }
+  }, [activeAppointmentId, maintenanceTimeZone, patientId, sessionClinicalDate, sessionCompleted, sessionId]);
+
   useEffect(() => {
     let cancelled = false;
-    const loadSessionMaintenanceProbes = async () => {
-      if (!patientId || !sessionId || sessionId.startsWith('draft-') || sessionCompleted) {
-        setSessionMaintenanceProbes({ available: [], upcoming: [], loaded: false, error: '' });
-        return;
-      }
-      try {
-        const result = await dataService.getAbaSessionMaintenanceProbes(sessionId, {
-          appointmentId: activeAppointmentId || undefined,
-          clinicalDate: sessionClinicalDate || undefined,
-          timeZone: maintenanceTimeZone || undefined
-        });
-        const payload = result?.data || result || {};
-        const errorMessage = result?.success === false ? (result?.error || 'Não foi possível carregar Maintenance Probes.') : '';
-        if (!cancelled) {
-          setSessionMaintenanceProbes({
-            available: result?.success === false ? [] : Array.isArray(payload?.available) ? payload.available : [],
-            upcoming: result?.success === false ? [] : Array.isArray(payload?.upcoming) ? payload.upcoming : [],
-            loaded: true,
-            error: errorMessage
-          });
-        }
-      } catch {
-        if (!cancelled) setSessionMaintenanceProbes({ available: [], upcoming: [], loaded: true, error: 'Não foi possível carregar Maintenance Probes.' });
-      }
-    };
-    void loadSessionMaintenanceProbes();
+    loadSessionMaintenanceProbeState('auto').then((nextState) => {
+      if (!cancelled) setSessionMaintenanceProbes(nextState);
+    });
     return () => {
       cancelled = true;
     };
-  }, [activeAppointmentId, maintenanceTimeZone, patientId, sessionClinicalDate, sessionId, sessionCompleted]);
+  }, [loadSessionMaintenanceProbeState]);
 
   useEffect(() => {
     let cancelled = false;
@@ -3571,12 +3591,37 @@ export const SessionMode = ({
   }, [activeSession?.startedAt, patientDisplayName, patientId, records, resolvedTherapistId, sessionClosureIssues, sessionEndPreviewAt, sessionId, sessionNote, therapistDisplayName]);
 
   const overviewMaintenanceSchedules = Array.isArray(maintenanceOverview?.schedules) ? maintenanceOverview.schedules : [];
+  const overviewAppointmentMaintenanceProbeSchedules = useMemo(() => {
+    const appointmentId = String(activeAppointmentId || '').trim();
+    if (!appointmentId) return [];
+    return overviewMaintenanceSchedules.filter((schedule: any) => (
+      String(schedule?.appointment_id || schedule?.appointmentId || schedule?.appointment?.id || '').trim() === appointmentId
+    ));
+  }, [activeAppointmentId, overviewMaintenanceSchedules]);
+  const overviewAppointmentMaintenanceProbeAvailability = useMemo(() => {
+    if (!activeAppointmentId || overviewAppointmentMaintenanceProbeSchedules.length === 0) {
+      return { available: [], upcoming: [], availableItems: [], upcomingItems: [], availableSchedule: null, upcomingSchedule: null };
+    }
+    return resolveMaintenanceProbeAvailability(overviewAppointmentMaintenanceProbeSchedules, {
+      appointmentId: activeAppointmentId || null,
+      sessionId,
+      sessionClinicalDate,
+      occurredAt: activeSession?.actualStartAt || activeSession?.actual_start_at || activeSession?.startedAt || activeSession?.started_at || new Date().toISOString(),
+      timeZone: maintenanceTimeZone
+    });
+  }, [activeAppointmentId, activeSession?.actualStartAt, activeSession?.actual_start_at, activeSession?.startedAt, activeSession?.started_at, maintenanceTimeZone, overviewAppointmentMaintenanceProbeSchedules, sessionClinicalDate, sessionId]);
   const sessionAvailableMaintenanceProbeSchedules = useMemo(() => (
-    normalizeSessionMaintenanceProbeList(sessionMaintenanceProbes?.available || [])
-  ), [sessionMaintenanceProbes]);
+    mergeMaintenanceScheduleLists(
+      normalizeSessionMaintenanceProbeList(sessionMaintenanceProbes?.available || []),
+      normalizeSessionMaintenanceProbeList(overviewAppointmentMaintenanceProbeAvailability.available || [])
+    )
+  ), [overviewAppointmentMaintenanceProbeAvailability.available, sessionMaintenanceProbes]);
   const sessionUpcomingMaintenanceProbeSchedules = useMemo(() => (
-    normalizeSessionMaintenanceProbeList(sessionMaintenanceProbes?.upcoming || [])
-  ), [sessionMaintenanceProbes]);
+    mergeMaintenanceScheduleLists(
+      normalizeSessionMaintenanceProbeList(sessionMaintenanceProbes?.upcoming || []),
+      normalizeSessionMaintenanceProbeList(overviewAppointmentMaintenanceProbeAvailability.upcoming || [])
+    )
+  ), [overviewAppointmentMaintenanceProbeAvailability.upcoming, sessionMaintenanceProbes]);
   const sessionGoals = useMemo(() => (
     mergeSessionGoalsWithAvailableMaintenance(baseSessionGoals, sessionAvailableMaintenanceProbeSchedules)
   ), [baseSessionGoals, sessionAvailableMaintenanceProbeSchedules]);
@@ -3886,27 +3931,8 @@ export const SessionMode = ({
   }, [maintenanceProbeRows]);
 
   const refreshSessionMaintenanceProbes = async () => {
-    if (!patientId || !sessionId || sessionId.startsWith('draft-') || sessionCompleted) {
-      setSessionMaintenanceProbes({ available: [], upcoming: [], loaded: false, error: '' });
-      return;
-    }
-    try {
-      const result = await dataService.getAbaSessionMaintenanceProbes(sessionId, {
-        appointmentId: activeAppointmentId || undefined,
-        clinicalDate: sessionClinicalDate || undefined,
-        timeZone: maintenanceTimeZone || undefined
-      });
-      const payload = result?.data || result || {};
-      const errorMessage = result?.success === false ? (result?.error || 'Não foi possível carregar Maintenance Probes.') : '';
-      setSessionMaintenanceProbes({
-        available: result?.success === false ? [] : Array.isArray(payload?.available) ? payload.available : [],
-        upcoming: result?.success === false ? [] : Array.isArray(payload?.upcoming) ? payload.upcoming : [],
-        loaded: true,
-        error: errorMessage
-      });
-    } catch {
-      setSessionMaintenanceProbes({ available: [], upcoming: [], loaded: true, error: 'Não foi possível carregar Maintenance Probes.' });
-    }
+    const nextState = await loadSessionMaintenanceProbeState('manual_reload');
+    setSessionMaintenanceProbes(nextState);
   };
 
   const refreshMaintenanceOverview = async () => {

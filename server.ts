@@ -48598,7 +48598,8 @@ async function startServer() {
       }).map((schedule: any) => {
         const appointmentId = sanitizeString(schedule?.appointment_id || schedule?.appointmentId, 180);
         const appointment = appointmentId ? schedule?.appointment || null : null;
-        const missingLinkedAppointment = Boolean(appointmentId && !appointment?.id);
+        const linkedToActiveAppointment = Boolean(isUuid(activeAppointmentId) && appointmentId === activeAppointmentId);
+        const missingLinkedAppointment = Boolean(appointmentId && !appointment?.id && !linkedToActiveAppointment);
         return cleanObject({
           ...schedule,
           appointment_status: missingLinkedAppointment
