@@ -4712,6 +4712,7 @@ const CLOSURE_APPOINTMENT_SELECT = [
   'actual_start_at',
   'actual_end_at',
   'actual_duration_minutes',
+  'aba_session_id',
   'duration_minutes',
   'approach',
   'service_type',
@@ -4747,6 +4748,7 @@ const CLOSURE_APPOINTMENT_SCHEMA_FALLBACK_COLUMNS = new Set([
   'actual_start_at',
   'actual_end_at',
   'actual_duration_minutes',
+  'aba_session_id',
   'duration_minutes',
   'approach',
   'service_type',
@@ -30390,6 +30392,8 @@ async function startServer() {
       actual_start: row?.actual_start_at || source?.actual_start_at || source?.actualStartAt || null,
       actual_end: row?.actual_end_at || source?.actual_end_at || source?.actualEndAt || null,
       actual_duration_minutes: Number(row?.actual_duration_minutes ?? source?.actual_duration_minutes ?? source?.actualDurationMinutes) || null,
+      aba_session_id: sanitizeString(row?.aba_session_id || row?.abaSessionId || source?.aba_session_id || source?.abaSessionId, 180) || null,
+      abaSessionId: sanitizeString(row?.abaSessionId || row?.aba_session_id || source?.abaSessionId || source?.aba_session_id, 180) || null,
       type: sanitizeString(row?.service_type || row?.approach || row?.type || source?.service_type || source?.serviceType || source?.approach || source?.type, 120) || 'Sessão',
       status,
       patientResponse: row?.patient_response || row?.patientResponse || source?.patientResponse || source?.patient_response || null,
@@ -34690,6 +34694,8 @@ async function startServer() {
     closure_blocking_count: Number(row?.blocking_issues_count || 0),
     closure_warning_count: Number(row?.warning_issues_count || 0),
     closure_main_issues: Array.isArray(row?.main_issues) ? row.main_issues.slice(0, 3) : [],
+    aba_session_id: sanitizeString(row?.aba_session_id, 180) || null,
+    abaSessionId: sanitizeString(row?.aba_session_id, 180) || null,
     payer_name_snapshot: sanitizeString(row?.payer_name_snapshot, 180) || null,
     authorization_code: sanitizeString(row?.authorization_code, 120) || null,
     guide_number: sanitizeString(row?.guide_number, 120) || null,
@@ -36726,6 +36732,7 @@ async function startServer() {
         actual_start_at: sanitizeString(stateAppointment?.actual_start_at || stateAppointment?.actualStartAt, 80) || null,
         actual_end_at: sanitizeString(stateAppointment?.actual_end_at || stateAppointment?.actualEndAt, 80) || null,
         actual_duration_minutes: Number(stateAppointment?.actual_duration_minutes || stateAppointment?.actualDurationMinutes || 0) || null,
+        aba_session_id: sanitizeString(stateAppointment?.aba_session_id || stateAppointment?.abaSessionId, 180) || null,
         duration_minutes: Number(stateAppointment?.duration_minutes || stateAppointment?.durationMinutes || stateAppointment?.scheduled_duration_minutes || stateAppointment?.scheduledDurationMinutes || 0) || null,
         approach: sanitizeString(stateAppointment?.approach || stateAppointment?.type || stateAppointment?.serviceType, 120) || null,
         service_type: sanitizeString(stateAppointment?.service_type || stateAppointment?.serviceType || stateAppointment?.type || stateAppointment?.approach, 120) || null,
@@ -47591,6 +47598,7 @@ async function startServer() {
       actual_duration_minutes: status === 'COMPLETED' && Number.isFinite(Number(params.actualDurationMinutes))
         ? Math.max(0, Math.round(Number(params.actualDurationMinutes)))
         : undefined,
+      aba_session_id: sanitizeString(params.abaSessionId, 180) || undefined,
       updated_at: new Date().toISOString()
     });
     const update = await updateAppointmentOperationalPatch(appointmentId, patch);

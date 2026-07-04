@@ -79,6 +79,10 @@ test('ABA session start returns specific operational conflicts', () => {
 
 test('ABA session writes update appointment and closure readiness', () => {
   assert.match(serverCode, /patchAppointmentOperationalFromAbaSession[\s\S]*?status: 'IN_PROGRESS' \| 'COMPLETED'/);
+  assert.match(serverCode, /patchAppointmentOperationalFromAbaSession[\s\S]*?aba_session_id: sanitizeString\(params\.abaSessionId, 180\) \|\| undefined/);
+  assert.match(serverCode, /updateAppointmentOperationalPatch[\s\S]*?if \(missingColumn && missingColumn in safePatch\)[\s\S]*?delete safePatch\[missingColumn\]/);
+  assert.match(serverCode, /const CLOSURE_APPOINTMENT_SELECT = \[[\s\S]*?'aba_session_id'/);
+  assert.match(serverCode, /const CLOSURE_APPOINTMENT_SCHEMA_FALLBACK_COLUMNS = new Set\(\[[\s\S]*?'aba_session_id'/);
   assert.match(serverCode, /appointmentStatus = payload\.status === 'completed'[\s\S]*?'COMPLETED'[\s\S]*?isAbaSessionInProgressStatus\(payload\.status\)[\s\S]*?'IN_PROGRESS'/);
   assert.match(serverCode, /await regenerateClosureForAppointments\(\s*\[payload\.appointment_id\],[\s\S]*?'aba_session_saved'/);
   assert.match(serverCode, /await regenerateClosureForAppointments\(\s*\[appointmentIdForClosure\],[\s\S]*?'aba_session_updated'/);
@@ -157,6 +161,9 @@ test('agenda start action uses only a persisted appointment id', () => {
   assert.match(patientDetailCode, /isUuidLike\(scheduledAppointmentId\)/);
   assert.match(patientDetailCode, /handleConfirmSessionStart\(\{ durationMinutes: scheduledSessionDurationMinutes, openSessionMode: true \}\)/);
   assert.match(patientDetailCode, /appointmentId: scheduledAppointmentId[\s\S]*?appointment_id: scheduledAppointmentId/);
+  assert.match(patientDetailCode, /const sessionToOpen = activeSession \|\| persistedSession/);
+  assert.match(patientDetailCode, /scheduledAppointmentId && !sessionAppointmentId[\s\S]*?appointment_id: scheduledAppointmentId/);
+  assert.match(patientDetailCode, /dataService\.saveAbaSession\(\{[\s\S]*?source: 'appointment'[\s\S]*?clientSource: 'appointment'/);
 });
 
 test('ABA session start emits safe appointment context logs', () => {
@@ -198,6 +205,13 @@ test('maintenance probes da sessao usam appointment_id e escopo da sessao', () =
   assert.match(route, /resolveMaintenanceProbeAvailability/);
   assert.match(route, /available[\s\S]*upcoming/);
   assert.doesNotMatch(route, /select\('\*'\)|targetName[\s\S]{0,120}availableSchedule/);
+});
+
+test('agenda recebe vinculo da sessao para liberar maintenance probes planejadas', () => {
+  assert.match(serverCode, /mapClosureRowToCalendarFields[\s\S]*?aba_session_id: sanitizeString\(row\?\.aba_session_id, 180\) \|\| null/);
+  assert.match(serverCode, /normalizeCalendarAppointmentRow[\s\S]*?aba_session_id: sanitizeString\(row\?\.aba_session_id \|\| row\?\.abaSessionId \|\| source\?\.aba_session_id \|\| source\?\.abaSessionId, 180\) \|\| null/);
+  assert.match(sessionModeCode, /const activeAppointmentId = String\(\s*activeSession\?\.appointmentId \|\| activeSession\?\.appointment_id/);
+  assert.match(sessionModeCode, /getAbaSessionMaintenanceProbes\(sessionId\)/);
 });
 
 test('no broad select star is introduced', () => {

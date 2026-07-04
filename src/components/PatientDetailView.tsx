@@ -1720,7 +1720,73 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
     const persistedSession = readPersistedSession();
     if (activeSession || persistedSession) {
-      if (persistedSession && !activeSession) persistActiveSession(persistedSession);
+      const sessionToOpen = activeSession || persistedSession;
+      const scheduledAppointmentId =
+        scheduledSessionForPatient?.appointment_id ||
+        scheduledSessionForPatient?.appointmentId ||
+        scheduledSessionForPatient?.id ||
+        null;
+      const sessionAppointmentId = sessionToOpen?.appointment_id || sessionToOpen?.appointmentId || null;
+      if (scheduledAppointmentId && !sessionAppointmentId) {
+        const linkedSession = {
+          ...sessionToOpen,
+          appointmentId: scheduledAppointmentId,
+          appointment_id: scheduledAppointmentId,
+          scheduledStart: sessionToOpen?.scheduledStart || scheduledSessionForPatient?.scheduled_start_at || scheduledSessionForPatient?.scheduledStartAt || null,
+          scheduled_start: sessionToOpen?.scheduled_start || scheduledSessionForPatient?.scheduled_start_at || scheduledSessionForPatient?.scheduledStartAt || null,
+          scheduledEnd: sessionToOpen?.scheduledEnd || scheduledSessionForPatient?.scheduled_end_at || scheduledSessionForPatient?.scheduledEndAt || null,
+          scheduled_end: sessionToOpen?.scheduled_end || scheduledSessionForPatient?.scheduled_end_at || scheduledSessionForPatient?.scheduledEndAt || null,
+          roomId: sessionToOpen?.roomId || scheduledSessionForPatient?.roomId || scheduledSessionForPatient?.room_id || null,
+          room_id: sessionToOpen?.room_id || scheduledSessionForPatient?.room_id || scheduledSessionForPatient?.roomId || null,
+          roomName: sessionToOpen?.roomName || scheduledSessionForPatient?.roomName || scheduledSessionForPatient?.room_name || null,
+          room_name: sessionToOpen?.room_name || scheduledSessionForPatient?.room_name || scheduledSessionForPatient?.roomName || null
+        };
+        persistActiveSession(linkedSession);
+        void dataService.saveAbaSession({
+          id: linkedSession.id,
+          patient_id: patient.id,
+          patientId: patient.id,
+          patient_name: patient?.name || linkedSession.patientName || 'Paciente',
+          appointment_id: scheduledAppointmentId,
+          appointmentId: scheduledAppointmentId,
+          scheduled_start: linkedSession.scheduled_start || linkedSession.scheduledStart || undefined,
+          scheduled_start_at: linkedSession.scheduled_start || linkedSession.scheduledStart || undefined,
+          scheduled_end: linkedSession.scheduled_end || linkedSession.scheduledEnd || undefined,
+          scheduled_end_at: linkedSession.scheduled_end || linkedSession.scheduledEnd || undefined,
+          actual_start: linkedSession.startedAt || linkedSession.actual_start_at || undefined,
+          room_id: linkedSession.room_id || undefined,
+          room_name: linkedSession.room_name || undefined,
+          location_type: linkedSession.location_type || linkedSession.locationType || undefined,
+          clinic_id: linkedSession.clinicId || linkedSession.clinic_id || resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || undefined,
+          professional_id: linkedSession.professional_id || linkedSession.professionalId || undefined,
+          professionalId: linkedSession.professionalId || linkedSession.professional_id || undefined,
+          therapist_id: linkedSession.therapist_id || linkedSession.therapistId || undefined,
+          therapistId: linkedSession.therapistId || linkedSession.therapist_id || undefined,
+          service_type: linkedSession.service_type || linkedSession.serviceType || scheduledSessionForPatient?.service_type || scheduledSessionForPatient?.serviceType || undefined,
+          serviceType: linkedSession.serviceType || linkedSession.service_type || scheduledSessionForPatient?.serviceType || scheduledSessionForPatient?.service_type || undefined,
+          status: linkedSession.status || 'active',
+          started_at: linkedSession.startedAt || linkedSession.actual_start_at || new Date().toISOString(),
+          duration_minutes: linkedSession.durationMinutes || scheduledSessionDurationMinutes,
+          reference_date: linkedSession.referenceDate || new Date().toISOString().slice(0, 10),
+          source: 'appointment',
+          clientSource: 'appointment'
+        }).then((saveResult: any) => {
+          const savedSession = saveResult?.session || saveResult?.data;
+          if (saveResult?.success && savedSession?.id) {
+            persistActiveSession({
+              ...linkedSession,
+              id: String(savedSession.id),
+              status: savedSession.status || linkedSession.status,
+              appointmentId: savedSession.appointment_id || scheduledAppointmentId,
+              appointment_id: savedSession.appointment_id || scheduledAppointmentId
+            });
+          }
+        }).catch((error: any) => {
+          console.warn('[ABA] Não foi possível vincular sessão ativa à consulta agendada:', error?.message || String(error));
+        });
+      } else if (persistedSession && !activeSession) {
+        persistActiveSession(persistedSession);
+      }
       setIsSessionModeOpen(true);
       return;
     }

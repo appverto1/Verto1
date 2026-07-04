@@ -1180,6 +1180,8 @@ const normalizeClinicalEvent = (event: any, roomLookup?: Map<string, any>) => {
     time: formatTime(start),
     endTime: formatTime(end),
     has_session_record: Boolean(event?.has_session_record ?? event?.hasSessionRecord),
+    aba_session_id: event?.aba_session_id || event?.abaSessionId || source?.aba_session_id || source?.abaSessionId || null,
+    abaSessionId: event?.abaSessionId || event?.aba_session_id || source?.abaSessionId || source?.aba_session_id || null,
     has_report: Boolean(event?.has_report ?? event?.hasReport),
     has_pending_signature: Boolean(event?.has_pending_signature ?? event?.hasPendingSignature),
     has_next_session_plan: Boolean(event?.has_next_session_plan ?? event?.hasNextSessionPlan),
@@ -2696,6 +2698,23 @@ export const ClinicalAgendaBoard = ({
   const closureOperationalView = getAppointmentClosureOperationalView(detailEvent, closureDetailState.data);
   const detailCancellationState = resolveAppointmentCancellationState(detailEvent);
   const detailPrimaryAction = getAppointmentPrimaryAction(detailEvent, closureOperationalView.phase);
+  const detailLinkedAbaSessionId = String(
+    detailEvent.aba_session_id ||
+      detailEvent.abaSessionId ||
+      detailEvent.source_payload?.aba_session_id ||
+      detailEvent.source_payload?.abaSessionId ||
+      detailEvent.sourcePayload?.aba_session_id ||
+      detailEvent.sourcePayload?.abaSessionId ||
+      ''
+  ).trim();
+  const detailHasActiveLinkedSession =
+    !detailCancellationState.isCancelled &&
+    (detailPrimaryAction.kind === 'continue' ||
+      Boolean(detailLinkedAbaSessionId && !detailEvent.has_session_record && !detailEvent.actual_end_at && !detailEvent.actualEndAt));
+  const detailHasCompletedLinkedSession =
+    !detailCancellationState.isCancelled &&
+    (detailPrimaryAction.kind === 'closure' ||
+      Boolean(detailEvent.has_session_record || detailEvent.actual_end_at || detailEvent.actualEndAt));
   const detailStatusColor = getAppointmentPatientConfirmationVisualState(detailEvent);
   const detailAppointmentConfirmed = detailStatusColor.canonical === 'CONFIRMED';
   const planItems = Array.isArray(detail.nextSessionPlanItems) ? detail.nextSessionPlanItems : [];
@@ -3854,6 +3873,18 @@ export const ClinicalAgendaBoard = ({
                                 {loadingSkip ? 'Atualizando...' : 'Fazer depois'}
                               </button>
                             </div>
+                          ) : detailHasActiveLinkedSession ? (
+                            <button
+                              type="button"
+                              onClick={() => onStartSession?.(detailEvent)}
+                              className="mt-2 inline-flex min-h-[32px] items-center justify-center rounded-full bg-amber-600 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-white transition hover:bg-amber-700"
+                            >
+                              Abrir na sessão ativa
+                            </button>
+                          ) : detailHasCompletedLinkedSession ? (
+                            <p className="mt-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800">
+                              Usada na sessão.
+                            </p>
                           ) : (
                             <p className="mt-2 rounded-2xl border border-amber-200 bg-white/80 px-3 py-2 text-xs font-semibold text-amber-800">
                               Inicie a sessão para usar esta Maintenance Probe.

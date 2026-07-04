@@ -333,6 +333,16 @@ test('popover tem acoes clinicas e nao registra sessao automaticamente', () => {
   assert.doesNotMatch(calendarCode, /saveAbaSessionSummary\(/);
 });
 
+test('maintenance probes vinculadas reconhecem sessao ativa da consulta', () => {
+  assert.match(calendarCode, /aba_session_id: event\?\.aba_session_id \|\| event\?\.abaSessionId \|\| source\?\.aba_session_id \|\| source\?\.abaSessionId \|\| null/);
+  assert.match(calendarCode, /const detailLinkedAbaSessionId = String\(/);
+  assert.match(calendarCode, /const detailHasActiveLinkedSession =/);
+  assert.match(calendarCode, /detailPrimaryAction\.kind === 'continue'/);
+  assert.match(calendarCode, /Abrir na sessão ativa/);
+  assert.match(calendarCode, /Usada na sessão\./);
+  assert.match(calendarCode, /Inicie a sessão para usar esta Maintenance Probe\./);
+});
+
 test('ação principal respeita a fase operacional da consulta', () => {
   assert.deepEqual(
     getAppointmentPrimaryAction({ status: 'scheduled' }, 'scheduled_pre_session'),
