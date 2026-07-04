@@ -72,7 +72,7 @@ import {
   normalizeAbaMasteryCriterion
 } from '../utils/abaMasteryEngine';
 import { formatMaintenanceScheduleDueLabel, resolveMaintenanceProbeAvailability } from '../utils/abaMaintenanceScheduling';
-import { resolveMaintenanceTargetDisplay } from '../utils/peiMaintenancePanel';
+import { mapMaintenancePanelResponse, resolveMaintenanceTargetDisplay } from '../utils/peiMaintenancePanel';
 import { isPeiClinicalRowAfterProgressReset } from '../utils/peiSessionReset';
 
 type SyncStatus = 'local' | 'syncing' | 'synced' | 'error';
@@ -563,6 +563,14 @@ const normalizeSessionMaintenanceProbeList = (items: any[]) => (Array.isArray(it
   })
   .filter(Boolean);
 
+const getMaintenancePanelSchedule = (row: any) => (
+  row?.nextSchedule ||
+  row?.activeSchedule ||
+  row?.schedule ||
+  row?.nextProbe?.schedule ||
+  null
+);
+
 const mergeMaintenanceScheduleLists = (...lists: any[][]) => {
   const byId = new Map<string, any>();
   lists.flat().forEach((schedule: any) => {
@@ -666,6 +674,7 @@ export const SessionMode = ({
   const [records, setRecords] = useState<SessionRecord[]>([]);
   const [sessionLiveSummary, setSessionLiveSummary] = useState<any>(null);
   const [maintenanceOverview, setMaintenanceOverview] = useState<any>({ schedules: [], probeResults: [], alerts: [], summary: null });
+  const [maintenancePanel, setMaintenancePanel] = useState<any>(null);
   const [sessionMaintenanceProbes, setSessionMaintenanceProbes] = useState<any>({ available: [], upcoming: [], loaded: false, error: '' });
   const [maintenanceScheduleModalGoal, setMaintenanceScheduleModalGoal] = useState<any>(null);
   const [maintenanceScheduleMode, setMaintenanceScheduleMode] = useState('DEFAULT_SEQUENCE');
@@ -1083,6 +1092,31 @@ export const SessionMode = ({
     };
   }, [activeAppointmentId, patientId, sessionId, sessionCompleted]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const loadMaintenancePanel = async () => {
+      if (!patientId || !activeAppointmentId || sessionCompleted) {
+        setMaintenancePanel(null);
+        return;
+      }
+      try {
+        const result = await dataService.getAbaMaintenancePanel(patientId, { page: 1, pageSize: 200 });
+        if (cancelled) return;
+        setMaintenancePanel(mapMaintenancePanelResponse(result, {
+          patientId,
+          requestId: Date.now(),
+          loadedAt: Date.now()
+        }));
+      } catch {
+        if (!cancelled) setMaintenancePanel(null);
+      }
+    };
+    void loadMaintenancePanel();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeAppointmentId, patientId, sessionCompleted, sessionId]);
+
   const loadSessionMaintenanceProbeState = useCallback(async (source: 'auto' | 'manual_reload' = 'auto') => {
     if (!patientId || !sessionId || sessionId.startsWith('draft-') || sessionCompleted) {
       return { available: [], upcoming: [], loaded: false, error: '' };
@@ -1091,14 +1125,16 @@ export const SessionMode = ({
       const result = await dataService.getAbaSessionMaintenanceProbes(sessionId, {
         appointmentId: activeAppointmentId || undefined,
         clinicalDate: sessionClinicalDate || undefined,
-        timeZone: maintenanceTimeZone || undefined
+        timeZone: maintenanceTimeZone || undefined,
+        force: source === 'manual_reload'
       });
       const payload = result?.data || result || {};
       const nextState = {
         available: result?.success === false ? [] : Array.isArray(payload?.available) ? payload.available : [],
         upcoming: result?.success === false ? [] : Array.isArray(payload?.upcoming) ? payload.upcoming : [],
         loaded: true,
-        error: result?.success === false ? (result?.error || 'Não foi possível carregar Maintenance Probes.') : ''
+        error: result?.success === false ? (result?.error || 'Não foi possível carregar Maintenance Probes.') : '',
+        diagnostics: payload?.diagnostics || result?.diagnostics || null
       };
       if (import.meta.env.DEV) {
         console.info('[Maintenance Probes] load attempt', {
@@ -3598,6 +3634,22 @@ export const SessionMode = ({
       String(schedule?.appointment_id || schedule?.appointmentId || schedule?.appointment?.id || '').trim() === appointmentId
     ));
   }, [activeAppointmentId, overviewMaintenanceSchedules]);
+  const panelAppointmentMaintenanceProbeSchedules = useMemo(() => {
+    const appointmentId = String(activeAppointmentId || '').trim();
+    if (!appointmentId || !maintenancePanel?.sections) return [];
+    const rows = [
+      ...(maintenancePanel.sections.scheduled || []),
+      ...(maintenancePanel.sections.waitingNextSession || []),
+      ...(maintenancePanel.sections.overdue || [])
+    ];
+    const schedules = rows
+      .map(getMaintenancePanelSchedule)
+      .filter((schedule: any) => (
+        schedule &&
+        String(schedule?.appointment_id || schedule?.appointmentId || schedule?.appointment?.id || '').trim() === appointmentId
+      ));
+    return normalizeSessionMaintenanceProbeList(schedules.map((schedule: any) => ({ schedule })));
+  }, [activeAppointmentId, maintenancePanel]);
   const overviewAppointmentMaintenanceProbeAvailability = useMemo(() => {
     if (!activeAppointmentId || overviewAppointmentMaintenanceProbeSchedules.length === 0) {
       return { available: [], upcoming: [], availableItems: [], upcomingItems: [], availableSchedule: null, upcomingSchedule: null };
@@ -3610,18 +3662,32 @@ export const SessionMode = ({
       timeZone: maintenanceTimeZone
     });
   }, [activeAppointmentId, activeSession?.actualStartAt, activeSession?.actual_start_at, activeSession?.startedAt, activeSession?.started_at, maintenanceTimeZone, overviewAppointmentMaintenanceProbeSchedules, sessionClinicalDate, sessionId]);
+  const panelAppointmentMaintenanceProbeAvailability = useMemo(() => {
+    if (!activeAppointmentId || panelAppointmentMaintenanceProbeSchedules.length === 0) {
+      return { available: [], upcoming: [], availableItems: [], upcomingItems: [], availableSchedule: null, upcomingSchedule: null };
+    }
+    return resolveMaintenanceProbeAvailability(panelAppointmentMaintenanceProbeSchedules, {
+      appointmentId: activeAppointmentId || null,
+      sessionId,
+      sessionClinicalDate,
+      occurredAt: activeSession?.actualStartAt || activeSession?.actual_start_at || activeSession?.startedAt || activeSession?.started_at || new Date().toISOString(),
+      timeZone: maintenanceTimeZone
+    });
+  }, [activeAppointmentId, activeSession?.actualStartAt, activeSession?.actual_start_at, activeSession?.startedAt, activeSession?.started_at, maintenanceTimeZone, panelAppointmentMaintenanceProbeSchedules, sessionClinicalDate, sessionId]);
   const sessionAvailableMaintenanceProbeSchedules = useMemo(() => (
     mergeMaintenanceScheduleLists(
       normalizeSessionMaintenanceProbeList(sessionMaintenanceProbes?.available || []),
-      normalizeSessionMaintenanceProbeList(overviewAppointmentMaintenanceProbeAvailability.available || [])
+      normalizeSessionMaintenanceProbeList(overviewAppointmentMaintenanceProbeAvailability.available || []),
+      normalizeSessionMaintenanceProbeList(panelAppointmentMaintenanceProbeAvailability.available || [])
     )
-  ), [overviewAppointmentMaintenanceProbeAvailability.available, sessionMaintenanceProbes]);
+  ), [overviewAppointmentMaintenanceProbeAvailability.available, panelAppointmentMaintenanceProbeAvailability.available, sessionMaintenanceProbes]);
   const sessionUpcomingMaintenanceProbeSchedules = useMemo(() => (
     mergeMaintenanceScheduleLists(
       normalizeSessionMaintenanceProbeList(sessionMaintenanceProbes?.upcoming || []),
-      normalizeSessionMaintenanceProbeList(overviewAppointmentMaintenanceProbeAvailability.upcoming || [])
+      normalizeSessionMaintenanceProbeList(overviewAppointmentMaintenanceProbeAvailability.upcoming || []),
+      normalizeSessionMaintenanceProbeList(panelAppointmentMaintenanceProbeAvailability.upcoming || [])
     )
-  ), [overviewAppointmentMaintenanceProbeAvailability.upcoming, sessionMaintenanceProbes]);
+  ), [overviewAppointmentMaintenanceProbeAvailability.upcoming, panelAppointmentMaintenanceProbeAvailability.upcoming, sessionMaintenanceProbes]);
   const sessionGoals = useMemo(() => (
     mergeSessionGoalsWithAvailableMaintenance(baseSessionGoals, sessionAvailableMaintenanceProbeSchedules)
   ), [baseSessionGoals, sessionAvailableMaintenanceProbeSchedules]);
@@ -3640,8 +3706,9 @@ export const SessionMode = ({
   const maintenanceSchedules = useMemo(() => mergeMaintenanceScheduleLists(
     sessionAvailableMaintenanceProbeSchedules,
     sessionUpcomingMaintenanceProbeSchedules,
-    overviewMaintenanceSchedules
-  ), [overviewMaintenanceSchedules, sessionAvailableMaintenanceProbeSchedules, sessionUpcomingMaintenanceProbeSchedules]);
+    overviewMaintenanceSchedules,
+    panelAppointmentMaintenanceProbeSchedules
+  ), [overviewMaintenanceSchedules, panelAppointmentMaintenanceProbeSchedules, sessionAvailableMaintenanceProbeSchedules, sessionUpcomingMaintenanceProbeSchedules]);
   const maintenanceProbeResults = Array.isArray(maintenanceOverview?.probeResults) ? maintenanceOverview.probeResults : [];
   const regressionAlerts = Array.isArray(maintenanceOverview?.alerts) ? maintenanceOverview.alerts : [];
 
@@ -3895,6 +3962,7 @@ export const SessionMode = ({
     });
     return scheduleIds.size;
   }, [activeAppointmentId, maintenanceSchedules]);
+  const sessionMaintenanceProbeDiagnostics = sessionMaintenanceProbes?.diagnostics || null;
 
   const showLinkedMaintenanceProbeLoadWarning = Boolean(
     activeAppointmentId &&
@@ -6411,8 +6479,16 @@ export const SessionMode = ({
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-amber-600">Sondagens da consulta</p>
-                  <h2 className="text-lg font-bold text-gray-900">Esta sessão está vinculada à consulta, mas as sondagens ainda não foram carregadas.</h2>
-                  <p className="mt-1 text-xs font-semibold text-gray-500">Recarregue as sondagens para usar as Maintenance Probes planejadas nesta sessão.</p>
+                  <h2 className="text-lg font-bold text-gray-900">Nenhuma sondagem encontrada para esta sessão.</h2>
+                  <p className="mt-1 text-xs font-semibold text-gray-500">A sessão está vinculada à consulta, mas nenhuma sondagem ativa foi carregada para este vínculo.</p>
+                  <div className="mt-2 flex flex-wrap gap-2 text-[10px] font-bold uppercase tracking-widest text-amber-700">
+                    <span className="rounded-full bg-amber-50 px-2 py-1">Sessão vinculada: sim</span>
+                    <span className="rounded-full bg-amber-50 px-2 py-1">Consulta vinculada: sim</span>
+                    {sessionClinicalDate && <span className="rounded-full bg-amber-50 px-2 py-1">Data clínica: {String(sessionClinicalDate).slice(0, 10)}</span>}
+                    {sessionMaintenanceProbeDiagnostics?.appointmentScheduleCount !== undefined && (
+                      <span className="rounded-full bg-amber-50 px-2 py-1">Sondagens da consulta na busca: {sessionMaintenanceProbeDiagnostics.appointmentScheduleCount}</span>
+                    )}
+                  </div>
                 </div>
                 <button type="button" onClick={refreshSessionMaintenanceProbes} className="inline-flex min-h-[38px] w-fit items-center justify-center rounded-full bg-amber-600 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-white">
                   Recarregar sondagens

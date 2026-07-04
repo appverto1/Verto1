@@ -4083,13 +4083,14 @@ export const dataService = {
     return { success: true, data: [] };
   },
 
-  async getAbaSessionMaintenanceProbes(sessionId: string, options: { appointmentId?: string | null; clinicalDate?: string | null; timeZone?: string | null } = {}) {
+  async getAbaSessionMaintenanceProbes(sessionId: string, options: { appointmentId?: string | null; clinicalDate?: string | null; timeZone?: string | null; force?: boolean } = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse({ available: [], upcoming: [] });
     if (!isPersistedUuid(sessionId)) return { success: true, data: { available: [], upcoming: [] }, available: [], upcoming: [] };
     const params = new URLSearchParams();
     if (options.appointmentId) params.set('appointmentId', String(options.appointmentId));
     if (options.clinicalDate) params.set('clinicalDate', String(options.clinicalDate));
     if (options.timeZone) params.set('timeZone', String(options.timeZone));
+    if (options.force) params.set('_reload', String(Date.now()));
     const queryString = params.toString();
     const endpoint = `/api/aba/sessions/${encodeURIComponent(String(sessionId))}/maintenance-probes${queryString ? `?${queryString}` : ''}`;
     try {

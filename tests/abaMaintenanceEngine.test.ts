@@ -363,8 +363,9 @@ test('backend e frontend usam summaries e rotas de manutencao paginadas', () => 
   assert.match(serverCode, /completeMaintenanceScheduleAfterProbe/);
   assert.match(serverCode, /persistTargetMaintenanceApproval/);
   assert.match(dataServiceCode, /async getAbaMaintenanceOverview\(patientId: string/);
-  assert.match(dataServiceCode, /async getAbaSessionMaintenanceProbes\(sessionId: string, options: \{ appointmentId\?: string \| null; clinicalDate\?: string \| null; timeZone\?: string \| null \} = \{\}\)/);
+  assert.match(dataServiceCode, /async getAbaSessionMaintenanceProbes\(sessionId: string, options: \{ appointmentId\?: string \| null; clinicalDate\?: string \| null; timeZone\?: string \| null; force\?: boolean \} = \{\}\)/);
   assert.match(dataServiceCode, /appointmentId\?: string \| null/);
+  assert.match(dataServiceCode, /if \(options\.force\) params\.set\('_reload'/);
   assert.match(dataServiceCode, /async createMaintenanceScheduleForTarget\(targetId: string/);
   assert.match(dataServiceCode, /async scheduleMaintenanceForNextSession\(targetId: string/);
   assert.match(dataServiceCode, /async saveAbaMaintenanceProbeResult\(result: any\)/);
@@ -372,8 +373,13 @@ test('backend e frontend usam summaries e rotas de manutencao paginadas', () => 
   assert.match(sessionModeCode, /dataService\.getAbaSessionMaintenanceProbes\(sessionId,\s*\{[\s\S]*?appointmentId: activeAppointmentId/m);
   assert.match(sessionModeCode, /const loadSessionMaintenanceProbeState = useCallback/);
   assert.match(sessionModeCode, /refreshSessionMaintenanceProbes[\s\S]*?loadSessionMaintenanceProbeState\('manual_reload'\)/m);
+  assert.match(sessionModeCode, /force: source === 'manual_reload'/);
+  assert.match(sessionModeCode, /dataService\.getAbaMaintenancePanel\(patientId, \{ page: 1, pageSize: 200 \}\)/);
   assert.match(sessionModeCode, /overviewAppointmentMaintenanceProbeAvailability/);
+  assert.match(sessionModeCode, /panelAppointmentMaintenanceProbeAvailability/);
+  assert.match(sessionModeCode, /maintenancePanel\.sections\.scheduled/);
   assert.match(sessionModeCode, /mergeMaintenanceScheduleLists\([\s\S]*?sessionMaintenanceProbes\?\.available[\s\S]*?overviewAppointmentMaintenanceProbeAvailability\.available/m);
+  assert.match(sessionModeCode, /mergeMaintenanceScheduleLists\([\s\S]*?panelAppointmentMaintenanceProbeAvailability\.available/m);
   assert.match(sessionModeCode, /sessionAvailableMaintenanceProbeSchedules/);
   assert.match(sessionModeCode, /schedules: \[\]/);
   assert.match(sessionModeCode, /appointmentId: activeAppointmentId/);

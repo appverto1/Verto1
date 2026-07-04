@@ -199,12 +199,17 @@ test('maintenance probes da sessao usam appointment_id e escopo da sessao', () =
   const route = serverCode.slice(routeStart, routeEnd);
   assert.match(route, /checkAuth, requireRoles\('coordinator', 'therapist', 'admin', 'owner'\)/);
   assert.match(route, /resolveAbaSessionReadScope\(requestedSessionId, req\.session\.user\)/);
-  assert.match(route, /const activeAppointmentId = sanitizeString\(session\?\.appointment_id/);
+  assert.match(route, /const requestedAppointmentId = sanitizeString\(req\.query\?\.appointmentId/);
+  assert.match(route, /const sessionAppointmentId = sanitizeString\(session\?\.appointment_id/);
+  assert.match(route, /const activeAppointmentId = isUuid\(requestedAppointmentId\) \? requestedAppointmentId : sessionAppointmentId/);
   assert.match(route, /\.eq\('patient_id', patientId\)/);
   assert.match(route, /select\(ABA_MAINTENANCE_SCHEDULE_SELECT\)/);
+  assert.match(route, /\.eq\('appointment_id', activeAppointmentId\)/);
+  assert.match(route, /appointmentScheduleRows/);
   assert.match(route, /resolveMaintenanceProbeAvailability/);
   assert.match(route, /linkedToActiveAppointment/);
   assert.match(route, /missingLinkedAppointment = Boolean\(appointmentId && !appointment\?\.id && !linkedToActiveAppointment\)/);
+  assert.match(route, /diagnostics = cleanObject\([\s\S]*?appointmentScheduleCount[\s\S]*?filteredOutReasons/m);
   assert.match(route, /available[\s\S]*upcoming/);
   assert.doesNotMatch(route, /select\('\*'\)|targetName[\s\S]{0,120}availableSchedule/);
 });

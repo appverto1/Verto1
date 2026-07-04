@@ -48555,7 +48555,9 @@ async function startServer() {
       const patientId = sanitizeString((scope as any).patientId, 120);
       const clinicId = sanitizeString((scope as any).clinicId || currentClinicId(req.session.user), 120);
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
-      const activeAppointmentId = sanitizeString(session?.appointment_id || req.query?.appointmentId || req.query?.appointment_id, 180);
+      const requestedAppointmentId = sanitizeString(req.query?.appointmentId || req.query?.appointment_id, 180);
+      const sessionAppointmentId = sanitizeString(session?.appointment_id, 180);
+      const activeAppointmentId = isUuid(requestedAppointmentId) ? requestedAppointmentId : sessionAppointmentId;
       const timeZone = sanitizeString(req.query?.timeZone || req.query?.timezone || req.session.user?.timeZone || req.session.user?.timezone || 'America/Sao_Paulo', 80) || 'America/Sao_Paulo';
       const sessionClinicalDate = req.query?.clinicalDate ||
         req.query?.clinical_date ||
@@ -48584,17 +48586,62 @@ async function startServer() {
         throw scheduleResult.error;
       }
 
-      const enrichedSchedules = await enrichMaintenanceRowsWithTargetDisplay(scheduleResult.data || [], clinicId, organizationId, req.session.user);
+      let appointmentScheduleRows: any[] = [];
+      if (isUuid(activeAppointmentId)) {
+        let appointmentScheduleQuery = supabase
+          .from('aba_maintenance_schedules')
+          .select(ABA_MAINTENANCE_SCHEDULE_SELECT)
+          .eq('organization_id', organizationId)
+          .eq('patient_id', patientId)
+          .eq('appointment_id', activeAppointmentId)
+          .in('status', ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES)
+          .order('target_due_date', { ascending: true })
+          .limit(100);
+        appointmentScheduleQuery = applyAbaTenantScope(appointmentScheduleQuery, req.session.user, clinicId, organizationId);
+        const appointmentScheduleResult = await appointmentScheduleQuery;
+        if (appointmentScheduleResult.error) {
+          if (!hasMissingFinancialSchema(appointmentScheduleResult.error) && !isMissingRelationError(appointmentScheduleResult.error)) {
+            throw appointmentScheduleResult.error;
+          }
+        } else {
+          appointmentScheduleRows = Array.isArray(appointmentScheduleResult.data) ? appointmentScheduleResult.data : [];
+        }
+      }
+
+      const scheduleRowsById = new Map<string, any>();
+      [...appointmentScheduleRows, ...((scheduleResult.data || []) as any[])].forEach((row: any) => {
+        const scheduleId = sanitizeString(row?.id || row?.schedule_id || row?.scheduleId, 180);
+        if (!scheduleId) return;
+        if (!scheduleRowsById.has(scheduleId)) scheduleRowsById.set(scheduleId, row);
+      });
+      const enrichedSchedules = await enrichMaintenanceRowsWithTargetDisplay(Array.from(scheduleRowsById.values()), clinicId, organizationId, req.session.user);
+      const filteredOutReasons: Record<string, number> = {};
+      const trackFilteredOut = (reason: string) => {
+        filteredOutReasons[reason] = (filteredOutReasons[reason] || 0) + 1;
+      };
       const realTargetSchedules = (Array.isArray(enrichedSchedules) ? enrichedSchedules : []).filter((schedule: any) => {
         const scheduleId = sanitizeString(schedule?.id || schedule?.schedule_id || schedule?.scheduleId, 180);
         const targetId = sanitizeString(schedule?.target_id || schedule?.targetId, 180);
         const targetPatientId = sanitizeString(schedule?.target?.patient_id || schedule?.target?.patientId, 120);
         const appointmentId = sanitizeString(schedule?.appointment_id || schedule?.appointmentId, 180);
         const appointmentPatientId = sanitizeString(schedule?.appointment?.patient_id || schedule?.appointment?.patientId, 120);
-        if (!hasPersistedMaintenanceScheduleId(scheduleId) || !isUuid(targetId) || schedule?.target_missing) return false;
-        if (!schedule?.target?.id) return false;
-        if (appointmentId && schedule?.appointment?.id && appointmentPatientId && appointmentPatientId !== patientId) return false;
-        return !targetPatientId || targetPatientId === patientId;
+        if (!hasPersistedMaintenanceScheduleId(scheduleId)) {
+          trackFilteredOut('missing_schedule');
+          return false;
+        }
+        if (!isUuid(targetId) || schedule?.target_missing || !schedule?.target?.id) {
+          trackFilteredOut('missing_target');
+          return false;
+        }
+        if (appointmentId && schedule?.appointment?.id && appointmentPatientId && appointmentPatientId !== patientId) {
+          trackFilteredOut('patient_mismatch');
+          return false;
+        }
+        if (targetPatientId && targetPatientId !== patientId) {
+          trackFilteredOut('patient_mismatch');
+          return false;
+        }
+        return true;
       }).map((schedule: any) => {
         const appointmentId = sanitizeString(schedule?.appointment_id || schedule?.appointmentId, 180);
         const appointment = appointmentId ? schedule?.appointment || null : null;
@@ -48657,11 +48704,23 @@ async function startServer() {
       const upcoming = availability.upcomingItems
         .map((item) => itemForResponse(item, availabilityReasonForResponse(item)))
         .filter(Boolean);
+      const diagnostics = cleanObject({
+        resultCount: available.length + upcoming.length,
+        appointmentScheduleCount: appointmentScheduleRows.length,
+        sessionScheduleCount: realTargetSchedules.filter((schedule: any) => (
+          sanitizeString(schedule?.session_id || schedule?.sessionId || readMaintenanceStoredPayload(schedule?.raw_payload || schedule?.rawPayload)?.sessionId || '', 180) === requestedSessionId
+        )).length,
+        filteredOutCount: Object.values(filteredOutReasons).reduce((total, count) => total + count, 0),
+        filteredOutReasons,
+        appointmentLookupUsed: isUuid(activeAppointmentId),
+        appointmentIdPresent: isUuid(activeAppointmentId)
+      });
       return res.json({
         success: true,
-        data: { available, upcoming },
+        data: { available, upcoming, diagnostics },
         available,
         upcoming,
+        diagnostics,
         session: cleanObject({
           id: requestedSessionId,
           patientId,
