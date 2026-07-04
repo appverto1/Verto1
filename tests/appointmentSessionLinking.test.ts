@@ -211,7 +211,8 @@ test('agenda recebe vinculo da sessao para liberar maintenance probes planejadas
   assert.match(serverCode, /mapClosureRowToCalendarFields[\s\S]*?aba_session_id: sanitizeString\(row\?\.aba_session_id, 180\) \|\| null/);
   assert.match(serverCode, /normalizeCalendarAppointmentRow[\s\S]*?aba_session_id: sanitizeString\(row\?\.aba_session_id \|\| row\?\.abaSessionId \|\| source\?\.aba_session_id \|\| source\?\.abaSessionId, 180\) \|\| null/);
   assert.match(sessionModeCode, /const activeAppointmentId = String\(\s*activeSession\?\.appointmentId \|\| activeSession\?\.appointment_id/);
-  assert.match(sessionModeCode, /getAbaSessionMaintenanceProbes\(sessionId\)/);
+  assert.match(sessionModeCode, /getAbaSessionMaintenanceProbes\(sessionId,\s*\{[\s\S]*?appointmentId: activeAppointmentId/m);
+  assert.match(sessionModeCode, /Sondagens de manutenção desta consulta/);
 });
 
 test('no broad select star is introduced', () => {

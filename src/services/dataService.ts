@@ -4083,10 +4083,15 @@ export const dataService = {
     return { success: true, data: [] };
   },
 
-  async getAbaSessionMaintenanceProbes(sessionId: string) {
+  async getAbaSessionMaintenanceProbes(sessionId: string, options: { appointmentId?: string | null; clinicalDate?: string | null; timeZone?: string | null } = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse({ available: [], upcoming: [] });
     if (!isPersistedUuid(sessionId)) return { success: true, data: { available: [], upcoming: [] }, available: [], upcoming: [] };
-    const endpoint = `/api/aba/sessions/${encodeURIComponent(String(sessionId))}/maintenance-probes`;
+    const params = new URLSearchParams();
+    if (options.appointmentId) params.set('appointmentId', String(options.appointmentId));
+    if (options.clinicalDate) params.set('clinicalDate', String(options.clinicalDate));
+    if (options.timeZone) params.set('timeZone', String(options.timeZone));
+    const queryString = params.toString();
+    const endpoint = `/api/aba/sessions/${encodeURIComponent(String(sessionId))}/maintenance-probes${queryString ? `?${queryString}` : ''}`;
     try {
       const response = await fetchClinical(endpoint, {
         headers: await buildConditionalHeaders(endpoint, 'aba'),

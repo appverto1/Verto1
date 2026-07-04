@@ -1091,7 +1091,11 @@ export const SessionMode = ({
         return;
       }
       try {
-        const result = await dataService.getAbaSessionMaintenanceProbes(sessionId);
+        const result = await dataService.getAbaSessionMaintenanceProbes(sessionId, {
+          appointmentId: activeAppointmentId || undefined,
+          clinicalDate: sessionClinicalDate || undefined,
+          timeZone: maintenanceTimeZone || undefined
+        });
         const payload = result?.data || result || {};
         const errorMessage = result?.success === false ? (result?.error || 'Não foi possível carregar Maintenance Probes.') : '';
         if (!cancelled) {
@@ -1110,7 +1114,7 @@ export const SessionMode = ({
     return () => {
       cancelled = true;
     };
-  }, [patientId, sessionId, sessionCompleted]);
+  }, [activeAppointmentId, maintenanceTimeZone, patientId, sessionClinicalDate, sessionId, sessionCompleted]);
 
   useEffect(() => {
     let cancelled = false;
@@ -3835,6 +3839,27 @@ export const SessionMode = ({
       .slice(0, 6);
   }, [maintenanceProbeRows]);
 
+  const appointmentLinkedMaintenanceProbeCount = useMemo(() => {
+    const appointmentId = String(activeAppointmentId || '').trim();
+    if (!appointmentId) return 0;
+    const scheduleIds = new Set<string>();
+    maintenanceSchedules.forEach((schedule: any) => {
+      const scheduleAppointmentId = String(schedule?.appointment_id || schedule?.appointmentId || schedule?.appointment?.id || '').trim();
+      const scheduleId = String(schedule?.id || schedule?.schedule_id || schedule?.scheduleId || '').trim();
+      if (scheduleAppointmentId === appointmentId && scheduleId) scheduleIds.add(scheduleId);
+    });
+    return scheduleIds.size;
+  }, [activeAppointmentId, maintenanceSchedules]);
+
+  const showLinkedMaintenanceProbeLoadWarning = Boolean(
+    activeAppointmentId &&
+    sessionMaintenanceProbes?.loaded &&
+    !sessionMaintenanceProbes?.error &&
+    appointmentLinkedMaintenanceProbeCount > 0 &&
+    sessionAvailableMaintenanceProbeSchedules.length === 0 &&
+    sessionUpcomingMaintenanceProbeSchedules.length === 0
+  );
+
   const upcomingMaintenanceProbeItems = useMemo(() => {
     return sessionUpcomingMaintenanceProbeSchedules
       .filter((schedule: any) => !sessionAvailableMaintenanceProbeSchedules.some((available: any) => String(available?.id || available?.scheduleId || '') === String(schedule?.id || schedule?.scheduleId || '')))
@@ -3866,7 +3891,11 @@ export const SessionMode = ({
       return;
     }
     try {
-      const result = await dataService.getAbaSessionMaintenanceProbes(sessionId);
+      const result = await dataService.getAbaSessionMaintenanceProbes(sessionId, {
+        appointmentId: activeAppointmentId || undefined,
+        clinicalDate: sessionClinicalDate || undefined,
+        timeZone: maintenanceTimeZone || undefined
+      });
       const payload = result?.data || result || {};
       const errorMessage = result?.success === false ? (result?.error || 'Não foi possível carregar Maintenance Probes.') : '';
       setSessionMaintenanceProbes({
@@ -6351,25 +6380,48 @@ export const SessionMode = ({
             </section>
           )}
 
+          {showLinkedMaintenanceProbeLoadWarning && (
+            <section className="rounded-[24px] sm:rounded-[28px] border border-amber-100 bg-white p-4 sm:p-5 shadow-xl shadow-amber-900/5">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-amber-600">Sondagens da consulta</p>
+                  <h2 className="text-lg font-bold text-gray-900">Esta sessão está vinculada à consulta, mas as sondagens ainda não foram carregadas.</h2>
+                  <p className="mt-1 text-xs font-semibold text-gray-500">Recarregue as sondagens para usar as Maintenance Probes planejadas nesta sessão.</p>
+                </div>
+                <button type="button" onClick={refreshSessionMaintenanceProbes} className="inline-flex min-h-[38px] w-fit items-center justify-center rounded-full bg-amber-600 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-white">
+                  Recarregar sondagens
+                </button>
+              </div>
+            </section>
+          )}
+
           {pendingMaintenanceProbeItems.length > 0 && (
             <section className="rounded-[24px] sm:rounded-[28px] border border-amber-100 bg-white p-4 sm:p-5 shadow-xl shadow-amber-900/5">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-amber-600">Probes de manutencao pendentes</p>
-                  <h2 className="text-lg font-bold text-gray-900">Sondagens para revisar nesta sessao</h2>
+                  <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-amber-600">Sondagens da consulta</p>
+                  <h2 className="text-lg font-bold text-gray-900">Sondagens de manutenção desta consulta</h2>
                 </div>
               </div>
               <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2">
                 {pendingMaintenanceProbeItems.map((row: any) => {
                   const goal = sessionGoals.find((entry: any) => goalTargetId(entry) === String(row.targetId || ''));
+                  const targetKey = String(row.targetId || '').trim();
+                  const activeForSession = Boolean(targetKey && currentTrialTargetKey === targetKey && activeMaintenanceProbeTargetId === targetKey && isMaintenanceProbeCollection(collectionType));
+                  const registeredInSession = Number(row.totalTrials || 0) > 0;
                   return (
                     <div key={`pending-${row.id}`} className="rounded-2xl border border-amber-100 bg-[#FFFDF7] p-4">
-                      <p className="text-sm font-bold text-gray-900">{row.name}</p>
+                      <div className="flex items-start justify-between gap-3">
+                        <p className="text-sm font-bold text-gray-900">{row.name}</p>
+                        <span className={`shrink-0 rounded-full px-2 py-1 text-[9px] font-bold uppercase tracking-widest ${registeredInSession ? 'bg-emerald-50 text-emerald-600' : activeForSession ? 'bg-blue-50 text-blue-600' : 'bg-amber-100 text-amber-700'}`}>
+                          {registeredInSession ? 'Registrada nesta sessão' : activeForSession ? 'Ativa nesta sessão' : 'Pendente nesta sessão'}
+                        </span>
+                      </div>
                       {row.contextLabel && <p className="mt-1 text-xs text-gray-500">{row.contextLabel}</p>}
                       <p className="mt-1 text-xs font-semibold text-amber-700">{row.nextSchedule ? formatMaintenanceDueLabel(row.nextSchedule) : 'Sem sondagem agendada'}</p>
-                      <p className="mt-1 text-xs text-gray-500">{row.activeAlert ? 'Alerta ativo de regressao/manutencao' : 'Use somente se for intencao clinica da tentativa.'}</p>
+                      <p className="mt-1 text-xs text-gray-500">{row.activeAlert ? 'Alerta ativo de regressao/manutencao' : 'Use os botões de tentativa para registrar o resultado da probe.'}</p>
                       <button type="button" onClick={() => activateMaintenanceProbeMode(goal)} className="mt-3 inline-flex min-h-[36px] items-center justify-center rounded-full bg-amber-600 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-white">
-                        Usar Maintenance Probe
+                        Registrar agora
                       </button>
                     </div>
                   );
