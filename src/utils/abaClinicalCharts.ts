@@ -181,6 +181,36 @@ export type AbaBehaviorContextPattern = {
   insights: string[];
 };
 
+export type AbaBehaviorCompositionSeries = {
+  key: string;
+  label: string;
+  behaviorId?: string | null;
+  total: number;
+  isOther?: boolean;
+};
+
+export type AbaBehaviorCompositionSegment = {
+  key: string;
+  label: string;
+  behaviorId?: string | null;
+  value: number;
+  count: number;
+  contextPattern?: AbaBehaviorContextPattern | null;
+};
+
+export type AbaBehaviorCompositionRow = {
+  groupKey: string;
+  groupBy: 'session' | 'day';
+  label: string;
+  sortAt: string;
+  total: number;
+  segments: AbaBehaviorCompositionSegment[];
+  dominantLocation?: AbaBehaviorContextPattern['dominantLocation'] | null;
+  commonSeverity?: AbaBehaviorContextPattern['commonSeverity'] | null;
+  commonCollectionMethod?: AbaBehaviorContextPattern['commonCollectionMethod'] | null;
+  [seriesKey: string]: any;
+};
+
 export const ABA_CLINICAL_CHART_DEFAULT_THRESHOLDS: AbaClinicalChartThresholds = {
   stablePercent: 5,
   meaningfulPercent: 10,
@@ -628,6 +658,210 @@ export function analyzeBehaviorContextPatterns(events: any[] = [], clinicContext
       insights
     };
   });
+}
+
+const behaviorCompositionDateValue = (point: any) =>
+  point?.changedAt ||
+  point?.changed_at ||
+  point?.date ||
+  point?.occurredAt ||
+  point?.occurred_at ||
+  point?.createdAt ||
+  point?.created_at ||
+  '';
+
+const behaviorCompositionDayKey = (value: unknown) => {
+  const raw = String(value || '');
+  if (!raw) return 'sem-data';
+  const date = new Date(raw);
+  if (!Number.isNaN(date.getTime())) return date.toISOString().slice(0, 10);
+  return raw.slice(0, 10) || 'sem-data';
+};
+
+const behaviorCompositionDayLabel = (key: string) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(key)) return key === 'sem-data' ? 'Sem data' : key;
+  const [, month, day] = key.split('-');
+  return `${day}/${month}`;
+};
+
+const behaviorCompositionBehaviorId = (point: any) =>
+  String(point?.behaviorId || point?.behavior_id || point?.itemId || point?.item_id || '').trim() || null;
+
+const behaviorCompositionBehaviorLabel = (point: any) =>
+  String(
+    point?.behaviorName ||
+    point?.behavior_name ||
+    point?.itemLabel ||
+    point?.item_label ||
+    point?.metricLabel ||
+    point?.metric_label ||
+    point?.label ||
+    point?.name ||
+    'Comportamento'
+  ).trim() || 'Comportamento';
+
+const behaviorCompositionValue = (point: any) =>
+  safeNumber(point?.value ?? point?.metricValue ?? point?.metric_value ?? point?.chartValue ?? point?.chart_value, 0);
+
+const behaviorCompositionPatternFor = (
+  point: any,
+  patternById: Map<string, AbaBehaviorContextPattern>,
+  patternByName: Map<string, AbaBehaviorContextPattern>
+) => {
+  const behaviorId = behaviorCompositionBehaviorId(point);
+  if (behaviorId && patternById.has(behaviorId)) return patternById.get(behaviorId) || null;
+  const labelKey = behaviorCompositionBehaviorLabel(point).toLowerCase();
+  return patternByName.get(labelKey) || null;
+};
+
+export function buildBehaviorCompositionStack(
+  points: any[] = [],
+  options: {
+    metricType?: string;
+    groupBy?: 'session' | 'day';
+    contextPatterns?: AbaBehaviorContextPattern[];
+    maxSeries?: number;
+  } = {}
+): { rows: AbaBehaviorCompositionRow[]; series: AbaBehaviorCompositionSeries[] } {
+  const metricType = String(options.metricType || 'BEHAVIOR_FREQUENCY');
+  const groupBy = options.groupBy || 'session';
+  const maxSeries = Math.max(1, options.maxSeries || 8);
+  const metricUsesAverage = ['BEHAVIOR_DURATION_AVG', 'BEHAVIOR_INTERVAL_OCCURRENCE'].includes(normalizeStatus(metricType));
+  const filtered = (Array.isArray(points) ? points : [])
+    .filter((point) => String(point?.metricType || point?.metric_type || '') === metricType)
+    .filter((point) => behaviorCompositionValue(point) > 0);
+
+  const patternById = new Map<string, AbaBehaviorContextPattern>();
+  const patternByName = new Map<string, AbaBehaviorContextPattern>();
+  (options.contextPatterns || []).forEach((pattern) => {
+    const id = String(pattern.behaviorId || '').trim();
+    if (id) patternById.set(id, pattern);
+    const name = String(pattern.behaviorName || '').trim().toLowerCase();
+    if (name) patternByName.set(name, pattern);
+  });
+
+  const totalsByBehavior = new Map<string, { label: string; behaviorId?: string | null; total: number }>();
+  filtered.forEach((point) => {
+    const behaviorId = behaviorCompositionBehaviorId(point);
+    const label = behaviorCompositionBehaviorLabel(point);
+    const key = behaviorId || normalizeContextKey(label) || label;
+    const value = behaviorCompositionValue(point);
+    const current = totalsByBehavior.get(key) || { label, behaviorId, total: 0 };
+    current.total += value;
+    totalsByBehavior.set(key, current);
+  });
+
+  const ranked = Array.from(totalsByBehavior.entries())
+    .sort((a, b) => b[1].total - a[1].total || a[1].label.localeCompare(b[1].label));
+  const selectedKeys = new Set(ranked.slice(0, maxSeries).map(([key]) => key));
+  const series = ranked.slice(0, maxSeries).map(([key, value], index) => ({
+    key: `behavior_${index}`,
+    label: value.label,
+    behaviorId: value.behaviorId || null,
+    total: round2(value.total) || 0,
+    sourceKey: key
+  } as AbaBehaviorCompositionSeries & { sourceKey: string }));
+  const hasOther = ranked.length > maxSeries;
+  if (hasOther) {
+    series.push({
+      key: 'behavior_other',
+      label: 'Outros comportamentos',
+      behaviorId: null,
+      total: round2(ranked.slice(maxSeries).reduce((sum, [, value]) => sum + value.total, 0)) || 0,
+      isOther: true,
+      sourceKey: '__other__'
+    } as AbaBehaviorCompositionSeries & { sourceKey: string });
+  }
+  const seriesKeyBySource = new Map<string, string>();
+  series.forEach((item: any) => {
+    if (item.sourceKey && item.sourceKey !== '__other__') seriesKeyBySource.set(item.sourceKey, item.key);
+  });
+
+  const grouped = new Map<string, {
+    label: string;
+    sortAt: string;
+    segments: Map<string, {
+      key: string;
+      label: string;
+      behaviorId?: string | null;
+      values: number[];
+      contextPattern?: AbaBehaviorContextPattern | null;
+    }>;
+  }>();
+
+  filtered.forEach((point, index) => {
+    const dateValue = behaviorCompositionDateValue(point);
+    const dayKey = behaviorCompositionDayKey(dateValue);
+    const groupKey = groupBy === 'day'
+      ? `day:${dayKey}`
+      : `session:${String(point?.sessionId || point?.session_id || dayKey || index).trim() || index}`;
+    const groupLabel = groupBy === 'day'
+      ? behaviorCompositionDayLabel(dayKey)
+      : String(point?.sessionLabel || point?.session_label || point?.sessionId || point?.session_id || behaviorCompositionDayLabel(dayKey) || `Sessao ${index + 1}`).trim();
+    if (!grouped.has(groupKey)) {
+      grouped.set(groupKey, {
+        label: groupLabel || 'Sessao',
+        sortAt: String(dateValue || dayKey || index),
+        segments: new Map()
+      });
+    }
+    const behaviorId = behaviorCompositionBehaviorId(point);
+    const label = behaviorCompositionBehaviorLabel(point);
+    const sourceKey = behaviorId || normalizeContextKey(label) || label;
+    const seriesKey = selectedKeys.has(sourceKey) ? seriesKeyBySource.get(sourceKey) || sourceKey : 'behavior_other';
+    const segment = grouped.get(groupKey)!.segments.get(seriesKey) || {
+      key: seriesKey,
+      label: selectedKeys.has(sourceKey) ? label : 'Outros comportamentos',
+      behaviorId: selectedKeys.has(sourceKey) ? behaviorId : null,
+      values: [],
+      contextPattern: selectedKeys.has(sourceKey) ? behaviorCompositionPatternFor(point, patternById, patternByName) : null
+    };
+    segment.values.push(behaviorCompositionValue(point));
+    if (!segment.contextPattern && selectedKeys.has(sourceKey)) {
+      segment.contextPattern = behaviorCompositionPatternFor(point, patternById, patternByName);
+    }
+    grouped.get(groupKey)!.segments.set(seriesKey, segment);
+  });
+
+  const rows = Array.from(grouped.entries())
+    .map(([groupKey, group]) => {
+      const segments = Array.from(group.segments.values())
+        .map((segment) => {
+          const value = metricUsesAverage
+            ? segment.values.reduce((sum, item) => sum + item, 0) / Math.max(segment.values.length, 1)
+            : segment.values.reduce((sum, item) => sum + item, 0);
+          return {
+            key: segment.key,
+            label: segment.label,
+            behaviorId: segment.behaviorId || null,
+            value: round2(value) || 0,
+            count: segment.values.length,
+            contextPattern: segment.contextPattern || null
+          };
+        })
+        .sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
+      const row: AbaBehaviorCompositionRow = {
+        groupKey,
+        groupBy,
+        label: group.label,
+        sortAt: group.sortAt,
+        total: round2(segments.reduce((sum, segment) => sum + segment.value, 0)) || 0,
+        segments,
+        dominantLocation: segments.find((segment) => segment.contextPattern?.dominantLocation)?.contextPattern?.dominantLocation || null,
+        commonSeverity: segments.find((segment) => segment.contextPattern?.commonSeverity)?.contextPattern?.commonSeverity || null,
+        commonCollectionMethod: segments.find((segment) => segment.contextPattern?.commonCollectionMethod)?.contextPattern?.commonCollectionMethod || null
+      };
+      segments.forEach((segment) => {
+        row[segment.key] = segment.value;
+      });
+      return row;
+    })
+    .sort((a, b) => new Date(a.sortAt || 0).getTime() - new Date(b.sortAt || 0).getTime());
+
+  return {
+    rows,
+    series: series.map(({ sourceKey, ...item }: any) => item)
+  };
 }
 
 const metricStatusScore = (metricType: string, status: unknown, fallbackValue: number) => {

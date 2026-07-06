@@ -424,9 +424,10 @@ test('banner de manutencao comunica tipo atual e botao nao registra tentativa', 
   const sessionGoalsBody = sessionModeCode.slice(sessionGoalsStart, sessionGoalsEnd);
   assert.match(sessionModeCode, /const isTeachingOperationalGoal = \(goal: any\) => \{/);
   assert.match(sessionModeCode, /const baseSessionGoals = \(patient\.pei\?\.filter\(isTeachingOperationalGoal\) \|\| \[\]\)/);
-  assert.match(sessionGoalsBody, /expandedMaintenanceProbeSchedules/);
-  assert.match(sessionGoalsBody, /mergeSessionGoalsWithAvailableMaintenance\(baseSessionGoals, expandedMaintenanceProbeSchedules\)/);
-  assert.doesNotMatch(sessionGoalsBody, /mergeSessionGoalsWithAvailableMaintenance\(baseSessionGoals, sessionAvailableMaintenanceProbeSchedules\)/);
+  assert.match(sessionGoalsBody, /sessionAvailableMaintenanceTargetIds/);
+  assert.match(sessionGoalsBody, /mergeSessionGoalsWithAvailableMaintenance\(baseSessionGoals, sessionAvailableMaintenanceProbeSchedules\)/);
+  assert.match(sessionGoalsBody, /sessionPlanFilter === 'skills'/);
+  assert.match(sessionGoalsBody, /sessionPlanFilter === 'maintenance'/);
   assert.match(sessionModeCode, /source: 'session_maintenance_probe_available'/);
   assert.doesNotMatch(sessionModeCode, /patient\.pei\?\.filter\(\(g: any\) => g\.isPriority \|\| g\.status === 'in_progress' \|\| isMaintenanceLikeGoal\(g\)\)/);
   assert.match(sessionModeCode, /Este target está em manutenção\./);
@@ -451,6 +452,9 @@ test('banner de manutencao comunica tipo atual e botao nao registra tentativa', 
   assert.doesNotMatch(sessionModeCode, /maintenanceInfo\.isMaintenanceTarget && \(/);
   assert.doesNotMatch(sessionModeCode, /Usar Maintenance Probe agora/);
   assert.doesNotMatch(sessionModeCode, /\{ key: 'maintenance_probe', label: 'Maintenance Probe' \}/);
+  assert.match(sessionModeCode, /data-session-plan-filter/);
+  assert.match(sessionModeCode, /Manutenções desta consulta/);
+  assert.match(sessionModeCode, /setSessionPlanFilter\(filter\.key as 'all' \| 'skills' \| 'maintenance'\)/);
   assert.match(serverCode, /availabilityReasonForResponse/);
   assert.match(serverCode, /return 'FUTURE_APPOINTMENT'/);
 });
@@ -505,6 +509,18 @@ test('SessionMode mobile usa cards compactos sem criar fluxo paralelo de registr
   assert.match(mobileCode, /Usar Maintenance Probe/);
   assert.match(sessionModeCode, /className="hidden space-y-5 sm:block"/);
   assert.doesNotMatch(mobileCode, /persistTrialRecord|dataService\.saveAbaMaintenanceProbeResult|saveAbaTrial/);
+});
+
+test('SessionMode integra manutenções ao plano e usa botões rápidos de tentativa', () => {
+  assert.match(sessionModeCode, /data-aba-trial-type-chips/);
+  assert.match(sessionModeCode, /collectionOptions\.map\(\(option\) =>/);
+  assert.match(sessionModeCode, /handleCollectionTypeChange\(option\.key\)/);
+  assert.match(sessionModeCode, /aria-pressed=\{selected\}/);
+  assert.match(sessionModeCode, /sessionPlanGoals\.map\(\(goal: any\) =>/);
+  assert.match(sessionModeCode, /Todas/);
+  assert.match(sessionModeCode, /Habilidades/);
+  assert.match(sessionModeCode, /Manutenções/);
+  assert.match(sessionModeCode, /setCollectionType\(lastRegularTrialType \|\| 'dtt'\)/);
 });
 
 test('registro real de Maintenance Probe preserva target e schedule idempotentes', () => {

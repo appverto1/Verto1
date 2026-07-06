@@ -5,6 +5,7 @@ import {
   aggregateClinicalChangesBySession,
   aggregateAbaClinicalLinePoints,
   analyzeBehaviorContextPatterns,
+  buildBehaviorCompositionStack,
   buildAbaClinicalLinePointsFromTargetSummaries,
   buildAbaClinicalLineSummary,
   buildSessionMetricSnapshotsFromSummaries,
@@ -496,8 +497,10 @@ test('frontend usa visão agregada com drilldown em vez de plotar todos os targe
   assert.match(panelCode, /getClinicalChangeDrilldown/);
   assert.match(panelCode, /showAggregatedChart[\s\S]*activeTab === 'overview'[\s\S]*activeTab === 'session-changes'/m);
   assert.match(panelCode, /\(activeTab === 'targets' && !hasSpecificTarget\)/);
-  assert.match(panelCode, /\(activeTab === 'behaviors' && !hasSpecificBehavior\)/);
+  assert.match(panelCode, /showBehaviorCompositionChart/);
+  assert.match(panelCode, /buildBehaviorCompositionStack/);
   assert.match(panelCode, /stackId="changes"/);
+  assert.match(panelCode, /stackId="behavior-composition"/);
   assert.match(panelCode, /setSelectedChangeGroupKey/);
   assert.match(panelCode, /Linha do tempo clínica/);
   assert.match(panelCode, /Ver detalhes/);
@@ -632,6 +635,44 @@ test('behavior context patterns explain little data and missing context', () => 
   assert.match(noContext[0].insights.join(' '), /contexto suficiente/i);
 });
 
+test('behavior composition stack separates bars by behavior and keeps real context labels', () => {
+  const contextPatterns = analyzeBehaviorContextPatterns([
+    { behavior_id: 'refusal', behavior_name: 'Recusa', location: 'Hall de entrada', severity: 4, measurement_type: 'Frequência' },
+    { behavior_id: 'aggression', behavior_name: 'Agressão', location: 'Brinquedoteca', severity: 3, measurement_type: 'Frequência' }
+  ]);
+  const result = buildBehaviorCompositionStack([
+    { id: 'r1', behaviorId: 'refusal', metricType: 'BEHAVIOR_FREQUENCY', metricLabel: 'Recusa', value: 2, changedAt: '2026-06-25T12:00:00.000Z' },
+    { id: 'a1', behaviorId: 'aggression', metricType: 'BEHAVIOR_FREQUENCY', metricLabel: 'Agressão', value: 1, changedAt: '2026-06-25T12:00:00.000Z' },
+    { id: 's1', behaviorId: 'self-injury', metricType: 'BEHAVIOR_FREQUENCY', metricLabel: 'Autoagressão', value: 1, changedAt: '2026-06-25T12:00:00.000Z' }
+  ], { metricType: 'BEHAVIOR_FREQUENCY', groupBy: 'day', contextPatterns });
+
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.rows[0].total, 4);
+  assert.equal(result.series.length, 3);
+  assert.deepEqual(result.rows[0].segments.map((segment) => [segment.label, segment.value]), [
+    ['Recusa', 2],
+    ['Agressão', 1],
+    ['Autoagressão', 1]
+  ]);
+  assert.equal(result.rows[0].dominantLocation?.value, 'Hall de entrada');
+  assert.notEqual(result.rows[0].dominantLocation?.value, 'Corredor');
+});
+
+test('behavior duration composition preserves behavior totals', () => {
+  const result = buildBehaviorCompositionStack([
+    { id: 'c1', behaviorId: 'crying', metricType: 'BEHAVIOR_DURATION_TOTAL', metricLabel: 'Choro', value: 360, changedAt: '2026-06-25T12:00:00.000Z' },
+    { id: 'e1', behaviorId: 'escape', metricType: 'BEHAVIOR_DURATION_TOTAL', metricLabel: 'Fuga da atividade', value: 240, changedAt: '2026-06-25T12:00:00.000Z' },
+    { id: 'st1', behaviorId: 'stereotypy', metricType: 'BEHAVIOR_DURATION_TOTAL', metricLabel: 'Estereotipia', value: 120, changedAt: '2026-06-25T12:00:00.000Z' }
+  ], { metricType: 'BEHAVIOR_DURATION_TOTAL', groupBy: 'day' });
+
+  assert.equal(result.rows[0].total, 720);
+  assert.deepEqual(result.rows[0].segments.map((segment) => [segment.label, segment.value]), [
+    ['Choro', 360],
+    ['Fuga da atividade', 240],
+    ['Estereotipia', 120]
+  ]);
+});
+
 test('behavior chart endpoint and panel expose context insights safely', () => {
   assert.match(serverCode, /from\('aba_behavior_events'\)[\s\S]*?raw_payload[\s\S]*?analyzeBehaviorContextPatterns[\s\S]*?contextPatterns/m);
   assert.match(panelCode, /data-aba-behavior-context-insights[\s\S]*?Contextos associados/m);
@@ -646,9 +687,11 @@ test('behavior chart endpoint and panel expose context insights safely', () => {
 test('legendas dos gráficos são reduzidas fora da visão geral consolidada', () => {
   assert.match(panelCode, /showFullAggregateLegend = activeTab === 'overview' \|\| activeTab === 'session-changes'/);
   assert.match(panelCode, /visibleAggregateBars = useMemo/);
-  assert.match(panelCode, /activeTab === 'behaviors'[\s\S]*?bar\.category === 'behavior'/m);
+  assert.match(panelCode, /behaviorCompositionSeries\.map\(\(series, index\) => \(/);
+  assert.match(panelCode, /<BehaviorCompositionTooltip metricType=\{effectiveMetricType\} \/>/);
   assert.match(panelCode, /activeTab === 'targets'[\s\S]*?bar\.category === 'skill'/m);
   assert.match(panelCode, /\{showFullAggregateLegend && <Legend/);
+  assert.match(panelCode, /showBehaviorCompositionChart[\s\S]*?<Legend wrapperStyle=\{\{ fontSize: 11, fontWeight: 700 \}\} \/>/m);
   assert.match(panelCode, /\{isCompareResponses && <Legend/);
   assert.match(panelCode, /visibleAggregateBars\.map\(\(bar, index\) => \(/);
 });
