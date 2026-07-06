@@ -11,7 +11,8 @@ import {
   compareAbaMetric,
   compareSessionMetrics,
   getClinicalChangeDrilldown,
-  getAbaMetricDirection
+  getAbaMetricDirection,
+  normalizeBehaviorContext
 } from '../src/utils/abaClinicalCharts.ts';
 
 const root = process.cwd();
@@ -560,17 +561,65 @@ test('behavior context patterns identify dominant context without causal languag
   const insightText = pattern.insights.join(' ');
   assert.match(insightText, /maior concentra/i);
   assert.match(insightText, /severidade 4 ou 5/i);
-  assert.match(insightText, /método intervalo parcial/i);
-  assert.doesNotMatch(insightText, /caus/i);
+  assert.match(insightText, /intervalo parcial/i);
+  assert.doesNotMatch(insightText, /causou|provocou|gerou/i);
 });
 
-test('behavior context patterns avoid strong conclusions with little data or no context', () => {
-  const insufficient = analyzeBehaviorContextPatterns([
+test('behavior context patterns read configurable context labels and small samples', () => {
+  const custom = analyzeBehaviorContextPatterns([
+    {
+      behavior_id: 'self-injury',
+      behavior_name: 'Autoagressão',
+      raw_payload: {
+        contextSnapshot: {
+          local: 'Hall de entrada',
+          intensity: '4',
+          method: 'Frequência'
+        }
+      },
+      occurred_at: '2026-06-26T15:00:00.000Z'
+    },
+    {
+      behavior_id: 'self-injury',
+      behavior_name: 'Autoagressão',
+      raw_payload: {
+        context_snapshot: {
+          environment: 'Hall de entrada',
+          severity: 4,
+          collectionMethod: 'Frequência'
+        }
+      },
+      occurred_at: '2026-06-26T15:10:00.000Z'
+    }
+  ], { locations: [{ id: 'hall-entry', label: 'Hall de entrada' }] });
+  assert.equal(custom[0].dominantLocation?.value, 'Hall de entrada');
+  assert.equal(custom[0].commonSeverity?.value, 4);
+  assert.equal(custom[0].commonCollectionMethod?.value, 'Frequência');
+  assert.equal(custom[0].smallSample, true);
+  assert.match(custom[0].insights.join(' '), /Amostra pequena/i);
+  assert.doesNotMatch(custom[0].insights.join(' '), /Corredor/);
+
+  const defaultLocation = normalizeBehaviorContext({
+    raw_payload: { contextSnapshot: { location: 'Brinquedoteca', severity: '3' } }
+  });
+  assert.equal(defaultLocation.locationLabel, 'Brinquedoteca');
+  assert.equal(defaultLocation.severity, 3);
+});
+
+test('behavior context patterns explain little data and missing context', () => {
+  const smallSample = analyzeBehaviorContextPatterns([
     { behavior_id: 'crying', behavior_name: 'Choro', raw_payload: { contextSnapshot: { location: 'Mesa', severity: 2 } } },
     { behavior_id: 'crying', behavior_name: 'Choro', raw_payload: { contextSnapshot: { location: 'Mesa', severity: 2 } } }
   ]);
-  assert.equal(insufficient[0].enoughData, false);
-  assert.match(insufficient[0].insights[0], /insuficientes/i);
+  assert.equal(smallSample[0].enoughData, false);
+  assert.equal(smallSample[0].smallSample, true);
+  assert.match(smallSample[0].insights[0], /Amostra pequena/i);
+
+  const single = analyzeBehaviorContextPatterns([
+    { behavior_id: 'crying', behavior_name: 'Choro', raw_payload: { contextSnapshot: { location: 'Mesa' } } }
+  ]);
+  assert.equal(single[0].singleContextRecord, true);
+  assert.match(single[0].insights[0], /Apenas 1 registro/i);
 
   const noContext = analyzeBehaviorContextPatterns([
     { behavior_id: 'escape', behavior_name: 'Fuga da atividade' },
@@ -578,8 +627,9 @@ test('behavior context patterns avoid strong conclusions with little data or no 
     { behavior_id: 'escape', behavior_name: 'Fuga da atividade' }
   ]);
   assert.equal(noContext[0].contextualRecords, 0);
-  assert.equal(noContext[0].enoughData, true);
-  assert.match(noContext[0].insights.join(' '), /sem predomin/i);
+  assert.equal(noContext[0].noContext, true);
+  assert.equal(noContext[0].enoughData, false);
+  assert.match(noContext[0].insights.join(' '), /contexto suficiente/i);
 });
 
 test('behavior chart endpoint and panel expose context insights safely', () => {
@@ -588,7 +638,9 @@ test('behavior chart endpoint and panel expose context insights safely', () => {
   assert.match(panelCode, /data-aba-behavior-context-panel[\s\S]*?Padrões identificados/m);
   assert.match(panelCode, /data-aba-behavior-trend-summary[\s\S]*?Resumo visual da tendência/m);
   assert.match(panelCode, /commonCollectionMethod[\s\S]*?Método:/m);
-  assert.doesNotMatch(panelCode, /causou|causa da piora/i);
+  assert.match(panelCode, /data-aba-context-distribution[\s\S]*?Por local/m);
+  assert.match(panelCode, /Por severidade[\s\S]*?Por método/m);
+  assert.doesNotMatch(panelCode, /causou|provocou|gerou|causa da piora/i);
 });
 
 test('legendas dos gráficos são reduzidas fora da visão geral consolidada', () => {

@@ -38,6 +38,7 @@ import {
   getClinicalChangeDrilldown,
   type AbaAggregatedClinicalChange,
   type AbaAggregatedClinicalChangeGroup,
+  type AbaBehaviorContextDistributionValue,
   type AbaBehaviorContextPattern,
   type AbaClinicalChangeCategory,
   type AbaClinicalLineCategory
@@ -759,8 +760,8 @@ const ClinicalChangeCard: React.FC<{ change: AbaAggregatedClinicalChange; index:
       {change.changeCategory === 'behavior' && contextPattern && (
         <div className="mt-3 rounded-lg border border-sky-100 bg-sky-50/70 px-3 py-2" data-aba-behavior-context-insights>
           <p className="text-[10px] font-semibold uppercase tracking-widest text-sky-700">Contextos associados</p>
-          {contextPattern.enoughData === false ? (
-            <p className="mt-1 text-xs font-semibold text-slate-600">Dados ainda insuficientes para padrão contextual confiável.</p>
+          {contextInsights.length === 0 ? (
+            <p className="mt-1 text-xs font-semibold text-slate-600">Os registros do periodo nao tem contexto suficiente para identificar local, severidade ou metodo predominante.</p>
           ) : (
             <ul className="mt-1 space-y-1 text-xs leading-relaxed text-slate-600">
               {contextInsights.map((insight: string, insightIndex: number) => (
@@ -770,6 +771,41 @@ const ClinicalChangeCard: React.FC<{ change: AbaAggregatedClinicalChange; index:
           )}
         </div>
       )}
+    </div>
+  );
+};
+
+const ContextDistributionRows = ({
+  title,
+  rows,
+  tone = 'sky'
+}: {
+  title: string;
+  rows?: AbaBehaviorContextDistributionValue<string | number>[];
+  tone?: 'sky' | 'amber' | 'violet' | 'slate';
+}) => {
+  const visibleRows = (rows || []).slice(0, 4);
+  if (visibleRows.length === 0) return null;
+  const toneClass = {
+    sky: 'bg-sky-500',
+    amber: 'bg-amber-500',
+    violet: 'bg-violet-500',
+    slate: 'bg-slate-500'
+  }[tone];
+  return (
+    <div className="rounded-md border border-slate-100 bg-slate-50/70 px-2 py-2" data-aba-context-distribution>
+      <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-slate-500">{title}</p>
+      <div className="space-y-1">
+        {visibleRows.map((row) => (
+          <div key={`${title}-${row.value}`} className="grid grid-cols-[minmax(72px,1fr)_minmax(64px,1fr)_24px] items-center gap-2 text-[11px] font-semibold text-slate-600">
+            <span className="truncate" title={String(row.value)}>{row.value}</span>
+            <span className="h-1.5 overflow-hidden rounded-full bg-white">
+              <span className={`block h-full rounded-full ${toneClass}`} style={{ width: `${Math.max(8, row.percent)}%` }} />
+            </span>
+            <span className="text-right text-slate-500">{row.count}</span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 };
@@ -1718,8 +1754,8 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
                       <p className="text-sm font-bold text-slate-900">{safeDisplayValue(pattern.behaviorName, 'Comportamento')}</p>
                       <span className="rounded-full bg-slate-50 px-2 py-1 text-[10px] font-bold text-slate-500">{pattern.totalRecords} registro(s)</span>
                     </div>
-                    {pattern.enoughData === false ? (
-                      <p className="mt-2 text-xs font-semibold text-slate-500">Dados insuficientes para identificar padrão contextual confiável.</p>
+                    {(pattern.insights || []).length === 0 ? (
+                      <p className="mt-2 text-xs font-semibold text-slate-500">Os registros do periodo nao tem contexto suficiente para identificar local, severidade ou metodo predominante.</p>
                     ) : (
                       <ul className="mt-2 space-y-1 text-xs font-semibold leading-relaxed text-slate-600">
                         {(pattern.insights || []).slice(0, 3).map((insight, index) => (
@@ -1732,12 +1768,18 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
                       {pattern.commonSeverity && <span className="rounded-full bg-amber-50 px-2 py-1 text-[10px] font-bold text-amber-700">Severidade: {pattern.commonSeverity.value}</span>}
                       {pattern.commonCollectionMethod && <span className="rounded-full bg-violet-50 px-2 py-1 text-[10px] font-bold text-violet-700">Método: {pattern.commonCollectionMethod.value}</span>}
                     </div>
+                    <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      <ContextDistributionRows title="Por local" rows={pattern.locationDistribution} tone="sky" />
+                      <ContextDistributionRows title="Por severidade" rows={pattern.severityDistribution} tone="amber" />
+                      <ContextDistributionRows title="Por método" rows={pattern.collectionMethodDistribution} tone="violet" />
+                      <ContextDistributionRows title="Por horário" rows={pattern.timeOfDayDistribution} tone="slate" />
+                    </div>
                   </div>
                 ))}
               </div>
             ) : (
               <p className="rounded-lg border border-sky-100 bg-white px-3 py-3 text-xs font-semibold text-slate-500">
-                Dados insuficientes para identificar padrão contextual confiável.
+                Os registros do periodo nao tem contexto suficiente para identificar local, severidade ou metodo predominante.
               </p>
             )}
           </div>

@@ -138,6 +138,25 @@ export type AbaAggregatedClinicalChangeGroup = {
   hasReviewReady: boolean;
 };
 
+export type AbaBehaviorContextDistributionValue<T extends string | number = string> = {
+  value: T;
+  count: number;
+  percent: number;
+};
+
+export type NormalizedBehaviorContext = {
+  locationLabel?: string;
+  severity?: number;
+  collectionMethod?: string;
+  durationSeconds?: number;
+  quantity?: number;
+  alertMode?: string;
+  recordedHour?: number;
+  timeOfDay?: string;
+  sessionLabel?: string;
+  hasAnyContext: boolean;
+};
+
 export type AbaBehaviorContextPattern = {
   behaviorKey: string;
   behaviorId?: string | null;
@@ -145,10 +164,17 @@ export type AbaBehaviorContextPattern = {
   totalRecords: number;
   contextualRecords: number;
   enoughData: boolean;
-  dominantLocation?: { value: string; count: number; percent: number } | null;
-  commonSeverity?: { value: number; count: number; percent: number } | null;
-  commonCollectionMethod?: { value: string; count: number; percent: number } | null;
-  commonTimeOfDay?: { value: string; count: number; percent: number } | null;
+  smallSample?: boolean;
+  singleContextRecord?: boolean;
+  noContext?: boolean;
+  dominantLocation?: AbaBehaviorContextDistributionValue | null;
+  commonSeverity?: AbaBehaviorContextDistributionValue<number> | null;
+  commonCollectionMethod?: AbaBehaviorContextDistributionValue | null;
+  commonTimeOfDay?: AbaBehaviorContextDistributionValue | null;
+  locationDistribution?: AbaBehaviorContextDistributionValue[];
+  severityDistribution?: AbaBehaviorContextDistributionValue<number>[];
+  collectionMethodDistribution?: AbaBehaviorContextDistributionValue[];
+  timeOfDayDistribution?: AbaBehaviorContextDistributionValue[];
   highSeverity?: { count: number; percent: number } | null;
   averageDurationSeconds?: number | null;
   totalQuantity?: number | null;
@@ -264,15 +290,79 @@ const firstContextValue = (source: any, ...keys: string[]) => {
   return undefined;
 };
 
-const readContextSnapshot = (event: any = {}) => {
+const asObject = (value: unknown): Record<string, any> | null =>
+  value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : null;
+
+const contextSourcesForEvent = (event: any = {}) => {
   const raw = event?.raw_payload || event?.rawPayload || {};
-  return event?.contextSnapshot ||
-    event?.context_snapshot ||
-    raw?.contextSnapshot ||
-    raw?.context_snapshot ||
-    raw?.behaviorEventContext ||
-    raw?.eventContext ||
-    {};
+  const metadata = event?.metadata || raw?.metadata || {};
+  return [
+    event?.context,
+    event?.contextSnapshot,
+    event?.context_snapshot,
+    event?.behaviorEventContext,
+    event?.eventContext,
+    event?.event_context,
+    metadata?.context,
+    metadata?.contextSnapshot,
+    metadata?.context_snapshot,
+    metadata,
+    raw?.context,
+    raw?.contextSnapshot,
+    raw?.context_snapshot,
+    raw?.behaviorEventContext,
+    raw?.eventContext,
+    raw?.event_context,
+    raw?.currentContext,
+    raw?.current_context,
+    raw?.sessionContext,
+    raw?.session_context,
+    raw?.metadata?.context,
+    raw?.metadata?.contextSnapshot,
+    raw?.metadata?.context_snapshot,
+    raw?.metadata,
+    raw,
+    event
+  ].map(asObject).filter(Boolean) as Record<string, any>[];
+};
+
+const firstContextValueFromSources = (sources: Record<string, any>[], ...keys: string[]) => {
+  for (const source of sources) {
+    const value = firstContextValue(source, ...keys);
+    if (value !== undefined) return value;
+  }
+  return undefined;
+};
+
+const coerceContextText = (value: unknown) => {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'object') {
+    const source = value as Record<string, any>;
+    return String(firstContextValue(source, 'label', 'name', 'title', 'value', 'id') || '').trim();
+  }
+  return String(value).trim();
+};
+
+const configuredLocationLabel = (value: unknown, clinicContextConfig?: any) => {
+  const rawLabel = coerceContextText(value);
+  if (!rawLabel) return '';
+  const locationLists = [
+    clinicContextConfig?.locations,
+    clinicContextConfig?.behaviorLocations,
+    clinicContextConfig?.contextLocations,
+    clinicContextConfig?.context?.locations
+  ].filter(Array.isArray) as any[][];
+  const matched = locationLists.flat().find((item) => {
+    const source = asObject(item);
+    if (!source) return false;
+    const candidates = ['id', 'key', 'value', 'label', 'name', 'title']
+      .map((key) => coerceContextText(source[key]))
+      .filter(Boolean);
+    return candidates.includes(rawLabel);
+  });
+  if (!matched) return rawLabel;
+  const source = asObject(matched);
+  return coerceContextText(firstContextValue(source, 'label', 'name', 'title', 'value')) || rawLabel;
 };
 
 const timeOfDayLabel = (value: unknown) => {
@@ -298,12 +388,110 @@ const topDistributionValue = <T extends string | number>(values: T[]) => {
   };
 };
 
-export function analyzeBehaviorContextPatterns(events: any[] = []): AbaBehaviorContextPattern[] {
+const recordedHourValue = (value: unknown) => {
+  const date = new Date(String(value || ''));
+  return Number.isNaN(date.getTime()) ? undefined : date.getHours();
+};
+
+const distributionValues = <T extends string | number>(values: T[]): AbaBehaviorContextDistributionValue<T>[] => {
+  const counts = new Map<T, number>();
+  values.forEach((value) => counts.set(value, (counts.get(value) || 0) + 1));
+  return Array.from(counts.entries())
+    .sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])))
+    .map(([value, count]) => ({
+      value,
+      count,
+      percent: Math.round((count / Math.max(values.length, 1)) * 100)
+    }));
+};
+
+export function normalizeBehaviorContext(event: any = {}, clinicContextConfig?: any): NormalizedBehaviorContext {
+  const sources = contextSourcesForEvent(event);
+  const timestamp = firstContextValueFromSources(sources, 'timestamp', 'recordedAt', 'recorded_at', 'occurredAt', 'occurred_at', 'createdAt', 'created_at');
+  const severityRaw = firstContextValueFromSources(sources, 'severity', 'intensity');
+  const severity = Number(severityRaw);
+  const durationRaw = firstContextValueFromSources(sources, 'durationSeconds', 'duration_seconds', 'duration');
+  const durationSeconds = Number(durationRaw);
+  const quantityRaw = firstContextValueFromSources(sources, 'quantity', 'countDelta', 'count_delta', 'count');
+  const quantity = Number(quantityRaw);
+  const locationLabel = configuredLocationLabel(firstContextValueFromSources(
+    sources,
+    'location',
+    'locationLabel',
+    'location_label',
+    'local',
+    'environment',
+    'environmentLabel',
+    'environment_label',
+    'place',
+    'setting',
+    'room',
+    'roomName',
+    'room_name'
+  ), clinicContextConfig);
+  const collectionMethod = coerceContextText(firstContextValueFromSources(sources, 'collectionMethod', 'collection_method', 'method', 'measurementType', 'measurement_type', 'collectionType', 'collection_type'));
+  const alertMode = coerceContextText(firstContextValueFromSources(sources, 'alertMode', 'alert_mode', 'alertTarget', 'alert_target', 'alert'));
+  const sessionLabel = coerceContextText(firstContextValueFromSources(sources, 'sessionLabel', 'session_label', 'sessionName', 'session_name', 'sessionId', 'session_id'));
+  const normalized = {
+    locationLabel: locationLabel || undefined,
+    severity: Number.isFinite(severity) && severity >= 1 && severity <= 5 ? severity : undefined,
+    collectionMethod: collectionMethod || undefined,
+    durationSeconds: Number.isFinite(durationSeconds) && durationSeconds > 0 ? durationSeconds : undefined,
+    quantity: Number.isFinite(quantity) && quantity > 0 ? quantity : undefined,
+    alertMode: alertMode || undefined,
+    recordedHour: recordedHourValue(timestamp),
+    timeOfDay: timeOfDayLabel(timestamp) || undefined,
+    sessionLabel: sessionLabel || undefined
+  };
+  return {
+    ...normalized,
+    hasAnyContext: Boolean(
+      normalized.locationLabel ||
+      normalized.severity !== undefined ||
+      normalized.collectionMethod ||
+      normalized.durationSeconds !== undefined ||
+      normalized.quantity !== undefined ||
+      normalized.alertMode ||
+      normalized.sessionLabel
+    )
+  };
+}
+
+const behaviorContextTrendInsight = (rows: Array<{ event: any; context: NormalizedBehaviorContext; behaviorName: string }>) => {
+  const withLocation = rows
+    .filter((row) => row.context.locationLabel)
+    .sort((a, b) => String(firstContextValue(a.event, 'occurredAt', 'occurred_at', 'timestamp', 'createdAt', 'created_at') || '').localeCompare(
+      String(firstContextValue(b.event, 'occurredAt', 'occurred_at', 'timestamp', 'createdAt', 'created_at') || '')
+    ));
+  if (withLocation.length < 4) return '';
+  const midpoint = Math.floor(withLocation.length / 2);
+  const previous = withLocation.slice(0, midpoint);
+  const recent = withLocation.slice(midpoint);
+  const locations = Array.from(new Set(withLocation.map((row) => row.context.locationLabel).filter(Boolean))) as string[];
+  let strongest: { location: string; previous: number; recent: number; delta: number } | null = null;
+  locations.forEach((location) => {
+    const previousCount = previous.filter((row) => row.context.locationLabel === location).length;
+    const recentCount = recent.filter((row) => row.context.locationLabel === location).length;
+    const delta = recentCount - previousCount;
+    if (Math.abs(delta) < 1) return;
+    if (!strongest || Math.abs(delta) > Math.abs(strongest.delta)) {
+      strongest = { location, previous: previousCount, recent: recentCount, delta };
+    }
+  });
+  if (!strongest || (strongest.previous + strongest.recent) < 2) return '';
+  const behaviorName = rows[0]?.behaviorName || 'Comportamento';
+  const trendDirection = strongest.delta > 0 ? 'aumento' : 'reducao';
+  const trendPrefix = strongest.delta > 0 ? `Em ${strongest.location}` : `Nos registros em ${strongest.location}`;
+  return `${trendPrefix}, ${behaviorName} apresentou ${trendDirection} nos registros recentes do periodo.`;
+};
+
+export function analyzeBehaviorContextPatterns(events: any[] = [], clinicContextConfig?: any): AbaBehaviorContextPattern[] {
   const grouped = new Map<string, any[]>();
   (Array.isArray(events) ? events : []).forEach((event) => {
-    const context = readContextSnapshot(event);
-    const behaviorId = String(firstContextValue(context, 'behaviorId', 'behavior_id') || firstContextValue(event, 'behaviorId', 'behavior_id') || '').trim();
-    const behaviorName = String(firstContextValue(context, 'behaviorName', 'behavior_name') || firstContextValue(event, 'behaviorName', 'behavior_name') || 'Comportamento').trim();
+    const sources = contextSourcesForEvent(event);
+    const context = normalizeBehaviorContext(event, clinicContextConfig);
+    const behaviorId = String(firstContextValueFromSources(sources, 'behaviorId', 'behavior_id') || '').trim();
+    const behaviorName = String(firstContextValueFromSources(sources, 'behaviorName', 'behavior_name') || 'Comportamento').trim();
     const behaviorKey = behaviorId || normalizeContextKey(behaviorName) || 'behavior';
     if (!grouped.has(behaviorKey)) grouped.set(behaviorKey, []);
     grouped.get(behaviorKey)!.push({ event, context, behaviorId, behaviorName });
@@ -313,34 +501,35 @@ export function analyzeBehaviorContextPatterns(events: any[] = []): AbaBehaviorC
     const behaviorId = rows.find((row) => row.behaviorId)?.behaviorId || null;
     const behaviorName = rows.find((row) => row.behaviorName)?.behaviorName || 'Comportamento';
     const locations = rows
-      .map(({ event, context }) => String(firstContextValue(context, 'location') || firstContextValue(event, 'location') || '').trim())
+      .map(({ context }) => context.locationLabel)
       .filter(Boolean);
     const severities = rows
-      .map(({ event, context }) => Number(firstContextValue(context, 'severity', 'intensity') ?? firstContextValue(event, 'severity')))
-      .filter((value) => Number.isFinite(value));
+      .map(({ context }) => context.severity)
+      .filter((value) => Number.isFinite(value)) as number[];
     const collectionMethods = rows
-      .map(({ event, context }) => String(firstContextValue(context, 'collectionMethod', 'collection_method', 'method', 'measurementType', 'measurement_type') || firstContextValue(event, 'measurement_type', 'measurementType') || '').trim())
+      .map(({ context }) => context.collectionMethod)
       .filter(Boolean);
     const durations = rows
-      .map(({ event, context }) => Number(firstContextValue(context, 'durationSeconds', 'duration_seconds') ?? firstContextValue(event, 'duration_seconds', 'durationSeconds')))
-      .filter((value) => Number.isFinite(value) && value > 0);
+      .map(({ context }) => context.durationSeconds)
+      .filter((value) => Number.isFinite(value) && Number(value) > 0) as number[];
     const quantities = rows
-      .map(({ event, context }) => Number(firstContextValue(context, 'quantity', 'countDelta', 'count_delta') ?? firstContextValue(event, 'count_delta', 'countDelta')))
-      .filter((value) => Number.isFinite(value) && value > 0);
+      .map(({ context }) => context.quantity)
+      .filter((value) => Number.isFinite(value) && Number(value) > 0) as number[];
     const alertTargets = rows
-      .map(({ event, context }) => String(firstContextValue(context, 'alertTarget', 'alert_target', 'alert') || firstContextValue(event, 'alert_target', 'alertTarget') || '').trim())
+      .map(({ context }) => context.alertMode)
       .filter(Boolean);
     const periods = rows
-      .map(({ event, context }) => timeOfDayLabel(firstContextValue(context, 'timestamp') || firstContextValue(event, 'occurredAt', 'occurred_at', 'timestamp', 'createdAt', 'created_at')))
+      .map(({ context }) => context.timeOfDay)
       .filter(Boolean);
-    const contextualRecords = rows.filter(({ event, context }) => (
-      firstContextValue(context, 'location', 'severity', 'intensity', 'activityName', 'activity_name', 'goalName', 'goal_name', 'collectionMethod', 'durationSeconds', 'quantity', 'alertTarget') ||
-      firstContextValue(event, 'location', 'severity', 'measurement_type', 'duration_seconds', 'count_delta')
-    )).length;
+    const contextualRecords = rows.filter(({ context }) => context.hasAnyContext).length;
     const dominantLocation = topDistributionValue(locations);
     const commonSeverity = topDistributionValue(severities);
     const commonCollectionMethod = topDistributionValue(collectionMethods);
     const commonTimeOfDay = topDistributionValue(periods);
+    const locationDistribution = distributionValues(locations);
+    const severityDistribution = distributionValues(severities);
+    const collectionMethodDistribution = distributionValues(collectionMethods);
+    const timeOfDayDistribution = distributionValues(periods);
     const highSeverityCount = severities.filter((value) => value >= 4).length;
     const highSeverity = severities.length > 0
       ? { count: highSeverityCount, percent: Math.round((highSeverityCount / severities.length) * 100) }
@@ -353,14 +542,33 @@ export function analyzeBehaviorContextPatterns(events: any[] = []): AbaBehaviorC
       : null;
     const commonAlertTarget = topDistributionValue(alertTargets);
     const totalRecords = rows.length;
-    const enoughData = totalRecords >= 3;
+    const enoughData = contextualRecords >= 3;
+    const smallSample = contextualRecords === 2;
+    const singleContextRecord = contextualRecords === 1;
+    const noContext = contextualRecords === 0;
     const insights: string[] = [];
 
-    if (!enoughData) {
-      insights.push('Dados ainda insuficientes para padrão contextual confiável.');
+    if (noContext) {
+      insights.push('Os registros do periodo nao tem contexto suficiente para identificar local, severidade ou metodo predominante.');
+    } else if (singleContextRecord) {
+      if (dominantLocation) {
+        insights.push(`Apenas 1 registro com contexto no periodo: ${behaviorName} foi registrado em ${dominantLocation.value}. Ainda nao ha padrao confiavel.`);
+      } else {
+        insights.push('Apenas 1 registro com contexto no periodo. Ainda nao ha padrao confiavel.');
+      }
+    } else if (smallSample) {
+      if (dominantLocation) {
+        insights.push(`Amostra pequena: ${behaviorName} apareceu mais em ${dominantLocation.value} nos registros disponiveis (${dominantLocation.count} de ${contextualRecords} com contexto).`);
+      } else if (commonSeverity) {
+        insights.push(`Amostra pequena: a severidade mais frequente foi ${commonSeverity.value} nos registros disponiveis.`);
+      } else if (commonCollectionMethod) {
+        insights.push(`Amostra pequena: ${behaviorName} apareceu mais em registros com metodo ${commonCollectionMethod.value}.`);
+      } else {
+        insights.push(`Amostra pequena: ha ${contextualRecords} registros com contexto, ainda sem predominancia clara.`);
+      }
     } else {
       if (dominantLocation && dominantLocation.count === totalRecords) {
-        insights.push(`${behaviorName} ocorreu em todos os registros recentes no ambiente ${dominantLocation.value} (${dominantLocation.count} de ${totalRecords}).`);
+        insights.push(`${behaviorName} foi observado em todos os registros recentes no ambiente ${dominantLocation.value} (${dominantLocation.count} de ${totalRecords}).`);
       } else if (dominantLocation && dominantLocation.percent >= 80) {
         insights.push(`${behaviorName} ocorreu principalmente em ${dominantLocation.value} (${dominantLocation.count} de ${totalRecords} registros).`);
       } else if (dominantLocation && totalRecords >= 5) {
@@ -368,14 +576,17 @@ export function analyzeBehaviorContextPatterns(events: any[] = []): AbaBehaviorC
       } else if (dominantLocation) {
         insights.push(`As ocorrências recentes apareceram com mais frequência em ${dominantLocation.value}.`);
       }
+      if (commonSeverity) {
+        insights.push(`A severidade mais frequente foi ${commonSeverity.value}, presente em ${commonSeverity.percent}% dos registros de ${behaviorName} com severidade informada.`);
+      }
       if (highSeverity && highSeverity.count >= 2 && highSeverity.percent >= 60) {
         insights.push(`${behaviorName} apareceu com severidade 4 ou 5 em ${highSeverity.percent}% dos registros com severidade informada.`);
-      } else if (commonSeverity) {
-        insights.push(`Severidade mais comum: ${commonSeverity.value}.`);
       }
       if (commonCollectionMethod && commonCollectionMethod.count >= 2) {
         insights.push(`${behaviorName} foi registrado com mais frequência pelo método ${commonCollectionMethod.value}.`);
       }
+      const trendInsight = behaviorContextTrendInsight(rows);
+      if (trendInsight) insights.push(trendInsight);
       if (averageDurationSeconds !== null && averageDurationSeconds >= 10) {
         insights.push(`Duração média registrada: ${averageDurationSeconds}s.`);
       }
@@ -400,10 +611,17 @@ export function analyzeBehaviorContextPatterns(events: any[] = []): AbaBehaviorC
       totalRecords,
       contextualRecords,
       enoughData,
+      smallSample,
+      singleContextRecord,
+      noContext,
       dominantLocation: dominantLocation as AbaBehaviorContextPattern['dominantLocation'],
       commonSeverity: commonSeverity as AbaBehaviorContextPattern['commonSeverity'],
       commonCollectionMethod: commonCollectionMethod as AbaBehaviorContextPattern['commonCollectionMethod'],
       commonTimeOfDay: commonTimeOfDay as AbaBehaviorContextPattern['commonTimeOfDay'],
+      locationDistribution: locationDistribution as AbaBehaviorContextPattern['locationDistribution'],
+      severityDistribution: severityDistribution as AbaBehaviorContextPattern['severityDistribution'],
+      collectionMethodDistribution: collectionMethodDistribution as AbaBehaviorContextPattern['collectionMethodDistribution'],
+      timeOfDayDistribution: timeOfDayDistribution as AbaBehaviorContextPattern['timeOfDayDistribution'],
       highSeverity,
       averageDurationSeconds,
       totalQuantity,
