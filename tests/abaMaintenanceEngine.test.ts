@@ -384,7 +384,9 @@ test('backend e frontend usam summaries e rotas de manutencao paginadas', () => 
   assert.match(sessionModeCode, /schedules: \[\]/);
   assert.match(sessionModeCode, /appointmentId: activeAppointmentId/);
   assert.match(sessionModeCode, /Sondagens de manutenção desta consulta/);
-  assert.match(sessionModeCode, /Registrar agora/);
+  assert.match(sessionModeCode, /data-maintenance-probe-queue/);
+  assert.match(sessionModeCode, /data-maintenance-probe-row/);
+  assert.match(sessionModeCode, /openMaintenanceProbeQueueItem/);
   assert.match(sessionModeCode, /Sem sondagem agendada/);
   assert.match(patientDetailCode, /maintenance_targets_count[\s\S]*?pending_maintenance_probes_count[\s\S]*?active_regression_risks_count/m);
 });
@@ -422,11 +424,13 @@ test('banner de manutencao comunica tipo atual e botao nao registra tentativa', 
   const sessionGoalsBody = sessionModeCode.slice(sessionGoalsStart, sessionGoalsEnd);
   assert.match(sessionModeCode, /const isTeachingOperationalGoal = \(goal: any\) => \{/);
   assert.match(sessionModeCode, /const baseSessionGoals = \(patient\.pei\?\.filter\(isTeachingOperationalGoal\) \|\| \[\]\)/);
-  assert.match(sessionGoalsBody, /mergeSessionGoalsWithAvailableMaintenance\(baseSessionGoals, sessionAvailableMaintenanceProbeSchedules\)/);
+  assert.match(sessionGoalsBody, /expandedMaintenanceProbeSchedules/);
+  assert.match(sessionGoalsBody, /mergeSessionGoalsWithAvailableMaintenance\(baseSessionGoals, expandedMaintenanceProbeSchedules\)/);
+  assert.doesNotMatch(sessionGoalsBody, /mergeSessionGoalsWithAvailableMaintenance\(baseSessionGoals, sessionAvailableMaintenanceProbeSchedules\)/);
   assert.match(sessionModeCode, /source: 'session_maintenance_probe_available'/);
   assert.doesNotMatch(sessionModeCode, /patient\.pei\?\.filter\(\(g: any\) => g\.isPriority \|\| g\.status === 'in_progress' \|\| isMaintenanceLikeGoal\(g\)\)/);
   assert.match(sessionModeCode, /Este target está em manutenção\./);
-  assert.match(sessionModeCode, /const showMaintenanceOperationalBlock = Boolean\(maintenanceProbeCanRunNow \|\| maintenanceProbeActiveForGoal\)/);
+  assert.match(sessionModeCode, /const showMaintenanceOperationalBlock = Boolean\(maintenanceProbeActiveForGoal\)/);
   assert.match(sessionModeCode, /\{showMaintenanceOperationalBlock && \(/);
   assert.match(sessionModeCode, /maintenanceProbeCanRunNow/);
   assert.match(sessionModeCode, /hasAvailableMaintenanceProbe/);
@@ -449,6 +453,32 @@ test('banner de manutencao comunica tipo atual e botao nao registra tentativa', 
   assert.doesNotMatch(sessionModeCode, /\{ key: 'maintenance_probe', label: 'Maintenance Probe' \}/);
   assert.match(serverCode, /availabilityReasonForResponse/);
   assert.match(serverCode, /return 'FUTURE_APPOINTMENT'/);
+});
+
+test('SessionMode renderiza sondagens da consulta como fila compacta e expande uma por vez', () => {
+  const queueStart = sessionModeCode.indexOf('data-maintenance-probe-queue');
+  const mobileStart = sessionModeCode.indexOf('data-aba-mobile-task-list');
+  assert.notEqual(queueStart, -1);
+  assert.notEqual(mobileStart, -1);
+  const queueCode = sessionModeCode.slice(queueStart, mobileStart);
+  assert.match(sessionModeCode, /expandedMaintenanceProbeTargetId/);
+  assert.match(sessionModeCode, /maintenanceProbeQueueItems/);
+  assert.match(sessionModeCode, /visibleMaintenanceProbeQueueItems/);
+  assert.match(sessionModeCode, /maintenanceProbeRegisteredCount/);
+  assert.match(sessionModeCode, /maintenanceProbePendingCount/);
+  assert.match(queueCode, /Sondagens de manutenção desta consulta/);
+  assert.match(queueCode, /data-maintenance-probe-row/);
+  assert.match(queueCode, /Pendentes:/);
+  assert.match(queueCode, /Registrada nesta sessão/);
+  assert.match(queueCode, /Todas \(/);
+  assert.match(queueCode, /Pendentes \(/);
+  assert.match(queueCode, /Registradas \(/);
+  assert.match(queueCode, /Ver todas/);
+  assert.match(queueCode, /Mostrar menos/);
+  assert.match(queueCode, /openMaintenanceProbeQueueItem\(row\)/);
+  assert.match(sessionModeCode, /setExpandedMaintenanceProbeTargetId\(targetId\)[\s\S]*?activateMaintenanceProbeMode\(goal\)/m);
+  assert.match(sessionModeCode, /setExpandedMaintenanceProbeTargetId\(null\)/);
+  assert.doesNotMatch(queueCode, /handleTrialClick\(row/);
 });
 
 test('SessionMode mobile usa cards compactos sem criar fluxo paralelo de registro', () => {

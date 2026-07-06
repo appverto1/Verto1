@@ -147,7 +147,11 @@ export type AbaBehaviorContextPattern = {
   enoughData: boolean;
   dominantLocation?: { value: string; count: number; percent: number } | null;
   commonSeverity?: { value: number; count: number; percent: number } | null;
+  commonCollectionMethod?: { value: string; count: number; percent: number } | null;
   commonTimeOfDay?: { value: string; count: number; percent: number } | null;
+  highSeverity?: { count: number; percent: number } | null;
+  averageDurationSeconds?: number | null;
+  totalQuantity?: number | null;
   insights: string[];
 };
 
@@ -314,16 +318,40 @@ export function analyzeBehaviorContextPatterns(events: any[] = []): AbaBehaviorC
     const severities = rows
       .map(({ event, context }) => Number(firstContextValue(context, 'severity', 'intensity') ?? firstContextValue(event, 'severity')))
       .filter((value) => Number.isFinite(value));
+    const collectionMethods = rows
+      .map(({ event, context }) => String(firstContextValue(context, 'collectionMethod', 'collection_method', 'method', 'measurementType', 'measurement_type') || firstContextValue(event, 'measurement_type', 'measurementType') || '').trim())
+      .filter(Boolean);
+    const durations = rows
+      .map(({ event, context }) => Number(firstContextValue(context, 'durationSeconds', 'duration_seconds') ?? firstContextValue(event, 'duration_seconds', 'durationSeconds')))
+      .filter((value) => Number.isFinite(value) && value > 0);
+    const quantities = rows
+      .map(({ event, context }) => Number(firstContextValue(context, 'quantity', 'countDelta', 'count_delta') ?? firstContextValue(event, 'count_delta', 'countDelta')))
+      .filter((value) => Number.isFinite(value) && value > 0);
+    const alertTargets = rows
+      .map(({ event, context }) => String(firstContextValue(context, 'alertTarget', 'alert_target', 'alert') || firstContextValue(event, 'alert_target', 'alertTarget') || '').trim())
+      .filter(Boolean);
     const periods = rows
       .map(({ event, context }) => timeOfDayLabel(firstContextValue(context, 'timestamp') || firstContextValue(event, 'occurredAt', 'occurred_at', 'timestamp', 'createdAt', 'created_at')))
       .filter(Boolean);
     const contextualRecords = rows.filter(({ event, context }) => (
-      firstContextValue(context, 'location', 'severity', 'intensity', 'activityName', 'activity_name', 'goalName', 'goal_name') ||
-      firstContextValue(event, 'location', 'severity')
+      firstContextValue(context, 'location', 'severity', 'intensity', 'activityName', 'activity_name', 'goalName', 'goal_name', 'collectionMethod', 'durationSeconds', 'quantity', 'alertTarget') ||
+      firstContextValue(event, 'location', 'severity', 'measurement_type', 'duration_seconds', 'count_delta')
     )).length;
     const dominantLocation = topDistributionValue(locations);
     const commonSeverity = topDistributionValue(severities);
+    const commonCollectionMethod = topDistributionValue(collectionMethods);
     const commonTimeOfDay = topDistributionValue(periods);
+    const highSeverityCount = severities.filter((value) => value >= 4).length;
+    const highSeverity = severities.length > 0
+      ? { count: highSeverityCount, percent: Math.round((highSeverityCount / severities.length) * 100) }
+      : null;
+    const averageDurationSeconds = durations.length
+      ? Math.round(durations.reduce((sum, value) => sum + value, 0) / durations.length)
+      : null;
+    const totalQuantity = quantities.length
+      ? quantities.reduce((sum, value) => sum + value, 0)
+      : null;
+    const commonAlertTarget = topDistributionValue(alertTargets);
     const totalRecords = rows.length;
     const enoughData = totalRecords >= 3;
     const insights: string[] = [];
@@ -331,13 +359,31 @@ export function analyzeBehaviorContextPatterns(events: any[] = []): AbaBehaviorC
     if (!enoughData) {
       insights.push('Dados ainda insuficientes para padrão contextual confiável.');
     } else {
-      if (dominantLocation && totalRecords >= 5) {
+      if (dominantLocation && dominantLocation.count === totalRecords) {
+        insights.push(`${behaviorName} ocorreu em todos os registros recentes no ambiente ${dominantLocation.value} (${dominantLocation.count} de ${totalRecords}).`);
+      } else if (dominantLocation && dominantLocation.percent >= 80) {
+        insights.push(`${behaviorName} ocorreu principalmente em ${dominantLocation.value} (${dominantLocation.count} de ${totalRecords} registros).`);
+      } else if (dominantLocation && totalRecords >= 5) {
         insights.push(`${behaviorName} teve maior concentração em ${dominantLocation.value}: ${dominantLocation.count} de ${totalRecords} registros recentes.`);
       } else if (dominantLocation) {
         insights.push(`As ocorrências recentes apareceram com mais frequência em ${dominantLocation.value}.`);
       }
-      if (commonSeverity) {
+      if (highSeverity && highSeverity.count >= 2 && highSeverity.percent >= 60) {
+        insights.push(`${behaviorName} apareceu com severidade 4 ou 5 em ${highSeverity.percent}% dos registros com severidade informada.`);
+      } else if (commonSeverity) {
         insights.push(`Severidade mais comum: ${commonSeverity.value}.`);
+      }
+      if (commonCollectionMethod && commonCollectionMethod.count >= 2) {
+        insights.push(`${behaviorName} foi registrado com mais frequência pelo método ${commonCollectionMethod.value}.`);
+      }
+      if (averageDurationSeconds !== null && averageDurationSeconds >= 10) {
+        insights.push(`Duração média registrada: ${averageDurationSeconds}s.`);
+      }
+      if (totalQuantity !== null && totalQuantity > totalRecords) {
+        insights.push(`Quantidade total registrada no período: ${totalQuantity}.`);
+      }
+      if (commonAlertTarget && commonAlertTarget.count >= 2) {
+        insights.push(`Alerta mais associado aos registros: ${commonAlertTarget.value}.`);
       }
       if (commonTimeOfDay && commonTimeOfDay.count >= 2) {
         insights.push(`Horário mais comum: ${commonTimeOfDay.value}.`);
@@ -356,7 +402,11 @@ export function analyzeBehaviorContextPatterns(events: any[] = []): AbaBehaviorC
       enoughData,
       dominantLocation: dominantLocation as AbaBehaviorContextPattern['dominantLocation'],
       commonSeverity: commonSeverity as AbaBehaviorContextPattern['commonSeverity'],
+      commonCollectionMethod: commonCollectionMethod as AbaBehaviorContextPattern['commonCollectionMethod'],
       commonTimeOfDay: commonTimeOfDay as AbaBehaviorContextPattern['commonTimeOfDay'],
+      highSeverity,
+      averageDurationSeconds,
+      totalQuantity,
       insights
     };
   });

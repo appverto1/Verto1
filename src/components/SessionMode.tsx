@@ -668,6 +668,9 @@ export const SessionMode = ({
   const [currentTrialTargetKey, setCurrentTrialTargetKey] = useState<string | null>(null);
   const [activeMaintenanceProbeTargetId, setActiveMaintenanceProbeTargetId] = useState<string | null>(null);
   const [activeMaintenanceScheduleId, setActiveMaintenanceScheduleId] = useState<string | null>(null);
+  const [expandedMaintenanceProbeTargetId, setExpandedMaintenanceProbeTargetId] = useState<string | null>(null);
+  const [maintenanceProbeQueueFilter, setMaintenanceProbeQueueFilter] = useState<'all' | 'pending' | 'registered'>('all');
+  const [maintenanceProbeQueueExpanded, setMaintenanceProbeQueueExpanded] = useState(false);
   const [manualMaintenanceProbeTargets, setManualMaintenanceProbeTargets] = useState<Record<string, ManualMaintenanceProbeActivation>>({});
   const [manualRegularOverrideTargetId, setManualRegularOverrideTargetId] = useState<string | null>(null);
   const [promptLevelKey, setPromptLevelKey] = useState('verbal');
@@ -1916,6 +1919,7 @@ export const SessionMode = ({
     }
     setActiveMaintenanceProbeTargetId(null);
     setActiveMaintenanceScheduleId(null);
+    setExpandedMaintenanceProbeTargetId(null);
     setManualRegularOverrideTargetId(null);
     setCollectionType(lastRegularTrialType || 'dtt');
     return result;
@@ -2383,6 +2387,7 @@ export const SessionMode = ({
     if (targetKey) clearManualMaintenanceProbeTarget(targetKey);
     setActiveMaintenanceProbeTargetId(null);
     setActiveMaintenanceScheduleId(null);
+    setExpandedMaintenanceProbeTargetId(null);
     setManualRegularOverrideTargetId(null);
     setCollectionType(lastRegularTrialType || 'dtt');
     setMaintenanceProbeFeedback('');
@@ -3688,9 +3693,15 @@ export const SessionMode = ({
       normalizeSessionMaintenanceProbeList(panelAppointmentMaintenanceProbeAvailability.upcoming || [])
     )
   ), [overviewAppointmentMaintenanceProbeAvailability.upcoming, panelAppointmentMaintenanceProbeAvailability.upcoming, sessionMaintenanceProbes]);
+  const expandedMaintenanceProbeTargetKey = String(expandedMaintenanceProbeTargetId || activeMaintenanceProbeTargetId || '').trim();
+  const expandedMaintenanceProbeSchedules = useMemo(() => (
+    expandedMaintenanceProbeTargetKey
+      ? sessionAvailableMaintenanceProbeSchedules.filter((schedule: any) => maintenanceScheduleTargetId(schedule) === expandedMaintenanceProbeTargetKey)
+      : []
+  ), [expandedMaintenanceProbeTargetKey, sessionAvailableMaintenanceProbeSchedules]);
   const sessionGoals = useMemo(() => (
-    mergeSessionGoalsWithAvailableMaintenance(baseSessionGoals, sessionAvailableMaintenanceProbeSchedules)
-  ), [baseSessionGoals, sessionAvailableMaintenanceProbeSchedules]);
+    mergeSessionGoalsWithAvailableMaintenance(baseSessionGoals, expandedMaintenanceProbeSchedules)
+  ), [baseSessionGoals, expandedMaintenanceProbeSchedules]);
   useEffect(() => {
     if (sessionGoals.length === 0) {
       if (mobileSelectedGoalKey) setMobileSelectedGoalKey('');
@@ -3945,11 +3956,65 @@ export const SessionMode = ({
     })
     .filter((row): row is any => Boolean(row)), [activeAppointmentId, maintenanceOverview, maintenanceSchedules, maintenanceTimeZone, patientId, records, resolvedClinicId, resolvedTherapistId, sessionAvailableMaintenanceProbeSchedules, sessionClinicalDate, sessionEndPreviewAt, sessionGoals, sessionId, sessionMaintenanceProbes?.loaded, sessionUpcomingMaintenanceProbeSchedules]);
 
-  const pendingMaintenanceProbeItems = useMemo(() => {
-    return maintenanceProbeRows
-      .filter((row: any) => Boolean(row.hasAvailableMaintenanceProbe))
-      .slice(0, 6);
-  }, [maintenanceProbeRows]);
+  const maintenanceProbeQueueItems = useMemo(() => {
+    return sessionAvailableMaintenanceProbeSchedules.map((schedule: any) => {
+      const targetId = maintenanceScheduleTargetId(schedule);
+      const scheduleId = String(schedule?.id || schedule?.schedule_id || schedule?.scheduleId || '').trim();
+      const display = resolveMaintenanceTargetDisplay({
+        target: {
+          id: targetId,
+          target_id: targetId,
+          targetId,
+          name: schedule?.targetName || schedule?.target_name || schedule?.target?.name,
+          targetName: schedule?.targetName || schedule?.target_name || schedule?.target?.name,
+          protocolTitle: schedule?.protocolTitle || schedule?.protocol_title,
+          protocol_title: schedule?.protocol_title || schedule?.protocolTitle,
+          domainName: schedule?.domainName || schedule?.domain_name,
+          domain_name: schedule?.domain_name || schedule?.domainName
+        },
+        schedule
+      });
+      const registeredRecords = records.filter((record) => {
+        if (record.kind !== 'trial' || !isMaintenanceProbeCollection(record.collectionType)) return false;
+        const recordTargetId = String(record.targetId || '').trim();
+        const recordScheduleId = String(
+          record.rawPayload?.maintenanceScheduleId ||
+          record.rawPayload?.maintenance_schedule_id ||
+          record.rawPayload?.scheduleId ||
+          record.rawPayload?.schedule_id ||
+          ''
+        ).trim();
+        if (scheduleId && recordScheduleId && recordScheduleId === scheduleId) return true;
+        return Boolean(targetId && recordTargetId && recordTargetId === targetId);
+      });
+      const active = Boolean(targetId && activeMaintenanceProbeTargetId === targetId && isMaintenanceProbeCollection(collectionType));
+      return {
+        id: scheduleId || targetId,
+        scheduleId,
+        targetId,
+        name: display.targetDisplayName || schedule?.targetName || schedule?.target_name || 'Maintenance Probe',
+        protocol: display.protocolDisplayName,
+        domain: display.domainDisplayName,
+        contextLabel: display.contextLabel,
+        nextSchedule: schedule,
+        registeredRecords,
+        registered: registeredRecords.length > 0,
+        active,
+        status: active ? 'active' : registeredRecords.length > 0 ? 'registered' : 'pending'
+      };
+    });
+  }, [activeMaintenanceProbeTargetId, collectionType, records, sessionAvailableMaintenanceProbeSchedules]);
+
+  const maintenanceProbeRegisteredCount = maintenanceProbeQueueItems.filter((item: any) => item.registered).length;
+  const maintenanceProbePendingCount = maintenanceProbeQueueItems.filter((item: any) => !item.registered).length;
+  const filteredMaintenanceProbeQueueItems = useMemo(() => {
+    if (maintenanceProbeQueueFilter === 'pending') return maintenanceProbeQueueItems.filter((item: any) => !item.registered);
+    if (maintenanceProbeQueueFilter === 'registered') return maintenanceProbeQueueItems.filter((item: any) => item.registered);
+    return maintenanceProbeQueueItems;
+  }, [maintenanceProbeQueueFilter, maintenanceProbeQueueItems]);
+  const visibleMaintenanceProbeQueueItems = maintenanceProbeQueueExpanded
+    ? filteredMaintenanceProbeQueueItems
+    : filteredMaintenanceProbeQueueItems.slice(0, 5);
 
   const appointmentLinkedMaintenanceProbeCount = useMemo(() => {
     const appointmentId = String(activeAppointmentId || '').trim();
@@ -3997,6 +4062,17 @@ export const SessionMode = ({
       ))
       .slice(0, 3);
   }, [maintenanceProbeRows]);
+
+  const openMaintenanceProbeQueueItem = (item: any) => {
+    const targetId = String(item?.targetId || '').trim();
+    const goal = sessionGoals.find((entry: any) => goalTargetId(entry) === targetId) ||
+      buildSessionGoalFromAvailableMaintenanceSchedule(item?.nextSchedule);
+    if (!targetId || !goal) return;
+    setExpandedMaintenanceProbeTargetId(targetId);
+    setMobileSelectedGoalKey(targetId);
+    const activated = activateMaintenanceProbeMode(goal);
+    if (!activated) setExpandedMaintenanceProbeTargetId(null);
+  };
 
   const refreshSessionMaintenanceProbes = async () => {
     const nextState = await loadSessionMaintenanceProbeState('manual_reload');
@@ -6497,38 +6573,88 @@ export const SessionMode = ({
             </section>
           )}
 
-          {pendingMaintenanceProbeItems.length > 0 && (
-            <section className="rounded-[24px] sm:rounded-[28px] border border-amber-100 bg-white p-4 sm:p-5 shadow-xl shadow-amber-900/5">
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          {maintenanceProbeQueueItems.length > 0 && (
+            <section className="rounded-[24px] sm:rounded-[28px] border border-amber-100 bg-white p-3 sm:p-4 shadow-xl shadow-amber-900/5" data-maintenance-probe-queue>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-amber-600">Sondagens da consulta</p>
                   <h2 className="text-lg font-bold text-gray-900">Sondagens de manutenção desta consulta</h2>
+                  <p className="mt-1 text-xs font-semibold text-gray-500">
+                    {maintenanceProbeRegisteredCount}/{maintenanceProbeQueueItems.length} registradas · Pendentes: {maintenanceProbePendingCount}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {[
+                    { key: 'all', label: `Todas (${maintenanceProbeQueueItems.length})` },
+                    { key: 'pending', label: `Pendentes (${maintenanceProbePendingCount})` },
+                    { key: 'registered', label: `Registradas (${maintenanceProbeRegisteredCount})` }
+                  ].map((filter) => (
+                    <button
+                      key={filter.key}
+                      type="button"
+                      onClick={() => setMaintenanceProbeQueueFilter(filter.key as 'all' | 'pending' | 'registered')}
+                      className={`inline-flex min-h-[32px] items-center justify-center rounded-full px-3 py-1 text-[10px] font-bold uppercase tracking-widest transition-all ${maintenanceProbeQueueFilter === filter.key ? 'bg-amber-600 text-white' : 'bg-amber-50 text-amber-700'}`}
+                    >
+                      {filter.label}
+                    </button>
+                  ))}
                 </div>
               </div>
-              <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2">
-                {pendingMaintenanceProbeItems.map((row: any) => {
-                  const goal = sessionGoals.find((entry: any) => goalTargetId(entry) === String(row.targetId || ''));
-                  const targetKey = String(row.targetId || '').trim();
-                  const activeForSession = Boolean(targetKey && currentTrialTargetKey === targetKey && activeMaintenanceProbeTargetId === targetKey && isMaintenanceProbeCollection(collectionType));
-                  const registeredInSession = Number(row.totalTrials || 0) > 0;
+              <div className="mt-3 divide-y divide-amber-100 rounded-2xl border border-amber-100 bg-[#FFFDF7]">
+                {visibleMaintenanceProbeQueueItems.map((row: any) => {
+                  const statusLabel = row.active ? 'Em registro' : row.registered ? 'Registrada nesta sessão' : 'Pendente';
+                  const statusClass = row.active
+                    ? 'bg-blue-50 text-blue-600'
+                    : row.registered
+                      ? 'bg-emerald-50 text-emerald-600'
+                      : 'bg-amber-100 text-amber-700';
                   return (
-                    <div key={`pending-${row.id}`} className="rounded-2xl border border-amber-100 bg-[#FFFDF7] p-4">
-                      <div className="flex items-start justify-between gap-3">
-                        <p className="text-sm font-bold text-gray-900">{row.name}</p>
-                        <span className={`shrink-0 rounded-full px-2 py-1 text-[9px] font-bold uppercase tracking-widest ${registeredInSession ? 'bg-emerald-50 text-emerald-600' : activeForSession ? 'bg-blue-50 text-blue-600' : 'bg-amber-100 text-amber-700'}`}>
-                          {registeredInSession ? 'Registrada nesta sessão' : activeForSession ? 'Ativa nesta sessão' : 'Pendente nesta sessão'}
+                    <div key={`probe-row-${row.id}`} className={`flex flex-col gap-2 px-3 py-3 sm:flex-row sm:items-center sm:justify-between ${row.active ? 'bg-blue-50/50' : ''}`} data-maintenance-probe-row>
+                      <div className="flex min-w-0 items-start gap-3">
+                        <span className={`mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-[10px] font-black ${row.registered ? 'border-emerald-200 bg-emerald-50 text-emerald-600' : row.active ? 'border-blue-200 bg-blue-50 text-blue-600' : 'border-amber-200 bg-white text-amber-600'}`}>
+                          {row.registered ? '✓' : row.active ? '•' : ''}
                         </span>
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-bold text-gray-900">{row.name}</p>
+                          <p className="mt-0.5 truncate text-xs font-semibold text-gray-500">
+                            {[row.protocol, row.domain].filter(Boolean).join(' · ') || row.contextLabel || 'Maintenance Probe'}
+                          </p>
+                        </div>
                       </div>
-                      {row.contextLabel && <p className="mt-1 text-xs text-gray-500">{row.contextLabel}</p>}
-                      <p className="mt-1 text-xs font-semibold text-amber-700">{row.nextSchedule ? formatMaintenanceDueLabel(row.nextSchedule) : 'Sem sondagem agendada'}</p>
-                      <p className="mt-1 text-xs text-gray-500">{row.activeAlert ? 'Alerta ativo de regressao/manutencao' : 'Use os botões de tentativa para registrar o resultado da probe.'}</p>
-                      <button type="button" onClick={() => activateMaintenanceProbeMode(goal)} className="mt-3 inline-flex min-h-[36px] items-center justify-center rounded-full bg-amber-600 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-white">
-                        Registrar agora
-                      </button>
+                      <div className="flex shrink-0 flex-wrap items-center gap-2">
+                        <span className={`rounded-full px-2 py-1 text-[9px] font-bold uppercase tracking-widest ${statusClass}`}>{statusLabel}</span>
+                        {!row.registered && (
+                          <button
+                            type="button"
+                            onClick={() => openMaintenanceProbeQueueItem(row)}
+                            className="inline-flex min-h-[34px] items-center justify-center rounded-full bg-amber-600 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-white transition-all active:scale-95"
+                          >
+                            {row.active ? 'Continuar' : 'Registrar'}
+                          </button>
+                        )}
+                      </div>
                     </div>
                   );
                 })}
               </div>
+              {filteredMaintenanceProbeQueueItems.length > visibleMaintenanceProbeQueueItems.length && (
+                <button
+                  type="button"
+                  onClick={() => setMaintenanceProbeQueueExpanded(true)}
+                  className="mt-3 inline-flex min-h-[34px] items-center justify-center rounded-full bg-amber-50 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-amber-700"
+                >
+                  Ver todas
+                </button>
+              )}
+              {maintenanceProbeQueueExpanded && filteredMaintenanceProbeQueueItems.length > 5 && (
+                <button
+                  type="button"
+                  onClick={() => setMaintenanceProbeQueueExpanded(false)}
+                  className="mt-3 ml-2 inline-flex min-h-[34px] items-center justify-center rounded-full bg-white px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-gray-500"
+                >
+                  Mostrar menos
+                </button>
+              )}
             </section>
           )}
 
@@ -6760,7 +6886,7 @@ export const SessionMode = ({
               const masteryRow = teachingMasteryRows.find((row) => teachingMasteryRowMatchesGoal(row, goal));
               const maintenanceInfo = getGoalMaintenanceInfo(goal);
               const maintenanceProbeCanRunNow = Boolean(maintenanceInfo.hasAvailableMaintenanceProbe);
-              const showMaintenanceOperationalBlock = Boolean(maintenanceProbeCanRunNow || maintenanceProbeActiveForGoal);
+              const showMaintenanceOperationalBlock = Boolean(maintenanceProbeActiveForGoal);
               const maintenanceDisplay = showMaintenanceOperationalBlock ? resolveMaintenanceTargetDisplay({
                 target: goal,
                 schedule: maintenanceInfo.nextSchedule || maintenanceInfo.lastResult || maintenanceInfo.activeAlert || {

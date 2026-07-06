@@ -38,6 +38,7 @@ import {
   getClinicalChangeDrilldown,
   type AbaAggregatedClinicalChange,
   type AbaAggregatedClinicalChangeGroup,
+  type AbaBehaviorContextPattern,
   type AbaClinicalChangeCategory,
   type AbaClinicalLineCategory
 } from '../utils/abaClinicalCharts';
@@ -224,6 +225,14 @@ const aggregateBarColors = {
   regressionCount: '#EF4444'
 };
 
+const aggregateBarDefinitions: Array<{ key: keyof typeof aggregateBarColors; category: AbaClinicalChangeCategory; label: string }> = [
+  { key: 'skillMagnitude', category: 'skill', label: 'Habilidades' },
+  { key: 'behaviorMagnitude', category: 'behavior', label: 'Comportamentos' },
+  { key: 'masteryCount', category: 'mastery', label: 'Maestria' },
+  { key: 'maintenanceCount', category: 'maintenance', label: 'Manutenção' },
+  { key: 'regressionCount', category: 'regression', label: 'Regressão/alertas' }
+];
+
 const clinicalLineColors = {
   independencePct: '#2563EB',
   promptedPct: '#F59E0B',
@@ -309,10 +318,44 @@ const isStableChange = (point: Partial<ChartPoint>) =>
 const isClinicallySignificantChange = (point: Partial<ChartPoint>) =>
   point.changeStatus === 'CLINICALLY_SIGNIFICANT_CHANGE' || point.changeStatus === 'REGRESSION_SIGNAL';
 
-const stateTone = (point: Partial<ChartPoint> & { changeCategory?: AbaClinicalChangeCategory }) => {
-  if (isAlertChange(point) || isWorsenedChange(point)) return 'border-red-200 bg-red-50 text-red-700';
-  if (isImprovedChange(point)) return 'border-emerald-200 bg-emerald-50 text-emerald-700';
-  return 'border-slate-200 bg-slate-50 text-slate-600';
+const changeStatePresentation = (point: Partial<ChartPoint>) => {
+  if (isAlertChange(point as any) || isWorsenedChange(point)) {
+    return {
+      label: 'Regressão',
+      text: 'text-red-700',
+      strongText: 'text-red-800',
+      badge: 'border-red-200 bg-red-50 text-red-700'
+    };
+  }
+  if (isImprovedChange(point)) {
+    return {
+      label: 'Melhora',
+      text: 'text-emerald-700',
+      strongText: 'text-emerald-800',
+      badge: 'border-emerald-200 bg-emerald-50 text-emerald-700'
+    };
+  }
+  if (point.changeStatus === 'FIRST_MEASUREMENT') {
+    return {
+      label: 'Primeira medição',
+      text: 'text-slate-600',
+      strongText: 'text-slate-700',
+      badge: 'border-slate-200 bg-slate-50 text-slate-600'
+    };
+  }
+  return {
+    label: 'Estável',
+    text: 'text-amber-700',
+    strongText: 'text-amber-800',
+    badge: 'border-amber-200 bg-amber-50 text-amber-800'
+  };
+};
+
+const lineTrendPresentation = (trend: string) => {
+  if (trend === 'improved') return { label: 'melhora', className: 'text-emerald-700' };
+  if (trend === 'worsened') return { label: 'regressão', className: 'text-red-700' };
+  if (trend === 'stable') return { label: 'estável', className: 'text-amber-700' };
+  return { label: 'dados insuficientes', className: 'text-slate-600' };
 };
 
 const dateInputValue = (value: any) => {
@@ -475,6 +518,34 @@ const clinicalChangeBrief = (point?: Partial<ChartPoint> | null) => {
   return `${label}: ${metric.toLowerCase()} ${previous} → ${current} (${delta}), ${clinicalInterpretation(point as ChartPoint)}.`;
 };
 
+const ChangeStateBadge = ({ point, compact = false }: { point: Partial<ChartPoint>; compact?: boolean }) => {
+  const tone = changeStatePresentation(point);
+  return (
+    <span className={`inline-flex items-center rounded-full border ${compact ? 'px-2 py-0.5 text-[10px]' : 'px-2.5 py-1 text-[11px]'} font-bold uppercase tracking-widest ${tone.badge}`}>
+      {tone.label}
+    </span>
+  );
+};
+
+const ClinicalChangeBriefView = ({ point }: { point?: Partial<ChartPoint> | null }) => {
+  if (!point) return <span>Sem dados suficientes para interpretar.</span>;
+  const metricType = String(point.metricType || '');
+  const tone = changeStatePresentation(point);
+  const metric = metricLabels[metricType] || 'Métrica';
+  const previous = formatClinicalValue(point.previousValue, metricType, (point as any).previousStatus);
+  const current = formatClinicalValue((point as ChartPoint).value ?? point.metricValue, metricType, point.currentStatus || point.masteryStatus || point.statusLabel);
+  return (
+    <span>
+      <span className="font-bold text-slate-800">{clinicalItemLabel(point)}</span>
+      {`: ${metric.toLowerCase()} ${previous} → ${current} `}
+      <span className={`font-black ${tone.strongText}`}>({formatDelta(point as ChartPoint)})</span>
+      {', '}
+      <span className={`font-black ${tone.text}`}>{tone.label.toLowerCase()}</span>
+      .
+    </span>
+  );
+};
+
 const topClinicalChangeForGroup = (group: AbaAggregatedClinicalChangeGroup) => {
   const changes = Array.isArray(group.topChanges) && group.topChanges.length > 0
     ? group.topChanges
@@ -567,11 +638,14 @@ const CustomTooltip = ({ active, payload }: any) => {
         <p>Métrica: {metricLabels[metricType] || 'Métrica'}</p>
         <p>Valor anterior: {formatClinicalValue(row.previousValue, metricType, (row as any).previousStatus)}</p>
         <p>Valor atual: {formatClinicalValue(row.value ?? row.metricValue, metricType, row.currentStatus || row.masteryStatus || row.statusLabel)}</p>
-        <p>Delta: {formatDelta(row)}</p>
+        <p>Delta: <span className={`font-black ${changeStatePresentation(row).strongText}`}>{formatDelta(row)}</span></p>
         <p>Tipo de tentativa mais usado: {trialType}</p>
         <p>Status de maestria: {masteryStatus}</p>
       </div>
-      <p className="mt-3 rounded-md bg-slate-50 px-3 py-2 font-bold text-slate-700">{clinicalInterpretation(row)}</p>
+      <div className="mt-3 rounded-md bg-slate-50 px-3 py-2">
+        <ChangeStateBadge point={row} />
+        <p className="mt-1 font-bold text-slate-700">{clinicalInterpretation(row)}</p>
+      </div>
     </div>
   );
 };
@@ -617,7 +691,7 @@ const AggregatedTooltip = ({ active, payload }: any) => {
       </div>
       {topChange && (
         <p className="mt-3 rounded-md bg-slate-50 px-3 py-2 font-bold text-slate-700">
-          Maior mudança: {clinicalChangeBrief(topChange)}
+          Maior mudança: <ClinicalChangeBriefView point={topChange} />
         </p>
       )}
       {!topChange && (
@@ -656,9 +730,7 @@ const ClinicalChangeCard: React.FC<{ change: AbaAggregatedClinicalChange; index:
         <span className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-widest ${categoryTone.badge}`}>
           {clinicalChangeCategoryLabels[change.changeCategory]}
         </span>
-        <span className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-widest ${stateTone(change)}`}>
-          {interpretation}
-        </span>
+        <ChangeStateBadge point={change} compact />
       </div>
       <h5 className="text-sm font-semibold leading-snug text-slate-900">{changePrimaryLabel(change)}</h5>
       <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
@@ -676,13 +748,13 @@ const ClinicalChangeCard: React.FC<{ change: AbaAggregatedClinicalChange; index:
         </div>
         <div className="rounded-md bg-slate-50 px-3 py-2">
           <p className="text-[10px] font-medium uppercase tracking-widest text-slate-400">Delta</p>
-          <p className={`mt-1 font-semibold ${isWorsenedChange(change) ? 'text-red-700' : isImprovedChange(change) ? 'text-emerald-700' : 'text-slate-700'}`}>
+          <p className={`mt-1 font-black ${changeStatePresentation(change).strongText}`}>
             {formatDelta(change)}
           </p>
         </div>
       </div>
       <p className="mt-3 text-xs leading-relaxed text-slate-600">
-        <span className="font-medium text-slate-700">Interpretação:</span> {interpretation}
+        <span className="font-medium text-slate-700">Interpretação:</span> <span className={changeStatePresentation(change).text}>{interpretation}</span>
       </p>
       {change.changeCategory === 'behavior' && contextPattern && (
         <div className="mt-3 rounded-lg border border-sky-100 bg-sky-50/70 px-3 py-2" data-aba-behavior-context-insights>
@@ -1073,6 +1145,7 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
   const selectedLineMetricOption = lineMetricOptions.find((option) => option.id === lineMetric);
   const lineAxisLabel = metricAxisLabels[lineMetric] || selectedLineMetricOption?.label || 'Valor';
   const isCompareResponses = lineMetric === 'TARGET_COMPARE_RESPONSES';
+  const lineTrendDisplay = lineTrendPresentation(String(lineSummary.trend || 'insufficient_data'));
   const lineNeedsItem = lineCategory !== 'general' && !lineItemId;
   const lineEmptyText = lineNeedsItem
     ? 'Selecione uma habilidade ou comportamento para visualizar a evolução em linha.'
@@ -1090,6 +1163,15 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
     (activeTab === 'behaviors' && !hasSpecificBehavior)
   );
   const shouldRenderChart = viewMode === 'stacked' && (showAggregatedChart ? aggregatedChangeRows.length > 0 : chartRows.length > 0);
+  const visibleAggregateBars = useMemo(() => {
+    if (activeTab === 'overview' || activeTab === 'session-changes') return aggregateBarDefinitions;
+    if (activeTab === 'targets') return aggregateBarDefinitions.filter((bar) => bar.category === 'skill');
+    if (activeTab === 'behaviors') return aggregateBarDefinitions.filter((bar) => bar.category === 'behavior');
+    if (activeTab === 'mastery') return aggregateBarDefinitions.filter((bar) => bar.category === 'mastery');
+    if (activeTab === 'maintenance') return aggregateBarDefinitions.filter((bar) => bar.category === 'maintenance' || bar.category === 'regression');
+    return aggregateBarDefinitions;
+  }, [activeTab]);
+  const showFullAggregateLegend = activeTab === 'overview' || activeTab === 'session-changes';
 
   const yAxisLabel = showAggregatedChart
     ? 'Intensidade das mudanças'
@@ -1316,6 +1398,47 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
       }))
     ].sort((a, b) => new Date(a.at || 0).getTime() - new Date(b.at || 0).getTime());
   }, [activeData.alerts, activeData.probeResults, activeData.schedules]);
+
+  const behaviorContextPatterns = useMemo(() => {
+    const patterns = Array.isArray(activeData.contextPatterns) ? activeData.contextPatterns as AbaBehaviorContextPattern[] : [];
+    return patterns
+      .filter((pattern) => !behaviorId || String(pattern.behaviorId || '') === behaviorId)
+      .sort((a, b) => b.totalRecords - a.totalRecords)
+      .slice(0, 4);
+  }, [activeData.contextPatterns, behaviorId]);
+
+  const behaviorTrendSummary = useMemo(() => {
+    const behaviorRows = aggregateSourcePoints.filter((point) => String(point.metricType || '').startsWith('BEHAVIOR_'));
+    const improved = behaviorRows.filter(isImprovedChange).length;
+    const worsened = behaviorRows.filter(isWorsenedChange).length;
+    const stable = behaviorRows.filter(isStableChange).length;
+    if (worsened > improved && worsened > 0) {
+      return {
+        label: 'Regressão',
+        className: 'border-red-200 bg-red-50 text-red-700',
+        body: `${worsened} registro(s) com aumento clínico de comportamento interferente no período.`
+      };
+    }
+    if (improved > 0 && improved >= worsened) {
+      return {
+        label: 'Melhora',
+        className: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+        body: `${improved} registro(s) com redução ou melhora clínica no período.`
+      };
+    }
+    if (stable > 0) {
+      return {
+        label: 'Estável',
+        className: 'border-amber-200 bg-amber-50 text-amber-800',
+        body: 'Sem mudança clínica relevante nos comportamentos interferentes filtrados.'
+      };
+    }
+    return {
+      label: 'Dados insuficientes',
+      className: 'border-slate-200 bg-slate-50 text-slate-600',
+      body: 'Ainda não há comparação suficiente para tendência contextual.'
+    };
+  }, [aggregateSourcePoints]);
 
   const goalLines = annotations.filter((annotation: any) => annotation.annotation_type === 'GOAL_LINE' && annotation.value !== null && annotation.value !== '');
   const showDefaultCriterion = activeTab === 'targets' && percentMetrics.has(effectiveMetricType) && !goalLines.length;
@@ -1570,6 +1693,57 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
         </div>
       )}
 
+      {activeTab === 'behaviors' && (
+        <section className="grid grid-cols-1 gap-3 rounded-lg border border-sky-100 bg-sky-50/50 p-4 lg:grid-cols-[240px_1fr]" data-aba-behavior-context-panel>
+          <div className={`rounded-lg border p-3 ${behaviorTrendSummary.className}`} data-aba-behavior-trend-summary>
+            <p className="text-[10px] font-bold uppercase tracking-widest opacity-80">Resumo visual da tendência</p>
+            <p className="mt-2 text-lg font-black">{behaviorTrendSummary.label}</p>
+            <p className="mt-1 text-xs font-semibold leading-relaxed">{behaviorTrendSummary.body}</p>
+          </div>
+          <div>
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-sky-700">Padrões identificados</p>
+                <h4 className="text-sm font-bold text-slate-900">Insights contextuais dos comportamentos</h4>
+              </div>
+              <span className="rounded-full bg-white px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-sky-700">
+                {behaviorContextPatterns.length} comportamento(s)
+              </span>
+            </div>
+            {behaviorContextPatterns.length > 0 ? (
+              <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                {behaviorContextPatterns.map((pattern) => (
+                  <div key={pattern.behaviorKey} className="rounded-lg border border-sky-100 bg-white px-3 py-2" data-aba-behavior-context-card>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-sm font-bold text-slate-900">{safeDisplayValue(pattern.behaviorName, 'Comportamento')}</p>
+                      <span className="rounded-full bg-slate-50 px-2 py-1 text-[10px] font-bold text-slate-500">{pattern.totalRecords} registro(s)</span>
+                    </div>
+                    {pattern.enoughData === false ? (
+                      <p className="mt-2 text-xs font-semibold text-slate-500">Dados insuficientes para identificar padrão contextual confiável.</p>
+                    ) : (
+                      <ul className="mt-2 space-y-1 text-xs font-semibold leading-relaxed text-slate-600">
+                        {(pattern.insights || []).slice(0, 3).map((insight, index) => (
+                          <li key={`${pattern.behaviorKey}-insight-${index}`}>{insight}</li>
+                        ))}
+                      </ul>
+                    )}
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {pattern.dominantLocation && <span className="rounded-full bg-sky-50 px-2 py-1 text-[10px] font-bold text-sky-700">Local: {pattern.dominantLocation.value}</span>}
+                      {pattern.commonSeverity && <span className="rounded-full bg-amber-50 px-2 py-1 text-[10px] font-bold text-amber-700">Severidade: {pattern.commonSeverity.value}</span>}
+                      {pattern.commonCollectionMethod && <span className="rounded-full bg-violet-50 px-2 py-1 text-[10px] font-bold text-violet-700">Método: {pattern.commonCollectionMethod.value}</span>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="rounded-lg border border-sky-100 bg-white px-3 py-3 text-xs font-semibold text-slate-500">
+                Dados insuficientes para identificar padrão contextual confiável.
+              </p>
+            )}
+          </div>
+        </section>
+      )}
+
       {error && <div className="rounded-lg border border-amber-100 bg-amber-50 p-3 text-xs font-bold text-amber-700">{error}</div>}
 
       {activeTab === 'overview' && (
@@ -1661,12 +1835,12 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
               {[
                 { label: 'Valor atual', value: formatClinicalValue(lineSummary.currentValue, lineMetric, lineSummary.status) },
                 { label: 'Variação', value: lineSummary.delta === null || lineSummary.delta === undefined ? '-' : `${lineSummary.delta > 0 ? '+' : ''}${formatValue(lineSummary.delta, lineMetric)}` },
-                { label: 'Tendência', value: lineSummary.trend === 'improved' ? 'melhora' : lineSummary.trend === 'worsened' ? 'atenção' : lineSummary.trend === 'stable' ? 'estável' : 'dados insuficientes' },
+                { label: 'Tendência', value: lineTrendDisplay.label, className: lineTrendDisplay.className },
                 { label: 'Última medição', value: lineSummary.lastMeasuredAt ? `${formatDate(lineSummary.lastMeasuredAt)} · ${lineSummary.lastSessionLabel || 'sessão'}` : '-' }
               ].map((item) => (
                 <div key={item.label} className="rounded-lg border border-slate-100 bg-slate-50/70 p-3">
                   <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{item.label}</p>
-                  <p className="mt-1 truncate text-sm font-bold text-slate-900">{item.value}</p>
+                  <p className={`mt-1 truncate text-sm font-black ${item.className || 'text-slate-900'}`}>{item.value}</p>
                 </div>
               ))}
             </div>
@@ -1693,7 +1867,7 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
                       label={{ value: lineAxisLabel, angle: -90, position: 'insideLeft', fill: '#94A3B8', fontSize: 11, fontWeight: 700 }}
                     />
                     <Tooltip content={<ClinicalLineTooltip />} />
-                    <Legend wrapperStyle={{ fontSize: 11, fontWeight: 700 }} />
+                    {isCompareResponses && <Legend wrapperStyle={{ fontSize: 11, fontWeight: 700 }} />}
                     {lineGoalLines.map((annotation: any) => (
                       <ReferenceLine key={annotation.id} y={Number(annotation.value)} stroke="#10B981" strokeDasharray="4 4" label={annotation.label} />
                     ))}
@@ -1760,12 +1934,19 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
                   <XAxis dataKey="label" tick={{ fill: '#64748B', fontSize: 10, fontWeight: 700 }} angle={-18} textAnchor="end" height={58} interval={0} />
                   <YAxis tick={{ fill: '#94A3B8', fontSize: 11, fontWeight: 700 }} label={{ value: yAxisLabel, angle: -90, position: 'insideLeft', fill: '#94A3B8', fontSize: 11, fontWeight: 700 }} />
                   <Tooltip content={<AggregatedTooltip />} cursor={{ fill: 'rgba(122, 50, 252, 0.06)' }} />
-                  <Legend wrapperStyle={{ fontSize: 11, fontWeight: 700 }} />
-                  <Bar dataKey="skillMagnitude" name="Habilidades" stackId="changes" fill={aggregateBarColors.skillMagnitude} maxBarSize={56} onClick={(entry: any) => openChangeGroup(entry?.payload?.groupKey || '', 'skill', 'detail')} />
-                  <Bar dataKey="behaviorMagnitude" name="Comportamentos" stackId="changes" fill={aggregateBarColors.behaviorMagnitude} maxBarSize={56} onClick={(entry: any) => openChangeGroup(entry?.payload?.groupKey || '', 'behavior', 'detail')} />
-                  <Bar dataKey="masteryCount" name="Maestria" stackId="changes" fill={aggregateBarColors.masteryCount} maxBarSize={56} onClick={(entry: any) => openChangeGroup(entry?.payload?.groupKey || '', 'mastery', 'detail')} />
-                  <Bar dataKey="maintenanceCount" name="Manutenção" stackId="changes" fill={aggregateBarColors.maintenanceCount} maxBarSize={56} onClick={(entry: any) => openChangeGroup(entry?.payload?.groupKey || '', 'maintenance', 'detail')} />
-                  <Bar dataKey="regressionCount" name="Regressão/alertas" stackId="changes" fill={aggregateBarColors.regressionCount} radius={[6, 6, 0, 0]} maxBarSize={56} onClick={(entry: any) => openChangeGroup(entry?.payload?.groupKey || '', 'regression', 'detail')} />
+                  {showFullAggregateLegend && <Legend wrapperStyle={{ fontSize: 11, fontWeight: 700 }} />}
+                  {visibleAggregateBars.map((bar, index) => (
+                    <Bar
+                      key={bar.key}
+                      dataKey={bar.key}
+                      name={bar.label}
+                      stackId="changes"
+                      fill={aggregateBarColors[bar.key]}
+                      radius={index === visibleAggregateBars.length - 1 ? [6, 6, 0, 0] : undefined}
+                      maxBarSize={56}
+                      onClick={(entry: any) => openChangeGroup(entry?.payload?.groupKey || '', bar.category, 'detail')}
+                    />
+                  ))}
                   </BarChart>
                 ) : (
                   <LineChart data={chartRows} margin={{ top: 20, right: 24, left: 8, bottom: 44 }}>
@@ -1824,7 +2005,7 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
                   </button>
                 </div>
                 <p className="text-sm font-semibold text-slate-800">
-                  {group.relevantChanges} relevantes de {group.totalChanges} mudanças. Maior mudança: {clinicalChangeBrief(topClinicalChangeForGroup(group))}.
+                  {group.relevantChanges} relevantes de {group.totalChanges} mudanças. Maior mudança: <ClinicalChangeBriefView point={topClinicalChangeForGroup(group)} />
                 </p>
                 <div className="mt-3 flex flex-wrap gap-2">
                   {clinicalChangeCategoryOrder.map((category) => (
@@ -1860,7 +2041,7 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
                 </div>
                 <p className="text-sm font-bold text-slate-900">{clinicalItemLabel(change)}</p>
                 <p className="mt-1 text-xs text-slate-500">
-                  {clinicalChangeCategoryLabels[change.changeCategory]} · {clinicalChangeBrief(change)}
+                  {clinicalChangeCategoryLabels[change.changeCategory]} · <ClinicalChangeBriefView point={change} />
                 </p>
               </button>
             ))}
@@ -1880,7 +2061,7 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
               </div>
               <p className="text-sm font-bold text-slate-900">{clinicalItemLabel(point)}</p>
               <p className="mt-1 text-xs text-slate-500">
-                {metricLabels[String(point.metricType || '')] || 'Métrica'}: {formatClinicalValue(point.value ?? point.metricValue, point.metricType, point.currentStatus || point.masteryStatus || point.statusLabel)} · anterior {formatClinicalValue(point.previousValue, point.metricType, (point as any).previousStatus)} · delta {formatDelta(point)}
+                {metricLabels[String(point.metricType || '')] || 'Métrica'}: {formatClinicalValue(point.value ?? point.metricValue, point.metricType, point.currentStatus || point.masteryStatus || point.statusLabel)} · anterior {formatClinicalValue(point.previousValue, point.metricType, (point as any).previousStatus)} · delta <span className={`font-black ${changeStatePresentation(point).strongText}`}>{formatDelta(point)}</span> · <span className={`font-black ${changeStatePresentation(point).text}`}>{changeStatePresentation(point).label}</span>
               </p>
             </div>
           ))}
@@ -2061,7 +2242,7 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
                           <div key={`${change.id || change.sessionId}-${change.metricType}-${index}`} className="rounded-md bg-white/80 px-3 py-2">
                             <p className="truncate text-xs font-medium text-slate-800">{changePrimaryLabel(change)}</p>
                             <p className="mt-1 text-[11px] text-slate-500">
-                              {formatClinicalValue(change.previousValue, change.metricType, (change as any).previousStatus)} → {formatClinicalValue((change as ChartPoint).value ?? change.metricValue, change.metricType, change.currentStatus || change.masteryStatus || change.statusLabel)} · {formatDelta(change)} · {clinicalInterpretation(change)}
+                              {formatClinicalValue(change.previousValue, change.metricType, (change as any).previousStatus)} → {formatClinicalValue((change as ChartPoint).value ?? change.metricValue, change.metricType, change.currentStatus || change.masteryStatus || change.statusLabel)} · <span className={`font-black ${changeStatePresentation(change).strongText}`}>{formatDelta(change)}</span> · <span className={`font-black ${changeStatePresentation(change).text}`}>{changeStatePresentation(change).label}</span>
                             </p>
                           </div>
                         ))}

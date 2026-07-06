@@ -541,20 +541,26 @@ test('container responsivo mede dimensoes antes de montar graficos recharts', ()
 let passed = 0;
 test('behavior context patterns identify dominant context without causal language', () => {
   const patterns = analyzeBehaviorContextPatterns([
-    { behavior_id: 'stereotypy', behavior_name: 'Estereotipia', location: 'Brinquedoteca', severity: 3, occurred_at: '2026-06-26T13:00:00.000Z' },
-    { behavior_id: 'stereotypy', behavior_name: 'Estereotipia', location: 'Brinquedoteca', severity: 3, occurred_at: '2026-06-26T13:05:00.000Z' },
-    { behavior_id: 'stereotypy', behavior_name: 'Estereotipia', location: 'Brinquedoteca', severity: 3, occurred_at: '2026-06-26T13:10:00.000Z' },
-    { behavior_id: 'stereotypy', behavior_name: 'Estereotipia', location: 'Brinquedoteca', severity: 2, occurred_at: '2026-06-26T13:15:00.000Z' },
-    { behavior_id: 'stereotypy', behavior_name: 'Estereotipia', location: 'Mesa', severity: 2, occurred_at: '2026-06-26T10:00:00.000Z' },
-    { behavior_id: 'stereotypy', behavior_name: 'Estereotipia', location: 'Sala de terapia', severity: 1, occurred_at: '2026-06-26T09:00:00.000Z' }
+    { behavior_id: 'stereotypy', behavior_name: 'Estereotipia', location: 'Brinquedoteca', severity: 4, measurement_type: 'intervalo parcial', duration_seconds: 30, count_delta: 1, occurred_at: '2026-06-26T13:00:00.000Z' },
+    { behavior_id: 'stereotypy', behavior_name: 'Estereotipia', location: 'Brinquedoteca', severity: 4, measurement_type: 'intervalo parcial', duration_seconds: 20, count_delta: 2, occurred_at: '2026-06-26T13:05:00.000Z' },
+    { behavior_id: 'stereotypy', behavior_name: 'Estereotipia', location: 'Brinquedoteca', severity: 5, measurement_type: 'intervalo parcial', duration_seconds: 25, count_delta: 1, occurred_at: '2026-06-26T13:10:00.000Z' },
+    { behavior_id: 'stereotypy', behavior_name: 'Estereotipia', location: 'Brinquedoteca', severity: 4, measurement_type: 'intervalo parcial', duration_seconds: 20, count_delta: 1, occurred_at: '2026-06-26T13:15:00.000Z' },
+    { behavior_id: 'stereotypy', behavior_name: 'Estereotipia', location: 'Mesa', severity: 2, measurement_type: 'frequência', occurred_at: '2026-06-26T10:00:00.000Z' },
+    { behavior_id: 'stereotypy', behavior_name: 'Estereotipia', location: 'Sala de terapia', severity: 1, measurement_type: 'frequência', occurred_at: '2026-06-26T09:00:00.000Z' }
   ]);
   const pattern = patterns[0];
   assert.equal(pattern.behaviorName, 'Estereotipia');
   assert.equal(pattern.dominantLocation?.value, 'Brinquedoteca');
   assert.equal(pattern.dominantLocation?.count, 4);
-  assert.equal(pattern.commonSeverity?.value, 3);
+  assert.equal(pattern.commonSeverity?.value, 4);
+  assert.equal(pattern.commonCollectionMethod?.value, 'intervalo parcial');
+  assert.equal(pattern.highSeverity?.percent, 67);
+  assert.equal(pattern.averageDurationSeconds, 24);
+  assert.equal(pattern.totalQuantity, 5);
   const insightText = pattern.insights.join(' ');
   assert.match(insightText, /maior concentra/i);
+  assert.match(insightText, /severidade 4 ou 5/i);
+  assert.match(insightText, /método intervalo parcial/i);
   assert.doesNotMatch(insightText, /caus/i);
 });
 
@@ -579,7 +585,30 @@ test('behavior context patterns avoid strong conclusions with little data or no 
 test('behavior chart endpoint and panel expose context insights safely', () => {
   assert.match(serverCode, /from\('aba_behavior_events'\)[\s\S]*?raw_payload[\s\S]*?analyzeBehaviorContextPatterns[\s\S]*?contextPatterns/m);
   assert.match(panelCode, /data-aba-behavior-context-insights[\s\S]*?Contextos associados/m);
+  assert.match(panelCode, /data-aba-behavior-context-panel[\s\S]*?Padrões identificados/m);
+  assert.match(panelCode, /data-aba-behavior-trend-summary[\s\S]*?Resumo visual da tendência/m);
+  assert.match(panelCode, /commonCollectionMethod[\s\S]*?Método:/m);
   assert.doesNotMatch(panelCode, /causou|causa da piora/i);
+});
+
+test('legendas dos gráficos são reduzidas fora da visão geral consolidada', () => {
+  assert.match(panelCode, /showFullAggregateLegend = activeTab === 'overview' \|\| activeTab === 'session-changes'/);
+  assert.match(panelCode, /visibleAggregateBars = useMemo/);
+  assert.match(panelCode, /activeTab === 'behaviors'[\s\S]*?bar\.category === 'behavior'/m);
+  assert.match(panelCode, /activeTab === 'targets'[\s\S]*?bar\.category === 'skill'/m);
+  assert.match(panelCode, /\{showFullAggregateLegend && <Legend/);
+  assert.match(panelCode, /\{isCompareResponses && <Legend/);
+  assert.match(panelCode, /visibleAggregateBars\.map\(\(bar, index\) => \(/);
+});
+
+test('mudança clínica tem destaque visual por melhora, estabilidade e regressão', () => {
+  assert.match(panelCode, /const changeStatePresentation = \(point: Partial<ChartPoint>\) => \{/);
+  assert.match(panelCode, /label: 'Melhora'[\s\S]*?text-emerald-700/m);
+  assert.match(panelCode, /label: 'Regressão'[\s\S]*?text-red-700/m);
+  assert.match(panelCode, /label: 'Estável'[\s\S]*?text-amber-700/m);
+  assert.match(panelCode, /ClinicalChangeBriefView/);
+  assert.match(panelCode, /ChangeStateBadge/);
+  assert.match(panelCode, /font-black \$\{changeStatePresentation\(point\)\.strongText\}/);
 });
 
 for (const item of tests) {
