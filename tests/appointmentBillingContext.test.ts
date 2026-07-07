@@ -376,9 +376,13 @@ test('consulta e modal sugerem autorização TISS vigente do paciente sem usar T
   assert.match(serverCode, /findSuggestedTissAuthorizationForAppointment/);
   assert.match(serverCode, /patient_payer_authorizations/);
   assert.match(serverCode, /getPatientTissAuthorizationVisualState/);
+  assert.match(serverCode, /dedupePatientTissAuthorizationSelectionOptions/);
+  assert.match(serverCode, /fetchAppointmentTissAuthorizationReservationCounts/);
   assert.match(serverCode, /suggestedBilling = await resolveAppointmentBillingSuggestion\(/);
   assert.match(serverCode, /patient_tiss_authorization_id: suggestedTissAuthorization\?\.authorizationId/);
-  assert.match(serverCode, /A autorização TISS selecionada não é elegível para este paciente, convênio e serviço\./);
+  assert.match(serverCode, /Esta autoriza..o n.o possui saldo dispon.vel/);
+  assert.match(serverCode, /Esta autoriza..o n.o est. dispon.vel para a data, conv.nio ou procedimento da consulta/);
+  assert.match(serverCode, /conflictType: 'authorization'/);
   assert.match(calendarCode, /Autorização TISS sugerida/);
   assert.match(calendarCode, /Usar esta autorização/);
   assert.match(calendarCode, /applySuggestedTissAuthorizationToBillingForm/);

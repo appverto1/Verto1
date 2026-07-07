@@ -9,8 +9,10 @@ import {
 } from '../src/utils/patientFinancialPlan';
 import {
   ABA_INDIVIDUAL_EXPECTED_TUSS_CODE,
+  dedupePatientTissAuthorizationSelectionOptions,
   findSuggestedTissAuthorizationForAppointment,
   findSuggestedTissAuthorizationForFinancialPlan,
+  getPatientTissAuthorizationQuantitySummary,
   getPatientTissAuthorizationVisualState,
   getPatientTissAuthorizationTussReview,
   groupPatientTissAuthorizations
@@ -256,6 +258,47 @@ test('autorizações TISS agrupam, deduplicam e calculam status comercial', () =
   assert.equal(getPatientTissAuthorizationVisualState({ ...base, usedQuantity: 10 }, '2026-06-15').label, 'Consumida');
   assert.equal(getPatientTissAuthorizationVisualState({ ...base, active: false }, '2026-06-15').label, 'Inativa');
   assert.equal(getPatientTissAuthorizationVisualState({ ...base, validFrom: '2026-07-01', validUntil: '2026-07-31' }, '2026-06-15').label, 'Futura');
+});
+
+test('autorizações TISS do agendamento deduplicam equivalentes e calculam saldo de pacote', () => {
+  const base = {
+    patientId: 'patient-pedro',
+    payerId: 'payer-amil',
+    serviceCatalogId: 'service-aba',
+    tussCodeId: 'tuss-50000470',
+    tussCode: '50000470',
+    authorizationNumber: '123456789',
+    authorizationCode: '123456789',
+    guideNumber: '12345679',
+    validFrom: '2026-06-01',
+    validUntil: '2026-06-30',
+    quantityAuthorized: 10,
+    quantityConsumed: 2,
+    quantityReserved: 1,
+    canUseForAppointment: true,
+    isEligibleForAppointment: true,
+    updatedAt: '2026-06-10T12:00:00Z',
+    active: true,
+    status: 'active'
+  };
+
+  assert.deepEqual(getPatientTissAuthorizationQuantitySummary(base), {
+    authorized: 10,
+    consumed: 2,
+    reserved: 1,
+    available: 7,
+    hasPackageLimit: true,
+  });
+
+  const deduped = dedupePatientTissAuthorizationSelectionOptions([
+    { ...base, id: 'auth-old', authorizationId: 'auth-old', updatedAt: '2026-06-01T12:00:00Z', quantityReserved: 3 },
+    { ...base, id: 'auth-new', authorizationId: 'auth-new', updatedAt: '2026-06-12T12:00:00Z' },
+    { ...base, id: 'auth-other-guide', authorizationId: 'auth-other-guide', guideNumber: '999' },
+  ]);
+
+  assert.equal(deduped.length, 2);
+  assert.equal(deduped.find((item) => item.guideNumber === '12345679')?.authorizationId, 'auth-new');
+  assert.equal(getPatientTissAuthorizationQuantitySummary(deduped.find((item) => item.authorizationId === 'auth-new')).available, 7);
 });
 
 test('autorizações ABA com TUSS legado não são sugeridas para novas Pré-guias', () => {

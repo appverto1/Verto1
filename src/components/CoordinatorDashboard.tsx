@@ -987,6 +987,7 @@ export function CoordinatorDashboard({
   const [sessionGuideNumber, setSessionGuideNumber] = useState("");
   const [sessionAuthorizationCode, setSessionAuthorizationCode] = useState("");
   const [sessionPatientTissAuthorizationId, setSessionPatientTissAuthorizationId] = useState("");
+  const [showSessionUnavailableTissAuthorizations, setShowSessionUnavailableTissAuthorizations] = useState(false);
   const [sessionBillingSuggestionState, setSessionBillingSuggestionState] = useState<{
     loading: boolean;
     error: string;
@@ -3063,18 +3064,41 @@ export function CoordinatorDashboard({
         : [];
     return fromSuggestion;
   }, [sessionBillingSuggestion]);
+  const sessionUnavailableTissAuthorizations = useMemo(() => {
+    const explicit = Array.isArray(sessionBillingSuggestion?.unavailableTissAuthorizations)
+      ? sessionBillingSuggestion.unavailableTissAuthorizations
+      : Array.isArray(sessionBillingSuggestion?.unavailable_tiss_authorizations)
+        ? sessionBillingSuggestion.unavailable_tiss_authorizations
+        : null;
+    if (explicit) return explicit;
+    return sessionAvailableTissAuthorizations.filter((authorization: any) =>
+      !Boolean(authorization?.canUseForAppointment || authorization?.isEligibleForAppointment)
+    );
+  }, [sessionAvailableTissAuthorizations, sessionBillingSuggestion]);
   const sessionUsableTissAuthorizations = useMemo(
     () => sessionAvailableTissAuthorizations.filter((authorization: any) => Boolean(authorization?.canUseForAppointment || authorization?.isEligibleForAppointment)),
     [sessionAvailableTissAuthorizations],
   );
-  const formatSessionAuthorizationBalance = (authorization: any) => {
+  const getSessionAuthorizationBalanceParts = (authorization: any) => {
     const authorized = Number(authorization?.quantityAuthorized ?? authorization?.authorizedQuantity ?? 0) || 0;
-    const used = Number(authorization?.quantityConsumed ?? authorization?.usedQuantity ?? 0) || 0;
-    const balance = authorization?.balance !== null && authorization?.balance !== undefined
-      ? Number(authorization.balance)
-      : authorized > 0 ? Math.max(0, authorized - used) : null;
-    if (authorized > 0 && balance !== null && Number.isFinite(balance)) return `${balance} de ${authorized}`;
-    if (balance !== null && Number.isFinite(balance)) return String(balance);
+    const consumed = Number(authorization?.quantityConsumed ?? authorization?.usedQuantity ?? 0) || 0;
+    const reserved = Number(authorization?.quantityReserved ?? authorization?.reservedQuantity ?? 0) || 0;
+    const available = authorization?.quantityAvailable !== null && authorization?.quantityAvailable !== undefined
+      ? Number(authorization.quantityAvailable)
+      : authorization?.balance !== null && authorization?.balance !== undefined
+        ? Number(authorization.balance)
+        : authorized > 0 ? Math.max(0, authorized - consumed - reserved) : null;
+    return {
+      authorized,
+      consumed,
+      reserved,
+      available: available !== null && Number.isFinite(available) ? available : null,
+    };
+  };
+  const formatSessionAuthorizationBalance = (authorization: any) => {
+    const balance = getSessionAuthorizationBalanceParts(authorization);
+    if (balance.authorized > 0 && balance.available !== null) return `${balance.available} de ${balance.authorized} sessões`;
+    if (balance.available !== null) return String(balance.available);
     return "sem limite informado";
   };
   const applySessionTissAuthorization = (authorization: any) => {
@@ -3083,9 +3107,64 @@ export function CoordinatorDashboard({
     setSessionAuthorizationCode(String(authorization?.authorizationCode || authorization?.authorizationNumber || ""));
     setSessionPatientTissAuthorizationId(String(authorization?.authorizationId || authorization?.patientTissAuthorizationId || ""));
   };
+  const renderSessionTissAuthorizationCard = (authorization: any, options: { compact?: boolean; history?: boolean } = {}) => {
+    const canUse = Boolean(authorization?.canUseForAppointment || authorization?.isEligibleForAppointment);
+    const authorizationId = String(authorization?.authorizationId || authorization?.patientTissAuthorizationId || "");
+    const isSelected = Boolean(authorizationId && authorizationId === sessionPatientTissAuthorizationId);
+    const key = authorizationId || `${authorization?.guideNumber}-${authorization?.authorizationCode}-${authorization?.validFrom}-${authorization?.validUntil}`;
+    const validity = [authorization?.validFrom, authorization?.validUntil]
+      .filter(Boolean)
+      .map((value: string) => String(value).slice(0, 10).split("-").reverse().join("/"))
+      .join(" a ");
+    const balance = getSessionAuthorizationBalanceParts(authorization);
+    return (
+      <div
+        key={key}
+        className={`rounded-xl border px-3 py-2 ${
+          canUse
+            ? isSelected
+              ? "border-emerald-300 bg-emerald-100"
+              : "border-emerald-200 bg-emerald-50"
+            : "border-slate-100 bg-slate-50"
+        }`}
+      >
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
+            <p className={`text-xs font-black ${canUse ? "text-emerald-800" : "text-slate-700"}`}>
+              Guia {authorization?.guideNumber || "sem guia"} · Senha {authorization?.authorizationCode || authorization?.authorizationNumber || "sem senha"}
+            </p>
+            <p className="mt-1 text-[11px] font-semibold text-slate-500">
+              {authorization?.procedureName || authorization?.tussDescription || "Procedimento"} {authorization?.tussCode ? `· TUSS ${authorization.tussCode}` : ""}
+            </p>
+            <p className="mt-1 text-[11px] font-semibold text-slate-400">
+              {canUse ? "Utilizável para esta consulta" : authorization?.availabilityLabel || authorization?.status || "Status não informado"}
+              {validity ? ` · Validade ${validity}` : ""}
+            </p>
+            <p className="mt-1 text-[11px] font-semibold text-slate-500">
+              Disponível: {formatSessionAuthorizationBalance(authorization)}
+              {balance.reserved > 0 ? ` · Reservado: ${balance.reserved}` : ""}
+              {balance.consumed > 0 ? ` · Consumido: ${balance.consumed}` : ""}
+            </p>
+            {!canUse && authorization?.unavailableReason && (
+              <p className="mt-1 text-[11px] font-bold text-amber-700">Motivo: {authorization.unavailableReason}</p>
+            )}
+          </div>
+          {canUse && !options.history && (
+            <button
+              type="button"
+              onClick={() => applySessionTissAuthorization(authorization)}
+              className={`rounded-xl px-3 py-2 text-[11px] font-black ${isSelected ? "bg-emerald-700 text-white" : "bg-emerald-600 text-white"}`}
+            >
+              {isSelected ? "Selecionada" : "Usar esta autorização"}
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  };
 
   useEffect(() => {
-    if (!isAddSessionModalOpen || editingAppointmentId || isTherapist) return;
+    if (!isAddSessionModalOpen || isTherapist) return;
     const patientId = String(selectedSessionPatient?.id || "").trim();
     if (
       sessionFinancialContextType !== "INSURANCE" ||
@@ -3095,16 +3174,19 @@ export function CoordinatorDashboard({
       !sessionDate
     ) {
       setSessionBillingSuggestionState({ loading: false, error: "", suggestion: null });
+      setShowSessionUnavailableTissAuthorizations(false);
       return;
     }
     let cancelled = false;
     setSessionBillingSuggestionState({ loading: true, error: "", suggestion: null });
+    setShowSessionUnavailableTissAuthorizations(false);
     dataService.getAppointmentBillingSuggestion({
       patientId,
       payerId: sessionPayerId,
       payerName: selectedSessionPayerName,
       serviceType: sessionApproach,
       appointmentDate: sessionDate,
+      currentAppointmentId: editingAppointmentId || undefined,
     }).then((result: any) => {
       if (cancelled) return;
       if (!result?.success) {
@@ -11240,48 +11322,38 @@ export function CoordinatorDashboard({
                             <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">
                               {sessionBillingSuggestionState.error}
                             </div>
-                          ) : sessionAvailableTissAuthorizations.length > 0 ? (
-                            sessionAvailableTissAuthorizations.slice(0, 6).map((authorization: any) => {
-                              const canUse = Boolean(authorization?.canUseForAppointment || authorization?.isEligibleForAppointment);
-                              const key = authorization?.authorizationId || authorization?.patientTissAuthorizationId || `${authorization?.guideNumber}-${authorization?.authorizationCode}`;
-                              const validity = [authorization?.validFrom, authorization?.validUntil]
-                                .filter(Boolean)
-                                .map((value: string) => String(value).slice(0, 10).split("-").reverse().join("/"))
-                                .join(" a ");
-                              return (
-                                <div key={key} className={`rounded-xl border px-3 py-2 ${canUse ? "border-emerald-200 bg-emerald-50" : "border-slate-100 bg-slate-50"}`}>
-                                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                                    <div className="min-w-0">
-                                      <p className={`text-xs font-black ${canUse ? "text-emerald-800" : "text-slate-700"}`}>
-                                        Guia {authorization?.guideNumber || "sem guia"} · Senha {authorization?.authorizationCode || authorization?.authorizationNumber || "sem senha"}
-                                      </p>
-                                      <p className="mt-1 text-[11px] font-semibold text-slate-500">
-                                        {authorization?.procedureName || authorization?.tussDescription || "Procedimento"} {authorization?.tussCode ? `· TUSS ${authorization.tussCode}` : ""}
-                                      </p>
-                                      <p className="mt-1 text-[11px] font-semibold text-slate-400">
-                                        {authorization?.availabilityLabel || authorization?.status || "Status não informado"}
-                                        {validity ? ` · Validade ${validity}` : ""}
-                                        {` · Saldo ${formatSessionAuthorizationBalance(authorization)}`}
-                                      </p>
-                                      {!canUse && authorization?.unavailableReason && (
-                                        <p className="mt-1 text-[11px] font-bold text-amber-700">{authorization.unavailableReason}</p>
+                          ) : sessionUsableTissAuthorizations.length > 0 || sessionUnavailableTissAuthorizations.length > 0 ? (
+                            <>
+                              {sessionUsableTissAuthorizations.length > 0 ? (
+                                sessionUsableTissAuthorizations.slice(0, 6).map((authorization: any) => renderSessionTissAuthorizationCard(authorization))
+                              ) : (
+                                <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-500">
+                                  Nenhuma autorização utilizável para este paciente, convênio, serviço e data.
+                                </div>
+                              )}
+                              {sessionUnavailableTissAuthorizations.length > 0 && (
+                                <div className="rounded-xl border border-slate-100 bg-slate-50">
+                                  <button
+                                    type="button"
+                                    onClick={() => setShowSessionUnavailableTissAuthorizations((current) => !current)}
+                                    className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-[11px] font-black uppercase tracking-wide text-slate-500"
+                                  >
+                                    <span>Autorizações não utilizáveis · {sessionUnavailableTissAuthorizations.length} no histórico recente</span>
+                                    <span>{showSessionUnavailableTissAuthorizations ? "Recolher" : "Ver detalhes"}</span>
+                                  </button>
+                                  {showSessionUnavailableTissAuthorizations && (
+                                    <div className="space-y-2 border-t border-slate-100 p-2">
+                                      {sessionUnavailableTissAuthorizations.slice(0, 8).map((authorization: any) =>
+                                        renderSessionTissAuthorizationCard(authorization, { compact: true, history: true })
                                       )}
                                     </div>
-                                    <button
-                                      type="button"
-                                      disabled={!canUse}
-                                      onClick={() => applySessionTissAuthorization(authorization)}
-                                      className={`rounded-xl px-3 py-2 text-[11px] font-black disabled:opacity-50 ${canUse ? "bg-emerald-600 text-white" : "border border-slate-200 text-slate-400"}`}
-                                    >
-                                      Usar esta autorização
-                                    </button>
-                                  </div>
+                                  )}
                                 </div>
-                              );
-                            })
+                              )}
+                            </>
                           ) : (
                             <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-500">
-                              Nenhuma autorização cadastrada para este paciente, convênio, serviço e data. Revise o cadastro de autorizações TISS se deveria haver saldo disponível.
+                              Nenhuma autorização utilizável para este paciente, convênio, serviço e data.
                             </div>
                           )}
                         </div>

@@ -256,9 +256,16 @@ test('agendamento mostra autorizacoes disponiveis e permite usar guia sem consum
   assert.match(coordinatorCode, /Guia\/senha do paciente neste conv.nio, servi.o e data/);
   assert.match(coordinatorCode, /Selecionar n.o consome saldo/);
   assert.match(coordinatorCode, /Usar esta autoriza..o/);
+  assert.match(coordinatorCode, /sessionUsableTissAuthorizations\.slice\(0, 6\)/);
+  assert.match(coordinatorCode, /Autoriza..es n.o utiliz.veis/);
+  assert.match(coordinatorCode, /hist.rico recente/);
+  assert.match(coordinatorCode, /Nenhuma autoriza..o utiliz.vel para este paciente, conv.nio, servi.o e data/);
+  assert.match(coordinatorCode, /Reservado:/);
+  assert.match(coordinatorCode, /Consumido:/);
   assert.match(coordinatorCode, /setSessionGuideNumber\(String\(authorization\?\.guideNumber/);
   assert.match(coordinatorCode, /setSessionAuthorizationCode\(String\(authorization\?\.authorizationCode/);
   assert.match(coordinatorCode, /sessionPatientTissAuthorizationId/);
+  assert.match(coordinatorCode, /currentAppointmentId: editingAppointmentId/);
 });
 
 test('relatórios somam paciente e profissional com duração real', () => {

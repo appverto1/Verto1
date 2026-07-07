@@ -255,6 +255,88 @@ const authorizationBalance = (authorization: any) => {
   return Math.max(0, authorizedQuantity - usedQuantity);
 };
 
+export const getPatientTissAuthorizationQuantitySummary = (authorization: any) => {
+  const authorized = Number(authorization?.quantityAuthorized ?? authorization?.authorizedQuantity ?? authorization?.authorized_quantity ?? 0) || 0;
+  const consumed = Number(authorization?.quantityConsumed ?? authorization?.usedQuantity ?? authorization?.used_quantity ?? 0) || 0;
+  const reserved = Number(
+    authorization?.quantityReserved ??
+      authorization?.reservedQuantity ??
+      authorization?.reserved_quantity ??
+      authorization?.reservedAppointments ??
+      authorization?.reserved_appointments ??
+      0,
+  ) || 0;
+  const explicitAvailable = authorization?.quantityAvailable ?? authorization?.availableQuantity ?? authorization?.available_quantity;
+  const available = authorized > 0
+    ? Math.max(0, authorized - consumed - reserved)
+    : Number.isFinite(Number(explicitAvailable))
+      ? Number(explicitAvailable)
+      : null;
+  return {
+    authorized,
+    consumed,
+    reserved,
+    available,
+    hasPackageLimit: authorized > 0,
+  };
+};
+
+export const patientTissAuthorizationSelectionDedupeKey = (authorization: any) => {
+  const patient = cleanText(authorization?.patientId || authorization?.patient_id);
+  const payer = cleanText(authorization?.payerId || authorization?.payer_id) || normalizeKey(authorization?.payerName || authorization?.payer_name);
+  const service = cleanText(authorization?.serviceCatalogId || authorization?.service_catalog_id) ||
+    normalizeKey(authorization?.procedureName || authorization?.serviceName || authorization?.procedureNameSnapshot || authorization?.procedure_name_snapshot);
+  const tuss = cleanText(authorization?.tussCodeId || authorization?.tuss_code_id) ||
+    normalizeKey(authorization?.tussCode || authorization?.procedureTussCode || authorization?.procedure_tuss_code);
+  const guide = normalizeKey(authorization?.guideNumber || authorization?.guide_number);
+  const password = normalizeKey(
+    authorization?.authorizationNumber ||
+      authorization?.authorizationCode ||
+      authorization?.authorization_number ||
+      authorization?.authorization_code,
+  );
+  const validFrom = asDateKey(authorization?.validFrom || authorization?.valid_from);
+  const validUntil = asDateKey(authorization?.validUntil || authorization?.valid_until);
+  const quantity = String(Number(authorization?.quantityAuthorized ?? authorization?.authorizedQuantity ?? authorization?.authorized_quantity ?? 0) || 0);
+  const contentKey = [patient, payer, service, tuss, guide, password, validFrom, validUntil, quantity].join('|');
+  return contentKey.replace(/\|/g, '').trim()
+    ? contentKey
+    : `id:${cleanText(authorization?.authorizationId || authorization?.patientTissAuthorizationId || authorization?.id)}`;
+};
+
+export const dedupePatientTissAuthorizationSelectionOptions = (authorizations: any[]) => {
+  const bestByKey = new Map<string, any>();
+  const score = (authorization: any) => {
+    const usable = authorization?.canUseForAppointment === true || authorization?.isEligibleForAppointment === true || authorization?.availabilityGroup === 'usable';
+    const active = authorization?.active !== false && !['inactive', 'inativo', 'cancelled', 'canceled', 'cancelada'].includes(cleanText(authorization?.status).toLowerCase());
+    const balance = getPatientTissAuthorizationQuantitySummary(authorization);
+    const updatedAt = Date.parse(cleanText(authorization?.updatedAt || authorization?.updated_at || authorization?.createdAt || authorization?.created_at)) || 0;
+    return [
+      usable ? 1 : 0,
+      active ? 1 : 0,
+      Number(balance.available ?? Number.MAX_SAFE_INTEGER),
+      updatedAt,
+      cleanText(authorization?.authorizationId || authorization?.patientTissAuthorizationId || authorization?.id),
+    ] as const;
+  };
+  const isBetter = (candidate: any, current: any) => {
+    const nextScore = score(candidate);
+    const currentScore = score(current);
+    for (let index = 0; index < nextScore.length; index += 1) {
+      if (nextScore[index] === currentScore[index]) continue;
+      return nextScore[index] > currentScore[index];
+    }
+    return false;
+  };
+
+  for (const authorization of Array.isArray(authorizations) ? authorizations : []) {
+    const key = patientTissAuthorizationSelectionDedupeKey(authorization);
+    const current = bestByKey.get(key);
+    if (!current || isBetter(authorization, current)) bestByKey.set(key, authorization);
+  }
+  return Array.from(bestByKey.values());
+};
+
 export const findSuggestedTissAuthorizationForAppointment = (
   appointment: {
     payerId?: any;

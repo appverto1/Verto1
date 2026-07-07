@@ -2793,7 +2793,8 @@ export const dataService = {
       payerName: options.payerName,
       serviceType: options.serviceType,
       procedureCode: options.procedureCode,
-      appointmentDate: options.appointmentDate
+      appointmentDate: options.appointmentDate,
+      currentAppointmentId: options.currentAppointmentId || options.appointmentId
     });
     try {
       const response = await fetchClinical(endpoint, {
