@@ -694,12 +694,21 @@ const AggregatedTooltip = ({ active, payload }: any) => {
   if (!active || !payload?.length) return null;
   const row: AbaAggregatedClinicalChangeGroup = payload[0]?.payload || {};
   const topChange = topClinicalChangeForGroup(row);
+  const isDayGroup = row.groupBy === 'day';
   return (
     <div className="max-w-[340px] rounded-lg border border-slate-100 bg-white p-4 text-xs shadow-xl">
-      <p className="font-black uppercase tracking-widest text-slate-900">{row.label || 'Sessão'}</p>
+      <p className="font-black uppercase tracking-widest text-slate-900">
+        {isDayGroup
+          ? `Dia: ${row.clinicalDateLabel || row.label || 'Sem data'}`
+          : `Sessão: ${row.sessionTooltipLabel || row.sessionDisplayLabel || row.label || 'Sessão'}`}
+      </p>
+      {!isDayGroup && row.sessionShortCode && (
+        <p className="mt-1 text-[11px] font-bold uppercase tracking-widest text-slate-400">Código curto: {row.sessionShortCode}</p>
+      )}
       <div className="mt-3 grid grid-cols-2 gap-2 text-slate-500">
         <p>Total: <strong className="text-slate-800">{row.totalChanges || 0}</strong></p>
         <p>Relevantes: <strong className="text-slate-800">{row.relevantChanges || 0}</strong></p>
+        {isDayGroup && <p>Sessões incluídas: <strong className="text-slate-800">{row.sessionCount || 0}</strong></p>}
         <p>Habilidades: <strong className="text-slate-800">{row.categoryCounts?.skill || 0}</strong></p>
         <p>Comportamentos: <strong className="text-slate-800">{row.categoryCounts?.behavior || 0}</strong></p>
         <p>Maestria: <strong className="text-slate-800">{row.categoryCounts?.mastery || 0}</strong></p>
@@ -728,12 +737,23 @@ const BehaviorCompositionTooltip = ({ active, payload, metricType }: any) => {
   if (!active || !payload?.length) return null;
   const row: AbaBehaviorCompositionRow = payload[0]?.payload || {};
   const segments = Array.isArray(row.segments) ? row.segments.filter((segment) => segment.value > 0) : [];
+  const isDayGroup = row.groupBy === 'day';
   return (
     <div className="max-w-[340px] rounded-lg border border-slate-100 bg-white p-4 text-xs shadow-xl">
-      <p className="font-black uppercase tracking-widest text-slate-900">{row.label || 'Período'}</p>
+      <p className="font-black uppercase tracking-widest text-slate-900">
+        {isDayGroup
+          ? `Dia: ${row.clinicalDateLabel || row.label || 'Sem data'}`
+          : `Sessão: ${row.sessionTooltipLabel || row.sessionDisplayLabel || row.label || 'Sessão'}`}
+      </p>
+      {!isDayGroup && row.sessionShortCode && (
+        <p className="mt-1 text-[11px] font-bold uppercase tracking-widest text-slate-400">Código curto: {row.sessionShortCode}</p>
+      )}
       <p className="mt-2 font-bold text-slate-700">
         Total: <span className="text-slate-900">{formatValue(row.total, metricType)}</span>
       </p>
+      {isDayGroup && (
+        <p className="mt-1 text-[11px] font-bold text-slate-500">Sessões incluídas: {row.sessionCount || 0}</p>
+      )}
       <div className="mt-3 space-y-1 text-slate-500">
         {segments.map((segment) => (
           <p key={segment.key} className="flex items-center justify-between gap-3">
@@ -782,7 +802,7 @@ const ClinicalChangeCard: React.FC<{ change: AbaAggregatedClinicalChange; index:
       <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
         {clinicalChangeCategoryLabels[change.changeCategory]} • {formatDateTime(change.changedAt)} • {sessionLabel}
       </p>
-      <p className="mt-1 text-[11px] text-slate-400">{metricLabels[metricType] || 'Métrica'}</p>
+      <p className="mt-1 text-[11px] font-bold text-slate-500">Métrica analisada: {metricLabels[metricType] || 'Métrica'}</p>
       <div className="mt-3 grid grid-cols-1 gap-2 text-xs sm:grid-cols-3">
         <div className="rounded-md bg-slate-50 px-3 py-2">
           <p className="text-[10px] font-medium uppercase tracking-widest text-slate-400">Anterior</p>
@@ -1597,6 +1617,11 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
           <option value="">Auto</option>
           {availableMetrics.map((id) => <option key={id} value={id}>{metricLabels[id] || id}</option>)}
         </select>
+        {!metricType && (
+          <p className="mt-1 text-[10px] font-medium leading-snug text-slate-400">
+            Métrica automática: cada habilidade usa sua métrica clínica principal.
+          </p>
+        )}
       </div>
       <div className="flex items-end gap-2">
         <label className="flex min-h-[44px] flex-1 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600">
@@ -2186,7 +2211,7 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
               </div>
               <p className="text-sm font-bold text-slate-900">{clinicalItemLabel(point)}</p>
               <p className="mt-1 text-xs text-slate-500">
-                {metricLabels[String(point.metricType || '')] || 'Métrica'}: {formatClinicalValue(point.value ?? point.metricValue, point.metricType, point.currentStatus || point.masteryStatus || point.statusLabel)} · anterior {formatClinicalValue(point.previousValue, point.metricType, (point as any).previousStatus)} · delta <span className={`font-black ${changeStatePresentation(point).strongText}`}>{formatDelta(point)}</span> · <span className={`font-black ${changeStatePresentation(point).text}`}>{changeStatePresentation(point).label}</span>
+                Métrica analisada: {metricLabels[String(point.metricType || '')] || 'Métrica'} · atual {formatClinicalValue(point.value ?? point.metricValue, point.metricType, point.currentStatus || point.masteryStatus || point.statusLabel)} · anterior {formatClinicalValue(point.previousValue, point.metricType, (point as any).previousStatus)} · delta <span className={`font-black ${changeStatePresentation(point).strongText}`}>{formatDelta(point)}</span> · <span className={`font-black ${changeStatePresentation(point).text}`}>{changeStatePresentation(point).label}</span>
               </p>
             </div>
           ))}

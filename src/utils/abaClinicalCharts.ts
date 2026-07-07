@@ -118,7 +118,15 @@ export type AbaAggregatedClinicalChangeGroup = {
   groupKey: string;
   groupBy: 'session' | 'day';
   label: string;
+  groupLabel?: string;
   sessionId?: string | null;
+  sessionDisplayLabel?: string | null;
+  sessionTooltipLabel?: string | null;
+  sessionShortCode?: string | null;
+  sessionCount?: number;
+  clinicalDate?: string;
+  clinicalDateLabel?: string;
+  clinicalDateShortLabel?: string;
   date: string;
   sortAt: string;
   totalChanges: number;
@@ -202,6 +210,16 @@ export type AbaBehaviorCompositionRow = {
   groupKey: string;
   groupBy: 'session' | 'day';
   label: string;
+  groupLabel?: string;
+  sessionId?: string | null;
+  sessionIds?: string[];
+  sessionDisplayLabel?: string | null;
+  sessionTooltipLabel?: string | null;
+  sessionShortCode?: string | null;
+  sessionCount?: number;
+  clinicalDate?: string;
+  clinicalDateLabel?: string;
+  clinicalDateShortLabel?: string;
   sortAt: string;
   total: number;
   segments: AbaBehaviorCompositionSegment[];
@@ -670,18 +688,86 @@ const behaviorCompositionDateValue = (point: any) =>
   point?.created_at ||
   '';
 
-const behaviorCompositionDayKey = (value: unknown) => {
+const padChartDatePart = (value: number) => String(value).padStart(2, '0');
+
+export const buildCanonicalChartDayKey = (value: unknown) => {
   const raw = String(value || '');
   if (!raw) return 'sem-data';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
   const date = new Date(raw);
-  if (!Number.isNaN(date.getTime())) return date.toISOString().slice(0, 10);
+  if (!Number.isNaN(date.getTime())) {
+    return `${date.getFullYear()}-${padChartDatePart(date.getMonth() + 1)}-${padChartDatePart(date.getDate())}`;
+  }
   return raw.slice(0, 10) || 'sem-data';
 };
 
-const behaviorCompositionDayLabel = (key: string) => {
+export const formatCanonicalChartDayLabel = (key: string, options: { full?: boolean } = {}) => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(key)) return key === 'sem-data' ? 'Sem data' : key;
-  const [, month, day] = key.split('-');
-  return `${day}/${month}`;
+  const [year, month, day] = key.split('-');
+  return options.full ? `${day}/${month}/${year}` : `${day}/${month}`;
+};
+
+export const buildAbaSessionShortCode = (sessionId: unknown) => {
+  const clean = String(sessionId || '').replace(/^session[-_]?/i, '').replace(/[^a-z0-9]/gi, '');
+  return clean ? clean.slice(-6).toUpperCase() : '';
+};
+
+export const buildSessionDisplayLabel = (input: {
+  sessionId?: string | null;
+  changedAt?: string | null;
+  fallbackIndex?: number;
+}) => {
+  const date = new Date(input.changedAt || 0);
+  const shortCode = buildAbaSessionShortCode(input.sessionId);
+  if (Number.isNaN(date.getTime())) {
+    const fallback = Number.isFinite(Number(input.fallbackIndex)) ? `Sessão ${Number(input.fallbackIndex) + 1}` : 'Sessão';
+    return {
+      label: shortCode ? `${fallback} cód. ${shortCode}` : fallback,
+      tooltipLabel: shortCode ? `${fallback} cód. ${shortCode}` : fallback,
+      shortCode
+    };
+  }
+  const day = date.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+  const fullDay = date.toLocaleDateString('pt-BR');
+  const time = date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  return {
+    label: `${day} · ${time}`,
+    tooltipLabel: `${fullDay} às ${time}`,
+    shortCode
+  };
+};
+
+const withHumanSessionLabelCollisions = <
+  T extends {
+    groupBy: 'session' | 'day';
+    label: string;
+    sessionDisplayLabel?: string | null;
+    sessionTooltipLabel?: string | null;
+    sessionShortCode?: string | null;
+  }
+>(rows: T[]) => {
+  const counts = new Map<string, number>();
+  rows.forEach((row) => {
+    if (row.groupBy !== 'session') return;
+    const label = row.sessionDisplayLabel || row.label || 'Sessão';
+    counts.set(label, (counts.get(label) || 0) + 1);
+  });
+  const seen = new Map<string, number>();
+  return rows.map((row) => {
+    if (row.groupBy !== 'session') return row;
+    const baseLabel = row.sessionDisplayLabel || row.label || 'Sessão';
+    if ((counts.get(baseLabel) || 0) <= 1) return { ...row, label: baseLabel, groupLabel: baseLabel };
+    const next = (seen.get(baseLabel) || 0) + 1;
+    seen.set(baseLabel, next);
+    const label = `${baseLabel} · #${next}`;
+    return {
+      ...row,
+      label,
+      groupLabel: label,
+      sessionDisplayLabel: label,
+      sessionTooltipLabel: row.sessionTooltipLabel ? `${row.sessionTooltipLabel} · #${next}` : label
+    };
+  });
 };
 
 const behaviorCompositionBehaviorId = (point: any) =>
@@ -779,7 +865,16 @@ export function buildBehaviorCompositionStack(
 
   const grouped = new Map<string, {
     label: string;
+    groupLabel: string;
     sortAt: string;
+    sessionId?: string | null;
+    sessionIds: Set<string>;
+    sessionDisplayLabel?: string | null;
+    sessionTooltipLabel?: string | null;
+    sessionShortCode?: string | null;
+    clinicalDate: string;
+    clinicalDateLabel: string;
+    clinicalDateShortLabel: string;
     segments: Map<string, {
       key: string;
       label: string;
@@ -791,25 +886,50 @@ export function buildBehaviorCompositionStack(
 
   filtered.forEach((point, index) => {
     const dateValue = behaviorCompositionDateValue(point);
-    const dayKey = behaviorCompositionDayKey(dateValue);
+    const dayKey = buildCanonicalChartDayKey(dateValue);
+    const sessionId = String(point?.sessionId || point?.session_id || '').trim() || null;
+    const sessionLabel = buildSessionDisplayLabel({ sessionId, changedAt: String(dateValue || ''), fallbackIndex: index });
     const groupKey = groupBy === 'day'
       ? `day:${dayKey}`
-      : `session:${String(point?.sessionId || point?.session_id || dayKey || index).trim() || index}`;
+      : `session:${sessionId || String(dateValue || dayKey || index).trim() || index}`;
     const groupLabel = groupBy === 'day'
-      ? behaviorCompositionDayLabel(dayKey)
-      : String(point?.sessionLabel || point?.session_label || point?.sessionId || point?.session_id || behaviorCompositionDayLabel(dayKey) || `Sessao ${index + 1}`).trim();
+      ? formatCanonicalChartDayLabel(dayKey)
+      : sessionLabel.label;
     if (!grouped.has(groupKey)) {
       grouped.set(groupKey, {
-        label: groupLabel || 'Sessao',
+        label: groupLabel || 'Sessão',
+        groupLabel: groupLabel || 'Sessão',
         sortAt: String(dateValue || dayKey || index),
+        sessionId,
+        sessionIds: new Set(),
+        sessionDisplayLabel: groupBy === 'session' ? sessionLabel.label : null,
+        sessionTooltipLabel: groupBy === 'session' ? sessionLabel.tooltipLabel : null,
+        sessionShortCode: groupBy === 'session' ? sessionLabel.shortCode : null,
+        clinicalDate: dayKey,
+        clinicalDateLabel: formatCanonicalChartDayLabel(dayKey, { full: true }),
+        clinicalDateShortLabel: formatCanonicalChartDayLabel(dayKey),
         segments: new Map()
       });
+    }
+    const group = grouped.get(groupKey)!;
+    if (sessionId) group.sessionIds.add(sessionId);
+    else if (dateValue) group.sessionIds.add(String(dateValue));
+    const currentSort = new Date(group.sortAt || 0).getTime();
+    const nextSort = new Date(String(dateValue || 0)).getTime();
+    if (!Number.isNaN(nextSort) && (Number.isNaN(currentSort) || nextSort < currentSort)) {
+      group.sortAt = String(dateValue || group.sortAt);
+      if (groupBy === 'session') {
+        group.label = groupLabel || group.label;
+        group.groupLabel = group.label;
+        group.sessionDisplayLabel = sessionLabel.label;
+        group.sessionTooltipLabel = sessionLabel.tooltipLabel;
+      }
     }
     const behaviorId = behaviorCompositionBehaviorId(point);
     const label = behaviorCompositionBehaviorLabel(point);
     const sourceKey = behaviorId || normalizeContextKey(label) || label;
     const seriesKey = selectedKeys.has(sourceKey) ? seriesKeyBySource.get(sourceKey) || sourceKey : 'behavior_other';
-    const segment = grouped.get(groupKey)!.segments.get(seriesKey) || {
+    const segment = group.segments.get(seriesKey) || {
       key: seriesKey,
       label: selectedKeys.has(sourceKey) ? label : 'Outros comportamentos',
       behaviorId: selectedKeys.has(sourceKey) ? behaviorId : null,
@@ -820,7 +940,7 @@ export function buildBehaviorCompositionStack(
     if (!segment.contextPattern && selectedKeys.has(sourceKey)) {
       segment.contextPattern = behaviorCompositionPatternFor(point, patternById, patternByName);
     }
-    grouped.get(groupKey)!.segments.set(seriesKey, segment);
+    group.segments.set(seriesKey, segment);
   });
 
   const rows = Array.from(grouped.entries())
@@ -844,6 +964,16 @@ export function buildBehaviorCompositionStack(
         groupKey,
         groupBy,
         label: group.label,
+        groupLabel: group.groupLabel,
+        sessionId: group.sessionId || null,
+        sessionIds: Array.from(group.sessionIds),
+        sessionDisplayLabel: group.sessionDisplayLabel || null,
+        sessionTooltipLabel: group.sessionTooltipLabel || null,
+        sessionShortCode: group.sessionShortCode || null,
+        sessionCount: group.sessionIds.size || undefined,
+        clinicalDate: group.clinicalDate,
+        clinicalDateLabel: group.clinicalDateLabel,
+        clinicalDateShortLabel: group.clinicalDateShortLabel,
         sortAt: group.sortAt,
         total: round2(segments.reduce((sum, segment) => sum + segment.value, 0)) || 0,
         segments,
@@ -859,7 +989,7 @@ export function buildBehaviorCompositionStack(
     .sort((a, b) => new Date(a.sortAt || 0).getTime() - new Date(b.sortAt || 0).getTime());
 
   return {
-    rows,
+    rows: withHumanSessionLabelCollisions(rows),
     series: series.map(({ sourceKey, ...item }: any) => item)
   };
 }
@@ -955,15 +1085,11 @@ const rawClinicalMagnitudeFor = (point: any) => {
 };
 
 const aggregateDateKey = (value: any) => {
-  const date = new Date(value || 0);
-  if (Number.isNaN(date.getTime())) return 'sem-data';
-  return date.toISOString().slice(0, 10);
+  return buildCanonicalChartDayKey(value);
 };
 
 const aggregateDateLabel = (value: any) => {
-  const date = new Date(value || 0);
-  if (Number.isNaN(date.getTime())) return 'Sem data';
-  return date.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+  return formatCanonicalChartDayLabel(aggregateDateKey(value));
 };
 
 export function aggregateClinicalChangesBySession(
@@ -973,17 +1099,19 @@ export function aggregateClinicalChangesBySession(
   const groupBy = options.groupBy || 'session';
   const visualMagnitudeCap = Math.max(1, Number(options.visualMagnitudeCap || 120));
   const groups = new Map<string, AbaAggregatedClinicalChangeGroup>();
+  const sessionIdsByGroup = new Map<string, Set<string>>();
 
-  for (const point of Array.isArray(points) ? points : []) {
+  for (const [index, point] of (Array.isArray(points) ? points : []).entries()) {
     const changedAt = String(point?.changedAt || point?.changed_at || '');
     const sessionId = String(point?.sessionId || point?.session_id || '').trim() || null;
+    const date = aggregateDateKey(changedAt);
+    const sessionLabel = buildSessionDisplayLabel({ sessionId, changedAt, fallbackIndex: index });
     const groupKey = groupBy === 'day'
-      ? `day:${aggregateDateKey(changedAt)}`
-      : `session:${sessionId || aggregateDateKey(changedAt)}`;
+      ? `day:${date}`
+      : `session:${sessionId || changedAt || date || index}`;
     const category = clinicalChangeCategoryFor(point);
     const rawMagnitude = rawClinicalMagnitudeFor(point);
     const visualMagnitude = Math.min(rawMagnitude, visualMagnitudeCap);
-    const date = aggregateDateKey(changedAt);
     const change = {
       ...(point as AbaSessionMetricSnapshot),
       changeCategory: category,
@@ -998,8 +1126,16 @@ export function aggregateClinicalChangesBySession(
         groupBy,
         label: groupBy === 'day'
           ? aggregateDateLabel(changedAt)
-          : `${aggregateDateLabel(changedAt)} ${sessionId ? `#${sessionId.slice(-4)}` : ''}`.trim(),
+          : sessionLabel.label,
+        groupLabel: groupBy === 'day' ? aggregateDateLabel(changedAt) : sessionLabel.label,
         sessionId,
+        sessionDisplayLabel: groupBy === 'session' ? sessionLabel.label : null,
+        sessionTooltipLabel: groupBy === 'session' ? sessionLabel.tooltipLabel : null,
+        sessionShortCode: groupBy === 'session' ? sessionLabel.shortCode : null,
+        sessionCount: undefined,
+        clinicalDate: date,
+        clinicalDateLabel: formatCanonicalChartDayLabel(date, { full: true }),
+        clinicalDateShortLabel: formatCanonicalChartDayLabel(date),
         date,
         sortAt: changedAt || date,
         totalChanges: 0,
@@ -1024,11 +1160,26 @@ export function aggregateClinicalChangesBySession(
         hasRegressionAlert: false,
         hasReviewReady: false
       });
+      sessionIdsByGroup.set(groupKey, new Set());
     }
 
     const group = groups.get(groupKey)!;
+    const sessionSet = sessionIdsByGroup.get(groupKey)!;
+    if (sessionId) sessionSet.add(sessionId);
+    else if (changedAt) sessionSet.add(changedAt);
     if (new Date(changedAt || 0).getTime() < new Date(group.sortAt || 0).getTime()) {
       group.sortAt = changedAt || group.sortAt;
+      group.date = date;
+      group.clinicalDate = date;
+      group.clinicalDateLabel = formatCanonicalChartDayLabel(date, { full: true });
+      group.clinicalDateShortLabel = formatCanonicalChartDayLabel(date);
+      if (groupBy === 'session') {
+        group.label = sessionLabel.label;
+        group.groupLabel = sessionLabel.label;
+        group.sessionDisplayLabel = sessionLabel.label;
+        group.sessionTooltipLabel = sessionLabel.tooltipLabel;
+        group.sessionShortCode = sessionLabel.shortCode;
+      }
     }
     group.totalChanges += 1;
     if (
@@ -1051,7 +1202,7 @@ export function aggregateClinicalChangesBySession(
     group.changes.push(change);
   }
 
-  return Array.from(groups.values())
+  const rows = Array.from(groups.values())
     .map((group) => {
       const sortedChanges = group.changes
         .slice()
@@ -1062,6 +1213,7 @@ export function aggregateClinicalChangesBySession(
         behaviorMagnitude: round2(group.behaviorMagnitude) || 0,
         totalRawMagnitude: round2(group.totalRawMagnitude) || 0,
         totalVisualMagnitude: round2(group.totalVisualMagnitude) || 0,
+        sessionCount: sessionIdsByGroup.get(group.groupKey)?.size || undefined,
         topChange: sortedChanges[0] || null,
         topChanges: sortedChanges.slice(0, 8),
         changes: group.changes.slice().sort((a, b) => {
@@ -1071,6 +1223,7 @@ export function aggregateClinicalChangesBySession(
       };
     })
     .sort((a, b) => new Date(a.sortAt || 0).getTime() - new Date(b.sortAt || 0).getTime());
+  return withHumanSessionLabelCollisions(rows);
 }
 
 export function getClinicalChangeDrilldown(groups: AbaAggregatedClinicalChangeGroup[], groupKey: string) {

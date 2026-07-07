@@ -306,6 +306,73 @@ test('aggregateClinicalChangesBySession agrupa por dia sem misturar eventos brut
   assert.equal(byDay[0].totalChanges, 2);
   assert.equal(byDay[0].skillMagnitude, 20);
   assert.equal(byDay[0].behaviorMagnitude, 40);
+  assert.equal(byDay[0].sessionCount, 2);
+  assert.equal(byDay[0].label, '25/05');
+});
+
+test('aggregateClinicalChangesBySession usa label humano para sessao e nunca UUID bruto no eixo', () => {
+  const sessionId = 'session-1ede0f1a-af0e-4c49-94b4-123456789abc';
+  const [group] = aggregateClinicalChangesBySession([
+    {
+      sessionId,
+      metricType: 'TARGET_TRIAL_COUNT',
+      metricLabel: 'Imita 2 movimentos',
+      changedAt: '2026-06-08T13:53:00.000Z',
+      previousValue: 1,
+      metricValue: 5,
+      deltaValue: 4,
+      deltaPercent: 400,
+      trendDirection: 'IMPROVED',
+      changeStatus: 'CLINICALLY_SIGNIFICANT_CHANGE',
+      metricDirection: 'HIGHER_IS_BETTER'
+    }
+  ], { groupBy: 'session' });
+
+  assert.equal(group.groupKey, `session:${sessionId}`);
+  assert.doesNotMatch(group.label, /session-|1ede0f1a|94b4/i);
+  assert.match(group.label, /\d{2}\/\d{2}/);
+  assert.match(group.sessionTooltipLabel || '', /\d{2}\/\d{2}\/\d{4}/);
+  assert.equal(group.sessionShortCode, '789ABC');
+});
+
+test('aggregateClinicalChangesBySession diferencia sessoes com mesmo horario visivel', () => {
+  const points = [
+    {
+      sessionId: 'session-a-000000000001',
+      metricType: 'TARGET_TRIAL_COUNT',
+      metricLabel: 'Tentativas A',
+      changedAt: '2026-06-08T13:53:00.000Z',
+      previousValue: 1,
+      metricValue: 2,
+      deltaValue: 1,
+      deltaPercent: 100,
+      trendDirection: 'IMPROVED',
+      changeStatus: 'CHANGED',
+      metricDirection: 'HIGHER_IS_BETTER'
+    },
+    {
+      sessionId: 'session-b-000000000002',
+      metricType: 'TARGET_TRIAL_COUNT',
+      metricLabel: 'Tentativas B',
+      changedAt: '2026-06-08T13:53:00.000Z',
+      previousValue: 1,
+      metricValue: 3,
+      deltaValue: 2,
+      deltaPercent: 200,
+      trendDirection: 'IMPROVED',
+      changeStatus: 'CHANGED',
+      metricDirection: 'HIGHER_IS_BETTER'
+    }
+  ];
+  const bySession = aggregateClinicalChangesBySession(points, { groupBy: 'session' });
+  const byDay = aggregateClinicalChangesBySession(points, { groupBy: 'day' });
+
+  assert.equal(bySession.length, 2);
+  assert.notEqual(bySession[0].label, bySession[1].label);
+  assert.match(bySession[0].label, /#1$/);
+  assert.match(bySession[1].label, /#2$/);
+  assert.equal(byDay.length, 1);
+  assert.equal(byDay[0].totalChanges, 2);
 });
 
 test('aggregateClinicalChangesBySession cap visual preserva magnitude real de outlier', () => {
@@ -658,6 +725,35 @@ test('behavior composition stack separates bars by behavior and keeps real conte
   assert.notEqual(result.rows[0].dominantLocation?.value, 'Corredor');
 });
 
+test('behavior composition stack consolida sessoes do mesmo dia em uma barra canonica', () => {
+  const result = buildBehaviorCompositionStack([
+    { id: 'r1', sessionId: 'session-a', behaviorId: 'refusal', metricType: 'BEHAVIOR_FREQUENCY', metricLabel: 'Recusa', value: 2, changedAt: '2026-06-08T13:53:00.000Z' },
+    { id: 'r2', sessionId: 'session-b', behaviorId: 'refusal', metricType: 'BEHAVIOR_FREQUENCY', metricLabel: 'Recusa', value: 1, changedAt: '2026-06-08T18:10:00.000Z' },
+    { id: 'a1', sessionId: 'session-b', behaviorId: 'aggression', metricType: 'BEHAVIOR_FREQUENCY', metricLabel: 'Agressao', value: 1, changedAt: '2026-06-08T18:11:00.000Z' }
+  ], { metricType: 'BEHAVIOR_FREQUENCY', groupBy: 'day' });
+
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.rows[0].groupKey, 'day:2026-06-08');
+  assert.equal(result.rows[0].label, '08/06');
+  assert.equal(result.rows[0].sessionCount, 2);
+  assert.equal(result.rows[0].total, 4);
+  assert.deepEqual(result.rows[0].segments.map((segment) => [segment.label, segment.value]), [
+    ['Recusa', 3],
+    ['Agressao', 1]
+  ]);
+});
+
+test('behavior composition stack usa label humano para sessao', () => {
+  const result = buildBehaviorCompositionStack([
+    { id: 'r1', sessionId: 'session-1ede0f1a-af0e-4c49-94b4-123456789abc', behaviorId: 'refusal', metricType: 'BEHAVIOR_FREQUENCY', metricLabel: 'Recusa', value: 2, changedAt: '2026-06-08T13:53:00.000Z' }
+  ], { metricType: 'BEHAVIOR_FREQUENCY', groupBy: 'session' });
+
+  assert.equal(result.rows.length, 1);
+  assert.doesNotMatch(result.rows[0].label, /session-|1ede0f1a|94b4/i);
+  assert.match(result.rows[0].label, /\d{2}\/\d{2}/);
+  assert.equal(result.rows[0].sessionShortCode, '789ABC');
+});
+
 test('behavior duration composition preserves behavior totals', () => {
   const result = buildBehaviorCompositionStack([
     { id: 'c1', behaviorId: 'crying', metricType: 'BEHAVIOR_DURATION_TOTAL', metricLabel: 'Choro', value: 360, changedAt: '2026-06-25T12:00:00.000Z' },
@@ -694,6 +790,20 @@ test('legendas dos gráficos são reduzidas fora da visão geral consolidada', (
   assert.match(panelCode, /showBehaviorCompositionChart[\s\S]*?<Legend wrapperStyle=\{\{ fontSize: 11, fontWeight: 700 \}\} \/>/m);
   assert.match(panelCode, /\{isCompareResponses && <Legend/);
   assert.match(panelCode, /visibleAggregateBars\.map\(\(bar, index\) => \(/);
+});
+
+test('tooltips diferenciam dia e sessao sem expor id tecnico bruto', () => {
+  assert.match(panelCode, /Dia: \$\{row\.clinicalDateLabel \|\| row\.label \|\| 'Sem data'\}/);
+  assert.match(panelCode, /Sessão: \$\{row\.sessionTooltipLabel \|\| row\.sessionDisplayLabel \|\| row\.label \|\| 'Sessão'\}/);
+  assert.match(panelCode, /Código curto: \{row\.sessionShortCode\}/);
+  assert.match(panelCode, /Sessões incluídas/);
+  assert.doesNotMatch(panelCode, /row\.sessionId\s*\|\|\s*row\.label/);
+});
+
+test('cards de mudanca mostram metrica comparada e modo Auto explicado', () => {
+  assert.match(panelCode, /Métrica analisada: \{metricLabels\[metricType\]/);
+  assert.match(panelCode, /Métrica analisada: \{metricLabels\[String\(point\.metricType \|\| ''\)\]/);
+  assert.match(panelCode, /Métrica automática: cada habilidade usa sua métrica clínica principal\./);
 });
 
 test('mudança clínica tem destaque visual por melhora, estabilidade e regressão', () => {
