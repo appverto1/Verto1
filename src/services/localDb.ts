@@ -307,7 +307,7 @@ export async function markRecordSyncStatus(
     last_updated: nextLastUpdated,
     retry_count: status === 'synced' ? 0 : metadata.retry_count ?? (row as any)?.retry_count ?? 0,
     last_attempt_at: metadata.last_attempt_at ?? (row as any)?.last_attempt_at ?? null,
-    next_retry_at: status === 'synced' || status === 'failed' ? null : metadata.next_retry_at ?? (row as any)?.next_retry_at ?? null,
+    next_retry_at: status === 'synced' || status === 'failed' || status === 'conflict' ? null : metadata.next_retry_at ?? (row as any)?.next_retry_at ?? null,
     last_error: status === 'synced' ? null : metadata.last_error ?? (row as any)?.last_error ?? null
   };
   await db.records.update(id, patch);
@@ -369,7 +369,8 @@ export async function getPendingRecords(): Promise<OfflineRecord[]> {
 
 export async function getFailedSyncRecords(): Promise<OfflineRecord[]> {
   const rows = await db.records.where('sync_status').equals('failed').toArray();
-  const decoded = await Promise.all(rows.map(mapStoredToOfflineRecord));
+  const conflictRows = await db.records.where('sync_status').equals('conflict').toArray();
+  const decoded = await Promise.all([...rows, ...conflictRows].map(mapStoredToOfflineRecord));
   return decoded.filter(Boolean) as OfflineRecord[];
 }
 
@@ -461,6 +462,15 @@ export const syncOfflineData = async () => {
             error: responsePayload?.warning || 'Servidor enfileirou o sync para tentar depois.'
           });
           console.warn(`Server queued ${record.type} sync for later: ${record.id}`, failure);
+        } else if (record.type === 'appointment' && response.status === 409) {
+          const errorMessage = responsePayload?.error || responsePayload?.message || 'Conflito de agenda encontrado ao sincronizar.';
+          await markRecordSyncStatus(record.id, 'conflict', {
+            retry_count: record.retry_count || 0,
+            last_attempt_at: Date.now(),
+            next_retry_at: null,
+            last_error: errorMessage
+          });
+          console.warn(`Marked appointment ${record.id} as CONFLICT during offline sync.`);
         } else {
           console.error(`Server rejected ${record.type} sync:`, responsePayload);
           const retryable = response.status === 408 || response.status === 429 || response.status >= 500;

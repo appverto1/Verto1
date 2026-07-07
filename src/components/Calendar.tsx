@@ -465,6 +465,76 @@ export const calculateCalendarEventVisualLayout = (start: Date, end: Date) => {
     durationMinutes
   };
 };
+
+export type CalendarVisualEventLayout = ReturnType<typeof calculateCalendarEventVisualLayout> & {
+  laneIndex: number;
+  laneCount: number;
+  widthPercent: number;
+  leftPercent: number;
+};
+
+const getVisualEventKey = (event: any, index: number) => String(event?.id || event?.localId || event?.clientAppointmentId || `event-${index}`);
+
+export const calculateCalendarOverlappingEventLayouts = (events: any[] = []): Map<string, CalendarVisualEventLayout> => {
+  const sorted = (Array.isArray(events) ? events : [])
+    .map((event, index) => {
+      const start = event?.start instanceof Date ? event.start : new Date(event?.start || event?.scheduled_at || 0);
+      const end = event?.end instanceof Date ? event.end : new Date(event?.end || event?.scheduled_end_at || 0);
+      return {
+        event,
+        index,
+        key: getVisualEventKey(event, index),
+        start,
+        end,
+        startMs: start.getTime(),
+        endMs: end.getTime()
+      };
+    })
+    .filter((item) => Number.isFinite(item.startMs) && Number.isFinite(item.endMs) && item.endMs > item.startMs)
+    .sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs || a.key.localeCompare(b.key));
+
+  const result = new Map<string, CalendarVisualEventLayout>();
+  const applyGroup = (group: typeof sorted) => {
+    const laneEndTimes: number[] = [];
+    const assignments: Array<typeof sorted[number] & { laneIndex: number }> = [];
+    group.forEach((item) => {
+      let laneIndex = laneEndTimes.findIndex((endMs) => endMs <= item.startMs);
+      if (laneIndex < 0) {
+        laneIndex = laneEndTimes.length;
+        laneEndTimes.push(item.endMs);
+      } else {
+        laneEndTimes[laneIndex] = item.endMs;
+      }
+      assignments.push({ ...item, laneIndex });
+    });
+    const laneCount = Math.max(1, laneEndTimes.length);
+    assignments.forEach((item) => {
+      const base = calculateCalendarEventVisualLayout(item.start, item.end);
+      const widthPercent = 100 / laneCount;
+      result.set(item.key, {
+        ...base,
+        laneIndex: item.laneIndex,
+        laneCount,
+        widthPercent,
+        leftPercent: item.laneIndex * widthPercent
+      });
+    });
+  };
+
+  let group: typeof sorted = [];
+  let groupEnd = Number.NEGATIVE_INFINITY;
+  sorted.forEach((item) => {
+    if (group.length > 0 && item.startMs >= groupEnd) {
+      applyGroup(group);
+      group = [];
+      groupEnd = Number.NEGATIVE_INFINITY;
+    }
+    group.push(item);
+    groupEnd = Math.max(groupEnd, item.endMs);
+  });
+  if (group.length > 0) applyGroup(group);
+  return result;
+};
 const CALENDAR_EVENTS_CACHE_TTL_MS = 60_000;
 const CALENDAR_EVENTS_FOCUS_REFRESH_TTL_MS = 3 * 60_000;
 const CALENDAR_DOMAIN_EVENT_DEBOUNCE_MS = 350;
@@ -2542,6 +2612,7 @@ export const ClinicalAgendaBoard = ({
           {days.map((day) => {
             const key = toDateKey(day);
             const dayEvents = eventsByDate[key] || [];
+            const eventLayouts = calculateCalendarOverlappingEventLayouts(dayEvents);
             const isToday = key === toDateKey(new Date());
             return (
               <div
@@ -2561,20 +2632,25 @@ export const ClinicalAgendaBoard = ({
                   </div>
                 )}
                 {dayEvents.map((event: any, index: number) => {
-                  const { top, height } = calculateCalendarEventVisualLayout(event.start, event.end);
-                  const sameStartIndex = dayEvents.slice(0, index).filter((item: any) => item.time === event.time).length;
+                  const layout = eventLayouts.get(getVisualEventKey(event, index)) || {
+                    ...calculateCalendarEventVisualLayout(event.start, event.end),
+                    laneIndex: 0,
+                    laneCount: 1,
+                    widthPercent: 100,
+                    leftPercent: 0
+                  };
                   return (
                     <div
                       key={event.id}
                       className="absolute z-10 overflow-hidden px-2"
                       style={{
-                        top,
-                        height,
-                        left: `${sameStartIndex * 4 + 4}%`,
-                        right: '4%'
+                        top: layout.top,
+                        height: layout.height,
+                        left: `calc(${layout.leftPercent}% + 4px)`,
+                        width: `calc(${layout.widthPercent}% - 8px)`
                       }}
                     >
-                      {renderEventCard(event, height < 72)}
+                      {renderEventCard(event, layout.height < 72 || layout.laneCount > 1)}
                     </div>
                   );
                 })}

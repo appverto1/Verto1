@@ -852,7 +852,7 @@ export function CoordinatorDashboard({
 
   const [loading, setLoading] = useState(false);
   const [isEditingRooms, setIsEditingRooms] = useState(false);
-  const [newRoom, setNewRoom] = useState({ name: "", specialties: "" });
+  const [newRoom, setNewRoom] = useState({ name: "", specialties: "", preventOverlappingAppointments: true });
   const [editingRoom, setEditingRoom] = useState<any>(null);
 
   const agendaViewPreferenceKey = useMemo(
@@ -3251,6 +3251,8 @@ export function CoordinatorDashboard({
       professional_names: sessionProfessional ? [sessionProfessional] : [],
       room_id: sessionLocationType === "clinica" ? sessionRoom : "",
       room_name: selectedSessionRoom?.name || sessionRoom,
+      room_prevent_overlapping_appointments: selectedSessionRoom?.prevent_overlapping_appointments ?? selectedSessionRoom?.preventOverlappingAppointments,
+      rooms,
       location_type: sessionLocationType,
       date: sessionDate,
       start_time: sessionTime,
@@ -3277,6 +3279,9 @@ export function CoordinatorDashboard({
           professional_names: sessionProfessional ? [sessionProfessional] : [],
           room_id: sessionLocationType === "clinica" ? sessionRoom : null,
           room_name: selectedSessionRoom?.name || sessionRoom,
+          room_prevent_overlapping_appointments:
+            selectedSessionRoom?.prevent_overlapping_appointments ??
+            selectedSessionRoom?.preventOverlappingAppointments,
           location_type: sessionLocationType,
           date: sessionDate,
           start_time: sessionTime,
@@ -5917,19 +5922,25 @@ export function CoordinatorDashboard({
       id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(),
       name: newRoom.name,
       specialties: specialtiesArray,
+      prevent_overlapping_appointments: newRoom.preventOverlappingAppointments !== false,
+      preventOverlappingAppointments: newRoom.preventOverlappingAppointments !== false,
       is_active: true,
       isActive: true,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
     setRooms((prev) => [...prev, room]);
-    setNewRoom({ name: "", specialties: "" });
+    setNewRoom({ name: "", specialties: "", preventOverlappingAppointments: true });
   };
 
   const handleEditRoom = (room: any) => {
     if (!canManageRooms) return;
     setEditingRoom(room);
-    setNewRoom({ name: room.name, specialties: (Array.isArray(room.specialties) ? room.specialties : []).join(", ") });
+    setNewRoom({
+      name: room.name,
+      specialties: (Array.isArray(room.specialties) ? room.specialties : []).join(", "),
+      preventOverlappingAppointments: room.prevent_overlapping_appointments !== false && room.preventOverlappingAppointments !== false
+    });
   };
 
   const handleUpdateRoom = (e: React.FormEvent) => {
@@ -5943,12 +5954,19 @@ export function CoordinatorDashboard({
     setRooms((prev) =>
       prev.map((r) =>
         r.id === editingRoom.id
-          ? { ...r, name: newRoom.name, specialties: specialtiesArray, updated_at: new Date().toISOString() }
+          ? {
+              ...r,
+              name: newRoom.name,
+              specialties: specialtiesArray,
+              prevent_overlapping_appointments: newRoom.preventOverlappingAppointments !== false,
+              preventOverlappingAppointments: newRoom.preventOverlappingAppointments !== false,
+              updated_at: new Date().toISOString()
+            }
           : r,
       ),
     );
     setEditingRoom(null);
-    setNewRoom({ name: "", specialties: "" });
+    setNewRoom({ name: "", specialties: "", preventOverlappingAppointments: true });
   };
 
   const handleDeleteRoom = (id: string) => {
@@ -6746,6 +6764,20 @@ export function CoordinatorDashboard({
                     Especialidades ajudam a filtrar salas, mas são opcionais. Separe por vírgula.
                   </p>
                 </div>
+                <label className="flex items-start gap-3 rounded-2xl border border-slate-100 bg-slate-50 p-4">
+                  <input
+                    type="checkbox"
+                    checked={newRoom.preventOverlappingAppointments !== false}
+                    onChange={(e) => setNewRoom({ ...newRoom, preventOverlappingAppointments: e.target.checked })}
+                    className="mt-1 h-4 w-4 rounded border-slate-300 text-[#7a32fc]"
+                  />
+                  <span>
+                    <span className="block text-xs font-bold text-slate-800">Impedir sobreposição nesta sala</span>
+                    <span className="mt-1 block text-[10px] font-medium leading-relaxed text-slate-400">
+                      Quando ativo, a agenda bloqueia mais de uma consulta no mesmo horário usando esta sala.
+                    </span>
+                  </span>
+                </label>
                 <button
                   type="submit"
                   className="w-full py-4 bg-[#7a32fc] text-white rounded-2xl font-bold text-sm shadow-lg shadow-purple-500/20 hover:scale-[1.02] transition-all active:scale-[0.98]"
@@ -6757,7 +6789,7 @@ export function CoordinatorDashboard({
                     type="button"
                     onClick={() => {
                       setEditingRoom(null);
-                      setNewRoom({ name: "", specialties: "" });
+                      setNewRoom({ name: "", specialties: "", preventOverlappingAppointments: true });
                     }}
                     className="w-full py-2 text-slate-400 text-[10px] font-bold uppercase tracking-widest"
                   >
@@ -6776,6 +6808,7 @@ export function CoordinatorDashboard({
               <div className="grid gap-4">
                 {rooms.map((room) => {
                   const roomActive = room.is_active !== false && room.isActive !== false;
+                  const roomPreventsOverlap = room.prevent_overlapping_appointments !== false && room.preventOverlappingAppointments !== false;
                   return (
                   <div
                     key={room.id}
@@ -6795,6 +6828,13 @@ export function CoordinatorDashboard({
                           )}
                         </h5>
                         <div className="flex flex-wrap gap-1 mt-1">
+                          <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider border ${
+                            roomPreventsOverlap
+                              ? "border-amber-100 bg-amber-50 text-amber-700"
+                              : "border-emerald-100 bg-emerald-50 text-emerald-700"
+                          }`}>
+                            {roomPreventsOverlap ? "Bloqueia sobreposição" : "Permite simultâneas"}
+                          </span>
                           {(Array.isArray(room.specialties) ? room.specialties : []).map((s: string) => (
                             <span
                               key={s}

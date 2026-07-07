@@ -18,11 +18,13 @@ import {
   buildAppointmentDateTime,
   buildRecurrenceDateKeys,
   calculateAppointmentEnd,
+  findScheduleRoomConfig,
   getAppointmentDurationMinutes,
   normalizeAppointmentTime,
   normalizeDurationMinutes,
   normalizeScheduleLocationType,
   resolveRecurringAppointmentBillingFields,
+  roomPreventsOverlappingAppointments,
 } from './utils/scheduling';
 import {
   mapPatientProfileTypeToLegacyPortalType,
@@ -4218,6 +4220,18 @@ export default function App() {
         appointment.room_name ||
         appointment.roomDisplayName ||
         targetRoom;
+      const targetRoomConfig = findScheduleRoomConfig(rooms, targetRoom, targetRoomName);
+      const targetRoomPreventsOverlap = roomPreventsOverlappingAppointments(
+        targetRoomConfig || {
+          name: targetRoomName,
+          prevent_overlapping_appointments:
+            appointmentUpdates.room_prevent_overlapping_appointments ??
+            appointmentUpdates.roomPreventOverlappingAppointments ??
+            appointment.room_prevent_overlapping_appointments ??
+            appointment.roomPreventOverlappingAppointments,
+        },
+        true,
+      );
       const targetProfessional =
         appointmentUpdates.professional ??
         appointment.professional ??
@@ -4270,7 +4284,7 @@ export default function App() {
             `Conflito de Paciente: ${targetPatientName || 'Paciente'} já possui sessão em ${targetDate} às ${item.time}.`,
           );
         }
-        if (sameRoom) {
+        if (sameRoom && targetRoomPreventsOverlap) {
           addConflict(
             conflicts,
             `Conflito de Sala: ${targetRoomName || targetRoom} já está ocupada em ${targetDate} às ${item.time}.`,
@@ -5101,6 +5115,16 @@ export default function App() {
     const roomName = locationType === 'clinica'
       ? String(sess.roomName || sess.room_name || rooms.find((room: any) => String(room?.id || '') === roomId)?.name || roomId).trim()
       : '';
+    const roomConfig = findScheduleRoomConfig(rooms, roomId, roomName);
+    const roomBlocksOverlap = roomPreventsOverlappingAppointments(
+      roomConfig || {
+        name: roomName,
+        prevent_overlapping_appointments:
+          sess.room_prevent_overlapping_appointments ??
+          sess.roomPreventOverlappingAppointments,
+      },
+      true,
+    );
     const professionalName = String(sess.professionalName || sess.professional || '').trim();
     const professionalId = String(sess.professionalId || sess.professional_id || sess.therapistId || sess.therapist_id || '').trim();
     let financialContextType = normalizeAppointmentFinancialContextType(
@@ -5238,7 +5262,7 @@ export default function App() {
           String(item.patientId || item.patient_id || '') === String(pid || '') ||
           String(item.name || item.patientName || '').trim() === String(sess.patientName || '').trim();
 
-        if (sameRoom) {
+        if (sameRoom && roomBlocksOverlap) {
           const message = `${roomName || roomId} já está ocupada das ${item.time} às ${existingEndTime} em ${dateStr}.`;
           if (!conflicts.includes(message)) conflicts.push(message);
         }

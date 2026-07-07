@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { calculateCalendarEventVisualLayout } from '../src/components/Calendar';
+import { calculateCalendarEventVisualLayout, calculateCalendarOverlappingEventLayouts } from '../src/components/Calendar';
 import { formatDisplayDate, formatDisplayDateTime } from '../src/utils/dateFormatting';
 import { resolveAppointmentCancellationState } from '../src/utils/appointmentCancellationState';
 import { getAppointmentPrimaryAction } from '../src/utils/appointmentPrimaryAction';
@@ -424,6 +424,22 @@ test('agenda dia e semana respeitam duracao real em minutos', () => {
   assert.doesNotMatch(calendarCode, /Math\.max\(48,\s*\(\(endMinutes - startMinutes\)/);
   assert.match(calendarCode, /className="absolute z-10 overflow-hidden px-2"/);
   assert.match(calendarCode, /className=\{`group relative h-full min-h-0 w-full overflow-hidden/);
+});
+
+test('agenda dia e semana renderizam consultas simultaneas lado a lado', () => {
+  const layouts = calculateCalendarOverlappingEventLayouts([
+    { id: 'a', start: new Date('2026-07-04T09:00:00'), end: new Date('2026-07-04T09:50:00') },
+    { id: 'b', start: new Date('2026-07-04T09:00:00'), end: new Date('2026-07-04T09:50:00') },
+    { id: 'c', start: new Date('2026-07-04T09:00:00'), end: new Date('2026-07-04T09:50:00') },
+  ]);
+  assert.equal(layouts.get('a')?.laneCount, 3);
+  assert.equal(layouts.get('b')?.laneIndex, 1);
+  assert.equal(layouts.get('c')?.laneIndex, 2);
+  assert.equal(Math.round((layouts.get('a')?.height || 0) * 100) / 100, 46.67);
+  assert.equal(Math.round((layouts.get('a')?.widthPercent || 0) * 100) / 100, 3333 / 100);
+  assert.match(calendarCode, /calculateCalendarOverlappingEventLayouts\(dayEvents\)/);
+  assert.match(calendarCode, /left: `calc\(\$\{layout\.leftPercent\}% \+ 4px\)`/);
+  assert.match(calendarCode, /width: `calc\(\$\{layout\.widthPercent\}% - 8px\)`/);
 });
 
 test('datas visiveis da agenda usam dd/mm/aaaa sem alterar input tecnico', () => {

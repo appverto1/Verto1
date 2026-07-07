@@ -297,6 +297,49 @@ export function appointmentTimesOverlap(startA: any, endA: any, startB: any, end
   return timeToMinutes(startA) < timeToMinutes(endB) && timeToMinutes(endA) > timeToMinutes(startB);
 }
 
+const readBooleanLike = (value: any): boolean | null => {
+  if (typeof value === 'boolean') return value;
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (!normalized) return null;
+  if (['true', '1', 'yes', 'sim', 's'].includes(normalized)) return true;
+  if (['false', '0', 'no', 'nao', 'não', 'n'].includes(normalized)) return false;
+  return null;
+};
+
+export function roomPreventsOverlappingAppointments(room: any, fallback = true): boolean {
+  const explicitPrevent = readBooleanLike(
+    room?.prevent_overlapping_appointments ??
+      room?.preventOverlappingAppointments ??
+      room?.prevent_overlap ??
+      room?.preventOverlap ??
+      room?.blocks_overlap ??
+      room?.blocksOverlap
+  );
+  if (explicitPrevent !== null) return explicitPrevent;
+
+  const explicitAllow = readBooleanLike(
+    room?.allow_overlapping_appointments ??
+      room?.allowOverlappingAppointments ??
+      room?.allow_overlap ??
+      room?.allowOverlap
+  );
+  if (explicitAllow !== null) return !explicitAllow;
+
+  const roomLabel = String(room?.name || room?.label || room?.roomName || room?.room_name || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  if (/(online|tele|remoto|virtual)/.test(roomLabel)) return false;
+  return fallback;
+}
+
+export function findScheduleRoomConfig(rooms: any[] = [], roomId: any, roomName?: any) {
+  const id = String(roomId || '').trim();
+  const name = String(roomName || '').trim().toLowerCase();
+  return (Array.isArray(rooms) ? rooms : []).find((room) => {
+    const currentId = String(room?.id || room?.room_id || room?.roomId || '').trim();
+    const currentName = String(room?.name || room?.roomName || room?.room_name || '').trim().toLowerCase();
+    return (id && currentId === id) || (name && currentName === name);
+  }) || null;
+}
+
 export function isoRangesOverlap(startA: any, endA: any, startB: any, endB: any): boolean {
   const aStart = new Date(startA).getTime();
   const aEnd = new Date(endA).getTime();
@@ -505,6 +548,9 @@ export function checkLocalScheduleConflicts(input: {
   professional_names?: any[];
   room_id?: any;
   room_name?: any;
+  room_prevent_overlapping_appointments?: any;
+  roomPreventOverlappingAppointments?: any;
+  rooms?: any[];
   location_type?: any;
   date?: any;
   start_time?: any;
@@ -526,6 +572,16 @@ export function checkLocalScheduleConflicts(input: {
   const patientName = String(input.patient_name || '').trim();
   const roomId = String(input.room_id || '').trim();
   const roomName = String(input.room_name || roomId || 'Sala').trim();
+  const roomConfig = findScheduleRoomConfig(input.rooms || [], roomId, roomName);
+  const selectedRoomPolicySource = {
+    ...(roomConfig || {}),
+    name: roomConfig?.name || roomName,
+    prevent_overlapping_appointments:
+      roomConfig?.prevent_overlapping_appointments ??
+      roomConfig?.preventOverlappingAppointments ??
+      input.room_prevent_overlapping_appointments ??
+      input.roomPreventOverlappingAppointments
+  };
   const professionalIds = new Set((input.professional_ids || []).map((value) => String(value || '').trim()).filter(Boolean));
   const professionalNames = new Set((input.professional_names || []).map((value) => String(value || '').trim()).filter(Boolean));
   const excludeIds = new Set(
@@ -578,15 +634,26 @@ export function checkLocalScheduleConflicts(input: {
       }
 
       if (locationType === 'clinica' && roomId && getAppointmentRoomId(appointment) === roomId) {
-        addConflict({
-          conflictType: 'room',
-          humanMessage: `${roomName} ja esta ocupada das ${existingStart} as ${existingEnd}.`,
-          blocking: true,
-          date: dateKey,
-          startTime: existingStart,
-          endTime: existingEnd,
-          relatedEventId: String(appointment?.id || '')
-        });
+        const existingRoomPolicySource = {
+          ...selectedRoomPolicySource,
+          prevent_overlapping_appointments:
+            selectedRoomPolicySource.prevent_overlapping_appointments ??
+            appointment?.prevent_overlapping_appointments ??
+            appointment?.preventOverlappingAppointments ??
+            appointment?.room_prevent_overlapping_appointments ??
+            appointment?.roomPreventOverlappingAppointments
+        };
+        if (roomPreventsOverlappingAppointments(existingRoomPolicySource, true)) {
+          addConflict({
+            conflictType: 'room',
+            humanMessage: `${roomName} ja esta ocupada das ${existingStart} as ${existingEnd}.`,
+            blocking: true,
+            date: dateKey,
+            startTime: existingStart,
+            endTime: existingEnd,
+            relatedEventId: String(appointment?.id || '')
+          });
+        }
       }
 
       const existingProfessionalIds = getAppointmentProfessionalIds(appointment);

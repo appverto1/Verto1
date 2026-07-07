@@ -13,6 +13,7 @@ import {
 
 const root = process.cwd();
 const serverCode = readFileSync(join(root, 'server.ts'), 'utf8');
+const localDbCode = readFileSync(join(root, 'src/services/localDb.ts'), 'utf8');
 
 const tests: Array<{ name: string; fn: () => void }> = [];
 const test = (name: string, fn: () => void) => tests.push({ name, fn });
@@ -41,6 +42,8 @@ function conflictFor(overrides: Record<string, any> = {}, appointments = [baseAp
     professional_names: overrides.professional_names ?? ['Terapeuta Ana'],
     room_id: overrides.room_id ?? 'room-2',
     room_name: overrides.room_name ?? 'Sala 2',
+    room_prevent_overlapping_appointments: overrides.room_prevent_overlapping_appointments,
+    rooms: overrides.rooms,
     location_type: overrides.location_type ?? 'clinica',
     date: overrides.date ?? '2026-05-27',
     start_time: overrides.start_time ?? '12:20',
@@ -103,6 +106,22 @@ test('conflito de sala retorna mensagem de sala', () => {
   assert.equal(result.humanMessage, 'Sala 1 ja esta ocupada das 09:00 as 09:30.');
 });
 
+test('sala configurada para permitir sobreposicao nao bloqueia consultas simultaneas', () => {
+  const result = conflictFor({
+    start_time: '09:00',
+    room_id: 'room-1',
+    room_name: 'Sala Online',
+    rooms: [{ id: 'room-1', name: 'Sala Online', prevent_overlapping_appointments: false }],
+  });
+  assert.equal(result.conflicts.some((item) => item.conflictType === 'room'), false);
+  assert.equal(result.hasConflict, false);
+});
+
+test('consultas simultaneas com paciente profissional e sala diferentes sao permitidas', () => {
+  const result = conflictFor({ start_time: '09:00' });
+  assert.equal(result.hasConflict, false);
+});
+
 test('conflito de profissional retorna mensagem de profissional', () => {
   const result = conflictFor({ start_time: '09:10', professional_ids: ['professional-1'] });
   assert.equal(result.conflicts[0].conflictType, 'professional');
@@ -137,7 +156,15 @@ test('payload exige horario HH:mm completo e backend nao usa select estrela', ()
   const routeCode = serverCode.slice(routeStart, routeEnd);
   assert.doesNotMatch(routeCode, /\.select\('\*'\)/);
   assert.match(serverCode, /\.select\(SCHEDULE_CONFLICT_APPOINTMENT_SELECT\)/);
+  assert.match(serverCode, /fetchConflictRooms/);
+  assert.match(serverCode, /prevent_overlapping_appointments/);
   assert.match(serverCode, /BLOCKING_APPOINTMENT_STATUS_QUERY_VALUES/);
+});
+
+test('sync offline de agendamento com conflito fica em status conflict sem duplicar', () => {
+  assert.match(localDbCode, /record\.type === 'appointment' && response\.status === 409/);
+  assert.match(localDbCode, /markRecordSyncStatus\(record\.id, 'conflict'/);
+  assert.match(localDbCode, /Conflito de agenda encontrado ao sincronizar/);
 });
 
 let passed = 0;

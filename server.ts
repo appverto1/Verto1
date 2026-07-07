@@ -93,7 +93,8 @@ import {
   getAppointmentDurationMinutes,
   normalizeAppointmentTime,
   normalizeDurationMinutes,
-  normalizeScheduleLocationType
+  normalizeScheduleLocationType,
+  roomPreventsOverlappingAppointments
 } from './src/utils/scheduling';
 import {
   findSuggestedTissAuthorizationForAppointment,
@@ -4672,6 +4673,33 @@ const SCHEDULE_CONFLICT_APPOINTMENT_SELECT = [
   'source_payload'
 ].join(',');
 
+const CLINIC_ROOM_SELECT = [
+  'id',
+  'organization_id',
+  'clinic_id',
+  'name',
+  'specialties',
+  'description',
+  'capacity',
+  'is_active',
+  'prevent_overlapping_appointments',
+  'created_at',
+  'updated_at'
+].join(',');
+
+const CLINIC_ROOM_LEGACY_SELECT = [
+  'id',
+  'organization_id',
+  'clinic_id',
+  'name',
+  'specialties',
+  'description',
+  'capacity',
+  'is_active',
+  'created_at',
+  'updated_at'
+].join(',');
+
 const TIME_REPORT_APPOINTMENT_SELECT = [
   'id',
   'organization_id',
@@ -8158,6 +8186,15 @@ function validateClinicStateAppointmentsForScheduleConflicts(params: {
         : '';
       const room = roomId ? roomsById.get(roomId) : null;
       const roomName = sanitizeString(appointment?.room_name || appointment?.roomName || room?.name || roomId, 180);
+      const roomPreventsOverlap = roomPreventsOverlappingAppointments({
+        ...(room || {}),
+        name: room?.name || roomName,
+        prevent_overlapping_appointments:
+          room?.prevent_overlapping_appointments ??
+          room?.preventOverlappingAppointments ??
+          appointment?.room_prevent_overlapping_appointments ??
+          appointment?.roomPreventOverlappingAppointments
+      }, true);
       const patientId = sanitizeString(appointment?.patientId || appointment?.patient_id, 120);
       const patientName = sanitizeString(appointment?.patientName || appointment?.patient_name || appointment?.name, 180);
       const professionals = getClinicStateAppointmentProfessionals(appointment);
@@ -8171,6 +8208,7 @@ function validateClinicStateAppointmentsForScheduleConflicts(params: {
         locationType,
         roomId,
         roomName,
+        roomPreventsOverlap,
         patientId,
         patientName,
         professionalIds: professionals.ids,
@@ -8212,7 +8250,8 @@ function validateClinicStateAppointmentsForScheduleConflicts(params: {
         current.locationType === 'clinica' &&
         other.locationType === 'clinica' &&
         current.roomId &&
-        current.roomId === other.roomId;
+        current.roomId === other.roomId &&
+        current.roomPreventsOverlap;
       if (sameRoom) {
         return {
           ok: false,
@@ -30661,6 +30700,51 @@ async function startServer() {
     return rows.map((row: any) => normalizeConflictAppointment(row));
   };
 
+  const fetchConflictRooms = async (clinicId: string, organizationId: string) => {
+    const roomsById = new Map<string, any>();
+    const addRoom = (room: any) => {
+      const id = sanitizeString(room?.id || room?.room_id || room?.roomId, 180);
+      if (!id) return;
+      roomsById.set(id, {
+        ...room,
+        id,
+        name: sanitizeString(room?.name || room?.room_name || room?.roomName, 180),
+        prevent_overlapping_appointments:
+          room?.prevent_overlapping_appointments ??
+          room?.preventOverlappingAppointments ??
+          true,
+      });
+    };
+
+    let tableQuery = supabase
+      .from('clinic_rooms')
+      .select(CLINIC_ROOM_SELECT)
+      .limit(400);
+    if (isUuid(organizationId)) tableQuery = tableQuery.eq('organization_id', organizationId);
+    else if (isUuid(clinicId)) tableQuery = tableQuery.eq('clinic_id', clinicId);
+    const tableResult = await tableQuery;
+    if (!tableResult.error && Array.isArray(tableResult.data)) {
+      tableResult.data.forEach(addRoom);
+    } else if (extractMissingColumnName(tableResult.error) === 'prevent_overlapping_appointments') {
+      let legacyQuery = supabase
+        .from('clinic_rooms')
+        .select(CLINIC_ROOM_LEGACY_SELECT)
+        .limit(400);
+      if (isUuid(organizationId)) legacyQuery = legacyQuery.eq('organization_id', organizationId);
+      else if (isUuid(clinicId)) legacyQuery = legacyQuery.eq('clinic_id', clinicId);
+      const legacyResult = await legacyQuery;
+      if (!legacyResult.error && Array.isArray(legacyResult.data)) legacyResult.data.forEach(addRoom);
+    } else if (tableResult.error && !hasMissingFinancialSchema(tableResult.error)) {
+      throw tableResult.error;
+    }
+
+    const stateResult = await fetchClinicStateWithSchemaFallback({ supabase, clinicId, logger: console });
+    if (!stateResult.error && Array.isArray(stateResult.data?.rooms)) {
+      stateResult.data.rooms.forEach(addRoom);
+    }
+    return Array.from(roomsById.values());
+  };
+
   const checkScheduleConflicts = async (rawInput: any, user: any): Promise<any> => {
     const clinicId = sanitizeString(rawInput?.clinic_id || rawInput?.clinicId || currentClinicId(user), 120);
     const organizationId = sanitizeString(rawInput?.organization_id || rawInput?.organizationId || user?.organizationId || user?.organization_id || clinicId, 120);
@@ -30721,6 +30805,7 @@ async function startServer() {
       appointmentsById.set(sanitizeString(appointment?.id, 180) || `idx-${index}`, appointment);
     });
     const appointments = Array.from(appointmentsById.values());
+    const rooms = await fetchConflictRooms(clinicId, organizationId).catch(() => []);
 
     const result = checkLocalScheduleConflicts({
       appointments,
@@ -30730,6 +30815,7 @@ async function startServer() {
       professional_names: professionalNames,
       room_id: locationType === 'clinica' ? roomId : '',
       room_name: roomName,
+      rooms,
       location_type: locationType,
       date: parsedDates.date,
       start_time: parsedDates.startTime,
@@ -32800,13 +32886,29 @@ async function startServer() {
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
       let query = supabase
         .from('clinic_rooms')
-        .select('id, organization_id, clinic_id, name, specialties, description, capacity, is_active, created_at, updated_at')
+        .select(CLINIC_ROOM_SELECT)
         .order('name', { ascending: true })
         .limit(400);
       if (isUuid(organizationId)) query = query.eq('organization_id', organizationId);
       else if (isUuid(clinicId)) query = query.eq('clinic_id', clinicId);
       const { data, error } = await query;
       if (!error) return res.json({ success: true, data: data || [] });
+      if (extractMissingColumnName(error) === 'prevent_overlapping_appointments') {
+        let legacyQuery = supabase
+          .from('clinic_rooms')
+          .select(CLINIC_ROOM_LEGACY_SELECT)
+          .order('name', { ascending: true })
+          .limit(400);
+        if (isUuid(organizationId)) legacyQuery = legacyQuery.eq('organization_id', organizationId);
+        else if (isUuid(clinicId)) legacyQuery = legacyQuery.eq('clinic_id', clinicId);
+        const legacy = await legacyQuery;
+        if (!legacy.error) {
+          return res.json({
+            success: true,
+            data: (legacy.data || []).map((room: any) => ({ ...room, prevent_overlapping_appointments: true }))
+          });
+        }
+      }
       if (!hasMissingFinancialSchema(error)) throw error;
       const stateResult = await fetchClinicStateWithSchemaFallback({ supabase, clinicId, logger: console });
       return res.json({ success: true, data: Array.isArray(stateResult.data?.rooms) ? stateResult.data.rooms : [], source: 'clinic_state_fallback' });
@@ -32832,12 +32934,15 @@ async function startServer() {
         description: sanitizeString(req.body?.description, 1000) || null,
         capacity: Number.isFinite(Number(req.body?.capacity)) ? Math.max(0, Math.round(Number(req.body.capacity))) : null,
         is_active: req.body?.is_active !== false && req.body?.isActive !== false,
+        prevent_overlapping_appointments:
+          req.body?.prevent_overlapping_appointments !== false &&
+          req.body?.preventOverlappingAppointments !== false,
         updated_at: new Date().toISOString()
       });
       const { data, error } = await supabase
         .from('clinic_rooms')
         .upsert([payload], { onConflict: 'id' })
-        .select('id, organization_id, clinic_id, name, specialties, description, capacity, is_active, created_at, updated_at')
+        .select(CLINIC_ROOM_SELECT)
         .single();
       if (error) {
         if (hasMissingFinancialSchema(error)) return res.status(503).json({ success: false, error: 'Cadastro de salas ainda não está disponível no banco.' });
@@ -32860,13 +32965,20 @@ async function startServer() {
         ...(req.body?.description !== undefined ? { description: sanitizeString(req.body.description, 1000) || null } : {}),
         ...(req.body?.capacity !== undefined ? { capacity: Number.isFinite(Number(req.body.capacity)) ? Math.max(0, Math.round(Number(req.body.capacity))) : null } : {}),
         ...(req.body?.is_active !== undefined || req.body?.isActive !== undefined ? { is_active: req.body?.is_active !== false && req.body?.isActive !== false } : {}),
+        ...(req.body?.prevent_overlapping_appointments !== undefined || req.body?.preventOverlappingAppointments !== undefined
+          ? {
+              prevent_overlapping_appointments:
+                req.body?.prevent_overlapping_appointments !== false &&
+                req.body?.preventOverlappingAppointments !== false
+            }
+          : {}),
         updated_at: new Date().toISOString()
       });
       const { data, error } = await supabase
         .from('clinic_rooms')
         .update(payload)
         .eq('id', roomId)
-        .select('id, organization_id, clinic_id, name, specialties, description, capacity, is_active, created_at, updated_at')
+        .select(CLINIC_ROOM_SELECT)
         .single();
       if (error) {
         if (hasMissingFinancialSchema(error)) return res.status(503).json({ success: false, error: 'Cadastro de salas ainda não está disponível no banco.' });
@@ -32887,7 +32999,7 @@ async function startServer() {
         .from('clinic_rooms')
         .update({ is_active: false, updated_at: new Date().toISOString() })
         .eq('id', roomId)
-        .select('id, organization_id, clinic_id, name, specialties, description, capacity, is_active, created_at, updated_at')
+        .select(CLINIC_ROOM_SELECT)
         .single();
       if (error) {
         if (hasMissingFinancialSchema(error)) return res.status(503).json({ success: false, error: 'Cadastro de salas ainda não está disponível no banco.' });

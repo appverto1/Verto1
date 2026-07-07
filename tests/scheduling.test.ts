@@ -12,6 +12,7 @@ const root = process.cwd();
 const serverCode = readFileSync(join(root, 'server.ts'), 'utf8');
 const migrationCode = readFileSync(join(root, 'supabase/migrations/20260527143000_clinic_rooms_schedule_conflicts_time_reports.sql'), 'utf8');
 const roomSpecialtiesMigrationCode = readFileSync(join(root, 'supabase/migrations/20260528120000_clinic_rooms_specialties.sql'), 'utf8');
+const roomOverlapMigrationCode = readFileSync(join(root, 'supabase/migrations/20260707120000_clinic_room_overlap_policy.sql'), 'utf8');
 const coordinatorCode = readFileSync(join(root, 'src/components/CoordinatorDashboard.tsx'), 'utf8');
 
 const tests: Array<{ name: string; fn: () => void }> = [];
@@ -47,6 +48,52 @@ test('local Clínica exige sala', () => {
   });
   assert.equal(result.hasConflict, false);
   assert.match(serverCode, /Selecione uma sala da clinica|Selecione uma sala da clínica/);
+});
+
+test('sala com sobreposicao liberada nao bloqueia, mas profissional continua bloqueando', () => {
+  const sharedRoom = checkLocalScheduleConflicts({
+    appointments: baseAppointments,
+    patient_id: 'p2',
+    professional_ids: ['t2'],
+    room_id: 'room-aba',
+    room_name: 'Sala ABA compartilhavel',
+    rooms: [{ id: 'room-aba', name: 'Sala ABA compartilhavel', prevent_overlapping_appointments: false }],
+    location_type: 'clinica',
+    date: '2026-05-27',
+    start_time: '08:15',
+    duration_minutes: 30,
+  });
+  assert.equal(sharedRoom.hasConflict, false);
+
+  const sameProfessional = checkLocalScheduleConflicts({
+    appointments: baseAppointments,
+    patient_id: 'p2',
+    professional_ids: ['t1'],
+    room_id: 'room-aba',
+    rooms: [{ id: 'room-aba', prevent_overlapping_appointments: false }],
+    location_type: 'clinica',
+    date: '2026-05-27',
+    start_time: '08:15',
+    duration_minutes: 30,
+  });
+  assert.equal(sameProfessional.conflicts.some((item) => item.conflictType === 'professional'), true);
+});
+
+test('configuracao cadastrada da sala vence payload inseguro', () => {
+  const result = checkLocalScheduleConflicts({
+    appointments: baseAppointments,
+    patient_id: 'p2',
+    professional_ids: ['t2'],
+    room_id: 'room-aba',
+    room_name: 'Sala ABA',
+    room_prevent_overlapping_appointments: false,
+    rooms: [{ id: 'room-aba', name: 'Sala ABA', prevent_overlapping_appointments: true }],
+    location_type: 'clinica',
+    date: '2026-05-27',
+    start_time: '08:15',
+    duration_minutes: 30,
+  });
+  assert.equal(result.conflicts.some((item) => item.conflictType === 'room'), true);
 });
 
 test('detecta conflito de sala sobreposto e permite horário adjacente', () => {
@@ -265,6 +312,8 @@ test('backend expõe endpoint de conflitos, relatórios e queries econômicas', 
   assert.match(serverCode, /app\.get\('\/api\/reports\/time\/patient'/);
   assert.match(serverCode, /app\.get\('\/api\/reports\/time\/professional'/);
   assert.match(serverCode, /\.select\(SCHEDULE_CONFLICT_APPOINTMENT_SELECT\)/);
+  assert.match(serverCode, /fetchConflictRooms/);
+  assert.match(serverCode, /roomPreventsOverlappingAppointments/);
   assert.match(serverCode, /\.select\(TIME_REPORT_APPOINTMENT_SELECT\)/);
   assert.match(serverCode, /exclude_event_ids/);
   assert.doesNotMatch(serverCode, /check-conflicts[\s\S]{0,2400}\.select\('\*'\)/);
@@ -289,6 +338,7 @@ test('migration cria salas, índices e summaries', () => {
   }
   assert.match(roomSpecialtiesMigrationCode, /create table if not exists public\.clinic_rooms/i);
   assert.match(roomSpecialtiesMigrationCode, /alter table public\.clinic_rooms[\s\S]*add column if not exists specialties text/i);
+  assert.match(roomOverlapMigrationCode, /add column if not exists prevent_overlapping_appointments boolean not null default true/i);
 });
 
 test('modal separa local, sala e duração', () => {
@@ -299,6 +349,8 @@ test('modal separa local, sala e duração', () => {
     'Hora de fim',
     'Horário disponível',
     'Conflito encontrado',
+    'Impedir sobreposição nesta sala',
+    'Bloqueia sobreposição',
   ]) {
     assert.match(coordinatorCode, new RegExp(fragment));
   }

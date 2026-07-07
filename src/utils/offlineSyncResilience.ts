@@ -1,4 +1,4 @@
-export type OfflineSyncStatus = 'synced' | 'pending' | 'failed';
+export type OfflineSyncStatus = 'synced' | 'pending' | 'failed' | 'conflict';
 
 export const OFFLINE_SYNC_MAX_RETRIES = 3;
 export const OFFLINE_SYNC_BASE_BACKOFF_MS = 30_000;
