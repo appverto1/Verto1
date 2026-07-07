@@ -1,3 +1,5 @@
+import { formatDisplayDate } from './dateFormatting';
+
 export type AbaMetricDirection = 'HIGHER_IS_BETTER' | 'LOWER_IS_BETTER' | 'STATUS_BASED';
 
 export type AbaMetricType =
@@ -701,10 +703,10 @@ export const buildCanonicalChartDayKey = (value: unknown) => {
   return raw.slice(0, 10) || 'sem-data';
 };
 
-export const formatCanonicalChartDayLabel = (key: string, options: { full?: boolean } = {}) => {
+export const formatCanonicalChartDayLabel = (key: string, options: { full?: boolean; short?: boolean } = {}) => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(key)) return key === 'sem-data' ? 'Sem data' : key;
   const [year, month, day] = key.split('-');
-  return options.full ? `${day}/${month}/${year}` : `${day}/${month}`;
+  return options.short ? `${day}/${month}` : `${day}/${month}/${year}`;
 };
 
 export const buildAbaSessionShortCode = (sessionId: unknown) => {
@@ -727,8 +729,8 @@ export const buildSessionDisplayLabel = (input: {
       shortCode
     };
   }
-  const day = date.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
-  const fullDay = date.toLocaleDateString('pt-BR');
+  const day = formatDisplayDate(date);
+  const fullDay = day;
   const time = date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
   return {
     label: `${day} · ${time}`,

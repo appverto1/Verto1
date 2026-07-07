@@ -46,6 +46,7 @@ import {
   type AbaClinicalChangeCategory,
   type AbaClinicalLineCategory
 } from '../utils/abaClinicalCharts';
+import { formatDisplayDate, formatDisplayDateTime } from '../utils/dateFormatting';
 import { formatSessionLabel, safeDisplayValue } from '../utils/displayLabels';
 
 type AbaClinicalChartsPanelProps = {
@@ -93,6 +94,7 @@ type ChangeDetailMode = 'summary' | 'detail';
 type ChangeTrendFilter = 'all' | 'improved' | 'worsened' | 'alerts';
 type ClinicalChartViewMode = 'stacked' | 'line';
 type LineGroupBy = 'session' | 'day' | 'week';
+type ChangeCountingBucket = 'improved' | 'worsened' | 'stable' | 'alerts' | 'nonComparable';
 
 const chartTabs = [
   { id: 'overview', label: 'Visão geral' },
@@ -331,6 +333,21 @@ const isStableChange = (point: Partial<ChartPoint>) =>
   point.changeStatus === 'NO_CHANGE' ||
   (!isImprovedChange(point) && !isWorsenedChange(point) && point.changeStatus !== 'FIRST_MEASUREMENT');
 
+const isNonComparableChange = (point: Partial<ChartPoint>) =>
+  point.changeStatus === 'FIRST_MEASUREMENT' ||
+  point.trendDirection === 'INSUFFICIENT_DATA' ||
+  point.previousValue === null ||
+  point.previousValue === undefined ||
+  point.previousValue === '';
+
+const changeCountingBucket = (point: Partial<ChartPoint> & { changeCategory?: AbaClinicalChangeCategory }): ChangeCountingBucket => {
+  if (isAlertChange(point)) return 'alerts';
+  if (isNonComparableChange(point)) return 'nonComparable';
+  if (isImprovedChange(point)) return 'improved';
+  if (isWorsenedChange(point)) return 'worsened';
+  return 'stable';
+};
+
 const isClinicallySignificantChange = (point: Partial<ChartPoint>) =>
   point.changeStatus === 'CLINICALLY_SIGNIFICANT_CHANGE' || point.changeStatus === 'REGRESSION_SIGNAL';
 
@@ -395,15 +412,11 @@ const safeNumber = (value: any, fallback = 0) => {
 const round1 = (value: number) => Math.round(value * 10) / 10;
 
 const formatDate = (value: any) => {
-  const date = new Date(value || 0);
-  if (Number.isNaN(date.getTime())) return '-';
-  return date.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+  return formatDisplayDate(value);
 };
 
 const formatDateTime = (value: any) => {
-  const date = new Date(value || 0);
-  if (Number.isNaN(date.getTime())) return '-';
-  return date.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  return formatDisplayDateTime(value);
 };
 
 const valueUnit = (metricType?: string) => {
@@ -1133,9 +1146,10 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
       if (detailDayFilter && dateInputValue(change.changedAt) !== detailDayFilter) return false;
       if (query && !changeSearchText(change).includes(query)) return false;
       if (detailSignificantOnly && !isClinicallySignificantChange(change)) return false;
-      if (detailTrendFilter === 'improved' && !isImprovedChange(change)) return false;
-      if (detailTrendFilter === 'worsened' && !isWorsenedChange(change)) return false;
-      if (detailTrendFilter === 'alerts' && !isAlertChange(change)) return false;
+      const bucket = changeCountingBucket(change);
+      if (detailTrendFilter === 'improved' && bucket !== 'improved') return false;
+      if (detailTrendFilter === 'worsened' && bucket !== 'worsened') return false;
+      if (detailTrendFilter === 'alerts' && bucket !== 'alerts') return false;
       return true;
     });
   }, [
@@ -1152,10 +1166,11 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
 
   const detailKpis = useMemo(() => ({
     total: selectedFilteredChanges.length,
-    improved: selectedFilteredChanges.filter(isImprovedChange).length,
-    worsened: selectedFilteredChanges.filter(isWorsenedChange).length,
-    stable: selectedFilteredChanges.filter(isStableChange).length,
-    alerts: selectedFilteredChanges.filter(isAlertChange).length
+    improved: selectedFilteredChanges.filter((change) => changeCountingBucket(change) === 'improved').length,
+    worsened: selectedFilteredChanges.filter((change) => changeCountingBucket(change) === 'worsened').length,
+    stable: selectedFilteredChanges.filter((change) => changeCountingBucket(change) === 'stable').length,
+    alerts: selectedFilteredChanges.filter((change) => changeCountingBucket(change) === 'alerts').length,
+    nonComparable: selectedFilteredChanges.filter((change) => changeCountingBucket(change) === 'nonComparable').length
   }), [selectedFilteredChanges]);
 
   const detailGroups = useMemo(() => clinicalChangeCategoryOrder
@@ -2240,13 +2255,14 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
               </button>
             </div>
 
-            <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-5">
+            <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-6">
               {[
                 { label: 'Mudanças', value: detailKpis.total, className: 'border-slate-200 bg-slate-50 text-slate-700' },
                 { label: 'Melhoras', value: detailKpis.improved, className: 'border-emerald-200 bg-emerald-50 text-emerald-700' },
                 { label: 'Pioras', value: detailKpis.worsened, className: 'border-red-200 bg-red-50 text-red-700' },
                 { label: 'Estáveis', value: detailKpis.stable, className: 'border-slate-200 bg-white text-slate-600' },
-                { label: 'Alertas', value: detailKpis.alerts, className: 'border-red-200 bg-red-50 text-red-700' }
+                { label: 'Alertas', value: detailKpis.alerts, className: 'border-red-200 bg-red-50 text-red-700' },
+                { label: 'Não comparáveis', value: detailKpis.nonComparable, className: 'border-amber-200 bg-amber-50 text-amber-800' }
               ].map((item) => (
                 <div key={item.label} className={`rounded-lg border p-3 ${item.className}`}>
                   <p className="text-[10px] font-medium uppercase tracking-widest opacity-75">{item.label}</p>
@@ -2254,6 +2270,11 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
                 </div>
               ))}
             </div>
+            {detailKpis.nonComparable > 0 && (
+              <p className="mb-4 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900">
+                Não comparáveis: sem medida anterior suficiente ou primeira medição no período.
+              </p>
+            )}
 
             <div className="mb-4 rounded-lg border border-slate-100 bg-slate-50 p-3">
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2">

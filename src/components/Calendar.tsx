@@ -32,6 +32,7 @@ import {
   Zap
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
+import { formatDisplayDate, formatDisplayDateTime, formatDisplayMonthYear } from '../utils/dateFormatting';
 import { formatMinutesHuman, getActualDurationMinutes, getAppointmentDurationMinutes } from '../utils/scheduling';
 import { resolveMaintenanceTargetDisplay } from '../utils/peiMaintenancePanel';
 import { mergeAppointmentIdentity } from '../utils/appointmentActionUpdates';
@@ -364,7 +365,7 @@ export const DayDetailsModal = ({ isOpen, onClose, date, agenda, onAddSession, o
   
   const appointments = agenda.filter((a: any) => a.date === date && !isDeletedAppointmentEvent(a)).sort((a: any, b: any) => a.time.localeCompare(b.time));
   const dateObj = new Date(date + 'T00:00:00');
-  const dateDisplay = dateObj.toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' });
+  const dateDisplay = formatDisplayDate(dateObj);
 
   return (
     <div className="fixed inset-0 z-[90] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in" onClick={onClose}>
@@ -454,6 +455,16 @@ const LOCATION_FILTERS = [
 const HOUR_START = 7;
 const HOUR_END = 20;
 const HOUR_HEIGHT = 56;
+export const calculateCalendarEventVisualLayout = (start: Date, end: Date) => {
+  const startMinutes = start.getHours() * 60 + start.getMinutes();
+  const endMinutes = end.getHours() * 60 + end.getMinutes();
+  const durationMinutes = Math.max(1, endMinutes - startMinutes);
+  return {
+    top: Math.max(0, ((startMinutes - HOUR_START * 60) / 60) * HOUR_HEIGHT),
+    height: (durationMinutes / 60) * HOUR_HEIGHT,
+    durationMinutes
+  };
+};
 const CALENDAR_EVENTS_CACHE_TTL_MS = 60_000;
 const CALENDAR_EVENTS_FOCUS_REFRESH_TTL_MS = 3 * 60_000;
 const CALENDAR_DOMAIN_EVENT_DEBOUNCE_MS = 350;
@@ -1214,8 +1225,7 @@ const normalizeClinicalEvent = (event: any, roomLookup?: Map<string, any>) => {
   return normalized;
 };
 
-const formatLongDate = (date: Date) =>
-  date.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long' });
+const formatLongDate = (date: Date) => formatDisplayDate(date);
 
 const toggleArrayValue = (values: string[], value: string) =>
   values.includes(value) ? values.filter((item) => item !== value) : [...values, value];
@@ -1652,10 +1662,10 @@ export const ClinicalAgendaBoard = ({
   ]);
 
   const periodLabel = useMemo(() => {
-    if (view === 'month') return activeDate.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
-    if (view === 'day') return activeDate.toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' });
-    const start = visibleRange.start.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' });
-    const end = visibleRange.end.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' });
+    if (view === 'month') return formatDisplayMonthYear(activeDate);
+    if (view === 'day') return formatDisplayDate(activeDate);
+    const start = formatDisplayDate(visibleRange.start);
+    const end = formatDisplayDate(visibleRange.end);
     return `${start} - ${end}`;
   }, [activeDate, view, visibleRange]);
 
@@ -2202,7 +2212,7 @@ export const ClinicalAgendaBoard = ({
       <div>
         <div className="mb-3 flex items-center justify-center">
           <p className={`text-sm font-semibold capitalize ${isDark ? 'text-white' : 'text-slate-900'}`}>
-            {activeDate.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}
+            {formatDisplayMonthYear(activeDate)}
           </p>
         </div>
         <div className="grid grid-cols-7 gap-1 text-center text-[10px] font-bold uppercase text-slate-400">
@@ -2474,7 +2484,7 @@ export const ClinicalAgendaBoard = ({
           clickEvent.stopPropagation();
           openEventDetail(event);
         }}
-        className={`group relative w-full overflow-hidden rounded-xl border p-2 text-left transition-all hover:-translate-y-0.5 hover:shadow-md ${statusColor.card}`}
+        className={`group relative h-full min-h-0 w-full overflow-hidden rounded-xl border ${compact ? 'p-1.5' : 'p-2'} text-left transition-all hover:shadow-md ${statusColor.card}`}
       >
         <div className="pl-1">
           <div className="flex items-start justify-between gap-2">
@@ -2487,7 +2497,7 @@ export const ClinicalAgendaBoard = ({
             </span>
           </div>
           <p className={`mt-1 truncate text-sm font-semibold leading-tight ${compact ? 'text-xs' : ''}`}>{event.patientName}</p>
-          <p className="mt-1 truncate text-[11px] font-medium opacity-85">
+          <p className={`${compact ? 'mt-0.5' : 'mt-1'} truncate text-[11px] font-medium opacity-85`}>
             <span className={`rounded-full border px-1.5 py-0.5 text-[9px] font-bold ${style.badge}`}>{style.label}</span>
             <span className="ml-1">{getRoomDisplayLine(event)}</span>
           </p>
@@ -2517,7 +2527,7 @@ export const ClinicalAgendaBoard = ({
                 <p className={`text-xs font-semibold capitalize ${isToday ? 'text-[#7a32fc]' : isDark ? 'text-slate-300' : 'text-slate-500'}`}>
                   {day.toLocaleDateString('pt-BR', { weekday: 'short' })}
                 </p>
-                <p className={`text-2xl font-bold ${isDark ? 'text-white' : 'text-slate-900'}`}>{day.getDate()}</p>
+                <p className={`text-sm font-bold ${isDark ? 'text-white' : 'text-slate-900'}`}>{formatDisplayDate(day)}</p>
               </div>
             );
           })}
@@ -2551,15 +2561,12 @@ export const ClinicalAgendaBoard = ({
                   </div>
                 )}
                 {dayEvents.map((event: any, index: number) => {
-                  const startMinutes = event.start.getHours() * 60 + event.start.getMinutes();
-                  const endMinutes = event.end.getHours() * 60 + event.end.getMinutes();
-                  const top = Math.max(0, ((startMinutes - HOUR_START * 60) / 60) * HOUR_HEIGHT);
-                  const height = Math.max(48, ((endMinutes - startMinutes) / 60) * HOUR_HEIGHT - 6);
+                  const { top, height } = calculateCalendarEventVisualLayout(event.start, event.end);
                   const sameStartIndex = dayEvents.slice(0, index).filter((item: any) => item.time === event.time).length;
                   return (
                     <div
                       key={event.id}
-                      className="absolute z-10 px-2"
+                      className="absolute z-10 overflow-hidden px-2"
                       style={{
                         top,
                         height,
@@ -3576,7 +3583,7 @@ export const ClinicalAgendaBoard = ({
                             {request.note && <p className={`mt-1 text-xs ${isDark ? 'text-slate-300' : 'text-slate-500'}`}>{request.note}</p>}
                             {!isCancel && requestedStart && !Number.isNaN(requestedStart.getTime()) && (
                               <p className={`mt-1 text-xs font-semibold ${isDark ? 'text-slate-200' : 'text-slate-600'}`}>
-                                Sugestão: {requestedStart.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                                Sugestão: {formatDisplayDateTime(requestedStart)}
                               </p>
                             )}
                           </div>
@@ -3612,13 +3619,13 @@ export const ClinicalAgendaBoard = ({
                   {signatures.slice(0, 2).map((signature: any, index: number) => (
                     <div key={`signature-${index}`} className="rounded-2xl bg-white/80 px-3 py-2 text-sm">
                       <p className="font-semibold text-slate-800">Sessão assinada por {signature.signedByName || 'responsável'}</p>
-                      {signature.signedAt && <p className="mt-0.5 text-xs text-slate-500">{new Date(signature.signedAt).toLocaleString('pt-BR')}</p>}
+                      {signature.signedAt && <p className="mt-0.5 text-xs text-slate-500">{formatDisplayDateTime(signature.signedAt)}</p>}
                     </div>
                   ))}
                   {statusHistory.slice(0, 4).map((entry: any, index: number) => (
                     <div key={`history-${index}`} className="rounded-2xl bg-white/80 px-3 py-2 text-sm">
                       <p className="font-semibold text-slate-800">{entry.label || 'Ação registrada'}</p>
-                      {entry.performedAt && <p className="mt-0.5 text-xs text-slate-500">{new Date(entry.performedAt).toLocaleString('pt-BR')}</p>}
+                      {entry.performedAt && <p className="mt-0.5 text-xs text-slate-500">{formatDisplayDateTime(entry.performedAt)}</p>}
                     </div>
                   ))}
                 </div>

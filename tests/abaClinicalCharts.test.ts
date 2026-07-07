@@ -307,7 +307,7 @@ test('aggregateClinicalChangesBySession agrupa por dia sem misturar eventos brut
   assert.equal(byDay[0].skillMagnitude, 20);
   assert.equal(byDay[0].behaviorMagnitude, 40);
   assert.equal(byDay[0].sessionCount, 2);
-  assert.equal(byDay[0].label, '25/05');
+  assert.equal(byDay[0].label, '25/05/2026');
 });
 
 test('aggregateClinicalChangesBySession usa label humano para sessao e nunca UUID bruto no eixo', () => {
@@ -330,9 +330,48 @@ test('aggregateClinicalChangesBySession usa label humano para sessao e nunca UUI
 
   assert.equal(group.groupKey, `session:${sessionId}`);
   assert.doesNotMatch(group.label, /session-|1ede0f1a|94b4/i);
-  assert.match(group.label, /\d{2}\/\d{2}/);
+  assert.match(group.label, /\d{2}\/\d{2}\/\d{4}/);
   assert.match(group.sessionTooltipLabel || '', /\d{2}\/\d{2}\/\d{4}/);
   assert.equal(group.sessionShortCode, '789ABC');
+});
+
+test('labels e tooltips clinicos usam data completa em dd/mm/aaaa', () => {
+  const [dayGroup] = aggregateClinicalChangesBySession([
+    {
+      sessionId: 'session-1',
+      metricType: 'TARGET_TRIAL_COUNT',
+      metricLabel: 'Tentativas',
+      changedAt: '2026-06-08T13:53:00.000Z',
+      previousValue: 1,
+      metricValue: 5,
+      deltaValue: 4,
+      deltaPercent: 400,
+      trendDirection: 'IMPROVED',
+      changeStatus: 'CHANGED',
+      metricDirection: 'HIGHER_IS_BETTER'
+    }
+  ], { groupBy: 'day' });
+  const [sessionGroup] = aggregateClinicalChangesBySession([
+    {
+      sessionId: 'session-1ede0f1a-af0e-4c49-94b4-123456789abc',
+      metricType: 'TARGET_TRIAL_COUNT',
+      metricLabel: 'Tentativas',
+      changedAt: '2026-06-08T13:53:00.000Z',
+      previousValue: 1,
+      metricValue: 5,
+      deltaValue: 4,
+      deltaPercent: 400,
+      trendDirection: 'IMPROVED',
+      changeStatus: 'CHANGED',
+      metricDirection: 'HIGHER_IS_BETTER'
+    }
+  ], { groupBy: 'session' });
+
+  assert.equal(dayGroup.label, '08/06/2026');
+  assert.equal(dayGroup.clinicalDateLabel, '08/06/2026');
+  assert.match(sessionGroup.label, /08\/06\/2026/);
+  assert.match(sessionGroup.sessionTooltipLabel || '', /08\/06\/2026/);
+  assert.doesNotMatch(sessionGroup.label, /session-1ede0f1a/i);
 });
 
 test('aggregateClinicalChangesBySession diferencia sessoes com mesmo horario visivel', () => {
@@ -609,6 +648,21 @@ test('container responsivo mede dimensoes antes de montar graficos recharts', ()
   assert.match(panelCode, /h-\[360px\] min-w-0 overflow-x-auto[\s\S]*style=\{\{ minWidth: stackedMinWidth \}\}/m);
 });
 
+test('resumo de mudancas fecha a conta com nao comparaveis', () => {
+  assert.match(panelCode, /type ChangeCountingBucket = 'improved' \| 'worsened' \| 'stable' \| 'alerts' \| 'nonComparable'/);
+  assert.match(panelCode, /const isNonComparableChange =/);
+  assert.match(panelCode, /point\.changeStatus === 'FIRST_MEASUREMENT'/);
+  assert.match(panelCode, /point\.trendDirection === 'INSUFFICIENT_DATA'/);
+  assert.match(panelCode, /const changeCountingBucket =/);
+  assert.match(panelCode, /if \(isAlertChange\(point\)\) return 'alerts'/);
+  assert.match(panelCode, /if \(isNonComparableChange\(point\)\) return 'nonComparable'/);
+  assert.match(panelCode, /nonComparable: selectedFilteredChanges\.filter\(\(change\) => changeCountingBucket\(change\) === 'nonComparable'\)\.length/);
+  assert.match(panelCode, /label: 'Não comparáveis'/);
+  assert.match(panelCode, /Não comparáveis: sem medida anterior suficiente ou primeira medição no período/);
+  assert.match(panelCode, /detailTrendFilter === 'improved' && bucket !== 'improved'/);
+  assert.match(panelCode, /detailTrendFilter === 'worsened' && bucket !== 'worsened'/);
+});
+
 let passed = 0;
 test('behavior context patterns identify dominant context without causal language', () => {
   const patterns = analyzeBehaviorContextPatterns([
@@ -734,7 +788,7 @@ test('behavior composition stack consolida sessoes do mesmo dia em uma barra can
 
   assert.equal(result.rows.length, 1);
   assert.equal(result.rows[0].groupKey, 'day:2026-06-08');
-  assert.equal(result.rows[0].label, '08/06');
+  assert.equal(result.rows[0].label, '08/06/2026');
   assert.equal(result.rows[0].sessionCount, 2);
   assert.equal(result.rows[0].total, 4);
   assert.deepEqual(result.rows[0].segments.map((segment) => [segment.label, segment.value]), [

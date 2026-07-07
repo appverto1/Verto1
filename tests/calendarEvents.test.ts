@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { calculateCalendarEventVisualLayout } from '../src/components/Calendar';
+import { formatDisplayDate, formatDisplayDateTime } from '../src/utils/dateFormatting';
 import { resolveAppointmentCancellationState } from '../src/utils/appointmentCancellationState';
 import { getAppointmentPrimaryAction } from '../src/utils/appointmentPrimaryAction';
 
@@ -405,6 +407,32 @@ test('visao mensal prioriza calendario amplo e eventos rolaveis no proprio dia',
   assert.doesNotMatch(calendarCode, /Agenda operacional/);
   assert.doesNotMatch(calendarCode, /\+\{items\.length/);
   assert.doesNotMatch(calendarCode, /openDayPanel/);
+});
+
+test('agenda dia e semana respeitam duracao real em minutos', () => {
+  const fifty = calculateCalendarEventVisualLayout(new Date('2026-07-04T09:00:00'), new Date('2026-07-04T09:50:00'));
+  const sixty = calculateCalendarEventVisualLayout(new Date('2026-07-04T09:00:00'), new Date('2026-07-04T10:00:00'));
+  const thirty = calculateCalendarEventVisualLayout(new Date('2026-07-04T09:30:00'), new Date('2026-07-04T10:00:00'));
+  const ninety = calculateCalendarEventVisualLayout(new Date('2026-07-04T09:00:00'), new Date('2026-07-04T10:30:00'));
+
+  assert.ok(fifty.height < sixty.height);
+  assert.equal(Math.round(fifty.height * 100) / 100, 46.67);
+  assert.equal(sixty.height, 56);
+  assert.equal(thirty.height, 28);
+  assert.equal(ninety.height, 84);
+  assert.equal(thirty.top, 140);
+  assert.doesNotMatch(calendarCode, /Math\.max\(48,\s*\(\(endMinutes - startMinutes\)/);
+  assert.match(calendarCode, /className="absolute z-10 overflow-hidden px-2"/);
+  assert.match(calendarCode, /className=\{`group relative h-full min-h-0 w-full overflow-hidden/);
+});
+
+test('datas visiveis da agenda usam dd/mm/aaaa sem alterar input tecnico', () => {
+  assert.equal(formatDisplayDate('2026-07-04'), '04/07/2026');
+  assert.match(formatDisplayDateTime('2026-07-04T09:00:00'), /^04\/07\/2026 \d{2}:00$/);
+  assert.match(calendarCode, /formatDisplayDate\(activeDate\)/);
+  assert.match(calendarCode, /formatDisplayDateTime\(requestedStart\)/);
+  assert.match(calendarCode, /formatDisplayMonthYear\(activeDate\)/);
+  assert.doesNotMatch(calendarCode, /toLocaleString\('pt-BR', \{ day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' \}\)/);
 });
 
 test('filtro de equipe reutiliza foto de perfil com fallback para iniciais', () => {
