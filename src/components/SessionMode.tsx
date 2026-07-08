@@ -630,7 +630,7 @@ const maintenanceScheduleTargetId = (schedule: any) => String(schedule?.target_i
 const buildSessionGoalFromAvailableMaintenanceSchedule = (schedule: any) => {
   const targetId = maintenanceScheduleTargetId(schedule);
   if (!targetId) return null;
-  const targetName = String(schedule?.targetName || schedule?.target_name || schedule?.target?.name || 'Maintenance Probe').trim();
+  const targetName = String(schedule?.targetName || schedule?.target_name || schedule?.target?.name || 'Sondagem de manutenção').trim();
   return {
     id: targetId,
     target_id: targetId,
@@ -781,6 +781,7 @@ export const SessionMode = ({
   const [mobileFocusMode, setMobileFocusMode] = useState(true);
   const [mobileSelectedGoalKey, setMobileSelectedGoalKey] = useState('');
   const [mobilePromptGridGoalKey, setMobilePromptGridGoalKey] = useState('');
+  const [mobilePromptCategoryByGoalKey, setMobilePromptCategoryByGoalKey] = useState<Record<string, string>>({});
   const [mobileExpandedCriteriaKey, setMobileExpandedCriteriaKey] = useState('');
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const [clinicalDockSheetOpen, setClinicalDockSheetOpen] = useState(false);
@@ -815,6 +816,33 @@ export const SessionMode = ({
     return options.length > 0 ? options : defaultPromptedPromptOptions;
   }, [clinicPromptTypes]);
   const promptedPromptKeySet = useMemo(() => new Set(promptedPromptOptions.map((prompt) => prompt.key)), [promptedPromptOptions]);
+  const promptCategoryBuckets = useMemo(() => {
+    const normalizeCategory = (value: unknown) => String(value || '')
+      .trim()
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, '_');
+    const bucketDefinitions = [
+      { key: 'visual', label: 'Visual', matches: ['visual'] },
+      { key: 'verbal', label: 'Verbal', matches: ['verbal'] },
+      { key: 'gestural_model', label: 'Gestual/Mod.', matches: ['gestual', 'gestural', 'modelo', 'model', 'posicional', 'positional'] },
+      { key: 'physical', label: 'Física', matches: ['fisica', 'physical', 'bloqueio', 'block'] }
+    ];
+    const buckets = bucketDefinitions.map((bucket) => ({ ...bucket, prompts: [] as typeof promptedPromptOptions }));
+    const otherBucket = { key: 'other', label: 'Outras', matches: [] as string[], prompts: [] as typeof promptedPromptOptions };
+    promptedPromptOptions.forEach((prompt) => {
+      const token = [
+        normalizeCategory(prompt.category),
+        normalizeCategory(prompt.key),
+        normalizeCategory(prompt.label),
+        normalizeCategory(prompt.name)
+      ].join('_');
+      const bucket = buckets.find((item) => item.matches.some((match) => token.includes(match))) || otherBucket;
+      bucket.prompts.push(prompt);
+    });
+    return [...buckets, otherBucket].filter((bucket) => bucket.prompts.length > 0);
+  }, [promptedPromptOptions]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1210,7 +1238,7 @@ export const SessionMode = ({
         available: result?.success === false ? [] : Array.isArray(payload?.available) ? payload.available : [],
         upcoming: result?.success === false ? [] : Array.isArray(payload?.upcoming) ? payload.upcoming : [],
         loaded: true,
-        error: result?.success === false ? (result?.error || 'Não foi possível carregar Maintenance Probes.') : '',
+        error: result?.success === false ? (result?.error || 'Não foi possível carregar sondagens de manutenção.') : '',
         diagnostics: payload?.diagnostics || result?.diagnostics || null
       };
       if (import.meta.env.DEV) {
@@ -1235,7 +1263,7 @@ export const SessionMode = ({
           source
         });
       }
-      return { available: [], upcoming: [], loaded: true, error: 'Não foi possível carregar Maintenance Probes.' };
+      return { available: [], upcoming: [], loaded: true, error: 'Não foi possível carregar sondagens de manutenção.' };
     }
   }, [activeAppointmentId, maintenanceTimeZone, patientId, sessionClinicalDate, sessionCompleted, sessionId]);
 
@@ -1842,10 +1870,10 @@ export const SessionMode = ({
     const resolvedTargetId = goalId || String(activeProbe?.targetId || '').trim();
     const resolvedScheduleId = String(activeProbe?.scheduleId || activeMaintenanceScheduleId || '').trim();
     if (!isRealClinicalId(resolvedTargetId) || !isRealClinicalId(resolvedScheduleId)) {
-      setSessionWarning('Nao foi possivel registrar Maintenance Probe sem habilidade e sondagem vinculadas.');
+      setSessionWarning('Nao foi possivel registrar sondagem de manutencao sem habilidade e sondagem vinculadas.');
       showClinicalToast({
         variant: 'error',
-        title: 'Maintenance Probe incompleta',
+        title: 'Sondagem de manutencao incompleta',
         subtitle: 'Selecione uma sondagem disponivel com target e schedule reais.'
       }, 'error');
       return { success: false, error: 'missing_real_maintenance_probe_link' };
@@ -1992,7 +2020,7 @@ export const SessionMode = ({
     } else {
       showClinicalToast({
         variant: 'success',
-        title: 'Maintenance Probe registrada.',
+        title: 'Sondagem de manutencao registrada.',
         subtitle: 'Resultado salvo no registro clínico.'
       });
     }
@@ -2059,10 +2087,10 @@ export const SessionMode = ({
       const maintenanceTargetId = String(record.targetId || activeProbe?.targetId || '').trim();
       if (!isRealClinicalId(maintenanceTargetId) || !isRealClinicalId(maintenanceScheduleId)) {
         updateRecordStatus(record.id, 'error');
-        setSessionWarning('Nao foi possivel converter a tentativa sem Maintenance Probe disponivel vinculada.');
+        setSessionWarning('Nao foi possivel converter a tentativa sem sondagem de manutencao disponivel vinculada.');
         showClinicalToast({
           variant: 'error',
-          title: 'Maintenance Probe incompleta',
+          title: 'Sondagem de manutencao incompleta',
           subtitle: 'Use uma sondagem disponivel antes de converter ou editar este registro.'
         }, 'error');
         return;
@@ -2261,10 +2289,10 @@ export const SessionMode = ({
       sessionId.startsWith('draft-') ||
       !canRecordInAbaSession({ sessionCompleted, status: activeSession?.status })
     )) {
-      setSessionWarning('Nao foi possivel registrar Maintenance Probe sem target e schedule reais na sessao ativa.');
+      setSessionWarning('Nao foi possivel registrar sondagem de manutencao sem meta e agenda reais na sessao ativa.');
       showClinicalToast({
         variant: 'error',
-        title: 'Nao foi possivel ativar a Maintenance Probe.',
+        title: 'Nao foi possivel ativar a sondagem de manutencao.',
         subtitle: 'A sondagem precisa estar disponivel nesta sessao antes da tentativa.'
       }, 'error');
       return;
@@ -2438,10 +2466,10 @@ export const SessionMode = ({
       sessionId.startsWith('draft-') ||
       !canRecordInAbaSession({ sessionCompleted, status: activeSession?.status })
     ) {
-      setPlanActionMessage('Maintenance Probe indisponível nesta sessão.');
+      setPlanActionMessage('Sondagem de manutencao indisponivel nesta sessao.');
       showClinicalToast({
         variant: 'error',
-        title: 'Nao foi possivel ativar a Maintenance Probe.',
+        title: 'Nao foi possivel ativar a sondagem de manutencao.',
         subtitle: 'A sondagem precisa estar disponivel nesta sessao com target e schedule reais.'
       }, 'error');
       return false;
@@ -2482,8 +2510,8 @@ export const SessionMode = ({
     }
     setCollectionType('maintenance_probe');
     if (goal?.id) setActiveCriteria(goal.id);
-    setPlanActionMessage('Maintenance Probe ativa para a proxima tentativa.');
-    setMaintenanceProbeFeedback('Maintenance Probe ativa para a proxima tentativa.');
+    setPlanActionMessage('Sondagem de manutencao ativa para a proxima tentativa.');
+    setMaintenanceProbeFeedback('Sondagem de manutencao ativa para a proxima tentativa.');
     if (maintenanceProbeFeedbackTimerRef.current) window.clearTimeout(maintenanceProbeFeedbackTimerRef.current);
     maintenanceProbeFeedbackTimerRef.current = window.setTimeout(() => {
       setMaintenanceProbeFeedback('');
@@ -2492,7 +2520,7 @@ export const SessionMode = ({
     }, 1500);
     showClinicalToast({
       variant: 'success',
-      title: 'Maintenance Probe ativa para a proxima tentativa.',
+      title: 'Sondagem de manutencao ativa para a proxima tentativa.',
       subtitle: maintenanceTargetLabel
     }, 'none');
     return true;
@@ -2507,10 +2535,10 @@ export const SessionMode = ({
     setManualRegularOverrideTargetId(null);
     setCollectionType(lastRegularTrialType || 'dtt');
     setMaintenanceProbeFeedback('');
-    setPlanActionMessage('Uso da Maintenance Probe cancelado.');
+    setPlanActionMessage('Uso da sondagem de manutencao cancelado.');
     showClinicalToast({
       variant: 'info',
-      title: 'Uso da Maintenance Probe cancelado.',
+      title: 'Uso da sondagem de manutencao cancelado.',
       subtitle: 'A proxima tentativa volta ao tipo regular.'
     }, 'none');
   };
@@ -4116,7 +4144,7 @@ export const SessionMode = ({
         id: scheduleId || targetId,
         scheduleId,
         targetId,
-        name: display.targetDisplayName || schedule?.targetName || schedule?.target_name || 'Maintenance Probe',
+        name: display.targetDisplayName || schedule?.targetName || schedule?.target_name || 'Sondagem de manutenção',
         protocol: display.protocolDisplayName,
         domain: display.domainDisplayName,
         contextLabel: display.contextLabel,
@@ -4168,7 +4196,7 @@ export const SessionMode = ({
       .map((schedule: any) => ({
         id: `upcoming-${String(schedule?.id || schedule?.scheduleId || schedule?.targetId || schedule?.target_id || '')}`,
         targetId: maintenanceScheduleTargetId(schedule) || null,
-        name: String(schedule?.targetName || schedule?.target_name || schedule?.target?.name || 'Maintenance Probe').trim(),
+        name: String(schedule?.targetName || schedule?.target_name || schedule?.target?.name || 'Sondagem de manutenção').trim(),
         nextSchedule: schedule,
         availabilityReason: schedule?.availabilityReason || null
       }))
@@ -4341,7 +4369,7 @@ export const SessionMode = ({
           ? 'Aguardando a proxima sessao do paciente para sugerir o vinculo.'
           : hasPendingLink
             ? 'Sem sessao vinculada agora; a pendencia foi preservada.'
-            : 'Maintenance Probe salva na agenda clinica.'
+            : 'Sondagem de manutenção salva na agenda clinica.'
       }, 'none');
     } finally {
       setMaintenanceScheduleSaving(false);
@@ -4432,7 +4460,7 @@ export const SessionMode = ({
       const goal = sessionGoals.find((entry: any) => goalTargetId(entry) === itemTargetId);
       const applied = activateMaintenanceProbeMode(goal);
       if (!applied) return;
-      setPlanActionMessage('Maintenance Probe ativa para a proxima tentativa.');
+      setPlanActionMessage('Sondagem de manutencao ativa para a proxima tentativa.');
     } else {
       if (item?.planned_trial_type) handleCollectionTypeChange(String(item.planned_trial_type));
       setPlanActionMessage('Item do plano selecionado para esta sessao.');
@@ -5596,7 +5624,7 @@ export const SessionMode = ({
         disabled={disabled}
         data-aba-dock-shortcut={shortcut.behaviorId}
         data-aba-dock-duration-active={isActive ? 'true' : 'false'}
-        className={`relative min-h-[48px] overflow-visible rounded-[18px] border px-3 py-2 text-left shadow-lg transition-all active:scale-[0.98] disabled:opacity-60 ${getDockButtonClass(shortcut.color, isActive || crisisMode)} ${isActive ? 'ring-2 ring-amber-300 ring-offset-2 ring-offset-white animate-pulse' : ''} ${microFeedback[feedbackKey] ? 'scale-[0.98] ring-4 ring-white/70' : ''} ${compact ? 'min-h-[56px]' : ''}`}
+        className={`relative min-h-[44px] overflow-visible rounded-[16px] border px-2 py-1.5 text-center shadow-sm transition-all active:scale-[0.98] disabled:opacity-60 ${getDockButtonClass(shortcut.color, isActive || crisisMode)} ${isActive ? 'ring-2 ring-amber-300 ring-offset-2 ring-offset-white animate-pulse' : ''} ${microFeedback[feedbackKey] ? 'scale-[0.98] ring-4 ring-white/70' : ''} ${compact ? 'min-h-[50px]' : ''}`}
       >
         {isFrequencyLike && microFeedback[feedbackKey] === 'plus' && (
           <span className="pointer-events-none absolute -top-3 right-2 z-20 animate-pop rounded-full bg-emerald-500 px-2 py-0.5 text-[10px] font-black text-white shadow-lg shadow-emerald-900/20">+1</span>
@@ -5604,8 +5632,8 @@ export const SessionMode = ({
         {microFeedback[feedbackKey] === 'pulse' && (
           <span className="pointer-events-none absolute -top-3 right-2 z-20 animate-pop rounded-full bg-white px-2 py-0.5 text-[10px] font-black text-[#1B254B] shadow-lg">ON</span>
         )}
-        <span className="flex items-center justify-between gap-1.5 text-[11px] font-black uppercase tracking-widest">
-          <span className="inline-flex min-w-0 items-center gap-1.5">
+        <span className="flex flex-col items-center justify-center gap-0.5 text-[10px] font-black uppercase tracking-widest">
+          <span className="inline-flex min-w-0 items-center gap-1">
             {method === 'duration' ? (openDuration ? <Square size={13} /> : <Play size={13} />) : <Plus size={13} />}
             <span className="truncate">{label}</span>
           </span>
@@ -5627,7 +5655,7 @@ export const SessionMode = ({
       data-aba-clinical-dock-compact={clinicalDockCompact ? 'true' : 'false'}
       className={`fixed inset-x-0 bottom-0 z-[130] px-2 pb-[calc(0.55rem+env(safe-area-inset-bottom))] pt-2 ${clinicalDockSheetOpen ? 'pointer-events-none' : 'pointer-events-auto'}`}
     >
-      <div className={`mx-auto max-w-3xl rounded-[24px] border p-1.5 shadow-xl backdrop-blur-xl ${clinicalDockCompact ? 'opacity-95' : 'p-2 shadow-2xl'} ${crisisMode ? 'border-red-300 bg-slate-950/95 shadow-red-950/30' : 'border-blue-100 bg-white/95 shadow-blue-950/15'}`}>
+      <div className={`mx-auto max-w-3xl rounded-[22px] border p-1.5 shadow-xl backdrop-blur-xl ${clinicalDockCompact ? 'opacity-95' : 'shadow-xl'} ${crisisMode ? 'border-red-300 bg-slate-950/95 shadow-red-950/30' : 'border-blue-100 bg-white/95 shadow-blue-950/15'}`} data-aba-dock-bottom-bar>
         {!clinicalDockPausedCompact && openDurations.length > 0 && (
           <div className={`mb-1.5 flex items-center justify-between rounded-2xl px-3 py-2 text-xs font-black ${crisisMode ? 'bg-white/10 text-white' : 'bg-amber-50 text-amber-800'}`} data-aba-dock-open-duration-badge>
             <span>{openDurations.length} duração em andamento</span>
@@ -5658,7 +5686,7 @@ export const SessionMode = ({
             </button>
           </div>
         ) : (
-          <div className="grid grid-cols-[repeat(3,minmax(0,1fr))_64px] gap-2">
+          <div className="grid grid-cols-[repeat(3,minmax(0,1fr))_56px] gap-1.5">
             {dockShortcuts.map((shortcut) => renderDockShortcutButton(shortcut, crisisMode))}
             <button
               type="button"
@@ -5666,7 +5694,7 @@ export const SessionMode = ({
                 if (crisisMode) openAbcModal();
                 else setClinicalDockSheetOpen(true);
               }}
-              className={`min-h-[48px] rounded-[18px] border px-2 text-[11px] font-black uppercase tracking-widest shadow-lg transition-all active:scale-[0.98] ${crisisMode ? 'border-white/15 bg-white text-slate-950' : 'border-slate-100 bg-[#1B254B] text-white'}`}
+              className={`min-h-[44px] rounded-[16px] border px-2 text-[10px] font-black uppercase tracking-widest shadow-sm transition-all active:scale-[0.98] ${crisisMode ? 'border-white/15 bg-white text-slate-950' : 'border-slate-100 bg-white text-slate-700'}`}
             >
               {crisisMode ? 'ABC' : 'Mais'}
             </button>
@@ -5696,12 +5724,12 @@ export const SessionMode = ({
         onClick={() => setClinicalDockSheetOpen(false)}
         className="absolute inset-0 h-full w-full bg-slate-950/35 backdrop-blur-[2px]"
       />
-      <div className="absolute inset-x-0 bottom-0 max-h-[86vh] overflow-y-auto rounded-t-[28px] border border-blue-100 bg-white p-3 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:p-4 xl:left-1/2 xl:right-auto xl:bottom-4 xl:w-[560px] xl:-translate-x-1/2 xl:rounded-[28px]">
+      <div className="absolute inset-x-0 bottom-0 max-h-[86vh] overflow-y-auto rounded-t-[28px] border border-blue-100 bg-white p-3 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:p-4 xl:left-1/2 xl:right-auto xl:bottom-4 xl:w-[560px] xl:-translate-x-1/2 xl:rounded-[28px]" data-aba-quick-register-sheet>
         <div className="mx-auto mb-2 h-1.5 w-12 rounded-full bg-slate-200" />
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <p className="text-[10px] font-black uppercase tracking-[0.22em] text-[#7a32fc]">Dock clínico</p>
-            <h2 className="text-lg font-black leading-tight text-slate-900">Registro sem sair da meta</h2>
+            <p className="text-[10px] font-black uppercase tracking-[0.22em] text-[#7a32fc]">Registro rápido</p>
+            <h2 className="text-lg font-black leading-tight text-slate-900">{contextSummaryItems.slice(0, 3).join(' · ')}</h2>
           </div>
           <button
             type="button"
@@ -5771,7 +5799,7 @@ export const SessionMode = ({
               className="mt-3 inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-2xl bg-[#7a32fc] px-4 text-xs font-black uppercase tracking-widest text-white disabled:cursor-not-allowed disabled:opacity-60"
             >
               {behaviorMeasurementType === 'duration' ? <Play size={16} /> : behaviorMeasurementType === 'abc' ? <FileText size={16} /> : <Plus size={16} />}
-              Registrar com contexto atual
+              Registrar ocorrência
             </button>
           )}
         </section>
@@ -6066,10 +6094,10 @@ export const SessionMode = ({
               if (!isIntervalMeasurementType(behaviorMeasurementType)) setClinicalDockSheetOpen(false);
             }}
             disabled={Boolean(intervalRun && isIntervalMeasurementType(behaviorMeasurementType))}
-            className="mt-3 inline-flex min-h-[52px] w-full items-center justify-center gap-2 rounded-2xl bg-[#7a32fc] px-4 text-xs font-black uppercase tracking-widest text-white disabled:cursor-not-allowed disabled:opacity-60"
+            className="sticky bottom-2 z-10 mt-3 inline-flex min-h-[52px] w-full items-center justify-center gap-2 rounded-2xl bg-[#7a32fc] px-4 text-xs font-black uppercase tracking-widest text-white shadow-lg shadow-purple-900/20 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {behaviorMeasurementType === 'duration' ? <Play size={16} /> : behaviorMeasurementType === 'abc' ? <FileText size={16} /> : <Plus size={16} />}
-            Registrar com contexto atual
+            Registrar ocorrência
           </button>
           <button
             type="button"
@@ -6125,61 +6153,50 @@ export const SessionMode = ({
 
   const sessionModeContent = (
     <div className="fixed inset-0 z-[100] bg-[#F4F7FE] flex flex-col overflow-hidden overflow-x-hidden animate-fade-in pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
-      <div className="sticky top-0 z-50 bg-white/95 backdrop-blur px-3 py-2 sm:px-4 sm:py-3 lg:px-6 lg:py-5 shadow-sm shrink-0 lg:flex lg:items-center lg:justify-between lg:gap-4">
-        <div className="flex items-center gap-2 sm:gap-5 min-w-0">
-          <button onClick={onClose} className="p-2 -ml-1 sm:-ml-2 hover:bg-gray-100 rounded-full transition-all shrink-0">
-            <ChevronLeft size={24} className="text-gray-400" />
+      <div className="sticky top-0 z-50 shrink-0 border-b border-purple-100 bg-white/95 backdrop-blur shadow-sm" data-aba-session-compact-header>
+        <div className="flex min-h-[52px] items-center gap-2 px-3 sm:px-4 lg:px-6">
+          <button onClick={onClose} className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-[#7a32fc] transition-all hover:bg-purple-50" aria-label="Voltar">
+            <ChevronLeft size={23} />
           </button>
-          <div className="min-w-0">
-            <h1 className="text-base sm:text-2xl font-bold text-gray-800 tracking-tight truncate">Sessão: <span className="text-[#7a32fc]">{patient.name}</span></h1>
-            <p className={`${mobileFocusMode ? 'hidden sm:block' : 'block'} text-[10px] font-bold text-gray-400 uppercase tracking-[0.18em] mt-0.5 sm:mt-1`}>Registro ABA em tempo real</p>
-          </div>
+          <h1 className="min-w-0 flex-1 truncate text-sm font-black tracking-tight text-gray-900 sm:text-base">
+            Sessão: <span className="text-[#7a32fc]">{patient.name}</span>
+          </h1>
           <button
             onClick={() => setMobileFocusMode((value) => !value)}
-            className="md:hidden ml-auto shrink-0 rounded-full bg-[#1B254B] px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-white"
+            className="hidden shrink-0 rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-black uppercase tracking-widest text-emerald-700 md:inline-flex"
           >
             {mobileFocusMode ? 'Foco' : 'Completo'}
           </button>
-        </div>
-
-        <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:mt-0 lg:flex lg:items-center lg:justify-end lg:gap-3">
-          <div className="contents lg:flex lg:items-center lg:gap-3 lg:rounded-2xl lg:bg-[#F4F7FE] lg:border lg:border-blue-100 lg:px-4 lg:py-3">
-            <div className="min-h-[52px] rounded-2xl bg-[#F4F7FE] border border-blue-100 px-3 py-2 lg:min-h-0 lg:border-0 lg:bg-transparent lg:p-0" data-aba-trial-type-chips>
-              <p className="text-[9px] sm:text-[10px] font-bold text-gray-400 uppercase tracking-widest">Tipo da próxima tentativa</p>
-              <div className="mt-1 flex flex-wrap gap-1.5">
-                {collectionOptions.map((option) => {
-                  const selected = collectionType === option.key && !isMaintenanceProbeCollection(collectionType);
-                  return (
-                    <button
-                      key={option.key}
-                      type="button"
-                      onClick={() => handleCollectionTypeChange(option.key)}
-                      className={`min-h-[34px] rounded-full px-3 text-[10px] font-black uppercase tracking-widest transition-all active:scale-95 ${selected ? 'bg-[#7a32fc] text-white shadow-sm' : 'bg-white text-gray-600 border border-blue-100'}`}
-                      aria-pressed={selected}
-                    >
-                      {option.label}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
           {activeSession && (
-            <div className="min-h-[52px] bg-[#7a32fc]/10 text-[#7a32fc] rounded-2xl px-3 py-2 sm:px-5 sm:py-3 text-right">
-              <p className="text-[9px] sm:text-[10px] font-bold uppercase tracking-widest flex items-center justify-end gap-2">
-                <Clock size={14} /> Restante
-              </p>
-              <p className="text-2xl sm:text-3xl font-bold leading-none">{formatCountdown ? formatCountdown(remainingSeconds) : '00:00'}</p>
-            </div>
+            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-black text-slate-900">
+              <Clock size={12} className="text-emerald-600" />
+              {formatCountdown ? formatCountdown(remainingSeconds) : '00:00'}
+            </span>
           )}
           {activeSession && (
             <button
               onClick={requestEndSession}
-              className="min-h-[52px] bg-red-50 text-red-500 font-bold px-3 sm:px-5 py-3 sm:py-4 rounded-2xl text-xs uppercase tracking-widest hover:bg-red-100 transition-all flex items-center justify-center gap-2"
+              className="shrink-0 rounded-full px-2 py-1 text-[11px] font-bold text-red-600 transition-all hover:bg-red-50"
             >
-              <StopCircle size={18} /> Encerrar
+              Encerrar
             </button>
           )}
+        </div>
+        <div className="flex gap-2 overflow-x-auto px-3 pb-2 sm:px-4 lg:px-6" data-aba-trial-type-chips>
+          {collectionOptions.map((option) => {
+            const selected = collectionType === option.key && !isMaintenanceProbeCollection(collectionType);
+            return (
+              <button
+                key={option.key}
+                type="button"
+                onClick={() => handleCollectionTypeChange(option.key)}
+                className={`inline-flex min-h-[34px] shrink-0 items-center justify-center rounded-full border px-4 text-[10px] font-black uppercase tracking-widest transition-all active:scale-95 ${selected ? 'border-[#7a32fc] bg-[#7a32fc] text-white shadow-sm' : 'border-purple-100 bg-white text-gray-700'}`}
+                aria-pressed={selected}
+              >
+                {option.label}
+              </button>
+            );
+          })}
         </div>
       </div>
 
@@ -6236,7 +6253,7 @@ export const SessionMode = ({
             <div
               data-aba-interval-parallel-banner
               data-aba-interval-response-active={intervalResponseActive ? 'true' : 'false'}
-              className={`sticky top-0 ${intervalResponseActive ? 'z-[160]' : 'z-40'} rounded-[18px] p-2 shadow-lg border transition-all sm:rounded-[22px] sm:p-3 ${intervalRunAwaitingResponse ? 'bg-amber-50 border-amber-300 ring-2 ring-amber-200/70' : intervalRunPaused ? 'bg-slate-50 border-slate-200 ring-1 ring-slate-200/70' : 'bg-white border-blue-100 shadow-blue-900/10'}`}
+              className={`sticky top-0 ${intervalResponseActive ? 'z-[160]' : 'z-40'} rounded-[16px] p-2 shadow-md border transition-all sm:rounded-[22px] sm:p-3 ${intervalRunAwaitingResponse ? 'bg-amber-50 border-amber-300 ring-2 ring-amber-200/70' : intervalRunPaused ? 'bg-slate-50 border-slate-200 ring-1 ring-slate-200/70' : 'bg-amber-50 border-amber-100 shadow-amber-900/5'}`}
             >
               <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
                 <div className="min-w-0 flex-1">
@@ -6244,13 +6261,13 @@ export const SessionMode = ({
                     <div className="min-w-0">
                       <div className="mb-1 flex items-center gap-2">
                         <Timer size={18} className={intervalRunAwaitingResponse ? 'text-amber-600' : intervalRunPaused ? 'text-slate-500' : 'text-[#7a32fc]'} />
-                        <h2 className="text-sm font-bold text-gray-800">{intervalRunPaused ? 'Coleta pausada' : 'Coleta por intervalo em andamento'}</h2>
+                        <h2 className="text-xs font-black text-amber-900">{intervalRunPaused ? 'Coleta pausada' : 'Coleta por intervalo'}</h2>
                       </div>
-                      <h3 className="text-base font-bold text-gray-900 sm:text-lg">Intervalo agora: {intervalRun.behaviorName} · {intervalRun.intervalIndex}/{intervalRun.totalIntervals}</h3>
-                      <p className="text-xs font-semibold text-gray-500 mt-1">
-                        {getMeasurementLabel(intervalRun.measurementType)} - {intervalRun.location || 'Sem local'} - severidade {intervalRun.severity || '-'}
+                      <h3 className="text-sm font-black text-gray-900 sm:text-lg">Intervalo agora: {intervalRun.behaviorName} · {intervalRun.intervalIndex}/{intervalRun.totalIntervals}</h3>
+                      <p className="mt-0.5 text-xs font-semibold text-amber-800">
+                        {intervalRun.location || 'Sem local'} · severidade {intervalRun.severity || '-'}
                       </p>
-                      <p className="mt-2 text-[11px] font-bold uppercase tracking-widest text-gray-400">
+                      <p className="mt-1 text-[10px] font-bold uppercase tracking-widest text-amber-700">
                         Respondidos: {Number(intervalRun.completedCount || 0)}/{Number(intervalRun.totalIntervals || 1)} - SIM: {Number(intervalRun.occurredCount || 0)}
                       </p>
                     </div>
@@ -6266,7 +6283,7 @@ export const SessionMode = ({
                     )}
                   </div>
                 </div>
-                <div className="grid w-full grid-cols-3 gap-2 lg:w-auto lg:min-w-[280px]">
+                <div className="hidden w-full grid-cols-3 gap-2 sm:grid lg:w-auto lg:min-w-[280px]">
                   <div className="rounded-2xl bg-[#F4F7FE] border border-blue-100 p-2 text-center">
                     <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Intervalo</p>
                     <p className="text-2xl font-bold text-gray-900">{intervalRun.intervalIndex}</p>
@@ -6284,7 +6301,7 @@ export const SessionMode = ({
                 </div>
               </div>
               <div className="mt-2 flex flex-col items-stretch justify-between gap-2 sm:flex-row sm:items-center">
-                <p className="text-xs font-semibold text-gray-500">
+                <p className="text-xs font-semibold text-amber-800">
                   {getIntervalInstruction(intervalRun.measurementType)}
                 </p>
                 <p className={`rounded-2xl px-3 py-2 text-center text-xs font-bold ${intervalRunAwaitingResponse ? 'bg-amber-100 text-amber-800' : intervalRunPaused ? 'bg-slate-100 text-slate-700' : 'bg-[#F4F7FE] text-gray-500'}`}>
@@ -6731,7 +6748,7 @@ export const SessionMode = ({
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <p className="text-sm font-bold text-gray-900">{item.instructions || 'Sugestão para revisar na sessão'}</p>
-                        <p className="mt-1 text-xs font-semibold text-gray-500">{item.planned_trial_type === 'maintenance_probe' ? 'Maintenance Probe' : 'Plano clínico'} - {item.priority || 'MEDIUM'}</p>
+                        <p className="mt-1 text-xs font-semibold text-gray-500">{item.planned_trial_type === 'maintenance_probe' ? 'Sondagem de manutenção' : 'Plano clínico'} - {item.priority || 'MEDIUM'}</p>
                       </div>
                     </div>
                     <div className="mt-3 flex flex-wrap gap-2">
@@ -6750,7 +6767,7 @@ export const SessionMode = ({
 
           {sessionMaintenanceProbes?.error && (
             <section className="rounded-[24px] sm:rounded-[28px] border border-slate-200 bg-white p-4 sm:p-5 shadow-xl shadow-slate-900/5">
-              <p className="text-sm font-bold text-slate-700">Não foi possível carregar Maintenance Probes.</p>
+              <p className="text-sm font-bold text-slate-700">Não foi possível carregar sondagens de manutenção.</p>
             </section>
           )}
 
@@ -6821,7 +6838,7 @@ export const SessionMode = ({
                         <div className="min-w-0">
                           <p className="truncate text-sm font-bold text-gray-900">{row.name}</p>
                           <p className="mt-0.5 truncate text-xs font-semibold text-gray-500">
-                            {[row.protocol, row.domain].filter(Boolean).join(' · ') || row.contextLabel || 'Maintenance Probe'}
+                            {[row.protocol, row.domain].filter(Boolean).join(' · ') || row.contextLabel || 'Sondagem de manutenção'}
                           </p>
                         </div>
                       </div>
@@ -6866,9 +6883,9 @@ export const SessionMode = ({
             <section className="rounded-[24px] sm:rounded-[28px] border border-slate-200 bg-white p-4 sm:p-5 shadow-xl shadow-slate-900/5">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-500">Maintenance Probe agendada</p>
+                  <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-500">Sondagem de manutenção agendada</p>
                   <h2 className="text-lg font-bold text-gray-900">
-                    Há Maintenance Probe agendada para data futura{firstUpcomingMaintenanceProbeItem?.nextSchedule ? `: ${formatMaintenanceDueLabel(firstUpcomingMaintenanceProbeItem.nextSchedule)}` : '.'}
+                    Há sondagem de manutenção agendada para data futura{firstUpcomingMaintenanceProbeItem?.nextSchedule ? `: ${formatMaintenanceDueLabel(firstUpcomingMaintenanceProbeItem.nextSchedule)}` : '.'}
                   </h2>
                 </div>
               </div>
@@ -6906,7 +6923,7 @@ export const SessionMode = ({
                         ? `${row.totalTrials} probe(s) hoje - ${row.accuracyPercent}% acuracia - ${row.independencePercent}% independencia`
                         : row.lastResult
                           ? `Ultimo probe: ${row.lastResult.accuracy_percent ?? row.lastResult.accuracyPercent ?? 0}% acuracia`
-                          : 'Aguardando Maintenance Probe'}
+                          : 'Aguardando sondagem de manutenção'}
                     </p>
                     {row.consecutiveFailureCount >= 2 && (
                       <p className="mt-2 rounded-xl bg-red-50 px-3 py-2 text-xs font-bold text-red-600">
@@ -6922,9 +6939,9 @@ export const SessionMode = ({
             </section>
           )}
 
-          <section className="rounded-[22px] border border-blue-100 bg-white p-3 shadow-sm" data-session-plan-filter>
+          <section className="rounded-[18px] border border-purple-100 bg-white/90 p-2 shadow-sm" data-session-plan-filter>
             {maintenanceProbeQueueItems.length > 0 && (
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-amber-100 bg-amber-50 px-3 py-2">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-amber-100 bg-amber-50 px-3 py-1.5">
                 <p className="text-xs font-black text-amber-800">
                   Manutenções desta consulta · {maintenanceProbePendingCount} pendente(s)
                 </p>
@@ -6933,7 +6950,7 @@ export const SessionMode = ({
                 </span>
               </div>
             )}
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-2 overflow-x-auto" data-aba-session-plan-tabs>
               {[
                 { key: 'all', label: 'Todas' },
                 { key: 'skills', label: 'Habilidades' },
@@ -6943,7 +6960,7 @@ export const SessionMode = ({
                   key={filter.key}
                   type="button"
                   onClick={() => setSessionPlanFilter(filter.key as 'all' | 'skills' | 'maintenance')}
-                  className={`inline-flex min-h-[34px] items-center justify-center rounded-full px-3 text-[10px] font-black uppercase tracking-widest transition-all active:scale-95 ${sessionPlanFilter === filter.key ? 'bg-[#7a32fc] text-white shadow-sm' : 'bg-[#F4F7FE] text-gray-600 border border-blue-100'}`}
+                  className={`inline-flex min-h-[32px] shrink-0 items-center justify-center border-b-2 px-3 text-[10px] font-black uppercase tracking-widest transition-all active:scale-95 ${sessionPlanFilter === filter.key ? 'border-[#7a32fc] text-[#7a32fc]' : 'border-transparent text-gray-600'}`}
                   aria-pressed={sessionPlanFilter === filter.key}
                 >
                   {filter.label}
@@ -6967,6 +6984,8 @@ export const SessionMode = ({
               const maintenanceProbeCanRunNow = Boolean(maintenanceInfo.hasAvailableMaintenanceProbe);
               const selected = mobileSelectedGoalKey === goalKey;
               const helpOpen = mobilePromptGridGoalKey === goalKey;
+              const selectedPromptCategoryKey = helpOpen ? (mobilePromptCategoryByGoalKey[goalKey] || '') : '';
+              const selectedPromptCategory = promptCategoryBuckets.find((bucket) => bucket.key === selectedPromptCategoryKey) || null;
               const criteriaOpen = mobileExpandedCriteriaKey === goalKey;
               const independentTrialLockKey = `trial:${goalKey}:independent:independent`;
               const errorTrialLockKey = `trial:${goalKey}:error:error`;
@@ -6985,11 +7004,12 @@ export const SessionMode = ({
                 <article
                   key={`mobile-${goalKey}`}
                   data-aba-mobile-task-card
+                  data-aba-mobile-primary-card={selected ? 'true' : 'false'}
                   onClick={() => {
                     setMobileSelectedGoalKey(goalKey);
                     syncTrialTypeForGoal(goal);
                   }}
-                  className={`rounded-2xl border bg-white px-3 py-2.5 shadow-sm transition-all ${selected ? 'border-[#7a32fc] ring-2 ring-[#7a32fc]/15' : 'border-blue-100'}`}
+                  className={`rounded-[18px] border bg-white px-3 py-3 shadow-sm transition-all ${selected ? 'border-[#7a32fc] ring-2 ring-[#7a32fc]/15' : 'border-blue-100'}`}
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
@@ -7004,11 +7024,19 @@ export const SessionMode = ({
                           <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest text-slate-600">Manutenção agendada</span>
                         )}
                       </div>
-                      <h2 className="mt-1 line-clamp-2 text-[15px] font-semibold leading-snug text-gray-900">{goal.name || goal.targetName || goal.target_name}</h2>
+                      <h2 className={`${selected ? 'text-lg' : 'text-[15px]'} mt-1 line-clamp-2 font-black leading-snug text-gray-900`}>{goal.name || goal.targetName || goal.target_name}</h2>
                     </div>
-                    <span className={`shrink-0 rounded-full px-2 py-1 text-[9px] font-bold uppercase tracking-widest ${maintenanceProbeCanRunNow ? 'bg-amber-100 text-amber-700' : masteryRow?.contributes ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-600'}`}>
-                      {statusLabel}
-                    </span>
+                    <div className="shrink-0 text-right">
+                      <span className={`inline-flex rounded-full px-2 py-1 text-[9px] font-bold uppercase tracking-widest ${maintenanceProbeCanRunNow ? 'bg-amber-100 text-amber-700' : masteryRow?.contributes ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-600'}`}>
+                        {statusLabel}
+                      </span>
+                      {selected && (
+                        <div className="mt-2 rounded-2xl bg-[#F4EFFF] px-3 py-2 text-center">
+                          <p className="text-[9px] font-black uppercase tracking-widest text-[#7a32fc]">Progresso</p>
+                          <p className="text-sm font-black text-[#1B254B]">{progressLabel}</p>
+                        </div>
+                      )}
+                    </div>
                   </div>
 
                   <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] font-semibold text-gray-500">
@@ -7032,10 +7060,11 @@ export const SessionMode = ({
                           }}
                           className="inline-flex min-h-[34px] w-full items-center justify-center rounded-xl bg-amber-100 px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-amber-800"
                         >
-                          Usar Maintenance Probe
+                          Usar sondagem
                         </button>
                       )}
-                      <div className="grid grid-cols-3 gap-2">
+                      <p className="pt-1 text-[10px] font-black uppercase tracking-widest text-slate-500">Registro de tentativa</p>
+                      <div className="grid grid-cols-2 gap-2">
                         <button
                           type="button"
                           onClick={(event) => {
@@ -7043,19 +7072,9 @@ export const SessionMode = ({
                             handleTrialClick(goal, 1, 'independent');
                           }}
                           disabled={Boolean(actionLocks[independentTrialLockKey])}
-                          className={`min-h-[42px] rounded-xl bg-[#05CD99] px-2 text-xs font-black text-white transition-all disabled:opacity-75 ${microFeedback[independentTrialLockKey] === 'check' ? 'scale-[0.98] ring-4 ring-emerald-200/70' : ''}`}
+                          className={`inline-flex min-h-[48px] items-center justify-center gap-2 rounded-xl bg-[#069669] px-3 text-xs font-black text-white transition-all disabled:opacity-75 ${microFeedback[independentTrialLockKey] === 'check' ? 'scale-[0.98] ring-4 ring-emerald-200/70' : ''}`}
                         >
-                          Indep.
-                        </button>
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            setMobilePromptGridGoalKey(helpOpen ? '' : goalKey);
-                          }}
-                          className="min-h-[42px] rounded-xl bg-orange-100 px-2 text-xs font-black text-orange-700"
-                        >
-                          Ajuda
+                          <CheckCircle2 size={16} /> Independente
                         </button>
                         <button
                           type="button"
@@ -7064,14 +7083,37 @@ export const SessionMode = ({
                             handleTrialClick(goal, 0, 'error');
                           }}
                           disabled={Boolean(actionLocks[errorTrialLockKey])}
-                          className={`min-h-[42px] rounded-xl bg-[#EE5D50] px-2 text-xs font-black text-white transition-all disabled:opacity-75 ${microFeedback[errorTrialLockKey] === 'check' ? 'scale-[0.98] ring-4 ring-red-200/70' : ''}`}
+                          className={`inline-flex min-h-[48px] items-center justify-center gap-2 rounded-xl bg-[#C91E1E] px-3 text-xs font-black text-white transition-all disabled:opacity-75 ${microFeedback[errorTrialLockKey] === 'check' ? 'scale-[0.98] ring-4 ring-red-200/70' : ''}`}
                         >
+                          <X size={16} />
                           Erro
                         </button>
                       </div>
-                      {helpOpen && (
-                        <div className="grid grid-cols-2 gap-2" data-aba-mobile-help-grid>
-                          {promptedPromptOptions.map((prompt) => {
+                      <div className="rounded-2xl border border-purple-100 bg-[#FBF7FF] p-2" data-aba-mobile-prompt-categories>
+                        <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Tipo de ajuda</p>
+                        <div className="mt-2 grid grid-cols-2 gap-2">
+                          {promptCategoryBuckets.map((bucket) => {
+                            const active = selectedPromptCategoryKey === bucket.key;
+                            return (
+                              <button
+                                key={bucket.key}
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setMobilePromptGridGoalKey(goalKey);
+                                  setMobilePromptCategoryByGoalKey((prev) => ({ ...prev, [goalKey]: bucket.key }));
+                                }}
+                                aria-pressed={active}
+                                className={`min-h-[38px] rounded-full border px-3 text-[11px] font-black transition-all active:scale-95 ${active ? 'border-[#7a32fc] bg-white text-[#7a32fc] ring-2 ring-[#7a32fc]/15' : 'border-purple-100 bg-white text-slate-700'}`}
+                              >
+                                {bucket.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        {selectedPromptCategory && (
+                          <div className="mt-2 grid grid-cols-2 gap-2" data-aba-mobile-help-grid data-aba-mobile-prompt-subtypes>
+                            {selectedPromptCategory.prompts.map((prompt) => {
                             const promptedTrialLockKey = `trial:${goalKey}:prompted:${prompt.key}`;
                             const promptedActive = microFeedback[promptedTrialLockKey] === 'check';
                             return (
@@ -7089,9 +7131,10 @@ export const SessionMode = ({
                                 {prompt.compactLabel}
                               </button>
                             );
-                          })}
-                        </div>
-                      )}
+                            })}
+                          </div>
+                        )}
+                      </div>
                       <button
                         type="button"
                         onClick={(event) => {
@@ -7189,12 +7232,12 @@ export const SessionMode = ({
                           )}
                           {maintenanceProbeActiveForGoal && (
                             <p className="mt-2 inline-flex rounded-full bg-emerald-100 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-emerald-700">
-                              Maintenance Probe ativo para {maintenanceDisplay?.targetDisplayName || 'esta tentativa'}
+                              Sondagem de manutenção ativa para {maintenanceDisplay?.targetDisplayName || 'esta tentativa'}
                             </p>
                           )}
                           <p className="mt-1 text-xs font-semibold text-amber-800">
                             {maintenanceProbeCanRunNow
-                              ? 'Para avaliar manutencao, use Maintenance Probe.'
+                              ? 'Para avaliar manutencao, use a sondagem.'
                               : 'Disponivel somente na data ou consulta vinculada.'}
                           </p>
                           <p className="text-xs font-semibold text-amber-800">
@@ -7218,7 +7261,7 @@ export const SessionMode = ({
                               onClick={() => activateMaintenanceProbeMode(goal)}
                               className="inline-flex min-h-[38px] w-fit items-center justify-center rounded-full bg-white px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-amber-700 shadow-sm transition-all active:scale-95"
                             >
-                              Usar Maintenance Probe
+                              Usar sondagem
                             </button>
                           )}
                           {maintenanceProbeActiveForGoal && (

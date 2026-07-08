@@ -585,8 +585,13 @@ test('aba prompt integrity: quick action selections are canonical and persistent
 test('aba session mode: trials and behavior events are one-touch and session-scoped', () => {
   assert.match(
     sessionModeCode,
-    /onClick=\{\(\) => handleTrialClick\(goal, 1, 'independent'\)\}[\s\S]*?Independente[\s\S]*?promptedPromptOptions\.map\(\(prompt\) => \{[\s\S]*?onClick=\{\(\) => handleTrialClick\(goal, 0\.5, 'prompted', prompt\.key\)\}[\s\S]*?Com ajuda[\s\S]*?onClick=\{\(\) => handleTrialClick\(goal, 0, 'error'\)\}[\s\S]*?Erro/m,
-    'SessionMode deve salvar tentativa em um toque com Independente, prompts de ajuda segmentados e Erro.'
+    /handleTrialClick\(goal, 1, 'independent'\)[\s\S]*?Independente[\s\S]*?handleTrialClick\(goal, 0, 'error'\)[\s\S]*?Erro/m,
+    'SessionMode deve salvar Independente e Erro em um toque.'
+  );
+  assert.match(
+    sessionModeCode,
+    /data-aba-mobile-prompt-categories[\s\S]*?promptCategoryBuckets\.map[\s\S]*?data-aba-mobile-prompt-subtypes[\s\S]*?selectedPromptCategory\.prompts\.map[\s\S]*?handleTrialClick\(goal, 0\.5, 'prompted', prompt\.key\)/m,
+    'SessionMode deve salvar ajuda por categoria e subtipo preservando prompt configurado.'
   );
   assert.match(
     appCode,

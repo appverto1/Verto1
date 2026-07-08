@@ -437,15 +437,15 @@ test('banner de manutencao comunica tipo atual e botao nao registra tentativa', 
   assert.match(sessionModeCode, /hasAvailableMaintenanceProbe/);
   assert.match(sessionModeCode, /sessionUpcomingMaintenanceProbeSchedules[\s\S]*?\.map\(\(schedule: any\)/m);
   assert.match(sessionModeCode, /firstUpcomingMaintenanceProbeItem/);
-  assert.match(sessionModeCode, /Há Maintenance Probe agendada para data futura/);
+  assert.match(sessionModeCode, /Há sondagem de manutenção agendada para data futura/);
   assert.match(sessionModeCode, /maintenanceSessionSummaryRows/);
   assert.match(sessionModeCode, /resolveMaintenanceTargetDisplay/);
-  assert.match(sessionModeCode, /Maintenance Probe ativa para a proxima tentativa/);
+  assert.match(sessionModeCode, /Sondagem de manutencao ativa para a proxima tentativa/);
   assert.match(sessionModeCode, /Cancelar uso da probe/);
   assert.match(activationBody, /activeProbeFromAvailable/);
   assert.match(activationBody, /isRealClinicalId\(targetId\)/);
   assert.match(activationBody, /isRealClinicalId\(scheduleId\)/);
-  assert.match(activationBody, /Nao foi possivel ativar a Maintenance Probe/);
+  assert.match(activationBody, /Nao foi possivel ativar a sondagem de manutencao/);
   assert.match(activationBody, /setCollectionType\('maintenance_probe'\)[\s\S]*?showClinicalToast/m);
   assert.doesNotMatch(activationBody, /handleTrialClick|persistTrialRecord|addRecord/m);
   assert.doesNotMatch(sessionModeCode, /upcomingMaintenanceProbeItems\.map/);
@@ -506,7 +506,7 @@ test('SessionMode mobile usa cards compactos sem criar fluxo paralelo de registr
   assert.match(mobileCode, /Ver critério/);
   assert.match(mobileCode, /data-aba-mobile-criteria-details/);
   assert.match(mobileCode, /maintenanceProbeCanRunNow && !maintenanceProbeActiveForGoal/);
-  assert.match(mobileCode, /Usar Maintenance Probe/);
+  assert.match(mobileCode, /Usar sondagem/);
   assert.match(sessionModeCode, /className="hidden space-y-5 sm:block"/);
   assert.doesNotMatch(mobileCode, /persistTrialRecord|dataService\.saveAbaMaintenanceProbeResult|saveAbaTrial/);
 });

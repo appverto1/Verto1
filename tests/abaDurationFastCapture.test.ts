@@ -161,7 +161,8 @@ test('Dock Clínico abre compacto e recolhe seletores em Ajustar contexto', () =
   assert.match(defaultDockView, /Ações rápidas/);
   assert.match(defaultDockView, /Contexto atual/);
   assert.match(defaultDockView, /Ajustar contexto/);
-  assert.match(defaultDockView, /Registrar com contexto atual/);
+  assert.match(defaultDockView, /Registro rápido/);
+  assert.match(defaultDockView, /Registrar ocorrência/);
   assert.match(defaultDockView, /ABC rápido/);
   assert.doesNotMatch(defaultDockView, /<select/);
 
@@ -256,6 +257,29 @@ test('Coleta por intervalo roda como banner paralelo sem esconder habilidades ou
   assert.match(sessionModeCode, /const clinicalDockCompact = Boolean\(intervalRun\)/);
   assert.match(sessionModeCode, /const clinicalDock = !sessionCompleted \? \(/);
   assert.doesNotMatch(sessionModeCode, /const clinicalDock = !sessionCompleted && !intervalResponseActive/);
+});
+
+test('SessionMode segue layout mobile-first compacto das telas de referência', () => {
+  const contentStart = sessionModeCode.indexOf('const sessionModeContent');
+  const content = sessionModeCode.slice(contentStart);
+  assert.match(content, /data-aba-session-compact-header/);
+  assert.match(content, /Sessão:/);
+  assert.match(content, /Encerrar/);
+  assert.match(content, /data-aba-trial-type-chips/);
+  assert.match(content, /data-aba-session-plan-tabs/);
+  assert.match(content, /data-aba-mobile-primary-card/);
+  assert.match(content, /Registro de tentativa/);
+  assert.match(content, /data-aba-mobile-prompt-categories/);
+  assert.match(content, /promptCategoryBuckets\.map/);
+  assert.match(sessionModeCode, /label: 'Visual'/);
+  assert.match(sessionModeCode, /label: 'Verbal'/);
+  assert.match(sessionModeCode, /label: 'Gestual\/Mod\.'/);
+  assert.match(sessionModeCode, /label: 'Física'/);
+  assert.match(content, /data-aba-mobile-prompt-subtypes/);
+  assert.match(sessionModeCode, /data-aba-dock-bottom-bar/);
+  assert.match(sessionModeCode, /data-aba-quick-register-sheet/);
+  assert.match(sessionModeCode, /Registrar ocorrência/);
+  assert.doesNotMatch(content, />\s*(Session|End|Prompt Level|Target Behavior|Independent|Physical)\s*</);
 });
 
 test('Dock Clínico não exibe mojibake em textos visíveis', () => {
