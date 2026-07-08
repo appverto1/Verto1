@@ -469,6 +469,10 @@ test('tela de repasses renderiza filtros, status e exige motivo para ajuste manu
   assert.match(coordinatorCode, /Ainda não há atendimentos recebidos elegíveis para repasse neste período/);
   assert.match(coordinatorCode, /Registrar repasse/);
   assert.match(coordinatorCode, /Calcular repasses do período/);
+  assert.match(coordinatorCode, /max-h-\[90vh\]/);
+  assert.match(coordinatorCode, /overflow-y-auto/);
+  assert.match(coordinatorCode, /Cancelar/);
+  assert.match(coordinatorCode, /Salvar repasse/);
   assert.match(coordinatorCode, /Motivo do ajuste manual/);
   assert.match(coordinatorCode, /Informe o motivo do ajuste manual do repasse/);
   assert.match(coordinatorCode, /adjustment_reason/);
@@ -477,6 +481,50 @@ test('tela de repasses renderiza filtros, status e exige motivo para ajuste manu
   assert.match(serverCode, /app\.get\('\/api\/financial\/professional-payments', checkAuth, requireRoles\('coordinator', 'admin', 'owner'\)/);
   assert.match(serverCode, /app\.post\('\/api\/financial\/professional-payments', checkAuth, requireRoles\('coordinator', 'admin', 'owner'\)/);
   assert.match(serverCode, /app\.patch\('\/api\/financial\/professional-payments\/:paymentId', checkAuth, requireRoles\('coordinator', 'admin', 'owner'\)/);
+});
+
+test('dashboard financeiro gerencial separa origem dos numeros, graficos e DRE por especialidade', () => {
+  assert.match(coordinatorCode, /Dashboard financeiro da cl.nica/);
+  assert.match(coordinatorCode, /Resumo executivo com origem dos n.meros separada entre projetado, realizado, pendente e previsto/);
+  assert.match(coordinatorCode, /data-financial-dashboard-charts/);
+  for (const chartId of [
+    'realized-vs-projected',
+    'revenue-by-origin',
+    'revenue-by-specialty',
+    'profit-by-specialty',
+    'transfers-by-professional',
+    'receivables-status',
+  ]) {
+    assert.match(coordinatorCode, new RegExp(chartId));
+  }
+  assert.match(coordinatorCode, /data-financial-chart=\{chartId\}/);
+  for (const label of [
+    'Realizado vs projetado por m.s',
+    'Receita por origem',
+    'Receita por especialidade',
+    'Lucro/margem por especialidade',
+    'Repasses por profissional',
+    'Recebimentos e pend.ncias',
+    'Projetado',
+    'Realizado',
+    'Receita realizada',
+    'Resultado estimado',
+  ]) {
+    assert.match(coordinatorCode, new RegExp(label));
+  }
+  assert.match(coordinatorCode, /renderFinancialTooltip/);
+  assert.match(coordinatorCode, /formatCurrency\(item\.value\)/);
+  assert.match(coordinatorCode, /formatFinancialMonthLabel/);
+  assert.match(coordinatorCode, /toLocaleDateString\("pt-BR"/);
+  assert.match(coordinatorCode, /data-unallocated-financial-costs/);
+  assert.match(coordinatorCode, /Custos\/Repasses n.o alocados/);
+  assert.match(coordinatorCode, /Revisar aloca..o/);
+  assert.match(coordinatorCode, /isUnallocatedSpecialtyLabel/);
+  assert.match(coordinatorCode, /specialtyRows: clinicalSpecialtyRows/);
+  assert.match(coordinatorCode, /unallocatedSpecialtyTotals/);
+  const financialChartsBlock = sliceFrom(coordinatorCode, 'data-financial-dashboard-charts', 26000);
+  assert.doesNotMatch(financialChartsBlock, />Projected<|>Revenue<|>Expense<|>Profit<|>Margin<|Professional payouts|>Cash flow</);
+  assert.doesNotMatch(financialChartsBlock, /Stripe|Assinatura/);
 });
 
 let passed = 0;

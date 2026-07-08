@@ -18,6 +18,7 @@
     "test:security": "node tests/security.regression.test.mjs",
     "test:aba-session-summary": "tsx tests/abaSessionSummary.test.ts",
     "test:aba-session-feedback": "tsx tests/abaSessionFeedback.test.ts",
+    "test:aba-prompt-types": "tsx tests/abaPromptTypes.test.ts",
     "test:aba-prompt-quick-actions": "tsx tests/abaPromptQuickActions.test.ts",
     "test:aba-duration-fast-capture": "tsx tests/abaDurationFastCapture.test.ts",
     "test:aba-interval-lifecycle": "tsx tests/abaIntervalLifecycle.test.ts",

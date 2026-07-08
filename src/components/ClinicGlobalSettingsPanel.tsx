@@ -1,8 +1,10 @@
-import React from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { AlertCircle, CheckCircle2 } from "lucide-react";
 import { BillingTissSettingsPanel } from "./BillingTissSettingsPanel";
 import { RoleCapabilityMatrix } from "./RoleCapabilityMatrix";
 import { SecureImage } from "./SecureMedia";
+import { dataService } from "../services/dataService";
+import { normalizeAbaPromptTypeConfig, type AbaPromptTypeConfig } from "../utils/abaPromptLevels";
 import { formatDocument, maskCep, maskPhoneBR, onlyDigits, parseDocumentForStorage } from "../utils/brMasks";
 
 type SettingsValues = Record<string, any>;
@@ -85,6 +87,151 @@ function SaveButton({ children, onSave }: { children: React.ReactNode; onSave: (
     >
       {children}
     </button>
+  );
+}
+
+function AbaPromptTypesSettings() {
+  const [promptTypes, setPromptTypes] = useState<AbaPromptTypeConfig[]>(() => normalizeAbaPromptTypeConfig());
+  const [savingId, setSavingId] = useState('');
+  const [newPrompt, setNewPrompt] = useState({
+    name: '',
+    category: 'Visual',
+    independenceScore: 80,
+    intrusivenessOrder: 1,
+    countsAsIndependent: false,
+    showInSession: true,
+    description: ''
+  });
+  const inactivePromptTypes = useMemo(() => promptTypes.filter((prompt) => !prompt.active), [promptTypes]);
+
+  useEffect(() => {
+    let cancelled = false;
+    dataService.getAbaPromptTypes()
+      .then((result: any) => {
+        if (!cancelled) setPromptTypes(normalizeAbaPromptTypeConfig(result?.data));
+      })
+      .catch(() => {
+        if (!cancelled) setPromptTypes(normalizeAbaPromptTypeConfig());
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const savePromptType = async (prompt: Partial<AbaPromptTypeConfig>) => {
+    const id = String(prompt.id || prompt.key || `prompt-${Date.now()}`);
+    setSavingId(id);
+    try {
+      const result = await dataService.saveAbaPromptType(prompt);
+      if (result?.success !== false) {
+        const saved = normalizeAbaPromptTypeConfig([result?.data || prompt])[0];
+        setPromptTypes((prev) => normalizeAbaPromptTypeConfig([
+          ...prev.filter((item) => item.id !== saved.id && item.key !== saved.key),
+          saved
+        ]));
+      }
+    } finally {
+      setSavingId('');
+    }
+  };
+
+  const addPromptType = async () => {
+    const name = newPrompt.name.trim();
+    if (!name) return;
+    await savePromptType({
+      ...newPrompt,
+      name,
+      label: name,
+      key: name,
+      active: true
+    });
+    setNewPrompt({
+      name: '',
+      category: 'Visual',
+      independenceScore: 80,
+      intrusivenessOrder: Math.max(1, promptTypes.length + 1),
+      countsAsIndependent: false,
+      showInSession: true,
+      description: ''
+    });
+  };
+
+  return (
+    <SectionCard
+      title="Tipos de ajuda ABA"
+      description="Configure os tipos de ajuda usados durante as tentativas. Também chamados de prompt na prática ABA."
+      complete={promptTypes.some((prompt) => prompt.active)}
+      hasAnyData
+    >
+      <div className="space-y-4">
+        <div className="rounded-xl border border-violet-100 bg-violet-50 px-4 py-3 text-sm font-semibold text-violet-900">
+          Cada tipo pode ter uma pontuação de independência para gráficos, relatórios e critérios clínicos. Eventos antigos continuam usando o fallback já existente.
+        </div>
+        <div className="grid gap-3">
+          {promptTypes.filter((prompt) => prompt.active).map((prompt) => (
+            <div key={prompt.id || prompt.key} className="grid gap-3 rounded-xl border border-slate-200 bg-white p-3 md:grid-cols-[1.3fr_1fr_110px_110px_auto]">
+              <label className={labelClass}>
+                Nome
+                <input value={prompt.name} onChange={(event) => setPromptTypes((prev) => prev.map((item) => item.key === prompt.key ? { ...item, name: event.target.value, label: event.target.value } : item))} className={inputClass} />
+              </label>
+              <label className={labelClass}>
+                Categoria
+                <input value={prompt.category} onChange={(event) => setPromptTypes((prev) => prev.map((item) => item.key === prompt.key ? { ...item, category: event.target.value } : item))} className={inputClass} />
+              </label>
+              <label className={labelClass}>
+                Pontuação
+                <input type="number" min={0} max={100} value={prompt.independenceScore} onChange={(event) => setPromptTypes((prev) => prev.map((item) => item.key === prompt.key ? { ...item, independenceScore: Number(event.target.value) } : item))} className={inputClass} />
+              </label>
+              <label className={labelClass}>
+                Ordem
+                <input type="number" min={0} value={prompt.intrusivenessOrder} onChange={(event) => setPromptTypes((prev) => prev.map((item) => item.key === prompt.key ? { ...item, intrusivenessOrder: Number(event.target.value) } : item))} className={inputClass} />
+              </label>
+              <div className="flex flex-col justify-end gap-2">
+                <label className="flex items-center gap-2 text-xs font-bold text-slate-600">
+                  <input type="checkbox" checked={prompt.showInSession} onChange={(event) => setPromptTypes((prev) => prev.map((item) => item.key === prompt.key ? { ...item, showInSession: event.target.checked } : item))} />
+                  Na sessão
+                </label>
+                <label className="flex items-center gap-2 text-xs font-bold text-slate-600">
+                  <input type="checkbox" checked={prompt.countsAsIndependent} onChange={(event) => setPromptTypes((prev) => prev.map((item) => item.key === prompt.key ? { ...item, countsAsIndependent: event.target.checked } : item))} />
+                  Independente
+                </label>
+                <button type="button" onClick={() => void savePromptType(prompt)} className="rounded-lg bg-[#7a32fc] px-3 py-2 text-xs font-black text-white">
+                  {savingId === (prompt.id || prompt.key) ? 'Salvando...' : 'Salvar'}
+                </button>
+                <button type="button" onClick={() => void savePromptType({ ...prompt, active: false })} className="text-xs font-bold text-red-600">
+                  Inativar
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4">
+          <p className="mb-3 text-sm font-black text-slate-800">Adicionar tipo de ajuda</p>
+          <div className="grid gap-3 md:grid-cols-[1.2fr_1fr_120px_120px]">
+            <label className={labelClass}>Nome<input value={newPrompt.name} onChange={(event) => setNewPrompt((prev) => ({ ...prev, name: event.target.value }))} placeholder="Visual parcial leve" className={inputClass} /></label>
+            <label className={labelClass}>Categoria<input value={newPrompt.category} onChange={(event) => setNewPrompt((prev) => ({ ...prev, category: event.target.value }))} placeholder="Visual" className={inputClass} /></label>
+            <label className={labelClass}>Pontuação<input type="number" min={0} max={100} value={newPrompt.independenceScore} onChange={(event) => setNewPrompt((prev) => ({ ...prev, independenceScore: Number(event.target.value) }))} className={inputClass} /></label>
+            <label className={labelClass}>Ordem<input type="number" min={0} value={newPrompt.intrusivenessOrder} onChange={(event) => setNewPrompt((prev) => ({ ...prev, intrusivenessOrder: Number(event.target.value) }))} className={inputClass} /></label>
+          </div>
+          <button type="button" onClick={() => void addPromptType()} className="mt-4 rounded-xl bg-[#7a32fc] px-5 py-2.5 text-sm font-black text-white">
+            Adicionar tipo
+          </button>
+        </div>
+        {inactivePromptTypes.length > 0 && (
+          <details className="rounded-xl border border-slate-200 bg-white p-4">
+            <summary className="cursor-pointer text-sm font-black text-slate-700">Tipos inativos ({inactivePromptTypes.length})</summary>
+            <div className="mt-3 space-y-2">
+              {inactivePromptTypes.map((prompt) => (
+                <div key={prompt.id || prompt.key} className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-slate-50 px-3 py-2">
+                  <span className="text-sm font-semibold text-slate-700">{prompt.name}</span>
+                  <button type="button" onClick={() => void savePromptType({ ...prompt, active: true })} className="text-xs font-black text-[#7a32fc]">Reativar</button>
+                </div>
+              ))}
+            </div>
+          </details>
+        )}
+      </div>
+    </SectionCard>
   );
 }
 
@@ -405,6 +552,8 @@ export function ClinicGlobalSettingsPanel({
                   <div className="md:col-span-2 flex justify-end"><SaveButton onSave={onSave}>Salvar preferências</SaveButton></div>
                 </div>
               </SectionCard>
+
+              <AbaPromptTypesSettings />
 
               <BillingTissSettingsPanel onEditClinicData={scrollToClinicData} onNavigatePayers={() => navigateToTab("payers")} onNavigateProfessionals={() => navigateToTab("team")} />
             </>

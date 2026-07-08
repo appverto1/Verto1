@@ -6448,6 +6448,26 @@ export function CoordinatorDashboard({
     map.set(safeKey, current);
   };
 
+  const isUnallocatedSpecialtyLabel = (label: any) => {
+    const normalized = String(label || "")
+      .trim()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase();
+    return !normalized || ["nao informado", "sem especialidade", "sem alocacao"].includes(normalized);
+  };
+
+  const formatFinancialMonthLabel = (monthKey: string, style: "short" | "long" = "long") => {
+    const [year, month] = String(monthKey || "").split("-").map(Number);
+    if (!year || !month) return "Mês não informado";
+    const date = new Date(year, month - 1, 1);
+    const label = date.toLocaleDateString("pt-BR", {
+      month: style,
+      year: style === "long" ? "numeric" : undefined,
+    });
+    return label.charAt(0).toUpperCase() + label.slice(1).replace(".", "");
+  };
+
   const financialDashboard = useMemo(() => {
     const clinicPatientIds = new Set((allPatients || []).map((patient: any) => String(patient?.id)));
     const patientById = new Map((allPatients || []).map((patient: any) => [String(patient?.id), patient]));
@@ -6470,6 +6490,7 @@ export function CoordinatorDashboard({
     });
     const paidPayments = monthPayments.filter((payment: any) => normalizeStatus(payment?.status) === "paid");
     const pendingPayments = monthPayments.filter((payment: any) => normalizeStatus(payment?.status) === "pending");
+    const cancelledPayments = monthPayments.filter((payment: any) => normalizeStatus(payment?.status) === "canceled");
     const monthProfessionalPayments = (professionalPayments || []).filter((payment: any) => {
       const referenceDate =
         payment?.payment_date ||
@@ -6583,6 +6604,7 @@ export function CoordinatorDashboard({
 
     const realized = paidPayments.reduce((sum: number, payment: any) => sum + parseCurrencyValue(payment?.amount), 0);
     const pendingAmount = pendingPayments.reduce((sum: number, payment: any) => sum + parseCurrencyValue(payment?.amount), 0);
+    const cancelledAmount = cancelledPayments.reduce((sum: number, payment: any) => sum + parseCurrencyValue(payment?.amount), 0);
     const overduePayments = pendingPayments.filter((payment: any) => {
       const days = daysUntilDate(payment?.due_date || payment?.dueDate);
       return days !== null && days < 0;
@@ -6691,11 +6713,48 @@ export function CoordinatorDashboard({
         .filter((payment: any) => normalizeStatus(payment?.status) === "paid" && isSameFinancialMonth(payment?.payment_date || payment?.paymentDate, key))
         .reduce((sum: number, payment: any) => sum + parseCurrencyValue(payment?.amount), 0);
       return {
-        month: date.toLocaleDateString("pt-BR", { month: "short" }).replace(".", ""),
-        revenue: paid,
+        monthKey: key,
+        month: formatFinancialMonthLabel(key, "short"),
+        monthFull: formatFinancialMonthLabel(key, "long"),
+        projected: key === financialMonth ? projection : 0,
+        realized: paid,
         profit: paid - professional,
       };
     });
+
+    const specialtyRows = Array.from(specialtyMap.values())
+      .map((row: any) => ({
+        ...row,
+        patients: row.patients.size,
+        paidPatients: row.paidPatients.size,
+      }))
+      .sort((a, b) => b.projected - a.projected);
+    const clinicalSpecialtyRows = specialtyRows.filter((row: any) => !isUnallocatedSpecialtyLabel(row.label));
+    const unallocatedSpecialtyRows = specialtyRows.filter((row: any) => isUnallocatedSpecialtyLabel(row.label));
+    const unallocatedSpecialtyTotals = unallocatedSpecialtyRows.reduce(
+      (acc: any, row: any) => ({
+        projected: acc.projected + (Number(row.projected) || 0),
+        realized: acc.realized + (Number(row.realized) || 0),
+        pending: acc.pending + (Number(row.pending) || 0),
+        overdue: acc.overdue + (Number(row.overdue) || 0),
+        professionalPaid: acc.professionalPaid + (Number(row.professionalPaid) || 0),
+        allocatedOperationalExpenses: acc.allocatedOperationalExpenses + (Number(row.allocatedOperationalExpenses) || 0),
+        netProfit: acc.netProfit + (Number(row.netProfit) || 0),
+        patients: acc.patients + (Number(row.patients) || 0),
+        paidPatients: acc.paidPatients + (Number(row.paidPatients) || 0),
+      }),
+      {
+        projected: 0,
+        realized: 0,
+        pending: 0,
+        overdue: 0,
+        professionalPaid: 0,
+        allocatedOperationalExpenses: 0,
+        netProfit: 0,
+        patients: 0,
+        paidPatients: 0,
+      },
+    );
 
     return {
       activePatients,
@@ -6703,6 +6762,7 @@ export function CoordinatorDashboard({
       projection,
       realized,
       pendingAmount,
+      cancelledAmount,
       overdueAmount,
       overduePayments,
       outstanding,
@@ -6723,13 +6783,9 @@ export function CoordinatorDashboard({
       cancellationValue,
       dreRows,
       revenueRows,
-      specialtyRows: Array.from(specialtyMap.values())
-        .map((row: any) => ({
-          ...row,
-          patients: row.patients.size,
-          paidPatients: row.paidPatients.size,
-        }))
-        .sort((a, b) => b.projected - a.projected),
+      specialtyRows: clinicalSpecialtyRows,
+      unallocatedSpecialtyRows,
+      unallocatedSpecialtyTotals,
       payerRows: Array.from(payerMap.values()).map((row: any) => ({ ...row, patients: row.patients.size })).sort((a, b) => b.amount - a.amount),
       insuranceRows: Array.from(insuranceMap.values()).map((row: any) => ({ ...row, patients: row.patients.size })).sort((a, b) => b.amount - a.amount),
       billingMethodRows: Array.from(billingMethodMap.values()).map((row: any) => ({ ...row, patients: row.patients.size })).sort((a, b) => b.amount - a.amount),
@@ -6737,6 +6793,7 @@ export function CoordinatorDashboard({
       monthPayments,
       paidPayments,
       pendingPayments,
+      cancelledPayments,
       professionalPayments: monthProfessionalPayments.sort((a: any, b: any) => String(a.due_date || a.payment_date || '').localeCompare(String(b.due_date || b.payment_date || ''))),
       paidProfessionalPayments,
       pendingProfessionalPayments,
@@ -6744,7 +6801,6 @@ export function CoordinatorDashboard({
   }, [allPatients, financialEntries, financialMonth, payments, professionalPayments, therapistMembersById]);
 
   const dreData = financialDashboard.dreRows;
-  const revenueHistory = financialDashboard.revenueRows;
   const compensationForecast = financialDashboard.dueRows.slice(0, 6);
   const activeFinancialSection = financialNavigationContext.breadcrumb[1] || (isReceptionist ? "Recebimentos de pacientes" : "Visão geral da clínica");
   const isProfessionalTransfersSection = activeFinancialSection === "Repasses a profissionais";
@@ -6802,6 +6858,149 @@ export function CoordinatorDashboard({
         };
       });
   }, [financialDashboard.professionalPayments, professionalTransferProfessionalFilter, professionalTransferStatusFilter]);
+
+  const financialProjectedVsRealizedRows = useMemo(() =>
+    financialDashboard.revenueRows.map((row: any) => ({
+      name: row.month,
+      monthFull: row.monthFull,
+      Projetado: row.projected,
+      Realizado: row.realized,
+    })),
+  [financialDashboard.revenueRows]);
+
+  const financialRevenueOriginRows = useMemo(() => {
+    const total = financialDashboard.payerRows.reduce((sum: number, row: any) => sum + (Number(row.amount) || 0), 0);
+    return financialDashboard.payerRows.map((row: any) => ({
+      name: row.label,
+      Receita: row.amount,
+      Participação: total > 0 ? (row.amount / total) * 100 : 0,
+      Quantidade: row.patients,
+    }));
+  }, [financialDashboard.payerRows]);
+
+  const financialRevenueSpecialtyRows = useMemo(() =>
+    financialDashboard.specialtyRows.map((row: any) => ({
+      name: row.label,
+      "Receita projetada": row.projected,
+      "Receita realizada": row.realized,
+      Pacientes: row.patients,
+    })),
+  [financialDashboard.specialtyRows]);
+
+  const financialProfitSpecialtyRows = useMemo(() =>
+    financialDashboard.specialtyRows.map((row: any) => ({
+      name: row.label,
+      Receita: row.realized || row.projected,
+      Repasses: row.professionalPaid,
+      "Despesas alocadas": row.allocatedOperationalExpenses,
+      "Lucro estimado": row.netProfit,
+      "Margem %": row.netMarginPct,
+    })),
+  [financialDashboard.specialtyRows]);
+
+  const financialProfessionalPayoutRows = useMemo(() => {
+    const rows = new Map<string, any>();
+    financialDashboard.professionalPayments.forEach((payment: any) => {
+      const name = payment.professional_name || payment.professionalName || "Profissional";
+      const current = rows.get(name) || {
+        name,
+        Pago: 0,
+        "Pendente/pronto": 0,
+        "Bloqueado/revisão": 0,
+        Total: 0,
+      };
+      const amount = parseCurrencyValue(payment?.amount);
+      const status = normalizeProfessionalTransferStatus(payment).key;
+      if (status === "paid") current.Pago += amount;
+      else if (["blocked", "review", "cancelled"].includes(status)) current["Bloqueado/revisão"] += amount;
+      else current["Pendente/pronto"] += amount;
+      current.Total += amount;
+      rows.set(name, current);
+    });
+    return Array.from(rows.values()).sort((a: any, b: any) => b.Total - a.Total);
+  }, [financialDashboard.professionalPayments]);
+
+  const financialReceivablesStatusRows = useMemo(() => [
+    { name: "Recebido", Valor: financialDashboard.realized, Quantidade: financialDashboard.paidPayments.length },
+    { name: "A receber", Valor: financialDashboard.pendingAmount, Quantidade: financialDashboard.pendingPayments.length },
+    { name: "Em atraso", Valor: financialDashboard.overdueAmount, Quantidade: financialDashboard.overduePayments.length },
+    { name: "Cancelado", Valor: financialDashboard.cancelledAmount, Quantidade: financialDashboard.cancelledPayments.length },
+  ], [
+    financialDashboard.cancelledAmount,
+    financialDashboard.cancelledPayments.length,
+    financialDashboard.overdueAmount,
+    financialDashboard.overduePayments.length,
+    financialDashboard.paidPayments.length,
+    financialDashboard.pendingAmount,
+    financialDashboard.pendingPayments.length,
+    financialDashboard.realized,
+  ]);
+
+  const financialCashFlowRows = useMemo(() =>
+    financialDashboard.revenueRows.map((row: any) => ({
+      name: row.month,
+      "Receita realizada": row.realized,
+      "Resultado estimado": row.profit,
+      monthFull: row.monthFull,
+    })),
+  [financialDashboard.revenueRows]);
+
+  const hasFinancialChartData = (rows: any[], keys: string[]) =>
+    rows.some((row) => keys.some((key) => Math.abs(Number(row?.[key]) || 0) > 0));
+
+  const renderFinancialTooltip = ({ active, payload, label }: any) => {
+    if (!active || !payload?.length) return null;
+    const row = payload[0]?.payload || {};
+    const title = row.monthFull ? `Mês: ${row.monthFull}` : row.name || label;
+    return (
+      <div className="rounded-2xl border border-slate-100 bg-white p-3 text-xs shadow-xl">
+        <p className="mb-2 font-semibold text-slate-900">{title}</p>
+        <div className="space-y-1">
+          {payload.map((item: any) => (
+            <p key={`${item.name}-${item.dataKey}`} className="flex items-center justify-between gap-4 text-slate-600">
+              <span>{item.name}</span>
+              <span className="font-semibold text-slate-900">{formatCurrency(item.value)}</span>
+            </p>
+          ))}
+        </div>
+        {typeof row.Participação === "number" && (
+          <p className="mt-2 text-slate-500">Participação: {row.Participação.toFixed(1)}%</p>
+        )}
+        {typeof row.Quantidade === "number" && (
+          <p className="mt-1 text-slate-500">Quantidade: {row.Quantidade}</p>
+        )}
+        {typeof row["Margem %"] === "number" && (
+          <p className="mt-1 text-slate-500">Margem: {row["Margem %"].toFixed(1)}%</p>
+        )}
+      </div>
+    );
+  };
+
+  const renderFinancialChartCard = (
+    chartId: string,
+    title: string,
+    description: string,
+    hasData: boolean,
+    chart: React.ReactNode,
+    legend?: React.ReactNode,
+  ) => (
+    <div data-financial-chart={chartId} className="rounded-[28px] border border-slate-100 bg-white p-5 shadow-sm">
+      <div>
+        <h4 className="text-sm font-semibold text-slate-900">{title}</h4>
+        <p className="mt-1 text-xs text-slate-500">{description}</p>
+      </div>
+      {hasData ? (
+        <>
+          <div className="mt-4 h-64 min-h-[260px]">{chart}</div>
+          {legend}
+        </>
+      ) : (
+        <div className="mt-4 rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">
+          Ainda não há dados suficientes para este gráfico no período selecionado.
+        </div>
+      )}
+    </div>
+  );
 
   const COLORS = ["#7a32fc", "#6AD2FF", "#EFF4FB", "#A3AED0"];
 
@@ -8666,7 +8865,7 @@ export function CoordinatorDashboard({
           )}
           {isProfessionalPaymentModalOpen && (
             <div
-              className="fixed inset-0 z-[130] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in"
+              className="fixed inset-0 z-[130] flex items-start justify-center overflow-y-auto bg-black/40 p-4 backdrop-blur-sm animate-fade-in sm:items-center"
               onClick={() => {
                 setIsProfessionalPaymentModalOpen(false);
                 setEditingProfessionalPayment(null);
@@ -8674,7 +8873,7 @@ export function CoordinatorDashboard({
               }}
             >
               <div
-                className="bg-white w-full max-w-md rounded-[32px] p-8 shadow-2xl animate-pop relative"
+                className="relative flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-[32px] bg-white shadow-2xl animate-pop"
                 onClick={(e) => e.stopPropagation()}
               >
                 <button
@@ -8687,10 +8886,15 @@ export function CoordinatorDashboard({
                 >
                   <X size={24} />
                 </button>
-                <h2 className="mb-6 flex items-center gap-2 text-2xl font-bold text-slate-900">
-                  <CreditCard size={24} className="text-[#7a32fc]" /> Pagamento Profissional
-                </h2>
-                <div className="space-y-4">
+                <div className="shrink-0 border-b border-slate-100 px-8 pb-4 pt-8">
+                  <h2 className="flex items-center gap-2 pr-8 text-2xl font-bold text-slate-900">
+                    <CreditCard size={24} className="text-[#7a32fc]" /> Registrar repasse
+                  </h2>
+                  <p className="mt-1 pr-8 text-xs text-slate-500">
+                    Cadastre ou revise pagamentos a profissionais com o botão salvar sempre visível.
+                  </p>
+                </div>
+                <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-8 py-6">
                   <div>
                     <label className="mb-1 block text-[10px] font-bold uppercase text-slate-400">
                       Profissional
@@ -8889,11 +9093,25 @@ export function CoordinatorDashboard({
                       />
                     </div>
                   </div>
+                </div>
+                <div className="flex shrink-0 gap-3 border-t border-slate-100 bg-white px-8 py-5">
                   <button
-                    onClick={handleAddProfessionalPayment}
-                    className="mt-4 w-full rounded-2xl bg-[#7a32fc] py-4 text-sm font-bold text-white shadow-lg shadow-purple-500/20"
+                    type="button"
+                    onClick={() => {
+                      setIsProfessionalPaymentModalOpen(false);
+                      setEditingProfessionalPayment(null);
+                      setProfessionalPaymentAdjustmentReason("");
+                    }}
+                    className="min-h-[48px] flex-1 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-600 transition hover:border-slate-300 hover:text-slate-900"
                   >
-                    Salvar Pagamento Profissional
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleAddProfessionalPayment}
+                    className="min-h-[48px] flex-1 rounded-2xl bg-[#7a32fc] px-4 py-3 text-sm font-bold text-white shadow-lg shadow-purple-500/20 transition hover:bg-[#6d28e8]"
+                  >
+                    Salvar repasse
                   </button>
                 </div>
               </div>
@@ -8946,10 +9164,10 @@ export function CoordinatorDashboard({
                     <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                       <div>
                         <h3 className="text-2xl font-semibold tracking-tight text-slate-900">
-                          DRE da Clínica
+                          Dashboard financeiro da clínica
                         </h3>
                         <p className="text-sm text-slate-500">
-                          Projeção pelo cadastro dos pacientes e realizado pelos pagamentos confirmados.
+                          Resumo executivo com origem dos números separada entre projetado, realizado, pendente e previsto.
                         </p>
                       </div>
                       <div className="flex items-center gap-3">
@@ -8968,13 +9186,14 @@ export function CoordinatorDashboard({
                     <div className="mt-6 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
                       {[
                         ["Pacientes ativos", financialDashboard.patientCount, "Com plano financeiro ativo"],
-                        ["Projeção mensal", formatCurrency(financialDashboard.projection), "Mensalidades cadastradas"],
-                        ["Realizado", formatCurrency(financialDashboard.realized), "Pagamentos do mês"],
-                        ["Ticket médio", formatCurrency(financialDashboard.averageTicket), "Por paciente ativo"],
-                        ["Fluxo de caixa", formatCurrency(financialDashboard.cashFlow), "Entradas menos saídas pagas"],
-                        ["Lucro líquido", formatCurrency(financialDashboard.netProfit), `${financialDashboard.netMarginPct.toFixed(1)}% de margem líquida`],
-                        ["Margem contribuição", `${financialDashboard.contributionMarginPct.toFixed(1)}%`, formatCurrency(financialDashboard.contributionMarginValue)],
-                        ["Repasses profissionais", formatCurrency(financialDashboard.professionalPaid), `${formatCurrency(financialDashboard.professionalPending)} pendente`],
+                        ["Receita projetada", formatCurrency(financialDashboard.projection), "Projetado: mensalidades/planos ativos no mês"],
+                        ["Receita realizada", formatCurrency(financialDashboard.realized), "Realizado: pagamentos confirmados no mês"],
+                        ["A receber", formatCurrency(financialDashboard.pendingAmount), "Pendente: cobranças em aberto no mês"],
+                        ["Em atraso", formatCurrency(financialDashboard.overdueAmount), "Pendente vencido no período"],
+                        ["Repasses previstos", formatCurrency(financialDashboard.professionalPending), "Previsto/a pagar a profissionais"],
+                        ["Despesas", formatCurrency(financialDashboard.operationalExpenses), "Realizado: saídas registradas no fluxo de caixa"],
+                        ["Lucro estimado", formatCurrency(financialDashboard.netProfit), `Estimado: ${financialDashboard.netMarginPct.toFixed(1)}% de margem líquida`],
+                        ["Ticket médio", formatCurrency(financialDashboard.averageTicket), "Projetado por paciente ativo"],
                       ].map(([label, value, hint]) => (
                         <div key={label} className="rounded-3xl bg-slate-50/80 p-5">
                           <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">{label}</p>
@@ -8982,6 +9201,149 @@ export function CoordinatorDashboard({
                           <p className="mt-1 text-[11px] text-slate-400">{hint}</p>
                         </div>
                       ))}
+                    </div>
+
+                    <div className="mt-6 rounded-3xl bg-slate-50 px-5 py-4 text-xs text-slate-500">
+                      <p>
+                        Projetado: soma dos planos ativos. Realizado: pagamentos confirmados. A receber: cobranças em aberto. Repasses: valores previstos ou pagos a profissionais. Lucro estimado: receita realizada menos repasses pagos e despesas conhecidas.
+                      </p>
+                    </div>
+
+                    <div data-financial-dashboard-charts className="mt-8">
+                      <div className="mb-4 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+                        <div>
+                          <h4 className="text-lg font-semibold text-slate-900">Gráficos gerenciais</h4>
+                          <p className="text-sm text-slate-500">Leituras rápidas do mês selecionado, sempre separando origem, especialidade, repasses e pendências.</p>
+                        </div>
+                        <span className="w-fit rounded-full bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-widest text-slate-400">
+                          {formatFinancialMonthLabel(financialMonth, "long")}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+                        {renderFinancialChartCard(
+                          "realized-vs-projected",
+                          "Realizado vs projetado por mês",
+                          "Compara a receita projetada do mês com pagamentos confirmados.",
+                          hasFinancialChartData(financialProjectedVsRealizedRows, ["Projetado", "Realizado"]),
+                          <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={260}>
+                            <BarChart data={financialProjectedVsRealizedRows}>
+                              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
+                              <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: "#94A3B8", fontSize: 12 }} />
+                              <YAxis axisLine={false} tickLine={false} tick={{ fill: "#94A3B8", fontSize: 12 }} tickFormatter={(value) => formatCurrency(value)} />
+                              <Tooltip content={renderFinancialTooltip} cursor={{ fill: "#F8FAFC" }} />
+                              <Bar name="Projetado" dataKey="Projetado" fill="#7a32fc" radius={[6, 6, 0, 0]} />
+                              <Bar name="Realizado" dataKey="Realizado" fill="#22c55e" radius={[6, 6, 0, 0]} />
+                            </BarChart>
+                          </SafeResponsiveContainer>,
+                        )}
+
+                        {renderFinancialChartCard(
+                          "revenue-by-origin",
+                          "Receita por origem",
+                          "Mostra a composição entre particular, convênio e outras origens registradas.",
+                          hasFinancialChartData(financialRevenueOriginRows, ["Receita"]),
+                          <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={260}>
+                            <RePieChart>
+                              <Pie data={financialRevenueOriginRows} dataKey="Receita" nameKey="name" innerRadius={58} outerRadius={92} paddingAngle={3}>
+                                {financialRevenueOriginRows.map((entry: any, index: number) => (
+                                  <Cell key={`origin-cell-${entry.name}`} fill={COLORS[index % COLORS.length]} />
+                                ))}
+                              </Pie>
+                              <Tooltip content={renderFinancialTooltip} />
+                            </RePieChart>
+                          </SafeResponsiveContainer>,
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {financialRevenueOriginRows.map((row: any, index: number) => (
+                              <span key={row.name} className="rounded-full bg-slate-50 px-3 py-1 text-[10px] font-semibold text-slate-500">
+                                <span className="mr-1 inline-block h-2 w-2 rounded-full" style={{ backgroundColor: COLORS[index % COLORS.length] }} />
+                                {row.name}: {formatCurrency(row.Receita)}
+                              </span>
+                            ))}
+                          </div>,
+                        )}
+
+                        {renderFinancialChartCard(
+                          "revenue-by-specialty",
+                          "Receita por especialidade",
+                          "Especialidades reais, sem misturar valores sem alocação clínica.",
+                          hasFinancialChartData(financialRevenueSpecialtyRows, ["Receita projetada", "Receita realizada"]),
+                          <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={260}>
+                            <BarChart data={financialRevenueSpecialtyRows}>
+                              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
+                              <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: "#94A3B8", fontSize: 11 }} />
+                              <YAxis axisLine={false} tickLine={false} tick={{ fill: "#94A3B8", fontSize: 12 }} tickFormatter={(value) => formatCurrency(value)} />
+                              <Tooltip content={renderFinancialTooltip} cursor={{ fill: "#F8FAFC" }} />
+                              <Bar name="Receita projetada" dataKey="Receita projetada" fill="#7a32fc" radius={[6, 6, 0, 0]} />
+                              <Bar name="Receita realizada" dataKey="Receita realizada" fill="#06b6d4" radius={[6, 6, 0, 0]} />
+                            </BarChart>
+                          </SafeResponsiveContainer>,
+                        )}
+
+                        {renderFinancialChartCard(
+                          "profit-by-specialty",
+                          "Lucro/margem por especialidade",
+                          "Compara receita, repasses, despesas alocadas e lucro estimado por área clínica.",
+                          hasFinancialChartData(financialProfitSpecialtyRows, ["Receita", "Repasses", "Despesas alocadas", "Lucro estimado"]),
+                          <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={260}>
+                            <BarChart data={financialProfitSpecialtyRows}>
+                              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
+                              <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: "#94A3B8", fontSize: 11 }} />
+                              <YAxis axisLine={false} tickLine={false} tick={{ fill: "#94A3B8", fontSize: 12 }} tickFormatter={(value) => formatCurrency(value)} />
+                              <Tooltip content={renderFinancialTooltip} cursor={{ fill: "#F8FAFC" }} />
+                              <Bar name="Receita" dataKey="Receita" fill="#7a32fc" radius={[6, 6, 0, 0]} />
+                              <Bar name="Repasses" dataKey="Repasses" fill="#f59e0b" radius={[6, 6, 0, 0]} />
+                              <Bar name="Despesas alocadas" dataKey="Despesas alocadas" fill="#94a3b8" radius={[6, 6, 0, 0]} />
+                              <Bar name="Lucro estimado" dataKey="Lucro estimado" fill="#22c55e" radius={[6, 6, 0, 0]} />
+                            </BarChart>
+                          </SafeResponsiveContainer>,
+                        )}
+
+                        {renderFinancialChartCard(
+                          "transfers-by-professional",
+                          "Repasses por profissional",
+                          "Valores agrupados por profissional e status de repasse.",
+                          hasFinancialChartData(financialProfessionalPayoutRows, ["Pago", "Pendente/pronto", "Bloqueado/revisão"]),
+                          <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={260}>
+                            <BarChart data={financialProfessionalPayoutRows} layout="vertical" margin={{ left: 16 }}>
+                              <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#F1F5F9" />
+                              <XAxis type="number" axisLine={false} tickLine={false} tick={{ fill: "#94A3B8", fontSize: 12 }} tickFormatter={(value) => formatCurrency(value)} />
+                              <YAxis type="category" dataKey="name" axisLine={false} tickLine={false} tick={{ fill: "#64748B", fontSize: 11 }} width={110} />
+                              <Tooltip content={renderFinancialTooltip} cursor={{ fill: "#F8FAFC" }} />
+                              <Bar name="Pago" dataKey="Pago" stackId="repasse" fill="#22c55e" radius={[0, 6, 6, 0]} />
+                              <Bar name="Pendente/pronto" dataKey="Pendente/pronto" stackId="repasse" fill="#7a32fc" radius={[0, 6, 6, 0]} />
+                              <Bar name="Bloqueado/revisão" dataKey="Bloqueado/revisão" stackId="repasse" fill="#f43f5e" radius={[0, 6, 6, 0]} />
+                            </BarChart>
+                          </SafeResponsiveContainer>,
+                        )}
+
+                        {renderFinancialChartCard(
+                          "receivables-status",
+                          "Recebimentos e pendências",
+                          "Composição entre recebido, a receber, em atraso e cancelado.",
+                          hasFinancialChartData(financialReceivablesStatusRows, ["Valor"]),
+                          <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={260}>
+                            <RePieChart>
+                              <Pie data={financialReceivablesStatusRows} dataKey="Valor" nameKey="name" outerRadius={95} paddingAngle={2}>
+                                {financialReceivablesStatusRows.map((entry: any, index: number) => (
+                                  <Cell
+                                    key={`receivable-cell-${entry.name}`}
+                                    fill={["#22c55e", "#7a32fc", "#f59e0b", "#94a3b8"][index % 4]}
+                                  />
+                                ))}
+                              </Pie>
+                              <Tooltip content={renderFinancialTooltip} />
+                            </RePieChart>
+                          </SafeResponsiveContainer>,
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {financialReceivablesStatusRows.map((row: any, index: number) => (
+                              <span key={row.name} className="rounded-full bg-slate-50 px-3 py-1 text-[10px] font-semibold text-slate-500">
+                                <span className="mr-1 inline-block h-2 w-2 rounded-full" style={{ backgroundColor: ["#22c55e", "#7a32fc", "#f59e0b", "#94a3b8"][index % 4] }} />
+                                {row.name}: {formatCurrency(row.Valor)}
+                              </span>
+                            ))}
+                          </div>,
+                        )}
+                      </div>
                     </div>
                   </div>
                 )}
@@ -9316,6 +9678,48 @@ export function CoordinatorDashboard({
                               </p>
                             )}
                           </div>
+                          {financialDashboard.unallocatedSpecialtyRows.length > 0 && (
+                            <div data-unallocated-financial-costs className="mt-5 rounded-[28px] border border-amber-100 bg-amber-50 p-5">
+                              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                                <div>
+                                  <p className="text-[10px] font-semibold uppercase tracking-widest text-amber-700">
+                                    Custos/Repasses não alocados
+                                  </p>
+                                  <h5 className="mt-1 text-lg font-semibold text-slate-900">
+                                    {formatCurrency(financialDashboard.unallocatedSpecialtyTotals.professionalPaid + financialDashboard.unallocatedSpecialtyTotals.allocatedOperationalExpenses)}
+                                  </h5>
+                                  <p className="mt-1 max-w-2xl text-sm text-amber-800/80">
+                                    Estes valores ainda não possuem especialidade clínica vinculada. Revise profissional, procedimento ou atendimento de origem antes de interpretar margem por especialidade.
+                                  </p>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => navigateToTab("financial", { breadcrumb: ["Financeiro", "Repasses a profissionais"] })}
+                                  className="w-fit rounded-2xl border border-amber-200 bg-white px-4 py-2 text-sm font-semibold text-amber-800 transition hover:border-amber-300"
+                                >
+                                  Revisar alocação
+                                </button>
+                              </div>
+                              <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+                                <div className="rounded-2xl bg-white/80 p-3">
+                                  <p className="text-[9px] font-semibold uppercase tracking-widest text-amber-700">Receita projetada</p>
+                                  <p className="mt-1 font-semibold text-slate-900">{formatCurrency(financialDashboard.unallocatedSpecialtyTotals.projected)}</p>
+                                </div>
+                                <div className="rounded-2xl bg-white/80 p-3">
+                                  <p className="text-[9px] font-semibold uppercase tracking-widest text-amber-700">Realizado</p>
+                                  <p className="mt-1 font-semibold text-slate-900">{formatCurrency(financialDashboard.unallocatedSpecialtyTotals.realized)}</p>
+                                </div>
+                                <div className="rounded-2xl bg-white/80 p-3">
+                                  <p className="text-[9px] font-semibold uppercase tracking-widest text-amber-700">Repasses</p>
+                                  <p className="mt-1 font-semibold text-slate-900">{formatCurrency(financialDashboard.unallocatedSpecialtyTotals.professionalPaid)}</p>
+                                </div>
+                                <div className="rounded-2xl bg-white/80 p-3">
+                                  <p className="text-[9px] font-semibold uppercase tracking-widest text-amber-700">Despesas alocadas</p>
+                                  <p className="mt-1 font-semibold text-slate-900">{formatCurrency(financialDashboard.unallocatedSpecialtyTotals.allocatedOperationalExpenses)}</p>
+                                </div>
+                              </div>
+                            </div>
+                          )}
                         </div>
 
                         <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
@@ -9450,7 +9854,7 @@ export function CoordinatorDashboard({
                                   <td className="py-4 text-slate-500 text-sm">
                                     {new Date(
                                       p.payment_date || p.due_date,
-                                    ).toLocaleDateString()}
+                                    ).toLocaleDateString("pt-BR")}
                                   </td>
                                   <td className="py-4">
                                     <span className="rounded-full bg-slate-100 px-3 py-1 text-[10px] font-medium uppercase text-slate-600">
@@ -9514,13 +9918,13 @@ export function CoordinatorDashboard({
 
                   <div className="space-y-8">
                     {!isReceptionist && (
-                      <div className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
+                      <div data-financial-chart="cash-flow-monthly" className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
                         <h4 className="mb-6 font-semibold text-slate-900">
-                          Realizado x projeção
+                          Fluxo de caixa mensal
                         </h4>
                         <div className="h-64 min-h-[300px]">
                 <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>
-                            <BarChart data={revenueHistory}>
+                            <BarChart data={financialCashFlowRows}>
                               <CartesianGrid
                                 strokeDasharray="3 3"
                                 vertical={false}
@@ -9538,20 +9942,18 @@ export function CoordinatorDashboard({
                                 tick={{ fill: "#94A3B8", fontSize: 12 }}
                               />
                               <Tooltip
-                                contentStyle={{
-                                  borderRadius: "16px",
-                                  border: "none",
-                                  boxShadow: "0 10px 15px -3px rgb(0 0 0 / 0.1)",
-                                }}
+                                content={renderFinancialTooltip}
                                 cursor={{ fill: "#F8FAFC" }}
                               />
                               <Bar
-                                dataKey="revenue"
+                                name="Receita realizada"
+                                dataKey="Receita realizada"
                                 fill="#7a32fc"
                                 radius={[4, 4, 0, 0]}
                               />
                               <Bar
-                                dataKey="profit"
+                                name="Resultado estimado"
+                                dataKey="Resultado estimado"
                                 fill="#6AD2FF"
                                 radius={[4, 4, 0, 0]}
                               />

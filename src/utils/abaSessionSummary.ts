@@ -1,4 +1,5 @@
 import { getIntervalRunStatus, isActiveIntervalCollection, type AbaIntervalCollectionStatus } from './abaIntervalLifecycle';
+import { resolveTrialPromptInfo } from './abaPromptLevels';
 import { formatPatientLabel, formatTherapistLabel, isTechnicalId, safeDisplayValue } from './displayLabels';
 
 export type SessionSummaryPendingItem = {
@@ -395,6 +396,15 @@ const trialOutcome = (trial: any) => {
   return { independent, prompted, error, correct };
 };
 
+const trialPromptScoreSnapshot = (trial: any): number | null => {
+  const rawPayload = valueOf(trial, 'raw_payload', 'rawPayload') || {};
+  const raw = valueOf(trial, 'promptIndependenceScoreSnapshot', 'prompt_independence_score_snapshot') ??
+    rawPayload.promptIndependenceScoreSnapshot ??
+    rawPayload.prompt_independence_score_snapshot;
+  const numberValue = Number(raw);
+  return Number.isFinite(numberValue) ? Math.max(0, Math.min(100, numberValue)) : null;
+};
+
 export const calculateTrialAccuracy = (trials: any[]) => {
   const outcomes = trials.map(trialOutcome);
   const totalTrials = outcomes.length;
@@ -403,6 +413,18 @@ export const calculateTrialAccuracy = (trials: any[]) => {
 };
 
 export const calculateTrialIndependence = (trials: any[]) => {
+  const snapshotScores = trials.map(trialPromptScoreSnapshot);
+  if (snapshotScores.some((score) => score !== null)) {
+    const normalizedScores = trials.map((trial, index) => {
+      const snapshotScore = snapshotScores[index];
+      if (snapshotScore !== null) return snapshotScore;
+      const outcome = trialOutcome(trial);
+      return outcome.independent ? 100 : 0;
+    });
+    return normalizedScores.length > 0
+      ? Math.round(normalizedScores.reduce((sum, value) => sum + value, 0) / normalizedScores.length)
+      : 0;
+  }
   const outcomes = trials.map(trialOutcome);
   const totalTrials = outcomes.length;
   const independentTrials = outcomes.filter((outcome) => outcome.independent).length;
@@ -649,12 +671,18 @@ export const buildSessionReport = (sessionSummary: SessionSummary): SessionRepor
     ? trialOutcomes.filter((outcome) => outcome.correct).length
     : Math.max(0, sessionSummary.independentTrials + sessionSummary.promptedTrials);
   const promptCounts = countBy(effectiveTrials.map((trial) => {
+    const promptInfo = resolveTrialPromptInfo(trial);
+    if (promptInfo.key && !promptInfo.isIndependent && !promptInfo.isError) return promptInfo.key;
     const promptKey = String(valueOf(trial, 'promptLevelKey', 'prompt_level_key', 'promptLevel', 'prompt_level') || '').toLowerCase();
     if (promptKey) return promptKey;
     const outcome = trialOutcome(trial);
     if (outcome.independent) return 'independent';
     if (outcome.error) return 'error';
     return 'prompted';
+  }));
+  const promptLabelsByKey = new Map(effectiveTrials.map((trial) => {
+    const promptInfo = resolveTrialPromptInfo(trial);
+    return [promptInfo.key, promptInfo.label] as const;
   }));
   const typeCounts = countBy(effectiveTrials.map((trial) => {
     const raw = String(valueOf(trial, 'collectionType', 'collection_type', 'trialType', 'trial_type') || '').toLowerCase();
@@ -693,7 +721,7 @@ export const buildSessionReport = (sessionSummary: SessionSummary): SessionRepor
           promptedCorrect,
           errors,
           accuracyPercent: percent(correct, trials.length),
-          independencePercent: percent(independentCorrect, trials.length),
+          independencePercent: calculateTrialIndependence(trials),
           mostUsedTrialType: mostUsed(trials.map(trialTypeOf)),
           masteryStatus: masteryStatus as SessionReport['targetSummaries'][number]['masteryStatus']
         };
@@ -920,7 +948,7 @@ export const buildSessionReport = (sessionSummary: SessionSummary): SessionRepor
         .filter(([key]) => key !== 'independent' && key !== 'error')
         .map(([key, count]) => ({
           key,
-          label: promptTypeLabels[key] || key,
+          label: String(promptLabelsByKey.get(key) || promptTypeLabels[key] || key),
           count
         }))
     },

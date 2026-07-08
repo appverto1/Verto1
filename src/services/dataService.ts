@@ -10,7 +10,12 @@ import {
   saveEncryptedRecord,
   setEndpointCacheMeta
 } from './localDb';
-import { resolveAbaPromptLevel } from '../utils/abaPromptLevels';
+import {
+  buildAbaPromptSnapshot,
+  normalizeAbaPromptTypeConfig,
+  resolveAbaPromptLevel,
+  resolveTrialPromptInfo
+} from '../utils/abaPromptLevels';
 import { isAbaV2Enabled } from '../utils/featureFlags';
 import { sanitizeTechnicalErrorMessage } from '../utils/displayLabels';
 import { isIdempotentConflictPayload } from '../utils/offlineSyncResilience';
@@ -4777,9 +4782,56 @@ export const dataService = {
     };
   },
 
+  async getAbaPromptTypes() {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(normalizeAbaPromptTypeConfig());
+    const endpoint = '/api/aba/prompt-types';
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await buildConditionalHeaders(endpoint, 'aba'),
+        credentials: 'include'
+      }, { helperName: 'getAbaPromptTypes', operation: 'list', table: 'aba_prompt_types', hasExplicitColumns: true });
+      if (response.ok) {
+        const result = await response.json();
+        return {
+          ...result,
+          data: normalizeAbaPromptTypeConfig(result?.data)
+        };
+      }
+    } catch (error) {
+      console.log('Fetching ABA prompt types from default configuration...');
+    }
+    return { success: true, data: normalizeAbaPromptTypeConfig() };
+  },
+
+  async saveAbaPromptType(promptType: any) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(promptType || {});
+    const id = String(promptType?.id || promptType?.prompt_type_id || promptType?.promptTypeId || generateId());
+    const data = {
+      ...(promptType || {}),
+      id,
+      name: promptType?.name || promptType?.label,
+      category: promptType?.category || 'Geral',
+      independence_score: promptType?.independence_score ?? promptType?.independenceScore,
+      independenceScore: promptType?.independence_score ?? promptType?.independenceScore,
+      intrusiveness_order: promptType?.intrusiveness_order ?? promptType?.intrusivenessOrder,
+      intrusivenessOrder: promptType?.intrusiveness_order ?? promptType?.intrusivenessOrder,
+      counts_as_independent: Boolean(promptType?.counts_as_independent ?? promptType?.countsAsIndependent),
+      countsAsIndependent: Boolean(promptType?.counts_as_independent ?? promptType?.countsAsIndependent),
+      show_in_session: promptType?.show_in_session ?? promptType?.showInSession ?? true,
+      showInSession: promptType?.show_in_session ?? promptType?.showInSession ?? true,
+      active: promptType?.active ?? true,
+      description: promptType?.description || ''
+    };
+    const hasPersistedId = Boolean(promptType?.id || promptType?.prompt_type_id || promptType?.promptTypeId);
+    const endpoint = hasPersistedId ? `/api/aba/prompt-types/${encodeURIComponent(id)}` : '/api/aba/prompt-types';
+    return await saveOfflineFirst(id, data, 'aba', endpoint, hasPersistedId ? 'PATCH' : 'POST');
+  },
+
   async saveAbaTrial(trial: any) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse(trial || {});
     const id = String(trial?.id || trial?.trial_id || trial?.trialId || generateId());
+    const abaPromptInfo = resolveTrialPromptInfo(trial);
+    const promptSnapshot = buildAbaPromptSnapshot(trial);
     const abaPromptLevel = resolveAbaPromptLevel({
       promptLevelKey: trial?.prompt_level_key || trial?.promptLevelKey,
       promptLevelName: trial?.prompt_level_name || trial?.promptLevelName,
@@ -4788,9 +4840,14 @@ export const dataService = {
       correct: trial?.correct,
       independent: trial?.independent
     });
+    const legacyPromptAudit = {
+      prompt_level_key: abaPromptLevel.key,
+      prompt_level_name: abaPromptLevel.label
+    };
     const data = {
       ...(trial || {}),
       ...buildAbaIntegrityFields(trial),
+      legacyPromptAudit,
       id,
       patient_id: trial?.patient_id || trial?.patientId,
       patientId: trial?.patient_id || trial?.patientId,
@@ -4803,11 +4860,12 @@ export const dataService = {
       maintenanceScheduleId: trial?.maintenance_schedule_id || trial?.maintenanceScheduleId || trial?.schedule_id || trial?.scheduleId,
       schedule_id: trial?.schedule_id || trial?.scheduleId || trial?.maintenance_schedule_id || trial?.maintenanceScheduleId,
       scheduleId: trial?.schedule_id || trial?.scheduleId || trial?.maintenance_schedule_id || trial?.maintenanceScheduleId,
-      promptLevel: abaPromptLevel.key,
-      prompt_level_key: abaPromptLevel.key,
-      promptLevelKey: abaPromptLevel.key,
-      prompt_level_name: abaPromptLevel.label,
-      promptLevelName: abaPromptLevel.label,
+      promptLevel: abaPromptInfo.key || abaPromptLevel.key,
+      prompt_level_key: abaPromptInfo.key || abaPromptLevel.key,
+      promptLevelKey: abaPromptInfo.key || abaPromptLevel.key,
+      prompt_level_name: abaPromptInfo.label || abaPromptLevel.label,
+      promptLevelName: abaPromptInfo.label || abaPromptLevel.label,
+      ...promptSnapshot,
       isIndependent: Boolean(trial?.isIndependent ?? trial?.independent),
       isCorrect: Boolean(trial?.isCorrect ?? trial?.correct),
       therapist_id: trial?.therapist_id || trial?.therapistId,
@@ -5135,6 +5193,8 @@ export const dataService = {
   async saveAbaMaintenanceProbeResult(result: any) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse(result || {});
     const id = String(result?.id || result?.result_id || result?.resultId || generateId());
+    const promptInfo = resolveTrialPromptInfo(result);
+    const promptSnapshot = buildAbaPromptSnapshot(result);
     const data = {
       ...(result || {}),
       ...buildAbaIntegrityFields(result),
@@ -5164,8 +5224,9 @@ export const dataService = {
       occurred_at: result?.occurred_at || result?.occurredAt || new Date().toISOString(),
       occurredAt: result?.occurred_at || result?.occurredAt || new Date().toISOString(),
       result: result?.result,
-      prompt_type: result?.prompt_type || result?.promptType,
-      promptType: result?.prompt_type || result?.promptType,
+      prompt_type: result?.prompt_type || result?.promptType || promptInfo.key,
+      promptType: result?.prompt_type || result?.promptType || promptInfo.key,
+      ...promptSnapshot,
       passed: result?.passed,
       total_trials: result?.total_trials ?? result?.totalTrials,
       totalTrials: result?.total_trials ?? result?.totalTrials,

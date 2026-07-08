@@ -24,7 +24,11 @@ import {
 } from 'lucide-react';
 import { sanitizeDescriptionForDisplay } from '../utils/mediaSecurity';
 import { dataService } from '../services/dataService';
-import { ABA_PROMPTED_PROMPT_KEYS, ABA_PROMPTED_PROMPT_OPTIONS, resolveAbaPromptLevel } from '../utils/abaPromptLevels';
+import {
+  normalizeAbaPromptTypeConfig,
+  resolveTrialPromptInfo,
+  type AbaPromptTypeConfig
+} from '../utils/abaPromptLevels';
 import { buildSessionReport, calculateSessionSummary, canCloseAbaSession, canRecordInAbaSession, type SessionSummary, type SessionSummaryPendingItem } from '../utils/abaSessionSummary';
 import { isAbaV2Enabled } from '../utils/featureFlags';
 import { buildClinicalActionToast, buildClinicalOfflineToast, buildClinicalSaveErrorToast, type ClinicalActionToast } from '../utils/abaSessionFeedback';
@@ -96,6 +100,11 @@ type SessionRecord = {
   countDelta?: number | null;
   trialOutcome?: 'independent' | 'prompted' | 'error';
   collectionType?: string;
+  promptTypeId?: string | null;
+  promptTypeNameSnapshot?: string | null;
+  promptCategorySnapshot?: string | null;
+  promptIndependenceScoreSnapshot?: number | null;
+  promptIntrusivenessOrderSnapshot?: number | null;
   promptLevelKey?: string;
   promptLevelName?: string;
   score?: number | null;
@@ -314,15 +323,36 @@ const syncClasses: Record<SyncStatus, string> = {
   error: 'bg-red-50 text-red-600 border-red-100'
 };
 
-const promptedPromptKeySet = new Set<string>(ABA_PROMPTED_PROMPT_KEYS);
-const promptedPromptOptions = ABA_PROMPTED_PROMPT_OPTIONS.map((prompt) => ({
-  ...prompt,
-  compactLabel: prompt.key === 'partial_physical'
+const defaultPromptedPromptOptions = normalizeAbaPromptTypeConfig()
+  .filter((prompt) => prompt.active && prompt.showInSession && !prompt.countsAsIndependent)
+  .map((prompt) => ({
+    ...prompt,
+    compactLabel: prompt.key === 'partial_physical'
+
     ? 'Física parcial'
     : prompt.key === 'full_physical'
       ? 'Física total'
       : prompt.label
 }));
+const buildSessionPromptSnapshot = (prompt: any) => {
+  const rawScore = prompt?.promptIndependenceScoreSnapshot ?? prompt?.independenceScore;
+  const score = Number(rawScore);
+  const rawOrder = prompt?.promptIntrusivenessOrderSnapshot ?? prompt?.intrusivenessOrder;
+  const order = Number(rawOrder);
+  const name = String(prompt?.promptTypeNameSnapshot || prompt?.label || prompt?.name || prompt?.key || '').trim();
+  return {
+    promptTypeId: prompt?.promptTypeId || prompt?.id || null,
+    prompt_type_id: prompt?.promptTypeId || prompt?.id || null,
+    promptTypeNameSnapshot: name || null,
+    prompt_type_name_snapshot: name || null,
+    promptCategorySnapshot: prompt?.promptCategorySnapshot || prompt?.category || null,
+    prompt_category_snapshot: prompt?.promptCategorySnapshot || prompt?.category || null,
+    promptIndependenceScoreSnapshot: Number.isFinite(score) ? score : null,
+    prompt_independence_score_snapshot: Number.isFinite(score) ? score : null,
+    promptIntrusivenessOrderSnapshot: Number.isFinite(order) ? order : null,
+    prompt_intrusiveness_order_snapshot: Number.isFinite(order) ? order : null
+  };
+};
 const REAL_CLINICAL_ID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const isRealClinicalId = (value: unknown) => REAL_CLINICAL_ID_REGEX.test(String(value || '').trim());
 
@@ -357,6 +387,7 @@ const mapRecentAbaEventToSessionRecord = (event: any): SessionRecord | null => {
     const score = event.response_score ?? event.responseScore ?? event.score ?? null;
     const promptLevelKey = event.prompt_level_key || event.promptLevelKey;
     const promptLevelName = event.prompt_level_name || event.promptLevelName;
+    const rawPayload = event.raw_payload || event.rawPayload || {};
     return {
       id: String(event.id),
       kind: 'trial',
@@ -370,11 +401,17 @@ const mapRecentAbaEventToSessionRecord = (event: any): SessionRecord | null => {
       therapistId: event.therapist_id || event.therapistId || null,
       trialOutcome: outcome,
       collectionType,
+      promptTypeId: event.prompt_type_id || event.promptTypeId || rawPayload.promptTypeId || rawPayload.prompt_type_id || null,
+      promptTypeNameSnapshot: event.prompt_type_name_snapshot || event.promptTypeNameSnapshot || rawPayload.promptTypeNameSnapshot || rawPayload.prompt_type_name_snapshot || null,
+      promptCategorySnapshot: event.prompt_category_snapshot || event.promptCategorySnapshot || rawPayload.promptCategorySnapshot || rawPayload.prompt_category_snapshot || null,
+      promptIndependenceScoreSnapshot: event.prompt_independence_score_snapshot ?? event.promptIndependenceScoreSnapshot ?? rawPayload.promptIndependenceScoreSnapshot ?? rawPayload.prompt_independence_score_snapshot ?? null,
+      promptIntrusivenessOrderSnapshot: event.prompt_intrusiveness_order_snapshot ?? event.promptIntrusivenessOrderSnapshot ?? rawPayload.promptIntrusivenessOrderSnapshot ?? rawPayload.prompt_intrusiveness_order_snapshot ?? null,
       promptLevelKey,
       promptLevelName,
       score,
       correct,
-      independent
+      independent,
+      rawPayload
     };
   }
 
@@ -428,6 +465,7 @@ const normalizePersistedSessionRecord = (record: any): SessionRecord => {
     const collectionType = normalizeAbaCollectionType(normalizedRecord.collectionType || record?.collection_type || record?.trialType || 'dtt');
     const promptLevelKey = normalizedRecord.promptLevelKey || record?.prompt_level_key || record?.promptLevel;
     const promptLevelName = normalizedRecord.promptLevelName || record?.prompt_level_name;
+    const rawPayload = normalizedRecord.rawPayload || record?.raw_payload || record?.rawPayload || {};
     const score = normalizedRecord.score ?? record?.response_score ?? 0;
     const scoreNumber = Number(score);
     const isCorrect = typeof normalizedRecord.correct === 'boolean' ? normalizedRecord.correct : Number.isFinite(scoreNumber) && scoreNumber > 0;
@@ -436,8 +474,14 @@ const normalizePersistedSessionRecord = (record: any): SessionRecord => {
     return {
       ...normalizedRecord,
       collectionType,
+      promptTypeId: normalizedRecord.promptTypeId || record?.prompt_type_id || record?.promptTypeId || rawPayload.promptTypeId || rawPayload.prompt_type_id || null,
+      promptTypeNameSnapshot: normalizedRecord.promptTypeNameSnapshot || record?.prompt_type_name_snapshot || record?.promptTypeNameSnapshot || rawPayload.promptTypeNameSnapshot || rawPayload.prompt_type_name_snapshot || null,
+      promptCategorySnapshot: normalizedRecord.promptCategorySnapshot || record?.prompt_category_snapshot || record?.promptCategorySnapshot || rawPayload.promptCategorySnapshot || rawPayload.prompt_category_snapshot || null,
+      promptIndependenceScoreSnapshot: normalizedRecord.promptIndependenceScoreSnapshot ?? record?.prompt_independence_score_snapshot ?? record?.promptIndependenceScoreSnapshot ?? rawPayload.promptIndependenceScoreSnapshot ?? rawPayload.prompt_independence_score_snapshot ?? null,
+      promptIntrusivenessOrderSnapshot: normalizedRecord.promptIntrusivenessOrderSnapshot ?? record?.prompt_intrusiveness_order_snapshot ?? record?.promptIntrusivenessOrderSnapshot ?? rawPayload.promptIntrusivenessOrderSnapshot ?? rawPayload.prompt_intrusiveness_order_snapshot ?? null,
       promptLevelKey,
       promptLevelName,
+      rawPayload,
       trialOutcome: outcome,
       detail: formatAbaTrialHistoryLabel({
         collectionType,
@@ -733,6 +777,7 @@ export const SessionMode = ({
   const [durationBlockModalOpen, setDurationBlockModalOpen] = useState(false);
   const [promptSelectionGoal, setPromptSelectionGoal] = useState<any>(null);
   const [promptWarning, setPromptWarning] = useState('');
+  const [clinicPromptTypes, setClinicPromptTypes] = useState<AbaPromptTypeConfig[]>(() => normalizeAbaPromptTypeConfig());
   const [mobileFocusMode, setMobileFocusMode] = useState(true);
   const [mobileSelectedGoalKey, setMobileSelectedGoalKey] = useState('');
   const [mobilePromptGridGoalKey, setMobilePromptGridGoalKey] = useState('');
@@ -758,6 +803,33 @@ export const SessionMode = ({
   const [editingRecordTitle, setEditingRecordTitle] = useState('');
   const [editingRecordDetail, setEditingRecordDetail] = useState('');
   const [editingRecordCollectionType, setEditingRecordCollectionType] = useState('dtt');
+  const promptedPromptOptions = useMemo(() => {
+    const options = normalizeAbaPromptTypeConfig(clinicPromptTypes)
+      .filter((prompt) => prompt.active && prompt.showInSession && !prompt.countsAsIndependent)
+      .filter((prompt) => prompt.key !== 'independent' && prompt.key !== 'error')
+      .map((prompt) => ({
+        ...prompt,
+        compactLabel: prompt.label
+      }));
+    return options.length > 0 ? options : defaultPromptedPromptOptions;
+  }, [clinicPromptTypes]);
+  const promptedPromptKeySet = useMemo(() => new Set(promptedPromptOptions.map((prompt) => prompt.key)), [promptedPromptOptions]);
+
+  useEffect(() => {
+    let cancelled = false;
+    dataService.getAbaPromptTypes()
+      .then((result: any) => {
+        if (cancelled) return;
+        setClinicPromptTypes(normalizeAbaPromptTypeConfig(result?.data));
+      })
+      .catch((error) => {
+        if (import.meta.env.DEV) console.warn('Falha ao carregar tipos de ajuda ABA:', error);
+        if (!cancelled) setClinicPromptTypes(normalizeAbaPromptTypeConfig());
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const [editingRecordLocation, setEditingRecordLocation] = useState('');
   const [editingRecordSeverity, setEditingRecordSeverity] = useState(2);
   const [editingRecordAntecedent, setEditingRecordAntecedent] = useState('');
@@ -1778,6 +1850,7 @@ export const SessionMode = ({
       return { success: false, error: 'missing_real_maintenance_probe_link' };
     }
     const promptType = params.outcome === 'prompted' ? params.selectedPrompt.key : null;
+    const promptSnapshot = buildSessionPromptSnapshot(params.selectedPrompt);
     const syntheticRecord: SessionRecord = {
       id: params.trialId,
       kind: 'trial',
@@ -1789,6 +1862,11 @@ export const SessionMode = ({
       targetName: goalName,
       trialOutcome: params.outcome,
       collectionType: 'maintenance_probe',
+      promptTypeId: promptSnapshot.promptTypeId,
+      promptTypeNameSnapshot: promptSnapshot.promptTypeNameSnapshot,
+      promptCategorySnapshot: promptSnapshot.promptCategorySnapshot,
+      promptIndependenceScoreSnapshot: promptSnapshot.promptIndependenceScoreSnapshot,
+      promptIntrusivenessOrderSnapshot: promptSnapshot.promptIntrusivenessOrderSnapshot,
       promptLevelKey: params.selectedPrompt.key,
       promptLevelName: params.selectedPrompt.label,
       score: params.score,
@@ -1817,6 +1895,11 @@ export const SessionMode = ({
         independent: Boolean(record.independent),
         collection_type: record.collectionType,
         prompt_level_key: record.promptLevelKey,
+        prompt_type_id: record.promptTypeId,
+        prompt_type_name_snapshot: record.promptTypeNameSnapshot,
+        prompt_category_snapshot: record.promptCategorySnapshot,
+        prompt_independence_score_snapshot: record.promptIndependenceScoreSnapshot,
+        prompt_intrusiveness_order_snapshot: record.promptIntrusivenessOrderSnapshot,
         trial_outcome: record.trialOutcome,
         therapist_id: record.therapistId || resolvedTherapistId || null,
         occurred_at: record.timestamp
@@ -1855,6 +1938,7 @@ export const SessionMode = ({
       result: params.outcome,
       prompt_type: promptType,
       promptType,
+      ...promptSnapshot,
       passed: maintenanceEvaluation.status === 'MAINTAINED',
       status: maintenanceEvaluation.status,
       probeStatus: maintenanceEvaluation.status,
@@ -1883,6 +1967,7 @@ export const SessionMode = ({
         result: params.outcome,
         score: params.score,
         promptType,
+        ...promptSnapshot,
         targetName: goalName,
         status: maintenanceEvaluation.status,
         reasons: maintenanceEvaluation.reasons,
@@ -2028,6 +2113,16 @@ export const SessionMode = ({
         promptLevelKey: record.promptLevelKey,
         prompt_level_name: record.promptLevelName,
         promptLevelName: record.promptLevelName,
+        prompt_type_id: record.promptTypeId,
+        promptTypeId: record.promptTypeId,
+        prompt_type_name_snapshot: record.promptTypeNameSnapshot,
+        promptTypeNameSnapshot: record.promptTypeNameSnapshot,
+        prompt_category_snapshot: record.promptCategorySnapshot,
+        promptCategorySnapshot: record.promptCategorySnapshot,
+        prompt_independence_score_snapshot: record.promptIndependenceScoreSnapshot,
+        promptIndependenceScoreSnapshot: record.promptIndependenceScoreSnapshot,
+        prompt_intrusiveness_order_snapshot: record.promptIntrusivenessOrderSnapshot,
+        promptIntrusivenessOrderSnapshot: record.promptIntrusivenessOrderSnapshot,
         occurred_at: record.timestamp,
         occurredAt: record.timestamp,
         timestamp: record.timestamp,
@@ -2058,7 +2153,12 @@ export const SessionMode = ({
         outcome: record.trialOutcome || (record.correct ? 'independent' : 'error'),
         selectedPrompt: {
           key: record.promptLevelKey || 'independent',
-          label: record.promptLevelName || record.promptLevelKey || 'Independente'
+          label: record.promptLevelName || record.promptLevelKey || 'Independente',
+          promptTypeId: record.promptTypeId || null,
+          promptTypeNameSnapshot: record.promptTypeNameSnapshot || record.promptLevelName || null,
+          promptCategorySnapshot: record.promptCategorySnapshot || null,
+          promptIndependenceScoreSnapshot: record.promptIndependenceScoreSnapshot ?? null,
+          promptIntrusivenessOrderSnapshot: record.promptIntrusivenessOrderSnapshot ?? null
         },
         timestamp: record.timestamp,
         trialId: record.id,
@@ -2174,6 +2274,7 @@ export const SessionMode = ({
     const isIndependent = outcome === 'independent';
     const trialId = `trial-${crypto.randomUUID()}`;
     const collectionLabel = getAbaCollectionLabel(normalizedCollectionType);
+    const promptSnapshot = buildSessionPromptSnapshot(selectedPrompt);
 
     addRecord({
       id: trialId,
@@ -2193,6 +2294,11 @@ export const SessionMode = ({
       therapistId: resolvedTherapistId || null,
       trialOutcome: outcome,
       collectionType: normalizedCollectionType,
+      promptTypeId: promptSnapshot.promptTypeId,
+      promptTypeNameSnapshot: promptSnapshot.promptTypeNameSnapshot,
+      promptCategorySnapshot: promptSnapshot.promptCategorySnapshot,
+      promptIndependenceScoreSnapshot: promptSnapshot.promptIndependenceScoreSnapshot,
+      promptIntrusivenessOrderSnapshot: promptSnapshot.promptIntrusivenessOrderSnapshot,
       promptLevelKey: selectedPrompt.key,
       promptLevelName: selectedPrompt.label,
       score,
@@ -2202,6 +2308,7 @@ export const SessionMode = ({
         source: 'session_mode_trial',
         clientTrialId: trialId,
         targetMaxScore: maxScore,
+        ...promptSnapshot,
         sessionReferenceDate: activeSession?.referenceDate || timestamp.slice(0, 10),
         maintenanceScheduleId: isMaintenanceAttempt ? maintenanceScheduleId : undefined,
         maintenance_schedule_id: isMaintenanceAttempt ? maintenanceScheduleId : undefined,
@@ -2249,6 +2356,7 @@ export const SessionMode = ({
         promptLevelKey: selectedPrompt.key,
         promptLevelName: selectedPrompt.label,
         promptLevel: selectedPrompt.key,
+        ...promptSnapshot,
         promptLevelSource: outcome === 'independent' ? 'independent_button' : outcome === 'error' ? 'error_button' : 'prompt_modal',
         correct: isCorrect,
         isCorrect,
@@ -2286,10 +2394,11 @@ export const SessionMode = ({
   const handleTrialClick = async (goal: any, score: number, outcome: 'independent' | 'prompted' | 'error', promptedPromptKey?: string) => {
     if (!ensureSessionCanRecord()) return;
     const selectedPrompt = outcome === 'independent'
-      ? resolveAbaPromptLevel({ promptLevelKey: 'independent' })
+      ? { ...resolveTrialPromptInfo({ promptLevelKey: 'independent' }, clinicPromptTypes), compactLabel: 'Independente' }
       : outcome === 'error'
-        ? resolveAbaPromptLevel({ promptLevelKey: 'error' })
-        : resolveAbaPromptLevel({ promptLevelKey: promptedPromptKey || promptLevelKey });
+        ? { ...resolveTrialPromptInfo({ promptLevelKey: 'error' }, clinicPromptTypes), compactLabel: 'Erro' }
+        : promptedPromptOptions.find((prompt) => prompt.key === (promptedPromptKey || promptLevelKey)) ||
+          { ...resolveTrialPromptInfo({ promptLevelKey: promptedPromptKey || promptLevelKey }, clinicPromptTypes), compactLabel: 'Com ajuda' };
     if (outcome === 'prompted' && !promptedPromptKeySet.has(selectedPrompt.key)) {
       setPromptWarning('Selecione visual, gestual, verbal, modelo, física parcial ou física total antes de salvar.');
       setPromptSelectionGoal(goal);

@@ -43,7 +43,12 @@ import {
   buildActivationEmailTemplate,
   buildPasswordRecoveryEmailTemplate
 } from './src/services/emailTemplates';
-import { resolveAbaPromptLevel } from './src/utils/abaPromptLevels';
+import {
+  buildAbaPromptSnapshot,
+  normalizeAbaPromptTypeConfig,
+  resolveAbaPromptLevel,
+  resolveTrialPromptInfo
+} from './src/utils/abaPromptLevels';
 import { abaMasteryCriterionSourceLabel, buildTargetStatusAuditLog, evaluateMaintenanceStatus, evaluateTargetMastery, formatAbaMasteryCriterion, normalizeAbaMasteryCriterion } from './src/utils/abaMasteryEngine';
 import {
   buildDefaultMaintenanceSchedulePreview,
@@ -5740,6 +5745,41 @@ function dateGroupForClinic(value: unknown, user: any): string {
 function hasGlobalClinicAccess(user: any): boolean {
   const role = sanitizeString(user?.role, 40).toLowerCase();
   return role === 'admin' || role === 'owner';
+}
+
+function normalizePromptTypeKey(value: unknown): string {
+  return sanitizeString(value, 160)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+function buildAbaPromptTypePayload(input: any, clinicId: string, actorId?: string | null) {
+  const name = sanitizeTextField(input?.name || input?.label, 120);
+  const key = normalizePromptTypeKey(input?.key || name);
+  const score = asSafeNumber(input?.independence_score ?? input?.independenceScore, 0, 100);
+  const order = Math.max(0, Math.round(asSafeNumber(input?.intrusiveness_order ?? input?.intrusivenessOrder, 0, 1000) || 0));
+  return cleanObject({
+    id: isUuid(sanitizeString(input?.id || input?.prompt_type_id || input?.promptTypeId, 120))
+      ? sanitizeString(input?.id || input?.prompt_type_id || input?.promptTypeId, 120)
+      : crypto.randomUUID(),
+    organization_id: clinicId,
+    key,
+    name,
+    category: sanitizeTextField(input?.category, 80) || 'Geral',
+    independence_score: score,
+    intrusiveness_order: order,
+    counts_as_independent: Boolean(input?.counts_as_independent ?? input?.countsAsIndependent),
+    show_in_session: input?.show_in_session !== false && input?.showInSession !== false,
+    active: input?.active !== false,
+    description: sanitizeTextField(input?.description, 500),
+    is_system_default: Boolean(input?.is_system_default ?? input?.isSystemDefault),
+    updated_by: sanitizeString(actorId, 120) || null,
+    updated_at: new Date().toISOString(),
+    created_by: sanitizeString(actorId, 120) || null
+  });
 }
 
 function canAccessClinicFinance(user: any): boolean {
@@ -28704,6 +28744,11 @@ async function startServer() {
     'independent',
     'prompt_level_key',
     'prompt_level_name',
+    'prompt_type_id',
+    'prompt_type_name_snapshot',
+    'prompt_category_snapshot',
+    'prompt_independence_score_snapshot',
+    'prompt_intrusiveness_order_snapshot',
     'notes',
     'occurred_at',
     'therapist_id',
@@ -52698,6 +52743,55 @@ async function startServer() {
     }
   });
 
+  app.get('/api/aba/prompt-types', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!clinicId) return res.status(400).json({ success: false, error: 'Clínica não identificada.' });
+      const { data, error } = await supabase
+        .from('aba_prompt_types')
+        .select('id,organization_id,key,name,category,independence_score,intrusiveness_order,counts_as_independent,show_in_session,active,description,is_system_default,created_at,updated_at')
+        .eq('organization_id', clinicId)
+        .order('intrusiveness_order', { ascending: true })
+        .order('name', { ascending: true });
+      if (error) {
+        if (hasMissingFinancialSchema(error)) return res.json({ success: true, data: normalizeAbaPromptTypeConfig() });
+        throw error;
+      }
+      return res.json({ success: true, data: normalizeAbaPromptTypeConfig(data || []) });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
+    }
+  });
+
+  const saveAbaPromptTypeHandler = async (req: any, res: any) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload do tipo de ajuda ABA')) return;
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!clinicId) return res.status(400).json({ success: false, error: 'Clínica não identificada.' });
+      const payload = buildAbaPromptTypePayload({
+        ...(req.body || {}),
+        id: req.params.promptTypeId || req.body?.id || req.body?.promptTypeId || req.body?.prompt_type_id
+      }, clinicId, req.session.user?.id);
+      if (!payload.name) return res.status(400).json({ success: false, error: 'Nome do tipo de ajuda é obrigatório.' });
+      if (!payload.key) return res.status(400).json({ success: false, error: 'Identificador do tipo de ajuda é obrigatório.' });
+      const result = await writeAbaRowWithSchemaFallback('aba_prompt_types', payload, 'upsert');
+      if (result.error) {
+        if (hasMissingFinancialSchema(result.error)) return res.status(503).json({ success: false, error: 'Schema de tipos de ajuda ABA ainda não aplicado.' });
+        throw result.error;
+      }
+      return res.json({ success: true, data: normalizeAbaPromptTypeConfig([{ ...payload, id: (result.data as any)?.id || payload.id }])[0] });
+    } catch (error: any) {
+      const message = sanitizeString(error?.message || '', 500).toLowerCase();
+      if (message.includes('duplicate') || message.includes('unique')) {
+        return res.status(409).json({ success: false, error: 'Já existe um tipo de ajuda ativo com esse nome.' });
+      }
+      return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
+    }
+  };
+
+  app.post('/api/aba/prompt-types', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'admin', 'owner'), saveAbaPromptTypeHandler);
+  app.patch('/api/aba/prompt-types/:promptTypeId', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'admin', 'owner'), saveAbaPromptTypeHandler);
+
   app.post('/api/aba/maintenance-probe-results', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 96 * 1024, 'Payload de maintenance probe ABA')) return;
@@ -52747,6 +52841,33 @@ async function startServer() {
       const trialId = sanitizeString(req.body?.trial_id || req.body?.trialId || req.body?.raw_payload?.trialId || req.body?.rawPayload?.trialId, 180) || null;
       const singleTrialResult = sanitizeString(req.body?.result || req.body?.outcome || req.body?.trialOutcome, 40).toLowerCase();
       const promptType = sanitizeString(req.body?.prompt_type || req.body?.promptType || req.body?.prompt_level_key || req.body?.promptLevelKey, 80) || null;
+      const promptTypeId = sanitizeString(req.body?.prompt_type_id || req.body?.promptTypeId, 120) || null;
+      let promptTypeRow: any = null;
+      if (promptTypeId) {
+        if (!isUuid(promptTypeId)) return res.status(400).json({ success: false, error: 'Tipo de ajuda inválido.' });
+        const promptTypeResult = await supabase
+          .from('aba_prompt_types')
+          .select('id,organization_id,key,name,category,independence_score,intrusiveness_order,counts_as_independent,show_in_session,active,description,is_system_default')
+          .eq('id', promptTypeId)
+          .eq('organization_id', clinicId)
+          .maybeSingle();
+        if (promptTypeResult.error) {
+          if (hasMissingFinancialSchema(promptTypeResult.error)) return res.status(503).json({ success: false, error: 'Schema de tipos de ajuda ABA ainda não aplicado.' });
+          throw promptTypeResult.error;
+        }
+        if (!promptTypeResult.data) return res.status(403).json({ success: false, error: 'Tipo de ajuda não pertence a esta clínica.' });
+        promptTypeRow = promptTypeResult.data;
+      }
+      const promptSnapshot = buildAbaPromptSnapshot({
+        ...(req.body || {}),
+        promptTypeId,
+        prompt_type_id: promptTypeId,
+        promptLevelKey: promptType || req.body?.prompt_level_key || req.body?.promptLevelKey,
+        promptTypeNameSnapshot: req.body?.promptTypeNameSnapshot || req.body?.prompt_type_name_snapshot || promptTypeRow?.name,
+        promptCategorySnapshot: req.body?.promptCategorySnapshot || req.body?.prompt_category_snapshot || promptTypeRow?.category,
+        promptIndependenceScoreSnapshot: req.body?.promptIndependenceScoreSnapshot ?? req.body?.prompt_independence_score_snapshot ?? promptTypeRow?.independence_score,
+        promptIntrusivenessOrderSnapshot: req.body?.promptIntrusivenessOrderSnapshot ?? req.body?.prompt_intrusiveness_order_snapshot ?? promptTypeRow?.intrusiveness_order
+      }, promptTypeRow ? [promptTypeRow] : undefined);
       const { criterion } = await fetchAbaMasteryCriterion({
         organizationId,
         clinicId,
@@ -52772,6 +52893,11 @@ async function startServer() {
           'correct',
           'independent',
           'prompt_level_key',
+          'prompt_type_id',
+          'prompt_type_name_snapshot',
+          'prompt_category_snapshot',
+          'prompt_independence_score_snapshot',
+          'prompt_intrusiveness_order_snapshot',
           'occurred_at',
           'therapist_id',
           'created_at'
@@ -52856,6 +52982,11 @@ async function startServer() {
         occurred_at: occurredAt,
         result: ['independent', 'prompted', 'error'].includes(singleTrialResult) ? singleTrialResult : null,
         prompt_type: promptType,
+        prompt_type_id: promptSnapshot.prompt_type_id,
+        prompt_type_name_snapshot: promptSnapshot.prompt_type_name_snapshot,
+        prompt_category_snapshot: promptSnapshot.prompt_category_snapshot,
+        prompt_independence_score_snapshot: promptSnapshot.prompt_independence_score_snapshot,
+        prompt_intrusiveness_order_snapshot: promptSnapshot.prompt_intrusiveness_order_snapshot,
         passed: req.body?.passed !== undefined ? Boolean(req.body.passed) : probeStatus === 'MAINTAINED',
         total_trials: totalTrials,
         independent_trials: independentTrials,
@@ -52871,6 +53002,7 @@ async function startServer() {
           clinicalDate,
           result: ['independent', 'prompted', 'error'].includes(singleTrialResult) ? singleTrialResult : undefined,
           promptType: promptType || undefined,
+          ...promptSnapshot,
           targetName: sanitizeTextField(req.body?.target_name || req.body?.targetName, 240),
           noAutomaticTargetMutation: true,
           humanReviewRequiredForRegressionConfirmed: true
@@ -53712,8 +53844,46 @@ async function startServer() {
         correct: req.body?.is_correct ?? req.body?.isCorrect ?? correct,
         independent: req.body?.is_independent ?? req.body?.isIndependent ?? req.body?.independent
       });
-      const promptKey = promptLevel.key;
-      const independent = correct && promptLevel.isIndependent;
+      const legacyPromptAudit = {
+        prompt_level_key: promptLevel.key,
+        prompt_level_name: promptLevel.label
+      };
+      const promptTypeId = sanitizeString(req.body?.prompt_type_id || req.body?.promptTypeId, 120) || null;
+      let promptTypeRow: any = null;
+      if (promptTypeId) {
+        if (!isUuid(promptTypeId)) return res.status(400).json({ success: false, error: 'Tipo de ajuda inválido.' });
+        const promptTypeResult = await supabase
+          .from('aba_prompt_types')
+          .select('id,organization_id,key,name,category,independence_score,intrusiveness_order,counts_as_independent,show_in_session,active,description,is_system_default')
+          .eq('id', promptTypeId)
+          .eq('organization_id', clinicId)
+          .maybeSingle();
+        if (promptTypeResult.error) {
+          if (hasMissingFinancialSchema(promptTypeResult.error)) return res.status(503).json({ success: false, error: 'Schema de tipos de ajuda ABA ainda não aplicado.' });
+          throw promptTypeResult.error;
+        }
+        if (!promptTypeResult.data) return res.status(403).json({ success: false, error: 'Tipo de ajuda não pertence a esta clínica.' });
+        promptTypeRow = promptTypeResult.data;
+      }
+      const promptInput = {
+        ...(req.body || {}),
+        promptTypeId,
+        prompt_type_id: promptTypeId,
+        promptTypeNameSnapshot: req.body?.promptTypeNameSnapshot || req.body?.prompt_type_name_snapshot || promptTypeRow?.name,
+        promptCategorySnapshot: req.body?.promptCategorySnapshot || req.body?.prompt_category_snapshot || promptTypeRow?.category,
+        promptIndependenceScoreSnapshot: req.body?.promptIndependenceScoreSnapshot ?? req.body?.prompt_independence_score_snapshot ?? promptTypeRow?.independence_score,
+        promptIntrusivenessOrderSnapshot: req.body?.promptIntrusivenessOrderSnapshot ?? req.body?.prompt_intrusiveness_order_snapshot ?? promptTypeRow?.intrusiveness_order,
+        promptLevelKey: req.body?.prompt_level_key || req.body?.promptLevelKey || req.body?.promptLevel || promptTypeRow?.key || promptLevel.key,
+        promptLevelName: req.body?.prompt_level_name || req.body?.promptLevelName || promptTypeRow?.name || promptLevel.label,
+        score,
+        maxScore,
+        correct: req.body?.is_correct ?? req.body?.isCorrect ?? correct,
+        independent: req.body?.is_independent ?? req.body?.isIndependent ?? req.body?.independent
+      };
+      const promptInfo = resolveTrialPromptInfo(promptInput, promptTypeRow ? [promptTypeRow] : undefined);
+      const promptSnapshot = buildAbaPromptSnapshot(promptInput, promptTypeRow ? [promptTypeRow] : undefined);
+      const promptKey = promptInfo.key || promptLevel.key;
+      const independent = correct && promptInfo.isIndependent;
       const targetName = sanitizeTextField(req.body?.target_name || req.body?.targetName || req.body?.title, 240);
       if (!targetName) return res.status(400).json({ success: false, error: 'Target é obrigatório.' });
 
@@ -53772,8 +53942,13 @@ async function startServer() {
         correct,
         independent,
         prompt_level_key: promptKey || null,
-        prompt_level_id: sanitizeString(req.body?.prompt_level_id || req.body?.promptLevelId || promptKey, 180) || null,
-        prompt_level_name: promptLevel.label,
+        prompt_level_id: sanitizeString(req.body?.prompt_level_id || req.body?.promptLevelId || promptTypeId || promptKey, 180) || null,
+        prompt_level_name: promptInfo.label || promptLevel.label,
+        prompt_type_id: promptSnapshot.prompt_type_id,
+        prompt_type_name_snapshot: promptSnapshot.prompt_type_name_snapshot,
+        prompt_category_snapshot: promptSnapshot.prompt_category_snapshot,
+        prompt_independence_score_snapshot: promptSnapshot.prompt_independence_score_snapshot,
+        prompt_intrusiveness_order_snapshot: promptSnapshot.prompt_intrusiveness_order_snapshot,
         latency_ms: req.body?.latency_ms !== undefined || req.body?.latencyMs !== undefined
           ? asSafeNumber(req.body?.latency_ms ?? req.body?.latencyMs, 0, 3_600_000)
           : null,
@@ -53791,7 +53966,9 @@ async function startServer() {
           maintenance_schedule_id: isAbaMaintenanceProbeCollection(collectionType) ? maintenanceScheduleId : undefined,
           clinicalDate: maintenanceClinicalDate || undefined,
           trialType: sanitizeString(req.body?.trialType || req.body?.trial_type || req.body?.collection_type || req.body?.collectionType, 80),
-          promptLevel: promptLevel.key,
+          legacyPromptAudit,
+          promptLevel: promptKey,
+          ...promptSnapshot,
           isIndependent: independent,
           isCorrect: correct,
           therapistId: sanitizeString(req.body?.therapist_id || req.body?.therapistId || req.session.user?.id, 120),

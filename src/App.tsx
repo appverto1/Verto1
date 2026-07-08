@@ -5,7 +5,7 @@ import { Database, CheckCircle2, AlertCircle, Lock, WifiOff, LayoutDashboard, Re
 import { clearSensitiveOfflineCacheForUser, getFailedSyncRecords, resetFailedSyncRecord, syncOfflineData } from './services/localDb';
 import { dataService } from './services/dataService';
 import { formatProfessionalRegistry } from './utils/professionalRegistry';
-import { resolveAbaPromptLevel } from './utils/abaPromptLevels';
+import { buildAbaPromptSnapshot, resolveAbaPromptLevel, resolveTrialPromptInfo } from './utils/abaPromptLevels';
 import { isAbaV2Enabled } from './utils/featureFlags';
 import { formatPatientLabel, safeDisplayValue, sanitizeTechnicalErrorMessage } from './utils/displayLabels';
 import {
@@ -5912,10 +5912,36 @@ export default function App() {
       correct: abaCorrect,
       independent: sessionMeta?.independent
     });
-    const promptLevelKey = abaPromptLevel.key;
+    const legacyPromptAudit = {
+      prompt_level_key: abaPromptLevel.key,
+      prompt_level_name: abaPromptLevel.label
+    };
+    const abaPromptInfo = resolveTrialPromptInfo({
+      promptTypeId: sessionMeta?.promptTypeId || sessionMeta?.prompt_type_id,
+      promptTypeNameSnapshot: sessionMeta?.promptTypeNameSnapshot || sessionMeta?.prompt_type_name_snapshot,
+      promptCategorySnapshot: sessionMeta?.promptCategorySnapshot || sessionMeta?.prompt_category_snapshot,
+      promptIndependenceScoreSnapshot: sessionMeta?.promptIndependenceScoreSnapshot ?? sessionMeta?.prompt_independence_score_snapshot,
+      promptIntrusivenessOrderSnapshot: sessionMeta?.promptIntrusivenessOrderSnapshot ?? sessionMeta?.prompt_intrusiveness_order_snapshot,
+      promptLevelKey: sessionMeta?.promptLevelKey,
+      promptLevelName: sessionMeta?.promptLevelName,
+      score: finalScore,
+      maxScore: maxScoreForAba,
+      correct: abaCorrect,
+      independent: sessionMeta?.independent
+    });
+    const promptSnapshot = buildAbaPromptSnapshot({
+      ...sessionMeta,
+      promptLevelKey: sessionMeta?.promptLevelKey,
+      promptLevelName: sessionMeta?.promptLevelName,
+      score: finalScore,
+      maxScore: maxScoreForAba,
+      correct: abaCorrect,
+      independent: sessionMeta?.independent
+    });
+    const promptLevelKey = abaPromptInfo.key;
     const abaIndependent = typeof sessionMeta?.independent === 'boolean'
-      ? abaCorrect && sessionMeta.independent && abaPromptLevel.isIndependent
-      : abaCorrect && abaPromptLevel.isIndependent;
+      ? abaCorrect && sessionMeta.independent && abaPromptInfo.isIndependent
+      : abaCorrect && abaPromptInfo.isIndependent;
     const abaCollectionType = String(sessionMeta?.collectionType || 'dtt').toLowerCase();
     const abaTargetId = String(
       sessionTargetKey ||
@@ -5971,8 +5997,9 @@ export default function App() {
           prompt_level_key: promptLevelKey,
           promptLevel: promptLevelKey,
           promptLevelKey,
-          prompt_level_name: abaPromptLevel.label,
-          promptLevelName: abaPromptLevel.label,
+          prompt_level_name: abaPromptInfo.label,
+          promptLevelName: abaPromptInfo.label,
+          ...promptSnapshot,
           notes: evalComment || '',
           occurred_at: recordedAt,
           timestamp: recordedAt,
@@ -5983,13 +6010,15 @@ export default function App() {
           raw_payload: {
             legacyScore: score,
             normalizedScore: finalScore,
+            legacyPromptAudit,
             isKid,
             clinicId: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
             source: 'verto_web',
             sessionReferenceDate: sessionMeta?.sessionReferenceDate || null,
             clientTrialId: sessionMeta?.trialId || sessionMeta?.trial_id || null,
-            promptLevelKey: abaPromptLevel.key,
-            promptLevelName: abaPromptLevel.label,
+            promptLevelKey: abaPromptInfo.key,
+            promptLevelName: abaPromptInfo.label,
+            ...promptSnapshot,
             promptLevelSource: sessionMeta?.promptLevelSource || null,
             trialType: abaCollectionType,
             maintenanceScheduleId: abaMaintenanceScheduleId || null,
