@@ -3,8 +3,12 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   acceptRecommendationForNextSession,
+  abaRecommendationPriorityLabel,
+  abaRecommendationTypeLabel,
+  deduplicateAbaRecommendationsForDecisionQueue,
   generateNextSessionRecommendations,
-  rejectRecommendation
+  rejectRecommendation,
+  translateAbaRecommendationText
 } from '../src/utils/abaPlanningEngine.ts';
 
 const root = process.cwd();
@@ -72,7 +76,7 @@ test('target em manutencao sem schedule gera recomendacao de agendamento', () =>
     maintenanceSchedules: []
   });
   assert.equal(result.recommendations[0].recommendation_type, 'MAINTENANCE_PROBE');
-  assert.match(result.recommendations[0].suggested_action, /Agendar Maintenance Probe/);
+  assert.match(result.recommendations[0].suggested_action, /Agendar sondagem de manutenção/);
 });
 
 test('regression alert gera REGRESSION_ATTENTION', () => {
@@ -214,10 +218,33 @@ test('rejeitar nao cria plano', () => {
     recommendation: generated.recommendations[0],
     rejectedBy: 'supervisor-1',
     reason: 'Aguardar revisao',
+    notes: 'Prioridade clinica sera outra',
     now: baseInput.now
   });
   assert.equal(rejected.recommendation.status, 'REJECTED');
   assert.equal(rejected.auditLog.new_status, 'REJECTED');
+  assert.equal(rejected.auditLog.metadata.reason, 'Aguardar revisao');
+  assert.equal(rejected.auditLog.metadata.notes, 'Prioridade clinica sera outra');
+});
+
+test('labels de sugestao clinica ficam em portugues', () => {
+  assert.equal(abaRecommendationPriorityLabel('HIGH'), 'Alta');
+  assert.equal(abaRecommendationPriorityLabel('MEDIUM'), 'Média');
+  assert.equal(abaRecommendationTypeLabel('REGRESSION_ATTENTION'), 'Atenção para regressão');
+  assert.equal(abaRecommendationTypeLabel('MAINTENANCE_PROBE'), 'Sondagem de manutenção');
+  assert.equal(translateAbaRecommendationText('HIGH PROMPT_FADING target summary-driven Maintenance Probe'), 'Alta Redução gradual de ajuda alvo baseado no resumo clínico sondagem de manutenção');
+});
+
+test('fila de decisao deduplica sugestoes equivalentes', () => {
+  const generated = generateNextSessionRecommendations({
+    ...baseInput,
+    focusType: 'MAINTENANCE',
+    targets: [target({ clinical_status: 'MAINTENANCE' })]
+  });
+  const duplicate = { ...generated.recommendations[0], id: 'duplicada' };
+  const queue = deduplicateAbaRecommendationsForDecisionQueue([generated.recommendations[0], duplicate]);
+  assert.equal(queue.length, 1);
+  assert.equal(queue[0].groupedCount, 2);
 });
 
 test('infraestrutura de planning esta persistente, economica e sem select star', () => {
@@ -233,15 +260,24 @@ test('infraestrutura de planning esta persistente, economica e sem select star',
   assert.match(serverCode, /generateNextSessionRecommendations/);
   assert.match(serverCode, /app\.post\('\/api\/aba\/patients\/:patientId\/next-session\/recommendations\/generate'/);
   assert.match(serverCode, /app\.post\('\/api\/aba\/recommendations\/:recommendationId\/accept'/);
+  assert.match(serverCode, /Informe o motivo da recusa/);
   assert.match(serverCode, /app\.post\('\/api\/aba\/recommendations\/:recommendationId\/apply-to-next-session'/);
   assert.doesNotMatch(serverCode, /select\('\*'\)/);
 });
 
 test('UI nao aplica sugestao sem aceite', () => {
-  assert.match(sessionModeCode, /Planejamento sugerido para a proxima sessao/);
-  assert.match(sessionModeCode, /Sugestoes baseadas nos dados disponiveis\. Revise antes de aplicar\./);
+  assert.match(sessionModeCode, /Planejamento sugerido para a pr.xima sess.o/);
+  assert.match(sessionModeCode, /Fila de decis.o cl.nica/);
   assert.match(sessionModeCode, /handleAcceptRecommendation/);
   assert.match(sessionModeCode, /handleApplyPlanItemNow/);
+  assert.match(sessionModeCode, /data-aba-recommendation-edit-modal/);
+  assert.match(sessionModeCode, /data-aba-recommendation-reject-modal/);
+  assert.match(sessionModeCode, /Motivo da recusa|Escolha o motivo da recusa/);
+  assert.match(sessionModeCode, /abaRecommendationPriorityLabel/);
+  assert.match(sessionModeCode, /abaRecommendationTypeLabel/);
+  assert.doesNotMatch(sessionModeCode, /window\.prompt\('Editar acao sugerida'/);
+  assert.doesNotMatch(sessionModeCode, /\{recommendation\.priority \|\| 'MEDIUM'\}/);
+  assert.doesNotMatch(sessionModeCode, /\{recommendation\.recommendation_type\}/);
   assert.doesNotMatch(sessionModeCode, /aplique esta intervencao/i);
 });
 

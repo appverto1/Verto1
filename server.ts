@@ -47318,7 +47318,7 @@ async function startServer() {
     const organizationId = params.organizationId;
     const sourceSessionId = sanitizeString(params.sourceSessionId, 180) || null;
     const activeScheduleStatuses = ABA_ACTIVE_MAINTENANCE_SCHEDULE_STATUSES;
-    const recommendationStatuses = ['SUGGESTED', 'ACCEPTED', 'EDITED', 'APPLIED_TO_NEXT_SESSION'];
+    const recommendationStatuses = ['SUGGESTED', 'ACCEPTED', 'EDITED', 'REJECTED', 'APPLIED_TO_NEXT_SESSION', 'EXPIRED'];
     const limit = 40;
 
     const summaryQueryBase = supabase
@@ -47532,6 +47532,8 @@ async function startServer() {
   }) => {
     const recommendationPatch = cleanObject({
       status: normalizeAbaRecommendationStatus(params.recommendation.status),
+      recommendation_type: normalizeAbaRecommendationType(params.recommendation.recommendation_type),
+      priority: normalizeAbaRecommendationPriority(params.recommendation.priority),
       accepted_by: sanitizeString(params.recommendation.accepted_by, 120) || null,
       accepted_at: params.recommendation.accepted_at || null,
       rejected_by: sanitizeString(params.recommendation.rejected_by, 120) || null,
@@ -47540,6 +47542,11 @@ async function startServer() {
       summary: sanitizeTextField(params.recommendation.summary, 500),
       rationale: sanitizeTextField(params.recommendation.rationale, 1000),
       suggested_action: sanitizeTextField(params.recommendation.suggested_action, 1000),
+      target_id: sanitizeString(params.recommendation.target_id, 120) || null,
+      behavior_id: sanitizeString(params.recommendation.behavior_id, 120) || null,
+      program_id: sanitizeString(params.recommendation.program_id, 120) || null,
+      domain: sanitizeTextField(params.recommendation.domain, 180) || null,
+      metric_name: sanitizeTextField(params.recommendation.metric_name, 160) || null,
       evidence: sanitizeClinicalPayload(params.recommendation.evidence || {}),
       updated_at: new Date().toISOString()
     });
@@ -51886,7 +51893,7 @@ async function startServer() {
         .select(ABA_CLINICAL_RECOMMENDATION_SELECT)
         .eq('organization_id', organizationId)
         .eq('patient_id', patientId)
-        .in('status', ['SUGGESTED', 'ACCEPTED', 'EDITED', 'APPLIED_TO_NEXT_SESSION'])
+        .in('status', ['SUGGESTED', 'ACCEPTED', 'EDITED', 'REJECTED', 'APPLIED_TO_NEXT_SESSION', 'EXPIRED'])
         .order('created_at', { ascending: false })
         .limit(limit);
       if (sourceSessionId) query = query.eq('source_session_id', sourceSessionId);
@@ -51980,10 +51987,13 @@ async function startServer() {
       if (!(await canAccessPatientInCurrentClinic(sanitizeString(recommendation.patient_id, 120), req.session.user))) {
         return res.status(403).json({ success: false, error: 'Paciente fora do escopo da clínica.' });
       }
+      const reason = sanitizeTextField(req.body?.reason || req.body?.motivo, 500);
+      if (!reason) return res.status(400).json({ success: false, error: 'Informe o motivo da recusa.' });
       const rejected = rejectRecommendation({
         recommendation,
         rejectedBy: sanitizeString(req.session.user?.id, 120),
-        reason: sanitizeTextField(req.body?.reason || req.body?.motivo, 500),
+        reason,
+        notes: sanitizeTextField(req.body?.notes || req.body?.observacao || req.body?.observation, 1000),
         now: new Date().toISOString()
       });
       const persisted = await persistRecommendationState({ ...rejected, clinicId });
@@ -52003,6 +52013,15 @@ async function startServer() {
       if (!(await canAccessPatientInCurrentClinic(sanitizeString(recommendation.patient_id, 120), req.session.user))) {
         return res.status(403).json({ success: false, error: 'Paciente fora do escopo da clínica.' });
       }
+      const editedEvidence = sanitizeClinicalPayload({
+        ...(recommendation.evidence || {}),
+        ...(req.body?.evidence || {}),
+        clinical_note: sanitizeTextField(req.body?.clinicalNote || req.body?.clinical_note || req.body?.notes || '', 1000),
+        apply_for_date: sanitizeString(req.body?.applyForDate || req.body?.apply_for_date, 40) || null,
+        responsible_professional_id: sanitizeString(req.body?.responsibleProfessionalId || req.body?.responsible_professional_id, 120) || null,
+        editedBy: sanitizeString(req.session.user?.id, 120),
+        editedAt: new Date().toISOString()
+      });
       const edited = cleanObject({
         ...recommendation,
         id: `rec-edit-${abaPlanningHash([recommendation.id, new Date().toISOString()])}`,
@@ -52010,7 +52029,14 @@ async function startServer() {
         summary: sanitizeTextField(req.body?.summary ?? recommendation.summary, 500),
         rationale: sanitizeTextField(req.body?.rationale ?? recommendation.rationale, 1000),
         suggested_action: sanitizeTextField(req.body?.suggested_action ?? req.body?.suggestedAction ?? recommendation.suggested_action, 1000),
+        recommendation_type: normalizeAbaRecommendationType(req.body?.recommendation_type ?? req.body?.recommendationType ?? recommendation.recommendation_type),
         priority: normalizeAbaRecommendationPriority(req.body?.priority ?? recommendation.priority),
+        target_id: sanitizeString(req.body?.target_id ?? req.body?.targetId ?? recommendation.target_id, 120) || null,
+        behavior_id: sanitizeString(req.body?.behavior_id ?? req.body?.behaviorId ?? recommendation.behavior_id, 120) || null,
+        program_id: sanitizeString(req.body?.program_id ?? req.body?.programId ?? recommendation.program_id, 120) || null,
+        domain: sanitizeTextField(req.body?.domain ?? recommendation.domain, 180) || null,
+        metric_name: sanitizeTextField(req.body?.metric_name ?? req.body?.metricName ?? recommendation.metric_name, 160) || null,
+        evidence: editedEvidence,
         status: 'EDITED',
         edited_from_id: recommendation.id,
         created_at: new Date().toISOString(),
@@ -52032,7 +52058,12 @@ async function startServer() {
         new_status: 'EDITED',
         performed_by: sanitizeString(req.session.user?.id, 120),
         performed_at: new Date().toISOString(),
-        metadata: sanitizeClinicalPayload({ editedFromId: recommendation.id, humanEdited: true })
+        metadata: sanitizeClinicalPayload({
+          editedFromId: recommendation.id,
+          humanEdited: true,
+          changedFields: Object.keys(req.body || {}).slice(0, 50),
+          clinicalNote: sanitizeTextField(req.body?.clinicalNote || req.body?.clinical_note || req.body?.notes || '', 1000)
+        })
       });
       await writeAbaRowWithSchemaFallback('aba_clinical_recommendation_audit_logs', auditPayload, 'upsert');
       return res.json({ success: true, data: { ...edited, id: (result.data as any)?.id || edited.id } });

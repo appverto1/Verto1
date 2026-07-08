@@ -124,7 +124,7 @@ const VALID_FOCUS_TYPES = new Set<AbaPlanningFocusType>([
   'BALANCED'
 ]);
 
-const VALID_EXISTING_STATUSES = new Set(['SUGGESTED', 'ACCEPTED', 'EDITED', 'APPLIED_TO_NEXT_SESSION']);
+const VALID_EXISTING_STATUSES = new Set(['SUGGESTED', 'ACCEPTED', 'EDITED', 'REJECTED', 'APPLIED_TO_NEXT_SESSION', 'EXPIRED']);
 
 const PRIORITY_WEIGHT: Record<AbaRecommendationPriority, number> = {
   CRITICAL: 4,
@@ -185,7 +185,7 @@ export const normalizePlanningFocusType = (value: unknown): AbaPlanningFocusType
 };
 
 const targetIdOf = (target: any) => safeString(target?.id || target?.target_id || target?.targetId);
-const targetNameOf = (target: any) => safeString(target?.name || target?.title || target?.target_name || target?.targetName, 'Target do PEI');
+const targetNameOf = (target: any) => safeString(target?.name || target?.title || target?.target_name || target?.targetName, 'alvo do PEI');
 const targetProgramOf = (target: any) => safeString(target?.program_id || target?.programId, '');
 const targetDomainOf = (target: any) => safeString(target?.domain || target?.domain_name || target?.domainName, '');
 const behaviorIdOf = (row: any) => safeString(row?.behavior_id || row?.behaviorId, '');
@@ -215,9 +215,83 @@ const targetMatches = (row: any, targetId: string) => safeString(row?.target_id 
 
 const evidenceBase = (evidence: Record<string, any>) => ({
   source: 'summary_driven',
+  sourceLabel: 'baseado no resumo clínico',
   rawEventsFetched: false,
   ...evidence
 });
+
+export const abaRecommendationPriorityLabel = (value: unknown) => {
+  const priority = safeString(value, 'MEDIUM').toUpperCase();
+  if (priority === 'CRITICAL' || priority === 'HIGH') return 'Alta';
+  if (priority === 'LOW') return 'Baixa';
+  return 'Média';
+};
+
+export const abaRecommendationTypeLabel = (value: unknown) => {
+  const type = safeString(value).toUpperCase();
+  if (type === 'REGRESSION_ATTENTION') return 'Atenção para regressão';
+  if (type === 'MAINTENANCE_PROBE') return 'Sondagem de manutenção';
+  if (type === 'PROMPT_FADING') return 'Redução gradual de ajuda';
+  if (type === 'MASTERY_REVIEW') return 'Revisão de critério';
+  if (type === 'CONTINUE_TRAINING') return 'Continuidade de ensino';
+  if (type === 'INTRODUCE_NEW_TARGET') return 'Novo alvo';
+  if (type === 'BEHAVIOR_MONITORING') return 'Monitoramento comportamental';
+  if (type === 'ABC_COLLECTION') return 'Coleta ABC';
+  if (type === 'GENERALIZATION') return 'Generalização';
+  return 'Observação clínica';
+};
+
+export const abaRecommendationStatusLabel = (value: unknown) => {
+  const status = safeString(value, 'SUGGESTED').toUpperCase();
+  if (status === 'ACCEPTED') return 'Aceita';
+  if (status === 'APPLIED_TO_NEXT_SESSION') return 'Aplicada';
+  if (status === 'EDITED') return 'Editada';
+  if (status === 'REJECTED') return 'Recusada';
+  if (status === 'EXPIRED') return 'Arquivada';
+  return 'Pendente';
+};
+
+export const translateAbaRecommendationText = (value: unknown) => safeString(value)
+  .replace(/\bMaintenance Probe\b/gi, 'sondagem de manutenção')
+  .replace(/\bREGRESSION_ATTENTION\b/g, 'Atenção para regressão')
+  .replace(/\bMAINTENANCE_PROBE\b/g, 'Sondagem de manutenção')
+  .replace(/\bPROMPT_FADING\b/g, 'Redução gradual de ajuda')
+  .replace(/\bHIGH\b/g, 'Alta')
+  .replace(/\bMEDIUM\b/g, 'Média')
+  .replace(/\bLOW\b/g, 'Baixa')
+  .replace(/\bsummary-driven\b/gi, 'baseado no resumo clínico')
+  .replace(/\bsummary_driven\b/gi, 'baseado no resumo clínico')
+  .replace(/\btarget\b/gi, 'alvo')
+  .replace(/\bprompt fading\b/gi, 'redução gradual de ajuda')
+  .replace(/\bprobe\b/gi, 'sondagem')
+  .replace(/\bmaintenance\b/gi, 'manutenção')
+  .trim();
+
+export const buildAbaRecommendationDecisionKey = (recommendation: any) => [
+  safeString(recommendation?.recommendation_type || recommendation?.recommendationType),
+  safeString(recommendation?.target_id || recommendation?.targetId),
+  safeString(recommendation?.behavior_id || recommendation?.behaviorId),
+  safeString(recommendation?.source_session_id || recommendation?.sourceSessionId),
+  translateAbaRecommendationText(recommendation?.suggested_action || recommendation?.suggestedAction)
+].join('|');
+
+export const deduplicateAbaRecommendationsForDecisionQueue = (recommendations: any[] = []) => {
+  const grouped = new Map<string, any>();
+  for (const recommendation of Array.isArray(recommendations) ? recommendations : []) {
+    const key = buildAbaRecommendationDecisionKey(recommendation);
+    const existing = grouped.get(key);
+    if (!existing) {
+      grouped.set(key, { ...recommendation, groupedCount: 1, groupedRecommendations: [recommendation] });
+      continue;
+    }
+    grouped.set(key, {
+      ...existing,
+      groupedCount: Number(existing.groupedCount || 1) + 1,
+      groupedRecommendations: [...(existing.groupedRecommendations || []), recommendation]
+    });
+  }
+  return Array.from(grouped.values());
+};
 
 const recommendationIdSeed = (recommendation: Pick<AbaClinicalRecommendation, 'organization_id' | 'patient_id' | 'source_session_id' | 'recommendation_type' | 'target_id' | 'behavior_id' | 'context_hash'>) => [
   recommendation.organization_id,
@@ -397,6 +471,12 @@ export function generateNextSessionRecommendations(input: GenerateNextSessionRec
   const masteryEvaluations = Array.isArray(input.masteryEvaluations) ? input.masteryEvaluations : [];
   const behaviorDailySummaries = Array.isArray(input.behaviorDailySummaries) ? input.behaviorDailySummaries : [];
   const snapshotsByTarget = buildSnapshotByTarget(metricSnapshots);
+  const targetNamesById = new Map<string, string>();
+  for (const target of targets) {
+    const targetId = targetIdOf(target);
+    if (targetId) targetNamesById.set(targetId, targetNameOf(target));
+  }
+  const targetDisplayName = (targetId: string | null | undefined) => targetNamesById.get(safeString(targetId)) || 'alvo do PEI';
   const recommendations: AbaClinicalRecommendation[] = [];
 
   for (const target of targets) {
@@ -417,7 +497,7 @@ export function generateNextSessionRecommendations(input: GenerateNextSessionRec
       title: nextProbe.noSchedule ? `Agendar sondagem de manutencao: ${targetNameOf(target)}` : `Revisar manutencao: ${targetNameOf(target)}`,
       summary: nextProbe.label,
       rationale: 'Habilidade em manutencao com sondagem pendente, vencida, sem agenda ou dentro da janela clinica.',
-      suggested_action: nextProbe.noSchedule ? 'Agendar Maintenance Probe para a proxima sessao ou escolher uma data.' : 'Usar Maintenance Probe na proxima sessao, com validacao do supervisor.',
+      suggested_action: nextProbe.noSchedule ? 'Agendar sondagem de manutenção para a próxima sessão ou escolher uma data.' : 'Usar sondagem de manutenção na próxima sessão, com validação do supervisor.',
       target_id: targetId,
       program_id: targetProgramOf(target) || null,
       domain: targetDomainOf(target) || null,
@@ -446,9 +526,11 @@ export function generateNextSessionRecommendations(input: GenerateNextSessionRec
       source_session_id: sourceSessionId,
       recommendation_type: 'REGRESSION_ATTENTION',
       priority: safeString(alert?.severity).toUpperCase() === 'HIGH' ? 'CRITICAL' : 'HIGH',
-      title: 'Ponto de atencao para regressao',
+      title: safeString(alert?.target_id || alert?.targetId)
+        ? `Atenção para regressão em "${targetDisplayName(alert?.target_id || alert?.targetId)}"`
+        : 'Atenção para regressão clínica',
       summary: safeString(alert?.message, 'Existe alerta ativo de regressao/manutencao.'),
-      rationale: 'Ha alerta ativo summary-driven ainda nao resolvido.',
+      rationale: 'Há alerta ativo baseado no resumo clínico ainda não resolvido.',
       suggested_action: 'Revisar dados recentes e considerar uma sondagem ou observacao focada na proxima sessao.',
       target_id: safeString(alert?.target_id || alert?.targetId) || null,
       metric_name: 'regression_alert',
@@ -478,10 +560,10 @@ export function generateNextSessionRecommendations(input: GenerateNextSessionRec
         source_session_id: sourceSessionId,
         recommendation_type: 'REGRESSION_ATTENTION',
         priority: drop >= 20 ? 'HIGH' : 'MEDIUM',
-        title: 'Queda relevante em indicador clinico',
+        title: `Queda de desempenho em "${targetDisplayName(targetId)}"`,
         summary: `${metricNameOf(snapshot)} caiu ${Math.round(drop)} p.p.`,
-        rationale: 'Queda igual ou superior a 10 pontos percentuais em metrica summary-driven.',
-        suggested_action: 'Revisar o target na proxima sessao antes de ampliar demanda.',
+        rationale: 'Queda igual ou superior a 10 pontos percentuais em métrica baseada no resumo clínico.',
+        suggested_action: 'Revisar este alvo na próxima sessão antes de ampliar demanda.',
         target_id: targetId,
         metric_name: metricNameOf(snapshot),
         previous_value: previous,
@@ -511,10 +593,10 @@ export function generateNextSessionRecommendations(input: GenerateNextSessionRec
           source_session_id: sourceSessionId,
           recommendation_type: 'PROMPT_FADING',
           priority: 'MEDIUM',
-          title: 'Revisar reducao gradual de ajuda',
-          summary: 'Alta acuracia com independencia menor sugere ponto de revisao.',
-          rationale: 'Metrica summary-driven indica acuracia alta e independencia mais baixa.',
-          suggested_action: 'Pode ser util considerar reducao gradual de ajuda, com validacao do supervisor.',
+          title: `Reduzir ajuda em "${targetDisplayName(targetId)}"`,
+          summary: 'Alta acurácia com independência menor sugere ponto de revisão.',
+          rationale: 'Métrica baseada no resumo clínico indica acurácia alta e independência mais baixa.',
+          suggested_action: 'Pode ser útil considerar redução gradual de ajuda, com validação do supervisor.',
           target_id: targetId,
           metric_name: 'accuracy_independence_gap',
           previous_value: metricValueOf(independence),
@@ -541,9 +623,9 @@ export function generateNextSessionRecommendations(input: GenerateNextSessionRec
       recommendation_type: 'MASTERY_REVIEW',
       priority: 'MEDIUM',
       title: 'Revisar criterio de maestria',
-      summary: 'Target atingiu criterio e aguarda revisao humana.',
+      summary: 'Alvo atingiu critério e aguarda revisão humana.',
       rationale: 'Avaliacao de maestria indica criterio atingido sem aprovacao automatica.',
-      suggested_action: 'Supervisor deve validar se o target pode seguir para manutencao.',
+      suggested_action: 'Supervisor deve validar se o alvo pode seguir para manutenção.',
       target_id: safeString(evaluation?.target_id || evaluation?.targetId) || null,
       metric_name: 'mastery_evaluation',
       previous_value: null,
@@ -580,7 +662,7 @@ export function generateNextSessionRecommendations(input: GenerateNextSessionRec
         title: `Continuar treino: ${targetNameOf(target)}`,
         summary: 'Houve melhora, mas o criterio ainda nao parece consolidado.',
         rationale: 'Snapshot recente mostra progresso sem evidencia de criterio final aprovado.',
-        suggested_action: 'Manter treino na proxima sessao e revisar prompts conforme resposta.',
+        suggested_action: 'Manter treino na próxima sessão e revisar tipos de ajuda conforme resposta.',
         target_id: targetId,
         program_id: targetProgramOf(target) || null,
         domain: targetDomainOf(target) || null,
@@ -672,10 +754,10 @@ export function generateNextSessionRecommendations(input: GenerateNextSessionRec
         source_session_id: sourceSessionId,
         recommendation_type: 'INTRODUCE_NEW_TARGET',
         priority: 'LOW',
-        title: `Considerar novo target: ${targetNameOf(newTarget)}`,
-        summary: 'Ha target do PEI ainda nao iniciado e sem bloqueador clinico critico ativo.',
+        title: `Considerar novo alvo: ${targetNameOf(newTarget)}`,
+        summary: 'Há alvo do PEI ainda não iniciado e sem bloqueador clínico crítico ativo.',
         rationale: 'Sem alerta critico ativo, manutencao critica ou regressao relevante nos resumos usados.',
-        suggested_action: 'Supervisor pode avaliar introduzir 1 novo target na proxima sessao.',
+        suggested_action: 'Supervisor pode avaliar introduzir 1 novo alvo na próxima sessão.',
         target_id: targetIdOf(newTarget),
         program_id: targetProgramOf(newTarget) || null,
         domain: targetDomainOf(newTarget) || null,
@@ -706,7 +788,7 @@ export function generateNextSessionRecommendations(input: GenerateNextSessionRec
         priority: 'LOW',
         title: 'Considerar generalizacao',
         summary: 'Indicadores recentes estao altos para acuracia e independencia.',
-        rationale: 'Snapshots summary-driven mostram desempenho alto, candidato a revisao de generalizacao.',
+        rationale: 'Resumos clínicos mostram desempenho alto, candidato a revisão de generalização.',
         suggested_action: 'Supervisor pode avaliar variar contexto, ambiente ou terapeuta na proxima sessao.',
         target_id: targetId,
         metric_name: 'generalization_candidate',
@@ -796,6 +878,7 @@ export function rejectRecommendation(input: {
   recommendation: AbaClinicalRecommendation;
   rejectedBy: string;
   reason?: string;
+  notes?: string;
   now?: string;
 }): {
   recommendation: AbaClinicalRecommendation;
@@ -822,7 +905,10 @@ export function rejectRecommendation(input: {
       new_status: 'REJECTED',
       performed_by: input.rejectedBy,
       performed_at: now,
-      metadata: evidenceBase({ reason: safeString(input.reason, '') })
+      metadata: evidenceBase({
+        reason: safeString(input.reason, ''),
+        notes: safeString(input.notes, '')
+      })
     }
   };
 }

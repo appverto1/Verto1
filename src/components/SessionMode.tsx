@@ -78,6 +78,13 @@ import {
 import { formatMaintenanceScheduleDueLabel, resolveMaintenanceProbeAvailability } from '../utils/abaMaintenanceScheduling';
 import { mapMaintenancePanelResponse, resolveMaintenanceTargetDisplay } from '../utils/peiMaintenancePanel';
 import { isPeiClinicalRowAfterProgressReset } from '../utils/peiSessionReset';
+import {
+  abaRecommendationPriorityLabel,
+  abaRecommendationStatusLabel,
+  abaRecommendationTypeLabel,
+  deduplicateAbaRecommendationsForDecisionQueue,
+  translateAbaRecommendationText
+} from '../utils/abaPlanningEngine';
 
 type SyncStatus = 'local' | 'syncing' | 'synced' | 'error';
 type AbcRequirement = 'REQUIRED' | 'RECOMMENDED' | 'OPTIONAL' | 'DISABLED';
@@ -742,8 +749,59 @@ export const SessionMode = ({
   const [planningRecommendations, setPlanningRecommendations] = useState<any[]>([]);
   const [planningLoading, setPlanningLoading] = useState(false);
   const [planningMessage, setPlanningMessage] = useState('');
+  const [planningFilter, setPlanningFilter] = useState<'pending' | 'high' | 'regression' | 'maintenance' | 'prompt_fading' | 'edited' | 'history'>('pending');
+  const [planningDecisionLoadingId, setPlanningDecisionLoadingId] = useState('');
+  const [editingRecommendation, setEditingRecommendation] = useState<any>(null);
+  const [editRecommendationForm, setEditRecommendationForm] = useState({
+    title: '',
+    priority: 'MEDIUM',
+    recommendationType: 'CONTINUE_TRAINING',
+    targetId: '',
+    suggestedAction: '',
+    summary: '',
+    rationale: '',
+    clinicalNote: '',
+    applyForDate: '',
+    responsibleProfessionalId: ''
+  });
+  const [rejectingRecommendation, setRejectingRecommendation] = useState<any>(null);
+  const [rejectRecommendationReason, setRejectRecommendationReason] = useState('');
+  const [rejectRecommendationNotes, setRejectRecommendationNotes] = useState('');
   const [nextSessionPlanItems, setNextSessionPlanItems] = useState<any[]>([]);
   const [planActionMessage, setPlanActionMessage] = useState('');
+  const planningFilterOptions = [
+    { key: 'pending', label: 'Pendentes' },
+    { key: 'high', label: 'Alta prioridade' },
+    { key: 'regression', label: 'Regressão' },
+    { key: 'maintenance', label: 'Manutenção' },
+    { key: 'prompt_fading', label: 'Redução de ajuda' },
+    { key: 'edited', label: 'Editadas' },
+    { key: 'history', label: 'Histórico' }
+  ] as const;
+  const recommendationTypeOptions = [
+    { value: 'REGRESSION_ATTENTION', label: 'Atenção para regressão' },
+    { value: 'MAINTENANCE_PROBE', label: 'Sondagem de manutenção' },
+    { value: 'PROMPT_FADING', label: 'Redução gradual de ajuda' },
+    { value: 'MASTERY_REVIEW', label: 'Revisão de critério' },
+    { value: 'CONTINUE_TRAINING', label: 'Continuidade de ensino' },
+    { value: 'INTRODUCE_NEW_TARGET', label: 'Novo alvo' },
+    { value: 'BEHAVIOR_MONITORING', label: 'Monitoramento comportamental' },
+    { value: 'ABC_COLLECTION', label: 'Coleta ABC' },
+    { value: 'GENERALIZATION', label: 'Generalização' }
+  ];
+  const recommendationPriorityOptions = [
+    { value: 'HIGH', label: 'Alta' },
+    { value: 'MEDIUM', label: 'Média' },
+    { value: 'LOW', label: 'Baixa' }
+  ];
+  const rejectRecommendationReasons = [
+    'Não faz sentido clinicamente agora',
+    'Dados insuficientes',
+    'Já foi trabalhado',
+    'Supervisor decidiu não aplicar',
+    'Prioridade será outra',
+    'Outro motivo'
+  ];
   const [openDurations, setOpenDurations] = useState<OpenDurationEvent[]>([]);
   const [selectedBehaviorId, setSelectedBehaviorId] = useState('crying');
   const [behaviorMeasurementType, setBehaviorMeasurementType] = useState(behaviorPresets[0].defaultMeasurement);
@@ -3883,6 +3941,56 @@ export const SessionMode = ({
     }
     return sessionGoals;
   }, [sessionAvailableMaintenanceTargetIds, sessionGoals, sessionPlanFilter]);
+  const planningTargetNameById = useMemo(() => {
+    const names = new Map<string, string>();
+    for (const goal of sessionGoals) {
+      const targetId = goalTargetId(goal);
+      const label = String(goal?.name || goal?.target_name || goal?.targetName || goal?.title || '').trim();
+      if (targetId && label) names.set(targetId, label);
+    }
+    return names;
+  }, [sessionGoals]);
+  const planningDecisionQueue = useMemo(
+    () => deduplicateAbaRecommendationsForDecisionQueue(planningRecommendations),
+    [planningRecommendations]
+  );
+  const isPendingPlanningRecommendation = useCallback((recommendation: any) => {
+    const status = String(recommendation?.status || 'SUGGESTED').toUpperCase();
+    return status === 'SUGGESTED' || status === 'EDITED';
+  }, []);
+  const pendingPlanningRecommendations = useMemo(
+    () => planningDecisionQueue.filter(isPendingPlanningRecommendation),
+    [isPendingPlanningRecommendation, planningDecisionQueue]
+  );
+  const historyPlanningRecommendations = useMemo(
+    () => planningDecisionQueue.filter((recommendation: any) => !isPendingPlanningRecommendation(recommendation)),
+    [isPendingPlanningRecommendation, planningDecisionQueue]
+  );
+  const visiblePlanningRecommendations = useMemo(() => {
+    const source = planningFilter === 'history' ? historyPlanningRecommendations : pendingPlanningRecommendations;
+    if (planningFilter === 'high') return source.filter((item: any) => ['HIGH', 'CRITICAL'].includes(String(item?.priority || '').toUpperCase()));
+    if (planningFilter === 'regression') return source.filter((item: any) => String(item?.recommendation_type || '').toUpperCase() === 'REGRESSION_ATTENTION');
+    if (planningFilter === 'maintenance') return source.filter((item: any) => String(item?.recommendation_type || '').toUpperCase() === 'MAINTENANCE_PROBE');
+    if (planningFilter === 'prompt_fading') return source.filter((item: any) => String(item?.recommendation_type || '').toUpperCase() === 'PROMPT_FADING');
+    if (planningFilter === 'edited') return source.filter((item: any) => String(item?.status || '').toUpperCase() === 'EDITED');
+    return source;
+  }, [historyPlanningRecommendations, pendingPlanningRecommendations, planningFilter]);
+  const planningRecommendationTitle = (recommendation: any) => {
+    const rawTitle = translateAbaRecommendationText(recommendation?.title || '');
+    const targetName = planningTargetNameById.get(String(recommendation?.target_id || recommendation?.targetId || '').trim());
+    const type = String(recommendation?.recommendation_type || '').toUpperCase();
+    if (targetName && (rawTitle === 'Ponto de atenção para regressão' || rawTitle === 'Atenção para regressão clínica')) {
+      return `Atenção para regressão em "${targetName}"`;
+    }
+    if (targetName && rawTitle === 'Queda relevante em indicador clinico') {
+      return `Queda de desempenho em "${targetName}"`;
+    }
+    if (targetName && rawTitle === 'Revisar reducao gradual de ajuda') {
+      return `Reduzir ajuda em "${targetName}"`;
+    }
+    if (!rawTitle) return abaRecommendationTypeLabel(type);
+    return rawTitle;
+  };
   useEffect(() => {
     if (sessionPlanGoals.length === 0) {
       if (mobileSelectedGoalKey) setMobileSelectedGoalKey('');
@@ -4445,42 +4553,120 @@ export const SessionMode = ({
         return;
       }
       setPlanningRecommendations(Array.isArray(result?.data) ? result.data : []);
+      setPlanningFilter('pending');
       if (result?.reusedExisting) setPlanningMessage('Sugestoes existentes reutilizadas para este contexto.');
     } finally {
       setPlanningLoading(false);
     }
   };
 
-  const handleAcceptRecommendation = async (recommendation: any, applyToNextSession = false) => {
-    const result = applyToNextSession
-      ? await dataService.applyAbaRecommendationToNextSession(recommendation.id)
-      : await dataService.acceptAbaRecommendation(recommendation.id);
-    if (result?.success === false) {
-      setPlanningMessage(result?.error || 'Nao foi possivel atualizar a sugestao agora.');
-      return;
+  const handleAcceptRecommendation = async (recommendation: any, applyToNextSession = true) => {
+    if (!recommendation?.id) return;
+    setPlanningDecisionLoadingId(String(recommendation.id));
+    setPlanningMessage('');
+    try {
+      const result = applyToNextSession
+        ? await dataService.applyAbaRecommendationToNextSession(recommendation.id)
+        : await dataService.acceptAbaRecommendation(recommendation.id);
+      if (result?.success === false) {
+        setPlanningMessage(result?.error || 'Nao foi possivel atualizar a sugestao agora.');
+        return;
+      }
+      setPlanningRecommendations((prev) => prev.map((item) => item.id === recommendation.id ? (result.data || item) : item));
+      if (result?.planItem) {
+        setNextSessionPlanItems((prev) => [result.planItem, ...prev.filter((item) => item.id !== result.planItem.id)]);
+        setPlanningMessage('Sugestao aceita e adicionada ao plano da proxima sessao.');
+      } else {
+        setPlanningMessage('Sugestao aceita para a proxima sessao.');
+      }
+    } finally {
+      setPlanningDecisionLoadingId('');
     }
-    setPlanningRecommendations((prev) => prev.map((item) => item.id === recommendation.id ? (result.data || item) : item));
-    if (result?.planItem) setNextSessionPlanItems((prev) => [result.planItem, ...prev.filter((item) => item.id !== result.planItem.id)]);
   };
 
-  const handleRejectRecommendation = async (recommendation: any) => {
-    const result = await dataService.rejectAbaRecommendation(recommendation.id);
-    if (result?.success === false) {
-      setPlanningMessage(result?.error || 'Nao foi possivel recusar a sugestao agora.');
-      return;
-    }
-    setPlanningRecommendations((prev) => prev.filter((item) => item.id !== recommendation.id));
+  const openRejectRecommendationModal = (recommendation: any) => {
+    setRejectingRecommendation(recommendation);
+    setRejectRecommendationReason('');
+    setRejectRecommendationNotes('');
+    setPlanningMessage('');
   };
 
-  const handleEditRecommendation = async (recommendation: any) => {
-    const nextAction = window.prompt('Editar acao sugerida', recommendation.suggested_action || '');
-    if (nextAction === null) return;
-    const result = await dataService.updateAbaRecommendation(recommendation.id, { suggested_action: nextAction });
-    if (result?.success === false) {
-      setPlanningMessage(result?.error || 'Nao foi possivel editar a sugestao agora.');
+  const confirmRejectRecommendation = async () => {
+    if (!rejectingRecommendation?.id) return;
+    const reason = rejectRecommendationReason.trim();
+    if (!reason) {
+      setPlanningMessage('Informe o motivo da recusa.');
       return;
     }
-    setPlanningRecommendations((prev) => [result.data, ...prev.filter((item) => item.id !== recommendation.id)]);
+    setPlanningDecisionLoadingId(String(rejectingRecommendation.id));
+    try {
+      const result = await dataService.rejectAbaRecommendation(rejectingRecommendation.id, {
+        reason,
+        notes: rejectRecommendationNotes.trim()
+      });
+      if (result?.success === false) {
+        setPlanningMessage(result?.error || 'Nao foi possivel recusar a sugestao agora.');
+        return;
+      }
+      setPlanningRecommendations((prev) => prev.map((item) => item.id === rejectingRecommendation.id ? (result.data || item) : item));
+      setRejectingRecommendation(null);
+      setRejectRecommendationReason('');
+      setRejectRecommendationNotes('');
+      setPlanningMessage('Sugestao recusada e registrada no historico.');
+    } finally {
+      setPlanningDecisionLoadingId('');
+    }
+  };
+
+  const openEditRecommendationModal = (recommendation: any) => {
+    setEditingRecommendation(recommendation);
+    setEditRecommendationForm({
+      title: translateAbaRecommendationText(recommendation?.title || ''),
+      priority: String(recommendation?.priority || 'MEDIUM').toUpperCase(),
+      recommendationType: String(recommendation?.recommendation_type || 'CONTINUE_TRAINING').toUpperCase(),
+      targetId: String(recommendation?.target_id || recommendation?.targetId || ''),
+      suggestedAction: translateAbaRecommendationText(recommendation?.suggested_action || ''),
+      summary: translateAbaRecommendationText(recommendation?.summary || ''),
+      rationale: translateAbaRecommendationText(recommendation?.rationale || ''),
+      clinicalNote: '',
+      applyForDate: '',
+      responsibleProfessionalId: ''
+    });
+    setPlanningMessage('');
+  };
+
+  const saveEditedRecommendation = async (acceptAfterSave = false) => {
+    if (!editingRecommendation?.id) return;
+    if (!editRecommendationForm.title.trim() || !editRecommendationForm.suggestedAction.trim()) {
+      setPlanningMessage('Informe titulo e acao recomendada antes de salvar.');
+      return;
+    }
+    setPlanningDecisionLoadingId(String(editingRecommendation.id));
+    try {
+      const result = await dataService.updateAbaRecommendation(editingRecommendation.id, {
+        title: editRecommendationForm.title.trim(),
+        priority: editRecommendationForm.priority,
+        recommendation_type: editRecommendationForm.recommendationType,
+        target_id: editRecommendationForm.targetId || null,
+        suggested_action: editRecommendationForm.suggestedAction.trim(),
+        summary: editRecommendationForm.summary.trim(),
+        rationale: editRecommendationForm.rationale.trim(),
+        clinicalNote: editRecommendationForm.clinicalNote.trim(),
+        applyForDate: editRecommendationForm.applyForDate || null,
+        responsibleProfessionalId: editRecommendationForm.responsibleProfessionalId || null
+      });
+      if (result?.success === false) {
+        setPlanningMessage(result?.error || 'Nao foi possivel editar a sugestao agora.');
+        return;
+      }
+      const edited = result.data || editingRecommendation;
+      setPlanningRecommendations((prev) => [edited, ...prev.filter((item) => item.id !== editingRecommendation.id)]);
+      setEditingRecommendation(null);
+      setPlanningMessage(acceptAfterSave ? 'Edicao salva. Aplicando sugestao...' : 'Sugestao editada e mantida como pendente.');
+      if (acceptAfterSave) await handleAcceptRecommendation(edited, true);
+    } finally {
+      setPlanningDecisionLoadingId('');
+    }
   };
 
   const handleApplyPlanItemNow = (item: any) => {
@@ -5285,91 +5471,138 @@ export const SessionMode = ({
                   </section>
                 )}
 
-                <section className="rounded-[24px] bg-white border border-emerald-100 p-5">
+                <section className="rounded-[24px] bg-white border border-emerald-100 p-5" data-aba-clinical-suggestions>
                   <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                     <div>
-                      <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-600">Planejamento sugerido para a proxima sessao</p>
-                      <h3 className="mt-1 text-lg font-bold text-gray-900">Qual foco voce quer priorizar?</h3>
-                      <p className="mt-1 text-xs font-semibold text-gray-500">Sugestoes baseadas nos dados disponiveis. Revise antes de aplicar.</p>
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-600">Planejamento sugerido para a próxima sessão</p>
+                      <h3 className="mt-1 text-lg font-bold text-gray-900">Fila de decisão clínica</h3>
+                      <p className="mt-1 text-xs font-semibold text-gray-500">Sugestões baseadas nos dados disponíveis. Aceite, edite ou recuse antes de aplicar.</p>
                     </div>
                     <div className="flex flex-col gap-2 sm:flex-row">
                       <select value={planningFocusType} onChange={(event) => setPlanningFocusType(event.target.value)} className="min-h-[42px] rounded-2xl border border-emerald-100 bg-[#F6FFFB] px-3 text-xs font-bold text-gray-700 outline-none">
-                        <option value="MAINTENANCE">Manutencao</option>
+                        <option value="MAINTENANCE">Manutenção</option>
                         <option value="NEW_SKILLS">Novas habilidades</option>
-                        <option value="BEHAVIOR_REDUCTION">Reducao comportamental</option>
-                        <option value="GENERALIZATION">Generalizacao</option>
-                        <option value="MASTERY_REVIEW">Revisao de maestria</option>
+                        <option value="BEHAVIOR_REDUCTION">Redução comportamental</option>
+                        <option value="GENERALIZATION">Generalização</option>
+                        <option value="MASTERY_REVIEW">Revisão de maestria</option>
                         <option value="BALANCED">Equilibrado</option>
                       </select>
                       <button type="button" onClick={handleGeneratePlanningRecommendations} disabled={planningLoading} className="min-h-[42px] rounded-2xl bg-emerald-600 px-4 text-xs font-bold uppercase tracking-widest text-white disabled:opacity-60">
-                        {planningLoading ? 'Gerando...' : 'Gerar sugestoes'}
+                        {planningLoading ? 'Gerando...' : 'Gerar sugestões'}
                       </button>
                     </div>
                   </div>
                   {planningMessage && <p className="mt-3 rounded-2xl bg-amber-50 px-4 py-3 text-xs font-bold text-amber-700">{planningMessage}</p>}
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {planningFilterOptions.map((option) => {
+                      const selected = planningFilter === option.key;
+                      return (
+                        <button
+                          key={option.key}
+                          type="button"
+                          onClick={() => setPlanningFilter(option.key)}
+                          className={`rounded-full px-3 py-2 text-[10px] font-bold uppercase tracking-widest transition ${selected ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-900/10' : 'bg-[#F6FFFB] text-emerald-700 ring-1 ring-emerald-100'}`}
+                        >
+                          {option.label}
+                        </button>
+                      );
+                    })}
+                  </div>
                   <div className="mt-4 grid grid-cols-1 gap-3 xl:grid-cols-2">
-                    {planningRecommendations.map((recommendation) => (
+                    {visiblePlanningRecommendations.map((recommendation) => {
+                      const isPending = isPendingPlanningRecommendation(recommendation);
+                      const isMaintenanceSuggestion = String(recommendation?.recommendation_type || '').toUpperCase() === 'MAINTENANCE_PROBE';
+                      const decisionBusy = planningDecisionLoadingId === String(recommendation?.id || '');
+                      return (
                       <div key={recommendation.id} className="rounded-2xl border border-emerald-100 bg-[#F6FFFB] p-4">
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className="rounded-full bg-white px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-emerald-700">{recommendation.priority || 'MEDIUM'}</span>
-                          <span className="rounded-full bg-white px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-gray-500">{recommendation.recommendation_type}</span>
+                          <span className="rounded-full bg-white px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-emerald-700">{abaRecommendationPriorityLabel(recommendation.priority)}</span>
+                          <span className="rounded-full bg-white px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-gray-500">{abaRecommendationTypeLabel(recommendation.recommendation_type)}</span>
+                          <span className="rounded-full bg-white px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-blue-600">{abaRecommendationStatusLabel(recommendation.status)}</span>
+                          {Number(recommendation.groupedCount || 1) > 1 && (
+                            <span className="rounded-full bg-amber-50 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-amber-700">{recommendation.groupedCount} agrupadas</span>
+                          )}
                         </div>
-                        <h4 className="mt-3 text-sm font-bold text-gray-900">{recommendation.title}</h4>
-                        <p className="mt-1 text-xs font-semibold text-gray-600">{recommendation.rationale}</p>
-                        <p className="mt-2 rounded-xl bg-white px-3 py-2 text-xs font-bold text-emerald-800">{recommendation.suggested_action}</p>
+                        <h4 className="mt-3 text-sm font-bold text-gray-900">{planningRecommendationTitle(recommendation)}</h4>
+                        {recommendation.summary && <p className="mt-1 text-xs font-semibold text-gray-600">{translateAbaRecommendationText(recommendation.summary)}</p>}
+                        {recommendation.rationale && <p className="mt-1 text-xs font-semibold text-gray-500">{translateAbaRecommendationText(recommendation.rationale)}</p>}
+                        <p className="mt-2 rounded-xl bg-white px-3 py-2 text-xs font-bold text-emerald-800">{translateAbaRecommendationText(recommendation.suggested_action || 'Revisar na próxima sessão.')}</p>
                         <p className="mt-2 text-[11px] font-semibold text-gray-500">
-                          Vínculo: {recommendation.target_id ? 'target do PEI' : recommendation.behavior_id ? 'comportamento' : 'resumo clínico'}
+                          Vínculo: {recommendation.target_id ? 'alvo do PEI' : recommendation.behavior_id ? 'comportamento' : 'resumo clínico'}
                         </p>
+                        {isPending ? (
                         <div className="mt-3 flex flex-wrap gap-2">
-                          {recommendation.recommendation_type === 'MAINTENANCE_PROBE' && (
+                          {isMaintenanceSuggestion && (
                             <>
                               <button type="button" onClick={() => {
                                 void handleAcceptRecommendation(recommendation, true);
                                 const goal = sessionGoals.find((entry: any) => String(entry?.id || entry?.target_id || entry?.targetId || '') === String(recommendation.target_id || ''));
                                 if (goal) void handleScheduleMaintenanceForNextSession(goal);
-                              }} className="rounded-full bg-emerald-600 px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-white">
-                                Aceitar e agendar para proxima sessao
+                              }} disabled={decisionBusy} className="rounded-full bg-emerald-600 px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-white disabled:opacity-60">
+                                Aceitar e agendar para próxima sessão
                               </button>
                               <button type="button" onClick={() => {
-                                void handleAcceptRecommendation(recommendation);
+                                void handleAcceptRecommendation(recommendation, false);
                                 const goal = sessionGoals.find((entry: any) => String(entry?.id || entry?.target_id || entry?.targetId || '') === String(recommendation.target_id || ''));
                                 if (goal) {
                                   openMaintenanceScheduleModal(goal);
                                   setMaintenanceScheduleMode('CUSTOM_DATE');
                                 }
-                              }} className="rounded-full bg-white px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-emerald-700">
+                              }} disabled={decisionBusy} className="rounded-full bg-white px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-emerald-700 disabled:opacity-60">
                                 Aceitar e escolher data
                               </button>
                               <button type="button" onClick={() => {
-                                void handleAcceptRecommendation(recommendation);
+                                void handleAcceptRecommendation(recommendation, false);
                                 const goal = sessionGoals.find((entry: any) => String(entry?.id || entry?.target_id || entry?.targetId || '') === String(recommendation.target_id || ''));
                                 if (goal) {
                                   openMaintenanceScheduleModal(goal);
                                   setMaintenanceScheduleMode('DEFAULT_SEQUENCE');
                                 }
-                              }} className="rounded-full bg-white px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-emerald-700">
+                              }} disabled={decisionBusy} className="rounded-full bg-white px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-emerald-700 disabled:opacity-60">
                                 Aceitar e usar 7/14/30/60
                               </button>
                             </>
                           )}
-                          <button type="button" onClick={() => handleAcceptRecommendation(recommendation)} className="rounded-full bg-white px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-emerald-700">
-                            Aceitar
+                          <button type="button" onClick={() => handleAcceptRecommendation(recommendation, true)} disabled={decisionBusy} className="rounded-full bg-white px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-emerald-700 disabled:opacity-60">
+                            {decisionBusy ? 'Salvando...' : 'Aceitar'}
                           </button>
-                          <button type="button" onClick={() => handleEditRecommendation(recommendation)} className="rounded-full bg-white px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-gray-500">
+                          <button type="button" onClick={() => openEditRecommendationModal(recommendation)} disabled={decisionBusy} className="rounded-full bg-white px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-gray-500 disabled:opacity-60">
                             Editar
                           </button>
-                          <button type="button" onClick={() => handleRejectRecommendation(recommendation)} className="rounded-full bg-red-50 px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-red-500">
+                          <button type="button" onClick={() => openRejectRecommendationModal(recommendation)} disabled={decisionBusy} className="rounded-full bg-red-50 px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-red-500 disabled:opacity-60">
                             Recusar
                           </button>
                         </div>
+                        ) : (
+                          <p className="mt-3 rounded-xl bg-white px-3 py-2 text-xs font-bold text-gray-500">Decisão registrada no histórico.</p>
+                        )}
                       </div>
-                    ))}
-                    {planningRecommendations.length === 0 && (
+                    );})}
+                    {visiblePlanningRecommendations.length === 0 && (
                       <p className="rounded-2xl border border-dashed border-emerald-100 bg-[#F6FFFB] p-4 text-sm font-semibold text-gray-500">
-                        Gere sugestoes quando o supervisor for planejar a proxima sessao.
+                        {planningRecommendations.length === 0
+                          ? 'Gere sugestões quando o supervisor for planejar a próxima sessão.'
+                          : planningFilter === 'history'
+                            ? 'Nenhuma decisão registrada no histórico deste contexto.'
+                            : pendingPlanningRecommendations.length === 0
+                              ? 'Todas as sugestões desta sessão já foram revisadas.'
+                              : 'Nenhuma sugestão pendente neste filtro.'}
                       </p>
                     )}
                   </div>
+                  {historyPlanningRecommendations.length > 0 && planningFilter !== 'history' && (
+                    <details className="mt-4 rounded-2xl border border-gray-100 bg-white px-4 py-3">
+                      <summary className="cursor-pointer text-xs font-bold uppercase tracking-widest text-gray-500">Histórico de sugestões ({historyPlanningRecommendations.length})</summary>
+                      <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+                        {historyPlanningRecommendations.slice(0, 6).map((recommendation: any) => (
+                          <div key={recommendation.id} className="rounded-xl bg-gray-50 px-3 py-2">
+                            <p className="text-xs font-bold text-gray-800">{planningRecommendationTitle(recommendation)}</p>
+                            <p className="mt-1 text-[11px] font-semibold text-gray-500">{abaRecommendationStatusLabel(recommendation.status)} · {abaRecommendationPriorityLabel(recommendation.priority)}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  )}
                 </section>
 
                 <section className="rounded-[24px] bg-white border border-blue-100 p-5">
@@ -5563,6 +5796,127 @@ export const SessionMode = ({
             </div>
           </div>
         </div>
+        {editingRecommendation && (
+          <div className="fixed inset-0 z-[230] flex items-end justify-center bg-gray-950/45 px-3 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:items-center sm:p-6" data-aba-recommendation-edit-modal>
+            <div className="flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden rounded-[28px] border border-emerald-100 bg-white shadow-2xl shadow-gray-950/20">
+              <div className="flex items-start justify-between gap-3 border-b border-gray-100 px-5 py-4">
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-600">Editar sugestão clínica</p>
+                  <h2 className="mt-1 text-xl font-black text-gray-900">{planningRecommendationTitle(editingRecommendation)}</h2>
+                </div>
+                <button type="button" onClick={() => setEditingRecommendation(null)} className="rounded-full bg-gray-100 p-2 text-gray-500">
+                  <X size={18} />
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto px-5 py-4 custom-scrollbar">
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <label className="text-[10px] font-bold uppercase tracking-widest text-gray-400 md:col-span-2">
+                    Título
+                    <input value={editRecommendationForm.title} onChange={(event) => setEditRecommendationForm((form) => ({ ...form, title: event.target.value }))} className="mt-1 w-full rounded-2xl border border-gray-100 bg-[#F8FAFF] px-3 py-3 text-sm font-semibold text-gray-800 outline-none" />
+                  </label>
+                  <label className="text-[10px] font-bold uppercase tracking-widest text-gray-400">
+                    Prioridade
+                    <select value={editRecommendationForm.priority} onChange={(event) => setEditRecommendationForm((form) => ({ ...form, priority: event.target.value }))} className="mt-1 w-full rounded-2xl border border-gray-100 bg-[#F8FAFF] px-3 py-3 text-sm font-semibold text-gray-800 outline-none">
+                      {recommendationPriorityOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </select>
+                  </label>
+                  <label className="text-[10px] font-bold uppercase tracking-widest text-gray-400">
+                    Tipo da sugestão
+                    <select value={editRecommendationForm.recommendationType} onChange={(event) => setEditRecommendationForm((form) => ({ ...form, recommendationType: event.target.value }))} className="mt-1 w-full rounded-2xl border border-gray-100 bg-[#F8FAFF] px-3 py-3 text-sm font-semibold text-gray-800 outline-none">
+                      {recommendationTypeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </select>
+                  </label>
+                  <label className="text-[10px] font-bold uppercase tracking-widest text-gray-400">
+                    Alvo/habilidade vinculada
+                    <select value={editRecommendationForm.targetId} onChange={(event) => setEditRecommendationForm((form) => ({ ...form, targetId: event.target.value }))} className="mt-1 w-full rounded-2xl border border-gray-100 bg-[#F8FAFF] px-3 py-3 text-sm font-semibold text-gray-800 outline-none">
+                      <option value="">Sem alvo específico</option>
+                      {sessionGoals.map((goal: any) => {
+                        const targetId = goalTargetId(goal);
+                        if (!targetId) return null;
+                        return <option key={targetId} value={targetId}>{goal?.name || goal?.target_name || goal?.targetName || targetId}</option>;
+                      })}
+                    </select>
+                  </label>
+                  <label className="text-[10px] font-bold uppercase tracking-widest text-gray-400">
+                    Aplicar em qual data
+                    <input type="date" value={editRecommendationForm.applyForDate} onChange={(event) => setEditRecommendationForm((form) => ({ ...form, applyForDate: event.target.value }))} className="mt-1 w-full rounded-2xl border border-gray-100 bg-[#F8FAFF] px-3 py-3 text-sm font-semibold text-gray-800 outline-none" />
+                  </label>
+                  <label className="text-[10px] font-bold uppercase tracking-widest text-gray-400 md:col-span-2">
+                    Ação recomendada
+                    <textarea value={editRecommendationForm.suggestedAction} onChange={(event) => setEditRecommendationForm((form) => ({ ...form, suggestedAction: event.target.value }))} className="mt-1 min-h-[86px] w-full rounded-2xl border border-gray-100 bg-[#F8FAFF] px-3 py-3 text-sm font-semibold text-gray-800 outline-none" />
+                  </label>
+                  <label className="text-[10px] font-bold uppercase tracking-widest text-gray-400">
+                    Resumo clínico
+                    <textarea value={editRecommendationForm.summary} onChange={(event) => setEditRecommendationForm((form) => ({ ...form, summary: event.target.value }))} className="mt-1 min-h-[80px] w-full rounded-2xl border border-gray-100 bg-[#F8FAFF] px-3 py-3 text-sm font-semibold text-gray-800 outline-none" />
+                  </label>
+                  <label className="text-[10px] font-bold uppercase tracking-widest text-gray-400">
+                    Justificativa clínica
+                    <textarea value={editRecommendationForm.rationale} onChange={(event) => setEditRecommendationForm((form) => ({ ...form, rationale: event.target.value }))} className="mt-1 min-h-[80px] w-full rounded-2xl border border-gray-100 bg-[#F8FAFF] px-3 py-3 text-sm font-semibold text-gray-800 outline-none" />
+                  </label>
+                  <label className="text-[10px] font-bold uppercase tracking-widest text-gray-400">
+                    Profissional responsável
+                    <input value={editRecommendationForm.responsibleProfessionalId} onChange={(event) => setEditRecommendationForm((form) => ({ ...form, responsibleProfessionalId: event.target.value }))} className="mt-1 w-full rounded-2xl border border-gray-100 bg-[#F8FAFF] px-3 py-3 text-sm font-semibold text-gray-800 outline-none" placeholder="Opcional" />
+                  </label>
+                  <label className="text-[10px] font-bold uppercase tracking-widest text-gray-400">
+                    Observação clínica
+                    <textarea value={editRecommendationForm.clinicalNote} onChange={(event) => setEditRecommendationForm((form) => ({ ...form, clinicalNote: event.target.value }))} className="mt-1 min-h-[80px] w-full rounded-2xl border border-gray-100 bg-[#F8FAFF] px-3 py-3 text-sm font-semibold text-gray-800 outline-none" placeholder="Opcional" />
+                  </label>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 gap-2 border-t border-gray-100 bg-white px-5 py-4 sm:grid-cols-3">
+                <button type="button" onClick={() => setEditingRecommendation(null)} className="min-h-[44px] rounded-2xl border border-gray-100 bg-white px-4 py-2 text-xs font-bold uppercase tracking-widest text-gray-500">
+                  Cancelar
+                </button>
+                <button type="button" onClick={() => void saveEditedRecommendation(false)} disabled={Boolean(planningDecisionLoadingId)} className="min-h-[44px] rounded-2xl bg-[#7a32fc] px-4 py-2 text-xs font-bold uppercase tracking-widest text-white disabled:opacity-60">
+                  {planningDecisionLoadingId ? 'Salvando...' : 'Salvar edição'}
+                </button>
+                <button type="button" onClick={() => void saveEditedRecommendation(true)} disabled={Boolean(planningDecisionLoadingId)} className="min-h-[44px] rounded-2xl bg-emerald-600 px-4 py-2 text-xs font-bold uppercase tracking-widest text-white disabled:opacity-60">
+                  Salvar e aceitar
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {rejectingRecommendation && (
+          <div className="fixed inset-0 z-[230] flex items-end justify-center bg-gray-950/45 px-3 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:items-center sm:p-6" data-aba-recommendation-reject-modal>
+            <div className="flex max-h-[90vh] w-full max-w-xl flex-col overflow-hidden rounded-[28px] border border-red-100 bg-white shadow-2xl shadow-gray-950/20">
+              <div className="flex items-start justify-between gap-3 border-b border-gray-100 px-5 py-4">
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-red-500">Recusar sugestão clínica</p>
+                  <h2 className="mt-1 text-lg font-black text-gray-900">{planningRecommendationTitle(rejectingRecommendation)}</h2>
+                </div>
+                <button type="button" onClick={() => setRejectingRecommendation(null)} className="rounded-full bg-gray-100 p-2 text-gray-500">
+                  <X size={18} />
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto px-5 py-4 custom-scrollbar">
+                <p className="text-sm font-semibold text-gray-600">Escolha o motivo da recusa. A sugestão sairá da fila pendente, mas ficará no histórico.</p>
+                <div className="mt-4 grid grid-cols-1 gap-2">
+                  {rejectRecommendationReasons.map((reason) => {
+                    const selected = rejectRecommendationReason === reason;
+                    return (
+                      <button key={reason} type="button" onClick={() => setRejectRecommendationReason(reason)} className={`rounded-2xl border px-4 py-3 text-left text-sm font-bold transition ${selected ? 'border-red-300 bg-red-50 text-red-700' : 'border-gray-100 bg-[#F8FAFF] text-gray-700'}`}>
+                        {reason}
+                      </button>
+                    );
+                  })}
+                </div>
+                <label className="mt-4 block text-[10px] font-bold uppercase tracking-widest text-gray-400">
+                  Observação opcional
+                  <textarea value={rejectRecommendationNotes} onChange={(event) => setRejectRecommendationNotes(event.target.value)} className="mt-1 min-h-[90px] w-full rounded-2xl border border-gray-100 bg-[#F8FAFF] px-3 py-3 text-sm font-semibold text-gray-800 outline-none" />
+                </label>
+              </div>
+              <div className="grid grid-cols-1 gap-2 border-t border-gray-100 bg-white px-5 py-4 sm:grid-cols-2">
+                <button type="button" onClick={() => setRejectingRecommendation(null)} className="min-h-[44px] rounded-2xl border border-gray-100 bg-white px-4 py-2 text-xs font-bold uppercase tracking-widest text-gray-500">
+                  Cancelar
+                </button>
+                <button type="button" onClick={() => void confirmRejectRecommendation()} disabled={Boolean(planningDecisionLoadingId)} className="min-h-[44px] rounded-2xl bg-red-600 px-4 py-2 text-xs font-bold uppercase tracking-widest text-white disabled:opacity-60">
+                  {planningDecisionLoadingId ? 'Salvando...' : 'Registrar recusa'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         {actionToastPortal}
       </div>
     );
@@ -6724,8 +7078,8 @@ export const SessionMode = ({
                   <div key={item.id} className="rounded-2xl border border-emerald-100 bg-[#F6FFFB] p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div>
-                        <p className="text-sm font-bold text-gray-900">{item.instructions || 'Sugestão para revisar na sessão'}</p>
-                        <p className="mt-1 text-xs font-semibold text-gray-500">{item.planned_trial_type === 'maintenance_probe' ? 'Sondagem de manutenção' : 'Plano clínico'} - {item.priority || 'MEDIUM'}</p>
+                        <p className="text-sm font-bold text-gray-900">{translateAbaRecommendationText(item.instructions || 'Sugestão para revisar na sessão')}</p>
+                        <p className="mt-1 text-xs font-semibold text-gray-500">{item.planned_trial_type === 'maintenance_probe' ? 'Sondagem de manutenção' : 'Plano clínico'} - {abaRecommendationPriorityLabel(item.priority)}</p>
                       </div>
                     </div>
                     <div className="mt-3 flex flex-wrap gap-2">
