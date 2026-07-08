@@ -998,7 +998,7 @@ export const SessionMode = ({
       addBehavior(behaviorPresets.find((item) => item.id === shortcut.behaviorId || item.name === shortcut.behaviorName));
     });
     behaviorPresets.forEach(addBehavior);
-    return Array.from(byId.values()).slice(0, 6);
+    return Array.from(byId.values()).slice(0, 8);
   }, [quickBehaviorShortcuts, recentBehaviorRecords, selectedBehavior]);
   const extraDockBehaviorOptions = useMemo(() => {
     const visibleIds = new Set(visibleDockBehaviorOptions.map((behavior) => behavior.id));
@@ -6318,18 +6318,7 @@ export const SessionMode = ({
               </div>
             </div>
             <div className="text-[10px] font-black uppercase tracking-widest text-slate-400" data-aba-dock-behavior-chips>
-              <div className="flex items-center justify-between gap-2">
-                <span>Comportamento</span>
-                {extraDockBehaviorOptions.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => setDockMoreBehaviorsOpen((open) => !open)}
-                    className="text-[10px] font-black uppercase tracking-widest text-[#7a32fc]"
-                  >
-                    {dockMoreBehaviorsOpen ? 'Mostrar menos' : 'Mais'}
-                  </button>
-                )}
-              </div>
+              <span>Comportamento</span>
               <div className="mt-1 flex max-h-[92px] flex-wrap gap-2 overflow-y-auto pr-1">
                 {(dockMoreBehaviorsOpen ? [...visibleDockBehaviorOptions, ...extraDockBehaviorOptions] : visibleDockBehaviorOptions).map((behavior) => (
                   <button
@@ -6343,6 +6332,15 @@ export const SessionMode = ({
                     <span className="min-w-0 truncate">{behavior.name}</span>
                   </button>
                 ))}
+                {extraDockBehaviorOptions.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setDockMoreBehaviorsOpen((open) => !open)}
+                    className={`${dockChipClass(false)} max-w-[10.5rem] text-[#7a32fc]`}
+                  >
+                    <span className="min-w-0 truncate">{dockMoreBehaviorsOpen ? 'Mostrar menos' : '+ Mais'}</span>
+                  </button>
+                )}
               </div>
             </div>
             <div className="text-[10px] font-black uppercase tracking-widest text-slate-400" data-aba-dock-method-chips>
@@ -7385,6 +7383,7 @@ export const SessionMode = ({
                       : masteryRow?.status || 'Dados insuficientes';
               const progressLabel = masteryRow?.criterionProgressLabel || '0/0';
               const progressPrefix = masteryRow?.criterionProgressPrefix || 'Hoje';
+              const progressShortLabel = String(progressLabel).match(/^\s*\d+\s*\/\s*\d+/)?.[0]?.replace(/\s+/g, '') || progressLabel;
               return (
                 <article
                   key={`mobile-${goalKey}`}
@@ -7399,28 +7398,28 @@ export const SessionMode = ({
                   <div className="space-y-2">
                     <div className="flex min-w-0 items-start justify-between gap-2">
                       <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-                        <span className="rounded-full bg-[#7a32fc]/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest text-[#7a32fc]">
+                        <span className="max-w-[9.5rem] truncate rounded-full bg-[#7a32fc]/10 px-2 py-0.5 text-[9px] font-semibold leading-tight text-[#7a32fc]" title={goal.domainName || goal.domain_name || 'Meta'}>
                           {goal.domainName || goal.domain_name || 'Meta'}
                         </span>
                         {maintenanceProbeCanRunNow && (
-                          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest text-amber-700">Manutenção</span>
+                          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[9px] font-semibold text-amber-700">Manutenção</span>
                         )}
                         {!maintenanceProbeCanRunNow && maintenanceInfo.hasUpcomingMaintenanceProbe && (
-                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest text-slate-600">Manutenção agendada</span>
+                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[9px] font-semibold text-slate-600">Manutenção agendada</span>
                         )}
                       </div>
-                      <span className={`inline-flex rounded-full px-2 py-1 text-[9px] font-bold uppercase tracking-widest ${maintenanceProbeCanRunNow ? 'bg-amber-100 text-amber-700' : masteryRow?.contributes ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-600'}`}>
+                      <span className={`inline-flex max-w-[8.5rem] shrink-0 truncate rounded-full px-2 py-1 text-[9px] font-semibold ${maintenanceProbeCanRunNow ? 'bg-amber-100 text-amber-700' : masteryRow?.contributes ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-600'}`} title={statusLabel}>
                         {statusLabel}
                       </span>
                     </div>
-                    <h2 className={`${selected ? 'text-lg' : 'text-[15px]'} line-clamp-2 overflow-hidden break-words font-black leading-snug text-gray-900`}>{goal.name || goal.targetName || goal.target_name}</h2>
+                    <h2 className={`${selected ? 'text-lg' : 'text-[15px]'} line-clamp-2 overflow-hidden break-words font-semibold leading-snug text-gray-900`}>{goal.name || goal.targetName || goal.target_name}</h2>
                     {selected && (
-                      <div className="flex min-w-0 items-center justify-between gap-3 rounded-2xl bg-[#F4EFFF] px-3 py-2" data-aba-mobile-progress-summary>
-                        <p className="min-w-0 truncate text-[9px] font-black uppercase tracking-widest text-[#7a32fc]">Progresso</p>
-                        <p className="shrink-0 text-sm font-black text-[#1B254B]">{progressLabel}</p>
+                      <div className="inline-flex max-w-full items-center gap-2 self-start rounded-xl bg-[#F4EFFF] px-2.5 py-1.5" data-aba-mobile-progress-summary title={progressLabel}>
+                        <p className="text-[9px] font-semibold uppercase tracking-widest text-[#7a32fc]">Progresso</p>
+                        <p className="text-xs font-semibold text-[#1B254B]">{progressShortLabel}</p>
                       </div>
                     )}
-                    <div className="space-y-1 text-[11px] font-semibold text-gray-500">
+                    <div className="space-y-1 text-[11px] font-medium text-gray-500">
                       <p className="min-w-0 truncate" title={`${progressPrefix}: ${progressLabel}`}>{progressPrefix}: {progressLabel}</p>
                       {masteryRow?.criterion && <p className="line-clamp-2 overflow-hidden break-words" title={`Critério: ${masteryRow.criterion}`}>Critério: {masteryRow.criterion}</p>}
                     </div>
