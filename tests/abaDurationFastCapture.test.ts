@@ -158,7 +158,7 @@ test('Dock Clínico abre como registro rápido em chips e deixa ajustes avançad
 
   const dockSheet = sessionModeCode.slice(sheetStart, sheetEnd);
   assert.match(dockSheet, /data-aba-quick-register-header/);
-  assert.match(dockSheet, /Registro Rápido/);
+  assert.match(dockSheet, /Registro rápido/);
   assert.match(dockSheet, /aria-label="Fechar registro rápido"/);
   assert.match(dockSheet, /data-aba-quick-register-chip-panel/);
   assert.match(dockSheet, /data-aba-quick-register-footer[\s\S]*?Registrar ocorrência/);
@@ -189,7 +189,7 @@ test('Dock Clínico abre como registro rápido em chips e deixa ajustes avançad
   const durationBlock = contextPanel.slice(contextPanel.indexOf('data-aba-dock-duration-chips'), contextPanel.indexOf('renderIntervalQuantityStepper'));
   const behaviorBlock = contextPanel.slice(contextPanel.indexOf('data-aba-dock-behavior-chips'), contextPanel.indexOf('data-aba-dock-method-chips'));
   const methodBlock = contextPanel.slice(contextPanel.indexOf('data-aba-dock-method-chips'), contextPanel.indexOf('hidden mt-2 grid'));
-  const alertBlock = contextPanel.slice(contextPanel.indexOf('data-aba-dock-alert-chips'), contextPanel.indexOf('hidden text-[10px]', contextPanel.indexOf('data-aba-dock-alert-chips')));
+  const alertBlock = contextPanel.slice(contextPanel.indexOf('data-aba-dock-alert-chips'), contextPanel.indexOf('aria-hidden="true"', contextPanel.indexOf('data-aba-dock-alert-chips')));
   assert.doesNotMatch(locationBlock, /<select/);
   assert.doesNotMatch(severityBlock, /<select/);
   assert.doesNotMatch(durationBlock, /<select/);
@@ -352,6 +352,37 @@ test('SessionMode segue layout mobile-first compacto das telas de referência', 
   assert.match(sessionModeCode, /data-aba-quick-register-sheet/);
   assert.match(sessionModeCode, /Registrar ocorrência/);
   assert.doesNotMatch(content, />\s*(Session|End|Prompt Level|Target Behavior|Independent|Physical)\s*</);
+});
+
+test('SessionMode mobile usa tipografia leve e textos sem caixa alta forçada nos controles principais', () => {
+  const contentStart = sessionModeCode.indexOf('const sessionModeContent');
+  const content = sessionModeCode.slice(contentStart);
+  const headerStart = content.indexOf('data-aba-session-compact-header');
+  const headerEnd = content.indexOf('ref={sessionScrollRef}', headerStart);
+  const headerBlock = content.slice(headerStart, headerEnd);
+  const sheetStart = sessionModeCode.indexOf('data-aba-clinical-dock-sheet');
+  const sheetEnd = sessionModeCode.indexOf('const sessionModeContent', sheetStart);
+  const dockSheet = sessionModeCode.slice(sheetStart, sheetEnd);
+  const primarySheet = dockSheet.slice(0, dockSheet.indexOf('data-aba-dock-advanced-options'));
+  const footerStart = dockSheet.indexOf('data-aba-quick-register-footer');
+  const footerBlock = dockSheet.slice(footerStart, dockSheet.indexOf('</button>', footerStart));
+
+  assert.match(headerBlock, /Sessão:/);
+  assert.match(sessionModeCode, /\{ key: 'cold_probe', label: 'Sonda' \}/);
+  assert.match(sessionModeCode, /\{ key: 'baseline_probe', label: 'Baseline' \}/);
+  assert.match(headerBlock, /font-medium/);
+  assert.doesNotMatch(headerBlock, /font-black uppercase|uppercase tracking-widest/);
+  assert.match(content, /\{ key: 'all', label: 'Todas' \}/);
+  assert.match(content, /\{ key: 'skills', label: 'Habilidades' \}/);
+  assert.match(content, /\{ key: 'maintenance', label: 'Manutenções' \}/);
+  assert.match(primarySheet, /Registro rápido/);
+  assert.match(primarySheet, />Local</);
+  assert.match(primarySheet, />Severidade</);
+  assert.match(primarySheet, />Comportamento</);
+  assert.match(primarySheet, />Método</);
+  assert.doesNotMatch(primarySheet, /font-black uppercase|uppercase tracking-widest/);
+  assert.match(footerBlock, /Registrar ocorrência/);
+  assert.doesNotMatch(footerBlock, /uppercase|tracking-widest|font-black/);
 });
 
 test('Dock Clínico não exibe mojibake em textos visíveis', () => {

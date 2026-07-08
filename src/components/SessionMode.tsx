@@ -1091,7 +1091,7 @@ export const SessionMode = ({
     }
   };
 
-  const dockChipClass = (active: boolean) => `inline-flex min-h-[36px] min-w-0 max-w-full items-center justify-center overflow-hidden whitespace-nowrap rounded-full border px-4 py-2 text-[11px] font-black transition-all focus:outline-none focus:ring-2 focus:ring-[#7a32fc]/30 active:scale-[0.98] ${active ? 'border-[#7a32fc] bg-[#7a32fc] text-white shadow-sm shadow-purple-500/20 ring-2 ring-[#7a32fc]/20' : 'border-[#E2D9EA] bg-white text-slate-700 hover:border-purple-200 hover:bg-white'}`;
+  const dockChipClass = (active: boolean) => `inline-flex min-h-[36px] min-w-0 max-w-full items-center justify-center overflow-hidden whitespace-nowrap rounded-full border px-4 py-2 text-[11px] font-medium transition-all focus:outline-none focus:ring-2 focus:ring-[#7a32fc]/30 active:scale-[0.98] ${active ? 'border-[#7a32fc] bg-[#7a32fc] text-white shadow-sm shadow-purple-500/10 ring-2 ring-[#7a32fc]/10' : 'border-[#E2D9EA] bg-white text-slate-700 hover:border-purple-200 hover:bg-white'}`;
 
   const releaseActionLock = (key: string) => {
     const nextLocks = { ...actionLocksRef.current };
@@ -6057,14 +6057,14 @@ export const SessionMode = ({
         {microFeedback[feedbackKey] === 'pulse' && (
           <span className="pointer-events-none absolute -top-3 right-2 z-20 animate-pop rounded-full bg-white px-2 py-0.5 text-[10px] font-black text-[#1B254B] shadow-lg">ON</span>
         )}
-        <span className="flex min-w-0 flex-col items-center justify-center gap-0.5 text-[10px] font-black uppercase tracking-widest">
+        <span className="flex min-w-0 flex-col items-center justify-center gap-0.5 text-[10px] font-medium">
           <span className="inline-flex min-w-0 max-w-full items-center gap-1 overflow-hidden">
             {method === 'duration' ? (openDuration ? <Square size={13} /> : <Play size={13} />) : <Plus size={13} />}
             <span className="min-w-0 truncate">{compactLabel}</span>
           </span>
           {openDuration && <span className="ml-1 shrink-0 rounded-full bg-white/25 px-1.5 py-0.5 text-[10px]">{elapsed}</span>}
         </span>
-        <span className={`${(mobileFocusMode || compact) || openDuration ? 'hidden' : 'block'} mt-1 truncate text-[10px] font-semibold opacity-75`}>
+        <span className={`${(mobileFocusMode || compact) || openDuration ? 'hidden' : 'block'} mt-1 truncate text-[10px] font-normal opacity-75`}>
           {method === 'duration' ? 'iniciar duração' : '+1 ocorrência'}
         </span>
       </button>
@@ -6083,7 +6083,7 @@ export const SessionMode = ({
       <div className={`mx-auto max-w-3xl rounded-[22px] border p-1.5 shadow-xl backdrop-blur-xl ${clinicalDockCompact ? 'opacity-95' : 'shadow-xl'} ${crisisMode ? 'border-red-300 bg-slate-950/95 shadow-red-950/30' : 'border-blue-100 bg-white/95 shadow-blue-950/15'}`} data-aba-dock-bottom-bar>
         {!clinicalDockPausedCompact && openDurations.length > 0 && (
           <div
-            className={`mb-1.5 flex min-w-0 items-center justify-between gap-2 overflow-hidden rounded-2xl px-3 py-2 text-xs font-black ${crisisMode ? 'bg-white/10 text-white' : 'bg-amber-50 text-amber-800'}`}
+            className={`mb-1.5 flex min-w-0 items-center justify-between gap-2 overflow-hidden rounded-2xl px-3 py-2 text-xs font-medium ${crisisMode ? 'bg-white/10 text-white' : 'bg-amber-50 text-amber-800'}`}
             data-aba-dock-open-duration-badge
             title={openDurations.length === 1 ? `${openDurations[0].behaviorName} ${formatElapsed(openDurations[0].startedAt, nowMs)}` : `${openDurations.length} eventos em andamento`}
           >
@@ -6103,7 +6103,7 @@ export const SessionMode = ({
                 setCrisisMode(true);
                 setClinicalDockSheetOpen(true);
               }}
-              className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-[18px] border border-red-100 bg-red-50 px-3 text-[11px] font-black uppercase tracking-widest text-red-600 shadow-sm transition-all active:scale-[0.98]"
+              className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-[18px] border border-red-100 bg-red-50 px-3 text-[11px] font-medium text-red-600 shadow-sm transition-all active:scale-[0.98]"
             >
               <Plus size={15} /> + Crise
             </button>
@@ -6113,7 +6113,7 @@ export const SessionMode = ({
                 setCrisisMode(false);
                 setClinicalDockSheetOpen(true);
               }}
-              className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-[18px] border border-slate-100 bg-[#1B254B] px-3 text-[11px] font-black uppercase tracking-widest text-white shadow-sm transition-all active:scale-[0.98]"
+              className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-[18px] border border-slate-100 bg-[#1B254B] px-3 text-[11px] font-medium text-white shadow-sm transition-all active:scale-[0.98]"
             >
               <MoreHorizontal size={15} /> Mais
             </button>
@@ -6127,7 +6127,7 @@ export const SessionMode = ({
                 if (crisisMode) openAbcModal();
                 else setClinicalDockSheetOpen(true);
               }}
-              className={`min-h-[44px] min-w-0 overflow-hidden rounded-[16px] border px-2 text-[10px] font-black uppercase tracking-widest shadow-sm transition-all active:scale-[0.98] ${crisisMode ? 'border-white/15 bg-white text-slate-950' : 'border-slate-100 bg-white text-slate-700'}`}
+              className={`min-h-[44px] min-w-0 overflow-hidden rounded-[16px] border px-2 text-[11px] font-medium shadow-sm transition-all active:scale-[0.98] ${crisisMode ? 'border-white/15 bg-white text-slate-950' : 'border-slate-100 bg-white text-slate-700'}`}
             >
               <span className="block truncate">{crisisMode ? 'ABC' : 'Mais'}</span>
             </button>
@@ -6155,7 +6155,7 @@ export const SessionMode = ({
     if (effectiveMeasurementType !== 'abc') setClinicalDockSheetOpen(false);
   };
   const renderIntervalQuantityStepper = (containerClassName = '') => (
-    <div className={`text-[10px] font-black uppercase tracking-widest text-slate-400 ${containerClassName}`} data-aba-dock-quantity-stepper>
+    <div className={`text-[11px] font-medium text-slate-500 ${containerClassName}`} data-aba-dock-quantity-stepper>
       <span>Quantidade</span>
       <div className="mt-1 inline-flex min-h-[44px] items-center rounded-2xl border border-blue-100 bg-[#F8FAFF] p-1 shadow-sm">
         <button
@@ -6163,7 +6163,7 @@ export const SessionMode = ({
           onClick={() => adjustIntervalQuantity(-1)}
           disabled={Boolean(intervalRun) || intervalQuantityCurrentValue <= intervalQuantityMin}
           aria-label="Diminuir quantidade"
-          className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-white text-base font-black text-slate-600 shadow-sm transition-all active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+          className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-white text-base font-semibold text-slate-600 shadow-sm transition-all active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
         >
           -
         </button>
@@ -6180,14 +6180,14 @@ export const SessionMode = ({
           onBlur={() => commitIntervalQuantityInput()}
           onFocus={(event) => event.currentTarget.select()}
           disabled={Boolean(intervalRun)}
-          className="h-10 w-16 bg-transparent px-2 text-center text-base font-black tracking-normal text-slate-900 outline-none disabled:opacity-60"
+          className="h-10 w-16 bg-transparent px-2 text-center text-base font-semibold tracking-normal text-slate-900 outline-none disabled:opacity-60"
         />
         <button
           type="button"
           onClick={() => adjustIntervalQuantity(1)}
           disabled={Boolean(intervalRun) || intervalQuantityCurrentValue >= intervalQuantityMax}
           aria-label="Aumentar quantidade"
-          className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-[#7a32fc] text-base font-black text-white shadow-sm shadow-purple-500/20 transition-all active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+          className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-[#7a32fc] text-base font-semibold text-white shadow-sm shadow-purple-500/10 transition-all active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
         >
           +
         </button>
@@ -6211,8 +6211,8 @@ export const SessionMode = ({
           <div className="mx-auto mb-3 h-1.5 w-12 rounded-full bg-[#D9D1DF]" />
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <h2 className="text-lg font-black leading-tight text-slate-800">Registro Rápido</h2>
-              <p className="mt-1 truncate text-xs font-black text-[#7a32fc]" title={contextSummaryItems.join(' · ')}>
+              <h2 className="text-lg font-semibold leading-tight text-slate-800">Registro rápido</h2>
+              <p className="mt-1 truncate text-xs font-medium text-[#7a32fc]" title={contextSummaryItems.join(' · ')}>
                 {contextSummaryItems.slice(0, 3).join(' · ')}
               </p>
             </div>
@@ -6230,7 +6230,7 @@ export const SessionMode = ({
 
         <section className="space-y-4" data-aba-dock-context-panel data-aba-quick-register-chip-panel>
           <div className="space-y-4">
-            <div className="text-[10px] font-black uppercase tracking-widest text-slate-400" data-aba-dock-location-chips>
+            <div className="text-[11px] font-medium text-slate-500" data-aba-dock-location-chips>
               <span>Local</span>
               <div className="mt-1 flex max-h-[88px] flex-wrap gap-2 overflow-y-auto pr-1">
                 {visibleDockLocationOptions.map((location) => (
@@ -6250,7 +6250,7 @@ export const SessionMode = ({
                 <button
                   type="button"
                   onClick={() => setDockLocationsExpanded((expanded) => !expanded)}
-                  className="mt-2 text-[10px] font-black uppercase tracking-widest text-slate-500"
+                  className="mt-2 text-[11px] font-medium text-slate-500"
                 >
                   {dockLocationsExpanded ? 'Mostrar menos' : 'Ver mais'}
                 </button>
@@ -6268,14 +6268,14 @@ export const SessionMode = ({
                     <button
                       type="button"
                       onClick={addDockLocation}
-                      className="inline-flex min-h-[38px] items-center justify-center rounded-2xl bg-[#7a32fc] px-3 text-[10px] font-black uppercase tracking-widest text-white"
+                      className="inline-flex min-h-[38px] items-center justify-center rounded-2xl bg-[#7a32fc] px-3 text-[11px] font-medium text-white"
                     >
                       Adicionar
                     </button>
                   </div>
                   {customDockLocations.length > 0 && (
                     <div className="mt-3 space-y-2">
-                      <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Locais adicionados</p>
+                      <p className="text-[11px] font-medium text-slate-500">Locais adicionados</p>
                       {customDockLocations.map((location) => (
                         <div key={location} className="flex flex-wrap items-center gap-2 rounded-2xl border border-blue-100 bg-white p-2">
                           {editingDockLocationName === location ? (
@@ -6285,13 +6285,13 @@ export const SessionMode = ({
                                 onChange={(event) => setEditingDockLocationValue(event.target.value)}
                                 className="min-h-[36px] min-w-0 flex-1 rounded-xl border border-blue-100 bg-[#F4F7FE] px-3 text-xs font-bold text-slate-700 outline-none"
                               />
-                              <button type="button" onClick={renameDockLocation} className="min-h-[36px] rounded-xl bg-[#7a32fc] px-3 text-[10px] font-black uppercase tracking-widest text-white">Salvar</button>
+                              <button type="button" onClick={renameDockLocation} className="min-h-[36px] rounded-xl bg-[#7a32fc] px-3 text-[11px] font-medium text-white">Salvar</button>
                             </>
                           ) : (
                             <>
                               <span className="min-w-0 flex-1 truncate text-xs font-bold text-slate-700">{location}</span>
-                              <button type="button" onClick={() => startRenameDockLocation(location)} className="text-[10px] font-black uppercase tracking-widest text-[#7a32fc]">Renomear</button>
-                              <button type="button" onClick={() => removeDockLocation(location)} className="text-[10px] font-black uppercase tracking-widest text-slate-400">Remover</button>
+                              <button type="button" onClick={() => startRenameDockLocation(location)} className="text-[11px] font-medium text-[#7a32fc]">Renomear</button>
+                              <button type="button" onClick={() => removeDockLocation(location)} className="text-[11px] font-medium text-slate-400">Remover</button>
                             </>
                           )}
                         </div>
@@ -6301,7 +6301,7 @@ export const SessionMode = ({
                 </div>
               )}
             </div>
-            <div className="text-[10px] font-black uppercase tracking-widest text-slate-400" data-aba-dock-severity-chips>
+            <div className="text-[11px] font-medium text-slate-500" data-aba-dock-severity-chips>
               <span>Severidade</span>
               <div className="mt-1 flex gap-2">
                 {severityOptions.map((severity) => (
@@ -6310,14 +6310,14 @@ export const SessionMode = ({
                     type="button"
                     onClick={() => setSelectedSeverity(severity)}
                     aria-pressed={selectedSeverity === severity}
-                    className={`inline-flex min-h-[38px] min-w-[38px] items-center justify-center rounded-full border px-3 py-2 text-xs font-black transition-all focus:outline-none focus:ring-2 focus:ring-red-500/25 active:scale-[0.98] ${selectedSeverity === severity ? 'border-red-600 bg-red-600 text-white shadow-sm shadow-red-900/20 ring-2 ring-red-500/20' : 'border-[#E2D9EA] bg-white text-slate-600 hover:border-slate-300 hover:bg-white'}`}
+                    className={`inline-flex min-h-[38px] min-w-[38px] items-center justify-center rounded-full border px-3 py-2 text-xs font-medium transition-all focus:outline-none focus:ring-2 focus:ring-red-500/25 active:scale-[0.98] ${selectedSeverity === severity ? 'border-red-600 bg-red-600 text-white shadow-sm shadow-red-900/10 ring-2 ring-red-500/10' : 'border-[#E2D9EA] bg-white text-slate-600 hover:border-slate-300 hover:bg-white'}`}
                   >
                     {severity}
                   </button>
                 ))}
               </div>
             </div>
-            <div className="text-[10px] font-black uppercase tracking-widest text-slate-400" data-aba-dock-behavior-chips>
+            <div className="text-[11px] font-medium text-slate-500" data-aba-dock-behavior-chips>
               <span>Comportamento</span>
               <div className="mt-1 flex max-h-[92px] flex-wrap gap-2 overflow-y-auto pr-1">
                 {(dockMoreBehaviorsOpen ? [...visibleDockBehaviorOptions, ...extraDockBehaviorOptions] : visibleDockBehaviorOptions).map((behavior) => (
@@ -6343,7 +6343,7 @@ export const SessionMode = ({
                 )}
               </div>
             </div>
-            <div className="text-[10px] font-black uppercase tracking-widest text-slate-400" data-aba-dock-method-chips>
+            <div className="text-[11px] font-medium text-slate-500" data-aba-dock-method-chips>
               <span>Método</span>
               <div className="mt-1 flex flex-wrap gap-2">
                 {selectedBehaviorMethodOptions.map((option) => (
@@ -6362,7 +6362,7 @@ export const SessionMode = ({
             </div>
           </div>
           <div className="hidden mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2" aria-hidden="true">
-            <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+            <label className="text-[11px] font-medium text-slate-500">
               Comportamento
               <select
                 value={selectedBehaviorId}
@@ -6377,7 +6377,7 @@ export const SessionMode = ({
                 ))}
               </select>
             </label>
-            <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+            <label className="text-[11px] font-medium text-slate-500">
               Método de coleta
               <select
                 value={behaviorMeasurementType}
@@ -6392,7 +6392,7 @@ export const SessionMode = ({
           </div>
           {isIntervalMeasurementType(behaviorMeasurementType) && (
             <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
-              <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 sm:col-span-2" data-aba-dock-duration-chips>
+              <div className="text-[11px] font-medium text-slate-500 sm:col-span-2" data-aba-dock-duration-chips>
                 <span>Duração</span>
                 <div className="mt-1 flex flex-wrap gap-2">
                   {quickIntervalDurationOptions.map((option) => (
@@ -6411,7 +6411,7 @@ export const SessionMode = ({
                     type="button"
                     onClick={() => setDockMoreDurationsOpen((open) => !open)}
                     disabled={Boolean(intervalRun)}
-                    className="inline-flex min-h-[38px] items-center justify-center rounded-2xl border border-blue-100 bg-white px-3 py-2 text-[11px] font-black text-[#7a32fc] disabled:cursor-not-allowed disabled:opacity-60"
+                    className="inline-flex min-h-[38px] items-center justify-center rounded-2xl border border-blue-100 bg-white px-3 py-2 text-[11px] font-medium text-[#7a32fc] disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     Mais durações
                   </button>
@@ -6443,13 +6443,13 @@ export const SessionMode = ({
                 )}
               </div>
               {intervalDurationMode === 'custom' && (
-                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                <label className="text-[11px] font-medium text-slate-500">
                   Segundos
                   <input type="number" min={1} max={3600} value={intervalCustomSeconds} onChange={(event) => setIntervalCustomSeconds(Number(event.target.value))} disabled={Boolean(intervalRun)} className="mt-1 w-full rounded-2xl border border-blue-100 bg-[#F4F7FE] px-3 py-3 text-xs font-bold text-slate-700 outline-none disabled:opacity-60" />
                 </label>
               )}
               {renderIntervalQuantityStepper()}
-              <div className="text-[10px] font-black uppercase tracking-widest text-slate-400" data-aba-dock-alert-chips>
+              <div className="text-[11px] font-medium text-slate-500" data-aba-dock-alert-chips>
                 <span>Alerta</span>
                 <div className="mt-1 flex flex-wrap gap-2">
                   {intervalAlertOptions.map((option) => (
@@ -6467,7 +6467,7 @@ export const SessionMode = ({
                   ))}
                 </div>
               </div>
-              <label className="hidden text-[10px] font-black uppercase tracking-widest text-slate-400" aria-hidden="true">
+              <label className="hidden text-[11px] font-medium text-slate-500" aria-hidden="true">
                 Alerta
                 <select value={intervalAlertType} onChange={(event) => setIntervalAlertType(event.target.value)} disabled={Boolean(intervalRun)} className="mt-1 w-full rounded-2xl border border-blue-100 bg-[#F4F7FE] px-3 py-3 text-xs font-bold text-slate-700 outline-none disabled:opacity-60">
                   {intervalAlertOptions.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
@@ -6476,7 +6476,7 @@ export const SessionMode = ({
             </div>
           )}
           <details className="mt-1 rounded-2xl border border-[#E4D8EF] bg-white/70 p-3" data-aba-dock-advanced-options>
-            <summary className="cursor-pointer text-[10px] font-black uppercase tracking-widest text-slate-500">Mais opções</summary>
+            <summary className="cursor-pointer text-[11px] font-medium text-slate-500">Mais opções</summary>
             <div className="mt-3 space-y-3 text-xs font-semibold text-slate-500">
               <p>Use esta área para ajustes menos frequentes, sem tirar o foco do registro rápido.</p>
               <div className="grid grid-cols-2 gap-2">
@@ -6484,27 +6484,27 @@ export const SessionMode = ({
                   type="button"
                   onClick={() => setCrisisMode((value) => !value)}
                   aria-pressed={crisisMode}
-                  className={`min-h-[40px] rounded-2xl border px-3 text-[10px] font-black uppercase tracking-widest ${crisisMode ? 'border-red-200 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600'}`}
+                  className={`min-h-[40px] rounded-2xl border px-3 text-[11px] font-medium ${crisisMode ? 'border-red-200 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600'}`}
                 >
                   Modo crise
                 </button>
                 <button
                   type="button"
                   onClick={() => { setClinicalDockSheetOpen(false); openAbcModal(); }}
-                  className="inline-flex min-h-[40px] items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-widest text-[#7a32fc]"
+                  className="inline-flex min-h-[40px] items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 text-[11px] font-medium text-[#7a32fc]"
                 >
                   <FileText size={13} /> ABC rápido
                 </button>
-                <button type="button" onClick={() => setDockLocationManagerOpen((open) => !open)} className="min-h-[40px] rounded-2xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-widest text-[#7a32fc]">Gerenciar locais</button>
-                <button type="button" onClick={() => setDockMoreDurationsOpen((open) => !open)} className="min-h-[40px] rounded-2xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-widest text-[#7a32fc]">Mais durações</button>
+                <button type="button" onClick={() => setDockLocationManagerOpen((open) => !open)} className="min-h-[40px] rounded-2xl border border-slate-200 bg-white px-3 text-[11px] font-medium text-[#7a32fc]">Gerenciar locais</button>
+                <button type="button" onClick={() => setDockMoreDurationsOpen((open) => !open)} className="min-h-[40px] rounded-2xl border border-slate-200 bg-white px-3 text-[11px] font-medium text-[#7a32fc]">Mais durações</button>
               </div>
 
               {openDurations.length > 0 && (
                 <div>
-                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Eventos em andamento</p>
+                  <p className="text-[11px] font-medium text-slate-500">Eventos em andamento</p>
                   <div className="mt-2 space-y-2">
                     {openDurations.map((event) => (
-                      <button key={event.id} onClick={() => { endDuration(event.id); setClinicalDockSheetOpen(false); }} disabled={Boolean(actionLocks[`duration:end:${event.id}`])} title={`${event.behaviorName} ${formatElapsed(event.startedAt, nowMs)}`} className="flex min-h-[46px] min-w-0 w-full items-center justify-between gap-2 overflow-hidden rounded-2xl border border-blue-100 bg-[#F8FAFF] px-4 text-left text-xs font-black text-slate-800 disabled:opacity-60">
+                      <button key={event.id} onClick={() => { endDuration(event.id); setClinicalDockSheetOpen(false); }} disabled={Boolean(actionLocks[`duration:end:${event.id}`])} title={`${event.behaviorName} ${formatElapsed(event.startedAt, nowMs)}`} className="flex min-h-[46px] min-w-0 w-full items-center justify-between gap-2 overflow-hidden rounded-2xl border border-blue-100 bg-[#F8FAFF] px-4 text-left text-xs font-medium text-slate-800 disabled:opacity-60">
                         <span className="min-w-0 truncate">{compactBehaviorLabel(event.behaviorName)}</span>
                         <span className="shrink-0">{formatElapsed(event.startedAt, nowMs)} ■</span>
                       </button>
@@ -6514,13 +6514,13 @@ export const SessionMode = ({
               )}
 
               <div>
-                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Últimos registros</p>
+                <p className="text-[11px] font-medium text-slate-500">Últimos registros</p>
                 <div className="mt-2 space-y-2">
                   {recentBehaviorRecords.length === 0 ? (
                     <p className="rounded-2xl border border-blue-100 bg-[#F8FAFF] px-4 py-3 text-xs font-semibold text-slate-500">Nenhum comportamento registrado nesta sessão.</p>
                   ) : recentBehaviorRecords.map((record) => (
                     <div key={record.id} className="rounded-2xl border border-blue-100 bg-[#F8FAFF] px-4 py-3">
-                      <p className="text-xs font-black text-slate-800">{record.title}</p>
+                      <p className="text-xs font-medium text-slate-800">{record.title}</p>
                       <p className="mt-1 text-[11px] font-semibold text-slate-500">{record.detail} • {new Date(record.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
                     </div>
                   ))}
@@ -6535,7 +6535,7 @@ export const SessionMode = ({
             type="button"
             onClick={handleQuickRegisterSubmit}
             disabled={Boolean(intervalRun && isIntervalMeasurementType(behaviorMeasurementType))}
-            className="inline-flex min-h-[52px] w-full items-center justify-center gap-2 rounded-2xl bg-[#7a32fc] px-4 text-xs font-black uppercase tracking-widest text-white shadow-lg shadow-purple-900/20 transition-all active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex min-h-[52px] w-full items-center justify-center gap-2 rounded-2xl bg-[#7a32fc] px-4 text-sm font-semibold text-white shadow-lg shadow-purple-900/10 transition-all active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
           >
             {behaviorMeasurementType === 'duration' ? <Play size={16} /> : behaviorMeasurementType === 'abc' ? <FileText size={16} /> : <Plus size={16} />}
             Registrar ocorrência
@@ -6552,17 +6552,17 @@ export const SessionMode = ({
           <button onClick={onClose} className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-[#7a32fc] transition-all hover:bg-purple-50" aria-label="Voltar">
             <ChevronLeft size={23} />
           </button>
-          <h1 className="min-w-0 flex-1 truncate text-sm font-black tracking-tight text-gray-900 sm:text-base">
-            Sessão: <span className="text-[#7a32fc]">{patient.name}</span>
+          <h1 className="min-w-0 flex-1 truncate text-sm font-medium tracking-tight text-gray-800 sm:text-base">
+            Sessão: <span className="font-semibold text-[#7a32fc]">{patient.name}</span>
           </h1>
           <button
             onClick={() => setMobileFocusMode((value) => !value)}
-            className="hidden shrink-0 rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-black uppercase tracking-widest text-emerald-700 md:inline-flex"
+            className="hidden shrink-0 rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-medium text-emerald-700 md:inline-flex"
           >
             {mobileFocusMode ? 'Foco' : 'Completo'}
           </button>
           {activeSession && (
-            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-black text-slate-900">
+            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-slate-800">
               <Clock size={12} className="text-emerald-600" />
               {formatCountdown ? formatCountdown(remainingSeconds) : '00:00'}
             </span>
@@ -6584,7 +6584,7 @@ export const SessionMode = ({
                 key={option.key}
                 type="button"
                 onClick={() => handleCollectionTypeChange(option.key)}
-                className={`inline-flex min-h-[34px] shrink-0 items-center justify-center rounded-full border px-4 text-[10px] font-black uppercase tracking-widest transition-all active:scale-95 ${selected ? 'border-[#7a32fc] bg-[#7a32fc] text-white shadow-sm' : 'border-purple-100 bg-white text-gray-700'}`}
+              className={`inline-flex min-h-[34px] shrink-0 items-center justify-center rounded-full border px-4 text-[11px] font-medium transition-all active:scale-95 ${selected ? 'border-[#7a32fc] bg-[#7a32fc] text-white shadow-sm shadow-purple-500/10' : 'border-purple-100 bg-white text-gray-700'}`}
                 aria-pressed={selected}
               >
                 {option.label}
@@ -7343,7 +7343,7 @@ export const SessionMode = ({
                   key={filter.key}
                   type="button"
                   onClick={() => setSessionPlanFilter(filter.key as 'all' | 'skills' | 'maintenance')}
-                  className={`inline-flex min-h-[32px] shrink-0 items-center justify-center border-b-2 px-3 text-[10px] font-black uppercase tracking-widest transition-all active:scale-95 ${sessionPlanFilter === filter.key ? 'border-[#7a32fc] text-[#7a32fc]' : 'border-transparent text-gray-600'}`}
+                  className={`inline-flex min-h-[32px] shrink-0 items-center justify-center border-b-2 px-3 text-[11px] font-medium transition-all active:scale-95 ${sessionPlanFilter === filter.key ? 'border-[#7a32fc] text-[#7a32fc]' : 'border-transparent text-gray-600'}`}
                   aria-pressed={sessionPlanFilter === filter.key}
                 >
                   {filter.label}
@@ -7415,7 +7415,7 @@ export const SessionMode = ({
                     <h2 className={`${selected ? 'text-lg' : 'text-[15px]'} line-clamp-2 overflow-hidden break-words font-semibold leading-snug text-gray-900`}>{goal.name || goal.targetName || goal.target_name}</h2>
                     {selected && (
                       <div className="inline-flex max-w-full items-center gap-2 self-start rounded-xl bg-[#F4EFFF] px-2.5 py-1.5" data-aba-mobile-progress-summary title={progressLabel}>
-                        <p className="text-[9px] font-semibold uppercase tracking-widest text-[#7a32fc]">Progresso</p>
+                        <p className="text-[10px] font-medium text-[#7a32fc]">Progresso</p>
                         <p className="text-xs font-semibold text-[#1B254B]">{progressShortLabel}</p>
                       </div>
                     )}
@@ -7439,12 +7439,12 @@ export const SessionMode = ({
                             event.stopPropagation();
                             activateMaintenanceProbeMode(goal);
                           }}
-                          className="inline-flex min-h-[34px] w-full items-center justify-center rounded-xl bg-amber-100 px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-amber-800"
+                          className="inline-flex min-h-[34px] w-full items-center justify-center rounded-xl bg-amber-100 px-3 py-2 text-[11px] font-medium text-amber-800"
                         >
                           Usar sondagem
                         </button>
                       )}
-                      <p className="pt-1 text-[10px] font-black uppercase tracking-widest text-slate-500">Registro de tentativa</p>
+                      <p className="pt-1 text-[11px] font-medium text-slate-500">Registro de tentativa</p>
                       <div className="grid grid-cols-2 gap-2">
                         <button
                           type="button"
@@ -7453,7 +7453,7 @@ export const SessionMode = ({
                             handleTrialClick(goal, 1, 'independent');
                           }}
                           disabled={Boolean(actionLocks[independentTrialLockKey])}
-                          className={`inline-flex min-h-[48px] items-center justify-center gap-2 rounded-xl bg-[#069669] px-3 text-xs font-black text-white transition-all disabled:opacity-75 ${microFeedback[independentTrialLockKey] === 'check' ? 'scale-[0.98] ring-4 ring-emerald-200/70' : ''}`}
+                          className={`inline-flex min-h-[48px] items-center justify-center gap-2 rounded-xl bg-[#069669] px-3 text-xs font-semibold text-white transition-all disabled:opacity-75 ${microFeedback[independentTrialLockKey] === 'check' ? 'scale-[0.98] ring-4 ring-emerald-200/70' : ''}`}
                         >
                           <CheckCircle2 size={16} /> Independente
                         </button>
@@ -7464,14 +7464,14 @@ export const SessionMode = ({
                             handleTrialClick(goal, 0, 'error');
                           }}
                           disabled={Boolean(actionLocks[errorTrialLockKey])}
-                          className={`inline-flex min-h-[48px] items-center justify-center gap-2 rounded-xl bg-[#C91E1E] px-3 text-xs font-black text-white transition-all disabled:opacity-75 ${microFeedback[errorTrialLockKey] === 'check' ? 'scale-[0.98] ring-4 ring-red-200/70' : ''}`}
+                          className={`inline-flex min-h-[48px] items-center justify-center gap-2 rounded-xl bg-[#C91E1E] px-3 text-xs font-semibold text-white transition-all disabled:opacity-75 ${microFeedback[errorTrialLockKey] === 'check' ? 'scale-[0.98] ring-4 ring-red-200/70' : ''}`}
                         >
                           <X size={16} />
                           Erro
                         </button>
                       </div>
                       <div className="rounded-2xl border border-purple-100 bg-[#FBF7FF] p-2" data-aba-mobile-prompt-categories>
-                        <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Tipo de ajuda</p>
+                        <p className="text-[11px] font-medium text-slate-500">Tipo de ajuda</p>
                         <div className="mt-2 grid grid-cols-2 gap-2">
                           {promptCategoryBuckets.map((bucket) => {
                             const active = selectedPromptCategoryKey === bucket.key;
@@ -7485,7 +7485,7 @@ export const SessionMode = ({
                                   setMobilePromptCategoryByGoalKey((prev) => ({ ...prev, [goalKey]: bucket.key }));
                                 }}
                                 aria-pressed={active}
-                                className={`min-h-[38px] rounded-full border px-3 text-[11px] font-black transition-all active:scale-95 ${active ? 'border-[#7a32fc] bg-white text-[#7a32fc] ring-2 ring-[#7a32fc]/15' : 'border-purple-100 bg-white text-slate-700'}`}
+                                className={`min-h-[38px] rounded-full border px-3 text-[11px] font-medium transition-all active:scale-95 ${active ? 'border-[#7a32fc] bg-white text-[#7a32fc] ring-2 ring-[#7a32fc]/10' : 'border-purple-100 bg-white text-slate-700'}`}
                               >
                                 {bucket.label}
                               </button>
@@ -7507,7 +7507,7 @@ export const SessionMode = ({
                                 }}
                                 disabled={Boolean(actionLocks[promptedTrialLockKey])}
                                 aria-label={`Registrar ${goal.name} com ajuda ${prompt.label}`}
-                                className={`min-h-[38px] rounded-xl border px-2 text-[11px] font-black leading-tight transition-all disabled:opacity-75 ${promptedActive ? 'border-orange-300 bg-white text-orange-700 ring-4 ring-orange-200/70' : 'border-orange-100 bg-white text-orange-700'}`}
+                                className={`min-h-[38px] rounded-xl border px-2 text-[11px] font-medium leading-tight transition-all disabled:opacity-75 ${promptedActive ? 'border-orange-300 bg-white text-orange-700 ring-4 ring-orange-200/60' : 'border-orange-100 bg-white text-orange-700'}`}
                               >
                                 {prompt.compactLabel}
                               </button>
@@ -7522,7 +7522,7 @@ export const SessionMode = ({
                           event.stopPropagation();
                           setMobileExpandedCriteriaKey(criteriaOpen ? '' : goalKey);
                         }}
-                        className="min-h-[32px] rounded-xl bg-slate-50 px-3 text-[10px] font-bold uppercase tracking-widest text-slate-500"
+                        className="min-h-[32px] rounded-xl bg-slate-50 px-3 text-[11px] font-medium text-slate-500"
                       >
                         {criteriaOpen ? 'Ocultar critério' : 'Ver critério'}
                       </button>
