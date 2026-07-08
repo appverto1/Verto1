@@ -162,7 +162,7 @@ test('Dock Clínico abre compacto e recolhe seletores em Ajustar contexto', () =
   assert.match(defaultDockView, /Contexto atual/);
   assert.match(defaultDockView, /Ajustar contexto/);
   assert.match(defaultDockView, /Registro rápido/);
-  assert.match(defaultDockView, /Registrar ocorrência/);
+  assert.match(sessionModeCode, /data-aba-quick-register-footer[\s\S]*?Registrar ocorrência/);
   assert.match(defaultDockView, /ABC rápido/);
   assert.doesNotMatch(defaultDockView, /<select/);
 
@@ -180,7 +180,7 @@ test('Dock Clínico abre compacto e recolhe seletores em Ajustar contexto', () =
   assert.match(contextPanel, /Personalizar/);
   const locationBlock = contextPanel.slice(contextPanel.indexOf('data-aba-dock-location-chips'), contextPanel.indexOf('data-aba-dock-severity-chips'));
   const severityBlock = contextPanel.slice(contextPanel.indexOf('data-aba-dock-severity-chips'), contextPanel.indexOf('Configurações rápidas'));
-  const durationBlock = contextPanel.slice(contextPanel.indexOf('data-aba-dock-duration-chips'), contextPanel.indexOf('Quantidade'));
+  const durationBlock = contextPanel.slice(contextPanel.indexOf('data-aba-dock-duration-chips'), contextPanel.indexOf('renderIntervalQuantityStepper'));
   const behaviorBlock = contextPanel.slice(contextPanel.indexOf('data-aba-dock-behavior-chips'), contextPanel.indexOf('data-aba-dock-method-chips'));
   const methodBlock = contextPanel.slice(contextPanel.indexOf('data-aba-dock-method-chips'), contextPanel.indexOf('hidden mt-2 grid'));
   const alertBlock = contextPanel.slice(contextPanel.indexOf('data-aba-dock-alert-chips'), contextPanel.indexOf('hidden text-[10px]', contextPanel.indexOf('data-aba-dock-alert-chips')));
@@ -194,7 +194,7 @@ test('Dock Clínico abre compacto e recolhe seletores em Ajustar contexto', () =
   assert.match(contextPanel, /onClick=\{\(\) => setBehaviorMeasurementType\(option\.key\)\}/);
   assert.match(contextPanel, /onClick=\{\(\) => setIntervalAlertType\(option\.key\)\}/);
   assert.match(contextPanel, /Duração/);
-  assert.match(contextPanel, /Quantidade/);
+  assert.match(contextPanel, /renderIntervalQuantityStepper\(\)/);
   assert.match(contextPanel, /Alerta/);
   assert.match(contextPanel, /Mais/);
 });
@@ -212,6 +212,24 @@ test('Dock Clínico usa seleção rápida de local, severidade e duração no co
   assert.match(sessionModeCode, /location: overrides\.location \?\? selectedLocation/);
   assert.match(sessionModeCode, /severity: overrides\.severity \?\? selectedSeverity/);
   assert.match(sessionModeCode, /durationSeconds: overrides\.durationSeconds \?\? overrides\.duration_seconds \?\? null/);
+});
+
+test('Dock Clínico usa stepper de quantidade com input editável sem normalizar no onChange', () => {
+  assert.match(sessionModeCode, /const \[intervalTotalIntervalsInput, setIntervalTotalIntervalsInput\] = useState\('10'\)/);
+  assert.match(sessionModeCode, /normalizeIntervalQuantityInput/);
+  assert.match(sessionModeCode, /commitIntervalQuantityInput/);
+  assert.match(sessionModeCode, /adjustIntervalQuantity\(-1\)/);
+  assert.match(sessionModeCode, /adjustIntervalQuantity\(1\)/);
+  assert.match(sessionModeCode, /data-aba-dock-quantity-stepper/);
+  assert.match(sessionModeCode, /type="text"[\s\S]*?inputMode="numeric"[\s\S]*?value=\{intervalTotalIntervalsInput\}/m);
+  assert.match(sessionModeCode, /onChange=\{\(event\) => \{\s*setIntervalTotalIntervalsInput\(event\.target\.value\);/m);
+  assert.match(sessionModeCode, /onBlur=\{\(\) => commitIntervalQuantityInput\(\)\}/);
+  assert.doesNotMatch(sessionModeCode, /onChange=\{\(event\) => setIntervalTotalIntervals\(Math\.max\(1, Number\(event\.target\.value\) \|\| 1\)\)\}/);
+  assert.match(sessionModeCode, /disabled=\{Boolean\(intervalRun\) \|\| intervalQuantityCurrentValue <= intervalQuantityMin\}/);
+  assert.match(sessionModeCode, /Informe uma quantidade entre/);
+  assert.match(sessionModeCode, /data-aba-quick-register-body/);
+  assert.match(sessionModeCode, /data-aba-quick-register-footer/);
+  assert.match(sessionModeCode, /onClick=\{handleQuickRegisterSubmit\}/);
 });
 
 test('Dock Clínico gerencia muitos locais sem requisitar backend nem alterar eventos antigos', () => {

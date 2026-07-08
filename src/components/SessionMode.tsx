@@ -227,6 +227,14 @@ const intervalAlertOptions = [
   { key: 'both', label: 'Ambos' },
   { key: 'silent', label: 'Silencioso' }
 ];
+const intervalQuantityMin = 1;
+const intervalQuantityMax = 200;
+const normalizeIntervalQuantityInput = (value: unknown) => {
+  const raw = String(value ?? '').trim();
+  const parsed = Number.parseInt(raw, 10);
+  if (!raw || !Number.isFinite(parsed)) return intervalQuantityMin;
+  return Math.min(intervalQuantityMax, Math.max(intervalQuantityMin, parsed));
+};
 const intervalLifecycleReasonOptions = [
   { key: '', label: 'Sem motivo informado' },
   { key: 'crise_intercorrencia', label: 'Crise/intercorrência' },
@@ -747,6 +755,8 @@ export const SessionMode = ({
   const [intervalDurationMode, setIntervalDurationMode] = useState('30');
   const [intervalCustomSeconds, setIntervalCustomSeconds] = useState(45);
   const [intervalTotalIntervals, setIntervalTotalIntervals] = useState(10);
+  const [intervalTotalIntervalsInput, setIntervalTotalIntervalsInput] = useState('10');
+  const [intervalQuantityError, setIntervalQuantityError] = useState('');
   const [intervalAlertType, setIntervalAlertType] = useState('both');
   const [intervalOptionsOpen, setIntervalOptionsOpen] = useState(false);
   const [intervalCancelConfirmOpen, setIntervalCancelConfirmOpen] = useState(false);
@@ -2729,6 +2739,24 @@ export const SessionMode = ({
     setBehaviorMeasurementType(getBehaviorDefaultMeasurement(behavior));
   };
 
+  const commitIntervalQuantityInput = (value = intervalTotalIntervalsInput) => {
+    const raw = String(value ?? '').trim();
+    const invalid = Boolean(raw && (!/^\d+$/.test(raw) || Number(raw) < intervalQuantityMin || Number(raw) > intervalQuantityMax));
+    const nextQuantity = normalizeIntervalQuantityInput(raw);
+    setIntervalTotalIntervals(nextQuantity);
+    setIntervalTotalIntervalsInput(String(nextQuantity));
+    setIntervalQuantityError(invalid ? `Informe uma quantidade entre ${intervalQuantityMin} e ${intervalQuantityMax}.` : '');
+    return nextQuantity;
+  };
+
+  const adjustIntervalQuantity = (delta: number) => {
+    const currentQuantity = normalizeIntervalQuantityInput(intervalTotalIntervalsInput || intervalTotalIntervals);
+    const nextQuantity = Math.min(intervalQuantityMax, Math.max(intervalQuantityMin, currentQuantity + delta));
+    setIntervalTotalIntervals(nextQuantity);
+    setIntervalTotalIntervalsInput(String(nextQuantity));
+    setIntervalQuantityError('');
+  };
+
   const handleSelectedBehaviorAction = () => {
     if (!ensureSessionCanRecord()) return;
     const effectiveMeasurementType = resolveBehaviorMeasurementForAction(selectedBehavior, behaviorMeasurementType);
@@ -2746,7 +2774,8 @@ export const SessionMode = ({
       return;
     }
     if (isIntervalMeasurementType(effectiveMeasurementType)) {
-      startIntervalRun(selectedBehavior, effectiveMeasurementType);
+      const committedQuantity = commitIntervalQuantityInput();
+      startIntervalRun(selectedBehavior, effectiveMeasurementType, committedQuantity);
       return;
     }
     if (effectiveMeasurementType === 'rate') {
@@ -2875,7 +2904,7 @@ export const SessionMode = ({
     });
   };
 
-  const startIntervalRun = (behaviorOverride = selectedBehavior, measurementOverride = behaviorMeasurementType) => {
+  const startIntervalRun = (behaviorOverride = selectedBehavior, measurementOverride = behaviorMeasurementType, quantityOverride?: number) => {
     if (!ensureSessionCanRecord()) return;
     if (intervalRun) {
       setSessionWarning(intervalRun.behaviorId === behaviorOverride.id
@@ -2885,6 +2914,7 @@ export const SessionMode = ({
     }
     const startedAt = new Date().toISOString();
     const intervalEndsAt = new Date(new Date(startedAt).getTime() + intervalSeconds * 1000).toISOString();
+    const plannedIntervalCount = Math.max(1, Math.floor(Number(quantityOverride ?? intervalTotalIntervals) || 1));
     const nextRun = {
       id: crypto.randomUUID(),
       behaviorId: behaviorOverride.id,
@@ -2898,8 +2928,8 @@ export const SessionMode = ({
       intervalEndsAt,
       intervalSeconds,
       intervalIndex: 1,
-      totalIntervals: Math.max(1, Math.floor(Number(intervalTotalIntervals) || 1)),
-      plannedIntervals: Math.max(1, Math.floor(Number(intervalTotalIntervals) || 1)),
+      totalIntervals: plannedIntervalCount,
+      plannedIntervals: plannedIntervalCount,
       alertType: intervalAlertType,
       status: 'RUNNING',
       collectionStatus: 'RUNNING',
@@ -5706,6 +5736,7 @@ export const SessionMode = ({
 
   const selectedIntervalAlertLabel = intervalAlertOptions.find((option) => option.key === intervalAlertType)?.label || intervalAlertType;
   const selectedIntervalDurationLabel = `${Number(intervalSeconds || 0)}s`;
+  const intervalQuantityCurrentValue = normalizeIntervalQuantityInput(intervalTotalIntervalsInput || intervalTotalIntervals);
   const contextSummaryItems = [
     selectedLocation,
     `Severidade ${selectedSeverity}`,
@@ -5715,6 +5746,55 @@ export const SessionMode = ({
     isIntervalMeasurementType(behaviorMeasurementType) ? `Quantidade ${intervalTotalIntervals}` : null,
     isIntervalMeasurementType(behaviorMeasurementType) ? `Alerta ${selectedIntervalAlertLabel}` : null
   ].filter(Boolean);
+  const handleQuickRegisterSubmit = () => {
+    const intervalSelected = isIntervalMeasurementType(behaviorMeasurementType);
+    handleSelectedBehaviorAction();
+    setClinicalDockContextOpen(false);
+    if (!intervalSelected) setClinicalDockSheetOpen(false);
+  };
+  const renderIntervalQuantityStepper = (containerClassName = '') => (
+    <div className={`text-[10px] font-black uppercase tracking-widest text-slate-400 ${containerClassName}`} data-aba-dock-quantity-stepper>
+      <span>Quantidade</span>
+      <div className="mt-1 inline-flex min-h-[44px] items-center rounded-2xl border border-blue-100 bg-[#F8FAFF] p-1 shadow-sm">
+        <button
+          type="button"
+          onClick={() => adjustIntervalQuantity(-1)}
+          disabled={Boolean(intervalRun) || intervalQuantityCurrentValue <= intervalQuantityMin}
+          aria-label="Diminuir quantidade"
+          className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-white text-base font-black text-slate-600 shadow-sm transition-all active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          -
+        </button>
+        <input
+          type="text"
+          inputMode="numeric"
+          pattern="[0-9]*"
+          aria-label="Quantidade"
+          value={intervalTotalIntervalsInput}
+          onChange={(event) => {
+            setIntervalTotalIntervalsInput(event.target.value);
+            setIntervalQuantityError('');
+          }}
+          onBlur={() => commitIntervalQuantityInput()}
+          onFocus={(event) => event.currentTarget.select()}
+          disabled={Boolean(intervalRun)}
+          className="h-10 w-16 bg-transparent px-2 text-center text-base font-black tracking-normal text-slate-900 outline-none disabled:opacity-60"
+        />
+        <button
+          type="button"
+          onClick={() => adjustIntervalQuantity(1)}
+          disabled={Boolean(intervalRun) || intervalQuantityCurrentValue >= intervalQuantityMax}
+          aria-label="Aumentar quantidade"
+          className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-[#7a32fc] text-base font-black text-white shadow-sm shadow-purple-500/20 transition-all active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          +
+        </button>
+      </div>
+      {intervalQuantityError && (
+        <p className="mt-1 text-[11px] font-bold normal-case tracking-normal text-red-500">{intervalQuantityError}</p>
+      )}
+    </div>
+  );
 
   const clinicalDockSheet = clinicalDockSheetOpen && !intervalResponseActive ? (
     <div className="fixed inset-0 z-[210]" data-aba-clinical-dock-sheet>
@@ -5724,7 +5804,8 @@ export const SessionMode = ({
         onClick={() => setClinicalDockSheetOpen(false)}
         className="absolute inset-0 h-full w-full bg-slate-950/35 backdrop-blur-[2px]"
       />
-      <div className="absolute inset-x-0 bottom-0 max-h-[86vh] overflow-y-auto rounded-t-[28px] border border-blue-100 bg-white p-3 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:p-4 xl:left-1/2 xl:right-auto xl:bottom-4 xl:w-[560px] xl:-translate-x-1/2 xl:rounded-[28px]" data-aba-quick-register-sheet>
+      <div className="absolute inset-x-0 bottom-0 flex max-h-[88vh] flex-col overflow-hidden rounded-t-[28px] border border-blue-100 bg-white shadow-2xl sm:max-h-[86vh] xl:left-1/2 xl:right-auto xl:bottom-4 xl:w-[560px] xl:-translate-x-1/2 xl:rounded-[28px]" data-aba-quick-register-sheet>
+        <div className="shrink-0 border-b border-blue-50 bg-white px-3 pb-3 pt-3 sm:px-4" data-aba-quick-register-header>
         <div className="mx-auto mb-2 h-1.5 w-12 rounded-full bg-slate-200" />
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -5739,6 +5820,8 @@ export const SessionMode = ({
             <ShieldAlert size={15} /> Modo crise
           </button>
         </div>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4 pt-3 sm:px-4" data-aba-quick-register-body>
 
         {crisisMode ? (
           <section className="mt-4 rounded-[24px] border border-red-100 bg-red-50 p-3">
@@ -5788,20 +5871,6 @@ export const SessionMode = ({
               Ajustar contexto
             </button>
           </div>
-          {!clinicalDockContextOpen && (
-            <button
-              type="button"
-              onClick={() => {
-                handleSelectedBehaviorAction();
-                if (!isIntervalMeasurementType(behaviorMeasurementType)) setClinicalDockSheetOpen(false);
-              }}
-              disabled={Boolean(intervalRun && isIntervalMeasurementType(behaviorMeasurementType))}
-              className="mt-3 inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-2xl bg-[#7a32fc] px-4 text-xs font-black uppercase tracking-widest text-white disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {behaviorMeasurementType === 'duration' ? <Play size={16} /> : behaviorMeasurementType === 'abc' ? <FileText size={16} /> : <Plus size={16} />}
-              Registrar ocorrência
-            </button>
-          )}
         </section>
 
         <section className="mt-3 rounded-[22px] border border-blue-100 bg-white p-3">
@@ -6057,10 +6126,7 @@ export const SessionMode = ({
                   <input type="number" min={1} max={3600} value={intervalCustomSeconds} onChange={(event) => setIntervalCustomSeconds(Number(event.target.value))} disabled={Boolean(intervalRun)} className="mt-1 w-full rounded-2xl border border-blue-100 bg-[#F4F7FE] px-3 py-3 text-xs font-bold text-slate-700 outline-none disabled:opacity-60" />
                 </label>
               )}
-              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">
-                Quantidade
-                <input type="number" min={1} max={200} value={intervalTotalIntervals} onChange={(event) => setIntervalTotalIntervals(Math.max(1, Number(event.target.value) || 1))} disabled={Boolean(intervalRun)} className="mt-1 w-full rounded-2xl border border-blue-100 bg-[#F4F7FE] px-3 py-3 text-xs font-bold text-slate-700 outline-none disabled:opacity-60" />
-              </label>
+              {renderIntervalQuantityStepper()}
               <div className="text-[10px] font-black uppercase tracking-widest text-slate-400" data-aba-dock-alert-chips>
                 <span>Alerta</span>
                 <div className="mt-1 flex flex-wrap gap-2">
@@ -6086,19 +6152,6 @@ export const SessionMode = ({
               </label>
             </div>
           )}
-          <button
-            type="button"
-            onClick={() => {
-              handleSelectedBehaviorAction();
-              setClinicalDockContextOpen(false);
-              if (!isIntervalMeasurementType(behaviorMeasurementType)) setClinicalDockSheetOpen(false);
-            }}
-            disabled={Boolean(intervalRun && isIntervalMeasurementType(behaviorMeasurementType))}
-            className="sticky bottom-2 z-10 mt-3 inline-flex min-h-[52px] w-full items-center justify-center gap-2 rounded-2xl bg-[#7a32fc] px-4 text-xs font-black uppercase tracking-widest text-white shadow-lg shadow-purple-900/20 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {behaviorMeasurementType === 'duration' ? <Play size={16} /> : behaviorMeasurementType === 'abc' ? <FileText size={16} /> : <Plus size={16} />}
-            Registrar ocorrência
-          </button>
           <button
             type="button"
             onClick={() => setClinicalDockContextOpen(false)}
@@ -6147,6 +6200,18 @@ export const SessionMode = ({
             ))}
           </div>
         </section>
+        </div>
+        <div className="shrink-0 border-t border-blue-50 bg-white px-3 pb-[calc(0.85rem+env(safe-area-inset-bottom))] pt-3 sm:px-4" data-aba-quick-register-footer>
+          <button
+            type="button"
+            onClick={handleQuickRegisterSubmit}
+            disabled={Boolean(intervalRun && isIntervalMeasurementType(behaviorMeasurementType))}
+            className="inline-flex min-h-[52px] w-full items-center justify-center gap-2 rounded-2xl bg-[#7a32fc] px-4 text-xs font-black uppercase tracking-widest text-white shadow-lg shadow-purple-900/20 transition-all active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {behaviorMeasurementType === 'duration' ? <Play size={16} /> : behaviorMeasurementType === 'abc' ? <FileText size={16} /> : <Plus size={16} />}
+            Registrar ocorrência
+          </button>
+        </div>
       </div>
     </div>
   ) : null;
@@ -6683,18 +6748,7 @@ export const SessionMode = ({
                         />
                       </label>
                     )}
-                    <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
-                      Quantidade
-                      <input
-                        type="number"
-                        min={1}
-                        max={200}
-                        value={intervalTotalIntervals}
-                        onChange={(event) => setIntervalTotalIntervals(Math.max(1, Number(event.target.value) || 1))}
-                        disabled={Boolean(intervalRun)}
-                        className="mt-1 w-full bg-white border border-blue-100 rounded-xl px-3 py-3 text-xs font-bold text-gray-700 outline-none disabled:opacity-60"
-                      />
-                    </label>
+                    {renderIntervalQuantityStepper('md:pt-0')}
                     <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
                       Alerta
                       <select
