@@ -472,7 +472,7 @@ function SectionFormActions({
   status,
   primaryLabel,
   savingLabel = "Salvando...",
-  successLabel = "✓ Salvo",
+  successLabel = "Salvo",
   disabled,
   onCancel,
   onSubmit,
@@ -487,6 +487,8 @@ function SectionFormActions({
 }) {
   const isSaving = status === "saving";
   const isSuccess = status === "success";
+  const saveStatus: SaveActionStatus =
+    status === "saving" ? "loading" : status === "success" ? "success" : status === "error" ? "error" : "idle";
   return (
     <div className="mt-3 flex flex-wrap items-center gap-2">
       {onCancel ? (
@@ -499,15 +501,14 @@ function SectionFormActions({
           Cancelar
         </button>
       ) : null}
-      <button
-        type="button"
-        onClick={onSubmit}
+      <SaveActionButton
+        status={saveStatus}
+        idleLabel={primaryLabel}
+        loadingLabel={savingLabel}
+        successLabel={successLabel}
         disabled={disabled || isSaving || isSuccess}
-        className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-normal text-white disabled:opacity-50"
-      >
-        {isSaving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
-        {isSaving ? savingLabel : isSuccess ? successLabel : primaryLabel}
-      </button>
+        onClick={onSubmit}
+      />
     </div>
   );
 }
@@ -555,7 +556,7 @@ function SaveActionButton({
       disabled={disabled || isLoading}
       data-save-action-button
       data-save-action-status={status}
-      className={`inline-flex min-h-[42px] items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold text-white transition disabled:cursor-not-allowed disabled:opacity-50 ${
+      className={`inline-flex min-h-[42px] min-w-[156px] items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold text-white transition disabled:cursor-not-allowed disabled:opacity-50 ${
         isError ? "bg-rose-600 hover:bg-rose-700" : "bg-[#7a32fc] hover:bg-[#6827df]"
       }`}
     >
@@ -2598,14 +2599,7 @@ export function PayerRequirementsPanel({
   };
 
   const setupPrimaryLabel = (stepKey: PayerSetupStepKey) => {
-    if (stepKey === "identification") return "Salvar identificação e continuar";
-    if (stepKey === "clinic") return "Salvar dados da clínica e continuar";
-    if (stepKey === "tiss") return "Confirmar padrão TISS e continuar";
-    if (stepKey === "procedures") return "Salvar procedimentos e continuar";
-    if (stepKey === "tuss") return "Salvar De/Para e continuar";
-    if (stepKey === "prices") return "Salvar valores e continuar";
-    if (stepKey === "authorizations") return "Continuar sem autorização agora";
-    if (stepKey === "anti_glosa") return "Salvar anti-glosa e continuar";
+    if (["identification", "clinic", "tiss", "procedures", "tuss", "prices", "authorizations", "anti_glosa"].includes(stepKey)) return "Salvar e continuar";
     if (stepKey === "test") return "Rodar teste de Pré-guia";
     if (stepKey === "ready") return "Ir para Pré-Guias TISS";
     return "Salvar e continuar";
@@ -3318,8 +3312,13 @@ export function PayerRequirementsPanel({
           >
             <summary className="cursor-pointer list-none rounded-xl px-2 py-1 text-sm font-semibold text-slate-800">
               Modo avançado
-              <span className="ml-2 text-xs font-normal text-slate-500">De/Para completo, tabela de valores, regras TISS e cadastros de apoio.</span>
+              <span className="ml-2 text-xs font-normal text-slate-500">Ajustes técnicos do convênio: De/Para completo, tabela de valores, regras TISS, cadastros de apoio e exceções.</span>
             </summary>
+            <div className="mt-2 flex flex-wrap gap-2 px-2 text-[11px] font-semibold text-slate-500" data-payer-advanced-mode-tabs>
+              {["Dados TISS avançados", "De/Para completo", "Tabela de valores", "Regras anti-glosa", "Cadastros de apoio", "Exceções por serviço"].map((item) => (
+                <span key={item} className="rounded-full border border-slate-200 bg-white px-2.5 py-1">{item}</span>
+              ))}
+            </div>
             <div className="mt-3">
           <div ref={payerRulesSectionRef} className="mt-4 rounded-2xl border border-indigo-100 bg-indigo-50/50 p-3">
             <div className="flex flex-wrap items-start justify-between gap-3">
@@ -3651,15 +3650,14 @@ export function PayerRequirementsPanel({
                     />
                   </PayerTissField>
                 </div>
-                <button
-                  type="button"
-                  disabled={!selectedPayerId || saving || payerTissLoading}
-                  onClick={() => void savePayerTissProfile()}
-                  className="mt-3 inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-900 px-4 py-3 text-sm font-bold text-white disabled:opacity-50"
-                >
-                  {saving || payerTissLoading ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-                  Salvar dados TISS da operadora
-                </button>
+                <div className="mt-3">
+                  <SaveActionButton
+                    status={saving || payerTissLoading ? "loading" : payerTissMessage ? "success" : "idle"}
+                    idleLabel="Salvar alterações"
+                    disabled={!selectedPayerId || saving || payerTissLoading}
+                    onClick={() => void savePayerTissProfile()}
+                  />
+                </div>
               </>
             ) : (
               <p className="mt-3 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600">
@@ -3723,15 +3721,14 @@ export function PayerRequirementsPanel({
             ))}
           </div>
 
-          <button
-            type="button"
-            disabled={!selectedPayerId || saving}
-            onClick={() => void saveRequirement()}
-            className="mt-4 inline-flex items-center justify-center gap-2 rounded-2xl bg-[#7a32fc] px-4 py-3 text-sm font-bold text-white disabled:opacity-50"
-          >
-            {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-            Salvar regra
-          </button>
+          <div className="mt-4">
+            <SaveActionButton
+              status={sectionFeedback.requirements?.status === "saving" ? "loading" : sectionFeedback.requirements?.status === "success" ? "success" : sectionFeedback.requirements?.status === "error" ? "error" : "idle"}
+              idleLabel="Salvar alterações"
+              disabled={!selectedPayerId || saving}
+              onClick={() => void saveRequirement()}
+            />
+          </div>
 
           <div className="mt-5 space-y-2">
             {requirements.length === 0 ? (
@@ -3916,7 +3913,7 @@ export function PayerRequirementsPanel({
             </div>
             <SectionFormActions
               status={sectionFeedback.service?.status || "idle"}
-              primaryLabel={editingTussServiceId ? "Atualizar cadastro" : "Salvar cadastro"}
+              primaryLabel="Salvar alterações"
               disabled={saving || tussServiceForm.name.trim().length < 2}
               onCancel={() => cancelSupportForm("service")}
               onSubmit={() => void createTussService()}
@@ -3994,7 +3991,7 @@ export function PayerRequirementsPanel({
             </div>
             <SectionFormActions
               status={sectionFeedback.code?.status || "idle"}
-              primaryLabel={editingTussCodeId ? "Atualizar cadastro" : "Salvar cadastro"}
+              primaryLabel="Salvar alterações"
               disabled={saving || tussCodeForm.code.trim().length < 2 || tussCodeForm.description.trim().length < 2}
               onCancel={() => cancelSupportForm("code")}
               onSubmit={() => void createTussCode()}
@@ -4221,15 +4218,14 @@ export function PayerRequirementsPanel({
                 Cancelar edição
               </button>
             )}
-            <button
-              type="button"
-              onClick={() => void createTussMapping()}
-              disabled={!selectedPayerId || !tussMappingForm.serviceCatalogId || saving}
-              className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-[#7a32fc] px-3 py-2 text-sm font-bold text-white disabled:opacity-50"
-            >
-              {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-              {editingTussMappingId ? "Atualizar mapeamento" : "Salvar mapeamento"}
-            </button>
+            <div className="mt-3">
+              <SaveActionButton
+                status={sectionFeedback.mapping?.status === "saving" ? "loading" : sectionFeedback.mapping?.status === "success" ? "success" : sectionFeedback.mapping?.status === "error" ? "error" : "idle"}
+                idleLabel="Salvar alterações"
+                disabled={!selectedPayerId || !tussMappingForm.serviceCatalogId || saving}
+                onClick={() => void createTussMapping()}
+              />
+            </div>
           </div>
 
         <div ref={payerPricesSectionRef} className="mt-4 rounded-2xl border border-emerald-100 bg-emerald-50/40 p-3">
@@ -4298,15 +4294,12 @@ export function PayerRequirementsPanel({
                 Cancelar edição
               </button>
             )}
-            <button
-              type="button"
-              onClick={() => void saveProcedurePrice()}
+            <SaveActionButton
+              status={sectionFeedback.price?.status === "saving" ? "loading" : sectionFeedback.price?.status === "success" ? "success" : sectionFeedback.price?.status === "error" ? "error" : "idle"}
+              idleLabel="Salvar alterações"
               disabled={!selectedPayerId || !procedurePriceForm.serviceCatalogId || procedurePriceForm.amountCents === "" || saving}
-              className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-700 px-4 py-2 text-sm font-normal text-white disabled:opacity-50"
-            >
-              {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-              {editingProcedurePriceId ? "Atualizar valor negociado" : "Salvar valor negociado"}
-            </button>
+              onClick={() => void saveProcedurePrice()}
+            />
           </div>
 
           <div className="mt-3 rounded-2xl border border-dashed border-emerald-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600">
@@ -4336,7 +4329,7 @@ export function PayerRequirementsPanel({
                     <li>4. Cadastre o valor negociado.</li>
                   </ol>
                   <div className="mt-3 flex flex-wrap gap-2">
-                    <button type="button" onClick={() => startNewSupportForm("service")} className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-xs font-normal text-white"><Plus size={14} />Novo procedimento interno</button>
+                    <button type="button" onClick={() => startNewSupportForm("service")} className="inline-flex items-center gap-1.5 rounded-lg bg-[#7a32fc] px-3 py-2 text-xs font-normal text-white"><Plus size={14} />Novo procedimento interno</button>
                     <button type="button" onClick={() => startNewSupportForm("code")} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-normal text-slate-700"><Plus size={14} />Novo código TUSS</button>
                     <button type="button" onClick={() => startNewBillingConfigurationPart("mapping")} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-normal text-slate-700">Novo De/Para</button>
                     <button type="button" onClick={() => startNewBillingConfigurationPart("price")} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-normal text-slate-700">Novo valor negociado</button>
@@ -4384,7 +4377,7 @@ export function PayerRequirementsPanel({
               <p className="mt-1 text-xs text-slate-500">Esses cadastros são referências usadas nas configurações de faturamento e não representam cobranças duplicadas.</p>
             </div>
             <div className="flex flex-wrap gap-2">
-              <button type="button" onClick={() => startNewSupportForm("service")} className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-xs font-normal text-white"><Plus size={14} />Novo procedimento interno</button>
+              <button type="button" onClick={() => startNewSupportForm("service")} className="inline-flex items-center gap-1.5 rounded-lg bg-[#7a32fc] px-3 py-2 text-xs font-normal text-white"><Plus size={14} />Novo procedimento interno</button>
               <button type="button" onClick={() => startNewSupportForm("code")} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-normal text-slate-700"><Plus size={14} />Novo código TUSS</button>
               <button type="button" aria-expanded={supportCatalogOpen} onClick={() => setSupportCatalogOpen((current) => !current)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-normal text-slate-600">
                 {supportCatalogOpen ? "Ocultar cadastros" : "Ver cadastros"}
@@ -4550,7 +4543,7 @@ export function PayerRequirementsPanel({
                   type="button"
                   onClick={() => void confirmAuthorizationSync()}
                   disabled={authorizationSyncLoading || Number(authorizationSyncModal.summary?.authorizationsEligible || 0) === 0}
-                  className="inline-flex items-center gap-2 rounded-lg bg-emerald-700 px-4 py-2 text-sm font-normal text-white disabled:opacity-50"
+                  className="inline-flex min-h-[42px] items-center gap-2 rounded-xl bg-[#7a32fc] px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
                 >
                   {authorizationSyncLoading ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
                   Confirmar sincronização

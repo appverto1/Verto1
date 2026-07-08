@@ -1209,7 +1209,20 @@ const CLINIC_ROLES: ClinicRole[] = ['coordinator', 'therapist', 'receptionist'];
 const DATE_ONLY_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const ENCRYPTION_ALGO = 'aes-256-gcm';
-const paymentStatuses = new Set(['paid', 'pending', 'canceled', 'refunded', 'delinquent']);
+const paymentStatuses = new Set([
+  'paid',
+  'pending',
+  'canceled',
+  'cancelled',
+  'refunded',
+  'delinquent',
+  'to_calculate',
+  'calculated',
+  'waiting_receipt',
+  'ready',
+  'blocked',
+  'review',
+]);
 const OTP_TTL_MS = 15 * 60 * 1000;
 const PORTAL_LOGIN_OTP_TTL_MS = 10 * 60 * 1000;
 const FAMILY_DAILY_PHOTO_LIMIT = 5;
@@ -54520,7 +54533,7 @@ async function startServer() {
   });
 
   // Payments
-  app.get('/api/payments', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/payments', checkAuth, requireRoles('coordinator', 'admin', 'owner', 'receptionist'), async (req: any, res) => {
     try {
       const scopedClinicId = currentClinicId(req.session.user);
       const paymentsResult = await fetchPaymentsWithSchemaFallback({
@@ -54542,7 +54555,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/payments', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/payments', checkAuth, requireRoles('coordinator', 'admin', 'owner', 'receptionist'), async (req: any, res) => {
     try {
       const receiptUrl = sanitizeReceiptUrl(req.body?.receipt_url);
       const requestedStatus = sanitizeString(req.body?.status, 40).toLowerCase();
@@ -54568,6 +54581,7 @@ async function startServer() {
         base_amount: req.body?.base_amount !== undefined ? asSafeNumber(req.body?.base_amount, 0, 1_000_000) : undefined,
         additional_amount: req.body?.additional_amount !== undefined ? asSafeNumber(req.body?.additional_amount, 0, 1_000_000) : undefined,
         additional_scope: sanitizeString(req.body?.additional_scope, 40),
+        adjustment_reason: sanitizeString(req.body?.adjustment_reason || req.body?.adjustmentReason, 600),
         is_recurring: Boolean(req.body?.is_recurring || req.body?.isRecurring),
         recurrence_group_id: sanitizeString(req.body?.recurrence_group_id || req.body?.recurrenceGroupId, 120),
         recurrence_index: req.body?.recurrence_index !== undefined ? asSafeNumber(req.body?.recurrence_index, 0, 10000) : undefined,
@@ -54618,7 +54632,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/payments/:paymentId', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/payments/:paymentId', checkAuth, requireRoles('coordinator', 'admin', 'owner', 'receptionist'), async (req: any, res) => {
     try {
       const paymentId = sanitizeString(req.params.paymentId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -54798,6 +54812,9 @@ async function startServer() {
         base_amount: req.body?.base_amount !== undefined ? asSafeNumber(req.body?.base_amount, 0, 1_000_000) : undefined,
         additional_amount: req.body?.additional_amount !== undefined ? asSafeNumber(req.body?.additional_amount, 0, 1_000_000) : undefined,
         additional_scope: req.body?.additional_scope !== undefined ? sanitizeString(req.body?.additional_scope, 40) : undefined,
+        adjustment_reason: req.body?.adjustment_reason !== undefined || req.body?.adjustmentReason !== undefined
+          ? sanitizeString(req.body?.adjustment_reason || req.body?.adjustmentReason, 600)
+          : undefined,
         notes: req.body?.notes !== undefined ? sanitizeString(req.body?.notes, 1200) : undefined,
         updated_at: new Date().toISOString()
       });

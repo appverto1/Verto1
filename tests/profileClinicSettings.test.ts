@@ -9,6 +9,8 @@ const coordinatorCode = read('src/components/CoordinatorDashboard.tsx');
 const settingsMenuCode = read('src/components/SettingsMenu.tsx');
 const appCode = read('src/App.tsx');
 const serverCode = read('server.ts');
+const patientDetailCode = read('src/components/PatientDetailView.tsx');
+const progressReportPdfCode = read('src/components/ProgressReportPDFLayout.tsx');
 
 const tests: Array<{ name: string; fn: () => void }> = [];
 const test = (name: string, fn: () => void) => tests.push({ name, fn });
@@ -91,6 +93,19 @@ test('relogin reidrata perfil profissional e dados da clinica pelo professional_
   ]) {
     assert.match(refresh, new RegExp(token));
   }
+});
+
+test('relatorio de evolucao usa logo institucional da clinica sem fallback para foto profissional', () => {
+  const mediaRefresh = sliceFrom(patientDetailCode, 'const refreshClinicDocumentMedia = async', 1200);
+  assert.match(mediaRefresh, /media\?\.clinicLogoUrl/);
+  assert.doesNotMatch(mediaRefresh, /profilePictureUrl/);
+  assert.doesNotMatch(patientDetailCode, /clinicLogoUrl = sanitizeDocumentImageUrl\(c\.logoUrl \|\| c\.clinicLogoUrl \|\| c\.profilePictureUrl\)/);
+  const progressClinic = sliceFrom(patientDetailCode, 'const progressReportClinic =', 1100);
+  assert.match(progressClinic, /progressClinicContext\?\.clinicName/);
+  assert.match(progressClinic, /progressClinicContext\?\.clinicLogoUrl \|\| progressClinicContext\?\.logoUrl/);
+  assert.match(patientDetailCode, /await refreshClinicDocumentMedia\(\)/);
+  assert.match(progressReportPdfCode, /<img src=\{clinic\.logoUrl\} alt="Logo da cl.nica"/);
+  assert.match(progressReportPdfCode, /\{clinic\.name \|\| 'Cl.nica n.o informada'\}/);
 });
 
 let passed = 0;

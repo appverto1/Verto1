@@ -176,6 +176,8 @@ type NavigationNode = {
   tab?: DashboardTab;
   intent?: FinancialNavigationIntent;
   children?: NavigationNode[];
+  clinicFinanceOnly?: boolean;
+  patientFinanceOnly?: boolean;
 };
 
 const COORDINATOR_SIDEBAR_PREFERENCE_KEY = "verto:coordinator-sidebar-expanded";
@@ -474,7 +476,7 @@ export function CoordinatorDashboard({
   };
 
   const canAccessTab = (tabId: string) => {
-    if (tabId === "financial") return canAccessClinicFinance;
+    if (tabId === "financial") return canAccessClinicFinance || isReceptionist;
     if (tabId === "closure") return !isReceptionist;
     if (tabId === "conference") return !isReceptionist && !isTherapist;
     const capability = capabilityForTab(tabId);
@@ -1169,6 +1171,9 @@ export function CoordinatorDashboard({
   const [professionalPaymentRecurrenceDueDays, setProfessionalPaymentRecurrenceDueDays] = useState("");
   const [professionalPaymentAdditionalAmount, setProfessionalPaymentAdditionalAmount] = useState("");
   const [professionalPaymentAdditionalScope, setProfessionalPaymentAdditionalScope] = useState<"next" | "future">("next");
+  const [professionalPaymentAdjustmentReason, setProfessionalPaymentAdjustmentReason] = useState("");
+  const [professionalTransferProfessionalFilter, setProfessionalTransferProfessionalFilter] = useState("all");
+  const [professionalTransferStatusFilter, setProfessionalTransferStatusFilter] = useState("all");
   const [defaultSessionDuration, setDefaultSessionDuration] = useState(
     String(user?.clinicSettings?.defaultSessionDuration || "50"),
   );
@@ -2039,20 +2044,22 @@ export function CoordinatorDashboard({
 
   useEffect(() => {
     const fetchFinancialData = async () => {
-      if (!canAccessClinicFinance) return;
-      const [paymentsResult, professionalResult, entriesResult] = await Promise.all([
-        dataService.getPayments(),
-        dataService.getProfessionalPayments(),
-        dataService.getClinicFinancialEntries(),
-      ]);
+      if (!canAccessClinicFinance && !isReceptionist) return;
+      const paymentsResult = await dataService.getPayments();
       if (paymentsResult.success) setPayments(paymentsResult.data || []);
-      if (professionalResult.success) setProfessionalPayments(professionalResult.data || []);
-      if (entriesResult.success) setFinancialEntries(entriesResult.data || []);
+      if (canAccessClinicFinance) {
+        const [professionalResult, entriesResult] = await Promise.all([
+          dataService.getProfessionalPayments(),
+          dataService.getClinicFinancialEntries(),
+        ]);
+        if (professionalResult.success) setProfessionalPayments(professionalResult.data || []);
+        if (entriesResult.success) setFinancialEntries(entriesResult.data || []);
+      }
     };
-    if (activeTab === "financial" && canAccessClinicFinance) {
+    if (activeTab === "financial" && (canAccessClinicFinance || isReceptionist)) {
       fetchFinancialData();
     }
-  }, [activeTab, canAccessClinicFinance]);
+  }, [activeTab, canAccessClinicFinance, isReceptionist]);
 
   useEffect(() => {
     if (!isPatientRegistrationModalOpen || !canAccessClinicFinance) return;
@@ -2569,6 +2576,7 @@ export function CoordinatorDashboard({
     setProfessionalPaymentIsRecurring(Boolean(payment?.is_recurring || payment?.isRecurring || payment?.recurrence_group_id || payment?.recurrenceGroupId));
     setProfessionalPaymentAdditionalAmount(formatMoneyInput(payment?.additional_amount || ""));
     setProfessionalPaymentAdditionalScope(payment?.additional_scope === "future" ? "future" : "next");
+    setProfessionalPaymentAdjustmentReason(String(payment?.adjustment_reason || payment?.adjustmentReason || payment?.notes || ""));
     setIsProfessionalPaymentModalOpen(true);
   };
 
@@ -2578,6 +2586,10 @@ export function CoordinatorDashboard({
     const additionalAmount = parseMoneyInput(professionalPaymentAdditionalAmount);
     if (!member || !Number.isFinite(amount) || amount <= 0) {
       alert("Selecione o profissional e informe um valor válido.");
+      return;
+    }
+    if (additionalAmount > 0 && professionalPaymentAdjustmentReason.trim().length < 3) {
+      showToast("Informe o motivo do ajuste manual do repasse.", "error");
       return;
     }
     if (editingProfessionalPayment?.id) {
@@ -2592,6 +2604,7 @@ export function CoordinatorDashboard({
         base_amount: amount,
         additional_amount: additionalAmount,
         additional_scope: additionalAmount > 0 ? professionalPaymentAdditionalScope : null,
+        adjustment_reason: additionalAmount > 0 ? professionalPaymentAdjustmentReason.trim() : null,
         payment_date: professionalPaymentDate,
         due_date: professionalPaymentDueDate || professionalPaymentDate,
         method: professionalPaymentMethod,
@@ -2615,6 +2628,7 @@ export function CoordinatorDashboard({
       setIsProfessionalPaymentModalOpen(false);
       setEditingProfessionalPayment(null);
       setProfessionalPaymentAdditionalAmount("");
+      setProfessionalPaymentAdjustmentReason("");
       showToast(editingProfessionalPaymentScope === "future" ? "Pagamentos profissionais futuros atualizados." : "Pagamento profissional atualizado.");
       return;
     }
@@ -2635,6 +2649,7 @@ export function CoordinatorDashboard({
         base_amount: amount,
         additional_amount: shouldApplyAdditional ? additionalAmount : 0,
         additional_scope: additionalAmount > 0 ? professionalPaymentAdditionalScope : null,
+        adjustment_reason: shouldApplyAdditional && additionalAmount > 0 ? professionalPaymentAdjustmentReason.trim() : null,
         payment_date: index === 0 ? professionalPaymentDate : dueDate,
         due_date: dueDate,
         method: professionalPaymentMethod,
@@ -2661,6 +2676,7 @@ export function CoordinatorDashboard({
       setProfessionalPaymentRecurrenceDueDays("");
       setProfessionalPaymentAdditionalAmount("");
       setProfessionalPaymentAdditionalScope("next");
+      setProfessionalPaymentAdjustmentReason("");
       showToast(professionalPaymentIsRecurring ? "Pagamentos profissionais recorrentes registrados." : "Pagamento profissional registrado.");
     } else {
       showToast(failed?.error || "Não foi possível salvar o pagamento profissional.", "error");
@@ -6463,7 +6479,10 @@ export function CoordinatorDashboard({
       return isSameFinancialMonth(referenceDate, financialMonth);
     });
     const paidProfessionalPayments = monthProfessionalPayments.filter((payment: any) => normalizeStatus(payment?.status) === "paid");
-    const pendingProfessionalPayments = monthProfessionalPayments.filter((payment: any) => normalizeStatus(payment?.status) === "pending");
+    const pendingProfessionalPayments = monthProfessionalPayments.filter((payment: any) => {
+      const status = normalizeStatus(payment?.status);
+      return !["paid", "canceled", "cancelled"].includes(status);
+    });
     const monthFinancialEntries = (financialEntries || []).filter((entry: any) =>
       isSameFinancialMonth(entry?.occurred_on || entry?.occurredOn || entry?.date, financialMonth),
     );
@@ -6727,6 +6746,62 @@ export function CoordinatorDashboard({
   const dreData = financialDashboard.dreRows;
   const revenueHistory = financialDashboard.revenueRows;
   const compensationForecast = financialDashboard.dueRows.slice(0, 6);
+  const activeFinancialSection = financialNavigationContext.breadcrumb[1] || (isReceptionist ? "Recebimentos de pacientes" : "Visão geral da clínica");
+  const isProfessionalTransfersSection = activeFinancialSection === "Repasses a profissionais";
+  const isPatientReceivablesSection = [
+    "Recebimentos de pacientes",
+    "Cobranças",
+    "Pendências de pacientes",
+    "Recibos",
+  ].includes(activeFinancialSection);
+  const professionalTransferStatusOptions = [
+    { value: "all", label: "Todos os status" },
+    { value: "to_calculate", label: "A calcular" },
+    { value: "calculated", label: "Calculado" },
+    { value: "waiting_receipt", label: "Aguardando recebimento" },
+    { value: "ready", label: "Pronto para repasse" },
+    { value: "paid", label: "Pago" },
+    { value: "blocked", label: "Bloqueado" },
+    { value: "cancelled", label: "Cancelado" },
+    { value: "review", label: "Revisão necessária" },
+  ];
+  const normalizeProfessionalTransferStatus = (payment: any) => {
+    const raw = String(payment?.transfer_status || payment?.transferStatus || payment?.status || "").toLowerCase();
+    if (["paid", "pago"].includes(raw)) return { key: "paid", label: "Pago", className: "bg-emerald-100 text-emerald-700" };
+    if (["blocked", "glosa", "denied"].includes(raw)) return { key: "blocked", label: "Bloqueado", className: "bg-rose-100 text-rose-700" };
+    if (["review", "revision", "revisao"].includes(raw)) return { key: "review", label: "Revisão necessária", className: "bg-amber-100 text-amber-800" };
+    if (["cancelled", "canceled", "cancelado"].includes(raw)) return { key: "cancelled", label: "Cancelado", className: "bg-slate-100 text-slate-500" };
+    if (["calculated", "calculado"].includes(raw)) return { key: "calculated", label: "Calculado", className: "bg-blue-100 text-blue-700" };
+    if (["waiting_receipt", "aguardando_recebimento"].includes(raw)) return { key: "waiting_receipt", label: "Aguardando recebimento", className: "bg-amber-100 text-amber-800" };
+    if (["pending", "ready", "pronto"].includes(raw)) return { key: "ready", label: "Pronto para repasse", className: "bg-violet-100 text-[#7a32fc]" };
+    return { key: "to_calculate", label: "A calcular", className: "bg-slate-100 text-slate-600" };
+  };
+  const professionalTransferRows = useMemo(() => {
+    return (financialDashboard.professionalPayments || [])
+      .filter((payment: any) => {
+        const professionalId = String(payment?.professional_id || payment?.professionalId || "").trim();
+        if (professionalTransferProfessionalFilter !== "all" && professionalId !== professionalTransferProfessionalFilter) return false;
+        const status = normalizeProfessionalTransferStatus(payment);
+        if (professionalTransferStatusFilter !== "all" && status.key !== professionalTransferStatusFilter) return false;
+        return true;
+      })
+      .map((payment: any) => {
+        const status = normalizeProfessionalTransferStatus(payment);
+        const baseAmount = parseCurrencyValue(payment?.base_amount ?? payment?.baseAmount ?? payment?.amount);
+        const adjustment = parseCurrencyValue(payment?.additional_amount ?? payment?.additionalAmount ?? 0);
+        const netAmount = parseCurrencyValue(payment?.amount);
+        return {
+          ...payment,
+          status,
+          baseAmount,
+          adjustment,
+          netAmount,
+          paymentOrigin: payment?.origin || payment?.payment_origin || "Registro financeiro interno",
+          ruleLabel: payment?.rule_label || payment?.ruleLabel || "Regra manual/contratual",
+          adjustmentReason: payment?.adjustment_reason || payment?.adjustmentReason || payment?.notes || "",
+        };
+      });
+  }, [financialDashboard.professionalPayments, professionalTransferProfessionalFilter, professionalTransferStatusFilter]);
 
   const COLORS = ["#7a32fc", "#6AD2FF", "#EFF4FB", "#A3AED0"];
 
@@ -7433,25 +7508,40 @@ export function CoordinatorDashboard({
         icon: DollarSign,
         badge: "BETA",
         children: [
-          { id: "finance-dashboard", label: "Dashboard financeiro", icon: LayoutDashboard, tab: "financial", intent: financialIntent("Dashboard financeiro") },
+          { id: "finance-dashboard", label: "Visão geral da clínica", icon: LayoutDashboard, tab: "financial", intent: financialIntent("Visão geral da clínica"), clinicFinanceOnly: true },
           {
-            id: "finance-clinical",
-            label: "Movimentação",
+            id: "finance-clinic-internal",
+            label: "Financeiro da clínica",
             icon: PieChart,
+            clinicFinanceOnly: true,
             children: [
+              { id: "clinical-dashboard", label: "Dashboard financeiro", icon: LayoutDashboard, tab: "financial", intent: financialIntent("Dashboard financeiro"), clinicFinanceOnly: true },
               { id: "clinical-revenue", label: "Receitas", icon: ArrowUpRight, tab: "financial", intent: financialIntent("Receitas") },
               { id: "clinical-expenses", label: "Despesas", icon: ArrowDownRight, tab: "financial", intent: financialIntent("Despesas") },
               { id: "clinical-cashflow", label: "Fluxo de Caixa", icon: TrendingUp, tab: "financial", intent: financialIntent("Fluxo de Caixa") },
-              { id: "clinical-transfers", label: "Repasses", icon: CreditCard, tab: "financial", intent: financialIntent("Repasses") },
+              { id: "clinical-transfers", label: "Repasses a profissionais", icon: CreditCard, tab: "financial", intent: financialIntent("Repasses a profissionais"), clinicFinanceOnly: true },
+              { id: "clinical-payers", label: "Convênios e lotes", icon: FileText, tab: "conference", intent: conferenceIntent("Lotes XML", "preGuides", "xmlDrafts", "Pré-faturamento TISS"), clinicFinanceOnly: true },
+            ],
+          },
+          {
+            id: "finance-patient-operations",
+            label: "Financeiro de pacientes",
+            icon: ReceiptText,
+            children: [
+              { id: "patient-receivables", label: "Recebimentos de pacientes", icon: ReceiptText, tab: "financial", intent: financialIntent("Recebimentos de pacientes") },
+              { id: "patient-charges", label: "Cobranças", icon: Bell, tab: "financial", intent: financialIntent("Cobranças") },
+              { id: "patient-overdue", label: "Pendências", icon: AlertCircle, tab: "financial", intent: financialIntent("Pendências de pacientes") },
+              { id: "patient-receipts", label: "Recibos e comprovantes", icon: Paperclip, tab: "financial", intent: financialIntent("Recibos") },
             ],
           },
           {
             id: "finance-reports",
             label: "Relatórios",
             icon: FileChartColumnIncreasing,
+            clinicFinanceOnly: true,
             children: [
-              { id: "report-production", label: "Produção", icon: PieChart, tab: "financial", intent: financialIntent("Relatórios de Produção") },
-              { id: "report-billing", label: "Faturamento", icon: ReceiptText, tab: "financial", intent: financialIntent("Relatórios de Faturamento") },
+              { id: "report-production", label: "Produção", icon: PieChart, tab: "financial", intent: financialIntent("Relatórios de Produção"), clinicFinanceOnly: true },
+              { id: "report-billing", label: "Faturamento", icon: ReceiptText, tab: "financial", intent: financialIntent("Relatórios de Faturamento"), clinicFinanceOnly: true },
             ],
           },
         ],
@@ -7475,6 +7565,8 @@ export function CoordinatorDashboard({
   ];
 
   const filterNavigationNode = (item: NavigationNode): NavigationNode | null => {
+    if (item.clinicFinanceOnly && !canAccessClinicFinance) return null;
+    if (item.patientFinanceOnly && !isReceptionist && !canAccessClinicFinance) return null;
     if (item.children?.length) {
       const children = item.children.map(filterNavigationNode).filter(Boolean) as NavigationNode[];
       return children.length ? { ...item, children } : null;
@@ -8578,6 +8670,7 @@ export function CoordinatorDashboard({
               onClick={() => {
                 setIsProfessionalPaymentModalOpen(false);
                 setEditingProfessionalPayment(null);
+                setProfessionalPaymentAdjustmentReason("");
               }}
             >
               <div
@@ -8588,6 +8681,7 @@ export function CoordinatorDashboard({
                   onClick={() => {
                     setIsProfessionalPaymentModalOpen(false);
                     setEditingProfessionalPayment(null);
+                    setProfessionalPaymentAdjustmentReason("");
                   }}
                   className="absolute top-6 right-6 text-gray-400 hover:text-gray-600"
                 >
@@ -8637,8 +8731,15 @@ export function CoordinatorDashboard({
                         onChange={(e) => setProfessionalPaymentStatus(e.target.value)}
                         className="w-full rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm font-semibold text-slate-700 outline-none"
                       >
+                        <option value="to_calculate">A calcular</option>
+                        <option value="calculated">Calculado</option>
+                        <option value="waiting_receipt">Aguardando recebimento</option>
+                        <option value="ready">Pronto para repasse</option>
                         <option value="pending">Pendente</option>
                         <option value="paid">Pago</option>
+                        <option value="blocked">Bloqueado</option>
+                        <option value="review">Revisão necessária</option>
+                        <option value="cancelled">Cancelado</option>
                       </select>
                     </div>
                   </div>
@@ -8776,6 +8877,17 @@ export function CoordinatorDashboard({
                         </select>
                       </div>
                     </div>
+                    <div className="mt-3">
+                      <label className="mb-1 block text-[10px] font-bold uppercase text-slate-400">
+                        Motivo do ajuste manual
+                      </label>
+                      <textarea
+                        value={professionalPaymentAdjustmentReason}
+                        onChange={(e) => setProfessionalPaymentAdjustmentReason(e.target.value)}
+                        className="min-h-[72px] w-full rounded-xl border border-slate-200 bg-white p-3 text-sm font-semibold text-slate-700 outline-none"
+                        placeholder="Obrigatório quando houver adicional/desconto manual."
+                      />
+                    </div>
                   </div>
                   <button
                     onClick={handleAddProfessionalPayment}
@@ -8821,7 +8933,7 @@ export function CoordinatorDashboard({
                 />
               </motion.div>
             )}
-            {canAccessClinicFinance && activeTab === "financial" && (
+            {(canAccessClinicFinance || isReceptionist) && activeTab === "financial" && (
               <motion.div
                 key="financial"
                 initial={{ opacity: 0, y: 20 }}
@@ -8878,12 +8990,18 @@ export function CoordinatorDashboard({
                   <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                     <div>
                       <h3 className="text-2xl font-semibold tracking-tight text-slate-900">
-                        {isReceptionist ? "Recebimentos e cobranças" : "Financeiro e DRE Operacional da Clínica"}
+                        {isProfessionalTransfersSection
+                          ? "Repasses a profissionais"
+                          : isPatientReceivablesSection || isReceptionist
+                            ? "Financeiro de pacientes"
+                            : "Financeiro da clínica"}
                       </h3>
                       <p className="text-sm text-slate-500">
-                        {isReceptionist
-                          ? "Acompanhe cobranças, vencimentos, recebimentos e comprovantes dos pacientes."
-                          : "Recebimentos, convênios, vencimentos, projeção e realizado em um só lugar."}
+                        {isProfessionalTransfersSection
+                          ? "Calcule, revise e acompanhe os valores a repassar para profissionais."
+                          : isPatientReceivablesSection || isReceptionist
+                            ? "Rotina de recepção: cobranças, recebimentos, comprovantes, recibos e pendências por paciente."
+                            : "Gestão interna: resultado da clínica, convênios, lotes, despesas, fluxo de caixa e relatórios."}
                       </p>
                     </div>
                     <div className="flex items-center gap-3">
@@ -8900,6 +9018,21 @@ export function CoordinatorDashboard({
                     </div>
                 </div>
 
+                <div className="grid gap-3 md:grid-cols-2">
+                  {canAccessClinicFinance && (
+                    <div className={`rounded-3xl border p-5 ${isPatientReceivablesSection ? "border-slate-100 bg-white" : "border-violet-100 bg-violet-50/70"}`}>
+                      <p className="text-[10px] font-semibold uppercase tracking-widest text-[#7a32fc]">Financeiro da clínica / interno</p>
+                      <p className="mt-2 text-sm font-semibold text-slate-900">Resultado, convênios, lotes, despesas, relatórios e repasses.</p>
+                      <p className="mt-1 text-xs text-slate-500">Visível para coordenação, dono, admin financeiro e perfis autorizados.</p>
+                    </div>
+                  )}
+                  <div className={`rounded-3xl border p-5 ${isPatientReceivablesSection || isReceptionist ? "border-violet-100 bg-violet-50/70" : "border-slate-100 bg-white"}`}>
+                    <p className="text-[10px] font-semibold uppercase tracking-widest text-[#7a32fc]">Financeiro de pacientes / recepção</p>
+                    <p className="mt-2 text-sm font-semibold text-slate-900">Receber pagamentos, registrar cobranças, recibos, comprovantes e inadimplência.</p>
+                    <p className="mt-1 text-xs text-slate-500">Foco operacional da recepção, sem margem, DRE ou regras internas de repasse.</p>
+                  </div>
+                </div>
+
                 <div className="flex flex-wrap gap-2">
                   <button
                     onClick={() => setIsPaymentModalOpen(true)}
@@ -8907,12 +9040,14 @@ export function CoordinatorDashboard({
                   >
                     <Plus size={18} /> Cobrança / Pagamento
                   </button>
-                  <button
-                    onClick={() => setIsProfessionalPaymentModalOpen(true)}
-                    className="flex items-center gap-2 rounded-2xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white shadow-sm shadow-slate-500/10 transition hover:bg-slate-800"
-                  >
-                    <CreditCard size={18} /> Pagamento Profissional
-                  </button>
+                  {canAccessClinicFinance && (
+                    <button
+                      onClick={() => setIsProfessionalPaymentModalOpen(true)}
+                      className="flex items-center gap-2 rounded-2xl bg-[#7a32fc] px-5 py-3 text-sm font-semibold text-white shadow-sm shadow-purple-500/10 transition hover:bg-[#6d28e8]"
+                    >
+                      <CreditCard size={18} /> Registrar repasse
+                    </button>
+                  )}
                   {!isReceptionist && (
                     <button
                       type="button"
@@ -8923,6 +9058,132 @@ export function CoordinatorDashboard({
                     </button>
                   )}
                 </div>
+
+                {canAccessClinicFinance && isProfessionalTransfersSection && (
+                  <div data-professional-transfers-panel className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
+                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                      <div>
+                        <p className="text-[10px] font-semibold uppercase tracking-widest text-[#7a32fc]">Repasses a profissionais</p>
+                        <h4 className="mt-1 text-xl font-semibold text-slate-900">Demonstrativo e revisão de repasses</h4>
+                        <p className="mt-1 max-w-2xl text-sm text-slate-500">
+                          Itens de repasse são acompanhados por período, profissional, status, origem, valor base, ajustes e valor líquido. Consultas canceladas não devem gerar repasse; convênios ainda não recebidos permanecem em revisão/aguardando recebimento.
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setIsProfessionalPaymentModalOpen(true)}
+                          className="inline-flex min-h-[42px] items-center gap-2 rounded-xl bg-[#7a32fc] px-4 py-2.5 text-sm font-semibold text-white"
+                        >
+                          <CreditCard size={16} />
+                          Registrar repasse
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => showToast("Cálculo automático será liberado quando houver atendimentos recebidos elegíveis no período.", "info")}
+                          className="inline-flex min-h-[42px] items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700"
+                        >
+                          Calcular repasses do período
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="mt-5 grid gap-3 md:grid-cols-3">
+                      <label className="text-xs font-semibold text-slate-600">
+                        Período
+                        <input
+                          type="month"
+                          value={financialMonth}
+                          onChange={(e) => setFinancialMonth(e.target.value)}
+                          className="mt-1 w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700 outline-none"
+                        />
+                      </label>
+                      <label className="text-xs font-semibold text-slate-600">
+                        Profissional
+                        <select
+                          value={professionalTransferProfessionalFilter}
+                          onChange={(e) => setProfessionalTransferProfessionalFilter(e.target.value)}
+                          className="mt-1 w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700 outline-none"
+                        >
+                          <option value="all">Todos os profissionais</option>
+                          {therapistFilterOptions.map((member) => (
+                            <option key={`transfer-filter-${member.id}`} value={member.id}>{member.label}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="text-xs font-semibold text-slate-600">
+                        Status
+                        <select
+                          value={professionalTransferStatusFilter}
+                          onChange={(e) => setProfessionalTransferStatusFilter(e.target.value)}
+                          className="mt-1 w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700 outline-none"
+                        >
+                          {professionalTransferStatusOptions.map((option) => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+
+                    <div className="mt-5 overflow-x-auto">
+                      {professionalTransferRows.length ? (
+                        <table className="w-full min-w-[860px] text-left">
+                          <thead>
+                            <tr className="border-b border-slate-100 text-[10px] font-semibold uppercase tracking-widest text-slate-400">
+                              <th className="pb-3">Profissional</th>
+                              <th className="pb-3">Origem</th>
+                              <th className="pb-3">Regra</th>
+                              <th className="pb-3">Valor bruto/base</th>
+                              <th className="pb-3">Ajustes</th>
+                              <th className="pb-3">Líquido a repassar</th>
+                              <th className="pb-3">Status</th>
+                              <th className="pb-3">Ações</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-50">
+                            {professionalTransferRows.map((payment: any, index: number) => (
+                              <tr key={payment.id || `professional-transfer-${index}`} className="text-sm text-slate-700">
+                                <td className="py-4 font-semibold text-slate-900">{payment.professional_name || payment.professionalName || "Profissional"}</td>
+                                <td className="py-4">
+                                  <p>{payment.paymentOrigin}</p>
+                                  <p className="text-[11px] text-slate-400">Convênio/paciente/procedimento conforme registro de origem.</p>
+                                </td>
+                                <td className="py-4">{payment.ruleLabel}</td>
+                                <td className="py-4">{formatCurrency(payment.baseAmount)}</td>
+                                <td className="py-4">
+                                  {formatCurrency(payment.adjustment)}
+                                  {payment.adjustment > 0 && payment.adjustmentReason ? (
+                                    <p className="mt-1 max-w-[180px] text-[11px] text-slate-400">Motivo: {payment.adjustmentReason}</p>
+                                  ) : null}
+                                </td>
+                                <td className="py-4 font-semibold text-[#7a32fc]">{formatCurrency(payment.netAmount)}</td>
+                                <td className="py-4">
+                                  <span className={`inline-flex rounded-full px-3 py-1 text-[10px] font-semibold uppercase ${payment.status.className}`}>
+                                    {payment.status.label}
+                                  </span>
+                                </td>
+                                <td className="py-4">
+                                  <button
+                                    type="button"
+                                    onClick={() => openProfessionalPaymentEditor(payment)}
+                                    className="rounded-xl border border-slate-200 px-3 py-1.5 text-[10px] font-semibold uppercase text-slate-600 hover:border-[#7a32fc] hover:text-[#7a32fc]"
+                                  >
+                                    Revisar
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      ) : (
+                        <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-6 text-sm text-slate-600">
+                          <p className="font-semibold text-slate-900">Ainda não há atendimentos recebidos elegíveis para repasse neste período.</p>
+                          <p className="mt-1">Quando houver pagamentos recebidos ou repasses registrados, eles aparecerão aqui com status, regra, ajustes e valor líquido. Não foi criado cálculo fictício.</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                   <div className="lg:col-span-2 space-y-8">
@@ -9342,6 +9603,7 @@ export function CoordinatorDashboard({
                       </div>
                     </div>
 
+                    {!isProfessionalTransfersSection && (
                     <div className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
                       <h4 className="mb-6 font-semibold text-slate-900">
                         Pagamentos de profissionais
@@ -9389,6 +9651,7 @@ export function CoordinatorDashboard({
                         )}
                       </div>
                     </div>
+                    )}
                   </div>
                 </div>
               </motion.div>

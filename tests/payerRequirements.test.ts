@@ -200,9 +200,12 @@ test('UI expõe configuração, agenda e fechamento sem IDs técnicos ou HTML pe
   assert.match(navigationSection, /id:\s*"prebilling-pending"[\s\S]*label:\s*"Pendências"/);
   assert.match(navigationSection, /id:\s*"prebilling-batches"[\s\S]*label:\s*"Lotes XML"/);
   assert.match(navigationSection, /id:\s*"finance-root"[\s\S]*label:\s*"Financeiro"/);
-  assert.match(navigationSection, /id:\s*"finance-dashboard"[\s\S]*label:\s*"Dashboard financeiro"/);
+  assert.match(navigationSection, /id:\s*"finance-dashboard"[\s\S]*label:\s*"Visão geral da clínica"/);
   assert.doesNotMatch(navigationSection, /id:\s*"report-payers"/);
-  assert.match(navigationSection, /id:\s*"finance-clinical"[\s\S]*label:\s*"Movimentação"/);
+  assert.match(navigationSection, /id:\s*"finance-clinic-internal"[\s\S]*label:\s*"Financeiro da clínica"/);
+  assert.match(navigationSection, /id:\s*"finance-patient-operations"[\s\S]*label:\s*"Financeiro de pacientes"/);
+  assert.match(navigationSection, /id:\s*"clinical-transfers"[\s\S]*label:\s*"Repasses a profissionais"/);
+  assert.match(navigationSection, /id:\s*"patient-receivables"[\s\S]*label:\s*"Recebimentos de pacientes"/);
   assert.match(navigationSection, /id:\s*"finance-reports"[\s\S]*label:\s*"Relatórios"/);
   assert.match(navigationSection, /id:\s*"settings-root"[\s\S]*label:\s*"Configurações"/);
   assert.match(coordinatorCode, /expandedNavigationSections/);
@@ -332,8 +335,7 @@ test('Tabela de Valores tem rotulos permanentes, reais no formulario e configura
   assert.match(payerPanelCode, /Editando código TUSS/);
   assert.match(payerPanelCode, /Novo procedimento interno/);
   assert.match(payerPanelCode, /Novo código TUSS/);
-  assert.match(payerPanelCode, /primaryLabel=\{editingTussServiceId \? "Atualizar cadastro" : "Salvar cadastro"\}/);
-  assert.match(payerPanelCode, /primaryLabel=\{editingTussCodeId \? "Atualizar cadastro" : "Salvar cadastro"\}/);
+  assert.ok((payerPanelCode.match(/primaryLabel="Salvar alterações"/g) || []).length >= 2);
   assert.match(payerPanelCode, /reactivateTussService/);
   assert.match(payerPanelCode, /reactivateTussCode/);
   assert.match(payerPanelCode, /Deseja reativar este procedimento/);
@@ -745,9 +747,9 @@ test('UI de convenios exibe esteira guiada e mantem modo avancado existente', ()
 test('esteira executavel embute campos praticos de DePara, valores e anti-glosa', () => {
   assert.match(payerPanelCode, /activeSetupStep\.key === "tuss"[\s\S]*Procedimento interno para c.digo TUSS/s);
   assert.match(payerPanelCode, /activeSetupStep\.key === "tuss"[\s\S]*C.digo TUSS[\s\S]*Descri..o TUSS/s);
-  assert.match(payerPanelCode, /Salvar De\/Para e continuar/);
+  assert.match(payerPanelCode, /return "Salvar e continuar"/);
   assert.match(payerPanelCode, /activeSetupStep\.key === "prices"[\s\S]*Valores negociados[\s\S]*Valor negociado[\s\S]*Vig.ncia inicial[\s\S]*Vig.ncia final opcional/s);
-  assert.match(payerPanelCode, /Salvar valores e continuar/);
+  assert.doesNotMatch(payerPanelCode, /Salvar valores e continuar/);
   assert.match(payerPanelCode, /Informe o valor contratado para este procedimento/);
   assert.match(payerPanelCode, /activeSetupStep\.key === "anti_glosa"[\s\S]*Revisei as exig.ncias anti-glosa desta operadora/s);
   assert.match(payerPanelCode, /Editar avan.ado em tabela de valores/s);
@@ -788,6 +790,7 @@ test('botao padrao de salvar confirma no proprio botao e usa cor principal', () 
   assert.match(payerPanelCode, /data-save-action-button/);
   assert.match(payerPanelCode, /data-save-action-status=\{status\}/);
   assert.match(payerPanelCode, /min-h-\[42px\]/);
+  assert.match(payerPanelCode, /min-w-\[156px\]/);
   assert.match(payerPanelCode, /bg-\[#7a32fc\]/);
   assert.match(payerPanelCode, /Salvando\.\.\./);
   assert.match(payerPanelCode, /status: SaveActionStatus/);
@@ -798,6 +801,11 @@ test('botao padrao de salvar confirma no proprio botao e usa cor principal', () 
   assert.match(payerPanelCode, /<SaveActionButton[\s\S]*idleLabel=\{setupPrimaryLabel\(activeSetupStep\.key\)\}/);
   assert.match(payerPanelCode, /loadingLabel=\{activeSetupStep\.key === "test" \? "Testando\.\.\." : "Salvando\.\.\."\}/);
   assert.match(payerPanelCode, /successLabel=\{activeSetupStep\.key === "test" \? "Teste conclu.do" : "Salvo"\}/);
+  assert.match(payerPanelCode, /return "Salvar e continuar"/);
+  assert.doesNotMatch(payerPanelCode, /Salvar identifica..o e continuar/);
+  assert.doesNotMatch(payerPanelCode, /Salvar valores e continuar/);
+  assert.doesNotMatch(payerPanelCode, /bg-slate-900[\s\S]{0,180}Salvar/);
+  assert.doesNotMatch(payerPanelCode, /bg-emerald-700[\s\S]{0,180}Salvar/);
 });
 
 test('layout de convenios usa lista horizontal no topo e esteira abaixo com largura ampla', () => {
@@ -813,10 +821,14 @@ test('layout de convenios usa lista horizontal no topo e esteira abaixo com larg
 test('modo avancado fica secundario e link avancado abre as secoes tecnicas', () => {
   assert.match(payerPanelCode, /advancedModeOpen/);
   assert.match(payerPanelCode, /setAdvancedModeOpen\(true\)/);
-  assert.match(payerPanelCode, /Modo avan.ado/s);
-  assert.match(payerPanelCode, /De\/Para completo, tabela de valores, regras TISS e cadastros de apoio/s);
+  assert.equal((payerPanelCode.match(/Modo avan.ado/g) || []).length, 1);
+  assert.match(payerPanelCode, /Ajustes t.cnicos do conv.nio: De\/Para completo, tabela de valores, regras TISS, cadastros de apoio e exce..es/s);
+  assert.match(payerPanelCode, /data-payer-advanced-mode-tabs/);
+  assert.match(payerPanelCode, /Dados TISS avan.ados/);
+  assert.match(payerPanelCode, /Exce..es por servi.o/);
   assert.match(payerPanelCode, /Editar avan.ado em tabela de valores/s);
   assert.match(payerPanelCode, /Editar avan.ado em De\/Para TUSS/s);
+  assert.match(payerPanelCode, /<SaveActionButton[\s\S]*idleLabel="Salvar altera..es"/);
 });
 
 test('salvar etapa confirma e avanca automaticamente para a proxima etapa', () => {

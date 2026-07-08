@@ -219,11 +219,13 @@ test('tenant drift: patient clinic_id update is restricted to global roles', () 
   );
 });
 
-test('finance privacy: API endpoints are coordinator/admin/owner only', () => {
-  const financeMarkers = [
+test('finance privacy: API endpoints separate patient receivables from internal finance', () => {
+  const patientPaymentMarkers = [
     "app.get('/api/payments'",
     "app.post('/api/payments'",
     "app.patch('/api/payments/:paymentId'",
+  ];
+  const financeMarkers = [
     "app.get('/api/financial/professional-payments'",
     "app.post('/api/financial/professional-payments'",
     "app.patch('/api/financial/professional-payments/:paymentId'",
@@ -231,6 +233,22 @@ test('finance privacy: API endpoints are coordinator/admin/owner only', () => {
     "app.get('/api/financial/feature-survey'",
     "app.post('/api/financial/feature-survey'"
   ];
+
+  for (const marker of patientPaymentMarkers) {
+    const start = serverCode.indexOf(marker);
+    assert.ok(start >= 0, `endpoint ${marker} nao encontrado.`);
+    const slice = serverCode.slice(start, start + 280);
+    assert.match(
+      slice,
+      /requireRoles\('coordinator', 'admin', 'owner', 'receptionist'\)/,
+      `${marker} deve aceitar recepcao para financeiro de pacientes.`
+    );
+    assert.doesNotMatch(
+      slice,
+      /therapist|patient/,
+      `${marker} nao deve expor pagamentos a terapeuta ou paciente.`
+    );
+  }
 
   for (const marker of financeMarkers) {
     const start = serverCode.indexOf(marker);
@@ -291,17 +309,17 @@ test('finance privacy: frontend does not fetch or render finance for unauthorize
   );
   assert.match(
     coordinatorCode,
-    /if \(tabId === "financial"\) return canAccessClinicFinance;/,
+    /if \(tabId === "financial"\) return canAccessClinicFinance \|\| isReceptionist;/,
     'aba financeira deve depender da regra coordinator/admin/owner.'
   );
   assert.match(
     coordinatorCode,
-    /if \(!canAccessClinicFinance\) return;[\s\S]*?dataService\.getPayments\(\)/m,
+    /if \(!canAccessClinicFinance && !isReceptionist\) return;[\s\S]*?dataService\.getPayments\(\)/m,
     'frontend nÃ£o deve buscar pagamentos sem permissÃ£o financeira.'
   );
   assert.match(
     coordinatorCode,
-    /\{canAccessClinicFinance && activeTab === "financial" && \(/,
+    /\{\(canAccessClinicFinance \|\| isReceptionist\) && activeTab === "financial" && \(/,
     'frontend nÃ£o deve renderizar a tela financeira sem permissÃ£o.'
   );
   assert.match(

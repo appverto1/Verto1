@@ -609,7 +609,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         notification?.title,
         'Verto'
       ),
-      clinicLogoUrl: portalContext?.clinicLogoUrl || metadata.clinicLogoUrl || notification?.clinicLogoUrl || notification?.clinic_logo_url || VERTO_NOTIFICATION_LOGO,
+      clinicLogoUrl: portalContext?.clinicLogoUrl || user?.clinicSettings?.clinicLogoUrl || metadata.clinicLogoUrl || notification?.clinicLogoUrl || notification?.clinic_logo_url || VERTO_NOTIFICATION_LOGO,
       scheduledAt: metadata.scheduledAt || notification?.scheduled_for || notification?.scheduledFor || notification?.created_at
     });
   };
@@ -2196,7 +2196,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     <div className="mb-4 space-y-2">
       {portalNotifications.slice(0, 3).map((notification: any) => {
         const metadata = notification?.metadata && typeof notification.metadata === 'object' ? notification.metadata : {};
-        const logoUrl = portalContext?.clinicLogoUrl || metadata.clinicLogoUrl || notification?.clinicLogoUrl || notification?.clinic_logo_url || VERTO_NOTIFICATION_LOGO;
+        const logoUrl = portalContext?.clinicLogoUrl || user?.clinicSettings?.clinicLogoUrl || metadata.clinicLogoUrl || notification?.clinicLogoUrl || notification?.clinic_logo_url || VERTO_NOTIFICATION_LOGO;
         const clinicName = getPortalNotificationClinicName(notification);
         const message = getPortalNotificationMessage(notification);
         return (
@@ -2710,10 +2710,11 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     'Verto'
   );
   const activePortalClinicLogoUrl = firstPortalText(
+    portalContext?.clinicLogoUrl,
+    user?.clinicSettings?.clinicLogoUrl,
     activePortalAppointment?.clinicLogoUrl,
     activePortalAppointment?.clinic?.logoUrl,
     activePortalAppointment?.clinic_logo_url,
-    portalContext?.clinicLogoUrl,
     VERTO_NOTIFICATION_LOGO
   );
   const portalActionBlocked = activePortalStatus.includes('CANCEL') || activePortalStatus.includes('COMPLET') || activePortalStatus.includes('NO_SHOW');

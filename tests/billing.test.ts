@@ -404,6 +404,54 @@ test('codigo principal nao usa select star nos caminhos de billing alterados', (
   }
 });
 
+test('menu financeiro separa gestao interna da clinica e operacao de pacientes sem misturar Stripe', () => {
+  const navigation = coordinatorCode.slice(
+    coordinatorCode.indexOf('const navigationGroups'),
+    coordinatorCode.indexOf('const filterNavigationNode'),
+  );
+  assert.match(navigation, /label:\s*"Financeiro da clínica"/);
+  assert.match(navigation, /label:\s*"Financeiro de pacientes"/);
+  assert.match(navigation, /label:\s*"Repasses a profissionais"/);
+  assert.match(navigation, /label:\s*"Recebimentos de pacientes"/);
+  assert.match(navigation, /label:\s*"Convênios e lotes"/);
+  assert.match(navigation, /clinicFinanceOnly:\s*true/);
+  assert.match(navigation, /id:\s*"settings-billing"[\s\S]*label:\s*"Assinatura"/);
+  assert.match(coordinatorCode, /if \(tabId === "financial"\) return canAccessClinicFinance \|\| isReceptionist/);
+  assert.match(coordinatorCode, /if \(item\.clinicFinanceOnly && !canAccessClinicFinance\) return null/);
+  assert.doesNotMatch(navigation, /Stripe/);
+});
+
+test('tela de repasses renderiza filtros, status e exige motivo para ajuste manual', () => {
+  assert.match(coordinatorCode, /data-professional-transfers-panel/);
+  assert.match(coordinatorCode, /Repasses a profissionais/);
+  assert.match(coordinatorCode, /Demonstrativo e revisão de repasses/);
+  assert.match(coordinatorCode, /professionalTransferProfessionalFilter/);
+  assert.match(coordinatorCode, /professionalTransferStatusFilter/);
+  for (const label of [
+    'A calcular',
+    'Calculado',
+    'Aguardando recebimento',
+    'Pronto para repasse',
+    'Pago',
+    'Bloqueado',
+    'Cancelado',
+    'Revisão necessária'
+  ]) {
+    assert.match(coordinatorCode, new RegExp(label));
+  }
+  assert.match(coordinatorCode, /Ainda não há atendimentos recebidos elegíveis para repasse neste período/);
+  assert.match(coordinatorCode, /Registrar repasse/);
+  assert.match(coordinatorCode, /Calcular repasses do período/);
+  assert.match(coordinatorCode, /Motivo do ajuste manual/);
+  assert.match(coordinatorCode, /Informe o motivo do ajuste manual do repasse/);
+  assert.match(coordinatorCode, /adjustment_reason/);
+  assert.match(serverCode, /adjustment_reason/);
+  assert.match(serverCode, /'waiting_receipt'/);
+  assert.match(serverCode, /app\.get\('\/api\/financial\/professional-payments', checkAuth, requireRoles\('coordinator', 'admin', 'owner'\)/);
+  assert.match(serverCode, /app\.post\('\/api\/financial\/professional-payments', checkAuth, requireRoles\('coordinator', 'admin', 'owner'\)/);
+  assert.match(serverCode, /app\.patch\('\/api\/financial\/professional-payments\/:paymentId', checkAuth, requireRoles\('coordinator', 'admin', 'owner'\)/);
+});
+
 let passed = 0;
 for (const { name, fn } of tests) {
   try {

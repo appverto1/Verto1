@@ -2106,8 +2106,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       const nextContext = {
         ...baseContext,
         logoUrl:
-          String(media?.clinicLogoUrl || media?.profilePictureUrl || baseContext?.logoUrl || "").trim() ||
+          String(media?.clinicLogoUrl || baseContext?.logoUrl || baseContext?.clinicLogoUrl || "").trim() ||
           baseContext?.logoUrl ||
+          baseContext?.clinicLogoUrl ||
           null,
         signatureUrl:
           String(media?.signatureUrl || baseContext?.signatureUrl || "").trim() ||
@@ -2338,7 +2339,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       String(c.address || c.clinicAddress || '').trim() ||
       [c.street, c.number, c.complement, c.neighborhood, c.city].filter(Boolean).join(', ') ||
       '-';
-    const clinicLogoUrl = sanitizeDocumentImageUrl(c.logoUrl || c.clinicLogoUrl || c.profilePictureUrl);
+    const clinicLogoUrl = sanitizeDocumentImageUrl(c.logoUrl || c.clinicLogoUrl);
     const signatureUrl = sanitizeDocumentImageUrl(c.signatureUrl || c.signatureDataUrl || c.professionalSignatureUrl);
     const fichaType = normalizeValue('formType', anamnesis?.formType || patient?.anamnesisData?.formType || '');
     const headerSummaryHtml = `
@@ -4200,17 +4201,18 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8, 12)}-${digits.slice(12)}`;
   };
 
+  const progressClinicContext = resolvedClinicContext || clinicContext || {};
   const progressReportClinic = {
-    name: clinicContext?.clinicName || clinicContext?.name || 'Clínica Verto',
-    cnpj: formatCnpj(clinicContext?.cnpj || clinicContext?.clinicCnpj || clinicContext?.document || ''),
+    name: progressClinicContext?.clinicName || progressClinicContext?.clinicLegalName || progressClinicContext?.name || 'Clínica Verto',
+    cnpj: formatCnpj(progressClinicContext?.cnpj || progressClinicContext?.clinicCnpj || progressClinicContext?.document || ''),
     address:
-      clinicContext?.address ||
-      [clinicContext?.street, clinicContext?.number, clinicContext?.complement, clinicContext?.neighborhood, clinicContext?.city]
+      progressClinicContext?.address ||
+      [progressClinicContext?.street, progressClinicContext?.number, progressClinicContext?.complement, progressClinicContext?.neighborhood, progressClinicContext?.city]
         .filter(Boolean)
         .join(', '),
-    phone: clinicContext?.phone || clinicContext?.telephone || '-',
-    email: clinicContext?.email || clinicContext?.clinicEmail || '-',
-    logoUrl: clinicContext?.logoUrl || clinicContext?.clinicLogoUrl || null
+    phone: progressClinicContext?.phone || progressClinicContext?.telephone || '-',
+    email: progressClinicContext?.email || progressClinicContext?.clinicEmail || '-',
+    logoUrl: progressClinicContext?.clinicLogoUrl || progressClinicContext?.logoUrl || null
   };
 
   const progressReportProfessional = {
@@ -4239,6 +4241,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
     setIsGeneratingProgressPdf(true);
     try {
+      await refreshClinicDocumentMedia();
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
       const { jsPDF } = await import('jspdf');
       const pdf = new jsPDF({ unit: 'pt', format: 'a4', orientation: 'portrait' });
       const pageWidth = pdf.internal.pageSize.getWidth();
