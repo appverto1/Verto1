@@ -145,28 +145,32 @@ test('SessionMode renders duration-only actions without + ocorrência inside dur
 
 test('SessionMode keeps behavior controls in the clinical dock sheet, not the initial body', () => {
   assert.match(sessionModeCode, /\{false && \(\s*<div className="bg-white rounded-\[24px\][\s\S]*?Evento comportamental inteligente/m);
-  assert.match(sessionModeCode, /data-aba-clinical-dock[\s\S]*?Ações rápidas[\s\S]*?Contexto atual[\s\S]*?Ajustar contexto[\s\S]*?Últimos registros/m);
+  assert.match(sessionModeCode, /data-aba-clinical-dock[\s\S]*?data-aba-dock-bottom-bar[\s\S]*?Mais/m);
+  assert.match(sessionModeCode, /data-aba-quick-register-sheet[\s\S]*?data-aba-dock-location-chips[\s\S]*?data-aba-dock-method-chips[\s\S]*?data-aba-quick-register-footer/m);
   assert.match(sessionModeCode, /buildBehaviorEventContextSnapshot[\s\S]*?contextSnapshot[\s\S]*?context_snapshot/m);
 });
 
-test('Dock Clínico abre compacto e recolhe seletores em Ajustar contexto', () => {
+test('Dock Clínico abre como registro rápido em chips e deixa ajustes avançados recolhidos', () => {
   const sheetStart = sessionModeCode.indexOf('data-aba-clinical-dock-sheet');
-  const contextPanelGate = sessionModeCode.indexOf('{clinicalDockContextOpen &&', sheetStart);
   const sheetEnd = sessionModeCode.indexOf('const sessionModeContent', sheetStart);
   assert.ok(sheetStart > 0);
-  assert.ok(contextPanelGate > sheetStart);
-  assert.ok(sheetEnd > contextPanelGate);
+  assert.ok(sheetEnd > sheetStart);
 
-  const defaultDockView = sessionModeCode.slice(sheetStart, contextPanelGate);
-  assert.match(defaultDockView, /Ações rápidas/);
-  assert.match(defaultDockView, /Contexto atual/);
-  assert.match(defaultDockView, /Ajustar contexto/);
-  assert.match(defaultDockView, /Registro rápido/);
-  assert.match(sessionModeCode, /data-aba-quick-register-footer[\s\S]*?Registrar ocorrência/);
-  assert.match(defaultDockView, /ABC rápido/);
-  assert.doesNotMatch(defaultDockView, /<select/);
+  const dockSheet = sessionModeCode.slice(sheetStart, sheetEnd);
+  assert.match(dockSheet, /data-aba-quick-register-header/);
+  assert.match(dockSheet, /Registro Rápido/);
+  assert.match(dockSheet, /aria-label="Fechar registro rápido"/);
+  assert.match(dockSheet, /data-aba-quick-register-chip-panel/);
+  assert.match(dockSheet, /data-aba-quick-register-footer[\s\S]*?Registrar ocorrência/);
 
-  const contextPanel = sessionModeCode.slice(contextPanelGate, sheetEnd);
+  const advancedStart = dockSheet.indexOf('data-aba-dock-advanced-options');
+  assert.ok(advancedStart > 0);
+  const primaryRegisterPanel = dockSheet.slice(0, advancedStart);
+  assert.doesNotMatch(primaryRegisterPanel, /Ações rápidas/);
+  assert.doesNotMatch(primaryRegisterPanel, /Contexto atual/);
+  assert.doesNotMatch(primaryRegisterPanel, /Abrir ABC rápido/);
+
+  const contextPanel = dockSheet;
   assert.match(contextPanel, /data-aba-dock-context-panel/);
   assert.match(contextPanel, /data-aba-dock-location-chips/);
   assert.match(contextPanel, /data-aba-dock-severity-chips/);
@@ -175,11 +179,13 @@ test('Dock Clínico abre compacto e recolhe seletores em Ajustar contexto', () =
   assert.match(contextPanel, /data-aba-dock-method-chips/);
   assert.match(contextPanel, /data-aba-dock-alert-chips/);
   assert.match(contextPanel, /data-aba-dock-advanced-options/);
+  assert.match(contextPanel, /Modo crise/);
+  assert.match(contextPanel, /ABC rápido/);
   assert.match(contextPanel, /Gerenciar locais/);
   assert.match(contextPanel, /Mais durações/);
   assert.match(contextPanel, /Personalizar/);
   const locationBlock = contextPanel.slice(contextPanel.indexOf('data-aba-dock-location-chips'), contextPanel.indexOf('data-aba-dock-severity-chips'));
-  const severityBlock = contextPanel.slice(contextPanel.indexOf('data-aba-dock-severity-chips'), contextPanel.indexOf('Configurações rápidas'));
+  const severityBlock = contextPanel.slice(contextPanel.indexOf('data-aba-dock-severity-chips'), contextPanel.indexOf('data-aba-dock-behavior-chips'));
   const durationBlock = contextPanel.slice(contextPanel.indexOf('data-aba-dock-duration-chips'), contextPanel.indexOf('renderIntervalQuantityStepper'));
   const behaviorBlock = contextPanel.slice(contextPanel.indexOf('data-aba-dock-behavior-chips'), contextPanel.indexOf('data-aba-dock-method-chips'));
   const methodBlock = contextPanel.slice(contextPanel.indexOf('data-aba-dock-method-chips'), contextPanel.indexOf('hidden mt-2 grid'));

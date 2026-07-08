@@ -623,11 +623,11 @@ test('aba session mode: trials and behavior events are one-touch and session-sco
     /intervalResponseActive[\s\S]*?intervalRun\?\.awaitingResponse[\s\S]*?scrollBottomPaddingStyle[\s\S]*?clinicalDockCompact = Boolean\(intervalRun\)[\s\S]*?clinicalDock = !sessionCompleted \? \([\s\S]*?clinicalDockSheet = clinicalDockSheetOpen && !intervalResponseActive[\s\S]*?data-aba-interval-parallel-banner[\s\S]*?data-aba-interval-response-active[\s\S]*?min-h-\[44px\]/m,
     'SessionMode deve manter o dock compacto paralelo, bloquear o sheet durante resposta de intervalo e priorizar SIM/NÃO sem cobrir controles.'
   );
-  assert.match(
-    sessionModeCode,
-    /scrollBottomPaddingStyle[\s\S]*?closeAfterAction[\s\S]*?data-aba-dock-duration-active[\s\S]*?animate-pulse[\s\S]*?-top-3 right-2[\s\S]*?data-aba-dock-open-duration-badge[\s\S]*?data-aba-dock-context-summary[\s\S]*?Ajustar contexto[\s\S]*?\{clinicalDockContextOpen &&[\s\S]*?data-aba-dock-context-panel[\s\S]*?Últimos registros[\s\S]*?style=\{scrollBottomPaddingStyle\}/m,
-    'Dock clínico mobile deve reservar espaço, indicar duração ativa, mostrar +1 flutuante, abrir compacto e recolher ajustes de contexto.'
-  );
+  assert.match(sessionModeCode, /scrollBottomPaddingStyle[\s\S]*?style=\{scrollBottomPaddingStyle\}/m, 'Dock clínico mobile deve reservar espaço para não cobrir controles ativos.');
+  assert.match(sessionModeCode, /closeAfterAction[\s\S]*?data-aba-dock-duration-active[\s\S]*?animate-pulse[\s\S]*?-top-3 right-2/m, 'Dock clínico mobile deve indicar duração ativa e manter feedback flutuante.');
+  assert.match(sessionModeCode, /data-aba-dock-open-duration-badge/, 'Dock clínico mobile deve comunicar duração em andamento.');
+  assert.match(sessionModeCode, /data-aba-quick-register-sheet[\s\S]*?data-aba-quick-register-chip-panel[\s\S]*?data-aba-dock-location-chips[\s\S]*?data-aba-dock-method-chips/m, 'Registro rápido deve abrir em chips, sem voltar ao formulário administrativo.');
+  assert.match(sessionModeCode, /data-aba-dock-advanced-options[\s\S]*?recentBehaviorRecords/m, 'Ajustes avançados e últimos registros devem ficar recolhidos no registro rápido.');
   assert.match(
     sessionModeCode,
     /const AbaSessionToast = \(\{ toast, compact = false \}[\s\S]*?compactTitle[\s\S]*?compactSubtitle[\s\S]*?data-aba-toast-compact[\s\S]*?intervalToastCompact[\s\S]*?1500[\s\S]*?top-\[calc\(4\.75rem\+env\(safe-area-inset-top\)\)\][\s\S]*?<AbaSessionToast toast=\{actionToast\} compact=\{intervalToastCompact\}/m,

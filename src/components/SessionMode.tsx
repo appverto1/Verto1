@@ -795,7 +795,6 @@ export const SessionMode = ({
   const [mobileExpandedCriteriaKey, setMobileExpandedCriteriaKey] = useState('');
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const [clinicalDockSheetOpen, setClinicalDockSheetOpen] = useState(false);
-  const [clinicalDockContextOpen, setClinicalDockContextOpen] = useState(false);
   const [dockLocationsExpanded, setDockLocationsExpanded] = useState(false);
   const [dockLocationManagerOpen, setDockLocationManagerOpen] = useState(false);
   const [customDockLocations, setCustomDockLocations] = useState<string[]>([]);
@@ -996,7 +995,7 @@ export const SessionMode = ({
     }
   };
 
-  const dockChipClass = (active: boolean) => `inline-flex min-h-[38px] items-center justify-center rounded-2xl border px-3 py-2 text-[11px] font-black transition-all focus:outline-none focus:ring-2 focus:ring-[#7a32fc]/30 active:scale-[0.98] ${active ? 'border-[#7a32fc] bg-[#7a32fc] text-white shadow-sm shadow-purple-500/20' : 'border-blue-100 bg-[#F8FAFF] text-slate-600 hover:border-purple-200 hover:bg-white'}`;
+  const dockChipClass = (active: boolean) => `inline-flex min-h-[36px] items-center justify-center rounded-full border px-4 py-2 text-[11px] font-black transition-all focus:outline-none focus:ring-2 focus:ring-[#7a32fc]/30 active:scale-[0.98] ${active ? 'border-[#7a32fc] bg-[#7a32fc] text-white shadow-sm shadow-purple-500/20 ring-2 ring-[#7a32fc]/20' : 'border-[#E2D9EA] bg-white text-slate-700 hover:border-purple-200 hover:bg-white'}`;
 
   const releaseActionLock = (key: string) => {
     const nextLocks = { ...actionLocksRef.current };
@@ -5749,7 +5748,6 @@ export const SessionMode = ({
   const handleQuickRegisterSubmit = () => {
     const intervalSelected = isIntervalMeasurementType(behaviorMeasurementType);
     handleSelectedBehaviorAction();
-    setClinicalDockContextOpen(false);
     if (!intervalSelected) setClinicalDockSheetOpen(false);
   };
   const renderIntervalQuantityStepper = (containerClassName = '') => (
@@ -5804,107 +5802,32 @@ export const SessionMode = ({
         onClick={() => setClinicalDockSheetOpen(false)}
         className="absolute inset-0 h-full w-full bg-slate-950/35 backdrop-blur-[2px]"
       />
-      <div className="absolute inset-x-0 bottom-0 flex max-h-[88vh] flex-col overflow-hidden rounded-t-[28px] border border-blue-100 bg-white shadow-2xl sm:max-h-[86vh] xl:left-1/2 xl:right-auto xl:bottom-4 xl:w-[560px] xl:-translate-x-1/2 xl:rounded-[28px]" data-aba-quick-register-sheet>
-        <div className="shrink-0 border-b border-blue-50 bg-white px-3 pb-3 pt-3 sm:px-4" data-aba-quick-register-header>
-        <div className="mx-auto mb-2 h-1.5 w-12 rounded-full bg-slate-200" />
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <p className="text-[10px] font-black uppercase tracking-[0.22em] text-[#7a32fc]">Registro rápido</p>
-            <h2 className="text-lg font-black leading-tight text-slate-900">{contextSummaryItems.slice(0, 3).join(' · ')}</h2>
-          </div>
-          <button
-            type="button"
-            onClick={() => setCrisisMode((value) => !value)}
-            className={`inline-flex min-h-[40px] shrink-0 items-center gap-2 rounded-2xl px-3 text-[10px] font-black uppercase tracking-widest ${crisisMode ? 'bg-red-600 text-white' : 'bg-red-50 text-red-600'}`}
-          >
-            <ShieldAlert size={15} /> Modo crise
-          </button>
-        </div>
-        </div>
-        <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4 pt-3 sm:px-4" data-aba-quick-register-body>
-
-        {crisisMode ? (
-          <section className="mt-4 rounded-[24px] border border-red-100 bg-red-50 p-3">
-            <p className="text-[10px] font-black uppercase tracking-widest text-red-600">Crise / alta prioridade</p>
-            <div className="mt-3 grid grid-cols-2 gap-2">
-              {quickBehaviorShortcuts.filter((shortcut) => crisisShortcutIdSet.has(shortcut.behaviorId)).map((shortcut) => renderDockShortcutButton(shortcut, true, true))}
-              <button onClick={() => { setClinicalDockSheetOpen(false); openAbcModal(); }} className="min-h-[56px] rounded-[18px] border border-slate-900 bg-slate-950 px-3 text-left text-[11px] font-black uppercase tracking-widest text-white">
-                <FileText size={14} className="mb-1" /> ABC rápido
-              </button>
-            </div>
-          </section>
-        ) : (
-          <>
-            <section className="mt-3 rounded-[22px] border border-blue-100 bg-[#F8FAFF] p-3">
-              <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Ações rápidas</p>
-              <div className="mt-2 grid grid-cols-2 gap-2">
-                {quickBehaviorShortcuts.filter((shortcut) => ['aggression', 'self_injury', 'escape', 'refusal'].includes(shortcut.behaviorId)).map((shortcut) => renderDockShortcutButton(shortcut, false, true))}
-              </div>
-            </section>
-
-            <section className="mt-3 rounded-[22px] border border-blue-100 bg-white p-3">
-              <p className="text-[10px] font-black uppercase tracking-widest text-[#7a32fc]">Duração</p>
-              <div className="mt-2 grid grid-cols-2 gap-2">
-                {behaviorPresets.filter((behavior) => behaviorAllowsMeasurement(behavior, 'duration')).slice(0, 4).map((behavior) => renderDockShortcutButton({
-                  behaviorId: behavior.id,
-                  label: `${behavior.name} iniciar`,
-                  method: 'duration',
-                  color: behavior.id === 'crying' ? 'sky' : behavior.id === 'escape' ? 'amber' : 'emerald'
-                }, false, true))}
-              </div>
-            </section>
-
-          </>
-        )}
-
-        <section className="mt-3 rounded-[22px] border border-blue-100 bg-[#F4F7FE] p-3" data-aba-dock-context-summary>
-          <div className="flex items-start justify-between gap-2">
+      <div className="absolute inset-x-0 bottom-0 flex max-h-[88vh] flex-col overflow-hidden rounded-t-[24px] border border-[#E4D8EF] bg-[#F5EFFA] shadow-2xl sm:max-h-[86vh] xl:left-1/2 xl:right-auto xl:bottom-4 xl:w-[560px] xl:-translate-x-1/2 xl:rounded-[28px]" data-aba-quick-register-sheet>
+        <div className="shrink-0 border-b border-[#E7DFF0] bg-[#FBF7FF] px-4 pb-3 pt-3" data-aba-quick-register-header>
+          <div className="mx-auto mb-3 h-1.5 w-12 rounded-full bg-[#D9D1DF]" />
+          <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Contexto atual</p>
-              <p className="mt-1 text-sm font-black leading-snug text-slate-900">{contextSummaryItems.join(' · ')}</p>
+              <h2 className="text-lg font-black leading-tight text-slate-800">Registro Rápido</h2>
+              <p className="mt-1 truncate text-xs font-black text-[#7a32fc]">
+                {contextSummaryItems.slice(0, 3).join(' · ')}
+              </p>
             </div>
             <button
               type="button"
-              onClick={() => setClinicalDockContextOpen((open) => !open)}
-              className="inline-flex min-h-[36px] shrink-0 items-center justify-center rounded-2xl border border-purple-100 bg-white px-3 text-[10px] font-black uppercase tracking-widest text-[#7a32fc]"
+              aria-label="Fechar registro rápido"
+              onClick={() => setClinicalDockSheetOpen(false)}
+              className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-slate-500 transition-all hover:bg-white active:scale-95"
             >
-              Ajustar contexto
+              <X size={20} />
             </button>
           </div>
-        </section>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4 pt-4 sm:px-4" data-aba-quick-register-body>
 
-        <section className="mt-3 rounded-[22px] border border-blue-100 bg-white p-3">
-          <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">ABC rápido</p>
-          <button onClick={() => { setClinicalDockSheetOpen(false); openAbcModal(); }} className="mt-2 inline-flex min-h-[52px] w-full items-center justify-center gap-2 rounded-2xl bg-[#1B254B] px-4 text-xs font-black uppercase tracking-widest text-white">
-            <FileText size={16} /> Abrir ABC rápido
-          </button>
-        </section>
-
-        {clinicalDockContextOpen && (
-        <>
-        <section className="mt-3 rounded-[22px] border border-blue-100 bg-white p-3" data-aba-dock-context-panel>
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Ajustar contexto</p>
-            <button
-              type="button"
-              onClick={() => setClinicalDockContextOpen(false)}
-              className="text-[10px] font-black uppercase tracking-widest text-slate-400"
-            >
-              Fechar
-            </button>
-          </div>
-          <div className="mt-2 space-y-3">
+        <section className="space-y-4" data-aba-dock-context-panel data-aba-quick-register-chip-panel>
+          <div className="space-y-4">
             <div className="text-[10px] font-black uppercase tracking-widest text-slate-400" data-aba-dock-location-chips>
-              <div className="flex items-center justify-between gap-2">
-                <span>Local</span>
-                <button
-                  type="button"
-                  onClick={() => setDockLocationManagerOpen((open) => !open)}
-                  className="text-[10px] font-black uppercase tracking-widest text-[#7a32fc]"
-                >
-                  Gerenciar locais
-                </button>
-              </div>
+              <span>Local</span>
               <div className="mt-1 flex max-h-[88px] flex-wrap gap-2 overflow-y-auto pr-1">
                 {visibleDockLocationOptions.map((location) => (
                   <button
@@ -5982,19 +5905,13 @@ export const SessionMode = ({
                     type="button"
                     onClick={() => setSelectedSeverity(severity)}
                     aria-pressed={selectedSeverity === severity}
-                    className={`inline-flex min-h-[38px] min-w-[38px] items-center justify-center rounded-2xl border px-3 py-2 text-xs font-black transition-all focus:outline-none focus:ring-2 focus:ring-[#7a32fc]/30 active:scale-[0.98] ${selectedSeverity === severity ? 'border-[#1B254B] bg-[#1B254B] text-white shadow-sm shadow-slate-900/20' : 'border-blue-100 bg-[#F8FAFF] text-slate-600 hover:border-slate-300 hover:bg-white'}`}
+                    className={`inline-flex min-h-[38px] min-w-[38px] items-center justify-center rounded-full border px-3 py-2 text-xs font-black transition-all focus:outline-none focus:ring-2 focus:ring-red-500/25 active:scale-[0.98] ${selectedSeverity === severity ? 'border-red-600 bg-red-600 text-white shadow-sm shadow-red-900/20 ring-2 ring-red-500/20' : 'border-[#E2D9EA] bg-white text-slate-600 hover:border-slate-300 hover:bg-white'}`}
                   >
                     {severity}
                   </button>
                 ))}
               </div>
             </div>
-          </div>
-        </section>
-
-        <section className="mt-3 rounded-[22px] border border-blue-100 bg-white p-3">
-          <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Configurações rápidas</p>
-          <div className="mt-2 space-y-3">
             <div className="text-[10px] font-black uppercase tracking-widest text-slate-400" data-aba-dock-behavior-chips>
               <div className="flex items-center justify-between gap-2">
                 <span>Comportamento</span>
@@ -6023,7 +5940,7 @@ export const SessionMode = ({
               </div>
             </div>
             <div className="text-[10px] font-black uppercase tracking-widest text-slate-400" data-aba-dock-method-chips>
-              <span>Método de coleta</span>
+              <span>Método</span>
               <div className="mt-1 flex flex-wrap gap-2">
                 {selectedBehaviorMethodOptions.map((option) => (
                   <button
@@ -6152,53 +6069,59 @@ export const SessionMode = ({
               </label>
             </div>
           )}
-          <button
-            type="button"
-            onClick={() => setClinicalDockContextOpen(false)}
-            className="mt-2 inline-flex min-h-[44px] w-full items-center justify-center rounded-2xl border border-blue-100 bg-white px-4 text-xs font-black uppercase tracking-widest text-slate-600"
-          >
-            Salvar contexto
-          </button>
-          <details className="mt-2 rounded-2xl border border-slate-200 bg-slate-50 p-3" data-aba-dock-advanced-options>
+          <details className="mt-1 rounded-2xl border border-[#E4D8EF] bg-white/70 p-3" data-aba-dock-advanced-options>
             <summary className="cursor-pointer text-[10px] font-black uppercase tracking-widest text-slate-500">Mais opções</summary>
-            <div className="mt-2 space-y-2 text-xs font-semibold text-slate-500">
-              <p>Use esta área para gerenciar locais, personalizar duração e acessar ajustes menos frequentes.</p>
-              <div className="flex flex-wrap gap-2">
-                <button type="button" onClick={() => setDockLocationManagerOpen((open) => !open)} className="rounded-xl bg-white px-3 py-2 text-[10px] font-black uppercase tracking-widest text-[#7a32fc]">Gerenciar locais</button>
-                <button type="button" onClick={() => setDockMoreDurationsOpen((open) => !open)} className="rounded-xl bg-white px-3 py-2 text-[10px] font-black uppercase tracking-widest text-[#7a32fc]">Mais durações</button>
+            <div className="mt-3 space-y-3 text-xs font-semibold text-slate-500">
+              <p>Use esta área para ajustes menos frequentes, sem tirar o foco do registro rápido.</p>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCrisisMode((value) => !value)}
+                  aria-pressed={crisisMode}
+                  className={`min-h-[40px] rounded-2xl border px-3 text-[10px] font-black uppercase tracking-widest ${crisisMode ? 'border-red-200 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600'}`}
+                >
+                  Modo crise
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setClinicalDockSheetOpen(false); openAbcModal(); }}
+                  className="inline-flex min-h-[40px] items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-widest text-[#7a32fc]"
+                >
+                  <FileText size={13} /> ABC rápido
+                </button>
+                <button type="button" onClick={() => setDockLocationManagerOpen((open) => !open)} className="min-h-[40px] rounded-2xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-widest text-[#7a32fc]">Gerenciar locais</button>
+                <button type="button" onClick={() => setDockMoreDurationsOpen((open) => !open)} className="min-h-[40px] rounded-2xl border border-slate-200 bg-white px-3 text-[10px] font-black uppercase tracking-widest text-[#7a32fc]">Mais durações</button>
+              </div>
+
+              {openDurations.length > 0 && (
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Eventos em andamento</p>
+                  <div className="mt-2 space-y-2">
+                    {openDurations.map((event) => (
+                      <button key={event.id} onClick={() => { endDuration(event.id); setClinicalDockSheetOpen(false); }} disabled={Boolean(actionLocks[`duration:end:${event.id}`])} className="flex min-h-[46px] w-full items-center justify-between rounded-2xl border border-blue-100 bg-[#F8FAFF] px-4 text-left text-xs font-black text-slate-800 disabled:opacity-60">
+                        <span>{event.behaviorName}</span>
+                        <span>{formatElapsed(event.startedAt, nowMs)} ■</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Últimos registros</p>
+                <div className="mt-2 space-y-2">
+                  {recentBehaviorRecords.length === 0 ? (
+                    <p className="rounded-2xl border border-blue-100 bg-[#F8FAFF] px-4 py-3 text-xs font-semibold text-slate-500">Nenhum comportamento registrado nesta sessão.</p>
+                  ) : recentBehaviorRecords.map((record) => (
+                    <div key={record.id} className="rounded-2xl border border-blue-100 bg-[#F8FAFF] px-4 py-3">
+                      <p className="text-xs font-black text-slate-800">{record.title}</p>
+                      <p className="mt-1 text-[11px] font-semibold text-slate-500">{record.detail} • {new Date(record.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           </details>
-        </section>
-        </>
-        )}
-
-        {openDurations.length > 0 && (
-          <section className="mt-4">
-            <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Eventos em andamento</p>
-            <div className="mt-2 space-y-2">
-              {openDurations.map((event) => (
-                <button key={event.id} onClick={() => { endDuration(event.id); setClinicalDockSheetOpen(false); }} disabled={Boolean(actionLocks[`duration:end:${event.id}`])} className="flex min-h-[52px] w-full items-center justify-between rounded-2xl border border-blue-100 bg-[#F4F7FE] px-4 text-left text-xs font-black text-slate-800 disabled:opacity-60">
-                  <span>{event.behaviorName}</span>
-                  <span>{formatElapsed(event.startedAt, nowMs)} ■</span>
-                </button>
-              ))}
-            </div>
-          </section>
-        )}
-
-        <section className="mt-4">
-          <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Últimos registros</p>
-          <div className="mt-2 space-y-2">
-            {recentBehaviorRecords.length === 0 ? (
-              <p className="rounded-2xl border border-blue-100 bg-[#F8FAFF] px-4 py-3 text-xs font-semibold text-slate-500">Nenhum comportamento registrado nesta sessão.</p>
-            ) : recentBehaviorRecords.map((record) => (
-              <div key={record.id} className="rounded-2xl border border-blue-100 bg-[#F8FAFF] px-4 py-3">
-                <p className="text-xs font-black text-slate-800">{record.title}</p>
-                <p className="mt-1 text-[11px] font-semibold text-slate-500">{record.detail} • {new Date(record.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
-              </div>
-            ))}
-          </div>
         </section>
         </div>
         <div className="shrink-0 border-t border-blue-50 bg-white px-3 pb-[calc(0.85rem+env(safe-area-inset-bottom))] pt-3 sm:px-4" data-aba-quick-register-footer>
