@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { AlertCircle, CheckCircle2 } from "lucide-react";
+import { AlertCircle, CheckCircle2, Plus, X } from "lucide-react";
 import { BillingTissSettingsPanel } from "./BillingTissSettingsPanel";
 import { RoleCapabilityMatrix } from "./RoleCapabilityMatrix";
 import { SecureImage } from "./SecureMedia";
@@ -231,6 +231,433 @@ function AbaPromptTypesSettings() {
           </details>
         )}
       </div>
+    </SectionCard>
+  );
+}
+
+function AbaPromptTypesClinicalSettings() {
+  const [promptTypes, setPromptTypes] = useState<AbaPromptTypeConfig[]>(() => normalizeAbaPromptTypeConfig());
+  const [savingId, setSavingId] = useState('');
+  const [savedId, setSavedId] = useState('');
+  const [editingPrompt, setEditingPrompt] = useState<Partial<AbaPromptTypeConfig> | null>(null);
+  const [modalMode, setModalMode] = useState<'create' | 'edit'>('edit');
+  const [modalError, setModalError] = useState('');
+
+  const activePromptTypes = useMemo(() => (
+    promptTypes.filter((prompt) => prompt.active)
+  ), [promptTypes]);
+  const inactivePromptTypes = useMemo(() => (
+    promptTypes.filter((prompt) => !prompt.active)
+  ), [promptTypes]);
+  const sessionPreviewPromptTypes = useMemo(() => (
+    activePromptTypes
+      .filter((prompt) => prompt.showInSession)
+      .sort((a, b) => a.intrusivenessOrder - b.intrusivenessOrder || a.label.localeCompare(b.label, 'pt-BR'))
+  ), [activePromptTypes]);
+
+  useEffect(() => {
+    let cancelled = false;
+    dataService.getAbaPromptTypes()
+      .then((result: any) => {
+        if (!cancelled) setPromptTypes(normalizeAbaPromptTypeConfig(result?.data));
+      })
+      .catch(() => {
+        if (!cancelled) setPromptTypes(normalizeAbaPromptTypeConfig());
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!editingPrompt) return undefined;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setEditingPrompt(null);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [editingPrompt]);
+
+  const updateDraft = (patch: Partial<AbaPromptTypeConfig>) => {
+    setEditingPrompt((previous) => previous ? { ...previous, ...patch } : previous);
+  };
+
+  const normalizeSavedPrompt = (rawPrompt: any, originalPrompt: Partial<AbaPromptTypeConfig>) => {
+    const normalized = normalizeAbaPromptTypeConfig([rawPrompt || originalPrompt]);
+    return normalized.find((item) => (
+      (rawPrompt?.id && item.id === rawPrompt.id) ||
+      (originalPrompt.id && item.id === originalPrompt.id) ||
+      (originalPrompt.key && item.key === originalPrompt.key) ||
+      (originalPrompt.name && item.name === originalPrompt.name)
+    )) || normalized[0];
+  };
+
+  const savePromptType = async (prompt: Partial<AbaPromptTypeConfig>) => {
+    const id = String(prompt.id || prompt.key || prompt.name || `prompt-${Date.now()}`);
+    setSavingId(id);
+    setSavedId('');
+    try {
+      const result = await dataService.saveAbaPromptType(prompt);
+      if (result?.success !== false) {
+        const saved = normalizeSavedPrompt(result?.data || prompt, prompt);
+        setPromptTypes((prev) => normalizeAbaPromptTypeConfig([
+          ...prev.filter((item) => item.id !== saved.id && item.key !== saved.key),
+          saved
+        ]));
+        setSavedId(id);
+        window.setTimeout(() => setSavedId((current) => current === id ? '' : current), 1400);
+        return saved;
+      }
+      setModalError(result?.error || 'Não foi possível salvar este tipo de ajuda.');
+      return null;
+    } finally {
+      setSavingId('');
+    }
+  };
+
+  const openCreatePrompt = () => {
+    setModalMode('create');
+    setModalError('');
+    setEditingPrompt({
+      name: '',
+      category: 'Visual',
+      independenceScore: undefined,
+      intrusivenessOrder: Math.max(0, ...promptTypes.map((prompt) => prompt.intrusivenessOrder)) + 1,
+      countsAsIndependent: false,
+      showInSession: true,
+      active: true,
+      description: ''
+    });
+  };
+
+  const openEditPrompt = (prompt: AbaPromptTypeConfig) => {
+    setModalMode('edit');
+    setModalError('');
+    setEditingPrompt({ ...prompt });
+  };
+
+  const validatePromptDraft = (prompt: Partial<AbaPromptTypeConfig>) => {
+    if (!String(prompt.name || '').trim()) return 'Informe o nome do tipo de ajuda.';
+    if (!String(prompt.category || '').trim()) return 'Informe a categoria da ajuda.';
+    if (prompt.independenceScore === undefined || prompt.independenceScore === null || Number.isNaN(Number(prompt.independenceScore))) {
+      return 'Informe a pontuação de independência.';
+    }
+    if (Number(prompt.independenceScore) < 0 || Number(prompt.independenceScore) > 100) {
+      return 'A pontuação de independência deve ficar entre 0 e 100.';
+    }
+    if (prompt.intrusivenessOrder === undefined || prompt.intrusivenessOrder === null || Number.isNaN(Number(prompt.intrusivenessOrder)) || Number(prompt.intrusivenessOrder) < 0) {
+      return 'A ordem na sessão deve ser um número maior ou igual a zero.';
+    }
+    return '';
+  };
+
+  const saveModalPrompt = async () => {
+    if (!editingPrompt) return;
+    const validationError = validatePromptDraft(editingPrompt);
+    if (validationError) {
+      setModalError(validationError);
+      return;
+    }
+    const name = String(editingPrompt.name || '').trim();
+    const saved = await savePromptType({
+      ...editingPrompt,
+      name,
+      label: name,
+      key: editingPrompt.key || name,
+      category: String(editingPrompt.category || '').trim(),
+      independenceScore: Number(editingPrompt.independenceScore),
+      intrusivenessOrder: Math.max(0, Math.round(Number(editingPrompt.intrusivenessOrder))),
+      countsAsIndependent: Boolean(editingPrompt.countsAsIndependent),
+      showInSession: editingPrompt.showInSession !== false,
+      active: editingPrompt.active !== false
+    });
+    if (saved) {
+      window.setTimeout(() => setEditingPrompt(null), 450);
+    }
+  };
+
+  const movePrompt = async (prompt: AbaPromptTypeConfig, direction: -1 | 1) => {
+    const ordered = [...activePromptTypes].sort((a, b) => a.intrusivenessOrder - b.intrusivenessOrder || a.label.localeCompare(b.label, 'pt-BR'));
+    const index = ordered.findIndex((item) => item.key === prompt.key);
+    const swapIndex = index + direction;
+    if (index < 0 || swapIndex < 0 || swapIndex >= ordered.length) return;
+    const current = ordered[index];
+    const swap = ordered[swapIndex];
+    const currentOrder = current.intrusivenessOrder;
+    const swapOrder = swap.intrusivenessOrder;
+    setPromptTypes((prev) => normalizeAbaPromptTypeConfig(prev.map((item) => {
+      if (item.key === current.key) return { ...item, intrusivenessOrder: swapOrder };
+      if (item.key === swap.key) return { ...item, intrusivenessOrder: currentOrder };
+      return item;
+    })));
+    await savePromptType({ ...current, intrusivenessOrder: swapOrder });
+    await savePromptType({ ...swap, intrusivenessOrder: currentOrder });
+  };
+
+  const renderSaveLabel = (id: string, idleLabel = 'Salvar alterações') => {
+    if (savingId === id) return 'Salvando...';
+    if (savedId === id) return '✓ Salvo';
+    return idleLabel;
+  };
+
+  const modalSaveId = String(editingPrompt?.id || editingPrompt?.key || editingPrompt?.name || 'new-prompt');
+
+  return (
+    <SectionCard
+      title="Tipos de ajuda ABA"
+      description="Configure os tipos de ajuda usados durante as tentativas. A pontuação indica o nível de independência usado em gráficos, relatórios e critérios clínicos."
+      complete={promptTypes.some((prompt) => prompt.active)}
+      hasAnyData
+    >
+      <div className="space-y-5">
+        <div className="rounded-xl border border-violet-100 bg-violet-50 p-4">
+          <p className="text-sm font-black text-violet-950">Como funciona a pontuação</p>
+          <p className="mt-2 text-sm font-semibold leading-relaxed text-violet-900">
+            100 = resposta independente. 0 = resposta totalmente dependente ou erro.
+            Quanto menor a ajuda necessária, maior a pontuação de independência.
+          </p>
+          <p className="mt-2 text-xs font-semibold leading-relaxed text-violet-800">
+            Essas pontuações são sugestões iniciais e podem ser ajustadas pela supervisora clínica conforme o protocolo da clínica.
+          </p>
+        </div>
+
+        <div className="rounded-xl border border-slate-200 bg-white p-4">
+          <p className="text-sm font-black text-slate-900">Escala sugerida</p>
+          <p className="text-xs font-semibold text-slate-500">Referência clínica para revisar a pontuação sem alterar dados automaticamente.</p>
+          <div className="mt-3 grid gap-2 sm:grid-cols-5">
+            {[
+              ['100', 'Independente'],
+              ['80-99', 'Ajuda mínima'],
+              ['50-79', 'Ajuda moderada'],
+              ['1-49', 'Ajuda intensa'],
+              ['0', 'Dependente / erro']
+            ].map(([score, label]) => (
+              <div key={score} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                <p className="text-lg font-black text-slate-900">{score}</p>
+                <p className="text-xs font-bold text-slate-600">{label}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-slate-200 bg-white p-4">
+          <p className="text-sm font-black text-slate-900">Prévia na sessão</p>
+          <p className="text-xs font-semibold text-slate-500">Esta é a ordem em que os terapeutas verão os tipos de ajuda durante a sessão.</p>
+          {sessionPreviewPromptTypes.length > 0 ? (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {sessionPreviewPromptTypes.map((prompt) => (
+                <span key={prompt.id || prompt.key} className="rounded-full border border-violet-100 bg-violet-50 px-3 py-1.5 text-xs font-black text-violet-800">
+                  {prompt.name}
+                </span>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-500">
+              Nenhum tipo de ajuda ativo para aparecer na sessão.
+            </p>
+          )}
+        </div>
+
+        <div className="rounded-xl border border-slate-200 bg-white">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
+            <div>
+              <p className="text-sm font-black text-slate-900">Lista de tipos ativos</p>
+              <p className="text-xs font-semibold text-slate-500">Edite cada tipo em uma janela própria para evitar alterações acidentais.</p>
+            </div>
+            <button
+              type="button"
+              onClick={openCreatePrompt}
+              className="inline-flex items-center gap-2 rounded-xl bg-[#7a32fc] px-4 py-2.5 text-sm font-black text-white transition-all hover:opacity-90"
+            >
+              <Plus size={16} />
+              Novo tipo de ajuda
+            </button>
+          </div>
+
+          <div className="hidden overflow-x-auto md:block">
+            <table className="w-full table-fixed text-left text-sm">
+              <thead className="bg-slate-50 text-xs font-black uppercase tracking-wide text-slate-500">
+                <tr>
+                  <th className="px-4 py-3">Tipo de ajuda</th>
+                  <th className="px-4 py-3">Categoria da ajuda</th>
+                  <th className="px-4 py-3">Pontuação de independência</th>
+                  <th className="px-4 py-3">Mostrar durante a sessão</th>
+                  <th className="px-4 py-3">Conta como resposta independente</th>
+                  <th className="px-4 py-3">Status</th>
+                  <th className="px-4 py-3">Ações</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {activePromptTypes.map((prompt, index) => (
+                  <tr key={prompt.id || prompt.key} className="align-middle">
+                    <td className="px-4 py-3 font-black text-slate-900">{prompt.name}</td>
+                    <td className="px-4 py-3 font-semibold text-slate-600">{prompt.category}</td>
+                    <td className="px-4 py-3 font-black text-slate-800">{prompt.independenceScore}</td>
+                    <td className="px-4 py-3">
+                      <span className={`rounded-full px-2.5 py-1 text-xs font-black ${prompt.showInSession ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
+                        {prompt.showInSession ? 'Sim' : 'Não'}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={`rounded-full px-2.5 py-1 text-xs font-black ${prompt.countsAsIndependent ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
+                        {prompt.countsAsIndependent ? 'Sim' : 'Não'}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3"><span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-black text-emerald-700">Ativo</span></td>
+                    <td className="px-4 py-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button type="button" disabled={index === 0} onClick={() => void movePrompt(prompt, -1)} className="rounded-lg border border-slate-200 px-2 py-1 text-xs font-black text-slate-600 disabled:opacity-35">↑</button>
+                        <button type="button" disabled={index === activePromptTypes.length - 1} onClick={() => void movePrompt(prompt, 1)} className="rounded-lg border border-slate-200 px-2 py-1 text-xs font-black text-slate-600 disabled:opacity-35">↓</button>
+                        <button type="button" onClick={() => openEditPrompt(prompt)} className="rounded-lg border border-violet-100 bg-violet-50 px-3 py-1.5 text-xs font-black text-[#7a32fc]">Editar</button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="space-y-3 p-3 md:hidden">
+            {activePromptTypes.map((prompt, index) => (
+              <div key={prompt.id || prompt.key} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="font-black text-slate-900">{prompt.name}</p>
+                    <p className="text-xs font-bold text-slate-500">{prompt.category} · {prompt.independenceScore} pontos</p>
+                  </div>
+                  <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-black text-emerald-700">Ativo</span>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2 text-[11px] font-black">
+                  <span className={prompt.showInSession ? 'rounded-full bg-violet-50 px-2.5 py-1 text-violet-700' : 'rounded-full bg-slate-100 px-2.5 py-1 text-slate-500'}>
+                    {prompt.showInSession ? 'Aparece na sessão' : 'Oculto na sessão'}
+                  </span>
+                  <span className={prompt.countsAsIndependent ? 'rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-700' : 'rounded-full bg-slate-100 px-2.5 py-1 text-slate-500'}>
+                    {prompt.countsAsIndependent ? 'Conta como independente' : 'Com ajuda'}
+                  </span>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button type="button" disabled={index === 0} onClick={() => void movePrompt(prompt, -1)} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-black text-slate-600 disabled:opacity-35">Subir</button>
+                  <button type="button" disabled={index === activePromptTypes.length - 1} onClick={() => void movePrompt(prompt, 1)} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-black text-slate-600 disabled:opacity-35">Descer</button>
+                  <button type="button" onClick={() => openEditPrompt(prompt)} className="rounded-lg bg-[#7a32fc] px-3 py-2 text-xs font-black text-white">Editar</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {inactivePromptTypes.length > 0 && (
+          <details className="rounded-xl border border-slate-200 bg-white p-4">
+            <summary className="cursor-pointer text-sm font-black text-slate-700">Tipos inativos ({inactivePromptTypes.length})</summary>
+            <div className="mt-3 space-y-2">
+              {inactivePromptTypes.map((prompt) => (
+                <div key={prompt.id || prompt.key} className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-slate-50 px-3 py-2">
+                  <span className="text-sm font-semibold text-slate-700">{prompt.name}</span>
+                  <button type="button" onClick={() => void savePromptType({ ...prompt, active: true })} className="rounded-lg bg-violet-50 px-3 py-2 text-xs font-black text-[#7a32fc]">
+                    {renderSaveLabel(String(prompt.id || prompt.key), 'Reativar')}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </details>
+        )}
+      </div>
+
+      {editingPrompt && (
+        <div
+          className="fixed inset-0 z-[180] flex items-end justify-center bg-slate-950/45 p-0 backdrop-blur-sm sm:items-center sm:p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label={modalMode === 'create' ? 'Novo tipo de ajuda' : 'Editar tipo de ajuda'}
+          onClick={() => setEditingPrompt(null)}
+        >
+          <div className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-t-2xl bg-white shadow-2xl sm:rounded-2xl" onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">
+              <div>
+                <h4 className="text-base font-black text-slate-900">{modalMode === 'create' ? 'Novo tipo de ajuda' : 'Editar tipo de ajuda'}</h4>
+                <p className="mt-1 text-sm font-semibold text-slate-500">Também chamado de prompt na prática ABA.</p>
+              </div>
+              <button type="button" onClick={() => setEditingPrompt(null)} className="rounded-full p-2 text-slate-500 hover:bg-slate-100" aria-label="Fechar">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
+              {modalError && (
+                <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">
+                  {modalError}
+                </div>
+              )}
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className={labelClass}>
+                  Nome do tipo de ajuda
+                  <input autoFocus value={editingPrompt.name || ''} onChange={(event) => updateDraft({ name: event.target.value, label: event.target.value })} placeholder="Visual parcial leve" className={inputClass} />
+                </label>
+                <label className={labelClass}>
+                  Categoria da ajuda
+                  <input value={editingPrompt.category || ''} onChange={(event) => updateDraft({ category: event.target.value })} placeholder="Visual" className={inputClass} />
+                </label>
+                <label className={labelClass}>
+                  Pontuação de independência
+                  <input type="number" min={0} max={100} value={editingPrompt.independenceScore ?? ''} onChange={(event) => updateDraft({ independenceScore: event.target.value === '' ? undefined : Number(event.target.value) })} className={inputClass} />
+                  <span className="mt-1.5 block text-[11px] font-semibold leading-relaxed text-slate-500">
+                    Use 100 para independente e 0 para totalmente dependente ou erro. Uma ajuda visual parcial pode ficar próxima de 80.
+                  </span>
+                </label>
+                <label className={labelClass}>
+                  Ordem na sessão
+                  <input type="number" min={0} value={editingPrompt.intrusivenessOrder ?? 0} onChange={(event) => updateDraft({ intrusivenessOrder: Number(event.target.value) })} className={inputClass} />
+                  <span className="mt-1.5 block text-[11px] font-semibold text-slate-500">Números menores aparecem primeiro nos chips da sessão.</span>
+                </label>
+              </div>
+
+              {Number(editingPrompt.independenceScore) === 100 && !editingPrompt.countsAsIndependent && (
+                <div className="rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs font-bold text-amber-700">
+                  Pontuação 100 normalmente representa resposta independente. Confirme se este tipo deve contar como independente.
+                </div>
+              )}
+
+              <div className="grid gap-3 md:grid-cols-3">
+                <label className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm font-bold text-slate-700">
+                  <input type="checkbox" checked={editingPrompt.showInSession !== false} onChange={(event) => updateDraft({ showInSession: event.target.checked })} className="mr-2" />
+                  Mostrar durante a sessão
+                  <span className="mt-1 block text-[11px] font-semibold text-slate-500">Aparece como chip rápido para o terapeuta.</span>
+                </label>
+                <label className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm font-bold text-slate-700">
+                  <input type="checkbox" checked={Boolean(editingPrompt.countsAsIndependent)} onChange={(event) => updateDraft({ countsAsIndependent: event.target.checked })} className="mr-2" />
+                  Conta como resposta independente
+                  <span className="mt-1 block text-[11px] font-semibold text-slate-500">Use apenas para respostas consideradas independentes.</span>
+                </label>
+                <label className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm font-bold text-slate-700">
+                  <input type="checkbox" checked={editingPrompt.active !== false} onChange={(event) => updateDraft({ active: event.target.checked })} className="mr-2" />
+                  Status ativo
+                  <span className="mt-1 block text-[11px] font-semibold text-slate-500">Inative para remover da lista principal sem apagar histórico.</span>
+                </label>
+              </div>
+
+              <label className={labelClass}>
+                Descrição clínica opcional
+                <textarea value={editingPrompt.description || ''} onChange={(event) => updateDraft({ description: event.target.value })} placeholder="Ex.: Dica visual parcial sem entregar a resposta completa." className={`${inputClass} min-h-[96px] resize-y`} />
+              </label>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 bg-white px-5 py-4">
+              {modalMode === 'edit' && (
+                <button type="button" onClick={() => void savePromptType({ ...editingPrompt, active: false }).then((saved) => { if (saved) setEditingPrompt(null); })} className="rounded-xl border border-red-100 bg-red-50 px-4 py-2.5 text-sm font-black text-red-600">
+                  Inativar
+                </button>
+              )}
+              <div className="ml-auto flex flex-wrap gap-2">
+                <button type="button" onClick={() => setEditingPrompt(null)} className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-black text-slate-600">
+                  Cancelar
+                </button>
+                <button type="button" onClick={() => void saveModalPrompt()} className="rounded-xl bg-[#7a32fc] px-5 py-2.5 text-sm font-black text-white transition-all hover:opacity-90 disabled:opacity-60" disabled={Boolean(savingId)}>
+                  {renderSaveLabel(modalSaveId, modalMode === 'create' ? 'Salvar tipo' : 'Salvar alterações')}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </SectionCard>
   );
 }
@@ -553,7 +980,7 @@ export function ClinicGlobalSettingsPanel({
                 </div>
               </SectionCard>
 
-              <AbaPromptTypesSettings />
+              <AbaPromptTypesClinicalSettings />
 
               <BillingTissSettingsPanel onEditClinicData={scrollToClinicData} onNavigatePayers={() => navigateToTab("payers")} onNavigateProfessionals={() => navigateToTab("team")} />
             </>

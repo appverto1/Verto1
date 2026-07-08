@@ -15,6 +15,9 @@ const dataServiceCode = readFileSync(join(root, 'src/services/dataService.ts'), 
 const serverCode = readFileSync(join(root, 'server.ts'), 'utf8');
 const settingsCode = readFileSync(join(root, 'src/components/ClinicGlobalSettingsPanel.tsx'), 'utf8');
 const migrationCode = readFileSync(join(root, 'supabase/migrations/20260708120000_aba_prompt_types.sql'), 'utf8');
+const clinicalSettingsStart = settingsCode.indexOf('function AbaPromptTypesClinicalSettings');
+const clinicalSettingsEnd = settingsCode.indexOf('function MediaDropzone', clinicalSettingsStart);
+const clinicalSettingsCode = settingsCode.slice(clinicalSettingsStart, clinicalSettingsEnd);
 
 const tests: Array<{ name: string; fn: () => void }> = [];
 const test = (name: string, fn: () => void) => tests.push({ name, fn });
@@ -121,11 +124,59 @@ test('data service and server expose tenant-scoped prompt type APIs', () => {
 });
 
 test('clinic settings exposes Tipos de ajuda ABA management', () => {
-  assert.match(settingsCode, /function AbaPromptTypesSettings/);
-  assert.match(settingsCode, /Tipos de ajuda ABA/);
-  assert.match(settingsCode, /Visual parcial leve/);
-  assert.match(settingsCode, /Inativar/);
-  assert.match(settingsCode, /Reativar/);
+  assert.match(settingsCode, /<AbaPromptTypesClinicalSettings \/>/);
+  assert.match(clinicalSettingsCode, /function AbaPromptTypesClinicalSettings/);
+  assert.match(clinicalSettingsCode, /Tipos de ajuda ABA/);
+  assert.match(clinicalSettingsCode, /Visual parcial leve/);
+  assert.match(clinicalSettingsCode, /Inativar/);
+  assert.match(clinicalSettingsCode, /Reativar/);
+});
+
+test('clinic prompt settings explains score and suggested scale in clinical language', () => {
+  assert.match(clinicalSettingsCode, /Como funciona a pontuação/);
+  assert.match(clinicalSettingsCode, /100 = resposta independente/);
+  assert.match(clinicalSettingsCode, /0 = resposta totalmente dependente ou erro/);
+  assert.match(clinicalSettingsCode, /Escala sugerida/);
+  assert.match(clinicalSettingsCode, /Ajuda mínima/);
+  assert.match(clinicalSettingsCode, /Ajuda moderada/);
+  assert.match(clinicalSettingsCode, /Ajuda intensa/);
+});
+
+test('clinic prompt settings renders compact list instead of open spreadsheet rows', () => {
+  const listStart = clinicalSettingsCode.indexOf('Lista de tipos ativos');
+  const listEnd = clinicalSettingsCode.indexOf('{inactivePromptTypes.length', listStart);
+  const listCode = clinicalSettingsCode.slice(listStart, listEnd);
+  assert.match(listCode, /<table/);
+  assert.match(listCode, /Tipo de ajuda/);
+  assert.match(listCode, /Categoria da ajuda/);
+  assert.match(listCode, /Pontuação de independência/);
+  assert.match(listCode, /Mostrar durante a sessão/);
+  assert.match(listCode, /Conta como resposta independente/);
+  assert.match(listCode, /Editar/);
+  assert.doesNotMatch(listCode, /<input/);
+  assert.doesNotMatch(listCode, /value=\{prompt\.name\}/);
+});
+
+test('clinic prompt settings uses modal with validation and persistent save feedback', () => {
+  assert.match(clinicalSettingsCode, /role="dialog"/);
+  assert.match(clinicalSettingsCode, /max-h-\[90vh\]/);
+  assert.match(clinicalSettingsCode, /overflow-y-auto/);
+  assert.match(clinicalSettingsCode, /Editar tipo de ajuda/);
+  assert.match(clinicalSettingsCode, /Novo tipo de ajuda/);
+  assert.match(clinicalSettingsCode, /Nome do tipo de ajuda/);
+  assert.match(clinicalSettingsCode, /A pontuação de independência deve ficar entre 0 e 100/);
+  assert.match(clinicalSettingsCode, /Salvar alterações/);
+  assert.match(clinicalSettingsCode, /Salvando\.\.\./);
+  assert.match(clinicalSettingsCode, /✓ Salvo/);
+});
+
+test('clinic prompt settings preview and inactive handling are clinically clear', () => {
+  assert.match(clinicalSettingsCode, /Prévia na sessão/);
+  assert.match(clinicalSettingsCode, /sessionPreviewPromptTypes/);
+  assert.match(clinicalSettingsCode, /filter\(\(prompt\) => prompt\.showInSession\)/);
+  assert.match(clinicalSettingsCode, /Nenhum tipo de ajuda ativo para aparecer na sessão/);
+  assert.match(clinicalSettingsCode, /Tipos inativos/);
+  assert.match(clinicalSettingsCode, /<details/);
 });
 
 test('migration is additive and multi-tenant scoped', () => {
