@@ -207,6 +207,17 @@ const behaviorPresets = [
   { id: 'stereotypy', name: 'Estereotipia', defaultMeasurement: 'partial_interval', allowedMeasurements: ['partial_interval', 'whole_interval', 'momentary_time_sampling', 'duration'], abcRequirement: 'OPTIONAL' as AbcRequirement, tone: 'bg-emerald-50 text-emerald-700 border-emerald-100' }
 ];
 
+const compactBehaviorLabel = (value: unknown) => {
+  const label = String(value || '').trim();
+  const compactLabels: Record<string, string> = {
+    'Fuga da atividade': 'Fuga',
+    Autoagressão: 'Autoag.',
+    Agressão: 'Agressão',
+    Estereotipia: 'Estereotipia'
+  };
+  return compactLabels[label] || label;
+};
+
 const antecedentOptions = ['Demanda apresentada', 'Transição', 'Espera', 'Negação de acesso', 'Barulho', 'Atenção dividida'];
 const consequenceOptions = ['Redirecionamento', 'Pausa breve', 'Reforço diferencial', 'Ajuda física', 'Bloqueio seguro', 'Acesso removido'];
 const locationOptions = ['Mesa', 'Sala de terapia', 'Brinquedoteca', 'Corredor', 'Banheiro', 'Recepção'];
@@ -966,6 +977,33 @@ export const SessionMode = ({
   const dockLocationOptions = useMemo(() => mergeDockLocationOptions(customDockLocations), [customDockLocations]);
   const visibleDockLocationOptions = dockLocationsExpanded ? dockLocationOptions : dockLocationOptions.slice(0, 6);
   const recentBehaviorRecords = useMemo(() => records.filter((record) => record.kind === 'behavior' && !isCancelledIntervalClinicalRecord(record)).slice(0, 5), [records]);
+  const visibleDockBehaviorOptions = useMemo(() => {
+    const byId = new Map<string, typeof behaviorPresets[number]>();
+    const addBehavior = (behavior?: typeof behaviorPresets[number] | null) => {
+      if (!behavior || byId.has(behavior.id)) return;
+      byId.set(behavior.id, behavior);
+    };
+    addBehavior(selectedBehavior);
+    recentBehaviorRecords.forEach((record: any) => {
+      const behavior = behaviorPresets.find((item) => (
+        item.id === record.behaviorId ||
+        item.id === record.behavior_id ||
+        item.name === record.behaviorName ||
+        item.name === record.behavior_name ||
+        item.name === record.title
+      ));
+      addBehavior(behavior);
+    });
+    quickBehaviorShortcuts.forEach((shortcut: any) => {
+      addBehavior(behaviorPresets.find((item) => item.id === shortcut.behaviorId || item.name === shortcut.behaviorName));
+    });
+    behaviorPresets.forEach(addBehavior);
+    return Array.from(byId.values()).slice(0, 6);
+  }, [quickBehaviorShortcuts, recentBehaviorRecords, selectedBehavior]);
+  const extraDockBehaviorOptions = useMemo(() => {
+    const visibleIds = new Set(visibleDockBehaviorOptions.map((behavior) => behavior.id));
+    return behaviorPresets.filter((behavior) => !visibleIds.has(behavior.id));
+  }, [visibleDockBehaviorOptions]);
   const intervalRunStatus = getIntervalRunStatus(intervalRun);
   const intervalRunPaused = intervalRunStatus === 'PAUSED';
   const intervalRunAwaitingResponse = intervalRunStatus === 'AWAITING_RESPONSE';
@@ -1053,7 +1091,7 @@ export const SessionMode = ({
     }
   };
 
-  const dockChipClass = (active: boolean) => `inline-flex min-h-[36px] items-center justify-center rounded-full border px-4 py-2 text-[11px] font-black transition-all focus:outline-none focus:ring-2 focus:ring-[#7a32fc]/30 active:scale-[0.98] ${active ? 'border-[#7a32fc] bg-[#7a32fc] text-white shadow-sm shadow-purple-500/20 ring-2 ring-[#7a32fc]/20' : 'border-[#E2D9EA] bg-white text-slate-700 hover:border-purple-200 hover:bg-white'}`;
+  const dockChipClass = (active: boolean) => `inline-flex min-h-[36px] min-w-0 max-w-full items-center justify-center overflow-hidden whitespace-nowrap rounded-full border px-4 py-2 text-[11px] font-black transition-all focus:outline-none focus:ring-2 focus:ring-[#7a32fc]/30 active:scale-[0.98] ${active ? 'border-[#7a32fc] bg-[#7a32fc] text-white shadow-sm shadow-purple-500/20 ring-2 ring-[#7a32fc]/20' : 'border-[#E2D9EA] bg-white text-slate-700 hover:border-purple-200 hover:bg-white'}`;
 
   const releaseActionLock = (key: string) => {
     const nextLocks = { ...actionLocksRef.current };
@@ -5932,12 +5970,12 @@ export const SessionMode = ({
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         {openDurations.map((event) => (
-          <div key={event.id} className="rounded-2xl bg-[#F4F7FE] border border-blue-100 p-3 sm:p-4 flex flex-col gap-3">
-            <div className="flex items-start justify-between gap-3">
+          <div key={event.id} className="min-w-0 overflow-hidden rounded-2xl bg-[#F4F7FE] border border-blue-100 p-3 sm:p-4 flex flex-col gap-3">
+            <div className="flex min-w-0 items-start justify-between gap-3">
               <div className="min-w-0">
-                <p className="text-sm font-bold text-gray-800 truncate">{event.behaviorName}</p>
-                <p className="text-xs text-gray-500 mt-1">{event.location || 'Sem local'} - severidade {event.severity || '-'}</p>
-                <p className="text-[11px] text-gray-400 mt-1">Início {new Date(event.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                <p className="truncate text-sm font-bold text-gray-800" title={event.behaviorName}>{event.behaviorName}</p>
+                <p className="mt-1 truncate text-xs text-gray-500" title={`${event.location || 'Sem local'} - severidade ${event.severity || '-'}`}>{event.location || 'Sem local'} - severidade {event.severity || '-'}</p>
+                <p className="mt-1 truncate text-[11px] text-gray-400">Início {new Date(event.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
               </div>
               <div className="text-right shrink-0">
                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Cronômetro</p>
@@ -5994,6 +6032,8 @@ export const SessionMode = ({
     const label = method === 'duration'
       ? (openDuration ? behavior.name : String(shortcut?.label || `${behavior.name} iniciar`))
       : String(shortcut?.label || behavior.name);
+    const compactLabel = compactBehaviorLabel(label);
+    const fullLabel = openDuration ? `${behavior.name} ${elapsed}` : label;
     const isFrequencyLike = method === 'frequency' || method === 'rate';
 
     return (
@@ -6007,7 +6047,9 @@ export const SessionMode = ({
         disabled={disabled}
         data-aba-dock-shortcut={shortcut.behaviorId}
         data-aba-dock-duration-active={isActive ? 'true' : 'false'}
-        className={`relative min-h-[44px] overflow-visible rounded-[16px] border px-2 py-1.5 text-center shadow-sm transition-all active:scale-[0.98] disabled:opacity-60 ${getDockButtonClass(shortcut.color, isActive || crisisMode)} ${isActive ? 'ring-2 ring-amber-300 ring-offset-2 ring-offset-white animate-pulse' : ''} ${microFeedback[feedbackKey] ? 'scale-[0.98] ring-4 ring-white/70' : ''} ${compact ? 'min-h-[50px]' : ''}`}
+        title={fullLabel}
+        aria-label={fullLabel}
+        className={`relative min-h-[44px] min-w-0 overflow-hidden rounded-[16px] border px-2 py-1.5 text-center shadow-sm transition-all active:scale-[0.98] disabled:opacity-60 ${getDockButtonClass(shortcut.color, isActive || crisisMode)} ${isActive ? 'ring-2 ring-amber-300 ring-offset-2 ring-offset-white animate-pulse' : ''} ${microFeedback[feedbackKey] ? 'scale-[0.98] ring-4 ring-white/70' : ''} ${compact ? 'min-h-[50px]' : ''}`}
       >
         {isFrequencyLike && microFeedback[feedbackKey] === 'plus' && (
           <span className="pointer-events-none absolute -top-3 right-2 z-20 animate-pop rounded-full bg-emerald-500 px-2 py-0.5 text-[10px] font-black text-white shadow-lg shadow-emerald-900/20">+1</span>
@@ -6015,15 +6057,15 @@ export const SessionMode = ({
         {microFeedback[feedbackKey] === 'pulse' && (
           <span className="pointer-events-none absolute -top-3 right-2 z-20 animate-pop rounded-full bg-white px-2 py-0.5 text-[10px] font-black text-[#1B254B] shadow-lg">ON</span>
         )}
-        <span className="flex flex-col items-center justify-center gap-0.5 text-[10px] font-black uppercase tracking-widest">
-          <span className="inline-flex min-w-0 items-center gap-1">
+        <span className="flex min-w-0 flex-col items-center justify-center gap-0.5 text-[10px] font-black uppercase tracking-widest">
+          <span className="inline-flex min-w-0 max-w-full items-center gap-1 overflow-hidden">
             {method === 'duration' ? (openDuration ? <Square size={13} /> : <Play size={13} />) : <Plus size={13} />}
-            <span className="truncate">{label}</span>
+            <span className="min-w-0 truncate">{compactLabel}</span>
           </span>
           {openDuration && <span className="ml-1 shrink-0 rounded-full bg-white/25 px-1.5 py-0.5 text-[10px]">{elapsed}</span>}
         </span>
-        <span className={`${(mobileFocusMode || compact) && !openDuration ? 'hidden' : 'block'} mt-1 text-[10px] font-semibold opacity-75`}>
-          {openDuration ? 'encerrar agora' : method === 'duration' ? 'iniciar duração' : '+1 ocorrência'}
+        <span className={`${(mobileFocusMode || compact) || openDuration ? 'hidden' : 'block'} mt-1 truncate text-[10px] font-semibold opacity-75`}>
+          {method === 'duration' ? 'iniciar duração' : '+1 ocorrência'}
         </span>
       </button>
     );
@@ -6040,9 +6082,17 @@ export const SessionMode = ({
     >
       <div className={`mx-auto max-w-3xl rounded-[22px] border p-1.5 shadow-xl backdrop-blur-xl ${clinicalDockCompact ? 'opacity-95' : 'shadow-xl'} ${crisisMode ? 'border-red-300 bg-slate-950/95 shadow-red-950/30' : 'border-blue-100 bg-white/95 shadow-blue-950/15'}`} data-aba-dock-bottom-bar>
         {!clinicalDockPausedCompact && openDurations.length > 0 && (
-          <div className={`mb-1.5 flex items-center justify-between rounded-2xl px-3 py-2 text-xs font-black ${crisisMode ? 'bg-white/10 text-white' : 'bg-amber-50 text-amber-800'}`} data-aba-dock-open-duration-badge>
-            <span>{openDurations.length} duração em andamento</span>
-            <span>{openDurations[0].behaviorName} {formatElapsed(openDurations[0].startedAt, nowMs)} ■</span>
+          <div
+            className={`mb-1.5 flex min-w-0 items-center justify-between gap-2 overflow-hidden rounded-2xl px-3 py-2 text-xs font-black ${crisisMode ? 'bg-white/10 text-white' : 'bg-amber-50 text-amber-800'}`}
+            data-aba-dock-open-duration-badge
+            title={openDurations.length === 1 ? `${openDurations[0].behaviorName} ${formatElapsed(openDurations[0].startedAt, nowMs)}` : `${openDurations.length} eventos em andamento`}
+          >
+            <span className="min-w-0 truncate">{openDurations.length === 1 ? 'Evento em andamento' : `${openDurations.length} eventos em andamento`}</span>
+            <span className="min-w-0 max-w-[52%] truncate text-right">
+              {openDurations.length === 1
+                ? `⏱ ${compactBehaviorLabel(openDurations[0].behaviorName)} · ${formatElapsed(openDurations[0].startedAt, nowMs)}`
+                : 'Toque em Mais'}
+            </span>
           </div>
         )}
         {clinicalDockPausedCompact ? (
@@ -6069,7 +6119,7 @@ export const SessionMode = ({
             </button>
           </div>
         ) : (
-          <div className="grid grid-cols-[repeat(3,minmax(0,1fr))_56px] gap-1.5">
+          <div className="grid grid-cols-[repeat(3,minmax(0,1fr))_minmax(52px,60px)] gap-1.5">
             {dockShortcuts.map((shortcut) => renderDockShortcutButton(shortcut, crisisMode))}
             <button
               type="button"
@@ -6077,9 +6127,9 @@ export const SessionMode = ({
                 if (crisisMode) openAbcModal();
                 else setClinicalDockSheetOpen(true);
               }}
-              className={`min-h-[44px] rounded-[16px] border px-2 text-[10px] font-black uppercase tracking-widest shadow-sm transition-all active:scale-[0.98] ${crisisMode ? 'border-white/15 bg-white text-slate-950' : 'border-slate-100 bg-white text-slate-700'}`}
+              className={`min-h-[44px] min-w-0 overflow-hidden rounded-[16px] border px-2 text-[10px] font-black uppercase tracking-widest shadow-sm transition-all active:scale-[0.98] ${crisisMode ? 'border-white/15 bg-white text-slate-950' : 'border-slate-100 bg-white text-slate-700'}`}
             >
-              {crisisMode ? 'ABC' : 'Mais'}
+              <span className="block truncate">{crisisMode ? 'ABC' : 'Mais'}</span>
             </button>
           </div>
         )}
@@ -6100,9 +6150,9 @@ export const SessionMode = ({
     isIntervalMeasurementType(behaviorMeasurementType) ? `Alerta ${selectedIntervalAlertLabel}` : null
   ].filter(Boolean);
   const handleQuickRegisterSubmit = () => {
-    const intervalSelected = isIntervalMeasurementType(behaviorMeasurementType);
+    const effectiveMeasurementType = resolveBehaviorMeasurementForAction(selectedBehavior, behaviorMeasurementType);
     handleSelectedBehaviorAction();
-    if (!intervalSelected) setClinicalDockSheetOpen(false);
+    if (effectiveMeasurementType !== 'abc') setClinicalDockSheetOpen(false);
   };
   const renderIntervalQuantityStepper = (containerClassName = '') => (
     <div className={`text-[10px] font-black uppercase tracking-widest text-slate-400 ${containerClassName}`} data-aba-dock-quantity-stepper>
@@ -6162,7 +6212,7 @@ export const SessionMode = ({
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <h2 className="text-lg font-black leading-tight text-slate-800">Registro Rápido</h2>
-              <p className="mt-1 truncate text-xs font-black text-[#7a32fc]">
+              <p className="mt-1 truncate text-xs font-black text-[#7a32fc]" title={contextSummaryItems.join(' · ')}>
                 {contextSummaryItems.slice(0, 3).join(' · ')}
               </p>
             </div>
@@ -6189,9 +6239,10 @@ export const SessionMode = ({
                     type="button"
                     onClick={() => setSelectedLocation(location)}
                     aria-pressed={selectedLocation === location}
-                    className={dockChipClass(selectedLocation === location)}
+                    title={location}
+                    className={`${dockChipClass(selectedLocation === location)} max-w-[11rem]`}
                   >
-                    {location}
+                    <span className="min-w-0 truncate">{location}</span>
                   </button>
                 ))}
               </div>
@@ -6269,7 +6320,7 @@ export const SessionMode = ({
             <div className="text-[10px] font-black uppercase tracking-widest text-slate-400" data-aba-dock-behavior-chips>
               <div className="flex items-center justify-between gap-2">
                 <span>Comportamento</span>
-                {behaviorPresets.length > 5 && (
+                {extraDockBehaviorOptions.length > 0 && (
                   <button
                     type="button"
                     onClick={() => setDockMoreBehaviorsOpen((open) => !open)}
@@ -6280,15 +6331,16 @@ export const SessionMode = ({
                 )}
               </div>
               <div className="mt-1 flex max-h-[92px] flex-wrap gap-2 overflow-y-auto pr-1">
-                {(dockMoreBehaviorsOpen ? behaviorPresets : behaviorPresets.slice(0, 5)).map((behavior) => (
+                {(dockMoreBehaviorsOpen ? [...visibleDockBehaviorOptions, ...extraDockBehaviorOptions] : visibleDockBehaviorOptions).map((behavior) => (
                   <button
                     key={behavior.id}
                     type="button"
                     onClick={() => selectBehavior(behavior)}
                     aria-pressed={selectedBehaviorId === behavior.id}
-                    className={dockChipClass(selectedBehaviorId === behavior.id)}
+                    title={behavior.name}
+                    className={`${dockChipClass(selectedBehaviorId === behavior.id)} max-w-[10.5rem]`}
                   >
-                    {behavior.name}
+                    <span className="min-w-0 truncate">{behavior.name}</span>
                   </button>
                 ))}
               </div>
@@ -6302,9 +6354,10 @@ export const SessionMode = ({
                     type="button"
                     onClick={() => setBehaviorMeasurementType(option.key)}
                     aria-pressed={behaviorMeasurementType === option.key}
-                    className={dockChipClass(behaviorMeasurementType === option.key)}
+                    title={option.label}
+                    className={`${dockChipClass(behaviorMeasurementType === option.key)} max-w-[11rem]`}
                   >
-                    {option.label}
+                    <span className="min-w-0 truncate">{option.label}</span>
                   </button>
                 ))}
               </div>
@@ -6408,9 +6461,10 @@ export const SessionMode = ({
                       onClick={() => setIntervalAlertType(option.key)}
                       disabled={Boolean(intervalRun)}
                       aria-pressed={intervalAlertType === option.key}
-                      className={`${dockChipClass(intervalAlertType === option.key)} disabled:cursor-not-allowed disabled:opacity-60`}
+                      title={option.label}
+                      className={`${dockChipClass(intervalAlertType === option.key)} max-w-[11rem] disabled:cursor-not-allowed disabled:opacity-60`}
                     >
-                      {option.label}
+                      <span className="min-w-0 truncate">{option.label}</span>
                     </button>
                   ))}
                 </div>
@@ -6452,9 +6506,9 @@ export const SessionMode = ({
                   <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Eventos em andamento</p>
                   <div className="mt-2 space-y-2">
                     {openDurations.map((event) => (
-                      <button key={event.id} onClick={() => { endDuration(event.id); setClinicalDockSheetOpen(false); }} disabled={Boolean(actionLocks[`duration:end:${event.id}`])} className="flex min-h-[46px] w-full items-center justify-between rounded-2xl border border-blue-100 bg-[#F8FAFF] px-4 text-left text-xs font-black text-slate-800 disabled:opacity-60">
-                        <span>{event.behaviorName}</span>
-                        <span>{formatElapsed(event.startedAt, nowMs)} ■</span>
+                      <button key={event.id} onClick={() => { endDuration(event.id); setClinicalDockSheetOpen(false); }} disabled={Boolean(actionLocks[`duration:end:${event.id}`])} title={`${event.behaviorName} ${formatElapsed(event.startedAt, nowMs)}`} className="flex min-h-[46px] min-w-0 w-full items-center justify-between gap-2 overflow-hidden rounded-2xl border border-blue-100 bg-[#F8FAFF] px-4 text-left text-xs font-black text-slate-800 disabled:opacity-60">
+                        <span className="min-w-0 truncate">{compactBehaviorLabel(event.behaviorName)}</span>
+                        <span className="shrink-0">{formatElapsed(event.startedAt, nowMs)} ■</span>
                       </button>
                     ))}
                   </div>
@@ -6558,14 +6612,14 @@ export const SessionMode = ({
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {openDurations.map((event) => (
-                  <div key={event.id} className="rounded-2xl bg-[#F4F7FE] border border-blue-100 p-3 sm:p-4 flex flex-col gap-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="text-sm font-bold text-gray-800">{event.behaviorName}</p>
-                        <p className="text-xs text-gray-500 mt-1">{event.location || 'Sem local'} - severidade {event.severity || '-'}</p>
-                        <p className="text-[11px] text-gray-400 mt-1">Início {new Date(event.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                  <div key={event.id} className="min-w-0 overflow-hidden rounded-2xl bg-[#F4F7FE] border border-blue-100 p-3 sm:p-4 flex flex-col gap-3">
+                    <div className="flex min-w-0 items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-bold text-gray-800" title={event.behaviorName}>{event.behaviorName}</p>
+                        <p className="mt-1 truncate text-xs text-gray-500" title={`${event.location || 'Sem local'} - severidade ${event.severity || '-'}`}>{event.location || 'Sem local'} - severidade {event.severity || '-'}</p>
+                        <p className="mt-1 truncate text-[11px] text-gray-400">Início {new Date(event.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
                       </div>
-                      <div className="text-right">
+                      <div className="shrink-0 text-right">
                         <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Cronômetro</p>
                         <p className="text-3xl font-bold text-[#7a32fc] leading-none">{formatElapsed(event.startedAt, nowMs)}</p>
                       </div>
@@ -7340,11 +7394,11 @@ export const SessionMode = ({
                     setMobileSelectedGoalKey(goalKey);
                     syncTrialTypeForGoal(goal);
                   }}
-                  className={`rounded-[18px] border bg-white px-3 py-3 shadow-sm transition-all ${selected ? 'border-[#7a32fc] ring-2 ring-[#7a32fc]/15' : 'border-blue-100'}`}
+                  className={`min-w-0 overflow-hidden rounded-[18px] border bg-white px-3 py-3 shadow-sm transition-all ${selected ? 'border-[#7a32fc] ring-2 ring-[#7a32fc]/15' : 'border-blue-100'}`}
                 >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-1.5">
+                  <div className="space-y-2">
+                    <div className="flex min-w-0 items-start justify-between gap-2">
+                      <div className="flex min-w-0 flex-wrap items-center gap-1.5">
                         <span className="rounded-full bg-[#7a32fc]/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest text-[#7a32fc]">
                           {goal.domainName || goal.domain_name || 'Meta'}
                         </span>
@@ -7355,24 +7409,21 @@ export const SessionMode = ({
                           <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest text-slate-600">Manutenção agendada</span>
                         )}
                       </div>
-                      <h2 className={`${selected ? 'text-lg' : 'text-[15px]'} mt-1 line-clamp-2 font-black leading-snug text-gray-900`}>{goal.name || goal.targetName || goal.target_name}</h2>
-                    </div>
-                    <div className="shrink-0 text-right">
                       <span className={`inline-flex rounded-full px-2 py-1 text-[9px] font-bold uppercase tracking-widest ${maintenanceProbeCanRunNow ? 'bg-amber-100 text-amber-700' : masteryRow?.contributes ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-600'}`}>
                         {statusLabel}
                       </span>
-                      {selected && (
-                        <div className="mt-2 rounded-2xl bg-[#F4EFFF] px-3 py-2 text-center">
-                          <p className="text-[9px] font-black uppercase tracking-widest text-[#7a32fc]">Progresso</p>
-                          <p className="text-sm font-black text-[#1B254B]">{progressLabel}</p>
-                        </div>
-                      )}
                     </div>
-                  </div>
-
-                  <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] font-semibold text-gray-500">
-                    <span>{progressPrefix}: {progressLabel}</span>
-                    {masteryRow?.criterion && <span className="truncate">Critério: {masteryRow.criterion}</span>}
+                    <h2 className={`${selected ? 'text-lg' : 'text-[15px]'} line-clamp-2 overflow-hidden break-words font-black leading-snug text-gray-900`}>{goal.name || goal.targetName || goal.target_name}</h2>
+                    {selected && (
+                      <div className="flex min-w-0 items-center justify-between gap-3 rounded-2xl bg-[#F4EFFF] px-3 py-2" data-aba-mobile-progress-summary>
+                        <p className="min-w-0 truncate text-[9px] font-black uppercase tracking-widest text-[#7a32fc]">Progresso</p>
+                        <p className="shrink-0 text-sm font-black text-[#1B254B]">{progressLabel}</p>
+                      </div>
+                    )}
+                    <div className="space-y-1 text-[11px] font-semibold text-gray-500">
+                      <p className="min-w-0 truncate" title={`${progressPrefix}: ${progressLabel}`}>{progressPrefix}: {progressLabel}</p>
+                      {masteryRow?.criterion && <p className="line-clamp-2 overflow-hidden break-words" title={`Critério: ${masteryRow.criterion}`}>Critério: {masteryRow.criterion}</p>}
+                    </div>
                   </div>
                   {selected && masteryRow?.criterionProgressKind === 'consecutive_independent' && masteryRow?.sequenceBrokenByLastTrial && (
                     <p className="mt-2 rounded-xl bg-orange-50 px-3 py-2 text-[11px] font-bold text-orange-700">

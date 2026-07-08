@@ -205,6 +205,54 @@ test('Dock Clínico abre como registro rápido em chips e deixa ajustes avançad
   assert.match(contextPanel, /Mais/);
 });
 
+test('Registro rápido mantém comportamento atual e usado visível antes do Mais', () => {
+  const sheetStart = sessionModeCode.indexOf('data-aba-clinical-dock-sheet');
+  const sheetEnd = sessionModeCode.indexOf('const sessionModeContent', sheetStart);
+  const dockSheet = sessionModeCode.slice(sheetStart, sheetEnd);
+  const behaviorBlock = dockSheet.slice(dockSheet.indexOf('data-aba-dock-behavior-chips'), dockSheet.indexOf('data-aba-dock-method-chips'));
+
+  assert.match(sessionModeCode, /const visibleDockBehaviorOptions = useMemo/);
+  assert.match(sessionModeCode, /addBehavior\(selectedBehavior\)/);
+  assert.match(sessionModeCode, /recentBehaviorRecords\.forEach/);
+  assert.match(sessionModeCode, /quickBehaviorShortcuts\.forEach/);
+  assert.match(behaviorBlock, /extraDockBehaviorOptions\.length > 0/);
+  assert.match(behaviorBlock, /dockMoreBehaviorsOpen \? \[\.\.\.visibleDockBehaviorOptions, \.\.\.extraDockBehaviorOptions\] : visibleDockBehaviorOptions/);
+  assert.doesNotMatch(behaviorBlock, /behaviorPresets\.slice\(0,\s*5\)/);
+});
+
+test('Registro rápido fecha o bottom sheet ao iniciar duração ou intervalo', () => {
+  const handlerStart = sessionModeCode.indexOf('const handleQuickRegisterSubmit');
+  const handlerEnd = sessionModeCode.indexOf('const renderIntervalQuantityStepper', handlerStart);
+  const handlerBlock = sessionModeCode.slice(handlerStart, handlerEnd);
+
+  assert.match(handlerBlock, /resolveBehaviorMeasurementForAction\(selectedBehavior, behaviorMeasurementType\)/);
+  assert.match(handlerBlock, /handleSelectedBehaviorAction\(\)/);
+  assert.match(handlerBlock, /effectiveMeasurementType !== 'abc'[\s\S]*?setClinicalDockSheetOpen\(false\)/);
+  assert.doesNotMatch(handlerBlock, /isIntervalMeasurementType\(behaviorMeasurementType\)/);
+});
+
+test('Eventos em andamento usam rótulo compacto e truncamento seguro no dock', () => {
+  assert.match(sessionModeCode, /const compactBehaviorLabel =/);
+  assert.match(sessionModeCode, /data-aba-dock-open-duration-badge/);
+  assert.match(sessionModeCode, /compactBehaviorLabel\(openDurations\[0\]\.behaviorName\)/);
+  assert.match(sessionModeCode, /data-aba-dock-open-duration-badge[\s\S]*?min-w-0[\s\S]*?truncate/);
+  assert.doesNotMatch(sessionModeCode, /openDurations\[0\]\.behaviorName\} \{formatElapsed\(openDurations\[0\]\.startedAt, nowMs\)/);
+});
+
+test('Card mobile separa badges, título e progresso para não esmagar texto', () => {
+  const cardStart = sessionModeCode.indexOf('data-aba-mobile-task-card');
+  const cardEnd = sessionModeCode.indexOf('data-aba-mobile-quick-actions', cardStart);
+  const cardBlock = sessionModeCode.slice(cardStart, cardEnd);
+  const titleIndex = cardBlock.indexOf('<h2');
+  const progressIndex = cardBlock.indexOf('data-aba-mobile-progress-summary');
+
+  assert.ok(titleIndex > 0);
+  assert.ok(progressIndex > titleIndex);
+  assert.match(cardBlock, /min-w-0 overflow-hidden rounded-\[18px\]/);
+  assert.match(cardBlock, /line-clamp-2 overflow-hidden break-words/);
+  assert.match(cardBlock, /data-aba-mobile-progress-summary/);
+});
+
 test('Dock Clínico usa seleção rápida de local, severidade e duração no contexto salvo', () => {
   const sheetStart = sessionModeCode.indexOf('data-aba-clinical-dock-sheet');
   const sheetEnd = sessionModeCode.indexOf('const sessionModeContent', sheetStart);
