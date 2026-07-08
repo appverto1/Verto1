@@ -615,8 +615,8 @@ test('aba session mode: trials and behavior events are one-touch and session-sco
   );
   assert.match(
     sessionModeCode,
-    /intervalResponseActive[\s\S]*?intervalRun\?\.awaitingResponse[\s\S]*?scrollBottomPaddingStyle[\s\S]*?clinicalDock = !sessionCompleted && !intervalResponseActive[\s\S]*?clinicalDockSheetOpen && !intervalResponseActive[\s\S]*?data-aba-interval-response-active[\s\S]*?min-h-\[56px\]/m,
-    'SessionMode deve ocultar o dock e priorizar SIM/NÃO durante a resposta de intervalo no mobile.'
+    /intervalResponseActive[\s\S]*?intervalRun\?\.awaitingResponse[\s\S]*?scrollBottomPaddingStyle[\s\S]*?clinicalDockCompact = Boolean\(intervalRun\)[\s\S]*?clinicalDock = !sessionCompleted \? \([\s\S]*?clinicalDockSheet = clinicalDockSheetOpen && !intervalResponseActive[\s\S]*?data-aba-interval-parallel-banner[\s\S]*?data-aba-interval-response-active[\s\S]*?min-h-\[44px\]/m,
+    'SessionMode deve manter o dock compacto paralelo, bloquear o sheet durante resposta de intervalo e priorizar SIM/NÃO sem cobrir controles.'
   );
   assert.match(
     sessionModeCode,

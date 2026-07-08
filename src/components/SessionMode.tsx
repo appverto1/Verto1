@@ -791,6 +791,7 @@ export const SessionMode = ({
   const [newDockLocationName, setNewDockLocationName] = useState('');
   const [editingDockLocationName, setEditingDockLocationName] = useState('');
   const [editingDockLocationValue, setEditingDockLocationValue] = useState('');
+  const [dockMoreBehaviorsOpen, setDockMoreBehaviorsOpen] = useState(false);
   const [dockMoreDurationsOpen, setDockMoreDurationsOpen] = useState(false);
   const [crisisMode, setCrisisMode] = useState(false);
   const [actionToast, setActionToast] = useState<ClinicalActionToast | null>(null);
@@ -5617,9 +5618,9 @@ export const SessionMode = ({
     );
   };
 
-  const clinicalDockCompact = Boolean(intervalRun && !intervalResponseActive);
+  const clinicalDockCompact = Boolean(intervalRun);
   const clinicalDockPausedCompact = Boolean(intervalRunPaused && !intervalResponseActive);
-  const clinicalDock = !sessionCompleted && !intervalResponseActive ? (
+  const clinicalDock = !sessionCompleted ? (
     <div
       ref={clinicalDockRef}
       data-aba-clinical-dock
@@ -5896,7 +5897,52 @@ export const SessionMode = ({
 
         <section className="mt-3 rounded-[22px] border border-blue-100 bg-white p-3">
           <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Configurações rápidas</p>
-          <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <div className="mt-2 space-y-3">
+            <div className="text-[10px] font-black uppercase tracking-widest text-slate-400" data-aba-dock-behavior-chips>
+              <div className="flex items-center justify-between gap-2">
+                <span>Comportamento</span>
+                {behaviorPresets.length > 5 && (
+                  <button
+                    type="button"
+                    onClick={() => setDockMoreBehaviorsOpen((open) => !open)}
+                    className="text-[10px] font-black uppercase tracking-widest text-[#7a32fc]"
+                  >
+                    {dockMoreBehaviorsOpen ? 'Mostrar menos' : 'Mais'}
+                  </button>
+                )}
+              </div>
+              <div className="mt-1 flex max-h-[92px] flex-wrap gap-2 overflow-y-auto pr-1">
+                {(dockMoreBehaviorsOpen ? behaviorPresets : behaviorPresets.slice(0, 5)).map((behavior) => (
+                  <button
+                    key={behavior.id}
+                    type="button"
+                    onClick={() => selectBehavior(behavior)}
+                    aria-pressed={selectedBehaviorId === behavior.id}
+                    className={dockChipClass(selectedBehaviorId === behavior.id)}
+                  >
+                    {behavior.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="text-[10px] font-black uppercase tracking-widest text-slate-400" data-aba-dock-method-chips>
+              <span>Método de coleta</span>
+              <div className="mt-1 flex flex-wrap gap-2">
+                {selectedBehaviorMethodOptions.map((option) => (
+                  <button
+                    key={option.key}
+                    type="button"
+                    onClick={() => setBehaviorMeasurementType(option.key)}
+                    aria-pressed={behaviorMeasurementType === option.key}
+                    className={dockChipClass(behaviorMeasurementType === option.key)}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+          <div className="hidden mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2" aria-hidden="true">
             <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">
               Comportamento
               <select
@@ -5987,7 +6033,24 @@ export const SessionMode = ({
                 Quantidade
                 <input type="number" min={1} max={200} value={intervalTotalIntervals} onChange={(event) => setIntervalTotalIntervals(Math.max(1, Number(event.target.value) || 1))} disabled={Boolean(intervalRun)} className="mt-1 w-full rounded-2xl border border-blue-100 bg-[#F4F7FE] px-3 py-3 text-xs font-bold text-slate-700 outline-none disabled:opacity-60" />
               </label>
-              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+              <div className="text-[10px] font-black uppercase tracking-widest text-slate-400" data-aba-dock-alert-chips>
+                <span>Alerta</span>
+                <div className="mt-1 flex flex-wrap gap-2">
+                  {intervalAlertOptions.map((option) => (
+                    <button
+                      key={option.key}
+                      type="button"
+                      onClick={() => setIntervalAlertType(option.key)}
+                      disabled={Boolean(intervalRun)}
+                      aria-pressed={intervalAlertType === option.key}
+                      className={`${dockChipClass(intervalAlertType === option.key)} disabled:cursor-not-allowed disabled:opacity-60`}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <label className="hidden text-[10px] font-black uppercase tracking-widest text-slate-400" aria-hidden="true">
                 Alerta
                 <select value={intervalAlertType} onChange={(event) => setIntervalAlertType(event.target.value)} disabled={Boolean(intervalRun)} className="mt-1 w-full rounded-2xl border border-blue-100 bg-[#F4F7FE] px-3 py-3 text-xs font-bold text-slate-700 outline-none disabled:opacity-60">
                   {intervalAlertOptions.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
@@ -6015,6 +6078,16 @@ export const SessionMode = ({
           >
             Salvar contexto
           </button>
+          <details className="mt-2 rounded-2xl border border-slate-200 bg-slate-50 p-3" data-aba-dock-advanced-options>
+            <summary className="cursor-pointer text-[10px] font-black uppercase tracking-widest text-slate-500">Mais opções</summary>
+            <div className="mt-2 space-y-2 text-xs font-semibold text-slate-500">
+              <p>Use esta área para gerenciar locais, personalizar duração e acessar ajustes menos frequentes.</p>
+              <div className="flex flex-wrap gap-2">
+                <button type="button" onClick={() => setDockLocationManagerOpen((open) => !open)} className="rounded-xl bg-white px-3 py-2 text-[10px] font-black uppercase tracking-widest text-[#7a32fc]">Gerenciar locais</button>
+                <button type="button" onClick={() => setDockMoreDurationsOpen((open) => !open)} className="rounded-xl bg-white px-3 py-2 text-[10px] font-black uppercase tracking-widest text-[#7a32fc]">Mais durações</button>
+              </div>
+            </div>
+          </details>
         </section>
         </>
         )}
@@ -6161,18 +6234,19 @@ export const SessionMode = ({
 
           {intervalRun && (
             <div
+              data-aba-interval-parallel-banner
               data-aba-interval-response-active={intervalResponseActive ? 'true' : 'false'}
-              className={`sticky top-0 ${intervalResponseActive ? 'z-[160]' : 'z-40'} rounded-[24px] sm:rounded-[28px] p-3 sm:p-5 shadow-2xl border transition-all ${intervalRunAwaitingResponse ? 'bg-amber-50 border-amber-300 ring-4 ring-amber-200/70' : intervalRunPaused ? 'bg-slate-50 border-slate-200 ring-2 ring-slate-200/70' : 'bg-white border-blue-100 shadow-blue-900/10'}`}
+              className={`sticky top-0 ${intervalResponseActive ? 'z-[160]' : 'z-40'} rounded-[18px] p-2 shadow-lg border transition-all sm:rounded-[22px] sm:p-3 ${intervalRunAwaitingResponse ? 'bg-amber-50 border-amber-300 ring-2 ring-amber-200/70' : intervalRunPaused ? 'bg-slate-50 border-slate-200 ring-1 ring-slate-200/70' : 'bg-white border-blue-100 shadow-blue-900/10'}`}
             >
-              <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
                 <div className="min-w-0 flex-1">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <div className="flex items-center gap-2 mb-2">
+                      <div className="mb-1 flex items-center gap-2">
                         <Timer size={18} className={intervalRunAwaitingResponse ? 'text-amber-600' : intervalRunPaused ? 'text-slate-500' : 'text-[#7a32fc]'} />
                         <h2 className="text-sm font-bold text-gray-800">{intervalRunPaused ? 'Coleta pausada' : 'Coleta por intervalo em andamento'}</h2>
                       </div>
-                      <h3 className="text-xl font-bold text-gray-900">{intervalRun.behaviorName}</h3>
+                      <h3 className="text-base font-bold text-gray-900 sm:text-lg">Intervalo agora: {intervalRun.behaviorName} · {intervalRun.intervalIndex}/{intervalRun.totalIntervals}</h3>
                       <p className="text-xs font-semibold text-gray-500 mt-1">
                         {getMeasurementLabel(intervalRun.measurementType)} - {intervalRun.location || 'Sem local'} - severidade {intervalRun.severity || '-'}
                       </p>
@@ -6192,16 +6266,16 @@ export const SessionMode = ({
                     )}
                   </div>
                 </div>
-                <div className="grid w-full grid-cols-3 gap-2 sm:gap-3 lg:w-auto lg:min-w-[320px]">
-                  <div className="rounded-2xl bg-[#F4F7FE] border border-blue-100 p-3 text-center">
+                <div className="grid w-full grid-cols-3 gap-2 lg:w-auto lg:min-w-[280px]">
+                  <div className="rounded-2xl bg-[#F4F7FE] border border-blue-100 p-2 text-center">
                     <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Intervalo</p>
                     <p className="text-2xl font-bold text-gray-900">{intervalRun.intervalIndex}</p>
                   </div>
-                  <div className="rounded-2xl bg-[#F4F7FE] border border-blue-100 p-3 text-center">
+                  <div className="rounded-2xl bg-[#F4F7FE] border border-blue-100 p-2 text-center">
                     <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Total</p>
                     <p className="text-2xl font-bold text-gray-900">{intervalRun.totalIntervals}</p>
                   </div>
-                  <div className={`rounded-2xl border p-3 text-center ${intervalRunAwaitingResponse ? 'bg-amber-100 border-amber-200' : intervalRunPaused ? 'bg-slate-100 border-slate-200' : 'bg-[#F4F7FE] border-blue-100'}`}>
+                  <div className={`rounded-2xl border p-2 text-center ${intervalRunAwaitingResponse ? 'bg-amber-100 border-amber-200' : intervalRunPaused ? 'bg-slate-100 border-slate-200' : 'bg-[#F4F7FE] border-blue-100'}`}>
                     <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Restante</p>
                     <p className={`text-2xl font-bold ${intervalRunAwaitingResponse ? 'text-amber-700' : intervalRunPaused ? 'text-slate-700' : 'text-[#7a32fc]'}`}>
                       {intervalRunAwaitingResponse ? 'Agora' : intervalRunPaused ? 'Pausado' : formatRemainingUntil(intervalRun.intervalEndsAt, nowMs)}
@@ -6209,11 +6283,11 @@ export const SessionMode = ({
                   </div>
                 </div>
               </div>
-              <div className="mt-4 flex flex-col items-stretch justify-between gap-3 sm:flex-row sm:items-center">
+              <div className="mt-2 flex flex-col items-stretch justify-between gap-2 sm:flex-row sm:items-center">
                 <p className="text-xs font-semibold text-gray-500">
                   {getIntervalInstruction(intervalRun.measurementType)}
                 </p>
-                <p className={`rounded-2xl px-4 py-3 text-center text-sm font-bold ${intervalRunAwaitingResponse ? 'bg-amber-100 text-amber-800' : intervalRunPaused ? 'bg-slate-100 text-slate-700' : 'bg-[#F4F7FE] text-gray-500'}`}>
+                <p className={`rounded-2xl px-3 py-2 text-center text-xs font-bold ${intervalRunAwaitingResponse ? 'bg-amber-100 text-amber-800' : intervalRunPaused ? 'bg-slate-100 text-slate-700' : 'bg-[#F4F7FE] text-gray-500'}`}>
                   {intervalRunAwaitingResponse ? 'Responda agora' : intervalRunPaused ? 'Coleta pausada' : 'Aguardando fim do intervalo...'}
                 </p>
                 {intervalRunAwaitingResponse && (
@@ -6221,27 +6295,27 @@ export const SessionMode = ({
                   <button
                     onClick={() => registerInterval(true)}
                     disabled={!intervalRunAwaitingResponse || Boolean(actionLocks[`interval:${intervalRun.id}:${Number(intervalRun.intervalIndex || 1)}`])}
-                    className={`min-h-[64px] px-6 py-4 rounded-2xl text-sm font-bold uppercase tracking-widest transition-all active:scale-95 ${intervalRunAwaitingResponse && !actionLocks[`interval:${intervalRun.id}:${Number(intervalRun.intervalIndex || 1)}`] ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/20' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
+                    className={`min-h-[44px] px-5 py-3 rounded-2xl text-sm font-bold uppercase tracking-widest transition-all active:scale-95 ${intervalRunAwaitingResponse && !actionLocks[`interval:${intervalRun.id}:${Number(intervalRun.intervalIndex || 1)}`] ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/20' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
                   >
                     SIM
                   </button>
                   <button
                     onClick={() => registerInterval(false)}
                     disabled={!intervalRunAwaitingResponse || Boolean(actionLocks[`interval:${intervalRun.id}:${Number(intervalRun.intervalIndex || 1)}`])}
-                    className={`min-h-[64px] px-6 py-4 rounded-2xl text-sm font-bold uppercase tracking-widest transition-all active:scale-95 ${intervalRunAwaitingResponse && !actionLocks[`interval:${intervalRun.id}:${Number(intervalRun.intervalIndex || 1)}`] ? 'bg-red-500 text-white shadow-lg shadow-red-500/20' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
+                    className={`min-h-[44px] px-5 py-3 rounded-2xl text-sm font-bold uppercase tracking-widest transition-all active:scale-95 ${intervalRunAwaitingResponse && !actionLocks[`interval:${intervalRun.id}:${Number(intervalRun.intervalIndex || 1)}`] ? 'bg-red-500 text-white shadow-lg shadow-red-500/20' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
                   >
                     NÃO
                   </button>
                 </div>
                 )}
               </div>
-              <div className={intervalRunPaused ? 'mt-3' : `mt-4 border-t border-blue-100 pt-4 ${intervalResponseActive ? 'pb-2' : ''}`}>
+              <div className={intervalRunPaused ? 'mt-2' : `mt-2 border-t border-blue-100 pt-2 ${intervalResponseActive ? 'pb-1' : ''}`}>
                 {intervalRunPaused ? (
                   <div ref={intervalPausedControlsRef} className="rounded-2xl border border-slate-200 bg-white p-3 sm:p-4" data-aba-interval-paused-controls>
                     <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                      <button onClick={resumeIntervalRun} className="inline-flex min-h-[56px] w-full items-center justify-center gap-2 rounded-2xl bg-[#1B254B] px-4 py-3 text-xs font-bold uppercase tracking-widest text-white active:scale-95"><RotateCcw size={16} /> Retomar</button>
-                      <button onClick={finishIntervalRunNow} className="inline-flex min-h-[56px] w-full items-center justify-center gap-2 rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-xs font-bold uppercase tracking-widest text-emerald-700 active:scale-95"><Square size={15} /> Finalizar agora</button>
-                      <button onClick={requestCancelIntervalRun} className="inline-flex min-h-[56px] w-full items-center justify-center gap-2 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-xs font-bold uppercase tracking-widest text-red-600 active:scale-95"><X size={15} /> Cancelar coleta</button>
+                      <button onClick={resumeIntervalRun} className="inline-flex min-h-[42px] w-full items-center justify-center gap-2 rounded-2xl bg-[#1B254B] px-3 py-2 text-xs font-bold uppercase tracking-widest text-white active:scale-95"><RotateCcw size={16} /> Retomar</button>
+                      <button onClick={finishIntervalRunNow} className="inline-flex min-h-[42px] w-full items-center justify-center gap-2 rounded-2xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs font-bold uppercase tracking-widest text-emerald-700 active:scale-95"><Square size={15} /> Finalizar agora</button>
+                      <button onClick={requestCancelIntervalRun} className="inline-flex min-h-[42px] w-full items-center justify-center gap-2 rounded-2xl border border-red-100 bg-red-50 px-3 py-2 text-xs font-bold uppercase tracking-widest text-red-600 active:scale-95"><X size={15} /> Cancelar coleta</button>
                     </div>
                     <p className="mt-3 text-xs font-semibold text-slate-500">
                       Intervalo {intervalRun.intervalIndex}/{intervalRun.totalIntervals} preservado. As respostas anteriores foram mantidas.
@@ -6251,19 +6325,19 @@ export const SessionMode = ({
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-3" data-aba-interval-running-controls>
                     <button
                       onClick={pauseIntervalRun}
-                      className="inline-flex min-h-[52px] items-center justify-center gap-2 rounded-2xl bg-[#1B254B] px-4 py-3 text-xs font-bold uppercase tracking-widest text-white active:scale-95"
+                      className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-2xl bg-[#1B254B] px-3 py-2 text-xs font-bold uppercase tracking-widest text-white active:scale-95"
                     >
                       <Pause size={16} /> Pausar
                     </button>
                     <button
                       onClick={finishIntervalRunNow}
-                      className="inline-flex min-h-[52px] items-center justify-center gap-2 rounded-2xl bg-emerald-50 px-4 py-3 text-xs font-bold uppercase tracking-widest text-emerald-700 active:scale-95"
+                      className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-2xl bg-emerald-50 px-3 py-2 text-xs font-bold uppercase tracking-widest text-emerald-700 active:scale-95"
                     >
                       <Square size={15} /> Finalizar agora
                     </button>
                     <button
                       onClick={() => setIntervalOptionsOpen((open) => !open)}
-                      className="inline-flex min-h-[52px] items-center justify-center gap-2 rounded-2xl bg-white px-4 py-3 text-xs font-bold uppercase tracking-widest text-[#7a32fc] border border-purple-100 active:scale-95"
+                      className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-2xl bg-white px-3 py-2 text-xs font-bold uppercase tracking-widest text-[#7a32fc] border border-purple-100 active:scale-95"
                     >
                       <MoreHorizontal size={16} /> Opções
                     </button>

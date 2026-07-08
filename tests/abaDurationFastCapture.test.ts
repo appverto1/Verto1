@@ -170,20 +170,32 @@ test('Dock Clínico abre compacto e recolhe seletores em Ajustar contexto', () =
   assert.match(contextPanel, /data-aba-dock-location-chips/);
   assert.match(contextPanel, /data-aba-dock-severity-chips/);
   assert.match(contextPanel, /data-aba-dock-duration-chips/);
+  assert.match(contextPanel, /data-aba-dock-behavior-chips/);
+  assert.match(contextPanel, /data-aba-dock-method-chips/);
+  assert.match(contextPanel, /data-aba-dock-alert-chips/);
+  assert.match(contextPanel, /data-aba-dock-advanced-options/);
   assert.match(contextPanel, /Gerenciar locais/);
   assert.match(contextPanel, /Mais durações/);
   assert.match(contextPanel, /Personalizar/);
   const locationBlock = contextPanel.slice(contextPanel.indexOf('data-aba-dock-location-chips'), contextPanel.indexOf('data-aba-dock-severity-chips'));
   const severityBlock = contextPanel.slice(contextPanel.indexOf('data-aba-dock-severity-chips'), contextPanel.indexOf('Configurações rápidas'));
   const durationBlock = contextPanel.slice(contextPanel.indexOf('data-aba-dock-duration-chips'), contextPanel.indexOf('Quantidade'));
+  const behaviorBlock = contextPanel.slice(contextPanel.indexOf('data-aba-dock-behavior-chips'), contextPanel.indexOf('data-aba-dock-method-chips'));
+  const methodBlock = contextPanel.slice(contextPanel.indexOf('data-aba-dock-method-chips'), contextPanel.indexOf('hidden mt-2 grid'));
+  const alertBlock = contextPanel.slice(contextPanel.indexOf('data-aba-dock-alert-chips'), contextPanel.indexOf('hidden text-[10px]', contextPanel.indexOf('data-aba-dock-alert-chips')));
   assert.doesNotMatch(locationBlock, /<select/);
   assert.doesNotMatch(severityBlock, /<select/);
   assert.doesNotMatch(durationBlock, /<select/);
-  assert.match(contextPanel, /Comportamento[\s\S]*?<select/);
-  assert.match(contextPanel, /Método de coleta[\s\S]*?<select/);
+  assert.doesNotMatch(behaviorBlock, /<select/);
+  assert.doesNotMatch(methodBlock, /<select/);
+  assert.doesNotMatch(alertBlock, /<select/);
+  assert.match(contextPanel, /onClick=\{\(\) => selectBehavior\(behavior\)\}/);
+  assert.match(contextPanel, /onClick=\{\(\) => setBehaviorMeasurementType\(option\.key\)\}/);
+  assert.match(contextPanel, /onClick=\{\(\) => setIntervalAlertType\(option\.key\)\}/);
   assert.match(contextPanel, /Duração/);
   assert.match(contextPanel, /Quantidade/);
   assert.match(contextPanel, /Alerta/);
+  assert.match(contextPanel, /Mais/);
 });
 
 test('Dock Clínico usa seleção rápida de local, severidade e duração no contexto salvo', () => {
@@ -213,6 +225,37 @@ test('Dock Clínico gerencia muitos locais sem requisitar backend nem alterar ev
   assert.match(sessionModeCode, /renameDockLocation/);
   assert.match(sessionModeCode, /removeDockLocation/);
   assert.doesNotMatch(sessionModeCode, /saveAbaDockLocation|fetchAbaDockLocation|deleteAbaDockLocation/);
+});
+
+test('Coleta por intervalo roda como banner paralelo sem esconder habilidades ou manutenções', () => {
+  const intervalStart = sessionModeCode.indexOf('{intervalRun && (');
+  const intervalEnd = sessionModeCode.indexOf('{intervalZeroFinishConfirmOpen', intervalStart);
+  assert.ok(intervalStart > 0);
+  assert.ok(intervalEnd > intervalStart);
+
+  const intervalBanner = sessionModeCode.slice(intervalStart, intervalEnd);
+  assert.match(intervalBanner, /data-aba-interval-parallel-banner/);
+  assert.match(intervalBanner, /Intervalo agora:/);
+  assert.match(intervalBanner, /SIM/);
+  assert.match(intervalBanner, /NÃO/);
+  assert.match(intervalBanner, /registerInterval\(true\)/);
+  assert.match(intervalBanner, /registerInterval\(false\)/);
+  assert.match(intervalBanner, /setIntervalOptionsOpen/);
+
+  const contentStart = sessionModeCode.indexOf('const sessionModeContent');
+  const content = sessionModeCode.slice(contentStart);
+  const bannerIndex = content.indexOf('data-aba-interval-parallel-banner');
+  const planIndex = content.indexOf('data-aba-mobile-task-list');
+  const maintenanceFilterIndex = content.indexOf("{ key: 'maintenance', label: 'Manutenções' }");
+  const maintenanceQueueIndex = content.indexOf('data-maintenance-probe-queue');
+  assert.ok(bannerIndex >= 0);
+  assert.ok(planIndex > bannerIndex);
+  assert.ok(maintenanceFilterIndex > bannerIndex);
+  assert.ok(maintenanceQueueIndex > bannerIndex);
+  assert.doesNotMatch(content.slice(bannerIndex, planIndex), /return null|setSessionCompleted/);
+  assert.match(sessionModeCode, /const clinicalDockCompact = Boolean\(intervalRun\)/);
+  assert.match(sessionModeCode, /const clinicalDock = !sessionCompleted \? \(/);
+  assert.doesNotMatch(sessionModeCode, /const clinicalDock = !sessionCompleted && !intervalResponseActive/);
 });
 
 test('Dock Clínico não exibe mojibake em textos visíveis', () => {
