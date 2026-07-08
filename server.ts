@@ -439,6 +439,14 @@ function resolveVertoPatientPricingTiers() {
   return parsed.length > 0 ? parsed : DEFAULT_VERTO_PATIENT_PRICING_TIERS;
 }
 
+function resolvePatientBasedBillingEnabled(): boolean {
+  return isVertoPatientBasedBillingEnabled(
+    process.env.PATIENT_BASED_BILLING_ENABLED ||
+      process.env.VERTO_PATIENT_BASED_BILLING_ENABLED ||
+      ''
+  );
+}
+
 function resolveBillingPlanSnapshotTtlMs(): number {
   const minutes = Number(
     process.env.BILLING_PLAN_SNAPSHOT_TTL_MINUTES ||
@@ -745,6 +753,14 @@ async function assertCanActivateBillablePatient(params: {
     return { ok: true };
   }
 
+  const patientBasedBillingEnabled = resolvePatientBasedBillingEnabled();
+  const requiredBillingQuantity = patientBasedBillingEnabled
+    ? requiredActivePatients
+    : limitResolution.requiredLimit;
+  const requiredTierLabel = patientBasedBillingEnabled
+    ? `${requiredActivePatients} pacientes ativos`
+    : limitResolution.requiredTierLabel;
+
   console.info('[Billing Limits] ativacao de paciente exige upgrade confirmado.', {
     clinicId,
     patientId: sanitizeString(params.patientId, 120) || null,
@@ -753,7 +769,7 @@ async function assertCanActivateBillablePatient(params: {
     currentActivePatients,
     requiredActivePatients,
     currentLimit,
-    requiredLimit: limitResolution.requiredLimit,
+    requiredLimit: requiredBillingQuantity,
     enterpriseRequired: limitResolution.enterpriseRequired,
     plansSource: limitResolution.plansSource
   });
@@ -764,8 +780,8 @@ async function assertCanActivateBillablePatient(params: {
       currentLimit,
       currentActivePatients,
       requiredActivePatients,
-      requiredLimit: limitResolution.requiredLimit,
-      requiredTierLabel: limitResolution.requiredTierLabel,
+      requiredLimit: requiredBillingQuantity,
+      requiredTierLabel,
       enterpriseRequired: limitResolution.enterpriseRequired
     })
   };
@@ -57631,6 +57647,8 @@ async function startServer() {
       const enterpriseThreshold = resolveActivePatientEnterpriseThreshold();
       const { plans, source, sync } = await loadBillingPlansFromSnapshots({ allowSync: true });
       const activePatientPriceId = resolveActivePatientPriceId() || plans.find((plan) => plan.selfService && !plan.isCustom)?.priceId || '';
+      const patientBasedBillingEnabled = resolvePatientBasedBillingEnabled();
+      const patientPricingTiers = resolveVertoPatientPricingTiers();
       console.info('[Billing Plans] diagnostics:', {
         stripeConfigured: hasStripeSecretConfigured(),
         source,
@@ -57649,6 +57667,8 @@ async function startServer() {
           billingModel: ACTIVE_PATIENT_BILLING_MODEL,
           defaultPriceId: activePatientPriceId || plans.find((plan) => !plan.isCustom)?.priceId || null,
           enterpriseThreshold,
+          patientBasedBillingEnabled,
+          patientPricingTiers,
           pricingModel: plans.some((plan) => plan.pricingModel === 'tiered_active_patients')
             ? 'tiered_active_patients'
             : 'plans_by_limit',
@@ -57726,19 +57746,20 @@ async function startServer() {
         activePatients,
         enterpriseThreshold: selectedPlan.enterpriseThreshold
       });
-      const patientBasedBillingEnabled = isVertoPatientBasedBillingEnabled(
-        process.env.PATIENT_BASED_BILLING_ENABLED ||
-          process.env.VERTO_PATIENT_BASED_BILLING_ENABLED ||
-          ''
-      );
+      const patientBasedBillingEnabled = resolvePatientBasedBillingEnabled();
       const patientBasedBillingPreview = patientBasedBillingEnabled
         ? calculateVertoPatientBasedMonthlyPrice(activePatients, resolveVertoPatientPricingTiers())
         : null;
+      const estimatedAmountCents =
+        patientBasedBillingPreview && !patientBasedBillingPreview.requiresCustomPricing
+          ? patientBasedBillingPreview.totalAmountCents
+          : estimate.estimatedAmountCents;
       console.info('[Billing Estimate] diagnostics:', {
         ...estimateDiagnostics,
         source,
         tierCount: selectedPlan.tiers?.length || 0,
-        estimatedAmountCents: estimate.estimatedAmountCents,
+        estimatedAmountCents,
+        stripeEstimatedAmountCents: estimate.estimatedAmountCents,
         patientBasedBillingEnabled,
         errorCode: null
       });
@@ -57747,6 +57768,8 @@ async function startServer() {
         success: true,
         data: {
           ...estimate,
+          estimatedAmountCents,
+          stripeEstimatedAmountCents: estimate.estimatedAmountCents,
           patientBasedBillingEnabled,
           patientBasedBillingPreview
         }
@@ -57892,15 +57915,17 @@ async function startServer() {
         requiredActivePatientCount: requestedActivePatients,
         billingState
       });
+      const patientBasedBillingEnabled = resolvePatientBasedBillingEnabled();
       const requestedLimit =
         normalizeActivePatientQuantity(req.body?.requestedLimit || req.body?.requested_limit || req.body?.selectedTierTo || req.body?.selected_tier_to) ||
-        limitResolution.requiredLimit;
+        (patientBasedBillingEnabled ? requestedActivePatients : limitResolution.requiredLimit);
       diagnostics = {
         ...diagnostics,
         requestedLimit,
         activePatients,
         currentLimit: limitResolution.currentLimit,
-        requiredLimit: limitResolution.requiredLimit,
+        requiredLimit: requestedLimit,
+        patientBasedBillingEnabled,
         enterpriseRequired: limitResolution.enterpriseRequired
       };
 

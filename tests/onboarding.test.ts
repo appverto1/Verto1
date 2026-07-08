@@ -103,7 +103,8 @@ test('tela de ativacao mostra plano modular e checkout seguro', () => {
   assert.match(subscriptionRequired, /\/api\/billing\/estimate/);
   assert.match(subscriptionRequired, /billingRangeCards/);
   assert.match(subscriptionRequired, /Selecione uma faixa para ver a estimativa/);
-  assert.match(subscriptionRequired, /Estimativa para até/);
+  assert.match(subscriptionRequired, /Marco de desconto em/);
+  assert.match(subscriptionRequired, /Quantidade de pacientes ativos/);
   assert.match(subscriptionRequired, /Faixa selecionada/);
   assert.match(subscriptionRequired, /Continuar para pagamento/);
   assert.match(subscriptionRequired, /Solicitar proposta personalizada/);

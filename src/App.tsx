@@ -2266,6 +2266,7 @@ export default function App() {
     activePatients: number;
     matchedTier: BillingTierOption | null;
     estimatedAmountCents: number | null;
+    stripeEstimatedAmountCents?: number | null;
     currency: string;
     isEnterprise: boolean;
     enterpriseThreshold?: number | null;
@@ -2280,14 +2281,23 @@ export default function App() {
     } | null;
   };
 
+  type BillingPatientPricingTierOption = {
+    patientLimit: number;
+    fixedMonthlyPriceCents: number;
+  };
+
   type BillingRangeCard = {
     key: string;
     kind: 'self_service' | 'enterprise';
     priceId?: string;
     label: string;
     description: string;
+    fromPatients?: number;
     activePatients: number | null;
     estimatedAmountCents: number | null;
+    unitPriceCents?: number | null;
+    milestonePriceCents?: number | null;
+    milestoneSavingsCents?: number | null;
     currency: string;
   };
 
@@ -2305,6 +2315,28 @@ export default function App() {
       currency: String(currency || 'brl').toUpperCase()
     }).format(amountCents / 100);
   };
+
+  const roundUpBillingUnitToRealCents = (amountCents: number) => {
+    if (!Number.isFinite(amountCents) || amountCents <= 0) return 0;
+    return Math.ceil(amountCents / 100) * 100;
+  };
+
+  const estimatePatientPackageAmountCents = (quantity: number, patientLimit: number, fixedMonthlyPriceCents: number) => {
+    const safeQuantity = Math.max(1, Math.floor(Number(quantity || 1)));
+    const safeLimit = Math.max(1, Math.floor(Number(patientLimit || 1)));
+    const safeFixed = Math.max(0, Math.round(Number(fixedMonthlyPriceCents || 0)));
+    const unitPriceCents = roundUpBillingUnitToRealCents(safeFixed / safeLimit);
+    return safeQuantity === safeLimit ? safeFixed : safeQuantity * unitPriceCents;
+  };
+
+  const normalizePatientPricingTiers = (tiers: BillingPatientPricingTierOption[] = []) =>
+    (Array.isArray(tiers) ? tiers : [])
+      .map((tier) => ({
+        patientLimit: Math.max(1, Math.floor(Number(tier?.patientLimit || 0))),
+        fixedMonthlyPriceCents: Math.max(0, Math.round(Number(tier?.fixedMonthlyPriceCents || 0)))
+      }))
+      .filter((tier) => tier.patientLimit > 0 && tier.fixedMonthlyPriceCents > 0)
+      .sort((a, b) => a.patientLimit - b.patientLimit);
 
   const describeBillingTierRange = (tier: BillingTierOption | null | undefined, fallbackIndex = 0, tiers: BillingTierOption[] = []) => {
     if (!tier) return '';
@@ -2487,11 +2519,23 @@ export default function App() {
       plans: BillingPlanOption[];
       salesContactUrl: string;
       pricingModel: string;
+      patientBasedBillingEnabled: boolean;
+      patientPricingTiers: BillingPatientPricingTierOption[];
       enterpriseThreshold: number;
-    }>({ loading: !isPatientCheckout, error: '', plans: [], salesContactUrl: '', pricingModel: '', enterpriseThreshold: 50 });
+    }>({
+      loading: !isPatientCheckout,
+      error: '',
+      plans: [],
+      salesContactUrl: '',
+      pricingModel: '',
+      patientBasedBillingEnabled: false,
+      patientPricingTiers: [],
+      enterpriseThreshold: 50
+    });
     const [plansReloadToken, setPlansReloadToken] = useState(0);
     const [selectedPriceId, setSelectedPriceId] = useState('');
     const [selectedBillingRangeKey, setSelectedBillingRangeKey] = useState('');
+    const [selectedActivePatientQuantity, setSelectedActivePatientQuantity] = useState<number | null>(null);
     const [checkoutLoading, setCheckoutLoading] = useState(false);
     const [checkoutError, setCheckoutError] = useState('');
     const [estimateState, setEstimateState] = useState<{
@@ -2520,6 +2564,8 @@ export default function App() {
             plans: loadedPlans,
             salesContactUrl: String(data.salesContactUrl || ''),
             pricingModel: String(data.pricingModel || ''),
+            patientBasedBillingEnabled: data.patientBasedBillingEnabled === true,
+            patientPricingTiers: normalizePatientPricingTiers(data.patientPricingTiers || []),
             enterpriseThreshold: Number(data.enterpriseThreshold || 50)
           });
           const defaultPriceId =
@@ -2550,7 +2596,32 @@ export default function App() {
     const enterpriseThreshold = Number(selectedPlan?.enterpriseThreshold || plansState.enterpriseThreshold || 50);
     const billingRangeCards: BillingRangeCard[] = [];
     const rangePlan = tieredPlan || selectedPlan;
-    if (rangePlan?.tiers?.length) {
+    const patientPricingTiers = normalizePatientPricingTiers(plansState.patientPricingTiers);
+    const usePatientPackagePricing = plansState.patientBasedBillingEnabled && patientPricingTiers.length > 0 && Boolean(rangePlan?.priceId);
+    if (usePatientPackagePricing && rangePlan) {
+      patientPricingTiers.forEach((tier, index) => {
+        const previousLimit = index > 0 ? patientPricingTiers[index - 1].patientLimit : 0;
+        const from = previousLimit + 1;
+        const to = tier.patientLimit;
+        if (!to || to > enterpriseThreshold) return;
+        const unitPriceCents = roundUpBillingUnitToRealCents(tier.fixedMonthlyPriceCents / tier.patientLimit);
+        const milestoneSavingsCents = Math.max(0, unitPriceCents * tier.patientLimit - tier.fixedMonthlyPriceCents);
+        billingRangeCards.push({
+          key: `patient-package-${from}-${to}`,
+          kind: 'self_service',
+          priceId: rangePlan.priceId,
+          label: from === to ? `${to} paciente ativo` : `${from} a ${to} pacientes ativos`,
+          description: `R$ ${(unitPriceCents / 100).toFixed(0)} por paciente antes do marco. No paciente ${to}, fecha em ${formatBillingCurrency(tier.fixedMonthlyPriceCents, rangePlan.currency)}.`,
+          fromPatients: from,
+          activePatients: to,
+          estimatedAmountCents: tier.fixedMonthlyPriceCents,
+          unitPriceCents,
+          milestonePriceCents: tier.fixedMonthlyPriceCents,
+          milestoneSavingsCents,
+          currency: rangePlan.currency
+        });
+      });
+    } else if (rangePlan?.tiers?.length) {
       (rangePlan.tiers || []).forEach((tier, index) => {
         const previousTier = index > 0 ? (rangePlan.tiers || [])[index - 1] : null;
         const from = Number(tier.from || (previousTier?.upTo ? Number(previousTier.upTo) + 1 : 1));
@@ -2563,6 +2634,7 @@ export default function App() {
           priceId: rangePlan.priceId,
           label,
           description: describeBillingRangeAudience(to),
+          fromPatients: from,
           activePatients: to,
           estimatedAmountCents: estimateStripePlanAmountCents(rangePlan, to),
           currency: rangePlan.currency
@@ -2582,6 +2654,7 @@ export default function App() {
           priceId: plan.priceId,
           label,
           description: describeBillingRangeAudience(activePatients),
+          fromPatients: Number(plan.minPatients || (index === 0 ? 1 : activePatients)),
           activePatients,
           estimatedAmountCents: estimateStripePlanAmountCents(plan, activePatients),
           currency: plan.currency
@@ -2598,10 +2671,31 @@ export default function App() {
       currency: selectedPlan?.currency || 'brl'
     });
     const selectedBillingRange = billingRangeCards.find((card) => card.key === selectedBillingRangeKey) || null;
-    const selectedActivePatients = selectedBillingRange?.kind === 'self_service' ? selectedBillingRange.activePatients : null;
+    const selectedRangeFrom = selectedBillingRange?.kind === 'self_service'
+      ? Math.max(1, Number(selectedBillingRange.fromPatients || 1))
+      : 1;
+    const selectedRangeTo = selectedBillingRange?.kind === 'self_service'
+      ? Math.max(selectedRangeFrom, Number(selectedBillingRange.activePatients || selectedRangeFrom))
+      : null;
+    const selectedActivePatients = selectedBillingRange?.kind === 'self_service'
+      ? Math.min(
+          selectedRangeTo || selectedRangeFrom,
+          Math.max(selectedRangeFrom, Number(selectedActivePatientQuantity || selectedRangeTo || selectedRangeFrom))
+        )
+      : null;
     const selectedBillingPriceId = selectedBillingRange?.kind === 'self_service' ? String(selectedBillingRange.priceId || '') : '';
     const isEnterpriseSelected = !isPatientCheckout && selectedBillingRange?.kind === 'enterprise';
-    const fallbackEstimatedAmountCents = selectedBillingRange?.estimatedAmountCents ?? null;
+    const selectedQuantityOptions =
+      selectedBillingRange?.kind === 'self_service' && selectedRangeTo
+        ? Array.from({ length: selectedRangeTo - selectedRangeFrom + 1 }, (_, index) => selectedRangeFrom + index)
+        : [];
+    const fallbackEstimatedAmountCents =
+      selectedBillingRange?.kind === 'self_service' &&
+      selectedActivePatients &&
+      selectedBillingRange.milestonePriceCents &&
+      selectedBillingRange.activePatients
+        ? estimatePatientPackageAmountCents(selectedActivePatients, selectedBillingRange.activePatients, selectedBillingRange.milestonePriceCents)
+        : selectedBillingRange?.estimatedAmountCents ?? null;
     const estimatedAmountCents =
       selectedActivePatients &&
       estimateState.data?.priceId === selectedBillingPriceId &&
@@ -2616,6 +2710,23 @@ export default function App() {
         : selectedActivePatients
           ? findMatchedBillingTier(tieredPlan, selectedActivePatients)
           : null;
+    const selectedUnitPriceCents =
+      estimateState.data?.patientBasedBillingPreview?.unitPriceCents ||
+      selectedBillingRange?.unitPriceCents ||
+      null;
+    const selectedMilestonePriceCents =
+      estimateState.data?.patientBasedBillingPreview?.milestonePriceCents ||
+      selectedBillingRange?.milestonePriceCents ||
+      null;
+    const selectedPatientsUntilMilestone =
+      estimateState.data?.patientBasedBillingPreview?.patientsUntilMilestone ??
+      (selectedBillingRange?.kind === 'self_service' && selectedActivePatients && selectedRangeTo
+        ? Math.max(0, selectedRangeTo - selectedActivePatients)
+        : null);
+    const selectedMilestoneSavingsCents =
+      selectedUnitPriceCents && selectedMilestonePriceCents && selectedRangeTo
+        ? Math.max(0, selectedUnitPriceCents * selectedRangeTo - selectedMilestonePriceCents)
+        : selectedBillingRange?.milestoneSavingsCents || 0;
     const clinicOperationType = String(
       user?.clinicOperationType ||
         user?.clinic_operation_type ||
@@ -2628,7 +2739,21 @@ export default function App() {
         ? 'Você poderá começar sem configurar convênios, TISS ou TUSS.'
         : clinicOperationType === 'insurance' || clinicOperationType === 'mixed'
           ? 'Depois da ativação, você poderá configurar pagadores, regras TUSS e pré-faturamento.'
-          : 'As configurações de convênio e TISS podem ser feitas depois, dentro da Verto.';
+        : 'As configurações de convênio e TISS podem ser feitas depois, dentro da Verto.';
+
+    useEffect(() => {
+      if (!selectedBillingRange || selectedBillingRange.kind !== 'self_service') {
+        setSelectedActivePatientQuantity(null);
+        return;
+      }
+      const from = Math.max(1, Number(selectedBillingRange.fromPatients || 1));
+      const to = Math.max(from, Number(selectedBillingRange.activePatients || from));
+      setSelectedActivePatientQuantity((current) => {
+        const safeCurrent = Number(current || 0);
+        if (Number.isFinite(safeCurrent) && safeCurrent >= from && safeCurrent <= to) return Math.floor(safeCurrent);
+        return to;
+      });
+    }, [selectedBillingRangeKey, selectedBillingRange?.fromPatients, selectedBillingRange?.activePatients]);
 
     useEffect(() => {
       if (isPatientCheckout || !selectedBillingPriceId || !selectedBillingRange || selectedBillingRange.kind !== 'self_service' || !selectedActivePatients) {
@@ -2785,6 +2910,7 @@ export default function App() {
                         onClick={() => {
                           setCheckoutError('');
                           setSelectedBillingRangeKey(card.key);
+                          setSelectedActivePatientQuantity(card.kind === 'self_service' ? card.activePatients : null);
                           if (card.kind === 'self_service' && card.priceId) {
                             setSelectedPriceId(card.priceId);
                           }
@@ -2816,11 +2942,16 @@ export default function App() {
                         </div>
                         <div className={`mt-5 rounded-2xl px-4 py-3 ${selected && isEnterprise ? 'bg-white/10' : 'bg-slate-50'}`}>
                           <p className={`text-[10px] font-black uppercase tracking-widest ${selected && isEnterprise ? 'text-slate-300' : 'text-slate-400'}`}>
-                            {isEnterprise ? 'Atendimento comercial' : `Estimativa para até ${card.activePatients} pacientes`}
+                            {isEnterprise ? 'Atendimento comercial' : `Marco de desconto em ${card.activePatients} pacientes`}
                           </p>
                           <p className={`mt-1 text-base font-black ${selected && isEnterprise ? 'text-white' : 'text-slate-950'}`}>
                             {isEnterprise ? 'Plano personalizado' : `${formatBillingCurrency(card.estimatedAmountCents, card.currency)}/mês`}
                           </p>
+                          {!isEnterprise && card.unitPriceCents && (
+                            <p className="mt-1 text-[11px] font-bold text-slate-500">
+                              {formatBillingCurrency(card.unitPriceCents, card.currency)} por paciente antes do marco
+                            </p>
+                          )}
                         </div>
                       </button>
                     );
@@ -2860,7 +2991,7 @@ export default function App() {
                           <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Faixa selecionada</p>
                           <p className="mt-1 text-sm font-black text-slate-900">{selectedBillingRange.label}</p>
                           <p className="mt-1 text-xs font-semibold text-slate-500">
-                            O checkout será criado com {selectedActivePatients} pacientes ativos.
+                            Escolha a quantidade exata dentro deste marco. O checkout será criado com {selectedActivePatients} pacientes ativos.
                           </p>
                         </div>
                         <div className="rounded-2xl bg-white px-4 py-3 text-left shadow-sm sm:text-right">
@@ -2872,20 +3003,57 @@ export default function App() {
                           </p>
                         </div>
                       </div>
+                      {selectedQuantityOptions.length > 0 && (
+                        <div className="mt-4">
+                          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                            Quantidade de pacientes ativos
+                          </p>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {selectedQuantityOptions.map((quantity) => {
+                              const selectedQuantity = quantity === selectedActivePatients;
+                              const quantityAmount = selectedBillingRange.milestonePriceCents && selectedBillingRange.activePatients
+                                ? estimatePatientPackageAmountCents(quantity, selectedBillingRange.activePatients, selectedBillingRange.milestonePriceCents)
+                                : null;
+                              return (
+                                <button
+                                  key={quantity}
+                                  type="button"
+                                  aria-pressed={selectedQuantity}
+                                  onClick={() => setSelectedActivePatientQuantity(quantity)}
+                                  className={`rounded-2xl border px-3 py-2 text-left transition-all ${
+                                    selectedQuantity
+                                      ? 'border-[#7a32fc] bg-violet-50 text-violet-800 shadow-sm'
+                                      : 'border-slate-200 bg-white text-slate-600 hover:border-violet-200'
+                                  }`}
+                                >
+                                  <span className="block text-xs font-black">{quantity}</span>
+                                  {quantityAmount !== null && (
+                                    <span className="block text-[10px] font-bold text-slate-500">
+                                      {formatBillingCurrency(quantityAmount, selectedBillingRange.currency)}
+                                    </span>
+                                  )}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
                       {matchedTier && (
                         <p className="mt-3 rounded-2xl bg-violet-50 px-3 py-2 text-xs font-bold text-violet-800">
                           Faixa usada no cálculo: {describeBillingTierRange(matchedTier, 0, tieredPlan?.tiers || [])}.
                         </p>
                       )}
-                      {estimateState.data?.patientBasedBillingPreview && (
+                      {(estimateState.data?.patientBasedBillingPreview || selectedUnitPriceCents || selectedMilestonePriceCents) && (
                         <div className="mt-3 rounded-2xl border border-violet-100 bg-white px-3 py-3 text-xs font-bold text-slate-700">
-                          <p className="text-[10px] uppercase tracking-widest text-violet-600">Previa por paciente ativo</p>
+                          <p className="text-[10px] uppercase tracking-widest text-violet-600">Prévia por paciente ativo</p>
                           <p className="mt-1">
-                            Pacientes ativos: {estimateState.data.patientBasedBillingPreview.activePatientCount} · Preco por paciente neste marco: {formatBillingCurrency(estimateState.data.patientBasedBillingPreview.unitPriceCents, selectedBillingRange.currency || selectedPlan?.currency || 'brl')} · Mensalidade prevista: {formatBillingCurrency(estimateState.data.patientBasedBillingPreview.totalAmountCents, selectedBillingRange.currency || selectedPlan?.currency || 'brl')}
+                            Pacientes ativos: {selectedActivePatients} · Preço por paciente neste marco: {formatBillingCurrency(selectedUnitPriceCents, selectedBillingRange.currency || selectedPlan?.currency || 'brl')} · Mensalidade prevista: {formatBillingCurrency(estimatedAmountCents, selectedBillingRange.currency || selectedPlan?.currency || 'brl')}
                           </p>
-                          {estimateState.data.patientBasedBillingPreview.nextMilestone && (
+                          {selectedBillingRange.activePatients && selectedMilestonePriceCents && (
                             <p className="mt-1 text-slate-500">
-                              Proximo marco: {estimateState.data.patientBasedBillingPreview.nextMilestone} pacientes. Ao atingir o marco: {formatBillingCurrency(estimateState.data.patientBasedBillingPreview.milestonePriceCents, selectedBillingRange.currency || selectedPlan?.currency || 'brl')}.
+                              Próximo marco: {selectedBillingRange.activePatients} pacientes. Ao atingir o marco: {formatBillingCurrency(selectedMilestonePriceCents, selectedBillingRange.currency || selectedPlan?.currency || 'brl')}.
+                              {selectedPatientsUntilMilestone ? ` Faltam ${selectedPatientsUntilMilestone} paciente(s).` : ''}
+                              {selectedMilestoneSavingsCents ? ` Economia no marco: ${formatBillingCurrency(selectedMilestoneSavingsCents, selectedBillingRange.currency || selectedPlan?.currency || 'brl')}.` : ''}
                             </p>
                           )}
                         </div>

@@ -468,15 +468,16 @@ export function estimateGraduatedActivePatientBilling(activePatients: number): {
   stripeCalculatesFinalAmount: boolean;
 } {
   const safePatients = Math.max(0, Math.floor(Number(activePatients || 0)));
+  const estimate = calculateVertoPatientBasedMonthlyPrice(safePatients, DEFAULT_VERTO_PATIENT_PRICING_TIERS);
 
   return {
     activePatients: safePatients,
     planName: 'Pacientes ativos',
-    patientLimit: null,
-    estimatedAmount: 0,
-    estimatedAmountCents: 0,
-    averageUnitPrice: 0,
-    requiresNegotiation: false,
+    patientLimit: estimate.appliedTier?.patientLimit || null,
+    estimatedAmount: estimate.totalAmountCents / 100,
+    estimatedAmountCents: estimate.totalAmountCents,
+    averageUnitPrice: estimate.unitPriceCents / 100,
+    requiresNegotiation: estimate.requiresCustomPricing,
     includedForEstimate: safePatients,
     billingModel: ACTIVE_PATIENT_BILLING_MODEL,
     stripeCalculatesFinalAmount: true
@@ -503,7 +504,11 @@ export type VertoPatientBasedMonthlyPrice = {
 
 export const DEFAULT_VERTO_PATIENT_PRICING_TIERS: VertoPricingTier[] = [
   { patientLimit: 5, fixedMonthlyPriceCents: 19700 },
-  { patientLimit: 30, fixedMonthlyPriceCents: 69700 }
+  { patientLimit: 10, fixedMonthlyPriceCents: 29700 },
+  { patientLimit: 20, fixedMonthlyPriceCents: 49700 },
+  { patientLimit: 30, fixedMonthlyPriceCents: 69700 },
+  { patientLimit: 40, fixedMonthlyPriceCents: 89700 },
+  { patientLimit: 50, fixedMonthlyPriceCents: 109700 }
 ];
 
 function normalizeVertoPricingTiers(tiers: VertoPricingTier[] = []): VertoPricingTier[] {

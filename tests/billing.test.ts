@@ -54,8 +54,8 @@ test('env usa apenas o Price modular por paciente ativo no fluxo profissional', 
   assert.match(envExample, /SALES_CONTACT_URL=/);
   assert.match(envExample, /STRIPE_ACTIVE_PATIENT_BILLING_MODE=quantity/);
   assert.match(envExample, /ACTIVE_PATIENT_ENTERPRISE_THRESHOLD=50/);
-  assert.match(envExample, /PATIENT_BASED_BILLING_ENABLED=false/);
-  assert.match(envExample, /PATIENT_BASED_BILLING_TIERS=5:19700,30:69700/);
+  assert.match(envExample, /PATIENT_BASED_BILLING_ENABLED=true/);
+  assert.match(envExample, /PATIENT_BASED_BILLING_TIERS=5:19700,10:29700,20:49700,30:69700,40:89700,50:109700/);
   assert.match(envExample, /BILLING_PLAN_SNAPSHOT_TTL_MINUTES=10/);
   doesNotContain(envExample, [
     'STRIPE_PRICE_ESSENCIAL',
@@ -72,6 +72,21 @@ test('motor por paciente ativo calcula tier de 5 pacientes com teto unitario e m
   assert.equal(calculateVertoPatientBasedMonthlyPrice(3, tiers).totalAmountCents, 12000);
   assert.equal(calculateVertoPatientBasedMonthlyPrice(4, tiers).totalAmountCents, 16000);
   assert.equal(calculateVertoPatientBasedMonthlyPrice(5, tiers).totalAmountCents, 19700);
+});
+
+test('motor por paciente ativo calcula todos os pacotes self-service com quantidade exata', () => {
+  assert.equal(calculateVertoPatientBasedMonthlyPrice(6).unitPriceCents, 3000);
+  assert.equal(calculateVertoPatientBasedMonthlyPrice(6).totalAmountCents, 18000);
+  assert.equal(calculateVertoPatientBasedMonthlyPrice(9).totalAmountCents, 27000);
+  assert.equal(calculateVertoPatientBasedMonthlyPrice(10).totalAmountCents, 29700);
+  assert.equal(calculateVertoPatientBasedMonthlyPrice(11).unitPriceCents, 2500);
+  assert.equal(calculateVertoPatientBasedMonthlyPrice(19).totalAmountCents, 47500);
+  assert.equal(calculateVertoPatientBasedMonthlyPrice(20).totalAmountCents, 49700);
+  assert.equal(calculateVertoPatientBasedMonthlyPrice(29).unitPriceCents, 2400);
+  assert.equal(calculateVertoPatientBasedMonthlyPrice(40).totalAmountCents, 89700);
+  assert.equal(calculateVertoPatientBasedMonthlyPrice(49).unitPriceCents, 2200);
+  assert.equal(calculateVertoPatientBasedMonthlyPrice(50).totalAmountCents, 109700);
+  assert.equal(calculateVertoPatientBasedMonthlyPrice(51).requiresCustomPricing, true);
 });
 
 test('motor por paciente ativo calcula marco de 30 pacientes sem inventar tier intermediario', () => {
@@ -204,6 +219,9 @@ test('mudanca de faixa por pacientes ativos exige confirmacao explicita e sem pr
   assert.match(serverCode, /app\.post\('\/api\/billing\/active-patient-limit\/cancel-pending'/);
   const confirmRoute = sliceFrom(serverCode, "app.post('/api/billing/active-patient-limit/confirm-upgrade'", 9000);
   assert.match(confirmRoute, /stripe\.subscriptionItems\.update/);
+  assert.match(confirmRoute, /requestedActivePatients/);
+  assert.match(confirmRoute, /resolvePatientBasedBillingEnabled/);
+  assert.match(confirmRoute, /patientBasedBillingEnabled \? requestedActivePatients : limitResolution\.requiredLimit/);
   assert.match(confirmRoute, /quantity: requestedLimit/);
   assert.match(confirmRoute, /proration_behavior: 'none'/);
   assert.match(confirmRoute, /pending_billing_status: 'confirmed_next_cycle'/);
@@ -233,6 +251,8 @@ test('endpoint de planos le Stripe e retorna apenas dados seguros para onboardin
   assert.match(serverCode, /syncStripeBillingPlanSnapshots/);
   assert.match(serverCode, /app\.post\('\/api\/admin\/billing\/sync-stripe-plans'/);
   assert.match(route, /enterpriseThreshold/);
+  assert.match(route, /patientBasedBillingEnabled/);
+  assert.match(route, /patientPricingTiers/);
   assert.match(route, /salesContactUrl/);
   assert.match(route, /firstPlanTierCount/);
   assert.match(route, /tieredPricesFound/);
@@ -256,9 +276,10 @@ test('parser Stripe expande tiers e transforma faixas up_to em from/to', () => {
 test('endpoint de estimativa calcula faixa server-side e nao abre checkout enterprise', () => {
   const estimateRoute = sliceFrom(serverCode, "app.post('/api/billing/estimate'", 4200);
   assert.match(estimateRoute, /estimateStripeActivePatientPlan/);
-  assert.match(estimateRoute, /isVertoPatientBasedBillingEnabled/);
+  assert.match(estimateRoute, /resolvePatientBasedBillingEnabled/);
   assert.match(estimateRoute, /calculateVertoPatientBasedMonthlyPrice\(activePatients, resolveVertoPatientPricingTiers\(\)\)/);
   assert.match(estimateRoute, /patientBasedBillingPreview/);
+  assert.match(estimateRoute, /stripeEstimatedAmountCents/);
   assert.match(estimateRoute, /loadBillingPlansFromSnapshots\(\{ allowSync: true \}\)/);
   assert.match(estimateRoute, /PRICE_NOT_AVAILABLE/);
   assert.match(estimateRoute, /INVALID_ACTIVE_PATIENTS/);
@@ -378,16 +399,22 @@ test('landing e tela de assinatura nao exibem planos fixos antigos', () => {
   assert.match(appCode, /selectedPriceId/);
   assert.match(subscriptionRequired, /billingRangeCards/);
   assert.match(subscriptionRequired, /setSelectedBillingRangeKey/);
+  assert.match(subscriptionRequired, /selectedActivePatientQuantity/);
+  assert.match(subscriptionRequired, /normalizePatientPricingTiers/);
+  assert.match(subscriptionRequired, /estimatePatientPackageAmountCents/);
   assert.match(subscriptionRequired, /selectedBillingPriceId/);
   assert.match(subscriptionRequired, /key: `tier-\$\{from\}-\$\{to\}`/);
-  assert.match(subscriptionRequired, /activePatients: to/);
+  assert.match(subscriptionRequired, /key: `patient-package-\$\{from\}-\$\{to\}`/);
+  assert.match(subscriptionRequired, /activePatients: selectedActivePatients/);
   assert.match(subscriptionRequired, /selectedPriceId: selectedBillingPriceId/);
   assert.match(subscriptionRequired, /priceId: selectedBillingPriceId/);
   assert.match(subscriptionRequired, /tier\.displayLabel/);
   assert.match(appCode, /PRICE_USAGE_TYPE_NOT_SUPPORTED_FOR_CHECKOUT/);
   assert.match(subscriptionRequired, /label === 'Pacientes ativos'/);
   assert.match(subscriptionRequired, /Selecione uma faixa para ver a estimativa/);
-  assert.match(subscriptionRequired, /Estimativa para até/);
+  assert.match(subscriptionRequired, /Marco de desconto em/);
+  assert.match(subscriptionRequired, /Quantidade de pacientes ativos/);
+  assert.match(subscriptionRequired, /Economia no marco/);
   assert.match(subscriptionRequired, /Faixa selecionada/);
   assert.match(subscriptionRequired, /Solicitar proposta personalizada/);
   assert.match(subscriptionRequired, /Plano personalizado/);
