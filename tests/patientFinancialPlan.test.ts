@@ -445,6 +445,33 @@ test('agendamento usa convenio cadastrado do paciente como pagador', () => {
   assert.match(coordinatorCode, /payerName: sessionFinancialContextType === "INSURANCE" \? selectedSessionPayerName : null[\s\S]{0,220}serviceType: sessionApproach/);
 });
 
+test('modal de agendamento nao herda convenio legado quando ha planos ativos ambiguos', () => {
+  assert.match(coordinatorCode, /isPreferredPatientInsurancePlan/);
+  assert.match(coordinatorCode, /preferredInsurancePlans\.length === 1/);
+  assert.match(coordinatorCode, /if \(insurancePlans\.length > 0\) \{/);
+  assert.match(coordinatorCode, /payerId: "",\s*payerName: "",\s*insurancePlanName: "",\s*insuranceCardNumber: ""/);
+});
+
+test('modal de agendamento deixa data e hora no topo e usa texto leve', () => {
+  assert.match(coordinatorCode, /const openNewAppointmentAt = \(date: string, time = "08:00"\)/);
+  assert.match(coordinatorCode, /const normalizedClickedTime = \/\^\\d\{2\}:\\d\{2\}\//);
+  assert.match(coordinatorCode, /setSessionTime\(normalizedClickedTime\)/);
+  assert.match(coordinatorCode, /<p className=\{sessionModalSectionLabelClass\}>Quando<\/p>/);
+  assert.match(coordinatorCode, /Hora de início/);
+  assert.match(coordinatorCode, /Confirmar agendamento/);
+  assert.doesNotMatch(coordinatorCode, /Confirmar Agendamento/);
+  assert.doesNotMatch(coordinatorCode, /CONFIRMAR AGENDAMENTO/);
+});
+
+test('modal de agendamento explica ausencia de autorizacao utilizavel', () => {
+  assert.match(coordinatorCode, /sessionAuthorizationUnavailableInsight/);
+  assert.match(coordinatorCode, /Nenhuma autorização utilizável para \$\{payerName\} nesta data\./);
+  assert.match(coordinatorCode, /Há autorizações cadastradas para outro convênio/);
+  assert.match(coordinatorCode, /fora da validade da sessão/);
+  assert.match(coordinatorCode, /procedimento\/TUSS não é compatível/);
+  assert.match(coordinatorCode, /sem saldo disponível/);
+});
+
 test('persistencia envia campos cadastrais visiveis e planos para backend', () => {
   for (const pattern of [
     /birthDate: resolvedBirthDate/,

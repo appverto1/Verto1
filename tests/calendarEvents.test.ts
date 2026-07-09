@@ -219,6 +219,13 @@ test('agenda mensal usa scroll interno por dia sem janela de excedentes', () => 
   assert.doesNotMatch(calendarCode, /items\.slice\(0, 10\)/);
 });
 
+test('agenda dia e semana respeitam hora clicada no eixo visual', () => {
+  assert.match(calendarCode, /const getTimelineClickTime = \(event: React\.MouseEvent<HTMLElement>\)/);
+  assert.match(calendarCode, /event\.currentTarget\.getBoundingClientRect\(\)/);
+  assert.match(calendarCode, /Math\.round\(\(\(y \/ HOUR_HEIGHT\) \* 60\) \/ 15\) \* 15/);
+  assert.match(calendarCode, /onCreateAppointment\?\.\(key, getTimelineClickTime\(event\)\)/);
+});
+
 test('clinic state logs e media nao ficam em polling pela agenda', () => {
   const appCode = readFileSync(join(root, 'src/App.tsx'), 'utf8');
   const mediaSlice = appCode.slice(

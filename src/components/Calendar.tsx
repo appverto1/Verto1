@@ -466,6 +466,14 @@ export const calculateCalendarEventVisualLayout = (start: Date, end: Date) => {
   };
 };
 
+const getTimelineClickTime = (event: React.MouseEvent<HTMLElement>) => {
+  const rect = event.currentTarget.getBoundingClientRect();
+  const y = Math.max(0, Math.min(rect.height, event.clientY - rect.top));
+  const minutesFromStart = Math.round(((y / HOUR_HEIGHT) * 60) / 15) * 15;
+  const totalMinutes = Math.max(HOUR_START * 60, Math.min(HOUR_END * 60, HOUR_START * 60 + minutesFromStart));
+  return `${pad2(Math.floor(totalMinutes / 60))}:${pad2(totalMinutes % 60)}`;
+};
+
 export type CalendarVisualEventLayout = ReturnType<typeof calculateCalendarEventVisualLayout> & {
   laneIndex: number;
   laneCount: number;
@@ -2619,7 +2627,7 @@ export const ClinicalAgendaBoard = ({
                 key={key}
                 className={`relative border-l ${isDark ? 'border-slate-800 bg-slate-950' : 'border-slate-100 bg-white'}`}
                 style={{ height: gridHeight }}
-                onClick={() => onCreateAppointment?.(key, '08:00')}
+                onClick={(event) => onCreateAppointment?.(key, getTimelineClickTime(event))}
               >
                 {hourSlots.map((hour) => (
                   <div key={`${key}-${hour}`} className={`h-[56px] border-b ${isDark ? 'border-slate-800/80' : 'border-slate-100'}`} />

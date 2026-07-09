@@ -259,7 +259,11 @@ test('agendamento mostra autorizacoes disponiveis e permite usar guia sem consum
   assert.match(coordinatorCode, /sessionUsableTissAuthorizations\.slice\(0, 6\)/);
   assert.match(coordinatorCode, /Autoriza..es n.o utiliz.veis/);
   assert.match(coordinatorCode, /hist.rico recente/);
-  assert.match(coordinatorCode, /Nenhuma autoriza..o utiliz.vel para este paciente, conv.nio, servi.o e data/);
+  assert.match(coordinatorCode, /Nenhuma autoriza..o utiliz.vel para \$\{payerName\} nesta data/);
+  assert.match(coordinatorCode, /autoriza..es cadastradas para outro conv.nio/);
+  assert.match(coordinatorCode, /fora da validade da sess.o/);
+  assert.match(coordinatorCode, /procedimento\/TUSS n.o . compat.vel/);
+  assert.match(coordinatorCode, /sem saldo dispon.vel/);
   assert.match(coordinatorCode, /Reservado:/);
   assert.match(coordinatorCode, /Consumido:/);
   assert.match(coordinatorCode, /setSessionGuideNumber\(String\(authorization\?\.guideNumber/);

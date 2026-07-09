@@ -2807,6 +2807,34 @@ export function CoordinatorDashboard({
       .includes(serviceKey);
   };
 
+  const isPreferredPatientInsurancePlan = (plan: any, rawPlan: any = {}) => {
+    const preferredValues = [
+      plan?.isPrimary,
+      plan?.is_primary,
+      plan?.primary,
+      plan?.isCurrent,
+      plan?.is_current,
+      plan?.current,
+      plan?.isDefault,
+      plan?.is_default,
+      plan?.default,
+      plan?.preferred,
+      plan?.principal,
+      rawPlan?.isPrimary,
+      rawPlan?.is_primary,
+      rawPlan?.primary,
+      rawPlan?.isCurrent,
+      rawPlan?.is_current,
+      rawPlan?.current,
+      rawPlan?.isDefault,
+      rawPlan?.is_default,
+      rawPlan?.default,
+      rawPlan?.preferred,
+      rawPlan?.principal,
+    ];
+    return preferredValues.some((value) => value === true || value === "true" || value === 1 || value === "1");
+  };
+
   const resolvePatientInsurancePayer = (patient: any, serviceType: any = "") => {
     if (!patient) {
       return {
@@ -2817,13 +2845,12 @@ export function CoordinatorDashboard({
       };
     }
     const insuranceEligibility = normalizePatientInsuranceEligibility(patient);
-    const plans = normalizePatientFinancialPlans(
-      Array.isArray(patient?.financialPlans)
-        ? patient.financialPlans
-        : Array.isArray(patient?.financial_plans)
-          ? patient.financial_plans
-          : [],
-    );
+    const rawPlans = Array.isArray(patient?.financialPlans)
+      ? patient.financialPlans
+      : Array.isArray(patient?.financial_plans)
+        ? patient.financial_plans
+        : [];
+    const plans = normalizePatientFinancialPlans(rawPlans);
     const insurancePlans = plans.filter(
       (plan: any) =>
         plan?.billingMode === "INSURANCE" &&
@@ -2831,12 +2858,21 @@ export function CoordinatorDashboard({
         (String(plan?.payerId || "").trim() ||
           String(plan?.payerNameSnapshot || "").trim()),
     );
+    const preferredInsurancePlans = insurancePlans.filter((plan: any) => {
+      const rawIndex = plans.findIndex((item: any) => String(item?.id || "") === String(plan?.id || ""));
+      return isPreferredPatientInsurancePlan(plan, rawIndex >= 0 ? rawPlans[rawIndex] : {});
+    });
     const matchingPlans = serviceType
       ? insurancePlans.filter((plan: any) => financialPlanMatchesAppointmentService(plan, serviceType))
       : [];
+    const preferredMatchingPlans = matchingPlans.filter((plan: any) => preferredInsurancePlans.some((preferred: any) => String(preferred?.id || "") === String(plan?.id || "")));
     const insurancePlan =
-      matchingPlans.length === 1
+      preferredMatchingPlans.length === 1
+        ? preferredMatchingPlans[0]
+        : matchingPlans.length === 1
         ? matchingPlans[0]
+        : preferredInsurancePlans.length === 1
+          ? preferredInsurancePlans[0]
         : !serviceType && insurancePlans.length === 1
           ? insurancePlans[0]
           : null;
@@ -2856,6 +2892,15 @@ export function CoordinatorDashboard({
           insurancePlan?.insurancePlanName || insuranceEligibility.insurancePlanCategory || "",
         ).trim(),
         insuranceCardNumber: String(insuranceEligibility.insuranceCardNumber || "").trim(),
+      };
+    }
+
+    if (insurancePlans.length > 0) {
+      return {
+        payerId: "",
+        payerName: "",
+        insurancePlanName: "",
+        insuranceCardNumber: "",
       };
     }
 
@@ -3095,6 +3140,39 @@ export function CoordinatorDashboard({
     () => sessionAvailableTissAuthorizations.filter((authorization: any) => Boolean(authorization?.canUseForAppointment || authorization?.isEligibleForAppointment)),
     [sessionAvailableTissAuthorizations],
   );
+  const sessionAuthorizationUnavailableInsight = useMemo(() => {
+    const payerName = selectedSessionPayerName || "este convênio";
+    const reasons = sessionUnavailableTissAuthorizations
+      .map((authorization: any) =>
+        normalizeUtf8Text(
+          authorization?.unavailableReason ||
+            authorization?.availabilityLabel ||
+            authorization?.status ||
+            "",
+        ).toLowerCase(),
+      )
+      .filter(Boolean);
+    const hasOtherPayer = reasons.some((reason: string) => reason.includes("convênio") || reason.includes("convenio") || reason.includes("pagador"));
+    const hasExpired = reasons.some((reason: string) => reason.includes("venc") || reason.includes("validade"));
+    const hasTussMismatch = reasons.some((reason: string) => reason.includes("tuss") || reason.includes("procedimento"));
+    const hasNoBalance = reasons.some((reason: string) => reason.includes("saldo") || reason.includes("quantidade"));
+    return {
+      title: `Nenhuma autorização utilizável para ${payerName} nesta data.`,
+      detail: hasOtherPayer
+        ? `Há autorizações cadastradas para outro convênio, mas nenhuma compatível com ${payerName}.`
+        : hasExpired
+          ? "Há autorização cadastrada, mas fora da validade da sessão."
+          : hasTussMismatch
+            ? "Há autorização cadastrada, mas o procedimento/TUSS não é compatível com esta sessão."
+            : hasNoBalance
+              ? "Há autorização cadastrada, mas sem saldo disponível para esta consulta."
+              : "Verifique autorização ativa, validade, saldo, TUSS/procedimento e convênio correto.",
+    };
+  }, [selectedSessionPayerName, sessionUnavailableTissAuthorizations]);
+  const sessionModalLabelClass = "block text-xs font-medium text-slate-500 mb-1";
+  const sessionModalInputClass = "w-full rounded-xl border border-slate-100 bg-slate-50 p-3 text-sm font-medium text-slate-700 outline-none focus:border-violet-200 focus:ring-2 focus:ring-violet-100";
+  const sessionModalSelectClass = sessionModalInputClass;
+  const sessionModalSectionLabelClass = "text-sm font-semibold text-slate-800";
   const getSessionAuthorizationBalanceParts = (authorization: any) => {
     const authorized = Number(authorization?.quantityAuthorized ?? authorization?.authorizedQuantity ?? 0) || 0;
     const consumed = Number(authorization?.quantityConsumed ?? authorization?.usedQuantity ?? 0) || 0;
@@ -3146,7 +3224,7 @@ export function CoordinatorDashboard({
       >
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
-            <p className={`text-xs font-black ${canUse ? "text-emerald-800" : "text-slate-700"}`}>
+            <p className={`text-xs font-semibold ${canUse ? "text-emerald-800" : "text-slate-700"}`}>
               Guia {authorization?.guideNumber || "sem guia"} · Senha {authorization?.authorizationCode || authorization?.authorizationNumber || "sem senha"}
             </p>
             <p className="mt-1 text-[11px] font-semibold text-slate-500">
@@ -3162,14 +3240,14 @@ export function CoordinatorDashboard({
               {balance.consumed > 0 ? ` · Consumido: ${balance.consumed}` : ""}
             </p>
             {!canUse && authorization?.unavailableReason && (
-              <p className="mt-1 text-[11px] font-bold text-amber-700">Motivo: {authorization.unavailableReason}</p>
+              <p className="mt-1 text-[11px] font-medium text-amber-700">Motivo: {authorization.unavailableReason}</p>
             )}
           </div>
           {canUse && !options.history && (
             <button
               type="button"
               onClick={() => applySessionTissAuthorization(authorization)}
-              className={`rounded-xl px-3 py-2 text-[11px] font-black ${isSelected ? "bg-emerald-700 text-white" : "bg-emerald-600 text-white"}`}
+              className={`rounded-xl px-3 py-2 text-[11px] font-semibold ${isSelected ? "bg-emerald-700 text-white" : "bg-emerald-600 text-white"}`}
             >
               {isSelected ? "Selecionada" : "Usar esta autorização"}
             </button>
@@ -3482,9 +3560,14 @@ export function CoordinatorDashboard({
   );
 
   const openNewAppointmentAt = (date: string, time = "08:00") => {
+    const clickedDate = String(date || "").trim() || new Date().toISOString().split("T")[0];
+    const clickedTime = String(time || "").trim();
+    const normalizedClickedTime = /^\d{2}:\d{2}/.test(clickedTime)
+      ? clickedTime.slice(0, 5)
+      : "08:00";
     resetSessionForm();
-    setSessionDate(date);
-    setSessionTime(time);
+    setSessionDate(clickedDate);
+    setSessionTime(normalizedClickedTime);
     setIsDayDetailsModalOpen(false);
     setIsAddSessionModalOpen(true);
   };
@@ -11627,7 +11710,7 @@ export function CoordinatorDashboard({
           onClick={() => setIsAddSessionModalOpen(false)}
         >
           <div
-            className="bg-white w-full max-w-md max-h-[90vh] overflow-y-auto rounded-[32px] p-8 shadow-2xl animate-pop relative"
+            className="bg-white w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-[28px] p-5 shadow-2xl animate-pop relative sm:p-6"
             onClick={(e) => e.stopPropagation()}
           >
             <button
@@ -11636,18 +11719,18 @@ export function CoordinatorDashboard({
             >
               <X size={24} />
             </button>
-            <h2 className="text-2xl font-bold text-slate-900 mb-6 flex items-center gap-2 tracking-tight">
-              <CalendarPlus size={24} className="text-[#7a32fc]" />{" "}
+            <h2 className="mb-5 flex items-center gap-2 text-xl font-semibold tracking-tight text-slate-900">
+              <CalendarPlus size={22} className="text-[#7a32fc]" />{" "}
               {editingAppointmentId ? "Editar Agendamento" : "Agendar Sessão"}
             </h2>
             <div className="space-y-4">
               <div className="relative">
-                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
+                <label className={sessionModalLabelClass}>
                   Paciente
                 </label>
                 <input
                   type="text"
-                  className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 text-sm outline-none focus:ring-2 focus:ring-blue-500/20 font-semibold text-slate-700"
+                  className={sessionModalInputClass}
                   placeholder="Buscar..."
                   value={sessionPatientName}
                   onChange={(e) => setSessionPatientName(e.target.value)}
@@ -11669,35 +11752,37 @@ export function CoordinatorDashboard({
                   </div>
                 )}
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+              <div className="rounded-2xl border border-slate-100 bg-slate-50/70 p-3">
+                <p className={sessionModalSectionLabelClass}>Quando</p>
+                <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
+                  <label className={sessionModalLabelClass}>
                     Data
                   </label>
                   <input
                     type="date"
-                    className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
+                    className="w-full rounded-xl border border-slate-100 bg-white p-3 text-sm font-medium text-slate-700 outline-none focus:border-violet-200 focus:ring-2 focus:ring-violet-100"
                     value={sessionDate}
                     onChange={(e) => setSessionDate(e.target.value)}
                   />
                 </div>
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
+                  <label className={sessionModalLabelClass}>
                     Hora de início
                   </label>
                   <input
                     type="time"
-                    className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
+                    className="w-full rounded-xl border border-slate-100 bg-white p-3 text-sm font-medium text-slate-700 outline-none focus:border-violet-200 focus:ring-2 focus:ring-violet-100"
                     value={sessionTime}
                     onChange={(e) => setSessionTime(e.target.value)}
                   />
                 </div>
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
+                  <label className={sessionModalLabelClass}>
                     Duração
                   </label>
                   <select
-                    className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
+                    className="w-full rounded-xl border border-slate-100 bg-white p-3 text-sm font-medium text-slate-700 outline-none focus:border-violet-200 focus:ring-2 focus:ring-violet-100"
                     value={sessionDurationOption}
                     onChange={(e) => setSessionDurationOption(e.target.value)}
                   >
@@ -11710,24 +11795,25 @@ export function CoordinatorDashboard({
                   </select>
                 </div>
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
+                  <label className={sessionModalLabelClass}>
                     Hora de fim
                   </label>
-                  <div className="w-full bg-slate-100 border border-slate-100 rounded-xl p-3 text-sm font-black text-slate-700">
+                  <div className="w-full rounded-xl border border-slate-100 bg-white p-3 text-sm font-semibold text-slate-700">
                     {sessionEndTime}
                   </div>
+                </div>
                 </div>
               </div>
               {sessionDurationOption === "custom" && (
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
+                  <label className={sessionModalLabelClass}>
                     Duração personalizada em minutos
                   </label>
                   <input
                     type="number"
                     min={15}
                     max={720}
-                    className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
+                    className={sessionModalInputClass}
                     value={sessionCustomDuration}
                     onChange={(e) => setSessionCustomDuration(e.target.value)}
                   />
@@ -11735,11 +11821,11 @@ export function CoordinatorDashboard({
               )}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
+                  <label className={sessionModalLabelClass}>
                     Tipo de sessão
                   </label>
                   <select
-                    className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
+                    className={sessionModalSelectClass}
                     value={sessionApproach}
                     onChange={(e) => setSessionApproach(e.target.value)}
                   >
@@ -11757,11 +11843,11 @@ export function CoordinatorDashboard({
                   </select>
                 </div>
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
+                  <label className={sessionModalLabelClass}>
                     Local do atendimento
                   </label>
                   <select
-                    className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
+                    className={sessionModalSelectClass}
                     value={sessionLocationType}
                     onChange={(e) => {
                       const nextLocation = e.target.value as ScheduleLocationType;
@@ -11779,11 +11865,11 @@ export function CoordinatorDashboard({
               </div>
               {sessionLocationType === "clinica" ? (
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
+                  <label className={sessionModalLabelClass}>
                     Sala <span className="text-red-500">*</span>
                   </label>
                   <select
-                    className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
+                    className={sessionModalSelectClass}
                     value={sessionRoom}
                     onChange={(e) => setSessionRoom(e.target.value)}
                   >
@@ -11802,12 +11888,12 @@ export function CoordinatorDashboard({
                 </div>
               ) : sessionLocationType === "online" ? (
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
+                  <label className={sessionModalLabelClass}>
                     Link da chamada <span className="text-slate-300 normal-case tracking-normal">(opcional)</span>
                   </label>
                   <input
                     type="url"
-                    className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
+                    className={sessionModalInputClass}
                     value={sessionCallLink}
                     onChange={(e) => setSessionCallLink(e.target.value)}
                     placeholder="https://..."
@@ -11815,12 +11901,12 @@ export function CoordinatorDashboard({
                 </div>
               ) : (
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
+                  <label className={sessionModalLabelClass}>
                     Endereço/observação <span className="text-slate-300 normal-case tracking-normal">(opcional)</span>
                   </label>
                   <input
                     type="text"
-                    className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
+                    className={sessionModalInputClass}
                     value={sessionLocationNotes}
                     onChange={(e) => setSessionLocationNotes(e.target.value)}
                     placeholder="Endereço, sala externa ou referência"
@@ -11828,11 +11914,11 @@ export function CoordinatorDashboard({
                 </div>
               )}
               <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
-                  Terapeuta Responsável
+                <label className={sessionModalLabelClass}>
+                  Terapeuta responsável
                 </label>
                 <select
-                  className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
+                  className={sessionModalSelectClass}
                   placeholder="Nome do Profissional"
                   value={sessionProfessionalId}
                   onChange={(e) => {
@@ -11861,15 +11947,15 @@ export function CoordinatorDashboard({
                 </select>
               </div>
               {!isTherapist && (
-                <div className="rounded-3xl border border-violet-100 bg-violet-50/70 p-4">
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-[#7a32fc]">
+                <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+                  <p className={sessionModalSectionLabelClass}>
                     Pagador e conferência
                   </p>
                   <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                    <label className="sm:col-span-2 text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                    <label className={`sm:col-span-2 ${sessionModalLabelClass}`}>
                       Contexto financeiro
                       <select
-                        className="mt-1 w-full rounded-xl border border-violet-100 bg-white p-3 text-sm font-semibold normal-case tracking-normal text-slate-700 outline-none"
+                        className={sessionModalSelectClass}
                         value={sessionFinancialContextType}
                         onChange={(e) => {
                           const nextContext =
@@ -11887,15 +11973,15 @@ export function CoordinatorDashboard({
                           </option>
                         ))}
                       </select>
-                      <span className="mt-2 block text-xs font-semibold normal-case tracking-normal text-slate-500">
+                      <span className="mt-2 block text-xs font-normal text-slate-500">
                         {selectedFinancialContextOption?.description || APPOINTMENT_FINANCIAL_CONTEXT_REQUIRED_MESSAGE}
                       </span>
                     </label>
                     {sessionFinancialContextType === "INSURANCE" && (
-                      <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                      <label className={sessionModalLabelClass}>
                         Pagador/convênio
                         <select
-                          className="mt-1 w-full rounded-xl border border-violet-100 bg-white p-3 text-sm font-semibold normal-case tracking-normal text-slate-700 outline-none"
+                          className={sessionModalSelectClass}
                           value={sessionPayerSelectValue}
                           onChange={(e) => handleSessionPayerChange(e.target.value)}
                         >
@@ -11919,10 +12005,10 @@ export function CoordinatorDashboard({
                       </label>
                     )}
                     {sessionFinancialContextType === "INSURANCE" && (
-                      <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                      <label className={sessionModalLabelClass}>
                         Plano do convênio
                         <input
-                          className="mt-1 w-full rounded-xl border border-violet-100 bg-white p-3 text-sm font-semibold normal-case tracking-normal text-slate-700 outline-none"
+                          className={sessionModalInputClass}
                           value={sessionInsurancePlanName}
                           onChange={(e) => setSessionInsurancePlanName(e.target.value)}
                           placeholder="Ex.: S380"
@@ -11935,56 +12021,56 @@ export function CoordinatorDashboard({
                       </label>
                     )}
                     {sessionFinancialContextType === "INSURANCE" && (
-                      <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                      <label className={sessionModalLabelClass}>
                         Número da carteirinha
                         <input
-                          className="mt-1 w-full rounded-xl border border-violet-100 bg-white p-3 text-sm font-semibold normal-case tracking-normal text-slate-700 outline-none"
+                          className={sessionModalInputClass}
                           value={sessionInsuranceCardNumber}
                           onChange={(e) => setSessionInsuranceCardNumber(e.target.value)}
                           placeholder="Ex.: 123456789"
                         />
                       </label>
                     )}
-                    <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                    <label className={sessionModalLabelClass}>
                       Guia
                       <input
-                        className="mt-1 w-full rounded-xl border border-violet-100 bg-white p-3 text-sm font-semibold normal-case tracking-normal text-slate-700 outline-none"
+                        className={sessionModalInputClass}
                         value={sessionGuideNumber}
                         onChange={(e) => setSessionGuideNumber(e.target.value)}
                         placeholder="Número da guia"
                       />
                     </label>
-                    <label className={`${sessionFinancialContextType === "INSURANCE" ? "sm:col-span-2" : ""} text-[10px] font-bold uppercase tracking-widest text-slate-500`}>
+                    <label className={`${sessionFinancialContextType === "INSURANCE" ? "sm:col-span-2" : ""} ${sessionModalLabelClass}`}>
                       Autorização/senha
                       <input
-                        className="mt-1 w-full rounded-xl border border-violet-100 bg-white p-3 text-sm font-semibold normal-case tracking-normal text-slate-700 outline-none"
+                        className={sessionModalInputClass}
                         value={sessionAuthorizationCode}
                         onChange={(e) => setSessionAuthorizationCode(e.target.value)}
                         placeholder="Código informado pelo pagador"
                       />
                     </label>
                     {sessionFinancialContextType === "INSURANCE" && sessionPayerId && selectedSessionPatient && (
-                      <div className="sm:col-span-2 rounded-2xl border border-violet-100 bg-white p-3">
+                      <div className="sm:col-span-2 rounded-2xl border border-slate-100 bg-slate-50/70 p-3">
                         <div className="flex items-start justify-between gap-3">
                           <div>
-                            <p className="text-[10px] font-black uppercase tracking-widest text-[#7a32fc]">
+                            <p className="text-sm font-semibold text-slate-800">
                               Autorizações disponíveis
                             </p>
-                            <p className="mt-1 text-[11px] font-semibold normal-case tracking-normal text-slate-500">
+                            <p className="mt-1 text-xs font-normal text-slate-500">
                               Guia/senha do paciente neste convênio, serviço e data. Selecionar não consome saldo.
                             </p>
                           </div>
-                          <span className="rounded-full bg-violet-50 px-2 py-1 text-[11px] font-bold text-[#7a32fc]">
+                          <span className="rounded-full bg-violet-50 px-2 py-1 text-[11px] font-semibold text-[#7a32fc]">
                             {sessionUsableTissAuthorizations.length} utilizável(is)
                           </span>
                         </div>
                         <div className="mt-3 space-y-2">
                           {sessionBillingSuggestionState.loading ? (
-                            <div className="rounded-xl border border-violet-100 bg-violet-50 px-3 py-2 text-xs font-bold text-[#7a32fc]">
+                            <div className="rounded-xl border border-violet-100 bg-violet-50 px-3 py-2 text-xs font-medium text-[#7a32fc]">
                               Carregando autorizações do paciente...
                             </div>
                           ) : sessionBillingSuggestionState.error ? (
-                            <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">
+                            <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
                               {sessionBillingSuggestionState.error}
                             </div>
                           ) : sessionUsableTissAuthorizations.length > 0 || sessionUnavailableTissAuthorizations.length > 0 ? (
@@ -11992,8 +12078,9 @@ export function CoordinatorDashboard({
                               {sessionUsableTissAuthorizations.length > 0 ? (
                                 sessionUsableTissAuthorizations.slice(0, 6).map((authorization: any) => renderSessionTissAuthorizationCard(authorization))
                               ) : (
-                                <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-500">
-                                  Nenhuma autorização utilizável para este paciente, convênio, serviço e data.
+                                <div className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                                  <p className="font-semibold">{sessionAuthorizationUnavailableInsight.title}</p>
+                                  <p className="mt-1 font-normal">{sessionAuthorizationUnavailableInsight.detail}</p>
                                 </div>
                               )}
                               {sessionUnavailableTissAuthorizations.length > 0 && (
@@ -12001,7 +12088,7 @@ export function CoordinatorDashboard({
                                   <button
                                     type="button"
                                     onClick={() => setShowSessionUnavailableTissAuthorizations((current) => !current)}
-                                    className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-[11px] font-black uppercase tracking-wide text-slate-500"
+                                    className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-xs font-medium text-slate-600"
                                   >
                                     <span>Autorizações não utilizáveis · {sessionUnavailableTissAuthorizations.length} no histórico recente</span>
                                     <span>{showSessionUnavailableTissAuthorizations ? "Recolher" : "Ver detalhes"}</span>
@@ -12017,8 +12104,9 @@ export function CoordinatorDashboard({
                               )}
                             </>
                           ) : (
-                            <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-500">
-                              Nenhuma autorização utilizável para este paciente, convênio, serviço e data.
+                            <div className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                              <p className="font-semibold">{sessionAuthorizationUnavailableInsight.title}</p>
+                              <p className="mt-1 font-normal">{sessionAuthorizationUnavailableInsight.detail}</p>
                             </div>
                           )}
                         </div>
@@ -12096,7 +12184,7 @@ export function CoordinatorDashboard({
               )}
               {editingAppointmentId && isEditingRecurringAppointment && (
                 <div className="rounded-3xl border border-violet-100 bg-violet-50 p-4">
-                  <p className="text-sm font-black text-slate-800">
+                  <p className="text-sm font-semibold text-slate-800">
                     Este agendamento faz parte de uma recorrência.
                   </p>
                   <p className="mt-1 text-xs font-medium text-slate-500">
@@ -12106,7 +12194,7 @@ export function CoordinatorDashboard({
                     <button
                       type="button"
                       onClick={() => setAppointmentEditScope("single")}
-                      className={`rounded-xl px-3 py-2 text-xs font-black transition-all ${
+                      className={`rounded-xl px-3 py-2 text-xs font-semibold transition-all ${
                         appointmentEditScope === "single"
                           ? "bg-[#7a32fc] text-white shadow-lg shadow-violet-500/20"
                           : "text-slate-500 hover:bg-slate-50"
@@ -12117,7 +12205,7 @@ export function CoordinatorDashboard({
                     <button
                       type="button"
                       onClick={() => setAppointmentEditScope("future")}
-                      className={`rounded-xl px-3 py-2 text-xs font-black transition-all ${
+                      className={`rounded-xl px-3 py-2 text-xs font-semibold transition-all ${
                         appointmentEditScope === "future"
                           ? "bg-[#7a32fc] text-white shadow-lg shadow-violet-500/20"
                           : "text-slate-500 hover:bg-slate-50"
@@ -12138,7 +12226,7 @@ export function CoordinatorDashboard({
                       onChange={(e) => setSessionNumSessions(e.target.checked ? 4 : 1)}
                     />
                     <span>
-                      <span className="block text-sm font-black text-slate-800">
+                      <span className="block text-sm font-semibold text-slate-800">
                         Reservar semanalmente este dia e horário
                       </span>
                       <span className="mt-1 block text-xs font-medium text-slate-500">
@@ -12149,11 +12237,11 @@ export function CoordinatorDashboard({
                   {Number(sessionNumSessions) > 1 && (
                     <div className="mt-4 grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] items-end gap-3">
                       <div>
-                        <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
+                        <label className={sessionModalLabelClass}>
                           Recorrência
                         </label>
                         <select
-                          className="w-full bg-white border border-slate-100 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
+                          className={sessionModalSelectClass}
                           value={sessionRecurrencePattern}
                           onChange={(e) => setSessionRecurrencePattern(e.target.value)}
                         >
@@ -12164,14 +12252,14 @@ export function CoordinatorDashboard({
                         </select>
                       </div>
                       <div>
-                        <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
+                        <label className={sessionModalLabelClass}>
                           Quantidade de sessões
                         </label>
                         <input
                           type="number"
                           min={2}
                           max={52}
-                          className="w-full bg-white border border-slate-100 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
+                          className={sessionModalInputClass}
                           value={sessionNumSessions}
                           onChange={(e) =>
                             setSessionNumSessions(
@@ -12187,7 +12275,7 @@ export function CoordinatorDashboard({
                   )}
                   {Number(sessionNumSessions) > 1 && (
                     <div className="mt-4 rounded-2xl bg-white p-3">
-                      <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                      <p className="text-xs font-medium text-slate-500">
                         Preview das próximas datas
                       </p>
                       <div className="mt-2 flex flex-wrap gap-2">
@@ -12204,13 +12292,13 @@ export function CoordinatorDashboard({
               <button
                 onClick={handleSessionSubmit}
                 disabled={!canSubmitSession}
-                className="w-full bg-[#7a32fc] text-white font-bold py-4 rounded-xl shadow-lg shadow-purple-500/20 hover:opacity-90 transition-all mt-2 active:scale-95 uppercase tracking-widest disabled:cursor-not-allowed disabled:opacity-50"
+                className="mt-2 w-full rounded-xl bg-[#7a32fc] py-4 font-semibold text-white shadow-lg shadow-purple-500/20 transition-all hover:opacity-90 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {isSessionSubmitting
                   ? "Salvando..."
                   : editingAppointmentId
-                  ? "Salvar Alterações"
-                  : "Confirmar Agendamento"}
+                  ? "Salvar alterações"
+                  : "Confirmar agendamento"}
               </button>
             </div>
           </div>
