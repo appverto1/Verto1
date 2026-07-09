@@ -1517,9 +1517,15 @@ test('migration de XML TISS em rascunho cria historico interno sem envio', () =>
   assert.doesNotMatch(xmlDraftMigrationCode, /create table if not exists public\.(tiss_batches|tiss_remittances|tiss_returns|tiss_denials)/i);
 });
 
-test('backend persiste de forma idempotente pelo appointment e revalida só por ação', () => {
+test('backend persiste de forma idempotente pelo appointment e usa pipeline operacional automático', () => {
   assert.match(serverCode, /const buildAndPersistTissPreGuideForAppointment/);
   assert.match(serverCode, /\.from\('appointment_tiss_pre_guides'\)[\s\S]*?\.upsert\(payload, \{ onConflict: 'organization_id,appointment_id' \}\)/);
+  assert.match(serverCode, /import \{\s*runTissPipelineForAppointment,\s*runTissPipelineForAppointments\s*\} from '\.\/src\/services\/tissRevenuePipelineOrchestrator'/);
+  assert.match(serverCode, /reason:\s*params\.eventType === 'appointment\.created' \? 'appointment_created' : 'appointment_updated'/);
+  assert.match(serverCode, /reason:\s*'session_completed'/);
+  assert.match(serverCode, /reason:\s*'authorization_changed'/);
+  assert.match(serverCode, /reason:\s*'tuss_mapping_changed'/);
+  assert.match(serverCode, /reason:\s*'price_changed'/);
   assert.match(serverCode, /clinic:\s*clinicResult\.data \|\| null/);
   assert.match(serverCode, /clinic_name_snapshot:\s*sanitizeString\(provider\.tradeName \|\| provider\.legalName, 180\)/);
   assert.doesNotMatch(serverCode, /clinic_name_snapshot:\s*sanitizeString\(provider\.tradeName \|\| provider\.legalName \|\| clinicResult\.data\?\.name/);
@@ -1788,14 +1794,15 @@ test('revalidação pontual e por período materializam Pré-guias sem backfill 
   assert.match(serverCode, /onConflict: 'organization_id,appointment_id'/);
 });
 
-test('botão de revalidação do período é único e comunica schema indisponível', () => {
-  const periodButtonCount = (preGuideUiCode.match(/Atualizar pré-guias do período/g) || []).length;
+test('botão de revalidação do período é fallback único e comunica schema indisponível', () => {
+  const periodButtonCount = (preGuideUiCode.match(/Revalidar agora/g) || []).length;
   assert.equal(periodButtonCount, 1);
   const revalidateClickCount = (preGuideUiCode.match(/onClick=\{\(\) => void revalidatePeriod\(\)\}/g) || []).length;
   assert.equal(revalidateClickCount, 1);
   assert.match(preGuideUiCode, /Estrutura de Pré-guia TISS indisponível/);
-  assert.match(preGuideUiCode, /Abra Ferramentas avançadas para atualizar as pré-guias do período/);
-  assert.match(preGuideUiCode, /Atualizar pré-guias do período/);
+  assert.match(preGuideUiCode, /Abra Ferramentas avançadas para revalidar manualmente as pré-guias do período/);
+  assert.match(preGuideUiCode, /O Verto revalida automaticamente/);
+  assert.match(preGuideUiCode, /Revalidar agora/);
   assert.doesNotMatch(preGuideUiCode, /Gerar\/Revalidar pendentes do período/);
 });
 
@@ -1940,8 +1947,8 @@ test('frontend separa Pré-guias e Rascunhos XML com preview interno', () => {
   assert.match(preGuideUiCode, /dataService\.getTissPreGuide/);
   assert.match(preGuideUiCode, /dataService\.revalidateTissPreGuide/);
   assert.match(preGuideUiCode, /dataService\.revalidateTissPreGuidePeriod/);
-  assert.match(preGuideUiCode, /Atualizar pré-guias do período/);
-  assert.match(preGuideUiCode, /As pré-guias são criadas por revalidação para evitar backfill automático/);
+  assert.match(preGuideUiCode, /Revalidar agora/);
+  assert.match(preGuideUiCode, /O Verto revalida automaticamente/);
   assert.match(preGuideUiCode, /Nenhum atendimento elegível encontrado/);
   assert.match(preGuideUiCode, /dataService\.updateClinicTissProfile/);
   assert.match(preGuideUiCode, /dataService\.updatePayerTissProfile/);

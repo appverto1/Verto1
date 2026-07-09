@@ -142,6 +142,10 @@ import {
   deriveTissRevenueCycleStateFromPreGuide
 } from './src/services/tissRevenueCycleStateMachine';
 import {
+  runTissPipelineForAppointment,
+  runTissPipelineForAppointments
+} from './src/services/tissRevenuePipelineOrchestrator';
+import {
   generateTissXmlDraft
 } from './src/services/tissXmlDraftGenerator';
 import {
@@ -17961,7 +17965,7 @@ async function startServer() {
           appointment?.source_payload && typeof appointment.source_payload === 'object' && !Array.isArray(appointment.source_payload)
             ? appointment.source_payload
             : {};
-        const revalidation = await revalidateAppointmentBillingForAppointment({
+        const revalidation = await runTissPipelineForAppointment({
           appointmentId,
           user: actor,
           scopedAppointment: {
@@ -17972,7 +17976,9 @@ async function startServer() {
               ...preparedAppointment
             }
           },
-          source: params.eventType,
+          reason: params.eventType === 'appointment.created' ? 'appointment_created' : 'appointment_updated',
+          mode: 'best_effort',
+          revalidateAppointment: revalidateAppointmentBillingForAppointment,
           overwriteExplicitContext: true,
           forceClosure: true
         });
@@ -38505,7 +38511,7 @@ async function startServer() {
         .maybeSingle(),
       supabase
         .from('appointment_tiss_pre_guides')
-        .select('id,organization_id,clinic_id,appointment_id,patient_id,professional_id,payer_id,provider_profile_id,payer_tiss_profile_id,professional_billing_profile_id,scheduled_start,scheduled_end,snapshot_data,revenue_cycle_state')
+        .select('id,organization_id,clinic_id,appointment_id,patient_id,professional_id,payer_id,provider_profile_id,payer_tiss_profile_id,professional_billing_profile_id,scheduled_start,scheduled_end,snapshot_data,revenue_cycle_state,official_document_id')
         .eq('organization_id', organizationId)
         .eq('appointment_id', appointmentId)
         .limit(1)
@@ -38539,6 +38545,19 @@ async function startServer() {
     }
     const billingItem = billingItemResult.error ? null : billingItemResult.data;
     const existingPreGuide = existingPreGuideResult.error ? null : existingPreGuideResult.data;
+    if (sanitizeString(existingPreGuide?.official_document_id, 120)) {
+      return {
+        ok: true,
+        schemaAvailable: true,
+        data: serializeTissPreGuide(existingPreGuide),
+        validation: {
+          status: sanitizeString(existingPreGuide?.status, 80) || 'official_locked',
+          errorCodes: [],
+          warningCodes: ['OFFICIAL_DOCUMENT_IMMUTABLE']
+        },
+        skippedOfficialDocument: true
+      };
+    }
     const closureCheck = closureCheckResult.error ? null : closureCheckResult.data;
     const appointmentProfessionalRows = appointmentProfessionalsResult.error || !Array.isArray(appointmentProfessionalsResult.data)
       ? []
@@ -39069,11 +39088,92 @@ async function startServer() {
         stale_reason: sanitizeTextField(params.reason, 600),
         updated_at: new Date().toISOString()
       })
-      .eq('organization_id', params.organizationId);
+      .eq('organization_id', params.organizationId)
+      .is('official_document_id', null);
     if (isUuid(sanitizeString(params.payerId, 120))) query = query.eq('payer_id', params.payerId);
     if (isUuid(sanitizeString(params.professionalId, 120))) query = query.eq('professional_id', params.professionalId);
     const { error } = await query;
     if (error && !hasMissingFinancialSchema(error) && !isMissingRelationError(error)) throw error;
+  };
+
+  const collectTissPipelineAffectedFutureAppointmentIds = async (params: {
+    organizationId: string;
+    payerId?: string | null;
+    patientId?: string | null;
+    professionalId?: string | null;
+    appointmentId?: string | null;
+    limit?: number;
+  }) => {
+    const organizationId = sanitizeString(params.organizationId, 120);
+    if (!isUuid(organizationId)) return [];
+    const ids = new Set<string>();
+    const explicitAppointmentId = sanitizeString(params.appointmentId, 120);
+    if (isUuid(explicitAppointmentId)) ids.add(explicitAppointmentId);
+
+    const today = new Date().toISOString().slice(0, 10);
+    const limit = Math.min(500, Math.max(1, Number(params.limit || 200) || 200));
+    let preGuideQuery = supabase
+      .from('appointment_tiss_pre_guides')
+      .select('appointment_id,scheduled_start,official_document_id')
+      .eq('organization_id', organizationId)
+      .is('official_document_id', null)
+      .gte('scheduled_start', today)
+      .limit(limit);
+    const payerId = sanitizeString(params.payerId, 120);
+    const patientId = sanitizeString(params.patientId, 120);
+    const professionalId = sanitizeString(params.professionalId, 120);
+    if (isUuid(payerId)) preGuideQuery = preGuideQuery.eq('payer_id', payerId);
+    if (isUuid(patientId)) preGuideQuery = preGuideQuery.eq('patient_id', patientId);
+    if (isUuid(professionalId)) preGuideQuery = preGuideQuery.eq('professional_id', professionalId);
+    const preGuideResult = await preGuideQuery;
+    if (!preGuideResult.error) {
+      for (const row of preGuideResult.data || []) {
+        const appointmentId = sanitizeString((row as any)?.appointment_id, 120);
+        if (isUuid(appointmentId)) ids.add(appointmentId);
+      }
+    } else if (!hasMissingFinancialSchema(preGuideResult.error) && !isMissingRelationError(preGuideResult.error)) {
+      console.warn('[TISS Pipeline] não foi possível localizar Pré-guias afetadas:', {
+        organizationId,
+        code: sanitizeString(preGuideResult.error?.code, 40) || null
+      });
+    }
+
+    let contextQuery = supabase
+      .from('appointment_billing_contexts')
+      .select('appointment_id,patient_id,payer_id')
+      .eq('organization_id', organizationId)
+      .limit(limit);
+    if (isUuid(payerId)) contextQuery = contextQuery.eq('payer_id', payerId);
+    if (isUuid(patientId)) contextQuery = contextQuery.eq('patient_id', patientId);
+    const contextResult = await contextQuery;
+    if (!contextResult.error) {
+      for (const row of contextResult.data || []) {
+        const appointmentId = sanitizeString((row as any)?.appointment_id, 120);
+        if (isUuid(appointmentId)) ids.add(appointmentId);
+      }
+    } else if (!hasMissingFinancialSchema(contextResult.error) && !isMissingRelationError(contextResult.error)) {
+      console.warn('[TISS Pipeline] não foi possível localizar contextos de cobrança afetados:', {
+        organizationId,
+        code: sanitizeString(contextResult.error?.code, 40) || null
+      });
+    }
+
+    const appointmentIds = Array.from(ids).slice(0, limit);
+    if (appointmentIds.length === 0) return [];
+    const rows = await readPersistedAppointmentRows(appointmentIds, organizationId);
+    const futureIds = rows
+      .filter((row: any) => {
+        const status = normalizeOperationalAppointmentStatus(row?.status);
+        if (['CANCELLED', 'CANCEL_REQUESTED', 'DELETED'].includes(status)) return false;
+        const scheduled = sanitizeString(row?.scheduled_start_at || row?.scheduled_at || row?.date, 40).slice(0, 10);
+        return !scheduled || scheduled >= today;
+      })
+      .map((row: any) => sanitizeString(row?.id, 120))
+      .filter((id: string) => isUuid(id));
+    if (isUuid(explicitAppointmentId) && !futureIds.includes(explicitAppointmentId)) {
+      futureIds.unshift(explicitAppointmentId);
+    }
+    return Array.from(new Set(futureIds)).slice(0, limit);
   };
 
   const tissPreGuideQuickFilterCodes: Record<string, string[]> = {
@@ -39720,6 +39820,23 @@ async function startServer() {
       } else {
         await markTissPreGuidesStale({ organizationId, payerId, reason: 'Autorização do paciente alterada.' });
       }
+      const affectedAppointmentIds = await collectTissPipelineAffectedFutureAppointmentIds({
+        organizationId,
+        patientId,
+        payerId,
+        appointmentId: isUuid(appointmentId) ? appointmentId : null
+      });
+      const pipelineResults = affectedAppointmentIds.length > 0
+        ? await runTissPipelineForAppointments({
+            appointmentIds: affectedAppointmentIds,
+            user: req.session.user,
+            reason: 'authorization_changed',
+            mode: 'best_effort',
+            revalidateAppointment: revalidateAppointmentBillingForAppointment,
+            logger: console,
+            concurrency: 4
+          })
+        : [];
       await recordTissRevenueCycleEvent({
         organizationId,
         clinicId: organizationId,
@@ -39746,7 +39863,15 @@ async function startServer() {
       return sendNoStoreJson(res, {
         success: true,
         data,
-        message: 'Autorização salva. Revalide a Pré-guia para atualizar a validação.'
+        tissPipeline: {
+          reason: 'authorization_changed',
+          attempted: pipelineResults.length,
+          updated: pipelineResults.filter((item) => item.ok).length,
+          errors: pipelineResults.filter((item) => !item.ok).length
+        },
+        message: pipelineResults.length > 0
+          ? 'Autorização salva. Pré-guias futuras afetadas foram revalidadas automaticamente.'
+          : 'Autorização salva. O pipeline automático não encontrou Pré-guias futuras afetadas.'
       });
     } catch (error: any) {
       console.warn('[TissPreGuide] patient payer authorization save failed:', {
@@ -39815,9 +39940,36 @@ async function startServer() {
         .select(PATIENT_PAYER_AUTHORIZATION_SELECT)
         .maybeSingle();
       if (updateError) throw updateError;
+      await markTissPreGuidesStale({
+        organizationId,
+        payerId: sanitizeString(authorization.payer_id, 120),
+        reason: 'Status da autorização do paciente alterado.'
+      });
+      const affectedAppointmentIds = await collectTissPipelineAffectedFutureAppointmentIds({
+        organizationId,
+        patientId,
+        payerId: sanitizeString(authorization.payer_id, 120)
+      });
+      const pipelineResults = affectedAppointmentIds.length > 0
+        ? await runTissPipelineForAppointments({
+            appointmentIds: affectedAppointmentIds,
+            user: req.session.user,
+            reason: 'authorization_changed',
+            mode: 'best_effort',
+            revalidateAppointment: revalidateAppointmentBillingForAppointment,
+            logger: console,
+            concurrency: 4
+          })
+        : [];
       return sendNoStoreJson(res, {
         success: true,
-        data: serializePatientPayerAuthorization(updated || { ...authorization, active: nextActive, status: nextActive ? 'active' : 'cancelled' })
+        data: serializePatientPayerAuthorization(updated || { ...authorization, active: nextActive, status: nextActive ? 'active' : 'cancelled' }),
+        tissPipeline: {
+          reason: 'authorization_changed',
+          attempted: pipelineResults.length,
+          updated: pipelineResults.filter((item) => item.ok).length,
+          errors: pipelineResults.filter((item) => !item.ok).length
+        }
       });
     } catch (error: any) {
       console.warn('[TissPreGuide] patient authorization status update failed:', {
@@ -39873,7 +40025,33 @@ async function startServer() {
         .eq('patient_id', patientId)
         .eq('id', authorizationId);
       if (deleteError) throw deleteError;
-      return sendNoStoreJson(res, { success: true, id: authorizationId, deleted: true });
+      const affectedAppointmentIds = await collectTissPipelineAffectedFutureAppointmentIds({
+        organizationId,
+        patientId,
+        payerId: sanitizeString(authorization.payer_id, 120)
+      });
+      const pipelineResults = affectedAppointmentIds.length > 0
+        ? await runTissPipelineForAppointments({
+            appointmentIds: affectedAppointmentIds,
+            user: req.session.user,
+            reason: 'authorization_changed',
+            mode: 'best_effort',
+            revalidateAppointment: revalidateAppointmentBillingForAppointment,
+            logger: console,
+            concurrency: 4
+          })
+        : [];
+      return sendNoStoreJson(res, {
+        success: true,
+        id: authorizationId,
+        deleted: true,
+        tissPipeline: {
+          reason: 'authorization_changed',
+          attempted: pipelineResults.length,
+          updated: pipelineResults.filter((item) => item.ok).length,
+          errors: pipelineResults.filter((item) => !item.ok).length
+        }
+      });
     } catch (error: any) {
       console.warn('[TissPreGuide] patient authorization delete failed:', {
         patientId: sanitizeString(req.params.patientId, 120) || null,
@@ -43024,7 +43202,29 @@ async function startServer() {
         if (!existing.error && existing.data?.id) return res.json({ success: true, idempotent: true, data: serializePayerTussMapping(existing.data, service, code) });
       }
       if (error) throw error;
-      return res.status(201).json({ success: true, data: serializePayerTussMapping(data, service, code) });
+      await markTissPreGuidesStale({ organizationId, payerId, reason: 'De/Para TUSS do convênio alterado.' });
+      const affectedAppointmentIds = await collectTissPipelineAffectedFutureAppointmentIds({ organizationId, payerId });
+      const pipelineResults = affectedAppointmentIds.length > 0
+        ? await runTissPipelineForAppointments({
+            appointmentIds: affectedAppointmentIds,
+            user: req.session.user,
+            reason: 'tuss_mapping_changed',
+            mode: 'best_effort',
+            revalidateAppointment: revalidateAppointmentBillingForAppointment,
+            logger: console,
+            concurrency: 4
+          })
+        : [];
+      return res.status(201).json({
+        success: true,
+        data: serializePayerTussMapping(data, service, code),
+        tissPipeline: {
+          reason: 'tuss_mapping_changed',
+          attempted: pipelineResults.length,
+          updated: pipelineResults.filter((item) => item.ok).length,
+          errors: pipelineResults.filter((item) => !item.ok).length
+        }
+      });
     } catch (error: any) {
       console.warn('[TussReady] mapping create failed:', error?.message || String(error));
       return res.status(500).json(payerSafeError(500));
@@ -43105,7 +43305,32 @@ async function startServer() {
         .select(PAYER_TUSS_MAPPING_SELECT)
         .maybeSingle();
       if (error) throw error;
-      return res.json({ success: true, data: serializePayerTussMapping(data, service, code) });
+      await markTissPreGuidesStale({ organizationId, payerId: sanitizeString(existing.payer_id, 120), reason: 'De/Para TUSS do convênio alterado.' });
+      const affectedAppointmentIds = await collectTissPipelineAffectedFutureAppointmentIds({
+        organizationId,
+        payerId: sanitizeString(existing.payer_id, 120)
+      });
+      const pipelineResults = affectedAppointmentIds.length > 0
+        ? await runTissPipelineForAppointments({
+            appointmentIds: affectedAppointmentIds,
+            user: req.session.user,
+            reason: 'tuss_mapping_changed',
+            mode: 'best_effort',
+            revalidateAppointment: revalidateAppointmentBillingForAppointment,
+            logger: console,
+            concurrency: 4
+          })
+        : [];
+      return res.json({
+        success: true,
+        data: serializePayerTussMapping(data, service, code),
+        tissPipeline: {
+          reason: 'tuss_mapping_changed',
+          attempted: pipelineResults.length,
+          updated: pipelineResults.filter((item) => item.ok).length,
+          errors: pipelineResults.filter((item) => !item.ok).length
+        }
+      });
     } catch (error: any) {
       console.warn('[TussReady] mapping update failed:', error?.message || String(error));
       return res.status(500).json(payerSafeError(500));
@@ -43257,7 +43482,29 @@ async function startServer() {
         newValue: data,
         performedBy: userId
       });
-      return res.status(201).json({ success: true, data: serializePayerProcedurePrice(data, resolvedService, resolvedCode, mapping) });
+      await markTissPreGuidesStale({ organizationId, payerId, reason: 'Valor negociado do convênio alterado.' });
+      const affectedAppointmentIds = await collectTissPipelineAffectedFutureAppointmentIds({ organizationId, payerId });
+      const pipelineResults = affectedAppointmentIds.length > 0
+        ? await runTissPipelineForAppointments({
+            appointmentIds: affectedAppointmentIds,
+            user: req.session.user,
+            reason: 'price_changed',
+            mode: 'best_effort',
+            revalidateAppointment: revalidateAppointmentBillingForAppointment,
+            logger: console,
+            concurrency: 4
+          })
+        : [];
+      return res.status(201).json({
+        success: true,
+        data: serializePayerProcedurePrice(data, resolvedService, resolvedCode, mapping),
+        tissPipeline: {
+          reason: 'price_changed',
+          attempted: pipelineResults.length,
+          updated: pipelineResults.filter((item) => item.ok).length,
+          errors: pipelineResults.filter((item) => !item.ok).length
+        }
+      });
     } catch (error: any) {
       console.warn('[TussReady] price create failed:', error?.message || String(error));
       return res.status(500).json(payerSafeError(500));
@@ -43337,7 +43584,30 @@ async function startServer() {
         newValue: data,
         performedBy: sanitizeString(req.session.user?.id, 120)
       });
-      return res.json({ success: true, data: serializePayerProcedurePrice(data, service, code, mapping) });
+      const payerId = sanitizeString(existing?.payer_id, 120);
+      await markTissPreGuidesStale({ organizationId, payerId, reason: 'Valor negociado do convênio alterado.' });
+      const affectedAppointmentIds = await collectTissPipelineAffectedFutureAppointmentIds({ organizationId, payerId });
+      const pipelineResults = affectedAppointmentIds.length > 0
+        ? await runTissPipelineForAppointments({
+            appointmentIds: affectedAppointmentIds,
+            user: req.session.user,
+            reason: 'price_changed',
+            mode: 'best_effort',
+            revalidateAppointment: revalidateAppointmentBillingForAppointment,
+            logger: console,
+            concurrency: 4
+          })
+        : [];
+      return res.json({
+        success: true,
+        data: serializePayerProcedurePrice(data, service, code, mapping),
+        tissPipeline: {
+          reason: 'price_changed',
+          attempted: pipelineResults.length,
+          updated: pipelineResults.filter((item) => item.ok).length,
+          errors: pipelineResults.filter((item) => !item.ok).length
+        }
+      });
     } catch (error: any) {
       console.warn('[TussReady] price update failed:', error?.message || String(error));
       return res.status(500).json(payerSafeError(500));
@@ -53558,6 +53828,17 @@ async function startServer() {
           req.session.user,
           'aba_session_saved'
         );
+        if (appointmentStatus === 'COMPLETED') {
+          await runTissPipelineForAppointment({
+            appointmentId: payload.appointment_id,
+            user: req.session.user,
+            reason: 'session_completed',
+            mode: 'best_effort',
+            revalidateAppointment: revalidateAppointmentBillingForAppointment,
+            forceClosure: true,
+            logger: console
+          });
+        }
       }
       const data = { ...payload, id: (result.data as any)?.id || payload.id };
       return res.json({ success: true, idempotent: Boolean(existingInProgressSession?.id), data, session: data });
@@ -53660,6 +53941,17 @@ async function startServer() {
               req.session.user,
               'aba_session_updated'
             );
+            if (appointmentStatus === 'COMPLETED') {
+              await runTissPipelineForAppointment({
+                appointmentId: appointmentIdForClosure,
+                user: req.session.user,
+                reason: 'session_completed',
+                mode: 'best_effort',
+                revalidateAppointment: revalidateAppointmentBillingForAppointment,
+                forceClosure: true,
+                logger: console
+              });
+            }
           }
           return res.json({ success: true, data: result.data || { id: sessionId, ...safePatch } });
         }
@@ -53840,11 +54132,20 @@ async function startServer() {
         }
       }
       if (isUuid(appointmentIdForClosure)) {
-        void regenerateClosureForAppointments(
+        await regenerateClosureForAppointments(
           [appointmentIdForClosure],
           req.session.user,
           'aba_session_summary_saved'
         );
+        await runTissPipelineForAppointment({
+          appointmentId: appointmentIdForClosure,
+          user: req.session.user,
+          reason: 'session_completed',
+          mode: 'best_effort',
+          revalidateAppointment: revalidateAppointmentBillingForAppointment,
+          forceClosure: true,
+          logger: console
+        });
       }
       return res.json({ success: true, data: { ...payload, id: (result.data as any)?.id || payload.id } });
     } catch (error: any) {

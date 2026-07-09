@@ -2256,10 +2256,10 @@ export function TissPreGuideTab({
                         </p>
                         <div className="mt-3 text-sm font-semibold text-slate-800">Nenhuma pré-guia materializada para o período.</div>
                         <p className="mt-1 text-sm text-slate-500">
-                          As pré-guias são criadas por revalidação para evitar backfill automático. Você pode gerar pré-guias para os atendimentos faturáveis deste período.
+                          O pipeline automático cria ou revalida Pré-guias quando agenda, sessão, autorização, De/Para ou valores mudam. Use a revalidação manual apenas como fallback.
                         </p>
                         <div className="mt-4 text-xs font-medium text-slate-500">
-                          Abra Ferramentas avançadas para atualizar as pré-guias do período.
+                          Abra Ferramentas avançadas para revalidar manualmente as pré-guias do período.
                         </div>
                       </div>
                     )}
@@ -2464,7 +2464,7 @@ export function TissPreGuideTab({
             <div>
               <div className="text-sm font-semibold text-slate-800">Manutenção das Pré-guias</div>
               <div className="mt-0.5 text-xs text-slate-600">
-                Use quando alterar agenda, convênio, autorização ou valores e precisar recalcular as pré-guias.
+                O Verto revalida automaticamente ao salvar agenda, sessão, autorização, De/Para ou valores. Use este botão como fallback operacional.
               </div>
             </div>
             <button
@@ -2474,7 +2474,7 @@ export function TissPreGuideTab({
               className="inline-flex items-center gap-2 rounded-md bg-[#7a32fc] px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
             >
               {periodRevalidating ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
-              {periodRevalidating ? "Atualizando Pré-guias..." : "Atualizar pré-guias do período"}
+              {periodRevalidating ? "Revalidando..." : "Revalidar agora"}
             </button>
           </div>
           <p className="text-sm text-slate-500">
