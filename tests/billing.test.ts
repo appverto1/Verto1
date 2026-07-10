@@ -484,6 +484,16 @@ test('menu financeiro separa paginas operacionais reais sem misturar Stripe ou L
   assert.doesNotMatch(navigation, /Stripe/);
 });
 
+test('modal de cobranca e pagamento tem scroll interno e footer fixo', () => {
+  const paymentModal = sliceFrom(coordinatorCode, '{isPaymentModalOpen && (', 22000);
+  assert.match(paymentModal, /max-h-\[90vh\]/);
+  assert.match(paymentModal, /flex-1[\s\S]*overflow-y-auto/);
+  assert.match(paymentModal, /flex-shrink-0 border-t border-slate-100 bg-white p-4/);
+  assert.match(paymentModal, /Registrar cobrança pendente/);
+  assert.match(paymentModal, /Confirmar pagamento/);
+  assert.doesNotMatch(paymentModal, /rounded-\[32px\] p-8/);
+});
+
 test('tela de repasses renderiza filtros, status e exige motivo para ajuste manual', () => {
   assert.match(coordinatorCode, /data-professional-transfers-panel/);
   assert.match(coordinatorCode, /Repasses a profissionais/);

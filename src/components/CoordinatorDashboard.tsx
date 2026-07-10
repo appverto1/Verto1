@@ -8834,14 +8834,14 @@ export function CoordinatorDashboard({
         <main className={`px-4 lg:px-8 pt-2 ${activeTab === "agenda" ? "pb-2" : "pb-16"}`}>
           {isPaymentModalOpen && (
             <div
-              className="fixed inset-0 z-[130] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in"
+              className="fixed inset-0 z-[130] flex items-start justify-center overflow-y-auto bg-black/40 p-4 backdrop-blur-sm animate-fade-in sm:items-center"
               onClick={() => {
                 setIsPaymentModalOpen(false);
                 setEditingPayment(null);
               }}
             >
               <div
-                className="bg-white w-full max-w-md rounded-[32px] p-8 shadow-2xl animate-pop relative"
+                className="relative flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-[32px] bg-white shadow-2xl animate-pop"
                 onClick={(e) => e.stopPropagation()}
               >
                 <button
@@ -8849,15 +8849,19 @@ export function CoordinatorDashboard({
                     setIsPaymentModalOpen(false);
                     setEditingPayment(null);
                   }}
-                  className="absolute top-6 right-6 text-gray-400 hover:text-gray-600"
+                  className="absolute right-5 top-5 z-10 text-gray-400 hover:text-gray-600"
                 >
                   <X size={24} />
                 </button>
-                <h2 className="text-2xl font-bold text-slate-900 mb-6 flex items-center gap-2">
-                  <DollarSign size={24} className="text-[#7a32fc]" /> Registrar
-                  {editingPayment ? " Pagamento" : " Pagamento"}
-                </h2>
-                <div className="space-y-4">
+                <div className="flex-shrink-0 border-b border-slate-100 px-6 py-5 pr-14">
+                  <h2 className="flex items-center gap-2 text-xl font-semibold text-slate-900">
+                    <DollarSign size={22} className="text-[#7a32fc]" /> Registrar pagamento
+                  </h2>
+                  <p className="mt-1 text-xs font-medium text-slate-500">
+                    Cobrança, recebimento, recorrência e comprovante do paciente.
+                  </p>
+                </div>
+                <div className="flex-1 space-y-4 overflow-y-auto px-6 py-5">
                   <div>
                     <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
                       Paciente
@@ -9134,11 +9138,13 @@ export function CoordinatorDashboard({
                       />
                     </div>
                   </div>
+                </div>
+                <div className="flex-shrink-0 border-t border-slate-100 bg-white p-4">
                   <button
                     onClick={handleAddPayment}
-                    className="w-full bg-[#7a32fc] text-white py-4 rounded-2xl font-bold text-sm shadow-lg shadow-purple-500/20 mt-4"
+                    className="w-full rounded-2xl bg-[#7a32fc] py-4 text-sm font-semibold text-white shadow-lg shadow-purple-500/20"
                   >
-                    {paymentReceipt ? "Confirmar Pagamento" : "Registrar Cobrança Pendente"}
+                    {paymentReceipt ? "Confirmar pagamento" : "Registrar cobrança pendente"}
                   </button>
                 </div>
               </div>
