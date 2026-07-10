@@ -228,8 +228,20 @@ test('UI expõe configuração, agenda e fechamento sem IDs técnicos ou HTML pe
   assert.doesNotMatch(navigationSection, /id:\s*"report-payers"/);
   assert.match(navigationSection, /id:\s*"finance-patient-operations"[\s\S]*label:\s*"Financeiro de pacientes"/);
   assert.match(navigationSection, /id:\s*"clinical-transfers"[\s\S]*label:\s*"Repasses a profissionais"/);
-  assert.match(navigationSection, /id:\s*"patient-receivables"[\s\S]*label:\s*"Recebimentos de pacientes"/);
+  const patientFinanceNode = navigationSection.slice(
+    navigationSection.indexOf('id: "finance-patient-operations"'),
+    navigationSection.indexOf('id: "finance-reports"'),
+  );
+  assert.match(patientFinanceNode, /tab:\s*"financial"/);
+  assert.match(patientFinanceNode, /intent:\s*financialIntent\("Financeiro de pacientes"\)/);
+  assert.match(patientFinanceNode, /aliases:\s*\[[\s\S]*id:\s*"patient-receivables"[\s\S]*label:\s*"Recebimentos de pacientes"/);
+  assert.match(patientFinanceNode, /id:\s*"patient-charges"[\s\S]*label:\s*"Cobranças"/);
+  assert.match(patientFinanceNode, /id:\s*"patient-overdue"[\s\S]*label:\s*"Pendências"/);
+  assert.match(patientFinanceNode, /id:\s*"patient-receipts"[\s\S]*label:\s*"Recibos e comprovantes"/);
+  assert.doesNotMatch(patientFinanceNode, /children:\s*\[/);
   assert.match(navigationSection, /id:\s*"finance-reports"[\s\S]*label:\s*"Relatórios"/);
+  assert.match(navigationSection, /id:\s*"report-production"[\s\S]*label:\s*"Produção"[\s\S]*financialIntent\("Relatórios de Produção"\)/);
+  assert.match(navigationSection, /id:\s*"report-billing"[\s\S]*label:\s*"Faturamento"[\s\S]*financialIntent\("Relatórios de Faturamento"\)/);
   assert.match(navigationSection, /id:\s*"settings-root"[\s\S]*label:\s*"Configurações"/);
   assert.match(coordinatorCode, /expandedNavigationSections/);
   assert.match(coordinatorCode, /financialNavigationContext\.breadcrumb\.join\(" > "\)/);
@@ -239,6 +251,13 @@ test('UI expõe configuração, agenda e fechamento sem IDs técnicos ou HTML pe
   assert.match(coordinatorCode, /data-financial-expenses-view/);
   assert.match(coordinatorCode, /data-financial-cashflow-view/);
   assert.match(coordinatorCode, /data-financial-payer-lots-view/);
+  assert.match(coordinatorCode, /data-patient-finance-internal-nav/);
+  assert.match(coordinatorCode, /data-patient-finance-receipts-view/);
+  assert.match(coordinatorCode, /data-patient-finance-charges-view/);
+  assert.match(coordinatorCode, /data-patient-finance-pending-view/);
+  assert.match(coordinatorCode, /data-patient-finance-documents-view/);
+  assert.match(coordinatorCode, /data-financial-production-report-view/);
+  assert.match(coordinatorCode, /data-financial-billing-report-view/);
   const financialSection = coordinatorCode.slice(
     coordinatorCode.indexOf('activeTab === "financial"'),
     coordinatorCode.indexOf('activeTab === "flow"'),

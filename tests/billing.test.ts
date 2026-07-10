@@ -440,7 +440,6 @@ test('menu financeiro separa paginas operacionais reais sem misturar Stripe ou L
   assert.match(navigation, /label:\s*"Financeiro da clínica"/);
   assert.match(navigation, /label:\s*"Financeiro de pacientes"/);
   assert.match(navigation, /label:\s*"Repasses a profissionais"/);
-  assert.match(navigation, /label:\s*"Recebimentos de pacientes"/);
   assert.match(navigation, /label:\s*"Convênios e lotes"/);
   assert.match(navigation, /id:\s*"clinical-revenue"[\s\S]*label:\s*"Receitas"[\s\S]*intent:\s*financialIntent\("Receitas"\)/);
   assert.match(navigation, /id:\s*"clinical-expenses"[\s\S]*label:\s*"Despesas"[\s\S]*intent:\s*financialIntent\("Despesas"\)/);
@@ -458,6 +457,26 @@ test('menu financeiro separa paginas operacionais reais sem misturar Stripe ou L
   assert.match(coordinatorCode, /data-financial-expenses-view/);
   assert.match(coordinatorCode, /data-financial-cashflow-view/);
   assert.match(coordinatorCode, /data-financial-payer-lots-view/);
+  const patientFinanceNode = navigation.slice(
+    navigation.indexOf('id: "finance-patient-operations"'),
+    navigation.indexOf('id: "finance-reports"'),
+  );
+  assert.match(patientFinanceNode, /tab:\s*"financial"/);
+  assert.match(patientFinanceNode, /intent:\s*financialIntent\("Financeiro de pacientes"\)/);
+  assert.match(patientFinanceNode, /aliases:\s*\[[\s\S]*id:\s*"patient-receivables"[\s\S]*label:\s*"Recebimentos de pacientes"/);
+  assert.match(patientFinanceNode, /id:\s*"patient-charges"[\s\S]*label:\s*"Cobranças"/);
+  assert.match(patientFinanceNode, /id:\s*"patient-overdue"[\s\S]*label:\s*"Pendências"/);
+  assert.match(patientFinanceNode, /id:\s*"patient-receipts"[\s\S]*label:\s*"Recibos e comprovantes"/);
+  assert.doesNotMatch(patientFinanceNode, /children:\s*\[/);
+  assert.match(coordinatorCode, /data-patient-finance-internal-nav/);
+  assert.match(coordinatorCode, /data-patient-finance-receipts-view/);
+  assert.match(coordinatorCode, /data-patient-finance-charges-view/);
+  assert.match(coordinatorCode, /data-patient-finance-pending-view/);
+  assert.match(coordinatorCode, /data-patient-finance-documents-view/);
+  assert.match(coordinatorCode, /data-financial-production-report-view/);
+  assert.match(coordinatorCode, /data-financial-billing-report-view/);
+  assert.doesNotMatch(sliceFrom(coordinatorCode, 'data-financial-production-report-view', 7000), /data-financial-dashboard-charts/);
+  assert.doesNotMatch(sliceFrom(coordinatorCode, 'data-financial-billing-report-view', 7000), /data-financial-dashboard-charts/);
   assert.match(navigation, /clinicFinanceOnly:\s*true/);
   assert.match(navigation, /id:\s*"settings-billing"[\s\S]*label:\s*"Assinatura"/);
   assert.match(coordinatorCode, /if \(tabId === "financial"\) return canAccessClinicFinance \|\| isReceptionist/);

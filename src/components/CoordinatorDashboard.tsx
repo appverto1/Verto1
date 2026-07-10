@@ -7005,12 +7005,70 @@ export function CoordinatorDashboard({
   const isCashFlowSection = activeFinancialSection === "Fluxo de caixa" || activeFinancialSection === "Fluxo de Caixa";
   const isProfessionalTransfersSection = activeFinancialSection === "Repasses a profissionais";
   const isFinancialPayerLotsSection = activeFinancialSection === "Convênios e lotes";
-  const isPatientReceivablesSection = [
+  const isProductionReportSection = activeFinancialSection === "Relatórios de Produção";
+  const isBillingReportSection = activeFinancialSection === "Relatórios de Faturamento";
+  const patientFinanceSections = [
+    "Financeiro de pacientes",
     "Recebimentos de pacientes",
     "Cobranças",
     "Pendências de pacientes",
     "Recibos",
-  ].includes(activeFinancialSection);
+  ];
+  const isPatientReceivablesSection = patientFinanceSections.includes(activeFinancialSection);
+  const patientFinanceActiveSection = activeFinancialSection === "Financeiro de pacientes"
+    ? "Recebimentos de pacientes"
+    : activeFinancialSection;
+  const isPatientPaymentsSection = patientFinanceActiveSection === "Recebimentos de pacientes";
+  const isPatientChargesSection = patientFinanceActiveSection === "Cobranças";
+  const isPatientPendingSection = patientFinanceActiveSection === "Pendências de pacientes";
+  const isPatientReceiptsSection = patientFinanceActiveSection === "Recibos";
+  const productionReportRows = useMemo(() => {
+    const monthAppointments = (therapistAgenda || []).filter((appointment: any) => {
+      const referenceDate =
+        appointment?.scheduled_start_at ||
+        appointment?.scheduledStartAt ||
+        appointment?.scheduledAt ||
+        appointment?.date;
+      return isSameFinancialMonth(referenceDate, financialMonth);
+    });
+    const normalizeAppointmentStatus = (status: any) => String(status || "").toLowerCase();
+    const completed = monthAppointments.filter((appointment: any) =>
+      ["completed", "complete", "realizada", "concluida", "concluída"].includes(normalizeAppointmentStatus(appointment?.status)),
+    );
+    const cancelled = monthAppointments.filter((appointment: any) =>
+      ["cancelled", "canceled", "cancelada", "cancelado"].includes(normalizeAppointmentStatus(appointment?.status)),
+    );
+    const professionalMap = new Map<string, any>();
+    monthAppointments.forEach((appointment: any) => {
+      const professionalId = String(
+        appointment?.professional_id ||
+        appointment?.professionalId ||
+        appointment?.therapist_id ||
+        appointment?.therapistId ||
+        "",
+      ).trim();
+      const professional = professionalId ? therapistMembersById[professionalId] : null;
+      const label = String(
+        appointment?.professional_name ||
+        appointment?.professionalName ||
+        appointment?.therapistName ||
+        professional?.name ||
+        "Profissional não informado",
+      ).trim();
+      const current = professionalMap.get(label) || { label, scheduled: 0, completed: 0, cancelled: 0 };
+      current.scheduled += 1;
+      const status = normalizeAppointmentStatus(appointment?.status);
+      if (["completed", "complete", "realizada", "concluida", "concluída"].includes(status)) current.completed += 1;
+      if (["cancelled", "canceled", "cancelada", "cancelado"].includes(status)) current.cancelled += 1;
+      professionalMap.set(label, current);
+    });
+    return {
+      scheduledCount: monthAppointments.length,
+      completedCount: completed.length,
+      cancelledCount: cancelled.length,
+      professionalRows: Array.from(professionalMap.values()).sort((a: any, b: any) => b.completed - a.completed || b.scheduled - a.scheduled),
+    };
+  }, [financialMonth, therapistAgenda, therapistMembersById]);
   const professionalTransferStatusOptions = [
     { value: "all", label: "Todos os status" },
     { value: "to_calculate", label: "A calcular" },
@@ -7946,11 +8004,13 @@ export function CoordinatorDashboard({
             id: "finance-patient-operations",
             label: "Financeiro de pacientes",
             icon: ReceiptText,
-            children: [
-              { id: "patient-receivables", label: "Recebimentos de pacientes", icon: ReceiptText, tab: "financial", intent: financialIntent("Recebimentos de pacientes") },
-              { id: "patient-charges", label: "Cobranças", icon: Bell, tab: "financial", intent: financialIntent("Cobranças") },
-              { id: "patient-overdue", label: "Pendências", icon: AlertCircle, tab: "financial", intent: financialIntent("Pendências de pacientes") },
-              { id: "patient-receipts", label: "Recibos e comprovantes", icon: Paperclip, tab: "financial", intent: financialIntent("Recibos") },
+            tab: "financial",
+            intent: financialIntent("Financeiro de pacientes"),
+            aliases: [
+              { id: "patient-receivables", label: "Recebimentos de pacientes", intent: financialIntent("Recebimentos de pacientes") },
+              { id: "patient-charges", label: "Cobranças", intent: financialIntent("Cobranças") },
+              { id: "patient-overdue", label: "Pendências", intent: financialIntent("Pendências de pacientes") },
+              { id: "patient-receipts", label: "Recibos e comprovantes", intent: financialIntent("Recibos") },
             ],
           },
           {
@@ -9583,6 +9643,10 @@ export function CoordinatorDashboard({
                                 ? "Fluxo de caixa"
                                 : isFinancialPayerLotsSection
                                   ? "Convênios e lotes"
+                                  : isProductionReportSection
+                                    ? "Relatórios de produção"
+                                    : isBillingReportSection
+                                      ? "Relatórios de faturamento"
                           : isPatientReceivablesSection || isReceptionist
                             ? "Financeiro de pacientes"
                             : "Dashboard financeiro"}
@@ -9598,6 +9662,10 @@ export function CoordinatorDashboard({
                                 ? "Entradas, saídas, saldo líquido e visão mensal de caixa."
                                 : isFinancialPayerLotsSection
                                   ? "Visão financeira de convênios, valores previstos, realizados e atalhos para lotes TISS."
+                                  : isProductionReportSection
+                                    ? "Produção assistencial por período, profissional e status de sessão."
+                                    : isBillingReportSection
+                                      ? "Faturamento por período, convênio, origem e status financeiro."
                                   : isPatientReceivablesSection || isReceptionist
                                     ? "Rotina de recepção: cobranças, recebimentos, comprovantes, recibos e pendências por paciente."
                                     : "Resumo executivo da clínica, com atalhos para as visões operacionais."}
@@ -9663,6 +9731,33 @@ export function CoordinatorDashboard({
                 </div>
                 )}
 
+                {(isPatientReceivablesSection || isReceptionist) && (
+                  <div data-patient-finance-internal-nav className="flex flex-wrap gap-2">
+                    {[
+                      ["Recebimentos de pacientes", "Recebimentos"],
+                      ["Cobranças", "Cobranças"],
+                      ["Pendências de pacientes", "Pendências"],
+                      ["Recibos", "Recibos e comprovantes"],
+                    ].map(([section, label]) => {
+                      const selected = patientFinanceActiveSection === section;
+                      return (
+                        <button
+                          key={section}
+                          type="button"
+                          onClick={() => navigateToTab("financial", financialIntent(section))}
+                          className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
+                            selected
+                              ? "bg-[#7a32fc] text-white shadow-sm shadow-purple-500/10"
+                              : "border border-slate-200 bg-white text-slate-600 hover:border-violet-200 hover:text-[#7a32fc]"
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
                 <div className="flex flex-wrap gap-2">
                   {(isRevenueSection || isPatientReceivablesSection || isReceptionist) && (
                     <button
@@ -9699,6 +9794,102 @@ export function CoordinatorDashboard({
                     </button>
                   )}
                 </div>
+
+                {(isPatientReceivablesSection || isReceptionist) && (
+                  <div className="space-y-4">
+                    {isPatientPaymentsSection && (
+                      <div data-patient-finance-receipts-view className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
+                        <h4 className="font-semibold text-slate-900">Recebimentos de pacientes</h4>
+                        <p className="mt-1 text-sm text-slate-500">Pagamentos confirmados, método, comprovante e status operacional da recepção.</p>
+                        <div className="mt-5 space-y-3">
+                          {financialDashboard.paidPayments.length ? financialDashboard.paidPayments.map((payment: any, index: number) => (
+                            <div key={payment.id || `patient-paid-${index}`} className="grid gap-3 rounded-2xl bg-slate-50 p-4 text-sm sm:grid-cols-[1fr_auto] sm:items-center">
+                              <div>
+                                <p className="font-semibold text-slate-900">{payment.patient_name || "Paciente"}</p>
+                                <p className="text-xs text-slate-500">
+                                  {new Date(payment.payment_date || payment.paymentDate || payment.due_date || payment.dueDate).toLocaleDateString("pt-BR")} · {payment.method || "Método não informado"}
+                                </p>
+                              </div>
+                              <div className="text-left sm:text-right">
+                                <p className="font-semibold text-[#7a32fc]">{formatCurrency(payment.amount)}</p>
+                                <p className="text-xs text-slate-500">{payment.receipt_url ? "Comprovante anexado" : "Sem comprovante anexado"}</p>
+                              </div>
+                            </div>
+                          )) : (
+                            <p className="rounded-2xl bg-slate-50 p-4 text-sm font-semibold text-slate-400">Nenhum recebimento confirmado no período.</p>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {isPatientChargesSection && (
+                      <div data-patient-finance-charges-view className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
+                        <h4 className="font-semibold text-slate-900">Cobranças</h4>
+                        <p className="mt-1 text-sm text-slate-500">Cobranças abertas, próximos vencimentos e valores a receber por paciente.</p>
+                        <div className="mt-5 grid gap-3 md:grid-cols-2">
+                          {financialDashboard.pendingPayments.concat(compensationForecast).slice(0, 8).map((charge: any, index: number) => (
+                            <div key={charge.id || `patient-charge-${index}`} className="rounded-2xl bg-slate-50 p-4">
+                              <p className="text-sm font-semibold text-slate-900">{charge.patient_name || charge.patientName || "Paciente"}</p>
+                              <p className="mt-1 text-lg font-semibold text-[#7a32fc]">{formatCurrency(charge.amount)}</p>
+                              <p className="text-xs text-slate-500">
+                                Vencimento: {charge.dueDay ? `dia ${String(charge.dueDay).padStart(2, "0")}` : new Date(charge.due_date || charge.dueDate || charge.payment_date || charge.paymentDate).toLocaleDateString("pt-BR")}
+                              </p>
+                            </div>
+                          ))}
+                          {!financialDashboard.pendingPayments.length && !compensationForecast.length && (
+                            <p className="rounded-2xl bg-slate-50 p-4 text-sm font-semibold text-slate-400">Nenhuma cobrança aberta ou vencimento previsto no período.</p>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {isPatientPendingSection && (
+                      <div data-patient-finance-pending-view className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
+                        <h4 className="font-semibold text-slate-900">Pendências financeiras</h4>
+                        <p className="mt-1 text-sm text-slate-500">Cobranças vencidas, inadimplência e pendências sem baixa financeira.</p>
+                        <div className="mt-5 space-y-3">
+                          {financialDashboard.overduePayments.length ? financialDashboard.overduePayments.map((payment: any, index: number) => (
+                            <div key={payment.id || `patient-overdue-${index}`} className="flex flex-col gap-2 rounded-2xl bg-rose-50 p-4 text-sm sm:flex-row sm:items-center sm:justify-between">
+                              <div>
+                                <p className="font-semibold text-slate-900">{payment.patient_name || "Paciente"}</p>
+                                <p className="text-xs text-rose-700">Vencida em {new Date(payment.due_date || payment.dueDate || payment.payment_date || payment.paymentDate).toLocaleDateString("pt-BR")}</p>
+                              </div>
+                              <p className="font-semibold text-rose-700">{formatCurrency(payment.amount)}</p>
+                            </div>
+                          )) : (
+                            <p className="rounded-2xl bg-slate-50 p-4 text-sm font-semibold text-slate-400">Nenhuma cobrança vencida no período.</p>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {isPatientReceiptsSection && (
+                      <div data-patient-finance-documents-view className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
+                        <h4 className="font-semibold text-slate-900">Recibos e comprovantes</h4>
+                        <p className="mt-1 text-sm text-slate-500">Comprovantes anexados e registros que ainda precisam de documento.</p>
+                        <div className="mt-5 grid gap-3 md:grid-cols-2">
+                          {financialDashboard.monthPayments.map((payment: any, index: number) => (
+                            <div key={payment.id || `patient-document-${index}`} className="rounded-2xl bg-slate-50 p-4">
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <p className="text-sm font-semibold text-slate-900">{payment.patient_name || "Paciente"}</p>
+                                  <p className="text-xs text-slate-500">{new Date(payment.payment_date || payment.paymentDate || payment.due_date || payment.dueDate).toLocaleDateString("pt-BR")}</p>
+                                </div>
+                                <span className={`rounded-full px-3 py-1 text-[10px] font-semibold ${payment.receipt_url ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
+                                  {payment.receipt_url ? "Anexado" : "Pendente"}
+                                </span>
+                              </div>
+                              <p className="mt-2 text-sm font-semibold text-[#7a32fc]">{formatCurrency(payment.amount)}</p>
+                            </div>
+                          ))}
+                          {!financialDashboard.monthPayments.length && (
+                            <p className="rounded-2xl bg-slate-50 p-4 text-sm font-semibold text-slate-400">Nenhum recibo ou comprovante no período.</p>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {isRevenueSection && (
                   <div data-financial-revenue-view className="grid gap-3 md:grid-cols-4">
@@ -9799,6 +9990,84 @@ export function CoordinatorDashboard({
                             <span className="font-semibold text-slate-900">{formatCurrency(row.amount)}</span>
                           </div>
                         ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {isProductionReportSection && (
+                  <div data-financial-production-report-view className="space-y-4">
+                    <div className="grid gap-3 md:grid-cols-3">
+                      {[
+                        ["Sessões agendadas", productionReportRows.scheduledCount, "Atendimentos no período selecionado"],
+                        ["Sessões realizadas", productionReportRows.completedCount, "Consultas concluídas no período"],
+                        ["Cancelamentos/faltas", productionReportRows.cancelledCount, "Sessões canceladas ou não realizadas"],
+                      ].map(([label, value, hint]) => (
+                        <div key={label} className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
+                          <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">{label}</p>
+                          <p className="mt-2 text-2xl font-semibold text-slate-900">{value}</p>
+                          <p className="mt-1 text-xs text-slate-500">{hint}</p>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
+                      <h4 className="font-semibold text-slate-900">Produção por profissional</h4>
+                      <div className="mt-5 space-y-3">
+                        {productionReportRows.professionalRows.length ? productionReportRows.professionalRows.map((row: any) => (
+                          <div key={row.label} className="grid gap-3 rounded-2xl bg-slate-50 p-4 text-sm sm:grid-cols-[1fr_auto_auto_auto] sm:items-center">
+                            <p className="font-semibold text-slate-900">{row.label}</p>
+                            <p className="text-slate-600">Agendadas: <span className="font-semibold">{row.scheduled}</span></p>
+                            <p className="text-emerald-700">Realizadas: <span className="font-semibold">{row.completed}</span></p>
+                            <p className="text-rose-700">Canceladas: <span className="font-semibold">{row.cancelled}</span></p>
+                          </div>
+                        )) : (
+                          <p className="rounded-2xl bg-slate-50 p-4 text-sm font-semibold text-slate-400">Ainda não há sessões no período selecionado.</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {isBillingReportSection && (
+                  <div data-financial-billing-report-view className="space-y-4">
+                    <div className="grid gap-3 md:grid-cols-4">
+                      {[
+                        ["Faturamento projetado", formatCurrency(financialDashboard.projection), "Planos ativos no período"],
+                        ["Faturamento realizado", formatCurrency(financialDashboard.realized), "Pagamentos confirmados"],
+                        ["A receber", formatCurrency(financialDashboard.pendingAmount), "Cobranças abertas"],
+                        ["Inadimplência", formatCurrency(financialDashboard.overdueAmount), "Cobranças vencidas"],
+                      ].map(([label, value, hint]) => (
+                        <div key={label} className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
+                          <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">{label}</p>
+                          <p className="mt-2 text-xl font-semibold text-slate-900">{value}</p>
+                          <p className="mt-1 text-xs text-slate-500">{hint}</p>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="grid gap-4 xl:grid-cols-2">
+                      <div className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
+                        <h4 className="font-semibold text-slate-900">Faturamento por origem</h4>
+                        <div className="mt-5 space-y-3">
+                          {financialDashboard.payerRows.map((row: any) => (
+                            <div key={row.label} className="flex items-center justify-between rounded-2xl bg-slate-50 p-4 text-sm">
+                              <span className="font-medium text-slate-600">{row.label}</span>
+                              <span className="font-semibold text-slate-900">{formatCurrency(row.amount)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
+                        <h4 className="font-semibold text-slate-900">Faturamento por convênio</h4>
+                        <div className="mt-5 space-y-3">
+                          {financialDashboard.insuranceRows.length ? financialDashboard.insuranceRows.map((row: any) => (
+                            <div key={row.label} className="flex items-center justify-between rounded-2xl bg-slate-50 p-4 text-sm">
+                              <span className="font-medium text-slate-600">{row.label}</span>
+                              <span className="font-semibold text-slate-900">{formatCurrency(row.amount)}</span>
+                            </div>
+                          )) : (
+                            <p className="rounded-2xl bg-slate-50 p-4 text-sm font-semibold text-slate-400">Nenhum convênio com faturamento no período.</p>
+                          )}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -9930,7 +10199,7 @@ export function CoordinatorDashboard({
                   </div>
                 )}
 
-                {(isRevenueSection || isExpenseSection || isPatientReceivablesSection || isReceptionist) && (
+                {(isRevenueSection || isExpenseSection) && (
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                   <div className="lg:col-span-2 space-y-8">
                     {!isReceptionist && isExpenseSection && (
