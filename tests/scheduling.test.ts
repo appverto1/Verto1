@@ -7,6 +7,12 @@ import {
   checkLocalScheduleConflicts,
   resolveRecurringAppointmentBillingFields,
 } from '../src/utils/scheduling';
+import {
+  buildAvailableRescheduleSlots,
+  buildRescheduleRequestNote,
+  normalizeRescheduleOptions,
+  parseRescheduleRequestNote,
+} from '../src/services/portalRescheduleAvailability';
 
 const root = process.cwd();
 const serverCode = readFileSync(join(root, 'server.ts'), 'utf8');
@@ -163,6 +169,73 @@ test('detecta conflito de profissional, paciente e recorrência', () => {
   });
   assert.equal(recurrence.blocking, true);
   assert.equal(recurrence.conflicts[0].date, '2026-05-27');
+});
+
+test('remarcacao do portal retorna apenas slots livres sem expor agenda privada', () => {
+  const availability = buildAvailableRescheduleSlots({
+    appointmentId: 'original',
+    patientId: 'p1',
+    professionalId: 't1',
+    roomId: 'room-aba',
+    locationType: 'clinica',
+    currentScheduledStart: '2026-07-11T17:00:00.000Z',
+    durationMinutes: 50,
+    now: '2026-07-10T10:00:00-03:00',
+    dateFrom: '2026-07-11',
+    maxDays: 2,
+    workdayStart: '08:00',
+    workdayEnd: '12:00',
+    minLeadMinutes: 0,
+    existingAppointments: [
+      {
+        id: 'professional-busy',
+        professionalId: 't1',
+        patientId: 'other-patient',
+        roomId: 'room-other',
+        scheduledStart: '2026-07-11T11:00:00.000Z',
+        scheduledEnd: '2026-07-11T11:50:00.000Z',
+        status: 'scheduled',
+      },
+      {
+        id: 'patient-busy',
+        professionalId: 'other-professional',
+        patientId: 'p1',
+        roomId: 'room-other',
+        scheduledStart: '2026-07-11T12:00:00.000Z',
+        scheduledEnd: '2026-07-11T12:50:00.000Z',
+        status: 'scheduled',
+      },
+      {
+        id: 'room-busy',
+        professionalId: 'other-professional',
+        patientId: 'other-patient',
+        roomId: 'room-aba',
+        scheduledStart: '2026-07-11T13:00:00.000Z',
+        scheduledEnd: '2026-07-11T13:50:00.000Z',
+        status: 'scheduled',
+      },
+    ],
+  });
+  assert.equal(availability.windowDays, 2);
+  assert.equal(availability.days[0]?.label, '11/07/2026');
+  const firstDayStarts = availability.days.find((day) => day.date === '2026-07-11')?.slots.map((slot) => slot.start) || [];
+  assert.deepEqual(firstDayStarts, ['11:00']);
+  assert.ok(availability.days.every((day) => day.slots.every((slot) => !('patientName' in slot) && !('title' in slot))));
+});
+
+test('solicitacao de remarcacao guarda ate tres opcoes estruturadas em nota compativel', () => {
+  const options = normalizeRescheduleOptions([
+    { scheduledStart: '2026-07-11T17:00:00.000Z', scheduledEnd: '2026-07-11T17:50:00.000Z', dateLabel: '11/07/2026', start: '14:00', end: '14:50' },
+    { scheduledStart: '2026-07-12T12:00:00.000Z', scheduledEnd: '2026-07-12T12:50:00.000Z', dateLabel: '12/07/2026', start: '09:00', end: '09:50' },
+    { scheduledStart: '2026-07-15T11:30:00.000Z', scheduledEnd: '2026-07-15T12:20:00.000Z', dateLabel: '15/07/2026', start: '08:30', end: '09:20' },
+    { scheduledStart: '2026-07-16T11:30:00.000Z', scheduledEnd: '2026-07-16T12:20:00.000Z' },
+  ]);
+  assert.equal(options.length, 3);
+  const note = buildRescheduleRequestNote('Prefiro periodo da tarde.', options);
+  const parsed = parseRescheduleRequestNote(note);
+  assert.equal(parsed.options.length, 3);
+  assert.equal(parsed.options[0].start, '14:00');
+  assert.equal(parsed.note, 'Prefiro periodo da tarde.');
 });
 
 test('remarcacao em lote ignora as ocorrencias da propria serie', () => {

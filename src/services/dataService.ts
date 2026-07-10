@@ -2162,6 +2162,28 @@ export const dataService = {
     }
   },
 
+  async getPortalAppointmentRescheduleSlots(appointmentId: string, params: any = {}) {
+    const query = new URLSearchParams();
+    if (params?.dateFrom) query.set('dateFrom', String(params.dateFrom));
+    if (params?.maxDays) query.set('maxDays', String(params.maxDays));
+    const endpoint = `/api/portal/appointments/${encodeURIComponent(String(appointmentId))}/reschedule-slots${query.toString() ? `?${query}` : ''}`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getPortalAppointmentRescheduleSlots',
+        operation: 'list',
+        table: 'appointments',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, error: 'Não foi possível carregar horários disponíveis agora.' };
+    }
+  },
+
   async requestPortalAppointmentCancel(appointmentId: string, payload: any = {}) {
     const endpoint = `/api/portal/appointments/${encodeURIComponent(String(appointmentId))}/request-cancel`;
     try {

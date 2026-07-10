@@ -102,6 +102,14 @@ import {
   roomPreventsOverlappingAppointments
 } from './src/utils/scheduling';
 import {
+  buildAvailableRescheduleSlots,
+  buildRescheduleRequestNote,
+  flattenRescheduleSlotGroups,
+  normalizeRescheduleOptions,
+  parseRescheduleRequestNote,
+  type PortalRescheduleOption
+} from './src/services/portalRescheduleAvailability';
+import {
   dedupePatientTissAuthorizationSelectionOptions,
   findSuggestedTissAuthorizationForAppointment,
   getPatientTissAuthorizationQuantitySummary,
@@ -32154,6 +32162,253 @@ async function startServer() {
     return data;
   };
 
+  const serializeAppointmentActionRequestForResponse = (row: any) => {
+    const parsed = parseRescheduleRequestNote(row?.note);
+    return {
+      ...row,
+      note: parsed.note,
+      rescheduleOptions: parsed.options,
+      reschedule_options: parsed.options
+    };
+  };
+
+  const buildPortalRescheduleDateWindow = (rawDateFrom: unknown, rawMaxDays: unknown) => {
+    const safeMaxDays = Math.min(30, Math.max(1, Math.round(Number(rawMaxDays || 14) || 14)));
+    const firstDate = sanitizeDate(rawDateFrom) || formatDateInAppointmentTimezone(new Date());
+    const firstDateTime = buildAppointmentDateTime(firstDate, '12:00') || new Date();
+    const dates: string[] = [];
+    for (let index = 0; index < safeMaxDays; index += 1) {
+      const date = new Date(firstDateTime.getTime());
+      date.setUTCDate(date.getUTCDate() + index);
+      dates.push(formatDateInAppointmentTimezone(date));
+    }
+    return { firstDate, maxDays: safeMaxDays, dates };
+  };
+
+  const buildPortalRescheduleAvailabilityForAppointment = async (appointment: any, user: any, rawOptions: any = {}) => {
+    const organizationId = sanitizeString(appointment?.organization_id || appointment?.clinic_id, 120);
+    const clinicId = sanitizeString(appointment?.clinic_id || organizationId || currentClinicId(user), 120);
+    const patientId = sanitizeString(appointment?.patient_id || appointment?.patientId, 120);
+    const professionalId = sanitizeString(
+      appointment?.therapist_id ||
+        appointment?.therapistId ||
+        appointment?.responsible_professional_id ||
+        appointment?.responsibleProfessionalId ||
+        appointment?.professional_id ||
+        appointment?.professionalId,
+      120
+    );
+    const roomId = sanitizeString(appointment?.room_id || appointment?.roomId, 180);
+    const locationType = normalizeScheduleLocationType(appointment?.location_type || appointment?.locationType || appointment?.location);
+    const durationMinutes = getCalendarAppointmentDuration(appointment);
+    const { firstDate, maxDays, dates } = buildPortalRescheduleDateWindow(rawOptions?.dateFrom || rawOptions?.date_from, rawOptions?.maxDays || rawOptions?.max_days);
+    if (!professionalId) {
+      return {
+        success: true,
+        data: {
+          days: [],
+          totalSlots: 0,
+          windowDays: maxDays,
+          maxSelectable: 3,
+          professionalName: '',
+          message: 'Não foi possível identificar o profissional responsável para calcular horários disponíveis.'
+        }
+      };
+    }
+    if (locationType === 'clinica' && !roomId) {
+      return {
+        success: true,
+        data: {
+          days: [],
+          totalSlots: 0,
+          windowDays: maxDays,
+          maxSelectable: 3,
+          professionalName: sanitizeString(appointment?.therapist_name || appointment?.therapistName || appointment?.professionalName, 180),
+          message: 'Esta consulta precisa de sala/local confirmado pela clínica para sugerir horários.'
+        }
+      };
+    }
+
+    const input = {
+      recurrenceDates: dates,
+      patientId,
+      professionalIds: [professionalId],
+      roomId
+    };
+    const [tableAppointments, stateAppointments] = await Promise.all([
+      fetchConflictAppointmentsFromTable({ clinicId, organizationId, input }).catch((error: any) => {
+        console.warn('[PortalReschedule] table availability query skipped:', error?.message || String(error));
+        return [];
+      }),
+      fetchConflictAppointmentsFromState(clinicId, input).catch(() => [])
+    ]);
+    const appointmentsById = new Map<string, any>();
+    [...tableAppointments, ...stateAppointments].forEach((item: any, index: number) => {
+      appointmentsById.set(sanitizeString(item?.id, 180) || `idx-${index}`, item);
+    });
+    const availability = buildAvailableRescheduleSlots({
+      appointmentId: appointment?.id,
+      patientId,
+      professionalId,
+      roomId,
+      locationType,
+      currentScheduledStart: appointment?.scheduled_start_at || appointment?.scheduledStartAt || appointment?.scheduled_at || appointment?.scheduledAt,
+      durationMinutes,
+      existingAppointments: Array.from(appointmentsById.values()),
+      dateFrom: firstDate,
+      maxDays,
+      now: new Date(),
+      workdayStart: rawOptions?.workdayStart || rawOptions?.workday_start || '08:00',
+      workdayEnd: rawOptions?.workdayEnd || rawOptions?.workday_end || '18:00'
+    });
+    return {
+      success: true,
+      data: {
+        ...availability,
+        professionalName: sanitizeString(appointment?.therapist_name || appointment?.therapistName || appointment?.professionalName, 180),
+        appointment: {
+          id: appointment?.id,
+          scheduledStart: appointment?.scheduled_start_at || appointment?.scheduledAt || appointment?.scheduled_at || null,
+          scheduledEnd: appointment?.scheduled_end_at || appointment?.scheduledEndAt || null,
+          durationMinutes
+        }
+      }
+    };
+  };
+
+  const resolveValidPortalRescheduleOptions = async (appointment: any, user: any, body: any) => {
+    const durationMinutes = getCalendarAppointmentDuration(appointment);
+    const selectedOptions = normalizeRescheduleOptions(
+      body?.rescheduleOptions ||
+        body?.reschedule_options ||
+        body?.selectedSlots ||
+        body?.selected_slots ||
+        (body?.requestedStart || body?.requested_start ? [{
+          scheduledStart: body?.requestedStart || body?.requested_start,
+          scheduledEnd: body?.requestedEnd || body?.requested_end
+        }] : []),
+      durationMinutes
+    );
+    if (selectedOptions.length === 0) return { ok: false, status: 400, error: 'Escolha pelo menos um horário disponível.' };
+    const availabilityResult = await buildPortalRescheduleAvailabilityForAppointment(appointment, user, body);
+    const availableSlots = flattenRescheduleSlotGroups(availabilityResult.data?.days || []);
+    const validOptions: PortalRescheduleOption[] = [];
+    for (const option of selectedOptions) {
+      const selectedStart = new Date(option.scheduledStart).getTime();
+      const match = availableSlots.find((slot) => Math.abs(new Date(slot.scheduledStart).getTime() - selectedStart) < 60_000);
+      if (!match) {
+        return { ok: false, status: 409, error: 'Este horário não está mais disponível. Escolha outra opção.' };
+      }
+      validOptions.push({
+        scheduledStart: match.scheduledStart,
+        scheduledEnd: match.scheduledEnd,
+        date: match.date,
+        dateLabel: match.dateLabel,
+        start: match.start,
+        end: match.end,
+        label: match.label
+      });
+    }
+    return { ok: true, options: validOptions };
+  };
+
+  const notifyPortalRescheduleApproval = async (params: {
+    appointment: any;
+    originalAppointment: any;
+    organizationId: string;
+    scheduledStart: string;
+  }) => {
+    try {
+      const appointment = params.appointment || {};
+      const patientId = sanitizeString(appointment?.patient_id || appointment?.patientId || params.originalAppointment?.patient_id || params.originalAppointment?.patientId, 120);
+      if (!isUuid(patientId)) return;
+      let patientResult = await supabase
+        .from('patients')
+        .select('id,name,email,responsible_user_id,responsible_email,clinic_id')
+        .eq('id', patientId)
+        .limit(1)
+        .maybeSingle();
+      if (patientResult.error && extractMissingColumnName(patientResult.error)) {
+        patientResult = await supabase
+          .from('patients')
+          .select('id,name,email,clinic_id')
+          .eq('id', patientId)
+          .limit(1)
+          .maybeSingle();
+      }
+      if (patientResult.error && !extractMissingColumnName(patientResult.error)) throw patientResult.error;
+      const patient = patientResult.data || {};
+      const clinicId = sanitizeString(appointment?.clinic_id || appointment?.clinicId || patient?.clinic_id || params.organizationId, 120);
+      const clinicBranding = await readClinicBrandingForFamilyView(clinicId);
+      const scheduledAt = sanitizeIsoDateTime(params.scheduledStart) || sanitizeString(appointment?.scheduled_at || appointment?.scheduledAt, 80);
+      const date = scheduledAt ? new Date(scheduledAt) : new Date();
+      const dateLabel = formatDateInAppointmentTimezone(date).split('-').reverse().join('/');
+      const timeLabel = formatTimeInAppointmentTimezone(date);
+      const patientName = sanitizeString(appointment?.patient_name || appointment?.patientName || patient?.name, 180) || 'Paciente';
+      const clinicName = clinicBranding.displayName || 'Clínica';
+      const message = `Consulta de ${patientName} remarcada para ${dateLabel} às ${timeLabel}.`;
+      const recipientUserId = sanitizeString(patient?.responsible_user_id, 120);
+      const recipientEmail = sanitizeEmail(patient?.responsible_email || patient?.email);
+      const sentAt = new Date().toISOString();
+      if (recipientUserId || recipientEmail) {
+        const notificationPayload = cleanObject({
+          organization_id: isUuid(params.organizationId) ? params.organizationId : clinicBranding.id || clinicId || null,
+          clinic_id: clinicBranding.id || (isUuid(clinicId) ? clinicId : null),
+          recipient_user_id: isUuid(recipientUserId) ? recipientUserId : null,
+          recipient_email: recipientEmail || null,
+          patient_id: patientId,
+          appointment_id: sanitizeString(appointment?.id || params.originalAppointment?.id, 120) || null,
+          type: 'appointment_reschedule_approved',
+          title: clinicName,
+          message,
+          sent_at: sentAt,
+          scheduled_for: scheduledAt || sentAt,
+          idempotency_key: `${sanitizeString(appointment?.id || params.originalAppointment?.id, 120)}:reschedule_approved:${scheduledAt || sentAt}`,
+          metadata: sanitizeClinicalPayload({
+            reminderKind: 'reschedule_approved',
+            scheduledAt,
+            clinicName,
+            clinicLogoUrl: clinicBranding.logoUrl || null,
+            patientName,
+            appointmentStatus: 'RESCHEDULED'
+          })
+        });
+        const { error } = await supabase
+          .from('portal_notifications')
+          .upsert(notificationPayload, { onConflict: 'idempotency_key' });
+        if (error && !isMissingRelationError(error)) {
+          console.warn('[PortalReschedule] internal notification skipped:', error.message);
+        }
+      }
+      await sendAppointmentNotification({
+        supabase,
+        patientId,
+        patientEmail: recipientEmail || sanitizeEmail(patient?.email) || null,
+        appointment: {
+          id: sanitizeString(appointment?.id || params.originalAppointment?.id, 120),
+          clinicId: clinicBranding.id || clinicId || null,
+          scheduledAt,
+          dateLabel,
+          timeLabel,
+          reminderKind: 'reschedule_approved',
+          clinicName,
+          clinicLogoUrl: clinicBranding.logoUrl || null,
+          patientName
+        },
+        clinicId: clinicBranding.id || clinicId || null,
+        clinicName,
+        clinicLogoUrl: clinicBranding.logoUrl || null,
+        patientName,
+        title: clinicName,
+        body: message,
+        reminderKind: 'reschedule_approved',
+        logger: console
+      });
+    } catch (error: any) {
+      console.warn('[PortalReschedule] approval notification skipped:', error?.message || String(error));
+    }
+  };
+
   const fetchAppointmentActionRequestForAdmin = async (requestId: string, user: any) => {
     const safeRequestId = sanitizeString(requestId, 120);
     if (!isUuid(safeRequestId)) return { ok: false, status: 400, error: 'Solicitação inválida.' };
@@ -32590,6 +32845,21 @@ async function startServer() {
     }
   });
 
+  app.get('/api/portal/appointments/:appointmentId/reschedule-slots', portalActionLimiter, checkAuth, async (req: any, res) => {
+    try {
+      const context = await fetchPortalAppointmentForUser(req.params.appointmentId, req.session.user);
+      if (!context.ok) return res.status((context as any).status || 404).json(portalSafeError((context as any).status || 404));
+      const appointment = (context as any).appointment;
+      const previousStatus = normalizeOperationalAppointmentStatus(appointment.status);
+      if (isAppointmentTerminalForPortalAction(previousStatus)) return res.status(409).json(portalSafeError(409));
+      const result = await buildPortalRescheduleAvailabilityForAppointment(appointment, req.session.user, req.query || {});
+      return res.json(result);
+    } catch (error: any) {
+      console.warn('[PortalReschedule] availability failed:', error?.message || String(error));
+      return res.status(500).json(portalSafeError(500));
+    }
+  });
+
   app.post('/api/portal/appointments/:appointmentId/request-reschedule', portalActionLimiter, checkAuth, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de solicitação de remarcação')) return;
@@ -32598,14 +32868,24 @@ async function startServer() {
       const appointment = (context as any).appointment;
       const previousStatus = normalizeOperationalAppointmentStatus(appointment.status);
       if (isAppointmentTerminalForPortalAction(previousStatus)) return res.status(409).json(portalSafeError(409));
+      const selectedOptionsResult = await resolveValidPortalRescheduleOptions(appointment, req.session.user, req.body || {});
+      if (!selectedOptionsResult.ok) {
+        return res.status((selectedOptionsResult as any).status || 409).json({
+          success: false,
+          error: (selectedOptionsResult as any).error || 'Escolha um horário disponível.'
+        });
+      }
+      const selectedOptions = (selectedOptionsResult as any).options || [];
+      const primaryOption = selectedOptions[0] || null;
+      const encodedNote = buildRescheduleRequestNote(req.body?.note || req.body?.observation, selectedOptions);
       const requestRow = await createOrUpdateAppointmentActionRequest({
         appointment,
         user: req.session.user,
         requestType: 'RESCHEDULE',
         reason: req.body?.reason,
-        note: req.body?.note || req.body?.observation,
-        requestedStart: req.body?.requestedStart || req.body?.requested_start,
-        requestedEnd: req.body?.requestedEnd || req.body?.requested_end
+        note: encodedNote,
+        requestedStart: primaryOption?.scheduledStart,
+        requestedEnd: primaryOption?.scheduledEnd
       });
       const now = new Date().toISOString();
       const actorId = sanitizeString(req.session.user?.id, 120);
@@ -32645,7 +32925,7 @@ async function startServer() {
         newStatus: 'RESCHEDULE_REQUESTED',
         performedBy: actorId,
         performedByRole: actorRole,
-        metadata: { actionRequestId: requestRow?.id || null, source: 'portal' }
+        metadata: { actionRequestId: requestRow?.id || null, source: 'portal', selectedOptions }
       });
       void regenerateClosureForAppointments([appointment.id], req.session.user, 'appointment_reschedule_requested');
       const serializedAppointment = await serializePortalAppointmentForFamilyView(persistedAppointment);
@@ -32655,7 +32935,7 @@ async function startServer() {
         message: 'Solicitação de remarcação registrada.',
         user: req.session.user,
         notificationIds: notificationUpdate.notificationIds,
-        actionRequest: requestRow
+        actionRequest: requestRow ? serializeAppointmentActionRequestForResponse(requestRow) : null
       }));
     } catch (error: any) {
       console.warn('[PortalAppointments] reschedule request failed:', error?.message || String(error));
@@ -32871,7 +33151,7 @@ async function startServer() {
         if (hasMissingFinancialSchema(error)) return res.json({ success: true, data: [] });
         throw error;
       }
-      return res.json({ success: true, data: data || [] });
+      return res.json({ success: true, data: (data || []).map(serializeAppointmentActionRequestForResponse) });
     } catch (error: any) {
       console.warn('[AppointmentActions] list failed:', error?.message || String(error));
       return res.status(500).json(portalSafeError(500));
@@ -32893,10 +33173,16 @@ async function startServer() {
       let nextAppointment: any = appointment;
       let auditAction = 'RESCHEDULE_APPROVED';
       let newStatus = 'RESCHEDULED';
+      let approvedRescheduleStart = '';
       if (requestRow.request_type === 'RESCHEDULE') {
-        const requestedStart = sanitizeIsoDateTime(req.body?.scheduledStart || req.body?.scheduled_start || req.body?.requestedStart || requestRow.requested_start);
-        const requestedEnd = sanitizeIsoDateTime(req.body?.scheduledEnd || req.body?.scheduled_end || req.body?.requestedEnd || requestRow.requested_end);
+        const parsedRequestNote = parseRescheduleRequestNote(requestRow.note);
+        const requestedOptions = parsedRequestNote.options;
+        const selectedOptionIndex = Math.max(0, Math.min(requestedOptions.length - 1, Math.round(Number(req.body?.selectedOptionIndex ?? req.body?.selected_option_index ?? 0) || 0)));
+        const selectedOption = requestedOptions[selectedOptionIndex] || null;
+        const requestedStart = sanitizeIsoDateTime(req.body?.scheduledStart || req.body?.scheduled_start || req.body?.requestedStart || selectedOption?.scheduledStart || requestRow.requested_start);
+        const requestedEnd = sanitizeIsoDateTime(req.body?.scheduledEnd || req.body?.scheduled_end || req.body?.requestedEnd || selectedOption?.scheduledEnd || requestRow.requested_end);
         if (!requestedStart) return res.status(400).json(portalSafeError(400));
+        approvedRescheduleStart = requestedStart;
         const durationMinutes = requestedEnd
           ? Math.max(15, Math.round((new Date(requestedEnd).getTime() - new Date(requestedStart).getTime()) / 60000))
           : getCalendarAppointmentDuration(appointment);
@@ -32990,6 +33276,14 @@ async function startServer() {
         performedByRole: actorRole,
         metadata: { actionRequestId: requestRow.id, resolutionNote }
       });
+      if (requestRow.request_type === 'RESCHEDULE') {
+        void notifyPortalRescheduleApproval({
+          appointment: nextAppointment,
+          originalAppointment: appointment,
+          organizationId,
+          scheduledStart: approvedRescheduleStart
+        });
+      }
       void regenerateClosureForAppointments([appointment.id], req.session.user, requestRow.request_type === 'CANCEL' ? 'appointment_cancel_approved' : 'appointment_reschedule_approved');
       return res.json({ success: true, appointment: serializePortalAppointment(nextAppointment) });
     } catch (error: any) {

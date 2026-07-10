@@ -11,6 +11,7 @@ const appCode = read('src/App.tsx');
 const dataServiceCode = read('src/services/dataService.ts');
 const routeSchemaCode = read('src/utils/routeSchemaFallbacks.ts');
 const packageJson = read('package.json');
+const calendarCode = read('src/components/Calendar.tsx');
 
 const tests: Array<{ name: string; fn: () => void }> = [];
 const test = (name: string, fn: () => void) => tests.push({ name, fn });
@@ -201,6 +202,37 @@ test('notificacoes do portal sao deduplicadas e normalizadas por consulta penden
   assert.match(patientDashboardCode, /openPortalNotification/);
   assert.match(patientDashboardCode, /getPortalNotificationMessage/);
   assert.doesNotMatch(patientDashboardCode, /<Bell size=\{15\}/);
+});
+
+test('remarcacao do portal usa slots disponiveis em vez de seletor livre', () => {
+  const modal = between(patientDashboardCode, 'const portalActionModal =', 'const closeMoodModal');
+  assert.match(dataServiceCode, /async getPortalAppointmentRescheduleSlots/);
+  assert.match(dataServiceCode, /\/reschedule-slots/);
+  assert.match(serverCode, /app\.get\('\/api\/portal\/appointments\/:appointmentId\/reschedule-slots'/);
+  assert.match(serverCode, /buildPortalRescheduleAvailabilityForAppointment/);
+  assert.match(serverCode, /resolveValidPortalRescheduleOptions/);
+  assert.match(modal, /Escolha at. 3 op..es de hor.rio/);
+  assert.match(modal, /portalRescheduleAvailability\.days\.map/);
+  assert.match(modal, /portalSelectedRescheduleSlots\.length\}\//);
+  assert.match(patientDashboardCode, /rescheduleOptions: selectedRescheduleOptions/);
+  assert.match(patientDashboardCode, /portalModal === 'reschedule' && portalSelectedRescheduleSlots\.length === 0/);
+  assert.doesNotMatch(modal, /datetime-local/);
+});
+
+test('equipe aprova opcao escolhida sem expor agenda privada', () => {
+  const staffBlock = between(calendarCode, "actionRequests.filter((request: any) => request.status === 'PENDING')", 'signatures.length > 0');
+  assert.match(calendarCode, /parseRescheduleRequestNote/);
+  assert.match(staffBlock, /rescheduleOptions\.slice\(0, 3\)/);
+  assert.match(staffBlock, /selectedOptionIndex: index/);
+  assert.match(staffBlock, /Aprovar op..o/);
+  const availabilityRoute = serverSlice("app.get('/api/portal/appointments/:appointmentId/reschedule-slots'", 1600);
+  assert.doesNotMatch(availabilityRoute, /patient_name|title|notes|observation/i);
+  const approvalRoute = serverSlice("app.post('/api/appointments/action-requests/:requestId/approve'", 2800);
+  assert.match(approvalRoute, /selectedOptionIndex/);
+  assert.match(approvalRoute, /checkScheduleConflicts/);
+  assert.match(serverCode, /notifyPortalRescheduleApproval/);
+  assert.match(serverCode, /appointment_reschedule_approved/);
+  assert.match(serverCode, /sendAppointmentNotification/);
 });
 
 test('serializacao do portal nao envia dados financeiros ou identificadores tecnicos como campos visiveis', () => {

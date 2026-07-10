@@ -33,6 +33,7 @@ import {
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
 import { formatDisplayDate, formatDisplayDateTime, formatDisplayMonthYear } from '../utils/dateFormatting';
+import { parseRescheduleRequestNote } from '../services/portalRescheduleAvailability';
 import { formatMinutesHuman, getActualDurationMinutes, getAppointmentDurationMinutes } from '../utils/scheduling';
 import { resolveMaintenanceTargetDisplay } from '../utils/peiMaintenancePanel';
 import { mergeAppointmentIdentity } from '../utils/appointmentActionUpdates';
@@ -2197,13 +2198,13 @@ export const ClinicalAgendaBoard = ({
     });
   };
 
-  const handleActionRequestDecision = async (request: any, decision: 'approve' | 'reject') => {
+  const handleActionRequestDecision = async (request: any, decision: 'approve' | 'reject', payload: any = {}) => {
     const requestId = String(request?.id || '').trim();
     if (!requestId) return;
     setActionRequestState({ loadingId: requestId, error: '' });
     const isApprove = decision === 'approve';
     const result = isApprove
-      ? await dataService.approveAppointmentActionRequest(requestId, {})
+      ? await dataService.approveAppointmentActionRequest(requestId, payload)
       : await dataService.rejectAppointmentActionRequest(requestId, {});
     if (!result?.success) {
       setActionRequestState({ loadingId: '', error: result?.error || 'Não foi possível atualizar a solicitação.' });
@@ -3645,6 +3646,13 @@ export const ClinicalAgendaBoard = ({
                   {actionRequests.filter((request: any) => request.status === 'PENDING').slice(0, 4).map((request: any) => {
                     const isCancel = request.request_type === 'CANCEL';
                     const requestedStart = request.requested_start ? new Date(request.requested_start) : null;
+                    const parsedRescheduleNote = parseRescheduleRequestNote(request.note);
+                    const rescheduleOptions = Array.isArray(request.rescheduleOptions) && request.rescheduleOptions.length > 0
+                      ? request.rescheduleOptions
+                      : Array.isArray(request.reschedule_options) && request.reschedule_options.length > 0
+                        ? request.reschedule_options
+                        : parsedRescheduleNote.options;
+                    const requestNote = parsedRescheduleNote.note || request.note;
                     const loading = actionRequestState.loadingId === String(request.id || '');
                     const requestAppointment = {
                       ...detailEvent,
@@ -3664,8 +3672,18 @@ export const ClinicalAgendaBoard = ({
                                 : 'O responsável solicitou a remarcação desta consulta.'}
                             </p>
                             {request.reason && <p className={`mt-1 text-xs ${isDark ? 'text-slate-300' : 'text-slate-500'}`}>Motivo: {request.reason}</p>}
-                            {request.note && <p className={`mt-1 text-xs ${isDark ? 'text-slate-300' : 'text-slate-500'}`}>{request.note}</p>}
-                            {!isCancel && requestedStart && !Number.isNaN(requestedStart.getTime()) && (
+                            {requestNote && <p className={`mt-1 text-xs ${isDark ? 'text-slate-300' : 'text-slate-500'}`}>{requestNote}</p>}
+                            {!isCancel && rescheduleOptions.length > 0 && (
+                              <div className="mt-2 space-y-1">
+                                <p className={`text-[11px] font-bold uppercase tracking-[0.14em] ${isDark ? 'text-slate-400' : 'text-slate-400'}`}>Opções escolhidas</p>
+                                {rescheduleOptions.slice(0, 3).map((option: any, index: number) => (
+                                  <div key={`${request.id}-${option.scheduledStart || index}`} className={`rounded-xl border px-3 py-2 text-xs font-semibold ${isDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-violet-100 bg-violet-50 text-slate-700'}`}>
+                                    {index + 1}. {option.dateLabel || ''}{option.dateLabel ? ' às ' : ''}{option.start || (option.scheduledStart ? formatDisplayDateTime(option.scheduledStart) : 'Horário selecionado')}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                            {!isCancel && rescheduleOptions.length === 0 && requestedStart && !Number.isNaN(requestedStart.getTime()) && (
                               <p className={`mt-1 text-xs font-semibold ${isDark ? 'text-slate-200' : 'text-slate-600'}`}>
                                 Sugestão: {formatDisplayDateTime(requestedStart)}
                               </p>
@@ -3676,6 +3694,22 @@ export const ClinicalAgendaBoard = ({
                               <button type="button" disabled={loading} onClick={() => void handleActionRequestDecision(request, 'approve')} className="rounded-xl bg-[#7a32fc] px-3 py-2 text-[11px] font-bold text-white disabled:opacity-60">
                                 {loading ? 'Atualizando...' : 'Cancelar consulta'}
                               </button>
+                            ) : rescheduleOptions.length > 0 ? (
+                              rescheduleOptions.slice(0, 3).map((option: any, index: number) => (
+                                <button
+                                  key={`approve-${request.id}-${option.scheduledStart || index}`}
+                                  type="button"
+                                  disabled={loading}
+                                  onClick={() => void handleActionRequestDecision(request, 'approve', {
+                                    selectedOptionIndex: index,
+                                    scheduledStart: option.scheduledStart,
+                                    scheduledEnd: option.scheduledEnd
+                                  })}
+                                  className="rounded-xl bg-[#7a32fc] px-3 py-2 text-[11px] font-bold text-white disabled:opacity-60"
+                                >
+                                  {loading ? 'Atualizando...' : `Aprovar opção ${index + 1}`}
+                                </button>
+                              ))
                             ) : (
                               <button type="button" onClick={() => onEditAppointment?.(requestAppointment)} className="rounded-xl bg-[#7a32fc] px-3 py-2 text-[11px] font-bold text-white">
                                 Remarcar consulta

@@ -90,6 +90,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [portalAppointmentDetail, setPortalAppointmentDetail] = useState<any | null>(null);
   const [portalModal, setPortalModal] = useState<'reschedule' | 'cancel' | 'sign' | ''>('');
   const [portalActionForm, setPortalActionForm] = useState({ reason: '', note: '', requestedStart: '', accepted: false });
+  const [portalRescheduleAvailability, setPortalRescheduleAvailability] = useState<any>({ loading: false, error: '', days: [], totalSlots: 0, maxSelectable: 3, message: '' });
+  const [portalSelectedRescheduleSlots, setPortalSelectedRescheduleSlots] = useState<any[]>([]);
   const [portalActionSaving, setPortalActionSaving] = useState(false);
   const [portalSection, setPortalSection] = useState<PortalSection>('home');
   const [portalAnamnesis, setPortalAnamnesis] = useState<any>(null);
@@ -633,14 +635,79 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     setPortalAppointmentsState((prev) => ({ ...prev, error: '', message: result?.message || 'Consulta confirmada com sucesso.' }));
   };
 
+  const loadPortalRescheduleSlots = async (appointmentId: string) => {
+    if (!appointmentId) {
+      setPortalRescheduleAvailability({ loading: false, error: 'Consulta não encontrada.', days: [], totalSlots: 0, maxSelectable: 3, message: '' });
+      return;
+    }
+    setPortalRescheduleAvailability({ loading: true, error: '', days: [], totalSlots: 0, maxSelectable: 3, message: '' });
+    const result = await dataService.getPortalAppointmentRescheduleSlots(appointmentId, { maxDays: 14 });
+    if (!result?.success) {
+      setPortalRescheduleAvailability({ loading: false, error: result?.error || 'Não foi possível carregar horários disponíveis.', days: [], totalSlots: 0, maxSelectable: 3, message: '' });
+      return;
+    }
+    const data = result.data || {};
+    setPortalRescheduleAvailability({
+      loading: false,
+      error: '',
+      days: Array.isArray(data.days) ? data.days : [],
+      totalSlots: Number(data.totalSlots || 0),
+      maxSelectable: Number(data.maxSelectable || 3) || 3,
+      message: data.message || ''
+    });
+  };
+
+  const openPortalRescheduleModal = () => {
+    const appointmentId = String((portalAppointmentDetail?.appointment || selectedPortalAppointment)?.id || '').trim();
+    setPortalSelectedRescheduleSlots([]);
+    setPortalActionForm((prev) => ({ ...prev, requestedStart: '' }));
+    setPortalModal('reschedule');
+    void loadPortalRescheduleSlots(appointmentId);
+  };
+
+  const closePortalActionModal = () => {
+    setPortalModal('');
+    setPortalSelectedRescheduleSlots([]);
+    setPortalRescheduleAvailability((prev: any) => ({ ...prev, loading: false, error: '' }));
+  };
+
+  const togglePortalRescheduleSlot = (slot: any) => {
+    const slotId = String(slot?.id || slot?.scheduledStart || '').trim();
+    if (!slotId) return;
+    setPortalSelectedRescheduleSlots((prev) => {
+      if (prev.some((item) => String(item?.id || item?.scheduledStart || '') === slotId)) {
+        return prev.filter((item) => String(item?.id || item?.scheduledStart || '') !== slotId);
+      }
+      const maxSelectable = Math.max(1, Math.min(3, Number(portalRescheduleAvailability.maxSelectable || 3) || 3));
+      if (prev.length >= maxSelectable) return prev;
+      return [...prev, slot];
+    });
+  };
+
   const submitPortalAction = async () => {
     const appointmentId = String((portalAppointmentDetail?.appointment || selectedPortalAppointment)?.id || '').trim();
     if (!appointmentId || !portalModal) return;
+    if (portalModal === 'reschedule' && portalSelectedRescheduleSlots.length === 0) {
+      setPortalAppointmentsState((prev) => ({ ...prev, error: 'Escolha pelo menos um horário disponível.' }));
+      return;
+    }
     setPortalActionSaving(true);
+    const selectedRescheduleOptions = portalSelectedRescheduleSlots.map((slot) => ({
+      scheduledStart: slot.scheduledStart,
+      scheduledEnd: slot.scheduledEnd,
+      date: slot.date,
+      dateLabel: slot.dateLabel,
+      start: slot.start,
+      end: slot.end,
+      label: slot.label
+    }));
+    const primaryRescheduleOption = selectedRescheduleOptions[0] || null;
     const payload = {
       reason: portalActionForm.reason,
       note: portalActionForm.note,
-      requestedStart: portalActionForm.requestedStart ? new Date(portalActionForm.requestedStart).toISOString() : undefined,
+      rescheduleOptions: selectedRescheduleOptions,
+      requestedStart: primaryRescheduleOption?.scheduledStart,
+      requestedEnd: primaryRescheduleOption?.scheduledEnd,
       accepted: portalActionForm.accepted,
       signedByName: displayName
     };
@@ -658,6 +725,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     const resultAppointment = result?.item || result?.appointment;
     if (resultAppointment) updatePortalAppointmentInList(resultAppointment);
     setPortalModal('');
+    setPortalSelectedRescheduleSlots([]);
     setPortalActionForm({ reason: '', note: '', requestedStart: '', accepted: false });
     setPortalAppointmentsState((prev) => ({
       ...prev,
@@ -2862,7 +2930,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           <button type="button" disabled={portalActionSaving || portalActionBlocked || activePortalConfirmed} onClick={() => void confirmPortalAppointment(activePortalAppointment)} className="flex items-center justify-center gap-2 rounded-2xl bg-[#7a32fc] px-4 py-3 text-sm font-black text-white disabled:opacity-50">
             <CheckCircle size={17} /> {activePortalConfirmed ? 'Presença confirmada' : 'Confirmar presença'}
           </button>
-          <button type="button" disabled={portalActionBlocked} onClick={() => setPortalModal('reschedule')} className="flex items-center justify-center gap-2 rounded-2xl border border-purple-100 bg-white px-4 py-3 text-sm font-black text-[#7a32fc] disabled:opacity-50">
+          <button type="button" disabled={portalActionBlocked} onClick={() => openPortalRescheduleModal()} className="flex items-center justify-center gap-2 rounded-2xl border border-purple-100 bg-white px-4 py-3 text-sm font-black text-[#7a32fc] disabled:opacity-50">
             <RefreshCcw size={17} /> Solicitar remarcação
           </button>
           <button type="button" disabled={portalActionBlocked} onClick={() => setPortalModal('cancel')} className="flex items-center justify-center gap-2 rounded-2xl border border-rose-100 bg-white px-4 py-3 text-sm font-black text-rose-600 disabled:opacity-50">
@@ -2890,9 +2958,15 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     </div>
   ) : null;
 
+  const portalActionSubmitDisabled =
+    portalActionSaving ||
+    (portalModal === 'sign' && !portalActionForm.accepted) ||
+    (portalModal === 'reschedule' && portalSelectedRescheduleSlots.length === 0);
+
   const portalActionModal = portalModal ? (
-    <div className="fixed inset-0 z-[100] flex items-end justify-center bg-slate-950/45 p-0 backdrop-blur-sm sm:items-center sm:p-4" onClick={() => setPortalModal('')}>
-      <div className="w-full max-w-md rounded-t-[28px] bg-white p-5 shadow-2xl sm:rounded-[28px]" onClick={(event) => event.stopPropagation()}>
+    <div className="fixed inset-0 z-[100] flex items-end justify-center bg-slate-950/45 p-0 backdrop-blur-sm sm:items-center sm:p-4" onClick={() => closePortalActionModal()}>
+      <div className="flex max-h-[88vh] w-full max-w-md flex-col overflow-hidden rounded-t-[28px] bg-white shadow-2xl sm:rounded-[28px]" onClick={(event) => event.stopPropagation()}>
+        <div className="shrink-0 p-5 pb-3">
         <div className="flex items-start justify-between gap-4">
           <div>
             <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-[#7a32fc]">
@@ -2902,12 +2976,14 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
               {portalModal === 'sign' ? 'Confirmar sessão' : portalModal === 'cancel' ? 'Solicitar cancelamento' : 'Solicitar remarcação'}
             </h3>
           </div>
-          <button type="button" onClick={() => setPortalModal('')} className="rounded-2xl border border-slate-100 p-2 text-slate-500">
+          <button type="button" onClick={() => closePortalActionModal()} className="rounded-2xl border border-slate-100 p-2 text-slate-500">
             <X size={18} />
           </button>
         </div>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-4">
         {portalModal === 'sign' ? (
-          <div className="mt-4 space-y-3">
+          <div className="space-y-3">
             <div className="rounded-2xl bg-purple-50 px-4 py-3 text-sm font-semibold text-purple-800">
               {portalAppointmentDetail?.consentText || 'Confirmo que a sessão descrita foi realizada.'}
             </div>
@@ -2917,12 +2993,79 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
             </label>
           </div>
         ) : (
-          <div className="mt-4 space-y-3">
+          <div className="space-y-3">
             {portalModal === 'reschedule' && (
-              <label className="block">
-                <span className="mb-1 block text-xs font-bold text-slate-500">Sugestão de novo horário</span>
-                <input type="datetime-local" value={portalActionForm.requestedStart} onChange={(e) => setPortalActionForm((prev) => ({ ...prev, requestedStart: e.target.value }))} className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold outline-none focus:border-[#7a32fc]" />
-              </label>
+              <div className="space-y-3">
+                <div className="rounded-2xl border border-purple-100 bg-purple-50/70 px-4 py-3">
+                  <p className="text-sm font-semibold text-slate-900">Escolha até 3 opções de horário.</p>
+                  <p className="mt-1 text-xs font-medium text-slate-600">A clínica confirmará uma delas. Você verá apenas horários disponíveis, sem agenda privada do profissional.</p>
+                  {activePortalProfessionalName && (
+                    <p className="mt-2 text-xs font-semibold text-slate-700">Profissional responsável: {activePortalProfessionalName}</p>
+                  )}
+                  {activePortalAppointment?.scheduledAt && (
+                    <p className="mt-2 text-xs font-semibold text-purple-700">Consulta atual: {formatPortalDateTime(activePortalAppointment.scheduledAt)}</p>
+                  )}
+                </div>
+                <div className="flex items-center justify-between rounded-2xl bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600">
+                  <span>Opções selecionadas</span>
+                  <span className="text-[#7a32fc]">{portalSelectedRescheduleSlots.length}/{Math.max(1, Math.min(3, Number(portalRescheduleAvailability.maxSelectable || 3) || 3))}</span>
+                </div>
+                {portalRescheduleAvailability.loading && (
+                  <div className="rounded-2xl border border-slate-100 bg-white px-4 py-4 text-sm font-semibold text-slate-500">
+                    Carregando horários disponíveis...
+                  </div>
+                )}
+                {portalRescheduleAvailability.error && (
+                  <div className="rounded-2xl border border-rose-100 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">
+                    {portalRescheduleAvailability.error}
+                  </div>
+                )}
+                {!portalRescheduleAvailability.loading && !portalRescheduleAvailability.error && portalRescheduleAvailability.days.length === 0 && (
+                  <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                    <p className="font-semibold">{portalRescheduleAvailability.message || 'Não encontramos horários disponíveis para remarcação nos próximos 14 dias.'}</p>
+                    <p className="mt-1 text-xs font-medium">Você pode enviar uma observação para a clínica entrar em contato.</p>
+                  </div>
+                )}
+                {!portalRescheduleAvailability.loading && portalRescheduleAvailability.days.length > 0 && (
+                  <div className="space-y-3">
+                    {portalRescheduleAvailability.days.map((day: any) => (
+                      <div key={day.date || day.label} className="rounded-2xl border border-slate-100 bg-white p-3">
+                        <p className="text-sm font-semibold text-slate-800">{day.label}</p>
+                        <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                          {(Array.isArray(day.slots) ? day.slots : []).map((slot: any) => {
+                            const slotId = String(slot?.id || slot?.scheduledStart || '');
+                            const selected = portalSelectedRescheduleSlots.some((item) => String(item?.id || item?.scheduledStart || '') === slotId);
+                            return (
+                              <button
+                                key={slotId}
+                                type="button"
+                                onClick={() => togglePortalRescheduleSlot(slot)}
+                                className={`rounded-2xl border px-3 py-2.5 text-sm font-semibold transition ${
+                                  selected
+                                    ? 'border-[#7a32fc] bg-[#7a32fc] text-white shadow-sm shadow-purple-500/20'
+                                    : 'border-slate-200 bg-white text-slate-700 hover:border-purple-200 hover:bg-purple-50'
+                                }`}
+                              >
+                                {slot.start}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {portalSelectedRescheduleSlots.length > 0 && (
+                  <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3">
+                    <p className="text-xs font-semibold text-emerald-800">Opções escolhidas</p>
+                    <ol className="mt-2 space-y-1 text-xs font-medium text-emerald-900">
+                      {portalSelectedRescheduleSlots.map((slot, index) => (
+                        <li key={slot.id || slot.scheduledStart}>{index + 1}. {slot.dateLabel} às {slot.start}</li>
+                      ))}
+                    </ol>
+                  </div>
+                )}
+              </div>
             )}
             <label className="block">
               <span className="mb-1 block text-xs font-bold text-slate-500">Motivo</span>
@@ -2934,9 +3077,12 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
             </label>
           </div>
         )}
-        <button type="button" disabled={portalActionSaving || (portalModal === 'sign' && !portalActionForm.accepted)} onClick={() => void submitPortalAction()} className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl bg-[#7a32fc] px-4 py-3 text-sm font-black text-white shadow-lg shadow-purple-500/20 disabled:opacity-50">
+        </div>
+        <div className="shrink-0 border-t border-slate-100 bg-white p-5 pt-3">
+        <button type="button" disabled={portalActionSubmitDisabled} onClick={() => void submitPortalAction()} className="flex w-full items-center justify-center gap-2 rounded-2xl bg-[#7a32fc] px-4 py-3 text-sm font-black text-white shadow-lg shadow-purple-500/20 disabled:opacity-50">
           {portalActionSaving ? 'Salvando...' : portalModal === 'sign' ? 'Confirmar assinatura' : 'Enviar solicitação'}
         </button>
+        </div>
       </div>
     </div>
   ) : null;
