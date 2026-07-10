@@ -39,7 +39,6 @@ type ReminderModalInput = {
 };
 
 const DEFAULT_CLINIC_NAME = "Clínica";
-const DEFAULT_VERTO_LOGO = "/verto-3d-transparent.png";
 const APPOINTMENT_RESPONSE_COPY = "Toque para confirmar, remarcar ou cancelar.";
 const FRIENDLY_ERROR_COPY = "Não foi possível concluir sua solicitação agora. Tente novamente em alguns instantes.";
 
@@ -56,8 +55,12 @@ const firstText = (...values: unknown[]) => {
 
 const firstUrl = (...values: unknown[]) => {
   for (const value of values) {
-    const text = sanitizeText(value, 2000);
-    if (/^(https?:\/\/|data:image\/|\/)/i.test(text)) return text;
+    const raw = String(value ?? "").trim();
+    if (!raw) continue;
+    if (raw.includes("/verto-3d-transparent.png")) continue;
+    if (/^data:image\//i.test(raw)) return raw.slice(0, 1_000_000);
+    const text = raw.slice(0, 2000);
+    if (/^(https?:\/\/|\/)/i.test(text)) return text;
   }
   return "";
 };
@@ -173,7 +176,7 @@ export function resolveBrandingContext(input: BrandingInput = {}): BrandingConte
   const fallbackName = sanitizeText(input.fallbackName, 120) || DEFAULT_CLINIC_NAME;
   return {
     displayName: fallbackName,
-    logoUrl: firstUrl(input.fallbackLogoUrl) || DEFAULT_VERTO_LOGO,
+    logoUrl: firstUrl(input.fallbackLogoUrl) || null,
     accentColor: input.fallbackAccentColor || "#7C3AED",
     sourceType: "verto_fallback",
     initialsFallback: buildBrandingInitials(fallbackName),
@@ -219,13 +222,11 @@ export function buildPatientReminderNotificationPayload(input: ReminderPayloadIn
     : `Lembrete de consulta${whenText ? ` ${whenText}` : ""}. ${APPOINTMENT_RESPONSE_COPY}`;
   const fallbackUrl = appointmentId ? `/?appointment_id=${encodeURIComponent(appointmentId)}` : "/";
   const url = sanitizeText(input.url, 2000) || fallbackUrl;
-  const icon = input.branding.logoUrl || DEFAULT_VERTO_LOGO;
+  const clinicLogoUrl = firstUrl(input.branding.logoUrl) || null;
   return {
     title: input.branding.displayName,
     body,
-    icon,
-    badge: DEFAULT_VERTO_LOGO,
-    image: input.branding.logoUrl || undefined,
+    ...(clinicLogoUrl ? { icon: clinicLogoUrl, badge: clinicLogoUrl } : {}),
     tag: appointmentId ? `appointment-reminder-${appointmentId}-${reminderKind}` : undefined,
     url,
     appointmentId,
@@ -239,7 +240,7 @@ export function buildPatientReminderNotificationPayload(input: ReminderPayloadIn
       appointmentId,
       reminderKind,
       brandName: input.branding.displayName,
-      brandLogoUrl: input.branding.logoUrl,
+      brandLogoUrl: clinicLogoUrl,
       brandSourceType: input.branding.sourceType,
     },
   };

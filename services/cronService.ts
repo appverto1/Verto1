@@ -113,6 +113,20 @@ const isGenericClinicNotificationName = (value: unknown) => {
   return !normalized || ['sua clinica', 'minha clinica', 'clinica', 'clinica verto', 'verto'].includes(normalized);
 };
 
+const sanitizeClinicNotificationLogoUrl = (value: unknown) => {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  const text = /^data:image\//i.test(raw) ? raw.slice(0, 1_000_000) : raw.slice(0, 2_000);
+  if (!text) return '';
+  if (text.includes('/verto-3d-transparent.png')) return '';
+  if (/^data:image\/(png|jpe?g|webp);base64,[a-z0-9+/=\s]+$/i.test(text)) return text;
+  if (/^https?:\/\//i.test(text) || (text.startsWith('/') && !text.startsWith('//'))) return text;
+  if (text.startsWith('patient-photos/') || /^[\w./-]+\.(png|jpe?g|webp)$/i.test(text)) {
+    return `/api/storage/patient-photos/view?path=${encodeURIComponent(text)}`;
+  }
+  return '';
+};
+
 const isActiveAppointmentStatus = (status: unknown) => {
   const normalized = sanitizeText(status || 'scheduled', 40).toLowerCase();
   return ![
@@ -678,17 +692,57 @@ async function resolveReminderClinicBranding(
   }
   const institutionalProfile = profileBrandingRows.find((row: any) => {
     const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
-    return sanitizeText(row?.clinic_name || metadata.clinicName, 160) ||
-      sanitizeText(row?.clinic_logo_url || metadata.clinicLogoUrl, 2000);
+    return sanitizeText(row?.clinic_name || metadata.clinicName || metadata.clinicSettings?.clinicName, 160) ||
+      sanitizeClinicNotificationLogoUrl(row?.clinic_logo_url || metadata.clinicLogoUrl || metadata.clinicSettings?.clinicLogoUrl);
   });
-  const profileMetadata = institutionalProfile?.metadata && typeof institutionalProfile.metadata === 'object'
-    ? institutionalProfile.metadata
+  const profileWithUsableName = profileBrandingRows.find((row: any) => {
+    const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+    return !isGenericClinicNotificationName(
+      row?.clinic_name ||
+        metadata.clinicName ||
+        metadata.clinicSettings?.clinicName ||
+        metadata.clinic_settings?.clinicName
+    );
+  });
+  const profileWithUsableLogo = profileBrandingRows.find((row: any) => {
+    const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+    return sanitizeClinicNotificationLogoUrl(
+      row?.clinic_logo_url ||
+        metadata.clinicLogoUrl ||
+        metadata.clinicSettings?.clinicLogoUrl ||
+        metadata.clinic_settings?.clinicLogoUrl ||
+        metadata.clinicLogoPath ||
+        metadata.clinicSettings?.clinicLogoPath ||
+        metadata.clinic_settings?.clinicLogoPath
+    );
+  });
+  const profileNameSource = profileWithUsableName || institutionalProfile;
+  const profileLogoSource = profileWithUsableLogo || institutionalProfile;
+  const profileNameMetadata = profileNameSource?.metadata && typeof profileNameSource.metadata === 'object'
+    ? profileNameSource.metadata
+    : {};
+  const profileLogoMetadata = profileLogoSource?.metadata && typeof profileLogoSource.metadata === 'object'
+    ? profileLogoSource.metadata
     : {};
   const clinicName = sanitizeText(data?.display_name || data?.legal_name || data?.name, 160);
-  const profileClinicName = sanitizeText(institutionalProfile?.clinic_name || profileMetadata.clinicName, 160);
+  const profileClinicName = sanitizeText(
+    profileNameSource?.clinic_name ||
+      profileNameMetadata.clinicName ||
+      profileNameMetadata.clinicSettings?.clinicName ||
+      profileNameMetadata.clinic_settings?.clinicName,
+    160
+  );
   const clinicLogoUrl =
-    sanitizeText(data?.logo_url, 2000) ||
-    sanitizeText(institutionalProfile?.clinic_logo_url || profileMetadata.clinicLogoUrl, 2000) ||
+    sanitizeClinicNotificationLogoUrl(data?.logo_url) ||
+    sanitizeClinicNotificationLogoUrl(
+      profileLogoSource?.clinic_logo_url ||
+        profileLogoMetadata.clinicLogoUrl ||
+        profileLogoMetadata.clinicSettings?.clinicLogoUrl ||
+        profileLogoMetadata.clinic_settings?.clinicLogoUrl ||
+        profileLogoMetadata.clinicLogoPath ||
+        profileLogoMetadata.clinicSettings?.clinicLogoPath ||
+        profileLogoMetadata.clinic_settings?.clinicLogoPath
+    ) ||
     null;
   const branding = {
     clinicName: !isGenericClinicNotificationName(clinicName)
@@ -927,7 +981,6 @@ async function runAppointmentReminderJob(
           },
           allowProfessionalFallback: false,
           fallbackName: DEFAULT_CLINIC_NOTIFICATION_NAME,
-          fallbackLogoUrl: '/verto-3d-transparent.png',
         });
         const reminderPayload = buildPatientReminderNotificationPayload({
           appointmentId: appointment.appointmentId,

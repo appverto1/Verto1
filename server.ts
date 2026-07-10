@@ -3015,6 +3015,19 @@ function sanitizeSessionUrl(value: unknown): string | null {
   return sanitizeString(url, 1500);
 }
 
+function sanitizeClinicBrandImageUrl(value: unknown): string | null {
+  const storagePath = extractPatientPhotosStoragePath(value);
+  if (storagePath) return buildPatientPhotoViewUrl(storagePath);
+  const raw = sanitizeString(value, 4_000);
+  if (raw.includes('/verto-3d-transparent.png')) return null;
+  if (raw && raw.startsWith('/') && !raw.startsWith('//')) {
+    return sanitizeString(raw, 1_500);
+  }
+  const url = sanitizeUrl(value);
+  if (!url) return null;
+  return url.startsWith('data:image/') ? url : sanitizeString(url, 1_500);
+}
+
 function extractPatientPhotosStoragePath(raw: unknown): string | null {
   const value = sanitizeString(raw, 1500);
   if (!value) return null;
@@ -18524,30 +18537,62 @@ async function startServer() {
     }
     const institutionalProfile = profileBranding.find((row: any) => {
       const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
-      return sanitizeString(row?.clinic_name || metadata.clinicName, 160) ||
-        sanitizeSessionUrl(row?.clinic_logo_url || metadata.clinicLogoUrl);
+      return sanitizeString(row?.clinic_name || metadata.clinicName || metadata.clinicSettings?.clinicName, 160) ||
+        sanitizeClinicBrandImageUrl(row?.clinic_logo_url || metadata.clinicLogoUrl || metadata.clinicSettings?.clinicLogoUrl);
     });
+    const profileWithUsableName = profileBranding.find((row: any) => {
+      const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+      return !isGenericClinicBrandingName(
+        row?.clinic_name ||
+          metadata.clinicName ||
+          metadata.clinicSettings?.clinicName ||
+          metadata.clinic_settings?.clinicName
+      );
+    });
+    const profileWithUsableLogo = profileBranding.find((row: any) => {
+      const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+      return sanitizeClinicBrandImageUrl(
+        row?.clinic_logo_url ||
+          metadata.clinicLogoUrl ||
+          metadata.clinicSettings?.clinicLogoUrl ||
+          metadata.clinic_settings?.clinicLogoUrl ||
+          metadata.clinicLogoPath ||
+          metadata.clinicSettings?.clinicLogoPath ||
+          metadata.clinic_settings?.clinicLogoPath
+      );
+    });
+    const profileNameSource = profileWithUsableName || institutionalProfile;
+    const profileLogoSource = profileWithUsableLogo || institutionalProfile;
+    const profileNameMetadata = profileNameSource?.metadata && typeof profileNameSource.metadata === 'object'
+      ? profileNameSource.metadata
+      : {};
+    const profileLogoMetadata = profileLogoSource?.metadata && typeof profileLogoSource.metadata === 'object'
+      ? profileLogoSource.metadata
+      : {};
     const clinicDisplayName = sanitizeString(clinic?.display_name || clinic?.legal_name || clinic?.name, 160);
     const profileDisplayName = sanitizeString(
-      institutionalProfile?.clinic_name ||
-        (institutionalProfile?.metadata && typeof institutionalProfile.metadata === 'object'
-          ? institutionalProfile.metadata.clinicName
-          : ''),
+      profileNameSource?.clinic_name ||
+        profileNameMetadata.clinicName ||
+        profileNameMetadata.clinicSettings?.clinicName ||
+        profileNameMetadata.clinic_settings?.clinicName,
       160
     );
     const displayName = !isGenericClinicBrandingName(clinicDisplayName)
       ? clinicDisplayName
       : (!isGenericClinicBrandingName(profileDisplayName) ? profileDisplayName : fallback.displayName);
-    const profileLogoUrl = sanitizeSessionUrl(
-      institutionalProfile?.clinic_logo_url ||
-        (institutionalProfile?.metadata && typeof institutionalProfile.metadata === 'object'
-          ? institutionalProfile.metadata.clinicLogoUrl
-          : null)
+    const profileLogoUrl = sanitizeClinicBrandImageUrl(
+      profileLogoSource?.clinic_logo_url ||
+        profileLogoMetadata.clinicLogoUrl ||
+        profileLogoMetadata.clinicSettings?.clinicLogoUrl ||
+        profileLogoMetadata.clinic_settings?.clinicLogoUrl ||
+        profileLogoMetadata.clinicLogoPath ||
+        profileLogoMetadata.clinicSettings?.clinicLogoPath ||
+        profileLogoMetadata.clinic_settings?.clinicLogoPath
     );
     return {
       id: safeClinicId,
       displayName,
-      logoUrl: sanitizeSessionUrl(clinic?.logo_url) || profileLogoUrl,
+      logoUrl: sanitizeClinicBrandImageUrl(clinic?.logo_url) || profileLogoUrl,
       primaryColor: fallback.primaryColor
     };
   };
@@ -18715,7 +18760,7 @@ async function startServer() {
       : rawClinicName;
     const clinicLogoUrl =
       clinicBranding.logoUrl ||
-      sanitizeSessionUrl(
+      sanitizeClinicBrandImageUrl(
         appointment?.clinic_logo_url ||
           appointment?.clinicLogoUrl ||
           source?.clinic_logo_url ||
@@ -31612,7 +31657,7 @@ async function startServer() {
         const branding = await readClinicBrandingForFamilyView(clinicId);
         const resolved = {
           displayName: sanitizeString(branding.displayName, 160) || 'Clínica',
-          logoUrl: sanitizeSessionUrl(branding.logoUrl) || null
+          logoUrl: sanitizeClinicBrandImageUrl(branding.logoUrl) || null
         };
         clinicBrandingById.set(clinicId, resolved);
         return resolved;
@@ -31687,7 +31732,7 @@ async function startServer() {
         const normalizedMetadata = {
           ...metadata,
           clinicName: branding.displayName,
-          clinicLogoUrl: branding.logoUrl || sanitizeSessionUrl(metadata.clinicLogoUrl) || null,
+          clinicLogoUrl: branding.logoUrl || sanitizeClinicBrandImageUrl(metadata.clinicLogoUrl) || null,
           patientName,
           scheduledAt: scheduledAt || metadata.scheduledAt || null
         };
@@ -31824,7 +31869,7 @@ async function startServer() {
     const professionalId = sanitizeString(row?.therapist_id || row?.therapistId || row?.professional_id || row?.professionalId || source?.therapist_id || source?.therapistId || source?.professionalId, 120);
     const professionalName = sanitizeString(row?.therapist_name || source?.therapistName || source?.professionalName || source?.professional, 180) || 'Profissional a definir';
     const clinicName = sanitizeString(row?.clinic_display_name || row?.clinicDisplayName || row?.clinic_name || row?.clinicName || source?.clinic_display_name || source?.clinicDisplayName || source?.clinic_name || source?.clinicName, 160) || null;
-    const clinicLogoUrl = sanitizeSessionUrl(row?.clinic_logo_url || row?.clinicLogoUrl || source?.clinic_logo_url || source?.clinicLogoUrl) || null;
+    const clinicLogoUrl = sanitizeClinicBrandImageUrl(row?.clinic_logo_url || row?.clinicLogoUrl || source?.clinic_logo_url || source?.clinicLogoUrl) || null;
     const patientConfirmationState = buildPatientConfirmationStateForAgenda({
       status:
         row?.patient_confirmation_status ||

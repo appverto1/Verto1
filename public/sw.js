@@ -1,6 +1,24 @@
-const SW_VERSION = "appointments-app-only-v7";
+const SW_VERSION = "appointments-app-only-v8";
 const APPOINTMENT_NOTIFICATION_CTA = "Toque para confirmar, remarcar ou cancelar.";
 const VERTO_ICON = "/verto-3d-transparent.png";
+
+const isGenericBrandName = (value) => {
+  const normalized = String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+  return !normalized || ["clinica", "sua clinica", "minha clinica", "clinica verto", "verto"].includes(normalized);
+};
+
+const isVertoFallbackAsset = (value) =>
+  String(value || "").includes("/verto-3d-transparent.png");
+
+const asNotificationAssetUrl = (value, fallback = VERTO_ICON) => {
+  const source = String(value || fallback || "").trim() || VERTO_ICON;
+  return new URL(source, self.location.origin).href;
+};
 
 self.addEventListener("install", (event) => {
   event.waitUntil(self.skipWaiting());
@@ -42,14 +60,19 @@ self.addEventListener("push", (event) => {
     payload.data?.url ||
     `/${fallbackQuery ? `?${fallbackQuery}` : ""}`;
   const brandName = payload.branding?.displayName || payload.data?.brandName || "Clínica";
-  const brandLogo = payload.branding?.logoUrl || payload.data?.brandLogoUrl || "";
+  const rawBrandLogo = payload.branding?.logoUrl || payload.data?.brandLogoUrl || "";
+  const brandLogo = isVertoFallbackAsset(rawBrandLogo) ? "" : rawBrandLogo;
+  const title = isGenericBrandName(payload.title) && !isGenericBrandName(brandName)
+    ? brandName
+    : (payload.title || brandName);
+  const iconSource = brandLogo || (isVertoFallbackAsset(payload.icon) ? "" : payload.icon) || VERTO_ICON;
+  const badgeSource = brandLogo || (isVertoFallbackAsset(payload.badge) ? "" : payload.badge) || VERTO_ICON;
 
   event.waitUntil(
-    self.registration.showNotification(payload.title || brandName, {
+    self.registration.showNotification(title, {
       body: payload.body || `Você tem uma consulta agendada. ${APPOINTMENT_NOTIFICATION_CTA}`,
-      icon: new URL(payload.icon || VERTO_ICON, self.location.origin).href,
-      badge: new URL(payload.badge || VERTO_ICON, self.location.origin).href,
-      image: payload.image ? new URL(payload.image, self.location.origin).href : undefined,
+      icon: asNotificationAssetUrl(iconSource),
+      badge: asNotificationAssetUrl(badgeSource),
       tag: payload.tag || (appointmentId ? `appointment-reminder-${appointmentId}-${reminderKind}` : undefined),
       renotify: Boolean(appointmentId),
       requireInteraction: true,

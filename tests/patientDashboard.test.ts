@@ -69,8 +69,10 @@ test('notificacoes Kids priorizam nome e logo da clinica resolvida', () => {
   assert.match(openNotification, /clinicName: firstPortalClinicText/);
   assert.match(openNotification, /getPortalClinicNameExclusions\(professionalName, notification\?\.title\)/);
   assert.ok(openNotification.lastIndexOf('notification?.clinic_name') < openNotification.lastIndexOf("'Clínica'"));
-  assert.match(openNotification, /clinicLogoUrl: metadata\.clinicLogoUrl \|\| notification\?\.clinicLogoUrl/);
+  assert.match(openNotification, /clinicLogoUrl: firstPortalLogoUrl/);
   const notificationSummary = between('const portalNotificationsSummary =', 'const portalHomeSummary');
+  assert.match(notificationSummary, /renderPortalClinicLogo\(logoUrl, clinicName\)/);
+  assert.doesNotMatch(notificationSummary, /VERTO_NOTIFICATION_LOGO/);
   assert.match(notificationSummary, /<span className="block truncate text-xs font-semibold text-slate-950">\{clinicName\}<\/span>/);
   assert.match(notificationSummary, /<span className="block text-sm font-semibold leading-relaxed text-slate-700">\s*\{message\}/);
   const appointmentModal = between('const portalAppointmentDetailModal =', 'const portalActionModal =');
@@ -81,6 +83,7 @@ test('notificacoes Kids priorizam nome e logo da clinica resolvida', () => {
   assert.ok(activeClinicName.indexOf('activePortalAppointment?.clinicName') < activeClinicName.indexOf('portalContext?.clinicName'));
   assert.ok(activeClinicLogo.indexOf('activePortalAppointment?.clinicLogoUrl') < activeClinicLogo.indexOf('portalContext?.clinicLogoUrl'));
   assert.match(activeClinicLogo, /user\?\.clinicSettings\?\.clinicLogoUrl/);
+  assert.doesNotMatch(activeClinicLogo, /VERTO_NOTIFICATION_LOGO/);
   assert.match(confirmPortalAppointment, /result\?\.item \|\| result\?\.appointment/);
   assert.match(appointmentModal, /Presença confirmada/);
   assert.match(appointmentModal, /A clínica já recebeu sua confirmação desta consulta/);

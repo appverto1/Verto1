@@ -14,8 +14,6 @@ import { getDefaultAnamnesisTemplate, getProfileTemplate, normalizeAnamnesisTemp
 
 type PortalSection = 'home' | 'appointments' | 'anamnesis' | 'notes' | 'tasks' | 'reports' | 'documents' | 'profile';
 
-const VERTO_NOTIFICATION_LOGO = '/verto-3d-transparent.png';
-
 export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompleteTask, history, energyTags, sharedNotes, protocols, onAddFamilyNote, isReadOnlyMode = false, patientPortalId = '' }: any) => { 
   const FAMILY_DAILY_PHOTO_LIMIT = 5;
   const chartFiltersStorageKey = `verto.patient-dashboard-chart-filters:${String(user?.id || patientPortalId || 'unknown')}`;
@@ -610,7 +608,13 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         user?.clinicName,
         'Clínica'
       ),
-      clinicLogoUrl: metadata.clinicLogoUrl || notification?.clinicLogoUrl || notification?.clinic_logo_url || portalContext?.clinicLogoUrl || user?.clinicSettings?.clinicLogoUrl || VERTO_NOTIFICATION_LOGO,
+      clinicLogoUrl: firstPortalLogoUrl(
+        metadata.clinicLogoUrl,
+        notification?.clinicLogoUrl,
+        notification?.clinic_logo_url,
+        portalContext?.clinicLogoUrl,
+        user?.clinicSettings?.clinicLogoUrl
+      ),
       scheduledAt: metadata.scheduledAt || notification?.scheduled_for || notification?.scheduledFor || notification?.created_at
     });
   };
@@ -1567,6 +1571,10 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       infrastructureTokens.some((token) => text.toLowerCase().includes(token));
   };
   const firstPortalText = (...values: any[]) => values.map(normalizePortalText).find(Boolean) || '';
+  const firstPortalLogoUrl = (...values: any[]) =>
+    values
+      .map(normalizePortalText)
+      .find((value) => value && !value.includes('/verto-3d-transparent.png')) || '';
   const portalIdentityKey = (value: any) =>
     normalizePortalText(value)
       .normalize('NFD')
@@ -1588,6 +1596,29 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     return values
       .map(normalizePortalText)
       .find((value) => value && !professionals.some((professional) => looksLikePortalProfessionalLabel(value, professional))) || 'Clínica';
+  };
+  const getPortalClinicInitials = (value: any) => {
+    const words = normalizePortalText(value || 'Clínica')
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2);
+    return words.map((word) => word.charAt(0).toUpperCase()).join('') || 'C';
+  };
+  const renderPortalClinicLogo = (logoUrl: any, clinicName: any, className = 'h-full w-full object-contain p-1') => {
+    const fallback = (
+      <span className="flex h-full w-full items-center justify-center bg-slate-100 text-xs font-semibold text-slate-700">
+        {getPortalClinicInitials(clinicName)}
+      </span>
+    );
+    const safeLogoUrl = firstPortalLogoUrl(logoUrl);
+    return safeLogoUrl ? (
+      <SecureImage
+        src={safeLogoUrl}
+        alt={`Logo ${clinicName || 'da clínica'}`}
+        className={className}
+        fallback={fallback}
+      />
+    ) : fallback;
   };
   const getPortalClinicNameExclusions = (...values: any[]) => ([
     ...values,
@@ -2262,7 +2293,13 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     <div className="mb-4 space-y-2">
       {portalNotifications.slice(0, 3).map((notification: any) => {
         const metadata = notification?.metadata && typeof notification.metadata === 'object' ? notification.metadata : {};
-        const logoUrl = metadata.clinicLogoUrl || notification?.clinicLogoUrl || notification?.clinic_logo_url || portalContext?.clinicLogoUrl || user?.clinicSettings?.clinicLogoUrl || VERTO_NOTIFICATION_LOGO;
+        const logoUrl = firstPortalLogoUrl(
+          metadata.clinicLogoUrl,
+          notification?.clinicLogoUrl,
+          notification?.clinic_logo_url,
+          portalContext?.clinicLogoUrl,
+          user?.clinicSettings?.clinicLogoUrl
+        );
         const clinicName = getPortalNotificationClinicName(notification);
         const message = getPortalNotificationMessage(notification);
         return (
@@ -2277,7 +2314,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
             }`}
           >
             <span className="mt-0.5 h-10 w-10 shrink-0 overflow-hidden rounded-2xl border border-white bg-white shadow-sm">
-              <SecureImage src={logoUrl} alt={`Logo ${clinicName}`} className="h-full w-full object-contain p-1" />
+              {renderPortalClinicLogo(logoUrl, clinicName)}
             </span>
             <span className="min-w-0">
               <span className="block truncate text-xs font-semibold text-slate-950">{clinicName}</span>
@@ -2776,13 +2813,12 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     user?.clinicName,
     'Clínica'
   );
-  const activePortalClinicLogoUrl = firstPortalText(
+  const activePortalClinicLogoUrl = firstPortalLogoUrl(
     activePortalAppointment?.clinicLogoUrl,
     activePortalAppointment?.clinic?.logoUrl,
     activePortalAppointment?.clinic_logo_url,
     portalContext?.clinicLogoUrl,
-    user?.clinicSettings?.clinicLogoUrl,
-    VERTO_NOTIFICATION_LOGO
+    user?.clinicSettings?.clinicLogoUrl
   );
   const portalActionBlocked = activePortalStatus.includes('CANCEL') || activePortalStatus.includes('COMPLET') || activePortalStatus.includes('NO_SHOW');
   const portalAppointmentsPanel = (
@@ -2897,7 +2933,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         <div className="flex items-start justify-between gap-4">
           <div className="flex min-w-0 items-start gap-3">
             <div className="h-12 w-12 shrink-0 overflow-hidden rounded-2xl border border-purple-100 bg-white shadow-sm">
-              <SecureImage src={activePortalClinicLogoUrl} alt={`Logo ${activePortalClinicName}`} className="h-full w-full object-contain p-1" />
+              {renderPortalClinicLogo(activePortalClinicLogoUrl, activePortalClinicName)}
             </div>
             <div className="min-w-0">
             <p className="truncate text-sm font-black text-slate-900">{activePortalClinicName}</p>

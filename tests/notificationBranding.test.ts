@@ -47,8 +47,8 @@ const clinicPush = buildPatientReminderNotificationPayload({
 assert.equal(clinicBranding.sourceType, 'clinic');
 assert.equal(clinicPush.title, 'Clínica ABC');
 assert.equal(clinicPush.icon, 'https://cdn.example.com/clinic-logo.png');
-assert.equal(clinicPush.badge, '/verto-3d-transparent.png');
-assert.equal(clinicPush.image, 'https://cdn.example.com/clinic-logo.png');
+assert.equal(clinicPush.badge, 'https://cdn.example.com/clinic-logo.png');
+assert.equal((clinicPush as any).image, undefined);
 assert.equal(clinicPush.data.brandLogoUrl, 'https://cdn.example.com/clinic-logo.png');
 assert.equal((clinicPush as any).actions, undefined);
 assert.match(clinicPush.body, /Pedro Henrique/);
@@ -107,8 +107,8 @@ const professionalPush = buildPatientReminderNotificationPayload({
 assert.equal(professionalBranding.sourceType, 'verto_fallback');
 assert.equal(professionalBranding.displayName, 'Clínica');
 assert.equal(professionalPush.title, 'Clínica');
-assert.equal(professionalPush.icon, '/verto-3d-transparent.png');
-assert.equal(professionalPush.data.brandLogoUrl, '/verto-3d-transparent.png');
+assert.equal((professionalPush as any).icon, undefined);
+assert.equal(professionalPush.data.brandLogoUrl, null);
 assert.doesNotMatch(professionalPush.title, /Mateus/);
 assert.doesNotMatch(professionalPush.body, /Mateus/);
 
@@ -134,8 +134,11 @@ assert.match(pushServiceCode, /title:\s*notificationPayload\.title/);
 assert.doesNotMatch(pushServiceCode, /title:\s*params\.title \|\| notificationPayload\.title/);
 assert.match(pushServiceCode, /clinic:\s*\{[\s\S]*?id:\s*clinicId \|\| null/);
 assert.match(serviceWorkerCode, /brandName/);
+assert.match(serviceWorkerCode, /isGenericBrandName/);
+assert.match(serviceWorkerCode, /isVertoFallbackAsset/);
 assert.doesNotMatch(serviceWorkerCode, /notification_action/);
 assert.doesNotMatch(serviceWorkerCode, /\bactions\s*:/);
+assert.doesNotMatch(serviceWorkerCode, /payload\.image/);
 assert.doesNotMatch(serviceWorkerCode, /Lembrete de Consulta - Verto/);
 assert.match(appCode, /buildPatientReminderModalViewModel/);
 assert.match(appCode, /allowProfessionalFallback:\s*false/);

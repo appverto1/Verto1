@@ -33,11 +33,13 @@ test('appointment confirmation branding is clinic-first and never falls back to 
   assert.match(familyBrandingSlice, /readProfileBranding\('clinic_name,clinic_logo_url,updated_at'\)/);
   assert.match(familyBrandingSlice, /isGenericClinicBrandingName/);
   assert.match(familyBrandingSlice, /clinic_name,clinic_logo_url,metadata,updated_at/);
-  assert.match(familyBrandingSlice, /sanitizeSessionUrl\(clinic\?\.logo_url\) \|\| profileLogoUrl/);
-  assert.match(serverCode, /institutionalProfile\?\.clinic_name/);
+  assert.match(familyBrandingSlice, /sanitizeClinicBrandImageUrl\(clinic\?\.logo_url\) \|\| profileLogoUrl/);
+  assert.match(familyBrandingSlice, /profileWithUsableName/);
+  assert.match(familyBrandingSlice, /profileWithUsableLogo/);
+  assert.match(serverCode, /profileNameSource\?\.clinic_name/);
   assert.match(serverCode, /clinic\?\.display_name \|\| clinic\?\.legal_name \|\| clinic\?\.name/);
   assert.ok(
-    familyBrandingSlice.indexOf('clinicDisplayName ||') < familyBrandingSlice.indexOf('institutionalProfile?.clinic_name'),
+    familyBrandingSlice.indexOf('const clinicDisplayName') < familyBrandingSlice.indexOf('const profileDisplayName'),
     'Nome institucional da clinica deve ter prioridade sobre professional_profiles.clinic_name.'
   );
   assert.match(confirmationRouteSlice, /buildFamilyAppointmentDisplayContext/);
@@ -130,6 +132,9 @@ test('patient portal still exposes appointment action controls and notification 
   assert.match(patientDashboardCode, /Confirmar presença/);
   assert.match(patientDashboardCode, /Solicitar remarcação/);
   assert.match(patientDashboardCode, /Solicitar cancelamento/);
+  assert.match(patientDashboardCode, /firstPortalLogoUrl/);
+  assert.match(patientDashboardCode, /renderPortalClinicLogo/);
+  assert.doesNotMatch(patientDashboardCode, /VERTO_NOTIFICATION_LOGO/);
   assert.match(pushServiceCode, /clinicName/);
   assert.match(pushServiceCode, /clinicLogoUrl/);
   assert.match(pushServiceCode, /allowProfessionalFallback:\s*false/);

@@ -1754,7 +1754,7 @@ export default function App() {
 
   const buildAppointmentConfirmationViewModel = () => {
     if (!appointmentConfirmation) {
-      const branding = resolveBrandingContext({ fallbackName: 'Clínica', fallbackLogoUrl: '/verto-3d-transparent.png' });
+      const branding = resolveBrandingContext({ fallbackName: 'Clínica' });
       return buildPatientReminderModalViewModel({
         appointmentId: '',
         branding,
@@ -1774,7 +1774,6 @@ export default function App() {
       },
       allowProfessionalFallback: false,
       fallbackName: 'Clínica',
-      fallbackLogoUrl: '/verto-3d-transparent.png',
     });
     return buildPatientReminderModalViewModel({
       appointmentId: appointmentConfirmation.appointmentId,

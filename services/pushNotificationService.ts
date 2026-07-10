@@ -81,6 +81,14 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-
 const sanitizeText = (value: unknown, maxLength = 240) =>
   String(value ?? '').trim().slice(0, maxLength);
 
+const sanitizeBrandLogoText = (value: unknown) => {
+  const text = String(value ?? '').trim();
+  if (!text) return '';
+  if (text.includes('/verto-3d-transparent.png')) return '';
+  if (/^data:image\//i.test(text)) return text.slice(0, 1_000_000);
+  return text.slice(0, 2000);
+};
+
 const sanitizeEmail = (value: unknown) => {
   const email = sanitizeText(value, 320).toLowerCase();
   return email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : '';
@@ -598,7 +606,7 @@ export async function sendAppointmentNotification(params: SendAppointmentNotific
   const clinicId = sanitizeText(params.appointment.clinicId || params.clinicId, 120);
   const professionalId = sanitizeText(params.appointment.professionalId || params.professionalId, 120);
   const clinicName = sanitizeText(params.appointment.clinicName || params.clinicName, 160);
-  const clinicLogoUrl = sanitizeText(params.appointment.clinicLogoUrl || params.clinicLogoUrl, 2000);
+  const clinicLogoUrl = sanitizeBrandLogoText(params.appointment.clinicLogoUrl || params.clinicLogoUrl);
   const appointmentQuery = new URLSearchParams({
     appointment_id: String(params.appointment.id || ''),
     ...(dateLabel ? { appointment_date: dateLabel } : {}),
@@ -619,7 +627,6 @@ export async function sendAppointmentNotification(params: SendAppointmentNotific
     },
     allowProfessionalFallback: false,
     fallbackName: 'Clínica',
-    fallbackLogoUrl: '/verto-3d-transparent.png',
   });
   if (process.env.NODE_ENV !== 'production') {
     logger.log?.('[PushBranding] context resolved.', {
