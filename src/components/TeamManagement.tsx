@@ -25,6 +25,7 @@ interface Member {
   email: string;
   role: 'coordinator' | 'therapist' | 'receptionist' | 'patient' | 'admin';
   profileRole?: string | null;
+  professionalTitle?: string | null;
   clinic_id: string;
   created_at: string;
   workSchedule?: any;
@@ -44,6 +45,13 @@ const WORK_SCHEDULE_DAYS = [
   { key: 'saturday', label: 'Sábado' },
   { key: 'sunday', label: 'Domingo' }
 ];
+const PROFESSIONAL_TITLE_OPTIONS = [
+  'Psicólogo',
+  'Terapeuta Ocupacional',
+  'Acompanhante Terapêutico',
+  'Aplicador ABA'
+];
+const DEFAULT_PROFESSIONAL_TITLE = 'Psicólogo';
 
 const buildDefaultWorkSchedule = () => ({
   active: true,
@@ -83,6 +91,45 @@ const hasSameOperationalRole = (member: Member, reference: Member | null) => {
   if (!reference) return false;
   if (member.role === reference.role) return true;
   return isAttendanceProfessional(member) && isAttendanceProfessional(reference);
+};
+
+const normalizeProfessionalTitle = (value: unknown, fallback = '') => {
+  const text = String(value || '').trim();
+  const match = PROFESSIONAL_TITLE_OPTIONS.find((option) => option.toLowerCase() === text.toLowerCase());
+  return match || fallback;
+};
+
+const getProfessionalTitleFromSource = (source: any, fallback = DEFAULT_PROFESSIONAL_TITLE) => {
+  const requiredFields = source?.requiredOnboardingFields || source?.required_onboarding_fields || {};
+  return normalizeProfessionalTitle(
+    source?.professionalTitle ||
+      source?.professional_title ||
+      source?.profileRole ||
+      requiredFields?.professionalTitle ||
+      requiredFields?.professional_title ||
+      requiredFields?.title,
+    fallback
+  );
+};
+
+const formatAccessRoleLabel = (role: unknown, source?: any) => {
+  const normalizedRole = String(role || '').trim().toLowerCase();
+  if (normalizedRole === 'coordinator') return 'Coordenador';
+  if (normalizedRole === 'receptionist') return 'Recepcionista/Assistente';
+  if (normalizedRole === 'admin' || normalizedRole === 'owner') return 'Administrador';
+  if (normalizedRole === 'therapist') return getProfessionalTitleFromSource(source);
+  if (normalizedRole === 'patient') return 'Paciente';
+  return 'Profissional';
+};
+
+const formatInvitationRoleLabel = (invitation: any) => {
+  const role = invitation?.role;
+  const roleLabel = invitation?.roleLabel || invitation?.role_label;
+  if (roleLabel && !/therapist/i.test(String(roleLabel))) return String(roleLabel);
+  if (String(role || '').toLowerCase() === 'therapist') {
+    return `Profissional de atendimento · ${getProfessionalTitleFromSource(invitation)}`;
+  }
+  return formatAccessRoleLabel(role, invitation);
 };
 
 const buildScheduleValidationError = (label: string, field: string) => `${label}: informe ${field} no formato HH:mm.`;
@@ -188,7 +235,8 @@ export function TeamManagement({
   const [resendingInvitationId, setResendingInvitationId] = useState<string | null>(null);
   const [unlinkingMemberId, setUnlinkingMemberId] = useState<string | null>(null);
   const [newMemberEmail, setNewMemberEmail] = useState('');
-  const [newMemberRole, setNewMemberRole] = useState<'therapist' | 'receptionist'>('therapist');
+  const [newMemberRole, setNewMemberRole] = useState<'therapist' | 'receptionist' | 'coordinator'>('therapist');
+  const [newMemberProfessionalTitle, setNewMemberProfessionalTitle] = useState(DEFAULT_PROFESSIONAL_TITLE);
   const [editingScheduleMember, setEditingScheduleMember] = useState<Member | null>(null);
   const [workScheduleDraft, setWorkScheduleDraft] = useState<any>(null);
   const [workScheduleLoadingId, setWorkScheduleLoadingId] = useState<string | null>(null);
@@ -261,7 +309,17 @@ export function TeamManagement({
     }
 
     try {
-      const result = await dataService.inviteToClinic(newMemberEmail, newMemberRole);
+      const result = await dataService.inviteToClinic(
+        newMemberEmail,
+        newMemberRole,
+        newMemberRole === 'therapist'
+          ? {
+              professionalTitle: newMemberProfessionalTitle,
+              professional_title: newMemberProfessionalTitle,
+              accessRoleLabel: 'Profissional de atendimento'
+            }
+          : {}
+      );
       if (result.success) {
         setSuccess(`Convite enviado com sucesso para ${newMemberEmail}`);
         setNewMemberEmail('');
@@ -302,7 +360,18 @@ export function TeamManagement({
     setSuccess(null);
     setResendingInvitationId(invitation.id);
     try {
-      const result = await dataService.inviteToClinic(invitation.email, invitation.role);
+      const result = await dataService.inviteToClinic(
+        invitation.email,
+        invitation.role,
+        invitation.role === 'therapist'
+          ? {
+              ...(invitation.requiredOnboardingFields || invitation.required_onboarding_fields || {}),
+              professionalTitle: getProfessionalTitleFromSource(invitation),
+              professional_title: getProfessionalTitleFromSource(invitation),
+              accessRoleLabel: 'Profissional de atendimento'
+            }
+          : (invitation.requiredOnboardingFields || invitation.required_onboarding_fields || {})
+      );
       if (result.success) {
         const baseMessage = result.message || `Convite reenviado para ${invitation.email}.`;
         setSuccess(baseMessage);
@@ -317,11 +386,25 @@ export function TeamManagement({
     }
   };
 
-  const handleUpdateRole = async (memberId: string, newRole: any) => {
+  const handleUpdateRole = async (memberId: string, newRole: any, professionalTitle?: string | null) => {
     try {
-      const result = await dataService.updateMemberRole(memberId, newRole);
+      const resolvedTitle = newRole === 'therapist'
+        ? normalizeProfessionalTitle(professionalTitle, DEFAULT_PROFESSIONAL_TITLE)
+        : null;
+      const result = await dataService.updateMemberRole(memberId, newRole, {
+        professionalTitle: resolvedTitle,
+        professional_title: resolvedTitle
+      });
       if (result.success) {
-        setSuccess('Papel atualizado com sucesso');
+        setSuccess('Acesso atualizado com sucesso');
+        setMembers((prev) => prev.map((member) => member.id === memberId
+          ? {
+              ...member,
+              role: newRole,
+              professionalTitle: resolvedTitle,
+              profileRole: resolvedTitle
+            }
+          : member));
         fetchMembers();
       } else {
         setError(result.error);
@@ -581,14 +664,6 @@ export function TeamManagement({
     admin: <Shield className="text-red-500" size={18} />
   };
 
-  const roleLabels = {
-    coordinator: 'Coordenador',
-    therapist: 'Terapeuta',
-    receptionist: 'Recepcionista',
-    patient: 'Paciente',
-    admin: 'Admin'
-  };
-
   const filteredMembers = members.filter(m => 
     m.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
     m.email.toLowerCase().includes(searchTerm.toLowerCase())
@@ -671,7 +746,7 @@ export function TeamManagement({
                       <div className="hidden md:block text-right">
                         <div className="flex items-center justify-end gap-1.5 mb-0.5">
                           {roleIcons[member.role as keyof typeof roleIcons]}
-                          <span className="text-xs font-semibold text-slate-700">{roleLabels[member.role as keyof typeof roleLabels]}</span>
+                          <span className="text-xs font-semibold text-slate-700">{formatAccessRoleLabel(member.role, member)}</span>
                         </div>
                         <p className="text-[10px] text-slate-400 font-medium">Desde {new Date(member.created_at).toLocaleDateString()}</p>
                       </div>
@@ -704,29 +779,49 @@ export function TeamManagement({
                         {openMenuId === member.id && (
                           <div className="absolute right-0 top-full mt-2 w-48 bg-white rounded-2xl shadow-xl border border-slate-100 z-50 py-2 animate-in fade-in zoom-in duration-200">
                             <div className="px-4 py-2 border-b border-slate-50 mb-1">
-                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Alterar Papel</p>
+                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Alterar acesso</p>
                             </div>
                             <button 
-                              onClick={() => { handleUpdateRole(member.id, 'coordinator'); setOpenMenuId(null); }}
+                              onClick={() => { handleUpdateRole(member.id, 'coordinator', null); setOpenMenuId(null); }}
                               className={`w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium transition-all ${member.role === 'coordinator' ? 'text-purple-600 bg-purple-50' : 'text-slate-600 hover:bg-slate-50'}`}
                               disabled={member.id === user.id}
                             >
                               <Shield size={14} /> Coordenador
                             </button>
                             <button 
-                              onClick={() => { handleUpdateRole(member.id, 'therapist'); setOpenMenuId(null); }}
+                              onClick={() => { handleUpdateRole(member.id, 'therapist', getProfessionalTitleFromSource(member)); setOpenMenuId(null); }}
                               className={`w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium transition-all ${member.role === 'therapist' ? 'text-blue-600 bg-blue-50' : 'text-slate-600 hover:bg-slate-50'}`}
                               disabled={member.id === user.id}
                             >
-                              <Stethoscope size={14} /> Terapeuta
+                              <Stethoscope size={14} /> Profissional de atendimento
                             </button>
                             <button 
-                              onClick={() => { handleUpdateRole(member.id, 'receptionist'); setOpenMenuId(null); }}
+                              onClick={() => { handleUpdateRole(member.id, 'receptionist', null); setOpenMenuId(null); }}
                               className={`w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium transition-all ${member.role === 'receptionist' ? 'text-green-600 bg-green-50' : 'text-slate-600 hover:bg-slate-50'}`}
                               disabled={member.id === user.id}
                             >
-                              <Calendar size={14} /> Recepcionista
+                              <Calendar size={14} /> Recepcionista/Assistente
                             </button>
+                            {member.role === 'therapist' && (
+                              <div className="border-t border-slate-50 pt-2 mt-1">
+                                <div className="px-4 py-2">
+                                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Título profissional</p>
+                                </div>
+                                {PROFESSIONAL_TITLE_OPTIONS.map((title) => {
+                                  const selected = getProfessionalTitleFromSource(member) === title;
+                                  return (
+                                    <button
+                                      key={title}
+                                      type="button"
+                                      onClick={() => { handleUpdateRole(member.id, 'therapist', title); setOpenMenuId(null); }}
+                                      className={`w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium transition-all ${selected ? 'text-blue-600 bg-blue-50' : 'text-slate-600 hover:bg-slate-50'}`}
+                                    >
+                                      <Stethoscope size={14} /> {title}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            )}
                             {(member.role === 'therapist' || member.role === 'coordinator') && (
                               <button
                                 type="button"
@@ -1023,7 +1118,7 @@ export function TeamManagement({
                                       className="h-4 w-4 accent-[#7a32fc]"
                                     />
                                     <span className="min-w-0 flex-1 truncate">{member.name}</span>
-                                    <span className="text-xs text-slate-400">{roleLabels[member.role as keyof typeof roleLabels] || member.role}</span>
+                                    <span className="text-xs text-slate-400">{formatAccessRoleLabel(member.role, member)}</span>
                                   </label>
                                 ))
                               )}
@@ -1116,8 +1211,40 @@ export function TeamManagement({
                       <Stethoscope size={20} />
                     </div>
                     <div>
-                      <p className="text-sm font-bold text-slate-900">Terapeuta</p>
-                      <p className="text-[10px] text-slate-500">Pacientes atribuídos e agendas</p>
+                      <p className="text-sm font-bold text-slate-900">Profissional de atendimento</p>
+                      <p className="text-[10px] text-slate-500">Agenda, prontuários e pacientes atribuídos</p>
+                    </div>
+                  </button>
+
+                  {newMemberRole === 'therapist' && (
+                    <div className="rounded-2xl border border-blue-100 bg-blue-50/40 p-3">
+                      <p className="mb-2 text-xs font-semibold text-slate-500">Título profissional</p>
+                      <div className="grid grid-cols-1 gap-2">
+                        {PROFESSIONAL_TITLE_OPTIONS.map((title) => (
+                          <button
+                            key={title}
+                            type="button"
+                            onClick={() => setNewMemberProfessionalTitle(title)}
+                            className={`rounded-xl border px-3 py-2 text-left text-xs font-semibold transition-all ${newMemberProfessionalTitle === title ? 'border-blue-400 bg-white text-blue-700' : 'border-transparent bg-white/60 text-slate-600 hover:bg-white'}`}
+                          >
+                            {title}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => setNewMemberRole('coordinator')}
+                    className={`flex items-center gap-3 p-4 rounded-2xl border-2 transition-all text-left ${newMemberRole === 'coordinator' ? 'border-purple-500 bg-purple-50/50' : 'border-slate-100 hover:border-slate-200'}`}
+                  >
+                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${newMemberRole === 'coordinator' ? 'bg-purple-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                      <Shield size={20} />
+                    </div>
+                    <div>
+                      <p className="text-sm font-bold text-slate-900">Coordenador</p>
+                      <p className="text-[10px] text-slate-500">Acesso completo à gestão da clínica</p>
                     </div>
                   </button>
 
@@ -1130,8 +1257,8 @@ export function TeamManagement({
                       <Calendar size={20} />
                     </div>
                     <div>
-                      <p className="text-sm font-bold text-slate-900">Recepcionista</p>
-                      <p className="text-[10px] text-slate-500">Apenas Agendas</p>
+                      <p className="text-sm font-bold text-slate-900">Recepcionista/Assistente</p>
+                      <p className="text-[10px] text-slate-500">Agenda, pagamentos, cobranças e convênios</p>
                     </div>
                   </button>
                 </div>
@@ -1177,7 +1304,7 @@ export function TeamManagement({
                         </div>
                         <div className="min-w-0">
                           <p className="font-bold text-slate-900 text-sm truncate">{inv.email}</p>
-                          <p className="text-[10px] text-slate-400 font-semibold uppercase tracking-widest">{inv.role}</p>
+                          <p className="text-[10px] text-slate-500 font-semibold">{formatInvitationRoleLabel(inv)}</p>
                         </div>
                       </div>
                       <div className="flex flex-wrap items-center gap-2 md:justify-end">
@@ -1231,7 +1358,7 @@ export function TeamManagement({
                           </div>
                           <div className="min-w-0">
                             <p className="font-bold text-slate-900 text-sm truncate">{inv.email}</p>
-                            <p className="text-[10px] text-slate-400 font-semibold uppercase tracking-widest">{inv.role}</p>
+                            <p className="text-[10px] text-slate-500 font-semibold">{formatInvitationRoleLabel(inv)}</p>
                           </div>
                         </div>
                         <span className={`self-start md:self-center shrink-0 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest ${statusClass}`}>
@@ -1256,7 +1383,7 @@ export function TeamManagement({
                         </div>
                         <div className="min-w-0">
                           <p className="font-bold text-slate-900 text-sm truncate">{entry.email || entry.name || 'Colaborador'}</p>
-                          <p className="text-[10px] text-slate-400 font-semibold uppercase tracking-widest">{entry.role}</p>
+                          <p className="text-[10px] text-slate-500 font-semibold">{formatInvitationRoleLabel(entry)}</p>
                         </div>
                       </div>
                       <span className="self-start md:self-center shrink-0 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest bg-amber-100 text-amber-700">

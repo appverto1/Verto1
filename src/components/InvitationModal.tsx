@@ -18,9 +18,24 @@ interface InvitationModalProps {
   onClose: () => void;
 }
 
+const PROFESSIONAL_TITLE_OPTIONS = [
+  'Psicólogo',
+  'Terapeuta Ocupacional',
+  'Acompanhante Terapêutico',
+  'Aplicador ABA'
+];
+const DEFAULT_PROFESSIONAL_TITLE = 'Psicólogo';
+
+const formatInviteRoleLabel = (role: string, title = DEFAULT_PROFESSIONAL_TITLE) => {
+  if (role === 'therapist') return `Profissional de atendimento · ${title}`;
+  if (role === 'receptionist') return 'Recepcionista/Assistente';
+  return 'Profissional';
+};
+
 export function InvitationModal({ user, onClose }: InvitationModalProps) {
   const [email, setEmail] = useState('');
   const [role, setRole] = useState<'therapist' | 'receptionist'>('therapist');
+  const [professionalTitle, setProfessionalTitle] = useState(DEFAULT_PROFESSIONAL_TITLE);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
@@ -42,9 +57,19 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
     setSuccessMessage(null);
 
     try {
-      const result = await dataService.inviteToClinic(email, role);
+      const result = await dataService.inviteToClinic(
+        email,
+        role,
+        role === 'therapist'
+          ? {
+              professionalTitle,
+              professional_title: professionalTitle,
+              accessRoleLabel: 'Profissional de atendimento'
+            }
+          : {}
+      );
       if (result.success) {
-        setInvitations([...invitations, { email, role }]);
+        setInvitations([...invitations, { email, role: formatInviteRoleLabel(role, professionalTitle) }]);
         setEmail('');
         setSuccess(true);
         setSuccessMessage(
@@ -138,8 +163,26 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
                     <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${role === 'therapist' ? 'bg-blue-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
                       <Stethoscope size={20} />
                     </div>
-                    <p className="text-sm font-bold text-slate-900">Terapeuta</p>
+                    <p className="text-sm font-bold text-slate-900">Profissional de atendimento</p>
                   </button>
+
+                  {role === 'therapist' && (
+                    <div className="col-span-2 rounded-2xl border border-blue-100 bg-blue-50/40 p-3">
+                      <p className="mb-2 text-xs font-semibold text-slate-500">Título profissional</p>
+                      <div className="grid grid-cols-1 gap-2">
+                        {PROFESSIONAL_TITLE_OPTIONS.map((title) => (
+                          <button
+                            key={title}
+                            type="button"
+                            onClick={() => setProfessionalTitle(title)}
+                            className={`rounded-xl border px-3 py-2 text-left text-xs font-semibold transition-all ${professionalTitle === title ? 'border-blue-400 bg-white text-blue-700' : 'border-transparent bg-white/60 text-slate-600 hover:bg-white'}`}
+                          >
+                            {title}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   <button
                     type="button"
@@ -149,7 +192,7 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
                     <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${role === 'receptionist' ? 'bg-green-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
                       <Calendar size={20} />
                     </div>
-                    <p className="text-sm font-bold text-slate-900">Recepcionista</p>
+                    <p className="text-sm font-bold text-slate-900">Recepcionista/Assistente</p>
                   </button>
                 </div>
               </div>
@@ -190,7 +233,7 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
                         </div>
                         <span className="text-xs font-medium text-slate-600">{inv.email}</span>
                       </div>
-                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{inv.role}</span>
+                      <span className="text-[10px] font-semibold text-slate-500">{inv.role}</span>
                     </div>
                   ))}
                 </div>

@@ -53,6 +53,7 @@
     "test:demo-sandbox": "tsx tests/demoSandbox.test.ts",
     "test:calendar-events": "tsx tests/calendarEvents.test.ts",
     "test:scheduling": "tsx tests/scheduling.test.ts",
+    "test:team-management": "tsx tests/teamManagementRoles.test.ts",
     "test:appointment-conflicts": "tsx tests/appointmentConflicts.test.ts",
     "test:appointment-care-team-recurrence": "tsx tests/appointmentCareTeamRecurrence.test.ts",
     "test:monthly-conference": "tsx tests/monthlyConference.test.ts",

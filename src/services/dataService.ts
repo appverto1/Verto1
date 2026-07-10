@@ -6223,13 +6223,13 @@ export const dataService = {
     }
   },
 
-  async updateMemberRole(memberId: string, role: string) {
+  async updateMemberRole(memberId: string, role: string, metadata?: Record<string, any>) {
     try {
       const response = await fetch(`/api/clinic/members/${memberId}/role`, {
         method: 'PATCH',
         headers: await getAuthHeaders(),
         credentials: 'include',
-        body: JSON.stringify({ role })
+        body: JSON.stringify({ role, ...(metadata || {}) })
       });
       if (response.ok) {
         return await response.json();

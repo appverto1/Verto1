@@ -15902,6 +15902,43 @@ async function startServer() {
     exceptions: []
   });
 
+  const PROFESSIONAL_TITLE_OPTIONS = [
+    'Psicólogo',
+    'Terapeuta Ocupacional',
+    'Acompanhante Terapêutico',
+    'Aplicador ABA'
+  ];
+  const DEFAULT_PROFESSIONAL_TITLE = 'Psicólogo';
+
+  const normalizeProfessionalTitleForClinic = (value: unknown, fallback = '') => {
+    const text = sanitizeString(value, 80);
+    const match = PROFESSIONAL_TITLE_OPTIONS.find((option) => option.toLowerCase() === text.toLowerCase());
+    return match || fallback;
+  };
+
+  const readProfessionalTitleFromSource = (source: any, fallback = DEFAULT_PROFESSIONAL_TITLE) => {
+    const payload = source && typeof source === 'object' ? source : {};
+    const requiredFields = payload.requiredOnboardingFields || payload.required_onboarding_fields || payload.metadata || {};
+    return normalizeProfessionalTitleForClinic(
+      payload.professionalTitle ||
+        payload.professional_title ||
+        payload.profileRole ||
+        requiredFields?.professionalTitle ||
+        requiredFields?.professional_title ||
+        requiredFields?.title ||
+        requiredFields?.role,
+      fallback
+    );
+  };
+
+  const formatClinicAccessRoleLabel = (role: unknown, source?: any) => {
+    const normalizedRole = sanitizeString(role, 40).toLowerCase();
+    if (normalizedRole === 'coordinator') return 'Coordenador';
+    if (normalizedRole === 'receptionist') return 'Recepcionista/Assistente';
+    if (normalizedRole === 'therapist') return `Profissional de atendimento · ${readProfessionalTitleFromSource(source)}`;
+    return 'Profissional';
+  };
+
   const sanitizeProfessionalWorkingSchedule = (raw: any, fallbackDuration = 50): PortalProfessionalWorkingSchedule => {
     const source = raw && typeof raw === 'object' ? raw : {};
     const defaultSchedule = buildDefaultProfessionalWorkingSchedule(fallbackDuration);
@@ -16068,6 +16105,9 @@ async function startServer() {
         const profile = professionalProfilesByUserId.get(memberId) || {};
         const metadata = profile?.metadata && typeof profile.metadata === 'object' ? profile.metadata : {};
         const fallbackDuration = asSafeNumber(metadata?.sessionDurationMinutes ?? metadata?.defaultSessionDurationMinutes, 15, 360) || 50;
+        const professionalTitle = m.role === 'therapist'
+          ? readProfessionalTitleFromSource({ metadata, professionalTitle: metadata?.professionalTitle || metadata?.professional_title || metadata?.role }, DEFAULT_PROFESSIONAL_TITLE)
+          : null;
         return {
           id: m.users?.id || m.user_id,
           name:
@@ -16080,10 +16120,9 @@ async function startServer() {
             'Profissional',
           email: m.users?.email || '',
           role: m.role,
-          profileRole:
-            sanitizeString(metadata?.role, 40) ||
-            sanitizeString(m?.role, 40) ||
-            null,
+          professionalTitle,
+          profileRole: professionalTitle,
+          roleLabel: formatClinicAccessRoleLabel(m.role, { professionalTitle }),
           workSchedule: readProfessionalWorkingScheduleFromMetadata(metadata, fallbackDuration) || buildDefaultProfessionalWorkingSchedule(fallbackDuration),
           workScheduleConfigured: Boolean(readProfessionalWorkingScheduleFromMetadata(metadata, fallbackDuration)),
           clinic_id: clinicId,
@@ -16322,6 +16361,19 @@ async function startServer() {
       if (!email || !role) {
         return res.status(400).json({ error: 'Email e papel validos sao obrigatorios' });
       }
+      const professionalTitle = role === 'therapist'
+        ? normalizeProfessionalTitleForClinic(
+            requiredOnboardingFields?.professionalTitle || requiredOnboardingFields?.professional_title || req.body?.professionalTitle || req.body?.professional_title,
+            DEFAULT_PROFESSIONAL_TITLE
+          )
+        : null;
+      const normalizedOnboardingFields = cleanObject({
+        ...requiredOnboardingFields,
+        professionalTitle,
+        professional_title: professionalTitle,
+        accessRoleLabel: role === 'therapist' ? 'Profissional de atendimento' : undefined
+      });
+      const invitedRoleLabel = formatClinicAccessRoleLabel(role, { professionalTitle, requiredOnboardingFields: normalizedOnboardingFields });
 
       const clinicId = currentClinicId(user);
       const demoState = await fetchClinicDemoState(clinicId);
@@ -16370,6 +16422,7 @@ async function startServer() {
         // Keep invitation fresh and allow role correction on resend.
         let patchPayload: Record<string, any> = cleanObject({
           role,
+          required_onboarding_fields: normalizedOnboardingFields,
           invited_by: user.id,
           updated_at: new Date().toISOString()
         });
@@ -16408,7 +16461,7 @@ async function startServer() {
         clinic_id: clinicId,
         clinic_name: sanitizeString(clinic?.name, 160) || sanitizeString(user.name, 160) || 'Clinica',
         role,
-        required_onboarding_fields: requiredOnboardingFields,
+        required_onboarding_fields: normalizedOnboardingFields,
         status: 'pending',
         invited_by: user.id,
         created_at: new Date().toISOString()
@@ -16443,7 +16496,8 @@ async function startServer() {
         insertedInvitation = {
           ...(existing || {}),
           id: existingInvitationId,
-          role
+          role,
+          required_onboarding_fields: normalizedOnboardingFields
         };
       }
 
@@ -16461,6 +16515,7 @@ async function startServer() {
           user_metadata: {
             full_name: email.split('@')[0],
             invited_role: role,
+            professional_title: professionalTitle,
             clinic_id: clinicId
           }
         });
@@ -16480,7 +16535,6 @@ async function startServer() {
           'generateSupabaseActionLink(clinic_invite)'
         )) || getActivationRedirectUrl('coordinator', email);
 
-      const invitedRoleLabel = role === 'receptionist' ? 'Recepcionista' : 'Terapeuta';
       const clinicName = sanitizeString(clinic?.name, 160) || sanitizeString(user.name, 160) || 'Clinica';
       const activationEmail = buildActivationEmailTemplate({
         nome: email.split('@')[0],
@@ -16510,6 +16564,7 @@ async function startServer() {
           invitationId: data?.id || null,
           clinicId,
           invitedRole: role,
+          professionalTitle,
           invitedBy: user.id,
           email: maskEmail(email)
         }
@@ -16539,6 +16594,7 @@ async function startServer() {
         payloadDetails: JSON.stringify({
           invitationId: data?.id || null,
           invitedRole: role,
+          professionalTitle,
           email: maskEmail(email),
           emailSent
         })
@@ -16579,20 +16635,60 @@ async function startServer() {
         logger: console
       });
       const membershipHistory = membershipHistoryResult.data || [];
+      const historyUserIds = Array.from(new Set(
+        (membershipHistory || [])
+          .map((m: any) => sanitizeString(m?.user_id, 120))
+          .filter((item: string) => isUuid(item))
+      ));
+      const historyProfilesByUserId = new Map<string, any>();
+      if (historyUserIds.length > 0) {
+        const { data: historyProfiles, error: historyProfileError } = await supabase
+          .from('professional_profiles')
+          .select('user_id,metadata')
+          .in('user_id', historyUserIds);
+        if (historyProfileError && !isMissingRelationError(historyProfileError)) throw historyProfileError;
+        (historyProfiles || []).forEach((profile: any) => {
+          const userId = sanitizeString(profile?.user_id, 120);
+          if (userId) historyProfilesByUserId.set(userId, profile);
+        });
+      }
+
+      const invitations = (invitationsResult.data || []).map((invitation: any) => {
+        const professionalTitle = invitation?.role === 'therapist' ? readProfessionalTitleFromSource(invitation, DEFAULT_PROFESSIONAL_TITLE) : null;
+        return {
+          ...invitation,
+          professionalTitle,
+          professional_title: professionalTitle,
+          roleLabel: formatClinicAccessRoleLabel(invitation?.role, { ...invitation, professionalTitle }),
+          role_label: formatClinicAccessRoleLabel(invitation?.role, { ...invitation, professionalTitle })
+        };
+      });
 
       res.json({
         success: true,
-        data: invitationsResult.data || [],
-        membershipHistory: (membershipHistory || []).map((m: any) => ({
-          id: `membership-${sanitizeString(m?.user_id, 120)}`,
-          user_id: sanitizeString(m?.user_id, 120),
-          email: sanitizeEmail(m?.users?.email) || '',
-          name: sanitizeString(m?.users?.name, 180) || 'Colaborador',
-          role: sanitizeString(m?.role, 40) || 'therapist',
-          status: 'unlinked',
-          created_at: m?.created_at || null,
-          updated_at: m?.updated_at || null
-        }))
+        data: invitations,
+        membershipHistory: (membershipHistory || []).map((m: any) => {
+          const userId = sanitizeString(m?.user_id, 120);
+          const profile = historyProfilesByUserId.get(userId) || {};
+          const metadata = profile?.metadata && typeof profile.metadata === 'object' ? profile.metadata : {};
+          const professionalTitle = m?.role === 'therapist'
+            ? readProfessionalTitleFromSource({ metadata, professionalTitle: metadata?.professionalTitle || metadata?.professional_title || metadata?.role }, DEFAULT_PROFESSIONAL_TITLE)
+            : null;
+          return {
+            id: `membership-${userId}`,
+            user_id: userId,
+            email: sanitizeEmail(m?.users?.email) || '',
+            name: sanitizeString(m?.users?.name, 180) || 'Colaborador',
+            role: sanitizeString(m?.role, 40) || 'therapist',
+            professionalTitle,
+            professional_title: professionalTitle,
+            roleLabel: formatClinicAccessRoleLabel(m?.role, { professionalTitle }),
+            role_label: formatClinicAccessRoleLabel(m?.role, { professionalTitle }),
+            status: 'unlinked',
+            created_at: m?.created_at || null,
+            updated_at: m?.updated_at || null
+          };
+        })
       });
     } catch (error: any) {
       return sendRouteDbError(res, '/api/clinic/invitations [GET]', error, {
@@ -16722,6 +16818,33 @@ async function startServer() {
         .eq('id', user.id);
 
       if (updateError) throw updateError;
+      if (invitation.role === 'therapist') {
+        const professionalTitle = readProfessionalTitleFromSource(invitation, DEFAULT_PROFESSIONAL_TITLE);
+        const { data: existingProfile, error: profileError } = await supabase
+          .from('professional_profiles')
+          .select('user_id,full_name,metadata')
+          .eq('user_id', user.id)
+          .maybeSingle();
+        if (profileError && !isMissingRelationError(profileError)) throw profileError;
+        const currentMetadata = existingProfile?.metadata && typeof existingProfile.metadata === 'object'
+          ? existingProfile.metadata
+          : {};
+        const { error: professionalTitleError } = await supabase
+          .from('professional_profiles')
+          .upsert(cleanObject({
+            user_id: user.id,
+            full_name: sanitizeString(existingProfile?.full_name || user.name || user.email?.split('@')?.[0], 180) || undefined,
+            metadata: cleanObject({
+              ...currentMetadata,
+              professionalTitle,
+              professional_title: professionalTitle,
+              role: professionalTitle,
+              titleUpdatedFromInvitationAt: new Date().toISOString()
+            }),
+            updated_at: new Date().toISOString()
+          }), { onConflict: 'user_id' });
+        if (professionalTitleError) throw professionalTitleError;
+      }
       await persistActivityLog({
         title: 'Convite aceito',
         content: `${maskEmail(sanitizeEmail(user.email) || '***')} aceitou convite e entrou na clínica.`,
@@ -16801,7 +16924,7 @@ async function startServer() {
         }], { onConflict: 'user_id,clinic_id' });
 
       if (updateError) throw updateError;
-      res.json({ success: true, message: `Papel ${role} atribuido com sucesso!` });
+      res.json({ success: true, message: `${formatClinicAccessRoleLabel(role, req.body)} atribuído com sucesso!` });
     } catch (error) {
       res.status(500).json({ error: 'Erro interno do servidor.' });
     }
@@ -16815,6 +16938,9 @@ async function startServer() {
     const { memberId } = req.params;
     const roleRaw = sanitizeString(req.body?.role, 30);
     const role = ensureClinicRole(roleRaw) ? roleRaw : null;
+    const professionalTitle = role === 'therapist'
+      ? normalizeProfessionalTitleForClinic(req.body?.professionalTitle || req.body?.professional_title, DEFAULT_PROFESSIONAL_TITLE)
+      : null;
 
     if (!role) return res.status(400).json({ error: 'Papel e obrigatorio' });
 
@@ -16828,15 +16954,61 @@ async function startServer() {
         .eq('status', 'active');
 
       if (error) throw error;
+      const { data: existingProfile, error: profileError } = await supabase
+        .from('professional_profiles')
+        .select('user_id,full_name,metadata')
+        .eq('user_id', memberId)
+        .maybeSingle();
+      if (profileError && !isMissingRelationError(profileError)) throw profileError;
+      const currentMetadata = existingProfile?.metadata && typeof existingProfile.metadata === 'object'
+        ? existingProfile.metadata
+        : {};
+      const nextMetadata = role === 'therapist'
+        ? cleanObject({
+            ...currentMetadata,
+            professionalTitle,
+            professional_title: professionalTitle,
+            role: professionalTitle,
+            professionalTitleUpdatedAt: new Date().toISOString(),
+            professionalTitleUpdatedBy: sanitizeString(adminUser?.id, 120) || null
+          })
+        : cleanObject({
+            ...currentMetadata,
+            professionalTitle: null,
+            professional_title: null,
+            role: null,
+            professionalTitleUpdatedAt: new Date().toISOString(),
+            professionalTitleUpdatedBy: sanitizeString(adminUser?.id, 120) || null
+          });
+      if (role === 'therapist' || existingProfile?.user_id) {
+        const { error: titleError } = await supabase
+          .from('professional_profiles')
+          .upsert(cleanObject({
+            user_id: memberId,
+            full_name: sanitizeString(existingProfile?.full_name, 180) || undefined,
+            metadata: nextMetadata,
+            updated_at: new Date().toISOString()
+          }), { onConflict: 'user_id' });
+        if (titleError) throw titleError;
+      }
       await persistActivityLog({
         title: 'Papel de colaborador atualizado',
-        content: `Colaborador ${sanitizeString(memberId, 120)} atualizado para papel ${role}.`,
+        content: `Colaborador ${sanitizeString(memberId, 120)} atualizado para ${formatClinicAccessRoleLabel(role, { professionalTitle })}.`,
         type: 'management',
         userId: sanitizeString(adminUser?.id, 120),
         clinicId,
         actorName: sanitizeString(adminUser?.name || adminUser?.email || 'Coordenador', 180)
       });
-      res.json({ success: true, message: 'Papel atualizado com sucesso' });
+      res.json({
+        success: true,
+        message: 'Acesso atualizado com sucesso',
+        data: {
+          memberId,
+          role,
+          professionalTitle,
+          roleLabel: formatClinicAccessRoleLabel(role, { professionalTitle })
+        }
+      });
     } catch (error) {
       res.status(500).json({ error: 'Erro interno do servidor.' });
     }
