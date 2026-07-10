@@ -431,20 +431,33 @@ test('codigo principal nao usa select star nos caminhos de billing alterados', (
   }
 });
 
-test('menu financeiro separa gestao interna da clinica e operacao de pacientes sem misturar Stripe', () => {
+test('menu financeiro separa paginas operacionais reais sem misturar Stripe ou Lotes XML TISS', () => {
   const navigation = coordinatorCode.slice(
     coordinatorCode.indexOf('const navigationGroups'),
     coordinatorCode.indexOf('const filterNavigationNode'),
   );
+  assert.match(navigation, /id:\s*"finance-dashboard"[\s\S]*label:\s*"Dashboard financeiro"/);
   assert.match(navigation, /label:\s*"Financeiro da clínica"/);
   assert.match(navigation, /label:\s*"Financeiro de pacientes"/);
   assert.match(navigation, /label:\s*"Repasses a profissionais"/);
   assert.match(navigation, /label:\s*"Recebimentos de pacientes"/);
   assert.match(navigation, /label:\s*"Convênios e lotes"/);
-  assert.doesNotMatch(navigation, /\{\s*id:\s*"clinical-revenue",\s*label:\s*"Receitas",\s*icon:/);
-  assert.doesNotMatch(navigation, /\{\s*id:\s*"clinical-expenses",\s*label:\s*"Despesas",\s*icon:/);
-  assert.doesNotMatch(navigation, /\{\s*id:\s*"clinical-cashflow",\s*label:\s*"Fluxo de Caixa",\s*icon:/);
+  assert.match(navigation, /id:\s*"clinical-revenue"[\s\S]*label:\s*"Receitas"[\s\S]*intent:\s*financialIntent\("Receitas"\)/);
+  assert.match(navigation, /id:\s*"clinical-expenses"[\s\S]*label:\s*"Despesas"[\s\S]*intent:\s*financialIntent\("Despesas"\)/);
+  assert.match(navigation, /id:\s*"clinical-cashflow"[\s\S]*label:\s*"Fluxo de caixa"[\s\S]*intent:\s*financialIntent\("Fluxo de caixa"\)/);
+  const financialPayerLotsNode = sliceFrom(navigation, 'id: "clinical-payers"', 520);
+  assert.match(financialPayerLotsNode, /tab:\s*"financial"/);
+  assert.match(financialPayerLotsNode, /financialIntent\("Conv/);
+  assert.doesNotMatch(financialPayerLotsNode, /conferenceIntent|Lotes XML/);
+  const tissLotsNode = sliceFrom(navigation, 'id: "prebilling-batches"', 520);
+  assert.match(tissLotsNode, /tab:\s*"conference"/);
+  assert.match(tissLotsNode, /conferenceIntent\("Lotes XML"/);
+  assert.doesNotMatch(tissLotsNode, /financialIntent\("Conv/);
   assert.match(coordinatorCode, /data-financial-clinic-internal-nav/);
+  assert.match(coordinatorCode, /data-financial-revenue-view/);
+  assert.match(coordinatorCode, /data-financial-expenses-view/);
+  assert.match(coordinatorCode, /data-financial-cashflow-view/);
+  assert.match(coordinatorCode, /data-financial-payer-lots-view/);
   assert.match(navigation, /clinicFinanceOnly:\s*true/);
   assert.match(navigation, /id:\s*"settings-billing"[\s\S]*label:\s*"Assinatura"/);
   assert.match(coordinatorCode, /if \(tabId === "financial"\) return canAccessClinicFinance \|\| isReceptionist/);

@@ -205,12 +205,26 @@ test('UI expõe configuração, agenda e fechamento sem IDs técnicos ou HTML pe
   assert.doesNotMatch(navigationSection, /\{\s*id:\s*"prebilling-pending",\s*label:\s*"Pendências",\s*icon:/);
   assert.match(navigationSection, /id:\s*"prebilling-batches"[\s\S]*label:\s*"Lotes XML"/);
   assert.match(navigationSection, /id:\s*"finance-root"[\s\S]*label:\s*"Financeiro"/);
-  assert.match(navigationSection, /id:\s*"finance-clinic-internal"[\s\S]*label:\s*"Financeiro da clínica"/);
-  assert.match(navigationSection, /aliases:\s*\[[\s\S]*id:\s*"finance-dashboard"[\s\S]*label:\s*"Visão geral da clínica"/);
-  assert.doesNotMatch(navigationSection, /\{\s*id:\s*"finance-dashboard",\s*label:\s*"Visão geral da clínica",\s*icon:/);
-  assert.doesNotMatch(navigationSection, /\{\s*id:\s*"clinical-revenue",\s*label:\s*"Receitas",\s*icon:/);
-  assert.doesNotMatch(navigationSection, /\{\s*id:\s*"clinical-expenses",\s*label:\s*"Despesas",\s*icon:/);
-  assert.doesNotMatch(navigationSection, /\{\s*id:\s*"clinical-cashflow",\s*label:\s*"Fluxo de Caixa",\s*icon:/);
+  assert.match(navigationSection, /id:\s*"finance-dashboard"[\s\S]*label:\s*"Dashboard financeiro"[\s\S]*intent:\s*financialIntent\("Dashboard financeiro"\)/);
+  assert.match(navigationSection, /aliases:\s*\[[\s\S]*id:\s*"finance-clinic-internal"[\s\S]*label:\s*"Financeiro da clínica"/);
+  assert.match(navigationSection, /aliases:\s*\[[\s\S]*id:\s*"finance-overview"[\s\S]*label:\s*"Visão geral da clínica"/);
+  assert.match(navigationSection, /id:\s*"clinical-revenue"[\s\S]*label:\s*"Receitas"[\s\S]*intent:\s*financialIntent\("Receitas"\)/);
+  assert.match(navigationSection, /id:\s*"clinical-expenses"[\s\S]*label:\s*"Despesas"[\s\S]*intent:\s*financialIntent\("Despesas"\)/);
+  assert.match(navigationSection, /id:\s*"clinical-cashflow"[\s\S]*label:\s*"Fluxo de caixa"[\s\S]*intent:\s*financialIntent\("Fluxo de caixa"\)/);
+  assert.match(navigationSection, /id:\s*"clinical-payers"[\s\S]*label:\s*"Convênios e lotes"[\s\S]*tab:\s*"financial"[\s\S]*financialIntent\("Convênios e lotes"\)/);
+  const financialPayerLotsNode = navigationSection.slice(
+    navigationSection.indexOf('id: "clinical-payers"'),
+    navigationSection.indexOf('id: "finance-patient-operations"'),
+  );
+  assert.match(financialPayerLotsNode, /tab:\s*"financial"/);
+  assert.doesNotMatch(financialPayerLotsNode, /conferenceIntent|Lotes XML/);
+  const tissLotsNode = navigationSection.slice(
+    navigationSection.indexOf('id: "prebilling-batches"'),
+    navigationSection.indexOf('id: "finance-root"'),
+  );
+  assert.match(tissLotsNode, /tab:\s*"conference"/);
+  assert.match(tissLotsNode, /conferenceIntent\("Lotes XML"/);
+  assert.doesNotMatch(tissLotsNode, /financialIntent\("Convênios e lotes"/);
   assert.doesNotMatch(navigationSection, /id:\s*"report-payers"/);
   assert.match(navigationSection, /id:\s*"finance-patient-operations"[\s\S]*label:\s*"Financeiro de pacientes"/);
   assert.match(navigationSection, /id:\s*"clinical-transfers"[\s\S]*label:\s*"Repasses a profissionais"/);
@@ -221,6 +235,10 @@ test('UI expõe configuração, agenda e fechamento sem IDs técnicos ou HTML pe
   assert.match(coordinatorCode, /financialNavigationContext\.breadcrumb\.join\(" > "\)/);
   assert.match(coordinatorCode, /item\.aliases\?\.some/);
   assert.match(coordinatorCode, /data-financial-clinic-internal-nav/);
+  assert.match(coordinatorCode, /data-financial-revenue-view/);
+  assert.match(coordinatorCode, /data-financial-expenses-view/);
+  assert.match(coordinatorCode, /data-financial-cashflow-view/);
+  assert.match(coordinatorCode, /data-financial-payer-lots-view/);
   const financialSection = coordinatorCode.slice(
     coordinatorCode.indexOf('activeTab === "financial"'),
     coordinatorCode.indexOf('activeTab === "flow"'),

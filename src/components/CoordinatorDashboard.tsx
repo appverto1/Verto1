@@ -2,6 +2,7 @@
 import {
   LayoutDashboard,
   Users,
+  TrendingUp,
   Calendar,
   ClipboardList,
   LogOut,
@@ -12,11 +13,14 @@ import {
   ChevronRight,
   DollarSign,
   PieChart,
+  ArrowUpRight,
+  ArrowDownRight,
   UserPlus,
   Mail,
   Filter,
   Download,
   FileText,
+  FileSpreadsheet,
   DoorOpen,
   Edit2,
   Trash2,
@@ -524,7 +528,7 @@ export function CoordinatorDashboard({
   });
   const [financialNavigationContext, setFinancialNavigationContext] = useState<FinancialNavigationIntent & { intentKey: number }>({
     tab: "financial",
-    breadcrumb: ["Financeiro", "Financeiro da clínica"],
+    breadcrumb: ["Financeiro", "Dashboard financeiro"],
     intentKey: 0,
   });
   const [therapistMembersById, setTherapistMembersById] = useState<Record<string, any>>({});
@@ -532,7 +536,7 @@ export function CoordinatorDashboard({
   const [patientQuickFilter, setPatientQuickFilter] = useState<"all" | "birthdaysToday">("all");
 
   const defaultFinancialNavigationIntent = (tab: DashboardTab): FinancialNavigationIntent | null => {
-    if (tab === "financial") return { tab, breadcrumb: ["Financeiro", "Financeiro da clínica"] };
+    if (tab === "financial") return { tab, breadcrumb: ["Financeiro", "Dashboard financeiro"] };
     if (tab === "payers") {
       return {
         tab,
@@ -6991,7 +6995,16 @@ export function CoordinatorDashboard({
   const dreData = financialDashboard.dreRows;
   const compensationForecast = financialDashboard.dueRows.slice(0, 6);
   const activeFinancialSection = financialNavigationContext.breadcrumb[1] || (isReceptionist ? "Recebimentos de pacientes" : "Visão geral da clínica");
+  const isFinancialDashboardSection = [
+    "Dashboard financeiro",
+    "Financeiro da clínica",
+    "Visão geral da clínica",
+  ].includes(activeFinancialSection);
+  const isRevenueSection = activeFinancialSection === "Receitas";
+  const isExpenseSection = activeFinancialSection === "Despesas";
+  const isCashFlowSection = activeFinancialSection === "Fluxo de caixa" || activeFinancialSection === "Fluxo de Caixa";
   const isProfessionalTransfersSection = activeFinancialSection === "Repasses a profissionais";
+  const isFinancialPayerLotsSection = activeFinancialSection === "Convênios e lotes";
   const isPatientReceivablesSection = [
     "Recebimentos de pacientes",
     "Cobranças",
@@ -7912,22 +7925,23 @@ export function CoordinatorDashboard({
         badge: "BETA",
         children: [
           {
-            id: "finance-clinic-internal",
-            label: "Financeiro da clínica",
-            icon: PieChart,
+            id: "finance-dashboard",
+            label: "Dashboard financeiro",
+            icon: LayoutDashboard,
             tab: "financial",
-            intent: financialIntent("Financeiro da clínica"),
+            intent: financialIntent("Dashboard financeiro"),
             clinicFinanceOnly: true,
             aliases: [
-              { id: "finance-dashboard", label: "Visão geral da clínica", intent: financialIntent("Visão geral da clínica") },
+              { id: "finance-clinic-internal", label: "Financeiro da clínica", intent: financialIntent("Dashboard financeiro") },
+              { id: "finance-overview", label: "Visão geral da clínica", intent: financialIntent("Dashboard financeiro") },
               { id: "clinical-dashboard", label: "Dashboard financeiro", intent: financialIntent("Dashboard financeiro") },
-              { id: "clinical-revenue", label: "Receitas", intent: financialIntent("Receitas") },
-              { id: "clinical-expenses", label: "Despesas", intent: financialIntent("Despesas") },
-              { id: "clinical-cashflow", label: "Fluxo de caixa", intent: financialIntent("Fluxo de caixa") },
             ],
           },
+          { id: "clinical-revenue", label: "Receitas", icon: ArrowUpRight, tab: "financial", intent: financialIntent("Receitas"), clinicFinanceOnly: true },
+          { id: "clinical-expenses", label: "Despesas", icon: ArrowDownRight, tab: "financial", intent: financialIntent("Despesas"), clinicFinanceOnly: true },
+          { id: "clinical-cashflow", label: "Fluxo de caixa", icon: TrendingUp, tab: "financial", intent: financialIntent("Fluxo de caixa"), clinicFinanceOnly: true },
           { id: "clinical-transfers", label: "Repasses a profissionais", icon: CreditCard, tab: "financial", intent: financialIntent("Repasses a profissionais"), clinicFinanceOnly: true },
-          { id: "clinical-payers", label: "Convênios e lotes", icon: FileText, tab: "conference", intent: conferenceIntent("Lotes XML", "preGuides", "xmlDrafts", "Pré-faturamento TISS"), clinicFinanceOnly: true },
+          { id: "clinical-payers", label: "Convênios e lotes", icon: FileSpreadsheet, tab: "financial", intent: financialIntent("Convênios e lotes"), clinicFinanceOnly: true },
           {
             id: "finance-patient-operations",
             label: "Financeiro de pacientes",
@@ -9366,7 +9380,7 @@ export function CoordinatorDashboard({
                 exit={{ opacity: 0, y: -20 }}
                 className="space-y-8"
               >
-                {!isReceptionist && (
+                {!isReceptionist && isFinancialDashboardSection && (
                   <div className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
                     <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                       <div>
@@ -9561,16 +9575,32 @@ export function CoordinatorDashboard({
                       <h3 className="text-2xl font-semibold tracking-tight text-slate-900">
                         {isProfessionalTransfersSection
                           ? "Repasses a profissionais"
+                          : isRevenueSection
+                            ? "Receitas"
+                            : isExpenseSection
+                              ? "Despesas"
+                              : isCashFlowSection
+                                ? "Fluxo de caixa"
+                                : isFinancialPayerLotsSection
+                                  ? "Convênios e lotes"
                           : isPatientReceivablesSection || isReceptionist
                             ? "Financeiro de pacientes"
-                            : "Financeiro da clínica"}
+                            : "Dashboard financeiro"}
                       </h3>
                       <p className="text-sm text-slate-500">
                         {isProfessionalTransfersSection
                           ? "Calcule, revise e acompanhe os valores a repassar para profissionais."
-                          : isPatientReceivablesSection || isReceptionist
-                            ? "Rotina de recepção: cobranças, recebimentos, comprovantes, recibos e pendências por paciente."
-                            : "Gestão interna: resultado da clínica, convênios, lotes, despesas, fluxo de caixa e relatórios."}
+                          : isRevenueSection
+                            ? "Recebimentos, cobranças, inadimplência e entradas confirmadas do período."
+                            : isExpenseSection
+                              ? "Despesas operacionais, saídas registradas e próximos vencimentos."
+                              : isCashFlowSection
+                                ? "Entradas, saídas, saldo líquido e visão mensal de caixa."
+                                : isFinancialPayerLotsSection
+                                  ? "Visão financeira de convênios, valores previstos, realizados e atalhos para lotes TISS."
+                                  : isPatientReceivablesSection || isReceptionist
+                                    ? "Rotina de recepção: cobranças, recebimentos, comprovantes, recibos e pendências por paciente."
+                                    : "Resumo executivo da clínica, com atalhos para as visões operacionais."}
                       </p>
                     </div>
                     <div className="flex items-center gap-3">
@@ -9587,15 +9617,17 @@ export function CoordinatorDashboard({
                     </div>
                 </div>
 
-                {canAccessClinicFinance && !isProfessionalTransfersSection && !isPatientReceivablesSection && !isReceptionist && (
+                {canAccessClinicFinance && !isPatientReceivablesSection && !isReceptionist && (
                   <div data-financial-clinic-internal-nav className="flex flex-wrap gap-2">
                     {[
-                      ["Financeiro da clínica", "Dashboard"],
+                      ["Dashboard financeiro", "Dashboard"],
                       ["Receitas", "Receitas"],
                       ["Despesas", "Despesas"],
                       ["Fluxo de caixa", "Fluxo de caixa"],
+                      ["Repasses a profissionais", "Repasses"],
+                      ["Convênios e lotes", "Convênios e lotes"],
                     ].map(([section, label]) => {
-                      const selected = activeFinancialSection === section || (section === "Financeiro da clínica" && ["Visão geral da clínica", "Dashboard financeiro"].includes(activeFinancialSection));
+                      const selected = activeFinancialSection === section || (section === "Dashboard financeiro" && ["Visão geral da clínica", "Financeiro da clínica"].includes(activeFinancialSection));
                       return (
                         <button
                           key={section}
@@ -9614,6 +9646,7 @@ export function CoordinatorDashboard({
                   </div>
                 )}
 
+                {(isPatientReceivablesSection || isReceptionist) && (
                 <div className="grid gap-3 md:grid-cols-2">
                   {canAccessClinicFinance && (
                     <div className={`rounded-3xl border p-5 ${isPatientReceivablesSection ? "border-slate-100 bg-white" : "border-violet-100 bg-violet-50/70"}`}>
@@ -9628,15 +9661,18 @@ export function CoordinatorDashboard({
                     <p className="mt-1 text-xs text-slate-500">Foco operacional da recepção, sem margem, DRE ou regras internas de repasse.</p>
                   </div>
                 </div>
+                )}
 
                 <div className="flex flex-wrap gap-2">
-                  <button
-                    onClick={() => setIsPaymentModalOpen(true)}
-                    className="flex items-center gap-2 rounded-2xl bg-[#7a32fc] px-5 py-3 text-sm font-semibold text-white shadow-sm shadow-purple-500/10 transition hover:bg-[#6d28e8]"
-                  >
-                    <Plus size={18} /> Cobrança / Pagamento
-                  </button>
-                  {canAccessClinicFinance && (
+                  {(isRevenueSection || isPatientReceivablesSection || isReceptionist) && (
+                    <button
+                      onClick={() => setIsPaymentModalOpen(true)}
+                      className="flex items-center gap-2 rounded-2xl bg-[#7a32fc] px-5 py-3 text-sm font-semibold text-white shadow-sm shadow-purple-500/10 transition hover:bg-[#6d28e8]"
+                    >
+                      <Plus size={18} /> Cobrança / Pagamento
+                    </button>
+                  )}
+                  {canAccessClinicFinance && isProfessionalTransfersSection && (
                     <button
                       onClick={() => setIsProfessionalPaymentModalOpen(true)}
                       className="flex items-center gap-2 rounded-2xl bg-[#7a32fc] px-5 py-3 text-sm font-semibold text-white shadow-sm shadow-purple-500/10 transition hover:bg-[#6d28e8]"
@@ -9644,7 +9680,16 @@ export function CoordinatorDashboard({
                       <CreditCard size={18} /> Registrar repasse
                     </button>
                   )}
-                  {!isReceptionist && (
+                  {isFinancialPayerLotsSection && (
+                    <button
+                      type="button"
+                      onClick={() => navigateToTab("conference", conferenceIntent("Lotes XML", "preGuides", "xmlDrafts", "Pré-faturamento TISS"))}
+                      className="flex items-center gap-2 rounded-2xl bg-[#7a32fc] px-5 py-3 text-sm font-semibold text-white shadow-sm shadow-purple-500/10 transition hover:bg-[#6d28e8]"
+                    >
+                      <FileText size={18} /> Abrir Lotes XML TISS
+                    </button>
+                  )}
+                  {(!isReceptionist && (isFinancialPayerLotsSection || isFinancialDashboardSection)) && (
                     <button
                       type="button"
                       onClick={() => navigateToTab("payers", payerIntent("convenios", "Convênios"))}
@@ -9654,6 +9699,110 @@ export function CoordinatorDashboard({
                     </button>
                   )}
                 </div>
+
+                {isRevenueSection && (
+                  <div data-financial-revenue-view className="grid gap-3 md:grid-cols-4">
+                    {[
+                      ["Receita realizada", formatCurrency(financialDashboard.realized), "Pagamentos confirmados no mês"],
+                      ["Receita projetada", formatCurrency(financialDashboard.projection), "Planos e mensalidades ativos"],
+                      ["A receber", formatCurrency(financialDashboard.pendingAmount), `${financialDashboard.pendingPayments.length} cobrança(s) pendente(s)`],
+                      ["Em atraso", formatCurrency(financialDashboard.overdueAmount), `${financialDashboard.overduePayments.length} cobrança(s) vencida(s)`],
+                    ].map(([label, value, hint]) => (
+                      <div key={label} className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
+                        <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">{label}</p>
+                        <p className="mt-2 text-xl font-semibold text-slate-900">{value}</p>
+                        <p className="mt-1 text-xs text-slate-500">{hint}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {isExpenseSection && (
+                  <div data-financial-expenses-view className="grid gap-3 md:grid-cols-4">
+                    {[
+                      ["Despesas operacionais", formatCurrency(financialDashboard.operationalExpenses), "Saídas registradas no período"],
+                      ["Repasses pagos", formatCurrency(financialDashboard.professionalPaid), "Pagamentos profissionais baixados"],
+                      ["Repasses pendentes", formatCurrency(financialDashboard.professionalPending), "Valores ainda a repassar"],
+                      ["Saldo líquido", formatCurrency(financialDashboard.cashFlow), "Entradas pagas menos saídas pagas"],
+                    ].map(([label, value, hint]) => (
+                      <div key={label} className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
+                        <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">{label}</p>
+                        <p className="mt-2 text-xl font-semibold text-slate-900">{value}</p>
+                        <p className="mt-1 text-xs text-slate-500">{hint}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {isCashFlowSection && (
+                  <div data-financial-cashflow-view className="space-y-4">
+                    <div className="grid gap-3 md:grid-cols-3">
+                      {[
+                        ["Entradas", formatCurrency(financialDashboard.cashIn), "Recebimentos pagos"],
+                        ["Saídas", formatCurrency(financialDashboard.cashOut), "Repasses pagos e despesas"],
+                        ["Saldo líquido", formatCurrency(financialDashboard.cashFlow), "Resultado de caixa do período"],
+                      ].map(([label, value, hint]) => (
+                        <div key={label} className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
+                          <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">{label}</p>
+                          <p className="mt-2 text-xl font-semibold text-slate-900">{value}</p>
+                          <p className="mt-1 text-xs text-slate-500">{hint}</p>
+                        </div>
+                      ))}
+                    </div>
+                    <div data-financial-chart="cash-flow-monthly" className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
+                      <h4 className="mb-6 font-semibold text-slate-900">
+                        Fluxo de caixa mensal
+                      </h4>
+                      <div className="h-64 min-h-[300px]">
+                        <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>
+                          <BarChart data={financialCashFlowRows}>
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
+                            <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fill: "#94A3B8", fontSize: 12 }} />
+                            <YAxis axisLine={false} tickLine={false} tick={{ fill: "#94A3B8", fontSize: 12 }} />
+                            <Tooltip content={renderFinancialTooltip} cursor={{ fill: "#F8FAFC" }} />
+                            <Bar name="Receita realizada" dataKey="Receita realizada" fill="#7a32fc" radius={[4, 4, 0, 0]} />
+                            <Bar name="Resultado estimado" dataKey="Resultado estimado" fill="#6AD2FF" radius={[4, 4, 0, 0]} />
+                          </BarChart>
+                        </SafeResponsiveContainer>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {isFinancialPayerLotsSection && (
+                  <div data-financial-payer-lots-view className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+                    <div className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
+                      <h4 className="font-semibold text-slate-900">Convênios e lotes financeiros</h4>
+                      <p className="mt-1 text-sm text-slate-500">
+                        Acompanhe valores previstos, realizados e pendências financeiras por convênio. Lotes XML oficiais continuam no pré-faturamento TISS.
+                      </p>
+                      <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                        {financialDashboard.insuranceRows.length ? financialDashboard.insuranceRows.map((row: any) => (
+                          <div key={row.label} className="rounded-2xl bg-slate-50 p-4">
+                            <p className="text-sm font-semibold text-slate-900">{row.label}</p>
+                            <p className="mt-1 text-lg font-semibold text-[#7a32fc]">{formatCurrency(row.amount)}</p>
+                            <p className="text-xs text-slate-500">{row.patients} paciente(s) com previsão financeira</p>
+                          </div>
+                        )) : (
+                          <p className="rounded-2xl bg-slate-50 p-4 text-sm font-semibold text-slate-400">
+                            Nenhum convênio com previsão financeira neste período.
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    <div className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
+                      <h4 className="font-semibold text-slate-900">Origem da receita</h4>
+                      <div className="mt-5 space-y-3">
+                        {financialDashboard.payerRows.concat(financialDashboard.billingMethodRows).map((row: any) => (
+                          <div key={`payer-lot-${row.label}`} className="flex items-center justify-between rounded-2xl bg-slate-50 p-4 text-sm">
+                            <span className="font-medium text-slate-600">{row.label}</span>
+                            <span className="font-semibold text-slate-900">{formatCurrency(row.amount)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {canAccessClinicFinance && isProfessionalTransfersSection && (
                   <div data-professional-transfers-panel className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
@@ -9781,9 +9930,10 @@ export function CoordinatorDashboard({
                   </div>
                 )}
 
+                {(isRevenueSection || isExpenseSection || isPatientReceivablesSection || isReceptionist) && (
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                   <div className="lg:col-span-2 space-y-8">
-                    {!isReceptionist && (
+                    {!isReceptionist && isExpenseSection && (
                       <>
                         <div className="overflow-hidden rounded-[32px] border border-slate-100 bg-white shadow-sm">
                           <div className="border-b border-slate-50 p-6">
@@ -10022,6 +10172,7 @@ export function CoordinatorDashboard({
                       </>
                     )}
 
+                    {(isRevenueSection || isPatientReceivablesSection || isReceptionist) && (
                     <div className="overflow-hidden rounded-[32px] border border-slate-100 bg-white shadow-sm">
                       <div className="border-b border-slate-50 p-6">
                         <h4 className="font-semibold text-slate-900">
@@ -10148,10 +10299,11 @@ export function CoordinatorDashboard({
                         </table>
                       </div>
                     </div>
+                    )}
                   </div>
 
                   <div className="space-y-8">
-                    {!isReceptionist && (
+                    {!isReceptionist && isCashFlowSection && (
                       <div data-financial-chart="cash-flow-monthly" className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
                         <h4 className="mb-6 font-semibold text-slate-900">
                           Fluxo de caixa mensal
@@ -10239,7 +10391,7 @@ export function CoordinatorDashboard({
                       </div>
                     </div>
 
-                    {!isProfessionalTransfersSection && (
+                    {isExpenseSection && (
                     <div className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
                       <h4 className="mb-6 font-semibold text-slate-900">
                         Pagamentos de profissionais
@@ -10290,6 +10442,7 @@ export function CoordinatorDashboard({
                     )}
                   </div>
                 </div>
+                )}
               </motion.div>
             )}
             {activeTab === "flow" && (
