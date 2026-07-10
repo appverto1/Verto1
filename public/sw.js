@@ -41,7 +41,7 @@ self.addEventListener("push", (event) => {
     payload.url ||
     payload.data?.url ||
     `/${fallbackQuery ? `?${fallbackQuery}` : ""}`;
-  const brandName = payload.branding?.displayName || payload.data?.brandName || "Verto";
+  const brandName = payload.branding?.displayName || payload.data?.brandName || "Clínica";
   const brandLogo = payload.branding?.logoUrl || payload.data?.brandLogoUrl || "";
 
   event.waitUntil(

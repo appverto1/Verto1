@@ -38,6 +38,7 @@ type ReminderModalInput = {
   branding: BrandingContext;
 };
 
+const DEFAULT_CLINIC_NAME = "Clínica";
 const DEFAULT_VERTO_LOGO = "/verto-3d-transparent.png";
 const APPOINTMENT_RESPONSE_COPY = "Toque para confirmar, remarcar ou cancelar.";
 const FRIENDLY_ERROR_COPY = "Não foi possível concluir sua solicitação agora. Tente novamente em alguns instantes.";
@@ -87,7 +88,7 @@ const namesLookLikeSamePerson = (left: unknown, right: unknown) => {
 };
 
 export function buildBrandingInitials(value: unknown) {
-  const words = sanitizeText(value || "Verto", 120)
+  const words = sanitizeText(value || DEFAULT_CLINIC_NAME, 120)
     .split(/\s+/)
     .filter(Boolean)
     .slice(0, 2);
@@ -155,7 +156,7 @@ export function resolveBrandingContext(input: BrandingInput = {}): BrandingConte
     professional.profile_picture
   );
   const professionalAccent = firstText(professional.professional_primary_color, professional.primaryColor, professional.primary_color);
-  const canUseProfessionalFallback = input.allowProfessionalFallback ?? !hasClinicIdentity;
+  const canUseProfessionalFallback = input.allowProfessionalFallback === true;
   if (canUseProfessionalFallback && (professionalName || professionalLogoUrl)) {
     const displayName = professionalName || "Profissional";
     return {
@@ -167,7 +168,7 @@ export function resolveBrandingContext(input: BrandingInput = {}): BrandingConte
     };
   }
 
-  const fallbackName = sanitizeText(input.fallbackName, 120) || "Verto";
+  const fallbackName = sanitizeText(input.fallbackName, 120) || DEFAULT_CLINIC_NAME;
   return {
     displayName: fallbackName,
     logoUrl: firstUrl(input.fallbackLogoUrl) || DEFAULT_VERTO_LOGO,
@@ -216,13 +217,13 @@ export function buildPatientReminderNotificationPayload(input: ReminderPayloadIn
     : `Lembrete de consulta${whenText ? ` ${whenText}` : ""}. ${APPOINTMENT_RESPONSE_COPY}`;
   const fallbackUrl = appointmentId ? `/?appointment_id=${encodeURIComponent(appointmentId)}` : "/";
   const url = sanitizeText(input.url, 2000) || fallbackUrl;
-  const icon = DEFAULT_VERTO_LOGO;
+  const icon = input.branding.logoUrl || DEFAULT_VERTO_LOGO;
   return {
     title: input.branding.displayName,
     body,
     icon,
-    badge: icon,
-    image: undefined as string | undefined,
+    badge: DEFAULT_VERTO_LOGO,
+    image: input.branding.logoUrl || undefined,
     tag: appointmentId ? `appointment-reminder-${appointmentId}-${reminderKind}` : undefined,
     url,
     appointmentId,
@@ -253,8 +254,8 @@ export function buildPatientReminderModalViewModel(input: ReminderModalInput) {
     sourceType: input.branding.sourceType,
     headerText: input.branding.displayName,
     appointmentSummaryText: whenText
-      ? `Consulta de ${patientName} com ${input.branding.displayName} ${whenText}.`
-      : `Consulta de ${patientName} com ${input.branding.displayName}.`,
+      ? `Consulta de ${patientName} ${whenText}.`
+      : `Consulta de ${patientName}.`,
     statusLabel: sanitizeText(input.status, 80),
     confirmLabel: "Confirmar presença",
     rescheduleLabel: "Remarcar consulta",

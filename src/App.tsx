@@ -1754,7 +1754,7 @@ export default function App() {
 
   const buildAppointmentConfirmationViewModel = () => {
     if (!appointmentConfirmation) {
-      const branding = resolveBrandingContext({ fallbackName: 'Verto', fallbackLogoUrl: '/verto-3d-transparent.png' });
+      const branding = resolveBrandingContext({ fallbackName: 'Clínica', fallbackLogoUrl: '/verto-3d-transparent.png' });
       return buildPatientReminderModalViewModel({
         appointmentId: '',
         branding,
@@ -1772,8 +1772,8 @@ export default function App() {
         displayName: appointmentConfirmation.professionalName,
         logoUrl: appointmentConfirmation.professionalLogoUrl,
       },
-      allowProfessionalFallback: !appointmentConfirmation.clinicId,
-      fallbackName: 'Verto',
+      allowProfessionalFallback: false,
+      fallbackName: 'Clínica',
       fallbackLogoUrl: '/verto-3d-transparent.png',
     });
     return buildPatientReminderModalViewModel({
@@ -6785,7 +6785,7 @@ export default function App() {
                 <div className="min-w-0">
                   <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500">Lembrete de consulta</p>
                   <h2 className="truncate text-xl font-black tracking-tight">
-                    {appointmentConfirmationViewModel?.brandName || 'Verto'}
+                    {appointmentConfirmationViewModel?.brandName || 'Clínica'}
                   </h2>
                 </div>
               </div>

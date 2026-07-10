@@ -90,7 +90,7 @@ test('portal notifications derive clinic branding from linked patient when notif
   assert.ok(
     notificationRouteSlice.indexOf('const patientId = sanitizeString(row?.patient_id || metadata.patientId || metadata.patient_id || appointmentContext?.patientId, 120);') <
       notificationRouteSlice.indexOf('const branding = await resolveNotificationClinicBranding(clinicId);'),
-    'Branding da notificacao deve poder usar o paciente antes do fallback Verto.'
+    'Branding da notificacao deve poder usar o paciente antes do fallback institucional.'
   );
   assert.ok(
     notificationClinicResolutionSlice.indexOf('patientClinicIdsById.get(patientId)') <
@@ -129,8 +129,11 @@ test('patient portal still exposes appointment action controls and notification 
   assert.match(patientDashboardCode, /Solicitar cancelamento/);
   assert.match(pushServiceCode, /clinicName/);
   assert.match(pushServiceCode, /clinicLogoUrl/);
+  assert.match(pushServiceCode, /allowProfessionalFallback:\s*false/);
   assert.match(cronServiceCode, /resolveReminderClinicBranding/);
-  assert.match(cronServiceCode, /const clinicName = clinicBranding\.clinicName \|\| appointment\.clinicName \|\| 'Verto'/);
+  assert.match(cronServiceCode, /DEFAULT_CLINIC_NOTIFICATION_NAME = 'Clínica'/);
+  assert.match(cronServiceCode, /isGenericClinicNotificationName/);
+  assert.match(cronServiceCode, /allowProfessionalFallback:\s*false/);
   assert.match(cronServiceCode, /appointment: brandedAppointment/);
   assert.doesNotMatch(pushServiceCode, /\.select\(['"]\*['"]\)/);
   assert.doesNotMatch(cronServiceCode, /\.select\(['"]\*['"]\)/);

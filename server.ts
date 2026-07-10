@@ -18454,7 +18454,7 @@ async function startServer() {
     const safeClinicId = sanitizeString(rawClinicId, 120);
     const fallback = {
       id: isUuid(safeClinicId) ? safeClinicId : null,
-      displayName: 'sua clínica',
+      displayName: 'Clínica',
       logoUrl: null as string | null,
       primaryColor: '#7C3AED'
     };
@@ -18670,11 +18670,11 @@ async function startServer() {
         source?.clinicName,
       160
     );
-    const rawClinicName = clinicBranding.displayName !== 'sua clínica'
+    const rawClinicName = clinicBranding.displayName !== 'Clínica'
       ? clinicBranding.displayName
       : explicitClinicName || clinicBranding.displayName;
     const clinicName = looksLikeProfessionalNameFallback(rawClinicName, professional.professionalName)
-      ? 'sua clínica'
+      ? 'Clínica'
       : rawClinicName;
     const clinicLogoUrl =
       clinicBranding.logoUrl ||
@@ -19710,7 +19710,7 @@ async function startServer() {
       }
       const readReminderClinicBranding = async (rawClinicId: unknown) => {
         const safeClinicId = sanitizeString(rawClinicId, 120);
-        if (!isUuid(safeClinicId)) return { clinicName: 'sua clínica', clinicLogoUrl: null };
+        if (!isUuid(safeClinicId)) return { clinicName: 'Clínica', clinicLogoUrl: null };
         const read = (columns: string) =>
           supabase
             .from('clinics')
@@ -19731,10 +19731,10 @@ async function startServer() {
         }
         if (clinicError) {
           console.warn('[Push] clinic branding read failed:', clinicError.message);
-          return { clinicName: 'sua clínica', clinicLogoUrl: null };
+          return { clinicName: 'Clínica', clinicLogoUrl: null };
         }
         return {
-          clinicName: sanitizeString(clinic?.display_name || clinic?.legal_name || clinic?.name, 160) || 'Verto',
+          clinicName: sanitizeString(clinic?.display_name || clinic?.legal_name || clinic?.name, 160) || 'Clínica',
           clinicLogoUrl: sanitizeSessionUrl(clinic?.logo_url)
         };
       };
@@ -31318,7 +31318,7 @@ async function startServer() {
       responsibleUserId: sanitizeString(row?.responsible_user_id || user?.id, 120) || null,
       responsibleEmail: sanitizeEmail(row?.responsible_email || user?.email) || null,
       clinicId: clinicBranding.id || (isUuid(clinicId) ? clinicId : null),
-      clinicName: clinicBranding.displayName !== 'sua clínica' ? clinicBranding.displayName : null,
+      clinicName: clinicBranding.displayName !== 'Clínica' ? clinicBranding.displayName : null,
       clinicLegalName: null,
       clinicLogoUrl: clinicBranding.logoUrl,
       portalType: sanitizeString(user?.portalType || user?.type || row?.panel_type || row?.type, 80) || null,
@@ -31600,11 +31600,11 @@ async function startServer() {
       const clinicBrandingById = new Map<string, { displayName: string; logoUrl: string | null }>();
       const resolveNotificationClinicBranding = async (rawClinicId: unknown) => {
         const clinicId = sanitizeString(rawClinicId, 120);
-        if (!isUuid(clinicId)) return { displayName: 'Verto', logoUrl: null };
+        if (!isUuid(clinicId)) return { displayName: 'Clínica', logoUrl: null };
         if (clinicBrandingById.has(clinicId)) return clinicBrandingById.get(clinicId)!;
         const branding = await readClinicBrandingForFamilyView(clinicId);
         const resolved = {
-          displayName: sanitizeString(branding.displayName, 160) || 'Verto',
+          displayName: sanitizeString(branding.displayName, 160) || 'Clínica',
           logoUrl: sanitizeSessionUrl(branding.logoUrl) || null
         };
         clinicBrandingById.set(clinicId, resolved);
@@ -31859,7 +31859,7 @@ async function startServer() {
       clinic: clinicName || clinicLogoUrl || isUuid(clinicId)
         ? {
             id: isUuid(clinicId) ? clinicId : null,
-            displayName: clinicName || 'sua clínica',
+            displayName: clinicName || 'Clínica',
             logoUrl: clinicLogoUrl,
             primaryColor: '#7C3AED'
           }

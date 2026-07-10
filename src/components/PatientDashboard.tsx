@@ -597,19 +597,18 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       patientName: metadata.patientName || notification?.patientName || user?.name || 'Paciente',
       clinicName: firstPortalClinicText(
         getPortalClinicNameExclusions(professionalName, notification?.title),
+        metadata.clinicName,
+        metadata.clinicLegalName,
+        notification?.clinicName,
+        notification?.clinic_name,
         portalContext?.clinicName,
         portalContext?.clinicLegalName,
         user?.clinicSettings?.clinicName,
         user?.workspaceName,
         user?.clinicName,
-        metadata.clinicName,
-        metadata.clinicLegalName,
-        notification?.clinicName,
-        notification?.clinic_name,
-        notification?.title,
-        'Verto'
+        'Clínica'
       ),
-      clinicLogoUrl: portalContext?.clinicLogoUrl || user?.clinicSettings?.clinicLogoUrl || metadata.clinicLogoUrl || notification?.clinicLogoUrl || notification?.clinic_logo_url || VERTO_NOTIFICATION_LOGO,
+      clinicLogoUrl: metadata.clinicLogoUrl || notification?.clinicLogoUrl || notification?.clinic_logo_url || portalContext?.clinicLogoUrl || user?.clinicSettings?.clinicLogoUrl || VERTO_NOTIFICATION_LOGO,
       scheduledAt: metadata.scheduledAt || notification?.scheduled_for || notification?.scheduledFor || notification?.created_at
     });
   };
@@ -1520,7 +1519,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     const professionals = professionalNames.map(normalizePortalText).filter(Boolean);
     return values
       .map(normalizePortalText)
-      .find((value) => value && !professionals.some((professional) => looksLikePortalProfessionalLabel(value, professional))) || 'Verto';
+      .find((value) => value && !professionals.some((professional) => looksLikePortalProfessionalLabel(value, professional))) || 'Clínica';
   };
   const getPortalClinicNameExclusions = (...values: any[]) => ([
     ...values,
@@ -2150,17 +2149,16 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     );
     return firstPortalClinicText(
       getPortalClinicNameExclusions(professionalName, notification?.title),
+      metadata.clinicName,
+      metadata.clinicLegalName,
+      notification?.clinicName,
+      notification?.clinic_name,
       portalContext?.clinicName,
       portalContext?.clinicLegalName,
       user?.clinicSettings?.clinicName,
       user?.workspaceName,
       user?.clinicName,
-      metadata.clinicName,
-      metadata.clinicLegalName,
-      notification?.clinicName,
-      notification?.clinic_name,
-      notification?.title,
-      'Verto'
+      'Clínica'
     );
   };
 
@@ -2196,7 +2194,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     <div className="mb-4 space-y-2">
       {portalNotifications.slice(0, 3).map((notification: any) => {
         const metadata = notification?.metadata && typeof notification.metadata === 'object' ? notification.metadata : {};
-        const logoUrl = portalContext?.clinicLogoUrl || user?.clinicSettings?.clinicLogoUrl || metadata.clinicLogoUrl || notification?.clinicLogoUrl || notification?.clinic_logo_url || VERTO_NOTIFICATION_LOGO;
+        const logoUrl = metadata.clinicLogoUrl || notification?.clinicLogoUrl || notification?.clinic_logo_url || portalContext?.clinicLogoUrl || user?.clinicSettings?.clinicLogoUrl || VERTO_NOTIFICATION_LOGO;
         const clinicName = getPortalNotificationClinicName(notification);
         const message = getPortalNotificationMessage(notification);
         return (
@@ -2698,23 +2696,23 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       activePortalAppointment?.clinicName,
       activePortalAppointment?.clinic_name
     ),
+    activePortalAppointment?.clinicName,
+    activePortalAppointment?.clinic?.displayName,
+    activePortalAppointment?.clinic?.name,
+    activePortalAppointment?.clinic_name,
     portalContext?.clinicName,
     portalContext?.clinicLegalName,
     user?.clinicSettings?.clinicName,
     user?.workspaceName,
     user?.clinicName,
-    activePortalAppointment?.clinicName,
-    activePortalAppointment?.clinic?.displayName,
-    activePortalAppointment?.clinic?.name,
-    activePortalAppointment?.clinic_name,
-    'Verto'
+    'Clínica'
   );
   const activePortalClinicLogoUrl = firstPortalText(
-    portalContext?.clinicLogoUrl,
-    user?.clinicSettings?.clinicLogoUrl,
     activePortalAppointment?.clinicLogoUrl,
     activePortalAppointment?.clinic?.logoUrl,
     activePortalAppointment?.clinic_logo_url,
+    portalContext?.clinicLogoUrl,
+    user?.clinicSettings?.clinicLogoUrl,
     VERTO_NOTIFICATION_LOGO
   );
   const portalActionBlocked = activePortalStatus.includes('CANCEL') || activePortalStatus.includes('COMPLET') || activePortalStatus.includes('NO_SHOW');

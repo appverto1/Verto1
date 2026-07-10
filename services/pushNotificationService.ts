@@ -617,8 +617,8 @@ export async function sendAppointmentNotification(params: SendAppointmentNotific
       displayName: params.appointment.professionalDisplayName || params.professionalDisplayName,
       logoUrl: params.appointment.professionalLogoUrl || params.professionalLogoUrl,
     },
-    allowProfessionalFallback: !isUuid(clinicId),
-    fallbackName: 'Verto',
+    allowProfessionalFallback: false,
+    fallbackName: 'Clínica',
     fallbackLogoUrl: '/verto-3d-transparent.png',
   });
   if (process.env.NODE_ENV !== 'production') {

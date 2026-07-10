@@ -46,8 +46,9 @@ const clinicPush = buildPatientReminderNotificationPayload({
 
 assert.equal(clinicBranding.sourceType, 'clinic');
 assert.equal(clinicPush.title, 'Clínica ABC');
-assert.equal(clinicPush.icon, '/verto-3d-transparent.png');
+assert.equal(clinicPush.icon, 'https://cdn.example.com/clinic-logo.png');
 assert.equal(clinicPush.badge, '/verto-3d-transparent.png');
+assert.equal(clinicPush.image, 'https://cdn.example.com/clinic-logo.png');
 assert.equal(clinicPush.data.brandLogoUrl, 'https://cdn.example.com/clinic-logo.png');
 assert.equal((clinicPush as any).actions, undefined);
 assert.match(clinicPush.body, /Pedro Henrique/);
@@ -64,11 +65,11 @@ const ambiguousClinicBranding = resolveBrandingContext({
   professional: {
     displayName: 'Terapeuta Mateus',
   },
-  fallbackName: 'Verto',
+  fallbackName: 'Clínica',
 });
 
 assert.equal(ambiguousClinicBranding.sourceType, 'verto_fallback');
-assert.equal(ambiguousClinicBranding.displayName, 'Verto');
+assert.equal(ambiguousClinicBranding.displayName, 'Clínica');
 
 const clinicModal = buildPatientReminderModalViewModel({
   appointmentId: 'appt-1',
@@ -84,7 +85,7 @@ assert.equal(clinicModal.brandName, 'Clínica ABC');
 assert.equal(clinicModal.brandLogoUrl, 'https://cdn.example.com/clinic-logo.png');
 assert.match(
   clinicModal.appointmentSummaryText,
-  /Consulta de Pedro Henrique com Clínica ABC dia \d{2}\/\d{2} \(amanhã\) às 12:00\./,
+  /Consulta de Pedro Henrique dia \d{2}\/\d{2} \(amanhã\) às 12:00\./,
 );
 assert.equal(clinicModal.confirmLabel, 'Confirmar presença');
 assert.equal(clinicModal.rescheduleLabel, 'Remarcar consulta');
@@ -103,14 +104,17 @@ const professionalPush = buildPatientReminderNotificationPayload({
   branding: professionalBranding,
 });
 
-assert.equal(professionalBranding.sourceType, 'professional');
-assert.equal(professionalPush.title, 'Mateus Psicologia');
+assert.equal(professionalBranding.sourceType, 'verto_fallback');
+assert.equal(professionalBranding.displayName, 'Clínica');
+assert.equal(professionalPush.title, 'Clínica');
 assert.equal(professionalPush.icon, '/verto-3d-transparent.png');
-assert.equal(professionalPush.data.brandLogoUrl, 'https://cdn.example.com/professional.png');
+assert.equal(professionalPush.data.brandLogoUrl, '/verto-3d-transparent.png');
+assert.doesNotMatch(professionalPush.title, /Mateus/);
+assert.doesNotMatch(professionalPush.body, /Mateus/);
 
 const fallbackBranding = resolveBrandingContext({});
 assert.equal(fallbackBranding.sourceType, 'verto_fallback');
-assert.equal(fallbackBranding.displayName, 'Verto');
+assert.equal(fallbackBranding.displayName, 'Clínica');
 
 assert.equal(
   friendlyPatientNotificationError('Erro interno do servidor.'),
@@ -125,21 +129,21 @@ const docsCode = read('docs/notification-branding.md');
 
 assert.match(pushServiceCode, /resolveBrandingContext/);
 assert.match(pushServiceCode, /buildPatientReminderNotificationPayload/);
-assert.match(pushServiceCode, /allowProfessionalFallback:\s*!isUuid\(clinicId\)/);
+assert.match(pushServiceCode, /allowProfessionalFallback:\s*false/);
 assert.match(pushServiceCode, /clinic:\s*\{[\s\S]*?id:\s*clinicId \|\| null/);
 assert.match(serviceWorkerCode, /brandName/);
 assert.doesNotMatch(serviceWorkerCode, /notification_action/);
 assert.doesNotMatch(serviceWorkerCode, /\bactions\s*:/);
 assert.doesNotMatch(serviceWorkerCode, /Lembrete de Consulta - Verto/);
 assert.match(appCode, /buildPatientReminderModalViewModel/);
-assert.match(appCode, /allowProfessionalFallback:\s*!appointmentConfirmation\.clinicId/);
+assert.match(appCode, /allowProfessionalFallback:\s*false/);
 assert.match(appCode, /friendlyPatientNotificationError/);
 assert.match(appCode, /Tentar novamente/);
 assert.match(appCode, /appointmentConfirmationRetry/);
 assert.match(cronCode, /\.select\('id, clinic_id, patient_id, patient_email, therapist_name, source_payload/);
 assert.doesNotMatch(cronCode, /\.select\('id, clinic_id, patient_id, patient_name, patient_email, therapist_name, source_payload/);
 assert.match(cronCode, /hydrateReminderAppointmentPatientNames/);
-assert.match(cronCode, /allowProfessionalFallback:\s*!isUuid\(appointment\.clinicId\)/);
+assert.match(cronCode, /allowProfessionalFallback:\s*false/);
 assert.match(cronCode, /professionalDisplayName: appointment\.professionalDisplayName/);
 assert.match(cronCode, /patientName: appointment\.patientName/);
 assert.match(docsCode, /dominio\/origin/);

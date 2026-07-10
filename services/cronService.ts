@@ -58,6 +58,7 @@ type ReminderAppointment = {
 };
 
 const BRAZIL_TIMEZONE = 'America/Sao_Paulo';
+const DEFAULT_CLINIC_NOTIFICATION_NAME = 'Clínica';
 const CRON_LOOKBACK_MINUTES = 180;
 const QUERY_AHEAD_HOURS = 28;
 const REMINDER_DEDUPE_TTL_MS = 30 * 60 * 60 * 1000;
@@ -101,6 +102,14 @@ const parseReminderSourcePayload = (value: unknown): Record<string, any> => {
 };
 
 const isUuid = (value: unknown) => UUID_REGEX.test(sanitizeText(value, 120));
+
+const isGenericClinicNotificationName = (value: unknown) => {
+  const normalized = sanitizeText(value, 160)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+  return !normalized || ['sua clinica', 'clinica', 'verto'].includes(normalized);
+};
 
 const isActiveAppointmentStatus = (status: unknown) => {
   const normalized = sanitizeText(status || 'scheduled', 40).toLowerCase();
@@ -616,7 +625,7 @@ async function resolveReminderClinicBranding(
 ) {
   const safeClinicId = sanitizeText(clinicId, 120);
   if (!isUuid(safeClinicId)) {
-    return { clinicName: 'sua clínica', clinicLogoUrl: null };
+    return { clinicName: DEFAULT_CLINIC_NOTIFICATION_NAME, clinicLogoUrl: null };
   }
   const cached = clinicBrandingCache.get(safeClinicId);
   if (cached) return cached;
@@ -645,13 +654,13 @@ async function resolveReminderClinicBranding(
       clinicId: safeClinicId,
       message: error.message
     });
-    const fallback = { clinicName: 'sua clínica', clinicLogoUrl: null };
+    const fallback = { clinicName: DEFAULT_CLINIC_NOTIFICATION_NAME, clinicLogoUrl: null };
     clinicBrandingCache.set(safeClinicId, fallback);
     return fallback;
   }
 
   const branding = {
-    clinicName: sanitizeText(data?.display_name || data?.legal_name || data?.name, 160) || 'Verto',
+    clinicName: sanitizeText(data?.display_name || data?.legal_name || data?.name, 160) || DEFAULT_CLINIC_NOTIFICATION_NAME,
     clinicLogoUrl: sanitizeText(data?.logo_url, 2000) || null
   };
   clinicBrandingCache.set(safeClinicId, branding);
@@ -862,7 +871,11 @@ async function runAppointmentReminderJob(
       try {
         const scheduled = dayjs(appointment.scheduledAt).tz(BRAZIL_TIMEZONE);
         const clinicBranding = await resolveReminderClinicBranding(options, appointment.clinicId);
-        const clinicName = clinicBranding.clinicName || appointment.clinicName || 'Verto';
+        const clinicName = (
+          !isGenericClinicNotificationName(clinicBranding.clinicName)
+            ? clinicBranding.clinicName
+            : appointment.clinicName
+        ) || DEFAULT_CLINIC_NOTIFICATION_NAME;
         const clinicLogoUrl = clinicBranding.clinicLogoUrl || appointment.clinicLogoUrl || null;
         const brandedAppointment = {
           ...appointment,
@@ -879,8 +892,8 @@ async function runAppointmentReminderJob(
             displayName: appointment.professionalDisplayName,
             logoUrl: appointment.professionalLogoUrl,
           },
-          allowProfessionalFallback: !isUuid(appointment.clinicId),
-          fallbackName: 'Verto',
+          allowProfessionalFallback: false,
+          fallbackName: DEFAULT_CLINIC_NOTIFICATION_NAME,
           fallbackLogoUrl: '/verto-3d-transparent.png',
         });
         const reminderPayload = buildPatientReminderNotificationPayload({

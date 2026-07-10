@@ -28,7 +28,7 @@ assert.match(cron, /\.select\('id, clinic_id, patient_id, patient_email, therapi
 assert.doesNotMatch(cron, /\.select\('id, clinic_id, patient_id, patient_name, patient_email, therapist_name, source_payload/);
 assert.match(cron, /hydrateReminderAppointmentPatientNames/);
 assert.doesNotMatch(read('src/services/notificationBranding.ts'), /actions:\s*\[/);
-assert.match(read('src/services/notificationBranding.ts'), /const icon = DEFAULT_VERTO_LOGO/);
+assert.match(read('src/services/notificationBranding.ts'), /const icon = input\.branding\.logoUrl \|\| DEFAULT_VERTO_LOGO/);
 assert.doesNotMatch(read('public/sw.js'), /actions,/);
 assert.doesNotMatch(read('public/sw.js'), /notification_action/);
 assert.match(server, /POST|post\('\/api\/internal\/notifications\/run-appointment-reminders/);
