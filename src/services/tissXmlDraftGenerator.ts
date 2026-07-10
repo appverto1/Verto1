@@ -167,7 +167,7 @@ function validatePreGuideForXml(preGuide: any): TissXmlDraftIssue[] {
   if (requirements.requiresProviderCode && !hasAny(provider.providerCode)) addIssue(issues, preGuide, "PROVIDER_CODE_MISSING", "Código do prestador na operadora não informado.", "provider");
   if (!hasAny(beneficiary.name || preGuide?.patientName)) addIssue(issues, preGuide, "BENEFICIARY_NAME_MISSING", "Nome do beneficiário não informado.", "beneficiary");
   if (requirements.requiresBeneficiaryCard && !hasAny(beneficiary.cardNumber || preGuide?.beneficiaryCardNumber)) addIssue(issues, preGuide, "BENEFICIARY_CARD_MISSING", "Carteirinha do beneficiário não informada.", "beneficiary");
-  if (!hasAny(procedure.tussCode || preGuide?.tussCode)) addIssue(issues, preGuide, "TUSS_CODE_MISSING", "Código TUSS não informado.", "procedure");
+  if (!hasAny(procedure.billingCode || procedure.billing_code || procedure.tussCode || preGuide?.billingCode || preGuide?.billing_code || preGuide?.tussCode)) addIssue(issues, preGuide, "TUSS_CODE_MISSING", "Código TUSS não informado.", "procedure");
   if (!hasAny(procedure.name || preGuide?.internalProcedureName)) addIssue(issues, preGuide, "PROCEDURE_NAME_MISSING", "Procedimento não informado.", "procedure");
   if (amount(procedure.quantity || preGuide?.quantity) <= 0) addIssue(issues, preGuide, "QUANTITY_MISSING", "Quantidade do procedimento não informada.", "procedure");
   if (amount(procedure.totalAmountCents || preGuide?.totalAmountCents) <= 0) addIssue(issues, preGuide, "AMOUNT_MISSING", "Valor previsto não informado.", "procedure");
@@ -223,7 +223,8 @@ export function buildTissSpSadtDraftPayload(input: GenerateTissXmlDraftInput): T
     const quantity = amount(procedure.quantity || row.quantity || 1);
     const totalAmountCents = amount(procedure.totalAmountCents || row.totalAmountCents);
     const unit = normalizeUnit(procedure.unit || row.unit);
-    const tussCode = text(procedure.tussCode || row.tussCode);
+    const officialTussCode = text(procedure.officialTussCode || procedure.official_tuss_code || row.officialTussCode || row.official_tuss_code || procedure.tussCode || row.tussCode);
+    const tussCode = text(procedure.billingCode || procedure.billing_code || row.billingCode || row.billing_code || officialTussCode);
     const cboCode = text(professional.cboCode);
     if (looksLikeTestTussCode(tussCode)) {
       addWarning(warnings, "TUSS_CODE_LOOKS_LIKE_TEST_DATA", "Código TUSS parece ser dado de teste.", "procedure", `guides.${index}.procedure.tussCode`, row);
@@ -257,7 +258,11 @@ export function buildTissSpSadtDraftPayload(input: GenerateTissXmlDraftInput): T
         internalCode: text(procedure.internalCode || row.internalProcedureCode),
         name: text(procedure.name || row.internalProcedureName),
         tussCode,
-        tussDescription: text(procedure.tussDescription || row.tussDescription),
+        officialTussCode,
+        authorizedCode: text(procedure.authorizedCode || procedure.authorized_code || row.authorizedCode || row.authorized_code),
+        billingCode: tussCode,
+        operatorPackageCode: text(procedure.operatorPackageCode || procedure.operator_package_code || row.operatorPackageCode || row.operator_package_code),
+        tussDescription: text(procedure.billingCodeDescription || procedure.billing_code_description || row.billingCodeDescription || row.billing_code_description || procedure.tussDescription || row.tussDescription),
         quantity,
         unit,
       },

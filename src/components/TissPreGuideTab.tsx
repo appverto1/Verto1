@@ -47,6 +47,11 @@ type TissPreGuideRow = {
   internalProcedureCode?: string | null;
   internalProcedureName?: string | null;
   tussCode?: string | null;
+  officialTussCode?: string | null;
+  authorizedCode?: string | null;
+  billingCode?: string | null;
+  operatorPackageCode?: string | null;
+  billingCodeSource?: string | null;
   tussDescription?: string | null;
   tussVersion?: string | null;
   quantity?: number | null;
@@ -1786,7 +1791,7 @@ export function TissPreGuideTab({
     const procedure = detail.snapshot?.procedure || {};
     const toDateInput = (value?: unknown) => String(value || "").slice(0, 10);
     const currentAuthorizationTussCode = authorization.procedureTussCode || "";
-    const expectedTussCode = procedure.tussCode || detail.tussCode || "";
+    const expectedTussCode = authorization.expectedAuthorizedTussCode || procedure.authorizedCode || procedure.officialTussCode || procedure.tussCode || detail.authorizedCode || detail.tussCode || "";
     setAuthorizationForm({
       id: authorization.authorizationId || authorization.id || "",
       authorizationNumber: authorization.authorizationCode || detail.authorizationCode || "",
@@ -3580,7 +3585,10 @@ export function TissPreGuideTab({
                       <DetailField label="Valor" value={formatCurrency(detail.totalAmountCents || snapshot.procedure?.totalAmountCents)} />
                       <DetailField label="Guia" value={fieldValue(snapshot.authorization?.guideNumber || detail.guideNumber)} />
                       <DetailField label="Senha" value={fieldValue(snapshot.authorization?.authorizationCode || detail.authorizationCode)} />
-                      <DetailField label="TUSS" value={fieldValue(snapshot.procedure?.tussCode || detail.tussCode)} />
+                      <DetailField label="TUSS oficial" value={fieldValue(snapshot.procedure?.officialTussCode || snapshot.procedure?.tussCode || detail.officialTussCode || detail.tussCode)} />
+                      <DetailField label="Código autorizado" value={fieldValue(snapshot.authorization?.procedureTussCode || snapshot.procedure?.authorizedCode || detail.authorizedCode)} />
+                      <DetailField label="Código faturado/XML" value={fieldValue(snapshot.procedure?.billingCode || detail.billingCode || snapshot.procedure?.tussCode || detail.tussCode)} />
+                      <DetailField label="Pacote da operadora" value={fieldValue(snapshot.procedure?.operatorPackageCode || detail.operatorPackageCode)} />
                       <DetailField label="Procedimento" value={fieldValue(snapshot.procedure?.name || detail.internalProcedureName)} />
                     </div>
                   </section>

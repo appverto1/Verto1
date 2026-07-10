@@ -381,8 +381,13 @@ const CATALOG: Array<Omit<TissAntiGlosaChecklistItem, "status" | "relatedIssueCo
     suggestedAction: "Revisar autorização",
     okWhen: (snapshot) => {
       const authorizedTuss = text(snapshot.authorization?.procedureTussCode);
-      const tuss = text(snapshot.procedure?.tussCode);
-      return !authorizedTuss || !tuss || authorizedTuss === tuss;
+      const expectedAuthorizedTuss = text(
+        snapshot.authorization?.expectedAuthorizedTussCode ||
+          snapshot.procedure?.authorizedCode ||
+          snapshot.procedure?.officialTussCode ||
+          snapshot.procedure?.tussCode,
+      );
+      return !authorizedTuss || !expectedAuthorizedTuss || authorizedTuss === expectedAuthorizedTuss;
     },
   },
 ];

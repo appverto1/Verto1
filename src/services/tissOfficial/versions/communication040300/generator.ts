@@ -528,8 +528,10 @@ function normalizeGuide(row: any, issues: TissOfficialIssue[]): NormalizedGuide 
     addIssue({ issues, preGuideId, entity: "authorization", field: "guideNumber", code: "TISS_OFFICIAL_GUIDE_NUMBER_MISSING", message: "Número da guia é obrigatório para XML TISS oficial." });
   }
 
-  const tussCode = normalizeNumberText(firstValue(row?.tussCode, row?.tuss_code, procedure.tussCode, procedure.tuss_code), 10);
-  const tussDescription = normalizeLimitedText(firstValue(row?.tussDescription, row?.tuss_description, procedure.tussDescription, procedure.tuss_description, procedure.name), 150);
+  const officialTussCode = normalizeNumberText(firstValue(row?.officialTussCode, row?.official_tuss_code, procedure.officialTussCode, procedure.official_tuss_code, row?.tussCode, row?.tuss_code, procedure.tussCode, procedure.tuss_code), 10);
+  const billingTussCode = normalizeNumberText(firstValue(row?.billingCode, row?.billing_code, procedure.billingCode, procedure.billing_code), 10);
+  const tussCode = billingTussCode || officialTussCode;
+  const tussDescription = normalizeLimitedText(firstValue(row?.billingCodeDescription, row?.billing_code_description, procedure.billingCodeDescription, procedure.billing_code_description, row?.tussDescription, row?.tuss_description, procedure.tussDescription, procedure.tuss_description, procedure.name), 150);
   if (!/^\d{1,10}$/.test(tussCode) || isPlaceholder(tussCode)) {
     addIssue({ issues, preGuideId, entity: "procedure", field: "tussCode", code: "TISS_OFFICIAL_TUSS_CODE_MISSING", message: "Código TUSS é obrigatório para XML TISS oficial." });
   }

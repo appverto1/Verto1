@@ -30,6 +30,74 @@ const getMasteryTarget = (goal: any, fallbackSkill?: any) => {
   return Number.isFinite(target) && target > 0 ? Math.floor(target) : 5;
 };
 
+const firstHistoryText = (...values: any[]) =>
+  values.map((value) => String(value || '').trim()).find(Boolean) || '';
+
+const getFamilyHistoryImageSource = (item: any) => {
+  const metadata = item?.metadata && typeof item.metadata === 'object' ? item.metadata : {};
+  const attachments = [
+    ...(Array.isArray(item?.attachments) ? item.attachments : []),
+    ...(Array.isArray(item?.files) ? item.files : []),
+    ...(Array.isArray(item?.photos) ? item.photos : []),
+    ...(Array.isArray(metadata?.attachments) ? metadata.attachments : []),
+    ...(Array.isArray(metadata?.files) ? metadata.files : []),
+    ...(Array.isArray(metadata?.photos) ? metadata.photos : [])
+  ].filter((entry) => entry && typeof entry === 'object');
+  const direct = firstHistoryText(
+    item?.image,
+    item?.image_url,
+    item?.imageUrl,
+    item?.photo,
+    item?.photo_url,
+    item?.photoUrl,
+    item?.url,
+    metadata?.image,
+    metadata?.image_url,
+    metadata?.imageUrl,
+    metadata?.photo,
+    metadata?.photo_url,
+    metadata?.photoUrl,
+    metadata?.url,
+    ...attachments.flatMap((entry: any) => [
+      entry?.image,
+      entry?.image_url,
+      entry?.imageUrl,
+      entry?.photo,
+      entry?.photo_url,
+      entry?.photoUrl,
+      entry?.url
+    ])
+  );
+  if (direct) return direct;
+  const path = firstHistoryText(
+    item?.image_path,
+    item?.imagePath,
+    item?.storage_path,
+    item?.storagePath,
+    item?.photo_path,
+    item?.photoPath,
+    item?.path,
+    metadata?.image_path,
+    metadata?.imagePath,
+    metadata?.storage_path,
+    metadata?.storagePath,
+    metadata?.photo_path,
+    metadata?.photoPath,
+    metadata?.path,
+    ...attachments.flatMap((entry: any) => [
+      entry?.image_path,
+      entry?.imagePath,
+      entry?.storage_path,
+      entry?.storagePath,
+      entry?.photo_path,
+      entry?.photoPath,
+      entry?.path
+    ])
+  );
+  if (!path) return '';
+  return path.startsWith('patient-photos/') ? path : `patient-photos/${path}`;
+};
+
 export const HistoryCard = ({ item, energyTags, isTherapist, onEvaluate, protocols = [], id, isKid, fullHistory = [], peiGoals = [] }: any) => { 
   const [isEvaluating, setIsEvaluating] = useState(false); 
   const [score, setScore] = useState(item.score !== undefined ? item.score : ''); 
@@ -103,13 +171,7 @@ export const HistoryCard = ({ item, energyTags, isTherapist, onEvaluate, protoco
   }; 
 
   const isFamilyEntry = item.type === 'family_note' || item.type === 'photo';
-  const familyImageSource = (() => {
-    const direct = item?.image || item?.image_url || item?.imageUrl || item?.photo || item?.photo_url || item?.photoUrl;
-    if (direct) return direct;
-    const path = String(item?.image_path || item?.imagePath || item?.storage_path || item?.storagePath || '').trim();
-    if (!path) return '';
-    return path.startsWith('patient-photos/') ? path : `patient-photos/${path}`;
-  })();
+  const familyImageSource = getFamilyHistoryImageSource(item);
   const displayTitle = repairMojibake(item?.title);
   const displayNote = sanitizeDescriptionForDisplay(repairMojibake(item?.note));
   const displayIcon = (() => {
@@ -282,4 +344,3 @@ export const HistoryCard = ({ item, energyTags, isTherapist, onEvaluate, protoco
     </div> 
   ); 
 };
-

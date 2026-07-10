@@ -71,6 +71,15 @@ const amountCentsOrNull = (value: unknown) => {
   const amount = Number(value);
   return Number.isFinite(amount) && amount >= 0 ? Math.round(amount) : null;
 };
+const objectValue = (value: unknown): Record<string, any> =>
+  value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
+const firstText = (...values: unknown[]) => {
+  for (const value of values) {
+    const candidate = text(value);
+    if (candidate) return candidate;
+  }
+  return '';
+};
 const normalizedIdentity = (value: unknown) =>
   text(value)
     .normalize('NFD')
@@ -518,6 +527,58 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
   const procedureName = text(service.name || billingItem.internal_procedure_name);
   const resolvedTussCode = text(tussCode.code || billingItem.tuss_code);
   const tussDescription = text(tussCode.description || billingItem.tuss_description);
+  const mappingMetadata = objectValue(mapping.metadata);
+  const officialTussCode = resolvedTussCode;
+  const authorizedProcedureExpectedCode = firstText(
+    mapping.authorized_code,
+    mapping.authorizedCode,
+    mappingMetadata.authorized_code,
+    mappingMetadata.authorizedCode,
+    officialTussCode,
+  );
+  const authorizedCodeDescription = firstText(
+    mapping.authorized_code_description,
+    mapping.authorizedCodeDescription,
+    mappingMetadata.authorized_code_description,
+    mappingMetadata.authorizedCodeDescription,
+    tussDescription,
+  );
+  const billingCode = firstText(
+    mapping.billing_code,
+    mapping.billingCode,
+    mappingMetadata.billing_code,
+    mappingMetadata.billingCode,
+    officialTussCode,
+  );
+  const billingCodeDescription = firstText(
+    mapping.billing_code_description,
+    mapping.billingCodeDescription,
+    mappingMetadata.billing_code_description,
+    mappingMetadata.billingCodeDescription,
+    tussDescription,
+  );
+  const operatorPackageCode = firstText(
+    mapping.operator_package_code,
+    mapping.operatorPackageCode,
+    mappingMetadata.operator_package_code,
+    mappingMetadata.operatorPackageCode,
+    mapping.contract_code,
+  );
+  const operatorPackageDescription = firstText(
+    mapping.operator_package_description,
+    mapping.operatorPackageDescription,
+    mappingMetadata.operator_package_description,
+    mappingMetadata.operatorPackageDescription,
+    mapping.contract_description,
+    mapping.payer_specific_description,
+  );
+  const billingCodeSource = firstText(
+    mapping.billing_code_source,
+    mapping.billingCodeSource,
+    mappingMetadata.billing_code_source,
+    mappingMetadata.billingCodeSource,
+    billingCode && officialTussCode && billingCode !== officialTussCode ? 'payer_mapping_billing_code' : 'official_tuss',
+  );
   const quantity = Number(billingItem.quantity || service.default_quantity || mapping.default_quantity || 0);
   const unit = text(billingItem.billing_unit || mapping.billing_unit || service.billing_unit);
   const unitAmountCents = amountCentsOrNull(
@@ -653,7 +714,7 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
     addIssue(errors, 'AUTHORIZED_PROCEDURE_NOT_INFORMED', 'authorization_procedure', tissPreGuideIssueLabel('AUTHORIZED_PROCEDURE_NOT_INFORMED'), 'authorization');
   }
   if (
-    (authorizationProcedureTussCode && resolvedTussCode && authorizationProcedureTussCode !== resolvedTussCode) ||
+    (authorizationProcedureTussCode && authorizedProcedureExpectedCode && authorizationProcedureTussCode !== authorizedProcedureExpectedCode) ||
     (authorizationProcedureCode && procedureCode && authorizationProcedureCode !== procedureCode)
   ) {
     addIssue(errors, 'AUTHORIZATION_PROCEDURE_MISMATCH', 'authorization_procedure_tuss_code', tissPreGuideIssueLabel('AUTHORIZATION_PROCEDURE_MISMATCH'), 'authorization');
@@ -778,6 +839,21 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
         internalCode: procedureCode || null,
         name: procedureName || null,
         tussCode: resolvedTussCode || null,
+        officialTussCode: officialTussCode || null,
+        authorizedCode: authorizedProcedureExpectedCode || null,
+        authorizedCodeDescription: authorizedCodeDescription || null,
+        billingCode: billingCode || null,
+        billingCodeDescription: billingCodeDescription || null,
+        operatorPackageCode: operatorPackageCode || null,
+        operatorPackageDescription: operatorPackageDescription || null,
+        billingCodeSource: billingCodeSource || null,
+        codeSplit: {
+          officialTussCode: officialTussCode || null,
+          authorizedCode: authorizedProcedureExpectedCode || null,
+          billingCode: billingCode || null,
+          operatorPackageCode: operatorPackageCode || null,
+          billingCodeSource: billingCodeSource || null,
+        },
         tussDescription: tussDescription || null,
         tussVersion: text(tussCode.version || payerProfile.tiss_version) || null,
         quantity: positiveNumber(quantity) ? quantity : null,
@@ -804,6 +880,8 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
         procedureCode: authorizationProcedureCode || null,
         procedureName: authorizationProcedureName || null,
         procedureTussCode: authorizationProcedureTussCode || null,
+        expectedAuthorizedTussCode: authorizedProcedureExpectedCode || null,
+        authorizedCode: authorizationProcedureTussCode || authorizedProcedureExpectedCode || null,
       },
       signature: {
         present: hasResponsibleSignature,

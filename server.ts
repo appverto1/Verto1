@@ -3067,6 +3067,142 @@ function buildPatientPhotoViewUrl(storagePath: unknown): string | null {
   return `/api/storage/patient-photos/view?path=${encodeURIComponent(path)}`;
 }
 
+function enrichPatientPhotoHistoryRow(row: any): any {
+  if (!row || typeof row !== 'object') return row;
+  const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+  const attachments = [
+    ...(Array.isArray(row?.attachments) ? row.attachments : []),
+    ...(Array.isArray(row?.files) ? row.files : []),
+    ...(Array.isArray(row?.photos) ? row.photos : []),
+    ...(Array.isArray(metadata?.attachments) ? metadata.attachments : []),
+    ...(Array.isArray(metadata?.files) ? metadata.files : []),
+    ...(Array.isArray(metadata?.photos) ? metadata.photos : [])
+  ].filter((item) => item && typeof item === 'object');
+  const candidates = [
+    row?.image_path,
+    row?.imagePath,
+    row?.storage_path,
+    row?.storagePath,
+    row?.photo_path,
+    row?.photoPath,
+    row?.path,
+    row?.image,
+    row?.image_url,
+    row?.imageUrl,
+    row?.photo,
+    row?.photo_url,
+    row?.photoUrl,
+    row?.url,
+    metadata?.image_path,
+    metadata?.imagePath,
+    metadata?.storage_path,
+    metadata?.storagePath,
+    metadata?.photo_path,
+    metadata?.photoPath,
+    metadata?.path,
+    metadata?.image,
+    metadata?.image_url,
+    metadata?.imageUrl,
+    metadata?.photo,
+    metadata?.photo_url,
+    metadata?.photoUrl,
+    metadata?.url,
+    ...attachments.flatMap((item: any) => [
+      item?.image_path,
+      item?.imagePath,
+      item?.storage_path,
+      item?.storagePath,
+      item?.photo_path,
+      item?.photoPath,
+      item?.path,
+      item?.image,
+      item?.image_url,
+      item?.imageUrl,
+      item?.photo,
+      item?.photo_url,
+      item?.photoUrl,
+      item?.url
+    ])
+  ];
+  const storagePath = candidates.map(extractPatientPhotosStoragePath).find(Boolean);
+  if (!storagePath) return row;
+  const viewUrl = buildPatientPhotoViewUrl(storagePath);
+  if (!viewUrl) return row;
+  return {
+    ...row,
+    image: viewUrl,
+    image_url: viewUrl,
+    imageUrl: viewUrl,
+    image_path: storagePath,
+    imagePath: storagePath
+  };
+}
+
+async function canAccessPatientPhotoReferencedByHistory(params: {
+  objectPath: string;
+  accessObjectPath: string;
+  actorId: string;
+  activeClinicId: string;
+  role: string;
+  req: any;
+}): Promise<boolean> {
+  const { objectPath, accessObjectPath, actorId, activeClinicId, role, req } = params;
+  const possibleReferences = Array.from(new Set([
+    objectPath,
+    accessObjectPath,
+    `patient-photos/${objectPath}`,
+    `patient-photos/${accessObjectPath}`,
+    buildPatientPhotoViewUrl(objectPath),
+    buildPatientPhotoViewUrl(accessObjectPath)
+  ].filter(Boolean).map((item) => sanitizeString(item, 1500)).filter(Boolean)));
+
+  const matchingRows: any[] = [];
+  if (possibleReferences.length > 0) {
+    const { data: pathRows, error: pathError } = await supabase
+      .from('history')
+      .select('patient_id,patient_email')
+      .in('image_path', possibleReferences)
+      .eq('is_active', true)
+      .is('deleted_at', null)
+      .limit(10);
+    if (!pathError && Array.isArray(pathRows)) matchingRows.push(...pathRows);
+
+    const { data: imageRows, error: imageError } = await supabase
+      .from('history')
+      .select('patient_id,patient_email')
+      .in('image', possibleReferences)
+      .eq('is_active', true)
+      .is('deleted_at', null)
+      .limit(10);
+    if (!imageError && Array.isArray(imageRows)) matchingRows.push(...imageRows);
+  }
+
+  if (role === 'patient') {
+    const actorEmail = sanitizeEmail(req.session.user?.email);
+    const linkedPatientIds = actorEmail
+      ? await getPatientIdsByEmailAcrossClinics(actorEmail, actorId, activeClinicId)
+      : [];
+    const linkedPatientIdSet = new Set(linkedPatientIds.map((id) => sanitizeString(id, 120)).filter(Boolean));
+    return matchingRows.some((row) => {
+      const rowPatientId = sanitizeString(row?.patient_id, 120);
+      const rowPatientEmail = sanitizeEmail(row?.patient_email);
+      return (
+        (rowPatientId && linkedPatientIdSet.has(rowPatientId)) ||
+        (actorEmail && rowPatientEmail && rowPatientEmail === actorEmail)
+      );
+    });
+  }
+
+  for (const row of matchingRows) {
+    const rowPatientId = sanitizeString(row?.patient_id, 120);
+    if (rowPatientId && await canAccessPatientInCurrentClinic(rowPatientId, req.session.user)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function normalizeCanonicalPatientName(value: unknown): string {
   return sanitizeString(value, 180).replace(/\s+/g, ' ').trim();
 }
@@ -9133,7 +9269,17 @@ async function listAppointmentTissAuthorizationOptionsForBilling(params: {
     const expectedTussCodeRow = isUuid(expectedTussCodeId)
       ? await fetchTussCodeByIdForAppointmentTissBilling(organizationId, expectedTussCodeId)
       : null;
-    const expectedTussCode = sanitizeString(expectedTussCodeRow?.code || mapping?.tussCode || mapping?.procedure_tuss_code, 80).toUpperCase();
+    const mappingMetadata = mapping?.metadata && typeof mapping.metadata === 'object' && !Array.isArray(mapping.metadata) ? mapping.metadata : {};
+    const expectedTussCode = sanitizeString(
+      mapping?.authorized_code ||
+        mapping?.authorizedCode ||
+        mappingMetadata.authorized_code ||
+        mappingMetadata.authorizedCode ||
+        expectedTussCodeRow?.code ||
+        mapping?.tussCode ||
+        mapping?.procedure_tuss_code,
+      80
+    ).toUpperCase();
     const serializedOptions = hydrated.map((authorization: any) => {
       const serialized = serializeAppointmentTissAuthorizationSuggestion(authorization, referenceDateKey);
       if (!serialized) return null;
@@ -22770,10 +22916,26 @@ async function startServer() {
       } else {
         const ownerPatientId = sanitizeString(accessObjectPath.split('/')[0], 120);
         if (!isUuid(ownerPatientId)) return res.status(400).send('Path inválido.');
+        let canViewPatientPhoto = false;
         if (role === 'patient') {
-          if (ownerPatientId !== actorId) return res.status(403).send('Acesso negado.');
-        } else if (!(await canAccessPatientInCurrentClinic(ownerPatientId, req.session.user))) {
-          return res.status(403).send('Paciente fora do escopo da clínica.');
+          canViewPatientPhoto = ownerPatientId === actorId;
+        } else {
+          canViewPatientPhoto = await canAccessPatientInCurrentClinic(ownerPatientId, req.session.user);
+        }
+
+        if (!canViewPatientPhoto) {
+          canViewPatientPhoto = await canAccessPatientPhotoReferencedByHistory({
+            objectPath,
+            accessObjectPath,
+            actorId,
+            activeClinicId,
+            role,
+            req
+          });
+        }
+
+        if (!canViewPatientPhoto) {
+          return res.status(403).send(role === 'patient' ? 'Acesso negado.' : 'Paciente fora do escopo da clínica.');
         }
       }
 
@@ -25907,34 +26069,6 @@ async function startServer() {
   // History
   app.get('/api/history/:patientId', checkAuth, checkPatientAccess, async (req, res) => {
     try {
-      const signHistoryImageUrl = async (row: any) => {
-        try {
-          const directPath = sanitizeString(row?.image_path, 600);
-          const signedUrl = sanitizeString(row?.image, 4000);
-          let storagePath = directPath;
-
-          if (!storagePath && signedUrl.includes('/storage/v1/object/sign/patient-photos/')) {
-            const marker = '/storage/v1/object/sign/patient-photos/';
-            const tail = signedUrl.split(marker)[1] || '';
-            const encodedPath = tail.split('?')[0] || '';
-            if (encodedPath) storagePath = decodeURIComponent(encodedPath);
-          }
-
-          if (!storagePath) return row;
-
-          const viewUrl = buildPatientPhotoViewUrl(storagePath);
-          if (!viewUrl) return row;
-
-          return {
-            ...row,
-            image: viewUrl,
-            image_path: storagePath
-          };
-        } catch {
-          return row;
-        }
-      };
-
       const patientId = sanitizeString((req as any).resolvedPatientId || req.params.patientId, 120);
       if (!isUuid(patientId)) return res.json({ success: true, data: [] });
       const limit = parseBoundedListLimit((req as any).query?.limit, 20, 50);
@@ -25954,7 +26088,7 @@ async function startServer() {
       const deduped = Array.from(new Map(merged.map((item: any) => [String(item?.id || crypto.randomUUID()), item])).values())
         .sort((a: any, b: any) => new Date(b?.created_at || 0).getTime() - new Date(a?.created_at || 0).getTime())
         .slice(0, limit);
-      const enriched = await Promise.all(deduped.map(signHistoryImageUrl));
+      const enriched = deduped.map(enrichPatientPhotoHistoryRow);
       res.json({ success: true, data: enriched });
     } catch (error: any) {
       return sendRouteDbError(res, '/api/history/:patientId [GET]', error, {
@@ -26000,25 +26134,7 @@ async function startServer() {
       const data = historyResult.data;
       const error = historyResult.error;
       if (error) throw error;
-      const enriched = await Promise.all(
-        (Array.isArray(data) ? data : []).slice(0, limit).map(async (row: any) => {
-          try {
-            const directPath = sanitizeString(row?.image_path, 600);
-            const signedUrl = sanitizeString(row?.image, 4000);
-            let storagePath = directPath;
-            if (!storagePath && signedUrl.includes('/storage/v1/object/sign/patient-photos/')) {
-              const marker = '/storage/v1/object/sign/patient-photos/';
-              const tail = signedUrl.split(marker)[1] || '';
-              const encodedPath = tail.split('?')[0] || '';
-              if (encodedPath) storagePath = decodeURIComponent(encodedPath);
-            }
-            if (!storagePath) return row;
-            return { ...row, image: buildPatientPhotoViewUrl(storagePath) || row?.image, image_path: storagePath };
-          } catch {
-            return row;
-          }
-        })
-      );
+      const enriched = (Array.isArray(data) ? data : []).slice(0, limit).map(enrichPatientPhotoHistoryRow);
       res.json({ success: true, data: enriched });
     } catch (error: any) {
       return sendRouteDbError(res, '/api/history/email/:email [GET]', error, {
@@ -26203,25 +26319,7 @@ async function startServer() {
           return bTs - aTs;
         })
         .slice(0, limit);
-      const enrichedHistory = await Promise.all(
-        consolidatedHistory.map(async (row: any) => {
-          try {
-            const directPath = sanitizeString(row?.image_path, 600);
-            const signedUrl = sanitizeString(row?.image, 4000);
-            let storagePath = directPath;
-            if (!storagePath && signedUrl.includes('/storage/v1/object/sign/patient-photos/')) {
-              const marker = '/storage/v1/object/sign/patient-photos/';
-              const tail = signedUrl.split(marker)[1] || '';
-              const encodedPath = tail.split('?')[0] || '';
-              if (encodedPath) storagePath = decodeURIComponent(encodedPath);
-            }
-            if (!storagePath) return row;
-            return { ...row, image: buildPatientPhotoViewUrl(storagePath) || row?.image, image_path: storagePath };
-          } catch {
-            return row;
-          }
-        })
-      );
+      const enrichedHistory = consolidatedHistory.map(enrichPatientPhotoHistoryRow);
 
       const treatmentStatus = await updatePatientStatusIfNeeded(req.session.user);
       req.session.user.treatmentStatus = treatmentStatus;
@@ -36779,6 +36877,65 @@ async function startServer() {
   };
 
   const normalizeTussActiveFlag = (value: unknown) => value !== false && sanitizeString(value, 20).toLowerCase() !== 'false';
+  const payerTussMappingMetadata = (row: any) =>
+    row?.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata) ? row.metadata : {};
+  const firstTussMappingText = (...values: unknown[]) => {
+    for (const value of values) {
+      const candidate = sanitizeString(value, 240);
+      if (candidate) return candidate;
+    }
+    return '';
+  };
+  const hasOwnField = (value: any, key: string) => Object.prototype.hasOwnProperty.call(value || {}, key);
+  const normalizeTussMappingMetadataText = (value: unknown, maxLength = 240) => sanitizeString(value, maxLength) || null;
+  const mergePayerTussMappingCodeMetadata = (body: any, existingMetadata: any = {}) => {
+    const base = sanitizeClinicalPayload(existingMetadata && typeof existingMetadata === 'object' ? existingMetadata : {});
+    const incomingMetadata = body?.metadata !== undefined ? sanitizeClinicalPayload(body.metadata || {}) : {};
+    const metadata = { ...base, ...incomingMetadata };
+    const assignText = (camelKey: string, snakeKey: string, maxLength = 240) => {
+      const provided = hasOwnField(body, camelKey) || hasOwnField(body, snakeKey);
+      if (!provided) return;
+      metadata[snakeKey] = normalizeTussMappingMetadataText(body?.[camelKey] ?? body?.[snakeKey], maxLength);
+    };
+    assignText('authorizedCode', 'authorized_code', 80);
+    assignText('authorizedCodeDescription', 'authorized_code_description', 600);
+    assignText('billingCode', 'billing_code', 80);
+    assignText('billingCodeDescription', 'billing_code_description', 600);
+    assignText('operatorPackageCode', 'operator_package_code', 120);
+    assignText('operatorPackageDescription', 'operator_package_description', 600);
+    assignText('billingCodeSource', 'billing_code_source', 120);
+    return cleanObject(metadata);
+  };
+  const resolvePayerTussAuthorizedCode = (mapping: any, officialTussCode: unknown) => {
+    const metadata = payerTussMappingMetadata(mapping);
+    return firstTussMappingText(
+      mapping?.authorized_code,
+      mapping?.authorizedCode,
+      metadata.authorized_code,
+      metadata.authorizedCode,
+      officialTussCode
+    ) || null;
+  };
+  const resolvePayerTussBillingCode = (mapping: any, officialTussCode: unknown) => {
+    const metadata = payerTussMappingMetadata(mapping);
+    return firstTussMappingText(
+      mapping?.billing_code,
+      mapping?.billingCode,
+      metadata.billing_code,
+      metadata.billingCode,
+      officialTussCode
+    ) || null;
+  };
+  const resolvePayerTussOperatorPackageCode = (mapping: any) => {
+    const metadata = payerTussMappingMetadata(mapping);
+    return firstTussMappingText(
+      mapping?.operator_package_code,
+      mapping?.operatorPackageCode,
+      metadata.operator_package_code,
+      metadata.operatorPackageCode,
+      mapping?.contract_code
+    ) || null;
+  };
 
   const serializeTussServiceCatalog = (row: any) => ({
     id: sanitizeString(row?.id, 120),
@@ -36810,43 +36967,58 @@ async function startServer() {
     updatedAt: row?.updated_at || null
   });
 
-  const serializePayerTussMapping = (row: any, service: any = null, code: any = null) => ({
-    id: sanitizeString(row?.id, 120),
-    payerId: sanitizeString(row?.payer_id, 120),
-    serviceCatalogId: sanitizeString(row?.service_catalog_id, 120),
-    tussCodeId: sanitizeString(row?.tuss_code_id, 120) || null,
-    serviceName: sanitizeString(service?.name, 180) || null,
-    internalCode: sanitizeString(service?.internal_code, 80) || null,
-    tussCode: sanitizeString(code?.code, 80) || null,
-    tussDescription: sanitizeTextField(code?.description, 600) || null,
-    tussVersion: sanitizeString(code?.version, 80) || null,
-    contractCode: sanitizeString(row?.contract_code, 120) || null,
-    contractDescription: sanitizeTextField(row?.contract_description || row?.payer_specific_description, 600) || null,
-    payerSpecificDescription: sanitizeTextField(row?.payer_specific_description || row?.contract_description, 600) || null,
-    specialty: sanitizeString(row?.specialty || service?.specialty, 120) || null,
-    guideType: normalizeTussGuideType(row?.guide_type),
-    billingUnit: normalizeTussBillingUnit(row?.billing_unit),
-    quantityRule: normalizeTussQuantityRule(row?.quantity_rule),
-    defaultQuantity: Number(row?.default_quantity || 1) || 1,
-    amountCents: row?.amount_cents ?? null,
-    negotiatedAmountCents: row?.negotiated_amount_cents ?? row?.amount_cents ?? null,
-    standardDurationMinutes: row?.standard_duration_minutes ?? null,
-    requiresAuthorization: Boolean(row?.requires_authorization),
-    requiresGuide: Boolean(row?.requires_guide),
-    requiresReport: Boolean(row?.requires_report),
-    requiresSignature: Boolean(row?.requires_signature),
-    requiresProfessionalRegistry: Boolean(row?.requires_professional_registry),
-    requiresPatientDocument: Boolean(row?.requires_patient_document),
-    useActualDuration: Boolean(row?.use_actual_duration),
-    active: normalizeTussActiveFlag(row?.active),
-    validFrom: row?.valid_from || null,
-    validTo: row?.valid_to || null,
-    source: sanitizeString(row?.source, 120) || null,
-    notes: sanitizeTextField(row?.notes, 1200) || null,
-    metadata: row?.metadata && typeof row.metadata === 'object' ? row.metadata : {},
-    createdAt: row?.created_at || null,
-    updatedAt: row?.updated_at || null
-  });
+  const serializePayerTussMapping = (row: any, service: any = null, code: any = null) => {
+    const metadata = payerTussMappingMetadata(row);
+    const officialTussCode = sanitizeString(code?.code, 80) || null;
+    const authorizedCode = resolvePayerTussAuthorizedCode(row, officialTussCode);
+    const billingCode = resolvePayerTussBillingCode(row, officialTussCode);
+    const operatorPackageCode = resolvePayerTussOperatorPackageCode(row);
+    return {
+      id: sanitizeString(row?.id, 120),
+      payerId: sanitizeString(row?.payer_id, 120),
+      serviceCatalogId: sanitizeString(row?.service_catalog_id, 120),
+      tussCodeId: sanitizeString(row?.tuss_code_id, 120) || null,
+      serviceName: sanitizeString(service?.name, 180) || null,
+      internalCode: sanitizeString(service?.internal_code, 80) || null,
+      tussCode: officialTussCode,
+      officialTussCode,
+      tussDescription: sanitizeTextField(code?.description, 600) || null,
+      tussVersion: sanitizeString(code?.version, 80) || null,
+      authorizedCode,
+      authorizedCodeDescription: sanitizeTextField(metadata.authorized_code_description || metadata.authorizedCodeDescription || code?.description, 600) || null,
+      billingCode,
+      billingCodeDescription: sanitizeTextField(metadata.billing_code_description || metadata.billingCodeDescription || code?.description, 600) || null,
+      operatorPackageCode,
+      operatorPackageDescription: sanitizeTextField(metadata.operator_package_description || metadata.operatorPackageDescription || row?.contract_description || row?.payer_specific_description, 600) || null,
+      billingCodeSource: sanitizeString(metadata.billing_code_source || metadata.billingCodeSource || (billingCode && officialTussCode && billingCode !== officialTussCode ? 'payer_mapping_billing_code' : 'official_tuss'), 120) || null,
+      contractCode: sanitizeString(row?.contract_code, 120) || null,
+      contractDescription: sanitizeTextField(row?.contract_description || row?.payer_specific_description, 600) || null,
+      payerSpecificDescription: sanitizeTextField(row?.payer_specific_description || row?.contract_description, 600) || null,
+      specialty: sanitizeString(row?.specialty || service?.specialty, 120) || null,
+      guideType: normalizeTussGuideType(row?.guide_type),
+      billingUnit: normalizeTussBillingUnit(row?.billing_unit),
+      quantityRule: normalizeTussQuantityRule(row?.quantity_rule),
+      defaultQuantity: Number(row?.default_quantity || 1) || 1,
+      amountCents: row?.amount_cents ?? null,
+      negotiatedAmountCents: row?.negotiated_amount_cents ?? row?.amount_cents ?? null,
+      standardDurationMinutes: row?.standard_duration_minutes ?? null,
+      requiresAuthorization: Boolean(row?.requires_authorization),
+      requiresGuide: Boolean(row?.requires_guide),
+      requiresReport: Boolean(row?.requires_report),
+      requiresSignature: Boolean(row?.requires_signature),
+      requiresProfessionalRegistry: Boolean(row?.requires_professional_registry),
+      requiresPatientDocument: Boolean(row?.requires_patient_document),
+      useActualDuration: Boolean(row?.use_actual_duration),
+      active: normalizeTussActiveFlag(row?.active),
+      validFrom: row?.valid_from || null,
+      validTo: row?.valid_to || null,
+      source: sanitizeString(row?.source, 120) || null,
+      notes: sanitizeTextField(row?.notes, 1200) || null,
+      metadata,
+      createdAt: row?.created_at || null,
+      updatedAt: row?.updated_at || null
+    };
+  };
 
   const serializePayerProcedurePrice = (row: any, service: any = null, code: any = null, mapping: any = null) => ({
     id: sanitizeString(row?.id, 120),
@@ -38188,6 +38360,11 @@ async function startServer() {
     internalProcedureCode: sanitizeString(row?.internal_procedure_code, 80) || null,
     internalProcedureName: sanitizeString(row?.internal_procedure_name, 180) || null,
     tussCode: sanitizeString(row?.tuss_code, 80) || null,
+    officialTussCode: sanitizeString(row?.snapshot_data?.procedure?.officialTussCode || row?.snapshot_data?.procedure?.tussCode || row?.tuss_code, 80) || null,
+    authorizedCode: sanitizeString(row?.snapshot_data?.authorization?.procedureTussCode || row?.snapshot_data?.procedure?.authorizedCode || row?.snapshot_data?.authorization?.expectedAuthorizedTussCode, 80) || null,
+    billingCode: sanitizeString(row?.snapshot_data?.procedure?.billingCode || row?.tuss_code, 80) || null,
+    operatorPackageCode: sanitizeString(row?.snapshot_data?.procedure?.operatorPackageCode, 120) || null,
+    billingCodeSource: sanitizeString(row?.snapshot_data?.procedure?.billingCodeSource, 120) || null,
     tussDescription: sanitizeTextField(row?.tuss_description, 600) || null,
     tussVersion: sanitizeString(row?.tuss_version, 80) || null,
     quantity: Number(row?.quantity || 0) || 0,
@@ -38955,8 +39132,8 @@ async function startServer() {
       authorization_code: sanitizeString(preGuide.authorizationCode || snapshot?.authorization?.authorizationCode, 160) || null,
       patient_name: sanitizeString(preGuide.patientName || snapshot?.beneficiary?.name, 180) || null,
       scheduled_start: preGuide.scheduledStart || params.preGuideRow?.scheduled_start || null,
-      tuss_code: sanitizeString(preGuide.tussCode || snapshot?.procedure?.tussCode, 80) || null,
-      procedure_name: sanitizeString(preGuide.tussDescription || preGuide.internalProcedureName || snapshot?.procedure?.name, 240) || null,
+      tuss_code: sanitizeString(preGuide.billingCode || snapshot?.procedure?.billingCode || preGuide.tussCode || snapshot?.procedure?.tussCode, 80) || null,
+      procedure_name: sanitizeString(snapshot?.procedure?.billingCodeDescription || preGuide.tussDescription || preGuide.internalProcedureName || snapshot?.procedure?.name, 240) || null,
       status: 'sent',
       sent_amount_cents: sentAmount,
       paid_amount_cents: 0,
@@ -39601,12 +39778,13 @@ async function startServer() {
         billingContext?.abaSessionId,
       180
     ) || null;
+    const expectedAuthorizationTussCodeForPreGuide = resolvePayerTussAuthorizedCode(mapping, sanitizeString(tussCode?.code || billingItem?.tuss_code, 80));
     const patientPayerAuthorization = await fetchPatientPayerAuthorizationForPreGuide({
       organizationId,
       patientId,
       payerId,
       scheduledStart: scheduledStartForAuthorization,
-      tussCode: sanitizeString(tussCode?.code || billingItem?.tuss_code, 80) || null,
+      tussCode: expectedAuthorizationTussCodeForPreGuide,
       procedureCode: sanitizeString(service?.internal_code || billingItem?.internal_procedure_code, 80) || null
     });
     const responsibleSignature = await fetchResponsibleSignatureForPreGuide({
@@ -40663,7 +40841,13 @@ async function startServer() {
       const resolvedMapping = automaticResolution.mapping;
       const resolvedService = automaticResolution.service;
       const resolvedTussCode = manualTussOverride ? overrideTussCode : automaticResolution.tussCode;
-      const resolvedProcedureTussCode = sanitizeString(resolvedTussCode?.code, 80) || null;
+      const resolvedOfficialProcedureTussCode = sanitizeString(resolvedTussCode?.code, 80) || null;
+      const resolvedProcedureTussCode = manualTussOverride
+        ? resolvedOfficialProcedureTussCode
+        : resolvePayerTussAuthorizedCode(resolvedMapping, resolvedOfficialProcedureTussCode);
+      const resolvedBillingProcedureCode = manualTussOverride
+        ? resolvedProcedureTussCode
+        : resolvePayerTussBillingCode(resolvedMapping, resolvedOfficialProcedureTussCode);
       const resolvedProcedureCode = sanitizeString(resolvedService?.internal_code || submittedProcedureCode, 80) || null;
       const resolvedProcedureName = sanitizeString(
         resolvedMapping?.contract_description ||
@@ -40678,7 +40862,7 @@ async function startServer() {
         serviceCatalogId: resolvedServiceCatalogId,
         tussCodeId: sanitizeString(resolvedTussCode?.id, 120),
         payerTussMappingId: sanitizeString(resolvedMapping?.id, 120),
-        tussCode: resolvedProcedureTussCode,
+        tussCode: resolvedOfficialProcedureTussCode,
         appointmentDate: referenceDate
       });
       if (!activePriceResolution.price) {
@@ -40713,7 +40897,10 @@ async function startServer() {
         synchronized_at: now,
         synchronized_by: isUuid(actorId) ? actorId : null,
         sync_metadata: cleanObject({
-          expectedTussCode: sanitizeString(automaticResolution.tussCode?.code, 80) || null,
+          expectedTussCode: resolvedOfficialProcedureTussCode,
+          officialTussCode: resolvedOfficialProcedureTussCode,
+          authorizedCode: resolvedProcedureTussCode,
+          billingCode: resolvedBillingProcedureCode,
           resolvedTussCode: resolvedProcedureTussCode,
           payerTussMappingId: sanitizeString(resolvedMapping?.id, 120) || null,
           referenceDate: sanitizeString(referenceDate, 40) || null,
@@ -44123,7 +44310,7 @@ async function startServer() {
         valid_to: validTo,
         source: sanitizeString(req.body?.source || req.body?.fonte, 80) || 'manual',
         notes: sanitizeTextField(req.body?.notes || req.body?.observations || req.body?.observacoes, 1200) || null,
-        metadata: sanitizeClinicalPayload(req.body?.metadata || {}),
+        metadata: mergePayerTussMappingCodeMetadata(req.body, {}),
         created_by: isUuid(userId) ? userId : null,
         updated_by: isUuid(userId) ? userId : null,
         created_at: now,
@@ -44238,7 +44425,23 @@ async function startServer() {
         valid_to: req.body?.validTo !== undefined || req.body?.valid_to !== undefined ? sanitizeString(req.body?.validTo || req.body?.valid_to, 20) || null : undefined,
         source: req.body?.source !== undefined ? sanitizeString(req.body?.source, 80) || 'manual' : undefined,
         notes: req.body?.notes !== undefined ? sanitizeTextField(req.body?.notes, 1200) || null : undefined,
-        metadata: req.body?.metadata !== undefined ? sanitizeClinicalPayload(req.body?.metadata || {}) : undefined,
+        metadata: (
+          req.body?.metadata !== undefined ||
+          req.body?.authorizedCode !== undefined ||
+          req.body?.authorized_code !== undefined ||
+          req.body?.authorizedCodeDescription !== undefined ||
+          req.body?.authorized_code_description !== undefined ||
+          req.body?.billingCode !== undefined ||
+          req.body?.billing_code !== undefined ||
+          req.body?.billingCodeDescription !== undefined ||
+          req.body?.billing_code_description !== undefined ||
+          req.body?.operatorPackageCode !== undefined ||
+          req.body?.operator_package_code !== undefined ||
+          req.body?.operatorPackageDescription !== undefined ||
+          req.body?.operator_package_description !== undefined ||
+          req.body?.billingCodeSource !== undefined ||
+          req.body?.billing_code_source !== undefined
+        ) ? mergePayerTussMappingCodeMetadata(req.body, existing.metadata || {}) : undefined,
         updated_by: isUuid(sanitizeString(req.session.user?.id, 120)) ? sanitizeString(req.session.user?.id, 120) : null,
         updated_at: new Date().toISOString()
       });
@@ -44953,7 +45156,9 @@ async function startServer() {
           protectedAuthorizationIds.add(authorizationId);
         }
       }
-      const expectedTussCode = sanitizeString(code.code, 80);
+      const officialTussCode = sanitizeString(code.code, 80);
+      const expectedTussCode = resolvePayerTussAuthorizedCode(mapping, officialTussCode);
+      const expectedBillingCode = resolvePayerTussBillingCode(mapping, officialTussCode);
       const eligibleAuthorizations = authorizations.filter((row: any) => {
         const authorizationId = sanitizeString(row?.id, 120);
         const status = sanitizeString(row?.status, 40).toLowerCase();
@@ -44985,6 +45190,8 @@ async function startServer() {
         mappingId: mapping.id,
         previousTussCodes: previousCodes,
         newTussCode: expectedTussCode,
+        officialTussCode,
+        billingCode: expectedBillingCode,
         validFrom: mapping.valid_from || null,
         validTo: mapping.valid_to || null,
         authorizationsFound: authorizations.length,
@@ -45026,7 +45233,10 @@ async function startServer() {
             source: 'mapping_sync',
             mappingId: mapping.id,
             previousTussCodes: previousCodes,
-            newTussCode: expectedTussCode
+            newTussCode: expectedTussCode,
+            officialTussCode,
+            authorizedCode: expectedTussCode,
+            billingCode: expectedBillingCode
           }),
           updated_by: isUuid(actorId) ? actorId : null,
           updated_at: now

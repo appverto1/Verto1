@@ -70,10 +70,18 @@ type PayerTussMapping = {
   serviceName?: string | null;
   internalCode?: string | null;
   tussCode?: string | null;
+  officialTussCode?: string | null;
   tussDescription?: string | null;
   contractCode?: string | null;
   contractDescription?: string | null;
   payerSpecificDescription?: string | null;
+  authorizedCode?: string | null;
+  authorizedCodeDescription?: string | null;
+  billingCode?: string | null;
+  billingCodeDescription?: string | null;
+  operatorPackageCode?: string | null;
+  operatorPackageDescription?: string | null;
+  billingCodeSource?: string | null;
   specialty?: string | null;
   guideType?: string | null;
   billingUnit?: string | null;
@@ -93,6 +101,7 @@ type PayerTussMapping = {
   validTo?: string | null;
   source?: string | null;
   notes?: string | null;
+  metadata?: Record<string, any>;
   active: boolean;
 };
 
@@ -282,6 +291,13 @@ const defaultTussMappingForm = {
   tussCodeId: "",
   contractCode: "",
   contractDescription: "",
+  authorizedCode: "",
+  authorizedCodeDescription: "",
+  billingCode: "",
+  billingCodeDescription: "",
+  operatorPackageCode: "",
+  operatorPackageDescription: "",
+  billingCodeSource: "official_tuss",
   specialty: "",
   guideType: "sp_sadt",
   billingUnit: "session",
@@ -2006,6 +2022,13 @@ export function PayerRequirementsPanel({
         standardDurationMinutes: tussMappingForm.standardDurationMinutes ? Number(tussMappingForm.standardDurationMinutes) : null,
         contractCode: tussMappingForm.contractCode.trim(),
         contractDescription: tussMappingForm.contractDescription.trim(),
+        authorizedCode: tussMappingForm.authorizedCode.trim(),
+        authorizedCodeDescription: tussMappingForm.authorizedCodeDescription.trim(),
+        billingCode: tussMappingForm.billingCode.trim(),
+        billingCodeDescription: tussMappingForm.billingCodeDescription.trim(),
+        operatorPackageCode: tussMappingForm.operatorPackageCode.trim(),
+        operatorPackageDescription: tussMappingForm.operatorPackageDescription.trim(),
+        billingCodeSource: tussMappingForm.billingCodeSource,
         specialty: tussMappingForm.specialty.trim(),
         source: tussMappingForm.source,
         notes: tussMappingForm.notes.trim(),
@@ -2115,12 +2138,20 @@ export function PayerRequirementsPanel({
 
   const editTussMapping = (mapping: PayerTussMapping) => {
     if (!beginEditingSection("mapping")) return;
+    const metadata = mapping.metadata || {};
     setEditingTussMappingId(mapping.id);
     setTussMappingForm({
       serviceCatalogId: mapping.serviceCatalogId || "",
       tussCodeId: mapping.tussCodeId || "",
       contractCode: mapping.contractCode || "",
       contractDescription: mapping.contractDescription || mapping.payerSpecificDescription || "",
+      authorizedCode: mapping.authorizedCode || metadata.authorized_code || metadata.authorizedCode || "",
+      authorizedCodeDescription: mapping.authorizedCodeDescription || metadata.authorized_code_description || metadata.authorizedCodeDescription || "",
+      billingCode: mapping.billingCode || metadata.billing_code || metadata.billingCode || "",
+      billingCodeDescription: mapping.billingCodeDescription || metadata.billing_code_description || metadata.billingCodeDescription || "",
+      operatorPackageCode: mapping.operatorPackageCode || metadata.operator_package_code || metadata.operatorPackageCode || mapping.contractCode || "",
+      operatorPackageDescription: mapping.operatorPackageDescription || metadata.operator_package_description || metadata.operatorPackageDescription || "",
+      billingCodeSource: mapping.billingCodeSource || metadata.billing_code_source || metadata.billingCodeSource || "official_tuss",
       specialty: mapping.specialty || "",
       guideType: mapping.guideType || "sp_sadt",
       billingUnit: mapping.billingUnit || "session",
@@ -2488,6 +2519,9 @@ export function PayerRequirementsPanel({
     const validFrom = price?.validFrom || mapping?.validFrom || "";
     const validUntil = price?.validUntil || mapping?.validTo || "";
     const tussCode = code?.code || price?.tussCode || mapping?.tussCode || "";
+    const authorizedCode = mapping?.authorizedCode || tussCode;
+    const billingCode = mapping?.billingCode || tussCode;
+    const operatorPackageCode = mapping?.operatorPackageCode || "";
     const actionMenuOpen = openBillingActionMenuKey === key;
     const inactiveBadges = [
       service?.active !== true ? { key: "procedure_inactive", label: service ? "Procedimento inativo" : "Procedimento ausente" } : null,
@@ -2501,6 +2535,12 @@ export function PayerRequirementsPanel({
           <div className="min-w-0">
             <p className="text-sm font-medium text-slate-900">{service?.name || price?.serviceName || mapping?.serviceName || mapping?.internalCode || "Procedimento não identificado"}</p>
             <p className="mt-1 text-xs text-slate-600">{[`TUSS ${tussCode || "não informado"}`, price ? formatCurrency(price.amountCents) : "Sem valor negociado"].join(" · ")}</p>
+            {mapping ? (
+              <p className="mt-0.5 text-xs text-slate-500">
+                Autorizado {authorizedCode || "não informado"} · Faturado/XML {billingCode || "não informado"}
+                {operatorPackageCode ? ` · Pacote ${operatorPackageCode}` : ""}
+              </p>
+            ) : null}
             <p className="mt-0.5 text-xs text-slate-400">
               {validFrom || validUntil
                 ? `Vigência: ${formatBillingDate(validFrom) || "sem início"} a ${formatBillingDate(validUntil) || "sem fim"}`
@@ -4022,7 +4062,7 @@ export function PayerRequirementsPanel({
                 </select>
               </label>
               <label htmlFor="payer-mapping-tuss-code" className="text-xs font-normal text-slate-700">
-                <span className="mb-1 block">Código TUSS</span>
+                <span className="mb-1 block">Código TUSS oficial</span>
                 <select
                   id="payer-mapping-tuss-code"
                   value={tussMappingForm.tussCodeId}
@@ -4033,8 +4073,89 @@ export function PayerRequirementsPanel({
                   {tussCodes.filter((code) => code.active === true || code.id === tussMappingForm.tussCodeId).map((code) => <option key={code.id} value={code.id}>{code.code} - {code.description}{code.active !== true ? " (inativo)" : ""}</option>)}
                 </select>
               </label>
+              <div className="rounded-2xl border border-sky-100 bg-sky-50/80 p-3 text-xs text-sky-900 md:col-span-2">
+                <p className="font-medium">Códigos por etapa da operadora</p>
+                <p className="mt-1">
+                  Se os campos abaixo ficarem vazios, o Verto usa o TUSS oficial. Preencha apenas quando a autorização ou o XML exigirem códigos diferentes.
+                </p>
+              </div>
+              <label htmlFor="payer-mapping-authorized-code" className="text-xs font-normal text-slate-700">
+                <span className="mb-1 block">Código usado na autorização</span>
+                <input
+                  id="payer-mapping-authorized-code"
+                  value={tussMappingForm.authorizedCode}
+                  onChange={(event) => setTussMappingForm((current) => ({ ...current, authorizedCode: event.target.value }))}
+                  placeholder="Opcional. Ex.: 50000470"
+                  className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-normal outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-100"
+                />
+              </label>
+              <label htmlFor="payer-mapping-billing-code" className="text-xs font-normal text-slate-700">
+                <span className="mb-1 block">Código usado no faturamento/XML</span>
+                <input
+                  id="payer-mapping-billing-code"
+                  value={tussMappingForm.billingCode}
+                  onChange={(event) => setTussMappingForm((current) => ({ ...current, billingCode: event.target.value }))}
+                  placeholder="Opcional. Ex.: 6680"
+                  className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-normal outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-100"
+                />
+              </label>
+              <label htmlFor="payer-mapping-authorized-description" className="text-xs font-normal text-slate-700">
+                <span className="mb-1 block">Descrição do código autorizado</span>
+                <input
+                  id="payer-mapping-authorized-description"
+                  value={tussMappingForm.authorizedCodeDescription}
+                  onChange={(event) => setTussMappingForm((current) => ({ ...current, authorizedCodeDescription: event.target.value }))}
+                  placeholder="Opcional"
+                  className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-normal outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-100"
+                />
+              </label>
+              <label htmlFor="payer-mapping-billing-description" className="text-xs font-normal text-slate-700">
+                <span className="mb-1 block">Descrição do código faturado</span>
+                <input
+                  id="payer-mapping-billing-description"
+                  value={tussMappingForm.billingCodeDescription}
+                  onChange={(event) => setTussMappingForm((current) => ({ ...current, billingCodeDescription: event.target.value }))}
+                  placeholder="Opcional"
+                  className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-normal outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-100"
+                />
+              </label>
+              <label htmlFor="payer-mapping-package-code" className="text-xs font-normal text-slate-700">
+                <span className="mb-1 block">Código/pacote da operadora</span>
+                <input
+                  id="payer-mapping-package-code"
+                  value={tussMappingForm.operatorPackageCode}
+                  onChange={(event) => setTussMappingForm((current) => ({ ...current, operatorPackageCode: event.target.value }))}
+                  placeholder="Opcional. Ex.: pacote contratual"
+                  className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-normal outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-100"
+                />
+              </label>
+              <label htmlFor="payer-mapping-billing-code-source" className="text-xs font-normal text-slate-700">
+                <span className="mb-1 block">Origem do código faturado</span>
+                <select
+                  id="payer-mapping-billing-code-source"
+                  value={tussMappingForm.billingCodeSource}
+                  onChange={(event) => setTussMappingForm((current) => ({ ...current, billingCodeSource: event.target.value }))}
+                  className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-normal outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-100"
+                >
+                  <option value="official_tuss">TUSS oficial</option>
+                  <option value="authorized_code">Código autorizado</option>
+                  <option value="payer_mapping_billing_code">Regra de faturamento da operadora</option>
+                  <option value="operator_package">Pacote/código da operadora</option>
+                  <option value="payer_contract">Contrato do pagador</option>
+                </select>
+              </label>
+              <label htmlFor="payer-mapping-package-description" className="text-xs font-normal text-slate-700 md:col-span-2">
+                <span className="mb-1 block">Descrição do pacote/regra da operadora</span>
+                <input
+                  id="payer-mapping-package-description"
+                  value={tussMappingForm.operatorPackageDescription}
+                  onChange={(event) => setTussMappingForm((current) => ({ ...current, operatorPackageDescription: event.target.value }))}
+                  placeholder="Opcional. Ex.: operadora autoriza como TUSS, mas fatura como pacote contratual"
+                  className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-normal outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-100"
+                />
+              </label>
               <label htmlFor="payer-mapping-contract-code" className="text-xs font-normal text-slate-700">
-                <span className="mb-1 block">Código contratual do pagador</span>
+                <span className="mb-1 block">Código contratual legado</span>
                 <input
                   id="payer-mapping-contract-code"
                   value={tussMappingForm.contractCode}
@@ -4525,7 +4646,8 @@ export function PayerRequirementsPanel({
                     </div>
                     <div className="grid gap-3 sm:grid-cols-2">
                       <div className="rounded-xl bg-slate-50 p-3"><p className="text-xs uppercase text-slate-400">Procedimento interno</p><p className="mt-1">{authorizationSyncModal.summary?.procedureName || authorizationSyncModal.mapping.serviceName || "Procedimento"}</p></div>
-                      <div className="rounded-xl bg-slate-50 p-3"><p className="text-xs uppercase text-slate-400">Código TUSS novo</p><p className="mt-1">{authorizationSyncModal.summary?.newTussCode || authorizationSyncModal.mapping.tussCode || "Não informado"}</p></div>
+                      <div className="rounded-xl bg-slate-50 p-3"><p className="text-xs uppercase text-slate-400">Código autorizado novo</p><p className="mt-1">{authorizationSyncModal.summary?.newTussCode || authorizationSyncModal.mapping.authorizedCode || authorizationSyncModal.mapping.tussCode || "Não informado"}</p></div>
+                      <div className="rounded-xl bg-slate-50 p-3"><p className="text-xs uppercase text-slate-400">Código faturado/XML</p><p className="mt-1">{authorizationSyncModal.summary?.billingCode || authorizationSyncModal.mapping.billingCode || authorizationSyncModal.mapping.tussCode || "Não informado"}</p></div>
                       <div className="rounded-xl bg-slate-50 p-3"><p className="text-xs uppercase text-slate-400">Autorizações encontradas</p><p className="mt-1">{Number(authorizationSyncModal.summary?.authorizationsFound || 0)}</p></div>
                       <div className="rounded-xl bg-slate-50 p-3"><p className="text-xs uppercase text-slate-400">Autorizações elegíveis</p><p className="mt-1">{Number(authorizationSyncModal.summary?.authorizationsEligible || 0)}</p></div>
                       <div className="rounded-xl bg-slate-50 p-3"><p className="text-xs uppercase text-slate-400">Autorizações protegidas</p><p className="mt-1">{Number(authorizationSyncModal.summary?.authorizationsProtected || 0)}</p></div>

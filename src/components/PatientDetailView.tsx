@@ -2592,6 +2592,96 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return date.toISOString().slice(0, 10);
   };
 
+  const formatPatientTimelineDateLabel = (value: any) => {
+    const raw = String(value || '').trim();
+    if (!raw) return 'Sem data';
+    if (/^hoje$/i.test(raw)) return 'Hoje';
+    if (/^ontem$/i.test(raw)) return 'Ontem';
+    const isoDate = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (isoDate) return `${isoDate[3]}/${isoDate[2]}/${isoDate[1]}`;
+    const brDate = raw.match(/^(\d{2})[/-](\d{2})[/-](\d{4})$/);
+    if (brDate) return `${brDate[1]}/${brDate[2]}/${brDate[3]}`;
+    const date = new Date(raw);
+    if (Number.isNaN(date.getTime())) return raw;
+    return date.toLocaleDateString('pt-BR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric'
+    });
+  };
+
+  const getPatientTimelineGroupKey = (item: any) => {
+    const key = resolveHistorySnapshotKey(item);
+    if (key) return key;
+    return String(item?.dateGroup || item?.date_group || 'Sem data').trim() || 'Sem data';
+  };
+
+  const firstPatientDetailText = (...values: any[]) =>
+    values.map((value) => String(value || '').trim()).find(Boolean) || '';
+
+  const resolveFamilyMediaForTimeline = (source: any) => {
+    const metadata = source?.metadata && typeof source.metadata === 'object' ? source.metadata : {};
+    const attachments = [
+      ...(Array.isArray(source?.attachments) ? source.attachments : []),
+      ...(Array.isArray(source?.files) ? source.files : []),
+      ...(Array.isArray(source?.photos) ? source.photos : []),
+      ...(Array.isArray(metadata?.attachments) ? metadata.attachments : []),
+      ...(Array.isArray(metadata?.files) ? metadata.files : []),
+      ...(Array.isArray(metadata?.photos) ? metadata.photos : [])
+    ].filter((entry) => entry && typeof entry === 'object');
+    const image = firstPatientDetailText(
+      source?.image,
+      source?.image_url,
+      source?.imageUrl,
+      source?.photo,
+      source?.photo_url,
+      source?.photoUrl,
+      source?.url,
+      metadata?.image,
+      metadata?.image_url,
+      metadata?.imageUrl,
+      metadata?.photo,
+      metadata?.photo_url,
+      metadata?.photoUrl,
+      metadata?.url,
+      ...attachments.flatMap((entry: any) => [
+        entry?.image,
+        entry?.image_url,
+        entry?.imageUrl,
+        entry?.photo,
+        entry?.photo_url,
+        entry?.photoUrl,
+        entry?.url
+      ])
+    );
+    const imagePath = firstPatientDetailText(
+      source?.image_path,
+      source?.imagePath,
+      source?.storage_path,
+      source?.storagePath,
+      source?.photo_path,
+      source?.photoPath,
+      source?.path,
+      metadata?.image_path,
+      metadata?.imagePath,
+      metadata?.storage_path,
+      metadata?.storagePath,
+      metadata?.photo_path,
+      metadata?.photoPath,
+      metadata?.path,
+      ...attachments.flatMap((entry: any) => [
+        entry?.image_path,
+        entry?.imagePath,
+        entry?.storage_path,
+        entry?.storagePath,
+        entry?.photo_path,
+        entry?.photoPath,
+        entry?.path
+      ])
+    );
+    return { image: image || null, image_path: imagePath || null };
+  };
+
   const availableSnapshots = useMemo(() => {
     const dates = (history || [])
       .filter((h: any) => String(h?.patientId || h?.patient_id || '') === String(patient.id))
@@ -2859,6 +2949,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       .map((n: any) => {
         const rawText = String(n?.text || '');
         const hasStarMarker = /\[STAR\]/i.test(rawText) || /\u2b50|⭐/.test(String(n?.subject || ''));
+        const media = resolveFamilyMediaForTimeline(n);
+        const noteType = String(n?.type || n?.kind || '').toLowerCase() === 'photo' ? 'photo' : 'family_note';
         const normalizedText = rawText
           .replace(/\[STAR\]/gi, '')
           .replace(/^🏠\s*registro da fam[ií]lia\s*\n?/i, '')
@@ -2872,19 +2964,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           id: `note-family-${n?.id}`,
           sourceRef: `note-family-${n?.id}`,
           patientId: n?.patientId ?? n?.patient_id ?? patient?.id,
-          type: 'family_note',
-          title: 'Registro da Família',
+          patient_id: n?.patient_id ?? n?.patientId ?? patient?.id,
+          patient_email: n?.patient_email ?? n?.patientEmail ?? patient?.email ?? null,
+          type: noteType,
+          title: noteType === 'photo' ? 'Foto enviada' : 'Registro da Família',
           note: normalizedText || rawText,
-          image:
-            n?.image ||
-            n?.image_url ||
-            n?.imageUrl ||
-            n?.photo ||
-            n?.photo_url ||
-            n?.photoUrl ||
-            null,
-          image_path: n?.image_path || n?.imagePath || n?.storage_path || n?.storagePath || null,
-          icon: '🏠',
+          image: media.image,
+          image_path: media.image_path,
+          icon: noteType === 'photo' ? '📷' : '🏠',
           score:
             milestoneBySource.get(`note-family-${n?.id}`)?.awarded
               ? 1
@@ -2922,6 +3009,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         // Preserve family enrichment when duplicated with history rows
         image: current?.image || entry?.image || null,
         image_path: current?.image_path || current?.imagePath || entry?.image_path || null,
+        patientId: current?.patientId || current?.patient_id || entry?.patientId || entry?.patient_id || patient?.id,
+        patient_id: current?.patient_id || current?.patientId || entry?.patient_id || entry?.patientId || patient?.id,
+        patient_email: current?.patient_email || entry?.patient_email || patient?.email || null,
+        sourceRef: current?.sourceRef || entry?.sourceRef || String(current?.id || entry?.id || ''),
         subject: current?.subject || entry?.subject,
         score: Math.max(Number(current?.score ?? 0) || 0, Number(entry?.score ?? 0) || 0),
         milestoneAwarded:
@@ -2940,8 +3031,16 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       const sourceRef = String(item?.sourceRef || item?.id || '');
       const eventAwarded = Boolean(milestoneBySource.get(sourceRef)?.awarded);
       const hasMarker = /\[STAR\]/i.test(String(item?.note || item?.text || '')) || /\u2b50|⭐/.test(String(item?.subject || ''));
+      const media = resolveFamilyMediaForTimeline(item);
+      const resolvedPatientId = item?.patientId || item?.patient_id || patient?.id;
       return {
         ...item,
+        sourceRef,
+        patientId: resolvedPatientId,
+        patient_id: item?.patient_id || item?.patientId || resolvedPatientId,
+        patient_email: item?.patient_email || patient?.email || null,
+        image: item?.image || media.image,
+        image_path: item?.image_path || item?.imagePath || media.image_path,
         milestoneAwarded: Boolean(item?.milestoneAwarded) || eventAwarded,
         score: (Boolean(item?.milestoneAwarded) || eventAwarded || hasMarker || Number(item?.score ?? 0) >= 1) ? 1 : Number(item?.score ?? 0)
       };
@@ -2952,7 +3051,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       const bTs = new Date(b?.date || b?.created_at || 0).getTime();
       return bTs - aTs;
     });
-  }, [history, notes, isKidsProfile, patient?.id]);
+  }, [history, notes, isKidsProfile, patient?.id, patient?.email]);
 
   const normalizeNoteText = (value: string) =>
     String(value || '')
@@ -3497,8 +3596,20 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     }).length;
   }, [isKidsProfile, historyWithFamilyNotes]);
 
-  const groupedHistory = (historyWithFamilyNotes || []).reduce((groups: any, item: any) => { const group = groups[item.dateGroup] || []; group.push(item); groups[item.dateGroup] = group; return groups; }, {}); 
-  const sortedDateKeys = Object.keys(groupedHistory).sort((a, b) => { if (a === "Hoje") return -1; if (b === "Hoje") return 1; if (a === "Ontem") return -1; if (b === "Ontem") return 1; return b.localeCompare(a); }); 
+  const groupedHistory = (historyWithFamilyNotes || []).reduce((groups: any, item: any) => {
+    const groupKey = getPatientTimelineGroupKey(item);
+    const group = groups[groupKey] || [];
+    group.push(item);
+    groups[groupKey] = group;
+    return groups;
+  }, {});
+  const sortedDateKeys = Object.keys(groupedHistory).sort((a, b) => {
+    if (a === "Hoje") return -1;
+    if (b === "Hoje") return 1;
+    if (a === "Ontem") return -1;
+    if (b === "Ontem") return 1;
+    return b.localeCompare(a);
+  });
   
   const filteredNotes = useMemo(() => {
     return (notes || []).filter((n: any) => {
@@ -9097,7 +9208,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               return (
               <div key={dateKey} className="relative pl-6 border-l-2 border-gray-200 ml-2"> 
                 <div className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-[#7551FF] border-4 border-white ring-1 ring-gray-100"></div> 
-                <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">{dateKey}</h3> 
+                <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">{formatPatientTimelineDateLabel(dateKey)}</h3> 
                 <div className="space-y-4">
                   {familyItems.map((item: any, idx: number) => (
                     <HistoryCard 

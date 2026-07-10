@@ -41,6 +41,7 @@ const authorizationTussSyncMigrationCode = readFileSync(join(root, 'supabase/mig
 const payerAntiGlosaReviewMigrationCode = readFileSync(join(root, 'supabase/migrations/20260629103000_payer_anti_glosa_review_state.sql'), 'utf8');
 const xmlDraftGeneratorCode = readFileSync(join(root, 'src/services/tissXmlDraftGenerator.ts'), 'utf8');
 const xmlDraftValidatorCode = readFileSync(join(root, 'src/services/tissXmlDraftValidator.ts'), 'utf8');
+const officialTissGeneratorCode = readFileSync(join(root, 'src/services/tissOfficial/versions/communication040300/generator.ts'), 'utf8');
 const revenueStateMachineCode = readFileSync(join(root, 'src/services/tissRevenueCycleStateMachine.ts'), 'utf8');
 const antiGlosaChecklistCode = readFileSync(join(root, 'src/services/tissAntiGlosaChecklist.ts'), 'utf8');
 const packageJson = readFileSync(join(root, 'package.json'), 'utf8');
@@ -215,6 +216,96 @@ test('atendimento de convênio com dados mínimos produz Pré-guia válida', () 
   assert.equal(result.snapshot.revenueCycle.state, 'ready_for_billing');
   assert.equal(result.snapshot.revenueCycle.canAdvanceToBilling, true);
   assert.equal(result.snapshot.antiGlosaChecklist.status, 'ready');
+});
+
+test('DePara separa codigo autorizado do codigo faturado sem bloquear pre-guia', () => {
+  const input = clone(validInput);
+  input.tussCode = {
+    ...input.tussCode,
+    code: '50000470',
+    description: 'Sessao de psicoterapia individual por psicologo',
+  };
+  input.mapping = {
+    ...input.mapping,
+    metadata: {
+      authorized_code: '50000470',
+      authorized_code_description: 'Sessao autorizada pela operadora',
+      billing_code: '6680',
+      billing_code_description: 'Pacote contratual faturado',
+      operator_package_code: 'PKG-PSI',
+      operator_package_description: 'Pacote Simplisaude',
+      billing_code_source: 'payer_mapping_billing_code',
+    },
+  };
+  input.authorization = {
+    ...input.authorization,
+    procedure_tuss_code: '50000470',
+  };
+
+  const validation = validateTissPreGuide(input);
+
+  assert.equal(validation.status, 'valid');
+  assert.deepEqual(validation.errorCodes, []);
+  assert.equal(validation.snapshot.procedure.tussCode, '50000470');
+  assert.equal(validation.snapshot.procedure.officialTussCode, '50000470');
+  assert.equal(validation.snapshot.procedure.authorizedCode, '50000470');
+  assert.equal(validation.snapshot.procedure.billingCode, '6680');
+  assert.equal(validation.snapshot.procedure.billingCodeDescription, 'Pacote contratual faturado');
+  assert.equal(validation.snapshot.procedure.operatorPackageCode, 'PKG-PSI');
+  assert.equal(validation.snapshot.authorization.procedureTussCode, '50000470');
+  assert.equal(validation.snapshot.authorization.expectedAuthorizedTussCode, '50000470');
+
+  const antiGlosa = validateAntiGlosaForPreGuide({
+    status: validation.status,
+    errors: validation.errors,
+    warnings: validation.warnings,
+    errorCodes: validation.errorCodes,
+    warningCodes: validation.warningCodes,
+    snapshot: validation.snapshot,
+  });
+  assert.equal(antiGlosa.canGenerateXml, true);
+  assert.ok(!issueCodes(antiGlosa).includes('AUTHORIZATION_PROCEDURE_MISMATCH'));
+
+  const draft = buildTissSpSadtDraftPayload({
+    payerId: 'payer-1',
+    competenceMonth: '2026-06',
+    preGuides: [{
+      id: 'pre-guide-split-code',
+      status: 'valid',
+      payerId: 'payer-1',
+      guideType: 'sp_sadt',
+      quantity: 1,
+      totalAmountCents: 12000,
+      snapshot: validation.snapshot,
+    }],
+  });
+  assert.equal(draft.guides[0].procedure.officialTussCode, '50000470');
+  assert.equal(draft.guides[0].procedure.tussCode, '6680');
+  assert.equal(draft.guides[0].procedure.billingCode, '6680');
+});
+
+test('codigo autorizado divergente continua bloqueando quando nao bate com a autorizacao', () => {
+  const input = clone(validInput);
+  input.tussCode = {
+    ...input.tussCode,
+    code: '50000470',
+  };
+  input.mapping = {
+    ...input.mapping,
+    metadata: {
+      authorized_code: '50000470',
+      billing_code: '6680',
+    },
+  };
+  input.authorization = {
+    ...input.authorization,
+    procedure_tuss_code: '6680',
+  };
+
+  const validation = validateTissPreGuide(input);
+
+  assert.equal(validation.status, 'pending_data');
+  assert.ok(validation.errorCodes.includes('AUTHORIZATION_PROCEDURE_MISMATCH'));
 });
 
 test('maquina de estados permite PrÃ©-guia vÃ¡lida e bloqueia estados oficiais futuros', () => {
@@ -2165,6 +2256,12 @@ test('frontend de Pré-guias apresenta status operacionais sem contradição vis
 
 test('autorizacao TUSS usa DePara server-side e sincronizacao controlada', () => {
   assert.match(serverCode, /resolveAuthorizationTussFromMapping/);
+  assert.match(serverCode, /mergePayerTussMappingCodeMetadata/);
+  assert.match(serverCode, /authorized_code/);
+  assert.match(serverCode, /billing_code/);
+  assert.match(serverCode, /operator_package_code/);
+  assert.match(serverCode, /resolvePayerTussAuthorizedCode/);
+  assert.match(serverCode, /resolvePayerTussBillingCode/);
   assert.match(serverCode, /AUTHORIZATION_TUSS_MAPPING_AMBIGUOUS/);
   assert.match(serverCode, /AUTHORIZATION_TUSS_MAPPING_MISSING/);
   assert.match(serverCode, /AUTHORIZATION_TUSS_OVERRIDE_REASON_REQUIRED/);
@@ -2177,6 +2274,16 @@ test('autorizacao TUSS usa DePara server-side e sincronizacao controlada', () =>
   assert.match(serverCode, /AUTHORIZATION_TUSS_SYNCHRONIZED/);
   assert.match(serverCode, /PRE_GUIDES_REVALIDATED_AFTER_AUTHORIZATION_SYNC/);
   assert.match(dataServiceCode, /syncPayerTussMappingAuthorizations/);
+  assert.match(payerRequirementsCode, /Código usado na autorização/);
+  assert.match(payerRequirementsCode, /Código usado no faturamento\/XML/);
+  assert.match(payerRequirementsCode, /Código\/pacote da operadora/);
+  assert.match(payerRequirementsCode, /Autorizado \{authorizedCode/);
+  assert.match(preGuideUiCode, /Código autorizado/);
+  assert.match(preGuideUiCode, /Código faturado\/XML/);
+  assert.match(xmlDraftGeneratorCode, /procedure\.billingCode/);
+  assert.match(xmlDraftGeneratorCode, /officialTussCode/);
+  assert.match(officialTissGeneratorCode, /billingTussCode/);
+  assert.match(officialTissGeneratorCode, /procedure\.billingCode/);
   assert.match(payerRequirementsCode, /Sincronizar autorizações e Pré-guias afetadas/);
   assert.match(payerRequirementsCode, /Confirmar sincronização/);
   assert.match(authorizationTussSyncMigrationCode, /payer_tuss_mapping_id uuid references public\.payer_tuss_mappings/);

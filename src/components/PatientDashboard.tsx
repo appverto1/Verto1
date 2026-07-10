@@ -1023,7 +1023,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     if (!key) return String(value || '').trim();
     if (key === toLocalDateKey(new Date())) return 'Hoje';
     const [year, month, day] = key.split('-');
-    return `${day}-${month}-${year}`;
+    return `${day}/${month}/${year}`;
   };
 
   const getHistoryItemSortTime = (item: any) => {
@@ -1041,10 +1041,10 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const formatFilterDate = (value: string) => {
     const raw = String(value || '').trim();
     if (!raw) return '';
-    if (/^\d{2}[/-]\d{2}[/-]\d{4}$/.test(raw)) return raw.replace(/\//g, '-');
+    if (/^\d{2}[/-]\d{2}[/-]\d{4}$/.test(raw)) return raw.replace(/-/g, '/');
     if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
       const [year, month, day] = raw.split('-');
-      return `${day}-${month}-${year}`;
+      return `${day}/${month}/${year}`;
     }
     const parsed = new Date(raw);
     if (Number.isNaN(parsed.getTime())) return raw;
@@ -1835,7 +1835,11 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         let persistedImagePath: string | undefined = familyImagePath || undefined;
         if (persistedImage && persistedImage.startsWith('data:image/')) {
           const extension = persistedImage.includes('image/jpeg') ? 'jpg' : persistedImage.includes('image/webp') ? 'webp' : 'png';
-          const fileName = `${user.id}/family-${Date.now()}.${extension}`;
+          const ownerPatientId = String(portalPatientId || user?.patientId || user?.patient_id || user?.id || '').trim();
+          if (!ownerPatientId) {
+            throw new Error('Não encontramos o paciente vinculado para salvar a foto.');
+          }
+          const fileName = `${ownerPatientId}/family-${Date.now()}.${extension}`;
           const uploadResult = await dataService.uploadDataUrl('patient-photos', fileName, persistedImage, `image/${extension === 'jpg' ? 'jpeg' : extension}`);
           if (uploadResult?.success && uploadResult.url) {
             persistedImage = uploadResult.url;
@@ -1880,9 +1884,63 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   };
 
   const getFamilyDiaryImageSource = (entry: any) => {
-    const direct = firstPortalText(entry?.image, entry?.imageUrl, entry?.photoUrl, entry?.image_url, entry?.url);
+    const metadata = entry?.metadata && typeof entry.metadata === 'object' ? entry.metadata : {};
+    const attachments = [
+      ...(Array.isArray(entry?.attachments) ? entry.attachments : []),
+      ...(Array.isArray(entry?.files) ? entry.files : []),
+      ...(Array.isArray(entry?.photos) ? entry.photos : []),
+      ...(Array.isArray(metadata?.attachments) ? metadata.attachments : []),
+      ...(Array.isArray(metadata?.files) ? metadata.files : []),
+      ...(Array.isArray(metadata?.photos) ? metadata.photos : [])
+    ].filter((item) => item && typeof item === 'object');
+    const direct = firstPortalText(
+      entry?.image,
+      entry?.imageUrl,
+      entry?.photoUrl,
+      entry?.image_url,
+      entry?.photo_url,
+      entry?.url,
+      metadata?.image,
+      metadata?.imageUrl,
+      metadata?.photoUrl,
+      metadata?.image_url,
+      metadata?.photo_url,
+      metadata?.url,
+      ...attachments.flatMap((item: any) => [
+        item?.image,
+        item?.imageUrl,
+        item?.photoUrl,
+        item?.image_url,
+        item?.photo_url,
+        item?.url
+      ])
+    );
     if (direct) return direct;
-    const path = firstPortalText(entry?.image_path, entry?.imagePath, entry?.storage_path, entry?.storagePath);
+    const path = firstPortalText(
+      entry?.image_path,
+      entry?.imagePath,
+      entry?.storage_path,
+      entry?.storagePath,
+      entry?.photo_path,
+      entry?.photoPath,
+      entry?.path,
+      metadata?.image_path,
+      metadata?.imagePath,
+      metadata?.storage_path,
+      metadata?.storagePath,
+      metadata?.photo_path,
+      metadata?.photoPath,
+      metadata?.path,
+      ...attachments.flatMap((item: any) => [
+        item?.image_path,
+        item?.imagePath,
+        item?.storage_path,
+        item?.storagePath,
+        item?.photo_path,
+        item?.photoPath,
+        item?.path
+      ])
+    );
     if (!path) return '';
     return path.startsWith('patient-photos/') ? path : `patient-photos/${path}`;
   };
@@ -1898,7 +1956,14 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     if (file) {
       setIsUploading(true);
       try {
-        const fileName = `${user.id}/${Date.now()}-${file.name}`;
+        const ownerPatientId = String(portalPatientId || user?.patientId || user?.patient_id || user?.id || '').trim();
+        if (!ownerPatientId) {
+          alert('Não encontramos o paciente vinculado para salvar a foto.');
+          setIsUploading(false);
+          e.target.value = '';
+          return;
+        }
+        const fileName = `${ownerPatientId}/${Date.now()}-${file.name}`;
         const result = await dataService.uploadFile('patient-photos', fileName, file);
         
         if (result.success && result.url) {
