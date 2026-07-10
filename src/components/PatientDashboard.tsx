@@ -639,13 +639,13 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     setPortalAppointmentsState((prev) => ({ ...prev, error: '', message: result?.message || 'Consulta confirmada com sucesso.' }));
   };
 
-  const loadPortalRescheduleSlots = async (appointmentId: string) => {
+  const loadPortalRescheduleSlots = async (appointmentId: string, dateFrom?: string) => {
     if (!appointmentId) {
       setPortalRescheduleAvailability({ loading: false, error: 'Consulta não encontrada.', days: [], totalSlots: 0, maxSelectable: 3, message: '' });
       return;
     }
-    setPortalRescheduleAvailability({ loading: true, error: '', days: [], totalSlots: 0, maxSelectable: 3, message: '' });
-    const result = await dataService.getPortalAppointmentRescheduleSlots(appointmentId, { maxDays: 14 });
+    setPortalRescheduleAvailability((prev: any) => ({ ...prev, loading: true, error: '', days: [], totalSlots: 0, maxSelectable: 3, message: '' }));
+    const result = await dataService.getPortalAppointmentRescheduleSlots(appointmentId, { maxDays: 5, dateFrom });
     if (!result?.success) {
       setPortalRescheduleAvailability({ loading: false, error: result?.error || 'Não foi possível carregar horários disponíveis.', days: [], totalSlots: 0, maxSelectable: 3, message: '' });
       return;
@@ -657,7 +657,11 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       days: Array.isArray(data.days) ? data.days : [],
       totalSlots: Number(data.totalSlots || 0),
       maxSelectable: Number(data.maxSelectable || 3) || 3,
-      message: data.message || ''
+      message: data.message || '',
+      rangeLabel: data.rangeLabel || '',
+      weekStart: data.weekStart || '',
+      weekEnd: data.weekEnd || '',
+      nextDateFrom: data.nextDateFrom || ''
     });
   };
 
@@ -3047,6 +3051,11 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                   <span>Opções selecionadas</span>
                   <span className="text-[#7a32fc]">{portalSelectedRescheduleSlots.length}/{Math.max(1, Math.min(3, Number(portalRescheduleAvailability.maxSelectable || 3) || 3))}</span>
                 </div>
+                {portalRescheduleAvailability.rangeLabel && (
+                  <div className="rounded-2xl border border-slate-100 bg-white px-4 py-2 text-xs font-medium text-slate-600">
+                    Semana exibida: <span className="font-semibold text-slate-800">{portalRescheduleAvailability.rangeLabel}</span>
+                  </div>
+                )}
                 {portalRescheduleAvailability.loading && (
                   <div className="rounded-2xl border border-slate-100 bg-white px-4 py-4 text-sm font-semibold text-slate-500">
                     Carregando horários disponíveis...
@@ -3059,7 +3068,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                 )}
                 {!portalRescheduleAvailability.loading && !portalRescheduleAvailability.error && portalRescheduleAvailability.days.length === 0 && (
                   <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                    <p className="font-semibold">{portalRescheduleAvailability.message || 'Não encontramos horários disponíveis para remarcação nos próximos 14 dias.'}</p>
+                    <p className="font-semibold">{portalRescheduleAvailability.message || 'Não encontramos horários disponíveis nesta semana.'}</p>
                     <p className="mt-1 text-xs font-medium">Você pode enviar uma observação para a clínica entrar em contato.</p>
                   </div>
                 )}
@@ -3091,6 +3100,19 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                       </div>
                     ))}
                   </div>
+                )}
+                {!portalRescheduleAvailability.loading && portalRescheduleAvailability.nextDateFrom && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const appointmentId = String((portalAppointmentDetail?.appointment || selectedPortalAppointment)?.id || '').trim();
+                      setPortalSelectedRescheduleSlots([]);
+                      void loadPortalRescheduleSlots(appointmentId, portalRescheduleAvailability.nextDateFrom);
+                    }}
+                    className="w-full rounded-2xl border border-purple-100 bg-white px-4 py-3 text-sm font-semibold text-[#7a32fc] transition hover:bg-purple-50"
+                  >
+                    Ver próxima semana
+                  </button>
                 )}
                 {portalSelectedRescheduleSlots.length > 0 && (
                   <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3">

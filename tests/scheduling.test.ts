@@ -20,6 +20,7 @@ const migrationCode = readFileSync(join(root, 'supabase/migrations/2026052714300
 const roomSpecialtiesMigrationCode = readFileSync(join(root, 'supabase/migrations/20260528120000_clinic_rooms_specialties.sql'), 'utf8');
 const roomOverlapMigrationCode = readFileSync(join(root, 'supabase/migrations/20260707120000_clinic_room_overlap_policy.sql'), 'utf8');
 const coordinatorCode = readFileSync(join(root, 'src/components/CoordinatorDashboard.tsx'), 'utf8');
+const teamManagementCode = readFileSync(join(root, 'src/components/TeamManagement.tsx'), 'utf8');
 
 const tests: Array<{ name: string; fn: () => void }> = [];
 const test = (name: string, fn: () => void) => tests.push({ name, fn });
@@ -221,6 +222,78 @@ test('remarcacao do portal retorna apenas slots livres sem expor agenda privada'
   const firstDayStarts = availability.days.find((day) => day.date === '2026-07-11')?.slots.map((slot) => slot.start) || [];
   assert.deepEqual(firstDayStarts, ['11:00']);
   assert.ok(availability.days.every((day) => day.slots.every((slot) => !('patientName' in slot) && !('title' in slot))));
+});
+
+test('remarcacao do portal usa jornada semanal, almoco e bloqueios do profissional', () => {
+  const availability = buildAvailableRescheduleSlots({
+    appointmentId: 'original',
+    patientId: 'p1',
+    professionalId: 't1',
+    roomId: 'room-aba',
+    locationType: 'clinica',
+    currentScheduledStart: '2026-07-20T14:00:00.000Z',
+    durationMinutes: 50,
+    now: '2026-07-19T10:00:00-03:00',
+    dateFrom: '2026-07-20',
+    maxDays: 5,
+    workingSchedule: {
+      active: true,
+      stepMinutes: 50,
+      minLeadMinutes: 0,
+      maxSlotsPerDay: 12,
+      days: {
+        monday: {
+          enabled: true,
+          periods: [{ start: '08:00', end: '12:00' }, { start: '13:00', end: '17:00' }],
+          intervals: [{ start: '12:00', end: '13:00' }]
+        },
+        tuesday: {
+          enabled: true,
+          periods: [{ start: '08:00', end: '12:00' }],
+          intervals: []
+        },
+        saturday: { enabled: false, periods: [] },
+        sunday: { enabled: false, periods: [] }
+      },
+      exceptions: [
+        { date: '2026-07-20', start: '08:00', end: '09:30', type: 'Folga', blocksAvailability: true }
+      ]
+    },
+    existingAppointments: [
+      {
+        id: 'busy',
+        professionalId: 't1',
+        patientId: 'other',
+        roomId: 'room-aba',
+        scheduledStart: '2026-07-20T13:30:00.000Z',
+        scheduledEnd: '2026-07-20T14:20:00.000Z',
+        status: 'scheduled'
+      }
+    ]
+  });
+
+  assert.equal(availability.windowDays, 5);
+  assert.equal(availability.rangeLabel, '20/07/2026 a 24/07/2026');
+  assert.ok(!availability.days.some((day) => day.date === '2026-07-25'));
+  const mondayStarts = availability.days.find((day) => day.date === '2026-07-20')?.slots.map((slot) => slot.start) || [];
+  assert.ok(!mondayStarts.includes('08:00'));
+  assert.ok(!mondayStarts.includes('08:50'));
+  assert.ok(!mondayStarts.includes('10:30'));
+  assert.ok(!mondayStarts.includes('12:00'));
+  assert.ok(mondayStarts.includes('09:40'));
+  assert.ok(mondayStarts.includes('13:00'));
+});
+
+test('configuracao de jornada profissional persiste no perfil e exige permissao administrativa', () => {
+  assert.match(serverCode, /app\.get\('\/api\/clinic\/members\/:memberId\/work-schedule'/);
+  assert.match(serverCode, /app\.patch\('\/api\/clinic\/members\/:memberId\/work-schedule'/);
+  assert.match(serverCode, /requireRoles\('coordinator', 'admin', 'owner'\)/);
+  assert.match(serverCode, /assertClinicMemberForWorkSchedule/);
+  assert.match(serverCode, /metadata[^]*workSchedule/);
+  assert.match(teamManagementCode, /Hor.rios de trabalho/);
+  assert.match(teamManagementCode, /Exce..es e bloqueios/);
+  assert.match(teamManagementCode, /updateMemberWorkSchedule/);
+  assert.match(teamManagementCode, /Salvar hor.rios/);
 });
 
 test('solicitacao de remarcacao guarda ate tres opcoes estruturadas em nota compativel', () => {

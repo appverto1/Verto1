@@ -211,12 +211,26 @@ test('remarcacao do portal usa slots disponiveis em vez de seletor livre', () =>
   assert.match(serverCode, /app\.get\('\/api\/portal\/appointments\/:appointmentId\/reschedule-slots'/);
   assert.match(serverCode, /buildPortalRescheduleAvailabilityForAppointment/);
   assert.match(serverCode, /resolveValidPortalRescheduleOptions/);
+  assert.match(patientDashboardCode, /maxDays: 5/);
+  assert.match(patientDashboardCode, /rangeLabel/);
+  assert.match(patientDashboardCode, /Ver pr.xima semana/);
   assert.match(modal, /Escolha at. 3 op..es de hor.rio/);
   assert.match(modal, /portalRescheduleAvailability\.days\.map/);
   assert.match(modal, /portalSelectedRescheduleSlots\.length\}\//);
   assert.match(patientDashboardCode, /rescheduleOptions: selectedRescheduleOptions/);
   assert.match(patientDashboardCode, /portalModal === 'reschedule' && portalSelectedRescheduleSlots\.length === 0/);
   assert.doesNotMatch(modal, /datetime-local/);
+});
+
+test('horarios de trabalho do profissional alimentam remarcacao sem listar mes inteiro', () => {
+  assert.match(serverCode, /app\.get\('\/api\/clinic\/members\/:memberId\/work-schedule'/);
+  assert.match(serverCode, /app\.patch\('\/api\/clinic\/members\/:memberId\/work-schedule'/);
+  assert.match(serverCode, /assertClinicMemberForWorkSchedule/);
+  assert.match(serverCode, /readProfessionalWorkingScheduleFromMetadata/);
+  assert.match(serverCode, /PORTAL_RESCHEDULE_WEEK_WINDOW_DAYS = 5/);
+  assert.match(serverCode, /buildPortalRescheduleDateWindow/);
+  assert.match(serverCode, /workingSchedule/);
+  assert.doesNotMatch(patientDashboardCode, /maxDays: 14/);
 });
 
 test('equipe aprova opcao escolhida sem expor agenda privada', () => {

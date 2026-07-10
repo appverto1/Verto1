@@ -107,6 +107,7 @@ import {
   flattenRescheduleSlotGroups,
   normalizeRescheduleOptions,
   parseRescheduleRequestNote,
+  type PortalProfessionalWorkingSchedule,
   type PortalRescheduleOption
 } from './src/services/portalRescheduleAvailability';
 import {
@@ -15838,6 +15839,183 @@ async function startServer() {
     }
   });
 
+  const PORTAL_RESCHEDULE_WEEK_WINDOW_DAYS = 5;
+
+  const addPortalDateKeyDays = (dateKey: string, days: number) => {
+    const base = buildAppointmentDateTime(sanitizeDate(dateKey) || formatDateInAppointmentTimezone(new Date()), '12:00') || new Date();
+    base.setUTCDate(base.getUTCDate() + days);
+    return formatDateInAppointmentTimezone(base);
+  };
+
+  const portalDateKeyWeekday = (dateKey: string) => {
+    const date = buildAppointmentDateTime(sanitizeDate(dateKey) || formatDateInAppointmentTimezone(new Date()), '12:00') || new Date();
+    return date.getUTCDay();
+  };
+
+  const startOfPortalWeek = (dateKey: string) => {
+    const weekday = portalDateKeyWeekday(dateKey);
+    const distanceFromMonday = (weekday + 6) % 7;
+    return addPortalDateKeyDays(dateKey, -distanceFromMonday);
+  };
+
+  const nextPortalWeekStart = (dateKey: string) => addPortalDateKeyDays(startOfPortalWeek(dateKey), 7);
+
+  const sanitizeScheduleTime = (value: unknown, fallback: string) => {
+    const text = sanitizeString(value, 12);
+    const match = text.match(/^(\d{1,2}):(\d{2})/);
+    if (!match) return fallback;
+    const hour = Math.min(23, Math.max(0, Number(match[1])));
+    const minute = Math.min(59, Math.max(0, Number(match[2])));
+    return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+  };
+
+  const sanitizeSchedulePeriod = (period: any, fallbackStart = '08:00', fallbackEnd = '17:00') => {
+    const start = sanitizeScheduleTime(period?.start ?? period?.startTime ?? period?.start_time, fallbackStart);
+    const end = sanitizeScheduleTime(period?.end ?? period?.endTime ?? period?.end_time, fallbackEnd);
+    if (start >= end) return null;
+    return cleanObject({
+      start,
+      end,
+      locationTypes: Array.isArray(period?.locationTypes || period?.location_types)
+        ? (period.locationTypes || period.location_types).map((item: any) => sanitizeString(item, 40)).filter(Boolean).slice(0, 6)
+        : [],
+      roomIds: Array.isArray(period?.roomIds || period?.room_ids)
+        ? (period.roomIds || period.room_ids).map((item: any) => sanitizeString(item, 120)).filter(Boolean).slice(0, 20)
+        : []
+    });
+  };
+
+  const buildDefaultProfessionalWorkingSchedule = (durationMinutes = 50): PortalProfessionalWorkingSchedule => ({
+    active: true,
+    stepMinutes: durationMinutes,
+    minLeadMinutes: 120,
+    maxSlotsPerDay: 8,
+    days: {
+      monday: { enabled: true, periods: [{ start: '08:00', end: '12:00' }, { start: '13:00', end: '17:00' }], intervals: [{ start: '12:00', end: '13:00' }] },
+      tuesday: { enabled: true, periods: [{ start: '08:00', end: '12:00' }, { start: '13:00', end: '17:00' }], intervals: [{ start: '12:00', end: '13:00' }] },
+      wednesday: { enabled: true, periods: [{ start: '08:00', end: '12:00' }, { start: '13:00', end: '17:00' }], intervals: [{ start: '12:00', end: '13:00' }] },
+      thursday: { enabled: true, periods: [{ start: '08:00', end: '12:00' }, { start: '13:00', end: '17:00' }], intervals: [{ start: '12:00', end: '13:00' }] },
+      friday: { enabled: true, periods: [{ start: '08:00', end: '12:00' }, { start: '13:00', end: '17:00' }], intervals: [{ start: '12:00', end: '13:00' }] },
+      saturday: { enabled: false, periods: [] },
+      sunday: { enabled: false, periods: [] }
+    },
+    exceptions: []
+  });
+
+  const sanitizeProfessionalWorkingSchedule = (raw: any, fallbackDuration = 50): PortalProfessionalWorkingSchedule => {
+    const source = raw && typeof raw === 'object' ? raw : {};
+    const defaultSchedule = buildDefaultProfessionalWorkingSchedule(fallbackDuration);
+    const rawDaysSource = source.days || source.weekly || source.weeklySchedule || source.weekly_schedule;
+    const hasExplicitDays = Boolean(rawDaysSource && typeof rawDaysSource === 'object');
+    const rawDays = hasExplicitDays ? rawDaysSource : defaultSchedule.days;
+    const dayKeys = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+    const days: Record<string, any> = {};
+    dayKeys.forEach((dayKey) => {
+      if (hasExplicitDays && !(rawDays as any)?.[dayKey]) {
+        days[dayKey] = { enabled: false, periods: [], intervals: [] };
+        return;
+      }
+      const day = (rawDays && typeof rawDays === 'object' ? (rawDays as any)[dayKey] : null) || (defaultSchedule.days as any)?.[dayKey] || {};
+      const rawPeriods = Array.isArray(day?.periods || day?.ranges || day?.shifts) ? (day.periods || day.ranges || day.shifts) : [];
+      const periods = rawPeriods
+        .map((period: any) => sanitizeSchedulePeriod(period))
+        .filter(Boolean)
+        .slice(0, 4);
+      const rawIntervals = Array.isArray(day?.intervals || day?.breaks) ? (day.intervals || day.breaks) : [];
+      const intervals = rawIntervals
+        .map((period: any) => sanitizeSchedulePeriod(period, '12:00', '13:00'))
+        .filter(Boolean)
+        .slice(0, 4);
+      const lunchStart = sanitizeString(day?.lunchStart || day?.lunch_start, 12);
+      const lunchEnd = sanitizeString(day?.lunchEnd || day?.lunch_end, 12);
+      if (lunchStart && lunchEnd) {
+        const lunchPeriod = sanitizeSchedulePeriod({ start: lunchStart, end: lunchEnd }, '12:00', '13:00');
+        if (lunchPeriod) intervals.push(lunchPeriod);
+      }
+      days[dayKey] = {
+        enabled: day?.enabled === false || day?.active === false ? false : periods.length > 0,
+        periods,
+        intervals
+      };
+    });
+    const exceptions = (Array.isArray(source.exceptions || source.blocks || source.scheduleExceptions || source.schedule_exceptions)
+      ? (source.exceptions || source.blocks || source.scheduleExceptions || source.schedule_exceptions)
+      : [])
+      .map((exception: any) => {
+        const date = sanitizeDate(exception?.date);
+        if (!date) return null;
+        const start = sanitizeScheduleTime(exception?.start || exception?.startTime || exception?.start_time, '00:00');
+        const end = sanitizeScheduleTime(exception?.end || exception?.endTime || exception?.end_time, '23:59');
+        if (start >= end) return null;
+        return cleanObject({
+          date,
+          start,
+          end,
+          type: sanitizeString(exception?.type, 60) || 'Bloqueio manual',
+          note: sanitizeTextField(exception?.note || exception?.observation || exception?.observacao, 240) || null,
+          blocksAvailability: exception?.blocksAvailability !== false && exception?.blocks_availability !== false,
+          active: exception?.active !== false
+        });
+      })
+      .filter(Boolean)
+      .slice(0, 120);
+    return cleanObject({
+      active: source.active !== false,
+      stepMinutes: asSafeNumber(source.stepMinutes ?? source.step_minutes, 10, 120) || fallbackDuration,
+      minLeadMinutes: asSafeNumber(source.minLeadMinutes ?? source.min_lead_minutes, 0, 30 * 24 * 60) ?? 120,
+      maxSlotsPerDay: asSafeNumber(source.maxSlotsPerDay ?? source.max_slots_per_day, 1, 24) || 8,
+      defaultSessionDurationMinutes: asSafeNumber(source.defaultSessionDurationMinutes ?? source.default_session_duration_minutes, 15, 360) || fallbackDuration,
+      allowedLocationTypes: Array.isArray(source.allowedLocationTypes || source.allowed_location_types)
+        ? (source.allowedLocationTypes || source.allowed_location_types).map((item: any) => sanitizeString(item, 40)).filter(Boolean).slice(0, 6)
+        : [],
+      allowedRoomIds: Array.isArray(source.allowedRoomIds || source.allowed_room_ids)
+        ? (source.allowedRoomIds || source.allowed_room_ids).map((item: any) => sanitizeString(item, 120)).filter(Boolean).slice(0, 30)
+        : [],
+      days,
+      exceptions
+    });
+  };
+
+  const readProfessionalWorkingScheduleFromMetadata = (metadata: any, fallbackDuration = 50): PortalProfessionalWorkingSchedule | null => {
+    const source = metadata && typeof metadata === 'object' ? metadata : {};
+    const raw = source.workSchedule || source.work_schedule || source.workingSchedule || source.working_schedule || source.availability?.workSchedule || null;
+    if (raw && typeof raw === 'object') return sanitizeProfessionalWorkingSchedule(raw, fallbackDuration);
+    return null;
+  };
+
+  const assertClinicMemberForWorkSchedule = async (clinicId: string, memberId: string) => {
+    if (!isUuid(clinicId) || !isUuid(memberId)) return null;
+    const { data, error } = await supabase
+      .from('clinic_memberships')
+      .select('user_id,clinic_id,role,status')
+      .eq('clinic_id', clinicId)
+      .eq('user_id', memberId)
+      .eq('status', 'active')
+      .maybeSingle();
+    if (error) throw error;
+    return data || null;
+  };
+
+  const fetchProfessionalWorkingSchedule = async (clinicId: string, memberId: string) => {
+    const membership = await assertClinicMemberForWorkSchedule(clinicId, memberId);
+    if (!membership) return null;
+    const { data: profile, error } = await supabase
+      .from('professional_profiles')
+      .select('user_id,full_name,metadata')
+      .eq('user_id', memberId)
+      .maybeSingle();
+    if (error && !isMissingRelationError(error)) throw error;
+    const metadata = profile?.metadata && typeof profile.metadata === 'object' ? profile.metadata : {};
+    const fallbackDuration = asSafeNumber(metadata?.sessionDurationMinutes ?? metadata?.defaultSessionDurationMinutes, 15, 360) || 50;
+    return {
+      memberId,
+      role: membership.role,
+      professionalName: sanitizeString(profile?.full_name, 180) || null,
+      workSchedule: readProfessionalWorkingScheduleFromMetadata(metadata, fallbackDuration) || buildDefaultProfessionalWorkingSchedule(fallbackDuration),
+      configured: Boolean(readProfessionalWorkingScheduleFromMetadata(metadata, fallbackDuration))
+    };
+  };
+
   // Clinic Management & Invitations
   app.get('/api/clinic/members', checkAuth, async (req: any, res) => {
     const user = req.session.user;
@@ -15885,38 +16063,120 @@ async function startServer() {
         });
       }
 
-      const members = (data || []).map((m: any) => ({
-        id: m.users?.id || m.user_id,
-        name:
-          sanitizeString(
-            professionalProfilesByUserId.get(sanitizeString(m.users?.id || m.user_id, 120))?.full_name,
-            180,
-          ) ||
-          m.users?.name ||
-          'Profissional',
-        full_name:
-          sanitizeString(
-            professionalProfilesByUserId.get(sanitizeString(m.users?.id || m.user_id, 120))?.full_name,
-            180,
-          ) ||
-          m.users?.name ||
-          'Profissional',
-        email: m.users?.email || '',
-        role: m.role,
-        profileRole:
-          sanitizeString(
-            professionalProfilesByUserId.get(sanitizeString(m.users?.id || m.user_id, 120))?.metadata?.role,
-            40,
-          ) ||
-          sanitizeString(m?.role, 40) ||
-          null,
-        clinic_id: clinicId,
-        created_at: m.created_at
-      }));
+      const members = (data || []).map((m: any) => {
+        const memberId = sanitizeString(m.users?.id || m.user_id, 120);
+        const profile = professionalProfilesByUserId.get(memberId) || {};
+        const metadata = profile?.metadata && typeof profile.metadata === 'object' ? profile.metadata : {};
+        const fallbackDuration = asSafeNumber(metadata?.sessionDurationMinutes ?? metadata?.defaultSessionDurationMinutes, 15, 360) || 50;
+        return {
+          id: m.users?.id || m.user_id,
+          name:
+            sanitizeString(profile?.full_name, 180) ||
+            m.users?.name ||
+            'Profissional',
+          full_name:
+            sanitizeString(profile?.full_name, 180) ||
+            m.users?.name ||
+            'Profissional',
+          email: m.users?.email || '',
+          role: m.role,
+          profileRole:
+            sanitizeString(metadata?.role, 40) ||
+            sanitizeString(m?.role, 40) ||
+            null,
+          workSchedule: readProfessionalWorkingScheduleFromMetadata(metadata, fallbackDuration) || buildDefaultProfessionalWorkingSchedule(fallbackDuration),
+          workScheduleConfigured: Boolean(readProfessionalWorkingScheduleFromMetadata(metadata, fallbackDuration)),
+          clinic_id: clinicId,
+          created_at: m.created_at
+        };
+      });
       res.json({ success: true, data: members });
     } catch (error: any) {
       logRouteDbError('/api/notes/:patientId [GET]', error, { patientId: sanitizeString(req.params.patientId, 120) });
       res.status(500).json({ error: 'Falha na operação de dados.' });
+    }
+  });
+
+  app.get('/api/clinic/members/:memberId/work-schedule', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const clinicId = currentClinicId(req.session.user);
+      const memberId = sanitizeString(req.params.memberId, 120);
+      const requesterRole = sanitizeString(req.session.user?.role, 40);
+      const requesterId = sanitizeString(req.session.user?.id, 120);
+      const canView = ['coordinator', 'receptionist', 'admin', 'owner'].includes(requesterRole) || requesterId === memberId;
+      if (!canView) return res.status(403).json({ success: false, error: 'Sem permissão para visualizar horários de trabalho.' });
+      const data = await fetchProfessionalWorkingSchedule(clinicId, memberId);
+      if (!data) return res.status(404).json({ success: false, error: 'Profissional não encontrado nesta clínica.' });
+      return res.json({ success: true, data });
+    } catch (error: any) {
+      logRouteDbError('/api/clinic/members/:memberId/work-schedule [GET]', error, {
+        memberId: sanitizeString(req.params?.memberId, 120)
+      });
+      return res.status(500).json({ success: false, error: 'Não foi possível carregar os horários de trabalho.' });
+    }
+  });
+
+  app.patch('/api/clinic/members/:memberId/work-schedule', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 24 * 1024, 'Horários de trabalho')) return;
+      const clinicId = currentClinicId(req.session.user);
+      const memberId = sanitizeString(req.params.memberId, 120);
+      const membership = await assertClinicMemberForWorkSchedule(clinicId, memberId);
+      if (!membership) return res.status(404).json({ success: false, error: 'Profissional não encontrado nesta clínica.' });
+      const { data: existingProfile, error: profileError } = await supabase
+        .from('professional_profiles')
+        .select('user_id,full_name,metadata')
+        .eq('user_id', memberId)
+        .maybeSingle();
+      if (profileError && !isMissingRelationError(profileError)) throw profileError;
+      const currentMetadata = existingProfile?.metadata && typeof existingProfile.metadata === 'object'
+        ? existingProfile.metadata
+        : {};
+      const fallbackDuration = asSafeNumber(
+        req.body?.defaultSessionDurationMinutes ??
+          req.body?.default_session_duration_minutes ??
+          currentMetadata?.sessionDurationMinutes ??
+          currentMetadata?.defaultSessionDurationMinutes,
+        15,
+        360
+      ) || 50;
+      const rawSchedule = req.body?.workSchedule || req.body?.work_schedule || req.body;
+      const workSchedule = sanitizeProfessionalWorkingSchedule(rawSchedule, fallbackDuration);
+      const metadata = cleanObject({
+        ...currentMetadata,
+        workSchedule,
+        work_schedule: workSchedule,
+        defaultSessionDurationMinutes: workSchedule.defaultSessionDurationMinutes || fallbackDuration,
+        sessionDurationMinutes: currentMetadata?.sessionDurationMinutes || workSchedule.defaultSessionDurationMinutes || fallbackDuration,
+        workScheduleUpdatedAt: new Date().toISOString(),
+        workScheduleUpdatedBy: sanitizeString(req.session.user?.id, 120) || null
+      });
+      const { data, error } = await supabase
+        .from('professional_profiles')
+        .upsert(cleanObject({
+          user_id: memberId,
+          full_name: sanitizeString(existingProfile?.full_name, 180) || undefined,
+          metadata,
+          updated_at: new Date().toISOString()
+        }), { onConflict: 'user_id' })
+        .select('user_id,full_name,metadata')
+        .maybeSingle();
+      if (error) throw error;
+      return res.json({
+        success: true,
+        data: {
+          memberId,
+          workSchedule,
+          configured: true,
+          professionalName: sanitizeString(data?.full_name || existingProfile?.full_name, 180) || null
+        },
+        message: 'Horários de trabalho salvos.'
+      });
+    } catch (error: any) {
+      logRouteDbError('/api/clinic/members/:memberId/work-schedule [PATCH]', error, {
+        memberId: sanitizeString(req.params?.memberId, 120)
+      });
+      return res.status(500).json({ success: false, error: 'Não foi possível salvar os horários de trabalho.' });
     }
   });
 
@@ -32216,9 +32476,13 @@ async function startServer() {
     };
   };
 
-  const buildPortalRescheduleDateWindow = (rawDateFrom: unknown, rawMaxDays: unknown) => {
-    const safeMaxDays = Math.min(30, Math.max(1, Math.round(Number(rawMaxDays || 14) || 14)));
-    const firstDate = sanitizeDate(rawDateFrom) || formatDateInAppointmentTimezone(new Date());
+  const buildPortalRescheduleDateWindow = (rawDateFrom: unknown, rawMaxDays: unknown, currentScheduledStart?: unknown) => {
+    const safeMaxDays = Math.min(7, Math.max(1, Math.round(Number(rawMaxDays || PORTAL_RESCHEDULE_WEEK_WINDOW_DAYS) || PORTAL_RESCHEDULE_WEEK_WINDOW_DAYS)));
+    const explicitDateFrom = sanitizeDate(rawDateFrom);
+    const originalDate = sanitizeIsoDateTime(currentScheduledStart) ? formatDateInAppointmentTimezone(new Date(sanitizeIsoDateTime(currentScheduledStart)!)) : formatDateInAppointmentTimezone(new Date());
+    const originalWeekday = portalDateKeyWeekday(originalDate);
+    const defaultFirstDate = originalWeekday >= 5 ? nextPortalWeekStart(originalDate) : startOfPortalWeek(originalDate);
+    const firstDate = explicitDateFrom || defaultFirstDate;
     const firstDateTime = buildAppointmentDateTime(firstDate, '12:00') || new Date();
     const dates: string[] = [];
     for (let index = 0; index < safeMaxDays; index += 1) {
@@ -32226,7 +32490,15 @@ async function startServer() {
       date.setUTCDate(date.getUTCDate() + index);
       dates.push(formatDateInAppointmentTimezone(date));
     }
-    return { firstDate, maxDays: safeMaxDays, dates };
+    return {
+      firstDate,
+      maxDays: safeMaxDays,
+      dates,
+      explicitDateFrom: Boolean(explicitDateFrom),
+      weekStart: firstDate,
+      weekEnd: dates[dates.length - 1] || firstDate,
+      nextDateFrom: addPortalDateKeyDays(firstDate, 7)
+    };
   };
 
   const buildPortalRescheduleAvailabilityForAppointment = async (appointment: any, user: any, rawOptions: any = {}) => {
@@ -32245,7 +32517,9 @@ async function startServer() {
     const roomId = sanitizeString(appointment?.room_id || appointment?.roomId, 180);
     const locationType = normalizeScheduleLocationType(appointment?.location_type || appointment?.locationType || appointment?.location);
     const durationMinutes = getCalendarAppointmentDuration(appointment);
-    const { firstDate, maxDays, dates } = buildPortalRescheduleDateWindow(rawOptions?.dateFrom || rawOptions?.date_from, rawOptions?.maxDays || rawOptions?.max_days);
+    const currentScheduledStart = appointment?.scheduled_start_at || appointment?.scheduledStartAt || appointment?.scheduled_at || appointment?.scheduledAt;
+    const initialWindow = buildPortalRescheduleDateWindow(rawOptions?.dateFrom || rawOptions?.date_from, rawOptions?.maxDays || rawOptions?.max_days, currentScheduledStart);
+    let maxDays = initialWindow.maxDays;
     if (!professionalId) {
       return {
         success: true,
@@ -32273,43 +32547,61 @@ async function startServer() {
       };
     }
 
-    const input = {
-      recurrenceDates: dates,
-      patientId,
-      professionalIds: [professionalId],
-      roomId
+    const scheduleData = await fetchProfessionalWorkingSchedule(clinicId, professionalId).catch((error: any) => {
+      console.warn('[PortalReschedule] professional schedule fallback used:', error?.message || String(error));
+      return null;
+    });
+    const workingSchedule = (scheduleData?.workSchedule || buildDefaultProfessionalWorkingSchedule(durationMinutes)) as PortalProfessionalWorkingSchedule;
+    const buildAvailabilityForWindow = async (window: ReturnType<typeof buildPortalRescheduleDateWindow>) => {
+      const input = {
+        recurrenceDates: window.dates,
+        patientId,
+        professionalIds: [professionalId],
+        roomId
+      };
+      const [tableAppointments, stateAppointments] = await Promise.all([
+        fetchConflictAppointmentsFromTable({ clinicId, organizationId, input }).catch((error: any) => {
+          console.warn('[PortalReschedule] table availability query skipped:', error?.message || String(error));
+          return [];
+        }),
+        fetchConflictAppointmentsFromState(clinicId, input).catch(() => [])
+      ]);
+      const appointmentsById = new Map<string, any>();
+      [...tableAppointments, ...stateAppointments].forEach((item: any, index: number) => {
+        appointmentsById.set(sanitizeString(item?.id, 180) || `idx-${index}`, item);
+      });
+      return buildAvailableRescheduleSlots({
+        appointmentId: appointment?.id,
+        patientId,
+        professionalId,
+        roomId,
+        locationType,
+        currentScheduledStart,
+        durationMinutes,
+        existingAppointments: Array.from(appointmentsById.values()),
+        dateFrom: window.firstDate,
+        maxDays: window.maxDays,
+        now: new Date(),
+        workdayStart: rawOptions?.workdayStart || rawOptions?.workday_start || '08:00',
+        workdayEnd: rawOptions?.workdayEnd || rawOptions?.workday_end || '18:00',
+        workingSchedule,
+        weekStart: window.weekStart,
+        weekEnd: window.weekEnd,
+        nextDateFrom: window.nextDateFrom
+      });
     };
-    const [tableAppointments, stateAppointments] = await Promise.all([
-      fetchConflictAppointmentsFromTable({ clinicId, organizationId, input }).catch((error: any) => {
-        console.warn('[PortalReschedule] table availability query skipped:', error?.message || String(error));
-        return [];
-      }),
-      fetchConflictAppointmentsFromState(clinicId, input).catch(() => [])
-    ]);
-    const appointmentsById = new Map<string, any>();
-    [...tableAppointments, ...stateAppointments].forEach((item: any, index: number) => {
-      appointmentsById.set(sanitizeString(item?.id, 180) || `idx-${index}`, item);
-    });
-    const availability = buildAvailableRescheduleSlots({
-      appointmentId: appointment?.id,
-      patientId,
-      professionalId,
-      roomId,
-      locationType,
-      currentScheduledStart: appointment?.scheduled_start_at || appointment?.scheduledStartAt || appointment?.scheduled_at || appointment?.scheduledAt,
-      durationMinutes,
-      existingAppointments: Array.from(appointmentsById.values()),
-      dateFrom: firstDate,
-      maxDays,
-      now: new Date(),
-      workdayStart: rawOptions?.workdayStart || rawOptions?.workday_start || '08:00',
-      workdayEnd: rawOptions?.workdayEnd || rawOptions?.workday_end || '18:00'
-    });
+    let availability = await buildAvailabilityForWindow(initialWindow);
+    if (availability.totalSlots === 0 && !initialWindow.explicitDateFrom) {
+      const nextWindow = buildPortalRescheduleDateWindow(initialWindow.nextDateFrom, maxDays, currentScheduledStart);
+      maxDays = nextWindow.maxDays;
+      availability = await buildAvailabilityForWindow(nextWindow);
+    }
     return {
       success: true,
       data: {
         ...availability,
         professionalName: sanitizeString(appointment?.therapist_name || appointment?.therapistName || appointment?.professionalName, 180),
+        scheduleConfigured: Boolean(scheduleData?.configured),
         appointment: {
           id: appointment?.id,
           scheduledStart: appointment?.scheduled_start_at || appointment?.scheduledAt || appointment?.scheduled_at || null,

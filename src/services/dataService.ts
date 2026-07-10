@@ -5995,6 +5995,36 @@ export const dataService = {
     }
   },
 
+  async getMemberWorkSchedule(memberId: string) {
+    try {
+      const response = await fetch(`/api/clinic/members/${encodeURIComponent(String(memberId))}/work-schedule`, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      const result = await safeJson(response);
+      return response.ok ? result : { success: false, error: result?.error || 'Não foi possível carregar horários de trabalho.' };
+    } catch (error) {
+      console.error('Error fetching member work schedule:', error);
+      return { success: false, error: String(error) };
+    }
+  },
+
+  async updateMemberWorkSchedule(memberId: string, workSchedule: any) {
+    try {
+      const response = await fetch(`/api/clinic/members/${encodeURIComponent(String(memberId))}/work-schedule`, {
+        method: 'PATCH',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({ workSchedule })
+      });
+      const result = await safeJson(response);
+      return response.ok ? result : { success: false, error: result?.error || 'Não foi possível salvar horários de trabalho.' };
+    } catch (error) {
+      console.error('Error updating member work schedule:', error);
+      return { success: false, error: String(error) };
+    }
+  },
+
   async getClinicAnamnesisTemplate(workspaceId?: string) {
     try {
       const response = await fetch('/api/clinic/anamnesis-template', {

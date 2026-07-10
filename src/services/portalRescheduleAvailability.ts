@@ -60,6 +60,74 @@ export type PortalRescheduleAvailabilityResult = {
   totalSlots: number;
   windowDays: number;
   maxSelectable: number;
+  weekStart?: string;
+  weekEnd?: string;
+  rangeLabel?: string;
+  nextDateFrom?: string;
+};
+
+export type PortalWorkPeriod = {
+  start?: string | null;
+  end?: string | null;
+  locationTypes?: string[];
+  location_types?: string[];
+  roomIds?: string[];
+  room_ids?: string[];
+};
+
+export type PortalWorkDay = {
+  enabled?: boolean;
+  active?: boolean;
+  periods?: PortalWorkPeriod[];
+  ranges?: PortalWorkPeriod[];
+  shifts?: PortalWorkPeriod[];
+  intervals?: PortalWorkPeriod[];
+  breaks?: PortalWorkPeriod[];
+  lunchStart?: string | null;
+  lunchEnd?: string | null;
+  lunch_start?: string | null;
+  lunch_end?: string | null;
+};
+
+export type PortalScheduleException = {
+  date?: string | null;
+  start?: string | null;
+  end?: string | null;
+  startTime?: string | null;
+  endTime?: string | null;
+  start_time?: string | null;
+  end_time?: string | null;
+  type?: string | null;
+  blocksAvailability?: boolean;
+  blocks_availability?: boolean;
+  active?: boolean;
+};
+
+export type PortalProfessionalWorkingSchedule = {
+  active?: boolean;
+  days?: Record<string, PortalWorkDay | PortalWorkPeriod[] | boolean>;
+  weekly?: Record<string, PortalWorkDay | PortalWorkPeriod[] | boolean>;
+  weeklySchedule?: Record<string, PortalWorkDay | PortalWorkPeriod[] | boolean>;
+  weekly_schedule?: Record<string, PortalWorkDay | PortalWorkPeriod[] | boolean>;
+  exceptions?: PortalScheduleException[];
+  blocks?: PortalScheduleException[];
+  scheduleExceptions?: PortalScheduleException[];
+  schedule_exceptions?: PortalScheduleException[];
+  holidays?: string[];
+  clinicHolidays?: string[];
+  clinic_holidays?: string[];
+  stepMinutes?: number | string | null;
+  step_minutes?: number | string | null;
+  minLeadMinutes?: number | string | null;
+  min_lead_minutes?: number | string | null;
+  maxSlotsPerDay?: number | string | null;
+  max_slots_per_day?: number | string | null;
+  defaultSessionDurationMinutes?: number | string | null;
+  default_session_duration_minutes?: number | string | null;
+  allowedLocationTypes?: string[];
+  allowed_location_types?: string[];
+  allowedRoomIds?: string[];
+  allowed_room_ids?: string[];
 };
 
 export const PORTAL_RESCHEDULE_MAX_OPTIONS = 3;
@@ -72,6 +140,16 @@ const DEFAULT_WORKDAY_START = '08:00';
 const DEFAULT_WORKDAY_END = '18:00';
 const DEFAULT_STEP_MINUTES = 30;
 const DEFAULT_MIN_LEAD_MINUTES = 120;
+
+const DAY_KEYS_BY_INDEX = [
+  ['0', 'sun', 'sunday', 'domingo', 'dom'],
+  ['1', 'mon', 'monday', 'segunda', 'segunda-feira', 'seg'],
+  ['2', 'tue', 'tuesday', 'terca', 'terça', 'terça-feira', 'ter'],
+  ['3', 'wed', 'wednesday', 'quarta', 'quarta-feira', 'qua'],
+  ['4', 'thu', 'thursday', 'quinta', 'quinta-feira', 'qui'],
+  ['5', 'fri', 'friday', 'sexta', 'sexta-feira', 'sex'],
+  ['6', 'sat', 'saturday', 'sabado', 'sábado', 'sábado-feira', 'sab']
+];
 
 const clampNumber = (value: unknown, fallback: number, min: number, max: number) => {
   const parsed = Number(value);
@@ -96,6 +174,12 @@ const addDaysToDateKey = (dateKey: string, days: number) => {
   const base = new Date(`${dateKey}T12:00:00-03:00`);
   base.setUTCDate(base.getUTCDate() + days);
   return dateKeyInPortalTimeZone(base);
+};
+
+const getDayIndexFromDateKey = (dateKey: string) => {
+  const date = new Date(`${dateKey}T12:00:00-03:00`);
+  if (Number.isNaN(date.getTime())) return 0;
+  return date.getUTCDay();
 };
 
 const minutesToTime = (minutes: number) => `${pad2(Math.floor(minutes / 60))}:${pad2(minutes % 60)}`;
@@ -188,6 +272,125 @@ const normalizeLocationType = (value: unknown) => {
   return normalized || '';
 };
 
+const asRecord = (value: unknown): Record<string, any> =>
+  value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
+
+const toArray = <T = any>(value: unknown): T[] => {
+  if (Array.isArray(value)) return value as T[];
+  return value ? [value as T] : [];
+};
+
+const normalizeStringList = (value: unknown) => toArray(value)
+  .map((item) => readString(item))
+  .filter(Boolean);
+
+const hasRestrictionMatch = (allowed: unknown, selected: string, normalizer: (value: unknown) => string = readString) => {
+  const list = normalizeStringList(allowed).map(normalizer).filter(Boolean);
+  if (list.length === 0) return true;
+  return Boolean(selected && list.includes(normalizer(selected)));
+};
+
+const normalizePeriod = (period: unknown, fallbackStart = DEFAULT_WORKDAY_START, fallbackEnd = DEFAULT_WORKDAY_END) => {
+  const source = asRecord(period);
+  const start = minutesToTime(timeToMinutes(source.start ?? source.startTime ?? source.start_time ?? fallbackStart, timeToMinutes(fallbackStart, 8 * 60)));
+  const end = minutesToTime(timeToMinutes(source.end ?? source.endTime ?? source.end_time ?? fallbackEnd, timeToMinutes(fallbackEnd, 18 * 60)));
+  const startMinutes = timeToMinutes(start, 0);
+  const endMinutes = timeToMinutes(end, 0);
+  if (endMinutes <= startMinutes) return null;
+  return {
+    start,
+    end,
+    startMinutes,
+    endMinutes,
+    locationTypes: normalizeStringList(source.locationTypes ?? source.location_types),
+    roomIds: normalizeStringList(source.roomIds ?? source.room_ids)
+  };
+};
+
+const resolveDaySource = (days: Record<string, any>, dateKey: string) => {
+  const dayIndex = getDayIndexFromDateKey(dateKey);
+  const possibleKeys = DAY_KEYS_BY_INDEX[dayIndex] || [String(dayIndex)];
+  for (const key of possibleKeys) {
+    if (Object.prototype.hasOwnProperty.call(days, key)) return days[key];
+  }
+  return undefined;
+};
+
+const normalizeDayPeriods = (daySource: unknown, fallbackStart: string, fallbackEnd: string) => {
+  if (daySource === false) return { periods: [], blockedPeriods: [] };
+  if (Array.isArray(daySource)) {
+    return {
+      periods: daySource.map((period) => normalizePeriod(period, fallbackStart, fallbackEnd)).filter(Boolean) as ReturnType<typeof normalizePeriod>[],
+      blockedPeriods: []
+    };
+  }
+  const day = asRecord(daySource);
+  if (day.enabled === false || day.active === false) return { periods: [], blockedPeriods: [] };
+  const rawPeriods = toArray(day.periods ?? day.ranges ?? day.shifts);
+  const periods = (rawPeriods.length > 0 ? rawPeriods : [{ start: fallbackStart, end: fallbackEnd }])
+    .map((period) => normalizePeriod(period, fallbackStart, fallbackEnd))
+    .filter(Boolean) as ReturnType<typeof normalizePeriod>[];
+  const rawBlocks = [
+    ...toArray(day.intervals),
+    ...toArray(day.breaks)
+  ];
+  const lunchStart = readString(day.lunchStart, day.lunch_start);
+  const lunchEnd = readString(day.lunchEnd, day.lunch_end);
+  if (lunchStart && lunchEnd) rawBlocks.push({ start: lunchStart, end: lunchEnd });
+  const blockedPeriods = rawBlocks
+    .map((period) => normalizePeriod(period, fallbackStart, fallbackEnd))
+    .filter(Boolean) as ReturnType<typeof normalizePeriod>[];
+  return { periods, blockedPeriods };
+};
+
+const normalizeWorkingDays = (schedule: PortalProfessionalWorkingSchedule | null | undefined) => {
+  const source = asRecord(schedule);
+  const days = asRecord(source.days ?? source.weekly ?? source.weeklySchedule ?? source.weekly_schedule);
+  return days;
+};
+
+const normalizeScheduleExceptions = (
+  schedule: PortalProfessionalWorkingSchedule | null | undefined,
+  extraExceptions: PortalScheduleException[] | undefined,
+) => {
+  const source = asRecord(schedule);
+  return [
+    ...toArray<PortalScheduleException>(source.exceptions),
+    ...toArray<PortalScheduleException>(source.blocks),
+    ...toArray<PortalScheduleException>(source.scheduleExceptions),
+    ...toArray<PortalScheduleException>(source.schedule_exceptions),
+    ...toArray<PortalScheduleException>(extraExceptions)
+  ].filter((exception) => exception && exception.active !== false);
+};
+
+const buildBlockedPeriodsForDate = (
+  dateKey: string,
+  schedule: PortalProfessionalWorkingSchedule | null | undefined,
+  extraExceptions: PortalScheduleException[] | undefined,
+  fallbackStart: string,
+  fallbackEnd: string,
+) => {
+  const source = asRecord(schedule);
+  const holidays = new Set([
+    ...normalizeStringList(source.holidays),
+    ...normalizeStringList(source.clinicHolidays),
+    ...normalizeStringList(source.clinic_holidays)
+  ]);
+  if (holidays.has(dateKey)) {
+    return [{ start: '00:00', end: '23:59', startMinutes: 0, endMinutes: 23 * 60 + 59, locationTypes: [], roomIds: [] }];
+  }
+  return normalizeScheduleExceptions(schedule, extraExceptions)
+    .filter((exception) => readString(exception.date) === dateKey && exception.blocksAvailability !== false && exception.blocks_availability !== false)
+    .map((exception) => normalizePeriod({
+      start: exception.start ?? exception.startTime ?? exception.start_time ?? '00:00',
+      end: exception.end ?? exception.endTime ?? exception.end_time ?? '23:59'
+    }, fallbackStart, fallbackEnd))
+    .filter(Boolean) as ReturnType<typeof normalizePeriod>[];
+};
+
+const slotOverlapsAnyBlockedPeriod = (startMinutes: number, endMinutes: number, blockedPeriods: ReturnType<typeof normalizePeriod>[]) =>
+  blockedPeriods.some((period) => period && startMinutes < period.endMinutes && endMinutes > period.startMinutes);
+
 export function buildAvailableRescheduleSlots(params: {
   appointmentId?: string | null;
   patientId?: string | null;
@@ -206,16 +409,28 @@ export function buildAvailableRescheduleSlots(params: {
   minLeadMinutes?: number | string | null;
   maxSlotsPerDay?: number | string | null;
   maxSelectable?: number | string | null;
+  workingSchedule?: PortalProfessionalWorkingSchedule | null;
+  scheduleExceptions?: PortalScheduleException[];
+  weekStart?: string | null;
+  weekEnd?: string | null;
+  nextDateFrom?: string | null;
 }): PortalRescheduleAvailabilityResult {
   const now = params.now instanceof Date ? params.now : new Date(params.now || Date.now());
   const durationMinutes = clampNumber(params.durationMinutes, 50, 15, 360);
   const windowDays = clampNumber(params.maxDays, PORTAL_RESCHEDULE_DEFAULT_WINDOW_DAYS, 1, 30);
-  const stepMinutes = clampNumber(params.stepMinutes, DEFAULT_STEP_MINUTES, 10, 120);
-  const minLeadMinutes = clampNumber(params.minLeadMinutes, DEFAULT_MIN_LEAD_MINUTES, 0, 30 * 24 * 60);
-  const maxSlotsPerDay = clampNumber(params.maxSlotsPerDay, 8, 1, 24);
+  const schedule = params.workingSchedule && typeof params.workingSchedule === 'object' ? params.workingSchedule : null;
+  const scheduleConfigured = Boolean(schedule && Object.keys(normalizeWorkingDays(schedule)).length > 0 && schedule.active !== false);
+  const stepMinutes = clampNumber(
+    params.stepMinutes ?? schedule?.stepMinutes ?? schedule?.step_minutes,
+    scheduleConfigured ? durationMinutes : DEFAULT_STEP_MINUTES,
+    10,
+    120
+  );
+  const minLeadMinutes = clampNumber(params.minLeadMinutes ?? schedule?.minLeadMinutes ?? schedule?.min_lead_minutes, DEFAULT_MIN_LEAD_MINUTES, 0, 30 * 24 * 60);
+  const maxSlotsPerDay = clampNumber(params.maxSlotsPerDay ?? schedule?.maxSlotsPerDay ?? schedule?.max_slots_per_day, 8, 1, 24);
   const maxSelectable = clampNumber(params.maxSelectable, PORTAL_RESCHEDULE_MAX_OPTIONS, 1, PORTAL_RESCHEDULE_MAX_OPTIONS);
-  const workdayStart = timeToMinutes(params.workdayStart || DEFAULT_WORKDAY_START, timeToMinutes(DEFAULT_WORKDAY_START, 8 * 60));
-  const workdayEnd = timeToMinutes(params.workdayEnd || DEFAULT_WORKDAY_END, timeToMinutes(DEFAULT_WORKDAY_END, 18 * 60));
+  const fallbackWorkdayStart = readString(params.workdayStart) || DEFAULT_WORKDAY_START;
+  const fallbackWorkdayEnd = readString(params.workdayEnd) || DEFAULT_WORKDAY_END;
   const firstDateKey = params.dateFrom && /^\d{4}-\d{2}-\d{2}$/.test(params.dateFrom)
     ? params.dateFrom
     : dateKeyInPortalTimeZone(now);
@@ -227,11 +442,31 @@ export function buildAvailableRescheduleSlots(params: {
   const locationType = normalizeLocationType(params.locationType);
   const existingAppointments = Array.isArray(params.existingAppointments) ? params.existingAppointments : [];
   const days: PortalRescheduleSlotGroup[] = [];
+  const workingDays = normalizeWorkingDays(schedule);
+  const scheduleAllowedLocationTypes = normalizeStringList(schedule?.allowedLocationTypes ?? schedule?.allowed_location_types);
+  const scheduleAllowedRoomIds = normalizeStringList(schedule?.allowedRoomIds ?? schedule?.allowed_room_ids);
 
   for (let dayIndex = 0; dayIndex < windowDays; dayIndex += 1) {
     const dateKey = addDaysToDateKey(firstDateKey, dayIndex);
     const group: PortalRescheduleSlotGroup = { date: dateKey, label: formatDateLabel(dateKey), slots: [] };
-    for (let startMinute = workdayStart; startMinute + durationMinutes <= workdayEnd; startMinute += stepMinutes) {
+    const daySource = scheduleConfigured ? resolveDaySource(workingDays, dateKey) : [{ start: fallbackWorkdayStart, end: fallbackWorkdayEnd }];
+    const { periods, blockedPeriods } = normalizeDayPeriods(daySource, fallbackWorkdayStart, fallbackWorkdayEnd);
+    const dateBlockedPeriods = [
+      ...blockedPeriods,
+      ...buildBlockedPeriodsForDate(dateKey, schedule, params.scheduleExceptions, fallbackWorkdayStart, fallbackWorkdayEnd)
+    ];
+
+    for (const period of periods) {
+      if (!period) continue;
+      if (!hasRestrictionMatch(scheduleAllowedLocationTypes, locationType, normalizeLocationType)) continue;
+      if (!hasRestrictionMatch(period.locationTypes, locationType, normalizeLocationType)) continue;
+      if (locationType === 'clinica') {
+        if (!hasRestrictionMatch(scheduleAllowedRoomIds, roomId)) continue;
+        if (!hasRestrictionMatch(period.roomIds, roomId)) continue;
+      }
+      for (let startMinute = period.startMinutes; startMinute + durationMinutes <= period.endMinutes; startMinute += stepMinutes) {
+        const endMinute = startMinute + durationMinutes;
+        if (slotOverlapsAnyBlockedPeriod(startMinute, endMinute, dateBlockedPeriods)) continue;
       const start = buildDateTime(dateKey, minutesToTime(startMinute));
       const end = new Date(start.getTime() + durationMinutes * 60_000);
       if (start.getTime() <= minStartTime) continue;
@@ -264,6 +499,8 @@ export function buildAvailableRescheduleSlots(params: {
       group.slots.push(slot);
       if (group.slots.length >= maxSlotsPerDay) break;
     }
+      if (group.slots.length >= maxSlotsPerDay) break;
+    }
     if (group.slots.length > 0) days.push(group);
   }
 
@@ -271,7 +508,11 @@ export function buildAvailableRescheduleSlots(params: {
     days,
     totalSlots: days.reduce((sum, group) => sum + group.slots.length, 0),
     windowDays,
-    maxSelectable
+    maxSelectable,
+    weekStart: params.weekStart || firstDateKey,
+    weekEnd: params.weekEnd || addDaysToDateKey(firstDateKey, windowDays - 1),
+    rangeLabel: `${formatDateLabel(params.weekStart || firstDateKey)} a ${formatDateLabel(params.weekEnd || addDaysToDateKey(firstDateKey, windowDays - 1))}`,
+    nextDateFrom: params.nextDateFrom || addDaysToDateKey(firstDateKey, windowDays)
   };
 }
 
@@ -354,4 +595,3 @@ export function parseRescheduleRequestNote(note: unknown): { options: PortalResc
   const cleaned = withoutHumanOptions.replace(/^Observação:\s*/i, '').trim();
   return { options, note: cleaned };
 }
-

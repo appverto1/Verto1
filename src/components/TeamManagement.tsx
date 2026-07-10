@@ -26,10 +26,36 @@ interface Member {
   role: 'coordinator' | 'therapist' | 'receptionist' | 'patient' | 'admin';
   clinic_id: string;
   created_at: string;
+  workSchedule?: any;
+  workScheduleConfigured?: boolean;
 }
 
 const PROFESSIONALS_PER_ACTIVE_PATIENT = 10;
 const MIN_TEAM_ACCESS_LIMIT = 10;
+const WORK_SCHEDULE_DAYS = [
+  { key: 'monday', label: 'Segunda-feira' },
+  { key: 'tuesday', label: 'Terça-feira' },
+  { key: 'wednesday', label: 'Quarta-feira' },
+  { key: 'thursday', label: 'Quinta-feira' },
+  { key: 'friday', label: 'Sexta-feira' },
+  { key: 'saturday', label: 'Sábado' },
+  { key: 'sunday', label: 'Domingo' }
+];
+
+const buildDefaultWorkSchedule = () => ({
+  active: true,
+  stepMinutes: 50,
+  minLeadMinutes: 120,
+  maxSlotsPerDay: 8,
+  defaultSessionDurationMinutes: 50,
+  days: WORK_SCHEDULE_DAYS.reduce((acc, day, index) => {
+    acc[day.key] = index < 5
+      ? { enabled: true, periods: [{ start: '08:00', end: '12:00' }, { start: '13:00', end: '17:00' }], intervals: [{ start: '12:00', end: '13:00' }] }
+      : { enabled: false, periods: [], intervals: [] };
+    return acc;
+  }, {} as Record<string, any>),
+  exceptions: []
+});
 
 export function TeamManagement({
   user,
@@ -57,6 +83,11 @@ export function TeamManagement({
   const [unlinkingMemberId, setUnlinkingMemberId] = useState<string | null>(null);
   const [newMemberEmail, setNewMemberEmail] = useState('');
   const [newMemberRole, setNewMemberRole] = useState<'therapist' | 'receptionist'>('therapist');
+  const [editingScheduleMember, setEditingScheduleMember] = useState<Member | null>(null);
+  const [workScheduleDraft, setWorkScheduleDraft] = useState<any>(null);
+  const [workScheduleLoadingId, setWorkScheduleLoadingId] = useState<string | null>(null);
+  const [workScheduleSaving, setWorkScheduleSaving] = useState(false);
+  const [workScheduleNewException, setWorkScheduleNewException] = useState({ date: '', start: '08:00', end: '12:00', type: 'Bloqueio manual' });
 
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
 
@@ -217,6 +248,106 @@ export function TeamManagement({
     }
   };
 
+  const openWorkScheduleEditor = async (member: Member) => {
+    setEditingScheduleMember(member);
+    setWorkScheduleDraft(member.workSchedule || buildDefaultWorkSchedule());
+    setWorkScheduleNewException({ date: '', start: '08:00', end: '12:00', type: 'Bloqueio manual' });
+    setError(null);
+    setSuccess(null);
+    setOpenMenuId(null);
+    setWorkScheduleLoadingId(member.id);
+    try {
+      const result = await dataService.getMemberWorkSchedule(member.id);
+      if (result?.success) {
+        setWorkScheduleDraft(result.data?.workSchedule || buildDefaultWorkSchedule());
+      }
+    } catch (_err) {
+      // Mantém a versão já carregada pela lista da equipe.
+    } finally {
+      setWorkScheduleLoadingId(null);
+    }
+  };
+
+  const updateScheduleDay = (dayKey: string, updater: (day: any) => any) => {
+    setWorkScheduleDraft((prev: any) => {
+      const base = prev || buildDefaultWorkSchedule();
+      const currentDay = base.days?.[dayKey] || { enabled: false, periods: [], intervals: [] };
+      return {
+        ...base,
+        days: {
+          ...(base.days || {}),
+          [dayKey]: updater(currentDay)
+        }
+      };
+    });
+  };
+
+  const updateSchedulePeriod = (dayKey: string, periodIndex: number, field: 'start' | 'end', value: string) => {
+    updateScheduleDay(dayKey, (day) => {
+      const periods = Array.isArray(day.periods) && day.periods.length > 0
+        ? [...day.periods]
+        : [{ start: '08:00', end: '12:00' }, { start: '13:00', end: '17:00' }];
+      periods[periodIndex] = { ...(periods[periodIndex] || {}), [field]: value };
+      return { ...day, periods, enabled: day.enabled !== false };
+    });
+  };
+
+  const updateScheduleLunch = (dayKey: string, field: 'start' | 'end', value: string) => {
+    updateScheduleDay(dayKey, (day) => {
+      const intervals = Array.isArray(day.intervals) ? [...day.intervals] : [{ start: '12:00', end: '13:00' }];
+      intervals[0] = { ...(intervals[0] || { start: '12:00', end: '13:00' }), [field]: value };
+      return { ...day, intervals };
+    });
+  };
+
+  const addWorkScheduleException = () => {
+    if (!workScheduleNewException.date) {
+      setError('Informe a data do bloqueio.');
+      return;
+    }
+    setWorkScheduleDraft((prev: any) => {
+      const base = prev || buildDefaultWorkSchedule();
+      return {
+        ...base,
+        exceptions: [
+          ...(Array.isArray(base.exceptions) ? base.exceptions : []),
+          { ...workScheduleNewException, blocksAvailability: true, active: true }
+        ]
+      };
+    });
+    setWorkScheduleNewException({ date: '', start: '08:00', end: '12:00', type: 'Bloqueio manual' });
+    setError(null);
+  };
+
+  const removeWorkScheduleException = (index: number) => {
+    setWorkScheduleDraft((prev: any) => ({
+      ...(prev || buildDefaultWorkSchedule()),
+      exceptions: (Array.isArray(prev?.exceptions) ? prev.exceptions : []).filter((_: any, itemIndex: number) => itemIndex !== index)
+    }));
+  };
+
+  const saveWorkSchedule = async () => {
+    if (!editingScheduleMember?.id || !workScheduleDraft) return;
+    setWorkScheduleSaving(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const result = await dataService.updateMemberWorkSchedule(editingScheduleMember.id, workScheduleDraft);
+      if (!result?.success) {
+        setError(result?.error || 'Não foi possível salvar horários de trabalho.');
+        return;
+      }
+      const savedSchedule = result.data?.workSchedule || workScheduleDraft;
+      setMembers((prev) => prev.map((member) => member.id === editingScheduleMember.id ? { ...member, workSchedule: savedSchedule, workScheduleConfigured: true } : member));
+      setWorkScheduleDraft(savedSchedule);
+      setSuccess('Horários de trabalho salvos.');
+    } catch (err) {
+      setError('Erro ao salvar horários de trabalho.');
+    } finally {
+      setWorkScheduleSaving(false);
+    }
+  };
+
   const roleIcons = {
     coordinator: <Shield className="text-purple-500" size={18} />,
     therapist: <Stethoscope className="text-blue-500" size={18} />,
@@ -367,6 +498,15 @@ export function TeamManagement({
                             >
                               <Calendar size={14} /> Recepcionista
                             </button>
+                            {(member.role === 'therapist' || member.role === 'coordinator') && (
+                              <button
+                                type="button"
+                                onClick={() => void openWorkScheduleEditor(member)}
+                                className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-all"
+                              >
+                                <Clock size={14} /> Horários de trabalho
+                              </button>
+                            )}
                             <div className="h-px bg-slate-50 my-1" />
                             <button 
                               onClick={() => { handleUnlinkMember(member); setOpenMenuId(null); }}
@@ -385,6 +525,167 @@ export function TeamManagement({
             </div>
           </div>
         </div>
+
+        {editingScheduleMember && workScheduleDraft && (
+          <div className="lg:col-span-2 bg-white rounded-[28px] border border-slate-100 shadow-sm overflow-hidden">
+            <div className="flex flex-col gap-3 border-b border-slate-100 p-5 md:flex-row md:items-center md:justify-between">
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-purple-500">Horários de trabalho</p>
+                <h2 className="mt-1 text-lg font-semibold text-slate-900">{editingScheduleMember.name}</h2>
+                <p className="mt-1 text-xs text-slate-500">Esses horários alimentam as opções reais de remarcação no portal do paciente.</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingScheduleMember(null)}
+                  className="rounded-2xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                >
+                  Fechar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void saveWorkSchedule()}
+                  disabled={workScheduleSaving || workScheduleLoadingId === editingScheduleMember.id}
+                  className="rounded-2xl bg-[#7a32fc] px-4 py-2 text-xs font-semibold text-white shadow-sm disabled:opacity-60"
+                >
+                  {workScheduleSaving ? 'Salvando...' : workScheduleLoadingId === editingScheduleMember.id ? 'Carregando...' : 'Salvar horários'}
+                </button>
+              </div>
+            </div>
+
+            <div className="grid gap-4 p-5 xl:grid-cols-[1fr_280px]">
+              <div className="space-y-3">
+                <div className="grid gap-2 rounded-2xl bg-slate-50 p-3 md:grid-cols-3">
+                  <label className="text-xs font-medium text-slate-600">
+                    Duração padrão
+                    <select
+                      value={String(workScheduleDraft.defaultSessionDurationMinutes || workScheduleDraft.stepMinutes || '50')}
+                      onChange={(event) => setWorkScheduleDraft((prev: any) => ({ ...(prev || buildDefaultWorkSchedule()), defaultSessionDurationMinutes: Number(event.target.value), stepMinutes: Number(event.target.value) }))}
+                      className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 outline-none focus:border-purple-300"
+                    >
+                      <option value="30">30 min</option>
+                      <option value="45">45 min</option>
+                      <option value="50">50 min</option>
+                      <option value="60">60 min</option>
+                      <option value="90">90 min</option>
+                    </select>
+                  </label>
+                  <label className="text-xs font-medium text-slate-600">
+                    Antecedência mínima
+                    <select
+                      value={String(workScheduleDraft.minLeadMinutes || 120)}
+                      onChange={(event) => setWorkScheduleDraft((prev: any) => ({ ...(prev || buildDefaultWorkSchedule()), minLeadMinutes: Number(event.target.value) }))}
+                      className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 outline-none focus:border-purple-300"
+                    >
+                      <option value="0">Sem trava</option>
+                      <option value="120">2 horas</option>
+                      <option value="1440">1 dia</option>
+                      <option value="2880">2 dias</option>
+                    </select>
+                  </label>
+                  <label className="text-xs font-medium text-slate-600">
+                    Slots por dia
+                    <input
+                      type="number"
+                      min={1}
+                      max={24}
+                      value={Number(workScheduleDraft.maxSlotsPerDay || 8)}
+                      onChange={(event) => setWorkScheduleDraft((prev: any) => ({ ...(prev || buildDefaultWorkSchedule()), maxSlotsPerDay: Number(event.target.value) || 8 }))}
+                      className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 outline-none focus:border-purple-300"
+                    />
+                  </label>
+                </div>
+
+                {WORK_SCHEDULE_DAYS.map((day) => {
+                  const dayDraft = workScheduleDraft.days?.[day.key] || { enabled: false, periods: [], intervals: [] };
+                  const periods = Array.isArray(dayDraft.periods) && dayDraft.periods.length > 0
+                    ? dayDraft.periods
+                    : [{ start: '08:00', end: '12:00' }, { start: '13:00', end: '17:00' }];
+                  const lunch = Array.isArray(dayDraft.intervals) && dayDraft.intervals[0] ? dayDraft.intervals[0] : { start: '12:00', end: '13:00' };
+                  return (
+                    <div key={day.key} className="rounded-2xl border border-slate-100 p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <label className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+                          <input
+                            type="checkbox"
+                            checked={dayDraft.enabled !== false}
+                            onChange={(event) => updateScheduleDay(day.key, (current) => ({ ...current, enabled: event.target.checked }))}
+                            className="accent-[#7a32fc]"
+                          />
+                          {day.label}
+                        </label>
+                        <span className="text-[11px] font-medium text-slate-400">{dayDraft.enabled === false ? 'Não atende' : 'Atendimento configurado'}</span>
+                      </div>
+                      {dayDraft.enabled !== false && (
+                        <div className="mt-3 grid gap-2 md:grid-cols-3">
+                          {[0, 1].map((periodIndex) => (
+                            <div key={periodIndex} className="rounded-xl bg-slate-50 p-2">
+                              <p className="mb-1 text-[11px] font-medium text-slate-500">{periodIndex === 0 ? 'Manhã' : 'Tarde'}</p>
+                              <div className="grid grid-cols-2 gap-2">
+                                <input type="time" value={periods[periodIndex]?.start || (periodIndex === 0 ? '08:00' : '13:00')} onChange={(event) => updateSchedulePeriod(day.key, periodIndex, 'start', event.target.value)} className="rounded-lg border border-slate-200 px-2 py-2 text-xs font-medium text-slate-700" />
+                                <input type="time" value={periods[periodIndex]?.end || (periodIndex === 0 ? '12:00' : '17:00')} onChange={(event) => updateSchedulePeriod(day.key, periodIndex, 'end', event.target.value)} className="rounded-lg border border-slate-200 px-2 py-2 text-xs font-medium text-slate-700" />
+                              </div>
+                            </div>
+                          ))}
+                          <div className="rounded-xl bg-purple-50/60 p-2">
+                            <p className="mb-1 text-[11px] font-medium text-purple-600">Almoço / intervalo</p>
+                            <div className="grid grid-cols-2 gap-2">
+                              <input type="time" value={lunch.start || '12:00'} onChange={(event) => updateScheduleLunch(day.key, 'start', event.target.value)} className="rounded-lg border border-purple-100 px-2 py-2 text-xs font-medium text-slate-700" />
+                              <input type="time" value={lunch.end || '13:00'} onChange={(event) => updateScheduleLunch(day.key, 'end', event.target.value)} className="rounded-lg border border-purple-100 px-2 py-2 text-xs font-medium text-slate-700" />
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+                <h3 className="text-sm font-semibold text-slate-900">Exceções e bloqueios</h3>
+                <p className="mt-1 text-xs text-slate-500">Folgas, reuniões e bloqueios removem disponibilidade sem apagar consultas.</p>
+                <div className="mt-4 space-y-2">
+                  <input type="date" value={workScheduleNewException.date} onChange={(event) => setWorkScheduleNewException((prev) => ({ ...prev, date: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700" />
+                  <div className="grid grid-cols-2 gap-2">
+                    <input type="time" value={workScheduleNewException.start} onChange={(event) => setWorkScheduleNewException((prev) => ({ ...prev, start: event.target.value }))} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700" />
+                    <input type="time" value={workScheduleNewException.end} onChange={(event) => setWorkScheduleNewException((prev) => ({ ...prev, end: event.target.value }))} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700" />
+                  </div>
+                  <select value={workScheduleNewException.type} onChange={(event) => setWorkScheduleNewException((prev) => ({ ...prev, type: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700">
+                    <option>Bloqueio manual</option>
+                    <option>Folga</option>
+                    <option>Férias</option>
+                    <option>Reunião interna</option>
+                    <option>Curso/supervisão</option>
+                    <option>Feriado</option>
+                    <option>Atendimento externo</option>
+                  </select>
+                  <button type="button" onClick={addWorkScheduleException} className="w-full rounded-xl border border-purple-200 bg-white px-3 py-2 text-xs font-semibold text-[#7a32fc] hover:bg-purple-50">
+                    Adicionar bloqueio
+                  </button>
+                </div>
+                <div className="mt-4 space-y-2">
+                  {(Array.isArray(workScheduleDraft.exceptions) ? workScheduleDraft.exceptions : []).length === 0 ? (
+                    <p className="rounded-xl bg-white px-3 py-3 text-xs font-medium text-slate-400">Nenhuma exceção futura cadastrada.</p>
+                  ) : (
+                    workScheduleDraft.exceptions.map((exception: any, index: number) => (
+                      <div key={`${exception.date}-${index}`} className="rounded-xl bg-white p-3 text-xs text-slate-600">
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <p className="font-semibold text-slate-800">{exception.date} · {exception.start}–{exception.end}</p>
+                            <p className="mt-0.5 text-slate-500">{exception.type || 'Bloqueio'}</p>
+                          </div>
+                          <button type="button" onClick={() => removeWorkScheduleException(index)} className="text-red-500 hover:text-red-600">
+                            Remover
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Atribuir Papel */}
         <div className="lg:col-span-1">
