@@ -194,6 +194,58 @@ export const createPatientFinancialPlan = (overrides: any = {}) => {
     payerId: cleanText(overrides.payerId || overrides.payer_id, 120),
     payerNameSnapshot,
     insurancePlanName: cleanText(overrides.insurancePlanName || overrides.insurance_plan_name, 160),
+    insuranceCardNumber: cleanText(
+      overrides.insuranceCardNumber ||
+        overrides.insurance_card_number ||
+        overrides.cardNumber ||
+        overrides.card_number ||
+        overrides.convenioCarteirinha,
+      120,
+    ),
+    insuranceCardHolder: cleanText(
+      overrides.insuranceCardHolder ||
+        overrides.insurance_card_holder ||
+        overrides.insuranceHolderName ||
+        overrides.insurance_holder_name ||
+        overrides.cardHolder ||
+        overrides.holderName ||
+        overrides.convenioTitularNome,
+      160,
+    ),
+    insuranceCardValidUntil: cleanText(
+      overrides.insuranceCardValidUntil ||
+        overrides.insurance_card_valid_until ||
+        overrides.cardValidUntil ||
+        overrides.card_valid_until ||
+        overrides.validUntil ||
+        overrides.convenioCarteirinhaValidade,
+      40,
+    ),
+    isPrimaryInsurance:
+      overrides.isPrimaryInsurance === true ||
+      overrides.is_primary_insurance === true ||
+      overrides.isPrimary === true ||
+      overrides.is_primary === true ||
+      overrides.isCurrent === true ||
+      overrides.is_current === true ||
+      overrides.current === true ||
+      overrides.principal === true ||
+      overrides.isPrimaryInsurance === 'true' ||
+      overrides.is_primary_insurance === 'true' ||
+      overrides.isPrimary === 'true' ||
+      overrides.is_primary === 'true' ||
+      overrides.isCurrent === 'true' ||
+      overrides.is_current === 'true' ||
+      overrides.current === 'true' ||
+      overrides.principal === 'true' ||
+      overrides.isPrimaryInsurance === 1 ||
+      overrides.is_primary_insurance === 1 ||
+      overrides.isPrimary === 1 ||
+      overrides.is_primary === 1 ||
+      overrides.isCurrent === 1 ||
+      overrides.is_current === 1 ||
+      overrides.current === 1 ||
+      overrides.principal === 1,
     authorizationCode: cleanText(overrides.authorizationCode || overrides.authorization_code, 120),
     authorizationValidUntil: cleanText(
       overrides.authorizationValidUntil || overrides.authorization_valid_until,
@@ -262,6 +314,14 @@ export const normalizePatientFinancialPlans = (plans: any, fallback: any = {}) =
       paymentMethod: fallback.billingMethod || fallback.billing_method || '',
       payerNameSnapshot: legacyInsuranceName,
       insuranceName: legacyInsuranceName,
+      insurancePlanName: fallback.convenioPlanoCategoria || fallback.insurancePlanCategory || fallback.insurance_plan_category || '',
+      insuranceCardNumber: fallback.convenioCarteirinha || fallback.insuranceCardNumber || fallback.insurance_card_number || '',
+      insuranceCardHolder: fallback.convenioTitularNome || fallback.insuranceHolderName || fallback.insurance_holder_name || '',
+      insuranceCardValidUntil:
+        fallback.convenioCarteirinhaValidade ||
+        fallback.insuranceCardValidUntil ||
+        fallback.insurance_card_valid_until ||
+        '',
     }),
   ];
 };
@@ -281,6 +341,10 @@ export const isPatientFinancialPlanComplete = (plan: any) => {
       normalized.copaymentAmountCents > 0 ||
       normalized.payerId ||
       normalized.payerNameSnapshot ||
+      normalized.insurancePlanName ||
+      normalized.insuranceCardNumber ||
+      normalized.insuranceCardHolder ||
+      normalized.insuranceCardValidUntil ||
       normalized.authorizationCode ||
       normalized.authorizationValidUntil ||
       normalized.sessionsQuantity ||
@@ -313,6 +377,10 @@ export const serializePatientFinancialPlanForPayload = (plan: any) => {
     payerId: normalized.payerId || null,
     payerNameSnapshot: normalized.payerNameSnapshot || null,
     insurancePlanName: normalized.insurancePlanName || null,
+    insuranceCardNumber: normalized.insuranceCardNumber || null,
+    insuranceCardHolder: normalized.insuranceCardHolder || null,
+    insuranceCardValidUntil: normalized.insuranceCardValidUntil || null,
+    isPrimaryInsurance: Boolean(normalized.isPrimaryInsurance),
     authorizationCode: normalized.authorizationCode || null,
     authorizationValidUntil: normalized.authorizationValidUntil || null,
     sessionsQuantity: normalized.sessionsQuantity ? Number(normalized.sessionsQuantity) : null,

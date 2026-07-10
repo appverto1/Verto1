@@ -62,6 +62,32 @@ test('convênio nao força PIX sem coparticipacao', () => {
   assert.equal(serializePatientFinancialPlanForPayload(withCopay).paymentMethod, 'pix');
 });
 
+test('plano de convênio do paciente persiste dados oficiais de carteirinha', () => {
+  const plan = createPatientFinancialPlan({
+    serviceType: 'ABA',
+    billingMode: 'INSURANCE',
+    payerId: 'payer-unimed',
+    payerNameSnapshot: 'Unimed',
+    insurancePlanName: 'Unimed Nacional',
+    insuranceCardNumber: '000000000',
+    insuranceCardHolder: 'Pedro Henrique Alves Santana',
+    insuranceCardValidUntil: '2026-12-31',
+    isPrimaryInsurance: true,
+  });
+  const payload = serializePatientFinancialPlanForPayload(plan);
+
+  assert.equal(plan.insurancePlanName, 'Unimed Nacional');
+  assert.equal(plan.insuranceCardNumber, '000000000');
+  assert.equal(plan.insuranceCardHolder, 'Pedro Henrique Alves Santana');
+  assert.equal(plan.insuranceCardValidUntil, '2026-12-31');
+  assert.equal(plan.isPrimaryInsurance, true);
+  assert.equal(payload.insurancePlanName, 'Unimed Nacional');
+  assert.equal(payload.insuranceCardNumber, '000000000');
+  assert.equal(payload.insuranceCardHolder, 'Pedro Henrique Alves Santana');
+  assert.equal(payload.insuranceCardValidUntil, '2026-12-31');
+  assert.equal(payload.isPrimaryInsurance, true);
+});
+
 test('perfil canonical persiste sem quebrar portal legado', () => {
   assert.equal(normalizePatientProfileType('kids_tea'), 'KIDS');
   assert.equal(normalizePatientProfileType('adult_tea'), 'ABA');
@@ -450,6 +476,41 @@ test('modal de agendamento nao herda convenio legado quando ha planos ativos amb
   assert.match(coordinatorCode, /preferredInsurancePlans\.length === 1/);
   assert.match(coordinatorCode, /if \(insurancePlans\.length > 0\) \{/);
   assert.match(coordinatorCode, /payerId: "",\s*payerName: "",\s*insurancePlanName: "",\s*insuranceCardNumber: ""/);
+  assert.match(coordinatorCode, /insurancePlanName: String\(insurancePlan\?\.insurancePlanName \|\| ""\)\.trim\(\)/);
+  assert.match(coordinatorCode, /insuranceCardNumber: String\(insurancePlan\?\.insuranceCardNumber \|\| ""\)\.trim\(\)/);
+  assert.doesNotMatch(coordinatorCode, /insurancePlan\?\.insurancePlanName \|\| insuranceEligibility\.insurancePlanCategory/);
+  assert.doesNotMatch(coordinatorCode, /insuranceCardNumber: String\(insuranceEligibility\.insuranceCardNumber \|\| ""\)\.trim\(\),[\s\S]{0,260}planPayerId/);
+});
+
+test('modal de agendamento mostra plano e carteirinha somente leitura', () => {
+  assert.match(coordinatorCode, /Dados do plano/);
+  assert.match(coordinatorCode, /Somente leitura no agendamento/);
+  assert.match(coordinatorCode, /Editar dados do convênio no paciente/);
+  assert.match(coordinatorCode, /openSelectedSessionPatientInsuranceRegistration/);
+  assert.match(coordinatorCode, /formatSessionReadonlyValue\(sessionInsurancePlanName\)/);
+  assert.match(coordinatorCode, /formatSessionReadonlyValue\(sessionInsuranceCardNumber\)/);
+  assert.match(coordinatorCode, /formatSessionReadonlyValue\(sessionInsuranceHolderName\)/);
+  assert.match(coordinatorCode, /formatSessionReadonlyDate\(sessionInsuranceCardValidUntil\)/);
+  assert.doesNotMatch(coordinatorCode, /onChange=\{\(e\) => setSessionInsurancePlanName\(e\.target\.value\)\}/);
+  assert.doesNotMatch(coordinatorCode, /onChange=\{\(e\) => setSessionInsuranceCardNumber\(e\.target\.value\)\}/);
+});
+
+test('cadastro do paciente expõe vínculo convênio com plano carteirinha e principalidade', () => {
+  for (const marker of [
+    'Fonte oficial para o agendamento quando este convênio for selecionado.',
+    'Carteirinha específica deste convênio.',
+    'Titular do plano',
+    'Validade da carteirinha',
+    'Convênio principal/atual',
+    'Usado como preferência ao criar novos agendamentos de convênio.',
+  ]) {
+    assert.ok(coordinatorCode.includes(marker), marker);
+  }
+  assert.match(coordinatorCode, /value=\{plan\.insuranceCardNumber\}/);
+  assert.match(coordinatorCode, /value=\{plan\.insuranceCardHolder\}/);
+  assert.match(coordinatorCode, /value=\{plan\.insuranceCardValidUntil\}/);
+  assert.match(coordinatorCode, /checked=\{Boolean\(plan\.isPrimaryInsurance\)\}/);
+  assert.match(coordinatorCode, /field === "payerId"[\s\S]{0,260}insuranceCardNumber: ""/);
 });
 
 test('modal de agendamento deixa data e hora no topo e usa texto leve', () => {

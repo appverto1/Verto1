@@ -164,11 +164,13 @@ test('criacao e edicao da consulta exibem e persistem plano e carteirinha', () =
   assert.match(coordinatorCode, /const \[sessionInsurancePlanName, setSessionInsurancePlanName\] = useState\(""\)/);
   assert.match(coordinatorCode, /const \[sessionInsuranceCardNumber, setSessionInsuranceCardNumber\] = useState\(""\)/);
   assert.match(coordinatorCode, /normalizePatientInsuranceEligibility\(patient\)/);
-  assert.match(coordinatorCode, /insurancePlanName: String\(\s*insurancePlan\?\.insurancePlanName \|\| insuranceEligibility\.insurancePlanCategory/);
-  assert.match(coordinatorCode, /insuranceCardNumber: String\(insuranceEligibility\.insuranceCardNumber/);
-  assert.match(coordinatorCode, /Plano do convênio/);
-  assert.match(coordinatorCode, /Número da carteirinha/);
-  assert.match(coordinatorCode, /Plano não cadastrado para este paciente\./);
+  assert.match(coordinatorCode, /insurancePlanName: String\(insurancePlan\?\.insurancePlanName \|\| ""\)\.trim\(\)/);
+  assert.match(coordinatorCode, /insuranceCardNumber: String\(insurancePlan\?\.insuranceCardNumber \|\| ""\)\.trim\(\)/);
+  assert.match(coordinatorCode, /Dados do plano/);
+  assert.match(coordinatorCode, /Somente leitura no agendamento/);
+  assert.match(coordinatorCode, /Editar dados do convênio no paciente/);
+  assert.doesNotMatch(coordinatorCode, /onChange=\{\(e\) => setSessionInsurancePlanName\(e\.target\.value\)\}/);
+  assert.doesNotMatch(coordinatorCode, /onChange=\{\(e\) => setSessionInsuranceCardNumber\(e\.target\.value\)\}/);
   assert.match(coordinatorCode, /insurancePlanName: sessionFinancialContextType === "INSURANCE" \? sessionInsurancePlanName/);
   assert.match(coordinatorCode, /insuranceCardNumber: sessionFinancialContextType === "INSURANCE" \? sessionInsuranceCardNumber/);
   assert.match(coordinatorCode, /const appointmentInsurancePlanSnapshot = String/);
@@ -182,6 +184,7 @@ test('criacao e edicao da consulta exibem e persistem plano e carteirinha', () =
 
 test('novas consultas copiam o vinculo atual sem alterar snapshots antigos', () => {
   assert.match(appCode, /const patientInsuranceEligibility = normalizePatientInsuranceEligibility\(patientForSession \|\| \{\}\)/);
+  assert.match(appCode, /const legacyPayerMatchesSelected =/);
   assert.match(appCode, /const effectiveInsurancePlanName = usesInsuranceContext/);
   assert.match(appCode, /const effectiveInsuranceCardNumber = usesInsuranceContext/);
   assert.match(appCode, /insurancePlanName: effectiveInsurancePlanName/);
@@ -238,10 +241,11 @@ test('detalhe da consulta salva pagador no contexto administrativo', () => {
 
 test('modal preenche sugestao do paciente com carteirinha sem sobrescrever cadastro', () => {
   assert.match(serverCode, /\.from\('patients'\)[\s\S]*\.select\('id, insurance_type, insurance_name, insurance_card_number, insurance_plan_category'\)/);
-  assert.match(serverCode, /insuranceCardNumber: patientInsuranceCardNumber \|\| null/);
+  assert.match(serverCode, /const patientInsuranceCardForPayer = \(payerName\?: any\) =>/);
+  assert.match(serverCode, /patientInsuranceFallbackMatches\(payerName\) \? patientInsuranceCardNumber : ''/);
   assert.match(serverCode, /const patientInsurancePlanName = sanitizeString\(patientBillingRow\?\.insurance_plan_category, 160\)/);
-  assert.match(serverCode, /insurancePlanName: sanitizeString\(selectedPlan\.insurance_plan_name, 160\) \|\| patientInsurancePlanName \|\| null/);
-  assert.match(serverCode, /insurancePlanName: patientInsurancePlanName \|\| null/);
+  assert.match(serverCode, /insurancePlanName: sanitizeString\(selectedPlan\.insurance_plan_name, 160\) \|\| patientInsurancePlanForPayer\(payerName\) \|\| null/);
+  assert.match(serverCode, /insurancePlanName: patientInsurancePlanForPayer\(payerName\) \|\| null/);
   assert.match(serverCode, /const patientDefault = serializeBillingSuggestion\(suggestion\)/);
   assert.match(serverCode, /payerId: sanitizeString\(row\?\.payer_id, 120\) \|\| null/);
   assert.match(serverCode, /payerName: sanitizeString\(payer\?\.name \|\| row\?\.payer_name_snapshot, 180\) \|\| null/);

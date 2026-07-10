@@ -5306,6 +5306,25 @@ export default function App() {
     );
     let effectivePayerId = String(sess.payerId || sess.payer_id || '').trim();
     let effectivePayerName = String(sess.payerName || sess.payer_name_snapshot || '').trim();
+    const patientFinancialPlans = Array.isArray(patientForSession?.financialPlans)
+      ? patientForSession.financialPlans
+      : Array.isArray((patientForSession as any)?.financial_plans)
+        ? (patientForSession as any).financial_plans
+        : [];
+    const normalizePatientPayerKey = (value: any) =>
+      String(value || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, ' ');
+    const patientInsurancePlans = patientFinancialPlans.filter((plan: any) => {
+      const payerId = String(plan?.payerId || plan?.payer_id || '').trim();
+      const payerName = String(plan?.payerNameSnapshot || plan?.payer_name_snapshot || plan?.insuranceName || plan?.insurance_name || '').trim();
+      const billingMode = String(plan?.billingMode || plan?.billing_mode || '').toUpperCase();
+      const status = String(plan?.status || 'ACTIVE').toUpperCase();
+      return (payerId || payerName) && billingMode === 'INSURANCE' && status !== 'INACTIVE' && plan?.active !== false && plan?.isActive !== false;
+    });
     if (!financialContextType && !effectivePayerId) {
       const serviceKey = String(sess.approach || sess.serviceType || sess.service_type || '')
         .normalize('NFD')
@@ -5313,18 +5332,7 @@ export default function App() {
         .trim()
         .toUpperCase()
         .replace(/[^A-Z0-9]+/g, '_');
-      const plans = Array.isArray(patientForSession?.financialPlans)
-        ? patientForSession.financialPlans
-        : Array.isArray((patientForSession as any)?.financial_plans)
-          ? (patientForSession as any).financial_plans
-          : [];
-      const insurancePlans = plans.filter((plan: any) => {
-        const payerId = String(plan?.payerId || plan?.payer_id || '').trim();
-        const billingMode = String(plan?.billingMode || plan?.billing_mode || '').toUpperCase();
-        const status = String(plan?.status || '').toUpperCase();
-        return payerId && billingMode === 'INSURANCE' && status !== 'INACTIVE' && plan?.active !== false && plan?.isActive !== false;
-      });
-      const matchingPlans = insurancePlans.filter((plan: any) => {
+      const matchingPlans = patientInsurancePlans.filter((plan: any) => {
         const planServiceKey = String(
           plan?.serviceType ||
             plan?.service_type ||
@@ -5341,7 +5349,7 @@ export default function App() {
           .replace(/[^A-Z0-9]+/g, '_');
         return !serviceKey || !planServiceKey || planServiceKey === serviceKey;
       });
-      const inferredPlan = matchingPlans.length === 1 ? matchingPlans[0] : insurancePlans.length === 1 ? insurancePlans[0] : null;
+      const inferredPlan = matchingPlans.length === 1 ? matchingPlans[0] : patientInsurancePlans.length === 1 ? patientInsurancePlans[0] : null;
       if (inferredPlan) {
         effectivePayerId = String(inferredPlan?.payerId || inferredPlan?.payer_id || '').trim();
         effectivePayerName = String(inferredPlan?.payerNameSnapshot || inferredPlan?.payer_name_snapshot || inferredPlan?.insuranceName || inferredPlan?.insurance_name || '').trim();
@@ -5351,21 +5359,38 @@ export default function App() {
     if (!financialContextType && effectivePayerId) financialContextType = 'INSURANCE';
     const usesInsuranceContext = financialContextType.toUpperCase() === 'INSURANCE';
     const patientInsuranceEligibility = normalizePatientInsuranceEligibility(patientForSession || {});
+    const effectiveInsurancePlan = patientInsurancePlans.find((plan: any) => {
+      const planPayerId = String(plan?.payerId || plan?.payer_id || '').trim();
+      const planPayerName = String(plan?.payerNameSnapshot || plan?.payer_name_snapshot || plan?.insuranceName || plan?.insurance_name || '').trim();
+      const payerIdMatches = effectivePayerId && planPayerId && planPayerId === effectivePayerId;
+      const payerNameMatches = effectivePayerName && planPayerName && normalizePatientPayerKey(planPayerName) === normalizePatientPayerKey(effectivePayerName);
+      return payerIdMatches || payerNameMatches;
+    });
+    const legacyPayerMatchesSelected =
+      !patientInsurancePlans.length ||
+      !effectivePayerName ||
+      normalizePatientPayerKey(patientInsuranceEligibility.insuranceName) === normalizePatientPayerKey(effectivePayerName);
     const effectiveInsurancePlanName = usesInsuranceContext
       ? String(
           sess.insurancePlanName ||
             sess.insurance_plan_name ||
-            patientInsuranceEligibility.insurancePlanCategory ||
+            effectiveInsurancePlan?.insurancePlanName ||
+            effectiveInsurancePlan?.insurance_plan_name ||
+            (legacyPayerMatchesSelected ? patientInsuranceEligibility.insurancePlanCategory : '') ||
             ''
         ).trim()
       : '';
     const effectiveInsuranceCardNumber = usesInsuranceContext
       ? String(
-          sess.insuranceCardNumber ||
+            sess.insuranceCardNumber ||
             sess.insurance_card_number ||
             sess.cardNumber ||
             sess.card_number ||
-            patientInsuranceEligibility.insuranceCardNumber ||
+            effectiveInsurancePlan?.insuranceCardNumber ||
+            effectiveInsurancePlan?.insurance_card_number ||
+            effectiveInsurancePlan?.cardNumber ||
+            effectiveInsurancePlan?.card_number ||
+            (legacyPayerMatchesSelected ? patientInsuranceEligibility.insuranceCardNumber : '') ||
             ''
         ).trim()
       : '';

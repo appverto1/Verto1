@@ -9223,8 +9223,25 @@ async function resolveAppointmentBillingSuggestion(params: {
     if (!hasMissingFinancialSchema(patientResult.error)) throw patientResult.error;
   }
   const patientBillingRow = patientResult.error ? null : patientResult.data;
+  const patientInsuranceName = sanitizeString(patientBillingRow?.insurance_name, 180);
   const patientInsuranceCardNumber = sanitizeString(patientBillingRow?.insurance_card_number, 120);
   const patientInsurancePlanName = sanitizeString(patientBillingRow?.insurance_plan_category, 160);
+  const normalizePayerFallbackKey = (value: any) =>
+    sanitizeString(value, 180)
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, ' ');
+  const patientInsuranceFallbackMatches = (payerName?: any) => {
+    const patientKey = normalizePayerFallbackKey(patientInsuranceName);
+    const payerKey = normalizePayerFallbackKey(payerName);
+    return !patientKey || !payerKey || patientKey === payerKey;
+  };
+  const patientInsuranceCardForPayer = (payerName?: any) =>
+    patientInsuranceFallbackMatches(payerName) ? patientInsuranceCardNumber : '';
+  const patientInsurancePlanForPayer = (payerName?: any) =>
+    patientInsuranceFallbackMatches(payerName) ? patientInsurancePlanName : '';
   const usablePlans = plans.filter((plan: any) =>
     isUuid(sanitizeString(plan?.payer_id, 120)) || Boolean(sanitizeString(plan?.payer_name_snapshot, 180))
   );
@@ -9306,8 +9323,8 @@ async function resolveAppointmentBillingSuggestion(params: {
       payerId: isUuid(payerId) ? payerId : null,
       payerName: payerName || null,
       serviceType: sanitizeString(selectedPlan.service_type || serviceType, 120) || null,
-      insuranceCardNumber: patientInsuranceCardNumber || null,
-      insurancePlanName: sanitizeString(selectedPlan.insurance_plan_name, 160) || patientInsurancePlanName || null,
+      insuranceCardNumber: patientInsuranceCardForPayer(payerName) || null,
+      insurancePlanName: sanitizeString(selectedPlan.insurance_plan_name, 160) || patientInsurancePlanForPayer(payerName) || null,
       authorizationCode: sanitizeString(selectedPlan.authorization_code, 120) || null,
       guideNumber: null,
       notes: sanitizeTextField(selectedPlan.notes, 1200) || null,
@@ -9332,8 +9349,8 @@ async function resolveAppointmentBillingSuggestion(params: {
       payerId: isUuid(requestedPayerId) ? requestedPayerId : null,
       payerName: payerName || null,
       serviceType: serviceType || null,
-      insuranceCardNumber: patientInsuranceCardNumber || null,
-      insurancePlanName: patientInsurancePlanName || null,
+      insuranceCardNumber: patientInsuranceCardForPayer(payerName) || null,
+      insurancePlanName: patientInsurancePlanForPayer(payerName) || null,
       authorizationCode: null,
       guideNumber: null,
       notes: null,

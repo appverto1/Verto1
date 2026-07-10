@@ -986,6 +986,8 @@ export function CoordinatorDashboard({
   const [sessionPayerNameSnapshot, setSessionPayerNameSnapshot] = useState("");
   const [sessionInsurancePlanName, setSessionInsurancePlanName] = useState("");
   const [sessionInsuranceCardNumber, setSessionInsuranceCardNumber] = useState("");
+  const [sessionInsuranceHolderName, setSessionInsuranceHolderName] = useState("");
+  const [sessionInsuranceCardValidUntil, setSessionInsuranceCardValidUntil] = useState("");
   const [sessionGuideNumber, setSessionGuideNumber] = useState("");
   const [sessionAuthorizationCode, setSessionAuthorizationCode] = useState("");
   const [sessionPatientTissAuthorizationId, setSessionPatientTissAuthorizationId] = useState("");
@@ -2820,6 +2822,8 @@ export function CoordinatorDashboard({
       plan?.default,
       plan?.preferred,
       plan?.principal,
+      plan?.isPrimaryInsurance,
+      plan?.is_primary_insurance,
       rawPlan?.isPrimary,
       rawPlan?.is_primary,
       rawPlan?.primary,
@@ -2831,18 +2835,24 @@ export function CoordinatorDashboard({
       rawPlan?.default,
       rawPlan?.preferred,
       rawPlan?.principal,
+      rawPlan?.isPrimaryInsurance,
+      rawPlan?.is_primary_insurance,
     ];
     return preferredValues.some((value) => value === true || value === "true" || value === 1 || value === "1");
   };
 
+  const emptyPatientInsurancePayer = () => ({
+    payerId: "",
+    payerName: "",
+    insurancePlanName: "",
+    insuranceCardNumber: "",
+    insuranceHolderName: "",
+    insuranceCardValidUntil: "",
+  });
+
   const resolvePatientInsurancePayer = (patient: any, serviceType: any = "") => {
     if (!patient) {
-      return {
-        payerId: "",
-        payerName: "",
-        insurancePlanName: "",
-        insuranceCardNumber: "",
-      };
+      return emptyPatientInsurancePayer();
     }
     const insuranceEligibility = normalizePatientInsuranceEligibility(patient);
     const rawPlans = Array.isArray(patient?.financialPlans)
@@ -2888,20 +2898,15 @@ export function CoordinatorDashboard({
       return {
         payerId: planPayerId,
         payerName: planPayerName,
-        insurancePlanName: String(
-          insurancePlan?.insurancePlanName || insuranceEligibility.insurancePlanCategory || "",
-        ).trim(),
-        insuranceCardNumber: String(insuranceEligibility.insuranceCardNumber || "").trim(),
+        insurancePlanName: String(insurancePlan?.insurancePlanName || "").trim(),
+        insuranceCardNumber: String(insurancePlan?.insuranceCardNumber || "").trim(),
+        insuranceHolderName: String(insurancePlan?.insuranceCardHolder || "").trim(),
+        insuranceCardValidUntil: String(insurancePlan?.insuranceCardValidUntil || "").trim(),
       };
     }
 
     if (insurancePlans.length > 0) {
-      return {
-        payerId: "",
-        payerName: "",
-        insurancePlanName: "",
-        insuranceCardNumber: "",
-      };
+      return emptyPatientInsurancePayer();
     }
 
     const insuranceType = normalizePayerLookup(
@@ -2920,18 +2925,15 @@ export function CoordinatorDashboard({
       ),
     ).trim();
     if (!insuranceName || insuranceType === "particular" || insuranceType === "private") {
-      return {
-        payerId: "",
-        payerName: "",
-        insurancePlanName: "",
-        insuranceCardNumber: "",
-      };
+      return emptyPatientInsurancePayer();
     }
     return {
       payerId: "",
       payerName: insuranceName,
       insurancePlanName: String(insuranceEligibility.insurancePlanCategory || "").trim(),
       insuranceCardNumber: String(insuranceEligibility.insuranceCardNumber || "").trim(),
+      insuranceHolderName: String(insuranceEligibility.insuranceHolderName || "").trim(),
+      insuranceCardValidUntil: String(insuranceEligibility.insuranceCardValidUntil || "").trim(),
     };
   };
 
@@ -2982,6 +2984,8 @@ export function CoordinatorDashboard({
     setSessionPayerNameSnapshot(String(matchingPayer?.name || patientPayer.payerName || ""));
     setSessionInsurancePlanName(String(patientPayer.insurancePlanName || ""));
     setSessionInsuranceCardNumber(String(patientPayer.insuranceCardNumber || ""));
+    setSessionInsuranceHolderName(String(patientPayer.insuranceHolderName || ""));
+    setSessionInsuranceCardValidUntil(String(patientPayer.insuranceCardValidUntil || ""));
     setSessionGuideNumber("");
     setSessionAuthorizationCode("");
     setSessionPatientTissAuthorizationId("");
@@ -3090,6 +3094,8 @@ export function CoordinatorDashboard({
       setSessionPayerNameSnapshot(sessionPayerSnapshotOptionLabel);
       setSessionInsurancePlanName(selectedSessionPatientInsurancePayer.insurancePlanName || "");
       setSessionInsuranceCardNumber(selectedSessionPatientInsurancePayer.insuranceCardNumber || "");
+      setSessionInsuranceHolderName(selectedSessionPatientInsurancePayer.insuranceHolderName || "");
+      setSessionInsuranceCardValidUntil(selectedSessionPatientInsurancePayer.insuranceCardValidUntil || "");
       setSessionGuideNumber("");
       setSessionAuthorizationCode("");
       setSessionPatientTissAuthorizationId("");
@@ -3109,6 +3115,12 @@ export function CoordinatorDashboard({
     );
     setSessionInsuranceCardNumber(
       payerMatchesPatient ? selectedSessionPatientInsurancePayer.insuranceCardNumber || "" : "",
+    );
+    setSessionInsuranceHolderName(
+      payerMatchesPatient ? selectedSessionPatientInsurancePayer.insuranceHolderName || "" : "",
+    );
+    setSessionInsuranceCardValidUntil(
+      payerMatchesPatient ? selectedSessionPatientInsurancePayer.insuranceCardValidUntil || "" : "",
     );
     setSessionGuideNumber("");
     setSessionAuthorizationCode("");
@@ -3173,6 +3185,20 @@ export function CoordinatorDashboard({
   const sessionModalInputClass = "w-full rounded-xl border border-slate-100 bg-slate-50 p-3 text-sm font-medium text-slate-700 outline-none focus:border-violet-200 focus:ring-2 focus:ring-violet-100";
   const sessionModalSelectClass = sessionModalInputClass;
   const sessionModalSectionLabelClass = "text-sm font-semibold text-slate-800";
+  const formatSessionReadonlyValue = (value: any) => {
+    const text = normalizeUtf8Text(String(value || "")).trim();
+    return text || "não cadastrado";
+  };
+  const formatSessionReadonlyDate = (value: any) => {
+    const text = String(value || "").trim();
+    if (!text) return "não cadastrada";
+    const datePart = text.slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(datePart)) {
+      const [year, month, day] = datePart.split("-");
+      return `${day}/${month}/${year}`;
+    }
+    return normalizeUtf8Text(text);
+  };
   const getSessionAuthorizationBalanceParts = (authorization: any) => {
     const authorized = Number(authorization?.quantityAuthorized ?? authorization?.authorizedQuantity ?? 0) || 0;
     const consumed = Number(authorization?.quantityConsumed ?? authorization?.usedQuantity ?? 0) || 0;
@@ -3293,12 +3319,6 @@ export function CoordinatorDashboard({
       }
       const suggestion = result.data?.suggestion || result.data || null;
       setSessionBillingSuggestionState({ loading: false, error: "", suggestion });
-      if (suggestion?.insurancePlanName && !sessionInsurancePlanName.trim()) {
-        setSessionInsurancePlanName(String(suggestion.insurancePlanName));
-      }
-      if (suggestion?.insuranceCardNumber && !sessionInsuranceCardNumber.trim()) {
-        setSessionInsuranceCardNumber(String(suggestion.insuranceCardNumber));
-      }
     }).catch(() => {
       if (!cancelled) {
         setSessionBillingSuggestionState({
@@ -3320,8 +3340,6 @@ export function CoordinatorDashboard({
     sessionApproach,
     sessionDate,
     sessionFinancialContextType,
-    sessionInsuranceCardNumber,
-    sessionInsurancePlanName,
     sessionPayerId,
   ]);
 
@@ -3342,6 +3360,8 @@ export function CoordinatorDashboard({
       setSessionPayerNameSnapshot(nextPayerName);
       setSessionInsurancePlanName(patientPayer.insurancePlanName || "");
       setSessionInsuranceCardNumber(patientPayer.insuranceCardNumber || "");
+      setSessionInsuranceHolderName(patientPayer.insuranceHolderName || "");
+      setSessionInsuranceCardValidUntil(patientPayer.insuranceCardValidUntil || "");
       return;
     }
 
@@ -3353,6 +3373,8 @@ export function CoordinatorDashboard({
       setSessionPayerNameSnapshot(String(matchingPayer.name || patientPayer.payerName || ""));
       setSessionInsurancePlanName((current) => current || patientPayer.insurancePlanName || "");
       setSessionInsuranceCardNumber((current) => current || patientPayer.insuranceCardNumber || "");
+      setSessionInsuranceHolderName((current) => current || patientPayer.insuranceHolderName || "");
+      setSessionInsuranceCardValidUntil((current) => current || patientPayer.insuranceCardValidUntil || "");
     }
   }, [
     clinicPayers,
@@ -3527,6 +3549,8 @@ export function CoordinatorDashboard({
     setSessionPayerNameSnapshot("");
     setSessionInsurancePlanName("");
     setSessionInsuranceCardNumber("");
+    setSessionInsuranceHolderName("");
+    setSessionInsuranceCardValidUntil("");
     setSessionGuideNumber("");
     setSessionAuthorizationCode("");
     setSessionPatientTissAuthorizationId("");
@@ -3700,6 +3724,10 @@ export function CoordinatorDashboard({
         insurance_plan_name: sessionFinancialContextType === "INSURANCE" ? sessionInsurancePlanName : "",
         insuranceCardNumber: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardNumber : "",
         insurance_card_number: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardNumber : "",
+        insuranceHolderName: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceHolderName : "",
+        insurance_holder_name: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceHolderName : "",
+        insuranceCardValidUntil: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardValidUntil : "",
+        insurance_card_valid_until: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardValidUntil : "",
         guideNumber: sessionGuideNumber,
         guide_number: sessionGuideNumber,
         authorizationCode: sessionAuthorizationCode,
@@ -3741,6 +3769,8 @@ export function CoordinatorDashboard({
         serviceType: sessionApproach || "Consulta Padrão",
         insurancePlanName: sessionFinancialContextType === "INSURANCE" ? sessionInsurancePlanName || null : null,
         insuranceCardNumber: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardNumber || null : null,
+        insuranceHolderName: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceHolderName || null : null,
+        insuranceCardValidUntil: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardValidUntil || null : null,
         guideNumber: sessionGuideNumber,
         authorizationCode: sessionAuthorizationCode,
         patientTissAuthorizationId: sessionPatientTissAuthorizationId || null,
@@ -3817,6 +3847,10 @@ export function CoordinatorDashboard({
       insurance_plan_name: sessionFinancialContextType === "INSURANCE" ? sessionInsurancePlanName : "",
       insuranceCardNumber: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardNumber : "",
       insurance_card_number: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardNumber : "",
+      insuranceHolderName: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceHolderName : "",
+      insurance_holder_name: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceHolderName : "",
+      insuranceCardValidUntil: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardValidUntil : "",
+      insurance_card_valid_until: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardValidUntil : "",
       guideNumber: sessionGuideNumber,
       guide_number: sessionGuideNumber,
       authorizationCode: sessionAuthorizationCode,
@@ -4289,25 +4323,57 @@ export function CoordinatorDashboard({
   };
 
   const handleFinancialPlanChange = (planId: string, field: string, value: any) => {
-    setNewPatientForm((prev: any) => ({
-      ...prev,
-      financialPlans: normalizePatientFinancialPlans(prev.financialPlans, prev).map((plan: any) =>
-        plan.id === planId
-          ? createPatientFinancialPlan({
-              ...plan,
-              [field]: value,
-              ...(field === "billingMode" && value === "INSURANCE"
-                ? { payerNameSnapshot: plan.payerNameSnapshot || prev.convenioNome || "" }
-                : {}),
-              ...(field === "billingMode" && value !== "INSURANCE"
-                ? { payerNameSnapshot: "", insuranceName: "", authorizationCode: "", authorizationValidUntil: "", copaymentAmount: "" }
-                : {}),
-              ...(field === "serviceType" && value !== "CUSTOM" ? { customServiceName: "" } : {}),
-              ...(field === "payerNameSnapshot" ? { insuranceName: value } : {}),
-            })
-          : plan,
-      ),
-    }));
+    setNewPatientForm((prev: any) => {
+      const nextPlans = normalizePatientFinancialPlans(prev.financialPlans, prev).map((plan: any) => {
+        if (plan.id !== planId) {
+          if (
+            field === "isPrimaryInsurance" &&
+            (value === true || value === "true") &&
+            plan.billingMode === "INSURANCE"
+          ) {
+            return createPatientFinancialPlan({ ...plan, isPrimaryInsurance: false });
+          }
+          return plan;
+        }
+        return createPatientFinancialPlan({
+          ...plan,
+          [field]: value,
+          ...(field === "billingMode" && value === "INSURANCE"
+            ? { payerNameSnapshot: plan.payerNameSnapshot || prev.convenioNome || "" }
+            : {}),
+          ...(field === "billingMode" && value !== "INSURANCE"
+            ? {
+                payerNameSnapshot: "",
+                insuranceName: "",
+                insurancePlanName: "",
+                insuranceCardNumber: "",
+                insuranceCardHolder: "",
+                insuranceCardValidUntil: "",
+                isPrimaryInsurance: false,
+                authorizationCode: "",
+                authorizationValidUntil: "",
+                copaymentAmount: "",
+              }
+            : {}),
+          ...(field === "payerId"
+            ? {
+                insurancePlanName: "",
+                insuranceCardNumber: "",
+                insuranceCardHolder: "",
+                insuranceCardValidUntil: "",
+                authorizationCode: "",
+                authorizationValidUntil: "",
+              }
+            : {}),
+          ...(field === "serviceType" && value !== "CUSTOM" ? { customServiceName: "" } : {}),
+          ...(field === "payerNameSnapshot" ? { insuranceName: value } : {}),
+        });
+      });
+      return {
+        ...prev,
+        financialPlans: nextPlans,
+      };
+    });
   };
 
   const addFinancialPlanRow = () => {
@@ -4757,6 +4823,15 @@ export function CoordinatorDashboard({
     setIsPatientRegistrationModalOpen(true);
   };
 
+  const openSelectedSessionPatientInsuranceRegistration = () => {
+    if (!selectedSessionPatient) {
+      showToast("Selecione o paciente antes de editar o convênio.", "error");
+      return;
+    }
+    setIsAddSessionModalOpen(false);
+    handleEditPatient(selectedSessionPatient, "financial");
+  };
+
   const handleDeletePatient = async (patient: any) => {
     if (!patient?.id) return;
     const patientName = normalizeUtf8Text(patient?.name || "Paciente");
@@ -4949,6 +5024,20 @@ export function CoordinatorDashboard({
     setSessionPayerNameSnapshot(String(appointment.payerName || appointment.payer_name_snapshot || ""));
     setSessionInsurancePlanName(appointmentInsurancePlanSnapshot);
     setSessionInsuranceCardNumber(appointmentInsuranceCardSnapshot);
+    setSessionInsuranceHolderName(String(
+      appointment.insuranceHolderName ||
+        appointment.insurance_holder_name ||
+        appointment.insuranceCardHolder ||
+        appointment.insurance_card_holder ||
+        "",
+    ));
+    setSessionInsuranceCardValidUntil(String(
+      appointment.insuranceCardValidUntil ||
+        appointment.insurance_card_valid_until ||
+        appointment.cardValidUntil ||
+        appointment.card_valid_until ||
+        "",
+    ));
     setSessionGuideNumber(String(appointment.guideNumber || appointment.guide_number || ""));
     setSessionAuthorizationCode(String(appointment.authorizationCode || appointment.authorization_code || ""));
     setSessionPatientTissAuthorizationId(String(appointment.patientTissAuthorizationId || appointment.patient_tiss_authorization_id || ""));
@@ -4977,6 +5066,24 @@ export function CoordinatorDashboard({
           result.data.hasContext
             ? result.data.insuranceCardNumber || ""
             : appointmentInsuranceCardSnapshot || result.data.insuranceCardNumber || "",
+        ));
+        setSessionInsuranceHolderName(String(
+          result.data.hasContext
+            ? result.data.insuranceHolderName || result.data.insuranceCardHolder || ""
+            : appointment.insuranceHolderName ||
+              appointment.insurance_holder_name ||
+              result.data.insuranceHolderName ||
+              result.data.insuranceCardHolder ||
+              "",
+        ));
+        setSessionInsuranceCardValidUntil(String(
+          result.data.hasContext
+            ? result.data.insuranceCardValidUntil || result.data.cardValidUntil || ""
+            : appointment.insuranceCardValidUntil ||
+              appointment.insurance_card_valid_until ||
+              result.data.insuranceCardValidUntil ||
+              result.data.cardValidUntil ||
+              "",
         ));
         setSessionGuideNumber(String(result.data.guideNumber || ""));
         setSessionAuthorizationCode(String(result.data.authorizationCode || ""));
@@ -11964,6 +12071,13 @@ export function CoordinatorDashboard({
                           if (nextContext !== "INSURANCE") {
                             setSessionPayerId("");
                             setSessionPayerNameSnapshot("");
+                            setSessionInsurancePlanName("");
+                            setSessionInsuranceCardNumber("");
+                            setSessionInsuranceHolderName("");
+                            setSessionInsuranceCardValidUntil("");
+                            setSessionGuideNumber("");
+                            setSessionAuthorizationCode("");
+                            setSessionPatientTissAuthorizationId("");
                           }
                         }}
                       >
@@ -12005,31 +12119,45 @@ export function CoordinatorDashboard({
                       </label>
                     )}
                     {sessionFinancialContextType === "INSURANCE" && (
-                      <label className={sessionModalLabelClass}>
-                        Plano do convênio
-                        <input
-                          className={sessionModalInputClass}
-                          value={sessionInsurancePlanName}
-                          onChange={(e) => setSessionInsurancePlanName(e.target.value)}
-                          placeholder="Ex.: S380"
-                        />
-                        {selectedSessionPatient && !sessionInsurancePlanName.trim() && (
-                          <span className="mt-1 block text-[11px] font-medium normal-case tracking-normal text-amber-700">
-                            Plano não cadastrado para este paciente.
-                          </span>
+                      <div className="sm:col-span-2 rounded-2xl border border-slate-100 bg-slate-50/70 p-3">
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                          <div>
+                            <p className="text-sm font-semibold text-slate-800">Dados do plano</p>
+                            <p className="mt-1 text-xs font-normal text-slate-500">
+                              Somente leitura no agendamento. Edite estes dados no cadastro do paciente.
+                            </p>
+                          </div>
+                          {selectedSessionPatient && (
+                            <button
+                              type="button"
+                              onClick={openSelectedSessionPatientInsuranceRegistration}
+                              className="w-fit rounded-xl border border-violet-100 bg-white px-3 py-2 text-xs font-semibold text-[#7a32fc] transition-colors hover:bg-violet-50"
+                            >
+                              Editar dados do convênio no paciente
+                            </button>
+                          )}
+                        </div>
+                        <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                          {[
+                            ["Plano", formatSessionReadonlyValue(sessionInsurancePlanName)],
+                            ["Carteirinha", formatSessionReadonlyValue(sessionInsuranceCardNumber)],
+                            ["Titular", formatSessionReadonlyValue(sessionInsuranceHolderName)],
+                            ["Validade", formatSessionReadonlyDate(sessionInsuranceCardValidUntil)],
+                          ].map(([label, value]) => (
+                            <div key={label} className="rounded-xl border border-white bg-white px-3 py-2">
+                              <p className="text-[11px] font-medium text-slate-400">{label}</p>
+                              <p className={`mt-1 text-sm font-medium ${String(value).startsWith("não cadastrad") ? "text-amber-700" : "text-slate-700"}`}>
+                                {value}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                        {selectedSessionPatient && (!sessionInsurancePlanName.trim() || !sessionInsuranceCardNumber.trim()) && (
+                          <p className="mt-2 text-[11px] font-medium text-amber-700">
+                            Complete o vínculo deste convênio no cadastro do paciente para evitar pendência na Pré-guia.
+                          </p>
                         )}
-                      </label>
-                    )}
-                    {sessionFinancialContextType === "INSURANCE" && (
-                      <label className={sessionModalLabelClass}>
-                        Número da carteirinha
-                        <input
-                          className={sessionModalInputClass}
-                          value={sessionInsuranceCardNumber}
-                          onChange={(e) => setSessionInsuranceCardNumber(e.target.value)}
-                          placeholder="Ex.: 123456789"
-                        />
-                      </label>
+                      </div>
                     )}
                     <label className={sessionModalLabelClass}>
                       Guia
@@ -13450,6 +13578,64 @@ export function CoordinatorDashboard({
                                     />
                                   </FormField>
                                 )}
+                                <FormField
+                                  label="Plano / categoria"
+                                  helperText="Fonte oficial para o agendamento quando este convênio for selecionado."
+                                >
+                                  <input
+                                    className={patientFormInputClass}
+                                    placeholder="Ex.: Unimed Nacional"
+                                    value={plan.insurancePlanName}
+                                    onChange={(e) => handleFinancialPlanChange(plan.id, "insurancePlanName", e.target.value)}
+                                  />
+                                </FormField>
+                                <FormField
+                                  label="Número da carteirinha"
+                                  helperText="Carteirinha específica deste convênio."
+                                >
+                                  <input
+                                    className={patientFormInputClass}
+                                    placeholder="Número da carteirinha"
+                                    value={plan.insuranceCardNumber}
+                                    onChange={(e) => handleFinancialPlanChange(plan.id, "insuranceCardNumber", e.target.value)}
+                                  />
+                                </FormField>
+                                <FormField
+                                  label="Titular do plano"
+                                  helperText="Preencha o titular usado por este convênio."
+                                >
+                                  <input
+                                    className={patientFormInputClass}
+                                    placeholder="Nome do titular"
+                                    value={plan.insuranceCardHolder}
+                                    onChange={(e) => handleFinancialPlanChange(plan.id, "insuranceCardHolder", e.target.value)}
+                                  />
+                                </FormField>
+                                <FormField
+                                  label="Validade da carteirinha"
+                                  helperText="Validade vinculada a este convênio."
+                                >
+                                  <input
+                                    type="date"
+                                    className={patientFormInputClass}
+                                    value={plan.insuranceCardValidUntil}
+                                    onChange={(e) => handleFinancialPlanChange(plan.id, "insuranceCardValidUntil", e.target.value)}
+                                  />
+                                </FormField>
+                                <label className="flex items-start gap-3 rounded-2xl border border-slate-100 bg-slate-50 p-3 text-xs font-medium text-slate-600 xl:col-span-2">
+                                  <input
+                                    type="checkbox"
+                                    className="mt-0.5 h-4 w-4 rounded border-slate-300 text-[#7a32fc]"
+                                    checked={Boolean(plan.isPrimaryInsurance)}
+                                    onChange={(e) => handleFinancialPlanChange(plan.id, "isPrimaryInsurance", e.target.checked)}
+                                  />
+                                  <span>
+                                    <span className="block text-slate-800">Convênio principal/atual</span>
+                                    <span className="mt-1 block text-slate-500">
+                                      Usado como preferência ao criar novos agendamentos de convênio.
+                                    </span>
+                                  </span>
+                                </label>
                                 <FormField label="Coparticipação">
                                   <input
                                     className={patientFormInputClass}
