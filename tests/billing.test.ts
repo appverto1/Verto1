@@ -494,6 +494,31 @@ test('modal de cobranca e pagamento tem scroll interno e footer fixo', () => {
   assert.doesNotMatch(paymentModal, /rounded-\[32px\] p-8/);
 });
 
+test('financeiro consolida origem da receita e remove cabecalho duplicado do dashboard', () => {
+  const payerLotsView = sliceFrom(coordinatorCode, 'data-financial-payer-lots-view', 5200);
+  assert.match(coordinatorCode, /normalizeRevenueOriginLabel/);
+  assert.match(coordinatorCode, /financialRevenueOriginRows/);
+  assert.match(payerLotsView, /financialRevenueOriginRows\.map/);
+  assert.match(payerLotsView, /Detalhe dos conv/);
+  assert.match(payerLotsView, /Total/);
+  assert.doesNotMatch(payerLotsView, /payerRows\.concat\(financialDashboard\.billingMethodRows\)/);
+  const genericFinancialHeader = sliceFrom(coordinatorCode, '!isFinancialDashboardSection && (', 7200);
+  assert.match(genericFinancialHeader, /data-financial-clinic-internal-nav/);
+});
+
+test('financeiro usa cores semanticas e nomenclatura profissional real', () => {
+  assert.match(coordinatorCode, /getFinancialSemanticValueClass/);
+  assert.match(coordinatorCode, /text-emerald-600/);
+  assert.match(coordinatorCode, /text-rose-600/);
+  assert.match(coordinatorCode, /formatProfessionalDisplayLabel/);
+  assert.match(coordinatorCode, /stripGenericProfessionalPrefix/);
+  assert.match(coordinatorCode, /professionalDisplayName/);
+  assert.doesNotMatch(coordinatorCode, /Terapeuta: /);
+  const transferPanel = sliceFrom(coordinatorCode, 'data-professional-transfers-panel', 7600);
+  assert.match(transferPanel, /payment\.professionalDisplayName/);
+  assert.doesNotMatch(transferPanel, /payment\.professional_name \|\| payment\.professionalName \|\| "Profissional"/);
+});
+
 test('tela de repasses renderiza filtros, status e exige motivo para ajuste manual', () => {
   assert.match(coordinatorCode, /data-professional-transfers-panel/);
   assert.match(coordinatorCode, /Repasses a profissionais/);

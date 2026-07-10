@@ -24,6 +24,12 @@ const patientDefaultMigrationCode = readFileSync(join(root, 'supabase/migrations
 const tests: Array<{ name: string; fn: () => void }> = [];
 const test = (name: string, fn: () => void) => tests.push({ name, fn });
 
+function sliceFrom(source: string, marker: string, chars = 4000) {
+  const start = source.indexOf(marker);
+  assert.ok(start >= 0, `${marker} nao encontrado.`);
+  return source.slice(start, start + chars);
+}
+
 test('endpoint de contexto faz upsert idempotente por consulta', () => {
   assert.match(serverCode, /app\.get\('\/api\/appointments\/:appointmentId\/billing-context'/);
   assert.match(serverCode, /app\.patch\('\/api\/appointments\/:appointmentId\/billing-context'/);
@@ -158,6 +164,21 @@ test('agendamento faturavel exige contexto financeiro explicito', () => {
   assert.match(serverCode, /appointmentRequiresFinancialContext/);
   assert.match(serverCode, /APPOINTMENT_FINANCIAL_CONTEXT_ERROR/);
   assert.match(serverCode, /Selecione um pagador\/convênio cadastrado ou escolha outro contexto financeiro válido\./);
+});
+
+test('agendamento particular oculta e limpa guia autorizacao e senha', () => {
+  const modal = sliceFrom(coordinatorCode, '{isAddSessionModalOpen && (', 70000);
+  assert.match(modal, /Atendimento particular, sem pagador de conv.nio/);
+  assert.match(modal, /sessionFinancialContextType === "INSURANCE" \? \(/);
+  assert.match(modal, /Guia[\s\S]*Autorização\/senha/);
+  assert.match(coordinatorCode, /guideNumber: sessionFinancialContextType === "INSURANCE" \? sessionGuideNumber : ""/);
+  assert.match(coordinatorCode, /authorizationCode: sessionFinancialContextType === "INSURANCE" \? sessionAuthorizationCode : ""/);
+  assert.match(coordinatorCode, /patientTissAuthorizationId: sessionFinancialContextType === "INSURANCE" \? sessionPatientTissAuthorizationId \|\| null : null/);
+  assert.match(coordinatorCode, /guideNumber: sessionFinancialContextType === "INSURANCE" \? sessionGuideNumber \|\| null : null/);
+  assert.match(coordinatorCode, /authorizationCode: sessionFinancialContextType === "INSURANCE" \? sessionAuthorizationCode \|\| null : null/);
+  assert.match(coordinatorCode, /setSessionGuideNumber\(""\)/);
+  assert.match(coordinatorCode, /setSessionAuthorizationCode\(""\)/);
+  assert.match(coordinatorCode, /setSessionPatientTissAuthorizationId\(""\)/);
 });
 
 test('criacao e edicao da consulta exibem e persistem plano e carteirinha', () => {
