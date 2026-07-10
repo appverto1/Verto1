@@ -287,12 +287,21 @@ test('remarcacao do portal usa jornada semanal, almoco e bloqueios do profission
 test('configuracao de jornada profissional persiste no perfil e exige permissao administrativa', () => {
   assert.match(serverCode, /app\.get\('\/api\/clinic\/members\/:memberId\/work-schedule'/);
   assert.match(serverCode, /app\.patch\('\/api\/clinic\/members\/:memberId\/work-schedule'/);
+  assert.match(serverCode, /app\.post\('\/api\/clinic\/members\/:memberId\/work-schedule\/apply'/);
   assert.match(serverCode, /requireRoles\('coordinator', 'admin', 'owner'\)/);
   assert.match(serverCode, /assertClinicMemberForWorkSchedule/);
   assert.match(serverCode, /metadata[^]*workSchedule/);
+  assert.match(serverCode, /preserveExceptions/);
+  assert.match(serverCode, /upsert\(payloads/);
   assert.match(teamManagementCode, /Hor.rios de trabalho/);
   assert.match(teamManagementCode, /Exce..es e bloqueios/);
   assert.match(teamManagementCode, /updateMemberWorkSchedule/);
+  assert.match(teamManagementCode, /applyMemberWorkSchedule/);
+  assert.match(teamManagementCode, /Aplicar escala para outros profissionais/);
+  assert.match(teamManagementCode, /Mesmo t.tulo profissional/);
+  assert.match(teamManagementCode, /Preservar exce..es e bloqueios individuais futuros/);
+  assert.match(teamManagementCode, /normalizeWorkScheduleDraftForSave/);
+  assert.match(teamManagementCode, /formato HH:mm/);
   assert.match(teamManagementCode, /Salvar hor.rios/);
 });
 

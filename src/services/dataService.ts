@@ -6025,6 +6025,27 @@ export const dataService = {
     }
   },
 
+  async applyMemberWorkSchedule(memberId: string, payload: {
+    workSchedule: any;
+    targetMode?: string;
+    targetMemberIds?: string[];
+    preserveExceptions?: boolean;
+  }) {
+    try {
+      const response = await fetch(`/api/clinic/members/${encodeURIComponent(String(memberId))}/work-schedule/apply`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      });
+      const result = await safeJson(response);
+      return response.ok ? result : { success: false, error: result?.error || 'Não foi possível aplicar escala em massa.' };
+    } catch (error) {
+      console.error('Error applying member work schedule:', error);
+      return { success: false, error: String(error) };
+    }
+  },
+
   async getClinicAnamnesisTemplate(workspaceId?: string) {
     try {
       const response = await fetch('/api/clinic/anamnesis-template', {

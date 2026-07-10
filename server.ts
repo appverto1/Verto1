@@ -16180,6 +16180,132 @@ async function startServer() {
     }
   });
 
+  app.post('/api/clinic/members/:memberId/work-schedule/apply', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 128 * 1024, 'Aplicação de escala')) return;
+      const clinicId = currentClinicId(req.session.user);
+      const sourceMemberId = sanitizeString(req.params.memberId, 120);
+      const sourceMembership = await assertClinicMemberForWorkSchedule(clinicId, sourceMemberId);
+      if (!sourceMembership) return res.status(404).json({ success: false, error: 'Profissional de origem não encontrado nesta clínica.' });
+
+      const targetModeRaw = sanitizeString(req.body?.targetMode || req.body?.target_mode, 40);
+      const targetMode = ['selected', 'attendance', 'sameRole', 'sameProfile'].includes(targetModeRaw) ? targetModeRaw : 'selected';
+      const selectedTargetIds = Array.from(new Set(
+        (Array.isArray(req.body?.targetMemberIds || req.body?.target_member_ids)
+          ? (req.body.targetMemberIds || req.body.target_member_ids)
+          : [])
+          .map((item: any) => sanitizeString(item, 120))
+          .filter((item: string) => isUuid(item) && item !== sourceMemberId)
+      ));
+      const preserveExceptions = req.body?.preserveExceptions !== false && req.body?.preserve_exceptions !== false;
+
+      let membershipQuery = supabase
+        .from('clinic_memberships')
+        .select('user_id,role,status')
+        .eq('clinic_id', clinicId)
+        .eq('status', 'active');
+
+      if (targetMode === 'selected' || targetMode === 'sameProfile') {
+        if (selectedTargetIds.length === 0) {
+          return res.status(400).json({ success: false, error: 'Selecione pelo menos um profissional para receber a escala.' });
+        }
+        membershipQuery = membershipQuery.in('user_id', selectedTargetIds);
+      } else if (targetMode === 'attendance') {
+        membershipQuery = membershipQuery.in('role', ['therapist', 'coordinator']);
+      } else {
+        const sourceRole = sanitizeString(sourceMembership.role, 40);
+        if (sourceRole === 'therapist' || sourceRole === 'coordinator') {
+          membershipQuery = membershipQuery.in('role', ['therapist', 'coordinator']);
+        } else {
+          membershipQuery = membershipQuery.eq('role', sourceRole);
+        }
+      }
+
+      const { data: targetMemberships, error: membershipError } = await membershipQuery;
+      if (membershipError) throw membershipError;
+
+      const targetIds = Array.from(new Set(
+        (targetMemberships || [])
+          .map((membership: any) => sanitizeString(membership?.user_id, 120))
+          .filter((item: string) => isUuid(item) && item !== sourceMemberId)
+      )).slice(0, 250);
+
+      if ((targetMode === 'selected' || targetMode === 'sameProfile') && targetIds.length !== selectedTargetIds.length) {
+        return res.status(403).json({ success: false, error: 'Um ou mais profissionais selecionados não pertencem a esta clínica.' });
+      }
+      if (targetIds.length === 0) {
+        return res.status(400).json({ success: false, error: 'Nenhum profissional elegível encontrado para receber a escala.' });
+      }
+
+      const rawSchedule = req.body?.workSchedule || req.body?.work_schedule || {};
+      const workSchedule = sanitizeProfessionalWorkingSchedule(rawSchedule, asSafeNumber(rawSchedule?.defaultSessionDurationMinutes, 15, 360) || 50);
+
+      const profilesByUserId = new Map<string, any>();
+      const { data: existingProfiles, error: profileError } = await supabase
+        .from('professional_profiles')
+        .select('user_id,full_name,metadata')
+        .in('user_id', targetIds);
+      if (profileError && !isMissingRelationError(profileError)) throw profileError;
+      (existingProfiles || []).forEach((profile: any) => {
+        const userId = sanitizeString(profile?.user_id, 120);
+        if (userId) profilesByUserId.set(userId, profile);
+      });
+
+      const now = new Date().toISOString();
+      const actorId = sanitizeString(req.session.user?.id, 120) || null;
+      const payloads = targetIds.map((targetId) => {
+        const existingProfile = profilesByUserId.get(targetId) || {};
+        const currentMetadata = existingProfile?.metadata && typeof existingProfile.metadata === 'object'
+          ? existingProfile.metadata
+          : {};
+        const existingSchedule = readProfessionalWorkingScheduleFromMetadata(currentMetadata, workSchedule.defaultSessionDurationMinutes || 50);
+        const nextSchedule = cleanObject({
+          ...workSchedule,
+          exceptions: preserveExceptions ? (existingSchedule?.exceptions || []) : (workSchedule.exceptions || [])
+        });
+        return cleanObject({
+          user_id: targetId,
+          full_name: sanitizeString(existingProfile?.full_name, 180) || undefined,
+          metadata: cleanObject({
+            ...currentMetadata,
+            workSchedule: nextSchedule,
+            work_schedule: nextSchedule,
+            defaultSessionDurationMinutes: workSchedule.defaultSessionDurationMinutes,
+            sessionDurationMinutes: currentMetadata?.sessionDurationMinutes || workSchedule.defaultSessionDurationMinutes,
+            workScheduleUpdatedAt: now,
+            workScheduleUpdatedBy: actorId,
+            workScheduleBulkAppliedFrom: sourceMemberId,
+            workScheduleBulkAppliedAt: now,
+            workSchedulePreservedExceptions: preserveExceptions
+          }),
+          updated_at: now
+        });
+      });
+
+      const { error: upsertError } = await supabase
+        .from('professional_profiles')
+        .upsert(payloads, { onConflict: 'user_id' });
+      if (upsertError) throw upsertError;
+
+      return res.json({
+        success: true,
+        data: {
+          sourceMemberId,
+          affectedMemberIds: targetIds,
+          affectedCount: targetIds.length,
+          targetMode,
+          preserveExceptions
+        },
+        message: `Escala aplicada para ${targetIds.length} profissional(is).`
+      });
+    } catch (error: any) {
+      logRouteDbError('/api/clinic/members/:memberId/work-schedule/apply [POST]', error, {
+        memberId: sanitizeString(req.params?.memberId, 120)
+      });
+      return res.status(500).json({ success: false, error: 'Não foi possível aplicar a escala em massa.' });
+    }
+  });
+
   app.post('/api/clinic/invite', inviteLimiter, checkAuth, async (req: any, res) => {
     try {
       const email = sanitizeEmail(req.body?.email);

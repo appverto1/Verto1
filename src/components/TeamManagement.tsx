@@ -24,11 +24,14 @@ interface Member {
   name: string;
   email: string;
   role: 'coordinator' | 'therapist' | 'receptionist' | 'patient' | 'admin';
+  profileRole?: string | null;
   clinic_id: string;
   created_at: string;
   workSchedule?: any;
   workScheduleConfigured?: boolean;
 }
+
+type BulkScheduleTargetMode = 'selected' | 'attendance' | 'sameRole' | 'sameProfile';
 
 const PROFESSIONALS_PER_ACTIVE_PATIENT = 10;
 const MIN_TEAM_ACCESS_LIMIT = 10;
@@ -56,6 +59,109 @@ const buildDefaultWorkSchedule = () => ({
   }, {} as Record<string, any>),
   exceptions: []
 });
+
+const TIME_INPUT_PATTERN = /^([01]?\d|2[0-3]):[0-5]\d$/;
+
+const normalizeScheduleTimeInput = (value: string) => {
+  const text = String(value || '').trim();
+  const match = text.match(TIME_INPUT_PATTERN);
+  if (!match) return null;
+  const [hour, minute] = text.split(':');
+  return `${hour.padStart(2, '0')}:${minute}`;
+};
+
+const timeToMinutes = (value: string) => {
+  const normalized = normalizeScheduleTimeInput(value);
+  if (!normalized) return null;
+  const [hour, minute] = normalized.split(':').map(Number);
+  return hour * 60 + minute;
+};
+
+const isAttendanceProfessional = (member: Member) => member.role === 'therapist' || member.role === 'coordinator';
+
+const hasSameOperationalRole = (member: Member, reference: Member | null) => {
+  if (!reference) return false;
+  if (member.role === reference.role) return true;
+  return isAttendanceProfessional(member) && isAttendanceProfessional(reference);
+};
+
+const buildScheduleValidationError = (label: string, field: string) => `${label}: informe ${field} no formato HH:mm.`;
+
+const normalizeSchedulePeriodForSave = (period: any, dayLabel: string, periodLabel: string) => {
+  const rawStart = String(period?.start || '').trim();
+  const rawEnd = String(period?.end || '').trim();
+  if (!rawStart && !rawEnd) return { period: null, error: null };
+  const start = normalizeScheduleTimeInput(rawStart);
+  const end = normalizeScheduleTimeInput(rawEnd);
+  if (!start) return { period: null, error: buildScheduleValidationError(`${dayLabel} · ${periodLabel}`, 'início') };
+  if (!end) return { period: null, error: buildScheduleValidationError(`${dayLabel} · ${periodLabel}`, 'fim') };
+  const startMinutes = timeToMinutes(start);
+  const endMinutes = timeToMinutes(end);
+  if (startMinutes === null || endMinutes === null || startMinutes >= endMinutes) {
+    return { period: null, error: `${dayLabel} · ${periodLabel}: o início deve ser anterior ao fim.` };
+  }
+  return { period: { start, end }, error: null };
+};
+
+const normalizeWorkScheduleDraftForSave = (draft: any) => {
+  const base = draft || buildDefaultWorkSchedule();
+  const days = WORK_SCHEDULE_DAYS.reduce((acc, day) => {
+    const current = base.days?.[day.key] || { enabled: false, periods: [], intervals: [] };
+    if (current.enabled === false) {
+      acc[day.key] = { enabled: false, periods: [], intervals: [] };
+      return acc;
+    }
+
+    const rawPeriods = Array.isArray(current.periods) && current.periods.length > 0
+      ? current.periods.slice(0, 2)
+      : [{ start: '', end: '' }, { start: '', end: '' }];
+    const normalizedPeriods: any[] = [];
+    for (let index = 0; index < 2; index += 1) {
+      const result = normalizeSchedulePeriodForSave(rawPeriods[index] || {}, day.label, index === 0 ? 'Manhã' : 'Tarde');
+      if (result.error) throw new Error(result.error);
+      if (result.period) normalizedPeriods.push(result.period);
+    }
+    if (normalizedPeriods.length === 0) {
+      throw new Error(`${day.label}: informe pelo menos um período de atendimento.`);
+    }
+
+    const rawLunch = Array.isArray(current.intervals) && current.intervals[0] ? current.intervals[0] : {};
+    const lunchResult = normalizeSchedulePeriodForSave(rawLunch, day.label, 'Intervalo/almoço');
+    if (lunchResult.error) throw new Error(lunchResult.error);
+
+    acc[day.key] = {
+      enabled: true,
+      periods: normalizedPeriods,
+      intervals: lunchResult.period ? [lunchResult.period] : []
+    };
+    return acc;
+  }, {} as Record<string, any>);
+
+  const exceptions = (Array.isArray(base.exceptions) ? base.exceptions : []).map((exception: any, index: number) => {
+    const date = String(exception?.date || '').trim();
+    if (!date) throw new Error(`Bloqueio ${index + 1}: informe a data.`);
+    const result = normalizeSchedulePeriodForSave(exception, `Bloqueio ${index + 1}`, 'horário');
+    if (result.error) throw new Error(result.error);
+    return {
+      ...exception,
+      date,
+      start: result.period?.start,
+      end: result.period?.end,
+      blocksAvailability: exception?.blocksAvailability !== false,
+      active: exception?.active !== false
+    };
+  });
+
+  return {
+    ...base,
+    defaultSessionDurationMinutes: Number(base.defaultSessionDurationMinutes || base.stepMinutes || 50),
+    stepMinutes: Number(base.stepMinutes || base.defaultSessionDurationMinutes || 50),
+    minLeadMinutes: Number(base.minLeadMinutes ?? 120),
+    maxSlotsPerDay: Number(base.maxSlotsPerDay || 8),
+    days,
+    exceptions
+  };
+};
 
 export function TeamManagement({
   user,
@@ -88,6 +194,12 @@ export function TeamManagement({
   const [workScheduleLoadingId, setWorkScheduleLoadingId] = useState<string | null>(null);
   const [workScheduleSaving, setWorkScheduleSaving] = useState(false);
   const [workScheduleNewException, setWorkScheduleNewException] = useState({ date: '', start: '08:00', end: '12:00', type: 'Bloqueio manual' });
+  const [workScheduleValidationError, setWorkScheduleValidationError] = useState<string | null>(null);
+  const [bulkApplyOpen, setBulkApplyOpen] = useState(false);
+  const [bulkTargetMode, setBulkTargetMode] = useState<BulkScheduleTargetMode>('selected');
+  const [bulkSelectedMemberIds, setBulkSelectedMemberIds] = useState<string[]>([]);
+  const [bulkPreserveExceptions, setBulkPreserveExceptions] = useState(true);
+  const [bulkApplying, setBulkApplying] = useState(false);
 
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
 
@@ -252,6 +364,11 @@ export function TeamManagement({
     setEditingScheduleMember(member);
     setWorkScheduleDraft(member.workSchedule || buildDefaultWorkSchedule());
     setWorkScheduleNewException({ date: '', start: '08:00', end: '12:00', type: 'Bloqueio manual' });
+    setWorkScheduleValidationError(null);
+    setBulkApplyOpen(false);
+    setBulkTargetMode('selected');
+    setBulkSelectedMemberIds([]);
+    setBulkPreserveExceptions(true);
     setError(null);
     setSuccess(null);
     setOpenMenuId(null);
@@ -300,9 +417,42 @@ export function TeamManagement({
     });
   };
 
+  const normalizeScheduleFieldOnBlur = (dayKey: string, kind: 'period' | 'lunch', index: number, field: 'start' | 'end') => {
+    const day = workScheduleDraft?.days?.[dayKey];
+    const value = kind === 'lunch'
+      ? day?.intervals?.[0]?.[field]
+      : day?.periods?.[index]?.[field];
+    const normalized = normalizeScheduleTimeInput(String(value || ''));
+    if (!normalized) return;
+    if (kind === 'lunch') {
+      updateScheduleLunch(dayKey, field, normalized);
+    } else {
+      updateSchedulePeriod(dayKey, index, field, normalized);
+    }
+  };
+
+  const normalizeExceptionFieldOnBlur = (field: 'start' | 'end') => {
+    const normalized = normalizeScheduleTimeInput(String(workScheduleNewException[field] || ''));
+    if (normalized) {
+      setWorkScheduleNewException((prev) => ({ ...prev, [field]: normalized }));
+    }
+  };
+
   const addWorkScheduleException = () => {
     if (!workScheduleNewException.date) {
-      setError('Informe a data do bloqueio.');
+      setWorkScheduleValidationError('Informe a data do bloqueio.');
+      return;
+    }
+    const start = normalizeScheduleTimeInput(workScheduleNewException.start);
+    const end = normalizeScheduleTimeInput(workScheduleNewException.end);
+    if (!start || !end) {
+      setWorkScheduleValidationError('Informe horários do bloqueio no formato HH:mm.');
+      return;
+    }
+    const startMinutes = timeToMinutes(start);
+    const endMinutes = timeToMinutes(end);
+    if (startMinutes === null || endMinutes === null || startMinutes >= endMinutes) {
+      setWorkScheduleValidationError('No bloqueio, o início deve ser anterior ao fim.');
       return;
     }
     setWorkScheduleDraft((prev: any) => {
@@ -311,12 +461,12 @@ export function TeamManagement({
         ...base,
         exceptions: [
           ...(Array.isArray(base.exceptions) ? base.exceptions : []),
-          { ...workScheduleNewException, blocksAvailability: true, active: true }
+          { ...workScheduleNewException, start, end, blocksAvailability: true, active: true }
         ]
       };
     });
     setWorkScheduleNewException({ date: '', start: '08:00', end: '12:00', type: 'Bloqueio manual' });
-    setError(null);
+    setWorkScheduleValidationError(null);
   };
 
   const removeWorkScheduleException = (index: number) => {
@@ -331,20 +481,95 @@ export function TeamManagement({
     setWorkScheduleSaving(true);
     setError(null);
     setSuccess(null);
+    setWorkScheduleValidationError(null);
     try {
-      const result = await dataService.updateMemberWorkSchedule(editingScheduleMember.id, workScheduleDraft);
+      const normalizedSchedule = normalizeWorkScheduleDraftForSave(workScheduleDraft);
+      const result = await dataService.updateMemberWorkSchedule(editingScheduleMember.id, normalizedSchedule);
       if (!result?.success) {
         setError(result?.error || 'Não foi possível salvar horários de trabalho.');
         return;
       }
-      const savedSchedule = result.data?.workSchedule || workScheduleDraft;
+      const savedSchedule = result.data?.workSchedule || normalizedSchedule;
       setMembers((prev) => prev.map((member) => member.id === editingScheduleMember.id ? { ...member, workSchedule: savedSchedule, workScheduleConfigured: true } : member));
       setWorkScheduleDraft(savedSchedule);
       setSuccess('Horários de trabalho salvos.');
     } catch (err) {
-      setError('Erro ao salvar horários de trabalho.');
+      setWorkScheduleValidationError(err instanceof Error ? err.message : 'Erro ao salvar horários de trabalho.');
     } finally {
       setWorkScheduleSaving(false);
+    }
+  };
+
+  const getBulkTargetMembers = () => {
+    if (!editingScheduleMember) return [];
+    if (bulkTargetMode === 'attendance') {
+      return members.filter((member) => member.id !== editingScheduleMember.id && isAttendanceProfessional(member));
+    }
+    if (bulkTargetMode === 'sameRole') {
+      return members.filter((member) => member.id !== editingScheduleMember.id && hasSameOperationalRole(member, editingScheduleMember));
+    }
+    if (bulkTargetMode === 'sameProfile') {
+      const referenceProfile = String(editingScheduleMember.profileRole || '').trim().toLowerCase();
+      if (!referenceProfile) return [];
+      return members.filter((member) => member.id !== editingScheduleMember.id && String(member.profileRole || '').trim().toLowerCase() === referenceProfile);
+    }
+    return members.filter((member) => bulkSelectedMemberIds.includes(member.id));
+  };
+
+  const toggleBulkMember = (memberId: string) => {
+    setBulkSelectedMemberIds((prev) => prev.includes(memberId) ? prev.filter((id) => id !== memberId) : [...prev, memberId]);
+  };
+
+  const applyWorkScheduleInBulk = async () => {
+    if (!editingScheduleMember?.id || !workScheduleDraft) return;
+    setBulkApplying(true);
+    setError(null);
+    setSuccess(null);
+    setWorkScheduleValidationError(null);
+    try {
+      const normalizedSchedule = normalizeWorkScheduleDraftForSave(workScheduleDraft);
+      const targetMembers = getBulkTargetMembers();
+      if (targetMembers.length === 0) {
+        setWorkScheduleValidationError('Selecione pelo menos um profissional para receber a escala.');
+        return;
+      }
+      const confirmed = window.confirm(
+        `Você está prestes a aplicar esta escala para ${targetMembers.length} profissional(is).\n\nIsso substituirá a jornada semanal desses profissionais.${bulkPreserveExceptions ? '\nExceções individuais futuras serão preservadas.' : '\nExceções individuais também serão substituídas.'}`
+      );
+      if (!confirmed) return;
+
+      const result = await dataService.applyMemberWorkSchedule(editingScheduleMember.id, {
+        workSchedule: normalizedSchedule,
+        targetMode: bulkTargetMode,
+        targetMemberIds: targetMembers.map((member) => member.id),
+        preserveExceptions: bulkPreserveExceptions
+      });
+
+      if (!result?.success) {
+        setError(result?.error || 'Não foi possível aplicar a escala em massa.');
+        return;
+      }
+
+      const affectedIds = new Set<string>(result.data?.affectedMemberIds || targetMembers.map((member) => member.id));
+      setMembers((prev) => prev.map((member) => {
+        if (!affectedIds.has(member.id)) return member;
+        const preservedExceptions = bulkPreserveExceptions && Array.isArray(member.workSchedule?.exceptions)
+          ? member.workSchedule.exceptions
+          : normalizedSchedule.exceptions;
+        return {
+          ...member,
+          workSchedule: { ...normalizedSchedule, exceptions: preservedExceptions },
+          workScheduleConfigured: true
+        };
+      }));
+      setWorkScheduleDraft(normalizedSchedule);
+      setBulkApplyOpen(false);
+      setBulkSelectedMemberIds([]);
+      setSuccess(result.message || `Escala aplicada para ${affectedIds.size} profissional(is).`);
+    } catch (err) {
+      setWorkScheduleValidationError(err instanceof Error ? err.message : 'Erro ao aplicar escala em massa.');
+    } finally {
+      setBulkApplying(false);
     }
   };
 
@@ -370,6 +595,10 @@ export function TeamManagement({
   );
   const pendingInvitations = invitations.filter((inv) => String(inv?.status || '').toLowerCase() === 'pending');
   const invitationHistory = invitations.filter((inv) => String(inv?.status || '').toLowerCase() !== 'pending');
+  const bulkManualCandidates = editingScheduleMember
+    ? members.filter((member) => member.id !== editingScheduleMember.id && member.role !== 'patient')
+    : [];
+  const bulkPreviewMembers = getBulkTargetMembers();
 
   return (
     <div className="p-6 max-w-6xl mx-auto font-sans">
@@ -526,166 +755,329 @@ export function TeamManagement({
           </div>
         </div>
 
-        {editingScheduleMember && workScheduleDraft && (
-          <div className="lg:col-span-2 bg-white rounded-[28px] border border-slate-100 shadow-sm overflow-hidden">
-            <div className="flex flex-col gap-3 border-b border-slate-100 p-5 md:flex-row md:items-center md:justify-between">
-              <div>
-                <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-purple-500">Horários de trabalho</p>
-                <h2 className="mt-1 text-lg font-semibold text-slate-900">{editingScheduleMember.name}</h2>
-                <p className="mt-1 text-xs text-slate-500">Esses horários alimentam as opções reais de remarcação no portal do paciente.</p>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => setEditingScheduleMember(null)}
-                  className="rounded-2xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
-                >
-                  Fechar
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void saveWorkSchedule()}
-                  disabled={workScheduleSaving || workScheduleLoadingId === editingScheduleMember.id}
-                  className="rounded-2xl bg-[#7a32fc] px-4 py-2 text-xs font-semibold text-white shadow-sm disabled:opacity-60"
-                >
-                  {workScheduleSaving ? 'Salvando...' : workScheduleLoadingId === editingScheduleMember.id ? 'Carregando...' : 'Salvar horários'}
-                </button>
-              </div>
-            </div>
-
-            <div className="grid gap-4 p-5 xl:grid-cols-[1fr_280px]">
-              <div className="space-y-3">
-                <div className="grid gap-2 rounded-2xl bg-slate-50 p-3 md:grid-cols-3">
-                  <label className="text-xs font-medium text-slate-600">
-                    Duração padrão
-                    <select
-                      value={String(workScheduleDraft.defaultSessionDurationMinutes || workScheduleDraft.stepMinutes || '50')}
-                      onChange={(event) => setWorkScheduleDraft((prev: any) => ({ ...(prev || buildDefaultWorkSchedule()), defaultSessionDurationMinutes: Number(event.target.value), stepMinutes: Number(event.target.value) }))}
-                      className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 outline-none focus:border-purple-300"
-                    >
-                      <option value="30">30 min</option>
-                      <option value="45">45 min</option>
-                      <option value="50">50 min</option>
-                      <option value="60">60 min</option>
-                      <option value="90">90 min</option>
-                    </select>
-                  </label>
-                  <label className="text-xs font-medium text-slate-600">
-                    Antecedência mínima
-                    <select
-                      value={String(workScheduleDraft.minLeadMinutes || 120)}
-                      onChange={(event) => setWorkScheduleDraft((prev: any) => ({ ...(prev || buildDefaultWorkSchedule()), minLeadMinutes: Number(event.target.value) }))}
-                      className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 outline-none focus:border-purple-300"
-                    >
-                      <option value="0">Sem trava</option>
-                      <option value="120">2 horas</option>
-                      <option value="1440">1 dia</option>
-                      <option value="2880">2 dias</option>
-                    </select>
-                  </label>
-                  <label className="text-xs font-medium text-slate-600">
-                    Slots por dia
-                    <input
-                      type="number"
-                      min={1}
-                      max={24}
-                      value={Number(workScheduleDraft.maxSlotsPerDay || 8)}
-                      onChange={(event) => setWorkScheduleDraft((prev: any) => ({ ...(prev || buildDefaultWorkSchedule()), maxSlotsPerDay: Number(event.target.value) || 8 }))}
-                      className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 outline-none focus:border-purple-300"
-                    />
-                  </label>
-                </div>
-
-                {WORK_SCHEDULE_DAYS.map((day) => {
-                  const dayDraft = workScheduleDraft.days?.[day.key] || { enabled: false, periods: [], intervals: [] };
-                  const periods = Array.isArray(dayDraft.periods) && dayDraft.periods.length > 0
-                    ? dayDraft.periods
-                    : [{ start: '08:00', end: '12:00' }, { start: '13:00', end: '17:00' }];
-                  const lunch = Array.isArray(dayDraft.intervals) && dayDraft.intervals[0] ? dayDraft.intervals[0] : { start: '12:00', end: '13:00' };
-                  return (
-                    <div key={day.key} className="rounded-2xl border border-slate-100 p-3">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <label className="flex items-center gap-2 text-sm font-semibold text-slate-800">
-                          <input
-                            type="checkbox"
-                            checked={dayDraft.enabled !== false}
-                            onChange={(event) => updateScheduleDay(day.key, (current) => ({ ...current, enabled: event.target.checked }))}
-                            className="accent-[#7a32fc]"
-                          />
-                          {day.label}
-                        </label>
-                        <span className="text-[11px] font-medium text-slate-400">{dayDraft.enabled === false ? 'Não atende' : 'Atendimento configurado'}</span>
-                      </div>
-                      {dayDraft.enabled !== false && (
-                        <div className="mt-3 grid gap-2 md:grid-cols-3">
-                          {[0, 1].map((periodIndex) => (
-                            <div key={periodIndex} className="rounded-xl bg-slate-50 p-2">
-                              <p className="mb-1 text-[11px] font-medium text-slate-500">{periodIndex === 0 ? 'Manhã' : 'Tarde'}</p>
-                              <div className="grid grid-cols-2 gap-2">
-                                <input type="time" value={periods[periodIndex]?.start || (periodIndex === 0 ? '08:00' : '13:00')} onChange={(event) => updateSchedulePeriod(day.key, periodIndex, 'start', event.target.value)} className="rounded-lg border border-slate-200 px-2 py-2 text-xs font-medium text-slate-700" />
-                                <input type="time" value={periods[periodIndex]?.end || (periodIndex === 0 ? '12:00' : '17:00')} onChange={(event) => updateSchedulePeriod(day.key, periodIndex, 'end', event.target.value)} className="rounded-lg border border-slate-200 px-2 py-2 text-xs font-medium text-slate-700" />
-                              </div>
-                            </div>
-                          ))}
-                          <div className="rounded-xl bg-purple-50/60 p-2">
-                            <p className="mb-1 text-[11px] font-medium text-purple-600">Almoço / intervalo</p>
-                            <div className="grid grid-cols-2 gap-2">
-                              <input type="time" value={lunch.start || '12:00'} onChange={(event) => updateScheduleLunch(day.key, 'start', event.target.value)} className="rounded-lg border border-purple-100 px-2 py-2 text-xs font-medium text-slate-700" />
-                              <input type="time" value={lunch.end || '13:00'} onChange={(event) => updateScheduleLunch(day.key, 'end', event.target.value)} className="rounded-lg border border-purple-100 px-2 py-2 text-xs font-medium text-slate-700" />
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-
-              <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-                <h3 className="text-sm font-semibold text-slate-900">Exceções e bloqueios</h3>
-                <p className="mt-1 text-xs text-slate-500">Folgas, reuniões e bloqueios removem disponibilidade sem apagar consultas.</p>
-                <div className="mt-4 space-y-2">
-                  <input type="date" value={workScheduleNewException.date} onChange={(event) => setWorkScheduleNewException((prev) => ({ ...prev, date: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700" />
-                  <div className="grid grid-cols-2 gap-2">
-                    <input type="time" value={workScheduleNewException.start} onChange={(event) => setWorkScheduleNewException((prev) => ({ ...prev, start: event.target.value }))} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700" />
-                    <input type="time" value={workScheduleNewException.end} onChange={(event) => setWorkScheduleNewException((prev) => ({ ...prev, end: event.target.value }))} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700" />
+        <AnimatePresence>
+          {editingScheduleMember && workScheduleDraft && (
+            <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/35 p-3 md:p-6">
+              <div className="flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-2xl">
+                <div className="flex flex-col gap-4 border-b border-slate-100 px-5 py-4 md:flex-row md:items-center md:justify-between">
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium text-purple-600">Horários de trabalho</p>
+                    <h2 className="mt-1 truncate text-xl font-semibold text-slate-900">{editingScheduleMember.name}</h2>
+                    <p className="mt-1 text-sm text-slate-500">Jornada usada para agenda e opções reais de remarcação no portal.</p>
                   </div>
-                  <select value={workScheduleNewException.type} onChange={(event) => setWorkScheduleNewException((prev) => ({ ...prev, type: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700">
-                    <option>Bloqueio manual</option>
-                    <option>Folga</option>
-                    <option>Férias</option>
-                    <option>Reunião interna</option>
-                    <option>Curso/supervisão</option>
-                    <option>Feriado</option>
-                    <option>Atendimento externo</option>
-                  </select>
-                  <button type="button" onClick={addWorkScheduleException} className="w-full rounded-xl border border-purple-200 bg-white px-3 py-2 text-xs font-semibold text-[#7a32fc] hover:bg-purple-50">
-                    Adicionar bloqueio
-                  </button>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setBulkApplyOpen((prev) => !prev)}
+                      className="rounded-2xl border border-purple-200 bg-purple-50 px-4 py-2.5 text-sm font-medium text-[#6f2cf5] hover:bg-purple-100"
+                    >
+                      Aplicar escala para outros
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingScheduleMember(null)}
+                      className="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50"
+                    >
+                      Fechar
+                    </button>
+                  </div>
                 </div>
-                <div className="mt-4 space-y-2">
-                  {(Array.isArray(workScheduleDraft.exceptions) ? workScheduleDraft.exceptions : []).length === 0 ? (
-                    <p className="rounded-xl bg-white px-3 py-3 text-xs font-medium text-slate-400">Nenhuma exceção futura cadastrada.</p>
-                  ) : (
-                    workScheduleDraft.exceptions.map((exception: any, index: number) => (
-                      <div key={`${exception.date}-${index}`} className="rounded-xl bg-white p-3 text-xs text-slate-600">
-                        <div className="flex items-start justify-between gap-2">
-                          <div>
-                            <p className="font-semibold text-slate-800">{exception.date} · {exception.start}–{exception.end}</p>
-                            <p className="mt-0.5 text-slate-500">{exception.type || 'Bloqueio'}</p>
+
+                <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
+                  {(workScheduleValidationError || workScheduleLoadingId === editingScheduleMember.id) && (
+                    <div className={`mb-4 rounded-2xl px-4 py-3 text-sm ${workScheduleValidationError ? 'bg-red-50 text-red-600' : 'bg-slate-50 text-slate-500'}`}>
+                      {workScheduleValidationError || 'Carregando horários de trabalho...'}
+                    </div>
+                  )}
+
+                  <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
+                    <div className="space-y-4">
+                      <div className="grid gap-3 rounded-2xl border border-slate-100 bg-slate-50/70 p-4 md:grid-cols-3">
+                        <label className="text-sm font-medium text-slate-600">
+                          Duração padrão da sessão
+                          <select
+                            value={String(workScheduleDraft.defaultSessionDurationMinutes || workScheduleDraft.stepMinutes || '50')}
+                            onChange={(event) => setWorkScheduleDraft((prev: any) => ({ ...(prev || buildDefaultWorkSchedule()), defaultSessionDurationMinutes: Number(event.target.value), stepMinutes: Number(event.target.value) }))}
+                            className="mt-2 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 outline-none focus:border-purple-300"
+                          >
+                            <option value="30">30 min</option>
+                            <option value="45">45 min</option>
+                            <option value="50">50 min</option>
+                            <option value="60">60 min</option>
+                            <option value="90">90 min</option>
+                          </select>
+                        </label>
+                        <label className="text-sm font-medium text-slate-600">
+                          Antecedência mínima
+                          <select
+                            value={String(workScheduleDraft.minLeadMinutes ?? 120)}
+                            onChange={(event) => setWorkScheduleDraft((prev: any) => ({ ...(prev || buildDefaultWorkSchedule()), minLeadMinutes: Number(event.target.value) }))}
+                            className="mt-2 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 outline-none focus:border-purple-300"
+                          >
+                            <option value="0">Sem trava</option>
+                            <option value="120">2 horas</option>
+                            <option value="1440">1 dia</option>
+                            <option value="2880">2 dias</option>
+                          </select>
+                        </label>
+                        <label className="text-sm font-medium text-slate-600">
+                          Limite de opções por dia
+                          <input
+                            type="number"
+                            min={1}
+                            max={24}
+                            value={String(workScheduleDraft.maxSlotsPerDay || 8)}
+                            onChange={(event) => setWorkScheduleDraft((prev: any) => ({ ...(prev || buildDefaultWorkSchedule()), maxSlotsPerDay: event.target.value }))}
+                            onBlur={(event) => setWorkScheduleDraft((prev: any) => ({ ...(prev || buildDefaultWorkSchedule()), maxSlotsPerDay: Math.min(24, Math.max(1, Number(event.target.value) || 8)) }))}
+                            className="mt-2 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 outline-none focus:border-purple-300"
+                          />
+                        </label>
+                      </div>
+
+                      <div className="space-y-3">
+                        {WORK_SCHEDULE_DAYS.map((day) => {
+                          const dayDraft = workScheduleDraft.days?.[day.key] || { enabled: false, periods: [], intervals: [] };
+                          const periods = Array.isArray(dayDraft.periods) && dayDraft.periods.length > 0
+                            ? dayDraft.periods
+                            : [{ start: '08:00', end: '12:00' }, { start: '13:00', end: '17:00' }];
+                          const lunch = Array.isArray(dayDraft.intervals) && dayDraft.intervals[0] ? dayDraft.intervals[0] : { start: '12:00', end: '13:00' };
+                          return (
+                            <section key={day.key} className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+                              <div className="flex flex-wrap items-center justify-between gap-3">
+                                <label className="flex items-center gap-3 text-base font-medium text-slate-800">
+                                  <input
+                                    type="checkbox"
+                                    checked={dayDraft.enabled !== false}
+                                    onChange={(event) => updateScheduleDay(day.key, (current) => ({ ...current, enabled: event.target.checked }))}
+                                    className="h-5 w-5 rounded border-slate-300 accent-[#7a32fc]"
+                                  />
+                                  {day.label}
+                                </label>
+                                <span className={`rounded-full px-3 py-1 text-xs font-medium ${dayDraft.enabled === false ? 'bg-slate-100 text-slate-500' : 'bg-emerald-50 text-emerald-700'}`}>
+                                  {dayDraft.enabled === false ? 'Não atende' : 'Atende'}
+                                </span>
+                              </div>
+
+                              {dayDraft.enabled !== false ? (
+                                <div className="mt-4 grid gap-3 lg:grid-cols-3">
+                                  {[0, 1].map((periodIndex) => (
+                                    <div key={periodIndex} className="rounded-2xl border border-slate-100 bg-slate-50 p-3">
+                                      <p className="mb-3 text-sm font-medium text-slate-700">{periodIndex === 0 ? 'Manhã' : 'Tarde'}</p>
+                                      <div className="grid grid-cols-2 gap-3">
+                                        <label className="text-xs font-medium text-slate-500">
+                                          Início
+                                          <input
+                                            type="text"
+                                            inputMode="numeric"
+                                            placeholder={periodIndex === 0 ? '08:00' : '13:00'}
+                                            value={periods[periodIndex]?.start ?? ''}
+                                            onChange={(event) => updateSchedulePeriod(day.key, periodIndex, 'start', event.target.value)}
+                                            onBlur={() => normalizeScheduleFieldOnBlur(day.key, 'period', periodIndex, 'start')}
+                                            className="mt-1 h-12 w-full rounded-xl border border-slate-200 bg-white px-3 text-base font-medium text-slate-800 outline-none focus:border-purple-300 focus:ring-2 focus:ring-purple-100"
+                                          />
+                                        </label>
+                                        <label className="text-xs font-medium text-slate-500">
+                                          Fim
+                                          <input
+                                            type="text"
+                                            inputMode="numeric"
+                                            placeholder={periodIndex === 0 ? '12:00' : '17:00'}
+                                            value={periods[periodIndex]?.end ?? ''}
+                                            onChange={(event) => updateSchedulePeriod(day.key, periodIndex, 'end', event.target.value)}
+                                            onBlur={() => normalizeScheduleFieldOnBlur(day.key, 'period', periodIndex, 'end')}
+                                            className="mt-1 h-12 w-full rounded-xl border border-slate-200 bg-white px-3 text-base font-medium text-slate-800 outline-none focus:border-purple-300 focus:ring-2 focus:ring-purple-100"
+                                          />
+                                        </label>
+                                      </div>
+                                    </div>
+                                  ))}
+
+                                  <div className="rounded-2xl border border-purple-100 bg-purple-50/60 p-3">
+                                    <p className="mb-3 text-sm font-medium text-purple-700">Intervalo/almoço</p>
+                                    <div className="grid grid-cols-2 gap-3">
+                                      <label className="text-xs font-medium text-purple-600">
+                                        Início
+                                        <input
+                                          type="text"
+                                          inputMode="numeric"
+                                          placeholder="12:00"
+                                          value={lunch.start ?? ''}
+                                          onChange={(event) => updateScheduleLunch(day.key, 'start', event.target.value)}
+                                          onBlur={() => normalizeScheduleFieldOnBlur(day.key, 'lunch', 0, 'start')}
+                                          className="mt-1 h-12 w-full rounded-xl border border-purple-100 bg-white px-3 text-base font-medium text-slate-800 outline-none focus:border-purple-300 focus:ring-2 focus:ring-purple-100"
+                                        />
+                                      </label>
+                                      <label className="text-xs font-medium text-purple-600">
+                                        Fim
+                                        <input
+                                          type="text"
+                                          inputMode="numeric"
+                                          placeholder="13:00"
+                                          value={lunch.end ?? ''}
+                                          onChange={(event) => updateScheduleLunch(day.key, 'end', event.target.value)}
+                                          onBlur={() => normalizeScheduleFieldOnBlur(day.key, 'lunch', 0, 'end')}
+                                          className="mt-1 h-12 w-full rounded-xl border border-purple-100 bg-white px-3 text-base font-medium text-slate-800 outline-none focus:border-purple-300 focus:ring-2 focus:ring-purple-100"
+                                        />
+                                      </label>
+                                    </div>
+                                  </div>
+                                </div>
+                              ) : (
+                                <p className="mt-3 rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-500">Dia sem atendimento. Não serão gerados slots para este dia.</p>
+                              )}
+                            </section>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <aside className="space-y-4">
+                      <section className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+                        <h3 className="text-base font-semibold text-slate-900">Exceções e bloqueios</h3>
+                        <p className="mt-1 text-sm text-slate-500">Folgas, reuniões e bloqueios removem disponibilidade sem apagar consultas.</p>
+                        <div className="mt-4 space-y-3">
+                          <label className="block text-sm font-medium text-slate-600">
+                            Data
+                            <input type="date" value={workScheduleNewException.date} onChange={(event) => setWorkScheduleNewException((prev) => ({ ...prev, date: event.target.value }))} className="mt-1 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700" />
+                          </label>
+                          <div className="grid grid-cols-2 gap-3">
+                            <label className="text-sm font-medium text-slate-600">
+                              Início
+                              <input type="text" inputMode="numeric" placeholder="08:00" value={workScheduleNewException.start} onChange={(event) => setWorkScheduleNewException((prev) => ({ ...prev, start: event.target.value }))} onBlur={() => normalizeExceptionFieldOnBlur('start')} className="mt-1 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700" />
+                            </label>
+                            <label className="text-sm font-medium text-slate-600">
+                              Fim
+                              <input type="text" inputMode="numeric" placeholder="12:00" value={workScheduleNewException.end} onChange={(event) => setWorkScheduleNewException((prev) => ({ ...prev, end: event.target.value }))} onBlur={() => normalizeExceptionFieldOnBlur('end')} className="mt-1 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700" />
+                            </label>
                           </div>
-                          <button type="button" onClick={() => removeWorkScheduleException(index)} className="text-red-500 hover:text-red-600">
-                            Remover
+                          <label className="block text-sm font-medium text-slate-600">
+                            Tipo
+                            <select value={workScheduleNewException.type} onChange={(event) => setWorkScheduleNewException((prev) => ({ ...prev, type: event.target.value }))} className="mt-1 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700">
+                              <option>Bloqueio manual</option>
+                              <option>Folga</option>
+                              <option>Férias</option>
+                              <option>Reunião interna</option>
+                              <option>Curso/supervisão</option>
+                              <option>Feriado</option>
+                              <option>Atendimento externo</option>
+                            </select>
+                          </label>
+                          <button type="button" onClick={addWorkScheduleException} className="h-11 w-full rounded-xl border border-purple-200 bg-white px-3 text-sm font-semibold text-[#7a32fc] hover:bg-purple-50">
+                            Adicionar bloqueio
                           </button>
                         </div>
-                      </div>
-                    ))
-                  )}
+                        <div className="mt-4 space-y-2">
+                          {(Array.isArray(workScheduleDraft.exceptions) ? workScheduleDraft.exceptions : []).length === 0 ? (
+                            <p className="rounded-xl bg-white px-3 py-3 text-sm text-slate-400">Nenhuma exceção futura cadastrada.</p>
+                          ) : (
+                            workScheduleDraft.exceptions.map((exception: any, index: number) => (
+                              <div key={`${exception.date}-${index}`} className="rounded-xl bg-white p-3 text-sm text-slate-600">
+                                <div className="flex items-start justify-between gap-2">
+                                  <div className="min-w-0">
+                                    <p className="font-medium text-slate-800">{exception.date} · {exception.start}–{exception.end}</p>
+                                    <p className="mt-0.5 text-slate-500">{exception.type || 'Bloqueio'}</p>
+                                  </div>
+                                  <button type="button" onClick={() => removeWorkScheduleException(index)} className="text-sm font-medium text-red-500 hover:text-red-600">
+                                    Remover
+                                  </button>
+                                </div>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </section>
+
+                      {bulkApplyOpen && (
+                        <section className="rounded-2xl border border-purple-100 bg-purple-50/50 p-4">
+                          <h3 className="text-base font-semibold text-slate-900">Aplicar escala para outros profissionais</h3>
+                          <p className="mt-1 text-sm text-slate-500">Use a jornada atual como modelo. Exceções individuais são preservadas por padrão.</p>
+                          <div className="mt-4 grid gap-2">
+                            {[
+                              { key: 'selected', label: 'Selecionados' },
+                              { key: 'attendance', label: 'Todos de atendimento' },
+                              { key: 'sameRole', label: 'Mesmo papel operacional' },
+                              { key: 'sameProfile', label: 'Mesmo título profissional' }
+                            ].map((option) => (
+                              <button
+                                key={option.key}
+                                type="button"
+                                onClick={() => setBulkTargetMode(option.key as BulkScheduleTargetMode)}
+                                className={`rounded-xl border px-3 py-2 text-left text-sm font-medium ${bulkTargetMode === option.key ? 'border-purple-300 bg-white text-[#6f2cf5]' : 'border-transparent bg-white/60 text-slate-600 hover:bg-white'}`}
+                              >
+                                {option.label}
+                              </button>
+                            ))}
+                          </div>
+
+                          {bulkTargetMode === 'selected' && (
+                            <div className="mt-4 max-h-56 space-y-2 overflow-y-auto rounded-xl bg-white p-2">
+                              {bulkManualCandidates.length === 0 ? (
+                                <p className="px-2 py-3 text-sm text-slate-400">Nenhum outro profissional disponível.</p>
+                              ) : (
+                                bulkManualCandidates.map((member) => (
+                                  <label key={member.id} className="flex items-center gap-3 rounded-lg px-2 py-2 text-sm text-slate-700 hover:bg-slate-50">
+                                    <input
+                                      type="checkbox"
+                                      checked={bulkSelectedMemberIds.includes(member.id)}
+                                      onChange={() => toggleBulkMember(member.id)}
+                                      className="h-4 w-4 accent-[#7a32fc]"
+                                    />
+                                    <span className="min-w-0 flex-1 truncate">{member.name}</span>
+                                    <span className="text-xs text-slate-400">{roleLabels[member.role as keyof typeof roleLabels] || member.role}</span>
+                                  </label>
+                                ))
+                              )}
+                            </div>
+                          )}
+
+                          <label className="mt-4 flex items-start gap-3 rounded-xl bg-white px-3 py-3 text-sm text-slate-700">
+                            <input
+                              type="checkbox"
+                              checked={bulkPreserveExceptions}
+                              onChange={(event) => setBulkPreserveExceptions(event.target.checked)}
+                              className="mt-0.5 h-4 w-4 accent-[#7a32fc]"
+                            />
+                            <span>Preservar exceções e bloqueios individuais futuros</span>
+                          </label>
+                          <p className="mt-3 text-sm text-slate-500">{bulkPreviewMembers.length} profissional(is) serão afetados.</p>
+                          <button
+                            type="button"
+                            onClick={() => void applyWorkScheduleInBulk()}
+                            disabled={bulkApplying || bulkPreviewMembers.length === 0}
+                            className="mt-3 h-11 w-full rounded-xl bg-[#7a32fc] px-4 text-sm font-semibold text-white disabled:opacity-60"
+                          >
+                            {bulkApplying ? 'Aplicando...' : 'Aplicar escala'}
+                          </button>
+                        </section>
+                      )}
+                    </aside>
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-3 border-t border-slate-100 bg-white px-5 py-4 md:flex-row md:items-center md:justify-between">
+                  <p className="text-sm text-slate-500">Após salvar, a remarcação do portal passa a usar esta jornada.</p>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setEditingScheduleMember(null)}
+                      className="h-11 rounded-2xl border border-slate-200 px-5 text-sm font-medium text-slate-600 hover:bg-slate-50"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void saveWorkSchedule()}
+                      disabled={workScheduleSaving || workScheduleLoadingId === editingScheduleMember.id}
+                      className="h-11 rounded-2xl bg-[#7a32fc] px-5 text-sm font-semibold text-white shadow-sm disabled:opacity-60"
+                    >
+                      {workScheduleSaving ? 'Salvando...' : 'Salvar horários'}
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
-        )}
+          )}
+        </AnimatePresence>
 
         {/* Atribuir Papel */}
         <div className="lg:col-span-1">
