@@ -190,19 +190,28 @@ test('UI expõe configuração, agenda e fechamento sem IDs técnicos ou HTML pe
   assert.match(navigationSection, /id:\s*"tiss-root"[\s\S]*label:\s*"Convênios e TISS"/);
   assert.match(navigationSection, /id:\s*"payer-convenios"[\s\S]*label:\s*"Convênios"/);
   assert.match(navigationSection, /id:\s*"patient-authorizations"[\s\S]*label:\s*"Autorizações dos pacientes"/);
-  assert.match(navigationSection, /id:\s*"payer-tuss"[\s\S]*label:\s*"De\/Para TUSS"/);
-  assert.match(navigationSection, /id:\s*"payer-prices"[\s\S]*label:\s*"Tabela de valores"/);
-  assert.match(navigationSection, /id:\s*"payer-rules"[\s\S]*label:\s*"Regras TISS"/);
+  assert.match(navigationSection, /aliases:\s*\[[\s\S]*id:\s*"payer-tuss"[\s\S]*label:\s*"De\/Para TUSS"/);
+  assert.match(navigationSection, /aliases:\s*\[[\s\S]*id:\s*"payer-prices"[\s\S]*label:\s*"Tabela de valores"/);
+  assert.match(navigationSection, /aliases:\s*\[[\s\S]*id:\s*"payer-rules"[\s\S]*label:\s*"Regras TISS"/);
+  assert.doesNotMatch(navigationSection, /\{\s*id:\s*"payer-tuss",\s*label:\s*"De\/Para TUSS",\s*icon:/);
+  assert.doesNotMatch(navigationSection, /\{\s*id:\s*"payer-prices",\s*label:\s*"Tabela de valores",\s*icon:/);
+  assert.doesNotMatch(navigationSection, /\{\s*id:\s*"payer-rules",\s*label:\s*"Regras TISS",\s*icon:/);
   assert.doesNotMatch(navigationSection, /Convênios e Faturamento/);
   assert.match(navigationSection, /id:\s*"prebilling-root"[\s\S]*label:\s*"Pré-faturamento TISS"/);
   assert.match(navigationSection, /id:\s*"prebilling-preguides"[\s\S]*label:\s*"Pré-guias TISS"/);
-  assert.match(navigationSection, /id:\s*"prebilling-conference"[\s\S]*label:\s*"Conferência"/);
-  assert.match(navigationSection, /id:\s*"prebilling-pending"[\s\S]*label:\s*"Pendências"/);
+  assert.match(navigationSection, /aliases:\s*\[[\s\S]*id:\s*"prebilling-conference"[\s\S]*label:\s*"Conferência"/);
+  assert.match(navigationSection, /aliases:\s*\[[\s\S]*id:\s*"prebilling-pending"[\s\S]*label:\s*"Pendências"/);
+  assert.doesNotMatch(navigationSection, /\{\s*id:\s*"prebilling-conference",\s*label:\s*"Conferência",\s*icon:/);
+  assert.doesNotMatch(navigationSection, /\{\s*id:\s*"prebilling-pending",\s*label:\s*"Pendências",\s*icon:/);
   assert.match(navigationSection, /id:\s*"prebilling-batches"[\s\S]*label:\s*"Lotes XML"/);
   assert.match(navigationSection, /id:\s*"finance-root"[\s\S]*label:\s*"Financeiro"/);
-  assert.match(navigationSection, /id:\s*"finance-dashboard"[\s\S]*label:\s*"Visão geral da clínica"/);
-  assert.doesNotMatch(navigationSection, /id:\s*"report-payers"/);
   assert.match(navigationSection, /id:\s*"finance-clinic-internal"[\s\S]*label:\s*"Financeiro da clínica"/);
+  assert.match(navigationSection, /aliases:\s*\[[\s\S]*id:\s*"finance-dashboard"[\s\S]*label:\s*"Visão geral da clínica"/);
+  assert.doesNotMatch(navigationSection, /\{\s*id:\s*"finance-dashboard",\s*label:\s*"Visão geral da clínica",\s*icon:/);
+  assert.doesNotMatch(navigationSection, /\{\s*id:\s*"clinical-revenue",\s*label:\s*"Receitas",\s*icon:/);
+  assert.doesNotMatch(navigationSection, /\{\s*id:\s*"clinical-expenses",\s*label:\s*"Despesas",\s*icon:/);
+  assert.doesNotMatch(navigationSection, /\{\s*id:\s*"clinical-cashflow",\s*label:\s*"Fluxo de Caixa",\s*icon:/);
+  assert.doesNotMatch(navigationSection, /id:\s*"report-payers"/);
   assert.match(navigationSection, /id:\s*"finance-patient-operations"[\s\S]*label:\s*"Financeiro de pacientes"/);
   assert.match(navigationSection, /id:\s*"clinical-transfers"[\s\S]*label:\s*"Repasses a profissionais"/);
   assert.match(navigationSection, /id:\s*"patient-receivables"[\s\S]*label:\s*"Recebimentos de pacientes"/);
@@ -210,6 +219,8 @@ test('UI expõe configuração, agenda e fechamento sem IDs técnicos ou HTML pe
   assert.match(navigationSection, /id:\s*"settings-root"[\s\S]*label:\s*"Configurações"/);
   assert.match(coordinatorCode, /expandedNavigationSections/);
   assert.match(coordinatorCode, /financialNavigationContext\.breadcrumb\.join\(" > "\)/);
+  assert.match(coordinatorCode, /item\.aliases\?\.some/);
+  assert.match(coordinatorCode, /data-financial-clinic-internal-nav/);
   const financialSection = coordinatorCode.slice(
     coordinatorCode.indexOf('activeTab === "financial"'),
     coordinatorCode.indexOf('activeTab === "flow"'),

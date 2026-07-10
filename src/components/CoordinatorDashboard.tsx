@@ -2,7 +2,6 @@
 import {
   LayoutDashboard,
   Users,
-  TrendingUp,
   Calendar,
   ClipboardList,
   LogOut,
@@ -13,14 +12,11 @@ import {
   ChevronRight,
   DollarSign,
   PieChart,
-  ArrowUpRight,
-  ArrowDownRight,
   UserPlus,
   Mail,
   Filter,
   Download,
   FileText,
-  FileSpreadsheet,
   DoorOpen,
   Edit2,
   Trash2,
@@ -175,6 +171,7 @@ type NavigationNode = {
   badge?: string;
   tab?: DashboardTab;
   intent?: FinancialNavigationIntent;
+  aliases?: Array<{ id: string; label: string; intent: FinancialNavigationIntent }>;
   children?: NavigationNode[];
   clinicFinanceOnly?: boolean;
   patientFinanceOnly?: boolean;
@@ -527,7 +524,7 @@ export function CoordinatorDashboard({
   });
   const [financialNavigationContext, setFinancialNavigationContext] = useState<FinancialNavigationIntent & { intentKey: number }>({
     tab: "financial",
-    breadcrumb: ["Financeiro", "Dashboard financeiro"],
+    breadcrumb: ["Financeiro", "Financeiro da clínica"],
     intentKey: 0,
   });
   const [therapistMembersById, setTherapistMembersById] = useState<Record<string, any>>({});
@@ -535,7 +532,7 @@ export function CoordinatorDashboard({
   const [patientQuickFilter, setPatientQuickFilter] = useState<"all" | "birthdaysToday">("all");
 
   const defaultFinancialNavigationIntent = (tab: DashboardTab): FinancialNavigationIntent | null => {
-    if (tab === "financial") return { tab, breadcrumb: ["Financeiro", "Dashboard financeiro"] };
+    if (tab === "financial") return { tab, breadcrumb: ["Financeiro", "Financeiro da clínica"] };
     if (tab === "payers") {
       return {
         tab,
@@ -549,8 +546,9 @@ export function CoordinatorDashboard({
     if (tab === "conference") {
       return {
         tab,
-        breadcrumb: ["Pré-faturamento TISS", "Conferência"],
-        conferenceTab: "sessions",
+        breadcrumb: ["Pré-faturamento TISS", "Pré-guias TISS"],
+        conferenceTab: "preGuides",
+        tissPanel: "preGuides",
       };
     }
     if (tab === "closure") {
@@ -7869,11 +7867,19 @@ export function CoordinatorDashboard({
         label: "Convênios e TISS",
         icon: KeyRound,
         children: [
-          { id: "payer-convenios", label: "Convênios", icon: KeyRound, tab: "payers", intent: payerIntent("convenios", "Convênios") },
+          {
+            id: "payer-convenios",
+            label: "Convênios",
+            icon: KeyRound,
+            tab: "payers",
+            intent: payerIntent("convenios", "Convênios"),
+            aliases: [
+              { id: "payer-prices", label: "Tabela de valores", intent: payerIntent("prices", "Tabela de valores") },
+              { id: "payer-tuss", label: "De/Para TUSS", intent: payerIntent("tuss", "De/Para TUSS") },
+              { id: "payer-rules", label: "Regras TISS", intent: payerIntent("rules", "Regras TISS") },
+            ],
+          },
           { id: "patient-authorizations", label: "Autorizações dos pacientes", icon: ClipboardCheck, tab: "patientAuthorizations", intent: patientAuthorizationsIntent() },
-          { id: "payer-prices", label: "Tabela de valores", icon: FileSpreadsheet, tab: "payers", intent: payerIntent("prices", "Tabela de valores") },
-          { id: "payer-tuss", label: "De/Para TUSS", icon: ClipboardCheck, tab: "payers", intent: payerIntent("tuss", "De/Para TUSS") },
-          { id: "payer-rules", label: "Regras TISS", icon: ShieldCheck, tab: "payers", intent: payerIntent("rules", "Regras TISS") },
         ],
       },
     ],
@@ -7883,9 +7889,17 @@ export function CoordinatorDashboard({
         label: "Pré-faturamento TISS",
         icon: FileChartColumnIncreasing,
         children: [
-          { id: "prebilling-preguides", label: "Pré-guias TISS", icon: ClipboardCheck, tab: "conference", intent: conferenceIntent("Pré-guias TISS", "preGuides", "preGuides") },
-          { id: "prebilling-conference", label: "Conferência", icon: Search, tab: "conference", intent: conferenceIntent("Conferência", "sessions") },
-          { id: "prebilling-pending", label: "Pendências", icon: AlertCircle, tab: "conference", intent: conferenceIntent("Pendências", "sessions") },
+          {
+            id: "prebilling-preguides",
+            label: "Pré-guias TISS",
+            icon: ClipboardCheck,
+            tab: "conference",
+            intent: conferenceIntent("Pré-guias TISS", "preGuides", "preGuides"),
+            aliases: [
+              { id: "prebilling-conference", label: "Conferência", intent: conferenceIntent("Conferência", "sessions") },
+              { id: "prebilling-pending", label: "Pendências", intent: conferenceIntent("Pendências", "sessions") },
+            ],
+          },
           { id: "prebilling-batches", label: "Lotes XML", icon: FileText, tab: "conference", intent: conferenceIntent("Lotes XML", "preGuides", "xmlDrafts") },
         ],
       },
@@ -7897,21 +7911,23 @@ export function CoordinatorDashboard({
         icon: DollarSign,
         badge: "BETA",
         children: [
-          { id: "finance-dashboard", label: "Visão geral da clínica", icon: LayoutDashboard, tab: "financial", intent: financialIntent("Visão geral da clínica"), clinicFinanceOnly: true },
           {
             id: "finance-clinic-internal",
             label: "Financeiro da clínica",
             icon: PieChart,
+            tab: "financial",
+            intent: financialIntent("Financeiro da clínica"),
             clinicFinanceOnly: true,
-            children: [
-              { id: "clinical-dashboard", label: "Dashboard financeiro", icon: LayoutDashboard, tab: "financial", intent: financialIntent("Dashboard financeiro"), clinicFinanceOnly: true },
-              { id: "clinical-revenue", label: "Receitas", icon: ArrowUpRight, tab: "financial", intent: financialIntent("Receitas") },
-              { id: "clinical-expenses", label: "Despesas", icon: ArrowDownRight, tab: "financial", intent: financialIntent("Despesas") },
-              { id: "clinical-cashflow", label: "Fluxo de Caixa", icon: TrendingUp, tab: "financial", intent: financialIntent("Fluxo de Caixa") },
-              { id: "clinical-transfers", label: "Repasses a profissionais", icon: CreditCard, tab: "financial", intent: financialIntent("Repasses a profissionais"), clinicFinanceOnly: true },
-              { id: "clinical-payers", label: "Convênios e lotes", icon: FileText, tab: "conference", intent: conferenceIntent("Lotes XML", "preGuides", "xmlDrafts", "Pré-faturamento TISS"), clinicFinanceOnly: true },
+            aliases: [
+              { id: "finance-dashboard", label: "Visão geral da clínica", intent: financialIntent("Visão geral da clínica") },
+              { id: "clinical-dashboard", label: "Dashboard financeiro", intent: financialIntent("Dashboard financeiro") },
+              { id: "clinical-revenue", label: "Receitas", intent: financialIntent("Receitas") },
+              { id: "clinical-expenses", label: "Despesas", intent: financialIntent("Despesas") },
+              { id: "clinical-cashflow", label: "Fluxo de caixa", intent: financialIntent("Fluxo de caixa") },
             ],
           },
+          { id: "clinical-transfers", label: "Repasses a profissionais", icon: CreditCard, tab: "financial", intent: financialIntent("Repasses a profissionais"), clinicFinanceOnly: true },
+          { id: "clinical-payers", label: "Convênios e lotes", icon: FileText, tab: "conference", intent: conferenceIntent("Lotes XML", "preGuides", "xmlDrafts", "Pré-faturamento TISS"), clinicFinanceOnly: true },
           {
             id: "finance-patient-operations",
             label: "Financeiro de pacientes",
@@ -7975,6 +7991,7 @@ export function CoordinatorDashboard({
     );
 
   const isNavigationNodeActive = (item: NavigationNode): boolean => {
+    if (item.aliases?.some((alias) => activeTab === alias.intent.tab && isFinancialBreadcrumbActive(alias.intent.breadcrumb))) return true;
     if (item.intent?.breadcrumb) return activeTab === item.intent.tab && isFinancialBreadcrumbActive(item.intent.breadcrumb);
     if (item.tab) return activeTab === item.tab;
     return Boolean(item.children?.some(isNavigationNodeActive));
@@ -9569,6 +9586,33 @@ export function CoordinatorDashboard({
                       </div>
                     </div>
                 </div>
+
+                {canAccessClinicFinance && !isProfessionalTransfersSection && !isPatientReceivablesSection && !isReceptionist && (
+                  <div data-financial-clinic-internal-nav className="flex flex-wrap gap-2">
+                    {[
+                      ["Financeiro da clínica", "Dashboard"],
+                      ["Receitas", "Receitas"],
+                      ["Despesas", "Despesas"],
+                      ["Fluxo de caixa", "Fluxo de caixa"],
+                    ].map(([section, label]) => {
+                      const selected = activeFinancialSection === section || (section === "Financeiro da clínica" && ["Visão geral da clínica", "Dashboard financeiro"].includes(activeFinancialSection));
+                      return (
+                        <button
+                          key={section}
+                          type="button"
+                          onClick={() => navigateToTab("financial", financialIntent(section))}
+                          className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
+                            selected
+                              ? "bg-[#7a32fc] text-white shadow-sm shadow-purple-500/10"
+                              : "border border-slate-200 bg-white text-slate-600 hover:border-violet-200 hover:text-[#7a32fc]"
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
 
                 <div className="grid gap-3 md:grid-cols-2">
                   {canAccessClinicFinance && (

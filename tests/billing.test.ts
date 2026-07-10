@@ -441,6 +441,10 @@ test('menu financeiro separa gestao interna da clinica e operacao de pacientes s
   assert.match(navigation, /label:\s*"Repasses a profissionais"/);
   assert.match(navigation, /label:\s*"Recebimentos de pacientes"/);
   assert.match(navigation, /label:\s*"Convênios e lotes"/);
+  assert.doesNotMatch(navigation, /\{\s*id:\s*"clinical-revenue",\s*label:\s*"Receitas",\s*icon:/);
+  assert.doesNotMatch(navigation, /\{\s*id:\s*"clinical-expenses",\s*label:\s*"Despesas",\s*icon:/);
+  assert.doesNotMatch(navigation, /\{\s*id:\s*"clinical-cashflow",\s*label:\s*"Fluxo de Caixa",\s*icon:/);
+  assert.match(coordinatorCode, /data-financial-clinic-internal-nav/);
   assert.match(navigation, /clinicFinanceOnly:\s*true/);
   assert.match(navigation, /id:\s*"settings-billing"[\s\S]*label:\s*"Assinatura"/);
   assert.match(coordinatorCode, /if \(tabId === "financial"\) return canAccessClinicFinance \|\| isReceptionist/);
