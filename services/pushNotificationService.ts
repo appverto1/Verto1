@@ -642,7 +642,7 @@ export async function sendAppointmentNotification(params: SendAppointmentNotific
   });
   const payload = JSON.stringify({
     ...notificationPayload,
-    title: params.title || notificationPayload.title,
+    title: notificationPayload.title,
     body: params.body || notificationPayload.body,
   });
 

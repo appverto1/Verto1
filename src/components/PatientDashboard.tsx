@@ -2280,8 +2280,9 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
               <SecureImage src={logoUrl} alt={`Logo ${clinicName}`} className="h-full w-full object-contain p-1" />
             </span>
             <span className="min-w-0">
-              <span className="block text-sm font-bold leading-relaxed text-slate-700">
-                <span className="font-black text-slate-950">{clinicName}</span> {message}
+              <span className="block truncate text-xs font-semibold text-slate-950">{clinicName}</span>
+              <span className="block text-sm font-semibold leading-relaxed text-slate-700">
+                {message}
               </span>
             </span>
           </button>

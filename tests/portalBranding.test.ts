@@ -30,7 +30,10 @@ test('appointment confirmation branding is clinic-first and never falls back to 
   assert.match(serverCode, /const readClinicBrandingForFamilyView = async/);
   assert.match(serverCode, /\.from\('clinics'\)[\s\S]*?\.select\(columns\)/);
   assert.match(serverCode, /read\('id,name,display_name,legal_name,logo_url'\)/);
-  assert.match(serverCode, /\.from\('professional_profiles'\)[\s\S]*?\.select\('clinic_name,clinic_logo_url,updated_at'\)/);
+  assert.match(familyBrandingSlice, /readProfileBranding\('clinic_name,clinic_logo_url,updated_at'\)/);
+  assert.match(familyBrandingSlice, /isGenericClinicBrandingName/);
+  assert.match(familyBrandingSlice, /clinic_name,clinic_logo_url,metadata,updated_at/);
+  assert.match(familyBrandingSlice, /sanitizeSessionUrl\(clinic\?\.logo_url\) \|\| profileLogoUrl/);
   assert.match(serverCode, /institutionalProfile\?\.clinic_name/);
   assert.match(serverCode, /clinic\?\.display_name \|\| clinic\?\.legal_name \|\| clinic\?\.name/);
   assert.ok(

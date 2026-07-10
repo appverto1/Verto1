@@ -130,6 +130,8 @@ const docsCode = read('docs/notification-branding.md');
 assert.match(pushServiceCode, /resolveBrandingContext/);
 assert.match(pushServiceCode, /buildPatientReminderNotificationPayload/);
 assert.match(pushServiceCode, /allowProfessionalFallback:\s*false/);
+assert.match(pushServiceCode, /title:\s*notificationPayload\.title/);
+assert.doesNotMatch(pushServiceCode, /title:\s*params\.title \|\| notificationPayload\.title/);
 assert.match(pushServiceCode, /clinic:\s*\{[\s\S]*?id:\s*clinicId \|\| null/);
 assert.match(serviceWorkerCode, /brandName/);
 assert.doesNotMatch(serviceWorkerCode, /notification_action/);

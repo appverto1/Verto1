@@ -63,11 +63,13 @@ const firstUrl = (...values: unknown[]) => {
 };
 
 const isGenericClinicName = (value: string) =>
-  ["sua clinica", "sua clínica", "clinica", "clínica", "verto"].includes(
+  ["sua clinica", "sua clínica", "minha clinica", "minha clínica", "clinica", "clínica", "clinica verto", "clínica verto", "verto"].includes(
     value
       .normalize("NFD")
       .replace(/[\u0300-\u036f]/g, "")
       .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim()
   );
 
 const normalizedIdentity = (value: unknown) =>

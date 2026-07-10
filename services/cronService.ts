@@ -107,8 +107,10 @@ const isGenericClinicNotificationName = (value: unknown) => {
   const normalized = sanitizeText(value, 160)
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase();
-  return !normalized || ['sua clinica', 'clinica', 'verto'].includes(normalized);
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+  return !normalized || ['sua clinica', 'minha clinica', 'clinica', 'clinica verto', 'verto'].includes(normalized);
 };
 
 const isActiveAppointmentStatus = (status: unknown) => {
@@ -659,9 +661,40 @@ async function resolveReminderClinicBranding(
     return fallback;
   }
 
+  let profileBrandingRows: any[] = [];
+  const readProfileBranding = (columns: string) =>
+    options.supabase
+      .from('professional_profiles')
+      .select(columns)
+      .eq('clinic_id', safeClinicId)
+      .order('updated_at', { ascending: false })
+      .limit(20);
+  let profileBranding = await readProfileBranding('clinic_name,clinic_logo_url,metadata,updated_at');
+  if (profileBranding.error && String(profileBranding.error.message || '').match(/column\s+"?metadata"?/i)) {
+    profileBranding = await readProfileBranding('clinic_name,clinic_logo_url,updated_at');
+  }
+  if (!profileBranding.error) {
+    profileBrandingRows = Array.isArray(profileBranding.data) ? profileBranding.data : [];
+  }
+  const institutionalProfile = profileBrandingRows.find((row: any) => {
+    const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+    return sanitizeText(row?.clinic_name || metadata.clinicName, 160) ||
+      sanitizeText(row?.clinic_logo_url || metadata.clinicLogoUrl, 2000);
+  });
+  const profileMetadata = institutionalProfile?.metadata && typeof institutionalProfile.metadata === 'object'
+    ? institutionalProfile.metadata
+    : {};
+  const clinicName = sanitizeText(data?.display_name || data?.legal_name || data?.name, 160);
+  const profileClinicName = sanitizeText(institutionalProfile?.clinic_name || profileMetadata.clinicName, 160);
+  const clinicLogoUrl =
+    sanitizeText(data?.logo_url, 2000) ||
+    sanitizeText(institutionalProfile?.clinic_logo_url || profileMetadata.clinicLogoUrl, 2000) ||
+    null;
   const branding = {
-    clinicName: sanitizeText(data?.display_name || data?.legal_name || data?.name, 160) || DEFAULT_CLINIC_NOTIFICATION_NAME,
-    clinicLogoUrl: sanitizeText(data?.logo_url, 2000) || null
+    clinicName: !isGenericClinicNotificationName(clinicName)
+      ? clinicName
+      : (!isGenericClinicNotificationName(profileClinicName) ? profileClinicName : DEFAULT_CLINIC_NOTIFICATION_NAME),
+    clinicLogoUrl
   };
   clinicBrandingCache.set(safeClinicId, branding);
   return branding;

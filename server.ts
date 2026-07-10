@@ -18467,6 +18467,15 @@ async function startServer() {
       primaryColor: '#7C3AED'
     };
     if (!isUuid(safeClinicId)) return fallback;
+    const isGenericClinicBrandingName = (value: unknown) => {
+      const normalized = sanitizeString(value, 180)
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ' ')
+        .trim();
+      return !normalized || ['clinica', 'sua clinica', 'minha clinica', 'clinica verto', 'verto'].includes(normalized);
+    };
     const read = (columns: string) =>
       supabase
         .from('clinics')
@@ -18490,13 +18499,16 @@ async function startServer() {
       return fallback;
     }
     let profileBranding: any[] = [];
-    const profileBrandingResult = await supabase
+    const readProfileBranding = (columns: string) => supabase
       .from('professional_profiles')
-      .select('clinic_name,clinic_logo_url,updated_at')
+      .select(columns)
       .eq('clinic_id', safeClinicId)
-      .not('clinic_name', 'is', null)
       .order('updated_at', { ascending: false })
-      .limit(10);
+      .limit(20);
+    let profileBrandingResult = await readProfileBranding('clinic_name,clinic_logo_url,metadata,updated_at');
+    if (profileBrandingResult.error && extractMissingColumnName(profileBrandingResult.error)) {
+      profileBrandingResult = await readProfileBranding('clinic_name,clinic_logo_url,updated_at');
+    }
     if (!profileBrandingResult.error) {
       profileBranding = Array.isArray(profileBrandingResult.data) ? profileBrandingResult.data : [];
     } else if (extractMissingColumnName(profileBrandingResult.error)) {
@@ -18510,15 +18522,32 @@ async function startServer() {
         profileBranding = Array.isArray(legacyProfileBrandingResult.data) ? legacyProfileBrandingResult.data : [];
       }
     }
-    const institutionalProfile = profileBranding.find((row: any) => sanitizeString(row?.clinic_name, 160));
+    const institutionalProfile = profileBranding.find((row: any) => {
+      const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+      return sanitizeString(row?.clinic_name || metadata.clinicName, 160) ||
+        sanitizeSessionUrl(row?.clinic_logo_url || metadata.clinicLogoUrl);
+    });
     const clinicDisplayName = sanitizeString(clinic?.display_name || clinic?.legal_name || clinic?.name, 160);
+    const profileDisplayName = sanitizeString(
+      institutionalProfile?.clinic_name ||
+        (institutionalProfile?.metadata && typeof institutionalProfile.metadata === 'object'
+          ? institutionalProfile.metadata.clinicName
+          : ''),
+      160
+    );
+    const displayName = !isGenericClinicBrandingName(clinicDisplayName)
+      ? clinicDisplayName
+      : (!isGenericClinicBrandingName(profileDisplayName) ? profileDisplayName : fallback.displayName);
+    const profileLogoUrl = sanitizeSessionUrl(
+      institutionalProfile?.clinic_logo_url ||
+        (institutionalProfile?.metadata && typeof institutionalProfile.metadata === 'object'
+          ? institutionalProfile.metadata.clinicLogoUrl
+          : null)
+    );
     return {
       id: safeClinicId,
-      displayName:
-        clinicDisplayName ||
-        sanitizeString(institutionalProfile?.clinic_name, 160) ||
-        fallback.displayName,
-      logoUrl: sanitizeSessionUrl(clinic?.logo_url || institutionalProfile?.clinic_logo_url),
+      displayName,
+      logoUrl: sanitizeSessionUrl(clinic?.logo_url) || profileLogoUrl,
       primaryColor: fallback.primaryColor
     };
   };
@@ -19716,37 +19745,7 @@ async function startServer() {
           console.warn('[Push] appointment clinic read failed:', appointmentClinicError.message);
         }
       }
-      const readReminderClinicBranding = async (rawClinicId: unknown) => {
-        const safeClinicId = sanitizeString(rawClinicId, 120);
-        if (!isUuid(safeClinicId)) return { clinicName: 'Clínica', clinicLogoUrl: null };
-        const read = (columns: string) =>
-          supabase
-            .from('clinics')
-            .select(columns)
-            .eq('id', safeClinicId)
-            .limit(1)
-            .maybeSingle();
-        let { data: clinic, error: clinicError } = await read('id,name,display_name,legal_name,logo_url');
-        if (clinicError && extractMissingColumnName(clinicError)) {
-          const fallback = await read('id,name,display_name,legal_name');
-          clinic = fallback.data;
-          clinicError = fallback.error;
-        }
-        if (clinicError && extractMissingColumnName(clinicError)) {
-          const fallback = await read('id,name');
-          clinic = fallback.data;
-          clinicError = fallback.error;
-        }
-        if (clinicError) {
-          console.warn('[Push] clinic branding read failed:', clinicError.message);
-          return { clinicName: 'Clínica', clinicLogoUrl: null };
-        }
-        return {
-          clinicName: sanitizeString(clinic?.display_name || clinic?.legal_name || clinic?.name, 160) || 'Clínica',
-          clinicLogoUrl: sanitizeSessionUrl(clinic?.logo_url)
-        };
-      };
-      const clinicBranding = await readReminderClinicBranding(reminderClinicId);
+      const clinicBranding = await readClinicBrandingForFamilyView(reminderClinicId);
       const reminderSource = parseAppointmentSourcePayloadForFamilyView(reminderAppointmentContext?.source_payload);
       let patientName = sanitizeString(
         reminderSource?.patientName ||
@@ -19799,8 +19798,8 @@ async function startServer() {
           dateLabel: sanitizeString(req.body?.dateLabel || req.body?.date_label, 80) || null,
           reminderKind: 'manual',
           clinicId: reminderClinicId,
-          clinicName: clinicBranding.clinicName,
-          clinicLogoUrl: clinicBranding.clinicLogoUrl,
+          clinicName: clinicBranding.displayName,
+          clinicLogoUrl: clinicBranding.logoUrl,
           patientName,
           professionalDisplayName,
           professionalLogoUrl

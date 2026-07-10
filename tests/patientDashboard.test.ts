@@ -71,7 +71,8 @@ test('notificacoes Kids priorizam nome e logo da clinica resolvida', () => {
   assert.ok(openNotification.lastIndexOf('notification?.clinic_name') < openNotification.lastIndexOf("'Clínica'"));
   assert.match(openNotification, /clinicLogoUrl: metadata\.clinicLogoUrl \|\| notification\?\.clinicLogoUrl/);
   const notificationSummary = between('const portalNotificationsSummary =', 'const portalHomeSummary');
-  assert.match(notificationSummary, /<span className="font-black text-slate-950">\{clinicName\}<\/span> \{message\}/);
+  assert.match(notificationSummary, /<span className="block truncate text-xs font-semibold text-slate-950">\{clinicName\}<\/span>/);
+  assert.match(notificationSummary, /<span className="block text-sm font-semibold leading-relaxed text-slate-700">\s*\{message\}/);
   const appointmentModal = between('const portalAppointmentDetailModal =', 'const portalActionModal =');
   const activeClinicName = between('const activePortalClinicName =', 'const activePortalClinicLogoUrl');
   const activeClinicLogo = between('const activePortalClinicLogoUrl =', 'const portalActionBlocked');
