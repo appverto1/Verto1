@@ -16036,6 +16036,7 @@ async function startServer() {
     stepMinutes: durationMinutes,
     minLeadMinutes: 120,
     maxSlotsPerDay: 8,
+    sessionBufferMinutes: 0,
     days: {
       monday: { enabled: true, periods: [{ start: '08:00', end: '12:00' }, { start: '13:00', end: '17:00' }], intervals: [{ start: '12:00', end: '13:00' }] },
       tuesday: { enabled: true, periods: [{ start: '08:00', end: '12:00' }, { start: '13:00', end: '17:00' }], intervals: [{ start: '12:00', end: '13:00' }] },
@@ -16147,6 +16148,7 @@ async function startServer() {
       stepMinutes: asSafeNumber(source.stepMinutes ?? source.step_minutes, 10, 120) || fallbackDuration,
       minLeadMinutes: asSafeNumber(source.minLeadMinutes ?? source.min_lead_minutes, 0, 30 * 24 * 60) ?? 120,
       maxSlotsPerDay: asSafeNumber(source.maxSlotsPerDay ?? source.max_slots_per_day, 1, 24) || 8,
+      sessionBufferMinutes: Math.round(asSafeNumber(source.sessionBufferMinutes ?? source.session_buffer_minutes, 0, 120) ?? 0),
       defaultSessionDurationMinutes: asSafeNumber(source.defaultSessionDurationMinutes ?? source.default_session_duration_minutes, 15, 360) || fallbackDuration,
       allowedLocationTypes: Array.isArray(source.allowedLocationTypes || source.allowed_location_types)
         ? (source.allowedLocationTypes || source.allowed_location_types).map((item: any) => sanitizeString(item, 40)).filter(Boolean).slice(0, 6)
@@ -31825,6 +31827,16 @@ async function startServer() {
     const locationType = normalizeScheduleLocationType(rawInput?.location_type || rawInput?.locationType || rawInput?.location);
     const roomId = sanitizeString(rawInput?.room_id || rawInput?.roomId || rawInput?.room, 180);
     const roomName = sanitizeString(rawInput?.room_name || rawInput?.roomName || rawInput?.roomDisplayName || roomId, 180);
+    let sessionBufferMinutes = Math.round(asSafeNumber(rawInput?.session_buffer_minutes ?? rawInput?.sessionBufferMinutes, 0, 120) ?? 0);
+    if (professionalIds[0]) {
+      try {
+        const professionalSchedule = await fetchProfessionalWorkingSchedule(clinicId, professionalIds[0]);
+        const schedule = professionalSchedule?.workSchedule || {};
+        sessionBufferMinutes = Math.round(asSafeNumber((schedule as any)?.sessionBufferMinutes ?? (schedule as any)?.session_buffer_minutes, 0, 120) ?? sessionBufferMinutes);
+      } catch (error: any) {
+        console.warn('[Calendar] session buffer fallback used:', error?.message || String(error));
+      }
+    }
 
     if (locationType === 'clinica' && !roomId) {
       return {
@@ -31876,6 +31888,7 @@ async function startServer() {
       start_time: parsedDates.startTime,
       end_time: parsedDates.endTime,
       duration_minutes: parsedDates.duration,
+      session_buffer_minutes: sessionBufferMinutes,
       exclude_event_id: rawInput?.exclude_event_id || rawInput?.excludeEventId,
       exclude_event_ids: Array.isArray(rawInput?.exclude_event_ids)
         ? rawInput.exclude_event_ids

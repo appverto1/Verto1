@@ -556,6 +556,8 @@ export function checkLocalScheduleConflicts(input: {
   start_time?: any;
   end_time?: any;
   duration_minutes?: any;
+  session_buffer_minutes?: any;
+  sessionBufferMinutes?: any;
   exclude_event_id?: any;
   exclude_event_ids?: any[];
   recurrence_dates?: any[];
@@ -568,6 +570,11 @@ export function checkLocalScheduleConflicts(input: {
   const startTime = normalizeAppointmentTime(input.start_time);
   const durationMinutes = normalizeDurationMinutes(input.duration_minutes);
   const endTime = addMinutesToTime(startTime, durationMinutes);
+  const sessionBufferMinutes = Math.min(
+    120,
+    Math.max(0, Math.round(Number(input.session_buffer_minutes ?? input.sessionBufferMinutes ?? 0) || 0))
+  );
+  const bufferedEndTime = addMinutesToTime(startTime, durationMinutes + sessionBufferMinutes);
   const patientId = String(input.patient_id || '').trim();
   const patientName = String(input.patient_name || '').trim();
   const roomId = String(input.room_id || '').trim();
@@ -614,7 +621,8 @@ export function checkLocalScheduleConflicts(input: {
         formatTimeInAppointmentTimezone(getAppointmentStartDateTime(appointment), timezone);
       const existingEnd = getAppointmentEndTime(appointment);
       if (!existingStart || !existingEnd) continue;
-      if (!appointmentTimesOverlap(startTime, endTime, existingStart, existingEnd)) continue;
+      const existingBufferedEnd = sessionBufferMinutes > 0 ? addMinutesToTime(existingEnd, sessionBufferMinutes) : existingEnd;
+      if (!appointmentTimesOverlap(startTime, bufferedEndTime, existingStart, existingBufferedEnd || existingEnd)) continue;
 
       const existingPatientId = getAppointmentPatientId(appointment);
       const existingPatientName = getAppointmentPatientName(appointment);

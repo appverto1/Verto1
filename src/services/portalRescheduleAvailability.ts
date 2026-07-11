@@ -122,6 +122,8 @@ export type PortalProfessionalWorkingSchedule = {
   min_lead_minutes?: number | string | null;
   maxSlotsPerDay?: number | string | null;
   max_slots_per_day?: number | string | null;
+  sessionBufferMinutes?: number | string | null;
+  session_buffer_minutes?: number | string | null;
   defaultSessionDurationMinutes?: number | string | null;
   default_session_duration_minutes?: number | string | null;
   allowedLocationTypes?: string[];
@@ -426,6 +428,10 @@ export function buildAvailableRescheduleSlots(params: {
     10,
     120
   );
+  const sessionBufferMinutes = clampNumber(schedule?.sessionBufferMinutes ?? schedule?.session_buffer_minutes, 0, 0, 120);
+  const slotCadenceMinutes = sessionBufferMinutes > 0
+    ? Math.max(stepMinutes, durationMinutes + sessionBufferMinutes)
+    : stepMinutes;
   const minLeadMinutes = clampNumber(params.minLeadMinutes ?? schedule?.minLeadMinutes ?? schedule?.min_lead_minutes, DEFAULT_MIN_LEAD_MINUTES, 0, 30 * 24 * 60);
   const maxSlotsPerDay = clampNumber(params.maxSlotsPerDay ?? schedule?.maxSlotsPerDay ?? schedule?.max_slots_per_day, 8, 1, 24);
   const maxSelectable = clampNumber(params.maxSelectable, PORTAL_RESCHEDULE_MAX_OPTIONS, 1, PORTAL_RESCHEDULE_MAX_OPTIONS);
@@ -464,7 +470,7 @@ export function buildAvailableRescheduleSlots(params: {
         if (!hasRestrictionMatch(scheduleAllowedRoomIds, roomId)) continue;
         if (!hasRestrictionMatch(period.roomIds, roomId)) continue;
       }
-      for (let startMinute = period.startMinutes; startMinute + durationMinutes <= period.endMinutes; startMinute += stepMinutes) {
+      for (let startMinute = period.startMinutes; startMinute + durationMinutes + sessionBufferMinutes <= period.endMinutes; startMinute += slotCadenceMinutes) {
         const endMinute = startMinute + durationMinutes;
         if (slotOverlapsAnyBlockedPeriod(startMinute, endMinute, dateBlockedPeriods)) continue;
       const start = buildDateTime(dateKey, minutesToTime(startMinute));
@@ -478,7 +484,10 @@ export function buildAvailableRescheduleSlots(params: {
         if (!statusBlocksAvailability(appointment.status)) return false;
         const appointmentStart = readAppointmentStart(appointment);
         const appointmentEnd = readAppointmentEnd(appointment, durationMinutes);
-        if (!appointmentStart || !appointmentEnd || !intervalsOverlap(start, end, appointmentStart, appointmentEnd)) return false;
+        if (!appointmentStart || !appointmentEnd) return false;
+        const bufferedEnd = new Date(end.getTime() + sessionBufferMinutes * 60_000);
+        const appointmentBufferedEnd = new Date(appointmentEnd.getTime() + sessionBufferMinutes * 60_000);
+        if (!intervalsOverlap(start, bufferedEnd, appointmentStart, appointmentBufferedEnd)) return false;
         const sameProfessional = professionalId && professionalId === readString(appointment.therapist_id, appointment.therapistId, appointment.professional_id, appointment.professionalId);
         const samePatient = patientId && patientId === readString(appointment.patient_id, appointment.patientId);
         const sameRoom = locationType === 'clinica' && roomId && roomId === readString(appointment.room_id, appointment.roomId);

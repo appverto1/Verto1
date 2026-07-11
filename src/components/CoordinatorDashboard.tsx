@@ -333,6 +333,38 @@ const formatProfessionalDisplayLabel = (source: any, fallback = "Profissional") 
   return fallback;
 };
 
+const resolvePatientResponsibleProfessionalId = (patient: any) =>
+  String(
+    patient?.therapist_id ||
+      patient?.therapistId ||
+      patient?.professional_id ||
+      patient?.professionalId ||
+      patient?.responsible_professional_id ||
+      patient?.responsibleProfessionalId ||
+      patient?.assigned_professional_id ||
+      patient?.assignedProfessionalId ||
+      patient?.primary_professional_id ||
+      patient?.primaryProfessionalId ||
+      patient?.metadata?.therapist_id ||
+      patient?.metadata?.professional_id ||
+      patient?.metadata?.responsible_professional_id ||
+      "",
+  ).trim();
+
+const resolvePatientResponsibleProfessionalLabel = (
+  patient: any,
+  professionalsById: Record<string, any>,
+) => {
+  const professionalId = resolvePatientResponsibleProfessionalId(patient);
+  if (!professionalId) return { id: "", label: "Sem profissional responsável" };
+  const professional = professionalsById[professionalId];
+  if (!professional) return { id: professionalId, label: "Sem profissional responsável" };
+  return {
+    id: professionalId,
+    label: formatProfessionalDisplayLabel({ ...professional, id: professionalId }, "Profissional"),
+  };
+};
+
 const normalizeRevenueOriginLabel = (label: any) => {
   const normalized = normalizeLookupText(label);
   if (!normalized || ["nao informado", "sem origem"].includes(normalized)) return "Outras origens";
@@ -770,6 +802,7 @@ export function CoordinatorDashboard({
             member?.imageUrl ||
             member?.image_url ||
             "",
+          workSchedule: member?.workSchedule || member?.work_schedule || null,
         };
       })
       .sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
@@ -855,9 +888,7 @@ export function CoordinatorDashboard({
     const currentTherapistId = String(user?.id || "").trim();
     return isTherapist
       ? allPatients.filter((patient: any) => {
-          const therapistId = String(
-            patient?.therapist_id || patient?.professional_id || "",
-          ).trim();
+          const therapistId = resolvePatientResponsibleProfessionalId(patient);
           return Boolean(currentTherapistId) && therapistId === currentTherapistId;
         })
       : allPatients;
@@ -875,16 +906,12 @@ export function CoordinatorDashboard({
     if (patientTherapistFilter !== "all" && !isTherapist) {
       if (patientTherapistFilter === "unassigned") {
         filteredPatients = patientsAllowedForRole.filter((patient: any) => {
-          const therapistId = String(
-            patient?.therapist_id || patient?.professional_id || "",
-          ).trim();
+          const therapistId = resolvePatientResponsibleProfessionalId(patient);
           return !therapistId;
         });
       } else {
         filteredPatients = patientsAllowedForRole.filter((patient: any) => {
-          const therapistId = String(
-            patient?.therapist_id || patient?.professional_id || "",
-          ).trim();
+          const therapistId = resolvePatientResponsibleProfessionalId(patient);
           return therapistId === patientTherapistFilter;
         });
       }
@@ -901,16 +928,12 @@ export function CoordinatorDashboard({
     if (patientTherapistFilter === "all" || isTherapist) return roleScopedPatients;
     if (patientTherapistFilter === "unassigned") {
       return roleScopedPatients.filter((patient: any) => {
-        const therapistId = String(
-          patient?.therapist_id || patient?.professional_id || "",
-        ).trim();
+        const therapistId = resolvePatientResponsibleProfessionalId(patient);
         return !therapistId;
       });
     }
     return roleScopedPatients.filter((patient: any) => {
-      const therapistId = String(
-        patient?.therapist_id || patient?.professional_id || "",
-      ).trim();
+      const therapistId = resolvePatientResponsibleProfessionalId(patient);
       return therapistId === patientTherapistFilter;
     });
   }, [isTherapist, patientTherapistFilter, roleScopedPatients]);
@@ -3094,10 +3117,16 @@ export function CoordinatorDashboard({
     const patient = allPatients.find(
       (item: any) => normalizeUtf8Text(item?.name).trim().toLowerCase() === normalizedName,
     );
+    const responsibleProfessionalId = resolvePatientResponsibleProfessionalId(patient);
+    const responsibleProfessional = responsibleProfessionalId
+      ? therapistFilterOptions.find((member) => String(member.id || "") === responsibleProfessionalId)
+      : null;
     const patientPayer = resolvePatientInsurancePayer(patient, sessionApproach);
     const matchingPayer = resolveClinicPayerForPatientInsurance(patientPayer);
     lastAutoPayerPatientKeyRef.current = getPatientAutoPayerKey(patient, name);
     setSessionPatientName(name);
+    setSessionProfessionalId(responsibleProfessional?.id ? String(responsibleProfessional.id) : "");
+    setSessionProfessional(responsibleProfessional?.label || "");
     if (matchingPayer?.id || patientPayer.payerId) setSessionFinancialContextType("INSURANCE");
     setSessionPayerId(String(matchingPayer?.id || patientPayer.payerId || ""));
     setSessionPayerNameSnapshot(String(matchingPayer?.name || patientPayer.payerName || ""));
@@ -3141,6 +3170,11 @@ export function CoordinatorDashboard({
     );
   }, [allPatients, sessionPatientName]);
 
+  const selectedSessionPatientResponsibleProfessionalId = useMemo(
+    () => resolvePatientResponsibleProfessionalId(selectedSessionPatient),
+    [selectedSessionPatient],
+  );
+
   const selectedSessionPatientInsurancePayer = useMemo(
     () => resolvePatientInsurancePayer(selectedSessionPatient, sessionApproach),
     [selectedSessionPatient, selectedSessionPatient?.financialPlans, selectedSessionPatient?.financial_plans, sessionApproach],
@@ -3166,6 +3200,37 @@ export function CoordinatorDashboard({
       null
     );
   }, [sessionProfessional, sessionProfessionalId, therapistFilterOptions]);
+
+  useEffect(() => {
+    if (!isAddSessionModalOpen || editingAppointmentId || !selectedSessionPatient) return;
+    if (!selectedSessionPatientResponsibleProfessionalId) return;
+    const responsibleProfessional = therapistFilterOptions.find(
+      (member) => String(member.id || "") === selectedSessionPatientResponsibleProfessionalId,
+    );
+    if (!responsibleProfessional?.id) return;
+    if (String(sessionProfessionalId || "") !== String(responsibleProfessional.id)) {
+      setSessionProfessionalId(String(responsibleProfessional.id));
+      setSessionProfessional(responsibleProfessional.label || "");
+    }
+  }, [
+    editingAppointmentId,
+    isAddSessionModalOpen,
+    selectedSessionPatient,
+    selectedSessionPatientResponsibleProfessionalId,
+    sessionProfessionalId,
+    therapistFilterOptions,
+  ]);
+
+  const sessionProfessionalNotice = selectedSessionPatient && !selectedSessionPatientResponsibleProfessionalId
+    ? "Este paciente ainda não possui profissional responsável atribuído. Selecione um profissional para esta consulta ou defina no prontuário."
+    : "";
+
+  const sessionBufferMinutes = useMemo(() => {
+    const schedule = selectedSessionProfessional?.workSchedule || selectedSessionProfessional?.work_schedule || {};
+    const raw = schedule?.sessionBufferMinutes ?? schedule?.session_buffer_minutes ?? 0;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? Math.min(120, Math.max(0, Math.round(parsed))) : 0;
+  }, [selectedSessionProfessional]);
   useEffect(() => {
     if (!selectedSessionProfessional?.id || !selectedSessionProfessional?.label) return;
     if (sessionProfessionalId !== String(selectedSessionProfessional.id)) {
@@ -3575,6 +3640,7 @@ export function CoordinatorDashboard({
       start_time: sessionTime,
       end_time: sessionEndTime,
       duration_minutes: sessionDurationMinutes,
+      session_buffer_minutes: sessionBufferMinutes,
       exclude_event_id: editingAppointmentId,
       recurrence_dates: sessionRecurrenceDates,
     });
@@ -3604,6 +3670,7 @@ export function CoordinatorDashboard({
           start_time: sessionTime,
           end_time: sessionEndTime,
           duration_minutes: sessionDurationMinutes,
+          session_buffer_minutes: sessionBufferMinutes,
           exclude_event_id: editingAppointmentId,
           recurrence_dates: sessionRecurrenceDates,
         });
@@ -11054,7 +11121,7 @@ export function CoordinatorDashboard({
                   {!isReceptionist && (
                     <div className="w-full sm:w-[360px]">
                       <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-widest mb-1.5 ml-1">
-                        Filtrar por terapeuta
+                        Filtrar por profissional
                       </label>
                       <select
                         className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
@@ -11152,21 +11219,17 @@ export function CoordinatorDashboard({
                             )}
                           </h4>
                           {(() => {
-                            const therapistId = String(
-                              patient?.therapist_id || patient?.professional_id || "",
-                            ).trim();
-                            if (!therapistId) {
+                            const responsible = resolvePatientResponsibleProfessionalLabel(patient, therapistMembersById);
+                            if (!responsible.id) {
                               return (
                                 <p className="text-[10px] mt-1 font-semibold text-amber-600">
-                                  Profissional: não atribuído
+                                  Profissional: Sem profissional responsável
                                 </p>
                               );
                             }
-                            const therapist = therapistMembersById[therapistId];
-                            const therapistName = formatProfessionalDisplayLabel({ ...therapist, id: therapistId }, "Profissional não identificado");
                             return (
                               <p className="text-[10px] mt-1 font-semibold text-indigo-600">
-                                Profissional: {therapistName}
+                                Profissional: {responsible.label}
                               </p>
                             );
                           })()}
@@ -12708,6 +12771,11 @@ export function CoordinatorDashboard({
                       </option>
                   )}
                 </select>
+                {sessionProfessionalNotice && (
+                  <p className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700">
+                    {sessionProfessionalNotice}
+                  </p>
+                )}
               </div>
               {!isTherapist && (
                 <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">

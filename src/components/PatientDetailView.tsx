@@ -399,7 +399,15 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [clinicTherapists, setClinicTherapists] = useState<any[]>([]);
   const [isLoadingTherapists, setIsLoadingTherapists] = useState(false);
   const [selectedTherapistId, setSelectedTherapistId] = useState<string>(
-    String(patient?.therapist_id || patient?.professional_id || '').trim()
+    String(
+      patient?.therapist_id ||
+        patient?.therapistId ||
+        patient?.professional_id ||
+        patient?.professionalId ||
+        patient?.responsible_professional_id ||
+        patient?.responsibleProfessionalId ||
+        '',
+    ).trim()
   );
 
   const flashPEIConfirmation = (goalId: any, skillId: any) => {
@@ -487,9 +495,47 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     }
   }, [openAnamnesisOnLoad, onAnamnesisOpenConsumed, patient?.id]);
 
+  const resolvePatientProfessionalId = (source: any) =>
+    String(
+      source?.therapist_id ||
+        source?.therapistId ||
+        source?.professional_id ||
+        source?.professionalId ||
+        source?.responsible_professional_id ||
+        source?.responsibleProfessionalId ||
+        source?.assigned_professional_id ||
+        source?.assignedProfessionalId ||
+        source?.primary_professional_id ||
+        source?.primaryProfessionalId ||
+        '',
+    ).trim();
+
+  const formatPatientProfessionalOptionLabel = (source: any) => {
+    const title = String(
+      source?.professionalTitle ||
+        source?.professional_title ||
+        source?.profileRole ||
+        source?.metadata?.professionalTitle ||
+        source?.metadata?.professional_title ||
+        '',
+    ).trim();
+    const rawName = String(source?.full_name || source?.fullName || source?.name || source?.email || 'Profissional').trim();
+    const name = rawName.replace(/^terapeuta\s+/i, '').trim() || rawName;
+    if (title && !name.toLowerCase().startsWith(title.toLowerCase())) return `${title} ${name}`;
+    return name || 'Profissional';
+  };
+
   useEffect(() => {
-    setSelectedTherapistId(String(patient?.therapist_id || patient?.professional_id || '').trim());
-  }, [patient?.therapist_id, patient?.professional_id, patient?.id]);
+    setSelectedTherapistId(resolvePatientProfessionalId(patient));
+  }, [
+    patient?.therapist_id,
+    patient?.therapistId,
+    patient?.professional_id,
+    patient?.professionalId,
+    patient?.responsible_professional_id,
+    patient?.responsibleProfessionalId,
+    patient?.id,
+  ]);
 
   const loadAnamnesisFlow = async () => {
     if (!patient?.id || !canOpenAnamnesis) return null;
@@ -870,7 +916,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         });
         setClinicTherapists(therapists);
       } catch (error) {
-        console.error('Erro ao carregar terapeutas da clínica:', error);
+        console.error('Erro ao carregar profissionais da clínica:', error);
         setClinicTherapists([]);
       } finally {
         setIsLoadingTherapists(false);
@@ -887,7 +933,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     onUpdatePatient({
       ...patient,
       therapist_id: nextValue,
-      professional_id: nextValue
+      therapistId: nextValue,
+      professional_id: nextValue,
+      professionalId: nextValue,
+      responsible_professional_id: nextValue,
+      responsibleProfessionalId: nextValue
     });
   };
 
@@ -8852,7 +8902,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 {canManageTherapistAssignment && (
                   <div className="mt-3 flex w-full max-w-sm flex-col items-stretch gap-1.5 sm:flex-row sm:items-center sm:gap-2">
                     <label className={`text-[10px] font-medium uppercase tracking-wide ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                      Terapeuta Responsável
+                      Profissional responsável
                     </label>
                     <select
                       className={`w-full min-w-0 rounded-lg border px-3 py-2 text-xs font-medium outline-none focus:border-[#7551FF] sm:w-56 ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-white border-slate-200 text-slate-800'}`}
@@ -8860,10 +8910,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                       onChange={(e) => handleTherapistAssignmentChange(e.target.value)}
                       disabled={isLoadingTherapists}
                     >
-                      <option value="">{isLoadingTherapists ? 'Carregando terapeutas...' : 'Não atribuído'}</option>
+                      <option value="">{isLoadingTherapists ? 'Carregando profissionais...' : 'Sem profissional responsável'}</option>
                       {clinicTherapists.map((therapist: any) => (
                         <option key={String(therapist.id)} value={String(therapist.id)}>
-                          {therapist.name || therapist.email || 'Terapeuta'}
+                          {formatPatientProfessionalOptionLabel(therapist)}
                         </option>
                       ))}
                     </select>

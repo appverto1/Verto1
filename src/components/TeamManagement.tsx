@@ -59,6 +59,7 @@ const buildDefaultWorkSchedule = () => ({
   minLeadMinutes: 120,
   maxSlotsPerDay: 8,
   defaultSessionDurationMinutes: 50,
+  sessionBufferMinutes: 0,
   days: WORK_SCHEDULE_DAYS.reduce((acc, day, index) => {
     acc[day.key] = index < 5
       ? { enabled: true, periods: [{ start: '08:00', end: '12:00' }, { start: '13:00', end: '17:00' }], intervals: [{ start: '12:00', end: '13:00' }] }
@@ -217,6 +218,7 @@ const normalizeWorkScheduleDraftForSave = (draft: any) => {
     ...base,
     defaultSessionDurationMinutes: Number(base.defaultSessionDurationMinutes || base.stepMinutes || 50),
     stepMinutes: Number(base.stepMinutes || base.defaultSessionDurationMinutes || 50),
+    sessionBufferMinutes: Math.min(120, Math.max(0, Number(base.sessionBufferMinutes ?? base.session_buffer_minutes ?? 0) || 0)),
     minLeadMinutes: Number(base.minLeadMinutes ?? 120),
     maxSlotsPerDay: Number(base.maxSlotsPerDay || 8),
     days,
@@ -905,7 +907,7 @@ export function TeamManagement({
 
                   <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
                     <div className="space-y-4">
-                      <div className="grid gap-3 rounded-2xl border border-slate-100 bg-slate-50/70 p-4 md:grid-cols-3">
+                      <div className="grid gap-3 rounded-2xl border border-slate-100 bg-slate-50/70 p-4 md:grid-cols-2 xl:grid-cols-4">
                         <label className="text-sm font-medium text-slate-600">
                           Duração padrão da sessão
                           <select
@@ -931,6 +933,21 @@ export function TeamManagement({
                             <option value="120">2 horas</option>
                             <option value="1440">1 dia</option>
                             <option value="2880">2 dias</option>
+                          </select>
+                        </label>
+                        <label className="text-sm font-medium text-slate-600">
+                          Intervalo entre sessões
+                          <select
+                            value={String(workScheduleDraft.sessionBufferMinutes ?? workScheduleDraft.session_buffer_minutes ?? 0)}
+                            onChange={(event) => setWorkScheduleDraft((prev: any) => ({ ...(prev || buildDefaultWorkSchedule()), sessionBufferMinutes: Number(event.target.value) }))}
+                            className="mt-2 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 outline-none focus:border-purple-300"
+                          >
+                            <option value="0">0 min</option>
+                            <option value="5">5 min</option>
+                            <option value="10">10 min</option>
+                            <option value="15">15 min</option>
+                            <option value="20">20 min</option>
+                            <option value="30">30 min</option>
                           </select>
                         </label>
                         <label className="text-sm font-medium text-slate-600">

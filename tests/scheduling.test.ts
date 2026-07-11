@@ -21,6 +21,8 @@ const roomSpecialtiesMigrationCode = readFileSync(join(root, 'supabase/migration
 const roomOverlapMigrationCode = readFileSync(join(root, 'supabase/migrations/20260707120000_clinic_room_overlap_policy.sql'), 'utf8');
 const coordinatorCode = readFileSync(join(root, 'src/components/CoordinatorDashboard.tsx'), 'utf8');
 const teamManagementCode = readFileSync(join(root, 'src/components/TeamManagement.tsx'), 'utf8');
+const patientDetailCode = readFileSync(join(root, 'src/components/PatientDetailView.tsx'), 'utf8');
+const appCode = readFileSync(join(root, 'src/App.tsx'), 'utf8');
 
 const tests: Array<{ name: string; fn: () => void }> = [];
 const test = (name: string, fn: () => void) => tests.push({ name, fn });
@@ -130,6 +132,34 @@ test('detecta conflito de sala sobreposto e permite horário adjacente', () => {
     duration_minutes: 45,
   });
   assert.equal(adjacent.hasConflict, false);
+});
+
+test('intervalo entre sessoes bloqueia horario colado quando configurado', () => {
+  const buffered = checkLocalScheduleConflicts({
+    appointments: baseAppointments,
+    patient_id: 'p2',
+    professional_ids: ['t1'],
+    room_id: 'room-fono',
+    location_type: 'clinica',
+    date: '2026-05-27',
+    start_time: '09:00',
+    duration_minutes: 45,
+    session_buffer_minutes: 10,
+  });
+  assert.equal(buffered.conflicts.some((item) => item.conflictType === 'professional'), true);
+
+  const noBuffer = checkLocalScheduleConflicts({
+    appointments: baseAppointments,
+    patient_id: 'p2',
+    professional_ids: ['t1'],
+    room_id: 'room-fono',
+    location_type: 'clinica',
+    date: '2026-05-27',
+    start_time: '09:00',
+    duration_minutes: 45,
+    session_buffer_minutes: 0,
+  });
+  assert.equal(noBuffer.hasConflict, false);
 });
 
 test('detecta conflito de profissional, paciente e recorrência', () => {
@@ -284,6 +314,38 @@ test('remarcacao do portal usa jornada semanal, almoco e bloqueios do profission
   assert.ok(mondayStarts.includes('13:00'));
 });
 
+test('remarcacao do portal respeita intervalo entre sessoes da jornada', () => {
+  const availability = buildAvailableRescheduleSlots({
+    appointmentId: 'original',
+    patientId: 'p1',
+    professionalId: 't1',
+    roomId: 'room-aba',
+    locationType: 'clinica',
+    durationMinutes: 50,
+    now: '2026-07-19T10:00:00-03:00',
+    dateFrom: '2026-07-20',
+    maxDays: 1,
+    workingSchedule: {
+      active: true,
+      stepMinutes: 50,
+      sessionBufferMinutes: 10,
+      minLeadMinutes: 0,
+      maxSlotsPerDay: 8,
+      days: {
+        monday: {
+          enabled: true,
+          periods: [{ start: '08:00', end: '12:00' }],
+          intervals: []
+        }
+      }
+    },
+    existingAppointments: []
+  });
+  const starts = availability.days[0]?.slots.map((slot) => slot.start) || [];
+  assert.deepEqual(starts, ['08:00', '09:00', '10:00', '11:00']);
+  assert.ok(!starts.includes('08:50'));
+});
+
 test('configuracao de jornada profissional persiste no perfil e exige permissao administrativa', () => {
   assert.match(serverCode, /app\.get\('\/api\/clinic\/members\/:memberId\/work-schedule'/);
   assert.match(serverCode, /app\.patch\('\/api\/clinic\/members\/:memberId\/work-schedule'/);
@@ -291,6 +353,8 @@ test('configuracao de jornada profissional persiste no perfil e exige permissao 
   assert.match(serverCode, /requireRoles\('coordinator', 'admin', 'owner'\)/);
   assert.match(serverCode, /assertClinicMemberForWorkSchedule/);
   assert.match(serverCode, /metadata[^]*workSchedule/);
+  assert.match(serverCode, /sessionBufferMinutes/);
+  assert.match(serverCode, /session_buffer_minutes/);
   assert.match(serverCode, /preserveExceptions/);
   assert.match(serverCode, /upsert\(payloads/);
   assert.match(teamManagementCode, /Hor.rios de trabalho/);
@@ -308,6 +372,8 @@ test('configuracao de jornada profissional persiste no perfil e exige permissao 
   assert.match(teamManagementCode, /min-w-0 w-full rounded-xl/);
   assert.match(teamManagementCode, /defaultSchedulePeriods/);
   assert.match(teamManagementCode, /defaultScheduleLunch/);
+  assert.match(teamManagementCode, /sessionBufferMinutes/);
+  assert.match(teamManagementCode, /Intervalo entre sess.es/);
   assert.match(teamManagementCode, /informe pelo menos um hor.rio de atendimento v.lido/);
   assert.match(teamManagementCode, /formatWorkScheduleMemberTitle\(editingScheduleMember\)/);
   assert.match(teamManagementCode, /replace\(/);
@@ -318,6 +384,32 @@ test('configuracao de jornada profissional persiste no perfil e exige permissao 
   assert.match(teamManagementCode, /CheckCircle2 size=\{17\}/);
   assert.match(teamManagementCode, /ring-4 ring-emerald-100/);
   assert.match(teamManagementCode, /Salvar hor.rios/);
+});
+
+test('pacientes e prontuario usam profissional responsavel sem terapeuta generico', () => {
+  assert.match(coordinatorCode, /resolvePatientResponsibleProfessionalId/);
+  assert.match(coordinatorCode, /responsible_professional_id/);
+  assert.match(coordinatorCode, /Filtrar por profissional/);
+  assert.match(coordinatorCode, /Sem profissional responsável/);
+  assert.doesNotMatch(coordinatorCode, /Filtrar por terapeuta/);
+  assert.doesNotMatch(coordinatorCode, /Profissional não identificado/);
+
+  assert.match(patientDetailCode, /Profissional responsável/);
+  assert.match(patientDetailCode, /formatPatientProfessionalOptionLabel/);
+  assert.match(patientDetailCode, /responsible_professional_id/);
+  assert.doesNotMatch(patientDetailCode, /Terapeuta Responsável/);
+  assert.doesNotMatch(patientDetailCode, /Carregando terapeutas/);
+  assert.match(appCode, /therapist_id:[\s\S]*updatedData\.therapist_id/);
+});
+
+test('agendamento usa responsavel do paciente e envia intervalo de sessoes ao conflito', () => {
+  assert.match(coordinatorCode, /selectPatientForSession/);
+  assert.match(coordinatorCode, /resolvePatientResponsibleProfessionalId\(patient\)/);
+  assert.match(coordinatorCode, /setSessionProfessionalId\(responsibleProfessional\?\.id/);
+  assert.match(coordinatorCode, /Este paciente ainda não possui profissional responsável atribuído/);
+  assert.match(coordinatorCode, /sessionBufferMinutes/);
+  assert.match(coordinatorCode, /session_buffer_minutes: sessionBufferMinutes/);
+  assert.match(serverCode, /fetchProfessionalWorkingSchedule\(clinicId, professionalIds\[0\]\)/);
 });
 
 test('solicitacao de remarcacao guarda ate tres opcoes estruturadas em nota compativel', () => {

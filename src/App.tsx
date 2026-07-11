@@ -5155,6 +5155,16 @@ export default function App() {
             typeof updatedData?.therapist_id !== 'undefined'
               ? updatedData.therapist_id
               : updatedData?.professional_id,
+          professional_id:
+            typeof updatedData?.professional_id !== 'undefined'
+              ? updatedData.professional_id
+              : updatedData?.therapist_id,
+          responsible_professional_id:
+            typeof updatedData?.responsible_professional_id !== 'undefined'
+              ? updatedData.responsible_professional_id
+              : (typeof updatedData?.responsibleProfessionalId !== 'undefined'
+                ? updatedData.responsibleProfessionalId
+                : (typeof updatedData?.therapist_id !== 'undefined' ? updatedData.therapist_id : updatedData?.professional_id)),
           clinic_id: updatedData.clinic_id,
           status: updatedData.status
         };
