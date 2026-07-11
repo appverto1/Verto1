@@ -413,6 +413,8 @@ test('agendamento usa responsavel do paciente e envia intervalo de sessoes ao co
 });
 
 test('modal de agendamento resolve profissional responsavel por aliases de id', () => {
+  assert.match(coordinatorCode, /isPatientCareProfessionalMember/);
+  assert.match(coordinatorCode, /getProfessionalAccessRoleKeys/);
   assert.match(coordinatorCode, /collectProfessionalIdentifierCandidates/);
   assert.match(coordinatorCode, /professional_profile_id/);
   assert.match(coordinatorCode, /professionalProfileId/);

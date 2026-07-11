@@ -333,6 +333,39 @@ const formatProfessionalDisplayLabel = (source: any, fallback = "Profissional") 
   return fallback;
 };
 
+const getProfessionalAccessRoleKeys = (source: any) =>
+  [
+    source?.role,
+    source?.accessRole,
+    source?.access_role,
+    source?.membershipRole,
+    source?.membership_role,
+    source?.systemRole,
+    source?.system_role,
+  ]
+    .map((item) => normalizeLookupText(item))
+    .filter(Boolean);
+
+const isPatientCareProfessionalMember = (source: any) => {
+  const accessRoles = getProfessionalAccessRoleKeys(source);
+  const professionalAccessLabels = ["therapist", "professional", "profissional", "profissional de atendimento"];
+  if (accessRoles.length > 0) {
+    return accessRoles.some((role) => professionalAccessLabels.includes(role));
+  }
+  const profileRoles = [
+    source?.profileRole,
+    source?.professionalProfileRole,
+    source?.roleLabel,
+    source?.role_label,
+  ]
+    .map((item) => normalizeLookupText(item))
+    .filter(Boolean);
+  return (
+    profileRoles.some((role) => professionalAccessLabels.includes(role)) ||
+    Boolean(inferProfessionalTitle(source))
+  );
+};
+
 const resolvePatientResponsibleProfessionalId = (patient: any) =>
   String(
     patient?.therapist_id ||
@@ -793,12 +826,9 @@ export function CoordinatorDashboard({
         if (!isMounted || !result?.success || !Array.isArray(result?.data)) return;
         const byId: Record<string, any> = {};
         result.data.forEach((member: any) => {
-          const role = String(
-            member?.profileRole || member?.professionalProfileRole || member?.role || "",
-          ).toLowerCase();
           const ids = collectProfessionalIdentifierCandidates(member);
           const id = ids[0] || "";
-          if ((role === "therapist" || role === "professional") && id) {
+          if (isPatientCareProfessionalMember(member) && id) {
             const normalizedMember = { ...member, id, matchIds: ids };
             ids.forEach((candidateId) => {
               byId[candidateId] = normalizedMember;
@@ -807,7 +837,7 @@ export function CoordinatorDashboard({
         });
         setTherapistMembersById(byId);
       } catch (error) {
-        console.error("Erro ao carregar terapeutas para exibição de responsáveis:", error);
+        console.error("Erro ao carregar profissionais para exibição de responsáveis:", error);
       }
     };
     loadTherapistMembers();
