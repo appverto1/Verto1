@@ -255,6 +255,7 @@ export function TeamManagement({
   const [workScheduleDraft, setWorkScheduleDraft] = useState<any>(null);
   const [workScheduleLoadingId, setWorkScheduleLoadingId] = useState<string | null>(null);
   const [workScheduleSaving, setWorkScheduleSaving] = useState(false);
+  const [workScheduleSavedPulse, setWorkScheduleSavedPulse] = useState(false);
   const [workScheduleNewException, setWorkScheduleNewException] = useState({ date: '', start: '08:00', end: '12:00', type: 'Bloqueio manual' });
   const [workScheduleValidationError, setWorkScheduleValidationError] = useState<string | null>(null);
   const [bulkApplyOpen, setBulkApplyOpen] = useState(false);
@@ -466,6 +467,7 @@ export function TeamManagement({
     setBulkTargetMode('selected');
     setBulkSelectedMemberIds([]);
     setBulkPreserveExceptions(true);
+    setWorkScheduleSavedPulse(false);
     setError(null);
     setSuccess(null);
     setOpenMenuId(null);
@@ -590,6 +592,8 @@ export function TeamManagement({
       setMembers((prev) => prev.map((member) => member.id === editingScheduleMember.id ? { ...member, workSchedule: savedSchedule, workScheduleConfigured: true } : member));
       setWorkScheduleDraft(savedSchedule);
       setSuccess('Horários de trabalho salvos.');
+      setWorkScheduleSavedPulse(true);
+      window.setTimeout(() => setWorkScheduleSavedPulse(false), 1800);
     } catch (err) {
       setWorkScheduleValidationError(err instanceof Error ? err.message : 'Erro ao salvar horários de trabalho.');
     } finally {
@@ -973,11 +977,14 @@ export function TeamManagement({
                               </div>
 
                               {dayDraft.enabled !== false ? (
-                                <div className="mt-4 grid gap-3 lg:grid-cols-3">
+                                <div className="mt-4 grid gap-3">
                                   {[0, 1].map((periodIndex) => (
                                     <div key={periodIndex} className="rounded-2xl border border-slate-100 bg-slate-50 p-3">
-                                      <p className="mb-3 text-sm font-medium text-slate-700">{periodIndex === 0 ? 'Manhã' : 'Tarde'}</p>
-                                      <div className="grid grid-cols-2 gap-3">
+                                      <div className="mb-3 flex items-center justify-between gap-3">
+                                        <p className="text-sm font-medium text-slate-700">{periodIndex === 0 ? 'Manhã' : 'Tarde'}</p>
+                                        <span className="text-xs text-slate-400">Atendimento</span>
+                                      </div>
+                                      <div className="grid gap-3 sm:grid-cols-2">
                                         <label className="text-xs font-medium text-slate-500">
                                           Início
                                           <input
@@ -986,7 +993,7 @@ export function TeamManagement({
                                             value={periods[periodIndex]?.start ?? ''}
                                             onChange={(event) => updateSchedulePeriod(day.key, periodIndex, 'start', event.target.value)}
                                             onBlur={() => normalizeScheduleFieldOnBlur(day.key, 'period', periodIndex, 'start')}
-                                            className="mt-1 h-12 w-full rounded-xl border border-slate-200 bg-white px-3 text-base font-medium text-slate-800 outline-none focus:border-purple-300 focus:ring-2 focus:ring-purple-100"
+                                            className="mt-1 h-12 min-w-0 w-full rounded-xl border border-slate-200 bg-white px-4 text-base font-medium text-slate-800 outline-none focus:border-purple-300 focus:ring-2 focus:ring-purple-100"
                                           />
                                         </label>
                                         <label className="text-xs font-medium text-slate-500">
@@ -997,7 +1004,7 @@ export function TeamManagement({
                                             value={periods[periodIndex]?.end ?? ''}
                                             onChange={(event) => updateSchedulePeriod(day.key, periodIndex, 'end', event.target.value)}
                                             onBlur={() => normalizeScheduleFieldOnBlur(day.key, 'period', periodIndex, 'end')}
-                                            className="mt-1 h-12 w-full rounded-xl border border-slate-200 bg-white px-3 text-base font-medium text-slate-800 outline-none focus:border-purple-300 focus:ring-2 focus:ring-purple-100"
+                                            className="mt-1 h-12 min-w-0 w-full rounded-xl border border-slate-200 bg-white px-4 text-base font-medium text-slate-800 outline-none focus:border-purple-300 focus:ring-2 focus:ring-purple-100"
                                           />
                                         </label>
                                       </div>
@@ -1005,8 +1012,11 @@ export function TeamManagement({
                                   ))}
 
                                   <div className="rounded-2xl border border-purple-100 bg-purple-50/60 p-3">
-                                    <p className="mb-3 text-sm font-medium text-purple-700">Intervalo/almoço</p>
-                                    <div className="grid grid-cols-2 gap-3">
+                                    <div className="mb-3 flex items-center justify-between gap-3">
+                                      <p className="text-sm font-medium text-purple-700">Intervalo/almoço</p>
+                                      <span className="text-xs text-purple-500">Não conta como atendimento</span>
+                                    </div>
+                                    <div className="grid gap-3 sm:grid-cols-2">
                                       <label className="text-xs font-medium text-purple-600">
                                         Início
                                         <input
@@ -1015,7 +1025,7 @@ export function TeamManagement({
                                           value={lunch.start ?? ''}
                                           onChange={(event) => updateScheduleLunch(day.key, 'start', event.target.value)}
                                           onBlur={() => normalizeScheduleFieldOnBlur(day.key, 'lunch', 0, 'start')}
-                                          className="mt-1 h-12 w-full rounded-xl border border-purple-100 bg-white px-3 text-base font-medium text-slate-800 outline-none focus:border-purple-300 focus:ring-2 focus:ring-purple-100"
+                                          className="mt-1 h-12 min-w-0 w-full rounded-xl border border-purple-100 bg-white px-4 text-base font-medium text-slate-800 outline-none focus:border-purple-300 focus:ring-2 focus:ring-purple-100"
                                         />
                                       </label>
                                       <label className="text-xs font-medium text-purple-600">
@@ -1026,7 +1036,7 @@ export function TeamManagement({
                                           value={lunch.end ?? ''}
                                           onChange={(event) => updateScheduleLunch(day.key, 'end', event.target.value)}
                                           onBlur={() => normalizeScheduleFieldOnBlur(day.key, 'lunch', 0, 'end')}
-                                          className="mt-1 h-12 w-full rounded-xl border border-purple-100 bg-white px-3 text-base font-medium text-slate-800 outline-none focus:border-purple-300 focus:ring-2 focus:ring-purple-100"
+                                          className="mt-1 h-12 min-w-0 w-full rounded-xl border border-purple-100 bg-white px-4 text-base font-medium text-slate-800 outline-none focus:border-purple-300 focus:ring-2 focus:ring-purple-100"
                                         />
                                       </label>
                                     </div>
@@ -1050,14 +1060,14 @@ export function TeamManagement({
                             Data
                             <input type="date" value={workScheduleNewException.date} onChange={(event) => setWorkScheduleNewException((prev) => ({ ...prev, date: event.target.value }))} className="mt-1 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700" />
                           </label>
-                          <div className="grid grid-cols-2 gap-3">
+                          <div className="grid gap-3">
                             <label className="text-sm font-medium text-slate-600">
                               Início
-                              <input type="time" placeholder="08:00" value={workScheduleNewException.start} onChange={(event) => setWorkScheduleNewException((prev) => ({ ...prev, start: event.target.value }))} onBlur={() => normalizeExceptionFieldOnBlur('start')} className="mt-1 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700" />
+                              <input type="time" placeholder="08:00" value={workScheduleNewException.start} onChange={(event) => setWorkScheduleNewException((prev) => ({ ...prev, start: event.target.value }))} onBlur={() => normalizeExceptionFieldOnBlur('start')} className="mt-1 h-11 min-w-0 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700" />
                             </label>
                             <label className="text-sm font-medium text-slate-600">
                               Fim
-                              <input type="time" placeholder="12:00" value={workScheduleNewException.end} onChange={(event) => setWorkScheduleNewException((prev) => ({ ...prev, end: event.target.value }))} onBlur={() => normalizeExceptionFieldOnBlur('end')} className="mt-1 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700" />
+                              <input type="time" placeholder="12:00" value={workScheduleNewException.end} onChange={(event) => setWorkScheduleNewException((prev) => ({ ...prev, end: event.target.value }))} onBlur={() => normalizeExceptionFieldOnBlur('end')} className="mt-1 h-11 min-w-0 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700" />
                             </label>
                           </div>
                           <label className="block text-sm font-medium text-slate-600">
@@ -1178,9 +1188,21 @@ export function TeamManagement({
                       type="button"
                       onClick={() => void saveWorkSchedule()}
                       disabled={workScheduleSaving || workScheduleLoadingId === editingScheduleMember.id}
-                      className="h-11 rounded-2xl bg-[#7a32fc] px-5 text-sm font-semibold text-white shadow-sm disabled:opacity-60"
+                      className={`inline-flex h-11 items-center justify-center gap-2 rounded-2xl px-5 text-sm font-semibold text-white shadow-sm transition-all duration-300 disabled:opacity-60 ${workScheduleSavedPulse ? 'bg-emerald-600 ring-4 ring-emerald-100' : 'bg-[#7a32fc] hover:bg-[#6924df]'}`}
                     >
-                      {workScheduleSaving ? 'Salvando...' : 'Salvar horários'}
+                      {workScheduleSaving ? (
+                        <>
+                          <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                          Salvando...
+                        </>
+                      ) : workScheduleSavedPulse ? (
+                        <>
+                          <CheckCircle2 size={17} className="animate-in zoom-in duration-200" />
+                          Horários salvos
+                        </>
+                      ) : (
+                        'Salvar horários'
+                      )}
                     </button>
                   </div>
                 </div>
