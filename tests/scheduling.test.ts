@@ -302,6 +302,15 @@ test('configuracao de jornada profissional persiste no perfil e exige permissao 
   assert.match(teamManagementCode, /Preservar exce..es e bloqueios individuais futuros/);
   assert.match(teamManagementCode, /normalizeWorkScheduleDraftForSave/);
   assert.match(teamManagementCode, /formato HH:mm/);
+  assert.match(teamManagementCode, /type="time"/);
+  assert.doesNotMatch(teamManagementCode, /inputMode="numeric"[^]*Hor.rios de trabalho/);
+  assert.match(teamManagementCode, /defaultSchedulePeriods/);
+  assert.match(teamManagementCode, /defaultScheduleLunch/);
+  assert.match(teamManagementCode, /informe pelo menos um hor.rio de atendimento v.lido/);
+  assert.match(teamManagementCode, /formatWorkScheduleMemberTitle\(editingScheduleMember\)/);
+  assert.match(teamManagementCode, /replace\(/);
+  assert.match(teamManagementCode, /terapeuta\\s\+/);
+  assert.doesNotMatch(teamManagementCode, /Terapeuta Mateus/);
   assert.match(teamManagementCode, /Salvar hor.rios/);
 });
 

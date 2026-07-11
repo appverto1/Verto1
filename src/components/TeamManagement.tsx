@@ -122,6 +122,18 @@ const formatAccessRoleLabel = (role: unknown, source?: any) => {
   return 'Profissional';
 };
 
+const formatWorkScheduleMemberTitle = (member: Member) => {
+  const rawName = String(member?.name || member?.email || 'Profissional').trim();
+  const nameWithoutGenericPrefix = rawName.replace(/^terapeuta\s+/i, '').trim() || rawName;
+  if (member?.role === 'therapist') {
+    return `${getProfessionalTitleFromSource(member, 'Profissional')} ${nameWithoutGenericPrefix}`.trim();
+  }
+  if (member?.role === 'coordinator') {
+    return `Coordenador ${nameWithoutGenericPrefix}`.trim();
+  }
+  return nameWithoutGenericPrefix;
+};
+
 const formatInvitationRoleLabel = (invitation: any) => {
   const role = invitation?.role;
   const roleLabel = invitation?.roleLabel || invitation?.role_label;
@@ -133,6 +145,8 @@ const formatInvitationRoleLabel = (invitation: any) => {
 };
 
 const buildScheduleValidationError = (label: string, field: string) => `${label}: informe ${field} no formato HH:mm.`;
+const defaultSchedulePeriods = () => [{ start: '08:00', end: '12:00' }, { start: '13:00', end: '17:00' }];
+const defaultScheduleLunch = () => [{ start: '12:00', end: '13:00' }];
 
 const normalizeSchedulePeriodForSave = (period: any, dayLabel: string, periodLabel: string) => {
   const rawStart = String(period?.start || '').trim();
@@ -163,13 +177,13 @@ const normalizeWorkScheduleDraftForSave = (draft: any) => {
       ? current.periods.slice(0, 2)
       : [{ start: '', end: '' }, { start: '', end: '' }];
     const normalizedPeriods: any[] = [];
-    for (let index = 0; index < 2; index += 1) {
-      const result = normalizeSchedulePeriodForSave(rawPeriods[index] || {}, day.label, index === 0 ? 'Manhã' : 'Tarde');
+    rawPeriods.forEach((rawPeriod: any, index: number) => {
+      const result = normalizeSchedulePeriodForSave(rawPeriod || {}, day.label, index === 0 ? 'Manhã' : 'Tarde');
       if (result.error) throw new Error(result.error);
       if (result.period) normalizedPeriods.push(result.period);
-    }
+    });
     if (normalizedPeriods.length === 0) {
-      throw new Error(`${day.label}: informe pelo menos um período de atendimento.`);
+      throw new Error(`${day.label}: informe pelo menos um horário de atendimento válido.`);
     }
 
     const rawLunch = Array.isArray(current.intervals) && current.intervals[0] ? current.intervals[0] : {};
@@ -486,7 +500,7 @@ export function TeamManagement({
     updateScheduleDay(dayKey, (day) => {
       const periods = Array.isArray(day.periods) && day.periods.length > 0
         ? [...day.periods]
-        : [{ start: '08:00', end: '12:00' }, { start: '13:00', end: '17:00' }];
+        : defaultSchedulePeriods();
       periods[periodIndex] = { ...(periods[periodIndex] || {}), [field]: value };
       return { ...day, periods, enabled: day.enabled !== false };
     });
@@ -494,7 +508,7 @@ export function TeamManagement({
 
   const updateScheduleLunch = (dayKey: string, field: 'start' | 'end', value: string) => {
     updateScheduleDay(dayKey, (day) => {
-      const intervals = Array.isArray(day.intervals) ? [...day.intervals] : [{ start: '12:00', end: '13:00' }];
+      const intervals = Array.isArray(day.intervals) ? [...day.intervals] : defaultScheduleLunch();
       intervals[0] = { ...(intervals[0] || { start: '12:00', end: '13:00' }), [field]: value };
       return { ...day, intervals };
     });
@@ -857,7 +871,7 @@ export function TeamManagement({
                 <div className="flex flex-col gap-4 border-b border-slate-100 px-5 py-4 md:flex-row md:items-center md:justify-between">
                   <div className="min-w-0">
                     <p className="text-xs font-medium text-purple-600">Horários de trabalho</p>
-                    <h2 className="mt-1 truncate text-xl font-semibold text-slate-900">{editingScheduleMember.name}</h2>
+                    <h2 className="mt-1 truncate text-xl font-semibold text-slate-900">{formatWorkScheduleMemberTitle(editingScheduleMember)}</h2>
                     <p className="mt-1 text-sm text-slate-500">Jornada usada para agenda e opções reais de remarcação no portal.</p>
                   </div>
                   <div className="flex flex-wrap gap-2">
@@ -934,8 +948,8 @@ export function TeamManagement({
                           const dayDraft = workScheduleDraft.days?.[day.key] || { enabled: false, periods: [], intervals: [] };
                           const periods = Array.isArray(dayDraft.periods) && dayDraft.periods.length > 0
                             ? dayDraft.periods
-                            : [{ start: '08:00', end: '12:00' }, { start: '13:00', end: '17:00' }];
-                          const lunch = Array.isArray(dayDraft.intervals) && dayDraft.intervals[0] ? dayDraft.intervals[0] : { start: '12:00', end: '13:00' };
+                            : defaultSchedulePeriods();
+                          const lunch = Array.isArray(dayDraft.intervals) && dayDraft.intervals[0] ? dayDraft.intervals[0] : defaultScheduleLunch()[0];
                           return (
                             <section key={day.key} className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
                               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -943,7 +957,12 @@ export function TeamManagement({
                                   <input
                                     type="checkbox"
                                     checked={dayDraft.enabled !== false}
-                                    onChange={(event) => updateScheduleDay(day.key, (current) => ({ ...current, enabled: event.target.checked }))}
+                                    onChange={(event) => updateScheduleDay(day.key, (current) => ({
+                                      ...current,
+                                      enabled: event.target.checked,
+                                      periods: event.target.checked && (!Array.isArray(current.periods) || current.periods.length === 0) ? defaultSchedulePeriods() : current.periods,
+                                      intervals: event.target.checked && (!Array.isArray(current.intervals) || current.intervals.length === 0) ? defaultScheduleLunch() : current.intervals
+                                    }))}
                                     className="h-5 w-5 rounded border-slate-300 accent-[#7a32fc]"
                                   />
                                   {day.label}
@@ -962,8 +981,7 @@ export function TeamManagement({
                                         <label className="text-xs font-medium text-slate-500">
                                           Início
                                           <input
-                                            type="text"
-                                            inputMode="numeric"
+                                            type="time"
                                             placeholder={periodIndex === 0 ? '08:00' : '13:00'}
                                             value={periods[periodIndex]?.start ?? ''}
                                             onChange={(event) => updateSchedulePeriod(day.key, periodIndex, 'start', event.target.value)}
@@ -974,8 +992,7 @@ export function TeamManagement({
                                         <label className="text-xs font-medium text-slate-500">
                                           Fim
                                           <input
-                                            type="text"
-                                            inputMode="numeric"
+                                            type="time"
                                             placeholder={periodIndex === 0 ? '12:00' : '17:00'}
                                             value={periods[periodIndex]?.end ?? ''}
                                             onChange={(event) => updateSchedulePeriod(day.key, periodIndex, 'end', event.target.value)}
@@ -993,8 +1010,7 @@ export function TeamManagement({
                                       <label className="text-xs font-medium text-purple-600">
                                         Início
                                         <input
-                                          type="text"
-                                          inputMode="numeric"
+                                          type="time"
                                           placeholder="12:00"
                                           value={lunch.start ?? ''}
                                           onChange={(event) => updateScheduleLunch(day.key, 'start', event.target.value)}
@@ -1005,8 +1021,7 @@ export function TeamManagement({
                                       <label className="text-xs font-medium text-purple-600">
                                         Fim
                                         <input
-                                          type="text"
-                                          inputMode="numeric"
+                                          type="time"
                                           placeholder="13:00"
                                           value={lunch.end ?? ''}
                                           onChange={(event) => updateScheduleLunch(day.key, 'end', event.target.value)}
@@ -1038,11 +1053,11 @@ export function TeamManagement({
                           <div className="grid grid-cols-2 gap-3">
                             <label className="text-sm font-medium text-slate-600">
                               Início
-                              <input type="text" inputMode="numeric" placeholder="08:00" value={workScheduleNewException.start} onChange={(event) => setWorkScheduleNewException((prev) => ({ ...prev, start: event.target.value }))} onBlur={() => normalizeExceptionFieldOnBlur('start')} className="mt-1 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700" />
+                              <input type="time" placeholder="08:00" value={workScheduleNewException.start} onChange={(event) => setWorkScheduleNewException((prev) => ({ ...prev, start: event.target.value }))} onBlur={() => normalizeExceptionFieldOnBlur('start')} className="mt-1 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700" />
                             </label>
                             <label className="text-sm font-medium text-slate-600">
                               Fim
-                              <input type="text" inputMode="numeric" placeholder="12:00" value={workScheduleNewException.end} onChange={(event) => setWorkScheduleNewException((prev) => ({ ...prev, end: event.target.value }))} onBlur={() => normalizeExceptionFieldOnBlur('end')} className="mt-1 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700" />
+                              <input type="time" placeholder="12:00" value={workScheduleNewException.end} onChange={(event) => setWorkScheduleNewException((prev) => ({ ...prev, end: event.target.value }))} onBlur={() => normalizeExceptionFieldOnBlur('end')} className="mt-1 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700" />
                             </label>
                           </div>
                           <label className="block text-sm font-medium text-slate-600">
