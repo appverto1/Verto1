@@ -495,14 +495,15 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id, user?.email, portalPatientId]);
 
-  const markPortalNotificationRead = async (notification: any) => {
+  const markPortalNotificationRead = async (notification: any, acknowledged = false) => {
     if (!notification?.id || notification?.read_at) return;
-    setPortalNotifications((current) =>
-      current.map((item) => String(item?.id) === String(notification.id)
-        ? { ...item, read_at: new Date().toISOString() }
-        : item)
+    setPortalNotifications((current) => acknowledged
+      ? current.filter((item) => String(item?.id) !== String(notification.id))
+      : current.map((item) => String(item?.id) === String(notification.id)
+          ? { ...item, read_at: new Date().toISOString() }
+          : item)
     );
-    const result = await dataService.markPortalNotification(String(notification.id));
+    const result = await dataService.markPortalNotification(String(notification.id), acknowledged);
     if (!result?.success) void loadPortalNotifications();
   };
 
@@ -580,7 +581,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
   const openPortalNotification = async (notification: any) => {
     const appointmentId = String(notification?.appointment_id || notification?.appointmentId || '').trim();
-    void markPortalNotificationRead(notification);
+    const notificationType = String(notification?.type || '').replace(/_(24h|12h)$/i, '');
+    void markPortalNotificationRead(notification, notificationType !== 'appointment_reminder');
     if (!appointmentId) return;
     const metadata = notification?.metadata && typeof notification.metadata === 'object' ? notification.metadata : {};
     const professionalName = firstPortalText(
@@ -2351,6 +2353,10 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
   const getPortalNotificationMessage = (notification: any) => {
     const metadata = notification?.metadata && typeof notification.metadata === 'object' ? notification.metadata : {};
+    const notificationType = normalizePortalLower(notification?.type).replace(/_(24h|12h)$/i, '');
+    if (notificationType && notificationType !== 'appointment_reminder') {
+      return firstPortalText(notification?.message) || 'Atualização da sua consulta disponível.';
+    }
     const scheduledAt = firstPortalText(
       metadata.scheduledAt,
       notification?.scheduled_for,

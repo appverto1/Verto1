@@ -185,12 +185,15 @@ test('notificacoes do portal sao deduplicadas e normalizadas por consulta penden
   assert.match(notificationsRoute, /\.is\('acknowledged_at', null\)/);
   assert.match(notificationsRoute, /title: branding\.displayName/);
   assert.match(notificationsRoute, /formatPortalReminderMessage/);
+  assert.match(notificationsRoute, /normalizePortalNotificationType\(row\?\.type\) === 'appointment_reminder'/);
   assert.match(notificationsRoute, /Toque para confirmar, remarcar ou cancelar/);
   assert.match(notificationsRoute, /dedupedRowsByAppointment/);
   assert.match(notificationsRoute, /latestPendingAppointmentReminder/);
   assert.match(serverCode, /const isPatientAppointmentNotificationActionable/);
   assert.match(serverCode, /normalizePortalNotificationType/);
   assert.match(notificationsRoute, /isPatientAppointmentNotificationActionable/);
+  assert.match(serverCode, /const notificationAppointmentStart = sanitizeIsoDateTime/);
+  assert.match(serverCode, /const currentAppointmentStart = sanitizeIsoDateTime/);
   assert.match(notificationsRoute, /queryPortalAppointmentsWithSchemaFallback/);
   assert.match(serverCode, /patient_confirmation_status/);
   assert.match(serverCode, /RESCHEDULE_REQUESTED/);
@@ -201,6 +204,8 @@ test('notificacoes do portal sao deduplicadas e normalizadas por consulta penden
   assert.match(patientDashboardCode, /dedupePortalNotifications/);
   assert.match(patientDashboardCode, /openPortalNotification/);
   assert.match(patientDashboardCode, /getPortalNotificationMessage/);
+  assert.match(patientDashboardCode, /notificationType !== 'appointment_reminder'/);
+  assert.match(serverCode, /buildPortalAppointmentHistory/);
   assert.doesNotMatch(patientDashboardCode, /<Bell size=\{15\}/);
 });
 
@@ -241,7 +246,7 @@ test('equipe aprova opcao escolhida sem expor agenda privada', () => {
   assert.match(staffBlock, /Aprovar op..o/);
   const availabilityRoute = serverSlice("app.get('/api/portal/appointments/:appointmentId/reschedule-slots'", 1600);
   assert.doesNotMatch(availabilityRoute, /patient_name|title|notes|observation/i);
-  const approvalRoute = serverSlice("app.post('/api/appointments/action-requests/:requestId/approve'", 7200);
+  const approvalRoute = serverSlice("app.post('/api/appointments/action-requests/:requestId/approve'", 11000);
   assert.match(approvalRoute, /selectedOptionIndex/);
   assert.match(approvalRoute, /checkScheduleConflicts/);
   assert.match(approvalRoute, /appointmentScheduleMatches/);
@@ -249,6 +254,7 @@ test('equipe aprova opcao escolhida sem expor agenda privada', () => {
   assert.match(approvalRoute, /\.eq\('status', 'PENDING'\)/);
   assert.doesNotMatch(approvalRoute, /req\.body\?\.scheduledStart/);
   assert.match(serverCode, /notifyPortalRescheduleApproval/);
+  assert.match(serverCode, /acknowledgeStaleAppointmentReminderNotifications\(nextAppointment\)/);
   assert.match(serverCode, /appointment_reschedule_approved/);
   assert.match(serverCode, /sendAppointmentNotification/);
 });

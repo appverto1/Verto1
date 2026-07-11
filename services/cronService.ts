@@ -664,7 +664,7 @@ async function resolveReminderClinicBranding(
   // com display_name e fazia o push voltar para o avatar generico.
   let data: any = null;
   let error: any = null;
-  let clinicColumns = ['id', 'name', 'display_name', 'legal_name', 'logo_url'];
+  let clinicColumns = ['id', 'name', 'display_name', 'legal_name', 'logo_url', 'owner_user_id'];
   while (clinicColumns.length >= 2) {
     const result = await read(clinicColumns.join(','));
     data = result.data;
@@ -693,12 +693,28 @@ async function resolveReminderClinicBranding(
       .eq('clinic_id', safeClinicId)
       .order('updated_at', { ascending: false })
       .limit(20);
-  let profileBranding = await readProfileBranding('clinic_name,clinic_logo_url,metadata,updated_at');
+  let profileBranding = await readProfileBranding('user_id,full_name,clinic_name,clinic_logo_url,metadata,updated_at');
   if (profileBranding.error && String(profileBranding.error.message || '').match(/column\s+"?metadata"?/i)) {
-    profileBranding = await readProfileBranding('clinic_name,clinic_logo_url,updated_at');
+    profileBranding = await readProfileBranding('user_id,full_name,clinic_name,clinic_logo_url,updated_at');
   }
   if (!profileBranding.error) {
     profileBrandingRows = Array.isArray(profileBranding.data) ? profileBranding.data : [];
+  } else if (String(profileBranding.error?.message || '').match(/column\s+"?clinic_id"?/i) && isUuid(data?.owner_user_id)) {
+    let ownerProfile = await options.supabase
+      .from('professional_profiles')
+      .select('user_id,full_name,clinic_name,clinic_logo_url,metadata,updated_at')
+      .eq('user_id', data.owner_user_id)
+      .limit(1)
+      .maybeSingle();
+    if (ownerProfile.error && String(ownerProfile.error.message || '').match(/column\s+"?metadata"?/i)) {
+      ownerProfile = await options.supabase
+        .from('professional_profiles')
+        .select('user_id,full_name,clinic_name,clinic_logo_url,updated_at')
+        .eq('user_id', data.owner_user_id)
+        .limit(1)
+        .maybeSingle();
+    }
+    if (!ownerProfile.error && ownerProfile.data) profileBrandingRows = [ownerProfile.data];
   }
   const institutionalProfile = profileBrandingRows.find((row: any) => {
     const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
@@ -754,11 +770,25 @@ async function resolveReminderClinicBranding(
         profileLogoMetadata.clinic_settings?.clinicLogoPath
     ) ||
     null;
+  const ownerProfessionalName = sanitizeText(profileNameSource?.full_name, 180);
+  const clinicNameIsOwnerName = Boolean(
+    clinicName && ownerProfessionalName &&
+    clinicName.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim() ===
+      ownerProfessionalName.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim()
+  );
   const branding = {
-    clinicName: !isGenericClinicNotificationName(clinicName)
-      ? clinicName
-      : (!isGenericClinicNotificationName(profileClinicName) ? profileClinicName : DEFAULT_CLINIC_NOTIFICATION_NAME),
-    clinicLogoUrl
+    clinicName: !isGenericClinicNotificationName(profileClinicName)
+      ? profileClinicName
+      : (!isGenericClinicNotificationName(clinicName) && !clinicNameIsOwnerName ? clinicName : DEFAULT_CLINIC_NOTIFICATION_NAME),
+    clinicLogoUrl: sanitizeClinicNotificationLogoUrl(
+      profileLogoSource?.clinic_logo_url ||
+        profileLogoMetadata.clinicLogoUrl ||
+        profileLogoMetadata.clinicSettings?.clinicLogoUrl ||
+        profileLogoMetadata.clinic_settings?.clinicLogoUrl ||
+        profileLogoMetadata.clinicLogoPath ||
+        profileLogoMetadata.clinicSettings?.clinicLogoPath ||
+        profileLogoMetadata.clinic_settings?.clinicLogoPath
+    ) || sanitizeClinicNotificationLogoUrl(data?.logo_url) || null
   };
   clinicBrandingCache.set(safeClinicId, branding);
   return branding;

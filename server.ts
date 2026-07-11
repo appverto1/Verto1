@@ -19208,7 +19208,7 @@ async function startServer() {
     // falhou para nao perder o logo institucional no fallback.
     let clinic: any = null;
     let clinicError: any = null;
-    let clinicColumns = ['id', 'name', 'display_name', 'legal_name', 'logo_url'];
+    let clinicColumns = ['id', 'name', 'display_name', 'legal_name', 'logo_url', 'owner_user_id'];
     while (clinicColumns.length >= 2) {
       const clinicResult = await read(clinicColumns.join(','));
       clinic = clinicResult.data;
@@ -19223,28 +19223,38 @@ async function startServer() {
       return fallback;
     }
     let profileBranding: any[] = [];
+    const clinicOwnerUserId = sanitizeString(clinic?.owner_user_id, 120);
     const readProfileBranding = (columns: string) => supabase
       .from('professional_profiles')
       .select(columns)
       .eq('clinic_id', safeClinicId)
       .order('updated_at', { ascending: false })
       .limit(20);
-    let profileBrandingResult = await readProfileBranding('clinic_name,clinic_logo_url,metadata,updated_at');
-    if (profileBrandingResult.error && extractMissingColumnName(profileBrandingResult.error)) {
-      profileBrandingResult = await readProfileBranding('clinic_name,clinic_logo_url,updated_at');
+    let profileBrandingResult = await readProfileBranding('user_id,full_name,clinic_name,clinic_logo_url,metadata,updated_at');
+    const profileBrandingMissingColumn = extractMissingColumnName(profileBrandingResult.error);
+    if (profileBrandingResult.error && profileBrandingMissingColumn && profileBrandingMissingColumn !== 'clinic_id') {
+      profileBrandingResult = await readProfileBranding('user_id,full_name,clinic_name,clinic_logo_url,updated_at');
     }
     if (!profileBrandingResult.error) {
       profileBranding = Array.isArray(profileBrandingResult.data) ? profileBrandingResult.data : [];
-    } else if (extractMissingColumnName(profileBrandingResult.error)) {
-      const legacyProfileBrandingResult = await supabase
+    } else if (extractMissingColumnName(profileBrandingResult.error) && isUuid(clinicOwnerUserId)) {
+      // professional_profiles legado nao possui clinic_id. O cadastro global da
+      // clinica e salvo no perfil do proprietario, ligado por clinics.owner_user_id.
+      let ownerProfileResult = await supabase
         .from('professional_profiles')
-        .select('clinic_name,clinic_logo_url')
-        .eq('clinic_id', safeClinicId)
-        .not('clinic_name', 'is', null)
-        .limit(10);
-      if (!legacyProfileBrandingResult.error) {
-        profileBranding = Array.isArray(legacyProfileBrandingResult.data) ? legacyProfileBrandingResult.data : [];
+        .select('user_id,full_name,clinic_name,clinic_logo_url,metadata,updated_at')
+        .eq('user_id', clinicOwnerUserId)
+        .limit(1)
+        .maybeSingle();
+      if (ownerProfileResult.error && extractMissingColumnName(ownerProfileResult.error)) {
+        ownerProfileResult = await supabase
+          .from('professional_profiles')
+          .select('user_id,full_name,clinic_name,clinic_logo_url,updated_at')
+          .eq('user_id', clinicOwnerUserId)
+          .limit(1)
+          .maybeSingle();
       }
+      if (!ownerProfileResult.error && ownerProfileResult.data) profileBranding = [ownerProfileResult.data];
     }
     const institutionalProfile = profileBranding.find((row: any) => {
       const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
@@ -19288,9 +19298,14 @@ async function startServer() {
         profileNameMetadata.clinic_settings?.clinicName,
       160
     );
-    const displayName = !isGenericClinicBrandingName(clinicDisplayName)
-      ? clinicDisplayName
-      : (!isGenericClinicBrandingName(profileDisplayName) ? profileDisplayName : fallback.displayName);
+    const ownerProfessionalName = sanitizeString(profileNameSource?.full_name, 180);
+    const clinicNameIsOwnerName = Boolean(
+      clinicDisplayName && ownerProfessionalName &&
+      normalizeBrandingIdentity(clinicDisplayName) === normalizeBrandingIdentity(ownerProfessionalName)
+    );
+    const displayName = !isGenericClinicBrandingName(profileDisplayName)
+      ? profileDisplayName
+      : (!isGenericClinicBrandingName(clinicDisplayName) && !clinicNameIsOwnerName ? clinicDisplayName : fallback.displayName);
     const profileLogoUrl = sanitizeClinicBrandImageUrl(
       profileLogoSource?.clinic_logo_url ||
         profileLogoMetadata.clinicLogoUrl ||
@@ -19303,7 +19318,7 @@ async function startServer() {
     return {
       id: safeClinicId,
       displayName,
-      logoUrl: sanitizeClinicBrandImageUrl(clinic?.logo_url) || profileLogoUrl,
+      logoUrl: profileLogoUrl || sanitizeClinicBrandImageUrl(clinic?.logo_url),
       primaryColor: fallback.primaryColor
     };
   };
@@ -32103,6 +32118,31 @@ async function startServer() {
       'REFUSED'
     ]);
     if (nonActionableStatuses.has(appointmentStatus) || nonActionableStatuses.has(responseStatus)) return false;
+    const notificationMetadata = notification?.metadata && typeof notification.metadata === 'object'
+      ? notification.metadata
+      : {};
+    const notificationAppointmentStart = sanitizeIsoDateTime(
+      notificationMetadata.scheduledAt ||
+      notificationMetadata.scheduled_at ||
+      notification?.appointment_scheduled_at ||
+      notification?.appointmentScheduledAt
+    );
+    const currentAppointmentStart = sanitizeIsoDateTime(
+      appointment?.scheduled_start_at ||
+      appointment?.scheduledStartAt ||
+      appointment?.scheduled_at ||
+      appointment?.scheduledAt ||
+      source?.scheduled_start_at ||
+      source?.scheduledStartAt ||
+      source?.scheduled_at ||
+      source?.scheduledAt
+    );
+    if (
+      notificationAppointmentStart && currentAppointmentStart &&
+      Math.abs(new Date(notificationAppointmentStart).getTime() - new Date(currentAppointmentStart).getTime()) >= 60_000
+    ) {
+      return false;
+    }
     if (
       appointment?.patient_responded_at ||
       appointment?.patientRespondedAt ||
@@ -32417,7 +32457,9 @@ async function startServer() {
           clinic_id: isUuid(clinicId) ? clinicId : row?.clinic_id,
           scheduled_for: scheduledAt || row?.scheduled_for,
           title: branding.displayName,
-          message: formatPortalReminderMessage({ ...row, scheduled_for: scheduledAt, metadata: normalizedMetadata }, patientName),
+          message: normalizePortalNotificationType(row?.type) === 'appointment_reminder'
+            ? formatPortalReminderMessage({ ...row, scheduled_for: scheduledAt, metadata: normalizedMetadata }, patientName)
+            : sanitizeTextField(row?.message, 1000) || 'Atualização da sua consulta disponível.',
           metadata: normalizedMetadata
         });
       }
@@ -32696,6 +32738,39 @@ async function startServer() {
       return { ok: false, status: 404, error: 'Notificação não encontrada.', notificationIds: [] as string[] };
     }
     return { ok: true, notificationIds };
+  };
+
+  const acknowledgeStaleAppointmentReminderNotifications = async (appointment: any) => {
+    const appointmentId = sanitizeString(appointment?.id, 120);
+    const patientId = sanitizeString(appointment?.patient_id || appointment?.patientId, 120);
+    const organizationId = sanitizeString(appointment?.organization_id || appointment?.clinic_id, 120);
+    if (!isUuid(appointmentId) || !isUuid(patientId) || !isUuid(organizationId)) return [] as string[];
+    const now = new Date().toISOString();
+    const reminderTypes = ['appointment_reminder', 'appointment_reminder_24h', 'appointment_reminder_12h'];
+    const buildQuery = (includeUpdatedAt: boolean) => {
+      let query = supabase
+        .from('portal_notifications')
+        .update({
+          read_at: now,
+          acknowledged_at: now,
+          ...(includeUpdatedAt ? { updated_at: now } : {})
+        })
+        .eq('appointment_id', appointmentId)
+        .eq('patient_id', patientId)
+        .in('type', reminderTypes)
+        .is('acknowledged_at', null);
+      query = query.or(`organization_id.eq.${organizationId},clinic_id.eq.${organizationId}`);
+      return query.select('id');
+    };
+    let result = await buildQuery(true);
+    if (result.error && extractMissingColumnName(result.error) === 'updated_at') result = await buildQuery(false);
+    if (result.error) {
+      if (!isMissingRelationError(result.error) && !hasMissingFinancialSchema(result.error)) throw result.error;
+      return [] as string[];
+    }
+    return (Array.isArray(result.data) ? result.data : [])
+      .map((row: any) => sanitizeString(row?.id, 120))
+      .filter((id: string) => isUuid(id));
   };
 
   const buildPortalAppointmentActionResult = (params: {
@@ -33226,6 +33301,22 @@ async function startServer() {
     metadata: sanitizeClinicalPayload(row?.metadata || {})
   });
 
+  const buildPortalAppointmentHistory = (rows: any[]) => {
+    const orderedRows = Array.isArray(rows) ? rows : [];
+    const latestRescheduleApprovalAt = orderedRows
+      .filter((row: any) => sanitizeString(row?.action, 80).toUpperCase() === 'RESCHEDULE_APPROVED')
+      .map((row: any) => new Date(row?.performed_at || 0).getTime())
+      .filter((value: number) => Number.isFinite(value))
+      .sort((a: number, b: number) => b - a)[0] || 0;
+    return orderedRows
+      .filter((row: any) => {
+        if (sanitizeString(row?.action, 80).toUpperCase() !== 'RESCHEDULE_REQUESTED') return true;
+        const requestedAt = new Date(row?.performed_at || 0).getTime();
+        return !latestRescheduleApprovalAt || !Number.isFinite(requestedAt) || requestedAt > latestRescheduleApprovalAt;
+      })
+      .map(mapAuditLogToHumanHistory);
+  };
+
   app.get('/api/portal/appointments', checkAuth, async (req: any, res) => {
     try {
       const role = sanitizeString(req.session.user?.role, 40).toLowerCase();
@@ -33517,7 +33608,7 @@ async function startServer() {
             signedAt: signature?.signed_at || null,
             status: signature?.status || 'SIGNED'
           })),
-          history: (auditResult.error ? [] : auditResult.data || []).map(mapAuditLogToHumanHistory),
+          history: buildPortalAppointmentHistory(auditResult.error ? [] : auditResult.data || []),
           closure: closure ? {
             readinessStatus: closure.readiness_status || 'UNKNOWN',
             blockingIssuesCount: Number(closure.blocking_issues_count || 0),
@@ -34142,6 +34233,7 @@ async function startServer() {
         }
       });
       if (requestRow.request_type === 'RESCHEDULE') {
+        await acknowledgeStaleAppointmentReminderNotifications(nextAppointment);
         void notifyPortalRescheduleApproval({
           appointment: nextAppointment,
           originalAppointment: appointment,

@@ -30,12 +30,18 @@ test('appointment confirmation branding is clinic-first and never falls back to 
   assert.match(serverCode, /const readClinicBrandingForFamilyView = async/);
   assert.match(serverCode, /\.from\('clinics'\)[\s\S]*?\.select\(columns\)/);
   assert.match(serverCode, /read\(clinicColumns\.join\(','\)\)/);
-  assert.match(familyBrandingSlice, /clinicColumns = \['id', 'name', 'display_name', 'legal_name', 'logo_url'\]/);
+  assert.match(familyBrandingSlice, /clinicColumns = \['id', 'name', 'display_name', 'legal_name', 'logo_url', 'owner_user_id'\]/);
   assert.match(familyBrandingSlice, /clinicColumns = clinicColumns\.filter/);
-  assert.match(familyBrandingSlice, /readProfileBranding\('clinic_name,clinic_logo_url,updated_at'\)/);
+  assert.match(familyBrandingSlice, /\.eq\('user_id', clinicOwnerUserId\)/);
+  assert.match(familyBrandingSlice, /profileLogoUrl \|\| sanitizeClinicBrandImageUrl\(clinic\?\.logo_url\)/);
+  assert.ok(
+    familyBrandingSlice.indexOf(".eq('user_id', clinicOwnerUserId)") < familyBrandingSlice.indexOf('const displayName ='),
+    'Schema legado deve ler branding institucional do perfil do proprietario antes de resolver o nome.'
+  );
+  assert.match(familyBrandingSlice, /readProfileBranding\('user_id,full_name,clinic_name,clinic_logo_url,updated_at'\)/);
   assert.match(familyBrandingSlice, /isGenericClinicBrandingName/);
   assert.match(familyBrandingSlice, /clinic_name,clinic_logo_url,metadata,updated_at/);
-  assert.match(familyBrandingSlice, /sanitizeClinicBrandImageUrl\(clinic\?\.logo_url\) \|\| profileLogoUrl/);
+  assert.match(familyBrandingSlice, /profileLogoUrl \|\| sanitizeClinicBrandImageUrl\(clinic\?\.logo_url\)/);
   assert.match(familyBrandingSlice, /profileWithUsableName/);
   assert.match(familyBrandingSlice, /profileWithUsableLogo/);
   assert.match(serverCode, /profileNameSource\?\.clinic_name/);
@@ -125,6 +131,8 @@ test('remarcacao aprovada nao volta a aparecer como solicitacao pendente', () =>
   assert.doesNotMatch(calendarCode, /explicit === 'RESCHEDULE_REQUESTED' \|\| explicit === 'RESCHEDULED'/);
   assert.match(serverCode, /RESCHEDULE_APPROVED/);
   assert.match(serverCode, /resolvedAppointmentIds/);
+  assert.match(serverCode, /buildPortalAppointmentHistory/);
+  assert.match(serverCode, /requestedAt > latestRescheduleApprovalAt/);
 });
 
 test('family popup uses neutral branding, logo initials fallback and no pre-confirmed green text', () => {
@@ -152,7 +160,9 @@ test('patient portal still exposes appointment action controls and notification 
   assert.match(pushServiceCode, /clinicLogoUrl/);
   assert.match(pushServiceCode, /allowProfessionalFallback:\s*false/);
   assert.match(cronServiceCode, /resolveReminderClinicBranding/);
-  assert.match(cronServiceCode, /clinicColumns = \['id', 'name', 'display_name', 'legal_name', 'logo_url'\]/);
+  assert.match(cronServiceCode, /clinicColumns = \['id', 'name', 'display_name', 'legal_name', 'logo_url', 'owner_user_id'\]/);
+  assert.match(cronServiceCode, /\.eq\('user_id', data\.owner_user_id\)/);
+  assert.match(cronServiceCode, /clinicNameIsOwnerName/);
   assert.match(cronServiceCode, /DEFAULT_CLINIC_NOTIFICATION_NAME = 'Clínica'/);
   assert.match(cronServiceCode, /isGenericClinicNotificationName/);
   assert.match(cronServiceCode, /allowProfessionalFallback:\s*false/);
