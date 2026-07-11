@@ -188,6 +188,7 @@ test('notificacoes do portal sao deduplicadas e normalizadas por consulta penden
   assert.match(notificationsRoute, /normalizePortalNotificationType\(row\?\.type\) === 'appointment_reminder'/);
   assert.match(notificationsRoute, /Toque para confirmar, remarcar ou cancelar/);
   assert.match(notificationsRoute, /dedupedRowsByAppointment/);
+  assert.match(notificationsRoute, /type === 'appointment_reschedule_approved' && patientId && eventScheduledAt/);
   assert.match(notificationsRoute, /latestPendingAppointmentReminder/);
   assert.match(serverCode, /const isPatientAppointmentNotificationActionable/);
   assert.match(serverCode, /normalizePortalNotificationType/);
@@ -202,11 +203,29 @@ test('notificacoes do portal sao deduplicadas e normalizadas por consulta penden
   assert.match(notificationsRoute, /data: visibleRows/);
   assert.match(notificationsRoute, /appointment_id/);
   assert.match(patientDashboardCode, /dedupePortalNotifications/);
+  assert.match(patientDashboardCode, /getPortalNotificationEventKey/);
+  assert.match(patientDashboardCode, /type === 'appointment_reschedule_approved' && patientId && scheduledKey/);
   assert.match(patientDashboardCode, /openPortalNotification/);
   assert.match(patientDashboardCode, /getPortalNotificationMessage/);
   assert.match(patientDashboardCode, /notificationType !== 'appointment_reminder'/);
+  assert.match(patientDashboardCode, /!acknowledged && notification\?\.read_at/);
   assert.match(serverCode, /buildPortalAppointmentHistory/);
   assert.doesNotMatch(patientDashboardCode, /<Bell size=\{15\}/);
+});
+
+test('notificacao de remarcacao lida pode ser reconhecida e baixa duplicatas equivalentes', () => {
+  const notificationPatch = between(
+    serverCode,
+    "app.patch('/api/portal/notifications/:notificationId'",
+    'const serializePortalAppointment ='
+  );
+  assert.match(notificationPatch, /normalizePortalNotificationType\(existing\?\.type\) === 'appointment_reschedule_approved'/);
+  assert.match(notificationPatch, /targetNotificationIds = Array\.from\(new Set/);
+  assert.match(notificationPatch, /metadata\.scheduledAt \|\| metadata\.scheduled_at \|\| row\?\.scheduled_for/);
+  assert.match(notificationPatch, /\.in\('id', targetNotificationIds\)/);
+  assert.match(notificationPatch, /acknowledgedIds: acknowledge \? targetNotificationIds : \[\]/);
+  assert.match(notificationPatch, /patientIds\.includes/);
+  assert.match(notificationPatch, /belongsToRecipient/);
 });
 
 test('remarcacao do portal usa slots disponiveis em vez de seletor livre', () => {

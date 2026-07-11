@@ -22904,6 +22904,97 @@ async function startServer() {
     }
   });
 
+  const canAccessCanonicalClinicLogo = async (params: {
+    objectPath: string;
+    user: any;
+  }): Promise<boolean> => {
+    const targetPath = extractPatientPhotosStoragePath(params.objectPath);
+    if (!targetPath) return false;
+    const role = sanitizeString(params.user?.role, 40).toLowerCase();
+    const clinicIds = new Set<string>();
+
+    if (role === 'patient') {
+      const actorId = sanitizeString(params.user?.id, 120);
+      const actorEmail = sanitizeEmail(params.user?.email);
+      const activeClinicId = sanitizeString(currentClinicId(params.user), 120);
+      const linkedPatientIds = actorEmail
+        ? await getPatientIdsByEmailAcrossClinics(actorEmail, actorId, activeClinicId)
+        : (isUuid(actorId) ? [actorId] : []);
+      if (linkedPatientIds.length === 0) return false;
+      const { data: linkedPatients, error: linkedPatientsError } = await supabase
+        .from('patients')
+        .select('id,clinic_id')
+        .in('id', linkedPatientIds)
+        .limit(Math.min(linkedPatientIds.length, 100));
+      if (linkedPatientsError) return false;
+      for (const patient of Array.isArray(linkedPatients) ? linkedPatients : []) {
+        const clinicId = sanitizeString(patient?.clinic_id, 120);
+        if (isUuid(clinicId)) clinicIds.add(clinicId);
+      }
+    } else {
+      const clinicId = sanitizeString(currentClinicId(params.user), 120);
+      if (isUuid(clinicId)) clinicIds.add(clinicId);
+    }
+
+    if (clinicIds.size === 0) return false;
+    const scopedClinicIds = Array.from(clinicIds);
+    let clinicColumns = ['id', 'owner_user_id', 'logo_url'];
+    let clinicRows: any[] = [];
+    for (let attempt = 0; attempt < 3 && clinicColumns.length > 1; attempt += 1) {
+      const clinicResult = await supabase
+        .from('clinics')
+        .select(clinicColumns.join(','))
+        .in('id', scopedClinicIds)
+        .limit(scopedClinicIds.length);
+      if (!clinicResult.error) {
+        clinicRows = Array.isArray(clinicResult.data) ? clinicResult.data : [];
+        break;
+      }
+      const missingColumn = extractMissingColumnName(clinicResult.error);
+      if (!missingColumn || !clinicColumns.includes(missingColumn)) return false;
+      clinicColumns = clinicColumns.filter((column) => column !== missingColumn);
+    }
+
+    const candidateReferences: unknown[] = clinicRows.map((clinic) => clinic?.logo_url);
+    const ownerUserIds = Array.from(new Set(
+      clinicRows
+        .map((clinic) => sanitizeString(clinic?.owner_user_id, 120))
+        .filter((ownerId) => isUuid(ownerId))
+    ));
+    if (ownerUserIds.length > 0) {
+      let profileColumns = ['user_id', 'clinic_logo_url', 'metadata'];
+      let profileRows: any[] = [];
+      for (let attempt = 0; attempt < 3 && profileColumns.length > 1; attempt += 1) {
+        const profileResult = await supabase
+          .from('professional_profiles')
+          .select(profileColumns.join(','))
+          .in('user_id', ownerUserIds)
+          .limit(ownerUserIds.length);
+        if (!profileResult.error) {
+          profileRows = Array.isArray(profileResult.data) ? profileResult.data : [];
+          break;
+        }
+        const missingColumn = extractMissingColumnName(profileResult.error);
+        if (!missingColumn || !profileColumns.includes(missingColumn)) return false;
+        profileColumns = profileColumns.filter((column) => column !== missingColumn);
+      }
+      for (const profile of profileRows) {
+        const metadata = profile?.metadata && typeof profile.metadata === 'object' ? profile.metadata : {};
+        candidateReferences.push(
+          profile?.clinic_logo_url,
+          metadata.clinicLogoUrl,
+          metadata.clinicLogoPath,
+          metadata.clinicSettings?.clinicLogoUrl,
+          metadata.clinicSettings?.clinicLogoPath
+        );
+      }
+    }
+
+    return candidateReferences.some((reference) =>
+      extractPatientPhotosStoragePath(reference) === targetPath
+    );
+  };
+
   app.get('/api/storage/patient-photos/view', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner', 'patient'), async (req: any, res) => {
     try {
       const objectPath = extractPatientPhotosStoragePath(req.query?.path);
@@ -22930,10 +23021,16 @@ async function startServer() {
 
       if (accessObjectPath.startsWith('onboarding/')) {
         const ownerUserId = sanitizeString(accessObjectPath.split('/')[1], 120);
-        const canViewOnboardingMedia = isUuid(ownerUserId) && (
+        let canViewOnboardingMedia = isUuid(ownerUserId) && (
           ownerUserId === actorId ||
           ['admin', 'owner', 'coordinator'].includes(role)
         );
+        if (!canViewOnboardingMedia) {
+          canViewOnboardingMedia = await canAccessCanonicalClinicLogo({
+            objectPath,
+            user: req.session.user
+          });
+        }
         if (!canViewOnboardingMedia) return res.status(403).send('Acesso negado.');
       } else {
         const ownerPatientId = sanitizeString(accessObjectPath.split('/')[0], 120);
@@ -32469,7 +32566,18 @@ async function startServer() {
         const appointmentId = sanitizeString(row?.appointment_id, 120);
         const patientId = sanitizeString(row?.patient_id, 120);
         const type = sanitizeString(row?.type, 80).replace(/_(24h|12h)$/i, '');
-        const groupKey = appointmentId
+        const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+        const eventScheduledAt = sanitizeIsoDateTime(
+          metadata.scheduledAt || metadata.scheduled_at || row?.scheduled_for
+        );
+        const groupKey = type === 'appointment_reschedule_approved' && patientId && eventScheduledAt
+          ? [
+              sanitizeString(row?.clinic_id || row?.organization_id, 120),
+              patientId,
+              type,
+              eventScheduledAt
+            ].join(':')
+          : appointmentId
           ? [
               sanitizeString(row?.clinic_id || row?.organization_id, 120),
               patientId,
@@ -32510,7 +32618,7 @@ async function startServer() {
       }
       const { data: existing, error: existingError } = await supabase
         .from('portal_notifications')
-        .select('id, patient_id, recipient_user_id, recipient_email, read_at, acknowledged_at')
+        .select('id, organization_id, clinic_id, patient_id, appointment_id, recipient_user_id, recipient_email, type, scheduled_for, read_at, acknowledged_at, metadata')
         .eq('id', notificationId)
         .limit(1)
         .maybeSingle();
@@ -32529,6 +32637,50 @@ async function startServer() {
       }
       const now = new Date().toISOString();
       const acknowledge = req.body?.acknowledged === true;
+      let targetNotificationIds = [notificationId];
+      if (acknowledge && normalizePortalNotificationType(existing?.type) === 'appointment_reschedule_approved') {
+        const existingMetadata = existing?.metadata && typeof existing.metadata === 'object' ? existing.metadata : {};
+        const existingEventAt = sanitizeIsoDateTime(
+          existingMetadata.scheduledAt || existingMetadata.scheduled_at || existing?.scheduled_for
+        );
+        if (existingEventAt) {
+          let siblingQuery = supabase
+            .from('portal_notifications')
+            .select('id, scheduled_for, metadata')
+            .eq('patient_id', existing.patient_id)
+            .eq('type', existing.type)
+            .is('acknowledged_at', null)
+            .limit(50);
+          const existingClinicId = sanitizeString(existing?.clinic_id, 120);
+          const existingOrganizationId = sanitizeString(existing?.organization_id, 120);
+          if (isUuid(existingClinicId)) {
+            siblingQuery = siblingQuery.eq('clinic_id', existingClinicId);
+          } else if (isUuid(existingOrganizationId)) {
+            siblingQuery = siblingQuery.eq('organization_id', existingOrganizationId);
+          }
+          if (isUuid(userId) && userEmail) {
+            siblingQuery = siblingQuery.or(`recipient_user_id.eq.${userId},recipient_email.eq.${userEmail}`);
+          } else if (isUuid(userId)) {
+            siblingQuery = siblingQuery.eq('recipient_user_id', userId);
+          } else {
+            siblingQuery = siblingQuery.eq('recipient_email', userEmail);
+          }
+          const siblingResult = await siblingQuery;
+          if (siblingResult.error) throw siblingResult.error;
+          targetNotificationIds = Array.from(new Set([
+            notificationId,
+            ...(Array.isArray(siblingResult.data) ? siblingResult.data : [])
+              .filter((row: any) => {
+                const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+                return sanitizeIsoDateTime(
+                  metadata.scheduledAt || metadata.scheduled_at || row?.scheduled_for
+                ) === existingEventAt;
+              })
+              .map((row: any) => sanitizeString(row?.id, 120))
+              .filter((id: string) => isUuid(id))
+          ]));
+        }
+      }
       const { data, error } = await supabase
         .from('portal_notifications')
         .update({
@@ -32536,11 +32688,15 @@ async function startServer() {
           ...(acknowledge ? { acknowledged_at: existing.acknowledged_at || now } : {}),
           updated_at: now
         })
-        .eq('id', notificationId)
-        .select('id, patient_id, appointment_id, type, title, message, read_at, acknowledged_at, sent_at, scheduled_for, created_at, metadata')
-        .single();
+        .in('id', targetNotificationIds)
+        .select('id, patient_id, appointment_id, type, title, message, read_at, acknowledged_at, sent_at, scheduled_for, created_at, metadata');
       if (error) throw error;
-      return res.json({ success: true, data });
+      const updatedRows = Array.isArray(data) ? data : [];
+      return res.json({
+        success: true,
+        data: updatedRows.find((row: any) => sanitizeString(row?.id, 120) === notificationId) || existing,
+        acknowledgedIds: acknowledge ? targetNotificationIds : []
+      });
     } catch (error: any) {
       return sendRouteDbError(res, '/api/portal/notifications/:notificationId [PATCH]', error, {
         notificationId: sanitizeString(req.params.notificationId, 120),

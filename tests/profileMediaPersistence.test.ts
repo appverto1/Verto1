@@ -70,6 +70,8 @@ test('midia de patient-photos usa proxy autenticado e imagem falhada para de ren
   const viewRoute = routeSlice("app.get('/api/storage/patient-photos/view'", 5000);
   assert.match(viewRoute, /checkAuth/);
   assert.match(viewRoute, /requireRoles\('coordinator', 'receptionist', 'therapist', 'admin', 'owner', 'patient'\)/);
+  assert.match(serverCode, /const canAccessCanonicalClinicLogo = async/);
+  assert.match(viewRoute, /canAccessCanonicalClinicLogo/);
   assert.match(viewRoute, /canAccessPatientInCurrentClinic\(ownerPatientId, req\.session\.user\)/);
   assert.match(viewRoute, /supabase\.storage\.from\('patient-photos'\)\.download\(objectPath\)/);
   assert.match(viewRoute, /Cache-Control', 'private, max-age=300'/);

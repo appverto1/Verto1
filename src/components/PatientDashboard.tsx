@@ -398,19 +398,35 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     return parts.join(' ');
   };
 
+  const getPortalNotificationEventKey = (item: any) => {
+    const metadata = item?.metadata && typeof item.metadata === 'object' ? item.metadata : {};
+    const appointmentId = String(item?.appointment_id || item?.appointmentId || '').trim();
+    const patientId = String(item?.patient_id || item?.patientId || metadata.patientId || metadata.patient_id || '').trim();
+    const clinicId = String(item?.clinic_id || item?.clinicId || item?.organization_id || metadata.clinicId || metadata.clinic_id || '').trim();
+    const type = String(item?.type || 'appointment_reminder').replace(/_(24h|12h)$/i, '');
+    const rawScheduledAt = String(
+      metadata.scheduledAt ||
+      metadata.scheduled_at ||
+      item?.scheduled_for ||
+      item?.scheduledFor ||
+      ''
+    ).trim();
+    const parsedScheduledAt = rawScheduledAt ? new Date(rawScheduledAt) : null;
+    const scheduledKey = parsedScheduledAt && !Number.isNaN(parsedScheduledAt.getTime())
+      ? String(parsedScheduledAt.getTime())
+      : rawScheduledAt;
+    if (type === 'appointment_reschedule_approved' && patientId && scheduledKey) {
+      return [clinicId, patientId, type, scheduledKey].join(':');
+    }
+    return appointmentId
+      ? [clinicId, patientId, appointmentId, type].join(':')
+      : String(item?.id || '').trim();
+  };
+
   const dedupePortalNotifications = (items: any[]) => {
     const byAppointment = new Map<string, any>();
     for (const item of Array.isArray(items) ? items : []) {
-      const appointmentId = String(item?.appointment_id || item?.appointmentId || '').trim();
-      const type = String(item?.type || 'appointment_reminder').replace(/_(24h|12h)$/i, '');
-      const key = appointmentId
-        ? [
-            String(item?.clinic_id || item?.clinicId || item?.organization_id || '').trim(),
-            String(item?.patient_id || item?.patientId || '').trim(),
-            appointmentId,
-            type
-          ].join(':')
-        : String(item?.id || '').trim();
+      const key = getPortalNotificationEventKey(item);
       if (!key || byAppointment.has(key)) continue;
       byAppointment.set(key, item);
     }
@@ -496,9 +512,10 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   }, [user?.id, user?.email, portalPatientId]);
 
   const markPortalNotificationRead = async (notification: any, acknowledged = false) => {
-    if (!notification?.id || notification?.read_at) return;
+    if (!notification?.id || (!acknowledged && notification?.read_at)) return;
+    const eventKey = getPortalNotificationEventKey(notification);
     setPortalNotifications((current) => acknowledged
-      ? current.filter((item) => String(item?.id) !== String(notification.id))
+      ? current.filter((item) => getPortalNotificationEventKey(item) !== eventKey)
       : current.map((item) => String(item?.id) === String(notification.id)
           ? { ...item, read_at: new Date().toISOString() }
           : item)
@@ -598,7 +615,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       id: appointmentId,
       patientName: metadata.patientName || notification?.patientName || user?.name || 'Paciente',
       clinicName: firstPortalClinicText(
-        getPortalClinicNameExclusions(professionalName, notification?.title),
+        getPortalClinicNameExclusions(professionalName),
         metadata.clinicName,
         metadata.clinicLegalName,
         notification?.clinicName,
@@ -2337,7 +2354,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       notification?.therapist_name
     );
     return firstPortalClinicText(
-      getPortalClinicNameExclusions(professionalName, notification?.title),
+      getPortalClinicNameExclusions(professionalName),
       metadata.clinicName,
       metadata.clinicLegalName,
       notification?.clinicName,
@@ -2411,8 +2428,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
               {renderPortalClinicLogo(logoUrl, clinicName)}
             </span>
             <span className="min-w-0">
-              <span className="block truncate text-xs font-semibold text-slate-950">{clinicName}</span>
-              <span className="block text-sm font-semibold leading-relaxed text-slate-700">
+              <span className="block truncate text-xs font-medium text-slate-800">{clinicName}</span>
+              <span className="block text-sm font-medium leading-relaxed text-slate-700">
                 {message}
               </span>
             </span>
@@ -2891,11 +2908,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     activePortalAppointment?.therapist_name
   );
   const activePortalClinicName = firstPortalClinicText(
-    getPortalClinicNameExclusions(
-      activePortalProfessionalName,
-      activePortalAppointment?.clinicName,
-      activePortalAppointment?.clinic_name
-    ),
+    getPortalClinicNameExclusions(activePortalProfessionalName),
     activePortalAppointment?.clinicName,
     activePortalAppointment?.clinic?.displayName,
     activePortalAppointment?.clinic?.name,
@@ -3030,10 +3043,10 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
               {renderPortalClinicLogo(activePortalClinicLogoUrl, activePortalClinicName)}
             </div>
             <div className="min-w-0">
-            <p className="truncate text-sm font-black text-slate-900">{activePortalClinicName}</p>
-            <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-[#7a32fc]">Detalhes da consulta</p>
-            <h3 className="mt-1 text-xl font-black text-slate-900">{activePortalAppointment?.patientName || 'Paciente'}</h3>
-            <p className="mt-1 text-sm font-semibold text-slate-500">{formatPortalDateTime(activePortalAppointment?.scheduledAt)}</p>
+            <p className="truncate text-sm font-medium text-slate-700">{activePortalClinicName}</p>
+            <p className="text-xs font-medium text-[#7a32fc]">Detalhes da consulta</p>
+            <h3 className="mt-1 text-xl font-semibold text-slate-900">{activePortalAppointment?.patientName || 'Paciente'}</h3>
+            <p className="mt-1 text-sm font-medium text-slate-500">{formatPortalDateTime(activePortalAppointment?.scheduledAt)}</p>
             </div>
           </div>
           <button type="button" onClick={() => { setSelectedPortalAppointment(null); setPortalAppointmentDetail(null); }} className="rounded-2xl border border-slate-100 p-2 text-slate-500">
@@ -3042,13 +3055,13 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         </div>
         {portalAppointmentDetail?.closure?.signaturePending && (
           <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
-            <p className="text-sm font-black text-amber-800">Assinatura pendente</p>
+            <p className="text-sm font-semibold text-amber-800">Assinatura pendente</p>
             <p className="mt-1 text-xs font-medium text-amber-700">Confirme a realização da sessão dentro do app.</p>
           </div>
         )}
         {activePortalConfirmed && (
           <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3">
-            <p className="text-sm font-black text-emerald-800">Presença confirmada</p>
+            <p className="text-sm font-semibold text-emerald-800">Presença confirmada</p>
             <p className="mt-1 text-xs font-medium text-emerald-700">A clínica já recebeu sua confirmação desta consulta.</p>
           </div>
         )}
@@ -3058,27 +3071,27 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           </div>
         )}
         <div className="mt-4 grid gap-2">
-          <button type="button" disabled={portalActionSaving || portalActionBlocked || activePortalConfirmed} onClick={() => void confirmPortalAppointment(activePortalAppointment)} className="flex items-center justify-center gap-2 rounded-2xl bg-[#7a32fc] px-4 py-3 text-sm font-black text-white disabled:opacity-50">
+          <button type="button" disabled={portalActionSaving || portalActionBlocked || activePortalConfirmed} onClick={() => void confirmPortalAppointment(activePortalAppointment)} className="flex items-center justify-center gap-2 rounded-2xl bg-[#7a32fc] px-4 py-3 text-sm font-semibold text-white disabled:opacity-50">
             <CheckCircle size={17} /> {activePortalConfirmed ? 'Presença confirmada' : 'Confirmar presença'}
           </button>
-          <button type="button" disabled={portalActionBlocked} onClick={() => openPortalRescheduleModal()} className="flex items-center justify-center gap-2 rounded-2xl border border-purple-100 bg-white px-4 py-3 text-sm font-black text-[#7a32fc] disabled:opacity-50">
+          <button type="button" disabled={portalActionBlocked} onClick={() => openPortalRescheduleModal()} className="flex items-center justify-center gap-2 rounded-2xl border border-purple-100 bg-white px-4 py-3 text-sm font-semibold text-[#7a32fc] disabled:opacity-50">
             <RefreshCcw size={17} /> Solicitar remarcação
           </button>
-          <button type="button" disabled={portalActionBlocked} onClick={() => setPortalModal('cancel')} className="flex items-center justify-center gap-2 rounded-2xl border border-rose-100 bg-white px-4 py-3 text-sm font-black text-rose-600 disabled:opacity-50">
+          <button type="button" disabled={portalActionBlocked} onClick={() => setPortalModal('cancel')} className="flex items-center justify-center gap-2 rounded-2xl border border-rose-100 bg-white px-4 py-3 text-sm font-semibold text-rose-600 disabled:opacity-50">
             <Ban size={17} /> Solicitar cancelamento
           </button>
           {portalAppointmentDetail?.session?.id && portalAppointmentDetail?.closure?.signaturePending && (
-            <button type="button" onClick={() => setPortalModal('sign')} className="flex items-center justify-center gap-2 rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-black text-emerald-700">
+            <button type="button" onClick={() => setPortalModal('sign')} className="flex items-center justify-center gap-2 rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700">
               <FileSignature size={17} /> Assinar sessão
             </button>
           )}
         </div>
         {Array.isArray(portalAppointmentDetail?.history) && portalAppointmentDetail.history.length > 0 && (
           <div className="mt-5">
-            <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">Histórico</p>
+            <p className="mb-2 text-xs font-medium text-slate-500">Histórico</p>
             <div className="space-y-2">
               {portalAppointmentDetail.history.slice(0, 4).map((entry: any, index: number) => (
-                <div key={index} className="rounded-2xl bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600">
+                <div key={index} className="rounded-2xl bg-slate-50 px-3 py-2 text-xs font-medium text-slate-600">
                   {entry.label || 'Ação registrada'} {entry.performedAt ? `em ${formatPortalDateTime(entry.performedAt)}` : ''}
                 </div>
               ))}

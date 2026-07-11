@@ -186,7 +186,7 @@ test('clinic_state_fallback enriquece resposta confirmada pelo historico operaci
   assert.match(serverCode, /source: 'clinic_state_fallback'/);
   assert.match(serverCode, /fetchCalendarEventsFromClinicState\(clinicId, range, filters, \{\}, organizationId\)/);
   assert.match(serverCode, /\.from\('appointment_status_audit_logs'\)[\s\S]*?\.in\('appointment_id', ids\)/);
-  assert.match(serverCode, /\.in\('action', \['CONFIRMED_BY_RESPONSIBLE', 'RESCHEDULE_REQUESTED', 'CANCEL_REQUESTED'\]\)/);
+  assert.match(serverCode, /\.in\('action', \['CONFIRMED_BY_RESPONSIBLE', 'RESCHEDULE_REQUESTED', 'RESCHEDULE_APPROVED', 'CANCEL_REQUESTED', 'CANCEL_APPROVED'\]\)/);
   assert.match(serverCode, /action === 'CONFIRMED_BY_RESPONSIBLE'[\s\S]*?status = 'confirmed'/);
   assert.match(serverCode, /applyPatientConfirmationStateToCalendarEvent/);
   assert.match(serverCode, /patientConfirmationStatus: resolved\.status/);

@@ -155,6 +155,11 @@ test('patient portal still exposes appointment action controls and notification 
   assert.match(patientDashboardCode, /isGenericPortalClinicName/);
   assert.match(patientDashboardCode, /isVertoPortalFallbackAsset/);
   assert.match(patientDashboardCode, /candidates\.find\(\(value\) => !isGenericPortalClinicName\(value\)\)/);
+  assert.doesNotMatch(patientDashboardCode, /getPortalClinicNameExclusions\(professionalName, notification\?\.title\)/);
+  assert.match(
+    patientDashboardCode,
+    /getPortalClinicNameExclusions\(activePortalProfessionalName\),\s*activePortalAppointment\?\.clinicName/
+  );
   assert.doesNotMatch(patientDashboardCode, /VERTO_NOTIFICATION_LOGO/);
   assert.match(pushServiceCode, /clinicName/);
   assert.match(pushServiceCode, /clinicLogoUrl/);
@@ -169,6 +174,32 @@ test('patient portal still exposes appointment action controls and notification 
   assert.match(cronServiceCode, /appointment: brandedAppointment/);
   assert.doesNotMatch(pushServiceCode, /\.select\(['"]\*['"]\)/);
   assert.doesNotMatch(cronServiceCode, /\.select\(['"]\*['"]\)/);
+});
+
+test('logo institucional privado pode ser lido apenas pela clinica vinculada ao paciente', () => {
+  const helperStart = serverCode.indexOf('const canAccessCanonicalClinicLogo = async');
+  const routeStart = serverCode.indexOf("app.get('/api/storage/patient-photos/view'", helperStart);
+  assert.ok(helperStart >= 0 && routeStart > helperStart, 'Resolvedor seguro do logo institucional nao encontrado.');
+  const helper = serverCode.slice(helperStart, routeStart);
+  const route = serverCode.slice(routeStart, routeStart + 5200);
+  assert.match(helper, /getPatientIdsByEmailAcrossClinics/);
+  assert.match(helper, /\.from\('patients'\)[\s\S]*?\.select\('id,clinic_id'\)/);
+  assert.match(helper, /\.from\('clinics'\)[\s\S]*?\.in\('id', scopedClinicIds\)/);
+  assert.match(helper, /\.from\('professional_profiles'\)[\s\S]*?\.in\('user_id', ownerUserIds\)/);
+  assert.match(helper, /extractPatientPhotosStoragePath\(reference\) === targetPath/);
+  assert.match(route, /canAccessCanonicalClinicLogo/);
+  assert.doesNotMatch(helper, /\.select\(['"]\*['"]\)/);
+});
+
+test('card e popup mantem branding hidratado e tipografia leve', () => {
+  const detailStart = patientDashboardCode.indexOf('const portalAppointmentDetailModal =');
+  const detailEnd = patientDashboardCode.indexOf('const portalActionSubmitDisabled', detailStart);
+  assert.ok(detailStart >= 0 && detailEnd > detailStart, 'Popup de detalhes nao encontrado.');
+  const detail = patientDashboardCode.slice(detailStart, detailEnd);
+  assert.match(detail, /activePortalClinicLogoUrl/);
+  assert.match(detail, /activePortalClinicName/);
+  assert.doesNotMatch(detail, /font-black/);
+  assert.doesNotMatch(detail, /uppercase/);
 });
 
 test('remarcacao guarda opcoes em metadata e nunca usa a nota tecnica como texto visivel', () => {
