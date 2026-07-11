@@ -351,6 +351,40 @@ const resolvePatientResponsibleProfessionalId = (patient: any) =>
       "",
   ).trim();
 
+const collectProfessionalIdentifierCandidates = (source: any, fallbackId: any = "") => {
+  const rawIds = [
+    fallbackId,
+    source?.id,
+    source?.user_id,
+    source?.userId,
+    source?.member_id,
+    source?.memberId,
+    source?.clinic_member_id,
+    source?.clinicMemberId,
+    source?.professional_id,
+    source?.professionalId,
+    source?.professional_profile_id,
+    source?.professionalProfileId,
+    source?.profile_id,
+    source?.profileId,
+    source?.auth_user_id,
+    source?.authUserId,
+    source?.therapist_id,
+    source?.therapistId,
+    source?.metadata?.user_id,
+    source?.metadata?.userId,
+    source?.metadata?.professional_id,
+    source?.metadata?.professionalId,
+    source?.metadata?.professional_profile_id,
+    source?.metadata?.professionalProfileId,
+    source?.metadata?.therapist_id,
+    source?.metadata?.therapistId,
+  ];
+  return Array.from(
+    new Set(rawIds.map((id) => String(id || "").trim()).filter(Boolean)),
+  );
+};
+
 const resolvePatientResponsibleProfessionalLabel = (
   patient: any,
   professionalsById: Record<string, any>,
@@ -762,9 +796,13 @@ export function CoordinatorDashboard({
           const role = String(
             member?.profileRole || member?.professionalProfileRole || member?.role || "",
           ).toLowerCase();
-          const id = String(member?.id || "").trim();
+          const ids = collectProfessionalIdentifierCandidates(member);
+          const id = ids[0] || "";
           if ((role === "therapist" || role === "professional") && id) {
-            byId[id] = member;
+            const normalizedMember = { ...member, id, matchIds: ids };
+            ids.forEach((candidateId) => {
+              byId[candidateId] = normalizedMember;
+            });
           }
         });
         setTherapistMembersById(byId);
@@ -781,14 +819,17 @@ export function CoordinatorDashboard({
   const therapistFilterOptions = useMemo(() => {
     const entries = Object.entries(therapistMembersById as Record<string, any>)
       .map(([id, member]: [string, any]) => {
+        const optionId = String(member?.id || id || "").trim();
         const specialties = Array.isArray(member?.specialties)
           ? member.specialties
           : String(member?.specialties || member?.specialty || member?.professionalSpecialty || "")
               .split(/[,;|]/);
         const specialty = String(specialties.find((item: any) => String(item || "").trim()) || "").trim();
+        const matchIds = collectProfessionalIdentifierCandidates(member, id);
         return {
-          id,
-          label: formatProfessionalDisplayLabel(member, String(member?.email || id).trim() || "Profissional"),
+          id: optionId,
+          matchIds,
+          label: formatProfessionalDisplayLabel(member, String(member?.email || optionId).trim() || "Profissional"),
           specialty,
           profilePicture:
             member?.profilePicture ||
@@ -806,7 +847,15 @@ export function CoordinatorDashboard({
         };
       })
       .sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
-    return entries;
+    const uniqueEntries: typeof entries = [];
+    const seenIds = new Set<string>();
+    entries.forEach((entry) => {
+      const primaryId = String(entry.id || "").trim();
+      if (!primaryId || seenIds.has(primaryId)) return;
+      seenIds.add(primaryId);
+      uniqueEntries.push(entry);
+    });
+    return uniqueEntries;
   }, [therapistMembersById]);
 
   const isValidDateOnlyParts = (year: number, month: number, day: number) => {
@@ -1122,6 +1171,7 @@ export function CoordinatorDashboard({
   const [sessionCallLink, setSessionCallLink] = useState("");
   const [sessionProfessional, setSessionProfessional] = useState("");
   const [sessionProfessionalId, setSessionProfessionalId] = useState("");
+  const [sessionProfessionalManuallySelected, setSessionProfessionalManuallySelected] = useState(false);
   const [sessionFinancialContextType, setSessionFinancialContextType] =
     useState<AppointmentFinancialContextType>("INSURANCE");
   const [sessionPayerId, setSessionPayerId] = useState("");
@@ -3112,19 +3162,39 @@ export function CoordinatorDashboard({
     };
   }, [isAddSessionModalOpen, isTherapist]);
 
-  const selectPatientForSession = (name: string) => {
+  const findSessionPatientByName = useCallback((name: string) => {
     const normalizedName = normalizeUtf8Text(name).trim().toLowerCase();
-    const patient = allPatients.find(
-      (item: any) => normalizeUtf8Text(item?.name).trim().toLowerCase() === normalizedName,
+    if (!normalizedName) return null;
+    return (
+      allPatients.find(
+        (item: any) => normalizeUtf8Text(item?.name).trim().toLowerCase() === normalizedName,
+      ) || null
     );
+  }, [allPatients]);
+
+  const findProfessionalOptionById = useCallback((professionalId: any) => {
+    const targetId = String(professionalId || "").trim();
+    if (!targetId) return null;
+    return (
+      therapistFilterOptions.find((member) => String(member.id || "") === targetId) ||
+      therapistFilterOptions.find(
+        (member) =>
+          Array.isArray((member as any).matchIds) &&
+          (member as any).matchIds.some((candidateId: any) => String(candidateId || "").trim() === targetId),
+      ) ||
+      null
+    );
+  }, [therapistFilterOptions]);
+
+  const selectPatientForSession = (name: string) => {
+    const patient = findSessionPatientByName(name);
     const responsibleProfessionalId = resolvePatientResponsibleProfessionalId(patient);
-    const responsibleProfessional = responsibleProfessionalId
-      ? therapistFilterOptions.find((member) => String(member.id || "") === responsibleProfessionalId)
-      : null;
+    const responsibleProfessional = findProfessionalOptionById(responsibleProfessionalId);
     const patientPayer = resolvePatientInsurancePayer(patient, sessionApproach);
     const matchingPayer = resolveClinicPayerForPatientInsurance(patientPayer);
     lastAutoPayerPatientKeyRef.current = getPatientAutoPayerKey(patient, name);
     setSessionPatientName(name);
+    setSessionProfessionalManuallySelected(false);
     setSessionProfessionalId(responsibleProfessional?.id ? String(responsibleProfessional.id) : "");
     setSessionProfessional(responsibleProfessional?.label || "");
     if (matchingPayer?.id || patientPayer.payerId) setSessionFinancialContextType("INSURANCE");
@@ -3139,6 +3209,15 @@ export function CoordinatorDashboard({
     setSessionPatientTissAuthorizationId("");
     setSessionBillingSuggestionState({ loading: false, error: "", suggestion: null });
     setFilteredPatients([]);
+  };
+
+  const handleSessionPatientNameChange = (value: string) => {
+    setSessionPatientName(value);
+    setSessionProfessionalManuallySelected(false);
+    const patient = findSessionPatientByName(value);
+    if (patient) return;
+    setSessionProfessionalId("");
+    setSessionProfessional("");
   };
 
   const activeClinicRooms = useMemo(
@@ -3192,37 +3271,45 @@ export function CoordinatorDashboard({
   const selectedSessionProfessional = useMemo(() => {
     const normalizedName = normalizeUtf8Text(sessionProfessional).trim();
     return (
-      therapistFilterOptions.find(
-        (member) => String(member.id || "") === String(sessionProfessionalId || ""),
-      ) ||
+      findProfessionalOptionById(sessionProfessionalId) ||
       therapistFilterOptions.find((member) => String(member.id || "") === normalizedName) ||
       therapistFilterOptions.find((member) => member.label === normalizedName) ||
       null
     );
-  }, [sessionProfessional, sessionProfessionalId, therapistFilterOptions]);
+  }, [findProfessionalOptionById, sessionProfessional, sessionProfessionalId, therapistFilterOptions]);
 
   useEffect(() => {
     if (!isAddSessionModalOpen || editingAppointmentId || !selectedSessionPatient) return;
     if (!selectedSessionPatientResponsibleProfessionalId) return;
-    const responsibleProfessional = therapistFilterOptions.find(
-      (member) => String(member.id || "") === selectedSessionPatientResponsibleProfessionalId,
-    );
+    const responsibleProfessional = findProfessionalOptionById(selectedSessionPatientResponsibleProfessionalId);
     if (!responsibleProfessional?.id) return;
+    if (sessionProfessionalManuallySelected && selectedSessionProfessional?.id) return;
     if (String(sessionProfessionalId || "") !== String(responsibleProfessional.id)) {
       setSessionProfessionalId(String(responsibleProfessional.id));
       setSessionProfessional(responsibleProfessional.label || "");
     }
   }, [
     editingAppointmentId,
+    findProfessionalOptionById,
     isAddSessionModalOpen,
     selectedSessionPatient,
     selectedSessionPatientResponsibleProfessionalId,
+    selectedSessionProfessional?.id,
     sessionProfessionalId,
+    sessionProfessionalManuallySelected,
     therapistFilterOptions,
   ]);
 
-  const sessionProfessionalNotice = selectedSessionPatient && !selectedSessionPatientResponsibleProfessionalId
-    ? "Este paciente ainda não possui profissional responsável atribuído. Selecione um profissional para esta consulta ou defina no prontuário."
+  const selectedSessionPatientResponsibleProfessionalOption = selectedSessionPatientResponsibleProfessionalId
+    ? findProfessionalOptionById(selectedSessionPatientResponsibleProfessionalId)
+    : null;
+
+  const sessionProfessionalNotice = selectedSessionPatient
+    ? !selectedSessionPatientResponsibleProfessionalId
+      ? "Este paciente ainda não possui profissional responsável atribuído. Selecione um profissional para esta consulta ou defina no prontuário."
+      : !selectedSessionPatientResponsibleProfessionalOption
+        ? "O profissional responsável deste paciente não está disponível na lista da clínica. Revise o cadastro da equipe antes de agendar."
+        : ""
     : "";
 
   const sessionBufferMinutes = useMemo(() => {
@@ -3730,6 +3817,7 @@ export function CoordinatorDashboard({
     setSessionApproach("");
     setSessionProfessional("");
     setSessionProfessionalId("");
+    setSessionProfessionalManuallySelected(false);
     setSessionFinancialContextType("INSURANCE");
     setSessionPayerId("");
     setSessionPayerNameSnapshot("");
@@ -5190,6 +5278,7 @@ export function CoordinatorDashboard({
         "",
     ).trim();
     setSessionProfessionalId(appointmentProfessionalId);
+    setSessionProfessionalManuallySelected(false);
     setSessionProfessional(
       ["equipe", "team"].includes(appointmentProfessionalName.toLowerCase())
         ? ""
@@ -12559,7 +12648,7 @@ export function CoordinatorDashboard({
                   className={sessionModalInputClass}
                   placeholder="Buscar..."
                   value={sessionPatientName}
-                  onChange={(e) => setSessionPatientName(e.target.value)}
+                  onChange={(e) => handleSessionPatientNameChange(e.target.value)}
                 />
                 {filteredPatients.length > 0 && (
                   <div className="absolute top-full left-0 right-0 bg-white border border-slate-100 rounded-xl shadow-xl mt-1 z-20 max-h-40 overflow-y-auto no-scrollbar">
@@ -12749,9 +12838,8 @@ export function CoordinatorDashboard({
                   value={sessionProfessionalId}
                   onChange={(e) => {
                     const nextId = e.target.value;
-                    const nextProfessional = therapistFilterOptions.find(
-                      (member) => String(member.id) === nextId,
-                    );
+                    const nextProfessional = findProfessionalOptionById(nextId);
+                    setSessionProfessionalManuallySelected(Boolean(nextId));
                     setSessionProfessionalId(nextId);
                     setSessionProfessional(nextProfessional?.label || "");
                   }}
@@ -12764,7 +12852,12 @@ export function CoordinatorDashboard({
                   ))}
                   {sessionProfessionalId &&
                     !therapistFilterOptions.some(
-                      (member) => String(member.id) === sessionProfessionalId,
+                      (member) =>
+                        String(member.id) === sessionProfessionalId ||
+                        (Array.isArray((member as any).matchIds) &&
+                          (member as any).matchIds.some(
+                            (candidateId: any) => String(candidateId || "").trim() === sessionProfessionalId,
+                          )),
                     ) && (
                       <option value={sessionProfessionalId} disabled>
                         Profissional não definido

@@ -412,6 +412,20 @@ test('agendamento usa responsavel do paciente e envia intervalo de sessoes ao co
   assert.match(serverCode, /fetchProfessionalWorkingSchedule\(clinicId, professionalIds\[0\]\)/);
 });
 
+test('modal de agendamento resolve profissional responsavel por aliases de id', () => {
+  assert.match(coordinatorCode, /collectProfessionalIdentifierCandidates/);
+  assert.match(coordinatorCode, /professional_profile_id/);
+  assert.match(coordinatorCode, /professionalProfileId/);
+  assert.match(coordinatorCode, /user_id/);
+  assert.match(coordinatorCode, /matchIds/);
+  assert.match(coordinatorCode, /findProfessionalOptionById/);
+  assert.match(coordinatorCode, /handleSessionPatientNameChange/);
+  assert.match(coordinatorCode, /setSessionProfessionalManuallySelected\(Boolean\(nextId\)\)/);
+  assert.match(coordinatorCode, /O profissional respons/);
+  assert.doesNotMatch(coordinatorCode, /Terapeuta respons/);
+  assert.doesNotMatch(coordinatorCode, /THERAPIST/);
+});
+
 test('solicitacao de remarcacao guarda ate tres opcoes estruturadas em nota compativel', () => {
   const options = normalizeRescheduleOptions([
     { scheduledStart: '2026-07-11T17:00:00.000Z', scheduledEnd: '2026-07-11T17:50:00.000Z', dateLabel: '11/07/2026', start: '14:00', end: '14:50' },
