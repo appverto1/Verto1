@@ -118,7 +118,7 @@ const sanitizeClinicNotificationLogoUrl = (value: unknown) => {
   if (!raw) return '';
   const text = /^data:image\//i.test(raw) ? raw.slice(0, 1_000_000) : raw.slice(0, 2_000);
   if (!text) return '';
-  if (text.includes('/verto-3d-transparent.png')) return '';
+  if (/(?:\/|^)(?:verto-3d(?:-transparent)?|logoverto|verto-logo)\.(?:png|webp|jpe?g)(?:$|[?#])/i.test(text)) return '';
   if (/^data:image\/(png|jpe?g|webp);base64,[a-z0-9+/=\s]+$/i.test(text)) return text;
   if (/^https?:\/\//i.test(text) || (text.startsWith('/') && !text.startsWith('//'))) return text;
   if (text.startsWith('patient-photos/') || /^[\w./-]+\.(png|jpe?g|webp)$/i.test(text)) {
@@ -635,6 +635,11 @@ const chooseDueReminder = (
 
 const clinicBrandingCache = new Map<string, { clinicName: string; clinicLogoUrl: string | null }>();
 
+export const invalidateReminderClinicBranding = (clinicId?: string | null) => {
+  const safeClinicId = sanitizeText(clinicId, 120);
+  if (safeClinicId) clinicBrandingCache.delete(safeClinicId);
+};
+
 async function resolveReminderClinicBranding(
   options: ActiveCronServiceOptions,
   clinicId?: string | null,
@@ -724,7 +729,7 @@ async function resolveReminderClinicBranding(
   const profileLogoMetadata = profileLogoSource?.metadata && typeof profileLogoSource.metadata === 'object'
     ? profileLogoSource.metadata
     : {};
-  const clinicName = sanitizeText(data?.display_name || data?.legal_name || data?.name, 160);
+  const clinicName = sanitizeText(data?.display_name || data?.name || data?.legal_name, 160);
   const profileClinicName = sanitizeText(
     profileNameSource?.clinic_name ||
       profileNameMetadata.clinicName ||

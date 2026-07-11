@@ -84,7 +84,7 @@ test('appointment reminder popup is clinic-branded and neutral', () => {
   assert.match(serverCode, /clinicLogoUrl/);
   assert.match(serverCode, /\.from\('clinics'\)/);
   assert.match(serverCode, /read\('id,name,display_name,legal_name,logo_url'\)/);
-  assert.match(serverCode, /clinic\?\.display_name \|\| clinic\?\.legal_name \|\| clinic\?\.name/);
+  assert.match(serverCode, /clinic\?\.display_name \|\| clinic\?\.name \|\| clinic\?\.legal_name/);
   assert.match(appCode, /buildPatientReminderModalViewModel/);
   assert.match(appCode, /appointmentConfirmationViewModel\?\.brandName/);
   assert.match(appCode, /appointmentConfirmationViewModel\?\.brandLogoUrl/);
@@ -134,9 +134,10 @@ test('frontend exposes portal actions and clinic agenda request decisions withou
   assert.match(calendarCode, /rejectAppointmentActionRequest/);
   assert.match(calendarCode, /Cancelar consulta/);
   assert.match(calendarCode, /Remarcar consulta/);
-  assert.match(calendarCode, /Manter horário/);
+  assert.match(calendarCode, /Recusar/);
+  assert.match(calendarCode, /Sugerir outro horário/);
+  assert.match(calendarCode, /Motivo da recusa/);
   assert.doesNotMatch(calendarCode, /Aprovar cancelamento/);
-  assert.doesNotMatch(calendarCode, /Recusar/);
   assert.doesNotMatch(patientDashboardCode, /dangerouslySetInnerHTML/);
   assert.doesNotMatch(patientDashboardCode, /PostgREST|Railway|schema cache/i);
 });

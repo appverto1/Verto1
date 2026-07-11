@@ -11,6 +11,7 @@ import {
   buildAvailableRescheduleSlots,
   buildRescheduleRequestNote,
   normalizeRescheduleOptions,
+  parseRescheduleRequestPayload,
   parseRescheduleRequestNote,
 } from '../src/services/portalRescheduleAvailability';
 
@@ -441,6 +442,30 @@ test('solicitacao de remarcacao guarda ate tres opcoes estruturadas em nota comp
   assert.equal(parsed.options.length, 3);
   assert.equal(parsed.options[0].start, '14:00');
   assert.equal(parsed.note, 'Prefiro periodo da tarde.');
+});
+
+test('solicitacao legada de remarcacao nunca vaza JSON escapado para a tela', () => {
+  const legacy = '[verto-reschedule-options]{{&quot;selectedSlots&quot;:[{&quot;scheduledStart&quot;:&quot;2026-07-15T11:00:00.000Z&quot;,&quot;scheduledEnd&quot;:&quot;2026-07-15T11:50:00.000Z&quot;,&quot;dateLabel&quot;:&quot;15/07/2026&quot;,&quot;start&quot;:&quot;08:00&quot;,&quot;end&quot;:&quot;08:50&quot;}]}}';
+  const parsed = parseRescheduleRequestNote(legacy);
+  assert.equal(parsed.options.length, 1);
+  assert.equal(parsed.note, '');
+  assert.equal(parsed.hasStructuredPayload, true);
+  assert.equal(parsed.invalidPayload, false);
+});
+
+test('metadata de remarcacao tem prioridade sobre nota legada e preserva mensagem humana', () => {
+  const parsed = parseRescheduleRequestPayload('Prefiro a tarde.', {
+    rescheduleOptions: [{
+      scheduledStart: '2026-07-15T18:00:00.000Z',
+      scheduledEnd: '2026-07-15T18:50:00.000Z',
+      dateLabel: '15/07/2026',
+      start: '15:00',
+      end: '15:50'
+    }]
+  });
+  assert.equal(parsed.source, 'metadata');
+  assert.equal(parsed.options[0].start, '15:00');
+  assert.equal(parsed.note, 'Prefiro a tarde.');
 });
 
 test('remarcacao em lote ignora as ocorrencias da propria serie', () => {

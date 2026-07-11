@@ -1575,10 +1575,6 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       infrastructureTokens.some((token) => text.toLowerCase().includes(token));
   };
   const firstPortalText = (...values: any[]) => values.map(normalizePortalText).find(Boolean) || '';
-  const firstPortalLogoUrl = (...values: any[]) =>
-    values
-      .map(normalizePortalText)
-      .find((value) => value && !value.includes('/verto-3d-transparent.png')) || '';
   const portalIdentityKey = (value: any) =>
     normalizePortalText(value)
       .normalize('NFD')
@@ -1586,6 +1582,22 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, ' ')
       .trim();
+  const isGenericPortalClinicName = (value: any) => [
+    '',
+    'clinica',
+    'sua clinica',
+    'minha clinica',
+    'clinica verto',
+    'verto'
+  ].includes(portalIdentityKey(value));
+  const isVertoPortalFallbackAsset = (value: any) => {
+    const normalized = normalizePortalText(value).toLowerCase();
+    return /(?:^|\/)(?:verto-3d(?:-transparent)?|logoverto|verto-logo)\.(?:png|webp|jpe?g)(?:$|[?#])/.test(normalized);
+  };
+  const firstPortalLogoUrl = (...values: any[]) =>
+    values
+      .map(normalizePortalText)
+      .find((value) => value && !isVertoPortalFallbackAsset(value)) || '';
   const looksLikePortalProfessionalLabel = (candidate: any, professionalName: any) => {
     const candidateKey = portalIdentityKey(candidate);
     const professionalKey = portalIdentityKey(professionalName);
@@ -1597,9 +1609,10 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   };
   const firstPortalClinicText = (professionalNames: any[], ...values: any[]) => {
     const professionals = professionalNames.map(normalizePortalText).filter(Boolean);
-    return values
+    const candidates = values
       .map(normalizePortalText)
-      .find((value) => value && !professionals.some((professional) => looksLikePortalProfessionalLabel(value, professional))) || 'Clínica';
+      .filter((value) => value && !professionals.some((professional) => looksLikePortalProfessionalLabel(value, professional)));
+    return candidates.find((value) => !isGenericPortalClinicName(value)) || candidates[0] || 'Clínica';
   };
   const getPortalClinicInitials = (value: any) => {
     const words = normalizePortalText(value || 'Clínica')

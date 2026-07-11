@@ -1,4 +1,4 @@
-const SW_VERSION = "appointments-app-only-v8";
+const SW_VERSION = "appointments-app-only-v9";
 const APPOINTMENT_NOTIFICATION_CTA = "Toque para confirmar, remarcar ou cancelar.";
 const VERTO_ICON = "/verto-3d-transparent.png";
 
@@ -13,7 +13,7 @@ const isGenericBrandName = (value) => {
 };
 
 const isVertoFallbackAsset = (value) =>
-  String(value || "").includes("/verto-3d-transparent.png");
+  /(?:^|\/)(?:verto-3d(?:-transparent)?|logoverto|verto-logo)\.(?:png|webp|jpe?g)(?:$|[?#])/i.test(String(value || ""));
 
 const asNotificationAssetUrl = (value, fallback = VERTO_ICON) => {
   const source = String(value || fallback || "").trim() || VERTO_ICON;

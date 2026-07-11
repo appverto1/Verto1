@@ -585,22 +585,127 @@ export function buildRescheduleRequestNote(note: unknown, options: PortalResched
   return [structured, humanOptions, humanNote].filter(Boolean).join('\n\n');
 }
 
-export function parseRescheduleRequestNote(note: unknown): { options: PortalRescheduleOption[]; note: string } {
-  const text = String(note || '');
-  const markerPattern = new RegExp(`${PORTAL_RESCHEDULE_NOTE_START.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([\\s\\S]*?)${PORTAL_RESCHEDULE_NOTE_END.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`);
-  const match = text.match(markerPattern);
-  const options = match?.[1]
-    ? normalizeRescheduleOptions((() => {
-        try {
-          const parsed = JSON.parse(match[1]);
-          return parsed?.selectedSlots || parsed?.options || [];
-        } catch {
-          return [];
-        }
-      })())
-    : [];
-  const withoutMarker = text.replace(markerPattern, '').trim();
-  const withoutHumanOptions = withoutMarker.replace(/Opções escolhidas:\s*(?:\n\d+\.\s.*)+/i, '').trim();
-  const cleaned = withoutHumanOptions.replace(/^Observação:\s*/i, '').trim();
-  return { options, note: cleaned };
+const decodeRescheduleHtmlEntities = (value: unknown) => String(value || '')
+  .replace(/&quot;/gi, '"')
+  .replace(/&#0*34;/gi, '"')
+  .replace(/&#x0*22;/gi, '"')
+  .replace(/&apos;/gi, "'")
+  .replace(/&#0*39;/gi, "'")
+  .replace(/&#x0*27;/gi, "'")
+  .replace(/&amp;/gi, '&');
+
+const extractRescheduleJsonObject = (value: string) => {
+  const firstBrace = value.indexOf('{');
+  if (firstBrace < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = firstBrace; index < value.length; index += 1) {
+    const char = value[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === '{') depth += 1;
+    if (char === '}') depth -= 1;
+    if (depth === 0) {
+      return { json: value.slice(firstBrace, index + 1), endIndex: index + 1 };
+    }
+  }
+  return null;
+};
+
+const parseRescheduleOptionsJson = (raw: string) => {
+  const candidates = [raw.trim()];
+  if (/^\{\{[\s\S]*\}\}$/.test(raw.trim())) {
+    candidates.push(raw.trim().slice(1, -1));
+  }
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      const options = normalizeRescheduleOptions(parsed?.selectedSlots || parsed?.rescheduleOptions || parsed?.options || []);
+      if (options.length > 0) return options;
+    } catch {
+      // Try the next legacy shape without letting malformed historical content break the screen.
+    }
+  }
+  return [] as PortalRescheduleOption[];
+};
+
+type ParsedReschedulePayload = {
+  options: PortalRescheduleOption[];
+  note: string;
+  hasStructuredPayload: boolean;
+  invalidPayload: boolean;
+  source: 'metadata' | 'legacy_note' | 'none';
+};
+
+export function parseRescheduleRequestNote(note: unknown): ParsedReschedulePayload {
+  const text = decodeRescheduleHtmlEntities(note);
+  const markerIndex = text.indexOf(PORTAL_RESCHEDULE_NOTE_START);
+  if (markerIndex < 0) {
+    return {
+      options: [],
+      note: text.trim(),
+      hasStructuredPayload: false,
+      invalidPayload: false,
+      source: 'none'
+    };
+  }
+
+  const beforeMarker = text.slice(0, markerIndex);
+  const afterMarker = text.slice(markerIndex + PORTAL_RESCHEDULE_NOTE_START.length);
+  const closingMarkerIndex = afterMarker.indexOf(PORTAL_RESCHEDULE_NOTE_END);
+  const extracted = closingMarkerIndex >= 0
+    ? { json: afterMarker.slice(0, closingMarkerIndex), endIndex: closingMarkerIndex + PORTAL_RESCHEDULE_NOTE_END.length }
+    : extractRescheduleJsonObject(afterMarker);
+  const options = extracted ? parseRescheduleOptionsJson(extracted.json) : [];
+  const remainder = extracted ? afterMarker.slice(extracted.endIndex) : '';
+  const withoutMarker = `${beforeMarker}${remainder}`.replace(new RegExp(PORTAL_RESCHEDULE_NOTE_END.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), '').trim();
+  const withoutHumanOptions = withoutMarker
+    .replace(/Op(?:ç|Ã§)(?:ões|Ãµes) escolhidas:\s*(?:\n\d+\.\s.*)+/i, '')
+    .trim();
+  const cleaned = withoutHumanOptions.replace(/^Observa(?:ç|Ã§)(?:ão|Ã£o):\s*/i, '').trim();
+  return {
+    options,
+    note: cleaned,
+    hasStructuredPayload: true,
+    invalidPayload: options.length === 0,
+    source: options.length > 0 ? 'legacy_note' : 'none'
+  };
+}
+
+export function parseRescheduleRequestPayload(note: unknown, metadata?: unknown): ParsedReschedulePayload {
+  const parsedNote = parseRescheduleRequestNote(note);
+  const metadataRecord = metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+    ? metadata as Record<string, unknown>
+    : {};
+  const metadataOptions = normalizeRescheduleOptions(
+    metadataRecord.rescheduleOptions ||
+      metadataRecord.reschedule_options ||
+      metadataRecord.selectedSlots ||
+      metadataRecord.selected_slots ||
+      metadataRecord.options ||
+      []
+  );
+  if (metadataOptions.length > 0) {
+    return {
+      ...parsedNote,
+      options: metadataOptions,
+      hasStructuredPayload: true,
+      invalidPayload: false,
+      source: 'metadata'
+    };
+  }
+  return parsedNote;
+}
+
+export function buildRescheduleRequestMessage(note: unknown) {
+  return parseRescheduleRequestNote(note).note;
 }

@@ -32,7 +32,7 @@ import {
   syncClinicActivePatientAddonQuantity
 } from './services/stripeService';
 import type { SafeStripeBillingPlan, SafeStripeBillingTier } from './services/stripeService';
-import { runAppointmentReminderScan, startAppointmentReminderCron, triggerAppointmentReminderScan } from './services/cronService';
+import { invalidateReminderClinicBranding, runAppointmentReminderScan, startAppointmentReminderCron, triggerAppointmentReminderScan } from './services/cronService';
 import {
   removePatientPushSubscription,
   resolvePatientIdsForPush,
@@ -103,10 +103,10 @@ import {
 } from './src/utils/scheduling';
 import {
   buildAvailableRescheduleSlots,
-  buildRescheduleRequestNote,
+  buildRescheduleRequestMessage,
   flattenRescheduleSlotGroups,
   normalizeRescheduleOptions,
-  parseRescheduleRequestNote,
+  parseRescheduleRequestPayload,
   type PortalProfessionalWorkingSchedule,
   type PortalRescheduleOption
 } from './src/services/portalRescheduleAvailability';
@@ -3020,7 +3020,7 @@ function sanitizeClinicBrandImageUrl(value: unknown): string | null {
   const storagePath = extractPatientPhotosStoragePath(value);
   if (storagePath) return buildPatientPhotoViewUrl(storagePath);
   const raw = sanitizeString(value, 4_000);
-  if (raw.includes('/verto-3d-transparent.png')) return null;
+  if (/(?:\/|^)(?:verto-3d(?:-transparent)?|logoverto|verto-logo)\.(?:png|webp|jpe?g)(?:$|[?#])/i.test(raw)) return null;
   if (raw && raw.startsWith('/') && !raw.startsWith('//')) {
     return sanitizeString(raw, 1_500);
   }
@@ -3896,6 +3896,7 @@ const APPOINTMENT_ACTION_REQUEST_SELECT = [
   'requested_end',
   'reason',
   'note',
+  'metadata',
   'resolved_by',
   'resolved_at',
   'resolution_note',
@@ -19275,7 +19276,7 @@ async function startServer() {
     const profileLogoMetadata = profileLogoSource?.metadata && typeof profileLogoSource.metadata === 'object'
       ? profileLogoSource.metadata
       : {};
-    const clinicDisplayName = sanitizeString(clinic?.display_name || clinic?.legal_name || clinic?.name, 160);
+    const clinicDisplayName = sanitizeString(clinic?.display_name || clinic?.name || clinic?.legal_name, 160);
     const profileDisplayName = sanitizeString(
       profileNameSource?.clinic_name ||
         profileNameMetadata.clinicName ||
@@ -27742,6 +27743,7 @@ async function startServer() {
               signature_data_url: resolvedSignatureUrl || undefined,
               updated_at: new Date().toISOString()
             });
+            invalidateReminderClinicBranding(clinicId);
           }
 
           if (nextClinicSettings) {
@@ -32381,11 +32383,11 @@ async function startServer() {
         }
         const patientId = sanitizeString(row?.patient_id || metadata.patientId || metadata.patient_id || appointmentContext?.patientId, 120);
         const clinicId = sanitizeString(
-          row?.clinic_id ||
+          patientClinicIdsById.get(patientId) ||
+            appointmentContext?.clinicId ||
+            row?.clinic_id ||
             metadata.clinicId ||
             metadata.clinic_id ||
-            appointmentContext?.clinicId ||
-            patientClinicIdsById.get(patientId) ||
             row?.organization_id,
           120
         );
@@ -32802,6 +32804,7 @@ async function startServer() {
     requestType: 'RESCHEDULE' | 'CANCEL';
     reason?: unknown;
     note?: unknown;
+    metadata?: Record<string, unknown>;
     requestedStart?: unknown;
     requestedEnd?: unknown;
   }) => {
@@ -32813,6 +32816,16 @@ async function startServer() {
     const requestedEnd = sanitizeIsoDateTime(params.requestedEnd);
     const reason = sanitizeTextField(params.reason, 600) || null;
     const note = sanitizeTextField(params.note, 1000) || null;
+    const requestedOptions = normalizeRescheduleOptions(
+      params.metadata?.rescheduleOptions ||
+        params.metadata?.reschedule_options ||
+        params.metadata?.selectedSlots ||
+        params.metadata?.selected_slots ||
+        []
+    );
+    const metadata = requestedOptions.length > 0
+      ? { rescheduleOptions: requestedOptions, reschedulePayloadVersion: 1 }
+      : {};
 
     const existing = await supabase
       .from('appointment_action_requests')
@@ -32829,6 +32842,9 @@ async function startServer() {
       throw existing.error;
     }
     if (existing.data?.id) {
+      const existingMetadata = existing.data?.metadata && typeof existing.data.metadata === 'object' && !Array.isArray(existing.data.metadata)
+        ? existing.data.metadata
+        : {};
       const { data, error } = await supabase
         .from('appointment_action_requests')
         .update(cleanObject({
@@ -32836,6 +32852,7 @@ async function startServer() {
           requested_end: requestedEnd || existing.data.requested_end || null,
           reason: reason || existing.data.reason || null,
           note: note || existing.data.note || null,
+          metadata: { ...existingMetadata, ...metadata },
           updated_at: now
         }))
         .eq('id', existing.data.id)
@@ -32860,6 +32877,7 @@ async function startServer() {
       requested_end: requestedEnd || null,
       reason,
       note,
+      metadata,
       created_at: now,
       updated_at: now
     });
@@ -32876,7 +32894,7 @@ async function startServer() {
   };
 
   const serializeAppointmentActionRequestForResponse = (row: any) => {
-    const parsed = parseRescheduleRequestNote(row?.note);
+    const parsed = parseRescheduleRequestPayload(row?.note, row?.metadata);
     return {
       ...row,
       note: parsed.note,
@@ -33622,13 +33640,14 @@ async function startServer() {
       }
       const selectedOptions = (selectedOptionsResult as any).options || [];
       const primaryOption = selectedOptions[0] || null;
-      const encodedNote = buildRescheduleRequestNote(req.body?.note || req.body?.observation, selectedOptions);
+      const requestMessage = buildRescheduleRequestMessage(req.body?.note || req.body?.observation);
       const requestRow = await createOrUpdateAppointmentActionRequest({
         appointment,
         user: req.session.user,
         requestType: 'RESCHEDULE',
         reason: req.body?.reason,
-        note: encodedNote,
+        note: requestMessage,
+        metadata: { rescheduleOptions: selectedOptions, reschedulePayloadVersion: 1 },
         requestedStart: primaryOption?.scheduledStart,
         requestedEnd: primaryOption?.scheduledEnd
       });
@@ -33920,7 +33939,7 @@ async function startServer() {
       let newStatus = 'RESCHEDULED';
       let approvedRescheduleStart = '';
       if (requestRow.request_type === 'RESCHEDULE') {
-        const parsedRequestNote = parseRescheduleRequestNote(requestRow.note);
+        const parsedRequestNote = parseRescheduleRequestPayload(requestRow.note, requestRow.metadata);
         const requestedOptions = parsedRequestNote.options;
         const selectedOptionIndex = Math.max(0, Math.min(requestedOptions.length - 1, Math.round(Number(req.body?.selectedOptionIndex ?? req.body?.selected_option_index ?? 0) || 0)));
         const selectedOption = requestedOptions[selectedOptionIndex] || null;

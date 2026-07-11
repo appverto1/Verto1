@@ -33,7 +33,7 @@ import {
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
 import { formatDisplayDate, formatDisplayDateTime, formatDisplayMonthYear } from '../utils/dateFormatting';
-import { parseRescheduleRequestNote } from '../services/portalRescheduleAvailability';
+import { formatRescheduleOptionLabel, parseRescheduleRequestPayload } from '../services/portalRescheduleAvailability';
 import { formatMinutesHuman, getActualDurationMinutes, getAppointmentDurationMinutes } from '../utils/scheduling';
 import { resolveMaintenanceTargetDisplay } from '../utils/peiMaintenancePanel';
 import { mergeAppointmentIdentity } from '../utils/appointmentActionUpdates';
@@ -936,8 +936,39 @@ const getProfessionalDisplayLine = (event: any) => {
       source?.professional ||
       '',
   ).trim();
+  const title = String(
+    event?.professionalTitle ||
+      event?.professional_title ||
+      event?.professionalRole ||
+      event?.professional_role ||
+      event?.therapistRole ||
+      event?.therapist_role ||
+      source?.professionalTitle ||
+      source?.professional_title ||
+      source?.professionalRole ||
+      source?.professional_role ||
+      source?.therapistRole ||
+      source?.therapist_role ||
+      '',
+  ).trim();
   const normalized = removeDiacritics(name).toLowerCase();
   if (name && !['equipe', 'team', 'profissional', 'profissional nao definido', 'nao informado'].includes(normalized)) {
+    const normalizedTitle = removeDiacritics(title).toLowerCase();
+    const titleIsProfessional = [
+      'psicologo',
+      'psicologa',
+      'terapeuta ocupacional',
+      'acompanhante terapeutico',
+      'aplicador aba',
+      'profissional'
+    ].includes(normalizedTitle);
+    const withoutGenericPrefix = name.replace(/^terapeuta\s+/i, '').trim();
+    if (titleIsProfessional && !normalized.startsWith(normalizedTitle)) {
+      return `${title} ${withoutGenericPrefix || name}`.trim();
+    }
+    if (/^terapeuta\s+/i.test(name)) {
+      return `Psicólogo ${withoutGenericPrefix}`.trim();
+    }
     return name;
   }
   return event?.therapistId || event?.therapist_id || event?.professionalId || event?.professional_id
@@ -1384,6 +1415,7 @@ export const ClinicalAgendaBoard = ({
   const [closureDetailState, setClosureDetailState] = useState<{ loading: boolean; error: string; data: any | null }>({ loading: false, error: '', data: null });
   const [closureChecklistExpanded, setClosureChecklistExpanded] = useState(false);
   const [actionRequestState, setActionRequestState] = useState<{ loadingId: string; error: string; message?: string }>({ loadingId: '', error: '', message: '' });
+  const [actionRequestResolution, setActionRequestResolution] = useState<{ requestId: string; note: string }>({ requestId: '', note: '' });
   const [billingEditorOpen, setBillingEditorOpen] = useState(false);
   const [financialValidationOpen, setFinancialValidationOpen] = useState(false);
   const [billingEditorState, setBillingEditorState] = useState<{ loading: boolean; saving: boolean; error: string; success: string }>({
@@ -2205,7 +2237,7 @@ export const ClinicalAgendaBoard = ({
     const isApprove = decision === 'approve';
     const result = isApprove
       ? await dataService.approveAppointmentActionRequest(requestId, payload)
-      : await dataService.rejectAppointmentActionRequest(requestId, {});
+      : await dataService.rejectAppointmentActionRequest(requestId, payload);
     if (!result?.success) {
       setActionRequestState({ loadingId: '', error: result?.error || 'Não foi possível atualizar a solicitação.' });
       return;
@@ -2217,7 +2249,12 @@ export const ClinicalAgendaBoard = ({
         if (detailResult?.success) setEventDetail(detailResult.data || null);
       });
     }
-    setActionRequestState({ loadingId: '', error: '' });
+    setActionRequestState({
+      loadingId: '',
+      error: '',
+      message: decision === 'approve' ? 'Solicitação aprovada e agenda atualizada.' : 'Solicitação recusada. O horário atual foi mantido.'
+    });
+    setActionRequestResolution({ requestId: '', note: '' });
   };
 
   const handleMaintenanceLinkDecision = async (probe: any, decision: 'confirm' | 'skip') => {
@@ -3646,14 +3683,15 @@ export const ClinicalAgendaBoard = ({
                   {actionRequests.filter((request: any) => request.status === 'PENDING').slice(0, 4).map((request: any) => {
                     const isCancel = request.request_type === 'CANCEL';
                     const requestedStart = request.requested_start ? new Date(request.requested_start) : null;
-                    const parsedRescheduleNote = parseRescheduleRequestNote(request.note);
+                    const parsedRescheduleNote = parseRescheduleRequestPayload(request.note, request.metadata);
                     const rescheduleOptions = Array.isArray(request.rescheduleOptions) && request.rescheduleOptions.length > 0
                       ? request.rescheduleOptions
                       : Array.isArray(request.reschedule_options) && request.reschedule_options.length > 0
                         ? request.reschedule_options
                         : parsedRescheduleNote.options;
-                    const requestNote = parsedRescheduleNote.note || request.note;
+                    const requestNote = parsedRescheduleNote.note;
                     const loading = actionRequestState.loadingId === String(request.id || '');
+                    const isRejecting = actionRequestResolution.requestId === String(request.id || '');
                     const requestAppointment = {
                       ...detailEvent,
                       pendingActionRequestId: request.id,
@@ -3678,7 +3716,7 @@ export const ClinicalAgendaBoard = ({
                                 <p className={`text-[11px] font-bold uppercase tracking-[0.14em] ${isDark ? 'text-slate-400' : 'text-slate-400'}`}>Opções escolhidas</p>
                                 {rescheduleOptions.slice(0, 3).map((option: any, index: number) => (
                                   <div key={`${request.id}-${option.scheduledStart || index}`} className={`rounded-xl border px-3 py-2 text-xs font-semibold ${isDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-violet-100 bg-violet-50 text-slate-700'}`}>
-                                    {index + 1}. {option.dateLabel || ''}{option.dateLabel ? ' às ' : ''}{option.start || (option.scheduledStart ? formatDisplayDateTime(option.scheduledStart) : 'Horário selecionado')}
+                                    {index + 1}. {formatRescheduleOptionLabel(option)}
                                   </div>
                                 ))}
                               </div>
@@ -3686,6 +3724,11 @@ export const ClinicalAgendaBoard = ({
                             {!isCancel && rescheduleOptions.length === 0 && requestedStart && !Number.isNaN(requestedStart.getTime()) && (
                               <p className={`mt-1 text-xs font-semibold ${isDark ? 'text-slate-200' : 'text-slate-600'}`}>
                                 Sugestão: {formatDisplayDateTime(requestedStart)}
+                              </p>
+                            )}
+                            {!isCancel && rescheduleOptions.length === 0 && parsedRescheduleNote.hasStructuredPayload && parsedRescheduleNote.invalidPayload && (
+                              <p className={`mt-2 text-xs font-semibold ${isDark ? 'text-amber-200' : 'text-amber-700'}`}>
+                                O responsável solicitou remarcação, mas as opções não puderam ser carregadas.
                               </p>
                             )}
                           </div>
@@ -3715,11 +3758,37 @@ export const ClinicalAgendaBoard = ({
                                 Remarcar consulta
                               </button>
                             )}
-                            <button type="button" disabled={loading} onClick={() => void handleActionRequestDecision(request, 'reject')} className="rounded-xl border border-violet-200 bg-white px-3 py-2 text-[11px] font-bold text-[#7a32fc] hover:bg-violet-50 disabled:opacity-60">
-                              Manter horário
+                            {!isCancel && (
+                              <button type="button" disabled={loading || !onEditAppointment} onClick={() => onEditAppointment?.(requestAppointment)} className="rounded-xl border border-violet-200 bg-white px-3 py-2 text-[11px] font-bold text-[#7a32fc] hover:bg-violet-50 disabled:opacity-60">
+                                Sugerir outro horário
+                              </button>
+                            )}
+                            <button type="button" disabled={loading} onClick={() => setActionRequestResolution({ requestId: String(request.id || ''), note: '' })} className="rounded-xl border border-violet-200 bg-white px-3 py-2 text-[11px] font-bold text-[#7a32fc] hover:bg-violet-50 disabled:opacity-60">
+                              Recusar
                             </button>
                           </div>
                         </div>
+                        {isRejecting && (
+                          <div className={`mt-3 rounded-2xl border p-3 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-violet-100 bg-violet-50/60'}`}>
+                            <label className={`block text-xs font-semibold ${isDark ? 'text-slate-200' : 'text-slate-700'}`}>
+                              Motivo da recusa
+                              <textarea
+                                value={actionRequestResolution.note}
+                                onChange={(event) => setActionRequestResolution({ requestId: String(request.id || ''), note: event.target.value })}
+                                placeholder="Ex.: Este horário não está mais disponível."
+                                className="mt-2 min-h-[72px] w-full resize-y rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 outline-none focus:border-[#7a32fc]"
+                              />
+                            </label>
+                            <div className="mt-2 flex justify-end gap-2">
+                              <button type="button" onClick={() => setActionRequestResolution({ requestId: '', note: '' })} className="rounded-xl px-3 py-2 text-[11px] font-semibold text-slate-600">
+                                Cancelar
+                              </button>
+                              <button type="button" disabled={loading} onClick={() => void handleActionRequestDecision(request, 'reject', { resolutionNote: actionRequestResolution.note })} className="rounded-xl bg-[#7a32fc] px-3 py-2 text-[11px] font-semibold text-white disabled:opacity-60">
+                                {loading ? 'Atualizando...' : 'Confirmar recusa'}
+                              </button>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     );
                   })}

@@ -37,7 +37,7 @@ test('appointment confirmation branding is clinic-first and never falls back to 
   assert.match(familyBrandingSlice, /profileWithUsableName/);
   assert.match(familyBrandingSlice, /profileWithUsableLogo/);
   assert.match(serverCode, /profileNameSource\?\.clinic_name/);
-  assert.match(serverCode, /clinic\?\.display_name \|\| clinic\?\.legal_name \|\| clinic\?\.name/);
+  assert.match(serverCode, /clinic\?\.display_name \|\| clinic\?\.name \|\| clinic\?\.legal_name/);
   assert.ok(
     familyBrandingSlice.indexOf('const clinicDisplayName') < familyBrandingSlice.indexOf('const profileDisplayName'),
     'Nome institucional da clinica deve ter prioridade sobre professional_profiles.clinic_name.'
@@ -134,6 +134,9 @@ test('patient portal still exposes appointment action controls and notification 
   assert.match(patientDashboardCode, /Solicitar cancelamento/);
   assert.match(patientDashboardCode, /firstPortalLogoUrl/);
   assert.match(patientDashboardCode, /renderPortalClinicLogo/);
+  assert.match(patientDashboardCode, /isGenericPortalClinicName/);
+  assert.match(patientDashboardCode, /isVertoPortalFallbackAsset/);
+  assert.match(patientDashboardCode, /candidates\.find\(\(value\) => !isGenericPortalClinicName\(value\)\)/);
   assert.doesNotMatch(patientDashboardCode, /VERTO_NOTIFICATION_LOGO/);
   assert.match(pushServiceCode, /clinicName/);
   assert.match(pushServiceCode, /clinicLogoUrl/);
@@ -145,6 +148,17 @@ test('patient portal still exposes appointment action controls and notification 
   assert.match(cronServiceCode, /appointment: brandedAppointment/);
   assert.doesNotMatch(pushServiceCode, /\.select\(['"]\*['"]\)/);
   assert.doesNotMatch(cronServiceCode, /\.select\(['"]\*['"]\)/);
+});
+
+test('remarcacao guarda opcoes em metadata e nunca usa a nota tecnica como texto visivel', () => {
+  const calendarCode = readFileSync(join(root, 'src/components/Calendar.tsx'), 'utf8');
+  const migrationCode = readFileSync(join(root, 'supabase/migrations/20260711120000_appointment_action_request_metadata.sql'), 'utf8');
+  assert.match(serverCode, /buildRescheduleRequestMessage/);
+  assert.match(serverCode, /metadata: \{ rescheduleOptions: selectedOptions, reschedulePayloadVersion: 1 \}/);
+  assert.match(serverCode, /parseRescheduleRequestPayload\(row\?\.note, row\?\.metadata\)/);
+  assert.match(calendarCode, /parseRescheduleRequestPayload\(request\.note, request\.metadata\)/);
+  assert.doesNotMatch(calendarCode, /parsedRescheduleNote\.note \|\| request\.note/);
+  assert.match(migrationCode, /add column if not exists metadata jsonb/);
 });
 
 let passed = 0;

@@ -235,7 +235,7 @@ test('horarios de trabalho do profissional alimentam remarcacao sem listar mes i
 
 test('equipe aprova opcao escolhida sem expor agenda privada', () => {
   const staffBlock = between(calendarCode, "actionRequests.filter((request: any) => request.status === 'PENDING')", 'signatures.length > 0');
-  assert.match(calendarCode, /parseRescheduleRequestNote/);
+  assert.match(calendarCode, /parseRescheduleRequestPayload/);
   assert.match(staffBlock, /rescheduleOptions\.slice\(0, 3\)/);
   assert.match(staffBlock, /selectedOptionIndex: index/);
   assert.match(staffBlock, /Aprovar op..o/);
