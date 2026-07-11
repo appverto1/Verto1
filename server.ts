@@ -19203,16 +19203,20 @@ async function startServer() {
         .eq('id', safeClinicId)
         .limit(1)
         .maybeSingle();
-    let { data: clinic, error: clinicError } = await read('id,name,display_name,legal_name,logo_url');
-    if (clinicError && extractMissingColumnName(clinicError)) {
-      const fallbackRead = await read('id,name,display_name,legal_name');
-      clinic = fallbackRead.data;
-      clinicError = fallbackRead.error;
-    }
-    if (clinicError && extractMissingColumnName(clinicError)) {
-      const fallbackRead = await read('id,name');
-      clinic = fallbackRead.data;
-      clinicError = fallbackRead.error;
+    // Schemas legados nao possuem necessariamente display_name/legal_name,
+    // mas frequentemente ainda possuem logo_url. Remova somente a coluna que
+    // falhou para nao perder o logo institucional no fallback.
+    let clinic: any = null;
+    let clinicError: any = null;
+    let clinicColumns = ['id', 'name', 'display_name', 'legal_name', 'logo_url'];
+    while (clinicColumns.length >= 2) {
+      const clinicResult = await read(clinicColumns.join(','));
+      clinic = clinicResult.data;
+      clinicError = clinicResult.error;
+      if (!clinicError) break;
+      const missingColumn = extractMissingColumnName(clinicError);
+      if (!missingColumn || !clinicColumns.includes(missingColumn)) break;
+      clinicColumns = clinicColumns.filter((column) => column !== missingColumn);
     }
     if (clinicError) {
       console.warn('[Appointments] clinic branding read failed:', clinicError.message);
@@ -32798,6 +32802,14 @@ async function startServer() {
     return { data: null, error: { message: 'Payload vazio.' } };
   };
 
+  const appointmentScheduleMatches = (row: any, expected: { start: string; end: string; status: string }) => {
+    const actualStart = buildAppointmentScheduledAt(row)?.toISOString() || '';
+    const actualEnd = sanitizeIsoDateTime(row?.scheduled_end_at || row?.scheduledEndAt) || '';
+    return normalizeOperationalAppointmentStatus(row?.status) === expected.status &&
+      actualStart === expected.start &&
+      actualEnd === expected.end;
+  };
+
   const createOrUpdateAppointmentActionRequest = async (params: {
     appointment: any;
     user: any;
@@ -33929,7 +33941,20 @@ async function startServer() {
       if (!context.ok) return res.status((context as any).status || 404).json(portalSafeError((context as any).status || 404));
       const requestRow = (context as any).request;
       const appointment = (context as any).appointment;
-      if (requestRow.status !== 'PENDING') return res.status(409).json(portalSafeError(409));
+      if (requestRow.status !== 'PENDING') {
+        if (requestRow.status === 'APPROVED') {
+          const persistedRows = await readPersistedAppointmentRows([appointment.id], sanitizeString(appointment.clinic_id, 120));
+          const persistedAppointment = persistedRows.find((row: any) => sanitizeString(row?.id, 120) === sanitizeString(appointment.id, 120));
+          if (persistedAppointment) {
+            return res.json({
+              success: true,
+              idempotent: true,
+              appointment: serializePortalAppointment(persistedAppointment)
+            });
+          }
+        }
+        return res.status(409).json(portalSafeError(409));
+      }
       const organizationId = sanitizeString(appointment.organization_id || appointment.clinic_id, 120);
       const actorId = sanitizeString(req.session.user?.id, 120);
       const actorRole = sanitizeString(req.session.user?.role, 40);
@@ -33943,9 +33968,13 @@ async function startServer() {
         const requestedOptions = parsedRequestNote.options;
         const selectedOptionIndex = Math.max(0, Math.min(requestedOptions.length - 1, Math.round(Number(req.body?.selectedOptionIndex ?? req.body?.selected_option_index ?? 0) || 0)));
         const selectedOption = requestedOptions[selectedOptionIndex] || null;
-        const requestedStart = sanitizeIsoDateTime(req.body?.scheduledStart || req.body?.scheduled_start || req.body?.requestedStart || selectedOption?.scheduledStart || requestRow.requested_start);
-        const requestedEnd = sanitizeIsoDateTime(req.body?.scheduledEnd || req.body?.scheduled_end || req.body?.requestedEnd || selectedOption?.scheduledEnd || requestRow.requested_end);
-        if (!requestedStart) return res.status(400).json(portalSafeError(400));
+        // A clinica so pode aprovar uma opcao que o responsavel realmente enviou.
+        // Nunca aceite data/hora arbitraria do corpo da requisicao.
+        const requestedStart = sanitizeIsoDateTime(selectedOption?.scheduledStart);
+        const requestedEnd = sanitizeIsoDateTime(selectedOption?.scheduledEnd);
+        if (!requestedStart || !requestedEnd) {
+          return res.status(400).json({ success: false, error: 'Escolha uma opção válida da solicitação de remarcação.' });
+        }
         approvedRescheduleStart = requestedStart;
         const durationMinutes = requestedEnd
           ? Math.max(15, Math.round((new Date(requestedEnd).getTime() - new Date(requestedStart).getTime()) / 60000))
@@ -33967,16 +33996,37 @@ async function startServer() {
         if (conflict?.blocking || conflict?.hasConflict) {
           return res.status(409).json({ success: false, error: conflict.humanMessage || 'Há conflito de agenda para o novo horário.' });
         }
+        const resolvedEnd = requestedEnd;
+        const previousSchedulePatch = cleanObject({
+          status: appointment.status,
+          scheduled_at: appointment.scheduled_at || appointment.scheduledAt || undefined,
+          scheduled_start_at: appointment.scheduled_start_at || appointment.scheduledStartAt || undefined,
+          scheduled_end_at: appointment.scheduled_end_at || appointment.scheduledEndAt || undefined,
+          scheduled_duration_minutes: appointment.scheduled_duration_minutes || appointment.scheduledDurationMinutes || undefined,
+          duration_minutes: appointment.duration_minutes || appointment.durationMinutes || undefined,
+          date: appointment.date || undefined,
+          time: appointment.time || undefined,
+          patient_response: appointment.patient_response || appointment.patientResponse || null,
+          patient_confirmation_status: appointment.patient_confirmation_status || appointment.patientConfirmationStatus || null,
+          patient_confirmation_source: appointment.patient_confirmation_source || appointment.patientConfirmationSource || null,
+          reschedule_requested_at: appointment.reschedule_requested_at || undefined,
+          reschedule_requested_by: appointment.reschedule_requested_by || undefined,
+          updated_at: now
+        });
         const update = await updateAppointmentOperationalPatch(appointment.id, {
           status: 'RESCHEDULED',
           scheduled_at: requestedStart,
           scheduled_start_at: requestedStart,
-          scheduled_end_at: requestedEnd || new Date(new Date(requestedStart).getTime() + durationMinutes * 60000).toISOString(),
+          scheduled_end_at: resolvedEnd,
           scheduled_duration_minutes: durationMinutes,
           duration_minutes: durationMinutes,
+          date: formatDateInAppointmentTimezone(startDate),
+          time: formatTimeInAppointmentTimezone(startDate),
           patient_response: null,
           patient_confirmation_status: null,
           patient_confirmation_source: null,
+          reschedule_requested_at: null,
+          reschedule_requested_by: null,
           notification_24h_sent_at: null,
           notification_12h_sent_at: null,
           notification_sent: false,
@@ -33984,12 +34034,24 @@ async function startServer() {
           updated_at: now
         });
         if (update.error) throw update.error;
+        const persistedRows = await readPersistedAppointmentRows([appointment.id], sanitizeString(appointment.clinic_id, 120));
+        const persistedAppointment = persistedRows.find((row: any) => sanitizeString(row?.id, 120) === sanitizeString(appointment.id, 120));
+        if (!persistedAppointment || !appointmentScheduleMatches(persistedAppointment, {
+          start: requestedStart,
+          end: resolvedEnd,
+          status: 'RESCHEDULED'
+        })) {
+          // Nao cria historico de aprovacao quando a escrita principal nao foi
+          // confirmada. A compensacao reduz o risco de estado parcial em schemas legados.
+          await updateAppointmentOperationalPatch(appointment.id, previousSchedulePatch);
+          return res.status(500).json({ success: false, error: 'Não foi possível confirmar a atualização da consulta.' });
+        }
         nextAppointment = {
-          ...appointment,
+          ...persistedAppointment,
           status: 'RESCHEDULED',
           scheduled_at: requestedStart,
           scheduled_start_at: requestedStart,
-          scheduled_end_at: requestedEnd || new Date(new Date(requestedStart).getTime() + durationMinutes * 60000).toISOString(),
+          scheduled_end_at: resolvedEnd,
           duration_minutes: durationMinutes,
           patient_response: null,
           patient_confirmation_status: null,
@@ -34019,16 +34081,48 @@ async function startServer() {
         };
       }
       const resolutionNote = sanitizeTextField(req.body?.resolutionNote || req.body?.resolution_note || req.body?.note, 800) || null;
-      await supabase
+      const resolutionMetadata = requestRow.request_type === 'RESCHEDULE'
+        ? {
+            ...(requestRow.metadata && typeof requestRow.metadata === 'object' ? requestRow.metadata : {}),
+            approvedOptionIndex: Math.max(0, Number(req.body?.selectedOptionIndex ?? req.body?.selected_option_index ?? 0) || 0),
+            approvedStart: approvedRescheduleStart,
+            approvedAt: now,
+            approvedBy: actorId || null
+          }
+        : requestRow.metadata;
+      const requestResolution = await supabase
         .from('appointment_action_requests')
         .update({
           status: 'APPROVED',
           resolved_by: actorId || null,
           resolved_at: now,
           resolution_note: resolutionNote,
+          metadata: resolutionMetadata,
           updated_at: now
         })
-        .eq('id', requestRow.id);
+        .eq('id', requestRow.id)
+        .eq('status', 'PENDING')
+        .select('id')
+        .maybeSingle();
+      if (requestResolution.error || !requestResolution.data?.id) {
+        if (requestRow.request_type === 'RESCHEDULE') {
+          await updateAppointmentOperationalPatch(appointment.id, cleanObject({
+            status: appointment.status,
+            scheduled_at: appointment.scheduled_at || appointment.scheduledAt || undefined,
+            scheduled_start_at: appointment.scheduled_start_at || appointment.scheduledStartAt || undefined,
+            scheduled_end_at: appointment.scheduled_end_at || appointment.scheduledEndAt || undefined,
+            scheduled_duration_minutes: appointment.scheduled_duration_minutes || appointment.scheduledDurationMinutes || undefined,
+            duration_minutes: appointment.duration_minutes || appointment.durationMinutes || undefined,
+            date: appointment.date || undefined,
+            time: appointment.time || undefined,
+            patient_response: appointment.patient_response || appointment.patientResponse || null,
+            patient_confirmation_status: appointment.patient_confirmation_status || appointment.patientConfirmationStatus || null,
+            patient_confirmation_source: appointment.patient_confirmation_source || appointment.patientConfirmationSource || null,
+            updated_at: now
+          }));
+        }
+        throw requestResolution.error || new Error('A solicitação já foi resolvida por outro usuário.');
+      }
       await writeAppointmentStatusAuditLog({
         organizationId,
         appointmentId: appointment.id,
@@ -34038,7 +34132,14 @@ async function startServer() {
         newStatus,
         performedBy: actorId,
         performedByRole: actorRole,
-        metadata: { actionRequestId: requestRow.id, resolutionNote }
+        metadata: {
+          actionRequestId: requestRow.id,
+          resolutionNote,
+          previousScheduledStart: appointment.scheduled_at || appointment.scheduled_start_at || null,
+          previousScheduledEnd: appointment.scheduled_end_at || null,
+          approvedScheduledStart: approvedRescheduleStart || null,
+          approvedScheduledEnd: requestRow.request_type === 'RESCHEDULE' ? nextAppointment.scheduled_end_at || null : null
+        }
       });
       if (requestRow.request_type === 'RESCHEDULE') {
         void notifyPortalRescheduleApproval({
@@ -36395,7 +36496,7 @@ async function startServer() {
         .from('appointment_status_audit_logs')
         .select(APPOINTMENT_STATUS_AUDIT_SELECT)
         .in('appointment_id', ids)
-        .in('action', ['CONFIRMED_BY_RESPONSIBLE', 'RESCHEDULE_REQUESTED', 'CANCEL_REQUESTED'])
+        .in('action', ['CONFIRMED_BY_RESPONSIBLE', 'RESCHEDULE_REQUESTED', 'RESCHEDULE_APPROVED', 'CANCEL_REQUESTED', 'CANCEL_APPROVED'])
         .order('performed_at', { ascending: false })
         .limit(Math.min(ids.length * 8, 1000));
       if (organizationIds.length === 1) auditQuery = auditQuery.eq('organization_id', organizationIds[0]);
@@ -36404,8 +36505,16 @@ async function startServer() {
       if (auditResult.error) {
         if (!hasMissingFinancialSchema(auditResult.error) && !isMissingRelationError(auditResult.error)) throw auditResult.error;
       } else {
+        const resolvedAppointmentIds = new Set<string>();
         for (const row of auditResult.data || []) {
           const appointmentId = sanitizeString(row?.appointment_id, 120);
+          const action = sanitizeString(row?.action, 80).toUpperCase();
+          if (action === 'RESCHEDULE_APPROVED' || action === 'CANCEL_APPROVED') {
+            resolvedAppointmentIds.add(appointmentId);
+            states.delete(appointmentId);
+            continue;
+          }
+          if (resolvedAppointmentIds.has(appointmentId)) continue;
           setAppointmentPatientConfirmationStateCandidate(
             states,
             appointmentId,

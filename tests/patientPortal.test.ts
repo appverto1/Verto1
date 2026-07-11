@@ -241,9 +241,13 @@ test('equipe aprova opcao escolhida sem expor agenda privada', () => {
   assert.match(staffBlock, /Aprovar op..o/);
   const availabilityRoute = serverSlice("app.get('/api/portal/appointments/:appointmentId/reschedule-slots'", 1600);
   assert.doesNotMatch(availabilityRoute, /patient_name|title|notes|observation/i);
-  const approvalRoute = serverSlice("app.post('/api/appointments/action-requests/:requestId/approve'", 2800);
+  const approvalRoute = serverSlice("app.post('/api/appointments/action-requests/:requestId/approve'", 7200);
   assert.match(approvalRoute, /selectedOptionIndex/);
   assert.match(approvalRoute, /checkScheduleConflicts/);
+  assert.match(approvalRoute, /appointmentScheduleMatches/);
+  assert.match(approvalRoute, /idempotent: true/);
+  assert.match(approvalRoute, /\.eq\('status', 'PENDING'\)/);
+  assert.doesNotMatch(approvalRoute, /req\.body\?\.scheduledStart/);
   assert.match(serverCode, /notifyPortalRescheduleApproval/);
   assert.match(serverCode, /appointment_reschedule_approved/);
   assert.match(serverCode, /sendAppointmentNotification/);

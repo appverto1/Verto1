@@ -659,16 +659,21 @@ async function resolveReminderClinicBranding(
       .limit(1)
       .maybeSingle();
 
-  let { data, error } = await read('id,name,display_name,legal_name,logo_url');
-  if (error && String(error.message || '').match(/column\s+"?(display_name|legal_name|logo_url)"?/i)) {
-    const fallback = await read('id,name,display_name,legal_name');
-    data = fallback.data;
-    error = fallback.error;
-  }
-  if (error && String(error.message || '').match(/column\s+"?(display_name|legal_name)"?/i)) {
-    const fallback = await read('id,name');
-    data = fallback.data;
-    error = fallback.error;
+  // Em tenants com schema legado, preserve logo_url/name enquanto remove apenas
+  // a coluna opcional ausente. O fallback anterior descartava logo_url junto
+  // com display_name e fazia o push voltar para o avatar generico.
+  let data: any = null;
+  let error: any = null;
+  let clinicColumns = ['id', 'name', 'display_name', 'legal_name', 'logo_url'];
+  while (clinicColumns.length >= 2) {
+    const result = await read(clinicColumns.join(','));
+    data = result.data;
+    error = result.error;
+    if (!error) break;
+    const missingColumnMatch = String(error.message || '').match(/column\s+"?([a-z_]+)"?/i);
+    const missingColumn = missingColumnMatch?.[1] || '';
+    if (!missingColumn || !clinicColumns.includes(missingColumn)) break;
+    clinicColumns = clinicColumns.filter((column) => column !== missingColumn);
   }
   if (error) {
     options.logger.warn('[Appointment Reminder Cron] Branding da clinica nao carregado.', {

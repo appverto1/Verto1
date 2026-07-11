@@ -213,11 +213,13 @@ const normalizeAppointmentPatientConfirmationStatus = (appointment: any) => {
     appointment?.patient_confirmation;
   const explicit = canonicalAppointmentStatus(raw);
   if (explicit === 'CONFIRMED') return 'CONFIRMED';
-  if (explicit === 'RESCHEDULE_REQUESTED' || explicit === 'RESCHEDULED') return 'RESCHEDULE_REQUESTED';
+  // Uma consulta remarcada ja foi resolvida pela clinica. Apenas a solicitacao
+  // pendente deve manter o badge de remarcacao solicitada.
+  if (explicit === 'RESCHEDULE_REQUESTED') return 'RESCHEDULE_REQUESTED';
   if (explicit === 'CANCEL_REQUESTED') return 'CANCEL_REQUESTED';
   const fallback = canonicalAppointmentStatus(appointment?.status || appointment?.appointment_status);
   if (fallback === 'CONFIRMED') return 'CONFIRMED';
-  if (fallback === 'RESCHEDULE_REQUESTED' || fallback === 'RESCHEDULED') return 'RESCHEDULE_REQUESTED';
+  if (fallback === 'RESCHEDULE_REQUESTED') return 'RESCHEDULE_REQUESTED';
   if (fallback === 'CANCEL_REQUESTED') return 'CANCEL_REQUESTED';
   return 'PENDING_CONFIRMATION';
 };

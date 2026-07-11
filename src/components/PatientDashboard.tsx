@@ -1697,8 +1697,14 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         type: normalizePortalLower(note?.type || note?.kind) === 'photo' ? 'photo' : 'family_note',
         note: firstPortalText(note?.note, note?.text, note?.content, note?.subject),
         created_at: firstPortalText(note?.created_at, note?.date),
+        // Nao achate os anexos: registros legados podem ter a foto somente em
+        // metadata/attachments. O resolvedor abaixo conhece essas variacoes.
+        metadata: note?.metadata && typeof note.metadata === 'object' ? note.metadata : undefined,
+        attachments: Array.isArray(note?.attachments) ? note.attachments : undefined,
+        files: Array.isArray(note?.files) ? note.files : undefined,
+        photos: Array.isArray(note?.photos) ? note.photos : undefined,
         image: firstPortalText(note?.image, note?.image_url, note?.photo_url, note?.url),
-        image_path: firstPortalText(note?.image_path, note?.photo_path, note?.path)
+        image_path: firstPortalText(note?.image_path, note?.imagePath, note?.storage_path, note?.storagePath, note?.photo_path, note?.photoPath, note?.path)
       }));
     const seen = new Set<string>();
     return [...persistedFamilyDiaryHistory, ...normalizedSharedNotes]

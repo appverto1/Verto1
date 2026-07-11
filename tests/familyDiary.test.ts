@@ -10,6 +10,7 @@ const detailView = read('src/components/PatientDetailView.tsx');
 const historyCard = read('src/components/History.tsx');
 const dataService = read('src/services/dataService.ts');
 const server = read('server.ts');
+const historyPhotoMigration = read('supabase/migrations/20260711123000_history_photo_storage_path.sql');
 
 assert.match(dashboard, /FAMILY_DAILY_PHOTO_LIMIT = 5/);
 assert.match(dashboard, /const saveResult = await onAddFamilyNote/);
@@ -46,6 +47,8 @@ assert.match(detailView, /patient_id:\s*n\?\.patient_id \?\? n\?\.patientId \?\?
 assert.match(detailView, /sourceRef:\s*current\?\.sourceRef \|\| entry\?\.sourceRef/);
 
 assert.match(server, /function enrichPatientPhotoHistoryRow/);
+assert.match(historyPhotoMigration, /add column if not exists image_path text/);
+assert.match(historyPhotoMigration, /history_active_photo_image_path_idx/);
 assert.match(server, /const enrichedHistory = consolidatedHistory\.map\(enrichPatientPhotoHistoryRow\)/);
 assert.match(server, /const enriched = deduped\.map\(enrichPatientPhotoHistoryRow\)/);
 assert.match(server, /const enriched = \(Array\.isArray\(data\) \? data : \[\]\)\.slice\(0, limit\)\.map\(enrichPatientPhotoHistoryRow\)/);
@@ -54,5 +57,7 @@ assert.match(server, /\.in\('image_path', possibleReferences\)/);
 assert.match(server, /\.in\('image', possibleReferences\)/);
 assert.match(server, /linkedPatientIdSet\.has\(rowPatientId\)/);
 assert.match(server, /canAccessPatientInCurrentClinic\(rowPatientId, req\.session\.user\)/);
+assert.match(dashboard, /attachments: Array\.isArray\(note\?\.attachments\)/);
+assert.match(dashboard, /note\?\.storage_path/);
 
 console.log('family diary persistence checks passed');

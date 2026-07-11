@@ -29,7 +29,9 @@ const familyBrandingSlice = serverCode.slice(
 test('appointment confirmation branding is clinic-first and never falls back to actor clinic settings', () => {
   assert.match(serverCode, /const readClinicBrandingForFamilyView = async/);
   assert.match(serverCode, /\.from\('clinics'\)[\s\S]*?\.select\(columns\)/);
-  assert.match(serverCode, /read\('id,name,display_name,legal_name,logo_url'\)/);
+  assert.match(serverCode, /read\(clinicColumns\.join\(','\)\)/);
+  assert.match(familyBrandingSlice, /clinicColumns = \['id', 'name', 'display_name', 'legal_name', 'logo_url'\]/);
+  assert.match(familyBrandingSlice, /clinicColumns = clinicColumns\.filter/);
   assert.match(familyBrandingSlice, /readProfileBranding\('clinic_name,clinic_logo_url,updated_at'\)/);
   assert.match(familyBrandingSlice, /isGenericClinicBrandingName/);
   assert.match(familyBrandingSlice, /clinic_name,clinic_logo_url,metadata,updated_at/);
@@ -117,6 +119,14 @@ test('portal appointment actions do not depend on broad selects or false local s
   assert.match(appCode, /if \(!result\?\.success\)/);
 });
 
+test('remarcacao aprovada nao volta a aparecer como solicitacao pendente', () => {
+  const calendarCode = readFileSync(join(root, 'src/components/Calendar.tsx'), 'utf8');
+  assert.match(calendarCode, /if \(explicit === 'RESCHEDULE_REQUESTED'\) return 'RESCHEDULE_REQUESTED'/);
+  assert.doesNotMatch(calendarCode, /explicit === 'RESCHEDULE_REQUESTED' \|\| explicit === 'RESCHEDULED'/);
+  assert.match(serverCode, /RESCHEDULE_APPROVED/);
+  assert.match(serverCode, /resolvedAppointmentIds/);
+});
+
 test('family popup uses neutral branding, logo initials fallback and no pre-confirmed green text', () => {
   assert.match(appCode, /getClinicInitials/);
   assert.match(appCode, /Lembrete de consulta/);
@@ -142,6 +152,7 @@ test('patient portal still exposes appointment action controls and notification 
   assert.match(pushServiceCode, /clinicLogoUrl/);
   assert.match(pushServiceCode, /allowProfessionalFallback:\s*false/);
   assert.match(cronServiceCode, /resolveReminderClinicBranding/);
+  assert.match(cronServiceCode, /clinicColumns = \['id', 'name', 'display_name', 'legal_name', 'logo_url'\]/);
   assert.match(cronServiceCode, /DEFAULT_CLINIC_NOTIFICATION_NAME = 'Clínica'/);
   assert.match(cronServiceCode, /isGenericClinicNotificationName/);
   assert.match(cronServiceCode, /allowProfessionalFallback:\s*false/);
