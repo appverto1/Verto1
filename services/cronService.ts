@@ -64,6 +64,8 @@ const DEFAULT_CLINIC_NOTIFICATION_NAME = 'Clínica';
 const CRON_LOOKBACK_MINUTES = 180;
 const QUERY_AHEAD_HOURS = 28;
 const REMINDER_DEDUPE_TTL_MS = 30 * 60 * 60 * 1000;
+const CLINIC_BRANDING_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const CLINIC_LOGO_SIGNED_URL_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 const REMINDER_STEPS = [
   {
@@ -104,6 +106,37 @@ const parseReminderSourcePayload = (value: unknown): Record<string, any> => {
 };
 
 const isUuid = (value: unknown) => UUID_REGEX.test(sanitizeText(value, 120));
+
+export const extractReminderMissingColumnName = (error: unknown) => {
+  const message = sanitizeText((error as any)?.message || error, 1000);
+  if (!message) return '';
+  const direct = message.match(/column\s+"?([a-zA-Z0-9_]+)"?\s+does not exist/i);
+  if (direct?.[1]) return direct[1].toLowerCase();
+  const qualified = message.match(/column\s+[a-zA-Z0-9_]+\."?([a-zA-Z0-9_]+)"?\s+does not exist/i);
+  if (qualified?.[1]) return qualified[1].toLowerCase();
+  const schemaCache = message.match(/could\s+not\s+find\s+the\s+'?([a-zA-Z0-9_]+)'?\s+column/i);
+  return schemaCache?.[1]?.toLowerCase() || '';
+};
+
+export const extractReminderClinicLogoStoragePath = (value: unknown) => {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  if (raw.startsWith('patient-photos/')) return raw.slice('patient-photos/'.length);
+  if (raw.startsWith('/api/storage/patient-photos/view?')) {
+    try {
+      return new URLSearchParams(raw.slice(raw.indexOf('?') + 1)).get('path') || '';
+    } catch {
+      return '';
+    }
+  }
+  const storageMatch = raw.match(/\/storage\/v1\/object\/(?:sign|public)\/patient-photos\/([^?]+)/i);
+  if (!storageMatch?.[1]) return '';
+  try {
+    return decodeURIComponent(storageMatch[1]);
+  } catch {
+    return storageMatch[1];
+  }
+};
 
 const isGenericClinicNotificationName = (value: unknown) => {
   const normalized = sanitizeText(value, 160)
@@ -643,12 +676,43 @@ export const chooseDueReminder = (
   return null;
 };
 
-const clinicBrandingCache = new Map<string, { clinicName: string; clinicLogoUrl: string | null }>();
+const clinicBrandingCache = new Map<string, {
+  clinicName: string;
+  clinicLogoUrl: string | null;
+  expiresAtMs: number;
+}>();
 
 export const invalidateReminderClinicBranding = (clinicId?: string | null) => {
   const safeClinicId = sanitizeText(clinicId, 120);
   if (safeClinicId) clinicBrandingCache.delete(safeClinicId);
 };
+
+async function resolvePushSafeClinicLogoUrl(
+  options: ActiveCronServiceOptions,
+  candidates: unknown[],
+) {
+  for (const candidate of candidates) {
+    const storagePath = extractReminderClinicLogoStoragePath(candidate);
+    if (storagePath && !storagePath.includes('..')) {
+      const { data, error } = await options.supabase.storage
+        .from('patient-photos')
+        .createSignedUrl(storagePath, CLINIC_LOGO_SIGNED_URL_TTL_SECONDS);
+      const signedUrl = sanitizeClinicNotificationLogoUrl(data?.signedUrl);
+      if (!error && /^https?:\/\//i.test(signedUrl)) return signedUrl;
+      options.logger.warn('[Appointment Reminder Cron] Logo institucional nao pode ser assinado.', {
+        storagePath,
+        message: error?.message || null,
+      });
+      continue;
+    }
+
+    const safeUrl = sanitizeClinicNotificationLogoUrl(candidate);
+    if (/^https?:\/\//i.test(safeUrl) || (safeUrl.startsWith('/') && !safeUrl.startsWith('/api/'))) {
+      return safeUrl;
+    }
+  }
+  return null;
+}
 
 async function resolveReminderClinicBranding(
   options: ActiveCronServiceOptions,
@@ -659,7 +723,10 @@ async function resolveReminderClinicBranding(
     return { clinicName: DEFAULT_CLINIC_NOTIFICATION_NAME, clinicLogoUrl: null };
   }
   const cached = clinicBrandingCache.get(safeClinicId);
-  if (cached) return cached;
+  if (cached && cached.expiresAtMs > Date.now()) {
+    return { clinicName: cached.clinicName, clinicLogoUrl: cached.clinicLogoUrl };
+  }
+  if (cached) clinicBrandingCache.delete(safeClinicId);
 
   const read = (columns: string) =>
     options.supabase
@@ -680,8 +747,7 @@ async function resolveReminderClinicBranding(
     data = result.data;
     error = result.error;
     if (!error) break;
-    const missingColumnMatch = String(error.message || '').match(/column\s+"?([a-z_]+)"?/i);
-    const missingColumn = missingColumnMatch?.[1] || '';
+    const missingColumn = extractReminderMissingColumnName(error);
     if (!missingColumn || !clinicColumns.includes(missingColumn)) break;
     clinicColumns = clinicColumns.filter((column) => column !== missingColumn);
   }
@@ -690,7 +756,11 @@ async function resolveReminderClinicBranding(
       clinicId: safeClinicId,
       message: error.message
     });
-    const fallback = { clinicName: DEFAULT_CLINIC_NOTIFICATION_NAME, clinicLogoUrl: null };
+    const fallback = {
+      clinicName: DEFAULT_CLINIC_NOTIFICATION_NAME,
+      clinicLogoUrl: null,
+      expiresAtMs: Date.now() + CLINIC_BRANDING_CACHE_TTL_MS,
+    };
     clinicBrandingCache.set(safeClinicId, fallback);
     return fallback;
   }
@@ -704,19 +774,19 @@ async function resolveReminderClinicBranding(
       .order('updated_at', { ascending: false })
       .limit(20);
   let profileBranding = await readProfileBranding('user_id,full_name,clinic_name,clinic_logo_url,metadata,updated_at');
-  if (profileBranding.error && String(profileBranding.error.message || '').match(/column\s+"?metadata"?/i)) {
+  if (profileBranding.error && extractReminderMissingColumnName(profileBranding.error) === 'metadata') {
     profileBranding = await readProfileBranding('user_id,full_name,clinic_name,clinic_logo_url,updated_at');
   }
   if (!profileBranding.error) {
     profileBrandingRows = Array.isArray(profileBranding.data) ? profileBranding.data : [];
-  } else if (String(profileBranding.error?.message || '').match(/column\s+"?clinic_id"?/i) && isUuid(data?.owner_user_id)) {
+  } else if (extractReminderMissingColumnName(profileBranding.error) === 'clinic_id' && isUuid(data?.owner_user_id)) {
     let ownerProfile = await options.supabase
       .from('professional_profiles')
       .select('user_id,full_name,clinic_name,clinic_logo_url,metadata,updated_at')
       .eq('user_id', data.owner_user_id)
       .limit(1)
       .maybeSingle();
-    if (ownerProfile.error && String(ownerProfile.error.message || '').match(/column\s+"?metadata"?/i)) {
+    if (ownerProfile.error && extractReminderMissingColumnName(ownerProfile.error) === 'metadata') {
       ownerProfile = await options.supabase
         .from('professional_profiles')
         .select('user_id,full_name,clinic_name,clinic_logo_url,updated_at')
@@ -768,18 +838,16 @@ async function resolveReminderClinicBranding(
       profileNameMetadata.clinic_settings?.clinicName,
     160
   );
-  const clinicLogoUrl =
-    sanitizeClinicNotificationLogoUrl(data?.logo_url) ||
-    sanitizeClinicNotificationLogoUrl(
-      profileLogoSource?.clinic_logo_url ||
-        profileLogoMetadata.clinicLogoUrl ||
-        profileLogoMetadata.clinicSettings?.clinicLogoUrl ||
-        profileLogoMetadata.clinic_settings?.clinicLogoUrl ||
-        profileLogoMetadata.clinicLogoPath ||
-        profileLogoMetadata.clinicSettings?.clinicLogoPath ||
-        profileLogoMetadata.clinic_settings?.clinicLogoPath
-    ) ||
-    null;
+  const clinicLogoUrl = await resolvePushSafeClinicLogoUrl(options, [
+    profileLogoSource?.clinic_logo_url,
+    profileLogoMetadata.clinicLogoUrl,
+    profileLogoMetadata.clinicSettings?.clinicLogoUrl,
+    profileLogoMetadata.clinic_settings?.clinicLogoUrl,
+    profileLogoMetadata.clinicLogoPath,
+    profileLogoMetadata.clinicSettings?.clinicLogoPath,
+    profileLogoMetadata.clinic_settings?.clinicLogoPath,
+    data?.logo_url,
+  ]);
   const ownerProfessionalName = sanitizeText(profileNameSource?.full_name, 180);
   const clinicNameIsOwnerName = Boolean(
     clinicName && ownerProfessionalName &&
@@ -790,18 +858,11 @@ async function resolveReminderClinicBranding(
     clinicName: !isGenericClinicNotificationName(profileClinicName)
       ? profileClinicName
       : (!isGenericClinicNotificationName(clinicName) && !clinicNameIsOwnerName ? clinicName : DEFAULT_CLINIC_NOTIFICATION_NAME),
-    clinicLogoUrl: sanitizeClinicNotificationLogoUrl(
-      profileLogoSource?.clinic_logo_url ||
-        profileLogoMetadata.clinicLogoUrl ||
-        profileLogoMetadata.clinicSettings?.clinicLogoUrl ||
-        profileLogoMetadata.clinic_settings?.clinicLogoUrl ||
-        profileLogoMetadata.clinicLogoPath ||
-        profileLogoMetadata.clinicSettings?.clinicLogoPath ||
-        profileLogoMetadata.clinic_settings?.clinicLogoPath
-    ) || sanitizeClinicNotificationLogoUrl(data?.logo_url) || null
+    clinicLogoUrl,
+    expiresAtMs: Date.now() + CLINIC_BRANDING_CACHE_TTL_MS,
   };
   clinicBrandingCache.set(safeClinicId, branding);
-  return branding;
+  return { clinicName: branding.clinicName, clinicLogoUrl: branding.clinicLogoUrl };
 }
 
 async function persistPortalReminder(params: {

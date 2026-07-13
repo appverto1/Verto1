@@ -168,6 +168,8 @@ test('patient portal still exposes appointment action controls and notification 
   assert.match(cronServiceCode, /clinicColumns = \['id', 'name', 'display_name', 'legal_name', 'logo_url', 'owner_user_id'\]/);
   assert.match(cronServiceCode, /\.eq\('user_id', data\.owner_user_id\)/);
   assert.match(cronServiceCode, /clinicNameIsOwnerName/);
+  assert.match(cronServiceCode, /extractReminderMissingColumnName\(profileBranding\.error\) === 'clinic_id'/);
+  assert.match(cronServiceCode, /createSignedUrl\(storagePath, CLINIC_LOGO_SIGNED_URL_TTL_SECONDS\)/);
   assert.match(cronServiceCode, /DEFAULT_CLINIC_NOTIFICATION_NAME = 'Clínica'/);
   assert.match(cronServiceCode, /isGenericClinicNotificationName/);
   assert.match(cronServiceCode, /allowProfessionalFallback:\s*false/);

@@ -1,6 +1,5 @@
-const SW_VERSION = "appointments-app-only-v9";
+const SW_VERSION = "appointments-clinic-branding-v10";
 const APPOINTMENT_NOTIFICATION_CTA = "Toque para confirmar, remarcar ou cancelar.";
-const VERTO_ICON = "/verto-3d-transparent.png";
 
 const isGenericBrandName = (value) => {
   const normalized = String(value || "")
@@ -15,9 +14,14 @@ const isGenericBrandName = (value) => {
 const isVertoFallbackAsset = (value) =>
   /(?:^|\/)(?:verto-3d(?:-transparent)?|logoverto|verto-logo)\.(?:png|webp|jpe?g)(?:$|[?#])/i.test(String(value || ""));
 
-const asNotificationAssetUrl = (value, fallback = VERTO_ICON) => {
-  const source = String(value || fallback || "").trim() || VERTO_ICON;
-  return new URL(source, self.location.origin).href;
+const asNotificationAssetUrl = (value) => {
+  const source = String(value || "").trim();
+  if (!source) return "";
+  try {
+    return new URL(source, self.location.origin).href;
+  } catch {
+    return "";
+  }
 };
 
 self.addEventListener("install", (event) => {
@@ -65,14 +69,14 @@ self.addEventListener("push", (event) => {
   const title = isGenericBrandName(payload.title) && !isGenericBrandName(brandName)
     ? brandName
     : (payload.title || brandName);
-  const iconSource = brandLogo || (isVertoFallbackAsset(payload.icon) ? "" : payload.icon) || VERTO_ICON;
-  const badgeSource = brandLogo || (isVertoFallbackAsset(payload.badge) ? "" : payload.badge) || VERTO_ICON;
+  const iconUrl = asNotificationAssetUrl(brandLogo || (isVertoFallbackAsset(payload.icon) ? "" : payload.icon));
+  const badgeUrl = asNotificationAssetUrl(brandLogo || (isVertoFallbackAsset(payload.badge) ? "" : payload.badge));
 
   event.waitUntil(
     self.registration.showNotification(title, {
       body: payload.body || `Você tem uma consulta agendada. ${APPOINTMENT_NOTIFICATION_CTA}`,
-      icon: asNotificationAssetUrl(iconSource),
-      badge: asNotificationAssetUrl(badgeSource),
+      ...(iconUrl ? { icon: iconUrl } : {}),
+      ...(badgeUrl ? { badge: badgeUrl } : {}),
       tag: payload.tag || (appointmentId ? `appointment-reminder-${appointmentId}-${reminderKind}` : undefined),
       renotify: Boolean(appointmentId),
       requireInteraction: true,

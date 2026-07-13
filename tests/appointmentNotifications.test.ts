@@ -2,7 +2,12 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import dayjs from 'dayjs';
-import { chooseDueReminder, isActiveAppointmentStatus } from '../services/cronService';
+import {
+  chooseDueReminder,
+  extractReminderClinicLogoStoragePath,
+  extractReminderMissingColumnName,
+  isActiveAppointmentStatus,
+} from '../services/cronService';
 
 const root = process.cwd();
 const read = (file: string) => readFileSync(join(root, file), 'utf8');
@@ -35,12 +40,17 @@ assert.match(cron, /\.select\('id,name,email,clinic_id,responsible_user_id,is_ac
 assert.match(pushService, /\.in\(column, values\)/);
 assert.doesNotMatch(pushService, /\.limit\(5000\)/);
 assert.match(pushService, /allowCrossClinicEmailFallback:\s*false/);
+assert.match(cron, /createSignedUrl\(storagePath, CLINIC_LOGO_SIGNED_URL_TTL_SECONDS\)/);
+assert.match(cron, /extractReminderMissingColumnName\(profileBranding\.error\) === 'clinic_id'/);
 assert.doesNotMatch(read('src/services/notificationBranding.ts'), /actions:\s*\[/);
 assert.match(read('src/services/notificationBranding.ts'), /const clinicLogoUrl = firstUrl\(input\.branding\.logoUrl\) \|\| null/);
 assert.doesNotMatch(read('src/services/notificationBranding.ts'), /DEFAULT_VERTO_LOGO/);
 assert.doesNotMatch(read('src/services/notificationBranding.ts'), /image:\s*input\.branding\.logoUrl/);
 assert.doesNotMatch(read('public/sw.js'), /actions,/);
 assert.doesNotMatch(read('public/sw.js'), /notification_action/);
+assert.doesNotMatch(read('public/sw.js'), /const VERTO_ICON/);
+assert.doesNotMatch(read('public/sw.js'), /\|\| VERTO_ICON/);
+assert.match(read('public/sw.js'), /appointments-clinic-branding-v10/);
 assert.match(server, /POST|post\('\/api\/internal\/notifications\/run-appointment-reminders/);
 assert.match(server, /APPOINTMENT_REMINDER_CRON_SECRET/);
 assert.match(server, /crypto\.timingSafeEqual/);
@@ -51,6 +61,16 @@ assert.doesNotMatch(server, /\.select\(\s*['"`]\*['"`]\s*\)/);
 assert.equal(isActiveAppointmentStatus('confirmed'), true);
 assert.equal(isActiveAppointmentStatus('RESCHEDULED'), false);
 assert.equal(isActiveAppointmentStatus('deleted'), false);
+assert.equal(
+  extractReminderMissingColumnName({ message: 'column professional_profiles.clinic_id does not exist' }),
+  'clinic_id',
+);
+assert.equal(
+  extractReminderClinicLogoStoragePath(
+    '/api/storage/patient-photos/view?path=onboarding%2Fclinic-id%2Flogo%2Fbrand.webp',
+  ),
+  'onboarding/clinic-id/logo/brand.webp',
+);
 
 const reminderAppointment = {
   appointmentId: 'appointment-1',
