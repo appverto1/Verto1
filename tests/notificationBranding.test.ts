@@ -155,12 +155,12 @@ assert.match(cronCode, /professionalDisplayName: appointment\.professionalDispla
 assert.match(cronCode, /patientName: appointment\.patientName/);
 assert.match(cronCode, /createSignedUrl\(storagePath, CLINIC_LOGO_SIGNED_URL_TTL_SECONDS\)/);
 assert.match(cronCode, /extractReminderMissingColumnName\(profileBranding\.error\) === 'clinic_id'/);
-assert.match(manifestCode, /"name": "Portal do paciente"/);
-assert.match(manifestCode, /"short_name": "Portal"/);
-assert.doesNotMatch(manifestCode, /"(?:name|short_name)": "Verto"/);
-assert.match(manifestCode, /portal-icon-192\.png/);
-assert.match(manifestCode, /portal-icon-512\.png/);
-assert.doesNotMatch(manifestCode, /"src": "\/icon-(?:192|512)\.png/);
+assert.match(manifestCode, /"name": "Verto"/);
+assert.match(manifestCode, /"short_name": "Verto"/);
+assert.doesNotMatch(manifestCode, /"(?:name|short_name)": "Portal(?: do paciente)?"/);
+assert.match(manifestCode, /"src": "\/icon-192\.png/);
+assert.match(manifestCode, /"src": "\/icon-512\.png/);
+assert.doesNotMatch(manifestCode, /portal-icon-(?:192|512)\.png/);
 assert.match(docsCode, /dominio\/origin/);
 assert.match(docsCode, /nao tenta ocultar ou mascarar esse origin/);
 
