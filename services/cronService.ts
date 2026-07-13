@@ -199,8 +199,20 @@ const buildScheduledAtFromClinicStateAppointment = (appointment: any) => {
 const getReminderDueUtc = (scheduledAt: string, hoursBefore: number) =>
   dayjs(scheduledAt).tz(BRAZIL_TIMEZONE).subtract(hoursBefore, 'hour').utc();
 
-const reminderDedupeKey = (appointment: ReminderAppointment, kind: ReminderKind) =>
-  `${appointment.appointmentId}:${kind}`;
+export const reminderScheduleCycleKey = (scheduledAt: unknown) => {
+  const parsed = dayjs(sanitizeText(scheduledAt, 120));
+  return parsed.isValid()
+    ? parsed.utc().format('YYYYMMDDTHHmmss[Z]')
+    : 'unscheduled';
+};
+
+export const reminderDedupeKey = (appointment: ReminderAppointment, kind: ReminderKind) =>
+  `${appointment.appointmentId}:${reminderScheduleCycleKey(appointment.scheduledAt)}:${kind}`;
+
+export const buildPortalReminderIdempotencyKey = (
+  appointment: ReminderAppointment,
+  recipientKey: string,
+) => `${appointment.appointmentId}:appointment:${reminderScheduleCycleKey(appointment.scheduledAt)}:${recipientKey}`;
 
 const pruneRecentReminderMemory = (nowMs: number) => {
   for (const [key, sentAtMs] of recentlySentReminders.entries()) {
@@ -226,6 +238,9 @@ const mergeAppointment = (
     return;
   }
 
+  const sameScheduleCycle =
+    reminderScheduleCycleKey(existing.scheduledAt) === reminderScheduleCycleKey(incoming.scheduledAt);
+
   appointments.set(incoming.appointmentId, {
     ...existing,
     clinicId: existing.clinicId || incoming.clinicId,
@@ -240,16 +255,116 @@ const mergeAppointment = (
     professionalLogoUrl: existing.professionalLogoUrl || incoming.professionalLogoUrl,
     scheduledAt: existing.scheduledAt || incoming.scheduledAt,
     status: existing.status || incoming.status,
-    patientResponse: existing.patientResponse || incoming.patientResponse,
-    patientConfirmationStatus: existing.patientConfirmationStatus || incoming.patientConfirmationStatus,
-    notification24SentAt: existing.notification24SentAt || incoming.notification24SentAt,
-    notification12SentAt: existing.notification12SentAt || incoming.notification12SentAt,
-    legacyNotification24Sent: Boolean(existing.legacyNotification24Sent || incoming.legacyNotification24Sent),
-    legacyNotification12Sent: Boolean(existing.legacyNotification12Sent || incoming.legacyNotification12Sent),
+    patientResponse: existing.patientResponse || (sameScheduleCycle ? incoming.patientResponse : null),
+    patientConfirmationStatus:
+      existing.patientConfirmationStatus || (sameScheduleCycle ? incoming.patientConfirmationStatus : null),
+    notification24SentAt:
+      existing.notification24SentAt || (sameScheduleCycle ? incoming.notification24SentAt : null),
+    notification12SentAt:
+      existing.notification12SentAt || (sameScheduleCycle ? incoming.notification12SentAt : null),
+    legacyNotification24Sent: Boolean(
+      existing.legacyNotification24Sent || (sameScheduleCycle && incoming.legacyNotification24Sent),
+    ),
+    legacyNotification12Sent: Boolean(
+      existing.legacyNotification12Sent || (sameScheduleCycle && incoming.legacyNotification12Sent),
+    ),
     hasAppointmentsTableSource: existing.hasAppointmentsTableSource || incoming.hasAppointmentsTableSource,
     hasClinicStateSource: existing.hasClinicStateSource || incoming.hasClinicStateSource
   });
 };
+
+export const approvedRescheduleMatchesAppointment = (request: any, appointment: any) => {
+  const appointmentId = sanitizeText(appointment?.id, 120);
+  if (!isUuid(appointmentId) || sanitizeText(request?.appointment_id, 120) !== appointmentId) return false;
+  if (sanitizeText(request?.status, 40).toUpperCase() !== 'APPROVED') return false;
+  if (sanitizeText(request?.request_type, 40).toUpperCase() !== 'RESCHEDULE') return false;
+  const requestOrganizationId = sanitizeText(request?.organization_id, 120);
+  const appointmentClinicId = sanitizeText(appointment?.clinic_id, 120);
+  if (requestOrganizationId && appointmentClinicId && requestOrganizationId !== appointmentClinicId) return false;
+  const metadata = parseReminderSourcePayload(request?.metadata);
+  const approvedStart = sanitizeText(
+    metadata?.approvedStart || metadata?.approved_start || request?.requested_start,
+    120,
+  );
+  const scheduledAt = sanitizeText(appointment?.scheduled_at, 120);
+  const approvedDate = dayjs(approvedStart);
+  const scheduledDate = dayjs(scheduledAt);
+  return approvedDate.isValid() &&
+    scheduledDate.isValid() &&
+    approvedDate.valueOf() === scheduledDate.valueOf();
+};
+
+async function reconcileApprovedReschedulesForReminders(
+  options: ActiveCronServiceOptions,
+  rows: any[],
+) {
+  const candidatesById = new Map<string, any>();
+  for (const row of rows) {
+    const status = sanitizeText(row?.status, 40).toLowerCase();
+    const appointmentId = sanitizeText(row?.id, 120);
+    if (isUuid(appointmentId) && ['rescheduled', 'remarcada', 'remarcado'].includes(status)) {
+      candidatesById.set(appointmentId, row);
+    }
+  }
+  if (candidatesById.size === 0) return new Set<string>();
+
+  const candidateIds = Array.from(candidatesById.keys());
+  const { data, error } = await options.supabase
+    .from('appointment_action_requests')
+    .select('appointment_id, organization_id, requested_start, status, request_type, metadata, resolved_at')
+    .in('appointment_id', candidateIds)
+    .eq('request_type', 'RESCHEDULE')
+    .eq('status', 'APPROVED')
+    .order('resolved_at', { ascending: false })
+    .limit(Math.min(1000, candidateIds.length * 3));
+
+  if (error) {
+    options.logger.warn('[Appointment Reminder Cron] Compatibilidade de remarcacoes aprovadas indisponivel.', {
+      count: candidateIds.length,
+      message: error.message,
+    });
+    return new Set<string>();
+  }
+
+  const approvedIds = new Set<string>();
+  for (const request of data || []) {
+    const appointmentId = sanitizeText(request?.appointment_id, 120);
+    if (approvedIds.has(appointmentId)) continue;
+    const appointment = candidatesById.get(appointmentId);
+    if (appointment && approvedRescheduleMatchesAppointment(request, appointment)) {
+      approvedIds.add(appointmentId);
+    }
+  }
+
+  if (approvedIds.size > 0) {
+    const repairedAt = dayjs().utc().toISOString();
+    const { data: repairedRows, error: repairError } = await options.supabase
+      .from('appointments')
+      .update({ status: 'scheduled', updated_at: repairedAt })
+      .in('id', Array.from(approvedIds))
+      .in('status', ['RESCHEDULED', 'rescheduled', 'REMARCADA', 'remarcada', 'REMARCADO', 'remarcado'])
+      .select('id');
+    if (repairError) {
+      options.logger.warn('[Appointment Reminder Cron] Status legado de remarcacao nao foi normalizado.', {
+        count: approvedIds.size,
+        message: repairError.message,
+      });
+      return new Set<string>();
+    } else {
+      const repairedIds = new Set<string>(
+        (Array.isArray(repairedRows) ? repairedRows : [])
+          .map((row: any) => sanitizeText(row?.id, 120))
+          .filter((id: string) => isUuid(id)),
+      );
+      options.logger.log('[Appointment Reminder Cron] Remarcacoes aprovadas normalizadas para lembretes.', {
+        count: repairedIds.size,
+      });
+      return repairedIds;
+    }
+  }
+
+  return new Set<string>();
+}
 
 async function fetchAppointmentsTable(
   options: ActiveCronServiceOptions,
@@ -272,12 +387,16 @@ async function fetchAppointmentsTable(
     return appointments;
   }
 
-  for (const row of data || []) {
+  const rows = Array.isArray(data) ? data : [];
+  const approvedRescheduleIds = await reconcileApprovedReschedulesForReminders(options, rows);
+
+  for (const row of rows) {
     const appointmentId = sanitizeText(row?.id, 120);
     const patientId = sanitizeText(row?.patient_id, 120);
     const scheduledAt = sanitizeText(row?.scheduled_at, 80);
     if (!appointmentId || !patientId || !scheduledAt) continue;
-    if (!isActiveAppointmentStatus(row?.status)) continue;
+    const isApprovedReschedule = approvedRescheduleIds.has(appointmentId);
+    if (!isActiveAppointmentStatus(row?.status) && !isApprovedReschedule) continue;
     if (row?.is_active === false || row?.deleted_at) continue;
 
     mergeAppointment(appointments, {
@@ -291,7 +410,7 @@ async function fetchAppointmentsTable(
       professionalDisplayName: null,
       professionalLogoUrl: null,
       scheduledAt,
-      status: sanitizeText(row?.status, 40).toLowerCase(),
+      status: isApprovedReschedule ? 'scheduled' : sanitizeText(row?.status, 40).toLowerCase(),
       patientResponse: sanitizeText(row?.patient_response, 40).toLowerCase(),
       patientConfirmationStatus: null,
       notification24SentAt: sanitizeText(row?.notification_24h_sent_at, 80) || null,
@@ -880,7 +999,7 @@ async function persistPortalReminder(params: {
   if (!recipientUserId && !recipientEmail) return false;
 
   const recipientKey = recipientUserId || recipientEmail;
-  const idempotencyKey = `${params.appointment.appointmentId}:appointment:${recipientKey}`;
+  const idempotencyKey = buildPortalReminderIdempotencyKey(params.appointment, recipientKey);
   const sentAt = dayjs().utc().toISOString();
   const notificationMetadata = {
     reminderKind: params.kind,
@@ -896,6 +1015,7 @@ async function persistPortalReminder(params: {
       .select('id, acknowledged_at, title, message, scheduled_for, metadata, created_at')
       .eq('patient_id', params.appointment.patientId)
       .eq('appointment_id', params.appointment.appointmentId)
+      .eq('idempotency_key', idempotencyKey)
       .in('type', ['appointment_reminder', 'appointment_reminder_24h', 'appointment_reminder_12h'])
       .order('created_at', { ascending: false })
       .limit(1);

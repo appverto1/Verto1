@@ -33393,7 +33393,7 @@ async function startServer() {
             clinicName,
             clinicLogoUrl: clinicBranding.logoUrl || null,
             patientName,
-            appointmentStatus: 'RESCHEDULED'
+            appointmentStatus: 'SCHEDULED'
           })
         });
         const { error } = await supabase
@@ -34225,7 +34225,7 @@ async function startServer() {
       const now = new Date().toISOString();
       let nextAppointment: any = appointment;
       let auditAction = 'RESCHEDULE_APPROVED';
-      let newStatus = 'RESCHEDULED';
+      let newStatus = 'SCHEDULED';
       let approvedRescheduleStart = '';
       if (requestRow.request_type === 'RESCHEDULE') {
         const parsedRequestNote = parseRescheduleRequestPayload(requestRow.note, requestRow.metadata);
@@ -34278,7 +34278,7 @@ async function startServer() {
           updated_at: now
         });
         const update = await updateAppointmentOperationalPatch(appointment.id, {
-          status: 'RESCHEDULED',
+          status: 'SCHEDULED',
           scheduled_at: requestedStart,
           scheduled_start_at: requestedStart,
           scheduled_end_at: resolvedEnd,
@@ -34294,6 +34294,7 @@ async function startServer() {
           notification_24h_sent_at: null,
           notification_12h_sent_at: null,
           notification_sent: false,
+          notification_sent_at: null,
           notification_12h_sent: false,
           updated_at: now
         });
@@ -34303,7 +34304,7 @@ async function startServer() {
         if (!persistedAppointment || !appointmentScheduleMatches(persistedAppointment, {
           start: requestedStart,
           end: resolvedEnd,
-          status: 'RESCHEDULED'
+          status: 'SCHEDULED'
         })) {
           // Nao cria historico de aprovacao quando a escrita principal nao foi
           // confirmada. A compensacao reduz o risco de estado parcial em schemas legados.
@@ -34312,7 +34313,7 @@ async function startServer() {
         }
         nextAppointment = {
           ...persistedAppointment,
-          status: 'RESCHEDULED',
+          status: 'SCHEDULED',
           scheduled_at: requestedStart,
           scheduled_start_at: requestedStart,
           scheduled_end_at: resolvedEnd,
@@ -34413,6 +34414,7 @@ async function startServer() {
           organizationId,
           scheduledStart: approvedRescheduleStart
         });
+        triggerAppointmentReminderScan('appointment_reschedule_approved');
       }
       void regenerateClosureForAppointments([appointment.id], req.session.user, requestRow.request_type === 'CANCEL' ? 'appointment_cancel_approved' : 'appointment_reschedule_approved');
       return res.json({ success: true, appointment: serializePortalAppointment(nextAppointment) });

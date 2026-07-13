@@ -3,10 +3,13 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import dayjs from 'dayjs';
 import {
+  approvedRescheduleMatchesAppointment,
+  buildPortalReminderIdempotencyKey,
   chooseDueReminder,
   extractReminderClinicLogoStoragePath,
   extractReminderMissingColumnName,
   isActiveAppointmentStatus,
+  reminderDedupeKey,
 } from '../services/cronService';
 
 const root = process.cwd();
@@ -22,7 +25,11 @@ assert.match(migration, /create unique index if not exists portal_notifications_
 assert.match(migration, /recipient_user_id = auth\.uid\(\)/);
 assert.match(migration, /revoke insert, delete, update on table public\.portal_notifications from anon, authenticated/);
 assert.match(migration, /grant update \(read_at, acknowledged_at, updated_at\)/);
-assert.match(cron, /appointmentId\}:appointment:\$\{recipientKey\}/);
+assert.match(cron, /buildPortalReminderIdempotencyKey\(params\.appointment, recipientKey\)/);
+assert.match(cron, /\.eq\('idempotency_key', idempotencyKey\)/);
+assert.match(cron, /const sameScheduleCycle =/);
+assert.match(cron, /sameScheduleCycle \? incoming\.notification24SentAt : null/);
+assert.match(cron, /sameScheduleCycle && incoming\.legacyNotification24Sent/);
 assert.match(cron, /type: 'appointment_reminder'/);
 assert.match(cron, /\.eq\('appointment_id', params\.appointment\.appointmentId\)/);
 assert.match(cron, /\.in\('type', \['appointment_reminder', 'appointment_reminder_24h', 'appointment_reminder_12h'\]\)/);
@@ -37,6 +44,12 @@ assert.match(cron, /\.select\('id, clinic_id, patient_id, scheduled_at, status, 
 assert.doesNotMatch(cron, /patient_confirmation_status, notification_24h_sent_at/);
 assert.match(cron, /hydrateReminderAppointmentPatients/);
 assert.match(cron, /\.select\('id,name,email,clinic_id,responsible_user_id,is_active,deleted_at'\)/);
+assert.match(cron, /reconcileApprovedReschedulesForReminders/);
+assert.match(cron, /\.in\('appointment_id', candidateIds\)/);
+assert.match(cron, /metadata\?\.approvedStart/);
+assert.match(cron, /approvedRescheduleMatchesAppointment/);
+assert.match(cron, /\.update\(\{ status: 'scheduled', updated_at: repairedAt \}\)[\s\S]*?\.select\('id'\)/);
+assert.match(cron, /isApprovedReschedule \? 'scheduled'/);
 assert.match(pushService, /\.in\(column, values\)/);
 assert.doesNotMatch(pushService, /\.limit\(5000\)/);
 assert.match(pushService, /allowCrossClinicEmailFallback:\s*false/);
@@ -55,6 +68,16 @@ assert.match(server, /POST|post\('\/api\/internal\/notifications\/run-appointmen
 assert.match(server, /APPOINTMENT_REMINDER_CRON_SECRET/);
 assert.match(server, /crypto\.timingSafeEqual/);
 assert.match(server, /appointmentReminderCronLimiter/);
+const approveRescheduleRoute = server.slice(
+  server.indexOf("app.post('/api/appointments/action-requests/:requestId/approve'"),
+  server.indexOf("app.post('/api/appointments/action-requests/:requestId/reject'")
+);
+assert.match(approveRescheduleRoute, /status:\s*'SCHEDULED'/);
+assert.match(approveRescheduleRoute, /notification_24h_sent_at:\s*null/);
+assert.match(approveRescheduleRoute, /notification_12h_sent_at:\s*null/);
+assert.match(approveRescheduleRoute, /notification_sent_at:\s*null/);
+assert.match(approveRescheduleRoute, /triggerAppointmentReminderScan\('appointment_reschedule_approved'\)/);
+assert.doesNotMatch(approveRescheduleRoute, /status:\s*'RESCHEDULED'/);
 assert.doesNotMatch(cron, /\.select\(\s*['"`]\*['"`]\s*\)/);
 assert.doesNotMatch(server, /\.select\(\s*['"`]\*['"`]\s*\)/);
 
@@ -87,6 +110,56 @@ const reminderAppointment = {
   hasClinicStateSource: false,
 };
 
+const rescheduledReminderAppointment = {
+  ...reminderAppointment,
+  scheduledAt: '2026-07-16T19:00:00.000Z',
+  status: 'scheduled',
+  notification24SentAt: null,
+  notification12SentAt: null,
+};
+
+const persistedRescheduledAppointment = {
+  id: '149c06e6-bdfc-42c6-8f63-971777f74c85',
+  clinic_id: 'e2aa4494-d2da-4e1e-ae0d-2ea00af164d4',
+  scheduled_at: '2026-07-16T19:00:00.000Z',
+  status: 'RESCHEDULED',
+};
+const approvedRescheduleRequest = {
+  appointment_id: persistedRescheduledAppointment.id,
+  organization_id: persistedRescheduledAppointment.clinic_id,
+  request_type: 'RESCHEDULE',
+  status: 'APPROVED',
+  metadata: { approvedStart: persistedRescheduledAppointment.scheduled_at },
+};
+
+assert.equal(
+  approvedRescheduleMatchesAppointment(approvedRescheduleRequest, persistedRescheduledAppointment),
+  true,
+);
+assert.equal(
+  approvedRescheduleMatchesAppointment(
+    { ...approvedRescheduleRequest, organization_id: '681c89af-5ee6-4f4e-93a0-99c68f1e3576' },
+    persistedRescheduledAppointment,
+  ),
+  false,
+);
+assert.equal(
+  approvedRescheduleMatchesAppointment(
+    { ...approvedRescheduleRequest, metadata: { approvedStart: '2026-07-16T20:00:00.000Z' } },
+    persistedRescheduledAppointment,
+  ),
+  false,
+);
+
+assert.notEqual(
+  reminderDedupeKey(reminderAppointment as any, '24h'),
+  reminderDedupeKey(rescheduledReminderAppointment as any, '24h'),
+);
+assert.notEqual(
+  buildPortalReminderIdempotencyKey(reminderAppointment as any, 'patient-1'),
+  buildPortalReminderIdempotencyKey(rescheduledReminderAppointment as any, 'patient-1'),
+);
+
 assert.equal(
   chooseDueReminder(
     reminderAppointment as any,
@@ -110,6 +183,22 @@ assert.equal(
     dayjs('2026-07-15T07:01:00.000Z'),
   ),
   null,
+);
+assert.equal(
+  chooseDueReminder(
+    rescheduledReminderAppointment as any,
+    dayjs('2026-07-15T18:59:00.000Z'),
+    dayjs('2026-07-15T19:01:00.000Z'),
+  )?.kind,
+  '24h',
+);
+assert.equal(
+  chooseDueReminder(
+    { ...rescheduledReminderAppointment, notification24SentAt: '2026-07-15T19:00:00.000Z' } as any,
+    dayjs('2026-07-16T06:59:00.000Z'),
+    dayjs('2026-07-16T07:01:00.000Z'),
+  )?.kind,
+  '12h',
 );
 
 console.log('appointment notification persistence checks passed');
