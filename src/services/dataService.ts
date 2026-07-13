@@ -6505,7 +6505,7 @@ export const dataService = {
 
   async updateAppointment(appointmentId: string, appointments: any[], clientRequestId?: string) {
     try {
-      const stableRequestId = clientRequestId || `${appointmentId}:${appointments.map((item) => item?.id).join(",")}`;
+      const stableRequestId = clientRequestId || createIdempotencyKey('appointment-update', appointmentId);
       const idempotencyKey = `PATCH:/api/appointments/${appointmentId}:${stableRequestId}`;
       const response = await fetch(`/api/appointments/${encodeURIComponent(appointmentId)}`, {
         method: "PATCH",

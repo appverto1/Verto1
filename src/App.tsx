@@ -4514,7 +4514,6 @@ export default function App() {
     const persistenceResult = await dataService.updateAppointment(
       String(id),
       appointmentsToPersist,
-      `${id}:${recurrenceScope}`,
     );
     if (!persistenceResult?.success || !Array.isArray(persistenceResult?.appointments)) {
       return {

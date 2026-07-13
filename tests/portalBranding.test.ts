@@ -95,11 +95,13 @@ test('portal notifications derive clinic branding from linked patient when notif
   assert.match(serverCode, /patient_confirmation_status/);
   assert.match(serverCode, /RESCHEDULE_REQUESTED/);
   assert.match(serverCode, /CANCEL_REQUESTED/);
-  assert.match(notificationRouteSlice, /\.select\('id,name,email,clinic_id'\)/);
+  assert.match(notificationRouteSlice, /readPortalPatientContexts\(notificationPatientIds\)/);
+  assert.match(notificationRouteSlice, /resolvePortalPatientDisplayName\(patient\)/);
   assert.match(notificationRouteSlice, /appointmentContext\?\.patientId/);
   assert.match(notificationRouteSlice, /appointmentContext\?\.clinicId/);
   assert.match(notificationRouteSlice, /patientClinicIdsById\.get\(patientId\)/);
   assert.match(notificationRouteSlice, /isGenericCalendarPatientName\(metadataPatientName\)/);
+  assert.match(notificationRouteSlice, /appointmentContext\?\.scheduledAt \|\| metadata\.scheduledAt \|\| row\?\.scheduled_for/);
   assert.ok(
     notificationRouteSlice.indexOf('const patientId = sanitizeString(row?.patient_id || metadata.patientId || metadata.patient_id || appointmentContext?.patientId, 120);') <
       notificationRouteSlice.indexOf('const branding = await resolveNotificationClinicBranding(clinicId);'),
@@ -113,7 +115,7 @@ test('portal notifications derive clinic branding from linked patient when notif
   assert.ok(
     notificationPatientNameResolutionSlice.indexOf('patientNamesById.get(patientId)') <
       notificationPatientNameResolutionSlice.indexOf('metadataPatientName'),
-    'Nome real do cadastro do paciente deve ganhar de metadados incompletos da notificacao.'
+    'Nome preferido resolvido para o portal deve ganhar de metadados antigos da notificacao.'
   );
 });
 

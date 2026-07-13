@@ -80,6 +80,7 @@
     "test:family-diary": "tsx tests/familyDiary.test.ts",
     "test:patient-registration-anamnesis": "tsx tests/patientRegistrationAnamnesis.test.ts",
     "test:patient-demographics-persistence": "tsx tests/patientDemographicsPersistence.test.ts",
+    "test:appointment-edit-patient-name": "tsx tests/appointmentEditPatientName.test.ts",
     "test:patient-birthday-card": "tsx tests/patientBirthdayCard.test.ts",
     "test:system-persistence-audit": "tsx tests/systemPersistenceAudit.test.ts",
     "test:settings": "tsx tests/settings.test.ts",

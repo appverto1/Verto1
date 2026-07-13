@@ -7,6 +7,7 @@ import {
   buildPatientReminderNotificationPayload,
   resolveBrandingContext,
 } from '../src/services/notificationBranding';
+import { resolvePortalPatientDisplayName } from '../src/utils/patientDisplayName';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -534,16 +535,6 @@ async function hydrateReminderAppointmentPatients(
   options: ActiveCronServiceOptions,
   appointments: ReminderAppointment[],
 ) {
-  const isIncompletePatientName = (value: unknown) => {
-    const label = sanitizeText(value, 180);
-    if (!label) return true;
-    const normalized = label
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .toLowerCase()
-      .trim();
-    return ['paciente', 'patient', 'cliente'].includes(normalized) || label.split(/\s+/).filter(Boolean).length < 2;
-  };
   const patientIdsToHydrate = Array.from(new Set(
     appointments
       .map((appointment) => sanitizeText(appointment.patientId, 120))
@@ -551,11 +542,19 @@ async function hydrateReminderAppointmentPatients(
   ));
   if (patientIdsToHydrate.length === 0) return appointments;
 
-  const { data, error } = await options.supabase
+  let patientResult = await options.supabase
     .from('patients')
-    .select('id,name,email,clinic_id,responsible_user_id,is_active,deleted_at')
+    .select('id,name,email,clinic_id,responsible_user_id,is_active,deleted_at,metadata')
     .in('id', patientIdsToHydrate)
     .limit(patientIdsToHydrate.length);
+  if (patientResult.error && extractReminderMissingColumnName(patientResult.error) === 'metadata') {
+    patientResult = await options.supabase
+      .from('patients')
+      .select('id,name,email,clinic_id,responsible_user_id,is_active,deleted_at')
+      .in('id', patientIdsToHydrate)
+      .limit(patientIdsToHydrate.length);
+  }
+  const { data, error } = patientResult;
   if (error) {
     options.logger.warn('[Appointment Reminder Cron] Dados dos pacientes nao carregados.', {
       count: patientIdsToHydrate.length,
@@ -567,7 +566,7 @@ async function hydrateReminderAppointmentPatients(
   const patientsById = new Map<string, { name: string; email: string; clinicId: string; recipientUserId: string }>();
   for (const row of data || []) {
     const id = sanitizeText(row?.id, 120);
-    const name = sanitizeText(row?.name, 180);
+    const name = resolvePortalPatientDisplayName(row);
     if (!id || row?.is_active === false || row?.deleted_at) continue;
     patientsById.set(id, {
       name,
@@ -599,9 +598,7 @@ async function hydrateReminderAppointmentPatients(
     }
     return [{
       ...appointment,
-      patientName: isIncompletePatientName(appointment.patientName)
-        ? patient?.name || sanitizeText(appointment.patientName, 180) || null
-        : sanitizeText(appointment.patientName, 180) || null,
+      patientName: patient?.name || sanitizeText(appointment.patientName, 180) || null,
       patientEmail: sanitizeEmail(appointment.patientEmail) || patient?.email || null,
       patientClinicId: patient?.clinicId || null,
       recipientUserId: patient?.recipientUserId || null,

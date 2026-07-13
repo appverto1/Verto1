@@ -117,6 +117,10 @@ import {
   getPatientTissAuthorizationVisualState
 } from './src/utils/patientTissAuthorizationView';
 import {
+  resolveClinicalPatientDisplayName,
+  resolvePortalPatientDisplayName
+} from './src/utils/patientDisplayName';
+import {
   buildAppointmentClosureOperationalView,
   evaluateAppointmentClosureReadiness,
   type ClosureReadinessStatus
@@ -9743,7 +9747,7 @@ async function syncAppointmentsTableFromClinicState(params: {
   if (appointmentIds.length > 0) {
     const { data: existingRows, error: existingError } = await supabase
       .from('appointments')
-      .select('id, status, patient_response, patient_responded_at, patient_confirmation_status, patient_confirmation_at, patient_confirmation_by, patient_confirmation_source, notification_24h_sent_at, notification_12h_sent_at, notification_sent, notification_sent_at, notification_12h_sent')
+      .select('id, scheduled_at, scheduled_start_at, status, patient_response, patient_responded_at, patient_confirmation_status, patient_confirmation_at, patient_confirmation_by, patient_confirmation_source, notification_24h_sent_at, notification_12h_sent_at, notification_sent, notification_sent_at, notification_12h_sent')
       .in('id', appointmentIds);
     if (!existingError) {
       for (const row of existingRows || []) {
@@ -9911,6 +9915,8 @@ async function syncAppointmentsTableFromClinicState(params: {
           : null
       );
     const existing = existingById.get(appointmentId) || {};
+    const previousScheduledAt = buildAppointmentScheduledAt(existing);
+    const scheduleChanged = Boolean(previousScheduledAt && scheduledAt && previousScheduledAt !== scheduledAt);
     const hasIncomingPatientResponse = hasAnyOwn(appointment, [
       'patient_response',
       'patientResponse',
@@ -9950,7 +9956,7 @@ async function syncAppointmentsTableFromClinicState(params: {
     const resolvedPatientConfirmationSource = hasIncomingPatientResponse
       ? (appointment?.patientConfirmationSource || appointment?.patient_confirmation_source || null)
       : (existing.patient_confirmation_source || null);
-    const hasIncoming24hMarker = hasAnyOwn(appointment, [
+    const hasIncoming24hMarker = scheduleChanged || hasAnyOwn(appointment, [
       'notification_24h_sent_at',
       'notification24hSentAt',
       'notification_sent_at',
@@ -9961,13 +9967,17 @@ async function syncAppointmentsTableFromClinicState(params: {
       'notification24hSentAt',
       'notification_sent_at'
     ]);
-    const resolved24hSentAt = hasIncoming24hMarker
+    const resolved24hSentAt = scheduleChanged
+      ? null
+      : hasIncoming24hMarker
       ? (incoming24hSentAt || null)
       : (existing.notification_24h_sent_at || existing.notification_sent_at || null);
-    const resolvedNotificationSent = hasIncoming24hMarker
+    const resolvedNotificationSent = scheduleChanged
+      ? false
+      : hasIncoming24hMarker
       ? (hasOwn(appointment, 'notification_sent') ? Boolean(appointment.notification_sent) : Boolean(resolved24hSentAt))
       : Boolean(existing.notification_sent || existing.notification_24h_sent_at || existing.notification_sent_at);
-    const hasIncoming12hMarker = hasAnyOwn(appointment, [
+    const hasIncoming12hMarker = scheduleChanged || hasAnyOwn(appointment, [
       'notification_12h_sent_at',
       'notification12hSentAt',
       'notification_12h_sent'
@@ -9976,10 +9986,14 @@ async function syncAppointmentsTableFromClinicState(params: {
       'notification_12h_sent_at',
       'notification12hSentAt'
     ]);
-    const resolved12hSentAt = hasIncoming12hMarker
+    const resolved12hSentAt = scheduleChanged
+      ? null
+      : hasIncoming12hMarker
       ? (incoming12hSentAt || null)
       : (existing.notification_12h_sent_at || null);
-    const resolvedNotification12hSent = hasIncoming12hMarker
+    const resolvedNotification12hSent = scheduleChanged
+      ? false
+      : hasIncoming12hMarker
       ? (hasOwn(appointment, 'notification_12h_sent') ? Boolean(appointment.notification_12h_sent) : Boolean(resolved12hSentAt))
       : Boolean(existing.notification_12h_sent || existing.notification_12h_sent_at);
     const resolvedPatientName = pickAppointmentPatientName([
@@ -18597,7 +18611,7 @@ async function startServer() {
     }
 
     const idempotencyKey = sanitizeString(
-      req.body?.idempotencyKey || req.body?.idempotency_key || req.headers?.['x-idempotency-key'] || `${params.eventType}:${appointmentIds.join(',')}`,
+      req.body?.idempotencyKey || req.body?.idempotency_key || req.headers?.['x-idempotency-key'] || `${params.eventType}:${crypto.randomUUID()}`,
       240
     );
     const previousAction = await fetchPersistedAppointmentActionByIdempotencyKey({
@@ -18624,15 +18638,36 @@ async function startServer() {
     }
 
     const state = await readClinicStateForAppointmentMutation(clinicId);
+    let existingRows: any[] = [];
     if (params.requireExisting) {
       const existingStateIds = new Set(state.appointments.map((appointment: any) => sanitizeString(appointment?.id, 120)));
-      const existingRows = await readPersistedAppointmentRows(appointmentIds, clinicId);
+      existingRows = await readPersistedAppointmentRows(appointmentIds, clinicId);
       const existingTableIds = new Set(existingRows.map((row: any) => sanitizeString(row?.id, 120)));
       const missingExisting = appointmentIds.some((appointmentId) => !existingStateIds.has(appointmentId) && !existingTableIds.has(appointmentId));
       if (missingExisting) {
         return res.status(404).json({ success: false, error: 'Consulta não encontrada para edição.' });
       }
     }
+    const previousAppointmentsById = new Map<string, any>();
+    for (const appointment of state.appointments) {
+      const appointmentId = sanitizeString(appointment?.id, 120);
+      if (appointmentId) previousAppointmentsById.set(appointmentId, appointment);
+    }
+    for (const appointment of existingRows) {
+      const appointmentId = sanitizeString(appointment?.id, 120);
+      if (appointmentId) previousAppointmentsById.set(appointmentId, appointment);
+    }
+    const scheduleChangedAppointmentIds = new Set(
+      preparedAppointments
+        .filter((appointment: any) => {
+          const previous = previousAppointmentsById.get(sanitizeString(appointment?.id, 120));
+          const previousScheduledAt = buildAppointmentScheduledAt(previous);
+          const nextScheduledAt = buildAppointmentScheduledAt(appointment);
+          return Boolean(previousScheduledAt && nextScheduledAt && previousScheduledAt !== nextScheduledAt);
+        })
+        .map((appointment: any) => sanitizeString(appointment?.id, 120))
+        .filter((appointmentId: string) => isUuid(appointmentId))
+    );
 
     const nextAppointmentsForValidation = mergeClinicStateAppointmentsById(state.appointments, preparedAppointments);
     const scheduleValidation = validateClinicStateAppointmentsForScheduleConflicts({
@@ -18702,6 +18737,19 @@ async function startServer() {
       idempotencyKey,
       payload: { appointmentIds }
     });
+    if (scheduleChangedAppointmentIds.size > 0) {
+      try {
+        await acknowledgeStaleAppointmentReminderNotifications(
+          persistedRows.filter((appointment: any) => scheduleChangedAppointmentIds.has(sanitizeString(appointment?.id, 120)))
+        );
+      } catch (error: any) {
+        console.warn('[Appointments] Lembretes do horario anterior nao puderam ser baixados.', {
+          clinicId,
+          appointmentIds: Array.from(scheduleChangedAppointmentIds),
+          message: sanitizeString(error?.message || String(error), 300)
+        });
+      }
+    }
 
     const preparedById = new Map(preparedAppointments.map((appointment: any) => [sanitizeString(appointment?.id, 120), appointment]));
     const revalidatedIds = new Set<string>();
@@ -19436,9 +19484,13 @@ async function startServer() {
     return clinicTokens.length === 1 && executorName.split(/\s+/).includes(clinicTokens[0]);
   };
 
-  const buildFamilyAppointmentDisplayContext = async (appointment: any) => {
+  const buildFamilyAppointmentDisplayContext = async (
+    appointment: any,
+    preloaded: { patient?: any; clinicBranding?: any } = {}
+  ) => {
     const source = parseAppointmentSourcePayloadForFamilyView(appointment?.source_payload || appointment?.sourcePayload);
     const patientId = sanitizeString(appointment?.patient_id || appointment?.patientId || source?.patient_id || source?.patientId, 120);
+    let patientContext = preloaded.patient || null;
     const organizationFallbackId = sanitizeString(
       appointment?.organization_id ||
         appointment?.organizationId ||
@@ -19453,23 +19505,34 @@ async function startServer() {
         source?.clinicId,
       120
     );
-    if (!isUuid(clinicId) && isUuid(patientId)) {
-      const patientClinicResult = await supabase
+    if (!patientContext && isUuid(patientId)) {
+      let patientResult = await supabase
         .from('patients')
-        .select('id,clinic_id')
+        .select('id,name,clinic_id,metadata')
         .eq('id', patientId)
         .limit(1)
         .maybeSingle();
-      if (!patientClinicResult.error && patientClinicResult.data?.clinic_id) {
-        clinicId = sanitizeString(patientClinicResult.data.clinic_id, 120);
-      } else if (patientClinicResult.error && !extractMissingColumnName(patientClinicResult.error)) {
-        console.warn('[Appointments] patient clinic branding fallback failed:', patientClinicResult.error.message);
+      if (patientResult.error && extractMissingColumnName(patientResult.error) === 'metadata') {
+        patientResult = await supabase
+          .from('patients')
+          .select('id,name,clinic_id')
+          .eq('id', patientId)
+          .limit(1)
+          .maybeSingle();
       }
+      if (!patientResult.error) {
+        patientContext = patientResult.data || null;
+      } else if (!extractMissingColumnName(patientResult.error)) {
+        console.warn('[Appointments] patient family display fallback failed:', patientResult.error.message);
+      }
+    }
+    if (!isUuid(clinicId) && isUuid(sanitizeString(patientContext?.clinic_id, 120))) {
+      clinicId = sanitizeString(patientContext.clinic_id, 120);
     }
     if (!isUuid(clinicId) && isUuid(organizationFallbackId)) {
       clinicId = organizationFallbackId;
     }
-    const clinicBranding = await readClinicBrandingForFamilyView(clinicId);
+    const clinicBranding = preloaded.clinicBranding || await readClinicBrandingForFamilyView(clinicId);
     const professional = await resolveAppointmentProfessionalForFamilyView(appointment);
     const explicitClinicName = sanitizeString(
       appointment?.clinic_display_name ||
@@ -19506,18 +19569,7 @@ async function startServer() {
         source?.name,
       180
     );
-    if ((!patientName || isGenericCalendarPatientName(patientName)) && isUuid(patientId)) {
-      const patientQuery = await supabase
-        .from('patients')
-        .select('id,name')
-        .eq('id', patientId)
-        .limit(1)
-        .maybeSingle();
-      if (!patientQuery.error && patientQuery.data?.name) {
-        patientName = sanitizeString(patientQuery.data.name, 180);
-      }
-    }
-    patientName = patientName || 'Paciente';
+    patientName = resolvePortalPatientDisplayName(patientContext, patientName);
 
     return {
       clinicId: clinicBranding.id || (isUuid(clinicId) ? clinicId : null),
@@ -31372,16 +31424,6 @@ async function startServer() {
     const labels = candidates.map((value) => sanitizeString(value, 180)).filter(Boolean);
     return labels.find((label) => !isGenericCalendarPatientName(label)) || labels[0] || '';
   };
-  const isMoreCompleteCalendarPatientName = (candidate: string, current: string) => {
-    const cleanCandidate = sanitizeString(candidate, 180);
-    const cleanCurrent = sanitizeString(current, 180);
-    if (!cleanCandidate) return false;
-    if (!cleanCurrent || isGenericCalendarPatientName(cleanCurrent)) return true;
-    const candidateParts = cleanCandidate.split(/\s+/).filter(Boolean).length;
-    const currentParts = cleanCurrent.split(/\s+/).filter(Boolean).length;
-    return candidateParts > currentParts || (candidateParts === currentParts && cleanCandidate.length > cleanCurrent.length + 2);
-  };
-
   const hydrateCalendarPatientNames = async (rows: any[], clinicId: string) => {
     const safeClinicId = sanitizeString(clinicId, 120);
     if (!Array.isArray(rows) || rows.length === 0 || !isUuid(safeClinicId)) return rows;
@@ -31413,7 +31455,8 @@ async function startServer() {
     const hydrateRowsFromKnownNames = (sourceRows: any[]) => sourceRows.map((row: any) => {
       const patientId = readRowPatientId(row);
       const hydratedName = knownNamesById.get(patientId);
-      if (!hydratedName || !isMoreCompleteCalendarPatientName(hydratedName, readRowPatientName(row))) return row;
+      const currentName = readRowPatientName(row);
+      if (!hydratedName || hydratedName === currentName) return row;
       return {
         ...row,
         patient_name: hydratedName,
@@ -31422,13 +31465,11 @@ async function startServer() {
       };
     });
     let hydratedRows = hydrateRowsFromKnownNames(rows);
-    const idsNeedingHydration = Array.from(new Set(hydratedRows
-      .map((row: any) => {
-        const patientId = readRowPatientId(row);
-        const currentName = readRowPatientName(row);
-        return isUuid(patientId) && (!currentName || isGenericCalendarPatientName(currentName) || currentName.split(/\s+/).filter(Boolean).length < 2) ? patientId : '';
-      })
-      .filter(Boolean)));
+    const idsNeedingHydration = Array.from(new Set(
+      hydratedRows
+        .map((row: any) => readRowPatientId(row))
+        .filter((patientId: string) => isUuid(patientId))
+    ));
     if (idsNeedingHydration.length === 0) return hydratedRows;
     const { data, error } = await supabase
       .from('patients')
@@ -31442,7 +31483,7 @@ async function startServer() {
     }
     for (const row of data || []) {
       const id = sanitizeString(row?.id, 120);
-      const name = sanitizeString(row?.name, 180);
+      const name = resolveClinicalPatientDisplayName(row);
       if (isUuid(id) && !isGenericCalendarPatientName(name)) knownNamesById.set(id, name);
     }
     hydratedRows = hydrateRowsFromKnownNames(hydratedRows);
@@ -32322,6 +32363,37 @@ async function startServer() {
     return buildQuery(columns.join(','));
   };
 
+  const readPortalPatientContexts = async (rawPatientIds: unknown[]) => {
+    const patientIds = Array.from(new Set(
+      (Array.isArray(rawPatientIds) ? rawPatientIds : [])
+        .map((id) => sanitizeString(id, 120))
+        .filter((id) => isUuid(id))
+    )).slice(0, 200);
+    if (patientIds.length === 0) return { data: [] as any[], error: null };
+
+    let columns = ['id', 'name', 'email', 'clinic_id', 'responsible_user_id', 'responsible_email', 'metadata'];
+    const removedColumns = new Set<string>();
+    for (let attempt = 0; attempt < 6 && columns.length > 1; attempt += 1) {
+      const result = await supabase
+        .from('patients')
+        .select(columns.join(','))
+        .in('id', patientIds)
+        .limit(patientIds.length);
+      if (!result.error) return result;
+      const missingColumn = extractMissingColumnName(result.error);
+      if (!missingColumn || missingColumn === 'id' || removedColumns.has(missingColumn) || !columns.includes(missingColumn)) {
+        return result;
+      }
+      removedColumns.add(missingColumn);
+      columns = columns.filter((column) => column !== missingColumn);
+    }
+    return supabase
+      .from('patients')
+      .select(columns.join(','))
+      .in('id', patientIds)
+      .limit(patientIds.length);
+  };
+
   const canPortalUserAccessPatient = async (patientId: string, appointment: any, user: any) => {
     const role = sanitizeString(user?.role, 40).toLowerCase();
     const appointmentScope = readPortalAppointmentPatientScope(appointment);
@@ -32453,22 +32525,11 @@ async function startServer() {
         }).map((id: any) => sanitizeString(id, 120)).filter((id: string) => isUuid(id))
       ));
       if (notificationPatientIds.length > 0) {
-        let patientResult = await supabase
-          .from('patients')
-          .select('id,name,email,clinic_id')
-          .in('id', notificationPatientIds)
-          .limit(Math.min(notificationPatientIds.length, 200));
-        if (patientResult.error && extractMissingColumnName(patientResult.error) === 'clinic_id') {
-          patientResult = await supabase
-            .from('patients')
-            .select('id,name,email')
-            .in('id', notificationPatientIds)
-            .limit(Math.min(notificationPatientIds.length, 200));
-        }
+        const patientResult = await readPortalPatientContexts(notificationPatientIds);
         if (!patientResult.error) {
           for (const patient of Array.isArray(patientResult.data) ? patientResult.data : []) {
             const id = sanitizeString(patient?.id, 120);
-            const name = sanitizeString(patient?.name, 160);
+            const name = resolvePortalPatientDisplayName(patient);
             const clinicId = sanitizeString(patient?.clinic_id, 120);
             if (id && name) patientNamesById.set(id, name);
             if (id && isUuid(clinicId)) patientClinicIdsById.set(id, clinicId);
@@ -32557,7 +32618,7 @@ async function startServer() {
           (!isGenericCalendarPatientName(appointmentPatientName) ? appointmentPatientName : '') ||
           (!isGenericCalendarPatientName(metadataPatientName) ? metadataPatientName : '') ||
           'Paciente';
-        const scheduledAt = sanitizeString(metadata.scheduledAt || row?.scheduled_for || appointmentContext?.scheduledAt, 120);
+        const scheduledAt = sanitizeString(appointmentContext?.scheduledAt || metadata.scheduledAt || row?.scheduled_for, 120);
         const normalizedMetadata = {
           ...metadata,
           clinicName: branding.displayName,
@@ -32824,8 +32885,12 @@ async function startServer() {
     };
   };
 
-  const serializePortalAppointmentForFamilyView = async (row: any, extras: Record<string, any> = {}) => {
-    const displayContext = await buildFamilyAppointmentDisplayContext(row);
+  const serializePortalAppointmentForFamilyView = async (
+    row: any,
+    extras: Record<string, any> = {},
+    preloaded: { patient?: any; clinicBranding?: any } = {}
+  ) => {
+    const displayContext = await buildFamilyAppointmentDisplayContext(row, preloaded);
     return serializePortalAppointment(row, {
       clinicId: displayContext.clinicId,
       clinicName: displayContext.clinicName,
@@ -32913,11 +32978,24 @@ async function startServer() {
     return { ok: true, notificationIds };
   };
 
-  const acknowledgeStaleAppointmentReminderNotifications = async (appointment: any) => {
-    const appointmentId = sanitizeString(appointment?.id, 120);
-    const patientId = sanitizeString(appointment?.patient_id || appointment?.patientId, 120);
-    const organizationId = sanitizeString(appointment?.organization_id || appointment?.clinic_id, 120);
-    if (!isUuid(appointmentId) || !isUuid(patientId) || !isUuid(organizationId)) return [] as string[];
+  const acknowledgeStaleAppointmentReminderNotifications = async (appointmentOrAppointments: any) => {
+    const appointments = (Array.isArray(appointmentOrAppointments) ? appointmentOrAppointments : [appointmentOrAppointments])
+      .filter(Boolean);
+    const appointmentIds = Array.from(new Set(
+      appointments.map((appointment: any) => sanitizeString(appointment?.id, 120)).filter((id: string) => isUuid(id))
+    ));
+    const patientIds = Array.from(new Set(
+      appointments
+        .map((appointment: any) => sanitizeString(appointment?.patient_id || appointment?.patientId, 120))
+        .filter((id: string) => isUuid(id))
+    ));
+    const organizationIds = Array.from(new Set(
+      appointments
+        .map((appointment: any) => sanitizeString(appointment?.organization_id || appointment?.clinic_id, 120))
+        .filter((id: string) => isUuid(id))
+    ));
+    if (appointmentIds.length === 0 || patientIds.length === 0 || organizationIds.length !== 1) return [] as string[];
+    const organizationId = organizationIds[0];
     const now = new Date().toISOString();
     const reminderTypes = ['appointment_reminder', 'appointment_reminder_24h', 'appointment_reminder_12h'];
     const buildQuery = (includeUpdatedAt: boolean) => {
@@ -32928,8 +33006,8 @@ async function startServer() {
           acknowledged_at: now,
           ...(includeUpdatedAt ? { updated_at: now } : {})
         })
-        .eq('appointment_id', appointmentId)
-        .eq('patient_id', patientId)
+        .in('appointment_id', appointmentIds)
+        .in('patient_id', patientIds)
         .in('type', reminderTypes)
         .is('acknowledged_at', null);
       query = query.or(`organization_id.eq.${organizationId},clinic_id.eq.${organizationId}`);
@@ -33345,29 +33423,19 @@ async function startServer() {
       const appointment = params.appointment || {};
       const patientId = sanitizeString(appointment?.patient_id || appointment?.patientId || params.originalAppointment?.patient_id || params.originalAppointment?.patientId, 120);
       if (!isUuid(patientId)) return;
-      let patientResult = await supabase
-        .from('patients')
-        .select('id,name,email,responsible_user_id,responsible_email,clinic_id')
-        .eq('id', patientId)
-        .limit(1)
-        .maybeSingle();
-      if (patientResult.error && extractMissingColumnName(patientResult.error)) {
-        patientResult = await supabase
-          .from('patients')
-          .select('id,name,email,clinic_id')
-          .eq('id', patientId)
-          .limit(1)
-          .maybeSingle();
-      }
+      const patientResult = await readPortalPatientContexts([patientId]);
       if (patientResult.error && !extractMissingColumnName(patientResult.error)) throw patientResult.error;
-      const patient = patientResult.data || {};
+      const patient = (Array.isArray(patientResult.data) ? patientResult.data[0] : null) || {};
       const clinicId = sanitizeString(appointment?.clinic_id || appointment?.clinicId || patient?.clinic_id || params.organizationId, 120);
       const clinicBranding = await readClinicBrandingForFamilyView(clinicId);
       const scheduledAt = sanitizeIsoDateTime(params.scheduledStart) || sanitizeString(appointment?.scheduled_at || appointment?.scheduledAt, 80);
       const date = scheduledAt ? new Date(scheduledAt) : new Date();
       const dateLabel = formatDateInAppointmentTimezone(date).split('-').reverse().join('/');
       const timeLabel = formatTimeInAppointmentTimezone(date);
-      const patientName = sanitizeString(appointment?.patient_name || appointment?.patientName || patient?.name, 180) || 'Paciente';
+      const patientName = resolvePortalPatientDisplayName(
+        patient,
+        appointment?.patient_name || appointment?.patientName
+      );
       const clinicName = clinicBranding.displayName || 'Clínica';
       const message = `Consulta de ${patientName} remarcada para ${dateLabel} às ${timeLabel}.`;
       const recipientUserId = sanitizeString(patient?.responsible_user_id, 120);
@@ -33494,33 +33562,28 @@ async function startServer() {
     try {
       const role = sanitizeString(req.session.user?.role, 40).toLowerCase();
       const patientIds = await getPortalPatientIdsForUser(req.session.user);
+      const authorizedPatientIdSet = new Set(patientIds.filter((patientId) => isUuid(patientId)));
       if (isResponsiblePortalRole(role) && patientIds.length === 0) {
         return res.json({ success: true, data: [] });
       }
       const patientEmails = new Set<string>();
       const patientClinicIds = new Set<string>();
+      const portalPatientContextsById = new Map<string, any>();
       const sessionPatientEmail = sanitizeEmail(req.session.user?.email);
       const sessionClinicId = sanitizeString(currentClinicId(req.session.user), 120);
       if (sessionPatientEmail) patientEmails.add(sessionPatientEmail);
       if (isUuid(sessionClinicId)) patientClinicIds.add(sessionClinicId);
       if (patientIds.length > 0) {
-        const readPatients = (columns: string) =>
-          supabase
-            .from('patients')
-            .select(columns)
-            .in('id', patientIds)
-            .limit(50);
-        let patientContextResult = await readPatients('id,email,clinic_id,responsible_email');
-        if (patientContextResult.error && extractMissingColumnName(patientContextResult.error)) {
-          patientContextResult = await readPatients('id,email,clinic_id');
-        }
+        const patientContextResult = await readPortalPatientContexts(patientIds);
         if (patientContextResult.error && !extractMissingColumnName(patientContextResult.error)) {
           throw patientContextResult.error;
         }
         for (const patient of Array.isArray(patientContextResult.data) ? patientContextResult.data : []) {
+          const patientId = sanitizeString(patient?.id, 120);
           const email = sanitizeEmail(patient?.email);
           const responsibleEmail = sanitizeEmail(patient?.responsible_email);
           const clinicId = sanitizeString(patient?.clinic_id, 120);
+          if (isUuid(patientId)) portalPatientContextsById.set(patientId, patient);
           if (email) patientEmails.add(email);
           if (responsibleEmail) patientEmails.add(responsibleEmail);
           if (isUuid(clinicId)) patientClinicIds.add(clinicId);
@@ -33691,16 +33754,30 @@ async function startServer() {
       for (const row of rows) {
         if (visibleRows.length >= limit) break;
         const rowId = sanitizeString(row?.id, 120);
+        const rowPatientId = sanitizeString(row?.patient_id, 120);
         if (
           notificationScopedAppointmentIds.has(rowId) ||
-          await canPortalUserAccessPatient(sanitizeString(row?.patient_id, 120), row, req.session.user)
+          authorizedPatientIdSet.has(rowPatientId) ||
+          await canPortalUserAccessPatient(rowPatientId, row, req.session.user)
         ) {
           visibleRows.push(row);
         }
       }
+      const clinicBrandingById = new Map<string, any>();
+      await Promise.all(Array.from(patientClinicIds).map(async (clinicId) => {
+        clinicBrandingById.set(clinicId, await readClinicBrandingForFamilyView(clinicId));
+      }));
       return res.json({
         success: true,
-        data: await Promise.all(visibleRows.map((row) => serializePortalAppointmentForFamilyView(row)))
+        data: await Promise.all(visibleRows.map((row) => {
+          const source = parseAppointmentSourcePayloadForFamilyView(row?.source_payload || row?.sourcePayload);
+          const patientId = sanitizeString(row?.patient_id || row?.patientId || source?.patient_id || source?.patientId, 120);
+          const clinicId = sanitizeString(row?.clinic_id || row?.clinicId || source?.clinic_id || source?.clinicId, 120);
+          return serializePortalAppointmentForFamilyView(row, {}, {
+            patient: portalPatientContextsById.get(patientId) || null,
+            clinicBranding: clinicBrandingById.get(clinicId) || null
+          });
+        }))
       });
     } catch (error: any) {
       console.warn('[PortalAppointments] list failed:', error?.message || String(error));

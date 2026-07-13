@@ -131,8 +131,12 @@ test('endpoint do calendario do portal segue escopo e select explicito', () => {
   assert.match(route, /notificationScopedAppointmentIds/);
   assert.match(route, /const rowsById = new Map<string, any>\(\)/);
   assert.match(route, /notificationScopedAppointmentIds\.has\(rowId\)/);
+  assert.match(route, /authorizedPatientIdSet\.has\(rowPatientId\)/);
   assert.match(route, /buildCalendarAppointmentStart\(a\)\.getTime\(\) - buildCalendarAppointmentStart\(b\)\.getTime\(\)/);
-  assert.match(route, /visibleRows\.map\(\(row\) => serializePortalAppointmentForFamilyView\(row\)\)/);
+  assert.match(route, /visibleRows\.map\(\(row\) => \{/);
+  assert.match(route, /serializePortalAppointmentForFamilyView\(row, \{\}, \{/);
+  assert.match(route, /patient:\s*portalPatientContextsById\.get\(patientId\)/);
+  assert.match(route, /clinicBranding:\s*clinicBrandingById\.get\(clinicId\)/);
   assert.doesNotMatch(route, /patient_name/);
 });
 

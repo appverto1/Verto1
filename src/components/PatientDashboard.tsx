@@ -99,6 +99,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [portalAnamnesisState, setPortalAnamnesisState] = useState({ loading: false, saving: false, message: '', error: '' });
   const [expandedAnamnesisSections, setExpandedAnamnesisSections] = useState<Record<string, boolean>>({});
   const portalAppointmentsRequestRef = useRef(0);
+  const portalAppointmentsLastLoadedAtRef = useRef(0);
   const portalAnamnesisRequestRef = useRef(0);
   const portalAnamnesisLastLoadedAtRef = useRef(0);
   const portalNotificationsRequestRef = useRef(0);
@@ -448,8 +449,15 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     setPortalAppointmentsState((prev) => ({ ...prev, loading: true, error: '' }));
     const result = await dataService.getPortalAppointments({ from: range.from, to: range.to, limit: range.limit });
     if (requestId !== portalAppointmentsRequestRef.current) return;
+    portalAppointmentsLastLoadedAtRef.current = Date.now();
     if (result?.success) {
-      setPortalAppointments(Array.isArray(result.data) ? result.data : []);
+      const nextAppointments = Array.isArray(result.data) ? result.data : [];
+      setPortalAppointments(nextAppointments);
+      setSelectedPortalAppointment((current: any) => {
+        if (!current?.id) return current;
+        const refreshed = nextAppointments.find((appointment: any) => String(appointment?.id) === String(current.id));
+        return refreshed ? { ...current, ...refreshed } : current;
+      });
       setPortalAppointmentsLoaded(true);
       setPortalAppointmentsRangeKey(rangeKey);
       setPortalAppointmentsState({ loading: false, error: '', message: '' });
@@ -481,6 +489,26 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     void loadPortalAppointments(range);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [portalSection, portalCalendarMonth, portalAppointmentsLoaded, portalAppointmentsRangeKey, portalAppointmentsState.loading, user?.id, user?.email, portalPatientId, portalDefaultAppointmentsRange]);
+
+  useEffect(() => {
+    const refreshAppointmentsWhenVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (portalSection !== 'appointments' && portalSection !== 'reports') return;
+      if (portalAppointmentsState.loading) return;
+      if (Date.now() - portalAppointmentsLastLoadedAtRef.current < 30_000) return;
+      const range = portalSection === 'appointments'
+        ? getPortalCalendarMonthRange(portalCalendarMonth)
+        : portalDefaultAppointmentsRange;
+      void loadPortalAppointments(range);
+    };
+    window.addEventListener('focus', refreshAppointmentsWhenVisible);
+    document.addEventListener('visibilitychange', refreshAppointmentsWhenVisible);
+    return () => {
+      window.removeEventListener('focus', refreshAppointmentsWhenVisible);
+      document.removeEventListener('visibilitychange', refreshAppointmentsWhenVisible);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [portalSection, portalCalendarMonth, portalAppointmentsState.loading, user?.id, user?.email, portalPatientId, portalDefaultAppointmentsRange]);
 
   const loadPortalNotifications = async () => {
     const requestId = ++portalNotificationsRequestRef.current;
