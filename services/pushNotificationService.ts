@@ -28,6 +28,7 @@ type ResolvePatientIdsParams = {
   patientEmail?: string | null;
   clinicId?: string | null;
   userId?: string | null;
+  allowCrossClinicEmailFallback?: boolean;
   logger?: Logger;
 };
 
@@ -46,6 +47,7 @@ type SavePushSubscriptionParams = {
 type SendAppointmentNotificationParams = {
   supabase: any;
   patientId: string;
+  prevalidatedPatientIds?: string[];
   patientEmail?: string | null;
   appointment: {
     id: string;
@@ -244,7 +246,12 @@ export async function resolvePatientIdsForPush(params: ResolvePatientIdsParams):
     });
     if (!error) addPatientRows(chooseAcceptedPatientRows(data || []));
 
-    if (!ids.size && clinicId && isUuid(clinicId)) {
+    if (
+      !ids.size &&
+      clinicId &&
+      isUuid(clinicId) &&
+      params.allowCrossClinicEmailFallback !== false
+    ) {
       const fallback = await params.supabase
         .from('patients')
         .select('id, email, clinic_id, status, is_active, deleted_at')
@@ -529,25 +536,66 @@ export async function findPushSubscriptionsForPatient(params: {
   patientIds: string[];
   patientEmail?: string | null;
   legacyUserIds?: string[];
+  clinicId?: string | null;
   logger?: Logger;
 }) {
   const patientIds = new Set(params.patientIds.filter((id) => isUuid(id)));
   const legacyUserIds = new Set((params.legacyUserIds || []).filter((id) => isUuid(id)));
   const patientEmail = sanitizeEmail(params.patientEmail);
 
-  const { data, error } = await params.supabase
-    .from('push_subscriptions')
-    .select('endpoint, p256dh, auth, subscription, patient_id, user_id, user_email')
-    .limit(5000);
+  const clinicId = sanitizeText(params.clinicId, 120);
+  const rowsByEndpoint = new Map<string, any>();
+  const collect = (rows: any[], requireClinicMatch = false) => {
+    for (const row of rows || []) {
+      const endpoint = sanitizeText(row?.endpoint || row?.subscription?.endpoint, 2000);
+      const rowClinicId = sanitizeText(row?.clinic_id, 120);
+      if (!endpoint) continue;
+      if (
+        clinicId &&
+        (rowClinicId ? rowClinicId !== clinicId : requireClinicMatch)
+      ) continue;
+      rowsByEndpoint.set(endpoint, row);
+    }
+  };
+  const readBatch = async (column: 'patient_id' | 'user_id', values: string[]) => {
+    if (values.length === 0) return;
+    const { data, error } = await params.supabase
+      .from('push_subscriptions')
+      .select('endpoint, p256dh, auth, subscription, patient_id, user_id, user_email, clinic_id')
+      .in(column, values)
+      .limit(500);
+    if (error) {
+      params.logger?.warn?.('[Push] Nao foi possivel buscar push_subscriptions em lote.', {
+        column,
+        count: values.length,
+        message: error.message
+      });
+      return;
+    }
+    collect(Array.isArray(data) ? data : []);
+  };
 
-  if (error) {
-    params.logger?.warn?.('[Push] Nao foi possivel buscar push_subscriptions.', {
-      message: error.message
-    });
-    return [];
+  await readBatch('patient_id', Array.from(patientIds));
+  if (rowsByEndpoint.size === 0) {
+    await readBatch('user_id', Array.from(new Set([...patientIds, ...legacyUserIds])));
   }
 
-  const rows = Array.isArray(data) ? data : [];
+  if (rowsByEndpoint.size === 0 && patientEmail) {
+    const { data, error } = await params.supabase
+      .from('push_subscriptions')
+      .select('endpoint, p256dh, auth, subscription, patient_id, user_id, user_email, clinic_id')
+      .ilike('user_email', patientEmail)
+      .limit(100);
+    if (error) {
+      params.logger?.warn?.('[Push] Nao foi possivel buscar push_subscriptions por email.', {
+        message: error.message
+      });
+    } else {
+      collect(Array.isArray(data) ? data : [], true);
+    }
+  }
+
+  const rows = Array.from(rowsByEndpoint.values());
   const exactMatches = rows.filter((row: any) => {
     const rowPatientId = sanitizeText(row?.patient_id, 120);
     const rowUserId = sanitizeText(row?.user_id, 120);
@@ -576,17 +624,26 @@ export async function findPushSubscriptionsForPatient(params: {
 
 export async function sendAppointmentNotification(params: SendAppointmentNotificationParams) {
   const logger = params.logger || console;
-  const patientIds = await resolvePatientIdsForPush({
-    supabase: params.supabase,
-    patientId: params.patientId,
-    patientEmail: params.patientEmail
-  });
+  const prevalidatedPatientIds = Array.from(new Set(
+    (params.prevalidatedPatientIds || []).filter((id) => isUuid(id))
+  ));
+  const patientIds = prevalidatedPatientIds.length > 0
+    ? prevalidatedPatientIds
+    : await resolvePatientIdsForPush({
+        supabase: params.supabase,
+        patientId: params.patientId,
+        patientEmail: params.patientEmail,
+        clinicId: params.appointment.clinicId || params.clinicId,
+        allowCrossClinicEmailFallback: false,
+        logger,
+      });
   const legacyIds = isUuid(params.patientId) ? [params.patientId] : [];
   const rows = await findPushSubscriptionsForPatient({
     supabase: params.supabase,
     patientIds,
     patientEmail: params.patientEmail,
     legacyUserIds: legacyIds,
+    clinicId: params.appointment.clinicId || params.clinicId,
     logger
   });
 
@@ -596,7 +653,7 @@ export async function sendAppointmentNotification(params: SendAppointmentNotific
       patientId: params.patientId,
       patientEmail: sanitizeEmail(params.patientEmail) || null
     });
-    return { sent: 0, failed: 0 };
+    return { sent: 0, failed: 0, subscriptions: 0 };
   }
 
   const timeLabel = sanitizeText(params.appointment.timeLabel, 80);
@@ -678,5 +735,5 @@ export async function sendAppointmentNotification(params: SendAppointmentNotific
     }
   }
 
-  return { sent, failed };
+  return { sent, failed, subscriptions: rows.length };
 }
