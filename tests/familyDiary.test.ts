@@ -30,8 +30,8 @@ assert.match(detailView, /return `\$\{isoDate\[3\]\}\/\$\{isoDate\[2\]\}\/\$\{is
 assert.match(detailView, /formatPatientTimelineDateLabel\(dateKey\)/);
 
 assert.match(dashboard, /const ownerPatientId = String\(portalPatientId \|\| user\?\.patientId \|\| user\?\.patient_id \|\| user\?\.id \|\| ''\)\.trim\(\)/);
-assert.match(dashboard, /const fileName = `\$\{ownerPatientId\}\/family-\$\{Date\.now\(\)\}\.\$\{extension\}`/);
-assert.match(dashboard, /const fileName = `\$\{ownerPatientId\}\/\$\{Date\.now\(\)\}-\$\{file\.name\}`/);
+assert.match(dashboard, /const fileName = `\$\{ownerPatientId\}\/family\/family-\$\{Date\.now\(\)\}\.\$\{extension\}`/);
+assert.match(dashboard, /const fileName = `\$\{ownerPatientId\}\/family\/family-\$\{Date\.now\(\)\}-\$\{file\.name\}`/);
 assert.doesNotMatch(dashboard, /const fileName = `\$\{user\.id\}\/family-/);
 assert.doesNotMatch(dashboard, /const fileName = `\$\{user\.id\}\/\$\{Date\.now\(\)\}-/);
 

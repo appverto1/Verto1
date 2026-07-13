@@ -58,6 +58,30 @@ test('upload de midia de perfil usa path deterministico por hash e retry idempot
   assert.doesNotMatch(storageRoute, /upsert:\s*true/);
 });
 
+test('foto do diario autoriza paciente vinculado e usa retry idempotente', () => {
+  const storageRoute = routeSlice("app.post('/api/storage/upload'", 7600);
+  const viewRoute = routeSlice("app.get('/api/storage/patient-photos/view'", 5200);
+  const historyRoute = routeSlice("app.post('/api/history'", 2600);
+
+  assert.match(storageRoute, /canPortalSessionAccessPatient\([\s\S]*?ownerPatientId[\s\S]*?req\.session\.user/);
+  assert.doesNotMatch(storageRoute, /actorId\s*!==\s*ownerPatientId/);
+  assert.match(viewRoute, /canPortalSessionAccessPatient\([\s\S]*?ownerPatientId[\s\S]*?req\.session\.user/);
+  assert.match(historyRoute, /role === 'patient'[\s\S]*?canPortalSessionAccessPatient\(resolvedPatientId, req\.session\.user\)/);
+
+  const portalAccessStart = serverCode.indexOf('async function canPortalSessionAccessPatient');
+  const portalAccessEnd = serverCode.indexOf('\n}', portalAccessStart) + 2;
+  const portalAccess = serverCode.slice(portalAccessStart, portalAccessEnd);
+  assert.match(portalAccess, /responsible_email/);
+  assert.match(portalAccess, /query = query\.eq\('clinic_id', clinicId\)/);
+  assert.match(portalAccess, /userEmail === responsibleEmail/);
+
+  assert.match(dataServiceCode, /const familyDiaryMatch = normalizedPath\.match/);
+  assert.match(dataServiceCode, /patient-family:\$\{ownerId\}:\$\{shortHash\}/);
+  assert.match(patientDashboardCode, /\/family\/family-\$\{Date\.now\(\)\}/);
+  assert.match(patientDashboardCode, /setFamilyUploadError\(result\.error \|\|/);
+  assert.match(patientDashboardCode, /e\.target\.value = ''/);
+});
+
 test('diario da familia permite cinco fotos por dia sem indice unico antigo', () => {
   assert.match(serverCode, /const FAMILY_DAILY_PHOTO_LIMIT = 5/);
   assert.match(serverCode, /todayPhotos\.length >= FAMILY_DAILY_PHOTO_LIMIT/);

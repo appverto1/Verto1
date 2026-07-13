@@ -49,6 +49,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [familyNote, setFamilyNote] = useState("");
   const [familyImage, setFamilyImage] = useState<string | null>(null);
   const [familyImagePath, setFamilyImagePath] = useState<string | null>(null);
+  const [familyUploadError, setFamilyUploadError] = useState('');
   const [isDrawingMode, setIsDrawingMode] = useState(false);
   const [showFamilySuccess, setShowFamilySuccess] = useState(false);
   const [isFamilySaving, setIsFamilySaving] = useState(false);
@@ -1877,7 +1878,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           if (!ownerPatientId) {
             throw new Error('Não encontramos o paciente vinculado para salvar a foto.');
           }
-          const fileName = `${ownerPatientId}/family-${Date.now()}.${extension}`;
+          const fileName = `${ownerPatientId}/family/family-${Date.now()}.${extension}`;
           const uploadResult = await dataService.uploadDataUrl('patient-photos', fileName, persistedImage, `image/${extension === 'jpg' ? 'jpeg' : extension}`);
           if (uploadResult?.success && uploadResult.url) {
             persistedImage = uploadResult.url;
@@ -1992,29 +1993,31 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     }
     const file = e.target.files?.[0];
     if (file) {
+      setFamilyUploadError('');
       setIsUploading(true);
       try {
         const ownerPatientId = String(portalPatientId || user?.patientId || user?.patient_id || user?.id || '').trim();
         if (!ownerPatientId) {
-          alert('Não encontramos o paciente vinculado para salvar a foto.');
-          setIsUploading(false);
-          e.target.value = '';
+          setFamilyUploadError('Não encontramos o paciente vinculado para salvar a foto.');
           return;
         }
-        const fileName = `${ownerPatientId}/${Date.now()}-${file.name}`;
+        const fileName = `${ownerPatientId}/family/family-${Date.now()}-${file.name}`;
         const result = await dataService.uploadFile('patient-photos', fileName, file);
         
         if (result.success && result.url) {
           setFamilyImage(result.url);
           setFamilyImagePath(result.path || null);
+          setFamilyUploadError('');
           setIsDrawingMode(true);
         } else {
-          alert('Erro ao enviar imagem. Tente novamente em alguns instantes.');
+          setFamilyUploadError(result.error || 'Não foi possível enviar a imagem. Tente novamente.');
         }
-      } catch (error) {
+      } catch (error: any) {
         console.error('Upload error:', error);
+        setFamilyUploadError(error?.message || 'Não foi possível processar a imagem selecionada.');
       } finally {
         setIsUploading(false);
+        e.target.value = '';
       }
     }
   };
@@ -3318,7 +3321,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                             </div>
                             {!isReadOnlyMode && (
                               <button 
-                                onClick={() => { setIsFamilyLogOpen(true); setIsMenuOpen(false); }}
+                                onClick={() => { setFamilyUploadError(''); setIsFamilyLogOpen(true); setIsMenuOpen(false); }}
                                 className="w-full flex items-center gap-3 p-3 text-sm font-medium text-blue-600 hover:bg-blue-50 rounded-xl transition-colors"
                               >
                                 <BookOpen size={18} /> Diário da Família
@@ -3518,7 +3521,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                           <SecureImage src={familyImage} alt="Preview" className="w-full h-full object-cover" />
                           <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
                             <button onClick={() => setIsDrawingMode(true)} className="p-1.5 bg-white rounded-full text-blue-500 shadow-sm" title="Rabiscar na foto"><Pencil size={14}/></button>
-                            <button onClick={() => { setFamilyImage(null); setFamilyImagePath(null); }} className="p-1.5 bg-white rounded-full text-red-500 shadow-sm"><Trash2 size={14}/></button>
+                            <button onClick={() => { setFamilyImage(null); setFamilyImagePath(null); setFamilyUploadError(''); }} className="p-1.5 bg-white rounded-full text-red-500 shadow-sm"><Trash2 size={14}/></button>
                           </div>
                         </div>
                       ) : (
@@ -3538,10 +3541,15 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                         Limite diário: já existem {FAMILY_DAILY_PHOTO_LIMIT} fotos enviadas hoje no Diário da Família.
                       </p>
                     )}
+                    {familyUploadError && (
+                      <p role="alert" className="mt-2 rounded-xl border border-rose-100 bg-rose-50 px-3 py-2 text-[11px] font-medium text-rose-700">
+                        {familyUploadError}
+                      </p>
+                    )}
                   </div>
                   <button 
                     onClick={handleConfirmFamilyNote} 
-                    disabled={isFamilySaving || (!familyNote.trim() && !familyImage)}
+                    disabled={isFamilySaving || isUploading || (!familyNote.trim() && !familyImage)}
                     className="w-full font-bold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 bg-blue-600 text-white shadow-blue-600/30 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
                   > 
                     {isFamilySaving ? <React.Fragment><RefreshCcw size={20} className="animate-spin" /> Enviando...</React.Fragment> : <React.Fragment><Check size={20} strokeWidth={3} /> Registrar no Histórico</React.Fragment>}

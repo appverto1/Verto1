@@ -421,6 +421,16 @@ function resolveIdempotentPatientPhotoPath(path: string, contentType: string, co
     };
   }
 
+  const familyDiaryMatch = normalizedPath.match(/^([^/]+)\/family(?:[-/.]|$)/i);
+  if (familyDiaryMatch) {
+    const ownerId = familyDiaryMatch[1];
+    return {
+      path: `${ownerId}/family/family-${shortHash}.${extension}`,
+      idempotent: true,
+      idempotencyKey: `patient-family:${ownerId}:${shortHash}`
+    };
+  }
+
   return { path: normalizedPath, idempotent: false, idempotencyKey: '' };
 }
 

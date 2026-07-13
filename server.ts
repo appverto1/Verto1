@@ -10674,19 +10674,23 @@ async function canPortalSessionAccessPatient(patientId: string, user: any): Prom
 
   let query = supabase
     .from('patients')
-    .select('id, email, responsible_user_id')
+    .select('id, email, responsible_email, responsible_user_id, clinic_id')
     .eq('id', patientId)
     .eq('is_active', true)
     .is('deleted_at', null)
     .limit(1);
+  const clinicId = sanitizeString(currentClinicId(user), 120);
+  if (isUuid(clinicId)) query = query.eq('clinic_id', clinicId);
   const { data, error } = await query.maybeSingle();
   if (error || !data?.id) return false;
 
   const responsibleUserId = sanitizeString(data?.responsible_user_id, 120);
   const patientEmail = sanitizeEmail(data?.email);
+  const responsibleEmail = sanitizeEmail(data?.responsible_email);
   return Boolean(
     (isUuid(userId) && responsibleUserId === userId) ||
-    (userEmail && patientEmail && userEmail === patientEmail)
+    (userEmail && patientEmail && userEmail === patientEmail) ||
+    (userEmail && responsibleEmail && userEmail === responsibleEmail)
   );
 }
 
@@ -22818,8 +22822,12 @@ async function startServer() {
           return res.status(400).json({ success: false, error: 'Path inválido: paciente não identificado.' });
         }
         if (role === 'patient') {
-          if (!isUuid(actorId) || actorId !== ownerPatientId) {
-            return res.status(403).json({ success: false, error: 'Você só pode enviar fotos para o próprio histórico.' });
+          const canUploadForLinkedPatient = await canPortalSessionAccessPatient(
+            ownerPatientId,
+            req.session.user
+          );
+          if (!canUploadForLinkedPatient) {
+            return res.status(403).json({ success: false, error: 'Você só pode enviar fotos para um paciente vinculado ao seu acesso.' });
           }
         } else {
           const canAccess = await canAccessPatientInCurrentClinic(ownerPatientId, req.session.user);
@@ -23037,7 +23045,10 @@ async function startServer() {
         if (!isUuid(ownerPatientId)) return res.status(400).send('Path inválido.');
         let canViewPatientPhoto = false;
         if (role === 'patient') {
-          canViewPatientPhoto = ownerPatientId === actorId;
+          canViewPatientPhoto = await canPortalSessionAccessPatient(
+            ownerPatientId,
+            req.session.user
+          );
         } else {
           canViewPatientPhoto = await canAccessPatientInCurrentClinic(ownerPatientId, req.session.user);
         }
@@ -26557,6 +26568,12 @@ async function startServer() {
       }
       const safeType = sanitizeString(req.body?.type, 80) || 'task';
       const role = sanitizeString(req.session.user?.role, 40).toLowerCase();
+      if (role === 'patient' && !(await canPortalSessionAccessPatient(resolvedPatientId, req.session.user))) {
+        return res.status(403).json({
+          success: false,
+          error: 'Este registro não pertence a um paciente vinculado ao seu acesso.'
+        });
+      }
       if (role === 'patient' && safeType === 'photo') {
         const safeEmail = sanitizeEmail(req.body?.patient_email || req.session.user?.email);
         const incomingHistoryId = sanitizeString(req.body?.id || req.body?.clientRecordId || req.body?.localId, 120);
