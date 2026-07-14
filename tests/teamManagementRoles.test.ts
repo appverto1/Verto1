@@ -31,6 +31,17 @@ test('lista, menu e historico nao renderizam enum cru therapist', () => {
   assert.doesNotMatch(teamManagementCode, /THERAPIST/);
 });
 
+test('gestao da equipe usa hierarquia leve e separa cadastro do historico', () => {
+  assert.match(teamManagementCode, /max-w-7xl/);
+  assert.match(teamManagementCode, /xl:grid-cols-\[minmax\(0,1\.35fr\)_minmax\(420px,0\.85fr\)\]/);
+  assert.match(teamManagementCode, /Movimenta\S+ da equipe/);
+  assert.match(teamManagementCode, /max-h-80 divide-y divide-slate-100 overflow-y-auto/);
+  assert.doesNotMatch(teamManagementCode, /<h1[^>]*>GestÃ£o da Equipe<\/h1>/);
+  assert.doesNotMatch(teamManagementCode, /font-bold[^"\n]*(?:uppercase|tracking-widest)|(?:uppercase|tracking-widest)[^"\n]*font-bold/);
+  assert.match(teamManagementCode, /handleResendInvitation\(inv\)/);
+  assert.match(teamManagementCode, /handleCancelInvitation\(inv\.id\)/);
+});
+
 test('modal de convite reutilizavel tambem evita Terapeuta generico', () => {
   assert.match(invitationModalCode, /Profissional de atendimento/);
   assert.match(invitationModalCode, /professionalTitle/);

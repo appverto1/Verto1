@@ -696,37 +696,37 @@ export function TeamManagement({
   const bulkPreviewMembers = getBulkTargetMembers();
 
   return (
-    <div className="p-6 max-w-6xl mx-auto font-sans">
-      <div className="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4">
+    <div className="mx-auto w-full max-w-7xl px-4 py-4 font-sans sm:px-6 lg:px-8">
+      <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Gestão da Equipe</h1>
-          <p className="text-slate-500 text-sm">
+          <p className="text-sm font-medium text-slate-700">Equipe ativa</p>
+          <p className="mt-1 text-sm text-slate-500">
             Limite saudável: {totalUsed} de {inviteLimit} acessos usados • {normalizedActivePatientCount} paciente(s) ativo(s)
           </p>
         </div>
         
-        <div className="flex items-center gap-3">
-          <div className="relative">
+        <div className="w-full md:w-72">
+          <div className="relative w-full">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
             <input 
               type="text"
               placeholder="Buscar membro..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-10 pr-4 py-2 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all w-full md:w-64"
+              className="h-11 w-full rounded-xl border border-slate-200 bg-white pl-10 pr-4 text-sm text-slate-700 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-500/10"
             />
           </div>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(420px,0.85fr)]">
         {/* Lista de Membros */}
-        <div className="lg:col-span-2">
-          <div className="bg-white rounded-[32px] shadow-sm border border-slate-100 overflow-visible">
-            <div className="p-6 border-b border-slate-50 flex items-center justify-between">
-              <h2 className="font-bold text-slate-900">Membros Ativos</h2>
-              <span className="px-3 py-1 bg-slate-100 text-slate-500 rounded-full text-[10px] font-bold uppercase tracking-wider">
-                {filteredMembers?.length || 0} Colaboradores
+        <div className="min-w-0">
+          <div className="overflow-visible rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4 sm:px-6">
+              <h2 className="text-base font-semibold text-slate-800">Membros ativos</h2>
+              <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-500">
+                {filteredMembers?.length || 0} colaboradores
               </span>
             </div>
 
@@ -741,32 +741,32 @@ export function TeamManagement({
                   <div className="w-16 h-16 bg-slate-50 text-slate-300 rounded-3xl flex items-center justify-center mx-auto mb-4">
                     <Users size={32} />
                   </div>
-                  <p className="text-slate-500 font-medium">Nenhum membro encontrado</p>
+                  <p className="text-sm font-medium text-slate-600">Nenhum membro encontrado</p>
                   <p className="text-slate-400 text-xs mt-1">Atribua papéis para começar a montar sua equipe.</p>
                 </div>
               ) : (
                 filteredMembers.map((member) => (
-                  <div key={member.id} className="p-6 hover:bg-slate-50/50 transition-all flex items-center justify-between group overflow-visible">
-                    <div className="flex items-center gap-4">
-                      <div className="w-12 h-12 bg-slate-100 rounded-2xl flex items-center justify-center text-slate-400 font-bold text-lg">
+                  <div key={member.id} className="group flex items-center justify-between gap-4 overflow-visible px-5 py-4 transition hover:bg-slate-50/60 sm:px-6">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-base font-medium text-slate-500">
                     {(String(member?.name || 'P').trim().charAt(0) || 'P').toUpperCase()}
                       </div>
-                      <div>
+                      <div className="min-w-0">
                         <div className="flex items-center gap-2">
-                          <h3 className="font-bold text-slate-900 text-sm">{member.name}</h3>
+                          <h3 className="truncate text-sm font-medium text-slate-800">{member.name}</h3>
                           {member.id === user.id && (
-                            <span className="px-2 py-0.5 bg-blue-50 text-blue-600 rounded-md text-[8px] font-bold uppercase tracking-widest">Você</span>
+                            <span className="rounded-md bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-600">Você</span>
                           )}
                         </div>
-                        <p className="text-slate-400 text-xs">{member.email}</p>
+                        <p className="truncate text-xs text-slate-400">{member.email}</p>
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-6">
+                    <div className="flex shrink-0 items-center gap-3 sm:gap-5">
                       <div className="hidden md:block text-right">
                         <div className="flex items-center justify-end gap-1.5 mb-0.5">
                           {roleIcons[member.role as keyof typeof roleIcons]}
-                          <span className="text-xs font-semibold text-slate-700">{formatAccessRoleLabel(member.role, member)}</span>
+                          <span className="text-xs font-medium text-slate-600">{formatAccessRoleLabel(member.role, member)}</span>
                         </div>
                         <p className="text-[10px] text-slate-400 font-medium">Desde {new Date(member.created_at).toLocaleDateString()}</p>
                       </div>
@@ -777,7 +777,7 @@ export function TeamManagement({
                           <select
                             value={memberSessionDurations[member.id] || memberSessionDurations[member.email] || memberSessionDurations[member.name] || '50'}
                             onChange={(e) => onUpdateMemberSessionDuration?.(member, e.target.value)}
-                            className="bg-transparent text-xs font-semibold text-slate-700 outline-none"
+                            className="bg-transparent text-xs font-medium text-slate-600 outline-none"
                           >
                             <option value="30">30 min</option>
                             <option value="45">45 min</option>
@@ -799,7 +799,7 @@ export function TeamManagement({
                         {openMenuId === member.id && (
                           <div className="absolute right-0 top-full mt-2 w-48 bg-white rounded-2xl shadow-xl border border-slate-100 z-50 py-2 animate-in fade-in zoom-in duration-200">
                             <div className="px-4 py-2 border-b border-slate-50 mb-1">
-                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Alterar acesso</p>
+                              <p className="text-xs font-medium text-slate-500">Alterar acesso</p>
                             </div>
                             <button 
                               onClick={() => { handleUpdateRole(member.id, 'coordinator', null); setOpenMenuId(null); }}
@@ -825,7 +825,7 @@ export function TeamManagement({
                             {member.role === 'therapist' && (
                               <div className="border-t border-slate-50 pt-2 mt-1">
                                 <div className="px-4 py-2">
-                                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Título profissional</p>
+                                  <p className="text-xs font-medium text-slate-500">Título profissional</p>
                                 </div>
                                 {PROFESSIONAL_TITLE_OPTIONS.map((title) => {
                                   const selected = getProfessionalTitleFromSource(member) === title;
@@ -1228,58 +1228,64 @@ export function TeamManagement({
           )}
         </AnimatePresence>
 
-        {/* Atribuir Papel */}
-        <div className="lg:col-span-1">
-          <div className="bg-white rounded-[32px] p-8 shadow-sm border border-slate-100 sticky top-6">
-            <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mb-6">
-              <UserPlus size={24} />
-            </div>
-            <h2 className="text-lg font-bold text-slate-900 mb-2">Convidar Colaborador</h2>
-            <p className="text-slate-500 text-xs mb-6">Se o colaborador ainda não tiver conta, ele poderá criar pelo próprio convite via e-mail.</p>
-
-            <form onSubmit={handleInvite} className="space-y-4">
+        {/* Convite */}
+        <aside className="min-w-0">
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 xl:sticky xl:top-6">
+            <div className="mb-5 flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
+                <UserPlus size={20} />
+              </div>
               <div>
-                <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">E-mail do Colaborador</label>
+                <h2 className="text-base font-semibold text-slate-800">Convidar colaborador</h2>
+                <p className="mt-1 text-sm leading-relaxed text-slate-500">O acesso é criado pelo próprio convite enviado por e-mail.</p>
+              </div>
+            </div>
+
+            <form onSubmit={handleInvite} className="space-y-5">
+              <div>
+                <label className="mb-2 block text-xs font-medium text-slate-600">E-mail do colaborador</label>
                 <div className="relative">
                   <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                  <input 
+                  <input
                     type="email"
                     required
                     value={newMemberEmail}
                     onChange={(e) => setNewMemberEmail(e.target.value)}
                     placeholder="exemplo@email.com"
-                    className="w-full pl-12 pr-4 py-3.5 bg-slate-50 border-none rounded-2xl text-sm focus:ring-2 focus:ring-blue-500/20 transition-all"
+                    className="h-12 w-full rounded-xl border border-slate-200 bg-slate-50 pl-12 pr-4 text-sm text-slate-700 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-500/10"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Papel / Nível de Acesso</label>
-                <div className="grid grid-cols-1 gap-3">
+                <label className="mb-2 block text-xs font-medium text-slate-600">Papel e nível de acesso</label>
+                <div className="grid grid-cols-1 gap-2.5">
                   <button
                     type="button"
+                    aria-pressed={newMemberRole === 'therapist'}
                     onClick={() => setNewMemberRole('therapist')}
-                    className={`flex items-center gap-3 p-4 rounded-2xl border-2 transition-all text-left ${newMemberRole === 'therapist' ? 'border-blue-500 bg-blue-50/50' : 'border-slate-100 hover:border-slate-200'}`}
+                    className={`flex items-center gap-3 rounded-xl border p-3.5 text-left transition ${newMemberRole === 'therapist' ? 'border-blue-300 bg-blue-50/70 shadow-sm' : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'}`}
                   >
-                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${newMemberRole === 'therapist' ? 'bg-blue-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
-                      <Stethoscope size={20} />
+                    <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${newMemberRole === 'therapist' ? 'bg-blue-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                      <Stethoscope size={19} />
                     </div>
-                    <div>
-                      <p className="text-sm font-bold text-slate-900">Profissional de atendimento</p>
-                      <p className="text-[10px] text-slate-500">Agenda, prontuários e pacientes atribuídos</p>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-slate-800">Profissional de atendimento</p>
+                      <p className="mt-0.5 text-xs text-slate-500">Agenda, prontuários e pacientes atribuídos</p>
                     </div>
                   </button>
 
                   {newMemberRole === 'therapist' && (
-                    <div className="rounded-2xl border border-blue-100 bg-blue-50/40 p-3">
-                      <p className="mb-2 text-xs font-semibold text-slate-500">Título profissional</p>
-                      <div className="grid grid-cols-1 gap-2">
+                    <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-3">
+                      <p className="mb-2 text-xs font-medium text-slate-600">Título profissional</p>
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-2">
                         {PROFESSIONAL_TITLE_OPTIONS.map((title) => (
                           <button
                             key={title}
                             type="button"
+                            aria-pressed={newMemberProfessionalTitle === title}
                             onClick={() => setNewMemberProfessionalTitle(title)}
-                            className={`rounded-xl border px-3 py-2 text-left text-xs font-semibold transition-all ${newMemberProfessionalTitle === title ? 'border-blue-400 bg-white text-blue-700' : 'border-transparent bg-white/60 text-slate-600 hover:bg-white'}`}
+                            className={`min-h-10 rounded-lg border px-3 py-2 text-left text-xs font-medium transition ${newMemberProfessionalTitle === title ? 'border-blue-300 bg-white text-blue-700 shadow-sm' : 'border-transparent bg-white/60 text-slate-600 hover:border-blue-100 hover:bg-white'}`}
                           >
                             {title}
                           </button>
@@ -1290,43 +1296,45 @@ export function TeamManagement({
 
                   <button
                     type="button"
+                    aria-pressed={newMemberRole === 'coordinator'}
                     onClick={() => setNewMemberRole('coordinator')}
-                    className={`flex items-center gap-3 p-4 rounded-2xl border-2 transition-all text-left ${newMemberRole === 'coordinator' ? 'border-purple-500 bg-purple-50/50' : 'border-slate-100 hover:border-slate-200'}`}
+                    className={`flex items-center gap-3 rounded-xl border p-3.5 text-left transition ${newMemberRole === 'coordinator' ? 'border-purple-300 bg-purple-50/70 shadow-sm' : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'}`}
                   >
-                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${newMemberRole === 'coordinator' ? 'bg-purple-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
-                      <Shield size={20} />
+                    <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${newMemberRole === 'coordinator' ? 'bg-purple-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                      <Shield size={19} />
                     </div>
-                    <div>
-                      <p className="text-sm font-bold text-slate-900">Coordenador</p>
-                      <p className="text-[10px] text-slate-500">Acesso completo à gestão da clínica</p>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-slate-800">Coordenador</p>
+                      <p className="mt-0.5 text-xs text-slate-500">Acesso completo à gestão da clínica</p>
                     </div>
                   </button>
 
                   <button
                     type="button"
+                    aria-pressed={newMemberRole === 'receptionist'}
                     onClick={() => setNewMemberRole('receptionist')}
-                    className={`flex items-center gap-3 p-4 rounded-2xl border-2 transition-all text-left ${newMemberRole === 'receptionist' ? 'border-green-500 bg-green-50/50' : 'border-slate-100 hover:border-slate-200'}`}
+                    className={`flex items-center gap-3 rounded-xl border p-3.5 text-left transition ${newMemberRole === 'receptionist' ? 'border-emerald-300 bg-emerald-50/70 shadow-sm' : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'}`}
                   >
-                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${newMemberRole === 'receptionist' ? 'bg-green-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
-                      <Calendar size={20} />
+                    <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${newMemberRole === 'receptionist' ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                      <Calendar size={19} />
                     </div>
-                    <div>
-                      <p className="text-sm font-bold text-slate-900">Recepcionista/Assistente</p>
-                      <p className="text-[10px] text-slate-500">Agenda, pagamentos, cobranças e convênios</p>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-slate-800">Recepcionista/Assistente</p>
+                      <p className="mt-0.5 text-xs text-slate-500">Agenda, pagamentos, cobranças e convênios</p>
                     </div>
                   </button>
                 </div>
               </div>
 
               {error && (
-                <div className="p-4 bg-red-50 text-red-600 rounded-2xl text-xs flex items-center gap-2 animate-shake">
+                <div className="flex items-center gap-2 rounded-xl bg-red-50 p-3.5 text-xs text-red-600 animate-shake">
                   <AlertCircle size={16} />
                   {error}
                 </div>
               )}
 
               {success && (
-                <div className="p-4 bg-green-50 text-green-600 rounded-2xl text-xs flex items-center gap-2 animate-pop">
+                <div className="flex items-center gap-2 rounded-xl bg-emerald-50 p-3.5 text-xs text-emerald-700 animate-pop">
                   <CheckCircle2 size={16} />
                   {success}
                 </div>
@@ -1335,40 +1343,52 @@ export function TeamManagement({
               <button
                 type="submit"
                 disabled={isAssigning || !canInvite}
-                className={`w-full py-4 rounded-2xl font-bold text-sm shadow-lg transition-all ${
+                className={`h-12 w-full rounded-xl text-sm font-medium text-white shadow-sm transition ${
                   !canInvite
-                    ? 'bg-slate-200 text-slate-500 cursor-not-allowed shadow-none'
-                    : 'bg-gradient-to-r from-[#6D28FF] to-[#9F67FF] text-white shadow-purple-500/30 hover:scale-[1.02] active:scale-[0.98]'
-                } disabled:opacity-50 disabled:scale-100`}
+                    ? 'cursor-not-allowed bg-slate-300 shadow-none'
+                    : 'bg-[#7a32fc] hover:bg-[#6924df] active:translate-y-px'
+                } disabled:opacity-60`}
               >
-                {isAssigning ? 'Enviando...' : !canInvite ? 'Limite atingido' : 'Enviar Convite'}
+                {isAssigning ? 'Enviando...' : !canInvite ? 'Limite atingido' : 'Enviar convite'}
               </button>
             </form>
+          </div>
+        </aside>
+      </div>
 
-            {/* Pending Invitations */}
+      {((pendingInvitations.length || 0) > 0 || (invitationHistory.length || 0) > 0 || (membershipHistory.length || 0) > 0) && (
+        <section className="mt-8 border-t border-slate-200 pt-6">
+          <div className="mb-4">
+            <h2 className="text-base font-semibold text-slate-800">Movimentações da equipe</h2>
+            <p className="mt-1 text-sm text-slate-500">Acompanhe convites e vínculos anteriores sem misturar com o cadastro atual.</p>
+          </div>
+
+          <div className="grid gap-4 xl:grid-cols-3">
             {(pendingInvitations.length || 0) > 0 && (
-              <div className="mt-12">
-                <h3 className="text-lg font-bold text-slate-900 mb-6">Convites Pendentes</h3>
-                <div className="space-y-3">
+              <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+                  <h3 className="text-sm font-semibold text-slate-700">Convites pendentes</h3>
+                  <span className="text-xs text-slate-400">{pendingInvitations.length}</span>
+                </div>
+                <div className="max-h-80 divide-y divide-slate-100 overflow-y-auto">
                   {pendingInvitations.map((inv) => (
-                    <div key={inv.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-100 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                      <div className="flex items-center gap-4 min-w-0">
-                        <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center text-slate-400">
-                          <Mail size={20} />
+                    <div key={inv.id} className="px-5 py-4">
+                      <div className="flex min-w-0 items-center gap-3">
+                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-50 text-slate-400">
+                          <Mail size={17} />
                         </div>
-                        <div className="min-w-0">
-                          <p className="font-bold text-slate-900 text-sm truncate">{inv.email}</p>
-                          <p className="text-[10px] text-slate-500 font-semibold">{formatInvitationRoleLabel(inv)}</p>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-medium text-slate-700">{inv.email}</p>
+                          <p className="mt-0.5 text-xs text-slate-500">{formatInvitationRoleLabel(inv)}</p>
                         </div>
+                        <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700">Pendente</span>
                       </div>
-                      <div className="flex flex-wrap items-center gap-2 md:justify-end">
-                        <span className="shrink-0 px-3 py-1 bg-amber-100 text-amber-600 rounded-full text-[10px] font-bold uppercase tracking-widest">Pendente</span>
+                      <div className="mt-3 flex gap-2 pl-12">
                         <button
                           type="button"
                           onClick={() => handleResendInvitation(inv)}
                           disabled={resendingInvitationId === inv.id}
-                          className="shrink-0 px-3 py-1 rounded-full border border-blue-200 bg-blue-50 text-blue-600 text-[10px] font-bold uppercase tracking-widest hover:bg-blue-100 transition-colors disabled:opacity-60"
-                          title="Reenviar convite"
+                          className="rounded-lg border border-blue-200 px-3 py-1.5 text-xs font-medium text-blue-600 transition hover:bg-blue-50 disabled:opacity-60"
                         >
                           {resendingInvitationId === inv.id ? 'Reenviando...' : 'Reenviar'}
                         </button>
@@ -1376,8 +1396,7 @@ export function TeamManagement({
                           type="button"
                           onClick={() => handleCancelInvitation(inv.id)}
                           disabled={cancellingInvitationId === inv.id}
-                          className="shrink-0 px-3 py-1 rounded-full border border-red-200 bg-red-50 text-red-600 text-[10px] font-bold uppercase tracking-widest hover:bg-red-100 transition-colors disabled:opacity-60"
-                          title="Cancelar convite"
+                          className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-600 transition hover:bg-red-50 disabled:opacity-60"
                         >
                           {cancellingInvitationId === inv.id ? 'Cancelando...' : 'Cancelar'}
                         </button>
@@ -1389,35 +1408,30 @@ export function TeamManagement({
             )}
 
             {(invitationHistory.length || 0) > 0 && (
-              <div className="mt-8">
-                <h3 className="text-lg font-bold text-slate-900 mb-4">Histórico de Convites</h3>
-                <div className="space-y-3">
+              <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+                  <h3 className="text-sm font-semibold text-slate-700">Histórico de convites</h3>
+                  <span className="text-xs text-slate-400">{invitationHistory.length}</span>
+                </div>
+                <div className="max-h-80 divide-y divide-slate-100 overflow-y-auto">
                   {invitationHistory.map((inv) => {
                     const status = String(inv?.status || '').toLowerCase();
-                    const statusLabel = status === 'accepted'
-                      ? 'Ativado'
-                      : status === 'canceled'
-                        ? 'Cancelado'
-                        : status;
+                    const statusLabel = status === 'accepted' ? 'Ativado' : status === 'canceled' ? 'Cancelado' : status;
                     const statusClass = status === 'accepted'
-                      ? 'bg-emerald-100 text-emerald-700'
+                      ? 'bg-emerald-50 text-emerald-700'
                       : status === 'canceled'
-                        ? 'bg-slate-200 text-slate-600'
+                        ? 'bg-slate-100 text-slate-500'
                         : 'bg-slate-100 text-slate-500';
                     return (
-                      <div key={inv.id} className="p-4 bg-white rounded-2xl border border-slate-100 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                        <div className="flex items-center gap-4 min-w-0">
-                          <div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-400">
-                            <Mail size={20} />
-                          </div>
-                          <div className="min-w-0">
-                            <p className="font-bold text-slate-900 text-sm truncate">{inv.email}</p>
-                            <p className="text-[10px] text-slate-500 font-semibold">{formatInvitationRoleLabel(inv)}</p>
-                          </div>
+                      <div key={inv.id} className="flex items-center gap-3 px-5 py-4">
+                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-50 text-slate-400">
+                          <Mail size={17} />
                         </div>
-                        <span className={`self-start md:self-center shrink-0 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest ${statusClass}`}>
-                          {statusLabel}
-                        </span>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-medium text-slate-700">{inv.email}</p>
+                          <p className="mt-0.5 text-xs text-slate-500">{formatInvitationRoleLabel(inv)}</p>
+                        </div>
+                        <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${statusClass}`}>{statusLabel}</span>
                       </div>
                     );
                   })}
@@ -1426,31 +1440,30 @@ export function TeamManagement({
             )}
 
             {(membershipHistory.length || 0) > 0 && (
-              <div className="mt-8">
-                <h3 className="text-lg font-bold text-slate-900 mb-4">Colaboradores Desvinculados</h3>
-                <div className="space-y-3">
+              <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+                  <h3 className="text-sm font-semibold text-slate-700">Colaboradores desvinculados</h3>
+                  <span className="text-xs text-slate-400">{membershipHistory.length}</span>
+                </div>
+                <div className="max-h-80 divide-y divide-slate-100 overflow-y-auto">
                   {membershipHistory.map((entry) => (
-                    <div key={entry.id} className="p-4 bg-white rounded-2xl border border-slate-100 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                      <div className="flex items-center gap-4 min-w-0">
-                        <div className="w-10 h-10 bg-amber-50 rounded-xl flex items-center justify-center text-amber-500">
-                          <Users size={20} />
-                        </div>
-                        <div className="min-w-0">
-                          <p className="font-bold text-slate-900 text-sm truncate">{entry.email || entry.name || 'Colaborador'}</p>
-                          <p className="text-[10px] text-slate-500 font-semibold">{formatInvitationRoleLabel(entry)}</p>
-                        </div>
+                    <div key={entry.id} className="flex items-center gap-3 px-5 py-4">
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-500">
+                        <Users size={17} />
                       </div>
-                      <span className="self-start md:self-center shrink-0 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest bg-amber-100 text-amber-700">
-                        Desvinculado
-                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium text-slate-700">{entry.email || entry.name || 'Colaborador'}</p>
+                        <p className="mt-0.5 text-xs text-slate-500">{formatInvitationRoleLabel(entry)}</p>
+                      </div>
+                      <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700">Desvinculado</span>
                     </div>
                   ))}
                 </div>
               </div>
             )}
           </div>
-        </div>
-      </div>
+        </section>
+      )}
     </div>
   );
 }
