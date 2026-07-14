@@ -1506,7 +1506,23 @@ export const ClinicalAgendaBoard = ({
   }, [activeDate, view]);
 
   const agendaVersion = useMemo(
-    () => (agenda || []).map((item: any) => `${item?.id || ''}:${item?.date || ''}:${item?.time || ''}:${item?.status || ''}`).join('|'),
+    () => JSON.stringify((agenda || []).map((item: any) => ({
+      id: item?.id || item?.appointment_id || '',
+      updatedAt: item?.updated_at || item?.updatedAt || '',
+      date: item?.date || '',
+      time: item?.time || '',
+      scheduledAt: item?.scheduled_at || item?.scheduledAt || '',
+      scheduledEndAt: item?.scheduled_end_at || item?.scheduledEndAt || '',
+      status: item?.status || item?.appointment_status || '',
+      patientId: getCalendarEventPatientId(item),
+      patientName: getCalendarEventPatientLabel(item),
+      type: item?.type || item?.approach || '',
+      duration: item?.duration_minutes || item?.durationMinutes || '',
+      professionalId: item?.therapist_id || item?.therapistId || item?.professional_id || item?.professionalId || '',
+      professionalName: item?.therapist_name || item?.therapistName || item?.professional || '',
+      roomId: item?.room_id || item?.roomId || item?.room || '',
+      roomName: item?.room_name || item?.roomName || '',
+    }))),
     [agenda]
   );
 
@@ -1535,9 +1551,9 @@ export const ClinicalAgendaBoard = ({
       const id = String(event?.id || event?.appointment_id || '').trim();
       const local = id ? localById.get(id) : null;
       if (!local) return event;
+      const mergedIdentity = mergeAppointmentIdentity(event, local);
       return {
-        ...event,
-        ...local,
+        ...mergedIdentity,
         status: local.status ?? event.status,
         notes: local.notes ?? local.note ?? event.notes,
         updated_at: local.updated_at ?? local.updatedAt ?? event.updated_at
@@ -1906,13 +1922,17 @@ export const ClinicalAgendaBoard = ({
     if (!appointment?.id) return;
     const normalized = normalizeClinicalEvent(appointment, roomLookup);
     cacheRef.current.clear();
-    setRemoteEvents((prev) => prev.map((event: any) =>
-      String(event?.id) === String(normalized.id)
-        ? normalizeClinicalEvent({ ...event, ...appointment, status: appointment.status || event.status }, roomLookup)
-        : event
-    ));
-    setSelectedEvent((prev: any) => prev && String(prev?.id) === String(normalized.id) ? { ...prev, ...normalized } : prev);
-    setEventDetail((prev: any) => prev ? { ...prev, event: { ...(prev.event || {}), ...appointment } } : prev);
+    setRemoteEvents((prev) => prev.map((event: any) => {
+      if (String(event?.id) !== String(normalized.id)) return event;
+      const mergedEvent = mergeAppointmentIdentity(event, appointment);
+      return normalizeClinicalEvent({ ...mergedEvent, status: appointment.status || event.status }, roomLookup);
+    }));
+    setSelectedEvent((prev: any) => prev && String(prev?.id) === String(normalized.id)
+      ? mergeAppointmentIdentity(prev, normalized)
+      : prev);
+    setEventDetail((prev: any) => prev
+      ? { ...prev, event: mergeAppointmentIdentity(prev.event || {}, appointment) }
+      : prev);
   };
 
   const hydrateBillingForm = (source: any = {}) => {
@@ -2821,11 +2841,11 @@ export const ClinicalAgendaBoard = ({
   };
 
   const detail = eventDetail || {};
-  const detailEvent = normalizeClinicalEvent({
-    ...(selectedEvent || {}),
-    ...(detail.event || {}),
-    ...(detail.closure || {})
-  });
+  const detailMergedEvent = mergeAppointmentIdentity(
+    mergeAppointmentIdentity(selectedEvent || {}, detail.event || {}),
+    detail.closure || {},
+  );
+  const detailEvent = normalizeClinicalEvent(detailMergedEvent);
   const closureOperationalView = getAppointmentClosureOperationalView(detailEvent, closureDetailState.data);
   const detailCancellationState = resolveAppointmentCancellationState(detailEvent);
   const detailPrimaryAction = getAppointmentPrimaryAction(detailEvent, closureOperationalView.phase);

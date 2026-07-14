@@ -4523,9 +4523,24 @@ export default function App() {
         errors: [persistenceResult?.error || 'Não foi possível confirmar a alteração do agendamento.'],
       };
     }
+    const confirmedAppointments = mergeAppointmentIdentityFallbacks(
+      persistenceResult.appointments,
+      appointmentsToPersist,
+    );
+    const confirmedPrimaryAppointment = confirmedAppointments.find((appointment: any) =>
+      String(appointment?.id || '') === String(
+        persistenceResult?.item?.id || persistenceResult?.appointment?.id || id,
+      ),
+    ) || confirmedAppointments[0] || null;
+    const confirmedResult = {
+      ...persistenceResult,
+      item: confirmedPrimaryAppointment,
+      items: confirmedAppointments,
+      appointments: confirmedAppointments,
+    };
     const applied = applyAppointmentResultToAgenda(
-      persistenceResult,
-      { action: 'updated', items: persistenceResult.appointments },
+      confirmedResult,
+      { action: 'updated', items: appointmentsToPersist },
       actionSequence,
     );
     if (!applied.ok) {
@@ -4547,8 +4562,8 @@ export default function App() {
     );
     return {
       success: true,
-      updatedCount: persistenceResult.appointments.length,
-      appointments: persistenceResult.appointments,
+      updatedCount: confirmedAppointments.length,
+      appointments: confirmedAppointments,
     };
   };
 

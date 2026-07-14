@@ -10,6 +10,7 @@ import {
 
 const root = process.cwd();
 const appCode = fs.readFileSync(path.join(root, 'src/App.tsx'), 'utf8');
+const calendarCode = fs.readFileSync(path.join(root, 'src/components/Calendar.tsx'), 'utf8');
 const coordinatorCode = fs.readFileSync(path.join(root, 'src/components/CoordinatorDashboard.tsx'), 'utf8');
 const dataServiceCode = fs.readFileSync(path.join(root, 'src/services/dataService.ts'), 'utf8');
 const serverCode = fs.readFileSync(path.join(root, 'server.ts'), 'utf8');
@@ -75,6 +76,15 @@ test('appointment action result is enriched with local confirmed identity before
   assert.match(appCode, /mergeAppointmentIdentityFallbacks\(rawItems, fallback\.items \|\| \[\]\)/);
   assert.match(appCode, /const persistedAppointments = mergeAppointmentIdentityFallbacks\(persistenceResult\.appointments, newItems\)/);
   assert.match(appCode, /\{ action: 'created', items: newItems \}/);
+});
+
+test('appointment edit preserves the known patient name in agenda and open detail without reload', () => {
+  assert.match(appCode, /mergeAppointmentIdentityFallbacks\(\s*persistenceResult\.appointments,\s*appointmentsToPersist,?\s*\)/);
+  assert.match(appCode, /items: confirmedAppointments/);
+  assert.match(appCode, /appointments: confirmedAppointments/);
+  assert.match(calendarCode, /const mergedIdentity = mergeAppointmentIdentity\(event, local\)/);
+  assert.match(calendarCode, /setSelectedEvent[\s\S]*?mergeAppointmentIdentity\(prev, normalized\)/);
+  assert.match(calendarCode, /const detailMergedEvent = mergeAppointmentIdentity\([\s\S]*?detail\.event[\s\S]*?detail\.closure/);
 });
 
 test('appointment mirror persists real patient labels instead of generic Paciente', () => {
