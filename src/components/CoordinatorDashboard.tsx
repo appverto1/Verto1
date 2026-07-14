@@ -4057,6 +4057,12 @@ export function CoordinatorDashboard({
         showToast((result.errors || [result.error || "Não foi possível confirmar o agendamento."]).join(" | "), "error");
         return;
       }
+      const appointmentWasRescheduled = Boolean(
+        result?.scheduleChanged ||
+          String(editingAppointment?.date || "") !== String(sessionDate || "") ||
+          String(editingAppointment?.time || "").slice(0, 5) !== String(sessionTime || "").slice(0, 5) ||
+          String(editingAppointmentActionRequest?.type || "").toUpperCase() === "RESCHEDULE",
+      );
       onAddActivityLog(
         "Agendamento editado",
         isEditingRecurringAppointment && appointmentEditScope === "future"
@@ -4109,7 +4115,13 @@ export function CoordinatorDashboard({
       resetSessionForm();
       hideProcessing();
       releaseSessionSubmit();
-      showToast("Dados salvos com sucesso!");
+      showToast(
+        appointmentWasRescheduled
+          ? Number(result?.scheduleChangedCount || 0) > 1
+            ? "Consultas remarcadas com sucesso!"
+            : "Consulta remarcada com sucesso!"
+          : "Consulta atualizada com sucesso!",
+      );
       return;
     }
 

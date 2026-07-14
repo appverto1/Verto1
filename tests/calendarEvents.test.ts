@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { calculateCalendarEventVisualLayout, calculateCalendarOverlappingEventLayouts } from '../src/components/Calendar';
+import {
+  calculateCalendarEventVisualLayout,
+  calculateCalendarOverlappingEventLayouts,
+  getAppointmentStatusColor,
+} from '../src/components/Calendar';
 import { formatDisplayDate, formatDisplayDateTime } from '../src/utils/dateFormatting';
 import { resolveAppointmentCancellationState } from '../src/utils/appointmentCancellationState';
 import { getAppointmentPrimaryAction } from '../src/utils/appointmentPrimaryAction';
@@ -137,7 +141,7 @@ test('cards mostram informacoes e indicadores essenciais da sessao', () => {
   assert.match(calendarCode, /patientConfirmationLabel/);
   assert.match(calendarCode, /patientConfirmationColor/);
   assert.match(calendarCode, /statusColor\.card/);
-  assert.match(calendarCode, /bg-emerald-500 text-white/);
+  assert.match(calendarCode, /bg-emerald-700 text-white/);
   assert.match(calendarCode, /mergeAppointmentStatusForRender/);
   assert.match(calendarCode, /Consulta confirmada pelo responsável/);
   assert.match(calendarCode, /style\.label/);
@@ -180,6 +184,20 @@ test('agenda usa resposta do paciente como fonte visual canonica', () => {
   assert.match(calendarCode, /CONFIRMADO/);
   assert.match(calendarCode, /REMARCAÇÃO SOLICITADA/);
   assert.match(calendarCode, /CANCELAMENTO SOLICITADO/);
+});
+
+test('agenda usa fundo semantico e texto branco nos eventos em ambos os temas', () => {
+  const confirmed = getAppointmentStatusColor('confirmed').card;
+  const rescheduleRequested = getAppointmentStatusColor('reschedule_requested').card;
+  const cancelled = getAppointmentStatusColor('cancelled').card;
+  const pending = getAppointmentStatusColor('pending_confirmation').card;
+
+  assert.match(confirmed, /bg-emerald-700/);
+  assert.match(rescheduleRequested, /bg-orange-700/);
+  assert.match(cancelled, /bg-red-700/);
+  assert.match(pending, /bg-sky-700/);
+  [confirmed, rescheduleRequested, cancelled, pending].forEach((card) => assert.match(card, /text-white/));
+  assert.match(calendarCode, /event\.patientName[\s\S]{0,180}text-white|text-white[\s\S]{0,180}event\.patientName/);
 });
 
 test('clinic_state_fallback enriquece resposta confirmada pelo historico operacional', () => {

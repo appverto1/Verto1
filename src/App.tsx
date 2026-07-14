@@ -4351,6 +4351,7 @@ export default function App() {
     };
     const conflicts: string[] = [];
     const patchesById = new Map<string, any>();
+    let scheduleChangedCount = 0;
 
     appointmentsToUpdate.forEach((appointment) => {
       const targetDate = resolveDateForOccurrence(appointment);
@@ -4471,6 +4472,7 @@ export default function App() {
       const scheduleChanged =
         String(appointment.date || '') !== String(targetDate || '') ||
         String(appointment.time || '') !== String(targetTime || '');
+      if (scheduleChanged) scheduleChangedCount += 1;
       const targetStartAt = buildAppointmentDateTime(targetDate, targetTime);
       const targetEndAt = calculateAppointmentEnd(targetStartAt, targetDuration);
       if (!targetStartAt || !targetEndAt) {
@@ -4489,6 +4491,12 @@ export default function App() {
         scheduled_start_at: targetScheduledAt,
         scheduledEndAt: targetScheduledEndAt,
         scheduled_end_at: targetScheduledEndAt,
+        startTime: targetScheduledAt,
+        start_time: targetScheduledAt,
+        start: targetScheduledAt,
+        endTime: targetScheduledEndAt,
+        end_time: targetScheduledEndAt,
+        end: targetScheduledEndAt,
         durationMinutes: targetDuration,
         duration_minutes: targetDuration,
         scheduledDurationMinutes: targetDuration,
@@ -4564,6 +4572,8 @@ export default function App() {
       success: true,
       updatedCount: confirmedAppointments.length,
       appointments: confirmedAppointments,
+      scheduleChanged: scheduleChangedCount > 0,
+      scheduleChangedCount,
     };
   };
 

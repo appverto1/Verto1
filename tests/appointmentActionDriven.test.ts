@@ -87,6 +87,19 @@ test('appointment edit preserves the known patient name in agenda and open detai
   assert.match(calendarCode, /const detailMergedEvent = mergeAppointmentIdentity\([\s\S]*?detail\.event[\s\S]*?detail\.closure/);
 });
 
+test('appointment reschedule replaces every schedule alias and closes stale detail without reload', () => {
+  assert.match(appCode, /startTime: targetScheduledAt/);
+  assert.match(appCode, /start_time: targetScheduledAt/);
+  assert.match(appCode, /endTime: targetScheduledEndAt/);
+  assert.match(appCode, /end_time: targetScheduledEndAt/);
+  assert.match(appCode, /scheduleChanged: scheduleChangedCount > 0/);
+  assert.match(calendarCode, /const openAppointmentEditor = \(event: any\) => \{[\s\S]*?setSelectedEvent\(null\);[\s\S]*?setEventDetail\(null\);[\s\S]*?onEditAppointment\?\.\(event\)/);
+  assert.match(calendarCode, /merged\.scheduledAt \|\| merged\.scheduled_at/);
+  assert.match(calendarCode, /merged\.startTime \|\| merged\.start_time \|\| merged\.start/);
+  assert.match(coordinatorCode, /Consulta remarcada com sucesso!/);
+  assert.match(coordinatorCode, /Consulta atualizada com sucesso!/);
+});
+
 test('appointment mirror persists real patient labels instead of generic Paciente', () => {
   const syncSlice = serverCode.slice(
     serverCode.indexOf('async function syncAppointmentsTableFromClinicState'),

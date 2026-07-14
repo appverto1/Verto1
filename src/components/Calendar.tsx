@@ -107,10 +107,10 @@ export const getAppointmentStatusColor = (status: any) => {
   const colors: Record<string, any> = {
     SCHEDULED: {
       canonical,
-      dot: 'bg-slate-400',
+      dot: 'bg-sky-700',
       badge: 'border-slate-200 bg-slate-100 text-slate-600',
       soft: 'border-slate-200 bg-white text-slate-800',
-      card: 'border-slate-300 bg-slate-200 text-slate-900 shadow-[0_10px_22px_rgba(100,116,139,0.20)] hover:bg-slate-300',
+      card: 'border-sky-700 bg-sky-700 text-white shadow-[0_10px_22px_rgba(3,105,161,0.28)] hover:bg-sky-600',
       text: 'text-slate-600',
       icon: Clock
     },
@@ -119,7 +119,7 @@ export const getAppointmentStatusColor = (status: any) => {
       dot: 'bg-sky-400',
       badge: 'border-sky-200 bg-sky-50 text-sky-700',
       soft: 'border-sky-100 bg-sky-50/70 text-sky-950',
-      card: 'border-sky-400 bg-sky-400 text-sky-950 shadow-[0_10px_24px_rgba(14,165,233,0.30)] hover:bg-sky-300',
+      card: 'border-sky-700 bg-sky-700 text-white shadow-[0_10px_24px_rgba(3,105,161,0.32)] hover:bg-sky-600',
       text: 'text-sky-700',
       icon: Clock
     },
@@ -128,7 +128,7 @@ export const getAppointmentStatusColor = (status: any) => {
       dot: 'bg-emerald-500',
       badge: 'border-emerald-200 bg-emerald-50 text-emerald-700',
       soft: 'border-emerald-100 bg-emerald-50/70 text-emerald-950',
-      card: 'border-emerald-500 bg-emerald-500 text-white shadow-[0_10px_26px_rgba(16,185,129,0.36)] hover:bg-emerald-400',
+      card: 'border-emerald-700 bg-emerald-700 text-white shadow-[0_10px_26px_rgba(4,120,87,0.34)] hover:bg-emerald-600',
       text: 'text-emerald-700',
       icon: CheckCircle2
     },
@@ -137,7 +137,7 @@ export const getAppointmentStatusColor = (status: any) => {
       dot: 'bg-amber-500',
       badge: 'border-amber-200 bg-amber-50 text-amber-700',
       soft: 'border-amber-100 bg-amber-50/70 text-amber-950',
-      card: 'border-amber-400 bg-amber-400 text-amber-950 shadow-[0_10px_26px_rgba(245,158,11,0.34)] hover:bg-amber-300',
+      card: 'border-orange-700 bg-orange-700 text-white shadow-[0_10px_26px_rgba(194,65,12,0.34)] hover:bg-orange-600',
       text: 'text-amber-700',
       icon: RefreshCcw
     },
@@ -146,7 +146,7 @@ export const getAppointmentStatusColor = (status: any) => {
       dot: 'bg-orange-500',
       badge: 'border-orange-200 bg-orange-50 text-orange-700',
       soft: 'border-orange-100 bg-orange-50/70 text-orange-950',
-      card: 'border-orange-500 bg-orange-500 text-white shadow-[0_10px_26px_rgba(249,115,22,0.34)] hover:bg-orange-400',
+      card: 'border-orange-700 bg-orange-700 text-white shadow-[0_10px_26px_rgba(194,65,12,0.34)] hover:bg-orange-600',
       text: 'text-orange-700',
       icon: RefreshCcw
     },
@@ -155,7 +155,7 @@ export const getAppointmentStatusColor = (status: any) => {
       dot: 'bg-rose-500',
       badge: 'border-rose-200 bg-rose-50 text-rose-700',
       soft: 'border-rose-100 bg-rose-50/70 text-rose-950',
-      card: 'border-rose-500 bg-rose-500 text-white shadow-[0_10px_26px_rgba(244,63,94,0.34)] hover:bg-rose-400',
+      card: 'border-red-700 bg-red-700 text-white shadow-[0_10px_26px_rgba(185,28,28,0.34)] hover:bg-red-600',
       text: 'text-rose-700',
       icon: Ban
     },
@@ -164,7 +164,7 @@ export const getAppointmentStatusColor = (status: any) => {
       dot: 'bg-red-500',
       badge: 'border-red-200 bg-red-50 text-red-700',
       soft: 'border-red-100 bg-red-50/70 text-red-950',
-      card: 'border-red-500 bg-red-500 text-white shadow-[0_10px_26px_rgba(239,68,68,0.34)] hover:bg-red-400',
+      card: 'border-red-700 bg-red-700 text-white shadow-[0_10px_26px_rgba(185,28,28,0.34)] hover:bg-red-600',
       text: 'text-red-700',
       icon: Ban
     },
@@ -173,7 +173,7 @@ export const getAppointmentStatusColor = (status: any) => {
       dot: 'bg-violet-500',
       badge: 'border-violet-200 bg-violet-50 text-violet-700',
       soft: 'border-violet-100 bg-violet-50/70 text-violet-950',
-      card: 'border-violet-500 bg-violet-500 text-white shadow-[0_10px_26px_rgba(122,50,252,0.34)] hover:bg-violet-400',
+      card: 'border-violet-700 bg-violet-700 text-white shadow-[0_10px_26px_rgba(109,40,217,0.34)] hover:bg-violet-600',
       text: 'text-violet-700',
       icon: Play
     },
@@ -182,7 +182,7 @@ export const getAppointmentStatusColor = (status: any) => {
       dot: 'bg-emerald-600',
       badge: 'border-emerald-200 bg-emerald-50 text-emerald-700',
       soft: 'border-emerald-100 bg-emerald-50/60 text-emerald-950',
-      card: 'border-emerald-600 bg-emerald-600 text-white shadow-[0_10px_26px_rgba(5,150,105,0.34)] hover:bg-emerald-500',
+      card: 'border-emerald-700 bg-emerald-700 text-white shadow-[0_10px_26px_rgba(4,120,87,0.34)] hover:bg-emerald-600',
       text: 'text-emerald-700',
       icon: CheckCircle2
     },
@@ -191,7 +191,7 @@ export const getAppointmentStatusColor = (status: any) => {
       dot: 'bg-pink-500',
       badge: 'border-pink-200 bg-pink-50 text-pink-700',
       soft: 'border-pink-100 bg-pink-50/70 text-pink-950',
-      card: 'border-pink-500 bg-pink-500 text-white shadow-[0_10px_26px_rgba(236,72,153,0.32)] hover:bg-pink-400',
+      card: 'border-rose-700 bg-rose-700 text-white shadow-[0_10px_26px_rgba(190,18,60,0.32)] hover:bg-rose-600',
       text: 'text-pink-700',
       icon: AlertCircle
     }
@@ -1570,6 +1570,12 @@ export const ClinicalAgendaBoard = ({
           (
             String(merged.status || '') !== String(event.status || '') ||
             String(merged.notes || '') !== String(event.notes || '') ||
+            String(merged.date || '') !== String(event.date || '') ||
+            String(merged.time || '') !== String(event.time || '') ||
+            String(merged.scheduledAt || merged.scheduled_at || '') !== String(event.scheduledAt || event.scheduled_at || '') ||
+            String(merged.scheduledEndAt || merged.scheduled_end_at || '') !== String(event.scheduledEndAt || event.scheduled_end_at || '') ||
+            String(merged.startTime || merged.start_time || merged.start || '') !== String(event.startTime || event.start_time || event.start || '') ||
+            String(merged.endTime || merged.end_time || merged.end || '') !== String(event.endTime || event.end_time || event.end || '') ||
             String(merged.recurrenceGroupId || merged.recurrence_group_id || '') !== String(event.recurrenceGroupId || event.recurrence_group_id || '') ||
             String(merged.recurrenceIndex || merged.recurrence_index || '') !== String(event.recurrenceIndex || event.recurrence_index || '') ||
             String(merged.updated_at || '') !== String(event.updated_at || '')
@@ -1909,10 +1915,17 @@ export const ClinicalAgendaBoard = ({
       .catch(() => setClosureDetailState({ loading: false, error: 'Não foi possível carregar o fechamento agora.', data: null }));
   };
 
+  const openAppointmentEditor = (event: any) => {
+    setSelectedEvent(null);
+    setEventDetail(null);
+    setStatusActionEvent(null);
+    onEditAppointment?.(event);
+  };
+
   const handleStatusAction = (event: any, action: 'confirm' | 'reschedule' | 'cancel' | 'delete') => {
     const normalized = normalizeClinicalEvent(event, roomLookup);
     if (action === 'confirm') onConfirmAppointment?.(normalized);
-    if (action === 'reschedule') onEditAppointment?.(normalized);
+    if (action === 'reschedule') openAppointmentEditor(normalized);
     if (action === 'cancel') onCancelAppointment?.(normalized);
     if (action === 'delete') onDeleteAppointment?.(normalized);
     setStatusActionEvent(null);
@@ -2626,7 +2639,7 @@ export const ClinicalAgendaBoard = ({
       >
         <div className="pl-1">
           <div className="flex items-start justify-between gap-2">
-            <span className="text-[10px] font-semibold leading-tight opacity-85">
+            <span className="text-[10px] font-semibold leading-tight text-white">
               {event.time} - {event.endTime}
             </span>
             <span className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] font-bold ${statusColor.badge}`}>
@@ -2634,7 +2647,7 @@ export const ClinicalAgendaBoard = ({
               {!compact && statusColor.label}
             </span>
           </div>
-          <p className={`mt-1 truncate text-sm font-semibold leading-tight ${compact ? 'text-xs' : ''}`}>{event.patientName}</p>
+          <p className={`mt-1 truncate text-sm font-semibold leading-tight text-white ${compact ? 'text-xs' : ''}`}>{event.patientName}</p>
           <p className={`${compact ? 'mt-0.5' : 'mt-1'} truncate text-[11px] font-medium opacity-85`}>
             <span className={`rounded-full border px-1.5 py-0.5 text-[9px] font-bold ${style.badge}`}>{style.label}</span>
             <span className="ml-1">{getRoomDisplayLine(event)}</span>
@@ -2825,8 +2838,8 @@ export const ClinicalAgendaBoard = ({
                         }}
                         className={`flex min-h-[20px] w-full items-center gap-1 rounded-md border px-1.5 py-0 text-left text-[10px] font-medium leading-4 transition-colors ${statusColor.card}`}
                       >
-                        <span className="shrink-0 tabular-nums">{event.time}</span>
-                        <span className="min-w-0 truncate">{event.patientName}</span>
+                        <span className="shrink-0 tabular-nums text-white">{event.time}</span>
+                        <span className="min-w-0 truncate text-white">{event.patientName}</span>
                       </button>
                     );
                   })}
@@ -3564,7 +3577,7 @@ export const ClinicalAgendaBoard = ({
                 </p>
               </div>
               <div className="flex items-center gap-2">
-                <button type="button" onClick={() => onEditAppointment?.(detailEvent)} className={`rounded-2xl border p-2 ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`} aria-label="Editar sessão">
+                <button type="button" onClick={() => openAppointmentEditor(detailEvent)} className={`rounded-2xl border p-2 ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`} aria-label="Editar sessão">
                   <Edit2 size={18} />
                 </button>
                 <button type="button" onClick={() => setSelectedEvent(null)} className={`rounded-2xl border p-2 ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`} aria-label="Fechar detalhes">
@@ -3776,12 +3789,12 @@ export const ClinicalAgendaBoard = ({
                                 </button>
                               ))
                             ) : (
-                              <button type="button" onClick={() => onEditAppointment?.(requestAppointment)} className="rounded-xl bg-[#7a32fc] px-3 py-2 text-[11px] font-bold text-white">
+                              <button type="button" onClick={() => openAppointmentEditor(requestAppointment)} className="rounded-xl bg-[#7a32fc] px-3 py-2 text-[11px] font-bold text-white">
                                 Remarcar consulta
                               </button>
                             )}
                             {!isCancel && (
-                              <button type="button" disabled={loading || !onEditAppointment} onClick={() => onEditAppointment?.(requestAppointment)} className="rounded-xl border border-violet-200 bg-white px-3 py-2 text-[11px] font-bold text-[#7a32fc] hover:bg-violet-50 disabled:opacity-60">
+                              <button type="button" disabled={loading || !onEditAppointment} onClick={() => openAppointmentEditor(requestAppointment)} className="rounded-xl border border-violet-200 bg-white px-3 py-2 text-[11px] font-bold text-[#7a32fc] hover:bg-violet-50 disabled:opacity-60">
                                 Sugerir outro horário
                               </button>
                             )}
@@ -3987,7 +4000,7 @@ export const ClinicalAgendaBoard = ({
                 <BarChart3 size={16} />
                 Ver gráficos
               </button>
-              <button type="button" onClick={() => onEditAppointment?.(detailEvent)} className={`flex items-center justify-center gap-2 rounded-2xl border px-4 py-3 text-sm font-bold ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`}>
+              <button type="button" onClick={() => openAppointmentEditor(detailEvent)} className={`flex items-center justify-center gap-2 rounded-2xl border px-4 py-3 text-sm font-bold ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`}>
                 <RefreshCcw size={16} />
                 Remarcar
               </button>
