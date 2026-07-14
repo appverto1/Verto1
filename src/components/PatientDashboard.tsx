@@ -14,6 +14,31 @@ import { getDefaultAnamnesisTemplate, getProfileTemplate, normalizeAnamnesisTemp
 
 type PortalSection = 'home' | 'appointments' | 'anamnesis' | 'notes' | 'tasks' | 'reports' | 'documents' | 'profile';
 
+const parsePortalMetadata = (value: unknown): Record<string, any> => {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, any>;
+  if (typeof value !== 'string' || !value.trim()) return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+const firstPortalPatientName = (...values: unknown[]) => {
+  const candidates = values.map((value) => String(value ?? '').trim()).filter(Boolean);
+  const isGeneric = (value: string) => {
+    const normalized = value
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim();
+    return ['paciente', 'patient', 'usuario', 'user'].includes(normalized);
+  };
+  return candidates.find((value) => !isGeneric(value)) || candidates[0] || 'Paciente';
+};
+
 export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompleteTask, history, energyTags, sharedNotes, protocols, onAddFamilyNote, isReadOnlyMode = false, patientPortalId = '' }: any) => { 
   const FAMILY_DAILY_PHOTO_LIMIT = 5;
   const chartFiltersStorageKey = `verto.patient-dashboard-chart-filters:${String(user?.id || patientPortalId || 'unknown')}`;
@@ -401,7 +426,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   };
 
   const getPortalNotificationEventKey = (item: any) => {
-    const metadata = item?.metadata && typeof item.metadata === 'object' ? item.metadata : {};
+    const metadata = parsePortalMetadata(item?.metadata);
     const appointmentId = String(item?.appointment_id || item?.appointmentId || '').trim();
     const patientId = String(item?.patient_id || item?.patientId || metadata.patientId || metadata.patient_id || '').trim();
     const clinicId = String(item?.clinic_id || item?.clinicId || item?.organization_id || metadata.clinicId || metadata.clinic_id || '').trim();
@@ -630,7 +655,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     const notificationType = String(notification?.type || '').replace(/_(24h|12h)$/i, '');
     void markPortalNotificationRead(notification, notificationType !== 'appointment_reminder');
     if (!appointmentId) return;
-    const metadata = notification?.metadata && typeof notification.metadata === 'object' ? notification.metadata : {};
+    const metadata = parsePortalMetadata(notification?.metadata);
     const professionalName = firstPortalText(
       metadata.professionalName,
       metadata.therapistName,
@@ -642,7 +667,17 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     );
     await openPortalAppointmentDetail({
       id: appointmentId,
-      patientName: metadata.patientName || notification?.patientName || user?.name || 'Paciente',
+      patientName: firstPortalPatientName(
+        metadata.patientName,
+        metadata.patient_name,
+        notification?.patientName,
+        notification?.patient_name,
+        portalContext?.portalDisplayName,
+        portalContext?.patientName,
+        displayName,
+        user?.name,
+        'Paciente'
+      ),
       clinicName: firstPortalClinicText(
         getPortalClinicNameExclusions(professionalName),
         metadata.clinicName,
@@ -2374,7 +2409,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   };
 
   const getPortalNotificationClinicName = (notification: any) => {
-    const metadata = notification?.metadata && typeof notification.metadata === 'object' ? notification.metadata : {};
+    const metadata = parsePortalMetadata(notification?.metadata);
     const professionalName = firstPortalText(
       metadata.professionalName,
       metadata.therapistName,
@@ -2400,7 +2435,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   };
 
   const getPortalNotificationMessage = (notification: any) => {
-    const metadata = notification?.metadata && typeof notification.metadata === 'object' ? notification.metadata : {};
+    const metadata = parsePortalMetadata(notification?.metadata);
     const notificationType = normalizePortalLower(notification?.type).replace(/_(24h|12h)$/i, '');
     if (notificationType && notificationType !== 'appointment_reminder') {
       return firstPortalText(notification?.message) || 'Atualização da sua consulta disponível.';
@@ -2412,10 +2447,13 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       notification?.scheduledAt,
       notification?.scheduled_at
     );
-    const patientName = firstPortalText(
+    const patientName = firstPortalPatientName(
       metadata.patientName,
+      metadata.patient_name,
       notification?.patientName,
       notification?.patient_name,
+      portalContext?.portalDisplayName,
+      portalContext?.patientName,
       displayName,
       user?.name,
       'Paciente'
@@ -2434,7 +2472,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   ) : portalNotifications.length > 0 ? (
     <div className="mb-4 space-y-2">
       {portalNotifications.slice(0, 3).map((notification: any) => {
-        const metadata = notification?.metadata && typeof notification.metadata === 'object' ? notification.metadata : {};
+        const metadata = parsePortalMetadata(notification?.metadata);
         const logoUrl = firstPortalLogoUrl(
           metadata.clinicLogoUrl,
           notification?.clinicLogoUrl,

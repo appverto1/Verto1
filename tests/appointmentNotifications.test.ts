@@ -57,13 +57,15 @@ assert.match(cron, /createSignedUrl\(storagePath, CLINIC_LOGO_SIGNED_URL_TTL_SEC
 assert.match(cron, /extractReminderMissingColumnName\(profileBranding\.error\) === 'clinic_id'/);
 assert.doesNotMatch(read('src/services/notificationBranding.ts'), /actions:\s*\[/);
 assert.match(read('src/services/notificationBranding.ts'), /const clinicLogoUrl = firstUrl\(input\.branding\.logoUrl\) \|\| null/);
+assert.match(read('src/services/notificationBranding.ts'), /badge: VERTO_NOTIFICATION_BADGE_URL/);
 assert.doesNotMatch(read('src/services/notificationBranding.ts'), /DEFAULT_VERTO_LOGO/);
 assert.doesNotMatch(read('src/services/notificationBranding.ts'), /image:\s*input\.branding\.logoUrl/);
 assert.doesNotMatch(read('public/sw.js'), /actions,/);
 assert.doesNotMatch(read('public/sw.js'), /notification_action/);
-assert.doesNotMatch(read('public/sw.js'), /const VERTO_ICON/);
-assert.doesNotMatch(read('public/sw.js'), /\|\| VERTO_ICON/);
-assert.match(read('public/sw.js'), /appointments-clinic-branding-v10/);
+assert.match(read('public/sw.js'), /const VERTO_NOTIFICATION_BADGE = "\/icon-192\.png\?v=20260714"/);
+assert.match(read('public/sw.js'), /const badgeUrl = asNotificationAssetUrl\(VERTO_NOTIFICATION_BADGE\)/);
+assert.doesNotMatch(read('public/sw.js'), /const badgeUrl = asNotificationAssetUrl\(brandLogo/);
+assert.match(read('public/sw.js'), /appointments-clinic-branding-v11/);
 assert.match(server, /POST|post\('\/api\/internal\/notifications\/run-appointment-reminders/);
 assert.match(server, /APPOINTMENT_REMINDER_CRON_SECRET/);
 assert.match(server, /crypto\.timingSafeEqual/);

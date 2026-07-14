@@ -3340,7 +3340,9 @@ export default function App() {
           if (
             String(previousContext.resolvedPatientId || '') === resolvedContextPatientId &&
             String(previousContext.clinicName || '') === String(portalContext?.clinicName || '') &&
-            String(previousContext.clinicLogoUrl || '') === String(portalContext?.clinicLogoUrl || '')
+            String(previousContext.clinicLogoUrl || '') === String(portalContext?.clinicLogoUrl || '') &&
+            String(previousContext.patientName || '') === String(portalContext?.patientName || '') &&
+            String(previousContext.portalDisplayName || '') === String(portalContext?.portalDisplayName || '')
           ) {
             return prev;
           }

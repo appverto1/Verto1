@@ -1,4 +1,5 @@
-const SW_VERSION = "appointments-clinic-branding-v10";
+const SW_VERSION = "appointments-clinic-branding-v11";
+const VERTO_NOTIFICATION_BADGE = "/icon-192.png?v=20260714";
 const APPOINTMENT_NOTIFICATION_CTA = "Toque para confirmar, remarcar ou cancelar.";
 
 const isGenericBrandName = (value) => {
@@ -70,7 +71,7 @@ self.addEventListener("push", (event) => {
     ? brandName
     : (payload.title || brandName);
   const iconUrl = asNotificationAssetUrl(brandLogo || (isVertoFallbackAsset(payload.icon) ? "" : payload.icon));
-  const badgeUrl = asNotificationAssetUrl(brandLogo || (isVertoFallbackAsset(payload.badge) ? "" : payload.badge));
+  const badgeUrl = asNotificationAssetUrl(VERTO_NOTIFICATION_BADGE);
 
   event.waitUntil(
     self.registration.showNotification(title, {

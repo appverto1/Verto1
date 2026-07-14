@@ -39,6 +39,7 @@ type ReminderModalInput = {
 };
 
 const DEFAULT_CLINIC_NAME = "Clínica";
+export const VERTO_NOTIFICATION_BADGE_URL = "/icon-192.png?v=20260714";
 const APPOINTMENT_RESPONSE_COPY = "Toque para confirmar, remarcar ou cancelar.";
 const FRIENDLY_ERROR_COPY = "Não foi possível concluir sua solicitação agora. Tente novamente em alguns instantes.";
 
@@ -226,7 +227,8 @@ export function buildPatientReminderNotificationPayload(input: ReminderPayloadIn
   return {
     title: input.branding.displayName,
     body,
-    ...(clinicLogoUrl ? { icon: clinicLogoUrl, badge: clinicLogoUrl } : {}),
+    ...(clinicLogoUrl ? { icon: clinicLogoUrl } : {}),
+    badge: VERTO_NOTIFICATION_BADGE_URL,
     tag: appointmentId ? `appointment-reminder-${appointmentId}-${reminderKind}` : undefined,
     url,
     appointmentId,

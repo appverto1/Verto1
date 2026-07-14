@@ -6,6 +6,7 @@ import {
   buildPatientReminderNotificationPayload,
   friendlyPatientNotificationError,
   resolveBrandingContext,
+  VERTO_NOTIFICATION_BADGE_URL,
 } from '../src/services/notificationBranding';
 
 const root = process.cwd();
@@ -47,7 +48,7 @@ const clinicPush = buildPatientReminderNotificationPayload({
 assert.equal(clinicBranding.sourceType, 'clinic');
 assert.equal(clinicPush.title, 'Clínica ABC');
 assert.equal(clinicPush.icon, 'https://cdn.example.com/clinic-logo.png');
-assert.equal(clinicPush.badge, 'https://cdn.example.com/clinic-logo.png');
+assert.equal(clinicPush.badge, VERTO_NOTIFICATION_BADGE_URL);
 assert.equal((clinicPush as any).image, undefined);
 assert.equal(clinicPush.data.brandLogoUrl, 'https://cdn.example.com/clinic-logo.png');
 assert.equal((clinicPush as any).actions, undefined);
@@ -108,6 +109,7 @@ assert.equal(professionalBranding.sourceType, 'verto_fallback');
 assert.equal(professionalBranding.displayName, 'Clínica');
 assert.equal(professionalPush.title, 'Clínica');
 assert.equal((professionalPush as any).icon, undefined);
+assert.equal(professionalPush.badge, VERTO_NOTIFICATION_BADGE_URL);
 assert.equal(professionalPush.data.brandLogoUrl, null);
 assert.doesNotMatch(professionalPush.title, /Mateus/);
 assert.doesNotMatch(professionalPush.body, /Mateus/);
@@ -137,7 +139,9 @@ assert.match(pushServiceCode, /clinic:\s*\{[\s\S]*?id:\s*clinicId \|\| null/);
 assert.match(serviceWorkerCode, /brandName/);
 assert.match(serviceWorkerCode, /isGenericBrandName/);
 assert.match(serviceWorkerCode, /isVertoFallbackAsset/);
-assert.doesNotMatch(serviceWorkerCode, /const VERTO_ICON/);
+assert.match(serviceWorkerCode, /const VERTO_NOTIFICATION_BADGE = "\/icon-192\.png\?v=20260714"/);
+assert.match(serviceWorkerCode, /const badgeUrl = asNotificationAssetUrl\(VERTO_NOTIFICATION_BADGE\)/);
+assert.doesNotMatch(serviceWorkerCode, /const badgeUrl = asNotificationAssetUrl\(brandLogo/);
 assert.match(serviceWorkerCode, /\.\.\.\(iconUrl \? \{ icon: iconUrl \} : \{\}\)/);
 assert.doesNotMatch(serviceWorkerCode, /notification_action/);
 assert.doesNotMatch(serviceWorkerCode, /\bactions\s*:/);

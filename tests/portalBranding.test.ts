@@ -97,6 +97,9 @@ test('portal notifications derive clinic branding from linked patient when notif
   assert.match(serverCode, /CANCEL_REQUESTED/);
   assert.match(notificationRouteSlice, /readPortalPatientContexts\(notificationPatientIds\)/);
   assert.match(notificationRouteSlice, /resolvePortalPatientDisplayName\(patient\)/);
+  assert.match(notificationRouteSlice, /!isGenericCalendarPatientName\(name\)/);
+  assert.match(notificationRouteSlice, /parseStoredJsonObject\(row\?\.metadata\)/);
+  assert.match(notificationRouteSlice, /patientName,\s*patient_name: patientName/);
   assert.match(notificationRouteSlice, /appointmentContext\?\.patientId/);
   assert.match(notificationRouteSlice, /appointmentContext\?\.clinicId/);
   assert.match(notificationRouteSlice, /patientClinicIdsById\.get\(patientId\)/);
@@ -117,6 +120,19 @@ test('portal notifications derive clinic branding from linked patient when notif
       notificationPatientNameResolutionSlice.indexOf('metadataPatientName'),
     'Nome preferido resolvido para o portal deve ganhar de metadados antigos da notificacao.'
   );
+});
+
+test('portal context persists the patient preferred name independently from clinic branding', () => {
+  const portalContextSlice = serverCode.slice(
+    serverCode.indexOf('const resolvePatientPortalContext = async'),
+    serverCode.indexOf("app.get('/api/portal/context'")
+  );
+  assert.match(portalContextSlice, /responsible_email,metadata/);
+  assert.match(portalContextSlice, /resolvePortalPatientDisplayName\(row, user\?\.name\)/);
+  assert.match(portalContextSlice, /patientName: portalDisplayName/);
+  assert.match(portalContextSlice, /portalDisplayName,/);
+  assert.match(appCode, /previousContext\.patientName/);
+  assert.match(appCode, /previousContext\.portalDisplayName/);
 });
 
 test('portal appointment actions do not depend on broad selects or false local success', () => {
@@ -153,6 +169,9 @@ test('patient portal still exposes appointment action controls and notification 
   assert.match(patientDashboardCode, /Solicitar remarcação/);
   assert.match(patientDashboardCode, /Solicitar cancelamento/);
   assert.match(patientDashboardCode, /firstPortalLogoUrl/);
+  assert.match(patientDashboardCode, /const parsePortalMetadata =/);
+  assert.match(patientDashboardCode, /portalContext\?\.portalDisplayName/);
+  assert.match(patientDashboardCode, /portalContext\?\.patientName/);
   assert.match(patientDashboardCode, /renderPortalClinicLogo/);
   assert.match(patientDashboardCode, /isGenericPortalClinicName/);
   assert.match(patientDashboardCode, /isVertoPortalFallbackAsset/);

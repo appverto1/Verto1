@@ -32169,6 +32169,8 @@ async function startServer() {
       return {
         resolvedPatientId: null,
         resolvedPatientEmail: sanitizeEmail(user?.email) || null,
+        patientName: null,
+        portalDisplayName: null,
         responsibleUserId: sanitizeString(user?.id, 120) || null,
         responsibleEmail: sanitizeEmail(user?.email) || null,
         clinicId: sanitizeString(currentClinicId(user), 120) || null,
@@ -32184,14 +32186,14 @@ async function startServer() {
     const primaryPatientId = patientIds[0];
     let patientRead = await supabase
       .from('patients')
-      .select('id,email,clinic_id,name,type,patient_profile_type,panel_type,profile_type,responsible_user_id,responsible_email')
+      .select('id,email,clinic_id,name,type,patient_profile_type,panel_type,profile_type,responsible_user_id,responsible_email,metadata')
       .eq('id', primaryPatientId)
       .limit(1)
       .maybeSingle();
     if (patientRead.error && extractMissingColumnName(patientRead.error)) {
       patientRead = await supabase
         .from('patients')
-        .select('id,email,clinic_id,name,type,responsible_user_id,responsible_email')
+        .select('id,email,clinic_id,name,type,responsible_user_id,responsible_email,metadata')
         .eq('id', primaryPatientId)
         .limit(1)
         .maybeSingle();
@@ -32209,9 +32211,12 @@ async function startServer() {
     const row = patient || { id: primaryPatientId };
     const clinicId = sanitizeString(row?.clinic_id || currentClinicId(user), 120);
     const clinicBranding = await readClinicBrandingForFamilyView(clinicId);
+    const portalDisplayName = resolvePortalPatientDisplayName(row, user?.name);
     return {
       resolvedPatientId: sanitizeString(row?.id || primaryPatientId, 120),
       resolvedPatientEmail: sanitizeEmail(row?.email) || sanitizeEmail(user?.email) || null,
+      patientName: portalDisplayName,
+      portalDisplayName,
       responsibleUserId: sanitizeString(row?.responsible_user_id || user?.id, 120) || null,
       responsibleEmail: sanitizeEmail(row?.responsible_email || user?.email) || null,
       clinicId: clinicBranding.id || (isUuid(clinicId) ? clinicId : null),
@@ -32273,9 +32278,7 @@ async function startServer() {
       'REFUSED'
     ]);
     if (nonActionableStatuses.has(appointmentStatus) || nonActionableStatuses.has(responseStatus)) return false;
-    const notificationMetadata = notification?.metadata && typeof notification.metadata === 'object'
-      ? notification.metadata
-      : {};
+    const notificationMetadata = parseStoredJsonObject(notification?.metadata);
     const notificationAppointmentStart = sanitizeIsoDateTime(
       notificationMetadata.scheduledAt ||
       notificationMetadata.scheduled_at ||
@@ -32513,7 +32516,7 @@ async function startServer() {
       const patientClinicIdsById = new Map<string, string>();
       const notificationPatientIds = Array.from(new Set(
         rows.flatMap((row: any) => {
-          const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+          const metadata = parseStoredJsonObject(row?.metadata);
           const appointmentId = sanitizeString(row?.appointment_id, 120);
           const appointmentContext = appointmentContextById.get(appointmentId);
           return [
@@ -32531,7 +32534,7 @@ async function startServer() {
             const id = sanitizeString(patient?.id, 120);
             const name = resolvePortalPatientDisplayName(patient);
             const clinicId = sanitizeString(patient?.clinic_id, 120);
-            if (id && name) patientNamesById.set(id, name);
+            if (id && name && !isGenericCalendarPatientName(name)) patientNamesById.set(id, name);
             if (id && isUuid(clinicId)) patientClinicIdsById.set(id, clinicId);
           }
         } else if (!extractMissingColumnName(patientResult.error)) {
@@ -32554,7 +32557,7 @@ async function startServer() {
       };
 
       const formatPortalReminderMessage = (row: any, patientName: string) => {
-        const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+        const metadata = parseStoredJsonObject(row?.metadata);
         const scheduledAt = sanitizeString(metadata.scheduledAt || row?.scheduled_for, 120);
         const date = new Date(scheduledAt || '');
         if (Number.isNaN(date.getTime())) {
@@ -32591,7 +32594,7 @@ async function startServer() {
 
       const normalizedRows: any[] = [];
       for (const row of rows) {
-        const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+        const metadata = parseStoredJsonObject(row?.metadata);
         const appointmentId = sanitizeString(row?.appointment_id, 120);
         const appointmentContext = appointmentContextById.get(appointmentId);
         if (
@@ -32629,6 +32632,8 @@ async function startServer() {
         normalizedRows.push({
           ...row,
           patient_id: patientId || row?.patient_id,
+          patientName,
+          patient_name: patientName,
           clinic_id: isUuid(clinicId) ? clinicId : row?.clinic_id,
           scheduled_for: scheduledAt || row?.scheduled_for,
           title: branding.displayName,
@@ -32644,7 +32649,7 @@ async function startServer() {
         const appointmentId = sanitizeString(row?.appointment_id, 120);
         const patientId = sanitizeString(row?.patient_id, 120);
         const type = sanitizeString(row?.type, 80).replace(/_(24h|12h)$/i, '');
-        const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+        const metadata = parseStoredJsonObject(row?.metadata);
         const eventScheduledAt = sanitizeIsoDateTime(
           metadata.scheduledAt || metadata.scheduled_at || row?.scheduled_for
         );
@@ -32717,7 +32722,7 @@ async function startServer() {
       const acknowledge = req.body?.acknowledged === true;
       let targetNotificationIds = [notificationId];
       if (acknowledge && normalizePortalNotificationType(existing?.type) === 'appointment_reschedule_approved') {
-        const existingMetadata = existing?.metadata && typeof existing.metadata === 'object' ? existing.metadata : {};
+        const existingMetadata = parseStoredJsonObject(existing?.metadata);
         const existingEventAt = sanitizeIsoDateTime(
           existingMetadata.scheduledAt || existingMetadata.scheduled_at || existing?.scheduled_for
         );
@@ -32749,7 +32754,7 @@ async function startServer() {
             notificationId,
             ...(Array.isArray(siblingResult.data) ? siblingResult.data : [])
               .filter((row: any) => {
-                const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+                const metadata = parseStoredJsonObject(row?.metadata);
                 return sanitizeIsoDateTime(
                   metadata.scheduledAt || metadata.scheduled_at || row?.scheduled_for
                 ) === existingEventAt;
