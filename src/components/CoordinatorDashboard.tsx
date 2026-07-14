@@ -7553,6 +7553,11 @@ export function CoordinatorDashboard({
   const hasFinancialChartData = (rows: any[], keys: string[]) =>
     rows.some((row) => keys.some((key) => Math.abs(Number(row?.[key]) || 0) > 0));
 
+  const financialChartGridColor = theme === "dark" ? "#334155" : "#F1F5F9";
+  const financialChartAxisColor = theme === "dark" ? "#CBD5E1" : "#94A3B8";
+  const financialChartStrongAxisColor = theme === "dark" ? "#E2E8F0" : "#64748B";
+  const financialChartCursorColor = theme === "dark" ? "rgba(148, 163, 184, 0.08)" : "#F8FAFC";
+
   const renderFinancialTooltip = ({ active, payload, label }: any) => {
     if (!active || !payload?.length) return null;
     const row = payload[0]?.payload || {};
@@ -8149,22 +8154,22 @@ export function CoordinatorDashboard({
                   <CartesianGrid
                     strokeDasharray="3 3"
                     vertical={false}
-                    stroke="#F1F5F9"
+                    stroke={financialChartGridColor}
                   />
                   <XAxis
                     dataKey="name"
                     axisLine={false}
                     tickLine={false}
-                    tick={{ fill: "#A3AED0", fontSize: 10, fontWeight: "bold" }}
+                    tick={{ fill: financialChartAxisColor, fontSize: 10, fontWeight: "bold" }}
                     padding={{ left: 30, right: 30 }}
                   />
                   <YAxis
                     axisLine={false}
                     tickLine={false}
-                    tick={{ fill: "#A3AED0", fontSize: 10, fontWeight: "bold" }}
+                    tick={{ fill: financialChartAxisColor, fontSize: 10, fontWeight: "bold" }}
                   />
                   <Tooltip
-                    cursor={{ fill: "#F8FAFC" }}
+                    cursor={{ fill: financialChartCursorColor }}
                     contentStyle={{ borderRadius: "16px", border: "none" }}
                   />
                   <Bar
@@ -9860,10 +9865,10 @@ export function CoordinatorDashboard({
                           hasFinancialChartData(financialProjectedVsRealizedRows, ["Projetado", "Realizado"]),
                           <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={260}>
                             <BarChart data={financialProjectedVsRealizedRows}>
-                              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
-                              <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: "#94A3B8", fontSize: 12 }} />
-                              <YAxis axisLine={false} tickLine={false} tick={{ fill: "#94A3B8", fontSize: 12 }} tickFormatter={(value) => formatCurrency(value)} />
-                              <Tooltip content={renderFinancialTooltip} cursor={{ fill: "#F8FAFC" }} />
+                              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={financialChartGridColor} />
+                              <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: financialChartAxisColor, fontSize: 12 }} />
+                              <YAxis axisLine={false} tickLine={false} tick={{ fill: financialChartAxisColor, fontSize: 12 }} tickFormatter={(value) => formatCurrency(value)} />
+                              <Tooltip content={renderFinancialTooltip} cursor={{ fill: financialChartCursorColor }} />
                               <Bar name="Projetado" dataKey="Projetado" fill="#86efac" radius={[6, 6, 0, 0]} />
                               <Bar name="Realizado" dataKey="Realizado" fill="#22c55e" radius={[6, 6, 0, 0]} />
                             </BarChart>
@@ -9902,10 +9907,10 @@ export function CoordinatorDashboard({
                           hasFinancialChartData(financialRevenueSpecialtyRows, ["Receita projetada", "Receita realizada"]),
                           <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={260}>
                             <BarChart data={financialRevenueSpecialtyRows}>
-                              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
-                              <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: "#94A3B8", fontSize: 11 }} />
-                              <YAxis axisLine={false} tickLine={false} tick={{ fill: "#94A3B8", fontSize: 12 }} tickFormatter={(value) => formatCurrency(value)} />
-                              <Tooltip content={renderFinancialTooltip} cursor={{ fill: "#F8FAFC" }} />
+                              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={financialChartGridColor} />
+                              <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: financialChartAxisColor, fontSize: 11 }} />
+                              <YAxis axisLine={false} tickLine={false} tick={{ fill: financialChartAxisColor, fontSize: 12 }} tickFormatter={(value) => formatCurrency(value)} />
+                              <Tooltip content={renderFinancialTooltip} cursor={{ fill: financialChartCursorColor }} />
                               <Bar name="Receita projetada" dataKey="Receita projetada" fill="#86efac" radius={[6, 6, 0, 0]} />
                               <Bar name="Receita realizada" dataKey="Receita realizada" fill="#22c55e" radius={[6, 6, 0, 0]} />
                             </BarChart>
@@ -9919,10 +9924,10 @@ export function CoordinatorDashboard({
                           hasFinancialChartData(financialProfitSpecialtyRows, ["Receita", "Repasses", "Despesas alocadas", "Lucro estimado"]),
                           <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={260}>
                             <BarChart data={financialProfitSpecialtyRows}>
-                              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
-                              <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: "#94A3B8", fontSize: 11 }} />
-                              <YAxis axisLine={false} tickLine={false} tick={{ fill: "#94A3B8", fontSize: 12 }} tickFormatter={(value) => formatCurrency(value)} />
-                              <Tooltip content={renderFinancialTooltip} cursor={{ fill: "#F8FAFC" }} />
+                              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={financialChartGridColor} />
+                              <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: financialChartAxisColor, fontSize: 11 }} />
+                              <YAxis axisLine={false} tickLine={false} tick={{ fill: financialChartAxisColor, fontSize: 12 }} tickFormatter={(value) => formatCurrency(value)} />
+                              <Tooltip content={renderFinancialTooltip} cursor={{ fill: financialChartCursorColor }} />
                               <Bar name="Receita" dataKey="Receita" fill="#22c55e" radius={[6, 6, 0, 0]} />
                               <Bar name="Repasses" dataKey="Repasses" fill="#fb7185" radius={[6, 6, 0, 0]} />
                               <Bar name="Despesas alocadas" dataKey="Despesas alocadas" fill="#ef4444" radius={[6, 6, 0, 0]} />
@@ -9938,10 +9943,10 @@ export function CoordinatorDashboard({
                           hasFinancialChartData(financialProfessionalPayoutRows, ["Pago", "Pendente/pronto", "Bloqueado/revisão"]),
                           <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={260}>
                             <BarChart data={financialProfessionalPayoutRows} layout="vertical" margin={{ left: 16 }}>
-                              <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#F1F5F9" />
-                              <XAxis type="number" axisLine={false} tickLine={false} tick={{ fill: "#94A3B8", fontSize: 12 }} tickFormatter={(value) => formatCurrency(value)} />
-                              <YAxis type="category" dataKey="name" axisLine={false} tickLine={false} tick={{ fill: "#64748B", fontSize: 11 }} width={110} />
-                              <Tooltip content={renderFinancialTooltip} cursor={{ fill: "#F8FAFC" }} />
+                              <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke={financialChartGridColor} />
+                              <XAxis type="number" axisLine={false} tickLine={false} tick={{ fill: financialChartAxisColor, fontSize: 12 }} tickFormatter={(value) => formatCurrency(value)} />
+                              <YAxis type="category" dataKey="name" axisLine={false} tickLine={false} tick={{ fill: financialChartStrongAxisColor, fontSize: 11 }} width={110} />
+                              <Tooltip content={renderFinancialTooltip} cursor={{ fill: financialChartCursorColor }} />
                               <Bar name="Pago" dataKey="Pago" stackId="repasse" fill="#22c55e" radius={[0, 6, 6, 0]} />
                               <Bar name="Pendente/pronto" dataKey="Pendente/pronto" stackId="repasse" fill="#7a32fc" radius={[0, 6, 6, 0]} />
                               <Bar name="Bloqueado/revisão" dataKey="Bloqueado/revisão" stackId="repasse" fill="#f43f5e" radius={[0, 6, 6, 0]} />
@@ -10303,10 +10308,10 @@ export function CoordinatorDashboard({
                       <div className="h-64 min-h-[300px]">
                         <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>
                           <BarChart data={financialCashFlowRows}>
-                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
-                            <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fill: "#94A3B8", fontSize: 12 }} />
-                            <YAxis axisLine={false} tickLine={false} tick={{ fill: "#94A3B8", fontSize: 12 }} />
-                            <Tooltip content={renderFinancialTooltip} cursor={{ fill: "#F8FAFC" }} />
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={financialChartGridColor} />
+                            <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fill: financialChartAxisColor, fontSize: 12 }} />
+                            <YAxis axisLine={false} tickLine={false} tick={{ fill: financialChartAxisColor, fontSize: 12 }} />
+                            <Tooltip content={renderFinancialTooltip} cursor={{ fill: financialChartCursorColor }} />
                             <Bar name="Receita realizada" dataKey="Receita realizada" fill="#22c55e" radius={[4, 4, 0, 0]} />
                             <Bar name="Resultado estimado" dataKey="Resultado estimado" fill="#0ea5e9" radius={[4, 4, 0, 0]} />
                           </BarChart>
@@ -10959,22 +10964,22 @@ export function CoordinatorDashboard({
                               <CartesianGrid
                                 strokeDasharray="3 3"
                                 vertical={false}
-                                stroke="#F1F5F9"
+                                stroke={financialChartGridColor}
                               />
                               <XAxis
                                 dataKey="month"
                                 axisLine={false}
                                 tickLine={false}
-                                tick={{ fill: "#94A3B8", fontSize: 12 }}
+                                tick={{ fill: financialChartAxisColor, fontSize: 12 }}
                               />
                               <YAxis
                                 axisLine={false}
                                 tickLine={false}
-                                tick={{ fill: "#94A3B8", fontSize: 12 }}
+                                tick={{ fill: financialChartAxisColor, fontSize: 12 }}
                               />
                               <Tooltip
                                 content={renderFinancialTooltip}
-                                cursor={{ fill: "#F8FAFC" }}
+                                cursor={{ fill: financialChartCursorColor }}
                               />
                               <Bar
                                 name="Receita realizada"
