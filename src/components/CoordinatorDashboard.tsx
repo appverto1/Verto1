@@ -11825,6 +11825,7 @@ export function CoordinatorDashboard({
                 <PayerRequirementsPanel
                   initialSection={financialNavigationContext.payerSection}
                   navigationIntentKey={financialNavigationContext.intentKey}
+                  theme={theme}
                 />
               </motion.div>
             )}

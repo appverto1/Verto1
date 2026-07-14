@@ -8,6 +8,7 @@ const readSource = (file: string) => fs.readFileSync(path.join(root, file), 'utf
 
 const commonCode = readSource('src/components/Common.tsx');
 const coordinatorCode = readSource('src/components/CoordinatorDashboard.tsx');
+const payerRequirementsCode = readSource('src/components/PayerRequirementsPanel.tsx');
 const affectedSurfaceSources = [
   'src/components/PayerRequirementsPanel.tsx',
   'src/components/TissPreGuideTab.tsx',
@@ -65,4 +66,11 @@ test('gráficos financeiros preservam cores claras e usam contraste próprio no 
   assert.match(coordinatorCode, /fill: financialChartAxisColor/);
   assert.match(coordinatorCode, /fill: financialChartStrongAxisColor/);
   assert.match(coordinatorCode, /cursor=\{\{ fill: financialChartCursorColor \}\}/);
+});
+
+test('esteira de convênios remove apenas o gradiente claro no tema escuro', () => {
+  assert.match(coordinatorCode, /<PayerRequirementsPanel[\s\S]*?theme=\{theme\}/);
+  assert.match(payerRequirementsCode, /theme === "dark"[\s\S]*?"border-slate-700 bg-\[#16243b\]"/);
+  assert.match(payerRequirementsCode, /"border-indigo-100 bg-gradient-to-br from-white to-indigo-50\/40"/);
+  assert.match(payerRequirementsCode, /data-payer-setup-wizard/);
 });

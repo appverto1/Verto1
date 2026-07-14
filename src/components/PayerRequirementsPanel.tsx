@@ -1050,11 +1050,13 @@ export function getPayerSetupReadiness(input: {
 type PayerRequirementsPanelProps = {
   initialSection?: "convenios" | "tuss" | "prices" | "rules";
   navigationIntentKey?: number;
+  theme?: "light" | "dark";
 };
 
 export function PayerRequirementsPanel({
   initialSection,
   navigationIntentKey,
+  theme = "light",
 }: PayerRequirementsPanelProps = {}) {
   const [payers, setPayers] = useState<Payer[]>([]);
   const [selectedPayerId, setSelectedPayerId] = useState("");
@@ -3098,7 +3100,14 @@ export function PayerRequirementsPanel({
   };
 
   const renderPayerSetupWizard = () => (
-    <div className="mt-4 rounded-3xl border border-indigo-100 bg-gradient-to-br from-white to-indigo-50/40 p-4">
+    <div
+      data-payer-setup-wizard
+      className={`mt-4 rounded-3xl border p-4 ${
+        theme === "dark"
+          ? "border-slate-700 bg-[#16243b]"
+          : "border-indigo-100 bg-gradient-to-br from-white to-indigo-50/40"
+      }`}
+    >
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <p className="text-xs font-bold uppercase tracking-widest text-indigo-500">Esteira de configuração</p>
