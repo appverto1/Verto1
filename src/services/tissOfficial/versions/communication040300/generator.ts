@@ -31,6 +31,7 @@ import {
   attendanceRegimes040300,
   attendanceTypes040300
 } from "./domains";
+import { TISS_PROVIDER_CODE_MAX_LENGTH } from "../../../../utils/tissFieldValidation";
 
 const ANS_NAMESPACE = "http://www.ans.gov.br/padroes/tiss/schemas";
 const XMLDSIG_NAMESPACE = "http://www.w3.org/2000/09/xmldsig#";
@@ -517,8 +518,8 @@ function normalizeGuide(row: any, issues: TissOfficialIssue[], timeZone: string)
     provider.contractedProviderCode,
     provider.providerCode
   ), 200);
-  if (providerCodeCandidate.length > 14) {
-    addIssue({ issues, preGuideId, entity: "provider", field: "providerIdentifier", code: "TISS_OFFICIAL_PROVIDER_CODE_TOO_LONG", message: "Código do prestador deve ter no máximo 14 caracteres; o XML nunca trunca esse identificador." });
+  if (providerCodeCandidate.length > TISS_PROVIDER_CODE_MAX_LENGTH) {
+    addIssue({ issues, preGuideId, entity: "provider", field: "providerIdentifier", code: "TISS_OFFICIAL_PROVIDER_CODE_TOO_LONG", message: `Código do prestador deve ter no máximo ${TISS_PROVIDER_CODE_MAX_LENGTH} caracteres; o XML nunca trunca esse identificador.` });
   }
   const providerIdentifier = pickProviderIdentifier(snapshot, row);
   if (!providerIdentifier) {

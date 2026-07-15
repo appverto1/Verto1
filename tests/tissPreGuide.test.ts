@@ -1966,7 +1966,7 @@ test('perfil TISS do prestador salva e le clinic_tiss_profiles sem substituir po
   assert.match(providerPatchRoute, /cnes_code:\s*sanitizeString\(req\.body\?\.cnesCode/);
   assert.match(providerPatchRoute, /const providerCode = sanitizeString\(req\.body\?\.providerCode/);
   assert.match(providerPatchRoute, /provider_code:\s*providerCode \|\| null/);
-  assert.match(providerPatchRoute, /providerCode\.length > 14 \|\| ansProviderCode\.length > 14/);
+  assert.match(providerPatchRoute, /providerCode\.length > TISS_PROVIDER_CODE_MAX_LENGTH \|\| ansProviderCode\.length > TISS_PROVIDER_CODE_MAX_LENGTH/);
   assert.match(providerPatchRoute, /TISS_PROVIDER_CODE_TOO_LONG/);
   assert.match(providerPatchRoute, /runAffectedTissPipeline\([\s\S]*clinic_tiss_profile_changed/);
   assert.doesNotMatch(providerPatchRoute, /professionalName|professional_name|user\.name/);

@@ -185,6 +185,11 @@ import {
   sanitizeOfficialXmlFilePart
 } from './src/services/tissOfficial/security';
 import {
+  getTissProviderCodeLengthError,
+  normalizeTissCivilDate,
+  TISS_PROVIDER_CODE_MAX_LENGTH
+} from './src/utils/tissFieldValidation';
+import {
   buildPatientPortabilitySnapshot,
   normalizePatientPortabilityScope
 } from './src/utils/patientPortability';
@@ -41111,11 +41116,12 @@ async function startServer() {
       const existingProfile = await fetchTissPreGuideProfile('clinic_tiss_profiles', CLINIC_TISS_PROFILE_SELECT, organizationId);
       const providerCode = sanitizeString(req.body?.providerCode ?? req.body?.provider_code, 200);
       const ansProviderCode = sanitizeString(req.body?.ansProviderCode ?? req.body?.ans_provider_code, 200);
-      if (providerCode.length > 14 || ansProviderCode.length > 14) {
+      if (providerCode.length > TISS_PROVIDER_CODE_MAX_LENGTH || ansProviderCode.length > TISS_PROVIDER_CODE_MAX_LENGTH) {
+        const invalidCode = providerCode.length > TISS_PROVIDER_CODE_MAX_LENGTH ? providerCode : ansProviderCode;
         return res.status(422).json({
           success: false,
           code: 'TISS_PROVIDER_CODE_TOO_LONG',
-          error: 'O código do prestador deve ter no máximo 14 caracteres. Revise o cadastro antes de salvar.'
+          error: getTissProviderCodeLengthError(invalidCode)
         });
       }
       const payload = cleanObject({
@@ -41230,11 +41236,13 @@ async function startServer() {
       const existingProfile = await fetchTissPreGuideProfile('payer_tiss_profiles', PAYER_TISS_PROFILE_SELECT, organizationId, 'payer_id', payerId);
       const contractedProviderCode = sanitizeString(req.body?.contractedProviderCode ?? req.body?.contracted_provider_code, 200);
       const operatorProviderCode = sanitizeString(req.body?.operatorProviderCode ?? req.body?.operator_provider_code, 200);
-      if (contractedProviderCode.length > 14 || operatorProviderCode.length > 14) {
+      if (contractedProviderCode.length > TISS_PROVIDER_CODE_MAX_LENGTH || operatorProviderCode.length > TISS_PROVIDER_CODE_MAX_LENGTH) {
+        const invalidCode = contractedProviderCode.length > TISS_PROVIDER_CODE_MAX_LENGTH ? contractedProviderCode : operatorProviderCode;
+        const invalidLabel = contractedProviderCode.length > TISS_PROVIDER_CODE_MAX_LENGTH ? 'Código do prestador' : 'Código operacional na operadora';
         return res.status(422).json({
           success: false,
           code: 'TISS_PROVIDER_CODE_TOO_LONG',
-          error: 'O código do prestador deve ter no máximo 14 caracteres. Revise o cadastro antes de salvar.'
+          error: getTissProviderCodeLengthError(invalidCode, invalidLabel)
         });
       }
       const guideType = sanitizeString(req.body?.defaultGuideType ?? req.body?.default_guide_type, 40).toLowerCase();
@@ -44734,8 +44742,11 @@ async function startServer() {
   };
 
   const tussValidityRangeIsValid = (validFrom: unknown, validUntil: unknown) => {
-    const from = sanitizeString(validFrom, 20).slice(0, 10);
-    const until = sanitizeString(validUntil, 20).slice(0, 10);
+    const rawFrom = sanitizeString(validFrom, 20);
+    const rawUntil = sanitizeString(validUntil, 20);
+    const from = normalizeTissCivilDate(rawFrom);
+    const until = normalizeTissCivilDate(rawUntil);
+    if ((rawFrom && !from) || (rawUntil && !until)) return false;
     return !from || !until || from <= until;
   };
 
@@ -45028,8 +45039,10 @@ async function startServer() {
       const serviceCatalogId = sanitizeString(req.body?.serviceCatalogId || req.body?.service_catalog_id, 120);
       const tussCodeId = sanitizeString(req.body?.tussCodeId || req.body?.tuss_code_id, 120);
       if (!isUuid(organizationId) || !isUuid(payerId) || !isUuid(serviceCatalogId) || (tussCodeId && !isUuid(tussCodeId))) return res.status(400).json(payerSafeError(400));
-      const validFrom = sanitizeString(req.body?.validFrom || req.body?.valid_from, 20) || null;
-      const validTo = sanitizeString(req.body?.validTo || req.body?.valid_to, 20) || null;
+      const rawValidFrom = sanitizeString(req.body?.validFrom ?? req.body?.valid_from, 20);
+      const rawValidTo = sanitizeString(req.body?.validTo ?? req.body?.valid_to, 20);
+      const validFrom = normalizeTissCivilDate(rawValidFrom) || null;
+      const validTo = normalizeTissCivilDate(rawValidTo) || null;
       const active = req.body?.active !== false;
       const supportedGuideTypes = new Set(guideTypes040300.map((item: any) => item.code));
       const guideType = sanitizeString(req.body?.guideType || req.body?.guide_type || 'sp_sadt', 40).toLowerCase();
@@ -45040,8 +45053,15 @@ async function startServer() {
           error: 'Selecione um tipo de guia suportado pelo XML TISS oficial da Verto.'
         });
       }
-      if (!tussValidityRangeIsValid(validFrom, validTo)) {
+      if (!tussValidityRangeIsValid(rawValidFrom, rawValidTo)) {
         return res.status(400).json({ success: false, error: 'Revise a vigência do mapeamento.', code: 'INVALID_TUSS_MAPPING_CONFIGURATION' });
+      }
+      if (active && !validFrom) {
+        return res.status(422).json({
+          success: false,
+          code: 'TUSS_MAPPING_VALID_FROM_REQUIRED',
+          error: 'Informe a vigência inicial obrigatória do De/Para no formato AAAA-MM-DD.'
+        });
       }
       const [payer, service, code] = await Promise.all([
         fetchPayerForAdmin(payerId, organizationId),
@@ -45089,12 +45109,15 @@ async function startServer() {
         created_at: now,
         updated_at: now
       });
-      const { data, error } = await supabase
+      const insertResult = await supabase
         .from('payer_tuss_mappings')
         .insert([payload])
         .select(PAYER_TUSS_MAPPING_SELECT)
         .maybeSingle();
-      if (error && isTussUniqueConflict(error)) {
+      let persistedData = insertResult.data;
+      let persistenceError = insertResult.error;
+      let idempotent = false;
+      if (persistenceError && isTussUniqueConflict(persistenceError)) {
         const existing = await supabase
           .from('payer_tuss_mappings')
           .select(PAYER_TUSS_MAPPING_SELECT)
@@ -45104,9 +45127,39 @@ async function startServer() {
           .eq('active', true)
           .limit(1)
           .maybeSingle();
-        if (!existing.error && existing.data?.id) return res.json({ success: true, idempotent: true, data: serializePayerTussMapping(existing.data, service, code) });
+        if (!existing.error && existing.data?.id) {
+          const existingPatch: Record<string, unknown> = cleanObject({
+            ...payload,
+            id: undefined,
+            organization_id: undefined,
+            payer_id: undefined,
+            service_catalog_id: undefined,
+            created_by: undefined,
+            created_at: undefined,
+            metadata: mergePayerTussMappingCodeMetadata(req.body, existing.data.metadata || {})
+          });
+          const updateResult = await supabase
+            .from('payer_tuss_mappings')
+            .update(existingPatch)
+            .eq('organization_id', organizationId)
+            .eq('payer_id', payerId)
+            .eq('service_catalog_id', serviceCatalogId)
+            .eq('id', existing.data.id)
+            .select(PAYER_TUSS_MAPPING_SELECT)
+            .maybeSingle();
+          persistedData = updateResult.data;
+          persistenceError = updateResult.error;
+          idempotent = true;
+        }
       }
-      if (error) throw error;
+      if (persistenceError) throw persistenceError;
+      if (!persistedData?.id || persistedData.payer_id !== payerId || persistedData.service_catalog_id !== serviceCatalogId || persistedData.valid_from !== validFrom) {
+        return res.status(409).json({
+          success: false,
+          code: 'TUSS_MAPPING_PERSISTENCE_MISMATCH',
+          error: 'O banco não confirmou a vigência inicial enviada. O De/Para existente foi preservado; tente novamente.'
+        });
+      }
       await markTissPreGuidesStale({ organizationId, payerId, reason: 'De/Para TUSS do convênio alterado.' });
       const affectedAppointmentIds = await collectTissPipelineAffectedFutureAppointmentIds({ organizationId, payerId });
       const pipelineResults = affectedAppointmentIds.length > 0
@@ -45120,9 +45173,10 @@ async function startServer() {
             concurrency: 4
           })
         : [];
-      return res.status(201).json({
+      return res.status(idempotent ? 200 : 201).json({
         success: true,
-        data: serializePayerTussMapping(data, service, code),
+        idempotent,
+        data: serializePayerTussMapping(persistedData, service, code),
         tissPipeline: {
           reason: 'tuss_mapping_changed',
           attempted: pipelineResults.length,
@@ -45146,11 +45200,15 @@ async function startServer() {
       if (!existing?.id) return res.status(404).json(payerSafeError(404));
       const serviceCatalogId = sanitizeString(req.body?.serviceCatalogId || req.body?.service_catalog_id || existing.service_catalog_id, 120);
       const tussCodeId = sanitizeString(req.body?.tussCodeId || req.body?.tuss_code_id || existing.tuss_code_id, 120);
-      const effectiveValidFrom = req.body?.validFrom !== undefined || req.body?.valid_from !== undefined
-        ? sanitizeString(req.body?.validFrom || req.body?.valid_from, 20) || null
+      const validFromProvided = req.body?.validFrom !== undefined || req.body?.valid_from !== undefined;
+      const validToProvided = req.body?.validTo !== undefined || req.body?.valid_to !== undefined;
+      const rawValidFrom = validFromProvided ? sanitizeString(req.body?.validFrom ?? req.body?.valid_from, 20) : '';
+      const rawValidTo = validToProvided ? sanitizeString(req.body?.validTo ?? req.body?.valid_to, 20) : '';
+      const effectiveValidFrom = validFromProvided
+        ? normalizeTissCivilDate(rawValidFrom) || null
         : existing.valid_from;
-      const effectiveValidTo = req.body?.validTo !== undefined || req.body?.valid_to !== undefined
-        ? sanitizeString(req.body?.validTo || req.body?.valid_to, 20) || null
+      const effectiveValidTo = validToProvided
+        ? normalizeTissCivilDate(rawValidTo) || null
         : existing.valid_to;
       const effectiveActive = req.body?.active !== undefined ? Boolean(req.body.active) : existing.active !== false;
       const guideTypeProvided = req.body?.guideType !== undefined || req.body?.guide_type !== undefined;
@@ -45163,8 +45221,15 @@ async function startServer() {
           error: 'Selecione um tipo de guia suportado pelo XML TISS oficial da Verto.'
         });
       }
-      if (!tussValidityRangeIsValid(effectiveValidFrom, effectiveValidTo)) {
+      if ((validFromProvided && rawValidFrom && !normalizeTissCivilDate(rawValidFrom)) || (validToProvided && rawValidTo && !normalizeTissCivilDate(rawValidTo)) || !tussValidityRangeIsValid(effectiveValidFrom, effectiveValidTo)) {
         return res.status(400).json({ success: false, error: 'Revise a vigência do mapeamento.', code: 'INVALID_TUSS_MAPPING_CONFIGURATION' });
+      }
+      if (effectiveActive && !normalizeTissCivilDate(effectiveValidFrom)) {
+        return res.status(422).json({
+          success: false,
+          code: 'TUSS_MAPPING_VALID_FROM_REQUIRED',
+          error: 'Informe a vigência inicial obrigatória do De/Para no formato AAAA-MM-DD.'
+        });
       }
       const [service, code] = await Promise.all([
         fetchTussServiceCatalogById(organizationId, serviceCatalogId),
@@ -45194,8 +45259,8 @@ async function startServer() {
         requires_patient_document: req.body?.requiresPatientDocument !== undefined || req.body?.requires_patient_document !== undefined ? Boolean(req.body?.requiresPatientDocument ?? req.body?.requires_patient_document) : undefined,
         use_actual_duration: req.body?.useActualDuration !== undefined || req.body?.use_actual_duration !== undefined ? Boolean(req.body?.useActualDuration ?? req.body?.use_actual_duration) : undefined,
         active: req.body?.active !== undefined ? Boolean(req.body?.active) : undefined,
-        valid_from: req.body?.validFrom !== undefined || req.body?.valid_from !== undefined ? sanitizeString(req.body?.validFrom || req.body?.valid_from, 20) || null : undefined,
-        valid_to: req.body?.validTo !== undefined || req.body?.valid_to !== undefined ? sanitizeString(req.body?.validTo || req.body?.valid_to, 20) || null : undefined,
+        valid_from: validFromProvided ? effectiveValidFrom : undefined,
+        valid_to: validToProvided ? effectiveValidTo : undefined,
         source: req.body?.source !== undefined ? sanitizeString(req.body?.source, 80) || 'manual' : undefined,
         notes: req.body?.notes !== undefined ? sanitizeTextField(req.body?.notes, 1200) || null : undefined,
         metadata: (
@@ -45226,6 +45291,13 @@ async function startServer() {
         .select(PAYER_TUSS_MAPPING_SELECT)
         .maybeSingle();
       if (error) throw error;
+      if (!data?.id || data.id !== mappingId || data.service_catalog_id !== serviceCatalogId || data.valid_from !== effectiveValidFrom) {
+        return res.status(409).json({
+          success: false,
+          code: 'TUSS_MAPPING_PERSISTENCE_MISMATCH',
+          error: 'O banco não confirmou a vigência inicial enviada. O De/Para existente foi preservado; tente novamente.'
+        });
+      }
       await markTissPreGuidesStale({ organizationId, payerId: sanitizeString(existing.payer_id, 120), reason: 'De/Para TUSS do convênio alterado.' });
       const affectedAppointmentIds = await collectTissPipelineAffectedFutureAppointmentIds({
         organizationId,

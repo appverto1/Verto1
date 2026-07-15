@@ -8,14 +8,22 @@ import {
 import { evaluateAppointmentClosureReadiness } from '../src/services/closureReadinessEngine';
 import {
   formatCentsForBrazilianInput,
+  getPayerTussMappingPersistenceError,
+  getProcedureSetupDependencyLabels,
   getPayerSetupReadiness,
   getBillingConfigurationCompletionState,
   isLegacyOrInvalidTussCodeForSetup,
   isBillingConfigurationOperational,
+  isPayerTussMappingReady,
   payerProcedurePriceToForm,
   payerTussMappingToForm,
   parseBrazilianCurrencyToCents,
+  resolvePayerTussMappingForForm,
 } from '../src/components/PayerRequirementsPanel';
+import {
+  getTissProviderCodeLengthError,
+  normalizeTissCivilDate,
+} from '../src/utils/tissFieldValidation';
 
 const root = process.cwd();
 const serverCode = readFileSync(join(root, 'server.ts'), 'utf8');
@@ -685,6 +693,7 @@ test('esteira bloqueia TUSS legado ou inadequado antes de XML', () => {
     tissProfile: { ansRegistration: '326305', contractedProviderCode: 'PREST-1' },
     activeProcedureCount: 1,
     activeMappingCount: 1,
+    readyMappingCount: 1,
     activePriceCount: 1,
     activeBillingConfigurationCount: 1,
     hasLegacyTussCode: true,
@@ -701,6 +710,7 @@ test('esteira pede valor negociado quando DePara existe sem preco vigente', () =
     tissProfile: { ansRegistration: '326305', contractedProviderCode: 'PREST-1' },
     activeProcedureCount: 1,
     activeMappingCount: 1,
+    readyMappingCount: 1,
     activePriceCount: 0,
     pendingPriceCount: 1,
   });
@@ -714,6 +724,7 @@ test('esteira nao declara XML pronto antes do teste mesmo com anti-glosa em aler
     tissProfile: { ansRegistration: '326305', contractedProviderCode: 'PREST-1' },
     activeProcedureCount: 1,
     activeMappingCount: 1,
+    readyMappingCount: 1,
     activePriceCount: 1,
     activeBillingConfigurationCount: 1,
     antiGlosaProfileNeedsReview: true,
@@ -735,6 +746,7 @@ test('esteira reconhece convenio ja configurado e teste de pre-guia aprovado com
     },
     activeProcedureCount: 1,
     activeMappingCount: 1,
+    readyMappingCount: 1,
     activePriceCount: 1,
     activeBillingConfigurationCount: 1,
     preGuideTestStatus: 'ready',
@@ -753,6 +765,7 @@ test('esteira com teste de pre-guia em alerta continua pronta apenas para pre-gu
     },
     activeProcedureCount: 1,
     activeMappingCount: 1,
+    readyMappingCount: 1,
     activePriceCount: 1,
     activeBillingConfigurationCount: 1,
     preGuideTestStatus: 'warning',
@@ -797,6 +810,114 @@ test('formularios simplificados hidratam DePara e valor persistidos sem apagar v
   assert.equal(price.payerTussMappingId, 'mapping-1');
 });
 
+test('vigencia civil do DePara e normalizada sem conversao de timezone', () => {
+  assert.equal(normalizeTissCivilDate('2026-07-01'), '2026-07-01');
+  assert.equal(normalizeTissCivilDate('01/07/2026'), '');
+  assert.equal(normalizeTissCivilDate('2026-02-30'), '');
+  assert.equal(isPayerTussMappingReady({ active: true, validFrom: '2026-07-01' }), true);
+  assert.equal(isPayerTussMappingReady({ active: true, validFrom: null }), false);
+});
+
+test('Etapa 5 permanece incompleta ate todos os DePara ativos terem vigencia persistida', () => {
+  const incomplete = getPayerSetupReadiness({
+    payer: { name: 'Bradesco Saude', payerType: 'INSURANCE', status: 'ACTIVE' },
+    tissProfile: { ansRegistration: '123456', contractedProviderCode: 'PREST-1' },
+    activeProcedureCount: 1,
+    activeMappingCount: 1,
+    readyMappingCount: 0,
+    activePriceCount: 1,
+    activeBillingConfigurationCount: 1,
+  });
+  assert.equal(incomplete.steps.find((step) => step.key === 'tuss')?.status, 'incomplete');
+  assert.match(incomplete.steps.find((step) => step.key === 'tuss')?.blockingReasons?.join(' ') || '', /vig.ncia inicial/i);
+
+  const ready = getPayerSetupReadiness({
+    payer: { name: 'Bradesco Saude', payerType: 'INSURANCE', status: 'ACTIVE' },
+    tissProfile: { ansRegistration: '123456', contractedProviderCode: 'PREST-1' },
+    activeProcedureCount: 1,
+    activeMappingCount: 1,
+    readyMappingCount: 1,
+    activePriceCount: 1,
+    activeBillingConfigurationCount: 1,
+  });
+  assert.equal(ready.steps.find((step) => step.key === 'tuss')?.status, 'ready');
+});
+
+test('modo simplificado e avancado resolvem o mesmo DePara por pagador e procedimento', () => {
+  const mappings: Parameters<typeof resolvePayerTussMappingForForm>[0]['mappings'] = [
+    { id: 'mapping-a', payerId: 'payer-1', serviceCatalogId: 'service-a', active: true, validFrom: '2026-06-01' },
+    { id: 'mapping-b', payerId: 'payer-1', serviceCatalogId: 'service-b', active: true, validFrom: '2026-07-01' },
+    { id: 'mapping-other', payerId: 'payer-2', serviceCatalogId: 'service-b', active: true, validFrom: '2026-07-01' },
+  ];
+  const resolved = resolvePayerTussMappingForForm({ mappings, payerId: 'payer-1', serviceCatalogId: 'service-b' });
+  assert.equal(resolved?.id, 'mapping-b');
+  assert.equal(resolved?.validFrom, '2026-07-01');
+});
+
+test('cliente recusa falso sucesso quando id ou vigencia retornados divergem', () => {
+  const expected = {
+    expectedId: 'mapping-1',
+    expectedPayerId: 'payer-1',
+    expectedServiceCatalogId: 'service-1',
+    expectedValidFrom: '2026-07-01',
+  };
+  assert.equal(getPayerTussMappingPersistenceError({
+    ...expected,
+    persisted: { id: 'mapping-1', payerId: 'payer-1', serviceCatalogId: 'service-1', validFrom: '2026-07-01' },
+  }), '');
+  assert.match(getPayerTussMappingPersistenceError({
+    ...expected,
+    persisted: { id: 'mapping-1', payerId: 'payer-1', serviceCatalogId: 'service-1', validFrom: null },
+  }), /n.o foi confirmada pelo banco/i);
+  assert.match(getPayerTussMappingPersistenceError({
+    ...expected,
+    persisted: { id: 'mapping-2', payerId: 'payer-1', serviceCatalogId: 'service-1', validFrom: '2026-07-01' },
+  }), /outro De\/Para/i);
+});
+
+test('codigo do prestador acima do limite mostra valor e nunca depende de truncamento', () => {
+  const message = getTissProviderCodeLengthError('TESTE-VERTO-001');
+  assert.match(message, /m.ximo 14 caracteres/i);
+  assert.match(message, /TESTE-VERTO-001/);
+  assert.match(message, /n.o foi salvo nem truncado/i);
+  assert.equal(getTissProviderCodeLengthError('TESTE-VERTO-00'), '');
+  assert.match(payerPanelCode, /aria-invalid=\{Boolean\(payerTissFieldErrors\.contractedProviderCode\)\}/);
+  assert.doesNotMatch(payerPanelCode, /id="payer-contracted-provider-code"[\s\S]{0,500}maxLength=\{14\}/);
+});
+
+test('procedimento com dependencias exibe bloqueio explicativo sem alterar historico', () => {
+  const mappings: Parameters<typeof getProcedureSetupDependencyLabels>[0]['mappings'] = [
+    { id: 'mapping-1', payerId: 'payer-1', serviceCatalogId: 'service-1', active: true },
+  ];
+  const prices: Parameters<typeof getProcedureSetupDependencyLabels>[0]['prices'] = [
+    { id: 'price-1', payerId: 'payer-1', serviceCatalogId: 'service-1', active: true },
+  ];
+  const dependencies = getProcedureSetupDependencyLabels({
+    serviceId: 'service-1',
+    mappings,
+    prices,
+  });
+  assert.deepEqual(dependencies, ['De/Para cadastrado', 'valor negociado cadastrado']);
+  assert.deepEqual(getProcedureSetupDependencyLabels({ serviceId: 'service-2', mappings, prices }), []);
+  assert.match(payerPanelCode, /ativo e protegido contra remoção sem conferência/);
+  assert.match(payerPanelCode, /Não pode ser removido nesta etapa porque possui/);
+  assert.match(payerPanelCode, /A inativação é feita no modo avançado/);
+});
+
+test('POST idempotente atualiza o DePara existente e confirma a vigencia devolvida pelo banco', () => {
+  const routeStart = serverCode.indexOf("app.post('/api/admin/tuss/mappings'");
+  const routeEnd = serverCode.indexOf("app.patch('/api/admin/tuss/mappings/:mappingId'", routeStart);
+  const route = serverCode.slice(routeStart, routeEnd);
+  assert.match(route, /isTussUniqueConflict\(persistenceError\)/);
+  assert.match(route, /\.update\(existingPatch\)/);
+  assert.match(route, /\.eq\('id', existing\.data\.id\)/);
+  assert.match(route, /persistedData\.valid_from !== validFrom/);
+  assert.match(route, /TUSS_MAPPING_PERSISTENCE_MISMATCH/);
+  assert.doesNotMatch(route, /return res\.json\(\{ success: true, idempotent: true, data: serializePayerTussMapping\(existing\.data/);
+  assert.match(payerPanelCode, /tussMappingSaveInFlightRef\.current/);
+  assert.match(payerPanelCode, /getPayerTussMappingPersistenceError/);
+});
+
 test('esteira navega somente por acao explicita e preserva contexto do pagador', () => {
   assert.match(payerPanelCode, /setActiveSetupStepKey\(payerSetupReadiness\.currentStepKey\)[\s\S]*?\}, \[selectedPayerId\]\)/);
   assert.doesNotMatch(payerPanelCode, /\}, \[payerSetupReadiness\.currentStepKey\]\)/);
@@ -818,6 +939,7 @@ test('esteira bloqueada por teste de pre-guia explica pendencias', () => {
     },
     activeProcedureCount: 1,
     activeMappingCount: 1,
+    readyMappingCount: 1,
     activePriceCount: 1,
     activeBillingConfigurationCount: 1,
     preGuideTestStatus: 'blocked',
