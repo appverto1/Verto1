@@ -1,6 +1,8 @@
 export const PAYER_DEPENDENT_BILLING_FIELDS = [
   'insuranceCardNumber',
   'insurancePlanName',
+  'insuranceHolderName',
+  'insuranceCardValidUntil',
   'guideNumber',
   'authorizationCode',
   'patientTissAuthorizationId',
@@ -15,6 +17,8 @@ export const clearPayerDependentBillingFields = <T extends BillingFormLike>(form
   ...form,
   insuranceCardNumber: '',
   insurancePlanName: '',
+  insuranceHolderName: '',
+  insuranceCardValidUntil: '',
   guideNumber: '',
   authorizationCode: '',
   patientTissAuthorizationId: '',
@@ -47,6 +51,8 @@ export const buildPayerScopedBillingForm = <T extends BillingFormLike>(
     serviceType: text(suggestion.serviceType || suggestion.service_type || previous.serviceType),
     insuranceCardNumber: text(suggestion.insuranceCardNumber || suggestion.insurance_card_number),
     insurancePlanName: text(suggestion.insurancePlanName || suggestion.insurance_plan_name),
+    insuranceHolderName: text(suggestion.insuranceHolderName || suggestion.insurance_holder_name),
+    insuranceCardValidUntil: text(suggestion.insuranceCardValidUntil || suggestion.insurance_card_valid_until),
     guideNumber: text(suggestion.guideNumber || suggestion.guide_number || tissAuthorization.guideNumber || tissAuthorization.guide_number),
     authorizationCode: text(
       suggestion.authorizationCode ||

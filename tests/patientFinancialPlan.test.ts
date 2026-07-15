@@ -476,10 +476,19 @@ test('modal de agendamento nao herda convenio legado quando ha planos ativos amb
   assert.match(coordinatorCode, /preferredInsurancePlans\.length === 1/);
   assert.match(coordinatorCode, /if \(insurancePlans\.length > 0\) \{/);
   assert.match(coordinatorCode, /payerId: "",\s*payerName: "",\s*insurancePlanName: "",\s*insuranceCardNumber: ""/);
-  assert.match(coordinatorCode, /insurancePlanName: String\(insurancePlan\?\.insurancePlanName \|\| ""\)\.trim\(\)/);
-  assert.match(coordinatorCode, /insuranceCardNumber: String\(insurancePlan\?\.insuranceCardNumber \|\| ""\)\.trim\(\)/);
-  assert.doesNotMatch(coordinatorCode, /insurancePlan\?\.insurancePlanName \|\| insuranceEligibility\.insurancePlanCategory/);
-  assert.doesNotMatch(coordinatorCode, /insuranceCardNumber: String\(insuranceEligibility\.insuranceCardNumber \|\| ""\)\.trim\(\),[\s\S]{0,260}planPayerId/);
+  assert.match(coordinatorCode, /const eligibilityMatchesPlan =/);
+  assert.match(
+    coordinatorCode,
+    /insurancePlan\?\.insurancePlanName \|\|\s*\(eligibilityMatchesPlan \? insuranceEligibility\.insurancePlanCategory : ""\)/,
+  );
+  assert.match(
+    coordinatorCode,
+    /insurancePlan\?\.insuranceCardNumber \|\|\s*\(eligibilityMatchesPlan \? insuranceEligibility\.insuranceCardNumber : ""\)/,
+  );
+  assert.doesNotMatch(
+    coordinatorCode,
+    /insurancePlan\?\.insurancePlanName \|\|\s*insuranceEligibility\.insurancePlanCategory/,
+  );
 });
 
 test('modal de agendamento mostra plano e carteirinha somente leitura', () => {

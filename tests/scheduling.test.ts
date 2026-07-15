@@ -567,8 +567,8 @@ test('agendamento mostra autorizacoes disponiveis e permite usar guia sem consum
   assert.match(coordinatorCode, /fora da validade da sess.o/);
   assert.match(coordinatorCode, /procedimento\/TUSS n.o . compat.vel/);
   assert.match(coordinatorCode, /sem saldo dispon.vel/);
-  assert.match(coordinatorCode, /Reservado:/);
-  assert.match(coordinatorCode, /Consumido:/);
+  assert.match(coordinatorCode, /Reservadas:/);
+  assert.match(coordinatorCode, /Consumidas:/);
   assert.match(coordinatorCode, /setSessionGuideNumber\(String\(authorization\?\.guideNumber/);
   assert.match(coordinatorCode, /setSessionAuthorizationCode\(String\(authorization\?\.authorizationCode/);
   assert.match(coordinatorCode, /sessionPatientTissAuthorizationId/);

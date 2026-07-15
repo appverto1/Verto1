@@ -3138,13 +3138,34 @@ export function CoordinatorDashboard({
       ),
     ).trim();
     if (planPayerId || planPayerName) {
+      const eligibilityPayerName = normalizeUtf8Text(String(insuranceEligibility.insuranceName || "")).trim();
+      const eligibilityMatchesPlan =
+        !eligibilityPayerName ||
+        !planPayerName ||
+        normalizePayerLookup(eligibilityPayerName) === normalizePayerLookup(planPayerName);
       return {
         payerId: planPayerId,
         payerName: planPayerName,
-        insurancePlanName: String(insurancePlan?.insurancePlanName || "").trim(),
-        insuranceCardNumber: String(insurancePlan?.insuranceCardNumber || "").trim(),
-        insuranceHolderName: String(insurancePlan?.insuranceCardHolder || "").trim(),
-        insuranceCardValidUntil: String(insurancePlan?.insuranceCardValidUntil || "").trim(),
+        insurancePlanName: String(
+          insurancePlan?.insurancePlanName ||
+            (eligibilityMatchesPlan ? insuranceEligibility.insurancePlanCategory : "") ||
+            "",
+        ).trim(),
+        insuranceCardNumber: String(
+          insurancePlan?.insuranceCardNumber ||
+            (eligibilityMatchesPlan ? insuranceEligibility.insuranceCardNumber : "") ||
+            "",
+        ).trim(),
+        insuranceHolderName: String(
+          insurancePlan?.insuranceCardHolder ||
+            (eligibilityMatchesPlan ? insuranceEligibility.insuranceHolderName : "") ||
+            "",
+        ).trim(),
+        insuranceCardValidUntil: String(
+          insurancePlan?.insuranceCardValidUntil ||
+            (eligibilityMatchesPlan ? insuranceEligibility.insuranceCardValidUntil : "") ||
+            "",
+        ).trim(),
       };
     }
 
@@ -3537,12 +3558,6 @@ export function CoordinatorDashboard({
       available: available !== null && Number.isFinite(available) ? available : null,
     };
   };
-  const formatSessionAuthorizationBalance = (authorization: any) => {
-    const balance = getSessionAuthorizationBalanceParts(authorization);
-    if (balance.authorized > 0 && balance.available !== null) return `${balance.available} de ${balance.authorized} sessões`;
-    if (balance.available !== null) return String(balance.available);
-    return "sem limite informado";
-  };
   const applySessionTissAuthorization = (authorization: any) => {
     if (!authorization) return;
     setSessionGuideNumber(String(authorization?.guideNumber || ""));
@@ -3582,11 +3597,12 @@ export function CoordinatorDashboard({
               {canUse ? "Utilizável para esta consulta" : authorization?.availabilityLabel || authorization?.status || "Status não informado"}
               {validity ? ` · Validade ${validity}` : ""}
             </p>
-            <p className="mt-1 text-[11px] font-semibold text-slate-500">
-              Disponível: {formatSessionAuthorizationBalance(authorization)}
-              {balance.reserved > 0 ? ` · Reservado: ${balance.reserved}` : ""}
-              {balance.consumed > 0 ? ` · Consumido: ${balance.consumed}` : ""}
-            </p>
+            <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] font-medium text-slate-500 sm:grid-cols-4">
+              <span>Disponíveis: {balance.available ?? "sem limite"}</span>
+              <span>Reservadas: {balance.reserved}</span>
+              <span>Consumidas: {balance.consumed}</span>
+              <span>Autorizadas: {balance.authorized || "sem limite"}</span>
+            </div>
             {!canUse && authorization?.unavailableReason && (
               <p className="mt-1 text-[11px] font-medium text-amber-700">Motivo: {authorization.unavailableReason}</p>
             )}
@@ -3640,6 +3656,12 @@ export function CoordinatorDashboard({
         return;
       }
       const suggestion = result.data?.suggestion || result.data || null;
+      if (suggestion) {
+        setSessionInsurancePlanName((current) => current || String(suggestion?.insurancePlanName || suggestion?.insurance_plan_name || ""));
+        setSessionInsuranceCardNumber((current) => current || String(suggestion?.insuranceCardNumber || suggestion?.insurance_card_number || ""));
+        setSessionInsuranceHolderName((current) => current || String(suggestion?.insuranceHolderName || suggestion?.insurance_holder_name || ""));
+        setSessionInsuranceCardValidUntil((current) => current || String(suggestion?.insuranceCardValidUntil || suggestion?.insurance_card_valid_until || ""));
+      }
       setSessionBillingSuggestionState({ loading: false, error: "", suggestion });
     }).catch(() => {
       if (!cancelled) {

@@ -166,7 +166,7 @@ test('salvar contexto comum usa fallback e autorizacao exige reserva atomica dis
   assert.match(route, /documentos apos pagador falharam/);
   assert.match(route, /error: 'Não foi possível salvar o pagador da consulta agora\.'/);
   assert.match(route, /TISS_AUTHORIZATION_RESERVATION_SCHEMA_UNAVAILABLE/);
-  assert.match(route, /A reserva atômica de autorização ainda não está disponível/);
+  assert.match(route, /Não foi possível reservar esta autorização porque a estrutura necessária ainda não está disponível/);
 
   const fetchStart = serverCode.indexOf('const fetchAppointmentForBillingContext');
   const fetchSlice = serverCode.slice(fetchStart, fetchStart + 7000);
@@ -206,7 +206,7 @@ test('detalhe do fechamento tolera colunas novas do pagador ausentes', () => {
 test('criacao da consulta cria contexto inicial sem sobrescrever edicao posterior', () => {
   assert.match(serverCode, /upsertInitialBillingContextFromAppointment/);
   assert.match(serverCode, /overwriteExplicit\?: boolean/);
-  assert.match(serverCode, /if \(existing\.data\?\.id && \(!params\.overwriteExplicit \|\| !explicitFinancialContextType\)\) return/);
+  assert.match(serverCode, /existing\.data\?\.id &&\s*!requestedTissAuthorizationId &&\s*\(!params\.overwriteExplicit \|\| !explicitFinancialContextType\)/);
   assert.match(serverCode, /suggestedBilling = await resolveAppointmentBillingSuggestion/);
   assert.match(serverCode, /payer_name_snapshot: payerName \|\| null/);
   assert.match(serverCode, /insurance_card_number: sanitizeString\(appointmentPayload\?\.insuranceCardNumber/);
@@ -216,7 +216,7 @@ test('criacao da consulta cria contexto inicial sem sobrescrever edicao posterio
   assert.match(serverCode, /explicitFinancialContext: Boolean\(explicitFinancialContextType\)/);
   assert.match(serverCode, /skipTussResolution: financialContextSkipsInsuranceBilling\(financialContextType\)/);
   assert.match(serverCode, /created_at: existing\.data\?\.created_at \|\| new Date\(\)\.toISOString\(\)/);
-  assert.match(serverCode, /source: sanitizeString\(\s*explicitFinancialContextType[\s\S]*?'APPOINTMENT_CONTEXT'/);
+  assert.match(serverCode, /source: sanitizeString\(\s*selectedTissAuthorization\?\.authorizationId[\s\S]*?'PATIENT_TISS_AUTHORIZATION'[\s\S]*?explicitFinancialContextType[\s\S]*?'APPOINTMENT_CONTEXT'/);
 });
 
 test('agendamento faturavel exige contexto financeiro explicito', () => {
@@ -257,8 +257,8 @@ test('criacao e edicao da consulta exibem e persistem plano e carteirinha', () =
   assert.match(coordinatorCode, /const \[sessionInsurancePlanName, setSessionInsurancePlanName\] = useState\(""\)/);
   assert.match(coordinatorCode, /const \[sessionInsuranceCardNumber, setSessionInsuranceCardNumber\] = useState\(""\)/);
   assert.match(coordinatorCode, /normalizePatientInsuranceEligibility\(patient\)/);
-  assert.match(coordinatorCode, /insurancePlanName: String\(insurancePlan\?\.insurancePlanName \|\| ""\)\.trim\(\)/);
-  assert.match(coordinatorCode, /insuranceCardNumber: String\(insurancePlan\?\.insuranceCardNumber \|\| ""\)\.trim\(\)/);
+  assert.match(coordinatorCode, /insurancePlanName: String\([\s\S]*?insurancePlan\?\.insurancePlanName[\s\S]*?eligibilityMatchesPlan/);
+  assert.match(coordinatorCode, /insuranceCardNumber: String\([\s\S]*?insurancePlan\?\.insuranceCardNumber[\s\S]*?eligibilityMatchesPlan/);
   assert.match(coordinatorCode, /Dados do plano/);
   assert.match(coordinatorCode, /Somente leitura no agendamento/);
   assert.match(coordinatorCode, /Editar dados do convênio no paciente/);
@@ -282,7 +282,7 @@ test('novas consultas copiam o vinculo atual sem alterar snapshots antigos', () 
   assert.match(appCode, /const effectiveInsuranceCardNumber = usesInsuranceContext/);
   assert.match(appCode, /insurancePlanName: effectiveInsurancePlanName/);
   assert.match(appCode, /insuranceCardNumber: effectiveInsuranceCardNumber/);
-  assert.match(serverCode, /if \(existing\.data\?\.id && \(!params\.overwriteExplicit \|\| !explicitFinancialContextType\)\) return/);
+  assert.match(serverCode, /existing\.data\?\.id &&\s*!requestedTissAuthorizationId &&\s*\(!params\.overwriteExplicit \|\| !explicitFinancialContextType\)/);
   assert.match(serverCode, /appointmentPayload\?\.insurancePlanName \|\| appointmentPayload\?\.insurance_plan_name \|\| suggestedBilling/);
   assert.match(serverCode, /appointmentPayload\?\.insuranceCardNumber \|\| appointmentPayload\?\.insurance_card_number/);
 });
@@ -333,7 +333,7 @@ test('detalhe da consulta salva pagador no contexto administrativo', () => {
 });
 
 test('modal preenche sugestao do paciente com carteirinha sem sobrescrever cadastro', () => {
-  assert.match(serverCode, /\.from\('patients'\)[\s\S]*\.select\('id, insurance_type, insurance_name, insurance_card_number, insurance_plan_category'\)/);
+  assert.match(serverCode, /\.from\('patients'\)[\s\S]*\.select\('id, insurance_type, insurance_name, insurance_card_number, insurance_card_valid_until, insurance_plan_category, insurance_holder_name'\)/);
   assert.match(serverCode, /const patientInsuranceCardForPayer = \(payerName\?: any\) =>/);
   assert.match(serverCode, /patientInsuranceFallbackMatches\(payerName\) \? patientInsuranceCardNumber : ''/);
   assert.match(serverCode, /const patientInsurancePlanName = sanitizeString\(patientBillingRow\?\.insurance_plan_category, 160\)/);
@@ -476,7 +476,7 @@ test('consulta e modal sugerem autorização TISS vigente do paciente sem usar T
   assert.match(serverCode, /dedupePatientTissAuthorizationSelectionOptions/);
   assert.match(serverCode, /fetchAppointmentTissAuthorizationReservationCounts/);
   assert.match(serverCode, /suggestedBilling = await resolveAppointmentBillingSuggestion\(/);
-  assert.match(serverCode, /patient_tiss_authorization_id: suggestedTissAuthorization\?\.authorizationId/);
+  assert.match(serverCode, /patient_tiss_authorization_id: selectedTissAuthorization\?\.authorizationId/);
   assert.match(serverCode, /Esta autoriza..o n.o possui saldo dispon.vel/);
   assert.match(serverCode, /Esta autoriza..o n.o est. dispon.vel para a data, conv.nio ou procedimento da consulta/);
   assert.match(serverCode, /conflictType: 'authorization'/);
