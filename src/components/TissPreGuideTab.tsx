@@ -25,6 +25,11 @@ import {
 import { ActiveFilterBanner } from "./ActiveFilterBanner";
 import { dataService } from "../services/dataService";
 import { getDefaultTissOfficialStrategyDescriptor } from "../services/tissOfficial/capabilities";
+import {
+  attendanceCharacters040300,
+  attendanceRegimes040300,
+  attendanceTypes040300,
+} from "../services/tissOfficial/versions/communication040300/domains";
 import { validateAntiGlosaBatchForOfficialXml, validateAntiGlosaForPreGuide } from "../services/tissAntiGlosaChecklist";
 import { formatDateTimeInAppointmentTimezone } from "../utils/scheduling";
 
@@ -578,8 +583,9 @@ function officialTrackingStatusMeta(status?: string | null) {
 }
 
 function officialGuideTrackingStatusMeta(status?: string | null) {
-  const normalized = String(status || "sent").trim();
+  const normalized = String(status || "generated").trim();
   const map: Record<string, { label: string; className: string }> = {
+    generated: { label: "Preparada", className: "bg-slate-100 text-slate-700 ring-slate-200" },
     sent: { label: "Enviada", className: "bg-sky-50 text-sky-700 ring-sky-100" },
     under_review: { label: "Em análise", className: "bg-indigo-50 text-indigo-700 ring-indigo-100" },
     paid: { label: "Paga", className: "bg-emerald-50 text-emerald-700 ring-emerald-100" },
@@ -592,7 +598,7 @@ function officialGuideTrackingStatusMeta(status?: string | null) {
     appeal_rejected: { label: "Recurso negado", className: "bg-rose-50 text-rose-700 ring-rose-100" },
     cancelled: { label: "Cancelada", className: "bg-slate-100 text-slate-600 ring-slate-200" },
   };
-  return map[normalized] || map.sent;
+  return map[normalized] || map.generated;
 }
 
 function officialTrackingEventLabel(eventType?: string | null) {
@@ -1766,8 +1772,16 @@ export function TissPreGuideTab({
         return;
       }
       setProfileEditor(null);
-      if (detail) await revalidate(detail);
-      setMessage("Cadastro global salvo. Pré-guia atual revalidada e demais pré-guias afetadas marcadas para revalidação.");
+      const appointmentId = String(detail?.appointmentId || "").trim();
+      const [detailResult] = await Promise.all([
+        appointmentId ? dataService.getTissPreGuide(appointmentId) : Promise.resolve(null),
+        loadRows(),
+      ]);
+      if (detailResult?.success && detailResult.data) setDetail(detailResult.data);
+      const pipelineErrors = Number(result?.tissPipeline?.errors || 0);
+      setMessage(pipelineErrors > 0
+        ? "Cadastro global salvo. Algumas Pré-guias não puderam ser atualizadas; use a revalidação manual como contingência."
+        : "Cadastro global salvo. As Pré-guias afetadas foram atualizadas automaticamente.");
     } finally {
       setProfileSaving(false);
     }
@@ -2391,7 +2405,7 @@ export function TissPreGuideTab({
                 <th className="px-4 py-3">Lote</th>
                 <th className="px-4 py-3">Geração</th>
                 <th className="px-4 py-3">Guias</th>
-                <th className="px-4 py-3">Valor enviado</th>
+                <th className="px-4 py-3">Valor do lote</th>
                 <th className="px-4 py-3">Acompanhamento</th>
                 <th className="px-4 py-3">Protocolo</th>
                 <th className="px-4 py-3">Pago</th>
@@ -3180,7 +3194,7 @@ export function TissPreGuideTab({
                           <DetailField label="Enviado em" value={tracking.sentAt ? formatDate(tracking.sentAt) : "Não enviado"} />
                           <DetailField label="Canal" value={fieldValue(tracking.sentChannel, "Não informado")} />
                           <DetailField label="Previsão de retorno" value={tracking.expectedReturnDate ? formatDate(tracking.expectedReturnDate) : "Não informada"} />
-                          <DetailField label="Valor enviado" value={formatCurrency(tracking.totalSentAmountCents ?? officialDocumentDetail.totalAmountCents)} />
+                          <DetailField label={tracking.sentAt ? "Valor enviado" : "Valor preparado"} value={formatCurrency(tracking.totalSentAmountCents ?? officialDocumentDetail.totalAmountCents)} />
                           <DetailField label="Valor pago" value={formatCurrency(tracking.totalPaidAmountCents)} />
                           <DetailField label="Valor glosado" value={formatCurrency(tracking.totalGlossedAmountCents)} />
                           <DetailField label="Valor pendente" value={formatCurrency(tracking.totalPendingAmountCents ?? officialDocumentDetail.totalAmountCents)} />
@@ -3206,7 +3220,7 @@ export function TissPreGuideTab({
                             <th className="px-3 py-2">Data</th>
                             <th className="px-3 py-2">Guia</th>
                             <th className="px-3 py-2">TUSS</th>
-                            <th className="px-3 py-2">Enviado</th>
+                            <th className="px-3 py-2">Valor do lote</th>
                             <th className="px-3 py-2">Pago</th>
                             <th className="px-3 py-2">Glosado</th>
                             <th className="px-3 py-2">Status</th>
@@ -4052,8 +4066,8 @@ export function TissPreGuideTab({
                     </label>
                     <EditorField label="CPF/CNPJ" value={profileForm.documentNumber || ""} onChange={(value) => updateProfileField("documentNumber", value)} maxLength={40} />
                     <EditorField label="CNES" value={profileForm.cnesCode || ""} onChange={(value) => updateProfileField("cnesCode", value)} maxLength={40} />
-                    <EditorField label="Código do prestador" value={profileForm.providerCode || ""} onChange={(value) => updateProfileField("providerCode", value)} maxLength={80} />
-                    <EditorField label="Código do prestador na operadora" value={profileForm.ansProviderCode || ""} onChange={(value) => updateProfileField("ansProviderCode", value)} maxLength={80} />
+                    <EditorField label="Código do prestador" value={profileForm.providerCode || ""} onChange={(value) => updateProfileField("providerCode", value)} maxLength={14} />
+                    <EditorField label="Código do prestador na operadora" value={profileForm.ansProviderCode || ""} onChange={(value) => updateProfileField("ansProviderCode", value)} maxLength={14} />
                   </div>
                 </div>
               ) : profileEditor === "payer" ? (
@@ -4080,9 +4094,29 @@ export function TissPreGuideTab({
                         <option value="other">Outro</option>
                       </select>
                     </label>
-                    <EditorField label="Código do contratado na operadora" value={profileForm.contractedProviderCode || ""} onChange={(value) => updateProfileField("contractedProviderCode", value)} maxLength={120} />
+                    <EditorField label="Código do contratado na operadora" value={profileForm.contractedProviderCode || ""} onChange={(value) => updateProfileField("contractedProviderCode", value)} maxLength={14} />
                     <EditorField label="Contratado executante" value={profileForm.contractedExecutant || ""} onChange={(value) => updateProfileField("contractedExecutant", value)} maxLength={160} />
-                    <EditorField label="Tipo de atendimento padrão" value={profileForm.defaultAttendanceType || ""} onChange={(value) => updateProfileField("defaultAttendanceType", value)} maxLength={80} />
+                    <label className="text-xs font-medium text-slate-600">
+                      Tipo de atendimento
+                      <select value={profileForm.defaultAttendanceType || ""} onChange={(event) => updateProfileField("defaultAttendanceType", event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm">
+                        <option value="">Selecione</option>
+                        {attendanceTypes040300.map((option) => <option key={option.code} value={option.code}>{option.code} - {option.label}</option>)}
+                      </select>
+                    </label>
+                    <label className="text-xs font-medium text-slate-600">
+                      Regime de atendimento
+                      <select value={profileForm.defaultAttendanceRegime || ""} onChange={(event) => updateProfileField("defaultAttendanceRegime", event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm">
+                        <option value="">Selecione</option>
+                        {attendanceRegimes040300.map((option) => <option key={option.code} value={option.code}>{option.code} - {option.label}</option>)}
+                      </select>
+                    </label>
+                    <label className="text-xs font-medium text-slate-600">
+                      Caráter de atendimento
+                      <select value={profileForm.defaultAttendanceCharacter || ""} onChange={(event) => updateProfileField("defaultAttendanceCharacter", event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm">
+                        <option value="">Selecione</option>
+                        {attendanceCharacters040300.map((option) => <option key={option.code} value={option.code}>{option.code} - {option.label}</option>)}
+                      </select>
+                    </label>
                   </div>
                   <div className="grid gap-2 sm:grid-cols-2">
                     {[
@@ -4125,7 +4159,7 @@ export function TissPreGuideTab({
                     <EditorField label="UF do conselho" value={profileForm.councilState || ""} onChange={(value) => updateProfileField("councilState", value.toUpperCase().slice(0, 2))} maxLength={2} />
                     <EditorField label="CBO" value={profileForm.cboCode || ""} onChange={(value) => updateProfileField("cboCode", value)} maxLength={40} />
                     <EditorField label="Especialidade" value={profileForm.specialtyName || ""} onChange={(value) => updateProfileField("specialtyName", value)} maxLength={120} />
-                    <EditorField label="Código do prestador" value={profileForm.providerCode || ""} onChange={(value) => updateProfileField("providerCode", value)} maxLength={80} />
+                    <EditorField label="Código do prestador" value={profileForm.providerCode || ""} onChange={(value) => updateProfileField("providerCode", value)} maxLength={14} />
                   </div>
                 </div>
               )}
@@ -4147,7 +4181,7 @@ export function TissPreGuideTab({
                 <button type="button" onClick={() => setProfileEditor(null)} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700">Cancelar</button>
                 <button type="button" onClick={() => void saveProfile()} disabled={profileSaving || profileLoading} className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-60">
                   {profileSaving && <Loader2 size={15} className="animate-spin" />}
-                  Salvar cadastro global e revalidar pré-guia atual
+                  {profileSaving ? "Atualizando Pré-Guia..." : "Salvar cadastro global"}
                 </button>
               </div>
             </footer>

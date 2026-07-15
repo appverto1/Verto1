@@ -124,6 +124,7 @@ type MonthlyConferenceCenterProps = {
   canExport?: boolean;
   initialTab?: ConferenceTab;
   tissInitialPanel?: "preGuides" | "batchDrafts" | "xmlDrafts";
+  initialPayerId?: string;
   navigationIntentKey?: number;
   onOpenAppointment?: (row: ConferenceRow) => void;
   onOpenPatient?: (row: ConferenceRow) => void;
@@ -456,6 +457,7 @@ export function MonthlyConferenceCenter({
   canExport = false,
   initialTab,
   tissInitialPanel,
+  initialPayerId,
   navigationIntentKey,
   onOpenAppointment,
   onOpenPatient,
@@ -557,6 +559,11 @@ export function MonthlyConferenceCenter({
       setActiveKpiFilter(null);
     }
   }, [initialTab, navigationIntentKey]);
+
+  useEffect(() => {
+    setPayerId(initialPayerId || "");
+    setPage(1);
+  }, [initialPayerId, navigationIntentKey]);
 
   const serviceTypeOptions = useMemo(() => {
     const values = new Set<string>();

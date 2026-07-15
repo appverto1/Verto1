@@ -6,6 +6,11 @@ import {
   clearPayerDependentBillingFields,
   payerScopedBillingSourceLabel,
 } from '../src/utils/appointmentBillingPayerSwitch';
+import {
+  findSuggestedTissAuthorizationForAppointment,
+  getPatientTissAuthorizationQuantitySummary,
+  getPatientTissAuthorizationVisualState,
+} from '../src/utils/patientTissAuthorizationView';
 
 const root = process.cwd();
 const serverCode = readFileSync(join(root, 'server.ts'), 'utf8');
@@ -20,6 +25,7 @@ const dataServiceCode = readFileSync(join(root, 'src/services/dataService.ts'), 
 const financialContextCode = readFileSync(join(root, 'src/utils/appointmentFinancialContext.ts'), 'utf8');
 const migrationCode = readFileSync(join(root, 'supabase/migrations/20260601120000_appointment_billing_context_patient_index.sql'), 'utf8');
 const patientDefaultMigrationCode = readFileSync(join(root, 'supabase/migrations/20260602123000_appointment_billing_context_patient_defaults.sql'), 'utf8');
+const atomicAuthorizationReservationMigrationCode = readFileSync(join(root, 'supabase/migrations/20260715120000_atomic_tiss_authorization_reservation.sql'), 'utf8');
 
 const tests: Array<{ name: string; fn: () => void }> = [];
 const test = (name: string, fn: () => void) => tests.push({ name, fn });
@@ -40,10 +46,13 @@ test('endpoint de contexto faz upsert idempotente por consulta', () => {
   assert.ok(routeEnd > routeStart, 'rota de salvar contexto deve terminar antes da dispensa de documento');
   const route = serverCode.slice(routeStart, routeEnd);
   assert.match(route, /await persistAppointmentClosureCheck\(\{\s*appointmentId: appointment\.id,\s*user: req\.session\.user,\s*force: true\s*\}\)/);
-  assert.match(route, /const data = await upsertAppointmentBillingContextRow\(payload, Boolean\(existing\?\.id\)\)/);
+  assert.match(route, /let data: any = null/);
+  assert.match(route, /supabase\.rpc\('reserve_tiss_authorization_billing_context'/);
+  assert.match(route, /data = await upsertAppointmentBillingContextRow\(payload, Boolean\(existing\?\.id\)\)/);
   assert.doesNotMatch(route, /regenerateClosureForAppointments/);
   assert.doesNotMatch(route, /\.upsert\(\[payload\]/);
-  assert.match(route, /message: 'Pagador salvo na consulta\.'/);
+  assert.match(route, /appliedTissAuthorization\?\.authorizationId \? 'Autorização aplicada\.' : 'Pagador salvo na consulta\.'/);
+  assert.match(route, /runAffectedTissPipeline\([\s\S]*appointmentId: appointment\.id[\s\S]*limit: 1/);
   assert.doesNotMatch(serverCode, /\.select\('\*'\)/);
 });
 
@@ -60,11 +69,73 @@ test('salvar pagador exige appointment persistido e nao cria consulta nova', () 
   const route = serverCode.slice(routeStart, routeEnd);
   const mirrorIndex = route.indexOf('ensureAppointmentMirrorForBillingContext');
   const existingIndex = route.indexOf('const existing = await fetchAppointmentBillingContextRow');
-  const saveIndex = route.indexOf('const data = await upsertAppointmentBillingContextRow');
+  const saveIndex = route.indexOf("supabase.rpc('reserve_tiss_authorization_billing_context'");
   assert.ok(mirrorIndex > 0, 'rota deve validar appointments antes de gravar pagador');
   assert.ok(existingIndex > mirrorIndex, 'contexto existente deve ser buscado depois da validacao');
   assert.ok(saveIndex > existingIndex, 'upsert do pagador deve acontecer depois da validacao');
   assert.match(route, /Sincronize a agenda e tente salvar o pagador novamente/);
+});
+
+test('saldo de autorizacao separa consumido, reservado e disponivel sem sugerir pacote esgotado', () => {
+  const exhausted = {
+    id: 'auth-1',
+    payerId: 'payer-1',
+    patientId: 'patient-1',
+    authorizedQuantity: 12,
+    usedQuantity: 0,
+    reservedQuantity: 12,
+    validFrom: '2026-07-01',
+    validUntil: '2026-12-31',
+    tussCode: '50000470',
+    serviceName: 'Psicoterapia',
+    active: true,
+  };
+  const summary = getPatientTissAuthorizationQuantitySummary(exhausted);
+  assert.deepEqual(summary, {
+    authorized: 12,
+    consumed: 0,
+    reserved: 12,
+    available: 0,
+    hasPackageLimit: true,
+  });
+  assert.equal(getPatientTissAuthorizationVisualState(exhausted, '2026-07-15').status, 'consumed');
+  assert.equal(findSuggestedTissAuthorizationForAppointment({
+    payerId: 'payer-1',
+    serviceName: 'Psicoterapia',
+    tussCode: '50000470',
+    appointmentDate: '2026-07-15',
+  }, [exhausted]), null);
+
+  const mixedConsumptionAndReservation = getPatientTissAuthorizationQuantitySummary({
+    ...exhausted,
+    usedQuantity: 1,
+    reservedQuantity: 1,
+  });
+  assert.deepEqual(mixedConsumptionAndReservation, {
+    authorized: 12,
+    consumed: 1,
+    reserved: 1,
+    available: 10,
+    hasPackageLimit: true,
+  });
+});
+
+test('reserva de autorizacao e atomica, idempotente, restrita ao tenant e sem acesso do cliente', () => {
+  const reservationCounter = sliceFrom(serverCode, 'async function fetchAppointmentTissAuthorizationReservationCounts', 15000);
+  assert.match(reservationCounter, /reservationsByAppointmentAndAuthorization/);
+  assert.match(reservationCounter, /reservationKey\(appointmentId, authorizationId\)/);
+  assert.match(reservationCounter, /futureCounts/);
+  assert.match(reservationCounter, /historicalOfficialCounts/);
+  assert.match(reservationCounter, /Math\.max\(0, futureReservations\) \+ Math\.max\(0, historicalOfficialCommitments - alreadyConsumed\)/);
+  assert.match(atomicAuthorizationReservationMigrationCode, /create or replace function public\.reserve_tiss_authorization_billing_context/);
+  assert.match(atomicAuthorizationReservationMigrationCode, /from public\.patient_payer_authorizations[\s\S]*organization_id = p_organization_id[\s\S]*patient_id = p_patient_id[\s\S]*for update/);
+  assert.match(atomicAuthorizationReservationMigrationCode, /TISS_AUTHORIZATION_NO_AVAILABLE_BALANCE/);
+  assert.match(atomicAuthorizationReservationMigrationCode, /v_future_commitments/);
+  assert.match(atomicAuthorizationReservationMigrationCode, /v_historical_official_commitments/);
+  assert.match(atomicAuthorizationReservationMigrationCode, /greatest\(0, v_future_commitments\)[\s\S]*greatest\(0, v_historical_official_commitments - v_consumed\)/);
+  assert.match(atomicAuthorizationReservationMigrationCode, /on conflict \(organization_id, appointment_id\) do update/);
+  assert.match(atomicAuthorizationReservationMigrationCode, /revoke all on function[\s\S]*from authenticated/);
+  assert.match(atomicAuthorizationReservationMigrationCode, /grant execute on function[\s\S]*to service_role/);
 });
 
 test('conflito de contexto existente vira update idempotente', () => {
@@ -74,7 +145,7 @@ test('conflito de contexto existente vira update idempotente', () => {
   assert.match(serverCode, /\.update\(cleanObject\(\{\s*\.\.\.row,\s*id: existingResult\.data\.id,/);
 });
 
-test('salvar contexto usa fallback de schema sem expor 503 tecnico', () => {
+test('salvar contexto comum usa fallback e autorizacao exige reserva atomica disponivel', () => {
   assert.match(serverCode, /APPOINTMENT_BILLING_CONTEXT_SCHEMA_FALLBACK_COLUMNS/);
   assert.match(serverCode, /APPOINTMENT_BILLING_CONTEXT_METADATA_VALUE_COLUMNS/);
   assert.match(serverCode, /BILLING_CONTEXT_APPOINTMENT_SELECT/);
@@ -89,12 +160,13 @@ test('salvar contexto usa fallback de schema sem expor 503 tecnico', () => {
   const routeStart = serverCode.indexOf("app.patch('/api/appointments/:appointmentId/billing-context'");
   const routeEnd = serverCode.indexOf("app.post('/api/appointments/:appointmentId/required-documents", routeStart);
   const route = serverCode.slice(routeStart, routeEnd);
-  assert.match(route, /const data = await upsertAppointmentBillingContextRow\(payload, Boolean\(existing\?\.id\)\)/);
+  assert.match(route, /data = await upsertAppointmentBillingContextRow\(payload, Boolean\(existing\?\.id\)\)/);
   assert.match(route, /auditoria apos pagador falhou/);
   assert.match(route, /pendencias apos pagador falharam/);
   assert.match(route, /documentos apos pagador falharam/);
   assert.match(route, /error: 'Não foi possível salvar o pagador da consulta agora\.'/);
-  assert.doesNotMatch(route, /status\(503\)/);
+  assert.match(route, /TISS_AUTHORIZATION_RESERVATION_SCHEMA_UNAVAILABLE/);
+  assert.match(route, /A reserva atômica de autorização ainda não está disponível/);
 
   const fetchStart = serverCode.indexOf('const fetchAppointmentForBillingContext');
   const fetchSlice = serverCode.slice(fetchStart, fetchStart + 7000);

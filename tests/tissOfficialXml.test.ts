@@ -165,12 +165,84 @@ test("serializa datas, horas, quantidades, valores e caracteres XML corretamente
   assert.equal(result.ok, true);
   if (!result.ok) return;
   assert.match(result.xml, /<ans:dataExecucao>2026-06-10<\/ans:dataExecucao>/);
-  assert.match(result.xml, /<ans:horaInicial>13:00:00<\/ans:horaInicial>/);
+  assert.match(result.xml, /<ans:horaInicial>10:00:00<\/ans:horaInicial>/);
   assert.match(result.xml, /<ans:quantidadeExecutada>1<\/ans:quantidadeExecutada>/);
   assert.match(result.xml, /<ans:valorUnitario>197\.00<\/ans:valorUnitario>/);
   assert.match(result.xml, /<ans:valorTotalGeral>197\.00<\/ans:valorTotalGeral>/);
   assert.match(result.xml, /Clínica Verto &amp; Saúde Ltda\./);
   assert.equal(result.totalAmountCents, 19700);
+});
+
+test("converte UTC uma unica vez para o timezone da clinica e preserva horario local sem offset", () => {
+  const utc = communication040300Strategy.generate({
+    ...validInput(),
+    timeZone: "America/Sao_Paulo",
+  });
+  assert.equal(utc.ok, true);
+  if (utc.ok) {
+    assert.match(utc.xml, /<ans:horaInicial>10:00:00<\/ans:horaInicial>/);
+    assert.match(utc.xml, /<ans:horaFinal>10:50:00<\/ans:horaFinal>/);
+    assert.match(utc.xml, /<ans:horaRegistroTransacao>11:30:00<\/ans:horaRegistroTransacao>/);
+  }
+
+  const local = validPreGuide({
+    scheduled_start: "2026-06-10T09:00:00",
+    scheduled_end: "2026-06-10T09:50:00",
+    snapshot_data: {
+      ...validPreGuide().snapshot_data,
+      appointment: {
+        id: APPOINTMENT_ID,
+        scheduledStart: "2026-06-10T09:00:00",
+        scheduledEnd: "2026-06-10T09:50:00",
+      },
+    },
+  });
+  const localResult = communication040300Strategy.generate({
+    ...validInput([local]),
+    timeZone: "America/Sao_Paulo",
+  });
+  assert.equal(localResult.ok, true);
+  if (localResult.ok) assert.match(localResult.xml, /<ans:horaInicial>09:00:00<\/ans:horaInicial>/);
+});
+
+test("codigo de prestador acima do limite bloqueia sem truncar e nome vem da identidade contratual", () => {
+  const invalidProviderCode = "TESTE-VERTO-001";
+  const invalid = validPreGuide({
+    snapshot_data: {
+      ...validPreGuide().snapshot_data,
+      payer: {
+        ...validPreGuide().snapshot_data.payer,
+        contractedProviderCode: invalidProviderCode,
+        contractedExecutant: "Clinica Verto - Ambiente de Teste",
+      },
+    },
+  });
+  const invalidResult = communication040300Strategy.generate(validInput([invalid]));
+  assert.equal(invalidResult.ok, false);
+  if (!invalidResult.ok) {
+    assert.ok(invalidResult.issues.some((issue) => issue.code === "TISS_OFFICIAL_PROVIDER_CODE_TOO_LONG"));
+    assert.ok(!invalidResult.issues.some((issue) => issue.message.includes("TESTE-VERTO-00")));
+  }
+
+  const contracted = validPreGuide({
+    snapshot_data: {
+      ...validPreGuide().snapshot_data,
+      payer: {
+        ...validPreGuide().snapshot_data.payer,
+        contractedExecutant: "Clinica Verto - Ambiente de Teste",
+      },
+      provider: {
+        ...validPreGuide().snapshot_data.provider,
+        legalName: "Neurolab",
+      },
+    },
+  });
+  const contractedResult = communication040300Strategy.generate(validInput([contracted]));
+  assert.equal(contractedResult.ok, true);
+  if (contractedResult.ok) {
+    assert.match(contractedResult.xml, /<ans:nomeContratadoSolicitante>Clinica Verto - Ambiente de Teste<\/ans:nomeContratadoSolicitante>/);
+    assert.doesNotMatch(contractedResult.xml, /<ans:nomeContratadoSolicitante>Neurolab<\/ans:nomeContratadoSolicitante>/);
+  }
 });
 
 test("calcula hash TISS MD5 dos valores e SHA-256 determinístico do XML exato", () => {
@@ -736,6 +808,14 @@ test("endpoints de acompanhamento operam em camada separada sem mutar XML oficia
   assert.doesNotMatch(trackingRegion, /xml_content\s*:/);
   assert.doesNotMatch(trackingRegion, /\.update\([\s\S]*?xml_content/);
   assert.doesNotMatch(trackingRegion, /\.from\('tiss_official_documents'\)(?:[^\n]*\n){0,4}\s*\.update\(/);
+});
+
+test("lote ainda não enviado mantém lote e guias em estado preparado", () => {
+  assert.match(serverCode, /trackingStatus === 'generated' \? \{ \.\.\.guide, status: 'generated' \} : guide/);
+  assert.match(uiCode, /generated: \{ label: "Preparada"/);
+  assert.match(uiCode, /tracking\.sentAt \? "Valor enviado" : "Valor preparado"/);
+  assert.match(uiCode, />Valor do lote<\/th>/);
+  assert.doesNotMatch(uiCode, /const normalized = String\(status \|\| "sent"\)/);
 });
 
 test("data service e UI expõem documento oficial sem remover o fluxo de rascunho", () => {

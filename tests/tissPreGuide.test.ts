@@ -1628,6 +1628,15 @@ test('backend persiste de forma idempotente pelo appointment e usa pipeline oper
   );
   assert.match(centralRevalidation, /buildAndPersistTissPreGuideForAppointment/);
   assert.match(centralRevalidation, /tissPreGuide: tissPreGuide\.data \|\| null/);
+  const affectedPipelineCollector = serverCode.slice(
+    serverCode.indexOf('const collectTissPipelineAffectedFutureAppointmentIds'),
+    serverCode.indexOf('const runAffectedTissPipeline'),
+  );
+  assert.match(affectedPipelineCollector, /pendingPreGuideAppointmentIds/);
+  assert.match(affectedPipelineCollector, /\.is\('official_document_id', null\)/);
+  assert.doesNotMatch(affectedPipelineCollector, /\.gte\('scheduled_start', today\)/);
+  assert.match(affectedPipelineCollector, /pendingPreGuideAppointmentIds\.has\(appointmentId\) \|\| !scheduled \|\| scheduled >= today/);
+  assert.match(affectedPipelineCollector, /\.eq\('therapist_id', professionalId\)/);
   const listRoute = serverCode.slice(
     serverCode.indexOf("app.get('/api/tiss/pre-guides'"),
     serverCode.indexOf("app.post('/api/tiss/pre-guides/revalidate-period'")
@@ -1955,7 +1964,11 @@ test('perfil TISS do prestador salva e le clinic_tiss_profiles sem substituir po
   assert.match(providerPatchRoute, /created_at:\s*existingProfile\?\.created_at \|\| now/);
   assert.match(providerPatchRoute, /document_number:\s*sanitizeString\(req\.body\?\.documentNumber/);
   assert.match(providerPatchRoute, /cnes_code:\s*sanitizeString\(req\.body\?\.cnesCode/);
-  assert.match(providerPatchRoute, /provider_code:\s*sanitizeString\(req\.body\?\.providerCode/);
+  assert.match(providerPatchRoute, /const providerCode = sanitizeString\(req\.body\?\.providerCode/);
+  assert.match(providerPatchRoute, /provider_code:\s*providerCode \|\| null/);
+  assert.match(providerPatchRoute, /providerCode\.length > 14 \|\| ansProviderCode\.length > 14/);
+  assert.match(providerPatchRoute, /TISS_PROVIDER_CODE_TOO_LONG/);
+  assert.match(providerPatchRoute, /runAffectedTissPipeline\([\s\S]*clinic_tiss_profile_changed/);
   assert.doesNotMatch(providerPatchRoute, /professionalName|professional_name|user\.name/);
 });
 
@@ -1979,9 +1992,9 @@ test('cadastros TISS sao globais e reutilizaveis em Configuracoes', () => {
   assert.doesNotMatch(billingTissSettingsCode, /Salvar dados do prestador/);
   assert.match(billingTissSettingsCode, /updatePayerTissProfile/);
   assert.match(billingTissSettingsCode, /updateProfessionalBillingProfile/);
-  assert.match(coordinatorCode, /Pré-guias afetadas podem precisar de revalidação/);
-  assert.match(billingTissSettingsCode, /Pré-guias deste pagador foram marcadas para revalidação/);
-  assert.match(billingTissSettingsCode, /Pré-guias deste profissional foram marcadas para revalidação/);
+  assert.match(coordinatorCode, /Pré-guias afetadas foram atualizadas automaticamente/);
+  assert.match(billingTissSettingsCode, /Pré-guias deste pagador foram atualizadas automaticamente/);
+  assert.match(billingTissSettingsCode, /Pré-guias deste profissional foram atualizadas automaticamente/);
   assert.doesNotMatch(billingTissSettingsCode, /appointmentId|appointment_id/);
 });
 
@@ -2011,8 +2024,26 @@ test('Convênios expõe configuração TISS guiada por operadora', () => {
   assert.match(payerRequirementsCode, /Exige CID/);
   assert.match(payerRequirementsCode, /Código do prestador na operadora/);
   assert.match(payerRequirementsCode, /TISS não aplicável/);
-  assert.match(payerRequirementsCode, /Pré-guias deste pagador foram marcadas para revalidação/);
+  assert.match(payerRequirementsCode, /Pré-guias deste pagador foram atualizadas automaticamente/);
   assert.doesNotMatch(payerRequirementsCode, /Enviar lote|Enviar remessa|Registrar glosa/i);
+});
+
+test('perfil TISS do pagador salva os tres dominios oficiais e revalida somente o pagador afetado', () => {
+  assert.match(preGuideUiCode, /attendanceTypes040300\.map/);
+  assert.match(preGuideUiCode, /attendanceRegimes040300\.map/);
+  assert.match(preGuideUiCode, /attendanceCharacters040300\.map/);
+  assert.match(preGuideUiCode, /defaultAttendanceType/);
+  assert.match(preGuideUiCode, /defaultAttendanceRegime/);
+  assert.match(preGuideUiCode, /defaultAttendanceCharacter/);
+
+  const payerPatchRoute = serverCode.slice(
+    serverCode.indexOf("app.patch('/api/admin/tiss/payer-profiles/:payerId'"),
+    serverCode.indexOf("app.get('/api/admin/tiss/professional-profiles'"),
+  );
+  assert.match(payerPatchRoute, /normalizeAttendanceType040300/);
+  assert.match(payerPatchRoute, /normalizeAttendanceRegime040300/);
+  assert.match(payerPatchRoute, /normalizeAttendanceCharacter040300/);
+  assert.match(payerPatchRoute, /runAffectedTissPipeline\([\s\S]*payerId[\s\S]*payer_tiss_profile_changed/);
 });
 
 test('frontend separa Pré-guias e Rascunhos XML com preview interno', () => {
@@ -2191,7 +2222,9 @@ test('frontend separa Pré-guias e Rascunhos XML com preview interno', () => {
   assert.match(coordinatorCode, /Abrimos o agendamento para coletar assinatura/);
   assert.match(preGuideUiCode, /Pré-guia revalidada com dados globais atualizados/);
   assert.match(preGuideUiCode, /setDetail\(result\.data\)/);
-  assert.match(preGuideUiCode, /Salvar cadastro global e revalidar pré-guia atual/);
+  assert.match(preGuideUiCode, /Atualizando Pré-Guia/);
+  assert.match(preGuideUiCode, /dataService\.getTissPreGuide\(appointmentId\)/);
+  assert.doesNotMatch(preGuideUiCode, /if \(detail\) await revalidate\(detail\)/);
   assert.match(preGuideUiCode, /Você está editando o perfil faturável global da clínica/);
   assert.match(preGuideUiCode, /Você está editando o perfil TISS global deste pagador/);
   assert.match(preGuideUiCode, /Você está editando o perfil faturável global deste profissional/);
@@ -2252,6 +2285,16 @@ test('frontend de Pré-guias apresenta status operacionais sem contradição vis
   ]) {
     assert.equal((detailFooter.match(new RegExp(label, 'g')) || []).length, 1);
   }
+});
+
+test('filtro de pagador chega a conferencia e as Pré-guias com contexto preservado', () => {
+  assert.match(coordinatorCode, /dataService\.getPayers\(\{ status: "ACTIVE", limit: 80 \}\)/);
+  assert.match(coordinatorCode, /payers=\{clinicPayers\}/);
+  assert.match(conferenceCode, /payerId,/);
+  assert.match(conferenceCode, /dataService\.getMonthlyConference\(\{ \.\.\.listPayload, page, limit: 50 \}\)/);
+  assert.match(conferenceCode, /\{payers\.map\(\(payer\) => payer\?\.id/);
+  assert.match(conferenceCode, /<TissPreGuideTab[\s\S]*?payerId=\{payerId\}/);
+  assert.match(conferenceCode, /setPayerId\(initialPayerId \|\| ""\)/);
 });
 
 test('autorizacao TUSS usa DePara server-side e sincronizacao controlada', () => {

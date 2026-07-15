@@ -802,6 +802,54 @@ export const parseBrazilianCurrencyToCents = (value: unknown): number | null => 
   return Number.isSafeInteger(cents) && cents >= 0 ? cents : null;
 };
 
+export const payerTussMappingToForm = (mapping: PayerTussMapping) => {
+  const metadata = mapping.metadata || {};
+  return {
+    serviceCatalogId: mapping.serviceCatalogId || "",
+    tussCodeId: mapping.tussCodeId || "",
+    contractCode: mapping.contractCode || "",
+    contractDescription: mapping.contractDescription || mapping.payerSpecificDescription || "",
+    authorizedCode: mapping.authorizedCode || metadata.authorized_code || metadata.authorizedCode || "",
+    authorizedCodeDescription: mapping.authorizedCodeDescription || metadata.authorized_code_description || metadata.authorizedCodeDescription || "",
+    billingCode: mapping.billingCode || metadata.billing_code || metadata.billingCode || "",
+    billingCodeDescription: mapping.billingCodeDescription || metadata.billing_code_description || metadata.billingCodeDescription || "",
+    operatorPackageCode: mapping.operatorPackageCode || metadata.operator_package_code || metadata.operatorPackageCode || mapping.contractCode || "",
+    operatorPackageDescription: mapping.operatorPackageDescription || metadata.operator_package_description || metadata.operatorPackageDescription || "",
+    billingCodeSource: mapping.billingCodeSource || metadata.billing_code_source || metadata.billingCodeSource || "official_tuss",
+    specialty: mapping.specialty || "",
+    guideType: mapping.guideType || "sp_sadt",
+    billingUnit: mapping.billingUnit || "session",
+    quantityRule: mapping.quantityRule || "per_session",
+    defaultQuantity: mapping.defaultQuantity ? String(mapping.defaultQuantity) : "1",
+    amountCents: formatCentsForBrazilianInput(mapping.amountCents),
+    negotiatedAmountCents: formatCentsForBrazilianInput(mapping.negotiatedAmountCents),
+    standardDurationMinutes: mapping.standardDurationMinutes ? String(mapping.standardDurationMinutes) : "",
+    requiresAuthorization: Boolean(mapping.requiresAuthorization),
+    requiresGuide: Boolean(mapping.requiresGuide),
+    requiresReport: Boolean(mapping.requiresReport),
+    requiresSignature: Boolean(mapping.requiresSignature),
+    requiresProfessionalRegistry: Boolean(mapping.requiresProfessionalRegistry),
+    requiresPatientDocument: Boolean(mapping.requiresPatientDocument),
+    useActualDuration: Boolean(mapping.useActualDuration),
+    validFrom: mapping.validFrom || "",
+    validTo: mapping.validTo || "",
+    source: mapping.source || "manual",
+    notes: mapping.notes || "",
+  };
+};
+
+export const payerProcedurePriceToForm = (price: PayerProcedurePrice) => ({
+  serviceCatalogId: price.serviceCatalogId || "",
+  tussCodeId: price.tussCodeId || "",
+  payerTussMappingId: price.payerTussMappingId || "",
+  amountCents: formatCentsForBrazilianInput(price.amountCents),
+  currency: price.currency || "BRL",
+  validFrom: price.validFrom || "",
+  validUntil: price.validUntil || "",
+  source: price.source || "manual",
+  notes: price.notes || "",
+});
+
 const payerTissMissing = (payer: Payer | null, form: PayerTissForm) => {
   if (!isInsurancePayer(payer)) return [];
   const missing: string[] = [];
@@ -990,10 +1038,7 @@ export function getPayerSetupReadiness(input: {
 
   const criticalSteps = steps.filter((step) => !["authorizations", "anti_glosa", "test"].includes(step.key));
   const blockers = steps.flatMap((step) => step.blockingReasons || []);
-  const warnings = [
-    ...steps.flatMap((step) => step.warnings || []),
-    input.payerTissMessage ? "Pré-guias afetadas podem precisar de revalidação." : "",
-  ].filter(Boolean) as string[];
+  const warnings = steps.flatMap((step) => step.warnings || []);
   const hasCriticalIncomplete = criticalSteps.some((step) => ["not_started", "incomplete", "blocked"].includes(step.status));
   const coreReadyForPreGuide = !hasCriticalIncomplete && activeBillingConfigurationCount > 0;
   let overallStatus: PayerSetupReadiness["overallStatus"] = "incomplete";
@@ -1002,10 +1047,10 @@ export function getPayerSetupReadiness(input: {
   if (!hasPayer) {
     overallStatus = "not_started";
     overallLabel = "Configuração não iniciada";
-  } else if (coreReadyForPreGuide && !antiGlosaProfileNeedsReview && preGuideTestStatus === "ready") {
+  } else if (coreReadyForPreGuide && preGuideTestStatus === "ready" && !antiGlosaProfileNeedsReview && warnings.length === 0) {
     overallStatus = "ready_for_xml";
     overallLabel = "Pronto para XML";
-  } else if (coreReadyForPreGuide && (antiGlosaProfileNeedsReview || preGuideTestStatus !== "ready" || warnings.length > 0)) {
+  } else if (coreReadyForPreGuide && preGuideTestStatus === "ready") {
     overallStatus = "ready_for_xml_with_warning";
     overallLabel = "Pronto para XML com alerta";
   } else if (coreReadyForPreGuide) {
@@ -1049,14 +1094,20 @@ export function getPayerSetupReadiness(input: {
 
 type PayerRequirementsPanelProps = {
   initialSection?: "convenios" | "tuss" | "prices" | "rules";
+  initialPayerId?: string;
   navigationIntentKey?: number;
   theme?: "light" | "dark";
+  onNavigateToPatientAuthorizations?: (context: { payerId: string; payerName: string }) => void;
+  onNavigateToPreGuides?: (context: { payerId: string; payerName: string }) => void;
 };
 
 export function PayerRequirementsPanel({
   initialSection,
+  initialPayerId,
   navigationIntentKey,
   theme = "light",
+  onNavigateToPatientAuthorizations,
+  onNavigateToPreGuides,
 }: PayerRequirementsPanelProps = {}) {
   const [payers, setPayers] = useState<Payer[]>([]);
   const [selectedPayerId, setSelectedPayerId] = useState("");
@@ -1176,22 +1227,6 @@ export function PayerRequirementsPanel({
   const antiGlosaProfileNeedsReview = isInsurancePayer(selectedPayer) &&
     !payerTissForm.antiGlosaReviewed &&
     !payerTissForm.operatorHasNoAdditionalRequirements;
-  const selectedPayerReadiness = useMemo(() => {
-    if (!isInsurancePayer(selectedPayer)) return { label: "TISS não aplicável", className: "bg-slate-100 text-slate-600", issues: [] as string[] };
-    const issues = [
-      ...selectedPayerTissMissing,
-      ...selectedPayerOfficialCodeIssues,
-      antiGlosaProfileNeedsReview ? "Perfil anti-glosa não revisado" : "",
-      selectedPayerMappingCount === 0 ? "Sem De/Para TUSS ativo" : "",
-      selectedPayerPriceCount === 0 ? "Sem valor negociado ativo" : "",
-      payerTissMessage ? "Pré-guias precisam ser revalidadas" : "",
-    ].filter(Boolean) as string[];
-    if (selectedPayerOfficialCodeIssues.length > 0) return { label: "Configuração inválida", className: "bg-rose-50 text-rose-700", issues };
-    if (payerTissMessage) return { label: "Pré-guias precisam ser revalidadas", className: "bg-amber-50 text-amber-700", issues };
-    if (antiGlosaProfileNeedsReview) return { label: "Anti-glosa não revisada", className: "bg-amber-50 text-amber-700", issues };
-    if (issues.length > 0) return { label: "Configuração incompleta", className: "bg-amber-50 text-amber-700", issues };
-    return { label: "Pronto para gerar XML", className: "bg-emerald-50 text-emerald-700", issues };
-  }, [antiGlosaProfileNeedsReview, payerTissMessage, selectedPayer, selectedPayerMappingCount, selectedPayerOfficialCodeIssues, selectedPayerPriceCount, selectedPayerTissMissing]);
   const activeTussServices = useMemo(() => tussServices.filter((service) => service.active === true), [tussServices]);
   const activeTussCodes = useMemo(() => tussCodes.filter((code) => code.active === true), [tussCodes]);
   const hasDemoTussData = [...tussMappings, ...tussCodes].some((item: any) =>
@@ -1335,6 +1370,18 @@ export function PayerRequirementsPanel({
       setupTestResult.status,
     ],
   );
+  const selectedPayerReadiness = useMemo(() => {
+    if (!isInsurancePayer(selectedPayer)) {
+      return { label: "TISS não aplicável", className: "bg-slate-100 text-slate-600", issues: [] as string[] };
+    }
+    const issues = Array.from(new Set([...payerSetupReadiness.blockers, ...payerSetupReadiness.warnings]));
+    const className = payerSetupReadiness.overallStatus === "ready_for_xml"
+      ? "bg-emerald-50 text-emerald-700"
+      : payerSetupReadiness.blockers.length > 0
+        ? "bg-rose-50 text-rose-700"
+        : "bg-amber-50 text-amber-700";
+    return { label: payerSetupReadiness.overallLabel, className, issues };
+  }, [payerSetupReadiness, selectedPayer]);
   const activeSetupStep = payerSetupReadiness.steps.find((step) => step.key === activeSetupStepKey) || payerSetupReadiness.steps[0];
   const activeSetupStepIndex = Math.max(0, payerSetupReadiness.steps.findIndex((step) => step.key === activeSetupStep.key));
 
@@ -1350,6 +1397,19 @@ export function PayerRequirementsPanel({
     window.setTimeout(() => {
       if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
     }, 80);
+  };
+
+  const runSetupAdvancedAction = (stepKey: PayerSetupStepKey) => {
+    const context = { payerId: selectedPayerId, payerName: selectedPayer?.name || "" };
+    if (stepKey === "authorizations" && onNavigateToPatientAuthorizations) {
+      onNavigateToPatientAuthorizations(context);
+      return;
+    }
+    if ((stepKey === "test" || stepKey === "ready") && onNavigateToPreGuides) {
+      onNavigateToPreGuides(context);
+      return;
+    }
+    scrollToSetupAdvanced(stepKey);
   };
 
   const selectSetupStep = (stepKey: PayerSetupStepKey) => {
@@ -1566,7 +1626,11 @@ export function PayerRequirementsPanel({
       }
       const rows = Array.isArray(result.data) ? result.data : [];
       setPayers(rows);
-      setSelectedPayerId((current) => current || rows[0]?.id || "");
+      setSelectedPayerId((current) => {
+        if (current && rows.some((payer: Payer) => payer.id === current)) return current;
+        if (initialPayerId && rows.some((payer: Payer) => payer.id === initialPayerId)) return initialPayerId;
+        return rows[0]?.id || "";
+      });
     } finally {
       setLoading(false);
     }
@@ -1602,20 +1666,35 @@ export function PayerRequirementsPanel({
         dataService.getPayerTussMappings({ payerId, limit: 180 }),
         payerId ? dataService.getPayerProcedurePrices({ payerId, limit: 180 }) : Promise.resolve({ success: true, data: [] }),
       ]);
-      if (servicesResult?.success) setTussServices(Array.isArray(servicesResult.data) ? servicesResult.data : []);
-      if (codesResult?.success) setTussCodes(Array.isArray(codesResult.data) ? codesResult.data : []);
-      if (mappingsResult?.success) setTussMappings(Array.isArray(mappingsResult.data) ? mappingsResult.data : []);
-      if (pricesResult?.success) setProcedurePrices(Array.isArray(pricesResult.data) ? pricesResult.data : []);
-      setTussMappingForm((current) => ({
-        ...current,
-        serviceCatalogId: current.serviceCatalogId || servicesResult?.data?.find((item: TussService) => item.active !== false)?.id || "",
-        tussCodeId: current.tussCodeId || codesResult?.data?.find((item: TussCode) => item.active !== false)?.id || "",
-      }));
-      setProcedurePriceForm((current) => ({
-        ...current,
-        serviceCatalogId: current.serviceCatalogId || servicesResult?.data?.find((item: TussService) => item.active !== false)?.id || "",
-        tussCodeId: current.tussCodeId || codesResult?.data?.find((item: TussCode) => item.active !== false)?.id || "",
-      }));
+      const services = servicesResult?.success && Array.isArray(servicesResult.data) ? servicesResult.data : [];
+      const codes = codesResult?.success && Array.isArray(codesResult.data) ? codesResult.data : [];
+      const mappings = mappingsResult?.success && Array.isArray(mappingsResult.data) ? mappingsResult.data : [];
+      const prices = pricesResult?.success && Array.isArray(pricesResult.data) ? pricesResult.data : [];
+      setTussServices(services);
+      setTussCodes(codes);
+      setTussMappings(mappings);
+      setProcedurePrices(prices);
+
+      const activeMapping = mappings.find((item: PayerTussMapping) => item.active !== false) || null;
+      const activePrice = prices.find((item: PayerProcedurePrice) =>
+        item.active !== false && (!activeMapping?.id || item.payerTussMappingId === activeMapping.id),
+      ) || prices.find((item: PayerProcedurePrice) => item.active !== false) || null;
+      const fallbackServiceId = activeMapping?.serviceCatalogId || services.find((item: TussService) => item.active !== false)?.id || "";
+      const fallbackTussCodeId = activeMapping?.tussCodeId || codes.find((item: TussCode) => item.active !== false)?.id || "";
+
+      setTussMappingForm(activeMapping
+        ? payerTussMappingToForm(activeMapping)
+        : { ...defaultTussMappingForm, serviceCatalogId: fallbackServiceId, tussCodeId: fallbackTussCodeId });
+      setEditingTussMappingId(activeMapping?.id || "");
+      setProcedurePriceForm(activePrice
+        ? payerProcedurePriceToForm(activePrice)
+        : {
+            ...defaultProcedurePriceForm,
+            serviceCatalogId: fallbackServiceId,
+            tussCodeId: fallbackTussCodeId,
+            payerTussMappingId: activeMapping?.id || "",
+          });
+      setEditingProcedurePriceId(activePrice?.id || "");
     } finally {
       setTussLoading(false);
     }
@@ -1671,7 +1750,16 @@ export function PayerRequirementsPanel({
 
   useEffect(() => {
     setActiveSetupStepKey(payerSetupReadiness.currentStepKey);
-  }, [payerSetupReadiness.currentStepKey, selectedPayerId]);
+    // A etapa acompanha o diagnóstico apenas ao trocar de convênio. Digitar ou
+    // marcar um campo nunca deve navegar sem a ação explícita de salvar.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedPayerId]);
+
+  useEffect(() => {
+    if (initialPayerId && payers.some((payer) => payer.id === initialPayerId)) {
+      setSelectedPayerId(initialPayerId);
+    }
+  }, [initialPayerId, navigationIntentKey, payers]);
 
   useEffect(() => {
     setPayerSetupIdentityForm({
@@ -1833,7 +1921,7 @@ export function PayerRequirementsPanel({
       setPayerTissForm(normalizePayerTissProfile(result.data || payerTissForm));
       setPayerTissMessage(savingWithoutAntiGlosaReview
         ? "Perfil anti-glosa ainda não revisado. As Pré-guias dessa operadora aparecerão com risco médio até a revisão ser confirmada."
-        : "Configuração do convênio salva. Pré-guias deste pagador foram marcadas para revalidação.");
+        : "Configuração do convênio salva. Pré-guias deste pagador foram atualizadas automaticamente.");
       return true;
     } finally {
       setSaving(false);
@@ -2043,12 +2131,14 @@ export function PayerRequirementsPanel({
         return false;
       }
       upsertTussMappingInState(result.data);
-      setTussMappingForm((current) => ({
-        ...defaultTussMappingForm,
-        serviceCatalogId: current.serviceCatalogId,
-        tussCodeId: current.tussCodeId,
+      setTussMappingForm(payerTussMappingToForm(result.data));
+      setEditingTussMappingId(result.data.id || "");
+      setProcedurePriceForm((current) => ({
+        ...current,
+        serviceCatalogId: result.data.serviceCatalogId || current.serviceCatalogId,
+        tussCodeId: result.data.tussCodeId || current.tussCodeId,
+        payerTussMappingId: result.data.id || current.payerTussMappingId,
       }));
-      setEditingTussMappingId("");
       setTussActionInfo(wasEditing ? "Mapeamento atualizado." : "Mapeamento criado.");
       setLocalFeedback("mapping", { status: "success", message: "Alterações salvas com sucesso." });
       finishEditingSection("mapping");
@@ -2087,12 +2177,8 @@ export function PayerRequirementsPanel({
         return false;
       }
       upsertProcedurePriceInState(result.data);
-      setProcedurePriceForm((current) => ({
-        ...defaultProcedurePriceForm,
-        serviceCatalogId: current.serviceCatalogId,
-        tussCodeId: current.tussCodeId,
-      }));
-      setEditingProcedurePriceId("");
+      setProcedurePriceForm(payerProcedurePriceToForm(result.data));
+      setEditingProcedurePriceId(result.data.id || "");
       setTussActionInfo(wasEditing ? "Valor negociado atualizado." : "Valor negociado cadastrado.");
       setLocalFeedback("price", { status: "success", message: "Alterações salvas com sucesso." });
       finishEditingSection("price");
@@ -2140,57 +2226,15 @@ export function PayerRequirementsPanel({
 
   const editTussMapping = (mapping: PayerTussMapping) => {
     if (!beginEditingSection("mapping")) return;
-    const metadata = mapping.metadata || {};
     setEditingTussMappingId(mapping.id);
-    setTussMappingForm({
-      serviceCatalogId: mapping.serviceCatalogId || "",
-      tussCodeId: mapping.tussCodeId || "",
-      contractCode: mapping.contractCode || "",
-      contractDescription: mapping.contractDescription || mapping.payerSpecificDescription || "",
-      authorizedCode: mapping.authorizedCode || metadata.authorized_code || metadata.authorizedCode || "",
-      authorizedCodeDescription: mapping.authorizedCodeDescription || metadata.authorized_code_description || metadata.authorizedCodeDescription || "",
-      billingCode: mapping.billingCode || metadata.billing_code || metadata.billingCode || "",
-      billingCodeDescription: mapping.billingCodeDescription || metadata.billing_code_description || metadata.billingCodeDescription || "",
-      operatorPackageCode: mapping.operatorPackageCode || metadata.operator_package_code || metadata.operatorPackageCode || mapping.contractCode || "",
-      operatorPackageDescription: mapping.operatorPackageDescription || metadata.operator_package_description || metadata.operatorPackageDescription || "",
-      billingCodeSource: mapping.billingCodeSource || metadata.billing_code_source || metadata.billingCodeSource || "official_tuss",
-      specialty: mapping.specialty || "",
-      guideType: mapping.guideType || "sp_sadt",
-      billingUnit: mapping.billingUnit || "session",
-      quantityRule: mapping.quantityRule || "per_session",
-      defaultQuantity: mapping.defaultQuantity ? String(mapping.defaultQuantity) : "1",
-      amountCents: formatCentsForBrazilianInput(mapping.amountCents),
-      negotiatedAmountCents: formatCentsForBrazilianInput(mapping.negotiatedAmountCents),
-      standardDurationMinutes: mapping.standardDurationMinutes ? String(mapping.standardDurationMinutes) : "",
-      requiresAuthorization: Boolean(mapping.requiresAuthorization),
-      requiresGuide: Boolean(mapping.requiresGuide),
-      requiresReport: Boolean(mapping.requiresReport),
-      requiresSignature: Boolean(mapping.requiresSignature),
-      requiresProfessionalRegistry: Boolean(mapping.requiresProfessionalRegistry),
-      requiresPatientDocument: Boolean(mapping.requiresPatientDocument),
-      useActualDuration: Boolean(mapping.useActualDuration),
-      validFrom: mapping.validFrom || "",
-      validTo: mapping.validTo || "",
-      source: mapping.source || "manual",
-      notes: mapping.notes || "",
-    });
+    setTussMappingForm(payerTussMappingToForm(mapping));
     payerTussSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
   const editProcedurePrice = (price: PayerProcedurePrice) => {
     if (!beginEditingSection("price")) return;
     setEditingProcedurePriceId(price.id);
-    setProcedurePriceForm({
-      serviceCatalogId: price.serviceCatalogId || "",
-      tussCodeId: price.tussCodeId || "",
-      payerTussMappingId: price.payerTussMappingId || "",
-      amountCents: formatCentsForBrazilianInput(price.amountCents),
-      currency: price.currency || "BRL",
-      validFrom: price.validFrom || "",
-      validUntil: price.validUntil || "",
-      source: price.source || "manual",
-      notes: price.notes || "",
-    });
+    setProcedurePriceForm(payerProcedurePriceToForm(price));
     setProcedurePriceAmountError("");
     payerPricesSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     window.setTimeout(() => procedurePriceAmountInputRef.current?.focus(), 250);
@@ -2708,7 +2752,7 @@ export function PayerRequirementsPanel({
           <div className="mt-3 grid gap-3 md:grid-cols-2">
             <label className="text-xs font-normal text-slate-700">
               <span className="mb-1 block">Código da clínica/prestador na operadora</span>
-              <input value={payerTissForm.contractedProviderCode} onChange={(event) => updatePayerTiss("contractedProviderCode", event.target.value)} className={setupFieldClass} placeholder="Informe o código contratual" />
+              <input value={payerTissForm.contractedProviderCode} onChange={(event) => updatePayerTiss("contractedProviderCode", event.target.value)} maxLength={14} className={setupFieldClass} placeholder="Informe o código contratual" />
             </label>
             <label className="text-xs font-normal text-slate-700">
               <span className="mb-1 block">Nome contratado</span>
@@ -2716,7 +2760,7 @@ export function PayerRequirementsPanel({
             </label>
             <label className="text-xs font-normal text-slate-700">
               <span className="mb-1 block">Código operacional na operadora</span>
-              <input value={payerTissForm.operatorProviderCode} onChange={(event) => updatePayerTiss("operatorProviderCode", event.target.value)} className={setupFieldClass} placeholder="Se houver outro código de envio" />
+              <input value={payerTissForm.operatorProviderCode} onChange={(event) => updatePayerTiss("operatorProviderCode", event.target.value)} maxLength={14} className={setupFieldClass} placeholder="Se houver outro código de envio" />
             </label>
             <label className="text-xs font-normal text-slate-700">
               <span className="mb-1 block">Código da operadora</span>
@@ -3205,7 +3249,7 @@ export function PayerRequirementsPanel({
             />
             <button
               type="button"
-              onClick={() => scrollToSetupAdvanced(activeSetupStep.key)}
+              onClick={() => runSetupAdvancedAction(activeSetupStep.key)}
               className="rounded-xl border border-indigo-100 bg-indigo-50 px-3 py-2 text-xs font-semibold text-indigo-700"
             >
               {advancedActionLabel(activeSetupStep.key)}
@@ -3450,6 +3494,7 @@ export function PayerRequirementsPanel({
                       aria-describedby="payer-contracted-provider-code-help"
                       value={payerTissForm.contractedProviderCode}
                       onChange={(event) => updatePayerTiss("contractedProviderCode", event.target.value)}
+                      maxLength={14}
                       placeholder="Ex.: PRESTADOR123"
                       className={payerTissFieldClass}
                     />
@@ -3470,6 +3515,7 @@ export function PayerRequirementsPanel({
                       aria-describedby="payer-operator-provider-code-help"
                       value={payerTissForm.operatorProviderCode}
                       onChange={(event) => updatePayerTiss("operatorProviderCode", event.target.value)}
+                      maxLength={14}
                       placeholder="Ex.: CLINICA-001"
                       className={payerTissFieldClass}
                     />
@@ -3700,12 +3746,13 @@ export function PayerRequirementsPanel({
                   </PayerTissField>
                 </div>
                 <div className="mt-3">
-                  <SaveActionButton
-                    status={saving || payerTissLoading ? "loading" : payerTissMessage ? "success" : "idle"}
-                    idleLabel="Salvar alterações"
-                    disabled={!selectedPayerId || saving || payerTissLoading}
-                    onClick={() => void savePayerTissProfile()}
-                  />
+            <SaveActionButton
+              status={saving || payerTissLoading ? "loading" : payerTissMessage ? "success" : "idle"}
+              idleLabel="Salvar alterações"
+              loadingLabel="Atualizando Pré-Guia..."
+              disabled={!selectedPayerId || saving || payerTissLoading}
+              onClick={() => void savePayerTissProfile()}
+            />
                 </div>
               </>
             ) : (
@@ -4352,6 +4399,7 @@ export function PayerRequirementsPanel({
               <SaveActionButton
                 status={sectionFeedback.mapping?.status === "saving" ? "loading" : sectionFeedback.mapping?.status === "success" ? "success" : sectionFeedback.mapping?.status === "error" ? "error" : "idle"}
                 idleLabel="Salvar alterações"
+                loadingLabel="Atualizando Pré-Guia..."
                 disabled={!selectedPayerId || !tussMappingForm.serviceCatalogId || saving}
                 onClick={() => void createTussMapping()}
               />
@@ -4427,6 +4475,7 @@ export function PayerRequirementsPanel({
             <SaveActionButton
               status={sectionFeedback.price?.status === "saving" ? "loading" : sectionFeedback.price?.status === "success" ? "success" : sectionFeedback.price?.status === "error" ? "error" : "idle"}
               idleLabel="Salvar alterações"
+              loadingLabel="Atualizando Pré-Guia..."
               disabled={!selectedPayerId || !procedurePriceForm.serviceCatalogId || procedurePriceForm.amountCents === "" || saving}
               onClick={() => void saveProcedurePrice()}
             />

@@ -26,6 +26,7 @@ export type OfficialTissDocumentInput = {
   competenceMonth: string;
   batchNumber: string;
   generatedAt?: string;
+  timeZone?: string;
   generatedBy?: string | null;
   communicationVersion?: string | null;
   contentStructureVersion?: string | null;
@@ -48,6 +49,7 @@ export type OfficialTissCanonicalPayload = {
   tussVersion: string;
   competenceMonth: string;
   generatedAt: string;
+  timeZone: string;
   batchNumber: string;
   payerId: string;
   guideType: "sp_sadt";

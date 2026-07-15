@@ -342,7 +342,7 @@ export function BillingTissSettingsPanel({
         return;
       }
       setPayerProfiles((current) => ({ ...current, [selectedPayerId]: result.data || {} }));
-      setMessage("Dados do pagador salvos. Pré-guias deste pagador foram marcadas para revalidação.");
+      setMessage("Dados do pagador salvos. Pré-guias deste pagador foram atualizadas automaticamente.");
     } finally {
       setSavingKind("");
     }
@@ -365,7 +365,7 @@ export function BillingTissSettingsPanel({
         return;
       }
       setProfessionalProfiles((current) => ({ ...current, [selectedProfessionalId]: result.data || {} }));
-      setMessage("Perfil do profissional salvo. Pré-guias deste profissional foram marcadas para revalidação.");
+      setMessage("Perfil do profissional salvo. Pré-guias deste profissional foram atualizadas automaticamente.");
     } finally {
       setSavingKind("");
     }

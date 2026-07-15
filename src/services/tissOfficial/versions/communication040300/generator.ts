@@ -110,6 +110,7 @@ type ProviderIdentifier = {
 };
 
 type NormalizedGuide = OfficialTissCanonicalGuide & {
+  timeZone: string;
   payerAns: string;
   providerIdentifier: ProviderIdentifier;
   providerName: string;
@@ -160,14 +161,41 @@ function firstDigits(maxLength: number, ...values: unknown[]) {
   return "";
 }
 
-function normalizeDate(value: unknown) {
+function zonedDateTimeParts(value: unknown, timeZone: string) {
   const raw = text(value, 80);
+  if (!/T/.test(raw) || !/(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw)) return null;
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return null;
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23"
+    }).formatToParts(date);
+    const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value || "";
+    return { year: get("year"), month: get("month"), day: get("day"), hour: get("hour"), minute: get("minute"), second: get("second") };
+  } catch {
+    return null;
+  }
+}
+
+function normalizeDate(value: unknown, timeZone = "America/Sao_Paulo") {
+  const raw = text(value, 80);
+  const zoned = zonedDateTimeParts(raw, timeZone);
+  if (zoned) return `${zoned.year}-${zoned.month}-${zoned.day}`;
   const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
   return match ? `${match[1]}-${match[2]}-${match[3]}` : "";
 }
 
-function normalizeTime(value: unknown) {
+function normalizeTime(value: unknown, timeZone = "America/Sao_Paulo") {
   const raw = text(value, 80);
+  const zoned = zonedDateTimeParts(raw, timeZone);
+  if (zoned) return `${zoned.hour}:${zoned.minute}:${zoned.second}`;
   const direct = raw.match(/^(\d{2}):(\d{2})(?::(\d{2}))?/);
   if (direct) return `${direct[1]}:${direct[2]}:${direct[3] || "00"}`;
   const iso = raw.match(/T(\d{2}):(\d{2})(?::(\d{2}))?/);
@@ -245,7 +273,8 @@ function pickProviderIdentifier(snapshot: any, row: any): ProviderIdentifier | n
     payer.operatorProviderCode,
     provider.contractedProviderCode,
     provider.providerCode
-  ), 14);
+  ), 200);
+  if (contractedCode.length > 14) return null;
   if (contractedCode && !isPlaceholder(contractedCode)) {
     return { tag: "codigoPrestadorNaOperadora", value: contractedCode };
   }
@@ -304,8 +333,8 @@ function xmlProcedure(guide: NormalizedGuide, level: number) {
 }
 
 function buildOfficialMessageXml(payload: OfficialTissCanonicalPayload, guides: NormalizedGuide[], epilogueHash: string) {
-  const generatedDate = normalizeDate(payload.generatedAt);
-  const generatedTime = normalizeTime(payload.generatedAt);
+  const generatedDate = normalizeDate(payload.generatedAt, payload.timeZone);
+  const generatedTime = normalizeTime(payload.generatedAt, payload.timeZone);
   const providerHeaderId = providerHeaderIdentifier(guides[0].providerIdentifier);
   const body = [
     '<?xml version="1.0" encoding="UTF-8"?>',
@@ -344,9 +373,9 @@ function buildOfficialMessageXml(payload: OfficialTissCanonicalPayload, guides: 
 }
 
 function buildSpSadtGuideXml(guide: NormalizedGuide, sequence: number) {
-  const date = normalizeDate(guide.scheduledStart);
-  const startTime = normalizeTime(guide.scheduledStart);
-  const endTime = normalizeTime(guide.scheduledEnd);
+  const date = normalizeDate(guide.scheduledStart, guide.timeZone);
+  const startTime = normalizeTime(guide.scheduledStart, guide.timeZone);
+  const endTime = normalizeTime(guide.scheduledEnd, guide.timeZone);
   const unitAmount = formatMoneyFromCents(guide.unitAmountCents);
   const totalAmount = formatMoneyFromCents(guide.totalAmountCents);
   const lines = [
@@ -465,7 +494,7 @@ function validatePreGuideBase(row: any, issues: TissOfficialIssue[]) {
   return snapshot;
 }
 
-function normalizeGuide(row: any, issues: TissOfficialIssue[]): NormalizedGuide | null {
+function normalizeGuide(row: any, issues: TissOfficialIssue[], timeZone: string): NormalizedGuide | null {
   const preGuideId = firstValue(row?.id);
   const snapshot = validatePreGuideBase(row, issues);
   const appointment = snapshot?.appointment || {};
@@ -481,12 +510,31 @@ function normalizeGuide(row: any, issues: TissOfficialIssue[]): NormalizedGuide 
     addIssue({ issues, preGuideId, entity: "payer", field: "ansRegistration", code: "TISS_OFFICIAL_PAYER_ANS_MISSING", message: "Registro ANS da operadora é obrigatório para XML TISS oficial." });
   }
 
+  const providerCodeCandidate = normalizeNumberText(firstValue(
+    payer.contractedProviderCode,
+    payer.providerCode,
+    payer.operatorProviderCode,
+    provider.contractedProviderCode,
+    provider.providerCode
+  ), 200);
+  if (providerCodeCandidate.length > 14) {
+    addIssue({ issues, preGuideId, entity: "provider", field: "providerIdentifier", code: "TISS_OFFICIAL_PROVIDER_CODE_TOO_LONG", message: "Código do prestador deve ter no máximo 14 caracteres; o XML nunca trunca esse identificador." });
+  }
   const providerIdentifier = pickProviderIdentifier(snapshot, row);
   if (!providerIdentifier) {
     addIssue({ issues, preGuideId, entity: "provider", field: "providerIdentifier", code: "TISS_OFFICIAL_PROVIDER_IDENTIFIER_MISSING", message: "Informe código do prestador na operadora, CPF ou CNPJ do prestador." });
   }
 
-  const providerName = normalizeLimitedText(firstValue(provider.legalName, provider.legal_name, provider.tradeName, provider.trade_name, row?.clinicName, row?.clinic_name_snapshot), 70);
+  const contractedProviderName = firstValue(payer.contractedExecutant, payer.contracted_executant);
+  const providerName = normalizeLimitedText(firstValue(
+    providerIdentifier?.tag === "codigoPrestadorNaOperadora" ? contractedProviderName : "",
+    provider.legalName,
+    provider.legal_name,
+    provider.tradeName,
+    provider.trade_name,
+    row?.clinicName,
+    row?.clinic_name_snapshot
+  ), 70);
   if (!providerName || isPlaceholder(providerName)) {
     addIssue({ issues, preGuideId, entity: "provider", field: "legalName", code: "TISS_OFFICIAL_PROVIDER_NAME_MISSING", message: "Razão social ou nome do prestador é obrigatório para XML TISS oficial." });
   }
@@ -550,7 +598,7 @@ function normalizeGuide(row: any, issues: TissOfficialIssue[]): NormalizedGuide 
   }
 
   const scheduledStart = firstValue(row?.scheduledStart, row?.scheduled_start, appointment.scheduledStart, appointment.scheduled_start);
-  const scheduledDate = normalizeDate(scheduledStart);
+  const scheduledDate = normalizeDate(scheduledStart, timeZone);
   if (!scheduledDate) {
     addIssue({ issues, preGuideId, entity: "appointment", field: "scheduledStart", code: "TISS_OFFICIAL_SCHEDULED_DATE_MISSING", message: "Data do atendimento é obrigatória para XML TISS oficial." });
   }
@@ -579,6 +627,7 @@ function normalizeGuide(row: any, issues: TissOfficialIssue[]): NormalizedGuide 
 
   return {
     preGuideId,
+    timeZone,
     appointmentId: firstValue(row?.appointmentId, row?.appointment_id, appointment.id),
     patientId: firstValue(row?.patientId, row?.patient_id, beneficiary.id),
     guideNumber,
@@ -618,6 +667,7 @@ function buildPayload(input: OfficialTissDocumentInput, guides: NormalizedGuide[
     tussVersion: text(input.tussVersion || COMMUNICATION_040300_MANIFEST.tussVersion, 20) || DEFAULT_TUSS_VERSION,
     competenceMonth: normalizeCompetence(input.competenceMonth),
     generatedAt,
+    timeZone: text(input.timeZone, 80) || "America/Sao_Paulo",
     batchNumber: normalizeNumberText(input.batchNumber, 12),
     payerId: text(input.payerId, 120),
     guideType: "sp_sadt",
@@ -673,7 +723,7 @@ function validateBatchInput(input: OfficialTissDocumentInput, guides: Normalized
     issues.push({ code: "TISS_OFFICIAL_MULTIPLE_CLINICS", message: "As Pré-guias selecionadas precisam pertencer à mesma clínica.", severity: "blocking", entity: "clinic" });
   }
   const competence = monthKey(input.competenceMonth);
-  const divergentGuide = guides.find((guide) => monthKey(guide.scheduledStart) !== competence);
+  const divergentGuide = guides.find((guide) => monthKey(normalizeDate(guide.scheduledStart, guide.timeZone)) !== competence);
   if (divergentGuide) {
     issues.push({
       code: "TISS_OFFICIAL_COMPETENCE_MISMATCH",
@@ -691,8 +741,9 @@ export const communication040300Strategy: TissXmlGenerationStrategy = {
 
   generate(input: OfficialTissDocumentInput): GeneratedOfficialTissDocument {
     const issues: TissOfficialIssue[] = [];
+    const timeZone = text(input.timeZone, 80) || "America/Sao_Paulo";
     const guides = (Array.isArray(input.preGuides) ? input.preGuides : [])
-      .map((row) => normalizeGuide(row, issues))
+      .map((row) => normalizeGuide(row, issues, timeZone))
       .filter((row): row is NormalizedGuide => Boolean(row))
       .sort(compareGuidesForOfficialBatch);
     validateBatchInput(input, guides, issues);

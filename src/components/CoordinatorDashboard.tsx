@@ -165,6 +165,8 @@ type FinancialNavigationIntent = {
   conferenceTab?: ConferenceNavigationTab;
   tissPanel?: TissPreGuidePanel;
   payerSection?: PayerNavigationSection;
+  payerId?: string;
+  payerName?: string;
 };
 
 type NavigationNode = {
@@ -223,6 +225,7 @@ import {
   ABA_INDIVIDUAL_EXPECTED_TUSS_CODE,
   ABA_INDIVIDUAL_EXPECTED_TUSS_DESCRIPTION,
   findSuggestedTissAuthorizationForFinancialPlan,
+  getPatientTissAuthorizationQuantitySummary,
   getPatientTissAuthorizationVisualState,
   groupPatientTissAuthorizations,
 } from "../utils/patientTissAuthorizationView";
@@ -1926,10 +1929,9 @@ export function CoordinatorDashboard({
   };
 
   const formatPatientAuthorizationBalance = (authorization: any) => {
-    const authorized = Number(authorization?.authorizedQuantity || 0) || 0;
-    const used = Number(authorization?.usedQuantity || 0) || 0;
-    if (!authorized) return "sem limite informado";
-    return String(Math.max(0, authorized - used));
+    const summary = getPatientTissAuthorizationQuantitySummary(authorization);
+    if (!summary.hasPackageLimit && summary.available === null) return "sem limite informado";
+    return String(summary.available ?? 0);
   };
 
   const describePatientAuthorizationSuggestion = (authorization: any) => {
@@ -1963,6 +1965,14 @@ export function CoordinatorDashboard({
       void loadPatientAuthorizationOverview();
     }
   }, [activeTab, loadPatientAuthorizationOverview]);
+
+  useEffect(() => {
+    if (activeTab !== "patientAuthorizations") return;
+    setPatientAuthorizationOverviewFilters((current) => ({
+      ...current,
+      payerId: financialNavigationContext.payerId || "all",
+    }));
+  }, [activeTab, financialNavigationContext.intentKey, financialNavigationContext.payerId]);
 
   const patientAuthorizationOverviewPayerOptions = useMemo(() => {
     const options = new Map<string, string>();
@@ -2297,6 +2307,17 @@ export function CoordinatorDashboard({
       cancelled = true;
     };
   }, [canAccessClinicFinance, clinicPayers.length, isPatientRegistrationModalOpen]);
+
+  useEffect(() => {
+    if (!["conference", "patientAuthorizations", "payers"].includes(activeTab) || isTherapist || clinicPayers.length > 0) return;
+    let cancelled = false;
+    dataService.getPayers({ status: "ACTIVE", limit: 80 }).then((result: any) => {
+      if (!cancelled && result?.success) setClinicPayers(Array.isArray(result.data) ? result.data : []);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, clinicPayers.length, isTherapist]);
 
   useEffect(() => {
     if (!isPatientRegistrationModalOpen || !canAccessClinicFinance) return;
@@ -6799,7 +6820,7 @@ export function CoordinatorDashboard({
       "management",
     );
     hideProcessing();
-    showToast(isTherapist ? "Perfil atualizado com sucesso!" : "Perfil e clínica salvos. Pré-guias afetadas podem precisar de revalidação.");
+    showToast(isTherapist ? "Perfil atualizado com sucesso!" : "Perfil e clínica salvos. Pré-guias afetadas foram atualizadas automaticamente.");
   };
 
   const normalizeAnamnesisTemplateForEditor = (template: any) => ({
@@ -8601,7 +8622,14 @@ export function CoordinatorDashboard({
     if (selectedPatientProfileAuthorizations.some((authorization: any) => authorization && !authorization.tussCode && !authorization.tussCodeId)) {
       alerts.push("Sem De/Para TUSS ativo");
     }
-    if (selectedPatientProfileAuthorizations.some((authorization: any) => authorization && authorization.amountCents === null)) {
+    const relevantAuthorizationForPrice = selectedProfileSuggestedAuthorization ||
+      selectedPatientProfileAuthorizations.find((authorization: any, index: number) => authorization && selectedProfileAuthorizationStates[index]?.isCurrent);
+    if (relevantAuthorizationForPrice && Number(
+      relevantAuthorizationForPrice.amountCents ??
+      relevantAuthorizationForPrice.negotiatedAmountCents ??
+      relevantAuthorizationForPrice.unitAmountCents ??
+      0,
+    ) <= 0) {
       alerts.push("Sem preço negociado ativo");
     }
     if (selectedProfilePrimaryFinancialPlan && Number(selectedProfilePrimaryFinancialPlan.amountCents || 0) <= 0) {
@@ -11612,6 +11640,7 @@ export function CoordinatorDashboard({
                   canExport={!isTherapist}
                   initialTab={financialNavigationContext.conferenceTab}
                   tissInitialPanel={financialNavigationContext.tissPanel}
+                  initialPayerId={financialNavigationContext.payerId}
                   navigationIntentKey={financialNavigationContext.intentKey}
                   onOpenAppointment={openAppointmentFromAdministrativeFlow}
                   onOpenPatient={openPatientEditFromAdministrativeFlow}
@@ -11836,8 +11865,23 @@ export function CoordinatorDashboard({
               >
                 <PayerRequirementsPanel
                   initialSection={financialNavigationContext.payerSection}
+                  initialPayerId={financialNavigationContext.payerId}
                   navigationIntentKey={financialNavigationContext.intentKey}
                   theme={theme}
+                  onNavigateToPatientAuthorizations={({ payerId, payerName }) => {
+                    navigateToTab("patientAuthorizations", {
+                      ...patientAuthorizationsIntent(),
+                      payerId,
+                      payerName,
+                    });
+                  }}
+                  onNavigateToPreGuides={({ payerId, payerName }) => {
+                    navigateToTab("conference", {
+                      ...conferenceIntent("Pré-guias TISS", "preGuides", "preGuides"),
+                      payerId,
+                      payerName,
+                    });
+                  }}
                 />
               </motion.div>
             )}
@@ -13478,7 +13522,9 @@ export function CoordinatorDashboard({
                       <span>Guia: {selectedProfileSuggestedAuthorization.guideNumber || "-"}</span>
                       <span>Autorização/Senha: {selectedProfileSuggestedAuthorization.authorizationNumber || selectedProfileSuggestedAuthorization.authorizationCode || "-"}</span>
                       <span>Validade: {formatPatientAuthorizationDate(selectedProfileSuggestedAuthorization.validFrom)} a {formatPatientAuthorizationDate(selectedProfileSuggestedAuthorization.validUntil)}</span>
-                      <span>Consumo: {Number(selectedProfileSuggestedAuthorization.usedQuantity || 0)} de {Number(selectedProfileSuggestedAuthorization.authorizedQuantity || 0) || "sem limite"}</span>
+                      <span>Consumidas: {getPatientTissAuthorizationQuantitySummary(selectedProfileSuggestedAuthorization).consumed}</span>
+                      <span>Reservadas/comprometidas: {getPatientTissAuthorizationQuantitySummary(selectedProfileSuggestedAuthorization).reserved}</span>
+                      <span>Autorizadas: {getPatientTissAuthorizationQuantitySummary(selectedProfileSuggestedAuthorization).authorized || "sem limite"}</span>
                       <span>Saldo: {formatPatientAuthorizationBalance(selectedProfileSuggestedAuthorization)}</span>
                     </div>
                   </div>

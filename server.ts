@@ -9047,6 +9047,7 @@ async function fetchAppointmentTissAuthorizationReservationCounts(params: {
   patientId: string;
   authorizationIds: string[];
   excludeAppointmentId?: any;
+  usedQuantityByAuthorizationId?: Map<string, number>;
 }) {
   const organizationId = sanitizeString(params.organizationId, 120);
   const patientId = sanitizeString(params.patientId, 120);
@@ -9056,19 +9057,35 @@ async function fetchAppointmentTissAuthorizationReservationCounts(params: {
   if (!isUuid(organizationId) || !isUuid(patientId) || authorizationIds.length === 0) return counts;
 
   try {
-    const contextResult = await supabase
-      .from('appointment_billing_contexts')
-      .select('appointment_id,patient_id,metadata')
-      .eq('organization_id', organizationId)
-      .eq('patient_id', patientId)
-      .limit(2000);
-    if (contextResult.error) {
-      if (hasMissingFinancialSchema(contextResult.error) || isMissingRelationError(contextResult.error) || extractMissingColumnName(contextResult.error)) return counts;
-      throw contextResult.error;
+    const [contextResult, preGuideResult] = await Promise.all([
+      supabase
+        .from('appointment_billing_contexts')
+        .select('appointment_id,patient_id,metadata')
+        .eq('organization_id', organizationId)
+        .eq('patient_id', patientId)
+        .limit(2000),
+      supabase
+        .from('appointment_tiss_pre_guides')
+        .select('appointment_id,patient_id,scheduled_start,official_document_id,snapshot_data,status,revenue_cycle_state')
+        .eq('organization_id', organizationId)
+        .eq('patient_id', patientId)
+        .limit(2000)
+    ]);
+    for (const result of [contextResult, preGuideResult]) {
+      if (result.error && !hasMissingFinancialSchema(result.error) && !isMissingRelationError(result.error) && !extractMissingColumnName(result.error)) {
+        throw result.error;
+      }
     }
     const authorizationIdSet = new Set(authorizationIds);
-    const appointmentByAuthorization = new Map<string, string>();
-    for (const context of Array.isArray(contextResult.data) ? contextResult.data : []) {
+    const reservationsByAppointmentAndAuthorization = new Map<string, {
+      appointmentId: string;
+      authorizationId: string;
+      committed: boolean;
+      activeReservation: boolean;
+      scheduledStart: string | null;
+    }>();
+    const reservationKey = (appointmentId: string, authorizationId: string) => `${appointmentId}:${authorizationId}`;
+    for (const context of contextResult.error || !Array.isArray(contextResult.data) ? [] : contextResult.data) {
       const appointmentId = sanitizeString(context?.appointment_id, 120);
       if (!isUuid(appointmentId) || appointmentId === excludeAppointmentId) continue;
       const metadata = parseStoredJsonObject(context?.metadata);
@@ -9082,9 +9099,35 @@ async function fetchAppointmentTissAuthorizationReservationCounts(params: {
         120
       );
       if (!authorizationIdSet.has(authorizationId)) continue;
-      appointmentByAuthorization.set(appointmentId, authorizationId);
+      reservationsByAppointmentAndAuthorization.set(reservationKey(appointmentId, authorizationId), {
+        appointmentId,
+        authorizationId,
+        committed: false,
+        activeReservation: true,
+        scheduledStart: null
+      });
     }
-    const appointmentIds = Array.from(appointmentByAuthorization.keys());
+    for (const preGuide of preGuideResult.error || !Array.isArray(preGuideResult.data) ? [] : preGuideResult.data) {
+      const appointmentId = sanitizeString(preGuide?.appointment_id, 120);
+      if (!isUuid(appointmentId) || appointmentId === excludeAppointmentId) continue;
+      const snapshot = parseStoredJsonObject(preGuide?.snapshot_data);
+      const authorizationId = sanitizeString(snapshot?.authorization?.authorizationId || snapshot?.authorization?.id, 120);
+      if (!authorizationIdSet.has(authorizationId)) continue;
+      const key = reservationKey(appointmentId, authorizationId);
+      const current = reservationsByAppointmentAndAuthorization.get(key);
+      const preGuideStatus = sanitizeString(preGuide?.status || preGuide?.revenue_cycle_state, 80).toLowerCase();
+      const activePreGuide = !['cancelled', 'canceled', 'deleted', 'refused'].includes(preGuideStatus);
+      reservationsByAppointmentAndAuthorization.set(key, {
+        appointmentId,
+        authorizationId,
+        committed: Boolean(current?.committed) || isUuid(sanitizeString(preGuide?.official_document_id, 120)),
+        activeReservation: Boolean(current?.activeReservation) || activePreGuide,
+        scheduledStart: sanitizeString(preGuide?.scheduled_start, 80) || current?.scheduledStart || null
+      });
+    }
+    const appointmentIds = Array.from(new Set(
+      Array.from(reservationsByAppointmentAndAuthorization.values()).map((reservation) => reservation.appointmentId)
+    ));
     if (appointmentIds.length === 0) return counts;
     const appointmentResult = await supabase
       .from('appointments')
@@ -9097,15 +9140,44 @@ async function fetchAppointmentTissAuthorizationReservationCounts(params: {
       throw appointmentResult.error;
     }
     const today = new Date().toISOString().slice(0, 10);
-    for (const appointment of Array.isArray(appointmentResult.data) ? appointmentResult.data : []) {
-      const appointmentId = sanitizeString(appointment?.id, 120);
-      const authorizationId = appointmentByAuthorization.get(appointmentId);
-      if (!authorizationId) continue;
+    const appointmentsById = new Map<string, any>(
+      (Array.isArray(appointmentResult.data) ? appointmentResult.data : []).map((appointment: any) => [
+        sanitizeString(appointment?.id, 120),
+        appointment
+      ])
+    );
+    const futureCounts = new Map<string, number>();
+    const historicalOfficialCounts = new Map<string, number>();
+    for (const reservation of reservationsByAppointmentAndAuthorization.values()) {
+      const appointment = appointmentsById.get(reservation.appointmentId);
+      if (!appointment || !reservation.authorizationId) continue;
       const status = normalizeAppointmentStatusForUi(appointment?.status || 'pending');
-      if (['cancelled', 'canceled', 'deleted', 'refused'].includes(status)) continue;
-      const appointmentDate = appointmentDateKeyForAuthorization(appointment?.scheduled_start_at || appointment?.scheduled_at || appointment?.date);
-      if (appointmentDate && appointmentDate < today) continue;
-      counts.set(authorizationId, (counts.get(authorizationId) || 0) + 1);
+      const appointmentDate = appointmentDateKeyForAuthorization(
+        reservation.scheduledStart || appointment?.scheduled_start_at || appointment?.scheduled_at || appointment?.date
+      );
+      const isHistorical = Boolean(appointmentDate && appointmentDate < today);
+      if (reservation.committed && isHistorical) {
+        historicalOfficialCounts.set(
+          reservation.authorizationId,
+          (historicalOfficialCounts.get(reservation.authorizationId) || 0) + 1
+        );
+        continue;
+      }
+      if (!reservation.committed && (
+        !reservation.activeReservation ||
+        ['cancelled', 'canceled', 'deleted', 'refused'].includes(status) ||
+        isHistorical
+      )) continue;
+      futureCounts.set(reservation.authorizationId, (futureCounts.get(reservation.authorizationId) || 0) + 1);
+    }
+    for (const authorizationId of authorizationIds) {
+      const futureReservations = futureCounts.get(authorizationId) || 0;
+      const historicalOfficialCommitments = historicalOfficialCounts.get(authorizationId) || 0;
+      const alreadyConsumed = Math.max(0, Number(params.usedQuantityByAuthorizationId?.get(authorizationId) || 0) || 0);
+      counts.set(
+        authorizationId,
+        Math.max(0, futureReservations) + Math.max(0, historicalOfficialCommitments - alreadyConsumed)
+      );
     }
   } catch (error: any) {
     console.warn('[AppointmentTissAuthorization] reservation count skipped.', {
@@ -9178,7 +9250,11 @@ async function resolveAppointmentTissAuthorizationForBilling(params: {
       organizationId,
       patientId,
       authorizationIds: hydratedRows.map((authorization: any) => sanitizeString(authorization?.id, 120)).filter((id: string) => isUuid(id)),
-      excludeAppointmentId: params.currentAppointmentId
+      excludeAppointmentId: params.currentAppointmentId,
+      usedQuantityByAuthorizationId: new Map(hydratedRows.map((authorization: any) => [
+        sanitizeString(authorization?.id, 120),
+        Number(authorization?.usedQuantity || authorization?.used_quantity || 0) || 0
+      ]))
     });
     const hydrated = hydratedRows.map((authorization: any) => ({
       ...authorization,
@@ -9262,7 +9338,11 @@ async function listAppointmentTissAuthorizationOptionsForBilling(params: {
       organizationId,
       patientId,
       authorizationIds: hydratedRows.map((authorization: any) => sanitizeString(authorization?.id, 120)).filter((id: string) => isUuid(id)),
-      excludeAppointmentId: params.currentAppointmentId
+      excludeAppointmentId: params.currentAppointmentId,
+      usedQuantityByAuthorizationId: new Map(hydratedRows.map((authorization: any) => [
+        sanitizeString(authorization?.id, 120),
+        Number(authorization?.usedQuantity || authorization?.used_quantity || 0) || 0
+      ]))
     });
     const hydrated = hydratedRows.map((authorization: any) => ({
       ...authorization,
@@ -31630,6 +31710,30 @@ async function startServer() {
         source?.therapist_name,
       180
     ) || null;
+    const payerId = sanitizeString(row?.payer_id || row?.payerId || source?.payer_id || source?.payerId, 120) || null;
+    const payerName = sanitizeString(
+      row?.payer_name_snapshot || row?.payerName || row?.payer_name || source?.payer_name_snapshot || source?.payerName || source?.payer_name,
+      180
+    ) || null;
+    const authorizationCode = sanitizeString(
+      row?.authorization_code || row?.authorizationCode || source?.authorization_code || source?.authorizationCode,
+      120
+    ) || null;
+    const guideNumber = sanitizeString(row?.guide_number || row?.guideNumber || source?.guide_number || source?.guideNumber, 120) || null;
+    const procedureCode = sanitizeString(row?.procedure_code || row?.procedureCode || source?.procedure_code || source?.procedureCode, 80) || null;
+    const insuranceCardNumber = sanitizeString(
+      row?.insurance_card_number || row?.insuranceCardNumber || source?.insurance_card_number || source?.insuranceCardNumber,
+      120
+    ) || null;
+    const insurancePlanName = sanitizeString(
+      row?.insurance_plan_name || row?.insurancePlanName || source?.insurance_plan_name || source?.insurancePlanName,
+      180
+    ) || null;
+    const explicitFinancialContext = sanitizeString(
+      row?.financial_context_type || row?.financialContextType || source?.financial_context_type || source?.financialContextType,
+      40
+    ).toUpperCase();
+    const financialContextType = explicitFinancialContext || (payerId || payerName ? 'INSURANCE' : null);
 
     return {
       id: appointmentId,
@@ -31652,6 +31756,23 @@ async function startServer() {
       responsibleProfessionalId: therapistId,
       responsible_professional_name: therapistName,
       responsibleProfessionalName: therapistName,
+      payer_id: payerId,
+      payerId,
+      payer_name_snapshot: payerName,
+      payer_name: payerName,
+      payerName,
+      financial_context_type: financialContextType,
+      financialContextType,
+      insurance_card_number: insuranceCardNumber,
+      insuranceCardNumber,
+      insurance_plan_name: insurancePlanName,
+      insurancePlanName,
+      authorization_code: authorizationCode,
+      authorizationCode,
+      guide_number: guideNumber,
+      guideNumber,
+      procedure_code: procedureCode,
+      procedureCode,
       start_time: start.toISOString(),
       end_time: end.toISOString(),
       date: sourceDate || formatDateInAppointmentTimezone(start),
@@ -36663,7 +36784,10 @@ async function startServer() {
     closure_main_issues: Array.isArray(row?.main_issues) ? row.main_issues.slice(0, 3) : [],
     aba_session_id: sanitizeString(row?.aba_session_id, 180) || null,
     abaSessionId: sanitizeString(row?.aba_session_id, 180) || null,
+    payer_id: sanitizeString(row?.payer_id, 120) || null,
+    payerId: sanitizeString(row?.payer_id, 120) || null,
     payer_name_snapshot: sanitizeString(row?.payer_name_snapshot, 180) || null,
+    payerName: sanitizeString(row?.payer_name_snapshot, 180) || null,
     authorization_code: sanitizeString(row?.authorization_code, 120) || null,
     guide_number: sanitizeString(row?.guide_number, 120) || null,
     required_document_pending_count: Number(row?.required_document_pending_count || 0)
@@ -36948,7 +37072,7 @@ async function startServer() {
     return appointment ? { ...appointment, source_payload: appointment } : null;
   };
 
-  app.get('/api/calendar/events', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/calendar/events', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
       const range = parseCalendarRangeParams(req.query);
       if (!range.ok) return res.status(400).json({ success: false, error: 'Intervalo da agenda inválido.' });
@@ -37020,7 +37144,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/calendar/events/:eventId/detail', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/calendar/events/:eventId/detail', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
       const eventId = sanitizeString(req.params.eventId, 180);
       if (!eventId) return res.status(400).json({ success: false, error: 'Sessão inválida.' });
@@ -37542,6 +37666,8 @@ async function startServer() {
       price?: any;
       preGuideCount?: number;
       officialPreGuideCount?: number;
+      futurePreGuideCount?: number;
+      historicalOfficialPreGuideCount?: number;
     } = {}
   ) => {
     const authorizedQuantity = Number(row?.authorized_quantity ?? 0) || 0;
@@ -37550,6 +37676,17 @@ async function startServer() {
     const code = context.code || null;
     const mapping = context.mapping || null;
     const price = context.price || null;
+    const preGuideCount = Number(context.preGuideCount || 0);
+    const hasSeparatedCommitmentCounts =
+      context.futurePreGuideCount !== undefined || context.historicalOfficialPreGuideCount !== undefined;
+    const futurePreGuideCount = Math.max(0, Number(context.futurePreGuideCount || 0) || 0);
+    const historicalOfficialPreGuideCount = Math.max(0, Number(context.historicalOfficialPreGuideCount || 0) || 0);
+    const reservedQuantity = hasSeparatedCommitmentCounts
+      ? futurePreGuideCount + Math.max(0, historicalOfficialPreGuideCount - usedQuantity)
+      : Math.max(0, preGuideCount - usedQuantity);
+    const availableQuantity = authorizedQuantity > 0
+      ? Math.max(0, authorizedQuantity - usedQuantity - reservedQuantity)
+      : null;
     return {
       id: sanitizeString(row?.id, 120),
       patientId: sanitizeString(row?.patient_id, 120),
@@ -37562,8 +37699,14 @@ async function startServer() {
       validFrom: row?.valid_from || null,
       validUntil: row?.valid_until || null,
       authorizedQuantity,
+      quantityAuthorized: authorizedQuantity,
       authorizedUnit: sanitizeString(row?.authorized_unit || mapping?.billing_unit || service?.billing_unit, 40) || 'sessions',
       usedQuantity,
+      quantityConsumed: usedQuantity,
+      reservedQuantity,
+      quantityReserved: reservedQuantity,
+      availableQuantity,
+      quantityAvailable: availableQuantity,
       serviceCatalogId: sanitizeString(row?.service_catalog_id, 120) || null,
       serviceName: sanitizeString(service?.name || row?.procedure_name_snapshot, 180) || null,
       internalCode: sanitizeString(service?.internal_code || row?.procedure_code || row?.procedure_code_snapshot, 80) || null,
@@ -37579,8 +37722,10 @@ async function startServer() {
       status: sanitizeString(row?.status, 40) || 'active',
       active: row?.active !== false,
       notes: sanitizeTextField(row?.notes, 2000) || null,
-      preGuideCount: Number(context.preGuideCount || 0),
+      preGuideCount,
       officialPreGuideCount: Number(context.officialPreGuideCount || 0),
+      futurePreGuideCount,
+      historicalOfficialPreGuideCount,
       createdAt: row?.created_at || null,
       updatedAt: row?.updated_at || null
     };
@@ -37614,7 +37759,7 @@ async function startServer() {
         ? supabase.from('payer_procedure_prices').select(PAYER_PROCEDURE_PRICE_SELECT).eq('organization_id', organizationId).in('payer_id', payerIds).eq('active', true).limit(400)
         : Promise.resolve({ data: [], error: null } as any),
       patientIds.length > 0
-        ? supabase.from('appointment_tiss_pre_guides').select('id,patient_id,official_document_id,snapshot_data').eq('organization_id', organizationId).in('patient_id', patientIds).limit(5000)
+        ? supabase.from('appointment_tiss_pre_guides').select('id,appointment_id,patient_id,scheduled_start,official_document_id,snapshot_data,status,revenue_cycle_state').eq('organization_id', organizationId).in('patient_id', patientIds).limit(5000)
         : Promise.resolve({ data: [], error: null } as any),
       options.includePatients && patientIds.length > 0
         ? supabase.from('patients').select('id,name,email,clinic_id,insurance_name,insurance_card_number,insurance_plan_category').eq('clinic_id', organizationId).in('id', patientIds).limit(patientIds.length)
@@ -37630,13 +37775,36 @@ async function startServer() {
     const patientsById = new Map<string, any>((patientsResult.error ? [] : patientsResult.data || []).map((row: any) => [sanitizeString(row.id, 120), row]));
     const prices = pricesResult.error ? [] : (pricesResult.data || []);
     const preGuides = preGuidesResult.error ? [] : (preGuidesResult.data || []);
-    const preGuidesByAuthorizationId = new Map<string, { count: number; officialCount: number }>();
+    const preGuidesByAuthorizationId = new Map<string, {
+      count: number;
+      officialCount: number;
+      futureAppointmentIds: Set<string>;
+      historicalOfficialAppointmentIds: Set<string>;
+    }>();
+    const today = new Date().toISOString().slice(0, 10);
     for (const preGuide of preGuides) {
-      const authorizationId = sanitizeString(preGuide?.snapshot_data?.authorization?.authorizationId || preGuide?.snapshot_data?.authorization?.id, 120);
+      const snapshot = parseStoredJsonObject(preGuide?.snapshot_data);
+      const authorizationId = sanitizeString(snapshot?.authorization?.authorizationId || snapshot?.authorization?.id, 120);
       if (!isUuid(authorizationId)) continue;
-      const current = preGuidesByAuthorizationId.get(authorizationId) || { count: 0, officialCount: 0 };
+      const current = preGuidesByAuthorizationId.get(authorizationId) || {
+        count: 0,
+        officialCount: 0,
+        futureAppointmentIds: new Set<string>(),
+        historicalOfficialAppointmentIds: new Set<string>()
+      };
       current.count += 1;
-      if (sanitizeString(preGuide?.official_document_id, 120)) current.officialCount += 1;
+      const official = isUuid(sanitizeString(preGuide?.official_document_id, 120));
+      if (official) current.officialCount += 1;
+      const status = sanitizeString(preGuide?.status || preGuide?.revenue_cycle_state, 80).toLowerCase();
+      const active = !['cancelled', 'canceled', 'deleted', 'refused'].includes(status);
+      const scheduledDate = appointmentDateKeyForAuthorization(preGuide?.scheduled_start);
+      const appointmentId = sanitizeString(preGuide?.appointment_id || preGuide?.id, 120);
+      if (active && (!scheduledDate || scheduledDate >= today)) {
+        current.futureAppointmentIds.add(appointmentId);
+        current.historicalOfficialAppointmentIds.delete(appointmentId);
+      } else if (official && !current.futureAppointmentIds.has(appointmentId)) {
+        current.historicalOfficialAppointmentIds.add(appointmentId);
+      }
       preGuidesByAuthorizationId.set(authorizationId, current);
     }
     const findPriceForAuthorization = (row: any) => {
@@ -37658,7 +37826,12 @@ async function startServer() {
       const authorizationId = sanitizeString(row?.id, 120);
       const patientId = sanitizeString(row?.patient_id, 120);
       const patient = patientsById.get(patientId);
-      const preGuideCounts = preGuidesByAuthorizationId.get(authorizationId) || { count: 0, officialCount: 0 };
+      const preGuideCounts = preGuidesByAuthorizationId.get(authorizationId) || {
+        count: 0,
+        officialCount: 0,
+        futureAppointmentIds: new Set<string>(),
+        historicalOfficialAppointmentIds: new Set<string>()
+      };
       const serialized = serializePatientPayerAuthorization(row, {
         payer: payersById.get(sanitizeString(row?.payer_id, 120)),
         service: servicesById.get(sanitizeString(row?.service_catalog_id, 120)),
@@ -37666,7 +37839,9 @@ async function startServer() {
         mapping: mappingsById.get(sanitizeString(row?.payer_tuss_mapping_id, 120)),
         price: findPriceForAuthorization(row),
         preGuideCount: preGuideCounts.count,
-        officialPreGuideCount: preGuideCounts.officialCount
+        officialPreGuideCount: preGuideCounts.officialCount,
+        futurePreGuideCount: preGuideCounts.futureAppointmentIds.size,
+        historicalOfficialPreGuideCount: preGuideCounts.historicalOfficialAppointmentIds.size
       });
       if (!options.includePatients) return serialized;
       return {
@@ -39797,7 +39972,13 @@ async function startServer() {
   const serializeTissOfficialTrackingBundle = (bundle: any, events: any[] = []) => {
     const document = serializeTissOfficialDocument(bundle.document);
     const tracking = serializeTissOfficialTracking(bundle.tracking);
-    const guides = Array.isArray(bundle.guides) ? bundle.guides.map(serializeTissOfficialGuideTracking).filter(Boolean) : [];
+    const trackingStatus = sanitizeString(tracking?.status, 60) || 'generated';
+    const guides = Array.isArray(bundle.guides)
+      ? bundle.guides
+          .map(serializeTissOfficialGuideTracking)
+          .filter(Boolean)
+          .map((guide: any) => trackingStatus === 'generated' ? { ...guide, status: 'generated' } : guide)
+      : [];
     return {
       ...document,
       tracking,
@@ -40720,6 +40901,7 @@ async function startServer() {
     const organizationId = sanitizeString(params.organizationId, 120);
     if (!isUuid(organizationId)) return [];
     const ids = new Set<string>();
+    const pendingPreGuideAppointmentIds = new Set<string>();
     const explicitAppointmentId = sanitizeString(params.appointmentId, 120);
     if (isUuid(explicitAppointmentId)) ids.add(explicitAppointmentId);
 
@@ -40730,7 +40912,7 @@ async function startServer() {
       .select('appointment_id,scheduled_start,official_document_id')
       .eq('organization_id', organizationId)
       .is('official_document_id', null)
-      .gte('scheduled_start', today)
+      .order('scheduled_start', { ascending: false })
       .limit(limit);
     const payerId = sanitizeString(params.payerId, 120);
     const patientId = sanitizeString(params.patientId, 120);
@@ -40742,7 +40924,10 @@ async function startServer() {
     if (!preGuideResult.error) {
       for (const row of preGuideResult.data || []) {
         const appointmentId = sanitizeString((row as any)?.appointment_id, 120);
-        if (isUuid(appointmentId)) ids.add(appointmentId);
+        if (isUuid(appointmentId)) {
+          ids.add(appointmentId);
+          pendingPreGuideAppointmentIds.add(appointmentId);
+        }
       }
     } else if (!hasMissingFinancialSchema(preGuideResult.error) && !isMissingRelationError(preGuideResult.error)) {
       console.warn('[TISS Pipeline] não foi possível localizar Pré-guias afetadas:', {
@@ -40751,24 +40936,46 @@ async function startServer() {
       });
     }
 
-    let contextQuery = supabase
-      .from('appointment_billing_contexts')
-      .select('appointment_id,patient_id,payer_id')
-      .eq('organization_id', organizationId)
-      .limit(limit);
-    if (isUuid(payerId)) contextQuery = contextQuery.eq('payer_id', payerId);
-    if (isUuid(patientId)) contextQuery = contextQuery.eq('patient_id', patientId);
-    const contextResult = await contextQuery;
-    if (!contextResult.error) {
-      for (const row of contextResult.data || []) {
-        const appointmentId = sanitizeString((row as any)?.appointment_id, 120);
-        if (isUuid(appointmentId)) ids.add(appointmentId);
+    if (isUuid(professionalId)) {
+      const professionalAppointmentsResult = await supabase
+        .from('appointments')
+        .select('id')
+        .eq('clinic_id', organizationId)
+        .eq('therapist_id', professionalId)
+        .gte('scheduled_at', new Date().toISOString())
+        .limit(limit);
+      if (!professionalAppointmentsResult.error) {
+        for (const row of professionalAppointmentsResult.data || []) {
+          const appointmentId = sanitizeString((row as any)?.id, 120);
+          if (isUuid(appointmentId)) ids.add(appointmentId);
+        }
+      } else if (!hasMissingFinancialSchema(professionalAppointmentsResult.error) && !isMissingRelationError(professionalAppointmentsResult.error)) {
+        console.warn('[TISS Pipeline] não foi possível localizar consultas futuras do profissional:', {
+          organizationId,
+          professionalId,
+          code: sanitizeString(professionalAppointmentsResult.error?.code, 40) || null
+        });
       }
-    } else if (!hasMissingFinancialSchema(contextResult.error) && !isMissingRelationError(contextResult.error)) {
-      console.warn('[TISS Pipeline] não foi possível localizar contextos de cobrança afetados:', {
-        organizationId,
-        code: sanitizeString(contextResult.error?.code, 40) || null
-      });
+    } else {
+      let contextQuery = supabase
+        .from('appointment_billing_contexts')
+        .select('appointment_id,patient_id,payer_id')
+        .eq('organization_id', organizationId)
+        .limit(limit);
+      if (isUuid(payerId)) contextQuery = contextQuery.eq('payer_id', payerId);
+      if (isUuid(patientId)) contextQuery = contextQuery.eq('patient_id', patientId);
+      const contextResult = await contextQuery;
+      if (!contextResult.error) {
+        for (const row of contextResult.data || []) {
+          const appointmentId = sanitizeString((row as any)?.appointment_id, 120);
+          if (isUuid(appointmentId)) ids.add(appointmentId);
+        }
+      } else if (!hasMissingFinancialSchema(contextResult.error) && !isMissingRelationError(contextResult.error)) {
+        console.warn('[TISS Pipeline] não foi possível localizar contextos de cobrança afetados:', {
+          organizationId,
+          code: sanitizeString(contextResult.error?.code, 40) || null
+        });
+      }
     }
 
     const appointmentIds = Array.from(ids).slice(0, limit);
@@ -40776,10 +40983,13 @@ async function startServer() {
     const rows = await readPersistedAppointmentRows(appointmentIds, organizationId);
     const futureIds = rows
       .filter((row: any) => {
+        const appointmentId = sanitizeString(row?.id, 120);
+        const rowProfessionalId = sanitizeString(row?.professional_id || row?.therapist_id, 120);
+        if (isUuid(professionalId) && rowProfessionalId !== professionalId) return false;
         const status = normalizeOperationalAppointmentStatus(row?.status);
         if (['CANCELLED', 'CANCEL_REQUESTED', 'DELETED'].includes(status)) return false;
         const scheduled = sanitizeString(row?.scheduled_start_at || row?.scheduled_at || row?.date, 40).slice(0, 10);
-        return !scheduled || scheduled >= today;
+        return pendingPreGuideAppointmentIds.has(appointmentId) || !scheduled || scheduled >= today;
       })
       .map((row: any) => sanitizeString(row?.id, 120))
       .filter((id: string) => isUuid(id));
@@ -40787,6 +40997,36 @@ async function startServer() {
       futureIds.unshift(explicitAppointmentId);
     }
     return Array.from(new Set(futureIds)).slice(0, limit);
+  };
+
+  const runAffectedTissPipeline = async (params: {
+    organizationId: string;
+    user: any;
+    reason: string;
+    payerId?: string | null;
+    patientId?: string | null;
+    professionalId?: string | null;
+    appointmentId?: string | null;
+    limit?: number;
+  }) => {
+    const appointmentIds = await collectTissPipelineAffectedFutureAppointmentIds(params);
+    const results = appointmentIds.length > 0
+      ? await runTissPipelineForAppointments({
+          appointmentIds,
+          user: params.user,
+          reason: params.reason,
+          mode: 'best_effort',
+          revalidateAppointment: revalidateAppointmentBillingForAppointment,
+          logger: console,
+          concurrency: 4
+        })
+      : [];
+    return {
+      reason: params.reason,
+      attempted: results.length,
+      updated: results.filter((item) => item.ok).length,
+      errors: results.filter((item) => !item.ok).length
+    };
   };
 
   const tissPreGuideQuickFilterCodes: Record<string, string[]> = {
@@ -40869,6 +41109,15 @@ async function startServer() {
       const now = new Date().toISOString();
       const userId = sanitizeString(req.session.user?.id, 120);
       const existingProfile = await fetchTissPreGuideProfile('clinic_tiss_profiles', CLINIC_TISS_PROFILE_SELECT, organizationId);
+      const providerCode = sanitizeString(req.body?.providerCode ?? req.body?.provider_code, 200);
+      const ansProviderCode = sanitizeString(req.body?.ansProviderCode ?? req.body?.ans_provider_code, 200);
+      if (providerCode.length > 14 || ansProviderCode.length > 14) {
+        return res.status(422).json({
+          success: false,
+          code: 'TISS_PROVIDER_CODE_TOO_LONG',
+          error: 'O código do prestador deve ter no máximo 14 caracteres. Revise o cadastro antes de salvar.'
+        });
+      }
       const payload = cleanObject({
         organization_id: organizationId,
         clinic_id: organizationId,
@@ -40879,8 +41128,8 @@ async function startServer() {
           : null,
         document_number: sanitizeString(req.body?.documentNumber ?? req.body?.document_number, 40).replace(/\D/g, '') || null,
         cnes_code: sanitizeString(req.body?.cnesCode ?? req.body?.cnes_code, 40).replace(/\D/g, '') || null,
-        provider_code: sanitizeString(req.body?.providerCode ?? req.body?.provider_code, 80) || null,
-        ans_provider_code: sanitizeString(req.body?.ansProviderCode ?? req.body?.ans_provider_code, 80) || null,
+        provider_code: providerCode || null,
+        ans_provider_code: ansProviderCode || null,
         address_line: sanitizeString(req.body?.addressLine ?? req.body?.address_line, 180) || null,
         address_number: sanitizeString(req.body?.addressNumber ?? req.body?.address_number, 40) || null,
         address_complement: sanitizeString(req.body?.addressComplement ?? req.body?.address_complement, 120) || null,
@@ -40902,7 +41151,13 @@ async function startServer() {
         .maybeSingle();
       if (error) throw error;
       await markTissPreGuidesStale({ organizationId, reason: 'Dados TISS do prestador alterados.' });
-      return sendNoStoreJson(res, { success: true, data });
+      const tissPipeline = await runAffectedTissPipeline({
+        organizationId,
+        user: req.session.user,
+        reason: 'clinic_tiss_profile_changed',
+        limit: 200
+      });
+      return sendNoStoreJson(res, { success: true, data, tissPipeline });
     } catch (error: any) {
       console.warn('[TissPreGuide] provider profile update failed:', error?.message || String(error));
       return res.status(500).json(payerSafeError(500));
@@ -40973,6 +41228,15 @@ async function startServer() {
       const now = new Date().toISOString();
       const userId = sanitizeString(req.session.user?.id, 120);
       const existingProfile = await fetchTissPreGuideProfile('payer_tiss_profiles', PAYER_TISS_PROFILE_SELECT, organizationId, 'payer_id', payerId);
+      const contractedProviderCode = sanitizeString(req.body?.contractedProviderCode ?? req.body?.contracted_provider_code, 200);
+      const operatorProviderCode = sanitizeString(req.body?.operatorProviderCode ?? req.body?.operator_provider_code, 200);
+      if (contractedProviderCode.length > 14 || operatorProviderCode.length > 14) {
+        return res.status(422).json({
+          success: false,
+          code: 'TISS_PROVIDER_CODE_TOO_LONG',
+          error: 'O código do prestador deve ter no máximo 14 caracteres. Revise o cadastro antes de salvar.'
+        });
+      }
       const guideType = sanitizeString(req.body?.defaultGuideType ?? req.body?.default_guide_type, 40).toLowerCase();
       const attendanceType = normalizeAttendanceType040300(req.body?.defaultAttendanceType ?? req.body?.default_attendance_type);
       const attendanceRegime = normalizeAttendanceRegime040300(req.body?.defaultAttendanceRegime ?? req.body?.default_attendance_regime);
@@ -41027,8 +41291,8 @@ async function startServer() {
         requires_beneficiary_card: req.body?.requiresBeneficiaryCard ?? req.body?.requires_beneficiary_card ?? true,
         requires_beneficiary_card_validity: Boolean(req.body?.requiresBeneficiaryCardValidity ?? req.body?.requires_beneficiary_card_validity),
         contracted_executant: sanitizeString(req.body?.contractedExecutant ?? req.body?.contracted_executant, 160) || null,
-        contracted_provider_code: sanitizeString(req.body?.contractedProviderCode ?? req.body?.contracted_provider_code, 120) || null,
-        operator_provider_code: sanitizeString(req.body?.operatorProviderCode ?? req.body?.operator_provider_code, 120) || null,
+        contracted_provider_code: contractedProviderCode || null,
+        operator_provider_code: operatorProviderCode || null,
         operator_document_number: sanitizeString(req.body?.operatorDocumentNumber ?? req.body?.operator_document_number, 32) || null,
         auditor_contact_name: sanitizeString(req.body?.auditorContactName ?? req.body?.auditor_contact_name, 160) || null,
         billing_email: sanitizeString(req.body?.billingEmail ?? req.body?.billing_email, 180) || null,
@@ -41070,7 +41334,14 @@ async function startServer() {
       }
       if (upsertResult.error) throw upsertResult.error;
       await markTissPreGuidesStale({ organizationId, payerId, reason: 'Dados TISS do pagador alterados.' });
-      return sendNoStoreJson(res, { success: true, data: upsertResult.data });
+      const tissPipeline = await runAffectedTissPipeline({
+        organizationId,
+        payerId,
+        user: req.session.user,
+        reason: 'payer_tiss_profile_changed',
+        limit: 200
+      });
+      return sendNoStoreJson(res, { success: true, data: upsertResult.data, tissPipeline });
     } catch (error: any) {
       console.warn('[TissPreGuide] payer profile update failed:', error?.message || String(error));
       return res.status(500).json(payerSafeError(500));
@@ -41703,11 +41974,13 @@ async function startServer() {
     organizationId,
     professionalId,
     updatedBy,
+    user,
     body,
   }: {
     organizationId: string;
     professionalId: string;
     updatedBy: string;
+    user: any;
     body: any;
   }) => {
     const existingProfile = await fetchTissPreGuideProfile(
@@ -41744,7 +42017,14 @@ async function startServer() {
       .maybeSingle();
     if (error) throw error;
     await markTissPreGuidesStale({ organizationId, professionalId, reason: 'Perfil faturável do profissional alterado.' });
-    return data;
+    const tissPipeline = await runAffectedTissPipeline({
+      organizationId,
+      professionalId,
+      user,
+      reason: 'professional_billing_profile_changed',
+      limit: 200
+    });
+    return { data, tissPipeline };
   };
 
   app.get('/api/tiss/professional-profile/me', noStoreDynamicResponse, checkAuth, requireRoles('therapist', 'coordinator', 'admin', 'owner'), async (req: any, res) => {
@@ -41776,13 +42056,14 @@ async function startServer() {
       if (!isUuid(organizationId) || !isUuid(professionalId)) return res.status(400).json(payerSafeError(400));
       const owner = await assertProfessionalBillingProfileScope(organizationId, professionalId);
       if (!owner) return res.status(404).json(payerSafeError(404));
-      const data = await upsertProfessionalBillingProfile({
+      const result = await upsertProfessionalBillingProfile({
         organizationId,
         professionalId,
         updatedBy: professionalId,
+        user: req.session.user,
         body: req.body,
       });
-      return sendNoStoreJson(res, { success: true, data });
+      return sendNoStoreJson(res, { success: true, data: result.data, tissPipeline: result.tissPipeline });
     } catch (error: any) {
       console.warn('[TissPreGuide] own professional profile update failed:', error?.message || String(error));
       return res.status(500).json(payerSafeError(500));
@@ -41837,13 +42118,14 @@ async function startServer() {
       const owner = await assertProfessionalBillingProfileScope(organizationId, professionalId);
       if (!owner) return res.status(404).json(payerSafeError(404));
       const userId = sanitizeString(req.session.user?.id, 120);
-      const data = await upsertProfessionalBillingProfile({
+      const result = await upsertProfessionalBillingProfile({
         organizationId,
         professionalId,
         updatedBy: userId,
+        user: req.session.user,
         body: req.body,
       });
-      return sendNoStoreJson(res, { success: true, data });
+      return sendNoStoreJson(res, { success: true, data: result.data, tissPipeline: result.tissPipeline });
     } catch (error: any) {
       console.warn('[TissPreGuide] professional profile update failed:', error?.message || String(error));
       return res.status(500).json(payerSafeError(500));
@@ -42162,6 +42444,7 @@ async function startServer() {
         preGuides,
         payerId,
         competenceMonth,
+        timeZone: currentClinicTimeZone(req.session.user),
         batchNumber: '',
         generatedBy,
         communicationVersion: officialTissStrategy.communicationVersion,
@@ -45852,7 +46135,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/appointments/:appointmentId/billing-context', checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/appointments/:appointmentId/billing-context', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
       const context = await fetchAppointmentForBillingContext(req.params.appointmentId, req.session.user);
       if (!context.ok) return res.status((context as any).status || 404).json(payerSafeError((context as any).status || 404));
@@ -46041,7 +46324,39 @@ async function startServer() {
         created_at: existing?.created_at || now,
         updated_at: now
       });
-      const data = await upsertAppointmentBillingContextRow(payload, Boolean(existing?.id));
+      let data: any = null;
+      if (appliedTissAuthorization?.authorizationId) {
+        const reservationResult = await supabase.rpc('reserve_tiss_authorization_billing_context', {
+          p_organization_id: organizationId,
+          p_appointment_id: appointment.id,
+          p_patient_id: appointment.patient_id,
+          p_authorization_id: appliedTissAuthorization.authorizationId,
+          p_context: payload
+        });
+        if (reservationResult.error) {
+          const reservationMessage = String(reservationResult.error.message || reservationResult.error.details || '');
+          if (reservationMessage.includes('TISS_AUTHORIZATION_NO_AVAILABLE_BALANCE')) {
+            return res.status(409).json({ success: false, code: 'AUTHORIZATION_NO_AVAILABLE_BALANCE', error: 'Esta autorização não possui saldo disponível.' });
+          }
+          if (reservationMessage.includes('TISS_AUTHORIZATION_SCOPE_INVALID') || reservationMessage.includes('TISS_AUTHORIZATION_PAYER_MISMATCH')) {
+            return res.status(403).json({ success: false, code: 'AUTHORIZATION_SCOPE_INVALID', error: 'A autorização não pertence a este paciente, convênio ou clínica.' });
+          }
+          if (reservationMessage.includes('TISS_AUTHORIZATION_INACTIVE')) {
+            return res.status(409).json({ success: false, code: 'AUTHORIZATION_INACTIVE', error: 'Esta autorização não está ativa.' });
+          }
+          if (sanitizeString(reservationResult.error.code, 40) === 'PGRST202' || reservationMessage.toLowerCase().includes('reserve_tiss_authorization_billing_context')) {
+            return res.status(503).json({
+              success: false,
+              code: 'TISS_AUTHORIZATION_RESERVATION_SCHEMA_UNAVAILABLE',
+              error: 'A reserva atômica de autorização ainda não está disponível. Aplique a migration pendente antes de tentar novamente.'
+            });
+          }
+          throw reservationResult.error;
+        }
+        data = mergeBillingContextMetadata(reservationResult.data || payload);
+      } else {
+        data = await upsertAppointmentBillingContextRow(payload, Boolean(existing?.id));
+      }
       try {
         await writePayerRequirementAuditLog({
           organizationId,
@@ -46118,11 +46433,24 @@ async function startServer() {
       } catch (closureError: any) {
         console.warn('[PayerRequirements] fechamento pontual apos pagador falhou:', closureError?.message || String(closureError));
       }
+      const tissPipeline = await runAffectedTissPipeline({
+        organizationId,
+        appointmentId: appointment.id,
+        user: req.session.user,
+        reason: 'appointment_billing_context_changed',
+        limit: 1
+      });
       const serialized = {
         ...serializeBillingContext(data, payer, documents),
         billingItem
       };
-      return res.json({ success: true, message: 'Pagador salvo na consulta.', data: serialized, billingContext: serialized });
+      return sendNoStoreJson(res, {
+        success: true,
+        message: appliedTissAuthorization?.authorizationId ? 'Autorização aplicada.' : 'Pagador salvo na consulta.',
+        data: serialized,
+        billingContext: serialized,
+        tissPipeline
+      });
     } catch (error: any) {
       console.warn('[PayerRequirements] billing context update failed:', error?.message || String(error));
       const code = sanitizeString(error?.code, 40);

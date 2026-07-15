@@ -12,6 +12,8 @@ import {
   getBillingConfigurationCompletionState,
   isLegacyOrInvalidTussCodeForSetup,
   isBillingConfigurationOperational,
+  payerProcedurePriceToForm,
+  payerTussMappingToForm,
   parseBrazilianCurrencyToCents,
 } from '../src/components/PayerRequirementsPanel';
 
@@ -706,7 +708,7 @@ test('esteira pede valor negociado quando DePara existe sem preco vigente', () =
   assert.match(readiness.steps.find((step) => step.key === 'prices')?.blockingReasons?.join(' ') || '', /valor negociado/i);
 });
 
-test('esteira marca anti-glosa nao revisada como alerta sem bloquear geracao futura', () => {
+test('esteira nao declara XML pronto antes do teste mesmo com anti-glosa em alerta', () => {
   const readiness = getPayerSetupReadiness({
     payer: { name: 'Amil', payerType: 'INSURANCE', status: 'ACTIVE' },
     tissProfile: { ansRegistration: '326305', contractedProviderCode: 'PREST-1' },
@@ -719,7 +721,8 @@ test('esteira marca anti-glosa nao revisada como alerta sem bloquear geracao fut
   const antiGlosaStep = readiness.steps.find((step) => step.key === 'anti_glosa');
   assert.equal(antiGlosaStep?.status, 'warning');
   assert.equal(antiGlosaStep?.canContinue, true);
-  assert.equal(readiness.overallStatus, 'ready_for_xml_with_warning');
+  assert.equal(readiness.overallStatus, 'ready_for_pre_guide');
+  assert.notEqual(readiness.overallStatus, 'ready_for_xml');
 });
 
 test('esteira reconhece convenio ja configurado e teste de pre-guia aprovado como pronto para XML', () => {
@@ -740,7 +743,7 @@ test('esteira reconhece convenio ja configurado e teste de pre-guia aprovado com
   assert.equal(readiness.currentStepKey, 'ready');
 });
 
-test('esteira leva teste de pre-guia com alerta para pronto para XML com alerta', () => {
+test('esteira com teste de pre-guia em alerta continua pronta apenas para pre-guia', () => {
   const readiness = getPayerSetupReadiness({
     payer: { name: 'Amil', payerType: 'INSURANCE', status: 'ACTIVE' },
     tissProfile: {
@@ -755,9 +758,54 @@ test('esteira leva teste de pre-guia com alerta para pronto para XML com alerta'
     preGuideTestStatus: 'warning',
     preGuideTestIssues: ['Exigências da operadora ainda não revisadas'],
   });
-  assert.equal(readiness.overallStatus, 'ready_for_xml_with_warning');
+  assert.equal(readiness.overallStatus, 'ready_for_pre_guide');
   assert.equal(readiness.steps.find((step) => step.key === 'test')?.status, 'warning');
   assert.match(readiness.warnings.join(' '), /Exig/);
+});
+
+test('formularios simplificados hidratam DePara e valor persistidos sem apagar vigencias', () => {
+  const mapping = payerTussMappingToForm({
+    id: 'mapping-1',
+    payerId: 'payer-1',
+    serviceCatalogId: 'service-1',
+    tussCodeId: 'tuss-1',
+    validFrom: '2026-07-01',
+    validTo: '2026-12-31',
+    authorizedCode: '50000470',
+    billingCode: '6680',
+    active: true,
+  } as any);
+  const price = payerProcedurePriceToForm({
+    id: 'price-1',
+    payerId: 'payer-1',
+    payerTussMappingId: 'mapping-1',
+    serviceCatalogId: 'service-1',
+    tussCodeId: 'tuss-1',
+    amountCents: 15000,
+    validFrom: '2026-07-01',
+    validUntil: '2026-12-31',
+    active: true,
+  } as any);
+
+  assert.equal(mapping.validFrom, '2026-07-01');
+  assert.equal(mapping.validTo, '2026-12-31');
+  assert.equal(mapping.authorizedCode, '50000470');
+  assert.equal(mapping.billingCode, '6680');
+  assert.equal(price.amountCents, '150,00');
+  assert.equal(price.validFrom, '2026-07-01');
+  assert.equal(price.validUntil, '2026-12-31');
+  assert.equal(price.payerTussMappingId, 'mapping-1');
+});
+
+test('esteira navega somente por acao explicita e preserva contexto do pagador', () => {
+  assert.match(payerPanelCode, /setActiveSetupStepKey\(payerSetupReadiness\.currentStepKey\)[\s\S]*?\}, \[selectedPayerId\]\)/);
+  assert.doesNotMatch(payerPanelCode, /\}, \[payerSetupReadiness\.currentStepKey\]\)/);
+  assert.match(payerPanelCode, /stepKey === "authorizations"[\s\S]*onNavigateToPatientAuthorizations\(context\)/);
+  assert.match(payerPanelCode, /stepKey === "test" \|\| stepKey === "ready"[\s\S]*onNavigateToPreGuides\(context\)/);
+  assert.match(coordinatorCode, /onNavigateToPatientAuthorizations[\s\S]*payerId,[\s\S]*payerName/);
+  assert.match(coordinatorCode, /onNavigateToPreGuides[\s\S]*payerId,[\s\S]*payerName/);
+  assert.match(coordinatorCode, /initialPayerId=\{financialNavigationContext\.payerId\}/);
+  assert.match(payerPanelCode, /initialPayerId && payers\.some\(\(payer\) => payer\.id === initialPayerId\)/);
 });
 
 test('esteira bloqueada por teste de pre-guia explica pendencias', () => {

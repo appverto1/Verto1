@@ -2948,15 +2948,6 @@ export const ClinicalAgendaBoard = ({
       : String(billingForm.source || '').toUpperCase() === 'PATIENT_DEFAULT'
         ? 'Dados sugeridos a partir do cadastro do paciente'
       : '';
-  const billingTissAuthorizationSummary = billingSuggestedTissAuthorization
-    ? [
-        billingSuggestedTissAuthorization.authorizationCode ? `Senha ${billingSuggestedTissAuthorization.authorizationCode}` : '',
-        billingSuggestedTissAuthorization.guideNumber ? `Guia ${billingSuggestedTissAuthorization.guideNumber}` : '',
-        billingSuggestedTissAuthorization.tussCode ? `TUSS ${billingSuggestedTissAuthorization.tussCode}` : '',
-        billingSuggestedTissAuthorization.balance !== null && billingSuggestedTissAuthorization.balance !== undefined ? `saldo ${billingSuggestedTissAuthorization.balance}` : '',
-        billingSuggestedTissAuthorization.validUntil ? `válida até ${String(billingSuggestedTissAuthorization.validUntil).slice(0, 10).split('-').reverse().join('/')}` : ''
-      ].filter(Boolean).join(' · ')
-    : '';
   const financialValidationItems = [
     {
       label: 'Pagador',
@@ -3004,26 +2995,28 @@ export const ClinicalAgendaBoard = ({
     : financialWarningCount > 0
       ? 'Pronta com alerta'
       : 'Pronta para faturamento';
-  const applySuggestedTissAuthorizationToBillingForm = () => {
-    if (!billingSuggestedTissAuthorization) return;
-    setBillingForm((prev: any) => ({
-      ...prev,
-      guideNumber: billingSuggestedTissAuthorization.guideNumber || prev.guideNumber,
-      authorizationCode: billingSuggestedTissAuthorization.authorizationCode || prev.authorizationCode,
-      source: 'PATIENT_TISS_AUTHORIZATION',
-      patientTissAuthorizationId: billingSuggestedTissAuthorization.authorizationId || billingSuggestedTissAuthorization.patientTissAuthorizationId || ''
-    }));
-  };
-  const applyAvailableTissAuthorizationToBillingForm = (authorization: any) => {
+  const applyAvailableTissAuthorizationToBillingForm = async (authorization: any) => {
     if (!authorization?.authorizationId && !authorization?.patientTissAuthorizationId) return;
-    setBillingForm((prev: any) => ({
-      ...prev,
-      guideNumber: authorization.guideNumber || prev.guideNumber,
-      authorizationCode: authorization.authorizationCode || authorization.authorizationNumber || prev.authorizationCode,
-      procedureCode: authorization.tussCode || prev.procedureCode,
+    const nextForm = {
+      ...billingForm,
+      financialContextType: 'INSURANCE',
+      payerId: authorization.payerId || billingForm.payerId,
+      payerName: authorization.payerName || billingForm.payerName,
+      guideNumber: authorization.guideNumber || billingForm.guideNumber,
+      authorizationCode: authorization.authorizationCode || authorization.authorizationNumber || billingForm.authorizationCode,
+      procedureCode: authorization.tussCode || authorization.procedureCode || billingForm.procedureCode,
       source: 'PATIENT_TISS_AUTHORIZATION',
       patientTissAuthorizationId: authorization.authorizationId || authorization.patientTissAuthorizationId || ''
-    }));
+    };
+    setBillingForm(nextForm);
+    const saved = await saveBillingContext(nextForm);
+    if (saved) {
+      setBillingEditorState((prev) => ({ ...prev, success: 'Autorização aplicada.' }));
+    }
+  };
+  const applySuggestedTissAuthorizationToBillingForm = async () => {
+    if (!billingSuggestedTissAuthorization) return;
+    await applyAvailableTissAuthorizationToBillingForm(billingSuggestedTissAuthorization);
   };
 
   return (
@@ -3246,14 +3239,27 @@ export const ClinicalAgendaBoard = ({
             {billingFormUsesInsurance && billingSuggestedTissAuthorization && (
               <div className={`mt-4 rounded-2xl border p-4 ${isDark ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100' : 'border-emerald-200 bg-emerald-50 text-emerald-900'}`}>
                 <p className="text-[10px] font-bold uppercase tracking-[0.16em]">Autorização TISS sugerida</p>
-                <p className="mt-1 text-sm font-semibold">{billingTissAuthorizationSummary || 'Autorização vigente do paciente disponível para esta consulta.'}</p>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  {[
+                    ['Autorização/Senha', billingSuggestedTissAuthorization.authorizationCode || billingSuggestedTissAuthorization.authorizationNumber || 'Não informada'],
+                    ['Guia', billingSuggestedTissAuthorization.guideNumber || 'Não informada'],
+                    ['TUSS', billingSuggestedTissAuthorization.tussCode || billingSuggestedTissAuthorization.procedureCode || 'Não informado'],
+                    ['Saldo disponível', billingSuggestedTissAuthorization.availabilityLabel || (billingSuggestedTissAuthorization.balance ?? 'Não informado')],
+                    ['Validade', billingSuggestedTissAuthorization.validUntil ? String(billingSuggestedTissAuthorization.validUntil).slice(0, 10).split('-').reverse().join('/') : 'Não informada'],
+                  ].map(([label, value]) => (
+                    <div key={String(label)} className={`rounded-xl border px-3 py-2 ${isDark ? 'border-emerald-400/20 bg-slate-950/20' : 'border-emerald-100 bg-white/70'}`}>
+                      <p className="text-[10px] font-medium uppercase tracking-[0.12em] opacity-70">{label}</p>
+                      <p className="mt-1 text-sm font-semibold">{String(value)}</p>
+                    </div>
+                  ))}
+                </div>
                 <button
                   type="button"
                   disabled={billingEditorState.saving}
                   onClick={applySuggestedTissAuthorizationToBillingForm}
                   className="mt-3 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-bold text-white disabled:opacity-60"
                 >
-                  Usar esta autorização
+                  {billingEditorState.saving ? 'Aplicando...' : 'Usar esta autorização'}
                 </button>
               </div>
             )}
@@ -3283,18 +3289,24 @@ export const ClinicalAgendaBoard = ({
                     return (
                       <div key={key} className={`rounded-xl border px-3 py-2 ${canUse ? 'border-emerald-200 bg-emerald-50' : isDark ? 'border-slate-700 bg-[#101827]' : 'border-slate-100 bg-white'}`}>
                         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                          <div className="min-w-0">
-                            <p className={`text-sm font-bold ${canUse ? 'text-emerald-800' : isDark ? 'text-slate-100' : 'text-slate-700'}`}>
-                              Guia {authorization?.guideNumber || 'sem guia'} - Senha {authorization?.authorizationCode || authorization?.authorizationNumber || 'sem senha'}
+                          <div className="min-w-0 flex-1">
+                            <p className={`text-sm font-semibold ${canUse ? 'text-emerald-800' : isDark ? 'text-slate-100' : 'text-slate-700'}`}>
+                              {authorization?.payerName || billingForm.payerName || 'Convênio'} · {authorization?.procedureName || authorization?.tussDescription || 'Procedimento'}
                             </p>
-                            <p className="mt-1 text-xs font-semibold text-slate-500">
-                              {authorization?.payerName || billingForm.payerName || 'Convenio'} - {authorization?.procedureName || authorization?.tussDescription || 'Procedimento'} {authorization?.tussCode ? `- TUSS ${authorization.tussCode}` : ''}
-                            </p>
-                            <p className="mt-1 text-[11px] font-semibold text-slate-400">
-                              {authorization?.availabilityLabel || authorization?.status || 'Status nao informado'}
-                              {validity ? ` - Validade ${validity}` : ''}
-                              {authorization?.balance !== null && authorization?.balance !== undefined ? ` - Saldo ${authorization.balance}` : ''}
-                            </p>
+                            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                              {[
+                                ['Autorização/Senha', authorization?.authorizationCode || authorization?.authorizationNumber || 'Não informada'],
+                                ['Guia', authorization?.guideNumber || 'Não informada'],
+                                ['TUSS', authorization?.tussCode || 'Não informado'],
+                                ['Saldo disponível', authorization?.availabilityLabel || (authorization?.balance ?? 'Não informado')],
+                                ['Validade', validity || 'Não informada'],
+                              ].map(([label, value]) => (
+                                <div key={String(label)} className={`rounded-lg border px-2.5 py-2 ${isDark ? 'border-slate-700 bg-slate-950/20' : 'border-slate-100 bg-white/70'}`}>
+                                  <p className="text-[10px] font-medium uppercase tracking-[0.1em] text-slate-400">{label}</p>
+                                  <p className={`mt-0.5 text-xs font-semibold ${isDark ? 'text-slate-100' : 'text-slate-700'}`}>{String(value)}</p>
+                                </div>
+                              ))}
+                            </div>
                             {!canUse && authorization?.unavailableReason && (
                               <p className="mt-1 text-[11px] font-bold text-amber-700">{authorization.unavailableReason}</p>
                             )}
@@ -3302,10 +3314,10 @@ export const ClinicalAgendaBoard = ({
                           <button
                             type="button"
                             disabled={!canUse || billingEditorState.saving}
-                            onClick={() => applyAvailableTissAuthorizationToBillingForm(authorization)}
+                            onClick={() => void applyAvailableTissAuthorizationToBillingForm(authorization)}
                             className={`rounded-xl px-3 py-2 text-xs font-bold disabled:opacity-50 ${canUse ? 'bg-emerald-600 text-white' : 'border border-slate-200 text-slate-400'}`}
                           >
-                            Usar
+                            {billingEditorState.saving ? 'Aplicando...' : 'Usar'}
                           </button>
                         </div>
                       </div>

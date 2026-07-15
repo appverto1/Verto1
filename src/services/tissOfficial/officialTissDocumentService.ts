@@ -36,6 +36,7 @@ export function buildOfficialTissIdempotencyKey(input: OfficialTissDocumentInput
     scope: "tiss_official_document",
     payerId: text(input.payerId, 120),
     competenceMonth: monthKey(input.competenceMonth),
+    timeZone: text(input.timeZone, 80) || "America/Sao_Paulo",
     communicationVersion: text(input.communicationVersion, 20),
     contentStructureVersion: text(input.contentStructureVersion, 20),
     preGuides: orderedPreGuides

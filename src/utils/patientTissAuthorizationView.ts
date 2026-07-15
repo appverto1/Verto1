@@ -99,6 +99,14 @@ export const getPatientTissAuthorizationVisualState = (
   const active = authorization?.active !== false && status !== 'cancelled' && status !== 'inactive';
   const authorizedQuantity = Number(authorization?.authorizedQuantity ?? authorization?.authorized_quantity ?? 0) || 0;
   const usedQuantity = Number(authorization?.usedQuantity ?? authorization?.used_quantity ?? 0) || 0;
+  const reservedQuantity = Number(
+    authorization?.quantityReserved ??
+      authorization?.reservedQuantity ??
+      authorization?.reserved_quantity ??
+      authorization?.reservedAppointments ??
+      authorization?.reserved_appointments ??
+      0,
+  ) || 0;
   const validFrom = asDateKey(authorization?.validFrom ?? authorization?.valid_from);
   const validUntil = asDateKey(authorization?.validUntil ?? authorization?.valid_until);
   const tussReview = getPatientTissAuthorizationTussReview(authorization);
@@ -120,7 +128,7 @@ export const getPatientTissAuthorizationVisualState = (
   if (!active) {
     return { status: 'inactive', label: 'Inativa', tone: 'slate', sortRank: 5, isCurrent: false, isHistorical: true, isLegacyOrInadequate: false };
   }
-  if (authorizedQuantity > 0 && usedQuantity >= authorizedQuantity) {
+  if (authorizedQuantity > 0 && usedQuantity + reservedQuantity >= authorizedQuantity) {
     return { status: 'consumed', label: 'Consumida', tone: 'slate', sortRank: 4, isCurrent: false, isHistorical: true, isLegacyOrInadequate: false };
   }
   if (validUntil && validUntil < referenceDateKey) {
@@ -251,8 +259,16 @@ export const findSuggestedTissAuthorizationForFinancialPlan = (
 const authorizationBalance = (authorization: any) => {
   const authorizedQuantity = Number(authorization?.authorizedQuantity ?? authorization?.authorized_quantity ?? 0) || 0;
   const usedQuantity = Number(authorization?.usedQuantity ?? authorization?.used_quantity ?? 0) || 0;
+  const reservedQuantity = Number(
+    authorization?.quantityReserved ??
+      authorization?.reservedQuantity ??
+      authorization?.reserved_quantity ??
+      authorization?.reservedAppointments ??
+      authorization?.reserved_appointments ??
+      0,
+  ) || 0;
   if (authorizedQuantity <= 0) return Number.MAX_SAFE_INTEGER;
-  return Math.max(0, authorizedQuantity - usedQuantity);
+  return Math.max(0, authorizedQuantity - usedQuantity - reservedQuantity);
 };
 
 export const getPatientTissAuthorizationQuantitySummary = (authorization: any) => {
@@ -361,6 +377,8 @@ export const findSuggestedTissAuthorizationForAppointment = (
   const payerTussMappingId = cleanText(appointment?.payerTussMappingId);
 
   const candidates = (Array.isArray(authorizations) ? authorizations : []).filter((authorization) => {
+    const quantity = getPatientTissAuthorizationQuantitySummary(authorization);
+    if (quantity.hasPackageLimit && quantity.available === 0) return false;
     const state = getPatientTissAuthorizationVisualState(
       serviceKey ? { ...authorization, serviceType: authorization?.serviceType || serviceKey } : authorization,
       referenceDateKey,
