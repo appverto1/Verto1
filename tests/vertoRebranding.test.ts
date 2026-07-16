@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { inflateSync } from 'node:zlib';
 import {
   buildPatientReminderNotificationPayload,
   resolveBrandingContext,
@@ -12,10 +13,24 @@ const root = process.cwd();
 const read = (file: string) => readFileSync(join(root, file), 'utf8');
 const asset = (file: string) => join(root, 'public', 'branding', 'verto', file);
 
-const readPngSize = (file: string) => {
+const readPngInfo = (file: string) => {
   const buffer = readFileSync(file);
   assert.equal(buffer.subarray(1, 4).toString('ascii'), 'PNG');
-  return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
+  const idatChunks: Buffer[] = [];
+  for (let offset = 8; offset < buffer.length;) {
+    const length = buffer.readUInt32BE(offset);
+    const type = buffer.subarray(offset + 4, offset + 8).toString('ascii');
+    if (type === 'IDAT') idatChunks.push(buffer.subarray(offset + 8, offset + 8 + length));
+    offset += 12 + length;
+  }
+  const colorType = buffer[25];
+  const scanlines = inflateSync(Buffer.concat(idatChunks));
+  return {
+    width: buffer.readUInt32BE(16),
+    height: buffer.readUInt32BE(20),
+    colorType,
+    cornerAlpha: colorType === 6 ? scanlines[4] : 255,
+  };
 };
 
 const requiredPngs = new Map<string, [number, number]>([
@@ -34,35 +49,44 @@ for (const [file, [width, height]] of requiredPngs) {
   const path = asset(file);
   assert.equal(existsSync(path), true, `${file} precisa existir`);
   assert.ok(statSync(path).size > 100, `${file} nao pode estar vazio`);
-  assert.deepEqual(readPngSize(path), { width, height });
+  const info = readPngInfo(path);
+  assert.deepEqual({ width: info.width, height: info.height }, { width, height });
+  assert.equal(info.colorType, 6, `${file} precisa preservar canal alpha`);
+  assert.equal(
+    info.cornerAlpha,
+    file === 'verto-maskable-icon.png' ? 255 : 0,
+    `${file} precisa ter o fundo tecnico correto`,
+  );
 }
 
 const favicon = readFileSync(asset('favicon.ico'));
 assert.equal(favicon.readUInt16LE(0), 0);
 assert.equal(favicon.readUInt16LE(2), 1);
-assert.ok(favicon.readUInt16LE(4) >= 1);
+assert.equal(favicon.readUInt16LE(4), 2);
+assert.equal(favicon[6], 16);
+assert.equal(favicon[22], 32);
 
-assert.equal(VERTO_BRAND_VERSION, '20260716');
-assert.match(VERTO_BRAND_ASSETS.symbol, /\/branding\/verto\/verto-symbol\.png\?v=20260716$/);
-assert.match(VERTO_BRAND_ASSETS.horizontalLogo, /\/branding\/verto\/verto-logo-horizontal\.png\?v=20260716$/);
+assert.equal(VERTO_BRAND_VERSION, '20260716-2');
+assert.match(VERTO_BRAND_ASSETS.symbol, /\/branding\/verto\/verto-symbol\.png\?v=20260716-2$/);
+assert.match(VERTO_BRAND_ASSETS.horizontalLogo, /\/branding\/verto\/verto-logo-horizontal\.png\?v=20260716-2$/);
 
 const common = read('src/components/Common.tsx');
 assert.match(common, /showText \? VERTO_BRAND_ASSETS\.horizontalLogo : VERTO_BRAND_ASSETS\.symbol/);
 assert.doesNotMatch(common, /assets\/Logoverto|<span[^>]*>\s*verto\s*<\/span>/i);
 
 const index = read('index.html');
-assert.match(index, /\/branding\/verto\/favicon\.ico\?v=20260716/);
-assert.match(index, /\/branding\/verto\/verto-favicon-16\.png\?v=20260716/);
-assert.match(index, /\/branding\/verto\/verto-favicon-32\.png\?v=20260716/);
-assert.match(index, /\/branding\/verto\/verto-apple-touch-icon\.png\?v=20260716/);
+assert.match(index, /\/branding\/verto\/favicon\.ico\?v=20260716-2/);
+assert.match(index, /\/branding\/verto\/verto-favicon-16\.png\?v=20260716-2/);
+assert.match(index, /\/branding\/verto\/verto-favicon-32\.png\?v=20260716-2/);
+assert.match(index, /\/branding\/verto\/verto-apple-touch-icon\.png\?v=20260716-2/);
 
 const manifest = JSON.parse(read('public/manifest.webmanifest'));
 assert.deepEqual(
   manifest.icons.map((icon: any) => [icon.src, icon.sizes, icon.purpose]),
   [
-    ['/branding/verto/verto-icon-192.png?v=20260716', '192x192', 'any'],
-    ['/branding/verto/verto-icon-512.png?v=20260716', '512x512', 'any'],
-    ['/branding/verto/verto-maskable-icon.png?v=20260716', '512x512', 'maskable'],
+    ['/branding/verto/verto-icon-192.png?v=20260716-2', '192x192', 'any'],
+    ['/branding/verto/verto-icon-512.png?v=20260716-2', '512x512', 'any'],
+    ['/branding/verto/verto-maskable-icon.png?v=20260716-2', '512x512', 'maskable'],
   ],
 );
 
