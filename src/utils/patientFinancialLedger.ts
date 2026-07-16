@@ -1,0 +1,272 @@
+import { formatDisplayDate, formatDisplayDateTime } from './dateFormatting';
+import { normalizeAppointmentFinancialContextType } from './appointmentFinancialContext';
+
+export type PatientFinancialStatus =
+  | 'no_charge'
+  | 'forecast'
+  | 'pending'
+  | 'partial'
+  | 'paid'
+  | 'overdue'
+  | 'courtesy'
+  | 'canceled'
+  | 'refunded';
+
+export const PATIENT_FINANCIAL_STATUS_LABELS: Record<PatientFinancialStatus, string> = {
+  no_charge: 'Sem cobrança',
+  forecast: 'Previsão',
+  pending: 'Pendente',
+  partial: 'Parcialmente pago',
+  paid: 'Pago',
+  overdue: 'Vencido',
+  courtesy: 'Cortesia',
+  canceled: 'Cancelado',
+  refunded: 'Estornado'
+};
+
+export const PATIENT_FINANCIAL_STATUS_CLASSES: Record<PatientFinancialStatus, string> = {
+  no_charge: 'border-slate-200 bg-slate-50 text-slate-600',
+  forecast: 'border-sky-200 bg-sky-50 text-sky-700',
+  pending: 'border-amber-200 bg-amber-50 text-amber-700',
+  partial: 'border-orange-200 bg-orange-50 text-orange-700',
+  paid: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+  overdue: 'border-rose-200 bg-rose-50 text-rose-700',
+  courtesy: 'border-violet-200 bg-violet-50 text-violet-700',
+  canceled: 'border-slate-200 bg-slate-100 text-slate-500',
+  refunded: 'border-rose-200 bg-rose-50 text-rose-700'
+};
+
+const numberValue = (value: any) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const dateOnlyKey = (value: any) => {
+  const raw = String(value || '').trim();
+  const direct = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (direct) return direct[1];
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return '';
+  const year = parsed.getFullYear();
+  const month = String(parsed.getMonth() + 1).padStart(2, '0');
+  const day = String(parsed.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+export const currentLocalDateKey = (now = new Date()) => {
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+export const resolvePatientFinancialStatus = (charge: any, now = new Date()): PatientFinancialStatus => {
+  if (!charge) return 'no_charge';
+  const raw = String(charge?.financial_status || charge?.financialStatus || charge?.status || 'pending').trim().toLowerCase();
+  if (charge?.canceled_at || charge?.canceledAt || ['canceled', 'cancelled', 'cancelado'].includes(raw)) return 'canceled';
+  if (charge?.is_courtesy || charge?.isCourtesy || raw === 'courtesy') return 'courtesy';
+  if (['refunded', 'estornado'].includes(raw)) return 'refunded';
+
+  const total = numberValue(charge?.amount ?? charge?.total_amount ?? charge?.totalAmount);
+  const paid = numberValue(
+    charge?.paid_amount ??
+    charge?.paidAmount ??
+    (raw === 'paid' ? total : 0)
+  );
+  const refunded = numberValue(charge?.refunded_amount ?? charge?.refundedAmount);
+  const balance = numberValue(
+    charge?.balance_amount ??
+    charge?.balanceAmount ??
+    Math.max(total - paid + refunded, 0)
+  );
+  if (paid > 0 && refunded >= paid) return 'refunded';
+  if (balance <= 0 && (total > 0 || paid > 0)) return 'paid';
+  if (paid - refunded > 0 || ['partial', 'partially_paid'].includes(raw)) return 'partial';
+  if (raw === 'forecast') return 'forecast';
+  const dueDate = dateOnlyKey(charge?.due_date || charge?.dueDate);
+  if (dueDate && dueDate < currentLocalDateKey(now)) return 'overdue';
+  return 'pending';
+};
+
+export const getPatientFinanceAmounts = (charge: any) => {
+  const original = numberValue(charge?.original_amount ?? charge?.originalAmount ?? charge?.base_amount ?? charge?.baseAmount ?? charge?.amount);
+  const additional = numberValue(charge?.additional_amount ?? charge?.additionalAmount);
+  const discount = numberValue(charge?.discount_amount ?? charge?.discountAmount);
+  const total = numberValue(charge?.amount ?? charge?.total_amount ?? charge?.totalAmount ?? Math.max(original + additional - discount, 0));
+  const paidGross = numberValue(charge?.paid_amount ?? charge?.paidAmount ?? (String(charge?.status || '').toLowerCase() === 'paid' ? total : 0));
+  const refunded = numberValue(charge?.refunded_amount ?? charge?.refundedAmount);
+  const paid = Math.max(paidGross - refunded, 0);
+  const balance = numberValue(charge?.balance_amount ?? charge?.balanceAmount ?? Math.max(total - paid, 0));
+  return { original, additional, discount, total, paidGross, refunded, paid, balance };
+};
+
+const pickPatientName = (patient: any, fallback: any) =>
+  String(patient?.name || patient?.full_name || patient?.fullName || fallback || 'Paciente').trim() || 'Paciente';
+
+const pickProfessionalLabel = (professional: any, fallback: any) =>
+  String(
+    professional?.label ||
+    professional?.displayLabel ||
+    professional?.professionalDisplayName ||
+    professional?.name ||
+    fallback ||
+    'Profissional não informado'
+  ).trim() || 'Profissional não informado';
+
+const appointmentStart = (appointment: any) =>
+  appointment?.scheduled_start_at ||
+  appointment?.scheduledStartAt ||
+  appointment?.scheduled_at ||
+  appointment?.scheduledAt ||
+  (appointment?.date && appointment?.time ? `${appointment.date}T${appointment.time}` : appointment?.date);
+
+export const isPrivatePatientFinanceAppointment = (appointment: any, billingContext?: any) => {
+  const context = normalizeAppointmentFinancialContextType(
+    billingContext?.financial_context_type ||
+    billingContext?.financialContextType ||
+    billingContext?.payer_type ||
+    billingContext?.payerType ||
+    appointment?.financial_context_type ||
+    appointment?.financialContextType ||
+    appointment?.payer_type ||
+    appointment?.payerType
+  );
+  return !context || ['PRIVATE', 'COURTESY', 'OTHER'].includes(context);
+};
+
+export const buildPatientFinancialAppointmentRows = (params: {
+  appointments?: any[];
+  charges?: any[];
+  items?: any[];
+  billingContexts?: any[];
+  patients?: any[];
+  professionals?: any[];
+  now?: Date;
+}) => {
+  const charges = Array.isArray(params.charges) ? params.charges : [];
+  const items = Array.isArray(params.items) ? params.items : [];
+  const patientsById = new Map((params.patients || []).map((patient: any) => [String(patient?.id || ''), patient]));
+  const professionalsById = new Map<string, any>();
+  (params.professionals || []).forEach((professional: any) => {
+    [professional?.id, professional?.user_id, professional?.userId, professional?.professional_id, professional?.professionalId]
+      .map((value) => String(value || '').trim())
+      .filter(Boolean)
+      .forEach((id) => professionalsById.set(id, professional));
+  });
+  const chargesById = new Map(charges.map((charge: any) => [String(charge?.id || ''), charge]));
+  const itemByAppointmentId = new Map<string, any>();
+  items.filter((item: any) => item?.active !== false).forEach((item: any) => {
+    const appointmentId = String(item?.appointment_id || item?.appointmentId || '').trim();
+    if (appointmentId) itemByAppointmentId.set(appointmentId, item);
+  });
+  const billingByAppointmentId = new Map((params.billingContexts || []).map((context: any) => [String(context?.appointment_id || context?.appointmentId || ''), context]));
+
+  return (params.appointments || [])
+    .filter((appointment: any) => isPrivatePatientFinanceAppointment(appointment, billingByAppointmentId.get(String(appointment?.id || ''))))
+    .map((appointment: any) => {
+      const appointmentId = String(appointment?.id || '').trim();
+      const item = itemByAppointmentId.get(appointmentId);
+      const charge = item ? chargesById.get(String(item?.payment_id || item?.paymentId || '')) : null;
+      const patientId = String(appointment?.patient_id || appointment?.patientId || item?.patient_id || '').trim();
+      const professionalId = String(appointment?.therapist_id || appointment?.therapistId || appointment?.professional_id || appointment?.professionalId || item?.professional_id || '').trim();
+      const amounts = getPatientFinanceAmounts(charge);
+      const status = resolvePatientFinancialStatus(charge, params.now);
+      const start = appointmentStart(appointment);
+      return {
+        appointmentId,
+        chargeId: charge?.id || null,
+        patientId,
+        professionalId,
+        patientName: pickPatientName(patientsById.get(patientId), item?.patient_name_snapshot || appointment?.patient_name || appointment?.patientName),
+        professionalName: pickProfessionalLabel(professionalsById.get(professionalId), item?.professional_name_snapshot || appointment?.therapist_name || appointment?.therapistName),
+        serviceType: String(item?.service_type_snapshot || appointment?.service_type || appointment?.serviceType || appointment?.approach || 'Consulta'),
+        specialty: String(item?.specialty_snapshot || charge?.specialty || ''),
+        scheduledAt: start || item?.appointment_scheduled_at || null,
+        appointmentDateLabel: formatDisplayDateTime(start || item?.appointment_scheduled_at, { separator: ', ' }),
+        clinicalStatus: String(appointment?.status || 'scheduled'),
+        dueDate: charge?.due_date || charge?.dueDate || null,
+        dueDateLabel: formatDisplayDate(charge?.due_date || charge?.dueDate, 'Não definido'),
+        method: charge?.method || null,
+        lastPaymentAt: charge?.last_payment_at || charge?.lastPaymentAt || null,
+        status,
+        statusLabel: PATIENT_FINANCIAL_STATUS_LABELS[status],
+        ...amounts,
+        charge,
+        item,
+        appointment
+      };
+    })
+    .sort((left: any, right: any) => String(right.scheduledAt || '').localeCompare(String(left.scheduledAt || '')));
+};
+
+export const buildPatientFinancialChargeRows = (ledger: any, patients: any[] = []) => {
+  const patientById = new Map((patients || []).map((patient: any) => [String(patient?.id || ''), patient]));
+  const itemsByChargeId = new Map<string, any[]>();
+  (ledger?.items || []).forEach((item: any) => {
+    const paymentId = String(item?.payment_id || item?.paymentId || '');
+    const current = itemsByChargeId.get(paymentId) || [];
+    current.push(item);
+    itemsByChargeId.set(paymentId, current);
+  });
+  const transactionsByChargeId = new Map<string, any[]>();
+  (ledger?.transactions || []).forEach((transaction: any) => {
+    const paymentId = String(transaction?.payment_id || transaction?.paymentId || '');
+    const current = transactionsByChargeId.get(paymentId) || [];
+    current.push(transaction);
+    transactionsByChargeId.set(paymentId, current);
+  });
+  const eventsByChargeId = new Map<string, any[]>();
+  (ledger?.events || []).forEach((event: any) => {
+    const paymentId = String(event?.payment_id || event?.paymentId || '');
+    const current = eventsByChargeId.get(paymentId) || [];
+    current.push(event);
+    eventsByChargeId.set(paymentId, current);
+  });
+
+  return (ledger?.charges || []).map((charge: any) => {
+    const id = String(charge?.id || '');
+    const patientId = String(charge?.patient_id || charge?.patientId || '');
+    const status = resolvePatientFinancialStatus(charge);
+    return {
+      id,
+      patientId,
+      patientName: pickPatientName(patientById.get(patientId), charge?.patient_name || charge?.patientName),
+      status,
+      statusLabel: PATIENT_FINANCIAL_STATUS_LABELS[status],
+      dueDate: charge?.due_date || charge?.dueDate || null,
+      dueDateLabel: formatDisplayDate(charge?.due_date || charge?.dueDate, 'Não definido'),
+      competenceMonth: charge?.competence_month || charge?.competenceMonth || null,
+      method: charge?.method || null,
+      source: charge?.source || 'LEGACY',
+      items: itemsByChargeId.get(id) || [],
+      transactions: transactionsByChargeId.get(id) || [],
+      events: eventsByChargeId.get(id) || [],
+      ...getPatientFinanceAmounts(charge),
+      charge
+    };
+  });
+};
+
+export const patientFinancialTransactionLabel = (transaction: any) => {
+  const type = String(transaction?.transaction_type || transaction?.transactionType || '').toUpperCase();
+  return ({
+    PAYMENT: 'Pagamento recebido',
+    DISCOUNT: 'Desconto aplicado',
+    COURTESY: 'Cortesia',
+    REFUND: 'Estorno',
+    ADJUSTMENT: 'Ajuste'
+  } as Record<string, string>)[type] || 'Operação financeira';
+};
+
+export const privateAppointmentFinancialReadinessLabel = (summary: any) => {
+  const status = resolvePatientFinancialStatus(summary);
+  if (status === 'no_charge' || status === 'forecast') return 'Pronta para cobrança';
+  if (status === 'pending') return 'Cobrança pendente';
+  if (status === 'partial') return 'Pagamento parcial';
+  if (status === 'overdue') return 'Cobrança vencida';
+  if (status === 'paid') return 'Pagamento recebido';
+  if (status === 'courtesy') return 'Financeiro regularizado';
+  if (status === 'refunded') return 'Pagamento estornado';
+  return 'Sem cobrança';
+};
+

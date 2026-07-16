@@ -3017,7 +3017,8 @@ function sanitizeUrl(value: unknown): string | null {
 }
 
 function sanitizeReceiptUrl(value: unknown): string | null {
-  const url = typeof value === 'string' ? value.trim() : '';
+  const url = (typeof value === 'string' ? value.trim() : '')
+    .replace(/^data:application\/pdf;filename=[^;,]{1,180};base64,/i, 'data:application/pdf;base64,');
   if (!url) return null;
   if (url.startsWith('data:image/')) {
     if (url.length > 2_000_000) return null;
@@ -37451,9 +37452,10 @@ async function startServer() {
       let signatures: any[] = [];
       let billingContext: any = null;
       let billingDocuments: any[] = [];
+      let patientFinance: any = null;
 
       if (isUuid(eventId) && isUuid(organizationId)) {
-        const [requestsResult, auditResult, signaturesResult, billingResult, documentsResult] = await Promise.all([
+        const [requestsResult, auditResult, signaturesResult, billingResult, documentsResult, patientFinanceResult] = await Promise.all([
           supabase
             .from('appointment_action_requests')
             .select(APPOINTMENT_ACTION_REQUEST_SELECT)
@@ -37489,7 +37491,14 @@ async function startServer() {
             .eq('organization_id', organizationId)
             .eq('appointment_id', eventId)
             .order('created_at', { ascending: false })
-            .limit(20)
+            .limit(20),
+          supabase
+            .from('patient_financial_appointment_summaries')
+            .select('organization_id,clinic_id,appointment_id,patient_id,professional_id,patient_name_snapshot,professional_name_snapshot,service_type_snapshot,specialty_snapshot,appointment_scheduled_at,quantity,unit_amount,subtotal,payment_id,original_amount,additional_amount,discount_amount,total_amount,paid_amount,refunded_amount,balance_amount,due_date,method,last_payment_at,financial_status,source,notes,created_at,updated_at')
+            .eq('organization_id', organizationId)
+            .eq('appointment_id', eventId)
+            .limit(1)
+            .maybeSingle()
         ]);
         if (!requestsResult.error) actionRequests = requestsResult.data || [];
         else if (!hasMissingFinancialSchema(requestsResult.error)) throw requestsResult.error;
@@ -37507,6 +37516,8 @@ async function startServer() {
         else if (!hasMissingFinancialSchema(billingResult.error)) throw billingResult.error;
         if (!documentsResult.error) billingDocuments = documentsResult.data || [];
         else if (!hasMissingFinancialSchema(documentsResult.error)) throw documentsResult.error;
+        if (!patientFinanceResult.error) patientFinance = patientFinanceResult.data || null;
+        else if (!hasMissingFinancialSchema(patientFinanceResult.error) && !isMissingRelationError(patientFinanceResult.error)) throw patientFinanceResult.error;
       }
 
       if (isUuid(patientId)) {
@@ -37634,6 +37645,7 @@ async function startServer() {
             appointmentDate: event.scheduled_start_at || event.scheduled_at || event.date || null,
             procedureCode: event.procedure_code || billingContext?.procedure_code || null
           })),
+          patientFinance,
           actionRequests,
           statusHistory,
           signatures
@@ -57487,7 +57499,549 @@ async function startServer() {
     }
   });
 
-  // Payments
+  const PATIENT_FINANCE_CHARGE_SELECT = [
+    'id', 'organization_id', 'clinic_id', 'patient_id', 'patient_name', 'appointment_id',
+    'professional_id', 'service_type', 'appointment_scheduled_at', 'payer_name', 'competence_month',
+    'amount', 'original_amount', 'base_amount', 'additional_amount', 'discount_amount', 'paid_amount',
+    'refunded_amount', 'balance_amount', 'payment_date', 'due_date', 'method', 'status',
+    'financial_status', 'is_courtesy', 'source', 'last_payment_at', 'receipt_url',
+    'receipt_file_name', 'receipt_content_type', 'notes', 'created_by', 'created_at', 'updated_at',
+    'canceled_at', 'canceled_by'
+  ].join(',');
+  const PATIENT_FINANCE_ITEM_SELECT = [
+    'id', 'organization_id', 'clinic_id', 'payment_id', 'appointment_id', 'patient_id',
+    'professional_id', 'patient_name_snapshot', 'professional_name_snapshot',
+    'service_type_snapshot', 'specialty_snapshot', 'appointment_scheduled_at', 'quantity',
+    'unit_amount', 'subtotal', 'active', 'created_at'
+  ].join(',');
+  const PATIENT_FINANCE_TRANSACTION_SELECT = [
+    'id', 'organization_id', 'clinic_id', 'payment_id', 'patient_id', 'transaction_type',
+    'amount', 'method', 'transaction_at', 'status', 'proof_url', 'proof_file_name',
+    'proof_content_type', 'receipt_url', 'receipt_number', 'document_status', 'notes',
+    'created_by', 'created_at', 'voided_at', 'voided_by'
+  ].join(',');
+  const PATIENT_FINANCE_EVENT_SELECT = [
+    'id', 'organization_id', 'clinic_id', 'payment_id', 'transaction_id', 'appointment_id',
+    'event_type', 'before_state', 'after_state', 'notes', 'created_by', 'created_at'
+  ].join(',');
+  const PATIENT_FINANCE_POLICY_SELECT = [
+    'organization_id', 'receivable_trigger', 'create_forecast_on_schedule', 'cancellation_policy',
+    'cancellation_percentage', 'cancellation_tolerance_hours', 'charge_no_show',
+    'reschedule_keeps_charge', 'created_at', 'updated_at'
+  ].join(',');
+
+  const PATIENT_FINANCE_DOCUMENT_CONTENT_TYPES = new Set([
+    'application/pdf',
+    'image/png',
+    'image/jpeg',
+    'image/webp'
+  ]);
+
+  const readPatientFinanceDocumentInput = (body: any) => {
+    const rawUrl = String(body?.proofUrl || body?.proof_url || body?.receipt_url || '').trim();
+    const url = sanitizeReceiptUrl(rawUrl);
+    const contentType = sanitizeString(
+      body?.proofContentType || body?.proof_content_type || body?.receipt_content_type,
+      120
+    ).toLowerCase();
+    if (rawUrl && !url) {
+      return { ok: false as const, error: 'O comprovante deve ser uma imagem ou PDF válido de até 2 MB.' };
+    }
+    if (contentType && !PATIENT_FINANCE_DOCUMENT_CONTENT_TYPES.has(contentType)) {
+      return { ok: false as const, error: 'Formato de comprovante não permitido. Use PNG, JPG, WebP ou PDF.' };
+    }
+    return {
+      ok: true as const,
+      url,
+      fileName: sanitizeString(body?.proofFileName || body?.proof_file_name || body?.receipt_file_name, 240) || null,
+      contentType: contentType || null
+    };
+  };
+
+  const patientFinanceErrorResponse = (error: any) => {
+    const raw = sanitizeString(error?.message || error?.details || String(error || ''), 500);
+    if (raw.includes('PATIENT_FINANCE_APPOINTMENT_ALREADY_CHARGED')) {
+      return { status: 409, error: 'Uma das consultas selecionadas já possui cobrança ativa. Abra a cobrança existente para continuar.' };
+    }
+    if (raw.includes('PATIENT_FINANCE_PAYMENT_EXCEEDS_BALANCE')) {
+      return { status: 409, error: 'O pagamento informado é maior que o saldo da cobrança. Confirme o valor antes de continuar.' };
+    }
+    if (raw.includes('PATIENT_FINANCE_REFUND_EXCEEDS_PAID')) {
+      return { status: 409, error: 'O estorno não pode ser maior que o valor efetivamente recebido.' };
+    }
+    if (raw.includes('PATIENT_FINANCE_DISCOUNT_EXCEEDS_BALANCE')) {
+      return { status: 409, error: 'O desconto não pode ser maior que o saldo atual da cobrança.' };
+    }
+    if (raw.includes('PATIENT_FINANCE_APPOINTMENT_SCOPE_INVALID') || raw.includes('PATIENT_FINANCE_PATIENT_NOT_FOUND')) {
+      return { status: 403, error: 'Paciente ou consulta não pertence à clínica atual.' };
+    }
+    if (raw.includes('PATIENT_FINANCIAL_CHARGE_NOT_FOUND')) {
+      return { status: 404, error: 'Cobrança não encontrada nesta clínica.' };
+    }
+    if (raw.includes('PATIENT_FINANCE_CHARGE_ALREADY_SETTLED')) {
+      return { status: 409, error: 'Esta cobrança já está regularizada.' };
+    }
+    if (raw.includes('PATIENT_FINANCE_CANCEL_REQUIRES_REFUND')) {
+      return { status: 409, error: 'Esta cobrança possui pagamento confirmado. Estorne o valor recebido antes de cancelar a cobrança.' };
+    }
+    if (raw.includes('PATIENT_FINANCE_RECEIPT_REQUIRES_PAYMENT')) {
+      return { status: 409, error: 'O recibo só pode ser emitido depois que houver um pagamento confirmado.' };
+    }
+    if (
+      hasMissingFinancialSchema(error) ||
+      isMissingRelationError(error) ||
+      raw.includes('create_patient_financial_charge') ||
+      raw.includes('create_and_settle_patient_financial_charge') ||
+      raw.includes('apply_patient_financial_operation')
+    ) {
+      return { status: 503, error: 'O financeiro por consulta ainda não está disponível neste ambiente. Nenhum lançamento foi alterado.' };
+    }
+    return { status: 400, error: 'Não foi possível concluir a operação financeira. Revise os campos e tente novamente.' };
+  };
+
+  app.get('/api/patient-finance/ledger', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner', 'receptionist'), async (req: any, res) => {
+    try {
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      if (!isUuid(organizationId)) return res.status(400).json({ success: false, error: 'Clínica inválida para o financeiro de pacientes.' });
+      const requestedMonth = sanitizeString(req.query?.month, 7);
+      const monthMatch = requestedMonth.match(/^(\d{4})-(\d{2})$/);
+      const baseDate = monthMatch
+        ? new Date(Number(monthMatch[1]), Number(monthMatch[2]) - 1, 1)
+        : new Date();
+      const rangeStart = new Date(baseDate.getFullYear(), baseDate.getMonth() - 1, 1);
+      const rangeEnd = new Date(baseDate.getFullYear(), baseDate.getMonth() + 2, 0, 23, 59, 59, 999);
+
+      const [chargesResult, itemsResult, transactionsResult, eventsResult, appointmentsResult, policyResult] = await Promise.all([
+        supabase
+          .from('payments')
+          .select(PATIENT_FINANCE_CHARGE_SELECT)
+          .or(`organization_id.eq.${organizationId},clinic_id.eq.${organizationId}`)
+          .order('updated_at', { ascending: false })
+          .limit(500),
+        supabase
+          .from('payment_appointment_items')
+          .select(PATIENT_FINANCE_ITEM_SELECT)
+          .eq('organization_id', organizationId)
+          .order('appointment_scheduled_at', { ascending: false })
+          .limit(1000),
+        supabase
+          .from('payment_transactions')
+          .select(PATIENT_FINANCE_TRANSACTION_SELECT)
+          .eq('organization_id', organizationId)
+          .order('transaction_at', { ascending: false })
+          .limit(1000),
+        supabase
+          .from('payment_audit_events')
+          .select(PATIENT_FINANCE_EVENT_SELECT)
+          .eq('organization_id', organizationId)
+          .order('created_at', { ascending: false })
+          .limit(1000),
+        supabase
+          .from('appointments')
+          .select('id,organization_id,clinic_id,patient_id,therapist_id,therapist_name,scheduled_at,scheduled_start_at,scheduled_end_at,duration_minutes,service_type,approach,status,room_id,room_name,location_type,source_payload')
+          .or(`organization_id.eq.${organizationId},clinic_id.eq.${organizationId}`)
+          .gte('scheduled_at', rangeStart.toISOString())
+          .lte('scheduled_at', rangeEnd.toISOString())
+          .is('deleted_at', null)
+          .order('scheduled_at', { ascending: false })
+          .limit(1000),
+        supabase
+          .from('clinic_patient_finance_policies')
+          .select(PATIENT_FINANCE_POLICY_SELECT)
+          .eq('organization_id', organizationId)
+          .maybeSingle()
+      ]);
+
+      const primaryError = [chargesResult, itemsResult, transactionsResult, eventsResult, appointmentsResult]
+        .map((result: any) => result.error)
+        .find(Boolean);
+      if (primaryError) {
+        const safe = patientFinanceErrorResponse(primaryError);
+        return res.status(safe.status).json({ success: false, error: safe.error });
+      }
+      if (policyResult.error && !hasMissingFinancialSchema(policyResult.error) && !isMissingRelationError(policyResult.error)) throw policyResult.error;
+
+      const appointmentIds = (appointmentsResult.data || [])
+        .map((appointment: any) => sanitizeString(appointment?.id, 120))
+        .filter((id: string) => isUuid(id));
+      let billingContexts: any[] = [];
+      if (appointmentIds.length > 0) {
+        const billingResult = await supabase
+          .from('appointment_billing_contexts')
+          .select(APPOINTMENT_BILLING_CONTEXT_SELECT)
+          .eq('organization_id', organizationId)
+          .in('appointment_id', appointmentIds)
+          .limit(Math.min(appointmentIds.length, 1000));
+        if (!billingResult.error) billingContexts = billingResult.data || [];
+        else if (!hasMissingFinancialSchema(billingResult.error)) throw billingResult.error;
+      }
+
+      return res.json({
+        success: true,
+        data: {
+          charges: chargesResult.data || [],
+          items: itemsResult.data || [],
+          transactions: transactionsResult.data || [],
+          events: eventsResult.data || [],
+          appointments: appointmentsResult.data || [],
+          billingContexts,
+          policy: policyResult.data || {
+            organization_id: organizationId,
+            receivable_trigger: 'MANUAL',
+            create_forecast_on_schedule: true,
+            cancellation_policy: 'NO_CHARGE',
+            cancellation_percentage: 0,
+            cancellation_tolerance_hours: 0,
+            charge_no_show: false,
+            reschedule_keeps_charge: true
+          }
+        },
+        meta: {
+          queryCount: appointmentIds.length > 0 ? 7 : 6,
+          rangeStart: rangeStart.toISOString(),
+          rangeEnd: rangeEnd.toISOString()
+        }
+      });
+    } catch (error: any) {
+      const safe = patientFinanceErrorResponse(error);
+      return res.status(safe.status).json({ success: false, error: safe.error });
+    }
+  });
+
+  app.post('/api/patient-finance/charges', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner', 'receptionist'), async (req: any, res) => {
+    try {
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const patientId = sanitizeString(req.body?.patientId || req.body?.patient_id, 120);
+      const idempotencyKey = sanitizeString(req.body?.idempotencyKey || req.body?.idempotency_key || req.headers?.['x-idempotency-key'], 220);
+      const rawItems = Array.isArray(req.body?.items) ? req.body.items.slice(0, 50) : [];
+      if (!isUuid(organizationId) || !isUuid(patientId)) return res.status(400).json({ success: false, error: 'Paciente inválido para esta cobrança.' });
+      if (!idempotencyKey) return res.status(400).json({ success: false, error: 'Não foi possível identificar esta operação com segurança. Tente novamente.' });
+      const appointmentIds = Array.from(new Set(rawItems
+        .map((item: any) => sanitizeString(item?.appointmentId || item?.appointment_id, 120))
+        .filter((id: string) => isUuid(id))));
+      if (rawItems.length > 0 && appointmentIds.length !== rawItems.length) {
+        return res.status(400).json({ success: false, error: 'Selecione consultas válidas para compor a cobrança.' });
+      }
+
+      if (appointmentIds.length > 0) {
+        const appointmentsResult = await supabase
+          .from('appointments')
+          .select('id,organization_id,clinic_id,patient_id')
+          .in('id', appointmentIds)
+          .eq('patient_id', patientId)
+          .or(`organization_id.eq.${organizationId},clinic_id.eq.${organizationId}`)
+          .is('deleted_at', null)
+          .limit(appointmentIds.length);
+        if (appointmentsResult.error) throw appointmentsResult.error;
+        if ((appointmentsResult.data || []).length !== appointmentIds.length) {
+          return res.status(403).json({ success: false, error: 'Uma das consultas não pertence a este paciente ou à clínica atual.' });
+        }
+      }
+
+      const originalAmount = asSafeNumber(req.body?.originalAmount ?? req.body?.original_amount ?? req.body?.amount, 0, 1_000_000);
+      const additionalAmount = asSafeNumber(req.body?.additionalAmount ?? req.body?.additional_amount ?? 0, 0, 1_000_000) || 0;
+      const discountAmount = asSafeNumber(req.body?.discountAmount ?? req.body?.discount_amount ?? 0, 0, 1_000_000) || 0;
+      if (originalAmount === null || originalAmount <= 0) return res.status(400).json({ success: false, error: 'Informe um valor válido para a cobrança.' });
+      const safeItems = rawItems.map((item: any) => ({
+        appointmentId: sanitizeString(item?.appointmentId || item?.appointment_id, 120),
+        unitAmount: asSafeNumber(item?.unitAmount ?? item?.unit_amount, 0, 1_000_000),
+        serviceType: sanitizeString(item?.serviceType || item?.service_type, 120),
+        specialty: sanitizeString(item?.specialty, 120)
+      }));
+
+      const initialPaymentAmount = asSafeNumber(req.body?.initialPaymentAmount ?? req.body?.initial_payment_amount ?? 0, 0, 1_000_000) || 0;
+      const financeDocument = readPatientFinanceDocumentInput(req.body);
+      if (!financeDocument.ok) return res.status(400).json({ success: false, error: financeDocument.error });
+      const sharedChargeParams = {
+        p_organization_id: organizationId,
+        p_patient_id: patientId,
+        p_items: safeItems,
+        p_original_amount: originalAmount,
+        p_additional_amount: additionalAmount,
+        p_discount_amount: discountAmount,
+        p_due_date: sanitizeDate(req.body?.dueDate || req.body?.due_date),
+        p_method: sanitizeString(req.body?.method, 80) || null,
+        p_source: sanitizeString(req.body?.source, 80) || 'MANUAL',
+        p_competence_month: sanitizeDate(req.body?.competenceMonth || req.body?.competence_month),
+        p_notes: sanitizeString(req.body?.notes, 1200) || null,
+      };
+      const result = initialPaymentAmount > 0
+        ? await supabase.rpc('create_and_settle_patient_financial_charge', {
+            ...sharedChargeParams,
+            p_payment_amount: initialPaymentAmount,
+            p_transaction_at: (() => {
+              const value = String(req.body?.transactionAt || req.body?.transaction_at || '').trim();
+              const parsed = value ? new Date(value) : new Date();
+              return Number.isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
+            })(),
+            p_proof_url: financeDocument.url,
+            p_proof_file_name: financeDocument.fileName,
+            p_proof_content_type: financeDocument.contentType,
+            p_idempotency_key: idempotencyKey,
+            p_actor_id: sanitizeString(req.session.user?.id, 120)
+          })
+        : await supabase.rpc('create_patient_financial_charge', {
+            ...sharedChargeParams,
+            p_idempotency_key: idempotencyKey,
+            p_actor_id: sanitizeString(req.session.user?.id, 120)
+          });
+      if (result.error) throw result.error;
+
+      return res.json({ success: true, data: result.data, idempotent: false });
+    } catch (error: any) {
+      const safe = patientFinanceErrorResponse(error);
+      return res.status(safe.status).json({ success: false, error: safe.error });
+    }
+  });
+
+  app.post('/api/patient-finance/charges/:paymentId/operations', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner', 'receptionist'), async (req: any, res) => {
+    try {
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const paymentId = sanitizeString(req.params.paymentId, 120);
+      const operation = sanitizeString(req.body?.operation, 40).toUpperCase();
+      const idempotencyKey = sanitizeString(req.body?.idempotencyKey || req.body?.idempotency_key || req.headers?.['x-idempotency-key'], 220);
+      const allowedOperations = new Set(['PAYMENT', 'PARTIAL_PAYMENT', 'DISCOUNT', 'COURTESY', 'REFUND', 'DUE_DATE_CHANGE', 'CANCEL', 'ISSUE_RECEIPT']);
+      if (!isUuid(organizationId) || !isUuid(paymentId)) return res.status(400).json({ success: false, error: 'Cobrança inválida.' });
+      if (!allowedOperations.has(operation)) return res.status(400).json({ success: false, error: 'Ação financeira inválida.' });
+      if (!idempotencyKey) return res.status(400).json({ success: false, error: 'Não foi possível identificar esta operação com segurança. Tente novamente.' });
+      const financeDocument = readPatientFinanceDocumentInput(req.body);
+      if (!financeDocument.ok) return res.status(400).json({ success: false, error: financeDocument.error });
+
+      const result = await supabase.rpc('apply_patient_financial_operation', {
+        p_organization_id: organizationId,
+        p_payment_id: paymentId,
+        p_operation: operation,
+        p_amount: asSafeNumber(req.body?.amount ?? 0, 0, 1_000_000) || 0,
+        p_due_date: sanitizeDate(req.body?.dueDate || req.body?.due_date),
+        p_method: sanitizeString(req.body?.method, 80) || null,
+        p_transaction_at: (() => {
+          const value = String(req.body?.transactionAt || req.body?.transaction_at || '').trim();
+          const parsed = value ? new Date(value) : new Date();
+          return Number.isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
+        })(),
+        p_proof_url: financeDocument.url,
+        p_proof_file_name: financeDocument.fileName,
+        p_proof_content_type: financeDocument.contentType,
+        p_notes: sanitizeString(req.body?.notes, 1200) || null,
+        p_idempotency_key: idempotencyKey,
+        p_actor_id: sanitizeString(req.session.user?.id, 120)
+      });
+      if (result.error) throw result.error;
+
+      return res.json({ success: true, data: result.data });
+    } catch (error: any) {
+      const safe = patientFinanceErrorResponse(error);
+      return res.status(safe.status).json({ success: false, error: safe.error });
+    }
+  });
+
+  app.post('/api/patient-finance/charges/:paymentId/reminder', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner', 'receptionist'), async (req: any, res) => {
+    try {
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const paymentId = sanitizeString(req.params.paymentId, 120);
+      if (!isUuid(organizationId) || !isUuid(paymentId)) {
+        return res.status(400).json({ success: false, error: 'Cobrança inválida.' });
+      }
+
+      const chargeResult = await supabase
+        .from('payments')
+        .select('id,organization_id,clinic_id,patient_id,patient_name,appointment_id,service_type,amount,paid_amount,refunded_amount,balance_amount,due_date,financial_status,status,canceled_at')
+        .eq('id', paymentId)
+        .or(`organization_id.eq.${organizationId},clinic_id.eq.${organizationId}`)
+        .limit(1)
+        .maybeSingle();
+      if (chargeResult.error) throw chargeResult.error;
+      const charge = chargeResult.data;
+      if (!charge?.id) return res.status(404).json({ success: false, error: 'Cobrança não encontrada nesta clínica.' });
+      const patientId = sanitizeString(charge.patient_id, 120);
+      if (!isUuid(patientId)) return res.status(409).json({ success: false, error: 'A cobrança não possui paciente válido para receber o lembrete.' });
+      const status = sanitizeString(charge.financial_status || charge.status, 40).toLowerCase();
+      const balance = Math.max(Number(charge.balance_amount ?? charge.amount ?? 0) || 0, 0);
+      if (charge.canceled_at || ['canceled', 'cancelled', 'paid', 'courtesy', 'refunded'].includes(status) || balance <= 0) {
+        return res.status(409).json({ success: false, error: 'Esta cobrança não possui saldo pendente para lembrete.' });
+      }
+
+      const appointmentId = sanitizeString(charge.appointment_id, 120);
+      const [patientResult, appointmentResult] = await Promise.all([
+        readPortalPatientContexts([patientId]),
+        isUuid(appointmentId)
+          ? supabase
+              .from('appointments')
+              .select('id,organization_id,clinic_id,patient_id,scheduled_at,scheduled_start_at,status')
+              .eq('id', appointmentId)
+              .or(`organization_id.eq.${organizationId},clinic_id.eq.${organizationId}`)
+              .limit(1)
+              .maybeSingle()
+          : Promise.resolve({ data: null, error: null })
+      ]);
+      if (patientResult.error && !extractMissingColumnName(patientResult.error)) throw patientResult.error;
+      if (appointmentResult.error) throw appointmentResult.error;
+      const patient = (Array.isArray(patientResult.data) ? patientResult.data[0] : null) || {};
+      if (sanitizeString(patient?.clinic_id, 120) !== organizationId) {
+        return res.status(403).json({ success: false, error: 'Paciente fora do escopo da clínica atual.' });
+      }
+
+      const branding = await readClinicBrandingForFamilyView(organizationId);
+      const clinicName = sanitizeString(branding.displayName, 160) || 'Clínica';
+      const patientName = resolvePortalPatientDisplayName(patient, charge.patient_name) || 'Paciente';
+      const dueDateLabel = charge.due_date
+        ? new Date(`${sanitizeDate(charge.due_date)}T12:00:00-03:00`).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' })
+        : 'sem vencimento definido';
+      const balanceLabel = balance.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+      const serviceLabel = sanitizeString(charge.service_type, 120) || 'consulta';
+      const message = `Lembrete financeiro de ${patientName}: ${serviceLabel}, saldo ${balanceLabel}, vencimento ${dueDateLabel}.`;
+      const recipientUserId = sanitizeString(patient?.responsible_user_id, 120);
+      const recipientEmail = sanitizeEmail(patient?.responsible_email || patient?.email);
+      if (!isUuid(recipientUserId) && !recipientEmail) {
+        return res.status(409).json({ success: false, error: 'O paciente não possui acesso ou contato vinculado para receber o lembrete.' });
+      }
+
+      const localDay = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit'
+      }).format(new Date());
+      const idempotencyKey = `patient-finance:${paymentId}:reminder:${localDay}:${Math.round(balance * 100)}`;
+      const now = new Date().toISOString();
+      const notificationPayload = cleanObject({
+        organization_id: organizationId,
+        clinic_id: organizationId,
+        recipient_user_id: isUuid(recipientUserId) ? recipientUserId : null,
+        recipient_email: recipientEmail || null,
+        patient_id: patientId,
+        appointment_id: isUuid(appointmentId) ? appointmentId : null,
+        type: 'payment_reminder',
+        title: clinicName,
+        message,
+        sent_at: now,
+        scheduled_for: now,
+        idempotency_key: idempotencyKey,
+        metadata: sanitizeClinicalPayload({
+          paymentId,
+          balance,
+          dueDate: sanitizeDate(charge.due_date),
+          clinicName,
+          clinicLogoUrl: sanitizeClinicBrandImageUrl(branding.logoUrl) || null,
+          patientName,
+          serviceType: serviceLabel
+        })
+      });
+      const notificationResult = await supabase
+        .from('portal_notifications')
+        .insert(notificationPayload)
+        .select('id')
+        .single();
+      if (notificationResult.error) {
+        if (String(notificationResult.error.code || '') === '23505') {
+          return res.json({ success: true, idempotent: true, message: 'O lembrete desta cobrança já foi enviado hoje.' });
+        }
+        if (isMissingRelationError(notificationResult.error)) {
+          return res.status(503).json({ success: false, error: 'As notificações do portal ainda não estão disponíveis neste ambiente.' });
+        }
+        throw notificationResult.error;
+      }
+
+      await sendAppointmentNotification({
+        supabase,
+        patientId,
+        patientEmail: recipientEmail || sanitizeEmail(patient?.email) || null,
+        appointment: {
+          id: isUuid(appointmentId) ? appointmentId : paymentId,
+          clinicId: organizationId,
+          scheduledAt: appointmentResult.data?.scheduled_start_at || appointmentResult.data?.scheduled_at || now,
+          reminderKind: 'payment_reminder',
+          clinicName,
+          clinicLogoUrl: sanitizeClinicBrandImageUrl(branding.logoUrl) || null,
+          patientName
+        },
+        clinicId: organizationId,
+        clinicName,
+        clinicLogoUrl: sanitizeClinicBrandImageUrl(branding.logoUrl) || null,
+        patientName,
+        title: clinicName,
+        body: message,
+        reminderKind: 'payment_reminder',
+        logger: console
+      });
+
+      return res.json({
+        success: true,
+        data: { notificationId: notificationResult.data?.id || null },
+        affected: { organizationId, patientId, appointmentId: isUuid(appointmentId) ? appointmentId : null, paymentId }
+      });
+    } catch (error: any) {
+      const safe = patientFinanceErrorResponse(error);
+      return res.status(safe.status).json({ success: false, error: safe.error });
+    }
+  });
+
+  app.get('/api/patient-finance/policy', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner', 'receptionist'), async (req: any, res) => {
+    try {
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      if (!isUuid(organizationId)) return res.status(400).json({ success: false, error: 'Clínica inválida.' });
+      const result = await supabase
+        .from('clinic_patient_finance_policies')
+        .select(PATIENT_FINANCE_POLICY_SELECT)
+        .eq('organization_id', organizationId)
+        .maybeSingle();
+      if (result.error && !hasMissingFinancialSchema(result.error)) throw result.error;
+      return res.json({ success: true, data: result.data || null });
+    } catch (error: any) {
+      const safe = patientFinanceErrorResponse(error);
+      return res.status(safe.status).json({ success: false, error: safe.error });
+    }
+  });
+
+  app.put('/api/patient-finance/policy', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      if (!isUuid(organizationId)) return res.status(400).json({ success: false, error: 'Clínica inválida.' });
+      const receivableTrigger = sanitizeString(req.body?.receivableTrigger || req.body?.receivable_trigger, 40).toUpperCase();
+      const cancellationPolicy = sanitizeString(req.body?.cancellationPolicy || req.body?.cancellation_policy, 40).toUpperCase();
+      if (!['MANUAL', 'SCHEDULED', 'CONFIRMED', 'STARTED', 'COMPLETED'].includes(receivableTrigger)) {
+        return res.status(400).json({ success: false, error: 'Momento de criação do recebível inválido.' });
+      }
+      if (!['NO_CHARGE', 'FULL_CHARGE', 'PARTIAL_CHARGE'].includes(cancellationPolicy)) {
+        return res.status(400).json({ success: false, error: 'Política de cancelamento inválida.' });
+      }
+      const cancellationPercentage = asSafeNumber(
+        req.body?.cancellationPercentage ?? req.body?.cancellation_percentage ?? 0,
+        0,
+        100
+      ) || 0;
+      if (cancellationPolicy === 'PARTIAL_CHARGE' && (cancellationPercentage <= 0 || cancellationPercentage >= 100)) {
+        return res.status(400).json({ success: false, error: 'Na cobrança parcial, informe um percentual maior que 0% e menor que 100%.' });
+      }
+      const payload = {
+        organization_id: organizationId,
+        receivable_trigger: receivableTrigger,
+        create_forecast_on_schedule: req.body?.createForecastOnSchedule !== false && req.body?.create_forecast_on_schedule !== false,
+        cancellation_policy: cancellationPolicy,
+        cancellation_percentage: cancellationPercentage,
+        cancellation_tolerance_hours: Math.round(asSafeNumber(req.body?.cancellationToleranceHours ?? req.body?.cancellation_tolerance_hours ?? 0, 0, 720) || 0),
+        charge_no_show: Boolean(req.body?.chargeNoShow ?? req.body?.charge_no_show),
+        reschedule_keeps_charge: req.body?.rescheduleKeepsCharge !== false && req.body?.reschedule_keeps_charge !== false,
+        updated_by: sanitizeString(req.session.user?.id, 120),
+        updated_at: new Date().toISOString()
+      };
+      const result = await supabase
+        .from('clinic_patient_finance_policies')
+        .upsert(payload, { onConflict: 'organization_id' })
+        .select(PATIENT_FINANCE_POLICY_SELECT)
+        .single();
+      if (result.error) throw result.error;
+      return res.json({ success: true, data: result.data });
+    } catch (error: any) {
+      const safe = patientFinanceErrorResponse(error);
+      return res.status(safe.status).json({ success: false, error: safe.error });
+    }
+  });
+
+  // Legacy payments API kept for old rows and backward compatibility.
   app.get('/api/payments', checkAuth, requireRoles('coordinator', 'admin', 'owner', 'receptionist'), async (req: any, res) => {
     try {
       const scopedClinicId = currentClinicId(req.session.user);

@@ -5627,6 +5627,88 @@ export const dataService = {
     return { success: true, data: [] };
   },
 
+  async getPatientFinanceLedger(month?: string) {
+    try {
+      const endpoint = endpointWithQuery('/api/patient-finance/ledger', { month });
+      const response = await fetchWithAuthRetry(endpoint, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error fetching patient finance ledger:', error);
+      return { success: false, data: null, error: 'Não foi possível carregar o financeiro de pacientes agora.' };
+    }
+  },
+
+  async createPatientFinancialCharge(payload: any) {
+    try {
+      const idempotencyKey = String(payload?.idempotencyKey || generateId());
+      const response = await fetchWithAuthRetry('/api/patient-finance/charges', {
+        method: 'POST',
+        headers: {
+          ...(await getAuthHeaders()),
+          'X-Idempotency-Key': idempotencyKey
+        },
+        credentials: 'include',
+        body: JSON.stringify({ ...payload, idempotencyKey })
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error creating patient financial charge:', error);
+      return { success: false, error: 'Não foi possível criar a cobrança agora.' };
+    }
+  },
+
+  async applyPatientFinancialOperation(paymentId: string, payload: any) {
+    try {
+      const idempotencyKey = String(payload?.idempotencyKey || generateId());
+      const response = await fetchWithAuthRetry(`/api/patient-finance/charges/${encodeURIComponent(String(paymentId))}/operations`, {
+        method: 'POST',
+        headers: {
+          ...(await getAuthHeaders()),
+          'X-Idempotency-Key': idempotencyKey
+        },
+        credentials: 'include',
+        body: JSON.stringify({ ...payload, idempotencyKey })
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error applying patient financial operation:', error);
+      return { success: false, error: 'Não foi possível concluir a operação financeira agora.' };
+    }
+  },
+
+  async sendPatientFinancialReminder(paymentId: string) {
+    try {
+      const response = await fetchWithAuthRetry(`/api/patient-finance/charges/${encodeURIComponent(String(paymentId))}/reminder`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({})
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error sending patient financial reminder:', error);
+      return { success: false, error: 'Não foi possível enviar o lembrete financeiro agora.' };
+    }
+  },
+
+  async updatePatientFinancePolicy(payload: any) {
+    try {
+      const response = await fetchWithAuthRetry('/api/patient-finance/policy', {
+        method: 'PUT',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error updating patient finance policy:', error);
+      return { success: false, error: 'Não foi possível salvar a política financeira agora.' };
+    }
+  },
+
   async savePayment(payment: any) {
     const id = generateId();
     return await saveOfflineFirst(id, payment, 'payment', '/api/payments');

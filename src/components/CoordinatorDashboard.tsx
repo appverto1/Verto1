@@ -62,6 +62,8 @@ import { ProtocolManagementSystem } from "./Protocols";
 import { StackedDomainStatusChart } from "./StackedDomainStatusChart";
 import { RoleCapabilityMatrix } from "./RoleCapabilityMatrix";
 import { ClinicalAgendaBoard } from "./Calendar";
+import { PatientFinanceWorkspace } from "./PatientFinanceWorkspace";
+import { resolvePatientFinancialStatus } from "../utils/patientFinancialLedger";
 import { OperationalClosureCenter } from "./OperationalClosureCenter";
 import { MonthlyConferenceCenter } from "./MonthlyConferenceCenter";
 import { PayerRequirementsPanel } from "./PayerRequirementsPanel";
@@ -754,6 +756,12 @@ export function CoordinatorDashboard({
     breadcrumb: ["Financeiro", "Dashboard financeiro"],
     intentKey: 0,
   });
+  const [patientFinanceLaunchRequest, setPatientFinanceLaunchRequest] = useState<{
+    key: string;
+    appointmentId?: string;
+    chargeId?: string;
+    action?: "charge" | "payment" | "partial_payment" | "discount" | "courtesy" | "refund" | "receipt" | "due_date" | "cancel" | "history";
+  } | null>(null);
   const [therapistMembersById, setTherapistMembersById] = useState<Record<string, any>>({});
   const [patientTherapistFilter, setPatientTherapistFilter] = useState<string>("all");
   const [patientQuickFilter, setPatientQuickFilter] = useState<"all" | "birthdaysToday">("all");
@@ -6047,7 +6055,9 @@ export function CoordinatorDashboard({
   );
 
   const pendingPatientPayments = useMemo(
-    () => (payments || []).filter((payment: any) => !isPaymentPaid(payment)),
+    () => (payments || []).filter((payment: any) =>
+      ["pending", "partial", "overdue"].includes(resolvePatientFinancialStatus(payment)),
+    ),
     [payments],
   );
 
@@ -6061,11 +6071,7 @@ export function CoordinatorDashboard({
   );
 
   const overduePatientPayments = useMemo(
-    () =>
-      pendingPatientPayments.filter((payment: any) => {
-        const days = daysUntilDate(payment?.due_date || payment?.dueDate);
-        return days !== null && days < 0;
-      }),
+    () => pendingPatientPayments.filter((payment: any) => resolvePatientFinancialStatus(payment) === "overdue"),
     [pendingPatientPayments],
   );
 
@@ -7376,6 +7382,7 @@ export function CoordinatorDashboard({
   const isBillingReportSection = activeFinancialSection === "Relatórios de Faturamento";
   const patientFinanceSections = [
     "Financeiro de pacientes",
+    "Por consulta",
     "Recebimentos de pacientes",
     "Cobranças",
     "Pendências de pacientes",
@@ -7383,12 +7390,8 @@ export function CoordinatorDashboard({
   ];
   const isPatientReceivablesSection = patientFinanceSections.includes(activeFinancialSection);
   const patientFinanceActiveSection = activeFinancialSection === "Financeiro de pacientes"
-    ? "Recebimentos de pacientes"
+    ? "Por consulta"
     : activeFinancialSection;
-  const isPatientPaymentsSection = patientFinanceActiveSection === "Recebimentos de pacientes";
-  const isPatientChargesSection = patientFinanceActiveSection === "Cobranças";
-  const isPatientPendingSection = patientFinanceActiveSection === "Pendências de pacientes";
-  const isPatientReceiptsSection = patientFinanceActiveSection === "Recibos";
   const productionReportRows = useMemo(() => {
     const monthAppointments = (therapistAgenda || []).filter((appointment: any) => {
       const referenceDate =
@@ -7706,6 +7709,21 @@ export function CoordinatorDashboard({
               })
           : undefined
       }
+      onOpenPatientFinance={(appointment: any, action: any = "history") => {
+        const appointmentId = String(
+          appointment?.appointmentId || appointment?.appointment_id || appointment?.id || "",
+        ).trim();
+        if (!appointmentId) {
+          showToast("Esta consulta ainda não possui um identificador financeiro válido.", "error");
+          return;
+        }
+        setPatientFinanceLaunchRequest({
+          key: `${appointmentId}:${action}:${Date.now()}`,
+          appointmentId,
+          action,
+        });
+        navigateToTab("financial", financialIntent("Financeiro de pacientes"));
+      }}
       onStartSession={(appointment: any) =>
         {
           const sessionAppointment = buildAppointmentSessionContext(appointment);
@@ -7974,6 +7992,10 @@ export function CoordinatorDashboard({
                   navigateToTab("patients");
                   return;
                 }
+                if (stat.id === "financial") {
+                  navigateToTab("financial", financialIntent("Pendências de pacientes"));
+                  return;
+                }
                 navigateToTab(stat.id as any);
               }}
               className={`group relative overflow-hidden rounded-[26px] border p-5 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-xl ${
@@ -8007,7 +8029,7 @@ export function CoordinatorDashboard({
         {canAccessClinicFinance && overduePatientPayments.length > 0 && (
           <button
             type="button"
-            onClick={() => navigateToTab("financial")}
+            onClick={() => navigateToTab("financial", financialIntent("Pendências de pacientes"))}
             className={`w-full rounded-[24px] border p-5 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lg ${
               theme === "dark"
                 ? "border-amber-300/20 bg-amber-400/10 text-amber-100"
@@ -10142,6 +10164,7 @@ export function CoordinatorDashboard({
                 {(isPatientReceivablesSection || isReceptionist) && (
                   <div data-patient-finance-internal-nav className="flex flex-wrap gap-2">
                     {[
+                      ["Por consulta", "Por consulta"],
                       ["Recebimentos de pacientes", "Recebimentos"],
                       ["Cobranças", "Cobranças"],
                       ["Pendências de pacientes", "Pendências"],
@@ -10167,14 +10190,6 @@ export function CoordinatorDashboard({
                 )}
 
                 <div className="flex flex-wrap gap-2">
-                  {(isRevenueSection || isPatientReceivablesSection || isReceptionist) && (
-                    <button
-                      onClick={() => setIsPaymentModalOpen(true)}
-                      className="flex items-center gap-2 rounded-2xl bg-[#7a32fc] px-5 py-3 text-sm font-semibold text-white shadow-sm shadow-purple-500/10 transition hover:bg-[#6d28e8]"
-                    >
-                      <Plus size={18} /> Cobrança / Pagamento
-                    </button>
-                  )}
                   {canAccessClinicFinance && isProfessionalTransfersSection && (
                     <button
                       onClick={() => setIsProfessionalPaymentModalOpen(true)}
@@ -10204,98 +10219,23 @@ export function CoordinatorDashboard({
                 </div>
 
                 {(isPatientReceivablesSection || isReceptionist) && (
-                  <div className="space-y-4">
-                    {isPatientPaymentsSection && (
-                      <div data-patient-finance-receipts-view className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
-                        <h4 className="font-semibold text-slate-900">Recebimentos de pacientes</h4>
-                        <p className="mt-1 text-sm text-slate-500">Pagamentos confirmados, método, comprovante e status operacional da recepção.</p>
-                        <div className="mt-5 space-y-3">
-                          {financialDashboard.paidPayments.length ? financialDashboard.paidPayments.map((payment: any, index: number) => (
-                            <div key={payment.id || `patient-paid-${index}`} className="grid gap-3 rounded-2xl bg-slate-50 p-4 text-sm sm:grid-cols-[1fr_auto] sm:items-center">
-                              <div>
-                                <p className="font-semibold text-slate-900">{payment.patient_name || "Paciente"}</p>
-                                <p className="text-xs text-slate-500">
-                                  {new Date(payment.payment_date || payment.paymentDate || payment.due_date || payment.dueDate).toLocaleDateString("pt-BR")} · {payment.method || "Método não informado"}
-                                </p>
-                              </div>
-                              <div className="text-left sm:text-right">
-                                <p className="font-semibold text-emerald-600">{formatCurrency(payment.amount)}</p>
-                                <p className="text-xs text-slate-500">{payment.receipt_url ? "Comprovante anexado" : "Sem comprovante anexado"}</p>
-                              </div>
-                            </div>
-                          )) : (
-                            <p className="rounded-2xl bg-slate-50 p-4 text-sm font-semibold text-slate-400">Nenhum recebimento confirmado no período.</p>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    {isPatientChargesSection && (
-                      <div data-patient-finance-charges-view className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
-                        <h4 className="font-semibold text-slate-900">Cobranças</h4>
-                        <p className="mt-1 text-sm text-slate-500">Cobranças abertas, próximos vencimentos e valores a receber por paciente.</p>
-                        <div className="mt-5 grid gap-3 md:grid-cols-2">
-                          {financialDashboard.pendingPayments.concat(compensationForecast).slice(0, 8).map((charge: any, index: number) => (
-                            <div key={charge.id || `patient-charge-${index}`} className="rounded-2xl bg-slate-50 p-4">
-                              <p className="text-sm font-semibold text-slate-900">{charge.patient_name || charge.patientName || "Paciente"}</p>
-                              <p className="mt-1 text-lg font-semibold text-slate-900">{formatCurrency(charge.amount)}</p>
-                              <p className="text-xs text-slate-500">
-                                Vencimento: {charge.dueDay ? `dia ${String(charge.dueDay).padStart(2, "0")}` : new Date(charge.due_date || charge.dueDate || charge.payment_date || charge.paymentDate).toLocaleDateString("pt-BR")}
-                              </p>
-                            </div>
-                          ))}
-                          {!financialDashboard.pendingPayments.length && !compensationForecast.length && (
-                            <p className="rounded-2xl bg-slate-50 p-4 text-sm font-semibold text-slate-400">Nenhuma cobrança aberta ou vencimento previsto no período.</p>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    {isPatientPendingSection && (
-                      <div data-patient-finance-pending-view className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
-                        <h4 className="font-semibold text-slate-900">Pendências financeiras</h4>
-                        <p className="mt-1 text-sm text-slate-500">Cobranças vencidas, inadimplência e pendências sem baixa financeira.</p>
-                        <div className="mt-5 space-y-3">
-                          {financialDashboard.overduePayments.length ? financialDashboard.overduePayments.map((payment: any, index: number) => (
-                            <div key={payment.id || `patient-overdue-${index}`} className="flex flex-col gap-2 rounded-2xl bg-rose-50 p-4 text-sm sm:flex-row sm:items-center sm:justify-between">
-                              <div>
-                                <p className="font-semibold text-slate-900">{payment.patient_name || "Paciente"}</p>
-                                <p className="text-xs text-rose-700">Vencida em {new Date(payment.due_date || payment.dueDate || payment.payment_date || payment.paymentDate).toLocaleDateString("pt-BR")}</p>
-                              </div>
-                              <p className="font-semibold text-rose-700">{formatCurrency(payment.amount)}</p>
-                            </div>
-                          )) : (
-                            <p className="rounded-2xl bg-slate-50 p-4 text-sm font-semibold text-slate-400">Nenhuma cobrança vencida no período.</p>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    {isPatientReceiptsSection && (
-                      <div data-patient-finance-documents-view className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
-                        <h4 className="font-semibold text-slate-900">Recibos e comprovantes</h4>
-                        <p className="mt-1 text-sm text-slate-500">Comprovantes anexados e registros que ainda precisam de documento.</p>
-                        <div className="mt-5 grid gap-3 md:grid-cols-2">
-                          {financialDashboard.monthPayments.map((payment: any, index: number) => (
-                            <div key={payment.id || `patient-document-${index}`} className="rounded-2xl bg-slate-50 p-4">
-                              <div className="flex items-start justify-between gap-3">
-                                <div>
-                                  <p className="text-sm font-semibold text-slate-900">{payment.patient_name || "Paciente"}</p>
-                                  <p className="text-xs text-slate-500">{new Date(payment.payment_date || payment.paymentDate || payment.due_date || payment.dueDate).toLocaleDateString("pt-BR")}</p>
-                                </div>
-                                <span className={`rounded-full px-3 py-1 text-[10px] font-semibold ${payment.receipt_url ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
-                                  {payment.receipt_url ? "Anexado" : "Pendente"}
-                                </span>
-                              </div>
-                              <p className="mt-2 text-sm font-semibold text-emerald-600">{formatCurrency(payment.amount)}</p>
-                            </div>
-                          ))}
-                          {!financialDashboard.monthPayments.length && (
-                            <p className="rounded-2xl bg-slate-50 p-4 text-sm font-semibold text-slate-400">Nenhum recibo ou comprovante no período.</p>
-                          )}
-                        </div>
-                      </div>
-                    )}
+                  <div
+                    data-patient-finance-receipts-view={patientFinanceActiveSection === "Recebimentos de pacientes" ? "" : undefined}
+                    data-patient-finance-charges-view={patientFinanceActiveSection === "Cobranças" ? "" : undefined}
+                    data-patient-finance-pending-view={patientFinanceActiveSection === "Pendências de pacientes" ? "" : undefined}
+                    data-patient-finance-documents-view={patientFinanceActiveSection === "Recibos" ? "" : undefined}
+                  >
+                    <PatientFinanceWorkspace
+                      activeSection={patientFinanceActiveSection}
+                      month={financialMonth}
+                      patients={allPatients}
+                      professionals={therapistFilterOptions}
+                      currentUser={user}
+                      launchRequest={patientFinanceLaunchRequest}
+                      onLaunchHandled={() => setPatientFinanceLaunchRequest(null)}
+                      onPaymentsLoaded={setPayments}
+                      onToast={showToast}
+                    />
                   </div>
                 )}
 

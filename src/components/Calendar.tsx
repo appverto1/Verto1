@@ -55,6 +55,18 @@ import {
   getPatientTissAuthorizationQuantitySummary,
   hasConfirmedPatientTissAuthorizationBalance
 } from '../utils/patientTissAuthorizationView';
+import {
+  PATIENT_FINANCIAL_STATUS_CLASSES,
+  PATIENT_FINANCIAL_STATUS_LABELS,
+  getPatientFinanceAmounts,
+  privateAppointmentFinancialReadinessLabel,
+  resolvePatientFinancialStatus
+} from '../utils/patientFinancialLedger';
+
+const formatPatientFinanceCurrency = (value: any) => new Intl.NumberFormat('pt-BR', {
+  style: 'currency',
+  currency: 'BRL'
+}).format(Number(value || 0));
 
 const isPersistedUuid = (value: any) =>
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || '').trim());
@@ -1372,6 +1384,7 @@ export const ClinicalAgendaBoard = ({
   onOpenPatient,
   onStartSession,
   onNavigateTissPreGuides,
+  onOpenPatientFinance,
   theme = 'light'
 }: any) => {
   const isDark = theme === 'dark';
@@ -2932,6 +2945,9 @@ export const ClinicalAgendaBoard = ({
   const statusHistory = Array.isArray(detail.statusHistory) ? detail.statusHistory : [];
   const signatures = Array.isArray(detail.signatures) ? detail.signatures : [];
   const billingContext = detail.billingContext || {};
+  const patientFinance = detail.patientFinance || null;
+  const patientFinanceStatus = resolvePatientFinancialStatus(patientFinance);
+  const patientFinanceAmounts = getPatientFinanceAmounts(patientFinance);
   const billingDocuments = Array.isArray(billingContext.documents) ? billingContext.documents : [];
   const pendingBillingDocuments = billingDocuments.filter((doc: any) => ['REQUIRED', 'PENDING', 'EXPIRED'].includes(String(doc.status || '').toUpperCase()));
   const billingSuggestion = billingContext.suggestion || null;
@@ -3053,11 +3069,13 @@ export const ClinicalAgendaBoard = ({
   ];
   const financialBlockingCount = financialValidationItems.filter((item: any) => !item.ok).length;
   const financialWarningCount = financialValidationItems.filter((item: any) => item.ok && item.warning).length;
-  const financialValidationStatus = financialBlockingCount > 0
-    ? 'Bloqueada para faturamento'
-    : financialWarningCount > 0
-      ? 'Pronta com alerta'
-      : 'Pronta para faturamento';
+  const financialValidationStatus = billingDetailIsNonInsuranceContext
+    ? privateAppointmentFinancialReadinessLabel(patientFinance)
+    : financialBlockingCount > 0
+      ? 'Bloqueada para faturamento'
+      : financialWarningCount > 0
+        ? 'Pronta com alerta'
+        : 'Pronta para faturamento';
   const applyAvailableTissAuthorizationToBillingForm = async (authorization: any) => {
     if (!authorization?.authorizationId && !authorization?.patientTissAuthorizationId) return;
     if (!hasConfirmedPatientTissAuthorizationBalance(authorization)) {
@@ -3805,6 +3823,52 @@ export const ClinicalAgendaBoard = ({
                 </div>
               )}
             </div>
+
+            {billingFinancialContextType === 'PRIVATE' && (
+              <div className={`mt-5 rounded-3xl border p-4 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-100 bg-white'}`} data-appointment-patient-finance>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-slate-400">Financeiro da consulta</p>
+                    <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-3">
+                      <div><span className="block text-xs text-slate-400">Valor</span><span className="mt-1 block font-medium">{formatPatientFinanceCurrency(patientFinanceAmounts.total)}</span></div>
+                      <div><span className="block text-xs text-slate-400">Pago</span><span className="mt-1 block font-medium text-emerald-600">{formatPatientFinanceCurrency(patientFinanceAmounts.paid)}</span></div>
+                      <div><span className="block text-xs text-slate-400">Saldo</span><span className={`mt-1 block font-medium ${patientFinanceAmounts.balance > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>{formatPatientFinanceCurrency(patientFinanceAmounts.balance)}</span></div>
+                      <div><span className="block text-xs text-slate-400">Vencimento</span><span className="mt-1 block font-medium">{patientFinance?.due_date ? formatDisplayDate(patientFinance.due_date) : 'Não definido'}</span></div>
+                      <div><span className="block text-xs text-slate-400">Forma de pagamento</span><span className="mt-1 block font-medium">{patientFinance?.method || 'Não informada'}</span></div>
+                      <div><span className="block text-xs text-slate-400">Último pagamento</span><span className="mt-1 block font-medium">{patientFinance?.last_payment_at ? formatDisplayDateTime(patientFinance.last_payment_at, { separator: ', ' }) : 'Não registrado'}</span></div>
+                    </div>
+                  </div>
+                  <span className={`inline-flex w-fit rounded-full border px-3 py-1.5 text-xs font-medium ${PATIENT_FINANCIAL_STATUS_CLASSES[patientFinanceStatus]}`}>
+                    {PATIENT_FINANCIAL_STATUS_LABELS[patientFinanceStatus]}
+                  </span>
+                </div>
+                {onOpenPatientFinance && (
+                  <div className="mt-4 flex flex-wrap gap-2 border-t border-slate-100 pt-4">
+                    {!patientFinance?.payment_id ? (
+                      <button type="button" onClick={() => onOpenPatientFinance(detailEvent, 'charge')} className="rounded-xl bg-[#7a32fc] px-3 py-2 text-xs font-medium text-white">Criar cobrança</button>
+                    ) : patientFinanceAmounts.balance > 0 ? (
+                      <>
+                        <button type="button" onClick={() => onOpenPatientFinance(detailEvent, 'payment')} className="rounded-xl bg-[#7a32fc] px-3 py-2 text-xs font-medium text-white">Registrar pagamento</button>
+                        <button type="button" onClick={() => onOpenPatientFinance(detailEvent, 'partial_payment')} className={`rounded-xl border px-3 py-2 text-xs font-medium ${isDark ? 'border-slate-700 text-slate-200' : 'border-slate-200 text-slate-600'}`}>Pagamento parcial</button>
+                        <button type="button" onClick={() => onOpenPatientFinance(detailEvent, 'discount')} className={`rounded-xl border px-3 py-2 text-xs font-medium ${isDark ? 'border-slate-700 text-slate-200' : 'border-slate-200 text-slate-600'}`}>Aplicar desconto</button>
+                      </>
+                    ) : null}
+                    {patientFinance?.payment_id && patientFinanceStatus !== 'courtesy' && patientFinanceStatus !== 'canceled' && (
+                      <button type="button" onClick={() => onOpenPatientFinance(detailEvent, 'courtesy')} className={`rounded-xl border px-3 py-2 text-xs font-medium ${isDark ? 'border-slate-700 text-slate-200' : 'border-slate-200 text-slate-600'}`}>Marcar como cortesia</button>
+                    )}
+                    {patientFinance?.payment_id && patientFinanceAmounts.paid > 0 && (
+                      <button type="button" onClick={() => onOpenPatientFinance(detailEvent, 'refund')} className="rounded-xl border border-rose-200 px-3 py-2 text-xs font-medium text-rose-600">Estornar</button>
+                    )}
+                    {patientFinance?.payment_id && patientFinanceAmounts.paid > 0 && (
+                      <button type="button" onClick={() => onOpenPatientFinance(detailEvent, 'receipt')} className={`rounded-xl border px-3 py-2 text-xs font-medium ${isDark ? 'border-slate-700 text-slate-200' : 'border-slate-200 text-slate-600'}`}>Emitir recibo</button>
+                    )}
+                    {patientFinance?.payment_id && (
+                      <button type="button" onClick={() => onOpenPatientFinance(detailEvent, 'history')} className={`rounded-xl border px-3 py-2 text-xs font-medium ${isDark ? 'border-slate-700 text-slate-200' : 'border-slate-200 text-slate-600'}`}>Ver histórico</button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
 
             {actionRequests.filter((request: any) => request.status === 'PENDING').length > 0 && (
               <div className={`mt-5 rounded-3xl border p-4 ${isDark ? 'border-violet-500/30 bg-violet-500/10' : 'border-violet-100 bg-violet-50/70'}`}>
