@@ -51,7 +51,10 @@ import {
 } from '../utils/appointmentBillingPayerSwitch';
 import { resolveAppointmentCancellationState } from '../utils/appointmentCancellationState';
 import { getAppointmentPrimaryAction } from '../utils/appointmentPrimaryAction';
-import { getPatientTissAuthorizationQuantitySummary } from '../utils/patientTissAuthorizationView';
+import {
+  getPatientTissAuthorizationQuantitySummary,
+  hasConfirmedPatientTissAuthorizationBalance
+} from '../utils/patientTissAuthorizationView';
 
 const isPersistedUuid = (value: any) =>
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || '').trim());
@@ -2955,9 +2958,10 @@ export const ClinicalAgendaBoard = ({
   );
   const billingAuthorizationQuantityRows = (authorization: any) => {
     const quantity = getPatientTissAuthorizationQuantitySummary(authorization);
+    const balanceConfirmed = hasConfirmedPatientTissAuthorizationBalance(authorization);
     return [
-      ['Disponíveis', quantity.available === null ? 'Sem limite informado' : `${quantity.available} sessões`],
-      ['Reservadas', `${quantity.reserved} sessões`],
+      ['Disponíveis', !balanceConfirmed ? 'Não confirmado' : quantity.available === null ? 'Sem limite informado' : `${quantity.available} sessões`],
+      ['Reservadas', !balanceConfirmed ? 'Não confirmado' : `${quantity.reserved} sessões`],
       ['Consumidas', `${quantity.consumed} sessões`],
       ['Autorizadas', quantity.hasPackageLimit ? `${quantity.authorized} sessões` : 'Sem limite informado'],
     ];
@@ -3056,6 +3060,14 @@ export const ClinicalAgendaBoard = ({
       : 'Pronta para faturamento';
   const applyAvailableTissAuthorizationToBillingForm = async (authorization: any) => {
     if (!authorization?.authorizationId && !authorization?.patientTissAuthorizationId) return;
+    if (!hasConfirmedPatientTissAuthorizationBalance(authorization)) {
+      setBillingEditorState((prev) => ({
+        ...prev,
+        success: '',
+        error: 'Não foi possível confirmar o saldo desta autorização. Atualize os dados antes de aplicá-la.'
+      }));
+      return;
+    }
     const nextForm = {
       ...billingForm,
       financialContextType: 'INSURANCE',
@@ -3320,7 +3332,11 @@ export const ClinicalAgendaBoard = ({
                 </div>
                 <button
                   type="button"
-                  disabled={billingEditorState.saving || billingAuthorizationIsApplied(billingSuggestedTissAuthorization)}
+                  disabled={
+                    billingEditorState.saving ||
+                    billingAuthorizationIsApplied(billingSuggestedTissAuthorization) ||
+                    !hasConfirmedPatientTissAuthorizationBalance(billingSuggestedTissAuthorization)
+                  }
                   onClick={applySuggestedTissAuthorizationToBillingForm}
                   className="mt-3 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-bold text-white disabled:opacity-60"
                 >

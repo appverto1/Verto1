@@ -120,8 +120,14 @@ import {
   dedupePatientTissAuthorizationSelectionOptions,
   findSuggestedTissAuthorizationForAppointment,
   getPatientTissAuthorizationQuantitySummary,
-  getPatientTissAuthorizationVisualState
+  getPatientTissAuthorizationVisualState,
+  hasConfirmedPatientTissAuthorizationBalance
 } from './src/utils/patientTissAuthorizationView';
+import {
+  resolveTissAuthorizationBalance,
+  type TissAuthorizationBalance,
+  type TissAuthorizationCommitment
+} from './src/utils/tissAuthorizationBalance';
 import {
   resolveClinicalPatientDisplayName,
   resolvePortalPatientDisplayName
@@ -8834,6 +8840,7 @@ const serializeAppointmentTissAuthorizationSuggestion = (authorization: any, ref
     authorizedQuantity,
     usedQuantity
   });
+  const balanceConfirmed = hasConfirmedPatientTissAuthorizationBalance(authorization);
   const balance = quantitySummary.available;
   const visualState = getPatientTissAuthorizationVisualState(authorization, referenceDateKey);
   return cleanObject({
@@ -8858,8 +8865,15 @@ const serializeAppointmentTissAuthorizationSuggestion = (authorization: any, ref
     quantityReserved: quantitySummary.reserved,
     quantityAvailable: quantitySummary.available,
     balance,
+    balanceConfirmed,
+    balanceErrorCode: sanitizeString(authorization?.balanceErrorCode || authorization?.balance_error_code, 120) || null,
+    currentAppointmentReserved: authorization?.currentAppointmentReserved === true,
     status: visualState.label,
-    isEligibleForAppointment: visualState.isCurrent && !visualState.isLegacyOrInadequate,
+    isEligibleForAppointment:
+      balanceConfirmed &&
+      visualState.isCurrent &&
+      !visualState.isLegacyOrInadequate &&
+      (!quantitySummary.hasPackageLimit || Number(quantitySummary.available || 0) > 0 || authorization?.currentAppointmentReserved === true),
     isLegacyOrInvalidForTiss: visualState.isLegacyOrInadequate,
     source: 'PATIENT_TISS_AUTHORIZATION'
   });
@@ -9053,19 +9067,89 @@ async function hydratePatientPayerAuthorizationsForAppointmentTissBilling(organi
   });
 }
 
-async function fetchAppointmentTissAuthorizationReservationCounts(params: {
+type ConfirmedTissAuthorizationBalance = TissAuthorizationBalance & {
+  confirmed: boolean;
+  errorCode: string | null;
+  preGuideCount: number;
+  officialPreGuideCount: number;
+};
+
+const readTissAuthorizationIdFromBillingMetadata = (value: any) => {
+  const metadata = parseStoredJsonObject(value);
+  return sanitizeString(
+    metadata?.patient_tiss_authorization_id ||
+      metadata?.patientTissAuthorizationId ||
+      metadata?.authorization_id ||
+      metadata?.authorizationId ||
+      metadata?.tiss_authorization?.authorizationId ||
+      metadata?.tiss_authorization?.authorization_id ||
+      metadata?.tissAuthorization?.authorizationId ||
+      metadata?.tissAuthorization?.authorization_id,
+    120
+  );
+};
+
+const readTissAuthorizationIdFromPreGuideSnapshot = (value: any) => {
+  const snapshot = parseStoredJsonObject(value);
+  return sanitizeString(
+    snapshot?.patient_tiss_authorization_id ||
+      snapshot?.patientTissAuthorizationId ||
+      snapshot?.authorization_id ||
+      snapshot?.authorizationId ||
+      snapshot?.authorization?.patientTissAuthorizationId ||
+      snapshot?.authorization?.patient_tiss_authorization_id ||
+      snapshot?.authorization?.authorizationId ||
+      snapshot?.authorization?.authorization_id ||
+      snapshot?.authorization?.id ||
+      snapshot?.billingContext?.patientTissAuthorizationId ||
+      snapshot?.billing_context?.patient_tiss_authorization_id,
+    120
+  );
+};
+
+async function fetchPatientTissAuthorizationBalances(params: {
   organizationId: string;
-  patientId: string;
-  authorizationIds: string[];
-  excludeAppointmentId?: any;
-  usedQuantityByAuthorizationId?: Map<string, number>;
+  authorizations: any[];
+  currentAppointmentId?: any;
 }) {
   const organizationId = sanitizeString(params.organizationId, 120);
-  const patientId = sanitizeString(params.patientId, 120);
-  const authorizationIds = Array.from(new Set((params.authorizationIds || []).map((id) => sanitizeString(id, 120)).filter((id) => isUuid(id))));
-  const excludeAppointmentId = sanitizeString(params.excludeAppointmentId, 120);
-  const counts = new Map<string, number>();
-  if (!isUuid(organizationId) || !isUuid(patientId) || authorizationIds.length === 0) return counts;
+  const currentAppointmentId = sanitizeString(params.currentAppointmentId, 120);
+  const authorizationRows = (Array.isArray(params.authorizations) ? params.authorizations : [])
+    .map((row: any) => ({
+      row,
+      authorizationId: sanitizeString(row?.id || row?.authorizationId || row?.authorization_id, 120),
+      patientId: sanitizeString(row?.patientId || row?.patient_id, 120),
+      authorizedQuantity: Number(row?.authorizedQuantity ?? row?.authorized_quantity ?? row?.quantityAuthorized ?? 0) || 0,
+      consumedQuantity: Number(row?.usedQuantity ?? row?.used_quantity ?? row?.quantityConsumed ?? 0) || 0
+    }))
+    .filter((entry) => isUuid(entry.authorizationId) && isUuid(entry.patientId));
+  const balances = new Map<string, ConfirmedTissAuthorizationBalance>();
+  const buildUnconfirmedBalances = (errorCode: string) => {
+    for (const authorization of authorizationRows) {
+      balances.set(authorization.authorizationId, {
+        authorized: Math.max(0, authorization.authorizedQuantity),
+        consumed: Math.max(0, authorization.consumedQuantity),
+        reserved: 0,
+        available: null,
+        futureReservations: 0,
+        historicalOfficialCommitments: 0,
+        currentAppointmentReserved: false,
+        confirmed: false,
+        errorCode,
+        preGuideCount: 0,
+        officialPreGuideCount: 0
+      });
+    }
+    return balances;
+  };
+  if (!isUuid(organizationId) || authorizationRows.length === 0) return balances;
+
+  const authorizationIds = new Set(authorizationRows.map((entry) => entry.authorizationId));
+  const patientIds = Array.from(new Set(authorizationRows.map((entry) => entry.patientId)));
+  const patientIdByAuthorizationId = new Map(
+    authorizationRows.map((entry) => [entry.authorizationId, entry.patientId])
+  );
+  const queryLimit = Math.min(10000, Math.max(2000, patientIds.length * 250));
 
   try {
     const [contextResult, preGuideResult] = await Promise.all([
@@ -9073,131 +9157,190 @@ async function fetchAppointmentTissAuthorizationReservationCounts(params: {
         .from('appointment_billing_contexts')
         .select('appointment_id,patient_id,metadata')
         .eq('organization_id', organizationId)
-        .eq('patient_id', patientId)
-        .limit(2000),
+        .in('patient_id', patientIds)
+        .limit(queryLimit),
       supabase
         .from('appointment_tiss_pre_guides')
-        .select('appointment_id,patient_id,scheduled_start,official_document_id,snapshot_data,status,revenue_cycle_state')
+        .select('appointment_id,patient_id,scheduled_start,official_document_id,snapshot_data,status')
         .eq('organization_id', organizationId)
-        .eq('patient_id', patientId)
-        .limit(2000)
+        .in('patient_id', patientIds)
+        .limit(queryLimit)
     ]);
-    for (const result of [contextResult, preGuideResult]) {
-      if (result.error && !hasMissingFinancialSchema(result.error) && !isMissingRelationError(result.error) && !extractMissingColumnName(result.error)) {
-        throw result.error;
-      }
+    const sourceError = contextResult.error || preGuideResult.error;
+    if (sourceError) {
+      console.warn('[TissAuthorizationBalance] source unavailable; balance was not assumed.', {
+        organizationId,
+        patientCount: patientIds.length,
+        message: sanitizeString(sourceError?.message || String(sourceError), 300),
+        code: sanitizeString(sourceError?.code, 80) || null
+      });
+      return buildUnconfirmedBalances('TISS_AUTHORIZATION_BALANCE_SOURCE_UNAVAILABLE');
     }
-    const authorizationIdSet = new Set(authorizationIds);
-    const reservationsByAppointmentAndAuthorization = new Map<string, {
+    if (
+      (Array.isArray(contextResult.data) && contextResult.data.length >= queryLimit) ||
+      (Array.isArray(preGuideResult.data) && preGuideResult.data.length >= queryLimit)
+    ) {
+      console.warn('[TissAuthorizationBalance] source limit reached; balance was not assumed.', {
+        organizationId,
+        patientCount: patientIds.length,
+        queryLimit
+      });
+      return buildUnconfirmedBalances('TISS_AUTHORIZATION_BALANCE_SOURCE_LIMIT_REACHED');
+    }
+
+    const candidates = new Map<string, {
       appointmentId: string;
       authorizationId: string;
-      committed: boolean;
-      activeReservation: boolean;
+      hasBillingContext: boolean;
+      activePreGuide: boolean;
+      officialPreGuide: boolean;
       scheduledStart: string | null;
     }>();
     const reservationKey = (appointmentId: string, authorizationId: string) => `${appointmentId}:${authorizationId}`;
-    for (const context of contextResult.error || !Array.isArray(contextResult.data) ? [] : contextResult.data) {
+    for (const context of Array.isArray(contextResult.data) ? contextResult.data : []) {
       const appointmentId = sanitizeString(context?.appointment_id, 120);
-      if (!isUuid(appointmentId) || appointmentId === excludeAppointmentId) continue;
-      const metadata = parseStoredJsonObject(context?.metadata);
-      const authorizationId = sanitizeString(
-        metadata?.patient_tiss_authorization_id ||
-          metadata?.patientTissAuthorizationId ||
-          metadata?.tiss_authorization?.authorizationId ||
-          metadata?.tiss_authorization?.authorization_id ||
-          metadata?.tissAuthorization?.authorizationId ||
-          metadata?.tissAuthorization?.authorization_id,
-        120
-      );
-      if (!authorizationIdSet.has(authorizationId)) continue;
-      reservationsByAppointmentAndAuthorization.set(reservationKey(appointmentId, authorizationId), {
+      const patientId = sanitizeString(context?.patient_id, 120);
+      const authorizationId = readTissAuthorizationIdFromBillingMetadata(context?.metadata);
+      if (
+        !isUuid(appointmentId) ||
+        !authorizationIds.has(authorizationId) ||
+        patientIdByAuthorizationId.get(authorizationId) !== patientId
+      ) continue;
+      const key = reservationKey(appointmentId, authorizationId);
+      const current = candidates.get(key);
+      candidates.set(key, {
         appointmentId,
         authorizationId,
-        committed: false,
-        activeReservation: true,
-        scheduledStart: null
+        hasBillingContext: true,
+        activePreGuide: Boolean(current?.activePreGuide),
+        officialPreGuide: Boolean(current?.officialPreGuide),
+        scheduledStart: current?.scheduledStart || null
       });
     }
-    for (const preGuide of preGuideResult.error || !Array.isArray(preGuideResult.data) ? [] : preGuideResult.data) {
+    for (const preGuide of Array.isArray(preGuideResult.data) ? preGuideResult.data : []) {
       const appointmentId = sanitizeString(preGuide?.appointment_id, 120);
-      if (!isUuid(appointmentId) || appointmentId === excludeAppointmentId) continue;
-      const snapshot = parseStoredJsonObject(preGuide?.snapshot_data);
-      const authorizationId = sanitizeString(snapshot?.authorization?.authorizationId || snapshot?.authorization?.id, 120);
-      if (!authorizationIdSet.has(authorizationId)) continue;
+      const patientId = sanitizeString(preGuide?.patient_id, 120);
+      const authorizationId = readTissAuthorizationIdFromPreGuideSnapshot(preGuide?.snapshot_data);
+      if (
+        !isUuid(appointmentId) ||
+        !authorizationIds.has(authorizationId) ||
+        patientIdByAuthorizationId.get(authorizationId) !== patientId
+      ) continue;
       const key = reservationKey(appointmentId, authorizationId);
-      const current = reservationsByAppointmentAndAuthorization.get(key);
-      const preGuideStatus = sanitizeString(preGuide?.status || preGuide?.revenue_cycle_state, 80).toLowerCase();
-      const activePreGuide = !['cancelled', 'canceled', 'deleted', 'refused'].includes(preGuideStatus);
-      reservationsByAppointmentAndAuthorization.set(key, {
+      const current = candidates.get(key);
+      const status = sanitizeString(preGuide?.status, 80).toLowerCase();
+      const activePreGuide = !['cancelled', 'canceled', 'deleted', 'refused'].includes(status);
+      candidates.set(key, {
         appointmentId,
         authorizationId,
-        committed: Boolean(current?.committed) || isUuid(sanitizeString(preGuide?.official_document_id, 120)),
-        activeReservation: Boolean(current?.activeReservation) || activePreGuide,
+        hasBillingContext: Boolean(current?.hasBillingContext),
+        activePreGuide: Boolean(current?.activePreGuide) || activePreGuide,
+        officialPreGuide: Boolean(current?.officialPreGuide) || (
+          activePreGuide && isUuid(sanitizeString(preGuide?.official_document_id, 120))
+        ),
         scheduledStart: sanitizeString(preGuide?.scheduled_start, 80) || current?.scheduledStart || null
       });
     }
-    const appointmentIds = Array.from(new Set(
-      Array.from(reservationsByAppointmentAndAuthorization.values()).map((reservation) => reservation.appointmentId)
-    ));
-    if (appointmentIds.length === 0) return counts;
-    const appointmentResult = await supabase
-      .from('appointments')
-      .select('id,status,scheduled_at,scheduled_start_at,date')
-      .eq('clinic_id', organizationId)
-      .in('id', appointmentIds)
-      .limit(appointmentIds.length);
+
+    const appointmentIds = Array.from(new Set(Array.from(candidates.values()).map((entry) => entry.appointmentId)));
+    const appointmentResult = appointmentIds.length > 0
+      ? await supabase
+          .from('appointments')
+          .select('id,status,scheduled_at,scheduled_start_at,date,is_active,deleted_at')
+          .or(`organization_id.eq.${organizationId},clinic_id.eq.${organizationId}`)
+          .in('id', appointmentIds)
+          .limit(appointmentIds.length)
+      : { data: [], error: null } as any;
     if (appointmentResult.error) {
-      if (hasMissingFinancialSchema(appointmentResult.error) || isMissingRelationError(appointmentResult.error)) return counts;
-      throw appointmentResult.error;
+      console.warn('[TissAuthorizationBalance] appointments unavailable; balance was not assumed.', {
+        organizationId,
+        appointmentCount: appointmentIds.length,
+        message: sanitizeString(appointmentResult.error?.message || String(appointmentResult.error), 300),
+        code: sanitizeString(appointmentResult.error?.code, 80) || null
+      });
+      return buildUnconfirmedBalances('TISS_AUTHORIZATION_APPOINTMENTS_UNAVAILABLE');
     }
-    const today = new Date().toISOString().slice(0, 10);
+
     const appointmentsById = new Map<string, any>(
       (Array.isArray(appointmentResult.data) ? appointmentResult.data : []).map((appointment: any) => [
         sanitizeString(appointment?.id, 120),
         appointment
       ])
     );
-    const futureCounts = new Map<string, number>();
-    const historicalOfficialCounts = new Map<string, number>();
-    for (const reservation of reservationsByAppointmentAndAuthorization.values()) {
-      const appointment = appointmentsById.get(reservation.appointmentId);
-      if (!appointment || !reservation.authorizationId) continue;
-      const status = normalizeAppointmentStatusForUi(appointment?.status || 'pending');
-      const appointmentDate = appointmentDateKeyForAuthorization(
-        reservation.scheduledStart || appointment?.scheduled_start_at || appointment?.scheduled_at || appointment?.date
-      );
-      const isHistorical = Boolean(appointmentDate && appointmentDate < today);
-      if (reservation.committed && isHistorical) {
-        historicalOfficialCounts.set(
-          reservation.authorizationId,
-          (historicalOfficialCounts.get(reservation.authorizationId) || 0) + 1
-        );
+    const nowTime = Date.now();
+    const today = new Date(nowTime).toISOString().slice(0, 10);
+    const commitments: TissAuthorizationCommitment[] = [];
+    const unconfirmedAuthorizationIds = new Set<string>();
+    const preGuideCountByAuthorizationId = new Map<string, number>();
+    const officialPreGuideCountByAuthorizationId = new Map<string, number>();
+    for (const candidate of candidates.values()) {
+      const appointment = appointmentsById.get(candidate.appointmentId);
+      const scheduledStart = candidate.scheduledStart || appointment?.scheduled_start_at || appointment?.scheduled_at || appointment?.date;
+      const appointmentDate = appointmentDateKeyForAuthorization(scheduledStart);
+      if (!appointmentDate || (!appointment && candidate.hasBillingContext && !candidate.scheduledStart)) {
+        unconfirmedAuthorizationIds.add(candidate.authorizationId);
         continue;
       }
-      if (!reservation.committed && (
-        !reservation.activeReservation ||
-        ['cancelled', 'canceled', 'deleted', 'refused'].includes(status) ||
-        isHistorical
-      )) continue;
-      futureCounts.set(reservation.authorizationId, (futureCounts.get(reservation.authorizationId) || 0) + 1);
-    }
-    for (const authorizationId of authorizationIds) {
-      const futureReservations = futureCounts.get(authorizationId) || 0;
-      const historicalOfficialCommitments = historicalOfficialCounts.get(authorizationId) || 0;
-      const alreadyConsumed = Math.max(0, Number(params.usedQuantityByAuthorizationId?.get(authorizationId) || 0) || 0);
-      counts.set(
-        authorizationId,
-        Math.max(0, futureReservations) + Math.max(0, historicalOfficialCommitments - alreadyConsumed)
+      const status = normalizeAppointmentStatusForUi(appointment?.status || 'pending');
+      const activeAppointment = Boolean(appointment) &&
+        appointment?.is_active !== false &&
+        !appointment?.deleted_at &&
+        !['cancelled', 'canceled', 'deleted', 'refused'].includes(status);
+      const scheduledTime = Date.parse(sanitizeString(scheduledStart, 100));
+      const isHistorical = Number.isFinite(scheduledTime) ? scheduledTime < nowTime : appointmentDate < today;
+      const futureReservation = !isHistorical && (
+        candidate.officialPreGuide ||
+        candidate.activePreGuide ||
+        (candidate.hasBillingContext && activeAppointment)
       );
+      const historicalOfficialCommitment = isHistorical && candidate.officialPreGuide;
+      commitments.push({
+        appointmentId: candidate.appointmentId,
+        authorizationId: candidate.authorizationId,
+        futureReservation,
+        historicalOfficialCommitment
+      });
+      if (candidate.activePreGuide || candidate.officialPreGuide) {
+        preGuideCountByAuthorizationId.set(
+          candidate.authorizationId,
+          (preGuideCountByAuthorizationId.get(candidate.authorizationId) || 0) + 1
+        );
+      }
+      if (candidate.officialPreGuide) {
+        officialPreGuideCountByAuthorizationId.set(
+          candidate.authorizationId,
+          (officialPreGuideCountByAuthorizationId.get(candidate.authorizationId) || 0) + 1
+        );
+      }
+    }
+
+    for (const authorization of authorizationRows) {
+      const balance = resolveTissAuthorizationBalance({
+        authorizationId: authorization.authorizationId,
+        authorizedQuantity: authorization.authorizedQuantity,
+        consumedQuantity: authorization.consumedQuantity,
+        commitments,
+        currentAppointmentId
+      });
+      const confirmed = !unconfirmedAuthorizationIds.has(authorization.authorizationId);
+      balances.set(authorization.authorizationId, {
+        ...balance,
+        available: confirmed ? balance.available : null,
+        confirmed,
+        errorCode: confirmed ? null : 'TISS_AUTHORIZATION_COMMITMENT_INCOMPLETE',
+        preGuideCount: preGuideCountByAuthorizationId.get(authorization.authorizationId) || 0,
+        officialPreGuideCount: officialPreGuideCountByAuthorizationId.get(authorization.authorizationId) || 0
+      });
     }
   } catch (error: any) {
-    console.warn('[AppointmentTissAuthorization] reservation count skipped.', {
+    console.warn('[TissAuthorizationBalance] resolution failed; balance was not assumed.', {
       organizationId,
-      patientId,
+      patientCount: patientIds.length,
       message: sanitizeString(error?.message || String(error), 300)
     });
+    return buildUnconfirmedBalances('TISS_AUTHORIZATION_BALANCE_RESOLUTION_FAILED');
   }
-  return counts;
+  return balances;
 }
 
 async function resolveAppointmentTissAuthorizationForBilling(params: {
@@ -9257,20 +9400,22 @@ async function resolveAppointmentTissAuthorizationForBilling(params: {
       throw error;
     }
     const hydratedRows = await hydratePatientPayerAuthorizationsForAppointmentTissBilling(organizationId, Array.isArray(data) ? data : []);
-    const reservationCounts = await fetchAppointmentTissAuthorizationReservationCounts({
+    const authorizationBalances = await fetchPatientTissAuthorizationBalances({
       organizationId,
-      patientId,
-      authorizationIds: hydratedRows.map((authorization: any) => sanitizeString(authorization?.id, 120)).filter((id: string) => isUuid(id)),
-      excludeAppointmentId: params.currentAppointmentId,
-      usedQuantityByAuthorizationId: new Map(hydratedRows.map((authorization: any) => [
-        sanitizeString(authorization?.id, 120),
-        Number(authorization?.usedQuantity || authorization?.used_quantity || 0) || 0
-      ]))
+      authorizations: hydratedRows,
+      currentAppointmentId: params.currentAppointmentId
     });
-    const hydrated = hydratedRows.map((authorization: any) => ({
-      ...authorization,
-      reservedQuantity: reservationCounts.get(sanitizeString(authorization?.id, 120)) || 0
-    }));
+    const hydrated = hydratedRows.map((authorization: any) => {
+      const authorizationBalance = authorizationBalances.get(sanitizeString(authorization?.id, 120));
+      return {
+        ...authorization,
+        reservedQuantity: authorizationBalance?.confirmed ? authorizationBalance.reserved : null,
+        availableQuantity: authorizationBalance?.confirmed ? authorizationBalance.available : null,
+        balanceConfirmed: authorizationBalance?.confirmed === true,
+        balanceErrorCode: authorizationBalance?.errorCode || null,
+        currentAppointmentReserved: authorizationBalance?.currentAppointmentReserved === true
+      };
+    });
     const enriched = hydrated.map((authorization: any) => ({
       ...authorization,
       serviceType: authorization?.serviceType || serviceType
@@ -9345,20 +9490,22 @@ async function listAppointmentTissAuthorizationOptionsForBilling(params: {
       throw error;
     }
     const hydratedRows = await hydratePatientPayerAuthorizationsForAppointmentTissBilling(organizationId, Array.isArray(data) ? data : []);
-    const reservationCounts = await fetchAppointmentTissAuthorizationReservationCounts({
+    const authorizationBalances = await fetchPatientTissAuthorizationBalances({
       organizationId,
-      patientId,
-      authorizationIds: hydratedRows.map((authorization: any) => sanitizeString(authorization?.id, 120)).filter((id: string) => isUuid(id)),
-      excludeAppointmentId: params.currentAppointmentId,
-      usedQuantityByAuthorizationId: new Map(hydratedRows.map((authorization: any) => [
-        sanitizeString(authorization?.id, 120),
-        Number(authorization?.usedQuantity || authorization?.used_quantity || 0) || 0
-      ]))
+      authorizations: hydratedRows,
+      currentAppointmentId: params.currentAppointmentId
     });
-    const hydrated = hydratedRows.map((authorization: any) => ({
-      ...authorization,
-      reservedQuantity: reservationCounts.get(sanitizeString(authorization?.id, 120)) || 0
-    }));
+    const hydrated = hydratedRows.map((authorization: any) => {
+      const authorizationBalance = authorizationBalances.get(sanitizeString(authorization?.id, 120));
+      return {
+        ...authorization,
+        reservedQuantity: authorizationBalance?.confirmed ? authorizationBalance.reserved : null,
+        availableQuantity: authorizationBalance?.confirmed ? authorizationBalance.available : null,
+        balanceConfirmed: authorizationBalance?.confirmed === true,
+        balanceErrorCode: authorizationBalance?.errorCode || null,
+        currentAppointmentReserved: authorizationBalance?.currentAppointmentReserved === true
+      };
+    });
     const expectedServiceCatalogId = sanitizeString(serviceCatalog?.id, 120);
     const expectedMappingId = sanitizeString(mapping?.id, 120);
     const expectedTussCodeId = sanitizeString(mapping?.tuss_code_id || mapping?.tussCodeId, 120);
@@ -9411,6 +9558,10 @@ async function listAppointmentTissAuthorizationOptionsForBilling(params: {
         availabilityGroup = 'inactive';
         availabilityLabel = 'Inativa';
         unavailableReason = 'Autorizacao inativa no cadastro.';
+      } else if (!serialized.balanceConfirmed) {
+        availabilityGroup = 'balance_unconfirmed';
+        availabilityLabel = 'Saldo nao confirmado';
+        unavailableReason = 'Nao foi possivel confirmar o saldo desta autorizacao. Atualize os dados antes de aplica-la.';
       } else if (!dateStatus.isCurrent) {
         const validFrom = sanitizeString(authorization?.validFrom || authorization?.valid_from, 40).slice(0, 10);
         availabilityGroup = validFrom && referenceDateKey < validFrom ? 'future' : 'expired';
@@ -9418,7 +9569,11 @@ async function listAppointmentTissAuthorizationOptionsForBilling(params: {
         unavailableReason = availabilityGroup === 'future'
           ? 'Autorizacao ainda nao vigente na data da consulta.'
           : 'Autorizacao vencida para a data da consulta.';
-      } else if (serialized.balance !== null && serialized.balance <= 0) {
+      } else if (
+        serialized.balance !== null &&
+        serialized.balance <= 0 &&
+        serialized.currentAppointmentReserved !== true
+      ) {
         availabilityGroup = 'no_balance';
         availabilityLabel = 'Sem saldo';
         unavailableReason = 'Autorizacao sem saldo disponivel para esta consulta.';
@@ -37783,6 +37938,7 @@ async function startServer() {
       officialPreGuideCount?: number;
       futurePreGuideCount?: number;
       historicalOfficialPreGuideCount?: number;
+      balance?: ConfirmedTissAuthorizationBalance;
     } = {}
   ) => {
     const authorizedQuantity = Number(row?.authorized_quantity ?? 0) || 0;
@@ -37791,17 +37947,23 @@ async function startServer() {
     const code = context.code || null;
     const mapping = context.mapping || null;
     const price = context.price || null;
-    const preGuideCount = Number(context.preGuideCount || 0);
+    const resolvedBalance = context.balance || null;
+    const preGuideCount = resolvedBalance?.preGuideCount ?? Number(context.preGuideCount || 0);
     const hasSeparatedCommitmentCounts =
       context.futurePreGuideCount !== undefined || context.historicalOfficialPreGuideCount !== undefined;
-    const futurePreGuideCount = Math.max(0, Number(context.futurePreGuideCount || 0) || 0);
-    const historicalOfficialPreGuideCount = Math.max(0, Number(context.historicalOfficialPreGuideCount || 0) || 0);
-    const reservedQuantity = hasSeparatedCommitmentCounts
+    const futurePreGuideCount = resolvedBalance?.futureReservations ?? Math.max(0, Number(context.futurePreGuideCount || 0) || 0);
+    const historicalOfficialPreGuideCount = resolvedBalance?.historicalOfficialCommitments ?? Math.max(0, Number(context.historicalOfficialPreGuideCount || 0) || 0);
+    const fallbackReservedQuantity = hasSeparatedCommitmentCounts
       ? futurePreGuideCount + Math.max(0, historicalOfficialPreGuideCount - usedQuantity)
       : Math.max(0, preGuideCount - usedQuantity);
-    const availableQuantity = authorizedQuantity > 0
-      ? Math.max(0, authorizedQuantity - usedQuantity - reservedQuantity)
-      : null;
+    const reservedQuantity = resolvedBalance
+      ? resolvedBalance.confirmed ? resolvedBalance.reserved : null
+      : fallbackReservedQuantity;
+    const availableQuantity = resolvedBalance
+      ? resolvedBalance.confirmed ? resolvedBalance.available : null
+      : authorizedQuantity > 0
+        ? Math.max(0, authorizedQuantity - usedQuantity - fallbackReservedQuantity)
+        : null;
     return {
       id: sanitizeString(row?.id, 120),
       patientId: sanitizeString(row?.patient_id, 120),
@@ -37822,6 +37984,8 @@ async function startServer() {
       quantityReserved: reservedQuantity,
       availableQuantity,
       quantityAvailable: availableQuantity,
+      balanceConfirmed: resolvedBalance ? resolvedBalance.confirmed : true,
+      balanceErrorCode: resolvedBalance?.errorCode || null,
       serviceCatalogId: sanitizeString(row?.service_catalog_id, 120) || null,
       serviceName: sanitizeString(service?.name || row?.procedure_name_snapshot, 180) || null,
       internalCode: sanitizeString(service?.internal_code || row?.procedure_code || row?.procedure_code_snapshot, 80) || null,
@@ -37838,7 +38002,7 @@ async function startServer() {
       active: row?.active !== false,
       notes: sanitizeTextField(row?.notes, 2000) || null,
       preGuideCount,
-      officialPreGuideCount: Number(context.officialPreGuideCount || 0),
+      officialPreGuideCount: resolvedBalance?.officialPreGuideCount ?? Number(context.officialPreGuideCount || 0),
       futurePreGuideCount,
       historicalOfficialPreGuideCount,
       createdAt: row?.created_at || null,
@@ -37857,7 +38021,7 @@ async function startServer() {
     const codeIds = Array.from(new Set(safeRows.map((row: any) => sanitizeString(row?.tuss_code_id, 120)).filter((id: string) => isUuid(id))));
     const mappingIds = Array.from(new Set(safeRows.map((row: any) => sanitizeString(row?.payer_tuss_mapping_id, 120)).filter((id: string) => isUuid(id))));
     const patientIds = Array.from(new Set(safeRows.map((row: any) => sanitizeString(row?.patient_id, 120)).filter((id: string) => isUuid(id))));
-    const [payersResult, servicesResult, codesResult, mappingsResult, pricesResult, preGuidesResult, patientsResult] = await Promise.all([
+    const [payersResult, servicesResult, codesResult, mappingsResult, pricesResult, patientsResult, authorizationBalances] = await Promise.all([
       payerIds.length > 0
         ? supabase.from('clinic_payers').select(CLINIC_PAYER_SELECT).eq('organization_id', organizationId).in('id', payerIds).limit(payerIds.length)
         : Promise.resolve({ data: [], error: null } as any),
@@ -37873,14 +38037,15 @@ async function startServer() {
       payerIds.length > 0
         ? supabase.from('payer_procedure_prices').select(PAYER_PROCEDURE_PRICE_SELECT).eq('organization_id', organizationId).in('payer_id', payerIds).eq('active', true).limit(400)
         : Promise.resolve({ data: [], error: null } as any),
-      patientIds.length > 0
-        ? supabase.from('appointment_tiss_pre_guides').select('id,appointment_id,patient_id,scheduled_start,official_document_id,snapshot_data,status,revenue_cycle_state').eq('organization_id', organizationId).in('patient_id', patientIds).limit(5000)
-        : Promise.resolve({ data: [], error: null } as any),
       options.includePatients && patientIds.length > 0
         ? supabase.from('patients').select('id,name,email,clinic_id,insurance_name,insurance_card_number,insurance_plan_category').eq('clinic_id', organizationId).in('id', patientIds).limit(patientIds.length)
-        : Promise.resolve({ data: [], error: null } as any)
+        : Promise.resolve({ data: [], error: null } as any),
+      fetchPatientTissAuthorizationBalances({
+        organizationId,
+        authorizations: safeRows
+      })
     ]);
-    for (const result of [payersResult, servicesResult, codesResult, mappingsResult, pricesResult, preGuidesResult, patientsResult]) {
+    for (const result of [payersResult, servicesResult, codesResult, mappingsResult, pricesResult, patientsResult]) {
       if (result.error && !hasMissingFinancialSchema(result.error) && !isMissingRelationError(result.error)) throw result.error;
     }
     const payersById = new Map<string, any>((payersResult.error ? [] : payersResult.data || []).map((row: any) => [sanitizeString(row.id, 120), row]));
@@ -37889,39 +38054,6 @@ async function startServer() {
     const mappingsById = new Map<string, any>((mappingsResult.error ? [] : mappingsResult.data || []).map((row: any) => [sanitizeString(row.id, 120), row]));
     const patientsById = new Map<string, any>((patientsResult.error ? [] : patientsResult.data || []).map((row: any) => [sanitizeString(row.id, 120), row]));
     const prices = pricesResult.error ? [] : (pricesResult.data || []);
-    const preGuides = preGuidesResult.error ? [] : (preGuidesResult.data || []);
-    const preGuidesByAuthorizationId = new Map<string, {
-      count: number;
-      officialCount: number;
-      futureAppointmentIds: Set<string>;
-      historicalOfficialAppointmentIds: Set<string>;
-    }>();
-    const today = new Date().toISOString().slice(0, 10);
-    for (const preGuide of preGuides) {
-      const snapshot = parseStoredJsonObject(preGuide?.snapshot_data);
-      const authorizationId = sanitizeString(snapshot?.authorization?.authorizationId || snapshot?.authorization?.id, 120);
-      if (!isUuid(authorizationId)) continue;
-      const current = preGuidesByAuthorizationId.get(authorizationId) || {
-        count: 0,
-        officialCount: 0,
-        futureAppointmentIds: new Set<string>(),
-        historicalOfficialAppointmentIds: new Set<string>()
-      };
-      current.count += 1;
-      const official = isUuid(sanitizeString(preGuide?.official_document_id, 120));
-      if (official) current.officialCount += 1;
-      const status = sanitizeString(preGuide?.status || preGuide?.revenue_cycle_state, 80).toLowerCase();
-      const active = !['cancelled', 'canceled', 'deleted', 'refused'].includes(status);
-      const scheduledDate = appointmentDateKeyForAuthorization(preGuide?.scheduled_start);
-      const appointmentId = sanitizeString(preGuide?.appointment_id || preGuide?.id, 120);
-      if (active && (!scheduledDate || scheduledDate >= today)) {
-        current.futureAppointmentIds.add(appointmentId);
-        current.historicalOfficialAppointmentIds.delete(appointmentId);
-      } else if (official && !current.futureAppointmentIds.has(appointmentId)) {
-        current.historicalOfficialAppointmentIds.add(appointmentId);
-      }
-      preGuidesByAuthorizationId.set(authorizationId, current);
-    }
     const findPriceForAuthorization = (row: any) => {
       const referenceDate = row?.valid_from || row?.issue_date || row?.issued_at || new Date().toISOString();
       const mappingId = sanitizeString(row?.payer_tuss_mapping_id, 120);
@@ -37941,11 +38073,18 @@ async function startServer() {
       const authorizationId = sanitizeString(row?.id, 120);
       const patientId = sanitizeString(row?.patient_id, 120);
       const patient = patientsById.get(patientId);
-      const preGuideCounts = preGuidesByAuthorizationId.get(authorizationId) || {
-        count: 0,
-        officialCount: 0,
-        futureAppointmentIds: new Set<string>(),
-        historicalOfficialAppointmentIds: new Set<string>()
+      const resolvedAuthorizationBalance = authorizationBalances.get(authorizationId) || {
+        authorized: Math.max(0, Number(row?.authorized_quantity || 0) || 0),
+        consumed: Math.max(0, Number(row?.used_quantity || 0) || 0),
+        reserved: 0,
+        available: null,
+        futureReservations: 0,
+        historicalOfficialCommitments: 0,
+        currentAppointmentReserved: false,
+        confirmed: false,
+        errorCode: 'TISS_AUTHORIZATION_BALANCE_NOT_RESOLVED',
+        preGuideCount: 0,
+        officialPreGuideCount: 0
       };
       const serialized = serializePatientPayerAuthorization(row, {
         payer: payersById.get(sanitizeString(row?.payer_id, 120)),
@@ -37953,10 +38092,7 @@ async function startServer() {
         code: codesById.get(sanitizeString(row?.tuss_code_id, 120)),
         mapping: mappingsById.get(sanitizeString(row?.payer_tuss_mapping_id, 120)),
         price: findPriceForAuthorization(row),
-        preGuideCount: preGuideCounts.count,
-        officialPreGuideCount: preGuideCounts.officialCount,
-        futurePreGuideCount: preGuideCounts.futureAppointmentIds.size,
-        historicalOfficialPreGuideCount: preGuideCounts.historicalOfficialAppointmentIds.size
+        balance: resolvedAuthorizationBalance
       });
       if (!options.includePatients) return serialized;
       return {

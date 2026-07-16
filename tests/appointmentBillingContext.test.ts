@@ -121,12 +121,12 @@ test('saldo de autorizacao separa consumido, reservado e disponivel sem sugerir 
 });
 
 test('reserva de autorizacao e atomica, idempotente, restrita ao tenant e sem acesso do cliente', () => {
-  const reservationCounter = sliceFrom(serverCode, 'async function fetchAppointmentTissAuthorizationReservationCounts', 15000);
-  assert.match(reservationCounter, /reservationsByAppointmentAndAuthorization/);
+  const reservationCounter = sliceFrom(serverCode, 'async function fetchPatientTissAuthorizationBalances', 24000);
+  assert.match(reservationCounter, /candidates = new Map/);
   assert.match(reservationCounter, /reservationKey\(appointmentId, authorizationId\)/);
-  assert.match(reservationCounter, /futureCounts/);
-  assert.match(reservationCounter, /historicalOfficialCounts/);
-  assert.match(reservationCounter, /Math\.max\(0, futureReservations\) \+ Math\.max\(0, historicalOfficialCommitments - alreadyConsumed\)/);
+  assert.match(reservationCounter, /resolveTissAuthorizationBalance/);
+  assert.match(reservationCounter, /TISS_AUTHORIZATION_BALANCE_SOURCE_UNAVAILABLE/);
+  assert.doesNotMatch(reservationCounter, /reservation count skipped/);
   assert.match(atomicAuthorizationReservationMigrationCode, /create or replace function public\.reserve_tiss_authorization_billing_context/);
   assert.match(atomicAuthorizationReservationMigrationCode, /from public\.patient_payer_authorizations[\s\S]*organization_id = p_organization_id[\s\S]*patient_id = p_patient_id[\s\S]*for update/);
   assert.match(atomicAuthorizationReservationMigrationCode, /TISS_AUTHORIZATION_NO_AVAILABLE_BALANCE/);
@@ -474,7 +474,7 @@ test('consulta e modal sugerem autorização TISS vigente do paciente sem usar T
   assert.match(serverCode, /patient_payer_authorizations/);
   assert.match(serverCode, /getPatientTissAuthorizationVisualState/);
   assert.match(serverCode, /dedupePatientTissAuthorizationSelectionOptions/);
-  assert.match(serverCode, /fetchAppointmentTissAuthorizationReservationCounts/);
+  assert.match(serverCode, /fetchPatientTissAuthorizationBalances/);
   assert.match(serverCode, /suggestedBilling = await resolveAppointmentBillingSuggestion\(/);
   assert.match(serverCode, /patient_tiss_authorization_id: selectedTissAuthorization\?\.authorizationId/);
   assert.match(serverCode, /Esta autoriza..o n.o possui saldo dispon.vel/);

@@ -17,6 +17,7 @@ const migrationCode = readFileSync(
 );
 const serverCode = readFileSync(join(root, 'server.ts'), 'utf8');
 const calendarCode = readFileSync(join(root, 'src/components/Calendar.tsx'), 'utf8');
+const coordinatorCode = readFileSync(join(root, 'src/components/CoordinatorDashboard.tsx'), 'utf8');
 
 function fakeClient(data: any, error: any = null) {
   return {
@@ -92,6 +93,22 @@ test('reserva serializa por autorizacao e persiste contexto em uma transacao', (
   assert.match(migrationCode, /expected_previous_authorization_id/);
 });
 
+test('todos os fluxos leem compromissos pelo resolvedor central em lote', () => {
+  const resolverStart = serverCode.indexOf('async function fetchPatientTissAuthorizationBalances');
+  const resolverEnd = serverCode.indexOf('async function resolveAppointmentTissAuthorizationForBilling', resolverStart);
+  assert.ok(resolverStart > 0 && resolverEnd > resolverStart);
+  const resolver = serverCode.slice(resolverStart, resolverEnd);
+  assert.match(resolver, /\.from\('appointment_billing_contexts'\)/);
+  assert.match(resolver, /\.from\('appointment_tiss_pre_guides'\)/);
+  assert.match(resolver, /\.in\('patient_id', patientIds\)/);
+  assert.match(resolver, /resolveTissAuthorizationBalance/);
+  assert.match(resolver, /currentAppointmentReserved/);
+  assert.match(resolver, /TISS_AUTHORIZATION_BALANCE_SOURCE_UNAVAILABLE/);
+  assert.doesNotMatch(resolver, /revenue_cycle_state/);
+  assert.match(serverCode, /const resolvedAuthorizationBalance = authorizationBalances\.get\(authorizationId\)/);
+  assert.match(serverCode, /balance: resolvedAuthorizationBalance/);
+});
+
 test('RPC valida tenant, paciente, pagador, vigencia e procedimento', () => {
   assert.match(migrationCode, /organization_id = p_organization_id/);
   assert.match(migrationCode, /clinic_id = p_organization_id/);
@@ -139,6 +156,10 @@ test('modal mostra saldo numerico, preserva dados e bloqueia clique repetido', (
   assert.match(calendarCode, /Autorizadas/);
   assert.match(calendarCode, /Consumidas/);
   assert.match(calendarCode, /Reservadas/);
+  assert.match(calendarCode, /hasConfirmedPatientTissAuthorizationBalance/);
+  assert.match(calendarCode, /Não foi possível confirmar o saldo desta autorização/);
+  assert.match(coordinatorCode, /hasConfirmedPatientTissAuthorizationBalance/);
+  assert.match(serverCode, /availabilityGroup = 'balance_unconfirmed'/);
   assert.match(calendarCode, /Disponíveis/);
   assert.match(calendarCode, /Autorização aplicada/);
 });

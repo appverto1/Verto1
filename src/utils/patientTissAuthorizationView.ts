@@ -267,6 +267,10 @@ const authorizationBalance = (authorization: any) => {
       authorization?.reserved_appointments ??
       0,
   ) || 0;
+  const explicitAvailable = authorization?.quantityAvailable ?? authorization?.availableQuantity ?? authorization?.available_quantity;
+  if (explicitAvailable !== null && explicitAvailable !== undefined && Number.isFinite(Number(explicitAvailable))) {
+    return Math.max(0, Number(explicitAvailable));
+  }
   if (authorizedQuantity <= 0) return Number.MAX_SAFE_INTEGER;
   return Math.max(0, authorizedQuantity - usedQuantity - reservedQuantity);
 };
@@ -283,11 +287,15 @@ export const getPatientTissAuthorizationQuantitySummary = (authorization: any) =
       0,
   ) || 0;
   const explicitAvailable = authorization?.quantityAvailable ?? authorization?.availableQuantity ?? authorization?.available_quantity;
-  const available = authorized > 0
-    ? Math.max(0, authorized - consumed - reserved)
-    : Number.isFinite(Number(explicitAvailable))
-      ? Number(explicitAvailable)
-      : null;
+  const hasExplicitAvailable = explicitAvailable !== null && explicitAvailable !== undefined && Number.isFinite(Number(explicitAvailable));
+  const available = authorization?.balanceConfirmed === false ||
+    (authorization?.balanceConfirmed === true && authorized > 0 && !hasExplicitAvailable)
+    ? null
+    : hasExplicitAvailable
+      ? Math.max(0, Number(explicitAvailable))
+      : authorized > 0
+        ? Math.max(0, authorized - consumed - reserved)
+        : null;
   return {
     authorized,
     consumed,
@@ -295,6 +303,21 @@ export const getPatientTissAuthorizationQuantitySummary = (authorization: any) =
     available,
     hasPackageLimit: authorized > 0,
   };
+};
+
+export const hasConfirmedPatientTissAuthorizationBalance = (authorization: any) => {
+  if (authorization?.balanceConfirmed === false) return false;
+  const explicitAvailable = authorization?.quantityAvailable ?? authorization?.availableQuantity ?? authorization?.available_quantity;
+  const explicitReserved = authorization?.quantityReserved ?? authorization?.reservedQuantity ?? authorization?.reserved_quantity;
+  if (explicitAvailable === null || explicitAvailable === undefined) {
+    return authorization?.balanceConfirmed !== true || getPatientTissAuthorizationQuantitySummary(authorization).hasPackageLimit === false;
+  }
+  if (!Number.isFinite(Number(explicitAvailable))) return false;
+  if (authorization?.balanceConfirmed === true && !Number.isFinite(Number(explicitReserved))) return false;
+  const summary = getPatientTissAuthorizationQuantitySummary(authorization);
+  if (!summary.hasPackageLimit) return true;
+  const expectedAvailable = Math.max(0, summary.authorized - summary.consumed - summary.reserved);
+  return expectedAvailable === summary.available;
 };
 
 export const patientTissAuthorizationSelectionDedupeKey = (authorization: any) => {
@@ -377,8 +400,9 @@ export const findSuggestedTissAuthorizationForAppointment = (
   const payerTussMappingId = cleanText(appointment?.payerTussMappingId);
 
   const candidates = (Array.isArray(authorizations) ? authorizations : []).filter((authorization) => {
+    if (!hasConfirmedPatientTissAuthorizationBalance(authorization)) return false;
     const quantity = getPatientTissAuthorizationQuantitySummary(authorization);
-    if (quantity.hasPackageLimit && quantity.available === 0) return false;
+    if (quantity.hasPackageLimit && quantity.available === 0 && authorization?.currentAppointmentReserved !== true) return false;
     const state = getPatientTissAuthorizationVisualState(
       serviceKey ? { ...authorization, serviceType: authorization?.serviceType || serviceKey } : authorization,
       referenceDateKey,

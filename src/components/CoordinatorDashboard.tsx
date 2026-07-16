@@ -228,6 +228,7 @@ import {
   getPatientTissAuthorizationQuantitySummary,
   getPatientTissAuthorizationVisualState,
   groupPatientTissAuthorizations,
+  hasConfirmedPatientTissAuthorizationBalance,
 } from "../utils/patientTissAuthorizationView";
 import {
   APPOINTMENT_FINANCIAL_CONTEXT_OPTIONS,
@@ -1929,6 +1930,7 @@ export function CoordinatorDashboard({
   };
 
   const formatPatientAuthorizationBalance = (authorization: any) => {
+    if (!hasConfirmedPatientTissAuthorizationBalance(authorization)) return "saldo não confirmado";
     const summary = getPatientTissAuthorizationQuantitySummary(authorization);
     if (!summary.hasPackageLimit && summary.available === null) return "sem limite informado";
     return String(summary.available ?? 0);
@@ -3488,11 +3490,15 @@ export function CoordinatorDashboard({
         : null;
     if (explicit) return explicit;
     return sessionAvailableTissAuthorizations.filter((authorization: any) =>
-      !Boolean(authorization?.canUseForAppointment || authorization?.isEligibleForAppointment)
+      !Boolean(authorization?.canUseForAppointment || authorization?.isEligibleForAppointment) ||
+      !hasConfirmedPatientTissAuthorizationBalance(authorization)
     );
   }, [sessionAvailableTissAuthorizations, sessionBillingSuggestion]);
   const sessionUsableTissAuthorizations = useMemo(
-    () => sessionAvailableTissAuthorizations.filter((authorization: any) => Boolean(authorization?.canUseForAppointment || authorization?.isEligibleForAppointment)),
+    () => sessionAvailableTissAuthorizations.filter((authorization: any) =>
+      Boolean(authorization?.canUseForAppointment || authorization?.isEligibleForAppointment) &&
+      hasConfirmedPatientTissAuthorizationBalance(authorization)
+    ),
     [sessionAvailableTissAuthorizations],
   );
   const sessionAuthorizationUnavailableInsight = useMemo(() => {
@@ -3543,29 +3549,31 @@ export function CoordinatorDashboard({
     return normalizeUtf8Text(text);
   };
   const getSessionAuthorizationBalanceParts = (authorization: any) => {
-    const authorized = Number(authorization?.quantityAuthorized ?? authorization?.authorizedQuantity ?? 0) || 0;
-    const consumed = Number(authorization?.quantityConsumed ?? authorization?.usedQuantity ?? 0) || 0;
-    const reserved = Number(authorization?.quantityReserved ?? authorization?.reservedQuantity ?? 0) || 0;
-    const available = authorization?.quantityAvailable !== null && authorization?.quantityAvailable !== undefined
-      ? Number(authorization.quantityAvailable)
-      : authorization?.balance !== null && authorization?.balance !== undefined
-        ? Number(authorization.balance)
-        : authorized > 0 ? Math.max(0, authorized - consumed - reserved) : null;
+    const summary = getPatientTissAuthorizationQuantitySummary(authorization);
     return {
-      authorized,
-      consumed,
-      reserved,
-      available: available !== null && Number.isFinite(available) ? available : null,
+      authorized: summary.authorized,
+      consumed: summary.consumed,
+      reserved: summary.reserved,
+      available: summary.available,
+      confirmed: hasConfirmedPatientTissAuthorizationBalance(authorization),
     };
   };
   const applySessionTissAuthorization = (authorization: any) => {
     if (!authorization) return;
+    if (!hasConfirmedPatientTissAuthorizationBalance(authorization)) {
+      setSessionBillingSuggestionState((prev) => ({
+        ...prev,
+        error: "Não foi possível confirmar o saldo desta autorização. Atualize os dados antes de aplicá-la.",
+      }));
+      return;
+    }
     setSessionGuideNumber(String(authorization?.guideNumber || ""));
     setSessionAuthorizationCode(String(authorization?.authorizationCode || authorization?.authorizationNumber || ""));
     setSessionPatientTissAuthorizationId(String(authorization?.authorizationId || authorization?.patientTissAuthorizationId || ""));
   };
   const renderSessionTissAuthorizationCard = (authorization: any, options: { compact?: boolean; history?: boolean } = {}) => {
-    const canUse = Boolean(authorization?.canUseForAppointment || authorization?.isEligibleForAppointment);
+    const canUse = Boolean(authorization?.canUseForAppointment || authorization?.isEligibleForAppointment) &&
+      hasConfirmedPatientTissAuthorizationBalance(authorization);
     const authorizationId = String(authorization?.authorizationId || authorization?.patientTissAuthorizationId || "");
     const isSelected = Boolean(authorizationId && authorizationId === sessionPatientTissAuthorizationId);
     const key = authorizationId || `${authorization?.guideNumber}-${authorization?.authorizationCode}-${authorization?.validFrom}-${authorization?.validUntil}`;
@@ -3598,8 +3606,8 @@ export function CoordinatorDashboard({
               {validity ? ` · Validade ${validity}` : ""}
             </p>
             <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] font-medium text-slate-500 sm:grid-cols-4">
-              <span>Disponíveis: {balance.available ?? "sem limite"}</span>
-              <span>Reservadas: {balance.reserved}</span>
+              <span>Disponíveis: {balance.confirmed ? balance.available ?? "sem limite" : "não confirmado"}</span>
+              <span>Reservadas: {balance.confirmed ? balance.reserved : "não confirmado"}</span>
               <span>Consumidas: {balance.consumed}</span>
               <span>Autorizadas: {balance.authorized || "sem limite"}</span>
             </div>
