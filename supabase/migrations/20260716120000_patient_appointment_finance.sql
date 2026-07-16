@@ -985,11 +985,12 @@ declare
   v_plan public.patient_financial_plans%rowtype;
   v_charge public.payments%rowtype;
   v_payload jsonb;
+  v_source_payload jsonb := coalesce(to_jsonb(new)->'source_payload', '{}'::jsonb);
   v_payment_id text;
   v_context_type text;
-  v_service_type text := trim(coalesce(new.service_type, new.approach, new.source_payload->>'serviceType', new.source_payload->>'service_type', ''));
+  v_service_type text := trim(coalesce(new.service_type, new.approach, v_source_payload->>'serviceType', v_source_payload->>'service_type', ''));
   v_event text := 'SCHEDULED';
-  v_actor_id text := nullif(trim(coalesce(new.source_payload->>'updatedBy', new.source_payload->>'createdBy', new.source_payload->>'created_by', '')), '');
+  v_actor_id text := nullif(trim(coalesce(v_source_payload->>'updatedBy', v_source_payload->>'createdBy', v_source_payload->>'created_by', '')), '');
   v_start_at timestamptz := coalesce(new.scheduled_start_at, new.scheduled_at);
   v_appointment_date date;
   v_due_date date;
@@ -1020,10 +1021,10 @@ begin
 
   v_context_type := upper(coalesce(
     nullif(v_context_type, ''),
-    nullif(trim(new.source_payload->>'financialContextType'), ''),
-    nullif(trim(new.source_payload->>'financial_context_type'), ''),
-    nullif(trim(new.source_payload->>'payerType'), ''),
-    nullif(trim(new.source_payload->>'payer_type'), ''),
+    nullif(trim(v_source_payload->>'financialContextType'), ''),
+    nullif(trim(v_source_payload->>'financial_context_type'), ''),
+    nullif(trim(v_source_payload->>'payerType'), ''),
+    nullif(trim(v_source_payload->>'payer_type'), ''),
     'PRIVATE'
   ));
   if v_context_type not in ('PRIVATE', 'PARTICULAR') then
@@ -1055,8 +1056,8 @@ begin
     else 'SCHEDULED'
   end;
 
-  if coalesce(new.source_payload->>'date', '') ~ '^\d{4}-\d{2}-\d{2}$' then
-    v_appointment_date := (new.source_payload->>'date')::date;
+  if coalesce(v_source_payload->>'date', '') ~ '^\d{4}-\d{2}-\d{2}$' then
+    v_appointment_date := (v_source_payload->>'date')::date;
   elsif v_start_at is not null then
     v_appointment_date := (v_start_at at time zone 'America/Sao_Paulo')::date;
   else
@@ -1352,10 +1353,30 @@ end;
 $$;
 
 drop trigger if exists appointments_sync_private_finance on public.appointments;
-create trigger appointments_sync_private_finance
-after insert or update of status, scheduled_at, scheduled_start_at, scheduled_end_at, service_type, approach, source_payload
-on public.appointments
-for each row execute function public.sync_private_appointment_finance();
+do $$
+begin
+  if exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'appointments'
+      and column_name = 'source_payload'
+  ) then
+    execute $trigger$
+      create trigger appointments_sync_private_finance
+      after insert or update of status, scheduled_at, scheduled_start_at, scheduled_end_at, service_type, approach, source_payload
+      on public.appointments
+      for each row execute function public.sync_private_appointment_finance()
+    $trigger$;
+  else
+    execute $trigger$
+      create trigger appointments_sync_private_finance
+      after insert or update of status, scheduled_at, scheduled_start_at, scheduled_end_at, service_type, approach
+      on public.appointments
+      for each row execute function public.sync_private_appointment_finance()
+    $trigger$;
+  end if;
+end $$;
 
 create or replace view public.patient_financial_appointment_summaries
 with (security_invoker = true)

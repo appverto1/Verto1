@@ -143,6 +143,17 @@ test('migration e aditiva, idempotente e vincula consulta sem duplicidade', () =
   assert.match(migrationCode, /apply_patient_financial_operation\([\s\S]*?p_payment_id text/i);
 });
 
+test('trigger financeiro tolera appointments sem source_payload legado', () => {
+  const triggerSlice = migrationCode.slice(
+    migrationCode.indexOf('create or replace function public.sync_private_appointment_finance'),
+    migrationCode.indexOf('create or replace view public.patient_financial_appointment_summaries')
+  );
+  assert.match(triggerSlice, /to_jsonb\(new\)->'source_payload'/i);
+  assert.doesNotMatch(triggerSlice, /\bnew\.source_payload\b/i);
+  assert.match(triggerSlice, /information_schema\.columns[\s\S]*?column_name = 'source_payload'/i);
+  assert.match(triggerSlice, /after insert or update of status, scheduled_at, scheduled_start_at, scheduled_end_at, service_type, approach\s+on public\.appointments/i);
+});
+
 test('regra automatica usa somente plano particular por sessao e nunca cria pagamento', () => {
   const triggerSlice = migrationCode.slice(
     migrationCode.indexOf('create or replace function public.sync_private_appointment_finance'),
