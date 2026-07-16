@@ -48,7 +48,143 @@ export const THERAPEUTIC_MEASUREMENT_OPTIONS: Array<{
   { value: 'percentage', label: 'Percentual', sessionPreview: ['0%', '50%', '100%'] },
 ];
 
+export const THERAPEUTIC_RECOMMENDATION_TYPE_LABELS: Record<string, string> = {
+  MAINTENANCE_PROBE: 'Sondagem de manutenção',
+  REGRESSION_ATTENTION: 'Regressão',
+  MASTERY_REVIEW: 'Aquisição',
+  CONTINUE_TRAINING: 'Aquisição',
+  INTRODUCE_NEW_TARGET: 'Aquisição',
+  BEHAVIOR_MONITORING: 'Monitoramento',
+  ABC_COLLECTION: 'Coleta ABC',
+  PROMPT_FADING: 'Redução de ajuda',
+  GENERALIZATION: 'Generalização',
+};
+
+export type TherapeuticRecommendationFilters = {
+  query?: string;
+  scope?: 'all' | 'untreated' | 'recent';
+  type?: string;
+  origin?: 'all' | 'protocol' | 'program';
+  professionalId?: string;
+  periodDays?: number | null;
+  now?: string | Date;
+};
+
+export type TherapeuticRecommendationGroup = {
+  key: string;
+  representative: any;
+  occurrences: any[];
+  occurrenceCount: number;
+  convertedProgram: any | null;
+  canCreateProgram: boolean;
+  latestCreatedAt: string | null;
+};
+
 const safeText = (value: unknown) => String(value ?? '').trim();
+
+const recommendationContext = (recommendation: any) => recommendation?.clinical_context || recommendation?.clinicalContext || {};
+
+const recommendationCreatedAt = (recommendation: any) => safeText(recommendation?.created_at || recommendation?.createdAt);
+
+export const recommendationHasTrustedProgramOrigin = (recommendation: any) => {
+  const context = recommendationContext(recommendation);
+  return Boolean(
+    recommendation?.can_create_program ??
+    recommendation?.canCreateProgram ??
+    (context?.target?.id && !context?.convertedProgram && !context?.converted_program),
+  );
+};
+
+export const groupTherapeuticRecommendations = (recommendations: any[]): TherapeuticRecommendationGroup[] => {
+  const grouped = new Map<string, any[]>();
+  for (const recommendation of Array.isArray(recommendations) ? recommendations : []) {
+    const context = recommendationContext(recommendation);
+    const targetId = safeText(recommendation?.target_id || recommendation?.targetId || context?.target?.id);
+    const behaviorId = safeText(recommendation?.behavior_id || recommendation?.behaviorId || context?.behavior?.id);
+    const programId = safeText(recommendation?.program_id || recommendation?.programId || context?.program?.id);
+    const protocolId = safeText(context?.protocol?.id || context?.target?.protocol_id || context?.target?.protocolId);
+    const type = safeText(recommendation?.recommendation_type || recommendation?.recommendationType).toUpperCase() || 'UNKNOWN';
+    const sourceKey = targetId ? `target:${targetId}` : behaviorId ? `behavior:${behaviorId}` : `recommendation:${safeText(recommendation?.id)}`;
+    const key = `${type}|${sourceKey}|program:${programId || '-'}|protocol:${protocolId || '-'}`;
+    const rows = grouped.get(key) || [];
+    rows.push(recommendation);
+    grouped.set(key, rows);
+  }
+
+  const priorityWeight: Record<string, number> = { CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };
+  return Array.from(grouped.entries()).map(([key, rows]) => {
+    const occurrences = [...rows].sort((left, right) => {
+      const dateDelta = new Date(recommendationCreatedAt(right) || 0).getTime() - new Date(recommendationCreatedAt(left) || 0).getTime();
+      if (dateDelta !== 0) return dateDelta;
+      return (priorityWeight[safeText(right?.priority).toUpperCase()] || 0) - (priorityWeight[safeText(left?.priority).toUpperCase()] || 0);
+    });
+    const convertedOccurrence = occurrences.find((item) => {
+      const context = recommendationContext(item);
+      return context?.converted_program?.id || context?.convertedProgram?.id;
+    });
+    const convertedContext = recommendationContext(convertedOccurrence);
+    const convertedProgram = convertedContext?.converted_program || convertedContext?.convertedProgram || null;
+    return {
+      key,
+      representative: occurrences[0],
+      occurrences,
+      occurrenceCount: occurrences.length,
+      convertedProgram,
+      canCreateProgram: !convertedProgram && occurrences.some(recommendationHasTrustedProgramOrigin),
+      latestCreatedAt: recommendationCreatedAt(occurrences[0]) || null,
+    };
+  }).sort((left, right) => {
+    if (Boolean(left.convertedProgram) !== Boolean(right.convertedProgram)) return left.convertedProgram ? 1 : -1;
+    const dateDelta = new Date(right.latestCreatedAt || 0).getTime() - new Date(left.latestCreatedAt || 0).getTime();
+    if (dateDelta !== 0) return dateDelta;
+    const priorityDelta = (priorityWeight[safeText(right.representative?.priority).toUpperCase()] || 0)
+      - (priorityWeight[safeText(left.representative?.priority).toUpperCase()] || 0);
+    if (priorityDelta !== 0) return priorityDelta;
+    if (left.canCreateProgram !== right.canCreateProgram) return left.canCreateProgram ? -1 : 1;
+    return left.key.localeCompare(right.key);
+  });
+};
+
+export const filterTherapeuticRecommendationGroups = (
+  groups: TherapeuticRecommendationGroup[],
+  filters: TherapeuticRecommendationFilters = {},
+) => {
+  const needle = safeText(filters.query).toLocaleLowerCase('pt-BR');
+  const now = filters.now instanceof Date ? filters.now : new Date(filters.now || Date.now());
+  const threshold = filters.periodDays && filters.periodDays > 0
+    ? now.getTime() - filters.periodDays * 24 * 60 * 60 * 1000
+    : null;
+
+  return (Array.isArray(groups) ? groups : []).filter((group) => {
+    const recommendation = group.representative;
+    const context = recommendationContext(recommendation);
+    const type = safeText(recommendation?.recommendation_type || recommendation?.recommendationType).toUpperCase();
+    const createdAt = new Date(group.latestCreatedAt || 0).getTime();
+    const professionalId = safeText(context?.responsible_professional?.id || context?.responsibleProfessional?.id);
+    const hasProtocol = Boolean(context?.protocol?.id || context?.target?.protocol_id || context?.target?.protocolId);
+    const hasProgram = Boolean(context?.program?.id || recommendation?.program_id || recommendation?.programId);
+    const scopeMatches = filters.scope !== 'untreated' || !group.convertedProgram;
+    const recentMatches = filters.scope !== 'recent' || createdAt >= now.getTime() - 30 * 24 * 60 * 60 * 1000;
+    const typeMatches = !filters.type || filters.type === 'all' || type === filters.type;
+    const originMatches = !filters.origin || filters.origin === 'all'
+      || (filters.origin === 'protocol' && hasProtocol)
+      || (filters.origin === 'program' && hasProgram);
+    const professionalMatches = !filters.professionalId || filters.professionalId === 'all' || professionalId === filters.professionalId;
+    const periodMatches = threshold === null || createdAt >= threshold;
+    const searchable = [
+      recommendation?.title,
+      recommendation?.summary,
+      recommendation?.rationale,
+      context?.target?.name,
+      context?.program?.name,
+      context?.protocol?.title,
+      context?.domain?.name,
+      context?.responsible_professional?.display_name,
+      context?.responsibleProfessional?.displayName,
+    ].map(safeText).join(' ').toLocaleLowerCase('pt-BR');
+    return scopeMatches && recentMatches && typeMatches && originMatches && professionalMatches && periodMatches && (!needle || searchable.includes(needle));
+  });
+};
 
 export const normalizeTherapeuticProgramStatus = (value: unknown): TherapeuticProgramStatus => {
   const normalized = safeText(value).toLowerCase();

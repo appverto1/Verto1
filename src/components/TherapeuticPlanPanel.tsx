@@ -21,14 +21,19 @@ import {
   Search,
   Sparkles,
   Target,
+  Link2,
   X,
 } from 'lucide-react';
+import { ResponsiveDrawer } from './ui/ResponsiveDrawer';
 import { dataService } from '../services/dataService';
 import {
   THERAPEUTIC_MEASUREMENT_OPTIONS,
   THERAPEUTIC_PROGRAM_STATUS_LABELS,
+  THERAPEUTIC_RECOMMENDATION_TYPE_LABELS,
   buildTherapeuticPlanSummary,
+  filterTherapeuticRecommendationGroups,
   formatTherapeuticPlanDate,
+  groupTherapeuticRecommendations,
   masteryCriterionLabel,
   normalizeTherapeuticPrograms,
   normalizeTherapeuticProgramStatus,
@@ -169,6 +174,19 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], userRole, isDark
   const [templateQuery, setTemplateQuery] = useState('');
   const [recommendations, setRecommendations] = useState<any[]>([]);
   const [recommendationsLoading, setRecommendationsLoading] = useState(false);
+  const [recommendationsLoadingMore, setRecommendationsLoadingMore] = useState(false);
+  const [recommendationsHasMore, setRecommendationsHasMore] = useState(false);
+  const [recommendationsCursor, setRecommendationsCursor] = useState('');
+  const [recommendationQuery, setRecommendationQuery] = useState('');
+  const [recommendationScope, setRecommendationScope] = useState<'all' | 'untreated' | 'recent'>('all');
+  const [recommendationType, setRecommendationType] = useState('all');
+  const [recommendationOrigin, setRecommendationOrigin] = useState<'all' | 'protocol' | 'program'>('all');
+  const [recommendationProfessionalId, setRecommendationProfessionalId] = useState('all');
+  const [recommendationPeriodDays, setRecommendationPeriodDays] = useState<number | null>(null);
+  const [expandedRecommendationKey, setExpandedRecommendationKey] = useState('');
+  const [linkingRecommendationId, setLinkingRecommendationId] = useState('');
+  const [selectedOriginTargetId, setSelectedOriginTargetId] = useState('');
+  const [linkingOrigin, setLinkingOrigin] = useState(false);
   const [selectedProtocolId, setSelectedProtocolId] = useState('');
   const [selectedDomainId, setSelectedDomainId] = useState('');
   const [selectedSkillId, setSelectedSkillId] = useState('');
@@ -178,14 +196,46 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], userRole, isDark
   const [detailTab, setDetailTab] = useState('overview');
   const [newTargetName, setNewTargetName] = useState('');
   const requestSequence = useRef(0);
+  const addProgramButtonRef = useRef<HTMLButtonElement | null>(null);
+  const drawerScrollRef = useRef<HTMLDivElement | null>(null);
+  const recommendationScrollTopRef = useRef(0);
 
   const programs = useMemo(() => normalizeTherapeuticPrograms(planData), [planData]);
   const objectives = Array.isArray(planData?.objectives) ? planData.objectives : [];
   const summary = useMemo(() => buildTherapeuticPlanSummary(programs, objectives), [objectives, programs]);
+  const groupedRecommendations = useMemo(() => groupTherapeuticRecommendations(recommendations), [recommendations]);
+  const visibleRecommendationGroups = useMemo(() => filterTherapeuticRecommendationGroups(groupedRecommendations, {
+    query: recommendationQuery,
+    scope: recommendationScope,
+    type: recommendationType,
+    origin: recommendationOrigin,
+    professionalId: recommendationProfessionalId,
+    periodDays: recommendationPeriodDays,
+  }), [groupedRecommendations, recommendationOrigin, recommendationPeriodDays, recommendationProfessionalId, recommendationQuery, recommendationScope, recommendationType]);
+  const recommendationProfessionals = useMemo(() => {
+    const byId = new Map<string, string>();
+    groupedRecommendations.forEach((group) => {
+      const context = group.representative?.clinical_context || group.representative?.clinicalContext || {};
+      const professional = context?.responsible_professional || context?.responsibleProfessional || {};
+      const id = String(professional?.id || '').trim();
+      const label = String(professional?.display_name || professional?.displayName || professional?.name || '').trim();
+      if (id && label) byId.set(id, label);
+    });
+    return Array.from(byId.entries()).map(([id, label]) => ({ id, label })).sort((left, right) => left.label.localeCompare(right.label, 'pt-BR'));
+  }, [groupedRecommendations]);
   const selectedProgram = useMemo(
     () => programs.find((program: any) => String(program.id) === selectedProgramId) || null,
     [programs, selectedProgramId],
   );
+  const hasUnsavedCreationChanges = useMemo(() => {
+    const blank = initialForm();
+    return Boolean(
+      editingProgramId
+      || targetInput.trim()
+      || originContext?.id
+      || JSON.stringify(form) !== JSON.stringify(blank),
+    );
+  }, [editingProgramId, form, originContext, targetInput]);
 
   const panel = isDark ? 'border-slate-700 bg-[#101b2e]' : 'border-slate-200 bg-white';
   const subpanel = isDark ? 'border-slate-700 bg-slate-900/45' : 'border-slate-100 bg-slate-50/75';
@@ -230,6 +280,14 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], userRole, isDark
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [patientId]);
 
+  useEffect(() => {
+    if (creationStep !== 'recommendation' || recommendationsLoading) return undefined;
+    const timer = window.setTimeout(() => {
+      if (drawerScrollRef.current) drawerScrollRef.current.scrollTop = recommendationScrollTopRef.current;
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [creationStep, recommendationsLoading]);
+
   const resetCreation = () => {
     setCreationStep(null);
     setCreationSource('manual');
@@ -244,6 +302,32 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], userRole, isDark
     setSelectedProtocolId('');
     setSelectedDomainId('');
     setSelectedSkillId('');
+    setExpandedRecommendationKey('');
+    setLinkingRecommendationId('');
+    setSelectedOriginTargetId('');
+    setLinkingOrigin(false);
+  };
+
+  const requestCloseCreation = () => {
+    if (saving || linkingOrigin) return;
+    if (hasUnsavedCreationChanges && !window.confirm('Descartar as alterações não salvas deste programa?')) return;
+    resetCreation();
+  };
+
+  const goBackCreation = () => {
+    setFormError('');
+    if (creationStep === 'review') {
+      setCreationStep('form');
+      return;
+    }
+    if (creationStep === 'form' && !editingProgramId) {
+      if (creationSource === 'recommendation') setCreationStep('recommendation');
+      else if (creationSource === 'template') setCreationStep('templates');
+      else if (creationSource === 'protocol') setCreationStep('protocol');
+      else setCreationStep('source');
+      return;
+    }
+    setCreationStep('source');
   };
 
   const startCreation = () => {
@@ -261,15 +345,30 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], userRole, isDark
     setTemplatesLoading(false);
   };
 
-  const loadRecommendations = async () => {
-    setRecommendationsLoading(true);
-    const response = await dataService.getNextSessionRecommendations(patientId, { limit: 100 });
+  const loadRecommendations = async (force = false, append = false) => {
+    if (append && (!recommendationsCursor || recommendationsLoadingMore)) return;
+    if (append) setRecommendationsLoadingMore(true);
+    else setRecommendationsLoading(true);
+    const response = await dataService.getNextSessionRecommendations(patientId, {
+      limit: 50,
+      before: append ? recommendationsCursor : undefined,
+      force,
+    });
     if (response?.success === false) setFormError(response?.message || response?.error || 'Não foi possível carregar as recomendações.');
     else {
       const rows = unwrapList(response, 'recommendations');
-      setRecommendations(rows.filter((item: any) => !['REJECTED', 'DISMISSED'].includes(String(item?.status || '').toUpperCase())));
+      const visibleRows = rows.filter((item: any) => !['REJECTED', 'DISMISSED'].includes(String(item?.status || '').toUpperCase()));
+      setRecommendations((current) => {
+        if (!append) return visibleRows;
+        const byId = new Map(current.map((item: any) => [String(item?.id), item]));
+        visibleRows.forEach((item: any) => byId.set(String(item?.id), item));
+        return Array.from(byId.values());
+      });
+      setRecommendationsHasMore(Boolean(response?.meta?.hasMore));
+      setRecommendationsCursor(String(response?.meta?.nextCursor || ''));
     }
-    setRecommendationsLoading(false);
+    if (append) setRecommendationsLoadingMore(false);
+    else setRecommendationsLoading(false);
   };
 
   const chooseSource = (source: CreationSource) => {
@@ -344,11 +443,45 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], userRole, isDark
   };
 
   const applyRecommendation = (recommendation: any) => {
-    const name = String(recommendation?.title || recommendation?.suggested_action || recommendation?.suggestedAction || 'Novo programa');
-    const objective = String(recommendation?.summary || recommendation?.rationale || recommendation?.clinical_note || recommendation?.clinicalNote || name);
-    setOriginContext({ id: recommendation?.id, label: name });
-    setForm({ ...initialForm(), name, objective, targets: [name] });
+    const context = recommendation?.clinical_context || recommendation?.clinicalContext || {};
+    const target = context?.target || {};
+    const targetId = String(target?.id || recommendation?.target_id || recommendation?.targetId || '').trim();
+    const targetName = String(target?.name || '').trim();
+    if (!recommendation?.can_create_program || !targetId || !targetName) {
+      setFormError('Esta recomendação ainda não possui uma habilidade de origem confiável. Complete o vínculo antes de criar o programa.');
+      return;
+    }
+    recommendationScrollTopRef.current = drawerScrollRef.current?.scrollTop || 0;
+    const programCategory = normalizeCategory(context?.program?.category || 'OUTRO');
+    const category = CATEGORY_OPTIONS.some(([value]) => value === programCategory) ? programCategory : 'OUTRO';
+    const objective = String(target?.description || context?.program?.objective || targetName).trim();
+    setOriginContext({
+      id: recommendation.id,
+      label: targetName,
+      targetId,
+      protocolId: context?.protocol?.id || target?.protocol_id || target?.protocolId || null,
+      protocolTitle: context?.protocol?.title || target?.protocol_title || target?.protocolTitle || null,
+      domainId: context?.domain?.id || target?.domain_id || target?.domainId || null,
+      domainName: context?.domain?.name || target?.domain_name || target?.domainName || null,
+    });
+    setForm({ ...initialForm(), name: targetName, objective, category, targets: [targetName] });
     setCreationStep('form');
+  };
+
+  const linkRecommendationTarget = async (recommendationId: string) => {
+    if (!recommendationId || !selectedOriginTargetId || linkingOrigin) return;
+    setLinkingOrigin(true);
+    setFormError('');
+    const response = await dataService.linkAbaRecommendationTarget(recommendationId, { targetId: selectedOriginTargetId });
+    if (response?.success === false) {
+      setFormError(response?.message || response?.error || 'Não foi possível vincular a habilidade de origem.');
+      setLinkingOrigin(false);
+      return;
+    }
+    setLinkingRecommendationId('');
+    setSelectedOriginTargetId('');
+    await loadRecommendations(true);
+    setLinkingOrigin(false);
   };
 
   const addTarget = (raw = targetInput) => {
@@ -533,6 +666,21 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], userRole, isDark
     });
   }, [templateCategory, templateQuery, templateScope, templates]);
 
+  const recommendationTypeOptions = useMemo<string[]>(() => Array.from(new Set<string>(
+    groupedRecommendations
+      .map((group) => String(group.representative?.recommendation_type || group.representative?.recommendationType || '').toUpperCase())
+      .filter((value): value is string => Boolean(value)),
+  )).sort((left, right) => (THERAPEUTIC_RECOMMENDATION_TYPE_LABELS[left] || left).localeCompare(THERAPEUTIC_RECOMMENDATION_TYPE_LABELS[right] || right, 'pt-BR')), [groupedRecommendations]);
+
+  const recommendationTargetOptions = useMemo(() => (Array.isArray(planData?.targets) ? planData.targets : [])
+    .map((target: any) => ({
+      id: String(target?.id || '').trim(),
+      label: String(target?.name || '').trim(),
+      programId: String(target?.program_id || target?.programId || '').trim(),
+    }))
+    .filter((target: any) => target.id && target.label)
+    .sort((left: any, right: any) => left.label.localeCompare(right.label, 'pt-BR')), [planData?.targets]);
+
   const statusClass = (statusValue: any) => {
     const status = normalizeTherapeuticProgramStatus(statusValue);
     if (status === 'teaching') return isDark ? 'bg-violet-500/15 text-violet-200 border-violet-400/30' : 'bg-violet-50 text-violet-700 border-violet-200';
@@ -620,14 +768,107 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], userRole, isDark
 
     if (creationStep === 'recommendation') {
       return (
-        <div className="space-y-3">
-          {recommendationsLoading && <div className={`flex items-center justify-center gap-2 py-12 text-sm ${muted}`}><Loader2 size={18} className="animate-spin" /> Carregando recomendações...</div>}
-          {!recommendationsLoading && recommendations.map((recommendation: any) => (
-            <article key={recommendation.id} className={`rounded-2xl border p-4 ${subpanel}`}>
-              <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center"><div><p className={`font-medium ${text}`}>{recommendation.title || recommendation.suggested_action || 'Recomendação clínica'}</p><p className={`mt-1 text-sm leading-relaxed ${muted}`}>{recommendation.summary || recommendation.rationale || recommendation.clinical_note || 'Sem justificativa adicional.'}</p><p className={`mt-2 text-xs ${muted}`}>Origem: {formatTherapeuticPlanDate(recommendation.created_at || recommendation.createdAt)}</p></div><button type="button" className="shrink-0 rounded-xl bg-violet-600 px-4 py-2.5 text-sm text-white" onClick={() => applyRecommendation(recommendation)}>Criar programa</button></div>
-            </article>
-          ))}
-          {!recommendationsLoading && !recommendations.length && <p className={`rounded-2xl border border-dashed p-8 text-center text-sm ${isDark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}>Não há recomendações disponíveis para transformar em programa.</p>}
+        <div className="space-y-4" data-testid="therapeutic-recommendations-step">
+          <div className={`space-y-3 rounded-2xl border p-4 ${subpanel}`}>
+            <label className="relative block">
+              <Search size={16} className={`absolute left-3.5 top-1/2 -translate-y-1/2 ${muted}`} />
+              <input className={`${field} pl-10`} value={recommendationQuery} onChange={(event) => setRecommendationQuery(event.target.value)} placeholder="Buscar habilidade, programa, protocolo ou recomendação" />
+            </label>
+            <div className="flex flex-wrap gap-2" aria-label="Situação das recomendações">
+              {([['all', 'Todas'], ['untreated', 'Não tratadas'], ['recent', 'Recentes']] as const).map(([value, label]) => (
+                <button key={value} type="button" className={`rounded-full border px-3 py-1.5 text-xs ${recommendationScope === value ? 'border-violet-500 bg-violet-600 text-white' : isDark ? 'border-slate-600 text-slate-300' : 'border-slate-200 text-slate-600'}`} onClick={() => setRecommendationScope(value)}>{label}</button>
+              ))}
+            </div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <label className={`text-xs ${muted}`}>Tipo<select className={`${field} mt-1.5`} value={recommendationType} onChange={(event) => setRecommendationType(event.target.value)}><option value="all">Todos os tipos</option>{recommendationTypeOptions.map((type) => <option key={type} value={type}>{THERAPEUTIC_RECOMMENDATION_TYPE_LABELS[type] || type}</option>)}</select></label>
+              <label className={`text-xs ${muted}`}>Origem<select className={`${field} mt-1.5`} value={recommendationOrigin} onChange={(event) => setRecommendationOrigin(event.target.value as 'all' | 'protocol' | 'program')}><option value="all">Todas as origens</option><option value="protocol">Protocolo</option><option value="program">Programa</option></select></label>
+              <label className={`text-xs ${muted}`}>Profissional<select className={`${field} mt-1.5`} value={recommendationProfessionalId} onChange={(event) => setRecommendationProfessionalId(event.target.value)}><option value="all">Todos os profissionais</option>{recommendationProfessionals.map((professional) => <option key={professional.id} value={professional.id}>{professional.label}</option>)}</select></label>
+              <label className={`text-xs ${muted}`}>Período<select className={`${field} mt-1.5`} value={recommendationPeriodDays || 'all'} onChange={(event) => setRecommendationPeriodDays(event.target.value === 'all' ? null : Number(event.target.value))}><option value="all">Todo o histórico carregado</option><option value="7">Últimos 7 dias</option><option value="30">Últimos 30 dias</option><option value="90">Últimos 90 dias</option></select></label>
+            </div>
+          </div>
+
+          {recommendationsLoading && <div className="space-y-3" aria-label="Carregando recomendações">{[0, 1, 2].map((item) => <div key={item} className={`animate-pulse rounded-2xl border p-5 ${subpanel}`}><div className={`h-3 w-24 rounded ${isDark ? 'bg-slate-700' : 'bg-slate-200'}`} /><div className={`mt-4 h-5 w-3/5 rounded ${isDark ? 'bg-slate-700' : 'bg-slate-200'}`} /><div className={`mt-3 h-3 w-full rounded ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`} /><div className={`mt-2 h-3 w-4/5 rounded ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`} /></div>)}</div>}
+
+          {!recommendationsLoading && visibleRecommendationGroups.map((group) => {
+            const recommendation = group.representative;
+            const context = recommendation?.clinical_context || recommendation?.clinicalContext || {};
+            const target = context?.target || {};
+            const behavior = context?.behavior || {};
+            const program = context?.program || {};
+            const protocol = context?.protocol || {};
+            const domain = context?.domain || {};
+            const assessment = context?.assessment || {};
+            const session = context?.source_session || context?.sourceSession || {};
+            const period = context?.period || {};
+            const responsible = context?.responsible_professional || context?.responsibleProfessional || {};
+            const indicator = context?.indicator || {};
+            const type = String(recommendation?.recommendation_type || recommendation?.recommendationType || '').toUpperCase();
+            const typeLabel = THERAPEUTIC_RECOMMENDATION_TYPE_LABELS[type] || 'Recomendação clínica';
+            const targetName = String(target?.name || behavior?.name || '').trim() || 'Origem clínica incompleta';
+            const contextPath = protocol?.title
+              ? [protocol.title, domain?.name, target?.name].filter(Boolean).join(' → ')
+              : program?.name
+                ? [`Programa “${program.name}”`, target?.name ? `Alvo “${target.name}”` : ''].filter(Boolean).join(' → ')
+                : target?.name ? `Alvo “${target.name}”` : '';
+            const motive = String(indicator?.reason || recommendation?.summary || recommendation?.rationale || 'Sem justificativa adicional.');
+            const originLabel = session?.occurred_at || session?.occurredAt
+              ? `Sessão de ${formatTherapeuticPlanDate(session.occurred_at || session.occurredAt)}`
+              : period?.start || period?.period_start
+                ? `Período analisado: ${formatTherapeuticPlanDate(period.start || period.period_start)} a ${formatTherapeuticPlanDate(period.end || period.period_end)}`
+                : `Gerada em ${formatTherapeuticPlanDate(recommendation?.created_at || recommendation?.createdAt)}`;
+            const isExpanded = expandedRecommendationKey === group.key;
+            const contextIssues = Array.isArray(recommendation?.context_issues) ? recommendation.context_issues : [];
+            const creationRecommendation = group.occurrences.find((item: any) => item?.can_create_program) || recommendation;
+            return (
+              <article key={group.key} className={`rounded-2xl border p-5 ${subpanel}`} data-testid="therapeutic-recommendation-card">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className={`rounded-full px-2.5 py-1 text-[11px] ${isDark ? 'bg-violet-500/15 text-violet-200' : 'bg-violet-50 text-violet-700'}`}>{typeLabel}</span>
+                  {group.occurrenceCount > 1 && <span className={`text-xs ${muted}`}>{group.occurrenceCount} ocorrências</span>}
+                </div>
+                <h4 className={`mt-3 text-base font-medium ${text}`}>{targetName}</h4>
+                {contextPath && <p className={`mt-1 text-sm ${muted}`}>{contextPath}</p>}
+                <p className={`mt-3 text-sm leading-relaxed ${text}`}>{motive}</p>
+                <div className={`mt-3 space-y-1 text-xs ${muted}`}>
+                  <p>{originLabel}</p>
+                  {responsible?.display_name && <p>Responsável: {responsible.display_name}</p>}
+                </div>
+
+                {group.convertedProgram && <div className={`mt-4 rounded-xl border px-3 py-2.5 text-sm ${isDark ? 'border-emerald-400/25 bg-emerald-500/10 text-emerald-100' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}><CheckCircle2 size={15} className="mr-2 inline" /> Programa criado: {group.convertedProgram.name}</div>}
+                {!group.convertedProgram && !group.canCreateProgram && <div className={`mt-4 rounded-xl border px-3 py-2.5 text-sm ${isDark ? 'border-amber-400/25 bg-amber-500/10 text-amber-100' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>Esta recomendação não possui uma habilidade de origem identificada.</div>}
+
+                {isExpanded && <div className={`mt-4 space-y-3 border-t pt-4 text-sm ${isDark ? 'border-slate-700' : 'border-slate-200'}`}>
+                  <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    {protocol?.title && <div><dt className={`text-xs ${muted}`}>Protocolo</dt><dd className={`mt-1 ${text}`}>{protocol.title}</dd></div>}
+                    {assessment?.label && <div><dt className={`text-xs ${muted}`}>Avaliação de origem</dt><dd className={`mt-1 ${text}`}>{assessment.label}</dd></div>}
+                    {domain?.name && <div><dt className={`text-xs ${muted}`}>Domínio</dt><dd className={`mt-1 ${text}`}>{domain.name}</dd></div>}
+                    {program?.name && <div><dt className={`text-xs ${muted}`}>Programa relacionado</dt><dd className={`mt-1 ${text}`}>{program.name}</dd></div>}
+                    {target?.name && <div><dt className={`text-xs ${muted}`}>Habilidade / alvo</dt><dd className={`mt-1 ${text}`}>{target.name}</dd></div>}
+                    {behavior?.name && <div><dt className={`text-xs ${muted}`}>Comportamento relacionado</dt><dd className={`mt-1 ${text}`}>{behavior.name}</dd></div>}
+                    {indicator?.metric_name && <div><dt className={`text-xs ${muted}`}>Indicador</dt><dd className={`mt-1 ${text}`}>{indicator.metric_name}</dd></div>}
+                    {target?.mastery_criteria && <div><dt className={`text-xs ${muted}`}>Critério esperado</dt><dd className={`mt-1 ${text}`}>{masteryCriterionLabel(target.mastery_criteria)}</dd></div>}
+                  </dl>
+                  {group.occurrenceCount > 1 && <div><p className={`text-xs ${muted}`}>Histórico de ocorrências</p><div className="mt-2 space-y-2">{group.occurrences.map((occurrence: any) => <div key={occurrence.id} className={`rounded-lg px-3 py-2 text-xs ${isDark ? 'bg-slate-800/70 text-slate-300' : 'bg-white text-slate-600'}`}>{formatTherapeuticPlanDate(occurrence.created_at || occurrence.createdAt)} · {THERAPEUTIC_RECOMMENDATION_TYPE_LABELS[String(occurrence.recommendation_type || '').toUpperCase()] || typeLabel}</div>)}</div></div>}
+                  {contextIssues.length > 0 && <p className={`text-xs ${muted}`}>Contexto pendente: {contextIssues.join(', ')}.</p>}
+                </div>}
+
+                {canManageStructure && linkingRecommendationId === String(recommendation.id) && <div className={`mt-4 rounded-xl border p-3 ${isDark ? 'border-slate-600 bg-slate-900' : 'border-slate-200 bg-white'}`}>
+                  <label className={`text-xs ${muted}`}>Vincular habilidade existente<select className={`${field} mt-1.5`} value={selectedOriginTargetId} onChange={(event) => setSelectedOriginTargetId(event.target.value)}><option value="">Selecione uma habilidade...</option>{recommendationTargetOptions.map((option: any) => <option key={option.id} value={option.id}>{option.label}</option>)}</select></label>
+                  {!recommendationTargetOptions.length && <p className={`mt-2 text-xs ${muted}`}>Não há alvos estruturados disponíveis neste plano. Crie a partir de protocolo ou manualmente.</p>}
+                  <div className="mt-3 flex justify-end gap-2"><button type="button" className={secondaryButton} disabled={linkingOrigin} onClick={() => { setLinkingRecommendationId(''); setSelectedOriginTargetId(''); }}>Cancelar</button><button type="button" className="inline-flex min-h-[40px] items-center gap-2 rounded-xl bg-violet-600 px-4 py-2 text-sm text-white disabled:opacity-50" disabled={!selectedOriginTargetId || linkingOrigin} onClick={() => void linkRecommendationTarget(String(recommendation.id))}>{linkingOrigin ? <Loader2 size={15} className="animate-spin" /> : <Link2 size={15} />} Vincular habilidade</button></div>
+                </div>}
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button type="button" className={secondaryButton} onClick={() => setExpandedRecommendationKey((current) => current === group.key ? '' : group.key)}>{isExpanded ? 'Ocultar contexto' : 'Abrir contexto'}</button>
+                  {group.convertedProgram ? <button type="button" className="inline-flex min-h-[40px] items-center rounded-xl bg-violet-600 px-4 py-2 text-sm text-white" onClick={() => { resetCreation(); setSelectedProgramId(String(group.convertedProgram.id)); setDetailTab('overview'); }}>Abrir programa</button> : group.canCreateProgram ? <button type="button" className="inline-flex min-h-[40px] items-center rounded-xl bg-violet-600 px-4 py-2 text-sm text-white" onClick={() => applyRecommendation(creationRecommendation)}>Criar programa</button> : canManageStructure ? <button type="button" className={secondaryButton} onClick={() => { setLinkingRecommendationId(String(recommendation.id)); setExpandedRecommendationKey(group.key); }}>Completar origem</button> : <span className={`self-center text-xs ${muted}`}>Origem deve ser vinculada por um coordenador.</span>}
+                </div>
+              </article>
+            );
+          })}
+
+          {!recommendationsLoading && recommendationsHasMore && <div className="flex justify-center"><button type="button" className={secondaryButton} disabled={recommendationsLoadingMore} onClick={() => void loadRecommendations(false, true)}>{recommendationsLoadingMore ? <Loader2 size={15} className="animate-spin" /> : <History size={15} />} Carregar recomendações anteriores</button></div>}
+
+          {!recommendationsLoading && !visibleRecommendationGroups.length && !recommendationsHasMore && <div className={`rounded-2xl border border-dashed p-8 text-center text-sm ${isDark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}><p>Nenhuma recomendação disponível para criar um programa.</p><div className="mt-4 flex flex-wrap justify-center gap-2"><button type="button" className={secondaryButton} onClick={() => setCreationStep('source')}>Voltar</button><button type="button" className={secondaryButton} onClick={() => chooseSource('manual')}>Criar manualmente</button><button type="button" className={secondaryButton} onClick={() => chooseSource('protocol')}>Criar a partir de protocolo</button></div></div>}
+          {!recommendationsLoading && formError && <button type="button" className={secondaryButton} onClick={() => void loadRecommendations()}>Tentar carregar novamente</button>}
         </div>
       );
     }
@@ -671,23 +912,40 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], userRole, isDark
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2"><label className={`text-xs ${muted}`}>Como registrar<select className={`${field} mt-1.5`} value={form.measurementType} onChange={(event) => setForm((current) => ({ ...current, measurementType: event.target.value }))}>{THERAPEUTIC_MEASUREMENT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label><label className={`text-xs ${muted}`}>Critério de domínio<select className={`${field} mt-1.5`} value={form.masteryPreset} onChange={(event) => setForm((current) => ({ ...current, masteryPreset: event.target.value }))}>{MASTERY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label></div>
           {form.masteryPreset === 'custom' && <div className="grid grid-cols-2 gap-3"><label className={`text-xs ${muted}`}>Percentual<input type="number" min="1" max="100" className={`${field} mt-1.5`} value={form.customAccuracy} onChange={(event) => setForm((current) => ({ ...current, customAccuracy: event.target.value }))} /></label><label className={`text-xs ${muted}`}>Sessões consecutivas<input type="number" min="1" max="30" className={`${field} mt-1.5`} value={form.customSessions} onChange={(event) => setForm((current) => ({ ...current, customSessions: event.target.value }))} /></label></div>}
           <div className={`rounded-2xl border ${subpanel}`}><button type="button" className={`flex w-full items-center justify-between p-4 text-sm ${text}`} onClick={() => setAdvancedOpen((current) => !current)}><span>Ajustes avançados <span className={muted}>(opcional)</span></span><ChevronDown size={17} className={`transition-transform ${advancedOpen ? 'rotate-180' : ''}`} /></button>{advancedOpen && <div className="grid grid-cols-1 gap-4 border-t p-4 md:grid-cols-2"><label className={`text-xs ${muted}`}>Instrução ou antecedente<textarea className={`${field} mt-1.5`} value={form.advancedSettings.antecedent} onChange={(event) => setForm((current) => ({ ...current, advancedSettings: { ...current.advancedSettings, antecedent: event.target.value } }))} /></label><label className={`text-xs ${muted}`}>Resposta esperada<textarea className={`${field} mt-1.5`} value={form.advancedSettings.expectedResponse} onChange={(event) => setForm((current) => ({ ...current, advancedSettings: { ...current.advancedSettings, expectedResponse: event.target.value } }))} /></label><label className={`text-xs ${muted}`}>Materiais<textarea className={`${field} mt-1.5`} value={form.advancedSettings.materials} onChange={(event) => setForm((current) => ({ ...current, advancedSettings: { ...current.advancedSettings, materials: event.target.value } }))} /></label><label className={`text-xs ${muted}`}>Hierarquia de ajuda<textarea className={`${field} mt-1.5`} value={form.advancedSettings.promptHierarchy} onChange={(event) => setForm((current) => ({ ...current, advancedSettings: { ...current.advancedSettings, promptHierarchy: event.target.value } }))} /></label><label className={`text-xs ${muted}`}>Reforçamento<textarea className={`${field} mt-1.5`} value={form.advancedSettings.reinforcement} onChange={(event) => setForm((current) => ({ ...current, advancedSettings: { ...current.advancedSettings, reinforcement: event.target.value } }))} /></label><label className={`text-xs ${muted}`}>Correção de erro<textarea className={`${field} mt-1.5`} value={form.advancedSettings.errorCorrection} onChange={(event) => setForm((current) => ({ ...current, advancedSettings: { ...current.advancedSettings, errorCorrection: event.target.value } }))} /></label><label className={`text-xs ${muted}`}>Generalização<textarea className={`${field} mt-1.5`} value={form.advancedSettings.generalization} onChange={(event) => setForm((current) => ({ ...current, advancedSettings: { ...current.advancedSettings, generalization: event.target.value } }))} /></label><label className={`text-xs ${muted}`}>Manutenção<textarea className={`${field} mt-1.5`} value={form.advancedSettings.maintenance} onChange={(event) => setForm((current) => ({ ...current, advancedSettings: { ...current.advancedSettings, maintenance: event.target.value } }))} /></label><label className={`text-xs ${muted}`}>Próxima revisão<input type="date" className={`${field} mt-1.5`} value={form.reviewDueDate} onChange={(event) => setForm((current) => ({ ...current, reviewDueDate: event.target.value }))} /></label><label className={`text-xs ${muted}`}>Observações<textarea className={`${field} mt-1.5`} value={form.advancedSettings.notes} onChange={(event) => setForm((current) => ({ ...current, advancedSettings: { ...current.advancedSettings, notes: event.target.value } }))} /></label></div>}</div>
-          <div className="flex justify-end"><button type="button" className="inline-flex min-h-[42px] items-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm text-white hover:bg-violet-700" onClick={continueToReview}>Revisar programa <ChevronLeft size={16} className="rotate-180" /></button></div>
         </div>
       );
     }
 
     if (creationStep === 'review') {
       const measurement = THERAPEUTIC_MEASUREMENT_OPTIONS.find((option) => option.value === form.measurementType);
-      return <div className="space-y-4"><div className={`rounded-2xl border p-5 ${subpanel}`}><p className={`text-xs ${muted}`}>{editingProgramId ? 'Revisão da atualização' : `Adaptado para ${patientName}`}</p><h4 className={`mt-1 text-xl font-medium ${text}`}>{form.name}</h4><dl className="mt-5 grid grid-cols-1 gap-4 text-sm md:grid-cols-2"><div><dt className={muted}>Categoria</dt><dd className={`mt-1 ${text}`}>{CATEGORY_LABELS[form.category] || form.category}</dd></div><div><dt className={muted}>Origem</dt><dd className={`mt-1 ${text}`}>{SOURCE_LABELS[creationSource]}{originContext?.label ? ` · ${originContext.label}` : ''}</dd></div><div className="md:col-span-2"><dt className={muted}>Objetivo</dt><dd className={`mt-1 leading-relaxed ${text}`}>{form.objective}</dd></div><div><dt className={muted}>Alvos iniciais</dt><dd className={`mt-1 ${text}`}>{form.targets.length}</dd></div><div><dt className={muted}>Registro</dt><dd className={`mt-1 ${text}`}>{measurement?.label}</dd></div><div><dt className={muted}>Domínio</dt><dd className={`mt-1 ${text}`}>{masteryCriterionLabel(buildMasteryCriteria(form))}</dd></div><div><dt className={muted}>Próxima revisão</dt><dd className={`mt-1 ${text}`}>{formatTherapeuticPlanDate(form.reviewDueDate)}</dd></div></dl></div><div className="flex flex-col-reverse justify-end gap-2 sm:flex-row"><button type="button" className={secondaryButton} disabled={saving} onClick={() => void submitProgram('draft')}>{saving ? <Loader2 size={16} className="animate-spin" /> : <FileText size={16} />} {editingProgramId ? 'Salvar alterações' : 'Salvar como rascunho'}</button>{!editingProgramId && <button type="button" className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm text-white disabled:opacity-50" disabled={saving} onClick={() => void submitProgram('teaching')}>{saving ? <Loader2 size={16} className="animate-spin" /> : canManageStructure ? <Play size={16} /> : <Check size={16} />}{canManageStructure ? 'Ativar programa' : 'Enviar para aprovação'}</button>}</div></div>;
+      return <div className={`rounded-2xl border p-5 ${subpanel}`}><p className={`text-xs ${muted}`}>{editingProgramId ? 'Revisão da atualização' : `Adaptado para ${patientName}`}</p><h4 className={`mt-1 text-xl font-medium ${text}`}>{form.name}</h4><dl className="mt-5 grid grid-cols-1 gap-4 text-sm md:grid-cols-2"><div><dt className={muted}>Categoria</dt><dd className={`mt-1 ${text}`}>{CATEGORY_LABELS[form.category] || form.category}</dd></div><div><dt className={muted}>Origem</dt><dd className={`mt-1 ${text}`}>{SOURCE_LABELS[creationSource]}{originContext?.label ? ` · ${originContext.label}` : ''}</dd></div><div className="md:col-span-2"><dt className={muted}>Objetivo</dt><dd className={`mt-1 leading-relaxed ${text}`}>{form.objective}</dd></div><div><dt className={muted}>Alvos iniciais</dt><dd className={`mt-1 ${text}`}>{form.targets.length}</dd></div><div><dt className={muted}>Registro</dt><dd className={`mt-1 ${text}`}>{measurement?.label}</dd></div><div><dt className={muted}>Domínio</dt><dd className={`mt-1 ${text}`}>{masteryCriterionLabel(buildMasteryCriteria(form))}</dd></div><div><dt className={muted}>Próxima revisão</dt><dd className={`mt-1 ${text}`}>{formatTherapeuticPlanDate(form.reviewDueDate)}</dd></div></dl></div>;
     }
     return null;
   };
+
+  const renderCreationFooter = () => {
+    if (creationStep !== 'form' && creationStep !== 'review') return null;
+    if (creationStep === 'form') {
+      return <div className="flex flex-col-reverse justify-between gap-2 sm:flex-row"><button type="button" className={secondaryButton} disabled={saving} onClick={requestCloseCreation}>Cancelar</button><div className="flex flex-col-reverse gap-2 sm:flex-row"><button type="button" className={secondaryButton} disabled={saving} onClick={goBackCreation}><ChevronLeft size={16} /> Voltar</button><button type="button" className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm text-white hover:bg-violet-700 disabled:opacity-50" disabled={saving} onClick={continueToReview}>Continuar <ChevronLeft size={16} className="rotate-180" /></button></div></div>;
+    }
+    return <div className="flex flex-col-reverse justify-between gap-2 sm:flex-row"><button type="button" className={secondaryButton} disabled={saving} onClick={goBackCreation}><ChevronLeft size={16} /> Voltar</button><div className="flex flex-col-reverse gap-2 sm:flex-row"><button type="button" className={secondaryButton} disabled={saving} onClick={() => void submitProgram('draft')}>{saving ? <Loader2 size={16} className="animate-spin" /> : <FileText size={16} />} {editingProgramId ? 'Salvar alterações' : 'Salvar como rascunho'}</button>{!editingProgramId && <button type="button" className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm text-white disabled:opacity-50" disabled={saving} onClick={() => void submitProgram('teaching')}>{saving ? <Loader2 size={16} className="animate-spin" /> : canManageStructure ? <Play size={16} /> : <Check size={16} />}{canManageStructure ? 'Ativar programa' : 'Enviar para aprovação'}</button>}</div></div>;
+  };
+
+  const creationTitle = editingProgramId
+    ? 'Editar programa'
+    : creationStep === 'source' ? 'Como deseja criar este programa?'
+      : creationStep === 'templates' ? 'Biblioteca de programas'
+        : creationStep === 'protocol' ? 'Criar a partir de protocolo'
+          : creationStep === 'recommendation' ? 'Criar a partir de recomendação'
+            : creationStep === 'review' ? 'Revise antes de salvar'
+              : `Adaptar programa para ${patientName}`;
+  const creationStage = creationStep === 'form' ? 'Adaptação' : creationStep === 'review' ? 'Revisão' : 'Origem';
 
   return (
     <section className="space-y-5" data-testid="therapeutic-plan-panel">
       <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
         <div><p className={`text-sm leading-relaxed ${muted}`}>Objetivos gerais, programas individualizados e alvos usados nas sessões.</p></div>
-        <div className="flex flex-wrap gap-2">{typeof onStartSession === 'function' && programs.some((program: any) => ['teaching', 'maintenance'].includes(normalizeTherapeuticProgramStatus(program.status))) && <button type="button" className={secondaryButton} onClick={onStartSession}><Play size={16} /> Iniciar sessão</button>}{canCreate && <button type="button" className="inline-flex min-h-[42px] items-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm text-white hover:bg-violet-700" onClick={startCreation}><Plus size={17} /> Adicionar programa</button>}</div>
+        <div className="flex flex-wrap gap-2">{typeof onStartSession === 'function' && programs.some((program: any) => ['teaching', 'maintenance'].includes(normalizeTherapeuticProgramStatus(program.status))) && <button type="button" className={secondaryButton} onClick={onStartSession}><Play size={16} /> Iniciar sessão</button>}{canCreate && <button ref={addProgramButtonRef} type="button" className="inline-flex min-h-[42px] items-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm text-white hover:bg-violet-700" onClick={startCreation}><Plus size={17} /> Adicionar programa</button>}</div>
       </div>
 
       {notice && <div className={`flex items-start justify-between gap-3 rounded-2xl border px-4 py-3 text-sm ${isDark ? 'border-emerald-400/25 bg-emerald-500/10 text-emerald-100' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}><span>{notice}</span><button type="button" onClick={() => setNotice('')}><X size={15} /></button></div>}
@@ -710,7 +968,21 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], userRole, isDark
         return <article key={program.id} className={`relative rounded-2xl border p-5 ${panel}`}><div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h4 className={`truncate text-base font-medium ${text}`}>{program.name}</h4><span className={`rounded-full border px-2.5 py-1 text-[10px] ${statusClass(status)}`}>{THERAPEUTIC_PROGRAM_STATUS_LABELS[status]}</span></div><p className={`mt-1 text-xs ${muted}`}>{CATEGORY_LABELS[normalizeCategory(program.category)] || program.category} · {SOURCE_LABELS[String(program.origin_type || 'manual')] || 'Programa individual'}</p></div><button type="button" className={`rounded-lg p-2 ${isDark ? 'text-slate-400 hover:bg-slate-800' : 'text-slate-400 hover:bg-slate-100'}`} onClick={() => setOpenMenuId((current) => current === String(program.id) ? '' : String(program.id))}><MoreHorizontal size={18} /></button></div>{openMenuId === String(program.id) && <div className={`absolute right-5 top-12 z-20 w-56 rounded-xl border p-1.5 shadow-xl ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-200 bg-white'}`}>{canManageStructure && !['completed', 'archived'].includes(status) && <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => editProgram(program)}><Pencil size={15} /> Editar</button>}{canManageStructure && status !== 'paused' && <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => void updateStatus(program, 'paused')}><Pause size={15} /> Pausar</button>}{canManageStructure && status !== 'maintenance' && !['completed', 'archived'].includes(status) && <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => void updateStatus(program, 'maintenance')}><Clock3 size={15} /> Mover para manutenção</button>}{canManageStructure && status !== 'completed' && <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => void updateStatus(program, 'completed')}><CheckCircle2 size={15} /> Concluir</button>}<button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => void saveAsTemplate(program)}><Copy size={15} /> Duplicar como modelo</button></div>}<p className={`mt-4 line-clamp-2 text-sm leading-relaxed ${muted}`}>{program.objective || 'Objetivo não informado.'}</p><div className="mt-5"><div className={`mb-2 flex justify-between text-xs ${muted}`}><span>{mastered} de {targetCount} alvos dominados</span><span>{progress}%</span></div><div className={`h-2 overflow-hidden rounded-full ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`}><div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${progress}%` }} /></div></div><div className={`mt-4 flex flex-wrap items-center justify-between gap-3 border-t pt-4 ${isDark ? 'border-slate-700' : 'border-slate-100'}`}><div className={`text-xs ${muted}`}><span>Última aplicação: {formatTherapeuticPlanDate(program.lastAppliedAt)}</span><span className="mx-2">·</span><span>{masteryCriterionLabel(program.mastery_criteria)}</span></div><button type="button" className="text-sm text-violet-500 hover:text-violet-400" onClick={() => { setSelectedProgramId(String(program.id)); setDetailTab('overview'); }}>Abrir programa</button></div>{actionProgramId === String(program.id) && <div className="absolute inset-0 z-30 flex items-center justify-center rounded-2xl bg-slate-950/25 backdrop-blur-[1px]"><Loader2 size={22} className="animate-spin text-white" /></div>}</article>;
       })}</div> : <div className={`rounded-2xl border border-dashed py-12 text-center ${isDark ? 'border-slate-700' : 'border-slate-200'}`}><Target size={30} className={`mx-auto ${isDark ? 'text-slate-600' : 'text-slate-300'}`} /><p className={`mt-3 text-sm ${muted}`}>{query || filter !== 'all' ? 'Nenhum programa encontrado com estes filtros.' : 'Ainda não há programas individualizados neste plano.'}</p>{canCreate && !query && filter === 'all' && <button type="button" className="mt-4 text-sm text-violet-500" onClick={startCreation}>Adicionar o primeiro programa</button>}</div>}
 
-      {creationStep && <div className="fixed inset-0 z-[120] flex items-end justify-center bg-slate-950/55 p-0 backdrop-blur-sm sm:items-center sm:p-4"><div className={`flex max-h-[94vh] w-full max-w-5xl flex-col rounded-t-3xl border shadow-2xl sm:rounded-3xl ${panel}`} role="dialog" aria-modal="true"><header className={`flex items-center justify-between gap-3 border-b px-5 py-4 sm:px-6 ${isDark ? 'border-slate-700' : 'border-slate-100'}`}><div className="flex min-w-0 items-center gap-3">{creationStep !== 'source' && <button type="button" className={`rounded-xl p-2 ${isDark ? 'hover:bg-slate-800' : 'hover:bg-slate-100'}`} onClick={() => setCreationStep(creationStep === 'review' ? 'form' : 'source')}><ChevronLeft size={18} /></button>}<div><h3 className={`text-lg font-medium ${text}`}>{editingProgramId ? 'Editar programa' : creationStep === 'source' ? 'Como deseja criar este programa?' : creationStep === 'templates' ? 'Biblioteca de programas' : creationStep === 'protocol' ? 'Criar a partir de protocolo' : creationStep === 'recommendation' ? 'Criar a partir de recomendação' : creationStep === 'review' ? 'Revise antes de salvar' : `Adaptar programa para ${patientName}`}</h3><p className={`mt-0.5 text-xs ${muted}`}>Escolher → adaptar → ativar</p></div></div><button type="button" className={`rounded-xl p-2 ${isDark ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-500 hover:bg-slate-100'}`} onClick={resetCreation}><X size={19} /></button></header><div className="overflow-y-auto p-5 sm:p-6">{formError && <div className={`mb-4 rounded-xl border px-4 py-3 text-sm ${isDark ? 'border-rose-400/25 bg-rose-500/10 text-rose-100' : 'border-rose-200 bg-rose-50 text-rose-700'}`}>{formError}</div>}{renderCreationBody()}</div></div></div>}
+      <ResponsiveDrawer
+        open={Boolean(creationStep)}
+        title={creationTitle}
+        titleId="therapeutic-program-drawer-title"
+        description={`Origem → Adaptação → Revisão · Etapa atual: ${creationStage}`}
+        onRequestClose={requestCloseCreation}
+        returnFocusRef={addProgramButtonRef}
+        scrollContainerRef={drawerScrollRef}
+        isDark={isDark}
+        headerLeading={creationStep && creationStep !== 'source' && !(editingProgramId && creationStep === 'form') ? <button type="button" className={`rounded-xl p-2 ${isDark ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-500 hover:bg-slate-100'}`} onClick={goBackCreation} aria-label="Voltar à etapa anterior"><ChevronLeft size={18} /></button> : null}
+        footer={renderCreationFooter()}
+      >
+        {formError && <div className={`mb-4 rounded-xl border px-4 py-3 text-sm ${isDark ? 'border-rose-400/25 bg-rose-500/10 text-rose-100' : 'border-rose-200 bg-rose-50 text-rose-700'}`}>{formError}</div>}
+        {renderCreationBody()}
+      </ResponsiveDrawer>
 
       {selectedProgram && <div className="fixed inset-0 z-[115] flex items-end justify-center bg-slate-950/55 p-0 backdrop-blur-sm sm:items-center sm:p-4"><div className={`flex max-h-[94vh] w-full max-w-5xl flex-col rounded-t-3xl border shadow-2xl sm:rounded-3xl ${panel}`} role="dialog" aria-modal="true"><header className={`flex items-start justify-between gap-3 border-b px-5 py-4 sm:px-6 ${isDark ? 'border-slate-700' : 'border-slate-100'}`}><div><div className="flex flex-wrap items-center gap-2"><h3 className={`text-xl font-medium ${text}`}>{selectedProgram.name}</h3><span className={`rounded-full border px-2.5 py-1 text-[10px] ${statusClass(selectedProgram.status)}`}>{THERAPEUTIC_PROGRAM_STATUS_LABELS[normalizeTherapeuticProgramStatus(selectedProgram.status)]}</span></div><p className={`mt-1 text-xs ${muted}`}>Origem: {SOURCE_LABELS[String(selectedProgram.origin_type || 'manual')] || 'Programa individual'} · Versão {selectedProgram.version || 1}</p></div><button type="button" className={`rounded-xl p-2 ${isDark ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-500 hover:bg-slate-100'}`} onClick={() => setSelectedProgramId('')}><X size={19} /></button></header><nav className={`flex gap-1 overflow-x-auto border-b px-5 py-2 sm:px-6 ${isDark ? 'border-slate-700' : 'border-slate-100'}`}>{[['overview', 'Visão geral'], ['targets', 'Alvos'], ['procedure', 'Procedimento'], ['progress', 'Progresso'], ['history', 'Histórico']].map(([value, label]) => <button key={value} type="button" className={`shrink-0 rounded-lg px-3 py-2 text-sm ${detailTab === value ? 'bg-violet-600 text-white' : isDark ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-600 hover:bg-slate-100'}`} onClick={() => setDetailTab(value)}>{label}</button>)}</nav><div className="overflow-y-auto p-5 sm:p-6">{detailTab === 'overview' && <div className="grid grid-cols-1 gap-4 md:grid-cols-2"><div className={`rounded-2xl border p-5 md:col-span-2 ${subpanel}`}><p className={`text-xs ${muted}`}>Objetivo</p><p className={`mt-2 leading-relaxed ${text}`}>{selectedProgram.objective || 'Não informado.'}</p></div><div className={`rounded-2xl border p-4 ${subpanel}`}><p className={`text-xs ${muted}`}>Critério de domínio</p><p className={`mt-1 text-sm ${text}`}>{masteryCriterionLabel(selectedProgram.mastery_criteria)}</p></div><div className={`rounded-2xl border p-4 ${subpanel}`}><p className={`text-xs ${muted}`}>Próxima revisão</p><p className={`mt-1 text-sm ${text}`}>{formatTherapeuticPlanDate(selectedProgram.review_due_date)}</p></div><div className={`rounded-2xl border p-4 ${subpanel}`}><p className={`text-xs ${muted}`}>Responsáveis</p><p className={`mt-1 text-sm ${text}`}>{Array.isArray(selectedProgram.responsible_professional_ids) && selectedProgram.responsible_professional_ids.length ? `${selectedProgram.responsible_professional_ids.length} profissional(is)` : 'Equipe clínica'}</p></div><div className={`rounded-2xl border p-4 ${subpanel}`}><p className={`text-xs ${muted}`}>Última aplicação</p><p className={`mt-1 text-sm ${text}`}>{formatTherapeuticPlanDate(selectedProgram.lastAppliedAt)}</p></div>{canManageStructure && !['completed', 'archived'].includes(normalizeTherapeuticProgramStatus(selectedProgram.status)) && <button type="button" className={secondaryButton} onClick={() => editProgram(selectedProgram)}><Pencil size={16} /> Editar programa</button>}</div>}{detailTab === 'targets' && <div className="space-y-3">{(selectedProgram.targets || []).map((target: any, index: number) => <div key={target.id || `${target.name}-${index}`} className={`flex items-center justify-between gap-3 rounded-2xl border p-4 ${subpanel}`}><div><p className={`font-medium ${text}`}>{target.name}</p><p className={`mt-1 text-xs ${muted}`}>{target.normalizedStatus === 'mastered' ? 'Dominado' : target.normalizedStatus === 'maintenance' ? 'Em manutenção' : target.normalizedStatus === 'paused' ? 'Pausado' : target.normalizedStatus === 'teaching' ? 'Em ensino' : 'Não iniciado'}</p></div><span className={`rounded-full px-2.5 py-1 text-xs ${target.normalizedStatus === 'mastered' ? isDark ? 'bg-emerald-500/15 text-emerald-200' : 'bg-emerald-50 text-emerald-700' : isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>{index + 1}</span></div>)}{canManageStructure && !['completed', 'archived'].includes(normalizeTherapeuticProgramStatus(selectedProgram.status)) && <div className={`flex flex-col gap-2 rounded-2xl border p-4 sm:flex-row ${subpanel}`}><input className={field} value={newTargetName} maxLength={240} onChange={(event) => setNewTargetName(event.target.value)} placeholder="Nome do novo alvo" /><button type="button" className="shrink-0 rounded-xl bg-violet-600 px-4 py-2.5 text-sm text-white disabled:opacity-50" disabled={!newTargetName.trim() || actionProgramId === String(selectedProgram.id)} onClick={() => void addTargetToProgram()}>{actionProgramId === String(selectedProgram.id) ? 'Adicionando...' : 'Adicionar alvo'}</button></div>}</div>}{detailTab === 'procedure' && <div className="grid grid-cols-1 gap-4 md:grid-cols-2">{[['Instrução / antecedente', 'antecedent'], ['Resposta esperada', 'expectedResponse'], ['Materiais', 'materials'], ['Hierarquia de ajuda', 'promptHierarchy'], ['Reforçamento', 'reinforcement'], ['Correção de erro', 'errorCorrection'], ['Generalização', 'generalization'], ['Manutenção', 'maintenance']].map(([label, key]) => <div key={key} className={`rounded-2xl border p-4 ${subpanel}`}><p className={`text-xs ${muted}`}>{label}</p><p className={`mt-2 whitespace-pre-wrap text-sm leading-relaxed ${text}`}>{selectedProgram?.advanced_settings?.[key] || 'Não informado.'}</p></div>)}</div>}{detailTab === 'progress' && <div className="space-y-4"><div className="grid grid-cols-2 gap-3 md:grid-cols-4">{[['Alvos', selectedProgram.targets.length], ['Dominados', selectedProgram.masteredTargetCount], ['Em ensino', selectedProgram.targets.filter((target: any) => target.normalizedStatus === 'teaching').length], ['Aplicações recentes', selectedProgram.lastAppliedAt ? 1 : 0]].map(([label, value]) => <div key={String(label)} className={`rounded-2xl border p-4 ${subpanel}`}><p className={`text-xs ${muted}`}>{label}</p><p className={`mt-1 text-xl font-medium ${text}`}>{value}</p></div>)}</div><div className={`rounded-2xl border p-5 ${subpanel}`}><p className={`text-sm ${text}`}>Progresso por alvo</p><div className="mt-4 space-y-3">{selectedProgram.targets.map((target: any) => <div key={target.id}><div className={`mb-1 flex justify-between text-xs ${muted}`}><span>{target.name}</span><span>{target.normalizedStatus === 'mastered' ? '100%' : target.normalizedStatus === 'maintenance' ? '90%' : 'Em coleta'}</span></div><div className={`h-2 rounded-full ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`}><div className="h-full rounded-full bg-emerald-500" style={{ width: target.normalizedStatus === 'mastered' ? '100%' : target.normalizedStatus === 'maintenance' ? '90%' : '15%' }} /></div></div>)}</div></div></div>}{detailTab === 'history' && <div className="space-y-3">{(selectedProgram.history || []).map((event: any) => <div key={event.id} className={`flex gap-3 rounded-2xl border p-4 ${subpanel}`}><div className={`mt-0.5 rounded-lg p-2 ${isDark ? 'bg-slate-800 text-violet-300' : 'bg-violet-50 text-violet-600'}`}><History size={15} /></div><div><p className={`text-sm ${text}`}>{String(event.event_type || 'UPDATED').replaceAll('_', ' ').toLocaleLowerCase('pt-BR')}</p><p className={`mt-1 text-xs ${muted}`}>{formatTherapeuticPlanDate(event.created_at)}</p></div></div>)}{!(selectedProgram.history || []).length && <p className={`rounded-2xl border border-dashed p-8 text-center text-sm ${isDark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}>Nenhuma alteração registrada.</p>}</div>}</div></div></div>}
     </section>

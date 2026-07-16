@@ -4730,23 +4730,25 @@ export const dataService = {
     }
   },
 
-  async getNextSessionRecommendations(patientId: string, options: { sourceSessionId?: string; focusType?: string; limit?: number } = {}) {
+  async getNextSessionRecommendations(patientId: string, options: { sourceSessionId?: string; focusType?: string; limit?: number; before?: string; force?: boolean } = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse([]);
     const endpoint = endpointWithQuery(`/api/aba/patients/${encodeURIComponent(String(patientId))}/next-session/recommendations`, {
       sourceSessionId: options.sourceSessionId,
       focusType: options.focusType,
-      limit: normalizeListLimit(options.limit, 20, 50)
+      limit: normalizeListLimit(options.limit, 20, 50),
+      before: options.before,
+      reload: options.force ? Date.now() : undefined,
     });
     try {
       const response = await fetchClinical(endpoint, {
         headers: await buildConditionalHeaders(endpoint, 'aba'),
         credentials: 'include'
       }, { helperName: 'getNextSessionRecommendations', operation: 'list', table: 'aba_clinical_recommendations', hasExplicitColumns: true });
-      if (response.ok) return await response.json();
+      return await safeJson(response);
     } catch (error) {
       if (import.meta.env.DEV) console.log('Fetching ABA recommendations from local state only...');
+      return { success: false, error: 'Não foi possível carregar as recomendações agora.' };
     }
-    return { success: true, data: [] };
   },
 
   async generateNextSessionRecommendations(patientId: string, payload: any = {}) {
@@ -4810,6 +4812,22 @@ export const dataService = {
       return await safeJson(response);
     } catch (error) {
       return { success: false, error: 'Não foi possível editar a sugestão agora.' };
+    }
+  },
+
+  async linkAbaRecommendationTarget(recommendationId: string, payload: { targetId: string }) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
+    const endpoint = `/api/aba/recommendations/${encodeURIComponent(String(recommendationId))}/link-target`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, { helperName: 'linkAbaRecommendationTarget', operation: 'write', table: 'aba_clinical_recommendations', hasExplicitColumns: true });
+      return await safeJson(response);
+    } catch (error) {
+      return { success: false, error: 'Não foi possível vincular a habilidade de origem agora.' };
     }
   },
 

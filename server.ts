@@ -50986,7 +50986,225 @@ async function startServer() {
     if (code.includes('THERAPEUTIC_PROGRAM_VERSION_CONFLICT')) return 'Este programa foi atualizado por outra pessoa. Recarregue antes de continuar.';
     if (code.includes('THERAPEUTIC_TARGET_ALREADY_EXISTS')) return 'Este alvo já existe no programa.';
     if (code.includes('THERAPEUTIC_PROGRAM_READ_ONLY')) return 'Programas concluídos ou arquivados não podem receber novos alvos.';
+    if (code.includes('THERAPEUTIC_RECOMMENDATION_ALREADY_CONVERTED')) return 'Esta recomendação já originou um programa.';
+    if (code.includes('THERAPEUTIC_RECOMMENDATION_CONTEXT_INCOMPLETE')) return 'A recomendação não possui uma habilidade de origem confiável.';
     return 'Não foi possível salvar o programa terapêutico agora.';
+  };
+
+  const emptySupabaseListResult = () => Promise.resolve({ data: [] as any[], error: null });
+
+  const stripProfessionalTitlePrefix = (value: unknown) => sanitizeString(value, 180)
+    .replace(/^(psicólogo|psicóloga|terapeuta ocupacional|acompanhante terapêutico|acompanhante terapêutica|aplicador aba|aplicadora aba|terapeuta|profissional)\s+/i, '')
+    .trim();
+
+  const enrichTherapeuticRecommendationContexts = async (params: {
+    recommendations: any[];
+    patientId: string;
+    clinicId: string;
+    organizationId: string;
+  }) => {
+    const rows = Array.isArray(params.recommendations) ? params.recommendations : [];
+    if (!rows.length) return { rows: [], queryCount: 0 };
+    const recommendationIds = Array.from(new Set(rows.map((row) => sanitizeString(row?.id, 180)).filter(Boolean))).slice(0, 200);
+    const targetIds = Array.from(new Set(rows.map((row) => sanitizeString(row?.target_id || row?.targetId, 180)).filter(Boolean))).slice(0, 200);
+    const behaviorIds = Array.from(new Set(rows.map((row) => sanitizeString(row?.behavior_id || row?.behaviorId, 180)).filter(Boolean))).slice(0, 200);
+    const sessionIds = Array.from(new Set(rows.map((row) => sanitizeString(row?.source_session_id || row?.sourceSessionId, 180)).filter(Boolean))).slice(0, 200);
+
+    const [targetResult, behaviorResult, sessionResult, convertedProgramResult] = await Promise.all([
+      targetIds.length
+        ? supabase
+            .from('aba_targets')
+            .select(ABA_TARGET_RECOMMENDATION_SELECT)
+            .eq('organization_id', params.organizationId)
+            .eq('patient_id', params.patientId)
+            .in('id', targetIds)
+            .limit(200)
+        : emptySupabaseListResult(),
+      behaviorIds.length
+        ? supabase
+            .from('aba_behavior_definitions')
+            .select('id,organization_id,clinic_id,patient_id,name,operational_definition,measurement_type,updated_at,created_at')
+            .eq('organization_id', params.organizationId)
+            .eq('patient_id', params.patientId)
+            .in('id', behaviorIds)
+            .limit(200)
+        : emptySupabaseListResult(),
+      sessionIds.length
+        ? supabase
+            .from('aba_sessions')
+            .select(ABA_SESSION_LIST_SELECT)
+            .eq('clinic_id', params.clinicId)
+            .eq('patient_id', params.patientId)
+            .in('id', sessionIds)
+            .limit(200)
+        : emptySupabaseListResult(),
+      recommendationIds.length
+        ? supabase
+            .from('aba_programs')
+            .select(THERAPEUTIC_PROGRAM_SELECT)
+            .eq('organization_id', params.organizationId)
+            .eq('patient_id', params.patientId)
+            .eq('origin_type', 'recommendation')
+            .in('origin_id', recommendationIds)
+            .limit(200)
+        : emptySupabaseListResult()
+    ]);
+    for (const result of [targetResult, behaviorResult, sessionResult, convertedProgramResult]) {
+      if (result.error) throw result.error;
+    }
+
+    const targetById = new Map((targetResult.data || []).map((target: any) => [String(target.id), target]));
+    const behaviorById = new Map((behaviorResult.data || []).map((behavior: any) => [String(behavior.id), behavior]));
+    const sessionById = new Map((sessionResult.data || []).map((session: any) => [String(session.id), session]));
+    const convertedProgramByRecommendationId = new Map<string, any>();
+    for (const program of convertedProgramResult.data || []) {
+      const recommendationId = sanitizeString((program as any)?.origin_id, 180);
+      if (recommendationId && !convertedProgramByRecommendationId.has(recommendationId)) convertedProgramByRecommendationId.set(recommendationId, program);
+    }
+
+    const sourceProgramIds = Array.from(new Set(rows.flatMap((row) => {
+      const target = targetById.get(sanitizeString(row?.target_id || row?.targetId, 180));
+      return [sanitizeString(row?.program_id || row?.programId, 180), sanitizeString(target?.program_id || target?.programId, 180)];
+    }).filter(Boolean))).slice(0, 200);
+    const professionalIds = Array.from(new Set(rows.flatMap((row) => {
+      const evidence = row?.evidence && typeof row.evidence === 'object' ? row.evidence : {};
+      const session = sessionById.get(sanitizeString(row?.source_session_id || row?.sourceSessionId, 180));
+      return [
+        sanitizeString(session?.therapist_id || session?.therapistId, 120),
+        sanitizeString(evidence?.responsible_professional_id || evidence?.responsibleProfessionalId, 120),
+        sanitizeString(row?.accepted_by || row?.acceptedBy, 120)
+      ];
+    }).filter(Boolean))).slice(0, 200);
+
+    const [sourceProgramResult, userResult, profileResult] = await Promise.all([
+      sourceProgramIds.length
+        ? supabase
+            .from('aba_programs')
+            .select(THERAPEUTIC_PROGRAM_SELECT)
+            .eq('organization_id', params.organizationId)
+            .eq('patient_id', params.patientId)
+            .in('id', sourceProgramIds)
+            .limit(200)
+        : emptySupabaseListResult(),
+      professionalIds.length
+        ? supabase
+            .from('users')
+            .select('id,name,email,role,clinic_id')
+            .eq('clinic_id', params.clinicId)
+            .in('id', professionalIds)
+            .limit(200)
+        : emptySupabaseListResult(),
+      professionalIds.length
+        ? supabase
+            .from('professional_profiles')
+            .select('user_id,full_name,metadata')
+            .in('user_id', professionalIds)
+            .limit(200)
+        : emptySupabaseListResult()
+    ]);
+    if (sourceProgramResult.error) throw sourceProgramResult.error;
+    if (userResult.error && !hasMissingFinancialSchema(userResult.error)) throw userResult.error;
+    if (profileResult.error && !hasMissingFinancialSchema(profileResult.error) && !isMissingRelationError(profileResult.error)) throw profileResult.error;
+
+    const sourceProgramById = new Map((sourceProgramResult.data || []).map((program: any) => [String(program.id), program]));
+    const userById = new Map((userResult.data || []).map((user: any) => [String(user.id), user]));
+    const profileByUserId = new Map((profileResult.data || []).map((profile: any) => [String(profile.user_id), profile]));
+    const recommendationTypes = ABA_RECOMMENDATION_TYPES;
+
+    const enriched = rows.map((recommendation) => {
+      const recommendationId = sanitizeString(recommendation?.id, 180);
+      const targetId = sanitizeString(recommendation?.target_id || recommendation?.targetId, 180);
+      const target: any = targetById.get(targetId) || null;
+      const behaviorId = sanitizeString(recommendation?.behavior_id || recommendation?.behaviorId, 180);
+      const behavior: any = behaviorById.get(behaviorId) || null;
+      const directProgramId = sanitizeString(recommendation?.program_id || recommendation?.programId, 180);
+      const targetProgramId = sanitizeString(target?.program_id || target?.programId, 180);
+      const program: any = sourceProgramById.get(targetProgramId || directProgramId) || null;
+      const sourceSessionId = sanitizeString(recommendation?.source_session_id || recommendation?.sourceSessionId, 180);
+      const session: any = sessionById.get(sourceSessionId) || null;
+      const evidence = recommendation?.evidence && typeof recommendation.evidence === 'object' ? recommendation.evidence : {};
+      const professionalId = sanitizeString(
+        session?.therapist_id || session?.therapistId || evidence?.responsible_professional_id || evidence?.responsibleProfessionalId || recommendation?.accepted_by,
+        120
+      );
+      const user: any = userById.get(professionalId) || null;
+      const profile: any = profileByUserId.get(professionalId) || null;
+      const professionalTitle = professionalId
+        ? readProfessionalTitleFromSource({ metadata: profile?.metadata, professionalTitle: profile?.metadata?.professionalTitle || profile?.metadata?.professional_title }, user?.role === 'therapist' ? DEFAULT_PROFESSIONAL_TITLE : 'Profissional')
+        : '';
+      const professionalName = stripProfessionalTitlePrefix(profile?.full_name || user?.name || user?.email);
+      const convertedProgram: any = convertedProgramByRecommendationId.get(recommendationId) || null;
+      const type = sanitizeString(recommendation?.recommendation_type || recommendation?.recommendationType, 80).toUpperCase();
+      const contextIssues: string[] = [];
+      if (!recommendationTypes.has(type)) contextIssues.push('tipo de recomendação não reconhecido');
+      if (!targetId) contextIssues.push('habilidade de origem ausente');
+      else if (!target) contextIssues.push('habilidade fora do paciente ou da clínica atual');
+      if (target && directProgramId && targetProgramId && directProgramId !== targetProgramId) contextIssues.push('programa de origem divergente');
+      const status = sanitizeString(recommendation?.status, 40).toUpperCase();
+      const canCreateProgram = Boolean(target && recommendationTypes.has(type) && !convertedProgram && !['REJECTED', 'EXPIRED'].includes(status) && contextIssues.length === 0);
+      const periodStart = sanitizeString(evidence?.periodStart || evidence?.period_start || evidence?.dateFrom || evidence?.date_from || evidence?.windowStart || evidence?.window_start, 40) || null;
+      const periodEnd = sanitizeString(evidence?.periodEnd || evidence?.period_end || evidence?.dateTo || evidence?.date_to || evidence?.windowEnd || evidence?.window_end, 40) || null;
+      const occurredAt = session?.actual_start_at || session?.started_at || session?.scheduled_start_at || session?.reference_date || session?.created_at || null;
+      return {
+        ...recommendation,
+        recommendation_id: recommendationId,
+        can_create_program: canCreateProgram,
+        context_issues: contextIssues,
+        clinical_context: {
+          patient: { id: params.patientId },
+          target: target ? {
+            id: target.id,
+            name: target.name,
+            description: target.description || null,
+            mastery_criteria: target.mastery_criteria || {},
+            protocol_id: target.protocol_id || null,
+            protocol_title: target.protocol_title || null,
+            domain_id: target.domain_id || null,
+            domain_name: target.domain_name || null
+          } : null,
+          program: program ? {
+            id: program.id,
+            name: program.name,
+            objective: program.objective || program.description || null,
+            category: program.category || null
+          } : null,
+          behavior: behavior ? {
+            id: behavior.id,
+            name: behavior.name,
+            description: behavior.operational_definition || null,
+            measurement_type: behavior.measurement_type || null
+          } : null,
+          protocol: target?.protocol_id ? { id: target.protocol_id, title: target.protocol_title || 'Protocolo de origem' } : null,
+          domain: target?.domain_id || target?.domain_name ? { id: target.domain_id || null, name: target.domain_name || recommendation?.domain || null } : null,
+          assessment: evidence?.evaluationId || evidence?.evaluation_id ? {
+            id: evidence.evaluationId || evidence.evaluation_id,
+            type: 'mastery_evaluation',
+            label: 'Avaliação de maestria'
+          } : null,
+          source_session: session ? { id: session.id, occurred_at: occurredAt, professional_id: professionalId || null } : null,
+          period: periodStart || periodEnd ? { start: periodStart, end: periodEnd } : null,
+          indicator: {
+            metric_name: recommendation?.metric_name || null,
+            previous_value: recommendation?.previous_value ?? null,
+            current_value: recommendation?.current_value ?? null,
+            delta_value: recommendation?.delta_value ?? null,
+            reason: recommendation?.summary || recommendation?.rationale || null
+          },
+          responsible_professional: professionalId ? {
+            id: professionalId,
+            name: professionalName || 'Profissional',
+            title: professionalTitle || 'Profissional',
+            display_name: `${professionalTitle || 'Profissional'} ${professionalName || ''}`.trim()
+          } : null,
+          generated_at: recommendation?.created_at || null,
+          converted_program: convertedProgram ? { id: convertedProgram.id, name: convertedProgram.name, status: convertedProgram.status } : null
+        }
+      };
+    });
+    return {
+      rows: enriched,
+      queryCount: 4 + (sourceProgramIds.length ? 1 : 0) + (professionalIds.length ? 2 : 0)
+    };
   };
 
   app.get('/api/aba/patients/:patientId/therapeutic-plan', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
@@ -51153,6 +51371,10 @@ async function startServer() {
         : (requestedStatus === 'draft' ? 'draft' : 'awaiting_approval');
       const originType = sanitizeString(req.body?.originType || req.body?.origin_type || 'manual', 40).toLowerCase();
       const originId = sanitizeString(req.body?.originId || req.body?.origin_id, 180) || null;
+      let resolvedProtocolId = sanitizeString(req.body?.protocolId || req.body?.protocol_id, 180) || null;
+      let resolvedProtocolTitle = sanitizeTextField(req.body?.protocolTitle || req.body?.protocol_title, 240) || null;
+      let resolvedDomainId = sanitizeString(req.body?.domainId || req.body?.domain_id, 180) || null;
+      let resolvedDomainName = sanitizeTextField(req.body?.domainName || req.body?.domain_name, 240) || null;
       const targets = (Array.isArray(req.body?.targets) ? req.body.targets : [])
         .slice(0, 50)
         .map((target: any) => ({
@@ -51163,11 +51385,58 @@ async function startServer() {
         .filter((target: any) => target.name);
       if (!targets.length) return res.status(400).json({ success: false, error: 'Adicione pelo menos um alvo inicial.' });
 
+      if (originType === 'recommendation' && !originId) {
+        return res.status(422).json({ success: false, error: 'THERAPEUTIC_RECOMMENDATION_CONTEXT_INCOMPLETE', message: 'Selecione uma recomendação com origem clínica identificada.' });
+      }
       if (originType === 'recommendation' && originId) {
         const recommendation = await fetchAbaRecommendationById(originId, clinicId);
         if (!recommendation?.id || String(recommendation.patient_id || '') !== patientId || String(recommendation.organization_id || '') !== organizationId) {
           return res.status(400).json({ success: false, error: 'A recomendação não pertence a este paciente.' });
         }
+        const recommendationStatus = sanitizeString(recommendation.status, 40).toUpperCase();
+        const recommendationType = sanitizeString(recommendation.recommendation_type, 80).toUpperCase();
+        const recommendationTargetId = sanitizeString(recommendation.target_id, 180);
+        const [convertedResult, targetResult] = await Promise.all([
+          supabase
+            .from('aba_programs')
+            .select(THERAPEUTIC_PROGRAM_SELECT)
+            .eq('organization_id', organizationId)
+            .eq('patient_id', patientId)
+            .eq('origin_type', 'recommendation')
+            .eq('origin_id', originId)
+            .order('created_at', { ascending: true })
+            .limit(1)
+            .maybeSingle(),
+          recommendationTargetId
+            ? supabase
+                .from('aba_targets')
+                .select(ABA_TARGET_RECOMMENDATION_SELECT)
+                .eq('organization_id', organizationId)
+                .eq('patient_id', patientId)
+                .eq('id', recommendationTargetId)
+                .limit(1)
+                .maybeSingle()
+            : Promise.resolve({ data: null, error: null })
+        ]);
+        if (convertedResult.error || targetResult.error) throw convertedResult.error || targetResult.error;
+        if (convertedResult.data?.id) {
+          return res.json({ success: true, data: convertedResult.data, idempotent: true, message: 'Esta recomendação já originou este programa.' });
+        }
+        const recommendationTarget: any = targetResult.data;
+        const recommendationProgramId = sanitizeString(recommendation.program_id, 180);
+        const targetProgramId = sanitizeString(recommendationTarget?.program_id, 180);
+        if (
+          !ABA_RECOMMENDATION_TYPES.has(recommendationType)
+          || ['REJECTED', 'EXPIRED'].includes(recommendationStatus)
+          || !recommendationTarget?.id
+          || (recommendationProgramId && targetProgramId && recommendationProgramId !== targetProgramId)
+        ) {
+          return res.status(422).json({ success: false, error: 'THERAPEUTIC_RECOMMENDATION_CONTEXT_INCOMPLETE', message: 'Esta recomendação não possui uma habilidade de origem confiável para criar um programa.' });
+        }
+        resolvedProtocolId = sanitizeString(recommendationTarget.protocol_id, 180) || null;
+        resolvedProtocolTitle = sanitizeTextField(recommendationTarget.protocol_title, 240) || null;
+        resolvedDomainId = sanitizeString(recommendationTarget.domain_id, 180) || null;
+        resolvedDomainName = sanitizeTextField(recommendationTarget.domain_name || recommendation.domain, 240) || null;
       }
       if (originType === 'template' && originId) {
         const templateResult = await supabase
@@ -51201,16 +51470,31 @@ async function startServer() {
         p_advanced_settings: sanitizeClinicalPayload(req.body?.advancedSettings || req.body?.advanced_settings || {}),
         p_origin_type: originType,
         p_origin_id: originId,
-        p_protocol_id: sanitizeString(req.body?.protocolId || req.body?.protocol_id, 180) || null,
-        p_protocol_title: sanitizeTextField(req.body?.protocolTitle || req.body?.protocol_title, 240) || null,
-        p_domain_id: sanitizeString(req.body?.domainId || req.body?.domain_id, 180) || null,
-        p_domain_name: sanitizeTextField(req.body?.domainName || req.body?.domain_name, 240) || null,
+        p_protocol_id: resolvedProtocolId,
+        p_protocol_title: resolvedProtocolTitle,
+        p_domain_id: resolvedDomainId,
+        p_domain_name: resolvedDomainName,
         p_review_due_date: sanitizeIsoDateOnly(req.body?.reviewDueDate || req.body?.review_due_date) || null,
         p_status: status,
         p_idempotency_key: idempotencyKey,
         p_actor_id: actorId
       });
       if (error) {
+        if (originType === 'recommendation' && originId && sanitizeString(error?.message || error?.code, 300).includes('THERAPEUTIC_RECOMMENDATION_ALREADY_CONVERTED')) {
+          const existingResult = await supabase
+            .from('aba_programs')
+            .select(THERAPEUTIC_PROGRAM_SELECT)
+            .eq('organization_id', organizationId)
+            .eq('patient_id', patientId)
+            .eq('origin_type', 'recommendation')
+            .eq('origin_id', originId)
+            .order('created_at', { ascending: true })
+            .limit(1)
+            .maybeSingle();
+          if (!existingResult.error && existingResult.data?.id) {
+            return res.json({ success: true, data: existingResult.data, idempotent: true, message: 'Esta recomendação já originou este programa.' });
+          }
+        }
         if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) {
           return res.status(503).json({ success: false, error: 'THERAPEUTIC_PLAN_SCHEMA_UNAVAILABLE', message: 'A estrutura do Plano terapêutico ainda não foi aplicada.' });
         }
@@ -55132,6 +55416,8 @@ async function startServer() {
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
       const sourceSessionId = sanitizeString(req.query?.sourceSessionId || req.query?.source_session_id, 180);
       const limit = parseAbaRecordListLimit(req.query?.limit);
+      const beforeRaw = sanitizeString(req.query?.before, 80);
+      const beforeIso = beforeRaw ? sanitizeIsoDateTime(beforeRaw, '') : '';
       let query = supabase
         .from('aba_clinical_recommendations')
         .select(ABA_CLINICAL_RECOMMENDATION_SELECT)
@@ -55139,15 +55425,34 @@ async function startServer() {
         .eq('patient_id', patientId)
         .in('status', ['SUGGESTED', 'ACCEPTED', 'EDITED', 'REJECTED', 'APPLIED_TO_NEXT_SESSION', 'EXPIRED'])
         .order('created_at', { ascending: false })
-        .limit(limit);
+        .limit(limit + 1);
       if (sourceSessionId) query = query.eq('source_session_id', sourceSessionId);
+      if (beforeIso) query = query.lt('created_at', beforeIso);
       query = applyAbaTenantScope(query, req.session.user, clinicId, organizationId);
       const { data, error } = await query;
       if (error) {
         if (hasMissingFinancialSchema(error)) return res.json({ success: true, data: [] });
         throw error;
       }
-      return res.json({ success: true, data: data || [] });
+      const pageRows = (data || []).slice(0, limit);
+      const hasMore = (data || []).length > limit;
+      const enriched = await enrichTherapeuticRecommendationContexts({
+        recommendations: pageRows,
+        patientId,
+        clinicId,
+        organizationId
+      });
+      return res.json({
+        success: true,
+        data: enriched.rows,
+        meta: {
+          queryCount: enriched.queryCount + 1,
+          batched: true,
+          pageSize: pageRows.length,
+          hasMore,
+          nextCursor: hasMore && pageRows.length ? pageRows[pageRows.length - 1]?.created_at || null : null
+        }
+      });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || 'Não foi possível carregar as sugestões agora.' });
     }
@@ -55245,6 +55550,58 @@ async function startServer() {
       return res.json({ success: true, data: persisted.data });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || 'Não foi possível recusar a sugestão agora.' });
+    }
+  });
+
+  app.post('/api/aba/recommendations/:recommendationId/link-target', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 24 * 1024, 'Vínculo de origem da recomendação ABA')) return;
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
+      const recommendationId = sanitizeString(req.params.recommendationId, 180);
+      const targetId = sanitizeString(req.body?.targetId || req.body?.target_id, 180);
+      if (!recommendationId || !targetId) {
+        return res.status(400).json({ success: false, error: 'Selecione uma habilidade válida para completar a origem.' });
+      }
+
+      const recommendation = await fetchAbaRecommendationById(recommendationId, clinicId);
+      if (!recommendation?.id || String(recommendation.organization_id || '') !== organizationId) {
+        return res.status(404).json({ success: false, error: 'Recomendação não encontrada nesta clínica.' });
+      }
+      const patientId = sanitizeString(recommendation.patient_id, 120);
+      if (!(await canAccessPatientInCurrentClinic(patientId, req.session.user))) {
+        return res.status(403).json({ success: false, error: 'Paciente fora do escopo da clínica.' });
+      }
+
+      const { data, error } = await supabase.rpc('link_therapeutic_recommendation_target', {
+        p_organization_id: organizationId,
+        p_patient_id: patientId,
+        p_recommendation_id: recommendationId,
+        p_target_id: targetId,
+        p_actor_id: actorId
+      });
+      if (error) {
+        const code = sanitizeString(error?.message || error?.code, 400);
+        if (code.includes('THERAPEUTIC_RECOMMENDATION_ALREADY_CONVERTED')) {
+          return res.status(409).json({ success: false, error: 'Esta recomendação já originou um programa.' });
+        }
+        if (code.includes('THERAPEUTIC_RECOMMENDATION_ORIGIN_ALREADY_SET')) {
+          return res.status(409).json({ success: false, error: 'Esta recomendação já possui outra habilidade de origem vinculada.' });
+        }
+        if (code.includes('THERAPEUTIC_RECOMMENDATION_TARGET_SCOPE_INVALID') || code.includes('THERAPEUTIC_RECOMMENDATION_PROGRAM_MISMATCH')) {
+          return res.status(400).json({ success: false, error: 'A habilidade selecionada não pertence ao contexto clínico desta recomendação.' });
+        }
+        if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) {
+          return res.status(503).json({ success: false, error: 'A estrutura de vínculo clínico ainda não está disponível.' });
+        }
+        throw error;
+      }
+      return res.json({ success: true, data, message: 'Habilidade de origem vinculada.' });
+    } catch (error) {
+      return sendRouteDbError(res, '/api/aba/recommendations/:recommendationId/link-target [POST]', error, {
+        fallbackMessage: 'Não foi possível vincular a habilidade de origem agora.'
+      });
     }
   });
 

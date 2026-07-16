@@ -31,6 +31,7 @@
     "test:pei-plan-protocols": "tsx tests/peiPlanProtocols.test.ts",
     "test:pei-plan-tabs": "tsx tests/peiPlanTabs.test.ts",
     "test:therapeutic-plan": "tsx tests/therapeuticPlanPrograms.test.ts",
+    "test:therapeutic-recommendations": "tsx tests/therapeuticProgramDrawerRecommendations.test.ts",
     "test:pei-maintenance-panel": "tsx tests/peiMaintenancePanel.test.ts",
     "test:notes-tasks-fallback": "tsx tests/notesTasksFallback.test.ts",
     "test:offline-sync-resilience": "tsx tests/offlineSyncResilience.test.ts",
