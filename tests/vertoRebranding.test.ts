@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { inflateSync } from 'node:zlib';
@@ -66,27 +67,37 @@ assert.equal(favicon.readUInt16LE(4), 2);
 assert.equal(favicon[6], 16);
 assert.equal(favicon[22], 32);
 
-assert.equal(VERTO_BRAND_VERSION, '20260716-2');
-assert.match(VERTO_BRAND_ASSETS.symbol, /\/branding\/verto\/verto-symbol\.png\?v=20260716-2$/);
-assert.match(VERTO_BRAND_ASSETS.horizontalLogo, /\/branding\/verto\/verto-logo-horizontal\.png\?v=20260716-2$/);
+const horizontalLogoHash = createHash('sha256')
+  .update(readFileSync(asset('verto-logo-horizontal.png')))
+  .digest('hex')
+  .toUpperCase();
+assert.equal(horizontalLogoHash, '3F0CBB4E7AEF4FC506D4A80346BD245578F1397500046031EC071CDDBC5E75AD');
+
+assert.equal(VERTO_BRAND_VERSION, '20260716-3');
+assert.match(VERTO_BRAND_ASSETS.symbol, /\/branding\/verto\/verto-symbol\.png\?v=20260716-3$/);
+assert.match(VERTO_BRAND_ASSETS.horizontalLogo, /\/branding\/verto\/verto-logo-horizontal\.png\?v=20260716-3$/);
 
 const common = read('src/components/Common.tsx');
 assert.match(common, /showText \? VERTO_BRAND_ASSETS\.horizontalLogo : VERTO_BRAND_ASSETS\.symbol/);
 assert.doesNotMatch(common, /assets\/Logoverto|<span[^>]*>\s*verto\s*<\/span>/i);
 
+const landingPage = read('src/components/LandingPage.tsx');
+assert.match(landingPage, /import \{ LogoVerto \} from ['"]\.\/Common['"]/);
+assert.ok((landingPage.match(/<LogoVerto\b/g) || []).length >= 4, 'A LP precisa reutilizar o logotipo oficial');
+
 const index = read('index.html');
-assert.match(index, /\/branding\/verto\/favicon\.ico\?v=20260716-2/);
-assert.match(index, /\/branding\/verto\/verto-favicon-16\.png\?v=20260716-2/);
-assert.match(index, /\/branding\/verto\/verto-favicon-32\.png\?v=20260716-2/);
-assert.match(index, /\/branding\/verto\/verto-apple-touch-icon\.png\?v=20260716-2/);
+assert.match(index, /\/branding\/verto\/favicon\.ico\?v=20260716-3/);
+assert.match(index, /\/branding\/verto\/verto-favicon-16\.png\?v=20260716-3/);
+assert.match(index, /\/branding\/verto\/verto-favicon-32\.png\?v=20260716-3/);
+assert.match(index, /\/branding\/verto\/verto-apple-touch-icon\.png\?v=20260716-3/);
 
 const manifest = JSON.parse(read('public/manifest.webmanifest'));
 assert.deepEqual(
   manifest.icons.map((icon: any) => [icon.src, icon.sizes, icon.purpose]),
   [
-    ['/branding/verto/verto-icon-192.png?v=20260716-2', '192x192', 'any'],
-    ['/branding/verto/verto-icon-512.png?v=20260716-2', '512x512', 'any'],
-    ['/branding/verto/verto-maskable-icon.png?v=20260716-2', '512x512', 'maskable'],
+    ['/branding/verto/verto-icon-192.png?v=20260716-3', '192x192', 'any'],
+    ['/branding/verto/verto-icon-512.png?v=20260716-3', '512x512', 'any'],
+    ['/branding/verto/verto-maskable-icon.png?v=20260716-3', '512x512', 'maskable'],
   ],
 );
 

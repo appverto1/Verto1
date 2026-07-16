@@ -1,4 +1,4 @@
-export const VERTO_BRAND_VERSION = '20260716-2';
+export const VERTO_BRAND_VERSION = '20260716-3';
 
 const withBrandVersion = (path: string) => `${path}?v=${VERTO_BRAND_VERSION}`;
 

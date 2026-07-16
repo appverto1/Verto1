@@ -62,13 +62,14 @@ assert.doesNotMatch(read('src/services/notificationBranding.ts'), /DEFAULT_VERTO
 assert.doesNotMatch(read('src/services/notificationBranding.ts'), /image:\s*input\.branding\.logoUrl/);
 assert.doesNotMatch(read('public/sw.js'), /actions,/);
 assert.doesNotMatch(read('public/sw.js'), /notification_action/);
-assert.match(read('public/sw.js'), /const VERTO_NOTIFICATION_ICON = "\/branding\/verto\/verto-icon-192\.png\?v=20260716-2"/);
-assert.match(read('public/sw.js'), /const VERTO_NOTIFICATION_BADGE = "\/branding\/verto\/verto-notification-badge\.png\?v=20260716-2"/);
+assert.match(read('public/sw.js'), /const VERTO_NOTIFICATION_ICON = "\/branding\/verto\/verto-icon-192\.png\?v=20260716-3"/);
+assert.match(read('public/sw.js'), /const VERTO_NOTIFICATION_BADGE = "\/branding\/verto\/verto-notification-badge\.png\?v=20260716-3"/);
 assert.match(read('public/sw.js'), /const badgeUrl = asNotificationAssetUrl\(VERTO_NOTIFICATION_BADGE\)/);
 assert.doesNotMatch(read('public/sw.js'), /const badgeUrl = asNotificationAssetUrl\(brandLogo/);
-assert.match(read('public/sw.js'), /const SW_VERSION = "verto-branding-v13"/);
+assert.match(read('public/sw.js'), /const SW_VERSION = "verto-branding-v14"/);
 assert.match(read('public/sw.js'), /appointments-clinic-branding-v11/);
 assert.match(read('public/sw.js'), /verto-branding-v12/);
+assert.match(read('public/sw.js'), /verto-branding-v13/);
 assert.match(server, /POST|post\('\/api\/internal\/notifications\/run-appointment-reminders/);
 assert.match(server, /APPOINTMENT_REMINDER_CRON_SECRET/);
 assert.match(server, /crypto\.timingSafeEqual/);
