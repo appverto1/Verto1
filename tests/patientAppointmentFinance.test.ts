@@ -134,6 +134,13 @@ test('migration e aditiva, idempotente e vincula consulta sem duplicidade', () =
   ]) assert.ok(migrationCode.includes(marker), marker);
   assert.match(migrationCode, /on conflict \(organization_id, idempotency_key\) do nothing/i);
   assert.match(migrationCode, /payment_appointment_items[\s\S]*?appointment_id uuid references public\.appointments/i);
+  assert.match(migrationCode, /payment_id text not null/i);
+  assert.match(migrationCode, /alter column payment_id type text using payment_id::text/i);
+  assert.match(migrationCode, /drop constraint if exists %I/i);
+  assert.match(migrationCode, /p\.id::text = new\.payment_id::text[\s\S]*?p\.organization_id = new\.organization_id/i);
+  assert.match(migrationCode, /update of payment_id, organization_id/i);
+  assert.match(migrationCode, /PATIENT_FINANCE_PAYMENT_HAS_DEPENDENCIES/i);
+  assert.match(migrationCode, /apply_patient_financial_operation\([\s\S]*?p_payment_id text/i);
 });
 
 test('regra automatica usa somente plano particular por sessao e nunca cria pagamento', () => {

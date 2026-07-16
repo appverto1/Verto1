@@ -10,6 +10,7 @@ import { RadarDomainAssessmentChart } from './RadarDomainAssessmentChart';
 import { CumulativeGrowthChart } from './CumulativeGrowthChart';
 import { AbaClinicalChartsPanel } from './AbaClinicalChartsPanel';
 import { ProgressReportPDFLayout } from './ProgressReportPDFLayout';
+import { TherapeuticPlanPanel } from './TherapeuticPlanPanel';
 import { ENERGY_TAGS } from './Common';
 import { dataService } from '../services/dataService';
 import { SecureImage, SecureIframe } from './SecureMedia';
@@ -9703,8 +9704,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 <div className="absolute top-0 right-0 w-32 h-32 bg-[#05CD99]/5 rounded-bl-full -z-0"></div>
                 <div className="flex items-center justify-between mb-6 relative z-10">
                   <div>
-                    <h3 className={`text-xl font-semibold tracking-tight ${isPanelDark ? 'text-slate-50' : 'text-gray-800'}`}>PEI - Plano de Ensino Individualizado</h3>
-                    <p className={`text-xs font-semibold uppercase tracking-widest mt-1 ${isPanelDark ? 'text-slate-300' : 'text-gray-500'}`}>Metas e Objetivos de Intervenção</p>
+                    <h3 className={`text-xl font-semibold tracking-tight ${isPanelDark ? 'text-slate-50' : 'text-gray-800'}`}>Plano terapêutico</h3>
+                    <p className={`mt-1 text-xs ${isPanelDark ? 'text-slate-300' : 'text-gray-500'}`}>Objetivos, programas de ensino, alvos e progresso do paciente.</p>
                   </div>
                   <div className="flex gap-2">
                     {peiGoals?.some((g: any) => g.isPriority || g.status === 'in_progress') && (
@@ -9761,6 +9762,19 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
                 {activePeiPlanSubtab === 'teaching' && (
                 <div className="space-y-4 mb-8">
+                  <TherapeuticPlanPanel
+                    patient={patient}
+                    protocols={planProtocolCatalog}
+                    userRole={userRole || resolvedClinicContext?.role || clinicContext?.role}
+                    isDark={isPanelDark}
+                    onStartSession={() => requestSessionStart('fullscreen')}
+                  />
+                  <details className={`rounded-2xl border ${isPanelDark ? 'border-slate-700 bg-slate-900/35' : 'border-slate-200 bg-slate-50/70'}`}>
+                    <summary className={`cursor-pointer list-none px-4 py-3 text-sm ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>
+                      Estruturas legadas do PEI
+                      <span className={`ml-2 text-xs ${isPanelDark ? 'text-slate-500' : 'text-slate-400'}`}>Compatibilidade com metas e registros anteriores</span>
+                    </summary>
+                    <div className="space-y-4 border-t p-4 pt-5 dark:border-slate-700">
                   <div className="flex items-center justify-between mb-2">
                     <h4 className={`text-xs font-semibold uppercase tracking-widest ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>Metas Ativas</h4>
                     <button 
@@ -10090,6 +10104,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                       </div>
                     )}
                   </div>
+                    </div>
+                  </details>
                 </div>
                 )}
                 {activePeiPlanSubtab === 'maintenance' && renderPeiMaintenancePanel()}

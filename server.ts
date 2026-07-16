@@ -50954,6 +50954,538 @@ async function startServer() {
     return { error: null, criteria: sanitizeClinicalPayload(criteria), normalized };
   };
 
+  const THERAPEUTIC_PROGRAM_SELECT = [
+    'id', 'organization_id', 'clinic_id', 'patient_id', 'therapeutic_objective_id',
+    'name', 'description', 'objective', 'category', 'program_type', 'status',
+    'measurement_type', 'mastery_criteria', 'advanced_settings', 'origin_type',
+    'origin_id', 'protocol_id', 'protocol_title', 'domain_id', 'domain_name',
+    'review_due_date', 'responsible_professional_ids', 'version', 'activated_at',
+    'approved_at', 'completed_at', 'created_by', 'created_at', 'updated_at'
+  ].join(',');
+  const THERAPEUTIC_TARGET_SELECT = [
+    'id', 'organization_id', 'clinic_id', 'patient_id', 'program_id', 'name',
+    'description', 'target_type', 'phase', 'protocol_id', 'protocol_title',
+    'domain_id', 'domain_name', 'mastery_criteria', 'clinical_status',
+    'sort_order', 'program_version', 'objective_snapshot', 'measurement_type',
+    'created_at', 'updated_at'
+  ].join(',');
+  const THERAPEUTIC_TEMPLATE_SELECT = [
+    'id', 'organization_id', 'clinic_id', 'source_scope', 'owner_user_id',
+    'name', 'description', 'category', 'objective', 'suggested_targets',
+    'measurement_type', 'mastery_criteria', 'advanced_settings', 'status',
+    'approved_by', 'approved_at', 'created_by', 'created_at', 'updated_at'
+  ].join(',');
+
+  const therapeuticProgramErrorMessage = (error: any) => {
+    const code = sanitizeString(error?.message || error?.code, 300);
+    if (code.includes('THERAPEUTIC_PLAN_PATIENT_SCOPE_INVALID')) return 'O paciente não pertence à clínica atual.';
+    if (code.includes('THERAPEUTIC_PROGRAM_NAME_REQUIRED')) return 'Informe o nome do programa.';
+    if (code.includes('THERAPEUTIC_PROGRAM_OBJECTIVE_REQUIRED')) return 'Informe o objetivo terapêutico.';
+    if (code.includes('THERAPEUTIC_PROGRAM_TARGETS_REQUIRED')) return 'Adicione pelo menos um alvo inicial.';
+    if (code.includes('THERAPEUTIC_PROGRAM_TARGET_LIMIT')) return 'Cada programa pode ter no máximo 50 alvos ativos ou preservados.';
+    if (code.includes('THERAPEUTIC_PROGRAM_VERSION_CONFLICT')) return 'Este programa foi atualizado por outra pessoa. Recarregue antes de continuar.';
+    if (code.includes('THERAPEUTIC_TARGET_ALREADY_EXISTS')) return 'Este alvo já existe no programa.';
+    if (code.includes('THERAPEUTIC_PROGRAM_READ_ONLY')) return 'Programas concluídos ou arquivados não podem receber novos alvos.';
+    return 'Não foi possível salvar o programa terapêutico agora.';
+  };
+
+  app.get('/api/aba/patients/:patientId/therapeutic-plan', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const [programResult, targetResult, objectiveResult, auditResult, trialResult] = await Promise.all([
+        supabase
+          .from('aba_programs')
+          .select(THERAPEUTIC_PROGRAM_SELECT)
+          .eq('clinic_id', clinicId)
+          .eq('patient_id', patientId)
+          .order('updated_at', { ascending: false })
+          .limit(200),
+        supabase
+          .from('aba_targets')
+          .select(THERAPEUTIC_TARGET_SELECT)
+          .eq('clinic_id', clinicId)
+          .eq('patient_id', patientId)
+          .order('sort_order', { ascending: true })
+          .limit(1000),
+        supabase
+          .from('patient_therapeutic_objectives')
+          .select('id,organization_id,clinic_id,patient_id,category,title,description,status,priority,review_due_date,created_at,updated_at')
+          .eq('organization_id', organizationId)
+          .eq('patient_id', patientId)
+          .order('priority', { ascending: false })
+          .limit(200),
+        supabase
+          .from('aba_program_audit_events')
+          .select('id,organization_id,patient_id,program_id,event_type,before_state,after_state,created_by,created_at')
+          .eq('organization_id', organizationId)
+          .eq('patient_id', patientId)
+          .order('created_at', { ascending: false })
+          .limit(300),
+        supabase
+          .from('aba_trials')
+          .select('id,program_id,target_id,occurred_at')
+          .eq('clinic_id', clinicId)
+          .eq('patient_id', patientId)
+          .not('program_id', 'is', null)
+          .order('occurred_at', { ascending: false })
+          .limit(500)
+      ]);
+      const firstError = [programResult.error, targetResult.error, objectiveResult.error, auditResult.error, trialResult.error].find(Boolean);
+      if (firstError) {
+        if (hasMissingFinancialSchema(firstError) || isMissingRelationError(firstError)) {
+          return res.status(503).json({ success: false, error: 'THERAPEUTIC_PLAN_SCHEMA_UNAVAILABLE', message: 'A estrutura do Plano terapêutico ainda não foi aplicada.' });
+        }
+        throw firstError;
+      }
+
+      const targetsByProgram = new Map<string, any[]>();
+      for (const target of targetResult.data || []) {
+        const programId = sanitizeString((target as any)?.program_id, 180);
+        if (!programId) continue;
+        const list = targetsByProgram.get(programId) || [];
+        list.push(target);
+        targetsByProgram.set(programId, list);
+      }
+      const historyByProgram = new Map<string, any[]>();
+      for (const event of auditResult.data || []) {
+        const programId = sanitizeString((event as any)?.program_id, 180);
+        if (!programId) continue;
+        const list = historyByProgram.get(programId) || [];
+        list.push(event);
+        historyByProgram.set(programId, list);
+      }
+      const lastAppliedByProgram = new Map<string, string>();
+      for (const trial of trialResult.data || []) {
+        const programId = sanitizeString((trial as any)?.program_id, 180);
+        const occurredAt = sanitizeString((trial as any)?.occurred_at, 80);
+        if (programId && occurredAt && !lastAppliedByProgram.has(programId)) lastAppliedByProgram.set(programId, occurredAt);
+      }
+      const programs = (programResult.data || []).map((program: any) => ({
+        ...program,
+        targets: targetsByProgram.get(String(program.id)) || [],
+        history: historyByProgram.get(String(program.id)) || [],
+        last_applied_at: lastAppliedByProgram.get(String(program.id)) || null
+      }));
+      return res.json({
+        success: true,
+        data: {
+          programs,
+          objectives: objectiveResult.data || [],
+          targets: targetResult.data || []
+        },
+        meta: { queryCount: 5, batched: true, patientId, organizationId }
+      });
+    } catch (error) {
+      return sendRouteDbError(res, '/api/aba/patients/:patientId/therapeutic-plan [GET]', error, {
+        fallbackMessage: 'Não foi possível carregar o Plano terapêutico agora.'
+      });
+    }
+  });
+
+  app.get('/api/aba/program-templates', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
+      const actorRole = sanitizeString(req.session.user?.role, 80).toLowerCase();
+      const canManageLibrary = ['owner', 'admin', 'coordinator'].includes(actorRole);
+      const includeArchived = String(req.query?.includeArchived || '').toLowerCase() === 'true';
+      const templateQuery = supabase
+        .from('aba_program_templates')
+        .select(THERAPEUTIC_TEMPLATE_SELECT)
+        .or(`source_scope.eq.VERTO,organization_id.eq.${organizationId}`)
+        .in('status', includeArchived ? ['PUBLISHED', 'DRAFT', 'PENDING_APPROVAL', 'ARCHIVED'] : ['PUBLISHED', 'DRAFT', 'PENDING_APPROVAL'])
+        .order('source_scope', { ascending: false })
+        .order('name', { ascending: true })
+        .limit(300);
+      const [templateResult, usageResult] = await Promise.all([
+        templateQuery,
+        supabase
+          .from('aba_programs')
+          .select('origin_id')
+          .eq('organization_id', organizationId)
+          .eq('origin_type', 'template')
+          .not('origin_id', 'is', null)
+          .limit(5000)
+      ]);
+      if (templateResult.error || usageResult.error) {
+        const firstError = templateResult.error || usageResult.error;
+        if (hasMissingFinancialSchema(firstError) || isMissingRelationError(firstError)) {
+          return res.status(503).json({ success: false, error: 'THERAPEUTIC_PLAN_SCHEMA_UNAVAILABLE', message: 'A biblioteca de programas ainda não foi aplicada.' });
+        }
+        throw firstError;
+      }
+      const usageByTemplate = new Map<string, number>();
+      for (const row of usageResult.data || []) {
+        const templateId = sanitizeString((row as any)?.origin_id, 180);
+        if (templateId) usageByTemplate.set(templateId, (usageByTemplate.get(templateId) || 0) + 1);
+      }
+      const visible = (templateResult.data || [])
+        .filter((template: any) => {
+          const scope = String(template.source_scope || '').toUpperCase();
+          const status = String(template.status || '').toUpperCase();
+          if (scope === 'PERSONAL') return String(template.owner_user_id || '') === actorId;
+          return canManageLibrary || status === 'PUBLISHED';
+        })
+        .map((template: any) => ({ ...template, patient_usage_count: usageByTemplate.get(String(template.id)) || 0 }));
+      return res.json({ success: true, data: visible, meta: { queryCount: 2, batched: true } });
+    } catch (error) {
+      return sendRouteDbError(res, '/api/aba/program-templates [GET]', error, {
+        fallbackMessage: 'Não foi possível carregar a biblioteca de programas.'
+      });
+    }
+  });
+
+  app.post('/api/aba/patients/:patientId/therapeutic-programs', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 96 * 1024, 'Programa terapêutico')) return;
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
+      const role = sanitizeString(req.session.user?.role, 80).toLowerCase();
+      const canApprove = ['owner', 'admin', 'coordinator'].includes(role);
+      const requestedStatus = sanitizeString(req.body?.status, 40).toLowerCase();
+      const status = canApprove
+        ? (['draft', 'teaching', 'maintenance'].includes(requestedStatus) ? requestedStatus : 'teaching')
+        : (requestedStatus === 'draft' ? 'draft' : 'awaiting_approval');
+      const originType = sanitizeString(req.body?.originType || req.body?.origin_type || 'manual', 40).toLowerCase();
+      const originId = sanitizeString(req.body?.originId || req.body?.origin_id, 180) || null;
+      const targets = (Array.isArray(req.body?.targets) ? req.body.targets : [])
+        .slice(0, 50)
+        .map((target: any) => ({
+          name: sanitizeTextField(typeof target === 'string' ? target : target?.name, 240),
+          description: sanitizeTextField(typeof target === 'object' ? target?.description : '', 500),
+          masteryCriteria: sanitizeClinicalPayload(typeof target === 'object' ? target?.masteryCriteria || target?.mastery_criteria || {} : {})
+        }))
+        .filter((target: any) => target.name);
+      if (!targets.length) return res.status(400).json({ success: false, error: 'Adicione pelo menos um alvo inicial.' });
+
+      if (originType === 'recommendation' && originId) {
+        const recommendation = await fetchAbaRecommendationById(originId, clinicId);
+        if (!recommendation?.id || String(recommendation.patient_id || '') !== patientId || String(recommendation.organization_id || '') !== organizationId) {
+          return res.status(400).json({ success: false, error: 'A recomendação não pertence a este paciente.' });
+        }
+      }
+      if (originType === 'template' && originId) {
+        const templateResult = await supabase
+          .from('aba_program_templates')
+          .select('id,organization_id,source_scope,owner_user_id,status')
+          .eq('id', originId)
+          .limit(1)
+          .maybeSingle();
+        const template: any = templateResult.data;
+        const templateScope = sanitizeString(template?.source_scope, 40).toUpperCase();
+        const templateStatus = sanitizeString(template?.status, 40).toUpperCase();
+        const sameOrganization = String(template?.organization_id || '') === organizationId;
+        const templateAllowed = template?.id && (
+          (templateScope === 'VERTO' && templateStatus === 'PUBLISHED')
+          || (sameOrganization && templateScope === 'CLINIC' && templateStatus !== 'ARCHIVED' && (canApprove || templateStatus === 'PUBLISHED'))
+          || (sameOrganization && templateScope === 'PERSONAL' && templateStatus !== 'ARCHIVED' && String(template.owner_user_id || '') === actorId)
+        );
+        if (templateResult.error || !templateAllowed) return res.status(400).json({ success: false, error: 'O modelo selecionado não está disponível para esta clínica.' });
+      }
+
+      const idempotencyKey = sanitizeString(req.body?.idempotencyKey || req.body?.idempotency_key, 180) || `therapeutic-program:${patientId}:${crypto.randomUUID()}`;
+      const { data, error } = await supabase.rpc('create_therapeutic_program', {
+        p_organization_id: organizationId,
+        p_patient_id: patientId,
+        p_name: sanitizeTextField(req.body?.name, 240),
+        p_objective: sanitizeTextField(req.body?.objective, 1000),
+        p_category: sanitizeString(req.body?.category || 'OUTRO', 120),
+        p_measurement_type: sanitizeString(req.body?.measurementType || req.body?.measurement_type || 'independent_prompted_no_response', 80),
+        p_mastery_criteria: sanitizeClinicalPayload(req.body?.masteryCriteria || req.body?.mastery_criteria || {}),
+        p_targets: sanitizeClinicalPayload(targets),
+        p_advanced_settings: sanitizeClinicalPayload(req.body?.advancedSettings || req.body?.advanced_settings || {}),
+        p_origin_type: originType,
+        p_origin_id: originId,
+        p_protocol_id: sanitizeString(req.body?.protocolId || req.body?.protocol_id, 180) || null,
+        p_protocol_title: sanitizeTextField(req.body?.protocolTitle || req.body?.protocol_title, 240) || null,
+        p_domain_id: sanitizeString(req.body?.domainId || req.body?.domain_id, 180) || null,
+        p_domain_name: sanitizeTextField(req.body?.domainName || req.body?.domain_name, 240) || null,
+        p_review_due_date: sanitizeIsoDateOnly(req.body?.reviewDueDate || req.body?.review_due_date) || null,
+        p_status: status,
+        p_idempotency_key: idempotencyKey,
+        p_actor_id: actorId
+      });
+      if (error) {
+        if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) {
+          return res.status(503).json({ success: false, error: 'THERAPEUTIC_PLAN_SCHEMA_UNAVAILABLE', message: 'A estrutura do Plano terapêutico ainda não foi aplicada.' });
+        }
+        return res.status(400).json({ success: false, error: therapeuticProgramErrorMessage(error) });
+      }
+      void persistActivityLog({
+        userId: actorId,
+        clinicId,
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email, 180) || 'Equipe',
+        title: status === 'awaiting_approval' ? 'Programa enviado para aprovação' : status === 'draft' ? 'Rascunho de programa criado' : 'Programa terapêutico ativado',
+        content: `${sanitizeTextField(req.body?.name, 240)} foi registrado no Plano terapêutico do paciente.`,
+        type: 'clinical',
+        actionType: 'THERAPEUTIC_PROGRAM_CREATED',
+        payload: { patientId, originType, status }
+      });
+      return res.status(201).json({ success: true, data, message: status === 'awaiting_approval' ? 'Programa enviado para aprovação.' : status === 'draft' ? 'Rascunho salvo.' : 'Programa ativado e disponível nas próximas sessões.' });
+    } catch (error) {
+      return sendRouteDbError(res, '/api/aba/patients/:patientId/therapeutic-programs [POST]', error, {
+        fallbackMessage: 'Não foi possível criar o programa terapêutico.'
+      });
+    }
+  });
+
+  app.patch('/api/aba/patients/:patientId/therapeutic-programs/:programId/status', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const programId = sanitizeString(req.params.programId, 180);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
+      const role = sanitizeString(req.session.user?.role, 80).toLowerCase();
+      const status = sanitizeString(req.body?.status, 40).toLowerCase();
+      if (!['owner', 'admin', 'coordinator'].includes(role) && status !== 'awaiting_approval') {
+        return res.status(403).json({ success: false, error: 'Somente supervisão ou coordenação pode alterar a fase oficial do programa.' });
+      }
+      const { data, error } = await supabase.rpc('update_therapeutic_program_status', {
+        p_organization_id: organizationId,
+        p_patient_id: patientId,
+        p_program_id: programId,
+        p_status: status,
+        p_expected_version: Number.isFinite(Number(req.body?.expectedVersion ?? req.body?.expected_version)) ? Number(req.body?.expectedVersion ?? req.body?.expected_version) : null,
+        p_reason: sanitizeTextField(req.body?.reason, 500) || null,
+        p_idempotency_key: sanitizeString(req.body?.idempotencyKey || req.body?.idempotency_key, 180) || `therapeutic-program-status:${programId}:${status}:${crypto.randomUUID()}`,
+        p_actor_id: actorId
+      });
+      if (error) return res.status(409).json({ success: false, error: therapeuticProgramErrorMessage(error) });
+      return res.json({ success: true, data, message: 'Estado do programa atualizado.' });
+    } catch (error) {
+      return sendRouteDbError(res, '/api/aba/patients/:patientId/therapeutic-programs/:programId/status [PATCH]', error, {
+        fallbackMessage: 'Não foi possível atualizar o programa.'
+      });
+    }
+  });
+
+  app.patch('/api/aba/patients/:patientId/therapeutic-programs/:programId', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 64 * 1024, 'Programa terapêutico')) return;
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const programId = sanitizeString(req.params.programId, 180);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
+      const targets = (Array.isArray(req.body?.targets) ? req.body.targets : [])
+        .slice(0, 50)
+        .map((target: any) => ({
+          name: sanitizeTextField(typeof target === 'string' ? target : target?.name, 240),
+          description: sanitizeTextField(typeof target === 'object' ? target?.description : '', 500),
+          masteryCriteria: sanitizeClinicalPayload(typeof target === 'object' ? target?.masteryCriteria || target?.mastery_criteria || {} : {})
+        }))
+        .filter((target: any) => target.name);
+      const { data, error } = await supabase.rpc('update_therapeutic_program', {
+        p_organization_id: organizationId,
+        p_patient_id: patientId,
+        p_program_id: programId,
+        p_name: sanitizeTextField(req.body?.name, 240),
+        p_objective: sanitizeTextField(req.body?.objective, 1000),
+        p_category: sanitizeString(req.body?.category || 'OUTRO', 120),
+        p_measurement_type: sanitizeString(req.body?.measurementType || req.body?.measurement_type || 'independent_prompted_no_response', 80),
+        p_mastery_criteria: sanitizeClinicalPayload(req.body?.masteryCriteria || req.body?.mastery_criteria || {}),
+        p_advanced_settings: sanitizeClinicalPayload(req.body?.advancedSettings || req.body?.advanced_settings || {}),
+        p_targets: sanitizeClinicalPayload(targets),
+        p_review_due_date: sanitizeIsoDateOnly(req.body?.reviewDueDate || req.body?.review_due_date) || null,
+        p_expected_version: Number.isFinite(Number(req.body?.expectedVersion ?? req.body?.expected_version)) ? Number(req.body?.expectedVersion ?? req.body?.expected_version) : null,
+        p_reason: sanitizeTextField(req.body?.reason || 'Programa atualizado', 500),
+        p_idempotency_key: sanitizeString(req.body?.idempotencyKey || req.body?.idempotency_key, 180) || `therapeutic-program-update:${programId}:${crypto.randomUUID()}`,
+        p_actor_id: actorId
+      });
+      if (error) {
+        if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) {
+          return res.status(503).json({ success: false, error: 'THERAPEUTIC_PLAN_SCHEMA_UNAVAILABLE', message: 'A estrutura do Plano terapêutico ainda não foi aplicada.' });
+        }
+        return res.status(400).json({ success: false, error: therapeuticProgramErrorMessage(error) });
+      }
+      return res.json({ success: true, data, message: 'Programa atualizado e versionado.' });
+    } catch (error) {
+      return sendRouteDbError(res, '/api/aba/patients/:patientId/therapeutic-programs/:programId [PATCH]', error, {
+        fallbackMessage: 'Não foi possível atualizar o programa terapêutico.'
+      });
+    }
+  });
+
+  app.post('/api/aba/patients/:patientId/therapeutic-programs/:programId/targets', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const programId = sanitizeString(req.params.programId, 180);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
+      const { data, error } = await supabase.rpc('add_therapeutic_program_target', {
+        p_organization_id: organizationId,
+        p_patient_id: patientId,
+        p_program_id: programId,
+        p_name: sanitizeTextField(req.body?.name, 240),
+        p_description: sanitizeTextField(req.body?.description, 500) || null,
+        p_idempotency_key: sanitizeString(req.body?.idempotencyKey || req.body?.idempotency_key, 180) || `therapeutic-target:${programId}:${crypto.randomUUID()}`,
+        p_actor_id: actorId
+      });
+      if (error) return res.status(400).json({ success: false, error: therapeuticProgramErrorMessage(error) });
+      return res.status(201).json({ success: true, data, message: 'Alvo adicionado ao programa.' });
+    } catch (error) {
+      return sendRouteDbError(res, '/api/aba/patients/:patientId/therapeutic-programs/:programId/targets [POST]', error, {
+        fallbackMessage: 'Não foi possível adicionar o alvo.'
+      });
+    }
+  });
+
+  app.post('/api/aba/program-templates', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
+      const role = sanitizeString(req.session.user?.role, 80).toLowerCase();
+      const sourceScope = ['owner', 'admin', 'coordinator'].includes(role) ? 'CLINIC' : 'PERSONAL';
+      const programId = sanitizeString(req.body?.programId || req.body?.program_id, 180);
+      if (!programId) {
+        if (!['owner', 'admin', 'coordinator'].includes(role)) {
+          return res.status(403).json({ success: false, error: 'Somente supervisão ou coordenação pode publicar modelos da clínica.' });
+        }
+        const name = sanitizeTextField(req.body?.name, 240);
+        const objective = sanitizeTextField(req.body?.objective, 1000);
+        const targets = (Array.isArray(req.body?.suggestedTargets || req.body?.suggested_targets) ? req.body?.suggestedTargets || req.body?.suggested_targets : [])
+          .slice(0, 50)
+          .map((target: any) => sanitizeTextField(typeof target === 'string' ? target : target?.name, 240))
+          .filter(Boolean);
+        if (!name || !objective || targets.length === 0) {
+          return res.status(400).json({ success: false, error: 'Informe nome, objetivo e ao menos um alvo sugerido.' });
+        }
+        const idempotencyKey = sanitizeString(req.body?.idempotencyKey || req.body?.idempotency_key, 180) || `program-template-direct:${organizationId}:${crypto.randomUUID()}`;
+        const status = ['DRAFT', 'PENDING_APPROVAL', 'PUBLISHED'].includes(String(req.body?.status || '').toUpperCase())
+          ? String(req.body.status).toUpperCase()
+          : 'PUBLISHED';
+        const now = new Date().toISOString();
+        const directPayload = {
+          id: `template-${crypto.createHash('sha256').update(`${organizationId}:${idempotencyKey}`).digest('hex').slice(0, 32)}`,
+          organization_id: organizationId,
+          clinic_id: clinicId,
+          source_scope: 'CLINIC',
+          owner_user_id: null,
+          name,
+          description: sanitizeTextField(req.body?.description || objective, 1000),
+          category: sanitizeString(req.body?.category || 'OUTRO', 120),
+          objective,
+          suggested_targets: sanitizeClinicalPayload(targets),
+          measurement_type: sanitizeString(req.body?.measurementType || req.body?.measurement_type || 'independent_prompted_no_response', 80),
+          mastery_criteria: sanitizeClinicalPayload(req.body?.masteryCriteria || req.body?.mastery_criteria || {}),
+          advanced_settings: sanitizeClinicalPayload(req.body?.advancedSettings || req.body?.advanced_settings || {}),
+          status,
+          approved_by: status === 'PUBLISHED' ? actorId : null,
+          approved_at: status === 'PUBLISHED' ? now : null,
+          idempotency_key: idempotencyKey,
+          created_by: actorId,
+          created_at: now,
+          updated_at: now
+        };
+        const { data, error } = await supabase.from('aba_program_templates').upsert(directPayload, { onConflict: 'id' }).select(THERAPEUTIC_TEMPLATE_SELECT).single();
+        if (error) throw error;
+        return res.status(201).json({ success: true, data, message: status === 'PUBLISHED' ? 'Modelo publicado na biblioteca da clínica.' : 'Rascunho de modelo salvo.' });
+      }
+      const [programResult, targetsResult] = await Promise.all([
+        supabase.from('aba_programs').select(THERAPEUTIC_PROGRAM_SELECT).eq('id', programId).eq('organization_id', organizationId).limit(1).maybeSingle(),
+        supabase.from('aba_targets').select('name,description,sort_order').eq('program_id', programId).eq('organization_id', organizationId).order('sort_order', { ascending: true }).limit(100)
+      ]);
+      if (programResult.error || !programResult.data || targetsResult.error) return res.status(404).json({ success: false, error: 'Programa não encontrado nesta clínica.' });
+      const program: any = programResult.data;
+      const idempotencyKey = sanitizeString(req.body?.idempotencyKey || req.body?.idempotency_key, 180) || `program-template:${programId}:${sourceScope}:${actorId}`;
+      const templatePayload = {
+        id: `template-${crypto.createHash('sha256').update(`${organizationId}:${idempotencyKey}`).digest('hex').slice(0, 32)}`,
+        organization_id: organizationId,
+        clinic_id: clinicId,
+        source_scope: sourceScope,
+        owner_user_id: sourceScope === 'PERSONAL' ? actorId : null,
+        name: sanitizeTextField(req.body?.name || program.name, 240),
+        description: sanitizeTextField(program.description || program.objective, 1000),
+        category: sanitizeString(program.category || 'OUTRO', 120),
+        objective: sanitizeTextField(program.objective || program.description, 1000),
+        suggested_targets: sanitizeClinicalPayload((targetsResult.data || []).map((target: any) => target.name)),
+        measurement_type: sanitizeString(program.measurement_type || 'independent_prompted_no_response', 80),
+        mastery_criteria: sanitizeClinicalPayload(program.mastery_criteria || {}),
+        advanced_settings: sanitizeClinicalPayload(program.advanced_settings || {}),
+        status: sourceScope === 'CLINIC' ? 'PUBLISHED' : 'DRAFT',
+        approved_by: sourceScope === 'CLINIC' ? actorId : null,
+        approved_at: sourceScope === 'CLINIC' ? new Date().toISOString() : null,
+        idempotency_key: idempotencyKey,
+        created_by: actorId,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
+      const { data, error } = await supabase.from('aba_program_templates').upsert(templatePayload, { onConflict: 'id' }).select(THERAPEUTIC_TEMPLATE_SELECT).single();
+      if (error) throw error;
+      return res.status(201).json({ success: true, data, message: sourceScope === 'CLINIC' ? 'Modelo publicado na biblioteca da clínica.' : 'Modelo pessoal salvo.' });
+    } catch (error) {
+      return sendRouteDbError(res, '/api/aba/program-templates [POST]', error, {
+        fallbackMessage: 'Não foi possível salvar o modelo.'
+      });
+    }
+  });
+
+  app.patch('/api/aba/program-templates/:templateId', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 48 * 1024, 'Modelo de programa')) return;
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
+      const templateId = sanitizeString(req.params.templateId, 180);
+      const existingResult = await supabase
+        .from('aba_program_templates')
+        .select(THERAPEUTIC_TEMPLATE_SELECT)
+        .eq('id', templateId)
+        .eq('organization_id', organizationId)
+        .neq('source_scope', 'VERTO')
+        .limit(1)
+        .maybeSingle();
+      if (existingResult.error || !existingResult.data) return res.status(404).json({ success: false, error: 'Modelo não encontrado nesta clínica.' });
+      const existing: any = existingResult.data;
+      const requestedStatus = String(req.body?.status || existing.status || 'DRAFT').toUpperCase();
+      if (!['DRAFT', 'PENDING_APPROVAL', 'PUBLISHED', 'ARCHIVED'].includes(requestedStatus)) {
+        return res.status(400).json({ success: false, error: 'Status de modelo inválido.' });
+      }
+      const targetsInput = req.body?.suggestedTargets ?? req.body?.suggested_targets;
+      const targets = Array.isArray(targetsInput)
+        ? targetsInput.slice(0, 50).map((target: any) => sanitizeTextField(typeof target === 'string' ? target : target?.name, 240)).filter(Boolean)
+        : existing.suggested_targets;
+      const patch = {
+        name: sanitizeTextField(req.body?.name ?? existing.name, 240),
+        description: sanitizeTextField(req.body?.description ?? existing.description, 1000),
+        category: sanitizeString(req.body?.category ?? existing.category, 120),
+        objective: sanitizeTextField(req.body?.objective ?? existing.objective, 1000),
+        suggested_targets: sanitizeClinicalPayload(targets),
+        measurement_type: sanitizeString(req.body?.measurementType ?? req.body?.measurement_type ?? existing.measurement_type, 80),
+        mastery_criteria: sanitizeClinicalPayload(req.body?.masteryCriteria ?? req.body?.mastery_criteria ?? existing.mastery_criteria ?? {}),
+        advanced_settings: sanitizeClinicalPayload(req.body?.advancedSettings ?? req.body?.advanced_settings ?? existing.advanced_settings ?? {}),
+        status: requestedStatus,
+        approved_by: requestedStatus === 'PUBLISHED' ? actorId : existing.approved_by,
+        approved_at: requestedStatus === 'PUBLISHED' ? new Date().toISOString() : existing.approved_at,
+        updated_at: new Date().toISOString()
+      };
+      if (!patch.name || !patch.objective || !Array.isArray(targets) || targets.length === 0) {
+        return res.status(400).json({ success: false, error: 'Informe nome, objetivo e ao menos um alvo sugerido.' });
+      }
+      const { data, error } = await supabase
+        .from('aba_program_templates')
+        .update(patch)
+        .eq('id', templateId)
+        .eq('organization_id', organizationId)
+        .select(THERAPEUTIC_TEMPLATE_SELECT)
+        .single();
+      if (error) throw error;
+      return res.json({ success: true, data, message: requestedStatus === 'ARCHIVED' ? 'Modelo arquivado.' : requestedStatus === 'PUBLISHED' ? 'Modelo publicado.' : 'Modelo atualizado.' });
+    } catch (error) {
+      return sendRouteDbError(res, '/api/aba/program-templates/:templateId [PATCH]', error, {
+        fallbackMessage: 'Não foi possível atualizar o modelo.'
+      });
+    }
+  });
+
   app.patch('/api/aba/patients/:patientId/targets/:targetId/mastery-criteria', checkAuth, checkPatientAccess, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.params.patientId || req.body?.patient_id || req.body?.patientId, 120);

@@ -4104,6 +4104,184 @@ export const dataService = {
     }
   },
 
+  async getPatientTherapeuticPlan(patientId: string, options: { force?: boolean } = {}) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse({ programs: [], objectives: [], targets: [] });
+    const endpoint = `/api/aba/patients/${encodeURIComponent(String(patientId))}/therapeutic-plan${options.force ? `?_reload=${Date.now()}` : ''}`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await buildConditionalHeaders(endpoint, 'aba'),
+        credentials: 'include'
+      }, {
+        helperName: 'getPatientTherapeuticPlan',
+        operation: 'list',
+        table: 'aba_programs,aba_targets,patient_therapeutic_objectives,aba_program_audit_events,aba_trials',
+        hasExplicitColumns: true
+      });
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível carregar o Plano terapêutico agora.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível carregar o Plano terapêutico agora.');
+      return { success: false, data: { programs: [], objectives: [], targets: [] }, error: message, message };
+    }
+  },
+
+  async getTherapeuticProgramTemplates(options: { force?: boolean; includeArchived?: boolean } = {}) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse([]);
+    const search = new URLSearchParams();
+    if (options.force) search.set('_reload', String(Date.now()));
+    if (options.includeArchived) search.set('includeArchived', 'true');
+    const endpoint = `/api/aba/program-templates${search.toString() ? `?${search.toString()}` : ''}`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await buildConditionalHeaders(endpoint, 'aba'),
+        credentials: 'include'
+      }, {
+        helperName: 'getTherapeuticProgramTemplates',
+        operation: 'list',
+        table: 'aba_program_templates',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível carregar a biblioteca de programas.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível carregar a biblioteca de programas.');
+      return { success: false, data: [], error: message, message };
+    }
+  },
+
+  async createTherapeuticProgram(patientId: string, payload: any = {}) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
+    const endpoint = `/api/aba/patients/${encodeURIComponent(String(patientId))}/therapeutic-programs`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'createTherapeuticProgram',
+        operation: 'write',
+        table: 'patient_therapeutic_objectives,aba_programs,aba_targets,aba_program_versions,aba_program_audit_events',
+        hasExplicitColumns: true
+      });
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível criar o programa terapêutico.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível criar o programa terapêutico.');
+      return { success: false, error: message, message };
+    }
+  },
+
+  async updateTherapeuticProgramStatus(patientId: string, programId: string, payload: any = {}) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
+    const endpoint = `/api/aba/patients/${encodeURIComponent(String(patientId))}/therapeutic-programs/${encodeURIComponent(String(programId))}/status`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'PATCH',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'updateTherapeuticProgramStatus',
+        operation: 'write',
+        table: 'aba_programs,aba_program_versions,aba_program_audit_events',
+        hasExplicitColumns: true
+      });
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível atualizar o programa.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível atualizar o programa.');
+      return { success: false, error: message, message };
+    }
+  },
+
+  async updateTherapeuticProgram(patientId: string, programId: string, payload: any = {}) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
+    const endpoint = `/api/aba/patients/${encodeURIComponent(String(patientId))}/therapeutic-programs/${encodeURIComponent(String(programId))}`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'PATCH',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'updateTherapeuticProgram',
+        operation: 'write',
+        table: 'patient_therapeutic_objectives,aba_programs,aba_targets,aba_program_versions,aba_program_audit_events',
+        hasExplicitColumns: true
+      });
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível atualizar o programa terapêutico.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível atualizar o programa terapêutico.');
+      return { success: false, error: message, message };
+    }
+  },
+
+  async addTherapeuticProgramTarget(patientId: string, programId: string, payload: any = {}) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
+    const endpoint = `/api/aba/patients/${encodeURIComponent(String(patientId))}/therapeutic-programs/${encodeURIComponent(String(programId))}/targets`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'addTherapeuticProgramTarget',
+        operation: 'write',
+        table: 'aba_targets,aba_programs,aba_program_versions,aba_program_audit_events',
+        hasExplicitColumns: true
+      });
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível adicionar o alvo.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível adicionar o alvo.');
+      return { success: false, error: message, message };
+    }
+  },
+
+  async saveTherapeuticProgramTemplate(payload: any = {}) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
+    const endpoint = '/api/aba/program-templates';
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'saveTherapeuticProgramTemplate',
+        operation: 'write',
+        table: 'aba_program_templates,aba_programs,aba_targets',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível salvar o modelo.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível salvar o modelo.');
+      return { success: false, error: message, message };
+    }
+  },
+
+  async updateTherapeuticProgramTemplate(templateId: string, payload: any = {}) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
+    const endpoint = `/api/aba/program-templates/${encodeURIComponent(String(templateId))}`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'PATCH',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'updateTherapeuticProgramTemplate',
+        operation: 'write',
+        table: 'aba_program_templates',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível atualizar o modelo.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível atualizar o modelo.');
+      return { success: false, error: message, message };
+    }
+  },
+
   async getRecentSessionEvents(sessionId: string, limit = 20) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse([]);
     if (!isPersistedUuid(sessionId)) return { success: true, data: [] };

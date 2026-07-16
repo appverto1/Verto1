@@ -6,6 +6,7 @@ import { VBMAPP_LEVEL_1_CANONICAL_PROTOCOL } from '../constants/vbmappLevel1Prot
 import { VBMAPP_LEVEL_2_CANONICAL_PROTOCOL } from '../constants/vbmappLevel2Protocol';
 import { VBMAPP_LEVEL_3_CANONICAL_PROTOCOL } from '../constants/vbmappLevel3Protocol';
 import { dataService } from '../services/dataService';
+import { TherapeuticProgramLibrary } from './TherapeuticProgramLibrary';
 
 const getLicensedCanonicalProtocolForRequest = (request: any) => {
   const source = `${request?.canonicalKey || ''} ${request?.canonicalName || ''} ${request?.protocolName || ''}`.toLowerCase();
@@ -306,6 +307,7 @@ export const ProtocolManagementSystem = ({
   canManageLibrary = true,
 }: any) => { 
   const [editingProtocol, setEditingProtocol] = useState<any>(null); 
+  const [librarySection, setLibrarySection] = useState<'protocols' | 'programs'>('protocols');
   const [filterAge, setFilterAge] = useState(""); 
   const [filterType, setFilterType] = useState(""); 
   const [filterDomain, setFilterDomain] = useState(""); 
@@ -748,6 +750,34 @@ export const ProtocolManagementSystem = ({
     return (<ProtocolEditor protocol={editingProtocol} onSave={handlePersistedManualProtocolSave} onCancel={() => setEditingProtocol(null)} />); 
   } 
 
+  if (librarySection === 'programs') {
+    return (
+      <div className={`flex h-full min-h-0 flex-col ${isDarkTheme ? 'bg-[#0b1220] text-slate-100' : 'bg-slate-50 text-slate-900'}`}>
+        <header className={`flex shrink-0 flex-col gap-4 border-b px-6 py-5 sm:flex-row sm:items-center sm:justify-between ${isDarkTheme ? 'border-white/10 bg-[#101a2d]' : 'border-slate-200 bg-white'}`}>
+          <div className="flex items-center gap-4">
+            <button onClick={onBack} className={`rounded-full p-2 ${isDarkTheme ? 'text-slate-300 hover:bg-white/10' : 'text-slate-500 hover:bg-slate-100'}`} aria-label="Voltar">
+              <ChevronLeft size={24} />
+            </button>
+            <div>
+              <h1 className="text-xl font-medium">Biblioteca de programas</h1>
+              <p className={`mt-1 text-sm ${isDarkTheme ? 'text-slate-400' : 'text-slate-500'}`}>Modelos reutilizáveis para individualizar no Plano terapêutico.</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setLibrarySection('protocols')}
+            className={`rounded-xl border px-4 py-2.5 text-sm ${isDarkTheme ? 'border-white/10 text-slate-200 hover:bg-white/5' : 'border-slate-200 text-slate-600 hover:bg-slate-100'}`}
+          >
+            Ver protocolos
+          </button>
+        </header>
+        <main className="min-h-0 flex-1 overflow-y-auto px-5 py-7 md:px-8">
+          <TherapeuticProgramLibrary isDark={isDarkTheme} canManageLibrary={canManageLibrary} />
+        </main>
+      </div>
+    );
+  }
+
   const ProtocolCard = ({ proto }: any) => {
     const isTemporaryRequest = Boolean(proto?.isTemporaryRequest);
     const isApprovedImport = Boolean(proto?.isApprovedImport);
@@ -1057,15 +1087,24 @@ export const ProtocolManagementSystem = ({
           <button onClick={onBack} className={`p-2 -ml-2 rounded-full ${isDarkTheme ? 'text-slate-300 hover:bg-white/10' : 'text-slate-500 hover:bg-slate-100'}`}><ChevronLeft size={24}/></button> 
           <h1 className={`text-xl font-bold tracking-tight ${isDarkTheme ? 'text-white' : 'text-slate-900'}`}>Biblioteca de Protocolos</h1> 
         </div>
-        {canManageLibrary ? (
-          <button onClick={handleCreateNew} className="bg-[#7a32fc] text-white px-5 py-2.5 rounded-2xl text-xs font-bold shadow-lg shadow-[#7a32fc]/20 hover:opacity-90 active:scale-95 transition-all flex items-center gap-2">
-            <Plus size={18} /> Criar Novo
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={() => setLibrarySection('programs')}
+            className={`rounded-xl border px-4 py-2.5 text-xs font-medium transition-colors ${isDarkTheme ? 'border-white/10 text-slate-200 hover:bg-white/5' : 'border-slate-200 text-slate-600 hover:bg-slate-100'}`}
+          >
+            Programas de ensino
           </button>
-        ) : (
-          <span className={`text-[10px] font-bold uppercase tracking-widest ${isDarkTheme ? 'text-slate-400' : 'text-slate-500'}`}>
-            Visualização de biblioteca
-          </span>
-        )}
+          {canManageLibrary ? (
+            <button onClick={handleCreateNew} className="bg-[#7a32fc] text-white px-5 py-2.5 rounded-xl text-xs font-medium shadow-lg shadow-[#7a32fc]/20 hover:opacity-90 active:scale-95 transition-all flex items-center gap-2">
+              <Plus size={18} /> Criar protocolo
+            </button>
+          ) : (
+            <span className={`text-xs ${isDarkTheme ? 'text-slate-400' : 'text-slate-500'}`}>
+              Visualização da biblioteca
+            </span>
+          )}
+        </div>
       </div> 
 
       <div className={`flex-1 overflow-y-auto no-scrollbar px-8 md:px-10 pt-6 pb-24 ${isDarkTheme ? 'bg-[radial-gradient(circle_at_top_left,rgba(122,50,252,0.16),transparent_32%),linear-gradient(180deg,#0b1220,#111827)]' : 'bg-[radial-gradient(circle_at_top_left,rgba(122,50,252,0.08),transparent_36%),linear-gradient(180deg,#f8fafc,#eef2f7)]'}`}> 

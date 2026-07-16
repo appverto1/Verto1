@@ -91,7 +91,7 @@ create table if not exists public.payment_appointment_items (
   id uuid primary key default gen_random_uuid(),
   organization_id uuid not null,
   clinic_id text not null,
-  payment_id uuid not null references public.payments(id) on delete cascade,
+  payment_id text not null,
   appointment_id uuid references public.appointments(id) on delete restrict,
   patient_id uuid not null references public.patients(id) on delete restrict,
   professional_id uuid references public.users(id) on delete set null,
@@ -111,7 +111,7 @@ create table if not exists public.payment_transactions (
   id uuid primary key default gen_random_uuid(),
   organization_id uuid not null,
   clinic_id text not null,
-  payment_id uuid not null references public.payments(id) on delete restrict,
+  payment_id text not null,
   patient_id uuid not null references public.patients(id) on delete restrict,
   transaction_type text not null check (transaction_type in ('PAYMENT', 'DISCOUNT', 'COURTESY', 'REFUND', 'ADJUSTMENT')),
   amount numeric(14,2) not null check (amount >= 0),
@@ -136,7 +136,7 @@ create table if not exists public.payment_audit_events (
   id uuid primary key default gen_random_uuid(),
   organization_id uuid not null,
   clinic_id text not null,
-  payment_id uuid not null references public.payments(id) on delete restrict,
+  payment_id text not null,
   transaction_id uuid references public.payment_transactions(id) on delete set null,
   appointment_id uuid references public.appointments(id) on delete set null,
   event_type text not null,
@@ -167,6 +167,131 @@ create table if not exists public.clinic_patient_finance_policies (
   updated_at timestamptz not null default now()
 );
 
+-- public.payments.id is text in the production legacy schema, while clean
+-- installations created it as uuid. Keep the child key canonical as text and
+-- add a native FK whenever both physical types match.
+-- A failed older execution may already have created these new tables with a
+-- uuid payment_id. Normalize that partial state without dropping rows.
+do $$
+declare
+  child_table text;
+  current_type text;
+  constraint_name text;
+begin
+  foreach child_table in array array['payment_appointment_items', 'payment_transactions', 'payment_audit_events']
+  loop
+    constraint_name := child_table || '_payment_id_fkey';
+    execute format('alter table public.%I drop constraint if exists %I', child_table, constraint_name);
+
+    select format_type(a.atttypid, a.atttypmod) into current_type
+    from pg_attribute a
+    where a.attrelid = format('public.%I', child_table)::regclass
+      and a.attname = 'payment_id'
+      and not a.attisdropped;
+
+    if current_type is distinct from 'text' then
+      execute format(
+        'alter table public.%I alter column payment_id type text using payment_id::text',
+        child_table
+      );
+    end if;
+  end loop;
+end $$;
+
+do $$
+declare
+  parent_type oid;
+  child_type oid;
+  child_table text;
+  constraint_name text;
+begin
+  select a.atttypid into parent_type
+  from pg_attribute a
+  where a.attrelid = 'public.payments'::regclass
+    and a.attname = 'id'
+    and not a.attisdropped;
+
+  foreach child_table in array array['payment_appointment_items', 'payment_transactions', 'payment_audit_events']
+  loop
+    select a.atttypid into child_type
+    from pg_attribute a
+    where a.attrelid = format('public.%I', child_table)::regclass
+      and a.attname = 'payment_id'
+      and not a.attisdropped;
+    constraint_name := child_table || '_payment_id_fkey';
+
+    if parent_type = child_type and not exists (
+      select 1 from pg_constraint
+      where conrelid = format('public.%I', child_table)::regclass
+        and conname = constraint_name
+    ) then
+      execute format(
+        'alter table public.%I add constraint %I foreign key (payment_id) references public.payments(id) on delete restrict',
+        child_table,
+        constraint_name
+      );
+    end if;
+  end loop;
+end $$;
+
+create or replace function public.assert_patient_finance_payment_reference()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not exists (
+    select 1
+    from public.payments p
+    where p.id::text = new.payment_id::text
+      and p.organization_id = new.organization_id
+  ) then
+    raise exception using
+      errcode = '23503',
+      message = 'PATIENT_FINANCE_PAYMENT_REFERENCE_INVALID';
+  end if;
+  return new;
+end;
+$$;
+
+do $$
+declare
+  child_table text;
+begin
+  foreach child_table in array array['payment_appointment_items', 'payment_transactions', 'payment_audit_events']
+  loop
+    execute format('drop trigger if exists assert_payment_reference on public.%I', child_table);
+    execute format(
+      'create trigger assert_payment_reference before insert or update of payment_id, organization_id on public.%I for each row execute function public.assert_patient_finance_payment_reference()',
+      child_table
+    );
+  end loop;
+end $$;
+
+create or replace function public.prevent_patient_finance_payment_delete()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if exists (select 1 from public.payment_appointment_items where payment_id::text = old.id::text)
+    or exists (select 1 from public.payment_transactions where payment_id::text = old.id::text)
+    or exists (select 1 from public.payment_audit_events where payment_id::text = old.id::text) then
+    raise exception using
+      errcode = '23503',
+      message = 'PATIENT_FINANCE_PAYMENT_HAS_DEPENDENCIES';
+  end if;
+  return old;
+end;
+$$;
+
+drop trigger if exists prevent_patient_finance_payment_delete on public.payments;
+create trigger prevent_patient_finance_payment_delete
+before delete on public.payments
+for each row execute function public.prevent_patient_finance_payment_delete();
+
 create unique index if not exists idx_payments_finance_idempotency
   on public.payments (organization_id, idempotency_key)
   where organization_id is not null and idempotency_key is not null;
@@ -195,7 +320,7 @@ insert into public.payment_transactions (
 select
   p.organization_id,
   p.clinic_id,
-  p.id,
+  p.id::text,
   p.patient_id::uuid,
   'PAYMENT',
   coalesce(nullif(p.paid_amount, 0), p.amount, 0),
@@ -227,7 +352,7 @@ insert into public.payment_transactions (
 select
   p.organization_id,
   p.clinic_id,
-  p.id,
+  p.id::text,
   p.patient_id::uuid,
   'REFUND',
   coalesce(nullif(p.refunded_amount, 0), p.amount, 0),
@@ -250,7 +375,8 @@ where p.organization_id is not null
   )
 on conflict (organization_id, idempotency_key) do nothing;
 
-create or replace function public.patient_financial_charge_payload(p_payment_id uuid)
+drop function if exists public.patient_financial_charge_payload(uuid);
+create or replace function public.patient_financial_charge_payload(p_payment_id text)
 returns jsonb
 language sql
 stable
@@ -262,28 +388,29 @@ as $$
     'items', coalesce((
       select jsonb_agg(to_jsonb(i) order by i.appointment_scheduled_at nulls last, i.created_at)
       from public.payment_appointment_items i
-      where i.payment_id = p.id
+      where i.payment_id::text = p.id::text
     ), '[]'::jsonb),
     'transactions', coalesce((
       select jsonb_agg(to_jsonb(t) order by t.transaction_at desc, t.created_at desc)
       from public.payment_transactions t
-      where t.payment_id = p.id
+      where t.payment_id::text = p.id::text
     ), '[]'::jsonb),
     'events', coalesce((
       select jsonb_agg(to_jsonb(e) order by e.created_at desc)
       from (
         select * from public.payment_audit_events ae
-        where ae.payment_id = p.id
+        where ae.payment_id::text = p.id::text
         order by ae.created_at desc
         limit 100
       ) e
     ), '[]'::jsonb)
   )
   from public.payments p
-  where p.id = p_payment_id;
+  where p.id::text = p_payment_id;
 $$;
 
-create or replace function public.refresh_patient_financial_charge(p_payment_id uuid)
+drop function if exists public.refresh_patient_financial_charge(uuid);
+create or replace function public.refresh_patient_financial_charge(p_payment_id text)
 returns public.payments
 language plpgsql
 security definer
@@ -300,7 +427,7 @@ declare
 begin
   select * into v_charge
   from public.payments
-  where id = p_payment_id
+  where id::text = p_payment_id
   for update;
 
   if not found then
@@ -313,23 +440,23 @@ begin
     coalesce(sum(amount) filter (where transaction_type = 'REFUND' and status = 'POSTED'), 0)
   into v_paid, v_discount, v_refunded
   from public.payment_transactions
-  where payment_id = p_payment_id;
+  where payment_id::text = p_payment_id;
 
   if not exists (
     select 1 from public.payment_transactions
-    where payment_id = p_payment_id and transaction_type = 'PAYMENT' and status = 'POSTED'
+    where payment_id::text = p_payment_id and transaction_type = 'PAYMENT' and status = 'POSTED'
   ) then
     v_paid := coalesce(v_charge.paid_amount, case when lower(coalesce(v_charge.status, '')) in ('paid', 'refunded') then v_charge.amount else 0 end, 0);
   end if;
   if not exists (
     select 1 from public.payment_transactions
-    where payment_id = p_payment_id and transaction_type in ('DISCOUNT', 'COURTESY') and status = 'POSTED'
+    where payment_id::text = p_payment_id and transaction_type in ('DISCOUNT', 'COURTESY') and status = 'POSTED'
   ) then
     v_discount := coalesce(v_charge.discount_amount, 0);
   end if;
   if not exists (
     select 1 from public.payment_transactions
-    where payment_id = p_payment_id and transaction_type = 'REFUND' and status = 'POSTED'
+    where payment_id::text = p_payment_id and transaction_type = 'REFUND' and status = 'POSTED'
   ) then
     v_refunded := coalesce(v_charge.refunded_amount, case when lower(coalesce(v_charge.status, '')) = 'refunded' then v_charge.amount else 0 end, 0);
   end if;
@@ -346,7 +473,7 @@ begin
     when coalesce(v_charge.financial_status, v_charge.status) = 'forecast'
       and not exists (
         select 1 from public.payment_transactions t
-        where t.payment_id = p_payment_id and t.status = 'POSTED'
+        where t.payment_id::text = p_payment_id and t.status = 'POSTED'
       ) then 'forecast'
     when v_charge.due_date is not null and v_charge.due_date < current_date then 'overdue'
     else 'pending'
@@ -364,24 +491,24 @@ begin
     payment_date = coalesce((
       select (transaction_at at time zone 'America/Sao_Paulo')::date
       from public.payment_transactions
-      where payment_id = p_payment_id and transaction_type = 'PAYMENT' and status = 'POSTED'
+      where payment_id::text = p_payment_id and transaction_type = 'PAYMENT' and status = 'POSTED'
       order by transaction_at desc, created_at desc
       limit 1
     ), v_charge.payment_date),
     method = coalesce((
       select nullif(trim(method), '')
       from public.payment_transactions
-      where payment_id = p_payment_id and transaction_type = 'PAYMENT' and status = 'POSTED'
+      where payment_id::text = p_payment_id and transaction_type = 'PAYMENT' and status = 'POSTED'
       order by transaction_at desc, created_at desc
       limit 1
     ), method),
     last_payment_at = coalesce((
       select max(transaction_at)
       from public.payment_transactions
-      where payment_id = p_payment_id and transaction_type = 'PAYMENT' and status = 'POSTED'
+      where payment_id::text = p_payment_id and transaction_type = 'PAYMENT' and status = 'POSTED'
     ), v_charge.last_payment_at),
     updated_at = now()
-  where id = p_payment_id
+  where id::text = p_payment_id
   returning * into v_charge;
 
   return v_charge;
@@ -395,7 +522,7 @@ security definer
 set search_path = public
 as $$
 begin
-  perform public.refresh_patient_financial_charge(coalesce(new.payment_id, old.payment_id));
+  perform public.refresh_patient_financial_charge(coalesce(new.payment_id, old.payment_id)::text);
   return coalesce(new, old);
 end;
 $$;
@@ -426,8 +553,8 @@ security definer
 set search_path = public
 as $$
 declare
-  v_existing_id uuid;
-  v_payment_id uuid;
+  v_existing_id text;
+  v_payment_id text;
   v_patient_name text;
   v_item_count integer;
   v_total numeric(14,2);
@@ -442,7 +569,7 @@ begin
 
   perform pg_advisory_xact_lock(hashtextextended(p_organization_id::text || ':' || p_idempotency_key, 0));
 
-  select id into v_existing_id
+  select id::text into v_existing_id
   from public.payments
   where organization_id = p_organization_id
     and idempotency_key = p_idempotency_key
@@ -511,7 +638,7 @@ begin
     case when p_due_date is not null and p_due_date < current_date then 'overdue' else 'pending' end,
     coalesce(nullif(trim(p_source), ''), 'MANUAL'), p_competence_month,
     nullif(trim(coalesce(p_notes, '')), ''), p_idempotency_key, p_actor_id, now(), now()
-  ) returning id into v_payment_id;
+  ) returning id::text into v_payment_id;
 
   if v_item_count > 0 then
     insert into public.payment_appointment_items (
@@ -554,11 +681,11 @@ begin
     from (
       select *
       from public.payment_appointment_items
-      where payment_id = v_payment_id
+      where payment_id::text = v_payment_id
       order by appointment_scheduled_at nulls last, created_at
       limit 1
     ) first_item
-    where p.id = v_payment_id;
+    where p.id::text = v_payment_id;
   end if;
 
   if coalesce(p_discount_amount, 0) > 0 then
@@ -577,9 +704,9 @@ begin
     before_state, after_state, notes, idempotency_key, created_by
   ) values (
     p_organization_id, p_organization_id::text, v_payment_id,
-    (select appointment_id from public.payment_appointment_items where payment_id = v_payment_id order by created_at limit 1),
+    (select appointment_id from public.payment_appointment_items where payment_id::text = v_payment_id order by created_at limit 1),
     'CHARGE_CREATED', '{}'::jsonb,
-    (select to_jsonb(p) from public.payments p where p.id = v_payment_id),
+    (select to_jsonb(p) from public.payments p where p.id::text = v_payment_id),
     p_notes, p_idempotency_key || ':created', p_actor_id
   );
 
@@ -587,9 +714,10 @@ begin
 end;
 $$;
 
+drop function if exists public.apply_patient_financial_operation(uuid, uuid, text, numeric, date, text, timestamptz, text, text, text, text, text, text);
 create or replace function public.apply_patient_financial_operation(
   p_organization_id uuid,
-  p_payment_id uuid,
+  p_payment_id text,
   p_operation text,
   p_amount numeric,
   p_due_date date,
@@ -645,7 +773,7 @@ begin
 
   select * into v_charge
   from public.payments
-  where id = p_payment_id and organization_id = p_organization_id
+  where id::text = p_payment_id and organization_id = p_organization_id
   for update;
   if not found then
     raise exception 'PATIENT_FINANCIAL_CHARGE_NOT_FOUND';
@@ -687,7 +815,7 @@ begin
   elsif v_operation = 'COURTESY' then
     v_amount := coalesce(v_charge.balance_amount, v_charge.amount, 0);
     if v_amount <= 0 then raise exception 'PATIENT_FINANCE_CHARGE_ALREADY_SETTLED'; end if;
-    update public.payments set is_courtesy = true where id = p_payment_id;
+    update public.payments set is_courtesy = true where id::text = p_payment_id;
     insert into public.payment_transactions (
       organization_id, clinic_id, payment_id, patient_id, transaction_type, amount,
       transaction_at, notes, idempotency_key, created_by
@@ -715,7 +843,7 @@ begin
     into v_transaction_id, v_existing_receipt_number, v_existing_receipt_url
     from public.payment_transactions
     where organization_id = p_organization_id
-      and payment_id = p_payment_id
+      and payment_id::text = p_payment_id
       and transaction_type = 'PAYMENT'
       and status = 'POSTED'
     order by transaction_at desc, created_at desc
@@ -740,11 +868,11 @@ begin
       receipt_file_name = coalesce(nullif(trim(coalesce(p_proof_file_name, '')), ''), receipt_file_name),
       receipt_content_type = coalesce(nullif(trim(coalesce(p_proof_content_type, '')), ''), receipt_content_type),
       updated_at = now()
-    where id = p_payment_id;
+    where id::text = p_payment_id;
     v_event_type := 'RECEIPT_ISSUED';
   elsif v_operation = 'DUE_DATE_CHANGE' then
     if p_due_date is null then raise exception 'PATIENT_FINANCE_DUE_DATE_REQUIRED'; end if;
-    update public.payments set due_date = p_due_date, updated_at = now() where id = p_payment_id;
+    update public.payments set due_date = p_due_date, updated_at = now() where id::text = p_payment_id;
     perform public.refresh_patient_financial_charge(p_payment_id);
     v_event_type := 'DUE_DATE_CHANGED';
   elsif v_operation = 'CANCEL' then
@@ -753,8 +881,8 @@ begin
     end if;
     update public.payments
     set canceled_at = now(), canceled_by = p_actor_id, financial_status = 'canceled', status = 'canceled', updated_at = now()
-    where id = p_payment_id;
-    update public.payment_appointment_items set active = false where payment_id = p_payment_id;
+    where id::text = p_payment_id;
+    update public.payment_appointment_items set active = false where payment_id::text = p_payment_id;
     v_event_type := 'CHARGE_CANCELED';
   else
     raise exception 'PATIENT_FINANCE_OPERATION_INVALID';
@@ -769,9 +897,9 @@ begin
     event_type, before_state, after_state, notes, idempotency_key, created_by
   ) values (
     p_organization_id, p_organization_id::text, p_payment_id, v_transaction_id,
-    (select appointment_id from public.payment_appointment_items where payment_id = p_payment_id order by created_at limit 1),
+    (select appointment_id from public.payment_appointment_items where payment_id::text = p_payment_id order by created_at limit 1),
     v_event_type, v_before,
-    (select to_jsonb(p) from public.payments p where p.id = p_payment_id),
+    (select to_jsonb(p) from public.payments p where p.id::text = p_payment_id),
     nullif(trim(coalesce(p_notes, '')), ''), p_idempotency_key, p_actor_id
   );
 
@@ -806,7 +934,7 @@ set search_path = public
 as $$
 declare
   v_created jsonb;
-  v_payment_id uuid;
+  v_payment_id text;
 begin
   v_created := public.create_patient_financial_charge(
     p_organization_id,
@@ -823,7 +951,7 @@ begin
     p_idempotency_key || ':charge',
     p_actor_id
   );
-  v_payment_id := nullif(v_created #>> '{charge,id}', '')::uuid;
+  v_payment_id := nullif(v_created #>> '{charge,id}', '');
   if v_payment_id is null then
     raise exception 'PATIENT_FINANCIAL_CHARGE_NOT_FOUND';
   end if;
@@ -857,7 +985,7 @@ declare
   v_plan public.patient_financial_plans%rowtype;
   v_charge public.payments%rowtype;
   v_payload jsonb;
-  v_payment_id uuid;
+  v_payment_id text;
   v_context_type text;
   v_service_type text := trim(coalesce(new.service_type, new.approach, new.source_payload->>'serviceType', new.source_payload->>'service_type', ''));
   v_event text := 'SCHEDULED';
@@ -942,7 +1070,7 @@ begin
 
   select p.* into v_charge
   from public.payment_appointment_items item
-  join public.payments p on p.id = item.payment_id
+  join public.payments p on p.id::text = item.payment_id::text
   where item.organization_id = v_organization_id
     and item.appointment_id = new.id
     and item.active = true
@@ -976,7 +1104,7 @@ begin
       service_type = coalesce(nullif(v_service_type, ''), service_type),
       appointment_scheduled_at = v_start_at,
       updated_at = now()
-    where id = v_charge.id;
+    where id::text = v_charge.id::text;
   end if;
 
   select
@@ -1037,15 +1165,15 @@ begin
         if v_charge.id is not null and coalesce(v_charge.paid_amount, 0) <= 0 then
           update public.payments
           set canceled_at = now(), canceled_by = v_actor_id, financial_status = 'canceled', status = 'canceled', updated_at = now()
-          where id = v_charge.id;
-          update public.payment_appointment_items set active = false where payment_id = v_charge.id;
+          where id::text = v_charge.id::text;
+          update public.payment_appointment_items set active = false where payment_id::text = v_charge.id::text;
           insert into public.payment_audit_events (
             organization_id, clinic_id, payment_id, appointment_id, event_type,
             before_state, after_state, notes, idempotency_key, created_by
           ) values (
-            v_organization_id, v_organization_id::text, v_charge.id, new.id,
+            v_organization_id, v_organization_id::text, v_charge.id::text, new.id,
             'CHARGE_CANCELED_BY_APPOINTMENT', to_jsonb(v_charge),
-            (select to_jsonb(p) from public.payments p where p.id = v_charge.id),
+            (select to_jsonb(p) from public.payments p where p.id::text = v_charge.id::text),
             'Falta sem cobrança conforme política da clínica.',
             'appointment-policy:' || new.id::text || ':charge:' || v_charge.id::text || ':no-show-no-charge', v_actor_id
           ) on conflict (organization_id, idempotency_key) where idempotency_key is not null do nothing;
@@ -1056,15 +1184,15 @@ begin
       if v_charge.id is not null and coalesce(v_charge.paid_amount, 0) <= 0 then
         update public.payments
         set canceled_at = now(), canceled_by = v_actor_id, financial_status = 'canceled', status = 'canceled', updated_at = now()
-        where id = v_charge.id;
-        update public.payment_appointment_items set active = false where payment_id = v_charge.id;
+        where id::text = v_charge.id::text;
+        update public.payment_appointment_items set active = false where payment_id::text = v_charge.id::text;
         insert into public.payment_audit_events (
           organization_id, clinic_id, payment_id, appointment_id, event_type,
           before_state, after_state, notes, idempotency_key, created_by
         ) values (
-          v_organization_id, v_organization_id::text, v_charge.id, new.id,
+          v_organization_id, v_organization_id::text, v_charge.id::text, new.id,
           'CHARGE_CANCELED_BY_APPOINTMENT', to_jsonb(v_charge),
-          (select to_jsonb(p) from public.payments p where p.id = v_charge.id),
+          (select to_jsonb(p) from public.payments p where p.id::text = v_charge.id::text),
           'Consulta cancelada conforme política da clínica.',
           'appointment-policy:' || new.id::text || ':charge:' || v_charge.id::text || ':canceled', v_actor_id
         ) on conflict (organization_id, idempotency_key) where idempotency_key is not null do nothing;
@@ -1089,17 +1217,17 @@ begin
     and coalesce(v_charge.amount, 0) > 0 then
     update public.payments
     set canceled_at = now(), canceled_by = v_actor_id, financial_status = 'canceled', status = 'canceled', updated_at = now()
-    where id = v_charge.id;
+    where id::text = v_charge.id::text;
     update public.payment_appointment_items
     set active = false
-    where payment_id = v_charge.id and appointment_id = new.id and active = true;
+    where payment_id::text = v_charge.id::text and appointment_id = new.id and active = true;
     insert into public.payment_audit_events (
       organization_id, clinic_id, payment_id, appointment_id, event_type,
       before_state, after_state, notes, idempotency_key, created_by
     ) values (
-      v_organization_id, v_organization_id::text, v_charge.id, new.id,
+      v_organization_id, v_organization_id::text, v_charge.id::text, new.id,
       'CHARGE_CANCELED_BY_RESCHEDULE', to_jsonb(v_charge),
-      (select to_jsonb(p) from public.payments p where p.id = v_charge.id),
+      (select to_jsonb(p) from public.payments p where p.id::text = v_charge.id::text),
       'Cobrança anterior encerrada porque a política da clínica cria nova obrigação após remarcação.',
       'appointment-policy:' || new.id::text || ':charge:' || v_charge.id::text || ':rescheduled', v_actor_id
     ) on conflict (organization_id, idempotency_key) where idempotency_key is not null do nothing;
@@ -1127,14 +1255,14 @@ begin
       'appointment-policy:' || new.id::text || ':cycle:' || v_charge_cycle::text,
       v_actor_id
     );
-    v_payment_id := nullif(v_payload #>> '{charge,id}', '')::uuid;
+    v_payment_id := nullif(v_payload #>> '{charge,id}', '');
     if v_payment_id is not null then
-      select * into v_charge from public.payments where id = v_payment_id for update;
+      select * into v_charge from public.payments where id::text = v_payment_id for update;
       insert into public.payment_audit_events (
         organization_id, clinic_id, payment_id, appointment_id, event_type,
         before_state, after_state, notes, idempotency_key, created_by
       ) values (
-        v_organization_id, v_organization_id::text, v_charge.id, new.id,
+        v_organization_id, v_organization_id::text, v_charge.id::text, new.id,
         'CHARGE_RECREATED_AFTER_RESCHEDULE', '{}'::jsonb, to_jsonb(v_charge),
         'Cobrança vinculada ao novo horário da consulta.',
         'appointment-policy:' || new.id::text || ':charge:' || v_charge.id::text || ':reschedule-created', v_actor_id
@@ -1163,9 +1291,9 @@ begin
       'appointment-policy:' || new.id::text || ':cycle:' || v_charge_cycle::text,
       v_actor_id
     );
-    v_payment_id := nullif(v_payload #>> '{charge,id}', '')::uuid;
+    v_payment_id := nullif(v_payload #>> '{charge,id}', '');
     if v_payment_id is not null then
-      select * into v_charge from public.payments where id = v_payment_id for update;
+      select * into v_charge from public.payments where id::text = v_payment_id for update;
     end if;
   end if;
 
@@ -1176,16 +1304,16 @@ begin
   if v_should_activate then
     update public.payments
     set financial_status = 'pending', status = 'pending', source = 'APPOINTMENT_POLICY', updated_at = now()
-    where id = v_charge.id
+    where id::text = v_charge.id::text
       and coalesce(financial_status, status, 'forecast') = 'forecast';
-    perform public.refresh_patient_financial_charge(v_charge.id);
+    perform public.refresh_patient_financial_charge(v_charge.id::text);
     insert into public.payment_audit_events (
       organization_id, clinic_id, payment_id, appointment_id, event_type,
       before_state, after_state, notes, idempotency_key, created_by
     ) values (
-      v_organization_id, v_organization_id::text, v_charge.id, new.id,
+      v_organization_id, v_organization_id::text, v_charge.id::text, new.id,
       'CHARGE_ACTIVATED_BY_APPOINTMENT', to_jsonb(v_charge),
-      (select to_jsonb(p) from public.payments p where p.id = v_charge.id),
+      (select to_jsonb(p) from public.payments p where p.id::text = v_charge.id::text),
       'Cobrança efetivada conforme o evento ' || v_event || '.',
       'appointment-policy:' || new.id::text || ':charge:' || v_charge.id::text || ':activated:' || v_event, v_actor_id
     ) on conflict (organization_id, idempotency_key) where idempotency_key is not null do nothing;
@@ -1198,12 +1326,12 @@ begin
           organization_id, clinic_id, payment_id, patient_id, transaction_type, amount,
           transaction_at, status, document_status, notes, idempotency_key, created_by
         ) values (
-          v_organization_id, v_organization_id::text, v_charge.id, new.patient_id,
+          v_organization_id, v_organization_id::text, v_charge.id::text, new.patient_id,
           'DISCOUNT', v_discount_amount, now(), 'POSTED', 'PENDING',
           'Ajuste automático conforme política de cancelamento parcial.',
           'appointment-policy:' || new.id::text || ':charge:' || v_charge.id::text || ':partial-cancellation', v_actor_id
         ) on conflict (organization_id, idempotency_key) do nothing;
-        perform public.refresh_patient_financial_charge(v_charge.id);
+        perform public.refresh_patient_financial_charge(v_charge.id::text);
       end if;
     end if;
   elsif coalesce(v_policy.create_forecast_on_schedule, true)
@@ -1211,11 +1339,11 @@ begin
     and coalesce(v_charge.financial_status, v_charge.status) = 'pending' then
     update public.payments
     set financial_status = 'forecast', status = 'forecast', source = 'APPOINTMENT_FORECAST', updated_at = now()
-    where id = v_charge.id
+    where id::text = v_charge.id::text
       and coalesce(paid_amount, 0) = 0
       and not exists (
         select 1 from public.payment_transactions t
-        where t.payment_id = v_charge.id and t.status = 'POSTED'
+        where t.payment_id::text = v_charge.id::text and t.status = 'POSTED'
       );
   end if;
 
@@ -1272,7 +1400,7 @@ select
   p.created_at,
   p.updated_at
 from public.payment_appointment_items i
-join public.payments p on p.id = i.payment_id
+join public.payments p on p.id::text = i.payment_id::text
 where i.active = true;
 
 alter table public.payment_appointment_items enable row level security;
@@ -1377,15 +1505,15 @@ with check (
   )
 );
 
-revoke all on function public.patient_financial_charge_payload(uuid) from public, anon, authenticated;
-revoke all on function public.refresh_patient_financial_charge(uuid) from public, anon, authenticated;
+revoke all on function public.patient_financial_charge_payload(text) from public, anon, authenticated;
+revoke all on function public.refresh_patient_financial_charge(text) from public, anon, authenticated;
 revoke all on function public.create_patient_financial_charge(uuid, uuid, jsonb, numeric, numeric, numeric, date, text, text, date, text, text, text) from public, anon, authenticated;
-revoke all on function public.apply_patient_financial_operation(uuid, uuid, text, numeric, date, text, timestamptz, text, text, text, text, text, text) from public, anon, authenticated;
+revoke all on function public.apply_patient_financial_operation(uuid, text, text, numeric, date, text, timestamptz, text, text, text, text, text, text) from public, anon, authenticated;
 revoke all on function public.create_and_settle_patient_financial_charge(uuid, uuid, jsonb, numeric, numeric, numeric, date, text, text, date, text, numeric, timestamptz, text, text, text, text, text) from public, anon, authenticated;
 revoke all on function public.sync_private_appointment_finance() from public, anon, authenticated;
-grant execute on function public.patient_financial_charge_payload(uuid) to service_role;
-grant execute on function public.refresh_patient_financial_charge(uuid) to service_role;
+grant execute on function public.patient_financial_charge_payload(text) to service_role;
+grant execute on function public.refresh_patient_financial_charge(text) to service_role;
 grant execute on function public.create_patient_financial_charge(uuid, uuid, jsonb, numeric, numeric, numeric, date, text, text, date, text, text, text) to service_role;
-grant execute on function public.apply_patient_financial_operation(uuid, uuid, text, numeric, date, text, timestamptz, text, text, text, text, text, text) to service_role;
+grant execute on function public.apply_patient_financial_operation(uuid, text, text, numeric, date, text, timestamptz, text, text, text, text, text, text) to service_role;
 grant execute on function public.create_and_settle_patient_financial_charge(uuid, uuid, jsonb, numeric, numeric, numeric, date, text, text, date, text, numeric, timestamptz, text, text, text, text, text) to service_role;
 grant select on public.patient_financial_appointment_summaries to authenticated, service_role;

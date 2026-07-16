@@ -8,6 +8,7 @@ import {
   Clock,
   FileText,
   Flame,
+  Loader2,
   MoreHorizontal,
   Pause,
   Pencil,
@@ -31,6 +32,11 @@ import {
 } from '../utils/abaPromptLevels';
 import { buildSessionReport, calculateSessionSummary, canCloseAbaSession, canRecordInAbaSession, type SessionSummary, type SessionSummaryPendingItem } from '../utils/abaSessionSummary';
 import { isAbaV2Enabled } from '../utils/featureFlags';
+import {
+  mergeLegacyAndTherapeuticSessionGoals,
+  normalizeTherapeuticPrograms,
+  therapeuticProgramsToSessionGoals,
+} from '../utils/therapeuticPlan';
 import { buildClinicalActionToast, buildClinicalOfflineToast, buildClinicalSaveErrorToast, type ClinicalActionToast } from '../utils/abaSessionFeedback';
 import { getCrisisShortcutIds, getDockVisibleShortcuts, normalizeQuickBehaviorShortcuts } from '../utils/abaClinicalDock';
 import {
@@ -712,8 +718,10 @@ export const SessionMode = ({
 }: any) => {
   if (!isAbaV2Enabled()) return null;
 
-  const baseSessionGoals = (patient.pei?.filter(isTeachingOperationalGoal) || [])
-    .sort((a: any, b: any) => (b.isPriority ? 1 : 0) - (a.isPriority ? 1 : 0));
+  const legacySessionGoals = useMemo(() => (
+    [...(patient.pei?.filter(isTeachingOperationalGoal) || [])]
+      .sort((a: any, b: any) => (b.isPriority ? 1 : 0) - (a.isPriority ? 1 : 0))
+  ), [patient.pei]);
 
   const sessionId = String(activeSession?.id || `draft-${patient?.id || 'patient'}`);
   const patientId = String(patient?.id || '');
@@ -749,6 +757,8 @@ export const SessionMode = ({
   const [sessionLiveSummary, setSessionLiveSummary] = useState<any>(null);
   const [maintenanceOverview, setMaintenanceOverview] = useState<any>({ schedules: [], probeResults: [], alerts: [], summary: null });
   const [maintenancePanel, setMaintenancePanel] = useState<any>(null);
+  const [therapeuticPrograms, setTherapeuticPrograms] = useState<any[]>([]);
+  const [therapeuticPlanLoading, setTherapeuticPlanLoading] = useState(true);
   const [sessionMaintenanceProbes, setSessionMaintenanceProbes] = useState<any>({ available: [], upcoming: [], loaded: false, error: '' });
   const [maintenanceScheduleModalGoal, setMaintenanceScheduleModalGoal] = useState<any>(null);
   const [maintenanceScheduleMode, setMaintenanceScheduleMode] = useState('DEFAULT_SEQUENCE');
@@ -937,6 +947,31 @@ export const SessionMode = ({
       cancelled = true;
     };
   }, []);
+  useEffect(() => {
+    let cancelled = false;
+    setTherapeuticPlanLoading(true);
+    setTherapeuticPrograms([]);
+    dataService.getPatientTherapeuticPlan(patientId)
+      .then((result: any) => {
+        if (cancelled) return;
+        if (result?.success === false) {
+          if (import.meta.env.DEV) console.warn('Plano terapêutico indisponível na sessão:', result?.message || result?.error);
+          setTherapeuticPrograms([]);
+          return;
+        }
+        setTherapeuticPrograms(normalizeTherapeuticPrograms(result?.data || result));
+      })
+      .catch((loadError: any) => {
+        if (import.meta.env.DEV) console.warn('Falha ao carregar programas terapêuticos na sessão:', loadError);
+        if (!cancelled) setTherapeuticPrograms([]);
+      })
+      .finally(() => {
+        if (!cancelled) setTherapeuticPlanLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [patientId]);
   const [editingRecordLocation, setEditingRecordLocation] = useState('');
   const [editingRecordSeverity, setEditingRecordSeverity] = useState(2);
   const [editingRecordAntecedent, setEditingRecordAntecedent] = useState('');
@@ -3967,6 +4002,17 @@ export const SessionMode = ({
       .map((schedule: any) => maintenanceScheduleTargetId(schedule))
       .filter(Boolean)
   ), [sessionAvailableMaintenanceProbeSchedules]);
+  const therapeuticSessionGoals = useMemo(
+    () => therapeuticProgramsToSessionGoals(therapeuticPrograms),
+    [therapeuticPrograms],
+  );
+  const activeTherapeuticProgramCount = useMemo(() => new Set(
+    therapeuticSessionGoals.map((goal: any) => String(goal?.programId || goal?.program_id || '')).filter(Boolean),
+  ).size, [therapeuticSessionGoals]);
+  const baseSessionGoals = useMemo(
+    () => mergeLegacyAndTherapeuticSessionGoals(legacySessionGoals, therapeuticSessionGoals),
+    [legacySessionGoals, therapeuticSessionGoals],
+  );
   const sessionGoals = useMemo(() => (
     mergeSessionGoalsWithAvailableMaintenance(baseSessionGoals, sessionAvailableMaintenanceProbeSchedules)
   ), [baseSessionGoals, sessionAvailableMaintenanceProbeSchedules]);
@@ -5232,6 +5278,17 @@ export const SessionMode = ({
         document.body
       )
     : null;
+
+  if (therapeuticPlanLoading && sessionGoals.length === 0 && upcomingMaintenanceProbeItems.length === 0) {
+    const loadingContent = (
+      <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-white p-6">
+        <Loader2 size={34} className="mb-4 animate-spin text-violet-500" />
+        <p className="text-sm text-slate-500">Preparando os programas da sessão...</p>
+      </div>
+    );
+    if (typeof document === 'undefined') return loadingContent;
+    return createPortal(loadingContent, document.body);
+  }
 
   if (sessionGoals.length === 0 && upcomingMaintenanceProbeItems.length === 0 && !sessionMaintenanceProbes?.error && !(sessionCompleted && postClosureSummary && !showSessionSummary)) {
     const emptyStateContent = (
@@ -7323,6 +7380,17 @@ export const SessionMode = ({
           )}
 
           <section className="rounded-[18px] border border-purple-100 bg-white/90 p-2 shadow-sm" data-session-plan-filter>
+            {activeTherapeuticProgramCount > 0 && (
+              <div className="mb-2 flex items-center justify-between gap-3 px-2 py-1" data-therapeutic-programs-today>
+                <div>
+                  <p className="text-sm font-medium text-gray-800">Programas de hoje</p>
+                  <p className="text-xs text-gray-500">Alvos ativos do Plano terapêutico</p>
+                </div>
+                <span className="rounded-full bg-purple-50 px-2.5 py-1 text-xs font-medium text-[#7a32fc]">
+                  {activeTherapeuticProgramCount} programa(s)
+                </span>
+              </div>
+            )}
             {maintenanceProbeQueueItems.length > 0 && (
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-amber-100 bg-amber-50 px-3 py-1.5">
                 <p className="text-xs font-black text-amber-800">

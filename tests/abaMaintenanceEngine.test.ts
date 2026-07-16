@@ -423,7 +423,8 @@ test('banner de manutencao comunica tipo atual e botao nao registra tentativa', 
   const sessionGoalsEnd = sessionModeCode.indexOf('const maintenanceSchedules = useMemo', sessionGoalsStart);
   const sessionGoalsBody = sessionModeCode.slice(sessionGoalsStart, sessionGoalsEnd);
   assert.match(sessionModeCode, /const isTeachingOperationalGoal = \(goal: any\) => \{/);
-  assert.match(sessionModeCode, /const baseSessionGoals = \(patient\.pei\?\.filter\(isTeachingOperationalGoal\) \|\| \[\]\)/);
+  assert.match(sessionModeCode, /patient\.pei\?\.filter\(isTeachingOperationalGoal\)/);
+  assert.match(sessionGoalsBody, /mergeLegacyAndTherapeuticSessionGoals\(legacySessionGoals, therapeuticSessionGoals\)/);
   assert.match(sessionGoalsBody, /sessionAvailableMaintenanceTargetIds/);
   assert.match(sessionGoalsBody, /mergeSessionGoalsWithAvailableMaintenance\(baseSessionGoals, sessionAvailableMaintenanceProbeSchedules\)/);
   assert.match(sessionGoalsBody, /sessionPlanFilter === 'skills'/);
