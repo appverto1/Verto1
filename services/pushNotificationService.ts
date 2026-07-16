@@ -3,6 +3,7 @@ import {
   buildPatientReminderNotificationPayload,
   resolveBrandingContext,
 } from '../src/services/notificationBranding';
+import { isVertoInstitutionalAsset } from '../src/constants/vertoBranding';
 
 type Logger = Pick<Console, 'log' | 'warn' | 'error'>;
 
@@ -86,7 +87,7 @@ const sanitizeText = (value: unknown, maxLength = 240) =>
 const sanitizeBrandLogoText = (value: unknown) => {
   const text = String(value ?? '').trim();
   if (!text) return '';
-  if (text.includes('/verto-3d-transparent.png')) return '';
+  if (isVertoInstitutionalAsset(text)) return '';
   if (/^data:image\//i.test(text)) return text.slice(0, 1_000_000);
   return text.slice(0, 2000);
 };

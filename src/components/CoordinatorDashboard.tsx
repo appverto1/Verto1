@@ -69,6 +69,7 @@ import { BillingTissSettingsPanel } from "./BillingTissSettingsPanel";
 import { ClinicGlobalSettingsPanel } from "./ClinicGlobalSettingsPanel";
 import { LogoVerto } from "./Common";
 import { SecureImage } from "./SecureMedia";
+import { VERTO_BRAND_ASSETS } from "../constants/vertoBranding";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   BarChart,
@@ -7924,7 +7925,7 @@ export function CoordinatorDashboard({
             <div className="absolute -left-24 -top-28 h-72 w-72 rounded-full bg-[radial-gradient(circle,rgba(139,92,246,0.22)_0%,rgba(168,85,247,0.12)_38%,transparent_72%)] blur-2xl" />
             <div className="absolute -right-[22%] top-1/2 hidden h-[162%] w-[78%] -translate-y-1/2 items-center justify-center lg:flex">
               <img
-                src="/verto-3d-transparent.png"
+                src={VERTO_BRAND_ASSETS.symbol}
                 alt=""
                 className="h-full w-full object-contain opacity-30 drop-shadow-[0_36px_80px_rgba(88,28,135,0.42)]"
               />
@@ -7953,8 +7954,8 @@ export function CoordinatorDashboard({
             <div className="flex justify-center lg:hidden">
               <div className="relative flex h-40 w-40 items-center justify-center sm:h-52 sm:w-52">
                 <img
-                  src="/verto-3d-transparent.png"
-                  alt="Logo 3D da Verto"
+                  src={VERTO_BRAND_ASSETS.symbol}
+                  alt="Símbolo da Verto"
                   className="h-full w-full object-contain drop-shadow-[0_26px_45px_rgba(88,28,135,0.25)]"
                 />
               </div>
@@ -8710,17 +8711,8 @@ export function CoordinatorDashboard({
           <div
             className={`flex shrink-0 items-center ${patientSidebarExpanded ? "gap-2" : "flex-col justify-center gap-2"} mb-5 px-1 transition-all duration-300`}
           >
-            <LogoVerto size={38} />
-            {patientSidebarExpanded && (
-              <div>
-                <span className="font-black text-xl text-slate-900 tracking-tighter block leading-none lowercase">
-                  verto
-                </span>
-                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-[0.18em]">
-                  Gestão
-                </span>
-              </div>
-            )}
+            <LogoVerto size={patientSidebarExpanded ? 30 : 38} showText={patientSidebarExpanded} />
+            {patientSidebarExpanded && <span className="text-[9px] font-bold uppercase tracking-[0.18em] text-slate-400">Gestão</span>}
             <button
               type="button"
               onClick={toggleSidebarExpanded}
@@ -8877,10 +8869,7 @@ export function CoordinatorDashboard({
                 >
                   <div className="flex items-center justify-between mb-8">
                     <div className="flex items-center gap-3">
-                      <LogoVerto size={40} />
-                      <span className="font-black text-xl text-slate-900 tracking-tighter lowercase">
-                        verto
-                      </span>
+                      <LogoVerto size={32} showText={true} />
                     </div>
                     <button
                       onClick={() => setIsMobileMenuOpen(false)}
@@ -9039,17 +9028,8 @@ export function CoordinatorDashboard({
         className={`${isSidebarExpanded ? 'w-64' : 'w-20'} h-screen shrink-0 overflow-hidden bg-white hidden lg:flex flex-col px-4 py-4 border-r border-slate-100 transition-all duration-300 ease-in-out z-20`}
       >
         <div className={`flex shrink-0 items-center ${isSidebarExpanded ? 'gap-2' : 'flex-col justify-center gap-2'} mb-5 px-1 transition-all duration-300`}>
-          <LogoVerto size={38} />
-          {isSidebarExpanded && (
-            <div>
-              <span className="font-black text-xl text-slate-900 tracking-tighter block leading-none lowercase">
-                verto
-              </span>
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em]">
-                Gestão
-              </span>
-            </div>
-          )}
+          <LogoVerto size={isSidebarExpanded ? 30 : 38} showText={isSidebarExpanded} />
+          {isSidebarExpanded && <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-400">Gestão</span>}
           <button
             type="button"
             onClick={toggleSidebarExpanded}
@@ -9215,10 +9195,7 @@ export function CoordinatorDashboard({
               >
                 <div className="flex items-center justify-between mb-8">
                   <div className="flex items-center gap-3">
-                    <LogoVerto size={40} />
-                    <span className="font-black text-xl text-slate-900 tracking-tighter lowercase">
-                      verto
-                    </span>
+                    <LogoVerto size={32} showText={true} />
                   </div>
                   <button
                     onClick={() => setIsMobileMenuOpen(false)}

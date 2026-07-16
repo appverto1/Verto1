@@ -1,5 +1,5 @@
 ﻿import React, { Suspense, useState, useEffect, useMemo, useRef } from 'react';
-import { GlobalStyles, ENERGY_TAGS, ADULT_CONVENTIONAL_TAGS } from './components/Common';
+import { GlobalStyles, ENERGY_TAGS, ADULT_CONVENTIONAL_TAGS, LogoVerto } from './components/Common';
 import { testSupabaseConnection, getSupabase, ensureFreshSession } from './lib/supabase';
 import { Database, CheckCircle2, AlertCircle, Lock, WifiOff, LayoutDashboard, RefreshCw } from 'lucide-react';
 import { clearSensitiveOfflineCacheForUser, getFailedSyncRecords, resetFailedSyncRecord, syncOfflineData } from './services/localDb';
@@ -45,11 +45,11 @@ import {
 } from './utils/appointmentActionUpdates';
 import { normalizeAppointmentFinancialContextType } from './utils/appointmentFinancialContext';
 import {
-  buildBrandingInitials,
   buildPatientReminderModalViewModel,
   friendlyPatientNotificationError,
   resolveBrandingContext,
 } from './services/notificationBranding';
+import { VERTO_BRAND_ASSETS } from './constants/vertoBranding';
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>;
@@ -1740,7 +1740,6 @@ export default function App() {
     };
   };
 
-  const getClinicInitials = (value: string) => buildBrandingInitials(value || 'Clínica');
 
   const getAppointmentConfirmationStatusLabel = (value: string) => {
     const normalized = String(value || '').toLowerCase();
@@ -6749,15 +6748,17 @@ export default function App() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-white">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#7a32fc]"></div>
+      <div className="flex min-h-screen flex-col items-center justify-center gap-5 bg-white">
+        <LogoVerto size={38} showText={true} />
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-violet-100 border-b-[#7a32fc]" aria-label="Carregando" />
       </div>
     );
   }
 
   const lazyFallback = (
-    <div className="min-h-screen flex items-center justify-center bg-white">
-      <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-[#7a32fc]"></div>
+    <div className="flex min-h-screen flex-col items-center justify-center gap-5 bg-white">
+      <LogoVerto size={34} showText={true} />
+      <div className="h-7 w-7 animate-spin rounded-full border-2 border-violet-100 border-b-[#7a32fc]" aria-label="Carregando" />
     </div>
   );
   const userNeedsPatientActivation =
@@ -6804,17 +6805,17 @@ export default function App() {
                         onError={(event) => {
                           event.currentTarget.style.display = 'none';
                           const fallback = event.currentTarget.nextElementSibling as HTMLElement | null;
-                          if (fallback) fallback.style.display = 'flex';
+                          if (fallback) fallback.style.display = 'block';
                         }}
                       />
-                      <span className="hidden h-full w-full items-center justify-center bg-slate-100 text-sm font-black text-slate-700">
-                        {appointmentConfirmationViewModel.initialsFallback}
-                      </span>
+                      <img
+                        src={VERTO_BRAND_ASSETS.symbol}
+                        alt="Verto"
+                        className="hidden h-full w-full object-contain"
+                      />
                     </>
                   ) : (
-                    <span className="flex h-full w-full items-center justify-center bg-slate-100 text-sm font-black text-slate-700">
-                      {appointmentConfirmationViewModel?.initialsFallback || getClinicInitials(appointmentConfirmation.clinicName)}
-                    </span>
+                    <img src={VERTO_BRAND_ASSETS.symbol} alt="Verto" className="h-full w-full object-contain" />
                   )}
                 </div>
                 <div className="min-w-0">

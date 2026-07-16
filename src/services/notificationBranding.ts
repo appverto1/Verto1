@@ -1,3 +1,5 @@
+import { VERTO_BRAND_ASSETS, isVertoInstitutionalAsset } from '../constants/vertoBranding';
+
 export type BrandingSourceType = "clinic" | "professional" | "verto_fallback";
 
 export type BrandingContext = {
@@ -39,7 +41,8 @@ type ReminderModalInput = {
 };
 
 const DEFAULT_CLINIC_NAME = "Clínica";
-export const VERTO_NOTIFICATION_BADGE_URL = "/icon-192.png?v=20260714";
+export const VERTO_NOTIFICATION_ICON_URL = VERTO_BRAND_ASSETS.notificationIcon;
+export const VERTO_NOTIFICATION_BADGE_URL = VERTO_BRAND_ASSETS.notificationBadge;
 const APPOINTMENT_RESPONSE_COPY = "Toque para confirmar, remarcar ou cancelar.";
 const FRIENDLY_ERROR_COPY = "Não foi possível concluir sua solicitação agora. Tente novamente em alguns instantes.";
 
@@ -58,7 +61,7 @@ const firstUrl = (...values: unknown[]) => {
   for (const value of values) {
     const raw = String(value ?? "").trim();
     if (!raw) continue;
-    if (raw.includes("/verto-3d-transparent.png")) continue;
+    if (isVertoInstitutionalAsset(raw)) continue;
     if (/^data:image\//i.test(raw)) return raw.slice(0, 1_000_000);
     const text = raw.slice(0, 2000);
     if (/^(https?:\/\/|\/)/i.test(text)) return text;
@@ -227,7 +230,7 @@ export function buildPatientReminderNotificationPayload(input: ReminderPayloadIn
   return {
     title: input.branding.displayName,
     body,
-    ...(clinicLogoUrl ? { icon: clinicLogoUrl } : {}),
+    icon: clinicLogoUrl || VERTO_NOTIFICATION_ICON_URL,
     badge: VERTO_NOTIFICATION_BADGE_URL,
     tag: appointmentId ? `appointment-reminder-${appointmentId}-${reminderKind}` : undefined,
     url,

@@ -11,6 +11,7 @@ import { SecureImage } from './SecureMedia';
 import { calculateDomainMastery } from '../utils/clinicalMath';
 import { ensureFreshSession } from '../lib/supabase';
 import { getDefaultAnamnesisTemplate, getProfileTemplate, normalizeAnamnesisTemplate } from '../lib/anamnesisSchema';
+import { VERTO_BRAND_ASSETS, isVertoInstitutionalAsset } from '../constants/vertoBranding';
 
 type PortalSection = 'home' | 'appointments' | 'anamnesis' | 'notes' | 'tasks' | 'reports' | 'documents' | 'profile';
 
@@ -1674,8 +1675,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     'verto'
   ].includes(portalIdentityKey(value));
   const isVertoPortalFallbackAsset = (value: any) => {
-    const normalized = normalizePortalText(value).toLowerCase();
-    return /(?:^|\/)(?:verto-3d(?:-transparent)?|logoverto|verto-logo)\.(?:png|webp|jpe?g)(?:$|[?#])/.test(normalized);
+    return isVertoInstitutionalAsset(value);
   };
   const firstPortalLogoUrl = (...values: any[]) =>
     values
@@ -1697,18 +1697,9 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       .filter((value) => value && !professionals.some((professional) => looksLikePortalProfessionalLabel(value, professional)));
     return candidates.find((value) => !isGenericPortalClinicName(value)) || candidates[0] || 'Clínica';
   };
-  const getPortalClinicInitials = (value: any) => {
-    const words = normalizePortalText(value || 'Clínica')
-      .split(/\s+/)
-      .filter(Boolean)
-      .slice(0, 2);
-    return words.map((word) => word.charAt(0).toUpperCase()).join('') || 'C';
-  };
   const renderPortalClinicLogo = (logoUrl: any, clinicName: any, className = 'h-full w-full object-contain p-1') => {
     const fallback = (
-      <span className="flex h-full w-full items-center justify-center bg-slate-100 text-xs font-semibold text-slate-700">
-        {getPortalClinicInitials(clinicName)}
-      </span>
+      <img src={VERTO_BRAND_ASSETS.symbol} alt="Verto" className={className} />
     );
     const safeLogoUrl = firstPortalLogoUrl(logoUrl);
     return safeLogoUrl ? (
@@ -3726,7 +3717,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
               <SecureImage src={profilePicture} alt="Foto do paciente" className="h-full w-full object-cover" />
             </div>
           ) : (
-            <LogoVerto size={50} showText={true} className="drop-shadow-sm shrink-0" />
+            <LogoVerto size={50} className="drop-shadow-sm shrink-0" />
           )}
           <div className="w-px h-8 bg-gray-200 mx-2 hidden sm:block"></div>
           <div>

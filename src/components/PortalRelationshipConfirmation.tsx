@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { CheckCircle2, ShieldCheck } from 'lucide-react';
 import { dataService } from '../services/dataService';
+import { LogoVerto } from './Common';
 
 export function PortalRelationshipConfirmation({ onLogin }: { onLogin?: (user: any) => void }) {
   const token = useMemo(() => {
@@ -123,12 +124,13 @@ export function PortalRelationshipConfirmation({ onLogin }: { onLogin?: (user: a
   return (
     <div className="min-h-screen bg-slate-50 px-4 py-8 text-slate-900">
       <div className="mx-auto w-full max-w-2xl rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+        <LogoVerto size={32} showText={true} className="mb-6" />
         <div className="mb-6 flex items-center gap-3">
           <div className="rounded-2xl bg-violet-100 p-3 text-violet-700">
             <ShieldCheck size={24} />
           </div>
           <div>
-            <p className="text-xs font-black uppercase tracking-[0.22em] text-violet-600">Portal Verto</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-violet-600">Portal seguro</p>
             <h1 className="text-2xl font-black">Confirmar novo vínculo</h1>
           </div>
         </div>

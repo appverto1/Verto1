@@ -1,6 +1,7 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
 import { getSupabase } from '../lib/supabase';
 import { GoogleIcon } from './GoogleIcon';
+import { LogoVerto } from './Common';
 
 type ActivationAccessProps = {
   onLogin: (
@@ -333,6 +334,7 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
       <div className="w-full max-w-xl bg-white border border-slate-100 rounded-3xl shadow-sm p-6 md:p-8">
         <div className="text-center mb-6">
+          <LogoVerto size={34} showText={true} className="mx-auto mb-5" />
           <h1 className="text-2xl font-extrabold text-slate-900">
             {isRecoveryRoute ? 'Recuperacao de Senha' : 'Ativacao de Conta'}
           </h1>

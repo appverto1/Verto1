@@ -1429,7 +1429,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
 
               <div className="p-6 md:p-8 overflow-y-auto">
                 <div className="flex items-center gap-3 mb-6">
-                  <LogoVerto size={32} />
+                  <LogoVerto size={30} showText={true} />
                   <div>
                     <h2 className="text-lg md:text-xl font-semibold tracking-tight">
                       {loginType === 'patient' ? 'Portal do Paciente' : 'Portal do Profissional'}
@@ -1770,7 +1770,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                 {registerStep === 1 && (
                   <div className="animate-slide-up">
                     <div className="flex items-center gap-3 mb-6">
-                      <LogoVerto size={32} />
+                      <LogoVerto size={30} showText={true} />
                       <div>
                         <h2 className="text-lg md:text-xl font-semibold tracking-tight">Começar</h2>
                         <p className="text-gray-400 font-normal text-[9px] md:text-[10px] uppercase tracking-wider">Escolha como deseja usar a Verto</p>
@@ -2052,10 +2052,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
       <footer className="bg-[#1d1f1c] py-20 border-t border-white/10">
         <div className="max-w-7xl mx-auto px-6 grid grid-cols-1 md:grid-cols-4 gap-12">
           <div className="col-span-1 md:col-span-2">
-            <div className="flex items-center gap-2 mb-6">
-              <LogoVerto size={40} />
-              <span className="text-2xl font-logo font-bold tracking-tighter text-[#7a32fc] lowercase">verto</span>
-            </div>
+            <LogoVerto size={40} showText={true} className="mb-6" />
             <p className="text-[#bdb8ae] font-normal max-w-sm leading-relaxed">
               Estruturando cuidado contínuo entre paciente, família, profissional e clínica.
             </p>

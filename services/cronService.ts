@@ -8,6 +8,7 @@ import {
   resolveBrandingContext,
 } from '../src/services/notificationBranding';
 import { resolvePortalPatientDisplayName } from '../src/utils/patientDisplayName';
+import { isVertoInstitutionalAsset } from '../src/constants/vertoBranding';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -154,7 +155,7 @@ const sanitizeClinicNotificationLogoUrl = (value: unknown) => {
   if (!raw) return '';
   const text = /^data:image\//i.test(raw) ? raw.slice(0, 1_000_000) : raw.slice(0, 2_000);
   if (!text) return '';
-  if (/(?:\/|^)(?:verto-3d(?:-transparent)?|logoverto|verto-logo)\.(?:png|webp|jpe?g)(?:$|[?#])/i.test(text)) return '';
+  if (isVertoInstitutionalAsset(text)) return '';
   if (/^data:image\/(png|jpe?g|webp);base64,[a-z0-9+/=\s]+$/i.test(text)) return text;
   if (/^https?:\/\//i.test(text) || (text.startsWith('/') && !text.startsWith('//'))) return text;
   if (text.startsWith('patient-photos/') || /^[\w./-]+\.(png|jpe?g|webp)$/i.test(text)) {

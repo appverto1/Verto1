@@ -590,8 +590,9 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#EEF6FF] flex items-center justify-center">
-        <div className="h-12 w-12 rounded-full border-b-2 border-[#0EA5E9] animate-spin" />
+      <div className="flex min-h-screen flex-col items-center justify-center gap-5 bg-[#EEF6FF]">
+        <LogoVerto size={38} showText={true} />
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-violet-100 border-b-[#7357e8]" aria-label="Carregando" />
       </div>
     );
   }

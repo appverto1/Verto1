@@ -1,5 +1,7 @@
 ﻿export type EmailTemplateProfile = 'professional' | 'patient';
 
+import { VERTO_EMAIL_HORIZONTAL_LOGO_URL } from '../constants/vertoBranding';
+
 type ActivationTemplateInput = {
   nome: string;
   link_ativacao: string;
@@ -40,8 +42,7 @@ const PROFESSIONAL_WELCOME_HTML = `
           <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:16px;overflow:hidden;">
             <tr>
               <td style="padding:34px 36px 12px;text-align:center;">
-                <img src="https://resend-attachments.s3.amazonaws.com/7b85198f-15af-45f6-9ba3-86895bb5c74f" alt="Logo Verto" width="85" height="85" style="display:block;margin:0 auto 12px;outline:none;border:none;text-decoration:none;" />
-                <h1 style="margin:0;color:#3b0764;font-size:44px;line-height:1.05;font-weight:700;">Verto</h1>
+                <img src="${VERTO_EMAIL_HORIZONTAL_LOGO_URL}" alt="Verto" width="180" height="52" style="display:block;width:180px;height:auto;margin:0 auto 16px;outline:none;border:none;text-decoration:none;" />
                 <p style="margin:12px 0 0;color:#8b5cf6;font-size:14px;font-weight:700;letter-spacing:1.8px;text-transform:uppercase;">SUA CLÍNICA NO PRÓXIMO NÍVEL</p>
               </td>
             </tr>
@@ -91,7 +92,7 @@ const PATIENT_WELCOME_HTML = `
           <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:16px;padding:28px 28px 24px;">
             <tr>
               <td style="text-align:center;padding-bottom:8px;">
-                <img src="https://resend-attachments.s3.amazonaws.com/7b85198f-15af-45f6-9ba3-86895bb5c74f" alt="Logo Verto" width="72" height="72" style="display:block;margin:0 auto 12px;border:0;outline:none;" />
+                <img src="${VERTO_EMAIL_HORIZONTAL_LOGO_URL}" alt="Verto" width="160" height="46" style="display:block;width:160px;height:auto;margin:0 auto 16px;border:0;outline:none;" />
                 <h1 style="margin:0;padding:0;font-size:1.5rem;line-height:1.333;color:rgb(46,16,101);font-weight:700;margin-bottom:1rem;">Olá, {{nome}}! 🎉</h1>
                 <p style="margin:0;padding:0;font-size:1.125rem;line-height:1.75rem;color:rgb(91,33,182);margin-bottom:1.5rem;margin-top:16px;">Seu caminho para um acompanhamento mais próximo e humano começou. Estamos muito felizes em participar da sua jornada.</p>
                 <p style="margin:0 0 20px;">
@@ -121,6 +122,7 @@ const PROFESSIONAL_RECOVERY_HTML = `
         <td align="center" style="padding:32px 16px;">
           <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:16px;padding:28px;">
             <tr><td>
+              <img src="${VERTO_EMAIL_HORIZONTAL_LOGO_URL}" alt="Verto" width="160" height="46" style="display:block;width:160px;height:auto;margin:0 auto 22px;border:0;outline:none;" />
               <h1 style="margin:0;padding:0;font-size:1.5rem;line-height:1.333;color:rgb(46,16,101);font-weight:700;margin-bottom:1rem;">Recuperação de Senha 🔐</h1>
               <p style="margin:0;padding:0;font-size:1.125rem;line-height:1.75rem;color:rgb(91,33,182);margin-bottom:1.5rem;margin-top:16px;">Recebemos uma solicitação para redefinir a senha da sua conta Verto. Use o código abaixo no aplicativo para concluir a recuperação:</p>
               <p style="margin:0 0 8px;color:#4c1d95;font-size:14px;font-weight:700;">Código de recuperação:</p>
@@ -142,6 +144,7 @@ const PATIENT_RECOVERY_HTML = `
         <td align="center" style="padding:32px 16px;">
           <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:16px;padding:28px;">
             <tr><td>
+              <img src="${VERTO_EMAIL_HORIZONTAL_LOGO_URL}" alt="Verto" width="160" height="46" style="display:block;width:160px;height:auto;margin:0 auto 22px;border:0;outline:none;" />
               <h1 style="margin:0;padding:0;font-size:1.5rem;line-height:1.333;color:rgb(46,16,101);font-weight:700;margin-bottom:1rem;">Esqueceu sua senha?</h1>
               <p style="margin:0;padding:0;font-size:1.125rem;line-height:1.75rem;color:rgb(91,33,182);margin-bottom:1.5rem;margin-top:16px;">Não se preocupe, {{nome}}! Use o código abaixo no aplicativo para criar sua nova senha:</p>
               <p style="margin:0 0 8px;color:#4c1d95;font-size:14px;font-weight:700;">Código de recuperação:</p>

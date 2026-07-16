@@ -49,6 +49,7 @@ import {
   buildActivationEmailTemplate,
   buildPasswordRecoveryEmailTemplate
 } from './src/services/emailTemplates';
+import { VERTO_EMAIL_HORIZONTAL_LOGO_URL, isVertoInstitutionalAsset } from './src/constants/vertoBranding';
 import {
   buildAbaPromptSnapshot,
   normalizeAbaPromptTypeConfig,
@@ -2761,7 +2762,7 @@ function buildPostPaymentActivationEmail(token: string): string {
             <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#ffffff;border-radius:28px;overflow:hidden;border:1px solid #e5e7eb;box-shadow:0 18px 45px rgba(17,24,39,0.08);">
               <tr>
                 <td style="padding:32px;background:linear-gradient(135deg,#7a32fc 0%,#10b981 100%);color:#ffffff;">
-                  <p style="margin:0 0 10px;font-size:12px;letter-spacing:0.22em;text-transform:uppercase;font-weight:800;">Verto</p>
+                  <img src="${VERTO_EMAIL_HORIZONTAL_LOGO_URL}" alt="Verto" width="170" height="49" style="display:block;width:170px;height:auto;margin:0 0 16px;border:0;outline:none;" />
                   <h1 style="margin:0;font-size:28px;line-height:1.15;font-weight:900;">Bem-vindo à Verto!</h1>
                 </td>
               </tr>
@@ -3041,7 +3042,7 @@ function sanitizeClinicBrandImageUrl(value: unknown): string | null {
   const storagePath = extractPatientPhotosStoragePath(value);
   if (storagePath) return buildPatientPhotoViewUrl(storagePath);
   const raw = sanitizeString(value, 4_000);
-  if (/(?:\/|^)(?:verto-3d(?:-transparent)?|logoverto|verto-logo)\.(?:png|webp|jpe?g)(?:$|[?#])/i.test(raw)) return null;
+  if (isVertoInstitutionalAsset(raw)) return null;
   if (raw && raw.startsWith('/') && !raw.startsWith('//')) {
     return sanitizeString(raw, 1_500);
   }
@@ -11729,7 +11730,7 @@ function buildRelationshipConfirmationEmail(params: { patientName: string; confi
     html: `
       <div style="font-family:Inter,Segoe UI,Arial,sans-serif;color:#0f172a;background:#f8fafc;padding:28px;">
         <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:22px;padding:28px;">
-          <p style="margin:0 0 8px;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#7a32fc;font-weight:800;">Verto</p>
+          <img src="${VERTO_EMAIL_HORIZONTAL_LOGO_URL}" alt="Verto" width="160" height="46" style="display:block;width:160px;height:auto;margin:0 0 20px;border:0;outline:none;" />
           <h1 style="font-size:22px;margin:0 0 14px;">Confirme o novo vínculo</h1>
           <p style="font-size:15px;line-height:1.6;color:#334155;margin:0 0 18px;">
             Uma clínica/profissional solicitou vínculo com o perfil de ${patientName} na Verto. Confirme para permitir o atendimento e escolher quais dados compartilháveis deseja disponibilizar.
@@ -11751,7 +11752,7 @@ function buildPortalLoginCodeEmail(params: { name?: string | null; code: string;
     html: `
       <div style="font-family:Inter,Segoe UI,Arial,sans-serif;color:#0f172a;background:#f8fafc;padding:28px;">
         <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:22px;padding:28px;">
-          <p style="margin:0 0 8px;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#7a32fc;font-weight:800;">Verto</p>
+          <img src="${VERTO_EMAIL_HORIZONTAL_LOGO_URL}" alt="Verto" width="160" height="46" style="display:block;width:160px;height:auto;margin:0 0 20px;border:0;outline:none;" />
           <h1 style="font-size:22px;margin:0 0 14px;">Código de acesso</h1>
           <p style="font-size:15px;line-height:1.6;color:#334155;margin:0 0 18px;">
             Olá, ${name}. Use o código abaixo para entrar no portal e revisar a solicitação de vínculo.
@@ -11773,7 +11774,7 @@ function buildAnamnesisRequestEmail(params: { patientName: string; portalUrl: st
     html: `
       <div style="font-family:Inter,Segoe UI,Arial,sans-serif;color:#0f172a;background:#f8fafc;padding:28px;">
         <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:22px;padding:28px;">
-          <p style="margin:0 0 8px;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#7a32fc;font-weight:800;">Verto</p>
+          <img src="${VERTO_EMAIL_HORIZONTAL_LOGO_URL}" alt="Verto" width="160" height="46" style="display:block;width:160px;height:auto;margin:0 0 20px;border:0;outline:none;" />
           <h1 style="font-size:22px;margin:0 0 14px;">Ficha de anamnese</h1>
           <p style="font-size:15px;line-height:1.6;color:#334155;margin:0 0 18px;">
             A clínica solicitou o preenchimento da ficha de anamnese de ${patientName}. Acesse a Verto para preencher com segurança.

@@ -1,5 +1,7 @@
-const SW_VERSION = "appointments-clinic-branding-v11";
-const VERTO_NOTIFICATION_BADGE = "/icon-192.png?v=20260714";
+const SW_VERSION = "verto-branding-v12";
+const VERTO_NOTIFICATION_ICON = "/branding/verto/verto-icon-192.png?v=20260716";
+const VERTO_NOTIFICATION_BADGE = "/branding/verto/verto-notification-badge.png?v=20260716";
+const LEGACY_VERTO_CACHE_NAMES = new Set(["appointments-clinic-branding-v11"]);
 const APPOINTMENT_NOTIFICATION_CTA = "Toque para confirmar, remarcar ou cancelar.";
 
 const isGenericBrandName = (value) => {
@@ -13,7 +15,8 @@ const isGenericBrandName = (value) => {
 };
 
 const isVertoFallbackAsset = (value) =>
-  /(?:^|\/)(?:verto-3d(?:-transparent)?|logoverto|verto-logo)\.(?:png|webp|jpe?g)(?:$|[?#])/i.test(String(value || ""));
+  /(?:^|\/)(?:verto-3d(?:-transparent)?|logoverto|verto-logo)\.(?:png|webp|jpe?g)(?:$|[?#])/i.test(String(value || "")) ||
+  /(?:^|\/)branding\/verto\/(?:verto-[a-z0-9-]+\.png|favicon\.ico)(?:$|[?#])/i.test(String(value || ""));
 
 const asNotificationAssetUrl = (value) => {
   const source = String(value || "").trim();
@@ -36,7 +39,7 @@ self.addEventListener("activate", (event) => {
         const cacheNames = await self.caches.keys();
         await Promise.all(
           cacheNames
-            .filter((cacheName) => cacheName !== SW_VERSION)
+            .filter((cacheName) => LEGACY_VERTO_CACHE_NAMES.has(cacheName))
             .map((cacheName) => self.caches.delete(cacheName)),
         );
       }
@@ -70,7 +73,8 @@ self.addEventListener("push", (event) => {
   const title = isGenericBrandName(payload.title) && !isGenericBrandName(brandName)
     ? brandName
     : (payload.title || brandName);
-  const iconUrl = asNotificationAssetUrl(brandLogo || (isVertoFallbackAsset(payload.icon) ? "" : payload.icon));
+  const payloadIcon = isVertoFallbackAsset(payload.icon) ? VERTO_NOTIFICATION_ICON : payload.icon;
+  const iconUrl = asNotificationAssetUrl(brandLogo || payloadIcon || VERTO_NOTIFICATION_ICON);
   const badgeUrl = asNotificationAssetUrl(VERTO_NOTIFICATION_BADGE);
 
   event.waitUntil(

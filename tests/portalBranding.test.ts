@@ -153,8 +153,9 @@ test('remarcacao aprovada nao volta a aparecer como solicitacao pendente', () =>
   assert.match(serverCode, /requestedAt > latestRescheduleApprovalAt/);
 });
 
-test('family popup uses neutral branding, logo initials fallback and no pre-confirmed green text', () => {
-  assert.match(appCode, /getClinicInitials/);
+test('family popup keeps clinic branding and uses the official Verto symbol only as fallback', () => {
+  assert.match(appCode, /VERTO_BRAND_ASSETS\.symbol/);
+  assert.match(appCode, /appointmentConfirmationViewModel\.brandLogoUrl/);
   assert.match(appCode, /Lembrete de consulta/);
   assert.match(appCode, /Confirmar presença/);
   assert.match(appCode, /professionalName/);

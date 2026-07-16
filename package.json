@@ -76,6 +76,7 @@
     "test:patient-dashboard": "tsx tests/patientDashboard.test.ts",
     "test:patient-professional-link": "tsx tests/patientProfessionalLink.test.ts",
     "test:notifications": "tsx tests/notificationBranding.test.ts",
+    "test:verto-branding": "tsx tests/vertoRebranding.test.ts",
     "test:appointment-notifications": "tsx tests/appointmentNotifications.test.ts",
     "test:appointment-action-driven": "tsx tests/appointmentActionDriven.test.ts",
     "test:action-driven-system": "tsx tests/actionDrivenSystem.test.ts",

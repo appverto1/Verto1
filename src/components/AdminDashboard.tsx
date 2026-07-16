@@ -269,8 +269,9 @@ export const AdminDashboard = ({ onLogout }: any) => {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#F4F7FE]">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#7a32fc]"></div>
+      <div className="flex min-h-screen flex-col items-center justify-center gap-5 bg-[#F4F7FE]">
+        <LogoVerto size={38} showText={true} />
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-violet-100 border-b-[#7a32fc]" aria-label="Carregando" />
       </div>
     );
   }

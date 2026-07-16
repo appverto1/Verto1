@@ -7,11 +7,11 @@ import {
   AlertCircle,
   Stethoscope,
   Calendar,
-  Shield,
   ArrowRight
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { dataService } from '../services/dataService';
+import { LogoVerto } from './Common';
 
 interface InvitationModalProps {
   user: any;
@@ -100,9 +100,7 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
           {/* Left Side - Info */}
           <div className="bg-[#4318FF] p-8 md:w-1/3 text-white flex flex-col justify-between">
             <div>
-              <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center mb-6">
-                <Shield size={24} />
-              </div>
+              <LogoVerto size={28} showText={true} className="mb-6" />
               <h2 className="text-2xl font-bold mb-4 tracking-tight">Bem-vindo à Verto!</h2>
               <p className="text-blue-100 text-sm leading-relaxed mb-6">
                 Vamos configurar sua equipe. {maxMembers ? `Voce pode convidar ate ${maxMembers - 1} outros profissionais.` : 'Convide os profissionais que vao colaborar na clinica.'}

@@ -1,6 +1,6 @@
 ﻿import React from 'react';
 import { BatteryCharging, BatteryFull, Ear, Users, Brain, Check, CheckCircle, Activity, DollarSign, Briefcase, Heart, Plus } from 'lucide-react';
-import logoVerto from '../assets/Logoverto.png';
+import { VERTO_BRAND_ASSETS } from '../constants/vertoBranding';
 
 export const ENERGY_TAGS = [
   { id: 'sensory', label: 'Sensorial', icon: <Ear size={18} />, color: 'bg-purple-100 text-purple-600 border-purple-200' },
@@ -19,13 +19,16 @@ export const ADULT_CONVENTIONAL_TAGS = [
 ];
 
 export const LogoVerto = ({ size = 64, className = "", showText = false }: { size?: number, className?: string, showText?: boolean }) => (
-  <div className={`flex items-center gap-2 shrink-0 ${className}`}>
-    <div style={{ width: size, height: size }} className="flex items-center justify-center">
-      <img src={logoVerto} alt="Verto Logo" className="w-full h-full object-contain" />
-    </div>
-    {showText && (
-      <span className="text-2xl font-logo font-bold tracking-tighter text-[#7a32fc] lowercase" style={{ fontSize: size * 0.5 }}>verto</span>
-    )}
+  <div
+    className={`flex shrink-0 items-center ${className}`}
+    style={{ width: showText ? Math.round(size * 3.5) : size, height: size }}
+  >
+    <img
+      src={showText ? VERTO_BRAND_ASSETS.horizontalLogo : VERTO_BRAND_ASSETS.symbol}
+      alt="Verto"
+      className="h-full w-full object-contain"
+      draggable={false}
+    />
   </div>
 );
 

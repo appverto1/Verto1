@@ -7,6 +7,7 @@ import {
   friendlyPatientNotificationError,
   resolveBrandingContext,
   VERTO_NOTIFICATION_BADGE_URL,
+  VERTO_NOTIFICATION_ICON_URL,
 } from '../src/services/notificationBranding';
 
 const root = process.cwd();
@@ -108,7 +109,7 @@ const professionalPush = buildPatientReminderNotificationPayload({
 assert.equal(professionalBranding.sourceType, 'verto_fallback');
 assert.equal(professionalBranding.displayName, 'Clínica');
 assert.equal(professionalPush.title, 'Clínica');
-assert.equal((professionalPush as any).icon, undefined);
+assert.equal(professionalPush.icon, VERTO_NOTIFICATION_ICON_URL);
 assert.equal(professionalPush.badge, VERTO_NOTIFICATION_BADGE_URL);
 assert.equal(professionalPush.data.brandLogoUrl, null);
 assert.doesNotMatch(professionalPush.title, /Mateus/);
@@ -139,7 +140,8 @@ assert.match(pushServiceCode, /clinic:\s*\{[\s\S]*?id:\s*clinicId \|\| null/);
 assert.match(serviceWorkerCode, /brandName/);
 assert.match(serviceWorkerCode, /isGenericBrandName/);
 assert.match(serviceWorkerCode, /isVertoFallbackAsset/);
-assert.match(serviceWorkerCode, /const VERTO_NOTIFICATION_BADGE = "\/icon-192\.png\?v=20260714"/);
+assert.match(serviceWorkerCode, /const VERTO_NOTIFICATION_ICON = "\/branding\/verto\/verto-icon-192\.png\?v=20260716"/);
+assert.match(serviceWorkerCode, /const VERTO_NOTIFICATION_BADGE = "\/branding\/verto\/verto-notification-badge\.png\?v=20260716"/);
 assert.match(serviceWorkerCode, /const badgeUrl = asNotificationAssetUrl\(VERTO_NOTIFICATION_BADGE\)/);
 assert.doesNotMatch(serviceWorkerCode, /const badgeUrl = asNotificationAssetUrl\(brandLogo/);
 assert.match(serviceWorkerCode, /\.\.\.\(iconUrl \? \{ icon: iconUrl \} : \{\}\)/);
@@ -162,8 +164,9 @@ assert.match(cronCode, /extractReminderMissingColumnName\(profileBranding\.error
 assert.match(manifestCode, /"name": "Verto"/);
 assert.match(manifestCode, /"short_name": "Verto"/);
 assert.doesNotMatch(manifestCode, /"(?:name|short_name)": "Portal(?: do paciente)?"/);
-assert.match(manifestCode, /"src": "\/icon-192\.png/);
-assert.match(manifestCode, /"src": "\/icon-512\.png/);
+assert.match(manifestCode, /"src": "\/branding\/verto\/verto-icon-192\.png/);
+assert.match(manifestCode, /"src": "\/branding\/verto\/verto-icon-512\.png/);
+assert.match(manifestCode, /"src": "\/branding\/verto\/verto-maskable-icon\.png[^"]*"[\s\S]*?"purpose": "maskable"/);
 assert.doesNotMatch(manifestCode, /portal-icon-(?:192|512)\.png/);
 assert.match(docsCode, /dominio\/origin/);
 assert.match(docsCode, /nao tenta ocultar ou mascarar esse origin/);
