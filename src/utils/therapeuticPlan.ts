@@ -60,12 +60,42 @@ export const THERAPEUTIC_RECOMMENDATION_TYPE_LABELS: Record<string, string> = {
   GENERALIZATION: 'Generalização',
 };
 
+export const THERAPEUTIC_PROGRAM_CREATION_RECOMMENDATION_TYPES = new Set(['INTRODUCE_NEW_TARGET']);
+
+export type TherapeuticRecommendationActionKind =
+  | 'create_program'
+  | 'open_program'
+  | 'review_regression'
+  | 'configure_generalization'
+  | 'schedule_maintenance'
+  | 'review_prompt_fading'
+  | 'review_acquisition'
+  | 'apply_next_session'
+  | 'complete_origin';
+
+export type TherapeuticRecommendationActionPolicy = {
+  primaryAction: TherapeuticRecommendationActionKind;
+  primaryLabel: string;
+  secondaryAction?: TherapeuticRecommendationActionKind;
+  secondaryLabel?: string;
+  destination: string;
+  contextComplete: boolean;
+  programId: string;
+  targetId: string;
+  detailTab?: 'overview' | 'targets' | 'procedure' | 'progress';
+  advancedSection?: 'procedure' | 'support' | 'generalization' | 'management';
+};
+
 export type TherapeuticRecommendationFilters = {
   query?: string;
-  scope?: 'all' | 'untreated' | 'recent';
+  scope?: 'all' | 'untreated' | 'recent' | 'incomplete' | 'treated';
   type?: string;
   origin?: 'all' | 'protocol' | 'program';
+  assessmentId?: string;
+  domainId?: string;
+  programId?: string;
   professionalId?: string;
+  status?: string;
   periodDays?: number | null;
   now?: string | Date;
 };
@@ -86,13 +116,191 @@ const recommendationContext = (recommendation: any) => recommendation?.clinical_
 
 const recommendationCreatedAt = (recommendation: any) => safeText(recommendation?.created_at || recommendation?.createdAt);
 
+const recommendationTypeOf = (recommendation: any) => safeText(
+  recommendation?.recommendation_type || recommendation?.recommendationType,
+).toUpperCase();
+
+const recommendationStatusOf = (recommendation: any) => safeText(recommendation?.status).toUpperCase();
+
+const recommendationConvertedProgram = (recommendation: any) => {
+  const context = recommendationContext(recommendation);
+  return context?.converted_program || context?.convertedProgram || null;
+};
+
 export const recommendationHasTrustedProgramOrigin = (recommendation: any) => {
   const context = recommendationContext(recommendation);
+  const explicitPermission = recommendation?.can_create_program ?? recommendation?.canCreateProgram;
+  const type = recommendationTypeOf(recommendation);
+  const sourceProgramId = safeText(context?.program?.id || recommendation?.program_id || recommendation?.programId);
   return Boolean(
-    recommendation?.can_create_program ??
-    recommendation?.canCreateProgram ??
-    (context?.target?.id && !context?.convertedProgram && !context?.converted_program),
+    explicitPermission === true
+    && THERAPEUTIC_PROGRAM_CREATION_RECOMMENDATION_TYPES.has(type)
+    && context?.target?.id
+    && !sourceProgramId
+    && !recommendationConvertedProgram(recommendation),
   );
+};
+
+export const resolveTherapeuticRecommendationActionPolicy = (
+  recommendation: any,
+): TherapeuticRecommendationActionPolicy => {
+  const context = recommendationContext(recommendation);
+  const type = recommendationTypeOf(recommendation);
+  const convertedProgram = recommendationConvertedProgram(recommendation);
+  const programId = safeText(convertedProgram?.id || context?.program?.id || recommendation?.program_id || recommendation?.programId);
+  const targetId = safeText(context?.target?.id || recommendation?.target_id || recommendation?.targetId);
+  const behaviorId = safeText(context?.behavior?.id || recommendation?.behavior_id || recommendation?.behaviorId);
+  const incomplete = (label = 'Completar origem'): TherapeuticRecommendationActionPolicy => ({
+    primaryAction: 'complete_origin',
+    primaryLabel: label,
+    destination: 'context_review',
+    contextComplete: false,
+    programId,
+    targetId,
+  });
+
+  if (convertedProgram?.id) {
+    return {
+      primaryAction: 'open_program',
+      primaryLabel: 'Abrir programa',
+      destination: 'converted_program',
+      contextComplete: true,
+      programId,
+      targetId,
+      detailTab: 'overview',
+    };
+  }
+
+  if (type === 'INTRODUCE_NEW_TARGET') {
+    if (programId) {
+      return {
+        primaryAction: 'open_program',
+        primaryLabel: 'Abrir programa existente',
+        secondaryAction: 'apply_next_session',
+        secondaryLabel: 'Aplicar à próxima sessão',
+        destination: 'existing_program',
+        contextComplete: Boolean(targetId),
+        programId,
+        targetId,
+        detailTab: 'targets',
+      };
+    }
+    if (recommendationHasTrustedProgramOrigin(recommendation)) {
+      return {
+        primaryAction: 'create_program',
+        primaryLabel: 'Criar programa',
+        secondaryAction: 'apply_next_session',
+        secondaryLabel: 'Aplicar à próxima sessão',
+        destination: 'new_program',
+        contextComplete: true,
+        programId,
+        targetId,
+      };
+    }
+    return incomplete('Vincular habilidade');
+  }
+
+  if (type === 'REGRESSION_ATTENTION') {
+    if (!programId || !targetId) return incomplete();
+    return {
+      primaryAction: 'review_regression',
+      primaryLabel: 'Revisar regressão',
+      secondaryAction: 'apply_next_session',
+      secondaryLabel: 'Acompanhar na próxima sessão',
+      destination: 'existing_program_progress',
+      contextComplete: true,
+      programId,
+      targetId,
+      detailTab: 'progress',
+    };
+  }
+
+  if (type === 'GENERALIZATION') {
+    if (!programId || !targetId) return incomplete();
+    return {
+      primaryAction: 'configure_generalization',
+      primaryLabel: 'Configurar generalização',
+      secondaryAction: 'open_program',
+      secondaryLabel: 'Abrir programa',
+      destination: 'program_generalization',
+      contextComplete: true,
+      programId,
+      targetId,
+      detailTab: 'procedure',
+      advancedSection: 'generalization',
+    };
+  }
+
+  if (type === 'MAINTENANCE_PROBE') {
+    if (!targetId) return incomplete('Vincular habilidade');
+    return {
+      primaryAction: 'schedule_maintenance',
+      primaryLabel: 'Agendar manutenção',
+      secondaryAction: programId ? 'open_program' : undefined,
+      secondaryLabel: programId ? 'Abrir programa' : undefined,
+      destination: 'target_maintenance',
+      contextComplete: true,
+      programId,
+      targetId,
+      detailTab: 'targets',
+    };
+  }
+
+  if (type === 'PROMPT_FADING') {
+    if (!programId || !targetId) return incomplete();
+    return {
+      primaryAction: 'review_prompt_fading',
+      primaryLabel: 'Revisar hierarquia de ajuda',
+      secondaryAction: 'open_program',
+      secondaryLabel: 'Abrir procedimento',
+      destination: 'program_prompt_fading',
+      contextComplete: true,
+      programId,
+      targetId,
+      detailTab: 'procedure',
+      advancedSection: 'support',
+    };
+  }
+
+  if (type === 'MASTERY_REVIEW' || type === 'CONTINUE_TRAINING') {
+    if (!programId || !targetId) return incomplete();
+    return {
+      primaryAction: 'review_acquisition',
+      primaryLabel: type === 'MASTERY_REVIEW' ? 'Revisar aquisição' : 'Abrir programa',
+      secondaryAction: 'apply_next_session',
+      secondaryLabel: 'Aplicar à próxima sessão',
+      destination: 'existing_program',
+      contextComplete: true,
+      programId,
+      targetId,
+      detailTab: type === 'MASTERY_REVIEW' ? 'progress' : 'targets',
+    };
+  }
+
+  if (type === 'BEHAVIOR_MONITORING' || type === 'ABC_COLLECTION') {
+    if (!behaviorId && !targetId) return incomplete('Vincular contexto clínico');
+    return {
+      primaryAction: 'apply_next_session',
+      primaryLabel: 'Adicionar ao planejamento',
+      destination: 'next_session_plan',
+      contextComplete: true,
+      programId,
+      targetId,
+    };
+  }
+
+  if (programId) {
+    return {
+      primaryAction: 'open_program',
+      primaryLabel: 'Abrir programa',
+      destination: 'existing_program',
+      contextComplete: true,
+      programId,
+      targetId,
+      detailTab: 'overview',
+    };
+  }
+  return incomplete();
 };
 
 export const groupTherapeuticRecommendations = (recommendations: any[]): TherapeuticRecommendationGroup[] => {
@@ -104,8 +312,11 @@ export const groupTherapeuticRecommendations = (recommendations: any[]): Therape
     const programId = safeText(recommendation?.program_id || recommendation?.programId || context?.program?.id);
     const protocolId = safeText(context?.protocol?.id || context?.target?.protocol_id || context?.target?.protocolId);
     const type = safeText(recommendation?.recommendation_type || recommendation?.recommendationType).toUpperCase() || 'UNKNOWN';
+    const evidence = recommendation?.evidence && typeof recommendation.evidence === 'object' ? recommendation.evidence : {};
+    const ruleCode = safeText(context?.rule?.code || evidence?.ruleCode || evidence?.rule_code || type);
+    const ruleVersion = safeText(context?.rule?.version || evidence?.ruleVersion || evidence?.rule_version || '1');
     const sourceKey = targetId ? `target:${targetId}` : behaviorId ? `behavior:${behaviorId}` : `recommendation:${safeText(recommendation?.id)}`;
-    const key = `${type}|${sourceKey}|program:${programId || '-'}|protocol:${protocolId || '-'}`;
+    const key = `${type}|${sourceKey}|program:${programId || '-'}|protocol:${protocolId || '-'}|rule:${ruleCode || '-'}@${ruleVersion || '-'}`;
     const rows = grouped.get(key) || [];
     rows.push(recommendation);
     grouped.set(key, rows);
@@ -159,17 +370,34 @@ export const filterTherapeuticRecommendationGroups = (
     const recommendation = group.representative;
     const context = recommendationContext(recommendation);
     const type = safeText(recommendation?.recommendation_type || recommendation?.recommendationType).toUpperCase();
+    const status = recommendationStatusOf(recommendation);
     const createdAt = new Date(group.latestCreatedAt || 0).getTime();
     const professionalId = safeText(context?.responsible_professional?.id || context?.responsibleProfessional?.id);
+    const assessmentId = safeText(context?.assessment?.id);
+    const domainId = safeText(context?.domain?.id);
+    const programId = safeText(context?.program?.id || recommendation?.program_id || recommendation?.programId);
     const hasProtocol = Boolean(context?.protocol?.id || context?.target?.protocol_id || context?.target?.protocolId);
-    const hasProgram = Boolean(context?.program?.id || recommendation?.program_id || recommendation?.programId);
-    const scopeMatches = filters.scope !== 'untreated' || !group.convertedProgram;
+    const hasProgram = Boolean(programId);
+    const treated = Boolean(group.convertedProgram) || ['ACCEPTED', 'APPLIED_TO_NEXT_SESSION', 'REJECTED', 'EXPIRED'].includes(status);
+    const actionPolicy = resolveTherapeuticRecommendationActionPolicy(recommendation);
+    const scopeMatches = filters.scope === 'treated'
+      ? treated
+      : filters.scope === 'incomplete'
+        ? !actionPolicy.contextComplete
+        : filters.scope !== 'untreated' || !treated;
     const recentMatches = filters.scope !== 'recent' || createdAt >= now.getTime() - 30 * 24 * 60 * 60 * 1000;
-    const typeMatches = !filters.type || filters.type === 'all' || type === filters.type;
+    const typeMatches = !filters.type || filters.type === 'all'
+      || type === filters.type
+      || (filters.type === 'ACQUISITION' && ['INTRODUCE_NEW_TARGET', 'MASTERY_REVIEW', 'CONTINUE_TRAINING'].includes(type))
+      || (filters.type === 'HELP' && type === 'PROMPT_FADING');
     const originMatches = !filters.origin || filters.origin === 'all'
       || (filters.origin === 'protocol' && hasProtocol)
       || (filters.origin === 'program' && hasProgram);
     const professionalMatches = !filters.professionalId || filters.professionalId === 'all' || professionalId === filters.professionalId;
+    const assessmentMatches = !filters.assessmentId || filters.assessmentId === 'all' || assessmentId === filters.assessmentId;
+    const domainMatches = !filters.domainId || filters.domainId === 'all' || domainId === filters.domainId;
+    const programMatches = !filters.programId || filters.programId === 'all' || programId === filters.programId;
+    const statusMatches = !filters.status || filters.status === 'all' || status === filters.status;
     const periodMatches = threshold === null || createdAt >= threshold;
     const searchable = [
       recommendation?.title,
@@ -179,10 +407,13 @@ export const filterTherapeuticRecommendationGroups = (
       context?.program?.name,
       context?.protocol?.title,
       context?.domain?.name,
+      context?.assessment?.label,
       context?.responsible_professional?.display_name,
       context?.responsibleProfessional?.displayName,
     ].map(safeText).join(' ').toLocaleLowerCase('pt-BR');
-    return scopeMatches && recentMatches && typeMatches && originMatches && professionalMatches && periodMatches && (!needle || searchable.includes(needle));
+    return scopeMatches && recentMatches && typeMatches && originMatches && professionalMatches
+      && assessmentMatches && domainMatches && programMatches && statusMatches
+      && periodMatches && (!needle || searchable.includes(needle));
   });
 };
 
@@ -335,6 +566,23 @@ export const formatTherapeuticPlanDate = (value: unknown) => {
 
 export const masteryCriterionLabel = (criteria: any) => {
   const source = criteria && typeof criteria === 'object' ? criteria : {};
+  const customMeasure = safeText(source.measure);
+  const customValue = Number(source.value);
+  if (customMeasure && Number.isFinite(customValue)) {
+    const measureLabels: Record<string, string> = {
+      accuracy_percent: 'de acerto',
+      independent_responses: 'respostas independentes',
+      frequency: 'ocorrências',
+      duration_seconds: 'segundos de duração',
+      latency_seconds: 'segundos de latência',
+      steps_percent: 'de etapas concluídas',
+    };
+    const operatorLabels: Record<string, string> = { gte: '≥', gt: '>', eq: '=', lte: '≤' };
+    const unitValue = ['accuracy_percent', 'steps_percent'].includes(customMeasure) ? `${customValue}%` : String(customValue);
+    const requiredSessions = Number(source.requiredSessions ?? source.required_sessions);
+    const sessionMode = safeText(source.sessionMode || source.session_mode) === 'cumulative' ? 'acumuladas' : 'consecutivas';
+    return `${operatorLabels[safeText(source.operator)] || '≥'} ${unitValue} ${measureLabels[customMeasure] || customMeasure}${Number.isFinite(requiredSessions) && requiredSessions > 0 ? ` em ${requiredSessions} sessões ${sessionMode}` : ''}`;
+  }
   const accuracy = Number(source.minAccuracyPercent ?? source.min_accuracy_percent);
   const sessions = Number(source.requiredSessions ?? source.required_sessions);
   if (Number.isFinite(accuracy) && Number.isFinite(sessions) && accuracy > 0 && sessions > 0) {

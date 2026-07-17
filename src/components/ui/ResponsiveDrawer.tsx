@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 
 type ResponsiveDrawerProps = {
   open: boolean;
@@ -9,6 +10,7 @@ type ResponsiveDrawerProps = {
   returnFocusRef?: React.RefObject<HTMLElement | null>;
   scrollContainerRef?: React.RefObject<HTMLDivElement | null>;
   headerLeading?: React.ReactNode;
+  progress?: React.ReactNode;
   footer?: React.ReactNode;
   children: React.ReactNode;
   isDark?: boolean;
@@ -32,6 +34,7 @@ export const ResponsiveDrawer = ({
   returnFocusRef,
   scrollContainerRef,
   headerLeading,
+  progress,
   footer,
   children,
   isDark = false,
@@ -89,10 +92,14 @@ export const ResponsiveDrawer = ({
     };
   }, [open, returnFocusRef]);
 
-  if (!open) return null;
+  if (!open || typeof document === 'undefined') return null;
 
-  return (
-    <div className="fixed inset-0 z-[120]" data-testid="therapeutic-program-drawer-root">
+  const drawer = (
+    <div
+      className="fixed inset-0 z-[240]"
+      data-testid="therapeutic-program-drawer-root"
+      data-portal-root="document-body"
+    >
       <button
         type="button"
         className="absolute inset-0 cursor-default bg-slate-950/45 backdrop-blur-[1px]"
@@ -111,33 +118,36 @@ export const ResponsiveDrawer = ({
         data-testid="therapeutic-program-drawer"
       >
         <header
-          className={`flex shrink-0 items-center justify-between gap-3 border-b px-4 pb-4 pt-[calc(1rem+env(safe-area-inset-top))] sm:px-6 ${
+          className={`shrink-0 border-b px-4 pb-4 pt-[calc(1rem+env(safe-area-inset-top))] sm:px-6 ${
             isDark ? 'border-slate-700' : 'border-slate-100'
           }`}
           data-testid="therapeutic-program-drawer-header"
         >
-          <div className="flex min-w-0 items-center gap-3">
-            {headerLeading}
-            <div className="min-w-0">
-              <h2
-                ref={titleRef}
-                id={titleId}
-                tabIndex={-1}
-                className={`truncate text-lg font-medium outline-none ${isDark ? 'text-slate-100' : 'text-slate-900'}`}
-              >
-                {title}
-              </h2>
-              {description && <p className={`mt-1 text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>{description}</p>}
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex min-w-0 items-start gap-3">
+              {headerLeading}
+              <div className="min-w-0">
+                <h2
+                  ref={titleRef}
+                  id={titleId}
+                  tabIndex={-1}
+                  className={`text-lg font-medium leading-snug outline-none ${isDark ? 'text-slate-100' : 'text-slate-900'}`}
+                >
+                  {title}
+                </h2>
+                {description && <p className={`mt-1 text-sm ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>{description}</p>}
+              </div>
             </div>
+            <button
+              type="button"
+              className={`shrink-0 rounded-xl p-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 ${isDark ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-500 hover:bg-slate-100'}`}
+              onClick={onRequestClose}
+              aria-label="Fechar"
+            >
+              <span aria-hidden="true" className="text-xl leading-none">×</span>
+            </button>
           </div>
-          <button
-            type="button"
-            className={`shrink-0 rounded-xl p-2 ${isDark ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-500 hover:bg-slate-100'}`}
-            onClick={onRequestClose}
-            aria-label="Fechar"
-          >
-            <span aria-hidden="true" className="text-xl leading-none">×</span>
-          </button>
+          {progress && <div className="mt-4" data-testid="therapeutic-program-drawer-progress">{progress}</div>}
         </header>
 
         <div
@@ -161,4 +171,6 @@ export const ResponsiveDrawer = ({
       </aside>
     </div>
   );
+
+  return createPortal(drawer, document.body);
 };

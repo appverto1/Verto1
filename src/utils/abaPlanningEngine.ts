@@ -494,9 +494,9 @@ export function generateNextSessionRecommendations(input: GenerateNextSessionRec
       source_session_id: sourceSessionId,
       recommendation_type: 'MAINTENANCE_PROBE',
       priority: nextProbe.isOverdue || nextProbe.status === 'MISSED' ? 'HIGH' : 'MEDIUM',
-      title: nextProbe.noSchedule ? `Agendar sondagem de manutencao: ${targetNameOf(target)}` : `Revisar manutencao: ${targetNameOf(target)}`,
+      title: nextProbe.noSchedule ? `Agendar sondagem de manutenção: ${targetNameOf(target)}` : `Revisar manutenção: ${targetNameOf(target)}`,
       summary: nextProbe.label,
-      rationale: 'Habilidade em manutencao com sondagem pendente, vencida, sem agenda ou dentro da janela clinica.',
+      rationale: 'Habilidade em manutenção com sondagem pendente, vencida, sem agenda ou dentro da janela clínica.',
       suggested_action: nextProbe.noSchedule ? 'Agendar sondagem de manutenção para a próxima sessão ou escolher uma data.' : 'Usar sondagem de manutenção na próxima sessão, com validação do supervisor.',
       target_id: targetId,
       program_id: targetProgramOf(target) || null,
@@ -786,10 +786,10 @@ export function generateNextSessionRecommendations(input: GenerateNextSessionRec
         source_session_id: sourceSessionId,
         recommendation_type: 'GENERALIZATION',
         priority: 'LOW',
-        title: 'Considerar generalizacao',
-        summary: 'Indicadores recentes estao altos para acuracia e independencia.',
+        title: 'Considerar generalização',
+        summary: 'Indicadores recentes estão altos para acurácia e independência.',
         rationale: 'Resumos clínicos mostram desempenho alto, candidato a revisão de generalização.',
-        suggested_action: 'Supervisor pode avaliar variar contexto, ambiente ou terapeuta na proxima sessao.',
+        suggested_action: 'Supervisor pode avaliar variar contexto, ambiente ou profissional na próxima sessão.',
         target_id: targetId,
         metric_name: 'generalization_candidate',
         previous_value: independenceValue,
@@ -830,6 +830,7 @@ export function acceptRecommendationForNextSession(input: {
 } {
   const now = isoOrNow(input.now);
   const previousStatus = input.recommendation.status;
+  const auditAction = input.createPlanItem ? 'APPLIED_TO_NEXT_SESSION' : 'ACCEPTED';
   const accepted: AbaClinicalRecommendation = {
     ...input.recommendation,
     status: input.createPlanItem ? 'APPLIED_TO_NEXT_SESSION' : 'ACCEPTED',
@@ -860,11 +861,11 @@ export function acceptRecommendationForNextSession(input: {
     recommendation: accepted,
     planItem,
     auditLog: {
-      id: `audit-${stableHash(`${accepted.id || ''}|accepted|${now}`).replace(/^ctx_/, '')}`,
+      id: `audit-${stableHash(`${accepted.id || ''}|${auditAction}`).replace(/^ctx_/, '')}`,
       organization_id: accepted.organization_id,
       patient_id: accepted.patient_id,
       recommendation_id: accepted.id || '',
-      action: input.createPlanItem ? 'APPLIED_TO_NEXT_SESSION' : 'ACCEPTED',
+      action: auditAction,
       previous_status: previousStatus,
       new_status: accepted.status,
       performed_by: input.acceptedBy,

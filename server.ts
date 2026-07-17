@@ -5468,6 +5468,42 @@ function normalizeProtocolArrayForRoute(value: any): any[] {
   return normalizeJsonArrayForRoute(value, ['protocols', 'items', 'data', 'value']).filter(Boolean);
 }
 
+function resolveProtocolSkillOriginForRoute(
+  value: any,
+  params: { protocolId: string; domainId: string; skillId: string }
+): {
+  protocolId: string;
+  protocolTitle: string | null;
+  domainId: string;
+  domainName: string | null;
+  skillId: string;
+  skillName: string | null;
+} | null {
+  const protocol = normalizeProtocolArrayForRoute(value).find(
+    (item: any) => sanitizeString(item?.id, 180) === params.protocolId
+  );
+  if (!protocol) return null;
+
+  const domain = normalizeJsonArrayForRoute(protocol?.data, ['domains', 'items', 'data', 'value']).find(
+    (item: any) => sanitizeString(item?.id, 180) === params.domainId
+  );
+  if (!domain) return null;
+
+  const skill = normalizeJsonArrayForRoute(domain?.skills, ['skills', 'items', 'data', 'value']).find(
+    (item: any) => sanitizeString(item?.id, 180) === params.skillId
+  );
+  if (!skill) return null;
+
+  return {
+    protocolId: sanitizeString(protocol.id, 180),
+    protocolTitle: sanitizeString(protocol.title || protocol.name, 240) || null,
+    domainId: sanitizeString(domain.id, 180),
+    domainName: sanitizeString(domain.name || domain.title, 240) || null,
+    skillId: sanitizeString(skill.id, 180),
+    skillName: sanitizeString(skill.name || skill.title, 240) || null
+  };
+}
+
 function effortEmojiForPercent(value: number | null | undefined): string | null {
   if (value === null || value === undefined || !Number.isFinite(Number(value))) return null;
   const percent = Number(value);
@@ -29787,6 +29823,8 @@ async function startServer() {
   const ABA_MAINTENANCE_PROBE_STATUSES = new Set(['MAINTAINED', 'WATCH', 'REGRESSION_RISK']);
   const ABA_PLANNING_FOCUS_TYPES = new Set(['MAINTENANCE', 'NEW_SKILLS', 'BEHAVIOR_REDUCTION', 'GENERALIZATION', 'MASTERY_REVIEW', 'BALANCED']);
   const ABA_RECOMMENDATION_TYPES = new Set(['MAINTENANCE_PROBE', 'REGRESSION_ATTENTION', 'MASTERY_REVIEW', 'CONTINUE_TRAINING', 'INTRODUCE_NEW_TARGET', 'BEHAVIOR_MONITORING', 'ABC_COLLECTION', 'PROMPT_FADING', 'GENERALIZATION']);
+  const THERAPEUTIC_PROGRAM_CREATION_RECOMMENDATION_TYPES = new Set(['INTRODUCE_NEW_TARGET']);
+  const THERAPEUTIC_PROGRAM_ORIGIN_TYPES = new Set(['manual', 'template', 'protocol', 'recommendation']);
   const ABA_RECOMMENDATION_PRIORITIES = new Set(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']);
   const ABA_RECOMMENDATION_STATUSES = new Set(['SUGGESTED', 'ACCEPTED', 'EDITED', 'REJECTED', 'APPLIED_TO_NEXT_SESSION', 'EXPIRED']);
   const ABA_PLAN_ITEM_STATUSES = new Set(['PLANNED', 'USED_IN_SESSION', 'SKIPPED', 'CANCELLED']);
@@ -50988,6 +51026,7 @@ async function startServer() {
     if (code.includes('THERAPEUTIC_PROGRAM_READ_ONLY')) return 'Programas concluídos ou arquivados não podem receber novos alvos.';
     if (code.includes('THERAPEUTIC_RECOMMENDATION_ALREADY_CONVERTED')) return 'Esta recomendação já originou um programa.';
     if (code.includes('THERAPEUTIC_RECOMMENDATION_CONTEXT_INCOMPLETE')) return 'A recomendação não possui uma habilidade de origem confiável.';
+    if (code.includes('THERAPEUTIC_RECOMMENDATION_ACTION_MISMATCH')) return 'Esta recomendação deve ser tratada no programa ou alvo existente, sem criar outro programa.';
     return 'Não foi possível salvar o programa terapêutico agora.';
   };
 
@@ -51009,8 +51048,12 @@ async function startServer() {
     const targetIds = Array.from(new Set(rows.map((row) => sanitizeString(row?.target_id || row?.targetId, 180)).filter(Boolean))).slice(0, 200);
     const behaviorIds = Array.from(new Set(rows.map((row) => sanitizeString(row?.behavior_id || row?.behaviorId, 180)).filter(Boolean))).slice(0, 200);
     const sessionIds = Array.from(new Set(rows.map((row) => sanitizeString(row?.source_session_id || row?.sourceSessionId, 180)).filter(Boolean))).slice(0, 200);
+    const assessmentIds = Array.from(new Set(rows.map((row) => {
+      const evidence = row?.evidence && typeof row.evidence === 'object' ? row.evidence : {};
+      return sanitizeString(evidence?.evaluationId || evidence?.evaluation_id, 180);
+    }).filter(Boolean))).slice(0, 200);
 
-    const [targetResult, behaviorResult, sessionResult, convertedProgramResult] = await Promise.all([
+    const [targetResult, behaviorResult, sessionResult, assessmentResult, convertedProgramResult] = await Promise.all([
       targetIds.length
         ? supabase
             .from('aba_targets')
@@ -51038,6 +51081,15 @@ async function startServer() {
             .in('id', sessionIds)
             .limit(200)
         : emptySupabaseListResult(),
+      assessmentIds.length
+        ? supabase
+            .from('aba_mastery_evaluations')
+            .select('id,organization_id,clinic_id,patient_id,session_id,target_id,target_name,evaluation_status,status,accuracy_percent,independence_percent,criteria,reasons,evaluated_at,therapist_id')
+            .eq('organization_id', params.organizationId)
+            .eq('patient_id', params.patientId)
+            .in('id', assessmentIds)
+            .limit(200)
+        : emptySupabaseListResult(),
       recommendationIds.length
         ? supabase
             .from('aba_programs')
@@ -51049,13 +51101,14 @@ async function startServer() {
             .limit(200)
         : emptySupabaseListResult()
     ]);
-    for (const result of [targetResult, behaviorResult, sessionResult, convertedProgramResult]) {
+    for (const result of [targetResult, behaviorResult, sessionResult, assessmentResult, convertedProgramResult]) {
       if (result.error) throw result.error;
     }
 
     const targetById = new Map((targetResult.data || []).map((target: any) => [String(target.id), target]));
     const behaviorById = new Map((behaviorResult.data || []).map((behavior: any) => [String(behavior.id), behavior]));
     const sessionById = new Map((sessionResult.data || []).map((session: any) => [String(session.id), session]));
+    const assessmentById = new Map((assessmentResult.data || []).map((assessment: any) => [String(assessment.id), assessment]));
     const convertedProgramByRecommendationId = new Map<string, any>();
     for (const program of convertedProgramResult.data || []) {
       const recommendationId = sanitizeString((program as any)?.origin_id, 180);
@@ -51123,13 +51176,16 @@ async function startServer() {
       const sourceSessionId = sanitizeString(recommendation?.source_session_id || recommendation?.sourceSessionId, 180);
       const session: any = sessionById.get(sourceSessionId) || null;
       const evidence = recommendation?.evidence && typeof recommendation.evidence === 'object' ? recommendation.evidence : {};
+      const assessmentId = sanitizeString(evidence?.evaluationId || evidence?.evaluation_id, 180);
+      const assessment: any = assessmentById.get(assessmentId) || null;
       const professionalId = sanitizeString(
         session?.therapist_id || session?.therapistId || evidence?.responsible_professional_id || evidence?.responsibleProfessionalId || recommendation?.accepted_by,
         120
       );
       const user: any = userById.get(professionalId) || null;
-      const profile: any = profileByUserId.get(professionalId) || null;
-      const professionalTitle = professionalId
+      const profile: any = user ? profileByUserId.get(professionalId) || null : null;
+      const scopedProfessionalId = user ? professionalId : '';
+      const professionalTitle = scopedProfessionalId
         ? readProfessionalTitleFromSource({ metadata: profile?.metadata, professionalTitle: profile?.metadata?.professionalTitle || profile?.metadata?.professional_title }, user?.role === 'therapist' ? DEFAULT_PROFESSIONAL_TITLE : 'Profissional')
         : '';
       const professionalName = stripProfessionalTitlePrefix(profile?.full_name || user?.name || user?.email);
@@ -51139,9 +51195,17 @@ async function startServer() {
       if (!recommendationTypes.has(type)) contextIssues.push('tipo de recomendação não reconhecido');
       if (!targetId) contextIssues.push('habilidade de origem ausente');
       else if (!target) contextIssues.push('habilidade fora do paciente ou da clínica atual');
+      if (assessmentId && !assessment) contextIssues.push('avaliação de origem fora do paciente ou da clínica atual');
       if (target && directProgramId && targetProgramId && directProgramId !== targetProgramId) contextIssues.push('programa de origem divergente');
       const status = sanitizeString(recommendation?.status, 40).toUpperCase();
-      const canCreateProgram = Boolean(target && recommendationTypes.has(type) && !convertedProgram && !['REJECTED', 'EXPIRED'].includes(status) && contextIssues.length === 0);
+      const canCreateProgram = Boolean(
+        target
+        && THERAPEUTIC_PROGRAM_CREATION_RECOMMENDATION_TYPES.has(type)
+        && !program
+        && !convertedProgram
+        && !['REJECTED', 'EXPIRED'].includes(status)
+        && contextIssues.length === 0
+      );
       const periodStart = sanitizeString(evidence?.periodStart || evidence?.period_start || evidence?.dateFrom || evidence?.date_from || evidence?.windowStart || evidence?.window_start, 40) || null;
       const periodEnd = sanitizeString(evidence?.periodEnd || evidence?.period_end || evidence?.dateTo || evidence?.date_to || evidence?.windowEnd || evidence?.window_end, 40) || null;
       const occurredAt = session?.actual_start_at || session?.started_at || session?.scheduled_start_at || session?.reference_date || session?.created_at || null;
@@ -51176,12 +51240,14 @@ async function startServer() {
           } : null,
           protocol: target?.protocol_id ? { id: target.protocol_id, title: target.protocol_title || 'Protocolo de origem' } : null,
           domain: target?.domain_id || target?.domain_name ? { id: target.domain_id || null, name: target.domain_name || recommendation?.domain || null } : null,
-          assessment: evidence?.evaluationId || evidence?.evaluation_id ? {
-            id: evidence.evaluationId || evidence.evaluation_id,
+          assessment: assessment ? {
+            id: assessment.id,
             type: 'mastery_evaluation',
-            label: 'Avaliação de maestria'
+            label: evidence?.evaluationLabel || evidence?.evaluation_label || `Avaliação de maestria${assessment.target_name ? ` · ${assessment.target_name}` : ''}`,
+            evaluated_at: assessment.evaluated_at || null,
+            status: assessment.status || assessment.evaluation_status || null
           } : null,
-          source_session: session ? { id: session.id, occurred_at: occurredAt, professional_id: professionalId || null } : null,
+          source_session: session ? { id: session.id, occurred_at: occurredAt, professional_id: scopedProfessionalId || null } : null,
           period: periodStart || periodEnd ? { start: periodStart, end: periodEnd } : null,
           indicator: {
             metric_name: recommendation?.metric_name || null,
@@ -51190,12 +51256,29 @@ async function startServer() {
             delta_value: recommendation?.delta_value ?? null,
             reason: recommendation?.summary || recommendation?.rationale || null
           },
-          responsible_professional: professionalId ? {
-            id: professionalId,
+          responsible_professional: scopedProfessionalId ? {
+            id: scopedProfessionalId,
             name: professionalName || 'Profissional',
             title: professionalTitle || 'Profissional',
             display_name: `${professionalTitle || 'Profissional'} ${professionalName || ''}`.trim()
           } : null,
+          rule: {
+            code: evidence?.ruleCode || evidence?.rule_code || type,
+            version: evidence?.ruleVersion || evidence?.rule_version || '1'
+          },
+          destination: type === 'INTRODUCE_NEW_TARGET'
+            ? (program ? 'existing_program' : 'new_program')
+            : type === 'REGRESSION_ATTENTION'
+              ? 'existing_program_progress'
+              : type === 'GENERALIZATION'
+                ? 'program_generalization'
+                : type === 'MAINTENANCE_PROBE'
+                  ? 'target_maintenance'
+                  : type === 'PROMPT_FADING'
+                    ? 'program_prompt_fading'
+                    : ['BEHAVIOR_MONITORING', 'ABC_COLLECTION'].includes(type)
+                      ? 'next_session_plan'
+                      : 'existing_program',
           generated_at: recommendation?.created_at || null,
           converted_program: convertedProgram ? { id: convertedProgram.id, name: convertedProgram.name, status: convertedProgram.status } : null
         }
@@ -51203,7 +51286,7 @@ async function startServer() {
     });
     return {
       rows: enriched,
-      queryCount: 4 + (sourceProgramIds.length ? 1 : 0) + (professionalIds.length ? 2 : 0)
+      queryCount: 5 + (sourceProgramIds.length ? 1 : 0) + (professionalIds.length ? 2 : 0)
     };
   };
 
@@ -51384,6 +51467,13 @@ async function startServer() {
         }))
         .filter((target: any) => target.name);
       if (!targets.length) return res.status(400).json({ success: false, error: 'Adicione pelo menos um alvo inicial.' });
+      if (!THERAPEUTIC_PROGRAM_ORIGIN_TYPES.has(originType)) {
+        return res.status(422).json({
+          success: false,
+          error: 'THERAPEUTIC_PROGRAM_ORIGIN_INVALID',
+          message: 'A origem informada para este programa não é válida.'
+        });
+      }
 
       if (originType === 'recommendation' && !originId) {
         return res.status(422).json({ success: false, error: 'THERAPEUTIC_RECOMMENDATION_CONTEXT_INCOMPLETE', message: 'Selecione uma recomendação com origem clínica identificada.' });
@@ -51433,10 +51523,46 @@ async function startServer() {
         ) {
           return res.status(422).json({ success: false, error: 'THERAPEUTIC_RECOMMENDATION_CONTEXT_INCOMPLETE', message: 'Esta recomendação não possui uma habilidade de origem confiável para criar um programa.' });
         }
+        if (!THERAPEUTIC_PROGRAM_CREATION_RECOMMENDATION_TYPES.has(recommendationType) || targetProgramId) {
+          return res.status(422).json({
+            success: false,
+            error: 'THERAPEUTIC_RECOMMENDATION_ACTION_MISMATCH',
+            message: targetProgramId
+              ? 'Esta habilidade já pertence a um programa. Abra o programa existente para realizar a ação clínica indicada.'
+              : 'Este tipo de recomendação deve ser tratado no programa ou alvo relacionado, sem criar um novo programa.'
+          });
+        }
         resolvedProtocolId = sanitizeString(recommendationTarget.protocol_id, 180) || null;
         resolvedProtocolTitle = sanitizeTextField(recommendationTarget.protocol_title, 240) || null;
         resolvedDomainId = sanitizeString(recommendationTarget.domain_id, 180) || null;
         resolvedDomainName = sanitizeTextField(recommendationTarget.domain_name || recommendation.domain, 240) || null;
+      }
+      if (originType === 'protocol') {
+        if (!originId || !resolvedProtocolId || !resolvedDomainId) {
+          return res.status(422).json({
+            success: false,
+            error: 'THERAPEUTIC_PROTOCOL_CONTEXT_INCOMPLETE',
+            message: 'Selecione um protocolo, domínio e habilidade válidos antes de continuar.'
+          });
+        }
+        const stateResult = await fetchClinicStateWithSchemaFallback({ supabase, clinicId, logger: console });
+        if (stateResult.error) throw stateResult.error;
+        const protocolOrigin = resolveProtocolSkillOriginForRoute(stateResult.data?.protocols, {
+          protocolId: resolvedProtocolId,
+          domainId: resolvedDomainId,
+          skillId: originId
+        });
+        if (!protocolOrigin) {
+          return res.status(422).json({
+            success: false,
+            error: 'THERAPEUTIC_PROTOCOL_CONTEXT_INVALID',
+            message: 'A habilidade selecionada não pertence ao protocolo desta clínica. Atualize os dados e tente novamente.'
+          });
+        }
+        resolvedProtocolId = protocolOrigin.protocolId;
+        resolvedProtocolTitle = protocolOrigin.protocolTitle;
+        resolvedDomainId = protocolOrigin.domainId;
+        resolvedDomainName = protocolOrigin.domainName;
       }
       if (originType === 'template' && originId) {
         const templateResult = await supabase
@@ -54650,7 +54776,7 @@ async function startServer() {
     try {
       if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de agendamento para futura consulta')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
-      const organizationId = sanitizeString(req.body?.organization_id || req.body?.organizationId || req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
       const patientId = sanitizeString(req.body?.patient_id || req.body?.patientId, 120);
       const targetId = sanitizeString(req.params.targetId, 180);
       if (!isUuid(targetId)) {

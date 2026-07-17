@@ -5,6 +5,7 @@ import {
   filterTherapeuticRecommendationGroups,
   groupTherapeuticRecommendations,
   recommendationHasTrustedProgramOrigin,
+  resolveTherapeuticRecommendationActionPolicy,
 } from '../src/utils/therapeuticPlan.ts';
 
 const root = process.cwd();
@@ -31,7 +32,7 @@ const recommendation = (overrides: Record<string, any> = {}) => ({
   program_id: 'program-1',
   source_session_id: 'session-1',
   created_at: '2026-07-08T12:00:00.000Z',
-  can_create_program: true,
+  can_create_program: false,
   clinical_context: {
     target: { id: 'target-1', name: 'Responder ao proprio nome', protocol_id: 'protocol-1' },
     program: { id: 'program-1', name: 'Atencao social' },
@@ -78,6 +79,34 @@ test('recomendacao incompleta nao permite criar programa', () => {
   assert.equal(groupTherapeuticRecommendations([incomplete])[0].canCreateProgram, false);
 });
 
+test('somente aquisicao sem programa oferece criacao direta', () => {
+  const acquisition = recommendation({
+    recommendation_type: 'INTRODUCE_NEW_TARGET',
+    can_create_program: true,
+    program_id: null,
+    clinical_context: {
+      ...recommendation().clinical_context,
+      program: null,
+    },
+  });
+  assert.equal(recommendationHasTrustedProgramOrigin(acquisition), true);
+  assert.equal(resolveTherapeuticRecommendationActionPolicy(acquisition).primaryAction, 'create_program');
+
+  const existingProgram = recommendation({
+    recommendation_type: 'INTRODUCE_NEW_TARGET',
+    can_create_program: false,
+  });
+  assert.equal(resolveTherapeuticRecommendationActionPolicy(existingProgram).primaryAction, 'open_program');
+});
+
+test('regressao, generalizacao, manutencao e ajuda usam acoes do contexto existente', () => {
+  assert.equal(resolveTherapeuticRecommendationActionPolicy(recommendation()).primaryAction, 'review_regression');
+  assert.equal(resolveTherapeuticRecommendationActionPolicy(recommendation({ recommendation_type: 'GENERALIZATION' })).primaryAction, 'configure_generalization');
+  assert.equal(resolveTherapeuticRecommendationActionPolicy(recommendation({ recommendation_type: 'MAINTENANCE_PROBE' })).primaryAction, 'schedule_maintenance');
+  assert.equal(resolveTherapeuticRecommendationActionPolicy(recommendation({ recommendation_type: 'PROMPT_FADING' })).primaryAction, 'review_prompt_fading');
+  assert.equal(resolveTherapeuticRecommendationActionPolicy(recommendation({ recommendation_type: 'CONTINUE_TRAINING' })).primaryAction, 'review_acquisition');
+});
+
 test('recomendacao convertida aponta para o programa e bloqueia nova conversao', () => {
   const converted = recommendation({
     can_create_program: false,
@@ -122,6 +151,9 @@ test('fluxo de criacao usa drawer lateral unico e remove o modal central antigo'
   assert.match(drawer, /max-w-\[820px\]/);
   assert.match(drawer, /h-\[100dvh\]/);
   assert.match(drawer, /sm:w-\[min\(820px,calc\(100vw-2rem\)\)\]/);
+  assert.match(drawer, /createPortal\(drawer, document\.body\)/);
+  assert.match(drawer, /data-portal-root="document-body"/);
+  assert.match(drawer, /fixed inset-0 z-\[240\]/);
 });
 
 test('drawer tem uma unica regiao rolavel, header e footer fixos', () => {
@@ -140,7 +172,48 @@ test('drawer bloqueia body, prende foco, fecha com Esc e devolve foco', () => {
   assert.match(drawer, /aria-modal="true"/);
   assert.match(drawer, /aria-labelledby=\{titleId\}/);
   assert.match(drawer, /returnFocusRef\?\.current\?\.focus/);
-  assert.match(panel, /window\.confirm\('Descartar as alteracoes nao salvas|window\.confirm\('Descartar as altera/u);
+  assert.doesNotMatch(panel, /window\.confirm/);
+  assert.match(panel, /closeConfirmationOpen/);
+  assert.match(panel, /Continuar editando/);
+  assert.match(panel, /Descartar alterações/);
+  assert.match(panel, /Salvar como rascunho/);
+});
+
+test('criacao rapida mostra essenciais e recolhe configuracoes avancadas', () => {
+  assert.match(panel, /Nome do programa/);
+  assert.match(panel, /Objetivo terapêutico/);
+  assert.match(panel, /Digite um alvo e pressione Enter/);
+  assert.match(panel, /Durante a sessão, o aplicador verá/);
+  assert.match(panel, /form\.masteryPreset === 'custom'/);
+  assert.match(panel, /data-testid="custom-mastery-fields"/);
+  assert.match(panel, /Ajustes avançados/);
+  assert.match(panel, /advancedSection\('procedure'/);
+  assert.match(panel, /advancedSection\('support'/);
+  assert.match(panel, /advancedSection\('generalization'/);
+  assert.match(panel, /advancedSection\('management'/);
+});
+
+test('alvos aceitam lote, bloqueiam duplicados e podem ser editados ou reordenados', () => {
+  assert.match(panel, /split\(\/\[\\n,;\]\+\//);
+  assert.match(panel, /duplicado\(s\) ignorado\(s\)/);
+  assert.match(panel, /const commitTargetEdit/);
+  assert.match(panel, /const moveTarget/);
+  assert.match(panel, /onPaste=/);
+  assert.match(panel, /Mover \$\{target\} para cima/);
+});
+
+test('sugestoes pedem decisao antes de sobrescrever e permitem desfazer', () => {
+  assert.match(panel, /requestQuickSuggestion/);
+  assert.match(panel, /Preencher apenas campos vazios/);
+  assert.match(panel, /Substituir campos preenchidos/);
+  assert.match(panel, /Desfazer sugestão/);
+  assert.doesNotMatch(panel.match(/const applyQuickSuggestion[^]*?\n  \};/)?.[0] || '', /createTherapeuticProgram|submitProgram/);
+});
+
+test('grupo convertido abre o programa existente e nao reoferece criacao', () => {
+  assert.match(panel, /const policyRecommendation = group\.convertedProgram/);
+  assert.match(panel, /converted_program: group\.convertedProgram/);
+  assert.match(panel, /Programa criado:/);
 });
 
 test('estado, filtros e posicao da recomendacao sao preservados ao voltar', () => {
@@ -162,9 +235,45 @@ test('recomendacoes sao paginadas e carregadas em lote sem fetch por card', () =
   assert.match(enrichment, /behaviorIds/);
   assert.match(enrichment, /sessionIds/);
   assert.match(enrichment, /professionalIds/);
+  assert.match(enrichment, /assessmentIds/);
+  assert.match(enrichment, /assessmentById/);
   assert.doesNotMatch(enrichment, /for \(const recommendation[^]*?supabase\.from/);
   assert.match(dataService, /before: options\.before/);
   assert.match(panel, /Carregar recomendacoes anteriores|Carregar recomenda/u);
+});
+
+test('avaliacao e profissional so entram no contexto depois de validacao no tenant', () => {
+  const enrichment = server.match(/const enrichTherapeuticRecommendationContexts = async[^]*?\n  \};/)?.[0] || '';
+  assert.match(enrichment, /\.from\('aba_mastery_evaluations'\)/);
+  assert.match(enrichment, /\.eq\('organization_id', params\.organizationId\)/);
+  assert.match(enrichment, /\.eq\('patient_id', params\.patientId\)/);
+  assert.match(enrichment, /const profile: any = user \?/);
+  assert.match(enrichment, /const scopedProfessionalId = user \? professionalId : ''/);
+  assert.match(enrichment, /avaliação de origem fora do paciente ou da clínica atual/);
+});
+
+test('backend rejeita criacao para recomendacao que deve atuar no programa existente', () => {
+  const createRoute = server.match(/app\.post\('\/api\/aba\/patients\/:patientId\/therapeutic-programs'[^]*?app\.patch\('\/api\/aba\/patients\/:patientId\/therapeutic-programs\/:programId\/status'/)?.[0] || '';
+  assert.match(createRoute, /THERAPEUTIC_PROGRAM_CREATION_RECOMMENDATION_TYPES\.has\(recommendationType\)/);
+  assert.match(createRoute, /THERAPEUTIC_RECOMMENDATION_ACTION_MISMATCH/);
+  assert.match(createRoute, /targetProgramId/);
+  assert.match(createRoute, /return res\.json\(\{ success: true, data: convertedResult\.data, idempotent: true/);
+});
+
+test('backend valida protocolo, dominio e habilidade na fonte canonica da clinica', () => {
+  const createRoute = server.match(/app\.post\('\/api\/aba\/patients\/:patientId\/therapeutic-programs'[^]*?app\.patch\('\/api\/aba\/patients\/:patientId\/therapeutic-programs\/:programId\/status'/)?.[0] || '';
+  const resolverStart = server.indexOf('function resolveProtocolSkillOriginForRoute');
+  const resolverEnd = server.indexOf('function effortEmojiForPercent', resolverStart);
+  const resolver = resolverStart >= 0 && resolverEnd > resolverStart ? server.slice(resolverStart, resolverEnd) : '';
+  assert.match(createRoute, /THERAPEUTIC_PROGRAM_ORIGIN_TYPES\.has\(originType\)/);
+  assert.match(createRoute, /originType === 'protocol'/);
+  assert.match(createRoute, /fetchClinicStateWithSchemaFallback\(\{ supabase, clinicId/);
+  assert.match(createRoute, /resolveProtocolSkillOriginForRoute\(stateResult\.data\?\.protocols/);
+  assert.match(createRoute, /THERAPEUTIC_PROTOCOL_CONTEXT_INVALID/);
+  assert.match(createRoute, /resolvedProtocolTitle = protocolOrigin\.protocolTitle/);
+  assert.match(createRoute, /resolvedDomainName = protocolOrigin\.domainName/);
+  assert.match(resolver, /item\?\.id/);
+  assert.doesNotMatch(resolver, /title.*includes|name.*includes|localeCompare/i);
 });
 
 test('backend devolve contexto rastreavel e nao permite origem por texto', () => {
@@ -182,7 +291,8 @@ test('backend devolve contexto rastreavel e nao permite origem por texto', () =>
   assert.match(applyBlock, /target\?\.id/);
   assert.match(applyBlock, /target\?\.name/);
   assert.doesNotMatch(applyBlock, /recommendation\?\.title/);
-  assert.doesNotMatch(applyBlock, /recommendation\?\.summary/);
+  assert.match(applyBlock, /const objective = String\(target\?\.description \|\| context\?\.program\?\.objective \|\| targetName\)/);
+  assert.match(applyBlock, /motive: context\?\.indicator\?\.reason \|\| recommendation\?\.summary/);
 });
 
 test('vinculo explicito valida paciente, tenant, alvo e permissao no servidor', () => {
@@ -207,6 +317,17 @@ test('conversao e idempotente e serializada entre retries ou duas abas', () => {
   assert.match(planningEngine, /pushUnique/);
   assert.match(planningEngine, /contextHash/);
   assert.doesNotMatch(migration, /drop table|delete from public\.aba_clinical_recommendations/i);
+});
+
+test('aplicacao contextual usa ids deterministas em retries', () => {
+  const acceptStart = planningEngine.indexOf('export function acceptRecommendationForNextSession');
+  const acceptEnd = planningEngine.indexOf('export function rejectRecommendation', acceptStart);
+  const acceptBlock = acceptStart >= 0 && acceptEnd > acceptStart ? planningEngine.slice(acceptStart, acceptEnd) : '';
+  assert.match(acceptBlock, /id: `plan-\$\{stableHash\(`/);
+  assert.match(acceptBlock, /source_recommendation_id: accepted\.id/);
+  assert.match(acceptBlock, /const auditAction = input\.createPlanItem/);
+  assert.match(acceptBlock, /id: `audit-\$\{stableHash\(`\$\{accepted\.id \|\| ''\}\|\$\{auditAction\}`\)/);
+  assert.doesNotMatch(acceptBlock, /accepted\|\$\{now\}/);
 });
 
 test('programa so e vinculado no RPC final e cancelar nao trata recomendacao', () => {
