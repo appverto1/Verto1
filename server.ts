@@ -28840,8 +28840,11 @@ async function startServer() {
       if (error) throw error;
       return res.json({ success: true, data });
     } catch (error: any) {
-      logRouteDbError('/api/history/:historyId [PATCH]', error, { historyId: sanitizeString(req.params.historyId, 120) });
-      return res.status(500).json({ success: false, error: 'Falha na operação de dados.' });
+      return sendClinicalMutationError(res, '/api/history/:historyId', 'update', error, {
+        historyId: sanitizeString(req.params.historyId, 120),
+        actorId: sanitizeString(req.session.user?.id, 120),
+        patientId: sanitizeString(req.body?.patient_id || req.body?.patientId, 120)
+      });
     }
   });
 
@@ -28943,8 +28946,12 @@ async function startServer() {
       const { data, error } = await updateNoteWithSchemaFallback(effectiveNoteId, updates);
       if (error) throw error;
       return res.json({ success: true, data });
-    } catch (error) {
-      return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+    } catch (error: any) {
+      return sendClinicalMutationError(res, '/api/notes/:noteId', 'update', error, {
+        noteId: sanitizeString(req.params.noteId, 120),
+        actorId: sanitizeString(req.session.user?.id, 120),
+        patientId: sanitizeString(req.body?.patient_id || req.body?.patientId, 120)
+      });
     }
   });
 
@@ -41331,6 +41338,88 @@ async function startServer() {
     };
   };
 
+  type QueuedTissProfileRevalidation = {
+    organizationId: string;
+    user: any;
+    reason: string;
+    runForOrganization: boolean;
+    professionalIds: Set<string>;
+    timer: ReturnType<typeof setTimeout>;
+  };
+
+  const queuedTissProfileRevalidations = new Map<string, QueuedTissProfileRevalidation>();
+  const TISS_PROFILE_REVALIDATION_DEBOUNCE_MS = 150;
+
+  // Perfil global e perfil faturável são persistidos no request; a revalidação derivada
+  // pode ser longa e não deve manter a tela de configurações bloqueada.
+  const queueTissProfileRevalidation = (params: {
+    organizationId: string;
+    user: any;
+    reason: string;
+    professionalId?: string | null;
+  }) => {
+    const organizationId = sanitizeString(params.organizationId, 120);
+    if (!isUuid(organizationId)) {
+      return { reason: params.reason, queued: false, attempted: 0, updated: 0, errors: 0 };
+    }
+
+    const professionalId = sanitizeString(params.professionalId, 120);
+    let queued = queuedTissProfileRevalidations.get(organizationId);
+    if (!queued) {
+      const entry = {
+        organizationId,
+        user: params.user,
+        reason: params.reason,
+        runForOrganization: !isUuid(professionalId),
+        professionalIds: new Set<string>(),
+        timer: null as unknown as ReturnType<typeof setTimeout>
+      };
+      if (isUuid(professionalId)) entry.professionalIds.add(professionalId);
+      queued = entry;
+      queuedTissProfileRevalidations.set(organizationId, queued);
+    } else {
+      queued.user = params.user || queued.user;
+      queued.reason = params.reason;
+      if (!isUuid(professionalId)) {
+        queued.runForOrganization = true;
+      } else if (!queued.runForOrganization) {
+        queued.professionalIds.add(professionalId);
+        if (queued.professionalIds.size > 1) queued.runForOrganization = true;
+      }
+      clearTimeout(queued.timer);
+    }
+
+    queued.timer = setTimeout(() => {
+      queuedTissProfileRevalidations.delete(organizationId);
+      const scopedProfessionalId = queued!.runForOrganization
+        ? null
+        : Array.from(queued!.professionalIds)[0] || null;
+      void (async () => {
+        await markTissPreGuidesStale({
+          organizationId,
+          professionalId: scopedProfessionalId,
+          reason: queued!.reason
+        });
+        return runAffectedTissPipeline({
+          organizationId,
+          professionalId: scopedProfessionalId,
+          user: queued!.user,
+          reason: queued!.reason,
+          limit: 200
+        });
+      })().catch((error: any) => {
+        console.warn('[TISS Pipeline] revalidação assíncrona de perfil falhou:', {
+          organizationId,
+          reason: queued!.reason,
+          code: sanitizeString(error?.code, 40) || null,
+          message: sanitizeTextField(error?.message, 300) || String(error)
+        });
+      });
+    }, TISS_PROFILE_REVALIDATION_DEBOUNCE_MS);
+
+    return { reason: params.reason, queued: true, attempted: 0, updated: 0, errors: 0 };
+  };
+
   const tissPreGuideQuickFilterCodes: Record<string, string[]> = {
     missing_provider: ['CLINIC_TISS_PROFILE_MISSING', 'PROVIDER_DOCUMENT_MISSING', 'PROVIDER_CODE_MISSING', 'CNES_MISSING'],
     missing_payer_profile: ['PAYER_TISS_PROFILE_MISSING', 'PAYER_ANS_REGISTRATION_MISSING', 'PAYER_CONTRACTED_PROVIDER_CODE_MISSING', 'PAYER_CID_REQUIRED'],
@@ -41453,12 +41542,10 @@ async function startServer() {
         .select(CLINIC_TISS_PROFILE_SELECT)
         .maybeSingle();
       if (error) throw error;
-      await markTissPreGuidesStale({ organizationId, reason: 'Dados TISS do prestador alterados.' });
-      const tissPipeline = await runAffectedTissPipeline({
+      const tissPipeline = queueTissProfileRevalidation({
         organizationId,
         user: req.session.user,
-        reason: 'clinic_tiss_profile_changed',
-        limit: 200
+        reason: 'clinic_tiss_profile_changed'
       });
       return sendNoStoreJson(res, { success: true, data, tissPipeline });
     } catch (error: any) {
@@ -42321,13 +42408,11 @@ async function startServer() {
       .select(PROFESSIONAL_BILLING_PROFILE_SELECT)
       .maybeSingle();
     if (error) throw error;
-    await markTissPreGuidesStale({ organizationId, professionalId, reason: 'Perfil faturável do profissional alterado.' });
-    const tissPipeline = await runAffectedTissPipeline({
+    const tissPipeline = queueTissProfileRevalidation({
       organizationId,
       professionalId,
       user,
-      reason: 'professional_billing_profile_changed',
-      limit: 200
+      reason: 'professional_billing_profile_changed'
     });
     return { data, tissPipeline };
   };

@@ -1968,7 +1968,9 @@ test('perfil TISS do prestador salva e le clinic_tiss_profiles sem substituir po
   assert.match(providerPatchRoute, /provider_code:\s*providerCode \|\| null/);
   assert.match(providerPatchRoute, /providerCode\.length > TISS_PROVIDER_CODE_MAX_LENGTH \|\| ansProviderCode\.length > TISS_PROVIDER_CODE_MAX_LENGTH/);
   assert.match(providerPatchRoute, /TISS_PROVIDER_CODE_TOO_LONG/);
-  assert.match(providerPatchRoute, /runAffectedTissPipeline\([\s\S]*clinic_tiss_profile_changed/);
+  assert.match(providerPatchRoute, /queueTissProfileRevalidation\([\s\S]*clinic_tiss_profile_changed/);
+  assert.doesNotMatch(providerPatchRoute, /await runAffectedTissPipeline/);
+  assert.match(serverCode, /queueTissProfileRevalidation[\s\S]*await markTissPreGuidesStale[\s\S]*runAffectedTissPipeline/);
   assert.doesNotMatch(providerPatchRoute, /professionalName|professional_name|user\.name/);
 });
 
@@ -1992,7 +1994,7 @@ test('cadastros TISS sao globais e reutilizaveis em Configuracoes', () => {
   assert.doesNotMatch(billingTissSettingsCode, /Salvar dados do prestador/);
   assert.match(billingTissSettingsCode, /updatePayerTissProfile/);
   assert.match(billingTissSettingsCode, /updateProfessionalBillingProfile/);
-  assert.match(coordinatorCode, /Pré-guias afetadas foram atualizadas automaticamente/);
+  assert.match(coordinatorCode, /Pré-guias afetadas serão atualizadas automaticamente/);
   assert.match(billingTissSettingsCode, /Pré-guias deste pagador foram atualizadas automaticamente/);
   assert.match(billingTissSettingsCode, /Pré-guias deste profissional foram atualizadas automaticamente/);
   assert.doesNotMatch(billingTissSettingsCode, /appointmentId|appointment_id/);

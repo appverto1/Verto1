@@ -78,6 +78,25 @@ test('backend persiste campos profissionais e institucionais de forma tolerante 
   assert.match(serverCode, /clinicEmail:\s*sanitizeEmail\(settings\.clinicEmail\)/);
 });
 
+test('salvamento de configurações não fica bloqueado pela revalidação derivada de Pré-guias', () => {
+  const clinicSave = sliceFrom(coordinatorCode, 'const handleSaveClinicSettings = async', 10500);
+  assert.match(clinicSave, /clinicSettingsSaveInFlightRef/);
+  assert.match(clinicSave, /try\s*\{/);
+  assert.match(clinicSave, /finally\s*\{[\s\S]*hideProcessing\(\)/);
+
+  const providerRoute = sliceFrom(serverCode, "app.patch('/api/admin/tiss/provider-profile'", 5200);
+  assert.match(providerRoute, /queueTissProfileRevalidation/);
+  assert.doesNotMatch(providerRoute, /await runAffectedTissPipeline/);
+  assert.doesNotMatch(providerRoute, /await markTissPreGuidesStale/);
+
+  const professionalUpsert = sliceFrom(serverCode, 'const upsertProfessionalBillingProfile = async', 5000);
+  assert.match(professionalUpsert, /queueTissProfileRevalidation/);
+  assert.doesNotMatch(professionalUpsert, /await runAffectedTissPipeline/);
+  assert.doesNotMatch(professionalUpsert, /await markTissPreGuidesStale/);
+  assert.match(serverCode, /queuedTissProfileRevalidations/);
+  assert.match(serverCode, /await markTissPreGuidesStale\(/);
+});
+
 test('relogin reidrata perfil profissional e dados da clinica pelo professional_profiles', () => {
   const refresh = sliceFrom(appCode, 'const professionalProfile = profileResult?.data?.professional_profile', 3600);
   for (const token of [

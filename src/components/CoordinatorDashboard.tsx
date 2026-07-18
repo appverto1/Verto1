@@ -1235,6 +1235,7 @@ export function CoordinatorDashboard({
   const [clinicPayers, setClinicPayers] = useState<any[]>([]);
   const lastAutoPayerPatientKeyRef = useRef("");
   const sessionSubmitInFlightRef = useRef(false);
+  const clinicSettingsSaveInFlightRef = useRef(false);
   const [isSessionSubmitting, setIsSessionSubmitting] = useState(false);
   const [sessionNumSessions, setSessionNumSessions] = useState(1);
   const [sessionRecurrencePattern, setSessionRecurrencePattern] = useState("weekly");
@@ -6720,7 +6721,11 @@ export function CoordinatorDashboard({
       return;
     }
 
+    if (clinicSettingsSaveInFlightRef.current) return;
+    clinicSettingsSaveInFlightRef.current = true;
     showProcessing(isTherapist ? "Salvando perfil profissional..." : "Salvando perfil e dados da clínica...");
+
+    try {
     const clinicSettings = {
       ...(user?.clinicSettings || {}),
       defaultSessionDuration,
@@ -6771,12 +6776,10 @@ export function CoordinatorDashboard({
         });
         if (!providerResult?.success) {
           showToast(providerResult?.error || "Não foi possível salvar os dados fiscais/TISS da clínica.", "error");
-          hideProcessing();
           return;
         }
       } catch {
         showToast("Não foi possível salvar os dados fiscais/TISS da clínica.", "error");
-        hideProcessing();
         return;
       }
     }
@@ -6809,7 +6812,6 @@ export function CoordinatorDashboard({
           });
       if (!professionalBillingResult?.success) {
         showToast(professionalBillingResult?.error || "Não foi possível salvar o perfil faturável do profissional.", "error");
-        hideProcessing();
         return;
       }
     }
@@ -6856,8 +6858,14 @@ export function CoordinatorDashboard({
         : "A coordenação atualizou dados profissionais, dados institucionais da clínica, horários e branding.",
       "management",
     );
-    hideProcessing();
-    showToast(isTherapist ? "Perfil atualizado com sucesso!" : "Perfil e clínica salvos. Pré-guias afetadas foram atualizadas automaticamente.");
+    showToast(isTherapist ? "Perfil atualizado com sucesso!" : "Perfil e clínica salvos. Pré-guias afetadas serão atualizadas automaticamente.");
+    } catch (error: any) {
+      console.error("Falha ao salvar configurações da clínica:", error);
+      showToast(error?.message || "Não foi possível salvar as configurações agora. Nenhum dado foi confirmado como salvo.", "error");
+    } finally {
+      clinicSettingsSaveInFlightRef.current = false;
+      hideProcessing();
+    }
   };
 
   const normalizeAnamnesisTemplateForEditor = (template: any) => ({

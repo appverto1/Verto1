@@ -97,20 +97,26 @@ test('diario da familia usa historico como fonte persistente e idempotente', () 
   assert.doesNotMatch(historyRoute, /\.select\(\s*['"`]\*['"`]\s*\)/);
 });
 
-test('estrelinhas do diario sao persistidas para o portal do paciente', () => {
+test('estrelinhas do diario persistem no registro familiar sem depender do evento legado', () => {
   const updateHistory = sliceFrom(appCode, 'const handleUpdateHistoryItem = async', 11000);
   assert.match(updateHistory, /resolvePatientEmailForMilestone/);
   assert.match(updateHistory, /stableUuidFromString\(`family-milestone:\$\{sourceRef\}`\)/);
   assert.match(updateHistory, /source:\s*'family_milestone_event'/);
   assert.match(updateHistory, /dataService\.updateNote\(String\(noteId\)/);
   assert.match(updateHistory, /const historyUpdateResult = await dataService\.updateHistoryItem/);
-  assert.match(updateHistory, /return false/);
+  assert.match(updateHistory, /void persistMilestoneEvent\(/);
+  assert.doesNotMatch(updateHistory, /Falha ao confirmar a estrelinha no portal da família/);
   assert.match(updateHistory, /const previousTherapistNotes = therapistNotes/);
   assert.match(updateHistory, /const previousHistory = history/);
   assert.match(updateHistory, /setHistory\(previousHistory\)/);
   assert.match(updateHistory, /setTherapistNotes\(previousTherapistNotes\)/);
   assert.match(updateHistory, /Não foi possível salvar a estrelinha agora\. Tente novamente\./);
   assert.match(updateHistory, /throw new Error\(historyUpdateResult\?\.error \|\| 'Falha ao salvar estrela no histórico\.'\)/);
+});
+
+test('falhas de persistência da estrelinha retornam erro clínico acionável', () => {
+  assert.match(serverCode, /sendClinicalMutationError\(res, '\/api\/notes\/:noteId', 'update'/);
+  assert.match(serverCode, /sendClinicalMutationError\(res, '\/api\/history\/:historyId', 'update'/);
 });
 
 test('offline first criptografado e sync nao perdem mutacoes pendentes', () => {

@@ -3889,6 +3889,10 @@ export default function App() {
       const matchingNote = (Array.isArray(therapistNotes) ? therapistNotes : []).find((n: any) => String(n.id) === String(noteId));
       const notePatientId = String(matchingNote?.patientId || matchingNote?.patient_id || '').trim();
       const notePatientEmail = resolvePatientEmailForMilestone(notePatientId, matchingNote?.patient_email);
+      if (!matchingNote) {
+        alert('Não foi possível localizar o registro original da família para validar este marco. Atualize o prontuário e tente novamente.');
+        return;
+      }
       const updatedNoteText = applyStarMarker(String(matchingNote?.text || matchingNote?.note || ''), starred);
       const updatedNoteSubject = String(matchingNote?.subject || 'Geral').replace(/\u2b50|â­/g, '').trim() || 'Geral';
       const previousTherapistNotes = therapistNotes;
@@ -3921,15 +3925,14 @@ export default function App() {
             throw new Error(noteUpdateResult?.error || 'Falha ao atualizar anotação familiar original.');
           }
         }
-        const milestonePersisted = await persistMilestoneEvent({
+        // A nota da família é a fonte canônica da estrela. O evento abaixo é apenas
+        // compatibilidade/auditoria legada e não pode desfazer uma validação já persistida.
+        void persistMilestoneEvent({
           patientId: notePatientId,
           patientEmail: notePatientEmail,
           sourceRef: rawId,
           awarded: starred
         });
-        if (!milestonePersisted) {
-          throw new Error('Falha ao confirmar a estrelinha no portal da família.');
-        }
       } catch (error) {
         console.error('Falha ao persistir estrela em anotaÃ§Ã£o de famÃ­lia:', error);
         setTherapistNotes(previousTherapistNotes);
@@ -3997,15 +4000,14 @@ export default function App() {
           );
         }
 
-        const milestonePersisted = await persistMilestoneEvent({
+        // O score persistido no registro familiar é canônico; o evento é somente
+        // uma trilha legada para registros que ainda a consomem.
+        void persistMilestoneEvent({
           patientId: String(item?.patientId || item?.patient_id || ''),
           patientEmail,
           sourceRef: rawId,
           awarded: starred
         });
-        if (!milestonePersisted) {
-          throw new Error('Falha ao confirmar a estrelinha no portal da família.');
-        }
       } catch (error) {
         console.error('Falha ao persistir estrelinha de registro da família:', error);
         setHistory(previousHistory);
