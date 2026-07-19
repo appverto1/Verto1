@@ -193,7 +193,9 @@ test('agenda usa fundo semantico e texto branco nos eventos em ambos os temas', 
   const pending = getAppointmentStatusColor('pending_confirmation').card;
 
   assert.match(confirmed, /bg-emerald-700/);
-  assert.match(rescheduleRequested, /bg-orange-700/);
+  assert.match(rescheduleRequested, /bg-yellow-700/);
+  assert.match(rescheduleRequested, /text-white/);
+  assert.doesNotMatch(rescheduleRequested, /bg-orange-/);
   assert.match(cancelled, /bg-red-700/);
   assert.match(pending, /bg-sky-700/);
   [confirmed, rescheduleRequested, cancelled, pending].forEach((card) => assert.match(card, /text-white/));

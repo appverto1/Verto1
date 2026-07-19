@@ -65,6 +65,26 @@ class FakeQuery {
     return this;
   }
 
+  gte(column: string, value: any) {
+    this.filters.push({ op: 'gte', column, value });
+    return this;
+  }
+
+  lte(column: string, value: any) {
+    this.filters.push({ op: 'lte', column, value });
+    return this;
+  }
+
+  lt(column: string, value: any) {
+    this.filters.push({ op: 'lt', column, value });
+    return this;
+  }
+
+  or(value: string) {
+    this.filters.push({ op: 'or', value });
+    return this;
+  }
+
   order(column: string, value: any) {
     this.filters.push({ op: 'order', column, value });
     return this;
@@ -124,6 +144,30 @@ test('/api/history retorna array com select atual e limit', async () => {
   assert.deepEqual(result.data, [{ id: 'history-1', patient_id: 'patient-1' }]);
   assert.equal(supabase.calls[0].selectColumns, HISTORY_SELECT);
   assert.equal(supabase.calls[0].filters.some((item) => item.op === 'limit' && item.value === 20), true);
+  assert.deepEqual(
+    supabase.calls[0].filters.filter((item) => item.op === 'order').map((item) => item.column),
+    ['created_at', 'id']
+  );
+});
+
+test('/api/history aplica período e cursor estável sem consulta por registro', async () => {
+  const supabase = new FakeSupabase({ history: [{ data: [], error: null }] });
+  await fetchHistoryWithSchemaFallback({
+    supabase,
+    patientId: 'patient-1',
+    createdFrom: '2026-01-01T00:00:00.000Z',
+    createdTo: '2026-07-19T23:59:59.999Z',
+    cursorCreatedAt: '2026-07-10T12:00:00.000Z',
+    cursorId: '11111111-1111-4111-8111-111111111111',
+    limit: 41,
+    logger: silentLogger
+  });
+
+  assert.equal(supabase.calls.length, 1);
+  assert.equal(supabase.calls[0].filters.some((item) => item.op === 'gte' && item.column === 'created_at'), true);
+  assert.equal(supabase.calls[0].filters.some((item) => item.op === 'lte' && item.column === 'created_at'), true);
+  assert.equal(supabase.calls[0].filters.some((item) => item.op === 'or' && String(item.value).includes('id.lt.11111111')), true);
+  assert.equal(supabase.calls[0].filters.some((item) => item.op === 'limit' && item.value === 41), true);
 });
 
 test('/api/history remove coluna opcional ausente e remove filtro legado quebrado', async () => {

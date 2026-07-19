@@ -4,7 +4,6 @@ import {
   HelpCircle,
   ShoppingBag,
   UserPlus,
-  LogOut,
   Search,
   Menu,
   X,
@@ -963,16 +962,6 @@ export const ReceptionistDashboard = ({
           })}
         </nav>
 
-        <div className="mt-auto pt-6 border-t border-slate-50">
-          <button
-            onClick={onLogout}
-            className={`flex items-center ${isSidebarExpanded ? 'gap-3 p-3.5' : 'justify-center p-3.5'} w-full text-slate-400 hover:bg-violet-50 hover:text-[#7a32fc] rounded-2xl transition-all font-bold text-sm`}
-            title={!isSidebarExpanded ? "Sair" : ""}
-          >
-            <LogOut size={20} /> 
-            {isSidebarExpanded && <span>Sair</span>}
-          </button>
-        </div>
       </aside>
 
       {/* Main Content Area */}
@@ -1828,15 +1817,6 @@ export const ReceptionistDashboard = ({
                         <UserPlus size={18} /> Novo Paciente
                       </button>
 
-                      <div className="h-px bg-gray-100 my-1"></div>
-
-                      <button
-                        id="menu-logout"
-                        onClick={onLogout}
-                        className="flex items-center gap-3 p-3 hover:bg-red-50 rounded-xl text-red-500 transition-colors text-xs font-semibold uppercase tracking-wider text-left"
-                      >
-                        <LogOut size={18} /> Sair
-                      </button>
                     </div>
                   )}
                 </div>

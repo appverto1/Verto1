@@ -7,6 +7,7 @@ const read = (file: string) => readFileSync(join(root, file), 'utf8');
 
 const appCode = read('src/App.tsx');
 const coordinatorCode = read('src/components/CoordinatorDashboard.tsx');
+const patientDetailCode = read('src/components/PatientDetailView.tsx');
 const dataServiceCode = read('src/services/dataService.ts');
 const localDbCode = read('src/services/localDb.ts');
 const serverCode = read('server.ts');
@@ -77,12 +78,12 @@ test('diario da familia usa historico como fonte persistente e idempotente', () 
   assert.match(familySave, /const persistedPatientId = String\(historySaveResult\.data\.patient_id \|\| historySaveResult\.data\.patientId \|\| ''\)\.trim\(\)/);
   assert.match(familySave, /setResolvedPatientPortalId\(persistedPatientId\)/);
   assert.match(familySave, /return \{ success: true, data: historySaveResult\?\.data \|\| newHistoryItem \}/);
-  assert.match(appCode, /const refreshPatientHistoryForProfessional = async \(patientId: any\) =>/);
-  assert.match(appCode, /dataService\.getHistory\(normalizedPatientId\)/);
+  assert.match(appCode, /const refreshPatientHistoryForProfessional = async \(\s*patientId: any,\s*params: \{ limit\?: number; cursor\?: string; from\?: string; to\?: string \} = \{\}/);
+  assert.match(appCode, /dataService\.getHistory\(normalizedPatientId, params\)/);
   assert.match(appCode, /const next = mergeHistoryRecords\(prev, result\.data, normalizedPatientId\)/);
   assert.match(appCode, /historyRef\.current = next/);
-  assert.match(coordinatorCode, /onRefreshPatientHistory\?: \(patientId: any\) => Promise<any> \| any/);
-  assert.match(coordinatorCode, /onRefreshPatientHistory\?\.?\(resolvedPatient\.id\)/);
+  assert.match(coordinatorCode, /onRefreshPatientHistory\?: \(\s*patientId: any,\s*params\?: \{ limit\?: number; cursor\?: string; from\?: string; to\?: string \}/);
+  assert.match(patientDetailCode, /onRefreshPatientHistory\(patientId, \{\s*limit: PATIENT_HISTORY_PAGE_SIZE,/);
 
   const historyRoute = sliceFrom(serverCode, "app.post('/api/history'", 6200);
   assert.match(historyRoute, /const incomingHistoryId = sanitizeString\(req\.body\?\.id/);

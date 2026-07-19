@@ -12,6 +12,7 @@ const read = (file: string) => readFileSync(join(root, file), 'utf8');
 
 const serverCode = read('server.ts');
 const dataServiceCode = read('src/services/dataService.ts');
+const patientDetailCode = read('src/components/PatientDetailView.tsx');
 const migrationCode = read('supabase/migrations/20260601143000_patient_longitudinal_timeline.sql');
 const portabilityCode = read('src/utils/patientPortability.ts');
 
@@ -48,18 +49,44 @@ test('migration cria timeline longitudinal, import log, indices idempotentes e R
   assert.match(migrationCode, /idx_patient_history_imports_idempotency/);
 });
 
-test('timeline e historico importado sao rotas autenticadas, escopadas e paginadas', () => {
+test('historico exibido usa cursor, filtros visiveis e merge incremental', () => {
+  const historyRoute = routeSlice("app.get('/api/history/:patientId'", 6200);
+  assert.match(historyRoute, /fetchHistoryWithSchemaFallback/);
+  assert.match(historyRoute, /limit: limit \+ 1/);
+  assert.match(historyRoute, /encodeClinicalHistoryCursor/);
+  assert.match(historyRoute, /pagination: \{ limit, hasMore, nextCursor \}/);
+  assert.match(dataServiceCode, /async getHistory\(patientId: string, params:/);
+  assert.match(dataServiceCode, /cursor: params\.cursor/);
+  assert.match(patientDetailCode, /Todo o histórico/);
+  assert.match(patientDetailCode, /Últimos 30 dias/);
+  assert.match(patientDetailCode, /Últimos 90 dias/);
+  assert.match(patientDetailCode, /Últimos 6 meses/);
+  assert.match(patientDetailCode, /Último ano/);
+  assert.match(patientDetailCode, /Período personalizado/);
+  assert.match(patientDetailCode, /Carregar registros anteriores/);
+  assert.match(patientDetailCode, /historyRequestsInFlightRef/);
+  assert.match(patientDetailCode, /clinicContext\?\.clinicId/);
+  assert.match(read('src/App.tsx'), /String\(b\?\.id \|\| ''\)\.localeCompare\(String\(a\?\.id \|\| ''\)\)/);
+});
+
+test('timeline e historico importado sao rotas autenticadas, escopadas e paginadas por cursor', () => {
   const timelineRoute = routeSlice("app.get('/api/patients/:patientId/timeline'");
   const importedRoute = routeSlice("app.get('/api/patients/:patientId/imported-history'");
   assert.match(timelineRoute, /checkAuth, checkPatientAccess, requireRoles\('coordinator', 'therapist', 'admin', 'owner'\)/);
   assert.match(timelineRoute, /parseBoundedListLimit/);
   assert.match(timelineRoute, /\.eq\('organization_id', clinicId\)/);
   assert.match(timelineRoute, /\.eq\('patient_id', patientId\)/);
-  assert.match(timelineRoute, /\.range\(offset, offset \+ limit - 1\)/);
+  assert.match(timelineRoute, /decodeClinicalHistoryCursor/);
+  assert.match(timelineRoute, /\.order\('created_at', \{ ascending: false \}\)/);
+  assert.match(timelineRoute, /\.order\('id', \{ ascending: false \}\)/);
+  assert.match(timelineRoute, /\.limit\(limit \+ 1\)/);
+  assert.match(timelineRoute, /nextCursor/);
+  assert.doesNotMatch(timelineRoute, /\.range\(/);
   assert.match(timelineRoute, /PATIENT_LONGITUDINAL_TIMELINE_SELECT/);
   assert.match(timelineRoute, /LONGITUDINAL_TIMELINE_VIEWED/);
   assert.match(importedRoute, /\.eq\('is_imported', true\)/);
   assert.match(dataServiceCode, /async getPatientLongitudinalTimeline/);
+  assert.match(dataServiceCode, /params\.cursor/);
   assert.match(dataServiceCode, /async getPatientImportedHistory/);
   assert.match(dataServiceCode, /async createPatientSharedHistorySnapshot/);
 });

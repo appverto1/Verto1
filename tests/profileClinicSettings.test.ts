@@ -6,6 +6,8 @@ const root = process.cwd();
 const read = (file: string) => readFileSync(join(root, file), 'utf8');
 
 const coordinatorCode = read('src/components/CoordinatorDashboard.tsx');
+const therapistCode = read('src/components/TherapistDashboard.tsx');
+const receptionistCode = read('src/components/ReceptionistDashboard.tsx');
 const settingsMenuCode = read('src/components/SettingsMenu.tsx');
 const appCode = read('src/App.tsx');
 const serverCode = read('server.ts');
@@ -27,6 +29,36 @@ test('configuracoes saem do menu lateral e ficam apenas na engrenagem', () => {
   assert.match(settingsMenuCode, /<Settings size=\{20\}/);
   assert.match(settingsMenuCode, /Perfil e clínica/);
   assert.match(coordinatorCode, /onViewProfile=\{\(\) => navigateToTab\("settings"\)\}/);
+});
+
+test('perfil e logout ficam centralizados no menu da engrenagem', () => {
+  for (const dashboard of [coordinatorCode, therapistCode, receptionistCode]) {
+    assert.doesNotMatch(dashboard, />\s*Sair do Sistema\s*</i);
+    assert.doesNotMatch(dashboard, /onClick=\{onLogout\}/);
+    assert.doesNotMatch(dashboard, /id=["']menu-logout["']/);
+  }
+
+  assert.match(settingsMenuCode, /profileImageUrl/);
+  assert.match(settingsMenuCode, /profileImageFailed/);
+  assert.match(settingsMenuCode, /object-cover/);
+  assert.match(settingsMenuCode, /userInitials/);
+  assert.match(settingsMenuCode, /Sair do sistema/);
+  assert.match(settingsMenuCode, /await onLogout\(\)/);
+  assert.match(settingsMenuCode, /if \(isLoggingOut\) return/);
+  assert.match(settingsMenuCode, /Não foi possível sair agora\. Tente novamente\./);
+  assert.match(settingsMenuCode, /disabled=\{isLoggingOut\}/);
+});
+
+test('menu da conta usa papel da organizacao ativa e navegacao acessivel', () => {
+  assert.match(settingsMenuCode, /user\?\.activeWorkspaceRole/);
+  assert.match(settingsMenuCode, /user\?\.activeOrganizationRole/);
+  assert.match(settingsMenuCode, /aria-haspopup="menu"/);
+  assert.match(settingsMenuCode, /aria-expanded=\{isOpen\}/);
+  assert.match(settingsMenuCode, /role="menu"/);
+  assert.match(settingsMenuCode, /role="menuitem"/);
+  assert.match(settingsMenuCode, /event\.key !== 'Escape'/);
+  assert.match(settingsMenuCode, /triggerRef\.current\?\.focus\(\)/);
+  assert.match(settingsMenuCode, /firstActionRef\.current\?\.focus\(\)/);
 });
 
 test('perfil profissional e dados da clinica aparecem como blocos separados', () => {

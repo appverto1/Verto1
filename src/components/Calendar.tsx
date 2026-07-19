@@ -150,11 +150,11 @@ export const getAppointmentStatusColor = (status: any) => {
     },
     RESCHEDULE_REQUESTED: {
       canonical,
-      dot: 'bg-amber-500',
-      badge: 'border-amber-200 bg-amber-50 text-amber-700',
-      soft: 'border-amber-100 bg-amber-50/70 text-amber-950',
-      card: 'border-orange-700 bg-orange-700 text-white shadow-[0_10px_26px_rgba(194,65,12,0.34)] hover:bg-orange-600',
-      text: 'text-amber-700',
+      dot: 'bg-yellow-500',
+      badge: 'border-yellow-300 bg-yellow-50 text-yellow-800',
+      soft: 'border-yellow-200 bg-yellow-50/80 text-yellow-950',
+      card: 'border-yellow-700 bg-yellow-700 text-white shadow-[0_10px_26px_rgba(161,98,7,0.32)] hover:bg-yellow-600',
+      text: 'text-yellow-800',
       icon: RefreshCcw
     },
     RESCHEDULED: {
@@ -371,7 +371,7 @@ export const CalendarWidget = ({ agenda, currentDate, onDateChange, onDateSelect
         <div className="mt-6 flex items-center justify-center gap-6 text-[10px] font-bold text-gray-400 uppercase tracking-wider">
              <div className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-green-500"></div> Confirmado</div>
              <div className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-yellow-500"></div> Pendente</div>
-             <div className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-amber-500"></div> Remarcar</div>
+             <div className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-yellow-500"></div> Remarcar</div>
              <div className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-red-500"></div> Cancelado</div>
         </div>
     </div>

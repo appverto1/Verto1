@@ -669,14 +669,14 @@ export function evaluateTargetMastery(input: EvaluateTargetMasteryInput): AbaMas
       consecutiveSuccessfulDays: 0,
       criterionProgressCount: 0,
       criterionRequiredCount: 0,
-      criterionProgressLabel: '0/0 tentativas',
+      criterionProgressLabel: 'Critério não configurado',
       criterionProgressKind: 'none',
       sequenceBrokenByLastTrial: false,
       status: 'INSUFFICIENT_DATA',
       reasons: [{ code: 'NO_CRITERIA', message: 'Nenhum criterio ativo encontrado para esta meta ou programa.' }],
       suggestedPhase: 'teaching',
       criterionLabel: 'Criterio nao configurado',
-      performanceText: '0/0 tentativas'
+      performanceText: 'Critério não configurado'
     };
   }
 
@@ -963,7 +963,7 @@ export function buildRegressionAlertFromMaintenanceResult(input: {
         ? 'MEDIUM'
         : 'LOW';
   const consecutiveText = result.consecutiveFailureCount >= 2
-    ? `${result.consecutiveFailureCount} probes consecutivos abaixo do criterio`
+    ? `${result.consecutiveFailureCount} sondagens consecutivas abaixo do criterio`
     : 'Risco de regressao';
   return {
     id: input.alertId || `regression-alert-${result.targetId}-${result.occurredAt}`,

@@ -316,7 +316,7 @@ test('multiplas falhas consecutivas geram alerta sugerido', () => {
   assert.equal(result.consecutiveFailureCount, 2);
   const alert = buildRegressionAlertFromMaintenanceResult({ result: { ...result, id: 'probe-1' } });
   assert.equal(alert?.severity, 'LOW');
-  assert.match(alert?.message || '', /2 probes consecutivos abaixo do criterio/);
+  assert.match(alert?.message || '', /2 sondagens consecutivas abaixo do criterio/);
 });
 
 test('migration cria tabelas, estados clinicos, schedules e alertas sem mutar target automaticamente', () => {

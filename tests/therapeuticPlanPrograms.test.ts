@@ -233,6 +233,14 @@ test('Plano terapêutico e coleta deixam explícitos programa, alvo, sincroniza�
   assert.ok(sessionMode.includes("setSessionHistoryOpen((open) => !open)"));
 });
 
+test('Plano terapeutico possui uma unica acao principal para iniciar sessao', () => {
+  const planHeaderStart = patientDetail.indexOf('Objetivos, programas de ensino, alvos e progresso do paciente.');
+  assert.ok(planHeaderStart >= 0);
+  const planHeader = patientDetail.slice(planHeaderStart, planHeaderStart + 900);
+  assert.doesNotMatch(planHeader, /Iniciar Sess[aã]o|Iniciar sess[aã]o/);
+  assert.equal((panel.match(/> Iniciar sess[aã]o</g) || []).length, 1);
+});
+
 for (const { name, fn } of tests) {
   fn();
   console.log(`[ok] ${name}`);

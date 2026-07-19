@@ -1618,11 +1618,11 @@ export const dataService = {
     }
   },
 
-  async getPatientLongitudinalTimeline(patientId: string, params: { limit?: number; offset?: number } = {}) {
+  async getPatientLongitudinalTimeline(patientId: string, params: { limit?: number; cursor?: string } = {}) {
     try {
       const searchParams = new URLSearchParams();
       if (params.limit) searchParams.set('limit', String(params.limit));
-      if (params.offset) searchParams.set('offset', String(params.offset));
+      if (params.cursor) searchParams.set('cursor', String(params.cursor));
       const suffix = searchParams.toString() ? `?${searchParams.toString()}` : '';
       const response = await fetch(`/api/patients/${encodeURIComponent(patientId)}/timeline${suffix}`, {
         headers: await getAuthHeaders(),
@@ -1824,24 +1824,35 @@ export const dataService = {
     }
   },
 
-  async getHistory(patientId: string) {
+  async getHistory(patientId: string, params: { limit?: number; cursor?: string; from?: string; to?: string } = {}) {
     try {
-      const response = await fetch(endpointWithLimit(`/api/history/${patientId}`, 20), {
+      const endpoint = endpointWithQuery(`/api/history/${encodeURIComponent(patientId)}`, {
+        limit: normalizeListLimit(params.limit, 40, 100),
+        cursor: params.cursor,
+        from: params.from,
+        to: params.to
+      });
+      const response = await fetch(endpoint, {
         headers: await getAuthHeaders(),
         credentials: 'include'
       });
       if (response.ok) {
         const result = await response.json();
-        for (const h of result.data) {
-          await saveEncryptedRecord({ id: h.id, data: h, type: 'history', sync_status: 'synced', last_updated: Date.now(), method: 'POST', endpoint: '/api/history' });
-        }
+        await Promise.all((Array.isArray(result?.data) ? result.data : []).map((h: any) =>
+          saveEncryptedRecord({ id: h.id, data: h, type: 'history', sync_status: 'synced', last_updated: Date.now(), method: 'POST', endpoint: '/api/history' })
+        ));
         return result;
       }
     } catch (error) {
       console.log('Fetching history from local storage...');
     }
     const local = await getRecordsByType('history');
-    return { success: true, data: local.filter(r => r.data.patient_id === patientId).map(r => r.data) };
+    return {
+      success: true,
+      data: local.filter(r => r.data.patient_id === patientId).map(r => r.data),
+      pagination: { limit: normalizeListLimit(params.limit, 40, 100), hasMore: false, nextCursor: null },
+      offline: true
+    };
   },
 
   async getHistoryByEmail(email: string) {

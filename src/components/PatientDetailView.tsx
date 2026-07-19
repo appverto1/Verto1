@@ -80,10 +80,51 @@ const isVbMappProtocol = (protocol: any) => {
 };
 
 type PatientDetailTab = 'history' | 'notes' | 'report' | 'plan' | 'session' | 'aba-charts' | 'files';
+type PatientHistoryPeriod = 'all' | '30d' | '90d' | '180d' | '365d' | 'custom';
+type PatientHistoryPaginationState = {
+  initialized: boolean;
+  loading: boolean;
+  loadingMore: boolean;
+  error: string;
+  hasMore: boolean;
+  nextCursor: string;
+  offline: boolean;
+};
+
+const PATIENT_HISTORY_PAGE_SIZE = 40;
+
+const resolvePatientHistoryRange = (period: PatientHistoryPeriod, customFrom: string, customTo: string) => {
+  if (period === 'all') return { from: '', to: '', ready: true };
+  if (period === 'custom') {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(customFrom) || !/^\d{4}-\d{2}-\d{2}$/.test(customTo)) {
+      return { from: '', to: '', ready: false };
+    }
+    const from = new Date(`${customFrom}T00:00:00`);
+    const to = new Date(`${customTo}T23:59:59.999`);
+    if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from.getTime() > to.getTime()) {
+      return { from: '', to: '', ready: false };
+    }
+    return { from: from.toISOString(), to: to.toISOString(), ready: true };
+  }
+
+  const daysByPeriod: Record<Exclude<PatientHistoryPeriod, 'all' | 'custom'>, number> = {
+    '30d': 30,
+    '90d': 90,
+    '180d': 180,
+    '365d': 365,
+  };
+  const to = new Date();
+  to.setHours(23, 59, 59, 999);
+  const from = new Date(to);
+  from.setHours(0, 0, 0, 0);
+  from.setDate(from.getDate() - (daysByPeriod[period] - 1));
+  return { from: from.toISOString(), to: to.toISOString(), ready: true };
+};
+
 const isUuidLike = (value: any) =>
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || '').trim());
 
-export const PatientDetailView = ({ patient, onBack, history, notes: externalNotes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false, anamnesisTemplate, allowedTabs, userRole, themeMode, scheduledSession, startScheduledSessionKey }: any) => {
+export const PatientDetailView = ({ patient, onBack, history, notes: externalNotes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, onRefreshPatientHistory, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false, anamnesisTemplate, allowedTabs, userRole, themeMode, scheduledSession, startScheduledSessionKey }: any) => {
   const safeSetProtocols =
     typeof setProtocols === 'function' ? setProtocols : null;
   const coalescePatientText = (...values: any[]) => {
@@ -309,6 +350,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   };
   const initialChartFilters = readPersistedChartFilters();
   const [activeTab, setActiveTab] = useState(initialTab); 
+  const [historyPeriod, setHistoryPeriod] = useState<PatientHistoryPeriod>('all');
+  const [historyCustomFrom, setHistoryCustomFrom] = useState('');
+  const [historyCustomTo, setHistoryCustomTo] = useState('');
+  const [historyPaginationByKey, setHistoryPaginationByKey] = useState<Record<string, PatientHistoryPaginationState>>({});
+  const historyRequestsInFlightRef = React.useRef(new Set<string>());
   const [newNote, setNewNote] = useState(""); 
   const [noteMode, setNoteMode] = useState('private'); 
   const [noteSearchQuery, setNoteSearchQuery] = useState("");
@@ -410,6 +456,94 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         '',
     ).trim()
   );
+
+  const historyRange = useMemo(
+    () => resolvePatientHistoryRange(historyPeriod, historyCustomFrom, historyCustomTo),
+    [historyPeriod, historyCustomFrom, historyCustomTo]
+  );
+  const historyRequestKey = [
+    String(clinicContext?.clinicId || clinicContext?.organizationId || 'current-clinic'),
+    String(patient?.id || ''),
+    historyPeriod,
+    historyRange.from,
+    historyRange.to,
+  ].join(':');
+  const historyPagination = historyPaginationByKey[historyRequestKey] || {
+    initialized: false,
+    loading: false,
+    loadingMore: false,
+    error: '',
+    hasMore: false,
+    nextCursor: '',
+    offline: false,
+  };
+
+  const requestPatientHistoryPage = React.useCallback(async (cursor = '') => {
+    const patientId = String(patient?.id || '').trim();
+    if (!patientId || !historyRange.ready || typeof onRefreshPatientHistory !== 'function') return;
+    const requestKey = `${historyRequestKey}:${cursor || 'first'}`;
+    if (historyRequestsInFlightRef.current.has(requestKey)) return;
+    historyRequestsInFlightRef.current.add(requestKey);
+    setHistoryPaginationByKey((current) => ({
+      ...current,
+      [historyRequestKey]: {
+        ...(current[historyRequestKey] || {
+          initialized: false,
+          error: '',
+          hasMore: false,
+          nextCursor: '',
+          offline: false,
+        }),
+        loading: !cursor,
+        loadingMore: Boolean(cursor),
+        error: '',
+      },
+    }));
+
+    try {
+      const result = await onRefreshPatientHistory(patientId, {
+        limit: PATIENT_HISTORY_PAGE_SIZE,
+        cursor: cursor || undefined,
+        from: historyRange.from || undefined,
+        to: historyRange.to || undefined,
+      });
+      if (!result?.success) throw new Error(result?.error || 'Não foi possível carregar o histórico.');
+      setHistoryPaginationByKey((current) => ({
+        ...current,
+        [historyRequestKey]: {
+          initialized: true,
+          loading: false,
+          loadingMore: false,
+          error: '',
+          hasMore: Boolean(result?.pagination?.hasMore),
+          nextCursor: String(result?.pagination?.nextCursor || ''),
+          offline: Boolean(result?.offline),
+        },
+      }));
+    } catch (error: any) {
+      setHistoryPaginationByKey((current) => ({
+        ...current,
+        [historyRequestKey]: {
+          ...(current[historyRequestKey] || {
+            initialized: false,
+            hasMore: false,
+            nextCursor: '',
+            offline: false,
+          }),
+          loading: false,
+          loadingMore: false,
+          error: String(error?.message || 'Não foi possível carregar o histórico.'),
+        },
+      }));
+    } finally {
+      historyRequestsInFlightRef.current.delete(requestKey);
+    }
+  }, [historyRange.from, historyRange.ready, historyRange.to, historyRequestKey, onRefreshPatientHistory, patient?.id]);
+
+  useEffect(() => {
+    if (activeTab !== 'history' || !historyRange.ready || historyPagination.initialized || historyPagination.loading || historyPagination.error) return;
+    void requestPatientHistoryPage();
+  }, [activeTab, historyPagination.error, historyPagination.initialized, historyPagination.loading, historyRange.ready, requestPatientHistoryPage]);
 
   const flashPEIConfirmation = (goalId: any, skillId: any) => {
     if (peiConfirmationTimerRef.current) {
@@ -3104,6 +3238,29 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     });
   }, [history, notes, isKidsProfile, patient?.id, patient?.email]);
 
+  const visibleHistoryWithFamilyNotes = useMemo(() => {
+    const rows = Array.isArray(historyWithFamilyNotes) ? historyWithFamilyNotes : [];
+    if (historyPeriod === 'all' || !historyRange.ready || !historyRange.from || !historyRange.to) return rows;
+    const fromMs = new Date(historyRange.from).getTime();
+    const toMs = new Date(historyRange.to).getTime();
+    return rows.filter((item: any) => {
+      const rawDate = item?.created_at || item?.createdAt || item?.date || '';
+      let timestamp = new Date(rawDate).getTime();
+      if (Number.isNaN(timestamp)) {
+        const group = String(item?.date_group || item?.dateGroup || '').trim();
+        const isoMatch = group.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        const brMatch = group.match(/^(\d{2})[/-](\d{2})[/-](\d{4})$/);
+        const normalized = isoMatch
+          ? `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`
+          : brMatch
+            ? `${brMatch[3]}-${brMatch[2]}-${brMatch[1]}`
+            : '';
+        timestamp = normalized ? new Date(`${normalized}T12:00:00`).getTime() : Number.NaN;
+      }
+      return Number.isFinite(timestamp) && timestamp >= fromMs && timestamp <= toMs;
+    });
+  }, [historyPeriod, historyRange.from, historyRange.ready, historyRange.to, historyWithFamilyNotes]);
+
   const normalizeNoteText = (value: string) =>
     String(value || '')
       .replace(/ðŸ“/g, '📝')
@@ -3647,7 +3804,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     }).length;
   }, [isKidsProfile, historyWithFamilyNotes]);
 
-  const groupedHistory = (historyWithFamilyNotes || []).reduce((groups: any, item: any) => {
+  const groupedHistory = (visibleHistoryWithFamilyNotes || []).reduce((groups: any, item: any) => {
     const groupKey = getPatientTimelineGroupKey(item);
     const group = groups[groupKey] || [];
     group.push(item);
@@ -5814,7 +5971,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         criterion: null,
         label: 'Criterio de maestria nao configurado',
         sourceLabel: 'Criterio de maestria nao configurado',
-        progressLabel: '0/0',
+        progressLabel: 'Critério não configurado',
         requiredCount: 0
       };
     }
@@ -8997,6 +9154,68 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       <div className={`min-w-0 p-4 transition-colors sm:p-6 ${isPanelDark ? 'bg-[#081324]' : 'bg-gray-50'}`}>
         {activeTab === 'history' ? ( 
           <div className="space-y-6"> 
+            <section className={`rounded-2xl border p-4 ${isPanelDark ? 'border-slate-700 bg-[#101b2e]' : 'border-slate-200 bg-white'}`} aria-label="Período do histórico">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+                <div className="grid min-w-0 flex-1 grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  <label className="block">
+                    <span className={`mb-1.5 block text-xs font-medium ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>Período visível</span>
+                    <select
+                      value={historyPeriod}
+                      onChange={(event) => setHistoryPeriod(event.target.value as PatientHistoryPeriod)}
+                      className={`h-11 w-full rounded-xl border px-3 text-sm outline-none transition focus:border-[#7a32fc] focus:ring-2 focus:ring-[#7a32fc]/15 ${isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-200 bg-white text-slate-700'}`}
+                    >
+                      <option value="all">Todo o histórico</option>
+                      <option value="30d">Últimos 30 dias</option>
+                      <option value="90d">Últimos 90 dias</option>
+                      <option value="180d">Últimos 6 meses</option>
+                      <option value="365d">Último ano</option>
+                      <option value="custom">Período personalizado</option>
+                    </select>
+                  </label>
+                  {historyPeriod === 'custom' && (
+                    <React.Fragment>
+                      <label className="block">
+                        <span className={`mb-1.5 block text-xs font-medium ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>De</span>
+                        <input
+                          type="date"
+                          value={historyCustomFrom}
+                          onChange={(event) => setHistoryCustomFrom(event.target.value)}
+                          className={`h-11 w-full rounded-xl border px-3 text-sm outline-none transition focus:border-[#7a32fc] focus:ring-2 focus:ring-[#7a32fc]/15 ${isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-200 bg-white text-slate-700'}`}
+                        />
+                      </label>
+                      <label className="block">
+                        <span className={`mb-1.5 block text-xs font-medium ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>Até</span>
+                        <input
+                          type="date"
+                          value={historyCustomTo}
+                          onChange={(event) => setHistoryCustomTo(event.target.value)}
+                          className={`h-11 w-full rounded-xl border px-3 text-sm outline-none transition focus:border-[#7a32fc] focus:ring-2 focus:ring-[#7a32fc]/15 ${isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-200 bg-white text-slate-700'}`}
+                        />
+                      </label>
+                    </React.Fragment>
+                  )}
+                </div>
+                <p className={`text-xs ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`} aria-live="polite">
+                  {historyPagination.loading
+                    ? 'Carregando registros...'
+                    : `${visibleHistoryWithFamilyNotes.length} registro${visibleHistoryWithFamilyNotes.length === 1 ? '' : 's'} carregado${visibleHistoryWithFamilyNotes.length === 1 ? '' : 's'}`}
+                </p>
+              </div>
+              {!historyRange.ready && historyPeriod === 'custom' && (
+                <p className="mt-3 text-sm text-amber-700">Informe uma data inicial e final válidas para consultar o período.</p>
+              )}
+              {historyPagination.error && (
+                <div className="mt-3 flex flex-col gap-2 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700 sm:flex-row sm:items-center sm:justify-between" role="alert">
+                  <span>{historyPagination.error}</span>
+                  <button type="button" onClick={() => void requestPatientHistoryPage()} className="min-h-10 rounded-lg border border-rose-300 px-3 font-medium hover:bg-rose-100">
+                    Tentar novamente
+                  </button>
+                </div>
+              )}
+              {historyPagination.offline && (
+                <p className="mt-3 text-xs text-amber-700">Exibindo os registros disponíveis neste dispositivo. A paginação será retomada quando houver conexão.</p>
+              )}
+            </section>
             {showCoordinatorPatientRadar && (
               <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
                 <RadarDomainAssessmentChart
@@ -9249,7 +9468,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 </div>
               </React.Fragment>
             ) : null}
-            {isKidsProfile && ((sortedDateKeys?.length || 0) > 0 ? sortedDateKeys.map((dateKey, gIdx) => {
+            {isKidsProfile && historyPagination.loading && (sortedDateKeys?.length || 0) === 0 ? (
+              <div className="space-y-3" aria-label="Carregando histórico">
+                {[0, 1, 2].map((item) => <div key={item} className={`h-24 animate-pulse rounded-2xl ${isPanelDark ? 'bg-slate-800' : 'bg-slate-200/70'}`} />)}
+              </div>
+            ) : null}
+            {isKidsProfile && !historyPagination.loading && ((sortedDateKeys?.length || 0) > 0 ? sortedDateKeys.map((dateKey, gIdx) => {
               const dateItems = groupedHistory[dateKey] || [];
               const familyItems = dateItems.filter((item: any) => item.type === 'family_note' || item.type === 'photo');
               const sessionItems = dateItems.filter((item: any) => item.type !== 'family_note' && item.type !== 'photo');
@@ -9327,7 +9551,19 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 </div> 
               </div>
               );
-            }) : <p className="text-center text-gray-400 mt-10">Nenhum histórico disponível.</p>)} 
+            }) : <p className="text-center text-gray-400 mt-10">Nenhum histórico disponível para este período.</p>)}
+            {historyPagination.hasMore && (
+              <div className="flex justify-center pt-2">
+                <button
+                  type="button"
+                  disabled={historyPagination.loadingMore || !historyPagination.nextCursor}
+                  onClick={() => void requestPatientHistoryPage(historyPagination.nextCursor)}
+                  className={`min-h-11 rounded-xl border px-5 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${isPanelDark ? 'border-slate-600 text-slate-100 hover:bg-slate-800' : 'border-slate-200 bg-white text-slate-700 hover:border-[#7a32fc]/40 hover:text-[#7a32fc]'}`}
+                >
+                  {historyPagination.loadingMore ? 'Carregando registros...' : 'Carregar registros anteriores'}
+                </button>
+              </div>
+            )}
           </div> 
         ) : activeTab === 'notes' ? ( 
           <div className="space-y-4 animate-fade-in"> 
@@ -9708,14 +9944,6 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                     <p className={`mt-1 text-xs ${isPanelDark ? 'text-slate-300' : 'text-gray-500'}`}>Objetivos, programas de ensino, alvos e progresso do paciente.</p>
                   </div>
                   <div className="flex gap-2">
-                    {peiGoals?.some((g: any) => g.isPriority || g.status === 'in_progress') && (
-                      <button 
-                        onClick={() => requestSessionStart('fullscreen')}
-                        className="bg-[#7a32fc] text-white font-semibold px-6 py-3 rounded-2xl shadow-lg shadow-[#7a32fc]/20 hover:opacity-90 active:scale-95 transition-all flex items-center gap-2 text-sm"
-                      >
-                        <Activity size={20} /> Iniciar Sessão
-                      </button>
-                    )}
                     <div className="p-3 bg-[#05CD99]/10 rounded-2xl text-[#05CD99]">
                       <Target size={24} />
                     </div>

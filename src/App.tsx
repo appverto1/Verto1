@@ -2103,7 +2103,8 @@ export default function App() {
     return Array.from(byId.values()).sort((a: any, b: any) => {
       const aTime = new Date(a?.created_at || a?.date || 0).getTime();
       const bTime = new Date(b?.created_at || b?.date || 0).getTime();
-      return bTime - aTime;
+      if (bTime !== aTime) return bTime - aTime;
+      return String(b?.id || '').localeCompare(String(a?.id || ''));
     });
   };
 
@@ -3540,13 +3541,16 @@ export default function App() {
     return true;
   }, [user, patientAssignedTaskCount, patientAssignedTasksLoadError, patientContextLoaded, tasks]);
 
-  const refreshPatientHistoryForProfessional = async (patientId: any) => {
+  const refreshPatientHistoryForProfessional = async (
+    patientId: any,
+    params: { limit?: number; cursor?: string; from?: string; to?: string } = {}
+  ) => {
     const normalizedPatientId = String(patientId || '').trim();
     if (!normalizedPatientId || !user || !['therapist', 'coordinator', 'receptionist', 'admin', 'owner'].includes(String(user.role || '').toLowerCase())) {
       return { success: false, error: 'Paciente inválido.' };
     }
     try {
-      const result = await dataService.getHistory(normalizedPatientId);
+      const result = await dataService.getHistory(normalizedPatientId, params);
       if (!result?.success || !Array.isArray(result?.data)) {
         return { success: false, error: result?.error || 'Não foi possível atualizar o histórico.' };
       }
@@ -3555,7 +3559,7 @@ export default function App() {
         historyRef.current = next;
         return next;
       });
-      return { success: true, data: result.data };
+      return { success: true, data: result.data, pagination: result?.pagination || null, offline: Boolean(result?.offline) };
     } catch (error: any) {
       console.error('Falha ao atualizar histórico persistido do paciente:', error);
       return { success: false, error: error?.message || 'Não foi possível atualizar o histórico.' };

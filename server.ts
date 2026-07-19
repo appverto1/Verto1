@@ -1839,6 +1839,42 @@ function sanitizeDate(value: unknown): string | null {
   return date;
 }
 
+type ClinicalHistoryCursor = {
+  createdAt: string;
+  id: string;
+};
+
+function normalizeClinicalHistoryBoundary(value: unknown, endOfDay = false): string | null {
+  const raw = sanitizeString(value, 80);
+  if (!raw) return null;
+  if (DATE_ONLY_REGEX.test(raw)) {
+    return `${raw}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}Z`;
+  }
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+function encodeClinicalHistoryCursor(row: any): string | null {
+  const id = sanitizeString(row?.id, 160);
+  const parsed = new Date(row?.created_at || row?.createdAt || '');
+  if (!id || Number.isNaN(parsed.getTime())) return null;
+  return Buffer.from(JSON.stringify({ createdAt: parsed.toISOString(), id }), 'utf8').toString('base64url');
+}
+
+function decodeClinicalHistoryCursor(value: unknown): ClinicalHistoryCursor | null {
+  const raw = sanitizeString(value, 600);
+  if (!raw) return null;
+  try {
+    const decoded = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
+    const id = sanitizeString(decoded?.id, 160);
+    const parsed = new Date(decoded?.createdAt || '');
+    if (!id || !/^[a-zA-Z0-9_-]+$/.test(id) || Number.isNaN(parsed.getTime())) return null;
+    return { createdAt: parsed.toISOString(), id };
+  } catch {
+    return null;
+  }
+}
+
 function sanitizePhoneE164(value: unknown): string | null {
   const raw = sanitizeString(value, 30);
   if (!raw) return null;
@@ -22148,20 +22184,30 @@ async function startServer() {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const limit = parseBoundedListLimit(req.query?.limit, 50, 100);
-      const offset = Math.max(0, Math.min(5000, Number(req.query?.offset || 0) || 0));
+      const rawCursor = sanitizeString(req.query?.cursor, 600);
+      const cursor = rawCursor ? decodeClinicalHistoryCursor(rawCursor) : null;
       if (!isUuid(patientId) || !isUuid(clinicId)) return res.status(400).json({ success: false, error: 'Paciente inválido.' });
-      const { data, error } = await supabase
+      if (rawCursor && !cursor) return res.status(400).json({ success: false, error: 'Cursor de histórico inválido.' });
+      let query = supabase
         .from('patient_longitudinal_timeline_items')
         .select(PATIENT_LONGITUDINAL_TIMELINE_SELECT)
         .eq('organization_id', clinicId)
-        .eq('patient_id', patientId)
-        .order('item_date', { ascending: false, nullsFirst: false })
+        .eq('patient_id', patientId);
+      if (cursor) {
+        query = query.or(`created_at.lt.${cursor.createdAt},and(created_at.eq.${cursor.createdAt},id.lt.${cursor.id})`);
+      }
+      const { data, error } = await query
         .order('created_at', { ascending: false })
-        .range(offset, offset + limit - 1);
+        .order('id', { ascending: false })
+        .limit(limit + 1);
       if (error) {
-        if (isMissingRelationError(error)) return res.json({ success: true, data: [], pagination: { limit, offset, hasMore: false }, warning: 'Timeline longitudinal ainda não configurada.' });
+        if (isMissingRelationError(error)) return res.json({ success: true, data: [], pagination: { limit, hasMore: false, nextCursor: null }, warning: 'Timeline longitudinal ainda não configurada.' });
         throw error;
       }
+      const fetchedRows = Array.isArray(data) ? data : [];
+      const hasMore = fetchedRows.length > limit;
+      const rows = fetchedRows.slice(0, limit);
+      const nextCursor = hasMore && rows.length ? encodeClinicalHistoryCursor(rows[rows.length - 1]) : null;
       void persistActivityLog({
         userId: sanitizeString(req.session.user?.id, 120),
         clinicId,
@@ -22170,10 +22216,9 @@ async function startServer() {
         content: 'Timeline longitudinal do paciente foi consultada com paginação.',
         type: 'management',
         actionType: 'LONGITUDINAL_TIMELINE_VIEWED',
-        payload: { patientId, limit, offset }
+        payload: { patientId, limit, cursor: rawCursor || null }
       });
-      const rows = Array.isArray(data) ? data : [];
-      return res.json({ success: true, data: rows, pagination: { limit, offset, hasMore: rows.length === limit } });
+      return res.json({ success: true, data: rows, pagination: { limit, hasMore, nextCursor } });
     } catch (error: any) {
       return sendRouteDbError(res, '/api/patients/:patientId/timeline [GET]', error, {
         patientId: sanitizeString(req.params.patientId, 120),
@@ -26632,12 +26677,26 @@ async function startServer() {
     try {
       const patientId = sanitizeString((req as any).resolvedPatientId || req.params.patientId, 120);
       if (!isUuid(patientId)) return res.json({ success: true, data: [] });
-      const limit = parseBoundedListLimit((req as any).query?.limit, 20, 50);
+      const limit = parseBoundedListLimit((req as any).query?.limit, 40, 100);
+      const rawCursor = sanitizeString((req as any).query?.cursor, 600);
+      const cursor = rawCursor ? decodeClinicalHistoryCursor(rawCursor) : null;
+      const createdFrom = normalizeClinicalHistoryBoundary((req as any).query?.from, false);
+      const createdTo = normalizeClinicalHistoryBoundary((req as any).query?.to, true);
+      if (rawCursor && !cursor) return res.status(400).json({ success: false, error: 'Cursor de histórico inválido.' });
+      if ((req as any).query?.from && !createdFrom) return res.status(400).json({ success: false, error: 'Data inicial inválida.' });
+      if ((req as any).query?.to && !createdTo) return res.status(400).json({ success: false, error: 'Data final inválida.' });
+      if (createdFrom && createdTo && new Date(createdFrom).getTime() > new Date(createdTo).getTime()) {
+        return res.status(400).json({ success: false, error: 'O período do histórico é inválido.' });
+      }
 
       const historyByIdResult = await fetchHistoryWithSchemaFallback({
         supabase,
         patientId,
-        limit,
+        createdFrom,
+        createdTo,
+        cursorCreatedAt: cursor?.createdAt || null,
+        cursorId: cursor?.id || null,
+        limit: limit + 1,
         route: '/api/history/:patientId',
         logger: console
       });
@@ -26646,15 +26705,20 @@ async function startServer() {
       if (historyByIdError) throw historyByIdError;
 
       const merged = Array.isArray(historyById) ? historyById : [];
-      const deduped = Array.from(new Map(merged.map((item: any) => [String(item?.id || crypto.randomUUID()), item])).values())
-        .sort((a: any, b: any) => new Date(b?.created_at || 0).getTime() - new Date(a?.created_at || 0).getTime())
-        .slice(0, limit);
+      const dedupedRows = Array.from(new Map(merged.map((item: any) => [String(item?.id || crypto.randomUUID()), item])).values())
+        .sort((a: any, b: any) => {
+          const byCreatedAt = new Date(b?.created_at || 0).getTime() - new Date(a?.created_at || 0).getTime();
+          return byCreatedAt || String(b?.id || '').localeCompare(String(a?.id || ''));
+        });
+      const hasMore = dedupedRows.length > limit;
+      const deduped = dedupedRows.slice(0, limit);
       const enriched = deduped.map(enrichPatientPhotoHistoryRow);
-      res.json({ success: true, data: enriched });
+      const nextCursor = hasMore && deduped.length ? encodeClinicalHistoryCursor(deduped[deduped.length - 1]) : null;
+      res.json({ success: true, data: enriched, pagination: { limit, hasMore, nextCursor } });
     } catch (error: any) {
       return sendRouteDbError(res, '/api/history/:patientId [GET]', error, {
         patientId: sanitizeString((req as any).resolvedPatientId || req.params.patientId, 120),
-        limit: parseBoundedListLimit((req as any).query?.limit, 20, 50),
+        limit: parseBoundedListLimit((req as any).query?.limit, 40, 100),
         requestId: requestIdForLogs(req)
       });
     }

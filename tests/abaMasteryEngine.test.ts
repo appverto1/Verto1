@@ -66,6 +66,8 @@ test('sem criterio ativo retorna INSUFFICIENT_DATA', () => {
   const result = evaluate({ criteria: null, trials: [trial()] });
   assert.equal(result.status, 'INSUFFICIENT_DATA');
   assert.equal(result.reasons[0].code, 'NO_CRITERIA');
+  assert.equal(result.criterionProgressLabel, 'Critério não configurado');
+  assert.doesNotMatch(result.performanceText, /0\/0/);
 });
 
 test('poucas tentativas retorna INSUFFICIENT_DATA', () => {

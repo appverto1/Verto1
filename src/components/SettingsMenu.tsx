@@ -12,7 +12,7 @@ import { motion, AnimatePresence } from 'motion/react';
 
 interface SettingsMenuProps {
   user: any;
-  onLogout: () => void;
+  onLogout: () => void | Promise<void>;
   onViewTeam?: () => void;
   onOpenInvitations?: () => void;
   onViewProfile?: () => void;
@@ -32,7 +32,12 @@ export function SettingsMenu({
   onOpenMarketplace
 }: SettingsMenuProps) {
   const [isOpen, setIsOpen] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [logoutError, setLogoutError] = useState('');
+  const [profileImageFailed, setProfileImageFailed] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const firstActionRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -40,22 +45,102 @@ export function SettingsMenu({
         setIsOpen(false);
       }
     };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || !isOpen || isLoggingOut) return;
+      setIsOpen(false);
+      triggerRef.current?.focus();
+    };
     document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isLoggingOut, isOpen]);
 
-  const isCoordinator = user?.role === 'coordinator' || user?.role === 'admin';
-  const isOwner = user?.role === 'owner';
+  useEffect(() => {
+    if (!isOpen) return;
+    window.requestAnimationFrame(() => firstActionRef.current?.focus());
+  }, [isOpen]);
+
+  const normalizedRole = String(
+    user?.activeWorkspaceRole ||
+    user?.activeOrganizationRole ||
+    user?.organizationRole ||
+    user?.role ||
+    ''
+  ).trim().toLowerCase();
+  const isCoordinator = normalizedRole === 'coordinator' || normalizedRole === 'admin';
+  const isOwner = normalizedRole === 'owner';
   const canManageTeam = isCoordinator || isOwner;
   const canSeeBilling = isCoordinator || isOwner;
+  const roleLabel = normalizedRole === 'coordinator'
+    ? 'Coordenador'
+    : normalizedRole === 'receptionist'
+      ? 'Recepcionista/Assistente'
+      : normalizedRole === 'owner' || normalizedRole === 'admin'
+        ? 'Administrador'
+        : String(
+            user?.professionalTitle ||
+            user?.professional_title ||
+            user?.professionalProfile?.professionalTitle ||
+            user?.professionalProfile?.professional_title ||
+            user?.professionalProfile?.metadata?.professionalTitle ||
+            user?.professionalProfile?.metadata?.professional_title ||
+            'Profissional de atendimento'
+          ).trim();
+  const organizationName = String(
+    user?.workspaceName ||
+    user?.activeWorkspaceName ||
+    user?.clinicSettings?.clinicName ||
+    user?.clinicName ||
+    ''
+  ).trim();
+  const profileImageUrl = String(
+    user?.profilePictureUrl ||
+    user?.profilePicture ||
+    user?.avatarUrl ||
+    user?.avatar_url ||
+    ''
+  ).trim();
+  const userInitials = String(user?.name || 'Usuário')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part.charAt(0).toUpperCase())
+    .join('') || '?';
+
+  useEffect(() => {
+    setProfileImageFailed(false);
+  }, [profileImageUrl]);
+
+  const handleLogout = async () => {
+    if (isLoggingOut) return;
+    setLogoutError('');
+    setIsLoggingOut(true);
+    try {
+      await onLogout();
+      setIsOpen(false);
+    } catch {
+      setLogoutError('Não foi possível sair agora. Tente novamente.');
+    } finally {
+      setIsLoggingOut(false);
+    }
+  };
 
   return (
     <div className="relative" ref={menuRef} style={{ zIndex: 100 }}>
       <button
+        ref={triggerRef}
+        type="button"
         onClick={() => {
           setIsOpen(!isOpen);
         }}
         className="p-2.5 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-xl transition-all"
+        aria-label="Abrir menu da conta e configurações"
+        aria-haspopup="menu"
+        aria-expanded={isOpen}
       >
         <Settings size={20} />
       </button>
@@ -67,21 +152,34 @@ export function SettingsMenu({
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 10 }}
             className="absolute right-0 mt-2 w-64 bg-white rounded-2xl shadow-xl border border-slate-100 overflow-hidden z-[100]"
+            role="menu"
+            aria-label="Conta e configurações"
           >
             <div className="p-4 border-b border-slate-50">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-purple-50 text-[#7a32fc] rounded-xl flex items-center justify-center font-bold">
-                  {user?.name?.charAt(0) || '?'}
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-purple-50 text-sm font-medium text-[#7a32fc]">
+                  {profileImageUrl && !profileImageFailed ? (
+                    <img
+                      src={profileImageUrl}
+                      alt=""
+                      className="h-full w-full object-cover"
+                      onError={() => setProfileImageFailed(true)}
+                    />
+                  ) : userInitials}
                 </div>
                 <div className="overflow-hidden">
-                  <p className="text-sm font-bold text-slate-900 truncate">{user?.name || 'Usuário'}</p>
-                  <p className="text-[10px] text-slate-400 truncate uppercase tracking-widest font-semibold">{user?.role || 'Profissional'}</p>
+                  <p className="text-sm font-medium text-slate-900 truncate">{user?.name || 'Usuário'}</p>
+                  <p className="text-xs text-slate-500 truncate">{roleLabel}</p>
+                  {organizationName && <p className="mt-0.5 text-[11px] text-slate-400 truncate">{organizationName}</p>}
                 </div>
               </div>
             </div>
 
             <div className="p-2">
               <button
+                ref={firstActionRef}
+                type="button"
+                role="menuitem"
                 onClick={() => {
                   setIsOpen(false);
                   onViewProfile?.();
@@ -97,6 +195,8 @@ export function SettingsMenu({
 
               {canManageTeam && (
                 <button
+                  type="button"
+                  role="menuitem"
                   onClick={() => {
                     setIsOpen(false);
                     onViewTeam?.();
@@ -113,6 +213,8 @@ export function SettingsMenu({
 
               {canSeeBilling && (
                 <button
+                  type="button"
+                  role="menuitem"
                   onClick={() => {
                     setIsOpen(false);
                     onViewBilling?.();
@@ -128,6 +230,8 @@ export function SettingsMenu({
               )}
 
               <button
+                type="button"
+                role="menuitem"
                 onClick={() => {
                   setIsOpen(false);
                   onOpenMarketplace?.();
@@ -146,15 +250,20 @@ export function SettingsMenu({
             </div>
 
             <div className="p-2 border-t border-slate-50 bg-slate-50/50">
+              {logoutError && (
+                <p className="px-3 pb-1 text-xs text-red-600" role="alert">{logoutError}</p>
+              )}
               <button
+                type="button"
+                role="menuitem"
+                disabled={isLoggingOut}
                 onClick={() => {
-                  setIsOpen(false);
-                  onLogout();
+                  void handleLogout();
                 }}
-                className="w-full flex items-center gap-3 p-3 text-red-600 hover:bg-red-50 rounded-xl transition-all group"
+                className="w-full flex items-center gap-3 p-3 text-red-600 hover:bg-red-50 rounded-xl transition-all group disabled:cursor-wait disabled:opacity-60"
               >
                 <LogOut size={18} className="text-red-400 group-hover:text-red-600" />
-                <span className="text-sm font-bold">Sair do Sistema</span>
+                <span className="text-sm font-medium">{isLoggingOut ? 'Saindo...' : 'Sair do sistema'}</span>
               </button>
             </div>
           </motion.div>

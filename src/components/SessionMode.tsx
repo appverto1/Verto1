@@ -7490,7 +7490,7 @@ export const SessionMode = ({
                     : masteryRow?.statusCode === 'NOT_MET'
                       ? 'Em treino'
                       : masteryRow?.status || 'Dados insuficientes';
-              const progressLabel = masteryRow?.criterionProgressLabel || '0/0';
+              const progressLabel = masteryRow?.criterionProgressLabel || 'Dados ainda não coletados';
               const progressPrefix = masteryRow?.criterionProgressPrefix || 'Hoje';
               const progressShortLabel = String(progressLabel).match(/^\s*\d+\s*\/\s*\d+/)?.[0]?.replace(/\s+/g, '') || progressLabel;
               const programName = String(goal.programName || goal.program_name || goal.protocolTitle || goal.protocol_title || '').trim();
@@ -7708,7 +7708,7 @@ export const SessionMode = ({
                         <p className="max-w-[220px] text-xs font-medium text-[#7a32fc] sm:ml-auto">{masteryRow?.criterion || 'Critério ainda não configurado'}</p>
                         <p className="mt-1 text-[11px] text-gray-500">Origem: {masteryRow?.criterionSourceLabel || 'Não configurado'}</p>
                         <p className="text-[11px] text-gray-500">
-                          {masteryRow?.contributes ? 'Criterio concluido' : masteryRow?.criterionProgressPrefix || 'Hoje'}: {masteryRow?.criterionProgressLabel || '0/0'}
+                          {masteryRow?.contributes ? 'Criterio concluido' : masteryRow?.criterionProgressPrefix || 'Hoje'}: {masteryRow?.criterionProgressLabel || 'Dados ainda não coletados'}
                         </p>
                         {masteryRow?.criterionProgressKind === 'consecutive_independent' && masteryRow?.sequenceBrokenByLastTrial && (
                           <p className="mt-1 text-[11px] text-orange-600">Última tentativa com ajuda ou erro quebrou a sequência.</p>

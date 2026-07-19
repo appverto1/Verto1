@@ -5,7 +5,6 @@ import {
   TrendingUp,
   Calendar,
   ClipboardList,
-  LogOut,
   Plus,
   Search,
   Bell,
@@ -513,7 +512,10 @@ interface CoordinatorDashboardProps {
   ) => any;
   onDeleteHistoryItem?: (id: any) => void;
   onEvaluateHistoryItem?: (id: any, score: number, note: string) => void;
-  onRefreshPatientHistory?: (patientId: any) => Promise<any> | any;
+  onRefreshPatientHistory?: (
+    patientId: any,
+    params?: { limit?: number; cursor?: string; from?: string; to?: string }
+  ) => Promise<any> | any;
   allTasks?: any[];
   onAddTask?: (task: any) => void;
   onUpdateTask?: (taskId: any, updates: any) => void;
@@ -5554,11 +5556,6 @@ export function CoordinatorDashboard({
     setPatientOpenTab(nextOptions.tab || "history");
     setOpenAnamnesisOnPatientOpen(Boolean(nextOptions.openAnamnesis));
     setView("patient");
-    if (nextOptions.tab === "history" || !nextOptions.tab) {
-      void Promise.resolve(onRefreshPatientHistory?.(resolvedPatient.id)).catch((error) => {
-        console.warn("Falha ao atualizar histórico persistido do paciente:", error);
-      });
-    }
   };
 
   const openPatientProfileModal = (patient: any) => {
@@ -8764,38 +8761,6 @@ export function CoordinatorDashboard({
             })}
           </nav>
 
-          <div className="mt-auto shrink-0 pt-3 border-t border-slate-50">
-            <div
-              className={`bg-slate-50 rounded-2xl ${patientSidebarExpanded ? "p-3 mb-3" : "p-2 mb-2"} transition-all`}
-            >
-              <div className={`flex items-center ${patientSidebarExpanded ? "gap-3" : "justify-center"}`}>
-                <div className={`${patientSidebarExpanded ? "w-10 h-10 rounded-xl" : "w-9 h-9 rounded-lg"} bg-white flex items-center justify-center font-bold text-[#7a32fc] shadow-sm overflow-hidden`}>
-                  {coordinatorAvatarUrl ? (
-                    <img src={coordinatorAvatarUrl} alt={user?.name || "Perfil"} className="w-full h-full object-cover" />
-                  ) : (
-                    user.name?.[0]
-                  )}
-                </div>
-                {patientSidebarExpanded && (
-                  <div className="overflow-hidden">
-                    <p className="text-sm font-bold text-slate-900 truncate">
-                      {normalizeUtf8Text(user.name)}
-                    </p>
-                    <p className="text-xs font-medium text-slate-400 truncate">
-                      {user.email}
-                    </p>
-                  </div>
-                )}
-              </div>
-            </div>
-            <button
-              onClick={onLogout}
-              className={`w-full flex items-center ${patientSidebarExpanded ? "gap-3 justify-start px-3" : "justify-center px-2"} py-2.5 text-slate-400 hover:text-[#7a32fc] hover:bg-violet-50 rounded-xl transition-all font-bold text-sm`}
-            >
-              <LogOut size={18} />
-              {patientSidebarExpanded && "Sair do Sistema"}
-            </button>
-          </div>
         </div>
 
         {/* Main Content */}
@@ -8920,15 +8885,6 @@ export function CoordinatorDashboard({
                     })}
                   </nav>
 
-                  <div className="mt-auto pt-6 border-t border-slate-50">
-                    <button
-                      onClick={onLogout}
-                      className="w-full flex items-center gap-4 px-4 py-3.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all font-bold text-sm"
-                    >
-                      <LogOut size={18} />
-                      Sair do Sistema
-                    </button>
-                  </div>
                 </motion.div>
               </>
             )}
@@ -8942,6 +8898,7 @@ export function CoordinatorDashboard({
               hideBackButton={true}
               clinicContext={{
                 userId: user?.id || "",
+                clinicId: user?.activeWorkspaceId || user?.clinicId || "",
                 clinicName:
                   user?.clinicSettings?.clinicName ||
                   user?.workspaceName ||
@@ -9037,6 +8994,7 @@ export function CoordinatorDashboard({
                     }
                   : undefined
               }
+              onRefreshPatientHistory={onRefreshPatientHistory}
               onAddTask={onAddTask}
               onUpdateTask={onUpdateTask}
               protocols={protocols}
@@ -9078,34 +9036,6 @@ export function CoordinatorDashboard({
           })}
         </nav>
 
-        <div className="mt-auto shrink-0 pt-3 border-t border-slate-50">
-          {isSidebarExpanded && (
-            <div className="bg-slate-50 rounded-2xl p-3 mb-3">
-              <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 bg-white rounded-lg flex items-center justify-center font-bold text-[#7a32fc] shadow-sm text-xs overflow-hidden">
-                    {coordinatorAvatarUrl ? (
-                      <img src={coordinatorAvatarUrl} alt={user?.name || "Perfil"} className="w-full h-full object-cover" />
-                    ) : (
-                      user.name?.[0]
-                    )}
-                  </div>
-                <div className="overflow-hidden">
-                  <p className="text-[11px] font-bold text-slate-900 truncate">
-                    {normalizeUtf8Text(user.name)}
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
-          <button
-            onClick={onLogout}
-            className={`w-full flex items-center ${isSidebarExpanded ? 'gap-3 px-4' : 'justify-center'} py-3 text-slate-400 hover:text-[#7a32fc] hover:bg-violet-50 rounded-2xl transition-all font-bold text-sm`}
-            title={!isSidebarExpanded ? "Sair" : ""}
-          >
-            <LogOut size={20} />
-            {isSidebarExpanded && <span>Sair do Sistema</span>}
-          </button>
-        </div>
       </aside>
 
       {/* Main Content */}
@@ -9245,15 +9175,6 @@ export function CoordinatorDashboard({
                   })}
                 </nav>
 
-                <div className="mt-auto pt-6 border-t border-slate-50">
-                  <button
-                    onClick={onLogout}
-                    className="w-full flex items-center gap-4 px-4 py-3.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all font-bold text-sm"
-                  >
-                    <LogOut size={18} />
-                    Sair do Sistema
-                  </button>
-                </div>
               </motion.div>
             </>
           )}

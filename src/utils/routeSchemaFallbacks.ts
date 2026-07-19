@@ -1398,6 +1398,10 @@ export async function fetchHistoryWithSchemaFallback(params: {
   patientEmail?: string | null;
   excludePatientId?: string | null;
   patientIds?: string[];
+  createdFrom?: string | null;
+  createdTo?: string | null;
+  cursorCreatedAt?: string | null;
+  cursorId?: string | null;
   limit: number;
   route?: string;
   logger?: LoggerLike;
@@ -1417,6 +1421,10 @@ export async function fetchHistoryWithSchemaFallback(params: {
       const patientEmail = cleanString(params.patientEmail, 320).toLowerCase();
       const excludePatientId = cleanString(params.excludePatientId, 120);
       const patientIds = Array.from(new Set((params.patientIds || []).map((id) => cleanString(id, 120)).filter(Boolean)));
+      const createdFrom = cleanString(params.createdFrom, 80);
+      const createdTo = cleanString(params.createdTo, 80);
+      const cursorCreatedAt = cleanString(params.cursorCreatedAt, 80);
+      const cursorId = cleanString(params.cursorId, 160);
 
       if (patientEmail && removedColumns.has('patient_email')) return { data: [], error: null };
       if (patientId) query = query.eq('patient_id', patientId);
@@ -1425,8 +1433,18 @@ export async function fetchHistoryWithSchemaFallback(params: {
       if (patientIds.length > 0) query = query.in('patient_id', patientIds);
       if (!removedColumns.has('is_active')) query = query.eq('is_active', true);
       if (!removedColumns.has('deleted_at')) query = query.is('deleted_at', null);
+      if (createdFrom) query = query.gte('created_at', createdFrom);
+      if (createdTo) query = query.lte('created_at', createdTo);
+      if (cursorCreatedAt && cursorId) {
+        query = query.or(`created_at.lt.${cursorCreatedAt},and(created_at.eq.${cursorCreatedAt},id.lt.${cursorId})`);
+      } else if (cursorCreatedAt) {
+        query = query.lt('created_at', cursorCreatedAt);
+      }
 
-      return query.order('created_at', { ascending: false }).limit(params.limit);
+      return query
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+        .limit(params.limit);
     }
   });
 }

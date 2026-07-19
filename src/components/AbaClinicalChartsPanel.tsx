@@ -302,7 +302,7 @@ const metricAxisLabels: Record<string, string> = {
   MAINTENANCE_ACCURACY: 'Acurácia de manutenção (%)',
   MAINTENANCE_INDEPENDENCE: 'Independência de manutenção (%)',
   MAINTENANCE_FAILURES: 'Falhas consecutivas',
-  MAINTENANCE_DAYS_SINCE_PROBE: 'Dias desde último probe'
+  MAINTENANCE_DAYS_SINCE_PROBE: 'Dias desde a última sondagem'
 };
 
 const statusTone = (status?: string) => {
