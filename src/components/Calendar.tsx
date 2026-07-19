@@ -1385,6 +1385,7 @@ export const ClinicalAgendaBoard = ({
   onStartSession,
   onNavigateTissPreGuides,
   onOpenPatientFinance,
+  onAppointmentActionResolved,
   theme = 'light'
 }: any) => {
   const isDark = theme === 'dark';
@@ -1435,6 +1436,13 @@ export const ClinicalAgendaBoard = ({
   const [closureChecklistExpanded, setClosureChecklistExpanded] = useState(false);
   const [actionRequestState, setActionRequestState] = useState<{ loadingId: string; error: string; message?: string }>({ loadingId: '', error: '', message: '' });
   const [actionRequestResolution, setActionRequestResolution] = useState<{ requestId: string; note: string }>({ requestId: '', note: '' });
+  const [rescheduleAvailabilityState, setRescheduleAvailabilityState] = useState<{
+    requestId: string;
+    loading: boolean;
+    error: string;
+    data: any | null;
+  }>({ requestId: '', loading: false, error: '', data: null });
+  const [rescheduleAvailabilityNonce, setRescheduleAvailabilityNonce] = useState(0);
   const [billingEditorOpen, setBillingEditorOpen] = useState(false);
   const [financialValidationOpen, setFinancialValidationOpen] = useState(false);
   const [billingEditorState, setBillingEditorState] = useState<{ loading: boolean; saving: boolean; error: string; success: string }>({
@@ -1494,6 +1502,60 @@ export const ClinicalAgendaBoard = ({
     });
     return map;
   }, [rooms]);
+
+  const pendingRescheduleRequestId = useMemo(() => {
+    const requests = Array.isArray(eventDetail?.actionRequests) ? eventDetail.actionRequests : [];
+    const pendingRequest = requests.find((request: any) =>
+      String(request?.status || '').toUpperCase() === 'PENDING' &&
+      String(request?.request_type || request?.requestType || '').toUpperCase() === 'RESCHEDULE'
+    );
+    return String(pendingRequest?.id || '').trim();
+  }, [eventDetail?.actionRequests]);
+
+  useEffect(() => {
+    if (!pendingRescheduleRequestId) {
+      setRescheduleAvailabilityState({ requestId: '', loading: false, error: '', data: null });
+      return undefined;
+    }
+    let active = true;
+    setRescheduleAvailabilityState((current) => ({
+      requestId: pendingRescheduleRequestId,
+      loading: true,
+      error: '',
+      data: current.requestId === pendingRescheduleRequestId ? current.data : null
+    }));
+    dataService.getAppointmentActionRequestAvailability(pendingRescheduleRequestId)
+      .then((result: any) => {
+        if (!active) return;
+        if (result?.success && result?.data) {
+          setRescheduleAvailabilityState({
+            requestId: pendingRescheduleRequestId,
+            loading: false,
+            error: '',
+            data: result.data
+          });
+          return;
+        }
+        setRescheduleAvailabilityState({
+          requestId: pendingRescheduleRequestId,
+          loading: false,
+          error: result?.error || 'Não foi possível verificar os horários agora.',
+          data: result?.data || null
+        });
+      })
+      .catch(() => {
+        if (!active) return;
+        setRescheduleAvailabilityState({
+          requestId: pendingRescheduleRequestId,
+          loading: false,
+          error: 'Não foi possível verificar os horários agora.',
+          data: null
+        });
+      });
+    return () => {
+      active = false;
+    };
+  }, [pendingRescheduleRequestId, rescheduleAvailabilityNonce]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -1955,11 +2017,16 @@ export const ClinicalAgendaBoard = ({
     if (!appointment?.id) return;
     const normalized = normalizeClinicalEvent(appointment, roomLookup);
     cacheRef.current.clear();
-    setRemoteEvents((prev) => prev.map((event: any) => {
-      if (String(event?.id) !== String(normalized.id)) return event;
-      const mergedEvent = mergeAppointmentIdentity(event, appointment);
-      return normalizeClinicalEvent({ ...mergedEvent, status: appointment.status || event.status }, roomLookup);
-    }));
+    setRemoteEvents((prev) => {
+      let matched = false;
+      const next = prev.map((event: any) => {
+        if (String(event?.id) !== String(normalized.id)) return event;
+        matched = true;
+        const mergedEvent = mergeAppointmentIdentity(event, appointment);
+        return normalizeClinicalEvent({ ...mergedEvent, status: appointment.status || event.status }, roomLookup);
+      });
+      return matched ? next : [...next, normalized];
+    });
     setSelectedEvent((prev: any) => prev && String(prev?.id) === String(normalized.id)
       ? mergeAppointmentIdentity(prev, normalized)
       : prev);
@@ -2328,10 +2395,35 @@ export const ClinicalAgendaBoard = ({
       ? await dataService.approveAppointmentActionRequest(requestId, payload)
       : await dataService.rejectAppointmentActionRequest(requestId, payload);
     if (!result?.success) {
+      if (result?.data && decision === 'approve') {
+        setRescheduleAvailabilityState({
+          requestId,
+          loading: false,
+          error: result?.error || 'Este horário não está mais disponível.',
+          data: result.data
+        });
+      }
       setActionRequestState({ loadingId: '', error: result?.error || 'Não foi possível atualizar a solicitação.' });
       return;
     }
     applyUpdatedAppointmentToAgenda(result.appointment);
+    onAppointmentActionResolved?.(result.appointment);
+    setEventDetail((previous: any) => {
+      if (!previous) return previous;
+      const requests = Array.isArray(previous.actionRequests)
+        ? previous.actionRequests.map((item: any) => String(item?.id || '') === requestId
+            ? { ...item, status: decision === 'approve' ? 'APPROVED' : 'REJECTED' }
+            : item)
+        : previous.actionRequests;
+      return {
+        ...previous,
+        event: mergeAppointmentIdentity(previous.event || {}, result.appointment || {}),
+        actionRequests: requests
+      };
+    });
+    setRescheduleAvailabilityState({ requestId: '', loading: false, error: '', data: null });
+    cacheRef.current.clear();
+    setRemoteRefreshNonce((value) => value + 1);
     const currentId = String(selectedEvent?.id || '').trim();
     if (currentId) {
       dataService.getCalendarEventDetail(currentId).then((detailResult: any) => {
@@ -3894,6 +3986,13 @@ export const ClinicalAgendaBoard = ({
                     const requestNote = parsedRescheduleNote.note;
                     const loading = actionRequestState.loadingId === String(request.id || '');
                     const isRejecting = actionRequestResolution.requestId === String(request.id || '');
+                    const requestId = String(request.id || '');
+                    const availabilityMatchesRequest = rescheduleAvailabilityState.requestId === requestId;
+                    const availabilityLoading = !isCancel && availabilityMatchesRequest && rescheduleAvailabilityState.loading;
+                    const availabilityError = !isCancel && availabilityMatchesRequest ? rescheduleAvailabilityState.error : '';
+                    const availabilityOptions = availabilityMatchesRequest && Array.isArray(rescheduleAvailabilityState.data?.options)
+                      ? rescheduleAvailabilityState.data.options
+                      : [];
                     const requestAppointment = {
                       ...detailEvent,
                       pendingActionRequestId: request.id,
@@ -3903,26 +4002,17 @@ export const ClinicalAgendaBoard = ({
                     };
                     return (
                       <div key={request.id} className={`rounded-2xl border px-3 py-3 ${isDark ? 'border-slate-700 bg-slate-950' : 'border-white bg-white'}`}>
-                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                          <div>
-                            <p className="text-sm font-bold">{isCancel ? 'Cancelamento solicitado' : 'Remarcação solicitada'}</p>
+                        <div className="flex flex-col gap-3">
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                            <div>
+                            <p className="text-sm font-semibold">{isCancel ? 'Cancelamento solicitado' : 'Remarcação solicitada'}</p>
                             <p className={`mt-1 text-xs ${isDark ? 'text-slate-300' : 'text-slate-500'}`}>
                               {isCancel
                                 ? 'O responsável solicitou o cancelamento desta consulta.'
-                                : 'O responsável solicitou a remarcação desta consulta.'}
+                                : 'Escolha uma opção livre. Conflitos e alternativas são verificados automaticamente.'}
                             </p>
                             {request.reason && <p className={`mt-1 text-xs ${isDark ? 'text-slate-300' : 'text-slate-500'}`}>Motivo: {request.reason}</p>}
                             {requestNote && <p className={`mt-1 text-xs ${isDark ? 'text-slate-300' : 'text-slate-500'}`}>{requestNote}</p>}
-                            {!isCancel && rescheduleOptions.length > 0 && (
-                              <div className="mt-2 space-y-1">
-                                <p className={`text-[11px] font-bold uppercase tracking-[0.14em] ${isDark ? 'text-slate-400' : 'text-slate-400'}`}>Opções escolhidas</p>
-                                {rescheduleOptions.slice(0, 3).map((option: any, index: number) => (
-                                  <div key={`${request.id}-${option.scheduledStart || index}`} className={`rounded-xl border px-3 py-2 text-xs font-semibold ${isDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-violet-100 bg-violet-50 text-slate-700'}`}>
-                                    {index + 1}. {formatRescheduleOptionLabel(option)}
-                                  </div>
-                                ))}
-                              </div>
-                            )}
                             {!isCancel && rescheduleOptions.length === 0 && requestedStart && !Number.isNaN(requestedStart.getTime()) && (
                               <p className={`mt-1 text-xs font-semibold ${isDark ? 'text-slate-200' : 'text-slate-600'}`}>
                                 Sugestão: {formatDisplayDateTime(requestedStart)}
@@ -3933,39 +4023,103 @@ export const ClinicalAgendaBoard = ({
                                 O responsável solicitou remarcação, mas as opções não puderam ser carregadas.
                               </p>
                             )}
-                          </div>
-                          <div className="flex flex-wrap gap-2">
-                            {isCancel ? (
-                              <button type="button" disabled={loading} onClick={() => void handleActionRequestDecision(request, 'approve')} className="rounded-xl bg-[#7a32fc] px-3 py-2 text-[11px] font-bold text-white disabled:opacity-60">
-                                {loading ? 'Atualizando...' : 'Cancelar consulta'}
+                            </div>
+                            {isCancel && (
+                              <button type="button" disabled={loading} onClick={() => void handleActionRequestDecision(request, 'approve')} className="inline-flex min-h-10 items-center justify-center rounded-xl bg-[#7a32fc] px-3 py-2 text-xs font-semibold text-white disabled:opacity-60">
+                                {loading ? <><Loader2 size={14} className="mr-2 animate-spin" />Atualizando...</> : 'Cancelar consulta'}
                               </button>
-                            ) : rescheduleOptions.length > 0 ? (
-                              rescheduleOptions.slice(0, 3).map((option: any, index: number) => (
-                                <button
-                                  key={`approve-${request.id}-${option.scheduledStart || index}`}
-                                  type="button"
-                                  disabled={loading}
-                                  onClick={() => void handleActionRequestDecision(request, 'approve', {
-                                    selectedOptionIndex: index,
-                                    scheduledStart: option.scheduledStart,
-                                    scheduledEnd: option.scheduledEnd
-                                  })}
-                                  className="rounded-xl bg-[#7a32fc] px-3 py-2 text-[11px] font-bold text-white disabled:opacity-60"
-                                >
-                                  {loading ? 'Atualizando...' : `Aprovar opção ${index + 1}`}
-                                </button>
-                              ))
-                            ) : (
-                              <button type="button" onClick={() => openAppointmentEditor(requestAppointment)} className="rounded-xl bg-[#7a32fc] px-3 py-2 text-[11px] font-bold text-white">
+                            )}
+                          </div>
+                          {!isCancel && rescheduleOptions.length > 0 && (
+                            <div className="space-y-2">
+                              {availabilityError && (
+                                <div className={`flex flex-col gap-2 rounded-xl border px-3 py-2 text-xs sm:flex-row sm:items-center sm:justify-between ${isDark ? 'border-amber-500/40 bg-amber-500/10 text-amber-100' : 'border-amber-200 bg-amber-50 text-amber-800'}`} role="alert">
+                                  <span>{availabilityError}</span>
+                                  <button type="button" onClick={() => setRescheduleAvailabilityNonce((value) => value + 1)} className="min-h-9 rounded-lg border border-current px-3 font-medium">
+                                    Verificar novamente
+                                  </button>
+                                </div>
+                              )}
+                              {rescheduleOptions.slice(0, 3).map((option: any, index: number) => {
+                                const optionAvailability = availabilityOptions.find((item: any) => Number(item?.index) === index) || null;
+                                const assignment = optionAvailability?.assignment || null;
+                                const alternatives = Array.isArray(optionAvailability?.alternatives) ? optionAvailability.alternatives : [];
+                                const assignmentLabel = [assignment?.professionalName, assignment?.roomName].filter(Boolean).join(' · ');
+                                const optionReady = optionAvailability?.available === true;
+                                const optionUnavailable = optionAvailability?.available === false;
+                                return (
+                                  <div key={`${request.id}-${option.scheduledStart || index}`} className={`rounded-xl border p-3 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-200 bg-white'}`}>
+                                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                                      <div className="min-w-0">
+                                        <div className="flex flex-wrap items-center gap-2">
+                                          <span className={`text-sm font-semibold ${isDark ? 'text-slate-100' : 'text-slate-800'}`}>{formatRescheduleOptionLabel(option)}</span>
+                                          {availabilityLoading && !optionAvailability ? (
+                                            <span className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] ${isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-500'}`}><Loader2 size={12} className="animate-spin" />Verificando</span>
+                                          ) : optionReady ? (
+                                            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-1 text-[11px] font-medium text-emerald-700"><CheckCircle2 size={12} />Livre</span>
+                                          ) : optionUnavailable ? (
+                                            <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-700"><AlertCircle size={12} />Conflito</span>
+                                          ) : null}
+                                        </div>
+                                        {assignmentLabel && <p className={`mt-1 text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>{assignmentLabel}</p>}
+                                        {optionAvailability?.message && (
+                                          <p className={`mt-1 text-xs ${optionReady ? (isDark ? 'text-emerald-300' : 'text-emerald-700') : (isDark ? 'text-amber-200' : 'text-amber-700')}`}>
+                                            {optionAvailability.message}
+                                          </p>
+                                        )}
+                                      </div>
+                                      <button
+                                        type="button"
+                                        disabled={loading || availabilityLoading || !optionReady}
+                                        onClick={() => void handleActionRequestDecision(request, 'approve', {
+                                          selectedOptionIndex: index,
+                                          assignmentId: assignment?.id
+                                        })}
+                                        className="inline-flex min-h-10 shrink-0 items-center justify-center rounded-xl bg-[#7a32fc] px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-[#6926e8] disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+                                      >
+                                        {loading ? <><Loader2 size={14} className="mr-2 animate-spin" />Aprovando...</> : 'Aprovar este horário'}
+                                      </button>
+                                    </div>
+                                    {!optionReady && alternatives.length > 0 && (
+                                      <div className={`mt-3 border-t pt-3 ${isDark ? 'border-slate-700' : 'border-slate-100'}`}>
+                                        <p className={`text-xs ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>Alternativas livres para o mesmo horário:</p>
+                                        <div className="mt-2 flex flex-wrap gap-2">
+                                          {alternatives.map((alternative: any) => (
+                                            <button
+                                              key={alternative.id}
+                                              type="button"
+                                              disabled={loading}
+                                              onClick={() => void handleActionRequestDecision(request, 'approve', {
+                                                selectedOptionIndex: index,
+                                                assignmentId: alternative.id,
+                                                professionalId: alternative.professionalId,
+                                                roomId: alternative.roomId
+                                              })}
+                                              className={`min-h-10 rounded-xl border px-3 py-2 text-left text-xs font-medium transition-colors disabled:opacity-60 ${isDark ? 'border-violet-400/50 text-violet-200 hover:bg-violet-500/10' : 'border-violet-200 text-[#6d28d9] hover:bg-violet-50'}`}
+                                            >
+                                              {[alternative.professionalName, alternative.roomName].filter(Boolean).join(' · ')}
+                                            </button>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                          <div className="flex flex-wrap gap-2">
+                            {!isCancel && rescheduleOptions.length === 0 && (
+                              <button type="button" onClick={() => openAppointmentEditor(requestAppointment)} className="min-h-10 rounded-xl bg-[#7a32fc] px-3 py-2 text-xs font-semibold text-white">
                                 Remarcar consulta
                               </button>
                             )}
                             {!isCancel && (
-                              <button type="button" disabled={loading || !onEditAppointment} onClick={() => openAppointmentEditor(requestAppointment)} className="rounded-xl border border-violet-200 bg-white px-3 py-2 text-[11px] font-bold text-[#7a32fc] hover:bg-violet-50 disabled:opacity-60">
+                              <button type="button" disabled={loading || !onEditAppointment} onClick={() => openAppointmentEditor(requestAppointment)} className="min-h-10 rounded-xl border border-violet-200 bg-white px-3 py-2 text-xs font-medium text-[#7a32fc] hover:bg-violet-50 disabled:opacity-60">
                                 Sugerir outro horário
                               </button>
                             )}
-                            <button type="button" disabled={loading} onClick={() => setActionRequestResolution({ requestId: String(request.id || ''), note: '' })} className="rounded-xl border border-violet-200 bg-white px-3 py-2 text-[11px] font-bold text-[#7a32fc] hover:bg-violet-50 disabled:opacity-60">
+                            <button type="button" disabled={loading} onClick={() => setActionRequestResolution({ requestId: String(request.id || ''), note: '' })} className="min-h-10 rounded-xl border border-violet-200 bg-white px-3 py-2 text-xs font-medium text-[#7a32fc] hover:bg-violet-50 disabled:opacity-60">
                               Recusar
                             </button>
                           </div>

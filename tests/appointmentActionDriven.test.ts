@@ -271,3 +271,73 @@ test('appointment routes avoid select star and persist domain events', () => {
   assert.match(appointmentRouteSlice, /eventType/);
   assert.match(appointmentRouteSlice, /idempotencyKey/);
 });
+
+test('reschedule approval readback compares canonical ISO strings without throwing', () => {
+  const helperStart = serverCode.indexOf('const appointmentScheduleMatches');
+  const helperEnd = serverCode.indexOf('const resolveAppointmentNotificationTarget', helperStart);
+  const helper = serverCode.slice(helperStart, helperEnd);
+  assert.ok(helperStart > -1, 'appointmentScheduleMatches must exist');
+  assert.match(helper, /sanitizeIsoDateTime\(buildAppointmentScheduledAt\(row\)\)/);
+  assert.doesNotMatch(helper, /buildAppointmentScheduledAt\(row\)\?\.toISOString/);
+  assert.match(helper, /calculateAppointmentEnd\(new Date\(actualStart\), getCalendarAppointmentDuration\(row\)\)/);
+});
+
+test('reschedule approval preflights all submitted options and only accepts server assignments', () => {
+  const previewStart = serverCode.indexOf('const buildRescheduleApprovalPreview');
+  const previewEnd = serverCode.indexOf('const buildPortalRescheduleDateWindow', previewStart);
+  const preview = serverCode.slice(previewStart, previewEnd);
+  const routeStart = serverCode.indexOf("app.post('/api/appointments/action-requests/:requestId/approve'");
+  const routeEnd = serverCode.indexOf("app.post('/api/appointments/action-requests/:requestId/reject'", routeStart);
+  const route = serverCode.slice(routeStart, routeEnd);
+
+  assert.match(preview, /parsed\.options\.slice\(0, 3\)/);
+  assert.match(preview, /\.from\('clinic_memberships'\)[\s\S]*?\.eq\('clinic_id', assignment\.clinicId\)/);
+  assert.match(preview, /\.from\('professional_profiles'\)[\s\S]*?\.in\('user_id', activeMemberIds\)/);
+  assert.match(preview, /fetchConflictRooms\(assignment\.clinicId, assignment\.organizationId\)/);
+  assert.match(preview, /Promise\.all\(\[[\s\S]*?fetchConflictAppointmentsFromTable[\s\S]*?fetchConflictAppointmentsFromState/);
+  assert.match(preview, /checkLocalScheduleConflicts\(\{/);
+  assert.match(preview, /buildAvailableRescheduleSlots\(\{/);
+  assert.match(preview, /!conflictTypes\.has\('patient'\)/);
+  assert.match(preview, /alternatives\.length >= 3/);
+
+  assert.match(route, /const selectedOption = requestedOptions\[selectedOptionIndex\]/);
+  assert.match(route, /Nunca aceite data\/hora arbitraria do corpo da requisicao/);
+  assert.doesNotMatch(route, /sanitizeIsoDateTime\(req\.body\?\.scheduledStart/);
+  assert.match(route, /const allowedAssignments = \[/);
+  assert.match(route, /allowedAssignments\.find/);
+  assert.match(route, /code: 'RESCHEDULE_CONFLICT'/);
+  assert.match(route, /therapist_id: approvedAssignment\.professionalId/);
+  assert.match(route, /room_id: approvedAssignment\.locationType === 'clinica'/);
+  assert.match(route, /const durationMinutes = getCalendarAppointmentDuration\(appointment\)/);
+  assert.match(route, /calculateAppointmentEnd\(startDate, durationMinutes\)/);
+});
+
+test('reschedule approval is idempotent and does not record a false approval before persistence', () => {
+  const routeStart = serverCode.indexOf("app.post('/api/appointments/action-requests/:requestId/approve'");
+  const routeEnd = serverCode.indexOf("app.post('/api/appointments/action-requests/:requestId/reject'", routeStart);
+  const route = serverCode.slice(routeStart, routeEnd);
+  assert.match(route, /requestRow\.status === 'APPROVED'/);
+  assert.match(route, /idempotent: true/);
+  assert.match(route, /appointmentScheduleMatches\(persistedAppointment/);
+  assert.match(route, /await updateAppointmentOperationalPatch\(appointment\.id, previousSchedulePatch\)/);
+  assert.match(route, /rescheduleCompensationPatch = previousSchedulePatch/);
+  assert.match(route, /notification_24h_sent_at: appointment\.notification_24h_sent_at/);
+  assert.match(route, /requestRow\.request_type === 'RESCHEDULE' && rescheduleCompensationPatch/);
+  const appointmentUpdateIndex = route.indexOf('const update = await updateAppointmentOperationalPatch');
+  const requestResolutionIndex = route.indexOf(".from('appointment_action_requests')");
+  const auditIndex = route.indexOf('await writeAppointmentStatusAuditLog');
+  assert.ok(appointmentUpdateIndex > -1 && requestResolutionIndex > appointmentUpdateIndex);
+  assert.ok(auditIndex > requestResolutionIndex, 'history must only be written after appointment and request persistence');
+});
+
+test('calendar exposes conflict-aware options and propagates approved appointment immediately', () => {
+  assert.match(dataServiceCode, /getAppointmentActionRequestAvailability/);
+  assert.match(calendarCode, /Escolha uma opção livre\. Conflitos e alternativas são verificados automaticamente\./);
+  assert.match(calendarCode, /Aprovar este horário/);
+  assert.match(calendarCode, /Alternativas livres para o mesmo horário/);
+  assert.match(calendarCode, /assignmentId: alternative\.id/);
+  assert.match(calendarCode, /onAppointmentActionResolved\?\.\(result\.appointment\)/);
+  assert.match(calendarCode, /setRemoteRefreshNonce\(\(value\) => value \+ 1\)/);
+  assert.match(coordinatorCode, /onAppointmentActionResolved=\{onAppointmentActionResolved\}/);
+  assert.match(appCode, /onAppointmentActionResolved=\{\(appointment: any\) => \{[\s\S]*?applyAppointmentResultToAgenda/);
+});

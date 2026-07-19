@@ -33367,6 +33367,9 @@ async function startServer() {
         : null,
       locationType,
       locationLabel,
+      roomId: locationType === 'clinica' && isUuid(row?.room_id || source?.room_id || source?.roomId)
+        ? sanitizeString(row?.room_id || source?.room_id || source?.roomId, 180)
+        : null,
       roomName: locationType === 'clinica' ? roomName || 'Sala não informada' : null,
       status: normalizeOperationalAppointmentStatus(row?.status || source?.status),
       patientConfirmationStatus: resolvedPatientConfirmationState.status,
@@ -33627,8 +33630,11 @@ async function startServer() {
   };
 
   const appointmentScheduleMatches = (row: any, expected: { start: string; end: string; status: string }) => {
-    const actualStart = buildAppointmentScheduledAt(row)?.toISOString() || '';
-    const actualEnd = sanitizeIsoDateTime(row?.scheduled_end_at || row?.scheduledEndAt) || '';
+    const actualStart = sanitizeIsoDateTime(buildAppointmentScheduledAt(row)) || '';
+    const actualEnd = sanitizeIsoDateTime(row?.scheduled_end_at || row?.scheduledEndAt) ||
+      (actualStart
+        ? calculateAppointmentEnd(new Date(actualStart), getCalendarAppointmentDuration(row))?.toISOString() || ''
+        : '');
     return normalizeOperationalAppointmentStatus(row?.status) === expected.status &&
       actualStart === expected.start &&
       actualEnd === expected.end;
@@ -33731,12 +33737,299 @@ async function startServer() {
 
   const serializeAppointmentActionRequestForResponse = (row: any) => {
     const parsed = parseRescheduleRequestPayload(row?.note, row?.metadata);
+    const metadata = row?.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata)
+      ? row.metadata
+      : {};
     return {
       ...row,
       metadata,
       note: parsed.note,
       rescheduleOptions: parsed.options,
       reschedule_options: parsed.options
+    };
+  };
+
+  const resolveAppointmentRescheduleAssignment = (appointment: any) => {
+    const source = parseCalendarSourcePayload(appointment?.source_payload || appointment?.sourcePayload);
+    const roomId = sanitizeString(
+      appointment?.room_id || appointment?.roomId || source?.room_id || source?.roomId || source?.room,
+      180
+    );
+    return {
+      clinicId: sanitizeString(
+        appointment?.clinic_id || appointment?.clinicId || appointment?.organization_id || appointment?.organizationId || source?.clinic_id || source?.clinicId,
+        120
+      ),
+      organizationId: sanitizeString(
+        appointment?.organization_id || appointment?.organizationId || appointment?.clinic_id || appointment?.clinicId || source?.organization_id || source?.organizationId,
+        120
+      ),
+      patientId: sanitizeString(appointment?.patient_id || appointment?.patientId || source?.patient_id || source?.patientId, 120),
+      professionalId: sanitizeString(
+        appointment?.therapist_id ||
+          appointment?.therapistId ||
+          appointment?.responsible_professional_id ||
+          appointment?.responsibleProfessionalId ||
+          appointment?.professional_id ||
+          appointment?.professionalId ||
+          source?.therapist_id ||
+          source?.therapistId ||
+          source?.professional_id ||
+          source?.professionalId,
+        120
+      ),
+      professionalName: sanitizeString(
+        appointment?.therapist_name ||
+          appointment?.therapistName ||
+          appointment?.responsible_professional_name ||
+          appointment?.responsibleProfessionalName ||
+          appointment?.professional_name ||
+          appointment?.professionalName ||
+          source?.therapist_name ||
+          source?.therapistName ||
+          source?.professionalName ||
+          source?.professional,
+        180
+      ) || 'Profissional',
+      roomId,
+      roomName: sanitizePortalRoomName(
+        appointment?.room_name || appointment?.roomName || source?.room_name || source?.roomName || source?.roomDisplayName
+      ),
+      locationType: normalizeScheduleLocationType(
+        appointment?.location_type || appointment?.locationType || appointment?.location || source?.location_type || source?.locationType || (roomId ? 'clinica' : 'outro')
+      )
+    };
+  };
+
+  const formatRescheduleProfessionalName = (profile: any, fallbackName = '') => {
+    const metadata = profile?.metadata && typeof profile.metadata === 'object' ? profile.metadata : {};
+    const name = sanitizeString(profile?.full_name || fallbackName, 180) || 'Profissional';
+    const title = readProfessionalTitleFromSource(
+      { metadata, professionalTitle: metadata?.professionalTitle || metadata?.professional_title },
+      'Profissional'
+    );
+    if (!title || title === 'Profissional' || name.toLocaleLowerCase('pt-BR').startsWith(title.toLocaleLowerCase('pt-BR'))) return name;
+    return `${title} ${name}`;
+  };
+
+  const buildRescheduleApprovalPreview = async (params: { appointment: any; request: any; user: any }) => {
+    const appointment = params.appointment || {};
+    const assignment = resolveAppointmentRescheduleAssignment(appointment);
+    const parsed = parseRescheduleRequestPayload(params.request?.note, params.request?.metadata);
+    const options = parsed.options.slice(0, 3);
+    if (!isUuid(assignment.clinicId) || !isUuid(assignment.organizationId) || !isUuid(assignment.patientId)) {
+      return {
+        requestId: sanitizeString(params.request?.id, 120),
+        appointmentId: sanitizeString(appointment?.id, 120),
+        options: options.map((option, index) => ({
+          index,
+          ...option,
+          available: false,
+          message: 'Não foi possível confirmar clínica e paciente desta consulta.'
+        }))
+      };
+    }
+
+    const membershipResult = await supabase
+      .from('clinic_memberships')
+      .select('user_id,role,status')
+      .eq('clinic_id', assignment.clinicId)
+      .eq('status', 'active')
+      .limit(200);
+    if (membershipResult.error) throw membershipResult.error;
+    const memberships = Array.isArray(membershipResult.data) ? membershipResult.data : [];
+    const activeMemberIds = Array.from(new Set(
+      memberships.map((row: any) => sanitizeString(row?.user_id, 120)).filter((id: string) => isUuid(id))
+    ));
+    const profileResult = activeMemberIds.length > 0
+      ? await supabase
+          .from('professional_profiles')
+          .select('user_id,full_name,metadata')
+          .in('user_id', activeMemberIds)
+          .limit(activeMemberIds.length)
+      : { data: [], error: null } as any;
+    if (profileResult.error && !isMissingRelationError(profileResult.error)) throw profileResult.error;
+    const profilesById = new Map<string, any>();
+    for (const profile of Array.isArray(profileResult.data) ? profileResult.data : []) {
+      const userId = sanitizeString(profile?.user_id, 120);
+      if (userId) profilesById.set(userId, profile);
+    }
+
+    const professionalCandidates = memberships
+      .filter((membership: any) => {
+        const id = sanitizeString(membership?.user_id, 120);
+        return id === assignment.professionalId || sanitizeString(membership?.role, 40).toLowerCase() === 'therapist';
+      })
+      .map((membership: any) => {
+        const id = sanitizeString(membership?.user_id, 120);
+        const profile = profilesById.get(id) || {};
+        const metadata = profile?.metadata && typeof profile.metadata === 'object' ? profile.metadata : {};
+        const fallbackDuration = asSafeNumber(metadata?.sessionDurationMinutes ?? metadata?.defaultSessionDurationMinutes, 15, 360) || getCalendarAppointmentDuration(appointment);
+        return {
+          id,
+          name: id === assignment.professionalId
+            ? assignment.professionalName
+            : formatRescheduleProfessionalName(profile),
+          workSchedule: readProfessionalWorkingScheduleFromMetadata(metadata, fallbackDuration) || buildDefaultProfessionalWorkingSchedule(fallbackDuration),
+          role: sanitizeString(membership?.role, 40)
+        };
+      })
+      .filter((professional: any) => isUuid(professional.id));
+    professionalCandidates.sort((left: any, right: any) =>
+      left.id === assignment.professionalId ? -1 : right.id === assignment.professionalId ? 1 : left.name.localeCompare(right.name, 'pt-BR')
+    );
+
+    const rooms = (await fetchConflictRooms(assignment.clinicId, assignment.organizationId))
+      .filter((room: any) => room?.is_active !== false && room?.isActive !== false)
+      .slice(0, 80);
+    const dates = Array.from(new Set(options.map((option) => formatDateInAppointmentTimezone(new Date(option.scheduledStart))).filter(Boolean)));
+    const conflictInput = { recurrenceDates: dates };
+    const [tableAppointments, stateAppointments] = await Promise.all([
+      fetchConflictAppointmentsFromTable({
+        clinicId: assignment.clinicId,
+        organizationId: assignment.organizationId,
+        input: conflictInput
+      }),
+      fetchConflictAppointmentsFromState(assignment.clinicId, conflictInput).catch(() => [])
+    ]);
+    const appointmentsById = new Map<string, any>();
+    [...tableAppointments, ...stateAppointments].forEach((item: any, index: number) => {
+      appointmentsById.set(sanitizeString(item?.id, 180) || `idx-${index}`, item);
+    });
+    const existingAppointments = Array.from(appointmentsById.values());
+    const durationMinutes = getCalendarAppointmentDuration(appointment);
+    const originalProfessional = professionalCandidates.find((professional: any) => professional.id === assignment.professionalId) || null;
+    const originalRoom = rooms.find((room: any) => sanitizeString(room?.id, 180) === assignment.roomId) || null;
+
+    const evaluateCandidate = (option: PortalRescheduleOption, professional: any, room: any) => {
+      if (!professional?.id) {
+        return { available: false, message: 'O profissional responsável não está ativo na equipe desta clínica.', conflictTypes: ['professional'] };
+      }
+      if (assignment.locationType === 'clinica' && !room?.id) {
+        return { available: false, message: 'A sala anterior não está disponível. Escolha uma das salas sugeridas.', conflictTypes: ['room'] };
+      }
+      const startDate = new Date(option.scheduledStart);
+      const dateKey = formatDateInAppointmentTimezone(startDate);
+      const startTime = formatTimeInAppointmentTimezone(startDate);
+      const sessionBufferMinutes = Math.round(asSafeNumber(
+        professional?.workSchedule?.sessionBufferMinutes ?? professional?.workSchedule?.session_buffer_minutes,
+        0,
+        120
+      ) ?? 0);
+      const conflict = checkLocalScheduleConflicts({
+        appointments: existingAppointments,
+        patient_id: assignment.patientId,
+        professional_ids: [professional.id],
+        professional_names: [professional.name],
+        room_id: assignment.locationType === 'clinica' ? room?.id : null,
+        room_name: room?.name || assignment.roomName,
+        rooms,
+        location_type: assignment.locationType,
+        date: dateKey,
+        start_time: startTime,
+        duration_minutes: durationMinutes,
+        session_buffer_minutes: sessionBufferMinutes,
+        exclude_event_id: appointment.id
+      });
+      if (conflict.blocking) {
+        return {
+          available: false,
+          message: conflict.humanMessage || 'Há um conflito para este horário.',
+          conflictTypes: Array.from(new Set(conflict.conflicts.map((item: any) => item.conflictType).filter(Boolean))),
+          conflicts: conflict.conflicts
+        };
+      }
+      const availability = buildAvailableRescheduleSlots({
+        appointmentId: appointment.id,
+        patientId: assignment.patientId,
+        professionalId: professional.id,
+        roomId: assignment.locationType === 'clinica' ? room?.id : null,
+        locationType: assignment.locationType,
+        currentScheduledStart: appointment?.scheduled_start_at || appointment?.scheduled_at || appointment?.scheduledAt,
+        durationMinutes,
+        existingAppointments,
+        dateFrom: dateKey,
+        maxDays: 1,
+        maxSlotsPerDay: 24,
+        workingSchedule: professional.workSchedule,
+        now: new Date()
+      });
+      const exactSlot = flattenRescheduleSlotGroups(availability.days).find((slot) =>
+        Math.abs(new Date(slot.scheduledStart).getTime() - startDate.getTime()) < 60_000
+      );
+      if (!exactSlot) {
+        return {
+          available: false,
+          message: `${professional.name} não atende neste horário ou a jornada configurada não comporta a sessão completa.`,
+          conflictTypes: ['professional']
+        };
+      }
+      return { available: true, message: 'Horário livre e pronto para aprovação.', conflictTypes: [] as string[] };
+    };
+
+    const serializeAssignment = (optionIndex: number, professional: any, room: any, kind: 'current' | 'alternative') => ({
+      id: `${optionIndex}:${professional?.id || 'none'}:${room?.id || 'none'}`,
+      kind,
+      professionalId: professional?.id || null,
+      professionalName: professional?.name || 'Profissional',
+      roomId: assignment.locationType === 'clinica' ? room?.id || null : null,
+      roomName: assignment.locationType === 'clinica' ? room?.name || null : null,
+      locationType: assignment.locationType
+    });
+
+    const previewOptions = options.map((option, optionIndex) => {
+      const directResult = evaluateCandidate(option, originalProfessional, originalRoom);
+      const directAssignment = serializeAssignment(optionIndex, originalProfessional, originalRoom, 'current');
+      const alternatives: any[] = [];
+      const seen = new Set([directAssignment.id]);
+      const tryAlternative = (professional: any, room: any) => {
+        if (alternatives.length >= 3) return;
+        const serialized = serializeAssignment(optionIndex, professional, room, 'alternative');
+        if (seen.has(serialized.id)) return;
+        seen.add(serialized.id);
+        const result = evaluateCandidate(option, professional, room);
+        if (result.available) alternatives.push({ ...serialized, available: true, message: result.message });
+      };
+      const conflictTypes = new Set(directResult.conflictTypes || []);
+      if (!directResult.available && !conflictTypes.has('patient')) {
+        if (assignment.locationType === 'clinica' && originalProfessional) {
+          for (const room of rooms) {
+            if (sanitizeString(room?.id, 180) !== assignment.roomId) tryAlternative(originalProfessional, room);
+            if (alternatives.length >= 3) break;
+          }
+        }
+        if (alternatives.length < 3) {
+          for (const professional of professionalCandidates) {
+            if (professional.id === assignment.professionalId) continue;
+            if (assignment.locationType === 'clinica') {
+              if (originalRoom) tryAlternative(professional, originalRoom);
+              for (const room of rooms) {
+                tryAlternative(professional, room);
+                if (alternatives.length >= 3) break;
+              }
+            } else {
+              tryAlternative(professional, null);
+            }
+            if (alternatives.length >= 3) break;
+          }
+        }
+      }
+      return {
+        index: optionIndex,
+        ...option,
+        available: directResult.available,
+        message: directResult.message,
+        conflictTypes: directResult.conflictTypes || [],
+        assignment: directAssignment,
+        alternatives
+      };
+    });
+
+    return {
+      requestId: sanitizeString(params.request?.id, 120),
+      appointmentId: sanitizeString(appointment?.id, 120),
+      checkedAt: new Date().toISOString(),
+      options: previewOptions
     };
   };
 
@@ -34774,6 +35067,31 @@ async function startServer() {
     }
   });
 
+  app.get('/api/appointments/action-requests/:requestId/availability', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const context = await fetchAppointmentActionRequestForAdmin(req.params.requestId, req.session.user);
+      if (!context.ok) {
+        return res.status((context as any).status || 404).json({
+          success: false,
+          error: (context as any).error || 'Solicitação não encontrada.'
+        });
+      }
+      const requestRow = (context as any).request;
+      if (requestRow.request_type !== 'RESCHEDULE') {
+        return res.status(400).json({ success: false, error: 'Esta solicitação não é uma remarcação.' });
+      }
+      const data = await buildRescheduleApprovalPreview({
+        appointment: (context as any).appointment,
+        request: requestRow,
+        user: req.session.user
+      });
+      return res.json({ success: true, data });
+    } catch (error: any) {
+      console.warn('[AppointmentActions] availability failed:', error?.message || String(error));
+      return res.status(500).json({ success: false, error: 'Não foi possível verificar os horários agora.' });
+    }
+  });
+
   app.post('/api/appointments/action-requests/:requestId/approve', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de aprovação de solicitação')) return;
@@ -34803,6 +35121,8 @@ async function startServer() {
       let auditAction = 'RESCHEDULE_APPROVED';
       let newStatus = 'SCHEDULED';
       let approvedRescheduleStart = '';
+      let approvedRescheduleAssignment: any = null;
+      let rescheduleCompensationPatch: Record<string, unknown> | null = null;
       if (requestRow.request_type === 'RESCHEDULE') {
         const parsedRequestNote = parseRescheduleRequestPayload(requestRow.note, requestRow.metadata);
         const requestedOptions = parsedRequestNote.options;
@@ -34816,27 +35136,45 @@ async function startServer() {
           return res.status(400).json({ success: false, error: 'Escolha uma opção válida da solicitação de remarcação.' });
         }
         approvedRescheduleStart = requestedStart;
-        const durationMinutes = requestedEnd
-          ? Math.max(15, Math.round((new Date(requestedEnd).getTime() - new Date(requestedStart).getTime()) / 60000))
-          : getCalendarAppointmentDuration(appointment);
-        const startDate = new Date(requestedStart);
-        const conflict = await checkScheduleConflicts({
-          clinic_id: appointment.clinic_id,
-          organization_id: organizationId,
-          patient_id: appointment.patient_id,
-          professional_id: appointment.therapist_id,
-          room_id: appointment.room_id,
-          room_name: appointment.room_name,
-          location_type: appointment.location_type,
-          date: formatDateInAppointmentTimezone(startDate),
-          start_time: formatTimeInAppointmentTimezone(startDate),
-          duration_minutes: durationMinutes,
-          exclude_event_id: appointment.id
-        }, req.session.user);
-        if (conflict?.blocking || conflict?.hasConflict) {
-          return res.status(409).json({ success: false, error: conflict.humanMessage || 'Há conflito de agenda para o novo horário.' });
+        const approvalPreview = await buildRescheduleApprovalPreview({
+          appointment,
+          request: requestRow,
+          user: req.session.user
+        });
+        const optionPreview = approvalPreview.options.find((option: any) => option.index === selectedOptionIndex) || null;
+        const requestedAssignmentId = sanitizeString(req.body?.assignmentId || req.body?.assignment_id, 260);
+        const requestedProfessionalId = sanitizeString(req.body?.professionalId || req.body?.professional_id, 120);
+        const requestedRoomId = sanitizeString(req.body?.roomId || req.body?.room_id, 180);
+        const allowedAssignments = [
+          ...(optionPreview?.available && optionPreview?.assignment ? [optionPreview.assignment] : []),
+          ...(Array.isArray(optionPreview?.alternatives) ? optionPreview.alternatives : [])
+        ];
+        const approvedAssignment = requestedAssignmentId
+          ? allowedAssignments.find((candidate: any) => candidate.id === requestedAssignmentId)
+          : requestedProfessionalId || requestedRoomId
+            ? allowedAssignments.find((candidate: any) =>
+                (!requestedProfessionalId || candidate.professionalId === requestedProfessionalId) &&
+                (!requestedRoomId || candidate.roomId === requestedRoomId)
+              )
+            : optionPreview?.available
+              ? optionPreview.assignment
+              : null;
+        if (!optionPreview || !approvedAssignment) {
+          return res.status(409).json({
+            success: false,
+            code: 'RESCHEDULE_CONFLICT',
+            error: optionPreview?.message || 'Este horário não está mais disponível. Escolha outra opção ou use uma alternativa sugerida.',
+            data: approvalPreview
+          });
         }
-        const resolvedEnd = requestedEnd;
+        approvedRescheduleAssignment = approvedAssignment;
+        const durationMinutes = getCalendarAppointmentDuration(appointment);
+        const startDate = new Date(requestedStart);
+        const resolvedEndDate = calculateAppointmentEnd(startDate, durationMinutes);
+        if (!resolvedEndDate) {
+          return res.status(400).json({ success: false, error: 'Não foi possível calcular o término desta consulta.' });
+        }
+        const resolvedEnd = resolvedEndDate.toISOString();
         const previousSchedulePatch = cleanObject({
           status: appointment.status,
           scheduled_at: appointment.scheduled_at || appointment.scheduledAt || undefined,
@@ -34844,6 +35182,11 @@ async function startServer() {
           scheduled_end_at: appointment.scheduled_end_at || appointment.scheduledEndAt || undefined,
           scheduled_duration_minutes: appointment.scheduled_duration_minutes || appointment.scheduledDurationMinutes || undefined,
           duration_minutes: appointment.duration_minutes || appointment.durationMinutes || undefined,
+          therapist_id: appointment.therapist_id || appointment.therapistId || undefined,
+          therapist_name: appointment.therapist_name || appointment.therapistName || undefined,
+          room_id: appointment.room_id || appointment.roomId || null,
+          room_name: appointment.room_name || appointment.roomName || null,
+          location_type: appointment.location_type || appointment.locationType || appointment.location || undefined,
           date: appointment.date || undefined,
           time: appointment.time || undefined,
           patient_response: appointment.patient_response || appointment.patientResponse || null,
@@ -34851,8 +35194,14 @@ async function startServer() {
           patient_confirmation_source: appointment.patient_confirmation_source || appointment.patientConfirmationSource || null,
           reschedule_requested_at: appointment.reschedule_requested_at || undefined,
           reschedule_requested_by: appointment.reschedule_requested_by || undefined,
+          notification_24h_sent_at: appointment.notification_24h_sent_at ?? appointment.notification24hSentAt ?? null,
+          notification_12h_sent_at: appointment.notification_12h_sent_at ?? appointment.notification12hSentAt ?? null,
+          notification_sent: appointment.notification_sent ?? appointment.notificationSent ?? false,
+          notification_sent_at: appointment.notification_sent_at ?? appointment.notificationSentAt ?? null,
+          notification_12h_sent: appointment.notification_12h_sent ?? appointment.notification12hSent ?? false,
           updated_at: now
         });
+        rescheduleCompensationPatch = previousSchedulePatch;
         const update = await updateAppointmentOperationalPatch(appointment.id, {
           status: 'SCHEDULED',
           scheduled_at: requestedStart,
@@ -34860,6 +35209,11 @@ async function startServer() {
           scheduled_end_at: resolvedEnd,
           scheduled_duration_minutes: durationMinutes,
           duration_minutes: durationMinutes,
+          therapist_id: approvedAssignment.professionalId,
+          therapist_name: approvedAssignment.professionalName,
+          room_id: approvedAssignment.locationType === 'clinica' ? approvedAssignment.roomId : null,
+          room_name: approvedAssignment.locationType === 'clinica' ? approvedAssignment.roomName : null,
+          location_type: approvedAssignment.locationType,
           date: formatDateInAppointmentTimezone(startDate),
           time: formatTimeInAppointmentTimezone(startDate),
           patient_response: null,
@@ -34894,6 +35248,11 @@ async function startServer() {
           scheduled_start_at: requestedStart,
           scheduled_end_at: resolvedEnd,
           duration_minutes: durationMinutes,
+          therapist_id: approvedAssignment.professionalId,
+          therapist_name: approvedAssignment.professionalName,
+          room_id: approvedAssignment.locationType === 'clinica' ? approvedAssignment.roomId : null,
+          room_name: approvedAssignment.locationType === 'clinica' ? approvedAssignment.roomName : null,
+          location_type: approvedAssignment.locationType,
           patient_response: null,
           patient_confirmation_status: null,
           patient_confirmation_source: null
@@ -34927,6 +35286,10 @@ async function startServer() {
             ...(requestRow.metadata && typeof requestRow.metadata === 'object' ? requestRow.metadata : {}),
             approvedOptionIndex: Math.max(0, Number(req.body?.selectedOptionIndex ?? req.body?.selected_option_index ?? 0) || 0),
             approvedStart: approvedRescheduleStart,
+            approvedProfessionalId: approvedRescheduleAssignment?.professionalId || null,
+            approvedProfessionalName: approvedRescheduleAssignment?.professionalName || null,
+            approvedRoomId: approvedRescheduleAssignment?.roomId || null,
+            approvedRoomName: approvedRescheduleAssignment?.roomName || null,
             approvedAt: now,
             approvedBy: actorId || null
           }
@@ -34946,21 +35309,8 @@ async function startServer() {
         .select('id')
         .maybeSingle();
       if (requestResolution.error || !requestResolution.data?.id) {
-        if (requestRow.request_type === 'RESCHEDULE') {
-          await updateAppointmentOperationalPatch(appointment.id, cleanObject({
-            status: appointment.status,
-            scheduled_at: appointment.scheduled_at || appointment.scheduledAt || undefined,
-            scheduled_start_at: appointment.scheduled_start_at || appointment.scheduledStartAt || undefined,
-            scheduled_end_at: appointment.scheduled_end_at || appointment.scheduledEndAt || undefined,
-            scheduled_duration_minutes: appointment.scheduled_duration_minutes || appointment.scheduledDurationMinutes || undefined,
-            duration_minutes: appointment.duration_minutes || appointment.durationMinutes || undefined,
-            date: appointment.date || undefined,
-            time: appointment.time || undefined,
-            patient_response: appointment.patient_response || appointment.patientResponse || null,
-            patient_confirmation_status: appointment.patient_confirmation_status || appointment.patientConfirmationStatus || null,
-            patient_confirmation_source: appointment.patient_confirmation_source || appointment.patientConfirmationSource || null,
-            updated_at: now
-          }));
+        if (requestRow.request_type === 'RESCHEDULE' && rescheduleCompensationPatch) {
+          await updateAppointmentOperationalPatch(appointment.id, rescheduleCompensationPatch);
         }
         throw requestResolution.error || new Error('A solicitação já foi resolvida por outro usuário.');
       }
@@ -34979,7 +35329,11 @@ async function startServer() {
           previousScheduledStart: appointment.scheduled_at || appointment.scheduled_start_at || null,
           previousScheduledEnd: appointment.scheduled_end_at || null,
           approvedScheduledStart: approvedRescheduleStart || null,
-          approvedScheduledEnd: requestRow.request_type === 'RESCHEDULE' ? nextAppointment.scheduled_end_at || null : null
+          approvedScheduledEnd: requestRow.request_type === 'RESCHEDULE' ? nextAppointment.scheduled_end_at || null : null,
+          previousProfessionalId: appointment.therapist_id || appointment.therapistId || null,
+          approvedProfessionalId: approvedRescheduleAssignment?.professionalId || null,
+          previousRoomId: appointment.room_id || appointment.roomId || null,
+          approvedRoomId: approvedRescheduleAssignment?.roomId || null
         }
       });
       if (requestRow.request_type === 'RESCHEDULE') {

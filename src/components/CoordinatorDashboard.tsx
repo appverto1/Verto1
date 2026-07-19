@@ -490,6 +490,7 @@ interface CoordinatorDashboardProps {
   onAddActivityLog: (title: string, content: string, type?: string) => void;
   onScheduleSession: (session: any) => Promise<any> | any;
   onUpdateAppointment: (id: any, updates: any) => Promise<any> | any;
+  onAppointmentActionResolved?: (appointment: any) => Promise<any> | any;
   onUpdateAgendaStatus: (id: any, status: string, details?: any) => Promise<any> | any;
   onDeleteAppointment?: (id: any, details?: any) => Promise<any> | any;
   onAddPatient: (patient: any) => Promise<any> | any;
@@ -620,6 +621,7 @@ export function CoordinatorDashboard({
   onAddActivityLog,
   onScheduleSession,
   onUpdateAppointment,
+  onAppointmentActionResolved,
   onUpdateAgendaStatus,
   onDeleteAppointment,
   onAddPatient,
@@ -7702,6 +7704,7 @@ export function CoordinatorDashboard({
       onConfirmAppointment={handleConfirmAppointmentFromAgenda}
       onCancelAppointment={handleCancelAppointmentFromAgenda}
       onDeleteAppointment={handleDeleteAppointmentFromAgenda}
+      onAppointmentActionResolved={onAppointmentActionResolved}
       onOpenPatient={onPatientClick}
       onNavigateTissPreGuides={
         ["owner", "admin", "coordinator"].includes(String(user?.role || "").toLowerCase())

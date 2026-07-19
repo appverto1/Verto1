@@ -7055,6 +7055,14 @@ export default function App() {
             onAddActivityLog={onAddActivityLog}
             onScheduleSession={handleScheduleSession}
             onUpdateAppointment={handleUpdateAppointment}
+            onAppointmentActionResolved={(appointment: any) => {
+              const actionSequence = nextAppointmentActionSequence();
+              return applyAppointmentResultToAgenda(
+                { success: true, appointment, appointments: [appointment], items: [appointment] },
+                { action: 'updated', items: [appointment] },
+                actionSequence,
+              );
+            }}
             onUpdateAgendaStatus={handleUpdateAgendaStatus}
             onDeleteAppointment={handleDeleteAppointment}
             onAddPatient={handleAddPatient}

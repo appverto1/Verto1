@@ -2287,6 +2287,25 @@ export const dataService = {
     }
   },
 
+  async getAppointmentActionRequestAvailability(requestId: string) {
+    const endpoint = `/api/appointments/action-requests/${encodeURIComponent(String(requestId))}/availability`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getAppointmentActionRequestAvailability',
+        operation: 'detail',
+        table: 'appointments,appointment_action_requests,clinic_memberships,professional_profiles,clinic_rooms',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, error: 'Não foi possível verificar os horários agora.' };
+    }
+  },
+
   async rejectAppointmentActionRequest(requestId: string, payload: any = {}) {
     const endpoint = `/api/appointments/action-requests/${encodeURIComponent(String(requestId))}/reject`;
     try {
