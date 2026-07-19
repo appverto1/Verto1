@@ -8,6 +8,7 @@ import {
   Clock,
   FileText,
   Flame,
+  History as HistoryIcon,
   Loader2,
   MoreHorizontal,
   Pause,
@@ -6650,7 +6651,7 @@ export const SessionMode = ({
             data-aba-session-history-toggle
             className="inline-flex min-h-[36px] shrink-0 items-center gap-1 rounded-full px-2 text-[11px] font-medium text-slate-600 transition-colors hover:bg-slate-100"
           >
-            <History size={14} />
+            <HistoryIcon size={14} />
             <span className="hidden lg:inline">{sessionHistoryOpen ? 'Ocultar histórico' : `Histórico (${liveSummaryTotals.recordTotal})`}</span>
             <span className="lg:hidden">{liveSummaryTotals.recordTotal}</span>
           </button>

@@ -224,6 +224,8 @@ test('Plano terapêutico e coleta deixam explícitos programa, alvo, sincroniza�
   assert.ok(panel.includes('Nenhuma aplicação registrada.'));
   assert.ok(sessionMode.includes('data-aba-session-sync-status'));
   assert.ok(sessionMode.includes('data-aba-session-history-toggle'));
+  assert.match(sessionMode, /History\s+as\s+HistoryIcon/);
+  assert.ok(sessionMode.includes('<HistoryIcon size={14} />'));
   assert.ok(sessionMode.includes('data-aba-session-history-panel'));
   assert.ok(sessionMode.includes('data-aba-last-trial-feedback'));
   assert.ok(sessionMode.includes('data-aba-trial-response-matrix'));
