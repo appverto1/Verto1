@@ -182,7 +182,25 @@ test('RLS e endpoints preservam tenant e papeis operacionais', () => {
   assert.match(chargeEndpoint, /\.from\('appointments'\)[\s\S]*?\.eq\('patient_id', patientId\)[\s\S]*?organization_id\.eq\.\$\{organizationId\},clinic_id\.eq\.\$\{organizationId\}/);
   assert.match(serverCode, /PATIENT_FINANCE_APPOINTMENT_SCOPE_INVALID/);
   assert.match(serverCode, /app\.put\('\/api\/patient-finance\/policy'[\s\S]*?requireRoles\('coordinator', 'admin', 'owner'\)/);
-  assert.match(serverCode, /meta:[\s\S]*?queryCount: appointmentIds\.length > 0 \? 7 : 6/);
+  const ledgerEndpoint = serverCode.slice(
+    serverCode.indexOf("app.get('/api/patient-finance/ledger'"),
+    serverCode.indexOf("app.post('/api/patient-finance/charges'")
+  );
+  assert.match(ledgerEndpoint, /readLedgerAppointments\(PATIENT_FINANCE_APPOINTMENT_SELECT\)/);
+  assert.match(ledgerEndpoint, /extractMissingColumnName\(appointmentsResult\.error\) === 'source_payload'/);
+  assert.match(ledgerEndpoint, /readLedgerAppointments\(PATIENT_FINANCE_APPOINTMENT_LEGACY_SELECT\)/);
+  assert.match(ledgerEndpoint, /queryCount: 5 \+ appointmentQueryCount \+ \(appointmentIds\.length > 0 \? 1 : 0\)/);
+});
+
+test('ledger financeiro tolera appointments legados sem source_payload sem abrir o escopo do tenant', () => {
+  const ledgerEndpoint = serverCode.slice(
+    serverCode.indexOf("app.get('/api/patient-finance/ledger'"),
+    serverCode.indexOf("app.post('/api/patient-finance/charges'")
+  );
+  assert.match(serverCode, /PATIENT_FINANCE_APPOINTMENT_LEGACY_SELECT[\s\S]*?filter\(\(column\) => column !== 'source_payload'\)/);
+  assert.match(ledgerEndpoint, /\.or\(`organization_id\.eq\.\$\{organizationId\},clinic_id\.eq\.\$\{organizationId\}`\)/);
+  assert.match(ledgerEndpoint, /\.is\('deleted_at', null\)/);
+  assert.doesNotMatch(ledgerEndpoint, /source_payload[^\n]*?return res\.status\(503\)/);
 });
 
 test('workspace oferece fluxo separado, filtros, composicao, documentos e competencia', () => {

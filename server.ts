@@ -58624,6 +58624,16 @@ async function startServer() {
     'id', 'organization_id', 'clinic_id', 'payment_id', 'transaction_id', 'appointment_id',
     'event_type', 'before_state', 'after_state', 'notes', 'created_by', 'created_at'
   ].join(',');
+  // `source_payload` is optional in legacy appointment schemas and is not required by the ledger.
+  const PATIENT_FINANCE_APPOINTMENT_SELECT = [
+    'id', 'organization_id', 'clinic_id', 'patient_id', 'therapist_id', 'therapist_name',
+    'scheduled_at', 'scheduled_start_at', 'scheduled_end_at', 'duration_minutes', 'service_type',
+    'approach', 'status', 'room_id', 'room_name', 'location_type', 'source_payload'
+  ].join(',');
+  const PATIENT_FINANCE_APPOINTMENT_LEGACY_SELECT = PATIENT_FINANCE_APPOINTMENT_SELECT
+    .split(',')
+    .filter((column) => column !== 'source_payload')
+    .join(',');
   const PATIENT_FINANCE_POLICY_SELECT = [
     'organization_id', 'receivable_trigger', 'create_forecast_on_schedule', 'cancellation_policy',
     'cancellation_percentage', 'cancellation_tolerance_hours', 'charge_no_show',
@@ -58711,8 +58721,17 @@ async function startServer() {
         : new Date();
       const rangeStart = new Date(baseDate.getFullYear(), baseDate.getMonth() - 1, 1);
       const rangeEnd = new Date(baseDate.getFullYear(), baseDate.getMonth() + 2, 0, 23, 59, 59, 999);
+      const readLedgerAppointments = (select: string) => supabase
+        .from('appointments')
+        .select(select)
+        .or(`organization_id.eq.${organizationId},clinic_id.eq.${organizationId}`)
+        .gte('scheduled_at', rangeStart.toISOString())
+        .lte('scheduled_at', rangeEnd.toISOString())
+        .is('deleted_at', null)
+        .order('scheduled_at', { ascending: false })
+        .limit(1000);
 
-      const [chargesResult, itemsResult, transactionsResult, eventsResult, appointmentsResult, policyResult] = await Promise.all([
+      const [chargesResult, itemsResult, transactionsResult, eventsResult, initialAppointmentsResult, policyResult] = await Promise.all([
         supabase
           .from('payments')
           .select(PATIENT_FINANCE_CHARGE_SELECT)
@@ -58737,21 +58756,19 @@ async function startServer() {
           .eq('organization_id', organizationId)
           .order('created_at', { ascending: false })
           .limit(1000),
-        supabase
-          .from('appointments')
-          .select('id,organization_id,clinic_id,patient_id,therapist_id,therapist_name,scheduled_at,scheduled_start_at,scheduled_end_at,duration_minutes,service_type,approach,status,room_id,room_name,location_type,source_payload')
-          .or(`organization_id.eq.${organizationId},clinic_id.eq.${organizationId}`)
-          .gte('scheduled_at', rangeStart.toISOString())
-          .lte('scheduled_at', rangeEnd.toISOString())
-          .is('deleted_at', null)
-          .order('scheduled_at', { ascending: false })
-          .limit(1000),
+        readLedgerAppointments(PATIENT_FINANCE_APPOINTMENT_SELECT),
         supabase
           .from('clinic_patient_finance_policies')
           .select(PATIENT_FINANCE_POLICY_SELECT)
           .eq('organization_id', organizationId)
           .maybeSingle()
       ]);
+      let appointmentsResult = initialAppointmentsResult;
+      let appointmentQueryCount = 1;
+      if (extractMissingColumnName(appointmentsResult.error) === 'source_payload') {
+        appointmentsResult = await readLedgerAppointments(PATIENT_FINANCE_APPOINTMENT_LEGACY_SELECT);
+        appointmentQueryCount += 1;
+      }
 
       const primaryError = [chargesResult, itemsResult, transactionsResult, eventsResult, appointmentsResult]
         .map((result: any) => result.error)
@@ -58798,7 +58815,7 @@ async function startServer() {
           }
         },
         meta: {
-          queryCount: appointmentIds.length > 0 ? 7 : 6,
+          queryCount: 5 + appointmentQueryCount + (appointmentIds.length > 0 ? 1 : 0),
           rangeStart: rangeStart.toISOString(),
           rangeEnd: rangeEnd.toISOString()
         }

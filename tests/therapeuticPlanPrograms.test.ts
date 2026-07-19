@@ -214,6 +214,23 @@ test('dataService recarrega apenas os recursos terapeuticos afetados', () => {
   assert.ok(library.includes('await loadTemplates(true)'));
 });
 
+test('Plano terapêutico e coleta deixam explícitos programa, alvo, sincronização e baixa amostra', () => {
+  assert.ok(panel.includes('data-therapeutic-plan-summary'));
+  assert.ok(panel.includes('>Plano terapêutico<'));
+  assert.ok(panel.includes('>Programa</p>'));
+  assert.ok(panel.includes('>Alvo atual</p>'));
+  assert.ok(panel.includes('Nenhum alvo ativo selecionado'));
+  assert.ok(panel.includes('Critério ainda não configurado'));
+  assert.ok(panel.includes('Nenhuma aplicação registrada.'));
+  assert.ok(sessionMode.includes('data-aba-session-sync-status'));
+  assert.ok(sessionMode.includes('data-aba-session-history-toggle'));
+  assert.ok(sessionMode.includes('data-aba-session-history-panel'));
+  assert.ok(sessionMode.includes('data-aba-last-trial-feedback'));
+  assert.ok(sessionMode.includes('data-aba-trial-response-matrix'));
+  assert.ok(sessionMode.includes('Amostra ainda insuficiente para indicar tendência.'));
+  assert.ok(sessionMode.includes("setSessionHistoryOpen((open) => !open)"));
+});
+
 for (const { name, fn } of tests) {
   fn();
   console.log(`[ok] ${name}`);

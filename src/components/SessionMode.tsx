@@ -873,6 +873,7 @@ export const SessionMode = ({
   const [mobilePromptCategoryByGoalKey, setMobilePromptCategoryByGoalKey] = useState<Record<string, string>>({});
   const [mobileExpandedCriteriaKey, setMobileExpandedCriteriaKey] = useState('');
   const [historyExpanded, setHistoryExpanded] = useState(false);
+  const [sessionHistoryOpen, setSessionHistoryOpen] = useState(false);
   const [clinicalDockSheetOpen, setClinicalDockSheetOpen] = useState(false);
   const [dockLocationsExpanded, setDockLocationsExpanded] = useState(false);
   const [dockLocationManagerOpen, setDockLocationManagerOpen] = useState(false);
@@ -4802,6 +4803,18 @@ export const SessionMode = ({
     };
   }, [clinicalHistoryRecords.length, sessionLiveSummary, trialCount]);
 
+  const sessionSyncStatus = useMemo<SyncStatus>(() => {
+    if (records.some((record) => record.syncStatus === 'error')) return 'error';
+    if (records.some((record) => record.syncStatus === 'syncing')) return 'syncing';
+    if (records.some((record) => record.syncStatus !== 'synced')) return 'local';
+    return 'synced';
+  }, [records]);
+
+  const latestTrialRecord = useMemo(
+    () => records.find((record) => record.kind === 'trial') || null,
+    [records]
+  );
+
   const renderSyncBadge = (status: SyncStatus) => (
     <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-bold uppercase tracking-widest ${syncClasses[status]}`}>
       {status === 'synced' ? <CheckCircle2 size={12} /> : status === 'error' ? <AlertCircle size={12} /> : <Clock size={12} />}
@@ -6610,7 +6623,7 @@ export const SessionMode = ({
             <ChevronLeft size={23} />
           </button>
           <h1 className="min-w-0 flex-1 truncate text-sm font-medium tracking-tight text-gray-800 sm:text-base">
-            Sessão: <span className="font-semibold text-[#7a32fc]">{patient.name}</span>
+            Sessão: <span className="font-medium text-[#7a32fc]">{patient.name}</span>
           </h1>
           <button
             onClick={() => setMobileFocusMode((value) => !value)}
@@ -6624,10 +6637,27 @@ export const SessionMode = ({
               {formatCountdown ? formatCountdown(remainingSeconds) : '00:00'}
             </span>
           )}
+          <span data-aba-session-sync-status className="hidden sm:inline-flex">
+            {renderSyncBadge(sessionSyncStatus)}
+          </span>
+          <span data-aba-session-sync-status-mobile className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border sm:hidden ${syncClasses[sessionSyncStatus]}`} title={syncLabels[sessionSyncStatus]} aria-label={`Estado de sincronização: ${syncLabels[sessionSyncStatus]}`}>
+            {sessionSyncStatus === 'synced' ? <CheckCircle2 size={14} /> : sessionSyncStatus === 'error' ? <AlertCircle size={14} /> : <Clock size={14} />}
+          </span>
+          <button
+            type="button"
+            onClick={() => setSessionHistoryOpen((open) => !open)}
+            aria-pressed={sessionHistoryOpen}
+            data-aba-session-history-toggle
+            className="inline-flex min-h-[36px] shrink-0 items-center gap-1 rounded-full px-2 text-[11px] font-medium text-slate-600 transition-colors hover:bg-slate-100"
+          >
+            <History size={14} />
+            <span className="hidden lg:inline">{sessionHistoryOpen ? 'Ocultar histórico' : `Histórico (${liveSummaryTotals.recordTotal})`}</span>
+            <span className="lg:hidden">{liveSummaryTotals.recordTotal}</span>
+          </button>
           {activeSession && (
             <button
               onClick={requestEndSession}
-              className="shrink-0 rounded-full px-2 py-1 text-[11px] font-bold text-red-600 transition-all hover:bg-red-50"
+              className="min-h-[36px] shrink-0 rounded-full px-2 text-[11px] font-medium text-red-600 transition-all hover:bg-red-50"
             >
               Encerrar
             </button>
@@ -6651,11 +6681,21 @@ export const SessionMode = ({
         </div>
       </div>
 
-      <div ref={sessionScrollRef} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden lg:overflow-hidden grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_390px]">
+      <div ref={sessionScrollRef} className={`flex-1 min-h-0 overflow-y-auto overflow-x-hidden lg:overflow-hidden grid grid-cols-1 ${sessionHistoryOpen ? 'xl:grid-cols-[minmax(0,1fr)_360px]' : 'xl:grid-cols-1'}`}>
         <div className="p-3 sm:p-4 lg:p-6 space-y-4 sm:space-y-6 lg:overflow-y-auto no-scrollbar" style={scrollBottomPaddingStyle}>
           {sessionWarning && (
             <div className="rounded-2xl border border-amber-100 bg-amber-50 px-5 py-4 text-sm font-semibold text-amber-700 flex items-center gap-3">
               <AlertCircle size={18} /> {sessionWarning}
+            </div>
+          )}
+
+          {latestTrialRecord && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-violet-100 bg-violet-50/60 px-4 py-3" data-aba-last-trial-feedback aria-live="polite">
+              <div className="min-w-0">
+                <p className="text-xs text-slate-500">Última tentativa</p>
+                <p className="mt-1 truncate text-sm text-slate-800" title={`${latestTrialRecord.detail} · ${formatSessionTime(latestTrialRecord.timestamp)}`}>{latestTrialRecord.detail} registrada às {formatSessionTime(latestTrialRecord.timestamp)}</p>
+              </div>
+              {renderSyncBadge(normalizeSyncStatus(latestTrialRecord.syncStatus))}
             </div>
           )}
 
@@ -7452,6 +7492,10 @@ export const SessionMode = ({
               const progressLabel = masteryRow?.criterionProgressLabel || '0/0';
               const progressPrefix = masteryRow?.criterionProgressPrefix || 'Hoje';
               const progressShortLabel = String(progressLabel).match(/^\s*\d+\s*\/\s*\d+/)?.[0]?.replace(/\s+/g, '') || progressLabel;
+              const programName = String(goal.programName || goal.program_name || goal.protocolTitle || goal.protocol_title || '').trim();
+              const targetName = String(goal.targetName || goal.target_name || goal.name || 'Alvo não identificado').trim();
+              const instruction = String(goal.instruction || goal.antecedent || goal?.advanced_settings?.antecedent || '').trim();
+              const expectedResponse = String(goal.expectedResponse || goal.expected_response || goal?.advanced_settings?.expectedResponse || '').trim();
               return (
                 <article
                   key={`mobile-${goalKey}`}
@@ -7480,7 +7524,9 @@ export const SessionMode = ({
                         {statusLabel}
                       </span>
                     </div>
-                    <h2 className={`${selected ? 'text-lg' : 'text-[15px]'} line-clamp-2 overflow-hidden break-words font-semibold leading-snug text-gray-900`}>{goal.name || goal.targetName || goal.target_name}</h2>
+                    {programName && <div><p className="text-[10px] text-slate-500">Programa</p><p className="truncate text-xs text-slate-700" title={programName}>{programName}</p></div>}
+                    <div><p className="text-[10px] text-slate-500">Alvo atual</p><h2 className={`${selected ? 'text-lg' : 'text-[15px]'} mt-0.5 line-clamp-2 overflow-hidden break-words font-medium leading-snug text-gray-900`}>{targetName}</h2></div>
+                    {selected && (instruction || expectedResponse) && <div className="space-y-1 rounded-xl bg-slate-50 px-3 py-2 text-[11px] text-slate-600"><p>{instruction ? `Instrução: ${instruction}` : `Resposta esperada: ${expectedResponse}`}</p>{instruction && expectedResponse && <p>Resposta esperada: {expectedResponse}</p>}</div>}
                     {selected && (
                       <div className="inline-flex max-w-full items-center gap-2 self-start rounded-xl bg-[#F4EFFF] px-2.5 py-1.5" data-aba-mobile-progress-summary title={progressLabel}>
                         <p className="text-[10px] font-medium text-[#7a32fc]">Progresso</p>
@@ -7492,6 +7538,7 @@ export const SessionMode = ({
                       {masteryRow?.criterion && <p className="line-clamp-2 overflow-hidden break-words" title={`Critério: ${masteryRow.criterion}`}>Critério: {masteryRow.criterion}</p>}
                     </div>
                   </div>
+                  {selected && masteryRow?.statusCode === 'INSUFFICIENT_DATA' && <p className="mt-2 rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-800" data-aba-insufficient-data>Amostra ainda insuficiente para indicar tendência. Continue registrando conforme o critério configurado.</p>}
                   {selected && masteryRow?.criterionProgressKind === 'consecutive_independent' && masteryRow?.sequenceBrokenByLastTrial && (
                     <p className="mt-2 rounded-xl bg-orange-50 px-3 py-2 text-[11px] font-bold text-orange-700">
                       Última tentativa com ajuda ou erro quebrou a sequência.
@@ -7553,7 +7600,7 @@ export const SessionMode = ({
                                   setMobilePromptCategoryByGoalKey((prev) => ({ ...prev, [goalKey]: bucket.key }));
                                 }}
                                 aria-pressed={active}
-                                className={`min-h-[38px] rounded-full border px-3 text-[11px] font-medium transition-all active:scale-95 ${active ? 'border-[#7a32fc] bg-white text-[#7a32fc] ring-2 ring-[#7a32fc]/10' : 'border-purple-100 bg-white text-slate-700'}`}
+                                className={`min-h-[44px] rounded-xl border px-3 text-[11px] font-medium transition-all active:scale-95 ${active ? 'border-[#7a32fc] bg-white text-[#7a32fc] ring-2 ring-[#7a32fc]/10' : 'border-purple-100 bg-white text-slate-700'}`}
                               >
                                 {bucket.label}
                               </button>
@@ -7575,7 +7622,7 @@ export const SessionMode = ({
                                 }}
                                 disabled={Boolean(actionLocks[promptedTrialLockKey])}
                                 aria-label={`Registrar ${goal.name} com ajuda ${prompt.label}`}
-                                className={`min-h-[38px] rounded-xl border px-2 text-[11px] font-medium leading-tight transition-all disabled:opacity-75 ${promptedActive ? 'border-orange-300 bg-white text-orange-700 ring-4 ring-orange-200/60' : 'border-orange-100 bg-white text-orange-700'}`}
+                                className={`min-h-[44px] rounded-xl border px-2 text-[11px] font-medium leading-tight transition-all disabled:opacity-75 ${promptedActive ? 'border-orange-300 bg-white text-orange-700 ring-4 ring-orange-200/60' : 'border-orange-100 bg-white text-orange-700'}`}
                               >
                                 {prompt.compactLabel}
                               </button>
@@ -7632,39 +7679,51 @@ export const SessionMode = ({
               }) : null;
               const independentTrialLockKey = `trial:${goalKey}:independent:independent`;
               const errorTrialLockKey = `trial:${goalKey}:error:error`;
+              const programName = String(goal.programName || goal.program_name || goal.protocolTitle || goal.protocol_title || '').trim();
+              const targetName = String(goal.targetName || goal.target_name || goal.name || 'Alvo não identificado').trim();
+              const instruction = String(goal.instruction || goal.antecedent || goal?.advanced_settings?.antecedent || '').trim();
+              const expectedResponse = String(goal.expectedResponse || goal.expected_response || goal?.advanced_settings?.expectedResponse || '').trim();
               return (
                 <div key={goal.id} onPointerDown={() => syncTrialTypeForGoal(goal)} className="bg-white rounded-[24px] sm:rounded-[32px] p-4 sm:p-6 shadow-xl shadow-blue-900/5 border border-white relative overflow-hidden">
                   <div className="flex flex-col gap-4 mb-5 sm:flex-row sm:items-start sm:justify-between">
-                    <div>
+                    <div className="min-w-0">
                       <div className="mb-3 flex flex-wrap gap-2">
-                        <span className="inline-flex bg-[#7a32fc]/10 text-[#7a32fc] text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-widest">
+                        <span className="inline-flex bg-[#7a32fc]/10 px-3 py-1 text-[10px] font-medium text-[#7a32fc] rounded-full">
                           {goal.domainName || 'Meta'}
                         </span>
                         {maintenanceProbeCanRunNow && (
-                          <span className="inline-flex bg-amber-100 text-amber-700 text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-widest">
+                          <span className="inline-flex bg-amber-100 px-3 py-1 text-[10px] font-medium text-amber-700 rounded-full">
                             Manutenção
                           </span>
                         )}
                       </div>
-                      <h2 className="text-xl sm:text-2xl font-bold text-gray-800 tracking-tight">{goal.name}</h2>
+                      {programName && <div><p className="text-[11px] text-gray-500">Programa</p><p className="mt-0.5 truncate text-sm text-gray-700" title={programName}>{programName}</p></div>}
+                      <div className={programName ? 'mt-3' : ''}><p className="text-[11px] text-gray-500">Alvo atual</p><h2 className="mt-0.5 text-xl font-medium tracking-tight text-gray-800 sm:text-2xl">{targetName}</h2></div>
+                      {(instruction || expectedResponse) && <div className="mt-3 max-w-2xl space-y-1 rounded-2xl bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-600"><p>{instruction ? `Instrução: ${instruction}` : `Resposta esperada: ${expectedResponse}`}</p>{instruction && expectedResponse && <p>Resposta esperada: {expectedResponse}</p>}</div>}
                     </div>
-                    {patient.age <= 12 && (
+                    {(
                       <div className="text-left sm:text-right">
-                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Criterio de maestria</p>
-                        <p className="max-w-[220px] text-xs font-bold text-[#7a32fc] sm:ml-auto">{masteryRow?.criterion || 'Criterio nao configurado'}</p>
-                        <p className="mt-1 text-[11px] font-semibold text-gray-500">Origem: {masteryRow?.criterionSourceLabel || 'Criterio de maestria nao configurado'}</p>
-                        <p className="text-[11px] font-semibold text-gray-500">
+                        <p className="text-[10px] text-gray-400">Critério de domínio</p>
+                        <p className="max-w-[220px] text-xs font-medium text-[#7a32fc] sm:ml-auto">{masteryRow?.criterion || 'Critério ainda não configurado'}</p>
+                        <p className="mt-1 text-[11px] text-gray-500">Origem: {masteryRow?.criterionSourceLabel || 'Não configurado'}</p>
+                        <p className="text-[11px] text-gray-500">
                           {masteryRow?.contributes ? 'Criterio concluido' : masteryRow?.criterionProgressPrefix || 'Hoje'}: {masteryRow?.criterionProgressLabel || '0/0'}
                         </p>
                         {masteryRow?.criterionProgressKind === 'consecutive_independent' && masteryRow?.sequenceBrokenByLastTrial && (
-                          <p className="mt-1 text-[11px] font-bold text-orange-600">Ultima tentativa com ajuda ou erro quebrou a sequencia.</p>
+                          <p className="mt-1 text-[11px] text-orange-600">Última tentativa com ajuda ou erro quebrou a sequência.</p>
                         )}
-                        <span className={`mt-2 inline-flex rounded-full px-2 py-1 text-[9px] font-bold uppercase tracking-widest ${masteryRow?.statusCode === 'READY_FOR_REVIEW' ? 'bg-emerald-50 text-emerald-600' : masteryRow?.statusCode === 'MET_TODAY' ? 'bg-blue-50 text-blue-600' : masteryRow?.statusCode === 'INSUFFICIENT_DATA' ? 'bg-amber-50 text-amber-600' : 'bg-slate-100 text-slate-500'}`}>
+                        <span className={`mt-2 inline-flex rounded-full px-2 py-1 text-[9px] font-medium ${masteryRow?.statusCode === 'READY_FOR_REVIEW' ? 'bg-emerald-50 text-emerald-600' : masteryRow?.statusCode === 'MET_TODAY' ? 'bg-blue-50 text-blue-600' : masteryRow?.statusCode === 'INSUFFICIENT_DATA' ? 'bg-amber-50 text-amber-600' : 'bg-slate-100 text-slate-500'}`}>
                           {masteryRow?.status || 'Dados insuficientes'}
                         </span>
                       </div>
                     )}
                   </div>
+
+                  {masteryRow?.statusCode === 'INSUFFICIENT_DATA' && (
+                    <div className="mb-5 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs leading-relaxed text-amber-800" data-aba-insufficient-data>
+                      Amostra ainda insuficiente para indicar tendência. Continue registrando conforme o critério configurado.
+                    </div>
+                  )}
 
                   {showMaintenanceOperationalBlock && (
                     <div className="mb-5 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3">
@@ -7738,21 +7797,21 @@ export const SessionMode = ({
                     </div>
                   )}
 
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div className="grid grid-cols-1 gap-3 lg:grid-cols-3" data-aba-trial-response-matrix>
                     <button
                       onClick={() => handleTrialClick(goal, 1, 'independent')}
                       disabled={Boolean(actionLocks[independentTrialLockKey])}
-                      className={`relative bg-[#05CD99] text-white min-h-[88px] sm:min-h-[96px] rounded-3xl flex flex-col items-center justify-center px-4 shadow-lg shadow-green-500/20 hover:scale-[1.01] active:scale-95 transition-all disabled:opacity-90 ${maintenanceProbeActiveForGoal ? 'ring-4 ring-amber-200/80' : ''} ${microFeedback[independentTrialLockKey] === 'check' ? 'scale-[0.98] ring-4 ring-emerald-200/70' : ''}`}
+                      className={`relative flex min-h-[76px] flex-col items-center justify-center rounded-2xl bg-[#05CD99] px-4 text-white shadow-lg shadow-green-500/20 transition-all hover:scale-[1.01] active:scale-95 disabled:opacity-90 ${maintenanceProbeActiveForGoal ? 'ring-4 ring-amber-200/80' : ''} ${microFeedback[independentTrialLockKey] === 'check' ? 'scale-[0.98] ring-4 ring-emerald-200/70' : ''}`}
                     >
                       {microFeedback[independentTrialLockKey] === 'check' && <span className="absolute right-4 top-4 rounded-full bg-white/25 p-1"><CheckCircle2 size={16} /></span>}
-                      <CheckCircle2 size={26} />
-                      <span className="text-xl sm:text-2xl font-bold mt-2">Independente</span>
-                      <span className={`${mobileFocusMode ? 'hidden sm:block' : 'block'} text-[10px] font-bold uppercase tracking-widest opacity-80`}>1 = correto independente</span>
+                      <CheckCircle2 size={22} />
+                      <span className="mt-2 text-base font-medium">Independente</span>
+                      <span className={`${mobileFocusMode ? 'hidden sm:block' : 'block'} text-[10px] opacity-80`}>Resposta correta sem ajuda</span>
                     </button>
-                    <div className={`relative rounded-3xl border border-orange-100 bg-orange-50 p-2 shadow-lg shadow-orange-500/10 ${maintenanceProbeActiveForGoal ? 'ring-4 ring-amber-200/80' : ''}`}>
+                    <div className={`relative rounded-2xl border border-orange-100 bg-orange-50 p-3 shadow-lg shadow-orange-500/10 ${maintenanceProbeActiveForGoal ? 'ring-4 ring-amber-200/80' : ''}`}>
                       <div className="mb-2 flex min-h-[28px] items-center justify-center gap-2 px-2 text-orange-700">
                         <Activity size={18} />
-                        <span className="text-xs font-black uppercase tracking-widest">Com ajuda</span>
+                        <span className="text-xs font-medium">Com ajuda</span>
                       </div>
                       <div className="grid grid-cols-2 gap-2">
                         {promptedPromptOptions.map((prompt) => {
@@ -7766,7 +7825,7 @@ export const SessionMode = ({
                               disabled={Boolean(actionLocks[promptedTrialLockKey])}
                               aria-label={`Registrar ${goal.name} com ajuda ${prompt.label}`}
                               title={`Com ajuda ${prompt.label}`}
-                              className={`relative flex min-h-[46px] items-center justify-center rounded-2xl border px-2 text-center text-[11px] font-black leading-tight transition-all active:scale-95 disabled:opacity-80 sm:min-h-[50px] sm:text-xs ${promptedActive ? 'scale-[0.98] border-orange-300 bg-white text-orange-700 ring-4 ring-orange-200/70' : 'border-orange-100 bg-white text-orange-700 shadow-sm hover:border-orange-300 hover:bg-orange-100'}`}
+                              className={`relative flex min-h-[44px] items-center justify-center rounded-xl border px-2 text-center text-[11px] font-medium leading-tight transition-all active:scale-95 disabled:opacity-80 ${promptedActive ? 'scale-[0.98] border-orange-300 bg-white text-orange-700 ring-4 ring-orange-200/70' : 'border-orange-100 bg-white text-orange-700 shadow-sm hover:border-orange-300 hover:bg-orange-100'}`}
                             >
                               {promptedActive && <span className="absolute right-2 top-2 rounded-full bg-orange-100 p-0.5 text-orange-700"><CheckCircle2 size={12} /></span>}
                               <span className="max-w-full break-words">{prompt.compactLabel}</span>
@@ -7778,25 +7837,23 @@ export const SessionMode = ({
                     <button
                       onClick={() => handleTrialClick(goal, 0, 'error')}
                       disabled={Boolean(actionLocks[errorTrialLockKey])}
-                      className={`relative bg-[#EE5D50] text-white min-h-[88px] sm:min-h-[96px] rounded-3xl flex flex-col items-center justify-center px-4 shadow-lg shadow-red-500/20 hover:scale-[1.01] active:scale-95 transition-all disabled:opacity-90 ${maintenanceProbeActiveForGoal ? 'ring-4 ring-amber-200/80' : ''} ${microFeedback[errorTrialLockKey] === 'check' ? 'scale-[0.98] ring-4 ring-red-200/70' : ''}`}
+                      className={`relative flex min-h-[76px] flex-col items-center justify-center rounded-2xl bg-[#EE5D50] px-4 text-white shadow-lg shadow-red-500/20 transition-all hover:scale-[1.01] active:scale-95 disabled:opacity-90 ${maintenanceProbeActiveForGoal ? 'ring-4 ring-amber-200/80' : ''} ${microFeedback[errorTrialLockKey] === 'check' ? 'scale-[0.98] ring-4 ring-red-200/70' : ''}`}
                     >
                       {microFeedback[errorTrialLockKey] === 'check' && <span className="absolute right-4 top-4 rounded-full bg-white/25 p-1"><CheckCircle2 size={16} /></span>}
-                      <X size={26} />
-                      <span className="text-xl sm:text-2xl font-bold mt-2">Erro</span>
-                      <span className={`${mobileFocusMode ? 'hidden sm:block' : 'block'} text-[10px] font-bold uppercase tracking-widest opacity-80`}>0 = erro ou sem resposta</span>
+                      <X size={22} />
+                      <span className="mt-2 text-base font-medium">Erro</span>
+                      <span className={`${mobileFocusMode ? 'hidden sm:block' : 'block'} text-[10px] opacity-80`}>Erro ou sem resposta</span>
                     </button>
                   </div>
 
                   <div className="mt-5 text-center">
                     <button
-                      onMouseDown={() => setActiveCriteria(goal.id)}
-                      onMouseUp={() => setActiveCriteria(null)}
-                      onMouseLeave={() => setActiveCriteria(null)}
-                      onTouchStart={() => setActiveCriteria(goal.id)}
-                      onTouchEnd={() => setActiveCriteria(null)}
-                      className="text-[10px] font-bold text-gray-300 uppercase tracking-[0.3em] hover:text-gray-400 transition-colors"
+                      type="button"
+                      onClick={() => setActiveCriteria((current) => current === goal.id ? null : goal.id)}
+                      aria-expanded={activeCriteria === goal.id}
+                      className="min-h-[36px] rounded-xl px-3 text-[11px] font-medium text-slate-500 transition-colors hover:bg-slate-50 hover:text-[#7a32fc]"
                     >
-                      Segure para ver critérios
+                      {activeCriteria === goal.id ? 'Ocultar critério' : 'Ver critério'}
                     </button>
                     {activeCriteria === goal.id && (
                       <div className="mt-3 mx-auto max-w-xl bg-[#1B254B] text-white p-5 rounded-3xl shadow-2xl animate-pop">
@@ -7812,15 +7869,18 @@ export const SessionMode = ({
           </div>
         </div>
 
-        <aside className="bg-white border-t xl:border-t-0 xl:border-l border-gray-100 p-3 sm:p-5 xl:overflow-y-auto pb-[calc(1rem+env(safe-area-inset-bottom))]" style={scrollBottomPaddingStyle}>
+        {sessionHistoryOpen && <><button type="button" aria-label="Fechar histórico da sessão" className="fixed inset-0 z-[108] bg-slate-950/20 xl:hidden" onClick={() => setSessionHistoryOpen(false)} /><aside className="fixed inset-x-0 bottom-0 z-[109] max-h-[76dvh] overflow-y-auto rounded-t-3xl border border-gray-100 bg-white p-3 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:p-5 xl:static xl:z-auto xl:max-h-none xl:rounded-none xl:border-y-0 xl:border-r-0 xl:border-l xl:shadow-none xl:overflow-y-auto" style={scrollBottomPaddingStyle} data-aba-session-history-panel>
           <div className="flex items-center justify-between gap-3 mb-4">
             <div>
-              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.2em]">Histórico da sessão</p>
-              <h2 className="text-lg font-bold text-gray-800">{liveSummaryTotals.recordTotal} registro(s)</h2>
+              <p className="text-[10px] text-gray-400">Histórico da sessão</p>
+              <h2 className="text-lg font-medium text-gray-800">{liveSummaryTotals.recordTotal} registro(s)</h2>
             </div>
-            <div className="text-right">
-              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Tentativas hoje</p>
-              <p className="text-3xl font-bold text-[#7a32fc] leading-none">{liveSummaryTotals.trialTotal}</p>
+            <div className="flex items-start gap-3">
+              <div className="text-right">
+                <p className="text-[10px] text-gray-400">Tentativas hoje</p>
+                <p className="text-2xl font-medium text-[#7a32fc] leading-none">{liveSummaryTotals.trialTotal}</p>
+              </div>
+              <button type="button" onClick={() => setSessionHistoryOpen(false)} aria-label="Fechar histórico" className="inline-flex min-h-[36px] min-w-[36px] items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100"><X size={17} /></button>
             </div>
           </div>
 
@@ -7987,7 +8047,7 @@ export const SessionMode = ({
               </button>
             )}
           </div>
-        </aside>
+        </aside></>}
       </div>
 
       {maintenanceScheduleModalGoal && (

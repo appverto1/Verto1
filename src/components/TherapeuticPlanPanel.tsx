@@ -1387,18 +1387,92 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], userRole, isDark
   const activeProgressIndex = Math.max(0, progressSteps.indexOf(creationStage));
   const creationProgress = <nav className="flex items-center gap-1 overflow-hidden" aria-label="Progresso da criação do programa">{progressSteps.map((step, index) => <React.Fragment key={step}><span className={`shrink-0 text-xs ${index === activeProgressIndex ? 'font-medium text-violet-500' : index < activeProgressIndex ? isDark ? 'text-emerald-300' : 'text-emerald-600' : muted}`} aria-current={index === activeProgressIndex ? 'step' : undefined}>{step}</span>{index < progressSteps.length - 1 && <span className={`min-w-2 flex-1 border-t ${index < activeProgressIndex ? 'border-emerald-400' : isDark ? 'border-slate-700' : 'border-slate-200'}`} aria-hidden="true" />}</React.Fragment>)}</nav>;
 
+  const renderProgramCard = (program: any) => {
+    const status = normalizeTherapeuticProgramStatus(program.status);
+    const targets = Array.isArray(program.targets) ? program.targets : [];
+    const targetCount = targets.length;
+    const mastered = Number(program.masteredTargetCount || 0);
+    const currentTarget = targets.find((target: any) => target.normalizedStatus === 'teaching') || (status === 'maintenance' ? targets.find((target: any) => target.normalizedStatus === 'maintenance') : null);
+    const teachingTargets = targets.filter((target: any) => target.normalizedStatus === 'teaching').length;
+    const waitingTargets = targets.filter((target: any) => target.normalizedStatus === 'not_started').length;
+    const pausedTargets = targets.filter((target: any) => target.normalizedStatus === 'paused').length;
+    const progress = targetCount ? Math.round((mastered / targetCount) * 100) : 0;
+    const criteria = program.mastery_criteria || program.masteryCriteria || program.criteria;
+    const hasConfiguredCriterion = Boolean(
+      criteria && typeof criteria === 'object' && Object.values(criteria).some((value) => (
+        typeof value === 'number' ? Number.isFinite(value) : Boolean(String(value || '').trim())
+      ))
+    );
+    const criterionLabel = hasConfiguredCriterion ? masteryCriterionLabel(criteria) : 'Critério ainda não configurado';
+    const hasRecordedApplications = Boolean(program.lastAppliedAt);
+    const responsibleLabel = program?.advanced_settings?.responsibleNotes || program?.advancedSettings?.responsibleNotes || (Array.isArray(program.responsible_professional_ids) && program.responsible_professional_ids.length ? `${program.responsible_professional_ids.length} profissional(is)` : 'Equipe clínica');
+
+    return (
+      <article key={program.id} className={`relative rounded-2xl border p-5 ${panel}`} data-therapeutic-program-card>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className={`text-xs ${muted}`}>Programa</p>
+            <div className="mt-1 flex flex-wrap items-center gap-2">
+              <h4 className={`truncate text-base font-medium ${text}`}>{program.name}</h4>
+              <span className={`rounded-full border px-2.5 py-1 text-[10px] ${statusClass(status)}`}>{THERAPEUTIC_PROGRAM_STATUS_LABELS[status]}</span>
+            </div>
+            <p className={`mt-1 text-xs ${muted}`}>{CATEGORY_LABELS[normalizeCategory(program.category)] || program.category} · {SOURCE_LABELS[String(program.origin_type || 'manual')] || 'Programa individual'}</p>
+          </div>
+          <button type="button" aria-label={`Mais ações para ${program.name}`} className={`min-h-[40px] min-w-[40px] rounded-lg p-2 ${isDark ? 'text-slate-400 hover:bg-slate-800' : 'text-slate-400 hover:bg-slate-100'}`} onClick={() => setOpenMenuId((current) => current === String(program.id) ? '' : String(program.id))}><MoreHorizontal size={18} /></button>
+        </div>
+
+        {openMenuId === String(program.id) && <div className={`absolute right-5 top-12 z-20 w-56 rounded-xl border p-1.5 shadow-xl ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-200 bg-white'}`}>
+          {canManageStructure && !['completed', 'archived'].includes(status) && <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => editProgram(program)}><Pencil size={15} /> Editar</button>}
+          {canManageStructure && status !== 'paused' && <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => void updateStatus(program, 'paused')}><Pause size={15} /> Pausar</button>}
+          {canManageStructure && status !== 'maintenance' && !['completed', 'archived'].includes(status) && <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => void updateStatus(program, 'maintenance')}><Clock3 size={15} /> Mover para manutenção</button>}
+          {canManageStructure && status !== 'completed' && <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => void updateStatus(program, 'completed')}><CheckCircle2 size={15} /> Concluir</button>}
+          <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => void saveAsTemplate(program)}><Copy size={15} /> Duplicar como modelo</button>
+        </div>}
+
+        <div className={`mt-4 rounded-xl border px-3 py-3 ${isDark ? 'border-slate-700 bg-slate-800/40' : 'border-slate-100 bg-slate-50/70'}`}>
+          <p className={`text-xs ${muted}`}>Alvo atual</p>
+          <p className={`mt-1 text-sm ${text}`}>{currentTarget?.name || currentTarget?.target_name || 'Nenhum alvo ativo selecionado'}</p>
+          {currentTarget?.normalizedStatus && <p className={`mt-1 text-xs ${muted}`}>{currentTarget.normalizedStatus === 'maintenance' ? 'Em manutenção' : 'Em ensino'}</p>}
+        </div>
+
+        <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 text-xs">
+          <div><p className={muted}>Objetivo</p><p className={`mt-1 line-clamp-2 leading-relaxed ${text}`}>{program.objective || 'Objetivo não informado.'}</p></div>
+          <div><p className={muted}>Critério</p><p className={`mt-1 line-clamp-2 leading-relaxed ${text}`}>{criterionLabel}</p></div>
+          <div><p className={muted}>Alvos</p><p className={`mt-1 ${text}`}>{targetCount ? `${mastered} dominados · ${teachingTargets} em ensino${waitingTargets ? ` · ${waitingTargets} aguardando` : ''}${pausedTargets ? ` · ${pausedTargets} pausados` : ''}` : 'Nenhum alvo cadastrado'}</p></div>
+          <div><p className={muted}>Responsável</p><p className={`mt-1 line-clamp-2 ${text}`}>{responsibleLabel}</p></div>
+        </div>
+
+        <div className={`mt-4 border-t pt-4 ${isDark ? 'border-slate-700' : 'border-slate-100'}`}>
+          {hasRecordedApplications ? <>
+            <div className={`mb-2 flex justify-between text-xs ${muted}`}><span>{mastered} de {targetCount} alvos dominados</span><span>{progress}%</span></div>
+            <div className={`h-2 overflow-hidden rounded-full ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`}><div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${progress}%` }} /></div>
+          </> : <p className={`text-xs ${muted}`}>Nenhuma aplicação registrada.</p>}
+          <div className={`mt-3 flex flex-wrap items-center justify-between gap-3 text-xs ${muted}`}>
+            <span>Última aplicação: {hasRecordedApplications ? formatTherapeuticPlanDate(program.lastAppliedAt) : 'Não registrada'}</span>
+            <span>Revisão: {formatTherapeuticPlanDate(program.review_due_date || program.reviewDueDate)}</span>
+            <button type="button" className="min-h-[36px] text-sm text-violet-500 hover:text-violet-400" onClick={() => { setSelectedProgramId(String(program.id)); setDetailTab('overview'); }}>Abrir programa</button>
+          </div>
+        </div>
+        {actionProgramId === String(program.id) && <div className="absolute inset-0 z-30 flex items-center justify-center rounded-2xl bg-slate-950/25 backdrop-blur-[1px]"><Loader2 size={22} className="animate-spin text-white" /></div>}
+      </article>
+    );
+  };
+
   return (
     <section className="space-y-5" data-testid="therapeutic-plan-panel">
       <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
-        <div><p className={`text-sm leading-relaxed ${muted}`}>Objetivos gerais, programas individualizados e alvos usados nas sessões.</p></div>
+        <div><h2 className={`text-lg font-medium ${text}`}>Plano terapêutico</h2><p className={`mt-1 text-sm leading-relaxed ${muted}`}>Objetivos gerais, programas individualizados e alvos usados nas sessões.</p></div>
         <div className="flex flex-wrap gap-2">{typeof onStartSession === 'function' && programs.some((program: any) => ['teaching', 'maintenance'].includes(normalizeTherapeuticProgramStatus(program.status))) && <button type="button" className={secondaryButton} onClick={onStartSession}><Play size={16} /> Iniciar sessão</button>}{canCreate && <button ref={addProgramButtonRef} type="button" className="inline-flex min-h-[42px] items-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm text-white hover:bg-violet-700" onClick={startCreation}><Plus size={17} /> Adicionar programa</button>}</div>
       </div>
 
       {notice && <div className={`flex items-start justify-between gap-3 rounded-2xl border px-4 py-3 text-sm ${isDark ? 'border-emerald-400/25 bg-emerald-500/10 text-emerald-100' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}><span>{notice}</span><button type="button" onClick={() => setNotice('')}><X size={15} /></button></div>}
       {error && <div className={`rounded-2xl border px-4 py-3 text-sm ${isDark ? 'border-rose-400/25 bg-rose-500/10 text-rose-100' : 'border-rose-200 bg-rose-50 text-rose-700'}`}>{error}<button type="button" className="ml-2 underline" onClick={() => void loadPlan(true)}>Tentar novamente</button></div>}
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        {[['Em ensino', summary.teaching], ['Em manutenção', summary.maintenance], ['Alvos dominados', summary.masteredTargets], ['Próxima revisão', formatTherapeuticPlanDate(summary.nextReview)]].map(([label, value]) => <div key={String(label)} className={`rounded-2xl border p-4 ${subpanel}`}><p className={`text-xs ${muted}`}>{label}</p><p className={`mt-1 text-lg font-medium ${text}`}>{value}</p></div>)}
+      <div className={`flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border px-4 py-3 text-sm ${subpanel}`} data-therapeutic-plan-summary>
+        <span className={text}>{summary.teaching} em ensino</span><span className={muted}>·</span>
+        <span className={text}>{summary.maintenance} em manutenção</span><span className={muted}>·</span>
+        <span className={text}>{summary.masteredTargets} alvos dominados</span>
+        {summary.nextReview && <><span className={muted}>·</span><span className={muted}>revisão em {formatTherapeuticPlanDate(summary.nextReview)}</span></>}
       </div>
 
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -1406,13 +1480,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], userRole, isDark
         <label className="relative w-full md:max-w-xs"><Search size={15} className={`absolute left-3.5 top-1/2 -translate-y-1/2 ${muted}`} /><input className={`${field} pl-10`} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar programa ou alvo" /></label>
       </div>
 
-      {loading ? <div className={`flex items-center justify-center gap-2 rounded-2xl border border-dashed py-12 text-sm ${isDark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}><Loader2 size={18} className="animate-spin" /> Carregando Plano terapêutico...</div> : visiblePrograms.length ? <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">{visiblePrograms.map((program: any) => {
-        const status = normalizeTherapeuticProgramStatus(program.status);
-        const targetCount = program.targets.length;
-        const mastered = program.masteredTargetCount;
-        const progress = targetCount ? Math.round((mastered / targetCount) * 100) : 0;
-        return <article key={program.id} className={`relative rounded-2xl border p-5 ${panel}`}><div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h4 className={`truncate text-base font-medium ${text}`}>{program.name}</h4><span className={`rounded-full border px-2.5 py-1 text-[10px] ${statusClass(status)}`}>{THERAPEUTIC_PROGRAM_STATUS_LABELS[status]}</span></div><p className={`mt-1 text-xs ${muted}`}>{CATEGORY_LABELS[normalizeCategory(program.category)] || program.category} · {SOURCE_LABELS[String(program.origin_type || 'manual')] || 'Programa individual'}</p></div><button type="button" className={`rounded-lg p-2 ${isDark ? 'text-slate-400 hover:bg-slate-800' : 'text-slate-400 hover:bg-slate-100'}`} onClick={() => setOpenMenuId((current) => current === String(program.id) ? '' : String(program.id))}><MoreHorizontal size={18} /></button></div>{openMenuId === String(program.id) && <div className={`absolute right-5 top-12 z-20 w-56 rounded-xl border p-1.5 shadow-xl ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-200 bg-white'}`}>{canManageStructure && !['completed', 'archived'].includes(status) && <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => editProgram(program)}><Pencil size={15} /> Editar</button>}{canManageStructure && status !== 'paused' && <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => void updateStatus(program, 'paused')}><Pause size={15} /> Pausar</button>}{canManageStructure && status !== 'maintenance' && !['completed', 'archived'].includes(status) && <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => void updateStatus(program, 'maintenance')}><Clock3 size={15} /> Mover para manutenção</button>}{canManageStructure && status !== 'completed' && <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => void updateStatus(program, 'completed')}><CheckCircle2 size={15} /> Concluir</button>}<button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => void saveAsTemplate(program)}><Copy size={15} /> Duplicar como modelo</button></div>}<p className={`mt-4 line-clamp-2 text-sm leading-relaxed ${muted}`}>{program.objective || 'Objetivo não informado.'}</p><div className="mt-5"><div className={`mb-2 flex justify-between text-xs ${muted}`}><span>{mastered} de {targetCount} alvos dominados</span><span>{progress}%</span></div><div className={`h-2 overflow-hidden rounded-full ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`}><div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${progress}%` }} /></div></div><div className={`mt-4 flex flex-wrap items-center justify-between gap-3 border-t pt-4 ${isDark ? 'border-slate-700' : 'border-slate-100'}`}><div className={`text-xs ${muted}`}><span>Última aplicação: {formatTherapeuticPlanDate(program.lastAppliedAt)}</span><span className="mx-2">·</span><span>{masteryCriterionLabel(program.mastery_criteria)}</span></div><button type="button" className="text-sm text-violet-500 hover:text-violet-400" onClick={() => { setSelectedProgramId(String(program.id)); setDetailTab('overview'); }}>Abrir programa</button></div>{actionProgramId === String(program.id) && <div className="absolute inset-0 z-30 flex items-center justify-center rounded-2xl bg-slate-950/25 backdrop-blur-[1px]"><Loader2 size={22} className="animate-spin text-white" /></div>}</article>;
-      })}</div> : <div className={`rounded-2xl border border-dashed py-12 text-center ${isDark ? 'border-slate-700' : 'border-slate-200'}`}><Target size={30} className={`mx-auto ${isDark ? 'text-slate-600' : 'text-slate-300'}`} /><p className={`mt-3 text-sm ${muted}`}>{query || filter !== 'all' ? 'Nenhum programa encontrado com estes filtros.' : 'Ainda não há programas individualizados neste plano.'}</p>{canCreate && !query && filter === 'all' && <button type="button" className="mt-4 text-sm text-violet-500" onClick={startCreation}>Adicionar o primeiro programa</button>}</div>}
+      {loading ? <div className={`flex items-center justify-center gap-2 rounded-2xl border border-dashed py-12 text-sm ${isDark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}><Loader2 size={18} className="animate-spin" /> Carregando Plano terapêutico...</div> : visiblePrograms.length ? <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">{visiblePrograms.map(renderProgramCard)}</div> : <div className={`rounded-2xl border border-dashed py-12 text-center ${isDark ? 'border-slate-700' : 'border-slate-200'}`}><Target size={30} className={`mx-auto ${isDark ? 'text-slate-600' : 'text-slate-300'}`} /><p className={`mt-3 text-sm ${muted}`}>{query || filter !== 'all' ? 'Nenhum programa encontrado com estes filtros.' : 'Ainda não há programas individualizados neste plano.'}</p>{canCreate && !query && filter === 'all' && <button type="button" className="mt-4 text-sm text-violet-500" onClick={startCreation}>Adicionar o primeiro programa</button>}</div>}
 
       <ResponsiveDrawer
         open={Boolean(creationStep)}
