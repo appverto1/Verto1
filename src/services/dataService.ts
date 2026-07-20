@@ -24,6 +24,7 @@ import {
   mirrorPatientInsuranceEligibilityAliases,
   normalizePatientInsuranceEligibility,
 } from '../utils/patientInsuranceEligibility';
+import { normalizeClinicalTextRecord } from '../utils/clinicalText';
 
 enum OperationType {
   CREATE = 'create',
@@ -749,7 +750,9 @@ function normalizeArrayLike(value: any, nestedKeys: string[] = []) {
 }
 
 function normalizeProtocolList(value: any) {
-  return normalizeArrayLike(value, ['protocols', 'items', 'data', 'value']).filter(Boolean);
+  return normalizeArrayLike(value, ['protocols', 'items', 'data', 'value'])
+    .filter(Boolean)
+    .map((protocol) => normalizeClinicalTextRecord(protocol));
 }
 
 function firstDefinedValue(source: any, keys: string[]) {
@@ -4147,7 +4150,9 @@ export const dataService = {
         table: 'aba_programs,aba_targets,patient_therapeutic_objectives,aba_program_audit_events,aba_trials',
         hasExplicitColumns: true
       });
-      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível carregar o Plano terapêutico agora.');
+      return normalizeClinicalTextRecord(
+        normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível carregar o Plano terapêutico agora.'),
+      );
     } catch (error) {
       const message = getApiErrorMessage(error, 'Não foi possível carregar o Plano terapêutico agora.');
       return { success: false, data: { programs: [], objectives: [], targets: [] }, error: message, message };
@@ -4171,7 +4176,9 @@ export const dataService = {
         hasExplicitColumns: true,
         requiresPatientOrSession: false
       });
-      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível carregar a biblioteca de programas.');
+      return normalizeClinicalTextRecord(
+        normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível carregar a biblioteca de programas.'),
+      );
     } catch (error) {
       const message = getApiErrorMessage(error, 'Não foi possível carregar a biblioteca de programas.');
       return { success: false, data: [], error: message, message };
@@ -4774,7 +4781,7 @@ export const dataService = {
         headers: await buildConditionalHeaders(endpoint, 'aba'),
         credentials: 'include'
       }, { helperName: 'getNextSessionRecommendations', operation: 'list', table: 'aba_clinical_recommendations', hasExplicitColumns: true });
-      return await safeJson(response);
+      return normalizeClinicalTextRecord(await safeJson(response));
     } catch (error) {
       if (import.meta.env.DEV) console.log('Fetching ABA recommendations from local state only...');
       return { success: false, error: 'Não foi possível carregar as recomendações agora.' };

@@ -26,12 +26,14 @@ const serverCode = readFileSync(join(root, 'server.ts'), 'utf8');
 const tests: Array<{ name: string; fn: () => void }> = [];
 const test = (name: string, fn: () => void) => tests.push({ name, fn });
 
-test('aba Plano possui subabas internas e Ensino e o padrao', () => {
+test('aba Plano possui áreas internas e Programas mantém teaching como padrão', () => {
   assert.match(patientDetailCode, /activePeiPlanSubtab[\s\S]*?useState<PeiPlanSubtab>\('teaching'\)/);
   assert.match(patientDetailCode, /PEI_PLAN_SUBTABS\.map/);
-  for (const label of ['Ensino', 'Manutenção', 'Generalização', 'Histórico']) {
+  for (const label of ['Programas', 'Manutenção', 'Generalização', 'Histórico']) {
     assert.ok(patientDetailCode.includes(label), `${label} deve aparecer como subaba do Plano`);
   }
+  assert.match(patientDetailCode, /tab\.id === 'teaching'[\s\S]*?\? 'Programas'/);
+  assert.match(patientDetailCode, /data-therapeutic-plan-navigation/);
   assert.doesNotMatch(patientDetailCode, /id="tab-maintenance"|setActiveTab\('maintenance'\)/);
 });
 

@@ -12,6 +12,7 @@ const root = process.cwd();
 const read = (file: string) => readFileSync(join(root, file), 'utf8');
 const panel = read('src/components/TherapeuticPlanPanel.tsx');
 const drawer = read('src/components/ui/ResponsiveDrawer.tsx');
+const alertDialog = read('src/components/ui/AlertDialog.tsx');
 const server = read('server.ts');
 const dataService = read('src/services/dataService.ts');
 const planningEngine = read('src/utils/abaPlanningEngine.ts');
@@ -177,6 +178,23 @@ test('drawer bloqueia body, prende foco, fecha com Esc e devolve foco', () => {
   assert.match(panel, /Continuar editando/);
   assert.match(panel, /Descartar alterações/);
   assert.match(panel, /Salvar como rascunho/);
+  assert.match(panel, /interactionBlocked=\{closeConfirmationOpen\}/);
+  assert.match(alertDialog, /role="alertdialog"/);
+  assert.match(alertDialog, /aria-modal="true"/);
+  assert.match(alertDialog, /primaryButtonRef\.current\?\.focus/);
+  assert.match(alertDialog, /document\.addEventListener\('keydown', handleKeyDown, true\)/);
+  assert.match(alertDialog, /z-\[300\]/);
+  const footer = panel.match(/const renderCreationFooter = \(\) => \{[\s\S]*?\n  \};/)?.[0] || '';
+  assert.doesNotMatch(footer, /closeConfirmationOpen|Há alterações não salvas/);
+});
+
+test('estado dirty compara snapshot normalizado e não usa a existência do programa como alteração', () => {
+  assert.match(panel, /buildCreationDraftSnapshot/);
+  assert.match(panel, /initialCreationSnapshotRef/);
+  assert.match(panel, /currentCreationSnapshot !== initialCreationSnapshotRef\.current/);
+  const dirtyBlock = panel.match(/const hasUnsavedCreationChanges =[\s\S]*?;\n/)?.[0] || '';
+  assert.doesNotMatch(dirtyBlock, /editingProgramId|originContext/);
+  assert.match(panel, /initialCreationSnapshotRef\.current = buildCreationDraftSnapshot\(nextForm, ''\)/);
 });
 
 test('criacao rapida mostra essenciais e recolhe configuracoes avancadas', () => {

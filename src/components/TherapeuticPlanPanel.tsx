@@ -28,7 +28,9 @@ import {
   X,
 } from 'lucide-react';
 import { ResponsiveDrawer } from './ui/ResponsiveDrawer';
+import { AlertDialog } from './ui/AlertDialog';
 import { dataService } from '../services/dataService';
+import { decodeClinicalTextEntities, normalizeClinicalTextRecord } from '../utils/clinicalText';
 import {
   THERAPEUTIC_MEASUREMENT_OPTIONS,
   THERAPEUTIC_PROGRAM_STATUS_LABELS,
@@ -183,6 +185,11 @@ const initialForm = () => ({
   },
 });
 
+const buildCreationDraftSnapshot = (formValue: ReturnType<typeof initialForm>, pendingTarget: string) => JSON.stringify({
+  form: normalizeClinicalTextRecord(formValue),
+  pendingTarget: decodeClinicalTextEntities(pendingTarget).replace(/\r\n/g, '\n'),
+});
+
 const newIdempotencyKey = (prefix: string) => {
   const suffix = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
     ? crypto.randomUUID()
@@ -312,6 +319,8 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], userRole, isDark
   const addProgramButtonRef = useRef<HTMLButtonElement | null>(null);
   const drawerScrollRef = useRef<HTMLDivElement | null>(null);
   const recommendationScrollTopRef = useRef(0);
+  const initialCreationSnapshotRef = useRef(buildCreationDraftSnapshot(initialForm(), ''));
+  const closeRequestFocusRef = useRef<HTMLElement | null>(null);
 
   const programs = useMemo(() => normalizeTherapeuticPrograms(planData), [planData]);
   const objectives = Array.isArray(planData?.objectives) ? planData.objectives : [];
@@ -344,15 +353,13 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], userRole, isDark
     () => programs.find((program: any) => String(program.id) === selectedProgramId) || null,
     [programs, selectedProgramId],
   );
-  const hasUnsavedCreationChanges = useMemo(() => {
-    const blank = initialForm();
-    return Boolean(
-      editingProgramId
-      || targetInput.trim()
-      || originContext?.id
-      || JSON.stringify(form) !== JSON.stringify(blank),
-    );
-  }, [editingProgramId, form, originContext, targetInput]);
+  const currentCreationSnapshot = useMemo(
+    () => buildCreationDraftSnapshot(form, targetInput),
+    [form, targetInput],
+  );
+  const hasUnsavedCreationChanges = Boolean(
+    creationStep && currentCreationSnapshot !== initialCreationSnapshotRef.current,
+  );
 
   const panel = isDark ? 'border-slate-700 bg-[#101b2e]' : 'border-slate-200 bg-white';
   const subpanel = isDark ? 'border-slate-700 bg-slate-900/45' : 'border-slate-100 bg-slate-50/75';
@@ -406,6 +413,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], userRole, isDark
   }, [creationStep, recommendationsLoading]);
 
   const resetCreation = () => {
+    initialCreationSnapshotRef.current = buildCreationDraftSnapshot(initialForm(), '');
     setCreationStep(null);
     setCreationSource('manual');
     setOriginContext({});
@@ -437,6 +445,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], userRole, isDark
   const requestCloseCreation = () => {
     if (saving || linkingOrigin || recommendationActionId) return;
     if (hasUnsavedCreationChanges) {
+      closeRequestFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       setCloseConfirmationOpen(true);
       return;
     }
@@ -757,15 +766,16 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], userRole, isDark
     if (saving) return;
     setSaving(true);
     setFormError('');
+    const normalizedForm = normalizeClinicalTextRecord(form);
     const payload = {
-      name: form.name.trim(),
-      objective: form.objective.trim(),
-      category: form.category,
-      targets: form.targets,
-      measurementType: form.measurementType,
-      masteryCriteria: buildMasteryCriteria(form),
-      advancedSettings: form.advancedSettings,
-      reviewDueDate: form.reviewDueDate || null,
+      name: normalizedForm.name.trim(),
+      objective: normalizedForm.objective.trim(),
+      category: normalizedForm.category,
+      targets: normalizedForm.targets,
+      measurementType: normalizedForm.measurementType,
+      masteryCriteria: buildMasteryCriteria(normalizedForm),
+      advancedSettings: normalizedForm.advancedSettings,
+      reviewDueDate: normalizedForm.reviewDueDate || null,
       originType: creationSource,
       originId: originContext?.id || null,
       protocolId: originContext?.protocolId || null,
@@ -798,15 +808,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], userRole, isDark
     const existingTargets = (Array.isArray(program?.targets) ? program.targets : [])
       .map((target: any) => String(target?.name || '').trim())
       .filter(Boolean);
-    setCreationSource((['template', 'protocol', 'recommendation'].includes(String(program?.origin_type)) ? program.origin_type : 'manual') as CreationSource);
-    setOriginContext({
-      id: program?.origin_id,
-      protocolId: program?.protocol_id,
-      protocolTitle: program?.protocol_title,
-      domainId: program?.domain_id,
-      domainName: program?.domain_name,
-    });
-    setForm({
+    const nextForm = normalizeClinicalTextRecord({
       ...initialForm(),
       name: String(program?.name || ''),
       objective: String(program?.objective || program?.description || ''),
@@ -822,6 +824,16 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], userRole, isDark
       reviewDueDate: String(program?.review_due_date || '').slice(0, 10),
       advancedSettings: { ...initialForm().advancedSettings, ...(program?.advanced_settings || {}) },
     });
+    setCreationSource((['template', 'protocol', 'recommendation'].includes(String(program?.origin_type)) ? program.origin_type : 'manual') as CreationSource);
+    setOriginContext({
+      id: program?.origin_id,
+      protocolId: program?.protocol_id,
+      protocolTitle: program?.protocol_title,
+      domainId: program?.domain_id,
+      domainName: program?.domain_name,
+    });
+    setForm(nextForm);
+    initialCreationSnapshotRef.current = buildCreationDraftSnapshot(nextForm, '');
     setLockedTargetNames(existingTargets);
     setEditingProgramId(String(program.id));
     setOperationKey(newIdempotencyKey(`therapeutic-program-update:${program.id}`));
@@ -1048,6 +1060,15 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], userRole, isDark
     if (status === 'completed') return isDark ? 'bg-sky-500/15 text-sky-200 border-sky-400/30' : 'bg-sky-50 text-sky-700 border-sky-200';
     if (status === 'paused') return isDark ? 'bg-amber-500/15 text-amber-200 border-amber-400/30' : 'bg-amber-50 text-amber-700 border-amber-200';
     return isDark ? 'bg-slate-700 text-slate-300 border-slate-600' : 'bg-slate-100 text-slate-600 border-slate-200';
+  };
+
+  const statusAccentClass = (statusValue: any) => {
+    const status = normalizeTherapeuticProgramStatus(statusValue);
+    if (status === 'teaching') return 'bg-violet-500';
+    if (status === 'maintenance') return 'bg-emerald-500';
+    if (status === 'completed') return 'bg-sky-500';
+    if (status === 'paused') return 'bg-amber-500';
+    return isDark ? 'bg-slate-500' : 'bg-slate-300';
   };
 
   const renderCreationBody = () => {
@@ -1357,10 +1378,6 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], userRole, isDark
   };
 
   const renderCreationFooter = () => {
-    if (closeConfirmationOpen) {
-      const canSaveDraft = !editingProgramId && ['form', 'review'].includes(String(creationStep)) && !validateForm();
-      return <div className="space-y-3" aria-live="polite"><p className={`text-sm ${text}`}>Há alterações não salvas neste programa.</p><div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end"><button type="button" className={secondaryButton} onClick={() => setCloseConfirmationOpen(false)}>Continuar editando</button><button type="button" className={secondaryButton} onClick={resetCreation}>Descartar alterações</button>{canSaveDraft && <button type="button" className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm text-white disabled:opacity-50" disabled={saving} onClick={() => void submitProgram('draft')}>{saving ? <Loader2 size={16} className="animate-spin" /> : <FileText size={16} />} Salvar como rascunho</button>}</div></div>;
-    }
     if (creationStep !== 'form' && creationStep !== 'review') return null;
     if (creationStep === 'form') {
       return <div className="flex flex-col-reverse justify-between gap-2 sm:flex-row"><button type="button" className={secondaryButton} disabled={saving} onClick={requestCloseCreation}>Cancelar</button><div className="flex flex-col-reverse gap-2 sm:flex-row"><button type="button" className={secondaryButton} disabled={saving} onClick={goBackCreation}><ChevronLeft size={16} /> Voltar</button><button type="button" className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm text-white hover:bg-violet-700 disabled:opacity-50" disabled={saving} onClick={continueToReview}>Revisar programa <ChevronLeft size={16} className="rotate-180" /></button></div></div>;
@@ -1408,20 +1425,21 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], userRole, isDark
     const responsibleLabel = program?.advanced_settings?.responsibleNotes || program?.advancedSettings?.responsibleNotes || (Array.isArray(program.responsible_professional_ids) && program.responsible_professional_ids.length ? `${program.responsible_professional_ids.length} profissional(is)` : 'Equipe clínica');
 
     return (
-      <article key={program.id} className={`relative rounded-2xl border p-5 ${panel}`} data-therapeutic-program-card>
-        <div className="flex items-start justify-between gap-3">
+      <article key={program.id} className={`relative flex min-h-full flex-col rounded-2xl border shadow-sm ${panel}`} data-therapeutic-program-card data-program-status={status}>
+        <span className={`absolute inset-y-4 left-0 w-1 rounded-r-full ${statusAccentClass(status)}`} aria-hidden="true" />
+        <header className={`flex items-start justify-between gap-3 border-b px-5 py-4 pl-6 ${isDark ? 'border-slate-700/80' : 'border-slate-100'}`}>
           <div className="min-w-0">
             <p className={`text-xs ${muted}`}>Programa</p>
             <div className="mt-1 flex flex-wrap items-center gap-2">
-              <h4 className={`truncate text-base font-medium ${text}`}>{program.name}</h4>
+              <h4 className={`break-words text-lg font-medium leading-snug ${text}`}>{program.name}</h4>
               <span className={`rounded-full border px-2.5 py-1 text-[10px] ${statusClass(status)}`}>{THERAPEUTIC_PROGRAM_STATUS_LABELS[status]}</span>
             </div>
             <p className={`mt-1 text-xs ${muted}`}>{CATEGORY_LABELS[normalizeCategory(program.category)] || program.category} · {SOURCE_LABELS[String(program.origin_type || 'manual')] || 'Programa individual'}</p>
           </div>
           <button type="button" aria-label={`Mais ações para ${program.name}`} className={`min-h-[40px] min-w-[40px] rounded-lg p-2 ${isDark ? 'text-slate-400 hover:bg-slate-800' : 'text-slate-400 hover:bg-slate-100'}`} onClick={() => setOpenMenuId((current) => current === String(program.id) ? '' : String(program.id))}><MoreHorizontal size={18} /></button>
-        </div>
+        </header>
 
-        {openMenuId === String(program.id) && <div className={`absolute right-5 top-12 z-20 w-56 rounded-xl border p-1.5 shadow-xl ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-200 bg-white'}`}>
+        {openMenuId === String(program.id) && <div className={`absolute right-5 top-14 z-20 w-56 rounded-xl border p-1.5 shadow-xl ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-200 bg-white'}`}>
           {canManageStructure && !['completed', 'archived'].includes(status) && <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => editProgram(program)}><Pencil size={15} /> Editar</button>}
           {canManageStructure && status !== 'paused' && <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => void updateStatus(program, 'paused')}><Pause size={15} /> Pausar</button>}
           {canManageStructure && status !== 'maintenance' && !['completed', 'archived'].includes(status) && <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => void updateStatus(program, 'maintenance')}><Clock3 size={15} /> Mover para manutenção</button>}
@@ -1429,30 +1447,32 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], userRole, isDark
           <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => void saveAsTemplate(program)}><Copy size={15} /> Duplicar como modelo</button>
         </div>}
 
-        <div className={`mt-4 rounded-xl border px-3 py-3 ${isDark ? 'border-slate-700 bg-slate-800/40' : 'border-slate-100 bg-slate-50/70'}`}>
-          <p className={`text-xs ${muted}`}>Alvo atual</p>
-          <p className={`mt-1 text-sm ${text}`}>{currentTarget?.name || currentTarget?.target_name || 'Nenhum alvo ativo selecionado'}</p>
-          {currentTarget?.normalizedStatus && <p className={`mt-1 text-xs ${muted}`}>{currentTarget.normalizedStatus === 'maintenance' ? 'Em manutenção' : 'Em ensino'}</p>}
+        <div className="flex-1 space-y-4 px-5 py-4 pl-6">
+          <div className={`rounded-xl border px-4 py-3 ${isDark ? 'border-slate-700 bg-slate-800/40' : 'border-violet-100 bg-violet-50/45'}`} data-therapeutic-current-target>
+            <p className={`text-xs ${muted}`}>Alvo atual</p>
+            <p className={`mt-1 break-words text-sm font-medium leading-relaxed ${text}`}>{currentTarget?.name || currentTarget?.target_name || 'Nenhum alvo ativo selecionado'}</p>
+            {currentTarget?.normalizedStatus && <p className={`mt-1 text-xs ${muted}`}>{currentTarget.normalizedStatus === 'maintenance' ? 'Em manutenção' : 'Em ensino'}</p>}
+          </div>
+
+          <dl className={`grid grid-cols-1 gap-x-5 gap-y-4 border-t pt-4 text-xs sm:grid-cols-2 ${isDark ? 'border-slate-700/80' : 'border-slate-100'}`}>
+            <div><dt className={muted}>Objetivo</dt><dd className={`mt-1 break-words leading-relaxed ${text}`}>{program.objective || 'Objetivo não informado.'}</dd></div>
+            <div><dt className={muted}>Critério</dt><dd className={`mt-1 break-words leading-relaxed ${text}`}>{criterionLabel}</dd></div>
+            <div><dt className={muted}>Alvos</dt><dd className={`mt-1 leading-relaxed ${text}`}>{targetCount ? `${mastered} dominados · ${teachingTargets} em ensino${waitingTargets ? ` · ${waitingTargets} aguardando` : ''}${pausedTargets ? ` · ${pausedTargets} pausados` : ''}` : 'Nenhum alvo cadastrado'}</dd></div>
+            <div><dt className={muted}>Responsável</dt><dd className={`mt-1 break-words leading-relaxed ${text}`}>{responsibleLabel}</dd></div>
+          </dl>
         </div>
 
-        <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 text-xs">
-          <div><p className={muted}>Objetivo</p><p className={`mt-1 line-clamp-2 leading-relaxed ${text}`}>{program.objective || 'Objetivo não informado.'}</p></div>
-          <div><p className={muted}>Critério</p><p className={`mt-1 line-clamp-2 leading-relaxed ${text}`}>{criterionLabel}</p></div>
-          <div><p className={muted}>Alvos</p><p className={`mt-1 ${text}`}>{targetCount ? `${mastered} dominados · ${teachingTargets} em ensino${waitingTargets ? ` · ${waitingTargets} aguardando` : ''}${pausedTargets ? ` · ${pausedTargets} pausados` : ''}` : 'Nenhum alvo cadastrado'}</p></div>
-          <div><p className={muted}>Responsável</p><p className={`mt-1 line-clamp-2 ${text}`}>{responsibleLabel}</p></div>
-        </div>
-
-        <div className={`mt-4 border-t pt-4 ${isDark ? 'border-slate-700' : 'border-slate-100'}`}>
+        <footer className={`border-t px-5 py-4 pl-6 ${isDark ? 'border-slate-700 bg-slate-900/25' : 'border-slate-100 bg-slate-50/45'}`}>
           {hasRecordedApplications ? <>
             <div className={`mb-2 flex justify-between text-xs ${muted}`}><span>{mastered} de {targetCount} alvos dominados</span><span>{progress}%</span></div>
             <div className={`h-2 overflow-hidden rounded-full ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`}><div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${progress}%` }} /></div>
           </> : <p className={`text-xs ${muted}`}>Nenhuma aplicação registrada.</p>}
-          <div className={`mt-3 flex flex-wrap items-center justify-between gap-3 text-xs ${muted}`}>
+          <div className={`mt-3 grid grid-cols-1 items-center gap-2 text-xs sm:grid-cols-[1fr_1fr_auto] ${muted}`}>
             <span>Última aplicação: {hasRecordedApplications ? formatTherapeuticPlanDate(program.lastAppliedAt) : 'Não registrada'}</span>
             <span>Revisão: {formatTherapeuticPlanDate(program.review_due_date || program.reviewDueDate)}</span>
-            <button type="button" className="min-h-[36px] text-sm text-violet-500 hover:text-violet-400" onClick={() => { setSelectedProgramId(String(program.id)); setDetailTab('overview'); }}>Abrir programa</button>
+            <button type="button" className="min-h-[40px] justify-self-start rounded-lg px-2 text-sm text-violet-500 hover:bg-violet-500/10 hover:text-violet-400 sm:justify-self-end" onClick={() => { setSelectedProgramId(String(program.id)); setDetailTab('overview'); }}>Abrir programa</button>
           </div>
-        </div>
+        </footer>
         {actionProgramId === String(program.id) && <div className="absolute inset-0 z-30 flex items-center justify-center rounded-2xl bg-slate-950/25 backdrop-blur-[1px]"><Loader2 size={22} className="animate-spin text-white" /></div>}
       </article>
     );
@@ -1476,11 +1496,14 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], userRole, isDark
       </div>
 
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <div className="flex max-w-full gap-1 overflow-x-auto rounded-xl p-1">{[['all', 'Todos'], ['teaching', 'Em ensino'], ['maintenance', 'Manutenção'], ['paused', 'Pausados'], ['completed', 'Concluídos']].map(([value, label]) => <button key={value} type="button" className={`shrink-0 rounded-lg px-3 py-2 text-xs transition-colors ${filter === value ? 'bg-violet-600 text-white' : isDark ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-600 hover:bg-slate-100'}`} onClick={() => setFilter(value)}>{label}</button>)}</div>
+        <div className="min-w-0">
+          <p className={`mb-2 text-xs ${muted}`}>Status dos programas</p>
+          <div className="flex max-w-full gap-2 overflow-x-auto pb-1" role="group" aria-label="Filtrar programas por status">{[['all', 'Todos'], ['teaching', 'Em ensino'], ['maintenance', 'Em manutenção'], ['paused', 'Pausados'], ['completed', 'Concluídos']].map(([value, label]) => <button key={value} type="button" aria-pressed={filter === value} className={`shrink-0 rounded-full border px-3 py-1.5 text-xs transition-colors ${filter === value ? 'border-violet-600 bg-violet-600 text-white' : isDark ? 'border-slate-700 text-slate-300 hover:border-slate-600 hover:bg-slate-800' : 'border-slate-200 bg-white text-slate-600 hover:border-violet-200 hover:bg-violet-50'}`} onClick={() => setFilter(value)}>{label}</button>)}</div>
+        </div>
         <label className="relative w-full md:max-w-xs"><Search size={15} className={`absolute left-3.5 top-1/2 -translate-y-1/2 ${muted}`} /><input className={`${field} pl-10`} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar programa ou alvo" /></label>
       </div>
 
-      {loading ? <div className={`flex items-center justify-center gap-2 rounded-2xl border border-dashed py-12 text-sm ${isDark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}><Loader2 size={18} className="animate-spin" /> Carregando Plano terapêutico...</div> : visiblePrograms.length ? <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">{visiblePrograms.map(renderProgramCard)}</div> : <div className={`rounded-2xl border border-dashed py-12 text-center ${isDark ? 'border-slate-700' : 'border-slate-200'}`}><Target size={30} className={`mx-auto ${isDark ? 'text-slate-600' : 'text-slate-300'}`} /><p className={`mt-3 text-sm ${muted}`}>{query || filter !== 'all' ? 'Nenhum programa encontrado com estes filtros.' : 'Ainda não há programas individualizados neste plano.'}</p>{canCreate && !query && filter === 'all' && <button type="button" className="mt-4 text-sm text-violet-500" onClick={startCreation}>Adicionar o primeiro programa</button>}</div>}
+      {loading ? <div className={`flex items-center justify-center gap-2 rounded-2xl border border-dashed py-12 text-sm ${isDark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}><Loader2 size={18} className="animate-spin" /> Carregando Plano terapêutico...</div> : visiblePrograms.length ? <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">{visiblePrograms.map(renderProgramCard)}</div> : <div className={`rounded-2xl border border-dashed py-12 text-center ${isDark ? 'border-slate-700' : 'border-slate-200'}`}><Target size={30} className={`mx-auto ${isDark ? 'text-slate-600' : 'text-slate-300'}`} /><p className={`mt-3 text-sm ${muted}`}>{query || filter !== 'all' ? 'Nenhum programa encontrado com estes filtros.' : 'Ainda não há programas individualizados neste plano.'}</p>{canCreate && !query && filter === 'all' && <button type="button" className="mt-4 text-sm text-violet-500" onClick={startCreation}>Adicionar o primeiro programa</button>}</div>}
 
       <ResponsiveDrawer
         open={Boolean(creationStep)}
@@ -1492,12 +1515,25 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], userRole, isDark
         returnFocusRef={addProgramButtonRef}
         scrollContainerRef={drawerScrollRef}
         isDark={isDark}
+        interactionBlocked={closeConfirmationOpen}
         headerLeading={creationStep && creationStep !== 'source' && !(editingProgramId && creationStep === 'form') ? <button type="button" className={`rounded-xl p-2 ${isDark ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-500 hover:bg-slate-100'}`} onClick={goBackCreation} aria-label="Voltar à etapa anterior"><ChevronLeft size={18} /></button> : null}
         footer={renderCreationFooter()}
       >
         {formError && <div className={`mb-4 rounded-xl border px-4 py-3 text-sm ${isDark ? 'border-rose-400/25 bg-rose-500/10 text-rose-100' : 'border-rose-200 bg-rose-50 text-rose-700'}`}>{formError}</div>}
         {renderCreationBody()}
       </ResponsiveDrawer>
+
+      <AlertDialog
+        open={closeConfirmationOpen}
+        title="Há alterações não salvas"
+        description="Você fez alterações neste programa. Deseja continuar editando ou descartar as alterações?"
+        primaryLabel="Continuar editando"
+        destructiveLabel="Descartar alterações"
+        onPrimaryAction={() => setCloseConfirmationOpen(false)}
+        onDestructiveAction={resetCreation}
+        returnFocusRef={closeRequestFocusRef}
+        isDark={isDark}
+      />
 
       {selectedProgram && <div className="fixed inset-0 z-[115] flex items-end justify-center bg-slate-950/55 p-0 backdrop-blur-sm sm:items-center sm:p-4"><div className={`flex max-h-[94vh] w-full max-w-5xl flex-col rounded-t-3xl border shadow-2xl sm:rounded-3xl ${panel}`} role="dialog" aria-modal="true"><header className={`flex items-start justify-between gap-3 border-b px-5 py-4 sm:px-6 ${isDark ? 'border-slate-700' : 'border-slate-100'}`}><div><div className="flex flex-wrap items-center gap-2"><h3 className={`text-xl font-medium ${text}`}>{selectedProgram.name}</h3><span className={`rounded-full border px-2.5 py-1 text-[10px] ${statusClass(selectedProgram.status)}`}>{THERAPEUTIC_PROGRAM_STATUS_LABELS[normalizeTherapeuticProgramStatus(selectedProgram.status)]}</span></div><p className={`mt-1 text-xs ${muted}`}>Origem: {SOURCE_LABELS[String(selectedProgram.origin_type || 'manual')] || 'Programa individual'} · Versão {selectedProgram.version || 1}</p></div><button type="button" className={`rounded-xl p-2 ${isDark ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-500 hover:bg-slate-100'}`} onClick={() => setSelectedProgramId('')}><X size={19} /></button></header><nav className={`flex gap-1 overflow-x-auto border-b px-5 py-2 sm:px-6 ${isDark ? 'border-slate-700' : 'border-slate-100'}`}>{[['overview', 'Visão geral'], ['targets', 'Alvos'], ['procedure', 'Procedimento'], ['progress', 'Progresso'], ['history', 'Histórico']].map(([value, label]) => <button key={value} type="button" className={`shrink-0 rounded-lg px-3 py-2 text-sm ${detailTab === value ? 'bg-violet-600 text-white' : isDark ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-600 hover:bg-slate-100'}`} onClick={() => setDetailTab(value)}>{label}</button>)}</nav><div className="overflow-y-auto p-5 sm:p-6">{detailTab === 'overview' && <div className="grid grid-cols-1 gap-4 md:grid-cols-2"><div className={`rounded-2xl border p-5 md:col-span-2 ${subpanel}`}><p className={`text-xs ${muted}`}>Objetivo</p><p className={`mt-2 leading-relaxed ${text}`}>{selectedProgram.objective || 'Não informado.'}</p></div><div className={`rounded-2xl border p-4 ${subpanel}`}><p className={`text-xs ${muted}`}>Critério de domínio</p><p className={`mt-1 text-sm ${text}`}>{masteryCriterionLabel(selectedProgram.mastery_criteria)}</p></div><div className={`rounded-2xl border p-4 ${subpanel}`}><p className={`text-xs ${muted}`}>Próxima revisão</p><p className={`mt-1 text-sm ${text}`}>{formatTherapeuticPlanDate(selectedProgram.review_due_date)}</p></div><div className={`rounded-2xl border p-4 ${subpanel}`}><p className={`text-xs ${muted}`}>Responsáveis</p><p className={`mt-1 text-sm ${text}`}>{Array.isArray(selectedProgram.responsible_professional_ids) && selectedProgram.responsible_professional_ids.length ? `${selectedProgram.responsible_professional_ids.length} profissional(is)` : 'Equipe clínica'}</p></div><div className={`rounded-2xl border p-4 ${subpanel}`}><p className={`text-xs ${muted}`}>Última aplicação</p><p className={`mt-1 text-sm ${text}`}>{formatTherapeuticPlanDate(selectedProgram.lastAppliedAt)}</p></div>{canManageStructure && !['completed', 'archived'].includes(normalizeTherapeuticProgramStatus(selectedProgram.status)) && <button type="button" className={secondaryButton} onClick={() => editProgram(selectedProgram)}><Pencil size={16} /> Editar programa</button>}</div>}{detailTab === 'targets' && <div className="space-y-3">{(selectedProgram.targets || []).map((target: any, index: number) => <div key={target.id || `${target.name}-${index}`} className={`flex items-center justify-between gap-3 rounded-2xl border p-4 ${subpanel}`}><div><p className={`font-medium ${text}`}>{target.name}</p><p className={`mt-1 text-xs ${muted}`}>{target.normalizedStatus === 'mastered' ? 'Dominado' : target.normalizedStatus === 'maintenance' ? 'Em manutenção' : target.normalizedStatus === 'paused' ? 'Pausado' : target.normalizedStatus === 'teaching' ? 'Em ensino' : 'Não iniciado'}</p></div><span className={`rounded-full px-2.5 py-1 text-xs ${target.normalizedStatus === 'mastered' ? isDark ? 'bg-emerald-500/15 text-emerald-200' : 'bg-emerald-50 text-emerald-700' : isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>{index + 1}</span></div>)}{canManageStructure && !['completed', 'archived'].includes(normalizeTherapeuticProgramStatus(selectedProgram.status)) && <div className={`flex flex-col gap-2 rounded-2xl border p-4 sm:flex-row ${subpanel}`}><input className={field} value={newTargetName} maxLength={240} onChange={(event) => setNewTargetName(event.target.value)} placeholder="Nome do novo alvo" /><button type="button" className="shrink-0 rounded-xl bg-violet-600 px-4 py-2.5 text-sm text-white disabled:opacity-50" disabled={!newTargetName.trim() || actionProgramId === String(selectedProgram.id)} onClick={() => void addTargetToProgram()}>{actionProgramId === String(selectedProgram.id) ? 'Adicionando...' : 'Adicionar alvo'}</button></div>}</div>}{detailTab === 'procedure' && <div className="grid grid-cols-1 gap-4 md:grid-cols-2">{[['Instrução / antecedente', 'antecedent'], ['Resposta esperada', 'expectedResponse'], ['Materiais', 'materials'], ['Hierarquia de ajuda', 'promptHierarchy'], ['Reforçamento', 'reinforcement'], ['Correção de erro', 'errorCorrection'], ['Generalização', 'generalization'], ['Manutenção', 'maintenance']].map(([label, key]) => <div key={key} className={`rounded-2xl border p-4 ${subpanel}`}><p className={`text-xs ${muted}`}>{label}</p><p className={`mt-2 whitespace-pre-wrap text-sm leading-relaxed ${text}`}>{selectedProgram?.advanced_settings?.[key] || 'Não informado.'}</p></div>)}</div>}{detailTab === 'progress' && <div className="space-y-4"><div className="grid grid-cols-2 gap-3 md:grid-cols-4">{[['Alvos', selectedProgram.targets.length], ['Dominados', selectedProgram.masteredTargetCount], ['Em ensino', selectedProgram.targets.filter((target: any) => target.normalizedStatus === 'teaching').length], ['Aplicações recentes', selectedProgram.lastAppliedAt ? 1 : 0]].map(([label, value]) => <div key={String(label)} className={`rounded-2xl border p-4 ${subpanel}`}><p className={`text-xs ${muted}`}>{label}</p><p className={`mt-1 text-xl font-medium ${text}`}>{value}</p></div>)}</div><div className={`rounded-2xl border p-5 ${subpanel}`}><p className={`text-sm ${text}`}>Progresso por alvo</p><div className="mt-4 space-y-3">{selectedProgram.targets.map((target: any) => <div key={target.id}><div className={`mb-1 flex justify-between text-xs ${muted}`}><span>{target.name}</span><span>{target.normalizedStatus === 'mastered' ? '100%' : target.normalizedStatus === 'maintenance' ? '90%' : 'Em coleta'}</span></div><div className={`h-2 rounded-full ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`}><div className="h-full rounded-full bg-emerald-500" style={{ width: target.normalizedStatus === 'mastered' ? '100%' : target.normalizedStatus === 'maintenance' ? '90%' : '15%' }} /></div></div>)}</div></div></div>}{detailTab === 'history' && <div className="space-y-3">{(selectedProgram.history || []).map((event: any) => <div key={event.id} className={`flex gap-3 rounded-2xl border p-4 ${subpanel}`}><div className={`mt-0.5 rounded-lg p-2 ${isDark ? 'bg-slate-800 text-violet-300' : 'bg-violet-50 text-violet-600'}`}><History size={15} /></div><div><p className={`text-sm ${text}`}>{String(event.event_type || 'UPDATED').replaceAll('_', ' ').toLocaleLowerCase('pt-BR')}</p><p className={`mt-1 text-xs ${muted}`}>{formatTherapeuticPlanDate(event.created_at)}</p></div></div>)}{!(selectedProgram.history || []).length && <p className={`rounded-2xl border border-dashed p-8 text-center text-sm ${isDark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}>Nenhuma alteração registrada.</p>}</div>}</div></div></div>}
     </section>

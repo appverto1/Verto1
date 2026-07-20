@@ -7,6 +7,7 @@ import { VBMAPP_LEVEL_2_CANONICAL_PROTOCOL } from '../constants/vbmappLevel2Prot
 import { VBMAPP_LEVEL_3_CANONICAL_PROTOCOL } from '../constants/vbmappLevel3Protocol';
 import { dataService } from '../services/dataService';
 import { TherapeuticProgramLibrary } from './TherapeuticProgramLibrary';
+import { normalizeClinicalTextRecord } from '../utils/clinicalText';
 
 const getLicensedCanonicalProtocolForRequest = (request: any) => {
   const source = `${request?.canonicalKey || ''} ${request?.canonicalName || ''} ${request?.protocolName || ''}`.toLowerCase();
@@ -384,7 +385,7 @@ export const ProtocolManagementSystem = ({
   const prepareManualProtocolForPersistence = (protocol: any) => {
     const nowIso = new Date().toISOString();
     const existingId = protocol?.id ? String(protocol.id) : '';
-    return {
+    return normalizeClinicalTextRecord({
       ...protocol,
       id: existingId || `manual-protocol-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       origin: protocol?.origin || (protocol?.isApprovedImport ? 'verto_approved_import' : 'manual_editor'),
@@ -392,7 +393,7 @@ export const ProtocolManagementSystem = ({
       createdAt: protocol?.createdAt || nowIso,
       updatedAt: nowIso,
       version: Number(protocol?.version || 0) + 1,
-    };
+    });
   };
   const persistProtocolListImmediately = async (nextProtocols: any[]) => {
     persistManualProtocolSnapshot(nextProtocols);

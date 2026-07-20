@@ -50,6 +50,7 @@ import {
   resolveBrandingContext,
 } from './services/notificationBranding';
 import { VERTO_BRAND_ASSETS } from './constants/vertoBranding';
+import { decodeClinicalTextEntities } from './utils/clinicalText';
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>;
@@ -2045,16 +2046,7 @@ export default function App() {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showWorkspacePicker, setShowWorkspacePicker] = useState(false);
 
-  const decodeStoredText = (value: any) =>
-    String(value ?? '')
-      .replace(/&amp;/g, '&')
-      .replace(/&quot;/g, '"')
-      .replace(/&#34;/g, '"')
-      .replace(/&#39;/g, "'")
-      .replace(/&apos;/g, "'")
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .trim();
+  const decodeStoredText = (value: any) => decodeClinicalTextEntities(value).trim();
 
   const normalizeHistoryRecordForState = (record: any, fallbackPatientId?: string) => {
     const createdAt = record?.created_at || record?.createdAt || record?.date || null;

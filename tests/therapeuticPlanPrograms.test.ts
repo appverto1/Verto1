@@ -233,6 +233,18 @@ test('Plano terapêutico e coleta deixam explícitos programa, alvo, sincroniza�
   assert.ok(sessionMode.includes("setSessionHistoryOpen((open) => !open)"));
 });
 
+test('filtros de status são secundários e cards possuem regiões visuais responsivas', () => {
+  assert.ok(panel.includes('Status dos programas'));
+  assert.ok(panel.includes("['maintenance', 'Em manutenção']"));
+  assert.ok(panel.includes('aria-label="Filtrar programas por status"'));
+  assert.ok(panel.includes('data-program-status={status}'));
+  assert.ok(panel.includes('data-therapeutic-current-target'));
+  assert.ok(panel.includes('<header className={`flex items-start'));
+  assert.ok(panel.includes('<footer className={`border-t'));
+  assert.ok(panel.includes('grid grid-cols-1 gap-5 lg:grid-cols-2'));
+  assert.doesNotMatch(panel.match(/const renderProgramCard[\s\S]*?\n  \};/)?.[0] || '', /line-clamp/);
+});
+
 test('Plano terapeutico possui uma unica acao principal para iniciar sessao', () => {
   const planHeaderStart = patientDetail.indexOf('Objetivos, programas de ensino, alvos e progresso do paciente.');
   assert.ok(planHeaderStart >= 0);

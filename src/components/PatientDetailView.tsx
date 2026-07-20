@@ -56,6 +56,7 @@ import { VBMAPP_LEVEL_1_CANONICAL_PROTOCOL } from '../constants/vbmappLevel1Prot
 import { VBMAPP_LEVEL_2_CANONICAL_PROTOCOL } from '../constants/vbmappLevel2Protocol';
 import { VBMAPP_LEVEL_3_CANONICAL_PROTOCOL } from '../constants/vbmappLevel3Protocol';
 import html2canvas from 'html2canvas';
+import { decodeClinicalTextEntities } from '../utils/clinicalText';
 
 const getApprovedVertoCanonicalProtocol = (request: any) => {
   const source = `${request?.canonicalKey || ''} ${request?.canonicalName || ''} ${request?.protocolName || ''}`.toLowerCase();
@@ -3261,7 +3262,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     });
   }, [historyPeriod, historyRange.from, historyRange.ready, historyRange.to, historyWithFamilyNotes]);
 
-  const normalizeNoteText = (value: string) =>
+  const normalizeNoteText = (value: string) => decodeClinicalTextEntities(
     String(value || '')
       .replace(/ðŸ“/g, '📝')
       .replace(/ðŸŽ¯/g, '🎯')
@@ -3287,15 +3288,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       .replace(/Ãº/g, 'ú')
       .replace(/Ã£/g, 'ã')
       .replace(/Ã§/g, 'ç')
-      .replace(/&amp;/g, '&')
-      .replace(/&quot;/g, '"')
-      .replace(/&#34;/g, '"')
-      .replace(/&#39;/g, "'")
-      .replace(/&apos;/g, "'")
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/Â/g, '')
-      .trim();
+      .replace(/Â/g, ''),
+  ).trim();
 
   const formatAbaDateTime = (value: any) => {
     const date = new Date(value || 0);
@@ -9950,12 +9944,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                   </div>
                 </div>
 
-                <div className={`mb-6 flex gap-2 overflow-x-auto rounded-2xl border p-1 ${isPanelDark ? 'bg-slate-900/60 border-slate-700' : 'bg-slate-50 border-slate-100'}`}>
+                <nav aria-label="Áreas do Plano terapêutico" className={`mb-7 flex gap-2 overflow-x-auto rounded-2xl border p-1.5 shadow-sm ${isPanelDark ? 'bg-slate-900/70 border-slate-700' : 'bg-slate-100/80 border-slate-200'}`} data-therapeutic-plan-navigation>
                   {PEI_PLAN_SUBTABS.map((tab) => {
                     const active = activePeiPlanSubtab === tab.id;
                     const label =
                       tab.id === 'teaching'
-                        ? 'Ensino'
+                        ? 'Programas'
                         : tab.id === 'maintenance'
                           ? 'Manutenção'
                           : tab.id === 'generalization'
@@ -9969,14 +9963,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                         key={tab.id}
                         type="button"
                         onClick={() => setActivePeiPlanSubtab(tab.id)}
-                        className={`min-h-[40px] shrink-0 rounded-xl px-4 py-2 text-sm font-semibold transition-all ${
+                        className={`min-h-[44px] shrink-0 rounded-xl border px-5 py-2.5 text-sm font-medium transition-all ${
                           active
                             ? isPanelDark
-                              ? 'bg-slate-800 text-white shadow-sm'
-                              : 'bg-white text-[#7a32fc] shadow-sm'
+                              ? 'border-slate-600 bg-slate-800 text-white shadow-sm'
+                              : 'border-violet-100 bg-white text-[#7a32fc] shadow-sm'
                             : isPanelDark
-                              ? 'text-slate-300 hover:bg-slate-800/60'
-                              : 'text-slate-500 hover:bg-white/70'
+                              ? 'border-transparent text-slate-300 hover:bg-slate-800/60'
+                              : 'border-transparent text-slate-600 hover:bg-white/70'
                         }`}
                       >
                         {label}
@@ -9986,7 +9980,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                       </button>
                     );
                   })}
-                </div>
+                </nav>
 
                 {activePeiPlanSubtab === 'teaching' && (
                 <div className="space-y-4 mb-8">

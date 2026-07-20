@@ -1,3 +1,5 @@
+import { decodeClinicalTextEntities, normalizeClinicalTextRecord } from './clinicalText';
+
 export type TherapeuticProgramStatus =
   | 'draft'
   | 'awaiting_approval'
@@ -110,7 +112,7 @@ export type TherapeuticRecommendationGroup = {
   latestCreatedAt: string | null;
 };
 
-const safeText = (value: unknown) => String(value ?? '').trim();
+const safeText = (value: unknown) => decodeClinicalTextEntities(value).trim();
 
 const recommendationContext = (recommendation: any) => recommendation?.clinical_context || recommendation?.clinicalContext || {};
 
@@ -305,7 +307,8 @@ export const resolveTherapeuticRecommendationActionPolicy = (
 
 export const groupTherapeuticRecommendations = (recommendations: any[]): TherapeuticRecommendationGroup[] => {
   const grouped = new Map<string, any[]>();
-  for (const recommendation of Array.isArray(recommendations) ? recommendations : []) {
+  for (const rawRecommendation of Array.isArray(recommendations) ? recommendations : []) {
+    const recommendation = normalizeClinicalTextRecord(rawRecommendation);
     const context = recommendationContext(recommendation);
     const targetId = safeText(recommendation?.target_id || recommendation?.targetId || context?.target?.id);
     const behaviorId = safeText(recommendation?.behavior_id || recommendation?.behaviorId || context?.behavior?.id);
@@ -463,21 +466,25 @@ export const normalizeTherapeuticPrograms = (payload: any) => {
   });
 
   return programs.map((program: any) => {
-    const programId = safeText(program?.id);
-    const nestedTargets = Array.isArray(program?.targets) ? program.targets : targetsByProgram.get(programId) || [];
+    const normalizedProgram = normalizeClinicalTextRecord(program);
+    const programId = safeText(normalizedProgram?.id);
+    const nestedTargets = Array.isArray(normalizedProgram?.targets) ? normalizedProgram.targets : targetsByProgram.get(programId) || [];
     const normalizedTargets = nestedTargets
-      .map((target: any) => ({ ...target, normalizedStatus: normalizeTherapeuticTargetStatus(target) }))
+      .map((target: any) => {
+        const normalizedTarget = normalizeClinicalTextRecord(target);
+        return { ...normalizedTarget, normalizedStatus: normalizeTherapeuticTargetStatus(normalizedTarget) };
+      })
       .sort((a: any, b: any) => Number(a?.sort_order ?? a?.sortOrder ?? 0) - Number(b?.sort_order ?? b?.sortOrder ?? 0));
     return {
-      ...program,
+      ...normalizedProgram,
       id: programId,
-      status: normalizeTherapeuticProgramStatus(program?.status),
-      objective: safeText(program?.objective || program?.description),
-      category: safeText(program?.category || program?.domain_name || program?.domainName || 'Outro'),
-      measurementType: safeText(program?.measurement_type || program?.measurementType || 'independent_prompted_no_response'),
+      status: normalizeTherapeuticProgramStatus(normalizedProgram?.status),
+      objective: safeText(normalizedProgram?.objective || normalizedProgram?.description),
+      category: safeText(normalizedProgram?.category || normalizedProgram?.domain_name || normalizedProgram?.domainName || 'Outro'),
+      measurementType: safeText(normalizedProgram?.measurement_type || normalizedProgram?.measurementType || 'independent_prompted_no_response'),
       targets: normalizedTargets,
       masteredTargetCount: normalizedTargets.filter((target: any) => target.normalizedStatus === 'mastered').length,
-      lastAppliedAt: program?.last_applied_at || program?.lastAppliedAt || null,
+      lastAppliedAt: normalizedProgram?.last_applied_at || normalizedProgram?.lastAppliedAt || null,
     };
   });
 };

@@ -14,6 +14,7 @@ type ResponsiveDrawerProps = {
   footer?: React.ReactNode;
   children: React.ReactNode;
   isDark?: boolean;
+  interactionBlocked?: boolean;
 };
 
 const FOCUSABLE_SELECTOR = [
@@ -38,14 +39,20 @@ export const ResponsiveDrawer = ({
   footer,
   children,
   isDark = false,
+  interactionBlocked = false,
 }: ResponsiveDrawerProps) => {
   const drawerRef = useRef<HTMLElement | null>(null);
   const titleRef = useRef<HTMLHeadingElement | null>(null);
   const onRequestCloseRef = useRef(onRequestClose);
+  const interactionBlockedRef = useRef(interactionBlocked);
 
   useEffect(() => {
     onRequestCloseRef.current = onRequestClose;
   }, [onRequestClose]);
+
+  useEffect(() => {
+    interactionBlockedRef.current = interactionBlocked;
+  }, [interactionBlocked]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -58,6 +65,7 @@ export const ResponsiveDrawer = ({
 
     const focusTimer = window.setTimeout(() => titleRef.current?.focus(), 0);
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (interactionBlockedRef.current) return;
       if (event.key === 'Escape') {
         event.preventDefault();
         onRequestCloseRef.current();
