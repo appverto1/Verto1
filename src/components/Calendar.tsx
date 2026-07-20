@@ -150,11 +150,11 @@ export const getAppointmentStatusColor = (status: any) => {
     },
     RESCHEDULE_REQUESTED: {
       canonical,
-      dot: 'bg-yellow-500',
-      badge: 'border-yellow-300 bg-yellow-50 text-yellow-800',
-      soft: 'border-yellow-200 bg-yellow-50/80 text-yellow-950',
-      card: 'border-yellow-700 bg-yellow-700 text-white shadow-[0_10px_26px_rgba(161,98,7,0.32)] hover:bg-yellow-600',
-      text: 'text-yellow-800',
+      dot: 'bg-amber-600',
+      badge: 'border-amber-600/40 bg-amber-100 text-amber-950',
+      soft: 'border-amber-300 bg-amber-50 text-amber-950',
+      card: 'border-amber-600 bg-amber-300 text-amber-950 shadow-[0_8px_20px_rgba(217,119,6,0.24)] hover:bg-amber-200',
+      text: 'text-amber-950',
       icon: RefreshCcw
     },
     RESCHEDULED: {
@@ -220,6 +220,11 @@ const normalizeAppointmentPatientConfirmationStatus = (appointment: any) => {
   if (cancellationState.status === 'declined') return 'CANCEL_REQUESTED';
   if (cancellationState.status === 'cancelled_by_clinic') return 'CANCELLED_BY_CLINIC';
   if (cancellationState.status === 'cancelled') return 'CANCELLED';
+  const rescheduleStatus = String(appointment?.rescheduleStatus || appointment?.reschedule_status || '').trim().toUpperCase();
+  if (appointment?.hasPendingReschedule === true || appointment?.has_pending_reschedule === true || rescheduleStatus === 'PENDING') {
+    return 'RESCHEDULE_REQUESTED';
+  }
+  const rescheduleWasExplicitlyResolved = Boolean(rescheduleStatus && rescheduleStatus !== 'PENDING');
   const raw =
     appointment?.patientConfirmationStatus ||
     appointment?.patient_confirmation_status ||
@@ -231,11 +236,11 @@ const normalizeAppointmentPatientConfirmationStatus = (appointment: any) => {
   if (explicit === 'CONFIRMED') return 'CONFIRMED';
   // Uma consulta remarcada ja foi resolvida pela clinica. Apenas a solicitacao
   // pendente deve manter o badge de remarcacao solicitada.
-  if (explicit === 'RESCHEDULE_REQUESTED') return 'RESCHEDULE_REQUESTED';
+  if (explicit === 'RESCHEDULE_REQUESTED' && !rescheduleWasExplicitlyResolved) return 'RESCHEDULE_REQUESTED';
   if (explicit === 'CANCEL_REQUESTED') return 'CANCEL_REQUESTED';
   const fallback = canonicalAppointmentStatus(appointment?.status || appointment?.appointment_status);
   if (fallback === 'CONFIRMED') return 'CONFIRMED';
-  if (fallback === 'RESCHEDULE_REQUESTED') return 'RESCHEDULE_REQUESTED';
+  if (fallback === 'RESCHEDULE_REQUESTED' && !rescheduleWasExplicitlyResolved) return 'RESCHEDULE_REQUESTED';
   if (fallback === 'CANCEL_REQUESTED') return 'CANCEL_REQUESTED';
   return 'PENDING_CONFIRMATION';
 };
@@ -243,10 +248,11 @@ const normalizeAppointmentPatientConfirmationStatus = (appointment: any) => {
 export const getAppointmentPatientConfirmationVisualState = (appointment: any) => {
   const canonical = normalizeAppointmentPatientConfirmationStatus(appointment);
   const cancellationState = resolveAppointmentCancellationState(appointment);
+  const storedLabel = String(appointment?.patientConfirmationLabel || appointment?.patient_confirmation_label || '').trim();
+  const safeStoredLabel = canonical !== 'RESCHEDULE_REQUESTED' && /remarca/i.test(storedLabel) ? '' : storedLabel;
   const label =
     cancellationState.label ||
-    appointment?.patientConfirmationLabel ||
-    appointment?.patient_confirmation_label ||
+    safeStoredLabel ||
     {
       CONFIRMED: 'CONFIRMADO',
       RESCHEDULE_REQUESTED: 'REMARCAÇÃO SOLICITADA',
@@ -1301,6 +1307,12 @@ const normalizeClinicalEvent = (event: any, roomLookup?: Map<string, any>) => {
     patientConfirmationColor: event?.patientConfirmationColor || event?.patient_confirmation_color || source?.patientConfirmationColor || source?.patient_confirmation_color || null,
     patient_confirmation_source: event?.patient_confirmation_source || event?.patientConfirmationSource || source?.patient_confirmation_source || source?.patientConfirmationSource || null,
     patientConfirmationSource: event?.patientConfirmationSource || event?.patient_confirmation_source || source?.patientConfirmationSource || source?.patient_confirmation_source || null,
+    has_pending_reschedule: Boolean(event?.has_pending_reschedule ?? event?.hasPendingReschedule ?? source?.has_pending_reschedule ?? source?.hasPendingReschedule),
+    hasPendingReschedule: Boolean(event?.hasPendingReschedule ?? event?.has_pending_reschedule ?? source?.hasPendingReschedule ?? source?.has_pending_reschedule),
+    reschedule_status: event?.reschedule_status || event?.rescheduleStatus || source?.reschedule_status || source?.rescheduleStatus || null,
+    rescheduleStatus: event?.rescheduleStatus || event?.reschedule_status || source?.rescheduleStatus || source?.reschedule_status || null,
+    reschedule_request_id: event?.reschedule_request_id || event?.rescheduleRequestId || source?.reschedule_request_id || source?.rescheduleRequestId || null,
+    rescheduleRequestId: event?.rescheduleRequestId || event?.reschedule_request_id || source?.rescheduleRequestId || source?.reschedule_request_id || null,
     room: roomInfo.roomName,
     roomId: roomInfo.roomId,
     room_id: roomInfo.roomId,
@@ -2016,7 +2028,26 @@ export const ClinicalAgendaBoard = ({
   const applyUpdatedAppointmentToAgenda = (appointment: any) => {
     if (!appointment?.id) return;
     const normalized = normalizeClinicalEvent(appointment, roomLookup);
-    cacheRef.current.clear();
+    for (const [key, cached] of cacheRef.current.entries()) {
+      const cachedIndex = cached.data.findIndex((event: any) => String(event?.id || event?.appointment_id || '') === String(normalized.id));
+      let range: { from?: string; to?: string } = {};
+      try {
+        range = JSON.parse(key) || {};
+      } catch {
+        cacheRef.current.delete(key);
+        continue;
+      }
+      const fromTime = new Date(range.from || '').getTime();
+      const toTime = new Date(range.to || '').getTime();
+      const belongsToRange = Number.isFinite(fromTime) && Number.isFinite(toTime) && normalized.start.getTime() >= fromTime && normalized.start.getTime() <= toTime;
+      if (cachedIndex < 0 && !belongsToRange) continue;
+      const nextData = cached.data.filter((event: any) => String(event?.id || event?.appointment_id || '') !== String(normalized.id));
+      if (belongsToRange) {
+        const current = cachedIndex >= 0 ? cached.data[cachedIndex] : normalized;
+        nextData.push(normalizeClinicalEvent(mergeAppointmentIdentity(current, appointment), roomLookup));
+      }
+      cacheRef.current.set(key, { ...cached, data: nextData });
+    }
     setRemoteEvents((prev) => {
       let matched = false;
       const next = prev.map((event: any) => {
@@ -2407,29 +2438,29 @@ export const ClinicalAgendaBoard = ({
       return;
     }
     applyUpdatedAppointmentToAgenda(result.appointment);
-    onAppointmentActionResolved?.(result.appointment);
+    try {
+      await Promise.resolve(onAppointmentActionResolved?.(result.appointment));
+    } catch (syncError) {
+      console.warn('[Calendar] appointment state propagation deferred:', syncError);
+    }
     setEventDetail((previous: any) => {
       if (!previous) return previous;
       const requests = Array.isArray(previous.actionRequests)
         ? previous.actionRequests.map((item: any) => String(item?.id || '') === requestId
-            ? { ...item, status: decision === 'approve' ? 'APPROVED' : 'REJECTED' }
+            ? { ...item, ...(result.actionRequest || {}), status: decision === 'approve' ? 'APPROVED' : 'REJECTED' }
             : item)
         : previous.actionRequests;
+      const statusHistory = result.statusHistoryEntry
+        ? [result.statusHistoryEntry, ...(Array.isArray(previous.statusHistory) ? previous.statusHistory : [])]
+        : previous.statusHistory;
       return {
         ...previous,
         event: mergeAppointmentIdentity(previous.event || {}, result.appointment || {}),
-        actionRequests: requests
+        actionRequests: requests,
+        statusHistory
       };
     });
     setRescheduleAvailabilityState({ requestId: '', loading: false, error: '', data: null });
-    cacheRef.current.clear();
-    setRemoteRefreshNonce((value) => value + 1);
-    const currentId = String(selectedEvent?.id || '').trim();
-    if (currentId) {
-      dataService.getCalendarEventDetail(currentId).then((detailResult: any) => {
-        if (detailResult?.success) setEventDetail(detailResult.data || null);
-      });
-    }
     setActionRequestState({
       loadingId: '',
       error: '',
@@ -2773,6 +2804,8 @@ export const ClinicalAgendaBoard = ({
     const style = getSessionTypeStyle(event.type);
     const statusColor = getAppointmentPatientConfirmationVisualState(event);
     const StatusIcon = statusColor.icon;
+    const eventTextClass = statusColor.canonical === 'RESCHEDULE_REQUESTED' ? 'text-amber-950' : 'text-white';
+    const accessibleLabel = `${event.time} a ${event.endTime}, ${event.patientName}. ${statusColor.label}.`;
     return (
       <button
         key={event.id}
@@ -2781,11 +2814,13 @@ export const ClinicalAgendaBoard = ({
           clickEvent.stopPropagation();
           openEventDetail(event);
         }}
+        title={accessibleLabel}
+        aria-label={accessibleLabel}
         className={`group relative h-full min-h-0 w-full overflow-hidden rounded-xl border ${compact ? 'p-1.5' : 'p-2'} text-left transition-all hover:shadow-md ${statusColor.card}`}
       >
         <div className="pl-1">
           <div className="flex items-start justify-between gap-2">
-            <span className="text-[10px] font-semibold leading-tight text-white">
+            <span className={`text-[10px] font-semibold leading-tight ${eventTextClass}`}>
               {event.time} - {event.endTime}
             </span>
             <span className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] font-bold ${statusColor.badge}`}>
@@ -2793,7 +2828,7 @@ export const ClinicalAgendaBoard = ({
               {!compact && statusColor.label}
             </span>
           </div>
-          <p className={`mt-1 truncate text-sm font-semibold leading-tight text-white ${compact ? 'text-xs' : ''}`}>{event.patientName}</p>
+          <p className={`mt-1 truncate text-sm font-semibold leading-tight ${eventTextClass} ${compact ? 'text-xs' : ''}`}>{event.patientName}</p>
           <p className={`${compact ? 'mt-0.5' : 'mt-1'} truncate text-[11px] font-medium opacity-85`}>
             <span className={`rounded-full border px-1.5 py-0.5 text-[9px] font-bold ${style.badge}`}>{style.label}</span>
             <span className="ml-1">{getRoomDisplayLine(event)}</span>
@@ -2973,19 +3008,25 @@ export const ClinicalAgendaBoard = ({
                 <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto pr-0.5 overscroll-contain custom-scrollbar">
                   {items.map((event: any) => {
                     const statusColor = getAppointmentPatientConfirmationVisualState(event);
+                    const StatusIcon = statusColor.icon;
+                    const isPendingReschedule = statusColor.canonical === 'RESCHEDULE_REQUESTED';
+                    const eventTextClass = isPendingReschedule ? 'text-amber-950' : 'text-white';
+                    const accessibleLabel = `${event.time}, ${event.patientName}. ${statusColor.label}.`;
                     return (
                       <button
                         key={event.id}
                         type="button"
-                        title={`${event.time} ${event.patientName}${event.type ? ` · ${event.type}` : ''}${getRoomDisplayLine(event) ? ` · ${getRoomDisplayLine(event)}` : ''}`}
+                        title={`${accessibleLabel}${event.type ? ` ${event.type}.` : ''}${getRoomDisplayLine(event) ? ` ${getRoomDisplayLine(event)}.` : ''}`}
+                        aria-label={accessibleLabel}
                         onClick={(clickEvent) => {
                           clickEvent.stopPropagation();
                           openEventDetail(event);
                         }}
                         className={`flex min-h-[20px] w-full items-center gap-1 rounded-md border px-1.5 py-0 text-left text-[10px] font-medium leading-4 transition-colors ${statusColor.card}`}
                       >
-                        <span className="shrink-0 tabular-nums text-white">{event.time}</span>
-                        <span className="min-w-0 truncate text-white">{event.patientName}</span>
+                        {isPendingReschedule && <StatusIcon size={10} className="shrink-0" aria-hidden="true" />}
+                        <span className={`shrink-0 tabular-nums ${eventTextClass}`}>{event.time}</span>
+                        <span className={`min-w-0 truncate ${eventTextClass}`}>{event.patientName}</span>
                       </button>
                     );
                   })}

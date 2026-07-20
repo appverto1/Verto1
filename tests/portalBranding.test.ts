@@ -145,7 +145,8 @@ test('portal appointment actions do not depend on broad selects or false local s
 
 test('remarcacao aprovada nao volta a aparecer como solicitacao pendente', () => {
   const calendarCode = readFileSync(join(root, 'src/components/Calendar.tsx'), 'utf8');
-  assert.match(calendarCode, /if \(explicit === 'RESCHEDULE_REQUESTED'\) return 'RESCHEDULE_REQUESTED'/);
+  assert.match(calendarCode, /rescheduleStatus === 'PENDING'/);
+  assert.match(calendarCode, /explicit === 'RESCHEDULE_REQUESTED' && !rescheduleWasExplicitlyResolved/);
   assert.doesNotMatch(calendarCode, /explicit === 'RESCHEDULE_REQUESTED' \|\| explicit === 'RESCHEDULED'/);
   assert.match(serverCode, /RESCHEDULE_APPROVED/);
   assert.match(serverCode, /resolvedAppointmentIds/);

@@ -35,9 +35,9 @@ const firstPortalPatientName = (...values: unknown[]) => {
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, ' ')
       .trim();
-    return ['paciente', 'patient', 'usuario', 'user'].includes(normalized);
+    return ['paciente', 'patient', 'usuario', 'user', 'paciente nao identificado', 'patient not identified'].includes(normalized);
   };
-  return candidates.find((value) => !isGeneric(value)) || candidates[0] || 'Paciente';
+  return candidates.find((value) => !isGeneric(value)) || 'Paciente não identificado';
 };
 
 export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompleteTask, history, energyTags, sharedNotes, protocols, onAddFamilyNote, isReadOnlyMode = false, patientPortalId = '' }: any) => { 
@@ -669,15 +669,14 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     await openPortalAppointmentDetail({
       id: appointmentId,
       patientName: firstPortalPatientName(
-        metadata.patientName,
-        metadata.patient_name,
         notification?.patientName,
         notification?.patient_name,
+        metadata.patientName,
+        metadata.patient_name,
         portalContext?.portalDisplayName,
         portalContext?.patientName,
         displayName,
-        user?.name,
-        'Paciente'
+        user?.name
       ),
       clinicName: firstPortalClinicText(
         getPortalClinicNameExclusions(professionalName),
@@ -2439,15 +2438,14 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       notification?.scheduled_at
     );
     const patientName = firstPortalPatientName(
-      metadata.patientName,
-      metadata.patient_name,
       notification?.patientName,
       notification?.patient_name,
+      metadata.patientName,
+      metadata.patient_name,
       portalContext?.portalDisplayName,
       portalContext?.patientName,
       displayName,
-      user?.name,
-      'Paciente'
+      user?.name
     );
     const dayText = formatPortalReminderDay(scheduledAt);
     const timeText = formatPortalTime(scheduledAt);
@@ -3105,7 +3103,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
             <div className="min-w-0">
             <p className="truncate text-sm font-medium text-slate-700">{activePortalClinicName}</p>
             <p className="text-xs font-medium text-[#7a32fc]">Detalhes da consulta</p>
-            <h3 className="mt-1 text-xl font-semibold text-slate-900">{activePortalAppointment?.patientName || 'Paciente'}</h3>
+            <h3 className="mt-1 text-xl font-semibold text-slate-900">{firstPortalPatientName(activePortalAppointment?.patientName)}</h3>
             <p className="mt-1 text-sm font-medium text-slate-500">{formatPortalDateTime(activePortalAppointment?.scheduledAt)}</p>
             </div>
           </div>

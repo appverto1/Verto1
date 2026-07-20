@@ -18,6 +18,7 @@ const cron = read('services/cronService.ts');
 const pushService = read('services/pushNotificationService.ts');
 const server = read('server.ts');
 const migration = read('supabase/migrations/20260611143000_portal_notifications.sql');
+const atomicRescheduleMigration = read('supabase/migrations/20260719153000_atomic_appointment_reschedule_approval.sql');
 
 assert.match(migration, /create table if not exists public\.portal_notifications/);
 assert.match(migration, /idempotency_key text not null/);
@@ -78,12 +79,24 @@ const approveRescheduleRoute = server.slice(
   server.indexOf("app.post('/api/appointments/action-requests/:requestId/approve'"),
   server.indexOf("app.post('/api/appointments/action-requests/:requestId/reject'")
 );
+assert.match(approveRescheduleRoute, /supabase\.rpc\('approve_appointment_reschedule'/);
 assert.match(approveRescheduleRoute, /status:\s*'SCHEDULED'/);
-assert.match(approveRescheduleRoute, /notification_24h_sent_at:\s*null/);
-assert.match(approveRescheduleRoute, /notification_12h_sent_at:\s*null/);
-assert.match(approveRescheduleRoute, /notification_sent_at:\s*null/);
+assert.match(atomicRescheduleMigration, /set status = 'scheduled'/);
+assert.match(atomicRescheduleMigration, /notification_24h_sent_at = null/);
+assert.match(atomicRescheduleMigration, /notification_12h_sent_at = null/);
+assert.match(atomicRescheduleMigration, /notification_sent_at = null/);
 assert.match(approveRescheduleRoute, /triggerAppointmentReminderScan\('appointment_reschedule_approved'\)/);
 assert.doesNotMatch(approveRescheduleRoute, /status:\s*'RESCHEDULED'/);
+
+const portalNotificationsRoute = server.slice(
+  server.indexOf("app.get('/api/portal/notifications'"),
+  server.indexOf("app.get('/api/portal/appointments'", server.indexOf("app.get('/api/portal/notifications'")),
+);
+assert.match(portalNotificationsRoute, /readPortalPatientContexts\(notificationPatientIds\)/);
+assert.match(portalNotificationsRoute, /patientNamesById\.get\(patientId\)/);
+assert.match(portalNotificationsRoute, /Paciente não identificado/);
+assert.doesNotMatch(portalNotificationsRoute, /\|\|\s*'Paciente';/);
+assert.match(server, /\.from\('patients'\)[\s\S]*?\.in\('id', patientIds\)[\s\S]*?\.limit\(patientIds\.length\)/);
 assert.doesNotMatch(cron, /\.select\(\s*['"`]\*['"`]\s*\)/);
 assert.doesNotMatch(server, /\.select\(\s*['"`]\*['"`]\s*\)/);
 

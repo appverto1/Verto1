@@ -93,6 +93,17 @@ assert.equal(clinicModal.confirmLabel, 'Confirmar presença');
 assert.equal(clinicModal.rescheduleLabel, 'Remarcar consulta');
 assert.equal(clinicModal.cancelLabel, 'Cancelar agendamento');
 
+const unidentifiedPatientModal = buildPatientReminderModalViewModel({
+  appointmentId: 'appt-without-patient',
+  scheduledAt,
+  dateLabel,
+  timeLabel: '12:00',
+  patientName: '',
+  status: 'pending',
+  branding: clinicBranding,
+});
+assert.match(unidentifiedPatientModal.appointmentSummaryText, /Paciente não identificado/);
+
 const professionalBranding = resolveBrandingContext({
   professional: {
     displayName: 'Mateus Psicologia',

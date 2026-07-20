@@ -252,7 +252,7 @@ export function buildPatientReminderNotificationPayload(input: ReminderPayloadIn
 }
 
 export function buildPatientReminderModalViewModel(input: ReminderModalInput) {
-  const patientName = sanitizeText(input.patientName, 160) || "Paciente";
+  const patientName = sanitizeText(input.patientName, 160) || "Paciente não identificado";
   const whenText = buildWhenText(input);
   return {
     brandName: input.branding.displayName,

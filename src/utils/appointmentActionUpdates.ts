@@ -46,7 +46,13 @@ const normalizePatientLabel = (value: any) =>
 
 const isGenericPatientLabel = (value: any) => {
   const normalized = normalizePatientLabel(value);
-  return !normalized || normalized === "paciente" || normalized === "patient" || normalized === "cliente";
+  return !normalized || [
+    "paciente",
+    "patient",
+    "cliente",
+    "paciente nao identificado",
+    "patient not identified",
+  ].includes(normalized);
 };
 
 const normalizeAssignmentText = (value: any) =>

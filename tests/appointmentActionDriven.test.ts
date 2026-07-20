@@ -14,6 +14,10 @@ const calendarCode = fs.readFileSync(path.join(root, 'src/components/Calendar.ts
 const coordinatorCode = fs.readFileSync(path.join(root, 'src/components/CoordinatorDashboard.tsx'), 'utf8');
 const dataServiceCode = fs.readFileSync(path.join(root, 'src/services/dataService.ts'), 'utf8');
 const serverCode = fs.readFileSync(path.join(root, 'server.ts'), 'utf8');
+const atomicRescheduleMigration = fs.readFileSync(
+  path.join(root, 'supabase/migrations/20260719153000_atomic_appointment_reschedule_approval.sql'),
+  'utf8'
+);
 
 test('appointment merge updates only matching persisted ids', () => {
   const current = [
@@ -36,6 +40,12 @@ test('appointment merge never replaces real patient name with generic Paciente',
   assert.equal(next.find((item) => item.id === 'future-1')?.patientName, 'Pedro Henrique');
   assert.equal(next.find((item) => item.id === 'future-1')?.patient_name, 'Pedro Henrique');
   assert.equal(next.find((item) => item.id === 'future-1')?.name, 'Pedro Henrique');
+
+  const unidentifiedFallback = mergeAppointmentIdentityFallbacks(
+    [{ id: 'future-1', patientName: 'Paciente não identificado' }],
+    [{ id: 'future-1', patientName: 'Pedro Henrique' }],
+  );
+  assert.equal(unidentifiedFallback[0]?.patientName, 'Pedro Henrique');
 });
 
 test('appointment merge preserves professional and room on partial patches', () => {
@@ -306,8 +316,9 @@ test('reschedule approval preflights all submitted options and only accepts serv
   assert.match(route, /const allowedAssignments = \[/);
   assert.match(route, /allowedAssignments\.find/);
   assert.match(route, /code: 'RESCHEDULE_CONFLICT'/);
-  assert.match(route, /therapist_id: approvedAssignment\.professionalId/);
-  assert.match(route, /room_id: approvedAssignment\.locationType === 'clinica'/);
+  assert.match(route, /supabase\.rpc\('approve_appointment_reschedule'/);
+  assert.match(route, /p_professional_id: approvedAssignment\.professionalId/);
+  assert.match(route, /p_room_id: approvedAssignment\.locationType === 'clinica'/);
   assert.match(route, /const durationMinutes = getCalendarAppointmentDuration\(appointment\)/);
   assert.match(route, /calculateAppointmentEnd\(startDate, durationMinutes\)/);
 });
@@ -319,15 +330,24 @@ test('reschedule approval is idempotent and does not record a false approval bef
   assert.match(route, /requestRow\.status === 'APPROVED'/);
   assert.match(route, /idempotent: true/);
   assert.match(route, /appointmentScheduleMatches\(persistedAppointment/);
-  assert.match(route, /await updateAppointmentOperationalPatch\(appointment\.id, previousSchedulePatch\)/);
-  assert.match(route, /rescheduleCompensationPatch = previousSchedulePatch/);
-  assert.match(route, /notification_24h_sent_at: appointment\.notification_24h_sent_at/);
-  assert.match(route, /requestRow\.request_type === 'RESCHEDULE' && rescheduleCompensationPatch/);
-  const appointmentUpdateIndex = route.indexOf('const update = await updateAppointmentOperationalPatch');
-  const requestResolutionIndex = route.indexOf(".from('appointment_action_requests')");
-  const auditIndex = route.indexOf('await writeAppointmentStatusAuditLog');
-  assert.ok(appointmentUpdateIndex > -1 && requestResolutionIndex > appointmentUpdateIndex);
-  assert.ok(auditIndex > requestResolutionIndex, 'history must only be written after appointment and request persistence');
+  assert.match(route, /supabase\.rpc\('approve_appointment_reschedule'/);
+  assert.match(route, /appointmentScheduleMatches\(atomicPayload\.appointment/);
+  assert.match(route, /RESCHEDULE_APPROVAL_SCHEMA_UNAVAILABLE/);
+  assert.match(route, /RESCHEDULE_APPOINTMENT_CHANGED/);
+  assert.match(route, /RESCHEDULE_ASSIGNMENT_UNAVAILABLE/);
+  assert.doesNotMatch(route, /rescheduleCompensationPatch/);
+  assert.match(atomicRescheduleMigration, /from public\.appointment_action_requests[\s\S]*?for update/);
+  assert.match(atomicRescheduleMigration, /from public\.appointments[\s\S]*?for update/);
+  assert.match(atomicRescheduleMigration, /pg_advisory_xact_lock[\s\S]*?:patient:/);
+  assert.match(atomicRescheduleMigration, /pg_advisory_xact_lock[\s\S]*?:professional:/);
+  assert.match(atomicRescheduleMigration, /pg_advisory_xact_lock[\s\S]*?:room:/);
+  assert.match(atomicRescheduleMigration, /RESCHEDULE_APPOINTMENT_CHANGED/);
+  assert.match(atomicRescheduleMigration, /originalScheduledStart/);
+  assert.match(atomicRescheduleMigration, /update public\.appointments[\s\S]*?set status = 'scheduled'/);
+  assert.match(atomicRescheduleMigration, /update public\.appointment_action_requests[\s\S]*?set status = 'APPROVED'/);
+  assert.match(atomicRescheduleMigration, /insert into public\.appointment_status_audit_logs/);
+  assert.match(atomicRescheduleMigration, /notification_24h_sent_at = null/);
+  assert.doesNotMatch(atomicRescheduleMigration, /insert into public\.appointments/);
 });
 
 test('calendar exposes conflict-aware options and propagates approved appointment immediately', () => {
@@ -337,7 +357,18 @@ test('calendar exposes conflict-aware options and propagates approved appointmen
   assert.match(calendarCode, /Alternativas livres para o mesmo horário/);
   assert.match(calendarCode, /assignmentId: alternative\.id/);
   assert.match(calendarCode, /onAppointmentActionResolved\?\.\(result\.appointment\)/);
-  assert.match(calendarCode, /setRemoteRefreshNonce\(\(value\) => value \+ 1\)/);
+  const decisionStart = calendarCode.indexOf('const handleActionRequestDecision');
+  const decisionEnd = calendarCode.indexOf('const handleMaintenanceLinkDecision', decisionStart);
+  const decisionHandler = calendarCode.slice(decisionStart, decisionEnd);
+  assert.match(decisionHandler, /applyUpdatedAppointmentToAgenda\(result\.appointment\)/);
+  assert.doesNotMatch(decisionHandler, /cacheRef\.current\.clear/);
+  assert.doesNotMatch(decisionHandler, /setRemoteRefreshNonce/);
+  assert.doesNotMatch(decisionHandler, /getCalendarEventDetail/);
+  const cacheUpdateStart = calendarCode.indexOf('const applyUpdatedAppointmentToAgenda');
+  const cacheUpdateEnd = calendarCode.indexOf('const hydrateBillingForm', cacheUpdateStart);
+  const cacheUpdate = calendarCode.slice(cacheUpdateStart, cacheUpdateEnd);
+  assert.match(cacheUpdate, /cachedIndex < 0 && !belongsToRange/);
+  assert.match(cacheUpdate, /nextData\.push\(normalizeClinicalEvent/);
   assert.match(coordinatorCode, /onAppointmentActionResolved=\{onAppointmentActionResolved\}/);
   assert.match(appCode, /onAppointmentActionResolved=\{\(appointment: any\) => \{[\s\S]*?applyAppointmentResultToAgenda/);
 });
